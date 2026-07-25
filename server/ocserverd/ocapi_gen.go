@@ -1353,6 +1353,8 @@ type SetPasswordDTO struct {
 // explicit owner action). `org_name` — the studio display name ("" = unset).
 // `owner_name` — the owner's display nickname ("" = unset). `display_theme` /
 // `display_language` — the owner's cockpit visual prefs ("" = unset).
+// `display_wide` — whether the cockpit uses the wide layout (default false =
+// the narrow centred column).
 type SettingsDTO struct {
 	// CodexCompactionThreshold Codex context-compaction threshold, 1 through 10.
 	CodexCompactionThreshold *int `json:"codex_compaction_threshold,omitempty"`
@@ -1365,7 +1367,10 @@ type SettingsDTO struct {
 
 	// DisplayTheme The owner's cockpit visual theme (T-0b41-p2). "" = never set — the frontend keeps its localStorage cache / default; reconciled in at login as the cross-device source of truth.
 	DisplayTheme *string `json:"display_theme,omitempty"`
-	HandoverPct  int     `json:"handover_pct"`
+
+	// DisplayWide Whether the cockpit uses the WIDE layout — the centred ~1040px content column is lifted, the side gutters stay (T-756f). false (the default) = the narrow centred column, the shipped look. Same dual-layer contract as display_theme: the frontend keeps a localStorage cache for the pre-auth paint and reconciles this server value in at login as the cross-device source of truth.
+	DisplayWide *bool `json:"display_wide,omitempty"`
+	HandoverPct int   `json:"handover_pct"`
 
 	// Onboarding The first-run onboarding report (T-ba62), or null when onboarding never ran on this database. Owner-gated by virtue of living on GET /api/settings — a failed step's detail can carry local paths, so it must never reach the PUBLIC /api/auth/status probe.
 	Onboarding *OnboardingReportDTO `json:"onboarding,omitempty"`
@@ -1403,7 +1408,10 @@ type SettingsUpdateDTO struct {
 
 	// DisplayTheme The owner's cockpit visual theme (T-0b41-p2) — trimmed; "" clears it back to unset. Must be one of office, xian (or ""); anything else is a 422.
 	DisplayTheme *string `json:"display_theme,omitempty"`
-	HandoverPct  *int    `json:"handover_pct,omitempty"`
+
+	// DisplayWide Turn the WIDE cockpit layout on/off (T-756f) — true lifts the centred ~1040px content column (the side gutters stay), false restores it. A plain boolean with no unset state: omit the field to leave it unchanged.
+	DisplayWide *bool `json:"display_wide,omitempty"`
+	HandoverPct *int  `json:"handover_pct,omitempty"`
 
 	// OrgName The studio display name (T-d693) — trimmed, max 80 runes; "" clears it back to the localized default. A value longer than 80 runes is a 422.
 	OrgName              *string `json:"org_name,omitempty"`

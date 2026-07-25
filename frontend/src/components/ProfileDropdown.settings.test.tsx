@@ -41,6 +41,7 @@ beforeEach(() => {
   // later test's first paint is not tinted (and stays on the zh default dict).
   localStorage.clear();
   delete document.documentElement.dataset.theme;
+  delete document.documentElement.dataset.layout;
 });
 
 describe("ProfileDropdown · preferences scope", () => {
@@ -68,6 +69,19 @@ describe("ProfileDropdown · preferences scope", () => {
     const utils = await openPreferences();
     fireEvent.click(utils.getByText(p.themeOffice));
     expect(document.documentElement.dataset.theme).toBe("office");
+  });
+
+  it("offers the 版面 segmented control and flips the layout both ways (T-756f)", async () => {
+    const utils = await openPreferences();
+    expect(utils.getByText(p.layout)).toBeTruthy();
+    // Narrow is the default, so nothing is applied to <html> yet.
+    expect(document.documentElement.hasAttribute("data-layout")).toBe(false);
+
+    fireEvent.click(utils.getByText(p.layoutWide));
+    expect(document.documentElement.dataset.layout).toBe("wide");
+
+    fireEvent.click(utils.getByText(p.layoutNarrow));
+    expect(document.documentElement.hasAttribute("data-layout")).toBe(false);
   });
 });
 

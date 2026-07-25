@@ -206,6 +206,29 @@ func TestLoadAuthSettingsDisplayPrefs(t *testing.T) {
 	}
 }
 
+func TestLoadAuthSettingsDisplayWide(t *testing.T) {
+	// Absent → false (never set = the shipped narrow centred column).
+	got, _ := loadForTest(t, newTestDAL(t), defaultConfig())
+	if got.displayWide {
+		t.Fatalf("absent display.wide must load as false")
+	}
+	// Stored values land in the boot snapshot verbatim (both directions).
+	for _, tc := range []struct {
+		stored string
+		want   bool
+	}{{"true", true}, {"false", false}} {
+		d := newTestDAL(t)
+		if err := d.PutSetting(settingDisplayWide, tc.stored); err != nil {
+			t.Fatal(err)
+		}
+		loaded, _ := loadForTest(t, d, defaultConfig())
+		if loaded.displayWide != tc.want {
+			t.Fatalf("stored display.wide %q must load as %v: got %v",
+				tc.stored, tc.want, loaded.displayWide)
+		}
+	}
+}
+
 func TestLoadAuthSettingsCtxOverrides(t *testing.T) {
 	d := newTestDAL(t)
 	for key, value := range map[string]string{
