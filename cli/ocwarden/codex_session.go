@@ -93,6 +93,10 @@ type codexSession struct {
 	model       string
 	effort      string
 	compactions int
+	// completedCompactions makes the App Server's item/completed stream
+	// idempotent. Replayed notifications must not look like fresh context
+	// compactions and accidentally recycle a just-booted agent.
+	completedCompactions map[string]struct{}
 }
 
 func (s *codexSession) send(method string, params map[string]any) int {
@@ -299,6 +303,17 @@ func (s *codexSession) recordCompaction(params map[string]any) {
 	if item == nil || item["type"] != "contextCompaction" {
 		return
 	}
+	id, _ := item["id"].(string)
+	if id == "" {
+		return // completion events are item-addressed; never count an anonymous echo
+	}
+	if s.completedCompactions == nil {
+		s.completedCompactions = make(map[string]struct{})
+	}
+	if _, seen := s.completedCompactions[id]; seen {
+		return
+	}
+	s.completedCompactions[id] = struct{}{}
 	s.compactions++
 }
 

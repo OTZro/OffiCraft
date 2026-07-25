@@ -180,9 +180,11 @@ func TestReportTokenUsageUsesLatestTurnForContextGauge(t *testing.T) {
 func TestRecordCompactionCountsOnlyContextCompactionItems(t *testing.T) {
 	session := &codexSession{}
 	session.recordCompaction(map[string]any{"item": map[string]any{"type": "agentMessage"}})
+	session.recordCompaction(map[string]any{"item": map[string]any{"type": "contextCompaction", "id": "compact-1"}})
+	session.recordCompaction(map[string]any{"item": map[string]any{"type": "contextCompaction", "id": "compact-1"}})
 	session.recordCompaction(map[string]any{"item": map[string]any{"type": "contextCompaction"}})
 	if session.compactions != 1 {
-		t.Fatalf("compactions = %d, want 1", session.compactions)
+		t.Fatalf("compactions = %d, want 1 unique item", session.compactions)
 	}
 }
 
