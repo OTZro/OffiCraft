@@ -48,7 +48,7 @@ import { InlineEdit } from "./InlineEdit";
 import { Breadcrumbs, type Crumb } from "./Breadcrumbs";
 import "./stepper.css";
 import { ConfirmModal } from "./ConfirmModal";
-import { MODEL_QUICK_PICKS, EFFORTS } from "./ModelEffortEditor";
+import { CodexModelSelect, MODEL_QUICK_PICKS, EFFORTS } from "./ModelEffortEditor";
 import {
   BriefcaseIcon,
   BulbIcon,
@@ -1089,14 +1089,23 @@ function AssigneeCard({
                     ariaLabel={t.settings.assigneeModelLabel}
                   />
                 )}
-                <input
-                  className="manual-input manual-assignee__model"
-                  value={modelDraft}
-                  placeholder={t.settings.assigneeModelPlaceholder}
-                  aria-label={t.settings.assigneeModelPlaceholder}
-                  data-testid="manual-assignee-model"
-                  onChange={(e) => setModelDraft(e.target.value)}
-                />
+                {runtimeDraft === "codex" ? (
+                  <CodexModelSelect
+                    model={modelDraft}
+                    onModelChange={setModelDraft}
+                    className="manual-input manual-assignee__model"
+                    testId="manual-assignee-model"
+                  />
+                ) : (
+                  <input
+                    className="manual-input manual-assignee__model"
+                    value={modelDraft}
+                    placeholder={t.settings.assigneeModelPlaceholder}
+                    aria-label={t.settings.assigneeModelPlaceholder}
+                    data-testid="manual-assignee-model"
+                    onChange={(e) => setModelDraft(e.target.value)}
+                  />
+                )}
               </div>
 
               {/* 投入程度 — 低/中/高 segmented. */}

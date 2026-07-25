@@ -652,6 +652,7 @@ export const zh = {
     modelEffortSave: "儲存",
     modelEffortCancel: "取消",
     modelPlaceholder: "自訂模型字串（留空用預設）",
+    modelMachineDefault: "使用此機器的 Codex 預設模型",
     claudeAccount: "Claude Account",
     modelEffortNextWakeNote: "變更於下次喚醒／換手生效",
     modelEffortError: "儲存失敗，請稍後重試",

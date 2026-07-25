@@ -577,6 +577,7 @@ export const en: Dict = {
     modelEffortSave: "Save",
     modelEffortCancel: "Cancel",
     modelPlaceholder: "Custom model string (blank = default)",
+    modelMachineDefault: "Use this machine's Codex default model",
     claudeAccount: "Claude Account",
     modelEffortNextWakeNote: "Changes take effect on the next wake / handover",
     modelEffortError: "Save failed. Please try again.",

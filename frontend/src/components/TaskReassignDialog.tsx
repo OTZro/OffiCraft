@@ -29,7 +29,7 @@ import type { TaskReassignInput, TaskView } from "../api/adapter";
 import { useMachines } from "../hooks/useMachines";
 import { useMonitoring } from "../hooks/useMonitoring";
 import { ConfirmModal } from "./ConfirmModal";
-import { EFFORTS, MODEL_QUICK_PICKS } from "./ModelEffortEditor";
+import { CodexModelSelect, EFFORTS, MODEL_QUICK_PICKS } from "./ModelEffortEditor";
 
 /** One full-width segmented control — the AssigneeCard toggle's shape, in the
  * dialog's own class namespace. */
@@ -299,14 +299,23 @@ export function TaskReassignDialog({
                     className="task-reassign__seg--grid2"
                   />
                 )}
-                <input
-                  className="task-reassign__input"
-                  value={modelDraft}
-                  placeholder={t.settings.assigneeModelPlaceholder}
-                  aria-label={t.settings.assigneeModelPlaceholder}
-                  data-testid="reassign-model"
-                  onChange={(e) => setModelDraft(e.target.value)}
-                />
+                {runtimeDraft === "codex" ? (
+                  <CodexModelSelect
+                    model={modelDraft}
+                    onModelChange={setModelDraft}
+                    className="task-reassign__input"
+                    testId="reassign-model"
+                  />
+                ) : (
+                  <input
+                    className="task-reassign__input"
+                    value={modelDraft}
+                    placeholder={t.settings.assigneeModelPlaceholder}
+                    aria-label={t.settings.assigneeModelPlaceholder}
+                    data-testid="reassign-model"
+                    onChange={(e) => setModelDraft(e.target.value)}
+                  />
+                )}
               </div>
 
               <div className="task-reassign__section">

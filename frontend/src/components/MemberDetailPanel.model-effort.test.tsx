@@ -114,21 +114,23 @@ describe("MemberDetailPanel · model/effort quick-pick editor", () => {
     );
   });
 
-  it("switching provider clears Claude's model pick and saves Codex", async () => {
+  it("switching provider clears Claude's model pick and offers exact Codex models", async () => {
     const utils = renderPanel();
     fireEvent.click(utils.getByTestId("mp-model-effort-edit"));
     fireEvent.change(utils.getByTestId("me-runtime-select"), {
       target: { value: "codex" },
     });
-    expect((utils.getByTestId("me-model-input") as HTMLInputElement).value).toBe(
+    const modelSelect = utils.getByTestId("me-codex-model-select") as HTMLSelectElement;
+    expect(modelSelect.value).toBe(
       ""
     );
     expect(utils.queryByTestId("me-model-chip-opus")).toBeNull();
+    fireEvent.change(modelSelect, { target: { value: "gpt-5.6-terra" } });
     fireEvent.click(utils.getByTestId("mp-model-effort-save"));
     await waitFor(() =>
       expect(patchMember).toHaveBeenCalledWith("mira", {
         runtime: "codex",
-        model: "",
+        model: "gpt-5.6-terra",
         effort: "medium",
       })
     );

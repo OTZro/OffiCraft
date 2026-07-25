@@ -1050,7 +1050,7 @@ export function MonitorPage() {
 
 /** Format a percentage, honest "—" when the source is null (never fabricated). */
 function pctText(v: number | null, dash: string): string {
-  return v != null ? `${v}%` : dash;
+  return v != null ? `${Math.round(v)}%` : dash;
 }
 
 function contextText(

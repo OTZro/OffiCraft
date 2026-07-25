@@ -12,14 +12,50 @@
 // Controlled + stateless: the caller owns the draft values (it decides when to
 // PATCH); this component only renders the two fields and reports changes.
 
+import { useEffect } from "react";
 import { useI18n } from "../i18n";
 import type { Effort } from "../types";
 import "./model-effort-editor.css";
 
 /** Quick-pick model chips (safe defaults — the input stays free-form). */
 export const MODEL_QUICK_PICKS = ["fable", "opus", "sonnet", "haiku"] as const;
+/** Exact Codex App Server model identifiers supported by OffiCraft's picker. */
+export const CODEX_MODEL_OPTIONS = ["gpt-5.6-terra", "gpt-5.6-sol"] as const;
 /** The closed effort vocabulary (server 422s anything else). */
 export const EFFORTS: readonly Effort[] = ["low", "medium", "high"] as const;
+
+/** A closed picker: Codex model identifiers are not short aliases. */
+export function CodexModelSelect({
+  model,
+  onModelChange,
+  className = "me-editor__select",
+  testId = "me-codex-model-select",
+}: {
+  model: string;
+  onModelChange: (model: string) => void;
+  className?: string;
+  testId?: string;
+}) {
+  const { t } = useI18n();
+  const known = model === "" || (CODEX_MODEL_OPTIONS as readonly string[]).includes(model);
+  useEffect(() => {
+    if (!known) onModelChange("");
+  }, [known, onModelChange]);
+  return (
+    <select
+      className={className}
+      value={known ? model : ""}
+      aria-label={t.mp.model}
+      data-testid={testId}
+      onChange={(e) => onModelChange(e.target.value)}
+    >
+      <option value="">{t.mp.modelMachineDefault}</option>
+      {CODEX_MODEL_OPTIONS.map((id) => (
+        <option key={id} value={id}>{id}</option>
+      ))}
+    </select>
+  );
+}
 
 export function ModelEffortEditor({
   runtime,
@@ -74,14 +110,18 @@ export function ModelEffortEditor({
           ))}
         </div>
       )}
-      <input
-        className="me-editor__input"
-        value={model}
-        placeholder={t.mp.modelPlaceholder}
-        aria-label={t.mp.model}
-        onChange={(e) => onModelChange(e.target.value)}
-        data-testid="me-model-input"
-      />
+      {runtime === "codex" ? (
+        <CodexModelSelect model={model} onModelChange={onModelChange} />
+      ) : (
+        <input
+          className="me-editor__input"
+          value={model}
+          placeholder={t.mp.modelPlaceholder}
+          aria-label={t.mp.model}
+          onChange={(e) => onModelChange(e.target.value)}
+          data-testid="me-model-input"
+        />
+      )}
       <div className="me-editor__label me-editor__label--stacked">
         {t.mp.effort}
       </div>
