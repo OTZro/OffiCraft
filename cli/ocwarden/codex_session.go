@@ -251,8 +251,11 @@ func (s *codexSession) post(path string, payload map[string]any) {
 func (s *codexSession) reportTokenUsage(params map[string]any) {
 	usage, _ := params["tokenUsage"].(map[string]any)
 	total, _ := usage["total"].(map[string]any)
+	last, _ := usage["last"].(map[string]any)
 	window := jsonNumber(usage["modelContextWindow"])
-	used := jsonNumber(total["totalTokens"])
+	// "total" is cumulative across the thread and can exceed one context
+	// window after a few turns. "last" is the current turn's context gauge.
+	used := jsonNumber(last["totalTokens"])
 	if window > 0 {
 		s.post("/api/agent/context", map[string]any{
 			"context_pct": used / window * 100,
@@ -311,6 +314,12 @@ func (s *codexSession) handleServerRequest(msg appServerMessage) {
 			"code": -32601, "message": "OffiCraft sidecar does not support this server request",
 		}})
 	}
+}
+
+func actionableCodexListenerLine(line string) bool {
+	// Transport diagnostics belong in the pane, not in the model transcript.
+	// Sending the connected/reconnect chatter creates empty, token-heavy turns.
+	return !strings.HasPrefix(strings.TrimSpace(line), "[ocagent] listen:")
 }
 
 func runCodexSession(argv []string, env func(string) string, out io.Writer) int {
@@ -408,7 +417,9 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 				fmt.Fprintln(out, "codex-session: ocagent listen exited; ending session for reconciliation")
 				return 1
 			}
-			s.steerOrStart(line)
+			if actionableCodexListenerLine(line) {
+				s.steerOrStart(line)
+			}
 		case msg, ok := <-s.messages:
 			if !ok {
 				s.messages = nil

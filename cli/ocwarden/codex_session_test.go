@@ -113,6 +113,60 @@ func TestRequestUserInputBridgeCreatesOneCardPerQuestion(t *testing.T) {
 	}
 }
 
+func TestReportTokenUsageUsesLatestTurnForContextGauge(t *testing.T) {
+	var contextBody map[string]any
+	var telemetryBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode %s: %v", r.URL.Path, err)
+		}
+		switch r.URL.Path {
+		case "/api/agent/context":
+			contextBody = body
+		case "/api/monitoring/telemetry":
+			telemetryBody = body
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	session := &codexSession{base: server.URL, token: "member-token", effort: "low"}
+	session.reportTokenUsage(map[string]any{
+		"tokenUsage": map[string]any{
+			"modelContextWindow": float64(1000),
+			"last":               map[string]any{"totalTokens": float64(250)},
+			"total": map[string]any{
+				"inputTokens": float64(1100), "cachedInputTokens": float64(700),
+				"outputTokens": float64(50), "reasoningOutputTokens": float64(20),
+				"totalTokens": float64(1150),
+			},
+		},
+	})
+	if got := contextBody["context_pct"]; got != float64(25) {
+		t.Fatalf("context_pct = %#v, want latest-turn 25 (not cumulative 115)", got)
+	}
+	tokens, _ := telemetryBody["tokens"].(map[string]any)
+	if got := tokens["totalTokens"]; got != float64(1150) {
+		t.Fatalf("telemetry totalTokens = %#v, want cumulative thread total", got)
+	}
+}
+
+func TestActionableCodexListenerLineFiltersTransportDiagnostics(t *testing.T) {
+	for line, want := range map[string]bool{
+		"[ocagent] listen: connected — streaming http://127.0.0.1": false,
+		"[ocagent] listen: stream ended: EOF":                      false,
+		"[ocagent] chat from owner (id, 1s ago): hello":            true,
+		"[ocagent] task T-1 updated · by owner":                    true,
+	} {
+		if got := actionableCodexListenerLine(line); got != want {
+			t.Errorf("%q: got %v want %v", line, got, want)
+		}
+	}
+}
+
 type runtimeProbeRunner struct{}
 
 func (runtimeProbeRunner) Run(name string, args ...string) (string, error) {
