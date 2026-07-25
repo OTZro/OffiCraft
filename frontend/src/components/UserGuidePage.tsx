@@ -25,6 +25,10 @@ import { navigateHash, useHashRoute } from "../lib/hashRoute";
 import { Markdown } from "./Markdown";
 import { Breadcrumbs, type Crumb } from "./Breadcrumbs";
 import { ChevronRightIcon } from "./icons";
+// The guide is a top-level tab, not a SettingsPage sub-view. Keep its layout
+// sheet attached to this route so the document reader cannot lose its centred
+// reading measure if SettingsPage is ever loaded separately.
+import "./settings.css";
 
 export function UserGuideList({
   docs,
