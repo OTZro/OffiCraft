@@ -6,8 +6,9 @@
 //   • Claude model = fable/opus/sonnet/haiku quick-pick CHIPS + a free custom
 //     string input (spawn --model is a FREE string — the chips are safe
 //     defaults, the input stays authoritative; BLANK ⇒ the server/CLI default).
-//   • Codex model = closed quick-pick CHIPS only.  The blank/default chip
-//     delegates to the Codex configuration on the selected machine.
+//   • Codex model = closed quick-pick CHIPS only.  No selected chip delegates
+//     to the Codex configuration on the selected machine, just like a blank
+//     Claude custom-model field delegates to Claude's default.
 //   • effort = a low/medium/high dropdown (closed vocabulary, server-422
 //     outside it).
 //
@@ -49,25 +50,20 @@ export function CodexModelSelect({
       aria-label={t.mp.model}
       data-testid={testId}
     >
-      <button
-        type="button"
-        className={`doc-btn${model === "" ? " doc-btn--accent" : ""}`}
-        data-testid={`${testId}-default`}
-        onClick={() => onModelChange("")}
-      >
-        {t.mp.modelMachineDefault}
-      </button>
       {CODEX_MODEL_OPTIONS.map((id) => (
         <button
           type="button"
           key={id}
           className={`doc-btn${model === id ? " doc-btn--accent" : ""}`}
           data-testid={`${testId}-${id}`}
-          onClick={() => onModelChange(id)}
+          onClick={() => onModelChange(model === id ? "" : id)}
         >
           {id}
         </button>
       ))}
+      {model === "" && (
+        <span className="me-editor__hint">{t.mp.modelMachineDefault}</span>
+      )}
     </div>
   );
 }
