@@ -56,7 +56,7 @@ type outsourceCandidate struct {
 	TypeKey   string
 	Priority  string
 	CreatedTS float64
-	// TargetModel / TargetEffort / TargetMachine is the task's explicit 發包
+	// TargetRuntime / TargetModel / TargetEffort / TargetMachine is the task's explicit 發包
 	// target (T-35e0, task.outsource_*): non-empty for a create/reassign
 	// dispatch. When present, the decide mints from it (model/effort/machine)
 	// instead of the type manual's assignee spec — but the per-type copies cap
@@ -64,6 +64,7 @@ type outsourceCandidate struct {
 	// (T-b6e9, owner ruling 2026-07-24: per-type copies binds regardless of
 	// dispatch source). A typeless ad-hoc dispatch has no manual limit to apply,
 	// so it rides the global cap only.
+	TargetRuntime string
 	TargetModel   string
 	TargetEffort  string
 	TargetMachine string
@@ -84,6 +85,7 @@ func (c outsourceCandidate) hasExplicitTarget() bool {
 // notifyWorkerSpawn; the ADMISSION decision never reads it).
 type outsourceTypeSpec struct {
 	Copies  int
+	Runtime string
 	Model   string
 	Effort  string
 	Machine string // "auto" | machine id; consumed by the Phase 6 spawn seam
@@ -94,6 +96,7 @@ type outsourceTypeSpec struct {
 type outsourceAssignment struct {
 	TaskID  string
 	TypeKey string
+	Runtime string
 	Model   string
 	Effort  string
 	Machine string // "auto" | machine id — the resolved spawn placement preference
@@ -203,7 +206,7 @@ func outsourceDecide(
 			// A typeless target, or one whose type carries no outsource spec, has
 			// no limit to apply (Copies stays 0 = 無限) and rides the global cap only.
 			spec = outsourceTypeSpec{
-				Copies: 0, Model: c.TargetModel,
+				Copies: 0, Runtime: NormalizeRuntime(c.TargetRuntime), Model: c.TargetModel,
 				Effort: c.TargetEffort, Machine: c.TargetMachine,
 			}
 			if c.TypeKey != "" {
@@ -229,6 +232,7 @@ func outsourceDecide(
 		out = append(out, outsourceAssignment{
 			TaskID:     c.TaskID,
 			TypeKey:    c.TypeKey,
+			Runtime:    NormalizeRuntime(spec.Runtime),
 			Model:      spec.Model,
 			Effort:     spec.Effort,
 			Machine:    spec.Machine,
@@ -251,7 +255,10 @@ func outsourceSpecOf(m TaskManual) *outsourceTypeSpec {
 	if kind, _ := assignee["kind"].(string); kind != TaskExecutorOutsource {
 		return nil
 	}
-	spec := outsourceTypeSpec{Copies: 1, Effort: "medium", Machine: "auto"}
+	spec := outsourceTypeSpec{Copies: 1, Runtime: RuntimeClaude, Effort: "medium", Machine: "auto"}
+	if v, ok := assignee["runtime"].(string); ok && strings.TrimSpace(v) != "" {
+		spec.Runtime = strings.TrimSpace(v)
+	}
 	if v, ok := assignee["model"].(string); ok {
 		spec.Model = strings.TrimSpace(v)
 	}
@@ -451,7 +458,8 @@ func (s *apiServer) runOutsourceTick(now float64) {
 		cands = append(cands, outsourceCandidate{
 			TaskID: t.ID, TypeKey: t.TypeKey,
 			Priority: t.Priority, CreatedTS: t.CreatedTS,
-			TargetModel: t.OutsourceModel, TargetEffort: t.OutsourceEffort,
+			TargetRuntime: t.OutsourceRuntime,
+			TargetModel:   t.OutsourceModel, TargetEffort: t.OutsourceEffort,
 			TargetMachine: t.OutsourceMachine,
 		})
 	}
@@ -493,7 +501,7 @@ func (s *apiServer) runOutsourceTick(now float64) {
 			}
 			gate, err := s.outsourceSpawnGate(outsourceGateRequest{
 				PrincipalClass: principal, Initiator: initiator, TaskID: t.ID,
-				Model: d.Model, Effort: d.Effort, Machine: d.Machine,
+				Runtime: d.Runtime, Model: d.Model, Effort: d.Effort, Machine: d.Machine,
 				IssuedBy: t.CreatorID,
 			})
 			if err != nil {
@@ -509,6 +517,7 @@ func (s *apiServer) runOutsourceTick(now float64) {
 		worker := OutsourceWorker{
 			ID:           "ow-" + newHexID(12),
 			Codename:     DeriveCodename(d.Model, codenames),
+			Runtime:      NormalizeRuntime(d.Runtime),
 			Model:        d.Model,
 			Effort:       d.Effort,
 			TaskID:       t.ID,

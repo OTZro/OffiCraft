@@ -132,6 +132,46 @@ func TestBuildWorkerBootContext_FullAssembly(t *testing.T) {
 	}
 }
 
+func TestBuildWorkerBootContext_CodexRuntimeTailHasFinalPrecedence(t *testing.T) {
+	s := newWorkerTestServer(t)
+	task := Task{ID: "t-codex", Title: "Codex task", Priority: TaskPriorityMid}
+	got, err := s.buildWorkerBootContext(
+		OutsourceWorker{ID: "ow-codex", Codename: "C-1", Runtime: RuntimeCodex},
+		task, nil,
+	)
+	if err != nil {
+		t.Fatalf("fold: %v", err)
+	}
+	tail := strings.LastIndex(got, "# Runtime 開機尾步（Codex App Server）")
+	if tail < 0 {
+		t.Fatal("Codex worker must receive its runtime boot tail")
+	}
+	if !strings.Contains(got[tail:], "不要**自行啟動 `ocagent listen`") {
+		t.Fatal("Codex runtime tail must transfer listener ownership to the sidecar")
+	}
+	if strings.Contains(got, "# Runtime 開機尾步（Claude Code）") {
+		t.Fatal("Codex worker must not receive Claude's runtime boot tail")
+	}
+}
+
+func TestBuildWorkerBootContext_ClaudeRuntimeTailHasFinalPrecedence(t *testing.T) {
+	s := newWorkerTestServer(t)
+	got, err := s.buildWorkerBootContext(
+		OutsourceWorker{ID: "ow-claude", Codename: "C-2", Runtime: RuntimeClaude},
+		Task{ID: "t-claude", Title: "Claude task", Priority: TaskPriorityMid}, nil,
+	)
+	if err != nil {
+		t.Fatalf("fold: %v", err)
+	}
+	tail := strings.LastIndex(got, "# Runtime 開機尾步（Claude Code）")
+	if tail < 0 || !strings.Contains(got[tail:], "Monitor 在背景跑 bare `ocagent listen`") {
+		t.Fatal("Claude worker must receive its Monitor-owned listener tail")
+	}
+	if strings.Contains(got, "# Runtime 開機尾步（Codex App Server）") {
+		t.Fatal("Claude worker must not receive Codex's runtime boot tail")
+	}
+}
+
 // T-ba04: a worker minted onto a task that is in `reassigning` gets a TAKEOVER
 // section in its boot context — who its predecessor is (id) + the "hand over
 // first, THEN flip the status yourself" protocol. A non-reassigning task must
@@ -264,6 +304,25 @@ func TestPickWorkerWarden_AutoPicksIdlestMachine(t *testing.T) {
 	connectAgentOn(t, s, "m-agent-c", "m-other")
 	if got := pickWarden(s, "auto"); got != ServerSelfHost {
 		t.Fatalf("auto with loaded m-other: got %q, want %s", got, ServerSelfHost)
+	}
+}
+
+func TestPickWorkerWarden_FiltersBySelectedRuntime(t *testing.T) {
+	s := newWorkerTestServer(t)
+	putWardenFixture(t, s, "m-codex")
+	connectWarden(t, s, ServerSelfHost)
+	connectWarden(t, s, "m-codex")
+	s.telemetry.Set(ServerSelfHost, map[string]any{"runtimes": map[string]any{
+		RuntimeClaude: map[string]any{"installed": true, "logged_in": true},
+	}})
+	s.telemetry.Set("m-codex", map[string]any{"runtimes": map[string]any{
+		RuntimeCodex: map[string]any{"installed": true, "logged_in": true},
+	}})
+	got := s.pickWorkerWarden(
+		OutsourceWorker{ID: "ow-codex", Runtime: RuntimeCodex}, "auto", nowSecs(),
+	)
+	if got != "m-codex" {
+		t.Fatalf("Codex worker placed on %q, want the Codex-capable machine", got)
 	}
 }
 

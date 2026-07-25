@@ -115,6 +115,7 @@ const MOCK_WIRE_MEMBERS: WireMember[] = [
     kind: "warden",
     role_key: "",
     role_name: "",
+    runtime: "claude",
     model: "",
     effort: "medium",
     desired_state: "offline",
@@ -139,6 +140,7 @@ const MOCK_WIRE_MEMBERS: WireMember[] = [
     kind: "assistant", // mirror the real seed (dal/seed.py: Mira kind="assistant")
     role_key: "assistant",
     role_name: "",
+    runtime: "claude",
     model: "claude-sonnet-4.5",
     effort: "medium",
     desired_state: "offline",
@@ -173,6 +175,7 @@ const MOCK_WIRE_MEMBERS: WireMember[] = [
     kind: "warden",
     role_key: "assistant",
     role_name: "",
+    runtime: "claude",
     model: "",
     effort: "medium",
     desired_state: "offline",
@@ -245,6 +248,7 @@ const MOCK_WIRE_MONITORING: MockMonitoring = {
       id: "mira",
       name: "Mira",
       role: "assistant",
+      runtime: "claude",
       model: "claude-sonnet-4.5",
       effort: "", // honest-empty — mock Mira has no telemetry
       machine: "mbp5",
@@ -745,6 +749,7 @@ let mockPassword = "mock-password";
 const DEFAULT_MOCK_SETTINGS = {
   token_ttl: 86400,
   handover_pct: 50,
+  codex_compaction_threshold: 3,
   // M3 global outsource cap — mirrors the server's code-side default (3).
   outsource_max_parallel: 3,
   // The two software-update toggles — both OFF out of the box, mirroring the
@@ -2265,6 +2270,7 @@ export const mockApi: Api = {
       kind: "warden",
       role_key: "assistant",
       role_name: "",
+      runtime: "claude",
       model: "",
       effort: "medium",
       desired_state: "offline",
@@ -2498,6 +2504,9 @@ export const mockApi: Api = {
         "handover_pct must be between 40 and 90"
       );
     }
+    if (patch.codexCompactionThreshold !== undefined && (patch.codexCompactionThreshold < 1 || patch.codexCompactionThreshold > 10)) {
+      throw new ApiError("http 422 for PATCH /api/settings", 422, "validation_error", "codex_compaction_threshold must be between 1 and 10");
+    }
     if (
       patch.outsourceMaxParallel !== undefined &&
       (patch.outsourceMaxParallel < -1 || patch.outsourceMaxParallel > 20)
@@ -2581,6 +2590,9 @@ export const mockApi: Api = {
     }
     if (patch.handoverPct !== undefined) {
       mockServerSettings.handover_pct = patch.handoverPct;
+    }
+    if (patch.codexCompactionThreshold !== undefined) {
+      mockServerSettings.codex_compaction_threshold = patch.codexCompactionThreshold;
     }
     if (patch.outsourceMaxParallel !== undefined) {
       mockServerSettings.outsource_max_parallel = patch.outsourceMaxParallel;
@@ -2776,6 +2788,7 @@ export const mockApi: Api = {
       kind: "",
       role_key: roleKey,
       role_name: name,
+      runtime: input.runtime ?? "claude",
       model: (input.model ?? "").trim(),
       effort,
       desired_state: "offline",

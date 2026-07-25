@@ -39,13 +39,18 @@ export interface AgentDetailVM {
   /** True while the agent's session is really up — gates the refocus button
    * (the server 409s an offline refocus on both kinds). */
   online: boolean;
+  runtime: "claude" | "codex";
   model: string;
   effort: string;
   /** The note under the model/effort editor (member: next-wake semantics;
    * worker: active-respawn semantics). */
   modelEffortNote: string;
   /** Persist a model/effort edit. Undefined ⇒ the cell is read-only. */
-  onSaveModelEffort?: (model: string, effort: string) => Promise<void>;
+  onSaveModelEffort?: (
+    runtime: "claude" | "codex",
+    model: string,
+    effort: string,
+  ) => Promise<void>;
   /** Resolved machine display text; "" ⇒ dash. Wrappers apply their own gate
    * (member: awake-only; worker: 尚未分配 fallback text). */
   machineText: string;
@@ -55,6 +60,7 @@ export interface AgentDetailVM {
    * (the server already resolves alias/label or nulls it, T-ba6b). */
   accountText: string;
   contextPct: number | null;
+  compactionCount?: number | null;
   cost: number | null;
   onRefocus?: () => Promise<void>;
   refocusSince: number | null;
@@ -122,14 +128,17 @@ export function AgentDetailPanel({
   // ── model / effort editing (shared quick-pick editor; persistence is the
   // wrapper's — member PATCHes the member, worker POSTs the model op) ────────
   const [meEditing, setMeEditing] = useState(false);
+  const [meRuntime, setMeRuntime] = useState<"claude" | "codex">("claude");
   const [meModel, setMeModel] = useState("");
   const [meEffort, setMeEffort] = useState("medium");
   const [meBusy, setMeBusy] = useState(false);
   const [meError, setMeError] = useState(false);
   const [meOverride, setMeOverride] = useState<{
+    runtime: "claude" | "codex";
     model: string;
     effort: string;
   } | null>(null);
+  const shownRuntime = meOverride?.runtime ?? vm.runtime;
   const shownModel = meOverride?.model ?? vm.model;
   const shownEffort = meOverride?.effort ?? vm.effort;
   // Known effort levels render 中文字 + the raw key (the member page's format,
@@ -140,6 +149,7 @@ export function AgentDetailPanel({
       : null;
 
   function startMeEdit() {
+    setMeRuntime(shownRuntime);
     setMeModel(shownModel);
     setMeEffort(shownEffort || "medium");
     setMeError(false);
@@ -151,8 +161,12 @@ export function AgentDetailPanel({
     setMeBusy(true);
     setMeError(false);
     try {
-      await vm.onSaveModelEffort(meModel.trim(), meEffort);
-      setMeOverride({ model: meModel.trim(), effort: meEffort });
+      await vm.onSaveModelEffort(meRuntime, meModel.trim(), meEffort);
+      setMeOverride({
+        runtime: meRuntime,
+        model: meModel.trim(),
+        effort: meEffort,
+      });
       setMeEditing(false);
     } catch {
       setMeError(true);
@@ -255,7 +269,11 @@ export function AgentDetailPanel({
     };
   }, [showPrompt, promptFetch, promptKey]);
 
-  const contextText = vm.contextPct != null ? `${vm.contextPct}%` : dash;
+  const contextText = vm.contextPct != null ? `${Math.round(vm.contextPct)}%` : dash;
+  const contextDisplay =
+    vm.runtime === "codex" && vm.compactionCount != null
+      ? `${contextText} (${t.mp.compactionCount(vm.compactionCount)})`
+      : contextText;
   const costText = vm.cost != null ? formatCost(vm.cost) : dash;
 
   return (
@@ -269,14 +287,14 @@ export function AgentDetailPanel({
       {overlays}
       {afterIdentityCards}
 
-      {/* info card: LEFT 模型 + 投入度 (editable launch intents), RIGHT 機器 +
-       * Claude Account — the member page's mp-info2 layout, now the ONE layout. */}
+      {/* info card: LEFT 執行環境 + 模型 + 投入度 (editable launch intents), RIGHT 機器 +
+       * runtime account — the member page's mp-info2 layout, now the ONE layout. */}
       <div className="mp-card mp-info2">
         <div className="mp-field" data-testid={`${p}-model-effort-cell`}>
           {!meEditing ? (
             <>
               <div className="mp-field__head">
-                <div className="mp-field__label">{t.mp.model}</div>
+                <div className="mp-field__label">{t.mp.agentRuntime}</div>
                 {vm.onSaveModelEffort && (
                   <button
                     type="button"
@@ -288,6 +306,12 @@ export function AgentDetailPanel({
                     <span>{t.settings.edit}</span>
                   </button>
                 )}
+              </div>
+              <div className="mp-field__value">
+                {shownRuntime === "codex" ? "Codex" : "Claude Code"}
+              </div>
+              <div className="mp-field__label mp-field__label--stacked">
+                {t.mp.model}
               </div>
               <div className="mp-field__value">{shownModel || dash}</div>
               <div className="mp-field__label mp-field__label--stacked">
@@ -310,8 +334,10 @@ export function AgentDetailPanel({
               data-testid={`${p}-model-effort-editor`}
             >
               <ModelEffortEditor
+                runtime={meRuntime}
                 model={meModel}
                 effort={meEffort}
+                onRuntimeChange={setMeRuntime}
                 onModelChange={setMeModel}
                 onEffortChange={setMeEffort}
               />
@@ -352,7 +378,7 @@ export function AgentDetailPanel({
             {vm.machineText || dash}
           </div>
           <div className="mp-field__label mp-field__label--stacked">
-            {t.mp.claudeAccount}
+            {shownRuntime === "codex" ? t.mp.codexAccount : t.mp.claudeAccount}
           </div>
           <div className="mp-field__value" data-testid={`${p}-account`}>
             {vm.accountText || dash}
@@ -383,7 +409,7 @@ export function AgentDetailPanel({
               </button>
             </div>
             <div className="mp-cell__value" data-testid={`${p}-context`}>
-              {contextText}
+              {contextDisplay}
             </div>
           </div>
           <div className="mp-cell">

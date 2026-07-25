@@ -97,7 +97,8 @@ type apiServer struct {
 	namespace string
 	// ctxhigh is the context-high band config the /api/events stream loop
 	// evaluates each quiet tick (DB ctx.* settings; defaults when unset).
-	ctxhigh SseContextHighConfig
+	ctxhigh                  SseContextHighConfig
+	codexCompactionThreshold int
 	// root anchors the repo-file assets (seeds / prebuilt binaries / frozen
 	// MCP catalog) — see assets.go.
 	root assetRoot

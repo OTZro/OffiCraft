@@ -328,7 +328,8 @@ func readMachineName(r CmdRunner) string {
 // (claudeprobe.go) the server folds into the machine rows' claude_* columns
 // (T-97ee).
 func buildTelemetryPayload(agentID, machine string, hardware map[string]any,
-	binaries map[string]string, claude map[string]any) (map[string]any, error) {
+	binaries map[string]string, claude map[string]any,
+	runtimes ...map[string]any) (map[string]any, error) {
 	aid := strings.TrimSpace(agentID)
 	if aid == "" {
 		return nil, fmt.Errorf("agent_id is required (empty would be a guaranteed 400)")
@@ -345,6 +346,9 @@ func buildTelemetryPayload(agentID, machine string, hardware map[string]any,
 	}
 	if len(claude) > 0 {
 		payload["claude"] = claude
+	}
+	if len(runtimes) > 0 && len(runtimes[0]) > 0 {
+		payload["runtimes"] = runtimes[0]
 	}
 	return payload, nil
 }
@@ -415,7 +419,8 @@ func nextBackoff(cur time.Duration) time.Duration {
 // fingerprints-only or probe-only cycle (e.g. a non-darwin host with no
 // hardware probes) still posts — both are first-class telemetry fields.
 func runOnce(cfg Config, collect func() map[string]any, machine func() string, post Poster,
-	binaries func() map[string]string, claude func() map[string]any) ReportResult {
+	binaries func() map[string]string, claude func() map[string]any,
+	runtimes ...func() map[string]any) ReportResult {
 	if cfg.Token == "" || cfg.ID == "" {
 		return ReportResult{Reason: "no OC_TOKEN/OC_ID"}
 	}
@@ -428,10 +433,14 @@ func runOnce(cfg Config, collect func() map[string]any, machine func() string, p
 	if claude != nil {
 		cl = claude()
 	}
-	if len(hardware) == 0 && len(bins) == 0 && len(cl) == 0 {
+	var runtimeCaps map[string]any
+	if len(runtimes) > 0 && runtimes[0] != nil {
+		runtimeCaps = runtimes[0]()
+	}
+	if len(hardware) == 0 && len(bins) == 0 && len(cl) == 0 && len(runtimeCaps) == 0 {
 		return ReportResult{Reason: "no hardware probed (skip POST)"}
 	}
-	payload, err := buildTelemetryPayload(cfg.ID, machine(), hardware, bins, cl)
+	payload, err := buildTelemetryPayload(cfg.ID, machine(), hardware, bins, cl, runtimeCaps)
 	if err != nil {
 		return ReportResult{Reason: "build rejected: " + err.Error()}
 	}
@@ -452,7 +461,8 @@ func runOnce(cfg Config, collect func() map[string]any, machine func() string, p
 // before (byte-identical wire behaviour; tests inject an instant sleep seam).
 func run(ctx context.Context, cfg Config, collect func() map[string]any, machine func() string, post Poster,
 	binaries func() map[string]string, claude func() map[string]any,
-	sleep func(context.Context, time.Duration) bool, iterations int, out io.Writer) int {
+	sleep func(context.Context, time.Duration) bool, iterations int, out io.Writer,
+	runtimes ...func() map[string]any) int {
 
 	if cfg.Token == "" || cfg.ID == "" {
 		fmt.Fprintln(out, "[ocwarden] run: no OC_TOKEN/OC_ID — nothing to report; exiting.")
@@ -463,7 +473,7 @@ func run(ctx context.Context, cfg Config, collect func() map[string]any, machine
 		if ctx.Err() != nil {
 			return 0 // cancelled between cycles → clean exit
 		}
-		result := runOnce(cfg, collect, machine, post, binaries, claude)
+		result := runOnce(cfg, collect, machine, post, binaries, claude, runtimes...)
 		wait := backoff
 		if result.Posted || result.Status == 0 {
 			backoff = backoffStart
@@ -539,6 +549,8 @@ func realMain(argv []string, env func(string) string, out io.Writer) int {
 			return installCmd(env, out, force)
 		case "teardown":
 			return teardownCmd(env, out)
+		case "codex-session":
+			return runCodexSession(argv[1:], env, out)
 		case "version", "--version", "-v":
 			// Print WHICH build this is (git sha/time/dirty when stamped + always a
 			// content self-hash) so a human can tell an eva self-updated binary apart
@@ -656,7 +668,11 @@ func realMain(argv []string, env func(string) string, out io.Writer) int {
 		logf("[ocwarden] self-update: enabled (poll %s; %s + %s; reconnect-kick on)", selfUpdateInterval, wardenBinaryPath, agentBinaryPath)
 	}
 
-	rc := run(ctx, cfg, collect, machine, post, fingerprints.collect, claudeProbe.collect, sleepUntil, iters, out)
+	runtimeProbe := func() map[string]any {
+		return collectRuntimeCapabilities(env, runner, claudeProbe.collect())
+	}
+	rc := run(ctx, cfg, collect, machine, post, fingerprints.collect, claudeProbe.collect,
+		sleepUntil, iters, out, runtimeProbe)
 
 	// Graceful shutdown: the root ctx is now cancelled — either a signal fired, or
 	// run() returned on its own (--once, or a mis-wire). Stop relaying signals, then

@@ -643,6 +643,7 @@ export const zh = {
     forceStopConfirmAction: "強制停止",
     forceStopBusy: "停止中…",
     model: "模型",
+    agentRuntime: "AI 執行環境",
     effort: "EFFORT · 思考強度",
     effortLevel: (e: Effort) =>
       ({ low: "低", medium: "中", high: "高" })[e],
@@ -651,13 +652,16 @@ export const zh = {
     modelEffortSave: "儲存",
     modelEffortCancel: "取消",
     modelPlaceholder: "自訂模型字串（留空用預設）",
+    modelMachineDefault: "使用此機器的 Codex 預設模型",
     claudeAccount: "Claude Account",
+    codexAccount: "Codex Account",
     modelEffortNextWakeNote: "變更於下次喚醒／換手生效",
     modelEffortError: "儲存失敗，請稍後重試",
     runtime: "運行狀況",
     machine: "機器",
     standby: "待命中",
     context: "context",
+    compactionCount: (n: number) => `壓縮：${n}`,
     refocus: "重新聚焦",
     refocusOfflineHint: "僅線上可重新聚焦",
     refocusing: "聚焦中…",
@@ -1017,8 +1021,10 @@ export const zh = {
     ttl24h: "24 小時",
     ttl7d: "7 天",
     ttl30d: "30 天",
-    handover: "自動換手門檻",
-    handoverSub: "AI 同事的記憶用到這個比例，就自動交接給下一手（40–90%）",
+    handover: "Claude 自動換手門檻",
+    handoverSub: "Claude Code 的記憶用到這個比例，就自動交接給下一手（40–90%）",
+    codexHandover: "Codex 自動換手回合",
+    codexHandoverSub: "完成 3 次 context compaction 後自動重新聚焦；不依 context 百分比判斷",
     // ── 存檔回讀對帳（T-1c2e，rework 後住在軟體更新區：secret 只顯示
     // 已設定/未設定,絕不露明文;自動更新開關存檔後回讀對帳（寫入 → 重新
     // GET → 比對）,回饋誠實反映伺服器實際存了什麼）──

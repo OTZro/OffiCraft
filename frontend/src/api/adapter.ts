@@ -355,6 +355,7 @@ export interface OutsourceWorkerView {
   id: string;
   /** Model-flavoured anonymous codename (O-7 / S-3 / H-1 …). */
   codename: string;
+  runtime?: "claude" | "codex";
   model: string;
   effort: string;
   /** Worker lifecycle status (assigned → active → released). OPTIONAL so
@@ -411,6 +412,7 @@ export interface OutsourceWorkerView {
    * fabricated value (parity with the member detail's honest gate). */
   account?: string | null;
   contextPct?: number | null;
+  compactionCount?: number | null;
   cost?: number | null;
   /** The durable cumulative spend banked on every session end / kill+respawn
    * (wire `banked_cost`, migrations/00021 — member.bankedCost parity). null =
@@ -476,6 +478,7 @@ export type ManualAssigneeView =
   | { kind: "member"; memberId: string }
   | {
       kind: "outsource";
+      runtime?: "claude" | "codex";
       model: string;
       effort: string;
       copies: number;
@@ -548,7 +551,13 @@ export interface TaskMessageInput {
  * mints exactly ONE worker for THIS task. */
 export type TaskReassignTarget =
   | { kind: "member"; memberId: string }
-  | { kind: "outsource"; model: string; effort: string; machine: string };
+  | {
+      kind: "outsource";
+      runtime?: "claude" | "codex";
+      model: string;
+      effort: string;
+      machine: string;
+    };
 
 /** One reassign (轉派): the new executor + an optional handover note the server
  * appends to the new executor's notification chat message. The task enters
@@ -565,6 +574,8 @@ export interface ServerSettingsView {
   tokenTtl: number;
   /** Context auto-handover threshold in percent (40..90). */
   handoverPct: number;
+  /** Codex context compactions before automatic refocus (1..10). */
+  codexCompactionThreshold: number;
   /** M3: the GLOBAL cap on concurrently live outsource workers (-1..20;
    * **-1 ⇒ 無限 (unlimited — no global cap)**; 0 ⇒ outsource assignment is
    * PAUSED — the panel annotates it). */
@@ -625,6 +636,7 @@ export interface OnboardingReportView {
 export interface ServerSettingsPatch {
   tokenTtl?: number;
   handoverPct?: number;
+  codexCompactionThreshold?: number;
   outsourceMaxParallel?: number;
   /** Also admit GitHub prereleases in update checks (default false). */
   updaterReceiveBeta?: boolean;
@@ -656,6 +668,7 @@ export interface ServerSettingsPatch {
  * handover (the reconcile START payload bakes them into the launch command). */
 export interface MemberPatch {
   name?: string;
+  runtime?: "claude" | "codex";
   model?: string;
   effort?: string;
 }
@@ -694,6 +707,7 @@ export interface RolePatch {
 export interface RoleCreateInput {
   name: string;
   memberName?: string;
+  runtime?: "claude" | "codex";
   model?: string;
   effort?: string;
 }
@@ -1122,7 +1136,7 @@ export interface Api {
    * persist for the next spawn. Returns the freshly projected worker. (T-f190) */
   setWorkerModel(
     id: string,
-    patch: { model: string; effort?: string },
+    patch: { runtime?: "claude" | "codex"; model: string; effort?: string },
   ): Promise<OutsourceWorkerView>;
   /** Read a worker's boot-context PREVIEW (`GET
    * /api/outsource-workers/{id}/boot-context`, owner-only) — the worker twin

@@ -443,6 +443,30 @@ func resolveClaudeBin(env func(string) string) string {
 	return ""
 }
 
+func resolveCodexBin(env func(string) string) string {
+	if p := strings.TrimSpace(env("OC_CODEX_BIN")); p != "" && isExecutableFile(p) {
+		return p
+	}
+	if p, err := exec.LookPath("codex"); err == nil && p != "" {
+		return p
+	}
+	home := env("HOME")
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	for _, cand := range []string{
+		filepath.Join(home, ".local", "bin", "codex"),
+		filepath.Join(home, ".npm-global", "bin", "codex"),
+		"/opt/homebrew/bin/codex",
+		"/usr/local/bin/codex",
+	} {
+		if isExecutableFile(cand) {
+			return cand
+		}
+	}
+	return ""
+}
+
 // isExecutableFile reports whether p is an existing, non-directory file with at least
 // one executable bit — a cheap "could we exec this" probe for resolveClaudeBin.
 func isExecutableFile(p string) bool {
@@ -526,6 +550,8 @@ func buildCommandDeps(cfg Config, env func(string) string, runner CmdRunner) Com
 	// silently refuses every spawn (the Phase-4-flip boot-death root cause). See
 	// resolveClaudeBin.
 	claudeBin := resolveClaudeBin(env)
+	codexBin := resolveCodexBin(env)
+	wardenBin, _ := os.Executable()
 	// The instance namespace keys the tmux socket + agent home (validated at
 	// process entry — realMain refuses an invalid OC_NAMESPACE before any
 	// transport is built, so the error case here is unreachable).
@@ -552,6 +578,8 @@ func buildCommandDeps(cfg Config, env func(string) string, runner CmdRunner) Com
 			fmt.Fprintf(os.Stderr, "[ocwarden spawn] "+format+"\n", a...)
 		},
 		ClaudeBin: claudeBin,
+		CodexBin:  codexBin,
+		WardenBin: wardenBin,
 		// T-ba62: the spawn-time claude-login gate. Existence-only by
 		// construction (claudecreds.go) — stat, keychain METADATA, env != "".
 		// OC_CLAUDE_CRED_CHECK=0 is the documented escape hatch: this gate is

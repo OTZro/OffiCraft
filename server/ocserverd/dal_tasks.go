@@ -56,6 +56,7 @@ type Task struct {
 	// (preferred over the type manual's assignee spec). '' / '' / '' on a plain
 	// manual-driven outsource task (the scheduler falls back to the type spec) and
 	// on every non-outsource task.
+	OutsourceRuntime string
 	OutsourceModel   string
 	OutsourceEffort  string
 	OutsourceMachine string
@@ -74,7 +75,7 @@ const taskColumns = `id, type_key, title, dedupe_key, inputs, description,
 	status, lock, priority, executor_kind, executor_id, creator_id, waiting_reason,
 	created_ts, updated_ts, closed_ts, closeout_ts, duplicate_of,
 	reassigned_from, reassigned_from_kind,
-	outsource_model, outsource_effort, outsource_machine,
+	outsource_runtime, outsource_model, outsource_effort, outsource_machine,
 	handoff, handoff_note, handoff_task_id`
 
 // sqlTerminalStatuses is the SQL IN-list of the terminal statuses — every
@@ -92,7 +93,7 @@ func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 		&t.WaitingReason,
 		&t.CreatedTS, &t.UpdatedTS, &t.ClosedTS, &t.CloseoutTS, &t.DuplicateOf,
 		&t.ReassignedFrom, &t.ReassignedFromKind,
-		&t.OutsourceModel, &t.OutsourceEffort, &t.OutsourceMachine,
+		&t.OutsourceRuntime, &t.OutsourceModel, &t.OutsourceEffort, &t.OutsourceMachine,
 		&t.Handoff, &t.HandoffNote, &t.HandoffTaskID,
 	)
 	if err != nil {
@@ -228,7 +229,7 @@ func (d *DAL) PutTask(t Task) error {
 	}
 	_, err = d.db.Exec(`
 		INSERT INTO task (`+taskColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			type_key = excluded.type_key, title = excluded.title,
 			dedupe_key = excluded.dedupe_key, inputs = excluded.inputs,
@@ -244,6 +245,7 @@ func (d *DAL) PutTask(t Task) error {
 			duplicate_of = excluded.duplicate_of,
 			reassigned_from = excluded.reassigned_from,
 			reassigned_from_kind = excluded.reassigned_from_kind,
+			outsource_runtime = excluded.outsource_runtime,
 			outsource_model = excluded.outsource_model,
 			outsource_effort = excluded.outsource_effort,
 			outsource_machine = excluded.outsource_machine,
@@ -255,6 +257,7 @@ func (d *DAL) PutTask(t Task) error {
 		t.WaitingReason,
 		t.CreatedTS, t.UpdatedTS, t.ClosedTS, t.CloseoutTS, t.DuplicateOf,
 		t.ReassignedFrom, t.ReassignedFromKind,
+		NormalizeRuntime(t.OutsourceRuntime),
 		t.OutsourceModel, t.OutsourceEffort, t.OutsourceMachine,
 		t.Handoff, t.HandoffNote, t.HandoffTaskID,
 	)
@@ -620,6 +623,7 @@ func (d *DAL) ReplaceTaskPlan(taskID string, retain, freeze []string,
 type OutsourceWorker struct {
 	ID       string
 	Codename string
+	Runtime  string
 	Model    string
 	Effort   string
 	TaskID   string
@@ -698,6 +702,7 @@ func workerFromMember(m Member) OutsourceWorker {
 	return OutsourceWorker{
 		ID:               m.ID,
 		Codename:         m.Codename,
+		Runtime:          NormalizeRuntime(m.Runtime),
 		Model:            m.Model,
 		Effort:           m.Effort,
 		TaskID:           taskID,
@@ -746,6 +751,7 @@ func memberFromWorker(w OutsourceWorker) Member {
 		Name:             w.Codename,
 		Kind:             KindOutsource,
 		RoleKey:          "",
+		Runtime:          NormalizeRuntime(w.Runtime),
 		Model:            w.Model,
 		Effort:           w.Effort,
 		DesiredState:     w.DesiredState,

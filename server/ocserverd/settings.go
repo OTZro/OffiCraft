@@ -49,11 +49,12 @@ const (
 	settingClaimToken = "auth.claim_token"
 	// ctx.* mirror the SseContextHighConfig knobs (defaults in
 	// defaultSseContextHigh; only handover_pct gets UI in B3).
-	settingCtxWarnPct       = "ctx.warn_pct"
-	settingCtxHandoverPct   = "ctx.handover_pct"
-	settingCtxRemindStepPct = "ctx.remind_step_pct"
-	settingCtxMinBootSecs   = "ctx.min_boot_secs"
-	settingCtxStaleGuard    = "ctx.stale_guard"
+	settingCtxWarnPct               = "ctx.warn_pct"
+	settingCtxHandoverPct           = "ctx.handover_pct"
+	settingCtxRemindStepPct         = "ctx.remind_step_pct"
+	settingCtxMinBootSecs           = "ctx.min_boot_secs"
+	settingCtxStaleGuard            = "ctx.stale_guard"
+	settingCodexCompactionThreshold = "codex.compaction_threshold"
 	// settingOutsourceMaxParallel (M3, owner ruling ③) is the GLOBAL cap on
 	// concurrently live (assigned + active) outsource workers — the Phase 2
 	// assignment scheduler's admission knob; member tasks never count (H7).
@@ -119,22 +120,24 @@ var displayLanguageAllowed = map[string]bool{"zh": true, "en": true}
 // defaultOutsourceMaxParallel is the code-side default when the key was never
 // written.
 const defaultOutsourceMaxParallel = 3
+const defaultCodexCompactionThreshold = 3
 
 // authSettings is the boot-time snapshot cmdServe stamps onto the apiServer.
 type authSettings struct {
-	secret               []byte
-	passwordHash         string // "" = not set in DB (first-run: set-password flow)
-	passwordChangedAt    int64  // epoch secs; owner tokens with iat before it are refused
-	tokenTTL             int64
-	ctxhigh              SseContextHighConfig
-	outsourceMaxParallel int              // task.outsource_max_parallel (default 3)
-	updaterReceiveBeta   bool             // updater.receive_beta (default false = official releases only)
-	updaterAutoUpdate    bool             // updater.auto_update (default false = manual upgrades only)
-	orgName              string           // org.name ("" = never set → localized default in the topbar)
-	ownerName            string           // owner.name ("" = never set → localized default in the profile pill)
-	displayTheme         string           // display.theme ("" = never set → frontend cache/default)
-	displayLanguage      string           // display.language ("" = never set → frontend cache/default)
-	displayCustomThemes  []ThemeBundleDTO // display.custom_themes (nil = none saved)
+	secret                   []byte
+	passwordHash             string // "" = not set in DB (first-run: set-password flow)
+	passwordChangedAt        int64  // epoch secs; owner tokens with iat before it are refused
+	tokenTTL                 int64
+	ctxhigh                  SseContextHighConfig
+	codexCompactionThreshold int
+	outsourceMaxParallel     int              // task.outsource_max_parallel (default 3)
+	updaterReceiveBeta       bool             // updater.receive_beta (default false = official releases only)
+	updaterAutoUpdate        bool             // updater.auto_update (default false = manual upgrades only)
+	orgName                  string           // org.name ("" = never set → localized default in the topbar)
+	ownerName                string           // owner.name ("" = never set → localized default in the profile pill)
+	displayTheme             string           // display.theme ("" = never set → frontend cache/default)
+	displayLanguage          string           // display.language ("" = never set → frontend cache/default)
+	displayCustomThemes      []ThemeBundleDTO // display.custom_themes (nil = none saved)
 }
 
 // loadAuthSettings loads the snapshot from the migrated DB, running the
@@ -154,8 +157,9 @@ type authSettings struct {
 //   - ctx.*: DB overrides on top of the oc.toml/[defaults] config.
 func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, error) {
 	out := authSettings{
-		tokenTTL: int64(cfg.Auth.TokenTTL),
-		ctxhigh:  cfg.SseContextHigh,
+		tokenTTL:                 int64(cfg.Auth.TokenTTL),
+		ctxhigh:                  cfg.SseContextHigh,
+		codexCompactionThreshold: defaultCodexCompactionThreshold,
 	}
 
 	stored, err := d.GetSetting(settingJWTSecret)
@@ -242,6 +246,15 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 	}
 	if err := applyCtxOverrides(d, &out.ctxhigh); err != nil {
 		return out, err
+	}
+	if v, err := d.GetSetting(settingCodexCompactionThreshold); err != nil {
+		return out, err
+	} else if v != nil {
+		n, err := strconv.Atoi(*v)
+		if err != nil || n < 1 || n > 10 {
+			return out, fmt.Errorf("settings %s: must be 1..10: %q", settingCodexCompactionThreshold, *v)
+		}
+		out.codexCompactionThreshold = n
 	}
 
 	out.outsourceMaxParallel = defaultOutsourceMaxParallel

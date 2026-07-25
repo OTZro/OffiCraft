@@ -48,7 +48,7 @@ import { InlineEdit } from "./InlineEdit";
 import { Breadcrumbs, type Crumb } from "./Breadcrumbs";
 import "./stepper.css";
 import { ConfirmModal } from "./ConfirmModal";
-import { MODEL_QUICK_PICKS, EFFORTS } from "./ModelEffortEditor";
+import { CODEX_MODEL_OPTIONS, MODEL_QUICK_PICKS, EFFORTS } from "./ModelEffortEditor";
 import {
   BriefcaseIcon,
   BulbIcon,
@@ -850,6 +850,7 @@ function AssigneeCard({
     null
   );
   const [memberDraft, setMemberDraft] = useState("");
+  const [runtimeDraft, setRuntimeDraft] = useState<"claude" | "codex">("claude");
   const [modelDraft, setModelDraft] = useState("");
   const [effortDraft, setEffortDraft] = useState("medium");
   // copies: >=1 = a finite count; 0 = 無限 (wire spec TaskManualDTO).
@@ -860,6 +861,9 @@ function AssigneeCard({
     const a = manual.assignee;
     setKindDraft(a === null ? null : a.kind);
     setMemberDraft(a?.kind === "member" ? a.memberId : (roster[0]?.id ?? ""));
+    setRuntimeDraft(
+      a?.kind === "outsource" ? a.runtime || "claude" : "claude"
+    );
     setModelDraft(a?.kind === "outsource" ? a.model : "");
     setEffortDraft(a?.kind === "outsource" ? a.effort || "medium" : "medium");
     setCopiesDraft(a?.kind === "outsource" ? Math.max(0, a.copies) : 1);
@@ -890,6 +894,7 @@ function AssigneeCard({
           ? { kind: "member", memberId: memberDraft }
           : {
               kind: "outsource",
+              runtime: runtimeDraft,
               model: modelDraft.trim(),
               effort: effortDraft,
               copies: Math.max(0, Math.floor(copiesDraft)),
@@ -1042,6 +1047,23 @@ function AssigneeCard({
 
           {kindDraft === "outsource" && (
             <>
+              <div className="manual-assignee-editor__section">
+                <div className="manual-assignee-editor__label">
+                  {t.mp.agentRuntime}
+                </div>
+                <select
+                  className="manual-input"
+                  value={runtimeDraft}
+                  data-testid="manual-assignee-runtime"
+                  onChange={(e) => {
+                    setRuntimeDraft(e.target.value as "claude" | "codex");
+                    setModelDraft("");
+                  }}
+                >
+                  <option value="claude">Claude Code</option>
+                  <option value="codex">Codex</option>
+                </select>
+              </div>
               {/* 模型 — the member panel's quick-pick vocabulary
                * (MODEL_QUICK_PICKS, same source as ModelEffortEditor) as
                * segmented chips + the authoritative free input. */}
@@ -1049,30 +1071,59 @@ function AssigneeCard({
                 <div className="manual-assignee-editor__label">
                   {t.settings.assigneeModelLabel}
                 </div>
-                <Segmented
-                  options={MODEL_QUICK_PICKS.map((m) => ({
-                    value: m,
-                    label: m,
-                  }))}
-                  value={
-                    (MODEL_QUICK_PICKS as readonly string[]).includes(
-                      modelDraft
-                    )
-                      ? (modelDraft as (typeof MODEL_QUICK_PICKS)[number])
-                      : null
-                  }
-                  onPick={(v) => setModelDraft(v)}
-                  testidPrefix="manual-assignee-model"
-                  ariaLabel={t.settings.assigneeModelLabel}
-                />
-                <input
-                  className="manual-input manual-assignee__model"
-                  value={modelDraft}
-                  placeholder={t.settings.assigneeModelPlaceholder}
-                  aria-label={t.settings.assigneeModelPlaceholder}
-                  data-testid="manual-assignee-model"
-                  onChange={(e) => setModelDraft(e.target.value)}
-                />
+                {runtimeDraft === "claude" && (
+                  <Segmented
+                    options={MODEL_QUICK_PICKS.map((m) => ({
+                      value: m,
+                      label: m,
+                    }))}
+                    value={
+                      (MODEL_QUICK_PICKS as readonly string[]).includes(
+                        modelDraft
+                      )
+                        ? (modelDraft as (typeof MODEL_QUICK_PICKS)[number])
+                        : null
+                    }
+                    onPick={(v) => setModelDraft(v)}
+                    testidPrefix="manual-assignee-model"
+                    ariaLabel={t.settings.assigneeModelLabel}
+                  />
+                )}
+                {runtimeDraft === "codex" ? (
+                  <>
+                    <Segmented
+                      options={CODEX_MODEL_OPTIONS.map((m) => ({
+                        value: m,
+                        label: m,
+                      }))}
+                      value={
+                        (CODEX_MODEL_OPTIONS as readonly string[]).includes(modelDraft)
+                          ? (modelDraft as (typeof CODEX_MODEL_OPTIONS)[number])
+                          : null
+                      }
+                      onPick={setModelDraft}
+                      testidPrefix="manual-assignee-model"
+                      ariaLabel={t.settings.assigneeModelLabel}
+                    />
+                    <input
+                      className="manual-input manual-assignee__model"
+                      value={modelDraft}
+                      placeholder={t.settings.assigneeModelPlaceholder}
+                      aria-label={t.settings.assigneeModelPlaceholder}
+                      data-testid="manual-assignee-model"
+                      onChange={(e) => setModelDraft(e.target.value)}
+                    />
+                  </>
+                ) : (
+                  <input
+                    className="manual-input manual-assignee__model"
+                    value={modelDraft}
+                    placeholder={t.settings.assigneeModelPlaceholder}
+                    aria-label={t.settings.assigneeModelPlaceholder}
+                    data-testid="manual-assignee-model"
+                    onChange={(e) => setModelDraft(e.target.value)}
+                  />
+                )}
               </div>
 
               {/* 投入程度 — 低/中/高 segmented. */}

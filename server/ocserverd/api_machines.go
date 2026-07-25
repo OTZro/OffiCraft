@@ -368,6 +368,65 @@ func (s *apiServer) machineClaudeInfo(machineID string) (version, credSource *st
 	return version, credSource, subReadable
 }
 
+// machineRuntimeCapabilities projects the provider-neutral readiness probes
+// from a warden heartbeat. Older wardens return an empty map: placement treats
+// unknown as unavailable instead of dispatching a runtime that cannot launch.
+func (s *apiServer) machineRuntimeCapabilities(machineID string) map[string]RuntimeCapabilityDTO {
+	out := map[string]RuntimeCapabilityDTO{}
+	entry := s.telemetry.Get(machineID)
+	if entry == nil {
+		return out
+	}
+	raw, _ := entry["runtimes"].(map[string]any)
+	for name, value := range raw {
+		if !ValidRuntime(name) {
+			continue
+		}
+		obj, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		capability := RuntimeCapabilityDTO{}
+		if v, ok := obj["installed"].(bool); ok {
+			capability.Installed = &v
+		}
+		if v, ok := obj["logged_in"].(bool); ok {
+			capability.LoggedIn = &v
+		}
+		if v, ok := obj["version"].(string); ok {
+			capability.Version = &v
+		}
+		out[name] = capability
+	}
+	return out
+}
+
+func (s *apiServer) machineSupportsRuntime(machineID, runtime string) bool {
+	normalized := NormalizeRuntime(runtime)
+	capabilities := s.machineRuntimeCapabilities(machineID)
+	// Rolling-upgrade compatibility: every pre-capability warden is a Claude
+	// warden by construction. Codex never gets this inference and therefore
+	// remains fail-closed until explicitly probed.
+	if len(capabilities) == 0 {
+		return normalized == RuntimeClaude
+	}
+	// Claude's historic placement contract is intentionally permissive: the
+	// spawn-time operator escape hatch OC_CLAUDE_CRED_CHECK=0 exists for hosts
+	// whose credential heuristic false-negatives.  Codex introduced this
+	// placement gate; do not retroactively tighten Claude with it.
+	if normalized == RuntimeClaude {
+		return true
+	}
+	capability, ok := capabilities[normalized]
+	if !ok {
+		return false
+	}
+	if capability.Installed == nil || !*capability.Installed {
+		return false
+	}
+	return capability.LoggedIn == nil || *capability.LoggedIn
+}
+
 // GET /api/machines — one row per ACTIVE warden member; display name folds
 // the machine-alias overlay over the member name; server-self always FIRST.
 func (s *apiServer) HandleListMachinesApiMachinesGet(w http.ResponseWriter, r *http.Request) {
@@ -392,14 +451,15 @@ func (s *apiServer) HandleListMachinesApiMachinesGet(w http.ResponseWriter, r *h
 		}
 		claudeVersion, claudeCredSource, claudeSubReadable := s.machineClaudeInfo(m.ID)
 		rows = append(rows, machineDTO{
-			MachineID:         m.ID,
-			DisplayName:       display,
-			Online:            s.hub.IsOnline(m.ID),
-			IsSelf:            m.ID == ServerSelfHost,
-			BinStatus:         s.machineBinStatus(m.ID),
-			ClaudeVersion:     claudeVersion,
-			ClaudeCredSource:  claudeCredSource,
-			ClaudeSubReadable: claudeSubReadable,
+			MachineID:           m.ID,
+			DisplayName:         display,
+			Online:              s.hub.IsOnline(m.ID),
+			IsSelf:              m.ID == ServerSelfHost,
+			BinStatus:           s.machineBinStatus(m.ID),
+			ClaudeVersion:       claudeVersion,
+			ClaudeCredSource:    claudeCredSource,
+			ClaudeSubReadable:   claudeSubReadable,
+			RuntimeCapabilities: s.machineRuntimeCapabilities(m.ID),
 		})
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].IsSelf && !rows[j].IsSelf })

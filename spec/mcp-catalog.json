@@ -9,7 +9,7 @@
       "name": "get_members"
     },
     {
-      "description": "Hire a member (server mints the id). Pure seam, no UI (\u00a79.1).",
+      "description": "Hire a member (server mints the id). runtime is claude/codex (absent = claude); model is provider-specific. Pure seam, no UI (\u00a79.1).",
       "inputSchema": {
         "properties": {
           "effort": {
@@ -63,6 +63,22 @@
             ],
             "default": null,
             "title": "Role Key"
+          },
+          "runtime": {
+            "anyOf": [
+              {
+                "enum": [
+                  "claude",
+                  "codex"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Runtime"
           }
         },
         "required": [
@@ -88,7 +104,7 @@
       "name": "get_member"
     },
     {
-      "description": "Edit a member (name / model / effort). Blank name / bad effort \u2192 422.",
+      "description": "Edit a member (name / runtime / model / effort). runtime is claude/codex; blank name / bad runtime / bad effort \u2192 422.",
       "inputSchema": {
         "properties": {
           "effort": {
@@ -129,6 +145,22 @@
             ],
             "default": null,
             "title": "Name"
+          },
+          "runtime": {
+            "anyOf": [
+              {
+                "enum": [
+                  "claude",
+                  "codex"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Runtime"
           }
         },
         "required": [
@@ -654,11 +686,19 @@
             "default": null,
             "title": "Machine"
           },
-          "rate_limits": {
-            "default": null,
-            "title": "Rate Limits"
-          },
-          "self_update": {
+        "rate_limits": {
+          "default": null,
+          "title": "Rate Limits"
+        },
+        "runtime": {
+          "default": null,
+          "title": "Runtime"
+        },
+        "runtimes": {
+          "default": null,
+          "title": "Runtimes"
+        },
+        "self_update": {
             "default": null,
             "title": "Self Update"
           },
@@ -818,7 +858,7 @@
       "name": "list_roles"
     },
     {
-      "description": "Create a custom role + its founding member (one pair per call).",
+      "description": "Create a custom role + its founding member (one pair per call). runtime is claude/codex (absent = claude).",
       "inputSchema": {
         "properties": {
           "effort": {
@@ -860,6 +900,22 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "runtime": {
+            "anyOf": [
+              {
+                "enum": [
+                  "claude",
+                  "codex"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Runtime"
           }
         },
         "required": [
@@ -1109,7 +1165,7 @@
       "name": "list_tasks"
     },
     {
-      "description": "Create a task (dedupes on the manual's key; ad-hoc when type_key omitted). Pass target.kind=outsource to drop the task as an unassigned outsource task (發包); the existing outsource scheduler then spawns workers against the global concurrency cap (outsourceParallelCap) — below the cap it starts immediately, at the cap it queues for capacity and is picked up automatically when a slot frees. No owner-approval card and no per-task approval; the owner may reassign a still-queued task at any time. Caller authorization (正職授權矩陣, T-23cf): an outsource worker may never create a task; a 發包 create is open to any 正職 (owner/admin included); a typed task the manual assigns to member X may be created only by X (owner/admin NOT exempt); an ad-hoc task with a member executor may name only the caller itself unless the caller is owner/admin (a 一般正職 may self-execute or 發包, never assign another member).",
+      "description": "Create a task (dedupes on the manual's key; ad-hoc when type_key omitted). Pass target.kind=outsource to drop the task as an unassigned outsource task (發包); target.runtime is claude/codex (absent = claude). The existing outsource scheduler then spawns workers against the global concurrency cap (outsourceParallelCap) — below the cap it starts immediately, at the cap it queues for capacity and is picked up automatically when a slot frees. No owner-approval card and no per-task approval; the owner may reassign a still-queued task at any time. Caller authorization (正職授權矩陣, T-23cf): an outsource worker may never create a task; a 發包 create is open to any 正職 (owner/admin included); a typed task the manual assigns to member X may be created only by X (owner/admin NOT exempt); an ad-hoc task with a member executor may name only the caller itself unless the caller is owner/admin (a 一般正職 may self-execute or 發包, never assign another member).",
       "inputSchema": {
         "properties": {
           "description": {
@@ -1202,6 +1258,22 @@
                 ],
                 "default": null,
                 "title": "Model"
+              },
+              "runtime": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "claude",
+                      "codex"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Runtime"
               }
             },
             "required": [
@@ -1541,7 +1613,7 @@
       "name": "report_task_closeout"
     },
     {
-      "description": "Reassign a task to a member or a fresh outsource worker (executor-guarded: a plain agent may reassign only a task it executes; owner/admin drive any task). Caller authorization (正職授權矩陣, T-23cf): owner/admin may hand a task to any active member or 發包 it to a fresh outsource worker; a 一般正職 may only turn its own task into a 發包 (a member target is 403); an outsource worker may not reassign at all. An outsource target lands the task unassigned for the scheduler to spawn under the global parallel cap; enters the reassigning handover state.",
+      "description": "Reassign a task to a member or a fresh outsource worker (executor-guarded: a plain agent may reassign only a task it executes; owner/admin drive any task). Caller authorization (正職授權矩陣, T-23cf): owner/admin may hand a task to any active member or 發包 it to a fresh outsource worker; a 一般正職 may only turn its own task into a 發包 (a member target is 403); an outsource worker may not reassign at all. An outsource target uses target.runtime claude/codex (absent = claude), lands the task unassigned for the scheduler to spawn under the global parallel cap, and enters the reassigning handover state.",
       "inputSchema": {
         "properties": {
           "note": {
@@ -1609,6 +1681,22 @@
                 ],
                 "default": null,
                 "title": "Model"
+              },
+              "runtime": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "claude",
+                      "codex"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Runtime"
               }
             },
             "required": [
@@ -1743,7 +1831,7 @@
       "name": "list_task_manuals"
     },
     {
-      "description": "Create a task type: pass display_name; the server mints and returns the tm- type_key id (legacy explicit type_key still accepted; duplicate \u2192 409; assignee = owner-only).",
+      "description": "Create a task type: pass display_name; the server mints and returns the tm- type_key id (legacy explicit type_key still accepted; duplicate \u2192 409; assignee = owner-only). An outsource assignee may select runtime claude/codex; absent = claude.",
       "inputSchema": {
         "properties": {
           "assignee": {
@@ -1804,7 +1892,7 @@
       "name": "get_task_manual"
     },
     {
-      "description": "Edit a task manual (partial; content fields agent-editable; assignee = owner-only). Only the fields you name change, so omitting a field is safe — but unknown keys are rejected rather than dropped: the learnings doc goes in learnings (NOT text — that is write_task_learnings' field name).",
+      "description": "Edit a task manual (partial; content fields agent-editable; assignee = owner-only). An outsource assignee may select runtime claude/codex; absent = claude. Only the fields you name change, so omitting a field is safe — but unknown keys are rejected rather than dropped: the learnings doc goes in learnings (NOT text — that is write_task_learnings' field name).",
       "inputSchema": {
         "properties": {
           "assignee": {

@@ -316,13 +316,36 @@ warden's outbound SSE.
 - Frame shape — bare `data:` event, no `id:` line:
 
 ```
-data: {"topic":"warden-command","data":{"rpc":"start","args":{"member_id":"m-1a2b3c","persona_context":"…","member_token":"<jwt>","role":"assistant","task_type":"default","model":"","effort":"","session_name":""}}}
+data: {"topic":"warden-command","data":{"rpc":"start","args":{"member_id":"m-1a2b3c","persona_context":"…","member_token":"<jwt>","role":"assistant","task_type":"default","runtime":"claude","model":"","effort":"","session_name":""}}}
 ```
 
 - `rpc` vocabulary and `args` shapes:
-  - `start`: `{member_id, persona_context, member_token, role, task_type, model, effort, session_name}`
-    (blank `effort`/`model`/`session_name` mean warden defaults; `session_name` is always
-    `""` today — the warden derives `member-<id>`).
+  - `start`: `{member_id, persona_context, member_token, role, task_type, runtime, model, effort, session_name}`.
+    `runtime` is the closed vocabulary `claude | codex`; absent/blank means `claude` for
+    compatibility with older servers. Blank `effort`/`model`/`session_name` mean the
+    selected runtime's defaults; `session_name` is always `""` today — the warden derives
+    `member-<id>`.
+    - Claude execution keeps the existing private `persona.md` + `.mcp.json` +
+      `settings.json` launch path unchanged.
+    - Codex execution writes the same private `persona.md`, starts a warden-managed
+      `codex app-server` sidecar, and gives App Server a minimal developer instruction
+      pointing to that file. App Server is the correctness path; an attached Codex TUI is
+      optional and may disconnect/reconnect without ending the agent.
+    - Server lifecycle events are wake signals, never raw prompt interpolation. While the
+      Codex thread is idle, a durable pending wake starts a turn. During an active turn,
+      urgent lifecycle events may steer that turn; routine events are durably coalesced
+      and start the next idle turn. The listener must retain pending work across App
+      Server/TUI reconnects.
+    - Codex `item/tool/requestUserInput` never waits on the optional TUI. The sidecar
+      converts each question into the SAME durable OffiCraft reply card used by Claude
+      (`create_reply_card`; one question per card, with the first automatically bound to
+      the current task/step), immediately resolves the App Server request with a deferred
+      marker, and yields the turn. The existing directed `reply_card` delta on owner
+      answer/expiry wakes the next idle turn; Codex then reads the authoritative card(s)
+      through MCP. A durable
+      `(thread_id, turn_id, item_id) -> reply_card_ids[]` mapping makes reconnect/replay
+      idempotent. Secret-input requests become action cards and MUST NOT solicit the
+      secret value in card text or answers.
   - `stop`: `{member_id}` — the single ROBUST stop; the warden self-escalates the kill.
   - `uninstall`: `{member_id}` — the warden removes itself from its box.
   - `update` (T-5f01 — the owner's one-click machine upgrade, pushed by

@@ -77,6 +77,40 @@ func TestHandleIngestTelemetry_ClaimFoldsWithoutSelfReport(t *testing.T) {
 	}
 }
 
+func TestHandleIngestTelemetry_RuntimeCapabilities(t *testing.T) {
+	api := &apiServer{telemetry: newMemStore(), hub: NewHub()}
+	if !api.machineSupportsRuntime("legacy-warden", RuntimeClaude) ||
+		api.machineSupportsRuntime("legacy-warden", RuntimeCodex) {
+		t.Fatal("an absent capability map must preserve only legacy Claude placement")
+	}
+	rec := doIngestTelemetry(api, "m-box", "m-box",
+		`{"runtimes":{"claude":{"installed":true,"logged_in":true,"version":"2.1.211"},"codex":{"installed":true,"logged_in":false,"version":"0.145.0"}}}`)
+	if rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	if !api.machineSupportsRuntime("m-box", RuntimeClaude) {
+		t.Fatal("logged-in Claude capability must be eligible")
+	}
+	if api.machineSupportsRuntime("m-box", RuntimeCodex) {
+		t.Fatal("logged-out Codex capability must be ineligible")
+	}
+	caps := api.machineRuntimeCapabilities("m-box")
+	if got := caps[RuntimeCodex].Version; got == nil || *got != "0.145.0" {
+		t.Fatalf("Codex version did not round-trip: %#v", caps)
+	}
+	codexOnly := doIngestTelemetry(api, "m-box", "m-box",
+		`{"runtimes":{"codex":{"installed":true,"logged_in":true}}}`)
+	if codexOnly.Code != 200 || api.machineSupportsRuntime("m-box", RuntimeClaude) {
+		t.Fatal("once a map is reported, a missing Claude entry must fail closed")
+	}
+
+	bad := doIngestTelemetry(api, "m-box", "m-box",
+		`{"runtimes":{"codex":{"installed":"yes"}}}`)
+	if bad.Code != 400 {
+		t.Fatalf("wrong-typed capability must be 400: %d %s", bad.Code, bad.Body.String())
+	}
+}
+
 func TestHandleIngestTelemetry_BinariesFingerprintsFoldAndEcho(t *testing.T) {
 	api := &apiServer{telemetry: newMemStore(), hub: NewHub()}
 	// A binaries-only heartbeat is a valid telemetry POST (first-class field),

@@ -107,8 +107,29 @@ describe("MemberDetailPanel · model/effort quick-pick editor", () => {
     fireEvent.click(utils.getByTestId("mp-model-effort-save"));
     await waitFor(() =>
       expect(patchMember).toHaveBeenCalledWith("mira", {
+        runtime: "claude",
         model: "sonnet",
         effort: "high",
+      })
+    );
+  });
+
+  it("switching provider clears Claude's model pick and offers Codex suggestions plus an override", async () => {
+    const utils = renderPanel();
+    fireEvent.click(utils.getByTestId("mp-model-effort-edit"));
+    fireEvent.change(utils.getByTestId("me-runtime-select"), {
+      target: { value: "codex" },
+    });
+    const modelInput = utils.getByTestId("me-codex-model-select-input") as HTMLInputElement;
+    expect(modelInput.value).toBe("");
+    expect(utils.queryByTestId("me-model-chip-opus")).toBeNull();
+    fireEvent.click(utils.getByTestId("me-codex-model-select-chip-gpt-5.6-terra"));
+    fireEvent.click(utils.getByTestId("mp-model-effort-save"));
+    await waitFor(() =>
+      expect(patchMember).toHaveBeenCalledWith("mira", {
+        runtime: "codex",
+        model: "gpt-5.6-terra",
+        effort: "medium",
       })
     );
   });
@@ -123,6 +144,7 @@ describe("MemberDetailPanel · model/effort quick-pick editor", () => {
     fireEvent.click(utils.getByTestId("mp-model-effort-save"));
     await waitFor(() =>
       expect(patchMember).toHaveBeenCalledWith("mira", {
+        runtime: "claude",
         model: "claude-x-preview",
         effort: "medium",
       })
@@ -136,6 +158,7 @@ describe("MemberDetailPanel · model/effort quick-pick editor", () => {
     fireEvent.click(utils.getByTestId("mp-model-effort-save"));
     await waitFor(() =>
       expect(patchMember).toHaveBeenLastCalledWith("mira", {
+        runtime: "claude",
         model: "",
         effort: "medium",
       })

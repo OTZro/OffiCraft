@@ -1133,13 +1133,14 @@ export function MemberDetailPanel({
       vm={{
         testIdPrefix: "mp",
         online,
+        runtime: member.runtime || "claude",
         model: member.model,
         effort: member.effort,
         modelEffortNote: t.mp.modelEffortNextWakeNote,
         // model/effort are LAUNCH INTENTS patched onto the member — a change
         // takes effect on the NEXT wake/handover (the note above says so).
-        onSaveModelEffort: async (model, effort) => {
-          await api.patchMember(member.id, { model, effort });
+        onSaveModelEffort: async (runtime, model, effort) => {
+          await api.patchMember(member.id, { runtime, model, effort });
         },
         // Gate on `awake` (owner presence contract T-2860): 機器 + Claude
         // Account are runtime facts — not-awakened reads a bare dash, never a
@@ -1149,6 +1150,7 @@ export function MemberDetailPanel({
         machineAction: relocateAction,
         accountText: (awake && member.account) || "",
         contextPct: member.contextPct,
+        compactionCount: member.compactionCount,
         cost: totalCost,
         onRefocus: onRefocus ? async () => void (await onRefocus()) : undefined,
         refocusSince: member.refocusSince,

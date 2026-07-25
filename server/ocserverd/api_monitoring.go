@@ -39,6 +39,16 @@ func (s *apiServer) HandleIngestAgentContextApiAgentContextPost(w http.ResponseW
 		writeError(w, http.StatusBadRequest, "context_pct must be a number")
 		return
 	}
+	var compactions *int
+	if body.CompactionCount != nil {
+		value, ok := body.CompactionCount.(float64)
+		if !ok || value < 0 || value != math.Trunc(value) {
+			writeError(w, http.StatusBadRequest, "compaction_count must be a non-negative integer")
+			return
+		}
+		count := int(value)
+		compactions = &count
+	}
 	agentID := currentActor(r)
 	rateLimits := map[string]any{}
 	if body.RateLimits != nil {
@@ -55,15 +65,19 @@ func (s *apiServer) HandleIngestAgentContextApiAgentContextPost(w http.ResponseW
 	entry["rate_limits"] = rateLimits
 	entry["ts"] = now
 	entry["context_pct_ts"] = now
+	if compactions != nil {
+		entry["compaction_count"] = *compactions
+	}
 	s.gauge.Set(agentID, entry)
 	// No agent consumes the context signal on the wire (it drives the
 	// server-side context-high band, not fan-out); owner cockpit only.
 	s.hub.Publish("context", "signal", "context", agentID, nil, audienceOwnerOnly(), requestTrigger(r))
 	writeJSON(w, http.StatusOK, agentContextDTO{
-		AgentID:    agentID,
-		ContextPct: pct,
-		RateLimits: rateLimits,
-		TS:         now,
+		AgentID:         agentID,
+		ContextPct:      pct,
+		CompactionCount: compactions,
+		RateLimits:      rateLimits,
+		TS:              now,
 	})
 }
 
@@ -307,9 +321,10 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	}
 	if body.RateLimits == nil && body.Tokens == nil && body.Hardware == nil &&
 		body.Binaries == nil && body.Claude == nil && body.Cost == nil &&
-		body.Effort == nil && body.SelfUpdate == nil && body.CommandResult == nil {
+		body.Effort == nil && body.Runtime == nil && body.Runtimes == nil &&
+		body.SelfUpdate == nil && body.CommandResult == nil {
 		writeError(w, http.StatusBadRequest,
-			"rate_limits, tokens, hardware, binaries, claude, cost, effort, "+
+			"rate_limits, tokens, hardware, binaries, claude, cost, effort, runtime, runtimes, "+
 				"self_update or command_result is required")
 		return
 	}
@@ -343,6 +358,48 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	claude, ok := asObject(body.Claude, "claude")
 	if !ok {
 		return
+	}
+	runtimes, ok := asObject(body.Runtimes, "runtimes")
+	if !ok {
+		return
+	}
+	for name, raw := range runtimes {
+		if !ValidRuntime(name) {
+			writeError(w, http.StatusBadRequest, "runtimes keys must be 'claude' or 'codex'")
+			return
+		}
+		capability, isObj := raw.(map[string]any)
+		if !isObj {
+			writeError(w, http.StatusBadRequest, "runtimes."+name+" must be an object")
+			return
+		}
+		if v, exists := capability["installed"]; exists {
+			if _, valid := v.(bool); !valid {
+				writeError(w, http.StatusBadRequest, "runtimes."+name+".installed must be a boolean")
+				return
+			}
+		}
+		if v, exists := capability["logged_in"]; exists && v != nil {
+			if _, valid := v.(bool); !valid {
+				writeError(w, http.StatusBadRequest, "runtimes."+name+".logged_in must be a boolean or null")
+				return
+			}
+		}
+		if v, exists := capability["version"]; exists && v != nil {
+			if _, valid := v.(string); !valid {
+				writeError(w, http.StatusBadRequest, "runtimes."+name+".version must be a string or null")
+				return
+			}
+		}
+	}
+	var runtime *string
+	if body.Runtime != nil {
+		text, isStr := body.Runtime.(string)
+		if !isStr || !ValidRuntime(text) {
+			writeError(w, http.StatusBadRequest, "runtime must be 'claude' or 'codex'")
+			return
+		}
+		runtime = &text
 	}
 	var cost *float64
 	if body.Cost != nil {
@@ -390,6 +447,12 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	}
 	if body.Claude != nil {
 		entry["claude"] = claude
+	}
+	if body.Runtimes != nil {
+		entry["runtimes"] = runtimes
+	}
+	if runtime != nil {
+		entry["runtime"] = *runtime
 	}
 	if cost != nil {
 		entry["cost"] = *cost
@@ -446,6 +509,8 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 		Hardware:      entryObj(entry, "hardware"),
 		Binaries:      entryObj(entry, "binaries"),
 		Claude:        entryObj(entry, "claude"),
+		Runtime:       entryStr(entry, "runtime"),
+		Runtimes:      entryObj(entry, "runtimes"),
 		Cost:          entryNum(entry, "cost"),
 		Effort:        entryStr(entry, "effort"),
 		SelfUpdate:    entryObj(entry, "self_update"),
@@ -549,18 +614,20 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		// worker DTO reads (P7b read-path convergence — one fold, two wires).
 		rt := foldActorRuntime(entry, gauge[m.ID], m.BankedCost)
 		sessions = append(sessions, monitoringSessionDTO{
-			ID:         m.ID,
-			Name:       m.Name,
-			Role:       roleName,
-			Model:      m.Model,
-			Effort:     effort,
-			Machine:    resolveDisplay(machineNames, s.observedHost(m)),
-			Account:    resolveSessionAccount(rt.account),
-			Presence:   PresenceState(m, now, s.hub.IsOnline(m.ID)),
-			ContextPct: rt.contextPct,
-			Cost:       rt.cost,
-			BankedCost: rt.bankedCost,
-			Tokens:     entryObj(entry, "tokens"),
+			ID:              m.ID,
+			Name:            m.Name,
+			Role:            roleName,
+			Runtime:         NormalizeRuntime(m.Runtime),
+			Model:           m.Model,
+			Effort:          effort,
+			Machine:         resolveDisplay(machineNames, s.observedHost(m)),
+			Account:         resolveSessionAccount(rt.account),
+			Presence:        PresenceState(m, now, s.hub.IsOnline(m.ID)),
+			ContextPct:      rt.contextPct,
+			CompactionCount: rt.compactionCount,
+			Cost:            rt.cost,
+			BankedCost:      rt.bankedCost,
+			Tokens:          entryObj(entry, "tokens"),
 		})
 	}
 
@@ -605,14 +672,15 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		// members), so the registry verdicts apply verbatim here.
 		claudeVersion, claudeCredSource, claudeSubReadable := s.machineClaudeInfo(host)
 		row := monitoringMachineDTO{
-			Machine:           host,
-			DisplayName:       resolveDisplay(machineNames, host),
-			Agents:            hostCounts[host],
-			Accounts:          accounts,
-			BinStatus:         s.machineBinStatus(host),
-			ClaudeVersion:     claudeVersion,
-			ClaudeCredSource:  claudeCredSource,
-			ClaudeSubReadable: claudeSubReadable,
+			Machine:             host,
+			DisplayName:         resolveDisplay(machineNames, host),
+			Agents:              hostCounts[host],
+			Accounts:            accounts,
+			BinStatus:           s.machineBinStatus(host),
+			ClaudeVersion:       claudeVersion,
+			ClaudeCredSource:    claudeCredSource,
+			ClaudeSubReadable:   claudeSubReadable,
+			RuntimeCapabilities: s.machineRuntimeCapabilities(host),
 		}
 		if hw != nil {
 			row.CpuPct = teleNum(hw["cpu_pct"])
@@ -661,6 +729,13 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		}
 	}
 	accountKeys := map[string]bool{}
+	// An identified account is still useful observability even before Codex has
+	// supplied a rate-limit window or a billable-cost estimate.  Keeping it in
+	// the fold lets the cockpit show the bound ChatGPT account honestly instead
+	// of presenting the misleading "no account usage data" empty state.
+	for account := range acctHosts {
+		accountKeys[account] = true
+	}
 	for account := range freshRL {
 		accountKeys[account] = true
 	}

@@ -281,7 +281,11 @@ func (s *apiServer) buildBootContext(role string, member *Member, taskType strin
 	if err != nil {
 		return nil, err
 	}
-	bootSeed, err := s.root.readSeedFile("boot_sequence.md")
+	bootSeedName := "boot_sequence.md"
+	if member != nil && NormalizeRuntime(member.Runtime) == RuntimeCodex {
+		bootSeedName = "boot_sequence_codex.md"
+	}
+	bootSeed, err := s.root.readSeedFile(bootSeedName)
 	if err != nil {
 		return nil, err
 	}
@@ -317,7 +321,6 @@ func (s *apiServer) buildBootContext(role string, member *Member, taskType strin
 			"# 使用者自訂（Owner Additions）\n\n"+strings.TrimSpace(userCtx.Text))
 	}
 	parts = append(parts, strings.TrimSpace(bootSeed))
-
 	name := roleDTO.Name
 	if member != nil {
 		name = member.Name

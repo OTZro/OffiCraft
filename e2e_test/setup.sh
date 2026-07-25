@@ -85,10 +85,22 @@ echo "[setup] staging product-guide docs (docs/guide → docsdist, go:embed)…"
 bash "$REPO_ROOT/bin/build-docsdist" \
   || { echo "[setup] FATAL: build-docsdist failed" >&2; exit 1; }
 
-# 2c. build ocserverd fresh from source (with the staged SPA baked in), then
-#     migrate. The daemon runs with CWD = repo root so its oc.toml / DSN /
-#     repo-file assets resolve exactly like bin/serve (conformance/run.sh
-#     --target go convention).
+# 2b3. stage the remaining embed-only server assets. A plain go build with
+#      empty seedsdist/bindist produces a binary that starts but cannot boot an
+#      agent persona, serve the MCP catalog, or provide warden self-update
+#      binaries. That silent partial build makes real-runtime E2E misleading:
+#      Codex can complete its MCP handshake, then receive zero tools because
+#      tools/list fails with "catalog unavailable". Match bin/ci.sh and
+#      conformance/run.sh by staging both trees unconditionally before build.
+echo "[setup] staging seeds and bindist assets (go:embed)…"
+bash "$REPO_ROOT/bin/build-seedsdist" \
+  || { echo "[setup] FATAL: build-seedsdist failed" >&2; exit 1; }
+bash "$REPO_ROOT/bin/build-bindist" \
+  || { echo "[setup] FATAL: build-bindist failed" >&2; exit 1; }
+
+# 2c. build ocserverd fresh from source (with all staged assets baked in), then
+#     migrate. The daemon runs with CWD = repo root so its oc.toml / DSN resolve
+#     exactly like bin/serve (conformance/run.sh --target go convention).
 echo "[setup] building ocserverd (go build from server/ocserverd)…"
 (cd "$REPO_ROOT/server/ocserverd" && go build -o "$STATE_DIR/ocserverd" .) \
   || { echo "[setup] FATAL: ocserverd build failed" >&2; exit 1; }

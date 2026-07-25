@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -63,6 +64,32 @@ func TestReadSeedFileErrsWhenEmbedMiss(t *testing.T) {
 	_, err := root.readSeedFileFrom("boot_sequence.md", fstest.MapFS{})
 	if !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("want fs.ErrNotExist when the embed misses, got %v", err)
+	}
+}
+
+func TestBuildBootContextSelectsRuntimeBootSequence(t *testing.T) {
+	s := newWorkerTestServer(t)
+	for _, tc := range []struct {
+		name    string
+		runtime string
+		want    string
+		absent  string
+	}{
+		{"claude", RuntimeClaude, "# Claude Code 執行環境", "# Codex App Server 執行環境"},
+		{"codex", RuntimeCodex, "# Codex App Server 執行環境", "# Claude Code 執行環境"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			boot, err := s.buildBootContext("assistant", &Member{Runtime: tc.runtime}, "general")
+			if err != nil {
+				t.Fatalf("buildBootContext: %v", err)
+			}
+			if boot == nil || !strings.Contains(boot.Context, tc.want) {
+				t.Fatalf("runtime boot context missing %q", tc.want)
+			}
+			if strings.Contains(boot.Context, tc.absent) {
+				t.Fatalf("runtime boot context leaked other runtime tail %q", tc.absent)
+			}
+		})
 	}
 }
 

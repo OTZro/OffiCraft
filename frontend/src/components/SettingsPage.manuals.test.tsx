@@ -493,6 +493,7 @@ describe("設定 › 任務手冊 — detail", () => {
     await waitFor(async () => {
       expect((await api.getTaskManual("review-pr")).assignee).toEqual({
         kind: "outsource",
+        runtime: "claude",
         model: "opus",
         effort: "high",
         copies: 2,

@@ -63,14 +63,15 @@ The suite runs against the Go server (`ocserverd`) — the only implementation
 since the Python backend retired (rollback anchor: git tag `py-final`):
 
 ```bash
-bash run_all.sh                    # stage SPA → go build ocserverd (go:embed webdist)
+bash run_all.sh                    # stage all embed assets → go build ocserverd
 OC_E2E_TARGET=go bash run_all.sh   #     → ocserverd migrate (goose) → ocserverd serve
 ```
 
 Port :8791, repo-root `oc.toml`, fresh-DB lifecycle, exact-pid teardown. The
-run builds `ocserverd` fresh into `.state/` with the SPA staged into
-`server/ocserverd/webdist/` first, so the browser specs get the embedded
-cockpit.
+run builds `ocserverd` fresh into `.state/` with the SPA, product docs, seeds,
+and bindist (agent binaries plus the frozen MCP catalog) staged first, so the
+browser specs get the embedded cockpit and real-runtime specs get the same
+embedded agent/MCP assets as a production build.
 
 Or drive the phases by hand:
 

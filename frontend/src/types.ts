@@ -18,6 +18,7 @@ export type MemberLifecycle =
   | "stopped";
 
 export type Effort = "low" | "medium" | "high";
+export type AgentRuntime = "claude" | "codex";
 
 // Role keys are OPEN since M2-2: the seed "assistant" plus any owner-created
 // custom role key (server-minted `r-<hex>`). Labels resolve i18n-first (seed
@@ -44,6 +45,7 @@ export interface Member {
    * lifecycle dot + action button group need. Never fabricated.
    */
   lifecycle: MemberLifecycle;
+  runtime?: AgentRuntime;
   model: string;
   effort: Effort;
   // The member's kind (e.g. "assistant" | "warden"). The office roster shows
@@ -69,6 +71,7 @@ export interface Member {
   machine: string | null;
   account: string | null;
   contextPct: number | null;
+  compactionCount?: number | null;
   estimatedCost: number | null;
   bankedCost: number | null;
 
@@ -269,6 +272,16 @@ export interface MachineView {
    * (informational only since T-f694 — the account key no longer reads it).
    */
   claudeSubReadable: boolean | null;
+  runtimeCapabilities?: Partial<
+    Record<
+      AgentRuntime,
+      {
+        installed: boolean | null;
+        loggedIn: boolean | null;
+        version: string | null;
+      }
+    >
+  >;
 }
 
 /** The machine binary-freshness verdict vocabulary (`bin_status`). */
@@ -335,9 +348,11 @@ export interface MonSessionView {
   effort: string;
   machine: string;
   account: string;
+  runtime: "claude" | "codex";
   /** presence tri-state mapped 1:1 onto the member status. */
   status: MemberStatus;
   contextPct: number | null;
+  compactionCount: number | null;
   cost: number | null;
   bankedCost: number | null;
 }
@@ -358,6 +373,7 @@ export interface MonMachineView {
   binStatus: BinStatus;
   /** Same probe columns as the registry row (`MachineView.claude*`). */
   claudeVersion: string | null;
+  runtimeCapabilities?: MachineView["runtimeCapabilities"];
   claudeCredSource: ClaudeCredSource;
   claudeSubReadable: boolean | null;
 }

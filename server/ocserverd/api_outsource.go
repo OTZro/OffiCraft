@@ -469,9 +469,9 @@ func (s *apiServer) HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost
 	s.writeWorkerProjection(w, r, *worker)
 }
 
-// POST /api/outsource-workers/{id}/model — the owner cockpit's 換 model (owner-only),
-// the worker twin of the member model/effort edit. Persist the new model (blank ⇒
-// the launcher default) and effort; when the worker is ACTIVE + online, kill+respawn
+// POST /api/outsource-workers/{id}/model — the owner cockpit's runtime/model
+// edit (owner-only), the worker twin of the member runtime/model/effort edit.
+// Persist the new values; when the worker is ACTIVE + online, kill+respawn
 // so the new model takes effect NOW, otherwise (assigned / stopped) only persist —
 // the next spawn / restart bakes it in ("active 時 kill+respawn 立即生效, assigned 時
 // 下次 spawn 生效"). 404 unknown/released.
@@ -495,8 +495,25 @@ func (s *apiServer) HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(
 	if body.Model != nil {
 		worker.Model = strings.TrimSpace(*body.Model) // blank ⇒ launcher default
 	}
-	if body.Effort != nil && strings.TrimSpace(*body.Effort) != "" {
-		worker.Effort = strings.TrimSpace(*body.Effort)
+	if body.Runtime != nil {
+		runtime := string(*body.Runtime)
+		if !ValidRuntime(runtime) {
+			s.outsourceMu.Unlock()
+			writeError(w, http.StatusUnprocessableEntity,
+				"runtime must be one of [claude codex]; got '"+runtime+"'")
+			return
+		}
+		worker.Runtime = runtime
+	}
+	if body.Effort != nil {
+		effort := strings.TrimSpace(*body.Effort)
+		if !validEffort(effort) {
+			s.outsourceMu.Unlock()
+			writeError(w, http.StatusUnprocessableEntity,
+				"effort must be one of [high low medium]; got '"+effort+"'")
+			return
+		}
+		worker.Effort = effort
 	}
 	if err := s.dal.PutOutsourceWorker(*worker); err != nil {
 		s.outsourceMu.Unlock()
@@ -507,7 +524,7 @@ func (s *apiServer) HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(
 	// stopped worker adopts the new model at its next spawn / restart.
 	if worker.Status == WorkerStatusActive && worker.DesiredState != DesiredStateOffline &&
 		s.hub.IsOnline(worker.ID) {
-		s.respawnWorkerNow(*worker, "model")
+		s.respawnWorkerNow(*worker, "runtime/model")
 		if fresh, ferr := s.dal.GetOutsourceWorker(id); ferr == nil && fresh != nil {
 			worker = fresh
 		}

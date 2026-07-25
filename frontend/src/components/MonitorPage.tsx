@@ -1050,7 +1050,20 @@ export function MonitorPage() {
 
 /** Format a percentage, honest "—" when the source is null (never fabricated). */
 function pctText(v: number | null, dash: string): string {
-  return v != null ? `${v}%` : dash;
+  return v != null ? `${Math.round(v)}%` : dash;
+}
+
+function contextText(
+  pct: number | null,
+  runtime: "claude" | "codex",
+  compactions: number | null,
+  dash: string,
+  compactionLabel: (n: number) => string
+): string {
+  const text = pctText(pct, dash);
+  return runtime === "codex" && compactions != null
+    ? `${text} (${compactionLabel(compactions)})`
+    : text;
 }
 
 /** Power state for a machine row: AC (🔌) vs battery (🔋), with the battery
@@ -1207,7 +1220,7 @@ function SessionRow({
         {effort && <span className="mon-badge">{effort}</span>}
       </td>
       <td data-label={t.monitor.sessionCol.context}>
-        {pctText(session.contextPct, dash)}
+        {contextText(session.contextPct, session.runtime, session.compactionCount, dash, t.mp.compactionCount)}
       </td>
       <td data-label={t.monitor.sessionCol.estCost}>
         {totalCost != null ? formatCost(totalCost) : dash}
@@ -1299,7 +1312,7 @@ function OutsourceSessionRow({
         {worker.effort && <span className="mon-badge">{worker.effort}</span>}
       </td>
       <td data-label={t.monitor.sessionCol.context}>
-        {pctText(worker.contextPct ?? null, dash)}
+        {contextText(worker.contextPct ?? null, worker.runtime || "claude", worker.compactionCount ?? null, dash, t.mp.compactionCount)}
       </td>
       <td data-label={t.monitor.sessionCol.estCost}>
         {totalCost != null ? formatCost(totalCost) : dash}

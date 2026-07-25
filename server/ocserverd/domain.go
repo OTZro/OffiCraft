@@ -270,6 +270,10 @@ func ValidateMember(m Member) error {
 		return fmt.Errorf("member %s: kind %q not in {%q, %q, %q}",
 			m.ID, m.Kind, KindAssistant, KindWarden, KindOutsource)
 	}
+	if !ValidRuntime(NormalizeRuntime(m.Runtime)) {
+		return fmt.Errorf("member %s: runtime %q not in {%q, %q}",
+			m.ID, m.Runtime, RuntimeClaude, RuntimeCodex)
+	}
 	return nil
 }
 

@@ -849,7 +849,7 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 
 	kind := trimString(body.Target.Kind)
 	var newMember *Member
-	model, effort, machine := "", "", ""
+	runtime, model, effort, machine := RuntimeClaude, "", "", ""
 	switch kind {
 	case TaskExecutorMember:
 		// Rule 7: a 一般正職 may only turn its OWN task into a 發包 (an outsource
@@ -891,6 +891,14 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 		}
 		newMember = m
 	case TaskExecutorOutsource:
+		if body.Target.Runtime != nil {
+			runtime = string(*body.Target.Runtime)
+			if !ValidRuntime(runtime) {
+				writeError(w, http.StatusBadRequest,
+					"target.runtime must be 'claude' or 'codex'")
+				return
+			}
+		}
 		model = trimmedOrEmpty(body.Target.Model)
 		effort = trimmedOrEmpty(body.Target.Effort)
 		if effort == "" {
@@ -930,7 +938,8 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 		}
 		gate, err := s.outsourceSpawnGate(outsourceGateRequest{
 			PrincipalClass: principal, Initiator: initiator, TaskID: t.ID,
-			Model: model, Effort: effort, Machine: machine, IssuedBy: currentActor(r),
+			Runtime: runtime, Model: model, Effort: effort, Machine: machine,
+			IssuedBy: currentActor(r),
 		})
 		if err != nil {
 			internalError(w, err)
@@ -1015,10 +1024,12 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 	if kind == TaskExecutorMember {
 		t.ExecutorKind = TaskExecutorMember
 		t.ExecutorID = newMember.ID
+		t.OutsourceRuntime = RuntimeClaude
 		t.OutsourceModel, t.OutsourceEffort, t.OutsourceMachine = "", "", ""
 	} else {
 		t.ExecutorKind = TaskExecutorOutsource
 		t.ExecutorID = ""
+		t.OutsourceRuntime = runtime
 		t.OutsourceModel = model
 		t.OutsourceEffort = effort
 		t.OutsourceMachine = machine
@@ -1346,10 +1357,18 @@ func (s *apiServer) HandleCreateTaskApiTasksPost(w http.ResponseWriter, r *http.
 	}
 	// The dispatch target forces the outsource track (its model/effort/machine
 	// drive the gate + worker below), overriding any manual assignee.
-	dispatchModel, dispatchEffort, dispatchMachine := "", "", ""
+	dispatchRuntime, dispatchModel, dispatchEffort, dispatchMachine := RuntimeClaude, "", "", ""
 	if dispatchTarget != nil {
 		executorKind = TaskExecutorOutsource
 		executorID = ""
+		if dispatchTarget.Runtime != nil {
+			dispatchRuntime = string(*dispatchTarget.Runtime)
+			if !ValidRuntime(dispatchRuntime) {
+				writeError(w, http.StatusBadRequest,
+					"target.runtime must be 'claude' or 'codex'")
+				return
+			}
+		}
 		dispatchModel = trimmedOrEmpty(dispatchTarget.Model)
 		dispatchEffort = trimmedOrEmpty(dispatchTarget.Effort)
 		if dispatchEffort == "" {
@@ -1427,6 +1446,7 @@ func (s *apiServer) HandleCreateTaskApiTasksPost(w http.ResponseWriter, r *http.
 		ExecutorID:   executorID,
 		// The explicit 發包 target rides on the task row (T-35e0): the scheduler
 		// mints from it. Empty for a member/manual-outsource create.
+		OutsourceRuntime: dispatchRuntime,
 		OutsourceModel:   dispatchModel,
 		OutsourceEffort:  dispatchEffort,
 		OutsourceMachine: dispatchMachine,
@@ -1451,7 +1471,8 @@ func (s *apiServer) HandleCreateTaskApiTasksPost(w http.ResponseWriter, r *http.
 		}
 		gate, err := s.outsourceSpawnGate(outsourceGateRequest{
 			PrincipalClass: principal, Initiator: initiator, TaskID: t.ID,
-			Model: dispatchModel, Effort: dispatchEffort, Machine: dispatchMachine,
+			Runtime: dispatchRuntime, Model: dispatchModel,
+			Effort: dispatchEffort, Machine: dispatchMachine,
 			IssuedBy: currentActor(r),
 		})
 		if err != nil {

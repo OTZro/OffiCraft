@@ -45,12 +45,13 @@
         <key>OC_BASE</key><string>__OC_BASE__</string>
         <key>HOME</key><string>__HOME__</string>
         <key>OC_WARDEN_TOKFILE</key><string>__HOME__/.officraft/warden/exec-warden.tok</string>
-        <!-- CONDITIONAL (renderPlist): OC_NAMESPACE for a namespaced instance, and
-             OC_CLAUDE_BIN when the install resolved a claude executable — the
-             minimal launchd PATH above cannot re-find a version-manager claude at
-             runtime, so the installer stamps the absolute path here (and swaps
-             PATH for the installer's PATH when claude is a shim that needs it).
+        <!-- CONDITIONAL (renderPlist): OC_NAMESPACE for a namespaced instance,
+             plus OC_CLAUDE_BIN and/or OC_CODEX_BIN when install resolves those
+             executables. The minimal launchd PATH above cannot re-find a
+             version-manager CLI, so the installer stamps absolute paths here
+             (and carries the installer's PATH when a shim needs it).
         <key>OC_CLAUDE_BIN</key><string>__CLAUDE_BIN__</string>
+        <key>OC_CODEX_BIN</key><string>__CODEX_BIN__</string>
         -->
     </dict>
     <key>RunAtLoad</key><true/>

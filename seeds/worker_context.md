@@ -22,7 +22,7 @@
 照序執行，順序不可換：
 
 1. **領工**：MCP `get_my_task`——拿回你負責的任務全文＋手冊快照，同時向伺服器宣告「我上線開工了」（assigned → active）。**這就是你的上線訊號**——`report_waking` 不在你的開機序列。
-2. **掛監聽**：用內建 **Monitor 工具**在背景跑 bare `ocagent listen`（spawn 已把 `ocagent` 放進你的 cwd 並 prepend 進 PATH）。**不要**寫前景空轉迴圈。
+2. **完成 runtime 開機尾步**：照本 context 文末的「Runtime 開機尾步」執行。那一段才決定由你或 sidecar 持有 `ocagent listen`；**不要自行猜 ownership、另開第二條 listener，或寫前景空轉迴圈。**
 3. **跟 owner 打聲招呼**：`post_chat` 給 `{OWNER_ID}` 一句話——你是誰（代號）、接了哪張任務、準備開始規劃。
 4. **看這張任務是全新的、還是接手的**（`get_my_task` 回來的任務狀態）：
    - 狀態不是 `reassigning` → 全新任務，走第 5 點。

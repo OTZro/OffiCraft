@@ -111,4 +111,25 @@ describe("MemberDetailPanel · presence-gated machine + account", () => {
     expect(within(cell).getByText("seth-m5")).toBeTruthy();
     expect(within(cell).getByText("eva-claude")).toBeTruthy();
   });
+
+  it("labels a Codex runtime account as Codex, and puts runtime before model", async () => {
+    const { container } = renderPanel(
+      mkMember({
+        status: "online",
+        lifecycle: "online",
+        runtime: "codex",
+        account: "codex-account",
+      })
+    );
+
+    await waitFor(() => within(container).getByText(zh.mp.codexAccount));
+    expect(within(container).queryByText(zh.mp.claudeAccount)).toBeNull();
+
+    const modelEffortCell = container.querySelector(
+      '[data-testid="mp-model-effort-cell"]'
+    )?.textContent ?? "";
+    expect(modelEffortCell.indexOf(zh.mp.agentRuntime)).toBeLessThan(
+      modelEffortCell.indexOf(zh.mp.model)
+    );
+  });
 });

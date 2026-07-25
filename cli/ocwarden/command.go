@@ -540,6 +540,7 @@ func startParamsFromArgs(args map[string]any) (StartParams, error) {
 	}
 	p.Role = optional("role")
 	p.TaskType = optional("task_type")
+	p.Runtime = optional("runtime")
 	p.Model = optional("model")
 	// effort (M2-2): the owner-set reasoning-effort launch intent. Optional like
 	// model — absent/blank keeps the executor's historic "--effort medium".

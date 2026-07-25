@@ -442,8 +442,14 @@ export const httpApi: Api = {
     // semantics — only supplied fields ride the body (an absent field must NOT
     // arrive as null, which the server would reject / misread). model/effort
     // are launch intents (take effect on the next wake).
-    const body: { name?: string; model?: string; effort?: string } = {};
+    const body: {
+      name?: string;
+      runtime?: "claude" | "codex";
+      model?: string;
+      effort?: string;
+    } = {};
     if (patch.name !== undefined) body.name = patch.name;
+    if (patch.runtime !== undefined) body.runtime = patch.runtime;
     if (patch.model !== undefined) body.model = patch.model;
     if (patch.effort !== undefined) body.effort = patch.effort;
     const wire = unwrap(
@@ -991,13 +997,22 @@ export const httpApi: Api = {
 
   async setWorkerModel(
     id: string,
-    patch: { model: string; effort?: string },
+    patch: {
+      runtime?: "claude" | "codex";
+      model: string;
+      effort?: string;
+    },
   ): Promise<OutsourceWorkerView> {
     // POST /api/outsource-workers/{id}/model {model, effort?} -> OutsourceWorkerDTO
     // (owner-only). Active+online → kill+respawn now; otherwise persist for the
     // next spawn. model is always sent (blank ⇒ launcher default); effort only
     // when supplied (an absent field must not arrive as null).
-    const body: { model: string; effort?: string } = { model: patch.model };
+    const body: {
+      runtime?: "claude" | "codex";
+      model: string;
+      effort?: string;
+    } = { model: patch.model };
+    if (patch.runtime !== undefined) body.runtime = patch.runtime;
     if (patch.effort !== undefined) body.effort = patch.effort;
     const wire = unwrap(
       await client.POST("/api/outsource-workers/{id}/model", {
@@ -1319,6 +1334,7 @@ export const httpApi: Api = {
     const body: {
       token_ttl?: number;
       handover_pct?: number;
+      codex_compaction_threshold?: number;
       outsource_max_parallel?: number;
       updater_receive_beta?: boolean;
       updater_auto_update?: boolean;
@@ -1333,6 +1349,7 @@ export const httpApi: Api = {
     } = {};
     if (patch.tokenTtl !== undefined) body.token_ttl = patch.tokenTtl;
     if (patch.handoverPct !== undefined) body.handover_pct = patch.handoverPct;
+    if (patch.codexCompactionThreshold !== undefined) body.codex_compaction_threshold = patch.codexCompactionThreshold;
     if (patch.outsourceMaxParallel !== undefined) {
       body.outsource_max_parallel = patch.outsourceMaxParallel;
     }
@@ -1443,10 +1460,12 @@ export const httpApi: Api = {
     const body: {
       name: string;
       member_name?: string;
+      runtime?: "claude" | "codex";
       model?: string;
       effort?: string;
     } = { name: input.name };
     if (input.memberName !== undefined) body.member_name = input.memberName;
+    if (input.runtime !== undefined) body.runtime = input.runtime;
     if (input.model !== undefined) body.model = input.model;
     if (input.effort !== undefined) body.effort = input.effort;
     const wire = unwrap(await client.POST("/api/roles", { body }));

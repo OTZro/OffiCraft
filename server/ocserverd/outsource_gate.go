@@ -30,6 +30,7 @@ type outsourceGateRequest struct {
 	PrincipalClass string   // the initiator's principal class (authz.go ladder)
 	Initiator      *Member  // the initiator's member row (nil for owner scope)
 	TaskID         string   // the task being dispatched
+	Runtime        string   // target worker runtime
 	Model          string   // target worker model
 	Effort         string   // target reasoning effort
 	Machine        string   // target machine placement preference

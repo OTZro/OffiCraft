@@ -29,7 +29,7 @@ import type { TaskReassignInput, TaskView } from "../api/adapter";
 import { useMachines } from "../hooks/useMachines";
 import { useMonitoring } from "../hooks/useMonitoring";
 import { ConfirmModal } from "./ConfirmModal";
-import { EFFORTS, MODEL_QUICK_PICKS } from "./ModelEffortEditor";
+import { CODEX_MODEL_OPTIONS, EFFORTS, MODEL_QUICK_PICKS } from "./ModelEffortEditor";
 
 /** One full-width segmented control — the AssigneeCard toggle's shape, in the
  * dialog's own class namespace. */
@@ -143,6 +143,7 @@ export function TaskReassignDialog({
 
   const [kindDraft, setKindDraft] = useState<"member" | "outsource">("member");
   const [memberDraft, setMemberDraft] = useState(roster[0]?.id ?? "");
+  const [runtimeDraft, setRuntimeDraft] = useState<"claude" | "codex">("claude");
   const [modelDraft, setModelDraft] = useState("");
   const [effortDraft, setEffortDraft] = useState<string>("medium");
   // No 自動分配 row: a reassign must NAME a machine (owner 2026-07-19). Opens
@@ -182,6 +183,7 @@ export function TaskReassignDialog({
           ? { kind: "member", memberId: memberDraft }
           : {
               kind: "outsource",
+              runtime: runtimeDraft,
               model: modelDraft.trim(),
               effort: effortDraft,
               machine: machineDraft,
@@ -259,35 +261,79 @@ export function TaskReassignDialog({
 
           {kindDraft === "outsource" && (
             <>
+              <div className="task-reassign__section">
+                <div className="task-reassign__label">{t.mp.agentRuntime}</div>
+                <select
+                  className="task-reassign__input"
+                  value={runtimeDraft}
+                  data-testid="reassign-runtime"
+                  onChange={(e) => {
+                    setRuntimeDraft(e.target.value as "claude" | "codex");
+                    setModelDraft("");
+                  }}
+                >
+                  <option value="claude">Claude Code</option>
+                  <option value="codex">Codex</option>
+                </select>
+              </div>
               {/* 模型 — ModelEffortEditor's quick-pick vocabulary as segmented
                * chips + the authoritative free input (blank ⇒ runtime default). */}
               <div className="task-reassign__section">
                 <div className="task-reassign__label">
                   {t.settings.assigneeModelLabel}
                 </div>
-                <Segmented
-                  options={MODEL_QUICK_PICKS.map((m) => ({
-                    value: m,
-                    label: m,
-                  }))}
-                  value={
-                    (MODEL_QUICK_PICKS as readonly string[]).includes(modelDraft)
-                      ? (modelDraft as (typeof MODEL_QUICK_PICKS)[number])
-                      : null
-                  }
-                  onPick={(v) => setModelDraft(v)}
-                  testidPrefix="reassign-model"
-                  ariaLabel={t.settings.assigneeModelLabel}
-                  className="task-reassign__seg--grid2"
-                />
-                <input
-                  className="task-reassign__input"
-                  value={modelDraft}
-                  placeholder={t.settings.assigneeModelPlaceholder}
-                  aria-label={t.settings.assigneeModelPlaceholder}
-                  data-testid="reassign-model"
-                  onChange={(e) => setModelDraft(e.target.value)}
-                />
+                {runtimeDraft === "claude" && (
+                  <Segmented
+                    options={MODEL_QUICK_PICKS.map((m) => ({
+                      value: m,
+                      label: m,
+                    }))}
+                    value={
+                      (MODEL_QUICK_PICKS as readonly string[]).includes(modelDraft)
+                        ? (modelDraft as (typeof MODEL_QUICK_PICKS)[number])
+                        : null
+                    }
+                    onPick={(v) => setModelDraft(v)}
+                    testidPrefix="reassign-model"
+                    ariaLabel={t.settings.assigneeModelLabel}
+                    className="task-reassign__seg--grid2"
+                  />
+                )}
+                {runtimeDraft === "codex" ? (
+                  <>
+                    <Segmented
+                      options={CODEX_MODEL_OPTIONS.map((m) => ({
+                        value: m,
+                        label: m,
+                      }))}
+                      value={
+                        (CODEX_MODEL_OPTIONS as readonly string[]).includes(modelDraft)
+                          ? (modelDraft as (typeof CODEX_MODEL_OPTIONS)[number])
+                          : null
+                      }
+                      onPick={setModelDraft}
+                      testidPrefix="reassign-model"
+                      ariaLabel={t.settings.assigneeModelLabel}
+                    />
+                    <input
+                      className="task-reassign__input"
+                      value={modelDraft}
+                      placeholder={t.settings.assigneeModelPlaceholder}
+                      aria-label={t.settings.assigneeModelPlaceholder}
+                      data-testid="reassign-model"
+                      onChange={(e) => setModelDraft(e.target.value)}
+                    />
+                  </>
+                ) : (
+                  <input
+                    className="task-reassign__input"
+                    value={modelDraft}
+                    placeholder={t.settings.assigneeModelPlaceholder}
+                    aria-label={t.settings.assigneeModelPlaceholder}
+                    data-testid="reassign-model"
+                    onChange={(e) => setModelDraft(e.target.value)}
+                  />
+                )}
               </div>
 
               <div className="task-reassign__section">

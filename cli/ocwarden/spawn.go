@@ -77,6 +77,7 @@ type StartParams struct {
 	MemberToken    string
 	Role           string
 	TaskType       string // colours the boot prompt upstream; carried for parity
+	Runtime        string // claude (default) | codex
 	Model          string
 	// Effort is the member's owner-set reasoning-effort launch intent
 	// (low/medium/high, from member.effort server-side). Empty ⇒ the historic
@@ -674,6 +675,8 @@ type SpawnDeps struct {
 	// formatted into it.
 	Logf      func(string, ...any)
 	ClaudeBin string // pre-resolved claude executable (Phase 4 resolves it)
+	CodexBin  string // pre-resolved codex executable
+	WardenBin string // this ocwarden executable; runs the codex-session sidecar
 	// ClaudeCreds (T-ba62, nil-skipped) is the spawn-time "is claude logged in?"
 	// existence probe. Resolvable-but-logged-out was the ONE prerequisite with no
 	// gate anywhere: the TUI starts, the nudge is delivered into a login prompt,
@@ -750,16 +753,34 @@ func (d SpawnDeps) start(p StartParams) SpawnOutcome {
 		nudge = defaultNudge
 	}
 
-	// claude CLI must be resolvable (Python raises SpawnError otherwise).
-	if d.ClaudeBin == "" {
+	runtimeName := strings.TrimSpace(p.Runtime)
+	if runtimeName == "" {
+		runtimeName = "claude"
+	}
+	if runtimeName != "claude" && runtimeName != "codex" {
+		return SpawnOutcome{OK: false, Reason: "runtime_unsupported: expected claude or codex"}
+	}
+	// The selected runtime must be resolvable. A machine may carry either or both.
+	if runtimeName == "claude" && d.ClaudeBin == "" {
 		return SpawnOutcome{OK: false, Reason: "claude_bin_unresolved: set OC_CLAUDE_BIN or put claude on the daemon PATH (~/.local/bin absent from launchd PATH)"}
+	}
+	if runtimeName == "codex" {
+		if d.CodexBin == "" {
+			return SpawnOutcome{OK: false, Reason: "codex_bin_unresolved: set OC_CODEX_BIN or put codex on the daemon PATH"}
+		}
+		if d.WardenBin == "" {
+			return SpawnOutcome{OK: false, Reason: "warden_bin_unresolved: cannot launch codex-session sidecar"}
+		}
+		if _, err := d.Runner.Run(d.CodexBin, "login", "status"); err != nil {
+			return SpawnOutcome{OK: false, Reason: "codex_not_logged_in: `codex login status` failed on this host"}
+		}
 	}
 	// ...and it must be LOGGED IN (T-ba62). A logged-out claude launches its TUI
 	// fine, so every downstream step "succeeds" and the outcome is OK:true while
 	// the agent can never boot — the silent failure this gate exists to end.
 	// nil seam = gate off (test default / OC_CLAUDE_CRED_CHECK=0). The reason
 	// carries the value-free SET/unset summary ONLY (see claudecreds.go).
-	if d.ClaudeCreds != nil {
+	if runtimeName == "claude" && d.ClaudeCreds != nil {
 		if st := d.ClaudeCreds(); !st.Present {
 			return SpawnOutcome{OK: false, Reason: fmt.Sprintf(
 				"claude_not_logged_in: no claude credential found on this host (%s) — "+
@@ -904,29 +925,38 @@ func (d SpawnDeps) start(p StartParams) SpawnOutcome {
 		}
 	}
 
-	command := buildLaunchCommandWithEnv(d.ClaudeBin, workdir, mcpConfigPath, appendSys,
-		tokenFile, p.MemberID, base, session, socket, p.Model, p.Effort, settingsPath, extraEnv, envRendered)
+	command := ""
+	if runtimeName == "codex" {
+		command = buildCodexLaunchCommand(d.WardenBin, d.CodexBin, workdir,
+			personaFile, tokenFile, p.MemberID, base, session, socket, p.Model, p.Effort,
+			extraEnv, envRendered)
+	} else {
+		command = buildLaunchCommandWithEnv(d.ClaudeBin, workdir, mcpConfigPath, appendSys,
+			tokenFile, p.MemberID, base, session, socket, p.Model, p.Effort, settingsPath, extraEnv, envRendered)
+	}
 
 	// pretrust the workdir BEFORE launch (LOAD-BEARING): without it claude's trust
 	// dialog can intercept and eat the boot nudge → dead-on-boot. Phase 2 leaves the
 	// seam nil (Phase 4 wires the real ~/.claude.json write); a nil seam is skipped,
 	// a failing one aborts (better to not-spawn than to spawn a nudge-eaten zombie).
-	if d.Pretrust != nil {
+	if runtimeName == "claude" && d.Pretrust != nil {
 		if err := d.Pretrust(); err != nil {
 			return SpawnOutcome{OK: false, Reason: fmt.Sprintf(
 				"pretrust_failed: marking workdir trusted in claude.json: %v", err)}
 		}
 	}
 
-	// STAGE-A: detached claude TUI in tmux at the pinned geometry.
+	// STAGE-A: detached provider session in tmux at the pinned geometry.
 	if err := tmuxNewSession(d.Runner, socket, session, command); err != nil {
 		return SpawnOutcome{OK: false, Reason: fmt.Sprintf(
 			"spawn_exec_failed: tmux new-session: %v", err)}
 	}
-	// STAGE-B: deliver the neutral boot nudge via the trusted tmux buffer, with the
-	// bounded settle/confirm RETRY loop (pane-capture) so the nudge actually commits
-	// even when claude's REPL is not input-ready the instant new-session returns.
-	tmuxDeliverNudge(d.Runner, d.Sleep, socket, session, nudge)
+	if runtimeName == "claude" {
+		// STAGE-B (Claude only): deliver the neutral boot nudge via the trusted
+		// tmux buffer. Codex's sidecar starts the boot turn through App Server;
+		// injecting terminal keystrokes there would target a non-interactive pane.
+		tmuxDeliverNudge(d.Runner, d.Sleep, socket, session, nudge)
+	}
 
 	pid := tmuxPanePID(d.Runner, socket, session)
 	return SpawnOutcome{OK: true, SessionID: session, PID: pid}

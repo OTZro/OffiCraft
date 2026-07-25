@@ -28,7 +28,11 @@ interface WorkerDetailPanelProps {
   onRestart?: () => Promise<void>;
   /** Change model/effort (換 model — T-f190): active → takes effect now,
    * assigned → next spawn. Undefined ⇒ the model cell is read-only. */
-  onSetModel?: (model: string, effort: string) => Promise<void>;
+  onSetModel?: (
+    runtime: "claude" | "codex",
+    model: string,
+    effort: string,
+  ) => Promise<void>;
   /** Fetch the worker's initial-prompt PREVIEW (GET …/boot-context — T-ba6b):
    * the server re-runs the spawn fold over the CURRENT task/manual rows and
    * returns the text (no token). Undefined ⇒ the initial-prompt card is hidden
@@ -290,14 +294,15 @@ export function WorkerDetailPanel({
       vm={{
         testIdPrefix: "worker-detail",
         online,
+        runtime: worker.runtime || "claude",
         model: worker.model,
         effort: worker.effort,
         modelEffortNote: t.workerDetail.modelNextSpawnNote,
         // 換 model: active+online takes effect now (server kill+respawn),
         // otherwise the next spawn bakes it in. Read-only when unwired.
         onSaveModelEffort: onSetModel
-          ? async (model, effort) => {
-              await onSetModel(model, effort);
+          ? async (runtime, model, effort) => {
+              await onSetModel(runtime, model, effort);
             }
           : undefined,
         machineText,
@@ -307,6 +312,7 @@ export function WorkerDetailPanel({
         // "" ⇒ the shared panel's honest dash (T-ba6b).
         accountText: worker.account || "",
         contextPct: worker.contextPct ?? null,
+        compactionCount: worker.compactionCount ?? null,
         cost: totalCost,
         onRefocus: onRefocus
           ? async () => void (await onRefocus())

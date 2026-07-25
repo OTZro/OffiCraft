@@ -135,7 +135,7 @@ the DB). A rewrite MUST keep them ephemeral — persisting any of them is a beha
 | store | keyed by | written by | read by | restart semantics |
 |---|---|---|---|---|
 | context gauge (inventory #3) | verified caller `sub` | `POST /api/agent/context` (merge: MUST NOT clobber `boot_ts`; stamps `context_pct`, `rate_limits`, `ts`, `context_pct_ts`); SSE connect stamps `boot_ts` | context-high band, auto-recycle, monitoring fold | empty on restart (honest-empty; reporter refills) |
-| warden telemetry (inventory #5) | verified caller `sub` | `POST /api/monitoring/telemetry` — partial-report MERGE: only supplied fields (`rate_limits`/`tokens`/`hardware`/`cost`/`effort`/`self_update`/`command_result`, `machine`/`account` tags) overwrite; an all-absent body is 400 | monitoring fold; disconnect-edge bank | empty on restart; a purely-banked account disappears from the monitoring fold until re-reported (honest-empty by design) |
+| warden telemetry (inventory #5) | verified caller `sub` | `POST /api/monitoring/telemetry` — partial-report MERGE: only supplied fields (`rate_limits`/`tokens`/`hardware`/`cost`/`effort`/`runtime`/`runtimes`/`self_update`/`command_result`, `machine`/`account` tags) overwrite; `runtimes` is a value-free provider readiness map and MUST NOT contain credential material; an all-absent body is 400 | monitoring fold; disconnect-edge bank and runtime-capable placement | empty on restart; a purely-banked account disappears from the monitoring fold until re-reported (honest-empty by design) |
 | reconcile store (inventory #7) | member id | producer tick (per-member reconcile state: `last_command`, `last_command_at`, `stop_deadline`, attempts/backoff/circuit) | producer tick | forgotten on restart → the "awaiting presence"/dedupe windows reset; the next tick re-decides from presence (self-healing) |
 | warden-command FIFO (inventory #6) | warden member id | producer dispatch | SSE warden band | pending frames dropped; re-folded next tick (spec/sse.md §7) |
 
@@ -171,7 +171,10 @@ The server owns desired-state reconciliation; the warden is a stateless executor
 
 Per member: `desired_state` intent (`online | offline | uninstall`; junk-safe parse — any
 unrecognised value MUST be treated as `offline`, fail-safe never-spawn),
-the live `online` fact (**the SSE hub's `is_online` is the single online truth**), `refocus_since`, and the agent-reported stopped fact.
+the persisted runtime (`claude | codex`; absent/blank legacy rows fold to `claude`),
+the live `online` fact (**the SSE hub's `is_online` is the single online truth**),
+`refocus_since`, the agent-reported stopped fact, and the selected machine's volatile
+runtime capability report.
 
 ### 4.3 Decision rules (pure state machine)
 
@@ -185,7 +188,9 @@ the live `online` fact (**the SSE hub's `is_online` is the single online truth**
   (a silent timeout is indistinguishable from an at-most-once delivery miss). Circuit-open → no respawn until cooldown; cooldown lapse
   half-opens with a fresh retry budget (attempts reset).
 - ¬online, clear of backoff/circuit → dispatch **START**. The START payload MUST be built
-  server-side: fold the persona via the shared boot core (§2) + mint the member JWT (§1.3);
+  server-side: fold the persona via the shared boot core (§2) + mint the member JWT (§1.3)
+  + include the normalized runtime. The payload is otherwise provider-neutral and the
+  warden selects the Claude or Codex adapter from that field;
   a missing/inactive member, unknown role, or missing secret MUST fail closed — no START,
   state not advanced.
 - online ∧ `refocus_since > 0` → **recycle** (§4.5).
@@ -268,6 +273,11 @@ ONE-SHOT, never a standing order):
 - Queue-key resolution: a command for member M is enqueued under the member id of the
   ACTIVE warden on M's `desired_machine_id` (the machine id IS the warden's own member id);
   a warden target addresses itself.
+- Placement MUST filter for an online machine whose latest telemetry reports the selected
+  runtime `installed == true` and `logged_in != false`. An explicit machine that is
+  offline or lacks that readiness falls back to the same runtime-capable automatic
+  placement used by outsource scheduling. If no eligible machine exists, dispatch fails
+  closed and reconcile retries after telemetry or placement changes.
 
 ## 5. Installer / binary surface (one line — OpenAPI covers it)
 
