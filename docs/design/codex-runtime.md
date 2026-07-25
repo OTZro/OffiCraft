@@ -1,6 +1,6 @@
 # Codex runtime — provider adapter design
 
-> Status: implemented; isolated `seth-m1` end-to-end validation pending. Claude remains
+> Status: implemented and validated end-to-end on isolated `seth-m1`. Claude remains
 > the backward-compatible default.
 
 ## Goal and compatibility boundary
@@ -91,6 +91,16 @@ The Codex member boot sequence changes only execution ownership:
    Claude's `statusLine` reports. Existing warning/handover thresholds remain server-owned
    and unchanged.
 5. `request_user_input` is disabled and bridged to reply cards as described below.
+
+### Context compaction and refocus
+
+Claude's percentage-based handover remains unchanged. Codex App Server keeps a durable
+thread and can compact that thread without ending the session, so a transient context
+percentage is not its useful handover signal. The sidecar counts completed
+`contextCompaction` items and includes the current count in context telemetry. At three
+compactions in one live session, the existing graceful refocus flow runs; a real session
+boundary clears the count before the replacement thread reports again. Monitoring renders
+Codex as `context N% · ↻ compact x/3`; Claude remains percentage-only.
 
 The cockpit's Global Context editor remains a single shared owner-additions block. The
 read-only Claude and Codex Boot Sequence variants are shown together in the preview. For
