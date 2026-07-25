@@ -98,10 +98,11 @@ const (
 	reassignHandoverTimeoutSecs = 1800.0
 	// workerSpawnCooldownSecs benches a machine for a worker after that machine
 	// FAILED to boot it (a refused start receipt, or an FSM zombie-takeover
-	// ghost-reap off it). While benched, pickWorkerWarden skips the machine for
-	// that worker so the re-spawn lands elsewhere — 換機重試 (T-9ccf DoD②).
-	// Sized at 3× the re-dispatch pace so a benched host is retried only after
-	// a few full retry cycles elsewhere, never every 90s tick.
+	// ghost-reap off it). While benched, resolveWorkerPlacement refuses that
+	// machine for that worker — this is a PAUSE, not the 換機 rotation it was
+	// under automatic placement: there is no other host to rotate to now that a
+	// worker only ever boots where it was placed. Sized at 3× the re-dispatch
+	// pace so a known-bad boot is retried after a few cycles, not every 90s.
 	workerSpawnCooldownSecs = 3 * workerSpawnRetrySecs
 )
 
@@ -281,36 +282,54 @@ func sortedKeys(m map[string]any) []string {
 //
 // The literal "auto" was never a warden id — IsOnline("auto") is always false,
 // so an "auto" placement was an unreachable destination reconcile never healed.
-// Migration 00033 normalizes stored values to "" and every write path now
+// Migration 00034 normalizes stored values to "" and every write path now
 // rejects it, so it is NOT special-cased here: it simply names no machine and
 // falls out with everything else that does not resolve.
 //
 // Callers hold s.outsourceMu (the cooldown map read below shares it).
 func (s *apiServer) pickWorkerWarden(w OutsourceWorker, preferred string, now float64) string {
+	id, _ := s.resolveWorkerPlacement(w, preferred, now)
+	return id
+}
+
+// resolveWorkerPlacement is pickWorkerWarden's body, additionally naming WHY a
+// placement was refused. The two are one function on purpose: a reason derived
+// separately from the decision drifts from it, and this reason is what the owner
+// reads off the cockpit — it has to be the actual cause, not a plausible guess.
+// The returned reason is "" exactly when a machine was resolved.
+func (s *apiServer) resolveWorkerPlacement(w OutsourceWorker, preferred string, now float64) (string, string) {
 	if preferred == "" {
-		return ""
+		return "", placementReasonNoMachine + ": no machine is selected for this worker — " +
+			"pick one on the worker (改機器) or on the task type's 手冊 assignee; " +
+			"there is no automatic placement"
+	}
+	unavailable := func(detail string) (string, string) {
+		return "", placementReasonUnavailable + ": machine '" + preferred + "' " + detail +
+			"; no other machine is substituted"
 	}
 	members, err := s.dal.ListMembers()
 	if err != nil {
-		return ""
+		return unavailable("could not be looked up (server error)")
 	}
 	for _, m := range members {
 		if m.ID != preferred {
 			continue
 		}
-		if m.Kind != KindWarden || m.RosterStatus != RosterStatusActive ||
-			!s.hub.IsOnline(m.ID) {
-			return ""
+		if m.Kind != KindWarden || m.RosterStatus != RosterStatusActive {
+			return unavailable("is not an active machine")
+		}
+		if !s.hub.IsOnline(m.ID) {
+			return unavailable("is offline")
 		}
 		if s.workerMachineCoolingOn(w.ID, m.ID, now) {
-			return "" // benched for this worker after a recent boot failure
+			return unavailable("was just benched after a failed boot of this worker")
 		}
 		if !s.machineSupportsRuntime(m.ID, w.Runtime) {
-			return ""
+			return unavailable("does not provide the '" + NormalizeRuntime(w.Runtime) + "' runtime")
 		}
-		return m.ID
+		return m.ID, ""
 	}
-	return ""
+	return unavailable("does not exist")
 }
 
 // placementReasonNoMachine / placementReasonUnavailable are the two structured
@@ -328,36 +347,64 @@ const (
 // fields). Writes only when the reason actually CHANGES, because the 30s cadence
 // re-attempts the same blocked spawn indefinitely: an unconditional write would
 // re-stamp last_op_at and fan an SSE delta every tick, turning one stalled
-// worker into a permanent event stream.
+// worker into a permanent event stream. A CHANGED cause (the pin went offline,
+// then the machine was deleted) always writes — the guard suppresses repetition,
+// never news. clearWorkerPlacementBlock is its counterpart on the success path,
+// so a block that follows a successful dispatch is news again rather than being
+// mistaken for the same old block.
+//
+// The row is RE-READ before writing: this is a whole-row write on a snapshot the
+// tick loaded earlier, and closeTask releases workers WITHOUT holding
+// outsourceMu — persisting the stale copy would resurrect a released worker back
+// to 'assigned'. A worker that vanished or was released in the meantime is left
+// alone: there is nothing left to explain.
 //
 // Best-effort by contract (the stampWakeObservability rule): a persistence
 // failure is logged and never changes the dispatch decision — observability must
 // not be able to stall the control loop.
-func (s *apiServer) stampWorkerPlacementBlocked(w *OutsourceWorker, machinePref string, now float64) {
-	reason := placementReasonNoMachine + ": no machine is selected for this worker — " +
-		"pick one on the worker (改機器) or on the task type's 手冊 assignee; " +
-		"there is no automatic placement"
-	if machinePref != "" {
-		reason = placementReasonUnavailable + ": machine '" + machinePref + "' cannot " +
-			"take this worker right now — it is offline, was just benched after a " +
-			"failed boot, or does not provide the '" + NormalizeRuntime(w.Runtime) +
-			"' runtime; no other machine is substituted"
-	}
+func (s *apiServer) stampWorkerPlacementBlocked(w *OutsourceWorker, reason string, now float64) {
 	outsourceLog("spawn %s (%s): %s", w.ID, w.Codename, reason)
-	if w.LastOp == reconcileCmdStart && w.LastOpReason == reason {
+	fresh, err := s.dal.GetOutsourceWorker(w.ID)
+	if err != nil || fresh == nil || fresh.Status == WorkerStatusReleased {
+		return
+	}
+	if fresh.LastOp == reconcileCmdStart && fresh.LastOpReason == reason {
 		return // already stamped with this exact cause — do not churn the row
 	}
 	ok := false
-	w.LastOp = reconcileCmdStart
-	w.LastOpOK = &ok
-	w.LastOpLog = ""
-	w.LastOpReason = reason
-	w.LastOpAt = now
-	if err := s.dal.PutOutsourceWorker(*w); err != nil {
+	fresh.LastOp = reconcileCmdStart
+	fresh.LastOpOK = &ok
+	fresh.LastOpLog = ""
+	fresh.LastOpReason = reason
+	fresh.LastOpAt = now
+	if err := s.dal.PutOutsourceWorker(*fresh); err != nil {
 		outsourceLog("spawn %s: placement-blocked stamp persist failed: %v", w.ID, err)
 		return
 	}
-	s.publishOutsourceWorker(*w, triggerServer)
+	s.publishOutsourceWorker(*fresh, triggerServer)
+}
+
+// clearWorkerPlacementBlock drops a placement-blocked stamp once a start has
+// actually been dispatched. Without it the stamp outlives its cause: a worker
+// blocked, then dispatched, then blocked again for the SAME reason would match
+// the anti-churn guard above and write nothing, leaving the cockpit showing a
+// last_op_at from the first block — "stalled an hour ago" and "stalled right
+// now" would render identically, which is the silence this whole change removes.
+// Only a placement stamp is cleared; a warden's own receipt is never touched.
+func (s *apiServer) clearWorkerPlacementBlock(workerID string) {
+	fresh, err := s.dal.GetOutsourceWorker(workerID)
+	if err != nil || fresh == nil || fresh.LastOp != reconcileCmdStart {
+		return
+	}
+	if !strings.HasPrefix(fresh.LastOpReason, placementReasonNoMachine+":") &&
+		!strings.HasPrefix(fresh.LastOpReason, placementReasonUnavailable+":") {
+		return
+	}
+	fresh.LastOpReason = ""
+	fresh.LastOpLog = ""
+	if err := s.dal.PutOutsourceWorker(*fresh); err != nil {
+		outsourceLog("spawn %s: placement-block clear failed: %v", workerID, err)
+	}
 }
 
 // workerMachineKey is the workerMachineCooldown map key: one bench per
@@ -419,20 +466,32 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 	// priority order: (1) the durable OWNER-PINNED desired_machine_id from a
 	// 改機器 relocate (T-f190) wins — the most recent explicit placement, and it
 	// survives restart; (2) else the reassign dialog's machine pick carried in
-	// workerMachinePref (T-160e, in-memory); (3) else the type manual's
-	// assignee. There is no fourth arm: when none of them names a machine the
-	// worker has no placement and is not booted (owner ruling 2026-07-25 — a
-	// machine nobody chose is not a destination).
+	// workerMachinePref (T-160e, in-memory); (3) else the DURABLE 發包 target on
+	// the task row, which is what a create/reassign dispatch resolved and stored;
+	// (4) else the type manual's assignee. There is no fifth arm: when none of
+	// them names a machine the worker has no placement and is not booted (owner
+	// ruling 2026-07-25 — a machine nobody chose is not a destination).
+	//
+	// Arm (3) is load-bearing, not belt-and-braces: workerMachinePref is
+	// in-memory by design, so a restart forgets it. It used to degrade to the old
+	// automatic placement — the worker still booted, just somewhere else. With no
+	// automatic arm left, forgetting would mean a PERMANENT stall for every
+	// in-flight ad-hoc 發包 (no type manual to fall back to). Reading the task row
+	// is what makes "the resolved spec is re-read on handover/rebirth, never
+	// re-derived" true rather than aspirational.
 	machinePref := w.DesiredMachineID
 	if machinePref == "" {
 		machinePref = s.workerMachinePref[w.ID]
+	}
+	if machinePref == "" {
+		machinePref = t.OutsourceMachine
 	}
 	if machinePref == "" && manual != nil {
 		if spec := outsourceSpecOf(*manual); spec != nil {
 			machinePref = spec.Machine
 		}
 	}
-	warden := s.pickWorkerWarden(w, machinePref, now)
+	warden, blocked := s.resolveWorkerPlacement(w, machinePref, now)
 	if warden == "" {
 		// Either nobody chose a machine, or the chosen one cannot take the worker
 		// right now (offline / benched after a failed boot / wrong runtime).
@@ -440,7 +499,7 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 		// the cockpit says WHY instead of showing an unexplained grey worker —
 		// this used to be log-only, which made "no machine chosen" and "booting"
 		// look identical to the owner.
-		s.stampWorkerPlacementBlocked(&w, machinePref, now)
+		s.stampWorkerPlacementBlocked(&w, blocked, now)
 		return false
 	}
 	persona, err := s.buildWorkerBootContext(w, *t, manual)
@@ -522,6 +581,9 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 	st.LastCommand = reconcileCmdStart
 	st.LastCommandAt = now
 	s.workerReconcileStates[w.ID] = st
+	// The start landed: any placement-blocked explanation on the row is now
+	// history, and leaving it would make the NEXT block look like the same one.
+	s.clearWorkerPlacementBlock(w.ID)
 	s.publishOutsourceWorker(w, triggerServer)
 	outsourceLog("spawn %s (%s) dispatched → warden %s (task %s, attempt %d)",
 		w.ID, w.Codename, warden, t.ID, s.workerSpawnAttempts[w.ID])

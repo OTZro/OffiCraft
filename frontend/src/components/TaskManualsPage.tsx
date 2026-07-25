@@ -26,9 +26,10 @@
 //   Assignee edit — segmented 指定成員/外包 toggle; model = the member panel's
 //                   quick-pick chips (MODEL_QUICK_PICKS — the same source as
 //                   ModelEffortEditor) + free input; 投入程度 = 低/中/高
-//                   segmented; 機器 = 自動分配 + the machines list (states
-//                   joined honestly from /api/machines + monitoring agents:
-//                   閒置/忙碌/離線); 雇用數量 = −/＋ stepper + 無限 (wire
+//                   segmented; 機器 = the machines list, one of which must be
+//                   chosen for the type to run at all (states joined honestly
+//                   from /api/machines + monitoring agents: 閒置/忙碌/離線);
+//                   雇用數量 = −/＋ stepper + 無限 (wire
 //                   copies=0 = unlimited, spec TaskManualDTO).
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";

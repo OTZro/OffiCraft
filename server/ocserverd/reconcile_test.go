@@ -578,11 +578,21 @@ func TestWardenTargetOf(t *testing.T) {
 	if got := s.wardenTargetOf("m-a"); got != ServerSelfHost {
 		t.Fatalf("an agent routes to its desired machine's warden: %q", got)
 	}
+	// A pin naming no active warden resolves to NOTHING, not to the raw string.
+	// Handing the unresolved pin on as if it were a host is how the literal
+	// "auto" became a destination: every dispatch addressed a machine that could
+	// not exist, forever, and the stall was indistinguishable from an offline one.
 	orphan := testAgent("m-orphan")
 	orphan.DesiredMachineID = "m-no-such-warden"
 	putTestMember(t, s, orphan)
-	if got := s.wardenTargetOf("m-orphan"); got != "m-no-such-warden" {
-		t.Fatalf("no active warden falls back to the raw host key: %q", got)
+	if got := s.wardenTargetOf("m-orphan"); got != "" {
+		t.Fatalf("a pin naming no active warden must resolve to no target: %q", got)
+	}
+	unplaced := testAgent("m-unplaced")
+	unplaced.DesiredMachineID = ""
+	putTestMember(t, s, unplaced)
+	if got := s.wardenTargetOf("m-unplaced"); got != "" {
+		t.Fatalf("an unplaced member must resolve to no target: %q", got)
 	}
 	if got := s.wardenTargetOf("m-missing"); got != "" {
 		t.Fatalf("a missing member resolves to no target: %q", got)
@@ -813,6 +823,79 @@ func TestRunReconcileTick(t *testing.T) {
 			t.Fatalf("a claim-less online member must never be recycled: %+v", frames)
 		}
 	})
+}
+
+// ── stampMemberPlacementBlocked ──────────────────────────────────────────────
+
+// A member decided START with no resolvable machine dispatches NOTHING, and the
+// stall is named on the row the cockpit reads instead of retrying in silence
+// every 30s. Written only when the cause CHANGES (the cadence re-decides the
+// same START forever).
+func TestStampMemberPlacementBlocked(t *testing.T) {
+	s := newReconcileTestServer(t)
+	putWarden(t, s, "mach-real")
+	connectOnline(t, s, "mach-real")
+	connectOnline(t, s, ServerSelfHost)
+
+	unplaced := testAgent("m-unplaced")
+	unplaced.DesiredMachineID = ""
+	putTestMember(t, s, unplaced)
+
+	now := 5000.0
+	s.runReconcileTick(now)
+	got, err := s.dal.GetMember("m-unplaced")
+	if err != nil || got == nil {
+		t.Fatalf("re-read member: %v", err)
+	}
+	if !strings.HasPrefix(got.LastOpReason, placementReasonNoMachine+":") {
+		t.Fatalf("an unplaced member must be stamped %s: %+v", placementReasonNoMachine, got)
+	}
+	if got.LastOp != reconcileCmdStart || got.LastOpOK == nil || *got.LastOpOK {
+		t.Fatalf("the stamp must be a FAILED start op: %+v", got)
+	}
+	if got.LastOpAt != now {
+		t.Fatalf("last_op_at = %v, want %v", got.LastOpAt, now)
+	}
+	for _, host := range []string{ServerSelfHost, "mach-real"} {
+		if frames := drainFrames(t, s, host); len(frames) != 0 {
+			t.Fatalf("%s must receive nothing for an unplaced member: %+v", host, frames)
+		}
+	}
+
+	// Anti-churn: the same cause on the next tick writes nothing.
+	s.runReconcileTick(now + 30)
+	if again, _ := s.dal.GetMember("m-unplaced"); again == nil || again.LastOpAt != now {
+		t.Fatalf("an unchanged cause must NOT re-stamp: %+v", again)
+	}
+
+	// A pin naming no active machine is the OTHER variant, and it names the pin.
+	ghosted := testAgent("m-ghosted")
+	ghosted.DesiredMachineID = "mach-ghost"
+	putTestMember(t, s, ghosted)
+	s.runReconcileTick(now + 60)
+	gh, _ := s.dal.GetMember("m-ghosted")
+	if gh == nil || !strings.HasPrefix(gh.LastOpReason, placementReasonUnavailable+":") {
+		t.Fatalf("a pin naming no active machine must be stamped %s: %+v",
+			placementReasonUnavailable, gh)
+	}
+	if !strings.Contains(gh.LastOpReason, "mach-ghost") {
+		t.Fatalf("the reason must name the machine the owner chose: %q", gh.LastOpReason)
+	}
+
+	// SENTINEL: a member pinned to a real ONLINE warden still STARTs normally, so
+	// the refusals above are the missing placement, not a broken fixture.
+	placed := testAgent("m-placed")
+	placed.DesiredMachineID = "mach-real"
+	putTestMember(t, s, placed)
+	s.runReconcileTick(now + 90)
+	frames := drainFrames(t, s, "mach-real")
+	if len(frames) != 1 || frames[0].RPC != reconcileCmdStart ||
+		frames[0].Args["member_id"] != "m-placed" {
+		t.Fatalf("a member pinned to a real online warden must START: %+v", frames)
+	}
+	if p, _ := s.dal.GetMember("m-placed"); p == nil || p.LastOpReason != "" {
+		t.Fatalf("a dispatched member must not be stamped blocked: %+v", p)
+	}
 }
 
 // ── stampContextHighRecycle ──────────────────────────────────────────────────

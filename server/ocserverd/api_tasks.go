@@ -96,18 +96,21 @@ func inheritDispatchSpec(spec dispatchSpec, manualSpec *outsourceTypeSpec, dispa
 		src = dispatchSpec{Runtime: dispatcher.Runtime, Model: dispatcher.Model,
 			Effort: dispatcher.Effort, Machine: dispatcher.DesiredMachineID}
 	}
-	inheritedRuntime := false
-	if spec.Runtime == "" && ValidRuntime(NormalizeRuntime(src.Runtime)) {
-		spec.Runtime = NormalizeRuntime(src.Runtime)
-		inheritedRuntime = true
+	// A blank source runtime STATES nothing — it must not be read as "claude"
+	// here, or a source carrying a codex model with an unset runtime would
+	// normalize to claude and then hand its codex model to a claude boot: exactly
+	// the incoherent pair this rule exists to prevent.
+	srcRuntime := strings.TrimSpace(src.Runtime)
+	if spec.Runtime == "" && srcRuntime != "" && ValidRuntime(NormalizeRuntime(srcRuntime)) {
+		spec.Runtime = NormalizeRuntime(srcRuntime)
 	}
 	if spec.Runtime == "" {
 		spec.Runtime = RuntimeClaude
 	}
-	// The source's model is only coherent under the source's runtime: keep it when
-	// the runtime came from that same source, or when an explicit runtime happens
-	// to match it.
-	if spec.Model == "" && (inheritedRuntime || NormalizeRuntime(src.Runtime) == spec.Runtime) {
+	// The source's model rides along only when the source SAYS which runtime it
+	// belongs to and that is the runtime being dispatched. Otherwise the model is
+	// of unknown provenance and the runtime's own default applies.
+	if spec.Model == "" && srcRuntime != "" && NormalizeRuntime(srcRuntime) == spec.Runtime {
 		spec.Model = src.Model
 	}
 	if spec.Effort == "" && validEffort(src.Effort) {

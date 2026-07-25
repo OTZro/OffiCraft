@@ -183,9 +183,13 @@ Legacy Claude probe fields stay for existing clients. Codex placement always req
 explicit `installed == true` and rejects an explicit `logged_in == false`. During a rolling
 upgrade only, a completely absent capability map preserves legacy Claude placement; after
 any map is reported, Claude follows the same explicit readiness rule. Null login state
-remains eligible. Explicit placement that is offline or lacks the selected runtime falls
-back to runtime-capable automatic placement. No eligible machine means no `start`;
-reconcile retries after telemetry or placement changes.
+remains eligible. Placement is an explicit decision (owner ruling 2026-07-25): a placement
+that is offline or lacks the selected runtime is NOT substituted by another host, and
+there is no automatic placement to fall back on — a machine nobody named is no placement
+at all. Either way no `start` is dispatched; the stall is named on the row the cockpit
+reads (`last_op_reason` — `no_machine_selected`, and `machine_unavailable` for an
+outsource worker whose named machine cannot take it), and reconcile retries after
+telemetry or placement changes.
 
 ## Launch policy
 

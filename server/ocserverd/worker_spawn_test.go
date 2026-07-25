@@ -750,6 +750,181 @@ func TestNotifyWorkerSpawn_StampsMachineUnavailableReason(t *testing.T) {
 	}
 }
 
+// TestNotifyWorkerSpawn_TaskRowMachineSurvivesRestart: the placement source
+// chain reads the DURABLE 發包 target on the task row. workerMachinePref is
+// in-memory by design, so a restart forgets it — and an ad-hoc 發包 worker has no
+// type manual to fall back to. The task row is what keeps it from stalling
+// permanently, so this test deliberately leaves the in-memory map EMPTY.
+func TestNotifyWorkerSpawn_TaskRowMachineSurvivesRestart(t *testing.T) {
+	s := newWorkerTestServer(t)
+	putWardenFixture(t, s, "m-dispatch")
+	connectWarden(t, s, ServerSelfHost)
+	connectWarden(t, s, "m-dispatch")
+
+	// No TypeKey → no type manual, exactly like an ad-hoc 發包.
+	task := putTaskFixture(t, s, Task{
+		ID: "t-0000000000c1", Title: "ad-hoc 發包", Status: TaskStatusNotStarted,
+		Priority: TaskPriorityMid, ExecutorKind: TaskExecutorOutsource,
+		ExecutorID: "ow-restart", OutsourceMachine: "m-dispatch",
+	})
+	w := putWorkerFixture(t, s, OutsourceWorker{
+		ID: "ow-restart", Codename: "O-restart", Model: "opus", Effort: "high",
+		TaskID: task.ID, Status: WorkerStatusAssigned,
+	})
+	if _, ok := s.workerMachinePref[w.ID]; ok {
+		t.Fatal("fixture must leave workerMachinePref empty — that is what a restart forgets")
+	}
+
+	s.outsourceMu.Lock()
+	dispatched := s.notifyWorkerSpawn(w, nowSecs())
+	s.outsourceMu.Unlock()
+	if !dispatched {
+		t.Fatal("the task row's durable 發包 target must place the worker after a restart")
+	}
+	frames := s.hub.DrainWardenCommands("m-dispatch")
+	if len(frames) != 1 {
+		t.Fatalf("want 1 start on the task row's machine, got %d", len(frames))
+	}
+	if rpc, args := decodeWardenFrame(t, frames[0]); rpc != reconcileCmdStart ||
+		args["member_id"] != "ow-restart" {
+		t.Fatalf("frame = %s %v", rpc, args)
+	}
+	if got := len(s.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
+		t.Fatalf("no other machine may be substituted, got %d frames", got)
+	}
+}
+
+// TestNotifyWorkerSpawn_BlockedReasonNamesTheCause: the refusal text is the
+// ACTUAL cause, not a three-way disjunction the owner has to guess between —
+// each way a named machine can refuse a worker writes its own distinguishable
+// machine_unavailable reason onto the worker row.
+func TestNotifyWorkerSpawn_BlockedReasonNamesTheCause(t *testing.T) {
+	s := newWorkerTestServer(t)
+	connectWarden(t, s, ServerSelfHost) // online, idle, and never the pin
+	putWardenFixture(t, s, "m-offline") // on the roster, never connects
+	putWardenFixture(t, s, "m-benched")
+	connectWarden(t, s, "m-benched")
+	putWardenFixture(t, s, "m-claudeonly")
+	connectWarden(t, s, "m-claudeonly")
+	s.telemetry.Set("m-claudeonly", map[string]any{"runtimes": map[string]any{
+		RuntimeClaude: map[string]any{"installed": true, "logged_in": true},
+	}})
+	// An ACTIVE roster member that is not a machine at all.
+	putTestMember(t, s, testAgent("m-person"))
+
+	now := 4_000_000.0
+	cases := []struct {
+		name, workerID, taskID, machine, runtime, phrase string
+		bench                                            bool
+	}{
+		{name: "offline", workerID: "ow-c1", taskID: "t-0000000000d1",
+			machine: "m-offline", phrase: "is offline"},
+		{name: "benched after a failed boot", workerID: "ow-c2", taskID: "t-0000000000d2",
+			machine: "m-benched", bench: true, phrase: "benched after a failed boot"},
+		{name: "wrong runtime", workerID: "ow-c3", taskID: "t-0000000000d3",
+			machine: "m-claudeonly", runtime: RuntimeCodex,
+			phrase: "does not provide the '" + RuntimeCodex + "' runtime"},
+		{name: "not an active machine", workerID: "ow-c4", taskID: "t-0000000000d4",
+			machine: "m-person", phrase: "is not an active machine"},
+		{name: "does not exist", workerID: "ow-c5", taskID: "t-0000000000d5",
+			machine: "m-ghost", phrase: "does not exist"},
+	}
+	seen := map[string]string{}
+	for _, c := range cases {
+		w := blockedSpawnFixture(t, s, c.taskID, c.workerID, c.machine)
+		if c.runtime != "" {
+			w.Runtime = c.runtime
+			putWorkerFixture(t, s, w)
+		}
+		s.outsourceMu.Lock()
+		if c.bench {
+			s.benchWorkerMachine(w.ID, c.machine, now)
+		}
+		dispatched := s.notifyWorkerSpawn(w, now)
+		s.outsourceMu.Unlock()
+		if dispatched {
+			t.Fatalf("%s: a refused placement must not dispatch", c.name)
+		}
+		blocked := readWorker(t, s, c.workerID)
+		if !strings.HasPrefix(blocked.LastOpReason, placementReasonUnavailable+":") {
+			t.Fatalf("%s: last_op_reason = %q, want a %s reason", c.name,
+				blocked.LastOpReason, placementReasonUnavailable)
+		}
+		if !strings.Contains(blocked.LastOpReason, c.phrase) {
+			t.Fatalf("%s: last_op_reason must name the cause %q, got %q", c.name,
+				c.phrase, blocked.LastOpReason)
+		}
+		if prior, dup := seen[blocked.LastOpReason]; dup {
+			t.Fatalf("%s and %s share one reason %q — the causes are not distinguishable",
+				c.name, prior, blocked.LastOpReason)
+		}
+		seen[blocked.LastOpReason] = c.name
+	}
+	if got := len(s.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
+		t.Fatalf("no refusal may be substituted onto the idle warden, got %d frames", got)
+	}
+
+	// SENTINEL: an online machine that can take the worker still dispatches, so
+	// the refusals above are the causes, not a broken fixture.
+	ok := blockedSpawnFixture(t, s, "t-0000000000d6", "ow-c6", ServerSelfHost)
+	s.outsourceMu.Lock()
+	dispatched := s.notifyWorkerSpawn(ok, now)
+	s.outsourceMu.Unlock()
+	if !dispatched || len(s.hub.DrainWardenCommands(ServerSelfHost)) != 1 {
+		t.Fatal("a healthy named machine must take the worker")
+	}
+}
+
+// TestNotifyWorkerSpawn_BlockRestampedAfterDispatch: the anti-churn guard
+// suppresses REPETITION, never news. A block, a real dispatch, then the same
+// block again must carry a FRESH last_op_at — without the clear on the dispatch
+// path the second block matches the first and is silently swallowed, leaving the
+// cockpit showing "stalled an hour ago" for a stall happening right now.
+func TestNotifyWorkerSpawn_BlockRestampedAfterDispatch(t *testing.T) {
+	s := newWorkerTestServer(t)
+	putWardenFixture(t, s, "m-flip")
+	w := blockedSpawnFixture(t, s, "t-0000000000e1", "ow-flip", "m-flip")
+
+	first := 3_000_000.0
+	s.outsourceMu.Lock()
+	s.notifyWorkerSpawn(w, first)
+	s.outsourceMu.Unlock()
+	blocked := readWorker(t, s, "ow-flip")
+	if !strings.HasPrefix(blocked.LastOpReason, placementReasonUnavailable+":") ||
+		blocked.LastOpAt != first {
+		t.Fatalf("an offline pin must stamp a block at %v: %+v", first, blocked)
+	}
+
+	// The machine comes online and the start actually lands.
+	conn, err := s.hub.Connect("m-flip", "")
+	if err != nil {
+		t.Fatalf("hub connect m-flip: %v", err)
+	}
+	s.outsourceMu.Lock()
+	dispatched := s.notifyWorkerSpawn(readWorker(t, s, "ow-flip"), first+workerSpawnRetrySecs+1)
+	s.outsourceMu.Unlock()
+	if !dispatched || len(s.hub.DrainWardenCommands("m-flip")) != 1 {
+		t.Fatal("the pin coming online must dispatch the worker")
+	}
+
+	// It goes offline again: the SAME cause, but after a dispatch this is news.
+	s.hub.Disconnect(conn)
+	third := first + 10*workerSpawnRetrySecs
+	s.outsourceMu.Lock()
+	s.notifyWorkerSpawn(readWorker(t, s, "ow-flip"), third)
+	s.outsourceMu.Unlock()
+	again := readWorker(t, s, "ow-flip")
+	if again.LastOpReason != blocked.LastOpReason {
+		t.Fatalf("the second block must carry the same cause: %q vs %q",
+			again.LastOpReason, blocked.LastOpReason)
+	}
+	if again.LastOpAt != third {
+		t.Fatalf("a block AFTER a dispatch must re-stamp: last_op_at = %v, want %v "+
+			"(keeping the first block's %v means the dispatch never cleared it)",
+			again.LastOpAt, third, blocked.LastOpAt)
+	}
+}
+
 // A案 P5a: worker_stop rides the same fail-closed reachability gate as member
 // dispatch — an offline target warden gets nothing in its FIFO.
 func TestEnqueueWorkerStop_OfflineTarget_FailClosed(t *testing.T) {
