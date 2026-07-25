@@ -25,6 +25,9 @@ import { navigateHash, useHashRoute } from "../lib/hashRoute";
 import { Markdown } from "./Markdown";
 import { Breadcrumbs, type Crumb } from "./Breadcrumbs";
 import { ChevronRightIcon } from "./icons";
+// The guide is a top-level route, not a SettingsPage child, so it must load
+// the shared document-layout rules itself.
+import "./settings.css";
 
 export function UserGuideList({
   docs,
