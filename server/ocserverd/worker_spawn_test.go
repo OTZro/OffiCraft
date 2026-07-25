@@ -264,46 +264,27 @@ func pickWarden(s *apiServer, pref string) string {
 	return s.pickWorkerWarden(OutsourceWorker{ID: "ow-pick"}, pref, nowSecs())
 }
 
-func TestPickWorkerWarden_AutoTieKeepsPriorPrecedence(t *testing.T) {
+// TestPickWorkerWarden_UnnamedMachineNeverPlaces: placement is an explicit owner
+// decision — an empty preference (and the legacy "auto" spelling, which names no
+// machine either) resolves to NOTHING, no matter how many healthy idle wardens
+// are online. This is the whole point of the change: a worker nobody placed is
+// not quietly placed somewhere.
+func TestPickWorkerWarden_UnnamedMachineNeverPlaces(t *testing.T) {
 	s := newWorkerTestServer(t)
-	// Nothing online → "" (fail-closed).
-	if got := pickWarden(s, "auto"); got != "" {
-		t.Fatalf("no online warden: got %q, want \"\"", got)
-	}
-	// Another active warden online → picked.
 	putWardenFixture(t, s, "m-other")
-	connectWarden(t, s, "m-other")
-	if got := pickWarden(s, "auto"); got != "m-other" {
-		t.Fatalf("other warden online: got %q, want m-other", got)
-	}
-	// Server-self online too, both idle (load tie) → server-self keeps the
-	// pre-machine-preference precedence.
 	connectWarden(t, s, ServerSelfHost)
-	if got := pickWarden(s, "auto"); got != ServerSelfHost {
-		t.Fatalf("server-self online: got %q, want %s", got, ServerSelfHost)
-	}
-	// An absent preference means "auto" (spec: absent = "auto").
-	if got := pickWarden(s, ""); got != ServerSelfHost {
-		t.Fatalf("empty preference: got %q, want %s", got, ServerSelfHost)
-	}
-}
+	connectWarden(t, s, "m-other")
 
-func TestPickWorkerWarden_AutoPicksIdlestMachine(t *testing.T) {
-	s := newWorkerTestServer(t)
-	putWardenFixture(t, s, "m-other")
-	connectWarden(t, s, ServerSelfHost)
-	connectWarden(t, s, "m-other")
-	// Server-self hosts one live agent session; m-other hosts none → "auto"
-	// must leave the precedence order and pick the IDLEST machine.
-	connectAgentOn(t, s, "mira", ServerSelfHost)
-	if got := pickWarden(s, "auto"); got != "m-other" {
-		t.Fatalf("auto with loaded server-self: got %q, want m-other (idlest)", got)
+	for _, pref := range []string{"", "auto"} {
+		if got := pickWarden(s, pref); got != "" {
+			t.Fatalf("preference %q with healthy wardens online: got %q, want \"\" (no placement)",
+				pref, got)
+		}
 	}
-	// Load up m-other past server-self → the pick follows the counts back.
-	connectAgentOn(t, s, "m-agent-b", "m-other")
-	connectAgentOn(t, s, "m-agent-c", "m-other")
-	if got := pickWarden(s, "auto"); got != ServerSelfHost {
-		t.Fatalf("auto with loaded m-other: got %q, want %s", got, ServerSelfHost)
+	// SENTINEL: the same fixture places fine once a machine is actually named,
+	// so the emptiness above is the preference, not a broken fixture.
+	if got := pickWarden(s, "m-other"); got != "m-other" {
+		t.Fatalf("named machine: got %q, want m-other", got)
 	}
 }
 
@@ -318,11 +299,14 @@ func TestPickWorkerWarden_FiltersBySelectedRuntime(t *testing.T) {
 	s.telemetry.Set("m-codex", map[string]any{"runtimes": map[string]any{
 		RuntimeCodex: map[string]any{"installed": true, "logged_in": true},
 	}})
-	got := s.pickWorkerWarden(
-		OutsourceWorker{ID: "ow-codex", Runtime: RuntimeCodex}, "auto", nowSecs(),
-	)
-	if got != "m-codex" {
-		t.Fatalf("Codex worker placed on %q, want the Codex-capable machine", got)
+	w := OutsourceWorker{ID: "ow-codex", Runtime: RuntimeCodex}
+	if got := s.pickWorkerWarden(w, "m-codex", nowSecs()); got != "m-codex" {
+		t.Fatalf("Codex worker on the Codex-capable machine: got %q, want m-codex", got)
+	}
+	// A machine that cannot run the worker's runtime is REFUSED outright — no
+	// substitution onto the runtime-capable host that is sitting right there.
+	if got := s.pickWorkerWarden(w, ServerSelfHost, nowSecs()); got != "" {
+		t.Fatalf("Codex worker pinned to a claude-only machine: got %q, want \"\"", got)
 	}
 }
 
@@ -331,38 +315,43 @@ func TestPickWorkerWarden_SpecifiedMachineOnline_Honoured(t *testing.T) {
 	putWardenFixture(t, s, "m-other")
 	connectWarden(t, s, ServerSelfHost)
 	connectWarden(t, s, "m-other")
-	// m-other is BUSIER than server-self — an explicit machine id must still
-	// win over the idlest-machine logic while it is online.
+	// m-other is BUSIER than server-self — an explicit machine id is honoured
+	// regardless: load is no longer an input to placement.
 	connectAgentOn(t, s, "mira", "m-other")
 	if got := pickWarden(s, "m-other"); got != "m-other" {
 		t.Fatalf("specified online machine: got %q, want m-other", got)
 	}
 }
 
-func TestPickWorkerWarden_SpecifiedMachineOffline_FallsBackToAuto(t *testing.T) {
+// TestPickWorkerWarden_SpecifiedMachineOffline_FailsClosed: the old contract
+// substituted another host when the named machine was offline, which booted the
+// worker somewhere the owner never chose. It now dispatches NOTHING.
+func TestPickWorkerWarden_SpecifiedMachineOffline_FailsClosed(t *testing.T) {
 	s := newWorkerTestServer(t)
 	putWardenFixture(t, s, "m-other")
 	putWardenFixture(t, s, "m-third")
 	connectWarden(t, s, ServerSelfHost)
 	connectWarden(t, s, "m-third")
-	// m-other is on the roster but OFFLINE → the spec-promised fallback to
-	// "auto": idlest online machine (m-third idle beats loaded server-self).
-	connectAgentOn(t, s, "mira", ServerSelfHost)
-	if got := pickWarden(s, "m-other"); got != "m-third" {
-		t.Fatalf("offline specified machine: got %q, want m-third (auto fallback)", got)
+	// m-other is on the roster but OFFLINE, while two healthy wardens are online
+	// and idle — exactly the situation the fallback used to exploit.
+	if got := pickWarden(s, "m-other"); got != "" {
+		t.Fatalf("offline specified machine: got %q, want \"\" (no substitution)", got)
 	}
-	// And with NOTHING online at all it stays fail-closed.
-	s2 := newWorkerTestServer(t)
-	putWardenFixture(t, s2, "m-other")
-	if got := pickWarden(s2, "m-other"); got != "" {
-		t.Fatalf("offline specified machine, none online: got %q, want \"\"", got)
+	// SENTINEL: bring it online and the same pin places immediately.
+	connectWarden(t, s, "m-other")
+	if got := pickWarden(s, "m-other"); got != "m-other" {
+		t.Fatalf("machine back online: got %q, want m-other", got)
+	}
+	// An id naming no machine at all is likewise nothing.
+	if got := pickWarden(s, "m-nonexistent"); got != "" {
+		t.Fatalf("unknown machine id: got %q, want \"\"", got)
 	}
 }
 
 // TestPickWorkerWarden_CooledMachineSkipped (T-9ccf DoD② 換機): a machine benched
-// for a worker (a boot failure within the cooldown window) is skipped so the
-// pick rotates to a healthy alternative; when EVERY online warden is benched the
-// pick honestly returns "" (wait, do not hammer a known-bad host).
+// for a worker (a boot failure within the cooldown window) is refused while the
+// bench holds — but the worker now WAITS for its own machine instead of rotating
+// onto one the owner did not choose.
 func TestPickWorkerWarden_CooledMachineSkipped(t *testing.T) {
 	s := newWorkerTestServer(t)
 	putWardenFixture(t, s, "m-other")
@@ -371,76 +360,20 @@ func TestPickWorkerWarden_CooledMachineSkipped(t *testing.T) {
 	now := 1_000_000.0
 	w := OutsourceWorker{ID: "ow-cool"}
 
-	// server-self is idlest → normally picked. Bench it for this worker → the
-	// pick must rotate to m-other.
-	s.outsourceMu.Lock()
-	s.benchWorkerMachine(w.ID, ServerSelfHost, now)
-	got := s.pickWorkerWarden(w, "auto", now)
-	s.outsourceMu.Unlock()
-	if got != "m-other" {
-		t.Fatalf("benched server-self must rotate to m-other, got %q", got)
-	}
-
-	// Bench m-other too → nothing eligible → "" (honest wait, no re-pick).
 	s.outsourceMu.Lock()
 	s.benchWorkerMachine(w.ID, "m-other", now)
-	got = s.pickWorkerWarden(w, "auto", now)
+	got := s.pickWorkerWarden(w, "m-other", now)
 	s.outsourceMu.Unlock()
 	if got != "" {
-		t.Fatalf("all online wardens benched must yield \"\" (wait), got %q", got)
+		t.Fatalf("benched machine must not place (and must not rotate), got %q", got)
 	}
 
-	// After the cooldown window elapses, the machines are eligible again.
+	// After the cooldown window elapses the pinned machine is eligible again.
 	s.outsourceMu.Lock()
-	got = s.pickWorkerWarden(w, "auto", now+workerSpawnCooldownSecs+1)
+	got = s.pickWorkerWarden(w, "m-other", now+workerSpawnCooldownSecs+1)
 	s.outsourceMu.Unlock()
-	if got == "" {
-		t.Fatalf("expired cooldown must re-admit a machine, got \"\"")
-	}
-}
-
-// TestPickWorkerWarden_DeprioritizesUnhealthyHost (T-9ccf DoD②, RAM+帳號判準): a
-// warden whose claude sub is unreadable (creds broken) or whose ram_pct is over
-// the ceiling is chosen only when nothing healthier is online. Here the idlest
-// host has broken creds, so the busier-but-healthy host wins; an UNKNOWN probe
-// (no telemetry) never deprioritizes.
-func TestPickWorkerWarden_DeprioritizesUnhealthyHost(t *testing.T) {
-	s := newWorkerTestServer(t)
-	putWardenFixture(t, s, "m-bad")
-	connectWarden(t, s, ServerSelfHost)
-	connectWarden(t, s, "m-bad")
-	now := 1_000_000.0
-	w := OutsourceWorker{ID: "ow-health"}
-
-	// m-bad is idlest (no agents) but its claude sub is UNREADABLE; server-self
-	// hosts a live agent (busier) but has no adverse probe → healthy wins.
-	connectAgentOn(t, s, "mira", ServerSelfHost)
-	s.telemetry.Set("m-bad", map[string]any{
-		"claude": map[string]any{"sub_readable": false},
-		"ts":     now,
-	})
-	s.outsourceMu.Lock()
-	got := s.pickWorkerWarden(w, "auto", now)
-	s.outsourceMu.Unlock()
-	if got != ServerSelfHost {
-		t.Fatalf("creds-broken idlest host must lose to a healthy busier host, got %q", got)
-	}
-
-	// A RAM-exhausted host is likewise deprioritized.
-	s2 := newWorkerTestServer(t)
-	putWardenFixture(t, s2, "m-ram")
-	connectWarden(t, s2, ServerSelfHost)
-	connectWarden(t, s2, "m-ram")
-	connectAgentOn(t, s2, "mira", ServerSelfHost)
-	s2.telemetry.Set("m-ram", map[string]any{
-		"hardware": map[string]any{"ram_pct": workerPlacementRamCeiling + 5},
-		"ts":       now,
-	})
-	s2.outsourceMu.Lock()
-	got = s2.pickWorkerWarden(w, "auto", now)
-	s2.outsourceMu.Unlock()
-	if got != ServerSelfHost {
-		t.Fatalf("ram-exhausted idlest host must lose to a healthy busier host, got %q", got)
+	if got != "m-other" {
+		t.Fatalf("expired cooldown must re-admit the pinned machine, got %q", got)
 	}
 }
 
@@ -541,6 +474,7 @@ func TestNotifyWorkerSpawn_DispatchesMemberStart_AndPaces(t *testing.T) {
 	w := putWorkerFixture(t, s, OutsourceWorker{
 		ID: "ow-2", Codename: "O-2", Model: "opus", Effort: "high",
 		TaskID: task.ID, Status: WorkerStatusAssigned,
+		DesiredMachineID: ServerSelfHost, // explicit placement (owner ruling 2026-07-25)
 	})
 
 	s.outsourceMu.Lock()
@@ -612,6 +546,7 @@ func TestNotifyWorkerSpawn_StampsSpawnObservation(t *testing.T) {
 	w := putWorkerFixture(t, s, OutsourceWorker{
 		ID: "ow-9", Codename: "O-9", Model: "opus", Effort: "high",
 		TaskID: task.ID, Status: WorkerStatusAssigned,
+		DesiredMachineID: ServerSelfHost, // explicit placement (owner ruling 2026-07-25)
 	})
 
 	s.outsourceMu.Lock()
@@ -681,6 +616,137 @@ func TestNotifyWorkerSpawn_HonoursManualMachinePreference(t *testing.T) {
 	token, _ := args["member_token"].(string)
 	if mid := jwtMachineOf(t, token); mid != "m-other" {
 		t.Errorf("token machine_id = %q, want m-other (the pinned dispatch host)", mid)
+	}
+}
+
+// readWorker re-reads a worker row from the DAL — the blocked-placement stamp
+// lands on the ROW, so every assertion below reads it back rather than trusting
+// the in-memory copy the caller passed in.
+func readWorker(t *testing.T, s *apiServer, id string) OutsourceWorker {
+	t.Helper()
+	w, err := s.dal.GetOutsourceWorker(id)
+	if err != nil || w == nil {
+		t.Fatalf("re-read worker %s: %+v %v", id, w, err)
+	}
+	return *w
+}
+
+// blockedSpawnFixture seeds one assigned worker on a live outsource task, ready
+// for a spawn attempt that is expected to be refused at placement time.
+func blockedSpawnFixture(t *testing.T, s *apiServer, taskID, workerID, machine string) OutsourceWorker {
+	t.Helper()
+	task := putTaskFixture(t, s, Task{
+		ID: taskID, Title: "placement stall", Status: TaskStatusNotStarted,
+		Priority: TaskPriorityMid, ExecutorKind: TaskExecutorOutsource,
+		ExecutorID: workerID,
+	})
+	return putWorkerFixture(t, s, OutsourceWorker{
+		ID: workerID, Codename: "O-" + workerID, Model: "opus", Effort: "high",
+		TaskID: task.ID, Status: WorkerStatusAssigned, DesiredMachineID: machine,
+	})
+}
+
+// TestNotifyWorkerSpawn_StampsNoMachineSelectedReason: a spawn nobody placed
+// dispatches NOTHING and says so on the worker row (last_op_reason
+// no_machine_selected) — and because the 30s cadence retries the same blocked
+// spawn forever, an identical retry must NOT re-stamp the row.
+func TestNotifyWorkerSpawn_StampsNoMachineSelectedReason(t *testing.T) {
+	s := newWorkerTestServer(t)
+	putWardenFixture(t, s, "m-other")
+	connectWarden(t, s, ServerSelfHost)
+	connectWarden(t, s, "m-other")
+	w := blockedSpawnFixture(t, s, "t-0000000000b1", "ow-nm", "")
+
+	now := 1_000_000.0
+	s.outsourceMu.Lock()
+	dispatched := s.notifyWorkerSpawn(w, now)
+	s.outsourceMu.Unlock()
+	if dispatched {
+		t.Fatal("a worker no one placed must not be dispatched")
+	}
+	// Two healthy idle wardens are online: neither may be substituted.
+	for _, host := range []string{ServerSelfHost, "m-other"} {
+		if got := s.hub.DrainWardenCommands(host); len(got) != 0 {
+			t.Fatalf("%s must receive nothing, got %d frames", host, len(got))
+		}
+	}
+	blocked := readWorker(t, s, "ow-nm")
+	if !strings.HasPrefix(blocked.LastOpReason, placementReasonNoMachine+":") {
+		t.Fatalf("last_op_reason = %q, want a %s reason", blocked.LastOpReason,
+			placementReasonNoMachine)
+	}
+	if blocked.LastOp != reconcileCmdStart || blocked.LastOpOK == nil || *blocked.LastOpOK {
+		t.Fatalf("a blocked spawn must stamp a FAILED start op: %+v", blocked)
+	}
+	if blocked.LastOpAt != now {
+		t.Fatalf("last_op_at = %v, want %v", blocked.LastOpAt, now)
+	}
+
+	// The anti-churn guarantee: same cause, same row, no second write.
+	s.outsourceMu.Lock()
+	s.notifyWorkerSpawn(blocked, now+workerSpawnRetrySecs+1)
+	s.outsourceMu.Unlock()
+	if again := readWorker(t, s, "ow-nm"); again.LastOpAt != blocked.LastOpAt {
+		t.Fatalf("an identical blocked retry must NOT re-stamp: last_op_at %v → %v",
+			blocked.LastOpAt, again.LastOpAt)
+	}
+
+	// SENTINEL: name an online machine and the very same worker dispatches, so
+	// the refusals above are the missing placement, not a broken fixture.
+	blocked.DesiredMachineID = "m-other"
+	if err := s.dal.PutOutsourceWorker(blocked); err != nil {
+		t.Fatalf("pin worker: %v", err)
+	}
+	s.outsourceMu.Lock()
+	ok := s.notifyWorkerSpawn(readWorker(t, s, "ow-nm"), now+2*workerSpawnRetrySecs)
+	s.outsourceMu.Unlock()
+	if !ok || len(s.hub.DrainWardenCommands("m-other")) != 1 {
+		t.Fatal("a named online machine must take the worker")
+	}
+}
+
+// TestNotifyWorkerSpawn_StampsMachineUnavailableReason: a worker pinned to an
+// OFFLINE machine stalls with machine_unavailable — it is never re-placed onto
+// the healthy warden sitting right there.
+func TestNotifyWorkerSpawn_StampsMachineUnavailableReason(t *testing.T) {
+	s := newWorkerTestServer(t)
+	putWardenFixture(t, s, "m-pinned")
+	connectWarden(t, s, ServerSelfHost) // online, idle, and NOT the pin
+	w := blockedSpawnFixture(t, s, "t-0000000000b2", "ow-off", "m-pinned")
+
+	now := 2_000_000.0
+	s.outsourceMu.Lock()
+	dispatched := s.notifyWorkerSpawn(w, now)
+	s.outsourceMu.Unlock()
+	if dispatched {
+		t.Fatal("an offline pin must not be dispatched anywhere")
+	}
+	if got := s.hub.DrainWardenCommands(ServerSelfHost); len(got) != 0 {
+		t.Fatalf("no other machine may be substituted for the offline pin, got %d frames",
+			len(got))
+	}
+	blocked := readWorker(t, s, "ow-off")
+	if !strings.HasPrefix(blocked.LastOpReason, placementReasonUnavailable+":") {
+		t.Fatalf("last_op_reason = %q, want a %s reason", blocked.LastOpReason,
+			placementReasonUnavailable)
+	}
+	if !strings.Contains(blocked.LastOpReason, "m-pinned") {
+		t.Fatalf("the reason must name the machine the owner chose: %q", blocked.LastOpReason)
+	}
+	if blocked.LastOpOK == nil || *blocked.LastOpOK {
+		t.Fatalf("a blocked spawn must stamp last_op_ok=false: %+v", blocked)
+	}
+
+	// SENTINEL: the pin comes online and the identical worker boots THERE.
+	connectWarden(t, s, "m-pinned")
+	s.outsourceMu.Lock()
+	ok := s.notifyWorkerSpawn(blocked, now+workerSpawnRetrySecs+1)
+	s.outsourceMu.Unlock()
+	if !ok {
+		t.Fatal("the pinned machine coming online must dispatch the worker")
+	}
+	if got := len(s.hub.DrainWardenCommands("m-pinned")); got != 1 {
+		t.Fatalf("want 1 start on the pinned machine, got %d", got)
 	}
 }
 
@@ -866,6 +932,7 @@ func fsmWorkerFixture(t *testing.T, s *apiServer, id string, status string, crea
 	return putWorkerFixture(t, s, OutsourceWorker{
 		ID: id, Codename: "O-1", Model: "opus", Effort: "high",
 		TaskID: "t-" + id, Status: status, CreatedTS: createdTS,
+		DesiredMachineID: ServerSelfHost, // explicit placement (owner ruling 2026-07-25)
 	})
 }
 
@@ -1319,6 +1386,7 @@ func TestTick_AssignedWorker_RedispatchesSpawn(t *testing.T) {
 	putWorkerFixture(t, s, OutsourceWorker{
 		ID: "ow-a", Codename: "O-10", Model: "opus", Effort: "high",
 		TaskID: task.ID, Status: WorkerStatusAssigned,
+		DesiredMachineID: ServerSelfHost, // explicit placement (owner ruling 2026-07-25)
 	})
 
 	s.runOutsourceTick(nowSecs())

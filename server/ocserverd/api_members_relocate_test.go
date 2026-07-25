@@ -122,6 +122,46 @@ func TestRelocateMember_Rejects(t *testing.T) {
 	}
 }
 
+// TestRelocateMember_RejectsUnresolvableMachine: ANY non-"" machine_id must
+// resolve to a real machine — the legacy "auto" spelling has no exemption (it
+// named no machine, so the pin could never boot). "" still clears the pin.
+func TestRelocateMember_RejectsUnresolvableMachine(t *testing.T) {
+	s := newReconcileTestServer(t)
+	putWarden(t, s, "mach-real")
+	m := testAgent("m-pin")
+	m.DesiredMachineID = "mach-real"
+	putTestMember(t, s, m)
+
+	relocate := func(machineID string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		s.HandleRelocateMemberApiMembersMemberIdRelocatePost(rec,
+			taskReq(t, "POST", "/api/members/m-pin/relocate",
+				map[string]any{"machine_id": machineID}, wireOwnerID, "owner"), "m-pin")
+		return rec
+	}
+
+	// SENTINEL: a real concrete machine id still pins.
+	if rec := relocate("mach-real"); rec.Code != http.StatusOK {
+		t.Fatalf("concrete machine relocate must 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	for _, machineID := range []string{"auto", "ghost"} {
+		if rec := relocate(machineID); rec.Code != http.StatusNotFound {
+			t.Fatalf("machine_id %q must 404, got %d %s", machineID, rec.Code, rec.Body.String())
+		}
+		got, _ := s.dal.GetMember("m-pin")
+		if got == nil || got.DesiredMachineID != "mach-real" {
+			t.Fatalf("a rejected %q relocate must leave the pin alone: %+v", machineID, got)
+		}
+	}
+	// "" is the legal clear — the member then has no placement at all.
+	if rec := relocate(""); rec.Code != http.StatusOK {
+		t.Fatalf("clearing the pin must 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	if got, _ := s.dal.GetMember("m-pin"); got == nil || got.DesiredMachineID != "" {
+		t.Fatalf("\"\" must clear the pin: %+v", got)
+	}
+}
+
 // TestRelocateMember_AdminGated pins the route's authz floor through the FULL
 // wired stack (the route-table Requires=admin_agent): a plain agent is a flat
 // 403 envelope, denied before the handler resolves anything.
@@ -153,12 +193,13 @@ func TestRelocateMember_AdminGated(t *testing.T) {
 func TestRelocateMember_WorkerIdFallback(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
+	seedMachine(t, api, ServerSelfHost)
 	workerID := assignOneWorker(t, api)
 
 	rec := httptest.NewRecorder()
 	api.HandleRelocateMemberApiMembersMemberIdRelocatePost(rec,
 		taskReq(t, "POST", "/api/members/"+workerID+"/relocate",
-			map[string]any{"machine_id": "auto"}, wireOwnerID, "owner"), workerID)
+			map[string]any{"machine_id": ServerSelfHost}, wireOwnerID, "owner"), workerID)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("relocate(worker id): %d %s", rec.Code, rec.Body.String())
 	}
@@ -186,8 +227,8 @@ func TestRelocateMember_WorkerIdFallback(t *testing.T) {
 	if err != nil || w == nil {
 		t.Fatalf("re-read worker: %v", err)
 	}
-	if w.DesiredMachineID != "auto" {
-		t.Errorf("worker desired_machine_id = %q, want auto", w.DesiredMachineID)
+	if w.DesiredMachineID != ServerSelfHost {
+		t.Errorf("worker desired_machine_id = %q, want %s", w.DesiredMachineID, ServerSelfHost)
 	}
 
 	// A RELEASED worker no longer resolves — the fallback answers the honest
@@ -199,7 +240,7 @@ func TestRelocateMember_WorkerIdFallback(t *testing.T) {
 	rec = httptest.NewRecorder()
 	api.HandleRelocateMemberApiMembersMemberIdRelocatePost(rec,
 		taskReq(t, "POST", "/api/members/"+workerID+"/relocate",
-			map[string]any{"machine_id": "auto"}, wireOwnerID, "owner"), workerID)
+			map[string]any{"machine_id": ServerSelfHost}, wireOwnerID, "owner"), workerID)
 	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "member") {
 		t.Fatalf("released worker id: want the member 404, got %d %s", rec.Code, rec.Body.String())
 	}

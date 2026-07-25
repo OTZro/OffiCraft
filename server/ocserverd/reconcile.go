@@ -1144,8 +1144,9 @@ func (s *apiServer) dispatchIdentitySweepNow(memberID, keepWarden string, now fl
 //   - outsource (A案 P6 — the former KindOutsource exclusion is REMOVED now the
 //     P5b naming convergence lets a member-verb stop target member-<ow-id>):
 //     the owner pin when concrete, else the machine the server ACTUALLY
-//     dispatched the last start to (workerSpawnTarget — "auto" placement has no
-//     durable pin). Restart amnesia / never-dispatched reads "" → no sweep
+//     dispatched the last start to (workerSpawnTarget — a task-level or manual
+//     placement leaves no durable pin on the worker row). Restart amnesia /
+//     never-dispatched reads "" → no sweep
 //     (fail-safe: an unverifiable 正身 never initiates a kill). This closes the
 //     2026-07-19 seth-m1 hole: a spawn retry's live doppelganger on another
 //     machine is reaped the moment the 正身 connects on the dispatched machine.
@@ -1163,7 +1164,7 @@ func (s *apiServer) identitySweepOnConnect(memberID, machineClaim string) {
 	}
 	expected := m.DesiredMachineID
 	if m.Kind == KindOutsource {
-		if expected == "" || expected == "auto" {
+		if expected == "" {
 			expected, _ = s.workerSpawnObs(memberID)
 		}
 	}

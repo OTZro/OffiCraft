@@ -1939,8 +1939,8 @@ export const mockApi: Api = {
     // observable outcome honestly: write the owner-pinned desired_machine_id and,
     // for a CONCRETE machine id, reflect it as the new `machine` (the dispatch
     // the server would perform), resolving the id to its display name from the
-    // machine registry. "auto"/"" carry no concrete target → `machine` is left
-    // untouched (never fabricated). A released / unknown worker → 404, matching
+    // machine registry. "" carries no target → `machine` is left untouched (never
+    // fabricated). A released / unknown worker → 404, matching
     // the owner-only server handler.
     const w = outsourceWorkers.find((x) => x.id === id);
     if (!w || w.status === "released") {
@@ -1952,7 +1952,7 @@ export const mockApi: Api = {
       );
     }
     w.desiredMachineId = machineId;
-    if (machineId !== "" && machineId !== "auto") {
+    if (machineId !== "") {
       const m = wireMembers.find(
         (x) => x.id === machineId && x.kind === "warden"
       );

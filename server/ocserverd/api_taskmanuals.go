@@ -59,8 +59,12 @@ func (s *apiServer) writeTaskManual(w http.ResponseWriter, m TaskManual) {
 // populated object must carry a legal kind — "member" (with a non-blank
 // member_id) or "outsource". Outsource knobs (spec TaskManualUpdateDTO):
 // `copies` >= 0 where 0 = 無限 (unlimited per-type parallel copies; absent
-// = 1); `machine` is the spawn placement preference — "auto" or a machine
-// id, any non-blank string (absent = "auto"). "" = OK, else the 400 message.
+// = 1); `machine`, when present, must be a MACHINE ID — the type's workers boot
+// there and nowhere else. Absent leaves the type without a placement, which is a
+// legal (if not-yet-runnable) manual: the dispatcher or a per-worker 改機器 can
+// still name one. The old "auto" spelling is rejected outright — it named no
+// machine, so every worker of that type silently never booted. "" = OK, else the
+// 400 message.
 func validateManualAssignee(assignee map[string]any) string {
 	if len(assignee) == 0 {
 		return ""
@@ -90,14 +94,38 @@ func validateManualAssignee(assignee map[string]any) string {
 			}
 		}
 		if machine, ok := assignee["machine"]; ok {
-			if m, isStr := machine.(string); !isStr || m == "" {
-				return "assignee machine must be \"auto\" or a machine id"
+			m, isStr := machine.(string)
+			if !isStr || m == "" {
+				return "assignee machine must be a machine id"
+			}
+			if m == "auto" {
+				return "assignee machine must be a machine id; \"auto\" is not a machine"
 			}
 		}
 	default:
 		return "assignee kind must be 'member' or 'outsource'"
 	}
 	return ""
+}
+
+// resolveManualAssigneeMachine confirms an outsource assignee's `machine` names a
+// machine that actually exists, writing the resolve error and returning false
+// when it does not. validateManualAssignee can only check the SHAPE (it is pure);
+// a stale or hand-typed id is shaped fine and strands every future worker of the
+// type — the same reasoning that makes a nonexistent relocate pin a 404.
+func (s *apiServer) resolveManualAssigneeMachine(w http.ResponseWriter, assignee map[string]any) bool {
+	if kind, _ := assignee["kind"].(string); kind != TaskExecutorOutsource {
+		return true
+	}
+	machineID, _ := assignee["machine"].(string)
+	if machineID == "" {
+		return true
+	}
+	if _, err := s.resolveMachine(machineID); err != nil {
+		writeResolveError(w, err, "machine", machineID)
+		return false
+	}
+	return true
 }
 
 // callerMaySetAssignee enforces the owner-only assignee governance gate
@@ -188,6 +216,9 @@ func (s *apiServer) HandleCreateTaskManualApiTaskManualsPost(w http.ResponseWrit
 	if body.Assignee != nil {
 		if problem := validateManualAssignee(*body.Assignee); problem != "" {
 			writeError(w, http.StatusBadRequest, problem)
+			return
+		}
+		if !s.resolveManualAssigneeMachine(w, *body.Assignee) {
 			return
 		}
 		blob, err := json.Marshal(*body.Assignee)
@@ -284,6 +315,9 @@ func (s *apiServer) HandleUpdateTaskManualApiTaskManualsTypeKeyPost(w http.Respo
 	if body.Assignee != nil {
 		if problem := validateManualAssignee(*body.Assignee); problem != "" {
 			writeError(w, http.StatusBadRequest, problem)
+			return
+		}
+		if !s.resolveManualAssigneeMachine(w, *body.Assignee) {
 			return
 		}
 	}

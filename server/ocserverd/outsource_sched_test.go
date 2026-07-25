@@ -202,10 +202,11 @@ func TestOutsourceSpecOfParsesTheManualAssignee(t *testing.T) {
 		spec.Copies != 3 {
 		t.Fatalf("full spec: got %+v", spec)
 	}
-	// copies absent → 1; effort absent → medium; machine absent → "auto".
+	// copies absent → 1; effort absent → medium; machine absent → "" (owner
+	// ruling 2026-07-25: an absent machine names none, not the legacy "auto").
 	spec = outsourceSpecOf(TaskManual{Assignee: `{"kind":"outsource","model":"m"}`})
 	if spec == nil || spec.Copies != 1 || spec.Effort != "medium" ||
-		spec.Machine != "auto" {
+		spec.Machine != "" {
 		t.Fatalf("defaults: got %+v", spec)
 	}
 	// copies 0 = 無限 and an explicit machine id both ride through verbatim.

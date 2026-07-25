@@ -103,14 +103,6 @@ const (
 	// Sized at 3× the re-dispatch pace so a benched host is retried only after
 	// a few full retry cycles elsewhere, never every 90s tick.
 	workerSpawnCooldownSecs = 3 * workerSpawnRetrySecs
-	// workerPlacementRamCeiling is the ram_pct above which a candidate warden is
-	// deprioritized in "auto" placement (a host whose memory is near-exhausted is
-	// where a fresh claude boot is likeliest to wedge — recon O-19 hypothesis 1).
-	// Soft, not fail-closed: an over-ceiling host is still eligible when nothing
-	// healthier is online, and an UNKNOWN ram (stale/absent telemetry) never
-	// deprioritizes — honest-unknown, the same backward-compat posture as the
-	// claude/bin probes.
-	workerPlacementRamCeiling = 90.0
 )
 
 // ── boot context (worker-specific assembly — NEVER the member fold) ──────────
@@ -271,88 +263,101 @@ func sortedKeys(m map[string]any) []string {
 
 // ── warden targeting ─────────────────────────────────────────────────────────
 
-// pickWorkerWarden picks the warden (= machine) a worker session boots on,
-// honouring the manual's spawn placement preference (spec TaskManualDTO
-// `machine`, parsed by outsourceSpecOf into outsourceTypeSpec.Machine):
+// pickWorkerWarden resolves the warden (= machine) a worker session boots on.
+// Placement is an EXPLICIT owner decision (owner ruling 2026-07-25): the ONLY
+// admissible preference is a concrete machine id, honoured only while that
+// warden is genuinely dispatchable — a warden kind, active on the roster,
+// online, not benched for this worker by a recent boot failure, and capable of
+// the worker's runtime.
 //
-//   - preferred == a concrete machine id → spawn THERE when that warden is
-//     currently online; when it is OFFLINE, fall back to "auto" automatically
-//     (the spec-promised behaviour: 指定的機器若當下離線,會自動改用「自動分配」).
-//   - preferred == "auto" (or "") → the IDLEST online machine: the one whose
-//     live agent-session count (hub.AgentsOnMachine — the same per-machine
-//     count the monitoring surface projects) is lowest; ties keep the prior
-//     precedence (server-self first, then lexicographic).
-//   - no online active warden → "" (fail-closed: the caller dispatches
-//     nothing and the cadence retries).
+// Anything else returns "" and the caller fails closed:
 //
-// A worker has no durable machine binding by design — any online warden can
-// host a temporary session; placement is decided HERE, at spawn time, where
-// liveness is actually known (never at scheduler admission time).
+//   - preferred == "" — no machine was ever chosen. There is no automatic
+//     placement to fall back on; the owner must pin one.
+//   - the pinned machine is offline, benched, or cannot run this runtime. The
+//     old "fall back to the idlest OTHER host" arm is gone: booting a worker
+//     somewhere the owner did not choose is the silent mis-placement this
+//     change removes, and an offline pin is now a visible stall instead.
 //
-// T-9ccf DoD②: the "auto" arm now folds two more spawn-time facts on top of
-// idleness, so a repeatedly-failing placement rotates off the bad host:
-//   - a machine benched for THIS worker (workerMachineCooldown — it just failed
-//     to boot it) is SKIPPED outright; when EVERY online warden is benched the
-//     pick returns "" and the worker waits, visible as spawn_state=stuck,
-//     rather than hammering a known-bad host;
-//   - among the rest, a broken-creds host (claude sub explicitly unreadable) and
-//     a RAM-exhausted host (ram_pct over the ceiling) are DEPRIORITIZED — chosen
-//     only when nothing healthier is online (soft, never fail-closed on unknown
-//     telemetry), then idlest-first as before.
+// The literal "auto" was never a warden id — IsOnline("auto") is always false,
+// so an "auto" placement was an unreachable destination reconcile never healed.
+// Migration 00033 normalizes stored values to "" and every write path now
+// rejects it, so it is NOT special-cased here: it simply names no machine and
+// falls out with everything else that does not resolve.
 //
 // Callers hold s.outsourceMu (the cooldown map read below shares it).
 func (s *apiServer) pickWorkerWarden(w OutsourceWorker, preferred string, now float64) string {
+	if preferred == "" {
+		return ""
+	}
 	members, err := s.dal.ListMembers()
 	if err != nil {
 		return ""
 	}
-	type cand struct {
-		id      string
-		penalty int // creds-broken (2) + ram-high (1): lower is healthier
-		load    int
-	}
-	var cands []cand
 	for _, m := range members {
+		if m.ID != preferred {
+			continue
+		}
 		if m.Kind != KindWarden || m.RosterStatus != RosterStatusActive ||
 			!s.hub.IsOnline(m.ID) {
-			continue
+			return ""
 		}
 		if s.workerMachineCoolingOn(w.ID, m.ID, now) {
-			continue // benched for this worker after a recent boot failure — 換機
+			return "" // benched for this worker after a recent boot failure
 		}
 		if !s.machineSupportsRuntime(m.ID, w.Runtime) {
-			continue
+			return ""
 		}
-		if preferred != "" && preferred != "auto" && m.ID == preferred {
-			return m.ID // the requested machine is online + not benched — honour it
-		}
-		penalty := 0
-		if NormalizeRuntime(w.Runtime) == RuntimeClaude {
-			if _, _, subReadable := s.machineClaudeInfo(m.ID); subReadable != nil && !*subReadable {
-				penalty += 2 // creds unreadable — a claude boot cannot even authenticate
-			}
-		}
-		if ram := s.machineRamPct(m.ID); ram != nil && *ram > workerPlacementRamCeiling {
-			penalty += 1 // memory near-exhausted — the boot is likeliest to wedge here
-		}
-		cands = append(cands, cand{id: m.ID, penalty: penalty, load: s.agentLoadOn(m.ID)})
+		return m.ID
 	}
-	// "auto" (or a preferred host that is offline/benched — the fallback arm):
-	// healthiest (lowest penalty), then idlest, then the stable order tie-break.
-	best := cand{}
-	haveBest := false
-	for _, c := range cands {
-		better := !haveBest || c.penalty < best.penalty ||
-			(c.penalty == best.penalty && c.load < best.load) ||
-			(c.penalty == best.penalty && c.load == best.load && wardenOrderBefore(c.id, best.id))
-		if better {
-			best, haveBest = c, true
-		}
+	return ""
+}
+
+// placementReasonNoMachine / placementReasonUnavailable are the two structured
+// last_op_reason codes a blocked placement writes (the "<code>: <detail>"
+// convention member.last_op_reason already uses). They exist so a stalled
+// worker names its own cause on the cockpit instead of rendering as an
+// unexplained grey row.
+const (
+	placementReasonNoMachine   = "no_machine_selected"
+	placementReasonUnavailable = "machine_unavailable"
+)
+
+// stampWorkerPlacementBlocked records WHY a worker was not dispatched, on the
+// worker row the cockpit already reads (last_op / last_op_reason — the 「最近操作」
+// fields). Writes only when the reason actually CHANGES, because the 30s cadence
+// re-attempts the same blocked spawn indefinitely: an unconditional write would
+// re-stamp last_op_at and fan an SSE delta every tick, turning one stalled
+// worker into a permanent event stream.
+//
+// Best-effort by contract (the stampWakeObservability rule): a persistence
+// failure is logged and never changes the dispatch decision — observability must
+// not be able to stall the control loop.
+func (s *apiServer) stampWorkerPlacementBlocked(w *OutsourceWorker, machinePref string, now float64) {
+	reason := placementReasonNoMachine + ": no machine is selected for this worker — " +
+		"pick one on the worker (改機器) or on the task type's 手冊 assignee; " +
+		"there is no automatic placement"
+	if machinePref != "" {
+		reason = placementReasonUnavailable + ": machine '" + machinePref + "' cannot " +
+			"take this worker right now — it is offline, was just benched after a " +
+			"failed boot, or does not provide the '" + NormalizeRuntime(w.Runtime) +
+			"' runtime; no other machine is substituted"
 	}
-	if !haveBest {
-		return ""
+	outsourceLog("spawn %s (%s): %s", w.ID, w.Codename, reason)
+	if w.LastOp == reconcileCmdStart && w.LastOpReason == reason {
+		return // already stamped with this exact cause — do not churn the row
 	}
-	return best.id
+	ok := false
+	w.LastOp = reconcileCmdStart
+	w.LastOpOK = &ok
+	w.LastOpLog = ""
+	w.LastOpReason = reason
+	w.LastOpAt = now
+	if err := s.dal.PutOutsourceWorker(*w); err != nil {
+		outsourceLog("spawn %s: placement-blocked stamp persist failed: %v", w.ID, err)
+		return
+	}
+	s.publishOutsourceWorker(*w, triggerServer)
 }
 
 // workerMachineKey is the workerMachineCooldown map key: one bench per
@@ -378,54 +383,6 @@ func (s *apiServer) benchWorkerMachine(workerID, machineID string, now float64) 
 		return
 	}
 	s.workerMachineCooldown[workerMachineKey(workerID, machineID)] = now + workerSpawnCooldownSecs
-}
-
-// machineRamPct is the freshest reported ram_pct for a warden host (its own
-// telemetry entry's hardware fold — the same source the monitoring machine row
-// projects). nil = honest unknown (no hardware telemetry yet).
-func (s *apiServer) machineRamPct(machineID string) *float64 {
-	if s.telemetry == nil {
-		return nil
-	}
-	entry := s.telemetry.Get(machineID)
-	if entry == nil {
-		return nil
-	}
-	hw, _ := entry["hardware"].(map[string]any)
-	if hw == nil {
-		return nil
-	}
-	return teleNum(hw["ram_pct"])
-}
-
-// agentLoadOn counts the live agent SSE sessions machine wardenID currently
-// hosts — the idleness metric for "auto" placement. The warden's OWN
-// connection is excluded (it is transport, not workload). Since the A案 P1
-// change, a worker token now DOES carry its host as the machine_id claim (see
-// notifyWorkerSpawn), so a live worker session on wardenID counts toward its
-// load here — the metric now sees workers as the workload they are, not the
-// blind spot the claim-less token used to leave.
-func (s *apiServer) agentLoadOn(wardenID string) int {
-	n := 0
-	for _, id := range s.hub.AgentsOnMachine(wardenID) {
-		if id != wardenID {
-			n++
-		}
-	}
-	return n
-}
-
-// wardenOrderBefore is the load-tie-break order: the server-self warden (the
-// deployment's always-there host) first, then lexicographic — exactly the
-// pre-machine-preference precedence, so a tie changes nothing.
-func wardenOrderBefore(a, b string) bool {
-	if a == ServerSelfHost {
-		return true
-	}
-	if b == ServerSelfHost {
-		return false
-	}
-	return a < b
 }
 
 // ── wake dispatch (fills the outsource_sched.go seam) ────────────────────────
@@ -457,34 +414,33 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 			manual = m
 		}
 	}
-	// Placement preference ("auto" | machine id) is consumed at SPAWN TIME —
-	// here, where warden liveness is known — never at admission. Two owner
-	// overrides feed it, in priority order (batch-land integration of T-160e
-	// + T-f190): (1) the durable OWNER-PINNED desired_machine_id from a 改機器
-	// relocate (T-f190) wins — the most recent explicit placement, and it
+	// The machine id is consumed at SPAWN TIME — here, where warden liveness is
+	// known — never at admission. Three owner-authored sources feed it, in
+	// priority order: (1) the durable OWNER-PINNED desired_machine_id from a
+	// 改機器 relocate (T-f190) wins — the most recent explicit placement, and it
 	// survives restart; (2) else the reassign dialog's machine pick carried in
-	// workerMachinePref (T-160e, in-memory); (3) else the manual's assignee;
-	// (4) else "auto". An unpinned, unreassigned worker behaves as before.
+	// workerMachinePref (T-160e, in-memory); (3) else the type manual's
+	// assignee. There is no fourth arm: when none of them names a machine the
+	// worker has no placement and is not booted (owner ruling 2026-07-25 — a
+	// machine nobody chose is not a destination).
 	machinePref := w.DesiredMachineID
 	if machinePref == "" {
 		machinePref = s.workerMachinePref[w.ID]
 	}
-	if machinePref == "" {
-		machinePref = "auto"
-		if manual != nil {
-			if spec := outsourceSpecOf(*manual); spec != nil {
-				machinePref = spec.Machine
-			}
+	if machinePref == "" && manual != nil {
+		if spec := outsourceSpecOf(*manual); spec != nil {
+			machinePref = spec.Machine
 		}
 	}
 	warden := s.pickWorkerWarden(w, machinePref, now)
 	if warden == "" {
-		// No online warden, OR every online warden is benched for this worker
-		// (all recently failed to boot it — DoD② 換機): honestly wait rather than
-		// hammer a known-bad host; the worker stays visible as a non-online
-		// presence (waking window elapsed → offline).
-		outsourceLog("spawn %s (%s): no eligible warden — fail-closed, will retry",
-			w.ID, w.Codename)
+		// Either nobody chose a machine, or the chosen one cannot take the worker
+		// right now (offline / benched after a failed boot / wrong runtime).
+		// Nothing is dispatched, and the stall is stamped onto the worker row so
+		// the cockpit says WHY instead of showing an unexplained grey worker —
+		// this used to be log-only, which made "no machine chosen" and "booting"
+		// look identical to the owner.
+		s.stampWorkerPlacementBlocked(&w, machinePref, now)
 		return false
 	}
 	persona, err := s.buildWorkerBootContext(w, *t, manual)
@@ -503,7 +459,7 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 	// workdir file — never a log, never chat, never a transcript.
 	//
 	// machine_id claim = `warden`, the machine this worker is ACTUALLY dispatched
-	// to (server-picked — the resolved id even when machinePref was "auto"/""),
+	// to (the resolved machine id — always concrete, never a placeholder),
 	// mirroring the member token (api_auth.go mintMemberToken burns
 	// DesiredMachineID). So the worker's live SSE now projects hub.MachineOf ==
 	// its host, the same WHERE an agent's does.

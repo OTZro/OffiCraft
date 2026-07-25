@@ -371,6 +371,44 @@ func TestRelocateOutsourceWorker_Rejects(t *testing.T) {
 	}
 }
 
+// TestRelocateOutsourceWorker_RejectsUnresolvableMachine: ANY non-"" machine_id
+// must resolve to a real machine — "auto" is no longer waved through as a
+// pseudo-machine. "" stays the legal clear.
+func TestRelocateOutsourceWorker_RejectsUnresolvableMachine(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := assignOneWorker(t, api)
+	seedMachine(t, api, "m-real")
+
+	relocate := func(machineID string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		api.HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePost(rec,
+			taskReq(t, "POST", "/api/outsource-workers/"+workerID+"/relocate",
+				map[string]any{"machine_id": machineID}, wireOwnerID, "owner"), workerID)
+		return rec
+	}
+
+	// SENTINEL: a real concrete machine id still pins.
+	if rec := relocate("m-real"); rec.Code != http.StatusOK {
+		t.Fatalf("concrete machine relocate must 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	for _, machineID := range []string{"auto", "m-ghost"} {
+		if rec := relocate(machineID); rec.Code != http.StatusNotFound {
+			t.Fatalf("machine_id %q must 404, got %d %s", machineID, rec.Code, rec.Body.String())
+		}
+		w, _ := api.dal.GetOutsourceWorker(workerID)
+		if w == nil || w.DesiredMachineID != "m-real" {
+			t.Fatalf("a rejected %q relocate must leave the pin alone: %+v", machineID, w)
+		}
+	}
+	if rec := relocate(""); rec.Code != http.StatusOK {
+		t.Fatalf("clearing the pin must 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	if w, _ := api.dal.GetOutsourceWorker(workerID); w == nil || w.DesiredMachineID != "" {
+		t.Fatalf("\"\" must clear the worker pin: %+v", w)
+	}
+}
+
 // relocateOK drives the owner 改機器 handler and asserts a 200. Shared by the
 // input-shape fixtures below.
 func relocateOK(t *testing.T, api *apiServer, workerID, machineID string) {

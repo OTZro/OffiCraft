@@ -577,7 +577,7 @@ describe("設定 › 任務手冊 — detail", () => {
           model: "opus",
           effort: "high",
           copies: 1,
-          machine: "auto",
+          machine: "mach-a",
         },
       })
     );

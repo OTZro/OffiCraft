@@ -55,6 +55,73 @@ func (s *apiServer) publishTask(t Task, trigger string) {
 		audienceMembers(t.ExecutorID, t.CreatorID), trigger)
 }
 
+// dispatchSpec is a resolved 發包 target: what an outsource worker minted for the
+// task is given. It is persisted on the task row (task.outsource_*) and consumed
+// once at spawn time — a handover or a rebirth re-reads the SAME row rather than
+// re-deriving, so a worker's placement cannot drift between generations.
+type dispatchSpec struct {
+	Runtime string
+	Model   string
+	Effort  string
+	Machine string
+}
+
+// inheritDispatchSpec fills the fields a 發包 left unset. An EXPLICIT field always
+// wins — the dispatcher named it, it stands. An omitted field inherits from ONE
+// source (owner contract 2026-07-25):
+//
+//   - a TYPED task takes the type manual's outsource assignee — its 手冊 settings
+//     are the configuration for that whole task type;
+//   - a FREE (ad-hoc) task takes the DISPATCHING MEMBER's own spec: the runtime,
+//     model and effort it runs as, and the machine it is itself pinned to. 發包
+//     without a spec means "one like me".
+//
+// runtime and model inherit TOGETHER: a model name only means anything under the
+// runtime it was chosen for, so an inherited model is kept only when its source's
+// runtime is the runtime actually being dispatched. Otherwise the model is left
+// empty and the runtime's own default model applies — mixing a codex model into a
+// claude boot would be a spawn failure the owner never asked for.
+//
+// Nothing here invents a machine. When neither the target, the manual, nor the
+// dispatcher names one, Machine stays empty — and an empty machine is not a
+// destination (pickWorkerWarden fails closed with a visible reason). That is the
+// point: a placement nobody chose is not a placement.
+func inheritDispatchSpec(spec dispatchSpec, manualSpec *outsourceTypeSpec, dispatcher *Member) dispatchSpec {
+	var src dispatchSpec
+	switch {
+	case manualSpec != nil:
+		src = dispatchSpec{Runtime: manualSpec.Runtime, Model: manualSpec.Model,
+			Effort: manualSpec.Effort, Machine: manualSpec.Machine}
+	case dispatcher != nil:
+		src = dispatchSpec{Runtime: dispatcher.Runtime, Model: dispatcher.Model,
+			Effort: dispatcher.Effort, Machine: dispatcher.DesiredMachineID}
+	}
+	inheritedRuntime := false
+	if spec.Runtime == "" && ValidRuntime(NormalizeRuntime(src.Runtime)) {
+		spec.Runtime = NormalizeRuntime(src.Runtime)
+		inheritedRuntime = true
+	}
+	if spec.Runtime == "" {
+		spec.Runtime = RuntimeClaude
+	}
+	// The source's model is only coherent under the source's runtime: keep it when
+	// the runtime came from that same source, or when an explicit runtime happens
+	// to match it.
+	if spec.Model == "" && (inheritedRuntime || NormalizeRuntime(src.Runtime) == spec.Runtime) {
+		spec.Model = src.Model
+	}
+	if spec.Effort == "" && validEffort(src.Effort) {
+		spec.Effort = src.Effort
+	}
+	if spec.Effort == "" {
+		spec.Effort = "medium"
+	}
+	if spec.Machine == "" {
+		spec.Machine = src.Machine
+	}
+	return spec
+}
+
 func (s *apiServer) publishOutsourceWorker(w OutsourceWorker, trigger string) {
 	// No agent consumes outsource_worker on the wire (an ow- member row is kept
 	// off every agent-facing roster surface); only the owner cockpit renders
@@ -849,7 +916,7 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 
 	kind := trimString(body.Target.Kind)
 	var newMember *Member
-	runtime, model, effort, machine := RuntimeClaude, "", "", ""
+	var dispatch dispatchSpec
 	switch kind {
 	case TaskExecutorMember:
 		// Rule 7: a 一般正職 may only turn its OWN task into a 發包 (an outsource
@@ -892,27 +959,38 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 		newMember = m
 	case TaskExecutorOutsource:
 		if body.Target.Runtime != nil {
-			runtime = string(*body.Target.Runtime)
-			if !ValidRuntime(runtime) {
+			dispatch.Runtime = string(*body.Target.Runtime)
+			if !ValidRuntime(dispatch.Runtime) {
 				writeError(w, http.StatusBadRequest,
 					"target.runtime must be 'claude' or 'codex'")
 				return
 			}
 		}
-		model = trimmedOrEmpty(body.Target.Model)
-		effort = trimmedOrEmpty(body.Target.Effort)
-		if effort == "" {
-			effort = "medium"
-		}
-		if !validEffort(effort) {
+		dispatch.Model = trimmedOrEmpty(body.Target.Model)
+		dispatch.Effort = trimmedOrEmpty(body.Target.Effort)
+		if dispatch.Effort != "" && !validEffort(dispatch.Effort) {
 			writeError(w, http.StatusBadRequest,
 				"target.effort must be one of low, medium, high")
 			return
 		}
-		machine = trimmedOrEmpty(body.Target.Machine)
-		if machine == "" {
-			machine = "auto"
+		dispatch.Machine = trimmedOrEmpty(body.Target.Machine)
+		if dispatch.Machine != "" {
+			if _, err := s.resolveMachine(dispatch.Machine); err != nil {
+				writeResolveError(w, err, "machine", dispatch.Machine)
+				return
+			}
 		}
+		// Same inheritance contract as create: the omitted fields come from the
+		// type manual (typed) or from the DISPATCHING member itself (free), and
+		// an unresolved machine stays empty rather than becoming a placement
+		// nobody chose.
+		var manualSpec *outsourceTypeSpec
+		if t.TypeKey != "" {
+			if manual, err := s.dal.GetTaskManual(t.TypeKey); err == nil && manual != nil {
+				manualSpec = outsourceSpecOf(*manual)
+			}
+		}
+		dispatch = inheritDispatchSpec(dispatch, manualSpec, caller.member)
 	default:
 		writeError(w, http.StatusBadRequest,
 			"target.kind must be 'member' or 'outsource'")
@@ -938,7 +1016,8 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 		}
 		gate, err := s.outsourceSpawnGate(outsourceGateRequest{
 			PrincipalClass: principal, Initiator: initiator, TaskID: t.ID,
-			Runtime: runtime, Model: model, Effort: effort, Machine: machine,
+			Runtime: dispatch.Runtime, Model: dispatch.Model,
+			Effort: dispatch.Effort, Machine: dispatch.Machine,
 			IssuedBy: currentActor(r),
 		})
 		if err != nil {
@@ -1029,10 +1108,10 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 	} else {
 		t.ExecutorKind = TaskExecutorOutsource
 		t.ExecutorID = ""
-		t.OutsourceRuntime = runtime
-		t.OutsourceModel = model
-		t.OutsourceEffort = effort
-		t.OutsourceMachine = machine
+		t.OutsourceRuntime = dispatch.Runtime
+		t.OutsourceModel = dispatch.Model
+		t.OutsourceEffort = dispatch.Effort
+		t.OutsourceMachine = dispatch.Machine
 	}
 	// Enter the reassigning LOCK (T-9ca5) — orthogonal to status, which stays
 	// DERIVED. The reassign reset non-terminal steps to pending above, so the
@@ -1278,6 +1357,9 @@ func (s *apiServer) HandleCreateTaskApiTasksPost(w http.ResponseWriter, r *http.
 	// member assignee. Kept distinct from a caller-supplied executor_member_id,
 	// which is the softer rule-5 subject.
 	manualAssigneeMemberID := ""
+	// The type's outsource assignee, when it has one — the inheritance source for
+	// a TYPED dispatch (nil for ad-hoc, which inherits from the dispatcher).
+	var manualSpec *outsourceTypeSpec
 	// Warnings ride the 200 answer (typed tasks only); they never block. nil for
 	// ad-hoc — an ad-hoc task has no manual, so it has no "undefined" fields.
 	var warnings []string
@@ -1350,38 +1432,42 @@ func (s *apiServer) HandleCreateTaskApiTasksPost(w http.ResponseWriter, r *http.
 		switch {
 		case kind == TaskExecutorOutsource:
 			executorKind = TaskExecutorOutsource // unassigned; the scheduler picks
+			manualSpec = outsourceSpecOf(*manual)
 		case kind == TaskExecutorMember && memberID != "":
 			executorID = memberID
 			manualAssigneeMemberID = memberID
 		}
 	}
-	// The dispatch target forces the outsource track (its model/effort/machine
-	// drive the gate + worker below), overriding any manual assignee.
-	dispatchRuntime, dispatchModel, dispatchEffort, dispatchMachine := RuntimeClaude, "", "", ""
+	// The dispatch target forces the outsource track (its resolved spec drives the
+	// gate + worker below), overriding any manual assignee. Fields the dispatcher
+	// omitted are filled by inheritDispatchSpec once the caller is known — an
+	// omission means "like the manual" (typed) or "like me" (free), never a
+	// server-invented placement.
+	var dispatch dispatchSpec
 	if dispatchTarget != nil {
 		executorKind = TaskExecutorOutsource
 		executorID = ""
 		if dispatchTarget.Runtime != nil {
-			dispatchRuntime = string(*dispatchTarget.Runtime)
-			if !ValidRuntime(dispatchRuntime) {
+			dispatch.Runtime = string(*dispatchTarget.Runtime)
+			if !ValidRuntime(dispatch.Runtime) {
 				writeError(w, http.StatusBadRequest,
 					"target.runtime must be 'claude' or 'codex'")
 				return
 			}
 		}
-		dispatchModel = trimmedOrEmpty(dispatchTarget.Model)
-		dispatchEffort = trimmedOrEmpty(dispatchTarget.Effort)
-		if dispatchEffort == "" {
-			dispatchEffort = "medium"
-		}
-		if !validEffort(dispatchEffort) {
+		dispatch.Model = trimmedOrEmpty(dispatchTarget.Model)
+		dispatch.Effort = trimmedOrEmpty(dispatchTarget.Effort)
+		if dispatch.Effort != "" && !validEffort(dispatch.Effort) {
 			writeError(w, http.StatusBadRequest,
 				"target.effort must be one of low, medium, high")
 			return
 		}
-		dispatchMachine = trimmedOrEmpty(dispatchTarget.Machine)
-		if dispatchMachine == "" {
-			dispatchMachine = "auto"
+		dispatch.Machine = trimmedOrEmpty(dispatchTarget.Machine)
+		if dispatch.Machine != "" {
+			if _, err := s.resolveMachine(dispatch.Machine); err != nil {
+				writeResolveError(w, err, "machine", dispatch.Machine)
+				return
+			}
 		}
 	}
 	if executorKind == TaskExecutorMember && executorID == "" {
@@ -1409,6 +1495,14 @@ func (s *apiServer) HandleCreateTaskApiTasksPost(w http.ResponseWriter, r *http.
 		executorKind == TaskExecutorOutsource, manualAssigneeMemberID, executorID); reason != "" {
 		writeError(w, code, reason)
 		return
+	}
+	// Resolved here because inheritance needs the caller: a free 發包 inherits the
+	// DISPATCHING member's own spec, and the dispatcher is the verified token sub
+	// (§14 caller-identity), never a request field. caller.member is nil for the
+	// owner and for an outsource worker — both then inherit nothing, so the
+	// machine must be named explicitly.
+	if executorKind == TaskExecutorOutsource {
+		dispatch = inheritDispatchSpec(dispatch, manualSpec, caller.member)
 	}
 
 	// Dedupe only where an identity key EXISTS (a keyless type has no dedupe
@@ -1446,10 +1540,10 @@ func (s *apiServer) HandleCreateTaskApiTasksPost(w http.ResponseWriter, r *http.
 		ExecutorID:   executorID,
 		// The explicit 發包 target rides on the task row (T-35e0): the scheduler
 		// mints from it. Empty for a member/manual-outsource create.
-		OutsourceRuntime: dispatchRuntime,
-		OutsourceModel:   dispatchModel,
-		OutsourceEffort:  dispatchEffort,
-		OutsourceMachine: dispatchMachine,
+		OutsourceRuntime: dispatch.Runtime,
+		OutsourceModel:   dispatch.Model,
+		OutsourceEffort:  dispatch.Effort,
+		OutsourceMachine: dispatch.Machine,
 		// §14 caller-identity: the creator is the verified token sub, never a
 		// request parameter — a member agent, an outsource worker, or "owner".
 		CreatorID: currentActor(r),
@@ -1471,8 +1565,8 @@ func (s *apiServer) HandleCreateTaskApiTasksPost(w http.ResponseWriter, r *http.
 		}
 		gate, err := s.outsourceSpawnGate(outsourceGateRequest{
 			PrincipalClass: principal, Initiator: initiator, TaskID: t.ID,
-			Runtime: dispatchRuntime, Model: dispatchModel,
-			Effort: dispatchEffort, Machine: dispatchMachine,
+			Runtime: dispatch.Runtime, Model: dispatch.Model,
+			Effort: dispatch.Effort, Machine: dispatch.Machine,
 			IssuedBy: currentActor(r),
 		})
 		if err != nil {

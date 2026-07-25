@@ -195,8 +195,8 @@ type apiServer struct {
 	// carries (T-160e: the dialog picks model/effort/machine for the fresh
 	// worker; scheduler-minted workers read the manual instead). In-memory
 	// like its siblings: after a restart the spawn retry honestly falls back
-	// to the manual preference / "auto".
-	workerMachinePref map[string]string // worker id → "auto" | machine id
+	// to the manual preference.
+	workerMachinePref map[string]string // worker id → machine id
 	// workerReconcileStates (A案 P6) → worker id → shared-FSM bookkeeping.
 	// The outsource spawn/rescue path runs the SAME pure member reconcile FSM
 	// (reconcileDecide: start_timeout / backoff / circuit / zombie-takeover —

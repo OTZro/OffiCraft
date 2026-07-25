@@ -114,16 +114,15 @@ export function useRelocateMachine({
   // (`desiredMachineId: ""` → boundMachineId null) with no observed machine
   // would otherwise compare null === null and swallow a live verdict.
   //
-  // 🔴 `"auto"` is a legal pin (`types.ts`: "" = unpinned, "auto" = idlest-online,
-  // else a concrete machine id) and NO concrete machine id ever equals it, so the
-  // plain equality left an auto-pinned member's notice stuck on screen forever —
-  // the r1 SHOULD-2 stickiness this self-heal exists to end. "auto" delegates the
-  // choice to the scheduler, so ANY observed placement satisfies it.
+  // A pin is now always a CONCRETE machine id (`types.ts`: "" = unpinned, else a
+  // machine id) — the "auto" pseudo-pin it used to have to special-case is gone,
+  // rejected at the API and normalized out of storage, so plain equality is the
+  // whole rule again: the move landed exactly when the member is observed on the
+  // machine it was pinned to.
   const observedMachineId =
     currentMachineId != null && currentMachineId !== "" ? currentMachineId : null;
   const landed =
-    observedMachineId != null &&
-    (boundMachineId === "auto" || observedMachineId === boundMachineId);
+    observedMachineId != null && observedMachineId === boundMachineId;
   useEffect(() => {
     if (landed) setUndispatched(false);
   }, [landed]);

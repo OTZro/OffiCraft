@@ -642,8 +642,8 @@ type OutsourceWorker struct {
 	LastOpAt     float64
 	// DesiredMachineID is the OWNER-PINNED placement (T-f190, migrations/00018),
 	// the worker twin of member.desired_machine_id: "" = unpinned (fall back to
-	// the manual's "auto"|machine-id preference), "auto" = idlest-online, or a
-	// concrete machine id. notifyWorkerSpawn prefers this over the manual pref;
+	// the task's 發包 target, then the type manual), else a concrete machine id.
+	// notifyWorkerSpawn prefers this over the manual pref;
 	// the relocate handler writes it and re-spawns onto the chosen machine.
 	DesiredMachineID string
 	// RefocusSince is the in-flight context-handover marker (T-32e1,
