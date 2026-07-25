@@ -3,9 +3,11 @@
 // Presentation conventions inherited from the retired 新增角色 form (the
 // inline-row redesign removed it from Settings; the pattern lives on here as a
 // reusable piece):
-//   • model  = fable/opus/sonnet/haiku quick-pick CHIPS + a free custom string
-//     input (spawn --model is a FREE string — the chips are safe defaults, the
-//     input stays authoritative; BLANK ⇒ the server/CLI default).
+//   • Claude model = fable/opus/sonnet/haiku quick-pick CHIPS + a free custom
+//     string input (spawn --model is a FREE string — the chips are safe
+//     defaults, the input stays authoritative; BLANK ⇒ the server/CLI default).
+//   • Codex model = closed quick-pick CHIPS only.  The blank/default chip
+//     delegates to the Codex configuration on the selected machine.
 //   • effort = a low/medium/high dropdown (closed vocabulary, server-422
 //     outside it).
 //
@@ -28,7 +30,7 @@ export const EFFORTS: readonly Effort[] = ["low", "medium", "high"] as const;
 export function CodexModelSelect({
   model,
   onModelChange,
-  className = "me-editor__select",
+  className = "",
   testId = "me-codex-model-select",
 }: {
   model: string;
@@ -42,18 +44,31 @@ export function CodexModelSelect({
     if (!known) onModelChange("");
   }, [known, onModelChange]);
   return (
-    <select
-      className={className}
-      value={known ? model : ""}
+    <div
+      className={`me-editor__chips${className ? ` ${className}` : ""}`}
       aria-label={t.mp.model}
       data-testid={testId}
-      onChange={(e) => onModelChange(e.target.value)}
     >
-      <option value="">{t.mp.modelMachineDefault}</option>
+      <button
+        type="button"
+        className={`doc-btn${model === "" ? " doc-btn--accent" : ""}`}
+        data-testid={`${testId}-default`}
+        onClick={() => onModelChange("")}
+      >
+        {t.mp.modelMachineDefault}
+      </button>
       {CODEX_MODEL_OPTIONS.map((id) => (
-        <option key={id} value={id}>{id}</option>
+        <button
+          type="button"
+          key={id}
+          className={`doc-btn${model === id ? " doc-btn--accent" : ""}`}
+          data-testid={`${testId}-${id}`}
+          onClick={() => onModelChange(id)}
+        >
+          {id}
+        </button>
       ))}
-    </select>
+    </div>
   );
 }
 
