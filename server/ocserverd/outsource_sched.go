@@ -74,6 +74,10 @@ type outsourceCandidate struct {
 // target (a create/reassign dispatch). A dispatch always defaults effort→medium
 // and machine→auto, so a plain manual-driven outsource task (all three empty) is
 // reliably distinguished.
+// TargetRuntime is deliberately NOT part of the test: DAL.PutTask normalizes
+// outsource_runtime on every write, so it is never blank and would report every
+// task — dispatched or not — as an explicit target. That would route
+// manual-driven tasks around the spawn gate below; keep it out.
 func (c outsourceCandidate) hasExplicitTarget() bool {
 	return c.TargetModel != "" || c.TargetEffort != "" || c.TargetMachine != ""
 }

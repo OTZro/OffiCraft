@@ -898,6 +898,55 @@ func TestStampMemberPlacementBlocked(t *testing.T) {
 	}
 }
 
+// The stamp is a whole-row write on the snapshot the tick loaded, and the HTTP
+// faces (relocate / deactivate) write member rows without holding reconcileMu —
+// so it re-reads first: a relocate that landed mid-tick keeps its NEW pin, and a
+// member removed mid-tick is not written back at all.
+func TestStampMemberPlacementBlockedReReadsTheRow(t *testing.T) {
+	s := newReconcileTestServer(t)
+	stale := testAgent("m-moved")
+	stale.DesiredMachineID = "mach-ghost-a"
+	putTestMember(t, s, stale)
+
+	// A relocate lands after the tick took its snapshot.
+	moved := stale
+	moved.DesiredMachineID = "mach-ghost-b"
+	putTestMember(t, s, moved)
+
+	now := 7000.0
+	s.reconcileMu.Lock()
+	s.reconcileTickMemberLocked(stale, now)
+	s.reconcileMu.Unlock()
+
+	got, _ := s.dal.GetMember("m-moved")
+	// SENTINEL: the block really is stamped — the fixture reaches the write.
+	if got == nil || !strings.HasPrefix(got.LastOpReason, placementReasonUnavailable+":") ||
+		got.LastOpAt != now {
+		t.Fatalf("an unresolvable pin must stamp a block at %v: %+v", now, got)
+	}
+	if got.DesiredMachineID != "mach-ghost-b" {
+		t.Fatalf("the stamp must not write the stale pin back over a relocate, got %q",
+			got.DesiredMachineID)
+	}
+
+	// A member REMOVED after the snapshot is left alone: writing the snapshot
+	// back would resurrect it into the active roster.
+	removed := *got
+	removed.RosterStatus = RosterStatusRemoved
+	removed.LastOp, removed.LastOpReason, removed.LastOpAt = "", "", 0
+	putTestMember(t, s, removed)
+
+	s.reconcileMu.Lock()
+	s.reconcileTickMemberLocked(stale, now+30)
+	s.reconcileMu.Unlock()
+
+	after, _ := s.dal.GetMember("m-moved")
+	if after == nil || after.RosterStatus != RosterStatusRemoved ||
+		after.LastOpReason != "" || after.LastOpAt != 0 {
+		t.Fatalf("a removed member must not be written back by the stamp: %+v", after)
+	}
+}
+
 // ── stampContextHighRecycle ──────────────────────────────────────────────────
 
 func TestStampContextHighRecycle(t *testing.T) {

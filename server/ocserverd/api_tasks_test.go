@@ -1110,6 +1110,76 @@ func TestCreateTaskDispatchInheritsOmittedSpec(t *testing.T) {
 	}
 }
 
+// TestCreateTypedTaskWithManualOutsourceAssigneeCarriesNoDispatchTarget: a typed
+// task whose MANUAL routes it to outsource is not a 發包 — inheritance is gated on
+// an explicit target, so the task row's outsource_* columns stay empty and the
+// scheduler still reads it as a manual-driven candidate. Filling them would make
+// hasExplicitTarget() true, which skips the spawn gate and freezes the manual's
+// settings at create time instead of reading it live at admission.
+func TestCreateTypedTaskWithManualOutsourceAssigneeCarriesNoDispatchTarget(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	seedMachine(t, api, "m-manual-box")
+	putMemberRow(t, api, "m-disp", KindAssistant, "")
+	if err := api.dal.PutTaskManual(TaskManual{
+		TypeKey: "typed", Fields: "[]",
+		Assignee: `{"kind":"outsource","runtime":"claude","model":"opus","effort":"high","machine":"m-manual-box"}`,
+	}); err != nil {
+		t.Fatalf("seed manual: %v", err)
+	}
+
+	// The scheduler's own projection — the predicate under test, not a paraphrase.
+	candidateOf := func(task *Task) outsourceCandidate {
+		return outsourceCandidate{
+			TaskID: task.ID, TypeKey: task.TypeKey,
+			Priority: task.Priority, CreatedTS: task.CreatedTS,
+			TargetRuntime: task.OutsourceRuntime,
+			TargetModel:   task.OutsourceModel, TargetEffort: task.OutsourceEffort,
+			TargetMachine: task.OutsourceMachine,
+		}
+	}
+	storedFor := func(rec *httptest.ResponseRecorder) *Task {
+		t.Helper()
+		if rec.Code != http.StatusOK {
+			t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+		}
+		stored, err := api.dal.GetTask(decodeBody[taskCreateResultDTO](t, rec).Task.ID)
+		if err != nil || stored == nil {
+			t.Fatalf("re-read task: %v", err)
+		}
+		return stored
+	}
+
+	manual := storedFor(createTaskAs(t, api, map[string]any{
+		"title": "manual routes it", "type_key": "typed"}, "m-disp", "agent"))
+	if manual.ExecutorKind != TaskExecutorOutsource || manual.ExecutorID != "" {
+		t.Fatalf("a manual outsource assignee must land unassigned outsource: %+v", manual)
+	}
+	// outsource_runtime is normalized to a concrete runtime by the DAL on every
+	// write, which is why hasExplicitTarget reads the other three.
+	if manual.OutsourceModel != "" || manual.OutsourceEffort != "" ||
+		manual.OutsourceMachine != "" {
+		t.Fatalf("a manual-driven outsource create must store NO dispatch target: %+v", manual)
+	}
+	if candidateOf(manual).hasExplicitTarget() {
+		t.Fatal("a manual-driven task must not read as an explicit 發包 to the scheduler")
+	}
+
+	// SENTINEL: an explicit target on the SAME fixture DOES fill the columns and
+	// reads true — so the emptiness above is the gate, not a fixture that creates
+	// nothing.
+	dispatched := storedFor(createTaskAs(t, api, map[string]any{
+		"title": "explicit 發包", "type_key": "typed",
+		"target": map[string]any{"kind": "outsource"}}, "m-disp", "agent"))
+	if dispatched.OutsourceRuntime != RuntimeClaude || dispatched.OutsourceModel != "opus" ||
+		dispatched.OutsourceEffort != "high" || dispatched.OutsourceMachine != "m-manual-box" {
+		t.Fatalf("an explicit target must inherit and store the manual's spec: %+v", dispatched)
+	}
+	if !candidateOf(dispatched).hasExplicitTarget() {
+		t.Fatal("an explicit 發包 must read as an explicit target to the scheduler")
+	}
+}
+
 // ── submit_plan keeps done steps ─────────────────────────────────────────────
 
 func TestSubmitPlanReplacesOnlyTheNotDoneSteps(t *testing.T) {

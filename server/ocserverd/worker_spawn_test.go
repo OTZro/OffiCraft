@@ -875,6 +875,54 @@ func TestNotifyWorkerSpawn_BlockedReasonNamesTheCause(t *testing.T) {
 	}
 }
 
+// TestStampWorkerPlacementBlocked_ReReadsTheRowBeforeWriting: the stamp is a
+// whole-row write on a snapshot the tick loaded earlier, and the HTTP faces write
+// worker rows without holding outsourceMu — so a change that landed meanwhile
+// must survive the stamp, and a worker released meanwhile must not be written at
+// all.
+func TestStampWorkerPlacementBlocked_ReReadsTheRowBeforeWriting(t *testing.T) {
+	s := newWorkerTestServer(t)
+	putWardenFixture(t, s, "m-gone")
+	stale := blockedSpawnFixture(t, s, "t-0000000000e2", "ow-stale", "m-gone")
+
+	// A relocate lands after the tick took its snapshot.
+	moved := readWorker(t, s, "ow-stale")
+	moved.DesiredMachineID = "m-moved"
+	putWorkerFixture(t, s, moved)
+
+	now := 4_000_000.0
+	s.outsourceMu.Lock()
+	s.notifyWorkerSpawn(stale, now)
+	s.outsourceMu.Unlock()
+
+	got := readWorker(t, s, "ow-stale")
+	// SENTINEL: the block really is stamped — the fixture reaches the write.
+	if !strings.HasPrefix(got.LastOpReason, placementReasonUnavailable+":") ||
+		got.LastOpAt != now {
+		t.Fatalf("an offline pin must stamp a block at %v: %+v", now, got)
+	}
+	if got.DesiredMachineID != "m-moved" {
+		t.Fatalf("the stamp must not clobber a pin that landed after the snapshot, got %q",
+			got.DesiredMachineID)
+	}
+
+	// A worker RELEASED after the snapshot is left alone: there is nothing left
+	// to explain, and writing the snapshot back would resurrect it as assigned.
+	released := readWorker(t, s, "ow-stale")
+	released.Status = WorkerStatusReleased
+	released.LastOp, released.LastOpReason, released.LastOpAt = "", "", 0
+	putWorkerFixture(t, s, released)
+
+	s.outsourceMu.Lock()
+	s.notifyWorkerSpawn(stale, now+workerSpawnRetrySecs+1)
+	s.outsourceMu.Unlock()
+
+	after := readWorker(t, s, "ow-stale")
+	if after.Status != WorkerStatusReleased || after.LastOpReason != "" || after.LastOpAt != 0 {
+		t.Fatalf("a released worker must not be written back by the stamp: %+v", after)
+	}
+}
+
 // TestNotifyWorkerSpawn_BlockRestampedAfterDispatch: the anti-churn guard
 // suppresses REPETITION, never news. A block, a real dispatch, then the same
 // block again must carry a FRESH last_op_at — without the clear on the dispatch
