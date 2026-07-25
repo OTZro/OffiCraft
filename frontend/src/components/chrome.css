@@ -14,6 +14,16 @@
   margin-inline: auto;
 }
 
+/* WIDE layout (T-756f): the owner's opt-in preference, applied as
+   <html data-layout="wide"> by the i18n/preferences provider. It lifts ONLY the
+   max-width cap above — the side gutters live in each element's own padding
+   (22px), so they survive untouched and the chrome just breathes wider. The
+   narrow default is the absence of the attribute, so nothing here can affect an
+   install that never opted in. */
+:root[data-layout="wide"] :is(.topbar, .nav-tabs, .app__main) {
+  max-width: none;
+}
+
 .topbar {
   display: flex;
   align-items: center;

@@ -768,6 +768,9 @@ const DEFAULT_MOCK_SETTINGS = {
   // (the frontend keeps its localStorage cache / default until the owner picks).
   display_theme: "",
   display_language: "",
+  // Layout width (T-756f) — OFF out of the box, mirroring the server (the
+  // cockpit ships with the narrow centred column).
+  display_wide: false,
   // Custom theme bundles (T-16a1 P2) — none saved out of the box, mirroring the
   // server (display.custom_themes absent).
   custom_themes: [] as {
@@ -2626,6 +2629,11 @@ export const mockApi: Api = {
     }
     if (patch.displayLanguage !== undefined) {
       mockServerSettings.display_language = patch.displayLanguage.trim();
+    }
+    // display_wide (T-756f) is a plain bool — nothing to validate, and an
+    // omitted field never changes it (PATCH semantics, server parity).
+    if (patch.displayWide !== undefined) {
+      mockServerSettings.display_wide = patch.displayWide;
     }
     return toServerSettings(structuredClone(mockServerSettings));
   },

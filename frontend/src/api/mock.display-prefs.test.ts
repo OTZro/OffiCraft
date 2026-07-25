@@ -200,6 +200,27 @@ describe("mock settings — display prefs (display_theme / display_language)", (
     ).rejects.toBeInstanceOf(ApiError);
   });
 
+  it("defaults display_wide to false (the shipped narrow column)", async () => {
+    const s = await mockApi.getServerSettings();
+    expect(s.displayWide).toBe(false);
+  });
+
+  it("PATCHes display_wide both ways and reads it back durably", async () => {
+    let s = await mockApi.patchServerSettings({ displayWide: true });
+    expect(s.displayWide).toBe(true);
+    expect((await mockApi.getServerSettings()).displayWide).toBe(true);
+
+    s = await mockApi.patchServerSettings({ displayWide: false });
+    expect(s.displayWide).toBe(false);
+    expect((await mockApi.getServerSettings()).displayWide).toBe(false);
+  });
+
+  it("leaves display_wide alone when the patch omits it (PATCH semantics)", async () => {
+    await mockApi.patchServerSettings({ displayWide: true });
+    const s = await mockApi.patchServerSettings({ displayLanguage: "en" });
+    expect(s.displayWide).toBe(true);
+  });
+
   it("resets display_theme to \"\" when the active custom theme is deleted", async () => {
     await mockApi.patchServerSettings({
       customThemes: [{ id: "midnight", name: "Midnight", colors: { "--color-bg": "#101018" } }],

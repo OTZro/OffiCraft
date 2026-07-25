@@ -3377,7 +3377,7 @@
         "type": "object"
       },
       "SettingsDTO": {
-        "description": "The owner-adjustable settings surface (`GET /api/settings`). `token_ttl` —\nthe owner-login JWT lifetime (seconds). `handover_pct` — the context\nhandover threshold. `outsource_max_parallel` — the global cap on\nconcurrently live outsource workers (-1 = unlimited, 0 pauses assignment).\n`updater_receive_beta` — whether the GitHub-release update check also\nadmits prereleases (default false: official releases only).\n`updater_auto_update` — arms unattended background self-upgrade to the\nnewest admissible GitHub release (default false: upgrading stays an\nexplicit owner action). `org_name` — the studio display name (\"\" = unset).\n`owner_name` — the owner's display nickname (\"\" = unset). `display_theme` /\n`display_language` — the owner's cockpit visual prefs (\"\" = unset).",
+        "description": "The owner-adjustable settings surface (`GET /api/settings`). `token_ttl` —\nthe owner-login JWT lifetime (seconds). `handover_pct` — the context\nhandover threshold. `outsource_max_parallel` — the global cap on\nconcurrently live outsource workers (-1 = unlimited, 0 pauses assignment).\n`updater_receive_beta` — whether the GitHub-release update check also\nadmits prereleases (default false: official releases only).\n`updater_auto_update` — arms unattended background self-upgrade to the\nnewest admissible GitHub release (default false: upgrading stays an\nexplicit owner action). `org_name` — the studio display name (\"\" = unset).\n`owner_name` — the owner's display nickname (\"\" = unset). `display_theme` /\n`display_language` — the owner's cockpit visual prefs (\"\" = unset).\n`display_wide` — whether the cockpit uses the wide layout (default false =\nthe narrow centred column).",
         "properties": {
           "codex_compaction_threshold": {
             "default": 3,
@@ -3396,6 +3396,12 @@
             "description": "The owner's cockpit visual theme (T-0b41-p2). \"\" = never set — the frontend keeps its localStorage cache / default; reconciled in at login as the cross-device source of truth.",
             "title": "Display Theme",
             "type": "string"
+          },
+          "display_wide": {
+            "default": false,
+            "description": "Whether the cockpit uses the WIDE layout — the centred ~1040px content column is lifted, the side gutters stay (T-756f). false (the default) = the narrow centred column, the shipped look. Same dual-layer contract as display_theme: the frontend keeps a localStorage cache for the pre-auth paint and reconciles this server value in at login as the cross-device source of truth.",
+            "title": "Display Wide",
+            "type": "boolean"
           },
           "custom_themes": {
             "default": [],
@@ -3494,6 +3500,18 @@
             ],
             "description": "The owner's cockpit visual theme (T-0b41-p2) — trimmed; \"\" clears it back to unset. Must be one of office, xian (or \"\"); anything else is a 422.",
             "title": "Display Theme"
+          },
+          "display_wide": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Turn the WIDE cockpit layout on/off (T-756f) — true lifts the centred ~1040px content column (the side gutters stay), false restores it. A plain boolean with no unset state: omit the field to leave it unchanged.",
+            "title": "Display Wide"
           },
           "custom_themes": {
             "anyOf": [
