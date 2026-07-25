@@ -19,6 +19,7 @@ import (
 )
 
 const settingPushVAPIDPrivateKey = "push.vapid_private_key"
+const pushVAPIDSubscriber = "notifications@officraft.local"
 
 const webPushDeliveryTimeout = 10 * time.Second
 
@@ -185,7 +186,10 @@ func (s *apiServer) enqueueWebPush(payload webPushPayload) {
 				Endpoint: subscription.Endpoint,
 				Keys:     webpush.Keys{P256dh: subscription.P256dh, Auth: subscription.Auth},
 			}, &webpush.Options{
-				Subscriber: "mailto:notifications@officraft.local",
+				// webpush-go accepts a bare email and constructs the mailto URI
+				// itself. Passing a value already prefixed with "mailto:" produces
+				// the invalid VAPID subject "mailto:mailto:…".
+				Subscriber: pushVAPIDSubscriber,
 				TTL:        60, Urgency: webpush.UrgencyHigh,
 				VAPIDPublicKey: publicKey, VAPIDPrivateKey: privateKey,
 				VapidExpiration: time.Now().Add(12 * time.Hour),
@@ -193,6 +197,8 @@ func (s *apiServer) enqueueWebPush(payload webPushPayload) {
 			})
 			cancel()
 			if response != nil {
+				statusClass := pushDeliveryStatusClass(response.StatusCode)
+				log.Printf("[push] delivery status=%d class=%s", response.StatusCode, statusClass)
 				response.Body.Close()
 				if response.StatusCode == http.StatusGone || response.StatusCode == http.StatusNotFound {
 					if err := s.dal.DeletePushSubscription(subscription.Endpoint); err != nil {
@@ -202,10 +208,38 @@ func (s *apiServer) enqueueWebPush(payload webPushPayload) {
 				}
 			}
 			if err != nil {
-				log.Printf("[push] deliver notification: %v", err)
+				// Transport errors can include the subscription endpoint in their
+				// text, so retain only a safe classification in the server log.
+				log.Printf("[push] delivery error_class=%s", pushDeliveryErrorClass(err))
 			}
 		}
 	}()
+}
+
+func pushDeliveryStatusClass(status int) string {
+	switch {
+	case status >= 200 && status < 300:
+		return "accepted"
+	case status == http.StatusNotFound || status == http.StatusGone:
+		return "expired"
+	case status >= 400 && status < 500:
+		return "rejected"
+	case status >= 500 && status < 600:
+		return "gateway_error"
+	default:
+		return "unexpected"
+	}
+}
+
+func pushDeliveryErrorClass(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return "network"
+	}
+	return "send_error"
 }
 
 func (s *apiServer) HandleGetPushPublicKeyApiPushPublicKeyGet(w http.ResponseWriter, r *http.Request) {
