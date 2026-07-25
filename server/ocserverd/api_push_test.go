@@ -225,7 +225,7 @@ func TestWebPushDeliveryAndExpiredSubscriptionPruning(t *testing.T) {
 	}
 }
 
-func TestWebPushUsesSingleMailtoVAPIDSubject(t *testing.T) {
+func TestWebPushUsesPublicHTTPSVAPIDSubject(t *testing.T) {
 	d := newTestDAL(t)
 	authorization := make(chan string, 1)
 	s := &apiServer{dal: d, pushHTTPClient: recordingPushClient{authorization: authorization}}
@@ -235,7 +235,7 @@ func TestWebPushUsesSingleMailtoVAPIDSubject(t *testing.T) {
 	s.enqueueWebPush(webPushPayload{Kind: "chat", ChatID: "c-1", Title: "new", Body: "message"})
 	select {
 	case header := <-authorization:
-		if got, want := vapidSubject(t, header), "mailto:"+pushVAPIDSubscriber; got != want {
+		if got, want := vapidSubject(t, header), pushVAPIDSubscriber; got != want {
 			t.Fatalf("VAPID subject = %q, want %q", got, want)
 		}
 	case <-time.After(2 * time.Second):

@@ -19,7 +19,11 @@ import (
 )
 
 const settingPushVAPIDPrivateKey = "push.vapid_private_key"
-const pushVAPIDSubscriber = "notifications@officraft.local"
+
+// pushVAPIDSubscriber identifies this application to push gateways.  It must
+// be a public contact URI: Apple rejects the former .local mail address with
+// BadJwtToken before attempting delivery.
+const pushVAPIDSubscriber = "https://officraft.hardcoretech.link"
 
 const webPushDeliveryTimeout = 10 * time.Second
 
@@ -186,9 +190,9 @@ func (s *apiServer) enqueueWebPush(payload webPushPayload) {
 				Endpoint: subscription.Endpoint,
 				Keys:     webpush.Keys{P256dh: subscription.P256dh, Auth: subscription.Auth},
 			}, &webpush.Options{
-				// webpush-go accepts a bare email and constructs the mailto URI
-				// itself. Passing a value already prefixed with "mailto:" produces
-				// the invalid VAPID subject "mailto:mailto:…".
+				// A public HTTPS contact URI is accepted verbatim by webpush-go and
+				// is valid for Apple Web Push. Do not use an internal-only .local
+				// mailbox here: Apple rejects its VAPID JWT before delivery.
 				Subscriber: pushVAPIDSubscriber,
 				TTL:        60, Urgency: webpush.UrgencyHigh,
 				VAPIDPublicKey: publicKey, VAPIDPrivateKey: privateKey,
