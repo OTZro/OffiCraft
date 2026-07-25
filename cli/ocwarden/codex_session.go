@@ -92,11 +92,22 @@ type codexSession struct {
 	workdir     string
 	model       string
 	effort      string
+	out         io.Writer
 	compactions int
 	// completedCompactions makes the App Server's item/completed stream
 	// idempotent. Replayed notifications must not look like fresh context
 	// compactions and accidentally recycle a just-booted agent.
 	completedCompactions map[string]struct{}
+}
+
+// activity is the human-readable, tmux-visible companion to the headless
+// App Server protocol. It intentionally describes lifecycle only, never raw
+// model prompts, tool arguments, or response bodies.
+func (s *codexSession) activity(format string, args ...any) {
+	if s.out == nil {
+		return
+	}
+	fmt.Fprintf(s.out, "%s [codex] %s\n", time.Now().Format("15:04:05"), fmt.Sprintf(format, args...))
 }
 
 func (s *codexSession) send(method string, params map[string]any) int {
@@ -154,6 +165,7 @@ func (s *codexSession) waitResponse(id int) (appServerMessage, error) {
 }
 
 func (s *codexSession) startTurn(text string) {
+	s.activity("turn started")
 	params := map[string]any{
 		"threadId": s.threadID,
 		"input":    []any{map[string]any{"type": "text", "text": text}},
@@ -168,6 +180,7 @@ func (s *codexSession) steerOrStart(text string) {
 		return
 	}
 	if s.active && s.turnID != "" {
+		s.activity("turn steered by OffiCraft event")
 		s.send("turn/steer", map[string]any{
 			"threadId": s.threadID, "expectedTurnId": s.turnID,
 			"input": []any{map[string]any{"type": "text", "text": text}},
@@ -276,6 +289,7 @@ func (s *codexSession) reportTokenUsage(params map[string]any) {
 	// window after a few turns. "last" is the current turn's context gauge.
 	used := jsonNumber(last["totalTokens"])
 	if window > 0 {
+		s.activity("context %.0f%% · compact %d", used/window*100, s.compactions)
 		s.post("/api/agent/context", map[string]any{
 			"context_pct":      used / window * 100,
 			"compaction_count": s.compactions,
@@ -315,10 +329,12 @@ func (s *codexSession) recordCompaction(params map[string]any) {
 	}
 	s.completedCompactions[id] = struct{}{}
 	s.compactions++
+	s.activity("context compacted · count %d", s.compactions)
 }
 
 func (s *codexSession) handleServerRequest(msg appServerMessage) {
 	method, _ := msg["method"].(string)
+	s.activity("native user-input request → OffiCraft reply card")
 	// App Server RequestId is string | int64. Echo the exact JSON value back;
 	// coercing a string id to zero would leave Codex waiting forever.
 	id := msg["id"]
@@ -401,8 +417,14 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 	s := &codexSession{
 		in: stdin, messages: codexAppReader(stdout), nextID: 0,
 		base: env("OC_BASE"), token: env("OC_TOKEN"), workdir: *workdir,
-		model: *model, effort: normalizeCodexEffort(*effort),
+		model: *model, effort: normalizeCodexEffort(*effort), out: out,
 	}
+	s.activity("App Server started · model %s", func() string {
+		if *model == "" {
+			return "machine default"
+		}
+		return *model
+	}())
 	initializeID := s.send("initialize", map[string]any{
 		"clientInfo": map[string]any{
 			"name": "officraft", "title": "OffiCraft", "version": "0.1.0",
@@ -439,6 +461,7 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 		fmt.Fprintln(out, "codex-session: thread/start returned no thread id")
 		return 1
 	}
+	s.activity("thread ready · booting agent")
 	s.startTurn("開始。")
 
 	listenerLines := make(chan string, 32)
@@ -457,6 +480,7 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 				return 1
 			}
 			if actionableCodexListenerLine(line) {
+				s.activity("OffiCraft event: %s", line)
 				s.steerOrStart(line)
 			}
 		case msg, ok := <-s.messages:
@@ -479,6 +503,7 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 			case "turn/completed":
 				s.active = false
 				s.turnID = ""
+				s.activity("turn completed")
 				if !listenerStarted {
 					listenerStarted = true
 					listenerCmd = exec.Command(filepath.Join(*workdir, "ocagent"), "listen")
@@ -493,6 +518,7 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 						fmt.Fprintf(out, "codex-session: start ocagent listen: %v\n", startErr)
 						return 1
 					}
+					s.activity("listening for OffiCraft events")
 					go func(listener *exec.Cmd) {
 						scanner := bufio.NewScanner(pipe)
 						scanner.Buffer(make([]byte, 64*1024), 8<<20)
