@@ -1119,12 +1119,9 @@ type ReplyCardListItemDTO struct {
 // ReportWakingDTO Body for “report_waking()“ — the boot report (identity from token, NO
 // member_id). Stamps the CALLER's “waking_since“ and clears the recycle markers.
 //
-// “model“ is OPTIONAL (default “None“ ⇒ omitted). When present, the agent is
-// self-reporting the REAL per-member model it was launched with (from its OC_MODEL
-// env), so the server writes the true model onto the member and the cockpit stops
-// guessing — only the running agent knows its actual launched model. Folding it into
-// the boot report keeps the "agent reports its real launched model" path without a
-// separate tool.
+// “model“ is OPTIONAL and accepted for API compatibility. Its value is ignored: the
+// owner-configured model remains authoritative and cannot be changed by a caller's
+// wake report.
 type ReportWakingDTO struct {
 	Model *string `json:"model,omitempty"`
 }

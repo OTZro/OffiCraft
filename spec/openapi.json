@@ -2904,7 +2904,7 @@
         "type": "object"
       },
       "ReportWakingDTO": {
-        "description": "Body for ``report_waking()`` — the boot report (identity from token, NO\nmember_id). Stamps the CALLER's ``waking_since`` and clears the recycle markers.\n\n``model`` is OPTIONAL (default ``None`` ⇒ omitted). When present, the agent is\nself-reporting the REAL per-member model it was launched with (from its OC_MODEL\nenv), so the server writes the true model onto the member and the cockpit stops\nguessing — only the running agent knows its actual launched model. Folding it into\nthe boot report keeps the \"agent reports its real launched model\" path without a\nseparate tool.",
+        "description": "Body for ``report_waking()`` — the boot report (identity from token, NO\nmember_id). Stamps the CALLER's ``waking_since`` and clears the recycle markers.\n\n``model`` is OPTIONAL and accepted for API compatibility. Its value is ignored: the\nowner-configured model remains authoritative and cannot be changed by a caller's\nwake report.",
         "properties": {
           "model": {
             "anyOf": [
@@ -10505,7 +10505,7 @@
     },
     "/api/self/waking": {
       "post": {
-        "description": "``report_waking()`` — the boot report (identity from token, NO member_id).\n\nStamps the CALLER's ``waking_since`` → derives *waking* until the SSE connects\n(⇒ online) or the wall-clock TTL lapses. ``online`` is untouched (pure SSE\nprojection).\n\nRECYCLE LOOP BREAK: a fresh session's FIRST report clears ALL the recycle markers\n— ``refocus_since`` / ``stopped_since`` / ``stopping_since`` → 0.0 — so the\nrespawned agent sheds the refocus intent, the dump-done stamp AND the graceful-\nshutdown anchor BEFORE it goes online. The boot序 guarantees this report lands\nbefore the SSE connects, so the new session can never inherit a stale marker and\nre-trigger a recycle (or derive *stopping*) on itself.\n\n``model`` (optional): when present the agent self-reports the REAL model it was\nlaunched with (from OC_MODEL) — only the running agent knows this — so the server\nwrites the true model onto the member. Omitted ⇒ untouched (PATCH semantics).",
+        "description": "``report_waking()`` — the boot report (identity from token, NO member_id).\n\nStamps the CALLER's ``waking_since`` → derives *waking* until the SSE connects\n(⇒ online) or the wall-clock TTL lapses. ``online`` is untouched (pure SSE\nprojection).\n\nRECYCLE LOOP BREAK: a fresh session's FIRST report clears ALL the recycle markers\n— ``refocus_since`` / ``stopped_since`` / ``stopping_since`` → 0.0 — so the\nrespawned agent sheds the refocus intent, the dump-done stamp AND the graceful-\nshutdown anchor BEFORE it goes online. The boot序 guarantees this report lands\nbefore the SSE connects, so the new session can never inherit a stale marker and\nre-trigger a recycle (or derive *stopping*) on itself.\n\n``model`` (optional) remains accepted for API compatibility, but its value is\nignored. The owner-configured model remains authoritative.",
         "operationId": "handle_report_waking_api_self_waking_post",
         "requestBody": {
           "content": {
