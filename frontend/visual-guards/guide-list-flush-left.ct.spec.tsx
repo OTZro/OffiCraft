@@ -96,13 +96,9 @@ for (const width of [1280, 390]) {
   });
 }
 
-// ── doc view NO-REGRESSION: the reading measure stays on `.guide-view--doc` ──
-// The T-9aa5 fix moved the 900px cap off the list — but it must REMAIN on the
-// doc view (owner never complained about the doc; the long-form measure is
-// deliberate). guide-doc-overflow.ct.spec.tsx already pins the phone-width
-// no-sideways-scroll; this pins the DESKTOP retention the fix could silently
-// have dropped: at 1280 the doc-card must still be capped to its 900px measure,
-// NOT stretched to the ~1040px column.
+// ── doc view: retain the reading measure without centring it ────────────────
+// The document needs the same left baseline as the guide list and other
+// settings pages, while still retaining a comfortable desktop reading measure.
 const DOC_MD = [
   "# 介面說明",
   "",
@@ -112,7 +108,7 @@ const DOC_MD = [
   "- 條列二",
 ].join("\n");
 
-test("@1280: guide DOC view keeps its 900px reading measure (no T-9aa5 regression)", async ({
+test("@1280: guide DOC view keeps its 900px reading measure and aligns left", async ({
   mount,
   page,
 }) => {
@@ -122,15 +118,26 @@ test("@1280: guide DOC view keeps its 900px reading measure (no T-9aa5 regressio
     <GuideDocOverflowStory title="介面說明" markdown={DOC_MD} assets={{}} />
   );
 
-  const docWidth = await page.evaluate(() => {
+  const doc = await page.evaluate(() => {
     const card = document.querySelector(".guide-view--doc .doc-card") as HTMLElement;
-    return Math.round(card.getBoundingClientRect().width);
+    const main = document.querySelector(".app__main") as HTMLElement;
+    const mainRect = main.getBoundingClientRect();
+    const mainCS = getComputedStyle(main);
+    return {
+      left: Math.round(card.getBoundingClientRect().left),
+      width: Math.round(card.getBoundingClientRect().width),
+      mainInnerLeft: Math.round(mainRect.left + parseFloat(mainCS.paddingLeft)),
+    };
   });
-  console.log(`[guide-flush-left] @1280 doc-card width=${docWidth}px (cap 900)`);
+  console.log(`[guide-flush-left] @1280 doc-card ${JSON.stringify(doc)}`);
   // box-sizing is border-box globally, so max-width:900px IS the box width; the
   // ~1040px column would give ~996 without the cap. ≤ 901 with 1px slack.
   expect(
-    docWidth,
-    `doc-card must stay capped at its 900px measure at 1280 (got ${docWidth}px)`
+    doc.width,
+    `doc-card must stay capped at its 900px measure at 1280 (got ${doc.width}px)`
   ).toBeLessThanOrEqual(901);
+  expect(
+    Math.abs(doc.left - doc.mainInnerLeft),
+    `doc-card.left (${doc.left}) must match the app main content baseline (${doc.mainInnerLeft})`
+  ).toBeLessThanOrEqual(1);
 });

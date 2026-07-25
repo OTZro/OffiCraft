@@ -662,23 +662,21 @@
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
-/* Doc view only: the reading gutters that give the prose breathing room. */
+/* The card body owns the prose gutters. Keep this surface flush with the
+ * settings content baseline instead of adding a second outer gutter. */
 .guide-view--doc {
-  padding-left: 20px;
-  padding-right: 20px;
+  padding-left: 0;
+  padding-right: 0;
 }
-/* Cap the measure + centre it — but `.settings` is `display:flex` (column), so
- * these are FLEX ITEMS. `margin-inline: auto` alone would set their cross-axis
- * margins to auto, which DISABLES align-items:stretch and collapses the item to
- * its CONTENT width (v0.5.19 regression: .doc-card grew to its 900px cap on a
- * 390px phone → .settings became a sideways-pan surface). `width: 100%` restores
- * the fill: the item is min(100% of the column, max-width), so it fills a narrow
- * phone and only caps + centres once the column exceeds the measure. */
+/* Cap the reading measure while keeping its LEFT edge on the same content
+ * baseline as every settings surface. `width: 100%` keeps flex items filling
+ * narrow screens; the right auto margin preserves the measure on desktop
+ * without visually pushing the guide document to the right. */
 .guide-view--doc .crumbs,
 .guide-view--doc .doc-card {
   width: 100%;
   max-width: 900px;
-  margin-left: auto;
+  margin-left: 0;
   margin-right: auto;
 }
 /* Reading gutters live on the doc-card BODY, not .doc-md itself: keeping them
@@ -689,11 +687,10 @@
   padding-right: 26px;
 }
 @media (max-width: 720px) {
-  /* Phones are narrow enough that the 22px .app__main gutters are most of the
-     breathing room already; keep the extra small so the measure stays usable. */
+  /* The app and card already provide the narrow-screen gutters. */
   .guide-view--doc {
-    padding-left: 2px;
-    padding-right: 2px;
+    padding-left: 0;
+    padding-right: 0;
   }
   .guide-view--doc .doc-card {
     padding-left: 16px;
