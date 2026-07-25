@@ -2216,9 +2216,8 @@ export interface paths {
          *     before the SSE connects, so the new session can never inherit a stale marker and
          *     re-trigger a recycle (or derive *stopping*) on itself.
          *
-         *     ``model`` (optional): when present the agent self-reports the REAL model it was
-         *     launched with (from OC_MODEL) — only the running agent knows this — so the server
-         *     writes the true model onto the member. Omitted ⇒ untouched (PATCH semantics).
+         *     ``model`` (optional) remains accepted for API compatibility, but its value is
+         *     ignored. The owner-configured model remains authoritative.
          */
         post: operations["handle_report_waking_api_self_waking_post"];
         delete?: never;
@@ -4833,12 +4832,9 @@ export interface components {
          * @description Body for ``report_waking()`` — the boot report (identity from token, NO
          *     member_id). Stamps the CALLER's ``waking_since`` and clears the recycle markers.
          *
-         *     ``model`` is OPTIONAL (default ``None`` ⇒ omitted). When present, the agent is
-         *     self-reporting the REAL per-member model it was launched with (from its OC_MODEL
-         *     env), so the server writes the true model onto the member and the cockpit stops
-         *     guessing — only the running agent knows its actual launched model. Folding it into
-         *     the boot report keeps the "agent reports its real launched model" path without a
-         *     separate tool.
+         *     ``model`` is OPTIONAL and accepted for API compatibility. Its value is ignored: the
+         *     owner-configured model remains authoritative and cannot be changed by a caller's
+         *     wake report.
          */
         ReportWakingDTO: {
             /** Model */
