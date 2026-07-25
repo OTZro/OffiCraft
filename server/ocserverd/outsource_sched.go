@@ -80,15 +80,16 @@ func (c outsourceCandidate) hasExplicitTarget() bool {
 
 // outsourceTypeSpec is one manual's outsource assignee spec: how many copies
 // of the type may run at once (0 = 無限 — unlimited, spec TaskManualDTO), the
-// worker template to mint from, and the spawn placement preference ("auto" or
-// a machine id — carried through for the worker-spawn seam, see
+// worker template to mint from, and the machine the type's workers boot on
+// (a machine id, or empty when the type names none — carried through for the
+// worker-spawn seam, see
 // notifyWorkerSpawn; the ADMISSION decision never reads it).
 type outsourceTypeSpec struct {
 	Copies  int
 	Runtime string
 	Model   string
 	Effort  string
-	Machine string // "auto" | machine id; consumed by the Phase 6 spawn seam
+	Machine string // machine id ("" = the type names none); consumed by the Phase 6 spawn seam
 }
 
 // outsourceAssignment is one decided assignment: mint a (Model, Effort)
@@ -99,7 +100,7 @@ type outsourceAssignment struct {
 	Runtime string
 	Model   string
 	Effort  string
-	Machine string // "auto" | machine id — the resolved spawn placement preference
+	Machine string // machine id ("" = none resolved — the spawn then fails closed)
 	// FromTarget marks an assignment resolved from an explicit 發包 target (vs a
 	// type manual's assignee spec): the sched gate is skipped for it (already
 	// authorized at the dispatch handler) and it pins its own machine preference.
@@ -245,7 +246,7 @@ func outsourceDecide(
 // outsourceSpecOf extracts a manual's outsource assignee spec: nil for {} /
 // a member assignee / undecodable JSON. copies defaults to 1 when absent
 // (validateManualAssignee enforces >= 0 on write; 0 = 無限/unlimited); effort
-// defaults to the schema's 'medium'; machine defaults to "auto" (spec
+// defaults to the schema's 'medium'; machine defaults to empty (spec
 // TaskManualDTO — the placement preference rides through to the spawn seam).
 func outsourceSpecOf(m TaskManual) *outsourceTypeSpec {
 	assignee, err := manualAssignee(m)
@@ -255,7 +256,7 @@ func outsourceSpecOf(m TaskManual) *outsourceTypeSpec {
 	if kind, _ := assignee["kind"].(string); kind != TaskExecutorOutsource {
 		return nil
 	}
-	spec := outsourceTypeSpec{Copies: 1, Runtime: RuntimeClaude, Effort: "medium", Machine: "auto"}
+	spec := outsourceTypeSpec{Copies: 1, Runtime: RuntimeClaude, Effort: "medium"}
 	if v, ok := assignee["runtime"].(string); ok && strings.TrimSpace(v) != "" {
 		spec.Runtime = strings.TrimSpace(v)
 	}

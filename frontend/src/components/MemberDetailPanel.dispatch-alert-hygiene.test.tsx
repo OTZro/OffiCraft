@@ -341,43 +341,6 @@ describe("MemberDetailPanel · the relocate notice self-heals (review r1 SHOULD-
     expect(queryByTestId("mp-relocate-undispatched")).not.toBeNull();
   });
 
-  it("treats an \"auto\" pin as satisfied by ANY observed placement (review r2 SHOULD-3)", async () => {
-    // "auto" is a legal pin (types.ts: "" = unpinned, "auto" = idlest-online,
-    // else a concrete id) and no concrete machine id ever equals the string
-    // "auto" — so a plain equality left `landed` false FOREVER and the notice
-    // stuck on screen permanently, which is precisely the r1 SHOULD-2 state
-    // this self-heal was added to end. Delegating the choice to the scheduler
-    // means any observed placement satisfies the pin.
-    const onRelocate = vi.fn(
-      async (): Promise<MemberRelocateResult> => ({ relocationPending: true }),
-    );
-    const { getByTestId, queryByTestId, rerender } = render(
-      <I18nProvider>
-        <MemberDetailPanel
-          member={mkAwake({ desiredMachineId: "mach-b", machine: "mach-a" })}
-          onBack={() => {}}
-          onRelocate={onRelocate}
-        />
-      </I18nProvider>,
-    );
-
-    await relocateInto(getByTestId, queryByTestId);
-
-    rerender(
-      <I18nProvider>
-        <MemberDetailPanel
-          member={mkAwake({ desiredMachineId: "auto", machine: "mach-a" })}
-          onBack={() => {}}
-          onRelocate={onRelocate}
-        />
-      </I18nProvider>,
-    );
-
-    await waitFor(() =>
-      expect(queryByTestId("mp-relocate-undispatched")).toBeNull(),
-    );
-  });
-
   it("still shows the verdict for an UNPINNED member with no machine (review r2 NIT-1)", async () => {
     // The null/"" guards inside `landed` are load-bearing: without them an
     // unpinned member (desiredMachineId "" → null) that is nowhere observable

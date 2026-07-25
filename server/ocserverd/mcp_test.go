@@ -288,6 +288,7 @@ func TestMutableToolCatalogAndLoopbackCloseNestedDTOs(t *testing.T) {
 func TestToolsCallRelocateMemberMovesWorker(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
+	seedMachine(t, api, ServerSelfHost)
 	workerID := assignOneWorker(t, api)
 
 	// An admin-class caller (role assistant) on the roster.
@@ -308,7 +309,7 @@ func TestToolsCallRelocateMemberMovesWorker(t *testing.T) {
 	now := time.Now().Unix()
 	adminTok, _ := mintJWT("adm-mcp", "agent", 300, secret, now, "")
 	payload := postMCP(t, srv.URL, adminTok,
-		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"relocate_member","arguments":{"member_id":"`+workerID+`","machine_id":"auto"}}}`)
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"relocate_member","arguments":{"member_id":"`+workerID+`","machine_id":"`+ServerSelfHost+`"}}}`)
 	if errObj, present := payload["error"]; present {
 		t.Fatalf("expected a result envelope, got error: %v", errObj)
 	}
@@ -324,8 +325,8 @@ func TestToolsCallRelocateMemberMovesWorker(t *testing.T) {
 	if err != nil || w == nil {
 		t.Fatalf("re-read worker: %v", err)
 	}
-	if w.DesiredMachineID != "auto" {
-		t.Errorf("worker desired_machine_id = %q, want auto", w.DesiredMachineID)
+	if w.DesiredMachineID != ServerSelfHost {
+		t.Errorf("worker desired_machine_id = %q, want %s", w.DesiredMachineID, ServerSelfHost)
 	}
 
 	// A plain agent (no roster capability) is the RBAC 403 — denied at the

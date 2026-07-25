@@ -77,7 +77,10 @@ func newActiveWorker(t *testing.T, api *apiServer, online bool) string {
 	// index (00025) rejects a second fixture reusing a literal like "S-1".
 	w := OutsourceWorker{ID: workerID, Codename: "S-" + workerID, Model: "claude-sonnet-4-5",
 		Effort: "medium", TaskID: task.ID, Status: WorkerStatusActive,
-		DesiredState: DesiredStateOnline}
+		DesiredState: DesiredStateOnline,
+		// Placement is now an explicit machine id (owner ruling 2026-07-25) — pin
+		// it to the warden this fixture already seeds+connects online.
+		DesiredMachineID: ServerSelfHost}
 	if err := api.dal.PutOutsourceWorker(w); err != nil {
 		t.Fatalf("put worker: %v", err)
 	}

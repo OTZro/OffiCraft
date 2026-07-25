@@ -104,8 +104,10 @@ func TestCreateTaskOutsourceDispatchLandsUnassignedTask(t *testing.T) {
 	if stored.ExecutorKind != TaskExecutorOutsource || stored.ExecutorID != "" {
 		t.Fatalf("dispatch must land an unassigned outsource task, got %+v", stored)
 	}
+	// No machine named on the target → "" (owner ruling 2026-07-25: no
+	// automatic placement, not the legacy "auto").
 	if stored.OutsourceModel != "sonnet" || stored.OutsourceEffort != "high" ||
-		stored.OutsourceMachine != "auto" {
+		stored.OutsourceMachine != "" {
 		t.Fatalf("the outsource target must ride the task row, got %+v", stored)
 	}
 	if n := liveWorkerCount(t, api); n != 0 {

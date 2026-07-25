@@ -418,8 +418,7 @@ export interface OutsourceWorkerView {
    * never a fabricated machine name. */
   machine?: string;
   /** The OWNER-PINNED placement (wire `desired_machine_id`; the relocate
-   * target the picker binds): "" = unpinned, "auto" = idlest-online, or a
-   * concrete machine id. */
+   * target the picker binds): "" = unpinned, else a concrete machine id. */
   desiredMachineId?: string;
   /** Claude account / live context % / live cost — RUNTIME facts folded from
    * the SAME per-actor telemetry+gauge the member roster reads. null when the
@@ -486,9 +485,10 @@ export interface TaskManualFieldView {
 /** The type's 負責成員 setting — who executes tasks of this type. `null` ⇒
  * unset (wire `{}`). Outsource carries the server-side launch knobs: copies
  * (per-type parallel copies, H6; **0 = 無限** — unlimited, spec
- * TaskManualDTO) and machine (spawn placement preference — `"auto"` = the
- * scheduler picks the idlest online machine, or a machine id; a specified
- * machine that is offline at spawn time falls back to auto server-side). */
+ * TaskManualDTO) and machine (the machine this type's workers boot on — a
+ * machine id, or `""` for "none chosen". Nothing is substituted: while no
+ * machine is chosen, or the chosen one is offline, no worker of the type is
+ * started and the reason is recorded on the worker row). */
 export type ManualAssigneeView =
   | { kind: "member"; memberId: string }
   | {
@@ -559,10 +559,11 @@ export interface TaskMessageInput {
 
 /** The reassign target (`POST /api/tasks/{id}/reassign`): either an ACTIVE
  * roster member below the warden layer, or a FRESH outsource worker the server
- * mints on the spot from these knobs (`model` blank ⇒ the runtime default;
- * `machine` "auto" ⇒ the scheduler picks, and a named-but-offline machine
- * falls back to auto server-side — the same promise the manual's assignee
- * carries). The manual's per-type `copies` has no analogue here: a reassign
+ * mints on the spot from these knobs (blank fields are INHERITED server-side:
+ * from the type manual for a typed task, else from the dispatching member
+ * itself. A blank `machine` that resolves to nothing means no worker starts —
+ * an offline machine is never substituted). The manual's per-type `copies` has
+ * no analogue here: a reassign
  * mints exactly ONE worker for THIS task. */
 export type TaskReassignTarget =
   | { kind: "member"; memberId: string }
@@ -1141,8 +1142,8 @@ export interface Api {
    * cockpit's 改機器, the worker twin of the
    * member machine-bind. Writes the owner-pinned placement, kills the current
    * session, and clears pacing so the next tick re-spawns on the chosen machine
-   * (no lifecycle change). machineId = a concrete machine id, "auto"
-   * (idlest-online), or "" (clear the pin). Returns the freshly-projected
+   * (no lifecycle change). machineId = a concrete machine id that must resolve,
+   * or "" (clear the pin). Returns the freshly-projected
    * worker; the caller can also lean on the outsource_worker SSE refetch. (T-f190) */
   relocateWorker(id: string, machineId: string): Promise<OutsourceWorkerView>;
   /** Refocus a worker (`POST /api/outsource-workers/{id}/refocus`, owner-only) —

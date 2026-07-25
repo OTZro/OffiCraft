@@ -930,6 +930,186 @@ func TestCreateAdHocMemberExecutorIsSelfOnlyForPlain正職(t *testing.T) {
 	}
 }
 
+// ── 發包 target: machine resolution + spec inheritance ───────────────────────
+
+// TestInheritDispatchSpec pins the omitted-field inheritance contract: a typed
+// dispatch inherits the type manual's outsource assignee, a free one inherits
+// the DISPATCHING member's own spec, an explicitly supplied field always wins,
+// an inherited model is dropped under a runtime it does not belong to, and
+// nothing ever invents a machine.
+func TestInheritDispatchSpec(t *testing.T) {
+	manual := &outsourceTypeSpec{Runtime: RuntimeCodex, Model: "gpt-5-codex",
+		Effort: "high", Machine: "m-manual"}
+	dispatcher := &Member{ID: "m-disp", Runtime: RuntimeClaude, Model: "opus",
+		Effort: "low", DesiredMachineID: "m-disp-box"}
+
+	// A typed task takes the manual — the dispatcher is present and ignored.
+	got := inheritDispatchSpec(dispatchSpec{}, manual, dispatcher)
+	if got != (dispatchSpec{Runtime: RuntimeCodex, Model: "gpt-5-codex",
+		Effort: "high", Machine: "m-manual"}) {
+		t.Fatalf("typed dispatch must inherit the manual: %+v", got)
+	}
+
+	// A free task takes the dispatcher — including the machine IT is pinned to.
+	got = inheritDispatchSpec(dispatchSpec{}, nil, dispatcher)
+	if got != (dispatchSpec{Runtime: RuntimeClaude, Model: "opus",
+		Effort: "low", Machine: "m-disp-box"}) {
+		t.Fatalf("free dispatch must inherit the dispatcher: %+v", got)
+	}
+
+	// Explicit always wins — every field, machine included.
+	explicit := dispatchSpec{Runtime: RuntimeCodex, Model: "gpt-5",
+		Effort: "medium", Machine: "m-explicit"}
+	if got = inheritDispatchSpec(explicit, nil, dispatcher); got != explicit {
+		t.Fatalf("an explicit spec must survive inheritance untouched: %+v", got)
+	}
+	if got = inheritDispatchSpec(explicit, manual, dispatcher); got != explicit {
+		t.Fatalf("an explicit spec must beat the manual too: %+v", got)
+	}
+	// The machine arm alone: everything else omitted, machine named.
+	got = inheritDispatchSpec(dispatchSpec{Machine: "m-explicit"}, nil, dispatcher)
+	if got.Machine != "m-explicit" {
+		t.Fatalf("an explicit machine must never be overwritten by the dispatcher's: %q",
+			got.Machine)
+	}
+
+	// An inherited model is only coherent under its own runtime: an explicit
+	// runtime that differs drops it (a codex model must not ride a claude boot).
+	got = inheritDispatchSpec(dispatchSpec{Runtime: RuntimeClaude}, manual, nil)
+	if got.Model != "" {
+		t.Fatalf("a model from another runtime must be dropped, got %q", got.Model)
+	}
+	// …and a MATCHING explicit runtime keeps it.
+	got = inheritDispatchSpec(dispatchSpec{Runtime: RuntimeCodex}, manual, nil)
+	if got.Model != "gpt-5-codex" {
+		t.Fatalf("a model under its own runtime must be kept, got %q", got.Model)
+	}
+
+	// No source at all: runtime/effort take their defaults, and the machine
+	// stays EMPTY — a placement nobody chose is not a placement.
+	got = inheritDispatchSpec(dispatchSpec{}, nil, nil)
+	if got != (dispatchSpec{Runtime: RuntimeClaude, Effort: "medium"}) {
+		t.Fatalf("an unsourced spec must default runtime+effort only: %+v", got)
+	}
+	// A dispatcher with no pin likewise leaves the machine unnamed.
+	got = inheritDispatchSpec(dispatchSpec{}, nil, &Member{ID: "m-nopin"})
+	if got.Machine != "" {
+		t.Fatalf("an unpinned dispatcher must not name a machine, got %q", got.Machine)
+	}
+}
+
+// TestCreateTaskDispatchTargetMachineMustResolve: the create 發包 target's
+// machine is validated exactly like a relocate pin — "auto" and an unknown id
+// are both the resolve 404, a real machine id lands on the task row.
+func TestCreateTaskDispatchTargetMachineMustResolve(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	putMemberRow(t, api, "m-disp", KindAssistant, "")
+	seedMachine(t, api, "m-real")
+
+	dispatch := func(title, machine string) *httptest.ResponseRecorder {
+		return createTaskAs(t, api, map[string]any{"title": title,
+			"target": map[string]any{"kind": "outsource", "model": "sonnet",
+				"machine": machine}}, "m-disp", "agent")
+	}
+
+	// SENTINEL: a real machine id is accepted and rides the task row.
+	rec := dispatch("real box", "m-real")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("concrete machine target must 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	stored, _ := api.dal.GetTask(decodeBody[taskCreateResultDTO](t, rec).Task.ID)
+	if stored == nil || stored.OutsourceMachine != "m-real" {
+		t.Fatalf("the target machine must land on the task row: %+v", stored)
+	}
+	for _, machine := range []string{"auto", "m-ghost"} {
+		if rec := dispatch("bad "+machine, machine); rec.Code != http.StatusNotFound {
+			t.Fatalf("target machine %q must 404, got %d %s",
+				machine, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// TestCreateTaskDispatchInheritsOmittedSpec: end-to-end inheritance through the
+// create handler — a typed 發包 fills from the type manual, a free one from the
+// dispatching member, and an explicit field beats both.
+func TestCreateTaskDispatchInheritsOmittedSpec(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	seedMachine(t, api, "m-manual-box")
+	seedMachine(t, api, "m-disp-box")
+	seedMachine(t, api, "m-explicit-box")
+	if err := api.dal.PutMember(Member{
+		ID: "m-disp", Name: "Dispatcher", Kind: KindAssistant,
+		Runtime: RuntimeCodex, Model: "gpt-5-codex", Effort: "low",
+		DesiredMachineID: "m-disp-box", RosterStatus: RosterStatusActive,
+	}); err != nil {
+		t.Fatalf("seed dispatcher: %v", err)
+	}
+	if err := api.dal.PutTaskManual(TaskManual{
+		TypeKey: "typed", Fields: "[]",
+		Assignee: `{"kind":"outsource","runtime":"claude","model":"opus","effort":"high","machine":"m-manual-box"}`,
+	}); err != nil {
+		t.Fatalf("seed manual: %v", err)
+	}
+
+	storedFor := func(rec *httptest.ResponseRecorder) *Task {
+		t.Helper()
+		if rec.Code != http.StatusOK {
+			t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+		}
+		stored, err := api.dal.GetTask(decodeBody[taskCreateResultDTO](t, rec).Task.ID)
+		if err != nil || stored == nil {
+			t.Fatalf("re-read task: %v", err)
+		}
+		return stored
+	}
+
+	// Typed + bare target → the manual's whole spec.
+	got := storedFor(createTaskAs(t, api, map[string]any{
+		"title": "typed inherit", "type_key": "typed",
+		"target": map[string]any{"kind": "outsource"}}, "m-disp", "agent"))
+	if got.OutsourceRuntime != RuntimeClaude || got.OutsourceModel != "opus" ||
+		got.OutsourceEffort != "high" || got.OutsourceMachine != "m-manual-box" {
+		t.Fatalf("a typed dispatch must inherit the manual's spec: %+v", got)
+	}
+
+	// Free + bare target → the DISPATCHER's own spec, machine included.
+	got = storedFor(createTaskAs(t, api, map[string]any{
+		"title":  "free inherit",
+		"target": map[string]any{"kind": "outsource"}}, "m-disp", "agent"))
+	if got.OutsourceRuntime != RuntimeCodex || got.OutsourceModel != "gpt-5-codex" ||
+		got.OutsourceEffort != "low" || got.OutsourceMachine != "m-disp-box" {
+		t.Fatalf("a free dispatch must inherit the dispatcher's spec: %+v", got)
+	}
+
+	// Explicit fields beat the inherited ones.
+	got = storedFor(createTaskAs(t, api, map[string]any{
+		"title": "explicit wins", "type_key": "typed",
+		"target": map[string]any{"kind": "outsource", "effort": "medium",
+			"machine": "m-explicit-box"}}, "m-disp", "agent"))
+	if got.OutsourceEffort != "medium" || got.OutsourceMachine != "m-explicit-box" {
+		t.Fatalf("an explicit target field must beat the inherited one: %+v", got)
+	}
+
+	// An explicit runtime that differs from the source drops the inherited
+	// model, and a dispatcher with no pin leaves the machine unnamed.
+	putMemberRow(t, api, "m-bare", KindAssistant, "")
+	got = storedFor(createTaskAs(t, api, map[string]any{
+		"title": "runtime mismatch", "type_key": "typed",
+		"target": map[string]any{"kind": "outsource", "runtime": "codex"}},
+		"m-bare", "agent"))
+	if got.OutsourceRuntime != RuntimeCodex || got.OutsourceModel != "" {
+		t.Fatalf("a claude model must not ride a codex dispatch: %+v", got)
+	}
+	got = storedFor(createTaskAs(t, api, map[string]any{
+		"title":  "no machine anywhere",
+		"target": map[string]any{"kind": "outsource"}}, "m-bare", "agent"))
+	if got.OutsourceMachine != "" {
+		t.Fatalf("nothing named a machine — it must stay empty, got %q", got.OutsourceMachine)
+	}
+}
+
 // ── submit_plan keeps done steps ─────────────────────────────────────────────
 
 func TestSubmitPlanReplacesOnlyTheNotDoneSteps(t *testing.T) {

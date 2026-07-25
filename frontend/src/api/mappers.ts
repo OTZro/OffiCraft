@@ -545,11 +545,9 @@ export function toManualAssignee(
       effort: typeof a["effort"] === "string" ? a["effort"] : "",
       // 0 = 無限 (unlimited per-type copies — spec TaskManualDTO).
       copies: typeof a["copies"] === "number" ? a["copies"] : 1,
-      // Spawn placement preference; absent ⇒ "auto" (the wire default).
-      machine:
-        typeof a["machine"] === "string" && a["machine"] !== ""
-          ? a["machine"]
-          : "auto",
+      // The machine this type's workers boot on; absent ⇒ "" (none chosen —
+      // nothing is substituted, so no worker of the type starts).
+      machine: typeof a["machine"] === "string" ? a["machine"] : "",
     };
   }
   return null;
@@ -608,7 +606,12 @@ export function fromTaskManualPatch(
                 model: patch.assignee.model,
                 effort: patch.assignee.effort,
                 copies: patch.assignee.copies,
-                machine: patch.assignee.machine,
+                // A blank machine is OMITTED, not sent as "": the wire requires a
+                // non-blank machine id when the key is present, and "no machine
+                // chosen" is a legal manual (no worker starts until one is).
+                ...(patch.assignee.machine
+                  ? { machine: patch.assignee.machine }
+                  : {}),
               },
   };
 }

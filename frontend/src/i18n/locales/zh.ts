@@ -1119,14 +1119,14 @@ export const zh = {
     assigneeModelPlaceholder: "模型（留空用預設）",
     assigneeEffort: "投入程度",
     assigneeMachineLabel: "機器",
-    assigneeMachineAuto: "自動分配",
-    assigneeMachineAutoHint: "挑最閒的一台",
     // 機器狀態字：讀現有 machines（online）＋ monitoring（agents 數）——
     // 線上且無 agent ＝ 閒置、線上有 agent ＝ 忙碌、離線 ＝ 離線（誠實映射）
     assigneeMachineIdle: "閒置",
     assigneeMachineBusy: "忙碌",
     assigneeMachineOffline: "離線",
-    assigneeMachineNote: "指定的機器若當下離線，會自動改用「自動分配」。",
+    assigneeMachineUnset: "未選機器",
+    assigneeMachineNote:
+      "這個類型的外包只會在你選的機器上啟動。沒選機器、或該機器離線時，一律不啟動，原因會顯示在該外包上。",
     assigneeCopies: "雇用數量",
     assigneeCopiesDecrease: "減少",
     assigneeCopiesIncrease: "增加",
