@@ -929,9 +929,12 @@ export const en: Dict = {
     ttl24h: "24 hours",
     ttl7d: "7 days",
     ttl30d: "30 days",
-    handover: "Auto-handover threshold",
+    handover: "Claude auto-handover threshold",
     handoverSub:
-      "When a teammate's memory fills to this level, it hands over to a fresh one (40–90%)",
+      "When Claude Code's memory fills to this level, it hands over to a fresh one (40–90%)",
+    codexHandover: "Codex auto-handover rounds",
+    codexHandoverSub:
+      "Automatically refocus after 3 completed context compactions; context percentage is not used.",
     // ── Verified-save read-back (T-1c2e; lives in the software-update view
     // after the rework: secrets show only set/unset, never the plaintext, and
     // the auto-update switch verifies a save by reading the value back) ──

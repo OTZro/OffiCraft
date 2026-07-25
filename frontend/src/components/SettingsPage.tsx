@@ -630,6 +630,16 @@ function ServerParams({
             </div>
           </div>
 
+          <div className="param-row">
+            <div className="param-row__body">
+              <div className="param-row__name">{t.settings.codexHandover}</div>
+              <div className="param-row__sub">{t.settings.codexHandoverSub}</div>
+            </div>
+            <div className="param-pct" aria-label={t.settings.codexHandover}>
+              <span className="param-pct__sign">3 次</span>
+            </div>
+          </div>
+
           {(saveError || rangeError) && (
             <div className="set-error param-error">
               {t.settings.paramsSaveError}
