@@ -143,6 +143,7 @@ export function TaskReassignDialog({
 
   const [kindDraft, setKindDraft] = useState<"member" | "outsource">("member");
   const [memberDraft, setMemberDraft] = useState(roster[0]?.id ?? "");
+  const [runtimeDraft, setRuntimeDraft] = useState<"claude" | "codex">("claude");
   const [modelDraft, setModelDraft] = useState("");
   const [effortDraft, setEffortDraft] = useState<string>("medium");
   // No 自動分配 row: a reassign must NAME a machine (owner 2026-07-19). Opens
@@ -182,6 +183,7 @@ export function TaskReassignDialog({
           ? { kind: "member", memberId: memberDraft }
           : {
               kind: "outsource",
+              runtime: runtimeDraft,
               model: modelDraft.trim(),
               effort: effortDraft,
               machine: machineDraft,
@@ -259,27 +261,44 @@ export function TaskReassignDialog({
 
           {kindDraft === "outsource" && (
             <>
+              <div className="task-reassign__section">
+                <div className="task-reassign__label">{t.mp.agentRuntime}</div>
+                <select
+                  className="task-reassign__input"
+                  value={runtimeDraft}
+                  data-testid="reassign-runtime"
+                  onChange={(e) => {
+                    setRuntimeDraft(e.target.value as "claude" | "codex");
+                    setModelDraft("");
+                  }}
+                >
+                  <option value="claude">Claude Code</option>
+                  <option value="codex">Codex</option>
+                </select>
+              </div>
               {/* 模型 — ModelEffortEditor's quick-pick vocabulary as segmented
                * chips + the authoritative free input (blank ⇒ runtime default). */}
               <div className="task-reassign__section">
                 <div className="task-reassign__label">
                   {t.settings.assigneeModelLabel}
                 </div>
-                <Segmented
-                  options={MODEL_QUICK_PICKS.map((m) => ({
-                    value: m,
-                    label: m,
-                  }))}
-                  value={
-                    (MODEL_QUICK_PICKS as readonly string[]).includes(modelDraft)
-                      ? (modelDraft as (typeof MODEL_QUICK_PICKS)[number])
-                      : null
-                  }
-                  onPick={(v) => setModelDraft(v)}
-                  testidPrefix="reassign-model"
-                  ariaLabel={t.settings.assigneeModelLabel}
-                  className="task-reassign__seg--grid2"
-                />
+                {runtimeDraft === "claude" && (
+                  <Segmented
+                    options={MODEL_QUICK_PICKS.map((m) => ({
+                      value: m,
+                      label: m,
+                    }))}
+                    value={
+                      (MODEL_QUICK_PICKS as readonly string[]).includes(modelDraft)
+                        ? (modelDraft as (typeof MODEL_QUICK_PICKS)[number])
+                        : null
+                    }
+                    onPick={(v) => setModelDraft(v)}
+                    testidPrefix="reassign-model"
+                    ariaLabel={t.settings.assigneeModelLabel}
+                    className="task-reassign__seg--grid2"
+                  />
+                )}
                 <input
                   className="task-reassign__input"
                   value={modelDraft}

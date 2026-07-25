@@ -57,6 +57,12 @@ npm install -g @anthropic-ai/claude-code
 OC_CLAUDE_BIN=/絕對路徑/claude ./install.sh
 ```
 
+若成員選用 Codex，對應覆寫是：
+
+```bash
+OC_CODEX_BIN=/絕對路徑/codex ./install.sh
+```
+
 ### 成員被判離線，怎麼知道是誰的問題
 
 OffiCraft 把「線上」定義得很乾淨：**成員此刻有沒有持著那條到 server 的長連線**——持著＝線上，斷了＝離線，沒有心跳、沒有 TTL。好處是診斷不「鬼打牆」：

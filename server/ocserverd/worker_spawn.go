@@ -231,6 +231,14 @@ func (s *apiServer) buildWorkerBootContext(w OutsourceWorker, t Task, manual *Ta
 		// rather than fabricating an empty manual.
 		b.WriteString("\n# 任務手冊\n\n（該類型的手冊目前不存在——照任務描述與 owner 的指示規劃。）\n")
 	}
+	// Keep the provider delta last: the canonical global/worker seeds contain
+	// Claude's Monitor/statusLine mechanics, so Codex's small adapter appendix
+	// must have final precedence without forking those shared documents.
+	if appendix := runtimeContextAppendix(w.Runtime); appendix != "" {
+		b.WriteString("\n---\n\n")
+		b.WriteString(appendix)
+		b.WriteString("\n")
+	}
 	return b.String() + "\n", nil
 }
 
@@ -299,12 +307,17 @@ func (s *apiServer) pickWorkerWarden(w OutsourceWorker, preferred string, now fl
 		if s.workerMachineCoolingOn(w.ID, m.ID, now) {
 			continue // benched for this worker after a recent boot failure — 換機
 		}
+		if !s.machineSupportsRuntime(m.ID, w.Runtime) {
+			continue
+		}
 		if preferred != "" && preferred != "auto" && m.ID == preferred {
 			return m.ID // the requested machine is online + not benched — honour it
 		}
 		penalty := 0
-		if _, _, subReadable := s.machineClaudeInfo(m.ID); subReadable != nil && !*subReadable {
-			penalty += 2 // creds unreadable — a claude boot cannot even authenticate
+		if NormalizeRuntime(w.Runtime) == RuntimeClaude {
+			if _, _, subReadable := s.machineClaudeInfo(m.ID); subReadable != nil && !*subReadable {
+				penalty += 2 // creds unreadable — a claude boot cannot even authenticate
+			}
 		}
 		if ram := s.machineRamPct(m.ID); ram != nil && *ram > workerPlacementRamCeiling {
 			penalty += 1 // memory near-exhausted — the boot is likeliest to wedge here
@@ -498,6 +511,7 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 			PersonaContext: persona,
 			MemberToken:    token,
 			Role:           workerBootRoleLabel,
+			Runtime:        NormalizeRuntime(w.Runtime),
 			Model:          w.Model,
 			Effort:         w.Effort,
 		},

@@ -114,6 +114,7 @@ export function toMember(w: WireMember): Member {
     // one of offline/waking/online/stopping/stopped). Honest passthrough — never
     // a fabricated value.
     lifecycle: w.presence as MemberLifecycle,
+    runtime: (w.runtime || "claude") as "claude" | "codex",
     model: w.model, // direct
     effort: (w.effort || "medium") as Effort, // direct (narrowed to union)
     kind: w.kind, // "assistant" | "warden" | … — office roster keeps assistants only
@@ -420,6 +421,7 @@ export function toOutsourceWorker(w: WireOutsourceWorker): OutsourceWorkerView {
   return {
     id: w.id,
     codename: w.codename,
+    runtime: (w.runtime || "claude") as "claude" | "codex",
     model: w.model ?? "",
     effort: w.effort ?? "",
     status: w.status ?? "",
@@ -492,6 +494,7 @@ export function toManualAssignee(
   if (a["kind"] === "outsource") {
     return {
       kind: "outsource",
+      runtime: a["runtime"] === "codex" ? "codex" : "claude",
       model: typeof a["model"] === "string" ? a["model"] : "",
       effort: typeof a["effort"] === "string" ? a["effort"] : "",
       // 0 = 無限 (unlimited per-type copies — spec TaskManualDTO).
@@ -555,6 +558,7 @@ export function fromTaskManualPatch(
             ? { kind: "member", member_id: patch.assignee.memberId }
             : {
                 kind: "outsource",
+                runtime: patch.assignee.runtime ?? "claude",
                 model: patch.assignee.model,
                 effort: patch.assignee.effort,
                 copies: patch.assignee.copies,
@@ -577,6 +581,7 @@ export function fromTaskReassignInput(
         ? {
             kind: "member",
             member_id: target.memberId,
+            runtime: null,
             model: null,
             effort: null,
             machine: null,
@@ -584,6 +589,7 @@ export function fromTaskReassignInput(
         : {
             kind: "outsource",
             member_id: null,
+            runtime: target.runtime ?? "claude",
             model: target.model,
             effort: target.effort,
             machine: target.machine,
@@ -648,6 +654,16 @@ function toMonMachine(w: WireMonMachine): MonMachineView {
     claudeVersion: w.claude_version ?? null,
     claudeCredSource: toClaudeCredSource(w.claude_cred_source),
     claudeSubReadable: w.claude_sub_readable ?? null,
+    runtimeCapabilities: Object.fromEntries(
+      Object.entries(w.runtime_capabilities ?? {}).map(([runtime, capability]) => [
+        runtime,
+        {
+          installed: capability.installed ?? null,
+          loggedIn: capability.logged_in ?? null,
+          version: capability.version ?? null,
+        },
+      ])
+    ),
   };
 }
 
@@ -868,6 +884,16 @@ export function toMachine(w: WireMachine): MachineView {
     claudeVersion: w.claude_version ?? null,
     claudeCredSource: toClaudeCredSource(w.claude_cred_source),
     claudeSubReadable: w.claude_sub_readable ?? null,
+    runtimeCapabilities: Object.fromEntries(
+      Object.entries(w.runtime_capabilities ?? {}).map(([runtime, capability]) => [
+        runtime,
+        {
+          installed: capability.installed ?? null,
+          loggedIn: capability.logged_in ?? null,
+          version: capability.version ?? null,
+        },
+      ])
+    ),
   };
 }
 

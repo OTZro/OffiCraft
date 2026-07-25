@@ -781,9 +781,10 @@ def test_warden_command_band_start_frame(
         args = cmd["args"]
         assert set(args) == {
             "member_id", "persona_context", "member_token", "role",
-            "task_type", "model", "effort", "session_name",
+            "task_type", "runtime", "model", "effort", "session_name",
         }, args
         assert args["member_id"] == member_id, args
+        assert args["runtime"] == "claude", args
         assert args["persona_context"].strip(), "START must carry the folded persona"
         assert args["role"], args
         # Confidentiality payoff: the riding member_token is a REAL credential.

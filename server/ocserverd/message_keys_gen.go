@@ -176,6 +176,7 @@ var messageKeys = map[string]bool{
 	"monitor.sevenDay":                        true,
 	"monitor.time":                            true,
 	"monitor.usage":                           true,
+	"mp.agentRuntime":                         true,
 	"mp.back":                                 true,
 	"mp.claudeAccount":                        true,
 	"mp.context":                              true,

@@ -617,6 +617,7 @@ func (s *apiServer) buildStartFrame(m Member) ([]byte, bool) {
 			MemberToken:    token,
 			Role:           boot.RoleKey,
 			TaskType:       boot.TaskType,
+			Runtime:        NormalizeRuntime(m.Runtime),
 			Model:          m.Model,
 			Effort:         m.Effort,
 			SessionName:    "",
@@ -672,6 +673,16 @@ func (s *apiServer) reconcileOne(m Member, st reconcileState, now float64) recon
 	case reconcileCmdNone:
 		return decision
 	case reconcileCmdStart:
+		warden := s.wardenTargetOf(m.ID)
+		if m.Kind != KindWarden && !s.machineSupportsRuntime(warden, m.Runtime) {
+			reconcileLog("%s: target warden %q does not report runtime %q ready — fail-closed",
+				m.ID, warden, NormalizeRuntime(m.Runtime))
+			decision.Command = reconcileCmdNone
+			decision.Reason = "selected runtime unavailable on target machine"
+			decision.State = st
+			decision.DispatchUnlanded = true
+			return decision
+		}
 		frame, ok := s.buildStartFrame(m)
 		if !ok {
 			reconcileLog("%s: no START payload (persona/token) — fail-closed, not dispatching",

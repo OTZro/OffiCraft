@@ -570,6 +570,7 @@ export const en: Dict = {
     forceStopConfirmAction: "Force stop",
     forceStopBusy: "Stopping…",
     model: "Model",
+    agentRuntime: "AI runtime",
     effort: "EFFORT · Thinking",
     effortLevel: (e: Effort) =>
       ({ low: "Low", medium: "Medium", high: "High" })[e],

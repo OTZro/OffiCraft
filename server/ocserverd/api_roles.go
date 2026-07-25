@@ -148,6 +148,15 @@ func (s *apiServer) HandleCreateRoleApiRolesPost(w http.ResponseWriter, r *http.
 			"effort must be one of [high low medium]; got '"+*body.Effort+"'")
 		return
 	}
+	runtime := RuntimeClaude
+	if body.Runtime != nil {
+		runtime = string(*body.Runtime)
+		if !ValidRuntime(runtime) {
+			writeError(w, http.StatusUnprocessableEntity,
+				"runtime must be one of [claude codex]; got '"+runtime+"'")
+			return
+		}
+	}
 	memberName := trimmedOrEmpty(body.MemberName)
 	if memberName == "" {
 		members, err := s.dal.ListMembers()
@@ -181,6 +190,7 @@ func (s *apiServer) HandleCreateRoleApiRolesPost(w http.ResponseWriter, r *http.
 		Name:             memberName,
 		Kind:             KindAssistant,
 		RoleKey:          roleKey,
+		Runtime:          runtime,
 		Model:            trimmedOrEmpty(body.Model),
 		Effort:           effort,
 		DesiredState:     DesiredStateOffline,

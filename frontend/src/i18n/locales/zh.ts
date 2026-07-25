@@ -643,6 +643,7 @@ export const zh = {
     forceStopConfirmAction: "強制停止",
     forceStopBusy: "停止中…",
     model: "模型",
+    agentRuntime: "AI 執行環境",
     effort: "EFFORT · 思考強度",
     effortLevel: (e: Effort) =>
       ({ low: "低", medium: "中", high: "高" })[e],

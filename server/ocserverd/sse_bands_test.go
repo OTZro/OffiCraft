@@ -219,7 +219,7 @@ func TestDirectedFrameText(t *testing.T) {
 		t.Fatalf("envelope: %+v", envelope)
 	}
 	want := []string{"member_id", "persona_context", "member_token", "role",
-		"task_type", "model", "effort", "session_name"}
+		"task_type", "runtime", "model", "effort", "session_name"}
 	if len(envelope.Data.Args) != len(want) {
 		t.Fatalf("start args keys: %v", envelope.Data.Args)
 	}

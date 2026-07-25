@@ -296,8 +296,12 @@ export function OfficePage() {
         onRestart={async () => {
           await api.restartWorker(workerDetail.id);
         }}
-        onSetModel={async (model, effort) => {
-          await api.setWorkerModel(workerDetail.id, { model, effort });
+        onSetModel={async (runtime, model, effort) => {
+          await api.setWorkerModel(workerDetail.id, {
+            runtime,
+            model,
+            effort,
+          });
         }}
         // Initial-prompt PREVIEW (T-ba6b): the server re-runs the spawn fold
         // over the CURRENT task/manual rows (no token minted) — the worker twin

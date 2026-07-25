@@ -39,13 +39,18 @@ export interface AgentDetailVM {
   /** True while the agent's session is really up — gates the refocus button
    * (the server 409s an offline refocus on both kinds). */
   online: boolean;
+  runtime: "claude" | "codex";
   model: string;
   effort: string;
   /** The note under the model/effort editor (member: next-wake semantics;
    * worker: active-respawn semantics). */
   modelEffortNote: string;
   /** Persist a model/effort edit. Undefined ⇒ the cell is read-only. */
-  onSaveModelEffort?: (model: string, effort: string) => Promise<void>;
+  onSaveModelEffort?: (
+    runtime: "claude" | "codex",
+    model: string,
+    effort: string,
+  ) => Promise<void>;
   /** Resolved machine display text; "" ⇒ dash. Wrappers apply their own gate
    * (member: awake-only; worker: 尚未分配 fallback text). */
   machineText: string;
@@ -122,14 +127,17 @@ export function AgentDetailPanel({
   // ── model / effort editing (shared quick-pick editor; persistence is the
   // wrapper's — member PATCHes the member, worker POSTs the model op) ────────
   const [meEditing, setMeEditing] = useState(false);
+  const [meRuntime, setMeRuntime] = useState<"claude" | "codex">("claude");
   const [meModel, setMeModel] = useState("");
   const [meEffort, setMeEffort] = useState("medium");
   const [meBusy, setMeBusy] = useState(false);
   const [meError, setMeError] = useState(false);
   const [meOverride, setMeOverride] = useState<{
+    runtime: "claude" | "codex";
     model: string;
     effort: string;
   } | null>(null);
+  const shownRuntime = meOverride?.runtime ?? vm.runtime;
   const shownModel = meOverride?.model ?? vm.model;
   const shownEffort = meOverride?.effort ?? vm.effort;
   // Known effort levels render 中文字 + the raw key (the member page's format,
@@ -140,6 +148,7 @@ export function AgentDetailPanel({
       : null;
 
   function startMeEdit() {
+    setMeRuntime(shownRuntime);
     setMeModel(shownModel);
     setMeEffort(shownEffort || "medium");
     setMeError(false);
@@ -151,8 +160,12 @@ export function AgentDetailPanel({
     setMeBusy(true);
     setMeError(false);
     try {
-      await vm.onSaveModelEffort(meModel.trim(), meEffort);
-      setMeOverride({ model: meModel.trim(), effort: meEffort });
+      await vm.onSaveModelEffort(meRuntime, meModel.trim(), meEffort);
+      setMeOverride({
+        runtime: meRuntime,
+        model: meModel.trim(),
+        effort: meEffort,
+      });
       setMeEditing(false);
     } catch {
       setMeError(true);
@@ -291,6 +304,12 @@ export function AgentDetailPanel({
               </div>
               <div className="mp-field__value">{shownModel || dash}</div>
               <div className="mp-field__label mp-field__label--stacked">
+                {t.mp.agentRuntime}
+              </div>
+              <div className="mp-field__value">
+                {shownRuntime === "codex" ? "Codex" : "Claude Code"}
+              </div>
+              <div className="mp-field__label mp-field__label--stacked">
                 {t.mp.effort}
               </div>
               <div className="mp-field__value">
@@ -310,8 +329,10 @@ export function AgentDetailPanel({
               data-testid={`${p}-model-effort-editor`}
             >
               <ModelEffortEditor
+                runtime={meRuntime}
                 model={meModel}
                 effort={meEffort}
+                onRuntimeChange={setMeRuntime}
                 onModelChange={setMeModel}
                 onEffortChange={setMeEffort}
               />

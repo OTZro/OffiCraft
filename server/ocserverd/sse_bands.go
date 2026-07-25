@@ -303,6 +303,7 @@ type wardenStartArgs struct {
 	MemberToken    string `json:"member_token"`
 	Role           string `json:"role"`
 	TaskType       string `json:"task_type"`
+	Runtime        string `json:"runtime"`
 	Model          string `json:"model"`
 	Effort         string `json:"effort"`
 	SessionName    string `json:"session_name"`

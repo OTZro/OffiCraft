@@ -1154,12 +1154,13 @@ export interface paths {
          * @description Hire a roster member (§3.4 #9; pure seam, no UI). The owner assigns the
          *     display ``name``; the server mints the ``id`` (``m-<hex>`` — never client
          *     supplied, it is the attribution key). The member starts offline/active; hiring
-         *     does NOT spawn a runtime. A blank ``name`` is a 422.
+         *     does NOT spawn a runtime. ``runtime`` is claude/codex (absent = claude), and
+         *     ``model`` is provider-specific. A blank ``name`` or invalid runtime is a 422.
          *
          *     PRIVILEGE GUARD (closes the hire escalation hole): ``kind`` / ``role_key``
          *     are PRIVILEGE-BEARING fields — ``kind="warden"`` makes the row a MACHINE
          *     principal (a warden-command target) and ``role_key="assistant"`` makes it an
-         *     ADMIN principal (governance capability). A plain hire (name/model/effort)
+         *     ADMIN principal (governance capability). A plain hire (name/runtime/model/effort)
          *     stays open to any authenticated caller (unchanged), but a body carrying a
          *     non-empty ``kind`` or ``role_key`` demands the caller itself resolve to at
          *     least ``admin_agent`` (the same class the onboard / role-write seams
@@ -1204,10 +1205,11 @@ export interface paths {
         head?: never;
         /**
          * Edit a member (name / model / effort). Blank name / bad effort → 422.
-         * @description Partially update a member's owner-editable fields (§3.4 #11: name / model /
-         *     effort). PATCH semantics — only supplied fields change. A blank ``name`` is a
-         *     422; an ``effort`` outside low/medium/high is a 422. The immutable ``id`` and
-         *     every runtime field (presence/desired_state/status) are untouched.
+         * @description Partially update a member's owner-editable fields (§3.4 #11: name / runtime /
+         *     model / effort). PATCH semantics — only supplied fields change. A blank ``name``
+         *     is a 422; a runtime outside claude/codex or effort outside low/medium/high is a
+         *     422. A runtime change applies on the next wake/recycle. The immutable ``id`` and
+         *     all observed lifecycle fields (presence/desired_state/status) are untouched.
          */
         patch: operations["handle_update_member_api_members__member_id__patch"];
         trace?: never;
@@ -1930,9 +1932,10 @@ export interface paths {
          *     delta ``put_member`` fans. ``member_name`` is OPTIONAL: omitted/blank ⇒ the
          *     server picks a fresh Mira-style name from ``domain.member.MEMBER_NAME_POOL``,
          *     skipping every name already on the roster (case-insensitive, removed rows
-         *     included so a revived audit-trail name never doubles). ``model`` is a free
-         *     launch string (blank/omitted ⇒ CLI default); ``effort`` is the closed
-         *     low/medium/high vocabulary (422 outside it; omitted ⇒ medium) — both are
+         *     included so a revived audit-trail name never doubles). ``runtime`` is
+         *     claude/codex (omitted ⇒ claude); ``model`` is a free provider launch string
+         *     (blank/omitted ⇒ selected-runtime default); ``effort`` is the closed
+         *     low/medium/high vocabulary (422 outside it; omitted ⇒ medium) — all three are
          *     baked into the NEXT wake's launch command by the reconcile START payload
          *     (change-takes-effect-on-next-wake).
          */
@@ -2885,6 +2888,18 @@ export interface components {
             rate_limits?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Runtime
+             * @description The provider runtime that produced this session telemetry. null when an older reporter did not identify it.
+             */
+            runtime?: components["schemas"]["AgentRuntime"] | null;
+            /**
+             * Runtimes
+             * @description Warden heartbeats only — provider-neutral machine runtime capabilities keyed by runtime name. null when never reported.
+             */
+            runtimes?: {
+                [key: string]: components["schemas"]["RuntimeCapabilityDTO"];
+            } | null;
             /** Self Update */
             self_update?: {
                 [key: string]: unknown;
@@ -2898,17 +2913,18 @@ export interface components {
         };
         /**
          * AgentTelemetryIngestDTO
-         * @description Inbound warden telemetry report (``POST /api/monitoring/telemetry``).
+         * @description Inbound warden/agent telemetry report (``POST /api/monitoring/telemetry``).
          *
-         *     The warden-side reporter pushes what the model can't read about itself: the
+         *     The reporter pushes what the model can't reliably read about itself: the
          *     account-wide ``rate_limits`` (5h/7d windows), this session's own ``tokens``,
-         *     the host ``hardware`` snapshot (cpu/ram/battery/ac), and the harness-computed
-         *     cumulative ``cost``, and — warden heartbeats only — ``binaries``, the content
-         *     fingerprints (12-hex sha256 prefixes) of the live on-disk ocwarden/ocagent the
-         *     server compares against its own embedded prebuilts for the machine-table
-         *     ``bin_status`` verdict. ``machine`` / ``account`` are the merge tags (quota is
-         *     per-account; hardware is per-host). Fields are permissive so a bad body is a
-         *     flat 400 (not a Pydantic 422); at least one telemetry field must be present.
+         *     the host ``hardware`` snapshot (cpu/ram/battery/ac), the harness-computed
+         *     cumulative ``cost``, and the session ``runtime``. Warden heartbeats additionally
+         *     carry ``binaries`` plus provider-neutral ``runtimes`` capability probes; the
+         *     server compares binary fingerprints against its embedded prebuilts and uses
+         *     runtime readiness for placement. ``machine`` / ``account`` are merge tags
+         *     (quota is per-account; hardware is per-host). Fields are permissive so a bad
+         *     body is a flat 400 (not a Pydantic 422); at least one telemetry field must be
+         *     present.
          *
          *     The reporting identity is the CALLER (the verified JWT ``sub``), NEVER a
          *     self-reported ``agent_id`` (identity-from-token audit) — that field was removed,
@@ -2940,11 +2956,27 @@ export interface components {
             machine?: unknown;
             /** Rate Limits */
             rate_limits?: unknown;
+            /**
+             * Runtime
+             * @description Optional session runtime: ``claude`` or ``codex``. Omitted leaves previously stored telemetry untouched.
+             */
+            runtime?: unknown;
+            /**
+             * Runtimes
+             * @description Warden heartbeats only — provider-neutral runtime capability map. Each ``claude``/``codex`` entry may report ``installed`` bool, ``logged_in`` bool/null, and ``version`` string/null; values are readiness metadata only, never credentials.
+             */
+            runtimes?: unknown;
             /** Self Update */
             self_update?: unknown;
             /** Tokens */
             tokens?: unknown;
         };
+        /**
+         * AgentRuntime
+         * @description AI CLI runtime selected per member or outsource worker. Existing rows and omitted inputs default to ``claude`` for backward compatibility.
+         * @enum {string}
+         */
+        AgentRuntime: "claude" | "codex";
         /**
          * AliasDTO
          * @description The response to an account/machine display-name PATCH (AMD step1). ``id`` is
@@ -3658,6 +3690,13 @@ export interface components {
              * @default false
              */
             online: boolean;
+            /**
+             * Runtime Capabilities
+             * @description Provider-neutral runtime readiness keyed by ``claude``/``codex``. Empty for an older warden that has not reported capability probes. Codex placement requires an explicit installed=true and logged_in!=false report. During rolling upgrades only, a completely absent capability map preserves legacy Claude placement; once a map is reported, Claude also requires installed=true and logged_in!=false.
+             */
+            runtime_capabilities?: {
+                [key: string]: components["schemas"]["RuntimeCapabilityDTO"];
+            };
         };
         /**
          * MachineDeleteResultDTO
@@ -3988,6 +4027,12 @@ export interface components {
              */
             role_name: string;
             /**
+             * Runtime
+             * @description The member's selected AI CLI runtime. Existing rows default to ``claude``.
+             * @default claude
+             */
+            runtime: components["schemas"]["AgentRuntime"];
+            /**
              * Roster Status
              * @default active
              */
@@ -4007,7 +4052,7 @@ export interface components {
          * MemberHireDTO
          * @description Hire (create) a roster member (§3.4 #9; pure seam, no UI). The owner assigns
          *     a display ``name``; the server mints the ``id`` (never client-supplied — it is
-         *     the attribution key). ``kind``/``model``/``effort``/``role_key`` are optional.
+         *     the attribution key). ``kind``/``runtime``/``model``/``effort``/``role_key`` are optional; omitted ``runtime`` defaults to ``claude``.
          */
         MemberHireDTO: {
             /** Effort */
@@ -4020,6 +4065,11 @@ export interface components {
             name: string;
             /** Role Key */
             role_key?: string | null;
+            /**
+             * Runtime
+             * @description Optional provider runtime; null/omitted defaults to ``claude``.
+             */
+            runtime?: components["schemas"]["AgentRuntime"] | null;
         };
         /**
          * MemberRelocateDTO
@@ -4036,7 +4086,8 @@ export interface components {
          * MemberUpdateDTO
          * @description Partial edit of a member's owner-editable fields (§3.4 #11). Every field is
          *     optional (PATCH). A blank ``name`` is a 422; an ``effort`` outside
-         *     low/medium/high is a 422. The server owns everything else.
+         *     low/medium/high or a ``runtime`` outside claude/codex is a 422. Changing
+         *     runtime takes effect on the next wake/recycle. The server owns everything else.
          */
         MemberUpdateDTO: {
             /** Effort */
@@ -4045,6 +4096,11 @@ export interface components {
             model?: string | null;
             /** Name */
             name?: string | null;
+            /**
+             * Runtime
+             * @description Optional runtime replacement; null/omitted leaves the current runtime unchanged.
+             */
+            runtime?: components["schemas"]["AgentRuntime"] | null;
         };
         /**
          * MintRequestDTO
@@ -4173,6 +4229,13 @@ export interface components {
             machine: string;
             /** Ram Pct */
             ram_pct?: number | null;
+            /**
+             * Runtime Capabilities
+             * @description Same provider-neutral runtime readiness map carried by ``MachineDTO.runtime_capabilities``.
+             */
+            runtime_capabilities?: {
+                [key: string]: components["schemas"]["RuntimeCapabilityDTO"];
+            };
         };
         /**
          * MonitoringSessionDTO
@@ -4226,6 +4289,12 @@ export interface components {
              * @default
              */
             role: string;
+            /**
+             * Runtime
+             * @description The session's selected provider runtime.
+             * @default claude
+             */
+            runtime: components["schemas"]["AgentRuntime"];
             /** Tokens */
             tokens?: {
                 [key: string]: number;
@@ -4291,7 +4360,7 @@ export interface components {
         };
         /**
          * OutsourceWorkerDTO
-         * @description One outsource worker row of the panel (SPEC §4.1): the anonymous codename (model prefix + sequence), model/effort, lifecycle status (assigned → active → released), and its ONE bound task's id / title / status.
+         * @description One outsource worker row of the panel (SPEC §4.1): the anonymous codename (model prefix + sequence), runtime/model/effort, lifecycle status (assigned → active → released), and its ONE bound task's id / title / status.
          */
         OutsourceWorkerDTO: {
             /**
@@ -4404,6 +4473,12 @@ export interface components {
              * @default 0
              */
             refocus_since: number;
+            /**
+             * Runtime
+             * @description The worker's selected AI CLI runtime. Existing rows default to ``claude``.
+             * @default claude
+             */
+            runtime: components["schemas"]["AgentRuntime"];
             /** Status */
             status: string;
             /** Task Id */
@@ -4427,7 +4502,7 @@ export interface components {
         };
         /**
          * OutsourceWorkerModelDTO
-         * @description Change an outsource worker's model/effort (POST /api/outsource-workers/{id}/model, T-f190). model is the launch model (blank ⇒ the launcher default); effort is the optional quick-pick effort (null / absent ⇒ keep the current effort). The worker twin of the member model/effort edit.
+         * @description Change an outsource worker's runtime/model/effort (POST /api/outsource-workers/{id}/model, T-f190). runtime is optional (null/absent ⇒ keep current); model is the launch model (blank ⇒ the selected runtime's default); effort is optional (null/absent ⇒ keep current). The worker twin of the member runtime/model/effort edit.
          */
         OutsourceWorkerModelDTO: {
             /**
@@ -4440,6 +4515,11 @@ export interface components {
              * @default
              */
             model: string;
+            /**
+             * Runtime
+             * @description Optional runtime replacement; null/absent keeps the current runtime.
+             */
+            runtime?: components["schemas"]["AgentRuntime"] | null;
         };
         /**
          * OutsourceWorkerRelocateDTO
@@ -4841,11 +4921,11 @@ export interface components {
          *     (required, blank → 422). ``member_name`` is the founding member's display
          *     name — OPTIONAL: omitted/blank ⇒ the server picks a fresh name from the
          *     ``domain.member.MEMBER_NAME_POOL`` (Mira-style short English names), never
-         *     colliding with an existing roster member. ``model`` / ``effort`` are the
-         *     member's launch knobs — model is a free string (spawn ``--model`` is a free
-         *     string; blank/omitted ⇒ CLI default), effort is the closed low/medium/high
-         *     vocabulary (unknown → 422; omitted ⇒ medium). The server mints BOTH ids
-         *     (role key + member id) — never client-supplied.
+         *     colliding with an existing roster member. ``runtime`` / ``model`` / ``effort``
+         *     are the member's launch knobs — runtime is claude/codex (omitted ⇒ claude),
+         *     model is a free string (blank/omitted ⇒ selected-runtime default), effort is
+         *     the closed low/medium/high vocabulary (unknown → 422; omitted ⇒ medium). The
+         *     server mints BOTH ids (role key + member id) — never client-supplied.
          */
         RoleCreateDTO: {
             /** Effort */
@@ -4856,6 +4936,11 @@ export interface components {
             model?: string | null;
             /** Name */
             name: string;
+            /**
+             * Runtime
+             * @description Founding member runtime; null/omitted defaults to ``claude``.
+             */
+            runtime?: components["schemas"]["AgentRuntime"] | null;
         };
         /**
          * RoleCreateResultDTO
@@ -4866,6 +4951,21 @@ export interface components {
         RoleCreateResultDTO: {
             member: components["schemas"]["MemberDTO"];
             role: components["schemas"]["RoleDefDTO"];
+        };
+        /**
+         * RuntimeCapabilityDTO
+         * @description Value-free readiness of one AI CLI runtime on a machine. ``installed`` means the exact binary the warden would launch resolved and passed its version probe. ``logged_in`` is true/false when a safe provider login probe concluded, null when unknown. ``version`` is null when unresolved or probing failed. No credential value or path is exposed.
+         */
+        RuntimeCapabilityDTO: {
+            /**
+             * Installed
+             * @default false
+             */
+            installed: boolean;
+            /** Logged In */
+            logged_in?: boolean | null;
+            /** Version */
+            version?: string | null;
         };
         /**
          * RoleDefDTO
@@ -5209,7 +5309,7 @@ export interface components {
         };
         /**
          * TaskCreateTargetDTO
-         * @description Optional dispatch target (agent 發包給外包). When present with ``kind='outsource'`` the task is created as an **unassigned outsource task** — no owner-approval card and no per-task approval. The existing outsource scheduler then picks up unassigned outsource tasks against the global concurrency cap (``outsourceParallelCap``, owner-configurable in the cockpit; default unchanged): below the cap it mints a fresh worker immediately, at the cap it queues for capacity and is picked up automatically when a slot frees. The owner may reassign a still-queued task (to a member or another outsource) at any time. ``model`` is the worker's model (blank/absent = the runtime default); ``effort`` is low|medium|high (absent = ``medium``); ``machine`` is the spawn placement preference — ``auto`` (absent = auto) or a machine id. Absent (or ``kind='member'``) keeps the current create semantics (manual assignee / ``executor_member_id``).
+         * @description Optional dispatch target (agent 發包給外包). When present with ``kind='outsource'`` the task is created as an **unassigned outsource task** — no owner-approval card and no per-task approval. The existing outsource scheduler then picks up unassigned outsource tasks against the global concurrency cap (``outsourceParallelCap``, owner-configurable in the cockpit; default unchanged): below the cap it mints a fresh worker immediately, at the cap it queues for capacity and is picked up automatically when a slot frees. The owner may reassign a still-queued task (to a member or another outsource) at any time. ``runtime`` is claude/codex (absent = claude); ``model`` is the worker's model (blank/absent = selected-runtime default); ``effort`` is low|medium|high (absent = ``medium``); ``machine`` is the spawn placement preference — ``auto`` (absent = auto) or a machine id. Absent (or ``kind='member'``) keeps the current create semantics (manual assignee / ``executor_member_id``).
          */
         TaskCreateTargetDTO: {
             /**
@@ -5229,6 +5329,12 @@ export interface components {
              * @default null
              */
             model: string | null;
+            /**
+             * Runtime
+             * @description Outsource runtime; null/absent defaults to ``claude``.
+             * @default null
+             */
+            runtime: components["schemas"]["AgentRuntime"] | null;
         };
         /**
          * TaskDTO
@@ -5511,7 +5617,7 @@ export interface components {
         };
         /**
          * TaskManualCreateDTO
-         * @description Create one task type (a blank manual). Pass ``display_name`` (the human-facing label); the server MINTS the ``tm-`` type_key id and returns it in the DTO — later calls (get_task_manual / update_task_manual / create_task) address the type by that returned type_key. ``type_key`` is the optional LEGACY path (deprecated): when supplied it is taken verbatim as the id (duplicate → 409) and a blank display_name backfills to it. At least one of the two must be non-blank (400 otherwise). ``assignee`` is optional and OWNER-ONLY governance (a non-owner supplying it is a 403); when the owner supplies it, the shape/validation is the edit's assignee.
+         * @description Create one task type (a blank manual). Pass ``display_name`` (the human-facing label); the server MINTS the ``tm-`` type_key id and returns it in the DTO — later calls (get_task_manual / update_task_manual / create_task) address the type by that returned type_key. ``type_key`` is the optional LEGACY path (deprecated): when supplied it is taken verbatim as the id (duplicate → 409) and a blank display_name backfills to it. At least one of the two must be non-blank (400 otherwise). ``assignee`` is optional and OWNER-ONLY governance (a non-owner supplying it is a 403); when the owner supplies it, the shape/validation is the edit's assignee, including ``runtime`` for an outsource assignee (claude/codex; absent = claude).
          */
         TaskManualCreateDTO: {
             /**
@@ -5534,7 +5640,7 @@ export interface components {
         };
         /**
          * TaskManualDTO
-         * @description One task manual (任務手冊 — a task type / playbook): purpose (Q1), input fields (Q2; is_key fields form the dedupe identity key), the SOP markdown (Q3 — the plan blueprint), the accumulated learnings, and the type's executor assignee setting ({} = unset). An outsource assignee is {"kind":"outsource","model":…,"effort":…,"copies":N,"machine":…}: `copies` is the per-type parallel-worker cap — an integer >= 1, or 0 = 無限 (UNLIMITED: no per-type cap; the global outsource_max_parallel still applies); `machine` is the spawn placement preference — "auto" (the default when absent: the scheduler picks the idlest online machine) or a machine id; a specified machine that is offline at spawn time falls back to "auto" automatically.
+         * @description One task manual (任務手冊 — a task type / playbook): purpose (Q1), input fields (Q2; is_key fields form the dedupe identity key), the SOP markdown (Q3 — the plan blueprint), the accumulated learnings, and the type's executor assignee setting ({} = unset). An outsource assignee is {"kind":"outsource","runtime":"claude|codex","model":…,"effort":…,"copies":N,"machine":…}; absent runtime means claude. `copies` is the per-type parallel-worker cap — an integer >= 1, or 0 = 無限 (UNLIMITED: no per-type cap; the global outsource_max_parallel still applies); `machine` is the spawn placement preference — "auto" (the default when absent: the scheduler picks the idlest online machine) or a machine id; a specified machine that is offline or lacks the selected runtime at spawn time falls back to runtime-capable "auto" placement.
          */
         TaskManualDTO: {
             /** Assignee */
@@ -5601,7 +5707,7 @@ export interface components {
         };
         /**
          * TaskManualUpdateDTO
-         * @description Partial manual edit — only supplied fields change. ``assignee`` is {"kind":"member","member_id":…} or {"kind":"outsource","model":…,"effort":…,"copies":N,"machine":…}; {} unsets it. Outsource ``copies`` MUST be a number >= 0 (0 = 無限 — unlimited per-type parallel copies; absent = 1); ``machine`` MUST be a non-blank string when present — "auto" or a machine id (absent = "auto").
+         * @description Partial manual edit — only supplied fields change. ``assignee`` is {"kind":"member","member_id":…} or {"kind":"outsource","runtime":"claude|codex","model":…,"effort":…,"copies":N,"machine":…}; {} unsets it. Outsource runtime absent means claude; ``copies`` MUST be a number >= 0 (0 = 無限 — unlimited per-type parallel copies; absent = 1); ``machine`` MUST be a non-blank string when present — "auto" or a machine id (absent = "auto").
          */
         TaskManualUpdateDTO: {
             /**
@@ -5705,7 +5811,7 @@ export interface components {
         };
         /**
          * TaskReassignTargetDTO
-         * @description The reassignment target. ``kind='member'`` requires ``member_id`` — an ACTIVE roster member below the warden layer (a warden or an inactive/unknown member is a 400). ``kind='outsource'`` lands the task unassigned for the scheduler to spawn a fresh worker under the global parallel cap (no owner-approval card; T-35e0): ``model`` is the worker's model (blank/absent = the runtime default); ``effort`` is low|medium|high (absent = ``medium``); ``machine`` is the spawn placement preference — ``auto`` (absent = auto) or a machine id (an offline machine falls back to auto at spawn time, the TaskManualDTO promise).
+         * @description The reassignment target. ``kind='member'`` requires ``member_id`` — an ACTIVE roster member below the warden layer (a warden or an inactive/unknown member is a 400). ``kind='outsource'`` lands the task unassigned for the scheduler to spawn a fresh worker under the global parallel cap (no owner-approval card; T-35e0): ``runtime`` is claude/codex (absent = claude); ``model`` is the worker's model (blank/absent = selected-runtime default); ``effort`` is low|medium|high (absent = ``medium``); ``machine`` is the spawn placement preference — ``auto`` (absent = auto) or a machine id (an offline machine falls back to auto at spawn time, the TaskManualDTO promise).
          */
         TaskReassignTargetDTO: {
             /**
@@ -5730,6 +5836,12 @@ export interface components {
              * @default null
              */
             model: string | null;
+            /**
+             * Runtime
+             * @description Outsource runtime; null/absent defaults to ``claude``.
+             * @default null
+             */
+            runtime: components["schemas"]["AgentRuntime"] | null;
         };
         /**
          * TaskRefDTO

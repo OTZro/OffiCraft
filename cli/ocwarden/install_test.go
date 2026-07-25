@@ -1088,7 +1088,7 @@ func TestRunInstall_StampsClaudeIntoWrittenPlist(t *testing.T) {
 // REASON (not merely the non-nil error): "wrongly failed" and "correctly
 // refused" share an exit code, so the refusal must be identified by its text.
 // A REAL (non-dry-run) install is used so the "no residue" half is meaningful.
-func TestRunInstall_MissingClaudeFailsClosedWithReason(t *testing.T) {
+func TestRunInstall_MissingAllRuntimesFailsClosedWithReason(t *testing.T) {
 	f := newFakeSys()
 	f.runFn = stableLaunchctl()
 	p := fixedPaths()
@@ -1099,16 +1099,17 @@ func TestRunInstall_MissingClaudeFailsClosedWithReason(t *testing.T) {
 	i := &installer{
 		out: &sb, sys: f.ops(),
 		resolveClaude: func() (string, string) { return "", "" },
+		resolveCodex:  func() (string, string) { return "", "" },
 	}
 	err := i.runInstall(p)
 	if err == nil {
-		t.Fatalf("missing claude must FAIL the install; got nil error\n%s", sb.String())
+		t.Fatalf("missing runtimes must FAIL the install; got nil error\n%s", sb.String())
 	}
-	if !strings.Contains(err.Error(), "claude_bin_unresolved") {
-		t.Errorf("refusal must name its reason (claude_bin_unresolved); got %q", err)
+	if !strings.Contains(err.Error(), "runtime_bin_unresolved") {
+		t.Errorf("refusal must name its reason (runtime_bin_unresolved); got %q", err)
 	}
 	out := sb.String()
-	for _, want := range []string{"claude_bin_unresolved", "OC_CLAUDE_BIN", "FATAL", "NOTHING was installed"} {
+	for _, want := range []string{"runtime_bin_unresolved", "OC_CLAUDE_BIN/OC_CODEX_BIN", "FATAL", "NOTHING was installed"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("fail-closed install output must contain %q:\n%s", want, out)
 		}
@@ -1120,5 +1121,30 @@ func TestRunInstall_MissingClaudeFailsClosedWithReason(t *testing.T) {
 	}
 	if len(f.runs) != 0 {
 		t.Errorf("fail-closed install must run no launchctl; ran: %v", f.runs)
+	}
+}
+
+func TestRunInstall_CodexOnlyHostIsValid(t *testing.T) {
+	f := newFakeSys()
+	f.runFn = stableLaunchctl()
+	p := fixedPaths()
+	f.existing[p.srcExe] = []byte("OCWARDEN-BYTES")
+	p.ocAgentSrc = "/src/ocagent"
+	f.existing[p.ocAgentSrc] = []byte("OCAGENT-BYTES")
+	var sb strings.Builder
+	i := &installer{
+		out: &sb, sys: f.ops(),
+		resolveClaude: func() (string, string) { return "", "" },
+		resolveCodex:  func() (string, string) { return "/opt/bin/codex", "" },
+	}
+	if err := i.runInstall(p); err != nil {
+		t.Fatalf("a Codex-only host is valid: %v\n%s", err, sb.String())
+	}
+	plist := string(f.writes[p.plistPath])
+	if !strings.Contains(plist, "<key>OC_CODEX_BIN</key><string>/opt/bin/codex</string>") {
+		t.Fatalf("Codex path was not stamped:\n%s", plist)
+	}
+	if strings.Contains(plist, "<key>OC_CLAUDE_BIN</key>") {
+		t.Fatalf("unresolved Claude must not be stamped:\n%s", plist)
 	}
 }

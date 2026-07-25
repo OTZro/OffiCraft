@@ -215,6 +215,23 @@ func validEffort(effort string) bool {
 	return effort == "low" || effort == "medium" || effort == "high"
 }
 
+const (
+	RuntimeClaude = "claude"
+	RuntimeCodex  = "codex"
+)
+
+func NormalizeRuntime(runtime string) string {
+	runtime = strings.TrimSpace(runtime)
+	if runtime == "" {
+		return RuntimeClaude
+	}
+	return runtime
+}
+
+func ValidRuntime(runtime string) bool {
+	return runtime == RuntimeClaude || runtime == RuntimeCodex
+}
+
 // memberRoleName resolves a member's role display title
 // (handlers._member_role_name): a seed role shows its stable seed title, a
 // custom role its overlay name, an unknown/unbound role an honest "".
@@ -263,6 +280,7 @@ func (s *apiServer) newMemberDTO(m Member, roleName, observedMachine string, unr
 		Kind:             m.Kind,
 		RoleKey:          m.RoleKey,
 		RoleName:         roleName,
+		Runtime:          NormalizeRuntime(m.Runtime),
 		Model:            m.Model,
 		Effort:           m.Effort,
 		DesiredState:     m.DesiredState,
@@ -298,6 +316,7 @@ func (s *apiServer) newMemberLightDTO(m Member, roleName string) memberDTO {
 		Kind:          m.Kind,
 		RoleKey:       m.RoleKey,
 		RoleName:      roleName,
+		Runtime:       NormalizeRuntime(m.Runtime),
 		RosterStatus:  m.RosterStatus,
 		OwnerID:       wireOwnerID,
 		SchemaVersion: wireSchemaVersion,

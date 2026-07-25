@@ -3,6 +3,7 @@ package main
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -325,6 +326,67 @@ func TestStart_HappyPath(t *testing.T) {
 	}
 	if got, want := links[fxOcAgent], ocAgentSymlinkTarget(fxRepoRoot, ""); got != want {
 		t.Errorf("ocagent symlink target = %q, want %q", got, want)
+	}
+}
+
+func TestStart_CodexUsesSidecarWithoutTUINudge(t *testing.T) {
+	hasKey := "tmux -L officraft has-session -t member-alice"
+	pidKey := "tmux -L officraft display-message -p -t member-alice #{pane_pid}"
+	run := &recRunner{
+		out: map[string]string{pidKey: "5252\n"},
+		err: map[string]error{hasKey: errAbsent()},
+	}
+	files := map[string]string{}
+	deps := newStartDeps(t, run, files)
+	deps.CodexBin = "/opt/homebrew/bin/codex"
+	deps.WardenBin = "/opt/officraft/ocwarden"
+
+	out := deps.start(StartParams{
+		MemberID:       "alice",
+		PersonaContext: "PERSONA-BODY-HERE",
+		MemberToken:    fxToken,
+		Role:           "assistant",
+		Runtime:        "codex",
+		Model:          "gpt-5.6",
+		Effort:         "high",
+		SessionName:    "member-alice",
+	})
+	if !out.OK || out.PID != "5252" {
+		t.Fatalf("outcome = %+v, want successful Codex sidecar", out)
+	}
+	if !run.sawArgv(deps.CodexBin, "login", "status") {
+		t.Fatal("Codex spawn must fail-fast through `codex login status`")
+	}
+	wantCmd := buildCodexLaunchCommand(
+		deps.WardenBin, deps.CodexBin, fxWorkdir, fxPersona, fxTokenFile,
+		"alice", fxBase, "member-alice", fxSocket, "gpt-5.6", "high",
+		[][2]string{{"OC_EFFORT", "high"}}, "",
+	)
+	if !run.sawArgv("tmux", "-L", fxSocket, "new-session", "-d", "-s", "member-alice", "-x", "160", "-y", "50", wantCmd) {
+		t.Errorf("expected Codex sidecar tmux launch; calls:\n%v", run.calls)
+	}
+	if run.sawArgv("tmux", "-L", fxSocket, "send-keys", "-t", "member-alice", "Enter") {
+		t.Fatal("Codex App Server boot must not receive Claude TUI keystrokes")
+	}
+}
+
+func TestStart_CodexLoggedOutFailsBeforeLaunch(t *testing.T) {
+	run := &recRunner{err: map[string]error{
+		"/opt/homebrew/bin/codex login status": errors.New("not logged in"),
+	}}
+	deps := newStartDeps(t, run, map[string]string{})
+	deps.CodexBin = "/opt/homebrew/bin/codex"
+	deps.WardenBin = "/opt/officraft/ocwarden"
+	out := deps.start(StartParams{
+		MemberID: "alice", MemberToken: fxToken, Runtime: "codex",
+	})
+	if out.OK || !strings.HasPrefix(out.Reason, "codex_not_logged_in:") {
+		t.Fatalf("outcome = %+v, want codex_not_logged_in", out)
+	}
+	for _, call := range run.calls {
+		if len(call) > 0 && call[0] == "tmux" {
+			t.Fatalf("logged-out Codex must fail before tmux launch: %v", run.calls)
+		}
 	}
 }
 

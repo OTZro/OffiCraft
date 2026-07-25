@@ -127,6 +127,7 @@ type installer struct {
 	// version-manager installs (asdf/nvm/volta) → claude_bin_unresolved on every
 	// spawn. The stamp makes runtime priority ① (OC_CLAUDE_BIN) deterministic.
 	resolveClaude func() (claudeBin, plistPATH string)
+	resolveCodex  func() (codexBin, plistPATH string)
 
 	// agentGet + agentProbe are the ocagent DOWNLOAD seam (default install path): fetch
 	// the committed prebuilt ocagent from the server (GET /api/agent/binary) and
@@ -201,6 +202,9 @@ type wardenPaths struct {
 	// resolveClaudeBin priority ① hits deterministically (the launchd minimal
 	// env cannot re-discover a version-manager claude on its own).
 	claudeBin string
+	// codexBin is the optional Codex CLI executable resolved at install time.
+	// A host is valid when at least one provider resolves.
+	codexBin string
 	// plistPATH overrides the plist's PATH env value ("" = the historical
 	// minimal wardenPlistPATH — byte-identical render). Set when the resolved
 	// claude only runs under the installer's richer PATH (a version-manager
@@ -353,6 +357,9 @@ func renderPlist(p wardenPaths) string {
 	}
 	if p.claudeBin != "" {
 		extraEnv += "\n        <key>OC_CLAUDE_BIN</key><string>" + xmlEscape(p.claudeBin) + "</string>"
+	}
+	if p.codexBin != "" {
+		extraEnv += "\n        <key>OC_CODEX_BIN</key><string>" + xmlEscape(p.codexBin) + "</string>"
 	}
 	if p.credCheck != "" {
 		extraEnv += "\n        <key>OC_CLAUDE_CRED_CHECK</key><string>" + xmlEscape(p.credCheck) + "</string>"
@@ -883,29 +890,27 @@ func (i *installer) runInstall(p wardenPaths) error {
 	// (test fixtures / legacy callers keep the historical render).
 	if i.resolveClaude != nil {
 		p.claudeBin, p.plistPATH = i.resolveClaude()
-		switch {
-		case p.claudeBin == "":
-			// FAIL-CLOSED (T-ba62). This used to be a WARNING with exit 0, which
-			// is the worst possible shape: `bootstrap-here` reported ok=true, the
-			// cockpit threw the log away on the success branch, the machine row
-			// flipped online — and then EVERY spawn returned claude_bin_unresolved
-			// with zero owner-visible signal. A warden that cannot resolve claude
-			// cannot do the one job a warden has, so refuse to install one and say
-			// exactly why. There is deliberately NO override env: an operator who
-			// really wants a claude-less host can install once claude exists (the
-			// install is idempotent).
-			i.errf("claude CLI not found — REFUSING to install a warden that would " +
-				"refuse every spawn (claude_bin_unresolved). NOTHING was installed.")
-			i.errf("fix: install claude (e.g. `npm install -g @anthropic-ai/claude-code`), " +
-				"or export OC_CLAUDE_BIN=/absolute/path/to/claude, then re-run " +
-				"`ocwarden install` (safe — idempotent).")
-			return errors.New("claude_bin_unresolved: no claude CLI on this host " +
-				"(set OC_CLAUDE_BIN or install claude) — warden NOT installed")
-		case p.plistPATH != "":
+		if p.claudeBin != "" && p.plistPATH != "" {
 			i.logf("claude:   %s (stamped OC_CLAUDE_BIN + installer PATH into the plist — shim needs it)", p.claudeBin)
-		default:
+		} else if p.claudeBin != "" {
 			i.logf("claude:   %s (stamped OC_CLAUDE_BIN into the plist)", p.claudeBin)
 		}
+	}
+	if i.resolveCodex != nil {
+		var codexPATH string
+		p.codexBin, codexPATH = i.resolveCodex()
+		if codexPATH != "" {
+			p.plistPATH = codexPATH
+		}
+		if p.codexBin != "" {
+			i.logf("codex:    %s (stamped OC_CODEX_BIN into the plist)", p.codexBin)
+		}
+	}
+	if i.resolveClaude != nil && p.claudeBin == "" &&
+		(i.resolveCodex == nil || p.codexBin == "") {
+		i.errf("neither Claude Code nor Codex CLI is available — NOTHING was installed")
+		i.errf("runtime_bin_unresolved: install a provider or set OC_CLAUDE_BIN/OC_CODEX_BIN, then re-run safely")
+		return errors.New("runtime_bin_unresolved: install claude or codex, or set OC_CLAUDE_BIN/OC_CODEX_BIN")
 	}
 	if i.dryRun {
 		i.logf("DRY-RUN mode: no file writes / no launchctl / no verification.")
@@ -979,6 +984,20 @@ func installCmd(env func(string) string, out io.Writer, force bool) int {
 	// suffices or the installer PATH must ride along (shim/shebang).
 	i.resolveClaude = func() (string, string) {
 		return resolveClaudeForInstall(env, func() string { return resolveClaudeBin(env) }, realClaudeProbe, i.logf)
+	}
+	i.resolveCodex = func() (string, string) {
+		candidate := resolveCodexBin(env)
+		if candidate == "" || !stampableClaude(candidate) {
+			return "", ""
+		}
+		if realClaudeProbe(candidate, wardenPlistPATH, env("HOME")) == nil {
+			return candidate, ""
+		}
+		if path := env("PATH"); path != "" &&
+			realClaudeProbe(candidate, path, env("HOME")) == nil {
+			return candidate, path
+		}
+		return candidate, ""
 	}
 	p, err := resolvePaths(env, exe, os.Getuid())
 	if err != nil {

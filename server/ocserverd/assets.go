@@ -317,6 +317,11 @@ func (s *apiServer) buildBootContext(role string, member *Member, taskType strin
 			"# 使用者自訂（Owner Additions）\n\n"+strings.TrimSpace(userCtx.Text))
 	}
 	parts = append(parts, strings.TrimSpace(bootSeed))
+	if member != nil {
+		if appendix := runtimeContextAppendix(member.Runtime); appendix != "" {
+			parts = append(parts, appendix)
+		}
+	}
 
 	name := roleDTO.Name
 	if member != nil {
@@ -328,6 +333,21 @@ func (s *apiServer) buildBootContext(role string, member *Member, taskType strin
 		TaskType: taskType,
 		Context:  strings.Join(parts, "\n\n") + "\n",
 	}, nil
+}
+
+// runtimeContextAppendix keeps one canonical persona while correcting only
+// harness mechanics that differ. Claude needs no appendix because the existing
+// Monitor/statusLine instructions remain its native path.
+func runtimeContextAppendix(runtime string) string {
+	if NormalizeRuntime(runtime) != RuntimeCodex {
+		return ""
+	}
+	return `# Codex 執行環境附錄
+
+- 你由 OffiCraft 的 Codex App Server sidecar 執行；權限模式是 danger-full-access，approval policy 是 never。
+- 不要自行啟動 ` + "`ocagent listen`" + `。sidecar 會在開機 turn 完成後持有 SSE，將事件送進目前的 turn 或下一個 idle turn。
+- 不要用互動式 ` + "`request_user_input`" + ` 等待鍵盤。需要 owner 決策或動作時，直接用 OffiCraft ` + "`create_reply_card`" + `；秘密只請 owner 完成動作，不要要求貼入卡片。
+- context 使用量由 App Server token-usage 事件回報，不依賴 Claude statusLine。`
 }
 
 // ── catalog hash (normative M1 §3.2) ─────────────────────────────────────────

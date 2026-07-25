@@ -41,6 +41,31 @@ func TestResolveMember_OutsourceIDIsNotFound(t *testing.T) {
 	}
 }
 
+func TestUpdateMember_RuntimeRoundTripsAndValidates(t *testing.T) {
+	api := newTasksTestServer(t)
+	if err := api.dal.PutMember(fullMember("mira")); err != nil {
+		t.Fatalf("put member: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	api.HandleUpdateMemberApiMembersMemberIdPatch(rec,
+		taskReq(t, "PATCH", "/api/members/mira",
+			map[string]any{"runtime": RuntimeCodex}, wireOwnerID, "owner"), "mira")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Codex PATCH: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := decodeBody[memberDTO](t, rec).Runtime; got != RuntimeCodex {
+		t.Fatalf("runtime = %q, want codex", got)
+	}
+
+	rec = httptest.NewRecorder()
+	api.HandleUpdateMemberApiMembersMemberIdPatch(rec,
+		taskReq(t, "PATCH", "/api/members/mira",
+			map[string]any{"runtime": "unknown"}, wireOwnerID, "owner"), "mira")
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("unknown runtime: want 422, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 // TestGetMember_WorkerSelfReadResolves (T-ea82): the ONE exception to the ow-
 // 404 — a worker reading its OWN row (the ocagent recycle/wind-down hooks'
 // refetch) gets the member DTO, desired_state + refocus_since included; the

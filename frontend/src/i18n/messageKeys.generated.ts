@@ -175,6 +175,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "monitor.sevenDay",
   "monitor.time",
   "monitor.usage",
+  "mp.agentRuntime",
   "mp.back",
   "mp.claudeAccount",
   "mp.context",

@@ -307,9 +307,10 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	}
 	if body.RateLimits == nil && body.Tokens == nil && body.Hardware == nil &&
 		body.Binaries == nil && body.Claude == nil && body.Cost == nil &&
-		body.Effort == nil && body.SelfUpdate == nil && body.CommandResult == nil {
+		body.Effort == nil && body.Runtime == nil && body.Runtimes == nil &&
+		body.SelfUpdate == nil && body.CommandResult == nil {
 		writeError(w, http.StatusBadRequest,
-			"rate_limits, tokens, hardware, binaries, claude, cost, effort, "+
+			"rate_limits, tokens, hardware, binaries, claude, cost, effort, runtime, runtimes, "+
 				"self_update or command_result is required")
 		return
 	}
@@ -343,6 +344,48 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	claude, ok := asObject(body.Claude, "claude")
 	if !ok {
 		return
+	}
+	runtimes, ok := asObject(body.Runtimes, "runtimes")
+	if !ok {
+		return
+	}
+	for name, raw := range runtimes {
+		if !ValidRuntime(name) {
+			writeError(w, http.StatusBadRequest, "runtimes keys must be 'claude' or 'codex'")
+			return
+		}
+		capability, isObj := raw.(map[string]any)
+		if !isObj {
+			writeError(w, http.StatusBadRequest, "runtimes."+name+" must be an object")
+			return
+		}
+		if v, exists := capability["installed"]; exists {
+			if _, valid := v.(bool); !valid {
+				writeError(w, http.StatusBadRequest, "runtimes."+name+".installed must be a boolean")
+				return
+			}
+		}
+		if v, exists := capability["logged_in"]; exists && v != nil {
+			if _, valid := v.(bool); !valid {
+				writeError(w, http.StatusBadRequest, "runtimes."+name+".logged_in must be a boolean or null")
+				return
+			}
+		}
+		if v, exists := capability["version"]; exists && v != nil {
+			if _, valid := v.(string); !valid {
+				writeError(w, http.StatusBadRequest, "runtimes."+name+".version must be a string or null")
+				return
+			}
+		}
+	}
+	var runtime *string
+	if body.Runtime != nil {
+		text, isStr := body.Runtime.(string)
+		if !isStr || !ValidRuntime(text) {
+			writeError(w, http.StatusBadRequest, "runtime must be 'claude' or 'codex'")
+			return
+		}
+		runtime = &text
 	}
 	var cost *float64
 	if body.Cost != nil {
@@ -390,6 +433,12 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	}
 	if body.Claude != nil {
 		entry["claude"] = claude
+	}
+	if body.Runtimes != nil {
+		entry["runtimes"] = runtimes
+	}
+	if runtime != nil {
+		entry["runtime"] = *runtime
 	}
 	if cost != nil {
 		entry["cost"] = *cost
@@ -446,6 +495,8 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 		Hardware:      entryObj(entry, "hardware"),
 		Binaries:      entryObj(entry, "binaries"),
 		Claude:        entryObj(entry, "claude"),
+		Runtime:       entryStr(entry, "runtime"),
+		Runtimes:      entryObj(entry, "runtimes"),
 		Cost:          entryNum(entry, "cost"),
 		Effort:        entryStr(entry, "effort"),
 		SelfUpdate:    entryObj(entry, "self_update"),
@@ -552,6 +603,7 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 			ID:         m.ID,
 			Name:       m.Name,
 			Role:       roleName,
+			Runtime:    NormalizeRuntime(m.Runtime),
 			Model:      m.Model,
 			Effort:     effort,
 			Machine:    resolveDisplay(machineNames, s.observedHost(m)),
@@ -605,14 +657,15 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		// members), so the registry verdicts apply verbatim here.
 		claudeVersion, claudeCredSource, claudeSubReadable := s.machineClaudeInfo(host)
 		row := monitoringMachineDTO{
-			Machine:           host,
-			DisplayName:       resolveDisplay(machineNames, host),
-			Agents:            hostCounts[host],
-			Accounts:          accounts,
-			BinStatus:         s.machineBinStatus(host),
-			ClaudeVersion:     claudeVersion,
-			ClaudeCredSource:  claudeCredSource,
-			ClaudeSubReadable: claudeSubReadable,
+			Machine:             host,
+			DisplayName:         resolveDisplay(machineNames, host),
+			Agents:              hostCounts[host],
+			Accounts:            accounts,
+			BinStatus:           s.machineBinStatus(host),
+			ClaudeVersion:       claudeVersion,
+			ClaudeCredSource:    claudeCredSource,
+			ClaudeSubReadable:   claudeSubReadable,
+			RuntimeCapabilities: s.machineRuntimeCapabilities(host),
 		}
 		if hw != nil {
 			row.CpuPct = teleNum(hw["cpu_pct"])

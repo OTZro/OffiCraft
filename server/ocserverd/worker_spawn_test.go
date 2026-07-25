@@ -132,6 +132,26 @@ func TestBuildWorkerBootContext_FullAssembly(t *testing.T) {
 	}
 }
 
+func TestBuildWorkerBootContext_CodexAppendixHasFinalPrecedence(t *testing.T) {
+	s := newWorkerTestServer(t)
+	task := Task{ID: "t-codex", Title: "Codex task", Priority: TaskPriorityMid}
+	got, err := s.buildWorkerBootContext(
+		OutsourceWorker{ID: "ow-codex", Codename: "C-1", Runtime: RuntimeCodex},
+		task, nil,
+	)
+	if err != nil {
+		t.Fatalf("fold: %v", err)
+	}
+	appendix := strings.LastIndex(got, "# Codex 執行環境附錄")
+	legacyMonitor := strings.LastIndex(got, "Monitor")
+	if appendix < 0 || appendix < legacyMonitor {
+		t.Fatal("Codex appendix must follow the canonical Claude-specific mechanics")
+	}
+	if !strings.Contains(got[appendix:], "不要自行啟動 `ocagent listen`") {
+		t.Fatal("final Codex appendix must transfer listener ownership to the sidecar")
+	}
+}
+
 // T-ba04: a worker minted onto a task that is in `reassigning` gets a TAKEOVER
 // section in its boot context — who its predecessor is (id) + the "hand over
 // first, THEN flip the status yourself" protocol. A non-reassigning task must
@@ -264,6 +284,25 @@ func TestPickWorkerWarden_AutoPicksIdlestMachine(t *testing.T) {
 	connectAgentOn(t, s, "m-agent-c", "m-other")
 	if got := pickWarden(s, "auto"); got != ServerSelfHost {
 		t.Fatalf("auto with loaded m-other: got %q, want %s", got, ServerSelfHost)
+	}
+}
+
+func TestPickWorkerWarden_FiltersBySelectedRuntime(t *testing.T) {
+	s := newWorkerTestServer(t)
+	putWardenFixture(t, s, "m-codex")
+	connectWarden(t, s, ServerSelfHost)
+	connectWarden(t, s, "m-codex")
+	s.telemetry.Set(ServerSelfHost, map[string]any{"runtimes": map[string]any{
+		RuntimeClaude: map[string]any{"installed": true, "logged_in": true},
+	}})
+	s.telemetry.Set("m-codex", map[string]any{"runtimes": map[string]any{
+		RuntimeCodex: map[string]any{"installed": true, "logged_in": true},
+	}})
+	got := s.pickWorkerWarden(
+		OutsourceWorker{ID: "ow-codex", Runtime: RuntimeCodex}, "auto", nowSecs(),
+	)
+	if got != "m-codex" {
+		t.Fatalf("Codex worker placed on %q, want the Codex-capable machine", got)
 	}
 }
 

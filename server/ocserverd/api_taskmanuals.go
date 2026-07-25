@@ -72,6 +72,18 @@ func validateManualAssignee(assignee map[string]any) string {
 			return "assignee kind 'member' requires a member_id"
 		}
 	case TaskExecutorOutsource:
+		if runtime, ok := assignee["runtime"]; ok {
+			r, isStr := runtime.(string)
+			if !isStr || !ValidRuntime(r) {
+				return "assignee runtime must be 'claude' or 'codex'"
+			}
+		}
+		if effort, ok := assignee["effort"]; ok {
+			e, isStr := effort.(string)
+			if !isStr || !validEffort(e) {
+				return "assignee effort must be one of low, medium, high"
+			}
+		}
 		if copies, ok := assignee["copies"]; ok {
 			if n, isNum := copies.(float64); !isNum || n < 0 {
 				return "assignee copies must be a number >= 0 (0 = unlimited)"

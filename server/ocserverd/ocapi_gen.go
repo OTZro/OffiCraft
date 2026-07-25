@@ -13,6 +13,24 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for AgentRuntime.
+const (
+	Claude AgentRuntime = "claude"
+	Codex  AgentRuntime = "codex"
+)
+
+// Valid indicates whether the value is a known member of the AgentRuntime enum.
+func (e AgentRuntime) Valid() bool {
+	switch e {
+	case Claude:
+		return true
+	case Codex:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WebhookCreateDTOPlatform.
 const (
 	WebhookCreateDTOPlatformGeneric WebhookCreateDTOPlatform = "generic"
@@ -73,6 +91,9 @@ type AgentContextIngestDTO struct {
 	RateLimits *map[string]interface{} `json:"rate_limits,omitempty"`
 }
 
+// AgentRuntime AI CLI runtime selected per member or outsource worker. Existing rows and omitted inputs default to “claude“ for backward compatibility.
+type AgentRuntime string
+
 // AgentTelemetryDTO Echo of a stored telemetry entry (“POST /api/monitoring/telemetry“).
 type AgentTelemetryDTO struct {
 	Account  *string                 `json:"account,omitempty"`
@@ -87,22 +108,29 @@ type AgentTelemetryDTO struct {
 	Hardware      *map[string]interface{} `json:"hardware,omitempty"`
 	Machine       *string                 `json:"machine,omitempty"`
 	RateLimits    *map[string]interface{} `json:"rate_limits,omitempty"`
-	SelfUpdate    *map[string]interface{} `json:"self_update,omitempty"`
-	Tokens        *map[string]int         `json:"tokens,omitempty"`
-	Ts            float64                 `json:"ts"`
+
+	// Runtime The provider runtime that produced this session telemetry. null when an older reporter did not identify it.
+	Runtime *AgentRuntime `json:"runtime,omitempty"`
+
+	// Runtimes Warden heartbeats only — provider-neutral machine runtime capabilities keyed by runtime name. null when never reported.
+	Runtimes   *map[string]RuntimeCapabilityDTO `json:"runtimes,omitempty"`
+	SelfUpdate *map[string]interface{}          `json:"self_update,omitempty"`
+	Tokens     *map[string]int                  `json:"tokens,omitempty"`
+	Ts         float64                          `json:"ts"`
 }
 
-// AgentTelemetryIngestDTO Inbound warden telemetry report (“POST /api/monitoring/telemetry“).
+// AgentTelemetryIngestDTO Inbound warden/agent telemetry report (“POST /api/monitoring/telemetry“).
 //
-// The warden-side reporter pushes what the model can't read about itself: the
+// The reporter pushes what the model can't reliably read about itself: the
 // account-wide “rate_limits“ (5h/7d windows), this session's own “tokens“,
-// the host “hardware“ snapshot (cpu/ram/battery/ac), and the harness-computed
-// cumulative “cost“, and — warden heartbeats only — “binaries“, the content
-// fingerprints (12-hex sha256 prefixes) of the live on-disk ocwarden/ocagent the
-// server compares against its own embedded prebuilts for the machine-table
-// “bin_status“ verdict. “machine“ / “account“ are the merge tags (quota is
-// per-account; hardware is per-host). Fields are permissive so a bad body is a
-// flat 400 (not a Pydantic 422); at least one telemetry field must be present.
+// the host “hardware“ snapshot (cpu/ram/battery/ac), the harness-computed
+// cumulative “cost“, and the session “runtime“. Warden heartbeats additionally
+// carry “binaries“ plus provider-neutral “runtimes“ capability probes; the
+// server compares binary fingerprints against its embedded prebuilts and uses
+// runtime readiness for placement. “machine“ / “account“ are merge tags
+// (quota is per-account; hardware is per-host). Fields are permissive so a bad
+// body is a flat 400 (not a Pydantic 422); at least one telemetry field must be
+// present.
 //
 // The reporting identity is the CALLER (the verified JWT “sub“), NEVER a
 // self-reported “agent_id“ (identity-from-token audit) — that field was removed,
@@ -122,8 +150,14 @@ type AgentTelemetryIngestDTO struct {
 	Hardware      interface{} `json:"hardware,omitempty"`
 	Machine       interface{} `json:"machine,omitempty"`
 	RateLimits    interface{} `json:"rate_limits,omitempty"`
-	SelfUpdate    interface{} `json:"self_update,omitempty"`
-	Tokens        interface{} `json:"tokens,omitempty"`
+
+	// Runtime Optional session runtime: ``claude`` or ``codex``. Omitted leaves previously stored telemetry untouched.
+	Runtime interface{} `json:"runtime,omitempty"`
+
+	// Runtimes Warden heartbeats only — provider-neutral runtime capability map. Each ``claude``/``codex`` entry may report ``installed`` bool, ``logged_in`` bool/null, and ``version`` string/null; values are readiness metadata only, never credentials.
+	Runtimes   interface{} `json:"runtimes,omitempty"`
+	SelfUpdate interface{} `json:"self_update,omitempty"`
+	Tokens     interface{} `json:"tokens,omitempty"`
 }
 
 // AliasDTO The response to an account/machine display-name PATCH (AMD step1). “id“ is
@@ -506,6 +540,9 @@ type MachineDTO struct {
 	IsSelf        *bool   `json:"is_self,omitempty"`
 	MachineId     string  `json:"machine_id"`
 	Online        *bool   `json:"online,omitempty"`
+
+	// RuntimeCapabilities Provider-neutral runtime readiness keyed by ``claude``/``codex``. Empty for an older warden that has not reported capability probes. Codex placement requires an explicit installed=true and logged_in!=false report. During rolling upgrades only, a completely absent capability map preserves legacy Claude placement; once a map is reported, Claude also requires installed=true and logged_in!=false.
+	RuntimeCapabilities *map[string]RuntimeCapabilityDTO `json:"runtime_capabilities,omitempty"`
 }
 
 // MachineDeleteResultDTO The DELETE result (“DELETE /api/machines/{member_id}“, T-IUD).
@@ -697,19 +734,25 @@ type MemberDTO struct {
 	RoleKey           *string `json:"role_key,omitempty"`
 	RoleName          *string `json:"role_name,omitempty"`
 	RosterStatus      *string `json:"roster_status,omitempty"`
-	SchemaVersion     *int    `json:"schema_version,omitempty"`
-	UnreadCount       *int    `json:"unread_count,omitempty"`
+
+	// Runtime The member's selected AI CLI runtime. Existing rows default to ``claude``.
+	Runtime       *AgentRuntime `json:"runtime,omitempty"`
+	SchemaVersion *int          `json:"schema_version,omitempty"`
+	UnreadCount   *int          `json:"unread_count,omitempty"`
 }
 
 // MemberHireDTO Hire (create) a roster member (§3.4 #9; pure seam, no UI). The owner assigns
 // a display “name“; the server mints the “id“ (never client-supplied — it is
-// the attribution key). “kind“/“model“/“effort“/“role_key“ are optional.
+// the attribution key). “kind“/“runtime“/“model“/“effort“/“role_key“ are optional; omitted “runtime“ defaults to “claude“.
 type MemberHireDTO struct {
 	Effort  *string `json:"effort,omitempty"`
 	Kind    *string `json:"kind,omitempty"`
 	Model   *string `json:"model,omitempty"`
 	Name    string  `json:"name"`
 	RoleKey *string `json:"role_key,omitempty"`
+
+	// Runtime Optional provider runtime; null/omitted defaults to ``claude``.
+	Runtime *AgentRuntime `json:"runtime,omitempty"`
 }
 
 // MemberRelocateDTO Relocate a member to a machine (POST /api/members/{member_id}/relocate) — the owner cockpit's 改機器 for a roster member, the member twin of OutsourceWorkerRelocateDTO. Writes the member's owner-pinned desired_machine_id, then runs the SAME event-driven reconcile the activate click uses (reconcileMemberNow): a LIVE member is auto-migrated onto the chosen machine (robust STOP the old session → next tick re-spawns on the pin), an offline member just re-pins so the next wake lands there. PLACEMENT ONLY — unlike activate it NEVER touches desired_state (a relocate is not a wake). machine_id is the STABLE machine id (the warden member's own id), "auto" (idlest-online), or "" (clear the pin).
@@ -719,11 +762,15 @@ type MemberRelocateDTO struct {
 
 // MemberUpdateDTO Partial edit of a member's owner-editable fields (§3.4 #11). Every field is
 // optional (PATCH). A blank “name“ is a 422; an “effort“ outside
-// low/medium/high is a 422. The server owns everything else.
+// low/medium/high or a “runtime“ outside claude/codex is a 422. Changing
+// runtime takes effect on the next wake/recycle. The server owns everything else.
 type MemberUpdateDTO struct {
 	Effort *string `json:"effort,omitempty"`
 	Model  *string `json:"model,omitempty"`
 	Name   *string `json:"name,omitempty"`
+
+	// Runtime Optional runtime replacement; null/omitted leaves the current runtime unchanged.
+	Runtime *AgentRuntime `json:"runtime,omitempty"`
 }
 
 // MintRequestDTO Owner-gated long-lived agent-token mint request (`POST /api/mint`).
@@ -799,6 +846,9 @@ type MonitoringMachineDTO struct {
 	DisplayName   *string  `json:"display_name,omitempty"`
 	Machine       string   `json:"machine"`
 	RamPct        *float64 `json:"ram_pct,omitempty"`
+
+	// RuntimeCapabilities Same provider-neutral runtime readiness map carried by ``MachineDTO.runtime_capabilities``.
+	RuntimeCapabilities *map[string]RuntimeCapabilityDTO `json:"runtime_capabilities,omitempty"`
 }
 
 // MonitoringSessionDTO One live AI session. “context_pct“ comes from the in-memory gauge;
@@ -810,18 +860,21 @@ type MonitoringMachineDTO struct {
 // from), honest-empty until a source reports one — mirrors the “account“ tag
 // the accounts[] fold groups by, so the per-member detail row can show it.
 type MonitoringSessionDTO struct {
-	Account    *string         `json:"account,omitempty"`
-	BankedCost *float64        `json:"banked_cost,omitempty"`
-	ContextPct *float64        `json:"context_pct,omitempty"`
-	Cost       *float64        `json:"cost,omitempty"`
-	Effort     *string         `json:"effort,omitempty"`
-	Id         string          `json:"id"`
-	Machine    *string         `json:"machine,omitempty"`
-	Model      *string         `json:"model,omitempty"`
-	Name       string          `json:"name"`
-	Presence   *string         `json:"presence,omitempty"`
-	Role       *string         `json:"role,omitempty"`
-	Tokens     *map[string]int `json:"tokens,omitempty"`
+	Account    *string  `json:"account,omitempty"`
+	BankedCost *float64 `json:"banked_cost,omitempty"`
+	ContextPct *float64 `json:"context_pct,omitempty"`
+	Cost       *float64 `json:"cost,omitempty"`
+	Effort     *string  `json:"effort,omitempty"`
+	Id         string   `json:"id"`
+	Machine    *string  `json:"machine,omitempty"`
+	Model      *string  `json:"model,omitempty"`
+	Name       string   `json:"name"`
+	Presence   *string  `json:"presence,omitempty"`
+	Role       *string  `json:"role,omitempty"`
+
+	// Runtime The session's selected provider runtime.
+	Runtime *AgentRuntime   `json:"runtime,omitempty"`
+	Tokens  *map[string]int `json:"tokens,omitempty"`
 }
 
 // MyTaskDTO The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active.
@@ -848,7 +901,7 @@ type OnboardingStepDTO struct {
 	Reason *string `json:"reason,omitempty"`
 }
 
-// OutsourceWorkerDTO One outsource worker row of the panel (SPEC §4.1): the anonymous codename (model prefix + sequence), model/effort, lifecycle status (assigned → active → released), and its ONE bound task's id / title / status.
+// OutsourceWorkerDTO One outsource worker row of the panel (SPEC §4.1): the anonymous codename (model prefix + sequence), runtime/model/effort, lifecycle status (assigned → active → released), and its ONE bound task's id / title / status.
 type OutsourceWorkerDTO struct {
 	// Account The Claude account this worker's session runs under (telemetry entry keyed by the worker's actor id — the SAME per-actor telemetry the member roster reads). null when the worker has not reported one (never fabricated). T-f190 additive-optional.
 	Account *string `json:"account,omitempty"`
@@ -902,20 +955,26 @@ type OutsourceWorkerDTO struct {
 
 	// RefocusSince Epoch seconds of the in-flight context-handover stamp (T-32e1), 0 when none. >0 = a refocus (owner 換手 OR context-high auto-handover) is mid-flight; the FE maps 0→null. Additive-optional.
 	RefocusSince *float64 `json:"refocus_since,omitempty"`
-	Status       string   `json:"status"`
-	TaskId       string   `json:"task_id"`
-	TaskStatus   *string  `json:"task_status,omitempty"`
-	TaskTitle    *string  `json:"task_title,omitempty"`
+
+	// Runtime The worker's selected AI CLI runtime. Existing rows default to ``claude``.
+	Runtime    *AgentRuntime `json:"runtime,omitempty"`
+	Status     string        `json:"status"`
+	TaskId     string        `json:"task_id"`
+	TaskStatus *string       `json:"task_status,omitempty"`
+	TaskTitle  *string       `json:"task_title,omitempty"`
 
 	// UnreadCount The CALLER's unread chat-message count for this worker's conversation (the same chat_read watermark inverse the member roster serves) — the office 外包 row's red badge. Optional-with-default: absent reads as 0 for older clients.
 	UnreadCount *int `json:"unread_count,omitempty"`
 }
 
-// OutsourceWorkerModelDTO Change an outsource worker's model/effort (POST /api/outsource-workers/{id}/model, T-f190). model is the launch model (blank ⇒ the launcher default); effort is the optional quick-pick effort (null / absent ⇒ keep the current effort). The worker twin of the member model/effort edit.
+// OutsourceWorkerModelDTO Change an outsource worker's runtime/model/effort (POST /api/outsource-workers/{id}/model, T-f190). runtime is optional (null/absent ⇒ keep current); model is the launch model (blank ⇒ the selected runtime's default); effort is optional (null/absent ⇒ keep current). The worker twin of the member runtime/model/effort edit.
 type OutsourceWorkerModelDTO struct {
 	// Effort Optional effort quick-pick; null/absent keeps the current effort.
 	Effort *string `json:"effort,omitempty"`
 	Model  *string `json:"model,omitempty"`
+
+	// Runtime Optional runtime replacement; null/absent keeps the current runtime.
+	Runtime *AgentRuntime `json:"runtime,omitempty"`
 }
 
 // OutsourceWorkerRelocateDTO Relocate an outsource worker to a machine (POST /api/outsource-workers/{id}/relocate, T-f190) — the owner cockpit's 改機器 operation, the worker twin of MemberActivateDTO's machine bind. Writes the worker's desired_machine_id pin, kills the current session, and clears pacing so the next scheduler tick re-spawns on the chosen machine (no lifecycle change). machine_id is the STABLE machine id (the warden member's own id), "auto" (idlest-online), or "" (clear the pin → fall back to the manual preference).
@@ -1146,16 +1205,19 @@ type ResumeTaskDTO struct {
 // (required, blank → 422). “member_name“ is the founding member's display
 // name — OPTIONAL: omitted/blank ⇒ the server picks a fresh name from the
 // “domain.member.MEMBER_NAME_POOL“ (Mira-style short English names), never
-// colliding with an existing roster member. “model“ / “effort“ are the
-// member's launch knobs — model is a free string (spawn “--model“ is a free
-// string; blank/omitted ⇒ CLI default), effort is the closed low/medium/high
-// vocabulary (unknown → 422; omitted ⇒ medium). The server mints BOTH ids
-// (role key + member id) — never client-supplied.
+// colliding with an existing roster member. “runtime“ / “model“ / “effort“
+// are the member's launch knobs — runtime is claude/codex (omitted ⇒ claude),
+// model is a free string (blank/omitted ⇒ selected-runtime default), effort is
+// the closed low/medium/high vocabulary (unknown → 422; omitted ⇒ medium). The
+// server mints BOTH ids (role key + member id) — never client-supplied.
 type RoleCreateDTO struct {
 	Effort     *string `json:"effort,omitempty"`
 	MemberName *string `json:"member_name,omitempty"`
 	Model      *string `json:"model,omitempty"`
 	Name       string  `json:"name"`
+
+	// Runtime Founding member runtime; null/omitted defaults to ``claude``.
+	Runtime *AgentRuntime `json:"runtime,omitempty"`
 }
 
 // RoleCreateResultDTO The created pair: the folded custom role doc (“is_seed=False“, template
@@ -1232,6 +1294,13 @@ type RoleDeleteResultDTO struct {
 	DeletedLessons         *int      `json:"deleted_lessons,omitempty"`
 	RemovedMemberIds       *[]string `json:"removed_member_ids,omitempty"`
 	Role                   string    `json:"role"`
+}
+
+// RuntimeCapabilityDTO Value-free readiness of one AI CLI runtime on a machine. “installed“ means the exact binary the warden would launch resolved and passed its version probe. “logged_in“ is true/false when a safe provider login probe concluded, null when unknown. “version“ is null when unresolved or probing failed. No credential value or path is exposed.
+type RuntimeCapabilityDTO struct {
+	Installed *bool   `json:"installed,omitempty"`
+	LoggedIn  *bool   `json:"logged_in,omitempty"`
+	Version   *string `json:"version,omitempty"`
 }
 
 // SetPasswordDTO First-run owner-password claim (`POST /api/auth/set-password`, PUBLIC).
@@ -1360,12 +1429,15 @@ type TaskCreateResultDTO struct {
 	Warnings *[]string `json:"warnings,omitempty"`
 }
 
-// TaskCreateTargetDTO Optional dispatch target (agent 發包給外包). When present with “kind='outsource'“ the task is created as an **unassigned outsource task** — no owner-approval card and no per-task approval. The existing outsource scheduler then picks up unassigned outsource tasks against the global concurrency cap (“outsourceParallelCap“, owner-configurable in the cockpit; default unchanged): below the cap it mints a fresh worker immediately, at the cap it queues for capacity and is picked up automatically when a slot frees. The owner may reassign a still-queued task (to a member or another outsource) at any time. “model“ is the worker's model (blank/absent = the runtime default); “effort“ is low|medium|high (absent = “medium“); “machine“ is the spawn placement preference — “auto“ (absent = auto) or a machine id. Absent (or “kind='member'“) keeps the current create semantics (manual assignee / “executor_member_id“).
+// TaskCreateTargetDTO Optional dispatch target (agent 發包給外包). When present with “kind='outsource'“ the task is created as an **unassigned outsource task** — no owner-approval card and no per-task approval. The existing outsource scheduler then picks up unassigned outsource tasks against the global concurrency cap (“outsourceParallelCap“, owner-configurable in the cockpit; default unchanged): below the cap it mints a fresh worker immediately, at the cap it queues for capacity and is picked up automatically when a slot frees. The owner may reassign a still-queued task (to a member or another outsource) at any time. “runtime“ is claude/codex (absent = claude); “model“ is the worker's model (blank/absent = selected-runtime default); “effort“ is low|medium|high (absent = “medium“); “machine“ is the spawn placement preference — “auto“ (absent = auto) or a machine id. Absent (or “kind='member'“) keeps the current create semantics (manual assignee / “executor_member_id“).
 type TaskCreateTargetDTO struct {
 	Effort  *string `json:"effort,omitempty"`
 	Kind    string  `json:"kind"`
 	Machine *string `json:"machine,omitempty"`
 	Model   *string `json:"model,omitempty"`
+
+	// Runtime Outsource runtime; null/absent defaults to ``claude``.
+	Runtime *AgentRuntime `json:"runtime,omitempty"`
 }
 
 // TaskDTO One task (M3 任務卡): a workflow with a Definition of Done, executed by a roster member or an anonymous outsource worker. “task_no“ is the display number derived from the id (never a lookup key). “status“ is DERIVED from the steps (not agent-reported): the work states not_started/in_progress/waiting_owner/waiting_external plus the terminals done/terminated/duplicated. “reassigning“ is NO LONGER a status — it is the orthogonal “lock“ field (the owner/admin handover hold, cleared by the claim action; see “POST /api/tasks/{task_id}/reassign“); “priority“ includes “frozen“ (pause-pushing — a priority, not a status). “executor_kind='outsource'“ with an empty “executor_id“ is the transient unassigned state. “closed_ts“ is null while open. “deps“ are the blocking task ids (display markers, never a status change); “progress_done“/“progress_total“ count step leaves (“superseded“ replan history counts toward neither side). “closeout_reported“ flips true once the executor reports the close-out follow-ups done (“report_task_closeout“; terminal tasks only). “creator_id“ is the verified token sub of the task's creator (a member id, an outsource worker id, or the literal "owner"); "" on rows created before the column existed. “duplicate_of“ is the id of the ORIGINAL task this one duplicates — non-empty ONLY while “status='duplicated'“ (MCP “mark_duplicate“); the graph is depth-1 by construction so the cockpit link always resolves in one hop.
@@ -1468,14 +1540,14 @@ type TaskListItemDTO struct {
 	WaitingReason      *string  `json:"waiting_reason,omitempty"`
 }
 
-// TaskManualCreateDTO Create one task type (a blank manual). Pass “display_name“ (the human-facing label); the server MINTS the “tm-“ type_key id and returns it in the DTO — later calls (get_task_manual / update_task_manual / create_task) address the type by that returned type_key. “type_key“ is the optional LEGACY path (deprecated): when supplied it is taken verbatim as the id (duplicate → 409) and a blank display_name backfills to it. At least one of the two must be non-blank (400 otherwise). “assignee“ is optional and OWNER-ONLY governance (a non-owner supplying it is a 403); when the owner supplies it, the shape/validation is the edit's assignee.
+// TaskManualCreateDTO Create one task type (a blank manual). Pass “display_name“ (the human-facing label); the server MINTS the “tm-“ type_key id and returns it in the DTO — later calls (get_task_manual / update_task_manual / create_task) address the type by that returned type_key. “type_key“ is the optional LEGACY path (deprecated): when supplied it is taken verbatim as the id (duplicate → 409) and a blank display_name backfills to it. At least one of the two must be non-blank (400 otherwise). “assignee“ is optional and OWNER-ONLY governance (a non-owner supplying it is a 403); when the owner supplies it, the shape/validation is the edit's assignee, including “runtime“ for an outsource assignee (claude/codex; absent = claude).
 type TaskManualCreateDTO struct {
 	Assignee    *map[string]interface{} `json:"assignee,omitempty"`
 	DisplayName *string                 `json:"display_name,omitempty"`
 	TypeKey     *string                 `json:"type_key,omitempty"`
 }
 
-// TaskManualDTO One task manual (任務手冊 — a task type / playbook): purpose (Q1), input fields (Q2; is_key fields form the dedupe identity key), the SOP markdown (Q3 — the plan blueprint), the accumulated learnings, and the type's executor assignee setting ({} = unset). An outsource assignee is {"kind":"outsource","model":…,"effort":…,"copies":N,"machine":…}: `copies` is the per-type parallel-worker cap — an integer >= 1, or 0 = 無限 (UNLIMITED: no per-type cap; the global outsource_max_parallel still applies); `machine` is the spawn placement preference — "auto" (the default when absent: the scheduler picks the idlest online machine) or a machine id; a specified machine that is offline at spawn time falls back to "auto" automatically.
+// TaskManualDTO One task manual (任務手冊 — a task type / playbook): purpose (Q1), input fields (Q2; is_key fields form the dedupe identity key), the SOP markdown (Q3 — the plan blueprint), the accumulated learnings, and the type's executor assignee setting ({} = unset). An outsource assignee is {"kind":"outsource","runtime":"claude|codex","model":…,"effort":…,"copies":N,"machine":…}; absent runtime means claude. `copies` is the per-type parallel-worker cap — an integer >= 1, or 0 = 無限 (UNLIMITED: no per-type cap; the global outsource_max_parallel still applies); `machine` is the spawn placement preference — "auto" (the default when absent: the scheduler picks the idlest online machine) or a machine id; a specified machine that is offline or lacks the selected runtime at spawn time falls back to runtime-capable "auto" placement.
 type TaskManualDTO struct {
 	Assignee    map[string]interface{} `json:"assignee"`
 	DisplayName string                 `json:"display_name"`
@@ -1500,7 +1572,7 @@ type TaskManualFieldDTO struct {
 	Required *bool  `json:"required,omitempty"`
 }
 
-// TaskManualUpdateDTO Partial manual edit — only supplied fields change. “assignee“ is {"kind":"member","member_id":…} or {"kind":"outsource","model":…,"effort":…,"copies":N,"machine":…}; {} unsets it. Outsource “copies“ MUST be a number >= 0 (0 = 無限 — unlimited per-type parallel copies; absent = 1); “machine“ MUST be a non-blank string when present — "auto" or a machine id (absent = "auto").
+// TaskManualUpdateDTO Partial manual edit — only supplied fields change. “assignee“ is {"kind":"member","member_id":…} or {"kind":"outsource","runtime":"claude|codex","model":…,"effort":…,"copies":N,"machine":…}; {} unsets it. Outsource runtime absent means claude; “copies“ MUST be a number >= 0 (0 = 無限 — unlimited per-type parallel copies; absent = 1); “machine“ MUST be a non-blank string when present — "auto" or a machine id (absent = "auto").
 type TaskManualUpdateDTO struct {
 	Assignee    *map[string]interface{} `json:"assignee,omitempty"`
 	DisplayName *string                 `json:"display_name,omitempty"`
@@ -1543,17 +1615,20 @@ type TaskPriorityUpdateDTO struct {
 type TaskReassignDTO struct {
 	Note *string `json:"note,omitempty"`
 
-	// Target The reassignment target. ``kind='member'`` requires ``member_id`` — an ACTIVE roster member below the warden layer (a warden or an inactive/unknown member is a 400). ``kind='outsource'`` lands the task unassigned for the scheduler to spawn a fresh worker under the global parallel cap (no owner-approval card; T-35e0): ``model`` is the worker's model (blank/absent = the runtime default); ``effort`` is low|medium|high (absent = ``medium``); ``machine`` is the spawn placement preference — ``auto`` (absent = auto) or a machine id (an offline machine falls back to auto at spawn time, the TaskManualDTO promise).
+	// Target The reassignment target. ``kind='member'`` requires ``member_id`` — an ACTIVE roster member below the warden layer (a warden or an inactive/unknown member is a 400). ``kind='outsource'`` lands the task unassigned for the scheduler to spawn a fresh worker under the global parallel cap (no owner-approval card; T-35e0): ``runtime`` is claude/codex (absent = claude); ``model`` is the worker's model (blank/absent = selected-runtime default); ``effort`` is low|medium|high (absent = ``medium``); ``machine`` is the spawn placement preference — ``auto`` (absent = auto) or a machine id (an offline machine falls back to auto at spawn time, the TaskManualDTO promise).
 	Target TaskReassignTargetDTO `json:"target"`
 }
 
-// TaskReassignTargetDTO The reassignment target. “kind='member'“ requires “member_id“ — an ACTIVE roster member below the warden layer (a warden or an inactive/unknown member is a 400). “kind='outsource'“ lands the task unassigned for the scheduler to spawn a fresh worker under the global parallel cap (no owner-approval card; T-35e0): “model“ is the worker's model (blank/absent = the runtime default); “effort“ is low|medium|high (absent = “medium“); “machine“ is the spawn placement preference — “auto“ (absent = auto) or a machine id (an offline machine falls back to auto at spawn time, the TaskManualDTO promise).
+// TaskReassignTargetDTO The reassignment target. “kind='member'“ requires “member_id“ — an ACTIVE roster member below the warden layer (a warden or an inactive/unknown member is a 400). “kind='outsource'“ lands the task unassigned for the scheduler to spawn a fresh worker under the global parallel cap (no owner-approval card; T-35e0): “runtime“ is claude/codex (absent = claude); “model“ is the worker's model (blank/absent = selected-runtime default); “effort“ is low|medium|high (absent = “medium“); “machine“ is the spawn placement preference — “auto“ (absent = auto) or a machine id (an offline machine falls back to auto at spawn time, the TaskManualDTO promise).
 type TaskReassignTargetDTO struct {
 	Effort   *string `json:"effort,omitempty"`
 	Kind     string  `json:"kind"`
 	Machine  *string `json:"machine,omitempty"`
 	MemberId *string `json:"member_id,omitempty"`
 	Model    *string `json:"model,omitempty"`
+
+	// Runtime Outsource runtime; null/absent defaults to ``claude``.
+	Runtime *AgentRuntime `json:"runtime,omitempty"`
 }
 
 // TaskRefDTO The light task reference a reply card carries when it was armed from a task gate (請示 → 任務 jump, SPEC §3.6): id (the jump anchor), the type, and the title.

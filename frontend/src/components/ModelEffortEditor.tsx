@@ -22,33 +22,58 @@ export const MODEL_QUICK_PICKS = ["fable", "opus", "sonnet", "haiku"] as const;
 export const EFFORTS: readonly Effort[] = ["low", "medium", "high"] as const;
 
 export function ModelEffortEditor({
+  runtime,
   model,
   effort,
+  onRuntimeChange,
   onModelChange,
   onEffortChange,
 }: {
+  runtime?: "claude" | "codex";
   model: string;
   effort: string;
+  onRuntimeChange?: (runtime: "claude" | "codex") => void;
   onModelChange: (model: string) => void;
   onEffortChange: (effort: string) => void;
 }) {
   const { t } = useI18n();
   return (
     <>
-      <div className="me-editor__label">{t.mp.model}</div>
-      <div className="me-editor__chips">
-        {MODEL_QUICK_PICKS.map((m) => (
-          <button
-            type="button"
-            key={m}
-            className={`doc-btn${model === m ? " doc-btn--accent" : ""}`}
-            data-testid={`me-model-chip-${m}`}
-            onClick={() => onModelChange(m)}
+      {runtime && onRuntimeChange && (
+        <>
+          <div className="me-editor__label">{t.mp.agentRuntime}</div>
+          <select
+            className="me-editor__select"
+            value={runtime}
+            aria-label={t.mp.agentRuntime}
+            onChange={(e) => {
+              const next = e.target.value as "claude" | "codex";
+              if (next !== runtime) onModelChange("");
+              onRuntimeChange(next);
+            }}
+            data-testid="me-runtime-select"
           >
-            {m}
-          </button>
-        ))}
-      </div>
+            <option value="claude">Claude Code</option>
+            <option value="codex">Codex</option>
+          </select>
+        </>
+      )}
+      <div className="me-editor__label">{t.mp.model}</div>
+      {runtime !== "codex" && (
+        <div className="me-editor__chips">
+          {MODEL_QUICK_PICKS.map((m) => (
+            <button
+              type="button"
+              key={m}
+              className={`doc-btn${model === m ? " doc-btn--accent" : ""}`}
+              data-testid={`me-model-chip-${m}`}
+              onClick={() => onModelChange(m)}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+      )}
       <input
         className="me-editor__input"
         value={model}

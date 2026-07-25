@@ -25,6 +25,7 @@ func fullMember(id string) Member {
 		Name:             "Mira",
 		Kind:             "assistant",
 		RoleKey:          "assistant",
+		Runtime:          RuntimeClaude,
 		Model:            "opus",
 		Effort:           "high",
 		DesiredState:     "online",

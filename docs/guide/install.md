@@ -38,7 +38,7 @@
 
 > [!NOTE]
 > 用 asdf / nvm / volta 裝 `claude` 的人要注意：launchd 的 PATH 很小，找不到 shim。
-> 安裝時解析到的路徑會被寫進服務設定；真的找不到時用 `OC_CLAUDE_BIN=/絕對路徑/claude` 重跑安裝（冪等）。
+> 安裝時會解析 Claude Code 與 Codex CLI，找到的路徑都會寫進服務設定；機器只要至少有一種 runtime 即可。真的找不到時，用 `OC_CLAUDE_BIN=/絕對路徑/claude` 或 `OC_CODEX_BIN=/絕對路徑/codex` 重跑安裝（冪等）。
 
 ### C. 只有走「從原始碼／開發」那條才需要的
 

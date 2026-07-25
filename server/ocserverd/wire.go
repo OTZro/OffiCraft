@@ -112,6 +112,7 @@ type memberDTO struct {
 	Kind              string  `json:"kind"`
 	RoleKey           string  `json:"role_key"`
 	RoleName          string  `json:"role_name"`
+	Runtime           string  `json:"runtime"`
 	Model             string  `json:"model"`
 	Effort            string  `json:"effort"`
 	DesiredState      string  `json:"desired_state"`
@@ -154,9 +155,10 @@ type machineDTO struct {
 	// older warden that never probed) — the same backward-compat semantics as
 	// BinStatus. CredSource is server-synthesized from the presence bools:
 	// "file" | "keychain" | "both" | "none".
-	ClaudeVersion     *string `json:"claude_version"`
-	ClaudeCredSource  *string `json:"claude_cred_source"`
-	ClaudeSubReadable *bool   `json:"claude_sub_readable"`
+	ClaudeVersion       *string                         `json:"claude_version"`
+	ClaudeCredSource    *string                         `json:"claude_cred_source"`
+	ClaudeSubReadable   *bool                           `json:"claude_sub_readable"`
+	RuntimeCapabilities map[string]RuntimeCapabilityDTO `json:"runtime_capabilities"`
 }
 
 type machineOnboardResultDTO struct {
@@ -289,6 +291,8 @@ type agentTelemetryDTO struct {
 	Hardware      map[string]any `json:"hardware"`
 	Binaries      map[string]any `json:"binaries"`
 	Claude        map[string]any `json:"claude"`
+	Runtime       *string        `json:"runtime"`
+	Runtimes      map[string]any `json:"runtimes"`
 	Cost          *float64       `json:"cost"`
 	Effort        *string        `json:"effort"`
 	SelfUpdate    map[string]any `json:"self_update"`
@@ -300,6 +304,7 @@ type monitoringSessionDTO struct {
 	ID         string         `json:"id"`
 	Name       string         `json:"name"`
 	Role       string         `json:"role"`
+	Runtime    string         `json:"runtime"`
 	Model      string         `json:"model"`
 	Effort     string         `json:"effort"`
 	Machine    string         `json:"machine"`
@@ -325,9 +330,10 @@ type monitoringMachineDTO struct {
 	BinStatus *string `json:"bin_status"`
 	// ClaudeVersion / ClaudeCredSource / ClaudeSubReadable mirror the
 	// machineDTO claude probe columns (machineClaudeInfo — T-97ee).
-	ClaudeVersion     *string `json:"claude_version"`
-	ClaudeCredSource  *string `json:"claude_cred_source"`
-	ClaudeSubReadable *bool   `json:"claude_sub_readable"`
+	ClaudeVersion       *string                         `json:"claude_version"`
+	ClaudeCredSource    *string                         `json:"claude_cred_source"`
+	ClaudeSubReadable   *bool                           `json:"claude_sub_readable"`
+	RuntimeCapabilities map[string]RuntimeCapabilityDTO `json:"runtime_capabilities"`
 }
 
 type monitoringAccountDTO struct {
@@ -746,6 +752,7 @@ type docDTO struct {
 type outsourceWorkerDTO struct {
 	ID         string  `json:"id"`
 	Codename   string  `json:"codename"`
+	Runtime    string  `json:"runtime"`
 	Model      string  `json:"model"`
 	Effort     string  `json:"effort"`
 	Status     string  `json:"status"`
@@ -1091,6 +1098,7 @@ func newOutsourceWorkerDTO(w OutsourceWorker, task *Task, p outsourceWorkerProje
 	dto := outsourceWorkerDTO{
 		ID:          w.ID,
 		Codename:    w.Codename,
+		Runtime:     NormalizeRuntime(w.Runtime),
 		Model:       w.Model,
 		Effort:      w.Effort,
 		Status:      w.Status,

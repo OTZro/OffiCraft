@@ -152,6 +152,15 @@ func (s *apiServer) HandleHireMemberApiMembersPost(w http.ResponseWriter, r *htt
 			"effort must be one of [high low medium]; got '"+*body.Effort+"'")
 		return
 	}
+	runtime := RuntimeClaude
+	if body.Runtime != nil {
+		runtime = string(*body.Runtime)
+		if !ValidRuntime(runtime) {
+			writeError(w, http.StatusUnprocessableEntity,
+				"runtime must be one of [claude codex]; got '"+runtime+"'")
+			return
+		}
+	}
 	// The Go kind is a CLOSED set: the Python bare hire's kind="" folds to
 	// "assistant" at this ingest seam (CanonicalKind — owner-approved mapping);
 	// a kind outside the closed set is refused.
@@ -169,6 +178,7 @@ func (s *apiServer) HandleHireMemberApiMembersPost(w http.ResponseWriter, r *htt
 		Name:             name,
 		Kind:             kind,
 		RoleKey:          strOrEmpty(body.RoleKey),
+		Runtime:          runtime,
 		Model:            strOrEmpty(body.Model),
 		Effort:           effort,
 		DesiredState:     DesiredStateOffline,
@@ -205,8 +215,8 @@ func (s *apiServer) HandleGetMemberApiMembersMemberIdGet(w http.ResponseWriter, 
 	writeJSON(w, http.StatusOK, s.newMemberDTO(*m, roleName, s.observedHost(*m), 0))
 }
 
-// PATCH /api/members/{member_id} — partial edit (name/model/effort). Blank
-// name / unknown effort → 422; runtime fields untouched.
+// PATCH /api/members/{member_id} — partial edit (name/runtime/model/effort).
+// Blank name or an unknown runtime/effort is rejected.
 func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWriter, r *http.Request, memberId string) {
 	var body MemberUpdateDTO
 	if !decodeJSONBody(w, r, &body) {
@@ -227,6 +237,15 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 	}
 	if body.Model != nil {
 		m.Model = *body.Model
+	}
+	if body.Runtime != nil {
+		runtime := string(*body.Runtime)
+		if !ValidRuntime(runtime) {
+			writeError(w, http.StatusUnprocessableEntity,
+				"runtime must be one of [claude codex]; got '"+runtime+"'")
+			return
+		}
+		m.Runtime = runtime
 	}
 	if body.Effort != nil {
 		if !validEffort(*body.Effort) {
