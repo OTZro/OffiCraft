@@ -58,9 +58,10 @@ gate. No second Seth card is required.
 - [ ] **Binary builds clean at the landed sha:** `cd cli/ocwarden && go build -o
   ocwarden ./... && go vet ./... && go test -race ./...` all green; `gofmt -l .`
   empty.
-- [ ] **This scaffold + the installer are landed on origin/main** (bin/ocwarden
-  (committed binary) + the installer (flip-era bash `bin/warden-install`, since
-  RETIRED/deleted — `ocwarden install` is the sole installer today) +
+- [ ] **Historical flip checklist:** this scaffold + the installer were landed on
+  origin/main (the then-current `bin/ocwarden` prebuilt + the flip-era bash
+  `bin/warden-install`, since RETIRED/deleted — `ocwarden install` is the sole
+  installer today) +
   deploy/com.officraft.ocwarden.plist + this runbook), dormant, reviewer-clean.
 - [ ] **avo readiness gate passed.**
 

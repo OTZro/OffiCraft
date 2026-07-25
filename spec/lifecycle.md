@@ -287,11 +287,10 @@ the script pulls the warden binary from the PUBLIC `GET /api/warden/binary`. The
 variant probes that binary route (HEAD) BEFORE redeeming the one-time claim code — a
 server that cannot serve the binary (503) exits with a plain-language error and the
 single-use code survives for a retry. The binary routes (`/api/warden/binary`,
-`/api/agent/binary`) and the MCP catalog serve disk-first (the committed `bin/` +
-`spec/` files under the CWD) and fall back to copies embedded in the server binary
-(server-platform builds only) — a repo-less single-file deploy still serves them. Shapes
-and status codes are in `spec/openapi.json`; no hidden behaviour beyond the string
-templating.
+`/api/agent/binary`) and the MCP catalog serve the release-built assets embedded in the
+server binary; CWD files never shadow those bytes. This keeps a repo-less single-file
+deploy self-contained. Shapes and status codes are in `spec/openapi.json`; no hidden
+behaviour beyond the string templating.
 
 ## Appendix A — in-memory state covered by this document
 
