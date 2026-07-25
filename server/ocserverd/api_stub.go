@@ -12,6 +12,8 @@ package main
 import (
 	"net/http"
 	"sync"
+
+	"github.com/SherClockHolmes/webpush-go"
 )
 
 // apiServer carries the per-process state the handlers need: the durable DAL,
@@ -24,9 +26,12 @@ type apiServer struct {
 	processTime string
 	catalogHash string
 	dal         *DAL
-	hub         *Hub
-	telemetry   *memStore
-	gauge       *memStore
+	// pushHTTPClient is normally the guarded client assembled in api_push.go;
+	// tests can substitute a recording client without opening a real socket.
+	pushHTTPClient webpush.HTTPClient
+	hub            *Hub
+	telemetry      *memStore
+	gauge          *memStore
 	// machineClaims holds the pending one-time machine claim codes (in-memory
 	// only, like the observation stores — a restart voids them, which reads
 	// exactly like expiry).

@@ -1004,6 +1004,26 @@ type ProbeVersionDTO struct {
 	Version     string `json:"version"`
 }
 
+// PushPublicKeyDTO The base64url VAPID public key a browser passes to PushManager.subscribe.
+type PushPublicKeyDTO struct {
+	PublicKey string `json:"public_key"`
+}
+
+// PushSubscriptionCreateDTO One browser Web Push subscription, scoped to the authenticated owner.
+type PushSubscriptionCreateDTO struct {
+	Endpoint       string   `json:"endpoint"`
+	ExpirationTime *float64 `json:"expiration_time,omitempty"`
+	Keys           struct {
+		Auth   string `json:"auth"`
+		P256dh string `json:"p256dh"`
+	} `json:"keys"`
+}
+
+// PushSubscriptionDeleteDTO The endpoint identity of a browser subscription to remove.
+type PushSubscriptionDeleteDTO struct {
+	Endpoint string `json:"endpoint"`
+}
+
 // ReleaseCheckDTO Response of `GET /api/release/check` (owner-gated) — the explicit
 // 檢查更新 button behind the software-update card. The server asks GitHub
 // Releases (repo pkyosx/OffiCraft, anonymous — no token, no configuration)
@@ -1337,6 +1357,9 @@ type SetPasswordDTO struct {
 // `owner_name` — the owner's display nickname ("" = unset). `display_theme` /
 // `display_language` — the owner's cockpit visual prefs ("" = unset).
 type SettingsDTO struct {
+	// CodexCompactionThreshold Codex context-compaction threshold, 1 through 10.
+	CodexCompactionThreshold *int `json:"codex_compaction_threshold,omitempty"`
+
 	// CustomThemes The owner's saved custom theme bundles (T-16a1 P2), each a `{id,name,colors}` colour bundle. `[]` = none saved. display_theme may point at any id in this set (or a built-in). Owner-gated: rides GET /api/settings only.
 	CustomThemes *[]ThemeBundleDTO `json:"custom_themes,omitempty"`
 
@@ -1344,9 +1367,8 @@ type SettingsDTO struct {
 	DisplayLanguage *string `json:"display_language,omitempty"`
 
 	// DisplayTheme The owner's cockpit visual theme (T-0b41-p2). "" = never set — the frontend keeps its localStorage cache / default; reconciled in at login as the cross-device source of truth.
-	DisplayTheme             *string `json:"display_theme,omitempty"`
-	HandoverPct              int     `json:"handover_pct"`
-	CodexCompactionThreshold int     `json:"codex_compaction_threshold"`
+	DisplayTheme *string `json:"display_theme,omitempty"`
+	HandoverPct  int     `json:"handover_pct"`
 
 	// Onboarding The first-run onboarding report (T-ba62), or null when onboarding never ran on this database. Owner-gated by virtue of living on GET /api/settings — a failed step's detail can carry local paths, so it must never reach the PUBLIC /api/auth/status probe.
 	Onboarding *OnboardingReportDTO `json:"onboarding,omitempty"`
@@ -1373,6 +1395,9 @@ type SettingsDTO struct {
 // self-upgrade to the newest admissible release (both booleans, default false;
 // the manual upgrade endpoint is unaffected).
 type SettingsUpdateDTO struct {
+	// CodexCompactionThreshold Codex context-compaction threshold, 1 through 10.
+	CodexCompactionThreshold *int `json:"codex_compaction_threshold,omitempty"`
+
 	// CustomThemes Replace the owner's custom theme bundles (T-16a1 P2) with this array (each `{id,name,colors}`). Omit to leave them unchanged; `[]` clears them. Every bundle is validated against the shape, the theme.css token whitelist, and the concrete-colour grammar — any violation is a 422 and nothing is written. When this and display_theme are patched together, display_theme is validated against the POST-patch set; and deleting the active custom theme resets display_theme to "".
 	CustomThemes *[]ThemeBundleDTO `json:"custom_themes,omitempty"`
 
@@ -1380,9 +1405,8 @@ type SettingsUpdateDTO struct {
 	DisplayLanguage *string `json:"display_language,omitempty"`
 
 	// DisplayTheme The owner's cockpit visual theme (T-0b41-p2) — trimmed; "" clears it back to unset. Must be one of office, xian (or ""); anything else is a 422.
-	DisplayTheme             *string `json:"display_theme,omitempty"`
-	HandoverPct              *int    `json:"handover_pct,omitempty"`
-	CodexCompactionThreshold *int    `json:"codex_compaction_threshold,omitempty"`
+	DisplayTheme *string `json:"display_theme,omitempty"`
+	HandoverPct  *int    `json:"handover_pct,omitempty"`
 
 	// OrgName The studio display name (T-d693) — trimmed, max 80 runes; "" clears it back to the localized default. A value longer than 80 runes is a 422.
 	OrgName              *string `json:"org_name,omitempty"`
@@ -1957,6 +1981,12 @@ type HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPostJSONRequestBody 
 // HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePostJSONRequestBody defines body for HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePost for application/json ContentType.
 type HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePostJSONRequestBody = OutsourceWorkerRelocateDTO
 
+// HandleDeletePushSubscriptionApiPushSubscriptionDeleteJSONRequestBody defines body for HandleDeletePushSubscriptionApiPushSubscriptionDelete for application/json ContentType.
+type HandleDeletePushSubscriptionApiPushSubscriptionDeleteJSONRequestBody = PushSubscriptionDeleteDTO
+
+// HandleCreatePushSubscriptionApiPushSubscriptionPostJSONRequestBody defines body for HandleCreatePushSubscriptionApiPushSubscriptionPost for application/json ContentType.
+type HandleCreatePushSubscriptionApiPushSubscriptionPostJSONRequestBody = PushSubscriptionCreateDTO
+
 // HandleCreateReplyCardApiReplyCardsPostJSONRequestBody defines body for HandleCreateReplyCardApiReplyCardsPost for application/json ContentType.
 type HandleCreateReplyCardApiReplyCardsPostJSONRequestBody = ReplyCardCreateDTO
 
@@ -2220,6 +2250,15 @@ type ServerInterface interface {
 	// Stop (停止) an outsource worker (owner-only; kill + hold down).
 	// (POST /api/outsource-workers/{id}/stop)
 	HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost(w http.ResponseWriter, r *http.Request, id string)
+	// Read the VAPID public key used to subscribe this owner's browser.
+	// (GET /api/push/public-key)
+	HandleGetPushPublicKeyApiPushPublicKeyGet(w http.ResponseWriter, r *http.Request)
+	// Remove a Web Push subscription for this owner.
+	// (DELETE /api/push/subscription)
+	HandleDeletePushSubscriptionApiPushSubscriptionDelete(w http.ResponseWriter, r *http.Request)
+	// Save a Web Push subscription for this owner.
+	// (POST /api/push/subscription)
+	HandleCreatePushSubscriptionApiPushSubscriptionPost(w http.ResponseWriter, r *http.Request)
 	// Check GitHub Releases for a newer official OffiCraft version.
 	// (GET /api/release/check)
 	HandleCheckReleaseApiReleaseCheckGet(w http.ResponseWriter, r *http.Request)
@@ -3937,6 +3976,48 @@ func (siw *ServerInterfaceWrapper) HandleStopOutsourceWorkerApiOutsourceWorkersI
 	handler.ServeHTTP(w, r)
 }
 
+// HandleGetPushPublicKeyApiPushPublicKeyGet operation middleware
+func (siw *ServerInterfaceWrapper) HandleGetPushPublicKeyApiPushPublicKeyGet(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleGetPushPublicKeyApiPushPublicKeyGet(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleDeletePushSubscriptionApiPushSubscriptionDelete operation middleware
+func (siw *ServerInterfaceWrapper) HandleDeletePushSubscriptionApiPushSubscriptionDelete(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleDeletePushSubscriptionApiPushSubscriptionDelete(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleCreatePushSubscriptionApiPushSubscriptionPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleCreatePushSubscriptionApiPushSubscriptionPost(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleCreatePushSubscriptionApiPushSubscriptionPost(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // HandleCheckReleaseApiReleaseCheckGet operation middleware
 func (siw *ServerInterfaceWrapper) HandleCheckReleaseApiReleaseCheckGet(w http.ResponseWriter, r *http.Request) {
 
@@ -5389,6 +5470,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/outsource-workers/{id}/relocate", wrapper.HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/outsource-workers/{id}/restart", wrapper.HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/outsource-workers/{id}/stop", wrapper.HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/push/public-key", wrapper.HandleGetPushPublicKeyApiPushPublicKeyGet)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/push/subscription", wrapper.HandleDeletePushSubscriptionApiPushSubscriptionDelete)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/push/subscription", wrapper.HandleCreatePushSubscriptionApiPushSubscriptionPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/release/check", wrapper.HandleCheckReleaseApiReleaseCheckGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/reply-cards", wrapper.HandleListReplyCardsApiReplyCardsGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/reply-cards", wrapper.HandleCreateReplyCardApiReplyCardsPost)

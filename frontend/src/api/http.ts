@@ -50,6 +50,7 @@ import type {
   ChatMessage,
   ChatReadReceipt,
   ChatAttachmentInput,
+  PushSubscriptionInput,
   GalleryAttachment,
   MemberPatch,
   WebhookEndpoint,
@@ -1368,6 +1369,27 @@ export const httpApi: Api = {
     if (patch.customThemes !== undefined) body.custom_themes = patch.customThemes;
     const wire = unwrap(await client.PATCH("/api/settings", { body }));
     return toServerSettings(wire);
+  },
+
+  async getPushPublicKey(): Promise<string> {
+    const wire = unwrap(await client.GET("/api/push/public-key"));
+    return wire.public_key;
+  },
+
+  async savePushSubscription(subscription: PushSubscriptionInput): Promise<void> {
+    unwrap(
+      await client.POST("/api/push/subscription", {
+        body: {
+          endpoint: subscription.endpoint,
+          expiration_time: subscription.expirationTime,
+          keys: subscription.keys,
+        },
+      }),
+    );
+  },
+
+  async removePushSubscription(endpoint: string): Promise<void> {
+    unwrap(await client.DELETE("/api/push/subscription", { body: { endpoint } }));
   },
 
   async triggerUpgrade(): Promise<void> {

@@ -232,6 +232,11 @@ func (s *apiServer) openReplyCard(actor string, body ReplyCardCreateDTO, taskID,
 		map[string]any{"id": msg.ID, "from": msg.Sender, "to": msg.Recipient},
 		audienceMembers(msg.Sender, msg.Recipient), actor)
 	s.publishReplyCard(card, actor)
+	s.enqueueWebPush(webPushPayload{
+		Kind: "reply_card", ChatID: msg.ID, ReplyCardID: card.ID,
+		Title: "OffiCraft：需要你決定", Body: "你有一張新的請示卡。",
+		NeedsDecision: card.Status == replyCardStatusWaiting,
+	})
 	return &card, "", nil
 }
 

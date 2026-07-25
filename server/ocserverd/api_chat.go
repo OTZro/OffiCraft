@@ -352,6 +352,12 @@ func (s *apiServer) HandlePostChatApiChatPost(w http.ResponseWriter, r *http.Req
 	s.hub.Publish("chat", "patch", "chat", wireOwnerID+"::"+msg.ID,
 		map[string]any{"id": msg.ID, "from": msg.Sender, "to": msg.Recipient},
 		audienceMembers(msg.Sender, msg.Recipient), msg.Sender)
+	if msg.Recipient == wireOwnerID && msg.Sender != wireOwnerID {
+		s.enqueueWebPush(webPushPayload{
+			Kind: "chat", ChatID: msg.ID, ChatPeerID: msg.Sender, Title: "OffiCraft 有新訊息",
+			Body: "你有一則新訊息。",
+		})
+	}
 	writeJSON(w, http.StatusOK, s.servedChatMessageDTO(msg))
 }
 

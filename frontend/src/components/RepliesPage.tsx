@@ -61,7 +61,7 @@ function handledTsOf(card: ReplyCard): number | null {
     : card.answeredTs;
 }
 
-export function RepliesPage() {
+export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
   const { t } = useI18n();
   // Light roster (T-cf91): the page attributes each card to its asker by
   // name + role only, so it takes the identity-only projection AND does not
@@ -115,6 +115,26 @@ export function RepliesPage() {
   // A question attachment opened full-size (null = closed) — ONE page-level
   // shared Lightbox serves every card on the page.
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+
+  // A notification tap carries the card id in the hash.  Waiting cards are
+  // already loaded; a handled one needs its collapsed pane fetched and opened
+  // before it can be located.  Keeping this in the URL makes the destination
+  // refresh-safe and works equally for an existing or newly opened PWA window.
+  useEffect(() => {
+    if (!replyCardId) return;
+    if (!waiting.some((card) => card.id === replyCardId) && !handledLoaded) {
+      setHandledOpen(true);
+      void loadHandled();
+    }
+  }, [replyCardId, waiting, handledLoaded, loadHandled]);
+
+  useEffect(() => {
+    if (!replyCardId) return;
+    const card = document.getElementById(`reply-card-${replyCardId}`);
+    if (!card) return;
+    card.scrollIntoView({ block: "center" });
+    card.focus({ preventScroll: true });
+  }, [replyCardId, waiting, handled, handledOpen]);
 
   function toggleHandled() {
     setHandledOpen((wasOpen) => {
@@ -322,7 +342,7 @@ export function RepliesPage() {
 
   function renderWaitingCard(card: ReplyCard) {
     return (
-      <article key={card.id} className="reply-card" data-testid="waiting-card">
+      <article key={card.id} id={`reply-card-${card.id}`} tabIndex={-1} className="reply-card" data-testid="waiting-card">
         {renderHead(
           card,
           // Two stamps, one column: the ABSOLUTE opened-at (date always
@@ -365,6 +385,8 @@ export function RepliesPage() {
     return (
       <article
         key={card.id}
+        id={`reply-card-${card.id}`}
+        tabIndex={-1}
         className={`reply-card ${
           expired ? "reply-card--expired" : "reply-card--answered"
         }`}

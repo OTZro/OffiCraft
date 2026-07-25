@@ -19,6 +19,8 @@
  *   #office/worker/<workerId>/from/replies        → worker detail, same 返回
  *                                                   override as above
  *   #replies                                      → awaiting-reply page
+ *   #replies/card/<replyCardId>                   → awaiting-reply page,
+ *                                                   locate that card
  *   #tasks                                        → tasks page (M3)
  *   #tasks/<taskId>                               → tasks page, located on <taskId>
  *   #tasks/executor/<memberId>                    → tasks page, filtered to that
@@ -46,6 +48,8 @@ import { useCallback, useMemo, useSyncExternalStore } from "react";
 
 export interface HashRoute {
   page: "office" | "replies" | "tasks" | "monitor" | "guide" | "settings";
+  /** replies only — locate and focus this card (e.g. a Web Push tap). */
+  replyCardId?: string;
   /** office only — the member whose chat is open. */
   chatId?: string;
   /** office only, requires chatId — the message the chat locates + highlights
@@ -141,7 +145,11 @@ export function parseHash(raw: string): HashRoute {
     return { page: "settings" };
   }
 
-  if (head === "replies") return { page: "replies" };
+  if (head === "replies") {
+    return rest[0] === "card" && rest[1]
+      ? { page: "replies", replyCardId: rest[1] }
+      : { page: "replies" };
+  }
 
   if (head === "tasks") {
     // #tasks/executor/<memberId> narrows the list by 執行者; any other trailing
@@ -207,7 +215,10 @@ export function formatHash(route: HashRoute): string {
     }
     return "#settings";
   }
-  if (route.page === "replies") return "#replies";
+  if (route.page === "replies")
+    return route.replyCardId
+      ? `#replies/card/${encodeURIComponent(route.replyCardId)}`
+      : "#replies";
   if (route.page === "tasks") {
     // executor (filter) and taskId (single-task anchor) are mutually exclusive
     // — opposite semantics (narrow vs. override-all). executor wins if both are

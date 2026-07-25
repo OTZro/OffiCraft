@@ -36,6 +36,16 @@ export const en: Dict = {
     loadError: "Failed to load the user guide. Please try again.",
     empty: "No guide pages yet",
   },
+  notifications: {
+    title: "Turn on notifications",
+    description: "This device will notify you about new messages and asks that need your decision.",
+    enable: "Turn on notifications",
+    enabled: "Notifications are on for this device",
+    disable: "Turn off notifications",
+    unsupported: "This browser does not support push notifications.",
+    denied: "Notifications are blocked. Allow OffiCraft notifications in your browser settings.",
+    failed: "Could not set up notifications. Please try again.",
+  },
   // ── Tasks page (M3 task cards) ──
   tasks: {
     title: "Tasks",

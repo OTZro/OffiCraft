@@ -86,6 +86,27 @@
   {
     "auth": "gated",
     "mcp_tool": null,
+    "method": "GET",
+    "path": "/api/push/public-key",
+    "requires": "owner"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
+    "method": "POST",
+    "path": "/api/push/subscription",
+    "requires": "owner"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
+    "method": "DELETE",
+    "path": "/api/push/subscription",
+    "requires": "owner"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
     "method": "POST",
     "path": "/api/update/upgrade",
     "requires": "owner"

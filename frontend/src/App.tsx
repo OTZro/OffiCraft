@@ -23,6 +23,7 @@ import { SettingsPage } from "./components/SettingsPage";
 import { ProfileDropdown } from "./components/ProfileDropdown";
 import { OnboardingBanner } from "./components/OnboardingBanner";
 import { InlineEdit } from "./components/InlineEdit";
+import { PushNotifications } from "./components/PushNotifications";
 import { useOrgName } from "./hooks/useOrgName";
 import { useOwnerName } from "./hooks/useOwnerName";
 import { useReplyCardCount } from "./hooks/useReplyCardCount";
@@ -181,6 +182,7 @@ export default function App({ onLogout }: { onLogout?: () => void } = {}) {
           automatic first-run setup did not produce a working studio. Renders
           nothing at all unless that run actually failed. */}
       <OnboardingBanner />
+      <PushNotifications />
 
       <nav className="nav-tabs">
         <div className="nav-tabs__seg">
@@ -276,7 +278,7 @@ export default function App({ onLogout }: { onLogout?: () => void } = {}) {
         ) : tab === "office" ? (
           <OfficePage />
         ) : tab === "replies" ? (
-          <RepliesPage />
+          <RepliesPage replyCardId={route.replyCardId} />
         ) : tab === "tasks" ? (
           <TasksPage />
         ) : tab === "guide" ? (

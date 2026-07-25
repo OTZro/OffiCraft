@@ -1712,6 +1712,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/push/public-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the VAPID public key used to subscribe this owner's browser.
+         * @description Return the server's VAPID public key for the authenticated owner's browser subscription.
+         */
+        get: operations["handle_get_push_public_key_api_push_public_key_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/push/subscription": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save a Web Push subscription for this owner.
+         * @description Create or refresh the authenticated owner's Web Push subscription.
+         */
+        post: operations["handle_create_push_subscription_api_push_subscription_post"];
+        /**
+         * Remove a Web Push subscription for this owner.
+         * @description Remove the authenticated owner's Web Push subscription by endpoint.
+         */
+        delete: operations["handle_delete_push_subscription_api_push_subscription_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/reply-cards": {
         parameters: {
             query?: never;
@@ -4569,6 +4613,32 @@ export interface components {
             version: string;
         };
         /**
+         * PushPublicKeyDTO
+         * @description The base64url VAPID public key a browser passes to PushManager.subscribe.
+         */
+        PushPublicKeyDTO: {
+            public_key: string;
+        };
+        /**
+         * PushSubscriptionCreateDTO
+         * @description One browser Web Push subscription, scoped to the authenticated owner.
+         */
+        PushSubscriptionCreateDTO: {
+            endpoint: string;
+            expiration_time?: number | null;
+            keys: {
+                auth: string;
+                p256dh: string;
+            };
+        };
+        /**
+         * PushSubscriptionDeleteDTO
+         * @description The endpoint identity of a browser subscription to remove.
+         */
+        PushSubscriptionDeleteDTO: {
+            endpoint: string;
+        };
+        /**
          * ReleaseCheckDTO
          * @description Response of `GET /api/release/check` (owner-gated) — the explicit
          *     檢查更新 button behind the software-update card. The server asks GitHub
@@ -5113,6 +5183,12 @@ export interface components {
          */
         SettingsDTO: {
             /**
+             * Codex Compaction Threshold
+             * @description Codex context-compaction threshold, 1 through 10.
+             * @default 3
+             */
+            codex_compaction_threshold: number;
+            /**
              * Display Language
              * @description The owner's cockpit language (T-0b41-p2). "" = never set — the frontend keeps its localStorage cache / default; reconciled in at login as the cross-device source of truth.
              * @default
@@ -5131,8 +5207,7 @@ export interface components {
              */
             custom_themes: components["schemas"]["ThemeBundleDTO"][];
             /** Handover Pct */
-             handover_pct: number;
-             codex_compaction_threshold: number;
+            handover_pct: number;
             /**
              * Onboarding
              * @description The first-run onboarding report (T-ba62), or null when onboarding never ran on this database. Owner-gated by virtue of living on GET /api/settings — a failed step's detail can carry local paths, so it must never reach the PUBLIC /api/auth/status probe.
@@ -5180,6 +5255,11 @@ export interface components {
          */
         SettingsUpdateDTO: {
             /**
+             * Codex Compaction Threshold
+             * @description Codex context-compaction threshold, 1 through 10.
+             */
+            codex_compaction_threshold?: number | null;
+            /**
              * Display Language
              * @description The owner's cockpit language (T-0b41-p2) — trimmed; "" clears it back to unset. Must be one of zh, en (or ""); anything else is a 422.
              */
@@ -5196,7 +5276,6 @@ export interface components {
             custom_themes?: components["schemas"]["ThemeBundleDTO"][] | null;
             /** Handover Pct */
             handover_pct?: number | null;
-            codex_compaction_threshold?: number | null;
             /**
              * Org Name
              * @description The studio display name (T-d693) — trimmed, max 80 runes; "" clears it back to the localized default. A value longer than 80 runes is a 422.
@@ -9501,6 +9580,124 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ErrorEnvelopeDTO"];
                 };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_get_push_public_key_api_push_public_key_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushPublicKeyDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_create_push_subscription_api_push_subscription_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PushSubscriptionCreateDTO"];
+            };
+        };
+        responses: {
+            /** @description Subscription saved. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_delete_push_subscription_api_push_subscription_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PushSubscriptionDeleteDTO"];
+            };
+        };
+        responses: {
+            /** @description Subscription removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Client error (unified error envelope). */
             "4XX": {

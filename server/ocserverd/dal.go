@@ -21,6 +21,16 @@ type DAL struct {
 	db *sql.DB
 }
 
+// PushSubscription is one browser endpoint registered by the single owner.
+// Endpoint is the browser-provided natural key; re-subscribing replaces its
+// short-lived encryption material rather than accumulating duplicate rows.
+type PushSubscription struct {
+	Endpoint       string
+	P256dh         string
+	Auth           string
+	ExpirationTime *float64
+}
+
 func NewDAL(db *sql.DB) *DAL {
 	return &DAL{db: db}
 }
@@ -1302,6 +1312,48 @@ func (d *DAL) PutSetting(key, value string) error {
 		INSERT INTO setting (key, value, updated_at) VALUES (?, ?, ?)
 		ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
 		key, value, nowSecs())
+	return err
+}
+
+// PutPushSubscription creates or refreshes one browser subscription.
+func (d *DAL) PutPushSubscription(s PushSubscription) error {
+	_, err := d.db.Exec(`
+		INSERT INTO push_subscription (endpoint, p256dh, auth, expiration_time, created_ts, updated_ts)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(endpoint) DO UPDATE SET
+			p256dh = excluded.p256dh, auth = excluded.auth,
+			expiration_time = excluded.expiration_time, updated_ts = excluded.updated_ts`,
+		s.Endpoint, s.P256dh, s.Auth, s.ExpirationTime, nowSecs(), nowSecs())
+	return err
+}
+
+// ListPushSubscriptions returns the current delivery targets. The table is
+// deliberately owner-scoped by the studio's single-owner invariant.
+func (d *DAL) ListPushSubscriptions() ([]PushSubscription, error) {
+	rows, err := d.db.Query(`SELECT endpoint, p256dh, auth, expiration_time FROM push_subscription`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PushSubscription
+	for rows.Next() {
+		var s PushSubscription
+		var expiration sql.NullFloat64
+		if err := rows.Scan(&s.Endpoint, &s.P256dh, &s.Auth, &expiration); err != nil {
+			return nil, err
+		}
+		if expiration.Valid {
+			s.ExpirationTime = &expiration.Float64
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// DeletePushSubscription is intentionally idempotent: browsers commonly
+// unregister after a 404/410 delivery receipt and may retry during shutdown.
+func (d *DAL) DeletePushSubscription(endpoint string) error {
+	_, err := d.db.Exec(`DELETE FROM push_subscription WHERE endpoint = ?`, endpoint)
 	return err
 }
 

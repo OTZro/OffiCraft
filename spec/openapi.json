@@ -2469,6 +2469,35 @@
         "title": "ProbeVersionDTO",
         "type": "object"
       },
+      "PushPublicKeyDTO": {
+        "description": "The base64url VAPID public key a browser passes to PushManager.subscribe.",
+        "properties": {"public_key": {"type": "string"}},
+        "required": ["public_key"],
+        "title": "PushPublicKeyDTO",
+        "type": "object"
+      },
+      "PushSubscriptionCreateDTO": {
+        "description": "One browser Web Push subscription, scoped to the authenticated owner.",
+        "properties": {
+          "endpoint": {"type": "string"},
+          "expiration_time": {"anyOf": [{"type": "number"}, {"type": "null"}]},
+          "keys": {
+            "properties": {"auth": {"type": "string"}, "p256dh": {"type": "string"}},
+            "required": ["p256dh", "auth"],
+            "type": "object"
+          }
+        },
+        "required": ["endpoint", "keys"],
+        "title": "PushSubscriptionCreateDTO",
+        "type": "object"
+      },
+      "PushSubscriptionDeleteDTO": {
+        "description": "The endpoint identity of a browser subscription to remove.",
+        "properties": {"endpoint": {"type": "string"}},
+        "required": ["endpoint"],
+        "title": "PushSubscriptionDeleteDTO",
+        "type": "object"
+      },
       "ReleaseCheckDTO": {
         "description": "Response of `GET /api/release/check` (owner-gated) — the explicit\n檢查更新 button behind the software-update card. The server asks GitHub\nReleases (repo pkyosx/OffiCraft, anonymous — no token, no configuration)\nfor the newest admissible release SYNCHRONOUSLY (bounded; a short reuse\nwindow absorbs repeated clicks) and orders its tag against the running\n`version` (semver). `status` is \"up_to_date\" (the running build is the\nnewest — running >= latest, nothing is published at all, or a version\nlabel is unorderable — logged server-side, never presented as an update), \"update_available\" (`latest_tag` +\n`release_url` then point at the newer release; applying it is a MANUAL\nstep — download the asset and follow install.sh — unless the\n`updater_auto_update` setting is armed), or \"unknown\" (GitHub unreachable\n/ not answering — the honest degraded verdict, still a 200).",
         "properties": {
@@ -3350,6 +3379,12 @@
       "SettingsDTO": {
         "description": "The owner-adjustable settings surface (`GET /api/settings`). `token_ttl` —\nthe owner-login JWT lifetime (seconds). `handover_pct` — the context\nhandover threshold. `outsource_max_parallel` — the global cap on\nconcurrently live outsource workers (-1 = unlimited, 0 pauses assignment).\n`updater_receive_beta` — whether the GitHub-release update check also\nadmits prereleases (default false: official releases only).\n`updater_auto_update` — arms unattended background self-upgrade to the\nnewest admissible GitHub release (default false: upgrading stays an\nexplicit owner action). `org_name` — the studio display name (\"\" = unset).\n`owner_name` — the owner's display nickname (\"\" = unset). `display_theme` /\n`display_language` — the owner's cockpit visual prefs (\"\" = unset).",
         "properties": {
+          "codex_compaction_threshold": {
+            "default": 3,
+            "description": "Codex context-compaction threshold, 1 through 10.",
+            "title": "Codex Compaction Threshold",
+            "type": "integer"
+          },
           "display_language": {
             "default": "",
             "description": "The owner's cockpit language (T-0b41-p2). \"\" = never set — the frontend keeps its localStorage cache / default; reconciled in at login as the cross-device source of truth.",
@@ -3428,6 +3463,14 @@
       "SettingsUpdateDTO": {
         "description": "Partial settings edit (`PATCH /api/settings`) — only supplied fields change,\neffective immediately (no restart). `token_ttl` MUST be one of 43200 / 86400 /\n604800 / 2592000 seconds (12h / 24h / 7d / 30d — a whitelist, so a stray 0 can\nnever lock every future login out); `handover_pct` MUST be 40..90 (the warn\nband sits at 40 — a handover threshold below it would fire before the\nwarning). Anything else is a 422. `outsource_max_parallel` MUST be -1..20 (-1 = 無限/unlimited — no global cap; 0 pauses outsource assignment).\n`updater_receive_beta` toggles whether the GitHub-release update check also\nadmits prereleases; `updater_auto_update` toggles unattended background\nself-upgrade to the newest admissible release (both booleans, default false;\nthe manual upgrade endpoint is unaffected).",
         "properties": {
+          "codex_compaction_threshold": {
+            "anyOf": [
+              {"type": "integer"},
+              {"type": "null"}
+            ],
+            "description": "Codex context-compaction threshold, 1 through 10.",
+            "title": "Codex Compaction Threshold"
+          },
           "display_language": {
             "anyOf": [
               {
@@ -9311,6 +9354,42 @@
           }
         },
         "summary": "Check GitHub Releases for a newer official OffiCraft version."
+      }
+    },
+    "/api/push/public-key": {
+      "get": {
+        "description": "Return the server's VAPID public key for the authenticated owner's browser subscription.",
+        "operationId": "handle_get_push_public_key_api_push_public_key_get",
+        "responses": {
+          "200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/PushPublicKeyDTO"}}}, "description": "Successful Response"},
+          "4XX": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelopeDTO"}}}, "description": "Client error (unified error envelope)."},
+          "5XX": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelopeDTO"}}}, "description": "Server error (unified error envelope)."}
+        },
+        "summary": "Read the VAPID public key used to subscribe this owner's browser."
+      }
+    },
+    "/api/push/subscription": {
+      "post": {
+        "description": "Create or refresh the authenticated owner's Web Push subscription.",
+        "operationId": "handle_create_push_subscription_api_push_subscription_post",
+        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/PushSubscriptionCreateDTO"}}}, "required": true},
+        "responses": {
+          "204": {"description": "Subscription saved."},
+          "4XX": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelopeDTO"}}}, "description": "Client error (unified error envelope)."},
+          "5XX": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelopeDTO"}}}, "description": "Server error (unified error envelope)."}
+        },
+        "summary": "Save a Web Push subscription for this owner."
+      },
+      "delete": {
+        "description": "Remove the authenticated owner's Web Push subscription by endpoint.",
+        "operationId": "handle_delete_push_subscription_api_push_subscription_delete",
+        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/PushSubscriptionDeleteDTO"}}}, "required": true},
+        "responses": {
+          "204": {"description": "Subscription removed."},
+          "4XX": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelopeDTO"}}}, "description": "Client error (unified error envelope)."},
+          "5XX": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelopeDTO"}}}, "description": "Server error (unified error envelope)."}
+        },
+        "summary": "Remove a Web Push subscription for this owner."
       }
     },
     "/api/reply-cards": {

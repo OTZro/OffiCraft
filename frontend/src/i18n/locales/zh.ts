@@ -27,6 +27,16 @@ export const zh = {
     loadError: "載入使用說明失敗，請稍後重試",
     empty: "還沒有說明頁",
   },
+  notifications: {
+    title: "開啟通知",
+    description: "有新訊息或需要你決定的請示時，會通知這台裝置。",
+    enable: "開啟通知",
+    enabled: "此裝置已開啟通知",
+    disable: "關閉通知",
+    unsupported: "這個瀏覽器不支援推播通知。",
+    denied: "通知權限已被封鎖，請在瀏覽器設定中允許 OffiCraft 通知。",
+    failed: "通知設定失敗，請稍後再試。",
+  },
   // ── 任務頁(M3 任務卡)──
   tasks: {
     title: "任務",

@@ -159,6 +159,18 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			MCPExclude: true, // the owner's cockpit settings, not an agent tool
 		},
 		{
+			Method: http.MethodGet, Path: "/api/push/public-key", Handler: w.HandleGetPushPublicKeyApiPushPublicKeyGet,
+			Auth: authGated, Requires: principalOwner, Summary: "Read the VAPID public key for this owner's browser.", MCPExclude: true,
+		},
+		{
+			Method: http.MethodPost, Path: "/api/push/subscription", Handler: w.HandleCreatePushSubscriptionApiPushSubscriptionPost,
+			Auth: authGated, Requires: principalOwner, Summary: "Save this owner's browser Web Push subscription.", MCPExclude: true,
+		},
+		{
+			Method: http.MethodDelete, Path: "/api/push/subscription", Handler: w.HandleDeletePushSubscriptionApiPushSubscriptionDelete,
+			Auth: authGated, Requires: principalOwner, Summary: "Remove this owner's browser Web Push subscription.", MCPExclude: true,
+		},
+		{
 			Method:     "GET",
 			Path:       "/api/release/check",
 			Handler:    w.HandleCheckReleaseApiReleaseCheckGet,

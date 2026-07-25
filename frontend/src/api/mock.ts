@@ -30,6 +30,7 @@ import type {
   ChatMessage,
   ChatReadReceipt,
   ChatAttachmentInput,
+  PushSubscriptionInput,
   ChatAttachmentView,
   GalleryAttachment,
   MemberPatch,
@@ -2627,6 +2628,20 @@ export const mockApi: Api = {
       mockServerSettings.display_language = patch.displayLanguage.trim();
     }
     return toServerSettings(structuredClone(mockServerSettings));
+  },
+
+  async getPushPublicKey(): Promise<string> {
+    // A valid-size P-256 public-key-shaped value keeps mock-mode consumers
+    // deterministic; real browser subscriptions always use the server key.
+    return "B" + "A".repeat(86);
+  },
+
+  async savePushSubscription(_subscription: PushSubscriptionInput): Promise<void> {
+    // Mock mode intentionally has no push gateway or durable browser targets.
+  },
+
+  async removePushSubscription(_endpoint: string): Promise<void> {
+    // Idempotent, matching the production DELETE endpoint.
   },
 
   async checkRelease(): Promise<ReleaseCheckView> {

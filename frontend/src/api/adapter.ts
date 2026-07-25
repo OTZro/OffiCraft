@@ -127,6 +127,14 @@ export interface ChatAttachmentInput {
   mime?: string;
 }
 
+/** Browser-owned Web Push endpoint. These are encryption keys from the
+ * PushSubscription API, never owner credentials. */
+export interface PushSubscriptionInput {
+  endpoint: string;
+  expirationTime: number | null;
+  keys: { p256dh: string; auth: string };
+}
+
 /** The stored answer on an ANSWERED reply card, in view-model form.
  * `optionIdx` is null for a pure free-text answer (index into the card's
  * `options` otherwise); `attachments` are served refs into the shared
@@ -1377,6 +1385,12 @@ export interface Api {
    * context report). Returns the settings after the change.
    */
   patchServerSettings(patch: ServerSettingsPatch): Promise<ServerSettingsView>;
+  /** Read the VAPID public key used by PushManager.subscribe. */
+  getPushPublicKey(): Promise<string>;
+  /** Save or refresh this browser's Web Push subscription. */
+  savePushSubscription(subscription: PushSubscriptionInput): Promise<void>;
+  /** Remove a browser endpoint after it has been disabled locally. */
+  removePushSubscription(endpoint: string): Promise<void>;
   /**
    * Owner's EXPLICIT upgrade trigger (`POST /api/update/upgrade`) — the
    * software-update card's button (the OPT-IN auto-update setting runs the
