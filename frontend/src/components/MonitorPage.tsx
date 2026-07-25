@@ -1061,7 +1061,7 @@ function contextText(
 ): string {
   const text = pctText(pct, dash);
   return runtime === "codex" && compactions != null
-    ? `${text} · ↻ compact ${compactions}/3`
+    ? `${text} (compact: ${compactions})`
     : text;
 }
 
