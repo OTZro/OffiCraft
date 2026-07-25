@@ -586,6 +586,7 @@ export const en: Dict = {
     machine: "Machine",
     standby: "On standby",
     context: "context",
+    compactionCount: (n: number) => `compact: ${n}`,
     refocus: "Refocus",
     refocusOfflineHint: "Refocus is available only when online",
     refocusing: "Refocusing…",

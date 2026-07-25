@@ -272,7 +272,7 @@ export function AgentDetailPanel({
   const contextText = vm.contextPct != null ? `${Math.round(vm.contextPct)}%` : dash;
   const contextDisplay =
     vm.runtime === "codex" && vm.compactionCount != null
-      ? `${contextText} (compact: ${vm.compactionCount})`
+      ? `${contextText} (${t.mp.compactionCount(vm.compactionCount)})`
       : contextText;
   const costText = vm.cost != null ? formatCost(vm.cost) : dash;
 

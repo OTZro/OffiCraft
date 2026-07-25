@@ -661,6 +661,7 @@ export const zh = {
     machine: "機器",
     standby: "待命中",
     context: "context",
+    compactionCount: (n: number) => `壓縮：${n}`,
     refocus: "重新聚焦",
     refocusOfflineHint: "僅線上可重新聚焦",
     refocusing: "聚焦中…",

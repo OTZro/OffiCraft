@@ -110,6 +110,7 @@ type codexSession struct {
 }
 
 const codexTelemetryThrottle = 30 * time.Second
+const codexAppResponseTimeout = 30 * time.Second
 
 func (s *codexSession) allowUsageReport() bool {
 	s.telemetryMu.Lock()
@@ -199,16 +200,25 @@ func nestedString(obj map[string]any, keys ...string) string {
 }
 
 func (s *codexSession) waitResponse(id int) (appServerMessage, error) {
-	for msg := range s.messages {
-		if messageID(msg) != id {
-			continue
+	timer := time.NewTimer(codexAppResponseTimeout)
+	defer timer.Stop()
+	for {
+		select {
+		case <-timer.C:
+			return nil, fmt.Errorf("app-server request %d timed out after %s", id, codexAppResponseTimeout)
+		case msg, ok := <-s.messages:
+			if !ok {
+				return nil, errors.New("app-server exited before responding")
+			}
+			if messageID(msg) != id {
+				continue
+			}
+			if problem, ok := msg["error"].(map[string]any); ok {
+				return nil, fmt.Errorf("app-server request failed: %v", problem["message"])
+			}
+			return msg, nil
 		}
-		if problem, ok := msg["error"].(map[string]any); ok {
-			return nil, fmt.Errorf("app-server request failed: %v", problem["message"])
-		}
-		return msg, nil
 	}
-	return nil, errors.New("app-server exited before responding")
 }
 
 func (s *codexSession) startTurn(text string) {
