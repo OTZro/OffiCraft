@@ -32,6 +32,7 @@ func buildCodexLaunchCommand(wardenBin, codexBin, workdir, personaFile, tokenFil
 	}
 	pairs := [][2]string{
 		{"OC_BASE", base},
+		{"OC_ID", agentID},
 		{"OC_SESSION", session},
 		{"OC_TMUX_SOCKET", socket},
 	}

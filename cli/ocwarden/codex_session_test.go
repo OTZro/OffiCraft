@@ -38,6 +38,7 @@ func TestBuildCodexLaunchCommandKeepsTokenOutOfArgv(t *testing.T) {
 		"exec /opt/officraft/ocwarden codex-session",
 		"--codex-bin /opt/homebrew/bin/codex",
 		"--effort high",
+		"OC_ID=m-1",
 		"OC_TMUX_SOCKET=officraft-e2e",
 	} {
 		if !strings.Contains(got, want) {
