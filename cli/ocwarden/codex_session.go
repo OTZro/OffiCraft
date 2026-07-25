@@ -10,12 +10,14 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -80,24 +82,66 @@ func codexPersonaInstruction(personaFile, model string) string {
 type appServerMessage map[string]any
 
 type codexSession struct {
-	in          io.WriteCloser
-	messages    <-chan appServerMessage
-	writeMu     sync.Mutex
-	nextID      int
-	threadID    string
-	turnID      string
-	active      bool
-	base        string
-	token       string
-	workdir     string
-	model       string
-	effort      string
-	out         io.Writer
-	compactions int
+	in               io.WriteCloser
+	messages         <-chan appServerMessage
+	writeMu          sync.Mutex
+	nextID           int
+	threadID         string
+	turnID           string
+	active           bool
+	base             string
+	token            string
+	workdir          string
+	model            string
+	effort           string
+	account          string
+	out              io.Writer
+	compactions      int
+	telemetryMu      sync.Mutex
+	lastUsageReport  time.Time
+	forceUsageReport bool
 	// completedCompactions makes the App Server's item/completed stream
 	// idempotent. Replayed notifications must not look like fresh context
 	// compactions and accidentally recycle a just-booted agent.
 	completedCompactions map[string]struct{}
+}
+
+const codexTelemetryThrottle = 30 * time.Second
+
+func (s *codexSession) allowUsageReport() bool {
+	s.telemetryMu.Lock()
+	defer s.telemetryMu.Unlock()
+	now := time.Now()
+	if !s.lastUsageReport.IsZero() && !s.forceUsageReport && now.Sub(s.lastUsageReport) < codexTelemetryThrottle {
+		return false
+	}
+	s.lastUsageReport = now
+	s.forceUsageReport = false
+	return true
+}
+
+// codexAccountKey derives a stable opaque key from Codex's local account id.
+// It never returns credentials or the UUID itself, yet equal ChatGPT accounts
+// on separate machines map to the same monitoring account.
+func codexAccountKey() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	raw, err := os.ReadFile(filepath.Join(home, ".codex", "auth.json"))
+	if err != nil {
+		return ""
+	}
+	var auth struct {
+		Tokens struct {
+			AccountID string `json:"account_id"`
+		} `json:"tokens"`
+	}
+	if json.Unmarshal(raw, &auth) != nil || auth.Tokens.AccountID == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte("officraft-codex-account-v1:" + auth.Tokens.AccountID))
+	return "codex:" + fmt.Sprintf("%x", sum[:])
 }
 
 // activity is the human-readable, tmux-visible companion to the headless
@@ -281,6 +325,9 @@ func (s *codexSession) post(path string, payload map[string]any) {
 }
 
 func (s *codexSession) reportTokenUsage(params map[string]any) {
+	if !s.allowUsageReport() {
+		return
+	}
 	usage, _ := params["tokenUsage"].(map[string]any)
 	total, _ := usage["total"].(map[string]any)
 	last, _ := usage["last"].(map[string]any)
@@ -306,6 +353,33 @@ func (s *codexSession) reportTokenUsage(params map[string]any) {
 	}
 	s.post("/api/monitoring/telemetry", map[string]any{
 		"runtime": "codex", "tokens": tokens, "effort": s.effort,
+		"account": s.account, "account_label": "ChatGPT",
+	})
+}
+
+// reportRateLimits maps the App Server's primary/secondary rolling windows to
+// OffiCraft's existing five_hour/seven_day monitoring shape. When Codex only
+// provides the weekly window, five_hour stays absent rather than fabricated.
+func (s *codexSession) reportRateLimits(snapshot map[string]any) {
+	windows := map[string]any{}
+	for _, key := range []string{"primary", "secondary"} {
+		w, _ := snapshot[key].(map[string]any)
+		mins := jsonNumber(w["windowDurationMins"])
+		used := jsonNumber(w["usedPercent"])
+		if w == nil || mins <= 0 {
+			continue
+		}
+		name := "seven_day"
+		if mins <= 360 {
+			name = "five_hour"
+		}
+		windows[name] = map[string]any{"used_percentage": used, "resets_at": w["resetsAt"]}
+	}
+	if len(windows) == 0 {
+		return
+	}
+	s.post("/api/monitoring/telemetry", map[string]any{
+		"runtime": "codex", "account": s.account, "account_label": "ChatGPT", "rate_limits": windows,
 	})
 }
 
@@ -329,6 +403,9 @@ func (s *codexSession) recordCompaction(params map[string]any) {
 	}
 	s.completedCompactions[id] = struct{}{}
 	s.compactions++
+	s.telemetryMu.Lock()
+	s.forceUsageReport = true
+	s.telemetryMu.Unlock()
 	s.activity("context compacted · count %d", s.compactions)
 }
 
@@ -417,7 +494,7 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 	s := &codexSession{
 		in: stdin, messages: codexAppReader(stdout), nextID: 0,
 		base: env("OC_BASE"), token: env("OC_TOKEN"), workdir: *workdir,
-		model: *model, effort: normalizeCodexEffort(*effort), out: out,
+		model: *model, effort: normalizeCodexEffort(*effort), account: codexAccountKey(), out: out,
 	}
 	s.activity("App Server started · model %s", func() string {
 		if *model == "" {
@@ -436,6 +513,12 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 		return 1
 	}
 	s.notify("initialized", map[string]any{})
+	rateID := s.send("account/rateLimits/read", nil)
+	if response, rateErr := s.waitResponse(rateID); rateErr == nil {
+		if snapshot, _ := response["result"].(map[string]any); snapshot != nil {
+			s.reportRateLimits(snapshot)
+		}
+	}
 	threadParams := map[string]any{
 		"cwd": *workdir, "approvalPolicy": "never", "sandbox": "danger-full-access",
 		"developerInstructions": codexPersonaInstruction(*persona, *model),
@@ -531,6 +614,10 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 				}
 			case "thread/tokenUsage/updated":
 				s.reportTokenUsage(params)
+			case "account/rateLimits/updated":
+				if snapshot, _ := params["rateLimits"].(map[string]any); snapshot != nil {
+					s.reportRateLimits(snapshot)
+				}
 			case "item/completed":
 				s.recordCompaction(params)
 			case "item/tool/requestUserInput", "mcpServer/elicitation/request":
