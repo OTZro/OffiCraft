@@ -554,6 +554,12 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 
 	listenerLines := make(chan string, 32)
 	listenerStarted := false
+	// Telemetry is intentionally in-memory on the server.  A quiet App Server
+	// thread must therefore re-announce its lightweight identity after a server
+	// restart; use the same 30-second cadence as token telemetry, not a noisy
+	// per-event loop.
+	identityHeartbeat := time.NewTicker(codexTelemetryThrottle)
+	defer identityHeartbeat.Stop()
 	var listenerCmd *exec.Cmd
 	defer func() {
 		if listenerCmd != nil && listenerCmd.Process != nil {
@@ -562,6 +568,10 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 	}()
 	for s.messages != nil {
 		select {
+		case <-identityHeartbeat.C:
+			s.post("/api/monitoring/telemetry", map[string]any{
+				"runtime": "codex", "account": s.account, "account_label": "ChatGPT",
+			})
 		case line, ok := <-listenerLines:
 			if !ok {
 				fmt.Fprintln(out, "codex-session: ocagent listen exited; ending session for reconciliation")
