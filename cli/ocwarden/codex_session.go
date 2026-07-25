@@ -513,6 +513,11 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 		return 1
 	}
 	s.notify("initialized", map[string]any{})
+	// Identity is independent of token/rate-limit events. Report it immediately
+	// so a quiet Codex thread still shows its ChatGPT account in OffiCraft.
+	s.post("/api/monitoring/telemetry", map[string]any{
+		"runtime": "codex", "account": s.account, "account_label": "ChatGPT",
+	})
 	rateID := s.send("account/rateLimits/read", nil)
 	if response, rateErr := s.waitResponse(rateID); rateErr == nil {
 		if snapshot, _ := response["result"].(map[string]any); snapshot != nil {

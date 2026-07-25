@@ -29,7 +29,7 @@ import type { TaskReassignInput, TaskView } from "../api/adapter";
 import { useMachines } from "../hooks/useMachines";
 import { useMonitoring } from "../hooks/useMonitoring";
 import { ConfirmModal } from "./ConfirmModal";
-import { CodexModelSelect, EFFORTS, MODEL_QUICK_PICKS } from "./ModelEffortEditor";
+import { CODEX_MODEL_OPTIONS, EFFORTS, MODEL_QUICK_PICKS } from "./ModelEffortEditor";
 
 /** One full-width segmented control — the AssigneeCard toggle's shape, in the
  * dialog's own class namespace. */
@@ -300,12 +300,30 @@ export function TaskReassignDialog({
                   />
                 )}
                 {runtimeDraft === "codex" ? (
-                  <CodexModelSelect
-                    model={modelDraft}
-                    onModelChange={setModelDraft}
-                    className="task-reassign__input"
-                    testId="reassign-model"
-                  />
+                  <>
+                    <Segmented
+                      options={CODEX_MODEL_OPTIONS.map((m) => ({
+                        value: m,
+                        label: m,
+                      }))}
+                      value={
+                        (CODEX_MODEL_OPTIONS as readonly string[]).includes(modelDraft)
+                          ? (modelDraft as (typeof CODEX_MODEL_OPTIONS)[number])
+                          : null
+                      }
+                      onPick={setModelDraft}
+                      testidPrefix="reassign-model"
+                      ariaLabel={t.settings.assigneeModelLabel}
+                    />
+                    <input
+                      className="task-reassign__input"
+                      value={modelDraft}
+                      placeholder={t.settings.assigneeModelPlaceholder}
+                      aria-label={t.settings.assigneeModelPlaceholder}
+                      data-testid="reassign-model"
+                      onChange={(e) => setModelDraft(e.target.value)}
+                    />
+                  </>
                 ) : (
                   <input
                     className="task-reassign__input"

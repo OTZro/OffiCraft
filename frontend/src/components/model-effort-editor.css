@@ -16,11 +16,6 @@
   flex-wrap: wrap;
   margin-top: 4px;
 }
-.me-editor__hint {
-  align-self: center;
-  color: var(--color-text-muted);
-  font-size: 12px;
-}
 .me-editor__input,
 .me-editor__select {
   width: 100%;
