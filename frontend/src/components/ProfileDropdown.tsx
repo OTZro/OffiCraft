@@ -72,6 +72,9 @@ export function ProfileDropdown({
   const [pwdError, setPwdError] = useState<
     "" | "current" | "short" | "mismatch"
   >("");
+  const [pushContactEmail, setPushContactEmail] = useState("");
+  const [pushEmailLoaded, setPushEmailLoaded] = useState(false);
+  const [pushEmailError, setPushEmailError] = useState(false);
 
   // Reset transient view state whenever the menu is (re)opened.
   useEffect(() => {
@@ -100,6 +103,30 @@ export function ProfileDropdown({
     setPwdDone(false);
     setPwdBusy(false);
     setView("password");
+  }
+
+  async function openPreferences() {
+    setView("preferences");
+    setPushEmailError(false);
+    try {
+      const settings = await api.getServerSettings();
+      setPushContactEmail(settings.pushContactEmail);
+      setPushEmailLoaded(true);
+    } catch {
+      setPushEmailLoaded(false);
+      setPushEmailError(true);
+    }
+  }
+
+  async function commitPushContactEmail() {
+    if (!pushEmailLoaded) return;
+    setPushEmailError(false);
+    try {
+      const settings = await api.patchServerSettings({ pushContactEmail });
+      setPushContactEmail(settings.pushContactEmail);
+    } catch {
+      setPushEmailError(true);
+    }
   }
 
   async function handleChangePassword(e: FormEvent) {
@@ -153,7 +180,7 @@ export function ProfileDropdown({
           <button
             type="button"
             className="profile-dd__row"
-            onClick={() => setView("preferences")}
+            onClick={() => void openPreferences()}
           >
             <span className="profile-dd__row-icon">
               <GearIcon size={16} />
@@ -261,6 +288,27 @@ export function ProfileDropdown({
                 {t.profile.langEn}
               </button>
             </div>
+          </div>
+
+          <div className="profile-dd__section">
+            <label className="profile-dd__section-label" htmlFor="push-contact-email">
+              {t.profile.pushContactEmail}
+            </label>
+            <div className="profile-dd__section-hint">{t.profile.pushContactEmailSub}</div>
+            <input
+              id="push-contact-email"
+              className="profile-dd__input"
+              type="email"
+              inputMode="email"
+              autoComplete="email"
+              placeholder={t.profile.pushContactEmailPlaceholder}
+              value={pushContactEmail}
+              disabled={!pushEmailLoaded}
+              onChange={(e) => setPushContactEmail(e.target.value)}
+              onBlur={() => void commitPushContactEmail()}
+              onKeyDown={(e) => { if (e.key === "Enter") void commitPushContactEmail(); }}
+            />
+            {pushEmailError && <div className="profile-dd__error">{t.profile.pushContactEmailError}</div>}
           </div>
 
           <div className="profile-dd__divider" />

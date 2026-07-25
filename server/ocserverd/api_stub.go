@@ -75,6 +75,12 @@ type apiServer struct {
 	// back to the localized default. Owner-writable via PATCH /api/settings so
 	// the nickname syncs across the owner's devices. NOT an agent read path.
 	ownerName string
+	// pushContactEmail is the address handed to the push gateways as the VAPID
+	// subject (DB push.contact_email; T-8a82). Owner-supplied because the server
+	// sits behind a tunnel and cannot know a reachable identity for itself. "" =
+	// never set, and Web Push delivery is then refused rather than attempted
+	// with an address the gateways would reject.
+	pushContactEmail string
 	// displayTheme / displayLanguage are the owner's cockpit visual prefs (DB
 	// display.theme / display.language; T-0b41-p2). Owner-writable via PATCH
 	// /api/settings so they sync across devices, but because they must apply

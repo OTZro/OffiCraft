@@ -5223,6 +5223,12 @@ export interface components {
              * @default
              */
             owner_name: string;
+            /**
+             * Push Contact Email
+             * @description The contact address the push gateways are told to reach us at (T-8a82). "" = never set, and while it is unset no Web Push is delivered at all: Apple rejects the whole VAPID JWT when the address sits on an unreachable domain, so an unset or reserved-domain value would silently kill push on every device.
+             * @default
+             */
+            push_contact_email: string;
             /** Token Ttl */
             token_ttl: number;
             /**
@@ -5282,6 +5288,11 @@ export interface components {
              * @description The owner's display nickname (T-0b41) — trimmed, max 80 runes; "" clears it back to the localized default. A value longer than 80 runes is a 422.
              */
             owner_name?: string | null;
+            /**
+             * Push Contact Email
+             * @description The push contact address (T-8a82) — trimmed, max 254 runes; "" clears it back to unset and stops all Web Push delivery. A value must be a single `local@domain` address whose domain is a real public one: a malformed address, or one on a reserved suffix (.local, .localhost, .internal, .test, .invalid, .example), is a 422 — those are exactly the values the push gateways reject with BadJwtToken, which would take push down silently.
+             */
+            push_contact_email?: string | null;
             /** Outsource Max Parallel */
             outsource_max_parallel?: number | null;
             /** Token Ttl */

@@ -736,6 +736,7 @@ export function toServerSettings(w: WireServerSettings): ServerSettingsView {
     // Owner nickname (T-0b41; schema-optional for DTO-compat — the Go wire
     // always emits it). "" = never set; the profile pill substitutes t.user.
     ownerName: w.owner_name ?? "",
+    pushContactEmail: w.push_contact_email ?? "",
     // Cockpit display prefs (T-0b41-p2; schema-optional for DTO-compat — the Go
     // wire always emits them). "" = never set; the frontend keeps its
     // localStorage cache / default and reconciles a real value in at login.

@@ -3438,6 +3438,12 @@
             "title": "Owner Name",
             "type": "string"
           },
+          "push_contact_email": {
+            "default": "",
+            "description": "The contact address the push gateways are told to reach us at (T-8a82). \"\" = never set, and while it is unset no Web Push is delivered at all: Apple rejects the whole VAPID JWT when the address sits on an unreachable domain, so an unset or reserved-domain value would silently kill push on every device.",
+            "title": "Push Contact Email",
+            "type": "string"
+          },
           "token_ttl": {
             "title": "Token Ttl",
             "type": "integer"
@@ -3544,6 +3550,18 @@
             ],
             "description": "The owner's display nickname (T-0b41) — trimmed, max 80 runes; \"\" clears it back to the localized default. A value longer than 80 runes is a 422.",
             "title": "Owner Name"
+          },
+          "push_contact_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The push contact address (T-8a82) — trimmed, max 254 runes; \"\" clears it back to unset and stops all Web Push delivery. A value must be a single `local@domain` address whose domain is a real public one: a malformed address, or one on a reserved suffix (.local, .localhost, .internal, .test, .invalid, .example), is a 422 — those are exactly the values the push gateways reject with BadJwtToken, which would take push down silently.",
+            "title": "Push Contact Email"
           },
           "outsource_max_parallel": {
             "anyOf": [

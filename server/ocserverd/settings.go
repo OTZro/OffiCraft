@@ -90,6 +90,14 @@ const (
 	// pill falls back to the localized default label (frontend). Unlike
 	// org.name it is NOT an agent read path — it never enters get_global_context.
 	settingOwnerName = "owner.name"
+	// settingPushContactEmail (T-8a82) is the contact address handed to the push
+	// gateways as the VAPID subject. It is owner-supplied because the server
+	// cannot know a reachable identity for itself — it sits behind a tunnel and
+	// its public hostname is a deployment fact. "" (default) = never set, and
+	// delivery is then refused outright rather than attempted with a made-up
+	// address: Apple answers BadJwtToken for anything on an unreachable domain,
+	// which takes push down on every device with no visible error.
+	settingPushContactEmail = "push.contact_email"
 	// settingDisplayTheme (T-0b41-p2) is the owner's cockpit visual theme
 	// ("office", the only built-in, or a custom theme id). Server-backed (PATCH
 	// /api/settings) so the choice
@@ -135,6 +143,7 @@ type authSettings struct {
 	updaterAutoUpdate        bool             // updater.auto_update (default false = manual upgrades only)
 	orgName                  string           // org.name ("" = never set → localized default in the topbar)
 	ownerName                string           // owner.name ("" = never set → localized default in the profile pill)
+	pushContactEmail         string           // push.contact_email ("" = never set → Web Push delivery is refused)
 	displayTheme             string           // display.theme ("" = never set → frontend cache/default)
 	displayLanguage          string           // display.language ("" = never set → frontend cache/default)
 	displayCustomThemes      []ThemeBundleDTO // display.custom_themes (nil = none saved)
@@ -297,6 +306,11 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 		return out, err
 	} else if v != nil {
 		out.ownerName = *v
+	}
+	if v, err := d.GetSetting(settingPushContactEmail); err != nil {
+		return out, err
+	} else if v != nil {
+		out.pushContactEmail = *v
 	}
 	if v, err := d.GetSetting(settingDisplayTheme); err != nil {
 		return out, err

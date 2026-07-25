@@ -1375,7 +1375,10 @@ type SettingsDTO struct {
 	OutsourceMaxParallel *int    `json:"outsource_max_parallel,omitempty"`
 
 	// OwnerName The owner's display nickname shown in the cockpit topbar profile pill (T-0b41). "" = never set — the pill falls back to the localized default label.
-	OwnerName          *string `json:"owner_name,omitempty"`
+	OwnerName *string `json:"owner_name,omitempty"`
+
+	// PushContactEmail The contact address the push gateways are told to reach us at (T-8a82). "" = never set, and while it is unset no Web Push is delivered at all: Apple rejects the whole VAPID JWT when the address sits on an unreachable domain, so an unset or reserved-domain value would silently kill push on every device.
+	PushContactEmail   *string `json:"push_contact_email,omitempty"`
 	TokenTtl           int     `json:"token_ttl"`
 	UpdaterAutoUpdate  *bool   `json:"updater_auto_update,omitempty"`
 	UpdaterReceiveBeta *bool   `json:"updater_receive_beta,omitempty"`
@@ -1410,7 +1413,10 @@ type SettingsUpdateDTO struct {
 	OutsourceMaxParallel *int    `json:"outsource_max_parallel,omitempty"`
 
 	// OwnerName The owner's display nickname (T-0b41) — trimmed, max 80 runes; "" clears it back to the localized default. A value longer than 80 runes is a 422.
-	OwnerName          *string `json:"owner_name,omitempty"`
+	OwnerName *string `json:"owner_name,omitempty"`
+
+	// PushContactEmail The push contact address (T-8a82) — trimmed, max 254 runes; "" clears it back to unset and stops all Web Push delivery. A value must be a single `local@domain` address whose domain is a real public one: a malformed address, or one on a reserved suffix (.local, .localhost, .internal, .test, .invalid, .example), is a 422 — those are exactly the values the push gateways reject with BadJwtToken, which would take push down silently.
+	PushContactEmail   *string `json:"push_contact_email,omitempty"`
 	TokenTtl           *int    `json:"token_ttl,omitempty"`
 	UpdaterAutoUpdate  *bool   `json:"updater_auto_update,omitempty"`
 	UpdaterReceiveBeta *bool   `json:"updater_receive_beta,omitempty"`

@@ -1341,6 +1341,7 @@ export const httpApi: Api = {
       updater_auto_update?: boolean;
       org_name?: string;
       owner_name?: string;
+      push_contact_email?: string;
       display_theme?: string;
       display_language?: string;
       // The wire accepts the full ThemeBundle shape (id/name/colors + optional
@@ -1362,6 +1363,7 @@ export const httpApi: Api = {
     }
     if (patch.orgName !== undefined) body.org_name = patch.orgName;
     if (patch.ownerName !== undefined) body.owner_name = patch.ownerName;
+    if (patch.pushContactEmail !== undefined) body.push_contact_email = patch.pushContactEmail;
     if (patch.displayTheme !== undefined) body.display_theme = patch.displayTheme;
     if (patch.displayLanguage !== undefined) {
       body.display_language = patch.displayLanguage;

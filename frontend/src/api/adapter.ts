@@ -600,6 +600,9 @@ export interface ServerSettingsView {
   /** The owner's display nickname shown in the topbar profile pill (T-0b41).
    * "" = never set — the caller falls back to the localized default (`t.user`). */
   ownerName: string;
+  /** Contact email used as this deployment's Web Push VAPID identity. Empty
+   * means delivery is disabled until the owner configures a public address. */
+  pushContactEmail: string;
   /** The owner's cockpit visual theme (T-0b41-p2). "" = never set — the
    * frontend keeps its localStorage cache / default. Server = cross-device
    * truth, reconciled in at login (see i18n/index.tsx). */
@@ -656,6 +659,8 @@ export interface ServerSettingsPatch {
   /** The owner's display nickname (T-0b41); trimmed server-side, max 80 runes,
    * "" clears it back to the localized default (server 422s anything longer). */
   ownerName?: string;
+  /** Web Push VAPID contact email; empty clears it and disables delivery. */
+  pushContactEmail?: string;
   /** The owner's cockpit visual theme (T-0b41-p2); "" (unset) | "office" (the
    * built-in) | an existing custom theme id. The server 422s anything else. */
   displayTheme?: string;

@@ -62,6 +62,10 @@ type settingsDTO struct {
 	// OwnerName is the owner's display nickname (owner.name; T-0b41). "" = never
 	// set — the topbar's profile pill falls back to the localized default label.
 	OwnerName string `json:"owner_name"`
+	// PushContactEmail is the address handed to the push gateways as the VAPID
+	// subject (push.contact_email; T-8a82). "" = never set, and Web Push is then
+	// not delivered at all.
+	PushContactEmail string `json:"push_contact_email"`
 	// DisplayTheme is the owner's cockpit visual theme (display.theme;
 	// T-0b41-p2). "" = never set — the frontend keeps its localStorage cache /
 	// default. The frontend reconciles this server value in at login.

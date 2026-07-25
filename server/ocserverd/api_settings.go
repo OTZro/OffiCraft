@@ -10,6 +10,8 @@ package main
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -58,6 +60,43 @@ const maxOrgNameLen = 80
 // topbar pill label, not a document. Whitespace is trimmed; "" clears it back
 // to the localized default. Counted in runes so CJK names get the full budget.
 const maxOwnerNameLen = 80
+
+// maxPushContactEmailLen caps the push contact address (push.contact_email;
+// T-8a82) at the RFC 5321 maximum length of an address.
+const maxPushContactEmailLen = 254
+
+// reservedEmailDomainSuffixes are the domain suffixes that cannot resolve on
+// the public internet. A VAPID subject on one of them makes Apple reject the
+// signed token wholesale (BadJwtToken) before it looks at any subscription, so
+// accepting one here would silently take push down on every device — the exact
+// failure T-8a82 was opened for. Rejected at the edge instead.
+var reservedEmailDomainSuffixes = []string{".local", ".localhost", ".internal", ".test", ".invalid", ".example"}
+
+// validatePushContactEmail accepts a single trimmed local@domain address on a
+// public domain. It is deliberately stricter than RFC 5322: the address is not
+// a mailbox we deliver to, it is an identity a push gateway validates.
+func validatePushContactEmail(address string) error {
+	if utf8.RuneCountInString(address) > maxPushContactEmailLen {
+		return fmt.Errorf("push_contact_email must be at most %d characters", maxPushContactEmailLen)
+	}
+	local, domain, ok := strings.Cut(address, "@")
+	if !ok || local == "" || domain == "" || strings.Contains(domain, "@") {
+		return errors.New("push_contact_email must be an email address like name@example.com")
+	}
+	if strings.ContainsAny(address, " \t\r\n:,;<>") {
+		return errors.New("push_contact_email must be a single plain address, without a mailto: prefix or display name")
+	}
+	if !strings.Contains(domain, ".") || strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
+		return errors.New("push_contact_email must use a real public domain")
+	}
+	lowered := strings.ToLower(domain)
+	for _, reserved := range reservedEmailDomainSuffixes {
+		if strings.HasSuffix(lowered, reserved) {
+			return fmt.Errorf("push_contact_email cannot use the reserved domain %q — push gateways reject it", domain)
+		}
+	}
+	return nil
+}
 
 // GET /api/auth/status — PUBLIC: the single first-run bit the UI branches on.
 func (s *apiServer) HandleAuthStatusApiAuthStatusGet(w http.ResponseWriter, r *http.Request) {
@@ -233,6 +272,16 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 			return
 		}
 	}
+	var pushContactEmail string
+	if body.PushContactEmail != nil {
+		pushContactEmail = strings.TrimSpace(*body.PushContactEmail)
+		if pushContactEmail != "" {
+			if err := validatePushContactEmail(pushContactEmail); err != nil {
+				writeError(w, http.StatusUnprocessableEntity, err.Error())
+				return
+			}
+		}
+	}
 	// custom_themes (T-16a1 P2): replace the saved bundle set. Validated in full
 	// (shape + token whitelist + concrete-colour grammar) BEFORE anything is
 	// written — a bad bundle 422s and nothing is stored.
@@ -344,6 +393,14 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		}
 		s.ownerName = ownerName
 	}
+	if body.PushContactEmail != nil && pushContactEmail != s.pushContactEmail {
+		if err := s.dal.PutSetting(settingPushContactEmail, pushContactEmail); err != nil {
+			s.settingsMu.Unlock()
+			internalError(w, err)
+			return
+		}
+		s.pushContactEmail = pushContactEmail
+	}
 	// custom_themes + display.theme are coupled: replacing the bundle set can
 	// orphan the active theme, so write the set first, then resolve the theme
 	// against the POST-patch set (an explicit theme wins; otherwise a now-dangling
@@ -414,6 +471,7 @@ func (s *apiServer) settingsView() settingsDTO {
 		UpdaterAutoUpdate:        s.updaterAutoUpdate,
 		OrgName:                  s.orgName,
 		OwnerName:                s.ownerName,
+		PushContactEmail:         s.pushContactEmail,
 		DisplayTheme:             s.displayTheme,
 		DisplayLanguage:          s.displayLanguage,
 		CustomThemes:             customThemes,

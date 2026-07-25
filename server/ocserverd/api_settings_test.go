@@ -349,6 +349,31 @@ func TestOwnerNameSettingRoundTrips(t *testing.T) {
 	}
 }
 
+func TestPushContactEmailSettingRoundTripsAndRejectsUnsafeDomains(t *testing.T) {
+	api, srv, d, _ := newSettingsTestServer(t, "owner-pass")
+	status, data := doJSON(t, "POST", srv.URL+"/api/login", "", `{"password":"owner-pass"}`)
+	if status != http.StatusOK {
+		t.Fatalf("login: %d", status)
+	}
+	owner := data["token"].(string)
+
+	if status, data = doJSON(t, "GET", srv.URL+"/api/settings", owner, ""); status != http.StatusOK || data["push_contact_email"] != "" {
+		t.Fatalf("push_contact_email default must be empty: %d %v", status, data)
+	}
+	if status, _ = doJSON(t, "PATCH", srv.URL+"/api/settings", owner, `{"push_contact_email":"notify@officraft.local"}`); status != http.StatusUnprocessableEntity {
+		t.Fatalf("reserved VAPID contact domain must 422: %d", status)
+	}
+	if v, err := d.GetSetting(settingPushContactEmail); err != nil || v != nil {
+		t.Fatalf("rejected contact email must not persist: %v %v", v, err)
+	}
+	if status, data = doJSON(t, "PATCH", srv.URL+"/api/settings", owner, `{"push_contact_email":"  notify@example.org  "}`); status != http.StatusOK || data["push_contact_email"] != "notify@example.org" {
+		t.Fatalf("contact email patch must trim + echo: %d %v", status, data)
+	}
+	if got := api.pushVAPIDSubscriber(); got != "notify@example.org" {
+		t.Fatalf("contact email must be live for delivery: %q", got)
+	}
+}
+
 // TestDisplayPrefsSettingRoundTrips covers the T-0b41-p2 dual-layer display
 // prefs: the owner writes theme/language through PATCH /api/settings (enum
 // validated, durable + live in the snapshot) and reads them back on the settings

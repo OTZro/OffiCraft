@@ -464,6 +464,7 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 	api.releaseAPIBase = env("OC_RELEASE_API_BASE")
 	api.orgName = auth.orgName
 	api.ownerName = auth.ownerName
+	api.pushContactEmail = auth.pushContactEmail
 	api.displayTheme = auth.displayTheme
 	api.displayLanguage = auth.displayLanguage
 	api.displayCustomThemes = auth.displayCustomThemes

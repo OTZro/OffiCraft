@@ -45,6 +45,7 @@ export const en: Dict = {
     unsupported: "This browser does not support push notifications.",
     denied: "Notifications are blocked. Allow OffiCraft notifications in your browser settings.",
     failed: "Could not set up notifications. Please try again.",
+    contactRequired: "Add a notification email in Profile preferences first.",
   },
   // ── Tasks page (M3 task cards) ──
   tasks: {
@@ -453,7 +454,7 @@ export const en: Dict = {
     rename: "Rename",
     renamePlaceholder: "Enter name",
     preferences: "Preferences",
-    preferencesSub: "Name, appearance, language, password",
+    preferencesSub: "Name, appearance, language, notifications, password",
     logout: "Log out",
     back: "Preferences",
     theme: "Theme",
@@ -477,6 +478,10 @@ export const en: Dict = {
     language: "Language",
     langZh: "中文",
     langEn: "English",
+    pushContactEmail: "Notification email",
+    pushContactEmailSub: "A public contact address used to identify this cockpit to push services. Notifications are not sent until it is set.",
+    pushContactEmailPlaceholder: "name@company.com",
+    pushContactEmailError: "Enter a public email address.",
     changePassword: "Change password",
     changePasswordSub: "The password you sign in to this console with",
     currentPasswordPlaceholder: "Current password",

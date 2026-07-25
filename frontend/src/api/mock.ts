@@ -764,6 +764,7 @@ const DEFAULT_MOCK_SETTINGS = {
   // Owner nickname (T-0b41) — "" out of the box, mirroring the server (the
   // profile pill shows the localized default until the owner sets a nickname).
   owner_name: "",
+  push_contact_email: "",
   // Cockpit display prefs (T-0b41-p2) — "" out of the box, mirroring the server
   // (the frontend keeps its localStorage cache / default until the owner picks).
   display_theme: "",
@@ -2609,6 +2610,13 @@ export const mockApi: Api = {
     }
     if (patch.ownerName !== undefined) {
       mockServerSettings.owner_name = patch.ownerName.trim();
+    }
+    if (patch.pushContactEmail !== undefined) {
+      const email = patch.pushContactEmail.trim();
+      if (email && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || /\.(local|localhost|internal|test|invalid|example)$/i.test(email))) {
+        throw new ApiError("http 422 for PATCH /api/settings", 422, "validation_error", "push_contact_email must be a public email address");
+      }
+      mockServerSettings.push_contact_email = email;
     }
     // custom_themes + display_theme are coupled (server parity): write the set,
     // then resolve the theme against the post-patch set — an explicit theme

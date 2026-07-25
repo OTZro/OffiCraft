@@ -19,7 +19,24 @@ import (
 )
 
 const settingPushVAPIDPrivateKey = "push.vapid_private_key"
-const pushVAPIDSubscriber = "notifications@officraft.local"
+
+// pushVAPIDSubscriber is the contact address handed to the push gateways as the
+// VAPID subject. It is owner-supplied (push.contact_email; validated on the way
+// in by validatePushContactEmail) because the server sits behind a tunnel and
+// cannot know a reachable identity for itself.
+//
+// Two properties are load-bearing. The domain must be REAL: Apple rejects the
+// whole VAPID JWT with BadJwtToken for an unreachable one such as .local,
+// before it looks at any subscription — every iPhone silently lost push that
+// way. And the value stays a BARE address: webpush-go prefixes "mailto:"
+// itself, so a pre-prefixed value becomes the invalid subject "mailto:mailto:…".
+//
+// "" = never set, and delivery is refused rather than attempted.
+func (s *apiServer) pushVAPIDSubscriber() string {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.pushContactEmail
+}
 
 const webPushDeliveryTimeout = 10 * time.Second
 
@@ -165,6 +182,11 @@ type webPushPayload struct {
 // only the corresponding endpoint.
 func (s *apiServer) enqueueWebPush(payload webPushPayload) {
 	go func() {
+		subscriber := s.pushVAPIDSubscriber()
+		if subscriber == "" {
+			log.Printf("[push] no contact address configured; delivery skipped")
+			return
+		}
 		encoded, err := json.Marshal(payload)
 		if err != nil {
 			log.Printf("[push] encode payload: %v", err)
@@ -186,10 +208,7 @@ func (s *apiServer) enqueueWebPush(payload webPushPayload) {
 				Endpoint: subscription.Endpoint,
 				Keys:     webpush.Keys{P256dh: subscription.P256dh, Auth: subscription.Auth},
 			}, &webpush.Options{
-				// webpush-go accepts a bare email and constructs the mailto URI
-				// itself. Passing a value already prefixed with "mailto:" produces
-				// the invalid VAPID subject "mailto:mailto:…".
-				Subscriber: pushVAPIDSubscriber,
+				Subscriber: subscriber,
 				TTL:        60, Urgency: webpush.UrgencyHigh,
 				VAPIDPublicKey: publicKey, VAPIDPrivateKey: privateKey,
 				VapidExpiration: time.Now().Add(12 * time.Hour),

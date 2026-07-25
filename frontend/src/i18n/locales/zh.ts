@@ -36,6 +36,7 @@ export const zh = {
     unsupported: "這個瀏覽器不支援推播通知。",
     denied: "通知權限已被封鎖，請在瀏覽器設定中允許 OffiCraft 通知。",
     failed: "通知設定失敗，請稍後再試。",
+    contactRequired: "請先在個人檔案的偏好設定填入通知信箱。",
   },
   // ── 任務頁(M3 任務卡)──
   tasks: {
@@ -523,7 +524,7 @@ export const zh = {
     rename: "改名",
     renamePlaceholder: "輸入名字",
     preferences: "偏好設定",
-    preferencesSub: "名稱、外觀、語言、密碼",
+    preferencesSub: "名稱、外觀、語言、通知、密碼",
     logout: "登出",
     back: "偏好設定",
     theme: "主題",
@@ -547,6 +548,10 @@ export const zh = {
     language: "語言",
     langZh: "中文",
     langEn: "English",
+    pushContactEmail: "通知信箱",
+    pushContactEmailSub: "推播服務用來識別這個座艙的公開信箱；未填時不會送出通知。",
+    pushContactEmailPlaceholder: "name@company.com",
+    pushContactEmailError: "請填入可公開使用的信箱。",
     changePassword: "修改密碼",
     changePasswordSub: "登入這個主控台用的密碼",
     currentPasswordPlaceholder: "目前密碼",

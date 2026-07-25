@@ -55,6 +55,8 @@ func (c recordingPushClient) Do(r *http.Request) (*http.Response, error) {
 
 var _ webpush.HTTPClient = recordingPushClient{}
 
+const testPushContactEmail = "notifications@officraft.dev"
+
 func vapidSubject(t *testing.T, authorization string) string {
 	t.Helper()
 	const prefix = "vapid t="
@@ -167,7 +169,7 @@ func TestCreatePushSubscriptionPersistsBrowserSubscription(t *testing.T) {
 func TestWebPushDeliveryAndExpiredSubscriptionPruning(t *testing.T) {
 	d := newTestDAL(t)
 	urls := make(chan string, 2)
-	s := &apiServer{dal: d, pushHTTPClient: recordingPushClient{received: urls}}
+	s := &apiServer{dal: d, pushContactEmail: testPushContactEmail, pushHTTPClient: recordingPushClient{received: urls}}
 	if err := d.PutPushSubscription(testPushSubscription(t, "https://push.example.test/live")); err != nil {
 		t.Fatal(err)
 	}
@@ -225,17 +227,32 @@ func TestWebPushDeliveryAndExpiredSubscriptionPruning(t *testing.T) {
 	}
 }
 
+func TestWebPushSkipsDeliveryWithoutConfiguredContactEmail(t *testing.T) {
+	d := newTestDAL(t)
+	urls := make(chan string, 1)
+	s := &apiServer{dal: d, pushHTTPClient: recordingPushClient{received: urls}}
+	if err := d.PutPushSubscription(testPushSubscription(t, "https://push.example.test/live")); err != nil {
+		t.Fatal(err)
+	}
+	s.enqueueWebPush(webPushPayload{Kind: "chat", ChatID: "c-1", Title: "new", Body: "message"})
+	select {
+	case got := <-urls:
+		t.Fatalf("push must not be delivered without a configured contact email: %s", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestWebPushUsesSingleMailtoVAPIDSubject(t *testing.T) {
 	d := newTestDAL(t)
 	authorization := make(chan string, 1)
-	s := &apiServer{dal: d, pushHTTPClient: recordingPushClient{authorization: authorization}}
+	s := &apiServer{dal: d, pushContactEmail: testPushContactEmail, pushHTTPClient: recordingPushClient{authorization: authorization}}
 	if err := d.PutPushSubscription(testPushSubscription(t, "https://push.example.test/live")); err != nil {
 		t.Fatal(err)
 	}
 	s.enqueueWebPush(webPushPayload{Kind: "chat", ChatID: "c-1", Title: "new", Body: "message"})
 	select {
 	case header := <-authorization:
-		if got, want := vapidSubject(t, header), "mailto:"+pushVAPIDSubscriber; got != want {
+		if got, want := vapidSubject(t, header), "mailto:"+testPushContactEmail; got != want {
 			t.Fatalf("VAPID subject = %q, want %q", got, want)
 		}
 	case <-time.After(2 * time.Second):
@@ -261,7 +278,7 @@ func TestWebPushLogsSafeGatewayStatuses(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d := newTestDAL(t)
 			endpoint := "https://push.example.test/secret-subscription"
-			s := &apiServer{dal: d, pushHTTPClient: recordingPushClient{status: tc.status}}
+			s := &apiServer{dal: d, pushContactEmail: testPushContactEmail, pushHTTPClient: recordingPushClient{status: tc.status}}
 			if err := d.PutPushSubscription(testPushSubscription(t, endpoint)); err != nil {
 				t.Fatal(err)
 			}
@@ -277,7 +294,7 @@ func TestWebPushLogsSafeGatewayStatuses(t *testing.T) {
 	t.Run("transport error is safe", func(t *testing.T) {
 		d := newTestDAL(t)
 		endpoint := "https://push.example.test/secret-subscription"
-		s := &apiServer{dal: d, pushHTTPClient: recordingPushClient{err: errors.New("post " + endpoint + ": connection reset")}}
+		s := &apiServer{dal: d, pushContactEmail: testPushContactEmail, pushHTTPClient: recordingPushClient{err: errors.New("post " + endpoint + ": connection reset")}}
 		if err := d.PutPushSubscription(testPushSubscription(t, endpoint)); err != nil {
 			t.Fatal(err)
 		}

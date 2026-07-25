@@ -35,6 +35,7 @@ export function PushNotifications() {
   const { t } = useI18n();
   const [state, setState] = useState<PushState>("unsupported");
   const [registration, setRegistration] = useState<ServiceWorkerRegistration | null>(null);
+  const [errorMessage, setErrorMessage] = useState("");
 
   useEffect(() => {
     if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return;
@@ -46,6 +47,10 @@ export function PushNotifications() {
       void worker.pushManager.getSubscription().then(async (subscription) => {
         if (Notification.permission === "denied") return setState("denied");
         if (Notification.permission !== "granted" || !subscription) return setState("default");
+        const settings = await api.getServerSettings();
+        // An old browser subscription alone is not a delivery target: without
+        // a configured VAPID contact email the server deliberately skips it.
+        if (!settings.pushContactEmail) return setState("default");
         await api.savePushSubscription(subscriptionInput(subscription));
         setState("enabled");
       }).catch(() => setState("error"));
@@ -55,6 +60,15 @@ export function PushNotifications() {
   async function enable() {
     if (!registration) return;
     try {
+      // A valid VAPID contact identity is required for iPhone delivery. Check
+      // before opening the browser permission prompt so the owner knows what
+      // to fix instead of granting a permission that cannot receive anything.
+      const settings = await api.getServerSettings();
+      if (!settings.pushContactEmail) {
+        setErrorMessage(t.notifications.contactRequired);
+        setState("error");
+        return;
+      }
       const permission = await Notification.requestPermission();
       if (permission !== "granted") {
         setState(permission === "denied" ? "denied" : "default");
@@ -65,6 +79,7 @@ export function PushNotifications() {
       await api.savePushSubscription(subscriptionInput(subscription));
       setState("enabled");
     } catch {
+      setErrorMessage(t.notifications.failed);
       setState("error");
     }
   }
@@ -89,7 +104,7 @@ export function PushNotifications() {
   if (state === "unsupported" || state === "denied") return null;
   const enabled = state === "enabled";
   const label = enabled ? t.notifications.disable : t.notifications.enable;
-  const title = state === "error" ? t.notifications.failed : label;
+  const title = state === "error" ? errorMessage || t.notifications.failed : label;
   return (
     <button
       className={`icon-btn${enabled ? " icon-btn--active" : ""}`}
