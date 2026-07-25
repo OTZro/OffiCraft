@@ -313,7 +313,7 @@ func TestWorkerBootContextKnownMemberOnlyResidueStaysRemoved(t *testing.T) {
 		},
 		{
 			"§5 presence：report_waking 祈使開機指示",
-			"boot 起手你主動用 MCP `report_waking()` 報一次",
+			"**報 waking",
 			"帶順序的祈使開機指示（「發生在掛 listen 之前」），與 overlay §2「report_waking " +
 				"不在你的開機序列」直接矛盾，而且在它之前 ~180 行。前一輪把它與附錄 A 的工具目錄" +
 				"列舉一起判成「描述性」，那個判準對附錄 A 成立、對這一句不成立。",

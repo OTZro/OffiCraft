@@ -69,7 +69,7 @@ var residueCouplingCases = []struct{ name, text, why string }{
 	},
 	{
 		"§5 presence report_waking 祈使開機指示",
-		"boot 起手你主動用 MCP `report_waking()` 報一次",
+		"**報 waking",
 		"帶順序的祈使開機指示，與 overlay §2「report_waking 不在你的開機序列」矛盾。",
 	},
 }
