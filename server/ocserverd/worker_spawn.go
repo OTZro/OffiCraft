@@ -396,8 +396,7 @@ func (s *apiServer) clearWorkerPlacementBlock(workerID string) {
 	if err != nil || fresh == nil || fresh.LastOp != reconcileCmdStart {
 		return
 	}
-	if !strings.HasPrefix(fresh.LastOpReason, placementReasonNoMachine+":") &&
-		!strings.HasPrefix(fresh.LastOpReason, placementReasonUnavailable+":") {
+	if !isPlacementBlockedReason(fresh.LastOpReason) {
 		return
 	}
 	fresh.LastOpReason = ""

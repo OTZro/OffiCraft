@@ -859,17 +859,46 @@ func (s *apiServer) stampWakeObservability(m *Member, decision reconcileDecision
 	if decision.Command == reconcileCmdStart {
 		m.WakingSince = now
 		changed = true
-		// The START landed: a placement-blocked explanation on the row is now
-		// history, and leaving it would make the NEXT block look like the same one.
-		m.LastOpReason = ""
-		m.LastOpLog = ""
+		// The START landed, so a PLACEMENT-blocked explanation is now history —
+		// leaving it would make the next block look like the still-standing first
+		// one. Only a placement stamp is cleared: the wake_timeout receipt written
+		// above, and a warden's own refused-start receipt, are the record of why a
+		// boot failed and survive the retry that follows them.
+		if isPlacementBlockedReason(m.LastOpReason) {
+			m.LastOpReason = ""
+			m.LastOpLog = ""
+		}
 	}
 	if !changed {
 		return
 	}
-	if err := s.putMember(*m, triggerServer); err != nil {
+	// Re-read before the whole-row write, for the reason the placement stamps do:
+	// this is the tick's snapshot, and the HTTP faces (activate / relocate /
+	// deactivate) write member rows without holding reconcileMu, so persisting the
+	// snapshot silently reverts a placement that landed mid-tick. Narrowing, not
+	// eliminating — the read and the write are not atomic — but the window shrinks
+	// from the whole tick to a few statements.
+	fresh, err := s.dal.GetMember(m.ID)
+	if err != nil || fresh == nil || fresh.RosterStatus != RosterStatusActive {
+		return
+	}
+	fresh.WakingSince = m.WakingSince
+	fresh.LastOp = m.LastOp
+	fresh.LastOpOK = m.LastOpOK
+	fresh.LastOpLog = m.LastOpLog
+	fresh.LastOpReason = m.LastOpReason
+	fresh.LastOpAt = m.LastOpAt
+	if err := s.putMember(*fresh, triggerServer); err != nil {
 		reconcileLog("%s: wake observability persist failed: %v", m.ID, err)
 	}
+}
+
+// isPlacementBlockedReason reports whether a last_op_reason was written by one of
+// the placement stamps (rather than by a wake lapse or a warden receipt) — the
+// only kind of explanation a landed START makes obsolete.
+func isPlacementBlockedReason(reason string) bool {
+	return strings.HasPrefix(reason, placementReasonNoMachine+":") ||
+		strings.HasPrefix(reason, placementReasonUnavailable+":")
 }
 
 // ── pre-decide roster passes (producer.py, run inside the cadence tick) ──────

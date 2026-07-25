@@ -178,6 +178,14 @@ func TestReconcile_MemberBlockRestampedAfterLandedStart(t *testing.T) {
 		frames[0].Args["member_id"] != "m-flip" {
 		t.Fatalf("the machine coming online must dispatch the START: %+v", frames)
 	}
+	started, _ := s.dal.GetMember("m-flip")
+	if started == nil || started.WakingSince <= 0 {
+		t.Fatalf("the landed START must stamp waking_since: %+v", started)
+	}
+	if started.LastOpReason != "" || started.LastOpLog != "" {
+		t.Fatalf("a landed START must clear the PLACEMENT block it just resolved, "+
+			"got reason=%q log=%q", started.LastOpReason, started.LastOpLog)
+	}
 
 	// The agent boots, so the next block starts from a converged state.
 	agent := connectOnline(t, s, "m-flip")
@@ -200,5 +208,165 @@ func TestReconcile_MemberBlockRestampedAfterLandedStart(t *testing.T) {
 		t.Fatalf("a block AFTER a landed START must re-stamp: last_op_at = %v, want %v "+
 			"(keeping the first block's %v means the start never cleared it)",
 			again.LastOpAt, third, blocked.LastOpAt)
+	}
+}
+
+// The clear on the landed-start path is PLACEMENT-scoped: the wake_timeout
+// receipt this same function writes explains why an agent will not boot, and the
+// wake retry that follows it must not erase its own explanation.
+func TestReconcile_WakeTimeoutReceiptSurvivesLandedStart(t *testing.T) {
+	s := newReconcileTestServer(t)
+	putWarden(t, s, "mach-live")
+	connectOnline(t, s, "mach-live")
+
+	m := testAgent("m-boot")
+	m.DesiredMachineID = "mach-live"
+	m.LastOpLog = "warden accepted the start frame"
+	putTestMember(t, s, m)
+
+	now := nowSecs()
+	s.reconcileMu.Lock()
+	s.reconcileTickMemberLocked(m, now)
+	s.reconcileMu.Unlock()
+
+	lapsed := now + s.reconcileCfg.StartTimeout + 1
+	reloaded, _ := s.dal.GetMember("m-boot")
+	s.reconcileMu.Lock()
+	timedOut := s.reconcileTickMemberLocked(*reloaded, lapsed)
+	s.reconcileMu.Unlock()
+	if !timedOut.StartTimedOut {
+		t.Fatalf("the lapsed START must be observed as timed out: %+v", timedOut)
+	}
+	receipt, _ := s.dal.GetMember("m-boot")
+	if !strings.HasPrefix(receipt.LastOpReason, "wake_timeout:") {
+		t.Fatalf("expected a wake_timeout receipt on the row, got %q", receipt.LastOpReason)
+	}
+
+	// Past the backoff the wake is retried, and this START lands.
+	retry := lapsed + 10
+	s.reconcileMu.Lock()
+	dec := s.reconcileTickMemberLocked(*receipt, retry)
+	s.reconcileMu.Unlock()
+	if dec.Command != reconcileCmdStart {
+		t.Fatalf("expected the wake retry to dispatch a START, got %q (%s)", dec.Command, dec.Reason)
+	}
+	got, _ := s.dal.GetMember("m-boot")
+	if got.WakingSince != retry {
+		t.Fatalf("the retried START must stamp waking_since=%v, got %v", retry, got.WakingSince)
+	}
+	if got.LastOpReason != receipt.LastOpReason || got.LastOpLog != receipt.LastOpLog {
+		t.Fatalf("the wake_timeout receipt must survive the retry that follows it: "+
+			"reason %q → %q, log %q → %q",
+			receipt.LastOpReason, got.LastOpReason, receipt.LastOpLog, got.LastOpLog)
+	}
+}
+
+// The same guard from the other side: a receipt this function never wrote — a
+// warden's own refused-start result, folded onto the row by foldCommandResult —
+// is not the server's to erase either.
+func TestReconcile_LandedStartKeepsWardenRefusalReceipt(t *testing.T) {
+	s := newReconcileTestServer(t)
+	putWarden(t, s, "mach-live")
+	connectOnline(t, s, "mach-live")
+
+	m := testAgent("m-boot")
+	m.DesiredMachineID = "mach-live"
+	m.LastOp = reconcileCmdStart
+	refused := false
+	m.LastOpOK = &refused
+	m.LastOpReason = "session_already_exists: tmux session member-m-boot is already running"
+	m.LastOpLog = "warden: refused to spawn over a live session"
+	putTestMember(t, s, m)
+
+	dec := s.reconcileMemberNow("m-boot")
+	if dec.Command != reconcileCmdStart {
+		t.Fatalf("expected a START decision, got %q (%s)", dec.Command, dec.Reason)
+	}
+	got, _ := s.dal.GetMember("m-boot")
+	if got.WakingSince <= 0 {
+		t.Fatalf("the landed START must stamp waking_since; got %v", got.WakingSince)
+	}
+	if got.LastOpReason != m.LastOpReason || got.LastOpLog != m.LastOpLog {
+		t.Fatalf("a warden's refused-start receipt must survive the retry: "+
+			"reason %q → %q, log %q → %q",
+			m.LastOpReason, got.LastOpReason, m.LastOpLog, got.LastOpLog)
+	}
+}
+
+// The stamp is a whole-row write on the TICK'S SNAPSHOT, so it re-reads first:
+// the HTTP faces write member rows without holding reconcileMu, and persisting
+// the snapshot would silently revert a relocate that landed mid-tick — on
+// desired_machine_id, the field the placement work is about.
+func TestReconcile_WakeStampPreservesConcurrentRelocate(t *testing.T) {
+	s := newReconcileTestServer(t)
+	for _, mach := range []string{"mach-a", "mach-b"} {
+		putWarden(t, s, mach)
+		connectOnline(t, s, mach)
+	}
+
+	m := testAgent("m-move")
+	m.DesiredMachineID = "mach-a"
+	putTestMember(t, s, m)
+	stale := m // the snapshot the cadence tick loaded
+
+	// The relocate face repins the member while the tick is in flight.
+	moved, _ := s.dal.GetMember("m-move")
+	moved.DesiredMachineID = "mach-b"
+	putTestMember(t, s, *moved)
+
+	now := nowSecs()
+	s.reconcileMu.Lock()
+	dec := s.reconcileTickMemberLocked(stale, now)
+	s.reconcileMu.Unlock()
+	if dec.Command != reconcileCmdStart {
+		t.Fatalf("expected a START decision, got %q (%s)", dec.Command, dec.Reason)
+	}
+	got, _ := s.dal.GetMember("m-move")
+	if got.WakingSince != now {
+		t.Fatalf("the landed START must stamp waking_since=%v, got %v", now, got.WakingSince)
+	}
+	if got.DesiredMachineID != "mach-b" {
+		t.Fatalf("the stamp must not revert a relocate that landed mid-tick: "+
+			"desired_machine_id = %q, want %q", got.DesiredMachineID, "mach-b")
+	}
+}
+
+// A member dismissed after the tick snapshotted it is GONE: the stamp must not
+// resurrect its row. m-live is the control — the same tick still stamps a member
+// that is still on the roster.
+func TestReconcile_WakeStampSkipsMemberRemovedMidTick(t *testing.T) {
+	s := newReconcileTestServer(t)
+	putWarden(t, s, "mach-live")
+	connectOnline(t, s, "mach-live")
+
+	live := testAgent("m-live")
+	live.DesiredMachineID = "mach-live"
+	putTestMember(t, s, live)
+	gone := testAgent("m-gone")
+	gone.DesiredMachineID = "mach-live"
+	putTestMember(t, s, gone)
+
+	dismissed, _ := s.dal.GetMember("m-gone")
+	dismissed.RosterStatus = RosterStatusRemoved
+	putTestMember(t, s, *dismissed)
+
+	now := nowSecs()
+	s.reconcileMu.Lock()
+	liveDec := s.reconcileTickMemberLocked(live, now)
+	goneDec := s.reconcileTickMemberLocked(gone, now)
+	s.reconcileMu.Unlock()
+	if liveDec.Command != reconcileCmdStart || goneDec.Command != reconcileCmdStart {
+		t.Fatalf("both snapshots must decide a START: live=%q gone=%q",
+			liveDec.Command, goneDec.Command)
+	}
+
+	stillHere, _ := s.dal.GetMember("m-live")
+	if stillHere.WakingSince != now {
+		t.Fatalf("a roster-active member must still be stamped: waking_since = %v, want %v",
+			stillHere.WakingSince, now)
+	}
+	removed, _ := s.dal.GetMember("m-gone")
+	if removed.RosterStatus != RosterStatusRemoved || removed.WakingSince != 0 {
+		t.Fatalf("a member removed after the snapshot must not be written back: %+v", removed)
 	}
 }
