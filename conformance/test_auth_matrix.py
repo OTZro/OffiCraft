@@ -339,6 +339,20 @@ MATRIX: dict[str, Route] = {
         body={"current_password": "conf-wrong-current", "new_password": "conf-new-password"},
     ),
     "GET /api/settings": Route(requires="owner"),
+    "GET /api/push/public-key": Route(requires="owner"),
+    "POST /api/push/subscription": Route(
+        requires="owner",
+        body={
+            "endpoint": "https://push.example.test/conformance",
+            "keys": {"p256dh": "conformance-p256dh", "auth": "conformance-auth"},
+        },
+        overrides={"owner": 204},
+    ),
+    "DELETE /api/push/subscription": Route(
+        requires="owner",
+        body={"endpoint": "https://push.example.test/conformance"},
+        overrides={"owner": 204},
+    ),
     "GET /api/release/check": Route(
         # The harness pins $OC_RELEASE_API_BASE at an unroutable loopback
         # (run.sh), so the owner's positive authz face deterministically

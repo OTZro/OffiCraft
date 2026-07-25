@@ -459,6 +459,24 @@ HAPPY: dict[str, Happy] = {
             r, lambda d: d["token_ttl"] > 0 and 40 <= d["handover_pct"] <= 90
         ),
     ),
+    "GET /api/push/public-key": Happy(
+        check=lambda _c, r: _expect(r, lambda d: bool(d["public_key"])),
+    ),
+    "POST /api/push/subscription": Happy(
+        body={
+            "endpoint": "https://push.example.test/conformance",
+            "keys": {"p256dh": "conformance-p256dh", "auth": "conformance-auth"},
+        },
+        status=204,
+        nonjson="204 subscription save has no response body",
+        check=lambda _c, _r: None,
+    ),
+    "DELETE /api/push/subscription": Happy(
+        body={"endpoint": "https://push.example.test/conformance"},
+        status=204,
+        nonjson="204 subscription deletion has no response body",
+        check=lambda _c, _r: None,
+    ),
     "PATCH /api/settings": Happy(
         # Patch to the defaults: exercises the write path without steering the
         # shared instance away from its expected knobs.
