@@ -324,6 +324,15 @@ func (s *codexSession) post(path string, payload map[string]any) {
 	}
 }
 
+// reportIdentity is deliberately tiny: it is safe to send at session start,
+// after an SSE reconnect, and as the throttled heartbeat without waiting for a
+// token event.
+func (s *codexSession) reportIdentity() {
+	s.post("/api/monitoring/telemetry", map[string]any{
+		"runtime": "codex", "account": s.account, "account_label": "ChatGPT",
+	})
+}
+
 func (s *codexSession) reportTokenUsage(params map[string]any) {
 	if !s.allowUsageReport() {
 		return
@@ -515,9 +524,7 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 	s.notify("initialized", map[string]any{})
 	// Identity is independent of token/rate-limit events. Report it immediately
 	// so a quiet Codex thread still shows its ChatGPT account in OffiCraft.
-	s.post("/api/monitoring/telemetry", map[string]any{
-		"runtime": "codex", "account": s.account, "account_label": "ChatGPT",
-	})
+	s.reportIdentity()
 	rateID := s.send("account/rateLimits/read", nil)
 	if response, rateErr := s.waitResponse(rateID); rateErr == nil {
 		if snapshot, _ := response["result"].(map[string]any); snapshot != nil {
@@ -569,13 +576,18 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 	for s.messages != nil {
 		select {
 		case <-identityHeartbeat.C:
-			s.post("/api/monitoring/telemetry", map[string]any{
-				"runtime": "codex", "account": s.account, "account_label": "ChatGPT",
-			})
+			s.reportIdentity()
 		case line, ok := <-listenerLines:
 			if !ok {
 				fmt.Fprintln(out, "codex-session: ocagent listen exited; ending session for reconciliation")
 				return 1
+			}
+			// ocagent emits this exact lifecycle line each time its SSE stream
+			// opens. A server restart therefore restores account telemetry
+			// immediately, then restarts the normal 30-second cadence.
+			if strings.HasPrefix(strings.TrimSpace(line), "[ocagent] listen: connected") {
+				s.reportIdentity()
+				identityHeartbeat.Reset(codexTelemetryThrottle)
 			}
 			if actionableCodexListenerLine(line) {
 				s.activity("OffiCraft event: %s", line)
