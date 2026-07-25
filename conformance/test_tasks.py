@@ -56,6 +56,14 @@ def executor(client, owner_token) -> AgentIdentity:
     return AgentIdentity(member_id=member_id, token=token, role_key="")
 
 
+@pytest.fixture(scope="module")
+def machine(fresh_machine) -> str:
+    """This module's OWN onboarded machine. Every placement face — the manual's
+    outsource assignee and the 發包 target alike — now demands a machine id that
+    RESOLVES, so a placement fixture is no longer an arbitrary string."""
+    return fresh_machine()
+
+
 def _create_task(client, executor, title="conf task", **extra) -> dict:
     body = {"title": title, "executor_member_id": executor.member_id, **extra}
     r = client.post("/api/tasks", json=body, headers=_auth(executor.token))
@@ -785,32 +793,44 @@ def test_task_message_rides_chat_with_task_context(client, owner_token, executor
 
 
 def test_manual_outsource_assignee_machine_and_unlimited_copies(
-    client, owner_token
+    client, owner_token, machine
 ):
-    """New assignee wire knobs (spec TaskManualDTO/TaskManualUpdateDTO):
-    ``machine`` ("auto" | machine id; spawn placement preference) and
-    ``copies`` >= 0 where 0 = 無限 (unlimited per-type copies) round-trip
-    verbatim; illegal values are honest 400s."""
+    """Assignee wire knobs (spec TaskManualDTO/TaskManualUpdateDTO): ``machine``
+    is the machine id the type's workers boot on and ``copies`` >= 0 where 0 =
+    無限 (unlimited per-type copies); both round-trip verbatim. ``machine`` must
+    name a machine that EXISTS — the shape check refuses the retired "auto"
+    spelling (400, it names no machine) and the resolve refuses a stale id (404),
+    so a type can no longer be configured onto a placement no worker can reach.
+    The other illegal knobs stay honest 400s."""
     type_key = _new_manual(client, owner_token)
     # machine + copies=0 (unlimited) round-trip through PATCH → GET.
     r = client.post(
         f"/api/task-manuals/{type_key}",
         json={"assignee": {"kind": "outsource", "model": "claude-opus-4-6",
                            "effort": "high", "copies": 0,
-                           "machine": "warden-mbp5"}},
+                           "machine": machine}},
         headers=_auth(owner_token))
     assert r.status_code == 200, f"{r.status_code} {r.text}"
     a = client.get(f"/api/task-manuals/{type_key}",
                    headers=_auth(owner_token)).json()["assignee"]
-    assert a["copies"] == 0 and a["machine"] == "warden-mbp5", a
-    # "auto" is a legal machine value (the explicit default spelling).
+    assert a["copies"] == 0 and a["machine"] == machine, a
+    # "auto" is not a machine — the shape check refuses it outright.
     r = client.post(
         f"/api/task-manuals/{type_key}",
         json={"assignee": {"kind": "outsource", "model": "m",
                            "copies": 2, "machine": "auto"}},
         headers=_auth(owner_token))
-    assert r.status_code == 200
-    assert r.json()["assignee"]["machine"] == "auto"
+    assert r.status_code == 400, f"{r.status_code} {r.text}"
+    # A shaped-fine id that names no machine is the resolve's 404.
+    r = client.post(
+        f"/api/task-manuals/{type_key}",
+        json={"assignee": {"kind": "outsource", "machine": "warden-mbp5"}},
+        headers=_auth(owner_token))
+    assert r.status_code == 404, f"{r.status_code} {r.text}"
+    # Neither refusal wrote anything — the earlier placement still stands.
+    a = client.get(f"/api/task-manuals/{type_key}",
+                   headers=_auth(owner_token)).json()["assignee"]
+    assert a["machine"] == machine and a["copies"] == 0, a
     # Illegal knobs are 400s: negative copies; blank / non-string machine.
     for bad in [{"kind": "outsource", "copies": -1},
                 {"kind": "outsource", "machine": ""},
@@ -818,6 +838,23 @@ def test_manual_outsource_assignee_machine_and_unlimited_copies(
         r = client.post(f"/api/task-manuals/{type_key}",
                         json={"assignee": bad}, headers=_auth(owner_token))
         assert r.status_code == 400, f"{bad}: {r.status_code} {r.text}"
+
+
+def test_manual_create_assignee_machine_must_resolve(client, owner_token, machine):
+    """The create face carries the SAME assignee rule as the edit face — a manual
+    may not be born configured for a machine that is not installed."""
+    def create(assignee):
+        return client.post(
+            "/api/task-manuals",
+            json={"type_key": f"conf-task-type-{uuid.uuid4().hex[:8]}",
+                  "assignee": assignee},
+            headers=_auth(owner_token))
+
+    assert create({"kind": "outsource", "machine": "auto"}).status_code == 400
+    assert create({"kind": "outsource", "machine": "warden-mbp5"}).status_code == 404
+    r = create({"kind": "outsource", "machine": machine})
+    assert r.status_code == 200, f"{r.status_code} {r.text}"
+    assert r.json()["assignee"]["machine"] == machine
 
 
 def test_settings_outsource_cap_unlimited(client, owner_token):
@@ -1683,16 +1720,18 @@ def test_reassign_hands_over_to_a_member_and_only_they_take_over(
     assert r.json()["lock"] == ""
 
 
-def test_reassign_to_outsource_lands_unassigned(client, owner_token, executor):
+def test_reassign_to_outsource_lands_unassigned(
+    client, owner_token, executor, machine
+):
     """T-35e0 outsource target: the reassign no longer mints a worker on the
     spot — it lands the task UNASSIGNED (発包 → an unassigned outsource task)
-    under the `reassigning` lock, carrying the dialog's model/effort on the
-    row for the scheduler to pick up under the global cap. No worker is bound
-    at reassign time."""
+    under the `reassigning` lock, carrying the dialog's model/effort/machine on
+    the row for the scheduler to pick up under the global cap. No worker is
+    bound at reassign time."""
     task = _create_task(client, executor, title="outsource me")["task"]
     r = _reassign(client, owner_token, task["id"],
                   {"kind": "outsource", "model": "haiku", "effort": "high",
-                   "machine": "auto"})
+                   "machine": machine})
     assert r.status_code == 200, r.text
     body = r.json()
     # reassigning is a LOCK now (T-9ca5); the fresh task has no steps, so the
@@ -1702,6 +1741,44 @@ def test_reassign_to_outsource_lands_unassigned(client, owner_token, executor):
     assert body["executor_kind"] == "outsource"
     # unassigned: the scheduler mints the successor later, none bound here.
     assert body["executor_id"] == ""
+
+
+def test_dispatch_target_machine_must_resolve(
+    client, owner_token, executor, machine
+):
+    """發包 placement is an EXPLICIT machine on both dispatch faces (create with a
+    target, reassign to one): any non-blank ``target.machine`` must name a real
+    machine, and "auto" is simply an id that names none (404). OMITTING it stays
+    legal — the field is inherited (the type manual for a typed task, else the
+    dispatching member) and has no server-invented fallback."""
+    def create(machine_id):
+        target = {"kind": "outsource"}
+        if machine_id is not None:
+            target["machine"] = machine_id
+        return client.post("/api/tasks",
+                           json={"title": "發包 placement", "target": target},
+                           headers=_auth(owner_token))
+
+    for bad in ("auto", "warden-mbp5"):
+        r = create(bad)
+        assert r.status_code == 404, f"create {bad!r}: {r.status_code} {r.text}"
+    r = create(machine)
+    assert r.status_code == 200, r.text
+    assert r.json()["task"]["executor_kind"] == "outsource"
+    assert create(None).status_code == 200, "an omitted machine inherits, never 404s"
+
+    for bad in ("auto", "warden-mbp5"):
+        task = _create_task(client, executor, title=f"發包 {bad}")["task"]
+        r = _reassign(client, owner_token, task["id"],
+                      {"kind": "outsource", "machine": bad})
+        assert r.status_code == 404, f"reassign {bad!r}: {r.status_code} {r.text}"
+        # The refusal changed nothing — the task is still the member's.
+        after = _get_task(client, owner_token, task["id"])
+        assert after["executor_kind"] == "member", after
+        assert after["executor_id"] == executor.member_id, after
+    task = _create_task(client, executor, title="發包 real machine")["task"]
+    assert _reassign(client, owner_token, task["id"],
+                     {"kind": "outsource", "machine": machine}).status_code == 200
 
 
 def test_reassign_guards(client, owner_token, executor):

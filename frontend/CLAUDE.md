@@ -154,10 +154,12 @@ commit 時丟棄)/Q3 SOP markdown),編輯模式比照角色誌(編輯/取消/完
 segmented(成員 pick row 右側顯示該成員的**角色 label**,解析順序同
 PresenceBadge:i18n seed key → server roleName → raw key;無角色資料誠實省略
 ——owner 2026-07-13,選人時看得出誰是什麼角色)、模型 = 成員面板同源 MODEL_QUICK_PICKS chips+自由輸入、投入程度 =
-低/中/高 segmented、**機器段**(自動分配+機器清單,狀態字 = machines.online ×
-monitoring agents 誠實映射:閒置/忙碌/離線;說明「指定的機器若當下離線,會自動
-改用『自動分配』」)、**雇用數量 = −/＋ stepper+無限鈕**(wire `copies:0` =
-無限、`machine:"auto"|<machine id>`,spec TaskManualDTO)、解除設定 = wire `{}`
+低/中/高 segmented、**機器段**(**純機器清單、無「自動分配」列**,狀態字 =
+machines.online × monitoring agents 誠實映射:閒置/忙碌/離線;說明「沒選機器或
+該機器離線一律不啟動,原因顯示在該外包上」——**離線自動 fallback 的承諾已廢**)、
+**雇用數量 = −/＋ stepper+無限鈕**(wire `copies:0` = 無限、`machine:<machine id>`
+——必須解析到真機器,`"auto"` 已廢、送了 400;**沒選機器就整個 key 省略、不送 `""`**
+——wire 只認非空 id,spec TaskManualDTO)、解除設定 = wire `{}`
 → assignee patch(指派本身一律 server 執行,卡上只設定)。
 
 ## 請示 ↔ 任務跳轉(M3 Phase 4,SPEC §3.6)

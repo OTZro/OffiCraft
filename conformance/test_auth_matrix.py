@@ -402,12 +402,14 @@ MATRIX: dict[str, Route] = {
         body={},
     ),
     "POST /api/members/{member_id}/relocate": Route(
-        # placement-only 改機器 (admin floor). machine_id="auto" is validation-
-        # exempt (no real machine to resolve in the black box), so the admin
-        # positive faces land 200 on a fresh member; below-floor derive to 403.
+        # placement-only 改機器 (admin floor). Every non-blank machine_id must
+        # now RESOLVE, so the positive faces pin the session's onboarded machine
+        # — this row is an AUTHZ row and must not fail on placement validation
+        # (the placement contract itself lives in test_rest_happy). Below-floor
+        # cells derive to 403 before the resolve ever runs.
         requires="admin_agent",
         path=_member_path("/api/members/{member_id}/relocate"),
-        body={"machine_id": "auto"},
+        body=lambda ctx, _i: {"machine_id": ctx.machine_id},
     ),
     "POST /api/members/{member_id}/deactivate": Route(
         requires="admin_agent",
@@ -883,11 +885,12 @@ MATRIX: dict[str, Route] = {
         # T-f190 改機器; P7c drops the floor to admin_agent (外包對齊正職 — the
         # exact member relocate floor). Below-admin faces are a flat 403 (the
         # gate's teeth); the admin/owner faces are an honest 404 (no black-box
-        # worker row). machine_id "auto" skips the machine resolve so the 404
-        # is the worker's, not the machine's.
+        # worker row). The session's REAL machine is pinned so that 404 is the
+        # worker's — any non-blank machine_id now resolves too, and a bogus one
+        # would 404 for the wrong reason.
         requires="admin_agent",
         path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/relocate",
-        body=lambda _ctx, _i: {"machine_id": "auto"},
+        body=lambda ctx, _i: {"machine_id": ctx.machine_id},
         overrides={"admin_agent": 404, "owner": 404},
     ),
     # T-32e1/T-f190 worker lifecycle ops — all owner-only (relocate above sits

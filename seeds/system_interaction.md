@@ -300,8 +300,10 @@ owner 的座艙有一頁「任務」。**任務 = 一件帶完成準則（DoD）
 
 上面 §10.1b 講的是**手冊的負責設定**（哪個型別默認歸外包）——那是 owner 治理面。這裡講的是**針對單一任務、當下把它發包給外包**，這是每個成員都可以自己做的動作：**發包＝把這張任務落成一筆「未指派的外包任務」**，交給既有的外包排程器按產能自動接手（不再逐筆等 owner 點頭）。
 
-- **臨時發包（ad-hoc）**：`create_task` 帶 `target: {kind:"outsource", model, effort, machine}`（對齊轉派對話框的規格；`target` 不帶就是照舊建一般任務）。任務會建立成一筆**未指派的外包任務**——不必再開 owner 核可卡。
+- **臨時發包（ad-hoc）**：`create_task` 帶 `target: {kind:"outsource", runtime, model, effort, machine}`（對齊轉派對話框的規格；`target` 不帶就是照舊建一般任務）。任務會建立成一筆**未指派的外包任務**——不必再開 owner 核可卡。
 - **把手上的任務轉外包**：`reassign_task` 帶 `target.kind=outsource`（過去限 owner/admin，現在**你也能對自己負責的任務用**）——同樣把它落成未指派的外包任務。
+- **你沒填的欄位會繼承，只有機器不會**：`runtime`／`model`／`effort`／`machine` 你沒寫的，server 會從**一個**來源補齊——這張任務**有型別（有手冊）**就取該手冊的負責設定，**臨時任務**就取**你自己這一行**（你的 runtime／model／effort，加上你被指定跑在哪台機器上——「發一個像我這樣的」）。`model` 只有在來源講明它屬於這次要跑的 runtime 時才會被繼承，否則用該 runtime 的預設；`effort` 最後兜底 `medium`。
+- **⚠️ `machine` 沒有最終兜底——沒人指名機器，這張任務永遠不會開始跑**：手冊、你自己那行、`target.machine` 三處都沒有機器時，外包會被鑄出來卻**一直不啟動**（它的「最近操作」上會寫著 `no_machine_selected`）。指定的機器離線、或裝不了該 runtime 時**也不會自動改派別台**（同樣停著，原因 `machine_unavailable`）。所以**發包前先確認機器有著落**：不確定就在 `target.machine` 明寫一台（`list_machines` 查 id、順便看它在不在線），或請 owner 把該型別手冊的機器設好。**「自動分配」／`"auto"` 已經不存在**，寫了會被拒。
 - **之後由排程器自動接**：外包排程器按**全域並發上限**（`outsourceParallelCap`，owner 在座艙可調，預設沿用既有值）撿未指派的外包任務 spawn 外包 worker——**未滿上限就直接鑄一個開跑；已滿就排隊等產能，有名額自動接**。沒有逐筆核可這一步，你也不用逐張催。
 - **等產能期間 owner 隨時可轉派**：還沒被排到、正在等產能的任務，owner 可以隨時把它**轉派給某個成員或改派別的外包**（不必等它先開跑）。
 - **每個成員都能發包，不需要另外授權**——成本由全域並發上限兜底（滿額就排隊），不設 per-agent 白名單。
@@ -375,7 +377,8 @@ owner 的座艙有一頁「任務」。**任務 = 一件帶完成準則（DoD）
 - ❌ 開了 gate 卡等 owner 回覆，佇列裡還有尚未執行的任務，卻整個人閒著等（等待不是停下——開下一張）
 - ❌ 同一個 actor 寫完碼又自己 review 自己的碼（開發與 review 必須不同 actor）
 - ❌ 想把某**類型**默認改給某成員或轉外包，自己對手冊 patch `assignee`（負責設定是 owner 治理面、會 403——請 owner 到座艙設定）
-- ✅ 想把**當下這一張**任務發包給外包 → `create_task` 帶 `target` 或 `reassign_task` 轉 outsource（§10.1c），落成未指派的外包任務、由排程器按全域並發上限自動排隊（未滿即開跑、滿額等產能、有名額自動接）；別跟上一條的手冊治理面搞混
+- ❌ 發包時誰都沒指名機器（`target.machine` 空、手冊也沒設、臨時任務時你自己也沒被指定機器），以為排程器會自己挑一台——**不會**，那張任務會被鑄成外包卻永遠不開跑，它的「最近操作」會寫著 `no_machine_selected`
+- ✅ 想把**當下這一張**任務發包給外包 → `create_task` 帶 `target` 或 `reassign_task` 轉 outsource（§10.1c，**先確認機器有著落**），落成未指派的外包任務、由排程器按全域並發上限自動排隊（未滿即開跑、滿額等產能、有名額自動接）；別跟上一條的手冊治理面搞混
 - ✅ 同型請求第三次出現、還沒有手冊 → `create_task_manual` 建類型，`update_task_manual` 寫好用途／欄位／SOP，再請 owner 設負責
 - ✅ `list_task_manuals` 判出 `review-pr` 類型 → 照手冊的負責設定走 §10.1 三條路（自己負責就 `get_task_manual` 抽欄位——缺 PR 連結就先問——再 `create_task`）
 - ✅ 節點做完立刻 `update_step_status` 報 `done`；全部達成 DoD 後任務自動推導成「完成」（不必也不能自己報任務 `done`），接著照 §10.5 三步收尾（`write_task_learnings` 整併回手冊 → 清暫存 → `report_task_closeout` 回報處理完）

@@ -584,7 +584,7 @@ func TestOutsourceWorkerFoldMigration(t *testing.T) {
 		t.Fatalf("released fold wrong: %+v", rel)
 	}
 	act := read("ow-act")
-	// 00033 normalizes the legacy "auto" placement to "" (owner ruling
+	// 00034 normalizes the legacy "auto" placement to "" (owner ruling
 	// 2026-07-25: "auto" never named a real machine).
 	if act.roster != "active" || act.activated != 300 || act.desired != "offline" ||
 		act.desiredMachine != "" || act.refocus != 42.0 {
@@ -895,11 +895,11 @@ func TestMigration00028DownRestoresStepStatusByStartedTS(t *testing.T) {
 	}
 }
 
-// TestMigration00033NormalizesAutoMachinePlacement pins the 00033 normalization:
+// TestMigration00034NormalizesAutoMachinePlacement pins the 00034 normalization:
 // the legacy literal 'auto' — which never named a warden, so the placement was
 // unreachable — becomes ” in ALL THREE stores that carried it, while every real
 // machine id (and every already-empty value) is left untouched.
-func TestMigration00033NormalizesAutoMachinePlacement(t *testing.T) {
+func TestMigration00034NormalizesAutoMachinePlacement(t *testing.T) {
 	db, err := openSQLite(filepath.Join(t.TempDir(), "auto-norm.db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -908,9 +908,9 @@ func TestMigration00033NormalizesAutoMachinePlacement(t *testing.T) {
 	if err := runMigrations(db); err != nil {
 		t.Fatalf("goose up: %v", err)
 	}
-	// Seed the pre-normalization world (version 32).
-	if err := goose.DownTo(db, "migrations", 32); err != nil {
-		t.Fatalf("down to 32: %v", err)
+	// Seed the pre-normalization world (the version just below this migration).
+	if err := goose.DownTo(db, "migrations", 33); err != nil {
+		t.Fatalf("down to 33: %v", err)
 	}
 	if _, err := db.Exec(`INSERT INTO member (id, name, kind, desired_machine_id) VALUES
 		('m-auto', 'Auto', 'assistant', 'auto'),

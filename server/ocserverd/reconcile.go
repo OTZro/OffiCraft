@@ -537,8 +537,16 @@ func reconcileLog(format string, args ...any) {
 // wardenTargetOf resolves a member id → the warden member id its commands are
 // enqueued under (producer.py make_host_of): a warden addresses ITSELF; an
 // agent routes to the ACTIVE warden on its desired machine (the machine id IS
-// that warden's own member id); no active warden → the raw host string as an
-// inert fallback the reachability gate then fails closed on.
+// that warden's own member id). A pin that resolves to no active warden — and a
+// member with no pin at all — resolves to "": there is no destination.
+//
+// It used to return the raw pin string here instead, leaning on the downstream
+// reachability gate to fail closed on it. That is how "auto" became a host: the
+// literal string was handed on as a machine id, IsOnline("auto") was false
+// forever, and the member sat wanting to be online while nothing was ever
+// dispatched to it — a stall the gate reported as an ordinary unreachable
+// warden, indistinguishable from a machine that had merely gone offline.
+// Returning "" makes "nowhere to send this" a distinct, nameable answer.
 func (s *apiServer) wardenTargetOf(memberID string) string {
 	target, err := s.dal.GetMember(memberID)
 	if err == nil && target != nil && target.Kind == KindWarden {
@@ -548,14 +556,15 @@ func (s *apiServer) wardenTargetOf(memberID string) string {
 	if target != nil {
 		host = target.DesiredMachineID
 	}
-	if host != "" {
-		cand, err := s.dal.GetMember(host)
-		if err == nil && cand != nil && cand.Kind == KindWarden &&
-			cand.RosterStatus == RosterStatusActive {
-			return cand.ID
-		}
+	if host == "" {
+		return ""
 	}
-	return host
+	cand, err := s.dal.GetMember(host)
+	if err == nil && cand != nil && cand.Kind == KindWarden &&
+		cand.RosterStatus == RosterStatusActive {
+		return cand.ID
+	}
+	return ""
 }
 
 // enqueueWardenFrame pushes one command frame onto the target member's warden
@@ -674,6 +683,19 @@ func (s *apiServer) reconcileOne(m Member, st reconcileState, now float64) recon
 		return decision
 	case reconcileCmdStart:
 		warden := s.wardenTargetOf(m.ID)
+		if warden == "" {
+			// No machine chosen, or the chosen one is no longer an active machine.
+			// A member in this state wants to be online and can never be dispatched,
+			// so say so on the row the cockpit reads instead of retrying in silence
+			// every 30s — the worker arm of this rule lives in
+			// stampWorkerPlacementBlocked.
+			s.stampMemberPlacementBlocked(&m, now)
+			decision.Command = reconcileCmdNone
+			decision.Reason = "no machine selected"
+			decision.State = st
+			decision.DispatchUnlanded = true
+			return decision
+		}
 		if m.Kind != KindWarden && !s.machineSupportsRuntime(warden, m.Runtime) {
 			reconcileLog("%s: target warden %q does not report runtime %q ready — fail-closed",
 				m.ID, warden, NormalizeRuntime(m.Runtime))
@@ -764,6 +786,39 @@ func (s *apiServer) reconcileTickMemberLocked(m Member, now float64) reconcileDe
 //
 // Best-effort by contract: a persistence failure is logged and never changes the
 // reconcile decision — observability must not be able to stall the control loop.
+// stampMemberPlacementBlocked names, on the member row the cockpit reads, the one
+// stall the wake path could not previously explain: the member is wanted online
+// but has no machine to be sent to. Every other START failure already leaves a
+// trace (a lapsed start_timeout writes a receipt; an unbuildable frame logs and
+// backs off), while an unplaced member simply retried forever against nothing —
+// grey and unexplained, identical to a member nobody ever woke.
+//
+// Written only when the cause CHANGES, because the cadence re-decides this same
+// START every 30s: an unconditional write would re-stamp last_op_at and fan a
+// member delta on every tick. Best-effort — a persist failure never changes the
+// reconcile decision.
+func (s *apiServer) stampMemberPlacementBlocked(m *Member, now float64) {
+	reason := placementReasonNoMachine + ": no machine is selected for this member — " +
+		"choose one (改機器) before waking it; there is no automatic placement"
+	if m.DesiredMachineID != "" {
+		reason = placementReasonUnavailable + ": machine '" + m.DesiredMachineID +
+			"' is not an active machine — choose another one (改機器); " +
+			"no other machine is substituted"
+	}
+	if m.LastOp == reconcileCmdStart && m.LastOpReason == reason {
+		return
+	}
+	ok := false
+	m.LastOp = reconcileCmdStart
+	m.LastOpOK = &ok
+	m.LastOpLog = ""
+	m.LastOpReason = reason
+	m.LastOpAt = now
+	if err := s.putMember(*m, triggerServer); err != nil {
+		reconcileLog("%s: placement-blocked stamp persist failed: %v", m.ID, err)
+	}
+}
+
 func (s *apiServer) stampWakeObservability(m *Member, decision reconcileDecision, now float64) {
 	changed := false
 	if decision.StartTimedOut {

@@ -274,6 +274,18 @@ func (s *apiServer) HandleActivateMemberApiMembersMemberIdActivatePost(w http.Re
 		writeResolveError(w, err, "member", memberId)
 		return
 	}
+	// The machine bind is held to the SAME rule as every other placement write
+	// face: any non-blank id must name a real machine. activate is the one that
+	// most needs it — it flips desired_state online in the same call, so an
+	// unreachable pin here manufactures exactly the "wants to be online, can
+	// never be dispatched, never heals" member this validation exists to prevent.
+	// "" still clears the pin (the member then waits for a placement).
+	if body.MachineId != nil && *body.MachineId != "" {
+		if _, err := s.resolveMachine(*body.MachineId); err != nil {
+			writeResolveError(w, err, "machine", *body.MachineId)
+			return
+		}
+	}
 	m.StoppingSince = 0.0
 	m.WakingSince = 0.0
 	m.DesiredState = DesiredStateOnline
