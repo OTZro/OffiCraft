@@ -73,10 +73,12 @@ func codexPersonaInstruction(personaFile, model string) string {
 	if strings.TrimSpace(model) == "" {
 		return instruction +
 			"The OffiCraft launch model setting is blank, so the machine's Codex default applies. " +
-			"When calling report_waking, omit its optional model argument; never guess or persist a model name."
+			"If your role's boot sequence calls report_waking, omit its optional model argument; " +
+			"never guess or persist a model name."
 	}
 	return instruction + "The explicit OffiCraft launch model is " + model +
-		"; pass that exact value as report_waking's model argument."
+		". If your role's boot sequence calls report_waking, pass that exact value as its model argument. " +
+		"Follow your role-specific boot sequence when it says not to call report_waking."
 }
 
 type appServerMessage map[string]any

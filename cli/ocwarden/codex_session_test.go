@@ -66,6 +66,7 @@ func TestCodexPersonaInstructionPreservesBlankModelDefault(t *testing.T) {
 	for _, want := range []string{
 		"Read /private/persona.md completely",
 		"machine's Codex default applies",
+		"If your role's boot sequence calls report_waking",
 		"omit its optional model argument",
 		"never guess",
 	} {
@@ -75,7 +76,8 @@ func TestCodexPersonaInstructionPreservesBlankModelDefault(t *testing.T) {
 	}
 	explicit := codexPersonaInstruction("/private/persona.md", "gpt-5.6-terra")
 	if !strings.Contains(explicit, "explicit OffiCraft launch model is gpt-5.6-terra") ||
-		!strings.Contains(explicit, "pass that exact value") {
+		!strings.Contains(explicit, "pass that exact value") ||
+		!strings.Contains(explicit, "Follow your role-specific boot sequence") {
 		t.Fatalf("explicit-model instruction must pin report_waking: %s", explicit)
 	}
 }
