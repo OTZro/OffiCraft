@@ -54,7 +54,7 @@ bin/ci.sh          # 讀到 [ci] all green 才算過（不是 exit 0）
 
 CI 跑在本地（不付 GitHub Actions），從第一個非零步驟就 fail-fast；push 前請自己跑到綠。gate 內容：go gate / 黑箱 lint / gitleaks / FE typecheck+drift。
 
-改 Go 之後記得 rebuild + commit 對應的 prebuilt binary（`bin/ocagent` / `bin/ocwarden` / `bin/ocserverd`）—— CI parity gate 會抓 committed ≠ 源。
+改 Go 後只需 fresh build 驗證；`bin/ocagent`、`bin/ocwarden`、`bin/ocserverd` 若出現都是 gitignored build artifact，**永不 commit**。CI 一律編譯 source；只有本機恰有 prebuilt 時才做 parity dryrun。部署 binary 由 `bin/release` / GitHub Release fresh build 產出。
 
 ## wire freeze
 
@@ -81,7 +81,7 @@ macOS TCC 以 code-signing 身分記權限;Go 預設 adhoc 簽章每 build cdhas
   - **倒向「看得見的 skip」** → `bin/tests/run.sh:427`(`openssl version | grep -q '^OpenSSL 3'` 守著一個 red control)。**這是唯一另一個「檢查可能不執行」的方向**,但 else 分支會**印出 `skip — red control needs OpenSSL 3.x`**,不是靜默消失;且 `openssl version` 一口氣寫 ~25 bytes 就退出,窗開不起來。
   - **`echo "$VAR" | grep -q` 一律低risk**:writer 是 builtin、字串遠小於 64KB pipe buffer,grep 收到 EOF 前 write 早已完成。
   - **通則(給後面的人):`pipefail` + 早關 pipe 只有在「141 會把某個 `if`/`if !` 翻成『壞事不存在』並讓流程靜默往下走」時才是地雷。** `codesign-artifact` 之所以是地雷,是因為它是唯一一個誤判會**靜默翻轉「出不出貨」**的點。倒向紅、倒向可見 skip、rc 被 `|| true` 吃掉的,都不是同一種病。
-- **committed prebuilt(`bin/ocwarden` 等)永遠不簽**,維持素 `go build` 產物——CI parity gate 與任何 dev 機 rebuild 都不需要 keychain,repo/CI 完全不受影響;簽章只活在發佈 artifact 上。
+- **gitignored 本地 prebuilt(`bin/ocwarden` 等)不需要簽章**，維持素 `go build` 產物——CI parity dryrun 與任何 dev 機 build 都不需要 keychain,repo/CI 完全不受影響;簽章只活在發佈 artifact 上。
 - self-update 側**不驗簽**(self-signed 憑證在未信任機器上 verify 必非零,硬擋會 brick fleet),只在 swap 後 log 新 binary 的簽章身分(`cli/ocwarden/selfupdate.go` 的 signature observability)。
 
 發佈機一次性佈署:`bash bin/setup-codesign-cert`(冪等;產憑證 → 匯入 login keychain → sudo 信任 codeSign policy → 預授權 codesign 用 key → smoke test)。注意:換新憑證 = 新 TCC 身分,fleet 會再被問一輪權限。簽章腳本的 hermetic 測試在 `bin/tests/run.sh`(CI step 0b)。

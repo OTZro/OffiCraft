@@ -147,11 +147,12 @@ The labels never collide, so at no point do two jobs fight over one launchd iden
 the pull+push overlap in the coexistence window is made safe by the tmux clobber-guard
 (spawn) and isMemberSession gate (kill), not by label exclusivity.
 
-## Artifact → deploy (how the rebuilt binary reaches the running job)
+## Artifact → deploy (how the release-built binary reaches the running job)
 
-The canonical DEPLOY binary is the committed `bin/ocwarden` (a stripped prebuilt,
-`go build -ldflags="-s -w"`), which launchd execs DIRECTLY — the former `bin/warden-go`
-wrapper is folded into it (the binary self-resolves the token via `OC_WARDEN_TOKFILE`).
+The canonical DEPLOY binary is fresh-built by the release path, which launchd execs
+DIRECTLY — the former `bin/warden-go` wrapper is folded into it (the binary
+self-resolves the token via `OC_WARDEN_TOKFILE`). Local `bin/ocwarden` builds are
+gitignored and never committed.
 Two mechanisms keep the deployed binary from drifting behind landed source (the "改了
 golang 卻沒重編" 漏編 event):
 
@@ -163,12 +164,11 @@ golang 卻沒重編" 漏編 event):
    gitignored byproduct at `cli/ocwarden/ocwarden` purely to prove compilability; it is
    NOT the deploy artifact.
 
-2. **Committed binary refresh.** The committed `bin/ocwarden` is the artifact the plist
-   execs, so a golang source change must be accompanied by a rebuilt `bin/ocwarden`
-   (`cd cli/ocwarden && go build -ldflags="-s -w" -o ../../bin/ocwarden .`). The flip-time
-   bash installer rebuilt it in place (that installer is since retired — `ocwarden
-   install` installs the committed prebuilt and never rebuilds); steady-state deploy
-   must likewise refresh the committed binary and kickstart the job (below).
+2. **Release-built binary refresh.** The plist executes the binary installed from the
+   release path, so a golang source change must be included in a fresh release build.
+   Local `bin/ocwarden` builds are gitignored and never committed. The flip-time bash
+   installer is retired; steady-state `ocwarden install` installs the release-built
+   binary and does not rebuild source in place, then deploy kickstarts the job (below).
 
 **Adoption (the one step ci.sh cannot do): restart the job.** A running launchd process
 holds its old binary until restarted. So once the P4 flip installs

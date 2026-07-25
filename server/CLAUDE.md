@@ -33,6 +33,6 @@ M3 REST 子批 A(oapi-codegen 佈線 + SPA 基座)+ 子批 B(50 條 handler 填�
 - **config 預設路徑是 CWD-relative `oc.toml`**(binary 沒有 source-path 可錨 repo root);部署正解走 `$OC_CONFIG`。
 
 ## 慣例
-- 改 Go → rebuild + commit prebuilt `bin/ocserverd`(root §13;**先 `bash bin/build-seedsdist && bash bin/build-bindist`** 再 `go build -ldflags="-s -w"`——asset 已 embed-only,committed prebuilt 必帶 seedsdist + bindist embed,漏 staging 會默默丟掉單檔 boot/裝機能力;注意 parity gate 的 --help 對比抓不到內容面漏 staging,故此步靠人工紀律)。
+- 改 Go → fresh build 驗證，**不 commit binary**(root §13)。需要可單檔 boot/裝機的 build 前，先跑 `bash bin/build-seedsdist && bash bin/build-bindist` 再 `go build -ldflags="-s -w"`——asset 已 embed-only，漏 staging 會默默丟掉單檔 boot/裝機能力；本機產物是 gitignored，部署 binary 由發版流程 fresh build，parity dryrun 的 `--help` 對比抓不到內容面漏 staging，故此步靠人工紀律。
 - 有別於 cli/ 的 stdlib-only:本模組帶第三方依賴(BurntSushi/toml、pressly/goose/v3、modernc.org/sqlite)——server 端 schema/config 需求正當化;新增依賴前先想能不能 stdlib。
 - 新端點 = RouteSpec 表加一行(`routes.go`),不散寫 mount;boot assertion 缺 requires 即拒起。

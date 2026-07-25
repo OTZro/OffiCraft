@@ -41,7 +41,7 @@ This file is read by Claude Code agents working in this repo.
     - **recon 一律基於 `origin/main`**:此 repo 的 `local main` 是條**孤兒 old-flat-layout 歷史**(與 origin/main 無共同祖先),讀它 = 全錯 layout。verify-at-source 的 source = `origin/main`。
     - **wire 已凍結(M1)**:動 wire(HTTP OpenAPI 面或 MCP tool 面)= **先改 `spec/*.json`(spec/openapi.json / spec/mcp-catalog.json)+ owner 過目,再動碼**;ci wire-freeze gate(step 1g gen-ocapi drift:committed `ocapi_gen.go` 必須從凍結 spec byte-identical 重生 + step 4 FE schema drift;MCP 描述子由 ocserverd 直服凍結 `spec/mcp-catalog.json`,by construction 不漂)會擋任何未過 spec 的漂移;行為面由 `conformance/run.sh --target go` 收官。
     - **land pipeline**:off `origin/main` 開分支 → 隔離 worktree、標死 scope → 親驗全 diff(無 scope-creep)+ 親讀關鍵邏輯碼 → `bash bin/ci.sh` 讀 `[ci] all green` → FF fast-forward push(`git push origin <b>:main`)→ 雙源坐實(`git ls-remote` + `gh api .../commits/main --jq .sha`)→ autodeploy 盯 `/api/version` git_sha(公開免 auth;version 欄恆 0.0.0,對賬看 git_sha)→ 收退路(`worktree remove` + `branch -D`)。
-    - **改 Go → rebuild + commit prebuilt binary**(CI parity gate 抓 committed ≠ 源)。
+    - **改 Go → fresh build 驗證即可；binary 永不 commit**。CI 會編譯 source；若本機剛好有 gitignored prebuilt，才做 parity dryrun。
     - **§7 push 前審完整 manifest**:逐檔必要性,別把第一道審查讓給 gate。
 
 14. **caller 身分來自 auth、非參數;intent-per-tool**(owner 定案 2026-07-10;對齊 §1「乾淨身分、不借權」;全 spec 見 `docs/design/caller-identity-convention.md`):
@@ -55,7 +55,7 @@ This file is read by Claude Code agents working in this repo.
 ## 域地圖 — repo map(AI 定位用)
 
 top-level:
-- **`server/`** — Go server daemon:`ocserverd/`(**production server**:REST + SSE + MCP + reconcile,goose migrations,SPA go:embed)。folder = module = binary 同名;prebuilt 在 `bin/ocserverd`(勿與 bash installer `bin/ocserver` 混淆)。詳見 `server/CLAUDE.md`。
+- **`server/`** — Go server daemon:`ocserverd/`(**production server**:REST + SSE + MCP + reconcile,goose migrations,SPA go:embed)。folder = module = binary 同名;`bin/ocserverd` 若存在只是 gitignored 本地 build artifact(勿與 bash installer `bin/ocserver` 混淆)。詳見 `server/CLAUDE.md`。
 - **`cli/`** — Go 自更新 binary:`ocagent/`(Plane A:agent-side SSE listener)· `ocwarden/`(Plane B:per-machine warden executor)。folder = module = binary 同名。詳見 `cli/CLAUDE.md`。
 - **`frontend/`** — React18 + Vite5 + TS5 SPA。seam 分層 wire→mappers→types→adapter→mock→http→hooks→component。詳見 `frontend/CLAUDE.md`。
 - **`conformance/`** — 語言無關黑箱套件(HTTP-only,743 tests):wire 行為的回歸權威。詳見 `conformance/CLAUDE.md`。
