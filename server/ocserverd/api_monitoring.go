@@ -729,6 +729,13 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		}
 	}
 	accountKeys := map[string]bool{}
+	// An identified account is still useful observability even before Codex has
+	// supplied a rate-limit window or a billable-cost estimate.  Keeping it in
+	// the fold lets the cockpit show the bound ChatGPT account honestly instead
+	// of presenting the misleading "no account usage data" empty state.
+	for account := range acctHosts {
+		accountKeys[account] = true
+	}
 	for account := range freshRL {
 		accountKeys[account] = true
 	}
