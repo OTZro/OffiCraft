@@ -34,8 +34,10 @@ var tokenTTLWhitelist = map[int]bool{
 // handover_pct bounds: the warn band sits at 40 (ctx.warn_pct default) — a
 // handover threshold below it would fire before the warning.
 const (
-	minHandoverPct = 40
-	maxHandoverPct = 90
+	minHandoverPct              = 40
+	maxHandoverPct              = 90
+	minCodexCompactionThreshold = 1
+	maxCodexCompactionThreshold = 10
 )
 
 // outsource_max_parallel bounds: -1 = 無限 (unlimited — no global cap; the
@@ -202,6 +204,10 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		writeError(w, http.StatusUnprocessableEntity, "handover_pct must be between 40 and 90")
 		return
 	}
+	if body.CodexCompactionThreshold != nil && (*body.CodexCompactionThreshold < minCodexCompactionThreshold || *body.CodexCompactionThreshold > maxCodexCompactionThreshold) {
+		writeError(w, http.StatusUnprocessableEntity, "codex_compaction_threshold must be between 1 and 10")
+		return
+	}
 	if body.OutsourceMaxParallel != nil &&
 		(*body.OutsourceMaxParallel < minOutsourceParallel ||
 			*body.OutsourceMaxParallel > maxOutsourceParallel) {
@@ -279,6 +285,14 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 			return
 		}
 		s.ctxhigh.HandoverPct = *body.HandoverPct
+	}
+	if body.CodexCompactionThreshold != nil {
+		if err := s.dal.PutSetting(settingCodexCompactionThreshold, strconv.Itoa(*body.CodexCompactionThreshold)); err != nil {
+			s.settingsMu.Unlock()
+			internalError(w, err)
+			return
+		}
+		s.codexCompactionThreshold = *body.CodexCompactionThreshold
 	}
 	if body.OutsourceMaxParallel != nil {
 		if err := s.dal.PutSetting(settingOutsourceMaxParallel,
@@ -392,16 +406,17 @@ func (s *apiServer) settingsView() settingsDTO {
 		customThemes = []ThemeBundleDTO{}
 	}
 	return settingsDTO{
-		TokenTTL:             s.tokenTTL,
-		HandoverPct:          s.ctxhigh.HandoverPct,
-		OutsourceMaxParallel: s.outsourceMaxParallel,
-		UpdaterReceiveBeta:   s.updaterReceiveBeta,
-		UpdaterAutoUpdate:    s.updaterAutoUpdate,
-		OrgName:              s.orgName,
-		OwnerName:            s.ownerName,
-		DisplayTheme:         s.displayTheme,
-		DisplayLanguage:      s.displayLanguage,
-		CustomThemes:         customThemes,
+		TokenTTL:                 s.tokenTTL,
+		HandoverPct:              s.ctxhigh.HandoverPct,
+		CodexCompactionThreshold: s.codexCompactionThreshold,
+		OutsourceMaxParallel:     s.outsourceMaxParallel,
+		UpdaterReceiveBeta:       s.updaterReceiveBeta,
+		UpdaterAutoUpdate:        s.updaterAutoUpdate,
+		OrgName:                  s.orgName,
+		OwnerName:                s.ownerName,
+		DisplayTheme:             s.displayTheme,
+		DisplayLanguage:          s.displayLanguage,
+		CustomThemes:             customThemes,
 		// Read from the DAL, NOT from the settings snapshot: onboarding runs in
 		// its own goroutine and finishes after this handler returned, so a
 		// boot-time snapshot would serve a permanently stale "running".

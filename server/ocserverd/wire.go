@@ -47,9 +47,10 @@ type authStatusDTO struct {
 // settingsDTO is the owner-adjustable settings surface (GET/PATCH
 // /api/settings).
 type settingsDTO struct {
-	TokenTTL             int64 `json:"token_ttl"`
-	HandoverPct          int   `json:"handover_pct"`
-	OutsourceMaxParallel int   `json:"outsource_max_parallel"`
+	TokenTTL                 int64 `json:"token_ttl"`
+	HandoverPct              int   `json:"handover_pct"`
+	CodexCompactionThreshold int   `json:"codex_compaction_threshold"`
+	OutsourceMaxParallel     int   `json:"outsource_max_parallel"`
 	// UpdaterReceiveBeta / UpdaterAutoUpdate are the two software-update
 	// toggles (default false): follow GitHub prereleases too / self-upgrade
 	// in the background when a newer release exists.

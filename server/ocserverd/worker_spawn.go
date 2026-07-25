@@ -913,7 +913,7 @@ func (s *apiServer) autoHandoverWorker(w OutsourceWorker, now float64) {
 	}
 	// (2) handover check — the IDENTICAL guards to the member auto-stamp.
 	ctxhigh := s.ctxHighConfig()
-	if !shouldAutoRefocus(w.Runtime, record, ctxhigh) {
+	if !shouldAutoRefocus(w.Runtime, record, ctxhigh, s.codexCompactionThreshold) {
 		return // below the line, or no actionable pct (nil gauge / stale) — no-op
 	}
 	if bootStormTripped(gaugeSecsSinceBoot(record, now), ctxhigh.MinBootSecs) {

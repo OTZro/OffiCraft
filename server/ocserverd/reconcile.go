@@ -804,12 +804,13 @@ func (s *apiServer) stampWakeObservability(m *Member, decision reconcileDecision
 // codexCompactionRefocusThreshold is deliberately independent of the owner
 // context-percent setting: Codex compacts its own long-lived thread, so its
 // useful handover signal is repeated compaction, not a transient fill gauge.
-const codexCompactionRefocusThreshold = 3
-
-func shouldAutoRefocus(runtime string, record map[string]any, cfg SseContextHighConfig) bool {
+func shouldAutoRefocus(runtime string, record map[string]any, cfg SseContextHighConfig, codexThreshold int) bool {
 	if NormalizeRuntime(runtime) == RuntimeCodex {
 		count, ok := record["compaction_count"].(int)
-		return ok && count >= codexCompactionRefocusThreshold
+		if codexThreshold < 1 {
+			codexThreshold = defaultCodexCompactionThreshold
+		}
+		return ok && count >= codexThreshold
 	}
 	pct := actionableContextPct(record, cfg.StaleGuard)
 	return bandFor(pct, cfg.WarnPct, cfg.HandoverPct) == levelHandover
@@ -828,7 +829,7 @@ func (s *apiServer) stampContextHighRecycle(members []Member, now float64) {
 			continue // already recycling — the marker IS the cooldown
 		}
 		record := s.gauge.Get(m.ID)
-		if !shouldAutoRefocus(m.Runtime, record, ctxhigh) {
+		if !shouldAutoRefocus(m.Runtime, record, ctxhigh, s.codexCompactionThreshold) {
 			continue
 		}
 		if bootStormTripped(gaugeSecsSinceBoot(record, now), ctxhigh.MinBootSecs) {

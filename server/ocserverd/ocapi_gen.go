@@ -1344,8 +1344,9 @@ type SettingsDTO struct {
 	DisplayLanguage *string `json:"display_language,omitempty"`
 
 	// DisplayTheme The owner's cockpit visual theme (T-0b41-p2). "" = never set — the frontend keeps its localStorage cache / default; reconciled in at login as the cross-device source of truth.
-	DisplayTheme *string `json:"display_theme,omitempty"`
-	HandoverPct  int     `json:"handover_pct"`
+	DisplayTheme             *string `json:"display_theme,omitempty"`
+	HandoverPct              int     `json:"handover_pct"`
+	CodexCompactionThreshold int     `json:"codex_compaction_threshold"`
 
 	// Onboarding The first-run onboarding report (T-ba62), or null when onboarding never ran on this database. Owner-gated by virtue of living on GET /api/settings — a failed step's detail can carry local paths, so it must never reach the PUBLIC /api/auth/status probe.
 	Onboarding *OnboardingReportDTO `json:"onboarding,omitempty"`
@@ -1379,8 +1380,9 @@ type SettingsUpdateDTO struct {
 	DisplayLanguage *string `json:"display_language,omitempty"`
 
 	// DisplayTheme The owner's cockpit visual theme (T-0b41-p2) — trimmed; "" clears it back to unset. Must be one of office, xian (or ""); anything else is a 422.
-	DisplayTheme *string `json:"display_theme,omitempty"`
-	HandoverPct  *int    `json:"handover_pct,omitempty"`
+	DisplayTheme             *string `json:"display_theme,omitempty"`
+	HandoverPct              *int    `json:"handover_pct,omitempty"`
+	CodexCompactionThreshold *int    `json:"codex_compaction_threshold,omitempty"`
 
 	// OrgName The studio display name (T-d693) — trimmed, max 80 runes; "" clears it back to the localized default. A value longer than 80 runes is a 422.
 	OrgName              *string `json:"org_name,omitempty"`

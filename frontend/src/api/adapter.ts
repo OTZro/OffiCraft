@@ -574,6 +574,8 @@ export interface ServerSettingsView {
   tokenTtl: number;
   /** Context auto-handover threshold in percent (40..90). */
   handoverPct: number;
+  /** Codex context compactions before automatic refocus (1..10). */
+  codexCompactionThreshold: number;
   /** M3: the GLOBAL cap on concurrently live outsource workers (-1..20;
    * **-1 ⇒ 無限 (unlimited — no global cap)**; 0 ⇒ outsource assignment is
    * PAUSED — the panel annotates it). */
@@ -634,6 +636,7 @@ export interface OnboardingReportView {
 export interface ServerSettingsPatch {
   tokenTtl?: number;
   handoverPct?: number;
+  codexCompactionThreshold?: number;
   outsourceMaxParallel?: number;
   /** Also admit GitHub prereleases in update checks (default false). */
   updaterReceiveBeta?: boolean;

@@ -5131,7 +5131,8 @@ export interface components {
              */
             custom_themes: components["schemas"]["ThemeBundleDTO"][];
             /** Handover Pct */
-            handover_pct: number;
+             handover_pct: number;
+             codex_compaction_threshold: number;
             /**
              * Onboarding
              * @description The first-run onboarding report (T-ba62), or null when onboarding never ran on this database. Owner-gated by virtue of living on GET /api/settings — a failed step's detail can carry local paths, so it must never reach the PUBLIC /api/auth/status probe.
@@ -5195,6 +5196,7 @@ export interface components {
             custom_themes?: components["schemas"]["ThemeBundleDTO"][] | null;
             /** Handover Pct */
             handover_pct?: number | null;
+            codex_compaction_threshold?: number | null;
             /**
              * Org Name
              * @description The studio display name (T-d693) — trimmed, max 80 runes; "" clears it back to the localized default. A value longer than 80 runes is a 422.

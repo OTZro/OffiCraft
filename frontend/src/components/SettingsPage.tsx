@@ -539,6 +539,7 @@ function ServerParams({
   // The % field is a free-text draft until blur/Enter — committing on every
   // keystroke would PATCH the server mid-typing ("5" on the way to "50").
   const [handoverDraft, setHandoverDraft] = useState<string | null>(null);
+  const [codexHandoverDraft, setCodexHandoverDraft] = useState<string | null>(null);
   const [rangeError, setRangeError] = useState(false);
 
   const ttlLabel: Record<number, string> = {
@@ -561,6 +562,16 @@ function ServerParams({
     setHandoverDraft(null);
     if (n === settings.handoverPct) return;
     void onSave({ handoverPct: n });
+  }
+
+  function commitCodexHandover() {
+    if (!settings || codexHandoverDraft === null) return;
+    const n = Number(codexHandoverDraft);
+    if (!Number.isInteger(n) || n < 1 || n > 10) {
+      setRangeError(true); setCodexHandoverDraft(null); return;
+    }
+    setCodexHandoverDraft(null);
+    if (n !== settings.codexCompactionThreshold) void onSave({ codexCompactionThreshold: n });
   }
 
   return (
@@ -635,8 +646,20 @@ function ServerParams({
               <div className="param-row__name">{t.settings.codexHandover}</div>
               <div className="param-row__sub">{t.settings.codexHandoverSub}</div>
             </div>
-            <div className="param-pct" aria-label={t.settings.codexHandover}>
-              <span className="param-pct__sign">3 次</span>
+            <div className="param-pct">
+              <input
+                id="param-codex-handover"
+                className="param-input"
+                type="number"
+                min={1}
+                max={10}
+                aria-label={t.settings.codexHandover}
+                value={codexHandoverDraft ?? String(settings.codexCompactionThreshold)}
+                onChange={(e) => { setRangeError(false); onClearSaveError(); setCodexHandoverDraft(e.target.value); }}
+                onBlur={commitCodexHandover}
+                onKeyDown={(e) => { if (e.key === "Enter") commitCodexHandover(); }}
+              />
+              <span className="param-pct__sign">次</span>
             </div>
           </div>
 

@@ -453,6 +453,7 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 	api.passwordHash = auth.passwordHash
 	api.passwordChangedAt = auth.passwordChangedAt
 	api.ctxhigh = auth.ctxhigh
+	api.codexCompactionThreshold = auth.codexCompactionThreshold
 	api.outsourceMaxParallel = auth.outsourceMaxParallel
 	api.updaterReceiveBeta = auth.updaterReceiveBeta
 	api.updaterAutoUpdate = auth.updaterAutoUpdate
