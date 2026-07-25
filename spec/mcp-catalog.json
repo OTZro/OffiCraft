@@ -640,6 +640,11 @@
       "description": "Ingest an agent's context gauge (in-memory; bad body \u2192 400).",
       "inputSchema": {
         "properties": {
+          "compaction_count": {
+            "default": null,
+            "description": "Optional non-negative live Codex compaction count. Identity remains the verified JWT sub.",
+            "title": "Compaction Count"
+          },
           "context_pct": {
             "default": null,
             "title": "Context Pct"

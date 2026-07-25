@@ -410,16 +410,19 @@ func (s *apiServer) machineSupportsRuntime(machineID, runtime string) bool {
 	if len(capabilities) == 0 {
 		return normalized == RuntimeClaude
 	}
+	capability, ok := capabilities[normalized]
+	if !ok {
+		// A reported map is the warden's full answer: a runtime it did not
+		// mention is absent, not unknown. Only the no-map case above may infer
+		// Claude.
+		return false
+	}
 	// Claude's historic placement contract is intentionally permissive: the
 	// spawn-time operator escape hatch OC_CLAUDE_CRED_CHECK=0 exists for hosts
 	// whose credential heuristic false-negatives.  Codex introduced this
 	// placement gate; do not retroactively tighten Claude with it.
 	if normalized == RuntimeClaude {
 		return true
-	}
-	capability, ok := capabilities[normalized]
-	if !ok {
-		return false
 	}
 	if capability.Installed == nil || !*capability.Installed {
 		return false
