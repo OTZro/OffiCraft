@@ -287,14 +287,14 @@ export function AgentDetailPanel({
       {overlays}
       {afterIdentityCards}
 
-      {/* info card: LEFT 模型 + 投入度 (editable launch intents), RIGHT 機器 +
-       * Claude Account — the member page's mp-info2 layout, now the ONE layout. */}
+      {/* info card: LEFT 執行環境 + 模型 + 投入度 (editable launch intents), RIGHT 機器 +
+       * runtime account — the member page's mp-info2 layout, now the ONE layout. */}
       <div className="mp-card mp-info2">
         <div className="mp-field" data-testid={`${p}-model-effort-cell`}>
           {!meEditing ? (
             <>
               <div className="mp-field__head">
-                <div className="mp-field__label">{t.mp.model}</div>
+                <div className="mp-field__label">{t.mp.agentRuntime}</div>
                 {vm.onSaveModelEffort && (
                   <button
                     type="button"
@@ -307,13 +307,13 @@ export function AgentDetailPanel({
                   </button>
                 )}
               </div>
-              <div className="mp-field__value">{shownModel || dash}</div>
-              <div className="mp-field__label mp-field__label--stacked">
-                {t.mp.agentRuntime}
-              </div>
               <div className="mp-field__value">
                 {shownRuntime === "codex" ? "Codex" : "Claude Code"}
               </div>
+              <div className="mp-field__label mp-field__label--stacked">
+                {t.mp.model}
+              </div>
+              <div className="mp-field__value">{shownModel || dash}</div>
               <div className="mp-field__label mp-field__label--stacked">
                 {t.mp.effort}
               </div>
@@ -378,7 +378,7 @@ export function AgentDetailPanel({
             {vm.machineText || dash}
           </div>
           <div className="mp-field__label mp-field__label--stacked">
-            {t.mp.claudeAccount}
+            {shownRuntime === "codex" ? t.mp.codexAccount : t.mp.claudeAccount}
           </div>
           <div className="mp-field__value" data-testid={`${p}-account`}>
             {vm.accountText || dash}
