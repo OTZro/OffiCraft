@@ -342,6 +342,16 @@ func (s *codexSession) requestRateLimits() {
 	}
 }
 
+// App Server versions have returned the snapshot both directly and nested in
+// `rateLimits`; notifications always use the nested form. Normalize at the
+// boundary so reconnect recovery works across both shapes.
+func rateLimitSnapshot(result map[string]any) map[string]any {
+	if nested, _ := result["rateLimits"].(map[string]any); nested != nil {
+		return nested
+	}
+	return result
+}
+
 func (s *codexSession) reportTokenUsage(params map[string]any) {
 	if !s.allowUsageReport() {
 		return
@@ -537,7 +547,7 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 	rateID := s.send("account/rateLimits/read", nil)
 	if response, rateErr := s.waitResponse(rateID); rateErr == nil {
 		if snapshot, _ := response["result"].(map[string]any); snapshot != nil {
-			s.reportRateLimits(snapshot)
+			s.reportRateLimits(rateLimitSnapshot(snapshot))
 		}
 	}
 	threadParams := map[string]any{
@@ -611,7 +621,7 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 			if id := messageID(msg); id != 0 && id == s.rateLimitReadID {
 				s.rateLimitReadID = 0
 				if result, _ := msg["result"].(map[string]any); result != nil {
-					s.reportRateLimits(result)
+					s.reportRateLimits(rateLimitSnapshot(result))
 				}
 				continue
 			}
