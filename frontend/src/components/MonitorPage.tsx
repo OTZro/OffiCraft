@@ -1311,7 +1311,7 @@ function OutsourceSessionRow({
         {worker.effort && <span className="mon-badge">{worker.effort}</span>}
       </td>
       <td data-label={t.monitor.sessionCol.context}>
-        {contextText(worker.contextPct ?? null, worker.runtime, worker.compactionCount ?? null, dash)}
+        {contextText(worker.contextPct ?? null, worker.runtime || "claude", worker.compactionCount ?? null, dash)}
       </td>
       <td data-label={t.monitor.sessionCol.estCost}>
         {totalCost != null ? formatCost(totalCost) : dash}

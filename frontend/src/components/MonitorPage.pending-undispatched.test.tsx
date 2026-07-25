@@ -82,8 +82,10 @@ const session = (over: Partial<MonSessionView> = {}): MonSessionView => ({
   // the not-landed notice — an inconsistent fixture, not a bug.
   machine: "mach-b",
   account: "",
+  runtime: "claude",
   status: "offline",
   contextPct: 42,
+  compactionCount: null,
   cost: null,
   bankedCost: null,
   ...over,
