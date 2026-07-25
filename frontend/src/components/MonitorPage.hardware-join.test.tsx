@@ -94,7 +94,8 @@ describe("MonitorPage hardware telemetry join", () => {
     // Wait for the row to mount by its stable id badge.
     await screen.findByText("m-server-self");
     // The hardware cells carry the real numbers keyed by machine-id.
-    expect(await screen.findByText("17.2%")).toBeTruthy();
+    // MonitorPage intentionally renders percentages as whole numbers.
+    expect(await screen.findByText("17%")).toBeTruthy();
     expect(screen.getByText("41%")).toBeTruthy();
     // Battery power cell: 🔋 88% (on battery).
     expect(screen.getByText(/88%/)).toBeTruthy();
