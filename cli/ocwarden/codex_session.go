@@ -100,6 +100,9 @@ type codexSession struct {
 	telemetryMu      sync.Mutex
 	lastUsageReport  time.Time
 	forceUsageReport bool
+	// rateLimitReadID is the one in-flight refresh requested after an OffiCraft
+	// SSE reconnect. Responses arrive on the same App Server stream as events.
+	rateLimitReadID int
 	// completedCompactions makes the App Server's item/completed stream
 	// idempotent. Replayed notifications must not look like fresh context
 	// compactions and accidentally recycle a just-booted agent.
@@ -331,6 +334,12 @@ func (s *codexSession) reportIdentity() {
 	s.post("/api/monitoring/telemetry", map[string]any{
 		"runtime": "codex", "account": s.account, "account_label": "ChatGPT",
 	})
+}
+
+func (s *codexSession) requestRateLimits() {
+	if s.rateLimitReadID == 0 {
+		s.rateLimitReadID = s.send("account/rateLimits/read", nil)
+	}
 }
 
 func (s *codexSession) reportTokenUsage(params map[string]any) {
@@ -587,6 +596,7 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 			// immediately, then restarts the normal 30-second cadence.
 			if strings.HasPrefix(strings.TrimSpace(line), "[ocagent] listen: connected") {
 				s.reportIdentity()
+				s.requestRateLimits()
 				identityHeartbeat.Reset(codexTelemetryThrottle)
 			}
 			if actionableCodexListenerLine(line) {
@@ -596,6 +606,13 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 		case msg, ok := <-s.messages:
 			if !ok {
 				s.messages = nil
+				continue
+			}
+			if id := messageID(msg); id != 0 && id == s.rateLimitReadID {
+				s.rateLimitReadID = 0
+				if result, _ := msg["result"].(map[string]any); result != nil {
+					s.reportRateLimits(result)
+				}
 				continue
 			}
 			if _, hasID := msg["id"]; hasID {
