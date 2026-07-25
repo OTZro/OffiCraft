@@ -64,21 +64,35 @@ func normalizeCodexEffort(effort string) string {
 	}
 }
 
+func codexPersonaInstruction(personaFile, model string) string {
+	instruction := "Read " + personaFile +
+		" completely before acting. It is your OffiCraft identity and operating context. " +
+		"Never use request_user_input for normal questions; create an OffiCraft reply card instead. "
+	if strings.TrimSpace(model) == "" {
+		return instruction +
+			"The OffiCraft launch model setting is blank, so the machine's Codex default applies. " +
+			"When calling report_waking, omit its optional model argument; never guess or persist a model name."
+	}
+	return instruction + "The explicit OffiCraft launch model is " + model +
+		"; pass that exact value as report_waking's model argument."
+}
+
 type appServerMessage map[string]any
 
 type codexSession struct {
-	in       io.WriteCloser
-	messages <-chan appServerMessage
-	writeMu  sync.Mutex
-	nextID   int
-	threadID string
-	turnID   string
-	active   bool
-	base     string
-	token    string
-	workdir  string
-	model    string
-	effort   string
+	in          io.WriteCloser
+	messages    <-chan appServerMessage
+	writeMu     sync.Mutex
+	nextID      int
+	threadID    string
+	turnID      string
+	active      bool
+	base        string
+	token       string
+	workdir     string
+	model       string
+	effort      string
+	compactions int
 }
 
 func (s *codexSession) send(method string, params map[string]any) int {
@@ -259,7 +273,8 @@ func (s *codexSession) reportTokenUsage(params map[string]any) {
 	used := jsonNumber(last["totalTokens"])
 	if window > 0 {
 		s.post("/api/agent/context", map[string]any{
-			"context_pct": used / window * 100,
+			"context_pct":      used / window * 100,
+			"compaction_count": s.compactions,
 		})
 	}
 	tokens := map[string]any{}
@@ -274,6 +289,17 @@ func (s *codexSession) reportTokenUsage(params map[string]any) {
 	s.post("/api/monitoring/telemetry", map[string]any{
 		"runtime": "codex", "tokens": tokens, "effort": s.effort,
 	})
+}
+
+// recordCompaction consumes the current App Server signal. Context compaction is
+// an item, not a turn: counting the completed item avoids guessing from token
+// percentages and intentionally ignores the deprecated thread/compacted echo.
+func (s *codexSession) recordCompaction(params map[string]any) {
+	item, _ := params["item"].(map[string]any)
+	if item == nil || item["type"] != "contextCompaction" {
+		return
+	}
+	s.compactions++
 }
 
 func (s *codexSession) handleServerRequest(msg appServerMessage) {
@@ -373,12 +399,9 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 		return 1
 	}
 	s.notify("initialized", map[string]any{})
-	personaInstruction := "Read " + *persona +
-		" completely before acting. It is your OffiCraft identity and operating context. " +
-		"Never use request_user_input for normal questions; create an OffiCraft reply card instead."
 	threadParams := map[string]any{
 		"cwd": *workdir, "approvalPolicy": "never", "sandbox": "danger-full-access",
-		"developerInstructions": personaInstruction,
+		"developerInstructions": codexPersonaInstruction(*persona, *model),
 		"config": map[string]any{
 			"features": map[string]any{"default_mode_request_user_input": false},
 			"mcp_servers": map[string]any{"officraft": map[string]any{
@@ -467,6 +490,8 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 				}
 			case "thread/tokenUsage/updated":
 				s.reportTokenUsage(params)
+			case "item/completed":
+				s.recordCompaction(params)
 			case "item/tool/requestUserInput", "mcpServer/elicitation/request":
 				s.handleServerRequest(msg)
 			}

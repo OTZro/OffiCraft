@@ -262,28 +262,6 @@ var workerSharedCoreRewrites = []sharedCoreRewrite{
 			"啟動程序排除；留著這句等於叫 worker 去用一條它沒有的路。",
 	},
 
-	// §5 presence：把 waking 那一段從祈使句改成敘述句 ＋ 明講 worker 不報。
-	//
-	// 第三輪 review 抓到的：前一輪把「核心裡剩下的兩次 report_waking」整批判成
-	// 「描述性、不是開機指示，所以保留」。附錄 A 那一次（工具目錄列舉）確實是描述性的，
-	// 但這一次不是——「boot 起手你主動用 MCP report_waking() 報一次……發生在掛 listen
-	// 之前」是一條帶順序的**祈使開機指示**，而且它出現在 overlay §2（「report_waking
-	// 不在你的開機序列」）之前 180 行。兩次被當成同一類處理，是那個誤判的成因。
-	//
-	// 整行刪掉會連 online/offline 由 SSE 投影、沒有 heartbeat、presence 只能報自己
-	// 這些對 worker 同樣成立的共用 liveness 政策一起丟掉，所以就地改寫。改寫後這個
-	// 子句不留 report_waking 字樣、也不製造新的 §N 指標。
-	{
-		Anchor: "**第二條 liveness：presence",
-		Find: "**waking（喚醒中）**——boot 起手你主動用 MCP `report_waking()` 報一次" +
-			"（獨立於 SSE、不掛連線），發生在掛 listen **之前**；",
-		Replace: "**waking（喚醒中）**——成員在 boot 起手會主動報一次（獨立於 SSE、不掛連線），" +
-			"發生在掛 listen **之前**；**你不報 waking**——你的上線宣告是 `get_my_task` 領工" +
-			"（見下方外包 overlay 的開機程序）；",
-		Why: "這是核心裡唯一一條祈使式的 report_waking 開機指示，與 overlay §2 直接矛盾，" +
-			"且在它之前 180 行。留著等 overlay 覆寫，等於把開機第一步押在閱讀順序上。",
-	},
-
 	// §10.5 結案後續：拿掉「角色 lessons」那一軌。
 	{
 		Anchor:  "1. **經驗回寫**",
@@ -327,6 +305,10 @@ var workerBootSequenceExclusions = []sharedCoreExclusion{
 		Line:   true,
 		Why: "resume_summary 是成員的身分快照接續路徑；worker 從 get_my_task + task " +
 			"plan/step note + baton 接回。",
+	},
+	{
+		Anchor: "## Claude Code 執行環境",
+		Why:    "Claude 的互動工具、context telemetry、model 上報是 runtime tail；worker 只接收自己的 runtime 版本。",
 	},
 }
 

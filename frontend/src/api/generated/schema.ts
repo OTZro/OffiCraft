@@ -2827,6 +2827,11 @@ export interface components {
             agent_id: string;
             /** Context Pct */
             context_pct: number;
+            /**
+             * Compaction Count
+             * @description Codex App Server context compactions in this live session; null for runtimes that do not report it.
+             */
+            compaction_count?: number;
             /** Rate Limits */
             rate_limits?: {
                 [key: string]: unknown;
@@ -2845,6 +2850,11 @@ export interface components {
         AgentContextIngestDTO: {
             /** Context Pct */
             context_pct?: unknown;
+            /**
+             * Compaction Count
+             * @description Optional non-negative live Codex compaction count. Identity remains the verified JWT sub.
+             */
+            compaction_count?: unknown;
             /** Rate Limits */
             rate_limits?: {
                 [key: string]: unknown;
@@ -4258,6 +4268,11 @@ export interface components {
             banked_cost?: number | null;
             /** Context Pct */
             context_pct?: number | null;
+            /**
+             * Compaction Count
+             * @description Codex App Server compactions in this live session; null for Claude or before the first Codex report.
+             */
+            compaction_count?: number | null;
             /** Cost */
             cost?: number | null;
             /**
@@ -4380,6 +4395,11 @@ export interface components {
              * @description The worker's live context-window fill %, read from the SAME gauge the member roster reads (POST /api/agent/context, keyed by actor id). null when unreported. T-f190 additive-optional.
              */
             context_pct?: number | null;
+            /**
+             * Compaction Count
+             * @description Codex App Server compactions in this worker's live session; null when unavailable.
+             */
+            compaction_count?: number | null;
             /**
              * Cost
              * @description The worker's live session cost (telemetry `cost`, keyed by actor id) — the CURRENT session only, kept separate from banked_cost (never overlapping). null when unreported. T-f190 additive-optional.

@@ -444,6 +444,7 @@ export function toOutsourceWorker(w: WireOutsourceWorker): OutsourceWorkerView {
     // field arrives as undefined — coalesce to null (the honest dash), never 0.
     account: w.account ?? null,
     contextPct: w.context_pct ?? null,
+    compactionCount: w.compaction_count ?? null,
     cost: w.cost ?? null,
     // banked_cost = the durable cumulative spend (member parity, T-ba6b);
     // null = nothing banked yet — the panel sums live+banked like the member
@@ -626,11 +627,13 @@ function toMonSession(w: WireMonSession): MonSessionView {
     effort: w.effort || "", // live self-reported effort; "" passes through → "—"
     machine: w.machine,
     account: w.account,
+    runtime: (w.runtime || "claude") as "claude" | "codex",
     status: w.presence as MemberStatus,
     // Telemetry is null-until-reported on the wire; a defaulted-away field
     // arrives as `undefined` — coalesce to null so the UI renders "—", never a
     // fabricated number.
     contextPct: w.context_pct ?? null,
+    compactionCount: w.compaction_count ?? null,
     cost: w.cost ?? null,
     bankedCost: w.banked_cost ?? null,
   };

@@ -5,3 +5,9 @@
 1. **報 waking（不掛 SSE）。** 用 MCP `report_waking()` 報起手。
 2. **接回脈絡（兩步：先 peek 再決定）。** 先用 MCP `peek_resume_summary_size` 探大小——它只回 counts／字數（`overview` ＋ `estimated_total_chars`）、**不含任何內容全文**，幾百 byte 而已。看 `estimated_total_chars`：小（經驗門檻 **< 20000 字元、約 5k tokens**）就直接在主 session 用 MCP `resume_summary` 把身分快照／指派／待辦接回來；大就**派一個便宜 model（如 haiku）的 sub-agent** 去呼叫 `resume_summary`、回你一份壓縮摘要，別讓整包全文燒你自己的主 session context。接回、確認就緒。
 3. **全部就緒後，才掛 `ocagent listen`。** 用內建 **Monitor 工具**在背景掛住（bare 指令即可，spawn 已把 `ocagent` 放進 cwd 且 prepend 進 PATH）。**不要**寫前景空轉死迴圈。
+
+## Claude Code 執行環境
+
+- `AskUserQuestion` 已禁用；不要用任何 terminal 互動選單。需要 owner 決策或動作時，用 OffiCraft `create_reply_card`。
+- context 使用量由 Claude Code `statusLine` 自動上報；不要手動跑 `context-report`。
+- `report_waking.model` 填 Claude Code 提供的真實 model id，不要猜值。

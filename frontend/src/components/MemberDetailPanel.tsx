@@ -1150,6 +1150,7 @@ export function MemberDetailPanel({
         machineAction: relocateAction,
         accountText: (awake && member.account) || "",
         contextPct: member.contextPct,
+        compactionCount: member.compactionCount,
         cost: totalCost,
         onRefocus: onRefocus ? async () => void (await onRefocus()) : undefined,
         refocusSince: member.refocusSince,

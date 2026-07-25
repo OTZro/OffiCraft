@@ -61,6 +61,25 @@ func TestNormalizeCodexEffort(t *testing.T) {
 	}
 }
 
+func TestCodexPersonaInstructionPreservesBlankModelDefault(t *testing.T) {
+	blank := codexPersonaInstruction("/private/persona.md", "")
+	for _, want := range []string{
+		"Read /private/persona.md completely",
+		"machine's Codex default applies",
+		"omit its optional model argument",
+		"never guess",
+	} {
+		if !strings.Contains(blank, want) {
+			t.Fatalf("blank-model instruction missing %q: %s", want, blank)
+		}
+	}
+	explicit := codexPersonaInstruction("/private/persona.md", "gpt-5.6-terra")
+	if !strings.Contains(explicit, "explicit OffiCraft launch model is gpt-5.6-terra") ||
+		!strings.Contains(explicit, "pass that exact value") {
+		t.Fatalf("explicit-model instruction must pin report_waking: %s", explicit)
+	}
+}
+
 func TestRequestUserInputBridgeCreatesOneCardPerQuestion(t *testing.T) {
 	var payloads []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -149,9 +168,21 @@ func TestReportTokenUsageUsesLatestTurnForContextGauge(t *testing.T) {
 	if got := contextBody["context_pct"]; got != float64(25) {
 		t.Fatalf("context_pct = %#v, want latest-turn 25 (not cumulative 115)", got)
 	}
+	if got := contextBody["compaction_count"]; got != float64(0) {
+		t.Fatalf("compaction_count = %#v, want 0 before any compaction", got)
+	}
 	tokens, _ := telemetryBody["tokens"].(map[string]any)
 	if got := tokens["totalTokens"]; got != float64(1150) {
 		t.Fatalf("telemetry totalTokens = %#v, want cumulative thread total", got)
+	}
+}
+
+func TestRecordCompactionCountsOnlyContextCompactionItems(t *testing.T) {
+	session := &codexSession{}
+	session.recordCompaction(map[string]any{"item": map[string]any{"type": "agentMessage"}})
+	session.recordCompaction(map[string]any{"item": map[string]any{"type": "contextCompaction"}})
+	if session.compactions != 1 {
+		t.Fatalf("compactions = %d, want 1", session.compactions)
 	}
 }
 

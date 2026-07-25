@@ -60,6 +60,7 @@ export interface AgentDetailVM {
    * (the server already resolves alias/label or nulls it, T-ba6b). */
   accountText: string;
   contextPct: number | null;
+  compactionCount?: number | null;
   cost: number | null;
   onRefocus?: () => Promise<void>;
   refocusSince: number | null;
@@ -269,6 +270,10 @@ export function AgentDetailPanel({
   }, [showPrompt, promptFetch, promptKey]);
 
   const contextText = vm.contextPct != null ? `${vm.contextPct}%` : dash;
+  const contextDisplay =
+    vm.runtime === "codex" && vm.compactionCount != null
+      ? `${contextText} · ↻ compact ${vm.compactionCount}/3`
+      : contextText;
   const costText = vm.cost != null ? formatCost(vm.cost) : dash;
 
   return (
@@ -404,7 +409,7 @@ export function AgentDetailPanel({
               </button>
             </div>
             <div className="mp-cell__value" data-testid={`${p}-context`}>
-              {contextText}
+              {contextDisplay}
             </div>
           </div>
           <div className="mp-cell">

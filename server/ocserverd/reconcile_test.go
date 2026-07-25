@@ -742,6 +742,28 @@ func TestRunReconcileTick(t *testing.T) {
 		}
 	})
 
+	t.Run("Codex auto-stamps only after three actual compactions", func(t *testing.T) {
+		s := newReconcileTestServer(t)
+		m := testAgent("m-codex-compact")
+		m.Runtime = RuntimeCodex
+		putTestMember(t, s, m)
+		connectOnline(t, s, ServerSelfHost)
+		connectOnline(t, s, m.ID)
+		now := 10000.0
+		s.gauge.Set(m.ID, map[string]any{"context_pct": 99.0, "context_pct_ts": now - 10, "boot_ts": now - 500, "compaction_count": 2})
+		s.runReconcileTick(now)
+		got, _ := s.dal.GetMember(m.ID)
+		if got.RefocusSince != 0 {
+			t.Fatalf("Codex must ignore percent-only handover, got %+v", got)
+		}
+		s.gauge.Set(m.ID, map[string]any{"context_pct": 20.0, "context_pct_ts": now - 5, "boot_ts": now - 500, "compaction_count": 3})
+		s.runReconcileTick(now + 1)
+		got, _ = s.dal.GetMember(m.ID)
+		if got.RefocusSince != now+1 {
+			t.Fatalf("third Codex compaction must trigger refocus, got %+v", got)
+		}
+	})
+
 	t.Run("relocation stops the OLD machine's warden, then STARTs onto the NEW one", func(t *testing.T) {
 		s := newReconcileTestServer(t)
 		putWarden(t, s, "mach-old")

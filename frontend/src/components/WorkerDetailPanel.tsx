@@ -312,6 +312,7 @@ export function WorkerDetailPanel({
         // "" ⇒ the shared panel's honest dash (T-ba6b).
         accountText: worker.account || "",
         contextPct: worker.contextPct ?? null,
+        compactionCount: worker.compactionCount ?? null,
         cost: totalCost,
         onRefocus: onRefocus
           ? async () => void (await onRefocus())

@@ -24,6 +24,7 @@ import {
 import type { TaskManualPatch } from "../api/adapter";
 import {
   SEED_BOOT_SEQUENCE_MD,
+  SEED_BOOT_SEQUENCE_CODEX_MD,
   SEED_SYSTEM_INTERACTION_MD,
 } from "../api/seeds";
 import { isHttpStatus } from "../api/errors";
@@ -356,15 +357,20 @@ export function SettingsPage({
   }
 
   if (view.kind === "boot") {
-    // Boot sequence is a FIXED studio SOP: unlike the user-custom block it has
-    // NO owner overlay (backend seed_boot_sequence_text reads the file directly —
-    // no write route), so the card is READ-ONLY. The text mirrors
-    // dal/seeds/boot_sequence.md via SEED_BOOT_SEQUENCE_MD, the same constant
-    // assemble_boot_context tails into every agent's boot context.
+    // Boot sequence is a FIXED, runtime-selected studio SOP. Both read-only
+    // variants are shown here so the cockpit exposes exactly what Claude and
+    // Codex members receive; the server selects only one for each persona.
+    const bootPreview = [
+      "## Claude Code",
+      SEED_BOOT_SEQUENCE_MD.trim(),
+      "---",
+      "## Codex CLI",
+      SEED_BOOT_SEQUENCE_CODEX_MD.trim(),
+    ].join("\n\n");
     return (
       <DocDetail
         title={t.settings.bootName}
-        doc={{ text: SEED_BOOT_SEQUENCE_MD.trim(), isDefault: false }}
+        doc={{ text: bootPreview, isDefault: false }}
         badge={t.settings.bootBadge}
         readOnly
         crumbs={[crumbRoot, crumbRoles, { label: t.settings.bootName }]}

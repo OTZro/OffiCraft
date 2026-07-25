@@ -49,21 +49,19 @@ The adapter uses App Server's stdio JSON-RPC transport. App Server is still an e
 upstream surface, so protocol/version handling stays isolated in the sidecar and a failed
 initialize/thread start terminates the session visibly for normal OffiCraft reconciliation.
 
-## Global context: one policy, two runtime appendices
+## Global context: one policy, runtime-selected boot tails
 
 OffiCraft keeps one canonical Global Context. Governance, identity, MCP, chat, reply cards,
 tasks, lessons/manuals, lifecycle semantics, and `ocagent` commands are provider-neutral
-and must not be copied into separate Claude and Codex personas.
-
-The current seeds contain a few Claude-specific execution statements. They remain canonical
-to avoid forking or broadly rewriting proven policy text; a short, final-precedence runtime
-appendix selected during the existing persona fold corrects only those mechanics:
+and must not be copied into separate Claude and Codex personas. Only the small, read-only
+Boot Sequence is runtime-specific, because listener ownership and the readiness boundary
+genuinely differ:
 
 ```text
 shared Global Context
   + role / lessons / owner additions
   + actor boot semantics (member or outsource)
-  + runtime appendix (Claude or Codex)
+  + runtime boot sequence (Claude or Codex)
 ```
 
 This is composition across two independent axes, not four persona copies:
@@ -73,11 +71,11 @@ This is composition across two independent axes, not four persona copies:
 - **Runtime mechanics** describe only who owns the listener, context reporting, and
   interactive-question behavior.
 
-The Claude appendix preserves current behavior byte-for-behavior: after actor boot
+The Claude member boot sequence preserves current behavior byte-for-behavior: after boot
 readiness, the agent starts bare `ocagent listen` with its Monitor tool; Claude `statusLine`
 feeds context telemetry; `AskUserQuestion` stays disabled.
 
-The Codex appendix changes only execution ownership:
+The Codex member boot sequence changes only execution ownership:
 
 1. The sidecar starts a boot-only App Server turn. The member performs
    `report_waking` + resume recovery, or the worker performs `get_my_task`, then completes
@@ -94,9 +92,12 @@ The Codex appendix changes only execution ownership:
    and unchanged.
 5. `request_user_input` is disabled and bridged to reply cards as described below.
 
-The cockpit's Global Context editor remains a single shared owner-additions block. Runtime
-appendices are read-only seed assets and appear in boot-context previews so the actual
-launch instructions remain inspectable.
+The cockpit's Global Context editor remains a single shared owner-additions block. The
+read-only Claude and Codex Boot Sequence variants are shown together in the preview. For
+workers, the common worker overlay refers to a small final runtime boot tail selected at
+assembly time; it carries only that runtime's listener owner, interactive-question guard,
+and context-telemetry mechanics. Thus no recipient is asked to ignore another provider's
+instructions.
 
 ## Wake and steering policy
 
@@ -184,6 +185,11 @@ The selected adapter receives the shared launch knobs:
 - `effort`: exact shared vocabulary `low | medium | high`; omitted uses `medium`.
 - Codex sandbox: `danger-full-access`.
 - Codex approvals: `never`.
+
+For a blank Codex model, the sidecar tells the boot turn to omit `report_waking.model`.
+The model must not guess its own identifier and persist that guess, because the persisted
+value becomes an explicit override on the next wake and would replace the machine's Codex
+default. An explicit OffiCraft model is reported back verbatim.
 
 These settings intentionally favor capability for this trusted-machine deployment. They do
 not expand OffiCraft authorization: member identity, MCP scope, task governance, and

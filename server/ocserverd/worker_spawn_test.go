@@ -132,7 +132,7 @@ func TestBuildWorkerBootContext_FullAssembly(t *testing.T) {
 	}
 }
 
-func TestBuildWorkerBootContext_CodexAppendixHasFinalPrecedence(t *testing.T) {
+func TestBuildWorkerBootContext_CodexRuntimeTailHasFinalPrecedence(t *testing.T) {
 	s := newWorkerTestServer(t)
 	task := Task{ID: "t-codex", Title: "Codex task", Priority: TaskPriorityMid}
 	got, err := s.buildWorkerBootContext(
@@ -142,13 +142,33 @@ func TestBuildWorkerBootContext_CodexAppendixHasFinalPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fold: %v", err)
 	}
-	appendix := strings.LastIndex(got, "# Codex 執行環境附錄")
-	legacyMonitor := strings.LastIndex(got, "Monitor")
-	if appendix < 0 || appendix < legacyMonitor {
-		t.Fatal("Codex appendix must follow the canonical Claude-specific mechanics")
+	tail := strings.LastIndex(got, "# Runtime 開機尾步（Codex App Server）")
+	if tail < 0 {
+		t.Fatal("Codex worker must receive its runtime boot tail")
 	}
-	if !strings.Contains(got[appendix:], "不要自行啟動 `ocagent listen`") {
-		t.Fatal("final Codex appendix must transfer listener ownership to the sidecar")
+	if !strings.Contains(got[tail:], "不要**自行啟動 `ocagent listen`") {
+		t.Fatal("Codex runtime tail must transfer listener ownership to the sidecar")
+	}
+	if strings.Contains(got, "# Runtime 開機尾步（Claude Code）") {
+		t.Fatal("Codex worker must not receive Claude's runtime boot tail")
+	}
+}
+
+func TestBuildWorkerBootContext_ClaudeRuntimeTailHasFinalPrecedence(t *testing.T) {
+	s := newWorkerTestServer(t)
+	got, err := s.buildWorkerBootContext(
+		OutsourceWorker{ID: "ow-claude", Codename: "C-2", Runtime: RuntimeClaude},
+		Task{ID: "t-claude", Title: "Claude task", Priority: TaskPriorityMid}, nil,
+	)
+	if err != nil {
+		t.Fatalf("fold: %v", err)
+	}
+	tail := strings.LastIndex(got, "# Runtime 開機尾步（Claude Code）")
+	if tail < 0 || !strings.Contains(got[tail:], "Monitor 在背景跑 bare `ocagent listen`") {
+		t.Fatal("Claude worker must receive its Monitor-owned listener tail")
+	}
+	if strings.Contains(got, "# Runtime 開機尾步（Codex App Server）") {
+		t.Fatal("Claude worker must not receive Codex's runtime boot tail")
 	}
 }
 

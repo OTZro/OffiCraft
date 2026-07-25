@@ -39,6 +39,16 @@ func (s *apiServer) HandleIngestAgentContextApiAgentContextPost(w http.ResponseW
 		writeError(w, http.StatusBadRequest, "context_pct must be a number")
 		return
 	}
+	var compactions *int
+	if body.CompactionCount != nil {
+		value, ok := body.CompactionCount.(float64)
+		if !ok || value < 0 || value != math.Trunc(value) {
+			writeError(w, http.StatusBadRequest, "compaction_count must be a non-negative integer")
+			return
+		}
+		count := int(value)
+		compactions = &count
+	}
 	agentID := currentActor(r)
 	rateLimits := map[string]any{}
 	if body.RateLimits != nil {
@@ -55,15 +65,19 @@ func (s *apiServer) HandleIngestAgentContextApiAgentContextPost(w http.ResponseW
 	entry["rate_limits"] = rateLimits
 	entry["ts"] = now
 	entry["context_pct_ts"] = now
+	if compactions != nil {
+		entry["compaction_count"] = *compactions
+	}
 	s.gauge.Set(agentID, entry)
 	// No agent consumes the context signal on the wire (it drives the
 	// server-side context-high band, not fan-out); owner cockpit only.
 	s.hub.Publish("context", "signal", "context", agentID, nil, audienceOwnerOnly(), requestTrigger(r))
 	writeJSON(w, http.StatusOK, agentContextDTO{
-		AgentID:    agentID,
-		ContextPct: pct,
-		RateLimits: rateLimits,
-		TS:         now,
+		AgentID:         agentID,
+		ContextPct:      pct,
+		CompactionCount: compactions,
+		RateLimits:      rateLimits,
+		TS:              now,
 	})
 }
 
@@ -600,19 +614,20 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		// worker DTO reads (P7b read-path convergence — one fold, two wires).
 		rt := foldActorRuntime(entry, gauge[m.ID], m.BankedCost)
 		sessions = append(sessions, monitoringSessionDTO{
-			ID:         m.ID,
-			Name:       m.Name,
-			Role:       roleName,
-			Runtime:    NormalizeRuntime(m.Runtime),
-			Model:      m.Model,
-			Effort:     effort,
-			Machine:    resolveDisplay(machineNames, s.observedHost(m)),
-			Account:    resolveSessionAccount(rt.account),
-			Presence:   PresenceState(m, now, s.hub.IsOnline(m.ID)),
-			ContextPct: rt.contextPct,
-			Cost:       rt.cost,
-			BankedCost: rt.bankedCost,
-			Tokens:     entryObj(entry, "tokens"),
+			ID:              m.ID,
+			Name:            m.Name,
+			Role:            roleName,
+			Runtime:         NormalizeRuntime(m.Runtime),
+			Model:           m.Model,
+			Effort:          effort,
+			Machine:         resolveDisplay(machineNames, s.observedHost(m)),
+			Account:         resolveSessionAccount(rt.account),
+			Presence:        PresenceState(m, now, s.hub.IsOnline(m.ID)),
+			ContextPct:      rt.contextPct,
+			CompactionCount: rt.compactionCount,
+			Cost:            rt.cost,
+			BankedCost:      rt.bankedCost,
+			Tokens:          entryObj(entry, "tokens"),
 		})
 	}
 

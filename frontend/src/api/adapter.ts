@@ -412,6 +412,7 @@ export interface OutsourceWorkerView {
    * fabricated value (parity with the member detail's honest gate). */
   account?: string | null;
   contextPct?: number | null;
+  compactionCount?: number | null;
   cost?: number | null;
   /** The durable cumulative spend banked on every session end / kill+respawn
    * (wire `banked_cost`, migrations/00021 — member.bankedCost parity). null =

@@ -8,6 +8,7 @@
 //   * SEED_ROLE_ASSISTANT_MD     ← seeds/role_def_assistant.md
 //   * SEED_LESSONS_MD            ← seeds/lessons.md
 //   * SEED_BOOT_SEQUENCE_MD      ← seeds/boot_sequence.md
+//   * SEED_BOOT_SEQUENCE_CODEX_MD ← seeds/boot_sequence_codex.md
 //
 // One transform is applied at read time so the text matches the REAL folded
 // GlobalContextDTO.text a client sees: the `{OWNER_ID}` placeholder is
@@ -20,6 +21,7 @@ import SEED_SYSTEM_INTERACTION_RAW from "../../../seeds/system_interaction.md?ra
 import SEED_ROLE_ASSISTANT_RAW from "../../../seeds/role_def_assistant.md?raw";
 import SEED_LESSONS_RAW from "../../../seeds/lessons.md?raw";
 import SEED_BOOT_SEQUENCE_RAW from "../../../seeds/boot_sequence.md?raw";
+import SEED_BOOT_SEQUENCE_CODEX_RAW from "../../../seeds/boot_sequence_codex.md?raw";
 
 /** The out-of-box owner id (mirrors the server seed). */
 export const MOCK_OWNER_ID = "owner";
@@ -46,3 +48,7 @@ export const SEED_LESSONS_MD = foldOwnerId(SEED_LESSONS_RAW);
  * Global → Role → Lessons) so the concrete boot steps are the recency-
  * authoritative tail an agent reads. */
 export const SEED_BOOT_SEQUENCE_MD = foldOwnerId(SEED_BOOT_SEQUENCE_RAW);
+
+/** seeds/boot_sequence_codex.md — the Codex App Server counterpart selected
+ * when a member's runtime is codex. */
+export const SEED_BOOT_SEQUENCE_CODEX_MD = foldOwnerId(SEED_BOOT_SEQUENCE_CODEX_RAW);

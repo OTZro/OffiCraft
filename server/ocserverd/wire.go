@@ -276,10 +276,11 @@ type chatReadDTO struct {
 }
 
 type agentContextDTO struct {
-	AgentID    string         `json:"agent_id"`
-	ContextPct float64        `json:"context_pct"`
-	RateLimits map[string]any `json:"rate_limits"`
-	TS         float64        `json:"ts"`
+	AgentID         string         `json:"agent_id"`
+	CompactionCount *int           `json:"compaction_count,omitempty"`
+	ContextPct      float64        `json:"context_pct"`
+	RateLimits      map[string]any `json:"rate_limits"`
+	TS              float64        `json:"ts"`
 }
 
 type agentTelemetryDTO struct {
@@ -301,19 +302,20 @@ type agentTelemetryDTO struct {
 }
 
 type monitoringSessionDTO struct {
-	ID         string         `json:"id"`
-	Name       string         `json:"name"`
-	Role       string         `json:"role"`
-	Runtime    string         `json:"runtime"`
-	Model      string         `json:"model"`
-	Effort     string         `json:"effort"`
-	Machine    string         `json:"machine"`
-	Account    string         `json:"account"`
-	Presence   string         `json:"presence"`
-	ContextPct *float64       `json:"context_pct"`
-	Cost       *float64       `json:"cost"`
-	BankedCost *float64       `json:"banked_cost"`
-	Tokens     map[string]any `json:"tokens"`
+	ID              string         `json:"id"`
+	Name            string         `json:"name"`
+	Role            string         `json:"role"`
+	Runtime         string         `json:"runtime"`
+	Model           string         `json:"model"`
+	Effort          string         `json:"effort"`
+	Machine         string         `json:"machine"`
+	Account         string         `json:"account"`
+	Presence        string         `json:"presence"`
+	ContextPct      *float64       `json:"context_pct"`
+	CompactionCount *int           `json:"compaction_count,omitempty"`
+	Cost            *float64       `json:"cost"`
+	BankedCost      *float64       `json:"banked_cost"`
+	Tokens          map[string]any `json:"tokens"`
 }
 
 type monitoringMachineDTO struct {
@@ -795,9 +797,10 @@ type outsourceWorkerDTO struct {
 	// per-actor telemetry+gauge the member roster reads (keyed by the worker's
 	// actor id). Nullable — nil serialises null → the panel shows a bare dash,
 	// never a fabricated value (parity with monitoringSessionDTO's honest gate).
-	Account    *string  `json:"account"`
-	ContextPct *float64 `json:"context_pct"`
-	Cost       *float64 `json:"cost"`
+	Account         *string  `json:"account"`
+	ContextPct      *float64 `json:"context_pct"`
+	CompactionCount *int     `json:"compaction_count,omitempty"`
+	Cost            *float64 `json:"cost"`
 	// BankedCost mirrors member banked_cost (T-ba6b, migrations/00021): the
 	// durable cumulative spend banked on every session end / kill+respawn.
 	// nil when zero (nothing banked yet) → the panel adds nothing; the view
@@ -1064,10 +1067,11 @@ func newTaskManualListItemDTO(m TaskManual) taskManualDTO {
 // shape changes. cost / contextPct / bankedCost are nil when unreported /
 // zero → serialise null → the panel's honest dash, never a fabricated value.
 type actorRuntimeFold struct {
-	account    string
-	cost       *float64
-	contextPct *float64
-	bankedCost *float64
+	account         string
+	cost            *float64
+	contextPct      *float64
+	compactionCount *int
+	bankedCost      *float64
 }
 
 // foldActorRuntime folds one actor's telemetry entry, gauge entry, and durable
@@ -1082,6 +1086,9 @@ func foldActorRuntime(tele, gauge map[string]any, banked float64) actorRuntimeFo
 	}
 	if pct, ok := gauge["context_pct"].(float64); ok {
 		f.contextPct = &pct
+	}
+	if count, ok := gauge["compaction_count"].(int); ok && count >= 0 {
+		f.compactionCount = &count
 	}
 	if banked != 0 {
 		b := banked
@@ -1128,6 +1135,8 @@ func newOutsourceWorkerDTO(w OutsourceWorker, task *Task, p outsourceWorkerProje
 	rt := foldActorRuntime(p.tele, p.gaugeEntry, w.BankedCost)
 	dto.Cost = rt.cost
 	dto.ContextPct = rt.contextPct
+	dto.CompactionCount = rt.compactionCount
+	dto.CompactionCount = rt.compactionCount
 	dto.BankedCost = rt.bankedCost
 	// Account serves the RESOLVED readable name only (owner alias → owner-
 	// gated reported label). No readable name → null → the panel's dash;

@@ -331,7 +331,7 @@ func (s *apiServer) onFirstConnect(memberID string) {
 	s.gauge.Set(memberID, entry)
 }
 
-// clearSessionBootTS drops the boot_ts session anchor from a member's / worker's
+// clearSessionBootTS drops session-scoped gauge state from a member's / worker's
 // gauge entry at a real session BOUNDARY — a START dispatch that begins a new
 // session, or a STOP/kill that ends one. onFirstConnect stamps boot_ts only when
 // absent, so clearing here is what makes the next connect re-stamp a fresh
@@ -342,10 +342,10 @@ func (s *apiServer) clearSessionBootTS(id string) {
 	if entry == nil {
 		return
 	}
-	if _, ok := entry["boot_ts"]; !ok {
-		return
-	}
 	delete(entry, "boot_ts")
+	// Codex compaction count belongs to the old App Server thread. Carrying it
+	// over a refocus would immediately recycle the fresh replacement session.
+	delete(entry, "compaction_count")
 	s.gauge.Set(id, entry)
 }
 

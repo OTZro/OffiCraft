@@ -28,6 +28,7 @@ export function joinSessionRuntime(
     machine: s.machine || member.machine,
     account: s.account || member.account,
     contextPct: s.contextPct ?? member.contextPct,
+    compactionCount: s.compactionCount ?? member.compactionCount,
     estimatedCost: s.cost ?? member.estimatedCost,
     bankedCost: s.bankedCost ?? member.bankedCost,
   };

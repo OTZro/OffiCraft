@@ -231,15 +231,28 @@ func (s *apiServer) buildWorkerBootContext(w OutsourceWorker, t Task, manual *Ta
 		// rather than fabricating an empty manual.
 		b.WriteString("\n# 任務手冊\n\n（該類型的手冊目前不存在——照任務描述與 owner 的指示規劃。）\n")
 	}
-	// Keep the provider delta last: the canonical global/worker seeds contain
-	// Claude's Monitor/statusLine mechanics, so Codex's small adapter appendix
-	// must have final precedence without forking those shared documents.
-	if appendix := runtimeContextAppendix(w.Runtime); appendix != "" {
-		b.WriteString("\n---\n\n")
-		b.WriteString(appendix)
-		b.WriteString("\n")
-	}
+	// The worker overlay names this final tail as its step 2. It is selected by
+	// runtime, so ownership instructions never ask Codex to use Claude's Monitor
+	// or ask Claude to wait for Codex's sidecar.
+	b.WriteString("\n---\n\n")
+	b.WriteString(workerRuntimeBootTail(w.Runtime))
+	b.WriteString("\n")
 	return b.String() + "\n", nil
+}
+
+func workerRuntimeBootTail(runtime string) string {
+	if NormalizeRuntime(runtime) == RuntimeCodex {
+		return `# Runtime 開機尾步（Codex App Server）
+
+- ` + "`get_my_task`" + ` 成功後，完成這個 boot turn。**不要**自行啟動 ` + "`ocagent listen`" + `、Monitor 或前景空轉迴圈；OffiCraft 的 App Server sidecar 會在 ` + "`turn/completed`" + ` 後啟動並持有 listener。
+- 權限模式是 ` + "`danger-full-access`" + `，approval policy 是 ` + "`never`" + `。` + "`request_user_input`" + ` 已禁用；需要 owner 決策或動作時，用 OffiCraft ` + "`create_reply_card`" + `，不要等待 terminal 鍵盤。
+- context 使用量由 App Server token-usage 自動上報；不要手動跑 ` + "`context-report`" + `。`
+	}
+	return `# Runtime 開機尾步（Claude Code）
+
+- ` + "`get_my_task`" + ` 成功後，用內建 Monitor 在背景跑 bare ` + "`ocagent listen`" + `（spawn 已把 ` + "`ocagent`" + ` 放進 cwd 並 prepend 進 PATH）；不要寫前景空轉迴圈。
+- ` + "`AskUserQuestion`" + ` 已禁用；需要 owner 決策或動作時，用 OffiCraft ` + "`create_reply_card`" + `，不要等待 terminal 互動選單。
+- context 使用量由 Claude Code ` + "`statusLine`" + ` 自動上報；不要手動跑 ` + "`context-report`" + `。`
 }
 
 // sortedKeys returns m's keys sorted — deterministic boot-context emission.
@@ -900,8 +913,7 @@ func (s *apiServer) autoHandoverWorker(w OutsourceWorker, now float64) {
 	}
 	// (2) handover check — the IDENTICAL guards to the member auto-stamp.
 	ctxhigh := s.ctxHighConfig()
-	pct := actionableContextPct(record, ctxhigh.StaleGuard)
-	if bandFor(pct, ctxhigh.WarnPct, ctxhigh.HandoverPct) != levelHandover {
+	if !shouldAutoRefocus(w.Runtime, record, ctxhigh) {
 		return // below the line, or no actionable pct (nil gauge / stale) — no-op
 	}
 	if bootStormTripped(gaugeSecsSinceBoot(record, now), ctxhigh.MinBootSecs) {
@@ -930,8 +942,8 @@ func (s *apiServer) autoHandoverWorker(w OutsourceWorker, now float64) {
 	// shape. The 收口 (kill+respawn) is owned by the worker's own stopped-report
 	// and this branch's grace deadline (the in-flight arm above).
 	s.openWorkerHandoverGrace(*fresh, triggerServer)
-	outsourceLog("auto-handover %s (%s): context %.0f%% ≥ handover band — graceful refocus (grace opened)",
-		w.ID, w.Codename, *pct)
+	outsourceLog("auto-handover %s (%s, %s): runtime handover signal — graceful refocus (grace opened)",
+		w.ID, w.Codename, NormalizeRuntime(w.Runtime))
 }
 
 // clearWorkerRefocus zeroes a worker's refocus_since AND the graceful-handover

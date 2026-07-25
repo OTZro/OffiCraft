@@ -801,8 +801,22 @@ func (s *apiServer) stampWakeObservability(m *Member, decision reconcileDecision
 
 // ── pre-decide roster passes (producer.py, run inside the cadence tick) ──────
 
+// codexCompactionRefocusThreshold is deliberately independent of the owner
+// context-percent setting: Codex compacts its own long-lived thread, so its
+// useful handover signal is repeated compaction, not a transient fill gauge.
+const codexCompactionRefocusThreshold = 3
+
+func shouldAutoRefocus(runtime string, record map[string]any, cfg SseContextHighConfig) bool {
+	if NormalizeRuntime(runtime) == RuntimeCodex {
+		count, ok := record["compaction_count"].(int)
+		return ok && count >= codexCompactionRefocusThreshold
+	}
+	pct := actionableContextPct(record, cfg.StaleGuard)
+	return bandFor(pct, cfg.WarnPct, cfg.HandoverPct) == levelHandover
+}
+
 // stampContextHighRecycle auto-stamps refocus_since on any candidate whose
-// actionable context pct is in the HANDOVER band (§4.5 auto-stamp) — the
+// runtime-specific handover signal is actionable — the
 // automatic counterpart of the manual refocus button, reusing the SSE band's
 // stale-pct + boot-storm guards so an unreliable gauge never auto-recycles.
 // Mutates the in-slice member so the SAME tick's observation sees the marker.
@@ -814,8 +828,7 @@ func (s *apiServer) stampContextHighRecycle(members []Member, now float64) {
 			continue // already recycling — the marker IS the cooldown
 		}
 		record := s.gauge.Get(m.ID)
-		pct := actionableContextPct(record, ctxhigh.StaleGuard)
-		if bandFor(pct, ctxhigh.WarnPct, ctxhigh.HandoverPct) != levelHandover {
+		if !shouldAutoRefocus(m.Runtime, record, ctxhigh) {
 			continue
 		}
 		if bootStormTripped(gaugeSecsSinceBoot(record, now), ctxhigh.MinBootSecs) {
@@ -829,7 +842,7 @@ func (s *apiServer) stampContextHighRecycle(members []Member, now float64) {
 			reconcileLog("recycle: auto-stamp persist failed for %s: %v", m.ID, err)
 			continue
 		}
-		reconcileLog("recycle: context-high auto-stamp refocus_since for %s", m.ID)
+		reconcileLog("recycle: auto-stamp refocus_since for %s (%s)", m.ID, NormalizeRuntime(m.Runtime))
 	}
 }
 

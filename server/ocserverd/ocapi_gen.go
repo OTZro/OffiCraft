@@ -75,10 +75,13 @@ func (e WebhookEndpointDTOPlatform) Valid() bool {
 
 // AgentContextDTO Echo of a stored gauge entry (“POST /api/agent/context“ response).
 type AgentContextDTO struct {
-	AgentId    string                  `json:"agent_id"`
-	ContextPct float64                 `json:"context_pct"`
-	RateLimits *map[string]interface{} `json:"rate_limits,omitempty"`
-	Ts         float64                 `json:"ts"`
+	AgentId string `json:"agent_id"`
+
+	// CompactionCount Codex App Server context compactions in this live session; null for runtimes that do not report it.
+	CompactionCount *int                    `json:"compaction_count,omitempty"`
+	ContextPct      float64                 `json:"context_pct"`
+	RateLimits      *map[string]interface{} `json:"rate_limits,omitempty"`
+	Ts              float64                 `json:"ts"`
 }
 
 // AgentContextIngestDTO Inbound agent context-gauge report (“POST /api/agent/context“). The gauge
@@ -87,8 +90,10 @@ type AgentContextDTO struct {
 // report its OWN context. “context_pct“ is permissive so the handler returns a
 // clean 400 (not a Pydantic 422) on a non-numeric value.
 type AgentContextIngestDTO struct {
-	ContextPct interface{}             `json:"context_pct,omitempty"`
-	RateLimits *map[string]interface{} `json:"rate_limits,omitempty"`
+	// CompactionCount Optional non-negative live Codex compaction count. Identity remains the verified JWT sub.
+	CompactionCount interface{}             `json:"compaction_count,omitempty"`
+	ContextPct      interface{}             `json:"context_pct,omitempty"`
+	RateLimits      *map[string]interface{} `json:"rate_limits,omitempty"`
 }
 
 // AgentRuntime AI CLI runtime selected per member or outsource worker. Existing rows and omitted inputs default to “claude“ for backward compatibility.
@@ -862,15 +867,18 @@ type MonitoringMachineDTO struct {
 type MonitoringSessionDTO struct {
 	Account    *string  `json:"account,omitempty"`
 	BankedCost *float64 `json:"banked_cost,omitempty"`
-	ContextPct *float64 `json:"context_pct,omitempty"`
-	Cost       *float64 `json:"cost,omitempty"`
-	Effort     *string  `json:"effort,omitempty"`
-	Id         string   `json:"id"`
-	Machine    *string  `json:"machine,omitempty"`
-	Model      *string  `json:"model,omitempty"`
-	Name       string   `json:"name"`
-	Presence   *string  `json:"presence,omitempty"`
-	Role       *string  `json:"role,omitempty"`
+
+	// CompactionCount Codex App Server compactions in this live session; null for Claude or before the first Codex report.
+	CompactionCount *int     `json:"compaction_count,omitempty"`
+	ContextPct      *float64 `json:"context_pct,omitempty"`
+	Cost            *float64 `json:"cost,omitempty"`
+	Effort          *string  `json:"effort,omitempty"`
+	Id              string   `json:"id"`
+	Machine         *string  `json:"machine,omitempty"`
+	Model           *string  `json:"model,omitempty"`
+	Name            string   `json:"name"`
+	Presence        *string  `json:"presence,omitempty"`
+	Role            *string  `json:"role,omitempty"`
 
 	// Runtime The session's selected provider runtime.
 	Runtime *AgentRuntime   `json:"runtime,omitempty"`
@@ -909,6 +917,9 @@ type OutsourceWorkerDTO struct {
 	// BankedCost The worker's persistent historical cumulative cost (migrations/00021), the DIRECT twin of member banked_cost: the live cost is banked through the SAME bankLiveCost fold on every session end / kill+respawn (refocus / model change / relocate / stop / auto-handover), so a handover never zeroes the owner-visible spend. null when nothing banked yet. The panel shows live + banked summed, the member presentation. T-ba6b additive-optional.
 	BankedCost *float64 `json:"banked_cost,omitempty"`
 	Codename   string   `json:"codename"`
+
+	// CompactionCount Codex App Server compactions in this worker's live session; null when unavailable.
+	CompactionCount *int `json:"compaction_count,omitempty"`
 
 	// ContextPct The worker's live context-window fill %, read from the SAME gauge the member roster reads (POST /api/agent/context, keyed by actor id). null when unreported. T-f190 additive-optional.
 	ContextPct *float64 `json:"context_pct,omitempty"`

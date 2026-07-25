@@ -71,6 +71,7 @@ export interface Member {
   machine: string | null;
   account: string | null;
   contextPct: number | null;
+  compactionCount?: number | null;
   estimatedCost: number | null;
   bankedCost: number | null;
 
@@ -347,9 +348,11 @@ export interface MonSessionView {
   effort: string;
   machine: string;
   account: string;
+  runtime: "claude" | "codex";
   /** presence tri-state mapped 1:1 onto the member status. */
   status: MemberStatus;
   contextPct: number | null;
+  compactionCount: number | null;
   cost: number | null;
   bankedCost: number | null;
 }

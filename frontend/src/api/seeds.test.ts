@@ -12,6 +12,7 @@ import {
   SEED_ROLE_ASSISTANT_MD,
   SEED_LESSONS_MD,
   SEED_BOOT_SEQUENCE_MD,
+  SEED_BOOT_SEQUENCE_CODEX_MD,
 } from "./seeds";
 
 // The same raw sources seeds.ts reads — imported independently here so the
@@ -20,6 +21,7 @@ import SYSTEM_INTERACTION_RAW from "../../../seeds/system_interaction.md?raw";
 import ROLE_ASSISTANT_RAW from "../../../seeds/role_def_assistant.md?raw";
 import LESSONS_RAW from "../../../seeds/lessons.md?raw";
 import BOOT_SEQUENCE_RAW from "../../../seeds/boot_sequence.md?raw";
+import BOOT_SEQUENCE_CODEX_RAW from "../../../seeds/boot_sequence_codex.md?raw";
 
 const foldOwnerId = (raw: string): string =>
   raw.replace(/\{OWNER_ID\}/g, MOCK_OWNER_ID);
@@ -36,6 +38,7 @@ describe("seeds constants track seeds/*.md by construction", () => {
     { name: "role_def_assistant", exported: SEED_ROLE_ASSISTANT_MD, raw: ROLE_ASSISTANT_RAW },
     { name: "lessons", exported: SEED_LESSONS_MD, raw: LESSONS_RAW },
     { name: "boot_sequence", exported: SEED_BOOT_SEQUENCE_MD, raw: BOOT_SEQUENCE_RAW },
+    { name: "boot_sequence_codex", exported: SEED_BOOT_SEQUENCE_CODEX_MD, raw: BOOT_SEQUENCE_CODEX_RAW },
   ];
 
   it.each(cases)(
