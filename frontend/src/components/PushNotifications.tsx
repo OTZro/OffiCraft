@@ -84,8 +84,8 @@ export function PushNotifications() {
   }
 
   // This belongs with the other compact global controls, not as a page-wide
-  // banner. A crossed bell means the device is subscribed; tapping it removes
-  // the subscription. A plain bell invites the owner to enable notifications.
+  // banner. The icon shows the current state: a crossed bell means this device
+  // is not subscribed, while a plain bell means notifications are enabled.
   if (state === "unsupported" || state === "denied") return null;
   const enabled = state === "enabled";
   const label = enabled ? t.notifications.disable : t.notifications.enable;
@@ -99,7 +99,7 @@ export function PushNotifications() {
       aria-pressed={enabled}
       onClick={enabled ? disable : enable}
     >
-      {enabled ? <BellOffIcon size={16} /> : <BellIcon size={16} />}
+      {enabled ? <BellIcon size={16} /> : <BellOffIcon size={16} />}
     </button>
   );
 }
