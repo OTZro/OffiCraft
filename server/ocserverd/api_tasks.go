@@ -1504,7 +1504,14 @@ func (s *apiServer) HandleCreateTaskApiTasksPost(w http.ResponseWriter, r *http.
 	// (§14 caller-identity), never a request field. caller.member is nil for the
 	// owner and for an outsource worker — both then inherit nothing, so the
 	// machine must be named explicitly.
-	if executorKind == TaskExecutorOutsource {
+	//
+	// Gated on an EXPLICIT target, not on the executor kind. A typed task whose
+	// MANUAL assigns it to outsource is not a 發包: it carries no outsource_target,
+	// the scheduler reads its type manual live at admission, and outsource_sched
+	// keys "was this an explicit dispatch?" off these very columns — writing them
+	// here would make every manual-driven task impersonate a dispatch, routing it
+	// around the scheduler's spawn gate and freezing the manual at create time.
+	if dispatchTarget != nil {
 		dispatch = inheritDispatchSpec(dispatch, manualSpec, caller.member)
 	}
 

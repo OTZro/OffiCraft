@@ -148,3 +148,57 @@ func TestReconcile_OnlineMemberGetsNoTimeoutReceipt(t *testing.T) {
 		t.Fatalf("an online member must not carry a wake_timeout receipt, got %q", got.LastOpReason)
 	}
 }
+
+// The anti-churn guard on the placement stamp suppresses REPETITION, never news:
+// blocked → the machine appears and the START lands → the machine is removed
+// again → the second block carries a FRESH last_op_at. Without the clear on the
+// landed-start path the second block matches the first and is swallowed, leaving
+// the cockpit showing "stalled an hour ago" for a stall happening right now (the
+// worker twin is TestNotifyWorkerSpawn_BlockRestampedAfterDispatch).
+func TestReconcile_MemberBlockRestampedAfterLandedStart(t *testing.T) {
+	s := newReconcileTestServer(t)
+	m := testAgent("m-flip")
+	m.DesiredMachineID = "mach-flip" // named, but no machine row yet
+	putTestMember(t, s, m)
+
+	first := 8000.0
+	s.runReconcileTick(first)
+	blocked, _ := s.dal.GetMember("m-flip")
+	if blocked == nil || !strings.HasPrefix(blocked.LastOpReason, placementReasonUnavailable+":") ||
+		blocked.LastOpAt != first {
+		t.Fatalf("a pin naming no active machine must stamp a block at %v: %+v", first, blocked)
+	}
+
+	// The machine is installed and comes online: the START actually lands.
+	putWarden(t, s, "mach-flip")
+	connectOnline(t, s, "mach-flip")
+	s.runReconcileTick(first + 30)
+	frames := drainFrames(t, s, "mach-flip")
+	if len(frames) != 1 || frames[0].RPC != reconcileCmdStart ||
+		frames[0].Args["member_id"] != "m-flip" {
+		t.Fatalf("the machine coming online must dispatch the START: %+v", frames)
+	}
+
+	// The agent boots, so the next block starts from a converged state.
+	agent := connectOnline(t, s, "m-flip")
+	s.runReconcileTick(first + 60)
+
+	// The machine is removed again: the SAME cause, but after a landed START this
+	// is news, not repetition.
+	s.hub.Disconnect(agent)
+	warden, _ := s.dal.GetMember("mach-flip")
+	warden.RosterStatus = RosterStatusRemoved
+	putTestMember(t, s, *warden)
+
+	third := first + 90
+	s.runReconcileTick(third)
+	again, _ := s.dal.GetMember("m-flip")
+	if again == nil || again.LastOpReason != blocked.LastOpReason {
+		t.Fatalf("the second block must carry the same cause: %+v", again)
+	}
+	if again.LastOpAt != third {
+		t.Fatalf("a block AFTER a landed START must re-stamp: last_op_at = %v, want %v "+
+			"(keeping the first block's %v means the start never cleared it)",
+			again.LastOpAt, third, blocked.LastOpAt)
+	}
+}

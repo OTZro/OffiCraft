@@ -767,6 +767,53 @@ func (s *apiServer) reconcileTickMemberLocked(m Member, now float64) reconcileDe
 	return decision
 }
 
+// stampMemberPlacementBlocked names, on the member row the cockpit reads, the one
+// stall the wake path could not previously explain: the member is wanted online
+// but has no machine to be sent to. Every other START failure already leaves a
+// trace (a lapsed start_timeout writes a receipt; an unbuildable frame logs and
+// backs off), while an unplaced member simply retried forever against nothing —
+// grey and unexplained, identical to a member nobody ever woke.
+//
+// Written only when the cause CHANGES, because the cadence re-decides this same
+// START every 30s: an unconditional write would re-stamp last_op_at and fan a
+// member delta on every tick. stampWakeObservability clears the stamp when a START
+// finally lands, so a block that FOLLOWS a landed start is news again instead of
+// being mistaken for the still-standing first one.
+//
+// The row is RE-READ before writing: this is a whole-row write on the snapshot
+// the cadence tick loaded, and the HTTP faces (activate / relocate / deactivate)
+// write member rows without holding reconcileMu — persisting the stale copy would
+// silently undo a relocate that landed mid-tick, on the very field this stall is
+// about. Best-effort — a persist failure never changes the reconcile decision.
+func (s *apiServer) stampMemberPlacementBlocked(m *Member, now float64) {
+	fresh, err := s.dal.GetMember(m.ID)
+	if err != nil || fresh == nil || fresh.RosterStatus != RosterStatusActive {
+		return
+	}
+	// The reason names the pin on the row being WRITTEN, not the one the tick
+	// snapshotted: a relocate landing mid-tick would otherwise stamp a row pinned
+	// to the new machine with a complaint about the old one.
+	reason := placementReasonNoMachine + ": no machine is selected for this member — " +
+		"choose one (改機器) before waking it; there is no automatic placement"
+	if fresh.DesiredMachineID != "" {
+		reason = placementReasonUnavailable + ": machine '" + fresh.DesiredMachineID +
+			"' is not an active machine — choose another one (改機器); " +
+			"no other machine is substituted"
+	}
+	if fresh.LastOp == reconcileCmdStart && fresh.LastOpReason == reason {
+		return
+	}
+	ok := false
+	fresh.LastOp = reconcileCmdStart
+	fresh.LastOpOK = &ok
+	fresh.LastOpLog = ""
+	fresh.LastOpReason = reason
+	fresh.LastOpAt = now
+	if err := s.putMember(*fresh, triggerServer); err != nil {
+		reconcileLog("%s: placement-blocked stamp persist failed: %v", m.ID, err)
+	}
+}
+
 // stampWakeObservability turns two SERVER-SIDE facts about a wake into durable,
 // owner-visible state (T-ba62). Both were previously invisible outside the
 // server's stderr:
@@ -786,39 +833,6 @@ func (s *apiServer) reconcileTickMemberLocked(m Member, now float64) reconcileDe
 //
 // Best-effort by contract: a persistence failure is logged and never changes the
 // reconcile decision — observability must not be able to stall the control loop.
-// stampMemberPlacementBlocked names, on the member row the cockpit reads, the one
-// stall the wake path could not previously explain: the member is wanted online
-// but has no machine to be sent to. Every other START failure already leaves a
-// trace (a lapsed start_timeout writes a receipt; an unbuildable frame logs and
-// backs off), while an unplaced member simply retried forever against nothing —
-// grey and unexplained, identical to a member nobody ever woke.
-//
-// Written only when the cause CHANGES, because the cadence re-decides this same
-// START every 30s: an unconditional write would re-stamp last_op_at and fan a
-// member delta on every tick. Best-effort — a persist failure never changes the
-// reconcile decision.
-func (s *apiServer) stampMemberPlacementBlocked(m *Member, now float64) {
-	reason := placementReasonNoMachine + ": no machine is selected for this member — " +
-		"choose one (改機器) before waking it; there is no automatic placement"
-	if m.DesiredMachineID != "" {
-		reason = placementReasonUnavailable + ": machine '" + m.DesiredMachineID +
-			"' is not an active machine — choose another one (改機器); " +
-			"no other machine is substituted"
-	}
-	if m.LastOp == reconcileCmdStart && m.LastOpReason == reason {
-		return
-	}
-	ok := false
-	m.LastOp = reconcileCmdStart
-	m.LastOpOK = &ok
-	m.LastOpLog = ""
-	m.LastOpReason = reason
-	m.LastOpAt = now
-	if err := s.putMember(*m, triggerServer); err != nil {
-		reconcileLog("%s: placement-blocked stamp persist failed: %v", m.ID, err)
-	}
-}
-
 func (s *apiServer) stampWakeObservability(m *Member, decision reconcileDecision, now float64) {
 	changed := false
 	if decision.StartTimedOut {
@@ -845,6 +859,10 @@ func (s *apiServer) stampWakeObservability(m *Member, decision reconcileDecision
 	if decision.Command == reconcileCmdStart {
 		m.WakingSince = now
 		changed = true
+		// The START landed: a placement-blocked explanation on the row is now
+		// history, and leaving it would make the NEXT block look like the same one.
+		m.LastOpReason = ""
+		m.LastOpLog = ""
 	}
 	if !changed {
 		return
