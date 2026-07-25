@@ -11478,7 +11478,7 @@
     },
     "/api/tasks/{task_id}/artifact/{artifact_id}": {
       "delete": {
-        "description": "Un-pin one artifact from a task's set (MCP ``remove_task_artifact``). SAME permission model as add (owner ruling 2026-07-18 — the executing agent removes its OWN task's deliverables): requires the executing agent — caller must be the task's executor, admin capability (owner/admin agent) excepted. Returns the full updated task on success. The referenced chat_attachment blob is left intact (it may be shared with a chat message). Guards: 404 unknown task → 403 not the executor → 404 unknown artifact → 400 the artifact belongs to a different task.",
+        "description": "Un-pin one artifact from a task's set (MCP ``remove_task_artifact``). SAME permission model as add (owner ruling 2026-07-18 — the executing agent removes its OWN task's deliverables): requires the executing agent — caller must be the task's executor, admin capability (owner/admin agent) excepted. Returns the full updated task on success. The referenced chat_attachment blob is left intact (it may be shared with a chat message). SYMMETRIC with add (owner ruling 2026-07-25): a closed task's deliverable set is frozen in BOTH directions — an add-only freeze made un-pin an unrecoverable loss, since the deliverable could be taken off a closed card and never put back. Like add's, the freeze sits AFTER the permission check, so admin/owner are not exempt. Guards: 404 unknown task → 403 not the executor → 409 terminal task (a closed task's deliverables are frozen) → 404 unknown artifact → 400 the artifact belongs to a different task.",
         "operationId": "handle_remove_task_artifact_api_tasks__task_id__artifact__artifact_id__delete",
         "parameters": [
           {

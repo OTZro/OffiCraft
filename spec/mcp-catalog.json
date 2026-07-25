@@ -1793,7 +1793,7 @@
       "name": "add_task_artifact"
     },
     {
-      "description": "Un-pin (remove) one artifact from a task's artifact set \u2014 the counterpart to add_task_artifact. You may remove artifacts from a task you are the executor of (the owner/assistant may remove on any task). Give the task id and the artifact id (the id returned when it was added, or from get_task's artifacts). The underlying file blob is left intact; only the pin on the card is removed.",
+      "description": "Un-pin (remove) one artifact from a task's artifact set \u2014 the counterpart to add_task_artifact. You may remove artifacts from a task you are the executor of (the owner/assistant may remove on any task). Give the task id and the artifact id (the id returned when it was added, or from get_task's artifacts). The underlying file blob is left intact; only the pin on the card is removed. ONLY WHILE THE TASK IS STILL OPEN: once a task closes (done / terminated / duplicated) its deliverable set is frozen in both directions — remove is refused with the same 409 as add. So swap a deliverable BEFORE you close the task, not after; after the close it can neither be removed nor put back.",
       "inputSchema": {
         "properties": {
           "task_id": {
