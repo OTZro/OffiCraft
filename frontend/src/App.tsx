@@ -141,6 +141,7 @@ export default function App({ onLogout }: { onLogout?: () => void } = {}) {
           >
             <RefreshIcon size={16} />
           </button>
+          <PushNotifications />
           <button
             className={`icon-btn${settingsOpen ? " icon-btn--active" : ""}`}
             type="button"
@@ -182,7 +183,6 @@ export default function App({ onLogout }: { onLogout?: () => void } = {}) {
           automatic first-run setup did not produce a working studio. Renders
           nothing at all unless that run actually failed. */}
       <OnboardingBanner />
-      <PushNotifications />
 
       <nav className="nav-tabs">
         <div className="nav-tabs__seg">

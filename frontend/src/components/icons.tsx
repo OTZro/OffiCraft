@@ -48,6 +48,26 @@ export function RefreshIcon({ size = 16, className }: IconProps) {
   );
 }
 
+export function BellIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className}>
+      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+      <path d="M10 21h4" />
+    </svg>
+  );
+}
+
+export function BellOffIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className}>
+      <path d="m3 3 18 18" />
+      <path d="M6.26 6.26A6 6 0 0 0 6 8c0 7-3 7-3 9h13" />
+      <path d="M18 8a6 6 0 0 0-8.43-5.49" />
+      <path d="M10 21h4" />
+    </svg>
+  );
+}
+
 export function GearIcon({ size = 16, className }: IconProps) {
   return (
     <svg {...base(size)} className={className}>

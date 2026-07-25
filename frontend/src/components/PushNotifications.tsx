@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { PushSubscriptionInput } from "../api/adapter";
 import { useI18n } from "../i18n";
-import "./push-notifications.css";
+import { BellIcon, BellOffIcon } from "./icons";
 
 type PushState = "unsupported" | "default" | "enabled" | "denied" | "error";
 
@@ -83,7 +83,23 @@ export function PushNotifications() {
     }
   }
 
-  if (state === "unsupported") return null;
-  const message = state === "enabled" ? t.notifications.enabled : state === "denied" ? t.notifications.denied : state === "error" ? t.notifications.failed : t.notifications.description;
-  return <section className="push-notice" aria-live="polite"><div className="push-notice__copy"><strong>{t.notifications.title}</strong><span>{message}</span></div>{state === "enabled" ? <button type="button" className="push-notice__button push-notice__button--quiet" onClick={disable}>{t.notifications.disable}</button> : state !== "denied" ? <button type="button" className="push-notice__button" onClick={enable}>{t.notifications.enable}</button> : null}</section>;
+  // This belongs with the other compact global controls, not as a page-wide
+  // banner. A crossed bell means the device is subscribed; tapping it removes
+  // the subscription. A plain bell invites the owner to enable notifications.
+  if (state === "unsupported" || state === "denied") return null;
+  const enabled = state === "enabled";
+  const label = enabled ? t.notifications.disable : t.notifications.enable;
+  const title = state === "error" ? t.notifications.failed : label;
+  return (
+    <button
+      className={`icon-btn${enabled ? " icon-btn--active" : ""}`}
+      type="button"
+      aria-label={label}
+      title={title}
+      aria-pressed={enabled}
+      onClick={enabled ? disable : enable}
+    >
+      {enabled ? <BellOffIcon size={16} /> : <BellIcon size={16} />}
+    </button>
+  );
 }
