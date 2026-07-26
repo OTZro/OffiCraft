@@ -467,6 +467,7 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 	api.pushContactEmail = auth.pushContactEmail
 	api.displayTheme = auth.displayTheme
 	api.displayLanguage = auth.displayLanguage
+	api.displayWide = auth.displayWide
 	api.displayCustomThemes = auth.displayCustomThemes
 	api.namespace = cfg.Server.Namespace
 	// The embed-fallback binary cache rides beside the SQLite data file — a

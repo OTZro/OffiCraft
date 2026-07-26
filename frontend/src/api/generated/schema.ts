@@ -5176,6 +5176,8 @@ export interface components {
          *     explicit owner action). `org_name` — the studio display name ("" = unset).
          *     `owner_name` — the owner's display nickname ("" = unset). `display_theme` /
          *     `display_language` — the owner's cockpit visual prefs ("" = unset).
+         *     `display_wide` — whether the cockpit uses the wide layout (default false =
+         *     the narrow centred column).
          */
         SettingsDTO: {
             /**
@@ -5196,6 +5198,12 @@ export interface components {
              * @default
              */
             display_theme: string;
+            /**
+             * Display Wide
+             * @description Whether the cockpit uses the WIDE layout — the centred ~1040px content column is lifted, the side gutters stay (T-756f). false (the default) = the narrow centred column, the shipped look. Same dual-layer contract as display_theme: the frontend keeps a localStorage cache for the pre-auth paint and reconciles this server value in at login as the cross-device source of truth.
+             * @default false
+             */
+            display_wide: boolean;
             /**
              * Custom Themes
              * @description The owner's saved custom theme bundles (T-16a1 P2), each a `{id,name,colors}` colour bundle. `[]` = none saved. display_theme may point at any id in this set (or a built-in). Owner-gated: rides GET /api/settings only.
@@ -5271,6 +5279,11 @@ export interface components {
              * @description The owner's cockpit visual theme (T-0b41-p2) — trimmed; "" clears it back to unset. Must be one of office, xian (or ""); anything else is a 422.
              */
             display_theme?: string | null;
+            /**
+             * Display Wide
+             * @description Turn the WIDE cockpit layout on/off (T-756f) — true lifts the centred ~1040px content column (the side gutters stay), false restores it. A plain boolean with no unset state: omit the field to leave it unchanged.
+             */
+            display_wide?: boolean | null;
             /**
              * Custom Themes
              * @description Replace the owner's custom theme bundles (T-16a1 P2) with this array (each `{id,name,colors}`). Omit to leave them unchanged; `[]` clears them. Every bundle is validated against the shape, the theme.css token whitelist, and the concrete-colour grammar — any violation is a 422 and nothing is written. When this and display_theme are patched together, display_theme is validated against the POST-patch set; and deleting the active custom theme resets display_theme to "".

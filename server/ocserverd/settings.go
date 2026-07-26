@@ -111,6 +111,14 @@ const (
 	// cross-device truth, localStorage the pre-auth cache. "" (default) = never
 	// set. NOT an agent read path.
 	settingDisplayLanguage = "display.language"
+	// settingDisplayWide (T-756f, bool, default false) picks the cockpit LAYOUT
+	// width: false (never set) keeps the centred ~1040px content column the
+	// cockpit has always shipped; true lifts that cap so the topbar / nav tabs /
+	// main area span the window (the 22px side gutters stay either way). Same
+	// dual-layer contract as display.theme: server is the cross-device truth,
+	// localStorage the pre-auth cache. Stored like the updater toggles —
+	// strconv.FormatBool text, absent row = false. NOT an agent read path.
+	settingDisplayWide = "display.wide"
 	// settingDisplayCustomThemes (T-16a1 P2) is the owner's saved custom theme
 	// bundles — a JSON array of {id,name,colors} colour bundles (theme_bundle.go).
 	// Server-backed so the set syncs across devices; display.theme may point at
@@ -146,6 +154,7 @@ type authSettings struct {
 	pushContactEmail         string           // push.contact_email ("" = never set → Web Push delivery is refused)
 	displayTheme             string           // display.theme ("" = never set → frontend cache/default)
 	displayLanguage          string           // display.language ("" = never set → frontend cache/default)
+	displayWide              bool             // display.wide (default false = the narrow centred column)
 	displayCustomThemes      []ThemeBundleDTO // display.custom_themes (nil = none saved)
 }
 
@@ -295,6 +304,9 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 		return out, err
 	}
 	if err := getBool(settingUpdaterAutoUpdate, &out.updaterAutoUpdate); err != nil {
+		return out, err
+	}
+	if err := getBool(settingDisplayWide, &out.displayWide); err != nil {
 		return out, err
 	}
 	if v, err := d.GetSetting(settingOrgName); err != nil {

@@ -560,6 +560,70 @@ func TestDisplayPrefsSettingRoundTrips(t *testing.T) {
 	}
 }
 
+// TestDisplayWideSettingRoundTrips covers the T-756f layout-width pref: OFF out
+// of the box (the shipped narrow centred column), a PATCH flips it durably +
+// live in the snapshot, an omitted field never changes it (PATCH semantics), and
+// it stays off the agent read path like the other display prefs.
+func TestDisplayWideSettingRoundTrips(t *testing.T) {
+	api, srv, d, _ := newSettingsTestServer(t, "owner-pass")
+	status, data := doJSON(t, "POST", srv.URL+"/api/login", "", `{"password":"owner-pass"}`)
+	if status != 200 {
+		t.Fatalf("login: %d", status)
+	}
+	owner := data["token"].(string)
+
+	// Default: never set → false (narrow). The DB row does not exist at all —
+	// the shipped look must need no migration to stay the shipped look.
+	if status, data = doJSON(t, "GET", srv.URL+"/api/settings", owner, ""); status != 200 ||
+		data["display_wide"] != false {
+		t.Fatalf("display_wide must default to false: %d %v", status, data["display_wide"])
+	}
+	if v, err := d.GetSetting(settingDisplayWide); err != nil || v != nil {
+		t.Fatalf("an untouched display_wide must write nothing: %v %v", v, err)
+	}
+	if api.displayWideSnapshot() {
+		t.Fatalf("display_wide snapshot must default to false")
+	}
+
+	// Turning it on: echoed, durable, live.
+	if status, data = doJSON(t, "PATCH", srv.URL+"/api/settings", owner,
+		`{"display_wide":true}`); status != 200 || data["display_wide"] != true {
+		t.Fatalf("display_wide patch must echo true: %d %v", status, data["display_wide"])
+	}
+	if v, err := d.GetSetting(settingDisplayWide); err != nil || v == nil || *v != "true" {
+		t.Fatalf("display_wide must be durable: %v %v", v, err)
+	}
+	if !api.displayWideSnapshot() {
+		t.Fatalf("display_wide must be live in the snapshot")
+	}
+
+	// PATCH semantics: an unrelated patch leaves it alone.
+	if status, data = doJSON(t, "PATCH", srv.URL+"/api/settings", owner,
+		`{"display_language":"en"}`); status != 200 || data["display_wide"] != true {
+		t.Fatalf("an omitted display_wide must not change it: %d %v", status, data["display_wide"])
+	}
+
+	// It never leaks onto the agent read path (same boundary as theme/language).
+	if status, data = doJSON(t, "GET", srv.URL+"/api/global-context", owner, ""); status != 200 {
+		t.Fatalf("global-context: %d", status)
+	}
+	if _, ok := data["display_wide"]; ok {
+		t.Fatalf("display_wide must NOT appear on the agent read path: %v", data)
+	}
+
+	// Turning it back off is durable too (false is a written value, not a delete).
+	if status, data = doJSON(t, "PATCH", srv.URL+"/api/settings", owner,
+		`{"display_wide":false}`); status != 200 || data["display_wide"] != false {
+		t.Fatalf("display_wide must flip back to false: %d %v", status, data["display_wide"])
+	}
+	if v, err := d.GetSetting(settingDisplayWide); err != nil || v == nil || *v != "false" {
+		t.Fatalf("the flip back to narrow must be durable: %v %v", v, err)
+	}
+	if api.displayWideSnapshot() {
+		t.Fatalf("the flip back to narrow must be live in the snapshot")
+	}
+}
+
 // wordingValue digs custom_themes[idx].wording[lang][code] out of a settings
 // response body, failing the test if any hop is missing or mistyped.
 func wordingValue(t *testing.T, data map[string]any, idx int, lang, code string) string {

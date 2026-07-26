@@ -442,6 +442,17 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		}
 		s.displayLanguage = displayLanguage
 	}
+	// display.wide (T-756f) is a plain bool with no enum to validate — same
+	// store-as-text shape as the two updater toggles.
+	if body.DisplayWide != nil && *body.DisplayWide != s.displayWide {
+		if err := s.dal.PutSetting(settingDisplayWide,
+			strconv.FormatBool(*body.DisplayWide)); err != nil {
+			s.settingsMu.Unlock()
+			internalError(w, err)
+			return
+		}
+		s.displayWide = *body.DisplayWide
+	}
 	s.settingsMu.Unlock()
 	if updaterChanged {
 		// Force-expire the update-check cache + refresh in the background so
@@ -474,6 +485,7 @@ func (s *apiServer) settingsView() settingsDTO {
 		PushContactEmail:         s.pushContactEmail,
 		DisplayTheme:             s.displayTheme,
 		DisplayLanguage:          s.displayLanguage,
+		DisplayWide:              s.displayWide,
 		CustomThemes:             customThemes,
 		// Read from the DAL, NOT from the settings snapshot: onboarding runs in
 		// its own goroutine and finishes after this handler returned, so a

@@ -47,6 +47,12 @@ const DICTS: Record<Locale, Dict> = { zh, en };
 // here — those are server-only (see hooks/useOrgName + hooks/useOwnerName).
 const LS_LANGUAGE = "oc.language";
 const LS_THEME = "oc.theme";
+// The layout-width pref (T-756f) rides the SAME dual-layer contract. It differs
+// from theme/language in one way only: it is a plain bool, so there is no ""
+// third state — false IS the shipped narrow column, and the server's value is
+// therefore always adopted at reconcile (that is what makes turning wide OFF on
+// one device propagate to the others).
+const LS_WIDE = "oc.wide";
 
 function readStored<T extends string>(key: string, allowed: T[], fallback: T): T {
   try {
@@ -71,6 +77,18 @@ function readStoredTheme(): string {
   return "office";
 }
 
+// The wide cache holds the same "true"/"false" text the server stores, so the
+// two layers are literally the same vocabulary. Anything else (absent, garbage,
+// localStorage unavailable) reads as false — the shipped narrow column.
+function readStoredWide(): boolean {
+  try {
+    return localStorage.getItem(LS_WIDE) === "true";
+  } catch {
+    // localStorage unavailable — fall through to the narrow default
+  }
+  return false;
+}
+
 function writeStored(key: string, value: string | null) {
   try {
     if (value == null) localStorage.removeItem(key);
@@ -90,6 +108,11 @@ interface I18nContextValue {
   /** Active theme: the built-in name ("office") or a custom bundle id. */
   theme: string;
   setTheme: (next: string) => void;
+  /** Whether the cockpit uses the WIDE layout (T-756f): the centred ~1040px
+   * content column is lifted, the side gutters stay. false = the narrow
+   * centred column (the default). */
+  wide: boolean;
+  setWide: (next: boolean) => void;
   /** The active custom theme's per-role avatar images (T-16a1 P5; T-ea81), or
    * undefined when the active theme carries none (the built-in office, or a
    * custom theme with no avatars overlay). The Avatar component reads this to
@@ -122,6 +145,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     readStored<Language>(LS_LANGUAGE, ["zh", "en"], "zh")
   );
   const [theme, setThemeState] = useState<string>(() => readStoredTheme());
+  const [wide, setWideState] = useState<boolean>(() => readStoredWide());
   const [customThemes, setCustomThemesState] = useState<ThemeBundle[]>([]);
   // Effective copy locale: the user's language toggle. Themes are copy-neutral
   // by default (theme↔locale decoupled, T-16a1 P1) — a visual theme never
@@ -206,6 +230,16 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     }
   }, [theme, customThemes]);
 
+  // Apply the layout width (T-756f). Narrow REMOVES the attribute rather than
+  // writing data-layout="narrow": the default DOM then looks exactly as it did
+  // before this pref existed, so the shipped narrow chrome cannot regress. The
+  // CSS override keys off :root[data-layout="wide"] (components/chrome.css).
+  useEffect(() => {
+    const root = document.documentElement;
+    if (wide) root.dataset.layout = "wide";
+    else delete root.dataset.layout;
+  }, [wide]);
+
   // Low-level cache writes: local state + the localStorage pre-auth cache, NO
   // server write. Shared by the public setters (which add the server PATCH), the
   // login reconcile (server → cache), and resetPreferences (local-only).
@@ -217,6 +251,11 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   const cacheTheme = useCallback((next: string) => {
     setThemeState(next);
     writeStored(LS_THEME, next);
+  }, []);
+
+  const cacheWide = useCallback((next: boolean) => {
+    setWideState(next);
+    writeStored(LS_WIDE, next ? "true" : "false");
   }, []);
 
   // Public setters (owner edits from ProfileDropdown): apply locally at once
@@ -248,6 +287,18 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       }
     },
     [cacheTheme]
+  );
+
+  const setWide = useCallback(
+    (next: boolean) => {
+      cacheWide(next);
+      if (hasToken()) {
+        api
+          .patchServerSettings({ displayWide: next })
+          .catch((e) => console.warn("setWide: server sync failed", e));
+      }
+    },
+    [cacheWide]
   );
 
   // Replace the custom-theme set (import / rename / re-colour / delete). The
@@ -302,9 +353,14 @@ export function I18nProvider({ children }: { children: ReactNode }) {
         if (s.displayLanguage === "zh" || s.displayLanguage === "en") {
           cacheLanguage(s.displayLanguage);
         }
+        // Layout width (T-756f) is adopted UNCONDITIONALLY — unlike theme and
+        // language it has no "" third state to mean "keep the cache", so the
+        // server's bool is simply the truth. That is what lets the owner turn
+        // wide OFF on one device and have the others follow.
+        cacheWide(s.displayWide);
       })
       .catch((e) => console.warn("i18n reconcile: load failed", e));
-  }, [cacheTheme, cacheLanguage]);
+  }, [cacheTheme, cacheLanguage, cacheWide]);
 
   useEffect(() => {
     // Reconcile now if a token already exists (a returning session / reload
@@ -324,11 +380,12 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     // choice for every other device).
     cacheLanguage("zh");
     cacheTheme("office");
+    cacheWide(false);
     // The custom set is server-backed — clear only the LOCAL mirror so the next
     // owner's paint is not tinted; the server copy is untouched (re-adopted at
     // that owner's reconcile).
     setCustomThemesState([]);
-  }, [cacheLanguage, cacheTheme]);
+  }, [cacheLanguage, cacheTheme, cacheWide]);
 
   const value = useMemo<I18nContextValue>(
     () => ({
@@ -338,6 +395,8 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       setLanguage,
       theme,
       setTheme,
+      wide,
+      setWide,
       activeAvatars,
       activeLogo,
       activeNavIcons,
@@ -352,6 +411,8 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       setLanguage,
       theme,
       setTheme,
+      wide,
+      setWide,
       activeAvatars,
       activeLogo,
       activeNavIcons,

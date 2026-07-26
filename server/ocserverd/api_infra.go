@@ -314,6 +314,10 @@ func (s *apiServer) sseStopGateRefusal(memberID string) string {
 // genuinely new session (respawn / relocate / recycle) re-stamps because the
 // spawn/stop boundary cleared boot_ts first (clearSessionBootTS).
 func (s *apiServer) onFirstConnect(memberID string) {
+	// Worker presence is projected from this connection edge. The owner's live
+	// worker list subscribes to outsource_worker, so fan its canonical delta
+	// even when no durable member field changed (the common case).
+	s.publishOutsourcePresenceEdge(memberID)
 	if m, err := s.dal.GetMember(memberID); err == nil && m != nil && m.WakingSince > 0 {
 		m.WakingSince = 0.0
 		if err := s.putMember(*m, memberID); err != nil {
@@ -354,6 +358,19 @@ func (s *apiServer) clearSessionBootTS(id string) {
 // banked_cost, then POP the live field (exactly-once-per-edge banking).
 func (s *apiServer) onLastDisconnect(memberID string) {
 	s.bankLiveCost(memberID)
+	s.publishOutsourcePresenceEdge(memberID)
+}
+
+// publishOutsourcePresenceEdge makes the worker-list projection converge after
+// a real SSE online edge. Presence lives only in Hub, so no durable write is
+// guaranteed to accompany a clean connect/disconnect; the existing
+// outsource_worker delta is the owner cockpit's canonical invalidation signal.
+func (s *apiServer) publishOutsourcePresenceEdge(memberID string) {
+	worker, err := s.dal.GetOutsourceWorker(memberID)
+	if err != nil || worker == nil || worker.Status == WorkerStatusReleased {
+		return
+	}
+	s.publishOutsourceWorker(*worker, triggerServer)
 }
 
 // bankLiveCost is the ONE cost-banking fold for BOTH actor kinds (T-ba6b —

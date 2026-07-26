@@ -1344,6 +1344,7 @@ export const httpApi: Api = {
       push_contact_email?: string;
       display_theme?: string;
       display_language?: string;
+      display_wide?: boolean;
       // The wire accepts the full ThemeBundle shape (id/name/colors + optional
       // wording/fonts/avatars/logo/navIcons); reuse the type so it can't drift
       // out of sync with the bundle and silently drop new fields again.
@@ -1367,6 +1368,9 @@ export const httpApi: Api = {
     if (patch.displayTheme !== undefined) body.display_theme = patch.displayTheme;
     if (patch.displayLanguage !== undefined) {
       body.display_language = patch.displayLanguage;
+    }
+    if (patch.displayWide !== undefined) {
+      body.display_wide = patch.displayWide;
     }
     if (patch.customThemes !== undefined) body.custom_themes = patch.customThemes;
     const wire = unwrap(await client.PATCH("/api/settings", { body }));

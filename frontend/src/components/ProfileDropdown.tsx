@@ -31,7 +31,7 @@ type View = "main" | "preferences" | "password";
  * Profile menu that drops from the topbar profile pill.
  *  - main view: profile header (inline rename), Preferences row, Log out.
  *  - preferences view: Theme SELECTOR (辦公室 / custom) + Language
- *    (中文 / English), then a 修改密碼 row.
+ *    (中文 / English) + Layout (窄版 / 寬版), then a 修改密碼 row.
  *  - password view: current / new / repeat → POST /api/auth/change-password.
  *
  * Scope (owner 2026-07-12): this menu holds APPEARANCE + ACCOUNT IDENTITY only.
@@ -58,6 +58,8 @@ export function ProfileDropdown({
     customThemes,
     language,
     setLanguage,
+    wide,
+    setWide,
     resetPreferences,
   } = useI18n();
 
@@ -309,6 +311,30 @@ export function ProfileDropdown({
               onKeyDown={(e) => { if (e.key === "Enter") void commitPushContactEmail(); }}
             />
             {pushEmailError && <div className="profile-dd__error">{t.profile.pushContactEmailError}</div>}
+          </div>
+
+          <div className="profile-dd__section">
+            <div className="profile-dd__section-label">{t.profile.layout}</div>
+            <div className="profile-dd__seg">
+              <button
+                type="button"
+                className={`profile-dd__seg-btn${
+                  !wide ? " profile-dd__seg-btn--active" : ""
+                }`}
+                onClick={() => setWide(false)}
+              >
+                {t.profile.layoutNarrow}
+              </button>
+              <button
+                type="button"
+                className={`profile-dd__seg-btn${
+                  wide ? " profile-dd__seg-btn--active" : ""
+                }`}
+                onClick={() => setWide(true)}
+              >
+                {t.profile.layoutWide}
+              </button>
+            </div>
           </div>
 
           <div className="profile-dd__divider" />

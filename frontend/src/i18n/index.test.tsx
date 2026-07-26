@@ -125,6 +125,103 @@ describe("I18nProvider dual-layer theme/language", () => {
   });
 });
 
+describe("I18nProvider layout width (T-756f)", () => {
+  const root = document.documentElement;
+
+  beforeEach(() => {
+    __resetMock();
+    localStorage.clear();
+    delete root.dataset.layout;
+  });
+
+  it("defaults to narrow and leaves the DOM exactly as it was", () => {
+    render(
+      <I18nProvider>
+        <Capture />
+      </I18nProvider>
+    );
+    expect(ctx.wide).toBe(false);
+    // The narrow default must be the ABSENCE of the attribute — that is what
+    // guarantees the shipped chrome is untouched for anyone who never opted in.
+    expect(root.hasAttribute("data-layout")).toBe(false);
+  });
+
+  it("applies <html data-layout=\"wide\"> when switched on, and removes it again", () => {
+    render(
+      <I18nProvider>
+        <Capture />
+      </I18nProvider>
+    );
+    act(() => ctx.setWide(true));
+    expect(root.dataset.layout).toBe("wide");
+    act(() => ctx.setWide(false));
+    expect(root.hasAttribute("data-layout")).toBe(false);
+  });
+
+  it("caches the choice to localStorage for the pre-auth first paint", () => {
+    render(
+      <I18nProvider>
+        <Capture />
+      </I18nProvider>
+    );
+    act(() => ctx.setWide(true));
+    expect(localStorage.getItem("oc.wide")).toBe("true");
+  });
+
+  it("first paint uses the localStorage cache when pre-auth", () => {
+    localStorage.setItem("oc.wide", "true");
+    render(
+      <I18nProvider>
+        <Capture />
+      </I18nProvider>
+    );
+    expect(ctx.wide).toBe(true);
+    expect(root.dataset.layout).toBe("wide");
+  });
+
+  it("adopts the server value at login, writing it back to the cache", async () => {
+    await mockApi.patchServerSettings({ displayWide: true });
+    localStorage.setItem(TOKEN_KEY, "live-owner-token");
+    render(
+      <I18nProvider>
+        <Capture />
+      </I18nProvider>
+    );
+    await waitFor(() => expect(ctx.wide).toBe(true));
+    expect(root.dataset.layout).toBe("wide");
+    expect(localStorage.getItem("oc.wide")).toBe("true");
+  });
+
+  it("lets the server turn wide back OFF across devices (no \"\" third state)", async () => {
+    // This device cached wide; the owner turned it off elsewhere, so the server
+    // says false. Unlike theme/language there is no unset value meaning "keep
+    // the cache" — the server bool is simply adopted.
+    localStorage.setItem("oc.wide", "true");
+    localStorage.setItem(TOKEN_KEY, "live-owner-token");
+    render(
+      <I18nProvider>
+        <Capture />
+      </I18nProvider>
+    );
+    await waitFor(() => expect(ctx.wide).toBe(false));
+    expect(localStorage.getItem("oc.wide")).toBe("false");
+    expect(root.hasAttribute("data-layout")).toBe(false);
+  });
+
+  it("resetPreferences drops back to narrow (logout must not tint the next owner)", () => {
+    localStorage.setItem("oc.wide", "true");
+    render(
+      <I18nProvider>
+        <Capture />
+      </I18nProvider>
+    );
+    expect(ctx.wide).toBe(true);
+    act(() => ctx.resetPreferences());
+    expect(ctx.wide).toBe(false);
+    expect(root.hasAttribute("data-layout")).toBe(false);
+  });
+});
+
 describe("I18nProvider custom theme apply", () => {
   const root = document.documentElement;
 

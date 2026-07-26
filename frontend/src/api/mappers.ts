@@ -742,6 +742,10 @@ export function toServerSettings(w: WireServerSettings): ServerSettingsView {
     // localStorage cache / default and reconciles a real value in at login.
     displayTheme: w.display_theme ?? "",
     displayLanguage: w.display_language ?? "",
+    // Layout width (T-756f; schema-optional for DTO-compat — the Go wire always
+    // emits it). Absent maps to false, which is exactly the honest reading: an
+    // older server has no wide layout, so the cockpit stays narrow.
+    displayWide: w.display_wide ?? false,
     // Custom theme bundles (T-16a1 P2; schema-optional for DTO-compat — the Go
     // wire always emits an array). Absent maps to [] — never a fabricated theme.
     customThemes: (w.custom_themes ?? []).map((b) => ({

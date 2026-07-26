@@ -610,6 +610,11 @@ export interface ServerSettingsView {
   /** The owner's cockpit language (T-0b41-p2). "" = never set — same
    * dual-layer contract as displayTheme. */
   displayLanguage: string;
+  /** Whether the cockpit uses the WIDE layout (T-756f): the centred ~1040px
+   * content column is lifted, the side gutters stay. false = the narrow
+   * centred column, the shipped default. Same dual-layer contract as
+   * displayTheme, but a plain bool — there is no "never set" third state. */
+  displayWide: boolean;
   /** The owner's saved custom theme bundles (T-16a1 P2); [] = none saved.
    * displayTheme may point at any bundle's id (or a built-in). */
   customThemes: ThemeBundle[];
@@ -667,6 +672,9 @@ export interface ServerSettingsPatch {
   /** The owner's cockpit language (T-0b41-p2); "zh" | "en" (or "" to clear).
    * The server 422s anything else. */
   displayLanguage?: string;
+  /** Turn the WIDE cockpit layout on/off (T-756f). Omit to leave it
+   * unchanged — a plain bool, so there is nothing to "clear" it to. */
+  displayWide?: boolean;
   /** Replace the owner's custom theme bundles (T-16a1 P2). Omit to leave them
    * unchanged; [] clears them. Each bundle is validated (shape + theme.css
    * token whitelist + concrete-colour grammar); the server 422s any violation.

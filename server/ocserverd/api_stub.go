@@ -89,6 +89,11 @@ type apiServer struct {
 	// the frontend keeps its cached/default value. NOT an agent read path.
 	displayTheme    string
 	displayLanguage string
+	// displayWide is the owner's cockpit layout width (DB display.wide; T-756f)
+	// under the SAME dual-layer contract as the two prefs above. false (the
+	// default) = the centred ~1040px content column the cockpit ships with; true
+	// lifts that cap. NOT an agent read path.
+	displayWide bool
 	// displayCustomThemes is the owner's saved custom theme bundles (DB
 	// display.custom_themes; T-16a1 P2). nil = none saved. Owner-writable via
 	// PATCH /api/settings so the set syncs across devices; display.theme may
@@ -343,6 +348,14 @@ func (s *apiServer) displayLanguageSnapshot() string {
 	s.settingsMu.RLock()
 	defer s.settingsMu.RUnlock()
 	return s.displayLanguage
+}
+
+// displayWideSnapshot returns the live cockpit layout width (display.wide;
+// T-756f). false = the narrow centred column (the default).
+func (s *apiServer) displayWideSnapshot() bool {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.displayWide
 }
 
 // displayCustomThemesSnapshot returns a copy of the live custom theme bundles
