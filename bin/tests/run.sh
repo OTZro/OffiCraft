@@ -418,7 +418,14 @@ SH
 
   # R4. THE OPTION THE OWNER DID NOT CHOOSE — the dev/autodeploy shape must stay
   #     unblocked. Identical fixture, minus the release entry point: a dev Mac
-  #     with no keychain still builds and still ships (adhoc, with a warning).
+  #     with no keychain still builds and still ships.
+  #     ⚠️ The REASON it is unblocked changed in T-588c and the assertion changed
+  #     with it. This case used to expect `WARNING … ADHOC-signed`, i.e. "we tried
+  #     to sign, found no identity, and shipped anyway". Signing is now off by
+  #     default, so the dev shape never gets as far as looking: it stops at
+  #     "signing NOT REQUESTED", above the keychain probe. Asserting the old
+  #     warning here would demand the very keychain access the default-off switch
+  #     exists to avoid — the assertion and the feature would be at odds.
   SHIM_HAS_IDENTITY=0 run_dev_case
   check "DEV + missing identity exits 0 (dev Macs are NOT blocked)" "0" "$RC"
   case "$OUT" in
@@ -426,8 +433,8 @@ SH
     *) bad "DEV shape leaves OC_CODESIGN_REQUIRE unset (default off) ($OUT)";;
   esac
   case "$OUT" in
-    *WARNING*ADHOC-signed*) ok "DEV + missing identity warns and ships as built";;
-    *) bad "DEV + missing identity warns and ships as built ($OUT)";;
+    *"signing NOT REQUESTED"*) ok "DEV + missing identity ships as built without asking to sign";;
+    *) bad "DEV + missing identity ships as built without asking to sign ($OUT)";;
   esac
 
   # R5/R6. STATIC drift-guards on the two shared seams. R2/R4 prove today's
