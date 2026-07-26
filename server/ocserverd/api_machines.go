@@ -764,7 +764,13 @@ func (s *apiServer) HandleTeardownHereApiMachinesMachineIdTeardownHerePost(w htt
 	if s.namespace != "" {
 		env = append(env, "OC_NAMESPACE="+s.namespace)
 	}
-	exitCode, log, timedOut := runOcwarden(binPath, []string{"teardown"}, env)
+	args := []string{"teardown"}
+	if s.namespace == "" {
+		// Canonical teardown is destructive and the CLI refuses an implicit
+		// canonical target; the server has already resolved this instance.
+		args = append(args, "--canonical")
+	}
+	exitCode, log, timedOut := runOcwarden(binPath, args, env)
 	if timedOut {
 		writeJSON(w, http.StatusOK, machineTeardownHereResultDTO{
 			MachineID: machine.ID,

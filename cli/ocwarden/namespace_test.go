@@ -228,6 +228,40 @@ func TestResolveTeardownPaths_Namespaced(t *testing.T) {
 	}
 }
 
+// A lost OC_NAMESPACE used to make `ocwarden teardown` silently resolve the
+// canonical label/token/root.  The CLI boundary must reject that shape before
+// resolveTeardownPaths can derive or mutate anything; canonical is opt-in.
+func TestValidateTeardownTarget_FailsClosedAgainstImplicitCanonical(t *testing.T) {
+	canonical := envFn(map[string]string{"HOME": "/h"})
+	if err := validateTeardownTarget(canonical, false); err == nil {
+		t.Fatal("bare teardown with no OC_NAMESPACE must refuse implicit canonical target")
+	} else if !strings.Contains(err.Error(), "--canonical") {
+		t.Fatalf("refusal must tell caller how to make canonical explicit, got %v", err)
+	}
+	if err := validateTeardownTarget(canonical, true); err != nil {
+		t.Fatalf("explicit canonical teardown must remain available, got %v", err)
+	}
+
+	namespaced := envFn(map[string]string{"HOME": "/h", "OC_NAMESPACE": "e2e-safe"})
+	if err := validateTeardownTarget(namespaced, false); err != nil {
+		t.Fatalf("namespaced teardown must be admitted without canonical flag, got %v", err)
+	}
+	if err := validateTeardownTarget(namespaced, true); err == nil {
+		t.Fatal("--canonical must not override a namespaced target")
+	}
+}
+
+func TestRealMain_BareTeardownRefusesBeforeAnyHostOperation(t *testing.T) {
+	var sb strings.Builder
+	rc := realMain([]string{"teardown"}, envFn(map[string]string{"HOME": "/h"}), &sb)
+	if rc != 1 {
+		t.Fatalf("bare canonical teardown rc=%d, want 1", rc)
+	}
+	if !strings.Contains(sb.String(), "--canonical") {
+		t.Fatalf("bare teardown refusal must name explicit canonical authorization:\n%s", sb.String())
+	}
+}
+
 func TestDoTeardown_NamespacedActsOnOwnLabelOnly(t *testing.T) {
 	f := newFakeSys()
 	f.runFn = labelGoneRunFn

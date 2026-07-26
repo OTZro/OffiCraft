@@ -664,6 +664,54 @@ oc_preflight_guards() {
   fi
 }
 
+# oc_assert_teardown_instance — fail closed unless every resource axis agrees
+# with the selected instance.  This is deliberately checked BEFORE the first
+# teardown mutation: a namespaced E2E must never silently fall back to the
+# canonical warden label/root/socket when one derived variable is missing or
+# stale.
+oc_assert_teardown_instance() {
+  local ns="${OC_NS:-}" expected_root expected_suffix
+  if [[ -n "$ns" ]]; then
+    expected_root="$HOME_DIR/.officraft-$ns"
+    expected_suffix=".$ns"
+    [[ "${OC_ROOT:-}" == "$expected_root" ]] \
+      || die "TEARDOWN TARGET GUARD: namespace '$ns' requires OC_ROOT '$expected_root' (got '${OC_ROOT:-<unset>}')"
+    [[ "${SERVE_LABEL:-}" == "com.officraft.serve$expected_suffix" ]] \
+      || die "TEARDOWN TARGET GUARD: namespace '$ns' requires namespaced serve label (got '${SERVE_LABEL:-<unset>}')"
+    [[ "${WARDEN_LABEL:-}" == "com.officraft.ocwarden$expected_suffix" ]] \
+      || die "TEARDOWN TARGET GUARD: namespace '$ns' requires namespaced warden label (got '${WARDEN_LABEL:-<unset>}')"
+    [[ "${TMUX_SOCKET_LOCAL:-}" == "$OC_CANONICAL_TMUX_SOCKET-$ns" ]] \
+      || die "TEARDOWN TARGET GUARD: namespace '$ns' requires namespaced tmux socket (got '${TMUX_SOCKET_LOCAL:-<unset>}')"
+    return 0
+  fi
+
+  # Canonical is an explicit mode too: refuse a mixed set of canonical and
+  # namespaced axes rather than guessing which target the caller meant.
+  [[ "${OC_ROOT:-}" == "$HOME_DIR/.officraft" ]] \
+    || die "TEARDOWN TARGET GUARD: canonical mode requires OC_ROOT '$HOME_DIR/.officraft' (got '${OC_ROOT:-<unset>}')"
+  [[ "${SERVE_LABEL:-}" == "com.officraft.serve" ]] \
+    || die "TEARDOWN TARGET GUARD: canonical mode requires canonical serve label (got '${SERVE_LABEL:-<unset>}')"
+  [[ "${WARDEN_LABEL:-}" == "$OC_CANONICAL_WARDEN_LABEL" ]] \
+    || die "TEARDOWN TARGET GUARD: canonical mode requires canonical warden label (got '${WARDEN_LABEL:-<unset>}')"
+  [[ "${TMUX_SOCKET_LOCAL:-}" == "$OC_CANONICAL_TMUX_SOCKET" ]] \
+    || die "TEARDOWN TARGET GUARD: canonical mode requires canonical tmux socket (got '${TMUX_SOCKET_LOCAL:-<unset>}')"
+}
+
+# oc_teardown_warden — remove precisely the selected instance's warden.  Do
+# not rely on the caller's ambient environment: `ocwarden teardown` defaults
+# to canonical for an absent OC_NAMESPACE, so a namespaced harness MUST pass
+# its namespace on this exact subprocess invocation.
+oc_teardown_warden() {
+  oc_assert_teardown_instance
+  if [[ -x "$OCWARDEN" ]]; then
+    log "bin/ocwarden teardown (instance=${OC_NS:-canonical}, explicit OC_NAMESPACE)"
+    local -a args=(teardown)
+    [[ -z "${OC_NS:-}" ]] && args+=(--canonical)
+    env OC_NAMESPACE="${OC_NS:-}" "$OCWARDEN" "${args[@]}" 2>&1 | sed 's/^/[single-machine] warden-td| /' >&2 \
+      || warn "ocwarden teardown returned non-zero (may be already-gone) — continuing"
+  fi
+}
+
 # oc_teardown_bounded WHERE — the ONLY teardown path (PHASE 1 / PHASE 6). EXACT
 # labels only; NEVER pkill/killall/glob; .dump backup before any destruction;
 # poll-until-gone. Calls fail_stage on a stuck label / surviving root.
@@ -677,6 +725,10 @@ oc_teardown_bounded() {
   # touch the canonical ~/.officraft tree. Fallback preserves old behavior for
   # any caller that predates oc_resolve_instance.
   local oc_root="${OC_ROOT:-$HOME_DIR/.officraft}"
+
+  # Fail before backing up, booting out, or deleting anything if the instance
+  # axes no longer identify one unambiguous target.
+  oc_assert_teardown_instance
 
   # 1a. .dump backup BEFORE any destruction. Best-effort if DB absent.
   if [[ -f "$DB_PATH" ]]; then
@@ -697,12 +749,9 @@ oc_teardown_bounded() {
     launchctl bootout "$GUI/$label" 2>/dev/null || true
   done
 
-  # 1c. best-effort ocwarden teardown (removes its plist/tokfile cleanly if present).
-  if [[ -x "$OCWARDEN" ]]; then
-    log "bin/ocwarden teardown (best-effort clean warden removal)"
-    "$OCWARDEN" teardown 2>&1 | sed 's/^/[single-machine] warden-td| /' >&2 \
-      || warn "ocwarden teardown returned non-zero (may be already-gone) — continuing"
-  fi
+  # 1c. best-effort selected-instance warden teardown (removes only that
+  # instance's plist/tokfile; namespace propagation is load-bearing).
+  oc_teardown_warden
 
   # 1d. EXACT stale-agent sessions on the dedicated `officraft` tmux socket
   #     ONLY (member-<id> persistent agents + worker-<ow-id> ephemeral outsource

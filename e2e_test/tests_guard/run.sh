@@ -33,7 +33,14 @@ cat > "$SHIMDIR/launchctl" <<'SH'
 #!/usr/bin/env bash
 # Only two verbs matter to the code under test: `print` (read-only detection) and
 # `bootout` (MUST never be reached by a guard/allocator — tripwire if it is).
-if [[ "$1" == "bootout" ]]; then echo "TRIPWIRE launchctl bootout $*" >> "$SHIM_TRIPWIRE"; exit 0; fi
+if [[ "$1" == "bootout" ]]; then
+  if [[ "${SHIM_ALLOW_TEARDOWN:-0}" == "1" ]]; then
+    echo "launchctl $*" >> "$SHIM_TEARDOWN_LOG"
+  else
+    echo "TRIPWIRE launchctl bootout $*" >> "$SHIM_TRIPWIRE"
+  fi
+  exit 0
+fi
 if [[ "$1" == "print" ]]; then
   case "$2" in
     */com.officraft.ocwarden) [[ "${SHIM_WARDEN:-0}" == "1" ]] && exit 0 || exit 1 ;;
@@ -67,6 +74,25 @@ exit 0
 SH
 
 chmod +x "$SHIMDIR"/launchctl "$SHIMDIR"/lsof "$SHIMDIR"/tmux
+
+# These stubs are enabled ONLY by the hermetic teardown regression below.  They
+# record every mutating surface instead of touching the host, which lets the
+# test reject a canonical label/root/token target without ever exercising a
+# real warden teardown.
+cat > "$SHIMDIR/ocwarden" <<'SH'
+#!/usr/bin/env bash
+echo "ocwarden namespace=${OC_NAMESPACE:-<unset>} args=$*" >> "$SHIM_TEARDOWN_LOG"
+exit 0
+SH
+cat > "$SHIMDIR/rm" <<'SH'
+#!/usr/bin/env bash
+if [[ "${SHIM_ALLOW_TEARDOWN:-0}" == "1" ]]; then
+  printf 'rm'; printf ' <%s>' "$@"; printf '\n' >> "$SHIM_TEARDOWN_LOG"
+  exit 0
+fi
+exec /bin/rm "$@"
+SH
+chmod +x "$SHIMDIR"/ocwarden "$SHIMDIR"/rm
 export SHIM_TRIPWIRE="$TRIPWIRE"
 export PATH="$SHIMDIR:$PATH"
 
@@ -539,6 +565,64 @@ else
     esac
   fi
 fi
+
+# ── 18) T-2257: namespaced teardown must propagate OC_NAMESPACE to ocwarden ─
+#
+# `oc_resolve_instance` correctly derived a namespaced label/root, but the
+# lifecycle helper then ran bare `ocwarden teardown`.  A child process without
+# OC_NAMESPACE silently resolves the canonical label and token, so a harmless
+# E2E cleanup could unload the live fleet's warden.  This invokes the REAL
+# oc_teardown_bounded call chain, but every mutation is shimmed above.  The
+# recording shims are tripwires: canonical launchd label, canonical root, or
+# canonical token in any recorded target turns the test red.  The direct child
+# env assertion is deliberately what makes removing propagation red, rather
+# than merely checking the parent's OC_NS variable.
+TEARDOWN_LOG="$SHIMDIR/.teardown-log"
+: > "$TEARDOWN_LOG"
+TEST_HOME="$SHIMDIR/ns-teardown-home"
+export SHIM_ALLOW_TEARDOWN=1 SHIM_TEARDOWN_LOG="$TEARDOWN_LOG" TEST_HOME
+rc="$(run_snippet '
+  OC_E2E_NS="e2eproof"; OC_E2E_NS_PORT=8808
+  oc_resolve_instance
+  HOME_DIR="$HOME"; GUI="gui/501"; BACKUP_DIR="$HOME/backups"
+  # SHIMDIR itself is intentionally not exported to the hermetic child; resolve
+  # the fake through the exported PATH exactly as the harness resolves tools.
+  OCWARDEN="$(command -v ocwarden)"
+  mkdir -p "$HOME/.officraft/warden" "$OC_ROOT/warden"
+  printf canonical > "$HOME/.officraft/warden/exec-warden.tok"
+  printf isolated > "$OC_ROOT/warden/exec-warden.tok"
+  oc_teardown_bounded "namespace-regression"
+')"
+check "namespaced teardown helper completes through hermetic shims" "0" "$rc"
+
+if grep -Fqx 'ocwarden namespace=e2eproof args=teardown' "$TEARDOWN_LOG"; then
+  ok "namespaced teardown passes OC_NAMESPACE=e2eproof to the ocwarden child"
+else
+  bad "namespaced teardown did NOT pass its namespace to ocwarden (log: $(tr '\n' '|' < "$TEARDOWN_LOG")) — bare teardown falls back to canonical warden"
+fi
+
+if grep -Eq 'com\.officraft\.ocwarden([[:space:]]|$)' "$TEARDOWN_LOG"; then
+  bad "namespaced teardown touched canonical warden label (log: $(tr '\n' '|' < "$TEARDOWN_LOG"))"
+else
+  ok "namespaced teardown never targets canonical warden label"
+fi
+if grep -Fq "$TEST_HOME/.officraft/warden/exec-warden.tok" "$TEARDOWN_LOG"; then
+  bad "namespaced teardown touched canonical warden token (log: $(tr '\n' '|' < "$TEARDOWN_LOG"))"
+else
+  ok "namespaced teardown never targets canonical warden token"
+fi
+if grep -Fq "$TEST_HOME/.officraft/" "$TEARDOWN_LOG"; then
+  bad "namespaced teardown touched canonical officraft root (log: $(tr '\n' '|' < "$TEARDOWN_LOG"))"
+else
+  ok "namespaced teardown never targets canonical officraft root"
+fi
+if [[ -f "$TEST_HOME/.officraft/warden/exec-warden.tok" ]] \
+   && [[ "$(cat "$TEST_HOME/.officraft/warden/exec-warden.tok")" == "canonical" ]]; then
+  ok "canonical token sentinel remains intact after namespaced teardown"
+else
+  bad "canonical token sentinel was changed or removed by namespaced teardown"
+fi
+unset SHIM_ALLOW_TEARDOWN SHIM_TEARDOWN_LOG TEST_HOME
 
 echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1
