@@ -2,33 +2,50 @@
 # bin/tests/namespace-mirror-guard.sh — the BASH half of the cross-module
 # namespace mirror confrontation (T-5047).
 #
-# WHAT IS BEING GUARDED
-# ---------------------
-# The namespace→(root, launchd label) derivation is written out by hand FOUR
-# times, in three languages, across two Go modules and two shell scripts:
+# WHAT IS BEING GUARDED — AND WHAT IS NOT
+# ---------------------------------------
+# The namespace→(root, launchd label) derivation is hand-transcribed in FIVE
+# places. Naming only four of them (as an earlier version of this header did)
+# would be exactly the kind of coverage claim that reads as complete and is not:
 #
-#   cli/ocwarden/namespace.go       ← guarded by namespace_mirror_test.go
-#   server/ocserverd/onboarding.go  ← guarded by onboarding_mirror_test.go
-#   bin/install.sh                  ← guarded HERE
-#   bin/ocserver                    ← guarded HERE
+#   cli/ocwarden/namespace.go       ← by VALUE in namespace_mirror_test.go
+#   server/ocserverd/onboarding.go  ← by VALUE in onboarding_mirror_test.go
+#   bin/install.sh                  ← HERE (structure) + install-guard.sh §10 and
+#                                     uninstall-guard.sh (end-to-end behaviour)
+#   bin/ocserver                    ← HERE (structure only)
+#   e2e_test/lib/oc_lifecycle.sh    ← NOT GUARDED, deliberately. It is harness
+#                                     code that derives the root to know where to
+#                                     LOOK; if it drifts, the e2e run fails to
+#                                     find anything and says so loudly. Listed
+#                                     because an unlisted copy is an unknown one.
 #
-# Everything is checked against ONE shared table, fixtures/namespace-axes.tsv, so
-# a drift names the copy that drifted. Checking the copies against each other
-# would only ever report that they differ.
+# Everything checked here is checked against ONE shared table,
+# fixtures/namespace-axes.tsv, so a drift names the copy that drifted; comparing
+# the copies to each other could only ever report THAT they differ.
+#
+# WHAT THIS GUARD CANNOT SEE (stated so nobody reads its green as more than it is)
+#   - The Go derivations' VALUES. Those are checked by the two module tests
+#     above, which call the functions; this file only greps text.
+#   - Whether bin/ocserver's namespacing actually WORKS end to end. install.sh
+#     has install-guard.sh §10 / uninstall-guard.sh for that; bin/ocserver has
+#     no equivalent hermetic suite, so its coverage here is structure only.
+#   - The tmux-socket and agent-home axes, which exist only in the Go copy (the
+#     table carries the socket column and namespace_mirror_test.go checks it).
 #
 # WHY THE SHELL COPIES GET A DIFFERENT TREATMENT
 # ----------------------------------------------
 # The Go copies are FUNCTIONS, so their tests call them and compare results. The
-# shell copies are two variable assignments in the middle of a 1200-line
-# installer, and the install/uninstall guard suites already exercise them
-# END TO END for one namespace (see install-guard.sh §10 / uninstall-guard.sh).
-# What those suites cannot see is the CHARSET: it is a regex literal, not a
-# derivation, and a copy that is looser than the others admits a namespace the
-# other components will refuse — one component builds a path or a label the
-# others do not recognise, which is precisely the split-brain this ticket exists
-# to remove. So this guard pins the two shell derivations structurally and the
-# charset in all four copies, and leaves behaviour to the suites that run the
-# script.
+# shell copies are variable assignments in the middle of a 1200-line installer.
+# What no behavioural suite can see is the CHARSET: it is a regex literal, not a
+# derivation, and a copy looser than the others admits a namespace the rest will
+# refuse — one component then builds a path or label the others do not
+# recognise, which is precisely the split-brain this ticket exists to remove.
+#
+# EVERY MATCH BELOW IS TAKEN FROM CODE LINES ONLY (see code_only). These files
+# discuss the derivation and the charset at length in prose; a guard that greps
+# raw would be satisfiable by its own documentation — green because someone wrote
+# the right thing in a COMMENT while the code said something else.
+#
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,7 +57,7 @@ PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); printf '  ok   — %s\n' "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf '  FAIL — %s\n' "$1"; }
 
-echo "namespace mirror — four hand-transcribed copies against one table"
+echo "namespace mirror — 5 hand-transcribed copies, 4 checked here or by module tests"
 
 # ── the charset, in all FOUR copies ─────────────────────────────────────────
 CHARSET="$(sed -n 's/^# charset	//p' "$TABLE" | head -1)"
@@ -50,14 +67,30 @@ if [[ -z "$CHARSET" ]]; then
 fi
 ok "shared table declares the charset: $CHARSET"
 
-# The Go copies verify the regex by VALUE in their own tests (they can call
-# namespaceShape.String()); here we can only check the source text, which is why
-# the Go side is the authoritative check and this is the shell-reachable one.
+# code_only <file> — the file with comments removed, so nothing below can be
+# satisfied by prose. Drops whole-line # and // comments, then trailing ones.
+# LIMITATION, stated rather than hidden: a '#' or '//' inside a quoted string
+# truncates that line early. That direction is safe — it can only LOSE a real
+# match and turn the guard RED (a loud false alarm someone will investigate),
+# never invent one and turn it green.
+code_only() {
+  sed -e 's://.*::' -e 's:[[:space:]]#.*::' -e 's:^[[:space:]]*#.*::' "$1"
+}
+
+# The Go copies check this regex BY VALUE in their own module tests; repeating a
+# text match for them here is cheap and catches the case where the literal and
+# the compiled shape are edited apart.
 for f in cli/ocwarden/namespace.go server/ocserverd/config.go bin/install.sh bin/ocserver; do
-  if grep -qF -- "$CHARSET" "$ROOT/$f"; then
-    ok "$f carries the shared charset literally"
+  n="$(code_only "$ROOT/$f" | grep -cF -- "$CHARSET")"
+  if [[ "$n" -ge 1 ]]; then
+    ok "$f carries the shared charset in CODE ($n site(s), comments excluded)"
   else
-    bad "$f does NOT contain '$CHARSET' — a namespace one component accepts and another rejects is a split-brain install"
+    raw="$(grep -cF -- "$CHARSET" "$ROOT/$f")"
+    if [[ "$raw" -ge 1 ]]; then
+      bad "$f mentions '$CHARSET' ONLY IN A COMMENT — the code enforces something else. A namespace one component accepts and another rejects is a split-brain install"
+    else
+      bad "$f does not contain '$CHARSET' at all — a namespace one component accepts and another rejects is a split-brain install"
+    fi
   fi
 done
 
@@ -74,11 +107,11 @@ done
 check_derivation() {
   local what="$1" f="$2" pat="$3" want="$4" why="$5"
   local n
-  n="$(grep -cE -- "$pat" "$ROOT/$f")"
+  n="$(code_only "$ROOT/$f" | grep -cE -- "$pat")"
   if [[ "$n" == "$want" ]]; then
-    ok "$f: $what derived from the namespace key ($n site(s))"
+    ok "$f: $what derived from the namespace key ($n code site(s))"
   else
-    bad "$f: $what — found $n site(s) matching /$pat/, want $want. $why"
+    bad "$f: $what — found $n CODE site(s) matching /$pat/, want $want. $why"
   fi
 }
 
@@ -94,20 +127,34 @@ check_derivation "uninstall-path root"  bin/install.sh '\.officraft\$ns_dash' 1 
 check_derivation "uninstall-path label" bin/install.sh 'com\.officraft\.serve\$ns_dot' 1 \
   "--uninstall --namespace would boot out the MAIN instance's job."
 
-# bin/ocserver derives the label from SERVE_LABEL_BASE rather than the literal,
-# and carries the same pair TWICE (install + uninstall) — the same inverse
-# requirement as install.sh, which is why the count is 2 and not "at least one".
-check_derivation "root (install+uninstall)"  bin/ocserver '\.officraft\$NS_DASH/server' 2 \
+# bin/ocserver derives labels from *_LABEL_BASE and carries each pair TWICE
+# (install + uninstall) — the same inverse requirement as install.sh, which is
+# why the counts are 2 and not "at least one". It namespaces THREE labels, not
+# one: serve, autodeploy and tunnel are all per-instance launchd jobs, and an
+# un-suffixed autodeploy or tunnel job collides with the main instance's just as
+# surely as the serve one does.
+check_derivation "root (install+uninstall)" bin/ocserver '\.officraft\$NS_DASH/server' 2 \
   "From-source installs would collide in the MAIN instance's root, or become unremovable."
-check_derivation "label (install+uninstall)" bin/ocserver 'SERVE_LABEL_BASE\$NS_DOT' 2 \
-  "From-source installs would fight the MAIN instance for its launchd label."
-# …and the base the suffix is applied to must still be the shared literal, or the
-# check above would pass while pointing at some other job entirely.
-if grep -qE '^readonly SERVE_LABEL_BASE="com\.officraft\.serve"$' "$ROOT/bin/ocserver"; then
-  ok "bin/ocserver: SERVE_LABEL_BASE is still com.officraft.serve"
-else
-  bad "bin/ocserver: SERVE_LABEL_BASE is no longer com.officraft.serve — the namespaced label now suffixes something else"
-fi
+for lbl in SERVE AUTODEPLOY TUNNEL; do
+  check_derivation "${lbl} label (install+uninstall)" bin/ocserver "${lbl}_LABEL_BASE\\\$NS_DOT" 2 \
+    "The namespaced instance's ${lbl} job would fight the MAIN instance for its launchd label."
+done
+# …and each base must still be the shared literal, or the checks above would pass
+# while pointing at some other job entirely.
+# NOTE `grep -c`, never `grep -q`, on the right-hand side of these pipes. This
+# file runs under `set -uo pipefail`, and `grep -q` exits the moment it matches —
+# which closes the pipe, SIGPIPEs the still-writing `sed`, and makes pipefail
+# report the whole pipeline as failed. The guard then goes RED on a match, i.e.
+# exactly backwards. (Same shape as the `launchctl print | sed | head` fault this
+# ticket fixed in install.sh; it cost a debugging round here too.)
+for pair in "SERVE:com.officraft.serve" "AUTODEPLOY:com.officraft.autodeploy" "TUNNEL:com.officraft.tunnel"; do
+  var="${pair%%:*}"; lit="${pair#*:}"
+  if [[ "$(code_only "$ROOT/bin/ocserver" | grep -cE "^readonly ${var}_LABEL_BASE=\"${lit//./\\.}\"$")" -ge 1 ]]; then
+    ok "bin/ocserver: ${var}_LABEL_BASE is still $lit"
+  else
+    bad "bin/ocserver: ${var}_LABEL_BASE is no longer $lit — the namespaced label now suffixes something else"
+  fi
+done
 
 # ── the table itself must still contain the two rows that matter ────────────
 # A table that lost its empty-namespace row would let every check above pass
