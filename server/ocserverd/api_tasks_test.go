@@ -932,9 +932,9 @@ func TestCreateAdHocMemberExecutorIsSelfOnlyForPlain正職(t *testing.T) {
 
 // ── 發包 target: machine resolution + spec inheritance ───────────────────────
 
-// TestInheritDispatchSpec pins the omitted-field inheritance contract: a typed
-// dispatch inherits the type manual's outsource assignee, a free one inherits
-// the DISPATCHING member's own spec, an explicitly supplied field always wins,
+// TestInheritDispatchSpec pins the omitted-field inheritance contract: every
+// dispatch by a member inherits the DISPATCHING member's own spec; the typed
+// manual is only the fallback without a member dispatcher; an explicit field wins,
 // an inherited model is dropped under a runtime it does not belong to, and
 // nothing ever invents a machine.
 func TestInheritDispatchSpec(t *testing.T) {
@@ -943,11 +943,12 @@ func TestInheritDispatchSpec(t *testing.T) {
 	dispatcher := &Member{ID: "m-disp", Runtime: RuntimeClaude, Model: "opus",
 		Effort: "low", DesiredMachineID: "m-disp-box"}
 
-	// A typed task takes the manual — the dispatcher is present and ignored.
+	// A typed task still takes the dispatcher: 發包 without a spec means one
+	// like the member who dispatched it, not a hidden type-level override.
 	got := inheritDispatchSpec(dispatchSpec{}, manual, dispatcher)
-	if got != (dispatchSpec{Runtime: RuntimeCodex, Model: "gpt-5-codex",
-		Effort: "high", Machine: "m-manual"}) {
-		t.Fatalf("typed dispatch must inherit the manual: %+v", got)
+	if got != (dispatchSpec{Runtime: RuntimeClaude, Model: "opus",
+		Effort: "low", Machine: "m-disp-box"}) {
+		t.Fatalf("typed dispatch must inherit the dispatcher: %+v", got)
 	}
 
 	// A free task takes the dispatcher — including the machine IT is pinned to.
@@ -955,6 +956,13 @@ func TestInheritDispatchSpec(t *testing.T) {
 	if got != (dispatchSpec{Runtime: RuntimeClaude, Model: "opus",
 		Effort: "low", Machine: "m-disp-box"}) {
 		t.Fatalf("free dispatch must inherit the dispatcher: %+v", got)
+	}
+	// Owner-originated dispatch has no member spec, so a typed manual remains
+	// the fallback rather than inventing a machine or a runtime/model pair.
+	got = inheritDispatchSpec(dispatchSpec{}, manual, nil)
+	if got != (dispatchSpec{Runtime: RuntimeCodex, Model: "gpt-5-codex",
+		Effort: "high", Machine: "m-manual"}) {
+		t.Fatalf("spec-less dispatcher must fall back to typed manual: %+v", got)
 	}
 
 	// Explicit always wins — every field, machine included.

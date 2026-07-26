@@ -68,13 +68,12 @@ type dispatchSpec struct {
 
 // inheritDispatchSpec fills the fields a 發包 left unset. An EXPLICIT field always
 // wins — the dispatcher named it, it stands. An omitted field inherits from ONE
-// source (owner contract 2026-07-25):
+// source (owner contract 2026-07-26):
 //
-//   - a TYPED task takes the type manual's outsource assignee — its 手冊 settings
-//     are the configuration for that whole task type;
-//   - a FREE (ad-hoc) task takes the DISPATCHING MEMBER's own spec: the runtime,
-//     model and effort it runs as, and the machine it is itself pinned to. 發包
-//     without a spec means "one like me".
+//   - a dispatching MEMBER's own spec, for both typed and free tasks: 發包
+//     without a spec means "one like me";
+//   - the type manual only when the dispatcher has no member spec (for example
+//     owner-originated dispatch).
 //
 // runtime and model inherit TOGETHER: a model name only means anything under the
 // runtime it was chosen for, so an inherited model is kept only when its source's
@@ -89,12 +88,12 @@ type dispatchSpec struct {
 func inheritDispatchSpec(spec dispatchSpec, manualSpec *outsourceTypeSpec, dispatcher *Member) dispatchSpec {
 	var src dispatchSpec
 	switch {
-	case manualSpec != nil:
-		src = dispatchSpec{Runtime: manualSpec.Runtime, Model: manualSpec.Model,
-			Effort: manualSpec.Effort, Machine: manualSpec.Machine}
 	case dispatcher != nil:
 		src = dispatchSpec{Runtime: dispatcher.Runtime, Model: dispatcher.Model,
 			Effort: dispatcher.Effort, Machine: dispatcher.DesiredMachineID}
+	case manualSpec != nil:
+		src = dispatchSpec{Runtime: manualSpec.Runtime, Model: manualSpec.Model,
+			Effort: manualSpec.Effort, Machine: manualSpec.Machine}
 	}
 	// A blank source runtime STATES nothing — it must not be read as "claude"
 	// here, or a source carrying a codex model with an unset runtime would
