@@ -506,6 +506,38 @@ def test_t6020_withheld_routes_stay_owner_only_and_unlisted(client, owner_token)
         )
 
 
+def test_t6020_withheld_routes_refuse_the_admin_agent_live(client, admin_agent) -> None:
+    """The same five, asserted against the RUNNING server rather than against a
+    committed file. The manifest half above can only catch a snapshot that was
+    edited; this half catches a route table that was edited without the snapshot
+    — and it is the half that speaks to what an admin agent can actually reach.
+
+    Deliberately a REST probe, not tools/call: these routes have no tool name,
+    so tools/call could only ever answer "unknown tool", which would be the
+    right answer for the wrong reason (it would keep passing even if the choke
+    were opened)."""
+    probes = (
+        ("POST", "/api/mint", {"member_id": admin_agent.member_id, "ttl_days": 1}),
+        ("POST", "/api/auth/change-password",
+         {"current_password": "conf-wrong", "new_password": "conf-new-password"}),
+        ("GET", "/api/push/public-key", None),
+        ("POST", "/api/push/subscription",
+         {"endpoint": "https://push.example.test/t6020",
+          "keys": {"p256dh": "t6020-p256dh", "auth": "t6020-auth"}}),
+        ("DELETE", "/api/push/subscription",
+         {"endpoint": "https://push.example.test/t6020"}),
+    )
+    for method, path, body in probes:
+        r = client.request(method, path, json=body, headers=_auth(admin_agent.token))
+        assert r.status_code == 403, (
+            f"{method} {path}: an admin agent got {r.status_code} — the owner "
+            f"explicitly declined to open this route on 2026-07-26. {r.text}"
+        )
+        assert "principal not permitted" in r.text, (
+            f"{method} {path}: refused, but not by the RBAC choke: {r.text}"
+        )
+
+
 def test_t6020_opened_tool_is_callable_by_the_admin_agent(client, admin_agent) -> None:
     """The 19 are not merely NAMED for the admin agent: get_settings is driven
     end-to-end over tools/call with Mira's own token, and the result is the real
