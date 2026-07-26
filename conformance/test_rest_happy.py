@@ -1467,9 +1467,8 @@ def test_upgrade_no_newer_conflicts(hctx: HCtx) -> None:
 def test_settings_updater_server_fields_retired(hctx: HCtx) -> None:
     """The updater-server pair (updater_url + updater_invite_code) left the
     wire with the ocupdaterd teardown (t-dc68 — updates come from GitHub
-    Releases now): reads carry NEITHER field, and a PATCH still writing the
-    retired keys is simply ignored (unknown-key JSON semantics), never an
-    error and never a resurrected setting."""
+    Releases now): reads carry NEITHER field, and a PATCH writing the retired
+    keys is rejected as an unknown-field validation error."""
     h = _auth(hctx.owner_token)
     r = hctx.client.get("/api/settings", headers=h)
     assert r.status_code == 200, f"{r.status_code} {r.text}"
@@ -1486,10 +1485,9 @@ def test_settings_updater_server_fields_retired(hctx: HCtx) -> None:
         },
         headers=h,
     )
-    assert r.status_code == 200, f"{r.status_code} {r.text}"
+    assert r.status_code == 422, f"{r.status_code} {r.text}"
     body = r.json()
-    assert "updater_url" not in body, body
-    assert "updater_invite_code_set" not in body, body
+    assert body["error"]["code"] == "validation_error", body
     assert "conf-retired-invite-code" not in r.text, "retired secret echoed"
 
 
