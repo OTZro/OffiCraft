@@ -76,7 +76,7 @@ func TestListOutsourceWorkers_RuntimeFold(t *testing.T) {
 	if err := api.dal.PutMachineAlias(MachineAlias{MachineID: "mach-1", DisplayName: "MBP 5"}); err != nil {
 		t.Fatalf("put alias: %v", err)
 	}
-	api.telemetry.Set(workerID, map[string]any{"account": "5e163893-raw-key", "cost": 2.5})
+	api.telemetry.Set(workerID, map[string]any{"account": "5e163893-raw-key", accountRuntimeKey: RuntimeClaude, "cost": 2.5})
 	api.gauge.Set(workerID, map[string]any{"context_pct": 37.0})
 
 	rows = listWorkersAs(t, api, wireOwnerID)
@@ -116,9 +116,10 @@ func TestListOutsourceWorkers_AccountLabelOwnerGate(t *testing.T) {
 	api.noOutsource = true
 	workerID := assignOneWorker(t, api)
 	api.telemetry.Set(workerID, map[string]any{
-		"account":       "0cea9af2-raw-key",
-		"account_label": "eva@corp(Corp)",
-		"ts":            1500.0,
+		"account":         "0cea9af2-raw-key",
+		accountRuntimeKey: RuntimeClaude,
+		"account_label":   "eva@corp(Corp)",
+		"ts":              1500.0,
 	})
 
 	rows := listWorkersAs(t, api, wireOwnerID)
@@ -740,6 +741,31 @@ func getWorkerAs(t *testing.T, api *apiServer, sub, id string) outsourceWorkerDT
 	return decodeBody[outsourceWorkerDTO](t, rec)
 }
 
+func TestOutsourceWorker_RuntimeAccountNeverBorrowsAnotherRuntime(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := assignOneWorker(t, api) // default runtime is Claude
+	if err := api.dal.PutAccountAlias(AccountAlias{
+		Account: "codex:8906abc", DisplayName: "EvaChatGPT",
+	}); err != nil {
+		t.Fatalf("put alias: %v", err)
+	}
+	api.telemetry.Set(workerID, map[string]any{
+		"account": "codex:8906abc", accountRuntimeKey: RuntimeCodex,
+		"account_label": "ChatGPT", "ts": 1.0,
+	})
+
+	// Exercise BOTH HTTP projections bound by the external-worker UI.
+	rows := listWorkersAs(t, api, wireOwnerID)
+	if len(rows) != 1 || rows[0].Account != nil {
+		t.Fatalf("list must not attribute Codex account to Claude worker: %+v", rows)
+	}
+	detail := getWorkerAs(t, api, wireOwnerID, workerID)
+	if detail.Account != nil {
+		t.Fatalf("detail must not attribute Codex account to Claude worker: %q", *detail.Account)
+	}
+}
+
 // TestGetOutsourceWorker_AccountResolvedOnDetailPath (T-f190fix): the owner-
 // reported bug lived on the DETAIL page, so the single-worker GET — not just the
 // list — must route the Claude account through the shared resolveAccountDisplay
@@ -762,7 +788,7 @@ func TestGetOutsourceWorker_AccountResolvedOnDetailPath(t *testing.T) {
 	// With NO alias and no reported label it is UNRESOLVABLE, so the detail DTO
 	// must serve null → the panel's honest dash, NEVER this raw string.
 	const rawKey = "5e163893-user-raw-key/0cea9af2-org-raw-key"
-	api.telemetry.Set(workerID, map[string]any{"account": rawKey, "cost": 1.0})
+	api.telemetry.Set(workerID, map[string]any{"account": rawKey, accountRuntimeKey: RuntimeClaude, "cost": 1.0})
 
 	got := getWorkerAs(t, api, wireOwnerID, workerID)
 	if got.Account != nil {
@@ -810,7 +836,7 @@ func TestNewOutsourceWorkerDTO_GoldenWireShape(t *testing.T) {
 		unread:         4,
 		now:            2000.0,
 		online:         true,
-		tele:           map[string]any{"account": "raw-key-1", "cost": 1.5},
+		tele:           map[string]any{"account": "raw-key-1", accountRuntimeKey: RuntimeClaude, "cost": 1.5},
 		gaugeEntry:     map[string]any{"context_pct": 42.0},
 		spawnTarget:    "mac-1",
 		machineDisplay: func(id string) string { return "Mac Studio (" + id + ")" },
@@ -853,17 +879,17 @@ func TestNewOutsourceWorkerDTO_GoldenWireShape(t *testing.T) {
 
 func TestFoldActorRuntime(t *testing.T) {
 	t.Run("nil maps and zero banked fold all-empty", func(t *testing.T) {
-		f := foldActorRuntime(nil, nil, 0)
+		f := foldActorRuntime(nil, nil, 0, RuntimeClaude)
 		if f.account != "" || f.cost != nil || f.contextPct != nil || f.bankedCost != nil {
 			t.Fatalf("empty fold = %+v, want all zero", f)
 		}
 	})
 	t.Run("reported facts fold through", func(t *testing.T) {
 		f := foldActorRuntime(
-			map[string]any{"account": "raw-key-1", "cost": 2.5},
-			map[string]any{"context_pct": 37.0}, 1.25)
+			map[string]any{"account": "raw-key-1", accountRuntimeKey: RuntimeClaude, "cost": 2.5},
+			map[string]any{"context_pct": 37.0}, 1.25, RuntimeClaude)
 		if f.account != "raw-key-1" {
-			t.Errorf("account = %q, want raw-key-1", f.account)
+			t.Errorf("legacy non-Codex account = %q, want raw-key-1", f.account)
 		}
 		if f.cost == nil || *f.cost != 2.5 {
 			t.Errorf("cost = %v, want 2.5", f.cost)
@@ -878,9 +904,26 @@ func TestFoldActorRuntime(t *testing.T) {
 	t.Run("wrong-typed entries fold empty not fabricated", func(t *testing.T) {
 		f := foldActorRuntime(
 			map[string]any{"account": 7, "cost": "x"},
-			map[string]any{"context_pct": "high"}, 0)
+			map[string]any{"context_pct": "high"}, 0, RuntimeClaude)
 		if f.account != "" || f.cost != nil || f.contextPct != nil || f.bankedCost != nil {
 			t.Fatalf("mistyped fold = %+v, want all zero", f)
+		}
+	})
+	t.Run("account provenance blocks a foreign runtime but keeps its own", func(t *testing.T) {
+		tele := map[string]any{"account": "codex:8906abc", accountRuntimeKey: RuntimeCodex}
+		if got := foldActorRuntime(tele, nil, 0, RuntimeClaude).account; got != "" {
+			t.Fatalf("claude account = %q, want empty for codex provenance", got)
+		}
+		if got := foldActorRuntime(tele, nil, 0, RuntimeCodex).account; got != "codex:8906abc" {
+			t.Fatalf("codex account = %q, want its own key", got)
+		}
+	})
+	t.Run("unproven legacy account is fail-closed for both runtimes", func(t *testing.T) {
+		tele := map[string]any{"account": "legacy-key"}
+		for _, runtime := range []string{RuntimeClaude, RuntimeCodex} {
+			if got := foldActorRuntime(tele, nil, 0, runtime).account; got != "" {
+				t.Fatalf("%s legacy account = %q, want empty", runtime, got)
+			}
 		}
 	})
 }

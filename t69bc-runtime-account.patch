@@ -1,0 +1,274 @@
+diff --git a/server/ocserverd/account_display.go b/server/ocserverd/account_display.go
+index 149f312..b2fd483 100644
+--- a/server/ocserverd/account_display.go
++++ b/server/ocserverd/account_display.go
+@@ -7,7 +7,15 @@ package main
+ // verbatim, so the 外包 detail panel showed credential hashes; both surfaces
+ // now resolve through the same precedence chain.
+ 
+-import "net/http"
++import (
++	"net/http"
++	"strings"
++)
++
++// accountRuntimeKey is an internal provenance stamp paired with a telemetry
++// account key. It is deliberately not part of any API DTO: account identity is
++// runtime-specific, while the rest of telemetry remains one shared fold.
++const accountRuntimeKey = "account_runtime"
+ 
+ // accountLabelOverlay folds the freshest reporter-supplied `account_label`
+ // (oauthAccount email/org — T-260e) per account key across EVERY telemetry
+@@ -37,6 +45,39 @@ func accountLabelOverlay(telemetry map[string]map[string]any, isOwner bool) map[
+ 	return labels
+ }
+ 
++// telemetryAccount returns the account key only when it belongs to the actor's
++// current runtime. This is the sole runtime-aware decision in the account
++// path: acquisition differs (Codex obtains a ChatGPT key; Claude obtains its
++// OAuth key), but telemetry ingestion, folding, display resolution, and both
++// UI wires share this accessor.
++//
++// New reports carry account_runtime in the same merge as account. For a legacy
++// report, its ordinary runtime field is a safe compatibility fallback. Truly
++// unproven legacy non-Codex keys keep their historic behaviour; Codex keys are
++// self-identifying (`codex:`) and are therefore fail-closed for a Claude actor.
++// This both fixes already-stored stale Codex rows and avoids discarding old
++// Claude data that predates provenance stamps.
++func telemetryAccount(entry map[string]any, actorRuntime string) string {
++	account, _ := entry["account"].(string)
++	if account == "" {
++		return ""
++	}
++	reported, _ := entry[accountRuntimeKey].(string)
++	if reported == "" {
++		reported, _ = entry["runtime"].(string)
++	}
++	if reported != "" {
++		if NormalizeRuntime(reported) != NormalizeRuntime(actorRuntime) {
++			return ""
++		}
++		return account
++	}
++	if strings.HasPrefix(account, "codex:") && NormalizeRuntime(actorRuntime) != RuntimeCodex {
++		return ""
++	}
++	return account
++}
++
+ // resolveAccountDisplay maps a raw account key to its human-readable name:
+ // ① the owner's hand-set alias (accounts table) — highest precedence, never
+ //
+diff --git a/server/ocserverd/api_monitoring.go b/server/ocserverd/api_monitoring.go
+index 1567079..be15bd6 100644
+--- a/server/ocserverd/api_monitoring.go
++++ b/server/ocserverd/api_monitoring.go
+@@ -483,6 +483,13 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
+ 	}
+ 	if account, isStr := body.Account.(string); isStr && account != "" {
+ 		entry["account"] = account
++		// Account keys belong to a runtime-specific identity space. Stamp their
++		// provenance in the same partial-merge write so a later runtime switch
++		// cannot make the shared read path borrow the old runtime's account.
++		entry[accountRuntimeKey] = ""
++		if runtime != nil {
++			entry[accountRuntimeKey] = NormalizeRuntime(*runtime)
++		}
+ 	}
+ 	// account_label (T-260e): the reporter's human-readable label for the
+ 	// account key (oauthAccount email/org — PII). Folded into the entry for the
+@@ -612,7 +619,7 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
+ 		}
+ 		// Runtime facts fold through the SAME foldActorRuntime the outsource
+ 		// worker DTO reads (P7b read-path convergence — one fold, two wires).
+-		rt := foldActorRuntime(entry, gauge[m.ID], m.BankedCost)
++		rt := foldActorRuntime(entry, gauge[m.ID], m.BankedCost, m.Runtime)
+ 		sessions = append(sessions, monitoringSessionDTO{
+ 			ID:              m.ID,
+ 			Name:            m.Name,
+@@ -648,7 +655,7 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
+ 				hwByHost[host] = hw
+ 			}
+ 		}
+-		if account, ok := entry["account"].(string); ok && account != "" {
++		if account := telemetryAccount(entry, m.Runtime); account != "" {
+ 			if acctByHost[host] == nil {
+ 				acctByHost[host] = map[string]bool{}
+ 			}
+@@ -708,8 +715,8 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
+ 	acctHasCost := map[string]bool{}
+ 	for _, m := range members {
+ 		entry := tele(m.ID)
+-		account, ok := entry["account"].(string)
+-		if !ok || account == "" {
++		account := telemetryAccount(entry, m.Runtime)
++		if account == "" {
+ 			continue
+ 		}
+ 		ts, _ := entry["ts"].(float64)
+diff --git a/server/ocserverd/api_monitoring_test.go b/server/ocserverd/api_monitoring_test.go
+index 7003c59..a35d44e 100644
+--- a/server/ocserverd/api_monitoring_test.go
++++ b/server/ocserverd/api_monitoring_test.go
+@@ -442,6 +442,78 @@ func TestGetMonitoring_NoLabelReportedOmitsAccountLabel(t *testing.T) {
+ 	}
+ }
+ 
++// runtimeAccountServer reproduces the owner-reported shape: a member's current
++// runtime is Claude, but its durable telemetry entry carries an older Codex
++// account. The owner alias makes an accidental attribution immediately visible.
++func runtimeAccountServer(t *testing.T, memberRuntime, report string) *apiServer {
++	t.Helper()
++	s := &apiServer{dal: newTestDAL(t), hub: NewHub(), telemetry: newMemStore(), gauge: newMemStore()}
++	m := fullMember("kyle")
++	m.Runtime = memberRuntime
++	if err := s.dal.PutMember(m); err != nil {
++		t.Fatalf("seed member: %v", err)
++	}
++	if err := s.dal.PutAccountAlias(AccountAlias{Account: "codex:8906abc", DisplayName: "EvaChatGPT"}); err != nil {
++		t.Fatalf("seed alias: %v", err)
++	}
++	if rec := doIngestTelemetry(s, "kyle", "m-eva-m5", report); rec.Code != 200 {
++		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
++	}
++	return s
++}
++
++const codexReportedAccount = `{"runtime":"codex","account":"codex:8906abc","account_label":"ChatGPT"}`
++
++func TestGetMonitoring_RuntimeAccountNeverBorrowsAnotherRuntime(t *testing.T) {
++	s := runtimeAccountServer(t, RuntimeClaude, codexReportedAccount)
++	ownerRec := doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"})
++	d := monitoringOf(t, ownerRec)
++	if got := d["sessions"].([]any)[0].(map[string]any)["account"]; got != "" {
++		t.Fatalf("claude session account = %v, want honest empty", got)
++	}
++	if got := d["machines"].([]any)[0].(map[string]any)["accounts"].([]any); len(got) != 0 {
++		t.Fatalf("foreign-runtime account leaked into machine fold: %v", got)
++	}
++	if got := d["accounts"].([]any); len(got) != 0 {
++		t.Fatalf("foreign-runtime account leaked into accounts fold: %v", got)
++	}
++	if strings.Contains(ownerRec.Body.String(), "EvaChatGPT") {
++		t.Fatalf("claude monitoring response leaked codex alias: %s", ownerRec.Body.String())
++	}
++}
++
++func TestGetMonitoring_RuntimeAccountKeepsCodexAndOwnerGate(t *testing.T) {
++	s := runtimeAccountServer(t, RuntimeCodex, codexReportedAccount)
++	owner := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
++	if got := owner["sessions"].([]any)[0].(map[string]any)["account"]; got != "EvaChatGPT" {
++		t.Fatalf("codex session account = %v, want EvaChatGPT", got)
++	}
++	if got := owner["accounts"].([]any); len(got) != 1 {
++		t.Fatalf("codex account must remain observable, got %v", got)
++	}
++	// Existing privacy gate: an agent never receives reporter-supplied labels.
++	agentRec := doGetMonitoring(s, map[string]any{"sub": "kyle", "scope": "agent"})
++	if strings.Contains(agentRec.Body.String(), "account_label") || strings.Contains(agentRec.Body.String(), "ChatGPT") {
++		t.Fatalf("agent response leaked owner-only account label: %s", agentRec.Body.String())
++	}
++}
++
++func TestHandleIngestTelemetry_AccountProvenanceStaysPairedWithAccount(t *testing.T) {
++	api := &apiServer{telemetry: newMemStore(), hub: NewHub()}
++	if rec := doIngestTelemetry(api, "kyle", "", codexReportedAccount); rec.Code != 200 {
++		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
++	}
++	if got, _ := api.telemetry.Get("kyle")[accountRuntimeKey].(string); got != RuntimeCodex {
++		t.Fatalf("account runtime = %q, want codex", got)
++	}
++	if rec := doIngestTelemetry(api, "kyle", "", `{"runtime":"claude"}`); rec.Code != 200 {
++		t.Fatalf("partial ingest: %d %s", rec.Code, rec.Body.String())
++	}
++	if got, _ := api.telemetry.Get("kyle")[accountRuntimeKey].(string); got != RuntimeCodex {
++		t.Fatalf("account-less partial report changed provenance to %q", got)
++	}
++}
++
+ // TestFoldCommandResult_WorkerReceiptFoldsOntoWorkerRow (T-9ccf): a receipt
+ // keyed on worker_id (a worker has NO roster member) must fold the last-op
+ // fields onto the durable outsource_worker row — the worker twin of the member
+diff --git a/server/ocserverd/api_outsource_test.go b/server/ocserverd/api_outsource_test.go
+index dc95aa3..eb06e15 100644
+--- a/server/ocserverd/api_outsource_test.go
++++ b/server/ocserverd/api_outsource_test.go
+@@ -853,7 +853,7 @@ func TestNewOutsourceWorkerDTO_GoldenWireShape(t *testing.T) {
+ 
+ func TestFoldActorRuntime(t *testing.T) {
+ 	t.Run("nil maps and zero banked fold all-empty", func(t *testing.T) {
+-		f := foldActorRuntime(nil, nil, 0)
++		f := foldActorRuntime(nil, nil, 0, RuntimeClaude)
+ 		if f.account != "" || f.cost != nil || f.contextPct != nil || f.bankedCost != nil {
+ 			t.Fatalf("empty fold = %+v, want all zero", f)
+ 		}
+@@ -861,9 +861,9 @@ func TestFoldActorRuntime(t *testing.T) {
+ 	t.Run("reported facts fold through", func(t *testing.T) {
+ 		f := foldActorRuntime(
+ 			map[string]any{"account": "raw-key-1", "cost": 2.5},
+-			map[string]any{"context_pct": 37.0}, 1.25)
++			map[string]any{"context_pct": 37.0}, 1.25, RuntimeClaude)
+ 		if f.account != "raw-key-1" {
+-			t.Errorf("account = %q, want raw-key-1", f.account)
++			t.Errorf("legacy non-Codex account = %q, want raw-key-1", f.account)
+ 		}
+ 		if f.cost == nil || *f.cost != 2.5 {
+ 			t.Errorf("cost = %v, want 2.5", f.cost)
+@@ -878,11 +878,26 @@ func TestFoldActorRuntime(t *testing.T) {
+ 	t.Run("wrong-typed entries fold empty not fabricated", func(t *testing.T) {
+ 		f := foldActorRuntime(
+ 			map[string]any{"account": 7, "cost": "x"},
+-			map[string]any{"context_pct": "high"}, 0)
++			map[string]any{"context_pct": "high"}, 0, RuntimeClaude)
+ 		if f.account != "" || f.cost != nil || f.contextPct != nil || f.bankedCost != nil {
+ 			t.Fatalf("mistyped fold = %+v, want all zero", f)
+ 		}
+ 	})
++	t.Run("account provenance blocks a foreign runtime but keeps its own", func(t *testing.T) {
++		tele := map[string]any{"account": "codex:8906abc", accountRuntimeKey: RuntimeCodex}
++		if got := foldActorRuntime(tele, nil, 0, RuntimeClaude).account; got != "" {
++			t.Fatalf("claude account = %q, want empty for codex provenance", got)
++		}
++		if got := foldActorRuntime(tele, nil, 0, RuntimeCodex).account; got != "codex:8906abc" {
++			t.Fatalf("codex account = %q, want its own key", got)
++		}
++	})
++	t.Run("legacy codex key is fail-closed for claude", func(t *testing.T) {
++		tele := map[string]any{"account": "codex:legacy"}
++		if got := foldActorRuntime(tele, nil, 0, RuntimeClaude).account; got != "" {
++			t.Fatalf("claude legacy codex account = %q, want empty", got)
++		}
++	})
+ }
+ 
+ // TestRelocateOutsourceWorker_AdminGated (P7c 外包對齊正職): the route's floor
+diff --git a/server/ocserverd/wire.go b/server/ocserverd/wire.go
+index 3ab0556..9592483 100644
+--- a/server/ocserverd/wire.go
++++ b/server/ocserverd/wire.go
+@@ -1086,12 +1086,11 @@ type actorRuntimeFold struct {
+ }
+ 
+ // foldActorRuntime folds one actor's telemetry entry, gauge entry, and durable
+-// banked cost. Nil-map-safe: an actor with no entries folds all-empty.
+-func foldActorRuntime(tele, gauge map[string]any, banked float64) actorRuntimeFold {
++// banked cost. Nil-map-safe: an actor with no entries folds all-empty. Account
++// provenance is checked through the shared telemetryAccount accessor.
++func foldActorRuntime(tele, gauge map[string]any, banked float64, actorRuntime string) actorRuntimeFold {
+ 	f := actorRuntimeFold{}
+-	if a, ok := tele["account"].(string); ok {
+-		f.account = a
+-	}
++	f.account = telemetryAccount(tele, actorRuntime)
+ 	if c, ok := tele["cost"].(float64); ok {
+ 		f.cost = &c
+ 	}
+@@ -1143,7 +1142,7 @@ func newOutsourceWorkerDTO(w OutsourceWorker, task *Task, p outsourceWorkerProje
+ 	// actor id) via the SAME foldActorRuntime the member session loop reads.
+ 	// Absent → nil → serialises null → honest dash, never fabricated (parity
+ 	// with the member fold's `awake && … || dash` gate).
+-	rt := foldActorRuntime(p.tele, p.gaugeEntry, w.BankedCost)
++	rt := foldActorRuntime(p.tele, p.gaugeEntry, w.BankedCost, w.Runtime)
+ 	dto.Cost = rt.cost
+ 	dto.ContextPct = rt.contextPct
+ 	dto.CompactionCount = rt.compactionCount

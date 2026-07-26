@@ -176,7 +176,7 @@ func TestHandleIngestTelemetry_ClaudeProbeFoldAndEcho(t *testing.T) {
 
 // ── account_label (T-260e): human-readable account default display ──────────
 
-const teleWithLabel = `{"hardware": {"cpu_pct": 1},
+const teleWithLabel = `{"runtime":"claude","hardware": {"cpu_pct": 1},
 	"account": "acct-123/team",
 	"account_label": "eva.cheng@gofreight.com(GoFreight)"}`
 
@@ -273,7 +273,7 @@ func TestGetMonitoring_SameAccountKeyFoldsIntoOneRow(t *testing.T) {
 		t.Fatalf("seed member: %v", err)
 	}
 	rec := doIngestTelemetry(s, "joey", "m-other",
-		`{"hardware": {"cpu_pct": 2}, "cost": 1.5, "account": "acct-123/team"}`)
+		`{"runtime":"claude","hardware": {"cpu_pct": 2}, "cost": 1.5, "account": "acct-123/team"}`)
 	if rec.Code != 200 {
 		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
 	}
@@ -389,7 +389,7 @@ func TestGetMonitoring_SessionAccountNeverServesRawKey(t *testing.T) {
 		t.Fatalf("seed member: %v", err)
 	}
 	rec := doIngestTelemetry(s, "mira", "m-abc123",
-		`{"hardware": {"cpu_pct": 1}, "account": "acct-123/team"}`)
+		`{"runtime":"claude","hardware": {"cpu_pct": 1}, "account": "acct-123/team"}`)
 	if rec.Code != 200 {
 		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
 	}
@@ -410,10 +410,11 @@ func TestGetMonitoring_WorkerReportedLabelResolvesSessionAccount(t *testing.T) {
 	// roster members and left the raw key).
 	s := labelTestServer(t)
 	// Strip the member's own label; keep only the account key.
-	s.telemetry.Set("mira", map[string]any{"account": "acct-123/team"})
+	s.telemetry.Set("mira", map[string]any{"account": "acct-123/team", accountRuntimeKey: RuntimeClaude})
 	// A worker entry (NOT a roster member) reports the label for the same key.
 	s.telemetry.Set("ow-1", map[string]any{
-		"account": "acct-123/team", "account_label": "eva@corp(Corp)", "ts": 99.0})
+		"account": "acct-123/team", accountRuntimeKey: RuntimeClaude,
+		"account_label": "eva@corp(Corp)", "ts": 99.0})
 	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
 	if got := d["sessions"].([]any)[0].(map[string]any)["account"]; got != "eva@corp(Corp)" {
 		t.Fatalf("worker-reported label must resolve the session account, got %v", got)
@@ -431,7 +432,7 @@ func TestGetMonitoring_NoLabelReportedOmitsAccountLabel(t *testing.T) {
 		t.Fatalf("seed member: %v", err)
 	}
 	rec := doIngestTelemetry(s, "mira", "m-abc123",
-		`{"hardware": {"cpu_pct": 1}, "account": "acct-123/team"}`)
+		`{"runtime":"claude","hardware": {"cpu_pct": 1}, "account": "acct-123/team"}`)
 	if rec.Code != 200 {
 		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
 	}
@@ -439,6 +440,97 @@ func TestGetMonitoring_NoLabelReportedOmitsAccountLabel(t *testing.T) {
 	row := d["accounts"].([]any)[0].(map[string]any)
 	if _, present := row["account_label"]; present {
 		t.Fatalf("label-less report must omit account_label, got %v", row)
+	}
+}
+
+// runtimeAccountServer reproduces the owner-reported shape: a member's current
+// runtime is Claude, but its durable telemetry entry carries an older Codex
+// account. The owner alias makes an accidental attribution immediately visible.
+func runtimeAccountServer(t *testing.T, memberRuntime, report string) *apiServer {
+	t.Helper()
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(), telemetry: newMemStore(), gauge: newMemStore()}
+	m := fullMember("kyle")
+	m.Runtime = memberRuntime
+	if err := s.dal.PutMember(m); err != nil {
+		t.Fatalf("seed member: %v", err)
+	}
+	if err := s.dal.PutAccountAlias(AccountAlias{Account: "codex:8906abc", DisplayName: "EvaChatGPT"}); err != nil {
+		t.Fatalf("seed alias: %v", err)
+	}
+	if rec := doIngestTelemetry(s, "kyle", "m-eva-m5", report); rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	return s
+}
+
+const codexReportedAccount = `{"runtime":"codex","account":"codex:8906abc","account_label":"ReporterOnly"}`
+
+func TestGetMonitoring_RuntimeAccountNeverBorrowsAnotherRuntime(t *testing.T) {
+	s := runtimeAccountServer(t, RuntimeClaude, codexReportedAccount)
+	ownerRec := doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"})
+	d := monitoringOf(t, ownerRec)
+	if got := d["sessions"].([]any)[0].(map[string]any)["account"]; got != "" {
+		t.Fatalf("claude session account = %v, want honest empty", got)
+	}
+	if got := d["machines"].([]any)[0].(map[string]any)["accounts"].([]any); len(got) != 0 {
+		t.Fatalf("foreign-runtime account leaked into machine fold: %v", got)
+	}
+	if got := d["accounts"].([]any); len(got) != 1 || got[0].(map[string]any)["display_name"] != "EvaChatGPT" {
+		t.Fatalf("global account overview lost owner alias visibility: %v", got)
+	}
+	if got := d["accounts"].([]any)[0].(map[string]any)["machine"]; got != "" {
+		t.Fatalf("global foreign account must not inherit Claude machine: %v", got)
+	}
+}
+
+func TestGetMonitoring_RuntimeAccountKeepsCodexAndOwnerGate(t *testing.T) {
+	s := runtimeAccountServer(t, RuntimeCodex, codexReportedAccount)
+	owner := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	if got := owner["sessions"].([]any)[0].(map[string]any)["account"]; got != "EvaChatGPT" {
+		t.Fatalf("codex session account = %v, want EvaChatGPT", got)
+	}
+	if got := owner["accounts"].([]any); len(got) != 1 {
+		t.Fatalf("codex account must remain observable, got %v", got)
+	}
+	// Existing privacy gate: an agent never receives reporter-supplied labels.
+	agentRec := doGetMonitoring(s, map[string]any{"sub": "kyle", "scope": "agent"})
+	if strings.Contains(agentRec.Body.String(), `"account_label":"ReporterOnly"`) {
+		t.Fatalf("agent response leaked reporter-only account label: %s", agentRec.Body.String())
+	}
+}
+
+func TestHandleIngestTelemetry_AccountProvenanceStaysPairedWithAccount(t *testing.T) {
+	api := &apiServer{telemetry: newMemStore(), hub: NewHub()}
+	if rec := doIngestTelemetry(api, "kyle", "", codexReportedAccount); rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	if got, _ := api.telemetry.Get("kyle")[accountRuntimeKey].(string); got != RuntimeCodex {
+		t.Fatalf("account runtime = %q, want codex", got)
+	}
+	if rec := doIngestTelemetry(api, "kyle", "", `{"cost":1,"account":"must-not-replace"}`); rec.Code != 200 {
+		t.Fatalf("account without runtime: %d %s", rec.Code, rec.Body.String())
+	}
+	if got, _ := api.telemetry.Get("kyle")["account"].(string); got != "codex:8906abc" {
+		t.Fatalf("account without runtime replaced paired account with %q", got)
+	}
+	if rec := doIngestTelemetry(api, "kyle", "", `{"runtime":"claude"}`); rec.Code != 200 {
+		t.Fatalf("partial ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	if got, _ := api.telemetry.Get("kyle")[accountRuntimeKey].(string); got != RuntimeCodex {
+		t.Fatalf("account-less partial report changed provenance to %q", got)
+	}
+}
+
+func TestGetMonitoring_RuntimeHeartbeatCannotReattributePairedAccount(t *testing.T) {
+	s := runtimeAccountServer(t, RuntimeClaude, codexReportedAccount)
+	// Counterfactual: the same actor later sends only a Claude runtime heartbeat.
+	// Its account remains stamped Codex, so the heartbeat must not borrow it.
+	if rec := doIngestTelemetry(s, "kyle", "m-eva-m5", `{"runtime":"claude"}`); rec.Code != 200 {
+		t.Fatalf("claude heartbeat: %d %s", rec.Code, rec.Body.String())
+	}
+	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	if got := d["sessions"].([]any)[0].(map[string]any)["account"]; got != "" {
+		t.Fatalf("runtime-only Claude heartbeat reattributed Codex account: %v", got)
 	}
 }
 

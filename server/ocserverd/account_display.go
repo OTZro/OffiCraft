@@ -9,6 +9,11 @@ package main
 
 import "net/http"
 
+// accountRuntimeKey is an internal provenance stamp paired with a telemetry
+// account key. It is deliberately not part of any API DTO: account identity is
+// runtime-specific, while the rest of telemetry remains one shared fold.
+const accountRuntimeKey = "account_runtime"
+
 // accountLabelOverlay folds the freshest reporter-supplied `account_label`
 // (oauthAccount email/org — T-260e) per account key across EVERY telemetry
 // entry — members and outsource workers alike (the pre-T-ba6b fold scanned
@@ -35,6 +40,31 @@ func accountLabelOverlay(telemetry map[string]map[string]any, isOwner bool) map[
 		}
 	}
 	return labels
+}
+
+// telemetryAccount returns the account key only when it belongs to the actor's
+// current runtime. This is the sole runtime-aware decision in the account
+// path: acquisition differs (Codex obtains a ChatGPT key; Claude obtains its
+// OAuth key), but telemetry ingestion, folding, display resolution, and both
+// UI wires share this accessor.
+//
+// New reports carry account_runtime in the same merge as account. For a legacy
+// report, its ordinary runtime field is a safe compatibility fallback. When
+// neither exists, the account is unproven and fails closed for BOTH runtimes:
+// the server must not guess that any old key belongs to the actor now running.
+func telemetryAccount(entry map[string]any, actorRuntime string) string {
+	account, _ := entry["account"].(string)
+	if account == "" {
+		return ""
+	}
+	reported, _ := entry[accountRuntimeKey].(string)
+	if reported == "" {
+		reported, _ = entry["runtime"].(string)
+	}
+	if reported == "" || NormalizeRuntime(reported) != NormalizeRuntime(actorRuntime) {
+		return ""
+	}
+	return account
 }
 
 // resolveAccountDisplay maps a raw account key to its human-readable name:

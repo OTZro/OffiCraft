@@ -1086,12 +1086,11 @@ type actorRuntimeFold struct {
 }
 
 // foldActorRuntime folds one actor's telemetry entry, gauge entry, and durable
-// banked cost. Nil-map-safe: an actor with no entries folds all-empty.
-func foldActorRuntime(tele, gauge map[string]any, banked float64) actorRuntimeFold {
+// banked cost. Nil-map-safe: an actor with no entries folds all-empty. Account
+// provenance is checked through the shared telemetryAccount accessor.
+func foldActorRuntime(tele, gauge map[string]any, banked float64, actorRuntime string) actorRuntimeFold {
 	f := actorRuntimeFold{}
-	if a, ok := tele["account"].(string); ok {
-		f.account = a
-	}
+	f.account = telemetryAccount(tele, actorRuntime)
 	if c, ok := tele["cost"].(float64); ok {
 		f.cost = &c
 	}
@@ -1143,7 +1142,7 @@ func newOutsourceWorkerDTO(w OutsourceWorker, task *Task, p outsourceWorkerProje
 	// actor id) via the SAME foldActorRuntime the member session loop reads.
 	// Absent → nil → serialises null → honest dash, never fabricated (parity
 	// with the member fold's `awake && … || dash` gate).
-	rt := foldActorRuntime(p.tele, p.gaugeEntry, w.BankedCost)
+	rt := foldActorRuntime(p.tele, p.gaugeEntry, w.BankedCost, w.Runtime)
 	dto.Cost = rt.cost
 	dto.ContextPct = rt.contextPct
 	dto.CompactionCount = rt.compactionCount
