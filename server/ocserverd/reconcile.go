@@ -537,8 +537,16 @@ func reconcileLog(format string, args ...any) {
 // wardenTargetOf resolves a member id → the warden member id its commands are
 // enqueued under (producer.py make_host_of): a warden addresses ITSELF; an
 // agent routes to the ACTIVE warden on its desired machine (the machine id IS
-// that warden's own member id); no active warden → the raw host string as an
-// inert fallback the reachability gate then fails closed on.
+// that warden's own member id). A pin that resolves to no active warden — and a
+// member with no pin at all — resolves to "": there is no destination.
+//
+// It used to return the raw pin string here instead, leaning on the downstream
+// reachability gate to fail closed on it. That is how "auto" became a host: the
+// literal string was handed on as a machine id, IsOnline("auto") was false
+// forever, and the member sat wanting to be online while nothing was ever
+// dispatched to it — a stall the gate reported as an ordinary unreachable
+// warden, indistinguishable from a machine that had merely gone offline.
+// Returning "" makes "nowhere to send this" a distinct, nameable answer.
 func (s *apiServer) wardenTargetOf(memberID string) string {
 	target, err := s.dal.GetMember(memberID)
 	if err == nil && target != nil && target.Kind == KindWarden {
@@ -548,14 +556,15 @@ func (s *apiServer) wardenTargetOf(memberID string) string {
 	if target != nil {
 		host = target.DesiredMachineID
 	}
-	if host != "" {
-		cand, err := s.dal.GetMember(host)
-		if err == nil && cand != nil && cand.Kind == KindWarden &&
-			cand.RosterStatus == RosterStatusActive {
-			return cand.ID
-		}
+	if host == "" {
+		return ""
 	}
-	return host
+	cand, err := s.dal.GetMember(host)
+	if err == nil && cand != nil && cand.Kind == KindWarden &&
+		cand.RosterStatus == RosterStatusActive {
+		return cand.ID
+	}
+	return ""
 }
 
 // enqueueWardenFrame pushes one command frame onto the target member's warden
@@ -582,7 +591,10 @@ func (s *apiServer) enqueueToWarden(memberID, warden string, frame []byte) bool 
 			memberID, warden)
 		return false
 	}
-	s.hub.EnqueueWardenCommand(warden, frame)
+	// Tagged with the member/worker this frame acts on: one machine's FIFO is
+	// shared by everybody placed there, and a per-subject receipt may only be
+	// written from a per-subject observation (hub.PendingWardenCommandsFor).
+	s.hub.EnqueueWardenCommandFor(warden, memberID, frame)
 	return true
 }
 
@@ -674,6 +686,19 @@ func (s *apiServer) reconcileOne(m Member, st reconcileState, now float64) recon
 		return decision
 	case reconcileCmdStart:
 		warden := s.wardenTargetOf(m.ID)
+		if warden == "" {
+			// No machine chosen, or the chosen one is no longer an active machine.
+			// A member in this state wants to be online and can never be dispatched,
+			// so say so on the row the cockpit reads instead of retrying in silence
+			// every 30s — the worker arm of this rule lives in
+			// stampWorkerPlacementBlocked.
+			s.stampMemberPlacementBlocked(&m, now)
+			decision.Command = reconcileCmdNone
+			decision.Reason = "no machine selected"
+			decision.State = st
+			decision.DispatchUnlanded = true
+			return decision
+		}
 		if m.Kind != KindWarden && !s.machineSupportsRuntime(warden, m.Runtime) {
 			reconcileLog("%s: target warden %q does not report runtime %q ready — fail-closed",
 				m.ID, warden, NormalizeRuntime(m.Runtime))
@@ -745,6 +770,53 @@ func (s *apiServer) reconcileTickMemberLocked(m Member, now float64) reconcileDe
 	return decision
 }
 
+// stampMemberPlacementBlocked names, on the member row the cockpit reads, the one
+// stall the wake path could not previously explain: the member is wanted online
+// but has no machine to be sent to. Every other START failure already leaves a
+// trace (a lapsed start_timeout writes a receipt; an unbuildable frame logs and
+// backs off), while an unplaced member simply retried forever against nothing —
+// grey and unexplained, identical to a member nobody ever woke.
+//
+// Written only when the cause CHANGES, because the cadence re-decides this same
+// START every 30s: an unconditional write would re-stamp last_op_at and fan a
+// member delta on every tick. stampWakeObservability clears the stamp when a START
+// finally lands, so a block that FOLLOWS a landed start is news again instead of
+// being mistaken for the still-standing first one.
+//
+// The row is RE-READ before writing: this is a whole-row write on the snapshot
+// the cadence tick loaded, and the HTTP faces (activate / relocate / deactivate)
+// write member rows without holding reconcileMu — persisting the stale copy would
+// silently undo a relocate that landed mid-tick, on the very field this stall is
+// about. Best-effort — a persist failure never changes the reconcile decision.
+func (s *apiServer) stampMemberPlacementBlocked(m *Member, now float64) {
+	fresh, err := s.dal.GetMember(m.ID)
+	if err != nil || fresh == nil || fresh.RosterStatus != RosterStatusActive {
+		return
+	}
+	// The reason names the pin on the row being WRITTEN, not the one the tick
+	// snapshotted: a relocate landing mid-tick would otherwise stamp a row pinned
+	// to the new machine with a complaint about the old one.
+	reason := placementReasonNoMachine + ": no machine is selected for this member — " +
+		"choose one (改機器) before waking it; there is no automatic placement"
+	if fresh.DesiredMachineID != "" {
+		reason = placementReasonUnavailable + ": machine '" + fresh.DesiredMachineID +
+			"' is not an active machine — choose another one (改機器); " +
+			"no other machine is substituted"
+	}
+	if fresh.LastOp == reconcileCmdStart && fresh.LastOpReason == reason {
+		return
+	}
+	ok := false
+	fresh.LastOp = reconcileCmdStart
+	fresh.LastOpOK = &ok
+	fresh.LastOpLog = ""
+	fresh.LastOpReason = reason
+	fresh.LastOpAt = now
+	if err := s.putMember(*fresh, triggerServer); err != nil {
+		reconcileLog("%s: placement-blocked stamp persist failed: %v", m.ID, err)
+	}
+}
+
 // stampWakeObservability turns two SERVER-SIDE facts about a wake into durable,
 // owner-visible state (T-ba62). Both were previously invisible outside the
 // server's stderr:
@@ -806,13 +878,50 @@ func (s *apiServer) stampWakeObservability(m *Member, decision reconcileDecision
 	if decision.Command == reconcileCmdStart {
 		m.WakingSince = now
 		changed = true
+		// The START landed, so a PLACEMENT-blocked explanation is now history —
+		// leaving it would make the next block look like the still-standing first
+		// one. Only a placement stamp is cleared: the wake_timeout receipt written
+		// above, and a warden's own refused-start receipt, are the record of why a
+		// boot failed and survive the retry that follows them.
+		if isPlacementBlockedReason(m.LastOpReason) {
+			m.LastOpReason = ""
+			m.LastOpLog = ""
+		}
 	}
 	if !changed {
 		return
 	}
-	if err := s.putMember(*m, triggerServer); err != nil {
+	// Re-read before the whole-row write, for the reason the placement stamps do:
+	// this is the tick's snapshot, and the HTTP faces (activate / relocate /
+	// deactivate) write member rows without holding reconcileMu, so persisting the
+	// snapshot silently reverts a placement that landed mid-tick. Narrowing, not
+	// eliminating — the read and the write are not atomic — but the window shrinks
+	// from the whole tick to a few statements.
+	fresh, err := s.dal.GetMember(m.ID)
+	if err != nil || fresh == nil || fresh.RosterStatus != RosterStatusActive {
+		return
+	}
+	fresh.WakingSince = m.WakingSince
+	fresh.LastOp = m.LastOp
+	fresh.LastOpOK = m.LastOpOK
+	fresh.LastOpLog = m.LastOpLog
+	fresh.LastOpReason = m.LastOpReason
+	fresh.LastOpAt = m.LastOpAt
+	if err := s.putMember(*fresh, triggerServer); err != nil {
 		reconcileLog("%s: wake observability persist failed: %v", m.ID, err)
 	}
+}
+
+// isPlacementBlockedReason reports whether a last_op_reason was written by one of
+// the placement stamps (rather than by a wake lapse or a warden receipt) — the
+// only kind of explanation a landed START makes obsolete.
+func isPlacementBlockedReason(reason string) bool {
+	for _, code := range spawnBlockedReasonCodes {
+		if strings.HasPrefix(reason, code+":") {
+			return true
+		}
+	}
+	return false
 }
 
 // ── pre-decide roster passes (producer.py, run inside the cadence tick) ──────
@@ -1160,8 +1269,9 @@ func (s *apiServer) dispatchIdentitySweepNow(memberID, keepWarden string, now fl
 //   - outsource (A案 P6 — the former KindOutsource exclusion is REMOVED now the
 //     P5b naming convergence lets a member-verb stop target member-<ow-id>):
 //     the owner pin when concrete, else the machine the server ACTUALLY
-//     dispatched the last start to (workerSpawnTarget — "auto" placement has no
-//     durable pin). Restart amnesia / never-dispatched reads "" → no sweep
+//     dispatched the last start to (workerSpawnTarget — a task-level or manual
+//     placement leaves no durable pin on the worker row). Restart amnesia /
+//     never-dispatched reads "" → no sweep
 //     (fail-safe: an unverifiable 正身 never initiates a kill). This closes the
 //     2026-07-19 seth-m1 hole: a spawn retry's live doppelganger on another
 //     machine is reaped the moment the 正身 connects on the dispatched machine.
@@ -1179,7 +1289,7 @@ func (s *apiServer) identitySweepOnConnect(memberID, machineClaim string) {
 	}
 	expected := m.DesiredMachineID
 	if m.Kind == KindOutsource {
-		if expected == "" || expected == "auto" {
+		if expected == "" {
 			expected, _ = s.workerSpawnObs(memberID)
 		}
 	}

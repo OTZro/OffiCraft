@@ -779,6 +779,18 @@ export const zh = {
   machine: {
     // 無線上機器時,生成／喚醒按鈕停用的提示
     noOnlineMachine: "沒有線上的機器",
+    // 改機器按下之後的即時回饋:搬移是非同步的(API 200 只代表指定寫下了,真的
+    // 移到新機器是之後才由 SSE 帶回來),所以按鈕會一直停在「更換中…」直到落地
+    // 或逾時——不然按鈕與狀態都不變,會讓人以為沒按到。
+    relocating: "更換中…",
+    // 🔴 逾時文案只講我們觀測到的事實,不指因果:等了 30 秒沒收到落地回報,不等於
+    // 「沒搬成功」(可能搬了但我們看不到)。斷言原因會把人推向錯的方向——同 T-7fa1
+    // BLOCKER-1 的教訓。
+    relocateTimeout: "還沒收到完成回報,可以再按一次重試。",
+    relocateFailed: "這次沒有送出更換,可以再按一次重試。",
+    // 同機更換(沒有可觀測的落地可等)按下後的一次性回饋:只講「已送出」這個已經
+    // 發生的事實,不承諾換過去了、不起 30 秒計時。
+    relocateSent: "已送出更換",
     picker: {
       label: "選擇機器",
       // 目前綁定的機器離線時,於清單中停用並標註
@@ -1119,14 +1131,14 @@ export const zh = {
     assigneeModelPlaceholder: "模型（留空用預設）",
     assigneeEffort: "投入程度",
     assigneeMachineLabel: "機器",
-    assigneeMachineAuto: "自動分配",
-    assigneeMachineAutoHint: "挑最閒的一台",
     // 機器狀態字：讀現有 machines（online）＋ monitoring（agents 數）——
     // 線上且無 agent ＝ 閒置、線上有 agent ＝ 忙碌、離線 ＝ 離線（誠實映射）
     assigneeMachineIdle: "閒置",
     assigneeMachineBusy: "忙碌",
     assigneeMachineOffline: "離線",
-    assigneeMachineNote: "指定的機器若當下離線，會自動改用「自動分配」。",
+    assigneeMachineUnset: "未選機器",
+    assigneeMachineNote:
+      "這個類型的外包只會在你選的機器上啟動。沒選機器、或該機器離線時，一律不啟動，原因會顯示在該外包上。",
     assigneeCopies: "雇用數量",
     assigneeCopiesDecrease: "減少",
     assigneeCopiesIncrease: "增加",

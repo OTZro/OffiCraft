@@ -700,6 +700,10 @@ export const en: Dict = {
   },
   machine: {
     noOnlineMachine: "No online machine",
+    relocating: "Moving…",
+    relocateTimeout: "No completion report yet — press again to retry.",
+    relocateFailed: "The move could not be sent — press again to retry.",
+    relocateSent: "Move request sent",
     picker: {
       label: "Choose a machine",
       offlineOption: (name: string) => `${name} (offline)`,
@@ -1019,13 +1023,12 @@ export const en: Dict = {
     assigneeModelPlaceholder: "Model (blank = default)",
     assigneeEffort: "Effort",
     assigneeMachineLabel: "Machine",
-    assigneeMachineAuto: "Auto-assign",
-    assigneeMachineAutoHint: "Picks the idlest machine",
     assigneeMachineIdle: "Idle",
     assigneeMachineBusy: "Busy",
     assigneeMachineOffline: "Offline",
+    assigneeMachineUnset: "No machine chosen",
     assigneeMachineNote:
-      "If the chosen machine is offline at the time, auto-assign is used instead.",
+      "Workers of this type boot on the chosen machine and nowhere else. While no machine is chosen, or the chosen one is offline, none is started \u2014 the reason is shown on the worker.",
     assigneeCopies: "Hire count",
     assigneeCopiesDecrease: "Decrease",
     assigneeCopiesIncrease: "Increase",

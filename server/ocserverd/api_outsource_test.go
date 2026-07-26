@@ -324,7 +324,7 @@ func TestRelocateOutsourceWorker(t *testing.T) {
 	if len(oldFrames) != 1 {
 		t.Fatalf("want 1 worker_stop to the old host, got %d", len(oldFrames))
 	}
-	if rpc, args := decodeWardenFrame(t, oldFrames[0]); rpc != reconcileCmdStop ||
+	if rpc, args := decodeWardenFrame(t, oldFrames[0].Frame); rpc != reconcileCmdStop ||
 		args["member_id"] != workerID {
 		t.Errorf("old-host frame = %s %v, want worker_stop for %s", rpc, args, workerID)
 	}
@@ -334,7 +334,7 @@ func TestRelocateOutsourceWorker(t *testing.T) {
 	if len(newFrames) != 1 {
 		t.Fatalf("want 1 worker_start to the pinned host, got %d", len(newFrames))
 	}
-	if rpc, args := decodeWardenFrame(t, newFrames[0]); rpc != reconcileCmdStart ||
+	if rpc, args := decodeWardenFrame(t, newFrames[0].Frame); rpc != reconcileCmdStart ||
 		args["member_id"] != workerID {
 		t.Errorf("pinned-host frame = %s %v, want worker_start for %s", rpc, args, workerID)
 	}
@@ -372,6 +372,44 @@ func TestRelocateOutsourceWorker_Rejects(t *testing.T) {
 	}
 }
 
+// TestRelocateOutsourceWorker_RejectsUnresolvableMachine: ANY non-"" machine_id
+// must resolve to a real machine — "auto" is no longer waved through as a
+// pseudo-machine. "" stays the legal clear.
+func TestRelocateOutsourceWorker_RejectsUnresolvableMachine(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := assignOneWorker(t, api)
+	seedMachine(t, api, "m-real")
+
+	relocate := func(machineID string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		api.HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePost(rec,
+			taskReq(t, "POST", "/api/outsource-workers/"+workerID+"/relocate",
+				map[string]any{"machine_id": machineID}, wireOwnerID, "owner"), workerID)
+		return rec
+	}
+
+	// SENTINEL: a real concrete machine id still pins.
+	if rec := relocate("m-real"); rec.Code != http.StatusOK {
+		t.Fatalf("concrete machine relocate must 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	for _, machineID := range []string{"auto", "m-ghost"} {
+		if rec := relocate(machineID); rec.Code != http.StatusNotFound {
+			t.Fatalf("machine_id %q must 404, got %d %s", machineID, rec.Code, rec.Body.String())
+		}
+		w, _ := api.dal.GetOutsourceWorker(workerID)
+		if w == nil || w.DesiredMachineID != "m-real" {
+			t.Fatalf("a rejected %q relocate must leave the pin alone: %+v", machineID, w)
+		}
+	}
+	if rec := relocate(""); rec.Code != http.StatusOK {
+		t.Fatalf("clearing the pin must 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	if w, _ := api.dal.GetOutsourceWorker(workerID); w == nil || w.DesiredMachineID != "" {
+		t.Fatalf("\"\" must clear the worker pin: %+v", w)
+	}
+}
+
 // relocateOK drives the owner 改機器 handler and asserts a 200. Shared by the
 // input-shape fixtures below.
 func relocateOK(t *testing.T, api *apiServer, workerID, machineID string) {
@@ -404,7 +442,7 @@ func oneFrame(t *testing.T, api *apiServer, target string) (string, map[string]a
 	if len(frames) != 1 {
 		t.Fatalf("want exactly 1 frame on %s, got %d", target, len(frames))
 	}
-	return decodeWardenFrame(t, frames[0])
+	return decodeWardenFrame(t, frames[0].Frame)
 }
 
 // TestRelocateActiveWorker_MovesImmediately (T-f190 item 3, review gap): an
@@ -474,6 +512,310 @@ func TestRelocateNeverDispatchedWorker(t *testing.T) {
 	}
 }
 
+// x46Worker seeds the VERBATIM X-46 row read off the live cockpit: an already
+// minted worker, status ASSIGNED (never claimed), presence offline, desired_state
+// online, bound task not_started, pinned to a concrete machine that is online and
+// advertises its (codex) runtime — and every last_op field blank. Returns the
+// worker id.
+func x46Worker(t *testing.T, api *apiServer, pin string) string {
+	t.Helper()
+	seedMachine(t, api, pin)
+	connectWarden(t, api, pin)
+	api.telemetry.Set(pin, map[string]any{"runtimes": map[string]any{
+		RuntimeCodex: map[string]any{"installed": true, "logged_in": true},
+	}})
+	task := putTaskFixture(t, api, Task{
+		ID: "t-0ac4a22f3821", TypeKey: "review-pr", Title: "x",
+		Status: TaskStatusNotStarted, Priority: TaskPriorityMid,
+		ExecutorKind: TaskExecutorOutsource, ExecutorID: "ow-49c2c70c9448",
+	})
+	putWorkerFixture(t, api, OutsourceWorker{
+		ID: "ow-49c2c70c9448", Codename: "X-46", Runtime: RuntimeCodex,
+		Model: "gpt-5.6-terra", Effort: "medium", TaskID: task.ID,
+		Status: WorkerStatusAssigned, DesiredState: DesiredStateOnline,
+	})
+	return "ow-49c2c70c9448"
+}
+
+// TestRelocateAssignedWorker_X46 (T-e0e3): the X-46 row, relocated onto its
+// concrete machine. The immediate path DOES dispatch here — status is `assigned`,
+// so respawnWorkerNow's active-only O-28 deferral never applies — which is exactly
+// why the blank row was so misleading: the start went out and left no trace,
+// because worker spawn observability is in-memory by contract and nothing durable
+// was written until the boot was judged failed.
+func TestRelocateAssignedWorker_X46(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := x46Worker(t, api, "m-11b2")
+
+	relocateOK(t, api, workerID, "m-11b2")
+
+	if rpc, args := oneFrame(t, api, "m-11b2"); rpc != reconcileCmdStart ||
+		args["member_id"] != workerID {
+		t.Errorf("the relocate must dispatch a start to the pin: %s %v", rpc, args)
+	}
+	if got := api.workerSpawnTarget[workerID]; got != "m-11b2" {
+		t.Errorf("spawn target = %q, want m-11b2", got)
+	}
+
+	// NOTHING ever drains that machine's command FIFO — which is what the field
+	// evidence on eva-m5 showed: the warden logs a receipt line for every frame it
+	// reads (cli/ocwarden/transport.go, logged BEFORE dispatch precisely so
+	// delivery is provable from the warden log alone), and X-46's id appears zero
+	// times there while other workers on the same machine appear repeatedly. So the
+	// honest verdict for X-46 is "never collected", NOT "the runtime failed to
+	// boot" — the frames never reached anything that could try.
+	base := nowSecs()
+	for i := 0; i < 4; i++ {
+		api.runOutsourceTick(base + float64(i)*(WakingTTLSecs+10))
+	}
+	if api.hub.PendingWardenCommands("m-11b2") == 0 {
+		t.Fatal("precondition: this fixture must leave the frames uncollected")
+	}
+	w, err := api.dal.GetOutsourceWorker(workerID)
+	if err != nil || w == nil {
+		t.Fatalf("re-read worker: %v", err)
+	}
+	if !strings.HasPrefix(w.LastOpReason, spawnReasonNeverCollected+":") || w.LastOpAt == 0 {
+		t.Fatalf("an uncollected start must say so, got last_op=%q reason=%q at=%v",
+			w.LastOp, w.LastOpReason, w.LastOpAt)
+	}
+	// And it must survive a server re-exec, unlike the in-memory machine cell —
+	// that asymmetry is what made X-46 look like "no attempt was ever made".
+	api.workerSpawnTarget = map[string]string{}
+	api.workerReconcileStates = map[string]reconcileState{}
+	after, _ := api.dal.GetOutsourceWorker(workerID)
+	if !strings.HasPrefix(after.LastOpReason, spawnReasonNeverCollected+":") {
+		t.Fatalf("the receipt must be durable across a re-exec, got %q", after.LastOpReason)
+	}
+}
+
+// TestRelocateStoppedWorker_SavesPinWithoutReviving (owner ruling: placement is not
+// a start): a worker the owner explicitly STOPPED keeps its 停止 across a 改機器.
+// The pin is saved, nothing is dispatched, desired_state is untouched, and the row
+// says WHY nothing started — the tick has always honoured this
+// (TestStoppedWorker_TickNeverRevives); relocate used to be the one verb that
+// quietly overturned it.
+func TestRelocateStoppedWorker_SavesPinWithoutReviving(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := assignOneWorker(t, api)
+	w, err := api.dal.GetOutsourceWorker(workerID)
+	if err != nil || w == nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	w.DesiredState = DesiredStateOffline // owner pressed 停止
+	if err := api.dal.PutOutsourceWorker(*w); err != nil {
+		t.Fatalf("stop worker: %v", err)
+	}
+	seedMachine(t, api, "m-new")
+	connectWarden(t, api, "m-new")
+
+	relocateOK(t, api, workerID, "m-new")
+
+	if got := len(api.hub.DrainWardenCommands("m-new")); got != 0 {
+		t.Errorf("a relocate must never revive a stopped worker, got %d frames", got)
+	}
+	got, err := api.dal.GetOutsourceWorker(workerID)
+	if err != nil || got == nil {
+		t.Fatalf("re-read worker: %v", err)
+	}
+	if got.DesiredMachineID != "m-new" {
+		t.Errorf("the placement must still be saved: pin = %q", got.DesiredMachineID)
+	}
+	if got.DesiredState != DesiredStateOffline {
+		t.Errorf("desired_state must stay offline, got %q", got.DesiredState)
+	}
+	if !strings.HasPrefix(got.LastOpReason, spawnReasonHeldDown+":") {
+		t.Errorf("want a %s receipt explaining the no-op, got %q",
+			spawnReasonHeldDown, got.LastOpReason)
+	}
+}
+
+// TestRestartWorker_NoKillTarget_StillAttemptsStart (owner ruling: fix the whole
+// class, one shared path): 重啟 is the verb whose entire intent is "be running",
+// yet it discarded respawnWorkerNow's bool exactly like relocate did — so in the
+// no-kill-target shape it wrote a receipt that LOOKED caught while dispatching
+// nothing. It now rides the same shared path and genuinely attempts the start.
+func TestRestartWorker_NoKillTarget_StillAttemptsStart(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := newActiveWorker(t, api, false) // active, claimed once, SSE gone
+	api.hub.DrainWardenCommands(ServerSelfHost)
+	delete(api.workerSpawnTarget, workerID) // server re-exec forgot the dispatch
+	w, err := api.dal.GetOutsourceWorker(workerID)
+	if err != nil || w == nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	w.DesiredState = DesiredStateOffline // restart 409s unless the worker is stopped
+	if err := api.dal.PutOutsourceWorker(*w); err != nil {
+		t.Fatalf("stop worker: %v", err)
+	}
+
+	rec := postWorker(t, api, workerID, "restart", nil,
+		api.HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("restart: %d %s", rec.Code, rec.Body.String())
+	}
+
+	if rpc, args := oneFrame(t, api, ServerSelfHost); rpc != reconcileCmdStart ||
+		args["member_id"] != workerID {
+		t.Errorf("restart must actually attempt the start: %s %v", rpc, args)
+	}
+	// Restart flips desired_state online FIRST, so it can never reach the shared
+	// path's held-down arm — the intent lives in the state, not in a per-entry copy.
+	got, _ := api.dal.GetOutsourceWorker(workerID)
+	if got.DesiredState != DesiredStateOnline {
+		t.Errorf("restart must set desired_state online, got %q", got.DesiredState)
+	}
+	if strings.HasPrefix(got.LastOpReason, spawnReasonHeldDown+":") {
+		t.Errorf("restart must not report itself held down: %q", got.LastOpReason)
+	}
+}
+
+// TestSetWorkerModel_StoppedWorkerNotRevived is the third entry on the shared
+// path. The model handler used to re-ask "is this worker stopped?" itself and
+// skip in silence; the shared path owns that one branch point now, so the answer
+// is identical but the row explains it.
+func TestSetWorkerModel_StoppedWorkerNotRevived(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := newActiveWorker(t, api, true) // active AND holding a live SSE
+	api.hub.DrainWardenCommands(ServerSelfHost)
+	w, err := api.dal.GetOutsourceWorker(workerID)
+	if err != nil || w == nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	w.DesiredState = DesiredStateOffline // 停止 in flight, session still connected
+	if err := api.dal.PutOutsourceWorker(*w); err != nil {
+		t.Fatalf("stop worker: %v", err)
+	}
+
+	rec := postWorker(t, api, workerID, "model", map[string]any{"model": "opus"},
+		api.HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("model: %d %s", rec.Code, rec.Body.String())
+	}
+
+	if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
+		t.Errorf("a model change must not revive a stopped worker, got %d frames", got)
+	}
+	got, _ := api.dal.GetOutsourceWorker(workerID)
+	if got.Model != "opus" {
+		t.Errorf("the model change must still be saved, got %q", got.Model)
+	}
+	if !strings.HasPrefix(got.LastOpReason, spawnReasonHeldDown+":") {
+		t.Errorf("want a %s receipt explaining the no-op, got %q",
+			spawnReasonHeldDown, got.LastOpReason)
+	}
+}
+
+// TestRelocateMintedOfflineWorker (T-e0e3 regression — the X-46 report): a worker
+// already MINTED and CLAIMED (status active) whose session then died, with the
+// server's spawn memory gone too (re-exec), relocated onto a concrete online
+// machine. respawnWorkerNow's O-28 deferral used to swallow this shape whole: the
+// pin landed, NOTHING was dispatched, and last_op/last_op_reason stayed BLANK —
+// the cockpit showed 尚未分配機器 with nothing to diagnose. An owner relocate onto
+// a concrete machine must actually ATTEMPT the start.
+func TestRelocateMintedOfflineWorker(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true // no cadence tick may heal this — the handler must
+	workerID := newActiveWorker(t, api, false)
+	api.hub.DrainWardenCommands(ServerSelfHost)
+	delete(api.workerSpawnTarget, workerID) // server re-exec forgot the dispatch
+
+	seedMachine(t, api, "m-new")
+	connectWarden(t, api, "m-new")
+
+	relocateOK(t, api, workerID, "m-new")
+
+	// The start went out, onto the machine the owner named and nowhere else.
+	if rpc, args := oneFrame(t, api, "m-new"); rpc != reconcileCmdStart ||
+		args["member_id"] != workerID {
+		t.Errorf("pinned host frame = %s %v, want start for %s", rpc, args, workerID)
+	}
+	if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
+		t.Errorf("nothing may be dispatched to the machine the owner did not pick, got %d", got)
+	}
+	// The dispatch is observable, so the cockpit's machine cell fills in.
+	if got := api.workerSpawnTarget[workerID]; got != "m-new" {
+		t.Errorf("spawn target = %q, want m-new (a blank cell is the X-46 symptom)", got)
+	}
+	w, err := api.dal.GetOutsourceWorker(workerID)
+	if err != nil || w == nil || w.DesiredMachineID != "m-new" {
+		t.Fatalf("pin must be durable: %+v (%v)", w, err)
+	}
+	if w.Status != WorkerStatusActive {
+		t.Errorf("a relocate is a placement change, not a state change: status = %q", w.Status)
+	}
+}
+
+// TestRelocateMintedOfflineWorker_UnreachablePinLeavesReceipt is the same shape
+// with the pinned machine OFFLINE: placement is still an explicit decision, so
+// nothing may boot — but the refusal must be DIAGNOSABLE on the row rather than
+// leaving the owner with the blank X-46 hit. Nothing is substituted for the
+// machine the owner chose.
+func TestRelocateMintedOfflineWorker_UnreachablePinLeavesReceipt(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := newActiveWorker(t, api, false)
+	api.hub.DrainWardenCommands(ServerSelfHost)
+	delete(api.workerSpawnTarget, workerID)
+
+	seedMachine(t, api, "m-dark") // a real machine, never connected
+
+	relocateOK(t, api, workerID, "m-dark")
+
+	if got := len(api.hub.DrainWardenCommands("m-dark")); got != 0 {
+		t.Errorf("an offline pin must not be dispatched to, got %d frames", got)
+	}
+	if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
+		t.Errorf("no other machine may be substituted for the owner's pin, got %d frames", got)
+	}
+	w, err := api.dal.GetOutsourceWorker(workerID)
+	if err != nil || w == nil {
+		t.Fatalf("re-read worker: %v", err)
+	}
+	if w.LastOp != reconcileCmdStart || w.LastOpAt == 0 ||
+		!strings.HasPrefix(w.LastOpReason, placementReasonUnavailable+":") {
+		t.Fatalf("a refused relocate must name its cause, got last_op=%q at=%v reason=%q",
+			w.LastOp, w.LastOpAt, w.LastOpReason)
+	}
+	if !strings.Contains(w.LastOpReason, "m-dark") {
+		t.Errorf("the receipt must name the machine that refused: %q", w.LastOpReason)
+	}
+}
+
+// TestRelocateMintedOfflineWorker_ClearedPinNeverStarts is the SENTINEL for the
+// placement ruling the fix above must not resurrect: clearing the pin ("") on the
+// same offline worker leaves it with no placement, and no placement starts
+// nothing — with the reason saying exactly that, not an "auto" boot somewhere.
+func TestRelocateMintedOfflineWorker_ClearedPinNeverStarts(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := newActiveWorker(t, api, false)
+	api.hub.DrainWardenCommands(ServerSelfHost)
+	delete(api.workerSpawnTarget, workerID)
+	// An online, eligible machine exists — nothing may drift onto it unasked.
+	seedMachine(t, api, "m-idle")
+	connectWarden(t, api, "m-idle")
+
+	relocateOK(t, api, workerID, "")
+
+	for _, target := range []string{"m-idle", ServerSelfHost} {
+		if got := len(api.hub.DrainWardenCommands(target)); got != 0 {
+			t.Errorf("an unpinned worker must never be started (%s got %d frames)", target, got)
+		}
+	}
+	w, err := api.dal.GetOutsourceWorker(workerID)
+	if err != nil || w == nil {
+		t.Fatalf("re-read worker: %v", err)
+	}
+	if !strings.HasPrefix(w.LastOpReason, placementReasonNoMachine+":") {
+		t.Errorf("want a %s receipt, got %q", placementReasonNoMachine, w.LastOpReason)
+	}
+}
+
 // TestRelocateToSameMachine (T-f190 item 3, review gap): the code path is NOT a
 // no-op — relocating to the machine the worker already runs on kills the current
 // session and re-spawns it on that SAME machine (a deliberate "restart here", the
@@ -495,10 +837,10 @@ func TestRelocateToSameMachine(t *testing.T) {
 	if len(frames) != 2 {
 		t.Fatalf("same-machine relocate must kill+respawn (2 frames), got %d", len(frames))
 	}
-	if rpc, args := decodeWardenFrame(t, frames[0]); rpc != reconcileCmdStop || args["member_id"] != workerID {
+	if rpc, args := decodeWardenFrame(t, frames[0].Frame); rpc != reconcileCmdStop || args["member_id"] != workerID {
 		t.Errorf("frame[0] = %s %v, want worker_stop for %s", rpc, args, workerID)
 	}
-	if rpc, args := decodeWardenFrame(t, frames[1]); rpc != reconcileCmdStart || args["member_id"] != workerID {
+	if rpc, args := decodeWardenFrame(t, frames[1].Frame); rpc != reconcileCmdStart || args["member_id"] != workerID {
 		t.Errorf("frame[1] = %s %v, want worker_start for %s", rpc, args, workerID)
 	}
 	// The pin is durably the same machine.

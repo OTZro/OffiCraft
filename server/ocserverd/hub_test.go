@@ -500,7 +500,8 @@ func TestEnqueueWardenCommand(t *testing.T) {
 	h.EnqueueWardenCommand("w-2", []byte("other"))
 
 	drained := h.DrainWardenCommands("w-1")
-	if len(drained) != 2 || string(drained[0]) != "frame-1" || string(drained[1]) != "frame-2" {
+	if len(drained) != 2 || string(drained[0].Frame) != "frame-1" ||
+		string(drained[1].Frame) != "frame-2" {
 		t.Fatalf("drain must pop all pending in FIFO order: %q", drained)
 	}
 	if again := h.DrainWardenCommands("w-1"); again != nil {
@@ -511,5 +512,31 @@ func TestEnqueueWardenCommand(t *testing.T) {
 	}
 	if unknown := h.DrainWardenCommands("w-none"); unknown != nil {
 		t.Fatalf("unknown warden drains nothing: %q", unknown)
+	}
+}
+
+// TestPendingWardenCommands: the read-only backlog probe — the ONE in-process
+// observable that separates "nobody collected the frame" from "it was collected
+// and the boot failed". It must never pop (a probe that consumed the queue would
+// be impersonating the warden, the exact mistake it exists to detect).
+func TestPendingWardenCommands(t *testing.T) {
+	h := NewHub()
+	if got := h.PendingWardenCommands("w-1"); got != 0 {
+		t.Fatalf("empty queue: got %d", got)
+	}
+	h.EnqueueWardenCommand("w-1", []byte("f-1"))
+	h.EnqueueWardenCommand("w-1", []byte("f-2"))
+	if got := h.PendingWardenCommands("w-1"); got != 2 {
+		t.Fatalf("want 2, got %d", got)
+	}
+	if got := h.PendingWardenCommands("w-1"); got != 2 {
+		t.Fatalf("the probe must be READ-ONLY; second read got %d", got)
+	}
+	if got := h.PendingWardenCommands(""); got != 0 {
+		t.Fatalf("blank warden id: got %d", got)
+	}
+	h.DrainWardenCommands("w-1")
+	if got := h.PendingWardenCommands("w-1"); got != 0 {
+		t.Fatalf("after a real drain the queue must read empty, got %d", got)
 	}
 }

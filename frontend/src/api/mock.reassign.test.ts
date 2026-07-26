@@ -220,7 +220,7 @@ describe("mock reassign — outsource target", () => {
     __injectMockOutsourceWorker(mkWorker({ taskId: task.id }));
 
     const after = await mockApi.reassignTask(task.id, {
-      target: { kind: "outsource", model: "opus", effort: "high", machine: "auto" },
+      target: { kind: "outsource", model: "opus", effort: "high", machine: "mach-a" },
     });
 
     expect(after.status).toBe("in_progress");
@@ -263,7 +263,7 @@ describe("mock reassign — outsource target", () => {
     __injectMockTask(task);
 
     const after = await mockApi.reassignTask(task.id, {
-      target: { kind: "outsource", model: "", effort: "", machine: "auto" },
+      target: { kind: "outsource", model: "", effort: "", machine: "mach-a" },
     });
     const workers = await mockApi.listOutsourceWorkers();
     expect(workers.find((w) => w.id === after.executorId)?.effort).toBe("medium");
@@ -272,7 +272,7 @@ describe("mock reassign — outsource target", () => {
 
     await expect(
       mockApi.reassignTask(task.id, {
-        target: { kind: "outsource", model: "opus", effort: "extreme", machine: "auto" },
+        target: { kind: "outsource", model: "opus", effort: "extreme", machine: "mach-a" },
       })
     ).rejects.toMatchObject({ status: 400 });
   });

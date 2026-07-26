@@ -129,8 +129,16 @@ type Hub struct {
 	seq int64
 	// wardenCmds is the per-warden command FIFO (spec/sse.md §7), keyed by the
 	// warden MEMBER id (the drain side's verified token sub). Values are
-	// ready-to-write SSE wire text. Unbounded (a warden reconnect drains it).
-	wardenCmds map[string][][]byte
+	// ready-to-write SSE wire text, each tagged with the member/worker the frame
+	// ACTS ON. Unbounded (a warden reconnect drains it).
+	//
+	// The subject tag is load-bearing, not bookkeeping: ONE machine's queue is
+	// shared by every member and worker on it, so a bare depth answers "does this
+	// machine owe anybody a frame", never "is THIS worker's start frame still
+	// waiting". Reading the first as the second is how a receipt could accuse a
+	// healthy warden of not running while it was demonstrably draining somebody
+	// else's frame (T-e0e3 review C.1).
+	wardenCmds map[string][]wardenCmd
 	// cmdUndelivered is the per-ADDRESSED-MEMBER note that a drained command
 	// frame never reached the socket (T-66a2). One entry per member, overwritten
 	// by the next loss and deleted by the next dispatch — bounded by the roster,
@@ -158,7 +166,7 @@ type Hub struct {
 func NewHub() *Hub {
 	return &Hub{
 		listeners:      map[*hubListener]bool{},
-		wardenCmds:     map[string][][]byte{},
+		wardenCmds:     map[string][]wardenCmd{},
 		cmdUndelivered: map[string]undeliveredCommand{},
 		kicks:          map[string][]time.Time{},
 		clock:          time.Now,
@@ -736,7 +744,14 @@ func (h *Hub) BindWardenCommandStore(store wardenCommandStore) {
 		if c.WardenID == "" || len(c.Frame) == 0 || containsFrame(h.wardenCmds[c.WardenID], c.Frame) {
 			continue
 		}
-		h.wardenCmds[c.WardenID] = append(h.wardenCmds[c.WardenID], c.Frame)
+		// Subject = the persisted row's MemberID: that column IS the subject
+		// (planCommandPersistLocked fills it from the frame's args.member_id,
+		// the same id enqueueToWarden passes as the subject), so a rehydrated
+		// frame stays attributable to the member/worker it acts on. Restoring it
+		// untagged would make PendingWardenCommandsFor blind to exactly the
+		// frames the restart was supposed to save.
+		h.wardenCmds[c.WardenID] = append(h.wardenCmds[c.WardenID],
+			wardenCmd{Subject: c.MemberID, Frame: c.Frame})
 		restored++
 		fmt.Fprintf(os.Stderr,
 			"[sse] warden command restored across restart: warden=%s verb=%s target=%s\n",
@@ -783,17 +798,36 @@ func (h *Hub) MarkWardenCommandWritten(wardenID string, frame []byte) {
 	}
 }
 
+// wardenCmd is one queued warden command: the ready-to-write SSE wire text plus
+// the id of the member/worker it acts on. Subject is "" only for a frame whose
+// enqueuer genuinely had no subject; it is never a wildcard.
+type wardenCmd struct {
+	Subject string
+	Frame   []byte
+}
+
 // EnqueueWardenCommand appends one directed command frame (SSE wire text) to
 // wardenID's FIFO backlog (spec/sse.md §7 — the NAT transport's server half).
 // The frame is drained ONLY by the connection whose verified token sub is
 // wardenID, never the owner fan-out (the riding member_token is a secret).
 func (h *Hub) EnqueueWardenCommand(wardenID string, frame []byte) {
+	h.EnqueueWardenCommandFor(wardenID, "", frame)
+}
+
+// EnqueueWardenCommandFor is EnqueueWardenCommand with the frame's SUBJECT — the
+// member or worker id the command acts on — recorded alongside it, so a later
+// reader can ask "is THIS one's frame still waiting" instead of only "is anything
+// waiting". Every production enqueue knows its subject (they all come through
+// enqueueToWarden, whose first argument is exactly that id); the untagged
+// EnqueueWardenCommand remains for callers that genuinely have no subject.
+func (h *Hub) EnqueueWardenCommandFor(wardenID, subject string, frame []byte) {
 	if wardenID == "" {
 		return
 	}
 	var writes []commandStoreWrite
 	h.mu.Lock()
-	h.wardenCmds[wardenID] = append(h.wardenCmds[wardenID], frame)
+	h.wardenCmds[wardenID] = append(h.wardenCmds[wardenID],
+		wardenCmd{Subject: subject, Frame: frame})
 	// A FRESH dispatch supersedes any earlier "this member's frame never made
 	// it" note (T-66a2): the note exists to explain ONE lost dispatch, and the
 	// reader (stampWakeObservability) must never attribute a stale loss to the
@@ -810,6 +844,47 @@ func (h *Hub) EnqueueWardenCommand(wardenID string, frame []byte) {
 	runCommandPersists(writes)
 }
 
+// PendingWardenCommands reports how many command frames are STILL sitting in
+// wardenID's FIFO — i.e. enqueued by the server and not yet collected by any
+// connection claiming that warden. Read-only (it never pops), and it is the only
+// in-process observable that separates "the frame was never even picked up" from
+// "it was picked up and the boot failed": EnqueueWardenCommand succeeding means
+// only that the frame was appended to this map, never that anybody read it.
+func (h *Hub) PendingWardenCommands(wardenID string) int {
+	if wardenID == "" {
+		return 0
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.wardenCmds[wardenID])
+}
+
+// PendingWardenCommandsFor is the PER-SUBJECT backlog: how many of wardenID's
+// still-uncollected frames act on `subject`. This — not the queue depth — is what
+// a per-worker receipt may assert on, because one machine's FIFO is shared by
+// every member and worker placed there: a start frame for THIS worker that has
+// been collected leaves the queue non-empty whenever anybody ELSE on that machine
+// is also waiting, and a receipt reading that depth would tell the owner the
+// machine's warden is not running while it was, at that moment, draining.
+//
+// An empty subject can never match a tagged frame (and never matches at all): the
+// question "is this nameless thing's frame queued" has no honest answer, so the
+// caller must not ask it — see the target=="" arm in reconcileWorkerLiveness.
+func (h *Hub) PendingWardenCommandsFor(wardenID, subject string) int {
+	if wardenID == "" || subject == "" {
+		return 0
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := 0
+	for _, c := range h.wardenCmds[wardenID] {
+		if c.Subject == subject {
+			n++
+		}
+	}
+	return n
+}
+
 // DrainWardenCommands pops and returns ALL of wardenID's pending command
 // frames in FIFO order (nil when none). The pop is destructive by design —
 // at-most-once onto the downstream — but the caller now owes the frames back:
@@ -820,7 +895,7 @@ func (h *Hub) EnqueueWardenCommand(wardenID string, frame []byte) {
 // intention to write; the row is cleared per frame by MarkWardenCommandWritten
 // once the write actually succeeded, so a process that dies mid-drain still
 // finds its undrained `update` on the next boot.
-func (h *Hub) DrainWardenCommands(wardenID string) [][]byte {
+func (h *Hub) DrainWardenCommands(wardenID string) []wardenCmd {
 	if wardenID == "" {
 		return nil
 	}
@@ -870,15 +945,16 @@ type undeliveredCommand struct {
 //     delivered" from "delivered and failed".
 //
 // Returns how many frames were requeued and how many were dropped.
-func (h *Hub) ReturnUndeliveredCommands(wardenID string, undelivered [][]byte) (requeued, dropped int) {
+func (h *Hub) ReturnUndeliveredCommands(wardenID string, undelivered []wardenCmd) (requeued, dropped int) {
 	if wardenID == "" || len(undelivered) == 0 {
 		return 0, 0
 	}
 	var writes []commandStoreWrite
 	h.mu.Lock()
 	at := float64(h.clock().UnixNano()) / 1e9
-	var back [][]byte
-	for _, frame := range undelivered {
+	var back []wardenCmd
+	for _, cmd := range undelivered {
+		frame := cmd.Frame
 		digest, ok := decodeWardenCommandFrame(frame)
 		verb := digest.Verb
 		if !ok || verb == "" {
@@ -889,7 +965,10 @@ func (h *Hub) ReturnUndeliveredCommands(wardenID string, undelivered [][]byte) (
 		retry := verb == reconcileCmdUpdate &&
 			!containsFrame(h.wardenCmds[wardenID], frame) && !containsFrame(back, frame)
 		if retry {
-			back = append(back, frame)
+			// The subject tag rides back with the frame: a requeued command is
+			// still THAT member's command, and a per-subject backlog read after
+			// a requeue must keep seeing it.
+			back = append(back, cmd)
 			requeued++
 			// Second chance at durability: the row normally already exists (the
 			// enqueue wrote it and only a successful WRITE clears it), and the
@@ -957,9 +1036,17 @@ func (h *Hub) UndeliveredCommandSince(memberID string, since float64) (undeliver
 // requeue de-dup. Warden command frames for the same verb+target are byte
 // identical (update carries no token and no timestamp), so a warden that flaps
 // repeatedly accumulates ONE pending update, not one per flap.
-func containsFrame(queue [][]byte, frame []byte) bool {
+//
+// Ignoring Subject is safe rather than sloppy: the subject IS the frame's
+// args.member_id (enqueueToWarden passes the same id it builds the frame with),
+// so byte-identical frames necessarily carry the same subject and collapsing
+// them cannot merge two different members' orders. The only way to break that
+// is an untagged EnqueueWardenCommand (subject ""), which has no production
+// caller — it is reached from tests only. Anyone adding a real untagged caller
+// must compare Subject here too.
+func containsFrame(queue []wardenCmd, frame []byte) bool {
 	for _, q := range queue {
-		if bytes.Equal(q, frame) {
+		if bytes.Equal(q.Frame, frame) {
 			return true
 		}
 	}

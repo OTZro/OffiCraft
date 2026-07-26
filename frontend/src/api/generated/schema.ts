@@ -1362,7 +1362,7 @@ export interface paths {
         put?: never;
         /**
          * Relocate a member to a machine (placement only; never touches desired_state). Also accepts an outsource-worker id: the same move-one-agent verb relocates the worker.
-         * @description Relocate a member to a machine (the owner cockpit's 改機器 for a roster member; the member twin of the outsource-worker relocate). Writes the owner-pinned ``desired_machine_id`` then runs the SAME event-driven reconcile the activate click uses (``reconcileMemberNow``): a LIVE member is auto-migrated onto the chosen machine (robust STOP the old session, the next tick re-spawns on the pin); an offline member just re-pins so the next wake lands there. PLACEMENT ONLY — unlike activate it NEVER touches ``desired_state`` (a relocate is not a wake). A ``member`` delta fans out immediately. A concrete (non-"", non-"auto") pin must name a real machine, else 404. P7c: ``member_id`` also accepts an outsource-worker id — an id naming no roster member falls through to the worker table and relocates that worker (the response is then an OutsourceWorkerDTO); an id in neither table stays the member 404.
+         * @description Relocate a member to a machine (the owner cockpit's 改機器 for a roster member; the member twin of the outsource-worker relocate). Writes the owner-pinned ``desired_machine_id`` then runs the SAME event-driven reconcile the activate click uses (``reconcileMemberNow``): a LIVE member is auto-migrated onto the chosen machine (robust STOP the old session, the next tick re-spawns on the pin); an offline member just re-pins so the next wake lands there. PLACEMENT ONLY — unlike activate it NEVER touches ``desired_state`` (a relocate is not a wake). A ``member`` delta fans out immediately. Any non-"" pin must name a real machine, else 404 — "auto" included, since it names no machine and pinned the member to a destination dispatch could never reach. P7c: ``member_id`` also accepts an outsource-worker id — an id naming no roster member falls through to the worker table and relocates that worker (the response is then an OutsourceWorkerDTO); an id in neither table stays the member 404.
          */
         post: operations["handle_relocate_member_api_members__member_id__relocate_post"];
         delete?: never;
@@ -4130,7 +4130,7 @@ export interface components {
         };
         /**
          * MemberRelocateDTO
-         * @description Relocate a member to a machine (POST /api/members/{member_id}/relocate) — the owner cockpit's 改機器 for a roster member, the member twin of OutsourceWorkerRelocateDTO. Writes the member's owner-pinned desired_machine_id, then runs the SAME event-driven reconcile the activate click uses (reconcileMemberNow): a LIVE member is auto-migrated onto the chosen machine (robust STOP the old session → next tick re-spawns on the pin), an offline member just re-pins so the next wake lands there. PLACEMENT ONLY — unlike activate it NEVER touches desired_state (a relocate is not a wake). machine_id is the STABLE machine id (the warden member's own id), "auto" (idlest-online), or "" (clear the pin).
+         * @description Relocate a member to a machine (POST /api/members/{member_id}/relocate) — the owner cockpit's 改機器 for a roster member, the member twin of OutsourceWorkerRelocateDTO. Writes the member's owner-pinned desired_machine_id, then runs the SAME event-driven reconcile the activate click uses (reconcileMemberNow): a LIVE member is auto-migrated onto the chosen machine (robust STOP the old session → next tick re-spawns on the pin), an offline member just re-pins so the next wake lands there. PLACEMENT ONLY — unlike activate it NEVER touches desired_state (a relocate is not a wake). machine_id is the STABLE machine id (the warden member's own id) or "" (clear the pin — the member then has no placement and is not started until one is chosen). Any non-blank value must resolve to a real machine.
          */
         MemberRelocateDTO: {
             /**
@@ -4471,7 +4471,7 @@ export interface components {
             delegated_by: string;
             /**
              * Desired Machine Id
-             * @description The OWNER-PINNED machine placement (relocate target), the worker twin of member.desired_machine_id: "" = unpinned (manual preference decides), "auto" = idlest-online, or a concrete machine id. T-f190 additive-optional.
+             * @description The OWNER-PINNED machine placement (relocate target), the worker twin of member.desired_machine_id: "" = unpinned (the task's 發包 target, then the type manual, decides) or a concrete machine id. T-f190 additive-optional.
              * @default
              */
             desired_machine_id: string;
@@ -4590,7 +4590,7 @@ export interface components {
         };
         /**
          * OutsourceWorkerRelocateDTO
-         * @description Relocate an outsource worker to a machine (POST /api/outsource-workers/{id}/relocate, T-f190) — the owner cockpit's 改機器 operation, the worker twin of MemberActivateDTO's machine bind. Writes the worker's desired_machine_id pin, kills the current session, and clears pacing so the next scheduler tick re-spawns on the chosen machine (no lifecycle change). machine_id is the STABLE machine id (the warden member's own id), "auto" (idlest-online), or "" (clear the pin → fall back to the manual preference).
+         * @description Relocate an outsource worker to a machine (POST /api/outsource-workers/{id}/relocate, T-f190) — the owner cockpit's 改機器 operation, the worker twin of MemberActivateDTO's machine bind. Writes the worker's desired_machine_id pin, kills the current session, and clears pacing so the next scheduler tick re-spawns on the chosen machine (no lifecycle change). machine_id is the STABLE machine id (the warden member's own id) or "" (clear the pin → fall back to the manual preference). Any non-blank value must resolve to a real machine.
          */
         OutsourceWorkerRelocateDTO: {
             /**
@@ -5434,7 +5434,7 @@ export interface components {
         };
         /**
          * TaskCreateTargetDTO
-         * @description Optional dispatch target (agent 發包給外包). When present with ``kind='outsource'`` the task is created as an **unassigned outsource task** — no owner-approval card and no per-task approval. The existing outsource scheduler then picks up unassigned outsource tasks against the global concurrency cap (``outsourceParallelCap``, owner-configurable in the cockpit; default unchanged): below the cap it mints a fresh worker immediately, at the cap it queues for capacity and is picked up automatically when a slot frees. The owner may reassign a still-queued task (to a member or another outsource) at any time. ``runtime`` is claude/codex (absent = claude); ``model`` is the worker's model (blank/absent = selected-runtime default); ``effort`` is low|medium|high (absent = ``medium``); ``machine`` is the spawn placement preference — ``auto`` (absent = auto) or a machine id. Absent (or ``kind='member'``) keeps the current create semantics (manual assignee / ``executor_member_id``).
+         * @description Optional dispatch target (agent 發包給外包). When present with ``kind='outsource'`` the task is created as an **unassigned outsource task** — no owner-approval card and no per-task approval. The existing outsource scheduler then picks up unassigned outsource tasks against the global concurrency cap (``outsourceParallelCap``, owner-configurable in the cockpit; default unchanged): below the cap it mints a fresh worker immediately, at the cap it queues for capacity and is picked up automatically when a slot frees. The owner may reassign a still-queued task (to a member or another outsource) at any time. ``runtime`` is claude/codex (absent = claude); ``model`` is the worker's model (blank/absent = selected-runtime default); ``effort`` is low|medium|high (absent = ``medium``); ``machine`` is the machine the worker boots on (a machine id that must resolve; absent inherits — see below). Any of ``runtime``/``model``/``effort``/``machine`` that is OMITTED is INHERITED: a TYPED task takes the type manual's outsource assignee, a FREE (ad-hoc) task takes the DISPATCHING member's own runtime/model/effort and the machine it is itself pinned to (發包 without a spec means "one like me"). ``runtime`` and ``model`` inherit together — an inherited model is kept only under the runtime it belongs to, else the runtime's default model applies. ``effort`` falls back to ``medium``. ``machine`` has NO final fallback: when nothing names one the task carries no placement and no worker is started until one is chosen. The resolved spec is persisted on the task row and re-read on handover/rebirth, never re-derived. Absent (or ``kind='member'``) keeps the current create semantics (manual assignee / ``executor_member_id``).
          */
         TaskCreateTargetDTO: {
             /**
@@ -5765,7 +5765,7 @@ export interface components {
         };
         /**
          * TaskManualDTO
-         * @description One task manual (任務手冊 — a task type / playbook): purpose (Q1), input fields (Q2; is_key fields form the dedupe identity key), the SOP markdown (Q3 — the plan blueprint), the accumulated learnings, and the type's executor assignee setting ({} = unset). An outsource assignee is {"kind":"outsource","runtime":"claude|codex","model":…,"effort":…,"copies":N,"machine":…}; absent runtime means claude. `copies` is the per-type parallel-worker cap — an integer >= 1, or 0 = 無限 (UNLIMITED: no per-type cap; the global outsource_max_parallel still applies); `machine` is the spawn placement preference — "auto" (the default when absent: the scheduler picks the idlest online machine) or a machine id; a specified machine that is offline or lacks the selected runtime at spawn time falls back to runtime-capable "auto" placement.
+         * @description One task manual (任務手冊 — a task type / playbook): purpose (Q1), input fields (Q2; is_key fields form the dedupe identity key), the SOP markdown (Q3 — the plan blueprint), the accumulated learnings, and the type's executor assignee setting ({} = unset). An outsource assignee is {"kind":"outsource","runtime":"claude|codex","model":…,"effort":…,"copies":N,"machine":…}; absent runtime means claude. `copies` is the per-type parallel-worker cap — an integer >= 1, or 0 = 無限 (UNLIMITED: no per-type cap; the global outsource_max_parallel still applies); `machine` is the machine the type's workers boot on — a machine id that must resolve to a real machine; absent means the type names none. A machine that is offline or lacks the selected runtime at spawn time is NOT substituted: nothing is dispatched and the worker row carries the reason (last_op_reason).
          */
         TaskManualDTO: {
             /** Assignee */
@@ -5832,7 +5832,7 @@ export interface components {
         };
         /**
          * TaskManualUpdateDTO
-         * @description Partial manual edit — only supplied fields change. ``assignee`` is {"kind":"member","member_id":…} or {"kind":"outsource","runtime":"claude|codex","model":…,"effort":…,"copies":N,"machine":…}; {} unsets it. Outsource runtime absent means claude; ``copies`` MUST be a number >= 0 (0 = 無限 — unlimited per-type parallel copies; absent = 1); ``machine`` MUST be a non-blank string when present — "auto" or a machine id (absent = "auto").
+         * @description Partial manual edit — only supplied fields change. ``assignee`` is {"kind":"member","member_id":…} or {"kind":"outsource","runtime":"claude|codex","model":…,"effort":…,"copies":N,"machine":…}; {} unsets it. Outsource runtime absent means claude; ``copies`` MUST be a number >= 0 (0 = 無限 — unlimited per-type parallel copies; absent = 1); ``machine`` MUST be a non-blank machine id when present, and must resolve to a real machine ("auto" is rejected — it names no machine); absent leaves the type without a placement.
          */
         TaskManualUpdateDTO: {
             /**
@@ -5936,7 +5936,7 @@ export interface components {
         };
         /**
          * TaskReassignTargetDTO
-         * @description The reassignment target. ``kind='member'`` requires ``member_id`` — an ACTIVE roster member below the warden layer (a warden or an inactive/unknown member is a 400). ``kind='outsource'`` lands the task unassigned for the scheduler to spawn a fresh worker under the global parallel cap (no owner-approval card; T-35e0): ``runtime`` is claude/codex (absent = claude); ``model`` is the worker's model (blank/absent = selected-runtime default); ``effort`` is low|medium|high (absent = ``medium``); ``machine`` is the spawn placement preference — ``auto`` (absent = auto) or a machine id (an offline machine falls back to auto at spawn time, the TaskManualDTO promise).
+         * @description The reassignment target. ``kind='member'`` requires ``member_id`` — an ACTIVE roster member below the warden layer (a warden or an inactive/unknown member is a 400). ``kind='outsource'`` lands the task unassigned for the scheduler to spawn a fresh worker under the global parallel cap (no owner-approval card; T-35e0): ``runtime`` is claude/codex (absent = claude); ``model`` is the worker's model (blank/absent = selected-runtime default); ``effort`` is low|medium|high (absent = ``medium``); ``machine`` is the machine the worker boots on — a machine id that must resolve; absent inherits (see below). An offline machine is NOT substituted at spawn time: nothing is dispatched and the reason is recorded on the worker. Any of ``runtime``/``model``/``effort``/``machine`` that is OMITTED is INHERITED: a TYPED task takes the type manual's outsource assignee, a FREE (ad-hoc) task takes the DISPATCHING member's own runtime/model/effort and the machine it is itself pinned to (發包 without a spec means "one like me"). ``runtime`` and ``model`` inherit together — an inherited model is kept only under the runtime it belongs to, else the runtime's default model applies. ``effort`` falls back to ``medium``. ``machine`` has NO final fallback: when nothing names one the task carries no placement and no worker is started until one is chosen. The resolved spec is persisted on the task row and re-read on handover/rebirth, never re-derived.
          */
         TaskReassignTargetDTO: {
             /**

@@ -255,10 +255,13 @@ func (s *apiServer) HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePo
 // route handler and by the member relocate fallback (relocate_member accepts a
 // worker id — P7c), so both faces serve identical semantics.
 func (s *apiServer) relocateWorkerByID(w http.ResponseWriter, r *http.Request, id, machineID string) {
-	// A concrete (non-"", non-"auto") pin must name a real machine — reject a
-	// hand-typed / stale id with an honest 404 rather than pinning the worker to
-	// a placement that can never boot.
-	if machineID != "" && machineID != "auto" {
+	// Any non-"" machine_id must name a real machine — reject a hand-typed /
+	// stale id with an honest 404 rather than pinning the worker to a placement
+	// that can never boot. "auto" is no longer exempt: waving it through pinned
+	// the worker to a pseudo-machine dispatch could never reach, the same hole a
+	// nonexistent concrete id was already 404'd for. "" clears the pin, and the
+	// worker then falls back to the task's own 發包 target / the type manual.
+	if machineID != "" {
 		if _, err := s.resolveMachine(machineID); err != nil {
 			writeResolveError(w, err, "machine", machineID)
 			return
@@ -459,7 +462,7 @@ func (s *apiServer) HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost
 		internalError(w, err)
 		return
 	}
-	s.respawnWorkerNow(*worker, "restart")
+	s.respawnWorkerForOwnerOp(*worker, "restart")
 	if fresh, ferr := s.dal.GetOutsourceWorker(id); ferr == nil && fresh != nil {
 		worker = fresh
 	}
@@ -520,11 +523,13 @@ func (s *apiServer) HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(
 		internalError(w, err)
 		return
 	}
-	// Take effect immediately only for a live, non-stopped session; an assigned or
-	// stopped worker adopts the new model at its next spawn / restart.
-	if worker.Status == WorkerStatusActive && worker.DesiredState != DesiredStateOffline &&
-		s.hub.IsOnline(worker.ID) {
-		s.respawnWorkerNow(*worker, "runtime/model")
+	// Take effect immediately only for a LIVE session; an assigned worker adopts
+	// the new model at its next spawn. Whether the owner wants it running at all
+	// is deliberately NOT re-asked here — respawnWorkerForOwnerOp owns that single
+	// branch point for all three owner verbs, and asking twice is how the two
+	// copies drift (this one used to skip silently, leaving no receipt).
+	if worker.Status == WorkerStatusActive && s.hub.IsOnline(worker.ID) {
+		s.respawnWorkerForOwnerOp(*worker, "runtime/model")
 		if fresh, ferr := s.dal.GetOutsourceWorker(id); ferr == nil && fresh != nil {
 			worker = fresh
 		}

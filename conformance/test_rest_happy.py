@@ -533,14 +533,14 @@ HAPPY: dict[str, Happy] = {
     ),
     "POST /api/members/{member_id}/relocate": Happy(
         # placement-only 改機器: writes desired_machine_id, NEVER touches
-        # desired_state (the activate contrast). machine_id="auto" is validation-
-        # exempt so a fresh (offline) member relocates without a real target. The
-        # check pins BOTH: the pin landed AND desired_state was NOT flipped online.
+        # desired_state (the activate contrast). The pin must name a REAL
+        # machine — this file's own onboarded one. The check pins BOTH: the pin
+        # landed AND desired_state was NOT flipped online.
         path=lambda ctx: f"/api/members/{ctx.fresh_member()}/relocate",
-        body={"machine_id": "auto"},
-        check=lambda _c, r: _expect(
+        body=lambda ctx: {"machine_id": ctx.machine_id},
+        check=lambda ctx, r: _expect(
             r,
-            lambda d: d["desired_machine_id"] == "auto"
+            lambda d: d["desired_machine_id"] == ctx.machine_id
             and d.get("desired_state") != "online",
         ),
     ),
@@ -1343,6 +1343,93 @@ def test_install_sh_code_variant_claims_before_download(hctx: HCtx) -> None:
     assert 0 <= probe_at < claim_at, "the binary probe must precede the claim exchange"
     assert claim_at < download_at, "the claim exchange must precede the binary download"
     assert "/api/warden/binary" in body[probe_at:claim_at], "the probe must hit the binary route"
+
+
+# ── machine placement: an explicit machine id, or nothing ────────────────────
+
+
+def _desired_machine(hctx: HCtx, member_id: str) -> str:
+    r = hctx.client.get(f"/api/members/{member_id}", headers=_auth(hctx.owner_token))
+    assert r.status_code == 200, r.text
+    return r.json()["desired_machine_id"]
+
+
+def test_relocate_requires_a_machine_that_resolves(hctx: HCtx) -> None:
+    """Placement is an EXPLICIT decision: relocate takes a real machine id or ""
+    (clear the pin). Every other non-blank value — the retired "auto" spelling
+    included — is the same honest 404 a typo'd id has always been, so a member
+    can never be pinned to a destination dispatch cannot reach."""
+    member_id = hctx.fresh_member()
+    h = _auth(hctx.owner_token)
+    before = _desired_machine(hctx, member_id)
+    for bad in ("auto", "warden-nope"):
+        r = hctx.client.post(
+            f"/api/members/{member_id}/relocate", json={"machine_id": bad}, headers=h)
+        assert r.status_code == 404, f"{bad!r}: {r.status_code} {r.text[:200]}"
+        assert _desired_machine(hctx, member_id) == before, (
+            f"a refused relocate must leave the pin untouched ({bad!r})")
+    # Sentinel: a REAL machine still lands, so the refusals above are the rule
+    # and not a broken fixture.
+    r = hctx.client.post(
+        f"/api/members/{member_id}/relocate",
+        json={"machine_id": hctx.machine_id}, headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["desired_machine_id"] == hctx.machine_id
+    # "" clears the pin — the member then has no placement.
+    r = hctx.client.post(
+        f"/api/members/{member_id}/relocate", json={"machine_id": ""}, headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["desired_machine_id"] == ""
+
+
+def test_activate_requires_a_machine_that_resolves(hctx: HCtx) -> None:
+    """activate's machine bind is held to the SAME rule as relocate: a non-blank
+    machine_id must resolve. It matters most here because activate flips
+    desired_state online in the same call — a refused bind must leave BOTH the
+    pin and the desired_state untouched, never a member that wants to be online
+    on a machine that does not exist."""
+    member_id = hctx.fresh_member()
+    h = _auth(hctx.owner_token)
+    before = hctx.client.get(f"/api/members/{member_id}", headers=h).json()
+    for bad in ("auto", "warden-nope"):
+        r = hctx.client.post(
+            f"/api/members/{member_id}/activate", json={"machine_id": bad}, headers=h)
+        assert r.status_code == 404, f"{bad!r}: {r.status_code} {r.text[:200]}"
+        got = hctx.client.get(f"/api/members/{member_id}", headers=h).json()
+        assert got["desired_machine_id"] == before["desired_machine_id"], (
+            f"a refused activate must leave the pin untouched ({bad!r})")
+        assert got["desired_state"] != "online", (
+            f"a refused activate must not wake the member ({bad!r})")
+    # Sentinel: a REAL machine activates and pins in one call.
+    r = hctx.client.post(
+        f"/api/members/{member_id}/activate",
+        json={"machine_id": hctx.machine_id}, headers=h)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["desired_machine_id"] == hctx.machine_id, body
+    assert body["desired_state"] == "online", body
+
+
+def test_outsource_worker_relocate_requires_a_machine_that_resolves(
+    hctx: HCtx,
+) -> None:
+    """The worker twin of the member rule. No black-box path mints a worker, so
+    the positive face is DEGRADED to "the machine resolve passed and the WORKER
+    is what 404s" — distinguishable because a refused machine names the machine
+    in the error message, while a resolved one names the worker."""
+    h = _auth(hctx.owner_token)
+    for bad in ("auto", "warden-nope"):
+        r = hctx.client.post(
+            "/api/outsource-workers/ow-nope/relocate",
+            json={"machine_id": bad}, headers=h)
+        assert r.status_code == 404, f"{bad!r}: {r.status_code} {r.text[:200]}"
+        assert f"machine '{bad}' not found" in r.text, r.text
+    r = hctx.client.post(
+        "/api/outsource-workers/ow-nope/relocate",
+        json={"machine_id": hctx.machine_id}, headers=h)
+    assert r.status_code == 404, r.text
+    assert "machine" not in r.json()["error"]["message"], (
+        "a resolvable machine must let the request reach the worker resolve")
 
 
 # ── share-sig semantics (the ?sig= third auth path on the blob GET) ─────────

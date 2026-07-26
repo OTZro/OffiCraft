@@ -192,7 +192,7 @@ func TestEventsHandler_UndeliveredWardenCommandsAreAccountedFor(t *testing.T) {
 	if len(pending) != 1 {
 		t.Fatalf("exactly the update frame must be requeued, got %d frames back", len(pending))
 	}
-	digest, ok := decodeWardenCommandFrame(pending[0])
+	digest, ok := decodeWardenCommandFrame(pending[0].Frame)
 	if !ok || digest.Verb != reconcileCmdUpdate {
 		t.Fatalf("the requeued frame must be the update, got %+v", digest)
 	}
@@ -221,11 +221,11 @@ func TestEventsHandler_UndeliveredWardenCommandsAreAccountedFor(t *testing.T) {
 // flap — the requeue is a retry, not a leak.
 func TestReturnUndeliveredCommands_UpdateRequeueIsIdempotent(t *testing.T) {
 	h := NewHub()
-	frame := cmdFrame(t, reconcileCmdUpdate, "mach-a")
+	frame := cmdFrame(t, reconcileCmdUpdate, "m-1")
 	captureStderr(t, func() {
 		for i := 0; i < 5; i++ {
 			pending := h.DrainWardenCommands("mach-a")
-			pending = append(pending, frame)
+			pending = append(pending, wardenCmd{Subject: "m-1", Frame: frame})
 			h.ReturnUndeliveredCommands("mach-a", pending)
 		}
 	})
@@ -234,12 +234,55 @@ func TestReturnUndeliveredCommands_UpdateRequeueIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestReturnUndeliveredCommands_RequeuedFrameLeadsFramesThatArrivedLater: a
+// restored frame goes back at the HEAD of the FIFO, ahead of anything enqueued
+// while the doomed write was still in flight.
+//
+// This is an ORDER property, and order is the one thing a count assertion cannot
+// see: `append(queue, back...)` restores exactly the right NUMBER of frames and
+// is wrong in the way that is hardest to notice. It matters because a warden
+// command sequence is order-significant — a `stop` that overtakes its own `start`
+// reaps the session that start was meant to create.
+//
+// hub.go states this rule in a comment; before T-66a2 a test on the (now removed)
+// RequeueWardenCommands enforced it. Nothing did afterwards: reversing the append
+// left the whole suite green, on this branch AND on trunk. This is that guard,
+// restored at the layer that survived.
+func TestReturnUndeliveredCommands_RequeuedFrameLeadsFramesThatArrivedLater(t *testing.T) {
+	h := NewHub()
+	h.EnqueueWardenCommandFor("mach-a", "m-lost", cmdFrame(t, reconcileCmdUpdate, "m-lost"))
+
+	pending := h.DrainWardenCommands("mach-a")
+	if len(pending) != 1 {
+		t.Fatalf("precondition: want 1 drained frame, got %d", len(pending))
+	}
+	// A NEW command is enqueued while the doomed write is still in flight — it is
+	// therefore NEWER than the frame that failed, and must queue behind it.
+	h.EnqueueWardenCommandFor("mach-a", "m-later", cmdFrame(t, reconcileCmdUpdate, "m-later"))
+	captureStderr(t, func() { h.ReturnUndeliveredCommands("mach-a", pending) })
+
+	back := h.DrainWardenCommands("mach-a")
+	want := []string{"m-lost", "m-later"}
+	if len(back) != len(want) {
+		t.Fatalf("want %d queued frames, got %d", len(want), len(back))
+	}
+	for i := range want {
+		digest, ok := decodeWardenCommandFrame(back[i].Frame)
+		if !ok || digest.MemberID != want[i] {
+			t.Fatalf("frame[%d] acts on %q, want %q — the restored frame must lead the "+
+				"one that arrived during the failed write, or a later command can "+
+				"overtake the one it depends on", i, digest.MemberID, want[i])
+		}
+	}
+}
+
 // A fresh dispatch clears the stale loss note: the diagnosis explains ONE lost
 // dispatch, never the attempt now in flight.
 func TestEnqueueWardenCommand_ClearsStaleUndeliveredNote(t *testing.T) {
 	h := NewHub()
 	captureStderr(t, func() {
-		h.ReturnUndeliveredCommands("mach-a", [][]byte{cmdFrame(t, reconcileCmdStart, "m-1")})
+		h.ReturnUndeliveredCommands("mach-a",
+			[]wardenCmd{{Subject: "m-1", Frame: cmdFrame(t, reconcileCmdStart, "m-1")}})
 	})
 	if _, lost := h.UndeliveredCommandSince("m-1", 0); !lost {
 		t.Fatal("the loss must be noted first")
@@ -396,7 +439,7 @@ func TestReconcile_StaleUndeliveredNoteDoesNotExplainANewWake(t *testing.T) {
 	// An old loss, recorded well before this wake ever started.
 	captureStderr(t, func() {
 		s.hub.ReturnUndeliveredCommands("mach-live",
-			[][]byte{cmdFrame(t, reconcileCmdStart, "m-boot")})
+			[]wardenCmd{{Subject: "m-boot", Frame: cmdFrame(t, reconcileCmdStart, "m-boot")}})
 	})
 
 	m := testAgent("m-boot")

@@ -16,6 +16,7 @@ package main
 // is exactly what a re-exec does. No process is started or stopped.
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -65,6 +66,19 @@ func deliverPending(t *testing.T, api *apiServer, wardenID string, want int) [][
 		return len(w.written()) >= want+1 // +1: the handler's ": connected" preamble
 	})
 	return w.written()
+}
+
+// containsWrite reports whether one of the raw socket writes IS this frame.
+// Distinct from hub.containsFrame, which searches the QUEUE — since T-e0e3 the
+// queue holds wardenCmd{Subject, Frame}, while what the stream loop wrote is
+// bare wire text with no subject attached.
+func containsWrite(writes [][]byte, frame []byte) bool {
+	for _, w := range writes {
+		if bytes.Equal(w, frame) {
+			return true
+		}
+	}
+	return false
 }
 
 // assertNotStoredAnywhere fails if `secret` appears in ANY column of ANY row of
@@ -171,11 +185,23 @@ func TestWardenCommandQueue_UpdateSurvivesServerRestart(t *testing.T) {
 	// ── the restart (an upgrade re-execs the server — this IS the race).
 	second := bootServer(t, dal)
 
+	// The restored frame must stay ATTRIBUTABLE to the member it acts on: one
+	// machine's queue is shared by everybody placed there, so an untagged
+	// rehydration makes the per-subject read blind to exactly the frame the
+	// restart preserved. Read BEFORE the drain below — the drain pops, so a
+	// read placed after it measures an empty queue and asserts nothing.
+	//
+	// MUTANT: drop the `Subject: c.MemberID` tag in BindWardenCommandStore
+	// (hub.go) → the per-subject read returns 0 → RED.
+	if got := second.hub.PendingWardenCommandsFor("mach-a", "mach-a"); got != 1 {
+		t.Fatalf("the restored frame must still be attributable to its subject, got %d", got)
+	}
+
 	pending := second.hub.DrainWardenCommands("mach-a")
 	if len(pending) != 1 {
 		t.Fatalf("the pending update must survive the restart, got %d frame(s)", len(pending))
 	}
-	digest, ok := decodeWardenCommandFrame(pending[0])
+	digest, ok := decodeWardenCommandFrame(pending[0].Frame)
 	if !ok || digest.Verb != reconcileCmdUpdate || digest.MemberID != "mach-a" {
 		t.Fatalf("the restored frame must be the update for mach-a, got %+v (ok=%v)", digest, ok)
 	}
@@ -185,7 +211,7 @@ func TestWardenCommandQueue_UpdateSurvivesServerRestart(t *testing.T) {
 	// second's copy) and watch the frame go out.
 	third := bootServer(t, dal)
 	delivered := deliverPending(t, third, "mach-a", 1)
-	if !containsFrame(delivered, pending[0]) {
+	if !containsWrite(delivered, pending[0].Frame) {
 		t.Fatalf("the restored update must be written to the warden, got %d write(s)", len(delivered))
 	}
 	if n := countQueued(t, dal); n != 0 {
@@ -208,7 +234,7 @@ func TestWardenCommandQueue_DeliveredUpdateIsNotResentAfterRestart(t *testing.T)
 	frame := cmdFrame(t, reconcileCmdUpdate, "mach-a")
 	api.hub.EnqueueWardenCommand("mach-a", frame)
 
-	if delivered := deliverPending(t, api, "mach-a", 1); !containsFrame(delivered, frame) {
+	if delivered := deliverPending(t, api, "mach-a", 1); !containsWrite(delivered, frame) {
 		t.Fatal("the update must reach the warden on the ordinary path")
 	}
 	if n := countQueued(t, dal); n != 0 {
@@ -438,7 +464,7 @@ func TestWardenCommandQueue_RestoreKeepsFIFOOrder(t *testing.T) {
 		t.Fatalf("expected %d restored frames, got %d", len(order), len(pending))
 	}
 	for i, want := range order {
-		digest, ok := decodeWardenCommandFrame(pending[i])
+		digest, ok := decodeWardenCommandFrame(pending[i].Frame)
 		if !ok || digest.MemberID != want {
 			t.Fatalf("the restored FIFO must keep enqueue order: position %d is %+v, want %q",
 				i, digest, want)

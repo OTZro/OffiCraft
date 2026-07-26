@@ -696,7 +696,7 @@ func TestHandleUpgradeMachine(t *testing.T) {
 		if len(frames) != 1 {
 			t.Fatalf("warden FIFO = %d frames, want 1", len(frames))
 		}
-		text := string(frames[0])
+		text := string(frames[0].Frame)
 		if !strings.HasPrefix(text, "data: ") {
 			t.Fatalf("frame is not a bare data: event: %q", text)
 		}

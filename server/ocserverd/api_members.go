@@ -274,6 +274,18 @@ func (s *apiServer) HandleActivateMemberApiMembersMemberIdActivatePost(w http.Re
 		writeResolveError(w, err, "member", memberId)
 		return
 	}
+	// The machine bind is held to the SAME rule as every other placement write
+	// face: any non-blank id must name a real machine. activate is the one that
+	// most needs it — it flips desired_state online in the same call, so an
+	// unreachable pin here manufactures exactly the "wants to be online, can
+	// never be dispatched, never heals" member this validation exists to prevent.
+	// "" still clears the pin (the member then waits for a placement).
+	if body.MachineId != nil && *body.MachineId != "" {
+		if _, err := s.resolveMachine(*body.MachineId); err != nil {
+			writeResolveError(w, err, "machine", *body.MachineId)
+			return
+		}
+	}
 	m.StoppingSince = 0.0
 	m.WakingSince = 0.0
 	m.DesiredState = DesiredStateOnline
@@ -326,9 +338,14 @@ func (s *apiServer) HandleActivateMemberApiMembersMemberIdActivatePost(w http.Re
 // the old session so the next tick re-spawns on the pin), an offline member just
 // re-pins so the next wake lands there. PLACEMENT ONLY — unlike activate it NEVER
 // touches desired_state (or the stopping/waking anchors): a relocate is not a
-// wake. 404 for an unknown / removed member; a concrete (non-"", non-"auto") pin
-// that names no real machine is a 404, so a stale/typo'd id never pins the member
-// to a placement that can never boot (the worker-relocate reasoning).
+// wake. 404 for an unknown / removed member; any non-"" machine_id that names no
+// real machine is a 404, so a stale/typo'd id never pins the member to a
+// placement that can never boot (the worker-relocate reasoning). "" clears the
+// pin — the member then has no placement and will not be started until the owner
+// picks one. The literal "auto" is NOT exempt from the resolve: it used to be
+// waved through as a pseudo-machine, which pinned the member to a destination
+// dispatch could never reach (IsOnline("auto") is always false) and reconcile
+// never healed — the very hole a nonexistent concrete id was already 404'd for.
 func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.ResponseWriter, r *http.Request, memberId string) {
 	var body MemberRelocateDTO
 	if !decodeJSONBody(w, r, &body) {
@@ -338,7 +355,7 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 	if body.MachineId != nil {
 		machineID = *body.MachineId
 	}
-	if machineID != "" && machineID != "auto" {
+	if machineID != "" {
 		if _, err := s.resolveMachine(machineID); err != nil {
 			writeResolveError(w, err, "machine", machineID)
 			return

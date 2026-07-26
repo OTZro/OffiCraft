@@ -191,6 +191,68 @@ func TestAgentSuppliedAssigneeIs403OnCreateAndEdit(t *testing.T) {
 	}
 }
 
+// TestManualOutsourceAssigneeMachineMustNameARealMachine pins the assignee's
+// `machine` contract on BOTH handlers: "auto" is a flat 400 (it names no
+// machine), a shaped-but-unknown id is the resolve 404, and a real machine id
+// lands — so every worker of the type has somewhere to boot.
+func TestManualOutsourceAssigneeMachineMustNameARealMachine(t *testing.T) {
+	api := newTasksTestServer(t)
+	seedMachine(t, api, "m-real")
+
+	create := func(typeKey, machine string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		api.HandleCreateTaskManualApiTaskManualsPost(rec, taskReq(t, "POST",
+			"/api/task-manuals", map[string]any{"type_key": typeKey,
+				"assignee": map[string]any{"kind": "outsource", "machine": machine}},
+			"owner", "owner"))
+		return rec
+	}
+	update := func(typeKey, machine string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		api.HandleUpdateTaskManualApiTaskManualsTypeKeyPost(rec, taskReq(t, "POST",
+			"/x", map[string]any{
+				"assignee": map[string]any{"kind": "outsource", "machine": machine}},
+			"owner", "owner"), typeKey)
+		return rec
+	}
+
+	// SENTINEL: a real machine id is accepted and stored, on both faces.
+	if rec := create("ok-type", "m-real"); rec.Code != http.StatusOK {
+		t.Fatalf("create with a real machine must 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	if m, _ := api.dal.GetTaskManual("ok-type"); m == nil ||
+		!strings.Contains(m.Assignee, `"machine":"m-real"`) {
+		t.Fatalf("the assignee machine must land: %+v", m)
+	}
+	if rec := update("ok-type", "m-real"); rec.Code != http.StatusOK {
+		t.Fatalf("update with a real machine must 200, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	for _, tc := range []struct {
+		machine string
+		want    int
+	}{
+		{"auto", http.StatusBadRequest},  // never a machine — refused on shape
+		{"m-ghost", http.StatusNotFound}, // shaped fine, names nothing
+	} {
+		if rec := create("bad-"+tc.machine, tc.machine); rec.Code != tc.want {
+			t.Fatalf("create machine %q: want %d, got %d %s",
+				tc.machine, tc.want, rec.Code, rec.Body.String())
+		}
+		if m, _ := api.dal.GetTaskManual("bad-" + tc.machine); m != nil {
+			t.Fatalf("a refused create must write nothing, got %+v", m)
+		}
+		if rec := update("ok-type", tc.machine); rec.Code != tc.want {
+			t.Fatalf("update machine %q: want %d, got %d %s",
+				tc.machine, tc.want, rec.Code, rec.Body.String())
+		}
+		if m, _ := api.dal.GetTaskManual("ok-type"); m == nil ||
+			!strings.Contains(m.Assignee, `"machine":"m-real"`) {
+			t.Fatalf("a refused update must leave the assignee alone: %+v", m)
+		}
+	}
+}
+
 func TestOwnerAssigneeOnCreateIsValidatedAndApplied(t *testing.T) {
 	api := newTasksTestServer(t)
 

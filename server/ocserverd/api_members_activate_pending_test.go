@@ -127,6 +127,61 @@ func TestActivateMember_UnbuildableFrameSurfacesPending(t *testing.T) {
 	}
 }
 
+// TestActivateMember_RejectsUnresolvableMachine: activate is a placement write
+// face like relocate, and the one that most needs the rule — it flips
+// desired_state=online in the SAME call, so an unresolvable pin accepted here
+// manufactures a member that wants to be online and can never be dispatched.
+// Any non-blank machine_id must name a real machine; "" still clears the pin.
+func TestActivateMember_RejectsUnresolvableMachine(t *testing.T) {
+	s := newReconcileTestServer(t)
+	putWarden(t, s, "mach-real")
+	connectOnline(t, s, "mach-real")
+
+	m := testAgent("m-act")
+	m.DesiredState = DesiredStateOffline
+	m.DesiredMachineID = "mach-real"
+	putTestMember(t, s, m)
+
+	activate := func(body map[string]any) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		s.HandleActivateMemberApiMembersMemberIdActivatePost(rec,
+			taskReq(t, "POST", "/api/members/m-act/activate", body, wireOwnerID, "owner"),
+			"m-act")
+		return rec
+	}
+
+	for _, machineID := range []string{"auto", "mach-ghost"} {
+		if rec := activate(map[string]any{"machine_id": machineID}); rec.Code != http.StatusNotFound {
+			t.Fatalf("machine_id %q must 404, got %d %s", machineID, rec.Code, rec.Body.String())
+		}
+		got, _ := s.dal.GetMember("m-act")
+		if got == nil || got.DesiredMachineID != "mach-real" {
+			t.Fatalf("a refused %q activate must leave the pin alone: %+v", machineID, got)
+		}
+		if got.DesiredState != DesiredStateOffline {
+			t.Fatalf("a refused %q activate must not flip desired_state: %+v", machineID, got)
+		}
+	}
+
+	// SENTINEL: a real machine id still activates and stores the pin, so the
+	// refusals above are the validation, not a broken fixture.
+	if rec := activate(map[string]any{"machine_id": "mach-real"}); rec.Code != http.StatusOK {
+		t.Fatalf("concrete machine activate must 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	got, _ := s.dal.GetMember("m-act")
+	if got == nil || got.DesiredMachineID != "mach-real" || got.DesiredState != DesiredStateOnline {
+		t.Fatalf("a resolvable pin must activate and store: %+v", got)
+	}
+
+	// "" is the legal clear — the member is woken with no placement at all.
+	if rec := activate(map[string]any{"machine_id": ""}); rec.Code != http.StatusOK {
+		t.Fatalf("clearing the pin must 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	if got, _ := s.dal.GetMember("m-act"); got == nil || got.DesiredMachineID != "" {
+		t.Fatalf("\"\" must clear the pin: %+v", got)
+	}
+}
+
 // Positive control for the "or already online" arm: activating a member who is
 // ALREADY online decides `none` legitimately (nothing to start), and that must
 // not be reported as pending.

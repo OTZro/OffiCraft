@@ -584,8 +584,10 @@ func TestOutsourceWorkerFoldMigration(t *testing.T) {
 		t.Fatalf("released fold wrong: %+v", rel)
 	}
 	act := read("ow-act")
+	// 00035 normalizes the legacy "auto" placement to "" (owner ruling
+	// 2026-07-25: "auto" never named a real machine).
 	if act.roster != "active" || act.activated != 300 || act.desired != "offline" ||
-		act.desiredMachine != "auto" || act.refocus != 42.0 {
+		act.desiredMachine != "" || act.refocus != 42.0 {
 		t.Fatalf("active fold wrong: %+v", act)
 	}
 	asn := read("ow-asn")
@@ -890,5 +892,82 @@ func TestMigration00028DownRestoresStepStatusByStartedTS(t *testing.T) {
 	}
 	if s := stepStatus("p-done"); s != "done" {
 		t.Fatalf("the done prefix must stay done through the round-trip, got %q", s)
+	}
+}
+
+// TestMigration00035NormalizesAutoMachinePlacement pins the 00035 normalization:
+// the legacy literal 'auto' — which never named a warden, so the placement was
+// unreachable — becomes ” in ALL THREE stores that carried it, while every real
+// machine id (and every already-empty value) is left untouched.
+func TestMigration00035NormalizesAutoMachinePlacement(t *testing.T) {
+	db, err := openSQLite(filepath.Join(t.TempDir(), "auto-norm.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	if err := runMigrations(db); err != nil {
+		t.Fatalf("goose up: %v", err)
+	}
+	// Seed the pre-normalization world (the version just below this migration).
+	if err := goose.DownTo(db, "migrations", 33); err != nil {
+		t.Fatalf("down to 33: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO member (id, name, kind, desired_machine_id) VALUES
+		('m-auto', 'Auto', 'assistant', 'auto'),
+		('m-real', 'Real', 'assistant', 'm-box'),
+		('m-none', 'None', 'assistant', '')`); err != nil {
+		t.Fatalf("seed members: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO task (id, title, outsource_machine) VALUES
+		('t-auto', 'auto placed', 'auto'),
+		('t-real', 'box placed', 'm-box'),
+		('t-none', 'unplaced', '')`); err != nil {
+		t.Fatalf("seed tasks: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO task_manual (type_key, assignee) VALUES
+		('tm-auto', '{"kind":"outsource","model":"opus","machine":"auto"}'),
+		('tm-real', '{"kind":"outsource","model":"opus","machine":"m-box"}'),
+		('tm-member', '{"kind":"member","member_id":"m-real"}')`); err != nil {
+		t.Fatalf("seed manuals: %v", err)
+	}
+
+	if err := runMigrations(db); err != nil {
+		t.Fatalf("normalize up: %v", err)
+	}
+
+	scalar := func(query, id string) string {
+		t.Helper()
+		var got string
+		if err := db.QueryRow(query, id).Scan(&got); err != nil {
+			t.Fatalf("read %s: %v", id, err)
+		}
+		return got
+	}
+	const (
+		memberQ = `SELECT desired_machine_id FROM member WHERE id = ?`
+		taskQ   = `SELECT outsource_machine FROM task WHERE id = ?`
+		manualQ = `SELECT COALESCE(json_extract(assignee, '$.machine'), '<absent>')
+		             FROM task_manual WHERE type_key = ?`
+	)
+	for _, tc := range []struct{ what, query, id, want string }{
+		{"member auto", memberQ, "m-auto", ""},
+		{"member real", memberQ, "m-real", "m-box"},
+		{"member empty", memberQ, "m-none", ""},
+		{"task auto", taskQ, "t-auto", ""},
+		{"task real", taskQ, "t-real", "m-box"},
+		{"task empty", taskQ, "t-none", ""},
+		{"manual auto", manualQ, "tm-auto", ""},
+		{"manual real", manualQ, "tm-real", "m-box"},
+		{"manual member assignee", manualQ, "tm-member", "<absent>"},
+	} {
+		if got := scalar(tc.query, tc.id); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.what, got, tc.want)
+		}
+	}
+	// The member-kind assignee must survive byte-for-byte — json_set on a row
+	// that never carried a machine would rewrite the whole blob.
+	if got := scalar(`SELECT assignee FROM task_manual WHERE type_key = ?`, "tm-member"); got !=
+		`{"kind":"member","member_id":"m-real"}` {
+		t.Errorf("an untouched assignee must not be rewritten, got %q", got)
 	}
 }

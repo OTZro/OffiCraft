@@ -26,9 +26,10 @@
 //   Assignee edit — segmented 指定成員/外包 toggle; model = the member panel's
 //                   quick-pick chips (MODEL_QUICK_PICKS — the same source as
 //                   ModelEffortEditor) + free input; 投入程度 = 低/中/高
-//                   segmented; 機器 = 自動分配 + the machines list (states
-//                   joined honestly from /api/machines + monitoring agents:
-//                   閒置/忙碌/離線); 雇用數量 = −/＋ stepper + 無限 (wire
+//                   segmented; 機器 = the machines list, one of which must be
+//                   chosen for the type to run at all (states joined honestly
+//                   from /api/machines + monitoring agents: 閒置/忙碌/離線);
+//                   雇用數量 = −/＋ stepper + 無限 (wire
 //                   copies=0 = unlimited, spec TaskManualDTO).
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -855,7 +856,8 @@ function AssigneeCard({
   const [effortDraft, setEffortDraft] = useState("medium");
   // copies: >=1 = a finite count; 0 = 無限 (wire spec TaskManualDTO).
   const [copiesDraft, setCopiesDraft] = useState(1);
-  const [machineDraft, setMachineDraft] = useState("auto");
+  // "" = no machine chosen; the type then starts no worker until one is picked.
+  const [machineDraft, setMachineDraft] = useState("");
 
   function startEdit() {
     const a = manual.assignee;
@@ -867,7 +869,7 @@ function AssigneeCard({
     setModelDraft(a?.kind === "outsource" ? a.model : "");
     setEffortDraft(a?.kind === "outsource" ? a.effort || "medium" : "medium");
     setCopiesDraft(a?.kind === "outsource" ? Math.max(0, a.copies) : 1);
-    setMachineDraft(a?.kind === "outsource" ? a.machine || "auto" : "auto");
+    setMachineDraft(a?.kind === "outsource" ? a.machine : "");
     setSaveError(false);
     setEditing(true);
   }
@@ -898,7 +900,7 @@ function AssigneeCard({
               model: modelDraft.trim(),
               effort: effortDraft,
               copies: Math.max(0, Math.floor(copiesDraft)),
-              machine: machineDraft || "auto",
+              machine: machineDraft,
             };
     void commitAssignee(assignee);
   }
@@ -930,10 +932,9 @@ function AssigneeCard({
     const effort =
       t.mp.effortLevel((a.effort || "medium") as Effort) ?? a.effort;
     const model = a.model || "—";
-    const machine =
-      !a.machine || a.machine === "auto"
-        ? t.settings.assigneeMachineAuto
-        : machineName(a.machine);
+    const machine = a.machine
+      ? machineName(a.machine)
+      : t.settings.assigneeMachineUnset;
     const copies =
       a.copies === 0 ? t.settings.assigneeUnlimited : `×${a.copies}`;
     return `${t.settings.assigneeKindOutsource} · ${model} · ${effort} · ${machine} · ${copies}`;
@@ -1143,36 +1144,12 @@ function AssigneeCard({
                 />
               </div>
 
-              {/* 機器 — 自動分配 + the honest machines list. */}
+              {/* 機器 — the honest machines list; no machine chosen means no worker starts. */}
               <div className="manual-assignee-editor__section">
                 <div className="manual-assignee-editor__label">
                   {t.settings.assigneeMachineLabel}
                 </div>
                 <div className="manual-pick-list" role="radiogroup">
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={machineDraft === "auto"}
-                    className={`manual-pick-row${
-                      machineDraft === "auto" ? " manual-pick-row--active" : ""
-                    }`}
-                    data-testid="manual-assignee-machine-auto"
-                    onClick={() => setMachineDraft("auto")}
-                  >
-                    <span
-                      className={`manual-pick-row__check${
-                        machineDraft === "auto"
-                          ? " manual-pick-row__check--on"
-                          : ""
-                      }`}
-                    />
-                    <span className="manual-pick-row__name">
-                      {t.settings.assigneeMachineAuto}
-                    </span>
-                    <span className="manual-pick-row__state">
-                      {t.settings.assigneeMachineAutoHint}
-                    </span>
-                  </button>
                   {machines.map((m) => (
                     <button
                       key={m.machineId}

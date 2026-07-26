@@ -320,6 +320,7 @@ func TestReassignToOutsourceLandsUnassignedTarget(t *testing.T) {
 	api.noOutsource = true // hold the scheduler — assert the landing, then tick by hand
 	putActiveMember(t, api, "m-old", "Ken", KindAssistant)
 	task := createAdHocTask(t, api, "m-old")
+	seedMachine(t, api, "m-box")
 
 	rec := reassign(t, api, task.ID, map[string]any{
 		"target": map[string]any{
@@ -828,6 +829,39 @@ func TestSubmitPlanFreshStepsAreBornNeverStarted(t *testing.T) {
 		if st.StartedTS != 0 || st.FinishedTS != 0 {
 			t.Fatalf("fresh pending step %q must be born never-started: %+v", st.Name, st)
 		}
+	}
+}
+
+// TestReassignOutsourceTargetMachineMustResolve: the reassign 發包 target's
+// machine gets the same resolve as create — "auto" and an unknown id are both
+// the 404, a real machine id lands on the task row.
+func TestReassignOutsourceTargetMachineMustResolve(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	putActiveMember(t, api, "m-old", "Ken", KindAssistant)
+	seedMachine(t, api, "m-real")
+	task := createAdHocTask(t, api, "m-old")
+
+	target := func(machine string) map[string]any {
+		return map[string]any{"target": map[string]any{
+			"kind": "outsource", "model": "sonnet", "machine": machine}}
+	}
+	for _, machine := range []string{"auto", "m-ghost"} {
+		if rec := reassign(t, api, task.ID, target(machine), "owner", "owner"); rec.Code != http.StatusNotFound {
+			t.Fatalf("target machine %q must 404, got %d %s",
+				machine, rec.Code, rec.Body.String())
+		}
+		if stored, _ := api.dal.GetTask(task.ID); stored == nil ||
+			stored.ExecutorKind != TaskExecutorMember {
+			t.Fatalf("a refused reassign must not hand the task over: %+v", stored)
+		}
+	}
+	// SENTINEL: the same call with a real machine id succeeds.
+	if rec := reassign(t, api, task.ID, target("m-real"), "owner", "owner"); rec.Code != http.StatusOK {
+		t.Fatalf("concrete machine target must 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	if stored, _ := api.dal.GetTask(task.ID); stored == nil || stored.OutsourceMachine != "m-real" {
+		t.Fatalf("the target machine must land on the task row: %+v", stored)
 	}
 }
 
