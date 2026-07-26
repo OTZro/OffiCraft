@@ -126,6 +126,8 @@ export const MESSAGE_KEYS: readonly string[] = [
   "monitor.machine.deleteConfirmTitle",
   "monitor.machine.deleteError",
   "monitor.machine.deleteMachine",
+  "monitor.machine.hardwareStale",
+  "monitor.machine.hardwareStaleHint",
   "monitor.machine.install",
   "monitor.machine.installRemoteHint",
   "monitor.machine.installTitle",

@@ -720,6 +720,7 @@ function toMonMachine(w: WireMonMachine): MonMachineView {
     runtimeCapabilitiesTs: w.runtime_capabilities_ts ?? null,
     runtimeCapabilitiesStale: w.runtime_capabilities_stale ?? null,
     hardwareTs: w.hardware_ts ?? null,
+    hardwareStale: w.hardware_stale ?? null,
   };
 }
 

@@ -57,6 +57,7 @@ const card = (machineId: string): MonMachineView => ({
   acPower: false,
   // Fresh by construction: this fixture is about the host JOIN, not freshness.
   hardwareTs: Math.floor(Date.now() / 1000),
+  hardwareStale: false,
   runtimeCapabilitiesTs: null,
   runtimeCapabilitiesStale: null,
   binStatus: null,

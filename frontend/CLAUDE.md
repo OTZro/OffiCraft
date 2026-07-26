@@ -210,6 +210,24 @@ one-shot,可重跳);未知/過期 id 誠實自癒(消費 anchor、不高亮)。
 - **`member.effort`(MemberDetailPanel 資訊卡)= owner-intent**:passthrough `w.effort`(缺省 fallback `medium`),是「想要多少」的意圖、非即時值;M2-2 起 owner 可在詳情面板編輯 model/effort(`patchMember`,變更於下次喚醒生效——spawn `--effort` 已改吃 server 下推的 member.effort,空值才 fallback medium)。
 - ⚠️ 別在 MonitorPage 拿 roster 的 member.effort 當徽章——那是假值;一律用 session 自己 telemetry 的 `session.effort`。
 
+## 監控 › 機器表:硬體與 Runtime 的時效(T-90be ⑤ + T-b36a)
+`MonitorPage` 機器表有兩組會過期的 telemetry 欄,**兩組都必須連時效一起顯示**,理由是
+telemetry 只在成員被解僱時清、**斷線不清**,所以資料會比回報它的機器活得久。
+- **新鮮度的裁決在 server**(`hardware_stale` / `runtime_capabilities_stale` 兩個 wire
+  bool)。FE **不准**拿 `hardwareTs` / `runtimeCapabilitiesTs` 跟自己的時鐘比去重推那個
+  90s 窗——門檻只有一個家(server 的 `telemetryFreshSecs`),第二份必然會跟第一份各說各話。
+  戳記欄留在 view model 是給人看的時間點,不是給 UI 算 verdict 的輸入。
+- **CPU / RAM / 電源**:過期時 server 已把數值收回,所以格子落回 dash——但那跟「這台從來
+  沒回報過硬體」是**同一個 dash**。`hardwareStale === true` 時三格各掛一枚 `mon-stale`
+  標記(`data-testid="mon-hardware-stale"`)講清楚 dash 的原因。判斷式只准是 `=== true`:
+  `false` 是活樣本裡誠實的缺值、`null` 是從沒量過,兩者都不准被標成過期。
+- **Runtimes 欄**:`runtimeCapabilityText` 渲染 `claude ✓ · codex ✗`;過期(或年齡未知,
+  `stale !== false`)掛 `mon-stale`,但**值不收回**——「codex 三小時前沒登入」是 worker 卡在
+  `machine_unavailable` 唯一的解釋。**回報的 `false` 是答案**(`installed:false` /
+  `loggedIn:false` → ✗),只有 `null` 才是 `?`,空 map 才是 dash。
+- 護欄:`MonitorPage.hardware-freshness.test.tsx`(過期標記 / 從未回報不標 / 真 0 與真
+  false 仍正確顯示)、`MonitorPage.runtime-capabilities.test.tsx`。
+
 ## 長 token 溢出:單一來源在 `.doc-md` 基底(T-d451)
 owner/agent 自由文字會帶**不可斷的長 token**(長 URL、40-hex sha、無空白長字)。
 沒有斷點時它把容器 min-content 撐到 token 全寬,容器不肯縮、撐破手機視窗,**整頁**

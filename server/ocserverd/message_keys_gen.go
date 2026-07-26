@@ -127,6 +127,8 @@ var messageKeys = map[string]bool{
 	"monitor.machine.deleteConfirmTitle":      true,
 	"monitor.machine.deleteError":             true,
 	"monitor.machine.deleteMachine":           true,
+	"monitor.machine.hardwareStale":           true,
+	"monitor.machine.hardwareStaleHint":       true,
 	"monitor.machine.install":                 true,
 	"monitor.machine.installRemoteHint":       true,
 	"monitor.machine.installTitle":            true,

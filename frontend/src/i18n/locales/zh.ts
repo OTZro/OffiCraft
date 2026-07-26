@@ -940,6 +940,11 @@ export const zh = {
       runtimeStale: "過期",
       runtimeStaleHint: "距離上次探測已久,該機之後沒有再回報,這個能力狀態可能已經不成立",
       runtimeUnknown: "從未探測(舊版 warden,或還沒有心跳)",
+      // 硬體樣本時效(T-b36a):過期的數值 server 會收回,於是 CPU/RAM/電源
+      // 落回 dash——跟「從來沒回報過硬體」是同一個 dash。這兩個標籤就是把兩
+      // 個世界分開的東西,要行動的只有後者(這台失聯了,不是它從沒說過話)。
+      hardwareStale: "過期",
+      hardwareStaleHint: "距離上次量測已久且之後沒有再回報,數值已收回,不以現況呈現",
     },
   },
   settings: {

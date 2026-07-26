@@ -799,8 +799,17 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		// apart. See telemetryFreshSecs for the threshold.
 		if ts := hwTS[host]; ts > 0 {
 			stamp := ts
+			stale := now-ts > telemetryFreshSecs
 			row.HardwareTS = &stamp
-			if hw != nil && now-ts <= telemetryFreshSecs {
+			// The verdict rides the wire next to the stamp for the same reason
+			// runtime_capabilities_stale does: the window lives HERE, and a
+			// cockpit that re-derived it from `now - hardware_ts` would be a
+			// second home for the threshold, judged against a clock this server
+			// has never seen. Without it the only way to render "expired" is to
+			// guess from all-null values — which is wrong for a fresh sample
+			// whose probes all failed (hardware {} is a legal report).
+			row.HardwareStale = &stale
+			if hw != nil && !stale {
 				row.CpuPct = teleNum(hw["cpu_pct"])
 				row.RamPct = teleNum(hw["ram_pct"])
 				row.BatteryPct = teleNum(hw["battery_pct"])

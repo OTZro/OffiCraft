@@ -146,7 +146,19 @@ the durable `member.banked_cost` exactly once per online→offline edge, then po
 
 Identity-from-token: both ingest stores MUST key on the **verified token `sub`**, never a
 self-reported agent id. A non-numeric `context_pct`, or
-a wrong-typed telemetry field, is a flat **400** (not 422).
+a wrong-typed telemetry field, is a flat **400** (not 422) — **EXCEPTION**: the three
+telemetry blocks whose nested shape the spec DECLARES (`hardware` / `claude` / `runtimes`,
+T-90be) are typed as objects, so a non-object THERE is refused by the decoder as a **422**
+before the handler runs. The undeclared blocks (`binaries` / `rate_limits` / `tokens` /
+`command_result` / `self_update`) still answer the flat 400, and so does the all-absent body
+— `{}` and `{"hardware": null}` alike, because a JSON null decodes to an ABSENT field, not
+to a wrong type. The split is where the refusal happens, not how strict the wire is: the
+declared blocks' CONTENTS stay permissive (`additionalProperties` true — an unknown nested
+key must still land, see `TestHandleIngestTelemetry_UndeclaredNestedKeyStillLands`), and an
+empty `hardware: {}` is a 200, because a report whose every probe failed is still a sample.
+The whole table is executable in
+`server/ocserverd/api_monitoring_test.go::TestHandleIngestTelemetry_WrongTypedBlockStatusTable`,
+so this paragraph can only drift from the wire across a red test.
 
 ## 4. Reconcile producer — the decision surface
 

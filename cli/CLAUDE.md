@@ -24,6 +24,15 @@
 - **event-driven kick(T-c93d)+ `update` 動詞(T-5f01)**:self-update 的 15m 輪詢只是 backstop;`updater.Kick()`(buffered-1 去抖)有兩個 producer——SSE transport 每次成功 (re)connect(server 換版必踢斷所有 stream)、與 server push 的 **`update` warden-command 動詞**(owner 座艙一鍵升級 `POST /api/machines/{id}/upgrade` → `CommandDeps.Update` seam → 同一個 Kick)。update 動詞無 receipt(swap 自己會經 telemetry `self_update` 宣告);舊版 warden 對不認得的動詞 = log+skip 安全忽略(transport_test 釘死)。
 - **心跳 binaries 指紋(T-5f01)**:30s telemetry payload 順帶 `binaries: {ocwarden, ocagent}`——live binary 的 sha256 12-hex 前綴(`fingerprint.go`,stat (size,mtime) cache 免每 30s 重讀 multi-MB)。server 拿它比對自己 embed 的 bindist hash 算機器表 `bin_status`(current/stale/缺=unknown)。**刻意 content-hash、不埋版號**(同 self-update swap oracle 理由:埋 sha 必造成 update 迴圈 + 抖 CI parity dryrun)。
 
+## context-report 節流戳記綁 POST 成敗(T-b36a step 1;`cli/ocagent/contextreport.go`)
+`reportThrottleSecs = 30.0` 的戳記(`reportStampPath`,agent home 下的節流檔)**只在這一輪
+所嘗試的每個 POST 都被 server 接受時才寫**(context POST 在 pct 缺席時本來就跳過,不算失敗)。
+原本是無條件寫,兩層傷害:(a) 一個剛更新的戳記是這條路上唯一對外可讀的「我有在送」證據,
+失敗也蓋等於主動論證一件假的事;(b) 它把 30 秒內的重試整個吃掉——對一個回 422 的 server
+打第一次,stderr 印 FAILED、戳記照樣寫下,下一個 tick 被自己失敗的戳記判定為節流,server
+早已恢復也要等下一個窗才知道。⚠️ 別把那行 `writeStamp` 搬回 POST 之前,也別「為了避免打爆
+server」而在失敗路徑補寫戳記——退避是退避,節流戳記是「上一次成功回報在何時」。
+
 ## listen 自救(fail-closed,zombie 防線 B 的 client 半邊)
 `ocagent listen` 兩道自救原本 fail-open(probe 失敗照樣活 = 殭屍永生),已改 fail-closed 帶寬限(`listen.go` 常數 + `listen_run.go` foldProbe/foldRefusal):
 - **tmux session probe 三態**:alive / gone(tmux 明確答「無此 session」→ 2 連 miss 即自殺,不變)/ unknown(tmux 解析不到、spawn fault、timeout → 不再永遠當 alive:連續 `probeUnknownMin`(8)次 ∧ 滿 `probeUnknownGrace`(10min)才 self-exit;unknown 會重置 gone debounce,絕不瞬殺健康 listener)。

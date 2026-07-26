@@ -67,6 +67,7 @@ const card = (
   batteryPct: null,
   acPower: null,
   hardwareTs: null,
+  hardwareStale: null,
   runtimeCapabilities: capabilities,
   runtimeCapabilitiesTs: stale == null ? null : 1_700_000_000,
   runtimeCapabilitiesStale: stale,

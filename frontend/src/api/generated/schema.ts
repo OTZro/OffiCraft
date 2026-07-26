@@ -4384,6 +4384,11 @@ export interface components {
              * @description Epoch seconds when the served hardware sample was MEASURED; null = no sample, or a sample whose age is unknown. Per-machine and per-sample on purpose (T-b36a): the telemetry entry's own ts advances on every report, so a command receipt carrying no hardware would make a long-dead CPU number look like it arrived a second ago. A non-null stamp with null cpu/ram/battery/ac means the sample expired — 'nobody has measured this box lately', which is a different fact from 'this box never reported hardware' (both null) and must stay distinguishable.
              */
             hardware_ts?: number | null;
+            /**
+             * Hardware Stale
+             * @description Whether the hardware sample behind ``hardware_ts`` is older than the server's freshness window; null = no sample was ever taken. Same window, same SERVER-side verdict as ``runtime_capabilities_stale`` (T-b36a) — the threshold has exactly one home and no client re-derives it from its own clock. True is what tells the two blank rows apart: cpu/ram/battery/ac are null here BECAUSE the sample expired ('nobody has measured this box lately'), not because the box has never reported hardware (``hardware_ts`` null too). A client that only reads the values collapses those two worlds back into one dash.
+             */
+            hardware_stale?: boolean | null;
             /** Machine */
             machine: string;
             /** Ram Pct */

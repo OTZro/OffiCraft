@@ -181,6 +181,73 @@ func TestHandleIngestTelemetry_ClaudeProbeFoldAndEcho(t *testing.T) {
 	}
 }
 
+// TestHandleIngestTelemetry_WrongTypedBlockStatusTable is the executable copy of
+// the refusal-code table in spec/lifecycle.md §3 (and its restatement in
+// conformance/CLAUDE.md). That doc line used to say a wrong-typed telemetry
+// field is a flat 400, full stop — and it went on saying it after T-90be moved
+// three of the blocks into the decoder, i.e. the normative source of truth for
+// conformance was describing a wire that no longer existed.
+//
+// The split is not cosmetic: 400 is the handler REFUSING a value it understood,
+// 422 is the decoder refusing to build the request at all, and a black-box suite
+// asserting the wrong one either goes red on correct behaviour or stays green on
+// a regression. Pinning it here means the doc can only drift from the code
+// across a red test.
+func TestHandleIngestTelemetry_WrongTypedBlockStatusTable(t *testing.T) {
+	// DECLARED shape (T-90be) => codegen types the field as an object => a
+	// non-object never reaches the handler, so the refusal is the decoder's 422.
+	for _, field := range []string{"hardware", "claude", "runtimes"} {
+		for _, value := range []string{`"not-an-object"`, `5`, `[]`} {
+			api := &apiServer{telemetry: newMemStore(), hub: NewHub()}
+			body := `{"` + field + `": ` + value + `}`
+			if rec := doIngestTelemetry(api, "m-1", "m-1", body); rec.Code != 422 {
+				t.Errorf("%s = %d, want 422 — this block declares its shape, so the "+
+					"decoder refuses it before the handler runs", body, rec.Code)
+			}
+		}
+	}
+	// UNDECLARED blocks are still permissive `any` on the generated type, so the
+	// handler's own asObject check answers, and it answers with the flat 400 the
+	// spec line describes. Both halves have to be pinned: a test that only knew
+	// about the 422 would happily accept someone declaring these too, which is
+	// the change that turns an unknown nested key into a rejected report.
+	for _, field := range []string{
+		"binaries", "rate_limits", "tokens", "command_result", "self_update",
+	} {
+		api := &apiServer{telemetry: newMemStore(), hub: NewHub()}
+		body := `{"` + field + `": "not-an-object"}`
+		if rec := doIngestTelemetry(api, "m-1", "m-1", body); rec.Code != 400 {
+			t.Errorf("%s = %d, want 400 — an undeclared block is refused by the "+
+				"handler, not by the decoder", body, rec.Code)
+		}
+	}
+	// A JSON null is not a wrong TYPE — it decodes to an absent field, so a body
+	// whose only key is null lands in the all-absent 400 with `{}`. Declaring the
+	// shape did NOT move this case, and the doc says so; if it ever became a 422
+	// a warden clearing a block would start getting a different error class than
+	// a warden sending nothing.
+	for _, body := range []string{
+		`{"hardware": null}`, `{"claude": null}`, `{"runtimes": null}`, `{}`,
+	} {
+		api := &apiServer{telemetry: newMemStore(), hub: NewHub()}
+		rec := doIngestTelemetry(api, "m-1", "m-1", body)
+		if rec.Code != 400 {
+			t.Errorf("%s = %d, want 400 (all-absent)", body, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "is required") {
+			t.Errorf("%s: %s, want the all-absent refusal, not a type refusal",
+				body, rec.Body.String())
+		}
+	}
+	// And the empty OBJECT is not a refusal at all: a warden whose every probe
+	// failed reports `hardware: {}`, which is a real (if contentless) sample.
+	api := &apiServer{telemetry: newMemStore(), hub: NewHub()}
+	if rec := doIngestTelemetry(api, "m-1", "m-1", `{"hardware": {}}`); rec.Code != 200 {
+		t.Errorf(`{"hardware": {}} = %d, want 200 — an empty sample is a sample`,
+			rec.Code)
+	}
+}
+
 // TestHandleIngestTelemetry_UndeclaredNestedKeyStillLands is the compatibility
 // SENTINEL for the nested declaration (T-90be, owner ruling rc-55861dd893c6).
 //
@@ -1006,8 +1073,22 @@ func TestGetMonitoring_UnstampedHardwareIsNotFresh(t *testing.T) {
 	delete(entry, "hardware_ts")
 	s.telemetry.Set("mira", entry)
 
-	if got := machineRow(t, s, "m-abc123")["cpu_pct"]; got != nil {
+	row := machineRow(t, s, "m-abc123")
+	if got := row["cpu_pct"]; got != nil {
 		t.Errorf("cpu_pct = %v, want null — hardware of unknown age is not fresh", got)
+	}
+	// And the stamp fields go with it. This half was untested and it is the half
+	// that decides what the cockpit SAYS: withholding the number while emitting a
+	// stamp (or a stale verdict) would claim "measured at <some time>, too old",
+	// which is a fact the server does not have. An undateable sample is reported
+	// as no sample — the same honest blank a machine that never measured gets.
+	if got, present := row["hardware_ts"]; !present || got != nil {
+		t.Errorf("hardware_ts = %v, want null — a sample the server cannot date "+
+			"must not be given a time it never had", got)
+	}
+	if got, present := row["hardware_stale"]; !present || got != nil {
+		t.Errorf("hardware_stale = %v, want null — 'stale' is a verdict about a "+
+			"known age; unknown age is neither fresh nor stale", got)
 	}
 }
 
@@ -1093,6 +1174,14 @@ func TestGetMonitoring_StaleHardwareKeepsItsStamp(t *testing.T) {
 			"a stamp that advances on read would say the expired numbers are fresh",
 			age, telemetryFreshSecs+600)
 	}
+	// The stamp alone does not tell a client WHY the numbers are missing; it
+	// would have to re-derive the window against its own clock to find out. The
+	// verdict rides along so the threshold keeps exactly one home.
+	if got := row["hardware_stale"]; got != true {
+		t.Errorf("hardware_stale = %v, want true — this is the field that says the "+
+			"blanks mean 'nobody has measured this box lately' rather than "+
+			"'this box has never reported hardware'", got)
+	}
 }
 
 // TestGetMonitoring_NeverReportedHardwareHasNoStamp is the other half: a machine
@@ -1112,6 +1201,11 @@ func TestGetMonitoring_NeverReportedHardwareHasNoStamp(t *testing.T) {
 	row := machineRow(t, s, "m-abc123")
 	if got, present := row["hardware_ts"]; !present || got != nil {
 		t.Errorf("hardware_ts = %v, want null — no sample means no sample time", got)
+	}
+	if got, present := row["hardware_stale"]; !present || got != nil {
+		t.Errorf("hardware_stale = %v, want null — a machine that never measured is "+
+			"not 'stale'; branding it so would send an operator after a box that "+
+			"has nothing to report in the first place", got)
 	}
 	if got, present := row["runtime_capabilities_stale"]; !present || got != nil {
 		t.Errorf("runtime_capabilities_stale = %v, want null — a machine that never "+
@@ -1137,6 +1231,14 @@ func TestGetMonitoring_FreshHardwareCarriesAStampAndItsZeroes(t *testing.T) {
 	ts, ok := row["hardware_ts"].(float64)
 	if !ok || nowSecs()-ts > 5 {
 		t.Errorf("hardware_ts = %v, want the just-taken sample time", row["hardware_ts"])
+	}
+	// Straight off the real ingest path, nothing rewritten: a sample that just
+	// arrived must be declared FRESH. This is what goes red if the verdict is
+	// ever wired backwards — and a wrong `true` here would brand every healthy
+	// machine on screen as out of date.
+	if got := row["hardware_stale"]; got != false {
+		t.Errorf("hardware_stale = %v, want false — a sample taken seconds ago is "+
+			"current, and its measured zeroes are real readings", got)
 	}
 }
 

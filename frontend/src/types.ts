@@ -394,6 +394,15 @@ export interface MonMachineView {
    * and the only reason an operator can tell the two apart.
    */
   hardwareTs: number | null;
+  /**
+   * The server's verdict on that stamp: true = the sample expired, which is WHY
+   * cpu/ram/battery/acPower are null on this row; false = the nulls are honest
+   * absences in a live sample; null = nothing was ever measured. The UI must
+   * read THIS rather than compare `hardwareTs` against its own clock — the 90s
+   * window has one home (server-side), and "all four values are null" is not a
+   * substitute (a fresh report whose probes all failed looks identical).
+   */
+  hardwareStale: boolean | null;
   claudeCredSource: ClaudeCredSource;
   claudeSubReadable: boolean | null;
 }

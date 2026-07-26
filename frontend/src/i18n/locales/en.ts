@@ -849,6 +849,14 @@ export const en: Dict = {
       runtimeStaleHint:
         "Last probed a while ago — this machine has not reported since, so this readiness may no longer be true",
       runtimeUnknown: "Never probed — an older warden, or no heartbeat yet",
+      // ── hardware sample age (T-b36a). The server WITHHOLDS the numbers of an
+      // expired sample, so cpu/ram/power fall back to a dash — the same dash a
+      // machine that has never reported hardware shows. These two labels are
+      // what keep those worlds apart on screen; only the second one is
+      // actionable ("this box went dark", not "this box never spoke").
+      hardwareStale: "stale",
+      hardwareStaleHint:
+        "Measured a while ago and not since — the numbers are withheld rather than shown as current",
     },
   },
   settings: {

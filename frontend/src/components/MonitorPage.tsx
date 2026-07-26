@@ -556,15 +556,30 @@ export function MonitorPage() {
                       {m.claudeVersion ?? dash}
                     </td>
                     {/* Hardware telemetry (joined by host). Honest dash when the
-                     * host reported no telemetry — never a fabricated number. */}
-                    <td data-label={t.monitor.machineCol.cpu}>
+                     * host reported no telemetry — never a fabricated number.
+                     *
+                     * The dash alone is NOT enough (T-b36a): the server also
+                     * withholds the numbers of an EXPIRED sample, so "this box
+                     * has never reported hardware" and "it reported, then went
+                     * dark an hour ago" both land here as three dashes — and
+                     * only the second is something an operator can act on. When
+                     * the server says the sample is stale, the dash is marked
+                     * with its reason (same mon-stale marker the runtime
+                     * readiness cell uses; one visual vocabulary for one
+                     * freshness rule). `hardwareStale === true` and nothing
+                     * else: false is a live sample whose probe simply had no
+                     * answer, null is a box that never measured. */}
+                    <td data-label={t.monitor.machineCol.cpu} data-testid="mon-cpu">
                       {pctText(hw?.cpuPct ?? null, dash)}
+                      {hw?.hardwareStale === true && <HardwareStaleMark />}
                     </td>
-                    <td data-label={t.monitor.machineCol.ram}>
+                    <td data-label={t.monitor.machineCol.ram} data-testid="mon-ram">
                       {pctText(hw?.ramPct ?? null, dash)}
+                      {hw?.hardwareStale === true && <HardwareStaleMark />}
                     </td>
-                    <td data-label={t.monitor.machineCol.power}>
+                    <td data-label={t.monitor.machineCol.power} data-testid="mon-power">
                       {powerText(hw ? hw.acPower : null, hw?.batteryPct ?? null, dash)}
+                      {hw?.hardwareStale === true && <HardwareStaleMark />}
                     </td>
                     {/* Runtime readiness (T-90be ⑤) — ALWAYS with its age
                      * (T-b36a). This is not a cosmetic column: when a machine
@@ -1081,6 +1096,23 @@ export function MonitorPage() {
         </div>
       </section>
     </div>
+  );
+}
+
+/** The marker that turns a blank hardware cell into a STATEMENT: the number is
+ * missing because the sample expired, not because this machine has never been
+ * measured. It is the same `mon-stale` chip the runtime-readiness cell uses —
+ * one freshness rule on the wire, one way of saying "old" on screen. */
+function HardwareStaleMark() {
+  const { t } = useI18n();
+  return (
+    <span
+      className="mon-stale"
+      data-testid="mon-hardware-stale"
+      title={t.monitor.machine.hardwareStaleHint}
+    >
+      {t.monitor.machine.hardwareStale}
+    </span>
   );
 }
 
