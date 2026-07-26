@@ -591,7 +591,10 @@ func (s *apiServer) enqueueToWarden(memberID, warden string, frame []byte) bool 
 			memberID, warden)
 		return false
 	}
-	s.hub.EnqueueWardenCommand(warden, frame)
+	// Tagged with the member/worker this frame acts on: one machine's FIFO is
+	// shared by everybody placed there, and a per-subject receipt may only be
+	// written from a per-subject observation (hub.PendingWardenCommandsFor).
+	s.hub.EnqueueWardenCommandFor(warden, memberID, frame)
 	return true
 }
 

@@ -192,7 +192,7 @@ func TestEventsHandler_UndeliveredWardenCommandsAreAccountedFor(t *testing.T) {
 	if len(pending) != 1 {
 		t.Fatalf("exactly the update frame must be requeued, got %d frames back", len(pending))
 	}
-	digest, ok := decodeWardenCommandFrame(pending[0])
+	digest, ok := decodeWardenCommandFrame(pending[0].Frame)
 	if !ok || digest.Verb != reconcileCmdUpdate {
 		t.Fatalf("the requeued frame must be the update, got %+v", digest)
 	}
@@ -225,7 +225,7 @@ func TestReturnUndeliveredCommands_UpdateRequeueIsIdempotent(t *testing.T) {
 	captureStderr(t, func() {
 		for i := 0; i < 5; i++ {
 			pending := h.DrainWardenCommands("mach-a")
-			pending = append(pending, frame)
+			pending = append(pending, wardenCmd{Subject: "mach-a", Frame: frame})
 			h.ReturnUndeliveredCommands("mach-a", pending)
 		}
 	})
@@ -239,7 +239,8 @@ func TestReturnUndeliveredCommands_UpdateRequeueIsIdempotent(t *testing.T) {
 func TestEnqueueWardenCommand_ClearsStaleUndeliveredNote(t *testing.T) {
 	h := NewHub()
 	captureStderr(t, func() {
-		h.ReturnUndeliveredCommands("mach-a", [][]byte{cmdFrame(t, reconcileCmdStart, "m-1")})
+		h.ReturnUndeliveredCommands("mach-a",
+			[]wardenCmd{{Subject: "m-1", Frame: cmdFrame(t, reconcileCmdStart, "m-1")}})
 	})
 	if _, lost := h.UndeliveredCommandSince("m-1", 0); !lost {
 		t.Fatal("the loss must be noted first")
@@ -396,7 +397,7 @@ func TestReconcile_StaleUndeliveredNoteDoesNotExplainANewWake(t *testing.T) {
 	// An old loss, recorded well before this wake ever started.
 	captureStderr(t, func() {
 		s.hub.ReturnUndeliveredCommands("mach-live",
-			[][]byte{cmdFrame(t, reconcileCmdStart, "m-boot")})
+			[]wardenCmd{{Subject: "m-boot", Frame: cmdFrame(t, reconcileCmdStart, "m-boot")}})
 	})
 
 	m := testAgent("m-boot")

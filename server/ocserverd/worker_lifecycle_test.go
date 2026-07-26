@@ -205,8 +205,8 @@ func TestWorkerReportStopped_CollectsHandover(t *testing.T) {
 	if len(frames) != 2 {
 		t.Fatalf("the first stopped-report must collect (stop+start), got %d frames", len(frames))
 	}
-	rpc0, _ := decodeWardenFrame(t, frames[0])
-	rpc1, _ := decodeWardenFrame(t, frames[1])
+	rpc0, _ := decodeWardenFrame(t, frames[0].Frame)
+	rpc1, _ := decodeWardenFrame(t, frames[1].Frame)
 	if rpc0 != reconcileCmdStop || rpc1 != reconcileCmdStart {
 		t.Errorf("frames = %s,%s, want stop then start", rpc0, rpc1)
 	}
@@ -444,7 +444,7 @@ func TestStopWorker_KillsAndHoldsDown(t *testing.T) {
 	if len(frames) != 1 {
 		t.Fatalf("stop must kill exactly the session (1 worker_stop), got %d", len(frames))
 	}
-	if rpc, _ := decodeWardenFrame(t, frames[0]); rpc != reconcileCmdStop {
+	if rpc, _ := decodeWardenFrame(t, frames[0].Frame); rpc != reconcileCmdStop {
 		t.Errorf("stop frame = %s, want worker_stop", rpc)
 	}
 	// presence through the DTO: offline-intent + still-online session reads "stopping".
@@ -506,7 +506,7 @@ func TestRestartWorker_ClearsAndRedispatches(t *testing.T) {
 	frames := api.hub.DrainWardenCommands(ServerSelfHost)
 	sawStart := false
 	for _, f := range frames {
-		if rpc, _ := decodeWardenFrame(t, f); rpc == reconcileCmdStart {
+		if rpc, _ := decodeWardenFrame(t, f.Frame); rpc == reconcileCmdStart {
 			sawStart = true
 		}
 	}
@@ -571,7 +571,7 @@ func TestActiveOfflineWorker_TickRescues(t *testing.T) {
 	if len(frames) != 1 {
 		t.Fatalf("want 1 rescue start for the died active worker, got %d", len(frames))
 	}
-	if rpc, args := decodeWardenFrame(t, frames[0]); rpc != reconcileCmdStart ||
+	if rpc, args := decodeWardenFrame(t, frames[0].Frame); rpc != reconcileCmdStart ||
 		args["member_id"] != workerID {
 		t.Fatalf("frame = %s %v, want start %s", rpc, args, workerID)
 	}
@@ -793,7 +793,7 @@ func TestMidGraceRestartAmnesia_Converges(t *testing.T) {
 	for i := 0; i < 20 && !dispatched; i++ {
 		api.runOutsourceTick(now + StoppingTimeoutSecs + float64(i))
 		for _, frame := range api.hub.DrainWardenCommands(ServerSelfHost) {
-			if rpc, _ := decodeWardenFrame(t, frame); rpc == reconcileCmdStart {
+			if rpc, _ := decodeWardenFrame(t, frame.Frame); rpc == reconcileCmdStart {
 				dispatched = true
 			}
 		}
@@ -892,8 +892,8 @@ func TestAutoHandoverWorker_GraceTimeout_ForceCollects(t *testing.T) {
 	if len(frames) != 2 {
 		t.Fatalf("the grace deadline must force-collect (stop+start), got %d frames", len(frames))
 	}
-	rpc0, _ := decodeWardenFrame(t, frames[0])
-	rpc1, _ := decodeWardenFrame(t, frames[1])
+	rpc0, _ := decodeWardenFrame(t, frames[0].Frame)
+	rpc1, _ := decodeWardenFrame(t, frames[1].Frame)
 	if rpc0 != reconcileCmdStop || rpc1 != reconcileCmdStart {
 		t.Errorf("frames = %s,%s, want stop then start", rpc0, rpc1)
 	}
@@ -981,7 +981,7 @@ func TestWorkerHandoverCollect_OnceOnly(t *testing.T) {
 		w, _ := api.dal.GetOutsourceWorker(workerID)
 		api.autoHandoverWorker(*w, since+StoppingTimeoutSecs+1)
 		for _, frame := range api.hub.DrainWardenCommands(ServerSelfHost) {
-			if rpc, _ := decodeWardenFrame(t, frame); rpc == reconcileCmdStop {
+			if rpc, _ := decodeWardenFrame(t, frame.Frame); rpc == reconcileCmdStop {
 				t.Fatalf("a collected handover must not re-collect on timeout (second stop): %s", frame)
 			}
 		}

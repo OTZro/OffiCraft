@@ -76,14 +76,19 @@ func (c *failOnMarkerConn) sawWritten(needle string) bool {
 // writer, having pre-queued frames, and waits for the handler to return (or for
 // the write failure, whichever the case). Returns once the handler goroutine is
 // done so the FIFO can be inspected without racing it.
-func runWardenBand(t *testing.T, wardenID string, frames []string,
+// `subjects` are the member ids the queued frames act on; every frame is an
+// `update` because that is the ONE verb the at-most-once contract lets survive a
+// failed write (see Hub.ReturnUndeliveredCommands) — the order property under
+// test is only observable on frames that come back at all.
+func runWardenBand(t *testing.T, wardenID string, subjects []string,
 	w *failOnMarkerConn) *apiServer {
 	t.Helper()
 	api, dal := newGateTestAPI(t)
 	putGateMember(t, dal, Member{ID: wardenID, Kind: KindWarden,
 		DesiredState: DesiredStateOnline})
-	for _, f := range frames {
-		api.hub.EnqueueWardenCommand(wardenID, []byte(f))
+	for _, sub := range subjects {
+		api.hub.EnqueueWardenCommandFor(wardenID, sub,
+			cmdFrame(t, reconcileCmdUpdate, sub))
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -124,9 +129,18 @@ func runWardenBand(t *testing.T, wardenID string, frames []string,
 // ORDER fails in a shape indistinguishable from success by a count assertion —
 // and out-of-order warden commands are actively dangerous (a `stop` that
 // overtakes its own `start` reaps the session that start was creating).
+//
+// T-66a2 narrowed WHICH frames come back (only `update`, the verb with no
+// re-decision path; everything else is dropped with a receipt, asserted in
+// warden_command_delivery_test.go). This test therefore drives `update` frames:
+// it pins the ORDER of the surviving tail, which the per-verb accounting test
+// cannot — it only ever has one frame in flight.
 func TestEventsHandler_FailedWardenWriteRequeuesUndeliveredFramesInOrder(t *testing.T) {
-	w := newFailOnMarkerConn("frame-BBB")
-	api := runWardenBand(t, "w-req", []string{"frame-AAA", "frame-BBB", "frame-CCC"}, w)
+	w := newFailOnMarkerConn("m-BBB")
+	var api *apiServer
+	captureStderr(t, func() {
+		api = runWardenBand(t, "w-req", []string{"m-AAA", "m-BBB", "m-CCC"}, w)
+	})
 
 	// Discriminator: the backlog itself.
 	if got := api.hub.PendingWardenCommands("w-req"); got != 2 {
@@ -136,24 +150,31 @@ func TestEventsHandler_FailedWardenWriteRequeuesUndeliveredFramesInOrder(t *test
 	// Only now inspect CONTENT — the drain here is verification of the queue that
 	// the assertion above already established, not the discriminator.
 	back := api.hub.DrainWardenCommands("w-req")
-	want := []string{"frame-BBB", "frame-CCC"}
+	want := []string{"m-BBB", "m-CCC"}
 	if len(back) != len(want) {
 		t.Fatalf("want %d restored frames, got %d (%q)", len(want), len(back), back)
 	}
 	for i := range want {
-		if string(back[i]) != want[i] {
-			t.Fatalf("restored frame[%d] = %q, want %q — the undelivered tail must "+
-				"keep its original order: %q", i, back[i], want[i], back)
+		digest, ok := decodeWardenCommandFrame(back[i].Frame)
+		if !ok || digest.MemberID != want[i] {
+			t.Fatalf("restored frame[%d] acts on %q, want %q — the undelivered tail "+
+				"must keep its original order: %+v", i, digest.MemberID, want[i], back)
+		}
+		// The subject tag must survive the round trip, or a per-worker backlog
+		// read after a requeue would report zero for a frame that IS queued.
+		if back[i].Subject != want[i] {
+			t.Errorf("restored frame[%d] lost its subject tag: %q, want %q",
+				i, back[i].Subject, want[i])
 		}
 	}
 	// Sanity on the delivered side: the first frame DID go out, so it must not be
-	// re-queued (that would be a duplicate START, not a lost one).
-	if !w.sawWritten("frame-AAA") {
+	// re-queued (that would be a duplicate, not a lost one).
+	if !w.sawWritten("m-AAA") {
 		t.Error("precondition: the first frame should have been written")
 	}
 	for _, f := range back {
-		if bytes.Contains(f, []byte("frame-AAA")) {
-			t.Errorf("a frame that WAS delivered must not be re-queued: %q", back)
+		if bytes.Contains(f.Frame, []byte("m-AAA")) {
+			t.Errorf("a frame that WAS delivered must not be re-queued: %+v", back)
 		}
 	}
 }
@@ -164,13 +185,13 @@ func TestEventsHandler_FailedWardenWriteRequeuesUndeliveredFramesInOrder(t *test
 // connection must still empty the FIFO exactly once.
 func TestEventsHandler_SuccessfulWardenDrainClearsTheQueue(t *testing.T) {
 	w := newFailOnMarkerConn("") // nothing ever fails
-	api := runWardenBand(t, "w-ok", []string{"frame-AAA", "frame-BBB", "frame-CCC"}, w)
+	api := runWardenBand(t, "w-ok", []string{"m-AAA", "m-BBB", "m-CCC"}, w)
 
 	if got := api.hub.PendingWardenCommands("w-ok"); got != 0 {
 		t.Fatalf("a fully delivered drain must leave the FIFO EMPTY, got %d pending "+
 			"(non-zero = infinite re-delivery)", got)
 	}
-	for _, f := range []string{"frame-AAA", "frame-BBB", "frame-CCC"} {
+	for _, f := range []string{"m-AAA", "m-BBB", "m-CCC"} {
 		if !w.sawWritten(f) {
 			t.Errorf("frame %s was never written", f)
 		}

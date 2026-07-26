@@ -64,7 +64,8 @@ type drainedFrame struct {
 func drainFrames(t *testing.T, s *apiServer, wardenID string) []drainedFrame {
 	t.Helper()
 	var out []drainedFrame
-	for _, raw := range s.hub.DrainWardenCommands(wardenID) {
+	for _, cmd := range s.hub.DrainWardenCommands(wardenID) {
+		raw := cmd.Frame
 		text := strings.TrimSpace(strings.TrimPrefix(string(raw), "data: "))
 		var envelope struct {
 			Topic string `json:"topic"`

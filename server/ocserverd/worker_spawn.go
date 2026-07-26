@@ -749,30 +749,53 @@ func (s *apiServer) reconcileWorkerLiveness(w OutsourceWorker, now float64) {
 		// WHICH failure this was is not a detail — the two have different culprits
 		// and different fixes, and a receipt that conflates them sends the owner to
 		// the wrong machine. Enqueueing a frame proves only that it was appended to
-		// the hub's per-warden FIFO (EnqueueWardenCommand is IsOnline + a map
-		// append); nothing on that path observes a reader. The FIFO depth is the one
-		// in-process fact that tells them apart: still non-empty ⇒ NOBODY has
-		// collected the frame, so the runtime on the far machine was never even
-		// asked to start and looking at it is a wild goose chase.
+		// the hub's per-warden FIFO (EnqueueWardenCommandFor is IsOnline + a map
+		// append); nothing on that path observes a reader. The backlog is the one
+		// in-process fact that tells them apart: THIS worker's start frame still
+		// sitting there ⇒ NOBODY has collected it, so the runtime on the far machine
+		// was never even asked to start and looking at it is a wild goose chase.
+		//
+		// PER-SUBJECT, not per-machine (T-e0e3 review C.1). One machine's FIFO is
+		// shared by every member and worker placed there, so the queue DEPTH answers
+		// "does that machine owe anybody a frame" — a different question. Reading the
+		// depth made a healthy, actively-draining warden get accused of not running
+		// whenever any OTHER member on the same box happened to have a frame in
+		// flight, and the message even talks the owner OUT of looking at the runtime,
+		// which is where the real fault then was. Systematically, not rarely: the
+		// reconcile and outsource cadences are both 30s and start microseconds apart,
+		// so on a multi-agent machine the read lands in exactly that window.
 		//
 		// Residual, deliberately NOT claimed by either message: a frame that WAS
 		// popped can still be lost after the pop (the drain deletes the whole FIFO
 		// before writing it, and a socket write that "succeeds" is only a write into
 		// a buffer — there is no ack anywhere on this path). An empty backlog
 		// therefore means "collected", not "delivered".
-		if s.hub.PendingWardenCommands(target) > 0 {
+		switch {
+		case target == "":
+			// No recorded destination at all. The two arms below each name a machine
+			// and assert something about it; with no target they would name '' and
+			// assert it — "collected by machine ''" is a confident claim made from
+			// zero evidence, pointing at a log that has no host to live on. Say only
+			// what is known (T-7fa1 BLOCKER-1: an honest observation beats a
+			// confident wrong cause).
+			s.stampWorkerPlacementBlocked(&w, spawnReasonWakeTimeout+": the start "+
+				"window elapsed with no session, and this server no longer has a "+
+				"record of which machine the start was sent to (the spawn ledger is "+
+				"in-memory and a server restart clears it) — retry 改機器 to place it "+
+				"again", now)
+		case s.hub.PendingWardenCommandsFor(target, w.ID) > 0:
 			s.stampWorkerPlacementBlocked(&w, spawnReasonNeverCollected+": the start "+
 				"frame for this worker is still queued for machine '"+target+"' — that "+
 				"machine's warden has not picked it up, so nothing has tried to boot "+
 				"yet; check that ocwarden is running and holding its connection there",
 				now)
-			return
+		default:
+			s.stampWorkerPlacementBlocked(&w, spawnReasonWakeTimeout+": the start was "+
+				"collected by machine '"+target+"' but this worker never came "+
+				"online within the start window — check that the '"+
+				NormalizeRuntime(w.Runtime)+"' runtime actually runs and is logged in on "+
+				"that machine (warden log: ocwarden.err.log)", now)
 		}
-		s.stampWorkerPlacementBlocked(&w, spawnReasonWakeTimeout+": the start was "+
-			"collected by machine '"+target+"' but this worker never came "+
-			"online within the start window — check that the '"+
-			NormalizeRuntime(w.Runtime)+"' runtime actually runs and is logged in on "+
-			"that machine (warden log: ocwarden.err.log)", now)
 	}
 }
 
@@ -864,12 +887,30 @@ func (s *apiServer) retryPendingWorkerStop(workerID string) {
 // target is not simply inherited here: a relocate is an explicit placement
 // decision, and swallowing it left the worker with the new pin, no session, and
 // last_op/last_op_reason BLANK — the cockpit's 「尚未分配機器」 with nothing to
-// explain it (the X-46 report). Note what `no kill target` actually means: both
-// the spawn memory AND the live SSE claim are empty, i.e. the worker is not
-// connected, so there is no live session to double — only a possible
-// presence-deaf ghost, which the warden clobber-guard refuses and the FSM
-// zombie-takeover reaps. Dispatching here is therefore exactly what the cadence
-// tick's FSM rescue would do on its next pass, just without the blind window.
+// explain it (the X-46 report).
+//
+// WHY THAT IS SAFE — and it is NOT the warden clobber-guard (T-e0e3 review B.1
+// corrected the reasoning that used to stand here; the old wording pointed at a
+// gate that is not on this path, which would have sent the next reader looking in
+// the wrong place):
+//
+//   - the clobber-guard is PER-MACHINE and local. A relocate is by definition a
+//     move to ANOTHER machine, so the old session lives on A while the new START
+//     goes to B, and B's guard cannot see A. It does not apply here at all.
+//   - what DOES apply is identitySweepOnConnect (api_infra.go / reconcile.go): a
+//     session that comes up on the desired machine reaps that same id's sessions
+//     on every other machine. Cross-machine single-session is enforced there.
+//   - and decisively: this dispatch introduces NO new hazard class. The outsource
+//     cadence tick already fires reconcileWorkerLiveness → START for an ACTIVE
+//     worker with DesiredState != offline and no live SSE (outsource_sched.go),
+//     i.e. in exactly this state, and it did so before this change. The
+//     fall-through only removes the up-to-30s blind window before that happens.
+//
+// Two accepted asymmetries, recorded rather than hidden (each has its own ticket):
+// the cadence path additionally masks on RefocusSince == 0.0 and this one does
+// not; and dropping the pacing stamp bypasses workerSpawnRetrySecs and the FSM
+// backoff — acceptable only because this is owner-explicit and thus throttled by
+// a human's click rate.
 // Callers hold s.outsourceMu.
 func (s *apiServer) relocateWorkerNow(w OutsourceWorker) {
 	s.respawnWorkerForOwnerOp(w, "relocate")

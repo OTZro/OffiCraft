@@ -486,7 +486,7 @@ func TestNotifyWorkerSpawn_DispatchesMemberStart_AndPaces(t *testing.T) {
 	if len(frames) != 1 {
 		t.Fatalf("want exactly 1 start (pacing), got %d", len(frames))
 	}
-	rpc, args := decodeWardenFrame(t, frames[0])
+	rpc, args := decodeWardenFrame(t, frames[0].Frame)
 	if rpc != reconcileCmdStart {
 		t.Fatalf("rpc = %q, want start (P5b: the member verb)", rpc)
 	}
@@ -604,7 +604,7 @@ func TestNotifyWorkerSpawn_HonoursManualMachinePreference(t *testing.T) {
 	if len(frames) != 1 {
 		t.Fatalf("want 1 start on the preferred machine, got %d", len(frames))
 	}
-	rpc, args := decodeWardenFrame(t, frames[0])
+	rpc, args := decodeWardenFrame(t, frames[0].Frame)
 	if rpc != reconcileCmdStart || args["member_id"] != "ow-e" {
 		t.Errorf("frame = %s %v", rpc, args)
 	}
@@ -785,7 +785,7 @@ func TestNotifyWorkerSpawn_TaskRowMachineSurvivesRestart(t *testing.T) {
 	if len(frames) != 1 {
 		t.Fatalf("want 1 start on the task row's machine, got %d", len(frames))
 	}
-	if rpc, args := decodeWardenFrame(t, frames[0]); rpc != reconcileCmdStart ||
+	if rpc, args := decodeWardenFrame(t, frames[0].Frame); rpc != reconcileCmdStart ||
 		args["member_id"] != "ow-restart" {
 		t.Fatalf("frame = %s %v", rpc, args)
 	}
@@ -998,7 +998,7 @@ func TestEnqueueWorkerStop_OfflineTarget_FailClosed(t *testing.T) {
 	if len(frames) != 1 {
 		t.Fatalf("want 1 worker_stop frame, got %d", len(frames))
 	}
-	if rpc, args := decodeWardenFrame(t, frames[0]); rpc != reconcileCmdStop ||
+	if rpc, args := decodeWardenFrame(t, frames[0].Frame); rpc != reconcileCmdStop ||
 		args["member_id"] != "ow-1" {
 		t.Errorf("rpc = %q args = %v", rpc, args)
 	}
@@ -1033,7 +1033,7 @@ func TestStopWorkerNow_OfflineTarget_ParksKillAndTickRefires(t *testing.T) {
 	if len(frames) != 1 {
 		t.Fatalf("want the parked worker_stop re-fired on reconnect, got %d frames", len(frames))
 	}
-	if rpc, args := decodeWardenFrame(t, frames[0]); rpc != reconcileCmdStop ||
+	if rpc, args := decodeWardenFrame(t, frames[0].Frame); rpc != reconcileCmdStop ||
 		args["member_id"] != "ow-s" {
 		t.Errorf("rpc = %q args = %v", rpc, args)
 	}
@@ -1097,11 +1097,11 @@ func TestRespawnWorkerNow_SpawnMemoryEmpty_KillsViaSseMachineClaim(t *testing.T)
 	if len(frames) != 2 {
 		t.Fatalf("want stop+start on the claimed machine, got %d frames", len(frames))
 	}
-	if rpc, args := decodeWardenFrame(t, frames[0]); rpc != reconcileCmdStop ||
+	if rpc, args := decodeWardenFrame(t, frames[0].Frame); rpc != reconcileCmdStop ||
 		args["member_id"] != workerID {
 		t.Fatalf("first frame = %s %v, want stop %s", rpc, args, workerID)
 	}
-	if rpc, _ := decodeWardenFrame(t, frames[1]); rpc != reconcileCmdStart {
+	if rpc, _ := decodeWardenFrame(t, frames[1].Frame); rpc != reconcileCmdStart {
 		t.Fatalf("second frame = %s, want the respawn start", rpc)
 	}
 }
@@ -1205,7 +1205,7 @@ func TestReconcileWorkerLiveness_ClobberedStartZombieTakeover(t *testing.T) {
 	if len(frames) != 1 {
 		t.Fatalf("zombie takeover must enqueue exactly 1 stop, got %d", len(frames))
 	}
-	rpc, args := decodeWardenFrame(t, frames[0])
+	rpc, args := decodeWardenFrame(t, frames[0].Frame)
 	if rpc != reconcileCmdStop || args["member_id"] != "ow-g" {
 		t.Fatalf("takeover frame = %s %v, want stop ow-g", rpc, args)
 	}
@@ -1288,7 +1288,7 @@ func TestReconcileWorkerLiveness_SilentTimeoutBacksOffThenRespawns(t *testing.T)
 	if len(frames) != 1 {
 		t.Fatalf("want 1 start after the backoff lapsed, got %d", len(frames))
 	}
-	if rpc, args := decodeWardenFrame(t, frames[0]); rpc != reconcileCmdStart ||
+	if rpc, args := decodeWardenFrame(t, frames[0].Frame); rpc != reconcileCmdStart ||
 		args["member_id"] != "ow-b" {
 		t.Errorf("frame = %s %v", rpc, args)
 	}
@@ -1319,7 +1319,7 @@ func TestReconcileWorkerLiveness_LegacyWorkerStartReceiptStillDetectsZombie(t *t
 	if len(frames) != 1 {
 		t.Fatalf("legacy-receipt zombie takeover must enqueue 1 stop, got %d", len(frames))
 	}
-	if rpc, args := decodeWardenFrame(t, frames[0]); rpc != reconcileCmdStop ||
+	if rpc, args := decodeWardenFrame(t, frames[0].Frame); rpc != reconcileCmdStop ||
 		args["member_id"] != "ow-l" {
 		t.Errorf("frame = %s %v", rpc, args)
 	}
@@ -1499,6 +1499,106 @@ func TestReconcileWorkerLiveness_NeverCollectedIsNotAFailedBoot(t *testing.T) {
 	})
 }
 
+// TestReconcileWorkerLiveness_OtherMembersBacklogIsNotOurs (T-e0e3 review C.1):
+// one machine's command FIFO is shared by EVERY member and worker placed there,
+// so its depth answers "does that machine owe anybody a frame" — never "is THIS
+// worker's start frame still waiting". Reading the first as the second produced a
+// confident, wrong accusation: a warden that had just demonstrably drained our
+// frame got reported as not running, and the message explicitly steered the owner
+// AWAY from the runtime, which is where the fault actually was.
+//
+// The fixture is exactly that ambiguity and nothing else: our frame IS collected,
+// and a different member's frame is left queued on the SAME machine.
+func TestReconcileWorkerLiveness_OtherMembersBacklogIsNotOurs(t *testing.T) {
+	s := newWorkerTestServer(t)
+	connectWarden(t, s, ServerSelfHost)
+	w := fsmWorkerFixture(t, s, "ow-shared", WorkerStatusAssigned, 0)
+
+	base := nowSecs()
+	s.outsourceMu.Lock()
+	s.reconcileWorkerLiveness(w, base)
+	s.outsourceMu.Unlock()
+	if len(s.hub.DrainWardenCommands(ServerSelfHost)) != 1 {
+		t.Fatal("precondition: our start frame must be collected")
+	}
+	// A COMPLETELY DIFFERENT member's frame arrives on the same machine and is
+	// still waiting. That says nothing whatsoever about our worker.
+	s.hub.EnqueueWardenCommandFor(ServerSelfHost, "m-somebody-else",
+		[]byte("data: {\"topic\":\"warden-command\"}\n\n"))
+	if got := s.hub.PendingWardenCommands(ServerSelfHost); got != 1 {
+		t.Fatalf("precondition: the machine's queue must be non-empty, got %d", got)
+	}
+	if got := s.hub.PendingWardenCommandsFor(ServerSelfHost, "ow-shared"); got != 0 {
+		t.Fatalf("precondition: none of that backlog is OURS, got %d", got)
+	}
+
+	s.outsourceMu.Lock()
+	s.reconcileWorkerLiveness(w, base+WakingTTLSecs+1)
+	s.outsourceMu.Unlock()
+
+	got, err := s.dal.GetOutsourceWorker("ow-shared")
+	if err != nil || got == nil {
+		t.Fatalf("re-read worker: %v", err)
+	}
+	if strings.HasPrefix(got.LastOpReason, spawnReasonNeverCollected+":") {
+		t.Fatalf("somebody else's queued frame must not be read as ours — this "+
+			"receipt accuses a warden that collected our frame: %q", got.LastOpReason)
+	}
+	if !strings.HasPrefix(got.LastOpReason, spawnReasonWakeTimeout+":") {
+		t.Fatalf("our frame WAS collected and no session appeared — that is a wake "+
+			"timeout, got %q", got.LastOpReason)
+	}
+}
+
+// TestReconcileWorkerLiveness_UnknownTargetNamesNoMachine (T-e0e3 review C.2):
+// both timeout arms name a machine and then assert something about it. With no
+// recorded target that becomes "collected by machine ”" — a confident claim made
+// from zero evidence, sending the owner to a log on a host with no name. The
+// guard says only what is known.
+//
+// Honest scope: the state is forced here (the spawn ledger is cleared directly).
+// No production path is known that empties workerSpawnTarget while
+// workerReconcileStates still holds a dispatched START — a re-exec clears both.
+// The guard is kept because the COST of the wrong message is a wild goose chase
+// and the cost of the guard is one branch, not because reachability is proven.
+func TestReconcileWorkerLiveness_UnknownTargetNamesNoMachine(t *testing.T) {
+	s := newWorkerTestServer(t)
+	connectWarden(t, s, ServerSelfHost)
+	w := fsmWorkerFixture(t, s, "ow-notarget", WorkerStatusAssigned, 0)
+
+	base := nowSecs()
+	s.outsourceMu.Lock()
+	s.reconcileWorkerLiveness(w, base)
+	delete(s.workerSpawnTarget, w.ID) // forced: no record of where it went
+	s.outsourceMu.Unlock()
+	s.hub.DrainWardenCommands(ServerSelfHost)
+
+	s.outsourceMu.Lock()
+	s.reconcileWorkerLiveness(w, base+WakingTTLSecs+1)
+	s.outsourceMu.Unlock()
+
+	got, err := s.dal.GetOutsourceWorker("ow-notarget")
+	if err != nil || got == nil {
+		t.Fatalf("re-read worker: %v", err)
+	}
+	if got.LastOpReason == "" {
+		t.Fatal("a timed-out start must still leave a receipt")
+	}
+	if strings.Contains(got.LastOpReason, "machine ''") ||
+		strings.Contains(got.LastOpReason, "machine ‘’") {
+		t.Fatalf("a receipt must not name — or make claims about — a machine it "+
+			"cannot identify: %q", got.LastOpReason)
+	}
+	if strings.Contains(got.LastOpReason, "collected by") {
+		t.Fatalf("with no known target nothing is known about collection: %q",
+			got.LastOpReason)
+	}
+	if strings.HasPrefix(got.LastOpReason, spawnReasonNeverCollected+":") {
+		t.Fatalf("PendingWardenCommandsFor('' , id) is 0 by construction — it must "+
+			"not be read as evidence of collection either way: %q", got.LastOpReason)
+	}
+}
+
 // TestNotifyWorkerSpawn_NoSigningSecret_LeavesReceipt: the fail-closed mint gate
 // is one of the arms that used to abandon the spawn LOG-ONLY. Placement resolves
 // fine here, so without a receipt the worker sits on a perfectly good machine pin
@@ -1580,7 +1680,7 @@ func TestReclaimWorkerSession_RecordedTarget(t *testing.T) {
 	if len(frames) != 1 {
 		t.Fatalf("want 1 worker_stop, got %d", len(frames))
 	}
-	rpc, args := decodeWardenFrame(t, frames[0])
+	rpc, args := decodeWardenFrame(t, frames[0].Frame)
 	if rpc != reconcileCmdStop || args["member_id"] != "ow-4" {
 		t.Errorf("frame = %s %v, want worker_stop ow-4", rpc, args)
 	}
@@ -1651,7 +1751,7 @@ func TestDismissOutsourceWorkersForTask_ReleasesAndReclaims(t *testing.T) {
 	if len(frames) != 1 {
 		t.Fatalf("want 1 worker_stop, got %d", len(frames))
 	}
-	if rpc, args := decodeWardenFrame(t, frames[0]); rpc != reconcileCmdStop ||
+	if rpc, args := decodeWardenFrame(t, frames[0].Frame); rpc != reconcileCmdStop ||
 		args["member_id"] != "ow-7" {
 		t.Errorf("frame = %s %v", rpc, args)
 	}
@@ -1706,7 +1806,7 @@ func TestCloseoutReport_DismissesWorkerImmediately(t *testing.T) {
 	if len(frames) != 1 {
 		t.Fatalf("want 1 immediate worker_stop, got %d", len(frames))
 	}
-	if rpc, args := decodeWardenFrame(t, frames[0]); rpc != reconcileCmdStop ||
+	if rpc, args := decodeWardenFrame(t, frames[0].Frame); rpc != reconcileCmdStop ||
 		args["member_id"] != "ow-b" {
 		t.Errorf("frame = %s %v, want worker_stop ow-b", rpc, args)
 	}
@@ -1794,7 +1894,7 @@ func TestTick_ReclaimBackstop_GraceRespected(t *testing.T) {
 	if len(frames) != 1 {
 		t.Fatalf("want exactly 1 backstop worker_stop, got %d", len(frames))
 	}
-	if _, args := decodeWardenFrame(t, frames[0]); args["member_id"] != "ow-9" {
+	if _, args := decodeWardenFrame(t, frames[0].Frame); args["member_id"] != "ow-9" {
 		t.Errorf("backstop reclaimed %v, want ow-9", args["member_id"])
 	}
 }
@@ -1819,7 +1919,7 @@ func TestTick_AssignedWorker_RedispatchesSpawn(t *testing.T) {
 	if len(frames) != 1 {
 		t.Fatalf("want 1 worker_start from the tick pass, got %d", len(frames))
 	}
-	if rpc, args := decodeWardenFrame(t, frames[0]); rpc != reconcileCmdStart ||
+	if rpc, args := decodeWardenFrame(t, frames[0].Frame); rpc != reconcileCmdStart ||
 		args["member_id"] != "ow-a" {
 		t.Errorf("frame = %s %v", rpc, args)
 	}

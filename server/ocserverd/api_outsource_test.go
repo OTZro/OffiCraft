@@ -324,7 +324,7 @@ func TestRelocateOutsourceWorker(t *testing.T) {
 	if len(oldFrames) != 1 {
 		t.Fatalf("want 1 worker_stop to the old host, got %d", len(oldFrames))
 	}
-	if rpc, args := decodeWardenFrame(t, oldFrames[0]); rpc != reconcileCmdStop ||
+	if rpc, args := decodeWardenFrame(t, oldFrames[0].Frame); rpc != reconcileCmdStop ||
 		args["member_id"] != workerID {
 		t.Errorf("old-host frame = %s %v, want worker_stop for %s", rpc, args, workerID)
 	}
@@ -334,7 +334,7 @@ func TestRelocateOutsourceWorker(t *testing.T) {
 	if len(newFrames) != 1 {
 		t.Fatalf("want 1 worker_start to the pinned host, got %d", len(newFrames))
 	}
-	if rpc, args := decodeWardenFrame(t, newFrames[0]); rpc != reconcileCmdStart ||
+	if rpc, args := decodeWardenFrame(t, newFrames[0].Frame); rpc != reconcileCmdStart ||
 		args["member_id"] != workerID {
 		t.Errorf("pinned-host frame = %s %v, want worker_start for %s", rpc, args, workerID)
 	}
@@ -442,7 +442,7 @@ func oneFrame(t *testing.T, api *apiServer, target string) (string, map[string]a
 	if len(frames) != 1 {
 		t.Fatalf("want exactly 1 frame on %s, got %d", target, len(frames))
 	}
-	return decodeWardenFrame(t, frames[0])
+	return decodeWardenFrame(t, frames[0].Frame)
 }
 
 // TestRelocateActiveWorker_MovesImmediately (T-f190 item 3, review gap): an
@@ -837,10 +837,10 @@ func TestRelocateToSameMachine(t *testing.T) {
 	if len(frames) != 2 {
 		t.Fatalf("same-machine relocate must kill+respawn (2 frames), got %d", len(frames))
 	}
-	if rpc, args := decodeWardenFrame(t, frames[0]); rpc != reconcileCmdStop || args["member_id"] != workerID {
+	if rpc, args := decodeWardenFrame(t, frames[0].Frame); rpc != reconcileCmdStop || args["member_id"] != workerID {
 		t.Errorf("frame[0] = %s %v, want worker_stop for %s", rpc, args, workerID)
 	}
-	if rpc, args := decodeWardenFrame(t, frames[1]); rpc != reconcileCmdStart || args["member_id"] != workerID {
+	if rpc, args := decodeWardenFrame(t, frames[1].Frame); rpc != reconcileCmdStart || args["member_id"] != workerID {
 		t.Errorf("frame[1] = %s %v, want worker_start for %s", rpc, args, workerID)
 	}
 	// The pin is durably the same machine.

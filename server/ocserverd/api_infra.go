@@ -213,8 +213,8 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 		// member_token is a secret).
 		if wardenID != "" {
 			if pending := s.hub.DrainWardenCommands(wardenID); len(pending) > 0 {
-				for i, frame := range pending {
-					if !write(frame) {
+				for i, cmd := range pending {
+					if !write(cmd.Frame) {
 						// T-66a2 (supersedes T-e0e3 O1's blunt requeue): the drain
 						// already emptied the FIFO, so THIS frame and every frame
 						// behind it are in nobody's hands but ours. Returning here
