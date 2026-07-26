@@ -176,7 +176,7 @@ func TestHandleIngestTelemetry_ClaudeProbeFoldAndEcho(t *testing.T) {
 
 // ── account_label (T-260e): human-readable account default display ──────────
 
-const teleWithLabel = `{"hardware": {"cpu_pct": 1},
+const teleWithLabel = `{"runtime":"claude","hardware": {"cpu_pct": 1},
 	"account": "acct-123/team",
 	"account_label": "eva.cheng@gofreight.com(GoFreight)"}`
 
@@ -273,7 +273,7 @@ func TestGetMonitoring_SameAccountKeyFoldsIntoOneRow(t *testing.T) {
 		t.Fatalf("seed member: %v", err)
 	}
 	rec := doIngestTelemetry(s, "joey", "m-other",
-		`{"hardware": {"cpu_pct": 2}, "cost": 1.5, "account": "acct-123/team"}`)
+		`{"runtime":"claude","hardware": {"cpu_pct": 2}, "cost": 1.5, "account": "acct-123/team"}`)
 	if rec.Code != 200 {
 		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
 	}
@@ -389,7 +389,7 @@ func TestGetMonitoring_SessionAccountNeverServesRawKey(t *testing.T) {
 		t.Fatalf("seed member: %v", err)
 	}
 	rec := doIngestTelemetry(s, "mira", "m-abc123",
-		`{"hardware": {"cpu_pct": 1}, "account": "acct-123/team"}`)
+		`{"runtime":"claude","hardware": {"cpu_pct": 1}, "account": "acct-123/team"}`)
 	if rec.Code != 200 {
 		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
 	}
@@ -410,10 +410,11 @@ func TestGetMonitoring_WorkerReportedLabelResolvesSessionAccount(t *testing.T) {
 	// roster members and left the raw key).
 	s := labelTestServer(t)
 	// Strip the member's own label; keep only the account key.
-	s.telemetry.Set("mira", map[string]any{"account": "acct-123/team"})
+	s.telemetry.Set("mira", map[string]any{"account": "acct-123/team", accountRuntimeKey: RuntimeClaude})
 	// A worker entry (NOT a roster member) reports the label for the same key.
 	s.telemetry.Set("ow-1", map[string]any{
-		"account": "acct-123/team", "account_label": "eva@corp(Corp)", "ts": 99.0})
+		"account": "acct-123/team", accountRuntimeKey: RuntimeClaude,
+		"account_label": "eva@corp(Corp)", "ts": 99.0})
 	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
 	if got := d["sessions"].([]any)[0].(map[string]any)["account"]; got != "eva@corp(Corp)" {
 		t.Fatalf("worker-reported label must resolve the session account, got %v", got)
@@ -431,7 +432,7 @@ func TestGetMonitoring_NoLabelReportedOmitsAccountLabel(t *testing.T) {
 		t.Fatalf("seed member: %v", err)
 	}
 	rec := doIngestTelemetry(s, "mira", "m-abc123",
-		`{"hardware": {"cpu_pct": 1}, "account": "acct-123/team"}`)
+		`{"runtime":"claude","hardware": {"cpu_pct": 1}, "account": "acct-123/team"}`)
 	if rec.Code != 200 {
 		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
 	}
@@ -439,6 +440,193 @@ func TestGetMonitoring_NoLabelReportedOmitsAccountLabel(t *testing.T) {
 	row := d["accounts"].([]any)[0].(map[string]any)
 	if _, present := row["account_label"]; present {
 		t.Fatalf("label-less report must omit account_label, got %v", row)
+	}
+}
+
+// runtimeAccountServer reproduces the owner-reported shape: a member's current
+// runtime is Claude, but its durable telemetry entry carries an older Codex
+// account. The owner alias makes an accidental attribution immediately visible.
+func runtimeAccountServer(t *testing.T, memberRuntime, report string) *apiServer {
+	t.Helper()
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(), telemetry: newMemStore(), gauge: newMemStore()}
+	m := fullMember("kyle")
+	m.Runtime = memberRuntime
+	if err := s.dal.PutMember(m); err != nil {
+		t.Fatalf("seed member: %v", err)
+	}
+	// BOTH keys are aliased, so every assertion below can tell "withheld" apart
+	// from "merely unresolvable" — an empty account cell means the server
+	// refused to attribute the key, never that it had no readable name for it.
+	for _, alias := range []AccountAlias{
+		{Account: "codex:8906abc", DisplayName: "EvaChatGPT"},
+		{Account: "claude:uid/org", DisplayName: "EvaClaude"},
+	} {
+		if err := s.dal.PutAccountAlias(alias); err != nil {
+			t.Fatalf("seed alias: %v", err)
+		}
+	}
+	if rec := doIngestTelemetry(s, "kyle", "m-eva-m5", report); rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	return s
+}
+
+const codexReportedAccount = `{"runtime":"codex","account":"codex:8906abc","account_label":"ReporterOnly"}`
+const claudeReportedAccount = `{"runtime":"claude","account":"claude:uid/org","account_label":"ReporterOnly"}`
+
+// sessionAccount reads the one member row's account cell from the owner-facing
+// monitoring fold (the surface the member panel renders).
+func sessionAccount(t *testing.T, s *apiServer) any {
+	t.Helper()
+	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	return d["sessions"].([]any)[0].(map[string]any)["account"]
+}
+
+func TestGetMonitoring_RuntimeAccountNeverBorrowsAnotherRuntime(t *testing.T) {
+	s := runtimeAccountServer(t, RuntimeClaude, codexReportedAccount)
+	ownerRec := doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"})
+	d := monitoringOf(t, ownerRec)
+	if got := d["sessions"].([]any)[0].(map[string]any)["account"]; got != "" {
+		t.Fatalf("claude session account = %v, want honest empty", got)
+	}
+	if got := d["machines"].([]any)[0].(map[string]any)["accounts"].([]any); len(got) != 0 {
+		t.Fatalf("foreign-runtime account leaked into machine fold: %v", got)
+	}
+	if got := d["accounts"].([]any); len(got) != 1 || got[0].(map[string]any)["display_name"] != "EvaChatGPT" {
+		t.Fatalf("global account overview lost owner alias visibility: %v", got)
+	}
+	if got := d["accounts"].([]any)[0].(map[string]any)["machine"]; got != "" {
+		t.Fatalf("global foreign account must not inherit Claude machine: %v", got)
+	}
+}
+
+func TestGetMonitoring_RuntimeAccountKeepsCodexAndOwnerGate(t *testing.T) {
+	s := runtimeAccountServer(t, RuntimeCodex, codexReportedAccount)
+	owner := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	if got := owner["sessions"].([]any)[0].(map[string]any)["account"]; got != "EvaChatGPT" {
+		t.Fatalf("codex session account = %v, want EvaChatGPT", got)
+	}
+	if got := owner["accounts"].([]any); len(got) != 1 {
+		t.Fatalf("codex account must remain observable, got %v", got)
+	}
+	// Existing privacy gate: an agent never receives reporter-supplied labels.
+	agentRec := doGetMonitoring(s, map[string]any{"sub": "kyle", "scope": "agent"})
+	if strings.Contains(agentRec.Body.String(), `"account_label":"ReporterOnly"`) {
+		t.Fatalf("agent response leaked reporter-only account label: %s", agentRec.Body.String())
+	}
+}
+
+// TestHandleIngestTelemetry_AccountPairingIsAtomic pins the ingest half of the
+// guarantee: `account`, its provenance stamp and the reporter label are ONE
+// unit, and any report that cannot prove the pairing retires it instead of
+// leaving a stale one standing for a later report to inherit.
+func TestHandleIngestTelemetry_AccountPairingIsAtomic(t *testing.T) {
+	api := &apiServer{telemetry: newMemStore(), hub: NewHub()}
+	entry := func() map[string]any { return api.telemetry.Get("kyle") }
+	ingest := func(body string) {
+		t.Helper()
+		if rec := doIngestTelemetry(api, "kyle", "", body); rec.Code != 200 {
+			t.Fatalf("ingest %s: %d %s", body, rec.Code, rec.Body.String())
+		}
+	}
+
+	// ① a proven report stamps key + provenance + label together.
+	ingest(codexReportedAccount)
+	if got, _ := entry()[accountRuntimeKey].(string); got != RuntimeCodex {
+		t.Fatalf("account runtime = %q, want codex", got)
+	}
+	// ② a same-runtime report with no account leaves the pairing alone.
+	ingest(`{"runtime":"codex","cost":1}`)
+	if got, _ := entry()["account"].(string); got != "codex:8906abc" {
+		t.Fatalf("same-runtime heartbeat lost the paired account: %q", got)
+	}
+	// ③ an account WITHOUT a runtime is unprovable: it is not stored, and it
+	// must not leave the previous pairing behind either — that leftover is what
+	// a later runtime-only heartbeat used to inherit.
+	ingest(`{"cost":1,"account":"unprovable"}`)
+	for _, key := range []string{"account", accountRuntimeKey, "account_label"} {
+		if v, present := entry()[key]; present {
+			t.Fatalf("runtime-less account report left %s = %v standing", key, v)
+		}
+	}
+	// ④ a runtime-only heartbeat on a DIFFERENT runtime retires the pairing:
+	// the key belonged to the runtime the actor just left.
+	ingest(codexReportedAccount)
+	ingest(`{"runtime":"claude"}`)
+	if v, present := entry()["account"]; present {
+		t.Fatalf("runtime switch kept the prior runtime's account %v", v)
+	}
+}
+
+// TestGetMonitoring_RuntimelessAccountCannotDegradeIntoOlderRuntime is the
+// end-to-end sequence blocker 2 named: a proven pairing, then a report whose
+// runtime went missing. "Missing runtime" must never degrade into "some older
+// runtime" — the panel shows nothing rather than the key the actor used before.
+func TestGetMonitoring_RuntimelessAccountCannotDegradeIntoOlderRuntime(t *testing.T) {
+	s := runtimeAccountServer(t, RuntimeClaude, claudeReportedAccount)
+	if got := sessionAccount(t, s); got != "EvaClaude" {
+		t.Fatalf("proven Claude pairing must be served, got %v", got)
+	}
+	// The actor has moved to Codex; this report carries the new key but lost
+	// its runtime field (older / partial reporter). Unprovable in, nothing out.
+	if rec := doIngestTelemetry(s, "kyle", "m-eva-m5",
+		`{"cost":1,"account":"codex:8906abc"}`); rec.Code != 200 {
+		t.Fatalf("runtime-less account report: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := sessionAccount(t, s); got != "" {
+		t.Fatalf("runtime-less report degraded into the older runtime's account: %v", got)
+	}
+	if v, present := s.telemetry.Get("kyle")["account"]; present {
+		t.Fatalf("unprovable report left an inheritable account %v behind", v)
+	}
+}
+
+// TestGetMonitoring_RuntimeSwitchHeartbeatRetiresPriorAccount covers the other
+// half of the same sequence: the actor announces its new runtime before the
+// member row catches up. The old key must not keep being served under the
+// lagging row.
+func TestGetMonitoring_RuntimeSwitchHeartbeatRetiresPriorAccount(t *testing.T) {
+	s := runtimeAccountServer(t, RuntimeClaude, claudeReportedAccount)
+	if rec := doIngestTelemetry(s, "kyle", "m-eva-m5", `{"runtime":"codex"}`); rec.Code != 200 {
+		t.Fatalf("codex heartbeat: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := sessionAccount(t, s); got != "" {
+		t.Fatalf("account survived the runtime the actor left: %v", got)
+	}
+}
+
+// TestGetMonitoring_OwnerAliasVisibleToEveryCallerRank pins the contract
+// blocker 1 questioned (resolveAccountDisplay ①, account_display.go): the
+// owner's hand-set alias is readable by EVERY caller rank; only the
+// reporter-supplied account_label is owner-gated PII (T-260e). Runtime-aware
+// attribution decides WHICH key an actor owns — it must never narrow WHO may
+// read the alias of a key that is displayed.
+func TestGetMonitoring_OwnerAliasVisibleToEveryCallerRank(t *testing.T) {
+	s := runtimeAccountServer(t, RuntimeCodex, codexReportedAccount)
+	agentRec := doGetMonitoring(s, map[string]any{"sub": "kyle", "scope": "agent"})
+	d := monitoringOf(t, agentRec)
+	if got := d["sessions"].([]any)[0].(map[string]any)["account"]; got != "EvaChatGPT" {
+		t.Fatalf("agent-facing session account = %v, want owner alias EvaChatGPT", got)
+	}
+	if got := d["accounts"].([]any)[0].(map[string]any)["display_name"]; got != "EvaChatGPT" {
+		t.Fatalf("agent-facing accounts display_name = %v, want owner alias EvaChatGPT", got)
+	}
+	// The owner-only half of the same contract holds in the very same body.
+	if strings.Contains(agentRec.Body.String(), "ReporterOnly") {
+		t.Fatalf("agent response leaked the reporter-only label: %s", agentRec.Body.String())
+	}
+}
+
+func TestGetMonitoring_RuntimeHeartbeatCannotReattributePairedAccount(t *testing.T) {
+	s := runtimeAccountServer(t, RuntimeClaude, codexReportedAccount)
+	// Counterfactual: the same actor later sends only a Claude runtime heartbeat.
+	// Its account remains stamped Codex, so the heartbeat must not borrow it.
+	if rec := doIngestTelemetry(s, "kyle", "m-eva-m5", `{"runtime":"claude"}`); rec.Code != 200 {
+		t.Fatalf("claude heartbeat: %d %s", rec.Code, rec.Body.String())
+	}
+	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	if got := d["sessions"].([]any)[0].(map[string]any)["account"]; got != "" {
+		t.Fatalf("runtime-only Claude heartbeat reattributed Codex account: %v", got)
 	}
 }
 

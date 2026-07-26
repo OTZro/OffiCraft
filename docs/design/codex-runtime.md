@@ -205,6 +205,39 @@ These settings intentionally favor capability for this trusted-machine deploymen
 not expand OffiCraft authorization: member identity, MCP scope, task governance, and
 server-side validation remain unchanged.
 
+## Account attribution is runtime-paired
+
+An account key is a *runtime-specific* identity: Codex obtains a ChatGPT account, Claude
+obtains its own OAuth account, and the two live in different identity spaces. Telemetry,
+however, is ONE shared per-actor entry that every reporter partial-merges into. Without a
+rule, a member that changed runtime (or whose machine hosts both) was displayed with
+whichever account key happened to be in that entry — the member panel showed a `claude`
+member holding the machine's `codex` account.
+
+The rule, implemented in `server/ocserverd/account_display.go`:
+
+- the account key, its provenance stamp (`account_runtime`, internal to the in-memory
+  entry — deliberately **not** on any DTO, so no wire surface changes) and the reporter's
+  `account_label` move as **one atomic unit**. `applyAccountReport` is their only writer;
+- a report whose runtime disagrees with the stored stamp **retires** the stored pairing —
+  that key belonged to the runtime the actor just left, and the member row's runtime may
+  lag a live switch;
+- an account reported **without** a runtime is unprovable: it is neither stored nor
+  allowed to leave the previous pairing standing. "Missing runtime" must never degrade
+  into "some older runtime". Every shipped reporter already sends `runtime` alongside
+  `account` (`cli/ocagent/contextreport.go`, `cli/ocwarden/codex_session.go`), so this
+  costs nothing in practice and self-heals on the next report;
+- the read side (`telemetryAccount`, used by the monitoring session/machine folds and by
+  `foldActorRuntime` for the outsource-worker DTO) admits the key only when the stamp
+  matches the actor's runtime. It never falls back to the entry's ordinary `runtime`
+  field, which every later heartbeat rewrites.
+
+Withholding is scoped, not global: the owner's **accounts overview** still lists every
+reported key (it is global observability and the surface where the owner aliases a key);
+only the per-actor session/machine attribution cells go honestly empty. Display naming is
+unchanged and orthogonal — the owner's hand-set alias stays visible to every caller rank,
+while the reporter-supplied `account_label` stays owner-only PII (T-260e).
+
 ## Attribution
 
 OffiCraft-authored Codex commits use the human git author only and do not add a Codex

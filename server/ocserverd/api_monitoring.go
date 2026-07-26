@@ -481,16 +481,12 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	} else if machine, isStr := body.Machine.(string); isStr && machine != "" {
 		entry["machine"] = machine
 	}
-	if account, isStr := body.Account.(string); isStr && account != "" {
-		entry["account"] = account
-	}
-	// account_label (T-260e): the reporter's human-readable label for the
-	// account key (oauthAccount email/org — PII). Folded into the entry for the
-	// OWNER-FACING monitoring fold only; it is deliberately NOT echoed on the
-	// agent-readable ingest response below and never joins the stable key.
-	if label, isStr := body.AccountLabel.(string); isStr && label != "" {
-		entry["account_label"] = label
-	}
+	// Account keys belong to a runtime-specific identity space, so the key, its
+	// provenance stamp and its reporter label move as ONE unit through the
+	// partial merge — see applyAccountReport (account_display.go) for the three
+	// fail-closed rules that keep the pairing true across the whole sequence of
+	// reports, not just the happy path.
+	applyAccountReport(entry, body.Account, body.AccountLabel, runtime)
 	entry["ts"] = nowSecs()
 	s.telemetry.Set(agentID, entry)
 	// No agent consumes the monitoring signal on the wire; owner cockpit only.
@@ -612,7 +608,7 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		}
 		// Runtime facts fold through the SAME foldActorRuntime the outsource
 		// worker DTO reads (P7b read-path convergence — one fold, two wires).
-		rt := foldActorRuntime(entry, gauge[m.ID], m.BankedCost)
+		rt := foldActorRuntime(entry, gauge[m.ID], m.BankedCost, m.Runtime)
 		sessions = append(sessions, monitoringSessionDTO{
 			ID:              m.ID,
 			Name:            m.Name,
@@ -648,7 +644,7 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 				hwByHost[host] = hw
 			}
 		}
-		if account, ok := entry["account"].(string); ok && account != "" {
+		if account := telemetryAccount(entry, m.Runtime); account != "" {
 			if acctByHost[host] == nil {
 				acctByHost[host] = map[string]bool{}
 			}
@@ -708,8 +704,8 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	acctHasCost := map[string]bool{}
 	for _, m := range members {
 		entry := tele(m.ID)
-		account, ok := entry["account"].(string)
-		if !ok || account == "" {
+		account := telemetryAccount(entry, m.Runtime)
+		if account == "" {
 			continue
 		}
 		ts, _ := entry["ts"].(float64)
@@ -741,6 +737,14 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	}
 	for account := range acctCost {
 		accountKeys[account] = true
+	}
+	// The account overview is global owner observability, not a member-account
+	// attribution cell. Keep every reported key visible here even when it is
+	// deliberately withheld from a mismatched session/machine fold.
+	for _, entry := range telemetry {
+		if account, _ := entry["account"].(string); account != "" {
+			accountKeys[account] = true
+		}
 	}
 	sortedAccounts := make([]string, 0, len(accountKeys))
 	for account := range accountKeys {
