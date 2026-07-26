@@ -508,6 +508,14 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	}
 	if body.Runtimes != nil {
 		entry["runtimes"] = runtimes
+		// Same per-sample stamp as hardware_ts, same reason (T-b36a): the entry
+		// ts advances on every report, so a receipt carrying no capability probe
+		// would make an arbitrarily old "codex not logged in" look freshly
+		// measured. Placement (machineSupportsRuntime) deliberately does NOT
+		// consult this — expiring the map there would silently reclassify a quiet
+		// machine as a legacy warden and hand it Claude work; freshness here is a
+		// question about what the COCKPIT may present as current.
+		entry["runtimes_ts"] = nowSecs()
 	}
 	if runtime != nil {
 		entry["runtime"] = *runtime
@@ -599,7 +607,10 @@ func entryNum(entry map[string]any, key string) *float64 {
 	return nil
 }
 
-// hardwareFreshSecs is how long a reported hardware sample stays serveable.
+// telemetryFreshSecs is how long a reported telemetry SAMPLE stays serveable —
+// the hardware snapshot and the runtime capability probes both ride the same
+// warden heartbeat, so they get the same window rather than two knobs that can
+// disagree about what "recent" means.
 //
 // The warden heartbeat cadence is 30s (cli/ocwarden: reportThrottle), and a
 // heartbeat the server ACCEPTS resets the loop straight back to that cadence, so
@@ -613,7 +624,15 @@ func entryNum(entry map[string]any, key string) *float64 {
 // measured this box lately" are different facts, and the second is the one these
 // numbers depend on. A machine can be online with a wedged collector, and it can
 // be briefly offline with a 5-second-old sample that is still perfectly true.
-const hardwareFreshSecs = 90.0
+const telemetryFreshSecs = 90.0
+
+// runtimeCapabilitiesStampOf reads WHEN the entry's capability probe was taken.
+// Same fail-closed reading as hardwareStampOf: a map with no stamp has an
+// unknown age, and unknown age is not freshness.
+func runtimeCapabilitiesStampOf(entry map[string]any) float64 {
+	ts, _ := entry["runtimes_ts"].(float64)
+	return ts
+}
 
 // hardwareStampOf reads WHEN the entry's hardware sample was taken. Fail-closed:
 // an entry carrying hardware with no hardware_ts has an UNKNOWN age, and unknown
@@ -723,16 +742,12 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		host := s.observedHost(m)
 		hostCounts[host]++
 		if hw, ok := entry["hardware"].(map[string]any); ok {
-			// A hardware sample is only usable while it is FRESH. Telemetry is
-			// never cleared on disconnect (only on dismissal), so without this
-			// gate a machine that reported once and then went away kept serving
-			// its last CPU/RAM/battery numbers forever — beside an "offline"
-			// badge, with nothing on the wire saying how old they were. That
-			// reads as a confident live measurement and has already been
-			// misread. Past the TTL we serve the SAME honest nulls a machine
-			// that never reported hardware serves, so "no data" looks like no
-			// data. See hardwareFreshSecs for the threshold.
-			if ts := hardwareStampOf(entry); now-ts <= hardwareFreshSecs {
+			// Track the freshest sample per host REGARDLESS of age; whether its
+			// numbers may be served is decided per row below. Keeping the stamp
+			// for an expired sample is what lets the cockpit say "nobody has
+			// measured this box for an hour" instead of showing the same blank
+			// row as a box that has never reported hardware at all.
+			if ts := hardwareStampOf(entry); ts > 0 {
 				if prior, seen := hwTS[host]; !seen || ts > prior {
 					hwTS[host] = ts
 					hwByHost[host] = hw
@@ -773,11 +788,41 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 			ClaudeSubReadable:   claudeSubReadable,
 			RuntimeCapabilities: s.machineRuntimeCapabilities(host),
 		}
-		if hw != nil {
-			row.CpuPct = teleNum(hw["cpu_pct"])
-			row.RamPct = teleNum(hw["ram_pct"])
-			row.BatteryPct = teleNum(hw["battery_pct"])
-			row.ACPower = teleBool(hw["ac_power"])
+		// A hardware sample is only SERVEABLE while it is fresh. Telemetry is
+		// never cleared on disconnect (only on dismissal), so without this gate a
+		// machine that reported once and then went away kept serving its last
+		// CPU/RAM/battery numbers forever — beside an "offline" badge, with
+		// nothing on the wire saying how old they were. That reads as a confident
+		// live measurement and has already been misread. Past the TTL the numbers
+		// go back to the SAME honest nulls a machine that never reported hardware
+		// serves; the stamp stays on the wire so the two cases remain telling
+		// apart. See telemetryFreshSecs for the threshold.
+		if ts := hwTS[host]; ts > 0 {
+			stamp := ts
+			row.HardwareTS = &stamp
+			if hw != nil && now-ts <= telemetryFreshSecs {
+				row.CpuPct = teleNum(hw["cpu_pct"])
+				row.RamPct = teleNum(hw["ram_pct"])
+				row.BatteryPct = teleNum(hw["battery_pct"])
+				row.ACPower = teleBool(hw["ac_power"])
+			}
+		}
+		// Capability probes carry the same age question with a different answer:
+		// the values are KEPT past the window and marked instead of blanked,
+		// because "codex was not logged in as of 3h ago" is the only surface that
+		// explains a worker parked on machine_unavailable — deleting it would
+		// trade one silent screen for another. Only the confidence is withdrawn.
+		if entry := s.telemetry.Get(host); entry != nil {
+			if ts := runtimeCapabilitiesStampOf(entry); ts > 0 {
+				stamp := ts
+				stale := now-ts > telemetryFreshSecs
+				row.RuntimeCapabilitiesTS = &stamp
+				row.RuntimeCapabilitiesStale = &stale
+			} else if len(row.RuntimeCapabilities) > 0 {
+				// A map of unknown age must not read as current either.
+				stale := true
+				row.RuntimeCapabilitiesStale = &stale
+			}
 		}
 		machines = append(machines, row)
 	}

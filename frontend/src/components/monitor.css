@@ -164,6 +164,20 @@
   color: var(--color-text-muted);
 }
 
+/* A value that is REAL but no longer current (T-b36a). Deliberately shown, not
+   hidden: an expired runtime probe is the only explanation an operator has for
+   a worker that will not place — it just must not read as a live fact. */
+.mon-stale {
+  margin-left: 0.4em;
+  padding: 0 0.35em;
+  border-radius: 3px;
+  font-size: 0.75em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+}
+
 .mon-row--clickable {
   cursor: pointer;
   transition: background 0.15s;

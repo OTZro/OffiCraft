@@ -8,6 +8,7 @@ import { useMonitoring } from "../hooks/useMonitoring";
 import { useMachines } from "../hooks/useMachines";
 import { useOutsourceWorkers } from "../hooks/useOutsourceWorkers";
 import type {
+  MonMachineView,
   MonAccountView,
   MonSessionView,
   Member,
@@ -472,6 +473,9 @@ export function MonitorPage() {
                 <th>{t.monitor.machineCol.cpu}</th>
                 <th>{t.monitor.machineCol.ram}</th>
                 <th>{t.monitor.machineCol.power}</th>
+                <th className="mon-table__left">
+                  {t.monitor.machineCol.runtimes}
+                </th>
                 <th className="mon-table__right">
                   {t.monitor.machine.actionsCol}
                 </th>
@@ -480,7 +484,7 @@ export function MonitorPage() {
             <tbody>
               {machines.length === 0 ? (
                 <tr>
-                  <td className="mon-table__left mon-muted" colSpan={7}>
+                  <td className="mon-table__left mon-muted" colSpan={8}>
                     {t.monitor.machine.machinesEmpty}
                   </td>
                 </tr>
@@ -561,6 +565,38 @@ export function MonitorPage() {
                     </td>
                     <td data-label={t.monitor.machineCol.power}>
                       {powerText(hw ? hw.acPower : null, hw?.batteryPct ?? null, dash)}
+                    </td>
+                    {/* Runtime readiness (T-90be ⑤) — ALWAYS with its age
+                     * (T-b36a). This is not a cosmetic column: when a machine
+                     * cannot launch codex, the server silently refuses to place
+                     * codex work on it and the worker sits stamped
+                     * machine_unavailable; this cell is the only place the
+                     * reason appears. And because telemetry is never cleared on
+                     * disconnect, the values outlive the machine that reported
+                     * them — so a stale probe is shown MARKED rather than shown
+                     * plain (which would be a second confidently-wrong field)
+                     * or dropped (which would delete the only explanation). */}
+                    <td
+                      className="mon-table__left"
+                      data-label={t.monitor.machineCol.runtimes}
+                      data-testid="mon-runtimes"
+                    >
+                      {runtimeCapabilityText(hw?.runtimeCapabilities) === null ? (
+                        <span title={t.monitor.machine.runtimeUnknown}>{dash}</span>
+                      ) : (
+                        <>
+                          <span>{runtimeCapabilityText(hw?.runtimeCapabilities)}</span>
+                          {hw?.runtimeCapabilitiesStale !== false && (
+                            <span
+                              className="mon-stale"
+                              data-testid="mon-runtimes-stale"
+                              title={t.monitor.machine.runtimeStaleHint}
+                            >
+                              {t.monitor.machine.runtimeStale}
+                            </span>
+                          )}
+                        </>
+                      )}
                     </td>
                     {/* Actions — the machine-lifecycle verbs (T-IUD):
                      *   install   → server-self: in-place bootstrap-on-server, run
@@ -1046,6 +1082,35 @@ export function MonitorPage() {
       </section>
     </div>
   );
+}
+
+/** One machine's runtime readiness, e.g. "claude ✓ · codex ✗". null when the
+ * machine has never reported a capability map (an older warden, or no heartbeat
+ * yet) — the caller renders that as the honest dash, NOT as "not ready".
+ *
+ * A reported `false` is an ANSWER and must read as one: `installed:false` and
+ * `loggedIn:false` are exactly the states that make placement refuse this
+ * machine, so folding them into the same "—" as "never told us" would hide the
+ * one thing this column exists to show. Only null is unknown ("?"). */
+export function runtimeCapabilityText(
+  capabilities: MonMachineView["runtimeCapabilities"]
+): string | null {
+  const entries = Object.entries(capabilities ?? {});
+  if (entries.length === 0) return null;
+  return entries
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([runtime, capability]) => {
+      const mark =
+        capability.installed == null
+          ? "?"
+          : !capability.installed || capability.loggedIn === false
+            ? "✗"
+            : capability.loggedIn == null
+              ? "?"
+              : "✓";
+      return `${runtime} ${mark}`;
+    })
+    .join(" · ");
 }
 
 /** Format a percentage, honest "—" when the source is null (never fabricated). */

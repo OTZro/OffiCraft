@@ -908,7 +908,7 @@ func TestFoldWorkerCommandResult_NoopStopSkipped(t *testing.T) {
 // away, and nothing on the wire has ever said how old a hardware sample is. So
 // a machine that reported once and then went dark kept serving that sample
 // forever — a confident "47%" sitting next to an offline badge. These pin that
-// a sample past hardwareFreshSecs reads as NO DATA (the same honest nulls a
+// a sample past telemetryFreshSecs reads as NO DATA (the same honest nulls a
 // machine that never reported hardware serves), and that a fresh one is
 // untouched.
 // ---------------------------------------------------------------------------
@@ -953,14 +953,14 @@ func machineRow(t *testing.T, s *apiServer, machine string) map[string]any {
 func TestGetMonitoring_StaleHardwareReadsAsNoData(t *testing.T) {
 	s, age := freshnessServer(t,
 		`{"cpu_pct": 47, "ram_pct": 61, "battery_pct": 88, "ac_power": true}`)
-	age(hardwareFreshSecs + 1) // reported, then went away
+	age(telemetryFreshSecs + 1) // reported, then went away
 
 	row := machineRow(t, s, "m-abc123")
 	for _, key := range []string{"cpu_pct", "ram_pct", "battery_pct", "ac_power"} {
 		if got, present := row[key]; !present || got != nil {
 			t.Errorf("%s = %v, want null — a sample older than %vs is not a live "+
 				"measurement and must read as no data, not as the last value",
-				key, got, hardwareFreshSecs)
+				key, got, telemetryFreshSecs)
 		}
 	}
 	// The machine itself must NOT vanish: "this host exists but nobody has
@@ -982,7 +982,7 @@ func TestGetMonitoring_FreshHardwareStillServed(t *testing.T) {
 	if got := machineRow(t, s, "m-abc123")["cpu_pct"]; got != 47.0 {
 		t.Fatalf("freshly ingested cpu_pct = %v, want 47", got)
 	}
-	for _, seconds := range []float64{0, 30, hardwareFreshSecs - 1} {
+	for _, seconds := range []float64{0, 30, telemetryFreshSecs - 1} {
 		age(seconds)
 		row := machineRow(t, s, "m-abc123")
 		if row["cpu_pct"] != 47.0 {
@@ -1018,7 +1018,7 @@ func TestGetMonitoring_UnstampedHardwareIsNotFresh(t *testing.T) {
 // old CPU number, which is the same lie in a new costume.
 func TestGetMonitoring_LaterReportWithoutHardwareCannotRefreshIt(t *testing.T) {
 	s, age := freshnessServer(t, `{"cpu_pct": 47}`)
-	age(hardwareFreshSecs + 1)
+	age(telemetryFreshSecs + 1)
 	// A hardware-less report lands NOW: entry["ts"] jumps to the present.
 	if rec := doIngestTelemetry(s, "mira", "m-abc123",
 		`{"runtime":"claude","cost": 1.5}`); rec.Code != 200 {
@@ -1058,5 +1058,215 @@ func TestHandleIngestTelemetry_StampsHardwareSampleTime(t *testing.T) {
 	if got, _ := api.telemetry.Get("m-1")["hardware_ts"].(float64); got != 1000.0 {
 		t.Errorf("hardware_ts = %v, want 1000 untouched — a hardware-less report "+
 			"must not vouch for a sample it did not take", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Per-machine sample stamps on the wire (T-b36a step 2b)
+//
+// Nulling an expired sample fixed the confident-wrong number, but it left two
+// different worlds looking identical on screen: "this box has never reported
+// hardware" and "this box reported, then went away an hour ago". The second is
+// the one an operator has to act on. The stamp is what tells them apart, and it
+// is the reason the fold keeps the timestamp of a sample whose VALUES it refuses
+// to serve.
+// ---------------------------------------------------------------------------
+
+// TestGetMonitoring_StaleHardwareKeepsItsStamp: expired values, surviving stamp.
+func TestGetMonitoring_StaleHardwareKeepsItsStamp(t *testing.T) {
+	s, age := freshnessServer(t, `{"cpu_pct": 47, "ram_pct": 61}`)
+	age(telemetryFreshSecs + 600)
+
+	row := machineRow(t, s, "m-abc123")
+	if got := row["cpu_pct"]; got != nil {
+		t.Errorf("cpu_pct = %v, want null (the sample expired)", got)
+	}
+	ts, ok := row["hardware_ts"].(float64)
+	if !ok {
+		t.Fatalf("hardware_ts = %v, want the sample time — without it an expired "+
+			"machine is indistinguishable from one that never reported hardware, "+
+			"which is the whole reason the numbers could be trusted too long",
+			row["hardware_ts"])
+	}
+	if age := nowSecs() - ts; age < telemetryFreshSecs {
+		t.Errorf("hardware_ts is %.0fs old, want the ORIGINAL sample time (~%.0fs) — "+
+			"a stamp that advances on read would say the expired numbers are fresh",
+			age, telemetryFreshSecs+600)
+	}
+}
+
+// TestGetMonitoring_NeverReportedHardwareHasNoStamp is the other half: a machine
+// with no sample must not get a fabricated one.
+func TestGetMonitoring_NeverReportedHardwareHasNoStamp(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	m := fullMember("mira")
+	m.RoleKey = "builder"
+	if err := s.dal.PutMember(m); err != nil {
+		t.Fatalf("seed member: %v", err)
+	}
+	if rec := doIngestTelemetry(s, "mira", "m-abc123",
+		`{"runtime":"claude","cost":1.5}`); rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	row := machineRow(t, s, "m-abc123")
+	if got, present := row["hardware_ts"]; !present || got != nil {
+		t.Errorf("hardware_ts = %v, want null — no sample means no sample time", got)
+	}
+	if got, present := row["runtime_capabilities_stale"]; !present || got != nil {
+		t.Errorf("runtime_capabilities_stale = %v, want null — a machine that never "+
+			"probed is not 'fresh' and not 'stale', it is unknown", got)
+	}
+}
+
+// TestGetMonitoring_FreshHardwareCarriesAStampAndItsZeroes is the SENTINEL for
+// the honest-zero problem: 0 and false are real measurements, and the easiest
+// way to break this fold is to treat them as "no data".
+func TestGetMonitoring_FreshHardwareCarriesAStampAndItsZeroes(t *testing.T) {
+	s, _ := freshnessServer(t,
+		`{"cpu_pct": 0, "ram_pct": 0, "battery_pct": 0, "ac_power": false}`)
+	row := machineRow(t, s, "m-abc123")
+	for _, key := range []string{"cpu_pct", "ram_pct", "battery_pct"} {
+		if row[key] != 0.0 {
+			t.Errorf("%s = %v, want 0 — a measured zero is data, not absence", key, row[key])
+		}
+	}
+	if row["ac_power"] != false {
+		t.Errorf("ac_power = %v, want false (a real false, not dropped)", row["ac_power"])
+	}
+	ts, ok := row["hardware_ts"].(float64)
+	if !ok || nowSecs()-ts > 5 {
+		t.Errorf("hardware_ts = %v, want the just-taken sample time", row["hardware_ts"])
+	}
+}
+
+// runtimeCapabilityServer seeds one member that reported a capability probe from
+// host m-abc123, plus a hook that rewrites how long ago it was probed.
+func runtimeCapabilityServer(t *testing.T) (*apiServer, func(ageSecs float64)) {
+	t.Helper()
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	// The capability probe rides the WARDEN's own heartbeat, and a warden member
+	// IS the machine (same id) — that keying is what machineRuntimeCapabilities
+	// reads, so the fixture has to be a warden, not an agent sitting on the host.
+	warden := fullMember("m-abc123")
+	warden.Kind = "warden"
+	warden.RoleKey = ""
+	warden.DesiredMachineID = "m-abc123"
+	if err := s.dal.PutMember(warden); err != nil {
+		t.Fatalf("seed warden: %v", err)
+	}
+	if rec := doIngestTelemetry(s, "m-abc123", "m-abc123",
+		`{"runtimes":{"claude":{"installed":true,"logged_in":true,"version":"2.1.211"},
+			"codex":{"installed":true,"logged_in":false,"version":"0.52.0"}}}`); rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	if len(s.machineRuntimeCapabilities("m-abc123")) != 2 {
+		t.Fatalf("precondition: the probe did not land on the machine (%v)",
+			s.machineRuntimeCapabilities("m-abc123"))
+	}
+	return s, func(ageSecs float64) {
+		entry := s.telemetry.Get("m-abc123")
+		entry["runtimes_ts"] = nowSecs() - ageSecs
+		s.telemetry.Set("m-abc123", entry)
+	}
+}
+
+func capabilityOf(t *testing.T, row map[string]any, runtime string) map[string]any {
+	t.Helper()
+	caps, _ := row["runtime_capabilities"].(map[string]any)
+	capability, _ := caps[runtime].(map[string]any)
+	if capability == nil {
+		t.Fatalf("no runtime_capabilities.%s in %v", runtime, row)
+	}
+	return capability
+}
+
+// TestGetMonitoring_StaleRuntimeCapabilitiesAreMarkedNotBlanked: a machine that
+// probed and then went dark must not present its old readiness as current — but
+// the values stay, because they are the only explanation an operator has for a
+// worker stuck on machine_unavailable. Marked, not deleted.
+func TestGetMonitoring_StaleRuntimeCapabilitiesAreMarkedNotBlanked(t *testing.T) {
+	s, age := runtimeCapabilityServer(t)
+	age(telemetryFreshSecs + 1)
+
+	row := machineRow(t, s, "m-abc123")
+	if row["runtime_capabilities_stale"] != true {
+		t.Errorf("runtime_capabilities_stale = %v, want true — past the window this "+
+			"map is a memory, and rendering it plain is a second field that lies "+
+			"the way the hardware numbers used to", row["runtime_capabilities_stale"])
+	}
+	if _, ok := row["runtime_capabilities_ts"].(float64); !ok {
+		t.Errorf("runtime_capabilities_ts = %v, want the probe time",
+			row["runtime_capabilities_ts"])
+	}
+	if got := capabilityOf(t, row, "codex")["logged_in"]; got != false {
+		t.Errorf("codex logged_in = %v, want the reported false to SURVIVE — it is "+
+			"the only surface that explains why codex work will not place here", got)
+	}
+}
+
+// TestGetMonitoring_FreshRuntimeCapabilitiesAreNotStale is the sentinel: a
+// machine heartbeating normally must never be marked stale, and its honest
+// false must arrive as false.
+func TestGetMonitoring_FreshRuntimeCapabilitiesAreNotStale(t *testing.T) {
+	s, age := runtimeCapabilityServer(t)
+	// Straight off the real ingest path, with NOTHING rewritten: a probe that
+	// just arrived must read as current. This is what goes red if the ingest
+	// handler stops stamping runtimes_ts — an unstamped map is fail-closed
+	// stale, so dropping the stamp would mark every healthy machine out of date.
+	if got := machineRow(t, s, "m-abc123")["runtime_capabilities_stale"]; got != false {
+		t.Fatalf("freshly ingested runtime_capabilities_stale = %v, want false", got)
+	}
+	for _, seconds := range []float64{0, 30, telemetryFreshSecs - 1} {
+		age(seconds)
+		row := machineRow(t, s, "m-abc123")
+		if row["runtime_capabilities_stale"] != false {
+			t.Errorf("age %vs: runtime_capabilities_stale = %v, want false — a machine "+
+				"that has missed at most two heartbeats is not out of date",
+				seconds, row["runtime_capabilities_stale"])
+		}
+		if got := capabilityOf(t, row, "codex")["logged_in"]; got != false {
+			t.Errorf("age %vs: codex logged_in = %v, want false", seconds, got)
+		}
+		if got := capabilityOf(t, row, "claude")["installed"]; got != true {
+			t.Errorf("age %vs: claude installed = %v, want true", seconds, got)
+		}
+	}
+}
+
+// TestGetMonitoring_UnstampedRuntimeCapabilitiesAreNotFresh: fail-closed, the
+// same reading hardware gets. A map whose age is unknown is not current.
+func TestGetMonitoring_UnstampedRuntimeCapabilitiesAreNotFresh(t *testing.T) {
+	s, _ := runtimeCapabilityServer(t)
+	entry := s.telemetry.Get("m-abc123")
+	delete(entry, "runtimes_ts")
+	s.telemetry.Set("m-abc123", entry)
+
+	row := machineRow(t, s, "m-abc123")
+	if row["runtime_capabilities_stale"] != true {
+		t.Errorf("runtime_capabilities_stale = %v, want true — unknown age is not freshness",
+			row["runtime_capabilities_stale"])
+	}
+}
+
+// TestGetMonitoring_ReportWithoutRuntimesCannotRefreshThem: the verdict is about
+// the PROBE, not about the entry. A hardware-only heartbeat advances the entry
+// ts while carrying no capability probe at all.
+func TestGetMonitoring_ReportWithoutRuntimesCannotRefreshThem(t *testing.T) {
+	s, age := runtimeCapabilityServer(t)
+	age(telemetryFreshSecs + 1)
+	if rec := doIngestTelemetry(s, "m-abc123", "m-abc123",
+		`{"hardware":{"cpu_pct":47}}`); rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	row := machineRow(t, s, "m-abc123")
+	if row["cpu_pct"] != 47.0 {
+		t.Fatalf("precondition: the new hardware sample must be served, got %v", row["cpu_pct"])
+	}
+	if row["runtime_capabilities_stale"] != true {
+		t.Errorf("runtime_capabilities_stale = %v, want true — a report carrying no "+
+			"capability probe must not make an old one look freshly measured",
+			row["runtime_capabilities_stale"])
 	}
 }

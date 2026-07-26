@@ -4379,17 +4379,32 @@ export interface components {
              * @default
              */
             display_name: string;
+            /**
+             * Hardware Ts
+             * @description Epoch seconds when the served hardware sample was MEASURED; null = no sample, or a sample whose age is unknown. Per-machine and per-sample on purpose (T-b36a): the telemetry entry's own ts advances on every report, so a command receipt carrying no hardware would make a long-dead CPU number look like it arrived a second ago. A non-null stamp with null cpu/ram/battery/ac means the sample expired — 'nobody has measured this box lately', which is a different fact from 'this box never reported hardware' (both null) and must stay distinguishable.
+             */
+            hardware_ts?: number | null;
             /** Machine */
             machine: string;
             /** Ram Pct */
             ram_pct?: number | null;
             /**
              * Runtime Capabilities
-             * @description Same provider-neutral runtime readiness map carried by ``MachineDTO.runtime_capabilities``.
+             * @description Same provider-neutral runtime readiness map carried by ``MachineDTO.runtime_capabilities``. READ WITH ``runtime_capabilities_stale``: telemetry is never cleared on disconnect, so this map survives the machine that reported it and must not be rendered as a current fact on its own.
              */
             runtime_capabilities?: {
                 [key: string]: components["schemas"]["RuntimeCapabilityDTO"];
             };
+            /**
+             * Runtime Capabilities Ts
+             * @description Epoch seconds when ``runtime_capabilities`` was probed; null = never reported. Same per-sample stamp as ``hardware_ts`` (T-b36a).
+             */
+            runtime_capabilities_ts?: number | null;
+            /**
+             * Runtime Capabilities Stale
+             * @description Whether ``runtime_capabilities`` is older than the server's freshness window; null = never reported. The verdict is computed SERVER-side against the same window ``hardware_ts`` uses, so the threshold has exactly one home. Unlike hardware, the values are NOT blanked when stale: 'codex was not logged in as of 3h ago' is the only surface that explains a worker stuck on ``machine_unavailable``, so it is kept and marked rather than deleted — but it must never be shown as current.
+             */
+            runtime_capabilities_stale?: boolean | null;
         };
         /**
          * MonitoringSessionDTO

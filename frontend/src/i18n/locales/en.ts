@@ -751,6 +751,7 @@ export const en: Dict = {
       ram: "RAM",
       battery: "Battery",
       power: "Power",
+      runtimes: "Runtimes",
     },
     sessionCol: {
       member: "Member",
@@ -840,6 +841,14 @@ export const en: Dict = {
       upgradeOfflineHint:
         "Machine offline — cannot dispatch an upgrade (it self-updates when it reconnects)",
       upgradeError: "Failed to dispatch the upgrade command — try again",
+      // ── runtime readiness (T-90be ⑤ + T-b36a): rendered WITH its age. The
+      // server keeps stale capability values on the wire on purpose (they are
+      // the only explanation for a worker parked on machine_unavailable), so
+      // the UI's job is to show them without claiming they are current.
+      runtimeStale: "stale",
+      runtimeStaleHint:
+        "Last probed a while ago — this machine has not reported since, so this readiness may no longer be true",
+      runtimeUnknown: "Never probed — an older warden, or no heartbeat yet",
     },
   },
   settings: {

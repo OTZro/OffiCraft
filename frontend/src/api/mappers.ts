@@ -715,6 +715,11 @@ function toMonMachine(w: WireMonMachine): MonMachineView {
         },
       ])
     ),
+    // Freshness rides the same mapper as the values it qualifies, so a row can
+    // never arrive carrying readiness with no verdict about how old it is.
+    runtimeCapabilitiesTs: w.runtime_capabilities_ts ?? null,
+    runtimeCapabilitiesStale: w.runtime_capabilities_stale ?? null,
+    hardwareTs: w.hardware_ts ?? null,
   };
 }
 

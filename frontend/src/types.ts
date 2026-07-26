@@ -374,6 +374,26 @@ export interface MonMachineView {
   /** Same probe columns as the registry row (`MachineView.claude*`). */
   claudeVersion: string | null;
   runtimeCapabilities?: MachineView["runtimeCapabilities"];
+  /**
+   * Epoch seconds when `runtimeCapabilities` was probed; null = never reported.
+   */
+  runtimeCapabilitiesTs: number | null;
+  /**
+   * Whether `runtimeCapabilities` is older than the server's freshness window;
+   * null = never reported. The verdict is computed SERVER-side (one home for
+   * the threshold) — the UI only decides how to SHOW an old answer, and the
+   * answer is: show it, marked. Telemetry is never cleared on disconnect, so a
+   * machine that probed once keeps this map forever; rendering it plain would
+   * make a second field confidently wrong the way the hardware numbers were.
+   */
+  runtimeCapabilitiesStale: boolean | null;
+  /**
+   * Epoch seconds when the served hardware sample was measured; null = none.
+   * A non-null stamp with null cpu/ram/battery means the sample EXPIRED (the
+   * server withholds stale numbers) — a different fact from "never measured",
+   * and the only reason an operator can tell the two apart.
+   */
+  hardwareTs: number | null;
   claudeCredSource: ClaudeCredSource;
   claudeSubReadable: boolean | null;
 }

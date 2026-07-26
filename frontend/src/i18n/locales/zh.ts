@@ -845,6 +845,7 @@ export const zh = {
       ram: "RAM",
       battery: "電量",
       power: "電源",
+      runtimes: "Runtime",
     },
     // §3 session table headers
     sessionCol: {
@@ -933,6 +934,12 @@ export const zh = {
       upgradeUnknownHint: "尚未回報版本指紋,無法判斷是否有新版",
       upgradeOfflineHint: "機器離線,無法下發升級(上線時會自動更新)",
       upgradeError: "升級指令下發失敗,請重試",
+      // runtime 能力(T-90be ⑤ + T-b36a):一定連時效一起顯示。過期的值 server
+      // 刻意留在 wire 上(那是 worker 卡在 machine_unavailable 唯一的解釋),
+      // 所以畫面的責任是「照顯示、但不冒充現況」。
+      runtimeStale: "過期",
+      runtimeStaleHint: "距離上次探測已久,該機之後沒有再回報,這個能力狀態可能已經不成立",
+      runtimeUnknown: "從未探測(舊版 warden,或還沒有心跳)",
     },
   },
   settings: {

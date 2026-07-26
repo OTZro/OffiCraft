@@ -347,6 +347,20 @@ type monitoringMachineDTO struct {
 	ClaudeCredSource    *string                         `json:"claude_cred_source"`
 	ClaudeSubReadable   *bool                           `json:"claude_sub_readable"`
 	RuntimeCapabilities map[string]RuntimeCapabilityDTO `json:"runtime_capabilities"`
+	// HardwareTS is WHEN the served hardware sample was measured (epoch secs),
+	// nil when there is no sample or its age is unknown. Until T-b36a nothing on
+	// this wire said how old a number was, so a machine that reported once and
+	// went dark showed a confident CPU percentage next to an offline badge
+	// forever. The stale values are now nulled (see the fold), and this stamp is
+	// what keeps "expired" distinguishable from "never measured".
+	HardwareTS *float64 `json:"hardware_ts"`
+	// RuntimeCapabilitiesTS / RuntimeCapabilitiesStale carry the same freshness
+	// question for the capability probes. Their values are deliberately NOT
+	// blanked when stale: "codex was not logged in as of 3h ago" is the only
+	// surface that explains a worker parked on machine_unavailable, so the fix
+	// for "shown as if current" is to mark it, not to delete it.
+	RuntimeCapabilitiesTS    *float64 `json:"runtime_capabilities_ts"`
+	RuntimeCapabilitiesStale *bool    `json:"runtime_capabilities_stale"`
 }
 
 type monitoringAccountDTO struct {

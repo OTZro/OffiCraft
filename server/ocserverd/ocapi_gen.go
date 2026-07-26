@@ -855,11 +855,20 @@ type MonitoringMachineDTO struct {
 	ClaudeVersion *string  `json:"claude_version,omitempty"`
 	CpuPct        *float64 `json:"cpu_pct,omitempty"`
 	DisplayName   *string  `json:"display_name,omitempty"`
-	Machine       string   `json:"machine"`
-	RamPct        *float64 `json:"ram_pct,omitempty"`
 
-	// RuntimeCapabilities Same provider-neutral runtime readiness map carried by ``MachineDTO.runtime_capabilities``.
+	// HardwareTs Epoch seconds when the served hardware sample was MEASURED; null = no sample, or a sample whose age is unknown. Per-machine and per-sample on purpose (T-b36a): the telemetry entry's own ts advances on every report, so a command receipt carrying no hardware would make a long-dead CPU number look like it arrived a second ago. A non-null stamp with null cpu/ram/battery/ac means the sample expired — 'nobody has measured this box lately', which is a different fact from 'this box never reported hardware' (both null) and must stay distinguishable.
+	HardwareTs *float64 `json:"hardware_ts,omitempty"`
+	Machine    string   `json:"machine"`
+	RamPct     *float64 `json:"ram_pct,omitempty"`
+
+	// RuntimeCapabilities Same provider-neutral runtime readiness map carried by ``MachineDTO.runtime_capabilities``. READ WITH ``runtime_capabilities_stale``: telemetry is never cleared on disconnect, so this map survives the machine that reported it and must not be rendered as a current fact on its own.
 	RuntimeCapabilities *map[string]RuntimeCapabilityDTO `json:"runtime_capabilities,omitempty"`
+
+	// RuntimeCapabilitiesStale Whether ``runtime_capabilities`` is older than the server's freshness window; null = never reported. The verdict is computed SERVER-side against the same window ``hardware_ts`` uses, so the threshold has exactly one home. Unlike hardware, the values are NOT blanked when stale: 'codex was not logged in as of 3h ago' is the only surface that explains a worker stuck on ``machine_unavailable``, so it is kept and marked rather than deleted — but it must never be shown as current.
+	RuntimeCapabilitiesStale *bool `json:"runtime_capabilities_stale,omitempty"`
+
+	// RuntimeCapabilitiesTs Epoch seconds when ``runtime_capabilities`` was probed; null = never reported. Same per-sample stamp as ``hardware_ts`` (T-b36a).
+	RuntimeCapabilitiesTs *float64 `json:"runtime_capabilities_ts,omitempty"`
 }
 
 // MonitoringSessionDTO One live AI session. “context_pct“ comes from the in-memory gauge;
