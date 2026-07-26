@@ -84,7 +84,15 @@ func assertChildEnvIsProjected(t *testing.T, verb string, env []string, serverAp
 		}
 		k, v := kv[:i], kv[i+1:]
 		if !allowed[k] && !serverAppended[k] {
-			t.Errorf("%s: %s=%q reached the ocwarden child — the verb is not going through ocwardenChildEnv", verb, k, v)
+			// KEY ONLY, NEVER THE VALUE. This function scans the env that would
+			// really be handed to the child, and under the very mutant it exists to
+			// catch (the handler passing os.Environ() straight through) that slice is
+			// the SERVER PROCESS's real environment. An independent review ran that
+			// mutant and this message printed live ES_API_KEY_PROD / ES_API_KEY_STAGE
+			// / SSH_AUTH_SOCK values into the CI log. A guard against leaking secrets
+			// to a child must not leak them to stdout in the process of complaining.
+			// The length is enough to tell "present and non-empty" from "empty".
+			t.Errorf("%s: %s (value withheld, %d byte(s)) reached the ocwarden child — the verb is not going through ocwardenChildEnv", verb, k, len(v))
 		}
 		seen[k] = v
 	}

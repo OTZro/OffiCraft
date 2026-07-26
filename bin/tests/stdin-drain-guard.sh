@@ -476,9 +476,14 @@ done
 # Case 5c passes only while install.sh stays under a MEASURED boundary — see the
 # admission above 5c: the boundary is reproducible (81,920 B = 5 x 16,384, the
 # writer's chunk size, bisected twice) but its mechanism is NOT established, and
-# three attempts to state one were each measured false. This file is ~70 KB.
+# three attempts to state one were each measured false. install.sh is ~78 KB and
+# the boundary below is 78,000 B, so the remaining margin is now SMALL — tens of
+# bytes, not kilobytes. Do not read this check's green as room to grow.
 # Left implicit, growing install.sh would one day turn 5c red for a reason that
 # looks like flakiness and has nothing to do with the drain.
+# ⚠️ If you are here because this went red: the right move is to re-measure the
+# cliff AND this boundary together and move both, or to compress install.sh — not
+# to raise the number on its own. It is a measured guard, not a style preference.
 SCRIPT_BYTES="$(wc -c < "$SCRIPT" | tr -d ' ')"
 if [[ "$SCRIPT_BYTES" -le 78000 ]]; then
   ok "static: install.sh is ${SCRIPT_BYTES} B — inside the margin case 5c depends on (cliff measured at 81,920 B = 5 x 16,384)"

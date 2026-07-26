@@ -125,10 +125,19 @@ func (s *apiServer) wardenAlreadyInstalledHere(
 
 // wardenTokfilePath / wardenLaunchdLabel MIRROR cli/ocwarden/namespace.go's
 // tokfileFor + wardenLabelFor. They cannot import it (separate go modules), so
-// the two copies are pinned by TestWardenPaths_MirrorTheOcwardenDerivation,
-// which asserts the exact literal strings ocwarden produces. If that derivation
-// ever moves, this guard would quietly start stat-ing a path nobody writes —
-// i.e. it would answer "no warden here" for a host that has one.
+// the copies are pinned by TWO tests, and both are load-bearing:
+//   - TestWardenPaths_MirrorTheOcwardenDerivation asserts the exact literal
+//     strings ocwarden produces (the original pin, still here).
+//   - onboarding_mirror_test.go confronts THIS side against the shared table
+//     bin/tests/fixtures/namespace-axes.tsv — the same table cli/ocwarden and the
+//     bash installers are checked against. That is what makes a drift name the
+//     copy that drifted instead of merely reporting that two copies disagree; it
+//     also means new namespace cases are added by editing the table, not by
+//     editing four separate tests.
+//
+// If that derivation ever moves, this guard would quietly start stat-ing a path
+// nobody writes — i.e. it would answer "no warden here" for a host that has one,
+// and onboarding would then install a second warden on top of a live launchd job.
 func wardenTokfilePath(home, namespace string) string {
 	return filepath.Join(officraftRootPath(home, namespace), "warden", "exec-warden.tok")
 }
