@@ -513,6 +513,51 @@ func (h *Hub) EnqueueWardenCommand(wardenID string, frame []byte) {
 	h.wardenCmds[wardenID] = append(h.wardenCmds[wardenID], frame)
 }
 
+// RequeueWardenCommands puts frames BACK at the HEAD of wardenID's FIFO, in the
+// order given — the repair half of the drain, for the frames a connection popped
+// but never managed to write (T-e0e3 O1). Without it those frames were simply
+// gone: DrainWardenCommands deletes the whole queue up front, so a write that
+// fails partway through discarded the failing frame and every one behind it,
+// silently and with nothing written anywhere.
+//
+// HEAD, not tail, and order-preserving: these frames were enqueued BEFORE
+// anything that arrived while the doomed write was in flight, and a warden
+// command sequence is order-significant — a `stop` that overtook its own `start`
+// would reap the session that start was meant to create. A re-queue that only
+// restored the COUNT would be indistinguishable from a correct one at a glance
+// and wrong in exactly the way that is hardest to see.
+//
+// A fresh backing array is built on purpose: `frames` is normally a sub-slice of
+// what Drain returned, and appending the existing queue onto it could otherwise
+// scribble over that caller's memory.
+func (h *Hub) RequeueWardenCommands(wardenID string, frames [][]byte) {
+	if wardenID == "" || len(frames) == 0 {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	existing := h.wardenCmds[wardenID]
+	restored := make([][]byte, 0, len(frames)+len(existing))
+	restored = append(restored, frames...)
+	restored = append(restored, existing...)
+	h.wardenCmds[wardenID] = restored
+}
+
+// PendingWardenCommands reports how many command frames are STILL sitting in
+// wardenID's FIFO — i.e. enqueued by the server and not yet collected by any
+// connection claiming that warden. Read-only (it never pops), and it is the only
+// in-process observable that separates "the frame was never even picked up" from
+// "it was picked up and the boot failed": EnqueueWardenCommand succeeding means
+// only that the frame was appended to this map, never that anybody read it.
+func (h *Hub) PendingWardenCommands(wardenID string) int {
+	if wardenID == "" {
+		return 0
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.wardenCmds[wardenID])
+}
+
 // DrainWardenCommands pops and returns ALL of wardenID's pending command
 // frames in FIFO order (nil when none) — at-most-once onto the downstream: a
 // frame drained into a dying connection is lost by design (recovery is

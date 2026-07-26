@@ -1134,6 +1134,19 @@ func TestRespawnWorkerNow_NoKillTarget_DefersWholeCycle(t *testing.T) {
 		!strings.Contains(logged, "no kill target (spawn memory empty, sse offline)") {
 		t.Fatalf("sentinel log missing, got: %q", logged)
 	}
+	// …and the deferral is DIAGNOSABLE on the row, not log-only: a refused start
+	// owes the cockpit a receipt, because the owner-explicit callers of this
+	// primitive (relocate / restart / model change) discard the bool above and used
+	// to leave the worker showing 尚未分配機器 with a blank last_op forever.
+	w, err := api.dal.GetOutsourceWorker(workerID)
+	if err != nil || w == nil {
+		t.Fatalf("re-read worker: %v", err)
+	}
+	if w.LastOp != reconcileCmdStart ||
+		!strings.HasPrefix(w.LastOpReason, spawnReasonRespawnDeferred+":") {
+		t.Fatalf("a deferred respawn must leave a receipt, got last_op=%q reason=%q",
+			w.LastOp, w.LastOpReason)
+	}
 }
 
 // ── the shared-FSM spawn/rescue path (A案 P6 — retired recoverStuckWorker) ──
@@ -1329,6 +1342,194 @@ func TestNotifyWorkerSpawn_TerminalTask_NoDispatch(t *testing.T) {
 	s.outsourceMu.Unlock()
 	if got := s.hub.DrainWardenCommands(ServerSelfHost); len(got) != 0 {
 		t.Errorf("a terminal task must never boot a worker, got %d frames", len(got))
+	}
+	// This arm repeats on every tick forever, so it must be diagnosable rather
+	// than log-only — otherwise a permanently unbootable worker and a booting one
+	// render identically on the cockpit.
+	got, err := s.dal.GetOutsourceWorker("ow-3")
+	if err != nil || got == nil {
+		t.Fatalf("re-read worker: %v", err)
+	}
+	if !strings.HasPrefix(got.LastOpReason, spawnReasonNoLiveTask+":") {
+		t.Errorf("want a %s receipt, got last_op=%q reason=%q",
+			spawnReasonNoLiveTask, got.LastOp, got.LastOpReason)
+	}
+}
+
+// TestReconcileWorkerLiveness_WakeTimeoutLeavesDurableReceipt (T-e0e3 — the ACTUAL
+// X-46 root cause): a START that is DISPATCHED and never produces a session was
+// the one failure a worker row had NO durable record of. The member producer has
+// stamped this same FSM signal since T-ba62 (stampWakeObservability arm (b));
+// reconcileWorkerLiveness never read decision.StartTimedOut, and because worker
+// spawn observability is in-memory by contract, a re-exec then erased the machine
+// cell too — leaving a worker that had been dispatched to repeatedly showing
+// 尚未分配機器 with every last_op field blank.
+//
+// Also pins the 31751ae lesson: the retry that FOLLOWS a wake timeout must not
+// erase the explanation for the one before it.
+func TestReconcileWorkerLiveness_WakeTimeoutLeavesDurableReceipt(t *testing.T) {
+	s := newWorkerTestServer(t)
+	connectWarden(t, s, ServerSelfHost)
+	w := fsmWorkerFixture(t, s, "ow-wt", WorkerStatusAssigned, 0)
+
+	base := nowSecs()
+	s.outsourceMu.Lock()
+	// Tick 1 dispatches the START; the worker never connects.
+	s.reconcileWorkerLiveness(w, base)
+	s.outsourceMu.Unlock()
+	if len(s.hub.DrainWardenCommands(ServerSelfHost)) != 1 {
+		t.Fatal("precondition: the first tick must dispatch a START")
+	}
+	if got, _ := s.dal.GetOutsourceWorker("ow-wt"); got.LastOpReason != "" {
+		t.Fatalf("a start in flight is not yet a failure: %q", got.LastOpReason)
+	}
+
+	// Tick 2, past the start window: the FSM calls it a silent timeout.
+	s.outsourceMu.Lock()
+	s.reconcileWorkerLiveness(w, base+WakingTTLSecs+1)
+	s.outsourceMu.Unlock()
+
+	got, err := s.dal.GetOutsourceWorker("ow-wt")
+	if err != nil || got == nil {
+		t.Fatalf("re-read worker: %v", err)
+	}
+	if got.LastOp != reconcileCmdStart || got.LastOpOK == nil || *got.LastOpOK ||
+		got.LastOpAt == 0 {
+		t.Fatalf("a lapsed start must be a durable FAILED receipt, got last_op=%q ok=%v at=%v",
+			got.LastOp, got.LastOpOK, got.LastOpAt)
+	}
+	if !strings.HasPrefix(got.LastOpReason, spawnReasonWakeTimeout+":") {
+		t.Fatalf("want a %s receipt, got %q", spawnReasonWakeTimeout, got.LastOpReason)
+	}
+	// The receipt names the machine it was dispatched to and the runtime to check —
+	// a bare "it failed" is not diagnosable.
+	if !strings.Contains(got.LastOpReason, ServerSelfHost) {
+		t.Errorf("the receipt must name the dispatch target: %q", got.LastOpReason)
+	}
+
+	// 31751ae: the NEXT re-dispatch must not blank the reason that explains the
+	// previous failure — wake_timeout is not a placement block.
+	s.outsourceMu.Lock()
+	s.reconcileWorkerLiveness(*got, base+WakingTTLSecs*10)
+	s.outsourceMu.Unlock()
+	after, _ := s.dal.GetOutsourceWorker("ow-wt")
+	if !strings.HasPrefix(after.LastOpReason, spawnReasonWakeTimeout+":") {
+		t.Fatalf("a retry must not erase the wake_timeout receipt, got %q", after.LastOpReason)
+	}
+}
+
+// TestReconcileWorkerLiveness_NeverCollectedIsNotAFailedBoot (T-e0e3 round 3):
+// "the frame was never picked up" and "it was picked up and the boot failed" have
+// different culprits on different machines, so one receipt for both sends the
+// owner to the wrong place. Enqueueing proves nothing about a reader —
+// EnqueueWardenCommand is IsOnline + a map append, and notifyWorkerSpawn returns
+// true on exactly that — so neither its bool nor a frame count can tell these
+// apart. The hub's own FIFO depth can.
+//
+// The two subtests are a matched pair, the shape of the eva-m5 investigation that
+// found this: the SAME worker, the SAME dispatch, differing ONLY in whether
+// anything ever drained the queue.
+func TestReconcileWorkerLiveness_NeverCollectedIsNotAFailedBoot(t *testing.T) {
+	// NOBODY COLLECTS: the warden holds a stream (so placement resolves and the
+	// enqueue succeeds) but never drains its FIFO — the X-46 shape.
+	t.Run("uncollected frame is not blamed on the runtime", func(t *testing.T) {
+		s := newWorkerTestServer(t)
+		connectWarden(t, s, ServerSelfHost)
+		w := fsmWorkerFixture(t, s, "ow-nc", WorkerStatusAssigned, 0)
+
+		base := nowSecs()
+		s.outsourceMu.Lock()
+		s.reconcileWorkerLiveness(w, base) // dispatch — into the FIFO
+		s.outsourceMu.Unlock()
+		// Deliberately do NOT drain: no warden ever reads it.
+		if got := s.hub.PendingWardenCommands(ServerSelfHost); got != 1 {
+			t.Fatalf("precondition: the frame must be sitting in the FIFO, got %d", got)
+		}
+
+		s.outsourceMu.Lock()
+		s.reconcileWorkerLiveness(w, base+WakingTTLSecs+1)
+		s.outsourceMu.Unlock()
+
+		got, err := s.dal.GetOutsourceWorker("ow-nc")
+		if err != nil || got == nil {
+			t.Fatalf("re-read worker: %v", err)
+		}
+		if !strings.HasPrefix(got.LastOpReason, spawnReasonNeverCollected+":") {
+			t.Fatalf("an uncollected frame must say so, got %q", got.LastOpReason)
+		}
+		// The whole point: it must NOT send the owner to inspect the runtime on a
+		// machine that was never even asked to start anything.
+		if strings.Contains(got.LastOpReason, "runtime actually runs") {
+			t.Errorf("must not blame the far machine's runtime: %q", got.LastOpReason)
+		}
+	})
+
+	// SOMETHING COLLECTED IT: same dispatch, the queue is drained (a warden read
+	// it), and the worker still never appears ⇒ a genuine boot failure.
+	t.Run("collected frame that never boots is a wake timeout", func(t *testing.T) {
+		s := newWorkerTestServer(t)
+		connectWarden(t, s, ServerSelfHost)
+		w := fsmWorkerFixture(t, s, "ow-wc", WorkerStatusAssigned, 0)
+
+		base := nowSecs()
+		s.outsourceMu.Lock()
+		s.reconcileWorkerLiveness(w, base)
+		s.outsourceMu.Unlock()
+		if len(s.hub.DrainWardenCommands(ServerSelfHost)) != 1 { // a warden collects it
+			t.Fatal("precondition: one frame must be collected")
+		}
+		if got := s.hub.PendingWardenCommands(ServerSelfHost); got != 0 {
+			t.Fatalf("precondition: the FIFO must be empty after the drain, got %d", got)
+		}
+
+		s.outsourceMu.Lock()
+		s.reconcileWorkerLiveness(w, base+WakingTTLSecs+1)
+		s.outsourceMu.Unlock()
+
+		got, err := s.dal.GetOutsourceWorker("ow-wc")
+		if err != nil || got == nil {
+			t.Fatalf("re-read worker: %v", err)
+		}
+		if !strings.HasPrefix(got.LastOpReason, spawnReasonWakeTimeout+":") {
+			t.Fatalf("a collected-but-dead boot must be a wake timeout, got %q", got.LastOpReason)
+		}
+		if strings.HasPrefix(got.LastOpReason, spawnReasonNeverCollected+":") {
+			t.Errorf("a collected frame must not claim it was never picked up")
+		}
+	})
+}
+
+// TestNotifyWorkerSpawn_NoSigningSecret_LeavesReceipt: the fail-closed mint gate
+// is one of the arms that used to abandon the spawn LOG-ONLY. Placement resolves
+// fine here, so without a receipt the worker sits on a perfectly good machine pin
+// with nothing at all explaining why it never booted.
+func TestNotifyWorkerSpawn_NoSigningSecret_LeavesReceipt(t *testing.T) {
+	s := newWorkerTestServer(t)
+	s.secret = nil
+	connectWarden(t, s, ServerSelfHost)
+	seedMachine(t, s, ServerSelfHost)
+	task := putTaskFixture(t, s, Task{
+		ID: "t-000000000009", TypeKey: "review-pr", Title: "x",
+		Status: TaskStatusNotStarted, Priority: TaskPriorityMid,
+		ExecutorKind: TaskExecutorOutsource, ExecutorID: "ow-9",
+	})
+	w := putWorkerFixture(t, s, OutsourceWorker{
+		ID: "ow-9", Codename: "O-9", Model: "opus", Effort: "high",
+		TaskID: task.ID, Status: WorkerStatusAssigned, DesiredMachineID: ServerSelfHost,
+	})
+	s.outsourceMu.Lock()
+	dispatched := s.notifyWorkerSpawn(w, nowSecs())
+	s.outsourceMu.Unlock()
+	if dispatched || len(s.hub.DrainWardenCommands(ServerSelfHost)) != 0 {
+		t.Fatal("a server with no signing secret must never dispatch a worker start")
+	}
+	got, err := s.dal.GetOutsourceWorker("ow-9")
+	if err != nil || got == nil {
+		t.Fatalf("re-read worker: %v", err)
+	}
+	if !strings.HasPrefix(got.LastOpReason, spawnReasonNoSecret+":") {
+		t.Errorf("want a %s receipt, got last_op=%q reason=%q",
+			spawnReasonNoSecret, got.LastOp, got.LastOpReason)
 	}
 }
 

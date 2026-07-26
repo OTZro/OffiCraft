@@ -462,7 +462,7 @@ func (s *apiServer) HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost
 		internalError(w, err)
 		return
 	}
-	s.respawnWorkerNow(*worker, "restart")
+	s.respawnWorkerForOwnerOp(*worker, "restart")
 	if fresh, ferr := s.dal.GetOutsourceWorker(id); ferr == nil && fresh != nil {
 		worker = fresh
 	}
@@ -523,11 +523,13 @@ func (s *apiServer) HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(
 		internalError(w, err)
 		return
 	}
-	// Take effect immediately only for a live, non-stopped session; an assigned or
-	// stopped worker adopts the new model at its next spawn / restart.
-	if worker.Status == WorkerStatusActive && worker.DesiredState != DesiredStateOffline &&
-		s.hub.IsOnline(worker.ID) {
-		s.respawnWorkerNow(*worker, "runtime/model")
+	// Take effect immediately only for a LIVE session; an assigned worker adopts
+	// the new model at its next spawn. Whether the owner wants it running at all
+	// is deliberately NOT re-asked here — respawnWorkerForOwnerOp owns that single
+	// branch point for all three owner verbs, and asking twice is how the two
+	// copies drift (this one used to skip silently, leaving no receipt).
+	if worker.Status == WorkerStatusActive && s.hub.IsOnline(worker.ID) {
+		s.respawnWorkerForOwnerOp(*worker, "runtime/model")
 		if fresh, ferr := s.dal.GetOutsourceWorker(id); ferr == nil && fresh != nil {
 			worker = fresh
 		}

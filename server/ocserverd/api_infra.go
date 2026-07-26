@@ -213,8 +213,15 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 		// member_token is a secret).
 		if wardenID != "" {
 			if pending := s.hub.DrainWardenCommands(wardenID); len(pending) > 0 {
-				for _, frame := range pending {
+				for i, frame := range pending {
 					if !write(frame) {
+						// T-e0e3 O1: the drain already emptied the FIFO, so the frame
+						// that just failed and everything behind it exist ONLY in this
+						// slice — returning here used to discard them with nothing
+						// written anywhere, which is how a dispatched START could reach
+						// no warden and leave no trace. Put the undelivered tail back at
+						// the HEAD, in order, so the next connection re-drains it.
+						s.hub.RequeueWardenCommands(wardenID, pending[i:])
 						return
 					}
 				}

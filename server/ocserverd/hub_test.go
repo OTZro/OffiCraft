@@ -513,3 +513,74 @@ func TestEnqueueWardenCommand(t *testing.T) {
 		t.Fatalf("unknown warden drains nothing: %q", unknown)
 	}
 }
+
+// TestRequeueWardenCommands (T-e0e3 O1): the repair half of the drain. Frames a
+// connection popped but failed to write go BACK at the HEAD, in the order given —
+// ahead of anything enqueued while the doomed write was in flight, because a
+// warden command sequence is order-significant (a `stop` overtaking its own
+// `start` would reap the session that start was meant to create).
+//
+// Order is asserted frame-by-frame on purpose: a re-queue that restored only the
+// COUNT produces a failure shape identical to a correct one at a glance.
+func TestRequeueWardenCommands(t *testing.T) {
+	h := NewHub()
+	for _, f := range []string{"f-1", "f-2", "f-3"} {
+		h.EnqueueWardenCommand("w-1", []byte(f))
+	}
+	drained := h.DrainWardenCommands("w-1")
+	if len(drained) != 3 {
+		t.Fatalf("precondition: want 3 drained, got %d", len(drained))
+	}
+	// f-1 went out; the write of f-2 failed, so f-2 and f-3 never left.
+	// Meanwhile a NEW command was enqueued for this warden.
+	h.EnqueueWardenCommand("w-1", []byte("f-4-arrived-later"))
+	h.RequeueWardenCommands("w-1", drained[1:])
+
+	if got := h.PendingWardenCommands("w-1"); got != 3 {
+		t.Fatalf("want 3 pending (2 restored + 1 newer), got %d", got)
+	}
+	back := h.DrainWardenCommands("w-1")
+	want := []string{"f-2", "f-3", "f-4-arrived-later"}
+	if len(back) != len(want) {
+		t.Fatalf("want %d frames, got %d (%q)", len(want), len(back), back)
+	}
+	for i := range want {
+		if string(back[i]) != want[i] {
+			t.Fatalf("frame[%d] = %q, want %q (restored frames must lead, in order): %q",
+				i, back[i], want[i], back)
+		}
+	}
+
+	// Degenerate inputs are no-ops, never a panic or a phantom queue.
+	h.RequeueWardenCommands("", [][]byte{[]byte("x")})
+	h.RequeueWardenCommands("w-9", nil)
+	if got := h.PendingWardenCommands("w-9"); got != 0 {
+		t.Fatalf("an empty requeue must not create a queue, got %d", got)
+	}
+}
+
+// TestPendingWardenCommands: the read-only backlog probe — the ONE in-process
+// observable that separates "nobody collected the frame" from "it was collected
+// and the boot failed". It must never pop (a probe that consumed the queue would
+// be impersonating the warden, the exact mistake it exists to detect).
+func TestPendingWardenCommands(t *testing.T) {
+	h := NewHub()
+	if got := h.PendingWardenCommands("w-1"); got != 0 {
+		t.Fatalf("empty queue: got %d", got)
+	}
+	h.EnqueueWardenCommand("w-1", []byte("f-1"))
+	h.EnqueueWardenCommand("w-1", []byte("f-2"))
+	if got := h.PendingWardenCommands("w-1"); got != 2 {
+		t.Fatalf("want 2, got %d", got)
+	}
+	if got := h.PendingWardenCommands("w-1"); got != 2 {
+		t.Fatalf("the probe must be READ-ONLY; second read got %d", got)
+	}
+	if got := h.PendingWardenCommands(""); got != 0 {
+		t.Fatalf("blank warden id: got %d", got)
+	}
+	h.DrainWardenCommands("w-1")
+	if got := h.PendingWardenCommands("w-1"); got != 0 {
+		t.Fatalf("after a real drain the queue must read empty, got %d", got)
+	}
+}
