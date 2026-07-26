@@ -67,6 +67,7 @@ export function PushNotifications() {
       if (!settings.pushContactEmail) {
         setErrorMessage(t.notifications.contactRequired);
         setState("error");
+        window.alert(t.notifications.contactRequired);
         return;
       }
       const permission = await Notification.requestPermission();
