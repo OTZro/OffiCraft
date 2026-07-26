@@ -4,13 +4,25 @@
 #
 # WHAT IS BEING GUARDED — AND WHAT IS NOT
 # ---------------------------------------
-# The namespace→(root, launchd label) derivation is hand-transcribed across SIX
-# FILES / TEN CODE SITES. This list has been wrong twice: it said FOUR, then
-# FIVE, and each time it read as complete. The count is now per-SITE, because
-# counting files is what hid the miss — bin/install.sh alone carries FIVE sites,
-# and the one that was missing (the ocwarden label) lives in a file that was
-# already "on the list".
+# The namespace→(root, launchd label) derivation is hand-transcribed across SEVEN
+# FILES / ELEVEN CODE SITES. This list has been wrong THREE times: it said FOUR,
+# then FIVE, then TEN-in-SIX, and each time it read as complete. The count is now
+# per-SITE, because counting files is what hid the first miss — bin/install.sh
+# alone carries FIVE sites, and the one that was missing (the ocwarden label)
+# lived in a file that was already "on the list". The third miss was of a
+# different kind and worth naming: cli/ocagent/config.go's agent-home fallback
+# was listed BELOW as a non-guarded axis "which exists only in the Go copy", when
+# it was in fact a derivation site with NO namespace in it at all — a site is not
+# absent from this list only by being unlisted, it can also be listed under the
+# wrong heading.
 #
+#   cli/ocagent/config.go           ← 1 site (agents-home fallback root, as a
+#                                     function: fallbackAgentsHome). By VALUE in
+#                                     cli/ocagent/namespace_mirror_test.go.
+#                                     ⚠️ Until T-5047 this site hard-wired
+#                                     ~/.officraft/agents with no namespace, so a
+#                                     namespaced ocagent that lost OC_AGENT_HOME
+#                                     kept its state in the MAIN instance's tree.
 #   cli/ocwarden/namespace.go       ← 1 site (root + label + tmux socket, as
 #                                     functions). By VALUE in
 #                                     namespace_mirror_test.go.
@@ -43,8 +55,6 @@
 #   - e2e_test/lib/oc_lifecycle.sh, per the reasoning above.
 #   - bin/ocserver's namespacing END TO END: it has no hermetic suite, so only
 #     the text of its derivation is pinned, never its behaviour.
-#   - The agent-home axis (OC_AGENT_HOME), which exists only in the Go copy and
-#     is not in the shared table.
 #   - Any site added after this comment. This list is maintained by hand, which
 #     is precisely how it was wrong twice; `grep -rn 'officraft[-.]\$' bin/` is
 #     the cheap way to re-derive it before trusting it.
@@ -59,8 +69,9 @@
 #   - Whether bin/ocserver's namespacing actually WORKS end to end. install.sh
 #     has install-guard.sh §10 / uninstall-guard.sh for that; bin/ocserver has
 #     no equivalent hermetic suite, so its coverage here is structure only.
-#   - The tmux-socket and agent-home axes, which exist only in the Go copy (the
-#     table carries the socket column and namespace_mirror_test.go checks it).
+#   - The tmux-socket axis and the agents-home fallback, which exist only in the
+#     Go copies — both ARE checked by value, by cli/ocwarden and cli/ocagent's
+#     module tests respectively, just not by this file.
 #
 # WHY THE SHELL COPIES GET A DIFFERENT TREATMENT
 # ----------------------------------------------
@@ -87,13 +98,18 @@ PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); printf '  ok   — %s\n' "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf '  FAIL — %s\n' "$1"; }
 
-echo "namespace mirror — 10 hand-transcribed derivation sites in 6 files; 9 checked here or by module tests (e2e harness copy deliberately unguarded), + the charset in its 4 copies"
+echo "namespace mirror — 11 hand-transcribed derivation sites in 7 files; 10 checked here or by module tests (e2e harness copy deliberately unguarded), + the charset in its 5 copies (4 grepped here, cli/ocagent's by value in its module test)"
 
-# ── the charset, in all FOUR copies that carry it ───────────────────────────
-# FOUR is the charset's own count and is not the derivation-site count above:
-# the charset literal lives in cli/ocwarden/namespace.go, server/ocserverd/config.go,
-# bin/install.sh and bin/ocserver. (server's charset is in config.go, while its
-# label/root derivation is in onboarding.go — which is why the two lists differ.)
+# ── the charset, in the FOUR copies this file can grep ──────────────────────
+# The charset literal lives in FIVE places: cli/ocwarden/namespace.go,
+# cli/ocagent/config.go, server/ocserverd/config.go, bin/install.sh and
+# bin/ocserver. FIVE is the charset's own count and is not the derivation-site
+# count above (server's charset is in config.go while its label/root derivation is
+# in onboarding.go — which is why the two lists differ). Only four are grepped
+# here; cli/ocagent's is pinned BY VALUE against the same table line in
+# cli/ocagent/namespace_mirror_test.go (TestNamespaceCharset_MatchesTheSharedTable),
+# so it is checked, just not from this file. Adding it to the loop below would be
+# a second, weaker check of an already-checked copy.
 CHARSET="$(sed -n 's/^# charset	//p' "$TABLE" | head -1)"
 if [[ -z "$CHARSET" ]]; then
   echo "FATAL: $TABLE carries no '# charset<TAB><regex>' line — the charset is unpinned" >&2

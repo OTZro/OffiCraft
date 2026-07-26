@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -55,9 +56,7 @@ func loadConfig(env func(string) string) Config {
 
 	home := env("OC_AGENT_HOME")
 	if home == "" {
-		if h, err := os.UserHomeDir(); err == nil {
-			home = filepath.Join(h, ".officraft", "agents")
-		}
+		home = fallbackAgentsHome(env, os.UserHomeDir)
 	}
 
 	return Config{
@@ -68,6 +67,68 @@ func loadConfig(env func(string) string) Config {
 		Role:     env("OC_ROLE"),
 		TaskType: env("OC_TASK_TYPE"),
 	}
+}
+
+// ---------------------------------------------------------------------------
+// agent-home fallback — a namespace derivation point, and it was missing (T-5047)
+// ---------------------------------------------------------------------------
+//
+// envNamespaceKey / namespaceShape / fallbackAgentsHome are a HAND-TRANSCRIBED
+// MIRROR of cli/ocwarden/namespace.go's envNamespaceKey / namespaceShape /
+// officraftRootFor. ocagent and ocwarden are separate Go modules with no import
+// path between them (same reason loadConfig/jwtSub above are copies), so this copy
+// is confronted against the SHARED TABLE bin/tests/fixtures/namespace-axes.tsv by
+// namespace_mirror_test.go in this package — the same discipline the other copies
+// already had, so a drift here reddens THIS copy by name.
+//
+// THE DEFECT THIS CLOSES
+// ----------------------
+// The fallback used to be a hard-wired filepath.Join(home, ".officraft", "agents")
+// with no namespace in it at all. It was described as an axis that only exists in
+// the Go copy; it is not — it is a namespace derivation point that was simply
+// MISSING one. A namespaced ocagent that loses OC_AGENT_HOME (spawn only exports it
+// when the namespace is non-empty, so a hand-started or re-exec'd listener is one
+// unset env away) would resolve its state directory into the MAIN instance's
+// ~/.officraft/agents and, keyed only by lowercased agent id, collide with the main
+// instance's agent of the same id. What is at stake is bounded — the files under
+// there are the SSE cursor, the reply-card seen set and the context-report stamp,
+// i.e. pure dedup/optimisation ("losing it costs a full refetch or one silent
+// re-baseline, never truth", cursorPath) — but "instance A silently writes into
+// instance B's tree" is the exact shape this ticket exists to remove, and a
+// derivation point that is right by accident is the thing being removed.
+const envNamespaceKey = "OC_NAMESPACE"
+
+// namespaceShape is the locked charset, byte-identical to the other copies. It is
+// load-bearing here and not decoration: an unvalidated value is joined into a
+// PATH, so `OC_NAMESPACE=../x` would escape the instance root entirely.
+var namespaceShape = regexp.MustCompile(`^[a-z0-9-]{1,16}$`)
+
+// fallbackAgentsHome derives THIS INSTANCE's agents root: <root>/agents where root
+// is ~/.officraft for the main instance and ~/.officraft-<ns> otherwise (path
+// syntax uses a dash — see the shared table).
+//
+// A non-empty OC_NAMESPACE that fails the charset yields "" — the same
+// already-tolerated degraded state as an unresolvable home directory (the agent
+// then keeps no cross-run dedup state, which costs a refetch and nothing else).
+// It deliberately does NOT fold back to the main instance: namespace.go's own
+// warning is that "a malformed namespace silently folding back to the main
+// instance's paths would be far worse than a hard error", and unlike ocwarden this
+// call site has no error channel to refuse through. Loud refusal for a malformed
+// namespace stays where it belongs, in ocwarden's namespaceFromEnv at install and
+// at run.
+func fallbackAgentsHome(env func(string) string, userHomeDir func() (string, error)) string {
+	h, err := userHomeDir()
+	if err != nil {
+		return ""
+	}
+	ns := env(envNamespaceKey)
+	if ns == "" {
+		return filepath.Join(h, ".officraft", "agents")
+	}
+	if !namespaceShape.MatchString(ns) {
+		return ""
+	}
+	return filepath.Join(h, ".officraft-"+ns, "agents")
 }
 
 // jwtSub reads the `sub` claim of a JWT WITHOUT verifying (the agent holds no

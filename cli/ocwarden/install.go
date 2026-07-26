@@ -16,8 +16,12 @@
 // through the injectable sysOps struct, and the seam itself is constructed in exactly
 // ONE place (realHostSeam, reached only via the rebindable `newHostSeam` var — see
 // hostSeam below): production gets the real os/exec+os wiring, and the test binary
-// rebinds newHostSeam in TestMain so unit tests and CI can NEVER touch launchctl or
-// the live machine, guard or no guard. WARDEN_INSTALL_DRYRUN=1 is the dry-run seam
+// rebinds newHostSeam in TestMain, so an entry point that TAKES ITS EFFECTS FROM THE
+// SEAM cannot touch launchctl or the live machine, guard or no guard. What the seam
+// alone does NOT buy — and this sentence used to claim it did — is protection against
+// code that assembles the wiring itself instead of asking for it; see hostSeam below
+// for the mutant that did exactly that, and for the two checks that now close it.
+// WARDEN_INSTALL_DRYRUN=1 is the dry-run seam
 // (byte-parity with the bash installer's env of the same name): it prints every
 // step's intent and mutates nothing.
 //
@@ -175,10 +179,30 @@ func realSysOps() sysOps {
 //     entry points, so a bug in `guard`, in namespace derivation, or in the
 //     label math cannot escalate into touching the machine.
 //
-// The single-construction-point property is machine-checked by
-// TestHostSeam_SingleConstructionPoint: realSysOps() may appear in exactly one
-// place in the non-test sources (realHostSeam, below). Reintroducing an inline
-// realSysOps() anywhere reddens that test.
+// 🔴 THE LIMIT OF THAT, MEASURED RATHER THAN ASSUMED
+// The two bullets above hold for an entry point that GOES THROUGH the seam. They do
+// NOT hold for one that builds the wiring itself. Independent review put
+// `sysOps{run: execRunner{…}.Run, rename: os.Rename, …}` inline in teardownCmd: the
+// words realSysOps and realHostSeam appear nowhere in it, so every identifier-based
+// guard stayed green, refuseInTestBinary was never called, and the test binary issued
+// a real `launchctl bootout gui/<uid>/com.officraft.ocwarden` against the developer
+// machine's live warden. The suite did go red afterwards — with "no host seam was
+// constructed" — which is detection, not defence, and is the shape of the accident
+// this whole file exists to prevent.
+//
+// So the structural claim is machine-checked in THREE layers, and only the last one
+// is unroutable-around (all of it in hostseam_test.go's scanHostSeamSource, run from
+// TestMain before m.Run()):
+//   - realSysOps() may appear in exactly one place in the non-test sources
+//     (realHostSeam, below), and realHostSeam is CALLED nowhere. Identifier-level.
+//   - the `sysOps{` and `execRunner{` composite literals may each appear in exactly
+//     one place (realSysOps's return, and main.go's `var newCmdRunner`). This pins
+//     the STRUCTURE, so the mutant above is now a TestMain refusal before any test
+//     runs — verified: zero tests executed, zero launchctl processes started.
+//   - main.go's execRunner.Run opens with refuseInTestBinary. Whatever assembled the
+//     struct, the subprocess still has to start there, so this fires BEFORE
+//     exec.Command — verified by deleting the layer above and re-running the same
+//     mutant: it died at `execRunner.Run(launchctl)` with the live warden untouched.
 type hostSeam struct {
 	sys         sysOps
 	claudeProbe func(bin, pathEnv, home string) error

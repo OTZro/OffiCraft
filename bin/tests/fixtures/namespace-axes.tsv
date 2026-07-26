@@ -3,12 +3,16 @@
 # WHY THIS FILE EXISTS
 # --------------------
 # The same namespace→(root, launchd label, tmux socket, tokfile) derivation is
-# implemented across SIX FILES / TEN CODE SITES, in three languages, across two Go
-# modules that cannot import each other. Count SITES, not files: this header said
-# FOUR and the guard said FIVE, and both were wrong because bin/install.sh carries
-# five sites on its own — including the ocwarden label, which is the one this
-# ticket is about and the one that was missing from every list.
+# implemented across SEVEN FILES / ELEVEN CODE SITES, in three languages, across
+# three Go modules that cannot import each other. Count SITES, not files: this
+# header said FOUR and the guard said FIVE, and both were wrong because
+# bin/install.sh carries five sites on its own — including the ocwarden label,
+# which is the one this ticket is about and the one that was missing from every
+# list. The seventh file (cli/ocagent/config.go) was missing for a different
+# reason: it was listed as a non-guarded AXIS rather than as a derivation site,
+# and it had no namespace in it at all.
 #
+#   cli/ocagent/config.go         fallbackAgentsHome (agents-home fallback root)
 #   cli/ocwarden/namespace.go     wardenLabelFor / officraftRootFor /
 #                                 tmuxSocketFor / tokfileFor
 #   server/ocserverd/onboarding.go  wardenLaunchdLabel / officraftRootPath /
@@ -39,6 +43,7 @@
 # Change one side and only that side goes red — which is what makes the failure
 # say WHICH copy drifted instead of merely that two copies differ:
 #
+#   cli/ocagent/namespace_mirror_test.go        (go test ./cli/ocagent/)
 #   cli/ocwarden/namespace_mirror_test.go       (go test ./cli/ocwarden/)
 #   server/ocserverd/onboarding_mirror_test.go  (go test ./server/ocserverd/)
 #   bin/tests/namespace-mirror-guard.sh         (the two bash copies + charset)
@@ -57,7 +62,8 @@
 # historical literal. The tokfile is always <root>/warden/exec-warden.tok and is
 # derived, not listed, so it cannot disagree with root.
 #
-# CHARSET (all four implementations must carry this exact regex source):
+# CHARSET (all FIVE copies must carry this exact regex source — cli/ocwarden,
+# cli/ocagent, server/ocserverd/config.go, bin/install.sh, bin/ocserver):
 # charset	^[a-z0-9-]{1,16}$
 
 <empty>	<empty>	com.officraft.ocwarden	officraft

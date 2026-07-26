@@ -23,7 +23,10 @@
 package main
 
 import (
-	"os"
+	"bytes"
+	"go/parser"
+	"go/printer"
+	"go/token"
 	"strings"
 	"testing"
 )
@@ -232,12 +235,25 @@ func TestTeardownHere_NamespacedServerTearsDownItsOwn(t *testing.T) {
 // and each must build it from the projection. This is a source scan, so it fails
 // WITHOUT executing anything — the counterfactual (revert either site to
 // `os.Environ()`) is caught before a child is ever spawned.
+//
+// ⚠️ IT SCANS CODE ONLY, AND THAT IS THE WHOLE DIFFERENCE
+// The first version of this guard grepped the RAW file, comments included, and was
+// therefore an always-true assertion for the mutant that matters most: independent
+// review reverted the call site to `append([]string{}, os.Environ()...)` and left
+// the string `ocwardenChildEnv(os.Environ())` in a nearby COMMENT — the positive
+// check matched the comment, the negative check (`:= os.Environ()`) did not match
+// `append(...)`, and this test PASSED while the server shipped its whole
+// environment to a process that boots out a launchd job. The claim in the sentence
+// above was simply false for that variant.
+//
+// So the scan runs over codeOnly(): the file re-printed from its AST with every
+// comment dropped. bin/tests/namespace-mirror-guard.sh already learned this lesson
+// (its code_only helper); the Go side had not caught up.
 func TestOcwardenChildEnv_IsTheOnlyEnvSourceForBothVerbs(t *testing.T) {
-	src, err := os.ReadFile("api_machines.go")
+	body, err := codeOnly("api_machines.go")
 	if err != nil {
 		t.Fatalf("read api_machines.go: %v", err)
 	}
-	body := string(src)
 	for _, fn := range []string{"func (s *apiServer) runWardenInstallHere", "func (s *apiServer) runWardenTeardownHere"} {
 		start := strings.Index(body, fn)
 		if start < 0 {
@@ -254,5 +270,32 @@ func TestOcwardenChildEnv_IsTheOnlyEnvSourceForBothVerbs(t *testing.T) {
 		if strings.Contains(rest, ":= os.Environ()") {
 			t.Errorf("%s assigns os.Environ() directly — that is the pre-T-5047 defect", fn)
 		}
+		// Any OTHER route from os.Environ() into the child env is the same defect
+		// wearing a different syntax (`append([]string{}, os.Environ()...)` is the
+		// literal mutant that defeated the comment-blind version of this guard). The
+		// projection call is the only legitimate mention, so subtract it and there
+		// must be nothing left.
+		if n := strings.Count(rest, "os.Environ()") - strings.Count(rest, "ocwardenChildEnv(os.Environ())"); n > 0 {
+			t.Errorf("%s mentions os.Environ() %d time(s) outside ocwardenChildEnv(...) — every route from the server's own environment into the child must go through the allowlist projection, whatever the syntax", fn, n)
+		}
 	}
+}
+
+// codeOnly returns path's Go source with EVERY comment removed, by re-printing it
+// from an AST parsed without comments. Source scans in this package assert on code,
+// and a scan that also matched its own prose is not an assertion — see the warning
+// on TestOcwardenChildEnv_IsTheOnlyEnvSourceForBothVerbs for the mutant that
+// exploited exactly that. Mirrors code_only() in bin/tests/namespace-mirror-guard.sh.
+func codeOnly(path string) (string, error) {
+	fset := token.NewFileSet()
+	// mode 0: comments are not attached, so the printer cannot emit them.
+	f, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		return "", err
+	}
+	var buf bytes.Buffer
+	if err := printer.Fprint(&buf, fset, f); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
 }
