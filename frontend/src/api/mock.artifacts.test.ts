@@ -88,4 +88,22 @@ describe("mock task artifacts", () => {
       mockApi.removeTaskArtifact("task-art", "ta-nope"),
     ).rejects.toMatchObject({ status: 404 } as Partial<ApiError>);
   });
+
+  // T-2654 — the mock must REFUSE where production refuses. It used to delete
+  // on a closed task while the server 409s, and the mock cockpit is how UI
+  // changes get checked, so the parity gap made a broken flow look correct.
+  // The 409 comes before the artifact lookup, same order as the server.
+  it.each(["done", "terminated", "duplicated"] as const)(
+    "removeTaskArtifact on a %s task is a 409 and leaves the artifact pinned",
+    async (status) => {
+      __injectMockTask(
+        mkTask({ status, closedTs: 3000, artifacts: [mkArtifact({ id: "ta-1" })] }),
+      );
+      await expect(
+        mockApi.removeTaskArtifact("task-art", "ta-1"),
+      ).rejects.toMatchObject({ status: 409 } as Partial<ApiError>);
+      const still = await mockApi.getTask("task-art");
+      expect(still.artifacts?.map((a) => a.id)).toEqual(["ta-1"]);
+    },
+  );
 });

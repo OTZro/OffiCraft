@@ -208,6 +208,47 @@ func TestAddArtifactOnTerminalTaskIs409(t *testing.T) {
 	}
 }
 
+// TestRemoveArtifactOnTerminalTaskIs409 is the symmetric twin of
+// TestAddArtifactOnTerminalTaskIs409 (owner ruling 2026-07-25, T-2654): a closed
+// task's deliverable set is frozen in BOTH directions. The add-only freeze made
+// un-pin an unrecoverable loss — a deliverable could be taken off a closed card
+// and never put back. The open-task remove below is the positive control, so a
+// mutant that freezes un-pin unconditionally reddens too.
+func TestRemoveArtifactOnTerminalTaskIs409(t *testing.T) {
+	api := newTasksTestServer(t)
+	task := createAdHocTask(t, api, "m-exec")
+	link := map[string]any{"kind": "link", "url": "https://x/pr/1"}
+
+	// Positive control: while the task is still open, un-pin works as before.
+	openArt := decodeBody[taskDTO](t, addArtifact(t, api, task.ID, link, "m-exec", "agent")).Artifacts[0].ID
+	if rec := removeArtifact(t, api, task.ID, openArt, "m-exec", "agent"); rec.Code != http.StatusOK {
+		t.Fatalf("open task remove must stay 200, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Pin one more, then close the task.
+	artID := decodeBody[taskDTO](t, addArtifact(t, api, task.ID, link, "m-exec", "agent")).Artifacts[0].ID
+	rec := httptest.NewRecorder()
+	api.HandleTerminateTaskApiTasksTaskIdTerminatePost(rec,
+		taskReq(t, "POST", "/x", nil, "owner", "owner"), task.ID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("terminate: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// The executor is refused — same 409 shape as add.
+	if rec := removeArtifact(t, api, task.ID, artID, "m-exec", "agent"); rec.Code != http.StatusConflict {
+		t.Fatalf("terminal task remove must 409, got %d %s", rec.Code, rec.Body.String())
+	}
+	// The owner (admin capability) is not exempt either — the freeze is a task
+	// state rule, not a permission rule.
+	if rec := removeArtifact(t, api, task.ID, artID, "owner", "owner"); rec.Code != http.StatusConflict {
+		t.Fatalf("terminal task remove by owner must 409, got %d %s", rec.Code, rec.Body.String())
+	}
+	// The rejected attempts must leave the deliverable pinned.
+	if got := getTaskView(t, api, task.ID); len(got.Artifacts) != 1 {
+		t.Fatalf("frozen artifact must survive, got %+v", got.Artifacts)
+	}
+}
+
 func TestRemoveArtifact(t *testing.T) {
 	api := newTasksTestServer(t)
 	task := createAdHocTask(t, api, "m-exec")
