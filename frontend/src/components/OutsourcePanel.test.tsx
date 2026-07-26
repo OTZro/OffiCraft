@@ -1,7 +1,7 @@
 // 外包 panel (M3 SPEC §4). Locked here — the acceptance behaviors:
 //   1. Rows render the two-line shape (owner 2026-07-16, folding the
 //      2026-07-14 report's lines 2+3 into one; second ruling the same day
-//      puts the dot at the line start): 代號 / [上線綠點 at 行首, THEN the
+//      puts the dot at the line start): 代號 / [presence 點 at 行首, THEN the
 //      clickable T-xxxx chip, THEN task type — one line] — NO model name
 //      (the codename implies it), NO task title, NO 識別鍵, NO status word.
 //   2. Ordering 依任務建立時間新→舊 (the bound TASK's created_ts, not the
@@ -111,7 +111,7 @@ beforeEach(() => {
 });
 
 describe("OutsourcePanel", () => {
-  it("renders 代號 / [T-xxxx chip → task type + 上線綠點] one line + the task TITLE line (T-3451) — NO model·識別鍵·狀態字", async () => {
+  it("renders 代號 / [T-xxxx chip → task type + presence 點] one line + the task TITLE line (T-3451) — NO model·識別鍵·狀態字", async () => {
     const now = Date.now() / 1000;
     const task = mkTask({
       id: "t-a",
@@ -130,6 +130,7 @@ describe("OutsourcePanel", () => {
         taskId: "t-a",
         taskTitle: "修 PR 回饋",
         taskStatus: "in_progress",
+        presence: "online",
       })
     );
 
@@ -138,17 +139,22 @@ describe("OutsourcePanel", () => {
     // line 1 — the worker's name is the outsource identity label 「外包 · 代號」
     // (T-3ed8, owner 2026-07-20: consistent with the chat header / task chips).
     expect(row.textContent).toContain("外包 · O-7");
-    // line 2 — ONE line (owner 2026-07-16, second ruling): the online green
-    // dot at the LINE START (member-row parity; a LIVE worker is by
-    // definition online — owner report 2026-07-14), THEN the T-xxxx chip,
-    // THEN the bound task's TYPE.
+    // line 2 — ONE line (owner 2026-07-16, second ruling): the PRESENCE dot at
+    // the LINE START (member-row parity — the shared LifecycleDot; this worker
+    // really is online, so it is the green one), THEN the T-xxxx chip, THEN the
+    // bound task's TYPE.
     const taskLine = await findByTestId("outsource-task-line-ow-a");
     const chip = within(taskLine).getByTestId("outsource-task-ow-a");
     const typeLine = within(taskLine).getByTestId("outsource-type-ow-a");
     // Dot, chip and type are SIBLINGS in the same one-line container, in
     // that order — the dot is the container's FIRST element (行首).
-    const dot = taskLine.querySelector(".outsource-row__online-dot");
+    const dot = taskLine.querySelector(".lifecycle-dot");
     expect(dot).not.toBeNull();
+    expect(dot!.className).toContain("lifecycle-dot--online-awake");
+    expect(dot!.getAttribute("aria-label")).toBe(zh.office.presence["online-awake"]);
+    // The colour comes from the token layer (the shared dot's class), never an
+    // inline literal — a JS style would slip past `npm run lint:tokens`.
+    expect(dot!.getAttribute("style")).toBeNull();
     expect(dot!.parentElement).toBe(taskLine);
     expect(taskLine.firstElementChild).toBe(dot);
     expect(chip.parentElement).toBe(taskLine);
@@ -162,7 +168,7 @@ describe("OutsourcePanel", () => {
     ).toBeTruthy();
     expect(chip.textContent).toBe("T-9c21");
     expect(typeLine.textContent).toBe("review-pr");
-    expect(typeLine.querySelector(".outsource-row__online-dot")).toBeNull();
+    expect(typeLine.querySelector(".lifecycle-dot")).toBeNull();
     // line 3 (T-3451, owner 2026-07-23 REVERSES the 2026-07-16 "no title" rule):
     // the bound task's real TITLE now rides its own line, with the full text on
     // the `title` tooltip (hover). The TYPE line stays the type — the title is a
@@ -175,6 +181,76 @@ describe("OutsourcePanel", () => {
     expect(row.textContent).not.toContain("Opus");
     expect(row.textContent).not.toContain("github.com");
     expect(row.textContent).not.toContain("進行中");
+  });
+
+  // ── presence dot (T-59d6) ────────────────────────────────────────────────
+  // The rail row's dot is the worker's REAL presence, painted by the shared
+  // LifecycleDot. Locked per state, on BOTH channels:
+  //   · the VISUAL channel = the lifecycle-dot--<state> class (which is what
+  //     picks the --color-dot-* token). Asserting the class is what makes a
+  //     mutant that paints a non-online state green go RED — an aria-label-only
+  //     assertion would let「四態同色」 pass, which is the exact defect the
+  //     reviewer found.
+  //   · the A11Y channel = the roster's own presence label (colour is invisible
+  //     to a screen reader).
+  // Every state is covered, including the two transition states — an untested
+  // state is a state a mutant can repaint for free.
+  const PRESENCE_CASES: ReadonlyArray<{
+    presence: OutsourceWorkerView["presence"];
+    visual: keyof typeof zh.office.presence;
+  }> = [
+    { presence: "online", visual: "online-awake" },
+    { presence: "waking", visual: "waking" },
+    { presence: "stopping", visual: "stopping" },
+    { presence: "stopped", visual: "stopped" },
+    { presence: "offline", visual: "offline" },
+    // No presence at all (released / older server): honest offline, never green.
+    { presence: undefined, visual: "offline" },
+  ];
+
+  it.each(PRESENCE_CASES)(
+    "paints presence $presence as the $visual dot — distinct colour class + label",
+    async ({ presence, visual }) => {
+      const task = mkTask({ id: "t-p", taskNo: "T-p" });
+      __injectMockTask(task);
+      __injectMockOutsourceWorker(
+        mkWorker({ id: "ow-p", codename: "P-1", taskId: task.id, presence }),
+      );
+
+      const { findByTestId } = renderOutsource();
+      const dot = await findByTestId("outsource-presence-ow-p");
+      expect(dot.className).toBe(`lifecycle-dot lifecycle-dot--${visual}`);
+      expect(dot.getAttribute("aria-label")).toBe(zh.office.presence[visual]);
+      // Colour lives in the token layer; a JS inline style would both bypass
+      // `lint:tokens` and collapse the states into one grey.
+      expect(dot.getAttribute("style")).toBeNull();
+      // …and only the ONE live state may wear the online green.
+      if (presence !== "online") {
+        expect(dot.className).not.toContain("online-awake");
+      }
+    },
+  );
+
+  it("does not paint an assigned but offline worker as live (owner screenshot: X-46)", async () => {
+    const task = mkTask({ id: "t-offline", taskNo: "T-offline" });
+    __injectMockTask(task);
+    __injectMockOutsourceWorker(
+      mkWorker({
+        id: "ow-offline",
+        codename: "X-46",
+        taskId: task.id,
+        taskTitle: "尚未啟動的任務",
+        // server presence=offline, task not_started, no machine — the exact row
+        // the owner screenshotted rendering green.
+        presence: "offline",
+      }),
+    );
+
+    const { findByTestId } = renderOutsource();
+    const dot = await findByTestId("outsource-presence-ow-offline");
+    expect(dot.className).toContain("lifecycle-dot--offline");
+    expect(dot.className).not.toContain("online-awake");
+    expect(dot.getAttribute("aria-label")).toBe(zh.office.presence.offline);
   });
 
   it("the type line shows the manual's DISPLAY name — the raw key stays out of the UI (T-fa76)", async () => {
@@ -496,7 +572,7 @@ describe("OutsourcePanel", () => {
       chip.compareDocumentPosition(typeLine) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
-    expect(sub.querySelector(".outsource-row__online-dot")).toBeNull();
+    expect(sub.querySelector(".lifecycle-dot")).toBeNull();
     // …and no settings gear either (owner 2026-07-17: the outsource ⚙ is gone
     // from BOTH surfaces). ow-1 carries a real "review-pr" typeKey, so this is
     // the case that would grow one if the gear ever came back.

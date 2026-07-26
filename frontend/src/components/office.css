@@ -1865,7 +1865,7 @@ button.chat__msg-file {
 }
 /* line 2's type half — the bound task's TYPE where the member card's role
  * sits (owner 2026-07-14; since 2026-07-16 it sits AFTER the T-xxxx chip on
- * the same line, and the 上線綠點 moved out to the LINE START — a direct
+ * the same line, and the presence 點 moved out to the LINE START — a direct
  * task-line child, member-row parity). */
 .outsource-row__type {
   display: inline-flex;
@@ -1878,15 +1878,14 @@ button.chat__msg-file {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* The 上線綠點 leads the rail row's task line (owner 2026-07-16: 綠點在行首,
- * member-row parity) — always the online green, a LIVE worker is by
- * definition online. The chat header's copy of the line has NO dot. */
-.outsource-row__online-dot {
+/* The PRESENCE dot leads the rail row's task line (owner 2026-07-16: 點在行首,
+ * member-row parity). T-59d6 retired the private `.outsource-row__online-dot`
+ * (a misnomer AND a second colour source — it hard-coded the online green for
+ * every worker): the line now renders the shared `.lifecycle-dot`, so all five
+ * --color-dot-* states are visually distinct here exactly as on the 正職
+ * roster. Only the flex sizing is local. The chat header's copy has NO dot. */
+.outsource-row__task-line > .lifecycle-dot {
   flex: none;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--color-dot-online);
 }
 /* line 2's single-row container (owner 2026-07-16: ● dot, chip, then type) —
  * shared by the rail row AND the worker chat header's subtitle (the shared

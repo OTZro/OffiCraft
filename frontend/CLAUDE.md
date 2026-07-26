@@ -14,6 +14,28 @@
 ## presence
 三畫面(roster MemberCard / MonitorPage / MemberDetailPanel)顯示走**同一個共用 `PresenceBadge`**(5 態:offline / waking / online / stopping / stopped),display 一律傳 `hub.is_online`(realtime 活線)。DB `member.online` 欄是 vestigial(唯一 reader = reconcile fallback),別當 display 真相。
 
+**presence→視覺的推導只有一份(T-59d6)**:`LifecycleDot.tsx` 的 `presenceVisual(presence)`
+是**唯一**的 5 態→視覺映射,`PresenceBadge`(正職)、**兩個外包面**(rail 的
+`OutsourceTaskLine`、`WorkerDetailPanel` header)與 `MemberDetailPanel`
+(它不畫點,是餵 `MemberActionButtons status=`,但那也是同一個 lifecycle→visual 映射,
+一樣不准自己手寫一份)全部走它 + 同一顆 `LifecycleDot`。
+顏色只准來自 `--color-dot-offline/waking/online/stopping/stopped` 五個 token
+(**不准在 JS 寫 inline colour literal**——`npm run lint:tokens` 只掃 CSS,一個
+`style={{background:"#6b7280"}}` 會整個繞過那道 gate,而且會讓四個非 online 態塌成
+同一色,違反「點的顏色是 roster 上唯一的 presence 訊號」)。型別面:worker 的
+`OutsourceWorkerView.presence` 是 **`MemberLifecycle` 五態 union**(不是裸 string),
+因此打錯字或漏處理新態都是 compile error,不是靜默漂移。
+
+**wire 字串的收斂只有一個 seam**:`mappers.ts::toPresence`(**不是 worker 專用**——
+member 與 outsource worker 共用同一套 presence 詞彙,所以共用同一個 narrower)。
+wire 那頭是裸 `string`(spec 已凍結),不認得的字 → `undefined`,再由各 caller 落到
+自己誠實的地板:**member** 的 `lifecycle` 不可為空 → 落 `offline`(`status` 同源同落,
+兩個投影不會各說各話);**worker** 保留 `undefined`(released / 從未派工本身就是資訊)。
+兩者最後都由 `presenceVisual` 畫成 offline 點,**永不假綠**。⚠️ 別把這個 narrower 拿掉:
+未收斂的字會直接掉出 `presenceVisual` 的 no-default switch,渲染成
+`lifecycle-dot--undefined`——**沒有顏色、`role="img"` 卻沒有 aria-label**,對讀屏是整個
+消失的元素,而且不會有任何其他測試變紅。護欄:`api/mappers.presence.test.tsx`。
+
 ## unread 計數 badge(M2-1 紅點升級;與 presence 各自獨立)
 roster MemberCard 成員列**右側(flex 尾端)的紅色計數 badge**(>99 顯示 99+、count=0 完全不渲染)= server 算好的 `member.unreadCount`(MemberDTO `unread_count`,chat_read watermark 的反相計數;只算成員→owner 訊息,agent↔agent 不計;舊純紅點 boolean 已整顆換掉)——FE 純 passthrough、**不自己算**。清除即既有已讀 choke:進對話的 `listChat` auto-mark / `markChatRead`;`useMembers` 的 ROSTER_TOPICS 含 `chat` / `chat_read` 讓 badge 即時亮/滅;開著的那個對話卡片以 `selected` 壓掉 badge(對話中新訊息永不累積)。badge 在整列(聊天入口)內,點 badge = 點列 = 進聊天,無獨立 handler。mock 以同一規則 live 計算(`unreadCountOf`)、行為與 http 一致;測試用 `__injectMockChat` 注入 inbound 訊息。
 
@@ -115,9 +137,11 @@ selected+windowActive 壓掉),mock 以 `unreadCountOf` 同規則 live 計算。
 `outsource_worker`/`task`/`chat`/`chat_read` topic refetch)。**列形(owner
 2026-07-14 截圖回報,對齊正職成員卡三行、蓋過 2026-07-13「代號·狀態+識別鍵
 chip」舊裁定)**:第一行 **代號 (O-7 式)**(外包唯一的名字);第二行 **接到的
-task type + 上線綠點**(外包沒有角色名,綁定任務的 typeKey 就是它的角色行;
-typeKey 空 = 自由代辦字樣;live worker 恆 online——同外包聊天 header synthetic
-member 的不變量);第三行 **任務代號 (T-xxxx) chip,可點 → `#tasks/<taskId>`
+task type + presence 點**(外包沒有角色名,綁定任務的 typeKey 就是它的角色行;
+typeKey 空 = 自由代辦字樣);行首那顆點是 **worker 真實 presence**(共用
+`LifecycleDot` + `presenceVisual`,五態五色)——**舊的「live worker 恆 online」不變量已於
+2026-07-26 由 owner 廢除**(owner 截圖回報:server presence=offline、task=not_started、
+無機器的 X-46 被畫成綠點 = 錯的。「在列上」只代表任務未終態,不代表 session 起來了);第三行 **任務代號 (T-xxxx) chip,可點 → `#tasks/<taskId>`
 任務頁定位**(同回覆卡「查看任務詳情」的 locate-anchor 路由)。**不顯模型名、
 不顯任務標題、不顯識別鍵、不顯狀態字**(狀態看任務頁);排序 = **綁定任務的
 created_ts 新→舊**(join 不到才 fallback worker 自己的 mint stamp);任務終態
@@ -131,8 +155,10 @@ stepper+無限鈕+完成,照 seth-member-2):上限 = `settings.outsource_max_par
 指派」;settings 沒載到 → 誠實只顯 N,不捏上限)。**點列 = 開聊天頻道**:worker 的 `ow-` id 直接
 走 `#office/chat/<id>` 同一個 chatId 槽(OfficePage 先查 workers 再 fallback
 roster,released 自癒回預設成員聊天);ChatArea 完整重用,以 synthetic Member
-(lifecycle 恆 "online" — live worker 才在列上)+ `headerSub` prop **替換**
-PresenceBadge(worker 無 presence 可投影,顯示任務「狀態 · 標題」誠實行);
++ `headerSub` prop **替換** PresenceBadge——**理由不是「worker 無 presence 可投影」**
+(那句已隨上面的不變量一起廢除:worker 有真的 wire `presence`),而是版面裁定
+**presence 只在 rail 那一個地方投影**,chat header 不長第二個 presence 來源,改顯任務行;
+worker 詳情 header 則走與 rail 同一顆 `LifecycleDot`;
 標題「外包 · 代號」;無詳情面板(不傳 onOpenDetail)、無 unread 計數。
 
 ## 設定 › 任務手冊(M3 Phase 4,SPEC §5)

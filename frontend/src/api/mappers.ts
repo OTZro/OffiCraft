@@ -85,10 +85,52 @@ import type {
   WebhookRequestLog,
 } from "./adapter";
 
+/** The five real presence words, as a runtime set — the type union's twin. */
+const PRESENCE_STATES: readonly MemberLifecycle[] = [
+  "offline",
+  "waking",
+  "online",
+  "stopping",
+  "stopped",
+];
+
+/**
+ * Narrow the wire's bare `presence` STRING to the five-state union (T-59d6).
+ *
+ * The wire types presence as `string` (frozen spec), so this seam is the ONE
+ * place an unrecognised word can be caught — and it must be caught, because
+ * every presence surface downstream is exhaustive over the union: an
+ * out-of-union word falls off `presenceVisual`'s no-default switch and paints
+ * `lifecycle-dot--undefined` — a dot with no colour and no accessible name on a
+ * `role="img"` element. `undefined` here means "no presence to project"; each
+ * caller resolves it to its own honest floor (`offline` for members, whose
+ * `lifecycle` is non-optional; left `undefined` for workers, where absence is
+ * itself meaningful — released / never dispatched).
+ *
+ * NOT worker-specific despite its first caller: members and outsource workers
+ * speak the SAME presence vocabulary (A案 P6), so they share this one narrower.
+ */
+export function toPresence(
+  raw: string | undefined,
+): MemberLifecycle | undefined {
+  return raw !== undefined && PRESENCE_STATES.includes(raw as MemberLifecycle)
+    ? (raw as MemberLifecycle)
+    : undefined;
+}
+
 /**
  * Map one wire member → the view-model `Member`. Every field's source is noted.
  */
 export function toMember(w: WireMember): Member {
+  // Narrowed ONCE per member (T-59d6): both `status` and `lifecycle` below are
+  // projections of the same presence word, so they must agree about what
+  // counts as a recognised state. An unknown word → `undefined` → the honest
+  // `offline` floor: every downstream comparison (`=== "online"` composer
+  // lock, `=== "waking"` wake-in-flight) already read false on an unknown
+  // word, so behaviour is unchanged — what changes is that the dot now renders
+  // a real offline dot WITH its accessible name instead of a nameless,
+  // colourless one.
+  const presence = toPresence(w.presence) ?? "offline";
   return {
     id: w.id, // wire id (attribution key)
     memberId: w.member_no, // display badge "MB-XXX###"
@@ -105,15 +147,16 @@ export function toMember(w: WireMember): Member {
     // the nearest tri-state tint (stopping→online, stopped→offline) so the
     // legacy presence dot never renders an out-of-union value; the
     // full five-state lifecycle rides on `lifecycle` below.
-    status: (w.presence === "stopping"
-      ? "online"
-      : w.presence === "stopped"
-        ? "offline"
-        : w.presence) as MemberStatus,
+    status:
+      presence === "stopping"
+        ? "online"
+        : presence === "stopped"
+          ? "offline"
+          : presence,
     // lifecycle carries the REAL five-state presence verbatim (backend guarantees
     // one of offline/waking/online/stopping/stopped). Honest passthrough — never
     // a fabricated value.
-    lifecycle: w.presence as MemberLifecycle,
+    lifecycle: presence,
     runtime: (w.runtime || "claude") as "claude" | "codex",
     model: w.model, // direct
     effort: (w.effort || "medium") as Effort, // direct (narrowed to union)
@@ -432,10 +475,12 @@ export function toOutsourceWorker(w: WireOutsourceWorker): OutsourceWorkerView {
     unreadCount: w.unread_count ?? 0,
 
     // ── T-f190 detail-panel fold ──────────────────────────────────────────
-    // presence = the REAL-liveness projection (A案 P6, member vocabulary); honest "" when a
-    // defaulted-away wire field arrives (older server) → the panel treats it
-    // as released/off-panel, never a fabricated live state.
-    presence: w.presence ?? "",
+    // presence = the REAL-liveness projection (A案 P6, member vocabulary),
+    // NARROWED to the five-state union by the SAME `toPresence` the member seam
+    // uses (T-59d6). Unlike a member, a worker legitimately has NO presence
+    // (released / never dispatched), so `undefined` is kept rather than floored
+    // to offline — `presenceVisual` still paints it as the offline dot.
+    presence: toPresence(w.presence),
     // machine = the ACTUAL dispatch target (already resolved to a display name
     // server-side); "" when never dispatched → the panel shows 「尚未分配」.
     machine: w.machine ?? "",

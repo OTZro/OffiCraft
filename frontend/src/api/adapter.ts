@@ -10,6 +10,7 @@
 import type { ThemeBundle } from "../lib/themeBundle";
 import type {
   Member,
+  MemberLifecycle,
   MemberActivateResult,
   MemberRelocateResult,
   MonitoringView,
@@ -382,7 +383,7 @@ export interface OutsourceWorkerView {
   createdTs?: number;
   /** The bound task's display number (T-xxxx) / 識別鍵 value / type key — NOT
    * wire fields: useOutsourceWorkers joins them from GET /api/tasks (the panel
-   * row is 名稱 / task type + 上線綠點 / 可點的 T-xxxx — owner report
+   * row is 名稱 / task type + presence 點 / 可點的 T-xxxx — owner report
    * 2026-07-14, aligned with the member card's three-line shape).
    * Honest "" when the task cannot be resolved. */
   taskNo?: string;
@@ -400,11 +401,17 @@ export interface OutsourceWorkerView {
 
   // ── T-f190: the detail-panel alignment fields (外包詳情頁對齊成員詳情) ──────
   /** REAL-liveness projection on the ONE member presence vocabulary (wire
-   * `presence`, A案 P6 — replaces the retired `spawn_state`): online / waking /
-   * offline / stopping / stopped / "" (released). A worker whose session is
-   * not actually up is NOT drawn as a live green row.
-   * OPTIONAL so fixtures stay valid; the mapper always sets it (honest ""). */
-  presence?: string;
+   * `presence`, A案 P6 — replaces the retired `spawn_state`). Typed as the
+   * SAME five-state union the member roster carries (`MemberLifecycle`), NOT a
+   * bare string (T-59d6): the union is what makes `tsc` reject a typo'd or
+   * unhandled state on every surface that paints presence. `undefined` = no
+   * presence to project (released worker / older server that defaulted the
+   * field away) — `presenceVisual` resolves that to the offline dot, never a
+   * fabricated live green. The mapper narrows the wire string at one shared
+   * seam (`toPresence`, used by the member path too); unrecognised words become
+   * `undefined`, so a rail row and a detail panel can no longer disagree about
+   * an unknown value. */
+  presence?: MemberLifecycle;
   /** The machine the worker's session was ACTUALLY dispatched to (wire
    * `machine` — last_spawn_target resolved to its display name), NOT the
    * manual's preference. "" when never dispatched → the panel shows 「尚未分配」,

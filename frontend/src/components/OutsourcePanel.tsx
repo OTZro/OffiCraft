@@ -13,11 +13,13 @@
 // Row shape (owner 2026-07-16 — one line, folding the 2026-07-14 report's
 // lines 2+3):
 //   line 1  代號 (O-7 式 — the worker's name; an outsource has no other)
-//   line 2  上線綠點 at the LINE START (like a 正職 member row), then the
+//   line 2  presence dot at the LINE START (like a 正職 member row — the SAME
+//           5-state LifecycleDot, not a private green dot), then the
 //           任務代號 (T-xxxx) chip — CLICKABLE, routes to #tasks/<taskId> —
 //           then 接到的 task type (外包沒有角色名 — the bound task's type IS
-//           its role line; a LIVE worker is by definition online, the same
-//           invariant the worker chat header's synthetic member uses)
+//           its role line). The dot is PRESENCE, not "is this row alive": an
+//           assigned worker may not have started yet and must never look live
+//           (owner 2026-07-26 screenshot: an offline X-46 painted green).
 // plus the member-card unread badge at the row's flex end (wire unread_count).
 // NO model name (the codename already implies it), no task title, no 識別鍵.
 // Rows come 依任務建立時間新→舊 (the hook sorts + joins taskNo/taskTypeKey).
@@ -31,10 +33,11 @@ import { useWindowActive } from "../hooks/useWindowActive";
 import type { OutsourceWorkerView } from "../api/adapter";
 import { Avatar } from "./Avatar";
 import { CurrentTaskTitle } from "./CurrentTaskTitle";
+import { LifecycleDot, presenceVisual } from "./LifecycleDot";
 
 /** The worker's ONE-LINE task line — [T-xxxx chip → task type], optionally
- * led by the 上線綠點. SHARED between the rail's outsource row (dot; owner
- * 2026-07-16: 綠點在行首, member-row parity) and the worker chat header's
+ * led by the presence dot. SHARED between the rail's outsource row (dot; owner
+ * 2026-07-16: 點在行首, member-row parity) and the worker chat header's
  * subtitle (owner 2026-07-16: 兩邊顯示一樣的東西 — same chip + type, but NO
  * dot: outsource presence lives only in the rail; the header never grows a
  * second presence source). One component so the two renderings can't drift.
@@ -52,9 +55,8 @@ export function OutsourceTaskLine({
 }: {
   worker: OutsourceWorkerView;
   onOpenTask: (taskId: string) => void;
-  /** Lead the line with the 上線綠點 (rail row only — a LIVE worker is by
-   * definition online, same invariant the chat header's synthetic member
-   * carries; the header itself omits the dot). */
+  /** Lead the line with the presence dot (rail row only; the chat header
+   * omits it so the rail remains the single presence signal). */
   dot?: boolean;
   /** data-testid namespace: `${idPrefix}-task-line-<id>` / `-task-<id>` /
    * `-type-<id>` — "outsource" (rail) keeps its historical testids. */
@@ -66,7 +68,17 @@ export function OutsourceTaskLine({
       className="outsource-row__task-line"
       data-testid={`${idPrefix}-task-line-${w.id}`}
     >
-      {dot && <span className="outsource-row__online-dot" />}
+      {/* Presence dot — the app's ONE presence carrier (LifecycleDot via the
+       * shared `presenceVisual`), the same component + the same five
+       * --color-dot-* colours + the same role="img" label the 正職 roster
+       * uses. Each state is visually distinct: offline dark, waking amber
+       * pulse, online mint, stopping orange pulse, stopped grey. */}
+      {dot && (
+        <LifecycleDot
+          status={presenceVisual(w.presence)}
+          testId={`${idPrefix}-presence-${w.id}`}
+        />
+      )}
       {w.taskNo && (
         <button
           type="button"
@@ -163,7 +175,7 @@ export function OutsourcePanel({
               }}
             >
               {/* No status dot on the avatar (MemberCard parity): the line-2
-               * online dot below is the single presence signal of the row.
+               * presence dot below is the single presence signal of the row.
                * The avatar renders the active theme's 外包 image (T-3738 —
                * kind="outsource", the row's real subject); a theme without
                * one falls back to the built-in glyph inside the Avatar frame.
@@ -193,7 +205,7 @@ export function OutsourcePanel({
                   </span>
                 </span>
                 {/* line 2 — ONE line (owner 2026-07-16, second ruling):
-                 * 上線綠點 at the LINE START (member-row parity), then the
+                 * the presence dot at the LINE START (member-row parity), then the
                  * clickable T-xxxx chip, then 接到的 task type — the SHARED
                  * OutsourceTaskLine (the worker chat header renders the same
                  * line, minus the dot). */}

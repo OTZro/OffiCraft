@@ -19,6 +19,7 @@ import { Avatar } from "./Avatar";
 import { avatarKindForMember } from "../lib/avatarKind";
 import { ConfirmModal } from "./ConfirmModal";
 import { InlineEdit } from "./InlineEdit";
+import { presenceVisual } from "./LifecycleDot";
 import type { LifecycleVisualStatus } from "./LifecycleDot";
 import { PresenceBadge } from "./PresenceBadge";
 import { MemberActionButtons } from "./MemberActionButtons";
@@ -158,15 +159,15 @@ export function MemberDetailPanel({
   const wakePendingActive = wakePending && !wakePendingClears;
 
   // Map the REAL five-state lifecycle onto the one-per-state visual union the
-  // lifecycle dot + action buttons consume. HONEST: `online` maps to
-  // `online-awake` — there is no awake/sleeping activity sub-axis in the backend,
-  // so there is no `online-sleeping`; `error` likewise has no source and no state.
+  // action buttons consume — through the SHARED `presenceVisual` (T-59d6), the
+  // app's one and only lifecycle→visual mapping, so this panel cannot drift
+  // from the dot surfaces. HONEST: `online` maps to `online-awake` — there is no
+  // awake/sleeping activity sub-axis in the backend, so there is no
+  // `online-sleeping`; `error` likewise has no source and no state.
   // A pending wake surfaces as `waking` immediately (see above).
   const visual: LifecycleVisualStatus = wakePendingActive
     ? "waking"
-    : member.lifecycle === "online"
-      ? "online-awake"
-      : member.lifecycle;
+    : presenceVisual(member.lifecycle);
 
   // ── Machine picker (wake / respawn) ─────────────────────────────────────────
   // Fetch the machine registry so the owner picks WHICH online machine an agent

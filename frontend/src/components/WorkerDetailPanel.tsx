@@ -6,6 +6,7 @@ import { AgentDetailPanel } from "./AgentDetailPanel";
 import { useRelocateMachine } from "./useRelocateMachine";
 import { ChevronRightIcon } from "./icons";
 import { Avatar } from "./Avatar";
+import { LifecycleDot, presenceVisual } from "./LifecycleDot";
 import "./member-detail.css";
 
 interface WorkerDetailPanelProps {
@@ -87,23 +88,33 @@ export function WorkerDetailPanel({
   // machine name.
   const online = worker.presence === "online";
   const offline = worker.presence === "offline";
-  const waking = worker.presence === "waking";
   // stopping/stopped are both the owner-explicit hold-down (desired offline) —
   // the toggle and the status cell treat them as one 已停止 mode.
   const stopped =
     worker.presence === "stopped" || worker.presence === "stopping";
   const machineText = worker.machine || t.workerDetail.notAssigned;
-  const statusText = stopped
-    ? t.workerDetail.stopped
-    : online
-      ? t.workerDetail.working
-      : waking
-        ? t.workerDetail.starting
-        : offline
-          ? t.workerDetail.offline
-          : worker.status
-            ? t.workerDetail.statusLabel(worker.status)
-            : dash;
+  // The 狀態 CELL's wording is deliberately NOT the dot's label: it speaks the
+  // 外包 detail vocabulary (工作中/啟動中) and, when there is no presence at all,
+  // falls back to the worker's lifecycle status (已釋放…) — a fallback the dot
+  // cannot have. That is the ONLY split; the dot itself is the shared
+  // LifecycleDot below, so colour + a11y label can never drift from the roster.
+  // Exhaustive switch: presence is the five-state union, so a new state fails to
+  // compile here rather than silently landing in the fallback branch.
+  const statusText = ((): string => {
+    switch (worker.presence) {
+      case "online":
+        return t.workerDetail.working;
+      case "waking":
+        return t.workerDetail.starting;
+      case "stopping":
+      case "stopped":
+        return t.workerDetail.stopped;
+      case "offline":
+        return t.workerDetail.offline;
+      case undefined:
+        return worker.status ? t.workerDetail.statusLabel(worker.status) : dash;
+    }
+  })();
 
   // 委託人 (item 2): the RESOLVED creator name replaces the former hardcoded
   // "System owner". delegatedBy carries a real member name; a blank name with
@@ -180,13 +191,13 @@ export function WorkerDetailPanel({
           className="outsource-row__task-line"
           data-testid="worker-detail-header-task"
         >
-          {/* real presence dot: green (default class) only when presence is
-              online; a non-online worker gets a muted dot — honest, never a
-              fabricated live green. */}
-          <span
-            className="outsource-row__online-dot"
-            style={online ? undefined : { background: "#6b7280" }}
-            data-testid="worker-detail-header-dot"
+          {/* Presence dot — the SAME shared LifecycleDot + `presenceVisual`
+              the 正職 roster and the 外包 rail row render (T-59d6): five
+              distinct --color-dot-* colours, role="img" + label, never a
+              private colour literal and never a fabricated live green. */}
+          <LifecycleDot
+            status={presenceVisual(worker.presence)}
+            testId="worker-detail-header-dot"
           />
           {worker.taskNo && (
             <button

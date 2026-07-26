@@ -69,7 +69,7 @@ function mkWorker(over: Partial<OutsourceWorkerView>): OutsourceWorkerView {
     createdTs: Date.now() / 1000 - 600,
     // T-f190 runtime fold — honest defaults (nothing reported): the mapper's
     // null/"" shape. Individual tests override the fields under test.
-    presence: "",
+    presence: undefined,
     machine: "",
     desiredMachineId: "",
     account: null,
@@ -209,8 +209,10 @@ describe("WorkerDetailPanel — honest presence states (A案 P6 member vocabular
     ).toBe("工作中");
   });
 
-  it('released (presence ""): falls back to the lifecycle status label', async () => {
-    expect(await statusTextFor({ status: "released", presence: "" })).toBe(
+  it("released (no presence): falls back to the lifecycle status label", async () => {
+    expect(
+      await statusTextFor({ status: "released", presence: undefined }),
+    ).toBe(
       "已釋放",
     );
   });
@@ -382,9 +384,11 @@ describe("WorkerDetailPanel — header matches the sidebar 外包 row (T-f190 UI
     expect(header.textContent).not.toContain("Planning for big change");
     // The old raw ow-id chip is gone (the header no longer renders worker.id).
     expect(header.textContent).not.toContain("ow-1");
-    // Real presence: online → the default green dot (no muted inline override).
+    // Real presence: online → the shared lifecycle dot's ONLINE class (the
+    // colour comes from --color-dot-online, never an inline literal).
     const dot = await findByTestId("worker-detail-header-dot");
-    expect(dot.getAttribute("style") ?? "").not.toContain("background");
+    expect(dot.className).toBe("lifecycle-dot lifecycle-dot--online-awake");
+    expect(dot.getAttribute("style")).toBeNull();
     // Clicking the chip routes to the bound task.
     fireEvent.click(await findByTestId("worker-detail-header-chip"));
     await waitFor(() => expect(window.location.hash).toBe("#tasks/t-1"));
@@ -409,15 +413,33 @@ describe("WorkerDetailPanel — header matches the sidebar 外包 row (T-f190 UI
     expect(header.textContent).not.toContain("隨手需求");
   });
 
-  it("a non-online worker header shows a muted (honest, not-green) dot", async () => {
-    __injectMockTask(mkTask({ id: "t-1" }));
-    __injectMockOutsourceWorker(
-      mkWorker({ id: "ow-1", taskId: "t-1", presence: "offline" }),
-    );
-    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    const dot = await findByTestId("worker-detail-header-dot");
-    expect(dot.getAttribute("style") ?? "").toContain("background"); // muted override
-  });
+  // T-59d6: the header dot is the SAME shared LifecycleDot the rail row and the
+  // 正職 roster render — so every non-online state gets its OWN colour class
+  // (not one shared grey) and its own label. Asserting the exact class is what
+  // makes a mutant that repaints any of these green go RED here too.
+  it.each([
+    ["online", "online-awake"],
+    ["waking", "waking"],
+    ["stopping", "stopping"],
+    ["stopped", "stopped"],
+    ["offline", "offline"],
+    [undefined, "offline"],
+  ] as ReadonlyArray<[OutsourceWorkerView["presence"], string]>)(
+    "header dot for presence %s is the %s lifecycle dot",
+    async (presence, visual) => {
+      __injectMockTask(mkTask({ id: "t-1" }));
+      __injectMockOutsourceWorker(
+        mkWorker({ id: "ow-1", taskId: "t-1", presence }),
+      );
+      const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+      const dot = await findByTestId("worker-detail-header-dot");
+      expect(dot.className).toBe(`lifecycle-dot lifecycle-dot--${visual}`);
+      expect(dot.getAttribute("style")).toBeNull();
+      if (presence !== "online") {
+        expect(dot.className).not.toContain("online-awake");
+      }
+    },
+  );
 });
 
 describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {

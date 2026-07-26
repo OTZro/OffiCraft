@@ -16,15 +16,15 @@
  */
 import { useI18n } from "../i18n";
 import type { Member } from "../types";
-import { LifecycleDot } from "./LifecycleDot";
+import { LifecycleDot, presenceVisual } from "./LifecycleDot";
 import type { LifecycleVisualStatus } from "./LifecycleDot";
 
 /** Map the REAL five-state lifecycle onto the one-per-state visual union the
- * lifecycle dot consumes (`online → online-awake`; no awake/sleeping sub-axis,
- * no `error` state — honest one-per-state). Kept identical to the mapping the
- * detail panel used, now shared so it can't drift. */
+ * lifecycle dot consumes. Thin member-shaped wrapper over the ONE shared
+ * derivation (`presenceVisual`, LifecycleDot.tsx) the 外包 surfaces also use —
+ * the mapping itself is written exactly once (T-59d6). */
 export function lifecycleVisual(member: Member): LifecycleVisualStatus {
-  return member.lifecycle === "online" ? "online-awake" : member.lifecycle;
+  return presenceVisual(member.lifecycle);
 }
 
 export function PresenceBadge({ member }: { member: Member }) {

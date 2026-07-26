@@ -202,9 +202,13 @@ export function OfficePage() {
     : undefined;
   // The synthetic chat identity for a LIVE worker: ChatArea renders name /
   // composer-lock / unread anchors off a Member shape, so project the worker
-  // onto one. lifecycle "online" is by construction — a LIVE worker is
-  // chattable; presence display is REPLACED by headerSub below, so no member
-  // presence is ever fabricated on screen.
+  // onto one. lifecycle "online" here is a CHAT-CAPABILITY flag (it drives
+  // ChatArea's composer lock), NOT a presence claim: presence display is
+  // REPLACED by headerSub below, so nothing about it reaches the screen — the
+  // rail's dot is the one presence surface (T-59d6 retired the old「live worker
+  // 恆 online」invariant for DISPLAY). Whether an offline worker's composer
+  // should also lock/queue like an offline member's is a separate owner
+  // decision and is deliberately NOT changed here.
   const workerMember: Member | undefined = workerPeer
     ? {
         ...blankChatPeer(

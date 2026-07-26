@@ -22,6 +22,7 @@
  * all), which is exactly the bug this replaces.
  */
 import { useI18n } from "../i18n";
+import type { MemberLifecycle } from "../types";
 
 /** UI-only lifecycle visual states — one per real backend presence state
  * (`online` → `online-awake`). Not the `MemberStatus` data contract. */
@@ -32,7 +33,48 @@ export type LifecycleVisualStatus =
   | "stopping"
   | "stopped";
 
-export function LifecycleDot({ status }: { status: LifecycleVisualStatus }) {
+/**
+ * The SINGLE presence → visual derivation (T-59d6). Every surface that paints
+ * a presence dot — the roster's PresenceBadge, the 外包 rail row, the 外包
+ * detail header — routes through THIS function and then through LifecycleDot,
+ * so no surface can invent its own colour/label mapping and drift (the outsource
+ * rail once hard-coded a green dot for every worker, and the detail panel a
+ * second, separately written grey literal; both are gone).
+ *
+ * `undefined` = the subject has no presence to project (a released worker, or
+ * an older server that defaulted the field away). It resolves to `offline`:
+ * "we have no evidence this session is up" must never be drawn as live green.
+ *
+ * Exhaustive by construction — the switch has no `default`, so adding a sixth
+ * state to `MemberLifecycle` fails to compile here instead of silently falling
+ * through to some arbitrary colour.
+ */
+export function presenceVisual(
+  presence: MemberLifecycle | undefined,
+): LifecycleVisualStatus {
+  if (presence === undefined) return "offline";
+  switch (presence) {
+    case "online":
+      return "online-awake";
+    case "waking":
+      return "waking";
+    case "stopping":
+      return "stopping";
+    case "stopped":
+      return "stopped";
+    case "offline":
+      return "offline";
+  }
+}
+
+export function LifecycleDot({
+  status,
+  testId,
+}: {
+  status: LifecycleVisualStatus;
+  /** Optional data-testid so a host surface can address its own dot. */
+  testId?: string;
+}) {
   const { t } = useI18n();
   // The dict's `presence` keys are exactly this visual union, so indexing it
   // with `status` is what enforces the pair: add a sixth visual state without
@@ -44,6 +86,8 @@ export function LifecycleDot({ status }: { status: LifecycleVisualStatus }) {
       className={`lifecycle-dot lifecycle-dot--${status}`}
       role="img"
       aria-label={t.office.presence[status]}
+      title={t.office.presence[status]}
+      data-testid={testId}
     />
   );
 }
