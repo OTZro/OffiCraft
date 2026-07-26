@@ -130,15 +130,12 @@ type apiServer struct {
 	// beside the SQLite data file, stamped by cmdServe. "" (tests /
 	// dependency-free tables) disables the fallback — exec paths answer 503.
 	binCacheDir string
-	// ocwardenFS / ocwardenRun are the bootstrap-here / teardown-here EXEC
-	// seams. Both nil in production (→ bindistFS() / runOcwarden). Tests inject
-	// them so the teardown-here handler can be driven END TO END without ever
-	// exec'ing a real ocwarden: on a fleet host that would run
-	// `ocwarden teardown --canonical` and unload the live warden. Without these
-	// seams the --canonical / OC_NAMESPACE arms could only be covered by
-	// something that is itself the incident (T-2257).
-	ocwardenFS  fs.FS
-	ocwardenRun func(binPath string, args []string, env []string) (int, string, bool)
+	// ocwardenFS is the bootstrap-here / teardown-here BINARY-RESOLUTION seam.
+	// nil in production (→ bindistFS()); tests inject an fstest.MapFS so the
+	// HTTP handlers can be driven END TO END without an embedded bindist.
+	// The EXEC seam is the package-level runOcwarden var (T-5047) — do not add a
+	// second one here.
+	ocwardenFS fs.FS
 	// mcpTools maps tool name → route row (the non-mcp_exclude table surface;
 	// stamped by specsFor) — the tools/call routing index (mcp.go).
 	mcpTools map[string]RouteSpec

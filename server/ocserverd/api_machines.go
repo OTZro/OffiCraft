@@ -853,11 +853,7 @@ func (s *apiServer) runWardenTeardownHere(binPath string) (int, string, bool) {
 		// keys off exit 0, strand the machine in the roster.
 		args = append(args, "--canonical")
 	}
-	run := s.ocwardenRun
-	if run == nil {
-		run = runOcwarden
-	}
-	return run(binPath, args, env)
+	return runOcwarden(binPath, args, env)
 }
 
 // POST /api/machines/{machine_id}/teardown-here — tear the warden down ON THE

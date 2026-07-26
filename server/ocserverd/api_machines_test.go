@@ -816,22 +816,20 @@ func TestHandleDeleteMachine(t *testing.T) {
 // incident this ticket exists to prevent.
 // ---------------------------------------------------------------------------
 
-type recordedOcwardenRun struct {
-	args []string
-	env  []string
-}
-
+// REBASE NOTE (independent review of T-2257 onto T-5047 e169ed1): T-2257
+// originally added its own per-server `s.ocwardenRun` field as the exec seam.
+// T-5047 had already made the package-level `runOcwarden` a var seam and pinned
+// both verbs to it, so the field was a SECOND seam for the same thing. Dropped;
+// these tests now record through T-5047's `withRecordedOcwarden`. Only the
+// binary-RESOLUTION seam (ocwardenFS) remains T-2257's, and T-5047 has no
+// equivalent — the HTTP-level handler needs it to get past resolveOcwardenBinary.
 func newTeardownHereServer(t *testing.T, namespace string, exitCode int) (*apiServer, *[]recordedOcwardenRun) {
 	t.Helper()
 	s := newMachinesTestServer(t)
 	s.namespace = namespace
 	s.binCacheDir = filepath.Join(t.TempDir(), "cache-bin")
 	s.ocwardenFS = fstest.MapFS{"ocwarden": {Data: []byte("fake warden — never exec'd")}}
-	runs := &[]recordedOcwardenRun{}
-	s.ocwardenRun = func(_ string, args []string, env []string) (int, string, bool) {
-		*runs = append(*runs, recordedOcwardenRun{args: args, env: env})
-		return exitCode, "fake teardown log", false
-	}
+	runs := withRecordedOcwarden(t, exitCode)
 	putTestMember(t, s, Member{
 		ID: "m-box", Name: "m-box", Kind: KindWarden, Effort: "medium",
 		DesiredState: DesiredStateOffline, RosterStatus: RosterStatusActive,
