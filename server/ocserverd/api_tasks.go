@@ -2247,9 +2247,16 @@ func (s *apiServer) HandleAddTaskArtifactApiTasksTaskIdArtifactPost(w http.Respo
 // DELETE /api/tasks/{task_id}/artifact/{artifact_id} — un-pin one artifact (MCP
 // remove_task_artifact). SAME permission model as add (owner ruling 2026-07-18):
 // the task's executor may remove its own deliverables, admin/owner may remove on
-// any task (§14). Guard order: 404 task → 403 not the executor → 404 artifact →
-// 400 the artifact belongs to a different task. The referenced blob is left
-// intact (it may be shared with a chat message; the blob store has no delete path).
+// any task (§14). Guard order: 404 task → 403 not the executor → 409 the task is
+// closed → 404 artifact → 400 the artifact belongs to a different task. The
+// referenced blob is left intact (it may be shared with a chat message; the blob
+// store has no delete path).
+//
+// The 409 is the SYMMETRIC twin of add's freeze (owner ruling 2026-07-25, T-2654):
+// a closed task's deliverable set is frozen in BOTH directions. It used to be
+// add-only, which made un-pin an unrecoverable data loss — the deliverable could
+// be removed from a closed card and never put back. Like add's, this guard sits
+// after the permission check, so admin/owner are not exempt either.
 func (s *apiServer) HandleRemoveTaskArtifactApiTasksTaskIdArtifactArtifactIdDelete(w http.ResponseWriter, r *http.Request, taskId, artifactId string) {
 	t, err := s.resolveTask(taskId)
 	if err != nil {
@@ -2258,6 +2265,11 @@ func (s *apiServer) HandleRemoveTaskArtifactApiTasksTaskIdArtifactArtifactIdDele
 	}
 	if !s.callerMayDriveTask(r, *t) {
 		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+		return
+	}
+	if TaskIsTerminal(t.Status) {
+		writeError(w, http.StatusConflict,
+			"task '"+taskId+"' is closed ("+t.Status+") — its deliverables are frozen")
 		return
 	}
 	art, err := s.dal.GetTaskArtifact(artifactId)

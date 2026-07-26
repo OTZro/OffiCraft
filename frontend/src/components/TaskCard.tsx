@@ -1164,10 +1164,16 @@ export function TaskCard({
                 the rightmost coloured badge in this row; renders ONLY when the
                 count > 0, and clicking opens the tabbed popover. It deliberately
                 does NOT touch the top-right chevron slot (spec ③). */}
+            {/* T-2654: a CLOSED task's deliverable set is frozen in BOTH
+                directions (the server 409s un-pin exactly like add), so drop
+                the 移除 affordance instead of letting the click fail. Gating
+                here rather than at the call site covers every caller at once. */}
             <TaskArtifactsBadge
               task={view}
               onHydrate={onHydrate}
-              onRemoveArtifact={onRemoveArtifact}
+              onRemoveArtifact={
+                TERMINAL.has(view.status) ? undefined : onRemoveArtifact
+              }
             />
           </div>
 
