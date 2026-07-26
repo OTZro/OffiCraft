@@ -1201,13 +1201,18 @@ func TestCreateAdHocTaskDispatchInheritsTheDispatcher(t *testing.T) {
 	}
 }
 
-// TestCreateTypedTaskWithManualOutsourceAssigneeCarriesNoDispatchTarget: a typed
-// task whose MANUAL routes it to outsource is not a 發包 — inheritance is gated on
-// an explicit target, so the task row's outsource_* columns stay empty and the
-// scheduler still reads it as a manual-driven candidate. Filling them would make
-// hasExplicitTarget() true, which skips the spawn gate and freezes the manual's
-// settings at create time instead of reading it live at admission.
-func TestCreateTypedTaskWithManualOutsourceAssigneeCarriesNoDispatchTarget(t *testing.T) {
+// TestCreateTypedTaskWithManualOutsourceAssigneeIsNotADispatch: a typed task
+// whose MANUAL routes it to outsource DOES resolve and store a spec now (T-8a67
+// — before, it stored nothing, and a manual naming no machine therefore left the
+// minted worker with no placement and no way to boot), but it is still NOT a
+// 發包: the row says so (outsource_dispatched=0), so the scheduler keeps reading
+// it as a manual-driven candidate — gate included, manual read live.
+//
+// This pair is the whole point of migrations/00036. The columns being non-empty
+// USED to be what "explicit dispatch" meant, which is why nothing could be
+// written here; now the two are independent, and this test pins both halves of
+// that independence at once.
+func TestCreateTypedTaskWithManualOutsourceAssigneeIsNotADispatch(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
 	seedMachine(t, api, "m-manual-box")
@@ -1227,6 +1232,7 @@ func TestCreateTypedTaskWithManualOutsourceAssigneeCarriesNoDispatchTarget(t *te
 			TargetRuntime: task.OutsourceRuntime,
 			TargetModel:   task.OutsourceModel, TargetEffort: task.OutsourceEffort,
 			TargetMachine: task.OutsourceMachine,
+			Dispatched:    task.OutsourceDispatched,
 		}
 	}
 	storedFor := func(rec *httptest.ResponseRecorder) *Task {
@@ -1246,19 +1252,27 @@ func TestCreateTypedTaskWithManualOutsourceAssigneeCarriesNoDispatchTarget(t *te
 	if manual.ExecutorKind != TaskExecutorOutsource || manual.ExecutorID != "" {
 		t.Fatalf("a manual outsource assignee must land unassigned outsource: %+v", manual)
 	}
-	// outsource_runtime is normalized to a concrete runtime by the DAL on every
-	// write, which is why hasExplicitTarget reads the other three.
-	if manual.OutsourceModel != "" || manual.OutsourceEffort != "" ||
-		manual.OutsourceMachine != "" {
-		t.Fatalf("a manual-driven outsource create must store NO dispatch target: %+v", manual)
+	// The spec IS resolved and stored — the machine above all, since nothing else
+	// invents one and an unnamed machine is not a destination.
+	if manual.OutsourceMachine != "m-manual-box" {
+		t.Fatalf("a manual-driven outsource create must store a resolved placement: %+v", manual)
+	}
+	if manual.OutsourceRuntime != RuntimeClaude || manual.OutsourceModel != "opus" ||
+		manual.OutsourceEffort != "high" {
+		t.Fatalf("a manual-driven outsource create must store the resolved spec: %+v", manual)
+	}
+	// …and yet it is not a dispatch: the row says so, so the scheduler still gates
+	// it by its creator and still reads the manual live at admission.
+	if manual.OutsourceDispatched {
+		t.Fatalf("a manual-driven create is not a 發包: %+v", manual)
 	}
 	if candidateOf(manual).hasExplicitTarget() {
 		t.Fatal("a manual-driven task must not read as an explicit 發包 to the scheduler")
 	}
 
-	// SENTINEL: an explicit target on the SAME fixture DOES fill the columns and
-	// reads true — so the emptiness above is the gate, not a fixture that creates
-	// nothing.
+	// SENTINEL: an explicit target on the SAME fixture stores the same spec and
+	// reads TRUE — so the flag above is the discriminator, not a side effect of
+	// which fields happen to be filled.
 	dispatched := storedFor(createTaskAs(t, api, map[string]any{
 		"title": "explicit 發包", "type_key": "typed",
 		"target": map[string]any{"kind": "outsource"}}, "m-disp", "agent"))
@@ -1266,7 +1280,7 @@ func TestCreateTypedTaskWithManualOutsourceAssigneeCarriesNoDispatchTarget(t *te
 		dispatched.OutsourceEffort != "high" || dispatched.OutsourceMachine != "m-manual-box" {
 		t.Fatalf("an explicit target must inherit and store the manual's spec: %+v", dispatched)
 	}
-	if !candidateOf(dispatched).hasExplicitTarget() {
+	if !dispatched.OutsourceDispatched || !candidateOf(dispatched).hasExplicitTarget() {
 		t.Fatal("an explicit 發包 must read as an explicit target to the scheduler")
 	}
 }

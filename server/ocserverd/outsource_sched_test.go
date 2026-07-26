@@ -72,9 +72,11 @@ func TestOutsourceDecidePerTypeCopiesCap(t *testing.T) {
 	// cap too — no longer a global-cap-only side door. copies=2, one live → ONE more.
 	tgt := []outsourceCandidate{
 		{TaskID: "x-1", TypeKey: "review-pr", Priority: TaskPriorityMid, CreatedTS: 1.0,
-			TargetModel: "opus", TargetEffort: "low", TargetMachine: "auto"},
+			TargetModel: "opus", TargetEffort: "low", TargetMachine: "m-box",
+			Dispatched: true},
 		{TaskID: "x-2", TypeKey: "review-pr", Priority: TaskPriorityMid, CreatedTS: 2.0,
-			TargetModel: "opus", TargetEffort: "low", TargetMachine: "auto"},
+			TargetModel: "opus", TargetEffort: "low", TargetMachine: "m-box",
+			Dispatched: true},
 	}
 	got = outsourceDecide(tgt, specsOneType(2), map[string]int{"review-pr": 1}, 1, 10)
 	if len(got) != 1 || got[0].TaskID != "x-1" {
@@ -87,9 +89,12 @@ func TestOutsourceDecidePerTypeCopiesCap(t *testing.T) {
 	// A typeless ad-hoc explicit dispatch has no manual limit to apply — all three
 	// admit under a copies=1 type (the empty TypeKey rides the global cap only).
 	adhoc := []outsourceCandidate{
-		{TaskID: "a-1", Priority: TaskPriorityMid, CreatedTS: 1.0, TargetModel: "sonnet"},
-		{TaskID: "a-2", Priority: TaskPriorityMid, CreatedTS: 2.0, TargetModel: "sonnet"},
-		{TaskID: "a-3", Priority: TaskPriorityMid, CreatedTS: 3.0, TargetModel: "sonnet"},
+		{TaskID: "a-1", Priority: TaskPriorityMid, CreatedTS: 1.0,
+			TargetModel: "sonnet", Dispatched: true},
+		{TaskID: "a-2", Priority: TaskPriorityMid, CreatedTS: 2.0,
+			TargetModel: "sonnet", Dispatched: true},
+		{TaskID: "a-3", Priority: TaskPriorityMid, CreatedTS: 3.0,
+			TargetModel: "sonnet", Dispatched: true},
 	}
 	got = outsourceDecide(adhoc, specsOneType(1), map[string]int{}, 0, 10)
 	if len(got) != 3 {
@@ -506,8 +511,12 @@ func putUnassignedTargetTask(t *testing.T, api *apiServer, id, typeKey, model, e
 	if err := api.dal.PutTask(Task{
 		ID: id, TypeKey: typeKey, Title: id, Status: TaskStatusNotStarted,
 		Priority: TaskPriorityMid, ExecutorKind: TaskExecutorOutsource, ExecutorID: "",
-		OutsourceModel: model, OutsourceEffort: effort, OutsourceMachine: "auto",
-		CreatorID: wireOwnerID, CreatedTS: 1000, UpdatedTS: 1000,
+		OutsourceModel: model, OutsourceEffort: effort, OutsourceMachine: "m-target-box",
+		// The row DECLARES itself a dispatch (migrations/00036) — a fixture that
+		// only filled the spec columns would now be a manual-driven task carrying
+		// a creator snapshot, which is a different admission path entirely.
+		OutsourceDispatched: true,
+		CreatorID:           wireOwnerID, CreatedTS: 1000, UpdatedTS: 1000,
 	}); err != nil {
 		t.Fatalf("put target task %s: %v", id, err)
 	}
@@ -610,8 +619,9 @@ func TestOutsourceTickDoesNotReGateExplicitTargetByCreator(t *testing.T) {
 	if err := api.dal.PutTask(Task{
 		ID: "t-owned", Title: "owner reassigned this", Status: TaskStatusNotStarted,
 		Priority: TaskPriorityMid, ExecutorKind: TaskExecutorOutsource, ExecutorID: "",
-		OutsourceModel: "sonnet", OutsourceEffort: "medium", OutsourceMachine: "auto",
-		CreatorID: "m-plain", CreatedTS: 1000, UpdatedTS: 1000,
+		OutsourceModel: "sonnet", OutsourceEffort: "medium", OutsourceMachine: "m-box",
+		OutsourceDispatched: true,
+		CreatorID:           "m-plain", CreatedTS: 1000, UpdatedTS: 1000,
 	}); err != nil {
 		t.Fatalf("put task: %v", err)
 	}

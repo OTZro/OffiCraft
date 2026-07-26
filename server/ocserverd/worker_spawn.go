@@ -479,6 +479,17 @@ func (s *apiServer) benchWorkerMachine(workerID, machineID string, now float64) 
 	s.workerMachineCooldown[workerMachineKey(workerID, machineID)] = now + workerSpawnCooldownSecs
 }
 
+// firstNonEmpty returns the first non-empty argument ("" when there is none) —
+// the placement arms read as a priority list rather than a stack of ifs.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // ── wake dispatch (fills the outsource_sched.go seam) ────────────────────────
 
 // notifyWorkerSpawn dispatches ONE member `start` frame (P5b convergence: the
@@ -518,11 +529,15 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 	// priority order: (1) the durable OWNER-PINNED desired_machine_id from a
 	// 改機器 relocate (T-f190) wins — the most recent explicit placement, and it
 	// survives restart; (2) else the reassign dialog's machine pick carried in
-	// workerMachinePref (T-160e, in-memory); (3) else the DURABLE 發包 target on
-	// the task row, which is what a create/reassign dispatch resolved and stored;
-	// (4) else the type manual's assignee. There is no fifth arm: when none of
-	// them names a machine the worker has no placement and is not booted (owner
-	// ruling 2026-07-25 — a machine nobody chose is not a destination).
+	// workerMachinePref (T-160e, in-memory); then the two DURABLE task-side
+	// sources, whose order depends on which of them decided (see below): (3) the
+	// task row's outsource_machine and (4) the type manual's assignee. There is no
+	// fifth arm: when none of them names a machine the worker has no placement and
+	// is not booted (owner ruling 2026-07-25 — a machine nobody chose is not a
+	// destination). What T-8a67 changed is that a machine now much more rarely
+	// goes unnamed: the create-time snapshot of the CREATOR's own placement lands
+	// in arm (3) for a manual-driven task, so a manual that names none no longer
+	// strands its workers.
 	//
 	// Arm (3) is load-bearing, not belt-and-braces: workerMachinePref is
 	// in-memory by design, so a restart forgets it. It used to degrade to the old
@@ -536,11 +551,22 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 		machinePref = s.workerMachinePref[w.ID]
 	}
 	if machinePref == "" {
-		machinePref = t.OutsourceMachine
-	}
-	if machinePref == "" && manual != nil {
-		if spec := outsourceSpecOf(*manual); spec != nil {
-			machinePref = spec.Machine
+		manualMachine := ""
+		if manual != nil {
+			if spec := outsourceSpecOf(*manual); spec != nil {
+				manualMachine = spec.Machine
+			}
+		}
+		// Arms (3) and (4) swap by WHAT the task row carries (T-8a67,
+		// task.outsource_dispatched): an explicit 發包 target outranks the manual —
+		// the dispatcher named this placement for this task — but a manual-driven
+		// task's row holds only a creator SNAPSHOT, which is the weaker claim of
+		// the two and must lose to the live manual. Same two sources either way;
+		// only their order tracks which of them actually decided.
+		if t.OutsourceDispatched {
+			machinePref = firstNonEmpty(t.OutsourceMachine, manualMachine)
+		} else {
+			machinePref = firstNonEmpty(manualMachine, t.OutsourceMachine)
 		}
 	}
 	warden, blocked := s.resolveWorkerPlacement(w, machinePref, now)

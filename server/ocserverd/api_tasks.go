@@ -82,11 +82,19 @@ type dispatchSpec struct {
 //	    itself pinned to. 發包 without a spec means "one like me". (Independently
 //	    stated in T-0d32: 自由代辦外包完整繼承委派者設定.)
 //
-// The switch below IS those two cases: manualSpec is non-nil only when the task
-// carries a type_key whose manual exists AND routes to outsource (outsourceSpecOf
-// returns nil otherwise), so the second arm is reached exactly when there is no
-// manual to read. Read that way the order is not a tie-break between rivals —
-// they never compete.
+// The two passes below ARE those two cases: manualSpec is non-nil only when the
+// task carries a type_key whose manual exists AND routes to outsource
+// (outsourceSpecOf returns nil otherwise), so the dispatcher pass decides
+// anything only where there was no manual to read — or (T-8a67) where the manual
+// read did not state the field at all. Read that way the order is still not a
+// tie-break between rivals: a field the 手冊 named is already filled when the
+// dispatcher pass runs, so they never compete for one.
+//
+// T-8a67 added that second half deliberately. Before it, a typed 發包 whose
+// manual assignee named no machine resolved to no machine AT ALL, and since
+// nothing else invents one, the worker minted for that task was unbootable for
+// life. "The 手冊 decides" was never meant to include the fields the 手冊 left
+// blank — silence is not a decision.
 //
 // ⚠️ Reading it AS a priority order is what went wrong once already: fb8981c set
 // out to make an ad-hoc dispatch inherit the dispatcher — which this code
@@ -106,15 +114,34 @@ type dispatchSpec struct {
 // destination (pickWorkerWarden fails closed with a visible reason). That is the
 // point: a placement nobody chose is not a placement.
 func inheritDispatchSpec(spec dispatchSpec, manualSpec *outsourceTypeSpec, dispatcher *Member) dispatchSpec {
-	var src dispatchSpec
-	switch {
-	case manualSpec != nil:
-		src = dispatchSpec{Runtime: manualSpec.Runtime, Model: manualSpec.Model,
-			Effort: manualSpec.Effort, Machine: manualSpec.Machine}
-	case dispatcher != nil:
-		src = dispatchSpec{Runtime: dispatcher.Runtime, Model: dispatcher.Model,
-			Effort: dispatcher.Effort, Machine: dispatcher.DesiredMachineID}
+	if manualSpec != nil {
+		spec = fillDispatchSpecFrom(spec, dispatchSpec{
+			Runtime: manualSpec.Runtime, Model: manualSpec.Model,
+			Effort: manualSpec.Effort, Machine: manualSpec.Machine})
 	}
+	// T-8a67: the dispatcher is now a SECOND pass rather than the other half of
+	// an either/or. It changes nothing for the two cases above — a manual that
+	// names a field has already filled it, and an ad-hoc dispatch has no manual
+	// at all — it only covers what NOBODY named: a manual whose assignee leaves
+	// the machine (or model) blank used to leave the field blank forever, and a
+	// blank machine is not a destination, so the worker minted for that task
+	// could never boot. Falling through to the creator's own placement is not
+	// overriding the 手冊 (it stated nothing here); it is the same "發一個像我
+	// 這樣的" rule reaching the fields the 手冊 declined to decide.
+	if dispatcher != nil {
+		spec = fillDispatchSpecFrom(spec, dispatchSpec{
+			Runtime: dispatcher.Runtime, Model: dispatcher.Model,
+			Effort: dispatcher.Effort, Machine: dispatcher.DesiredMachineID})
+	}
+	return defaultedDispatchSpec(spec)
+}
+
+// fillDispatchSpecFrom copies ONE source's fields into the slots spec leaves
+// empty — never over an already-decided field, and applying NO defaults of its
+// own (defaults belong to defaultedDispatchSpec, once, after every source has
+// had its turn; baked in here they would pre-empt a later source's runtime and
+// then drop its model as "another runtime's").
+func fillDispatchSpecFrom(spec, src dispatchSpec) dispatchSpec {
 	// A blank source runtime STATES nothing — it must not be read as "claude"
 	// here, or a source carrying a codex model with an unset runtime would
 	// normalize to claude and then hand its codex model to a claude boot: exactly
@@ -122,9 +149,6 @@ func inheritDispatchSpec(spec dispatchSpec, manualSpec *outsourceTypeSpec, dispa
 	srcRuntime := strings.TrimSpace(src.Runtime)
 	if spec.Runtime == "" && srcRuntime != "" && ValidRuntime(NormalizeRuntime(srcRuntime)) {
 		spec.Runtime = NormalizeRuntime(srcRuntime)
-	}
-	if spec.Runtime == "" {
-		spec.Runtime = RuntimeClaude
 	}
 	// The source's model rides along only when the source SAYS which runtime it
 	// belongs to and that is the runtime being dispatched. Otherwise the model is
@@ -135,11 +159,22 @@ func inheritDispatchSpec(spec dispatchSpec, manualSpec *outsourceTypeSpec, dispa
 	if spec.Effort == "" && validEffort(src.Effort) {
 		spec.Effort = src.Effort
 	}
-	if spec.Effort == "" {
-		spec.Effort = "medium"
-	}
 	if spec.Machine == "" {
 		spec.Machine = src.Machine
+	}
+	return spec
+}
+
+// defaultedDispatchSpec applies the only two defaults there are: a runtime, and
+// an effort. The MACHINE is deliberately absent — a placement nobody chose is
+// not a placement (owner ruling 2026-07-25), and the spawn seam fails closed
+// with a visible reason instead of inventing a destination.
+func defaultedDispatchSpec(spec dispatchSpec) dispatchSpec {
+	if spec.Runtime == "" {
+		spec.Runtime = RuntimeClaude
+	}
+	if spec.Effort == "" {
+		spec.Effort = "medium"
 	}
 	return spec
 }
@@ -1127,6 +1162,7 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 		t.ExecutorID = newMember.ID
 		t.OutsourceRuntime = RuntimeClaude
 		t.OutsourceModel, t.OutsourceEffort, t.OutsourceMachine = "", "", ""
+		t.OutsourceDispatched = false
 	} else {
 		t.ExecutorKind = TaskExecutorOutsource
 		t.ExecutorID = ""
@@ -1134,6 +1170,11 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 		t.OutsourceModel = dispatch.Model
 		t.OutsourceEffort = dispatch.Effort
 		t.OutsourceMachine = dispatch.Machine
+		// A reassign to outsource is ALWAYS an explicit 發包 (the caller named
+		// target.kind=outsource and it was authorized right here), so the row it
+		// leaves behind is the authoritative target — never the manual-driven
+		// creator snapshot the same columns carry on a create (T-8a67).
+		t.OutsourceDispatched = true
 	}
 	// Enter the reassigning LOCK (T-9ca5) — orthogonal to status, which stays
 	// DERIVED. The reassign reset non-terminal steps to pending above, so the
@@ -1524,13 +1565,28 @@ func (s *apiServer) HandleCreateTaskApiTasksPost(w http.ResponseWriter, r *http.
 	// owner and for an outsource worker — both then inherit nothing, so the
 	// machine must be named explicitly.
 	//
-	// Gated on an EXPLICIT target, not on the executor kind. A typed task whose
-	// MANUAL assigns it to outsource is not a 發包: it carries no outsource_target,
-	// the scheduler reads its type manual live at admission, and outsource_sched
-	// keys "was this an explicit dispatch?" off these very columns — writing them
-	// here would make every manual-driven task impersonate a dispatch, routing it
-	// around the scheduler's spawn gate and freezing the manual at create time.
-	if dispatchTarget != nil {
+	// Resolved for EVERY task landing on the outsource track — an explicit 發包 and
+	// a manual-driven one alike (T-8a67). It used to be gated on dispatchTarget !=
+	// nil, so a typed task whose MANUAL routes it to outsource resolved NOTHING and
+	// carried nothing: if its manual assignee named no machine, the worker the
+	// scheduler minted for it had no placement, and a worker with no placement
+	// never boots. The reason the gate existed was that outsource_sched INFERRED
+	// "was this an explicit dispatch?" from these very columns being non-empty, so
+	// writing them made a manual-driven task impersonate a dispatch and skip the
+	// scheduler's spawn gate. That inference is retired (migrations/00036): the row
+	// now SAYS which it is, and the two meanings differ —
+	//
+	//   - dispatched: the columns are the AUTHORITATIVE target;
+	//   - not dispatched: they are a FALLBACK snapshot of the creator's own spec,
+	//     read only for what the live type manual leaves unset — so the manual is
+	//     NOT frozen at create time (an owner editing it still wins), while the
+	//     fields it declines to decide are no longer left permanently blank.
+	//
+	// The caller is what makes this resolvable here: the creator is the verified
+	// token sub (§14 caller-identity), never a request field. caller.member is nil
+	// for the owner and for an outsource worker — both then snapshot nothing, so
+	// the machine must come from the target or the manual.
+	if executorKind == TaskExecutorOutsource {
 		dispatch = inheritDispatchSpec(dispatch, manualSpec, caller.member)
 	}
 
@@ -1567,12 +1623,16 @@ func (s *apiServer) HandleCreateTaskApiTasksPost(w http.ResponseWriter, r *http.
 		Priority:     priority,
 		ExecutorKind: executorKind,
 		ExecutorID:   executorID,
-		// The explicit 發包 target rides on the task row (T-35e0): the scheduler
-		// mints from it. Empty for a member/manual-outsource create.
-		OutsourceRuntime: dispatch.Runtime,
-		OutsourceModel:   dispatch.Model,
-		OutsourceEffort:  dispatch.Effort,
-		OutsourceMachine: dispatch.Machine,
+		// The resolved outsource spec rides on the task row (T-35e0): the scheduler
+		// mints from it. Empty for a member create. OutsourceDispatched says which
+		// of its two meanings this row carries (migrations/00036): an authoritative
+		// explicit 發包 target, or — for a manual-driven outsource task — a fallback
+		// snapshot of the creator's own spec under the live manual (T-8a67).
+		OutsourceRuntime:    dispatch.Runtime,
+		OutsourceModel:      dispatch.Model,
+		OutsourceEffort:     dispatch.Effort,
+		OutsourceMachine:    dispatch.Machine,
+		OutsourceDispatched: dispatchTarget != nil,
 		// §14 caller-identity: the creator is the verified token sub, never a
 		// request parameter — a member agent, an outsource worker, or "owner".
 		CreatorID: currentActor(r),

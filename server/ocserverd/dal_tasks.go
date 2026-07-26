@@ -49,17 +49,30 @@ type Task struct {
 	// reassigned (or pre-column rows).
 	ReassignedFrom     string
 	ReassignedFromKind string
-	// OutsourceModel / OutsourceEffort / OutsourceMachine is the explicit 發包
-	// target (T-35e0, migrations/00029), set ONLY on a create/reassign dispatch to
-	// an outsource worker: the task lands unassigned (executor_kind='outsource',
-	// executor_id='') carrying its target here, and the scheduler mints from it
-	// (preferred over the type manual's assignee spec). '' / '' / '' on a plain
-	// manual-driven outsource task (the scheduler falls back to the type spec) and
-	// on every non-outsource task.
-	OutsourceRuntime string
-	OutsourceModel   string
-	OutsourceEffort  string
-	OutsourceMachine string
+	// OutsourceRuntime / OutsourceModel / OutsourceEffort / OutsourceMachine is
+	// the resolved outsource spec of a task on the outsource track (T-35e0,
+	// migrations/00029): what the worker minted for it is given. '' on every
+	// non-outsource task. OutsourceDispatched (migrations/00036) says which of the
+	// TWO meanings the columns carry — the columns alone no longer do, and the old
+	// "non-empty ⇒ explicit dispatch" inference is retired:
+	//
+	//   - Dispatched (an explicit create/reassign `target.kind=outsource`): the
+	//     AUTHORITATIVE target. The scheduler mints from it in preference to the
+	//     type manual's assignee spec, and skips its own spawn gate (the dispatch
+	//     was already authorized at the handler, by the true initiator).
+	//   - NOT dispatched (a plain manual-driven outsource task): a create-time
+	//     SNAPSHOT of the creator's own runtime/model/effort/machine (T-8a67),
+	//     consulted only for the fields the LIVE type manual leaves unset — so the
+	//     manual stays authoritative and editable, while a manual that names no
+	//     machine no longer strands the worker with no placement at all.
+	//
+	// Either way the row is the durable record: a handover or a rebirth re-reads
+	// it rather than re-deriving, so placement cannot drift between generations.
+	OutsourceRuntime    string
+	OutsourceModel      string
+	OutsourceEffort     string
+	OutsourceMachine    string
+	OutsourceDispatched bool
 	// Handoff / HandoffNote / HandoffTaskID is the DECLARED destination of the
 	// ball (T-74f8, migrations/00031): '' = never declared, else one of
 	// domain.go's HandoffReturnToCreator / HandoffFollowUp / HandoffNone. The
@@ -76,6 +89,7 @@ const taskColumns = `id, type_key, title, dedupe_key, inputs, description,
 	created_ts, updated_ts, closed_ts, closeout_ts, duplicate_of,
 	reassigned_from, reassigned_from_kind,
 	outsource_runtime, outsource_model, outsource_effort, outsource_machine,
+	outsource_dispatched,
 	handoff, handoff_note, handoff_task_id`
 
 // sqlTerminalStatuses is the SQL IN-list of the terminal statuses — every
@@ -87,6 +101,7 @@ const sqlTerminalStatuses = `'done', 'terminated', 'duplicated'`
 func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 	var t Task
 	var inputs string
+	var dispatched int
 	err := row.Scan(
 		&t.ID, &t.TypeKey, &t.Title, &t.DedupeKey, &inputs, &t.Description,
 		&t.Status, &t.Lock, &t.Priority, &t.ExecutorKind, &t.ExecutorID, &t.CreatorID,
@@ -94,11 +109,13 @@ func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 		&t.CreatedTS, &t.UpdatedTS, &t.ClosedTS, &t.CloseoutTS, &t.DuplicateOf,
 		&t.ReassignedFrom, &t.ReassignedFromKind,
 		&t.OutsourceRuntime, &t.OutsourceModel, &t.OutsourceEffort, &t.OutsourceMachine,
+		&dispatched,
 		&t.Handoff, &t.HandoffNote, &t.HandoffTaskID,
 	)
 	if err != nil {
 		return Task{}, err
 	}
+	t.OutsourceDispatched = dispatched != 0
 	if err := json.Unmarshal([]byte(inputs), &t.Inputs); err != nil {
 		return Task{}, fmt.Errorf("task %s: bad inputs JSON: %w", t.ID, err)
 	}
@@ -227,9 +244,13 @@ func (d *DAL) PutTask(t Task) error {
 	if err != nil {
 		return err
 	}
+	dispatched := 0
+	if t.OutsourceDispatched {
+		dispatched = 1
+	}
 	_, err = d.db.Exec(`
 		INSERT INTO task (`+taskColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			type_key = excluded.type_key, title = excluded.title,
 			dedupe_key = excluded.dedupe_key, inputs = excluded.inputs,
@@ -249,6 +270,7 @@ func (d *DAL) PutTask(t Task) error {
 			outsource_model = excluded.outsource_model,
 			outsource_effort = excluded.outsource_effort,
 			outsource_machine = excluded.outsource_machine,
+			outsource_dispatched = excluded.outsource_dispatched,
 			handoff = excluded.handoff,
 			handoff_note = excluded.handoff_note,
 			handoff_task_id = excluded.handoff_task_id`,
@@ -259,6 +281,7 @@ func (d *DAL) PutTask(t Task) error {
 		t.ReassignedFrom, t.ReassignedFromKind,
 		NormalizeRuntime(t.OutsourceRuntime),
 		t.OutsourceModel, t.OutsourceEffort, t.OutsourceMachine,
+		dispatched,
 		t.Handoff, t.HandoffNote, t.HandoffTaskID,
 	)
 	return err

@@ -68,19 +68,24 @@ type outsourceCandidate struct {
 	TargetModel   string
 	TargetEffort  string
 	TargetMachine string
+	// Dispatched mirrors task.outsource_dispatched: true = the four Target fields
+	// are an EXPLICIT 發包 target and override the type manual; false = they are
+	// the creator SNAPSHOT a manual-driven task carries (T-8a67) and fill only
+	// what the live manual leaves unset.
+	Dispatched bool
 }
 
 // hasExplicitTarget reports whether the candidate carries an explicit 發包
-// target (a create/reassign dispatch). A dispatch always floors effort→medium, so
-// a plain manual-driven outsource task (which stores none of these) is reliably
-// distinguished. machine has no default at all — nothing is placed automatically.
-// TargetRuntime is deliberately NOT part of the test: DAL.PutTask normalizes
-// outsource_runtime on every write, so it is never blank and would report every
-// task — dispatched or not — as an explicit target. That would route
-// manual-driven tasks around the spawn gate below; keep it out.
-func (c outsourceCandidate) hasExplicitTarget() bool {
-	return c.TargetModel != "" || c.TargetEffort != "" || c.TargetMachine != ""
-}
+// target (a create/reassign dispatch) rather than a manual-driven task's creator
+// snapshot.
+//
+// It reads the row's OWN declaration (task.outsource_dispatched,
+// migrations/00036) and no longer INFERS it from the spec columns being
+// non-empty. That inference was load-bearing in the wrong direction: it made the
+// columns unusable by any task the scheduler still had to gate, so a
+// manual-driven task could carry no resolved spec at all — and with no machine
+// anywhere, the worker minted for it could never boot (T-8a67).
+func (c outsourceCandidate) hasExplicitTarget() bool { return c.Dispatched }
 
 // outsourceTypeSpec is one manual's outsource assignee spec: how many copies
 // of the type may run at once (0 = 無限 — unlimited, spec TaskManualDTO), the
@@ -225,6 +230,14 @@ func outsourceDecide(
 			if !ok || spec.Copies < 0 {
 				continue
 			}
+			// T-8a67: the LIVE manual decides everything it states; the creator
+			// snapshot stored on the task row at create time fills only what the
+			// manual left unstated. That order is what keeps the manual editable
+			// (an owner who adds a machine to the assignee still wins on the very
+			// next tick) while no longer letting a manual's silence resolve to
+			// "no machine at all" — which is not a placement, so the worker minted
+			// under it would never boot.
+			spec = fillTypeSpecFromSnapshot(spec, c)
 		}
 		// Copies == 0 is 無限 (unlimited per-type copies) — never capped here.
 		// One gate for both dispatch sources (manual-driven and explicit target).
@@ -245,6 +258,26 @@ func outsourceDecide(
 		})
 	}
 	return out
+}
+
+// fillTypeSpecFromSnapshot folds a manual-driven candidate's creator snapshot
+// (task.outsource_*, written at create time — T-8a67) into the fields the LIVE
+// type manual leaves unset. Copies is untouched: how many of a type may run at
+// once is the manual's alone and no creator has any say in it.
+//
+// The field rules are inheritDispatchSpec's, reused rather than restated
+// (runtime+model inherit together, effort defaults to medium, nothing invents a
+// machine), so the snapshot cannot mean one thing when it is written and another
+// when it is read.
+func fillTypeSpecFromSnapshot(spec outsourceTypeSpec, c outsourceCandidate) outsourceTypeSpec {
+	resolved := defaultedDispatchSpec(fillDispatchSpecFrom(
+		dispatchSpec{Runtime: spec.Runtime, Model: spec.Model,
+			Effort: spec.Effort, Machine: spec.Machine},
+		dispatchSpec{Runtime: c.TargetRuntime, Model: c.TargetModel,
+			Effort: c.TargetEffort, Machine: c.TargetMachine}))
+	spec.Runtime, spec.Model = resolved.Runtime, resolved.Model
+	spec.Effort, spec.Machine = resolved.Effort, resolved.Machine
+	return spec
 }
 
 // outsourceSpecOf extracts a manual's outsource assignee spec: nil for {} /
@@ -466,6 +499,7 @@ func (s *apiServer) runOutsourceTick(now float64) {
 			TargetRuntime: t.OutsourceRuntime,
 			TargetModel:   t.OutsourceModel, TargetEffort: t.OutsourceEffort,
 			TargetMachine: t.OutsourceMachine,
+			Dispatched:    t.OutsourceDispatched,
 		})
 	}
 	if len(cands) == 0 {
