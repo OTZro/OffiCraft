@@ -25,7 +25,7 @@ interface ProfileDropdownProps {
   setOwnerName: (next: string) => void;
 }
 
-type View = "main" | "preferences" | "password";
+type View = "main" | "preferences" | "password" | "notifications";
 
 /**
  * Profile menu that drops from the topbar profile pill.
@@ -293,27 +293,6 @@ export function ProfileDropdown({
           </div>
 
           <div className="profile-dd__section">
-            <label className="profile-dd__section-label" htmlFor="push-contact-email">
-              {t.profile.pushContactEmail}
-            </label>
-            <div className="profile-dd__section-hint">{t.profile.pushContactEmailSub}</div>
-            <input
-              id="push-contact-email"
-              className="profile-dd__input"
-              type="email"
-              inputMode="email"
-              autoComplete="email"
-              placeholder={t.profile.pushContactEmailPlaceholder}
-              value={pushContactEmail}
-              disabled={!pushEmailLoaded}
-              onChange={(e) => setPushContactEmail(e.target.value)}
-              onBlur={() => void commitPushContactEmail()}
-              onKeyDown={(e) => { if (e.key === "Enter") void commitPushContactEmail(); }}
-            />
-            {pushEmailError && <div className="profile-dd__error">{t.profile.pushContactEmailError}</div>}
-          </div>
-
-          <div className="profile-dd__section">
             <div className="profile-dd__section-label">{t.profile.layout}</div>
             <div className="profile-dd__seg">
               <button
@@ -336,6 +315,13 @@ export function ProfileDropdown({
               </button>
             </div>
           </div>
+
+          <div className="profile-dd__divider" />
+
+          <button type="button" className="profile-dd__row" onClick={() => setView("notifications")}>
+            <span className="profile-dd__row-body"><span className="profile-dd__row-title">{t.profile.pushContactEmail}</span><span className="profile-dd__row-sub">{t.profile.pushContactEmailSub}</span></span>
+            <ChevronRightIcon size={16} className="profile-dd__row-chevron" />
+          </button>
 
           <div className="profile-dd__divider" />
 
@@ -437,6 +423,19 @@ export function ProfileDropdown({
             >
               {pwdBusy ? t.profile.saving : t.profile.save}
             </button>
+          </form>
+        </>
+      )}
+
+      {view === "notifications" && (
+        <>
+          <button type="button" className="profile-dd__back" onClick={() => setView("preferences")}><ChevronLeftIcon size={16} /><span>{t.profile.pushContactEmail}</span></button>
+          <form className="profile-dd__form" onSubmit={(e) => { e.preventDefault(); void commitPushContactEmail(); }}>
+            <label className="profile-dd__field-label" htmlFor="push-contact-email">{t.profile.pushContactEmail}</label>
+            <div className="profile-dd__section-hint">{t.profile.pushContactEmailSub}</div>
+            <input id="push-contact-email" className="profile-dd__input" type="email" inputMode="email" autoComplete="email" placeholder={t.profile.pushContactEmailPlaceholder} value={pushContactEmail} disabled={!pushEmailLoaded} onChange={(e) => setPushContactEmail(e.target.value)} />
+            {pushEmailError && <div className="profile-dd__error">{t.profile.pushContactEmailError}</div>}
+            <button type="submit" className="profile-dd__save" disabled={!pushEmailLoaded}>{t.profile.save}</button>
           </form>
         </>
       )}
