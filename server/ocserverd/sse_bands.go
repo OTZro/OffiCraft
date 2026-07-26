@@ -20,6 +20,7 @@ package main
 //     reconcile.go.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -313,4 +314,35 @@ type wardenStartArgs struct {
 type wardenCommandFrame struct {
 	RPC  string `json:"rpc"`
 	Args any    `json:"args"`
+}
+
+// wardenCommandDigest is the read-back SUBSET of a built command frame: which
+// verb, and which member it addressed. Deliberately its own decode shape rather
+// than a round-trip of wardenCommandFrame (whose Args is `any` for the encode
+// side) — it names ONLY the two non-secret fields, so accounting that reads a
+// frame back can never touch, log or leak the member_token riding a START.
+type wardenCommandDigest struct {
+	Verb     string
+	MemberID string
+}
+
+// decodeWardenCommandFrame parses one warden-command wire frame back into its
+// digest. Returns false for anything that is not a well-formed frame on this
+// topic — the caller must treat that as "a loss it cannot attribute", never as
+// "no loss".
+func decodeWardenCommandFrame(frame []byte) (wardenCommandDigest, bool) {
+	raw := bytes.TrimPrefix(bytes.TrimSpace(frame), []byte("data: "))
+	var env struct {
+		Topic string `json:"topic"`
+		Data  struct {
+			RPC  string `json:"rpc"`
+			Args struct {
+				MemberID string `json:"member_id"`
+			} `json:"args"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil || env.Topic != wardenCommandTopic {
+		return wardenCommandDigest{}, false
+	}
+	return wardenCommandDigest{Verb: env.Data.RPC, MemberID: env.Data.Args.MemberID}, true
 }

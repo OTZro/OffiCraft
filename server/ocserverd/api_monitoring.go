@@ -147,6 +147,31 @@ func isStopNoopReceipt(rpc string, ok *bool, reason string) bool {
 	return strings.HasPrefix(reason, stopNoopReasonPrefix)
 }
 
+// wakeTimeoutReasonCode is the reason CODE stampWakeObservability writes
+// (reconcile.go) when a START lapsed its start window. It is the only
+// dispatch-level — as opposed to execution-level — writer of last_op_reason
+// today, and naming it here is the cross-module contract that lets the receipt
+// fold recognise what it is about to overwrite.
+const wakeTimeoutReasonCode = "wake_timeout"
+
+// supersededDispatchClue returns a one-line carry-forward of the member's
+// CURRENT last_op_reason when that reason is a dispatch-level diagnosis (the
+// "nothing ever came back" story) about to be replaced by an execution receipt
+// (the "the machine acted and here is what happened" story). Empty when there is
+// nothing worth preserving — a receipt superseding a receipt is ordinary.
+//
+// Deliberately in-place inside the existing five last_op* fields: a separate
+// durable slot would grow MemberDTO, and the wire is frozen (CLAUDE.md §13).
+// This follows the isStopNoopReceipt precedent — the fold already knows that not
+// every receipt deserves the slot on its own terms.
+func supersededDispatchClue(m Member) string {
+	if !strings.HasPrefix(m.LastOpReason, wakeTimeoutReasonCode+":") {
+		return ""
+	}
+	return fmt.Sprintf("[superseded dispatch diagnosis @%.0f] %s",
+		m.LastOpAt, m.LastOpReason)
+}
+
 // foldCommandResult folds ONE warden command_result receipt onto the
 // addressed member's last_op* fields (handlers._fold_command_result).
 // Fail-safe: a missing/blank member_id or an unknown member is ignored; any
@@ -213,6 +238,26 @@ func (s *apiServer) foldCommandResult(commandResult map[string]any, trigger stri
 			"[monitoring] no-op stop receipt for member %q (%s) — last_op NOT folded\n",
 			memberID, reason)
 		return
+	}
+	// T-66a2: the five last_op* fields are ONE slot with TWO blind writers —
+	// this fold (an EXECUTION outcome: the machine received the order and acted)
+	// and stampWakeObservability (a DISPATCH-level diagnosis: nothing ever came
+	// back). The second is the clue that decides whether to go look at that
+	// machine at all, and until now the next spawn receipt erased it outright:
+	// not archived, not superseded, just gone in one putMember. The receipt is
+	// genuinely newer and must still win the slot — but the clue it displaces is
+	// carried into last_op_log rather than destroyed. Prefixed, not appended, so
+	// it survives the commandResultLogMax clamp of a long log dump; bounded to
+	// ONE hop because the new last_op_reason is the receipt's own, so the next
+	// fold has no dispatch diagnosis left to carry.
+	if clue := supersededDispatchClue(*m); clue != "" {
+		logText = clue + "\n" + logText
+		if len(logText) > commandResultLogMax {
+			logText = logText[:commandResultLogMax]
+		}
+		fmt.Fprintf(os.Stderr,
+			"[monitoring] member %q: %s receipt supersedes a dispatch diagnosis — "+
+				"carried into last_op_log (%s)\n", memberID, rpc, m.LastOpReason)
 	}
 	m.LastOp = rpc
 	m.LastOpOK = okPtr

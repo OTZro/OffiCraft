@@ -381,12 +381,35 @@ data: {"topic":"warden-command","data":{"rpc":"start","args":{"member_id":"m-1a2
   owner-scope entity fan-out.
 - **Queue semantics**:
   - per-warden FIFO; drain MUST pop all pending frames in FIFO order;
-  - delivery is **at-most-once** onto the downstream (fire-and-forget). A frame drained into
-    a dying connection is lost by design — recovery is NOT redelivery but re-decision from
-    presence on the next reconcile tick (the zero-field declarative guarantee;
-    spec/lifecycle.md §4.6);
-  - the queue is in-memory only (inventory #6): a restart drops pending frames; this MUST be
-    harmless because the reconcile producer re-folds and re-enqueues;
+  - delivery is **at-most-once** onto the downstream (fire-and-forget) **for every verb except
+    `update`**. A frame drained into a dying connection is lost by design — recovery is NOT
+    redelivery but re-decision from presence on the next reconcile tick (the zero-field
+    declarative guarantee; spec/lifecycle.md §4.6). `update` is the single exception, because
+    it is the single verb with no re-decision to recover it: see the `update` bullet below,
+    which is normative and overrides this sentence for that verb alone;
+  - **the loss MUST NOT be silent** (T-66a2): a drain pops the whole FIFO, so frames the
+    stream loop could not write are in nobody's hands but the server's. Each such frame MUST
+    be accounted for — one server log line naming warden + verb + addressed member (never
+    the frame body: `args` carries the token) — so an outside observer can tell "the order
+    was lost" from "no order was ever sent". Those two used to be indistinguishable, which
+    is the whole reason a delivery failure had no owner-visible explanation;
+  - **`update` is the one verb that IS re-enqueued** when it fails to reach the socket. Every
+    other verb has a compensating re-decision (reconcile re-derives START/STOP/UNINSTALL from
+    observed presence within one cadence); nothing anywhere re-derives "the owner asked this
+    machine to upgrade", and the upgrade endpoint deliberately re-execs the server, so this
+    verb is the most likely to be in flight when the stream dies. The retry is safe because
+    the warden's self-update is idempotent (content-hash swap oracle); the requeue de-dups on
+    frame identity, so a flapping warden accumulates ONE pending update, not one per flap;
+  - the queue is in-memory only (inventory #6): a restart drops pending frames. That is
+    harmless **only for the verbs the reconcile producer re-derives** — START / STOP /
+    UNINSTALL are re-folded and re-enqueued from observed presence within one cadence, so a
+    restart costs at most one tick. It is NOT harmless for `update`: nothing re-derives an
+    owner's upgrade click, so a restart between enqueue and drain loses it outright — and
+    `POST /api/update/upgrade` deliberately re-execs the server, which makes that race a
+    designed-in event rather than a hypothetical. The in-process requeue above does not cover
+    it either (the requeue survives a dead connection, not a dead process). Closing that gap
+    needs a durable queue, which is the DEFERRED queue-persistence item — until it lands, the
+    honest statement is that a pending `update` is lost on restart with no record;
   - unbounded by default; a configured positive cap makes enqueue fail (→ dispatch reports
     not-accepted → retry next tick) rather than grow a wedged backlog.
 - Band evaluation happens on quiet ticks only (buffered entity deltas drain first); relative priority among bands is an implementation detail.

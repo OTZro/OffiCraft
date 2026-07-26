@@ -504,6 +504,11 @@ export const zh = {
   // 有送出去、是機器上的 claude 沒登入）。一句具體但錯誤的因果，比原本的沉默
   // 更糟——它會把人推向錯的方向。所以現在只說 bool 真的知道的事，原因寫成兩
   // 條並列可能，並把人指回比這裡更準的那一行。
+  //
+  // T-66a2 補充：wake_timeout 不再只有一句。server 若能證明那個 frame 被 pop
+  // 出來卻沒寫上 socket，receipt 會改寫成「指令從來沒送到那台機器、別去看那
+  // 台機器的 claude」——在「真的沒送到」的情況下反而和這段文案一致。這裡的
+  // 推理不變：這段字知道的仍然比 last_op_reason 少，還是要把人指回那一行。
   dispatchAlert: {
     wakeTitle: "這次沒有送出喚醒指令",
     wakeBody:

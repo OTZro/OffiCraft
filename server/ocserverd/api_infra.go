@@ -213,8 +213,16 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 		// member_token is a secret).
 		if wardenID != "" {
 			if pending := s.hub.DrainWardenCommands(wardenID); len(pending) > 0 {
-				for _, frame := range pending {
+				for i, frame := range pending {
 					if !write(frame) {
+						// T-66a2: the drain already emptied the FIFO, so THIS
+						// frame and every frame behind it are in nobody's hands
+						// but ours. Returning here used to discard them with no
+						// log, no receipt and no field — a lost order looked
+						// exactly like an order never sent. Hand them back so the
+						// hub can requeue what has no re-decision path (update)
+						// and name what it drops.
+						s.hub.ReturnUndeliveredCommands(wardenID, pending[i:])
 						return
 					}
 				}

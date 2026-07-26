@@ -771,9 +771,25 @@ func (s *apiServer) stampWakeObservability(m *Member, decision reconcileDecision
 		m.LastOp = reconcileCmdStart
 		m.LastOpOK = &ok
 		m.LastOpAt = now
-		m.LastOpReason = "wake_timeout: the START was dispatched but the agent never " +
+		m.LastOpReason = wakeTimeoutReasonCode + ": the START was dispatched but the agent never " +
 			"came online within the start window — check that claude runs and is " +
 			"logged in on the target machine (warden log: ocwarden.err.log)"
+		// T-66a2: the sentence above is only true when the frame actually
+		// reached the machine. If the warden's stream died mid-delivery the
+		// frame was dropped server-side and NOTHING on the target machine was
+		// ever asked to start — telling the owner to go inspect claude there
+		// sends them to the wrong machine, which is worse than silence. The
+		// note is anchored to THIS wake (WakingSince), so an older loss can
+		// never explain the attempt now lapsing.
+		if note, lost := s.hub.UndeliveredCommandSince(m.ID, m.WakingSince); lost &&
+			note.Verb == reconcileCmdStart {
+			m.LastOpReason = fmt.Sprintf(
+				wakeTimeoutReasonCode+": the START never reached machine %q — its SSE stream "+
+					"failed mid-delivery and the frame was dropped server-side, so "+
+					"nothing on that machine was ever asked to start; do not go "+
+					"looking at claude there, the machine's connection is the suspect",
+				note.Warden)
+		}
 		// The anchor is stale by construction here; clearing it lets the member
 		// read plain offline again instead of a forever-"waking" lie.
 		m.WakingSince = 0.0

@@ -31,6 +31,13 @@ import "./dispatch-alert.css";
  *       WAS dispatched and timed out — where `last_op_reason` already carries
  *       the correct and OPPOSITE diagnosis ("the START was dispatched but the
  *       agent never came online — check that claude runs and is logged in").
+ * (T-66a2 amends case (b): `wake_timeout` is no longer ONE sentence. When the
+ * server can prove the START frame was popped for delivery and never reached
+ * the socket, the receipt now says so — "the START never reached machine X …
+ * do not go looking at claude there" — instead of the machine-side advice
+ * quoted above. That makes it AGREE with this panel rather than contradict it
+ * in the undelivered case, and it does not change the reasoning here: this copy
+ * still knows less than `last_op_reason` and must still point at it.)
  * The first version of this copy said "nothing reached the target machine" and
  * sent the owner to check the machine registry. In case (b) that CONTRADICTS
  * 「最近操作」 on the same panel and points at the wrong fix. Replacing a silent

@@ -26,6 +26,7 @@ package main
 //     In-memory only (restart drops it — harmless by contract).
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -129,6 +130,11 @@ type Hub struct {
 	// warden MEMBER id (the drain side's verified token sub). Values are
 	// ready-to-write SSE wire text. Unbounded (a warden reconnect drains it).
 	wardenCmds map[string][][]byte
+	// cmdUndelivered is the per-ADDRESSED-MEMBER note that a drained command
+	// frame never reached the socket (T-66a2). One entry per member, overwritten
+	// by the next loss and deleted by the next dispatch — bounded by the roster,
+	// volatile like every other hub store.
+	cmdUndelivered map[string]undeliveredCommand
 	// connGen is the hub-wide monotonic connection generation (pre-increment
 	// under h.mu; first connection is 1). Process-local like seq: an
 	// exec/restart resets it — generations only need to compare within one
@@ -144,10 +150,11 @@ type Hub struct {
 
 func NewHub() *Hub {
 	return &Hub{
-		listeners:  map[*hubListener]bool{},
-		wardenCmds: map[string][][]byte{},
-		kicks:      map[string][]time.Time{},
-		clock:      time.Now,
+		listeners:      map[*hubListener]bool{},
+		wardenCmds:     map[string][][]byte{},
+		cmdUndelivered: map[string]undeliveredCommand{},
+		kicks:          map[string][]time.Time{},
+		clock:          time.Now,
 	}
 }
 
@@ -511,12 +518,20 @@ func (h *Hub) EnqueueWardenCommand(wardenID string, frame []byte) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.wardenCmds[wardenID] = append(h.wardenCmds[wardenID], frame)
+	// A FRESH dispatch supersedes any earlier "this member's frame never made
+	// it" note (T-66a2): the note exists to explain ONE lost dispatch, and the
+	// reader (stampWakeObservability) must never attribute a stale loss to the
+	// attempt now in flight.
+	if digest, ok := decodeWardenCommandFrame(frame); ok && digest.MemberID != "" {
+		delete(h.cmdUndelivered, digest.MemberID)
+	}
 }
 
 // DrainWardenCommands pops and returns ALL of wardenID's pending command
-// frames in FIFO order (nil when none) — at-most-once onto the downstream: a
-// frame drained into a dying connection is lost by design (recovery is
-// re-decision from presence, never redelivery).
+// frames in FIFO order (nil when none). The pop is destructive by design —
+// at-most-once onto the downstream — but the caller now owes the frames back:
+// whatever it could NOT write must be handed to ReturnUndeliveredCommands, so
+// the loss is accounted for instead of being garbage-collected in silence.
 func (h *Hub) DrainWardenCommands(wardenID string) [][]byte {
 	if wardenID == "" {
 		return nil
@@ -529,6 +544,127 @@ func (h *Hub) DrainWardenCommands(wardenID string) [][]byte {
 	}
 	delete(h.wardenCmds, wardenID)
 	return pending
+}
+
+// undeliveredCommand is the note left behind when a command frame was popped
+// off the FIFO but never reached the socket. Keyed by the ADDRESSED member (the
+// frame's args.member_id — the subject of the order), not by the warden, because
+// the only consumer is the wake diagnosis for that member. Volatile, like every
+// other hub store; it explains one dispatch, not a history.
+type undeliveredCommand struct {
+	Verb     string  // the rpc that was lost ("start" / "stop" / "update" / ...)
+	Warden   string  // the warden whose stream died mid-delivery
+	At       float64 // epoch seconds of the loss
+	Requeued bool    // true → the frame was put back and WILL be retried
+}
+
+// ReturnUndeliveredCommands accounts for frames that DrainWardenCommands popped
+// but the stream loop could not write (the connection died mid-drain). Before
+// T-66a2 those frames were simply discarded by the returning handler: no log,
+// no receipt, no field — a lost order was indistinguishable from one that was
+// never sent, which is the whole reason nobody could tell where to look.
+//
+// Two deliberately different treatments:
+//
+//   - `update` is RE-ENQUEUED at the FRONT of the FIFO. It is the one verb with
+//     NO compensating re-decision anywhere: the 30s reconcile cadence re-derives
+//     start/stop/uninstall from observed presence, but nothing re-derives "the
+//     owner asked this machine to upgrade". It is also the verb most likely to
+//     be in flight when the stream dies, because POST /api/update/upgrade
+//     deliberately re-execs the server. The self-update it kicks is idempotent
+//     (content-hash swap oracle), so a redundant retry is a cheap no-op.
+//   - EVERY OTHER VERB STAYS DROPPED. That is not an oversight: at-most-once
+//     into a dying connection is the contract this band was built on, and
+//     redelivering a stale START/STOP after the world has moved on is worse than
+//     losing it (reconcile will re-decide from live presence within one cadence).
+//     What changes is that the drop is now LOUD: one stderr line per frame plus
+//     a note the wake diagnosis reads, so an outside observer can tell "never
+//     delivered" from "delivered and failed".
+//
+// Returns how many frames were requeued and how many were dropped.
+func (h *Hub) ReturnUndeliveredCommands(wardenID string, undelivered [][]byte) (requeued, dropped int) {
+	if wardenID == "" || len(undelivered) == 0 {
+		return 0, 0
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	at := float64(h.clock().UnixNano()) / 1e9
+	var back [][]byte
+	for _, frame := range undelivered {
+		digest, ok := decodeWardenCommandFrame(frame)
+		verb := digest.Verb
+		if !ok || verb == "" {
+			// An unparseable frame is still a loss worth naming; it just cannot
+			// be attributed to a verb or a member.
+			verb = "unknown"
+		}
+		retry := verb == reconcileCmdUpdate &&
+			!containsFrame(h.wardenCmds[wardenID], frame) && !containsFrame(back, frame)
+		if retry {
+			back = append(back, frame)
+			requeued++
+		} else {
+			dropped++
+		}
+		if digest.MemberID != "" {
+			h.cmdUndelivered[digest.MemberID] = undeliveredCommand{
+				Verb: verb, Warden: wardenID, At: at, Requeued: retry,
+			}
+			// KNOWN, DELIBERATE: a note written on the REQUEUE path is never
+			// cleared when the retry succeeds. Only EnqueueWardenCommand deletes
+			// notes, and a requeue writes to the FIFO directly (it is a retry of
+			// a frame already dispatched, not a new dispatch). Clearing here
+			// would erase the note in the same critical section that writes it,
+			// making the Requeued flag dead; clearing on successful redelivery
+			// would need per-frame delivery tracking — the ack/correlation-id
+			// machinery that is explicitly DEFERRED. It cannot mislead today:
+			// the only consumer (stampWakeObservability) gates on
+			// `note.Verb == start`, and a requeue only ever happens for
+			// `update`. A future reader adding a second consumer must not assume
+			// a requeued note means "still lost".
+		}
+		action := "DROPPED (at-most-once contract — reconcile re-decides from presence)"
+		if retry {
+			action = "REQUEUED (update has no re-decision path)"
+		}
+		// Never print the frame itself: a START carries the member_token.
+		fmt.Fprintf(os.Stderr,
+			"[sse] warden command undelivered: warden=%s verb=%s target=%s — %s\n",
+			wardenID, verb, digest.MemberID, action)
+	}
+	if len(back) > 0 {
+		h.wardenCmds[wardenID] = append(back, h.wardenCmds[wardenID]...)
+	}
+	return requeued, dropped
+}
+
+// UndeliveredCommandSince reports the loss note for memberID iff it is NEWER
+// than since (the caller's own dispatch anchor) — an older note describes some
+// previous attempt and must never be used to explain this one.
+func (h *Hub) UndeliveredCommandSince(memberID string, since float64) (undeliveredCommand, bool) {
+	if memberID == "" {
+		return undeliveredCommand{}, false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	note, ok := h.cmdUndelivered[memberID]
+	if !ok || note.At < since {
+		return undeliveredCommand{}, false
+	}
+	return note, true
+}
+
+// containsFrame reports whether an identical frame is already queued — the
+// requeue de-dup. Warden command frames for the same verb+target are byte
+// identical (update carries no token and no timestamp), so a warden that flaps
+// repeatedly accumulates ONE pending update, not one per flap.
+func containsFrame(queue [][]byte, frame []byte) bool {
+	for _, q := range queue {
+		if bytes.Equal(q, frame) {
+			return true
+		}
+	}
+	return false
 }
 
 // ── in-memory observation stores (context gauge + warden telemetry) ──────────
