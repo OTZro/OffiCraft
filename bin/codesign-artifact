@@ -1,65 +1,81 @@
 #!/usr/bin/env bash
 # officraft — sign ONE built artifact with the stable self-signed release
-# identity, IF this machine's keychain holds it; otherwise warn and leave the
-# binary exactly as built. Signing NEVER blocks a build or a deploy.
+# identity, WHEN a caller explicitly asks for it (OC_CODESIGN_ENABLE=1 /
+# OC_CODESIGN_REQUIRE=1) and this machine's keychain holds the identity;
+# otherwise leave the binary exactly as built. DEFAULT = do nothing at all, not
+# even look at the keychain. Signing never blocks a build or a deploy unless the
+# caller asked for it with OC_CODESIGN_REQUIRE=1, where the whole point is to.
 #
-# WHY (T-33d5): macOS TCC keys permission grants to a binary's code-signing
-# identity. The Go toolchain's default adhoc signature has a different cdhash
-# every build, so each release makes ocwarden/ocagent look like a brand-new app
-# to TCC and the owner is re-prompted for every permission after every update.
-# Signing the RELEASED artifacts with one long-lived self-signed certificate
-# (stable CN + stable --identifier) gives them a stable designated requirement,
-# so TCC grants survive self-updates.
+# ORIGINAL PREMISE (T-33d5) AND ITS RETRACTION (T-588c) — read both, because the
+# first one is why this file exists and the second is why it no longer runs:
+#   T-33d5 argued that macOS TCC keys permission grants to a binary's
+#   code-signing identity, that Go's default adhoc signature gets a new cdhash
+#   every build, and that signing with one long-lived SELF-SIGNED certificate
+#   would therefore give the fleet a stable designated requirement so TCC grants
+#   survive self-updates.
+#   ⚠️ THE OWNER HAS SINCE CONFIRMED THAT PREMISE IS WRONG: a self-signed
+#   identity does NOT make TCC authorization stick. So "not signing costs us
+#   re-prompted TCC permissions" is NOT a real cost of the default-off switch —
+#   do NOT write that trade-off into this file, into bin/release, or into the
+#   docs. It was written down as a cost once already and it was fiction.
+# What is left is a signing mechanism with no proven benefit, kept because the
+# owner asked for it to be kept ("以後我們想要拿回來繼續 sign 我們再說吧"), not
+# because anything depends on it. Hence: preserved, wired, and default-OFF.
 #
-# WHERE THIS RUNS — it signs release-shaped ARTIFACTS, but the two callers are
-# NOT release-only paths (this was mis-stated here before T-da4b, and that
-# wording is what made "the release path" sound like a place that existed):
+# WHERE THIS RUNS — nowhere, unless asked. The callers below are all shared,
+# non-release seams (this was mis-stated here before T-da4b as "the release
+# path", which is what made a release-only path sound like a place that existed):
 #   - bin/build-bindist → the bindist ocwarden/ocagent that ocserverd embeds and
 #     serves to the fleet self-update loop (GET /api/{warden,agent}/binary).
 #     ALSO runs on every bin/ci.sh run and in conformance/run.sh.
 #   - bin/build         → .deploy/ocserverd (the deploy / bin/release-package
 #     artifact). ALSO runs on the prod host via bin/autodeploy, inside
 #     `bin/ocserver install`, and by hand on any dev Mac.
-# Hence the default MUST stay warn-and-pass: these are shared seams, and a
-# missing cert here is the normal state of every dev/CI machine. Releasing is
-# the narrow path — bin/build-release — and it is the ONE caller that turns
-# OC_CODESIGN_REQUIRE on.
-# The COMMITTED prebuilts under bin/ are NEVER signed: they stay plain
+# Before T-588c those calls DID reach the keychain on a provisioned host — a real
+# green CI log carried "identity CONFIRMED present in keychain" from the
+# build-bindist step — which meant every concurrent bin/ci.sh run on this Mac was
+# contending for one shared login keychain. Since the default-off gate they stop
+# above the `security` call, so CI and dev builds need no keychain at all and two
+# CI runs can proceed at once without touching the same one.
+# The COMMITTED prebuilts under bin/ were NEVER signed either: they stay plain
 # `go build -ldflags="-s -w"` output, so the CI committed-prebuilt parity gate
-# and rebuilds on any dev machine need no keychain. On a machine WITHOUT the
-# identity this script is a warn-and-return no-op, so repo builds and CI keep
-# working with no keychain at all.
+# compares like with like on any machine.
 #
-# BUT DO NOT READ THAT AS "CI NEVER SIGNS" (T-da4b step 2 — this was mis-stated
-# here as "every dev/CI host today" lacks the identity; the CI host this repo
-# actually runs on HOLDS it). Where a dev/CI host IS provisioned, bin/ci.sh's
-# build-bindist step signs server/ocserverd/bindist/{ocwarden,ocagent} for real
-# and logs "identity CONFIRMED present in keychain". That is fine and stays
-# green — the parity gate compares the COMMITTED bin/ prebuilts, which this
-# script never touches — but "CI output is byte-identical everywhere" is FALSE:
-# it depends on whether the host holds the cert. Observed on a real green CI run
-# (grep the log for `identity CONFIRMED` outside the bin/tests section). The
-# hermetic tests in bin/tests/run.sh PATH-shim `security`, so they assert the
-# same result on provisioned and bare hosts alike.
+# The hermetic tests in bin/tests/run.sh PATH-shim `security`/`codesign`, so they
+# assert the same result on provisioned and bare hosts alike — including a
+# tripwire proving the default path invokes NEITHER.
 #
 # usage: codesign-artifact <binary> <identifier>
 #   e.g. codesign-artifact server/ocserverd/bindist/ocwarden com.officraft.ocwarden
 #
+# ⚠️ SIGNING IS OFF BY DEFAULT (T-588c, owner ruling: "可以保留但是我們預設都不跑"
+# / keep the code, run none of it unless asked). NOTHING in this repo's default
+# paths — bin/build, bin/build-bindist, bin/ci.sh and every lane it dispatches,
+# bin/autodeploy, bin/release publish — reaches the keychain any more: this script
+# returns a no-op before the `security` call unless a caller EXPLICITLY opts in
+# with OC_CODESIGN_ENABLE=1 (what `bin/release publish --sign` sets) or with
+# OC_CODESIGN_REQUIRE=1 (what bin/build-release sets, which implies enable).
+# The signing machinery below is preserved verbatim so turning it back on is one
+# env var, not an archaeology exercise.
+#
 # knobs (env):
+#   OC_CODESIGN_ENABLE=1   OPT IN to signing at all. Default (unset/0) = this
+#                          script never consults the keychain and leaves the
+#                          binary as built. Implied by OC_CODESIGN_REQUIRE=1.
 #   OC_CODESIGN_IDENTITY   keychain identity CN (default "OffiCraft Code Signing")
-#   OC_CODESIGN_DISABLE=1  skip signing even when the identity exists
-#   OC_CODESIGN_REQUIRE=1  the identity is MANDATORY: a missing identity is a hard
-#                          error (exit 4) instead of an adhoc-shipping warning.
-#                          bin/build-release is the one caller that sets it
-#                          (owner ruling rc-e43a3aae0912 — block at release, do
-#                          not ship without the cert), because silently shipping
-#                          adhoc defeats the whole point of T-33d5. Default off,
-#                          so dev/CI machines without the cert still build.
+#   OC_CODESIGN_DISABLE=1  skip signing even when the identity exists (a hard
+#                          override that wins over ENABLE/REQUIRE)
+#   OC_CODESIGN_REQUIRE=1  signing is requested AND the identity is MANDATORY: a
+#                          missing identity is a hard error (exit 4) instead of an
+#                          adhoc-shipping warning, and there is NO downgrade path.
+#                          bin/build-release and `bin/release publish --sign` are
+#                          the callers that set it (owner ruling rc-e43a3aae0912 —
+#                          block at release, do not ship without the cert).
 #
 # exit codes:
-#   0  signed, or a deliberate/benign no-op (non-darwin, disabled, identity absent
-#      while OC_CODESIGN_REQUIRE is off, sign/verify failed while REQUIRE is off
-#      → original kept)
+#   0  signed, or a deliberate/benign no-op (signing not requested, non-darwin,
+#      disabled, identity absent while OC_CODESIGN_REQUIRE is off, sign/verify
+#      failed while REQUIRE is off → original kept)
 #   1  usage / no such file
 #   3  FAIL-CHECK-BROKEN — the identity check itself could not be trusted
 #   4  FAIL-IDENTITY-MISSING — identity absent while OC_CODESIGN_REQUIRE=1
@@ -82,6 +98,20 @@ if [[ ! -f "$BIN" ]]; then
 fi
 if [[ "${OC_CODESIGN_DISABLE:-0}" == "1" ]]; then
   echo "[codesign-artifact] disabled (OC_CODESIGN_DISABLE=1) — leaving $BIN as built"
+  exit 0
+fi
+# ── THE DEFAULT-OFF GATE (T-588c) ───────────────────────────────────────────
+# Signing must be REQUESTED. This has to sit ABOVE the `security find-identity`
+# call, because "does not sign" is not the property that matters — "does not need
+# the shared login keychain" is. bin/ci.sh dispatches bin/build-bindist, which
+# calls this script twice; as long as those calls reach `security`/`codesign`,
+# every concurrent CI run on this Mac is contending for one keychain, and the
+# only reason a caller can be sure it is not is that the gate is upstream of the
+# probe. REQUIRE=1 implies ENABLE=1 so bin/build-release keeps its one-knob
+# contract (owner ruling rc-e43a3aae0912) without having to set two.
+if [[ "${OC_CODESIGN_ENABLE:-0}" != "1" && "${OC_CODESIGN_REQUIRE:-0}" != "1" ]]; then
+  echo "[codesign-artifact] signing NOT REQUESTED (default off since T-588c) — leaving $BIN as built"
+  echo "[codesign-artifact]   opt in with OC_CODESIGN_ENABLE=1, or 'bin/release publish --sign'"
   exit 0
 fi
 if [[ "$(uname -s)" != "Darwin" ]]; then

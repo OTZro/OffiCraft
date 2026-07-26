@@ -24,8 +24,14 @@ check(){ # check DESC EXPECTED ACTUAL
 WORK="$(mktemp -d -t oc-codesign-tests.XXXXXX)"
 SHIMDIR="$WORK/shim"
 TRIPWIRE="$WORK/.tripwire"
+# Second tripwire (T-588c): records every `security find-identity` call. The
+# codesign tripwire alone cannot express the property the default-off switch is
+# FOR — "no shared login keychain is touched" — because a gate below the identity
+# probe leaves codesign uninvoked while still contending for the keychain.
+SECWIRE="$WORK/.secwire"
 mkdir -p "$SHIMDIR"
 : > "$TRIPWIRE"
+: > "$SECWIRE"
 
 # ── process hygiene (T-1a54) ─────────────────────────────────────────────────
 # Every guard is dispatched through run_bounded.py, which runs it in its own
@@ -74,6 +80,7 @@ cat > "$SHIMDIR/security" <<'SH'
 #                     consumer that closes the pipe at the first match kills this
 #                     process with SIGPIPE (141), which pipefail then promotes to
 #                     the pipeline's rc. A collect-then-compare reader is immune.
+[[ -n "${SHIM_SECWIRE:-}" ]] && echo "security $*" >> "$SHIM_SECWIRE"
 if [[ "${SHIM_MALFORMED:-0}" == "1" ]]; then
   echo 'SecKeychainCopySearchList: authorization denied'
   exit 1
@@ -107,15 +114,99 @@ chmod +x "$SHIMDIR"/uname "$SHIMDIR"/security "$SHIMDIR"/codesign
 
 # run_case NAME — runs the script with the shim PATH; stdout+stderr and rc are
 # captured into OUT/RC; the target binary is a fresh two-byte file each time.
+#
+# T-588c: signing is OFF unless requested, so every case below that is ABOUT the
+# signing behaviour has to request it — run_case therefore sets
+# OC_CODESIGN_ENABLE=1. The DEFAULT (nothing requested) shape is its own helper,
+# run_case_default, used by the D-series cases; keeping them separate is what
+# stops "the default no-ops" and "signing works when asked" from being one
+# undifferentiated blob where a mutant to either reads as the other.
 BIN="$WORK/target-binary"
 run_case() {
   printf 'AB' > "$BIN"
   : > "$TRIPWIRE"
-  OUT="$(PATH="$SHIMDIR:$PATH" SHIM_TRIPWIRE="$TRIPWIRE" bash "$SCRIPT" "$BIN" com.officraft.test 2>&1)"
+  : > "$SECWIRE"
+  OUT="$(PATH="$SHIMDIR:$PATH" SHIM_TRIPWIRE="$TRIPWIRE" SHIM_SECWIRE="$SECWIRE" \
+         OC_CODESIGN_ENABLE=1 bash "$SCRIPT" "$BIN" com.officraft.test 2>&1)"
+  RC=$?
+}
+# The DEFAULT shape: no OC_CODESIGN_ENABLE, no OC_CODESIGN_REQUIRE. This is what
+# bin/build / bin/build-bindist / bin/ci.sh / bin/release publish all look like.
+run_case_default() {
+  printf 'AB' > "$BIN"
+  : > "$TRIPWIRE"
+  : > "$SECWIRE"
+  OUT="$(PATH="$SHIMDIR:$PATH" SHIM_TRIPWIRE="$TRIPWIRE" SHIM_SECWIRE="$SECWIRE" \
+         bash "$SCRIPT" "$BIN" com.officraft.test 2>&1)"
   RC=$?
 }
 
 echo "codesign-artifact hermetic tests"
+
+# ── D-series (T-588c): SIGNING IS OFF BY DEFAULT ────────────────────────────
+# The property under test is NOT "the artifact is unsigned" — it is "the SHARED
+# LOGIN KEYCHAIN is never consulted". That is the whole reason two full bin/ci.sh
+# runs can now proceed at once, so it is asserted against its own tripwire on the
+# `security` shim, not inferred from the artifact's bytes. A gate placed BELOW the
+# `security find-identity` call would leave the binary unsigned and still
+# serialise concurrent CI; D1 is the only assertion that can tell those apart.
+SHIM_HAS_IDENTITY=1 run_case_default
+check "DEFAULT (nothing requested) exits 0" "0" "$RC"
+check "DEFAULT leaves the binary untouched even with the identity PRESENT" "AB" "$(cat "$BIN")"
+check "DEFAULT never invokes codesign" "" "$(cat "$TRIPWIRE")"
+check "D1: DEFAULT never even consults the keychain (no security find-identity)" "" "$(cat "$SECWIRE")"
+case "$OUT" in *"signing NOT REQUESTED"*) ok "DEFAULT says so out loud (signing NOT REQUESTED)";; *) bad "DEFAULT says so out loud (signing NOT REQUESTED) ($OUT)";; esac
+
+# D2. …and a BROKEN keychain is irrelevant on the default path: the FAIL-CHECK-BROKEN
+# hard-stop (exit 3) must not be reachable when nobody asked to sign, or every
+# dev/CI machine with a wedged `security` would be blocked by a feature it does
+# not use.
+SHIM_MALFORMED=1 run_case_default
+check "D2: DEFAULT with a BROKEN keychain check still exits 0 (never reached)" "0" "$RC"
+check "D2: DEFAULT with a BROKEN keychain check never consults it" "" "$(cat "$SECWIRE")"
+unset SHIM_MALFORMED
+
+# D3. the opt-in is what re-arms everything: same fixture, ENABLE=1 → the keychain
+# IS consulted and the artifact IS signed. Without this, D1 could pass because the
+# script is simply broken.
+SHIM_HAS_IDENTITY=1 run_case
+check "D3: OC_CODESIGN_ENABLE=1 consults the keychain" "yes" "$([[ -s "$SECWIRE" ]] && echo yes || echo no)"
+check "D3: OC_CODESIGN_ENABLE=1 signs the artifact" "ABSIGNED" "$(cat "$BIN")"
+
+# D4. OC_CODESIGN_REQUIRE=1 IMPLIES the opt-in — bin/build-release sets only that
+# one knob (owner ruling rc-e43a3aae0912), so if REQUIRE did not imply ENABLE the
+# release-signing entry point would silently become a no-op: it would exit 0 with
+# an unsigned artifact and print "signing NOT REQUESTED", the exact silent
+# downgrade that ruling forbids.
+printf 'AB' > "$BIN"; : > "$TRIPWIRE"; : > "$SECWIRE"
+OUT="$(PATH="$SHIMDIR:$PATH" SHIM_TRIPWIRE="$TRIPWIRE" SHIM_SECWIRE="$SECWIRE" \
+       SHIM_HAS_IDENTITY=1 OC_CODESIGN_REQUIRE=1 bash "$SCRIPT" "$BIN" com.officraft.test 2>&1)"
+RC=$?
+check "D4: REQUIRE=1 alone (no ENABLE) still signs — REQUIRE implies ENABLE" "ABSIGNED" "$(cat "$BIN")"
+check "D4: REQUIRE=1 alone exits 0 on a provisioned host" "0" "$RC"
+case "$OUT" in *"signing NOT REQUESTED"*) bad "D4: REQUIRE=1 must NOT be swallowed by the default-off gate";; *) ok "D4: REQUIRE=1 is not swallowed by the default-off gate";; esac
+
+# D5. OC_CODESIGN_DISABLE=1 still wins over an explicit opt-in (the hard override
+# outranks the request; order of the two gates is a real decision, so pin it).
+printf 'AB' > "$BIN"; : > "$TRIPWIRE"; : > "$SECWIRE"
+OUT="$(PATH="$SHIMDIR:$PATH" SHIM_TRIPWIRE="$TRIPWIRE" SHIM_SECWIRE="$SECWIRE" \
+       SHIM_HAS_IDENTITY=1 OC_CODESIGN_ENABLE=1 OC_CODESIGN_DISABLE=1 bash "$SCRIPT" "$BIN" com.officraft.test 2>&1)"
+check "D5: DISABLE=1 beats ENABLE=1" "AB" "$(cat "$BIN")"
+case "$OUT" in *"OC_CODESIGN_DISABLE=1"*) ok "D5: DISABLE=1 says which knob stopped it";; *) bad "D5: DISABLE=1 says which knob stopped it ($OUT)";; esac
+
+# D6. STATIC drift-guard, in the same spirit as R5/R6 below: none of the shared
+# default-path scripts may re-arm signing behind the owner's back. The obvious
+# undo of this whole change is one `export OC_CODESIGN_ENABLE=1` in bin/build (or
+# in ci.sh), which would put every concurrent CI run back on the shared keychain
+# while every behavioural assertion above stayed green. Matched on a SETTING of
+# the var (anchored to an assignment), so explanatory comments stay legal.
+for shared in build build-bindist ci.sh; do
+  if grep -qE '^[^#]*OC_CODESIGN_(ENABLE|REQUIRE)=' "$HERE/../$shared"; then
+    bad "bin/$shared must NOT set OC_CODESIGN_ENABLE/REQUIRE (it runs on dev Macs + in CI; signing is opt-in per T-588c)"
+  else
+    ok "bin/$shared leaves signing unrequested (default off — no shared keychain in CI)"
+  fi
+done
 
 # 1. non-darwin host → no-op, exit 0, codesign never invoked
 SHIM_UNAME=Linux SHIM_HAS_IDENTITY=1 run_case

@@ -1,93 +1,480 @@
 #!/usr/bin/env bash
-# officraft — release pipeline (minimal viable cut of the §4.4 ocbuilder flow).
+# officraft — THE release command. Two subcommands, one job each:
 #
-#   bin/release <tag>            # e.g. bin/release v0.1.0
+#   bin/release publish --beta <tag> --target <sha> [--sign] [--dry-run]
+#   bin/release promote <tag>                       [--dry-run]
 #
-# From the CURRENT clean HEAD:
-#   1. sanity gates    — clean tree, darwin/arm64 host, tag shape v*.
-#   2. build           — OC_APP_VERSION=<tag> bin/build: frontend SPA
-#                        (VITE_USE_MOCK=false) + seeds + fresh ocwarden/ocagent
-#                        (bindist) all EMBEDDED into .deploy/ocserverd, with
-#                        appVersion stamped to <tag> and buildSHA/buildTime to
-#                        HEAD (so /api/version self-identifies the release).
-#   3. package         — dist/release/officraft-<tag>-darwin-arm64.tar.gz
-#                        containing ocserverd (+ SPA/seeds/bindist embedded),
-#                        ocwarden, ocagent, install.sh, README.md, LICENSE.
-#                        install.sh is ALSO staged as dist/release/install.sh —
-#                        published as its own release asset so the documented
-#                        install one-liner works (docs/guide/install.md:33; the
-#                        same command bin/install.sh's own header describes as
-#                        its standalone mode). It used to be called "the README
-#                        one-liner"; the repo README that carried it was pulled
-#                        from the product guide in T-68f1 and deleted, and the
-#                        README this script GENERATES below never had it — it
-#                        tells the reader to run ./install.sh from the unpacked
-#                        tarball:
-#                          curl -fsSL https://github.com/pkyosx/OffiCraft/releases/latest/download/install.sh | bash
-#                        (standalone mode: it downloads the tarball, verifies
-#                        sha256 against checksums.txt, then delegates to the
-#                        packaged install.sh).
-#   4. checksums.txt   — sha256 of the tarball + install.sh (shasum format).
+# WHY THIS FILE HAS SUBCOMMANDS (T-588c). The old form was `bin/release <tag>`:
+# it built from whatever the CURRENT worktree's HEAD happened to be, packaged
+# three files, and then PRINTED a `gh release create` line for a human to copy.
+# Every interesting failure lived in the gap between those two halves —
+#   * the tag says v0.1.0 but the bytes came from an unrelated branch tip,
+#     because "clean tree" was checked and "which commit" never was;
+#   * one of the three assets fails to upload and the release exists ANYWAY, half
+#     populated, with an install one-liner that 404s;
+#   * the release is created against the wrong targetCommitish, or lands as a
+#     draft, so nothing that reads GitHub Releases (the in-product update check)
+#     can see it;
+#   * the artifacts are fine, the release is fine, and the running station never
+#     actually moves onto the new build — nobody looked.
+# — and a printed command verifies nothing. So: publish owns the whole arc and
+# READS BACK what GitHub actually stored, and promote owns the beta->final flip
+# WITHOUT rebuilding anything.
 #
-# The repo tree stays ZERO-BINARY: all artifacts land in dist/release/
-# (gitignored); nothing is committed. Publishing is a separate, explicit step:
+# ── publish ─────────────────────────────────────────────────────────────────
+#   1. gates      — tag shape v*, --target resolves to a real commit, darwin/arm64.
+#   2. staging    — a THROWAWAY detached worktree at exactly <sha> (git worktree
+#                   add --detach). Not "the current tree is clean": the bytes come
+#                   from the commit you named, and the worktree is verified to be
+#                   at that commit and pristine before anything is built. The
+#                   invoking worktree is never built in and never mutated.
+#   3. build      — OC_APP_VERSION=<tag> bin/build inside the staging worktree:
+#                   frontend SPA (VITE_USE_MOCK=false) + seeds + fresh
+#                   ocwarden/ocagent (bindist) all EMBEDDED into .deploy/ocserverd,
+#                   with appVersion stamped to <tag> and buildSHA/buildTime to
+#                   <sha> (so /api/version self-identifies the release).
+#   4. package    — dist/release/officraft-<tag>-darwin-arm64.tar.gz (ocserverd,
+#                   ocwarden, ocagent, install.sh, LICENSE, README.md) plus
+#                   install.sh as its OWN asset (the documented curl|bash
+#                   one-liner downloads that file: docs/guide/install.md) plus
+#                   checksums.txt (sha256 of the tarball + install.sh).
+#   5. VERIFY THE ARTIFACTS before anything is uploaded — member list, mach-o
+#                   arm64-ness, the version/sha actually linked into ocserverd
+#                   (`go version -m`, i.e. the linker flags, not a hopeful grep),
+#                   and `shasum -c` against the checksums file we are about to
+#                   publish.
+#   6. upload     — ONE `gh release create --prerelease --target <sha>` carrying
+#                   all three assets. One call, so there is no window where the
+#                   release exists with a partial asset set.
+#   7. READ BACK  — ask GitHub what it stored and require: every expected asset
+#                   present AND state=uploaded, targetCommitish == <sha>,
+#                   isDraft == false, isPrerelease == true. Anything else exits
+#                   non-zero NAMING the failed item.
+#   8. SETTLE     — poll the live station until GET /api/version reports a git_sha
+#                   that matches <sha> AND GET /api/health answers ok.
 #
-#   gh release create <tag> dist/release/officraft-<tag>-darwin-arm64.tar.gz \
-#       dist/release/install.sh \
-#       dist/release/checksums.txt --title "OffiCraft <tag>" --notes "…"
+# --dry-run stops after step 5 and prints the exact upload command it would have
+# run. That is the shape used to rehearse a release, because steps 6-8 mutate
+# GitHub and must only ever be run for real by the person actually shipping.
 #
-# Codesigning: bin/build's advisory codesign-artifact pass still runs (signs
-# when this machine holds the "OffiCraft Code Signing" identity, warns
-# otherwise). The §4B local re-sign-on-install design supersedes shipping-side
-# signing and is a follow-up ticket — this script does not gate on it.
+# ── promote ─────────────────────────────────────────────────────────────────
+# Turns an EXISTING, ALREADY-VERIFIED prerelease into the final release. It
+# rebuilds NOTHING — the bytes people have been testing are the bytes that ship,
+# which is the entire point of a beta. It first re-verifies the prerelease
+# (exists, not a draft, is a prerelease, expected asset set, all uploaded, a
+# targetCommitish on record), then flips it, then READS BACK that the flip landed
+# and that the asset set and target commit are the same ones it verified. An
+# asset set that changed under promote means someone re-uploaded behind our back,
+# and that is a failure, not a warning.
+#
+# ── CODESIGNING IS OFF BY DEFAULT ───────────────────────────────────────────
+# (owner ruling, T-588c: "可以保留但是我們預設都不跑" / "以後我們想要拿回來繼續
+# sign 我們再說吧".) The default publish path sets NO signing env at all and
+# therefore never touches the login keychain — see bin/codesign-artifact's
+# default-off gate. `--sign` is the only way to sign, and it does so by
+# delegating the build to bin/build-release, which sets OC_CODESIGN_REQUIRE=1:
+# a missing identity, a locked keychain or a failed verify HARD-STOPS the
+# release. There is deliberately NO adhoc fallback under --sign; if you asked for
+# a signed release you get one or you get nothing.
+#   ⚠️ Do NOT write "the cost of not signing is macOS re-prompting for TCC
+#   permissions" into this file or the docs. The owner has confirmed a
+#   SELF-SIGNED identity does not make TCC authorization stick, so that cost does
+#   not exist. It was written down as a cost once; it was wrong.
+#
+# The repo tree stays ZERO-BINARY: artifacts land in dist/release/ (gitignored),
+# nothing is committed, and the staging worktree is removed on exit.
+#
+# knobs (env) — all defaulted; the overrides exist so bin/tests/release-guard.sh
+# can drive the real control flow hermetically (same posture as bin/build-release's
+# OC_BUILD_CMD seam):
+#   OC_RELEASE_SRC        git repo the staging worktree is cut from (default: this repo)
+#   OC_RELEASE_OUT        artifact output dir (default: <repo>/dist/release)
+#   OC_RELEASE_GH_REPO    GitHub repo for gh calls (default: pkyosx/OffiCraft)
+#   OC_RELEASE_SITE       station base URL polled in step 8 (default: http://127.0.0.1:7755)
+#   OC_RELEASE_SETTLE_TRIES / OC_RELEASE_SETTLE_SLEEP   step-8 polling budget
 set -euo pipefail
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
 
-TAG="${1:-}"
-if [[ -z "$TAG" ]]; then
-  echo "usage: bin/release <tag>   (e.g. bin/release v0.1.0)" >&2
+SRC="${OC_RELEASE_SRC:-$ROOT}"
+OUT="${OC_RELEASE_OUT:-$ROOT/dist/release}"
+GH_REPO="${OC_RELEASE_GH_REPO:-pkyosx/OffiCraft}"
+SITE="${OC_RELEASE_SITE:-http://127.0.0.1:7755}"
+SETTLE_TRIES="${OC_RELEASE_SETTLE_TRIES:-60}"
+SETTLE_SLEEP="${OC_RELEASE_SETTLE_SLEEP:-5}"
+
+say()  { echo "[release] $*"; }
+die()  { echo "[release] FATAL: $*" >&2; exit "${2:-1}"; }
+# fail_item — every VERIFICATION failure funnels here so it always names the item
+# that failed. The DoD for this command is "any check that does not pass exits
+# non-zero and says which one"; letting each site invent its own wording is how
+# that promise quietly stops being true.
+fail_item() { echo "[release] VERIFY-FAILED [$1]: $2" >&2; exit 6; }
+
+usage() {
+  cat >&2 <<'USAGE'
+usage:
+  bin/release publish --beta <tag> --target <sha> [--sign] [--dry-run]
+  bin/release promote <tag> [--dry-run]
+
+  publish   build <tag> from a clean staging worktree at <sha>, verify the
+            artifacts, upload them as a PRERELEASE in one call, read back what
+            GitHub stored, then wait for the live station to be on <sha>.
+  promote   flip an existing, verified prerelease to the final release.
+            Rebuilds nothing. Reads back that the flip landed.
+
+  --sign    sign the build (delegates to bin/build-release, identity MANDATORY).
+            Default: no signing at all, and no keychain is touched.
+  --dry-run publish: stop after artifact verification and print the upload
+            command. promote: verify the prerelease and print the flip command.
+USAGE
   exit 2
-fi
-if [[ ! "$TAG" =~ ^v[0-9][0-9A-Za-z.-]*$ ]]; then
-  echo "[release] FATAL: tag '$TAG' does not look like a version tag (v…)." >&2
-  exit 2
-fi
-if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
-  echo "[release] FATAL: release builds run on darwin/arm64 (asset is darwin-arm64)." >&2
-  exit 1
-fi
-if [[ -n "$(git -C "$ROOT" status --porcelain)" ]]; then
-  echo "[release] FATAL: working tree is dirty — release builds only from a clean HEAD." >&2
-  git -C "$ROOT" status --short >&2
-  exit 1
-fi
+}
 
-HEAD_SHA="$(git -C "$ROOT" rev-parse --short HEAD)"
-echo "[release] building $TAG from clean HEAD $HEAD_SHA (darwin-arm64)"
+require_tag_shape() {
+  [[ "$1" =~ ^v[0-9][0-9A-Za-z.-]*$ ]] \
+    || die "tag '$1' does not look like a version tag (v...)." 2
+}
 
-# 2. full build with the version stamped in (bin/build owns the embed ordering:
-#    SPA → webdist, seeds → seedsdist, fresh ocwarden/ocagent → bindist, then
-#    the ocserverd build that embeds all three).
-OC_APP_VERSION="$TAG" bash "$ROOT/bin/build"
+# ── artifact naming, in ONE place ────────────────────────────────────────────
+# publish builds these and promote re-verifies them, so the expected asset set
+# must have exactly one definition. Drift between "what we upload" and "what we
+# check for" is otherwise invisible.
+asset_names() { # asset_names <tag>
+  printf '%s\n' "officraft-$1-darwin-arm64.tar.gz" "install.sh" "checksums.txt"
+}
 
-# 3. package. bindist still holds the exact ocwarden/ocagent builds that were
-#    embedded (bin/build leaves them staged on purpose) — ship those same
-#    bytes rather than rebuilding, so package == embedded.
-NAME="officraft-$TAG-darwin-arm64"
-OUT="$ROOT/dist/release"
-STAGE="$OUT/$NAME"
-rm -rf "$STAGE" "$OUT/$NAME.tar.gz"
-mkdir -p "$STAGE"
+# ═══════════════════════════════════════════════════════════════════════════
+# publish
+# ═══════════════════════════════════════════════════════════════════════════
+cmd_publish() {
+  local TAG="" TARGET="" SIGN=0 DRY=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --beta)     TAG="${2:-}";    shift 2 ;;
+      --target)   TARGET="${2:-}"; shift 2 ;;
+      --sign)     SIGN=1;          shift ;;
+      --dry-run)  DRY=1;           shift ;;
+      *) echo "[release] unknown publish argument: $1" >&2; usage ;;
+    esac
+  done
+  [[ -n "$TAG"    ]] || { echo "[release] publish needs --beta <tag>" >&2; usage; }
+  [[ -n "$TARGET" ]] || { echo "[release] publish needs --target <sha>" >&2; usage; }
+  require_tag_shape "$TAG"
 
-cp "$ROOT/.deploy/ocserverd"                "$STAGE/ocserverd"
-cp "$ROOT/server/ocserverd/bindist/ocwarden" "$STAGE/ocwarden"
-cp "$ROOT/server/ocserverd/bindist/ocagent"  "$STAGE/ocagent"
-cp "$ROOT/bin/install.sh"                   "$STAGE/install.sh"
-cp "$ROOT/LICENSE"                          "$STAGE/LICENSE"
-chmod +x "$STAGE/ocserverd" "$STAGE/ocwarden" "$STAGE/ocagent" "$STAGE/install.sh"
+  # 1. gates. --target is resolved HERE, against the source repo, so a typo dies
+  #    before a build rather than after an upload.
+  local SHA SHORT
+  SHA="$(git -C "$SRC" rev-parse --verify "${TARGET}^{commit}" 2>/dev/null)" \
+    || die "--target '$TARGET' does not resolve to a commit in $SRC." 2
+  SHORT="$(git -C "$SRC" rev-parse --short "$SHA")"
+  if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
+    die "release builds run on darwin/arm64 (the asset is darwin-arm64)."
+  fi
 
-cat > "$STAGE/README.md" <<EOF
+  local NAME="officraft-$TAG-darwin-arm64"
+  say "publish $TAG (prerelease) from $SHORT ($SHA)"
+  if [[ "$SIGN" == 1 ]]; then
+    say "  signing: REQUESTED (--sign) — identity is MANDATORY, no adhoc fallback"
+  else
+    say "  signing: off (default) — no keychain is touched"
+  fi
+
+  # 2. staging worktree at exactly $SHA. Detached, throwaway, removed on exit.
+  #    `git worktree add` refuses to reuse an existing path, so leftovers are a
+  #    hard error rather than a silent build against stale bytes.
+  local STAGE
+  STAGE="$(mktemp -d -t oc-release-stage.XXXXXX)"
+  rmdir "$STAGE"
+  # shellcheck disable=SC2064
+  trap "git -C '$SRC' worktree remove --force '$STAGE' >/dev/null 2>&1 || true; git -C '$SRC' worktree prune >/dev/null 2>&1 || true" EXIT
+  say "staging worktree: $STAGE (detached at $SHORT)"
+  git -C "$SRC" worktree add --detach "$STAGE" "$SHA" >/dev/null \
+    || die "could not create the staging worktree at $SHA."
+  local STAGE_SHA
+  STAGE_SHA="$(git -C "$STAGE" rev-parse HEAD)"
+  [[ "$STAGE_SHA" == "$SHA" ]] \
+    || fail_item staging-commit "staging worktree is at $STAGE_SHA, not the requested $SHA."
+  [[ -z "$(git -C "$STAGE" status --porcelain)" ]] \
+    || fail_item staging-clean "staging worktree is not pristine at $SHORT (a fresh checkout must be clean)."
+
+  # 3. build. bin/build owns the embed ordering (SPA -> webdist, seeds ->
+  #    seedsdist, fresh ocwarden/ocagent -> bindist, then the ocserverd build
+  #    that embeds all three). --sign routes through bin/build-release, whose
+  #    ONLY job is to make the codesigning identity mandatory.
+  local BUILDER="bin/build"
+  [[ "$SIGN" == 1 ]] && BUILDER="bin/build-release"
+  say "build: OC_APP_VERSION=$TAG bash $BUILDER (in the staging worktree)"
+  ( cd "$STAGE" && OC_APP_VERSION="$TAG" bash "$STAGE/$BUILDER" ) \
+    || die "the release build failed — nothing was uploaded."
+
+  # 4. package. bindist still holds the exact ocwarden/ocagent builds that were
+  #    embedded (bin/build leaves them staged on purpose) — ship those same bytes
+  #    rather than rebuilding, so package == embedded.
+  mkdir -p "$OUT"
+  local PKG="$STAGE/.release-pkg/$NAME"
+  mkdir -p "$PKG"
+  cp "$STAGE/.deploy/ocserverd"                     "$PKG/ocserverd"
+  cp "$STAGE/server/ocserverd/bindist/ocwarden"     "$PKG/ocwarden"
+  cp "$STAGE/server/ocserverd/bindist/ocagent"      "$PKG/ocagent"
+  cp "$STAGE/bin/install.sh"                        "$PKG/install.sh"
+  cp "$STAGE/LICENSE"                               "$PKG/LICENSE"
+  chmod +x "$PKG/ocserverd" "$PKG/ocwarden" "$PKG/ocagent" "$PKG/install.sh"
+  write_package_readme "$PKG/README.md" "$TAG" "$SHORT"
+  tar -C "$STAGE/.release-pkg" -czf "$OUT/$NAME.tar.gz" "$NAME"
+  # install.sh doubles as a standalone release asset (the documented curl|bash
+  # bootstrap downloads THIS file) — publish the SAME bytes that went in the tarball.
+  cp "$PKG/install.sh" "$OUT/install.sh"
+  chmod +x "$OUT/install.sh"
+  ( cd "$OUT" && shasum -a 256 "$NAME.tar.gz" install.sh > checksums.txt )
+
+  # 5. verify the artifacts BEFORE any upload.
+  verify_artifacts "$TAG" "$SHA" "$SHORT" "$NAME"
+
+  local -a ASSETS=()
+  local a
+  while IFS= read -r a; do ASSETS+=("$OUT/$a"); done < <(asset_names "$TAG")
+
+  if [[ "$DRY" == 1 ]]; then
+    say "DRY RUN — artifacts verified, NOTHING uploaded. The upload step would be:"
+    say "  gh release create $TAG --repo $GH_REPO --prerelease --target $SHA \\"
+    say "    --title \"OffiCraft $TAG\" --notes \"...\" ${ASSETS[*]}"
+    say "then: read back the stored release, then wait for $SITE/api/version git_sha == $SHORT"
+    return 0
+  fi
+
+  # 6. upload — ONE call with all assets, so no partial release can exist.
+  say "upload: one gh release create with ${#ASSETS[@]} assets"
+  gh release create "$TAG" --repo "$GH_REPO" --prerelease --target "$SHA" \
+    --title "OffiCraft $TAG" \
+    --notes "OffiCraft $TAG (darwin-arm64) — built from $SHORT. Install: see install.sh." \
+    "${ASSETS[@]}" \
+    || die "gh release create failed — check GitHub for a partially created release before retrying."
+
+  # 7. read back what GitHub actually stored.
+  verify_stored_release "$TAG" "$SHA" prerelease >/dev/null
+
+  # 8. wait for the live station to actually be on this commit.
+  settle_station "$SHA" "$SHORT"
+
+  say "published and verified: $TAG (prerelease) on $SHORT"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# promote
+# ═══════════════════════════════════════════════════════════════════════════
+cmd_promote() {
+  local TAG="" DRY=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run) DRY=1; shift ;;
+      -*) echo "[release] unknown promote argument: $1" >&2; usage ;;
+      *) [[ -z "$TAG" ]] || { echo "[release] promote takes exactly one tag" >&2; usage; }
+         TAG="$1"; shift ;;
+    esac
+  done
+  [[ -n "$TAG" ]] || { echo "[release] promote needs a tag" >&2; usage; }
+  require_tag_shape "$TAG"
+  say "promote $TAG: existing prerelease -> final release (NO rebuild)"
+
+  # Pre-flip verification: it must ALREADY be the thing we are allowed to promote.
+  local BEFORE BEFORE_TARGET BEFORE_FINGERPRINT
+  BEFORE="$(verify_stored_release "$TAG" "" prerelease)"
+  BEFORE_TARGET="$(printf '%s\n' "$BEFORE" | sed -n '1p')"
+  BEFORE_FINGERPRINT="$(printf '%s\n' "$BEFORE" | sed -n '2,$p')"
+  say "  verified prerelease on targetCommitish $BEFORE_TARGET"
+
+  if [[ "$DRY" == 1 ]]; then
+    say "DRY RUN — prerelease verified, NOTHING flipped. The flip would be:"
+    say "  gh release edit $TAG --repo $GH_REPO --prerelease=false --draft=false"
+    return 0
+  fi
+
+  gh release edit "$TAG" --repo "$GH_REPO" --prerelease=false --draft=false \
+    || die "gh release edit failed — $TAG was NOT promoted."
+
+  # Read back: the flip landed, AND nothing else moved.
+  local AFTER AFTER_TARGET AFTER_FINGERPRINT
+  AFTER="$(verify_stored_release "$TAG" "$BEFORE_TARGET" final)"
+  AFTER_TARGET="$(printf '%s\n' "$AFTER" | sed -n '1p')"
+  AFTER_FINGERPRINT="$(printf '%s\n' "$AFTER" | sed -n '2,$p')"
+  [[ "$AFTER_TARGET" == "$BEFORE_TARGET" ]] \
+    || fail_item promote-target "targetCommitish changed during promote ($BEFORE_TARGET -> $AFTER_TARGET)."
+  # An asset set that changed under a metadata-only flip means somebody
+  # re-uploaded behind us; the bytes people tested are then NOT the bytes that
+  # ship, which is the one thing promote exists to guarantee.
+  [[ "$AFTER_FINGERPRINT" == "$BEFORE_FINGERPRINT" ]] \
+    || fail_item promote-assets "the asset set changed during promote (name/size differ) — the promoted bytes are not the tested bytes."
+  say "promoted and verified: $TAG is now the final release on $AFTER_TARGET"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# verification helpers
+# ═══════════════════════════════════════════════════════════════════════════
+
+# verify_artifacts <tag> <sha> <short> <name> — everything checkable locally,
+# before a single byte is uploaded.
+verify_artifacts() {
+  local TAG="$1" SHA="$2" SHORT="$3" NAME="$4"
+  say "verify artifacts (pre-upload)"
+
+  local f
+  while IFS= read -r f; do
+    [[ -f "$OUT/$f" ]] || fail_item artifact-present "expected artifact $f is missing from $OUT."
+    [[ -s "$OUT/$f" ]] || fail_item artifact-nonempty "artifact $f is empty."
+  done < <(asset_names "$TAG")
+
+  # The tarball's member list, EXACTLY. A tarball missing ocwarden — or one that
+  # quietly grew a stray file — is a broken install, not a cosmetic issue.
+  local want_members got_members
+  want_members="$(printf '%s\n' LICENSE README.md install.sh ocagent ocserverd ocwarden)"
+  got_members="$(tar -tzf "$OUT/$NAME.tar.gz" \
+    | sed -e "s|^$NAME/||" -e '/^$/d' | LC_ALL=C sort)"
+  [[ "$got_members" == "$want_members" ]] || fail_item tarball-members \
+    "tarball member list is wrong. want: $(echo "$want_members" | tr '\n' ' ')| got: $(echo "$got_members" | tr '\n' ' ')"
+
+  # The three binaries must be native arm64 mach-o, and ocserverd must carry the
+  # version + commit we asked for. `go version -m` reports the LINKER FLAGS the
+  # binary was built with, so this reads the stamp itself rather than hoping the
+  # tag string appears somewhere in the bytes (it appears in README.md too, so a
+  # grep over the tarball would "pass" on an unstamped binary).
+  local vdir
+  vdir="$(mktemp -d -t oc-release-verify.XXXXXX)"
+  tar -C "$vdir" -xzf "$OUT/$NAME.tar.gz"
+  local b desc
+  for b in ocserverd ocwarden ocagent; do
+    desc="$(file -b "$vdir/$NAME/$b")"
+    [[ "$desc" == *"Mach-O"*"arm64"*"executable"* ]] \
+      || fail_item artifact-arch "$b is not a darwin/arm64 Mach-O executable (file says: $desc)"
+  done
+  local ldflags
+  ldflags="$(go version -m "$vdir/$NAME/ocserverd" 2>/dev/null | grep -F -- '-ldflags' || true)"
+  [[ -n "$ldflags" ]] \
+    || fail_item version-stamp "could not read ocserverd's linker flags (go version -m returned no -ldflags line) — the embedded version identity is unverifiable."
+  [[ "$ldflags" == *"-X main.appVersion=$TAG"* ]] \
+    || fail_item version-stamp "ocserverd was NOT stamped with appVersion=$TAG (its -ldflags: $ldflags) — /api/version would misreport the release."
+  [[ "$ldflags" == *"-X main.buildSHA=$SHORT"* ]] \
+    || fail_item version-stamp "ocserverd was NOT stamped with buildSHA=$SHORT (its -ldflags: $ldflags) — the artifact cannot prove which commit it came from."
+  rm -rf "$vdir"
+  say "  ocserverd stamp OK: appVersion=$TAG buildSHA=$SHORT"
+
+  # checksums.txt must actually check out, and must cover exactly the two files
+  # the install one-liner verifies. A checksums file that lists one entry — or
+  # none — is how install.sh's sha256 step starts silently passing on nothing.
+  local lines
+  lines="$(awk 'NF' "$OUT/checksums.txt" | wc -l | tr -d '[:space:]')"
+  [[ "$lines" == "2" ]] \
+    || fail_item checksums-scope "checksums.txt has $lines entries; expected exactly 2 ($NAME.tar.gz + install.sh)."
+  ( cd "$OUT" && shasum -a 256 -c checksums.txt >/dev/null 2>&1 ) \
+    || fail_item checksums-match "shasum -c checksums.txt FAILED — the published digests do not match the published files."
+  say "  checksums OK (2 entries, shasum -c clean)"
+  say "artifacts verified for $TAG @ $SHORT"
+}
+
+# verify_stored_release <tag> <expected-target-or-empty> <prerelease|final>
+#   Asks GitHub what it stored and enforces every read-back DoD item. On success
+#   it prints, on STDOUT: line 1 = targetCommitish, lines 2+ = the asset
+#   fingerprint (name<TAB>size, sorted). Everything human-readable goes to stderr
+#   so a caller's capture stays parseable.
+verify_stored_release() {
+  local TAG="$1" WANT_TARGET="$2" KIND="$3"
+  echo "[release] read back what GitHub stored for $TAG" >&2
+
+  local json
+  json="$(gh release view "$TAG" --repo "$GH_REPO" \
+            --json tagName,isDraft,isPrerelease,targetCommitish,assets 2>/dev/null)" \
+    || fail_item release-exists "gh release view $TAG failed — the release does not exist or is not readable."
+  [[ -n "$json" ]] \
+    || fail_item release-exists "gh release view $TAG returned nothing."
+
+  # ONE pass over the payload: it either prints the two blocks this function
+  # contracts to return, or prints a VERIFY-FAILED line and exits 6. Keeping it
+  # in one place stops "what GitHub said" and "what we require" from drifting
+  # apart across four separate ad-hoc extractions.
+  local parsed rc=0
+  parsed="$(WANT_TAG="$TAG" WANT_TARGET="$WANT_TARGET" WANT_KIND="$KIND" \
+            WANT_ASSETS="$(asset_names "$TAG")" \
+            python3 -c '
+import json, os, sys
+
+def fail(item, msg):
+    sys.stderr.write("[release] VERIFY-FAILED [%s]: %s\n" % (item, msg))
+    raise SystemExit(6)
+
+rel = json.load(sys.stdin)
+tag = os.environ["WANT_TAG"]
+if rel.get("tagName") != tag:
+    fail("release-tag", "GitHub returned tagName %r, asked for %r." % (rel.get("tagName"), tag))
+if rel.get("isDraft") is not False:
+    fail("release-draft", "%s is a DRAFT (isDraft=%r) - a draft is invisible to every consumer of GitHub Releases, including the in-product update check." % (tag, rel.get("isDraft")))
+want_pre = os.environ["WANT_KIND"] == "prerelease"
+if bool(rel.get("isPrerelease")) is not want_pre:
+    fail("release-channel", "%s isPrerelease=%r but this step requires isPrerelease=%r." % (tag, rel.get("isPrerelease"), want_pre))
+target = rel.get("targetCommitish") or ""
+if not target:
+    fail("release-target", "%s has an EMPTY targetCommitish - the release cannot say which commit it was cut from." % tag)
+want_target = os.environ["WANT_TARGET"]
+if want_target and target != want_target:
+    fail("release-target", "%s targetCommitish is %s, expected %s." % (tag, target, want_target))
+
+by_name = {}
+for a in (rel.get("assets") or []):
+    by_name[a.get("name")] = a
+want = [n for n in os.environ["WANT_ASSETS"].splitlines() if n]
+for n in want:
+    if n not in by_name:
+        fail("asset-present", "%s is missing asset %r (has: %s) - a half-populated release 404s the documented install command." % (tag, n, ", ".join(sorted(str(k) for k in by_name)) or "none"))
+    state = by_name[n].get("state")
+    if state != "uploaded":
+        fail("asset-uploaded", "%s asset %r has state=%r, not \"uploaded\" - the release exists but that file is not actually downloadable." % (tag, n, state))
+    if not by_name[n].get("size"):
+        fail("asset-uploaded", "%s asset %r reports size=%r - a zero-byte asset is not a published file." % (tag, n, by_name[n].get("size")))
+extra = sorted(str(k) for k in set(by_name) - set(want))
+if extra:
+    fail("asset-extra", "%s carries unexpected asset(s) %s - the published set must be exactly %s." % (tag, ", ".join(extra), ", ".join(want)))
+
+print(target)
+for n in sorted(want):
+    print("%s\t%s" % (n, by_name[n].get("size")))
+' <<<"$json")" || rc=$?
+  [[ "$rc" == "0" ]] || exit "$rc"
+
+  local n_assets
+  n_assets="$(printf '%s\n' "$parsed" | sed -n '2,$p' | grep -c . || true)"
+  echo "[release]   stored release OK: not a draft, channel=$KIND, $n_assets assets all uploaded" >&2
+  printf '%s\n' "$parsed"
+}
+
+# settle_station <sha> <short> — the last DoD item: a release is not "done" until
+# the running station is actually on it. /api/version is public and git_sha is the
+# field to reconcile against (the version field is 0.0.0 on a self-build). Health
+# is checked too, because a server that answers /api/version from a half-booted
+# state is not a successful upgrade.
+settle_station() {
+  local SHA="$1" SHORT="$2" i seen=""
+  say "settle: waiting for $SITE to report git_sha matching $SHORT (up to $((SETTLE_TRIES * SETTLE_SLEEP))s)"
+  for (( i = 1; i <= SETTLE_TRIES; i++ )); do
+    seen="$(curl -fsS --max-time 10 "$SITE/api/version" 2>/dev/null \
+             | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("git_sha") or "")
+except Exception: print("")' 2>/dev/null || true)"
+    # A short sha is a PREFIX of the full one; require a real prefix of at least
+    # 7 chars so an empty or truncated answer can never satisfy this.
+    if [[ -n "$seen" && "${#seen}" -ge 7 && "$SHA" == "$seen"* ]]; then
+      say "  /api/version git_sha=$seen matches the target commit"
+      curl -fsS --max-time 10 "$SITE/api/health" >/dev/null 2>&1 \
+        || fail_item station-health "$SITE is on the target commit but GET /api/health did not answer ok."
+      say "  /api/health ok"
+      return 0
+    fi
+    sleep "$SETTLE_SLEEP"
+  done
+  fail_item station-settle "$SITE never reported a git_sha matching $SHORT (last seen: '${seen:-<none>}') — the assets are published but the station is NOT running this release."
+}
+
+write_package_readme() { # write_package_readme <path> <tag> <short-sha>
+  local path="$1" TAG="$2" HEAD_SHA="$3"
+  cat > "$path" <<EOF
 # OffiCraft $TAG (darwin-arm64)
 
 Run your own AI staff office on a Mac. This package contains everything —
@@ -133,17 +520,46 @@ Stop/start the service with
 Build identity: tag $TAG, git $HEAD_SHA. Verify: \`/api/version\` reports
 \`"version":"$TAG"\`.
 EOF
+}
 
-tar -C "$OUT" -czf "$OUT/$NAME.tar.gz" "$NAME"
-# install.sh doubles as a standalone release asset (curl | bash bootstrap) —
-# publish the SAME bytes that went into the tarball.
-cp "$STAGE/install.sh" "$OUT/install.sh"
-chmod +x "$OUT/install.sh"
-( cd "$OUT" && shasum -a 256 "$NAME.tar.gz" install.sh > checksums.txt )
-rm -rf "$STAGE"
-
-echo "[release] ✅ artifacts ready:"
-ls -lh "$OUT/$NAME.tar.gz" "$OUT/install.sh" "$OUT/checksums.txt" | awk '{print "[release]   " $5 "\t" $9}'
-cat "$OUT/checksums.txt" | sed 's/^/[release]   sha256 /'
-echo "[release] publish with:"
-echo "[release]   gh release create $TAG dist/release/$NAME.tar.gz dist/release/install.sh dist/release/checksums.txt --title \"OffiCraft $TAG\" --notes \"…\""
+# ═══════════════════════════════════════════════════════════════════════════
+# dispatch
+# ═══════════════════════════════════════════════════════════════════════════
+SUB="${1:-}"
+shift || true
+case "$SUB" in
+  publish) cmd_publish "$@" ;;
+  promote) cmd_promote "$@" ;;
+  ""|-h|--help|help) usage ;;
+  # LEGACY `bin/release <tag>` — refuse LOUDLY, never silently reinterpret.
+  # The old command built from whatever the current worktree's HEAD was and only
+  # PRINTED an upload command. Accepting `bin/release v0.1.0` as
+  # `publish --beta v0.1.0 --target HEAD` would keep the words and change the
+  # deed: it would now really upload, really create a prerelease, and really pick
+  # a commit the operator never named. So it exits non-zero with the exact
+  # replacement command instead.
+  v[0-9]*)
+    cat >&2 <<EOM
+[release] REMOVED: 'bin/release $SUB' (the old build-and-print-a-command form).
+[release]
+[release] It built from the CURRENT worktree HEAD and only printed a
+[release] 'gh release create' line for you to paste - no artifact verification,
+[release] no read-back, no check that the station ever moved. Publishing is now
+[release] one command that owns the whole arc:
+[release]
+[release]   bin/release publish --beta $SUB --target <sha>
+[release]
+[release] Rehearse it first with --dry-run (builds + verifies, uploads nothing):
+[release]
+[release]   bin/release publish --beta $SUB --target <sha> --dry-run
+[release]
+[release] Then, once the beta is proven, promote it WITHOUT rebuilding:
+[release]
+[release]   bin/release promote $SUB
+[release]
+[release] Codesigning is OFF by default now; add --sign only if you deliberately
+[release] want a signed build (a missing identity then HARD-FAILS).
+EOM
+    exit 2 ;;
+  *) echo "[release] unknown subcommand: $SUB" >&2; usage ;;
+esac
