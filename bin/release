@@ -69,17 +69,24 @@
 #
 # ── CODESIGNING IS OFF BY DEFAULT ───────────────────────────────────────────
 # (owner ruling, T-588c: "可以保留但是我們預設都不跑" / "以後我們想要拿回來繼續
-# sign 我們再說吧".) The default publish path sets NO signing env at all and
-# therefore never touches the login keychain — see bin/codesign-artifact's
-# default-off gate. `--sign` is the only way to sign, and it does so by
-# delegating the build to bin/build-release, which sets OC_CODESIGN_REQUIRE=1:
-# a missing identity, a locked keychain or a failed verify HARD-STOPS the
-# release. There is deliberately NO adhoc fallback under --sign; if you asked for
-# a signed release you get one or you get nothing.
-#   ⚠️ Do NOT write "the cost of not signing is macOS re-prompting for TCC
-#   permissions" into this file or the docs. The owner has confirmed a
-#   SELF-SIGNED identity does not make TCC authorization stick, so that cost does
-#   not exist. It was written down as a cost once; it was wrong.
+# sign 我們再說吧".) THE OWNER'S STATED REASON is operational, and it is the only
+# reason: signing was blocking both the test suite and the act of publishing
+# ("它卡測試又卡發佈"), so it is skipped to let development proceed. The default
+# publish path sets NO signing env at all and therefore never touches the login
+# keychain — see bin/codesign-artifact's default-off gate. `--sign` is the only
+# way to sign, and it does so by delegating the build to bin/build-release, which
+# sets OC_CODESIGN_REQUIRE=1: a missing identity, a locked keychain or a failed
+# verify HARD-STOPS the release. There is deliberately NO adhoc fallback under
+# --sign; if you asked for a signed release you get one or you get nothing.
+#   ⚠️ DO NOT write "the cost of not signing is macOS re-prompting for TCC
+#   permissions" — or any variant of it — into this file, into
+#   bin/codesign-artifact, or into the docs. Whether a SELF-SIGNED identity makes
+#   TCC authorization stick is NOT settled: it is strongly suspected NOT to, and
+#   it has never been demonstrated either way. That sentence was written down as
+#   a settled cost once and it was not one. Do not replace it with the opposite
+#   settled claim either — an unproven negative is still unproven. If someone
+#   needs the answer, the honest move is to test it on a real machine and bring
+#   the evidence, not to narrate a conclusion here.
 #
 # The repo tree stays ZERO-BINARY: artifacts land in dist/release/ (gitignored),
 # nothing is committed, and the staging worktree is removed on exit.

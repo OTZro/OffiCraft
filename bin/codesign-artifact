@@ -6,21 +6,26 @@
 # even look at the keychain. Signing never blocks a build or a deploy unless the
 # caller asked for it with OC_CODESIGN_REQUIRE=1, where the whole point is to.
 #
-# ORIGINAL PREMISE (T-33d5) AND ITS RETRACTION (T-588c) — read both, because the
-# first one is why this file exists and the second is why it no longer runs:
+# WHY IT EXISTS (T-33d5) AND WHY IT NO LONGER RUNS (T-588c) — two separate
+# questions, and only the second one has a decided answer:
 #   T-33d5 argued that macOS TCC keys permission grants to a binary's
 #   code-signing identity, that Go's default adhoc signature gets a new cdhash
 #   every build, and that signing with one long-lived SELF-SIGNED certificate
 #   would therefore give the fleet a stable designated requirement so TCC grants
-#   survive self-updates.
-#   ⚠️ THE OWNER HAS SINCE CONFIRMED THAT PREMISE IS WRONG: a self-signed
-#   identity does NOT make TCC authorization stick. So "not signing costs us
-#   re-prompted TCC permissions" is NOT a real cost of the default-off switch —
-#   do NOT write that trade-off into this file, into bin/release, or into the
-#   docs. It was written down as a cost once already and it was fiction.
-# What is left is a signing mechanism with no proven benefit, kept because the
-# owner asked for it to be kept ("以後我們想要拿回來繼續 sign 我們再說吧"), not
-# because anything depends on it. Hence: preserved, wired, and default-OFF.
+#   survive self-updates. THAT PREMISE WAS NEVER VERIFIED. It is strongly
+#   suspected to be false for a self-signed identity, but nobody has demonstrated
+#   it either way, so this file must not assert an answer in EITHER direction.
+#   ⚠️ Concretely: do NOT write "not signing costs us re-prompted TCC
+#   permissions" here, in bin/release, in bin/build-release or in the docs — that
+#   was stated as a settled cost once and it was never established. And do NOT
+#   flip it into "self-signing provably does nothing for TCC" either; that is
+#   equally unestablished. If the answer matters to someone, measure it on a real
+#   machine and bring the evidence.
+# THE DEFAULT-OFF DECISION DOES NOT REST ON THAT QUESTION AT ALL. The owner's
+# reason is operational: signing was obstructing both the test suite and the act
+# of publishing ("它卡測試又卡發佈"), so it is skipped to let development proceed
+# — and the mechanism is kept for later ("以後我們想要拿回來繼續 sign 我們再說吧").
+# Hence: preserved, wired, and default-OFF.
 #
 # WHERE THIS RUNS — nowhere, unless asked. The callers below are all shared,
 # non-release seams (this was mis-stated here before T-da4b as "the release
