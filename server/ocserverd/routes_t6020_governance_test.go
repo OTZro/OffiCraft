@@ -207,3 +207,46 @@ func TestT6020OpenedAndWithheldAreDisjointAndComplete(t *testing.T) {
 			"legible", stragglers)
 	}
 }
+
+// TestT6020OpenedToolsCarryTheirWholeParameterSet is the field-level tooth for
+// the 19 new descriptors. spec/mcp-catalog.json is HAND-MAINTAINED (spec/mcp.md
+// §5 names a bin/dump-mcp-catalog that does not exist in this tree), so a
+// descriptor missing a parameter is the DEFAULT outcome of adding one by hand,
+// not an exotic failure: the tool would list, resolve, and answer — and Mira
+// would simply have no way to send the argument.
+//
+// The comparison itself already exists and works: spec_catalog_conformance_test.go
+// confronts routes ≡ openapi ≡ catalog on the parameter-NAME set, in both
+// directions, for every non-excluded row — verified against three deliberate
+// mutants on these very 19 (a dropped body field, a dropped path param, and an
+// invented extra all redden it). Re-implementing that comparison here would be
+// a second copy of one rule, which is the disease this repo keeps catching.
+//
+// What that test canNOT stop is the escape hatch: knownCatalogDrift silences a
+// tool's missing parameters by name, and adding an entry is a one-line edit that
+// makes a red run green. It exists for six PRE-EXISTING gaps (T-c362, frozen by
+// the owner — not this ticket's to fix). None of the 19 is in it, and none may
+// ever be: these descriptors were written today, so a "known drift" on one of
+// them could only ever mean "we shipped it wrong and wrote that down instead of
+// fixing it".
+func TestT6020OpenedToolsCarryTheirWholeParameterSet(t *testing.T) {
+	if len(knownCatalogDrift) == 0 {
+		t.Fatalf("knownCatalogDrift is empty — the check below would be vacuous; " +
+			"if the T-c362 debt really was paid, delete this guard's premise too")
+	}
+	for key, tool := range t6020Opened {
+		if params, baselined := knownCatalogDrift[tool]; baselined {
+			t.Errorf("tool %q (%s %s) has a knownCatalogDrift baseline %v — these 19 "+
+				"descriptors were hand-written for T-6020, so a baseline on one of "+
+				"them is not inherited debt, it is a parameter we got wrong and then "+
+				"silenced. Fix spec/mcp-catalog.json instead: an agent whose only "+
+				"view of a tool is tools/list cannot send an argument the "+
+				"descriptor omits.", tool, key[0], key[1], params)
+		}
+		if params, overweight := openapiOverweight[tool]; overweight {
+			t.Errorf("tool %q (%s %s) has an openapiOverweight entry %v — same "+
+				"reasoning in the other direction: openapi would be advertising a "+
+				"lever this operation ignores.", tool, key[0], key[1], params)
+		}
+	}
+}
