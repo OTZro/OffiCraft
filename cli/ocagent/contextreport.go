@@ -128,8 +128,9 @@ func cmdContextReport(client httpClient, cfg Config, env func(string) string, no
 			// Context POST needs a real pct: when pct is absent (fresh/compacted
 			// session — used_percentage is null) we honestly SKIP it rather than
 			// fabricate a fake 0. pct gates ONLY its own POST, never the telemetry.
+			delivered := true
 			if havePct {
-				reportPost(client, cfg, "/api/agent/context", contextBody{ContextPct: pct}, errw)
+				delivered = reportPost(client, cfg, "/api/agent/context", contextBody{ContextPct: pct}, errw) && delivered
 			}
 			// ADDITIVE telemetry POST, pct-INDEPENDENT — and IDENTITY-INDEPENDENT of
 			// usage. A measured usage source (rate_limits / cost / tokens) is added
@@ -150,11 +151,20 @@ func cmdContextReport(client httpClient, cfg Config, env func(string) string, no
 			if machine := localHost(env); machine != "" {
 				body.Machine = machine
 			}
-			reportPost(client, cfg, "/api/monitoring/telemetry", body, errw)
-			// Stamp the throttle window (NOT bound to any POST's status): once we've
-			// done our best-effort POSTs, advance the window so the next tick is
-			// throttled (keeps pct=None ticks from re-POSTing telemetry every tick).
-			writeStamp(stamp, now)
+			delivered = reportPost(client, cfg, "/api/monitoring/telemetry", body, errw) && delivered
+			// Stamp the throttle window ONLY when every POST this burst attempted was
+			// ACCEPTED by the server. The stamp is not a "we tried" marker: it is the
+			// only externally-readable evidence that this reporter is delivering, and
+			// advancing it on a refusal did two harms at once — it argued the path was
+			// healthy while 100% of reports were being refused, and it SUPPRESSED the
+			// retry for a further window. A refused burst therefore leaves the previous
+			// stamp untouched, so the very next tick reports again (and keeps logging
+			// the refusal) until the server accepts. Success keeps the throttle exactly
+			// as before: one burst per window, so pct=None ticks never re-POST
+			// telemetry every tick.
+			if delivered {
+				writeStamp(stamp, now)
+			}
 		}
 	}
 
@@ -165,23 +175,28 @@ func cmdContextReport(client httpClient, cfg Config, env func(string) string, no
 // reportPost POSTs one best-effort report and — unlike the bare postJSON it wraps
 // — leaves an OBSERVABLE TRACE when the server refuses it. A rejected report used
 // to be indistinguishable from a delivered one at every layer: postJSON dropped
-// the status, cmdContextReport always exits 0, and the throttle stamp advances on
-// attempt rather than on success, so a reporter that had 422'd every 30 seconds
+// the status, cmdContextReport always exits 0, and the throttle stamp used to
+// advance on attempt rather than on success, so a reporter that had 422'd every 30 seconds
 // for hours still looked perfectly healthy from the outside. The line goes to
 // STDERR (never `out` — Claude Code renders stdout verbatim as the status line)
 // and includes the response body, because the interesting refusals are schema
-// refusals that name the offending key. Delivery stays best-effort: nothing here
-// changes the exit code or the throttle.
-func reportPost(client httpClient, cfg Config, path string, body any, errw io.Writer) {
+// refusals that name the offending key. Delivery stays best-effort for the exit
+// code (always 0), but the verdict is NOT thrown away: it is returned so the
+// caller can bind the throttle stamp to delivery instead of to attempt.
+//
+// Returns true iff the server ACCEPTED the report (2xx). A transport fault
+// (status 0) counts as not-delivered too — nothing was stored either way.
+func reportPost(client httpClient, cfg Config, path string, body any, errw io.Writer) bool {
 	status, detail := httpRequest(client, http.MethodPost, cfg.Base+path, cfg.Token, body)
 	if status >= 200 && status < 300 {
-		return
+		return true
 	}
 	if errw == nil {
-		return
+		return false
 	}
 	fmt.Fprintf(errw, "[ocagent] context-report: POST %s FAILED status=%d: %s\n",
 		path, status, truncateForLog(strings.TrimSpace(detail)))
+	return false
 }
 
 // truncateForLog caps a diagnostic string so a large transcript-derived body

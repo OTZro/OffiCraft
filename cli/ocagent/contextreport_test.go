@@ -730,3 +730,107 @@ func TestDurationSegment(t *testing.T) {
 		}
 	}
 }
+
+// refusingServer replies 422 to every POST and records the paths it saw. The
+// refusal body mimics the real schema refusal (DisallowUnknownFields).
+func refusingServer(t *testing.T) (*httptest.Server, *[]string) {
+	t.Helper()
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(422)
+		_, _ = w.Write([]byte(`{"error":{"code":"validation_error","message":"nope"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &seen
+}
+
+// TestRefusedReportDoesNotStampThrottle: the throttle stamp is evidence of
+// DELIVERY, not of attempt. A refused burst must leave the window OPEN so the
+// very next tick retries — and must not leave behind a freshly-advanced stamp
+// that argues (falsely) that this reporter is healthy.
+//
+// This is the counterfactual for the whole ticket: before the fix the stamp was
+// written unconditionally, so tick 2 five seconds later saw a 2000.0 stamp, was
+// throttled, and sent NOTHING while 100% of reports were being refused.
+func TestRefusedReportDoesNotStampThrottle(t *testing.T) {
+	srv, seen := refusingServer(t)
+	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle", Home: t.TempDir()}
+	stamp := reportStampPath(cfg)
+	payload := `{"context_window":{"used_percentage":50}}`
+
+	var out, errOut bytes.Buffer
+	cmdContextReport(srv.Client(), cfg, testEnv(nil), 2000.0, strings.NewReader(payload), &out, &errOut)
+	if len(*seen) != 2 {
+		t.Fatalf("tick 1: expected both POSTs attempted, saw %v", *seen)
+	}
+	if raw, err := os.ReadFile(stamp); err == nil {
+		t.Errorf("a refused burst must NOT stamp the throttle window; stamp = %q", raw)
+	}
+
+	// Tick 2, five seconds later: well inside the 30s window. Because nothing was
+	// delivered, the window was never opened, so the retry must go out.
+	cmdContextReport(srv.Client(), cfg, testEnv(nil), 2005.0, strings.NewReader(payload), &out, &errOut)
+	if len(*seen) != 4 {
+		t.Errorf("tick 2 must RETRY after a refusal (the refusal must not throttle it); saw %v", *seen)
+	}
+	if raw, err := os.ReadFile(stamp); err == nil {
+		t.Errorf("still refused ⇒ still no stamp; stamp = %q", raw)
+	}
+	if strings.Count(errOut.String(), "FAILED") != 4 {
+		t.Errorf("every refused POST must keep leaving a trace; stderr = %q", errOut.String())
+	}
+}
+
+// TestAcceptedReportStillThrottlesNextTick is the SENTINEL for the fix above:
+// binding the stamp to delivery must not degrade into "POST on every tick". A
+// 2xx burst stamps the window exactly as before, so a tick 5s later is silent.
+func TestAcceptedReportStillThrottlesNextTick(t *testing.T) {
+	srv, posts := contextServer(t)
+	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle", Home: t.TempDir()}
+	payload := `{"context_window":{"used_percentage":50}}`
+
+	var out, errOut bytes.Buffer
+	cmdContextReport(srv.Client(), cfg, testEnv(nil), 2000.0, strings.NewReader(payload), &out, &errOut)
+	if len(*posts) != 2 {
+		t.Fatalf("tick 1: expected both POSTs, got %v", *posts)
+	}
+	cmdContextReport(srv.Client(), cfg, testEnv(nil), 2005.0, strings.NewReader(payload), &out, &errOut)
+	if len(*posts) != 2 {
+		t.Errorf("an ACCEPTED burst must still throttle the next tick, got %v", *posts)
+	}
+}
+
+// TestRefusedTelemetryAloneLeavesWindowOpen: the two POSTs ride ONE window, so a
+// burst counts as delivered only when EVERY attempted POST was accepted. Here the
+// context POST is accepted and only the telemetry POST is refused — the exact
+// shape of the outage this ticket came from (a schema refusal on the telemetry
+// body alone) — and the window must stay open for the retry.
+func TestRefusedTelemetryAloneLeavesWindowOpen(t *testing.T) {
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/monitoring/telemetry" {
+			w.WriteHeader(422)
+			_, _ = w.Write([]byte(`{"error":{"code":"validation_error","message":"nope"}}`))
+			return
+		}
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle", Home: t.TempDir()}
+	payload := `{"context_window":{"used_percentage":50}}`
+	var out, errOut bytes.Buffer
+	cmdContextReport(srv.Client(), cfg, testEnv(nil), 2000.0, strings.NewReader(payload), &out, &errOut)
+	if _, err := os.ReadFile(reportStampPath(cfg)); err == nil {
+		t.Errorf("a partially refused burst must not stamp the window")
+	}
+	cmdContextReport(srv.Client(), cfg, testEnv(nil), 2005.0, strings.NewReader(payload), &out, &errOut)
+	if len(seen) != 4 {
+		t.Errorf("telemetry refusal must not throttle the next tick; saw %v", seen)
+	}
+}
