@@ -26,7 +26,7 @@
 // is the REAL wiring, not a stub.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, fireEvent, waitFor, within } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
 import { OfficePage } from "./OfficePage";
@@ -389,8 +389,10 @@ describe("OutsourcePanel", () => {
 
     const office = renderOffice();
     await office.findByText("正職既有訊息");
-    window.location.hash = "#office/chat/ow-switch";
-    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    await act(async () => {
+      window.location.hash = "#office/chat/ow-switch";
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
     await office.findByText("外包未讀");
     const divider = office.container.querySelector(".chat__unread-divider");
     expect(divider?.nextElementSibling?.getAttribute("data-msg-id")).toBe(
