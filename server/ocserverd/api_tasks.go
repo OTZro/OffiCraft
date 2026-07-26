@@ -114,6 +114,16 @@ type dispatchSpec struct {
 // destination (pickWorkerWarden fails closed with a visible reason). That is the
 // point: a placement nobody chose is not a placement.
 //
+// That rule and the dispatcher fall-through above are NOT in tension, and the
+// owner settled it explicitly (2026-07-26, reading A — single authoritative
+// statement in server/CLAUDE.md §8, do not re-derive it from the two separate
+// rulings): a blank machine field on a manual assignee STATES NOTHING (it is not
+// "deliberately unplaced"), so falling through to the creator's own pin is
+// allowed — that pin is itself an explicit human placement decision somebody
+// already made for that agent. What stays forbidden is the SERVER picking a host
+// on its own. When truly nobody has named one — the creator has no pin either —
+// Machine is still left empty and the worker is still not booted.
+//
 // ⚠️ KNOWN LIMITATION — T-8a67's snapshot fixes CLAUDE creators only (T-cd21 holds
 // the real fix; do not read the paragraphs above as covering this). On a TYPED
 // manual-driven task, runtime and effort can never reach the dispatcher pass:
