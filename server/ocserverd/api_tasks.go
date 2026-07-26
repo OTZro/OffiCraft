@@ -68,12 +68,32 @@ type dispatchSpec struct {
 
 // inheritDispatchSpec fills the fields a 發包 left unset. An EXPLICIT field always
 // wins — the dispatcher named it, it stands. An omitted field inherits from ONE
-// source (owner contract 2026-07-26):
+// source. This is TWO CASES, not one priority order — owner ruling 2026-07-26,
+// mirrored in server/CLAUDE.md:
 //
-//   - a dispatching MEMBER's own spec, for both typed and free tasks: 發包
-//     without a spec means "one like me";
-//   - the type manual only when the dispatcher has no member spec (for example
-//     owner-originated dispatch).
+//		「如果是有手冊的話看手冊上指定的,如果是自由指派那種不是由手冊來的,但是發派
+//		 對象是外包的話,那就以該 agent 本身配置一樣下去開外包。」
+//
+//	  - HAS A MANUAL (typed) → the type manual's outsource assignee. The 手冊 is
+//	    the owner-authored configuration for that whole task type, so whichever
+//	    member happened to press 發包 must not silently override it.
+//	  - NO MANUAL (ad-hoc/free), dispatched to outsource → the DISPATCHING agent's
+//	    own spec: the runtime, model and effort it runs as, and the machine it is
+//	    itself pinned to. 發包 without a spec means "one like me". (Independently
+//	    stated in T-0d32: 自由代辦外包完整繼承委派者設定.)
+//
+// The switch below IS those two cases: manualSpec is non-nil only when the task
+// carries a type_key whose manual exists AND routes to outsource (outsourceSpecOf
+// returns nil otherwise), so the second arm is reached exactly when there is no
+// manual to read. Read that way the order is not a tie-break between rivals —
+// they never compete.
+//
+// ⚠️ Reading it AS a priority order is what went wrong once already: fb8981c set
+// out to make an ad-hoc dispatch inherit the dispatcher — which this code
+// ALREADY did — and expressed it as a global inversion, which changed nothing
+// for ad-hoc and broke every typed dispatch, leaving two tests red. If you are
+// about to "fix" one arm, check whether it is already correct in the other's
+// absence, and pin the two arms separately (the tests do).
 //
 // runtime and model inherit TOGETHER: a model name only means anything under the
 // runtime it was chosen for, so an inherited model is kept only when its source's
@@ -88,12 +108,12 @@ type dispatchSpec struct {
 func inheritDispatchSpec(spec dispatchSpec, manualSpec *outsourceTypeSpec, dispatcher *Member) dispatchSpec {
 	var src dispatchSpec
 	switch {
-	case dispatcher != nil:
-		src = dispatchSpec{Runtime: dispatcher.Runtime, Model: dispatcher.Model,
-			Effort: dispatcher.Effort, Machine: dispatcher.DesiredMachineID}
 	case manualSpec != nil:
 		src = dispatchSpec{Runtime: manualSpec.Runtime, Model: manualSpec.Model,
 			Effort: manualSpec.Effort, Machine: manualSpec.Machine}
+	case dispatcher != nil:
+		src = dispatchSpec{Runtime: dispatcher.Runtime, Model: dispatcher.Model,
+			Effort: dispatcher.Effort, Machine: dispatcher.DesiredMachineID}
 	}
 	// A blank source runtime STATES nothing — it must not be read as "claude"
 	// here, or a source carrying a codex model with an unset runtime would

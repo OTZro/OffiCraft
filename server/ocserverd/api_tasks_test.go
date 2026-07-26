@@ -932,43 +932,89 @@ func TestCreateAdHocMemberExecutorIsSelfOnlyForPlain正職(t *testing.T) {
 
 // ── 發包 target: machine resolution + spec inheritance ───────────────────────
 
-// TestInheritDispatchSpec pins the omitted-field inheritance contract: every
-// dispatch by a member inherits the DISPATCHING member's own spec; the typed
-// manual is only the fallback without a member dispatcher; an explicit field wins,
-// an inherited model is dropped under a runtime it does not belong to, and
-// nothing ever invents a machine.
-func TestInheritDispatchSpec(t *testing.T) {
+// ── the two inheritance arms, ONE TEST EACH ─────────────────────────────────
+//
+// The owner ruled these as two cases, not one priority order (2026-07-26):
+// 「如果是有手冊的話看手冊上指定的,如果是自由指派那種不是由手冊來的,但是發派對象
+// 是外包的話,那就以該 agent 本身配置一樣下去開外包。」
+//
+// They are pinned SEPARATELY on purpose. Bundled into one function they shared a
+// single red/green bit, which is exactly how fb8981c could reach for the ad-hoc
+// case — already correct — and ship a global inversion that broke only the typed
+// one: the failure could not tell anybody WHICH half had moved. Split, a mutant
+// on either arm names itself.
+//
+// The shared rules that belong to neither arm (explicit wins, runtime/model
+// coupling, nothing invents a machine) live in their own test below, so an arm
+// mutant cannot redden them and blur the signal.
+
+// dispatchInheritanceFixtures: manual and dispatcher differ in EVERY field, so
+// no assertion below can pass by coincidence when the arms are swapped.
+func dispatchInheritanceFixtures() (*outsourceTypeSpec, *Member) {
 	manual := &outsourceTypeSpec{Runtime: RuntimeCodex, Model: "gpt-5-codex",
 		Effort: "high", Machine: "m-manual"}
 	dispatcher := &Member{ID: "m-disp", Runtime: RuntimeClaude, Model: "opus",
 		Effort: "low", DesiredMachineID: "m-disp-box"}
+	return manual, dispatcher
+}
 
-	// A typed task still takes the dispatcher: 發包 without a spec means one
-	// like the member who dispatched it, not a hidden type-level override.
+// TestInheritDispatchSpec_TypedTakesTheManual — ARM 1. A task that HAS a manual
+// takes the manual's outsource assignee: the 手冊 is the owner-authored
+// configuration for that whole task type, so whichever member happened to press
+// 發包 must not silently override it.
+func TestInheritDispatchSpec_TypedTakesTheManual(t *testing.T) {
+	manual, dispatcher := dispatchInheritanceFixtures()
+
+	// The dispatcher is PRESENT and must be ignored — that presence is the
+	// discriminator; without it a swapped switch would still pass.
 	got := inheritDispatchSpec(dispatchSpec{}, manual, dispatcher)
-	if got != (dispatchSpec{Runtime: RuntimeClaude, Model: "opus",
-		Effort: "low", Machine: "m-disp-box"}) {
-		t.Fatalf("typed dispatch must inherit the dispatcher: %+v", got)
+	if got != (dispatchSpec{Runtime: RuntimeCodex, Model: "gpt-5-codex",
+		Effort: "high", Machine: "m-manual"}) {
+		t.Fatalf("typed dispatch must inherit the manual: %+v", got)
 	}
 
-	// A free task takes the dispatcher — including the machine IT is pinned to.
-	got = inheritDispatchSpec(dispatchSpec{}, nil, dispatcher)
-	if got != (dispatchSpec{Runtime: RuntimeClaude, Model: "opus",
-		Effort: "low", Machine: "m-disp-box"}) {
-		t.Fatalf("free dispatch must inherit the dispatcher: %+v", got)
-	}
-	// Owner-originated dispatch has no member spec, so a typed manual remains
-	// the fallback rather than inventing a machine or a runtime/model pair.
+	// Owner-originated dispatch has no member row at all — same source, and
+	// nothing is invented in the dispatcher's absence.
 	got = inheritDispatchSpec(dispatchSpec{}, manual, nil)
 	if got != (dispatchSpec{Runtime: RuntimeCodex, Model: "gpt-5-codex",
 		Effort: "high", Machine: "m-manual"}) {
-		t.Fatalf("spec-less dispatcher must fall back to typed manual: %+v", got)
+		t.Fatalf("a manual is the source with no dispatcher too: %+v", got)
 	}
+}
+
+// TestInheritDispatchSpec_AdHocTakesTheDispatcher — ARM 2. A free (ad-hoc) task
+// has no manual to read, so 發包 without a spec means "one like me": the
+// dispatching agent's own runtime, model, effort and the machine IT is pinned to.
+//
+// manualSpec is nil here for the reason the production callers make it nil — no
+// type_key, so there is no manual to consult. outsourceSpecOf also returns nil
+// for a manual whose assignee is not outsource, which lands in this same arm.
+func TestInheritDispatchSpec_AdHocTakesTheDispatcher(t *testing.T) {
+	_, dispatcher := dispatchInheritanceFixtures()
+
+	got := inheritDispatchSpec(dispatchSpec{}, nil, dispatcher)
+	if got != (dispatchSpec{Runtime: RuntimeClaude, Model: "opus",
+		Effort: "low", Machine: "m-disp-box"}) {
+		t.Fatalf("an ad-hoc dispatch must inherit the dispatcher whole: %+v", got)
+	}
+	// The machine especially: it is the one field with no default anywhere, so
+	// losing it silently means the worker never starts at all.
+	if got.Machine != "m-disp-box" {
+		t.Fatalf("the dispatcher's own pin must carry: %q", got.Machine)
+	}
+}
+
+// TestInheritDispatchSpec_SharedRules: what holds no matter which arm sourced
+// the spec. Deliberately arm-neutral — a mutant on either arm must leave this
+// green, or the arm tests above are not the discriminators they claim to be.
+func TestInheritDispatchSpec_SharedRules(t *testing.T) {
+	manual, dispatcher := dispatchInheritanceFixtures()
 
 	// Explicit always wins — every field, machine included.
 	explicit := dispatchSpec{Runtime: RuntimeCodex, Model: "gpt-5",
 		Effort: "medium", Machine: "m-explicit"}
-	if got = inheritDispatchSpec(explicit, nil, dispatcher); got != explicit {
+	got := inheritDispatchSpec(explicit, nil, dispatcher)
+	if got != explicit {
 		t.Fatalf("an explicit spec must survive inheritance untouched: %+v", got)
 	}
 	if got = inheritDispatchSpec(explicit, manual, dispatcher); got != explicit {
@@ -1038,10 +1084,11 @@ func TestCreateTaskDispatchTargetMachineMustResolve(t *testing.T) {
 	}
 }
 
-// TestCreateTaskDispatchInheritsOmittedSpec: end-to-end inheritance through the
-// create handler — a typed 發包 fills from the type manual, a free one from the
-// dispatching member, and an explicit field beats both.
-func TestCreateTaskDispatchInheritsOmittedSpec(t *testing.T) {
+// dispatchInheritanceServer seeds the ONE fixture both end-to-end arm tests use:
+// a dispatcher whose every spec field differs from the type manual's, so neither
+// test can pass by coincidence if the arms are swapped.
+func dispatchInheritanceServer(t *testing.T) *apiServer {
+	t.Helper()
 	api := newTasksTestServer(t)
 	api.noOutsource = true
 	seedMachine(t, api, "m-manual-box")
@@ -1060,21 +1107,29 @@ func TestCreateTaskDispatchInheritsOmittedSpec(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed manual: %v", err)
 	}
+	return api
+}
 
-	storedFor := func(rec *httptest.ResponseRecorder) *Task {
-		t.Helper()
-		if rec.Code != http.StatusOK {
-			t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
-		}
-		stored, err := api.dal.GetTask(decodeBody[taskCreateResultDTO](t, rec).Task.ID)
-		if err != nil || stored == nil {
-			t.Fatalf("re-read task: %v", err)
-		}
-		return stored
+func storedTaskFor(t *testing.T, api *apiServer, rec *httptest.ResponseRecorder) *Task {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
 	}
+	stored, err := api.dal.GetTask(decodeBody[taskCreateResultDTO](t, rec).Task.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("re-read task: %v", err)
+	}
+	return stored
+}
 
-	// Typed + bare target → the manual's whole spec.
-	got := storedFor(createTaskAs(t, api, map[string]any{
+// TestCreateTypedTaskDispatchInheritsTheManual — ARM 1 END-TO-END, through the
+// real create handler and re-read from the task row. A typed 發包 fills its
+// omitted fields from the type manual even though a fully-specced dispatcher
+// made the call.
+func TestCreateTypedTaskDispatchInheritsTheManual(t *testing.T) {
+	api := dispatchInheritanceServer(t)
+
+	got := storedTaskFor(t, api, createTaskAs(t, api, map[string]any{
 		"title": "typed inherit", "type_key": "typed",
 		"target": map[string]any{"kind": "outsource"}}, "m-disp", "agent"))
 	if got.OutsourceRuntime != RuntimeClaude || got.OutsourceModel != "opus" ||
@@ -1082,17 +1137,8 @@ func TestCreateTaskDispatchInheritsOmittedSpec(t *testing.T) {
 		t.Fatalf("a typed dispatch must inherit the manual's spec: %+v", got)
 	}
 
-	// Free + bare target → the DISPATCHER's own spec, machine included.
-	got = storedFor(createTaskAs(t, api, map[string]any{
-		"title":  "free inherit",
-		"target": map[string]any{"kind": "outsource"}}, "m-disp", "agent"))
-	if got.OutsourceRuntime != RuntimeCodex || got.OutsourceModel != "gpt-5-codex" ||
-		got.OutsourceEffort != "low" || got.OutsourceMachine != "m-disp-box" {
-		t.Fatalf("a free dispatch must inherit the dispatcher's spec: %+v", got)
-	}
-
-	// Explicit fields beat the inherited ones.
-	got = storedFor(createTaskAs(t, api, map[string]any{
+	// Explicit fields still beat the manual's.
+	got = storedTaskFor(t, api, createTaskAs(t, api, map[string]any{
 		"title": "explicit wins", "type_key": "typed",
 		"target": map[string]any{"kind": "outsource", "effort": "medium",
 			"machine": "m-explicit-box"}}, "m-disp", "agent"))
@@ -1100,17 +1146,46 @@ func TestCreateTaskDispatchInheritsOmittedSpec(t *testing.T) {
 		t.Fatalf("an explicit target field must beat the inherited one: %+v", got)
 	}
 
-	// An explicit runtime that differs from the source drops the inherited
-	// model, and a dispatcher with no pin leaves the machine unnamed.
+	// An explicit runtime that differs from the manual drops the inherited model.
 	putMemberRow(t, api, "m-bare", KindAssistant, "")
-	got = storedFor(createTaskAs(t, api, map[string]any{
+	got = storedTaskFor(t, api, createTaskAs(t, api, map[string]any{
 		"title": "runtime mismatch", "type_key": "typed",
 		"target": map[string]any{"kind": "outsource", "runtime": "codex"}},
 		"m-bare", "agent"))
 	if got.OutsourceRuntime != RuntimeCodex || got.OutsourceModel != "" {
 		t.Fatalf("a claude model must not ride a codex dispatch: %+v", got)
 	}
-	got = storedFor(createTaskAs(t, api, map[string]any{
+}
+
+// TestCreateAdHocTaskDispatchInheritsTheDispatcher — ARM 2 END-TO-END. A free
+// task 發包'd to outsource is opened with the DISPATCHING agent's own
+// configuration (owner 2026-07-26; independently stated in T-0d32's
+// 「自由代辦外包完整繼承委派者設定」). No type_key, so no manual exists to read —
+// which is precisely why this arm is the dispatcher's.
+//
+// The seeded manual is deliberately left in place and NOT referenced: if this
+// task ever started reading it, every field asserted below would change.
+func TestCreateAdHocTaskDispatchInheritsTheDispatcher(t *testing.T) {
+	api := dispatchInheritanceServer(t)
+
+	got := storedTaskFor(t, api, createTaskAs(t, api, map[string]any{
+		"title":  "free inherit",
+		"target": map[string]any{"kind": "outsource"}}, "m-disp", "agent"))
+	if got.OutsourceRuntime != RuntimeCodex || got.OutsourceModel != "gpt-5-codex" ||
+		got.OutsourceEffort != "low" || got.OutsourceMachine != "m-disp-box" {
+		t.Fatalf("an ad-hoc dispatch must inherit the dispatcher's spec: %+v", got)
+	}
+	// The machine is called out on its own: it has no default anywhere, so
+	// dropping it does not degrade the worker — it stops it existing.
+	if got.OutsourceMachine != "m-disp-box" {
+		t.Fatalf("the dispatcher's own pin must land on the task row: %q",
+			got.OutsourceMachine)
+	}
+
+	// SENTINEL against over-inheriting: a dispatcher that names NO machine must
+	// leave it empty rather than borrowing one from anywhere else.
+	putMemberRow(t, api, "m-bare", KindAssistant, "")
+	got = storedTaskFor(t, api, createTaskAs(t, api, map[string]any{
 		"title":  "no machine anywhere",
 		"target": map[string]any{"kind": "outsource"}}, "m-bare", "agent"))
 	if got.OutsourceMachine != "" {
