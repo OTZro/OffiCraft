@@ -225,6 +225,11 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 						s.hub.ReturnUndeliveredCommands(wardenID, pending[i:])
 						return
 					}
+					// T-66a2 L3: the write succeeded, so this frame no longer
+					// needs restart insurance. "Written" is NOT "delivered" —
+					// this band has no ack — but it is the strongest event the
+					// server can observe, so it is the clearing event.
+					s.hub.MarkWardenCommandWritten(wardenID, frame)
 				}
 				continue
 			}

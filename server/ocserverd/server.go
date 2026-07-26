@@ -316,6 +316,21 @@ func specsFor(s *apiServer) []RouteSpec {
 // autodeploy that pulls a new sha but fails to restart keeps reporting the
 // OLD sha (handlers._PROCESS_SHA contract).
 func newAPIServer(dal *DAL, hub *Hub, secret []byte, tokenTTL int64, root assetRoot) *apiServer {
+	// T-66a2 L3: bind the durable warden-command queue and rehydrate the FIFO
+	// before anything can connect. Assembly is the RIGHT seam: an upgrade
+	// re-execs this process, so "the queue survives a restart" is exactly "a
+	// freshly assembled apiServer over the same store finds the frames again".
+	// A DAL-less assembly (defaultRouteSpecs' route-shape probe) simply keeps
+	// the pre-T-66a2 in-memory-only behaviour.
+	//
+	// KNOWN: this makes assembly a WRITE against the store (expiry sweep) and a
+	// read that populates the new hub. Building a second apiServer over a DAL a
+	// live one is already using therefore lands the same pending command in two
+	// hubs. cmdServe assembles exactly once, so this is a constraint on future
+	// callers rather than a live defect — see hub.BindWardenCommandStore.
+	if dal != nil && hub != nil {
+		hub.BindWardenCommandStore(dal)
+	}
 	return &apiServer{
 		processSHA:            gitSHA(),
 		processTime:           gitTime(),

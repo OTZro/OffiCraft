@@ -23,7 +23,8 @@ package main
 //     agent's task/chat/member delta.
 //   - the per-warden command FIFO (spec/sse.md §7): the NAT transport buffer
 //     between a command producer and the addressed warden's drain loop.
-//     In-memory only (restart drops it — harmless by contract).
+//     In memory, with a DURABLE MIRROR for the one verb a restart would lose
+//     outright (`update` — T-66a2 L3, see the warden-command section below).
 
 import (
 	"bytes"
@@ -135,6 +136,12 @@ type Hub struct {
 	// by the next loss and deleted by the next dispatch — bounded by the roster,
 	// volatile like every other hub store.
 	cmdUndelivered map[string]undeliveredCommand
+	// cmdStore is the DURABLE mirror of wardenCmds for the verbs that cannot be
+	// re-derived after a process death (T-66a2 L3; today: `update` alone —
+	// persistableCommandVerb). nil = no store bound (the route-shape harness
+	// builds a DAL-less server), in which case the FIFO stays purely in-memory
+	// exactly as before.
+	cmdStore wardenCommandStore
 	// connGen is the hub-wide monotonic connection generation (pre-increment
 	// under h.mu; first connection is 1). Process-local like seq: an
 	// exec/restart resets it — generations only need to compare within one
@@ -507,6 +514,275 @@ func (h *Hub) PushDirected(memberID string, frame []byte) bool {
 	return false
 }
 
+// ── the durable half of the FIFO (T-66a2 L3) ────────────────────────────────
+//
+// WHY ONLY `update` IS PERSISTED. The queue is process-local memory, so a
+// server restart used to empty it. For START / STOP / UNINSTALL that is
+// genuinely harmless: the reconcile producer re-derives all three from observed
+// presence within one 30s cadence, so a restart costs at most one tick. For
+// `update` — the owner's upgrade click — NOTHING anywhere re-derives it, and
+// `POST /api/update/upgrade` deliberately re-execs the server, which makes
+// "restart between enqueue and drain" a DESIGNED-IN event rather than a
+// hypothetical race. Persisting the three self-healing verbs as well would add
+// a second, slower source of truth for decisions the producer already owns
+// (and a replayed STOP from before the restart is actively worse than a lost
+// one — the world has moved on), and a START frame carries a member_token: a
+// live secret we must not write at rest, and one that would be expired by the
+// time anything replayed it. So the durable set is exactly the verbs with no
+// compensating re-decision, which today means `update` alone.
+//
+// WHAT THIS DOES *NOT* BUY. There is still NO delivery guarantee and no ack in
+// this band (the acknowledgement item is explicitly deferred). The only event
+// the server can observe is "the frame was written to the socket without
+// error", which is not "the warden received it" and certainly not "the warden
+// acted on it". A frame is therefore forgotten on a successful WRITE, and the
+// honest statement of what survives a restart is "a command nobody has managed
+// to write yet", not "a command that has not been carried out".
+//
+// DUPLICATES ARE EXPECTED AND HARMLESS. A crash after the write but before the
+// delete replays the command on the next boot. `update` is a kick into the
+// warden's existing content-hash self-update reconcile: if the bytes already
+// match, it swaps nothing and restarts nothing, so a redundant kick is a cheap
+// no-op. That idempotence is what makes persisting this verb (and only this
+// verb) safe to replay at all.
+
+// wardenCommandStore is the durable-queue surface the hub needs; *DAL is the
+// only implementation. An interface rather than a *DAL field so the hub keeps
+// no database dependency and the persistence tests can inject a store that
+// fails on demand.
+type wardenCommandStore interface {
+	PutWardenCommand(WardenCommand) error
+	DeleteWardenCommand(wardenID, verb, memberID string) error
+	ListWardenCommands() ([]WardenCommand, error)
+	DeleteWardenCommandsBefore(cutoff float64) (int64, error)
+}
+
+// wardenCommandTTL bounds how long an undrained command may sit in the durable
+// queue. The queue itself is already bounded by its natural key (one pending
+// row per warden+verb+target — the roster, not the traffic), so this is not a
+// size cap: it is a staleness cap. A day-old upgrade click names a build that
+// has almost certainly been superseded, and the warden's own 15-minute
+// self-update poll has had ~96 chances to converge without it, so replaying it
+// would be archaeology, not recovery.
+const wardenCommandTTL = 24 * time.Hour
+
+// persistableCommandVerb reports whether a verb outlives the process. See the
+// section comment above: only the verbs with no compensating re-decision.
+func persistableCommandVerb(verb string) bool {
+	return verb == reconcileCmdUpdate
+}
+
+// commandStoreWrite is one durable-queue write PLANNED under h.mu and EXECUTED
+// after it is released.
+//
+// WHY THE TWO PHASES ARE NOT OPTIONAL: h.mu is the single lock guarding the
+// listener registry, so Publish (the exit of every durable-write handler) and
+// Connect (the entry of every SSE connection) both take it. The store is
+// SQLite behind ONE pooled connection with a 5s busy timeout, so a single
+// contended write can park for seconds — measured at 4.9s of server-wide
+// Publish stall when the persist ran inside the critical section. The hub had
+// no database dependency before this work and must not acquire a blocking one:
+// nothing here may hold h.mu across store I/O.
+type commandStoreWrite struct {
+	store  wardenCommandStore
+	cmd    WardenCommand
+	digest wardenCommandDigest
+}
+
+// planCommandPersistLocked decides whether a frame needs a durable row and
+// assembles the write — pure bookkeeping, NO I/O. Caller holds h.mu.
+func (h *Hub) planCommandPersistLocked(
+	wardenID string, digest wardenCommandDigest, frame []byte,
+) (commandStoreWrite, bool) {
+	if h.cmdStore == nil || digest.MemberID == "" || !persistableCommandVerb(digest.Verb) {
+		return commandStoreWrite{}, false
+	}
+	return commandStoreWrite{
+		store:  h.cmdStore,
+		digest: digest,
+		cmd: WardenCommand{
+			WardenID:   wardenID,
+			Verb:       digest.Verb,
+			MemberID:   digest.MemberID,
+			Frame:      frame,
+			EnqueuedTS: float64(h.clock().UnixNano()) / 1e9,
+		},
+	}, true
+}
+
+// runCommandPersists executes planned writes with NO hub lock held. Best effort
+// by construction: the in-memory FIFO is the live path and has already accepted
+// the frame, so a store failure NEVER fails the dispatch — it only downgrades it
+// to the pre-T-66a2 behaviour (lost on restart). It must not be silent though,
+// which is what noteCommandStoreFailure is for.
+//
+// KNOWN, PRE-EXISTING RACE — NOT caused by doing this outside the lock, and
+// NOT fixable by moving it back in. A persist and the clearing delete for the
+// SAME natural key can interleave, so a second upgrade click landing as the
+// first one's write completes can have its row removed: click #2 is live in the
+// FIFO but has no durable row, and a restart loses it. Measured reproducible on
+// e5b480c too, where BOTH the Put and the Delete ran inside h.mu — the lock
+// only serialises the two operations, it never prevented the "Put completes,
+// then a same-key Delete lands" ORDER. This is a property of clearing by
+// natural key on write success, and the two-phase locking here only changes the
+// width of the window. Anyone tempted to fix it by pulling the store call back
+// into the critical section will not fix it; they will only restore the ~5s
+// server-wide Publish freeze.
+//
+// The sharpest form, stated plainly: this band has no ack, so "written to the
+// wire" is not "delivered". The reason a user clicks upgrade a SECOND time is
+// very often that the first click silently did nothing — so the click that
+// loses its restart insurance is precisely the one the user considers
+// necessary, not a redundant one. That stays inside the accepted "no ack"
+// envelope, but it is not a harmless duplicate and must not be described as
+// one. Closing it needs per-command identity + acknowledgement, which is the
+// deferred item.
+//
+// RESIDUAL, NAMED: the CALLER of the dispatch still waits for its own store
+// write (up to the busy timeout — measured 5.1s against an externally locked
+// database). In practice that is the owner's upgrade button and the return path
+// of an already-dying SSE connection handler; a reconcile tick never touches
+// the store at all, because planCommandPersistLocked returns false for the only
+// verbs reconcile dispatches. Synchronous is kept for a POSTCONDITION, not for
+// error reporting (a failure is a stderr line either way and the caller gets
+// nothing back): when EnqueueWardenCommand returns, the row IS there. The guard
+// tests read the store immediately after enqueue and depend on exactly that,
+// and going async would spawn an unbounded, unjoined, shutdown-unaware goroutine
+// per enqueue.
+func runCommandPersists(writes []commandStoreWrite) {
+	for _, w := range writes {
+		if err := w.store.PutWardenCommand(w.cmd); err != nil {
+			noteCommandStoreFailure("persist", w.cmd.WardenID, w.digest, err)
+		}
+	}
+}
+
+// noteCommandStoreFailure is the OUTSIDE-VISIBLE trace of a durable-queue
+// failure. Deliberately the same stderr channel and "[sse] warden command …"
+// prefix the undelivered accounting uses, so the operator reading a delivery
+// problem finds both halves in one place. It names warden + verb + target and
+// NEVER the frame body (an `args` payload can carry a token). The wire cannot
+// carry this — the HTTP/MCP surface is frozen — and lying about it in the
+// dispatch response would be worse: the command IS enqueued and WILL be
+// delivered if the process survives; all that was lost is its restart
+// insurance, which is exactly what this line says.
+func noteCommandStoreFailure(op, wardenID string, digest wardenCommandDigest, err error) {
+	fmt.Fprintf(os.Stderr,
+		"[sse] warden command queue %s FAILED: warden=%s verb=%s target=%s — %v "+
+			"(the command is still queued in memory and will be delivered if this "+
+			"process survives; it will NOT survive a restart)\n",
+		op, wardenID, digest.Verb, digest.MemberID, err)
+}
+
+// BindWardenCommandStore attaches the durable queue and REHYDRATES the FIFO
+// from it — the whole point of the exercise, called once during server
+// assembly (newAPIServer). Restoring at assembly time rather than at first
+// drain means the queue is whole before any warden can connect, and it makes
+// "the server restarted" testable as "build a second apiServer over the same
+// DAL", which is what the guard test does.
+//
+// Expired rows are swept first (wardenCommandTTL). A restored frame is appended
+// only if an identical one is not already queued, so binding twice cannot
+// duplicate an order.
+//
+// BOTH STORE CALLS HAPPEN BEFORE h.mu IS TAKEN — the lock only installs the
+// store and appends the already-fetched frames. See commandStoreWrite for why
+// no hub path may block on SQLite while holding the listener lock.
+//
+// KNOWN LIMITATION — restore does NOT re-check reachability. The dispatch path
+// (enqueueToWarden) refuses to enqueue for a warden that is not online, but a
+// restored frame skips that gate: it was already accepted by a live dispatch
+// before the restart, and re-deriving reachability at boot would only ask a
+// question nothing can answer yet (no warden has reconnected). The cost is that
+// a command for a machine deleted from the roster while the server was down is
+// still rehydrated into memory and still sits in the store. Nothing will ever
+// drain it, so it is inert, and the TTL sweep removes it within a day — but it
+// IS carried, and no roster removal prunes it today.
+//
+// KNOWN LIMITATION — this is a SIDE EFFECT of assembly. Two apiServers built
+// over one live DAL each restore the same rows, so the same command ends up in
+// two different hubs. Production assembles exactly once (cmdServe), so this is
+// not a live bug; it is a trap for any future code that builds a second server
+// over a running store.
+func (h *Hub) BindWardenCommandStore(store wardenCommandStore) {
+	if store == nil {
+		return
+	}
+	cutoff := float64(h.clock().Add(-wardenCommandTTL).UnixNano()) / 1e9
+	if expired, err := store.DeleteWardenCommandsBefore(cutoff); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"[sse] warden command queue expiry sweep FAILED: %v (stale commands may be replayed)\n", err)
+	} else if expired > 0 {
+		fmt.Fprintf(os.Stderr,
+			"[sse] warden command queue: dropped %d command(s) older than %s\n",
+			expired, wardenCommandTTL)
+	}
+	pending, listErr := store.ListWardenCommands()
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.cmdStore = store
+	if listErr != nil {
+		fmt.Fprintf(os.Stderr,
+			"[sse] warden command queue restore FAILED: %v — commands pending at the "+
+				"last shutdown are lost; an upgrade click may need to be repeated\n", listErr)
+		return
+	}
+	restored := 0
+	// Append in list order: ListWardenCommands is contracted to return enqueue
+	// order, and spec/sse.md §7 requires the drain to pop in FIFO order — the
+	// rebuilt queue must not reorder what the crash interrupted.
+	for _, c := range pending {
+		if c.WardenID == "" || len(c.Frame) == 0 || containsFrame(h.wardenCmds[c.WardenID], c.Frame) {
+			continue
+		}
+		h.wardenCmds[c.WardenID] = append(h.wardenCmds[c.WardenID], c.Frame)
+		restored++
+		fmt.Fprintf(os.Stderr,
+			"[sse] warden command restored across restart: warden=%s verb=%s target=%s\n",
+			c.WardenID, c.Verb, c.MemberID)
+	}
+	if restored > 0 {
+		fmt.Fprintf(os.Stderr,
+			"[sse] warden command queue: %d command(s) survived the restart and will be "+
+				"delivered when the addressed warden reconnects\n", restored)
+	}
+}
+
+// MarkWardenCommandWritten forgets a persisted command once the stream loop has
+// written it to the warden's socket without error.
+//
+// READ THIS BEFORE TRUSTING IT: a successful write is NOT an acknowledgement.
+// It means the bytes entered our side of the connection, nothing more — the
+// peer may never read them. This band has no ack (that item is deferred), so
+// "written" is the strongest event the server can observe, and it is what the
+// durable queue is cleared on. The residual exposure is a frame written into a
+// socket the warden never drained, which this design does not recover; what it
+// does recover is the much larger case of a command that was never written at
+// all because the process died first.
+//
+// The delete runs with NO hub lock held (only the store handle is read under
+// h.mu) — this is called from inside the SSE write loop, and blocking every
+// listener behind a SQLite delete is exactly the coupling commandStoreWrite
+// forbids.
+func (h *Hub) MarkWardenCommandWritten(wardenID string, frame []byte) {
+	digest, ok := decodeWardenCommandFrame(frame)
+	if !ok || digest.MemberID == "" || !persistableCommandVerb(digest.Verb) {
+		return
+	}
+	h.mu.Lock()
+	store := h.cmdStore
+	h.mu.Unlock()
+	if store == nil {
+		return
+	}
+	if err := store.DeleteWardenCommand(wardenID, digest.Verb, digest.MemberID); err != nil {
+		// A failed delete leaves a row that will be replayed on the next boot.
+		// Harmless (see the duplicate note above) but worth naming.
+		noteCommandStoreFailure("clear", wardenID, digest, err)
+	}
+}
+
 // EnqueueWardenCommand appends one directed command frame (SSE wire text) to
 // wardenID's FIFO backlog (spec/sse.md §7 — the NAT transport's server half).
 // The frame is drained ONLY by the connection whose verified token sub is
@@ -515,8 +791,8 @@ func (h *Hub) EnqueueWardenCommand(wardenID string, frame []byte) {
 	if wardenID == "" {
 		return
 	}
+	var writes []commandStoreWrite
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	h.wardenCmds[wardenID] = append(h.wardenCmds[wardenID], frame)
 	// A FRESH dispatch supersedes any earlier "this member's frame never made
 	// it" note (T-66a2): the note exists to explain ONE lost dispatch, and the
@@ -524,7 +800,14 @@ func (h *Hub) EnqueueWardenCommand(wardenID string, frame []byte) {
 	// attempt now in flight.
 	if digest, ok := decodeWardenCommandFrame(frame); ok && digest.MemberID != "" {
 		delete(h.cmdUndelivered, digest.MemberID)
+		if w, queued := h.planCommandPersistLocked(wardenID, digest, frame); queued {
+			writes = append(writes, w)
+		}
 	}
+	h.mu.Unlock()
+	// Durable write AFTER the unlock: the command is already live in the FIFO,
+	// so nothing waits on this — least of all Publish.
+	runCommandPersists(writes)
 }
 
 // DrainWardenCommands pops and returns ALL of wardenID's pending command
@@ -532,6 +815,11 @@ func (h *Hub) EnqueueWardenCommand(wardenID string, frame []byte) {
 // at-most-once onto the downstream — but the caller now owes the frames back:
 // whatever it could NOT write must be handed to ReturnUndeliveredCommands, so
 // the loss is accounted for instead of being garbage-collected in silence.
+//
+// The DURABLE rows are deliberately NOT deleted here. A drain is only the
+// intention to write; the row is cleared per frame by MarkWardenCommandWritten
+// once the write actually succeeded, so a process that dies mid-drain still
+// finds its undrained `update` on the next boot.
 func (h *Hub) DrainWardenCommands(wardenID string) [][]byte {
 	if wardenID == "" {
 		return nil
@@ -586,8 +874,8 @@ func (h *Hub) ReturnUndeliveredCommands(wardenID string, undelivered [][]byte) (
 	if wardenID == "" || len(undelivered) == 0 {
 		return 0, 0
 	}
+	var writes []commandStoreWrite
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	at := float64(h.clock().UnixNano()) / 1e9
 	var back [][]byte
 	for _, frame := range undelivered {
@@ -603,6 +891,15 @@ func (h *Hub) ReturnUndeliveredCommands(wardenID string, undelivered [][]byte) (
 		if retry {
 			back = append(back, frame)
 			requeued++
+			// Second chance at durability: the row normally already exists (the
+			// enqueue wrote it and only a successful WRITE clears it), and the
+			// store's conflict rule makes this a no-op in that case. It matters
+			// when the original persist failed — the frame is provably still
+			// wanted, so try again rather than leave it uninsured. Planned
+			// here, executed after the unlock (see commandStoreWrite).
+			if w, queued := h.planCommandPersistLocked(wardenID, digest, frame); queued {
+				writes = append(writes, w)
+			}
 		} else {
 			dropped++
 		}
@@ -635,6 +932,8 @@ func (h *Hub) ReturnUndeliveredCommands(wardenID string, undelivered [][]byte) (
 	if len(back) > 0 {
 		h.wardenCmds[wardenID] = append(back, h.wardenCmds[wardenID]...)
 	}
+	h.mu.Unlock()
+	runCommandPersists(writes)
 	return requeued, dropped
 }
 

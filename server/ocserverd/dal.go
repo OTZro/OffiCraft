@@ -1357,6 +1357,82 @@ func (d *DAL) DeletePushSubscription(endpoint string) error {
 	return err
 }
 
+// ── warden command queue (T-66a2 L3: the durable half of the §7 FIFO) ────────
+
+// WardenCommand is ONE pending warden-command frame held across a process
+// death. Only the verbs with no compensating re-decision are stored (today:
+// `update`) — see migrations/00034_warden_command_queue.sql for why START must
+// never land here.
+type WardenCommand struct {
+	WardenID   string
+	Verb       string
+	MemberID   string
+	Frame      []byte
+	EnqueuedTS float64
+}
+
+// PutWardenCommand records one pending command. DO NOTHING on conflict — a
+// re-enqueue of the same (warden, verb, target) is the SAME order, so it must
+// neither duplicate the row nor refresh enqueued_ts (that would let a
+// repeatedly-requeued command dodge the expiry sweep forever).
+func (d *DAL) PutWardenCommand(c WardenCommand) error {
+	_, err := d.db.Exec(`
+		INSERT INTO warden_command_queue (warden_id, verb, member_id, frame, enqueued_ts)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (warden_id, verb, member_id) DO NOTHING`,
+		c.WardenID, c.Verb, c.MemberID, string(c.Frame), c.EnqueuedTS)
+	return err
+}
+
+// DeleteWardenCommand forgets one pending command (idempotent). Called when the
+// frame has been WRITTEN to the warden's socket — which is NOT the same as
+// delivered (there is no ack in this band; see hub.go MarkWardenCommandWritten).
+func (d *DAL) DeleteWardenCommand(wardenID, verb, memberID string) error {
+	_, err := d.db.Exec(`
+		DELETE FROM warden_command_queue
+		WHERE warden_id = ? AND verb = ? AND member_id = ?`,
+		wardenID, verb, memberID)
+	return err
+}
+
+// ListWardenCommands returns every surviving pending command in enqueue order
+// — the FIFO the restore path rebuilds from.
+func (d *DAL) ListWardenCommands() ([]WardenCommand, error) {
+	rows, err := d.db.Query(`
+		SELECT warden_id, verb, member_id, frame, enqueued_ts
+		FROM warden_command_queue ORDER BY enqueued_ts, rowid`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []WardenCommand
+	for rows.Next() {
+		var c WardenCommand
+		var frame string
+		if err := rows.Scan(&c.WardenID, &c.Verb, &c.MemberID, &frame, &c.EnqueuedTS); err != nil {
+			return nil, err
+		}
+		c.Frame = []byte(frame)
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// DeleteWardenCommandsBefore drops every command enqueued strictly before
+// cutoff — the expiry sweep that keeps a never-drainable backlog from living
+// forever. Returns how many rows it removed.
+func (d *DAL) DeleteWardenCommandsBefore(cutoff float64) (int64, error) {
+	res, err := d.db.Exec(`DELETE FROM warden_command_queue WHERE enqueued_ts < ?`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, nil // the delete succeeded; an unsupported count is not a failure
+	}
+	return n, nil
+}
+
 // DeleteSetting removes one settings value (idempotent — deleting an absent
 // key is a no-op). Consumes the one-shot first-run claim token.
 func (d *DAL) DeleteSetting(key string) error {

@@ -400,18 +400,53 @@ data: {"topic":"warden-command","data":{"rpc":"start","args":{"member_id":"m-1a2
     verb is the most likely to be in flight when the stream dies. The retry is safe because
     the warden's self-update is idempotent (content-hash swap oracle); the requeue de-dups on
     frame identity, so a flapping warden accumulates ONE pending update, not one per flap;
-  - the queue is in-memory only (inventory #6): a restart drops pending frames. That is
-    harmless **only for the verbs the reconcile producer re-derives** — START / STOP /
+  - the queue lives in memory, with a **durable mirror for `update` alone** (T-66a2 L3;
+    `warden_command_queue`). A restart still drops every other pending frame, which is
+    harmless **precisely because the reconcile producer re-derives them** — START / STOP /
     UNINSTALL are re-folded and re-enqueued from observed presence within one cadence, so a
-    restart costs at most one tick. It is NOT harmless for `update`: nothing re-derives an
-    owner's upgrade click, so a restart between enqueue and drain loses it outright — and
-    `POST /api/update/upgrade` deliberately re-execs the server, which makes that race a
-    designed-in event rather than a hypothetical. The in-process requeue above does not cover
-    it either (the requeue survives a dead connection, not a dead process). Closing that gap
-    needs a durable queue, which is the DEFERRED queue-persistence item — until it lands, the
-    honest statement is that a pending `update` is lost on restart with no record;
-  - unbounded by default; a configured positive cap makes enqueue fail (→ dispatch reports
-    not-accepted → retry next tick) rather than grow a wedged backlog.
+    restart costs at most one tick, and replaying a pre-restart STOP after the world moved on
+    would be worse than losing it. `update` has no such re-decision, and
+    `POST /api/update/upgrade` deliberately re-execs the server, which makes "restart between
+    enqueue and drain" a designed-in event rather than a hypothetical; the in-process requeue
+    above does not cover it (it survives a dead connection, not a dead process). So an
+    `update` is written to the store on enqueue, restored into the FIFO when the server is
+    reassembled, and forgotten when it is WRITTEN to the warden's socket. START is
+    additionally excluded because its `args` carry a live `member_token`: a secret that must
+    not be written at rest and would be expired by any replay;
+  - **what persistence does NOT provide**: there is still no ack in this band, so "written to
+    the socket" is the strongest event the server can observe and is what clears the durable
+    row. A restored frame therefore means "nobody has managed to write this yet", never "this
+    has not been carried out". A crash between the write and the clear replays the command on
+    the next boot — safe only because the `update` kick is idempotent (content-hash swap
+    oracle), which is itself part of why this verb is the only one stored;
+  - **bounds**: the durable queue's natural key is (warden, verb, target), so a machine holds
+    at most ONE pending `update` however often it flaps — the queue is bounded by the roster,
+    not by traffic. Rows also EXPIRE (24h, swept at assembly): a day-old upgrade click names a
+    build that has been superseded and the warden's own 15-minute self-update poll has had
+    ~96 chances to converge, so replaying it would be archaeology. A re-enqueue does not
+    refresh the expiry anchor, so a repeatedly-requeued command still ages out;
+  - a durable write that FAILS never fails the dispatch (the in-memory FIFO has already
+    accepted the frame and will deliver it if the process survives), but it MUST be named on
+    the same stderr channel as the undelivered accounting — the loss of restart insurance is
+    exactly the kind of silently-missing guarantee this band's history is made of;
+  - **the store must never be reached while holding the hub's lock.** That lock also guards
+    the listener registry, so a contended durable write would stall every `Publish` (the exit
+    of every durable-write handler) and every `Connect` — measured at 4.9s server-wide before
+    this rule was applied. Durable writes are planned inside the critical section and executed
+    outside it; the dispatching caller alone waits for its own write;
+  - **restore does not re-check reachability.** The dispatch path refuses to enqueue for an
+    offline warden, but a frame restored at boot skips that gate: it was accepted by a live
+    dispatch before the restart, and no warden has reconnected yet for the question to be
+    answerable. A command for a machine removed from the roster while the server was down is
+    therefore still rehydrated. It is inert (nobody drains it) and the TTL sweep clears it
+    within a day, but no roster removal prunes it today;
+  - **restoring is a side effect of server assembly**, so two servers assembled over one live
+    store both restore the same rows into their own queues. Production assembles exactly once;
+    this is a constraint on future code, not a live defect;
+  - the restored FIFO MUST preserve enqueue order — the drain's FIFO requirement above applies
+    to a queue rebuilt after a crash exactly as it does to one built by live dispatches;
+  - the in-memory queue is unbounded by default; a configured positive cap makes enqueue fail
+    (→ dispatch reports not-accepted → retry next tick) rather than grow a wedged backlog.
 - Band evaluation happens on quiet ticks only (buffered entity deltas drain first); relative priority among bands is an implementation detail.
 
 ## 8. Task-close nudge band (directed signal, the executor's connection only)
@@ -463,7 +498,7 @@ From the migration inventory (§0.5), items assigned to spec/sse.md:
 | 1 | presence projection (`is_online`/`online_members`) | §5 |
 | 2 | observed position (`machine_of`, token machine claim) | §5 (claim shape: lifecycle §1) |
 | 4 | context-high per-connection band state | §6 |
-| 6 | warden-command FIFO | §7 |
+| 6 | warden-command FIFO (in-memory except the durable `update` mirror — §7) | §7 |
 | 8 | seq/epoch counter, restart rollback | §2.1 |
 
 (#3 context gauge and #5 telemetry/bank edge live in spec/lifecycle.md; the disconnect-bank
