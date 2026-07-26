@@ -636,6 +636,15 @@
   color: var(--color-danger-soft);
 }
 
+/* 改機器 control: the 編輯 button plus its progress/dead-end notice, stacked so
+ * the notice never widens the label row it sits in. */
+.mp-relocate {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
 /* Stacked second field inside one info cell (owner layout: 模型+EFFORT share
  * the left cell; 機器+Claude Account share the right cell). */
 .mp-field__label--stacked {

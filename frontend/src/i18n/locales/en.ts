@@ -700,6 +700,10 @@ export const en: Dict = {
   },
   machine: {
     noOnlineMachine: "No online machine",
+    relocating: "Moving…",
+    relocateTimeout: "No completion report yet — press again to retry.",
+    relocateFailed: "The move could not be sent — press again to retry.",
+    relocateSent: "Move request sent",
     picker: {
       label: "Choose a machine",
       offlineOption: (name: string) => `${name} (offline)`,
