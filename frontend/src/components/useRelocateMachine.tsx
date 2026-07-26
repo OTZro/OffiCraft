@@ -4,6 +4,42 @@ import type { MachineView, MemberRelocateResult } from "../types";
 import { MachinePicker } from "./MachinePicker";
 import { PencilIcon } from "./icons";
 
+/** How long 「更換中…」 may stay up before the control calls it a timeout.
+ *
+ * A relocate lands ASYNCHRONOUSLY: the POST answering 200 only means the pin was
+ * written — the agent actually arriving on the new machine comes back later as an
+ * SSE delta (`landed`). So the in-progress state cannot end at the promise, and
+ * without a ceiling it would spin forever whenever the move never lands. ONE
+ * named constant, so the wait is tunable in exactly one place.
+ *
+ * ⚠️ KNOWN BOUNDARY, decided not overlooked (owner ruling 2): the progress state
+ * is purely IN-MEMORY. A page reload or a component remount forgets that a move
+ * was fired, and this clock restarts from zero. Surviving a reload would mean a
+ * SECOND source of truth for "a relocate is in flight" (server-side fired-at, or
+ * localStorage) — judged not worth its cost against `landed`, which already
+ * self-heals whatever the owner sees after a reload. */
+export const RELOCATE_TIMEOUT_MS = 30_000;
+
+/** How long the one-shot 「已送出」 chip stays up after a relocate that has no
+ * observable landing to wait for (the same-machine case below).
+ *
+ * It is NOT a small timeout and must never be read as one: it promises nothing
+ * about the move landing, it only states that the request left. Being transient
+ * is the point — a permanent chip would start looking like a status. */
+export const RELOCATE_SENT_NOTICE_MS = 2_000;
+
+/** The 改機器 control's visible progress state.
+ *
+ *   idle       — the ordinary 編輯 affordance.
+ *   relocating — fired, not yet landed: 「更換中…」 + no re-fire (owner: 「一直狀態
+ *                沒變，按鈕沒變，會讓使用者誤以為沒有按到」).
+ *   timeout    — RELOCATE_TIMEOUT_MS elapsed without `landed`. Honest dead end,
+ *                and RETRYABLE: the button goes live again.
+ *   failed     — `onRelocate` rejected (a real path: the openapi-fetch middleware
+ *                throws on every non-2xx). Also retryable.
+ */
+type RelocatePhase = "idle" | "relocating" | "timeout" | "failed";
+
 interface UseRelocateMachineOpts {
   /** The agent this control is bound to (`member.id` / `worker.id`).
    *
@@ -91,14 +127,28 @@ export function useRelocateMachine({
 } {
   const { t } = useI18n();
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState<RelocatePhase>("idle");
   // T-7fa1: the relocate answered 200 but its recycle STOP/START never reached a
   // warden — pinned, not landed. Surfaced by the caller as a DispatchAlert.
   const [undispatched, setUndispatched] = useState(false);
-  // The verdict is about ONE agent: drop it when the panel switches to another.
+  // The verdict AND the progress phase are about ONE agent: drop both when the
+  // panel switches to another. Neither panel is remounted on that switch (no
+  // `key` at either call site — see subjectId's doc), so a 「更換中…」 left over
+  // from the previous agent would otherwise be shown against the new one.
+  // Bumped on every fire that shows the one-shot 「已送出」 chip; 0 = no chip. A
+  // NONCE rather than a bool so a second fire re-arms the 2s window instead of
+  // riding out the first one's.
+  const [sentNonce, setSentNonce] = useState(0);
   useEffect(() => {
     setUndispatched(false);
+    setPhase("idle");
+    setSentNonce(0);
   }, [subjectId]);
+  useEffect(() => {
+    if (sentNonce === 0) return;
+    const timer = setTimeout(() => setSentNonce(0), RELOCATE_SENT_NOTICE_MS);
+    return () => clearTimeout(timer);
+  }, [sentNonce]);
   // …and the reset above is a reset, not a CANCEL: a relocate still in flight
   // during the switch resolves afterwards. Same render-time ref discipline as
   // MemberDetailPanel's wake.
@@ -123,22 +173,74 @@ export function useRelocateMachine({
     currentMachineId != null && currentMachineId !== "" ? currentMachineId : null;
   const landed =
     observedMachineId != null && observedMachineId === boundMachineId;
+  // `landed` is also what ENDS 「更換中…」: the move is over when the agent is
+  // observed where it was pinned, not when the POST answers. Clearing from
+  // `timeout` too is deliberate — a late-landing move heals its own dead end.
   useEffect(() => {
-    if (landed) setUndispatched(false);
+    if (landed) {
+      setUndispatched(false);
+      setPhase("idle");
+    }
   }, [landed]);
 
+  // The ceiling on 「更換中…」. Re-armed on every entry into `relocating`, torn
+  // down the moment the phase leaves it (landed / failed / agent switch), so a
+  // move that lands can never be reported as a timeout afterwards.
+  useEffect(() => {
+    if (phase !== "relocating") return;
+    const timer = setTimeout(() => setPhase("timeout"), RELOCATE_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [phase]);
+
+  // Read at fire time, so two clicks inside ONE render batch (both closing over
+  // the same stale `phase`) still only relocate once.
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
+
   const run = (machineId: string) => {
+    if (phaseRef.current === "relocating") return;
     setPickerOpen(false);
-    setBusy(true);
     setUndispatched(false); // a fresh attempt clears the previous verdict
+    // 🔴 A move to the machine the agent is ALREADY OBSERVED ON never enters
+    // 「更換中…」 (owner ruling 3a). There is no observable transition to wait
+    // for — `observedMachineId` is already the target and stays it right through
+    // the server's same-machine recycle — so the progress state would have
+    // exactly ONE exit, the timeout, and would end up asserting a move had not
+    // happened when in fact one had. The relocate is still FIRED (this is not a
+    // no-op short-circuit); only the unwinnable wait is skipped, so the button
+    // stays live.
+    const observable = machineId !== observedMachineId;
+    if (observable) {
+      phaseRef.current = "relocating";
+      setPhase("relocating");
+      setSentNonce(0); // 「更換中…」 says everything the chip would
+    } else {
+      setPhase("idle"); // also drops a stale timeout/failed notice
+      // …but 「狀態沒變、按鈕沒變」 is EXACTLY the complaint this ticket exists to
+      // fix (owner's own words), and this branch changes neither. So it gets the
+      // one thing we honestly know: the request went out. A fact already true at
+      // this point — no promise about landing, no 30s clock.
+      setSentNonce((n) => n + 1);
+    }
     const firedFor = subjectId; // whose move this verdict belongs to
     void (async () => {
       try {
         const result = await onRelocate?.(machineId);
         if (subjectIdRef.current !== firedFor) return;
-        if (result?.relocationPending) setUndispatched(true);
+        // 🔴 PENDING IS A VERDICT, NOT PROGRESS (owner ruling 1). The server has
+        // given a definitive answer — nothing went out — so holding 「更換中…」
+        // would be pretending something is still under way. The DispatchAlert
+        // REPLACES the spinner rather than stacking on top of it (the same call
+        // the wake side made in T-7fa1: that copy exists precisely to take the
+        // place of 「永遠轉不完的『喚醒中…』」). Nothing is in flight, so the button
+        // goes live again; the alert self-heals on `landed`.
+        if (result?.relocationPending) {
+          setUndispatched(true);
+          setPhase("idle");
+        }
       } catch {
         if (subjectIdRef.current !== firedFor) return;
+        setPhase("failed");
         // NIT-3 (review r1): the openapi-fetch middleware throws on EVERY
         // non-2xx, so a rejected relocate is a real path, not a theoretical
         // one. Before this it escaped as an unhandled rejection. There is no
@@ -146,35 +248,58 @@ export function useRelocateMachine({
         // pending determination — so we only make sure a STALE verdict does
         // not survive the new attempt.
         setUndispatched(false);
-      } finally {
-        // The SSE delta refetches the panel; clear the in-flight guard either
-        // way (a rejected relocate lets the owner retry).
-        setBusy(false);
       }
+      // NO `finally` that ends the progress state: the promise resolving means
+      // the pin was written, NOT that the agent moved. 「更換中…」 outlives the
+      // await and is ended by `landed` or by RELOCATE_TIMEOUT_MS.
     })();
   };
 
+  const relocating = phase === "relocating";
   const canRelocate = Boolean(onRelocate) && onlineMachines.length >= 1;
   const handleClick =
-    canRelocate && !busy
+    canRelocate && !relocating
       ? () => {
           if (onlineMachines.length === 1) run(onlineMachines[0].machineId);
           else setPickerOpen(true);
         }
       : undefined;
 
+  // The dead end (timeout / rejected) is stated next to the button rather than
+  // inside it, so the button itself can stay the RETRY affordance.
+  const notice =
+    phase === "timeout"
+      ? t.machine.relocateTimeout
+      : phase === "failed"
+        ? t.machine.relocateFailed
+        : undefined;
+
   const relocateAction = onRelocate ? (
-    <button
-      type="button"
-      className="doc-btn doc-btn--edit"
-      data-testid={testId}
-      disabled={!handleClick}
-      title={onlineMachines.length === 0 ? noOnlineTitle : undefined}
-      onClick={handleClick}
-    >
-      {withIcon && <PencilIcon size={14} />}
-      <span>{t.settings.edit}</span>
-    </button>
+    <div className="mp-relocate">
+      <button
+        type="button"
+        className="doc-btn doc-btn--edit"
+        data-testid={testId}
+        disabled={!handleClick}
+        title={onlineMachines.length === 0 ? noOnlineTitle : undefined}
+        onClick={handleClick}
+      >
+        {withIcon && !relocating && <PencilIcon size={14} />}
+        <span>{relocating ? t.machine.relocating : t.settings.edit}</span>
+      </button>
+      {notice ? (
+        <div
+          className="mp-field__hint mp-info2__error"
+          data-testid={`${testId}-notice`}
+        >
+          {notice}
+        </div>
+      ) : sentNonce > 0 ? (
+        <div className="mp-field__hint" data-testid={`${testId}-sent`}>
+          {t.machine.relocateSent}
+        </div>
+      ) : null}
+    </div>
   ) : undefined;
 
   const relocatePicker = pickerOpen ? (
