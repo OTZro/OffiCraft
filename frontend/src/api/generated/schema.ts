@@ -234,9 +234,13 @@ export interface paths {
          * Post a chat message (sender = verified JWT sub; auto SSE fan-out).
          * @description Post one chat message (§3.4 #16). The sender is ALWAYS the VERIFIED JWT
          *     ``sub`` (``current_actor``) — never the body's ``from`` (ignored), so a sender
-         *     can not be forged. The server mints the ``id`` (``c-<hex>``) and timestamps.
-         *     The write funnels through the Repository, which auto-fans one ``chat`` SSE
-         *     delta (§3.7).
+         *     can not be forged. The recipient ``to`` is a durable address: the owner or an
+         *     active AI member (staff or outsource). An unknown, removed, or machine id is a
+         *     404 and creates no message. Presence is deliberately not checked: an offline,
+         *     waking, or stopped active member retains a durable mailbox and receives the
+         *     message on its next read. The server mints the ``id`` (``c-<hex>``) and
+         *     timestamps. The write funnels through the Repository, which auto-fans one
+         *     ``chat`` SSE delta (§3.7).
          *
          *     A message may carry text and/or MULTIPLE attachments via the generic
          *     ``attachments`` list (each ``{data_b64, filename?, mime?}``; image is the

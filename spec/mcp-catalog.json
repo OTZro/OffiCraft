@@ -355,7 +355,7 @@
       "name": "dismiss_member"
     },
     {
-      "description": "Post a chat message (sender = verified JWT sub; auto SSE fan-out).",
+      "description": "Post a chat message (sender = verified JWT sub; auto SSE fan-out). ``to`` must name the owner or an active AI member; unknown, removed, and machine ids are rejected. Presence is not a gate: an offline member keeps its durable mailbox.",
       "inputSchema": {
         "$defs": {
           "ChatAttachmentInputDTO": {

@@ -1578,6 +1578,43 @@ def test_upload_then_ref_post_roundtrip(hctx: HCtx) -> None:
     assert again.status_code == 200, again.text
 
 
+def test_chat_recipient_validation_preserves_offline_mailbox(hctx: HCtx) -> None:
+    """A valid member remains a durable mailbox while disconnected, but an
+    invented recipient is rejected instead of becoming an orphaned chat row."""
+    delivered = hctx.client.post(
+        "/api/chat",
+        json={"to": hctx.agent.member_id, "body": "offline-mailbox-probe"},
+        headers=_auth(hctx.owner_token),
+    )
+    assert delivered.status_code == 200, delivered.text
+
+    # The conformance agent has no SSE listener: this reads the persisted
+    # mailbox, not a success that depended on live fan-out.
+    mailbox = hctx.client.get(
+        "/api/chat?with=owner&limit=-1", headers=_auth(hctx.agent.token)
+    )
+    assert mailbox.status_code == 200, mailbox.text
+    assert any(m["body"] == "offline-mailbox-probe" for m in mailbox.json())
+
+    rejected = hctx.client.post(
+        "/api/chat",
+        json={
+            "to": "m-conformance-typo",
+            "body": "must-not-land",
+            "attachments": [{"data_b64": "bm8tb3JwaGFu", "mime": "text/plain"}],
+        },
+        headers=_auth(hctx.owner_token),
+    )
+    assert rejected.status_code == 404, rejected.text
+    assert "chat recipient 'm-conformance-typo' not found" in rejected.text
+
+    missing_mailbox = hctx.client.get(
+        "/api/chat?with=m-conformance-typo&limit=-1", headers=_auth(hctx.owner_token)
+    )
+    assert missing_mailbox.status_code == 200, missing_mailbox.text
+    assert all(m["body"] != "must-not-land" for m in missing_mailbox.json())
+
+
 def test_upload_ref_rejections(hctx: HCtx) -> None:
     """The ref form's 400 faces: unknown id, id together with data_b64, and
     an over-cap / empty upload body."""

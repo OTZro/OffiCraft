@@ -98,6 +98,28 @@ type chatBadRequest struct{ msg string }
 
 func (e chatBadRequest) Error() string { return e.msg }
 
+// resolveChatRecipient accepts only a durable chat address: the single owner
+// or an active AI member (staff or outsource). Presence is deliberately NOT a
+// condition. An offline, waking, or stopped member still owns a mailbox and
+// must receive messages posted before its next connection; a removed member,
+// warden, or invented id has no chat consumer and is refused instead of
+// becoming an orphaned conversation.
+func (s *apiServer) resolveChatRecipient(id string) (string, error) {
+	id = trimString(id)
+	if id == wireOwnerID {
+		return id, nil
+	}
+	m, err := s.dal.GetMember(id)
+	if err != nil {
+		return "", err
+	}
+	if m == nil || m.RosterStatus != RosterStatusActive ||
+		(m.Kind != KindAssistant && m.Kind != KindOutsource) {
+		return "", errNotFound
+	}
+	return id, nil
+}
+
 // decodeChatAttachment decodes one posted attachment (data-URI or bare
 // base64), resolves the mime (caller → data-URI → sniff), enforces the size
 // caps, and defaults a pasted image's filename
@@ -322,6 +344,11 @@ func (s *apiServer) HandlePostChatApiChatPost(w http.ResponseWriter, r *http.Req
 		writeError(w, status, problem)
 		return
 	}
+	recipient, err := s.resolveChatRecipient(body.To)
+	if err != nil {
+		writeResolveError(w, err, "chat recipient", trimString(body.To))
+		return
+	}
 	if len(resolved) > 0 {
 		refs, err := s.storeResolvedAttachments(resolved)
 		if err != nil {
@@ -338,7 +365,7 @@ func (s *apiServer) HandlePostChatApiChatPost(w http.ResponseWriter, r *http.Req
 	msg := ChatMessage{
 		ID:        "c-" + newHexID(12),
 		Sender:    currentActor(r),
-		Recipient: body.To,
+		Recipient: recipient,
 		Body:      strOrEmpty(body.Body),
 		TS:        nowSecs(),
 		Meta:      meta,

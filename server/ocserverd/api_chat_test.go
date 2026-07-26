@@ -473,3 +473,129 @@ func TestPostChatQueuesRegardlessOfRecipientPresence(t *testing.T) {
 		}
 	}
 }
+
+// TestPostChatValidatesRecipientWithoutGatingOfflineMailbox keeps the two
+// halves of the contract together: a typo must fail before anything is stored,
+// while an active member that merely lacks an SSE connection remains a valid
+// durable mailbox address.
+func TestPostChatValidatesRecipientWithoutGatingOfflineMailbox(t *testing.T) {
+	srv, secret, _ := newWiredTestServer(t)
+	now := time.Now().Unix()
+	ownerTok, _ := mintJWT(wireOwnerID, "owner", 300, secret, now, "")
+	miraTok, _ := mintJWT("mira", "agent", 300, secret, now, "")
+
+	post := func(to, body string) (int, string) {
+		raw, _ := json.Marshal(map[string]string{"to": to, "body": body})
+		return doRaw(t, "POST", srv.URL+"/api/chat", ownerTok, "application/json", raw)
+	}
+
+	// The test server has no listener for Mira: this is the offline mailbox
+	// path, not an accidental online success.
+	if status, roster := get(t, srv.URL+"/api/members", ownerTok); status != 200 ||
+		!strings.Contains(roster, `"id":"mira"`) || !strings.Contains(roster, `"presence":"offline"`) {
+		t.Fatalf("control: expected an offline Mira roster row, got %d %s", status, roster)
+	}
+	if status, resp := post("mira", "kept-for-offline-mira"); status != 200 {
+		t.Fatalf("offline member must retain a mailbox: %d %s", status, resp)
+	}
+
+	// A made-up id must not create an orphaned conversation. The read proves the
+	// rejection left no durable row, rather than merely withholding SSE fan-out.
+	badPost, _ := json.Marshal(map[string]any{
+		"to": "m-typo", "body": "must-not-land",
+		"attachments": []map[string]string{{
+			"data_b64": "bm90LWFuLW9ycGhhbg==", "filename": "never-stored.txt", "mime": "text/plain",
+		}},
+	})
+	if status, resp := doRaw(t, "POST", srv.URL+"/api/chat", ownerTok, "application/json", badPost); status != http.StatusNotFound ||
+		!strings.Contains(resp, "chat recipient 'm-typo' not found") {
+		t.Fatalf("unknown recipient: want 404 with actionable id, got %d %s", status, resp)
+	}
+	if status, body := get(t, srv.URL+"/api/chat?with=m-typo&limit=-1", ownerTok); status != 200 ||
+		strings.Contains(body, "must-not-land") {
+		t.Fatalf("unknown recipient must leave no mailbox row: %d %s", status, body)
+	}
+	if status, body := get(t, srv.URL+"/api/chat/attachments?with=m-typo", ownerTok); status != 200 ||
+		strings.TrimSpace(body) != "[]" {
+		t.Fatalf("rejected recipient must not orphan uploaded bytes: %d %s", status, body)
+	}
+
+	// Mira's next read sees the offline delivery, so recipient validation never
+	// smuggles a presence gate into the durable queue.
+	if status, body := get(t, srv.URL+"/api/chat?with=owner&limit=-1", miraTok); status != 200 ||
+		!strings.Contains(body, "kept-for-offline-mira") {
+		t.Fatalf("offline mailbox must be readable on the next boot: %d %s", status, body)
+	}
+}
+
+// TestPostChatRecipientKinds pins the entire recipient contract. In
+// particular, workers are chat peers even though their roster projection is
+// separate, while machines and soft-removed identities have no mailbox. The
+// warden leg carries inline bytes to prove rejection precedes blob storage.
+func TestPostChatRecipientKinds(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub()}
+	for _, m := range []Member{
+		{ID: "ow-active", Kind: KindOutsource, RosterStatus: RosterStatusActive},
+		{ID: "mach-warden", Kind: KindWarden, RosterStatus: RosterStatusActive},
+		{ID: "m-removed", Kind: KindAssistant, RosterStatus: RosterStatusRemoved},
+		{ID: "ow-removed", Kind: KindOutsource, RosterStatus: RosterStatusRemoved},
+	} {
+		if err := s.dal.PutMember(m); err != nil {
+			t.Fatalf("seed %s: %v", m.ID, err)
+		}
+	}
+	post := func(to string, inline bool) *httptest.ResponseRecorder {
+		payload := map[string]any{"to": to, "body": "recipient-kind-probe"}
+		if inline {
+			payload["attachments"] = []map[string]string{{
+				"data_b64": "bm8tb3JwaGFu", "filename": "no-orphan.txt", "mime": "text/plain",
+			}}
+		}
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "/api/chat", bytes.NewReader(raw))
+		claims := map[string]any{"sub": wireOwnerID, "scope": "owner"}
+		req = req.WithContext(context.WithValue(req.Context(), claimsContextKey, claims))
+		rec := httptest.NewRecorder()
+		s.HandlePostChatApiChatPost(rec, req)
+		return rec
+	}
+	counts := func() (messages, attachments int) {
+		if err := s.dal.db.QueryRow(`SELECT COUNT(*) FROM chat_message`).Scan(&messages); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.dal.db.QueryRow(`SELECT COUNT(*) FROM chat_attachment`).Scan(&attachments); err != nil {
+			t.Fatal(err)
+		}
+		return messages, attachments
+	}
+
+	if rec := post("ow-active", false); rec.Code != http.StatusOK {
+		t.Fatalf("active outsource recipient must be accepted: %d %s", rec.Code, rec.Body.String())
+	}
+	if messages, attachments := counts(); messages != 1 || attachments != 0 {
+		t.Fatalf("accepted outsource message: want 1 message / 0 attachments, got %d / %d", messages, attachments)
+	}
+
+	for _, tc := range []struct {
+		to     string
+		inline bool
+	}{
+		{to: "mach-warden", inline: true},
+		{to: "m-removed"},
+		{to: "ow-removed"},
+	} {
+		beforeMessages, beforeAttachments := counts()
+		rec := post(tc.to, tc.inline)
+		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "chat recipient '"+tc.to+"' not found") {
+			t.Fatalf("%s: want recipient 404, got %d %s", tc.to, rec.Code, rec.Body.String())
+		}
+		afterMessages, afterAttachments := counts()
+		if afterMessages != beforeMessages || afterAttachments != beforeAttachments {
+			t.Fatalf("%s: refused recipient changed storage from %d/%d to %d/%d", tc.to,
+				beforeMessages, beforeAttachments, afterMessages, afterAttachments)
+		}
+	}
+}
