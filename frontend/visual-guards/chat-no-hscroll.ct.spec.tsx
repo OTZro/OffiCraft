@@ -74,4 +74,23 @@ test("390px: .chat__messages is NOT a horizontal pan surface", async ({
     preScroll.scrollable,
     "<pre> still scrolls its long code line horizontally"
   ).toBeGreaterThan(1);
+
+  // (5) An image attachment shares the bubble's width constraint. Pin the
+  // story to a deliberately narrow text column so a fixed 300px cap would
+  // overflow; regular and outsource chats both render this ChatArea surface.
+  const imageRow = cmp.getByTestId("chat-image-row");
+  await imageRow.evaluate((el) => {
+    (el as HTMLElement).style.width = "190px";
+  });
+  const imageGeometry = await cmp.getByTestId("chat-image").evaluate((el) => {
+    const image = el.getBoundingClientRect();
+    const bubble = document
+      .querySelector('[data-testid="chat-image-bubble"]')!
+      .getBoundingClientRect();
+    return { imageRight: image.right, bubbleRight: bubble.right };
+  });
+  expect(
+    imageGeometry.imageRight - imageGeometry.bubbleRight,
+    "chat image must not exceed its text bubble",
+  ).toBeLessThanOrEqual(1);
 });

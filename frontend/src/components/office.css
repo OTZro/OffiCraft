@@ -955,7 +955,9 @@
  * cleanly inside the bubble's 12px corners. */
 .chat__msg-image {
   display: block;
-  max-width: 300px;
+  /* The thumbnail obeys both its desktop cap and the bubble's available
+   * inline size. A fixed 300px cap overflows a narrow mobile bubble. */
+  max-width: min(300px, 100%);
   max-height: 320px;
   width: auto;
   height: auto;

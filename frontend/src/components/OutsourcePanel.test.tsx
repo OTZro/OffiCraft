@@ -286,6 +286,67 @@ describe("OutsourcePanel", () => {
     }
   });
 
+  it("worker chat uses the same entry rules as a member chat: unread lands at its divider, read lands at the last message", async () => {
+    const now = Date.now() / 1000;
+    __injectMockTask(mkTask({ id: "t-entry", createdTs: 91 }));
+    __injectMockOutsourceWorker(
+      mkWorker({ id: "ow-entry", codename: "O-entry", taskId: "t-entry" }),
+    );
+    __injectMockChat({
+      id: "entry-read",
+      from: "ow-entry",
+      to: "owner",
+      body: "已讀內容",
+      ts: now - 31,
+      attachments: [],
+      replyCardId: null,
+    });
+    __injectMockChat({
+      id: "entry-unread",
+      from: "ow-entry",
+      to: "owner",
+      body: "未讀內容",
+      ts: now - 30,
+      attachments: [],
+      replyCardId: null,
+    });
+    await api.markChatRead({ peer: "ow-entry", lastReadTs: now - 31 });
+
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    const unread = renderOutsource();
+    fireEvent.click(await unread.findByTestId("outsource-row-ow-entry"));
+    await unread.findByText("未讀內容");
+    const divider = unread.container.querySelector(".chat__unread-divider");
+    expect(divider?.nextElementSibling?.getAttribute("data-msg-id")).toBe(
+      "entry-unread",
+    );
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
+
+    unread.unmount();
+    __resetMock();
+    window.location.hash = "";
+    __injectMockTask(mkTask({ id: "t-read-entry", createdTs: 92 }));
+    __injectMockOutsourceWorker(
+      mkWorker({ id: "ow-read-entry", codename: "O-read", taskId: "t-read-entry" }),
+    );
+    __injectMockChat({
+      id: "read-last",
+      from: "ow-read-entry",
+      to: "owner",
+      body: "最後一筆",
+      ts: now - 20,
+      attachments: [],
+      replyCardId: null,
+    });
+    await api.markChatRead({ peer: "ow-read-entry", lastReadTs: now - 20 });
+    const read = renderOutsource();
+    fireEvent.click(await read.findByTestId("outsource-row-ow-read-entry"));
+    await read.findByText("最後一筆");
+    expect(read.container.querySelector(".chat__unread-divider")).toBeNull();
+    expect(scrollIntoView).toHaveBeenCalled();
+  });
+
   it("orders rows by the bound TASK's created_ts, newest first", async () => {
     const now = Date.now() / 1000;
     // Worker mint order is the REVERSE of the task creation order on purpose:
