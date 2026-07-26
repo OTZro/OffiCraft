@@ -61,7 +61,11 @@ path / query / body:
 3. **Non-GET routes**: the remaining keys are serialized as the JSON request body — an
    **empty object** `{}` when nothing remains (a body MUST always be sent for a write
    route). Keys are already wire aliases (§4.1), so DTO validation
-   sees them by alias.
+   sees them by alias. A mutable tool MUST reject an argument that is not declared by
+   its input schema with the loopback route's 422 validation envelope; it MUST NOT
+   silently discard the argument. This also applies to nested DTO objects. Explicit
+   free-form map fields remain open only where their schema declares
+   `additionalProperties`.
 
 ### 3.2 In-process loopback
 

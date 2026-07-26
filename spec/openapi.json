@@ -33,6 +33,7 @@
           "ts"
         ],
         "title": "AgentContextDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "AgentContextIngestDTO": {
@@ -52,6 +53,7 @@
           }
         },
         "title": "AgentContextIngestDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "AgentTelemetryDTO": {
@@ -229,6 +231,7 @@
           "ts"
         ],
         "title": "AgentTelemetryDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "AgentTelemetryIngestDTO": {
@@ -281,6 +284,7 @@
           }
         },
         "title": "AgentTelemetryIngestDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "AgentRuntime": {
@@ -319,6 +323,7 @@
           "id"
         ],
         "title": "AliasDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "AliasUpdateDTO": {
@@ -337,6 +342,7 @@
           }
         },
         "title": "AliasUpdateDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "AuthStatusDTO": {
@@ -351,6 +357,7 @@
           "password_set"
         ],
         "title": "AuthStatusDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "BootCommandResultDTO": {
@@ -390,6 +397,7 @@
           "claim_expires_in"
         ],
         "title": "BootCommandResultDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "BootstrapDTO": {
@@ -430,6 +438,7 @@
           "role"
         ],
         "title": "BootstrapDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "BootstrapRequestDTO": {
@@ -470,6 +479,7 @@
           }
         },
         "title": "BootstrapRequestDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "BootstrapResultDTO": {
@@ -499,6 +509,7 @@
           "log"
         ],
         "title": "BootstrapResultDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ChangePasswordDTO": {
@@ -519,6 +530,7 @@
           "new_password"
         ],
         "title": "ChangePasswordDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ChatAttachmentDTO": {
@@ -553,6 +565,7 @@
           "url"
         ],
         "title": "ChatAttachmentDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ChatAttachmentInputDTO": {
@@ -598,6 +611,7 @@
           }
         },
         "title": "ChatAttachmentInputDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ChatAttachmentShareLinkDTO": {
@@ -612,6 +626,7 @@
           "url"
         ],
         "title": "ChatAttachmentShareLinkDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ChatAttachmentUploadDTO": {
@@ -636,6 +651,7 @@
           "mime"
         ],
         "title": "ChatAttachmentUploadDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ChatGalleryEntryDTO": {
@@ -695,6 +711,7 @@
           "to"
         ],
         "title": "ChatGalleryEntryDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ChatMessageDTO": {
@@ -747,6 +764,7 @@
           "to"
         ],
         "title": "ChatMessageDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ChatPostDTO": {
@@ -778,6 +796,7 @@
           "to"
         ],
         "title": "ChatPostDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ChatReadDTO": {
@@ -802,6 +821,7 @@
           "peer_id"
         ],
         "title": "ChatReadDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ChatUnreadCountDTO": {
@@ -816,6 +836,7 @@
           "unread"
         ],
         "title": "ChatUnreadCountDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "DocDTO": {
@@ -840,6 +861,7 @@
           "markdown_md"
         ],
         "title": "DocDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "DocSummaryDTO": {
@@ -859,6 +881,7 @@
           "title"
         ],
         "title": "DocSummaryDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ErrorBodyDTO": {
@@ -878,6 +901,7 @@
           "message"
         ],
         "title": "ErrorBodyDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ErrorEnvelopeDTO": {
@@ -891,6 +915,7 @@
           "error"
         ],
         "title": "ErrorEnvelopeDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "GlobalContextDTO": {
@@ -924,6 +949,7 @@
           }
         },
         "title": "GlobalContextDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "GlobalContextReplaceDTO": {
@@ -944,6 +970,7 @@
           "text"
         ],
         "title": "GlobalContextReplaceDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "HealthDTO": {
@@ -956,6 +983,7 @@
           }
         },
         "title": "HealthDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "LessonsDTO": {
@@ -993,6 +1021,7 @@
           }
         },
         "title": "LessonsDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "LessonsEditDTO": {
@@ -1010,6 +1039,7 @@
           }
         },
         "title": "LessonsEditDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "LessonsPatchDTO": {
@@ -1032,6 +1062,7 @@
           "edits"
         ],
         "title": "LessonsPatchDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "LessonsPatchResultDTO": {
@@ -1079,6 +1110,7 @@
           }
         },
         "title": "LessonsPatchResultDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "LessonsReplaceDTO": {
@@ -1099,6 +1131,7 @@
           "text"
         ],
         "title": "LessonsReplaceDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "LoginDTO": {
@@ -1113,6 +1146,7 @@
           "password"
         ],
         "title": "LoginDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "MachineClaimDTO": {
@@ -1127,6 +1161,7 @@
           "code"
         ],
         "title": "MachineClaimDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "MachineClaimResultDTO": {
@@ -1151,6 +1186,7 @@
           "machine_id"
         ],
         "title": "MachineClaimResultDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "MachineDTO": {
@@ -1235,6 +1271,7 @@
           "machine_id"
         ],
         "title": "MachineDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "MachineDeleteResultDTO": {
@@ -1259,6 +1296,7 @@
           "member_id"
         ],
         "title": "MachineDeleteResultDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "MachineOnboardDTO": {
@@ -1284,6 +1322,7 @@
           "display_name"
         ],
         "title": "MachineOnboardDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "MachineOnboardResultDTO": {
@@ -1328,6 +1367,7 @@
           "claim_expires_in"
         ],
         "title": "MachineOnboardResultDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "MachineTeardownHereResultDTO": {
@@ -1362,6 +1402,7 @@
           "log"
         ],
         "title": "MachineTeardownHereResultDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "MachineUninstallResultDTO": {
@@ -1386,6 +1427,7 @@
           "member_id"
         ],
         "title": "MachineUninstallResultDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "MachineUpgradeResultDTO": {
@@ -1410,6 +1452,7 @@
           "member_id"
         ],
         "title": "MachineUpgradeResultDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "MarkChatReadDTO": {
@@ -1429,6 +1472,7 @@
           "peer"
         ],
         "title": "MarkChatReadDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "MemberActivateDTO": {
@@ -1447,6 +1491,7 @@
           }
         },
         "title": "MemberActivateDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "MemberDTO": {
@@ -1607,6 +1652,7 @@
           "name"
         ],
         "title": "MemberDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "MemberHireDTO": {
@@ -1677,6 +1723,7 @@
           "name"
         ],
         "title": "MemberHireDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "MemberRelocateDTO": {
@@ -1689,6 +1736,7 @@
           }
         },
         "title": "MemberRelocateDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "MemberUpdateDTO": {
@@ -1741,6 +1789,7 @@
           }
         },
         "title": "MemberUpdateDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "MintRequestDTO": {
@@ -1760,6 +1809,7 @@
           "ttl_days"
         ],
         "title": "MintRequestDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "MonitoringAccountDTO": {
@@ -1832,6 +1882,7 @@
           "account"
         ],
         "title": "MonitoringAccountDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "MonitoringDTO": {
@@ -1860,6 +1911,7 @@
           }
         },
         "title": "MonitoringDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "MonitoringMachineDTO": {
@@ -1990,6 +2042,7 @@
           "machine"
         ],
         "title": "MonitoringMachineDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "MonitoringSessionDTO": {
@@ -2104,6 +2157,7 @@
           "name"
         ],
         "title": "MonitoringSessionDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "MyTaskDTO": {
@@ -2129,6 +2183,7 @@
           "manual"
         ],
         "title": "MyTaskDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "OnboardingReportDTO": {
@@ -2162,6 +2217,7 @@
           "state"
         ],
         "title": "OnboardingReportDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "OnboardingStepDTO": {
@@ -2191,6 +2247,7 @@
           "name"
         ],
         "title": "OnboardingStepDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "OutsourceWorkerDTO": {
@@ -2395,6 +2452,7 @@
           "task_id"
         ],
         "title": "OutsourceWorkerDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "OutsourceWorkerModelDTO": {
@@ -2431,6 +2489,7 @@
           }
         },
         "title": "OutsourceWorkerModelDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "OutsourceWorkerRelocateDTO": {
@@ -2443,6 +2502,7 @@
           }
         },
         "title": "OutsourceWorkerRelocateDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ProbeVersionDTO": {
@@ -2467,6 +2527,7 @@
           "catalog_hash"
         ],
         "title": "ProbeVersionDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "PushPublicKeyDTO": {
@@ -2474,6 +2535,7 @@
         "properties": {"public_key": {"type": "string"}},
         "required": ["public_key"],
         "title": "PushPublicKeyDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "PushSubscriptionCreateDTO": {
@@ -2489,6 +2551,7 @@
         },
         "required": ["endpoint", "keys"],
         "title": "PushSubscriptionCreateDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "PushSubscriptionDeleteDTO": {
@@ -2496,6 +2559,7 @@
         "properties": {"endpoint": {"type": "string"}},
         "required": ["endpoint"],
         "title": "PushSubscriptionDeleteDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ReleaseCheckDTO": {
@@ -2537,6 +2601,7 @@
           "current_version"
         ],
         "title": "ReleaseCheckDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ReplyCardAnswerBriefDTO": {
@@ -2572,6 +2637,7 @@
           "option_idx"
         ],
         "title": "ReplyCardAnswerBriefDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ReplyCardAnswerDTO": {
@@ -2605,6 +2671,7 @@
           "option_idx"
         ],
         "title": "ReplyCardAnswerDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ReplyCardAnswerPostDTO": {
@@ -2636,6 +2703,7 @@
           }
         },
         "title": "ReplyCardAnswerPostDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ReplyCardCountDTO": {
@@ -2660,6 +2728,7 @@
           "expired"
         ],
         "title": "ReplyCardCountDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ReplyCardCreateDTO": {
@@ -2705,6 +2774,7 @@
           "options"
         ],
         "title": "ReplyCardCreateDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ReplyCardDTO": {
@@ -2815,6 +2885,7 @@
           "answer"
         ],
         "title": "ReplyCardDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ReplyCardListItemDTO": {
@@ -2901,6 +2972,7 @@
           "answer"
         ],
         "title": "ReplyCardListItemDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ReportWakingDTO": {
@@ -2919,6 +2991,7 @@
           }
         },
         "title": "ReportWakingDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "RestartSelfDTO": {
@@ -2937,6 +3010,7 @@
           }
         },
         "title": "RestartSelfDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ResumeOverviewDTO": {
@@ -2981,6 +3055,7 @@
           "cards_answered_recent"
         ],
         "title": "ResumeOverviewDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ResumeSummaryDTO": {
@@ -3021,6 +3096,7 @@
           }
         },
         "title": "ResumeSummaryDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ResumeSummarySizeDTO": {
@@ -3055,6 +3131,7 @@
           "overview"
         ],
         "title": "ResumeSummarySizeDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ResumeTaskDTO": {
@@ -3129,6 +3206,7 @@
           "detail_chars"
         ],
         "title": "ResumeTaskDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "RoleCreateDTO": {
@@ -3188,6 +3266,7 @@
           "name"
         ],
         "title": "RoleCreateDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "RoleCreateResultDTO": {
@@ -3205,6 +3284,7 @@
           "member"
         ],
         "title": "RoleCreateResultDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "RuntimeCapabilityDTO": {
@@ -3239,6 +3319,7 @@
           }
         },
         "title": "RuntimeCapabilityDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "RoleDefDTO": {
@@ -3283,6 +3364,7 @@
           "key"
         ],
         "title": "RoleDefDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "RoleDefUpdateDTO": {
@@ -3312,6 +3394,7 @@
           }
         },
         "title": "RoleDefUpdateDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "RoleDeleteResultDTO": {
@@ -3354,6 +3437,7 @@
           "role"
         ],
         "title": "RoleDeleteResultDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "SetPasswordDTO": {
@@ -3374,6 +3458,7 @@
           "claim_token"
         ],
         "title": "SetPasswordDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "SettingsDTO": {
@@ -3470,6 +3555,7 @@
           "handover_pct"
         ],
         "title": "SettingsDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "SettingsUpdateDTO": {
@@ -3628,6 +3714,7 @@
         },
         "required": [],
         "title": "SettingsUpdateDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskArtifactDTO": {
@@ -3687,6 +3774,7 @@
           "kind"
         ],
         "title": "TaskArtifactDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskArtifactInputDTO": {
@@ -3737,6 +3825,7 @@
           "kind"
         ],
         "title": "TaskArtifactInputDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskCountDTO": {
@@ -3751,6 +3840,7 @@
           "open"
         ],
         "title": "TaskCountDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskCreateDTO": {
@@ -3831,6 +3921,7 @@
           "title"
         ],
         "title": "TaskCreateDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskCreateResultDTO": {
@@ -3863,6 +3954,7 @@
           "deduped"
         ],
         "title": "TaskCreateResultDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskCreateTargetDTO": {
@@ -3926,6 +4018,7 @@
           "kind"
         ],
         "title": "TaskCreateTargetDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskDTO": {
@@ -4101,6 +4194,7 @@
           "progress_total"
         ],
         "title": "TaskDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskDepsDTO": {
@@ -4118,6 +4212,7 @@
           "blocked_by"
         ],
         "title": "TaskDepsDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskLearningsPatchDTO": {
@@ -4140,6 +4235,7 @@
           "edits"
         ],
         "title": "TaskLearningsPatchDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskLearningsPatchResultDTO": {
@@ -4167,6 +4263,7 @@
           }
         },
         "title": "TaskLearningsPatchResultDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskLearningsReplaceDTO": {
@@ -4187,6 +4284,7 @@
           "text"
         ],
         "title": "TaskLearningsReplaceDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskListItemDTO": {
@@ -4318,6 +4416,7 @@
           "progress_total"
         ],
         "title": "TaskListItemDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskManualCreateDTO": {
@@ -4362,6 +4461,7 @@
           }
         },
         "title": "TaskManualCreateDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskManualDTO": {
@@ -4416,6 +4516,7 @@
           "display_name"
         ],
         "title": "TaskManualDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskManualDeleteResultDTO": {
@@ -4435,6 +4536,7 @@
           "deleted"
         ],
         "title": "TaskManualDeleteResultDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskManualFieldDTO": {
@@ -4459,6 +4561,7 @@
           "name"
         ],
         "title": "TaskManualFieldDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskManualUpdateDTO": {
@@ -4542,6 +4645,7 @@
           }
         },
         "title": "TaskManualUpdateDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskMarkDuplicateDTO": {
@@ -4556,6 +4660,7 @@
           "duplicate_of"
         ],
         "title": "TaskMarkDuplicateDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskMessageDTO": {
@@ -4588,6 +4693,7 @@
           }
         },
         "title": "TaskMessageDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskPlanDTO": {
@@ -4605,6 +4711,7 @@
           "steps"
         ],
         "title": "TaskPlanDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskPlanStepDTO": {
@@ -4648,6 +4755,7 @@
           "dod"
         ],
         "title": "TaskPlanStepDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskPriorityUpdateDTO": {
@@ -4662,6 +4770,7 @@
           "priority"
         ],
         "title": "TaskPriorityUpdateDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskReassignDTO": {
@@ -4687,6 +4796,7 @@
           "target"
         ],
         "title": "TaskReassignDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskReassignTargetDTO": {
@@ -4762,6 +4872,7 @@
           "kind"
         ],
         "title": "TaskReassignTargetDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskRefDTO": {
@@ -4786,6 +4897,7 @@
           "id"
         ],
         "title": "TaskRefDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskStepDTO": {
@@ -4861,6 +4973,7 @@
           "status"
         ],
         "title": "TaskStepDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TaskStepStatusUpdateDTO": {
@@ -4898,6 +5011,7 @@
           "status"
         ],
         "title": "TaskStepStatusUpdateDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "ThemeBundleDTO": {
@@ -4966,6 +5080,7 @@
           "colors"
         ],
         "title": "ThemeBundleDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "TokenDTO": {
@@ -4995,6 +5110,7 @@
           "owner_id"
         ],
         "title": "TokenDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "UpgradeResultDTO": {
@@ -5014,6 +5130,7 @@
           "target_version"
         ],
         "title": "UpgradeResultDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "VersionDTO": {
@@ -5065,6 +5182,7 @@
           "catalog_hash"
         ],
         "title": "VersionDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "WebhookCreateDTO": {
@@ -5120,6 +5238,7 @@
           "endpoint_id"
         ],
         "title": "WebhookCreateDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "WebhookEndpointDTO": {
@@ -5198,6 +5317,7 @@
           "token"
         ],
         "title": "WebhookEndpointDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "WebhookRequestLogDTO": {
@@ -5232,6 +5352,7 @@
           "truncated"
         ],
         "title": "WebhookRequestLogDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "WebhookUpdateDTO": {
@@ -5274,6 +5395,7 @@
           }
         },
         "title": "WebhookUpdateDTO",
+        "additionalProperties": false,
         "type": "object"
       },
       "WorkerBootContextDTO": {
@@ -5288,6 +5410,7 @@
           "context"
         ],
         "title": "WorkerBootContextDTO",
+        "additionalProperties": false,
         "type": "object"
       }
     }

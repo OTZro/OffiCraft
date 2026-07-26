@@ -84,6 +84,7 @@
         "required": [
           "name"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "hire_member"
@@ -166,6 +167,7 @@
         "required": [
           "member_id"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "update_member"
@@ -193,6 +195,7 @@
         "required": [
           "member_id"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "activate_member"
@@ -220,6 +223,7 @@
         "required": [
           "member_id"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "relocate_member"
@@ -235,6 +239,7 @@
         "required": [
           "member_id"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "deactivate_member"
@@ -250,6 +255,7 @@
         "required": [
           "member_id"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "force_stop_member"
@@ -271,6 +277,7 @@
             "title": "Model"
           }
         },
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "report_waking"
@@ -279,6 +286,7 @@
       "description": "report_stopping(): stamp the caller's stopping_since (graceful stop).",
       "inputSchema": {
         "properties": {},
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "report_stopping"
@@ -287,6 +295,7 @@
       "description": "report_stopped(): anchor the caller's stopped; fire recycle kill.",
       "inputSchema": {
         "properties": {},
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "report_stopped"
@@ -308,6 +317,7 @@
             "title": "Reason"
           }
         },
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "restart_self"
@@ -323,6 +333,7 @@
         "required": [
           "member_id"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "refocus_member"
@@ -338,6 +349,7 @@
         "required": [
           "member_id"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "dismiss_member"
@@ -421,6 +433,7 @@
         "required": [
           "to"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "post_chat"
@@ -475,6 +488,7 @@
         "required": [
           "peer"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "post_chat_mark-read"
@@ -584,6 +598,7 @@
           "summary",
           "options"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "create_reply_card"
@@ -655,6 +670,7 @@
             "type": "object"
           }
         },
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "ingest_agent_context"
@@ -712,6 +728,7 @@
             "title": "Tokens"
           }
         },
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "ingest_telemetry"
@@ -747,6 +764,7 @@
         "required": [
           "account_id"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "update_account"
@@ -774,6 +792,7 @@
         "required": [
           "machine_id"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "update_machine"
@@ -797,6 +816,7 @@
         "required": [
           "member_id"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "uninstall_machine"
@@ -812,6 +832,7 @@
         "required": [
           "member_id"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "delete_machine"
@@ -842,6 +863,7 @@
         "required": [
           "text"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "replace_global_context"
@@ -850,6 +872,7 @@
       "description": "Reset the user-custom block to empty (idempotent tombstone).",
       "inputSchema": {
         "properties": {},
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "reset_global_context"
@@ -926,6 +949,7 @@
         "required": [
           "name"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "create_role"
@@ -980,6 +1004,7 @@
         "required": [
           "role"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "update_role"
@@ -995,6 +1020,7 @@
         "required": [
           "role"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "reset_role"
@@ -1010,6 +1036,7 @@
         "required": [
           "role"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "delete_role"
@@ -1059,6 +1086,7 @@
           "task_type",
           "text"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "replace_lessons"
@@ -1104,6 +1132,7 @@
           "task_type",
           "edits"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "patch_lessons"
@@ -1306,6 +1335,7 @@
         "required": [
           "title"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "create_task"
@@ -1341,6 +1371,7 @@
           "task_id",
           "priority"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "set_task_priority"
@@ -1402,6 +1433,7 @@
           "task_id",
           "steps"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "submit_plan"
@@ -1422,6 +1454,7 @@
           "task_id",
           "duplicate_of"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "mark_duplicate"
@@ -1476,6 +1509,7 @@
           "step_id",
           "status"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "update_step_status"
@@ -1575,6 +1609,7 @@
           "summary",
           "options"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "open_gate"
@@ -1598,6 +1633,7 @@
           "task_id",
           "blocked_by"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "set_task_deps"
@@ -1613,6 +1649,7 @@
         "required": [
           "task_id"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "report_task_closeout"
@@ -1717,6 +1754,7 @@
           "task_id",
           "target"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "reassign_task"
@@ -1732,6 +1770,7 @@
         "required": [
           "task_id"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "claim_task"
@@ -1788,6 +1827,7 @@
           "task_id",
           "kind"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "add_task_artifact"
@@ -1807,6 +1847,7 @@
           "task_id",
           "artifact_id"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "remove_task_artifact"
@@ -1877,6 +1918,7 @@
             "title": "Type Key"
           }
         },
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "create_task_manual"
@@ -1990,6 +2032,7 @@
         "required": [
           "type_key"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "update_task_manual"
@@ -2016,6 +2059,7 @@
           "type_key",
           "text"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "write_task_learnings"
@@ -2057,6 +2101,7 @@
           "type_key",
           "edits"
         ],
+        "additionalProperties": false,
         "type": "object"
       },
       "name": "patch_task_learnings"

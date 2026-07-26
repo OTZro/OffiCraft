@@ -223,6 +223,25 @@ func TestToolsCallWithoutLoopbackIsHonest32603(t *testing.T) {
 	}
 }
 
+func TestToolsCallRejectsUnknownMutableArguments(t *testing.T) {
+	srv, secret, _ := newWiredTestServer(t)
+	ownerTok, _ := mintJWT("owner", "owner", 300, secret, time.Now().Unix(), "")
+
+	payload := postMCP(t, srv.URL, ownerTok,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_task","arguments":{"title":"must not be created","typo":"must not disappear"}}}`)
+	result, ok := payload["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("unknown mutable argument must reach the route as a result: %v", payload)
+	}
+	if result["isError"] != true {
+		t.Fatalf("unknown mutable argument must be refused: %v", result)
+	}
+	structured, ok := result["structuredContent"].(map[string]any)
+	if !ok || structured["error"].(map[string]any)["code"] != "validation_error" {
+		t.Fatalf("MCP must preserve the REST 422 validation envelope: %v", result)
+	}
+}
+
 // TestToolsCallRelocateMemberMovesWorker (P7c, gate rc-2786636f30e5 外包對齊正職):
 // the MCP channel for moving a worker is the EXISTING relocate_member tool —
 // its member_id argument also accepts a worker id, and the handler falls

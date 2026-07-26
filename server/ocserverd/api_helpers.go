@@ -61,59 +61,25 @@ func (s *apiServer) principalOfRequest(r *http.Request) string {
 
 // ── body decoding (the wire-frozen validation_error face) ────────────────────
 
-// decodeJSONBody decodes the request body into dst, answering the
-// validation_error envelope on failure. Missing/empty bodies decode the zero
-// value (all-optional DTO semantics, frozen from the original wire); a
-// malformed JSON body or a type mismatch is a 422 (validation source). Returns false
-// when the response was already written.
+// decodeJSONBody decodes a mutable request body into dst, answering the
+// validation_error envelope on failure. Unknown fields are refused instead of
+// being silently discarded: every API write and its MCP loopback must have the
+// same fail-closed typo behaviour. Missing/empty bodies still decode the zero
+// value (all-optional DTO semantics). Returns false when the response was
+// already written.
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
-	raw, err := io.ReadAll(r.Body)
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "could not read request body")
-		return false
-	}
-	if len(raw) == 0 {
-		return true
-	}
-	if err := json.Unmarshal(raw, dst); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "invalid request body: "+err.Error())
-		return false
-	}
-	return true
+	return decodeJSONBodyStrict(w, r, dst)
 }
 
 // decodeJSONBodyRequired decodes like decodeJSONBody and then 422s when any of
 // the named top-level keys is absent — the Pydantic required-field face (Go
 // structs cannot tell a missing key from a zero value).
 func decodeJSONBodyRequired(w http.ResponseWriter, r *http.Request, dst any, required ...string) bool {
-	raw, err := io.ReadAll(r.Body)
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "could not read request body")
-		return false
-	}
-	var keys map[string]json.RawMessage
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &keys); err != nil {
-			writeError(w, http.StatusUnprocessableEntity, "invalid request body: "+err.Error())
-			return false
-		}
-		if err := json.Unmarshal(raw, dst); err != nil {
-			writeError(w, http.StatusUnprocessableEntity, "invalid request body: "+err.Error())
-			return false
-		}
-	}
-	for _, name := range required {
-		if _, ok := keys[name]; !ok {
-			writeError(w, http.StatusUnprocessableEntity, "field required: "+name)
-			return false
-		}
-	}
-	return true
+	return decodeJSONBodyStrict(w, r, dst, required...)
 }
 
-// decodeJSONBodyStrict is the DESTRUCTIVE-WRITE decoder (T-2d99). It differs
-// from decodeJSONBody in two ways that exist solely to stop a malformed
-// request from masquerading as a valid one:
+// decodeJSONBodyStrict is the shared mutable-request decoder. It has two
+// properties that stop a malformed request from masquerading as a valid one:
 //
 //  1. DisallowUnknownFields — any key the DTO does not declare is a 422, not a
 //     silent drop. This is the single highest-leverage guard: the observed data
