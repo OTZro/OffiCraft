@@ -150,7 +150,7 @@ export interface ReplyCardAnswer {
  * One reply card (等我回覆卡) in view-model form. `status` is the closed set
  * `waiting` | `answered` | `expired` — the only transitions are
  * waiting→answered via an answer (the owner's positive close; no generic
- * close/skip surface anywhere) and waiting→expired via the owner-only expire
+ * close/skip surface anywhere) and waiting→expired via the owner/admin-agent expire
  * action (標為過期 — NOT an answer; terminal, no reopen); a revised answer
  * (重新決定) keeps `answered`. `options[0]` is ALWAYS the AI's own
  * recommendation. `chatMessageId` links the chat message the card rides in —
@@ -920,7 +920,7 @@ export interface Api {
    * (`DELETE /api/members/{id}/webhooks/{endpointId}`) — the token dies. */
   deleteWebhook(memberId: string, endpointId: string): Promise<void>;
   /** The endpoint's /in debug ring buffer, newest first (last 5 raw requests;
-   * `GET /api/members/{id}/webhooks/{endpointId}/requests`, owner-only). */
+   * `GET /api/members/{id}/webhooks/{endpointId}/requests`, owner/admin-agent). */
   listWebhookRequests(
     memberId: string,
     endpointId: string,
@@ -1040,7 +1040,7 @@ export interface Api {
   ): Promise<ReplyCard>;
   /**
    * Mark a WAITING card expired (`POST /api/reply-cards/{id}/expire` — 標為過期,
-   * the owner-only terminal exit that is NOT an answer). No body, no undo, no
+   * the owner/admin-agent terminal exit that is NOT an answer). No body, no undo, no
    * reopen; answered/expired → 409, unknown id → 404 (thrown as ApiError). The
    * server releases any bound task/step hold exactly like a first answer — an
    * orphaned card on a closed task is still expirable (its only exit). Returns
@@ -1146,29 +1146,29 @@ export interface Api {
    * or "" (clear the pin). Returns the freshly-projected
    * worker; the caller can also lean on the outsource_worker SSE refetch. (T-f190) */
   relocateWorker(id: string, machineId: string): Promise<OutsourceWorkerView>;
-  /** Refocus a worker (`POST /api/outsource-workers/{id}/refocus`, owner-only) —
+  /** Refocus a worker (`POST /api/outsource-workers/{id}/refocus`, owner/admin-agent) —
    * the cockpit's 換手, the worker twin of refocusMember. Kills the current
    * session and re-spawns a fresh worker onto the SAME task. ONLINE-ONLY (409
    * otherwise); stopped → 409; unknown/released → 404. Returns the freshly
    * projected worker. (T-32e1) */
   refocusWorker(id: string): Promise<OutsourceWorkerView>;
-  /** Stop a worker (`POST /api/outsource-workers/{id}/stop`, owner-only) — kill
+  /** Stop a worker (`POST /api/outsource-workers/{id}/stop`, owner/admin-agent) — kill
    * the session and hold it down (presence "stopping"/"stopped"); no auto-revival. The
    * bound task stays put. Idempotent; unknown/released → 404. (T-f190) */
   stopWorker(id: string): Promise<OutsourceWorkerView>;
   /** Restart a stopped worker (`POST /api/outsource-workers/{id}/restart`,
-   * owner-only) — clear the stop and re-dispatch. 409 if not stopped;
+   * owner/admin-agent) — clear the stop and re-dispatch. 409 if not stopped;
    * unknown/released → 404. (T-f190) */
   restartWorker(id: string): Promise<OutsourceWorkerView>;
   /** Change a worker's model/effort (`POST /api/outsource-workers/{id}/model`,
-   * owner-only) — active+online → kill+respawn to take effect now, otherwise
+   * owner/admin-agent) — active+online → kill+respawn to take effect now, otherwise
    * persist for the next spawn. Returns the freshly projected worker. (T-f190) */
   setWorkerModel(
     id: string,
     patch: { runtime?: "claude" | "codex"; model: string; effort?: string },
   ): Promise<OutsourceWorkerView>;
   /** Read a worker's boot-context PREVIEW (`GET
-   * /api/outsource-workers/{id}/boot-context`, owner-only) — the worker twin
+   * /api/outsource-workers/{id}/boot-context`, owner/admin-agent) — the worker twin
    * of getBootstrap's role preview: the server re-assembles the persona text
    * (seed + identity + bound task + manual) from the CURRENT DB rows, no
    * token. HONEST: today's re-assembly, not a verbatim spawn-time record.
@@ -1263,7 +1263,7 @@ export interface Api {
 
   /**
    * UPGRADE a machine's binaries NOW (`POST /api/machines/{member_id}/upgrade`,
-   * T-5f01, owner-only) — the one-click face of the machine table's "stale"
+   * T-5f01, owner/admin-agent) — the one-click face of the machine table's "stale"
    * verdict. Fire-and-forget: the server enqueues the `update` warden-command
    * onto the machine's live SSE downstream and the warden kicks its own
    * self-update reconcile (download + verify + atomic swap); nothing durable
@@ -1288,7 +1288,7 @@ export interface Api {
   getMachineBootCommand(machineId: string): Promise<string>;
   /**
    * Install THIS machine's warden on the SERVER host in one click (`POST
-   * /api/machines/{machineId}/bootstrap-here`, owner-only). A HOST-mutating action
+   * /api/machines/{machineId}/bootstrap-here`, owner/admin-agent). A HOST-mutating action
    * — the caller CONFIRMS first (like teardown). Returns the view result:
    * `ok` + `exitCode` + `log`. On `ok === false` the `log` carries the reason
    * (e.g. the one-warden guard message); the caller MUST surface it (never
@@ -1298,7 +1298,7 @@ export interface Api {
   bootstrapOnServer(machineId: string): Promise<BootstrapResultView>;
   /**
    * Tear THIS machine's warden down on the SERVER host in one click (`POST
-   * /api/machines/{machineId}/teardown-here`, owner-only). The symmetric inverse of
+   * /api/machines/{machineId}/teardown-here`, owner/admin-agent). The symmetric inverse of
    * `bootstrapOnServer`. A HOST-mutating action — the caller CONFIRMS first. Returns
    * the view result: `ok` + `exitCode` + `log` + `removed`. CONFIRM-THEN-REMOVE: the
    * warden member is soft-deleted server-side ONLY when the daemon is confirmed torn

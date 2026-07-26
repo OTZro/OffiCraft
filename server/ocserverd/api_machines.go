@@ -756,7 +756,8 @@ func (s *apiServer) resolveOcwardenBinaryFrom(embedded fs.FS) (string, error) {
 }
 
 // POST /api/machines/{machine_id}/bootstrap-here — install this machine's
-// warden ON THE SERVER HOST (owner-only on the route table). A non-zero exit
+// warden ON THE SERVER HOST (requires=admin_agent on the route table since
+// T-6020; a plain agent is a flat 403). A non-zero exit
 // is NOT an HTTP error: ok=false with the log surfaced.
 func (s *apiServer) HandleBootstrapHereApiMachinesMachineIdBootstrapHerePost(w http.ResponseWriter, r *http.Request, machineId string) {
 	machine, err := s.resolveMachine(machineId)
@@ -844,7 +845,7 @@ func (s *apiServer) runWardenTeardownHere(binPath string) (int, string, bool) {
 }
 
 // POST /api/machines/{machine_id}/teardown-here — tear the warden down ON THE
-// SERVER HOST (owner-only). CONFIRM-THEN-REMOVE: the member is soft-deleted
+// SERVER HOST (requires=admin_agent since T-6020). CONFIRM-THEN-REMOVE: the member is soft-deleted
 // ONLY on a confirmed teardown (exit 0).
 func (s *apiServer) HandleTeardownHereApiMachinesMachineIdTeardownHerePost(w http.ResponseWriter, r *http.Request, machineId string) {
 	machine, err := s.resolveMachine(machineId)

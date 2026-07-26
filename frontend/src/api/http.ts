@@ -784,7 +784,7 @@ export const httpApi: Api = {
 
   async expireReplyCard(id: string): Promise<ReplyCard> {
     // POST /api/reply-cards/{card_id}/expire -> ReplyCardDTO (標為過期 — the
-    // owner-only terminal exit that is NOT an answer; no body). answered /
+    // owner/admin-agent terminal exit that is NOT an answer; no body). answered /
     // already-expired → 409, unknown id → 404 (ApiError via middleware).
     const wire = unwrap(
       await client.POST("/api/reply-cards/{card_id}/expire", {
@@ -962,7 +962,7 @@ export const httpApi: Api = {
   },
 
   async refocusWorker(id: string): Promise<OutsourceWorkerView> {
-    // POST /api/outsource-workers/{id}/refocus -> OutsourceWorkerDTO (owner-only,
+    // POST /api/outsource-workers/{id}/refocus -> OutsourceWorkerDTO (owner/admin-agent,
     // online-only 409). Graceful (T-ea82): stamps the handover + nudges the worker
     // to flush (~120s grace), then the server kills+re-spawns a fresh worker on the
     // same task; the outsource_worker SSE delta also fans so the list refetches.
@@ -975,7 +975,7 @@ export const httpApi: Api = {
   },
 
   async stopWorker(id: string): Promise<OutsourceWorkerView> {
-    // POST /api/outsource-workers/{id}/stop -> OutsourceWorkerDTO (owner-only).
+    // POST /api/outsource-workers/{id}/stop -> OutsourceWorkerDTO (owner/admin-agent).
     // Kills the session and holds the worker down (presence "stopping"/"stopped").
     const wire = unwrap(
       await client.POST("/api/outsource-workers/{id}/stop", {
@@ -986,7 +986,7 @@ export const httpApi: Api = {
   },
 
   async restartWorker(id: string): Promise<OutsourceWorkerView> {
-    // POST /api/outsource-workers/{id}/restart -> OutsourceWorkerDTO (owner-only,
+    // POST /api/outsource-workers/{id}/restart -> OutsourceWorkerDTO (owner/admin-agent,
     // 409 if not stopped). Clears the stop and re-dispatches.
     const wire = unwrap(
       await client.POST("/api/outsource-workers/{id}/restart", {
@@ -1005,7 +1005,7 @@ export const httpApi: Api = {
     },
   ): Promise<OutsourceWorkerView> {
     // POST /api/outsource-workers/{id}/model {model, effort?} -> OutsourceWorkerDTO
-    // (owner-only). Active+online → kill+respawn now; otherwise persist for the
+    // (owner/admin-agent). Active+online → kill+respawn now; otherwise persist for the
     // next spawn. model is always sent (blank ⇒ launcher default); effort only
     // when supplied (an absent field must not arrive as null).
     const body: {
@@ -1026,7 +1026,7 @@ export const httpApi: Api = {
 
   async getWorkerBootContext(id: string): Promise<string> {
     // GET /api/outsource-workers/{id}/boot-context -> WorkerBootContextDTO
-    // (owner-only). The server re-runs the spawn fold over the CURRENT rows;
+    // (owner/admin-agent). The server re-runs the spawn fold over the CURRENT rows;
     // no token rides the response (a UI preview mints none).
     const wire = unwrap(
       await client.GET("/api/outsource-workers/{id}/boot-context", {
@@ -1243,7 +1243,7 @@ export const httpApi: Api = {
   async bootstrapOnServer(machineId: string): Promise<BootstrapResultView> {
     // POST /api/machines/{machine_id}/bootstrap-here -> BootstrapResultDTO
     // {machine_id, ok, exit_code, log}. Installs THIS machine's warden on the
-    // server host in one click (owner-only). A non-2xx (transport/gate) throws
+    // server host in one click (owner/admin-agent). A non-2xx (transport/gate) throws
     // via the client; an install that RAN but failed returns ok=false with the
     // reason in `log` (the caller surfaces it, never swallows).
     const wire = unwrap(
@@ -1257,7 +1257,7 @@ export const httpApi: Api = {
   async teardownOnServer(machineId: string): Promise<TeardownHereResultView> {
     // POST /api/machines/{machine_id}/teardown-here -> TeardownHereResultDTO
     // {machine_id, ok, exit_code, log, removed}. Tears THIS machine's warden down on
-    // the server host in one click (owner-only). A non-2xx (transport/gate) throws
+    // the server host in one click (owner/admin-agent). A non-2xx (transport/gate) throws
     // via the client; a teardown that RAN but failed returns ok=false with the reason
     // in `log` and removed=false (the daemon was NOT confirmed torn down, so the
     // member row is kept — the caller surfaces the log, never swallows it).

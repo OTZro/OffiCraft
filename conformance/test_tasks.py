@@ -22,8 +22,9 @@ the happy shapes; this file pins the BEHAVIOUR the M3 contract promises:
   * manual authorship split (owner ruling 2026-07-13): agents CREATE manuals
     and edit the CONTENT fields (purpose / fields / sop_md / learnings) —
     also via the MCP tools create_task_manual / update_task_manual — while
-    the ASSIGNEE face stays owner-only governance (an agent supplying
-    `assignee` on create or edit is a flat 403) and delete stays owner-only;
+    the ASSIGNEE face stays GOVERNANCE — floor admin_agent since T-6020, so a
+    PLAIN agent supplying `assignee` on create or edit is a flat 403 — and
+    delete is likewise admin_agent;
   * the worker claim faces reachable black-box: a plain member 404s, a warden
     (below the agent floor) 403s — the positive claim needs the Phase 2
     scheduler and is pinned in the server unit tests (api_tasks_test.go).
@@ -924,7 +925,8 @@ def test_manual_crud_and_delete_guard(client, owner_token, executor):
 
 
 # ── manual authorship split (owner ruling 2026-07-13) ────────────────────────
-# Agents author manual CONTENT; the assignee face + delete stay owner-only.
+# Agents author manual CONTENT; the assignee face + delete are governance
+# (owner / admin_agent — T-6020), so a plain agent is a flat 403 on both.
 
 
 def test_agent_creates_manual_and_edits_content_fields(client, executor):
@@ -954,6 +956,9 @@ def test_agent_creates_manual_and_edits_content_fields(client, executor):
 def test_agent_supplied_assignee_is_403_on_create_and_edit(
     client, owner_token, executor
 ):
+    """Sentinel: the T-6020 opening of the assignee gate stops at admin_agent —
+    a PLAIN agent is still a flat 403 on both faces, and the refused call writes
+    nothing."""
     assignee = {"kind": "member", "member_id": executor.member_id}
     # Create carrying assignee → 403, and the manual is NOT created.
     type_key = f"conf-gov-type-{uuid.uuid4().hex[:8]}"
@@ -981,6 +986,36 @@ def test_agent_supplied_assignee_is_403_on_create_and_edit(
                     json={"type_key": owner_type, "assignee": assignee},
                     headers=_auth(owner_token))
     assert r.status_code == 200 and r.json()["assignee"]["kind"] == "member"
+
+
+def test_admin_agent_may_set_a_manual_assignee(
+    client, owner_token, executor, admin_agent
+):
+    """T-6020 (owner ruling 2026-07-26): the assignee gate's floor moved from
+    owner to admin_agent, so the admin 助理 sets who executes a task type on
+    BOTH faces — create and edit."""
+    assignee = {"kind": "member", "member_id": executor.member_id}
+    type_key = f"conf-adm-type-{uuid.uuid4().hex[:8]}"
+    r = client.post("/api/task-manuals",
+                    json={"type_key": type_key, "assignee": assignee},
+                    headers=_auth(admin_agent.token))
+    assert r.status_code == 200, f"admin create+assignee: {r.status_code} {r.text}"
+    assert r.json()["assignee"]["member_id"] == executor.member_id, r.text
+    existing = _new_manual(client, owner_token)
+    r = client.post(f"/api/task-manuals/{existing}",
+                    json={"assignee": assignee}, headers=_auth(admin_agent.token))
+    assert r.status_code == 200, f"admin edit+assignee: {r.status_code} {r.text}"
+    assert r.json()["assignee"]["member_id"] == executor.member_id, r.text
+
+
+def test_admin_agent_may_delete_a_manual(client, owner_token, admin_agent):
+    """T-6020: DELETE /api/task-manuals/{type_key} dropped to the admin floor."""
+    type_key = _new_manual(client, owner_token)
+    r = client.delete(f"/api/task-manuals/{type_key}",
+                      headers=_auth(admin_agent.token))
+    assert r.status_code == 200, f"{r.status_code} {r.text}"
+    assert client.get(f"/api/task-manuals/{type_key}",
+                      headers=_auth(owner_token)).status_code == 404
 
 
 def test_agent_delete_manual_is_403(client, owner_token, executor):
@@ -1057,11 +1092,13 @@ def test_foreign_agent_cannot_drive_anothers_task(client, owner_token, executor)
 # ── set_task_priority (T-0786) ───────────────────────────────────────────────
 
 
-def test_executor_retunes_priority_and_frozen_stays_owner_only(
-    client, owner_token, executor
-):
-    """T-0786: the executor sets high|mid|low on their OWN task; the frozen
-    knob (set OR clear — leaving frozen is unfreezing) stays owner-only."""
+def test_executor_freezes_and_unfreezes_symmetrically(client, owner_token, executor):
+    """T-0786 + T-6020 (owner ruling 2026-07-26): the executor retunes their OWN
+    task, AND may freeze it and take it back out again. The symmetry is the
+    assertion — the pre-T-6020 wire refused both to everyone but the owner, and
+    a one-sided opening would strand the executor holding a task only the owner
+    could restart. The freezer is recorded in `frozen_by` so a frozen ticket
+    still says whose 喊停 it was, and the field clears on the way out."""
     task = _create_task(client, executor)["task"]
 
     def _priority(token, value):
@@ -1072,20 +1109,76 @@ def test_executor_retunes_priority_and_frozen_stays_owner_only(
         r = _priority(executor.token, value)
         assert r.status_code == 200, f"{r.status_code} {r.text}"
         assert r.json()["priority"] == value
-    # The executor freezing → 403.
+        assert r.json()["frozen_by"] == "", r.text
+    # The executor freezes its own task — and is named as the freezer.
     r = _priority(executor.token, "frozen")
-    assert r.status_code == 403, f"{r.status_code} {r.text}"
-    # The owner freezes; the executor may not unfreeze; the owner may.
-    assert _priority(owner_token, "frozen").status_code == 200
+    assert r.status_code == 200, f"{r.status_code} {r.text}"
+    assert r.json()["priority"] == "frozen", r.text
+    assert r.json()["frozen_by"] == executor.member_id, (
+        f"frozen_by must name the executor that froze it: {r.text}"
+    )
+    # … and unfreezes it itself (the symmetry), which clears the attribution.
     r = _priority(executor.token, "high")
-    assert r.status_code == 403, f"{r.status_code} {r.text}"
-    assert _priority(owner_token, "mid").status_code == 200
+    assert r.status_code == 200, f"{r.status_code} {r.text}"
+    assert r.json()["frozen_by"] == "", r.text
+    # The owner's own freeze is attributed to the owner, and the executor may
+    # cross it — one shared knob, not two per-actor knobs.
+    r = _priority(owner_token, "frozen")
+    assert r.status_code == 200, f"{r.status_code} {r.text}"
+    assert r.json()["frozen_by"] == "owner", r.text
+    assert _priority(executor.token, "mid").status_code == 200
+
+
+def test_admin_agent_freezes_a_task_it_does_not_execute(
+    client, owner_token, executor, admin_agent
+):
+    """T-6020: the admin 助理 may freeze/unfreeze ANY task (it passes the
+    executor guard by capability), and is named in `frozen_by` so the owner can
+    tell an agent's 喊停 from their own."""
+    task = _create_task(client, executor)["task"]
+
+    def _priority(token, value):
+        return client.post(f"/api/tasks/{task['id']}/priority",
+                           json={"priority": value}, headers=_auth(token))
+
+    r = _priority(admin_agent.token, "frozen")
+    assert r.status_code == 200, f"{r.status_code} {r.text}"
+    assert r.json()["frozen_by"] == admin_agent.member_id, r.text
+    r = _priority(admin_agent.token, "low")
+    assert r.status_code == 200, f"{r.status_code} {r.text}"
+    assert r.json()["frozen_by"] == "", r.text
+
+
+def test_foreign_agent_still_cannot_freeze(client, owner_token, executor):
+    """T-6020 sentinel: opening `frozen` to {owner, admin_agent, executor} must
+    NOT have opened it to every agent. A plain agent that executes nothing is
+    refused on the freeze AND on the unfreeze of somebody else's freeze — and
+    the refused calls change nothing."""
+    task = _create_task(client, executor)["task"]
+    intruder_id = hire_member(client, owner_token, "conf-freeze-intruder")
+    intruder = mint_member_token(client, owner_token, intruder_id, ttl_days=1)
+
+    def _priority(token, value):
+        return client.post(f"/api/tasks/{task['id']}/priority",
+                           json={"priority": value}, headers=_auth(token))
+
+    r = _priority(intruder, "frozen")
+    assert r.status_code == 403, f"foreign agent freeze: {r.status_code} {r.text}"
+    assert _priority(executor.token, "frozen").status_code == 200
+    r = _priority(intruder, "high")
+    assert r.status_code == 403, f"foreign agent unfreeze: {r.status_code} {r.text}"
+    r = client.get(f"/api/tasks/{task['id']}", headers=_auth(owner_token))
+    assert r.status_code == 200, r.text
+    assert r.json()["priority"] == "frozen", r.text
+    assert r.json()["frozen_by"] == executor.member_id, (
+        f"a refused call must not rewrite the attribution: {r.text}"
+    )
 
 
 def test_set_task_priority_via_mcp_loopback(client, executor):
     """The MCP face of the same capability: set_task_priority rides the
     loopback with the EXECUTOR's own token; get_task reads the change back;
-    the frozen refusal surfaces as an isError result (403 envelope)."""
+    the frozen set succeeds and carries its attribution (T-6020)."""
     task = _create_task(client, executor)["task"]
 
     def _call(id_, tool, arguments):
@@ -1105,11 +1198,13 @@ def test_set_task_priority_via_mcp_loopback(client, executor):
     assert r.status_code == 200, f"{r.status_code} {r.text}"
     assert r.json()["result"]["structuredContent"]["priority"] == "high"
 
+    # T-6020: the executor freezing over MCP is now a SUCCESS, attributed.
     r = _call(3, "set_task_priority", {"task_id": task["id"], "priority": "frozen"})
     assert r.status_code == 200, f"{r.status_code} {r.text}"
     result = r.json()["result"]
-    assert result["isError"] is True, "executor freezing over MCP must 403"
-    assert '"forbidden"' in result["content"][0]["text"], result
+    assert result.get("isError") is not True, r.text
+    assert result["structuredContent"]["priority"] == "frozen", r.text
+    assert result["structuredContent"]["frozen_by"] == executor.member_id, r.text
 
 
 # ── §6.3 close-out report ────────────────────────────────────────────────────

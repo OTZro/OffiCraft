@@ -1889,7 +1889,7 @@
       "name": "terminate_task"
     },
     {
-      "description": "Set a task's priority (owner any value; the executor high|mid|low on their own task; frozen stays owner-only).",
+      "description": "Set a task's priority (owner/admin agent any value on any task; the task's own executor any value on their task — frozen INCLUDED, and whoever may freeze may unfreeze, T-6020). The actor who sets frozen is recorded on the task as frozen_by and the field clears when the task leaves frozen. Anyone else is a flat 403.",
       "inputSchema": {
         "properties": {
           "priority": {
@@ -2611,7 +2611,7 @@
       "name": "list_task_manuals"
     },
     {
-      "description": "Create a task type: pass display_name; the server mints and returns the tm- type_key id (legacy explicit type_key still accepted; duplicate \u2192 409; assignee = owner-only). An outsource assignee may select runtime claude/codex; absent = claude.",
+      "description": "Create a task type: pass display_name; the server mints and returns the tm- type_key id (legacy explicit type_key still accepted; duplicate \u2192 409; assignee = owner/admin agent). An outsource assignee may select runtime claude/codex; absent = claude.",
       "inputSchema": {
         "properties": {
           "assignee": {
@@ -2673,7 +2673,7 @@
       "name": "get_task_manual"
     },
     {
-      "description": "Edit a task manual (partial; content fields agent-editable; assignee = owner-only). An outsource assignee may select runtime claude/codex; absent = claude. Only the fields you name change, so omitting a field is safe — but unknown keys are rejected rather than dropped: the learnings doc goes in learnings (NOT text — that is write_task_learnings' field name).",
+      "description": "Edit a task manual (partial; content fields agent-editable; assignee = owner/admin agent). An outsource assignee may select runtime claude/codex; absent = claude. Only the fields you name change, so omitting a field is safe — but unknown keys are rejected rather than dropped: the learnings doc goes in learnings (NOT text — that is write_task_learnings' field name).",
       "inputSchema": {
         "properties": {
           "assignee": {

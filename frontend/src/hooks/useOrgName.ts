@@ -6,7 +6,8 @@
 // value, PATCH on commit, and resolve to the localized default when unset.
 //
 // Owner-only surface: the whole cockpit is owner-authed, and /api/settings is
-// owner-gated — a member/agent never reaches this write path. It replaces the
+// governance-gated (owner / admin agent, T-6020) — a plain agent never reaches
+// this write path. It replaces the
 // old localStorage-only override (client cache dropped: the server is now the
 // single source of truth, so a stale per-browser copy could only mislead).
 

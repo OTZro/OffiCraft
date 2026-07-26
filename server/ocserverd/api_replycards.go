@@ -6,7 +6,7 @@ package main
 // deliberately closed:
 //
 //   waiting --(POST answer: the only POSITIVE close)--> answered
-//   waiting --(POST expire: owner-only 標為過期, NOT an answer)--> expired
+//   waiting --(POST expire: owner/admin-agent 標為過期, NOT an answer)--> expired
 //   waiting --(the SERVER sweep: expireWaitingCards)--> expired
 //   answered --(PUT answer: 重新決定, replace the answer)--> answered
 //
@@ -893,7 +893,7 @@ func (s *apiServer) HandleReanswerReplyCardApiReplyCardsCardIdAnswerPut(w http.R
 }
 
 // POST /api/reply-cards/{card_id}/expire — mark a WAITING card EXPIRED
-// (標為過期): the owner-only terminal exit that is NOT an answer. The owner is
+// (標為過期): the owner/admin-agent terminal exit that is NOT an answer. The owner is
 // saying the ask went stale (懸太久、答案已不可靠) — or its task already closed
 // — and declines to answer; the initiating agent decides itself whether the
 // question still matters (open a FRESH card with current context) or not

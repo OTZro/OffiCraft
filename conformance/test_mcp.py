@@ -406,3 +406,136 @@ def test_catalog_hash_keys_off_tool_surface_only(client) -> None:
         f"manifest-only={sorted(set(manifest_tools) - set(catalog_tools))} "
         f"catalog-only={sorted(set(catalog_tools) - set(manifest_tools))}"
     )
+
+
+# ── T-6020 governance opening: the two sentinels ─────────────────────────────
+#
+# The owner's 2026-07-26 ruling has TWO halves, and each half needs its own
+# tooth. Nineteen operational routes moved from requires=owner + mcp_exclude to
+# requires=admin_agent + an MCP tool; FIVE were deliberately left where they
+# were. Neither half is self-enforcing: the first would rot into "the tool is
+# named but nobody can call it", the second into "somebody tidily finished the
+# job", and both would pass every other test in this file.
+
+T6020_OPENED_TOOLS = {
+    "get_settings": "GET /api/settings",
+    "update_settings": "PATCH /api/settings",
+    "check_release": "GET /api/release/check",
+    "upgrade_software": "POST /api/update/upgrade",
+    "list_webhook_requests":
+        "GET /api/members/{member_id}/webhooks/{endpoint_id}/requests",
+    "answer_reply_card": "POST /api/reply-cards/{card_id}/answer",
+    "reanswer_reply_card": "PUT /api/reply-cards/{card_id}/answer",
+    "expire_reply_card": "POST /api/reply-cards/{card_id}/expire",
+    "bootstrap_machine_here": "POST /api/machines/{machine_id}/bootstrap-here",
+    "teardown_machine_here": "POST /api/machines/{machine_id}/teardown-here",
+    "upgrade_machine": "POST /api/machines/{member_id}/upgrade",
+    "terminate_task": "POST /api/tasks/{task_id}/terminate",
+    "post_task_message": "POST /api/tasks/{task_id}/message",
+    "get_worker_boot_context": "GET /api/outsource-workers/{id}/boot-context",
+    "refocus_outsource_worker": "POST /api/outsource-workers/{id}/refocus",
+    "stop_outsource_worker": "POST /api/outsource-workers/{id}/stop",
+    "restart_outsource_worker": "POST /api/outsource-workers/{id}/restart",
+    "set_outsource_worker_model": "POST /api/outsource-workers/{id}/model",
+    "delete_task_manual": "DELETE /api/task-manuals/{type_key}",
+}
+
+# The five the owner explicitly declined to open (routes.go carries the reasons
+# row by row). They stay requires=owner AND mcp_exclude.
+T6020_WITHHELD_ROUTES = (
+    ("POST", "/api/mint"),
+    ("POST", "/api/auth/change-password"),
+    ("GET", "/api/push/public-key"),
+    ("POST", "/api/push/subscription"),
+    ("DELETE", "/api/push/subscription"),
+)
+
+
+def test_t6020_opened_routes_are_admin_floor_tools(client, owner_token) -> None:
+    """Half one: each of the 19 is a LISTED tool at the admin_agent floor. The
+    manifest half catches a Requires that quietly went back to owner; the
+    tools/list half catches a route that kept its tool name but fell out of the
+    catalog (an agent's only view of a tool is tools/list, so that is invisible
+    unreachability, not a cosmetic gap)."""
+    listed = {t["name"] for t in _result(_rpc(client, owner_token, "tools/list"))["tools"]}
+    by_op = {f"{r['method']} {r['path']}": r for r in MANIFEST}
+    assert len(T6020_OPENED_TOOLS) == 19, "the ruling opened exactly 19 routes"
+    for tool, op in T6020_OPENED_TOOLS.items():
+        row = by_op.get(op)
+        assert row is not None, f"{op} vanished from the route manifest"
+        assert row["requires"] == "admin_agent", (
+            f"{op} declares requires={row['requires']!r} — T-6020 put it at the "
+            "admin_agent floor; owner would re-lock Mira out, agent/machine "
+            "would over-open it"
+        )
+        assert row["mcp_tool"] == tool, (
+            f"{op} exposes tool {row['mcp_tool']!r}, expected {tool!r}"
+        )
+        assert tool in listed, (
+            f"{tool} is on the route table but absent from a live tools/list — "
+            "an AI caller cannot discover, and the client cannot resolve, a tool "
+            "that tools/list does not carry"
+        )
+
+
+def test_t6020_withheld_routes_stay_owner_only_and_unlisted(client, owner_token) -> None:
+    """Half two: the five the owner declined are still requires=owner AND still
+    absent from the MCP surface — name-wise unlistable and, per the manifest,
+    mcp_exclude. Without this the natural next edit is "finish the job"."""
+    listed = {t["name"] for t in _result(_rpc(client, owner_token, "tools/list"))["tools"]}
+    by_op = {f"{r['method']} {r['path']}": r for r in MANIFEST}
+    for method, path in T6020_WITHHELD_ROUTES:
+        row = by_op.get(f"{method} {path}")
+        assert row is not None, f"{method} {path} vanished from the route manifest"
+        assert row["requires"] == "owner", (
+            f"{method} {path} declares requires={row['requires']!r} — the owner "
+            "explicitly declined to open this one on 2026-07-26 (minting an "
+            "identity is self-escalation; the password and Web Push are the "
+            "owner's personal account/browser). Re-read routes.go before changing it."
+        )
+        assert row["mcp_tool"] is None, (
+            f"{method} {path} grew an MCP tool ({row['mcp_tool']!r}) — it must "
+            "stay off the AI-callable surface"
+        )
+    # And no tool anywhere in the live catalog routes to one of those five.
+    for tool in listed:
+        row = next((r for r in MCP_ROWS if r["mcp_tool"] == tool), None)
+        assert row is not None, f"live tool {tool!r} has no manifest row"
+        assert (row["method"], row["path"]) not in T6020_WITHHELD_ROUTES, (
+            f"live tool {tool!r} resolves to withheld route {row['method']} {row['path']}"
+        )
+
+
+def test_t6020_opened_tool_is_callable_by_the_admin_agent(client, admin_agent) -> None:
+    """The 19 are not merely NAMED for the admin agent: get_settings is driven
+    end-to-end over tools/call with Mira's own token, and the result is the real
+    settings object rather than an unknown-tool error or an isError 403. One
+    concrete call, because a route table and a catalog can both agree while the
+    RBAC choke still refuses."""
+    r = _rpc(client, admin_agent.token, "tools/call",
+             {"name": "get_settings", "arguments": {}})
+    assert r.status_code == 200, f"{r.status_code} {r.text}"
+    body = r.json()
+    assert "error" not in body, (
+        f"get_settings must resolve for an admin agent, not error: {r.text}"
+    )
+    result = body["result"]
+    assert result.get("isError") is not True, (
+        f"the RBAC choke still refuses the admin agent: {r.text}"
+    )
+    assert "token_ttl" in result["structuredContent"], r.text
+
+
+def test_t6020_opened_tool_is_refused_for_a_plain_agent(client, agent_a) -> None:
+    """Sentinel for the SAME call: a plain agent gets the 403 envelope as an
+    isError result. This is what proves the 19 were lowered to admin_agent and
+    not to the agent floor — and it is deliberately the identical tool + token
+    plumbing as the positive case above, so only the identity differs."""
+    r = _rpc(client, agent_a.token, "tools/call",
+             {"name": "get_settings", "arguments": {}})
+    assert r.status_code == 200, f"{r.status_code} {r.text}"
+    result = _result(r)
+    assert result["isError"] is True, (
+        f"a plain agent must NOT reach get_settings: {r.text}"
+    )
+    assert '"forbidden"' in result["content"][0]["text"], result

@@ -359,7 +359,9 @@ func (s *apiServer) HandleReceiveWebhookInPost(w http.ResponseWriter, r *http.Re
 
 // GET /api/members/{member_id}/webhooks/{endpoint_id}/requests — the debug
 // ring buffer: the last 5 raw requests /in resolved to this endpoint, newest
-// first (owner-only; kept OFF WebhookEndpointDTO so the list wire stays light).
+// first (requires=admin_agent since T-6020 — raw UNVERIFIED external payloads
+// never reach a plain agent; kept OFF WebhookEndpointDTO so the list wire stays
+// light).
 func (s *apiServer) HandleListWebhookRequestsApiMembersMemberIdWebhooksEndpointIdRequestsGet(w http.ResponseWriter, r *http.Request, memberId, endpointId string) {
 	e, err := s.resolveWebhook(memberId, endpointId)
 	if err != nil {

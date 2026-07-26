@@ -37,7 +37,7 @@ interface WorkerDetailPanelProps {
   /** Fetch the worker's initial-prompt PREVIEW (GET …/boot-context — T-ba6b):
    * the server re-runs the spawn fold over the CURRENT task/manual rows and
    * returns the text (no token). Undefined ⇒ the initial-prompt card is hidden
-   * (a caller without owner scope omits it — the route is owner-only). */
+   * (a caller below the admin_agent floor omits it — T-6020). */
   onFetchBootContext?: () => Promise<string>;
 }
 

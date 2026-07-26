@@ -13,8 +13,12 @@ class (the RBAC route table that landed with service/authz.py):
     (status is then pure route semantics); no token → 401;
   * ``requires="admin_agent"`` → plain agents AND wardens are a flat 403
     (deny-first, before any target resolution); owner/admin get the route's
-    semantic status;
+    semantic status. T-6020 (owner ruling 2026-07-26) moved 19 operational
+    routes from the owner floor onto THIS one, so most of the office's
+    privileged verbs now have two positive faces, not one;
   * ``requires="owner"``    → everything below owner (admin included) is 403.
+    Exactly five rows are left here on purpose (mint, change-password, the
+    three Web Push rows) — see routes.go's T-6020 note.
 
 The capability ladder (rank): machine/warden=0 < agent=1 < admin_agent=2 <
 owner=3; enforcement is rank(principal) >= rank(requires). Below-floor cells
@@ -338,7 +342,7 @@ MATRIX: dict[str, Route] = {
         overrides={"owner": 401},
         body={"current_password": "conf-wrong-current", "new_password": "conf-new-password"},
     ),
-    "GET /api/settings": Route(requires="owner"),
+    "GET /api/settings": Route(requires="admin_agent"),
     "GET /api/push/public-key": Route(requires="owner"),
     "POST /api/push/subscription": Route(
         requires="owner",
@@ -355,24 +359,24 @@ MATRIX: dict[str, Route] = {
     ),
     "GET /api/release/check": Route(
         # The harness pins $OC_RELEASE_API_BASE at an unroutable loopback
-        # (run.sh), so the owner's positive authz face deterministically
-        # answers the honest degraded 200 {"status":"unknown"} — never the
-        # real GitHub. Full verdict semantics live in the server unit tests
+        # (run.sh), so the positive authz faces deterministically answer the
+        # honest degraded 200 {"status":"unknown"} — never the real GitHub.
+        # Full verdict semantics live in the server unit tests
         # (update_check_test.go).
-        requires="owner",
+        requires="admin_agent",
     ),
     "POST /api/update/upgrade": Route(
         # With $OC_RELEASE_API_BASE unroutable (run.sh) no newer GitHub
-        # release is ever known, so the owner's positive authz face
-        # deterministically answers the "no newer release known" 409 — the
-        # trigger's full precondition/execution semantics (the real
+        # release is ever known, so BOTH positive authz faces deterministically
+        # answer the "no newer release known" 409 — the trigger's full
+        # precondition/execution semantics (the real
         # download+verify+swap+restart body) live in the server unit tests
         # (update_check_test.go / upgrade_test.go).
-        requires="owner",
-        overrides={"owner": 409},
+        requires="admin_agent",
+        overrides={"owner": 409, "admin_agent": 409},
     ),
     "PATCH /api/settings": Route(
-        requires="owner",
+        requires="admin_agent",
         body={},  # empty patch = validated no-op read (mutating nothing)
     ),
     # ── members ──────────────────────────────────────────────────────────────
@@ -463,7 +467,7 @@ MATRIX: dict[str, Route] = {
     # payloads): every below-owner identity — admin agent included — is a
     # derived flat 403. The owner face reads a freshly seeded real endpoint.
     "GET /api/members/{member_id}/webhooks/{endpoint_id}/requests": Route(
-        requires="owner",
+        requires="admin_agent",
         path=lambda ctx, _i: _matrix_webhook_requests_path(ctx),
     ),
     # ── self-report presence (identity from token, no target param) ─────────
@@ -546,34 +550,35 @@ MATRIX: dict[str, Route] = {
         path=lambda ctx, _i: f"/api/reply-cards/{_matrix_card(ctx)}",
     ),
     "POST /api/reply-cards/{card_id}/answer": Route(
-        # answering is the OWNER's act (requires=owner): the positive face
-        # answers a fresh waiting card; below-owner identities are choked 403
-        # before target resolution (a missing id never leaks a 404 oracle).
-        requires="owner",
+        # answering is a GOVERNANCE act (requires=admin_agent since T-6020):
+        # each positive face answers its OWN fresh waiting card (one-shot);
+        # below-floor identities are choked 403 before target resolution (a
+        # missing id never leaks a 404 oracle).
+        requires="admin_agent",
         path=lambda ctx, i: (
             f"/api/reply-cards/"
-            f"{_matrix_card(ctx) if i == 'owner' else 'rc-conf-missing'}/answer"
+            f"{_matrix_card(ctx) if i in _ADMIN_FACES else 'rc-conf-missing'}/answer"
         ),
         body={"option_idx": 0},
     ),
     "PUT /api/reply-cards/{card_id}/answer": Route(
-        requires="owner",
+        requires="admin_agent",
         path=lambda ctx, i: (
             f"/api/reply-cards/"
-            f"{_matrix_answered_card(ctx) if i == 'owner' else 'rc-conf-missing'}"
+            f"{_matrix_answered_card(ctx) if i in _ADMIN_FACES else 'rc-conf-missing'}"
             "/answer"
         ),
         body={"text": "conf matrix revised answer"},
     ),
     "POST /api/reply-cards/{card_id}/expire": Route(
-        # expiring is the OWNER's act too (requires=owner) and one-shot
-        # terminal, so the positive face burns a FRESH waiting card per
-        # invocation; below-owner identities are choked 403 before target
-        # resolution (a missing id never leaks a 404 oracle).
-        requires="owner",
+        # expiring is a GOVERNANCE act too (requires=admin_agent since
+        # T-6020) and one-shot terminal, so each positive face burns a FRESH
+        # waiting card per invocation; below-floor identities are choked 403
+        # before target resolution (a missing id never leaks a 404 oracle).
+        requires="admin_agent",
         path=lambda ctx, i: (
             f"/api/reply-cards/"
-            f"{_matrix_card(ctx) if i == 'owner' else 'rc-conf-missing'}/expire"
+            f"{_matrix_card(ctx) if i in _ADMIN_FACES else 'rc-conf-missing'}/expire"
         ),
     ),
     # ── telemetry / monitoring ───────────────────────────────────────────────
@@ -604,16 +609,17 @@ MATRIX: dict[str, Route] = {
         path=lambda ctx, _i: f"/api/machines/{ctx.machine_id}/boot-command",
     ),
     "POST /api/machines/{machine_id}/bootstrap-here": Route(
-        # DEGRADED positive face: unknown machine id → 404 (resolve runs AFTER
-        # the owner-only choke, BEFORE the host subprocess) — never installs.
-        requires="owner",
-        overrides={"owner": 404},
+        # DEGRADED positive faces: unknown machine id → 404 (resolve runs
+        # AFTER the admin_agent choke, BEFORE the host subprocess) — never
+        # installs, so this row never touches the real OS.
+        requires="admin_agent",
+        overrides={"owner": 404, "admin_agent": 404},
         path="/api/machines/m-conf-missing/bootstrap-here",
     ),
     "POST /api/machines/{machine_id}/teardown-here": Route(
-        # DEGRADED positive face: same reasoning as bootstrap-here.
-        requires="owner",
-        overrides={"owner": 404},
+        # DEGRADED positive faces: same reasoning as bootstrap-here.
+        requires="admin_agent",
+        overrides={"owner": 404, "admin_agent": 404},
         path="/api/machines/m-conf-missing/teardown-here",
     ),
     "POST /api/machines/{member_id}/uninstall": Route(
@@ -623,9 +629,9 @@ MATRIX: dict[str, Route] = {
         path=lambda ctx, _i: f"/api/machines/{ctx.machine_id}/uninstall",
     ),
     "POST /api/machines/{member_id}/upgrade": Route(
-        # positive face: the scratch machine's warden is OFFLINE → nothing to
+        # positive faces: the scratch machine's warden is OFFLINE → nothing to
         # command (200, dispatched=false) — fire-and-forget, no durable write.
-        requires="owner",
+        requires="admin_agent",
         path=lambda ctx, _i: f"/api/machines/{ctx.machine_id}/upgrade",
     ),
     "DELETE /api/machines/{member_id}": Route(
@@ -729,27 +735,29 @@ MATRIX: dict[str, Route] = {
         path=lambda ctx, _i: f"/api/tasks/{_matrix_task(ctx)}",
     ),
     "POST /api/tasks/{task_id}/terminate": Route(
-        # owner-only: below-owner identities choke 403 BEFORE target
-        # resolution (missing-id probe, the reply-card answer posture).
-        requires="owner",
+        # requires=admin_agent since T-6020: below-floor identities choke 403
+        # BEFORE target resolution (missing-id probe, the reply-card posture),
+        # so a plain agent cannot terminate its way out of its own task.
+        requires="admin_agent",
         path=lambda ctx, i: (
-            f"/api/tasks/{_matrix_task(ctx) if i == 'owner' else 't-conf-missing'}"
+            f"/api/tasks/{_matrix_task(ctx) if i in _ADMIN_FACES else 't-conf-missing'}"
             "/terminate"
         ),
     ),
     "POST /api/tasks/{task_id}/priority": Route(
-        # T-0786: the executor may set high|mid|low on their OWN task; a
-        # foreign agent is the executor-guard 403. frozen stays owner-only
-        # (handler detail, pinned in test_tasks.py / api_tasks_test.go).
+        # T-0786: the executor may retune their OWN task; a foreign agent is
+        # the executor-guard 403. T-6020 opened `frozen` to the SAME set
+        # (owner / admin_agent / the executor), symmetrically — a handler
+        # detail pinned in test_tasks.py / api_tasks_test.go.
         requires="agent",
         overrides={"agent_other": 403},
         path=lambda ctx, _i: f"/api/tasks/{_matrix_task(ctx)}/priority",
         body={"priority": "high"},
     ),
     "POST /api/tasks/{task_id}/message": Route(
-        requires="owner",
+        requires="admin_agent",
         path=lambda ctx, i: (
-            f"/api/tasks/{_matrix_task(ctx) if i == 'owner' else 't-conf-missing'}"
+            f"/api/tasks/{_matrix_task(ctx) if i in _ADMIN_FACES else 't-conf-missing'}"
             "/message"
         ),
         body={"body": "conf matrix task message"},
@@ -873,13 +881,14 @@ MATRIX: dict[str, Route] = {
                    "admin_agent": 404, "owner": 404},
     ),
     "GET /api/outsource-workers/{id}/boot-context": Route(
-        # T-ba6b initial-prompt preview — owner-only (the text embeds the full
-        # task + manual, MCPExclude). Below-owner faces are a flat 403 (the
-        # gate's teeth); the owner face is an honest 404 against the unknown
-        # ow-nope row (no black-box worker exists — same as the worker ops).
-        requires="owner",
+        # T-ba6b initial-prompt preview — floor admin_agent since T-6020 (the
+        # text embeds the full task + manual). Below-floor faces are a flat 403
+        # (the gate's teeth); the positive faces get an honest 404 against the
+        # unknown ow-nope row (no black-box worker exists — same as the worker
+        # ops).
+        requires="admin_agent",
         path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/boot-context",
-        overrides={"owner": 404},
+        overrides={"owner": 404, "admin_agent": 404},
     ),
     "POST /api/outsource-workers/{id}/relocate": Route(
         # T-f190 改機器; P7c drops the floor to admin_agent (外包對齊正職 — the
@@ -893,31 +902,31 @@ MATRIX: dict[str, Route] = {
         body=lambda ctx, _i: {"machine_id": ctx.machine_id},
         overrides={"admin_agent": 404, "owner": 404},
     ),
-    # T-32e1/T-f190 worker lifecycle ops — all owner-only (relocate above sits
-    # at the admin floor since P7c; these stay owner-only until their own
-    # alignment ruling). Below-owner faces are a flat 403 (the gate's teeth);
-    # the owner face is an honest 404 against the unknown ow-nope row (no
+    # T-32e1/T-f190 worker lifecycle ops — ALL at the admin floor since T-6020
+    # (owner ruling 2026-07-26: 外包對齊正職, the same floor relocate has had
+    # since P7c). Below-floor faces are a flat 403 (the gate's teeth); the
+    # positive faces get an honest 404 against the unknown ow-nope row (no
     # black-box worker exists).
     "POST /api/outsource-workers/{id}/refocus": Route(
-        requires="owner",
+        requires="admin_agent",
         path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/refocus",
-        overrides={"owner": 404},
+        overrides={"owner": 404, "admin_agent": 404},
     ),
     "POST /api/outsource-workers/{id}/stop": Route(
-        requires="owner",
+        requires="admin_agent",
         path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/stop",
-        overrides={"owner": 404},
+        overrides={"owner": 404, "admin_agent": 404},
     ),
     "POST /api/outsource-workers/{id}/restart": Route(
-        requires="owner",
+        requires="admin_agent",
         path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/restart",
-        overrides={"owner": 404},
+        overrides={"owner": 404, "admin_agent": 404},
     ),
     "POST /api/outsource-workers/{id}/model": Route(
-        requires="owner",
+        requires="admin_agent",
         path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/model",
         body=lambda _ctx, _i: {"model": "claude-opus-4-8"},
-        overrides={"owner": 404},
+        overrides={"owner": 404, "admin_agent": 404},
     ),
     # ── task manuals (M3) ───────────────────────────────────────────────────
     "GET /api/task-manuals": Route(requires="machine"),
@@ -933,7 +942,7 @@ MATRIX: dict[str, Route] = {
     ),
     "POST /api/task-manuals/{type_key}": Route(
         # agent floor (owner ruling 2026-07-13): the CONTENT fields are
-        # agent-editable; the assignee owner-only 403 is pinned in
+        # agent-editable; the assignee governance 403 is pinned in
         # test_tasks.py (this body is content-only on purpose).
         requires="agent",
         path=lambda ctx, i: (
@@ -944,10 +953,10 @@ MATRIX: dict[str, Route] = {
         body={"purpose": "conf matrix manual edit"},
     ),
     "DELETE /api/task-manuals/{type_key}": Route(
-        requires="owner",
+        requires="admin_agent",
         path=lambda ctx, i: (
             f"/api/task-manuals/"
-            f"{_matrix_manual(ctx) if i == 'owner' else 'conf-missing-type'}"
+            f"{_matrix_manual(ctx) if i in _ADMIN_FACES else 'conf-missing-type'}"
         ),
     ),
     "POST /api/task-manuals/{type_key}/learnings": Route(

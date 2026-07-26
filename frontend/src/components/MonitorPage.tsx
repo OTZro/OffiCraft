@@ -310,7 +310,7 @@ export function MonitorPage() {
     setInstallTarget(null);
   };
 
-  // Install the server-self machine IN PLACE → POST bootstrap-here (owner-only HOST
+  // Install the server-self machine IN PLACE → POST bootstrap-here (owner/admin-agent HOST
   // action): the server installs the warden on itself. NO dialog — run directly on
   // click. A failed install is a REAL result (ok=false + log), NOT a thrown error —
   // only a transport/gate failure lands in catch.

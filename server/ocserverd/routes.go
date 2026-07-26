@@ -1183,7 +1183,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleCreateTaskManualApiTaskManualsPost,
 			Auth:     authGated,
 			Requires: principalAgent,
-			Summary:  "Create a task type: pass display_name; the server mints and returns the tm- type_key id (legacy explicit type_key still accepted; duplicate → 409; assignee = owner-only).",
+			Summary:  "Create a task type: pass display_name; the server mints and returns the tm- type_key id (legacy explicit type_key still accepted; duplicate → 409; assignee = owner/admin agent).",
 			MCPTool:  "create_task_manual",
 		},
 		{

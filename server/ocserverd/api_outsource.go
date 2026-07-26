@@ -13,7 +13,7 @@ package main
 // now folds the worker's REAL machine (last_spawn_target resolved), Claude
 // account, context %, live cost, and last warden receipt — all from the SAME
 // per-actor telemetry/gauge maps the member roster reads (keyed by actor id;
-// see api_monitoring.go). The owner can 改機器 via POST .../relocate (owner-only),
+// see api_monitoring.go). The owner or admin agent can 改機器 via POST .../relocate,
 // mirroring the member activate machine-bind; a single GET .../{id} backs the
 // panel's post-relocate refresh.
 
@@ -337,7 +337,7 @@ func (s *apiServer) writeWorkerProjection(w http.ResponseWriter, r *http.Request
 		tele, s.gauge.Snapshot(), machineNames, accountDisplay))
 }
 
-// POST /api/outsource-workers/{id}/refocus — the owner cockpit's 換手 (owner-only,
+// POST /api/outsource-workers/{id}/refocus — the cockpit's 換手 (owner/admin agent since T-6020,
 // route Requires=owner). The worker twin of refocus_member, member-shaped since
 // T-ea82: stamp refocus_since + fan the SOP 預告 at the worker's own session
 // (openWorkerHandoverGrace) and RETURN — the kill+respawn is owned by the 收口
@@ -394,7 +394,7 @@ func (s *apiServer) HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost
 	s.writeWorkerProjection(w, r, *worker)
 }
 
-// POST /api/outsource-workers/{id}/stop — the owner cockpit's 停止 (owner-only). The
+// POST /api/outsource-workers/{id}/stop — the cockpit's 停止 (owner/admin agent since T-6020). The
 // worker twin of a member deactivate: set desired_state="offline" (a DIRECT mirror
 // of member.desired_state, which makes every scheduler auto-spawn branch skip the
 // worker — stuck-recovery and the paced re-dispatch must NOT quietly revive an
@@ -433,7 +433,7 @@ func (s *apiServer) HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost(w htt
 	s.writeWorkerProjection(w, r, *worker)
 }
 
-// POST /api/outsource-workers/{id}/restart — the owner cockpit's 重啟 (owner-only),
+// POST /api/outsource-workers/{id}/restart — the cockpit's 重啟 (owner/admin agent since T-6020),
 // the inverse of stop: set desired_state back to "online" and re-dispatch (重啟 =
 // 再 dispatch — a fresh worker_start onto the pinned / preferred machine). 409 when
 // the worker is not stopped (nothing to restart — avoids a hidden double-spawn); 404
@@ -473,7 +473,7 @@ func (s *apiServer) HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost
 }
 
 // POST /api/outsource-workers/{id}/model — the owner cockpit's runtime/model
-// edit (owner-only), the worker twin of the member runtime/model/effort edit.
+// edit (owner/admin agent since T-6020), the worker twin of the member runtime/model/effort edit.
 // Persist the new values; when the worker is ACTIVE + online, kill+respawn
 // so the new model takes effect NOW, otherwise (assigned / stopped) only persist —
 // the next spawn / restart bakes it in ("active 時 kill+respawn 立即生效, assigned 時
