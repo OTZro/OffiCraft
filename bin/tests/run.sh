@@ -513,12 +513,16 @@ else
   bad "bin/tests/uninstall-guard.sh is missing"
 fi
 
-# ── namespace mirror across four hand-transcribed copies (T-5047) ──────────
-# The namespace→(root, launchd label) derivation exists FOUR times, in three
-# languages, across two Go modules that cannot import each other. The Go halves
-# are guarded by their own module tests (cli/ocwarden/namespace_mirror_test.go,
+# ── namespace mirror across the hand-transcribed copies (T-5047) ───────────
+# The namespace→(root, launchd label) derivation exists at ELEVEN SITES in SEVEN
+# FILES, in three languages, across three Go modules that cannot import each
+# other. Do NOT restate a smaller number here: this comment said FOUR, and an
+# out-of-date count in a dispatcher comment is exactly how the missing sites went
+# unnoticed three times. The authoritative, maintained list is the header of
+# namespace-mirror-guard.sh. The Go copies are guarded by their own module tests
+# (cli/ocwarden/namespace_mirror_test.go, cli/ocagent/namespace_mirror_test.go,
 # server/ocserverd/onboarding_mirror_test.go) against the same shared table; this
-# guard covers the two shell copies and the charset regex in all four. The
+# guard covers the two shell copies and the charset regex. The
 # consequence of a one-character drift is not a wrong string — the server asks
 # launchd about a label the warden never registered, concludes "no warden here",
 # and installs a second one over the live job.
