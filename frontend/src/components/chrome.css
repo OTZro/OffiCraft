@@ -109,6 +109,51 @@
   border-color: color-mix(in srgb, var(--color-overlay) 8%, transparent);
 }
 
+/* Compact inline warning for the notification bell.  It stays anchored to the
+ * control, but uses the shared semantic tokens so built-in and custom themes
+ * keep their own colours, shadow and typeface. */
+.push-notifications {
+  position: relative;
+}
+
+.push-notifications__notice {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 100;
+  box-sizing: border-box;
+  width: min(280px, calc(100vw - 24px));
+  padding: 12px 38px 12px 14px;
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--color-danger) 28%, var(--color-card));
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--color-shadow) 45%, transparent);
+  color: var(--color-text-strong);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.push-notifications__notice-close {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-strong);
+  cursor: pointer;
+}
+
+.push-notifications__notice-close:hover {
+  background: color-mix(in srgb, var(--color-overlay) 12%, transparent);
+}
+
 .profile-pill {
   display: flex;
   align-items: center;
@@ -146,12 +191,18 @@
 
 /* segmented control frame around the tabs */
 .nav-tabs__seg {
-  display: inline-flex;
+  display: flex;
   gap: 4px;
+  width: 100%;
   padding: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
   border-radius: 12px;
   border: 1px solid color-mix(in srgb, var(--color-overlay) 6%, transparent);
   background: color-mix(in srgb, var(--color-overlay) 3%, transparent);
+}
+.nav-tabs__seg::-webkit-scrollbar {
+  display: none;
 }
 
 .nav-tab {
@@ -222,28 +273,14 @@
   .profile-pill__name {
     display: none;
   }
-  /* Narrow screens can't fit all five tabs at full width; let the segmented
-     control scroll horizontally instead of compressing each tab (which forced
-     CJK labels to wrap character-by-character into a vertical stack under the
-     count badge). */
+  /* The segmented frame stays aligned with the content column. Only its
+     labels scroll, so the frame never shrinks or disappears on narrow screens. */
   .nav-tabs {
-    overflow-x: auto;
-    scrollbar-width: none;
-    /* T-68f1 — tightened from the desktop 22px. 使用說明 is the FIFTH tab and
-       therefore the last one in the overflow; at 22px/12px the strip needed
-       479px, so at 390 the tab sat at [352..452] and the 38px on screen were
-       all icon and padding — not one character of the label showed. These two
-       rules give back ~60px, which is what makes the label legible at 390 and
-       the whole tab visible from 414 up. Pinned by
-       visual-guards/nav-tabs-narrow.ct.spec.tsx. */
-    padding-left: 12px;
-    padding-right: 12px;
-  }
-  .nav-tabs::-webkit-scrollbar {
-    display: none;
+    padding-left: 22px;
+    padding-right: 22px;
   }
   .nav-tabs__seg {
-    flex-shrink: 0;
+    min-width: 0;
   }
   .nav-tab {
     flex-shrink: 0;

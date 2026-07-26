@@ -287,6 +287,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "notifications.denied",
   "notifications.description",
   "notifications.disable",
+  "notifications.dismiss",
   "notifications.enable",
   "notifications.enabled",
   "notifications.failed",

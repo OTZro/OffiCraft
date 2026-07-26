@@ -28,6 +28,7 @@ export const zh = {
     empty: "還沒有說明頁",
   },
   notifications: {
+    dismiss: "關閉提示",
     title: "開啟通知",
     description: "有新訊息或需要你決定的請示時，會通知這台裝置。",
     enable: "開啟通知",
@@ -36,7 +37,7 @@ export const zh = {
     unsupported: "這個瀏覽器不支援推播通知。",
     denied: "通知權限已被封鎖，請在瀏覽器設定中允許 OffiCraft 通知。",
     failed: "通知設定失敗，請稍後再試。",
-    contactRequired: "請先在個人檔案的偏好設定填入通知信箱。",
+    contactRequired: "請先在個人選單的「通知信箱」填入通知信箱。",
   },
   // ── 任務頁(M3 任務卡)──
   tasks: {

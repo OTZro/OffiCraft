@@ -1,6 +1,5 @@
-// ProfileDropdown change-password (B3): the preferences sub-view keeps the
-// theme SELECTOR + language + a 修改密碼 sub-view — through the api seam (mock
-// adapter here; validation parity with the server).
+// ProfileDropdown change-password (B3): the main menu owns the account
+// sub-views while preferences keeps only appearance controls.
 //
 // The /api/settings parameter knobs (登入有效期 / 自動換手門檻) MOVED to the
 // 設定 page's 參數調整 entry (owner 2026-07-12), and theme MANAGEMENT (import /
@@ -30,7 +29,7 @@ async function openPreferences() {
     </I18nProvider>
   );
   fireEvent.click(utils.getByText(p.preferences));
-  await utils.findByText(p.changePassword);
+  await utils.findByText(p.theme);
   return utils;
 }
 
@@ -50,7 +49,7 @@ describe("ProfileDropdown · preferences scope", () => {
     const text = utils.container.textContent ?? "";
     expect(text).not.toContain(zh.settings.sessionTtl);
     expect(text).not.toContain(zh.settings.handover);
-    // Theme selector + language + password remain.
+    // Theme selector + language remain.
     expect(utils.getByText(p.theme)).toBeTruthy();
     expect(utils.getByText(p.language)).toBeTruthy();
   });
@@ -67,7 +66,7 @@ describe("ProfileDropdown · preferences scope", () => {
 
   it("selects the built-in office theme from the quick picker", async () => {
     const utils = await openPreferences();
-    fireEvent.click(utils.getByText(p.themeOffice));
+    fireEvent.change(utils.getByLabelText(p.theme), { target: { value: "office" } });
     expect(document.documentElement.dataset.theme).toBe("office");
   });
 
@@ -87,7 +86,9 @@ describe("ProfileDropdown · preferences scope", () => {
 
 describe("ProfileDropdown · change password", () => {
   it("changes the password through the seam and confirms inline", async () => {
-    const utils = await openPreferences();
+    const utils = render(
+      <I18nProvider><ProfileDropdown open onClose={vi.fn()} userName="使用者" setOwnerName={vi.fn()} /></I18nProvider>,
+    );
     fireEvent.click(utils.getByText(p.changePassword));
     fireEvent.change(utils.getByLabelText(p.currentPasswordPlaceholder), {
       target: { value: "mock-password" },
@@ -106,7 +107,9 @@ describe("ProfileDropdown · change password", () => {
   });
 
   it("keeps a wrong current password an inline error (no logout bounce)", async () => {
-    const utils = await openPreferences();
+    const utils = render(
+      <I18nProvider><ProfileDropdown open onClose={vi.fn()} userName="使用者" setOwnerName={vi.fn()} /></I18nProvider>,
+    );
     fireEvent.click(utils.getByText(p.changePassword));
     fireEvent.change(utils.getByLabelText(p.currentPasswordPlaceholder), {
       target: { value: "wrong-password" },
@@ -122,7 +125,9 @@ describe("ProfileDropdown · change password", () => {
   });
 
   it("rejects a short or mismatched new password locally", async () => {
-    const utils = await openPreferences();
+    const utils = render(
+      <I18nProvider><ProfileDropdown open onClose={vi.fn()} userName="使用者" setOwnerName={vi.fn()} /></I18nProvider>,
+    );
     fireEvent.click(utils.getByText(p.changePassword));
     fireEvent.change(utils.getByLabelText(p.currentPasswordPlaceholder), {
       target: { value: "mock-password" },

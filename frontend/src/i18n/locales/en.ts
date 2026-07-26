@@ -37,6 +37,7 @@ export const en: Dict = {
     empty: "No guide pages yet",
   },
   notifications: {
+    dismiss: "Dismiss notification",
     title: "Turn on notifications",
     description: "This device will notify you about new messages and asks that need your decision.",
     enable: "Turn on notifications",
@@ -45,7 +46,7 @@ export const en: Dict = {
     unsupported: "This browser does not support push notifications.",
     denied: "Notifications are blocked. Allow OffiCraft notifications in your browser settings.",
     failed: "Could not set up notifications. Please try again.",
-    contactRequired: "Add a notification email in Profile preferences first.",
+    contactRequired: "Add a notification email from the Profile menu first.",
   },
   // ── Tasks page (M3 task cards) ──
   tasks: {

@@ -6,6 +6,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   GearIcon,
+  BellIcon,
   LogOutIcon,
   UserIcon,
 } from "./icons";
@@ -31,7 +32,8 @@ type View = "main" | "preferences" | "password" | "notifications";
  * Profile menu that drops from the topbar profile pill.
  *  - main view: profile header (inline rename), Preferences row, Log out.
  *  - preferences view: Theme SELECTOR (辦公室 / custom) + Language
- *    (中文 / English) + Layout (窄版 / 寬版), then a 修改密碼 row.
+ *    (中文 / English) + Layout (窄版 / 寬版).
+ *  - account rows in the main view: notification email and password.
  *  - password view: current / new / repeat → POST /api/auth/change-password.
  *
  * Scope (owner 2026-07-12): this menu holds APPEARANCE + ACCOUNT IDENTITY only.
@@ -107,9 +109,9 @@ export function ProfileDropdown({
     setView("password");
   }
 
-  async function openPreferences() {
-    setView("preferences");
+  async function loadPushContactEmail() {
     setPushEmailError(false);
+    setPushEmailLoaded(false);
     try {
       const settings = await api.getServerSettings();
       setPushContactEmail(settings.pushContactEmail);
@@ -118,6 +120,15 @@ export function ProfileDropdown({
       setPushEmailLoaded(false);
       setPushEmailError(true);
     }
+  }
+
+  function openPreferences() {
+    setView("preferences");
+  }
+
+  function openNotifications() {
+    setView("notifications");
+    void loadPushContactEmail();
   }
 
   async function commitPushContactEmail() {
@@ -182,7 +193,7 @@ export function ProfileDropdown({
           <button
             type="button"
             className="profile-dd__row"
-            onClick={() => void openPreferences()}
+            onClick={openPreferences}
           >
             <span className="profile-dd__row-icon">
               <GearIcon size={16} />
@@ -195,6 +206,18 @@ export function ProfileDropdown({
                 {t.profile.preferencesSub}
               </span>
             </span>
+            <ChevronRightIcon size={16} className="profile-dd__row-chevron" />
+          </button>
+
+          <button type="button" className="profile-dd__row" onClick={openNotifications}>
+            <span className="profile-dd__row-icon"><BellIcon size={16} /></span>
+            <span className="profile-dd__row-body"><span className="profile-dd__row-title">{t.profile.pushContactEmail}</span><span className="profile-dd__row-sub">{t.profile.pushContactEmailSub}</span></span>
+            <ChevronRightIcon size={16} className="profile-dd__row-chevron" />
+          </button>
+
+          <button type="button" className="profile-dd__row" onClick={openPasswordView}>
+            <span className="profile-dd__row-icon"><GearIcon size={16} /></span>
+            <span className="profile-dd__row-body"><span className="profile-dd__row-title">{t.profile.changePassword}</span><span className="profile-dd__row-sub">{t.profile.changePasswordSub}</span></span>
             <ChevronRightIcon size={16} className="profile-dd__row-chevron" />
           </button>
 
@@ -236,34 +259,10 @@ export function ProfileDropdown({
               </div>
             </div>
 
-            <ul className="profile-dd__theme-list">
-              <li className="profile-dd__theme-row">
-                <button
-                  type="button"
-                  className={`profile-dd__theme-pick${
-                    theme === "office"
-                      ? " profile-dd__theme-pick--active"
-                      : ""
-                  }`}
-                  onClick={() => setTheme("office")}
-                >
-                  {t.profile.themeOffice}
-                </button>
-              </li>
-              {customThemes.map((b) => (
-                <li key={b.id} className="profile-dd__theme-row">
-                  <button
-                    type="button"
-                    className={`profile-dd__theme-pick${
-                      theme === b.id ? " profile-dd__theme-pick--active" : ""
-                    }`}
-                    onClick={() => setTheme(b.id)}
-                  >
-                    {b.name}
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <select className="profile-dd__input" aria-label={t.profile.theme} value={theme} onChange={(e) => setTheme(e.target.value)}>
+              <option value="office">{t.profile.themeOffice}</option>
+              {customThemes.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
           </div>
 
           <div className="profile-dd__section">
@@ -316,33 +315,6 @@ export function ProfileDropdown({
             </div>
           </div>
 
-          <div className="profile-dd__divider" />
-
-          <button type="button" className="profile-dd__row" onClick={() => setView("notifications")}>
-            <span className="profile-dd__row-body"><span className="profile-dd__row-title">{t.profile.pushContactEmail}</span><span className="profile-dd__row-sub">{t.profile.pushContactEmailSub}</span></span>
-            <ChevronRightIcon size={16} className="profile-dd__row-chevron" />
-          </button>
-
-          <div className="profile-dd__divider" />
-
-          <button
-            type="button"
-            className="profile-dd__row"
-            onClick={openPasswordView}
-          >
-            <span className="profile-dd__row-body">
-              <span className="profile-dd__row-title">
-                {t.profile.changePassword}
-              </span>
-              <span className="profile-dd__row-sub">
-                {t.profile.changePasswordSub}
-              </span>
-            </span>
-            <ChevronRightIcon
-              size={16}
-              className="profile-dd__row-chevron"
-            />
-          </button>
         </>
       )}
 
@@ -351,7 +323,7 @@ export function ProfileDropdown({
           <button
             type="button"
             className="profile-dd__back"
-            onClick={() => setView("preferences")}
+            onClick={() => setView("main")}
           >
             <ChevronLeftIcon size={16} />
             <span>{t.profile.changePassword}</span>
@@ -429,13 +401,13 @@ export function ProfileDropdown({
 
       {view === "notifications" && (
         <>
-          <button type="button" className="profile-dd__back" onClick={() => setView("preferences")}><ChevronLeftIcon size={16} /><span>{t.profile.pushContactEmail}</span></button>
+          <button type="button" className="profile-dd__back" onClick={() => setView("main")}><ChevronLeftIcon size={16} /><span>{t.profile.pushContactEmail}</span></button>
           <form className="profile-dd__form" onSubmit={(e) => { e.preventDefault(); void commitPushContactEmail(); }}>
             <label className="profile-dd__field-label" htmlFor="push-contact-email">{t.profile.pushContactEmail}</label>
             <div className="profile-dd__section-hint">{t.profile.pushContactEmailSub}</div>
             <input id="push-contact-email" className="profile-dd__input" type="email" inputMode="email" autoComplete="email" placeholder={t.profile.pushContactEmailPlaceholder} value={pushContactEmail} disabled={!pushEmailLoaded} onChange={(e) => setPushContactEmail(e.target.value)} />
             {pushEmailError && <div className="profile-dd__error">{t.profile.pushContactEmailError}</div>}
-            <button type="submit" className="profile-dd__save" disabled={!pushEmailLoaded}>{t.profile.save}</button>
+            <button type="submit" className="profile-dd__submit" disabled={!pushEmailLoaded}>{t.profile.save}</button>
           </form>
         </>
       )}

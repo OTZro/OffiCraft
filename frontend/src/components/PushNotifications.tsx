@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { PushSubscriptionInput } from "../api/adapter";
 import { useI18n } from "../i18n";
-import { BellIcon, BellOffIcon } from "./icons";
+import { BellIcon, BellOffIcon, CloseIcon } from "./icons";
 
 type PushState = "unsupported" | "default" | "enabled" | "denied" | "error";
 
@@ -57,6 +57,18 @@ export function PushNotifications() {
     }).catch(() => setState("unsupported"));
   }, []);
 
+  // A missing contact address is actionable but should not leave a floating
+  // message over the cockpit indefinitely. Return the bell to its idle state
+  // after a short readable interval; another tap can immediately retry.
+  useEffect(() => {
+    if (state !== "error" || !errorMessage) return;
+    const timeout = window.setTimeout(() => {
+      setErrorMessage("");
+      setState("default");
+    }, 5000);
+    return () => window.clearTimeout(timeout);
+  }, [state, errorMessage]);
+
   async function enable() {
     if (!registration) return;
     try {
@@ -67,7 +79,6 @@ export function PushNotifications() {
       if (!settings.pushContactEmail) {
         setErrorMessage(t.notifications.contactRequired);
         setState("error");
-        window.alert(t.notifications.contactRequired);
         return;
       }
       const permission = await Notification.requestPermission();
@@ -99,6 +110,11 @@ export function PushNotifications() {
     }
   }
 
+  function dismissNotice() {
+    setErrorMessage("");
+    setState("default");
+  }
+
   // This belongs with the other compact global controls, not as a page-wide
   // banner. The icon shows the current state: a crossed bell means this device
   // is not subscribed, while a plain bell means notifications are enabled.
@@ -107,6 +123,7 @@ export function PushNotifications() {
   const label = enabled ? t.notifications.disable : t.notifications.enable;
   const title = state === "error" ? errorMessage || t.notifications.failed : label;
   return (
+    <div className="push-notifications">
     <button
       className={`icon-btn${enabled ? " icon-btn--active" : ""}`}
       type="button"
@@ -117,5 +134,20 @@ export function PushNotifications() {
     >
       {enabled ? <BellIcon size={16} /> : <BellOffIcon size={16} />}
     </button>
+    {state === "error" && errorMessage && (
+      <div className="push-notifications__notice" role="alert">
+        <button
+          className="push-notifications__notice-close"
+          type="button"
+          aria-label={t.notifications.dismiss}
+          title={t.notifications.dismiss}
+          onClick={dismissNotice}
+        >
+          <CloseIcon size={14} />
+        </button>
+        {errorMessage}
+      </div>
+    )}
+    </div>
   );
 }

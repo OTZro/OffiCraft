@@ -288,6 +288,7 @@ var messageKeys = map[string]bool{
 	"notifications.denied":                    true,
 	"notifications.description":               true,
 	"notifications.disable":                   true,
+	"notifications.dismiss":                   true,
 	"notifications.enable":                    true,
 	"notifications.enabled":                   true,
 	"notifications.failed":                    true,
