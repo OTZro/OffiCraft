@@ -321,7 +321,14 @@ describe("OutsourcePanel", () => {
     expect(divider?.nextElementSibling?.getAttribute("data-msg-id")).toBe(
       "entry-unread",
     );
-    expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
+    // The scroll is one React boundary LATER than the divider: entry
+    // positioning only sets firstUnreadId, and ChatArea scrolls in the effect
+    // that fires after the divider (its scroll target) has committed. The DOM
+    // of that commit is queryable the moment findByText resolves; the commit's
+    // passive effect is not — so the call must be awaited, not read.
+    await waitFor(() =>
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" }),
+    );
 
     unread.unmount();
     __resetMock();
@@ -344,12 +351,18 @@ describe("OutsourcePanel", () => {
     const read = renderOutsource();
     fireEvent.click(await read.findByTestId("outsource-row-ow-read-entry"));
     await read.findByText("最後一筆");
+    // Same boundary as above: the land-at-bottom scroll is the entry-positioning
+    // effect of the commit that rendered the thread, so it lands after the DOM
+    // findByText observed. Awaiting it also makes the no-divider assertion below
+    // meaningful — checked once positioning has actually run, not before.
+    await waitFor(() =>
+      expect(
+        scrollIntoView.mock.instances.some((el) =>
+          (el as Element).classList.contains("chat__scroll-anchor"),
+        ),
+      ).toBe(true),
+    );
     expect(read.container.querySelector(".chat__unread-divider")).toBeNull();
-    expect(
-      scrollIntoView.mock.instances.some((el) =>
-        (el as Element).classList.contains("chat__scroll-anchor"),
-      ),
-    ).toBe(true);
   });
 
   it("switching from a populated staff room to an unread worker room keeps the worker entry snapshot", async () => {
