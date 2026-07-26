@@ -217,3 +217,88 @@ func TestDoTeardown_DryRun_TouchesNothing(t *testing.T) {
 		t.Fatalf("dry-run log must mark itself, got:\n%s", log)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// SECOND-HEIGHT GUARD (T-2257): the validation must be CALLED, not merely correct
+// ---------------------------------------------------------------------------
+
+// scanTeardownGuardSource is the teardown analogue of hostseam_test.go's
+// scanHostSeamSource: a pure source scan over teardown.go, returning one
+// human-readable violation per problem and empty when the structure holds.
+//
+// WHY a source scan and not one more behavioural test. Every other guard test in
+// this package (TestValidateTeardownTarget_*, TestTeardownRefusal_*) drives
+// validateTeardownTarget DIRECTLY, so all of them prove the function is CORRECT and
+// none of them prove anything CALLS it. Delete the one line
+//
+//	if err := validateTeardownTarget(env, canonicalExplicit); err != nil { … }
+//
+// from teardownCmd and the entire CLI guard is gone while exactly one test in the
+// package turns red (TestRealMain_BareTeardownRefusesBeforeAnyHostOperation). A
+// whole safety layer resting on a single deletable test is the shape this repo
+// keeps getting bitten by, so the property gets pinned at a second height, in a
+// different medium.
+//
+// THE PROPERTY: inside teardownCmd's body, on CODE lines only, the
+// validateTeardownTarget call must appear and must come BEFORE the first
+// resolveTeardownPaths call — "fail closed before any path is derived" is the
+// contract, and a guard that ran after path resolution would already have named
+// the canonical instance. Comment lines are stripped for the same reason
+// countCodeOccurrences strips them: this file discusses the call at length above,
+// and a scan satisfied by its own documentation is an always-true assertion.
+func scanTeardownGuardSource() []string {
+	raw, err := os.ReadFile("teardown.go")
+	if err != nil {
+		return []string{fmt.Sprintf("cannot read teardown.go to verify the teardown guard: %v (fail closed)", err)}
+	}
+	lines := strings.Split(string(raw), "\n")
+	start := -1
+	for i, l := range lines {
+		if strings.HasPrefix(l, "func teardownCmd(") {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return []string{"teardown.go no longer declares `func teardownCmd(` — the CLI entry point this guard protects has moved or been renamed; re-point this scan at it rather than deleting it"}
+	}
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		if strings.HasPrefix(lines[i], "}") {
+			end = i
+			break
+		}
+	}
+	validateAt, resolveAt := -1, -1
+	for i := start + 1; i < end; i++ {
+		t := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(t, "//") {
+			continue
+		}
+		if validateAt < 0 && strings.Contains(t, "validateTeardownTarget(env, canonicalExplicit)") {
+			validateAt = i
+		}
+		if resolveAt < 0 && strings.Contains(t, "resolveTeardownPaths(") {
+			resolveAt = i
+		}
+	}
+	var out []string
+	if validateAt < 0 {
+		out = append(out, "teardownCmd's body no longer calls validateTeardownTarget(env, canonicalExplicit) on any code line. The explicit-target guard (T-2257) is the ONLY thing standing between a bare `ocwarden teardown` and this host's canonical warden — on 2026-07-25 that exact shape booted out a live warden and deleted its plist and exec token unrecoverably, leaving 7 agents unsupervised. The unit tests around validateTeardownTarget all call it directly and stay green with the call site deleted, which is why this scan exists")
+	}
+	if validateAt >= 0 && resolveAt >= 0 && validateAt > resolveAt {
+		out = append(out, fmt.Sprintf("teardownCmd calls resolveTeardownPaths (line %d) BEFORE validateTeardownTarget (line %d). The contract is fail-closed BEFORE any path is derived: a guard that runs after resolution has already resolved the canonical instance's plist and token paths, and the next edit that moves a side effect up between them is unguarded", resolveAt+1, validateAt+1))
+	}
+	return out
+}
+
+// TestTeardownGuard_IsCalledFromTheCLIEntryPoint is the ONLY runner of
+// scanTeardownGuardSource — it is enforcement, not a reporting wrapper, and there
+// must not be a second copy of it (see cli/CLAUDE.md on the pair of identical
+// no-op host-seam tests independent review defeated by replacing both bodies with
+// panic).
+func TestTeardownGuard_IsCalledFromTheCLIEntryPoint(t *testing.T) {
+	for _, v := range scanTeardownGuardSource() {
+		t.Errorf("teardown guard structure is broken: %s", v)
+	}
+}

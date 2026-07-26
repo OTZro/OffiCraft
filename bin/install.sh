@@ -124,9 +124,10 @@
 #      programs and is LEFT IN PLACE, by name: agents/ (every agent workspace
 #      on this machine) and warden/ (plus its own com.officraft.ocwarden job,
 #      which this installer never registered and therefore never removes —
-#      `~/.officraft/warden/ocwarden teardown` is that subsystem's own removal
-#      path; the absolute path matters because bin/ moves into the backup and
-#      this installer never puts it on PATH). A from-source
+#      `~/.officraft/warden/ocwarden teardown --canonical` is that subsystem's
+#      own removal path; the absolute path matters because bin/ moves into the
+#      backup and this installer never puts it on PATH, and --canonical matters
+#      because teardown refuses an IMPLICIT target (T-2257)). A from-source
 #      install sharing the same ~/.officraft/server root (visible as
 #      server/repo/) is likewise never touched. This is not a courtesy: an
 #      earlier version moved the WHOLE of ~/.officraft aside while printing
@@ -256,7 +257,9 @@ installer, so removal has no business moving them:
   ~/.officraft/agents/   EVERY agent workspace on this machine
   ~/.officraft/warden/   plus its own com.officraft.ocwarden launchd job,
                          which stays registered — remove it with
-                         `ocwarden teardown`, not with this script
+                         `ocwarden teardown --canonical` (namespaced:
+                         `OC_NAMESPACE=<ns> ocwarden teardown`), not with
+                         this script
   ~/.officraft/server/repo/  a from-source `bin/ocserver install` sharing
                              this root
   ~/.officraft itself is never removed.
@@ -445,8 +448,14 @@ EOF
       # Absolute path on purpose: bin/ is about to move into the backup and this
       # installer never puts ~/.officraft/bin on PATH, so bare `ocwarden` would be
       # command-not-found. The warden installs its own stable copy here.
-      local ns_env=""; [[ -n "$ns" ]] && ns_env="OC_NAMESPACE=$ns "
-      echo "[install]   to remove the warden too, afterwards: $ns_env$ROOT_DIR/warden/ocwarden teardown"
+      # The hint must be RUNNABLE (T-2257). `ocwarden teardown` now fails closed
+      # on an IMPLICIT target: bare, it refuses rather than resolve the canonical
+      # warden. So the canonical branch has to spell --canonical, and the
+      # namespaced branch must NOT (the flag and OC_NAMESPACE are mutually
+      # exclusive — passing both is also a refusal).
+      local ns_env="" ns_flag=" --canonical"
+      if [[ -n "$ns" ]]; then ns_env="OC_NAMESPACE=$ns "; ns_flag=""; fi
+      echo "[install]   to remove the warden too, afterwards: $ns_env$ROOT_DIR/warden/ocwarden teardown$ns_flag"
     fi
   fi
   echo "[install] $ROOT_DIR itself is never removed."

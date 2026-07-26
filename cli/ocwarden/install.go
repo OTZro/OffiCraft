@@ -237,6 +237,13 @@ type installer struct {
 	force  bool // --force: override the one-warden-per-machine guard
 	sys    sysOps
 
+	// tag is the SUBCOMMAND name logf/errf stamp on every line. Empty = "install",
+	// which keeps every existing golden transcript byte-identical. teardownCmd sets
+	// "teardown": its refusal (T-2257) is the most consequential message this type
+	// emits, and shipping it under "[ocwarden install] FATAL:" mislabels the very
+	// command the operator has to fix.
+	tag string
+
 	// resolveClaude is the install-time claude RESOLUTION seam (nil = skip, no
 	// stamp — legacy fixtures/tests are untouched). It returns (claudeBin,
 	// plistPATH): claudeBin is the absolute claude executable to stamp into the
@@ -267,11 +274,18 @@ type installer struct {
 	agentProbe func(bin string) error
 }
 
+// subcmdTag is the log prefix for whichever subcommand owns this installer.
+func (i *installer) subcmdTag() string {
+	if i.tag == "" {
+		return "install"
+	}
+	return i.tag
+}
 func (i *installer) logf(format string, a ...any) {
-	fmt.Fprintf(i.out, "[ocwarden install] "+format+"\n", a...)
+	fmt.Fprintf(i.out, "[ocwarden "+i.subcmdTag()+"] "+format+"\n", a...)
 }
 func (i *installer) errf(format string, a ...any) {
-	fmt.Fprintf(i.out, "[ocwarden install] FATAL: "+format+"\n", a...)
+	fmt.Fprintf(i.out, "[ocwarden "+i.subcmdTag()+"] FATAL: "+format+"\n", a...)
 }
 
 // ---------------------------------------------------------------------------

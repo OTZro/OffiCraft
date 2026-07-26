@@ -335,7 +335,11 @@ check "station/default: the release-path DB still made it into the backup" "FAKE
 # under-describing the blast radius, so the disclosure is asserted on its own.
 case "$OUT" in *"will NOT touch"*) ok "station/default: message states what it will not touch";; *) bad "station/default: no 'will NOT touch' disclosure ('$OUT')";; esac
 case "$OUT" in *"agents/ holds 3 agent workspace(s)"*) ok "station/default: names the agent-workspace count";; *) bad "station/default: does not disclose the agent workspaces";; esac
-case "$OUT" in *"ocwarden teardown"*) ok "station/default: points at the warden's own removal path";; *) bad "station/default: does not say how to remove the warden";; esac
+# DISCRIMINATING ON PURPOSE (T-2257): a bare `ocwarden teardown` substring is
+# satisfied by a command the CLI now REFUSES (it fails closed on an implicit
+# target), so matching the substring proved nothing. This is the canonical
+# fixture, so the printed command must carry --canonical or it is not runnable.
+case "$OUT" in *"ocwarden teardown --canonical"*) ok "station/default: points at the warden's own removal path with a RUNNABLE command";; *) bad "station/default: teardown hint is not runnable — bare 'ocwarden teardown' is refused by the CLI ('$OUT')";; esac
 case "$OUT" in *"com.officraft.ocwarden"*) ok "station/default: discloses the warden job it leaves registered";; *) bad "station/default: silent about the leftover warden job";; esac
 
 # ── 13. same station, --purge: deletion must be just as contained ──────────────
@@ -489,7 +493,10 @@ case "$OUT" in *"registered and this script leaves it that way"*) ok "warden pro
 # The remediation command has to be runnable. bin/ is about to move into the
 # backup and this installer never puts it on PATH, so a bare `ocwarden teardown`
 # would be command-not-found — the message must give the warden's own copy.
-case "$OUT" in *"$FAKEHOME/.officraft/warden/ocwarden teardown"*) ok "warden probe: teardown hint uses an absolute path that survives the uninstall";; *) bad "warden probe: teardown hint is not runnable after bin/ moves ('$OUT')";; esac
+# RUNNABLE has TWO halves and both are asserted here: the absolute path (bin/ is
+# gone from PATH) AND --canonical (T-2257: teardown refuses an implicit target,
+# so a bare `ocwarden teardown` exits 1 and the operator is stuck).
+case "$OUT" in *"$FAKEHOME/.officraft/warden/ocwarden teardown --canonical"*) ok "warden probe: teardown hint is runnable — absolute path AND an explicit --canonical target";; *) bad "warden probe: teardown hint is not runnable after bin/ moves, or omits the explicit target ('$OUT')";; esac
 check "warden probe: the warden's own plist is left alone" "1" "$([[ -f "$FAKEHOME/Library/LaunchAgents/com.officraft.ocwarden.plist" ]] && echo 1 || echo 0)"
 
 # ── 20. an unreadable agents/ must not kill the script silently ───────────────
@@ -689,6 +696,10 @@ case "$OUT" in
     ok "ns uninstall: teardown hint carries OC_NAMESPACE and the namespaced absolute path" ;;
   *) bad "ns uninstall: teardown hint would tear down the wrong instance ('$OUT')" ;;
 esac
+# The OTHER half of the explicit-target contract (T-2257): --canonical and a
+# non-empty OC_NAMESPACE are MUTUALLY EXCLUSIVE, so a namespaced hint that also
+# carried --canonical would be refused just as hard as a bare one.
+case "$OUT" in *"--canonical"*) bad "ns uninstall: teardown hint pairs OC_NAMESPACE with --canonical — the CLI refuses that combination ('$OUT')" ;; *) ok "ns uninstall: teardown hint does NOT carry --canonical" ;; esac
 check "ns uninstall: the namespaced warden/ is left in place" "NS-WARDEN-TOKEN-MARKER" "$(cat "$FAKEHOME/.officraft-$NSU/warden/exec-warden.tok" 2>/dev/null)"
 check "ns uninstall: the namespaced warden's plist is left alone" "1" "$([[ -f "$FAKEHOME/Library/LaunchAgents/com.officraft.ocwarden.$NSU.plist" ]] && echo 1 || echo 0)"
 # NEGATIVE CONTROL for the branch itself: with no warden/ in the namespaced root

@@ -166,7 +166,7 @@ curl -fsSL https://github.com/pkyosx/OffiCraft/releases/latest/download/install.
 | 留在原地 | 為什麼 |
 |---|---|
 | `~/.officraft/agents/` | 這台機器上**每一個 agent 的工作區**。安裝器從未建立它們 |
-| `~/.officraft/warden/` | ocwarden 常駐程式的目錄。它有**自己的** launchd job（`com.officraft.ocwarden`），移除後仍**保持註冊與執行**——要一併移除請用 `ocwarden teardown` |
+| `~/.officraft/warden/` | ocwarden 常駐程式的目錄。它有**自己的** launchd job（`com.officraft.ocwarden`），移除後仍**保持註冊與執行**——要一併移除請用 `ocwarden teardown --canonical`（具名實例是 `OC_NAMESPACE=<ns> ocwarden teardown`；teardown 拒絕隱含目標，裸指令會 exit 1） |
 | `~/.officraft/server/repo/` | 方式二（從原始碼）裝的那一份，跟這條路共用同一個 `server` 根目錄 |
 | `~/.officraft` 本身 | 永遠不會被移除 |
 
