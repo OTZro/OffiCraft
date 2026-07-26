@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -228,6 +229,106 @@ func TestResolveTeardownPaths_Namespaced(t *testing.T) {
 	}
 }
 
+// A lost OC_NAMESPACE used to make `ocwarden teardown` silently resolve the
+// canonical label/token/root.  The CLI boundary must reject that shape before
+// resolveTeardownPaths can derive or mutate anything; canonical is opt-in.
+func TestValidateTeardownTarget_FailsClosedAgainstImplicitCanonical(t *testing.T) {
+	canonical := envFn(map[string]string{"HOME": "/h"})
+	if err := validateTeardownTarget(canonical, false); err == nil {
+		t.Fatal("bare teardown with no OC_NAMESPACE must refuse implicit canonical target")
+	} else if !strings.Contains(err.Error(), "--canonical") {
+		t.Fatalf("refusal must tell caller how to make canonical explicit, got %v", err)
+	}
+	if err := validateTeardownTarget(canonical, true); err != nil {
+		t.Fatalf("explicit canonical teardown must remain available, got %v", err)
+	}
+
+	namespaced := envFn(map[string]string{"HOME": "/h", "OC_NAMESPACE": "e2e-safe"})
+	if err := validateTeardownTarget(namespaced, false); err != nil {
+		t.Fatalf("namespaced teardown must be admitted without canonical flag, got %v", err)
+	}
+	if err := validateTeardownTarget(namespaced, true); err == nil {
+		t.Fatal("--canonical must not override a namespaced target")
+	}
+}
+
+// withFakeTeardownSys makes the launchd/filesystem surface UNREACHABLE for the
+// duration of a test by swapping the teardownSysOps seam for a recording fake,
+// and restores the real constructor afterwards.
+//
+// Any test that drives realMain(..."teardown"...) MUST call this. realMain
+// derives its launchd target from the REAL os.Getuid() and the canonical label,
+// so a fake HOME sandboxes the FILE paths and nothing else: without the seam,
+// the ONLY thing standing between `go test` on a fleet host and
+// `launchctl bootout gui/<uid>/com.officraft.ocwarden` is the guard the test
+// exists to check. On 2026-07-26 that gap unloaded this repo's live warden
+// twice — once during review, once while mutating the guard to prove the test
+// could redden. The seam removes the gap by construction.
+func withFakeTeardownSys(t *testing.T) *fakeSys {
+	t.Helper()
+	f := newFakeSys()
+	f.runFn = labelGoneRunFn
+	prev := teardownSysOps
+	teardownSysOps = func() sysOps { return f.ops() }
+	t.Cleanup(func() { teardownSysOps = prev })
+	return f
+}
+
+func TestRealMain_BareTeardownRefusesBeforeAnyHostOperation(t *testing.T) {
+	f := withFakeTeardownSys(t)
+	env := envFn(map[string]string{"HOME": "/h"})
+
+	var sb strings.Builder
+	rc := realMain([]string{"teardown"}, env, &sb)
+	if rc != 1 {
+		t.Fatalf("bare canonical teardown rc=%d, want 1; transcript:\n%s", rc, sb.String())
+	}
+	if !strings.Contains(sb.String(), "--canonical") {
+		t.Fatalf("bare teardown refusal must name explicit canonical authorization:\n%s", sb.String())
+	}
+	// BEFORE ANY HOST OPERATION — asserted against the seam itself, not against
+	// the printed transcript: zero subprocesses, zero removals. This is the
+	// assertion the test name has always claimed and never actually made.
+	if len(f.runs) != 0 {
+		t.Fatalf("bare teardown reached the host: ran %v", f.runs)
+	}
+	if len(f.removed) != 0 {
+		t.Fatalf("bare teardown removed files: %v", f.removed)
+	}
+
+	// Seam interlock. The assertions above are only meaningful if the fake is
+	// really the sysOps teardownCmd uses; if the seam were bypassed, f would
+	// stay empty for the WRONG reason and the case above would be vacuous AND
+	// live-fire. So drive an ADMITTED target through the same seam and require
+	// the fake to have recorded it. Namespaced (not --canonical) on purpose:
+	// even if this ever escaped to the real sysOps, com.officraft.ocwarden.seamprobe
+	// and /h/.officraft-seamprobe exist on no host.
+	probe := envFn(map[string]string{"HOME": "/h", "OC_NAMESPACE": "seamprobe"})
+	var ns strings.Builder
+	if rc := realMain([]string{"teardown"}, probe, &ns); rc != 0 {
+		t.Fatalf("namespaced teardown rc=%d, want 0:\n%s", rc, ns.String())
+	}
+	if len(f.runs) == 0 {
+		t.Fatal("seam interlock FAILED: teardownCmd did not use the injected sysOps — " +
+			"the refusal assertions above prove nothing and this test can reach real launchd")
+	}
+	wantFirst := fmt.Sprintf("bootout gui/%d/com.officraft.ocwarden.seamprobe", os.Getuid())
+	if got := strings.Join(f.runs[0].args, " "); got != wantFirst {
+		t.Fatalf("seam interlock recorded first call %q, want %q (uid/label derivation moved?)", got, wantFirst)
+	}
+	// And nothing canonical may ever appear on the recorded surface.
+	for _, r := range f.runs {
+		if strings.HasSuffix(strings.Join(r.args, " "), "/com.officraft.ocwarden") {
+			t.Fatalf("canonical launchd label reached the seam: %v", r)
+		}
+	}
+	for _, rm := range f.removed {
+		if strings.Contains(rm, "/.officraft/") || strings.HasSuffix(rm, "com.officraft.ocwarden.plist") {
+			t.Fatalf("canonical artifact reached the seam: %q", rm)
+		}
+	}
+}
+
 func TestDoTeardown_NamespacedActsOnOwnLabelOnly(t *testing.T) {
 	f := newFakeSys()
 	f.runFn = labelGoneRunFn
@@ -342,5 +443,70 @@ func TestRealMain_RunRefusesInvalidNamespace(t *testing.T) {
 	}
 	if !strings.Contains(sb.String(), "OC_NAMESPACE") {
 		t.Errorf("refusal must name OC_NAMESPACE:\n%s", sb.String())
+	}
+}
+
+// Operator guidance must be RUNNABLE. `ocwarden teardown` now fails closed on an
+// implicit canonical target, so every message that tells an operator to run it
+// has to spell the explicit form — otherwise the official recovery instruction
+// is itself refused and the operator has no way forward. The install guard's
+// refusal is the one such message in this binary; the hint has to match the
+// instance being installed, because handing a namespaced install
+// "--canonical" would point it at the LIVE canonical warden.
+func TestGuardRefusal_TeachesARunnableTeardown(t *testing.T) {
+	refuse := func(ns string) string {
+		t.Helper()
+		f := newFakeSys()
+		p := fixedPaths()
+		p.namespace = ns
+		p.ocID = "m-aaa"
+		p.ocToken = fakeJWT("m-aaa")
+		f.existing[p.tokfile] = []byte(fakeJWT("m-bbb"))
+		i := &installer{out: io.Discard, sys: f.ops()}
+		err := i.guard(p)
+		if err == nil {
+			t.Fatal("guard must refuse a foreign warden")
+		}
+		return err.Error()
+	}
+
+	canonical := refuse("")
+	if !strings.Contains(canonical, "ocwarden teardown --canonical") {
+		t.Errorf("canonical install must teach the EXPLICIT teardown; got: %s", canonical)
+	}
+	if strings.Contains(canonical, "'ocwarden teardown'") {
+		t.Errorf("the bare form is refused by the CLI — an operator following it is stuck: %s", canonical)
+	}
+
+	namespaced := refuse("seth")
+	if !strings.Contains(namespaced, "OC_NAMESPACE=seth ocwarden teardown") {
+		t.Errorf("namespaced install must teach its OWN teardown; got: %s", namespaced)
+	}
+	if strings.Contains(namespaced, "--canonical") {
+		t.Errorf("a namespaced install must NEVER point the operator at the canonical warden: %s", namespaced)
+	}
+}
+
+// The refusal is read by AUTOMATION as often as by humans (the incident vector
+// was an automated cleanup). It must lead with WHAT IS DESTROYED and offer the
+// namespaced escape BEFORE it names the flag that authorizes the destruction —
+// a retry wrapper scraping stderr should meet the safe option first.
+func TestTeardownRefusal_LeadsWithConsequenceNotWithTheBypass(t *testing.T) {
+	err := validateTeardownTarget(envFn(map[string]string{"HOME": "/h"}), false)
+	if err == nil {
+		t.Fatal("bare teardown must refuse")
+	}
+	msg := err.Error()
+	for _, must := range []string{"CANONICAL warden", "com.officraft.ocwarden", "OC_NAMESPACE=", "--canonical"} {
+		if !strings.Contains(msg, must) {
+			t.Fatalf("refusal must mention %q; got: %s", must, msg)
+		}
+	}
+	iCanon := strings.Index(msg, "--canonical")
+	if i := strings.Index(msg, "CANONICAL warden"); i > iCanon {
+		t.Errorf("the consequence must precede the bypass flag:\n%s", msg)
+	}
+	if i := strings.Index(msg, "OC_NAMESPACE="); i > iCanon {
+		t.Errorf("the safe namespaced alternative must precede the bypass flag:\n%s", msg)
 	}
 }

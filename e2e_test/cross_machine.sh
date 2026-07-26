@@ -256,7 +256,7 @@ done
 # 1c. best-effort ocwarden teardown (removes its plist/tokfile cleanly if present).
 if [[ -x "$OCWARDEN" ]]; then
   log "bin/ocwarden teardown (best-effort clean warden removal)"
-  "$OCWARDEN" teardown 2>&1 | sed 's/^/[cross-machine] warden-td| /' >&2 || \
+  env OC_NAMESPACE="" "$OCWARDEN" teardown --canonical 2>&1 | sed 's/^/[cross-machine] warden-td| /' >&2 || \
     warn "ocwarden teardown returned non-zero (may be already-gone) — continuing"
 fi
 

@@ -575,7 +575,16 @@ func realMain(argv []string, env func(string) string, out io.Writer) int {
 			}
 			return installCmd(env, out, force)
 		case "teardown":
-			return teardownCmd(env, out)
+			canonical := false
+			for _, a := range argv[1:] {
+				if a == "--canonical" {
+					canonical = true
+					continue
+				}
+				fmt.Fprintf(out, "usage: ocwarden teardown [--canonical]\n")
+				return 2
+			}
+			return teardownCmd(env, out, canonical)
 		case "codex-session":
 			return runCodexSession(argv[1:], env, out)
 		case "version", "--version", "-v":
@@ -593,10 +602,10 @@ func realMain(argv []string, env func(string) string, out io.Writer) int {
 	once := fs.Bool("once", false, "run a single collect->POST cycle then exit (test hook)")
 
 	if len(argv) == 0 || argv[0] != "run" {
-		fmt.Fprintln(out, "usage: ocwarden {run [--once] | install | teardown}")
+		fmt.Fprintln(out, "usage: ocwarden {run [--once] | install | teardown [--canonical]}")
 		fmt.Fprintln(out, "  run       officraft per-machine hardware telemetry + command producer.")
 		fmt.Fprintln(out, "  install   install + start the launchd warden job on this machine.")
-		fmt.Fprintln(out, "  teardown  stop + remove the launchd warden job from this machine.")
+		fmt.Fprintln(out, "  teardown  stop + remove a namespaced warden; canonical requires --canonical.")
 		return 0
 	}
 	if err := fs.Parse(argv[1:]); err != nil {

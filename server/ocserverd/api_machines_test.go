@@ -798,3 +798,129 @@ func TestHandleDeleteMachine(t *testing.T) {
 		}
 	})
 }
+
+// ---------------------------------------------------------------------------
+// teardown-here — the CANONICAL/NAMESPACED argv+env contract (T-2257)
+//
+// `ocwarden teardown` now REFUSES an implicit canonical target: bare teardown
+// exits 1 and destroys nothing. The owner's one-click teardown-here therefore
+// has to spell `--canonical` when this server IS the canonical instance, and
+// must NOT when it is namespaced (the CLI rejects --canonical together with
+// OC_NAMESPACE). Neither arm had a single test: deleting the append left the
+// suite green while the button silently became a permanent exit 1, and because
+// CONFIRM-THEN-REMOVE keys off exit 0, the machine would stay in the roster
+// forever with no way to retire it.
+//
+// The handler is driven END TO END through the ocwardenFS / ocwardenRun seams,
+// so nothing is ever exec'd — running the real binary here would be the
+// incident this ticket exists to prevent.
+// ---------------------------------------------------------------------------
+
+type recordedOcwardenRun struct {
+	args []string
+	env  []string
+}
+
+func newTeardownHereServer(t *testing.T, namespace string, exitCode int) (*apiServer, *[]recordedOcwardenRun) {
+	t.Helper()
+	s := newMachinesTestServer(t)
+	s.namespace = namespace
+	s.binCacheDir = filepath.Join(t.TempDir(), "cache-bin")
+	s.ocwardenFS = fstest.MapFS{"ocwarden": {Data: []byte("fake warden — never exec'd")}}
+	runs := &[]recordedOcwardenRun{}
+	s.ocwardenRun = func(_ string, args []string, env []string) (int, string, bool) {
+		*runs = append(*runs, recordedOcwardenRun{args: args, env: env})
+		return exitCode, "fake teardown log", false
+	}
+	putTestMember(t, s, Member{
+		ID: "m-box", Name: "m-box", Kind: KindWarden, Effort: "medium",
+		DesiredState: DesiredStateOffline, RosterStatus: RosterStatusActive,
+	})
+	return s, runs
+}
+
+func postTeardownHere(t *testing.T, s *apiServer) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/machines/m-box/teardown-here", nil)
+	s.HandleTeardownHereApiMachinesMachineIdTeardownHerePost(rec, req, "m-box")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("teardown-here: %d %s", rec.Code, rec.Body.String())
+	}
+	return rec
+}
+
+func envValue(env []string, key string) (string, bool) {
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], key+"=") {
+			return strings.TrimPrefix(env[i], key+"="), true
+		}
+	}
+	return "", false
+}
+
+func TestHandleTeardownHere_ExplicitTargetContract(t *testing.T) {
+	t.Run("canonical instance spells --canonical and passes no OC_NAMESPACE", func(t *testing.T) {
+		s, runs := newTeardownHereServer(t, "", 0)
+		postTeardownHere(t, s)
+		if len(*runs) != 1 {
+			t.Fatalf("want exactly one ocwarden invocation, got %d", len(*runs))
+		}
+		got := strings.Join((*runs)[0].args, " ")
+		if got != "teardown --canonical" {
+			t.Fatalf("canonical teardown-here argv = %q, want %q — a bare `teardown` is REFUSED by the "+
+				"CLI (exit 1), so the one-click button would never confirm and CONFIRM-THEN-REMOVE would "+
+				"strand the machine in the roster forever", got, "teardown --canonical")
+		}
+		if ns, ok := envValue((*runs)[0].env, "OC_NAMESPACE"); ok && ns != "" {
+			t.Fatalf("canonical teardown-here must not export OC_NAMESPACE, got %q", ns)
+		}
+	})
+
+	t.Run("namespaced instance passes OC_NAMESPACE and never --canonical", func(t *testing.T) {
+		s, runs := newTeardownHereServer(t, "e2eproof", 0)
+		postTeardownHere(t, s)
+		if len(*runs) != 1 {
+			t.Fatalf("want exactly one ocwarden invocation, got %d", len(*runs))
+		}
+		got := strings.Join((*runs)[0].args, " ")
+		if got != "teardown" {
+			t.Fatalf("namespaced teardown-here argv = %q, want a bare %q — the CLI refuses "+
+				"--canonical together with OC_NAMESPACE, so adding the flag here would make every "+
+				"namespaced teardown exit 1", got, "teardown")
+		}
+		ns, ok := envValue((*runs)[0].env, "OC_NAMESPACE")
+		if !ok || ns != "e2eproof" {
+			t.Fatalf("namespaced teardown-here must export OC_NAMESPACE=e2eproof, got %q (present=%v) — "+
+				"without it the child resolves the CANONICAL label and token: the 2026-07-25 incident",
+				ns, ok)
+		}
+	})
+
+	// CONFIRM-THEN-REMOVE, pinned on both arms: the roster edit is what a
+	// permanently-failing teardown would silently cost the owner.
+	t.Run("exit 0 confirms and soft-deletes; non-zero keeps the machine", func(t *testing.T) {
+		s, _ := newTeardownHereServer(t, "", 0)
+		postTeardownHere(t, s)
+		m, err := s.dal.GetMember("m-box")
+		if err != nil || m == nil {
+			t.Fatalf("get member: %v", err)
+		}
+		if m.RosterStatus != RosterStatusRemoved {
+			t.Fatalf("confirmed teardown must soft-delete the warden, roster=%q", m.RosterStatus)
+		}
+
+		s2, _ := newTeardownHereServer(t, "", 1)
+		rec := postTeardownHere(t, s2)
+		if !strings.Contains(rec.Body.String(), `"removed":false`) {
+			t.Fatalf("unconfirmed teardown must report removed=false: %s", rec.Body.String())
+		}
+		m2, err := s2.dal.GetMember("m-box")
+		if err != nil || m2 == nil {
+			t.Fatalf("get member: %v", err)
+		}
+		if m2.RosterStatus == RosterStatusRemoved {
+			t.Fatal("an UNCONFIRMED teardown must never soft-delete the machine")
+		}
+	})
+}

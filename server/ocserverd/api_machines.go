@@ -642,7 +642,11 @@ func runOcwarden(binPath string, args []string, env []string) (int, string, bool
 // run — a stale bin/ocwarden under the CWD must never be exec'd in its place
 // (bootstrap-here once installed a frozen checkout's stale warden this way).
 func (s *apiServer) resolveOcwardenBinary(w http.ResponseWriter) (string, bool) {
-	path, err := s.resolveOcwardenBinaryFrom(bindistFS())
+	embedded := s.ocwardenFS
+	if embedded == nil {
+		embedded = bindistFS()
+	}
+	path, err := s.resolveOcwardenBinaryFrom(embedded)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable,
 			"ocwarden binary is not available (no embedded copy in this server build): "+err.Error())
@@ -764,7 +768,17 @@ func (s *apiServer) HandleTeardownHereApiMachinesMachineIdTeardownHerePost(w htt
 	if s.namespace != "" {
 		env = append(env, "OC_NAMESPACE="+s.namespace)
 	}
-	exitCode, log, timedOut := runOcwarden(binPath, []string{"teardown"}, env)
+	args := []string{"teardown"}
+	if s.namespace == "" {
+		// Canonical teardown is destructive and the CLI refuses an implicit
+		// canonical target; the server has already resolved this instance.
+		args = append(args, "--canonical")
+	}
+	run := s.ocwardenRun
+	if run == nil {
+		run = runOcwarden
+	}
+	exitCode, log, timedOut := run(binPath, args, env)
 	if timedOut {
 		writeJSON(w, http.StatusOK, machineTeardownHereResultDTO{
 			MachineID: machine.ID,
