@@ -874,7 +874,8 @@ func TestBoundCardStillAnswersAndReleasesTheHold(t *testing.T) {
 	}
 }
 
-// ── the expired terminal (T-1aa4): owner-only expire, hold release, orphans ──
+// ── the expired terminal (T-1aa4): expire (owner/admin agent since T-6020),
+// hold release, orphans ──
 
 // expireCardReq drives POST /api/reply-cards/{id}/expire as the given actor.
 func expireCardReq(t *testing.T, api *apiServer, cardID, sub, scope string) *httptest.ResponseRecorder {

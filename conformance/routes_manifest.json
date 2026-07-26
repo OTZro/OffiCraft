@@ -106,7 +106,7 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": "upgrade_software",
+    "mcp_tool": "upgrade_station",
     "method": "POST",
     "path": "/api/update/upgrade",
     "requires": "admin_agent"
@@ -449,14 +449,14 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": "bootstrap_machine_here",
+    "mcp_tool": "install_warden_on_server_host",
     "method": "POST",
     "path": "/api/machines/{machine_id}/bootstrap-here",
     "requires": "admin_agent"
   },
   {
     "auth": "gated",
-    "mcp_tool": "teardown_machine_here",
+    "mcp_tool": "uninstall_warden_on_server_host",
     "method": "POST",
     "path": "/api/machines/{machine_id}/teardown-here",
     "requires": "admin_agent"
@@ -470,7 +470,7 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": "upgrade_machine",
+    "mcp_tool": "upgrade_warden",
     "method": "POST",
     "path": "/api/machines/{member_id}/upgrade",
     "requires": "admin_agent"
@@ -743,7 +743,7 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": "get_worker_boot_context",
+    "mcp_tool": "get_outsource_worker_boot_context",
     "method": "GET",
     "path": "/api/outsource-workers/{id}/boot-context",
     "requires": "admin_agent"

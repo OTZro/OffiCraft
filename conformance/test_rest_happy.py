@@ -1042,7 +1042,8 @@ HAPPY: dict[str, Happy] = {
     ),
     "POST /api/task-manuals/{type_key}": Happy(
         # agent floor (owner ruling 2026-07-13): content fields are
-        # agent-editable (assignee stays owner-only — see test_tasks.py).
+        # agent-editable (assignee is governance: owner/admin agent since
+        # T-6020 — see test_tasks.py).
         identity="agent",
         path=lambda ctx: f"/api/task-manuals/{_happy_manual(ctx)}",
         body={"purpose": "conf happy purpose",

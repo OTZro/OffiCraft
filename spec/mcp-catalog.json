@@ -257,7 +257,7 @@
         "properties": {},
         "type": "object"
       },
-      "name": "upgrade_software"
+      "name": "upgrade_station"
     },
     {
       "description": "List the owner's roster (presence-derived MemberDTO[]).",
@@ -1289,7 +1289,7 @@
         ],
         "type": "object"
       },
-      "name": "bootstrap_machine_here"
+      "name": "install_warden_on_server_host"
     },
     {
       "description": "Teardown on server: tear this machine's warden down on the host.",
@@ -1304,7 +1304,7 @@
         ],
         "type": "object"
       },
-      "name": "teardown_machine_here"
+      "name": "uninstall_warden_on_server_host"
     },
     {
       "description": "Uninstall a machine: drive the uninstall RPC to its warden.",
@@ -1335,7 +1335,7 @@
         ],
         "type": "object"
       },
-      "name": "upgrade_machine"
+      "name": "upgrade_warden"
     },
     {
       "description": "Delete a machine: soft-delete its warden record (no command sent).",
@@ -2506,7 +2506,7 @@
         ],
         "type": "object"
       },
-      "name": "get_worker_boot_context"
+      "name": "get_outsource_worker_boot_context"
     },
     {
       "description": "Refocus (\u63db\u624b) an outsource worker (owner/admin agent, online-only else 409).",

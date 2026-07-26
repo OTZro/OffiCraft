@@ -226,7 +226,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Auth:     authGated,
 			Requires: principalAdminAgent,
 			Summary:  "Trigger a software upgrade to the latest GitHub release.",
-			MCPTool:  "upgrade_software",
+			MCPTool:  "upgrade_station",
 		},
 		// ── Gated infra seams ────────────────────────────────────────────────
 		{
@@ -687,7 +687,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Auth:     authGated,
 			Requires: principalAdminAgent,
 			Summary:  "Bootstrap on server: install this machine's warden on the host.",
-			MCPTool:  "bootstrap_machine_here",
+			MCPTool:  "install_warden_on_server_host",
 		},
 		{
 			Method:   "POST",
@@ -696,7 +696,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Auth:     authGated,
 			Requires: principalAdminAgent,
 			Summary:  "Teardown on server: tear this machine's warden down on the host.",
-			MCPTool:  "teardown_machine_here",
+			MCPTool:  "uninstall_warden_on_server_host",
 		},
 		{
 			Method:   "POST",
@@ -716,7 +716,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Auth:     authGated,
 			Requires: principalAdminAgent,
 			Summary:  "Upgrade a machine: kick its warden's self-update NOW.",
-			MCPTool:  "upgrade_machine",
+			MCPTool:  "upgrade_warden",
 		},
 		{
 			Method:   "DELETE",
@@ -1105,7 +1105,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Auth:     authGated,
 			Requires: principalAdminAgent,
 			Summary:  "Read an outsource worker's boot-context preview (owner/admin agent).",
-			MCPTool:  "get_worker_boot_context",
+			MCPTool:  "get_outsource_worker_boot_context",
 		},
 		{
 			// T-f190 改機器; P7c (gate rc-2786636f30e5) drops the floor to

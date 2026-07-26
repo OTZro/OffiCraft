@@ -1,12 +1,16 @@
 package main
 
 // api_taskmanuals_test.go — the manual-authorship split's server-side pins
-// (owner ruling 2026-07-13): manual CONTENT (create / purpose / fields /
-// sop_md / learnings) is agent-writable, the ASSIGNEE face is owner-only
-// governance — a non-owner supplying `assignee` on create or edit is a flat
-// 403 from the in-handler gate (the route floor is agent; the gate is the
-// extra choke). Handlers are invoked directly (route-table auth is pinned by
-// the conformance matrix; the gate reads the injected claims).
+// (owner ruling 2026-07-13, floor lowered by T-6020 owner ruling 2026-07-26):
+// manual CONTENT (create / purpose / fields / sop_md / learnings) is
+// agent-writable, the ASSIGNEE face is GOVERNANCE — admitted for owner AND
+// admin_agent, while a PLAIN agent supplying `assignee` on create or edit is a
+// flat 403 from the in-handler gate (the route floor is agent; the gate is the
+// extra choke). Both sides are pinned here: the plain-agent refusal in
+// TestAgentSuppliedAssigneeIs403OnCreateAndEdit, the admin_agent success in
+// TestAdminAgentAssigneeIsAppliedOnCreateAndEdit — a boundary needs both or it
+// is only a direction. Handlers are invoked directly (route-table auth is
+// pinned by the conformance matrix; the gate reads the injected claims).
 
 import (
 	"encoding/json"

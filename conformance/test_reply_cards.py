@@ -10,7 +10,8 @@ promises:
   * an ANSWER is the only POSITIVE close: option pick, free text (a
     counter-question included), or an attachment all flip waiting→answered;
     there is NO close/skip surface (probed: no such routes exist). The
-    owner-only EXPIRE (T-1aa4) is the sole other exit — waiting→expired,
+    EXPIRE (T-1aa4; owner or admin agent since T-6020) is the sole other exit
+    — waiting→expired,
     terminal, NOT an answer (its own test section below);
   * one-shot: a second POST answer is 409 (the agent asks again with a NEW
     card, never a reopen);
@@ -485,7 +486,7 @@ def test_answer_reaches_the_agent_with_card_context(
         assert blob.content == base64.b64decode(_PNG_B64)
 
 
-# ── expired (T-1aa4): the owner-only terminal that is NOT an answer ─────────
+# ── expired (T-1aa4): the governance terminal that is NOT an answer ────────
 
 
 def _expire(client, owner_token, card_id: str):

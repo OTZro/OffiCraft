@@ -227,8 +227,8 @@ export const en: Dict = {
     openedAt: (time: string) => `Opened ${time}`,
     answeredAt: (time: string) => `Answered ${time}`,
     expiredAt: (time: string) => `Expired ${time}`,
-    // Mark expired (owner-only terminal; not an answer; no undo) — the button
-    // opens a double-confirm.
+    // Mark expired (owner/admin-agent terminal since T-6020; not an answer; no
+    // undo) — the button opens a double-confirm.
     expire: "Mark expired",
     expireConfirm: "Confirm mark expired",
     expireConfirmBody: (summary: string) =>
