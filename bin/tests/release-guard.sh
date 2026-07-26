@@ -100,8 +100,13 @@ cat > "$SHIMDIR/gh" <<'SH'
 #!/usr/bin/env bash
 echo "gh $*" >> "$GH_WIRE"
 if [[ "${1:-}" == "release" && "${2:-}" == "view" ]]; then
-  [[ "${GH_VIEW_RC:-0}" == "0" ]] || { echo "release not found" >&2; exit "${GH_VIEW_RC}"; }
+  # stdout is emitted FIRST and the exit code applied AFTER, so a case can set
+  # GH_VIEW_RC!=0 together with a non-empty GH_VIEW_JSON. That combination is not
+  # a claim about how real gh behaves — it is the only way to reach the rc!=0 rule
+  # on its own, because with an empty payload the very next rule ("returned
+  # nothing") would have caught it anyway. See S1b.
   printf '%s' "${GH_VIEW_JSON:-}"
+  [[ "${GH_VIEW_RC:-0}" == "0" ]] || { echo "release not found" >&2; exit "${GH_VIEW_RC}"; }
   exit 0
 fi
 if [[ "${1:-}" == "release" && ( "${2:-}" == "create" || "${2:-}" == "edit" ) ]]; then
@@ -218,6 +223,15 @@ named_failure "S1 gh release view FAILS (no such release)" release-exists "$RC" 
 GH_VIEW_RC=0 GH_VIEW_JSON="" release_fn verify_stored_release "$TAG" "$SHA" prerelease
 named_failure "S2 gh release view returns NOTHING" release-exists "$RC" "$OUT"
 
+# S1 above cannot tell the two release-exists rules apart: its payload is empty,
+# so deleting the rc!=0 rule still leaves the "returned nothing" rule to catch it
+# — S1 passes on S2's rule. S1b is the only case that reaches the rc!=0 rule
+# alone: a non-zero exit carrying a perfectly well-formed payload, which must
+# still lose. Output from a command that failed is not an answer.
+GH_VIEW_RC=1 GH_VIEW_JSON="$(stored_json)" \
+  release_fn verify_stored_release "$TAG" "$SHA" prerelease
+named_failure "S1b gh release view FAILS but still printed a valid payload" release-exists "$RC" "$OUT"
+
 GH_VIEW_JSON="$(stored_json 'tagName="v0.0.0-other"')" \
   release_fn verify_stored_release "$TAG" "$SHA" prerelease
 named_failure "S3 GitHub answered about a DIFFERENT tag" release-tag "$RC" "$OUT"
@@ -278,6 +292,21 @@ named_failure "S12 an UNEXPECTED extra asset (somebody uploaded behind us)" asse
 GH_VIEW_JSON="$(stored_json 'targetCommitish="somebranchsha"')" \
   release_fn verify_stored_release "$TAG" "" prerelease
 check "S13 an empty EXPECTED target accepts any concrete stored target" "0" "$RC"
+
+# S14 is the ONLY case that reaches the "stored target is blank" rule. S7 looks
+# like it does, but it passes a concrete expected target ($SHA), so the blank is
+# actually caught one line later by the MISMATCH rule — which fails under the same
+# item name, release-target, so the two are indistinguishable from the outside.
+# S13 passes the empty expected target but a concrete stored one. Only
+# expected="" AND stored="" lands on `if not target`. That combination is exactly
+# promote's pre-flip call (it verifies with WANT_TARGET=""), so without this case
+# promote could flip a release that cannot say which commit it was cut from —
+# the one thing the read-back exists to prevent. Deleting the rule from
+# bin/release left the whole suite green before this case existed.
+GH_VIEW_JSON="$(stored_json 'targetCommitish=""')" \
+  release_fn verify_stored_release "$TAG" "" prerelease
+named_failure "S14 EMPTY stored target with an empty EXPECTED target (promote's pre-flip shape)" \
+  release-target "$RC" "$OUT"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # T — SETTLE: the station is actually running the release.
