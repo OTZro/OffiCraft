@@ -16,7 +16,10 @@ framework-raised sources) and pins the envelope:
   * 400 validation_error — handler-raised input rejections (bad base64
     attachment; non-numeric context_pct and empty telemetry, which
     lifecycle.md §3 pins as flat 400, NOT 422);
-  * 422 validation_error — the request-validation source (framework-level).
+  * 422 validation_error — the request-validation source (framework-level),
+    including lifecycle.md §3's EXCEPTION to the flat-400 rule: the telemetry
+    blocks whose nested shape the spec DECLARES are typed as objects, so a
+    non-object there is refused before any handler runs.
 
 The vocabulary table below is re-declared, NOT imported (black-box iron rule).
 """
@@ -131,6 +134,20 @@ CASES: dict[str, ErrCase] = {
         400,
         lambda c, _o, a, _m: c.post(
             "/api/monitoring/telemetry", json={}, headers=_auth(a.token)
+        ),
+    ),
+    # lifecycle.md §3 EXCEPTION: `hardware` / `claude` / `runtimes` declare their
+    # nested shape, so a non-object THERE is refused by request validation (422)
+    # rather than by the handler's own object check (the flat 400 that
+    # 400-telemetry-empty and the undeclared blocks still answer). Firing both
+    # halves from this file is the point: the two classes are raised by
+    # different sources and must both carry the one envelope.
+    "422-telemetry-declared-block-wrong-type": ErrCase(
+        422,
+        lambda c, _o, a, _m: c.post(
+            "/api/monitoring/telemetry",
+            json={"hardware": "not-an-object"},
+            headers=_auth(a.token),
         ),
     ),
     "422-login-missing-field": ErrCase(
