@@ -663,7 +663,7 @@ func buildCommandDeps(cfg Config, env func(string) string, runner CmdRunner) Com
 			if err != nil {
 				return false, fmt.Sprintf("[ocwarden teardown] cannot resolve paths: %v\n", err)
 			}
-			return doTeardown(realSysOps(), env(dryRunEnv) == "1", p)
+			return doTeardown(newHostSeam().sys, env(dryRunEnv) == "1", p)
 		},
 		// Real process-exit seam for the uninstall self-teardown. The uninstall case
 		// calls this ONLY after its receipt is proven delivered.

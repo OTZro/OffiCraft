@@ -187,7 +187,11 @@ func (i *installer) runTeardown(p teardownPaths) (ok bool) {
 // LOAD-BEARING for the server's handle_teardown_here: it soft-deletes the warden
 // member only on exit 0 (CONFIRM-THEN-REMOVE).
 func teardownCmd(env func(string) string, out io.Writer) int {
-	i := &installer{out: out, dryRun: env(dryRunEnv) == "1", sys: realSysOps()}
+	// Same single host seam as install (see hostSeam in install.go): production
+	// gets the real launchctl/filesystem, the test binary gets a recording fake
+	// bound in TestMain — so no test can bootout the live warden even if every
+	// guard below is wrong.
+	i := &installer{out: out, dryRun: env(dryRunEnv) == "1", sys: newHostSeam().sys}
 	p, err := resolveTeardownPaths(env, os.Getuid())
 	if err != nil {
 		i.errf("%v", err)

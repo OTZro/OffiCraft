@@ -18,6 +18,27 @@
 #                              # implied by --force: overwriting files and
 #                              # dropping every connected client are different
 #                              # acts and take separate consent.
+#      ./install.sh --namespace <ns> --port <port>
+#                              # install a SECOND, fully isolated instance on
+#                              # this machine. ONE key derives every per-instance
+#                              # resource, so the axes cannot disagree:
+#                              #   root   ~/.officraft-<ns>
+#                              #   label  com.officraft.serve.<ns>
+#                              #   config ~/.officraft-<ns>/server/oc.toml
+#                              #          (written here, carrying namespace+port)
+#                              #   db     ~/.officraft-<ns>/server/data/…
+#                              # and from there the warden it installs
+#                              # (com.officraft.ocwarden.<ns>, ~/.officraft-<ns>).
+#                              # <ns> matches [a-z0-9-]{1,16}; --port is REQUIRED
+#                              # (7755 is the MAIN instance's). Also settable as
+#                              # OC_NAMESPACE=<ns>. The EMPTY namespace is the
+#                              # main instance and changes nothing.
+#                              # NOTE this is the ONLY real isolation this script
+#                              # offers: a redirected $HOME is NOT isolation (the
+#                              # launchd label is a uid-keyed singleton and does
+#                              # not follow HOME), and OC_LAUNCHD_LABEL alone
+#                              # moves only the job, leaving the files in the
+#                              # first instance's root.
 #
 #   B. standalone mode (this file alone — no ocserverd next to it), e.g.:
 #      curl -fsSL https://github.com/pkyosx/OffiCraft/releases/latest/download/install.sh | bash
@@ -94,6 +115,9 @@
 #      curl -fsSL … | bash -s -- --uninstall            # stop + move to a backup
 #      curl -fsSL … | bash -s -- --uninstall --dry-run  # print only, nothing changes
 #      curl -fsSL … | bash -s -- --uninstall --purge --yes   # DELETE, no way back
+#      curl -fsSL … | bash -s -- --uninstall --namespace <ns>  # that instance only
+#      (--namespace targets ~/.officraft-<ns> + com.officraft.serve.<ns>; without
+#      it, removal addresses the MAIN instance exactly as before.)
 #      Default keeps the database — it MOVES ~/.officraft's release-path pieces
 #      to ~/.officraft.bak-<timestamp> (plist inside it, under launchd/) rather
 #      than deleting them, and prints a restore command that puts back both the
@@ -205,7 +229,7 @@ plist_program() {
 # resolved — uninstalling touches only what a PAST run of this installer left
 # behind, so it has no use for a fresh tarball.
 cmd_uninstall_release() {
-  local purge=0 dryrun=0 yes=0
+  local purge=0 dryrun=0 yes=0 ns="${OC_NAMESPACE:-}"
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --uninstall) ;; # matched here (in ANY position), not shifted off separately —
@@ -216,6 +240,11 @@ cmd_uninstall_release() {
       --purge)     purge=1 ;;
       --dry-run)   dryrun=1 ;;
       --yes)       yes=1 ;;
+      # Removal is the exact inverse of install: the SAME one key derives the
+      # root and the label, so a namespaced instance can actually be removed
+      # (without it, --namespace would be a one-way door).
+      --namespace)   shift; ns="${1:-}" ;;
+      --namespace=*) ns="${1#*=}" ;;
       -h|--help)
         cat <<'EOF'
 Removes an OffiCraft install created by THIS installer (curl | bash, or a
@@ -224,6 +253,11 @@ package-mode ./install.sh run).
   curl -fsSL … | bash -s -- --uninstall              # stop + move to a backup
   curl -fsSL … | bash -s -- --uninstall --dry-run    # print only, change nothing
   curl -fsSL … | bash -s -- --uninstall --purge      # DELETE (asks unless --yes)
+  curl -fsSL … | bash -s -- --uninstall --namespace <ns>   # a namespaced instance
+
+--namespace <ns> ([a-z0-9-]{1,16}, or OC_NAMESPACE) targets THAT instance and
+only that instance: ~/.officraft-<ns> and the launchd label
+com.officraft.serve.<ns>. Omitted = the main instance, byte-for-byte as before.
 
 WHAT IT TOUCHES — only what this installer itself created:
   ~/.officraft/bin/                        the WHOLE directory, not just the
@@ -261,19 +295,29 @@ program than the one this installer would have put there.
 EOF
         exit 0 ;;
       *)
-        echo "[install] FATAL: unknown --uninstall flag '$1' (supported: --purge, --dry-run, --yes)" >&2
+        echo "[install] FATAL: unknown --uninstall flag '$1' (supported: --purge, --dry-run, --yes, --namespace <ns>)" >&2
         exit 2 ;;
     esac
     shift
   done
 
+  local ns_dot="" ns_dash=""
+  if [[ -n "$ns" ]]; then
+    if ! printf '%s' "$ns" | grep -qE '^[a-z0-9-]{1,16}$'; then
+      echo "[install] FATAL: --namespace must match [a-z0-9-]{1,16}, got: '$ns'" >&2
+      echo "[install]        Refusing to fall back to the MAIN instance's root/label." >&2
+      exit 2
+    fi
+    ns_dot=".$ns"; ns_dash="-$ns"
+  fi
+
   local LABEL LA_DIR PLIST GUI TARGET ROOT_DIR BIN_DIR SERVER_DIR
-  LABEL="${OC_LAUNCHD_LABEL:-com.officraft.serve}"
+  LABEL="${OC_LAUNCHD_LABEL:-com.officraft.serve$ns_dot}"
   LA_DIR="$HOME/Library/LaunchAgents"
   PLIST="$LA_DIR/$LABEL.plist"
   GUI="gui/$(id -u)"
   TARGET="$GUI/$LABEL"
-  ROOT_DIR="$HOME/.officraft"
+  ROOT_DIR="$HOME/.officraft$ns_dash"
   BIN_DIR="$ROOT_DIR/bin"
   SERVER_DIR="$ROOT_DIR/server"
 
@@ -402,7 +446,7 @@ EOF
       # Probe the warden's job rather than asserting it: claiming "still
       # registered and RUNNING" without looking is the same class of defect
       # this ticket is about (saying more than was measured).
-      local warden_label="com.officraft.ocwarden"
+      local warden_label="com.officraft.ocwarden$ns_dot"
       if [[ -f "$LA_DIR/$warden_label.plist" ]]; then
         echo "[install]   warden/ belongs to the ocwarden daemon; its own launchd job ($warden_label) is"
         echo "[install]   registered and this script leaves it that way."
@@ -413,7 +457,11 @@ EOF
       # Absolute path on purpose: bin/ is about to move into the backup and this
       # installer never puts ~/.officraft/bin on PATH, so a bare `ocwarden` would
       # be command-not-found. The warden installs its own stable copy here.
-      echo "[install]   to remove the warden too, afterwards: $ROOT_DIR/warden/ocwarden teardown"
+      if [[ -n "$ns" ]]; then
+        echo "[install]   to remove the warden too, afterwards: OC_NAMESPACE=$ns $ROOT_DIR/warden/ocwarden teardown"
+      else
+        echo "[install]   to remove the warden too, afterwards: $ROOT_DIR/warden/ocwarden teardown"
+      fi
     fi
   fi
   echo "[install] $ROOT_DIR itself is never removed."
@@ -603,6 +651,22 @@ if [[ "$IN_PACKAGE" == 0 ]]; then
       --foreground) FWD+=("--foreground"); shift ;;
       --relocate) FWD+=("--relocate"); shift ;;
       --restart-live) FWD+=("--restart-live"); shift ;;
+      # Forwarded verbatim: the namespace decision belongs to the packaged
+      # installer (one derivation point), this half only carries it across.
+      --namespace)
+        if [[ $# -lt 2 || -z "$2" ]]; then
+          echo "[install] FATAL: --namespace needs a value (e.g. --namespace lab)" >&2
+          exit 2
+        fi
+        FWD+=("--namespace" "$2"); shift 2 ;;
+      --namespace=*) FWD+=("$1"); shift ;;
+      --port)
+        if [[ $# -lt 2 || -z "$2" ]]; then
+          echo "[install] FATAL: --port needs a value (e.g. --port 7756)" >&2
+          exit 2
+        fi
+        FWD+=("--port" "$2"); shift 2 ;;
+      --port=*) FWD+=("$1"); shift ;;
       -h|--help)
         cat <<'EOF'
 OffiCraft standalone installer — downloads the latest official release,
@@ -634,7 +698,7 @@ To remove an install this installer made, see --uninstall:
 EOF
         exit 0 ;;
       *)
-        echo "[install] FATAL: unknown argument '$1' (supported: --force, --foreground, --relocate, --restart-live, --tag <vX.Y.Z>)" >&2
+        echo "[install] FATAL: unknown argument '$1' (supported: --force, --foreground, --relocate, --restart-live, --namespace <ns> --port <port>, --tag <vX.Y.Z>)" >&2
         exit 2 ;;
     esac
   done
@@ -725,27 +789,97 @@ EOF
   exit $?
 fi
 
-# ── package mode (original in-tarball flow, unchanged) ───────────────────────
+# ── package mode (original in-tarball flow) ──────────────────────────────────
 FORCE=0
 FOREGROUND=0
 RELOCATE=0
 RESTART_LIVE=0
-for arg in "$@"; do
-  case "$arg" in
+NS="${OC_NAMESPACE:-}"
+PORT_FLAG=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --force) FORCE=1 ;;
     --foreground) FOREGROUND=1 ;;
     --relocate) RELOCATE=1 ;;
     --restart-live) RESTART_LIVE=1 ;;
+    --namespace)   shift; NS="${1:-}" ;;
+    --namespace=*) NS="${1#*=}" ;;
+    --port)        shift; PORT_FLAG="${1:-}" ;;
+    --port=*)      PORT_FLAG="${1#*=}" ;;
     -h|--help)
-      sed -n '2,105p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '2,129p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
-      echo "[install] FATAL: unknown argument '$arg' (supported: --force, --foreground, --relocate, --restart-live)" >&2
+      echo "[install] FATAL: unknown argument '$1' (supported: --force, --foreground, --relocate, --restart-live, --namespace <ns> --port <port>)" >&2
       exit 2
       ;;
   esac
+  shift
 done
+
+# The OffiCraft standard port — NOT 8770 (the retired open-company station's,
+# which collides on transition-period machines) and NOT the previous 8780.
+# Defined here rather than beside the port probe below because the namespace
+# gate has to name it.
+DEFAULT_PORT=7755
+
+# ── namespace: isolation BY CONSTRUCTION, not by the caller's discipline ─────
+# Everything that decides WHICH station a run touches is derived from ONE key:
+#
+#   ns == ""    → root ~/.officraft        label com.officraft.serve
+#   ns == "x"   → root ~/.officraft-x      label com.officraft.serve.x
+#
+# and a namespaced run additionally OWNS ITS OWN CONFIG (written under its own
+# root), so it can never be steered by an $OC_CONFIG or a ./oc.toml that
+# happened to be lying around — the exact foot-gun the relocation gate exists
+# to catch on the main instance.
+#
+# WHY THIS HAD TO EXIST. Before it, the only isolation this script offered was
+# OC_LAUNCHD_LABEL plus a redirected HOME, and both are things the CALLER has
+# to remember. The header a few dozen lines up already spells out that HOME is
+# NOT isolation (a launchd label is a singleton in the uid's gui domain and does
+# not follow HOME), and a caller who sets the label but not HOME gets a second
+# job writing into the FIRST instance's ~/.officraft. Isolation assembled by
+# hand out of two independent knobs is isolation that is one forgotten export
+# away from an outage. One flag now keys every axis at once, and the axes cannot
+# disagree because they are all derived here.
+#
+# Charset is the strict intersection of launchd-label / path-component syntax,
+# identical to cli/ocwarden/namespace.go, server/ocserverd/config.go and
+# bin/ocserver — keep the four in sync.
+#
+# --port is REQUIRED with --namespace and refused without it (mirrors
+# bin/ocserver install): the default 7755 belongs to the MAIN instance, so a
+# namespaced install that inherited it would either collide at the port gate or,
+# worse, look installed and fight over the socket.
+#
+# THE EMPTY NAMESPACE CHANGES NOTHING. Every derivation below reduces to the
+# historical literal when NS is empty; the guard suite pins that byte-for-byte.
+NS_DOT=""
+NS_DASH=""
+if [[ -n "$NS" ]]; then
+  if ! printf '%s' "$NS" | grep -qE '^[a-z0-9-]{1,16}$'; then
+    echo "[install] FATAL: --namespace must match [a-z0-9-]{1,16}, got: '$NS'" >&2
+    echo "[install]        (a malformed namespace silently folding back to the MAIN instance's" >&2
+    echo "[install]         root and label would be far worse than this error.)" >&2
+    exit 2
+  fi
+  if [[ -z "$PORT_FLAG" ]]; then
+    echo "[install] FATAL: --namespace requires --port (the default $DEFAULT_PORT is the MAIN instance's port)." >&2
+    echo "[install]        e.g. ./install.sh --namespace $NS --port 7756" >&2
+    exit 2
+  fi
+  NS_DOT=".$NS"
+  NS_DASH="-$NS"
+elif [[ -n "$PORT_FLAG" ]]; then
+  echo "[install] FATAL: --port is only valid together with --namespace (the main instance's port comes from OC_CONFIG/oc.toml)." >&2
+  exit 2
+fi
+if [[ -n "$PORT_FLAG" ]] && ! printf '%s' "$PORT_FLAG" | grep -qE '^[0-9]{2,5}$'; then
+  echo "[install] FATAL: --port must be a number, got: '$PORT_FLAG'" >&2
+  exit 2
+fi
 
 if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
   echo "[install] FATAL: OffiCraft v0.x supports macOS Apple Silicon (darwin/arm64) only." >&2
@@ -754,9 +888,11 @@ if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
 fi
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$HOME/.officraft"
+# NS_DASH is "" for the main instance, so this is the historical literal there.
+ROOT_DIR="$HOME/.officraft$NS_DASH"
 BIN_DIR="$ROOT_DIR/bin"
 DB_PATH="$ROOT_DIR/server/data/officraft.db"
+NS_CFG="$ROOT_DIR/server/oc.toml"
 
 for b in ocserverd ocwarden ocagent; do
   if [[ ! -f "$HERE/$b" ]]; then
@@ -777,8 +913,13 @@ done
 # ROOT_DIR/BIN_DIR/PLIST but leaves TARGET resolving to the SAME job the real
 # station runs under. "I ran it with a different HOME" is therefore NOT
 # isolation, and a run that believes it is sandboxed can still bootout the live
-# service. Only OC_LAUNCHD_LABEL actually changes which job is at stake.
-LABEL="${OC_LAUNCHD_LABEL:-com.officraft.serve}"
+# service. Only the LABEL decides which job is at stake — which is exactly why
+# --namespace suffixes it (NS_DOT) instead of leaving that to the caller:
+# a namespaced run targets com.officraft.serve.<ns> BY CONSTRUCTION, and can no
+# longer bootout the main station no matter what else is set. OC_LAUNCHD_LABEL
+# still wins when given explicitly (an existing alt-labelled install must stay
+# addressable).
+LABEL="${OC_LAUNCHD_LABEL:-com.officraft.serve$NS_DOT}"
 LA_DIR="$HOME/Library/LaunchAgents"
 PLIST="$LA_DIR/$LABEL.plist"
 GUI="gui/$(id -u)"
@@ -946,8 +1087,44 @@ for b in ocserverd ocwarden ocagent; do
   mv "$BIN_DIR/$b.new" "$BIN_DIR/$b"
 done
 
+config_port() {
+  # [server].port out of a config file, or "" when it does not set one.
+  sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]\{2,5\}\).*/\1/p' "$1" 2>/dev/null | head -1
+}
+
+# ── namespaced instance config ───────────────────────────────────────────────
+# A namespaced instance needs a config of its own BEFORE migrate runs, because
+# the DSN default is derived from [server].namespace (~/.officraft-<ns>/server/
+# data/officraft.db) — without it, migrate would create the MAIN instance's
+# database. Written only when absent, so re-running is a reload and never
+# silently retargets an existing instance's storage; the port is refreshed in
+# place when --port changes (the relocation gate below is what makes that a
+# deliberate act on the main instance, and a namespaced instance names its port
+# on every invocation anyway).
+if [[ -n "$NS" ]]; then
+  mkdir -p "$(dirname "$NS_CFG")"
+  if [[ -f "$NS_CFG" ]]; then
+    echo "[install] namespace '$NS': reusing existing config $NS_CFG"
+    old_ns_port="$(config_port "$NS_CFG")"
+    if [[ -n "$old_ns_port" && "$old_ns_port" != "$PORT_FLAG" ]]; then
+      echo "[install] FATAL: instance '$NS' is configured for port $old_ns_port but this run says --port $PORT_FLAG." >&2
+      echo "[install]        Changing an instance's port is a relocation, not a reload — NOTHING was changed." >&2
+      echo "[install]        Re-run with --port $old_ns_port, or edit $NS_CFG deliberately." >&2
+      exit 1
+    fi
+  else
+    printf '[server]\nnamespace = "%s"\nport = %s\n' "$NS" "$PORT_FLAG" > "$NS_CFG"
+    echo "[install] namespace '$NS': wrote $NS_CFG (namespace + port $PORT_FLAG)"
+  fi
+fi
+
 echo "[install] migrating database (goose)…"
-"$BIN_DIR/ocserverd" migrate
+if [[ -n "$NS" ]]; then
+  # Explicit, not inherited: the namespaced instance migrates ITS OWN database.
+  OC_CONFIG="$NS_CFG" "$BIN_DIR/ocserverd" migrate
+else
+  "$BIN_DIR/ocserverd" migrate
+fi
 
 # Effective port: $OC_CONFIG / ./oc.toml [server].port override, else 7755
 # (the OffiCraft standard port — NOT 8770, which belongs to the retired
@@ -965,24 +1142,29 @@ echo "[install] migrating database (goose)…"
 # (carried over from the job we are replacing), or none. "cwd" is the one that
 # bites: it is the difference between a config the operator chose and a file
 # they happen to be standing next to. See the relocation gate below.
-config_port() {
-  # [server].port out of a config file, or "" when it does not set one.
-  sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]\{2,5\}\).*/\1/p' "$1" 2>/dev/null | head -1
-}
-DEFAULT_PORT=7755
 PORT="$DEFAULT_PORT"
 CFG_ABS=""
 CFG_SRC="none"
-for cfg_kind in "env:${OC_CONFIG:-}" "cwd:./oc.toml"; do
-  cfg="${cfg_kind#*:}"
-  if [[ -n "$cfg" && -f "$cfg" ]]; then
-    p="$(config_port "$cfg")"
-    [[ -n "$p" ]] && PORT="$p"
-    CFG_ABS="$(cd "$(dirname "$cfg")" && pwd)/$(basename "$cfg")"
-    CFG_SRC="${cfg_kind%%:*}"
-    break
-  fi
-done
+if [[ -n "$NS" ]]; then
+  # A namespaced instance OWNS its config (written under its own root above),
+  # so the $OC_CONFIG / ./oc.toml probe is deliberately SKIPPED: standing in a
+  # checkout with a stray oc.toml must not be able to redirect an install that
+  # asked, by name, for a specific instance.
+  PORT="$PORT_FLAG"
+  CFG_ABS="$NS_CFG"
+  CFG_SRC="namespace"
+else
+  for cfg_kind in "env:${OC_CONFIG:-}" "cwd:./oc.toml"; do
+    cfg="${cfg_kind#*:}"
+    if [[ -n "$cfg" && -f "$cfg" ]]; then
+      p="$(config_port "$cfg")"
+      [[ -n "$p" ]] && PORT="$p"
+      CFG_ABS="$(cd "$(dirname "$cfg")" && pwd)/$(basename "$cfg")"
+      CFG_SRC="${cfg_kind%%:*}"
+      break
+    fi
+  done
+fi
 
 # ── same-label ownership gate ────────────────────────────────────────────────
 # (LABEL / PLIST / GUI / TARGET / LOG_DIR / SERVE_LOG were resolved at the top,

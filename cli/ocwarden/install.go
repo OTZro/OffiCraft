@@ -13,9 +13,11 @@
 //
 // SEAM DESIGN (mirrors main.go's CmdRunner): every side effect — launchctl/plutil
 // subprocess, file mkdir/write/rename/chmod/stat, and the settle-window sleep — goes
-// through the injectable sysOps struct. Real runs use realSysOps() (os/exec + os);
-// tests inject fakes so unit tests and CI (gate 7 = gofmt+vet+build) NEVER touch
-// launchctl or the live machine. WARDEN_INSTALL_DRYRUN=1 is the dry-run seam
+// through the injectable sysOps struct, and the seam itself is constructed in exactly
+// ONE place (realHostSeam, reached only via the rebindable `newHostSeam` var — see
+// hostSeam below): production gets the real os/exec+os wiring, and the test binary
+// rebinds newHostSeam in TestMain so unit tests and CI can NEVER touch launchctl or
+// the live machine, guard or no guard. WARDEN_INSTALL_DRYRUN=1 is the dry-run seam
 // (byte-parity with the bash installer's env of the same name): it prints every
 // step's intent and mutates nothing.
 //
@@ -103,6 +105,63 @@ func realSysOps() sysOps {
 		sleep: time.Sleep,
 	}
 }
+
+// ---------------------------------------------------------------------------
+// hostSeam — the SINGLE construction point for EVERY real-host effect the
+// `ocwarden install` / `ocwarden teardown` / uninstall-RPC entry points can
+// reach: the mutating sysOps (launchctl + filesystem), the claude/codex probe
+// (execs a candidate binary), the ocagent download (HTTP to OC_BASE) and the
+// downloaded-binary probe (execs it).
+//
+// WHY THIS EXISTS, and why it is a SEAM and not a check
+// -----------------------------------------------------
+// installCmd/teardownCmd used to call realSysOps() inline. Every side effect
+// went through the seam, but the seam was WIRED TO THE REAL OS inside the very
+// entry points a test can call: `realMain([]string{"install"})` from any test in
+// this package would bootout/bootstrap the LIVE canonical
+// com.officraft.ocwarden job on the developer's machine. Nothing structural
+// stopped it — the install tests merely happened to build `installer` by hand
+// with a fake. That is "safe by coincidence", and the same shape already
+// unloaded this fleet's live warden three times through the teardown path.
+//
+// So the wiring is now a package-level VARIABLE with exactly one production
+// binding, and the test binary REBINDS it in TestMain (hostseam_test.go) before
+// a single test runs. Consequences that a check could never buy:
+//   - Every test in this package — including tests written after this comment,
+//     including tests that delete/neuter a guard in the code under test — gets
+//     the fake. There is no opt-in to remember and no guard to get right.
+//   - The real host is not reachable from the test binary AT ALL through these
+//     entry points, so a bug in `guard`, in namespace derivation, or in the
+//     label math cannot escalate into touching the machine.
+//
+// The single-construction-point property is machine-checked by
+// TestHostSeam_SingleConstructionPoint: realSysOps() may appear in exactly one
+// place in the non-test sources (realHostSeam, below). Reintroducing an inline
+// realSysOps() anywhere reddens that test.
+type hostSeam struct {
+	sys         sysOps
+	claudeProbe func(bin, pathEnv, home string) error
+	agentGet    func(base, token string) getter
+	agentProbe  func(bin string) error
+}
+
+// realHostSeam is the ONLY place the real OS is wired into install/teardown.
+func realHostSeam() hostSeam {
+	probeOps := osUpdaterOps{runner: execRunner{timeout: selfUpdateProbeBudget}}
+	return hostSeam{
+		sys:         realSysOps(),
+		claudeProbe: realClaudeProbe,
+		agentGet: func(base, token string) getter {
+			return httpGetter(&http.Client{Timeout: selfUpdateHTTPTimeout}, base, token)
+		},
+		agentProbe: probeOps.probe,
+	}
+}
+
+// newHostSeam is the injection point. Production leaves it at realHostSeam; the
+// test binary swaps it in TestMain. NEVER call realHostSeam directly from an
+// entry point — that reintroduces exactly the reachability this removes.
+var newHostSeam = realHostSeam
 
 // installer carries the shared state for both install and teardown: where to log,
 // whether this is a dry run, and the side-effect seam.
@@ -948,7 +1007,8 @@ func (i *installer) runInstall(p wardenPaths) error {
 }
 
 // installCmd is the thin `ocwarden install` entry point: it resolves the running
-// binary + uid (the only real-OS reads outside the seam), wires realSysOps(), and
+// binary + uid (with resolveClaudeBin/resolveCodexBin's read-only LookPath+stat, the
+// only real-OS reads outside the seam), takes its effects from newHostSeam(), and
 // runs the six steps. Returns 0 on success, 1 on any failure.
 func installCmd(env func(string) string, out io.Writer, force bool) int {
 	exe, err := os.Executable()
@@ -967,15 +1027,18 @@ func installCmd(env func(string) string, out io.Writer, force bool) int {
 	// the download `--help` and requires exit 0 (verify-before-swap). Unused when
 	// OC_AGENT_BIN provides a local override or under DRYRUN.
 	cfg := loadConfig(env)
-	client := &http.Client{Timeout: selfUpdateHTTPTimeout}
-	probeOps := osUpdaterOps{runner: execRunner{timeout: selfUpdateProbeBudget}}
+	// EVERY real-host effect below comes from this one seam (see hostSeam):
+	// production binds realHostSeam, the test binary binds a recording fake in
+	// TestMain, so `realMain([]string{"install"})` from a test can never reach
+	// launchctl, the filesystem, or the network.
+	host := newHostSeam()
 	i := &installer{
 		out:        out,
 		dryRun:     env(dryRunEnv) == "1",
 		force:      force,
-		sys:        realSysOps(),
-		agentGet:   httpGetter(client, cfg.Base, cfg.Token),
-		agentProbe: probeOps.probe,
+		sys:        host.sys,
+		agentGet:   host.agentGet(cfg.Base, cfg.Token),
+		agentProbe: host.agentProbe,
 	}
 	// Install-time claude resolution → OC_CLAUDE_BIN plist stamp. lookup reuses the
 	// RUNTIME resolver (resolveClaudeBin: OC_CLAUDE_BIN env → LookPath → common
@@ -983,18 +1046,18 @@ func installCmd(env func(string) string, out io.Writer, force bool) int {
 	// discoverable; realClaudeProbe then decides whether the minimal launchd PATH
 	// suffices or the installer PATH must ride along (shim/shebang).
 	i.resolveClaude = func() (string, string) {
-		return resolveClaudeForInstall(env, func() string { return resolveClaudeBin(env) }, realClaudeProbe, i.logf)
+		return resolveClaudeForInstall(env, func() string { return resolveClaudeBin(env) }, host.claudeProbe, i.logf)
 	}
 	i.resolveCodex = func() (string, string) {
 		candidate := resolveCodexBin(env)
 		if candidate == "" || !stampableClaude(candidate) {
 			return "", ""
 		}
-		if realClaudeProbe(candidate, wardenPlistPATH, env("HOME")) == nil {
+		if host.claudeProbe(candidate, wardenPlistPATH, env("HOME")) == nil {
 			return candidate, ""
 		}
 		if path := env("PATH"); path != "" &&
-			realClaudeProbe(candidate, path, env("HOME")) == nil {
+			host.claudeProbe(candidate, path, env("HOME")) == nil {
 			return candidate, path
 		}
 		return candidate, ""

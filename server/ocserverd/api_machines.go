@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -611,6 +612,82 @@ func (s *apiServer) HandleClaimMachineTokenApiMachinesClaimPost(w http.ResponseW
 	})
 }
 
+// ---------------------------------------------------------------------------
+// child env — ALLOWLIST (fail-closed), not a denylist
+// ---------------------------------------------------------------------------
+//
+// bootstrap-here / teardown-here run `ocwarden` AS A CHILD OF THIS SERVER. The
+// child's env is what decides WHICH instance gets installed or torn down: root
+// (~/.officraft[-ns]), launchd label, tokfile, identity, even whether it does
+// anything at all. Until T-5047 the child inherited os.Environ() WHOLESALE with
+// a single key scrubbed (OC_ID), i.e. a denylist of length one. Everything else
+// the serve process happened to have in its environment steered the install:
+//
+//	OC_NAMESPACE          — inherited on a MAIN-instance server (s.namespace ""),
+//	                        so a stray value installs — or, on teardown-here,
+//	                        BOOTS OUT — a completely different instance's warden.
+//	WARDEN_INSTALL_DRYRUN — inherited "1" makes `ocwarden install` mutate nothing
+//	                        and exit 0: the server reports a successful install
+//	                        of a warden that does not exist.
+//	OC_AGENT_BIN          — redirects the installed ocagent to an arbitrary local
+//	                        file instead of the server's own verified download.
+//	OC_WARDEN_TOKFILE, OC_BASE, OC_TOKEN, OC_AGENT_HOME, …
+//
+// WHY AN ALLOWLIST. A denylist is only correct for the variables someone thought
+// of, and it silently stops being correct every time either side grows a new
+// key — the child (cli/ocwarden) and the parent (this file) are separate modules
+// with no compiler between them. That failure mode is not hypothetical here: the
+// one-key denylist below was written when OC_NAMESPACE did not exist yet, and it
+// was still "correct" the day namespacing shipped. An allowlist fails the other
+// way: a variable the child newly depends on is simply ABSENT, which surfaces as
+// a loud install failure on the very first run, not as an install that silently
+// went somewhere else. Fail-closed beats fail-open for anything that can bootout
+// a live warden.
+//
+// EVERY entry below is a DELIBERATE relay with a reason:
+//   - HOME  — the child derives root/tokfile/plist from it; it is the install.
+//   - PATH  — the child execs `launchctl` by name, and resolves the claude/codex
+//     shim under this PATH (the serve plist's enriched PATH is exactly what
+//     `bin/ocserver install` / bin/install.sh stamped there for this hop).
+//   - OC_CLAUDE_BIN / OC_CODEX_BIN — the runtime-binary stamps that must survive
+//     the launchd-minimal env; without them the installed warden refuses every
+//     spawn (claude_bin_unresolved). Stamped into the serve plist for this relay.
+//   - OC_CLAUDE_CRED_CHECK — the advertised escape hatch for the spawn-time
+//     credential gate. A warden is a launchd job, so an operator's shell export
+//     reaches it ONLY through this relay.
+//
+// Everything the server MEANS to set (OC_BASE / OC_TOKEN / OC_NAMESPACE) is
+// appended by the callers AFTER this, from server-computed values — so it can
+// never be shadowed by whatever the serve process inherited.
+var ocwardenChildEnvAllowlist = []string{
+	"HOME",
+	"PATH",
+	"OC_CLAUDE_BIN",
+	"OC_CODEX_BIN",
+	"OC_CLAUDE_CRED_CHECK",
+}
+
+// ocwardenChildEnv projects `environ` down to ocwardenChildEnvAllowlist. Keys
+// absent from the parent env are simply not emitted (an empty value is NOT
+// synthesised — "unset" and "set to empty" mean different things to the child).
+func ocwardenChildEnv(environ []string) []string {
+	allowed := make(map[string]bool, len(ocwardenChildEnvAllowlist))
+	for _, k := range ocwardenChildEnvAllowlist {
+		allowed[k] = true
+	}
+	out := make([]string, 0, len(ocwardenChildEnvAllowlist))
+	for _, kv := range environ {
+		eq := strings.IndexByte(kv, '=')
+		if eq <= 0 {
+			continue
+		}
+		if allowed[kv[:eq]] {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
 // runOcwarden runs `<ocwarden> <verb>` bounded by 60s (the injectable-runner
 // twins of handlers._default_bootstrap_runner / _default_teardown_runner).
 // argv list only — zero command-injection surface; the wiring rides in env.
@@ -705,22 +782,13 @@ func (s *apiServer) runWardenInstallHere(machine Member, binPath, baseURL string
 	if err != nil {
 		return bootstrapResultDTO{}, err
 	}
-	// env = the server process env (PATH/HOME inherited) + the OC_* wiring;
-	// OC_ID scrubbed — identity rides SOLELY in the token's sub.
-	// NOTE (claude spawn chain): the passthrough deliberately carries
-	// OC_CLAUDE_BIN (and a possibly-enriched PATH) from the serve plist —
-	// stamped there by `bin/ocserver install`, which ran in the operator's
-	// interactive shell and could actually FIND claude. The `ocwarden install`
-	// spawned below runs under this launchd-minimal env, so without that relay
-	// it could never resolve a version-manager claude, and the warden it
-	// installs would refuse every spawn (claude_bin_unresolved).
-	env := []string{}
-	for _, kv := range os.Environ() {
-		if len(kv) >= 6 && kv[:6] == "OC_ID=" {
-			continue
-		}
-		env = append(env, kv)
-	}
+	// env = the ALLOWLISTED projection of the server process env (see
+	// ocwardenChildEnvAllowlist: HOME/PATH + the deliberate claude/codex/cred
+	// relays) plus the OC_* wiring THIS server computes. OC_ID is not on the
+	// allowlist — identity rides SOLELY in the token's sub — and neither is
+	// anything else that could steer the install (OC_NAMESPACE, OC_AGENT_BIN,
+	// WARDEN_INSTALL_DRYRUN, a stray OC_BASE/OC_TOKEN, …).
+	env := ocwardenChildEnv(os.Environ())
 	env = append(env, "OC_BASE="+baseURL, "OC_TOKEN="+token)
 	// Namespaced instance: the warden it installs on this host must key its
 	// root/label/socket off the same namespace (single propagation env).
@@ -760,7 +828,10 @@ func (s *apiServer) HandleTeardownHereApiMachinesMachineIdTeardownHerePost(w htt
 	// teardown is identity-agnostic (HOME/uid only) — no OC_* wiring needed,
 	// EXCEPT the instance namespace: a namespaced server must tear down its OWN
 	// warden (label/tokfile under its namespace), never the main instance's.
-	env := os.Environ()
+	// SAME ALLOWLIST as bootstrap-here, and it matters MORE here: this verb
+	// BOOTS OUT a launchd job. A main-instance server that merely inherited a
+	// stray OC_NAMESPACE used to tear down a DIFFERENT instance's live warden.
+	env := ocwardenChildEnv(os.Environ())
 	if s.namespace != "" {
 		env = append(env, "OC_NAMESPACE="+s.namespace)
 	}
