@@ -151,3 +151,21 @@ describe("ProfileDropdown · change password", () => {
     await utils.findByText(p.pwdErrorMismatch);
   });
 });
+
+describe("ProfileDropdown · notification email", () => {
+  it("enables Save only for unsaved edits and disables it again after saving", async () => {
+    const utils = render(
+      <I18nProvider><ProfileDropdown open onClose={vi.fn()} userName="使用者" setOwnerName={vi.fn()} /></I18nProvider>,
+    );
+    fireEvent.click(utils.getByText(p.pushContactEmail));
+    const input = await utils.findByLabelText(p.pushContactEmail);
+    const save = utils.getByRole("button", { name: p.save });
+    expect((save as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.change(input, { target: { value: "push@example.com" } });
+    expect((save as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.click(save);
+    await vi.waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(true));
+  });
+});

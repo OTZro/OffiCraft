@@ -77,7 +77,9 @@ export function ProfileDropdown({
     "" | "current" | "short" | "mismatch"
   >("");
   const [pushContactEmail, setPushContactEmail] = useState("");
+  const [savedPushContactEmail, setSavedPushContactEmail] = useState("");
   const [pushEmailLoaded, setPushEmailLoaded] = useState(false);
+  const [pushEmailSaving, setPushEmailSaving] = useState(false);
   const [pushEmailError, setPushEmailError] = useState(false);
 
   // Reset transient view state whenever the menu is (re)opened.
@@ -112,9 +114,11 @@ export function ProfileDropdown({
   async function loadPushContactEmail() {
     setPushEmailError(false);
     setPushEmailLoaded(false);
+    setPushEmailSaving(false);
     try {
       const settings = await api.getServerSettings();
       setPushContactEmail(settings.pushContactEmail);
+      setSavedPushContactEmail(settings.pushContactEmail);
       setPushEmailLoaded(true);
     } catch {
       setPushEmailLoaded(false);
@@ -132,13 +136,17 @@ export function ProfileDropdown({
   }
 
   async function commitPushContactEmail() {
-    if (!pushEmailLoaded) return;
+    if (!pushEmailLoaded || pushEmailSaving || pushContactEmail === savedPushContactEmail) return;
     setPushEmailError(false);
+    setPushEmailSaving(true);
     try {
       const settings = await api.patchServerSettings({ pushContactEmail });
       setPushContactEmail(settings.pushContactEmail);
+      setSavedPushContactEmail(settings.pushContactEmail);
     } catch {
       setPushEmailError(true);
+    } finally {
+      setPushEmailSaving(false);
     }
   }
 
@@ -407,7 +415,7 @@ export function ProfileDropdown({
             <div className="profile-dd__section-hint">{t.profile.pushContactEmailSub}</div>
             <input id="push-contact-email" className="profile-dd__input" type="email" inputMode="email" autoComplete="email" placeholder={t.profile.pushContactEmailPlaceholder} value={pushContactEmail} disabled={!pushEmailLoaded} onChange={(e) => setPushContactEmail(e.target.value)} />
             {pushEmailError && <div className="profile-dd__error">{t.profile.pushContactEmailError}</div>}
-            <button type="submit" className="profile-dd__submit" disabled={!pushEmailLoaded}>{t.profile.save}</button>
+            <button type="submit" className="profile-dd__submit" disabled={!pushEmailLoaded || pushEmailSaving || pushContactEmail === savedPushContactEmail}>{pushEmailSaving ? t.profile.saving : t.profile.save}</button>
           </form>
         </>
       )}
