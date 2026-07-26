@@ -514,11 +514,13 @@ else
 fi
 
 # ── namespace mirror across the hand-transcribed copies (T-5047) ───────────
-# The namespace→(root, launchd label) derivation exists at ELEVEN SITES in SEVEN
+# The namespace→(root, launchd label) derivation exists at ELEVEN SITES in SIX
 # FILES, in three languages, across three Go modules that cannot import each
 # other. Do NOT restate a smaller number here: this comment said FOUR, and an
 # out-of-date count in a dispatcher comment is exactly how the missing sites went
-# unnoticed three times. The authoritative, maintained list is the header of
+# unnoticed three times. The FILE count has itself been wrong four times (FOUR,
+# FIVE, SIX, SEVEN) while the SITE count was right — which is why the shared
+# table's header says to count sites. The authoritative, maintained list is the header of
 # namespace-mirror-guard.sh. The Go copies are guarded by their own module tests
 # (cli/ocwarden/namespace_mirror_test.go, cli/ocagent/namespace_mirror_test.go,
 # server/ocserverd/onboarding_mirror_test.go) against the same shared table; this

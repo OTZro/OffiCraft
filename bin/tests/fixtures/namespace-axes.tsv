@@ -3,14 +3,15 @@
 # WHY THIS FILE EXISTS
 # --------------------
 # The same namespace→(root, launchd label, tmux socket, tokfile) derivation is
-# implemented across SEVEN FILES / ELEVEN CODE SITES, in three languages, across
+# implemented across SIX FILES / ELEVEN CODE SITES, in three languages, across
 # three Go modules that cannot import each other. Count SITES, not files: this
-# header said FOUR and the guard said FIVE, and both were wrong because
-# bin/install.sh carries five sites on its own — including the ocwarden label,
-# which is the one this ticket is about and the one that was missing from every
-# list. The seventh file (cli/ocagent/config.go) was missing for a different
-# reason: it was listed as a non-guarded AXIS rather than as a derivation site,
-# and it had no namespace in it at all.
+# header said FOUR, the guard said FIVE, and a later revision said SEVEN — all
+# wrong. bin/install.sh carries five sites on its own, including the ocwarden
+# label, which is the one this ticket is about and the one that was missing from
+# every list. cli/ocagent/config.go was missing for a different reason: it was
+# listed as a non-guarded AXIS rather than as a derivation site, and it had no
+# namespace in it at all. The FILE number itself has now been wrong four times,
+# which is the argument in this header's own first line: count SITES.
 #
 #   cli/ocagent/config.go         fallbackAgentsHome (agents-home fallback root)
 #   cli/ocwarden/namespace.go     wardenLabelFor / officraftRootFor /

@@ -4,9 +4,12 @@
 #
 # WHAT IS BEING GUARDED — AND WHAT IS NOT
 # ---------------------------------------
-# The namespace→(root, launchd label) derivation is hand-transcribed across SEVEN
-# FILES / ELEVEN CODE SITES. This list has been wrong THREE times: it said FOUR,
-# then FIVE, then TEN-in-SIX, and each time it read as complete. The count is now
+# The namespace→(root, launchd label) derivation is hand-transcribed across SIX
+# FILES / ELEVEN CODE SITES. This list has been wrong FOUR times: it said FOUR,
+# then FIVE, then TEN-in-SIX, then ELEVEN-in-SEVEN (the site arithmetic was right
+# but the file count was incremented off a predecessor that already over-counted
+# by one — enumerate the block below and you get SIX), and each time it read as
+# complete. The count is now
 # per-SITE, because counting files is what hid the first miss — bin/install.sh
 # alone carries FIVE sites, and the one that was missing (the ocwarden label)
 # lived in a file that was already "on the list". The third miss was of a
