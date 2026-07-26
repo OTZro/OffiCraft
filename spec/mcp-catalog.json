@@ -1,6 +1,265 @@
 {
   "tools": [
     {
+      "description": "Read the org-adjustable settings (owner/admin agent).",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "get_settings"
+    },
+    {
+      "description": "Edit settings (login TTL / handover threshold); live immediately.",
+      "inputSchema": {
+        "$defs": {
+          "ThemeBundleDTO": {
+            "description": "One owner-authored theme colour bundle (T-16a1 P2). `id` is a client-generated stable slug (`^[a-z0-9][a-z0-9-]{1,63}$`), unique within the owner's set and never a built-in name (`office` / `xian`). `name` is the display label (trimmed, 1..80 runes). `colors` maps `--color-*` token names \u2014 each MUST be a token defined in styles/theme.css \u2014 to CONCRETE colour values (hex / rgb() / rgba() / hsl() / hsla() / transparent only; no var(), no color-mix(), no arbitrary CSS). 1..200 pairs. The server 422s any bundle that violates the shape, the token whitelist, or the colour grammar. `wording` (optional, T-16a1 P3) carries per-language message-key text overrides; see its own description. `fonts` (optional, T-16a1 P4) carries font-family choices; see its own description.",
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "colors": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "title": "Colors",
+                "type": "object"
+              },
+              "fonts": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Optional font-family choices (T-16a1 P4). Maps a `--font-*` token name (`--font-sans` / `--font-title` only) to a font-family stack string. The value is NOT an arbitrary string: it must be one of a small CLOSED allowlist of safe, built-in font-family stacks (themeFonts.source.json \u2014 the same set the theme editor's font dropdown offers); no url(), no @font-face, no external font, no CSS structure characters. Absent = the theme keeps the default fonts. The server 422s any fonts that violates the token set or the safe-family allowlist.",
+                "title": "Fonts",
+                "type": "object"
+              },
+              "wording": {
+                "additionalProperties": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Wording Lang",
+                  "type": "object"
+                },
+                "description": "Optional per-language wording overrides (T-16a1 P3). Outer key = UI language (`zh` / `en` only); inner map = an i18n message-key (an internal code path such as `nav.tasks`, drawn from the generated messageKeys whitelist) -> the owner's replacement PLAIN TEXT. Values are plain text only (trimmed, <=200 runes, control chars / newlines rejected, per-language entry count capped); no HTML/CSS. Absent = no overrides. The server 422s any wording that violates the language set, the key whitelist, or the value rules.",
+                "title": "Wording",
+                "type": "object"
+              },
+              "avatars": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Optional per-role avatar images (T-16a1 P5; extended per role in T-ea81). Keys are the closed set `member` (\u4e00\u822c\u6b63\u8077 member) / `outsource` (\u5916\u5305 outsource worker) / `owner` (the human CEO / owner) / `assistant` (a member whose role is `assistant`, e.g. Mira). Each value is an EMBEDDED image encoded as a base64 `data:` URI so the image travels inside the bundle on export/import. The value is NOT arbitrary: only a `data:image/<mime>;base64,<...>` URI whose mime is a whitelisted RASTER format (`image/png` / `image/jpeg` / `image/webp`) is accepted. SVG (`image/svg+xml`) is REJECTED (it can carry script/onload \u2014 XSS). The base64 must decode, the decoded byte size is capped (<=64 KiB) and the string length capped, and the leading magic bytes must match the declared mime (PNG `89 50 4E 47`, JPEG `FF D8 FF`, WEBP `RIFF....WEBP`) \u2014 a value that declares one mime but carries another is rejected. Absent = that role falls back to the built-in avatar glyph (office never degrades). The server 422s any avatars that violates the key set, the mime whitelist, the size caps, the base64, or the magic-byte check.",
+                "title": "Avatars",
+                "type": "object"
+              },
+              "logo": {
+                "description": "Optional studio logo image (T-ea81). A single EMBEDDED image encoded as a base64 `data:` URI that replaces the built-in logo mark shown in the top bar. Same strict image gate as `avatars`: only a `data:image/<mime>;base64,<...>` URI whose mime is a whitelisted RASTER format (`image/png` / `image/jpeg` / `image/webp`) is accepted; SVG (`image/svg+xml`) is REJECTED (script/onload XSS); the base64 must decode, the decoded byte size is capped (<=64 KiB) and the string length capped, and the leading magic bytes must match the declared mime (PNG `89 50 4E 47`, JPEG `FF D8 FF`, WEBP `RIFF....WEBP`). Absent = the built-in logo mark is used (office never degrades). The server 422s any logo that violates the mime whitelist, the size caps, the base64, or the magic-byte check.",
+                "title": "Logo",
+                "type": "string"
+              },
+              "navIcons": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Optional per-tab navigation icon images (T-ea81). Keys are the closed set of the five nav tabs `office` (\u8fa6\u516c\u5ba4) / `replies` (\u8acb\u793a) / `tasks` (\u4efb\u52d9) / `monitor` (\u76e3\u63a7) / `guide` (\u4f7f\u7528\u8aaa\u660e); each value is an EMBEDDED image encoded as a base64 `data:` URI that replaces that tab's built-in icon. Same strict image gate as `avatars`: only a `data:image/<mime>;base64,<...>` URI whose mime is a whitelisted RASTER format (`image/png` / `image/jpeg` / `image/webp`) is accepted; SVG (`image/svg+xml`) is REJECTED (script/onload XSS); the base64 must decode, the decoded byte size is capped (<=64 KiB) and the string length capped, and the leading magic bytes must match the declared mime (PNG `89 50 4E 47`, JPEG `FF D8 FF`, WEBP `RIFF....WEBP`). Absent = that tab falls back to its built-in icon (office never degrades). The server 422s any navIcons that violates the key set, the mime whitelist, the size caps, the base64, or the magic-byte check.",
+                "title": "Nav Icons",
+                "type": "object"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "colors"
+            ],
+            "title": "ThemeBundleDTO",
+            "additionalProperties": false,
+            "type": "object"
+          }
+        },
+        "properties": {
+          "codex_compaction_threshold": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Codex context-compaction threshold, 1 through 10.",
+            "title": "Codex Compaction Threshold"
+          },
+          "custom_themes": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/ThemeBundleDTO"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Replace the owner's custom theme bundles (T-16a1 P2) with this array (each `{id,name,colors}`). Omit to leave them unchanged; `[]` clears them. Every bundle is validated against the shape, the theme.css token whitelist, and the concrete-colour grammar \u2014 any violation is a 422 and nothing is written. When this and display_theme are patched together, display_theme is validated against the POST-patch set; and deleting the active custom theme resets display_theme to \"\".",
+            "title": "Custom Themes"
+          },
+          "display_language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The owner's cockpit language (T-0b41-p2) \u2014 trimmed; \"\" clears it back to unset. Must be one of zh, en (or \"\"); anything else is a 422.",
+            "title": "Display Language"
+          },
+          "display_theme": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The owner's cockpit visual theme (T-0b41-p2) \u2014 trimmed; \"\" clears it back to unset. Must be one of office, xian (or \"\"); anything else is a 422.",
+            "title": "Display Theme"
+          },
+          "display_wide": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Turn the WIDE cockpit layout on/off (T-756f) \u2014 true lifts the centred ~1040px content column (the side gutters stay), false restores it. A plain boolean with no unset state: omit the field to leave it unchanged.",
+            "title": "Display Wide"
+          },
+          "handover_pct": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handover Pct"
+          },
+          "org_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The studio display name (T-d693) \u2014 trimmed, max 80 runes; \"\" clears it back to the localized default. A value longer than 80 runes is a 422.",
+            "title": "Org Name"
+          },
+          "outsource_max_parallel": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outsource Max Parallel"
+          },
+          "owner_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The owner's display nickname (T-0b41) \u2014 trimmed, max 80 runes; \"\" clears it back to the localized default. A value longer than 80 runes is a 422.",
+            "title": "Owner Name"
+          },
+          "push_contact_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The push contact address (T-8a82) \u2014 trimmed, max 254 runes; \"\" clears it back to unset and stops all Web Push delivery. A value must be a single `local@domain` address whose domain is a real public one: a malformed address, or one on a reserved suffix (.local, .localhost, .internal, .test, .invalid, .example), is a 422 \u2014 those are exactly the values the push gateways reject with BadJwtToken, which would take push down silently.",
+            "title": "Push Contact Email"
+          },
+          "token_ttl": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Ttl"
+          },
+          "updater_auto_update": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updater Auto Update"
+          },
+          "updater_receive_beta": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updater Receive Beta"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "name": "update_settings"
+    },
+    {
+      "description": "Check GitHub Releases for a newer official OffiCraft version.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "check_release"
+    },
+    {
+      "description": "Trigger a software upgrade to the latest GitHub release.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "upgrade_software"
+    },
+    {
       "description": "List the owner's roster (presence-derived MemberDTO[]).",
       "inputSchema": {
         "properties": {},
@@ -355,6 +614,25 @@
       "name": "dismiss_member"
     },
     {
+      "description": "Last 5 raw /in requests of one webhook endpoint (debug).",
+      "inputSchema": {
+        "properties": {
+          "endpoint_id": {
+            "type": "string"
+          },
+          "member_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "member_id",
+          "endpoint_id"
+        ],
+        "type": "object"
+      },
+      "name": "list_webhook_requests"
+    },
+    {
       "description": "Post a chat message (sender = verified JWT sub; auto SSE fan-out). ``to`` must name the owner or an active AI member; unknown, removed, and machine ids are rejected. Presence is not a gate: an offline member keeps its durable mailbox.",
       "inputSchema": {
         "$defs": {
@@ -654,6 +932,197 @@
       "name": "get_reply_card"
     },
     {
+      "description": "Answer a waiting reply card \u2014 the only positive close.",
+      "inputSchema": {
+        "$defs": {
+          "ChatAttachmentInputDTO": {
+            "description": "An attachment carried on a posted chat message \u2014 either INLINE BYTES or a\nREFERENCE to a blob already in the shared attachment store.\n\nInline: ``data_b64`` is the bytes, base64-encoded \u2014 a data-URI\n(``data:<mime>;base64,....``) OR bare base64 (the handler strips a\n``data:...;base64,`` prefix if present). ``mime`` and ``filename`` are\noptional: an omitted ``mime`` is sniffed for images (else\n``application/octet-stream``); an omitted ``filename`` defaults for pasted\nimages.\n\nReference: ``id`` names an EXISTING blob (minted by\n``POST /api/chat/attachments`` \u2014 the streaming upload seam that keeps file\nbytes out of a JSON tool call). The stored blob's mime/filename are\nauthoritative: ``filename``/``mime`` sent alongside ``id`` are IGNORED (so\nthe upload response ``{id, mime, filename}`` can be pasted back verbatim).\nAn unknown ``id`` is a 400; carrying BOTH ``id`` and ``data_b64`` is a 400\n(ambiguous intent). An item with neither ``id`` nor ``data_b64`` is\nsilently dropped (legacy tolerance, unchanged).",
+            "properties": {
+              "data_b64": {
+                "default": "",
+                "title": "Data B64",
+                "type": "string"
+              },
+              "filename": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Filename"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Id"
+              },
+              "mime": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Mime"
+              }
+            },
+            "title": "ChatAttachmentInputDTO",
+            "additionalProperties": false,
+            "type": "object"
+          }
+        },
+        "properties": {
+          "attachments": {
+            "items": {
+              "$ref": "#/$defs/ChatAttachmentInputDTO"
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
+          "card_id": {
+            "type": "string"
+          },
+          "option_idx": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Option Idx"
+          },
+          "text": {
+            "default": "",
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "card_id"
+        ],
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "name": "answer_reply_card"
+    },
+    {
+      "description": "Revise an answered card's answer (\u91cd\u65b0\u6c7a\u5b9a): stays answered.",
+      "inputSchema": {
+        "$defs": {
+          "ChatAttachmentInputDTO": {
+            "description": "An attachment carried on a posted chat message \u2014 either INLINE BYTES or a\nREFERENCE to a blob already in the shared attachment store.\n\nInline: ``data_b64`` is the bytes, base64-encoded \u2014 a data-URI\n(``data:<mime>;base64,....``) OR bare base64 (the handler strips a\n``data:...;base64,`` prefix if present). ``mime`` and ``filename`` are\noptional: an omitted ``mime`` is sniffed for images (else\n``application/octet-stream``); an omitted ``filename`` defaults for pasted\nimages.\n\nReference: ``id`` names an EXISTING blob (minted by\n``POST /api/chat/attachments`` \u2014 the streaming upload seam that keeps file\nbytes out of a JSON tool call). The stored blob's mime/filename are\nauthoritative: ``filename``/``mime`` sent alongside ``id`` are IGNORED (so\nthe upload response ``{id, mime, filename}`` can be pasted back verbatim).\nAn unknown ``id`` is a 400; carrying BOTH ``id`` and ``data_b64`` is a 400\n(ambiguous intent). An item with neither ``id`` nor ``data_b64`` is\nsilently dropped (legacy tolerance, unchanged).",
+            "properties": {
+              "data_b64": {
+                "default": "",
+                "title": "Data B64",
+                "type": "string"
+              },
+              "filename": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Filename"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Id"
+              },
+              "mime": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Mime"
+              }
+            },
+            "title": "ChatAttachmentInputDTO",
+            "additionalProperties": false,
+            "type": "object"
+          }
+        },
+        "properties": {
+          "attachments": {
+            "items": {
+              "$ref": "#/$defs/ChatAttachmentInputDTO"
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
+          "card_id": {
+            "type": "string"
+          },
+          "option_idx": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Option Idx"
+          },
+          "text": {
+            "default": "",
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "card_id"
+        ],
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "name": "reanswer_reply_card"
+    },
+    {
+      "description": "Mark a waiting card expired (\u6a19\u70ba\u904e\u671f): terminal, not an answer.",
+      "inputSchema": {
+        "properties": {
+          "card_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "card_id"
+        ],
+        "type": "object"
+      },
+      "name": "expire_reply_card"
+    },
+    {
       "description": "Ingest an agent's context gauge (in-memory; bad body \u2192 400).",
       "inputSchema": {
         "properties": {
@@ -808,6 +1277,36 @@
       "name": "list_machines"
     },
     {
+      "description": "Bootstrap on server: install this machine's warden on the host.",
+      "inputSchema": {
+        "properties": {
+          "machine_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "machine_id"
+        ],
+        "type": "object"
+      },
+      "name": "bootstrap_machine_here"
+    },
+    {
+      "description": "Teardown on server: tear this machine's warden down on the host.",
+      "inputSchema": {
+        "properties": {
+          "machine_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "machine_id"
+        ],
+        "type": "object"
+      },
+      "name": "teardown_machine_here"
+    },
+    {
       "description": "Uninstall a machine: drive the uninstall RPC to its warden.",
       "inputSchema": {
         "properties": {
@@ -822,6 +1321,21 @@
         "type": "object"
       },
       "name": "uninstall_machine"
+    },
+    {
+      "description": "Upgrade a machine: kick its warden's self-update NOW.",
+      "inputSchema": {
+        "properties": {
+          "member_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "member_id"
+        ],
+        "type": "object"
+      },
+      "name": "upgrade_machine"
     },
     {
       "description": "Delete a machine: soft-delete its warden record (no command sent).",
@@ -1360,6 +1874,21 @@
       "name": "get_task"
     },
     {
+      "description": "Terminate a task (owner/admin agent; the only non-executor status change).",
+      "inputSchema": {
+        "properties": {
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "type": "object"
+      },
+      "name": "terminate_task"
+    },
+    {
       "description": "Set a task's priority (owner any value; the executor high|mid|low on their own task; frozen stays owner-only).",
       "inputSchema": {
         "properties": {
@@ -1379,6 +1908,95 @@
         "type": "object"
       },
       "name": "set_task_priority"
+    },
+    {
+      "description": "Message the task's executor (owner/admin agent; task context auto-attached).",
+      "inputSchema": {
+        "$defs": {
+          "ChatAttachmentInputDTO": {
+            "description": "An attachment carried on a posted chat message \u2014 either INLINE BYTES or a\nREFERENCE to a blob already in the shared attachment store.\n\nInline: ``data_b64`` is the bytes, base64-encoded \u2014 a data-URI\n(``data:<mime>;base64,....``) OR bare base64 (the handler strips a\n``data:...;base64,`` prefix if present). ``mime`` and ``filename`` are\noptional: an omitted ``mime`` is sniffed for images (else\n``application/octet-stream``); an omitted ``filename`` defaults for pasted\nimages.\n\nReference: ``id`` names an EXISTING blob (minted by\n``POST /api/chat/attachments`` \u2014 the streaming upload seam that keeps file\nbytes out of a JSON tool call). The stored blob's mime/filename are\nauthoritative: ``filename``/``mime`` sent alongside ``id`` are IGNORED (so\nthe upload response ``{id, mime, filename}`` can be pasted back verbatim).\nAn unknown ``id`` is a 400; carrying BOTH ``id`` and ``data_b64`` is a 400\n(ambiguous intent). An item with neither ``id`` nor ``data_b64`` is\nsilently dropped (legacy tolerance, unchanged).",
+            "properties": {
+              "data_b64": {
+                "default": "",
+                "title": "Data B64",
+                "type": "string"
+              },
+              "filename": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Filename"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Id"
+              },
+              "mime": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Mime"
+              }
+            },
+            "title": "ChatAttachmentInputDTO",
+            "additionalProperties": false,
+            "type": "object"
+          }
+        },
+        "properties": {
+          "attachments": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/ChatAttachmentInputDTO"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attachments"
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "name": "post_task_message"
     },
     {
       "description": "Submit/replace the workflow plan (done and answered-card steps are kept). T-74f8 交棒閘 (second door): a plan is a step-set write and the task status is DERIVED from the step set, so a plan that leaves EVERY step done CLOSES the task — the same irreversible close the final step report performs. If that task's creator is not its executor and no handover is declared or already real, the replan is refused with 422 BEFORE anything is written (the plan stays fully editable). A plan carries no handoff field, so the way out is to hand over first: create the successor task and point its ``blocked_by`` at this task (the gate then stands aside by itself), or keep one unfinished step and declare the handover on the ``update_step_status`` report that closes it. A replan that still leaves work in the plan is never gated.",
@@ -1876,6 +2494,115 @@
       "name": "list_outsource_workers"
     },
     {
+      "description": "Read an outsource worker's boot-context preview (owner/admin agent).",
+      "inputSchema": {
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "get_worker_boot_context"
+    },
+    {
+      "description": "Refocus (\u63db\u624b) an outsource worker (owner/admin agent, online-only else 409).",
+      "inputSchema": {
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "refocus_outsource_worker"
+    },
+    {
+      "description": "Stop (\u505c\u6b62) an outsource worker: kill + hold down (owner/admin agent).",
+      "inputSchema": {
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "stop_outsource_worker"
+    },
+    {
+      "description": "Restart (\u91cd\u555f) a stopped outsource worker (owner/admin agent; 409 if not stopped).",
+      "inputSchema": {
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "restart_outsource_worker"
+    },
+    {
+      "description": "Change (\u63db model) an outsource worker's model/effort (owner/admin agent).",
+      "inputSchema": {
+        "properties": {
+          "effort": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional effort quick-pick; null/absent keeps the current effort.",
+            "title": "Effort"
+          },
+          "id": {
+            "type": "string"
+          },
+          "model": {
+            "default": "",
+            "title": "Model",
+            "type": "string"
+          },
+          "runtime": {
+            "anyOf": [
+              {
+                "enum": [
+                  "claude",
+                  "codex"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional runtime replacement; null/absent keeps the current runtime.",
+            "title": "Runtime"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "name": "set_outsource_worker_model"
+    },
+    {
       "description": "List task types (match by display_name/purpose; address by type_key).",
       "inputSchema": {
         "properties": {},
@@ -2044,6 +2771,21 @@
         "type": "object"
       },
       "name": "update_task_manual"
+    },
+    {
+      "description": "Delete a task type (open tasks of the type \u2192 409).",
+      "inputSchema": {
+        "properties": {
+          "type_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type_key"
+        ],
+        "type": "object"
+      },
+      "name": "delete_task_manual"
     },
     {
       "description": "Whole-doc replace of a type's learnings (task-close write-back). The doc text goes in text (NOT learnings — that is update_task_manual's field name); text is REQUIRED and unknown keys are rejected. Wiping existing learnings needs allow_shrink=true.",

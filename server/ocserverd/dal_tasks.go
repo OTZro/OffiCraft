@@ -82,6 +82,15 @@ type Task struct {
 	Handoff       string
 	HandoffNote   string
 	HandoffTaskID string
+	// FrozenBy is WHO put this task into the frozen priority (T-6020,
+	// migrations/00037): the verified token sub of that write — the wireOwnerID
+	// literal for owner scope, else the member / outsource-worker id. '' means
+	// "not frozen" (and pre-column rows, honestly unattributed); the write that
+	// moves the task off frozen clears it. Until T-6020 frozen was gated to the
+	// owner alone so the freezer was inferable; now that owner, admin_agent and
+	// the executor may all freeze, it has to be RECORDED or the owner cannot
+	// tell their own 喊停 from an agent's.
+	FrozenBy string
 }
 
 const taskColumns = `id, type_key, title, dedupe_key, inputs, description,
@@ -90,7 +99,7 @@ const taskColumns = `id, type_key, title, dedupe_key, inputs, description,
 	reassigned_from, reassigned_from_kind,
 	outsource_runtime, outsource_model, outsource_effort, outsource_machine,
 	outsource_dispatched,
-	handoff, handoff_note, handoff_task_id`
+	handoff, handoff_note, handoff_task_id, frozen_by`
 
 // sqlTerminalStatuses is the SQL IN-list of the terminal statuses — every
 // "open task" filter (dedupe probe, resume block, open counts) excludes these.
@@ -110,7 +119,7 @@ func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 		&t.ReassignedFrom, &t.ReassignedFromKind,
 		&t.OutsourceRuntime, &t.OutsourceModel, &t.OutsourceEffort, &t.OutsourceMachine,
 		&dispatched,
-		&t.Handoff, &t.HandoffNote, &t.HandoffTaskID,
+		&t.Handoff, &t.HandoffNote, &t.HandoffTaskID, &t.FrozenBy,
 	)
 	if err != nil {
 		return Task{}, err
@@ -250,7 +259,7 @@ func (d *DAL) PutTask(t Task) error {
 	}
 	_, err = d.db.Exec(`
 		INSERT INTO task (`+taskColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			type_key = excluded.type_key, title = excluded.title,
 			dedupe_key = excluded.dedupe_key, inputs = excluded.inputs,
@@ -273,7 +282,8 @@ func (d *DAL) PutTask(t Task) error {
 			outsource_dispatched = excluded.outsource_dispatched,
 			handoff = excluded.handoff,
 			handoff_note = excluded.handoff_note,
-			handoff_task_id = excluded.handoff_task_id`,
+			handoff_task_id = excluded.handoff_task_id,
+			frozen_by = excluded.frozen_by`,
 		t.ID, t.TypeKey, t.Title, t.DedupeKey, string(blob), t.Description,
 		t.Status, t.Lock, t.Priority, t.ExecutorKind, t.ExecutorID, t.CreatorID,
 		t.WaitingReason,
@@ -282,7 +292,7 @@ func (d *DAL) PutTask(t Task) error {
 		NormalizeRuntime(t.OutsourceRuntime),
 		t.OutsourceModel, t.OutsourceEffort, t.OutsourceMachine,
 		dispatched,
-		t.Handoff, t.HandoffNote, t.HandoffTaskID,
+		t.Handoff, t.HandoffNote, t.HandoffTaskID, t.FrozenBy,
 	)
 	return err
 }

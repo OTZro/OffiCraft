@@ -104,13 +104,35 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Summary:    "Owner login: exchange the password for an owner-scoped JWT.",
 			MCPExclude: true,
 		},
+		// ── T-6020 governance ruling (owner, 2026-07-26) ─────────────────────
+		// The owner opened 19 previously owner-only operational routes to the
+		// admin_agent class (see each row's T-6020 note) so an admin 助理 can
+		// actually run the office. FIVE rows were deliberately NOT opened and
+		// STAY principalOwner + MCPExclude. This is a decision, not an
+		// oversight — do not "finish the job" by lowering them:
+		//
+		//   POST /api/mint                  — minting an identity IS
+		//       self-escalation: an admin_agent that can mint an owner-scoped
+		//       (or any) token can hand itself every remaining gate, which
+		//       would make the whole ladder decorative.
+		//   POST /api/auth/change-password  — the owner's personal account
+		//       credential; changing it locks the human out of their own
+		//       cockpit.
+		//   GET  /api/push/public-key       — Web Push is the owner's own
+		//   POST /api/push/subscription       BROWSER, not an office capability;
+		//   DELETE /api/push/subscription     an agent has no browser to
+		//       subscribe and nothing legitimate to do with the owner's.
+		//
+		// Each of the five carries its own one-line reminder below.
 		{
-			Method:     "POST",
-			Path:       "/api/mint",
-			Handler:    w.HandleMintApiMintPost,
-			Auth:       authGated,
-			Requires:   principalOwner,
-			Summary:    "Owner-gated mint of a long-lived agent JWT for a member (TTL capped).",
+			Method:   "POST",
+			Path:     "/api/mint",
+			Handler:  w.HandleMintApiMintPost,
+			Auth:     authGated,
+			Requires: principalOwner,
+			Summary:  "Owner-gated mint of a long-lived agent JWT for a member (TTL capped).",
+			// T-6020: owner 2026-07-26 explicitly declined to open this to
+			// admin_agent — issuing an identity equals self-escalation.
 			MCPExclude: true,
 		},
 		{
@@ -132,61 +154,79 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			MCPExclude: true, // a credential seam, never an agent tool
 		},
 		{
-			Method:     "POST",
-			Path:       "/api/auth/change-password",
-			Handler:    w.HandleChangePasswordApiAuthChangePasswordPost,
-			Auth:       authGated,
-			Requires:   principalOwner,
-			Summary:    "Change the owner password (verifies the current one).",
+			Method:   "POST",
+			Path:     "/api/auth/change-password",
+			Handler:  w.HandleChangePasswordApiAuthChangePasswordPost,
+			Auth:     authGated,
+			Requires: principalOwner,
+			Summary:  "Change the owner password (verifies the current one).",
+			// T-6020: owner 2026-07-26 explicitly declined to open this to
+			// admin_agent — the owner's PERSONAL account credential.
 			MCPExclude: true, // the owner's credential, never an agent tool
 		},
 		{
-			Method:     "GET",
-			Path:       "/api/settings",
-			Handler:    w.HandleGetSettingsApiSettingsGet,
-			Auth:       authGated,
-			Requires:   principalOwner,
-			Summary:    "Read the owner-adjustable settings.",
-			MCPExclude: true, // the owner's cockpit settings, not an agent tool
+			// T-6020: opened to admin_agent (owner 2026-07-26) — running the
+			// office needs the office's own knobs.
+			Method:   "GET",
+			Path:     "/api/settings",
+			Handler:  w.HandleGetSettingsApiSettingsGet,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Read the org-adjustable settings (owner/admin agent).",
+			MCPTool:  "get_settings",
 		},
 		{
-			Method:     "PATCH",
-			Path:       "/api/settings",
-			Handler:    w.HandleUpdateSettingsApiSettingsPatch,
-			Auth:       authGated,
-			Requires:   principalOwner,
-			Summary:    "Edit settings (login TTL / handover threshold); live immediately.",
-			MCPExclude: true, // the owner's cockpit settings, not an agent tool
+			// T-6020: opened to admin_agent (owner 2026-07-26).
+			Method:   "PATCH",
+			Path:     "/api/settings",
+			Handler:  w.HandleUpdateSettingsApiSettingsPatch,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Edit settings (login TTL / handover threshold); live immediately.",
+			MCPTool:  "update_settings",
 		},
 		{
 			Method: http.MethodGet, Path: "/api/push/public-key", Handler: w.HandleGetPushPublicKeyApiPushPublicKeyGet,
-			Auth: authGated, Requires: principalOwner, Summary: "Read the VAPID public key for this owner's browser.", MCPExclude: true,
+			Auth: authGated, Requires: principalOwner, Summary: "Read the VAPID public key for this owner's browser.",
+			// T-6020: owner 2026-07-26 explicitly declined to open this to
+			// admin_agent — browser Web Push is the owner's personal device.
+			MCPExclude: true,
 		},
 		{
 			Method: http.MethodPost, Path: "/api/push/subscription", Handler: w.HandleCreatePushSubscriptionApiPushSubscriptionPost,
-			Auth: authGated, Requires: principalOwner, Summary: "Save this owner's browser Web Push subscription.", MCPExclude: true,
+			Auth: authGated, Requires: principalOwner, Summary: "Save this owner's browser Web Push subscription.",
+			// T-6020: owner 2026-07-26 explicitly declined to open this to
+			// admin_agent — browser Web Push is the owner's personal device.
+			MCPExclude: true,
 		},
 		{
 			Method: http.MethodDelete, Path: "/api/push/subscription", Handler: w.HandleDeletePushSubscriptionApiPushSubscriptionDelete,
-			Auth: authGated, Requires: principalOwner, Summary: "Remove this owner's browser Web Push subscription.", MCPExclude: true,
+			Auth: authGated, Requires: principalOwner, Summary: "Remove this owner's browser Web Push subscription.",
+			// T-6020: owner 2026-07-26 explicitly declined to open this to
+			// admin_agent — browser Web Push is the owner's personal device.
+			MCPExclude: true,
 		},
 		{
-			Method:     "GET",
-			Path:       "/api/release/check",
-			Handler:    w.HandleCheckReleaseApiReleaseCheckGet,
-			Auth:       authGated,
-			Requires:   principalOwner,
-			Summary:    "Check GitHub Releases for a newer official OffiCraft version.",
-			MCPExclude: true, // the owner's cockpit action, not an agent tool
+			// T-6020: opened to admin_agent (owner 2026-07-26).
+			Method:   "GET",
+			Path:     "/api/release/check",
+			Handler:  w.HandleCheckReleaseApiReleaseCheckGet,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Check GitHub Releases for a newer official OffiCraft version.",
+			MCPTool:  "check_release",
 		},
 		{
-			Method:     "POST",
-			Path:       "/api/update/upgrade",
-			Handler:    w.HandleUpgradeApiUpdateUpgradePost,
-			Auth:       authGated,
-			Requires:   principalOwner,
-			Summary:    "Trigger a software upgrade to the latest GitHub release.",
-			MCPExclude: true, // the owner's explicit action — NEVER an agent tool (no self-upgrade)
+			// T-6020: opened to admin_agent (owner 2026-07-26) — the admin 助理
+			// runs software upgrades; a PLAIN agent still cannot self-upgrade
+			// the server (the admin_agent choke keeps rank<2 out).
+			Method:   "POST",
+			Path:     "/api/update/upgrade",
+			Handler:  w.HandleUpgradeApiUpdateUpgradePost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Trigger a software upgrade to the latest GitHub release.",
+			MCPTool:  "upgrade_software",
 		},
 		// ── Gated infra seams ────────────────────────────────────────────────
 		{
@@ -373,16 +413,17 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Summary:    "Delete (permanently revoke) a webhook endpoint.",
 			MCPExclude: true,
 		},
-		// Debug ring buffer — raw external payloads; owner-only (agents never
-		// see another channel's unverified input through this side door).
+		// Debug ring buffer — raw external payloads. T-6020 (owner 2026-07-26)
+		// opened it to admin_agent; a PLAIN agent still cannot see another
+		// channel's unverified input through this side door.
 		{
-			Method:     "GET",
-			Path:       "/api/members/{member_id}/webhooks/{endpoint_id}/requests",
-			Handler:    w.HandleListWebhookRequestsApiMembersMemberIdWebhooksEndpointIdRequestsGet,
-			Auth:       authGated,
-			Requires:   principalOwner,
-			Summary:    "Last 5 raw /in requests of one webhook endpoint (debug).",
-			MCPExclude: true,
+			Method:   "GET",
+			Path:     "/api/members/{member_id}/webhooks/{endpoint_id}/requests",
+			Handler:  w.HandleListWebhookRequestsApiMembersMemberIdWebhooksEndpointIdRequestsGet,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Last 5 raw /in requests of one webhook endpoint (debug).",
+			MCPTool:  "list_webhook_requests",
 		},
 		// ── Webhook inlet — PUBLIC (M4 §2) ─────────────────────────────────────
 		// Token-only identity (?t=); the path carries nothing else. Silent 200
@@ -513,32 +554,36 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Summary:  "Read one reply card (full context: options, status, answer).",
 			MCPTool:  "get_reply_card",
 		},
+		// T-6020 (owner 2026-07-26): the three card-closing faces open to
+		// admin_agent — the admin 助理 answers on the owner's behalf. A plain
+		// agent still cannot close its own card (rank<2 → 403), so "no agent
+		// self-answers its own 請示" survives.
 		{
-			Method:     "POST",
-			Path:       "/api/reply-cards/{card_id}/answer",
-			Handler:    w.HandleAnswerReplyCardApiReplyCardsCardIdAnswerPost,
-			Auth:       authGated,
-			Requires:   principalOwner,
-			Summary:    "Answer a waiting reply card — the only positive close.",
-			MCPExclude: true, // the owner's cockpit action, not an agent tool
+			Method:   "POST",
+			Path:     "/api/reply-cards/{card_id}/answer",
+			Handler:  w.HandleAnswerReplyCardApiReplyCardsCardIdAnswerPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Answer a waiting reply card — the only positive close.",
+			MCPTool:  "answer_reply_card",
 		},
 		{
-			Method:     "PUT",
-			Path:       "/api/reply-cards/{card_id}/answer",
-			Handler:    w.HandleReanswerReplyCardApiReplyCardsCardIdAnswerPut,
-			Auth:       authGated,
-			Requires:   principalOwner,
-			Summary:    "Revise an answered card's answer (重新決定): stays answered.",
-			MCPExclude: true, // the owner's cockpit action, not an agent tool
+			Method:   "PUT",
+			Path:     "/api/reply-cards/{card_id}/answer",
+			Handler:  w.HandleReanswerReplyCardApiReplyCardsCardIdAnswerPut,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Revise an answered card's answer (重新決定): stays answered.",
+			MCPTool:  "reanswer_reply_card",
 		},
 		{
-			Method:     "POST",
-			Path:       "/api/reply-cards/{card_id}/expire",
-			Handler:    w.HandleExpireReplyCardApiReplyCardsCardIdExpirePost,
-			Auth:       authGated,
-			Requires:   principalOwner,
-			Summary:    "Mark a waiting card expired (標為過期): terminal, not an answer.",
-			MCPExclude: true, // the owner's cockpit action, not an agent tool
+			Method:   "POST",
+			Path:     "/api/reply-cards/{card_id}/expire",
+			Handler:  w.HandleExpireReplyCardApiReplyCardsCardIdExpirePost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Mark a waiting card expired (標為過期): terminal, not an answer.",
+			MCPTool:  "expire_reply_card",
 		},
 		// ── Agent context gauge + monitoring ─────────────────────────────────
 		{
@@ -632,23 +677,26 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Summary:    "Exchange a one-time claim code for the machine's exec-token.",
 			MCPExclude: true, // a credential-exchange seam (like /api/login), not an agent tool
 		},
+		// T-6020 (owner 2026-07-26): the two on-server host lifecycle faces open
+		// to admin_agent — installing/tearing down the server host's own warden
+		// is office operations. A plain agent is still 403 (rank<2).
 		{
-			Method:     "POST",
-			Path:       "/api/machines/{machine_id}/bootstrap-here",
-			Handler:    w.HandleBootstrapHereApiMachinesMachineIdBootstrapHerePost,
-			Auth:       authGated,
-			Requires:   principalOwner,
-			Summary:    "Bootstrap on server: install this machine's warden on the host.",
-			MCPExclude: true, // a privileged host action, not an agent tool
+			Method:   "POST",
+			Path:     "/api/machines/{machine_id}/bootstrap-here",
+			Handler:  w.HandleBootstrapHereApiMachinesMachineIdBootstrapHerePost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Bootstrap on server: install this machine's warden on the host.",
+			MCPTool:  "bootstrap_machine_here",
 		},
 		{
-			Method:     "POST",
-			Path:       "/api/machines/{machine_id}/teardown-here",
-			Handler:    w.HandleTeardownHereApiMachinesMachineIdTeardownHerePost,
-			Auth:       authGated,
-			Requires:   principalOwner,
-			Summary:    "Teardown on server: tear this machine's warden down on the host.",
-			MCPExclude: true, // a privileged host action, not an agent tool
+			Method:   "POST",
+			Path:     "/api/machines/{machine_id}/teardown-here",
+			Handler:  w.HandleTeardownHereApiMachinesMachineIdTeardownHerePost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Teardown on server: tear this machine's warden down on the host.",
+			MCPTool:  "teardown_machine_here",
 		},
 		{
 			Method:   "POST",
@@ -660,13 +708,15 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			MCPTool:  "uninstall_machine",
 		},
 		{
-			Method:     "POST",
-			Path:       "/api/machines/{member_id}/upgrade",
-			Handler:    w.HandleUpgradeMachineApiMachinesMemberIdUpgradePost,
-			Auth:       authGated,
-			Requires:   principalOwner,
-			Summary:    "Upgrade a machine: kick its warden's self-update NOW.",
-			MCPExclude: true, // a cockpit host-lifecycle click, not an agent tool
+			// T-6020: opened to admin_agent (owner 2026-07-26) — same floor as
+			// uninstall_machine right above, which was already admin_agent.
+			Method:   "POST",
+			Path:     "/api/machines/{member_id}/upgrade",
+			Handler:  w.HandleUpgradeMachineApiMachinesMemberIdUpgradePost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Upgrade a machine: kick its warden's self-update NOW.",
+			MCPTool:  "upgrade_machine",
 		},
 		{
 			Method:   "DELETE",
@@ -874,13 +924,16 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			MCPTool:  "get_task",
 		},
 		{
-			Method:     "POST",
-			Path:       "/api/tasks/{task_id}/terminate",
-			Handler:    w.HandleTerminateTaskApiTasksTaskIdTerminatePost,
-			Auth:       authGated,
-			Requires:   principalOwner,
-			Summary:    "Terminate a task (owner; the only owner status change).",
-			MCPExclude: true, // the owner's cockpit action, not an agent tool
+			// T-6020: opened to admin_agent (owner 2026-07-26). Still the only
+			// non-executor status change, and still closed to plain agents —
+			// an agent cannot terminate its own way out of a task.
+			Method:   "POST",
+			Path:     "/api/tasks/{task_id}/terminate",
+			Handler:  w.HandleTerminateTaskApiTasksTaskIdTerminatePost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Terminate a task (owner/admin agent; the only non-executor status change).",
+			MCPTool:  "terminate_task",
 		},
 		{
 			Method:   "POST",
@@ -888,17 +941,19 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleSetTaskPriorityApiTasksTaskIdPriorityPost,
 			Auth:     authGated,
 			Requires: principalAgent,
-			Summary:  "Set a task's priority (owner any value; the executor high|mid|low on their own task; frozen stays owner-only).",
+			Summary:  "Set a task's priority (owner/admin agent any value; the executor any value on their own task — frozen included, T-6020).",
 			MCPTool:  "set_task_priority",
 		},
 		{
-			Method:     "POST",
-			Path:       "/api/tasks/{task_id}/message",
-			Handler:    w.HandlePostTaskMessageApiTasksTaskIdMessagePost,
-			Auth:       authGated,
-			Requires:   principalOwner,
-			Summary:    "Message the task's executor (owner; task context auto-attached).",
-			MCPExclude: true, // the owner's cockpit action, not an agent tool
+			// T-6020: opened to admin_agent (owner 2026-07-26) — the admin 助理
+			// pings a task's executor. Plain agents still 403.
+			Method:   "POST",
+			Path:     "/api/tasks/{task_id}/message",
+			Handler:  w.HandlePostTaskMessageApiTasksTaskIdMessagePost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Message the task's executor (owner/admin agent; task context auto-attached).",
+			MCPTool:  "post_task_message",
 		},
 		{
 			Method:   "POST",
@@ -1041,15 +1096,16 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 		{
 			// T-ba6b: the detail panel's initial-prompt preview — a live
 			// re-assembly of the worker boot context (the member /api/bootstrap
-			// preview's worker twin; no token minted). Owner-only: the text
-			// embeds the full task + manual. A cockpit read face → MCPExclude.
-			Method:     "GET",
-			Path:       "/api/outsource-workers/{id}/boot-context",
-			Handler:    w.HandleGetWorkerBootContextApiOutsourceWorkersIdBootContextGet,
-			Auth:       authGated,
-			Requires:   principalOwner,
-			Summary:    "Read an outsource worker's boot-context preview (owner-only).",
-			MCPExclude: true,
+			// preview's worker twin; no token minted). The text embeds the full
+			// task + manual, so the floor is admin_agent, never plain agent.
+			// T-6020 (owner 2026-07-26) dropped it from owner-only.
+			Method:   "GET",
+			Path:     "/api/outsource-workers/{id}/boot-context",
+			Handler:  w.HandleGetWorkerBootContextApiOutsourceWorkersIdBootContextGet,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Read an outsource worker's boot-context preview (owner/admin agent).",
+			MCPTool:  "get_worker_boot_context",
 		},
 		{
 			// T-f190 改機器; P7c (gate rc-2786636f30e5) drops the floor to
@@ -1070,46 +1126,48 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 		{
 			// T-32e1/T-f190 worker lifecycle ops — owner mental model "外包只是
 			// 系統會幫我產生跟刪除的正職員工", so each reuses a member mechanism.
-			// All owner-only + MCPExclude (relocate above dropped to admin_agent
-			// in P7c; these stay owner-only until their own alignment ruling).
-			Method:     "POST",
-			Path:       "/api/outsource-workers/{id}/refocus",
-			Handler:    w.HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost,
-			Auth:       authGated,
-			Requires:   principalOwner,
-			Summary:    "Refocus (換手) an outsource worker (owner-only, online-only else 409).",
-			MCPExclude: true,
+			// T-6020 (owner 2026-07-26) gave all four the SAME admin_agent floor
+			// relocate already had in P7c — 外包對齊正職, one floor for the whole
+			// worker lifecycle. Plain agents remain 403 on every one.
+			Method:   "POST",
+			Path:     "/api/outsource-workers/{id}/refocus",
+			Handler:  w.HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Refocus (換手) an outsource worker (owner/admin agent, online-only else 409).",
+			MCPTool:  "refocus_outsource_worker",
 		},
 		{
-			Method:     "POST",
-			Path:       "/api/outsource-workers/{id}/stop",
-			Handler:    w.HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost,
-			Auth:       authGated,
-			Requires:   principalOwner,
-			Summary:    "Stop (停止) an outsource worker: kill + hold down (owner-only).",
-			MCPExclude: true,
+			Method:   "POST",
+			Path:     "/api/outsource-workers/{id}/stop",
+			Handler:  w.HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Stop (停止) an outsource worker: kill + hold down (owner/admin agent).",
+			MCPTool:  "stop_outsource_worker",
 		},
 		{
-			Method:     "POST",
-			Path:       "/api/outsource-workers/{id}/restart",
-			Handler:    w.HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost,
-			Auth:       authGated,
-			Requires:   principalOwner,
-			Summary:    "Restart (重啟) a stopped outsource worker (owner-only; 409 if not stopped).",
-			MCPExclude: true,
+			Method:   "POST",
+			Path:     "/api/outsource-workers/{id}/restart",
+			Handler:  w.HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Restart (重啟) a stopped outsource worker (owner/admin agent; 409 if not stopped).",
+			MCPTool:  "restart_outsource_worker",
 		},
 		{
-			Method:     "POST",
-			Path:       "/api/outsource-workers/{id}/model",
-			Handler:    w.HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost,
-			Auth:       authGated,
-			Requires:   principalOwner,
-			Summary:    "Change (換 model) an outsource worker's model/effort (owner-only).",
-			MCPExclude: true,
+			Method:   "POST",
+			Path:     "/api/outsource-workers/{id}/model",
+			Handler:  w.HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Change (換 model) an outsource worker's model/effort (owner/admin agent).",
+			MCPTool:  "set_outsource_worker_model",
 		},
 		// ── Task manuals (M3) — agents create manuals + edit the CONTENT fields
-		// (purpose / fields / SOP / learnings); the assignee face and delete
-		// stay owner-only governance (the in-handler assignee gate answers 403)
+		// (purpose / fields / SOP / learnings); the assignee face and delete are
+		// GOVERNANCE, floor admin_agent since T-6020 (owner 2026-07-26; the
+		// in-handler assignee gate answers 403 below that floor)
 		{
 			Method:   "GET",
 			Path:     "/api/task-manuals",
@@ -1143,17 +1201,18 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleUpdateTaskManualApiTaskManualsTypeKeyPost,
 			Auth:     authGated,
 			Requires: principalAgent,
-			Summary:  "Edit a task manual (partial; content fields agent-editable; assignee = owner-only).",
+			Summary:  "Edit a task manual (partial; content fields agent-editable; assignee = owner/admin agent).",
 			MCPTool:  "update_task_manual",
 		},
 		{
-			Method:     "DELETE",
-			Path:       "/api/task-manuals/{type_key}",
-			Handler:    w.HandleDeleteTaskManualApiTaskManualsTypeKeyDelete,
-			Auth:       authGated,
-			Requires:   principalOwner,
-			Summary:    "Delete a task type (open tasks of the type → 409).",
-			MCPExclude: true, // the owner's settings action, not an agent tool
+			// T-6020: opened to admin_agent (owner 2026-07-26).
+			Method:   "DELETE",
+			Path:     "/api/task-manuals/{type_key}",
+			Handler:  w.HandleDeleteTaskManualApiTaskManualsTypeKeyDelete,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Delete a task type (open tasks of the type → 409).",
+			MCPTool:  "delete_task_manual",
 		},
 		{
 			Method:   "POST",

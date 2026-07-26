@@ -2563,7 +2563,7 @@
         "type": "object"
       },
       "ReleaseCheckDTO": {
-        "description": "Response of `GET /api/release/check` (owner-gated) — the explicit\n檢查更新 button behind the software-update card. The server asks GitHub\nReleases (repo pkyosx/OffiCraft, anonymous — no token, no configuration)\nfor the newest admissible release SYNCHRONOUSLY (bounded; a short reuse\nwindow absorbs repeated clicks) and orders its tag against the running\n`version` (semver). `status` is \"up_to_date\" (the running build is the\nnewest — running >= latest, nothing is published at all, or a version\nlabel is unorderable — logged server-side, never presented as an update), \"update_available\" (`latest_tag` +\n`release_url` then point at the newer release; applying it is a MANUAL\nstep — download the asset and follow install.sh — unless the\n`updater_auto_update` setting is armed), or \"unknown\" (GitHub unreachable\n/ not answering — the honest degraded verdict, still a 200).",
+        "description": "Response of `GET /api/release/check` (owner/admin agent — T-6020) — the explicit\n檢查更新 button behind the software-update card. The server asks GitHub\nReleases (repo pkyosx/OffiCraft, anonymous — no token, no configuration)\nfor the newest admissible release SYNCHRONOUSLY (bounded; a short reuse\nwindow absorbs repeated clicks) and orders its tag against the running\n`version` (semver). `status` is \"up_to_date\" (the running build is the\nnewest — running >= latest, nothing is published at all, or a version\nlabel is unorderable — logged server-side, never presented as an update), \"update_available\" (`latest_tag` +\n`release_url` then point at the newer release; applying it is a MANUAL\nstep — download the asset and follow install.sh — unless the\n`updater_auto_update` setting is armed), or \"unknown\" (GitHub unreachable\n/ not answering — the honest degraded verdict, still a 200).",
         "properties": {
           "current_version": {
             "title": "Current Version",
@@ -2778,7 +2778,7 @@
         "type": "object"
       },
       "ReplyCardDTO": {
-        "description": "One reply card (等我回覆卡). ``from`` is the initiating member (the verified JWT sub at create time). ``status`` is the closed set ``waiting`` | ``answered`` | ``expired`` — the only transitions are waiting→answered via an answer (the owner's positive close) and waiting→expired via the owner-only expire action (標為過期 — NOT an answer: the ask went stale and the owner declined it; terminal, no reopen); a revised answer (PUT) keeps ``answered``. ``chat_message_id`` links the chat message the card rides in (the jump-to-origin anchor); ``answered_ts``/``answer`` are null unless answered; ``expired_ts`` is null unless expired. ``attachments`` are the QUESTION-side attachments the initiator opened the card with (served refs incl. download url; always an array, ``[]`` when none).",
+        "description": "One reply card (等我回覆卡). ``from`` is the initiating member (the verified JWT sub at create time). ``status`` is the closed set ``waiting`` | ``answered`` | ``expired`` — the only transitions are waiting→answered via an answer (the owner's positive close) and waiting→expired via the expire action (owner/admin agent — T-6020) (標為過期 — NOT an answer: the ask went stale and the owner declined it; terminal, no reopen); a revised answer (PUT) keeps ``answered``. ``chat_message_id`` links the chat message the card rides in (the jump-to-origin anchor); ``answered_ts``/``answer`` are null unless answered; ``expired_ts`` is null unless expired. ``attachments`` are the QUESTION-side attachments the initiator opened the card with (served refs incl. download url; always an array, ``[]`` when none).",
         "properties": {
           "answer": {
             "anyOf": [
@@ -3462,7 +3462,7 @@
         "type": "object"
       },
       "SettingsDTO": {
-        "description": "The owner-adjustable settings surface (`GET /api/settings`). `token_ttl` —\nthe owner-login JWT lifetime (seconds). `handover_pct` — the context\nhandover threshold. `outsource_max_parallel` — the global cap on\nconcurrently live outsource workers (-1 = unlimited, 0 pauses assignment).\n`updater_receive_beta` — whether the GitHub-release update check also\nadmits prereleases (default false: official releases only).\n`updater_auto_update` — arms unattended background self-upgrade to the\nnewest admissible GitHub release (default false: upgrading stays an\nexplicit owner action). `org_name` — the studio display name (\"\" = unset).\n`owner_name` — the owner's display nickname (\"\" = unset). `display_theme` /\n`display_language` — the owner's cockpit visual prefs (\"\" = unset).\n`display_wide` — whether the cockpit uses the wide layout (default false =\nthe narrow centred column).",
+        "description": "The org-adjustable settings surface (`GET /api/settings`; owner or admin agent since T-6020). `token_ttl` —\nthe owner-login JWT lifetime (seconds). `handover_pct` — the context\nhandover threshold. `outsource_max_parallel` — the global cap on\nconcurrently live outsource workers (-1 = unlimited, 0 pauses assignment).\n`updater_receive_beta` — whether the GitHub-release update check also\nadmits prereleases (default false: official releases only).\n`updater_auto_update` — arms unattended background self-upgrade to the\nnewest admissible GitHub release (default false: upgrading stays an\nexplicit owner action). `org_name` — the studio display name (\"\" = unset).\n`owner_name` — the owner's display nickname (\"\" = unset). `display_theme` /\n`display_language` — the owner's cockpit visual prefs (\"\" = unset).\n`display_wide` — whether the cockpit uses the wide layout (default false =\nthe narrow centred column).",
         "properties": {
           "codex_compaction_threshold": {
             "default": 3,
@@ -3490,7 +3490,7 @@
           },
           "custom_themes": {
             "default": [],
-            "description": "The owner's saved custom theme bundles (T-16a1 P2), each a `{id,name,colors}` colour bundle. `[]` = none saved. display_theme may point at any id in this set (or a built-in). Owner-gated: rides GET /api/settings only.",
+            "description": "The owner's saved custom theme bundles (T-16a1 P2), each a `{id,name,colors}` colour bundle. `[]` = none saved. display_theme may point at any id in this set (or a built-in). Governance-gated (owner/admin agent): rides GET /api/settings only.",
             "items": {
               "$ref": "#/components/schemas/ThemeBundleDTO"
             },
@@ -3510,7 +3510,7 @@
                 "type": "null"
               }
             ],
-            "description": "The first-run onboarding report (T-ba62), or null when onboarding never ran on this database. Owner-gated by virtue of living on GET /api/settings — a failed step's detail can carry local paths, so it must never reach the PUBLIC /api/auth/status probe.",
+            "description": "The first-run onboarding report (T-ba62), or null when onboarding never ran on this database. Governance-gated (owner/admin agent) by virtue of living on GET /api/settings — a failed step's detail can carry local paths, so it must never reach the PUBLIC /api/auth/status probe.",
             "title": "Onboarding"
           },
           "org_name": {
@@ -4089,6 +4089,12 @@
             "title": "Executor Kind",
             "type": "string"
           },
+          "frozen_by": {
+            "default": "",
+            "description": "WHO put this task into the ``frozen`` priority (T-6020): the verified token sub of that write — ``\"owner\"`` for the owner's own click, else the member / outsource-worker id. ``\"\"`` whenever the task is not frozen (and on rows written before the column existed, which are honestly unattributed); the write that moves the task off ``frozen`` clears it. Served because ``frozen`` is no longer a single-actor knob — owner, admin agent and the task's own executor may all freeze and unfreeze — so the owner must be able to tell their own 喊停 from an agent's by READING the task.",
+            "title": "Frozen By",
+            "type": "string"
+          },
           "handoff": {
             "default": "",
             "description": "The DECLARED destination of the ball at close (T-74f8): \"\" = never declared, else ``return_to_creator`` | ``follow_up`` | ``none``.",
@@ -4664,7 +4670,7 @@
         "type": "object"
       },
       "TaskMessageDTO": {
-        "description": "The task-card message box (owner → executor): the server posts one ordinary chat message to the task's executor with the task context auto-attached in ``meta`` ({task_id, task_title, task_type}). An unassigned executor is a 409.",
+        "description": "The task-card message box (owner or admin agent → executor; floor admin_agent since T-6020): the server posts one ordinary chat message to the task's executor with the task context auto-attached in ``meta`` ({task_id, task_title, task_type}). An unassigned executor is a 409.",
         "properties": {
           "attachments": {
             "anyOf": [
@@ -4759,7 +4765,7 @@
         "type": "object"
       },
       "TaskPriorityUpdateDTO": {
-        "description": "Priority change: ``high`` | ``mid`` | ``low`` | ``frozen`` (freeze/unfreeze ride the same knob — SPEC §3.3). The owner may set any value; the task's executor may set high|mid|low on their own task; frozen (set or clear) stays owner-only.",
+        "description": "Priority change: ``high`` | ``mid`` | ``low`` | ``frozen`` (freeze/unfreeze ride the same knob — SPEC §3.3). The owner and an admin agent may set any value on any task; the task's own executor may set any value on their task — frozen INCLUDED, and the clear of a frozen task is admitted for exactly the same set (T-6020: whoever may freeze may unfreeze). A caller who is none of the three is a flat 403.",
         "properties": {
           "priority": {
             "title": "Priority",
@@ -5114,7 +5120,7 @@
         "type": "object"
       },
       "UpgradeResultDTO": {
-        "description": "Response of `POST /api/update/upgrade` (owner-gated). `status` names the\noutcome (\"restarting\" — the new binary is already verified and swapped\nin place; the process re-execs right after this response) and\n`target_version` the GitHub release tag being installed. The endpoint\nfires only on the owner's explicit click; the OPT-IN `updater_auto_update`\nsetting runs the same verified body unattended in the background.",
+        "description": "Response of `POST /api/update/upgrade` (owner/admin agent — T-6020). `status` names the\noutcome (\"restarting\" — the new binary is already verified and swapped\nin place; the process re-execs right after this response) and\n`target_version` the GitHub release tag being installed. The endpoint\nfires only on an explicit owner/admin-agent trigger; the OPT-IN `updater_auto_update`\nsetting runs the same verified body unattended in the background.",
         "properties": {
           "status": {
             "title": "Status",
@@ -5321,7 +5327,7 @@
         "type": "object"
       },
       "WebhookRequestLogDTO": {
-        "description": "One row of a webhook endpoint's /in debug ring buffer (GET /api/members/{member_id}/webhooks/{endpoint_id}/requests, newest first, at most 5 rows kept per endpoint). Records EVERY request /in resolved to the endpoint's token, whatever the outcome: `delivered` (verified payload landed as a chat), `dropped:sig_failed` / `dropped:disabled` / `dropped:member_gone` (silent drops with their coarse reason), `challenge` (the Slack url_verification handshake), `ping` (a verified GitHub ping). An unknown token has no endpoint to log against, by construction. `headers` is the JSON-serialised request header map (truncated at 4 KiB); `body` is the raw payload text (truncated at 16 KiB); `truncated` marks that either was cut. Owner-only debug wire (requires=owner) - raw external payloads never ride any public or agent-facing surface, and the public /in response stays byte-identical regardless of logging.",
+        "description": "One row of a webhook endpoint's /in debug ring buffer (GET /api/members/{member_id}/webhooks/{endpoint_id}/requests, newest first, at most 5 rows kept per endpoint). Records EVERY request /in resolved to the endpoint's token, whatever the outcome: `delivered` (verified payload landed as a chat), `dropped:sig_failed` / `dropped:disabled` / `dropped:member_gone` (silent drops with their coarse reason), `challenge` (the Slack url_verification handshake), `ping` (a verified GitHub ping). An unknown token has no endpoint to log against, by construction. `headers` is the JSON-serialised request header map (truncated at 4 KiB); `body` is the raw payload text (truncated at 16 KiB); `truncated` marks that either was cut. Governance-gated debug wire (requires=admin_agent since T-6020) - raw external payloads never ride any public or PLAIN-agent-facing surface, and the public /in response stays byte-identical regardless of logging.",
         "properties": {
           "body": {
             "title": "Body",
@@ -7476,7 +7482,7 @@
     },
     "/api/machines/{machine_id}/bootstrap-here": {
       "post": {
-        "description": "Bootstrap on server: install a machine's warden ON THE SERVER HOST in one\nclick (``POST /api/machines/{machine_id}/bootstrap-here``).\n\nThe common case is that the officraft server RUNS ON the machine being\nprovisioned, so instead of copy-pasting the boot command into a shell the owner\nclicks once and the server installs the warden locally. It resolves the ACTIVE\nwarden member (404 otherwise), re-mints a fresh exec-token, resolves the\nocwarden binary the SAME way ``handle_warden_binary`` does (503 if absent), and\nruns ``<ocwarden> install`` as a subprocess.\n\nGovernance: OWNER-ONLY via the route table (``requires=\"owner\"``) —\nDELIBERATELY stricter than onboard's admin choke. This runs code on\nthe server host (a privileged local action), so it must be strictly owner-scoped:\nnot even the mira governance agent may trigger a host install.\n\nSECURITY: the subprocess uses an argv list (``[bin, \"install\"]``), NEVER a shell\nstring — zero command-injection surface. The token/base/id ride in ``env`` (a\nCOPY of ``os.environ`` so PATH/HOME are inherited — the warden installs into the\nserver user's ~/.officraft, which is the point). The runner is INJECTABLE via\n``app.state.bootstrap_runner`` so tests never launch a real installer.\n\nNon-zero exit is NOT raised: the one-warden guard in ocwarden refusing (exit 1)\nis a legitimate outcome — ``ok=false`` with the guard message surfaced in ``log``\nso the FE shows the reason. A timeout is a clear error, not a hang.",
+        "description": "Bootstrap on server: install a machine's warden ON THE SERVER HOST in one\nclick (``POST /api/machines/{machine_id}/bootstrap-here``).\n\nThe common case is that the officraft server RUNS ON the machine being\nprovisioned, so instead of copy-pasting the boot command into a shell the owner\nclicks once and the server installs the warden locally. It resolves the ACTIVE\nwarden member (404 otherwise), re-mints a fresh exec-token, resolves the\nocwarden binary the SAME way ``handle_warden_binary`` does (503 if absent), and\nruns ``<ocwarden> install`` as a subprocess.\n\nGovernance: ``requires=\"admin_agent\"`` — the SAME admin choke onboard uses\n(T-6020, owner ruling 2026-07-26: installing the warden on the server host is\noffice operations the admin 助理 runs). Still a privileged local action, so it\nstays closed to every PLAIN agent and to wardens (flat 403 before any resolve).\n\nSECURITY: the subprocess uses an argv list (``[bin, \"install\"]``), NEVER a shell\nstring — zero command-injection surface. The token/base/id ride in ``env`` (a\nCOPY of ``os.environ`` so PATH/HOME are inherited — the warden installs into the\nserver user's ~/.officraft, which is the point). The runner is INJECTABLE via\n``app.state.bootstrap_runner`` so tests never launch a real installer.\n\nNon-zero exit is NOT raised: the one-warden guard in ocwarden refusing (exit 1)\nis a legitimate outcome — ``ok=false`` with the guard message surfaced in ``log``\nso the FE shows the reason. A timeout is a clear error, not a hang.",
         "operationId": "handle_bootstrap_here_api_machines__machine_id__bootstrap_here_post",
         "parameters": [
           {
@@ -7536,7 +7542,7 @@
     },
     "/api/machines/{machine_id}/teardown-here": {
       "post": {
-        "description": "Teardown on server: tear a machine's warden down ON THE SERVER HOST in one\nclick (``POST /api/machines/{machine_id}/teardown-here``).\n\nThe symmetric inverse of ``handle_bootstrap_here``. The common case is that the\nofficraft server RUNS ON the machine being torn down, so instead of copy-\npasting the teardown command into a shell the owner clicks once and the server\nruns ``<ocwarden> teardown`` locally (``launchctl bootout`` + remove the install\nartifacts — the daemon stops because launchd stops it, never pkill). It resolves\nthe ACTIVE warden member (404 otherwise), resolves the ocwarden binary the SAME\nway ``handle_bootstrap_here`` does (503 if absent), and runs the teardown via an\nINJECTABLE runner (``app.state.teardown_runner``).\n\nGovernance: OWNER-ONLY via the route table (``requires=\"owner\"``) —\nthe SAME strict choke ``handle_bootstrap_here`` uses, DELIBERATELY stricter than\nthe admin choke of the remote-command ``handle_uninstall_machine`` /\n``handle_delete_machine``. This runs code on the server host (a privileged local\naction), so not even the mira governance agent may trigger a host teardown.\n\nSAFETY — CONFIRM-THEN-REMOVE: the warden member is soft-deleted ONLY when the\ndaemon is CONFIRMED torn down (``exit_code == 0``). ocwarden teardown is\nidempotent and CONFIRMS the bootout (it polls ``launchctl print`` until launchd\nreports the label truly gone — bootout is async), so 0 means \"the launchd job\nis CONFIRMED booted out and the artifacts are gone\"; a NON-ZERO exit (or a\ntimeout) means the local teardown did NOT complete or confirm\n— in that case the member row is LEFT ON THE ROSTER (``removed=false``) so a\nfailed local teardown never orphans a still-running daemon from its registry\nrow. ``log`` (merged stdout+stderr) surfaces the reason so the FE shows it.\n\nSECURITY: the subprocess uses an argv list (``[bin, \"teardown\"]``), NEVER a\nshell string. env is a COPY of ``os.environ`` (HOME/PATH inherited — the warden\nwas installed into the server user's ~/.officraft, which is what teardown\nremoves). The runner is INJECTABLE so tests never touch launchctl.",
+        "description": "Teardown on server: tear a machine's warden down ON THE SERVER HOST in one\nclick (``POST /api/machines/{machine_id}/teardown-here``).\n\nThe symmetric inverse of ``handle_bootstrap_here``. The common case is that the\nofficraft server RUNS ON the machine being torn down, so instead of copy-\npasting the teardown command into a shell the owner clicks once and the server\nruns ``<ocwarden> teardown`` locally (``launchctl bootout`` + remove the install\nartifacts — the daemon stops because launchd stops it, never pkill). It resolves\nthe ACTIVE warden member (404 otherwise), resolves the ocwarden binary the SAME\nway ``handle_bootstrap_here`` does (503 if absent), and runs the teardown via an\nINJECTABLE runner (``app.state.teardown_runner``).\n\nGovernance: ``requires=\"admin_agent\"`` — the SAME choke\n``handle_bootstrap_here`` uses, and now the SAME one as the remote-command\n``handle_uninstall_machine`` / ``handle_delete_machine`` (T-6020, owner ruling\n2026-07-26). This runs code on the server host (a privileged local action), so it\nstays closed to every PLAIN agent and to wardens (flat 403 before any resolve).\n\nSAFETY — CONFIRM-THEN-REMOVE: the warden member is soft-deleted ONLY when the\ndaemon is CONFIRMED torn down (``exit_code == 0``). ocwarden teardown is\nidempotent and CONFIRMS the bootout (it polls ``launchctl print`` until launchd\nreports the label truly gone — bootout is async), so 0 means \"the launchd job\nis CONFIRMED booted out and the artifacts are gone\"; a NON-ZERO exit (or a\ntimeout) means the local teardown did NOT complete or confirm\n— in that case the member row is LEFT ON THE ROSTER (``removed=false``) so a\nfailed local teardown never orphans a still-running daemon from its registry\nrow. ``log`` (merged stdout+stderr) surfaces the reason so the FE shows it.\n\nSECURITY: the subprocess uses an argv list (``[bin, \"teardown\"]``), NEVER a\nshell string. env is a COPY of ``os.environ`` (HOME/PATH inherited — the warden\nwas installed into the server user's ~/.officraft, which is what teardown\nremoves). The runner is INJECTABLE so tests never touch launchctl.",
         "operationId": "handle_teardown_here_api_machines__machine_id__teardown_here_post",
         "parameters": [
           {
@@ -7716,7 +7722,7 @@
     },
     "/api/machines/{member_id}/upgrade": {
       "post": {
-        "description": "Upgrade a machine's binaries NOW (``POST /api/machines/{member_id}/upgrade``,\nT-5f01).\n\nThe owner's one-click upgrade for a machine the table shows as ``stale``: the\nserver enqueues the ``update`` warden-command verb (spec/sse.md §7) onto the\nmachine's live SSE downstream, and the warden's dispatch kicks its EXISTING\nself-update reconcile immediately (the T-c93d kick seam — download +\nverify-before-swap + atomic swap + exec-in-place), instead of waiting out the\npoll backstop. Fire-and-forget by design: NO desired_state intent is written\nand nothing durable changes — the self-update loop is idempotent (content-hash\nswap oracle), so a spurious or repeated upgrade is a cheap no-op, and\nconvergence is observed through the next heartbeat's ``binaries`` fingerprints\nflipping ``bin_status`` to ``current``.\n\nONLINE-vs-OFFLINE: same reachability gate as every warden command — an online\nwarden gets the frame (``dispatched=true``); an offline warden gets nothing\n(``dispatched=false``, and its own reconnect-kick self-updates it the moment\nit comes back anyway). An older warden build that predates the ``update`` verb\nrefuses the frame as unknown-rpc (logged + skipped, reader loop unharmed).\n\nGovernance: ``requires=\"owner\"`` — a cockpit-only host-lifecycle action (like\nbootstrap-here / teardown-here), never an agent tool. Kind guard: an unknown,\nremoved, or non-warden member resolves 404 (machine not found).",
+        "description": "Upgrade a machine's binaries NOW (``POST /api/machines/{member_id}/upgrade``,\nT-5f01).\n\nThe owner's one-click upgrade for a machine the table shows as ``stale``: the\nserver enqueues the ``update`` warden-command verb (spec/sse.md §7) onto the\nmachine's live SSE downstream, and the warden's dispatch kicks its EXISTING\nself-update reconcile immediately (the T-c93d kick seam — download +\nverify-before-swap + atomic swap + exec-in-place), instead of waiting out the\npoll backstop. Fire-and-forget by design: NO desired_state intent is written\nand nothing durable changes — the self-update loop is idempotent (content-hash\nswap oracle), so a spurious or repeated upgrade is a cheap no-op, and\nconvergence is observed through the next heartbeat's ``binaries`` fingerprints\nflipping ``bin_status`` to ``current``.\n\nONLINE-vs-OFFLINE: same reachability gate as every warden command — an online\nwarden gets the frame (``dispatched=true``); an offline warden gets nothing\n(``dispatched=false``, and its own reconnect-kick self-updates it the moment\nit comes back anyway). An older warden build that predates the ``update`` verb\nrefuses the frame as unknown-rpc (logged + skipped, reader loop unharmed).\n\nGovernance: ``requires=\"admin_agent\"`` (T-6020) — a host-lifecycle action the\nadmin 助理 drives, on the same floor as bootstrap-here / teardown-here and\nuninstall_machine; a plain agent is a flat 403. Kind guard: an unknown,\nremoved, or non-warden member resolves 404 (machine not found).",
         "operationId": "handle_upgrade_machine_api_machines__member_id__upgrade_post",
         "parameters": [
           {
@@ -8735,7 +8741,7 @@
     },
     "/api/members/{member_id}/webhooks/{endpoint_id}/requests": {
       "get": {
-        "description": "The endpoint's /in debug ring buffer (M4 observability): the last 5 raw requests that resolved to this endpoint's token, newest first, each with its resolved outcome, JSON-serialised headers (<=4 KiB) and raw body text (<=16 KiB, `truncated` marks a cut). Owner-only (requires=owner - a plain agent or warden is a flat 403): these are raw UNVERIFIED external payloads, exposed for debugging a dead endpoint only. 404 if the member or endpoint is absent. Kept OFF WebhookEndpointDTO so the list wire stays light.",
+        "description": "The endpoint's /in debug ring buffer (M4 observability): the last 5 raw requests that resolved to this endpoint's token, newest first, each with its resolved outcome, JSON-serialised headers (<=4 KiB) and raw body text (<=16 KiB, `truncated` marks a cut). Governance-gated (requires=admin_agent since T-6020 - a plain agent or warden is a flat 403): these are raw UNVERIFIED external payloads, exposed for debugging a dead endpoint only. 404 if the member or endpoint is absent. Kept OFF WebhookEndpointDTO so the list wire stays light.",
         "operationId": "handle_list_webhook_requests_api_members__member_id__webhooks__endpoint_id__requests_get",
         "parameters": [
           {
@@ -9088,7 +9094,7 @@
     },
     "/api/outsource-workers/{id}/boot-context": {
       "get": {
-        "description": "Read the outsource worker's boot-context PREVIEW (T-ba6b): the server re-assembles the persona/boot text with the SAME fold the spawn path uses (buildWorkerBootContext — worker_context.md seed + 你的身分 + the bound task in full + the type manual Q1/Q2/Q3 + learnings) from the CURRENT DB rows, WITHOUT minting any token. Owner-only cockpit read (the text embeds the full task + manual). 404 for an unknown worker or a worker whose bound task is gone. HONEST caveat the UI must carry: this is today's re-assembly, not a verbatim spawn-time record — nothing is stored (no prompt column, no migration).",
+        "description": "Read the outsource worker's boot-context PREVIEW (T-ba6b): the server re-assembles the persona/boot text with the SAME fold the spawn path uses (buildWorkerBootContext — worker_context.md seed + 你的身分 + the bound task in full + the type manual Q1/Q2/Q3 + learnings) from the CURRENT DB rows, WITHOUT minting any token. Owner/admin-agent cockpit read (T-6020; the text embeds the full task + manual, so a plain agent is a flat 403). 404 for an unknown worker or a worker whose bound task is gone. HONEST caveat the UI must carry: this is today's re-assembly, not a verbatim spawn-time record — nothing is stored (no prompt column, no migration).",
         "operationId": "handle_get_worker_boot_context_api_outsource_workers__id__boot_context_get",
         "parameters": [
           {
@@ -9143,12 +9149,12 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Read an outsource worker's boot-context preview (owner-only)."
+        "summary": "Read an outsource worker's boot-context preview (owner/admin agent)."
       }
     },
     "/api/outsource-workers/{id}/model": {
       "post": {
-        "description": "Change (換 model) an outsource worker's model + effort (T-f190 lifecycle), the worker twin of the member model/effort edit. Persists the new model (blank ⇒ launcher default) and effort; when the worker is ACTIVE + online it kills+respawns so the new model takes effect NOW, otherwise (assigned/stopped) it only persists — the next spawn/restart bakes it in. 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Owner-only (route requires=owner), MCP-excluded (workers are server/owner-managed; agents never drive these).",
+        "description": "Change (換 model) an outsource worker's model + effort (T-f190 lifecycle), the worker twin of the member model/effort edit. Persists the new model (blank ⇒ launcher default) and effort; when the worker is ACTIVE + online it kills+respawns so the new model takes effect NOW, otherwise (assigned/stopped) it only persists — the next spawn/restart bakes it in. 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. Exposed as an MCP tool since T-6020.",
         "operationId": "handle_set_outsource_worker_model_api_outsource_workers__id__model_post",
         "parameters": [
           {
@@ -9213,12 +9219,12 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Change (換 model) an outsource worker's model/effort (owner-only)."
+        "summary": "Change (換 model) an outsource worker's model/effort (owner/admin agent)."
       }
     },
     "/api/outsource-workers/{id}/refocus": {
       "post": {
-        "description": "Refocus (換手) an outsource worker (T-32e1): the worker twin of refocus_member. Stamps refocus_since, then kills the current session and re-spawns it so a FRESH worker picks the SAME bound task back up from its task plan / step notes (a worker has no member fold — continuity lives in the task). ONLINE-ONLY: 409 unless the worker is active with a live session; 409 for a stopped worker (restart first); 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Owner-only (route requires=owner), MCP-excluded (workers are server/owner-managed; agents never drive these).",
+        "description": "Refocus (換手) an outsource worker (T-32e1): the worker twin of refocus_member. Stamps refocus_since, then kills the current session and re-spawns it so a FRESH worker picks the SAME bound task back up from its task plan / step notes (a worker has no member fold — continuity lives in the task). ONLINE-ONLY: 409 unless the worker is active with a live session; 409 for a stopped worker (restart first); 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. Exposed as an MCP tool since T-6020.",
         "operationId": "handle_refocus_outsource_worker_api_outsource_workers__id__refocus_post",
         "parameters": [
           {
@@ -9273,7 +9279,7 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Refocus (換手) an outsource worker's context (owner-only, online-only else 409)."
+        "summary": "Refocus (換手) an outsource worker's context (owner/admin agent, online-only else 409)."
       }
     },
     "/api/outsource-workers/{id}/relocate": {
@@ -9348,7 +9354,7 @@
     },
     "/api/outsource-workers/{id}/restart": {
       "post": {
-        "description": "Restart (重啟) a stopped outsource worker (T-f190 lifecycle), the inverse of stop: set desired_state back to 'online' and re-dispatch (重啟 = 再 dispatch, a fresh worker_start onto the pinned/preferred machine). 409 when the worker is not stopped (desired_state != offline) (nothing to restart); 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Owner-only (route requires=owner), MCP-excluded (workers are server/owner-managed; agents never drive these).",
+        "description": "Restart (重啟) a stopped outsource worker (T-f190 lifecycle), the inverse of stop: set desired_state back to 'online' and re-dispatch (重啟 = 再 dispatch, a fresh worker_start onto the pinned/preferred machine). 409 when the worker is not stopped (desired_state != offline) (nothing to restart); 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. Exposed as an MCP tool since T-6020.",
         "operationId": "handle_restart_outsource_worker_api_outsource_workers__id__restart_post",
         "parameters": [
           {
@@ -9403,12 +9409,12 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Restart (重啟) a stopped outsource worker (owner-only; 409 if not stopped)."
+        "summary": "Restart (重啟) a stopped outsource worker (owner/admin agent; 409 if not stopped)."
       }
     },
     "/api/outsource-workers/{id}/stop": {
       "post": {
-        "description": "Stop (停止) an outsource worker (T-f190 lifecycle): set desired_state='offline' (a direct mirror of member.desired_state — which makes every scheduler auto-revival path skip it: the shared reconcile-FSM rescue never revives an owner-held-down worker), clear any in-flight refocus, and kill the session WITHOUT re-dispatching. The worker projects presence 'stopping'/'stopped' (honest, never fake-green); the bound task stays in its own status. Idempotent. 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Owner-only (route requires=owner), MCP-excluded (workers are server/owner-managed; agents never drive these).",
+        "description": "Stop (停止) an outsource worker (T-f190 lifecycle): set desired_state='offline' (a direct mirror of member.desired_state — which makes every scheduler auto-revival path skip it: the shared reconcile-FSM rescue never revives an owner-held-down worker), clear any in-flight refocus, and kill the session WITHOUT re-dispatching. The worker projects presence 'stopping'/'stopped' (honest, never fake-green); the bound task stays in its own status. Idempotent. 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. Exposed as an MCP tool since T-6020.",
         "operationId": "handle_stop_outsource_worker_api_outsource_workers__id__stop_post",
         "parameters": [
           {
@@ -9463,12 +9469,12 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Stop (停止) an outsource worker (owner-only; kill + hold down)."
+        "summary": "Stop (停止) an outsource worker (owner/admin agent; kill + hold down)."
       }
     },
     "/api/release/check": {
       "get": {
-        "description": "Owner-gated explicit update check (檢查更新): synchronously asks GitHub\nReleases (pkyosx/OffiCraft, anonymous) for the newest admissible release\nand compares it against the running version. Failure to reach GitHub\ndegrades gracefully to status \"unknown\" — never a 5xx.",
+        "description": "Governance-gated explicit update check (檢查更新; owner/admin agent — T-6020): synchronously asks GitHub\nReleases (pkyosx/OffiCraft, anonymous) for the newest admissible release\nand compares it against the running version. Failure to reach GitHub\ndegrades gracefully to status \"unknown\" — never a 5xx.",
         "operationId": "handle_check_release_api_release_check_get",
         "responses": {
           "200": {
@@ -9806,7 +9812,7 @@
     },
     "/api/reply-cards/{card_id}/answer": {
       "post": {
-        "description": "Answer a WAITING reply card — the only POSITIVE close (there is deliberately no close/skip surface; the owner-only expire action is the sole other exit and is NOT an answer). The answer is an ``option_idx`` and/or free ``text`` (+ attachments); an empty answer is 400, an out-of-range ``option_idx`` is 400. Any real answer — including a counter-question typed as text — flips the card to ``answered`` and stamps ``answered_ts``; if the reply did not settle the original question the agent opens a NEW card (never reopens this one). Answering an already-answered card is a 409 (revise via PUT instead); an expired card is a 409 too (terminal — if the question still matters the agent opens a NEW card). When the card is bound to a task step (open_gate / create_reply_card auto-bind), the FIRST answer also releases the waiting_owner hold — the server restores the step (and the task, once its last bound card is answered) to in_progress; the agent then advances the work itself. Fans one ``reply_card`` SSE delta (badge −1; the agent's own connection receives it and refetches the card for the full answer context).",
+        "description": "Answer a WAITING reply card — the only POSITIVE close (there is deliberately no close/skip surface; the expire action (owner/admin agent) is the sole other exit and is NOT an answer). The answer is an ``option_idx`` and/or free ``text`` (+ attachments); an empty answer is 400, an out-of-range ``option_idx`` is 400. Any real answer — including a counter-question typed as text — flips the card to ``answered`` and stamps ``answered_ts``; if the reply did not settle the original question the agent opens a NEW card (never reopens this one). Answering an already-answered card is a 409 (revise via PUT instead); an expired card is a 409 too (terminal — if the question still matters the agent opens a NEW card). When the card is bound to a task step (open_gate / create_reply_card auto-bind), the FIRST answer also releases the waiting_owner hold — the server restores the step (and the task, once its last bound card is answered) to in_progress; the agent then advances the work itself. Fans one ``reply_card`` SSE delta (badge −1; the agent's own connection receives it and refetches the card for the full answer context).",
         "operationId": "handle_answer_reply_card_api_reply_cards__card_id__answer_post",
         "parameters": [
           {
@@ -9944,7 +9950,7 @@
     },
     "/api/reply-cards/{card_id}/expire": {
       "post": {
-        "description": "Mark a WAITING reply card EXPIRED (標為過期) — the owner-only terminal exit that is NOT an answer: the ask went stale (懸太久、答案已不可靠) or its task is already closed, and the owner declines to answer it. The card flips to ``expired`` and stamps ``expired_ts``; there is no request body, no undo, no reopen (if the question still matters the agent opens a NEW card with current context). When the card is bound to a task step, expiring releases the waiting_owner hold exactly like a first answer — the server restores the step (and the task, once its last bound card is settled) to in_progress; a card orphaned on an already-terminal task may still be expired (its ONLY exit — answering an orphan is 409) and the closed task is left untouched. An already-answered or already-expired card is a 409. Fans one ``reply_card`` SSE delta (status=expired; the initiating agent's connection receives it and refetches the card).",
+        "description": "Mark a WAITING reply card EXPIRED (標為過期) — the owner/admin-agent terminal exit that is NOT an answer: the ask went stale (懸太久、答案已不可靠) or its task is already closed, and the owner declines to answer it. The card flips to ``expired`` and stamps ``expired_ts``; there is no request body, no undo, no reopen (if the question still matters the agent opens a NEW card with current context). When the card is bound to a task step, expiring releases the waiting_owner hold exactly like a first answer — the server restores the step (and the task, once its last bound card is settled) to in_progress; a card orphaned on an already-terminal task may still be expired (its ONLY exit — answering an orphan is 409) and the closed task is left untouched. An already-answered or already-expired card is a 409. Fans one ``reply_card`` SSE delta (status=expired; the initiating agent's connection receives it and refetches the card).",
         "operationId": "handle_expire_reply_card_api_reply_cards__card_id__expire_post",
         "parameters": [
           {
@@ -9999,7 +10005,7 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Mark a waiting card expired (owner-only; not an answer; terminal)."
+        "summary": "Mark a waiting card expired (owner/admin agent; not an answer; terminal)."
       }
     },
     "/api/resume-summary": {
@@ -10723,7 +10729,7 @@
     },
     "/api/settings": {
       "get": {
-        "description": "Read the owner-adjustable settings (owner-gated): the login TTL, the context\nauto-handover threshold, and the read-only self-healed port (null while the\nserver runs on its preferred port).",
+        "description": "Read the org-adjustable settings (owner or admin agent — T-6020): the login TTL, the context\nauto-handover threshold, and the read-only self-healed port (null while the\nserver runs on its preferred port).",
         "operationId": "handle_get_settings_api_settings_get",
         "responses": {
           "200": {
@@ -10767,10 +10773,10 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Read the owner-adjustable settings."
+        "summary": "Read the org-adjustable settings (owner/admin agent)."
       },
       "patch": {
-        "description": "Partially update the owner-adjustable settings (owner-gated). Only supplied\nfields change; a change is durable (DB) AND live immediately — `token_ttl`\napplies from the next login, `handover_pct` applies from the next context\nreport. `token_ttl` outside the 12h/24h/7d/30d whitelist or `handover_pct`\noutside 40..90 is a 422 (nothing is written).",
+        "description": "Partially update the org-adjustable settings (owner or admin agent — T-6020). Only supplied\nfields change; a change is durable (DB) AND live immediately — `token_ttl`\napplies from the next login, `handover_pct` applies from the next context\nreport. `token_ttl` outside the 12h/24h/7d/30d whitelist or `handover_pct`\noutside 40..90 is a 422 (nothing is written).",
         "operationId": "handle_update_settings_api_settings_patch",
         "requestBody": {
           "content": {
@@ -10898,7 +10904,7 @@
         "summary": "List task types (match by display_name/purpose; address by type_key)."
       },
       "post": {
-        "description": "Create one task type (a blank manual). Pass ``display_name``; the server mints the ``tm-`` type_key id and returns it in the DTO. Legacy: an explicit ``type_key`` is still accepted verbatim as the id (duplicate → 409; blank display_name backfills to it). Agent floor: any agent may create a manual; ``assignee`` is OWNER-ONLY governance — a non-owner supplying it is a 403.",
+        "description": "Create one task type (a blank manual). Pass ``display_name``; the server mints the ``tm-`` type_key id and returns it in the DTO. Legacy: an explicit ``type_key`` is still accepted verbatim as the id (duplicate → 409; blank display_name backfills to it). Agent floor: any agent may create a manual; ``assignee`` is GOVERNANCE — a caller below admin_agent supplying it is a 403 (T-6020).",
         "operationId": "handle_create_task_manual_api_task_manuals_post",
         "requestBody": {
           "content": {
@@ -10952,12 +10958,12 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Create a task type: pass display_name; the server mints and returns the tm- type_key id (legacy explicit type_key still accepted; duplicate → 409; assignee = owner-only)."
+        "summary": "Create a task type: pass display_name; the server mints and returns the tm- type_key id (legacy explicit type_key still accepted; duplicate → 409; assignee = owner/admin agent)."
       }
     },
     "/api/task-manuals/{type_key}": {
       "delete": {
-        "description": "Delete a task type. Refused (409) while NON-terminal tasks of the type exist (SPEC §5.1); closed tasks never block.",
+        "description": "Delete a task type (floor admin_agent since T-6020; a plain agent is a 403). Refused (409) while NON-terminal tasks of the type exist (SPEC §5.1); closed tasks never block.",
         "operationId": "handle_delete_task_manual_api_task_manuals__type_key__delete",
         "parameters": [
           {
@@ -11073,7 +11079,7 @@
         "summary": "Read one task manual (purpose/fields/SOP/learnings/assignee)."
       },
       "post": {
-        "description": "Partial manual edit — only supplied fields change. Agent floor: content fields (purpose / fields / sop_md / learnings) are agent-editable; ``assignee`` is OWNER-ONLY governance — a non-owner supplying it is a 403. ``assignee`` is {\"kind\":\"member\",\"member_id\":…} or {\"kind\":\"outsource\",\"model\":…,\"effort\":…,\"copies\":N}; {} unsets it. Unknown keys are REJECTED (422) rather than silently dropped: this endpoint writes the same learnings document as ``write_task_learnings``, which spells the field ``text`` instead of ``learnings`` — sending the wrong name used to answer 200 having written nothing (T-2d99). Omitting a field remains legal; only unrecognised names are refused.",
+        "description": "Partial manual edit — only supplied fields change. Agent floor: content fields (purpose / fields / sop_md / learnings) are agent-editable; ``assignee`` is GOVERNANCE — a caller below admin_agent supplying it is a 403 (T-6020). ``assignee`` is {\"kind\":\"member\",\"member_id\":…} or {\"kind\":\"outsource\",\"model\":…,\"effort\":…,\"copies\":N}; {} unsets it. Unknown keys are REJECTED (422) rather than silently dropped: this endpoint writes the same learnings document as ``write_task_learnings``, which spells the field ``text`` instead of ``learnings`` — sending the wrong name used to answer 200 having written nothing (T-2d99). Omitting a field remains legal; only unrecognised names are refused.",
         "operationId": "handle_update_task_manual_api_task_manuals__type_key__post",
         "parameters": [
           {
@@ -11138,7 +11144,7 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Edit a task manual (partial; owner's structure edit)."
+        "summary": "Edit a task manual (partial; content fields agent-editable; assignee = owner/admin agent)."
       }
     },
     "/api/task-manuals/{type_key}/learnings": {
@@ -11965,7 +11971,7 @@
     },
     "/api/tasks/{task_id}/message": {
       "post": {
-        "description": "The task-card message box (owner → executor): the server posts one ordinary chat message to the task's executor with the task context auto-attached in ``meta`` ({task_id, task_title, task_type}). An unassigned executor is a 409.",
+        "description": "The task-card message box (owner or admin agent → executor; floor admin_agent since T-6020): the server posts one ordinary chat message to the task's executor with the task context auto-attached in ``meta`` ({task_id, task_title, task_type}). An unassigned executor is a 409.",
         "operationId": "handle_post_task_message_api_tasks__task_id__message_post",
         "parameters": [
           {
@@ -12030,7 +12036,7 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Message the task's executor (owner; task context auto-attached)."
+        "summary": "Message the task's executor (owner/admin agent; task context auto-attached)."
       }
     },
     "/api/tasks/{task_id}/plan": {
@@ -12105,7 +12111,7 @@
     },
     "/api/tasks/{task_id}/priority": {
       "post": {
-        "description": "Priority change: ``high`` | ``mid`` | ``low`` | ``frozen`` (freeze/unfreeze ride the same knob — SPEC §3.3). The owner may set any value; the task's executor may set high|mid|low on their own task; setting ``frozen`` or changing a frozen task's priority (unfreezing) stays owner-only (403). Closed tasks are a 409.",
+        "description": "Priority change: ``high`` | ``mid`` | ``low`` | ``frozen`` (freeze/unfreeze ride the same knob — SPEC §3.3). The owner and an admin agent may set any value on any task; the task's own executor may set any value on their task — including ``frozen`` and the clear of a frozen task, symmetrically (T-6020, owner ruling 2026-07-26). Anyone else is a flat 403. Whoever sets ``frozen`` is recorded on the task as ``frozen_by`` and the field is cleared when the task leaves frozen. Closed tasks are a 409.",
         "operationId": "handle_set_task_priority_api_tasks__task_id__priority_post",
         "parameters": [
           {
@@ -12170,7 +12176,7 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Set a task's priority (owner any value; the executor high|mid|low on their own task; frozen stays owner-only)."
+        "summary": "Set a task's priority (owner/admin agent any value; the executor any value on their own task — frozen included, T-6020)."
       }
     },
     "/api/tasks/{task_id}/reassign": {
@@ -12403,7 +12409,7 @@
     },
     "/api/tasks/{task_id}/terminate": {
       "post": {
-        "description": "Terminate a task — the ONLY owner-side status change (SPEC §3.7). Non-terminal only (done/terminated → 409); stamps closed_ts and releases any bound outsource worker. The FE owns the double-confirm.",
+        "description": "Terminate a task — the ONLY non-executor status change (SPEC §3.7); floor admin_agent since T-6020, so a plain agent cannot terminate its way out of a task. Non-terminal only (done/terminated → 409); stamps closed_ts and releases any bound outsource worker. The FE owns the double-confirm.",
         "operationId": "handle_terminate_task_api_tasks__task_id__terminate_post",
         "parameters": [
           {
@@ -12458,12 +12464,12 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Terminate a task (owner; the only owner status change)."
+        "summary": "Terminate a task (owner/admin agent; the only non-executor status change)."
       }
     },
     "/api/update/upgrade": {
       "post": {
-        "description": "Owner-gated, explicit upgrade trigger (the software-update card's 升級\nbutton; the armed `updater_auto_update` cadence shares the same body).\nPrecondition: no newer release known from the update check → 409. A valid\ntrigger runs the execution body SYNCHRONOUSLY in the request: pin the\nnewest admissible GitHub release → download its\nofficraft-<tag>-darwin-arm64.tar.gz asset → sha256-verify against the\nrelease's checksums.txt → extract the ocserverd binary → smoke-test → back\nup the running binary (.bak) → atomic swap — any failure answers an honest\nerror and leaves the old binary untouched and serving. Only after the swap\nhas landed does it answer 200 {status:\"restarting\"}; the process then\nre-execs itself so the new build takes over — poll GET /api/version until\ngit_sha advances.",
+        "description": "Governance-gated (owner/admin agent — T-6020), explicit upgrade trigger (the software-update card's 升級\nbutton; the armed `updater_auto_update` cadence shares the same body).\nPrecondition: no newer release known from the update check → 409. A valid\ntrigger runs the execution body SYNCHRONOUSLY in the request: pin the\nnewest admissible GitHub release → download its\nofficraft-<tag>-darwin-arm64.tar.gz asset → sha256-verify against the\nrelease's checksums.txt → extract the ocserverd binary → smoke-test → back\nup the running binary (.bak) → atomic swap — any failure answers an honest\nerror and leaves the old binary untouched and serving. Only after the swap\nhas landed does it answer 200 {status:\"restarting\"}; the process then\nre-execs itself so the new build takes over — poll GET /api/version until\ngit_sha advances.",
         "operationId": "handle_upgrade_api_update_upgrade_post",
         "responses": {
           "200": {

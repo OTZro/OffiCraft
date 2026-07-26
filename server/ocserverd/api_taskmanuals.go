@@ -3,9 +3,10 @@ package main
 // api_taskmanuals.go — the 設定 › 任務手冊 surface (M3 contract §C.5): the
 // shared read face, the agent-floor CONTENT writes (create a manual, partial
 // edit of purpose / fields / SOP / learnings — owner ruling 2026-07-13:
-// agents author manual content), the OWNER-ONLY governance face (the
-// assignee setting — an agent supplying `assignee` on create/edit is a 403
-// from the in-handler gate; delete stays requires=owner on the route table),
+// agents author manual content), the GOVERNANCE face (the assignee setting —
+// a caller below admin_agent supplying `assignee` on create/edit is a 403 from
+// the in-handler gate; delete is requires=admin_agent on the route table —
+// both floors lowered from owner by T-6020, owner ruling 2026-07-26),
 // and the AGENT's learnings write-back (whole-doc replace, the
 // replace_lessons shape). Manuals ship EMPTY (SPEC §5.1: no seed, no
 // tombstone); delete is refused while non-terminal tasks of the type exist.
@@ -128,17 +129,18 @@ func (s *apiServer) resolveManualAssigneeMachine(w http.ResponseWriter, assignee
 	return true
 }
 
-// callerMaySetAssignee enforces the owner-only assignee governance gate
-// (owner ruling 2026-07-13): the assignee face — who/what executes a type
-// (member binding / outsource headcount / machine placement) — stays owner
-// governance even though manual CONTENT is agent-editable. False → the
-// caller writes the 403.
+// callerMaySetAssignee enforces the assignee governance gate (owner ruling
+// 2026-07-13, floor lowered by T-6020 owner ruling 2026-07-26): the assignee
+// face — who/what executes a type (member binding / outsource headcount /
+// machine placement) — is GOVERNANCE, so it admits the governance classes
+// {owner, admin_agent} (root CLAUDE.md §4) and nothing below, even though the
+// manual CONTENT fields are agent-editable. False → the caller writes the 403.
 func (s *apiServer) callerMaySetAssignee(r *http.Request) bool {
-	return principalAtLeast(s.principalOfRequest(r), principalOwner)
+	return principalAtLeast(s.principalOfRequest(r), principalAdminAgent)
 }
 
-const assigneeOwnerOnlyMsg = "assignee is owner-only governance — " +
-	"only the owner may set who executes a task type"
+const assigneeGovernanceMsg = "assignee is owner/admin-agent governance — " +
+	"a plain agent may not set who executes a task type"
 
 // GET /api/task-manuals — the type cards (full DTOs; the list view shows
 // type_key + purpose, the rest rides along — one DTO, no second shape).
@@ -185,15 +187,15 @@ func (s *apiServer) HandleListTaskManualsApiTaskManualsGet(w http.ResponseWriter
 // LEGACY compat path (deprecated): taken verbatim as the id (duplicate →
 // 409), with a blank display_name backfilled to it so old MCP callers'
 // manuals still carry a display face. Both blank → 400. The optional
-// assignee is the owner-only governance face: a non-owner supplying it is a
-// 403; the owner's assignee is validated and applied.
+// assignee is the GOVERNANCE face: a caller below admin_agent supplying it is
+// a 403 (T-6020); owner/admin_agent get theirs validated and applied.
 func (s *apiServer) HandleCreateTaskManualApiTaskManualsPost(w http.ResponseWriter, r *http.Request) {
 	var body TaskManualCreateDTO
 	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	if body.Assignee != nil && !s.callerMaySetAssignee(r) {
-		writeError(w, http.StatusForbidden, assigneeOwnerOnlyMsg)
+		writeError(w, http.StatusForbidden, assigneeGovernanceMsg)
 		return
 	}
 	typeKey := trimString(strOrEmpty(body.TypeKey))
@@ -267,7 +269,7 @@ func (s *apiServer) HandleGetTaskManualApiTaskManualsTypeKeyGet(w http.ResponseW
 // POST /api/task-manuals/{type_key} — the partial manual edit (only supplied
 // fields change — the role-def edit posture). Agent floor for the CONTENT
 // fields (purpose / fields / sop_md / learnings); assignee stays the
-// owner-only governance face — a non-owner supplying it is a 403.
+// GOVERNANCE face — a caller below admin_agent supplying it is a 403 (T-6020).
 func (s *apiServer) HandleUpdateTaskManualApiTaskManualsTypeKeyPost(w http.ResponseWriter, r *http.Request, typeKey string) {
 	var body TaskManualUpdateDTO
 	// T-2d99 (mirror direction): strict decode, but NO required names. This is
@@ -284,7 +286,7 @@ func (s *apiServer) HandleUpdateTaskManualApiTaskManualsTypeKeyPost(w http.Respo
 		return
 	}
 	if body.Assignee != nil && !s.callerMaySetAssignee(r) {
-		writeError(w, http.StatusForbidden, assigneeOwnerOnlyMsg)
+		writeError(w, http.StatusForbidden, assigneeGovernanceMsg)
 		return
 	}
 	m, err := s.resolveTaskManual(typeKey)

@@ -896,10 +896,10 @@ export interface paths {
          *     ocwarden binary the SAME way ``handle_warden_binary`` does (503 if absent), and
          *     runs ``<ocwarden> install`` as a subprocess.
          *
-         *     Governance: OWNER-ONLY via the route table (``requires="owner"``) —
-         *     DELIBERATELY stricter than onboard's admin choke. This runs code on
-         *     the server host (a privileged local action), so it must be strictly owner-scoped:
-         *     not even the mira governance agent may trigger a host install.
+         *     Governance: ``requires="admin_agent"`` — the SAME admin choke onboard uses
+         *     (T-6020, owner ruling 2026-07-26: installing the warden on the server host is
+         *     office operations the admin 助理 runs). Still a privileged local action, so it
+         *     stays closed to every PLAIN agent and to wardens (flat 403 before any resolve).
          *
          *     SECURITY: the subprocess uses an argv list (``[bin, "install"]``), NEVER a shell
          *     string — zero command-injection surface. The token/base/id ride in ``env`` (a
@@ -941,11 +941,11 @@ export interface paths {
          *     way ``handle_bootstrap_here`` does (503 if absent), and runs the teardown via an
          *     INJECTABLE runner (``app.state.teardown_runner``).
          *
-         *     Governance: OWNER-ONLY via the route table (``requires="owner"``) —
-         *     the SAME strict choke ``handle_bootstrap_here`` uses, DELIBERATELY stricter than
-         *     the admin choke of the remote-command ``handle_uninstall_machine`` /
-         *     ``handle_delete_machine``. This runs code on the server host (a privileged local
-         *     action), so not even the mira governance agent may trigger a host teardown.
+         *     Governance: ``requires="admin_agent"`` — the SAME choke
+         *     ``handle_bootstrap_here`` uses, and now the SAME one as the remote-command
+         *     ``handle_uninstall_machine`` / ``handle_delete_machine`` (T-6020, owner ruling
+         *     2026-07-26). This runs code on the server host (a privileged local action), so it
+         *     stays closed to every PLAIN agent and to wardens (flat 403 before any resolve).
          *
          *     SAFETY — CONFIRM-THEN-REMOVE: the warden member is soft-deleted ONLY when the
          *     daemon is CONFIRMED torn down (``exit_code == 0``). ocwarden teardown is
@@ -1086,8 +1086,9 @@ export interface paths {
          *     it comes back anyway). An older warden build that predates the ``update`` verb
          *     refuses the frame as unknown-rpc (logged + skipped, reader loop unharmed).
          *
-         *     Governance: ``requires="owner"`` — a cockpit-only host-lifecycle action (like
-         *     bootstrap-here / teardown-here), never an agent tool. Kind guard: an unknown,
+         *     Governance: ``requires="admin_agent"`` (T-6020) — a host-lifecycle action the
+         *     admin 助理 drives, on the same floor as bootstrap-here / teardown-here and
+         *     uninstall_machine; a plain agent is a flat 403. Kind guard: an unknown,
          *     removed, or non-warden member resolves 404 (machine not found).
          */
         post: operations["handle_upgrade_machine_api_machines__member_id__upgrade_post"];
@@ -1428,7 +1429,7 @@ export interface paths {
         };
         /**
          * Last 5 raw /in requests of one webhook endpoint (debug).
-         * @description The endpoint's /in debug ring buffer (M4 observability): the last 5 raw requests that resolved to this endpoint's token, newest first, each with its resolved outcome, JSON-serialised headers (<=4 KiB) and raw body text (<=16 KiB, `truncated` marks a cut). Owner-only (requires=owner - a plain agent or warden is a flat 403): these are raw UNVERIFIED external payloads, exposed for debugging a dead endpoint only. 404 if the member or endpoint is absent. Kept OFF WebhookEndpointDTO so the list wire stays light.
+         * @description The endpoint's /in debug ring buffer (M4 observability): the last 5 raw requests that resolved to this endpoint's token, newest first, each with its resolved outcome, JSON-serialised headers (<=4 KiB) and raw body text (<=16 KiB, `truncated` marks a cut). Governance-gated (requires=admin_agent since T-6020 - a plain agent or warden is a flat 403): these are raw UNVERIFIED external payloads, exposed for debugging a dead endpoint only. 404 if the member or endpoint is absent. Kept OFF WebhookEndpointDTO so the list wire stays light.
          */
         get: operations["handle_list_webhook_requests_api_members__member_id__webhooks__endpoint_id__requests_get"];
         put?: never;
@@ -1581,8 +1582,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Read an outsource worker's boot-context preview (owner-only).
-         * @description Read the outsource worker's boot-context PREVIEW (T-ba6b): the server re-assembles the persona/boot text with the SAME fold the spawn path uses (buildWorkerBootContext — worker_context.md seed + 你的身分 + the bound task in full + the type manual Q1/Q2/Q3 + learnings) from the CURRENT DB rows, WITHOUT minting any token. Owner-only cockpit read (the text embeds the full task + manual). 404 for an unknown worker or a worker whose bound task is gone. HONEST caveat the UI must carry: this is today's re-assembly, not a verbatim spawn-time record — nothing is stored (no prompt column, no migration).
+         * Read an outsource worker's boot-context preview (owner/admin agent).
+         * @description Read the outsource worker's boot-context PREVIEW (T-ba6b): the server re-assembles the persona/boot text with the SAME fold the spawn path uses (buildWorkerBootContext — worker_context.md seed + 你的身分 + the bound task in full + the type manual Q1/Q2/Q3 + learnings) from the CURRENT DB rows, WITHOUT minting any token. Owner/admin-agent cockpit read (T-6020; the text embeds the full task + manual, so a plain agent is a flat 403). 404 for an unknown worker or a worker whose bound task is gone. HONEST caveat the UI must carry: this is today's re-assembly, not a verbatim spawn-time record — nothing is stored (no prompt column, no migration).
          */
         get: operations["handle_get_worker_boot_context_api_outsource_workers__id__boot_context_get"];
         put?: never;
@@ -1603,8 +1604,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Change (換 model) an outsource worker's model/effort (owner-only).
-         * @description Change (換 model) an outsource worker's model + effort (T-f190 lifecycle), the worker twin of the member model/effort edit. Persists the new model (blank ⇒ launcher default) and effort; when the worker is ACTIVE + online it kills+respawns so the new model takes effect NOW, otherwise (assigned/stopped) it only persists — the next spawn/restart bakes it in. 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Owner-only (route requires=owner), MCP-excluded (workers are server/owner-managed; agents never drive these).
+         * Change (換 model) an outsource worker's model/effort (owner/admin agent).
+         * @description Change (換 model) an outsource worker's model + effort (T-f190 lifecycle), the worker twin of the member model/effort edit. Persists the new model (blank ⇒ launcher default) and effort; when the worker is ACTIVE + online it kills+respawns so the new model takes effect NOW, otherwise (assigned/stopped) it only persists — the next spawn/restart bakes it in. 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. Exposed as an MCP tool since T-6020.
          */
         post: operations["handle_set_outsource_worker_model_api_outsource_workers__id__model_post"];
         delete?: never;
@@ -1623,8 +1624,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Refocus (換手) an outsource worker's context (owner-only, online-only else 409).
-         * @description Refocus (換手) an outsource worker (T-32e1): the worker twin of refocus_member. Stamps refocus_since, then kills the current session and re-spawns it so a FRESH worker picks the SAME bound task back up from its task plan / step notes (a worker has no member fold — continuity lives in the task). ONLINE-ONLY: 409 unless the worker is active with a live session; 409 for a stopped worker (restart first); 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Owner-only (route requires=owner), MCP-excluded (workers are server/owner-managed; agents never drive these).
+         * Refocus (換手) an outsource worker's context (owner/admin agent, online-only else 409).
+         * @description Refocus (換手) an outsource worker (T-32e1): the worker twin of refocus_member. Stamps refocus_since, then kills the current session and re-spawns it so a FRESH worker picks the SAME bound task back up from its task plan / step notes (a worker has no member fold — continuity lives in the task). ONLINE-ONLY: 409 unless the worker is active with a live session; 409 for a stopped worker (restart first); 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. Exposed as an MCP tool since T-6020.
          */
         post: operations["handle_refocus_outsource_worker_api_outsource_workers__id__refocus_post"];
         delete?: never;
@@ -1663,8 +1664,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Restart (重啟) a stopped outsource worker (owner-only; 409 if not stopped).
-         * @description Restart (重啟) a stopped outsource worker (T-f190 lifecycle), the inverse of stop: set desired_state back to 'online' and re-dispatch (重啟 = 再 dispatch, a fresh worker_start onto the pinned/preferred machine). 409 when the worker is not stopped (desired_state != offline) (nothing to restart); 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Owner-only (route requires=owner), MCP-excluded (workers are server/owner-managed; agents never drive these).
+         * Restart (重啟) a stopped outsource worker (owner/admin agent; 409 if not stopped).
+         * @description Restart (重啟) a stopped outsource worker (T-f190 lifecycle), the inverse of stop: set desired_state back to 'online' and re-dispatch (重啟 = 再 dispatch, a fresh worker_start onto the pinned/preferred machine). 409 when the worker is not stopped (desired_state != offline) (nothing to restart); 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. Exposed as an MCP tool since T-6020.
          */
         post: operations["handle_restart_outsource_worker_api_outsource_workers__id__restart_post"];
         delete?: never;
@@ -1683,8 +1684,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Stop (停止) an outsource worker (owner-only; kill + hold down).
-         * @description Stop (停止) an outsource worker (T-f190 lifecycle): set desired_state='offline' (a direct mirror of member.desired_state — which makes every scheduler auto-revival path skip it: the shared reconcile-FSM rescue never revives an owner-held-down worker), clear any in-flight refocus, and kill the session WITHOUT re-dispatching. The worker projects presence 'stopping'/'stopped' (honest, never fake-green); the bound task stays in its own status. Idempotent. 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Owner-only (route requires=owner), MCP-excluded (workers are server/owner-managed; agents never drive these).
+         * Stop (停止) an outsource worker (owner/admin agent; kill + hold down).
+         * @description Stop (停止) an outsource worker (T-f190 lifecycle): set desired_state='offline' (a direct mirror of member.desired_state — which makes every scheduler auto-revival path skip it: the shared reconcile-FSM rescue never revives an owner-held-down worker), clear any in-flight refocus, and kill the session WITHOUT re-dispatching. The worker projects presence 'stopping'/'stopped' (honest, never fake-green); the bound task stays in its own status. Idempotent. 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. Exposed as an MCP tool since T-6020.
          */
         post: operations["handle_stop_outsource_worker_api_outsource_workers__id__stop_post"];
         delete?: never;
@@ -1702,7 +1703,7 @@ export interface paths {
         };
         /**
          * Check GitHub Releases for a newer official OffiCraft version.
-         * @description Owner-gated explicit update check (檢查更新): synchronously asks GitHub
+         * @description Governance-gated explicit update check (檢查更新; owner/admin agent — T-6020): synchronously asks GitHub
          *     Releases (pkyosx/OffiCraft, anonymous) for the newest admissible release
          *     and compares it against the running version. Failure to reach GitHub
          *     degrades gracefully to status "unknown" — never a 5xx.
@@ -1850,7 +1851,7 @@ export interface paths {
         put: operations["handle_reanswer_reply_card_api_reply_cards__card_id__answer_put"];
         /**
          * Answer a waiting reply card — the only way a card closes.
-         * @description Answer a WAITING reply card — the only POSITIVE close (there is deliberately no close/skip surface; the owner-only expire action is the sole other exit and is NOT an answer). The answer is an ``option_idx`` and/or free ``text`` (+ attachments); an empty answer is 400, an out-of-range ``option_idx`` is 400. Any real answer — including a counter-question typed as text — flips the card to ``answered`` and stamps ``answered_ts``; if the reply did not settle the original question the agent opens a NEW card (never reopens this one). Answering an already-answered card is a 409 (revise via PUT instead); an expired card is a 409 too (terminal — if the question still matters the agent opens a NEW card). When the card is bound to a task step (open_gate / create_reply_card auto-bind), the FIRST answer also releases the waiting_owner hold — the server restores the step (and the task, once its last bound card is answered) to in_progress; the agent then advances the work itself. Fans one ``reply_card`` SSE delta (badge −1; the agent's own connection receives it and refetches the card for the full answer context).
+         * @description Answer a WAITING reply card — the only POSITIVE close (there is deliberately no close/skip surface; the expire action (owner/admin agent) is the sole other exit and is NOT an answer). The answer is an ``option_idx`` and/or free ``text`` (+ attachments); an empty answer is 400, an out-of-range ``option_idx`` is 400. Any real answer — including a counter-question typed as text — flips the card to ``answered`` and stamps ``answered_ts``; if the reply did not settle the original question the agent opens a NEW card (never reopens this one). Answering an already-answered card is a 409 (revise via PUT instead); an expired card is a 409 too (terminal — if the question still matters the agent opens a NEW card). When the card is bound to a task step (open_gate / create_reply_card auto-bind), the FIRST answer also releases the waiting_owner hold — the server restores the step (and the task, once its last bound card is answered) to in_progress; the agent then advances the work itself. Fans one ``reply_card`` SSE delta (badge −1; the agent's own connection receives it and refetches the card for the full answer context).
          */
         post: operations["handle_answer_reply_card_api_reply_cards__card_id__answer_post"];
         delete?: never;
@@ -1869,8 +1870,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Mark a waiting card expired (owner-only; not an answer; terminal).
-         * @description Mark a WAITING reply card EXPIRED (標為過期) — the owner-only terminal exit that is NOT an answer: the ask went stale (懸太久、答案已不可靠) or its task is already closed, and the owner declines to answer it. The card flips to ``expired`` and stamps ``expired_ts``; there is no request body, no undo, no reopen (if the question still matters the agent opens a NEW card with current context). When the card is bound to a task step, expiring releases the waiting_owner hold exactly like a first answer — the server restores the step (and the task, once its last bound card is settled) to in_progress; a card orphaned on an already-terminal task may still be expired (its ONLY exit — answering an orphan is 409) and the closed task is left untouched. An already-answered or already-expired card is a 409. Fans one ``reply_card`` SSE delta (status=expired; the initiating agent's connection receives it and refetches the card).
+         * Mark a waiting card expired (owner/admin agent; not an answer; terminal).
+         * @description Mark a WAITING reply card EXPIRED (標為過期) — the owner/admin-agent terminal exit that is NOT an answer: the ask went stale (懸太久、答案已不可靠) or its task is already closed, and the owner declines to answer it. The card flips to ``expired`` and stamps ``expired_ts``; there is no request body, no undo, no reopen (if the question still matters the agent opens a NEW card with current context). When the card is bound to a task step, expiring releases the waiting_owner hold exactly like a first answer — the server restores the step (and the task, once its last bound card is settled) to in_progress; a card orphaned on an already-terminal task may still be expired (its ONLY exit — answering an orphan is 409) and the closed task is left untouched. An already-answered or already-expired card is a 409. Fans one ``reply_card`` SSE delta (status=expired; the initiating agent's connection receives it and refetches the card).
          */
         post: operations["handle_expire_reply_card_api_reply_cards__card_id__expire_post"];
         delete?: never;
@@ -2238,8 +2239,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Read the owner-adjustable settings.
-         * @description Read the owner-adjustable settings (owner-gated): the login TTL, the context
+         * Read the org-adjustable settings (owner/admin agent).
+         * @description Read the org-adjustable settings (owner or admin agent — T-6020): the login TTL, the context
          *     auto-handover threshold, and the read-only self-healed port (null while the
          *     server runs on its preferred port).
          */
@@ -2251,7 +2252,7 @@ export interface paths {
         head?: never;
         /**
          * Edit settings (login TTL / handover threshold); live immediately.
-         * @description Partially update the owner-adjustable settings (owner-gated). Only supplied
+         * @description Partially update the org-adjustable settings (owner or admin agent — T-6020). Only supplied
          *     fields change; a change is durable (DB) AND live immediately — `token_ttl`
          *     applies from the next login, `handover_pct` applies from the next context
          *     report. `token_ttl` outside the 12h/24h/7d/30d whitelist or `handover_pct`
@@ -2274,8 +2275,8 @@ export interface paths {
         get: operations["handle_list_task_manuals_api_task_manuals_get"];
         put?: never;
         /**
-         * Create a task type: pass display_name; the server mints and returns the tm- type_key id (legacy explicit type_key still accepted; duplicate → 409; assignee = owner-only).
-         * @description Create one task type (a blank manual). Pass ``display_name``; the server mints the ``tm-`` type_key id and returns it in the DTO. Legacy: an explicit ``type_key`` is still accepted verbatim as the id (duplicate → 409; blank display_name backfills to it). Agent floor: any agent may create a manual; ``assignee`` is OWNER-ONLY governance — a non-owner supplying it is a 403.
+         * Create a task type: pass display_name; the server mints and returns the tm- type_key id (legacy explicit type_key still accepted; duplicate → 409; assignee = owner/admin agent).
+         * @description Create one task type (a blank manual). Pass ``display_name``; the server mints the ``tm-`` type_key id and returns it in the DTO. Legacy: an explicit ``type_key`` is still accepted verbatim as the id (duplicate → 409; blank display_name backfills to it). Agent floor: any agent may create a manual; ``assignee`` is GOVERNANCE — a caller below admin_agent supplying it is a 403 (T-6020).
          */
         post: operations["handle_create_task_manual_api_task_manuals_post"];
         delete?: never;
@@ -2298,13 +2299,13 @@ export interface paths {
         get: operations["handle_get_task_manual_api_task_manuals__type_key__get"];
         put?: never;
         /**
-         * Edit a task manual (partial; owner's structure edit).
-         * @description Partial manual edit — only supplied fields change. Agent floor: content fields (purpose / fields / sop_md / learnings) are agent-editable; ``assignee`` is OWNER-ONLY governance — a non-owner supplying it is a 403. ``assignee`` is {"kind":"member","member_id":…} or {"kind":"outsource","model":…,"effort":…,"copies":N}; {} unsets it. Unknown keys are REJECTED (422) rather than silently dropped: this endpoint writes the same learnings document as ``write_task_learnings``, which spells the field ``text`` instead of ``learnings`` — sending the wrong name used to answer 200 having written nothing (T-2d99). Omitting a field remains legal; only unrecognised names are refused.
+         * Edit a task manual (partial; content fields agent-editable; assignee = owner/admin agent).
+         * @description Partial manual edit — only supplied fields change. Agent floor: content fields (purpose / fields / sop_md / learnings) are agent-editable; ``assignee`` is GOVERNANCE — a caller below admin_agent supplying it is a 403 (T-6020). ``assignee`` is {"kind":"member","member_id":…} or {"kind":"outsource","model":…,"effort":…,"copies":N}; {} unsets it. Unknown keys are REJECTED (422) rather than silently dropped: this endpoint writes the same learnings document as ``write_task_learnings``, which spells the field ``text`` instead of ``learnings`` — sending the wrong name used to answer 200 having written nothing (T-2d99). Omitting a field remains legal; only unrecognised names are refused.
          */
         post: operations["handle_update_task_manual_api_task_manuals__type_key__post"];
         /**
          * Delete a task type (open tasks of the type → 409).
-         * @description Delete a task type. Refused (409) while NON-terminal tasks of the type exist (SPEC §5.1); closed tasks never block.
+         * @description Delete a task type (floor admin_agent since T-6020; a plain agent is a 403). Refused (409) while NON-terminal tasks of the type exist (SPEC §5.1); closed tasks never block.
          */
         delete: operations["handle_delete_task_manual_api_task_manuals__type_key__delete"];
         options?: never;
@@ -2544,8 +2545,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Message the task's executor (owner; task context auto-attached).
-         * @description The task-card message box (owner → executor): the server posts one ordinary chat message to the task's executor with the task context auto-attached in ``meta`` ({task_id, task_title, task_type}). An unassigned executor is a 409.
+         * Message the task's executor (owner/admin agent; task context auto-attached).
+         * @description The task-card message box (owner or admin agent → executor; floor admin_agent since T-6020): the server posts one ordinary chat message to the task's executor with the task context auto-attached in ``meta`` ({task_id, task_title, task_type}). An unassigned executor is a 409.
          */
         post: operations["handle_post_task_message_api_tasks__task_id__message_post"];
         delete?: never;
@@ -2584,8 +2585,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Set a task's priority (owner any value; the executor high|mid|low on their own task; frozen stays owner-only).
-         * @description Priority change: ``high`` | ``mid`` | ``low`` | ``frozen`` (freeze/unfreeze ride the same knob — SPEC §3.3). The owner may set any value; the task's executor may set high|mid|low on their own task; setting ``frozen`` or changing a frozen task's priority (unfreezing) stays owner-only (403). Closed tasks are a 409.
+         * Set a task's priority (owner/admin agent any value; the executor any value on their own task — frozen included, T-6020).
+         * @description Priority change: ``high`` | ``mid`` | ``low`` | ``frozen`` (freeze/unfreeze ride the same knob — SPEC §3.3). The owner and an admin agent may set any value on any task; the task's own executor may set any value on their task — including ``frozen`` and the clear of a frozen task, symmetrically (T-6020, owner ruling 2026-07-26). Anyone else is a flat 403. Whoever sets ``frozen`` is recorded on the task as ``frozen_by`` and the field is cleared when the task leaves frozen. Closed tasks are a 409.
          */
         post: operations["handle_set_task_priority_api_tasks__task_id__priority_post"];
         delete?: never;
@@ -2664,8 +2665,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Terminate a task (owner; the only owner status change).
-         * @description Terminate a task — the ONLY owner-side status change (SPEC §3.7). Non-terminal only (done/terminated → 409); stamps closed_ts and releases any bound outsource worker. The FE owns the double-confirm.
+         * Terminate a task (owner/admin agent; the only non-executor status change).
+         * @description Terminate a task — the ONLY non-executor status change (SPEC §3.7); floor admin_agent since T-6020, so a plain agent cannot terminate its way out of a task. Non-terminal only (done/terminated → 409); stamps closed_ts and releases any bound outsource worker. The FE owns the double-confirm.
          */
         post: operations["handle_terminate_task_api_tasks__task_id__terminate_post"];
         delete?: never;
@@ -2685,7 +2686,7 @@ export interface paths {
         put?: never;
         /**
          * Trigger a software upgrade to the latest GitHub release.
-         * @description Owner-gated, explicit upgrade trigger (the software-update card's 升級
+         * @description Governance-gated (owner/admin agent — T-6020), explicit upgrade trigger (the software-update card's 升級
          *     button; the armed `updater_auto_update` cadence shares the same body).
          *     Precondition: no newer release known from the update check → 409. A valid
          *     trigger runs the execution body SYNCHRONOUSLY in the request: pin the
@@ -4643,7 +4644,7 @@ export interface components {
         };
         /**
          * ReleaseCheckDTO
-         * @description Response of `GET /api/release/check` (owner-gated) — the explicit
+         * @description Response of `GET /api/release/check` (owner/admin agent — T-6020) — the explicit
          *     檢查更新 button behind the software-update card. The server asks GitHub
          *     Releases (repo pkyosx/OffiCraft, anonymous — no token, no configuration)
          *     for the newest admissible release SYNCHRONOUSLY (bounded; a short reuse
@@ -4758,7 +4759,7 @@ export interface components {
         };
         /**
          * ReplyCardDTO
-         * @description One reply card (等我回覆卡). ``from`` is the initiating member (the verified JWT sub at create time). ``status`` is the closed set ``waiting`` | ``answered`` | ``expired`` — the only transitions are waiting→answered via an answer (the owner's positive close) and waiting→expired via the owner-only expire action (標為過期 — NOT an answer: the ask went stale and the owner declined it; terminal, no reopen); a revised answer (PUT) keeps ``answered``. ``chat_message_id`` links the chat message the card rides in (the jump-to-origin anchor); ``answered_ts``/``answer`` are null unless answered; ``expired_ts`` is null unless expired. ``attachments`` are the QUESTION-side attachments the initiator opened the card with (served refs incl. download url; always an array, ``[]`` when none).
+         * @description One reply card (等我回覆卡). ``from`` is the initiating member (the verified JWT sub at create time). ``status`` is the closed set ``waiting`` | ``answered`` | ``expired`` — the only transitions are waiting→answered via an answer (the owner's positive close) and waiting→expired via the expire action (owner/admin agent — T-6020) (標為過期 — NOT an answer: the ask went stale and the owner declined it; terminal, no reopen); a revised answer (PUT) keeps ``answered``. ``chat_message_id`` links the chat message the card rides in (the jump-to-origin anchor); ``answered_ts``/``answer`` are null unless answered; ``expired_ts`` is null unless expired. ``attachments`` are the QUESTION-side attachments the initiator opened the card with (served refs incl. download url; always an array, ``[]`` when none).
          */
         ReplyCardDTO: {
             /** Answer */
@@ -5169,7 +5170,7 @@ export interface components {
         };
         /**
          * SettingsDTO
-         * @description The owner-adjustable settings surface (`GET /api/settings`). `token_ttl` —
+         * @description The org-adjustable settings surface (`GET /api/settings`; owner or admin agent since T-6020). `token_ttl` —
          *     the owner-login JWT lifetime (seconds). `handover_pct` — the context
          *     handover threshold. `outsource_max_parallel` — the global cap on
          *     concurrently live outsource workers (-1 = unlimited, 0 pauses assignment).
@@ -5210,7 +5211,7 @@ export interface components {
             display_wide: boolean;
             /**
              * Custom Themes
-             * @description The owner's saved custom theme bundles (T-16a1 P2), each a `{id,name,colors}` colour bundle. `[]` = none saved. display_theme may point at any id in this set (or a built-in). Owner-gated: rides GET /api/settings only.
+             * @description The owner's saved custom theme bundles (T-16a1 P2), each a `{id,name,colors}` colour bundle. `[]` = none saved. display_theme may point at any id in this set (or a built-in). Governance-gated (owner/admin agent): rides GET /api/settings only.
              * @default []
              */
             custom_themes: components["schemas"]["ThemeBundleDTO"][];
@@ -5218,7 +5219,7 @@ export interface components {
             handover_pct: number;
             /**
              * Onboarding
-             * @description The first-run onboarding report (T-ba62), or null when onboarding never ran on this database. Owner-gated by virtue of living on GET /api/settings — a failed step's detail can carry local paths, so it must never reach the PUBLIC /api/auth/status probe.
+             * @description The first-run onboarding report (T-ba62), or null when onboarding never ran on this database. Governance-gated (owner/admin agent) by virtue of living on GET /api/settings — a failed step's detail can carry local paths, so it must never reach the PUBLIC /api/auth/status probe.
              */
             onboarding?: components["schemas"]["OnboardingReportDTO"] | null;
             /**
@@ -5512,6 +5513,12 @@ export interface components {
             executor_id: string;
             /** Executor Kind */
             executor_kind: string;
+            /**
+             * Frozen By
+             * @description WHO put this task into the ``frozen`` priority (T-6020): the verified token sub of that write — ``"owner"`` for the owner's own click, else the member / outsource-worker id. ``""`` whenever the task is not frozen (and on rows written before the column existed, which are honestly unattributed); the write that moves the task off ``frozen`` clears it. Served because ``frozen`` is no longer a single-actor knob — owner, admin agent and the task's own executor may all freeze and unfreeze — so the owner must be able to tell their own 喊停 from an agent's by READING the task.
+             * @default
+             */
+            frozen_by: string;
             /**
              * Handoff
              * @description The DECLARED destination of the ball at close (T-74f8): "" = never declared, else ``return_to_creator`` | ``follow_up`` | ``none``.
@@ -5878,7 +5885,7 @@ export interface components {
         };
         /**
          * TaskMessageDTO
-         * @description The task-card message box (owner → executor): the server posts one ordinary chat message to the task's executor with the task context auto-attached in ``meta`` ({task_id, task_title, task_type}). An unassigned executor is a 409.
+         * @description The task-card message box (owner or admin agent → executor; floor admin_agent since T-6020): the server posts one ordinary chat message to the task's executor with the task context auto-attached in ``meta`` ({task_id, task_title, task_type}). An unassigned executor is a 409.
          */
         TaskMessageDTO: {
             /** Attachments */
@@ -5916,7 +5923,7 @@ export interface components {
         };
         /**
          * TaskPriorityUpdateDTO
-         * @description Priority change: ``high`` | ``mid`` | ``low`` | ``frozen`` (freeze/unfreeze ride the same knob — SPEC §3.3). The owner may set any value; the task's executor may set high|mid|low on their own task; frozen (set or clear) stays owner-only.
+         * @description Priority change: ``high`` | ``mid`` | ``low`` | ``frozen`` (freeze/unfreeze ride the same knob — SPEC §3.3). The owner and an admin agent may set any value on any task; the task's own executor may set any value on their task — frozen INCLUDED, and the clear of a frozen task is admitted for exactly the same set (T-6020: whoever may freeze may unfreeze). A caller who is none of the three is a flat 403.
          */
         TaskPriorityUpdateDTO: {
             /** Priority */
@@ -6148,11 +6155,11 @@ export interface components {
         };
         /**
          * UpgradeResultDTO
-         * @description Response of `POST /api/update/upgrade` (owner-gated). `status` names the
+         * @description Response of `POST /api/update/upgrade` (owner/admin agent — T-6020). `status` names the
          *     outcome ("restarting" — the new binary is already verified and swapped
          *     in place; the process re-execs right after this response) and
          *     `target_version` the GitHub release tag being installed. The endpoint
-         *     fires only on the owner's explicit click; the OPT-IN `updater_auto_update`
+         *     fires only on an explicit owner/admin-agent trigger; the OPT-IN `updater_auto_update`
          *     setting runs the same verified body unattended in the background.
          */
         UpgradeResultDTO: {
@@ -6286,7 +6293,7 @@ export interface components {
         };
         /**
          * WebhookRequestLogDTO
-         * @description One row of a webhook endpoint's /in debug ring buffer (GET /api/members/{member_id}/webhooks/{endpoint_id}/requests, newest first, at most 5 rows kept per endpoint). Records EVERY request /in resolved to the endpoint's token, whatever the outcome: `delivered` (verified payload landed as a chat), `dropped:sig_failed` / `dropped:disabled` / `dropped:member_gone` (silent drops with their coarse reason), `challenge` (the Slack url_verification handshake), `ping` (a verified GitHub ping). An unknown token has no endpoint to log against, by construction. `headers` is the JSON-serialised request header map (truncated at 4 KiB); `body` is the raw payload text (truncated at 16 KiB); `truncated` marks that either was cut. Owner-only debug wire (requires=owner) - raw external payloads never ride any public or agent-facing surface, and the public /in response stays byte-identical regardless of logging.
+         * @description One row of a webhook endpoint's /in debug ring buffer (GET /api/members/{member_id}/webhooks/{endpoint_id}/requests, newest first, at most 5 rows kept per endpoint). Records EVERY request /in resolved to the endpoint's token, whatever the outcome: `delivered` (verified payload landed as a chat), `dropped:sig_failed` / `dropped:disabled` / `dropped:member_gone` (silent drops with their coarse reason), `challenge` (the Slack url_verification handshake), `ping` (a verified GitHub ping). An unknown token has no endpoint to log against, by construction. `headers` is the JSON-serialised request header map (truncated at 4 KiB); `body` is the raw payload text (truncated at 16 KiB); `truncated` marks that either was cut. Governance-gated debug wire (requires=admin_agent since T-6020) - raw external payloads never ride any public or PLAIN-agent-facing surface, and the public /in response stays byte-identical regardless of logging.
          */
         WebhookRequestLogDTO: {
             /** Body */

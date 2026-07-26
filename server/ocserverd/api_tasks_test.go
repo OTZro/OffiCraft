@@ -2531,26 +2531,109 @@ func TestSetTaskPriorityExecutorMaySetHighMidLow(t *testing.T) {
 	}
 }
 
-// TestSetTaskPriorityFrozenStaysOwnerOnly: a non-owner may neither SET frozen
-// nor move a frozen task (leaving frozen IS unfreezing) — both flat 403s.
-func TestSetTaskPriorityFrozenStaysOwnerOnly(t *testing.T) {
+// TestSetTaskPriorityExecutorFreezesAndUnfreezesSymmetrically (T-6020, owner
+// ruling 2026-07-26): the task's own executor may freeze AND unfreeze. The
+// SYMMETRY is the assertion — the pre-T-6020 code let nobody but the owner do
+// either, and a one-sided opening (freeze yes, unfreeze no) would strand the
+// executor holding a task only the owner could restart.
+func TestSetTaskPriorityExecutorFreezesAndUnfreezesSymmetrically(t *testing.T) {
 	api := newTasksTestServer(t)
 	task := createAdHocTask(t, api, "m-exec")
 
-	// The executor freezing their own task → 403.
-	if rec := setPriority(t, api, task.ID, "m-exec", "agent", "frozen"); rec.Code != http.StatusForbidden {
-		t.Fatalf("executor freeze: want 403, got %d %s", rec.Code, rec.Body.String())
+	rec := setPriority(t, api, task.ID, "m-exec", "agent", "frozen")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("executor freeze: want 200, got %d %s", rec.Code, rec.Body.String())
 	}
-	// The owner freezes; the executor may not unfreeze (any value → 403).
-	if rec := setPriority(t, api, task.ID, "owner", "owner", "frozen"); rec.Code != http.StatusOK {
-		t.Fatalf("owner freeze: %d %s", rec.Code, rec.Body.String())
+	if got := decodeBody[taskDTO](t, rec); got.Priority != TaskPriorityFrozen {
+		t.Fatalf("priority after executor freeze: %q", got.Priority)
 	}
-	if rec := setPriority(t, api, task.ID, "m-exec", "agent", "high"); rec.Code != http.StatusForbidden {
-		t.Fatalf("executor unfreeze: want 403, got %d %s", rec.Code, rec.Body.String())
+	// … and back out again, by the same hand.
+	rec = setPriority(t, api, task.ID, "m-exec", "agent", "high")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("executor unfreeze: want 200, got %d %s", rec.Code, rec.Body.String())
 	}
-	// The owner unfreezes fine.
-	if rec := setPriority(t, api, task.ID, "owner", "owner", "high"); rec.Code != http.StatusOK {
-		t.Fatalf("owner unfreeze: %d %s", rec.Code, rec.Body.String())
+	if got := decodeBody[taskDTO](t, rec); got.Priority != "high" {
+		t.Fatalf("priority after executor unfreeze: %q", got.Priority)
+	}
+	// The owner may still cross a freeze the executor placed, and vice versa —
+	// one shared knob, not two per-actor knobs.
+	if rec := setPriority(t, api, task.ID, "m-exec", "agent", "frozen"); rec.Code != http.StatusOK {
+		t.Fatalf("executor re-freeze: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := setPriority(t, api, task.ID, "owner", "owner", "mid"); rec.Code != http.StatusOK {
+		t.Fatalf("owner unfreezes the executor's freeze: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestSetTaskPriorityFrozenByNamesWhoFroze (T-6020): opening `frozen` beyond the
+// owner destroys the inference "a frozen ticket was frozen by me", so the
+// freezer must be READABLE FROM OUTSIDE — frozen_by on the served task, not a
+// promise in a comment. Pinned for all three admitted actors, plus the clear on
+// the way out (a stale name on a running task is its own lie).
+func TestSetTaskPriorityFrozenByNamesWhoFroze(t *testing.T) {
+	api := newTasksTestServer(t)
+	if err := api.dal.PutMember(Member{
+		ID: "m-admin", Kind: KindAssistant, RoleKey: adminRoleKey,
+	}); err != nil {
+		t.Fatalf("PutMember: %v", err)
+	}
+	for _, tc := range []struct{ sub, scope, want string }{
+		{"owner", "owner", wireOwnerID},
+		{"m-admin", "agent", "m-admin"},
+		{"m-exec", "agent", "m-exec"},
+	} {
+		task := createAdHocTask(t, api, "m-exec")
+		rec := setPriority(t, api, task.ID, tc.sub, tc.scope, "frozen")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s freeze: %d %s", tc.sub, rec.Code, rec.Body.String())
+		}
+		if got := decodeBody[taskDTO](t, rec).FrozenBy; got != tc.want {
+			t.Fatalf("%s froze it but frozen_by=%q (want %q) — the owner cannot "+
+				"tell their own 喊停 from an agent's", tc.sub, got, tc.want)
+		}
+		// Durable, not just echoed back: re-read the task through the read face.
+		reread := httptest.NewRecorder()
+		api.HandleGetTaskApiTasksTaskIdGet(reread,
+			taskReq(t, "GET", "/api/tasks/"+task.ID, nil, "owner", "owner"), task.ID)
+		if got := decodeBody[taskDTO](t, reread).FrozenBy; got != tc.want {
+			t.Fatalf("%s: frozen_by did not survive a re-read: %q (want %q)",
+				tc.sub, got, tc.want)
+		}
+		// Unfreezing clears the attribution.
+		rec = setPriority(t, api, task.ID, tc.sub, tc.scope, "low")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s unfreeze: %d %s", tc.sub, rec.Code, rec.Body.String())
+		}
+		if got := decodeBody[taskDTO](t, rec).FrozenBy; got != "" {
+			t.Fatalf("%s: frozen_by=%q on a task that is no longer frozen", tc.sub, got)
+		}
+	}
+}
+
+// TestSetTaskPriorityForeignAgentMayNotFreeze (T-6020 sentinel): opening frozen
+// to {owner, admin_agent, executor} must NOT have opened it to every agent. A
+// plain agent that executes nothing is still refused — on freeze AND on the
+// unfreeze of somebody else's freeze.
+func TestSetTaskPriorityForeignAgentMayNotFreeze(t *testing.T) {
+	api := newTasksTestServer(t)
+	task := createAdHocTask(t, api, "m-exec")
+
+	if rec := setPriority(t, api, task.ID, "m-intruder", "agent", "frozen"); rec.Code != http.StatusForbidden {
+		t.Fatalf("foreign agent freeze: want 403, got %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := setPriority(t, api, task.ID, "m-exec", "agent", "frozen"); rec.Code != http.StatusOK {
+		t.Fatalf("executor freeze: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := setPriority(t, api, task.ID, "m-intruder", "agent", "high"); rec.Code != http.StatusForbidden {
+		t.Fatalf("foreign agent unfreeze: want 403, got %d %s", rec.Code, rec.Body.String())
+	}
+	stored, err := api.dal.GetTask(task.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if stored.Priority != TaskPriorityFrozen || stored.FrozenBy != "m-exec" {
+		t.Fatalf("the refused calls still changed state: priority=%q frozen_by=%q",
+			stored.Priority, stored.FrozenBy)
 	}
 }
 
@@ -2568,10 +2651,11 @@ func TestSetTaskPriorityForeignAgentIs403(t *testing.T) {
 	}
 }
 
-// TestSetTaskPriorityAdminAgentMayRetuneButNeverFreezes: admin capability
-// (role_key=assistant) passes the executor guard on ANY task — but the frozen
-// knob stays the owner's, on both sides.
-func TestSetTaskPriorityAdminAgentMayRetuneButNeverFreezes(t *testing.T) {
+// TestSetTaskPriorityAdminAgentMayRetuneAndFreeze: admin capability
+// (role_key=assistant) passes the executor guard on ANY task — and since T-6020
+// (owner ruling 2026-07-26) that includes the frozen knob, in both directions,
+// on a task it does not execute.
+func TestSetTaskPriorityAdminAgentMayRetuneAndFreeze(t *testing.T) {
 	api := newTasksTestServer(t)
 	if err := api.dal.PutMember(Member{
 		ID: "m-admin", Kind: KindAssistant, RoleKey: adminRoleKey,
@@ -2585,14 +2669,15 @@ func TestSetTaskPriorityAdminAgentMayRetuneButNeverFreezes(t *testing.T) {
 			t.Fatalf("admin %s: %d %s", p, rec.Code, rec.Body.String())
 		}
 	}
-	if rec := setPriority(t, api, task.ID, "m-admin", "agent", "frozen"); rec.Code != http.StatusForbidden {
-		t.Fatalf("admin freeze: want 403, got %d %s", rec.Code, rec.Body.String())
+	if rec := setPriority(t, api, task.ID, "m-admin", "agent", "frozen"); rec.Code != http.StatusOK {
+		t.Fatalf("admin freeze: want 200, got %d %s", rec.Code, rec.Body.String())
 	}
+	// The owner's own freeze is then crossable by the admin too (symmetry).
 	if rec := setPriority(t, api, task.ID, "owner", "owner", "frozen"); rec.Code != http.StatusOK {
 		t.Fatalf("owner freeze: %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := setPriority(t, api, task.ID, "m-admin", "agent", "high"); rec.Code != http.StatusForbidden {
-		t.Fatalf("admin unfreeze: want 403, got %d %s", rec.Code, rec.Body.String())
+	if rec := setPriority(t, api, task.ID, "m-admin", "agent", "high"); rec.Code != http.StatusOK {
+		t.Fatalf("admin unfreeze: want 200, got %d %s", rec.Code, rec.Body.String())
 	}
 }
 

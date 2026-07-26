@@ -582,7 +582,7 @@ func TestWebhookRequestLogMarksTruncation(t *testing.T) {
 	}
 }
 
-func TestWebhookRequestsRouteRequiresOwner(t *testing.T) {
+func TestWebhookRequestsRouteRequiresAdminAgent(t *testing.T) {
 	srv, secret, _ := newWiredTestServer(t)
 	now := time.Now().Unix()
 	ownerTok, _ := mintJWT("owner", "owner", 300, secret, now, "")
@@ -595,11 +595,11 @@ func TestWebhookRequestsRouteRequiresOwner(t *testing.T) {
 	if code, _ := get(t, url, ""); code != 401 {
 		t.Fatalf("anonymous: want 401, got %d", code)
 	}
-	// mira's agent token is ADMIN_AGENT class (role assistant) — still below
-	// the owner floor: raw payload debug data never reaches any agent.
+	// mira's agent token is ADMIN_AGENT class (role assistant) — T-6020 (owner
+	// ruling 2026-07-26) put the floor exactly there, so she reads the ring.
 	adminTok, _ := mintJWT("mira", "agent", 300, secret, now, "")
-	if code, _ := get(t, url, adminTok); code != 403 {
-		t.Fatalf("admin agent: want 403, got %d", code)
+	if code, rows := webhookRequests(t, srv.URL, adminTok, "mira", "rbac"); code != 200 || len(rows) != 0 {
+		t.Fatalf("admin agent: want 200 with an empty ring, got %d %v", code, rows)
 	}
 	// A plain agent (fresh hire, no privileged role) is likewise a flat 403.
 	_, hired := doJSON(t, "POST", srv.URL+"/api/members", ownerTok, `{"name":"rbacpeer"}`)

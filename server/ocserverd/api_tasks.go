@@ -797,11 +797,23 @@ func (s *apiServer) HandleTerminateTaskApiTasksTaskIdTerminatePost(w http.Respon
 
 // POST /api/tasks/{task_id}/priority — high|mid|low|frozen (freeze/unfreeze
 // ride the same knob; frozen is a priority, never a status — SPEC §3.3).
-// T-0786: the owner keeps every value; the task's executor (and admin
-// capability, §14) may set high|mid|low — but the frozen knob stays the
-// owner's alone, on BOTH sides (a non-owner may neither freeze nor touch a
-// frozen task, since leaving frozen IS unfreezing). Guard order: 400
-// closed-set → 404 → 403 authz → 409 terminal (deny before state probing).
+// T-0786 gated `frozen` to the owner alone. T-6020 (owner 2026-07-26) OPENED it:
+// the owner, an admin_agent, and the task's own executor may all set frozen —
+// and, SYMMETRICALLY, all may clear it. The symmetry is the point: gating the
+// freeze and the unfreeze differently strands whoever froze a task ("I stopped
+// my own task and now only the owner can restart it"), which is exactly the
+// dead end the one-sided version produced. The admitted set is therefore
+// EXACTLY callerMayDriveTask's — no second, narrower ladder for one value.
+//
+// Because frozen is no longer a single-actor knob, "who froze this" stops being
+// inferable and has to be RECORDED: t.FrozenBy carries the verified actor of the
+// write that put the task into frozen ("owner" for owner scope, the member /
+// worker id otherwise) and is cleared on the write that takes it out. It is
+// served on the task DTO (frozen_by) so the owner looking at a frozen ticket can
+// tell their own click from an agent's — a claim in a comment would not.
+//
+// Guard order: 400 closed-set → 404 → 403 authz → 409 terminal (deny before
+// state probing).
 func (s *apiServer) HandleSetTaskPriorityApiTasksTaskIdPriorityPost(w http.ResponseWriter, r *http.Request, taskId string) {
 	var body TaskPriorityUpdateDTO
 	if !decodeJSONBodyRequired(w, r, &body, "priority") {
@@ -818,26 +830,23 @@ func (s *apiServer) HandleSetTaskPriorityApiTasksTaskIdPriorityPost(w http.Respo
 		writeResolveError(w, err, "task", taskId)
 		return
 	}
-	if s.principalOfRequest(r) != principalOwner {
-		if !s.callerMayDriveTask(r, *t) {
-			writeError(w, http.StatusForbidden, "caller is not the task's executor")
-			return
-		}
-		if priority == TaskPriorityFrozen {
-			writeError(w, http.StatusForbidden,
-				"frozen is the owner's knob")
-			return
-		}
-		if t.Priority == TaskPriorityFrozen {
-			writeError(w, http.StatusForbidden,
-				"task is frozen; only the owner may unfreeze")
-			return
-		}
+	if !s.callerMayDriveTask(r, *t) {
+		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+		return
 	}
 	if TaskIsTerminal(t.Status) {
 		writeError(w, http.StatusConflict,
 			"task '"+taskId+"' is already closed ("+t.Status+")")
 		return
+	}
+	// Attribution (T-6020): stamp the freezer on the transition INTO frozen and
+	// clear it on the way out, so frozen_by is never a stale name on a running
+	// task. A frozen→frozen re-write re-stamps the current actor (the last
+	// person to assert the freeze is the one answering for it).
+	if priority == TaskPriorityFrozen {
+		t.FrozenBy = requestTrigger(r)
+	} else {
+		t.FrozenBy = ""
 	}
 	t.Priority = priority
 	t.UpdatedTS = nowSecs()

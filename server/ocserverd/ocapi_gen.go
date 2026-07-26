@@ -1024,7 +1024,7 @@ type PushSubscriptionDeleteDTO struct {
 	Endpoint string `json:"endpoint"`
 }
 
-// ReleaseCheckDTO Response of `GET /api/release/check` (owner-gated) — the explicit
+// ReleaseCheckDTO Response of `GET /api/release/check` (owner/admin agent — T-6020) — the explicit
 // 檢查更新 button behind the software-update card. The server asks GitHub
 // Releases (repo pkyosx/OffiCraft, anonymous — no token, no configuration)
 // for the newest admissible release SYNCHRONOUSLY (bounded; a short reuse
@@ -1084,7 +1084,7 @@ type ReplyCardCreateDTO struct {
 	Summary string   `json:"summary"`
 }
 
-// ReplyCardDTO One reply card (等我回覆卡). “from“ is the initiating member (the verified JWT sub at create time). “status“ is the closed set “waiting“ | “answered“ | “expired“ — the only transitions are waiting→answered via an answer (the owner's positive close) and waiting→expired via the owner-only expire action (標為過期 — NOT an answer: the ask went stale and the owner declined it; terminal, no reopen); a revised answer (PUT) keeps “answered“. “chat_message_id“ links the chat message the card rides in (the jump-to-origin anchor); “answered_ts“/“answer“ are null unless answered; “expired_ts“ is null unless expired. “attachments“ are the QUESTION-side attachments the initiator opened the card with (served refs incl. download url; always an array, “[]“ when none).
+// ReplyCardDTO One reply card (等我回覆卡). “from“ is the initiating member (the verified JWT sub at create time). “status“ is the closed set “waiting“ | “answered“ | “expired“ — the only transitions are waiting→answered via an answer (the owner's positive close) and waiting→expired via the expire action (owner/admin agent — T-6020) (標為過期 — NOT an answer: the ask went stale and the owner declined it; terminal, no reopen); a revised answer (PUT) keeps “answered“. “chat_message_id“ links the chat message the card rides in (the jump-to-origin anchor); “answered_ts“/“answer“ are null unless answered; “expired_ts“ is null unless expired. “attachments“ are the QUESTION-side attachments the initiator opened the card with (served refs incl. download url; always an array, “[]“ when none).
 type ReplyCardDTO struct {
 	Answer        *ReplyCardAnswerDTO  `json:"answer"`
 	AnsweredTs    *float64             `json:"answered_ts"`
@@ -1342,7 +1342,7 @@ type SetPasswordDTO struct {
 	Password   string `json:"password"`
 }
 
-// SettingsDTO The owner-adjustable settings surface (`GET /api/settings`). `token_ttl` —
+// SettingsDTO The org-adjustable settings surface (`GET /api/settings`; owner or admin agent since T-6020). `token_ttl` —
 // the owner-login JWT lifetime (seconds). `handover_pct` — the context
 // handover threshold. `outsource_max_parallel` — the global cap on
 // concurrently live outsource workers (-1 = unlimited, 0 pauses assignment).
@@ -1359,7 +1359,7 @@ type SettingsDTO struct {
 	// CodexCompactionThreshold Codex context-compaction threshold, 1 through 10.
 	CodexCompactionThreshold *int `json:"codex_compaction_threshold,omitempty"`
 
-	// CustomThemes The owner's saved custom theme bundles (T-16a1 P2), each a `{id,name,colors}` colour bundle. `[]` = none saved. display_theme may point at any id in this set (or a built-in). Owner-gated: rides GET /api/settings only.
+	// CustomThemes The owner's saved custom theme bundles (T-16a1 P2), each a `{id,name,colors}` colour bundle. `[]` = none saved. display_theme may point at any id in this set (or a built-in). Governance-gated (owner/admin agent): rides GET /api/settings only.
 	CustomThemes *[]ThemeBundleDTO `json:"custom_themes,omitempty"`
 
 	// DisplayLanguage The owner's cockpit language (T-0b41-p2). "" = never set — the frontend keeps its localStorage cache / default; reconciled in at login as the cross-device source of truth.
@@ -1372,7 +1372,7 @@ type SettingsDTO struct {
 	DisplayWide *bool `json:"display_wide,omitempty"`
 	HandoverPct int   `json:"handover_pct"`
 
-	// Onboarding The first-run onboarding report (T-ba62), or null when onboarding never ran on this database. Owner-gated by virtue of living on GET /api/settings — a failed step's detail can carry local paths, so it must never reach the PUBLIC /api/auth/status probe.
+	// Onboarding The first-run onboarding report (T-ba62), or null when onboarding never ran on this database. Governance-gated (owner/admin agent) by virtue of living on GET /api/settings — a failed step's detail can carry local paths, so it must never reach the PUBLIC /api/auth/status probe.
 	Onboarding *OnboardingReportDTO `json:"onboarding,omitempty"`
 
 	// OrgName The studio display name shown in the cockpit topbar (T-d693). "" = never set — the topbar falls back to the localized default string.
@@ -1503,6 +1503,9 @@ type TaskDTO struct {
 	DuplicateOf  *string  `json:"duplicate_of,omitempty"`
 	ExecutorId   *string  `json:"executor_id,omitempty"`
 	ExecutorKind string   `json:"executor_kind"`
+
+	// FrozenBy WHO put this task into the ``frozen`` priority (T-6020): the verified token sub of that write — ``"owner"`` for the owner's own click, else the member / outsource-worker id. ``""`` whenever the task is not frozen (and on rows written before the column existed, which are honestly unattributed); the write that moves the task off ``frozen`` clears it. Served because ``frozen`` is no longer a single-actor knob — owner, admin agent and the task's own executor may all freeze and unfreeze — so the owner must be able to tell their own 喊停 from an agent's by READING the task.
+	FrozenBy *string `json:"frozen_by,omitempty"`
 
 	// Handoff The DECLARED destination of the ball at close (T-74f8): "" = never declared, else ``return_to_creator`` | ``follow_up`` | ``none``.
 	Handoff *string `json:"handoff,omitempty"`
@@ -1635,7 +1638,7 @@ type TaskMarkDuplicateDTO struct {
 	DuplicateOf string `json:"duplicate_of"`
 }
 
-// TaskMessageDTO The task-card message box (owner → executor): the server posts one ordinary chat message to the task's executor with the task context auto-attached in “meta“ ({task_id, task_title, task_type}). An unassigned executor is a 409.
+// TaskMessageDTO The task-card message box (owner or admin agent → executor; floor admin_agent since T-6020): the server posts one ordinary chat message to the task's executor with the task context auto-attached in “meta“ ({task_id, task_title, task_type}). An unassigned executor is a 409.
 type TaskMessageDTO struct {
 	Attachments *[]ChatAttachmentInputDTO `json:"attachments,omitempty"`
 	Body        *string                   `json:"body,omitempty"`
@@ -1654,7 +1657,7 @@ type TaskPlanStepDTO struct {
 	ParallelGroup *string `json:"parallel_group,omitempty"`
 }
 
-// TaskPriorityUpdateDTO Priority change: “high“ | “mid“ | “low“ | “frozen“ (freeze/unfreeze ride the same knob — SPEC §3.3). The owner may set any value; the task's executor may set high|mid|low on their own task; frozen (set or clear) stays owner-only.
+// TaskPriorityUpdateDTO Priority change: “high“ | “mid“ | “low“ | “frozen“ (freeze/unfreeze ride the same knob — SPEC §3.3). The owner and an admin agent may set any value on any task; the task's own executor may set any value on their task — frozen INCLUDED, and the clear of a frozen task is admitted for exactly the same set (T-6020: whoever may freeze may unfreeze). A caller who is none of the three is a flat 403.
 type TaskPriorityUpdateDTO struct {
 	Priority string `json:"priority"`
 }
@@ -1751,11 +1754,11 @@ type TokenDTO struct {
 	TokenType *string `json:"token_type,omitempty"`
 }
 
-// UpgradeResultDTO Response of `POST /api/update/upgrade` (owner-gated). `status` names the
+// UpgradeResultDTO Response of `POST /api/update/upgrade` (owner/admin agent — T-6020). `status` names the
 // outcome ("restarting" — the new binary is already verified and swapped
 // in place; the process re-execs right after this response) and
 // `target_version` the GitHub release tag being installed. The endpoint
-// fires only on the owner's explicit click; the OPT-IN `updater_auto_update`
+// fires only on an explicit owner/admin-agent trigger; the OPT-IN `updater_auto_update`
 // setting runs the same verified body unattended in the background.
 type UpgradeResultDTO struct {
 	Status        string `json:"status"`
@@ -1837,7 +1840,7 @@ type WebhookEndpointDTO struct {
 // WebhookEndpointDTOPlatform The endpoint's verification preset (`generic`, `slack`, or `github`), fixed at creation.
 type WebhookEndpointDTOPlatform string
 
-// WebhookRequestLogDTO One row of a webhook endpoint's /in debug ring buffer (GET /api/members/{member_id}/webhooks/{endpoint_id}/requests, newest first, at most 5 rows kept per endpoint). Records EVERY request /in resolved to the endpoint's token, whatever the outcome: `delivered` (verified payload landed as a chat), `dropped:sig_failed` / `dropped:disabled` / `dropped:member_gone` (silent drops with their coarse reason), `challenge` (the Slack url_verification handshake), `ping` (a verified GitHub ping). An unknown token has no endpoint to log against, by construction. `headers` is the JSON-serialised request header map (truncated at 4 KiB); `body` is the raw payload text (truncated at 16 KiB); `truncated` marks that either was cut. Owner-only debug wire (requires=owner) - raw external payloads never ride any public or agent-facing surface, and the public /in response stays byte-identical regardless of logging.
+// WebhookRequestLogDTO One row of a webhook endpoint's /in debug ring buffer (GET /api/members/{member_id}/webhooks/{endpoint_id}/requests, newest first, at most 5 rows kept per endpoint). Records EVERY request /in resolved to the endpoint's token, whatever the outcome: `delivered` (verified payload landed as a chat), `dropped:sig_failed` / `dropped:disabled` / `dropped:member_gone` (silent drops with their coarse reason), `challenge` (the Slack url_verification handshake), `ping` (a verified GitHub ping). An unknown token has no endpoint to log against, by construction. `headers` is the JSON-serialised request header map (truncated at 4 KiB); `body` is the raw payload text (truncated at 16 KiB); `truncated` marks that either was cut. Governance-gated debug wire (requires=admin_agent since T-6020) - raw external payloads never ride any public or PLAIN-agent-facing surface, and the public /in response stays byte-identical regardless of logging.
 type WebhookRequestLogDTO struct {
 	Body      string  `json:"body"`
 	Headers   string  `json:"headers"`
@@ -2243,22 +2246,22 @@ type ServerInterface interface {
 	// Read one outsource worker by id (detail-panel refresh).
 	// (GET /api/outsource-workers/{id})
 	HandleGetOutsourceWorkerApiOutsourceWorkersIdGet(w http.ResponseWriter, r *http.Request, id string)
-	// Read an outsource worker's boot-context preview (owner-only).
+	// Read an outsource worker's boot-context preview (owner/admin agent).
 	// (GET /api/outsource-workers/{id}/boot-context)
 	HandleGetWorkerBootContextApiOutsourceWorkersIdBootContextGet(w http.ResponseWriter, r *http.Request, id string)
-	// Change (換 model) an outsource worker's model/effort (owner-only).
+	// Change (換 model) an outsource worker's model/effort (owner/admin agent).
 	// (POST /api/outsource-workers/{id}/model)
 	HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(w http.ResponseWriter, r *http.Request, id string)
-	// Refocus (換手) an outsource worker's context (owner-only, online-only else 409).
+	// Refocus (換手) an outsource worker's context (owner/admin agent, online-only else 409).
 	// (POST /api/outsource-workers/{id}/refocus)
 	HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost(w http.ResponseWriter, r *http.Request, id string)
 	// Relocate an outsource worker to a machine (admin-gated).
 	// (POST /api/outsource-workers/{id}/relocate)
 	HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePost(w http.ResponseWriter, r *http.Request, id string)
-	// Restart (重啟) a stopped outsource worker (owner-only; 409 if not stopped).
+	// Restart (重啟) a stopped outsource worker (owner/admin agent; 409 if not stopped).
 	// (POST /api/outsource-workers/{id}/restart)
 	HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost(w http.ResponseWriter, r *http.Request, id string)
-	// Stop (停止) an outsource worker (owner-only; kill + hold down).
+	// Stop (停止) an outsource worker (owner/admin agent; kill + hold down).
 	// (POST /api/outsource-workers/{id}/stop)
 	HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost(w http.ResponseWriter, r *http.Request, id string)
 	// Read the VAPID public key used to subscribe this owner's browser.
@@ -2291,7 +2294,7 @@ type ServerInterface interface {
 	// Revise an answered card's answer (重新決定): stays answered.
 	// (PUT /api/reply-cards/{card_id}/answer)
 	HandleReanswerReplyCardApiReplyCardsCardIdAnswerPut(w http.ResponseWriter, r *http.Request, cardId string)
-	// Mark a waiting card expired (owner-only; not an answer; terminal).
+	// Mark a waiting card expired (owner/admin agent; not an answer; terminal).
 	// (POST /api/reply-cards/{card_id}/expire)
 	HandleExpireReplyCardApiReplyCardsCardIdExpirePost(w http.ResponseWriter, r *http.Request, cardId string)
 	// Bounded LIGHT wake snapshot for the caller (recent chat + light task rows + size overview).
@@ -2333,7 +2336,7 @@ type ServerInterface interface {
 	// report_waking(): stamp the caller's waking + clear recycle markers.
 	// (POST /api/self/waking)
 	HandleReportWakingApiSelfWakingPost(w http.ResponseWriter, r *http.Request)
-	// Read the owner-adjustable settings.
+	// Read the org-adjustable settings (owner/admin agent).
 	// (GET /api/settings)
 	HandleGetSettingsApiSettingsGet(w http.ResponseWriter, r *http.Request)
 	// Edit settings (login TTL / handover threshold); live immediately.
@@ -2342,7 +2345,7 @@ type ServerInterface interface {
 	// List task types (match by display_name/purpose; address by type_key).
 	// (GET /api/task-manuals)
 	HandleListTaskManualsApiTaskManualsGet(w http.ResponseWriter, r *http.Request, params HandleListTaskManualsApiTaskManualsGetParams)
-	// Create a task type: pass display_name; the server mints and returns the tm- type_key id (legacy explicit type_key still accepted; duplicate → 409; assignee = owner-only).
+	// Create a task type: pass display_name; the server mints and returns the tm- type_key id (legacy explicit type_key still accepted; duplicate → 409; assignee = owner/admin agent).
 	// (POST /api/task-manuals)
 	HandleCreateTaskManualApiTaskManualsPost(w http.ResponseWriter, r *http.Request)
 	// Delete a task type (open tasks of the type → 409).
@@ -2351,7 +2354,7 @@ type ServerInterface interface {
 	// Read one task manual (purpose/fields/SOP/learnings/assignee).
 	// (GET /api/task-manuals/{type_key})
 	HandleGetTaskManualApiTaskManualsTypeKeyGet(w http.ResponseWriter, r *http.Request, typeKey string)
-	// Edit a task manual (partial; owner's structure edit).
+	// Edit a task manual (partial; content fields agent-editable; assignee = owner/admin agent).
 	// (POST /api/task-manuals/{type_key})
 	HandleUpdateTaskManualApiTaskManualsTypeKeyPost(w http.ResponseWriter, r *http.Request, typeKey string)
 	// Whole-doc replace of a type's learnings (task-close write-back).
@@ -2390,13 +2393,13 @@ type ServerInterface interface {
 	// Mark a task duplicated, pointing at the original (executor/owner; terminal).
 	// (POST /api/tasks/{task_id}/duplicate)
 	HandleMarkTaskDuplicateApiTasksTaskIdDuplicatePost(w http.ResponseWriter, r *http.Request, taskId string)
-	// Message the task's executor (owner; task context auto-attached).
+	// Message the task's executor (owner/admin agent; task context auto-attached).
 	// (POST /api/tasks/{task_id}/message)
 	HandlePostTaskMessageApiTasksTaskIdMessagePost(w http.ResponseWriter, r *http.Request, taskId string)
 	// Submit/replace the workflow plan (done and answered-card steps are kept).
 	// (POST /api/tasks/{task_id}/plan)
 	HandleSubmitTaskPlanApiTasksTaskIdPlanPost(w http.ResponseWriter, r *http.Request, taskId string)
-	// Set a task's priority (owner any value; the executor high|mid|low on their own task; frozen stays owner-only).
+	// Set a task's priority (owner/admin agent any value; the executor any value on their own task — frozen included, T-6020).
 	// (POST /api/tasks/{task_id}/priority)
 	HandleSetTaskPriorityApiTasksTaskIdPriorityPost(w http.ResponseWriter, r *http.Request, taskId string)
 	// Reassign a task to a member or a fresh outsource worker (the task's executor or an admin; an outsource target lands the task unassigned for the scheduler to spawn under the global parallel cap; enters the reassigning handover state).
@@ -2408,7 +2411,7 @@ type ServerInterface interface {
 	// Report a step status (pending/in_progress/done).
 	// (POST /api/tasks/{task_id}/steps/{step_id}/status)
 	HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPost(w http.ResponseWriter, r *http.Request, taskId string, stepId string)
-	// Terminate a task (owner; the only owner status change).
+	// Terminate a task (owner/admin agent; the only non-executor status change).
 	// (POST /api/tasks/{task_id}/terminate)
 	HandleTerminateTaskApiTasksTaskIdTerminatePost(w http.ResponseWriter, r *http.Request, taskId string)
 	// Trigger a software upgrade to the latest GitHub release.

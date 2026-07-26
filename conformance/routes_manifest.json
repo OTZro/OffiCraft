@@ -64,24 +64,17 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "get_settings",
     "method": "GET",
     "path": "/api/settings",
-    "requires": "owner"
+    "requires": "admin_agent"
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "update_settings",
     "method": "PATCH",
     "path": "/api/settings",
-    "requires": "owner"
-  },
-  {
-    "auth": "gated",
-    "mcp_tool": null,
-    "method": "GET",
-    "path": "/api/release/check",
-    "requires": "owner"
+    "requires": "admin_agent"
   },
   {
     "auth": "gated",
@@ -106,10 +99,17 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "check_release",
+    "method": "GET",
+    "path": "/api/release/check",
+    "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "upgrade_software",
     "method": "POST",
     "path": "/api/update/upgrade",
-    "requires": "owner"
+    "requires": "admin_agent"
   },
   {
     "auth": "gated",
@@ -253,10 +253,10 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "list_webhook_requests",
     "method": "GET",
     "path": "/api/members/{member_id}/webhooks/{endpoint_id}/requests",
-    "requires": "owner"
+    "requires": "admin_agent"
   },
   {
     "auth": "public",
@@ -288,6 +288,13 @@
   },
   {
     "auth": "gated",
+    "mcp_tool": null,
+    "method": "GET",
+    "path": "/api/chat/attachments/{attachment_id}/share-link",
+    "requires": "machine"
+  },
+  {
+    "auth": "gated",
     "mcp_tool": "get_chat_attachments",
     "method": "GET",
     "path": "/api/chat/attachments",
@@ -298,13 +305,6 @@
     "mcp_tool": null,
     "method": "POST",
     "path": "/api/chat/attachments",
-    "requires": "machine"
-  },
-  {
-    "auth": "gated",
-    "mcp_tool": null,
-    "method": "GET",
-    "path": "/api/chat/attachments/{attachment_id}/share-link",
     "requires": "machine"
   },
   {
@@ -358,24 +358,24 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "answer_reply_card",
     "method": "POST",
     "path": "/api/reply-cards/{card_id}/answer",
-    "requires": "owner"
+    "requires": "admin_agent"
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "reanswer_reply_card",
     "method": "PUT",
     "path": "/api/reply-cards/{card_id}/answer",
-    "requires": "owner"
+    "requires": "admin_agent"
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "expire_reply_card",
     "method": "POST",
     "path": "/api/reply-cards/{card_id}/expire",
-    "requires": "owner"
+    "requires": "admin_agent"
   },
   {
     "auth": "gated",
@@ -449,17 +449,17 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "bootstrap_machine_here",
     "method": "POST",
     "path": "/api/machines/{machine_id}/bootstrap-here",
-    "requires": "owner"
+    "requires": "admin_agent"
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "teardown_machine_here",
     "method": "POST",
     "path": "/api/machines/{machine_id}/teardown-here",
-    "requires": "owner"
+    "requires": "admin_agent"
   },
   {
     "auth": "gated",
@@ -470,10 +470,10 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "upgrade_machine",
     "method": "POST",
     "path": "/api/machines/{member_id}/upgrade",
-    "requires": "owner"
+    "requires": "admin_agent"
   },
   {
     "auth": "gated",
@@ -631,10 +631,10 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "terminate_task",
     "method": "POST",
     "path": "/api/tasks/{task_id}/terminate",
-    "requires": "owner"
+    "requires": "admin_agent"
   },
   {
     "auth": "gated",
@@ -645,10 +645,10 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "post_task_message",
     "method": "POST",
     "path": "/api/tasks/{task_id}/message",
-    "requires": "owner"
+    "requires": "admin_agent"
   },
   {
     "auth": "gated",
@@ -743,10 +743,10 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "get_worker_boot_context",
     "method": "GET",
     "path": "/api/outsource-workers/{id}/boot-context",
-    "requires": "owner"
+    "requires": "admin_agent"
   },
   {
     "auth": "gated",
@@ -757,31 +757,31 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "refocus_outsource_worker",
     "method": "POST",
     "path": "/api/outsource-workers/{id}/refocus",
-    "requires": "owner"
+    "requires": "admin_agent"
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "stop_outsource_worker",
     "method": "POST",
     "path": "/api/outsource-workers/{id}/stop",
-    "requires": "owner"
+    "requires": "admin_agent"
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "restart_outsource_worker",
     "method": "POST",
     "path": "/api/outsource-workers/{id}/restart",
-    "requires": "owner"
+    "requires": "admin_agent"
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "set_outsource_worker_model",
     "method": "POST",
     "path": "/api/outsource-workers/{id}/model",
-    "requires": "owner"
+    "requires": "admin_agent"
   },
   {
     "auth": "gated",
@@ -813,10 +813,10 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "delete_task_manual",
     "method": "DELETE",
     "path": "/api/task-manuals/{type_key}",
-    "requires": "owner"
+    "requires": "admin_agent"
   },
   {
     "auth": "gated",

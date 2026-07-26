@@ -676,6 +676,13 @@ type taskDTO struct {
 	Handoff       string `json:"handoff"`
 	HandoffNote   string `json:"handoff_note"`
 	HandoffTaskID string `json:"handoff_task_id"`
+	// FrozenBy names WHO put this task into the frozen priority (T-6020):
+	// "owner" for the owner's own click, else the member / outsource-worker id.
+	// "" whenever priority != frozen (and on pre-column rows). Served because
+	// frozen is no longer a single-actor knob — owner, admin_agent and the
+	// task's executor may all freeze and unfreeze — so the owner needs to read
+	// off a frozen ticket whether the 喊停 was theirs.
+	FrozenBy string `json:"frozen_by"`
 }
 
 // taskListItemDTO is the LIGHT list projection served by GET /api/tasks (and
@@ -950,6 +957,7 @@ func newTaskDTO(t Task, steps []TaskStep, deps []string, cardStatus map[string]s
 		Handoff:       t.Handoff,
 		HandoffNote:   t.HandoffNote,
 		HandoffTaskID: t.HandoffTaskID,
+		FrozenBy:      t.FrozenBy,
 	}
 	if t.ClosedTS > 0 {
 		ts := t.ClosedTS

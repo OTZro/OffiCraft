@@ -59,6 +59,8 @@ function wireTask(over: Partial<WireTask>): WireTask {
     handoff: "",
     handoff_note: "",
     handoff_task_id: "",
+    // T-6020: who froze the task ("" = not frozen). Same always-present shape.
+    frozen_by: "",
     ...over,
   };
 }
