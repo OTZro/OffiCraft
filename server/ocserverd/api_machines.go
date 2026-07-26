@@ -731,7 +731,11 @@ func execOcwarden(binPath string, args []string, env []string) (int, string, boo
 // run — a stale bin/ocwarden under the CWD must never be exec'd in its place
 // (bootstrap-here once installed a frozen checkout's stale warden this way).
 func (s *apiServer) resolveOcwardenBinary(w http.ResponseWriter) (string, bool) {
-	path, err := s.resolveOcwardenBinaryFrom(bindistFS())
+	embedded := s.ocwardenFS
+	if embedded == nil {
+		embedded = bindistFS()
+	}
+	path, err := s.resolveOcwardenBinaryFrom(embedded)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable,
 			"ocwarden binary is not available (no embedded copy in this server build): "+err.Error())
@@ -838,10 +842,22 @@ func (s *apiServer) runWardenInstallHere(machine Member, binPath, baseURL string
 // down a DIFFERENT instance's live warden.
 func (s *apiServer) runWardenTeardownHere(binPath string) (int, string, bool) {
 	env := ocwardenChildEnv(os.Environ())
+	args := []string{"teardown"}
 	if s.namespace != "" {
 		env = append(env, "OC_NAMESPACE="+s.namespace)
+	} else {
+		// T-2257: canonical teardown is destructive and the CLI now REFUSES an
+		// implicit canonical target. The server has already resolved which
+		// instance it is, so it must spell the authorization — a bare
+		// `teardown` here would exit 1 forever and, because CONFIRM-THEN-REMOVE
+		// keys off exit 0, strand the machine in the roster.
+		args = append(args, "--canonical")
 	}
-	return runOcwarden(binPath, []string{"teardown"}, env)
+	run := s.ocwardenRun
+	if run == nil {
+		run = runOcwarden
+	}
+	return run(binPath, args, env)
 }
 
 // POST /api/machines/{machine_id}/teardown-here — tear the warden down ON THE

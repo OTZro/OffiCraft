@@ -640,7 +640,7 @@ func realClaudeProbe(bin, pathEnv, home string) error {
 // OC_ID in the caller's env must NOT make the guard mistake the machine re-installing
 // ITSELF for a foreign warden (that false refusal broke half-install re-runs). If a
 // warden for a genuinely DIFFERENT machine is already installed, REFUSE and mutate
-// nothing (operator must `ocwarden teardown` or pass --force); no existing tokfile is
+// nothing (operator must tear the old warden down or pass --force); no existing tokfile is
 // a fresh install. This runs BEFORE any mutation and refuses identically under DRYRUN
 // (the tokfile read is a non-mutating probe).
 func (i *installer) guard(p wardenPaths) error {
@@ -660,7 +660,16 @@ func (i *installer) guard(p wardenPaths) error {
 		i.logf("guard: existing warden is the same machine (%s) — idempotent re-provision", existing)
 		return nil
 	}
-	return fmt.Errorf("refusing: a warden for machine %s is already installed on this box; run 'ocwarden teardown' first, or pass --force to replace", existing)
+	// The teardown hint must be RUNNABLE. Bare `ocwarden teardown` now fails
+	// closed (it refuses an implicit canonical target), so telling an operator
+	// to run it leaves them stuck with no recovery path — and telling a
+	// namespaced install to run `--canonical` would point them at the LIVE
+	// canonical warden. Spell the command for THIS instance.
+	teardownHint := "ocwarden teardown --canonical"
+	if p.namespace != "" {
+		teardownHint = "OC_NAMESPACE=" + p.namespace + " ocwarden teardown"
+	}
+	return fmt.Errorf("refusing: a warden for machine %s is already installed on this box; run '%s' first, or pass --force to replace", existing, teardownHint)
 }
 
 // copyBinary makes the install self-contained: it copies the running binary

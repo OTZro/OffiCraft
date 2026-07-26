@@ -180,18 +180,50 @@ func (i *installer) runTeardown(p teardownPaths) (ok bool) {
 	return ok
 }
 
+// validateTeardownTarget makes the destructive CLI fail closed.  An absent
+// OC_NAMESPACE historically meant the canonical instance; that is convenient for
+// an operator but unsafe for automation, where a lost namespace silently tears
+// down the live warden.  Namespaced targets remain unambiguous from their env;
+// canonical teardown must be deliberately spelled --canonical.
+func validateTeardownTarget(env func(string) string, canonicalExplicit bool) error {
+	ns, err := namespaceFromEnv(env)
+	if err != nil {
+		return err
+	}
+	if ns != "" && canonicalExplicit {
+		return fmt.Errorf("refusing: --canonical conflicts with OC_NAMESPACE=%q", ns)
+	}
+	if ns == "" && !canonicalExplicit {
+		// CONSEQUENCE FIRST, then the safe alternative, and only then the flag
+		// that authorizes the destruction. The incident vector was AUTOMATION:
+		// a wrapper that scrapes stderr for a fix-up must read what this
+		// destroys and find the namespaced escape before it finds --canonical.
+		return fmt.Errorf("refusing: this would tear down the CANONICAL warden on this host " +
+			"(launchd com.officraft.ocwarden, its exec token and plist) and stop every agent it " +
+			"supervises. For an isolated instance set OC_NAMESPACE=<ns>; if destroying the " +
+			"canonical warden is genuinely intended, authorize it explicitly with --canonical")
+	}
+	return nil
+}
+
 // teardownCmd is the thin `ocwarden teardown` entry point. Returns 0 ONLY when the
 // teardown is CONFIRMED (label gone from launchd + artifacts removed; idempotent —
 // a fully-absent install still returns 0), 1 on a resolution failure (e.g. HOME
 // unset) OR an unconfirmed/incomplete teardown. The non-zero-on-unconfirmed exit is
 // LOAD-BEARING for the server's handle_teardown_here: it soft-deletes the warden
 // member only on exit 0 (CONFIRM-THEN-REMOVE).
-func teardownCmd(env func(string) string, out io.Writer) int {
+func teardownCmd(env func(string) string, out io.Writer, canonicalExplicit bool) int {
 	// Same single host seam as install (see hostSeam in install.go): production
 	// gets the real launchctl/filesystem, the test binary gets a recording fake
 	// bound in TestMain — so no test can bootout the live warden even if every
 	// guard below is wrong.
 	i := &installer{out: out, dryRun: env(dryRunEnv) == "1", sys: newHostSeam().sys}
+	// FAIL CLOSED BEFORE ANY PATH IS DERIVED: an absent OC_NAMESPACE must not
+	// silently resolve the canonical instance (T-2257).
+	if err := validateTeardownTarget(env, canonicalExplicit); err != nil {
+		i.errf("%v", err)
+		return 1
+	}
 	p, err := resolveTeardownPaths(env, os.Getuid())
 	if err != nil {
 		i.errf("%v", err)

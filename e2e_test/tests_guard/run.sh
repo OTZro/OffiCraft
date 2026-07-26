@@ -33,7 +33,14 @@ cat > "$SHIMDIR/launchctl" <<'SH'
 #!/usr/bin/env bash
 # Only two verbs matter to the code under test: `print` (read-only detection) and
 # `bootout` (MUST never be reached by a guard/allocator — tripwire if it is).
-if [[ "$1" == "bootout" ]]; then echo "TRIPWIRE launchctl bootout $*" >> "$SHIM_TRIPWIRE"; exit 0; fi
+if [[ "$1" == "bootout" ]]; then
+  if [[ "${SHIM_ALLOW_TEARDOWN:-0}" == "1" ]]; then
+    echo "launchctl $*" >> "$SHIM_TEARDOWN_LOG"
+  else
+    echo "TRIPWIRE launchctl bootout $*" >> "$SHIM_TRIPWIRE"
+  fi
+  exit 0
+fi
 if [[ "$1" == "print" ]]; then
   case "$2" in
     */com.officraft.ocwarden) [[ "${SHIM_WARDEN:-0}" == "1" ]] && exit 0 || exit 1 ;;
@@ -67,6 +74,30 @@ exit 0
 SH
 
 chmod +x "$SHIMDIR"/launchctl "$SHIMDIR"/lsof "$SHIMDIR"/tmux
+
+# These stubs are enabled ONLY by the hermetic teardown regression below.  They
+# record every mutating surface instead of touching the host, which lets the
+# test reject a canonical label/root/token target without ever exercising a
+# real warden teardown.
+cat > "$SHIMDIR/ocwarden" <<'SH'
+#!/usr/bin/env bash
+echo "ocwarden namespace=${OC_NAMESPACE:-<unset>} args=$*" >> "$SHIM_TEARDOWN_LOG"
+exit 0
+SH
+cat > "$SHIMDIR/rm" <<'SH'
+#!/usr/bin/env bash
+if [[ "${SHIM_ALLOW_TEARDOWN:-0}" == "1" ]]; then
+  # The BRACE GROUP is load-bearing. Written as three bare printfs with the
+  # redirection on the last one only, the first two go to stdout and the log
+  # receives a lone newline (0x0a) — no rm target is ever recorded, so every
+  # tripwire that greps this log matches nothing and passes unconditionally.
+  # Case (18c) is the permanent proof that this records what it claims.
+  { printf 'rm'; printf ' <%s>' "$@"; printf '\n'; } >> "$SHIM_TEARDOWN_LOG"
+  exit 0
+fi
+exec /bin/rm "$@"
+SH
+chmod +x "$SHIMDIR"/ocwarden "$SHIMDIR"/rm
 export SHIM_TRIPWIRE="$TRIPWIRE"
 export PATH="$SHIMDIR:$PATH"
 
@@ -79,7 +110,9 @@ run_snippet() {
     # clean the isolation env so each case is deterministic.
     unset OC_NS OC_E2E_ALLOW_CANONICAL OC_E2E_NS OC_E2E_NS_PORT 2>/dev/null || true
     export HOME="${TEST_HOME:-/tmp/oc-guard-home}"
-    source "$LIB" >/dev/null 2>&1
+    # SNIPPET_LIB lets a NEGATIVE CONTROL source a deliberately mutated copy of
+    # the lib (see 18c/18d) so the tripwires' discriminating power is pinned.
+    source "${SNIPPET_LIB:-$LIB}" >/dev/null 2>&1
     eval "$snippet"
   ) >"$GLOG" 2>&1
   echo $?
@@ -539,6 +572,178 @@ else
     esac
   fi
 fi
+
+# ── 18) T-2257: namespaced teardown must propagate OC_NAMESPACE to ocwarden ─
+#
+# `oc_resolve_instance` correctly derived a namespaced label/root, but the
+# lifecycle helper then ran bare `ocwarden teardown`.  A child process without
+# OC_NAMESPACE silently resolves the canonical label and token, so a harmless
+# E2E cleanup could unload the live fleet's warden.  This invokes the REAL
+# oc_teardown_bounded call chain, but every mutation is shimmed above.  The
+# recording shims are tripwires: canonical launchd label, canonical root, or
+# canonical token in any recorded target turns the test red.  The direct child
+# env assertion is deliberately what makes removing propagation red, rather
+# than merely checking the parent's OC_NS variable.
+TEARDOWN_LOG="$SHIMDIR/.teardown-log"
+: > "$TEARDOWN_LOG"
+TEST_HOME="$SHIMDIR/ns-teardown-home"
+export SHIM_ALLOW_TEARDOWN=1 SHIM_TEARDOWN_LOG="$TEARDOWN_LOG" TEST_HOME
+rc="$(run_snippet '
+  OC_E2E_NS="e2eproof"; OC_E2E_NS_PORT=8808
+  oc_resolve_instance
+  HOME_DIR="$HOME"; GUI="gui/501"; BACKUP_DIR="$HOME/backups"
+  # SHIMDIR itself is intentionally not exported to the hermetic child; resolve
+  # the fake through the exported PATH exactly as the harness resolves tools.
+  OCWARDEN="$(command -v ocwarden)"
+  mkdir -p "$HOME/.officraft/warden" "$OC_ROOT/warden"
+  printf canonical > "$HOME/.officraft/warden/exec-warden.tok"
+  printf isolated > "$OC_ROOT/warden/exec-warden.tok"
+  oc_teardown_bounded "namespace-regression"
+')"
+check "namespaced teardown helper completes through hermetic shims" "0" "$rc"
+
+if grep -Fqx 'ocwarden namespace=e2eproof args=teardown' "$TEARDOWN_LOG"; then
+  ok "namespaced teardown passes OC_NAMESPACE=e2eproof to the ocwarden child"
+else
+  bad "namespaced teardown did NOT pass its namespace to ocwarden (log: $(tr '\n' '|' < "$TEARDOWN_LOG")) — bare teardown falls back to canonical warden"
+fi
+
+if grep -Eq 'com\.officraft\.ocwarden([[:space:]]|$)' "$TEARDOWN_LOG"; then
+  bad "namespaced teardown touched canonical warden label (log: $(tr '\n' '|' < "$TEARDOWN_LOG"))"
+else
+  ok "namespaced teardown never targets canonical warden label"
+fi
+if grep -Fq "$TEST_HOME/.officraft/warden/exec-warden.tok" "$TEARDOWN_LOG"; then
+  bad "namespaced teardown touched canonical warden token (log: $(tr '\n' '|' < "$TEARDOWN_LOG"))"
+else
+  ok "namespaced teardown never targets canonical warden token"
+fi
+if grep -Fq "$TEST_HOME/.officraft/" "$TEARDOWN_LOG"; then
+  bad "namespaced teardown touched canonical officraft root (log: $(tr '\n' '|' < "$TEARDOWN_LOG"))"
+else
+  ok "namespaced teardown never targets canonical officraft root"
+fi
+# This one does NOT test the recording shims — it catches a SHIM BYPASS: code
+# that deletes through an absolute /bin/rm (or any path that dodges $PATH) never
+# reaches the recorder above, so the three log tripwires would stay silent while
+# the file really vanished. The sentinel is the only assertion that survives
+# that class of escape. It is NOT the tripwire for MUT-D — (18c) is.
+if [[ -f "$TEST_HOME/.officraft/warden/exec-warden.tok" ]] \
+   && [[ "$(cat "$TEST_HOME/.officraft/warden/exec-warden.tok")" == "canonical" ]]; then
+  ok "canonical token sentinel remains intact after namespaced teardown (no shim bypass)"
+else
+  bad "canonical token sentinel was changed or removed by namespaced teardown"
+fi
+
+# ── 18c) PERMANENT NEGATIVE CONTROL for (18): the tripwires must actually fire ─
+#
+# The tripwires above are grep-for-absence assertions: they pass when the log is
+# EMPTY, which is also what a broken recorder produces. That is not a theory —
+# the shim's redirection was wrong on arrival (only the last of three printfs was
+# redirected, so every entry was a bare 0x0a) and all three tripwires plus the
+# sentinel were structurally incapable of failing. The suite reported 56/56 while
+# testing nothing.
+#
+# So: replay the literal 2026-07-25 incident. A mutated copy of the lib gets the
+# two incident deletions injected into oc_teardown_bounded —
+#   rm -f  "$HOME_DIR/.officraft/warden/exec-warden.tok"
+#   rm -rf "$HOME_DIR/.officraft/warden"
+# — and the SAME tripwire greps are then required to MATCH. If (18)'s recorder
+# ever regresses, this case reddens immediately.
+# The mutant lives in a MIRROR TREE (e2e_test/lib/ under a scratch root whose
+# server/ is symlinked to the real one) because the lib derives its repo root
+# from BASH_SOURCE and FATALs when it cannot parse config.go's defaultPort.
+MUTROOT="$SHIMDIR/mutd-tree"
+mkdir -p "$MUTROOT/e2e_test/lib"
+ln -sfn "$HERE/../../server" "$MUTROOT/server"
+MUTLIB="$MUTROOT/e2e_test/lib/oc_lifecycle.sh"
+awk '
+  /^oc_teardown_bounded\(\)/ { inbounded = 1 }
+  { print }
+  inbounded && !injected && /^  oc_assert_teardown_instance$/ {
+    print "  rm -f \"$HOME_DIR/.officraft/warden/exec-warden.tok\""
+    print "  rm -rf \"$HOME_DIR/.officraft/warden\""
+    injected = 1
+  }
+  END { if (!injected) exit 3 }
+' "$LIB" > "$MUTLIB"
+if [[ $? -ne 0 ]]; then
+  bad "could not build the MUT-D mutant: the 'oc_assert_teardown_instance' anchor inside oc_teardown_bounded moved — update guard (18c)"
+else
+  MUT_LOG="$SHIMDIR/.teardown-log-mutd"
+  : > "$MUT_LOG"
+  MUT_HOME="$SHIMDIR/mutd-home"
+  rc="$(SNIPPET_LIB="$MUTLIB" SHIM_TEARDOWN_LOG="$MUT_LOG" TEST_HOME="$MUT_HOME" run_snippet '
+    OC_E2E_NS="e2eproof"; OC_E2E_NS_PORT=8808
+    oc_resolve_instance
+    HOME_DIR="$HOME"; GUI="gui/501"; BACKUP_DIR="$HOME/backups"
+    OCWARDEN="$(command -v ocwarden)"
+    mkdir -p "$HOME/.officraft/warden" "$OC_ROOT/warden" "$HOME/backups"
+    printf canonical > "$HOME/.officraft/warden/exec-warden.tok"
+    oc_teardown_bounded "mutd-negative-control"
+  ')"
+  check "MUT-D control: the mutated teardown still completes (mutation is reachable)" "0" "$rc"
+  [[ "$rc" == "0" ]] || { echo "  ---- MUT-D control GLOG ----"; cat "$GLOG"; }
+  if grep -Fq "$MUT_HOME/.officraft/warden/exec-warden.tok" "$MUT_LOG"; then
+    ok "MUT-D control: the canonical-token tripwire FIRES on the 2026-07-25 incident (grep is not vacuous)"
+  else
+    bad "MUT-D control: the canonical-token tripwire stayed SILENT while the incident deletion ran (log: $(tr '\n' '|' < "$MUT_LOG")) — the rm recorder is broken again and case (18) is testing nothing"
+  fi
+  if grep -Fq "$MUT_HOME/.officraft/" "$MUT_LOG"; then
+    ok "MUT-D control: the canonical-root tripwire FIRES on the 2026-07-25 incident"
+  else
+    bad "MUT-D control: the canonical-root tripwire stayed SILENT while 'rm -rf ~/.officraft/warden' ran (log: $(tr '\n' '|' < "$MUT_LOG")) — case (18) is vacuous"
+  fi
+fi
+
+# ── 18d/18e) oc_assert_teardown_instance must actually GATE both call sites ────
+#
+# The guard shipped with no failing-without-it coverage: replacing BOTH of its
+# call sites with `:` left the suite fully green, so the one thing standing
+# between a stale variable and the canonical warden was untested. These two cases
+# drive a MIXED axis set (namespace selected, but WARDEN_LABEL/OC_ROOT still
+# canonical — exactly the shape the 2026-07-25 incident had) through each entry
+# point separately, and require it to DIE before any mutation. Asserted per call
+# site on purpose: one combined case would stay green while either site lost its
+# guard.
+c18_mixed() { # c18_mixed NAME ENTRYPOINT
+  local log="$SHIMDIR/.teardown-log-$1" entry="$2"
+  : > "$log"
+  SHIM_TEARDOWN_LOG="$log" TEST_HOME="$SHIMDIR/mixed-home-$1" run_snippet '
+    OC_E2E_NS="e2eproof"; OC_E2E_NS_PORT=8808
+    oc_resolve_instance
+    HOME_DIR="$HOME"; GUI="gui/501"; BACKUP_DIR="$HOME/backups"
+    OCWARDEN="$(command -v ocwarden)"
+    mkdir -p "$HOME/backups" "$OC_ROOT/warden"
+    # STALE canonical axes left behind by a partial/aborted resolve.
+    WARDEN_LABEL="com.officraft.ocwarden"
+    OC_ROOT="$HOME/.officraft"
+    '"$entry"
+}
+for _entry in 'oc_teardown_bounded "mixed-axes"' 'oc_teardown_warden'; do
+  _name="${_entry%% *}"
+  rc="$(c18_mixed "$_name" "$_entry")"
+  if [[ "$rc" != "0" ]]; then
+    ok "$_name DIES on a namespaced run whose WARDEN_LABEL/OC_ROOT are still canonical (rc=$rc)"
+  else
+    bad "$_name ACCEPTED a namespaced run with canonical WARDEN_LABEL/OC_ROOT — the teardown target guard is absent or bypassed at this call site; this is the exact 2026-07-25 shape"
+  fi
+  grep -q 'TEARDOWN TARGET GUARD' "$GLOG" \
+    && ok "$_name refusal names TEARDOWN TARGET GUARD" \
+    || bad "$_name died without the TEARDOWN TARGET GUARD marker (got: $(tr '\n' '|' < "$GLOG" | tail -c 300))"
+  # BEFORE ANY MUTATION, asserted as "the recorder saw NOTHING". Not just "no
+  # canonical label": oc_teardown_bounded's own call site is what makes the
+  # refusal precede the .dump backup and the serve/autodeploy/tunnel bootouts.
+  # If only the nested oc_teardown_warden guard survives, the run still dies —
+  # but only AFTER four bootouts, and only this assertion notices.
+  _mut="$(grep -cE 'launchctl bootout|^rm <' "$SHIMDIR/.teardown-log-$_name" 2>/dev/null || true)"
+  if [[ "${_mut:-0}" != "0" ]]; then
+    bad "$_name mutated $_mut host resource(s) BEFORE refusing — the guard must run before the backup/bootout/delete sequence (log: $(tr '\n' '|' < "$SHIMDIR/.teardown-log-$_name"))"
+  else
+    ok "$_name refused before booting out or deleting anything"
+  fi
+done
+unset SHIM_ALLOW_TEARDOWN SHIM_TEARDOWN_LOG TEST_HOME
 
 echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1

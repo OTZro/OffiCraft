@@ -406,14 +406,21 @@ func TestInstallCmd_CannotReachTheRealHost(t *testing.T) {
 
 // TestTeardownCmd_CannotReachTheRealHost is the same proof for the inverse verb —
 // the one that actually cost this fleet three live-warden unloads. `ocwarden
-// teardown` takes NO flags and NO identity: whatever HOME says, the label it boots
+// teardown --canonical` takes NO identity: whatever HOME says, the label it boots
 // out is the canonical singleton. Structurally absorbed, exactly like install.
+//
+// REBASE NOTE (independent review of T-2257): --canonical is now REQUIRED to reach
+// this path at all. Without it validateTeardownTarget refuses and the run never
+// gets as far as launchctl — which would turn this test green for the WRONG
+// reason (nothing booted out because nothing ran). The flag keeps the seam proof
+// pointed at the destructive path it exists to cover; T-2257's own tests cover the
+// refusal.
 func TestTeardownCmd_CannotReachTheRealHost(t *testing.T) {
 	hostSeamFakes = nil
 	home := t.TempDir()
 	var out strings.Builder
 
-	realMain([]string{"teardown"}, envFn(map[string]string{"HOME": home}), &out)
+	realMain([]string{"teardown", "--canonical"}, envFn(map[string]string{"HOME": home}), &out)
 
 	f := lastHostSeam(t)
 	wantTarget := "gui/" + itoa(os.Getuid()) + "/" + wardenLabel
