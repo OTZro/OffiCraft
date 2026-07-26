@@ -320,21 +320,26 @@ func readMachineName(r CmdRunner) string {
 // telemetry payload (mirrors warden/telemetry.py)
 // ---------------------------------------------------------------------------
 
-// buildTelemetryPayload assembles the POST body. Errors on an empty agent_id
-// (the one hard requirement). machine/hardware/binaries/claude are included
-// only when non-empty. binaries carries the live ocwarden/ocagent content
-// fingerprints (fingerprint.go) the server folds into the machine rows'
-// bin_status verdict (T-5f01); claude carries the local claude CLI probe
-// (claudeprobe.go) the server folds into the machine rows' claude_* columns
-// (T-97ee).
+// buildTelemetryPayload assembles the POST body. Errors on an empty agent id (the
+// one hard requirement — a warden with no identity has nothing to report), but
+// the id is NOT a body key: the reporting identity is the verified JWT sub, and
+// the frozen AgentTelemetryIngestDTO (additionalProperties:false) does not
+// declare `agent_id`. The server refuses unknown fields on mutable writes, so
+// sending it 422s the ENTIRE heartbeat — hardware, binaries, claude probe and
+// runtime capabilities together, which is exactly how every machine row went
+// silently null. machine/hardware/binaries/claude are included only when
+// non-empty. binaries carries the live ocwarden/ocagent content fingerprints
+// (fingerprint.go) the server folds into the machine rows' bin_status verdict
+// (T-5f01); claude carries the local claude CLI probe (claudeprobe.go) the server
+// folds into the machine rows' claude_* columns (T-97ee).
 func buildTelemetryPayload(agentID, machine string, hardware map[string]any,
 	binaries map[string]string, claude map[string]any,
 	runtimes ...map[string]any) (map[string]any, error) {
 	aid := strings.TrimSpace(agentID)
 	if aid == "" {
-		return nil, fmt.Errorf("agent_id is required (empty would be a guaranteed 400)")
+		return nil, fmt.Errorf("agent id is required (an unidentified warden has nothing to report)")
 	}
-	payload := map[string]any{"agent_id": aid}
+	payload := map[string]any{}
 	if machine != "" {
 		payload["machine"] = machine
 	}
@@ -401,6 +406,14 @@ type ReportResult struct {
 	Reason string
 }
 
+// errorMessageOf pulls `error.message` out of the server's error envelope
+// ({"error":{"code","message"}}). Any other shape yields "".
+func errorMessageOf(body map[string]any) string {
+	envelope, _ := body["error"].(map[string]any)
+	message, _ := envelope["message"].(string)
+	return strings.TrimSpace(message)
+}
+
 func nextBackoff(cur time.Duration) time.Duration {
 	if cur < backoffStart {
 		cur = backoffStart
@@ -444,11 +457,18 @@ func runOnce(cfg Config, collect func() map[string]any, machine func() string, p
 	if err != nil {
 		return ReportResult{Reason: "build rejected: " + err.Error()}
 	}
-	status, _ := post(telemetryPath, payload)
+	status, body := post(telemetryPath, payload)
 	if status == 200 {
 		return ReportResult{Posted: true, Status: 200, Reason: "posted"}
 	}
-	return ReportResult{Status: status, Reason: fmt.Sprintf("post status %d", status)}
+	// Carry the server's own explanation, not just the code. A schema refusal names
+	// the offending key, which is the difference between a one-line diagnosis and a
+	// multi-hour hunt.
+	reason := fmt.Sprintf("post status %d", status)
+	if detail := errorMessageOf(body); detail != "" {
+		reason += ": " + detail
+	}
+	return ReportResult{Status: status, Reason: reason}
 }
 
 // run is the throttled producer loop. iterations<=0 means forever; 1 = --once.
@@ -479,6 +499,13 @@ func run(ctx context.Context, cfg Config, collect func() map[string]any, machine
 			backoff = backoffStart
 			wait = reportThrottle
 		} else {
+			// A server REFUSAL (any non-200) must leave a trace. runOnce has always
+			// computed the verdict and the loop has always thrown it away, so a
+			// warden whose every heartbeat was rejected — leaving the whole machine
+			// row null in the cockpit — looked identical to a healthy one from the
+			// outside, for as long as it ran. Transport faults (status 0) stay quiet:
+			// a server being down is expected and would spam the log.
+			fmt.Fprintf(out, "[ocwarden] telemetry: %s (report NOT stored)\n", result.Reason)
 			backoff = nextBackoff(backoff)
 		}
 		if !sleep(ctx, wait) {

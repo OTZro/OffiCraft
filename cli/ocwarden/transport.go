@@ -708,8 +708,11 @@ func newCommandReporter(cfg Config) func(CommandResult) error {
 			strings.TrimSpace(cr.RPC) == "" {
 			return nil
 		}
+		// No agent_id key: the reporting identity is the verified JWT sub, and the
+		// frozen ingest schema refuses undeclared fields — one would 422 the whole
+		// receipt. command_result.member_id below is a legitimate TARGET, not an
+		// identity claim.
 		payload := map[string]any{
-			"agent_id": cfg.ID,
 			"command_result": map[string]any{
 				"member_id": cr.MemberID,
 				"worker_id": cr.WorkerID,

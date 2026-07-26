@@ -80,7 +80,7 @@ func realMain(argv []string, env func(string) string, in io.Reader, out io.Write
 		// now in fractional unix seconds — mirrors Python's time.time() (the throttle
 		// stamp stores/compares this float).
 		now := float64(time.Now().UnixNano()) / 1e9
-		return cmdContextReport(defaultHTTPClient(), cfg, env, now, in, out)
+		return cmdContextReport(defaultHTTPClient(), cfg, env, now, in, out, os.Stderr)
 
 	case "listen":
 		// The canonical SSE downlink: hold GET /api/events open (⇒ server-projected
