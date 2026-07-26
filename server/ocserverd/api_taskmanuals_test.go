@@ -285,3 +285,51 @@ func TestOwnerAssigneeOnCreateIsValidatedAndApplied(t *testing.T) {
 		t.Fatalf("owner assignee not applied: %q", m.Assignee)
 	}
 }
+
+// TestAdminAgentAssigneeIsAppliedOnCreateAndEdit pins the T-6020 half of the
+// assignee gate (owner ruling 2026-07-26): the floor moved from owner to
+// admin_agent, so an admin 助理 sets who executes a task type on BOTH faces.
+// The plain-agent refusal directly above is the other half — the two together
+// are what makes "governance, not owner-only, and not agent-open" a real
+// boundary rather than a direction.
+func TestAdminAgentAssigneeIsAppliedOnCreateAndEdit(t *testing.T) {
+	api := newTasksTestServer(t)
+	if err := api.dal.PutMember(Member{
+		ID: "m-admin", Kind: KindAssistant, RoleKey: adminRoleKey,
+	}); err != nil {
+		t.Fatalf("PutMember: %v", err)
+	}
+	assignee := map[string]any{"kind": "member", "member_id": "m-exec"}
+
+	rec := httptest.NewRecorder()
+	api.HandleCreateTaskManualApiTaskManualsPost(rec, taskReq(t, "POST",
+		"/api/task-manuals",
+		map[string]any{"type_key": "adm-type", "assignee": assignee},
+		"m-admin", "agent"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin create+assignee must 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	m, err := api.dal.GetTaskManual("adm-type")
+	if err != nil || m == nil {
+		t.Fatalf("manual readback: %v %v", m, err)
+	}
+	if m.Assignee != `{"kind":"member","member_id":"m-exec"}` {
+		t.Fatalf("admin assignee not applied on create: %q", m.Assignee)
+	}
+
+	seedManualWithKey(t, api, "adm-edit")
+	rec = httptest.NewRecorder()
+	api.HandleUpdateTaskManualApiTaskManualsTypeKeyPost(rec, taskReq(t, "POST",
+		"/x", map[string]any{"assignee": assignee}, "m-admin", "agent"),
+		"adm-edit")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin edit+assignee must 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	m, err = api.dal.GetTaskManual("adm-edit")
+	if err != nil || m == nil {
+		t.Fatalf("manual readback: %v %v", m, err)
+	}
+	if m.Assignee != `{"kind":"member","member_id":"m-exec"}` {
+		t.Fatalf("admin assignee not applied on edit: %q", m.Assignee)
+	}
+}
