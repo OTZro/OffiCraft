@@ -49,8 +49,16 @@ cd e2e_test && bash run_all.sh
 ## CI
 
 ```bash
-bin/ci.sh          # 讀到 [ci] all green 才算過（不是 exit 0）
+bin/ci.sh          # 綠的判準是「rc == 0 且整份輸出的最後一行精確為 [ci] all green」，兩個條件都要
 ```
+
+判準為什麼是 **AND**（T-d3e3）：兩半各自都不夠。
+
+- **寬鬆 grep 完全無效**：step 0 的 `e2e_test/tests_guard` 第一步就印自己的 `all green`，所以**任何**中途爆掉的 log 裡都已經含有那個子字串。
+- **只看最後一行會被 dispatch 的 lane 偽造**：ci.sh 不是這份 log 的唯一寫入者。一個被 dispatch 的 lane 只要 `echo "[ci] all green"; exit 1`，ci.sh 的 `set -e` 就在那裡中止，偽造的權威剛好留在最後一行——這個假綠是真的被做出來過的。
+- **只看 rc 也不夠**：這個 repo 有前例，`bin/common.sh` 的 `set -e` 打敗了 `run_all.sh` 刻意的 rc 捕獲，讓失敗訊號靜默消失。舊文所以寫「判準是 marker、**不是** exit 0」——那句話講的是 **rc 不足以單獨判綠**，不是「rc 不該被檢查」。要求兩者同時成立比任一半都嚴格，與原意相容。
+
+`bin/tests/ci-success-marker.sh` 是這條規則的可執行形式：它同時掃描 **ci.sh 以及每一個被 dispatch 的 lane 腳本**，要求除了 ci.sh 之外沒有任何 shell 腳本「有能力」印出這個權威字串。
 
 CI 跑在本地（不付 GitHub Actions），從第一個非零步驟就 fail-fast；push 前請自己跑到綠。gate 內容：go gate / 黑箱 lint / gitleaks / FE typecheck+drift。
 

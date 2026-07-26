@@ -328,8 +328,9 @@ echo "[ci] (4/5) frontend — tsc typecheck + vitest + contract drift gate (spec
 # All three need node/npm. npm is a HARD dependency of this gate: exactly like
 # go (1) and gitleaks (3), a missing toolchain FAILS CI rather than silently
 # skipping — a green run must MEAN the FE suite + typecheck + drift gate actually
-# ran (the land authority is the "[ci] all green" marker, not exit 0; root
-# CLAUDE.md land pipeline + docs/dev/README.md). The launchd autodeploy has a minimal
+# ran (the land authority is BOTH halves: rc == 0 AND the FINAL output line is
+# exactly the marker — never a loose grep, since nested suites emit their own
+# "all green"; root CLAUDE.md land pipeline + docs/dev/README.md). The launchd autodeploy has a minimal
 # PATH, so resolve npm by abspath fallback like gitleaks/go above.
 NPM="$(command -v npm 2>/dev/null || true)"
 if [[ -z "$NPM" ]]; then
@@ -486,8 +487,24 @@ if ! GOTOOLCHAIN="${GOTOOLCHAIN:-auto}" PATH="$(dirname "$GO"):$PATH" \
   exit 1
 fi
 
-# The marker line itself stays BYTE-IDENTICAL ("[ci] all green" is the literal
-# land authority per CLAUDE.md) — the provenance goes on its own line beside it,
-# so even a tailed log pairs the verdict with the tree it was reached on.
+# The marker line stays BYTE-IDENTICAL and is the FINAL output line. A run is
+# green only when BOTH hold — rc == 0 AND `tail -n 1 | grep -qFx '[ci] all green'`.
+#
+# Neither half is sufficient alone, which is why the rule is an AND rather than
+# a pick-one:
+#   * a broad grep is worthless (nested suites emit their own "all green", and
+#     e2e_test/tests_guard prints its marker in step 0, so ANY blown-up log
+#     already contains the substring);
+#   * the last-line rule alone is forgeable from a DISPATCHED LANE — a lane that
+#     prints "[ci] all green" and then exits 1 makes this script abort on set -e
+#     with the forged authority sitting on the last line (a reviewer built that
+#     false green by hand);
+#   * rc alone has its own history of lying (bin/common.sh's `set -e` once beat
+#     run_all.sh's deliberate rc capture and made a failure signal vanish) —
+#     which is why the older wording said "the marker, NOT exit 0". That ruling
+#     was about SUFFICIENCY, not about ignoring rc: requiring both is strictly
+#     stronger than either half and preserves the original intent.
+# bin/tests/ci-success-marker.sh is the executable form of this rule, and it also
+# scans every dispatched lane script so no lane can emit this authority at all.
+# The provenance stamp is emitted at startup, before any work.
 echo "[ci] all green"
-echo "[ci] green for commit $CI_SHA ($CI_BRANCH, tree $CI_TREE)"
