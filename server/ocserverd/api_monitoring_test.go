@@ -849,3 +849,163 @@ func TestFoldWorkerCommandResult_NoopStopSkipped(t *testing.T) {
 		t.Fatalf("no-op stop must not pollute the worker last_op, got %+v", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Hardware freshness (T-b36a)
+//
+// Telemetry is only cleared when a member is DISMISSED, never when it goes
+// away, and nothing on the wire has ever said how old a hardware sample is. So
+// a machine that reported once and then went dark kept serving that sample
+// forever — a confident "47%" sitting next to an offline badge. These pin that
+// a sample past hardwareFreshSecs reads as NO DATA (the same honest nulls a
+// machine that never reported hardware serves), and that a fresh one is
+// untouched.
+// ---------------------------------------------------------------------------
+
+// freshnessServer seeds one member reporting from host m-abc123, then returns
+// the server plus a hook that rewrites how long ago its hardware was sampled.
+func freshnessServer(t *testing.T, hw string) (*apiServer, func(ageSecs float64)) {
+	t.Helper()
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	m := fullMember("mira")
+	m.RoleKey = "builder"
+	if err := s.dal.PutMember(m); err != nil {
+		t.Fatalf("seed member: %v", err)
+	}
+	if rec := doIngestTelemetry(s, "mira", "m-abc123",
+		`{"runtime":"claude","hardware":`+hw+`}`); rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	return s, func(ageSecs float64) {
+		entry := s.telemetry.Get("mira")
+		entry["hardware_ts"] = nowSecs() - ageSecs
+		s.telemetry.Set("mira", entry)
+	}
+}
+
+func machineRow(t *testing.T, s *apiServer, machine string) map[string]any {
+	t.Helper()
+	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	for _, raw := range d["machines"].([]any) {
+		row := raw.(map[string]any)
+		if row["machine"] == machine {
+			return row
+		}
+	}
+	t.Fatalf("no machine row for %q in %v", machine, d["machines"])
+	return nil
+}
+
+// TestGetMonitoring_StaleHardwareReadsAsNoData: the counterfactual. A machine
+// that reported 47% CPU and then went dark must stop presenting that number.
+func TestGetMonitoring_StaleHardwareReadsAsNoData(t *testing.T) {
+	s, age := freshnessServer(t,
+		`{"cpu_pct": 47, "ram_pct": 61, "battery_pct": 88, "ac_power": true}`)
+	age(hardwareFreshSecs + 1) // reported, then went away
+
+	row := machineRow(t, s, "m-abc123")
+	for _, key := range []string{"cpu_pct", "ram_pct", "battery_pct", "ac_power"} {
+		if got, present := row[key]; !present || got != nil {
+			t.Errorf("%s = %v, want null — a sample older than %vs is not a live "+
+				"measurement and must read as no data, not as the last value",
+				key, got, hardwareFreshSecs)
+		}
+	}
+	// The machine itself must NOT vanish: "this host exists but nobody has
+	// measured it lately" is exactly the honest state we want on screen.
+	if row["agents"] == nil {
+		t.Errorf("the machine row itself must survive a stale sample; got %v", row)
+	}
+}
+
+// TestGetMonitoring_FreshHardwareStillServed is the SENTINEL: the TTL must not
+// be so eager that it kills healthy data. One heartbeat cadence of age (30s) is
+// the NORMAL steady state — every machine on screen is usually this old.
+func TestGetMonitoring_FreshHardwareStillServed(t *testing.T) {
+	s, age := freshnessServer(t, `{"cpu_pct": 47, "ram_pct": 61, "ac_power": false}`)
+	// Straight off the real ingest path, with NOTHING rewritten: a sample that
+	// just arrived must be served. (This is what goes red if the ingest handler
+	// stops stamping hardware_ts — an unstamped sample is fail-closed stale, so
+	// dropping the stamp would black out every healthy machine.)
+	if got := machineRow(t, s, "m-abc123")["cpu_pct"]; got != 47.0 {
+		t.Fatalf("freshly ingested cpu_pct = %v, want 47", got)
+	}
+	for _, seconds := range []float64{0, 30, hardwareFreshSecs - 1} {
+		age(seconds)
+		row := machineRow(t, s, "m-abc123")
+		if row["cpu_pct"] != 47.0 {
+			t.Errorf("age %vs: cpu_pct = %v, want 47 — a healthy machine that has "+
+				"missed at most two heartbeats must never flicker to no-data",
+				seconds, row["cpu_pct"])
+		}
+		if row["ac_power"] != false {
+			t.Errorf("age %vs: ac_power = %v, want false (a real false, not dropped)",
+				seconds, row["ac_power"])
+		}
+	}
+}
+
+// TestGetMonitoring_UnstampedHardwareIsNotFresh: fail-closed. An entry carrying
+// hardware with no hardware_ts has an UNKNOWN sample age, and unknown age must
+// never be presented as a live reading.
+func TestGetMonitoring_UnstampedHardwareIsNotFresh(t *testing.T) {
+	s, _ := freshnessServer(t, `{"cpu_pct": 47}`)
+	entry := s.telemetry.Get("mira")
+	delete(entry, "hardware_ts")
+	s.telemetry.Set("mira", entry)
+
+	if got := machineRow(t, s, "m-abc123")["cpu_pct"]; got != nil {
+		t.Errorf("cpu_pct = %v, want null — hardware of unknown age is not fresh", got)
+	}
+}
+
+// TestGetMonitoring_LaterReportWithoutHardwareCannotRefreshIt: the freshness
+// verdict is about the HARDWARE SAMPLE, not about the entry. A command_result
+// receipt or an identity-only heartbeat advances entry["ts"] while carrying no
+// hardware at all — reading the entry ts would let it resurrect an arbitrarily
+// old CPU number, which is the same lie in a new costume.
+func TestGetMonitoring_LaterReportWithoutHardwareCannotRefreshIt(t *testing.T) {
+	s, age := freshnessServer(t, `{"cpu_pct": 47}`)
+	age(hardwareFreshSecs + 1)
+	// A hardware-less report lands NOW: entry["ts"] jumps to the present.
+	if rec := doIngestTelemetry(s, "mira", "m-abc123",
+		`{"runtime":"claude","cost": 1.5}`); rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	entry := s.telemetry.Get("mira")
+	if ts, _ := entry["ts"].(float64); nowSecs()-ts > 5 {
+		t.Fatalf("precondition: the entry ts must have been refreshed, got %v", ts)
+	}
+	if got := machineRow(t, s, "m-abc123")["cpu_pct"]; got != nil {
+		t.Errorf("cpu_pct = %v, want null — a report carrying no hardware must not "+
+			"make old hardware look freshly measured", got)
+	}
+}
+
+// TestHandleIngestTelemetry_StampsHardwareSampleTime: the ingest half of the
+// freshness contract. hardware and hardware_ts move together, and a report that
+// carries no hardware must leave the previous sample's stamp ALONE (it did not
+// measure anything, so it has nothing to vouch for).
+func TestHandleIngestTelemetry_StampsHardwareSampleTime(t *testing.T) {
+	api := &apiServer{telemetry: newMemStore(), hub: NewHub()}
+	if rec := doIngestTelemetry(api, "m-1", "m-1",
+		`{"hardware": {"cpu_pct": 1}}`); rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	stamp, ok := api.telemetry.Get("m-1")["hardware_ts"].(float64)
+	if !ok || nowSecs()-stamp > 5 {
+		t.Fatalf("hardware_ts = %v (ok=%v), want the sample time", stamp, ok)
+	}
+	// Rewind, then send a report with NO hardware block.
+	entry := api.telemetry.Get("m-1")
+	entry["hardware_ts"] = 1000.0
+	api.telemetry.Set("m-1", entry)
+	if rec := doIngestTelemetry(api, "m-1", "m-1", `{"cost": 2.5}`); rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	if got, _ := api.telemetry.Get("m-1")["hardware_ts"].(float64); got != 1000.0 {
+		t.Errorf("hardware_ts = %v, want 1000 untouched — a hardware-less report "+
+			"must not vouch for a sample it did not take", got)
+	}
+}

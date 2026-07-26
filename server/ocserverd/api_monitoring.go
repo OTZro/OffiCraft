@@ -486,6 +486,13 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	}
 	if body.Hardware != nil {
 		entry["hardware"] = hardware
+		// Stamp WHEN this hardware sample was taken, separately from the entry's
+		// `ts`. The entry ts advances on EVERY report — a command_result receipt or
+		// an identity-only heartbeat carries no hardware, yet would refresh `ts` and
+		// make a long-dead CPU reading look like it arrived a second ago. The read
+		// path's freshness verdict must be about the hardware sample itself, so it
+		// gets its own stamp (same shape as the gauge's context_pct_ts).
+		entry["hardware_ts"] = nowSecs()
 	}
 	if body.Binaries != nil {
 		entry["binaries"] = binaries
@@ -586,6 +593,33 @@ func entryNum(entry map[string]any, key string) *float64 {
 	return nil
 }
 
+// hardwareFreshSecs is how long a reported hardware sample stays serveable.
+//
+// The warden heartbeat cadence is 30s (cli/ocwarden: reportThrottle), and a
+// heartbeat the server ACCEPTS resets the loop straight back to that cadence, so
+// a healthy machine restamps every ~30s plus request latency. 90s = three
+// cadences: two heartbeats may be lost (a sleeping laptop, a network blip, a
+// server restart mid-cycle) without a healthy machine ever flickering to "no
+// data", while the window in which the cockpit can show a number that is no
+// longer true is bounded at a minute and a half instead of being unbounded.
+//
+// Deliberately NOT tied to presence: "the warden's SSE dropped" and "nobody has
+// measured this box lately" are different facts, and the second is the one these
+// numbers depend on. A machine can be online with a wedged collector, and it can
+// be briefly offline with a 5-second-old sample that is still perfectly true.
+const hardwareFreshSecs = 90.0
+
+// hardwareStampOf reads WHEN the entry's hardware sample was taken. Fail-closed:
+// an entry carrying hardware with no hardware_ts has an UNKNOWN age, and unknown
+// age is not freshness — it reads as the epoch, i.e. stale. Every writer of
+// entry["hardware"] stamps this alongside it (see the ingest handler), so the
+// zero case means "written by something that does not know when it measured",
+// which must never be presented as a live reading.
+func hardwareStampOf(entry map[string]any) float64 {
+	ts, _ := entry["hardware_ts"].(float64)
+	return ts
+}
+
 // GET /api/monitoring — the three-section fold (sessions / machines /
 // accounts) over the roster + gauge + warden telemetry. NEVER fabricates a
 // number: unmeasured stays null / honest-empty.
@@ -683,10 +717,20 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		host := s.observedHost(m)
 		hostCounts[host]++
 		if hw, ok := entry["hardware"].(map[string]any); ok {
-			ts, _ := entry["ts"].(float64)
-			if prior, seen := hwTS[host]; !seen || ts > prior {
-				hwTS[host] = ts
-				hwByHost[host] = hw
+			// A hardware sample is only usable while it is FRESH. Telemetry is
+			// never cleared on disconnect (only on dismissal), so without this
+			// gate a machine that reported once and then went away kept serving
+			// its last CPU/RAM/battery numbers forever — beside an "offline"
+			// badge, with nothing on the wire saying how old they were. That
+			// reads as a confident live measurement and has already been
+			// misread. Past the TTL we serve the SAME honest nulls a machine
+			// that never reported hardware serves, so "no data" looks like no
+			// data. See hardwareFreshSecs for the threshold.
+			if ts := hardwareStampOf(entry); now-ts <= hardwareFreshSecs {
+				if prior, seen := hwTS[host]; !seen || ts > prior {
+					hwTS[host] = ts
+					hwByHost[host] = hw
+				}
 			}
 		}
 		if account := telemetryAccount(entry, m.Runtime); account != "" {
