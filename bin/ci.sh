@@ -4,7 +4,9 @@
 # CI runs LOCALLY (we do not pay for GitHub Actions). Runs, in order, failing
 # fast on the first non-zero step:
 #   1. golang            — gofmt + go vet + go build + committed-prebuilt
-#                          parity dryrun + go test over EVERY module under
+#                          parity dryrun + go test -count=1 (cache-defeat: a
+#                          cached PASS certifies a run that never happened, and
+#                          hides flakes — T-bedc) over EVERY module under
 #                          cli/ and server/ (cli/ocwarden ⇒ bin/ocwarden,
 #                          cli/ocagent ⇒ bin/ocagent, server/ocserverd ⇒
 #                          bin/ocserverd) + gen-ocapi drift gate (committed
@@ -196,7 +198,21 @@ go_module_gate() {
     # *_test.go (compilation), it never executes the assertions; without this
     # gate a broken runtime path would compile clean and ship. A module with no
     # *_test.go reports "no test files" and passes.
-    "$GO" test ./...
+    #
+    # -count=1 is the documented way to DEFEAT go's test-result cache, and it is
+    # load-bearing for the whole meaning of this gate (T-bedc). Without it go
+    # replays a previous PASS whenever the package's inputs hash the same, and
+    # prints `ok  <pkg> (cached)` — observed verbatim in a real CI log as
+    # `ok  	ocwarden	(cached)`. That green certifies a run that DID NOT HAPPEN,
+    # which is fatal here for two reasons: (a) the cache key covers package
+    # inputs, not the world the tests actually touch (ports, clocks, the host
+    # fleet, launchd, the staged embed assets' *effects*), so a test that would
+    # fail TODAY still reports ok; (b) it structurally hides FLAKES — a suite is
+    # only ever executed on the first commit that changes its inputs, so an
+    # intermittent failure is silently amortised to near-zero probability and the
+    # land authority `[ci] all green` becomes a statement about the cache rather
+    # than about the code. bin/tests/go-test-nocache-guard.sh pins this flag.
+    "$GO" test -count=1 ./...
   )
 }
 # Gate EVERY golang module under cli/ AND server/ with folder=module=binary

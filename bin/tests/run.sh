@@ -548,6 +548,26 @@ else
   bad "bin/tests/proc-hygiene-guard.sh is missing"
 fi
 
+# ── go test cache-defeat (T-bedc) ───────────────────────────────────────────
+# bin/ci.sh's step 1e used to run a bare `go test ./...`, so go served green from
+# its TEST RESULT CACHE — a real CI log contained `ok  ocwarden  (cached)`, i.e. a
+# grid cell that certified a run which never executed (and, worse, structurally
+# hid flakes: a suite only runs on the first commit that changes its inputs).
+# `-count=1` defeats that cache; this guard pins the flag on every go test call
+# site in the repo's shell scripts, by COMMAND-POSITION parsing rather than a
+# substring grep (which would match the prose in ci.sh and in the guard itself).
+echo
+NOCACHE="$HERE/go-test-nocache-guard.sh"
+if [[ -f "$NOCACHE" ]]; then
+  if run_guard "$NOCACHE"; then
+    ok "go test cache-defeat suite passed"
+  else
+    bad "go test cache-defeat suite FAILED (see output above)"
+  fi
+else
+  bad "bin/tests/go-test-nocache-guard.sh is missing"
+fi
+
 # ── guard-of-the-guard (T-d3e3 rework) ──────────────────────────────────────
 # The ci success-marker guard is dispatched at the very BOTTOM of this file,
 # AFTER the `[[ "$FAIL" == "0" ]] || exit 1` enforcement below, so its exit code
