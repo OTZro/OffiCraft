@@ -113,6 +113,29 @@ type dispatchSpec struct {
 // dispatcher names one, Machine stays empty — and an empty machine is not a
 // destination (pickWorkerWarden fails closed with a visible reason). That is the
 // point: a placement nobody chose is not a placement.
+//
+// ⚠️ KNOWN LIMITATION — T-8a67's snapshot fixes CLAUDE creators only (T-cd21 holds
+// the real fix; do not read the paragraphs above as covering this). On a TYPED
+// manual-driven task, runtime and effort can never reach the dispatcher pass:
+// outsourceSpecOf fills Runtime=claude / Effort=medium BEFORE it reads a single
+// assignee key, so the manual's silence is indistinguishable from it saying
+// "claude", and only Model and Machine are ever actually snapshotted. For a CODEX
+// creator that combination is incoherent by construction: Runtime is forced to
+// claude, the coupling rule above then correctly drops the creator's codex Model
+// — but the Machine arm has no such coupling, so the creator's CODEX box is still
+// snapshotted. resolveWorkerPlacement then refuses it (machineSupportsRuntime:
+// a reported capability map that does not mention claude means absent, not
+// unknown), and the worker stalls with `machine_unavailable: machine 'X' does not
+// provide the 'claude' runtime`.
+//
+// So for a codex creator this ticket's symptom is NOT fixed, only re-coded: the
+// worker still never boots, it merely says machine_unavailable instead of
+// no_machine_selected. Not a regression (that spawn failed before too), and
+// pinned by TestCreateTypedManualDrivenCodexCreatorStillFailsClosed so the gap
+// cannot quietly disappear from the record. Whether it fails or boots as a claude
+// worker on a codex dev's box depends on what that machine REPORTED: a host with
+// no capability map, or one that lists claude too, boots — still not "one like
+// me", just not refused.
 func inheritDispatchSpec(spec dispatchSpec, manualSpec *outsourceTypeSpec, dispatcher *Member) dispatchSpec {
 	if manualSpec != nil {
 		spec = fillDispatchSpecFrom(spec, dispatchSpec{

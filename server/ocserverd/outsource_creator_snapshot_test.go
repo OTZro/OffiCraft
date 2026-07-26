@@ -16,6 +16,7 @@ package main
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pressly/goose/v3"
@@ -334,6 +335,75 @@ func TestSpawnDispatchTargetOutranksTheManual(t *testing.T) {
 	}
 	if got := api.hub.DrainWardenCommands("m-target-box"); len(got) != 1 {
 		t.Fatalf("the dispatch target must take the worker, got %d frames", len(got))
+	}
+}
+
+// TestCreateTypedManualDrivenCodexCreatorStillFailsClosed pins a KNOWN
+// LIMITATION, not a desired behaviour (T-cd21 holds the fix): T-8a67's snapshot
+// repairs CLAUDE creators only.
+//
+// outsourceSpecOf fills Runtime=claude / Effort=medium BEFORE reading any assignee
+// key, so a typed manual's SILENCE about runtime is indistinguishable from it
+// saying claude — those two of the four fields never reach the creator at all. A
+// codex creator therefore gets runtime=claude with its codex model correctly
+// dropped by the coupling rule, while the MACHINE arm (which has no coupling)
+// still snapshots its codex box. The placement is then refused for the runtime
+// the machine does not provide.
+//
+// This test exists so the gap stays on the record: the ticket's symptom is not
+// fixed for codex creators, only re-coded from no_machine_selected to
+// machine_unavailable. If someone later fixes outsourceSpecOf, this test SHOULD
+// fail — and its failure is the signal to delete it along with the limitation
+// notes in api_tasks.go and server/CLAUDE.md, not to re-pin it.
+func TestCreateTypedManualDrivenCodexCreatorStillFailsClosed(t *testing.T) {
+	api := newWorkerTestServer(t)
+	api.outsourceMaxParallel = 5
+	putWardenFixture(t, api, "m-codex-box")
+	connectWarden(t, api, "m-codex-box")
+	// The creator's own box reports CODEX only. A reported map is the warden's
+	// full answer, so claude is ABSENT there — not merely unprobed.
+	if rec := doIngestTelemetry(api, "m-codex-box", "m-codex-box",
+		`{"runtimes":{"codex":{"installed":true,"logged_in":true}}}`); rec.Code != 200 {
+		t.Fatalf("ingest telemetry: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := api.dal.PutMember(Member{
+		ID: "m-disp", Name: "Codex dev", Kind: KindAssistant, RoleKey: "dev",
+		Runtime: RuntimeCodex, Model: "gpt-5-codex", Effort: "high",
+		DesiredMachineID: "m-codex-box", RosterStatus: RosterStatusActive,
+	}); err != nil {
+		t.Fatalf("seed codex creator: %v", err)
+	}
+	seedOutsourceManual(t, api, "typed", `{"kind":"outsource"}`)
+
+	task := createdTask(t, api, map[string]any{
+		"title": "codex creator, typed manual-driven", "type_key": "typed"})
+
+	// The snapshot DID take the creator's machine — that half works…
+	if task.OutsourceMachine != "m-codex-box" {
+		t.Fatalf("the machine arm has no runtime coupling, so it snapshots "+
+			"regardless: %+v", task)
+	}
+	// …and the runtime half cannot: the manual's default already claimed it, so
+	// the codex model is dropped as another runtime's.
+	if task.OutsourceRuntime != RuntimeClaude || task.OutsourceModel != "" {
+		t.Fatalf("a typed manual defaults runtime to claude before the creator is "+
+			"consulted, which drops its codex model: %+v", task)
+	}
+	// The consequence, stated rather than hidden: no frame, and a receipt naming
+	// the runtime the machine does not provide.
+	w, err := api.dal.GetOutsourceWorker(task.ExecutorID)
+	if err != nil || w == nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if !strings.HasPrefix(w.LastOpReason, placementReasonUnavailable+":") {
+		t.Fatalf("last_op_reason = %q, want a %s receipt", w.LastOpReason,
+			placementReasonUnavailable)
+	}
+	if !strings.Contains(w.LastOpReason, "does not provide the 'claude' runtime") {
+		t.Fatalf("the receipt must name the missing runtime: %q", w.LastOpReason)
+	}
+	if got := api.hub.DrainWardenCommands("m-codex-box"); len(got) != 0 {
+		t.Fatalf("nothing may be dispatched, got %d frames", len(got))
 	}
 }
 

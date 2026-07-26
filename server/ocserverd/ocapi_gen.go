@@ -934,7 +934,7 @@ type OutsourceWorkerDTO struct {
 	// DelegatedBy The RESOLVED display name of the bound task's creator (member or owner) — the real 委託人, replacing the former hardcoded "System owner" placeholder. "" when the task's creator_id is blank (pre-column / server-scheduled rows) → the client shows an honest fallback. T-f190 additive-optional.
 	DelegatedBy *string `json:"delegated_by,omitempty"`
 
-	// DesiredMachineId The OWNER-PINNED machine placement (relocate target), the worker twin of member.desired_machine_id: "" = unpinned (the task's 發包 target, then the type manual, decides) or a concrete machine id. T-f190 additive-optional.
+	// DesiredMachineId The OWNER-PINNED machine placement (relocate target), the worker twin of member.desired_machine_id: "" = unpinned, so the task-side sources decide instead — an EXPLICIT 發包 target on the task row outranks the type manual's assignee, while a manual-driven task's row carries only a creator snapshot and the LIVE manual outranks THAT (T-8a67) — or a concrete machine id. T-f190 additive-optional.
 	DesiredMachineId *string `json:"desired_machine_id,omitempty"`
 
 	// DesiredState Run-intent, a direct mirror of member.desired_state: 'online' (system wants it running) or 'offline' (owner-explicit stop — held down; presence is then 'stopping'/'stopped', every scheduler auto-revival path skips it). The stop/restart toggle key. Additive-optional.

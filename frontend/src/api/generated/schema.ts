@@ -4471,7 +4471,7 @@ export interface components {
             delegated_by: string;
             /**
              * Desired Machine Id
-             * @description The OWNER-PINNED machine placement (relocate target), the worker twin of member.desired_machine_id: "" = unpinned (the task's 發包 target, then the type manual, decides) or a concrete machine id. T-f190 additive-optional.
+             * @description The OWNER-PINNED machine placement (relocate target), the worker twin of member.desired_machine_id: "" = unpinned, so the task-side sources decide instead — an EXPLICIT 發包 target on the task row outranks the type manual's assignee, while a manual-driven task's row carries only a creator snapshot and the LIVE manual outranks THAT (T-8a67) — or a concrete machine id. T-f190 additive-optional.
              * @default
              */
             desired_machine_id: string;

@@ -30,4 +30,20 @@ UPDATE task
  WHERE outsource_model <> '' OR outsource_effort <> '' OR outsource_machine <> '';
 
 -- +goose Down
+--
+-- ⚠️ THE ROLLBACK IS ASYMMETRIC — read this before running it. Dropping the column
+-- is only safe while no row created by the NEW code exists. After this lands,
+-- every manual-driven outsource task is written with outsource_effort='medium'
+-- (the type manual's assignee schema default) and dispatched=0. Roll the DB back
+-- WITHOUT rolling the code back and the retired inference — "any of
+-- model/effort/machine non-empty ⇒ explicit dispatch" — re-reads that whole
+-- population as explicit dispatches, which SKIPS the scheduler's by-creator spawn
+-- gate (outsource_sched.go arm ④). That is the exact impersonation bug this
+-- migration exists to make impossible, reintroduced in bulk rather than one row
+-- at a time.
+--
+-- So the recovery direction is FORWARD, and it is cheap: fix the code and, if a
+-- rollback already happened, re-add the column and re-derive it
+-- (`UPDATE task SET outsource_dispatched = …`) from what those rows actually are.
+-- Going down is not the safe default here just because it is the reversible one.
 ALTER TABLE task DROP COLUMN outsource_dispatched;
