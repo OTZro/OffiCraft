@@ -43,9 +43,20 @@
 # locked, re-imaged release host, wrong machine) and a human must go re-provision
 # the release machine (`bash bin/setup-codesign-cert`). That is the point of
 # asking for a signed build: you get one, or you get nothing. Do NOT restate this
-# as "otherwise the fleet silently loses its TCC grants" — whether a self-signed
-# identity affects TCC persistence at all is unverified in both directions (see
-# the long note in bin/codesign-artifact).
+# as "otherwise the fleet silently loses its TCC grants": whether self-signed
+# codesign is effective for macOS TCC authorization is only STRONGLY SUSPECTED to
+# be INEFFECTIVE, with no 100% conclusion in EITHER direction (owner, 2026-07-26).
+# The canonical statement lives in bin/codesign-artifact — read it there, and do
+# not paraphrase it here.
+#
+# ⚠️ THIS PATH IS NOT VERIFIED AGAINST A REAL KEYCHAIN. Signing is off by default,
+# so `--sign` is an explicit exception path, and as of T-588c nobody has run it on
+# a provisioned machine end to end. bin/tests/run.sh proves the REQUIREMENT
+# reaches codesign-artifact (PATH-shimmed `security`/`codesign`, no keychain), and
+# bin/tests/release-guard.sh proves `--sign` routes through this script — but a
+# real `security find-identity` + real `codesign --verify` under `bin/release
+# publish --sign` is an accepted, KNOWN-UNTESTED boundary. Do not read the green
+# suites as evidence that a signed release has ever been produced.
 #
 # CLOSED SINCE T-588c (this was a KNOWN GAP under T-da4b): back when publishing
 # meant a hand-pasted `gh release create`, this script was an opt-in entry point

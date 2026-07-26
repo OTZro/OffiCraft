@@ -74,10 +74,14 @@ fi
 # SINCE T-588c THIS IS A NO-OP UNLESS SIGNING WAS EXPLICITLY REQUESTED, and the
 # helper stops above the keychain probe, so a plain build touches no keychain.
 # T-33d5's rationale was that a stable identity would let the server binary's
-# macOS TCC grants survive autodeploy / GitHub-release upgrades; THAT WAS NEVER
-# VERIFIED, and it must not be restated here as settled in either direction (see
-# bin/codesign-artifact). The owner's reason for switching signing off is
-# operational: it was obstructing the tests and the act of publishing.
+# macOS TCC grants survive autodeploy / GitHub-release upgrades. THAT CLAIM IS
+# NOT ESTABLISHED: whether self-signed codesign is effective for macOS TCC is
+# only STRONGLY SUSPECTED to be INEFFECTIVE, with no 100% conclusion in
+# EITHER direction (owner, 2026-07-26; basis: during the period when signing WAS
+# on, he still hit permission prompts more than once). Canonical statement:
+# bin/codesign-artifact. Do not paraphrase it here.
+# The owner's reason for switching signing off is operational and is the only
+# reason: it was obstructing the tests and the act of publishing.
 #
 # NOT the release path (T-da4b). This script also runs on every dev Mac and on
 # the prod host via bin/autodeploy, so signing stays advisory here: no identity =

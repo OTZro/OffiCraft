@@ -12,9 +12,12 @@
 # no build, no CI run and no `bin/release publish` consults the keychain unless
 # signing is explicitly requested (`bin/release publish --sign`). Provision this
 # only if you are deliberately cutting a signed release. T-33d5 justified signing
-# by arguing a stable identity keeps macOS TCC grants alive across self-updates;
-# THAT WAS NEVER VERIFIED and this file does not assert it in either direction —
-# see the long note in bin/codesign-artifact.
+# by arguing a stable identity keeps macOS TCC grants alive across self-updates.
+# THAT CLAIM IS NOT ESTABLISHED: whether self-signed codesign is effective for
+# macOS TCC is only STRONGLY SUSPECTED to be INEFFECTIVE, with no 100% conclusion in
+# EITHER direction (owner, 2026-07-26; basis: during the period when signing WAS
+# on, he still hit permission prompts more than once). Canonical statement:
+# bin/codesign-artifact. Do not paraphrase it here.
 #
 # Idempotent: if the identity already exists in the keychain this exits 0
 # without touching anything. Re-provisioning on purpose (e.g. after deleting

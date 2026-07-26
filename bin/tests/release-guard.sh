@@ -149,6 +149,23 @@ release_cli() {
 # stored_json — the payload the gh shim will hand back. Defaults describe a
 # CORRECT prerelease; each case overrides exactly ONE field, so a red case points
 # at one rule rather than at "something in here is wrong".
+#
+# THE FIXTURE IS MEASURED AGAINST REAL GITHUB, NOT INVENTED (2026-07-26). A shim
+# that returns a made-up shape tests the code against the test author's guess, and
+# stays green forever while the real payload differs — which is exactly how the
+# `file -b` arch check shipped broken (it matched an ordering `file` never emits).
+# So this fixture mirrors an actual `gh release view --json
+# assets,isDraft,isPrerelease,targetCommitish` run on pkyosx/OffiCraft v0.5.38:
+#
+#   isDraft False | isPrerelease True | targetCommitish fb89a69aad8c
+#   {'name': 'checksums.txt',                          'state': 'uploaded', 'size': 181}
+#   {'name': 'install.sh',                             'state': 'uploaded', 'size': 70730}
+#   {'name': 'officraft-v0.5.38-darwin-arm64.tar.gz',  'state': 'uploaded', 'size': 16842394}
+#
+# Confirmed by that run: the asset sub-fields name/state/size exist, `state` is the
+# literal string "uploaded", and `size` is a non-zero integer — i.e. the three
+# things verify_stored_release actually keys off. Re-measure before changing the
+# shape here; do not "tidy" it to match what the code expects.
 TAG="v9.9.9-guard"
 SHA="0123456789abcdef0123456789abcdef01234567"
 TARBALL="officraft-$TAG-darwin-arm64.tar.gz"

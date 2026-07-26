@@ -50,8 +50,22 @@
 #                   present AND state=uploaded, targetCommitish == <sha>,
 #                   isDraft == false, isPrerelease == true. Anything else exits
 #                   non-zero NAMING the failed item.
+#                   The shape of that payload is MEASURED, not assumed — see the
+#                   note above verify_stored_release.
 #   8. SETTLE     — poll the live station until GET /api/version reports a git_sha
 #                   that matches <sha> AND GET /api/health answers ok.
+#                   ⚠️ PUBLISH DOES NOT TRIGGER THE UPGRADE. This step only
+#                   OBSERVES one. The station picks a new release up by itself
+#                   because auto_update is enabled on the owner's account, and a
+#                   PRERELEASE does qualify: measured 2026-07-26, the station moved
+#                   onto v0.5.38 (isPrerelease=true) about 2-3 minutes after the
+#                   release was created, and /api/version's git_sha reconciled. So
+#                   waiting here is the correct operational expectation, not a
+#                   design gap. But if auto_update is ever switched OFF on that
+#                   account, this step will fail — CORRECTLY, and for a reason
+#                   that has nothing to do with the release itself. That is why
+#                   the timeout message names the unmet item explicitly instead of
+#                   just saying the publish failed.
 #
 # --dry-run stops after step 5 and prints the exact upload command it would have
 # run. That is the shape used to rehearse a release, because steps 6-8 mutate
@@ -78,15 +92,20 @@
 # sets OC_CODESIGN_REQUIRE=1: a missing identity, a locked keychain or a failed
 # verify HARD-STOPS the release. There is deliberately NO adhoc fallback under
 # --sign; if you asked for a signed release you get one or you get nothing.
+#   ⚠️ --sign IS NOT VERIFIED AGAINST A REAL KEYCHAIN. As of T-588c no signed
+#   release has been produced end to end on a provisioned machine. The tests prove
+#   the ROUTING (that --sign reaches bin/build-release with the identity made
+#   mandatory), not that real signing works. Accepted known boundary — stated here
+#   so nobody mistakes a green suite for a proven path.
 #   ⚠️ DO NOT write "the cost of not signing is macOS re-prompting for TCC
-#   permissions" — or any variant of it — into this file, into
-#   bin/codesign-artifact, or into the docs. Whether a SELF-SIGNED identity makes
-#   TCC authorization stick is NOT settled: it is strongly suspected NOT to, and
-#   it has never been demonstrated either way. That sentence was written down as
-#   a settled cost once and it was not one. Do not replace it with the opposite
-#   settled claim either — an unproven negative is still unproven. If someone
-#   needs the answer, the honest move is to test it on a real machine and bring
-#   the evidence, not to narrate a conclusion here.
+#   permissions", and do NOT write the opposite ("self-signing provably does
+#   nothing for TCC"). Both are over-claims: whether self-signed codesign is
+#   effective for macOS TCC authorization is only STRONGLY SUSPECTED to be
+#   INEFFECTIVE, with NO 100% conclusion in either direction (owner, 2026-07-26;
+#   his basis: during the period when signing WAS on, he still hit permission
+#   prompts more than once). The canonical statement — including why the
+#   default-off decision does not depend on that question at all — lives in
+#   bin/codesign-artifact. Read it there; do not paraphrase it here.
 #
 # The repo tree stays ZERO-BINARY: artifacts land in dist/release/ (gitignored),
 # nothing is committed, and the staging worktree is removed on exit.
@@ -403,6 +422,26 @@ verify_artifacts() {
 }
 
 # verify_stored_release <tag> <expected-target-or-empty> <prerelease|final>
+#
+# THE PAYLOAD SHAPE IS MEASURED, NOT ASSUMED (2026-07-26). Everything below keys
+# off `gh release view --json ...`, so it depends on field names AND on the exact
+# value `"uploaded"`. Assuming an external tool's output format is precisely how
+# the arch check in verify_artifacts shipped broken — it pattern-matched `file -b`
+# in an order `file` never emits, so every publish died there. Measured instead,
+# against pkyosx/OffiCraft v0.5.38:
+#
+#   $ gh release view v0.5.38 --json assets,isDraft,isPrerelease,targetCommitish
+#   isDraft False | isPrerelease True | targetCommitish fb89a69aad8c
+#   {'name': 'checksums.txt',                          'state': 'uploaded', 'size': 181}
+#   {'name': 'install.sh',                             'state': 'uploaded', 'size': 70730}
+#   {'name': 'officraft-v0.5.38-darwin-arm64.tar.gz',  'state': 'uploaded', 'size': 16842394}
+#
+# So: the asset sub-fields `name`/`state`/`size` DO exist, `state` is the literal
+# string "uploaded" for a healthy asset, and `size` is a non-zero integer. If a
+# future gh changes any of that, the read-back fails CLOSED (it will name
+# asset-uploaded) rather than passing on a field it can no longer see — but
+# re-measure before "fixing" it.
+#
 #   Asks GitHub what it stored and enforces every read-back DoD item. On success
 #   it prints, on STDOUT: line 1 = targetCommitish, lines 2+ = the asset
 #   fingerprint (name<TAB>size, sorted). Everything human-readable goes to stderr
@@ -481,6 +520,16 @@ for n in sorted(want):
 # field to reconcile against (the version field is 0.0.0 on a self-build). Health
 # is checked too, because a server that answers /api/version from a half-booted
 # state is not a successful upgrade.
+#
+# THIS FUNCTION ONLY OBSERVES; IT NEVER PUSHES. Nothing here (and nothing anywhere
+# in publish) tells the station to upgrade. The station's own auto_update picks the
+# new release up — including a PRERELEASE — and it took about 2-3 minutes when this
+# was measured on 2026-07-26 (v0.5.38, isPrerelease=true, git_sha reconciled). The
+# default budget below is 60 x 5s = 5 minutes, i.e. roughly double the measured
+# latency. If auto_update is ever turned off on the owner's account this step
+# starts failing while the release itself is perfectly fine, so the timeout has to
+# say WHICH thing did not happen — a bare "publish failed" would send the next
+# person hunting the artifacts instead of the account setting.
 settle_station() {
   local SHA="$1" SHORT="$2" i seen=""
   say "settle: waiting for $SITE to report git_sha matching $SHORT (up to $((SETTLE_TRIES * SETTLE_SLEEP))s)"
@@ -500,7 +549,7 @@ except Exception: print("")' 2>/dev/null || true)"
     fi
     sleep "$SETTLE_SLEEP"
   done
-  fail_item station-settle "$SITE never reported a git_sha matching $SHORT (last seen: '${seen:-<none>}') — the assets are published but the station is NOT running this release."
+  fail_item station-settle "the station at $SITE did not upgrade to $SHORT within $((SETTLE_TRIES * SETTLE_SLEEP))s (its /api/version git_sha last read: '${seen:-<none>}'). THIS IS THE ONLY UNMET ITEM: the assets uploaded and the stored release read back correct, so the tag, the artifacts and the target commit are all fine — what did not happen is the station moving onto them. publish never pushes an upgrade; it waits for the station's own auto_update to pick the release up (measured at ~2-3 min). Check that auto_update is still enabled on the owner's account before suspecting the release."
 }
 
 write_package_readme() { # write_package_readme <path> <tag> <short-sha>

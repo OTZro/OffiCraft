@@ -45,9 +45,20 @@
 //   - BACKOFF: a failed cycle (server down / auth reject / verify fail) never swaps
 //     and retreats onto an exponential backoff so a broken server is not hammered.
 //
-// SIGNATURE OBSERVABILITY, NEVER ENFORCEMENT (T-33d5): release machines sign the
-// served binaries with a stable self-signed identity (bin/codesign-artifact) so
-// macOS TCC grants survive swaps. After a swap the loop LOGS the new binary's
+// SIGNATURE OBSERVABILITY, NEVER ENFORCEMENT (T-33d5): release machines COULD sign
+// the served binaries with a stable self-signed identity (bin/codesign-artifact),
+// and T-33d5's stated hope was that this would make macOS TCC grants survive
+// swaps. Two corrections, both since T-588c:
+//   - SIGNING IS OFF BY DEFAULT and nothing in the normal build/CI/publish path
+//     signs anything, so in practice the binaries this loop swaps in are adhoc.
+//   - THAT TCC CLAIM IS NOT ESTABLISHED. Whether self-signed codesign is effective
+//     for macOS TCC authorization is only STRONGLY SUSPECTED TO BE INEFFECTIVE,
+//     with no 100% conclusion in either direction (owner, 2026-07-26; his basis:
+//     during the period when signing WAS on, he still hit permission prompts more
+//     than once). Do not write it as fact in either direction. The one canonical
+//     statement lives in bin/codesign-artifact — read it there.
+//
+// None of this changes what the code does. After a swap the loop LOGS the new binary's
 // code-signing identity (adhoc / the signing CN / unsigned) purely for the
 // operator's eyeballs. It deliberately does NOT verify-or-refuse: a self-built
 // certificate fails `codesign --verify` on any machine that never trusted it,
