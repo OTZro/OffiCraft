@@ -552,9 +552,16 @@ echo "bin tests (incl. install guard): $PASS ok, $FAIL failed"
 [[ "$FAIL" == "0" ]] || exit 1
 
 # T-d3e3: the top-level marker is a final exact log authority, not a broad grep.
+# This file runs under `set -uo pipefail` with NO -e, so the guard's exit code
+# must be enforced EXPLICITLY (same convention as the `[[ "$FAIL" == "0" ]] ||
+# exit 1` above). Without the `|| exit 1` the guard is decorative: it prints
+# FAIL and run.sh still exits 0, so CI step 0b stays green on a forged marker.
+# Dispatched through run_guard (T-1a54) like every other guard in this file, so
+# it inherits the wall-clock ceiling and the process-group reap rather than
+# being the one guard that can hang the harness forever.
 MARKER_GUARD="$HERE/ci-success-marker.sh"
 if [[ -x "$MARKER_GUARD" ]]; then
-  bash "$MARKER_GUARD"
+  run_guard "$MARKER_GUARD" || exit 1
 else
   echo "FATAL: ci success-marker guard missing/not executable: $MARKER_GUARD" >&2
   exit 1

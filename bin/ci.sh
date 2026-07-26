@@ -328,8 +328,9 @@ echo "[ci] (4/5) frontend — tsc typecheck + vitest + contract drift gate (spec
 # All three need node/npm. npm is a HARD dependency of this gate: exactly like
 # go (1) and gitleaks (3), a missing toolchain FAILS CI rather than silently
 # skipping — a green run must MEAN the FE suite + typecheck + drift gate actually
-# ran (the land authority is the "[ci] all green" marker, not exit 0; root
-# CLAUDE.md land pipeline + docs/dev/README.md). The launchd autodeploy has a minimal
+# ran (the land authority is `tail -n 1 | grep -qFx '[ci] all green'` — the FINAL
+# output line, not exit 0 and not a loose grep, since nested suites emit their own
+# "all green"; root CLAUDE.md land pipeline + docs/dev/README.md). The launchd autodeploy has a minimal
 # PATH, so resolve npm by abspath fallback like gitleaks/go above.
 NPM="$(command -v npm 2>/dev/null || true)"
 if [[ -z "$NPM" ]]; then
