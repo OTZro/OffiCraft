@@ -326,6 +326,7 @@ describe("OutsourcePanel", () => {
     unread.unmount();
     __resetMock();
     window.location.hash = "";
+    scrollIntoView.mockClear();
     __injectMockTask(mkTask({ id: "t-read-entry", createdTs: 92 }));
     __injectMockOutsourceWorker(
       mkWorker({ id: "ow-read-entry", codename: "O-read", taskId: "t-read-entry" }),
@@ -344,7 +345,57 @@ describe("OutsourcePanel", () => {
     fireEvent.click(await read.findByTestId("outsource-row-ow-read-entry"));
     await read.findByText("最後一筆");
     expect(read.container.querySelector(".chat__unread-divider")).toBeNull();
-    expect(scrollIntoView).toHaveBeenCalled();
+    expect(
+      scrollIntoView.mock.instances.some((el) =>
+        (el as Element).classList.contains("chat__scroll-anchor"),
+      ),
+    ).toBe(true);
+  });
+
+  it("switching from a populated staff room to an unread worker room keeps the worker entry snapshot", async () => {
+    const now = Date.now() / 1000;
+    __injectMockChat({
+      id: "staff-old",
+      from: "mira",
+      to: "owner",
+      body: "正職既有訊息",
+      ts: now - 50,
+      attachments: [],
+      replyCardId: null,
+    });
+    __injectMockTask(mkTask({ id: "t-switch", createdTs: 93 }));
+    __injectMockOutsourceWorker(
+      mkWorker({ id: "ow-switch", codename: "O-switch", taskId: "t-switch" }),
+    );
+    __injectMockChat({
+      id: "worker-switch-read",
+      from: "ow-switch",
+      to: "owner",
+      body: "外包已讀",
+      ts: now - 31,
+      attachments: [],
+      replyCardId: null,
+    });
+    __injectMockChat({
+      id: "worker-switch-unread",
+      from: "ow-switch",
+      to: "owner",
+      body: "外包未讀",
+      ts: now - 30,
+      attachments: [],
+      replyCardId: null,
+    });
+    await api.markChatRead({ peer: "ow-switch", lastReadTs: now - 31 });
+
+    const office = renderOffice();
+    await office.findByText("正職既有訊息");
+    window.location.hash = "#office/chat/ow-switch";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    await office.findByText("外包未讀");
+    const divider = office.container.querySelector(".chat__unread-divider");
+    expect(divider?.nextElementSibling?.getAttribute("data-msg-id")).toBe(
+      "worker-switch-unread",
+    );
   });
 
   it("orders rows by the bound TASK's created_ts, newest first", async () => {
