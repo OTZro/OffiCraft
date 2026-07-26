@@ -297,6 +297,71 @@ describe("WorkerDetailPanel — 改機器 relocate (T-f190 item 3)", () => {
     );
   });
 
+  // ── the relocate LIFECYCLE on THIS panel (T-e0e3 review E.1/E.2) ──────────
+  // Both cases mount the REAL WorkerDetailPanel through OfficePage. The hook's
+  // own suite drives a test-owned Harness and feeds `currentMachineId` itself,
+  // so it could not have caught what was actually broken: THIS panel passed
+  // nothing, `landed` was false by construction, and a 改機器 that succeeded in
+  // two seconds still span for the full 30s and then painted an error-styled
+  // timeout — on the exact panel the owner filed the report about. "The state
+  // machine is correct" and "it is wired up" are different claims, and only the
+  // second one was ever in doubt here.
+  //
+  // The receipt-driven failure/stale-receipt arms live in the hook suite: the
+  // mock adapter reflects EVERY relocate as landed, so a refusal cannot be
+  // staged through it without making the mock lie about the server.
+
+  it("SENTINEL: 改機器 enters 更換中 and blocks a duplicate operation", async () => {
+    // The over-correction guard for the case below. "Never enter 更換中" would
+    // also make a landed relocate look instantaneous while destroying the whole
+    // feature the owner asked for (「按了沒反應」 was half the report).
+    // Asserted SYNCHRONOUSLY after the click: the relocate promise resolves on a
+    // microtask, so anything awaited here could miss the state legitimately.
+    __setMockMemberOnline("warden-mbp5", true);
+    __injectMockTask(mkTask({ id: "t-1" }));
+    __injectMockOutsourceWorker(
+      mkWorker({ id: "ow-1", taskId: "t-1", machine: "", desiredMachineId: "" }),
+    );
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+    const btn = (await findByTestId(
+      "worker-detail-relocate",
+    )) as HTMLButtonElement;
+    await waitFor(() => expect(btn.disabled).toBe(false));
+
+    fireEvent.click(btn);
+    expect(btn.textContent).toContain("更換中");
+    expect(btn.disabled).toBe(true); // no second dispatch from a double-click
+    fireEvent.click(btn);
+  });
+
+  it("a LANDED relocate ends 更換中 — this panel never times out on success", async () => {
+    __setMockMemberOnline("warden-mbp5", true);
+    __injectMockTask(mkTask({ id: "t-1" }));
+    __injectMockOutsourceWorker(
+      mkWorker({ id: "ow-1", taskId: "t-1", machine: "", desiredMachineId: "" }),
+    );
+    const { findByTestId, queryByTestId } = renderOfficeAt(
+      "#office/worker/ow-1",
+    );
+    const btn = (await findByTestId(
+      "worker-detail-relocate",
+    )) as HTMLButtonElement;
+    await waitFor(() => expect(btn.disabled).toBe(false));
+    fireEvent.click(btn);
+
+    // The move lands (the machine cell adopts the new machine) …
+    await waitFor(async () =>
+      expect((await findByTestId("worker-detail-machine")).textContent).toBe(
+        "Warden · mbp5",
+      ),
+    );
+    // … and THAT is what must end the wait. No timer is advanced: if this ever
+    // needs a fake clock to pass, the landing signal has been lost again.
+    await waitFor(() => expect(btn.textContent).not.toContain("更換中"));
+    expect(btn.disabled).toBe(false);
+    expect(queryByTestId("worker-detail-relocate-notice")).toBeNull();
+  });
+
   it("with TWO online machines, 改機器 opens the machine picker", async () => {
     __setMockMemberOnline("warden-mbp5", true);
     __setMockMemberOnline("m-server-self", true);

@@ -645,6 +645,18 @@
   gap: 4px;
 }
 
+/* The server's verbatim refusal reason under the failure notice. It is free
+ * server text (machine ids, quoted paths) that does NOT inherit `.doc-md`, so it
+ * declares its own wrapping — see frontend/CLAUDE.md, T-d451: a non-breaking
+ * token here would push the whole label row past the mobile viewport. Bounded so
+ * a long receipt cannot take over the panel. */
+.mp-relocate__reason {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-align: right;
+  opacity: 0.75;
+}
+
 /* Stacked second field inside one info cell (owner layout: 模型+EFFORT share
  * the left cell; 機器+Claude Account share the right cell). */
 .mp-field__label--stacked {

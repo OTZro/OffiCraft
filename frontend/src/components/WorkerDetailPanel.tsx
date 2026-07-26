@@ -66,6 +66,33 @@ export function WorkerDetailPanel({
   const dash = t.workerDetail.dash;
 
   const { machines } = useMachines();
+  // 🔴 The relocate progress signal, in the SHAPE the hook compares (review
+  // E.1/E.2). This panel used to pass nothing at all, so `landed` was false by
+  // construction and EVERY successful 改機器 here spun the full 30s and then
+  // painted an error-styled timeout — on the very panel the owner reported.
+  //
+  // It cannot be `worker.machine` raw: that is a DISPLAY NAME (server-side
+  // `machineDisplay`), and comparing it against `desiredMachineId` (a raw id)
+  // is never equal. Resolve it back through the machine registry — the same list
+  // the picker already binds — and fall through to the raw value, because
+  // machineDisplay itself falls back to the id when a machine has no label.
+  //
+  // WHAT IT HONESTLY MEANS, stated because the hook's prop doc warns about
+  // exactly this class of signal: for a worker, `machine` is the last DISPATCH
+  // TARGET. So convergence proves "the server acted on the new pin and sent the
+  // start there", NOT "the agent is up on it". That is the right end for
+  // 「更換中…」 — it is the owner's own operation completing — and it is a real
+  // transition, not a degenerate one: before the relocate this holds the OLD
+  // machine, so it can only equal the new pin after a dispatch actually
+  // happened. Arrival is a separate fact and is not claimed anywhere here.
+  const observedMachineId = (() => {
+    const shown = (worker.machine ?? "").trim();
+    if (!shown) return null;
+    const hit = machines.find(
+      (m) => m.displayName === shown || m.machineId === shown,
+    );
+    return hit ? hit.machineId : shown;
+  })();
   // 改機器 (shared control — the member panel's, 文案統一 to 編輯): the picker's
   // bound entry is the owner-pinned placement (raw machine id).
   const { relocateAction, relocatePicker } = useRelocateMachine({
@@ -77,6 +104,15 @@ export function WorkerDetailPanel({
     pickerTitle: t.workerDetail.relocateTitle,
     pickerConfirmLabel: t.workerDetail.relocateConfirm,
     noOnlineTitle: t.workerDetail.noOnlineMachine,
+    currentMachineId: observedMachineId,
+    // The failure half: the server writes a receipt for every refused spawn, so
+    // a relocate that cannot land is answerable in seconds instead of at the
+    // 30s ceiling.
+    dispatchReceipt: {
+      at: worker.lastOpAt ?? null,
+      ok: worker.lastOpOk ?? null,
+      reason: worker.lastOpReason ?? "",
+    },
   });
 
   // ── honest presence projection (A案 P6 — the ONE member vocabulary) ────────

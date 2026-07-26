@@ -100,6 +100,25 @@ interface UseRelocateMachineOpts {
    * this exact reason (its own comment names the desired_machine residual); the
    * self-heal signal is gated with it. */
   currentMachineId?: string | null;
+  /** The subject's LAST-OPERATION RECEIPT, when the wire carries one (outsource
+   * worker rows do: `last_op` / `last_op_ok` / `last_op_reason` / `last_op_at`).
+   *
+   * 🔴 This is the FAILURE half of the relocate lifecycle. `landed` only ever
+   * says "it worked"; without a receipt the ONLY exit from 「更換中…」 for a move
+   * the server refused is the full RELOCATE_TIMEOUT_MS — 30 seconds of spinner
+   * for an answer the server already wrote down. When the receipt CHANGES while
+   * a relocate is in flight and reports `ok === false`, the wait ends
+   * immediately, the reason is shown verbatim, and the button becomes the retry.
+   *
+   * Edge-detected on `at`, never on the value: a stale receipt from BEFORE this
+   * relocate must not fail the new attempt, and comparing timestamps against the
+   * browser's clock would make that correctness depend on clock skew. The `at`
+   * seen at fire time is the baseline; any different `at` afterwards is news. */
+  dispatchReceipt?: {
+    at?: number | null;
+    ok?: boolean | null;
+    reason?: string;
+  } | null;
 }
 
 /**
@@ -119,6 +138,7 @@ export function useRelocateMachine({
   noOnlineTitle,
   withIcon,
   currentMachineId,
+  dispatchReceipt,
 }: UseRelocateMachineOpts): {
   relocateAction: ReactNode | undefined;
   relocatePicker: ReactNode | undefined;
@@ -139,10 +159,16 @@ export function useRelocateMachine({
   // NONCE rather than a bool so a second fire re-arms the 2s window instead of
   // riding out the first one's.
   const [sentNonce, setSentNonce] = useState(0);
+  // The server's own words for why the last operation failed, shown under the
+  // failure notice. Cleared with every fresh attempt so a healed row cannot keep
+  // explaining a move that already succeeded.
+  const [failureReason, setFailureReason] = useState("");
   useEffect(() => {
     setUndispatched(false);
     setPhase("idle");
     setSentNonce(0);
+    setFailureReason("");
+    setPickerOpen(false);
   }, [subjectId]);
   useEffect(() => {
     if (sentNonce === 0) return;
@@ -183,6 +209,27 @@ export function useRelocateMachine({
     }
   }, [landed]);
 
+  // ── the server-recorded outcome (the FAILURE exit from 「更換中…」) ──────────
+  // A relocate the server refused is knowable long before the 30s ceiling: the
+  // worker row carries a receipt for every non-dispatch. Baseline is whatever
+  // receipt existed WHEN THE MOVE WAS FIRED, so only a NEW one is this move's
+  // answer — an old failure must not condemn a fresh attempt.
+  const receiptAt = dispatchReceipt?.at ?? null;
+  const receiptBaselineRef = useRef<number | null>(receiptAt);
+  useEffect(() => {
+    if (phase !== "relocating") return;
+    if (receiptAt == null || receiptAt === receiptBaselineRef.current) return;
+    receiptBaselineRef.current = receiptAt;
+    // ok === false is the only definite refusal. `true`/null mean the server has
+    // nothing bad to say, and success is `landed`'s job to declare — reading a
+    // successful receipt as "arrived" would repeat the exact mistake this whole
+    // change exists to stop (a dispatch is not an arrival).
+    if (dispatchReceipt?.ok === false) {
+      setFailureReason((dispatchReceipt.reason ?? "").trim());
+      setPhase("failed");
+    }
+  }, [phase, receiptAt, dispatchReceipt?.ok, dispatchReceipt?.reason]);
+
   // The ceiling on 「更換中…」. Re-armed on every entry into `relocating`, torn
   // down the moment the phase leaves it (landed / failed / agent switch), so a
   // move that lands can never be reported as a timeout afterwards.
@@ -201,6 +248,10 @@ export function useRelocateMachine({
     if (phaseRef.current === "relocating") return;
     setPickerOpen(false);
     setUndispatched(false); // a fresh attempt clears the previous verdict
+    setFailureReason("");
+    // Re-baseline: from here on, only a receipt written AFTER this click is an
+    // answer to it.
+    receiptBaselineRef.current = receiptAt;
     // 🔴 A move to the machine the agent is ALREADY OBSERVED ON never enters
     // 「更換中…」 (owner ruling 3a). There is no observable transition to wait
     // for — `observedMachineId` is already the target and stays it right through
@@ -288,12 +339,25 @@ export function useRelocateMachine({
         <span>{relocating ? t.machine.relocating : t.settings.edit}</span>
       </button>
       {notice ? (
-        <div
-          className="mp-field__hint mp-info2__error"
-          data-testid={`${testId}-notice`}
-        >
-          {notice}
-        </div>
+        <>
+          <div
+            className="mp-field__hint mp-info2__error"
+            data-testid={`${testId}-notice`}
+          >
+            {notice}
+          </div>
+          {phase === "failed" && failureReason ? (
+            // The server's own receipt, verbatim. It names the machine and the
+            // cause; paraphrasing it here would be a second, drifting copy of a
+            // diagnosis that only the server can make.
+            <div
+              className="mp-field__hint mp-relocate__reason"
+              data-testid={`${testId}-reason`}
+            >
+              {failureReason}
+            </div>
+          ) : null}
+        </>
       ) : sentNonce > 0 ? (
         <div className="mp-field__hint" data-testid={`${testId}-sent`}>
           {t.machine.relocateSent}

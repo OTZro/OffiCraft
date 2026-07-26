@@ -24,6 +24,22 @@ const SHOT_DIR = process.env.RELOCATE_SHOT_DIR ?? "test-results/relocate-720";
 /** Must stay >= RELOCATE_TIMEOUT_MS in useRelocateMachine.tsx. */
 const PAST_TIMEOUT_MS = 31_000;
 
+/** ⚠️ WITHOUT THIS THE GUARD CANNOT PASS, EVER — it is not a flake allowance.
+ *
+ * State 2 is the RELOCATE_TIMEOUT_MS (30s) notice, waited for in real time on
+ * purpose (a faked clock replaces page timers wholesale and this guard is about
+ * what the owner's browser actually paints). Playwright's per-test budget is
+ * 30_000ms by default and playwright-ct.config.ts sets none, so a 30s wait ran
+ * out of test before it ran out of timer: both cases failed deterministically,
+ * every run, since the day they were written.
+ *
+ * Sized from the thing being waited for, not padded by feel: the 30s timer, plus
+ * the mount/machine-registry warm-up, plus the two screenshots, doubled for a
+ * loaded CI box. Keep it strictly greater than PAST_TIMEOUT_MS + the assertion's
+ * own 10s slack below, or this comes straight back. */
+const TEST_BUDGET_MS = 120_000;
+test.describe.configure({ timeout: TEST_BUDGET_MS });
+
 /** The row must not push anything past the viewport, and the page must not gain
  * a horizontal scrollbar. Measured on the ROW ELEMENT, not a parent (T-d451). */
 async function expectRowFits(page: Page, row: Locator) {
