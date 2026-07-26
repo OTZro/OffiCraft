@@ -130,6 +130,7 @@ describe("OutsourcePanel", () => {
         taskId: "t-a",
         taskTitle: "修 PR 回饋",
         taskStatus: "in_progress",
+        presence: "online",
       })
     );
 
@@ -149,6 +150,8 @@ describe("OutsourcePanel", () => {
     // that order — the dot is the container's FIRST element (行首).
     const dot = taskLine.querySelector(".outsource-row__online-dot");
     expect(dot).not.toBeNull();
+    expect(dot!.getAttribute("aria-label")).toBe("工作中");
+    expect(dot!.getAttribute("style")).toBeNull();
     expect(dot!.parentElement).toBe(taskLine);
     expect(taskLine.firstElementChild).toBe(dot);
     expect(chip.parentElement).toBe(taskLine);
@@ -175,6 +178,25 @@ describe("OutsourcePanel", () => {
     expect(row.textContent).not.toContain("Opus");
     expect(row.textContent).not.toContain("github.com");
     expect(row.textContent).not.toContain("進行中");
+  });
+
+  it("does not paint an assigned but offline worker as live", async () => {
+    const task = mkTask({ id: "t-offline", taskNo: "T-offline" });
+    __injectMockTask(task);
+    __injectMockOutsourceWorker(
+      mkWorker({
+        id: "ow-offline",
+        codename: "X-46",
+        taskId: task.id,
+        taskTitle: "尚未啟動的任務",
+        presence: "offline",
+      }),
+    );
+
+    const { findByTestId } = renderOutsource();
+    const dot = await findByTestId("outsource-presence-ow-offline");
+    expect(dot.getAttribute("aria-label")).toBe("離線");
+    expect(dot.getAttribute("style")).toContain("rgb(107, 114, 128)");
   });
 
   it("the type line shows the manual's DISPLAY name — the raw key stays out of the UI (T-fa76)", async () => {

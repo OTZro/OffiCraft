@@ -16,8 +16,8 @@
 //   line 2  上線綠點 at the LINE START (like a 正職 member row), then the
 //           任務代號 (T-xxxx) chip — CLICKABLE, routes to #tasks/<taskId> —
 //           then 接到的 task type (外包沒有角色名 — the bound task's type IS
-//           its role line; a LIVE worker is by definition online, the same
-//           invariant the worker chat header's synthetic member uses)
+//           its role line). The dot is presence, not worker lifecycle: an
+//           assigned worker may not have started yet and must never look live.
 // plus the member-card unread badge at the row's flex end (wire unread_count).
 // NO model name (the codename already implies it), no task title, no 識別鍵.
 // Rows come 依任務建立時間新→舊 (the hook sorts + joins taskNo/taskTypeKey).
@@ -52,21 +52,39 @@ export function OutsourceTaskLine({
 }: {
   worker: OutsourceWorkerView;
   onOpenTask: (taskId: string) => void;
-  /** Lead the line with the 上線綠點 (rail row only — a LIVE worker is by
-   * definition online, same invariant the chat header's synthetic member
-   * carries; the header itself omits the dot). */
+  /** Lead the line with the presence dot (rail row only; the chat header
+   * omits it so the rail remains the single presence signal). */
   dot?: boolean;
   /** data-testid namespace: `${idPrefix}-task-line-<id>` / `-task-<id>` /
    * `-type-<id>` — "outsource" (rail) keeps its historical testids. */
   idPrefix: string;
 }) {
   const { t } = useI18n();
+  const online = w.presence === "online";
+  const presenceLabel =
+    w.presence === "waking"
+      ? t.workerDetail.starting
+      : w.presence === "stopped" || w.presence === "stopping"
+        ? t.workerDetail.stopped
+        : w.presence === "offline"
+          ? t.workerDetail.offline
+          : online
+            ? t.workerDetail.working
+            : t.workerDetail.offline;
   return (
     <span
       className="outsource-row__task-line"
       data-testid={`${idPrefix}-task-line-${w.id}`}
     >
-      {dot && <span className="outsource-row__online-dot" />}
+      {dot && (
+        <span
+          className="outsource-row__online-dot"
+          style={online ? undefined : { background: "#6b7280" }}
+          aria-label={presenceLabel}
+          title={presenceLabel}
+          data-testid={`${idPrefix}-presence-${w.id}`}
+        />
+      )}
       {w.taskNo && (
         <button
           type="button"
