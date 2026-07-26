@@ -99,6 +99,21 @@
 #   OC_RELEASE_GH_REPO    GitHub repo for gh calls (default: pkyosx/OffiCraft)
 #   OC_RELEASE_SITE       station base URL polled in step 8 (default: http://127.0.0.1:7755)
 #   OC_RELEASE_SETTLE_TRIES / OC_RELEASE_SETTLE_SLEEP   step-8 polling budget
+#
+# There is deliberately NO "override the build command" knob. Step 3 runs
+# `$STAGE/bin/build` — a path INSIDE the staging worktree — so OC_RELEASE_SRC
+# pointing at a small fixture repo that carries its own bin/build is already
+# enough to drive steps 4-8 hermetically, and it exercises the REAL
+# builder-selection (bin/build vs bin/build-release under --sign) instead of
+# bypassing it. A build-command override would have replaced the one branch that
+# decides whether a release is signed with a branch the tests never take.
+#
+# ── SOURCEABLE ──────────────────────────────────────────────────────────────
+# Dispatch is guarded by "am I being executed", so bin/tests/release-guard.sh can
+# `source` this file and unit-test verify_stored_release / verify_artifacts /
+# settle_station DIRECTLY. That matters more than it looks: the alternative is a
+# guard that re-implements the read-back rules, which would then pass while the
+# real ones rot. The tests must bind to THESE functions, not to copies of them.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -300,19 +315,22 @@ cmd_promote() {
   gh release edit "$TAG" --repo "$GH_REPO" --prerelease=false --draft=false \
     || die "gh release edit failed — $TAG was NOT promoted."
 
-  # Read back: the flip landed, AND nothing else moved.
-  local AFTER AFTER_TARGET AFTER_FINGERPRINT
+  # Read back: the flip landed, AND nothing else moved. Passing $BEFORE_TARGET as
+  # the EXPECTED target is what pins the commit — a target that moved under the
+  # flip comes back as VERIFY-FAILED [release-target] naming both values, from
+  # inside the read-back. There is deliberately no second `AFTER_TARGET !=
+  # BEFORE_TARGET` comparison out here: it would be unreachable (the read-back
+  # cannot succeed AND return a different target), and an unreachable check reads
+  # like protection while providing none.
+  local AFTER AFTER_FINGERPRINT
   AFTER="$(verify_stored_release "$TAG" "$BEFORE_TARGET" final)"
-  AFTER_TARGET="$(printf '%s\n' "$AFTER" | sed -n '1p')"
   AFTER_FINGERPRINT="$(printf '%s\n' "$AFTER" | sed -n '2,$p')"
-  [[ "$AFTER_TARGET" == "$BEFORE_TARGET" ]] \
-    || fail_item promote-target "targetCommitish changed during promote ($BEFORE_TARGET -> $AFTER_TARGET)."
   # An asset set that changed under a metadata-only flip means somebody
   # re-uploaded behind us; the bytes people tested are then NOT the bytes that
   # ship, which is the one thing promote exists to guarantee.
   [[ "$AFTER_FINGERPRINT" == "$BEFORE_FINGERPRINT" ]] \
     || fail_item promote-assets "the asset set changed during promote (name/size differ) — the promoted bytes are not the tested bytes."
-  say "promoted and verified: $TAG is now the final release on $AFTER_TARGET"
+  say "promoted and verified: $TAG is now the final release on $BEFORE_TARGET"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -348,10 +366,16 @@ verify_artifacts() {
   local vdir
   vdir="$(mktemp -d -t oc-release-verify.XXXXXX)"
   tar -C "$vdir" -xzf "$OUT/$NAME.tar.gz"
+  # Match each token INDEPENDENTLY, not as an ordered glob. `file -b` on a Go
+  # arm64 binary says exactly "Mach-O 64-bit executable arm64" — architecture
+  # LAST — so the ordered pattern this replaced (Mach-O…arm64…executable) could
+  # never match any real artifact, and every publish died here. Ordering in
+  # file(1)'s prose is not a contract; the presence of the three tokens is what
+  # this check is actually about.
   local b desc
   for b in ocserverd ocwarden ocagent; do
     desc="$(file -b "$vdir/$NAME/$b")"
-    [[ "$desc" == *"Mach-O"*"arm64"*"executable"* ]] \
+    [[ "$desc" == *"Mach-O"* && "$desc" == *"arm64"* && "$desc" == *"executable"* ]] \
       || fail_item artifact-arch "$b is not a darwin/arm64 Mach-O executable (file says: $desc)"
   done
   local ldflags
@@ -530,8 +554,14 @@ EOF
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# dispatch
+# dispatch — only when EXECUTED. `source bin/release` defines the functions and
+# runs nothing, which is how bin/tests/release-guard.sh unit-tests the real
+# verification helpers instead of a re-implementation of them.
 # ═══════════════════════════════════════════════════════════════════════════
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+  return 0
+fi
+
 SUB="${1:-}"
 shift || true
 case "$SUB" in

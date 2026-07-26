@@ -686,6 +686,26 @@ else
   bad "bin/tests/go-test-nocache-guard.sh is missing"
 fi
 
+# ── bin/release publish/promote read-back (T-588c) ───────────────────────────
+# Own file because it needs its own shim set (`gh`, `curl`) and its own fixture
+# git repo, and because what it guards is a different KIND of property: not "does
+# this script decide correctly" but "after the irreversible step, does it check
+# what actually happened". Every case there is a negative — one violated
+# requirement per case — so deleting any single read-back rule in bin/release
+# turns exactly one of them red instead of silently widening what ships.
+# `gh release create` is NEVER reached: the shim records and creates nothing.
+RELEASEGUARD="$HERE/release-guard.sh"
+echo
+if [[ -f "$RELEASEGUARD" ]]; then
+  if run_guard "$RELEASEGUARD"; then
+    ok "bin/release publish/promote read-back suite passed"
+  else
+    bad "bin/release publish/promote read-back suite FAILED (see output above)"
+  fi
+else
+  bad "bin/tests/release-guard.sh is missing"
+fi
+
 # ── guard-of-the-guard (T-d3e3 rework) ──────────────────────────────────────
 # The ci success-marker guard is dispatched at the very BOTTOM of this file,
 # AFTER the `[[ "$FAIL" == "0" ]] || exit 1` enforcement below, so its exit code

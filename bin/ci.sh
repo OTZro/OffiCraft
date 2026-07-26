@@ -71,12 +71,20 @@ else
 fi
 
 # (0b) bin/ script unit tests (T-33d5) — same hermetic PATH-shim pattern as (0):
-# stubs uname/security/codesign, so NO keychain is touched and NOTHING is signed;
-# guards the codesign-artifact seam (release-artifact signing must warn-and-pass
-# on machines without the identity, never block a build) — plus, since T-da4b,
-# the SIGPIPE red/green (a present identity must NEVER read as absent) and the
-# sentinel: a BROKEN check hard-fails (exit 3) and OC_CODESIGN_REQUIRE=1 turns a
-# missing identity into a hard error (exit 4) instead of a silent adhoc ship.
+# stubs uname/security/codesign/gh/curl, so NO keychain is touched, NOTHING is
+# signed, NO release is created and NO station is contacted. It guards:
+#   * the codesign-artifact seam. Since T-588c signing is OFF BY DEFAULT and the
+#     gate sits ABOVE the `security find-identity` probe, so this step also
+#     asserts — on its own tripwire — that the default path never consults the
+#     shared login keychain at all, which is the property that lets two CI runs
+#     proceed at once. When signing IS requested the older guarantees still hold:
+#     the SIGPIPE red/green (a present identity must NEVER read as absent), a
+#     BROKEN check hard-fails (exit 3), and OC_CODESIGN_REQUIRE=1 turns a missing
+#     identity into a hard error (exit 4) instead of a silent adhoc ship.
+#   * bin/release publish/promote (release-guard.sh, T-588c) — the post-upload
+#     READ-BACK. One case per requirement, each violating exactly one, so a
+#     deleted check reddens here instead of shipping a half-populated,
+#     mis-targeted or draft release that nobody looked at.
 echo "[ci] (0b) bin script unit tests (hermetic)"
 if [[ -x "$ROOT/bin/tests/run.sh" ]]; then
   bash "$ROOT/bin/tests/run.sh"
