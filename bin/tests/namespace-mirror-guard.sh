@@ -4,20 +4,50 @@
 #
 # WHAT IS BEING GUARDED — AND WHAT IS NOT
 # ---------------------------------------
-# The namespace→(root, launchd label) derivation is hand-transcribed in FIVE
-# places. Naming only four of them (as an earlier version of this header did)
-# would be exactly the kind of coverage claim that reads as complete and is not:
+# The namespace→(root, launchd label) derivation is hand-transcribed across SIX
+# FILES / TEN CODE SITES. This list has been wrong twice: it said FOUR, then
+# FIVE, and each time it read as complete. The count is now per-SITE, because
+# counting files is what hid the miss — bin/install.sh alone carries FIVE sites,
+# and the one that was missing (the ocwarden label) lives in a file that was
+# already "on the list".
 #
-#   cli/ocwarden/namespace.go       ← by VALUE in namespace_mirror_test.go
-#   server/ocserverd/onboarding.go  ← by VALUE in onboarding_mirror_test.go
-#   bin/install.sh                  ← HERE (structure) + install-guard.sh §10 and
-#                                     uninstall-guard.sh (end-to-end behaviour)
-#   bin/ocserver                    ← HERE (structure only)
-#   e2e_test/lib/oc_lifecycle.sh    ← NOT GUARDED, deliberately. It is harness
+#   cli/ocwarden/namespace.go       ← 1 site (root + label + tmux socket, as
+#                                     functions). By VALUE in
+#                                     namespace_mirror_test.go.
+#   server/ocserverd/onboarding.go  ← 1 site (label + root + tokfile, as
+#                                     functions). By VALUE in
+#                                     onboarding_mirror_test.go.
+#   bin/install.sh                  ← 5 sites: install root ($NS_DASH), install
+#                                     serve label ($NS_DOT), uninstall root
+#                                     ($ns_dash), uninstall serve label
+#                                     ($ns_dot), and uninstall OCWARDEN label
+#                                     ($ns_dot). All five checked HERE
+#                                     (structure) + install-guard.sh §10 and
+#                                     uninstall-guard.sh (behaviour).
+#                                     ⚠️ The ocwarden one was found only by the
+#                                     follow-up review: absent from this list,
+#                                     unchecked here, and its branch was DEAD in
+#                                     every namespaced test case because the
+#                                     fixture never created warden/. It is the
+#                                     label the whole ticket is about.
+#   bin/ocserver                    ← 2 sites (root, and three labels each
+#                                     appearing on install+uninstall). HERE,
+#                                     structure only.
+#   e2e_test/lib/oc_lifecycle.sh    ← 1 site. NOT GUARDED, deliberately: harness
 #                                     code that derives the root to know where to
-#                                     LOOK; if it drifts, the e2e run fails to
-#                                     find anything and says so loudly. Listed
+#                                     LOOK, so a drift makes the e2e run fail to
+#                                     find anything and say so loudly. Listed
 #                                     because an unlisted copy is an unknown one.
+#
+# STILL NOT GUARDED, NAMED RATHER THAN IMPLIED (do not read the green as more):
+#   - e2e_test/lib/oc_lifecycle.sh, per the reasoning above.
+#   - bin/ocserver's namespacing END TO END: it has no hermetic suite, so only
+#     the text of its derivation is pinned, never its behaviour.
+#   - The agent-home axis (OC_AGENT_HOME), which exists only in the Go copy and
+#     is not in the shared table.
+#   - Any site added after this comment. This list is maintained by hand, which
+#     is precisely how it was wrong twice; `grep -rn 'officraft[-.]\$' bin/` is
+#     the cheap way to re-derive it before trusting it.
 #
 # Everything checked here is checked against ONE shared table,
 # fixtures/namespace-axes.tsv, so a drift names the copy that drifted; comparing
@@ -57,9 +87,13 @@ PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); printf '  ok   — %s\n' "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf '  FAIL — %s\n' "$1"; }
 
-echo "namespace mirror — 5 hand-transcribed copies, 4 checked here or by module tests"
+echo "namespace mirror — 10 hand-transcribed derivation sites in 6 files; 9 checked here or by module tests (e2e harness copy deliberately unguarded), + the charset in its 4 copies"
 
-# ── the charset, in all FOUR copies ─────────────────────────────────────────
+# ── the charset, in all FOUR copies that carry it ───────────────────────────
+# FOUR is the charset's own count and is not the derivation-site count above:
+# the charset literal lives in cli/ocwarden/namespace.go, server/ocserverd/config.go,
+# bin/install.sh and bin/ocserver. (server's charset is in config.go, while its
+# label/root derivation is in onboarding.go — which is why the two lists differ.)
 CHARSET="$(sed -n 's/^# charset	//p' "$TABLE" | head -1)"
 if [[ -z "$CHARSET" ]]; then
   echo "FATAL: $TABLE carries no '# charset<TAB><regex>' line — the charset is unpinned" >&2
@@ -126,6 +160,18 @@ check_derivation "uninstall-path root"  bin/install.sh '\.officraft\$ns_dash' 1 
   "--uninstall --namespace would remove the MAIN instance instead."
 check_derivation "uninstall-path label" bin/install.sh 'com\.officraft\.serve\$ns_dot' 1 \
   "--uninstall --namespace would boot out the MAIN instance's job."
+# The OCWARDEN label — the sixth site, and the one this ticket is actually about.
+# It was missing from this guard and from the header's coverage list until the
+# follow-up review found it. It is READ-ONLY (the uninstall path never boots the
+# warden out; it only reports whether a job is registered and how to remove it),
+# which is exactly why it is easy to overlook and why losing it is still bad: the
+# script would answer "no warden job is registered" for a machine that has one,
+# and the operator's next move is a reinstall on top of a live launchd job — the
+# ticket's own failure shape. Behavioural cover: uninstall-guard.sh's namespaced
+# section (whose fixture had to start building warden/ before that branch was
+# reachable at all).
+check_derivation "uninstall-path WARDEN label" bin/install.sh 'com\.officraft\.ocwarden\$ns_dot' 1 \
+  "--uninstall --namespace would report the MAIN instance's warden job (or none) for the namespaced machine."
 
 # bin/ocserver derives labels from *_LABEL_BASE and carries each pair TWICE
 # (install + uninstall) — the same inverse requirement as install.sh, which is

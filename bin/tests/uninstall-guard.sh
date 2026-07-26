@@ -572,6 +572,32 @@ ns_reset() {
   printf 'NS-BINARY-MARKER' > "$FAKEHOME/.officraft-$ns/bin/ocserverd"
   chmod +x "$FAKEHOME/.officraft-$ns/bin/ocserverd"
   printf 'NS-DB-MARKER' > "$FAKEHOME/.officraft-$ns/server/data/officraft.db"
+  # warden/ IN THE NAMESPACED ROOT — added by T-5047's follow-up review. Without
+  # it the `if [[ -d "$ROOT_DIR/warden" ]]` branch of the uninstall disclosure
+  # (bin/install.sh, the one that derives `com.officraft.ocwarden$ns_dot`) was
+  # DEAD CODE in every namespaced case: this fixture only ever built bin/ and
+  # server/data/, and the existing warden-probe cases (§19) run the MAIN instance
+  # with an empty ns_dot. So the one label mirror that this ticket is actually
+  # about — the ocwarden label — had no namespaced coverage at all, and a drift
+  # there would have told the operator "no warden job is registered" about a
+  # machine that has one.
+  mkdir -p "$FAKEHOME/.officraft-$ns/warden/log"
+  printf 'NS-WARDEN-TOKEN-MARKER' > "$FAKEHOME/.officraft-$ns/warden/exec-warden.tok"
+  printf 'NS-WARDEN-BIN' > "$FAKEHOME/.officraft-$ns/warden/ocwarden"
+  chmod +x "$FAKEHOME/.officraft-$ns/warden/ocwarden"
+  # The NAMESPACED warden's plist, so the probe's "registered" arm is the one
+  # taken and the assertions can tell the two labels apart. Deliberately NO
+  # main-instance com.officraft.ocwarden.plist here: that is what makes
+  # "names the namespaced label" a real discrimination rather than a coincidence.
+  cat > "$FAKEHOME/Library/LaunchAgents/com.officraft.ocwarden.$ns.plist" <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.officraft.ocwarden.$ns</string>
+  <key>ProgramArguments</key>
+  <array><string>$FAKEHOME/.officraft-$ns/warden/ocwarden</string><string>run</string></array>
+</dict></plist>
+PL
   # a plist for the NAMESPACED label, pointing at the namespaced binary, so the
   # ownership check adopts it and the launchd side of the removal is exercised.
   cat > "$FAKEHOME/Library/LaunchAgents/com.officraft.serve.$ns.plist" <<PL
@@ -628,6 +654,54 @@ if tripwire_has "com.officraft.serve.$NSU"; then
 else
   bad "ns uninstall never addressed com.officraft.serve.$NSU — tripwire: $(cat "$WORK/.tripwire")"
 fi
+
+# ── the SIXTH label mirror: the ocwarden label on the uninstall path (T-5047 ──
+# ── follow-up review). bin/install.sh derives `com.officraft.ocwarden$ns_dot` to
+# tell the operator whether this machine has a warden job. It is the label this
+# whole ticket is about, it was absent from the coverage list, and its branch was
+# unreachable in every namespaced case until ns_reset started building warden/.
+#
+# The failure shape if it drifts is the ticket's own failure shape: the script
+# probes the WRONG label, finds no plist, and tells the operator "no warden job
+# is registered" about a machine that is running one — after which the obvious
+# next step is a reinstall on top of a live job.
+case "$OUT" in
+  *"com.officraft.ocwarden.$NSU"*) ok "ns uninstall: warden disclosure names the NAMESPACED ocwarden label" ;;
+  *) bad "ns uninstall: warden disclosure never names com.officraft.ocwarden.$NSU ('$OUT')" ;;
+esac
+# DISCRIMINATION, not just presence: naming the MAIN warden label here would mean
+# the ns_dot was lost, i.e. the operator is told about the wrong machine's warden.
+# (Substring care: com.officraft.ocwarden.lab CONTAINS com.officraft.ocwarden, so
+# the check has to be for the main label NOT followed by the namespace suffix.)
+if printf '%s' "$OUT" | grep -qE 'com\.officraft\.ocwarden([^.]|$)'; then
+  bad "ns uninstall: warden disclosure names the MAIN ocwarden label — \$ns_dot was lost ('$OUT')"
+else
+  ok "ns uninstall: warden disclosure does NOT name the MAIN ocwarden label"
+fi
+case "$OUT" in
+  *"registered and this script leaves it that way"*) ok "ns uninstall: reports the NAMESPACED warden job as registered (its plist is present)" ;;
+  *) bad "ns uninstall: failed to notice the namespaced warden job its own fixture registered ('$OUT')" ;;
+esac
+# The teardown hint must carry the namespace, or the operator pastes a command
+# that tears down the MAIN instance's warden instead of the one just removed.
+case "$OUT" in
+  *"OC_NAMESPACE=$NSU $FAKEHOME/.officraft-$NSU/warden/ocwarden teardown"*)
+    ok "ns uninstall: teardown hint carries OC_NAMESPACE and the namespaced absolute path" ;;
+  *) bad "ns uninstall: teardown hint would tear down the wrong instance ('$OUT')" ;;
+esac
+check "ns uninstall: the namespaced warden/ is left in place" "NS-WARDEN-TOKEN-MARKER" "$(cat "$FAKEHOME/.officraft-$NSU/warden/exec-warden.tok" 2>/dev/null)"
+check "ns uninstall: the namespaced warden's plist is left alone" "1" "$([[ -f "$FAKEHOME/Library/LaunchAgents/com.officraft.ocwarden.$NSU.plist" ]] && echo 1 || echo 0)"
+# NEGATIVE CONTROL for the branch itself: with no warden/ in the namespaced root
+# the disclosure must say NOTHING about a warden — otherwise the assertions above
+# would pass on a fixture that never had one, and the branch would be untested
+# again by a different route.
+ns_reset "$NSU"
+rm -rf "$FAKEHOME/.officraft-$NSU/warden" "$FAKEHOME/Library/LaunchAgents/com.officraft.ocwarden.$NSU.plist"
+run_uninstall_ns --namespace "$NSU" --dry-run
+case "$OUT" in
+  *"com.officraft.ocwarden"*) bad "ns uninstall sentinel: discloses a warden on a namespaced root that has none ('$OUT')" ;;
+  *) ok "ns uninstall sentinel: no warden/ in the namespaced root → no warden disclosure" ;;
+esac
 
 # a MALFORMED namespace on the REMOVAL path is the most dangerous fold of all —
 # it would delete the main instance while the operator believed they named another.

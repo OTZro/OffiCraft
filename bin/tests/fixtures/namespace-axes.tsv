@@ -3,15 +3,27 @@
 # WHY THIS FILE EXISTS
 # --------------------
 # The same namespace→(root, launchd label, tmux socket, tokfile) derivation is
-# implemented FOUR times, in three languages, across two Go modules that cannot
-# import each other:
+# implemented across SIX FILES / TEN CODE SITES, in three languages, across two Go
+# modules that cannot import each other. Count SITES, not files: this header said
+# FOUR and the guard said FIVE, and both were wrong because bin/install.sh carries
+# five sites on its own — including the ocwarden label, which is the one this
+# ticket is about and the one that was missing from every list.
 #
 #   cli/ocwarden/namespace.go     wardenLabelFor / officraftRootFor /
 #                                 tmuxSocketFor / tokfileFor
 #   server/ocserverd/onboarding.go  wardenLaunchdLabel / officraftRootPath /
 #                                 wardenTokfilePath
-#   bin/install.sh                NS_DOT / NS_DASH
+#   bin/install.sh                NS_DOT / NS_DASH on the install path, and
+#                                 ns_dot / ns_dash on the uninstall path — the
+#                                 latter for BOTH the serve label AND the
+#                                 ocwarden label (5 sites total)
 #   bin/ocserver                  the same, on the from-source install path
+#   e2e_test/lib/oc_lifecycle.sh  harness-side root derivation, deliberately
+#                                 unguarded (see namespace-mirror-guard.sh)
+#
+# The authoritative, always-current list of what IS and IS NOT machine-checked
+# lives in bin/tests/namespace-mirror-guard.sh's header. Do not treat this comment
+# as the coverage claim.
 #
 # Those copies are HAND-TRANSCRIBED MIRRORS. The server derives a label to decide
 # "does this host already carry a warden?"; the warden derives a label to decide

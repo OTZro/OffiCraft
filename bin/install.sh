@@ -432,8 +432,8 @@ EOF
     fi
     if [[ -d "$ROOT_DIR/warden" ]]; then
       # Probe the warden's job rather than asserting it: claiming "still
-      # registered and RUNNING" without looking is the same class of defect
-      # this ticket is about (saying more than was measured).
+      # registered and RUNNING" without looking is this ticket's own defect
+      # class (saying more than was measured).
       local warden_label="com.officraft.ocwarden$ns_dot"
       if [[ -f "$LA_DIR/$warden_label.plist" ]]; then
         echo "[install]   warden/ belongs to the ocwarden daemon; its own launchd job ($warden_label) is"
@@ -443,9 +443,9 @@ EOF
         echo "[install]   (no $warden_label job is registered for this user right now)"
       fi
       # Absolute path on purpose: bin/ is about to move into the backup and this
-      # installer never puts ~/.officraft/bin on PATH, so a bare `ocwarden` would
-      # be command-not-found. The warden installs its own stable copy here.
-      ns_env=""; [[ -n "$ns" ]] && ns_env="OC_NAMESPACE=$ns "
+      # installer never puts ~/.officraft/bin on PATH, so bare `ocwarden` would be
+      # command-not-found. The warden installs its own stable copy here.
+      local ns_env=""; [[ -n "$ns" ]] && ns_env="OC_NAMESPACE=$ns "
       echo "[install]   to remove the warden too, afterwards: $ns_env$ROOT_DIR/warden/ocwarden teardown"
     fi
   fi
