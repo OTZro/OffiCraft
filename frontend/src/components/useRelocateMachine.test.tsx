@@ -45,6 +45,7 @@ interface HarnessProps {
   machines?: MachineView[];
   boundMachineId?: string | null;
   currentMachineId?: string | null;
+  progressObservable?: boolean;
   onRelocate?: (machineId: string) => void | Promise<MemberRelocateResult | void>;
 }
 
@@ -53,6 +54,7 @@ function Harness({
   machines = TWO_ONLINE,
   boundMachineId = "mach-a",
   currentMachineId = null,
+  progressObservable,
   onRelocate,
 }: HarnessProps) {
   const { relocateAction, relocatePicker, relocateUndispatched } =
@@ -61,6 +63,7 @@ function Harness({
       machines,
       boundMachineId,
       currentMachineId,
+      progressObservable,
       onRelocate,
       testId: "rl",
       pickerTitle: zh.machine.picker.relocateTitle,
@@ -269,6 +272,25 @@ describe("useRelocateMachine", () => {
     // very 「以為沒按到」 complaint. It gets the one honest fact instead.
     expect(sent()?.textContent).toBe(zh.machine.relocateSent);
 
+    act(() => {
+      vi.advanceTimersByTime(TIMEOUT_MS * 2);
+    });
+    expect(notice()).toBeNull();
+  });
+
+  it("uses the sent signal, never an unwinnable timeout, when the read model has no observed machine id", async () => {
+    const { onRelocate, resolve } = deferredRelocate();
+    const { button, notice, sent } = mount({
+      onRelocate,
+      machines: [machine("mach-a")],
+      progressObservable: false,
+    });
+    fireEvent.click(button());
+    await act(async () => {
+      resolve();
+    });
+    expect(button().textContent).toContain(zh.settings.edit);
+    expect(sent()?.textContent).toBe(zh.machine.relocateSent);
     act(() => {
       vi.advanceTimersByTime(TIMEOUT_MS * 2);
     });

@@ -24,6 +24,10 @@ const SHOT_DIR = process.env.RELOCATE_SHOT_DIR ?? "test-results/relocate-720";
 /** Must stay >= RELOCATE_TIMEOUT_MS in useRelocateMachine.tsx. */
 const PAST_TIMEOUT_MS = 31_000;
 
+// This guard intentionally waits for the production 30s timeout. Playwright's
+// default per-test ceiling is also 30s, which made the assertion unreachable.
+test.setTimeout(60_000);
+
 /** The row must not push anything past the viewport, and the page must not gain
  * a horizontal scrollbar. Measured on the ROW ELEMENT, not a parent (T-d451). */
 async function expectRowFits(page: Page, row: Locator) {
@@ -45,6 +49,7 @@ async function driveAndShoot(
   page: Page,
   panel: "member" | "worker",
   testId: string,
+  progressObservable = true,
 ) {
   const button = cmp.getByTestId(testId);
   // The machine registry has to report an online machine before the control is
@@ -63,6 +68,13 @@ async function driveAndShoot(
   // business, so handle either path.
   const confirm = cmp.getByTestId("machine-picker-confirm");
   if (await confirm.isVisible()) await confirm.click();
+  if (!progressObservable) {
+    await expect(button).toContainText("編輯");
+    await expect(cmp.getByTestId(`${testId}-sent`)).toBeVisible();
+    await expectRowFits(page, row);
+    await page.screenshot({ path: `${SHOT_DIR}/${panel}-panel-sent-720.png` });
+    return;
+  }
   await expect(button).toContainText("更換中");
   await expect(button).toBeDisabled();
   await expectRowFits(page, row);
@@ -97,5 +109,7 @@ test(`width ${WIDTH}: WORKER panel 改機器 row holds through 更換中 and the
 }) => {
   await page.setViewportSize({ width: WIDTH, height: 900 });
   const cmp = await mount(<WorkerRelocateProgressStory />);
-  await driveAndShoot(cmp, page, "worker", "worker-detail-relocate");
+  // Worker wire data has no raw observed machine id yet. Its control must show
+  // a truthful sent signal rather than a progress state that can only time out.
+  await driveAndShoot(cmp, page, "worker", "worker-detail-relocate", false);
 });

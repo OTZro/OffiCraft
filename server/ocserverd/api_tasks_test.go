@@ -1039,8 +1039,9 @@ func TestCreateTaskDispatchTargetMachineMustResolve(t *testing.T) {
 }
 
 // TestCreateTaskDispatchInheritsOmittedSpec: end-to-end inheritance through the
-// create handler — a typed 發包 fills from the type manual, a free one from the
-// dispatching member, and an explicit field beats both.
+// create handler — an explicit 發包 fills from the dispatching member for both
+// typed and free tasks; the type manual is only the fallback when there is no
+// dispatching member, and an explicit field beats either source.
 func TestCreateTaskDispatchInheritsOmittedSpec(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
@@ -1073,13 +1074,15 @@ func TestCreateTaskDispatchInheritsOmittedSpec(t *testing.T) {
 		return stored
 	}
 
-	// Typed + bare target → the manual's whole spec.
+	// Typed + bare target → the dispatcher's whole spec. A dispatch is an
+	// explicit owner action; its omitted fields mean "one like me", not "freeze
+	// whatever the type manual happened to say when this row was created".
 	got := storedFor(createTaskAs(t, api, map[string]any{
 		"title": "typed inherit", "type_key": "typed",
 		"target": map[string]any{"kind": "outsource"}}, "m-disp", "agent"))
-	if got.OutsourceRuntime != RuntimeClaude || got.OutsourceModel != "opus" ||
-		got.OutsourceEffort != "high" || got.OutsourceMachine != "m-manual-box" {
-		t.Fatalf("a typed dispatch must inherit the manual's spec: %+v", got)
+	if got.OutsourceRuntime != RuntimeCodex || got.OutsourceModel != "gpt-5-codex" ||
+		got.OutsourceEffort != "low" || got.OutsourceMachine != "m-disp-box" {
+		t.Fatalf("a typed dispatch must inherit the dispatcher's spec: %+v", got)
 	}
 
 	// Free + bare target → the DISPATCHER's own spec, machine included.
@@ -1174,14 +1177,15 @@ func TestCreateTypedTaskWithManualOutsourceAssigneeCarriesNoDispatchTarget(t *te
 	}
 
 	// SENTINEL: an explicit target on the SAME fixture DOES fill the columns and
-	// reads true — so the emptiness above is the gate, not a fixture that creates
-	// nothing.
+	// reads true. The dispatcher has no runtime/model/machine spec, so the target
+	// gets the safe defaults rather than silently copying the type manual; it is
+	// still an explicit dispatch because the stored effort is concrete.
 	dispatched := storedFor(createTaskAs(t, api, map[string]any{
 		"title": "explicit 發包", "type_key": "typed",
 		"target": map[string]any{"kind": "outsource"}}, "m-disp", "agent"))
-	if dispatched.OutsourceRuntime != RuntimeClaude || dispatched.OutsourceModel != "opus" ||
-		dispatched.OutsourceEffort != "high" || dispatched.OutsourceMachine != "m-manual-box" {
-		t.Fatalf("an explicit target must inherit and store the manual's spec: %+v", dispatched)
+	if dispatched.OutsourceRuntime != RuntimeClaude || dispatched.OutsourceModel != "" ||
+		dispatched.OutsourceEffort != "medium" || dispatched.OutsourceMachine != "" {
+		t.Fatalf("an explicit target must inherit the dispatcher's absent spec as safe defaults: %+v", dispatched)
 	}
 	if !candidateOf(dispatched).hasExplicitTarget() {
 		t.Fatal("an explicit 發包 must read as an explicit target to the scheduler")

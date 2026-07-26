@@ -79,6 +79,12 @@ interface UseRelocateMachineOpts {
   noOnlineTitle: string;
   /** Render the pencil icon inside the button (the member panel's look). */
   withIcon?: boolean;
+  /**
+   * False when the read model cannot provide a raw, actually-observed machine
+   * id.  In that case a successful request still gets the short "sent" signal,
+   * but must never enter a progress state whose only possible exit is timeout.
+   */
+  progressObservable?: boolean;
   /** The agent's CURRENT machine (`member.machine`), i.e. where it actually is —
    * as opposed to `boundMachineId`, which is only where the owner PINNED it.
    *
@@ -119,6 +125,7 @@ export function useRelocateMachine({
   noOnlineTitle,
   withIcon,
   currentMachineId,
+  progressObservable = true,
 }: UseRelocateMachineOpts): {
   relocateAction: ReactNode | undefined;
   relocatePicker: ReactNode | undefined;
@@ -209,7 +216,7 @@ export function useRelocateMachine({
     // happened when in fact one had. The relocate is still FIRED (this is not a
     // no-op short-circuit); only the unwinnable wait is skipped, so the button
     // stays live.
-    const observable = machineId !== observedMachineId;
+    const observable = progressObservable && machineId !== observedMachineId;
     if (observable) {
       phaseRef.current = "relocating";
       setPhase("relocating");

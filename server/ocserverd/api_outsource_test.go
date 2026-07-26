@@ -562,8 +562,8 @@ func TestRelocateAssignedWorker_X46(t *testing.T) {
 	// reads (cli/ocwarden/transport.go, logged BEFORE dispatch precisely so
 	// delivery is provable from the warden log alone), and X-46's id appears zero
 	// times there while other workers on the same machine appear repeatedly. So the
-	// honest verdict for X-46 is "never collected", NOT "the runtime failed to
-	// boot" — the frames never reached anything that could try.
+	// queue is non-empty. It proves a command remains queued, but because this is
+	// a per-machine FIFO it cannot prove which worker's frame it is.
 	base := nowSecs()
 	for i := 0; i < 4; i++ {
 		api.runOutsourceTick(base + float64(i)*(WakingTTLSecs+10))
@@ -575,8 +575,8 @@ func TestRelocateAssignedWorker_X46(t *testing.T) {
 	if err != nil || w == nil {
 		t.Fatalf("re-read worker: %v", err)
 	}
-	if !strings.HasPrefix(w.LastOpReason, spawnReasonNeverCollected+":") || w.LastOpAt == 0 {
-		t.Fatalf("an uncollected start must say so, got last_op=%q reason=%q at=%v",
+	if !strings.HasPrefix(w.LastOpReason, spawnReasonStartUnconfirmed+":") || w.LastOpAt == 0 {
+		t.Fatalf("an unconfirmed start must say so, got last_op=%q reason=%q at=%v",
 			w.LastOp, w.LastOpReason, w.LastOpAt)
 	}
 	// And it must survive a server re-exec, unlike the in-memory machine cell —
@@ -584,7 +584,7 @@ func TestRelocateAssignedWorker_X46(t *testing.T) {
 	api.workerSpawnTarget = map[string]string{}
 	api.workerReconcileStates = map[string]reconcileState{}
 	after, _ := api.dal.GetOutsourceWorker(workerID)
-	if !strings.HasPrefix(after.LastOpReason, spawnReasonNeverCollected+":") {
+	if !strings.HasPrefix(after.LastOpReason, spawnReasonStartUnconfirmed+":") {
 		t.Fatalf("the receipt must be durable across a re-exec, got %q", after.LastOpReason)
 	}
 }

@@ -1432,7 +1432,7 @@ func TestReconcileWorkerLiveness_WakeTimeoutLeavesDurableReceipt(t *testing.T) {
 func TestReconcileWorkerLiveness_NeverCollectedIsNotAFailedBoot(t *testing.T) {
 	// NOBODY COLLECTS: the warden holds a stream (so placement resolves and the
 	// enqueue succeeds) but never drains its FIFO — the X-46 shape.
-	t.Run("uncollected frame is not blamed on the runtime", func(t *testing.T) {
+	t.Run("non-empty shared FIFO leaves delivery unconfirmed", func(t *testing.T) {
 		s := newWorkerTestServer(t)
 		connectWarden(t, s, ServerSelfHost)
 		w := fsmWorkerFixture(t, s, "ow-nc", WorkerStatusAssigned, 0)
@@ -1454,13 +1454,11 @@ func TestReconcileWorkerLiveness_NeverCollectedIsNotAFailedBoot(t *testing.T) {
 		if err != nil || got == nil {
 			t.Fatalf("re-read worker: %v", err)
 		}
-		if !strings.HasPrefix(got.LastOpReason, spawnReasonNeverCollected+":") {
-			t.Fatalf("an uncollected frame must say so, got %q", got.LastOpReason)
+		if !strings.HasPrefix(got.LastOpReason, spawnReasonStartUnconfirmed+":") {
+			t.Fatalf("a shared queued command must leave delivery unconfirmed, got %q", got.LastOpReason)
 		}
-		// The whole point: it must NOT send the owner to inspect the runtime on a
-		// machine that was never even asked to start anything.
-		if strings.Contains(got.LastOpReason, "runtime actually runs") {
-			t.Errorf("must not blame the far machine's runtime: %q", got.LastOpReason)
+		if !strings.Contains(got.LastOpReason, "cannot tell whether this worker's frame") {
+			t.Errorf("must not claim a per-worker delivery verdict: %q", got.LastOpReason)
 		}
 	})
 
@@ -1493,8 +1491,8 @@ func TestReconcileWorkerLiveness_NeverCollectedIsNotAFailedBoot(t *testing.T) {
 		if !strings.HasPrefix(got.LastOpReason, spawnReasonWakeTimeout+":") {
 			t.Fatalf("a collected-but-dead boot must be a wake timeout, got %q", got.LastOpReason)
 		}
-		if strings.HasPrefix(got.LastOpReason, spawnReasonNeverCollected+":") {
-			t.Errorf("a collected frame must not claim it was never picked up")
+		if strings.HasPrefix(got.LastOpReason, spawnReasonStartUnconfirmed+":") {
+			t.Errorf("an empty queue must not leave delivery unconfirmed")
 		}
 	})
 }

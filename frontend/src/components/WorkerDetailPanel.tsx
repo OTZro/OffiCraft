@@ -76,6 +76,12 @@ export function WorkerDetailPanel({
     pickerTitle: t.workerDetail.relocateTitle,
     pickerConfirmLabel: t.workerDetail.relocateConfirm,
     noOnlineTitle: t.workerDetail.noOnlineMachine,
+    // The worker DTO currently exposes `machine` as a display label / latest
+    // dispatch target, not a raw independently-observed machine id.  Feeding it
+    // to the self-heal equality would make every successful move time out (or,
+    // worse, self-heal from the desired pin). Keep the honest sent signal until
+    // the API carries a real observed-id field.
+    progressObservable: false,
   });
 
   // ── honest presence projection (A案 P6 — the ONE member vocabulary) ────────

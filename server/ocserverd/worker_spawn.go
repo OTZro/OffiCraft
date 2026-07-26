@@ -341,18 +341,18 @@ func (s *apiServer) resolveWorkerPlacement(w OutsourceWorker, preferred string, 
 // exactly the diagnosis-free blank the owner hits on a relocate that goes
 // nowhere. EVERY non-dispatch now leaves a receipt.
 const (
-	placementReasonNoMachine   = "no_machine_selected"
-	placementReasonUnavailable = "machine_unavailable"
-	spawnReasonNoLiveTask      = "no_live_task"
-	spawnReasonBootContext     = "boot_context_failed"
-	spawnReasonNoSecret        = "no_signing_secret"
-	spawnReasonTokenMint       = "token_mint_failed"
-	spawnReasonFrameBuild      = "frame_build_failed"
-	spawnReasonWardenLost      = "warden_unreachable"
-	spawnReasonRespawnDeferred = "respawn_deferred"
-	spawnReasonWakeTimeout     = "wake_timeout"
-	spawnReasonNeverCollected  = "never_collected"
-	spawnReasonHeldDown        = "held_down"
+	placementReasonNoMachine    = "no_machine_selected"
+	placementReasonUnavailable  = "machine_unavailable"
+	spawnReasonNoLiveTask       = "no_live_task"
+	spawnReasonBootContext      = "boot_context_failed"
+	spawnReasonNoSecret         = "no_signing_secret"
+	spawnReasonTokenMint        = "token_mint_failed"
+	spawnReasonFrameBuild       = "frame_build_failed"
+	spawnReasonWardenLost       = "warden_unreachable"
+	spawnReasonRespawnDeferred  = "respawn_deferred"
+	spawnReasonWakeTimeout      = "wake_timeout"
+	spawnReasonStartUnconfirmed = "start_delivery_unconfirmed"
+	spawnReasonHeldDown         = "held_down"
 	// KNOWN LIMITATION — the receipt is a SINGLE SLOT, not a history (owner ruling:
 	// keep it single for now, the structural fix is tracked on its own ticket). All
 	// of the codes here write the same last_op/last_op_reason pair, so the NEWEST
@@ -369,13 +369,13 @@ const (
 // seam isPlacementBlockedReason matches on, so a landed START clears any of them.
 // A new code of that kind must be added HERE or its stamp outlives its cause.
 //
-// wake_timeout, never_collected and held_down are DELIBERATELY absent:
+// wake_timeout, start_delivery_unconfirmed and held_down are DELIBERATELY absent:
 //   - wake_timeout describes a start that WAS dispatched and failed to boot, so
 //     the retry that follows must not erase why the previous one died (31751ae);
-//   - never_collected is the same trap, sharper: the clear runs on every
-//     successful DISPATCH, and this code exists precisely to say that dispatching
-//     is not delivery — listing it would let each retry blank it and put the row
-//     straight back to the permanent silence this whole change removes;
+//   - start_delivery_unconfirmed is likewise not a placement result. A
+//     per-warden FIFO can say that *some* command is queued, not that this
+//     worker's start is queued, so it must never be promoted into a causal
+//     delivery verdict or erased by a retry;
 //   - held_down describes the owner's own 停止 standing, which no dispatch
 //     invalidates — only a restart does, and that writes its own receipt.
 var spawnBlockedReasonCodes = []string{
@@ -746,26 +746,28 @@ func (s *apiServer) reconcileWorkerLiveness(w OutsourceWorker, now float64) {
 	// regression 31751ae fixed on the member side).
 	if decision.StartTimedOut {
 		target := s.workerSpawnTarget[w.ID]
-		// WHICH failure this was is not a detail — the two have different culprits
-		// and different fixes, and a receipt that conflates them sends the owner to
-		// the wrong machine. Enqueueing a frame proves only that it was appended to
-		// the hub's per-warden FIFO (EnqueueWardenCommand is IsOnline + a map
-		// append); nothing on that path observes a reader. The FIFO depth is the one
-		// in-process fact that tells them apart: still non-empty ⇒ NOBODY has
-		// collected the frame, so the runtime on the far machine was never even
-		// asked to start and looking at it is a wild goose chase.
+		// Enqueueing proves only an append to a per-WARDEN FIFO. Its depth cannot
+		// prove whether THIS worker's start was collected: another member's newer
+		// frame shares the same queue. Keep a non-empty FIFO as an honest
+		// "delivery unconfirmed" observation, never a claim that the target warden
+		// failed to read this worker's frame.
 		//
 		// Residual, deliberately NOT claimed by either message: a frame that WAS
 		// popped can still be lost after the pop (the drain deletes the whole FIFO
 		// before writing it, and a socket write that "succeeds" is only a write into
 		// a buffer — there is no ack anywhere on this path). An empty backlog
 		// therefore means "collected", not "delivered".
+		if target == "" {
+			s.stampWorkerPlacementBlocked(&w, spawnReasonStartUnconfirmed+": a start "+
+				"timed out but this server no longer knows which machine received it; "+
+				"retry the worker start and inspect the next receipt", now)
+			return
+		}
 		if s.hub.PendingWardenCommands(target) > 0 {
-			s.stampWorkerPlacementBlocked(&w, spawnReasonNeverCollected+": the start "+
-				"frame for this worker is still queued for machine '"+target+"' — that "+
-				"machine's warden has not picked it up, so nothing has tried to boot "+
-				"yet; check that ocwarden is running and holding its connection there",
-				now)
+			s.stampWorkerPlacementBlocked(&w, spawnReasonStartUnconfirmed+": a start "+
+				"timed out while machine '"+target+"' still has queued commands; the "+
+				"server cannot tell whether this worker's frame was collected, so inspect "+
+				"both the warden receipt and the worker runtime", now)
 			return
 		}
 		s.stampWorkerPlacementBlocked(&w, spawnReasonWakeTimeout+": the start was "+
