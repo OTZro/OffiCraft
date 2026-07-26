@@ -570,8 +570,9 @@ func (u *updater) announceSelfUpdate() {
 	if ev == nil || u.post == nil || strings.TrimSpace(u.agentID) == "" {
 		return
 	}
+	// No agent_id key: identity is the verified JWT sub and the frozen ingest
+	// schema refuses undeclared fields (one would 422 the announcement).
 	payload := map[string]any{
-		"agent_id": u.agentID,
 		"self_update": map[string]any{
 			"binary":   ev.Binary,
 			"old_hash": ev.OldHash,

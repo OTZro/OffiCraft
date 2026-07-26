@@ -62,15 +62,15 @@ func findPost(posts []capturedPost, path string) *capturedPost {
 }
 
 // TestContextReportPostsContextPct: a real used_percentage ⇒ POST /api/agent/context
-// {agent_id, context_pct} authed with the agent token, and the status line prints
+// {context_pct} authed with the agent token, and the status line prints
 // the rounded pct.
 func TestContextReportPostsContextPct(t *testing.T) {
 	srv, posts := contextServer(t)
 	cfg := Config{Base: srv.URL, Token: "tok-k", ID: "kyle", Home: t.TempDir()}
 	payload := `{"context_window":{"used_percentage":42.4}}`
 
-	var out bytes.Buffer
-	rc := cmdContextReport(srv.Client(), cfg, testEnv(nil), 1000.0, strings.NewReader(payload), &out)
+	var out, errOut bytes.Buffer
+	rc := cmdContextReport(srv.Client(), cfg, testEnv(nil), 1000.0, strings.NewReader(payload), &out, &errOut)
 	if rc != 0 {
 		t.Fatalf("rc = %d, want 0", rc)
 	}
@@ -85,8 +85,10 @@ func TestContextReportPostsContextPct(t *testing.T) {
 	if err := json.Unmarshal([]byte(p.body), &decoded); err != nil {
 		t.Fatalf("body not JSON: %q", p.body)
 	}
-	if decoded["agent_id"] != "kyle" {
-		t.Errorf("agent_id = %v, want kyle", decoded["agent_id"])
+	// Identity is the verified JWT sub, NEVER a body key: the frozen ingest schema
+	// refuses unknown fields, so a self-reported agent_id 422s the whole report.
+	if _, present := decoded["agent_id"]; present {
+		t.Errorf("agent_id must not be on the wire; body = %q", p.body)
 	}
 	if decoded["context_pct"] != 42.4 {
 		t.Errorf("context_pct = %v, want 42.4", decoded["context_pct"])
@@ -122,16 +124,16 @@ func stripANSI(s string) string {
 // rounding (round-half-to-even), NOT 43.
 func TestContextReportBankersRounding(t *testing.T) {
 	cfg := Config{Base: "http://127.0.0.1:1", Token: "", ID: "", Home: t.TempDir()}
-	var out bytes.Buffer
+	var out, errOut bytes.Buffer
 	// No token ⇒ no POST, but the status line still renders from the payload pct.
 	cmdContextReport(defaultHTTPClient(), cfg, testEnv(nil), 1000.0,
-		strings.NewReader(`{"context_window":{"used_percentage":42.5}}`), &out)
+		strings.NewReader(`{"context_window":{"used_percentage":42.5}}`), &out, &errOut)
 	if got := stripANSI(out.String()); !strings.Contains(got, "42%") || strings.Contains(got, "43%") {
 		t.Errorf("42.5 ⇒ %q, want 42%% (banker's rounding)", got)
 	}
 	out.Reset()
 	cmdContextReport(defaultHTTPClient(), cfg, testEnv(nil), 1000.0,
-		strings.NewReader(`{"context_window":{"used_percentage":43.5}}`), &out)
+		strings.NewReader(`{"context_window":{"used_percentage":43.5}}`), &out, &errOut)
 	if got := stripANSI(out.String()); !strings.Contains(got, "44%") {
 		t.Errorf("43.5 ⇒ %q, want 44%% (banker's rounding)", got)
 	}
@@ -142,9 +144,9 @@ func TestContextReportBankersRounding(t *testing.T) {
 func TestContextReportNullPctSkipsContextPost(t *testing.T) {
 	srv, posts := contextServer(t)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle", Home: t.TempDir()}
-	var out bytes.Buffer
+	var out, errOut bytes.Buffer
 	rc := cmdContextReport(srv.Client(), cfg, testEnv(nil), 1000.0,
-		strings.NewReader(`{"context_window":{"used_percentage":null}}`), &out)
+		strings.NewReader(`{"context_window":{"used_percentage":null}}`), &out, &errOut)
 	if rc != 0 {
 		t.Fatalf("rc = %d", rc)
 	}
@@ -177,8 +179,9 @@ func TestContextReportClampsPct(t *testing.T) {
 }
 
 // TestContextReportTelemetry: rate_limits/cost/tokens ⇒ POST /api/monitoring/telemetry
-// with agent_id, the passed-through windows, cost (incl 0.0), account sentinel, and
-// machine default.
+// with runtime, the passed-through windows, cost (incl 0.0), and the machine tag.
+// Also pins the two identity rules the wire depends on: no self-reported agent_id,
+// and an unreadable account is OMITTED rather than sent as a literal "unknown".
 func TestContextReportTelemetry(t *testing.T) {
 	srv, posts := contextServer(t)
 	home := t.TempDir()
@@ -199,12 +202,12 @@ func TestContextReportTelemetry(t *testing.T) {
 		"cost":{"total_cost_usd":0.0},
 		"transcript_path":"` + transcript + `"
 	}`
-	var out bytes.Buffer
-	// HOME → an empty temp dir so readClaudeAccount misses (no ~/.claude*.json) and
-	// falls back to the "unknown" sentinel — not the developer's real account id.
+	var out, errOut bytes.Buffer
+	// HOME → an empty temp dir so readClaudeAccount misses (no ~/.claude*.json) —
+	// never the developer's real account id.
 	rc := cmdContextReport(srv.Client(), cfg,
 		testEnv(map[string]string{"OC_HOST": "lab-1", "HOME": t.TempDir()}),
-		1000.0, strings.NewReader(payload), &out)
+		1000.0, strings.NewReader(payload), &out, &errOut)
 	if rc != 0 {
 		t.Fatalf("rc = %d", rc)
 	}
@@ -220,11 +223,16 @@ func TestContextReportTelemetry(t *testing.T) {
 	if err := json.Unmarshal([]byte(p.body), &d); err != nil {
 		t.Fatalf("telemetry body not JSON: %q", p.body)
 	}
-	if d["agent_id"] != "kyle" {
-		t.Errorf("agent_id = %v", d["agent_id"])
+	if _, present := d["agent_id"]; present {
+		t.Errorf("agent_id must not be on the wire; body = %q", p.body)
 	}
-	if d["account"] != "unknown" {
-		t.Errorf("account = %v, want unknown (no ~/.claude.json)", d["account"])
+	if d["runtime"] != "claude" {
+		t.Errorf("runtime = %v, want claude", d["runtime"])
+	}
+	// An unreadable account is ABSENT. A literal "unknown" would mint a phantom
+	// account row in the owner's monitoring fold that reads as a real account.
+	if _, present := d["account"]; present {
+		t.Errorf("unreadable account must be omitted, got %v", d["account"])
 	}
 	if d["machine"] != "lab-1" {
 		t.Errorf("machine = %v, want lab-1 (OC_HOST)", d["machine"])
@@ -250,18 +258,39 @@ func TestContextReportTelemetry(t *testing.T) {
 	}
 }
 
-// TestContextReportNoTelemetryNoPost: an empty-ish payload (no rate_limits/cost/
-// transcript) ⇒ NO telemetry POST (an empty body would 400).
-func TestContextReportNoTelemetryNoPost(t *testing.T) {
+// TestContextReportUnmeasuredUsageStillReportsIdentity: a payload with NO usage
+// source (no rate_limits, no cost, no transcript) must STILL report identity.
+// Usage and identity used to share one gate, so a session whose usage was not yet
+// measurable reported nothing at all — and the cockpit kept showing whatever
+// account a previous runtime had left behind, which is worse than showing nothing.
+func TestContextReportUnmeasuredUsageStillReportsIdentity(t *testing.T) {
 	srv, posts := contextServer(t)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle", Home: t.TempDir()}
-	var out bytes.Buffer
-	cmdContextReport(srv.Client(), cfg, testEnv(nil), 1000.0,
-		strings.NewReader(`{"context_window":{"used_percentage":10}}`), &out)
-	if findPost(*posts, "/api/monitoring/telemetry") != nil {
-		t.Errorf("no telemetry source ⇒ must not POST telemetry")
+	home := writeClaudeJSON(t,
+		`{"userID":"acct-9","oauthAccount":{"emailAddress":"e@x.io","organizationUuid":"org-9"}}`)
+	var out, errOut bytes.Buffer
+	cmdContextReport(srv.Client(), cfg, testEnv(map[string]string{"HOME": home}), 1000.0,
+		strings.NewReader(`{"context_window":{"used_percentage":10}}`), &out, &errOut)
+
+	p := findPost(*posts, "/api/monitoring/telemetry")
+	if p == nil {
+		t.Fatalf("unmeasured usage must still report identity; posts=%v", *posts)
 	}
-	// but context POST did fire (pct present)
+	var d map[string]any
+	if err := json.Unmarshal([]byte(p.body), &d); err != nil {
+		t.Fatalf("telemetry body not JSON: %q", p.body)
+	}
+	if d["account"] != "acct-9/org-9" || d["runtime"] != "claude" {
+		t.Errorf("identity = account %v runtime %v, want acct-9/org-9 + claude",
+			d["account"], d["runtime"])
+	}
+	// The unmeasured fields stay ABSENT — never fabricated as zero.
+	for _, key := range []string{"rate_limits", "cost", "tokens"} {
+		if _, present := d[key]; present {
+			t.Errorf("%s has no source ⇒ must be omitted, got %v", key, d[key])
+		}
+	}
+	// and the context POST still fired (pct present)
 	if findPost(*posts, "/api/agent/context") == nil {
 		t.Errorf("pct present ⇒ context POST expected")
 	}
@@ -281,9 +310,9 @@ func TestContextReportThrottle(t *testing.T) {
 	if err := os.WriteFile(stamp, []byte("995.0"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	var out bytes.Buffer
+	var out, errOut bytes.Buffer
 	cmdContextReport(srv.Client(), cfg, testEnv(nil), 1000.0,
-		strings.NewReader(`{"context_window":{"used_percentage":50}}`), &out)
+		strings.NewReader(`{"context_window":{"used_percentage":50}}`), &out, &errOut)
 	if len(*posts) != 0 {
 		t.Errorf("throttled ⇒ no POSTs, got %v", *posts)
 	}
@@ -298,9 +327,9 @@ func TestContextReportStampAdvances(t *testing.T) {
 	srv, _ := contextServer(t)
 	home := t.TempDir()
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle", Home: home}
-	var out bytes.Buffer
+	var out, errOut bytes.Buffer
 	cmdContextReport(srv.Client(), cfg, testEnv(nil), 2000.0,
-		strings.NewReader(`{"context_window":{"used_percentage":50}}`), &out)
+		strings.NewReader(`{"context_window":{"used_percentage":50}}`), &out, &errOut)
 	raw, err := os.ReadFile(reportStampPath(cfg))
 	if err != nil {
 		t.Fatalf("stamp not written: %v", err)
@@ -316,9 +345,9 @@ func TestContextReportStampAdvances(t *testing.T) {
 func TestContextReportNoTokenNoPost(t *testing.T) {
 	srv, posts := contextServer(t)
 	cfg := Config{Base: srv.URL, Token: "", ID: "", Home: t.TempDir()}
-	var out bytes.Buffer
+	var out, errOut bytes.Buffer
 	rc := cmdContextReport(srv.Client(), cfg, testEnv(nil), 1000.0,
-		strings.NewReader(`{"context_window":{"used_percentage":77}}`), &out)
+		strings.NewReader(`{"context_window":{"used_percentage":77}}`), &out, &errOut)
 	if rc != 0 {
 		t.Fatalf("rc = %d", rc)
 	}
@@ -333,9 +362,9 @@ func TestContextReportNoTokenNoPost(t *testing.T) {
 // TestContextReportBestEffortOnFault: an unreachable base still exits 0 + prints.
 func TestContextReportBestEffortOnFault(t *testing.T) {
 	cfg := Config{Base: "http://127.0.0.1:1", Token: "t", ID: "kyle", Home: t.TempDir()}
-	var out bytes.Buffer
+	var out, errOut bytes.Buffer
 	rc := cmdContextReport(defaultHTTPClient(), cfg, testEnv(nil), 1000.0,
-		strings.NewReader(`{"context_window":{"used_percentage":30}}`), &out)
+		strings.NewReader(`{"context_window":{"used_percentage":30}}`), &out, &errOut)
 	if rc != 0 {
 		t.Fatalf("rc = %d, want 0 (best-effort)", rc)
 	}
@@ -522,9 +551,9 @@ func TestContextReportTelemetryAccountLabel(t *testing.T) {
 	home := writeClaudeJSON(t,
 		`{"userID":"acct-123","oauthAccount":{"emailAddress":"eva.cheng@gofreight.com","organizationName":"GoFreight","organizationUuid":"org-team"}}`)
 	payload := `{"rate_limits":{"five_hour":{"used_percentage":30,"resets_at":1720000000}}}`
-	var out bytes.Buffer
+	var out, errOut bytes.Buffer
 	rc := cmdContextReport(srv.Client(), cfg,
-		testEnv(map[string]string{"HOME": home}), 1000.0, strings.NewReader(payload), &out)
+		testEnv(map[string]string{"HOME": home}), 1000.0, strings.NewReader(payload), &out, &errOut)
 	if rc != 0 {
 		t.Fatalf("rc = %d", rc)
 	}
@@ -548,7 +577,7 @@ func TestContextReportTelemetryAccountLabel(t *testing.T) {
 	*posts = nil
 	cfg2 := Config{Base: srv.URL, Token: "t", ID: "kyle", Home: t.TempDir()}
 	rc = cmdContextReport(srv.Client(), cfg2,
-		testEnv(map[string]string{"HOME": t.TempDir()}), 1000.0, strings.NewReader(payload), &out)
+		testEnv(map[string]string{"HOME": t.TempDir()}), 1000.0, strings.NewReader(payload), &out, &errOut)
 	if rc != 0 {
 		t.Fatalf("rc = %d", rc)
 	}

@@ -80,8 +80,12 @@ func TestFullChain_MockShellToHTTPServer(t *testing.T) {
 	if gotCT != "application/json" {
 		t.Errorf("Content-Type = %q, want application/json", gotCT)
 	}
-	if gotBody["agent_id"] != "agent-xyz" {
-		t.Errorf("agent_id = %v, want agent-xyz", gotBody["agent_id"])
+	// The reporting identity is the verified JWT sub, never a body key. The frozen
+	// ingest schema does not declare agent_id and the server refuses unknown fields,
+	// so sending it 422s the ENTIRE heartbeat — hardware, binaries, claude probe and
+	// runtime capabilities together.
+	if _, present := gotBody["agent_id"]; present {
+		t.Errorf("agent_id must not be on the wire; body = %v", gotBody)
 	}
 	if gotBody["machine"] != "Seth's MacBook Pro" {
 		t.Errorf("machine = %v, want Seth's MacBook Pro", gotBody["machine"])

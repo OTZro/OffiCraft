@@ -822,8 +822,10 @@ func TestCommandReporter_PostsPayload(t *testing.T) {
 	if gotAuth != "Bearer tok-1" {
 		t.Fatalf("auth = %q, want Bearer tok-1", gotAuth)
 	}
-	if gotBody["agent_id"] != "agent-9" {
-		t.Fatalf("agent_id = %v, want agent-9", gotBody["agent_id"])
+	// Identity rides the token, not the body. command_result.member_id below is a
+	// legitimate TARGET and stays.
+	if _, present := gotBody["agent_id"]; present {
+		t.Fatalf("receipt must not send agent_id; body = %v", gotBody)
 	}
 	cr, ok := gotBody["command_result"].(map[string]any)
 	if !ok {

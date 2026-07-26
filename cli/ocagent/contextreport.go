@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -40,9 +41,13 @@ import (
 // 30s window (both POSTs ride the SAME window).
 const reportThrottleSecs = 30.0
 
-// contextBody is the context POST wire body: {agent_id, context_pct}.
+// contextBody is the context POST wire body: {context_pct}.
+//
+// NO agent_id: the gauge key is the verified JWT sub (identity-from-token), the
+// frozen AgentContextIngestDTO does not declare the field, and the server's
+// mutable-write decoder REFUSES unknown keys — a self-reported agent_id makes
+// the whole POST a 422. See the telemetryBody note below.
 type contextBody struct {
-	AgentID    string  `json:"agent_id"`
 	ContextPct float64 `json:"context_pct"`
 }
 
@@ -69,20 +74,35 @@ type tokensBody struct {
 	CacheRead int `json:"cache_read"`
 }
 
-// telemetryBody is the monitoring telemetry POST wire body. Field order mirrors
-// Python's {"agent_id", **telemetry, "account", "machine"} (agent_id, rate_limits,
-// cost, tokens, account, machine). rate_limits/cost/tokens are pointers with
-// omitempty so an absent source is dropped — and, crucially, cost is *float64 so a
-// REAL 0.0 (a brand-new session) is KEPT while a missing cost is omitted (a plain
-// float64 with omitempty would wrongly drop 0.0). machine is always present in
-// practice (localHost defaults to the server-self id) but stays omitempty for the
-// empty guard.
+// telemetryBody is the monitoring telemetry POST wire body.
+//
+// 🔴 EVERY KEY HERE MUST EXIST IN THE FROZEN AgentTelemetryIngestDTO
+// (spec/openapi.json, additionalProperties:false). The server routes all mutable
+// writes through a DisallowUnknownFields decoder, so ONE undeclared key 422s the
+// WHOLE report — usage, cost and account together. That is exactly how this
+// reporter went dark: it kept sending the retired self-reported `agent_id`
+// (identity is the verified JWT sub, never a body field) and every POST was
+// refused. `telemetry_wire_test.go` pins each key against the frozen schema.
+//
+// rate_limits/cost/tokens are pointers with omitempty so an absent source is
+// dropped — and, crucially, cost is *float64 so a REAL 0.0 (a brand-new session)
+// is KEPT while a missing cost is omitted (a plain float64 with omitempty would
+// wrongly drop 0.0). machine is always present in practice (localHost defaults to
+// the server-self id) but stays omitempty for the empty guard.
+//
+// Runtime is ALWAYS "claude" — this reporter only ever runs as a Claude Code
+// statusLine command. It doubles as the report's identity payload: it satisfies
+// the server's "at least one telemetry field" admission rule, so an identity-only
+// report (no usage measured yet) is still accepted instead of being dropped.
 type telemetryBody struct {
-	AgentID    string      `json:"agent_id"`
+	Runtime    string      `json:"runtime"`
 	RateLimits *rateLimits `json:"rate_limits,omitempty"`
 	Cost       *float64    `json:"cost,omitempty"`
 	Tokens     *tokensBody `json:"tokens,omitempty"`
-	Account    string      `json:"account"`
+	// Account is the stable monitoring attribution key, OMITTED when unreadable.
+	// Never a literal "unknown": a sentinel would mint a phantom account row in
+	// the owner's monitoring fold that looks like a real, separate account.
+	Account string `json:"account,omitempty"`
 	// AccountLabel is the human-readable owner-facing label for the account key
 	// ("<emailAddress>(<organizationName>)" from oauthAccount, T-260e). Display
 	// only — never part of the account KEY — and omitted when unreadable (the
@@ -95,7 +115,7 @@ type telemetryBody struct {
 // time in fractional seconds (mirrors time.time()) — injected so the throttle is
 // testable. ALWAYS returns 0 (best-effort + dual-use status line), identical to
 // Python cmd_context_report.
-func cmdContextReport(client httpClient, cfg Config, env func(string) string, now float64, stdin io.Reader, out io.Writer) int {
+func cmdContextReport(client httpClient, cfg Config, env func(string) string, now float64, stdin io.Reader, out, errw io.Writer) int {
 	payload := ""
 	if raw, err := io.ReadAll(stdin); err == nil { // a read fault degrades to ""
 		payload = string(raw)
@@ -109,29 +129,28 @@ func cmdContextReport(client httpClient, cfg Config, env func(string) string, no
 			// session — used_percentage is null) we honestly SKIP it rather than
 			// fabricate a fake 0. pct gates ONLY its own POST, never the telemetry.
 			if havePct {
-				postJSON(client, cfg, "/api/agent/context",
-					contextBody{AgentID: cfg.ID, ContextPct: pct})
+				reportPost(client, cfg, "/api/agent/context", contextBody{ContextPct: pct}, errw)
 			}
-			// ADDITIVE telemetry POST, pct-INDEPENDENT. Skipped entirely when there's
-			// no real telemetry (an empty body would 400 at the server).
-			if rl, cost, tokens, hasTel := buildTelemetry(payload); hasTel {
-				body := telemetryBody{
-					AgentID:    cfg.ID,
-					RateLimits: rl,
-					Cost:       cost,
-					Tokens:     tokens,
-				}
-				account := readClaudeAccount(env)
-				if account == "" {
-					account = "unknown" // honest sentinel
-				}
-				body.Account = account
-				body.AccountLabel = readClaudeAccountLabel(env)
-				if machine := localHost(env); machine != "" {
-					body.Machine = machine
-				}
-				postJSON(client, cfg, "/api/monitoring/telemetry", body)
+			// ADDITIVE telemetry POST, pct-INDEPENDENT — and IDENTITY-INDEPENDENT of
+			// usage. A measured usage source (rate_limits / cost / tokens) is added
+			// when present, but its ABSENCE must never suppress the report: runtime +
+			// account + machine are facts we always know, and withholding them left
+			// the owner's monitoring fold showing a stale runtime's account (or none)
+			// for a live claude session. runtime is always set, so the body is never
+			// empty and the server never has to reject it.
+			rl, cost, tokens := buildTelemetry(payload)
+			body := telemetryBody{
+				Runtime:      "claude",
+				RateLimits:   rl,
+				Cost:         cost,
+				Tokens:       tokens,
+				Account:      readClaudeAccount(env),
+				AccountLabel: readClaudeAccountLabel(env),
 			}
+			if machine := localHost(env); machine != "" {
+				body.Machine = machine
+			}
+			reportPost(client, cfg, "/api/monitoring/telemetry", body, errw)
 			// Stamp the throttle window (NOT bound to any POST's status): once we've
 			// done our best-effort POSTs, advance the window so the next tick is
 			// throttled (keeps pct=None ticks from re-POSTing telemetry every tick).
@@ -141,6 +160,38 @@ func cmdContextReport(client httpClient, cfg Config, env func(string) string, no
 
 	fmt.Fprintln(out, renderStatusline(payload, env, now))
 	return 0
+}
+
+// reportPost POSTs one best-effort report and — unlike the bare postJSON it wraps
+// — leaves an OBSERVABLE TRACE when the server refuses it. A rejected report used
+// to be indistinguishable from a delivered one at every layer: postJSON dropped
+// the status, cmdContextReport always exits 0, and the throttle stamp advances on
+// attempt rather than on success, so a reporter that had 422'd every 30 seconds
+// for hours still looked perfectly healthy from the outside. The line goes to
+// STDERR (never `out` — Claude Code renders stdout verbatim as the status line)
+// and includes the response body, because the interesting refusals are schema
+// refusals that name the offending key. Delivery stays best-effort: nothing here
+// changes the exit code or the throttle.
+func reportPost(client httpClient, cfg Config, path string, body any, errw io.Writer) {
+	status, detail := httpRequest(client, http.MethodPost, cfg.Base+path, cfg.Token, body)
+	if status >= 200 && status < 300 {
+		return
+	}
+	if errw == nil {
+		return
+	}
+	fmt.Fprintf(errw, "[ocagent] context-report: POST %s FAILED status=%d: %s\n",
+		path, status, truncateForLog(strings.TrimSpace(detail)))
+}
+
+// truncateForLog caps a diagnostic string so a large transcript-derived body
+// cannot flood the warden log.
+func truncateForLog(s string) string {
+	const max = 400
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 // ---------------------------------------------------------------------------
@@ -561,14 +612,16 @@ func claudeOrgUUID(d map[string]any) string {
 	return strings.TrimSpace(org)
 }
 
-// buildTelemetry parses a statusLine payload into the telemetry pieces
-// (rate_limits, cost, tokens) and reports whether ANY is present. Every field is
-// OMITTED when its source is missing (the panel shows 未量到, never a fabricated 0);
-// a real 0.0 cost IS kept. Mirrors _build_telemetry.
-func buildTelemetry(raw string) (rl *rateLimits, cost *float64, tokens *tokensBody, has bool) {
+// buildTelemetry parses a statusLine payload into the MEASURED telemetry pieces
+// (rate_limits, cost, tokens). Every field is OMITTED when its source is missing
+// (the panel shows 未量到, never a fabricated 0); a real 0.0 cost IS kept. Mirrors
+// _build_telemetry. It deliberately reports no "anything present?" verdict: the
+// caller must not gate the report — least of all the account identity — on
+// whether usage happened to be measurable this tick.
+func buildTelemetry(raw string) (rl *rateLimits, cost *float64, tokens *tokensBody) {
 	obj, ok := safeJSON(raw).(map[string]any)
 	if !ok {
-		return nil, nil, nil, false
+		return nil, nil, nil
 	}
 
 	// rate_limits: pass each present window's used_percentage + resets_at through raw.
@@ -605,8 +658,7 @@ func buildTelemetry(raw string) (rl *rateLimits, cost *float64, tokens *tokensBo
 		}
 	}
 
-	has = rl != nil || cost != nil || tokens != nil
-	return rl, cost, tokens, has
+	return rl, cost, tokens
 }
 
 // parseTranscriptTokens sums today's assistant-message token usage from a Claude

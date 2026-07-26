@@ -504,8 +504,10 @@ func TestRun_AnnouncesSelfUpdateBeforeExit(t *testing.T) {
 	if calls[0].path != selfUpdateReportPath {
 		t.Fatalf("announce path = %q, want %q", calls[0].path, selfUpdateReportPath)
 	}
-	if calls[0].payload["agent_id"] != "mira-1" {
-		t.Fatalf("announce agent_id = %v, want mira-1", calls[0].payload["agent_id"])
+	// Identity rides the token, not the body: an undeclared agent_id would 422 the
+	// whole announcement (see buildTelemetryPayload).
+	if _, present := calls[0].payload["agent_id"]; present {
+		t.Fatalf("announce must not send agent_id; payload = %#v", calls[0].payload)
 	}
 	su, ok := calls[0].payload["self_update"].(map[string]any)
 	if !ok {
