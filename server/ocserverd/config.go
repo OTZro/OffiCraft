@@ -132,9 +132,10 @@ type Config struct {
 	SseContextHighSet SseContextHighSet
 }
 
-// tomlFile is the on-disk oc.toml shape (unknown keys/tables are ignored, so
-// the file can carry other sections — [sse_context_high] etc. — without
-// breaking this reader, same as the Python tomllib readers).
+// tomlFile is the on-disk oc.toml shape. Settings outside this schema are
+// rejected so a typo cannot silently start the server with a default. The one
+// deliberate escape hatch is [extensions], which reserves a namespaced area
+// for configuration owned by extensions rather than ocserverd itself.
 type tomlFile struct {
 	Server struct {
 		Host      string `toml:"host"`
@@ -162,6 +163,19 @@ type tomlFile struct {
 		MinBootSecs   *float64 `toml:"min_boot_secs"`
 		StaleGuard    *bool    `toml:"stale_guard"`
 	} `toml:"sse_context_high"`
+	Extensions extensionConfig `toml:"extensions"`
+}
+
+// extensionConfig deliberately owns every key below [extensions] without
+// interpreting it. Implementing toml.Unmarshaler makes the decoder mark that
+// whole subtree as consumed while keeping unknown keys elsewhere fail-closed.
+type extensionConfig struct{}
+
+func (extensionConfig) UnmarshalTOML(value any) error {
+	if _, ok := value.(map[string]any); !ok {
+		return fmt.Errorf("[extensions] must be a table")
+	}
+	return nil
 }
 
 func defaultConfig() Config {
@@ -204,8 +218,16 @@ func loadConfig(path string) (Config, []string, error) {
 	var f tomlFile
 	// Preload the default so an absent port keeps its convention value.
 	f.Server.Port = cfg.Server.Port
-	if err := toml.Unmarshal(raw, &f); err != nil {
+	md, err := toml.Decode(string(raw), &f)
+	if err != nil {
 		return cfg, nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if unknown := md.Undecoded(); len(unknown) > 0 {
+		keys := make([]string, 0, len(unknown))
+		for _, key := range unknown {
+			keys = append(keys, key.String())
+		}
+		return cfg, nil, fmt.Errorf("parse %s: unknown setting(s): %s; only [extensions] may contain extension-owned settings", path, strings.Join(keys, ", "))
 	}
 	// A malformed namespace must fail LOUD: silently folding back to the main
 	// instance would cross-wire two instances' wardens/paths.

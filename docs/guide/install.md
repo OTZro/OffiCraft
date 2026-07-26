@@ -217,6 +217,15 @@ bin/ocserver install --force    # 重跑每一步（不動既有密碼）
 
 **除此之外不碰你機器上任何其他東西。**
 
+### `oc.toml` 的設定範圍
+
+OffiCraft 接受 `[server]`（`port`、`namespace`）與 `[storage]`（`dsn`）的既定設定；舊版的 `[auth]`、`[server].host`、`[sse_context_high]` 與 `[storage].database_url` 仍可讀取以便遷移，但會提示你移除。其他拼錯欄位或未知區域會拒絕啟動，避免默默套用預設值。若是由擴充功能管理的設定，請明確放在 `[extensions]` 下，例如：
+
+```toml
+[extensions.example]
+enabled = true
+```
+
 > release tarball 那條路只落 `~/.officraft/bin` + 資料庫，並註冊 `com.officraft.serve`
 > 一個 job——**不裝 autodeploy 與 tunnel**，那兩個是原始碼路徑才有的。
 

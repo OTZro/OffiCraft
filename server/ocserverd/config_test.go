@@ -123,6 +123,32 @@ func TestLoadConfigEffectiveSchemaDrawsNoWarnings(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsUnknownSettingsButAllowsExtensions(t *testing.T) {
+	write := func(t *testing.T, body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "oc.toml")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	path := write(t, "[server]\nport = 8796\npoert = 8797\n")
+	if _, _, err := loadConfig(path); err == nil || !strings.Contains(err.Error(), "server.poert") || !strings.Contains(err.Error(), "[extensions]") {
+		t.Fatalf("unknown server setting must fail with the extension escape hatch: %v", err)
+	}
+
+	path = write(t, "[unrelated]\nvalue = true\n")
+	if _, _, err := loadConfig(path); err == nil || !strings.Contains(err.Error(), "unrelated.value") {
+		t.Fatalf("unknown table must fail loud: %v", err)
+	}
+
+	path = write(t, "[extensions.plugin]\nenabled = true\nendpoint = \"https://example.test\"\n")
+	if _, warnings, err := loadConfig(path); err != nil || len(warnings) != 0 {
+		t.Fatalf("extensions namespace must remain available: warnings=%v err=%v", warnings, err)
+	}
+}
+
 func TestLoadConfigNamespace(t *testing.T) {
 	write := func(t *testing.T, body string) string {
 		t.Helper()
