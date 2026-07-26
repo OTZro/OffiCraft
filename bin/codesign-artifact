@@ -159,12 +159,12 @@ else
   if [[ "${OC_CODESIGN_REQUIRE:-0}" == "1" ]]; then
     echo "[codesign-artifact] FAIL-IDENTITY-MISSING: codesigning identity \"$IDENTITY\" is not in the keychain," >&2
     echo "[codesign-artifact]   and OC_CODESIGN_REQUIRE=1 forbids the adhoc fallback." >&2
-    echo "[codesign-artifact]   $BIN would ship ADHOC-signed (TCC grants would NOT survive updates)." >&2
+    echo "[codesign-artifact]   $BIN would ship ADHOC-signed (its signing identity changes every build)." >&2
     echo "[codesign-artifact]   provision this release machine once with: bash bin/setup-codesign-cert" >&2
     exit 4
   fi
   echo "[codesign-artifact] WARNING: codesigning identity \"$IDENTITY\" not in the keychain;"
-  echo "[codesign-artifact]          $BIN ships ADHOC-signed (TCC grants will NOT survive updates)."
+  echo "[codesign-artifact]          $BIN ships ADHOC-signed (its signing identity changes every build)."
   echo "[codesign-artifact]          provision a release machine once with: bash bin/setup-codesign-cert"
   exit 0
 fi
@@ -192,7 +192,7 @@ if ! codesign --force --sign "$IDENTITY" --identifier "$IDENT" --timestamp=none 
     echo "[codesign-artifact] FAIL-SIGN-FAILED: the identity \"$IDENTITY\" IS in the keychain but" >&2
     echo "[codesign-artifact]   signing/verifying $BIN FAILED, and OC_CODESIGN_REQUIRE=1 forbids" >&2
     echo "[codesign-artifact]   falling back to the adhoc build." >&2
-    echo "[codesign-artifact]   $BIN would ship ADHOC-signed (TCC grants would NOT survive updates)." >&2
+    echo "[codesign-artifact]   $BIN would ship ADHOC-signed (its signing identity changes every build)." >&2
     echo "[codesign-artifact]   is the login keychain unlocked / the cert still valid? see bin/setup-codesign-cert" >&2
     exit 5
   fi
