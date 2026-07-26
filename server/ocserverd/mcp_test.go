@@ -242,6 +242,42 @@ func TestToolsCallRejectsUnknownMutableArguments(t *testing.T) {
 	}
 }
 
+func TestMutableToolCatalogAndLoopbackCloseNestedDTOs(t *testing.T) {
+	raw, err := os.ReadFile("../../spec/mcp-catalog.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var catalog struct {
+		Tools []struct {
+			Name        string         `json:"name"`
+			InputSchema map[string]any `json:"inputSchema"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(raw, &catalog); err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range catalog.Tools {
+		if tool.Name != "create_task" {
+			continue
+		}
+		properties := tool.InputSchema["properties"].(map[string]any)
+		target := properties["target"].(map[string]any)
+		if target["additionalProperties"] != false {
+			t.Fatalf("create_task.target must declare closed nested DTO semantics: %#v", target)
+		}
+		break
+	}
+
+	srv, secret, _ := newWiredTestServer(t)
+	ownerTok, _ := mintJWT("owner", "owner", 300, secret, time.Now().Unix(), "")
+	payload := postMCP(t, srv.URL, ownerTok,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_task","arguments":{"title":"must not be created","target":{"kind":"member","typo":"must not disappear"}}}}`)
+	result := payload["result"].(map[string]any)
+	if result["isError"] != true || result["structuredContent"].(map[string]any)["error"].(map[string]any)["code"] != "validation_error" {
+		t.Fatalf("nested unknown MCP argument must be refused: %v", result)
+	}
+}
+
 // TestToolsCallRelocateMemberMovesWorker (P7c, gate rc-2786636f30e5 外包對齊正職):
 // the MCP channel for moving a worker is the EXISTING relocate_member tool —
 // its member_id argument also accepts a worker id, and the handler falls

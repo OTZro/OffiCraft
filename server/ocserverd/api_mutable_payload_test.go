@@ -53,3 +53,18 @@ func TestMutableJSONDecoderStillAllowsDeclaredMapContents(t *testing.T) {
 		t.Fatalf("declared map content = %#v, want preserved", got)
 	}
 }
+
+func TestMutableJSONDecoderRejectsTrailingJSON(t *testing.T) {
+	var body struct {
+		Title string `json:"title"`
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks",
+		strings.NewReader(`{"title":"first"} {"title":"second"}`))
+	if decodeJSONBodyRequired(rec, req, &body, "title") {
+		t.Fatal("a second JSON value must be refused")
+	}
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422: %s", rec.Code, rec.Body.String())
+	}
+}

@@ -112,6 +112,14 @@ func decodeJSONBodyStrict(w http.ResponseWriter, r *http.Request, dst any, requi
 			writeError(w, http.StatusUnprocessableEntity, "invalid request body: "+err.Error())
 			return false
 		}
+		if err := dec.Decode(&struct{}{}); err != io.EOF {
+			if err == nil {
+				writeError(w, http.StatusUnprocessableEntity, "invalid request body: multiple JSON values")
+			} else {
+				writeError(w, http.StatusUnprocessableEntity, "invalid request body: "+err.Error())
+			}
+			return false
+		}
 	}
 	for _, name := range required {
 		if _, ok := keys[name]; !ok {

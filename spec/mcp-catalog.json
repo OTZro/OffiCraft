@@ -404,7 +404,8 @@
               }
             },
             "title": "ChatAttachmentInputDTO",
-            "type": "object"
+            "type": "object",
+            "additionalProperties": false
           }
         },
         "properties": {
@@ -555,7 +556,8 @@
               }
             },
             "title": "ChatAttachmentInputDTO",
-            "type": "object"
+            "type": "object",
+            "additionalProperties": false
           }
         },
         "properties": {
@@ -1115,7 +1117,8 @@
                 }
               },
               "title": "LessonsEditDTO",
-              "type": "object"
+              "type": "object",
+              "additionalProperties": false
             },
             "title": "Edits",
             "type": "array"
@@ -1313,7 +1316,8 @@
             "required": [
               "kind"
             ],
-            "type": "object"
+            "type": "object",
+            "additionalProperties": false
           },
           "title": {
             "title": "Title",
@@ -1420,7 +1424,8 @@
                 "name",
                 "dod"
               ],
-              "type": "object"
+              "type": "object",
+              "additionalProperties": false
             },
             "title": "Steps",
             "type": "array"
@@ -1564,7 +1569,8 @@
               }
             },
             "title": "ChatAttachmentInputDTO",
-            "type": "object"
+            "type": "object",
+            "additionalProperties": false
           }
         },
         "properties": {
@@ -1744,7 +1750,8 @@
             "required": [
               "kind"
             ],
-            "type": "object"
+            "type": "object",
+            "additionalProperties": false
           },
           "task_id": {
             "type": "string"
@@ -1978,7 +1985,8 @@
                   "required": [
                     "name"
                   ],
-                  "type": "object"
+                  "type": "object",
+                  "additionalProperties": false
                 },
                 "type": "array"
               },
@@ -2088,7 +2096,8 @@
                 }
               },
               "title": "LessonsEditDTO",
-              "type": "object"
+              "type": "object",
+              "additionalProperties": false
             },
             "title": "Edits",
             "type": "array"
