@@ -215,13 +215,15 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 			if pending := s.hub.DrainWardenCommands(wardenID); len(pending) > 0 {
 				for i, frame := range pending {
 					if !write(frame) {
-						// T-66a2: the drain already emptied the FIFO, so THIS
-						// frame and every frame behind it are in nobody's hands
-						// but ours. Returning here used to discard them with no
-						// log, no receipt and no field — a lost order looked
-						// exactly like an order never sent. Hand them back so the
-						// hub can requeue what has no re-decision path (update)
-						// and name what it drops.
+						// T-66a2 (supersedes T-e0e3 O1's blunt requeue): the drain
+						// already emptied the FIFO, so THIS frame and every frame
+						// behind it are in nobody's hands but ours. Returning here
+						// used to discard them with no log, no receipt and no field
+						// — a lost order looked exactly like an order never sent.
+						// Hand them back so the hub can requeue what has no
+						// re-decision path (update) and NAME what it drops; a blind
+						// requeue-everything would put a stale START back in the
+						// queue that reconcile has already re-decided.
 						s.hub.ReturnUndeliveredCommands(wardenID, pending[i:])
 						return
 					}

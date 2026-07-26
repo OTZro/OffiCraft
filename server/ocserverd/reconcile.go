@@ -913,8 +913,12 @@ func (s *apiServer) stampWakeObservability(m *Member, decision reconcileDecision
 // the placement stamps (rather than by a wake lapse or a warden receipt) — the
 // only kind of explanation a landed START makes obsolete.
 func isPlacementBlockedReason(reason string) bool {
-	return strings.HasPrefix(reason, placementReasonNoMachine+":") ||
-		strings.HasPrefix(reason, placementReasonUnavailable+":")
+	for _, code := range spawnBlockedReasonCodes {
+		if strings.HasPrefix(reason, code+":") {
+			return true
+		}
+	}
+	return false
 }
 
 // ── pre-decide roster passes (producer.py, run inside the cadence tick) ──────

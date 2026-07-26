@@ -332,15 +332,58 @@ func (s *apiServer) resolveWorkerPlacement(w OutsourceWorker, preferred string, 
 	return unavailable("does not exist")
 }
 
-// placementReasonNoMachine / placementReasonUnavailable are the two structured
-// last_op_reason codes a blocked placement writes (the "<code>: <detail>"
-// convention member.last_op_reason already uses). They exist so a stalled
-// worker names its own cause on the cockpit instead of rendering as an
-// unexplained grey row.
+// The structured last_op_reason codes a refused spawn writes (the
+// "<code>: <detail>" convention member.last_op_reason already uses). They exist
+// so a stalled worker names its own cause on the cockpit instead of rendering as
+// an unexplained grey row. The first two are placement verdicts; the rest are the
+// arms notifyWorkerSpawn used to abandon LOG-ONLY — a worker that fails to boot
+// for one of those looked identical to one nobody ever tried to boot, which is
+// exactly the diagnosis-free blank the owner hits on a relocate that goes
+// nowhere. EVERY non-dispatch now leaves a receipt.
 const (
 	placementReasonNoMachine   = "no_machine_selected"
 	placementReasonUnavailable = "machine_unavailable"
+	spawnReasonNoLiveTask      = "no_live_task"
+	spawnReasonBootContext     = "boot_context_failed"
+	spawnReasonNoSecret        = "no_signing_secret"
+	spawnReasonTokenMint       = "token_mint_failed"
+	spawnReasonFrameBuild      = "frame_build_failed"
+	spawnReasonWardenLost      = "warden_unreachable"
+	spawnReasonRespawnDeferred = "respawn_deferred"
+	spawnReasonWakeTimeout     = "wake_timeout"
+	spawnReasonNeverCollected  = "never_collected"
+	spawnReasonHeldDown        = "held_down"
+	// KNOWN LIMITATION — the receipt is a SINGLE SLOT, not a history (owner ruling:
+	// keep it single for now, the structural fix is tracked on its own ticket). All
+	// of the codes here write the same last_op/last_op_reason pair, so the NEWEST
+	// truth overwrites the previous one. The concrete way that bites: a worker
+	// stalls with never_collected (its machine's warden never picked the frame up),
+	// the owner relocates it, the new machine collects the frame but the agent dies
+	// booting → wake_timeout replaces it, and "that other machine never even
+	// received it" is gone. Both readings were true; only the last survives. So this
+	// is NOT the design end state — if you are here because a diagnosis lost its
+	// earlier half, that is the known gap, not a new bug.
 )
+
+// spawnBlockedReasonCodes is the CLOSED set of "we did not dispatch" codes — the
+// seam isPlacementBlockedReason matches on, so a landed START clears any of them.
+// A new code of that kind must be added HERE or its stamp outlives its cause.
+//
+// wake_timeout, never_collected and held_down are DELIBERATELY absent:
+//   - wake_timeout describes a start that WAS dispatched and failed to boot, so
+//     the retry that follows must not erase why the previous one died (31751ae);
+//   - never_collected is the same trap, sharper: the clear runs on every
+//     successful DISPATCH, and this code exists precisely to say that dispatching
+//     is not delivery — listing it would let each retry blank it and put the row
+//     straight back to the permanent silence this whole change removes;
+//   - held_down describes the owner's own 停止 standing, which no dispatch
+//     invalidates — only a restart does, and that writes its own receipt.
+var spawnBlockedReasonCodes = []string{
+	placementReasonNoMachine, placementReasonUnavailable,
+	spawnReasonNoLiveTask, spawnReasonBootContext, spawnReasonNoSecret,
+	spawnReasonTokenMint, spawnReasonFrameBuild, spawnReasonWardenLost,
+	spawnReasonRespawnDeferred,
+}
 
 // stampWorkerPlacementBlocked records WHY a worker was not dispatched, on the
 // worker row the cockpit already reads (last_op / last_op_reason — the 「最近操作」
@@ -401,6 +444,11 @@ func (s *apiServer) clearWorkerPlacementBlock(workerID string) {
 	}
 	fresh.LastOpReason = ""
 	fresh.LastOpLog = ""
+	// The whole stamp was server-written, so its verdict goes with its reason:
+	// leaving last_op_ok=false behind would render this just-dispatched worker as a
+	// FAILED start with nothing to explain it — a fresh blank of the same kind. nil
+	// is the honest "no receipt yet"; the warden's own receipt fills it in.
+	fresh.LastOpOK = nil
 	if err := s.dal.PutOutsourceWorker(*fresh); err != nil {
 		outsourceLog("spawn %s: placement-block clear failed: %v", workerID, err)
 	}
@@ -452,7 +500,12 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 	}
 	t, err := s.dal.GetTask(w.TaskID)
 	if err != nil || t == nil || TaskIsTerminal(t.Status) {
-		return false // no live task to work — never boot a worker into a void
+		// No live task to work — never boot a worker into a void. Stamped, not
+		// merely logged: this arm repeats on EVERY tick forever, so log-only made
+		// a permanently unbootable worker indistinguishable from a booting one.
+		s.stampWorkerPlacementBlocked(&w, spawnReasonNoLiveTask+": bound task "+w.TaskID+
+			" is missing or already closed — nothing left to boot this worker for", now)
+		return false
 	}
 	var manual *TaskManual
 	if t.TypeKey != "" {
@@ -503,11 +556,13 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 	}
 	persona, err := s.buildWorkerBootContext(w, *t, manual)
 	if err != nil {
-		outsourceLog("spawn %s: boot-context fold failed: %v", w.ID, err)
+		s.stampWorkerPlacementBlocked(&w, spawnReasonBootContext+
+			": could not assemble the worker's boot context: "+err.Error(), now)
 		return false
 	}
 	if len(s.secret) == 0 {
-		outsourceLog("spawn %s: no signing secret — fail-closed", w.ID)
+		s.stampWorkerPlacementBlocked(&w, spawnReasonNoSecret+
+			": the server has no JWT signing secret, so no worker token can be minted", now)
 		return false
 	}
 	// Server-mint (the auth authority — never the warden, never the worker):
@@ -523,7 +578,8 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 	// its host, the same WHERE an agent's does.
 	token, err := s.mintAgentToken(w.ID, warden, s.authTokenTTL())
 	if err != nil {
-		outsourceLog("spawn %s: token mint failed: %v", w.ID, err)
+		s.stampWorkerPlacementBlocked(&w, spawnReasonTokenMint+
+			": minting this worker's session token failed: "+err.Error(), now)
 		return false
 	}
 	// P5b convergence: the SAME member `start` shape the reconcile producer
@@ -544,13 +600,18 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 		},
 	})
 	if err != nil {
-		outsourceLog("spawn %s: frame build failed: %v", w.ID, err)
+		s.stampWorkerPlacementBlocked(&w, spawnReasonFrameBuild+
+			": could not build this worker's start frame: "+err.Error(), now)
 		return false
 	}
 	if !s.enqueueToWarden(w.ID, warden, frame) {
 		// The picked warden dropped offline between pickWorkerWarden and the
 		// enqueue — the same fail-closed reachability gate the member dispatch
-		// sits behind. No pacing/row stamp: the next tick retries a fresh pick.
+		// sits behind. No PACING stamp (the next tick retries a fresh pick
+		// unthrottled), but a row receipt: this used to be the one refusal that
+		// left the cockpit with nothing at all to read.
+		s.stampWorkerPlacementBlocked(&w, spawnReasonWardenLost+": machine '"+warden+
+			"' went offline between the placement decision and the dispatch", now)
 		return false
 	}
 	if s.workerStopPending[w.ID] == warden {
@@ -671,6 +732,48 @@ func (s *apiServer) reconcileWorkerLiveness(w OutsourceWorker, now float64) {
 	default:
 		s.workerReconcileStates[w.ID] = decision.State
 	}
+	// A START that was DISPATCHED and never produced a session is the one failure
+	// the worker path had no durable record of at all. The member producer has
+	// turned this exact FSM signal into a receipt since T-ba62
+	// (stampWakeObservability arm (b)); reconcileWorkerLiveness simply never read
+	// it, so a worker whose boot silently failed kept a blank last_op forever
+	// while spawn observability — being in-memory by contract — lost the machine
+	// cell on the next re-exec. That is the X-46 shape: dispatched six times,
+	// nothing to show for any of them. Stamped AFTER the switch so the re-START
+	// this same decision may carry has already run its success-path clear; the
+	// code is deliberately NOT in spawnBlockedReasonCodes, because the retry that
+	// follows a wake timeout must not erase the explanation for it (the very
+	// regression 31751ae fixed on the member side).
+	if decision.StartTimedOut {
+		target := s.workerSpawnTarget[w.ID]
+		// WHICH failure this was is not a detail — the two have different culprits
+		// and different fixes, and a receipt that conflates them sends the owner to
+		// the wrong machine. Enqueueing a frame proves only that it was appended to
+		// the hub's per-warden FIFO (EnqueueWardenCommand is IsOnline + a map
+		// append); nothing on that path observes a reader. The FIFO depth is the one
+		// in-process fact that tells them apart: still non-empty ⇒ NOBODY has
+		// collected the frame, so the runtime on the far machine was never even
+		// asked to start and looking at it is a wild goose chase.
+		//
+		// Residual, deliberately NOT claimed by either message: a frame that WAS
+		// popped can still be lost after the pop (the drain deletes the whole FIFO
+		// before writing it, and a socket write that "succeeds" is only a write into
+		// a buffer — there is no ack anywhere on this path). An empty backlog
+		// therefore means "collected", not "delivered".
+		if s.hub.PendingWardenCommands(target) > 0 {
+			s.stampWorkerPlacementBlocked(&w, spawnReasonNeverCollected+": the start "+
+				"frame for this worker is still queued for machine '"+target+"' — that "+
+				"machine's warden has not picked it up, so nothing has tried to boot "+
+				"yet; check that ocwarden is running and holding its connection there",
+				now)
+			return
+		}
+		s.stampWorkerPlacementBlocked(&w, spawnReasonWakeTimeout+": the start was "+
+			"collected by machine '"+target+"' but this worker never came "+
+			"online within the start window — check that the '"+
+			NormalizeRuntime(w.Runtime)+"' runtime actually runs and is logged in on "+
+			"that machine (warden log: ocwarden.err.log)", now)
+	}
 }
 
 // canonicalWorkerLastOp folds a worker row's last_op verb onto the reconcile
@@ -755,9 +858,59 @@ func (s *apiServer) retryPendingWorkerStop(workerID string) {
 //
 // Owner-chosen placement, so — unlike the ghost recovery — the old machine is NOT
 // benched (the owner may relocate back) and no ghost-kill cooldown is stamped.
+//
+// An owner relocate must ALWAYS end in either a dispatch or a receipt. That is
+// why the O-28 deferral respawnWorkerNow applies to an ACTIVE worker with no kill
+// target is not simply inherited here: a relocate is an explicit placement
+// decision, and swallowing it left the worker with the new pin, no session, and
+// last_op/last_op_reason BLANK — the cockpit's 「尚未分配機器」 with nothing to
+// explain it (the X-46 report). Note what `no kill target` actually means: both
+// the spawn memory AND the live SSE claim are empty, i.e. the worker is not
+// connected, so there is no live session to double — only a possible
+// presence-deaf ghost, which the warden clobber-guard refuses and the FSM
+// zombie-takeover reaps. Dispatching here is therefore exactly what the cadence
+// tick's FSM rescue would do on its next pass, just without the blind window.
 // Callers hold s.outsourceMu.
 func (s *apiServer) relocateWorkerNow(w OutsourceWorker) {
-	s.respawnWorkerNow(w, "relocate")
+	s.respawnWorkerForOwnerOp(w, "relocate")
+}
+
+// respawnWorkerForOwnerOp is the ONE path behind every owner verb that changes a
+// worker in place and is expected to leave it running: relocate (改機器), restart
+// (重啟), and the runtime/model change. All three previously called
+// respawnWorkerNow directly and all three DISCARDED its bool, so all three could
+// end in "nothing happened, nothing written" — a receipt that looks like it was
+// caught is worse than no backstop at all.
+//
+// There is exactly ONE branch point in here, and it is the intent question:
+// **does the owner currently want this worker running?** `desired_state=offline`
+// is an explicit 停止 and it DOMINATES every other owner verb — the same
+// member-parity invariant the scheduler tick already honours (its assigned branch
+// `continue`s on it; TestStoppedWorker_TickNeverRevives pins it). Placement and
+// model are recorded, nothing is started, and the row says exactly that instead of
+// letting one owner action quietly overturn another. Restart cannot reach that arm
+// by construction (it flips desired_state to online first, and 409s otherwise),
+// which is the point: the intent lives in the state, not in per-entry copies.
+//
+// Everything after the branch is shared: kill the old session and make sure a
+// start is genuinely ATTEMPTED, with a receipt on every refusal.
+// Callers hold s.outsourceMu.
+func (s *apiServer) respawnWorkerForOwnerOp(w OutsourceWorker, op string) {
+	if w.DesiredState == DesiredStateOffline {
+		s.stampWorkerPlacementBlocked(&w, spawnReasonHeldDown+": the "+op+" was saved, "+
+			"but nothing was started — this worker is stopped; 重啟 it when you want it "+
+			"to run", nowSecs())
+		return
+	}
+	if s.respawnWorkerNow(w, op) {
+		return
+	}
+	// Deferred: no kill target on an ACTIVE worker. respawnWorkerNow has already
+	// stamped the deferral receipt; drop the pacing stamp its early return skipped
+	// and attempt the start anyway. notifyWorkerSpawn either dispatches (clearing
+	// that receipt) or replaces it with its own cause, so the row is never blank.
+	delete(s.workerSpawnAt, w.ID)
+	s.notifyWorkerSpawn(w, nowSecs())
 }
 
 // resolveWorkerKillTarget resolves the warden a worker kill frame is addressed
@@ -817,9 +970,19 @@ func (s *apiServer) observedWorkerHost(workerID string, tele map[string]any) str
 func (s *apiServer) respawnWorkerNow(w OutsourceWorker, reason string) bool {
 	old := s.resolveWorkerKillTarget(w.ID)
 	if old == "" && w.Status == WorkerStatusActive {
-		outsourceLog("auto-handover deferred %s (%s): reason=%s — no kill target "+
+		outsourceLog("%s deferred %s (%s): no kill target "+
 			"(spawn memory empty, sse offline); no kill, no respawn — tick retries",
-			w.ID, w.Codename, reason)
+			reason, w.ID, w.Codename)
+		// The deferral is a REFUSED start, so it owes the cockpit a receipt like
+		// every other one: the owner-explicit callers (relocate / restart / model
+		// change) discard this bool, and log-only left the worker showing 「尚未分配
+		// 機器」 with a blank last_op forever — nothing to diagnose (the X-46 report).
+		// A landed START clears it (clearWorkerPlacementBlock), and the anti-churn
+		// guard keeps the auto-handover retry loop from re-stamping every tick.
+		s.stampWorkerPlacementBlocked(&w, spawnReasonRespawnDeferred+": the "+reason+
+			" could not clear this worker's previous session — it is marked active but "+
+			"neither the server's spawn memory nor a live connection knows which machine "+
+			"it is on; retrying", nowSecs())
 		return false
 	}
 	// Traceable handover record BEFORE the kill (member換手 shape: notify→reclaim→
