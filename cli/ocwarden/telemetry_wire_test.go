@@ -26,7 +26,38 @@ import (
 // which is why this drift was invisible to the compiler. This test reads the
 // frozen spec off disk and checks the real payloads against it.
 
-func frozenTelemetryProperties(t *testing.T) map[string]bool {
+// ── depth (T-90be) ──────────────────────────────────────────────────────────
+//
+// The check above was TOP-LEVEL ONLY, and the nested blocks declared nothing at
+// all: `hardware` was literally {"title": "Hardware"}. Renaming a nested key —
+// cpu_pct -> cpu_percent — was accepted (HTTP 200), stored verbatim, and then
+// read back as null forever, with the whole suite green. This test's own old
+// fixture proved it: it passed `hardware: {"cpu": "M5"}`, a key no consumer has
+// ever read, and the guard was happy.
+//
+// So the spec now declares the nested shape and this walker descends into it.
+// Two things keep it honest:
+//   - the payloads come from the REAL producers (collectHardware, claudeProber,
+//     collectRuntimeCapabilities), not from literals typed in this file. A
+//     literal fixture only ever proves the fixture matches the spec, which
+//     stays true when the producer is renamed.
+//   - the nested declaration is asserted to EXIST (a walker with nothing to
+//     descend into silently passes everything).
+
+// schemaNode is as much of a JSON-Schema node as this guard needs: the declared
+// child properties and whether the node is closed.
+type schemaNode struct {
+	Properties           map[string]*schemaNode `json:"properties"`
+	AdditionalProperties json.RawMessage        `json:"additionalProperties"`
+}
+
+// closed reports additionalProperties:false — the setting that makes the SERVER
+// refuse an undeclared key instead of storing it.
+func (n *schemaNode) closed() bool {
+	return strings.TrimSpace(string(n.AdditionalProperties)) == "false"
+}
+
+func frozenTelemetrySchema(t *testing.T) *schemaNode {
 	t.Helper()
 	specPath := filepath.Join("..", "..", "spec", "openapi.json")
 	raw, err := os.ReadFile(specPath)
@@ -35,55 +66,124 @@ func frozenTelemetryProperties(t *testing.T) map[string]bool {
 	}
 	var spec struct {
 		Components struct {
-			Schemas map[string]struct {
-				Properties           map[string]json.RawMessage `json:"properties"`
-				AdditionalProperties *bool                      `json:"additionalProperties"`
-			} `json:"schemas"`
+			Schemas map[string]*schemaNode `json:"schemas"`
 		} `json:"components"`
 	}
 	if err := json.Unmarshal(raw, &spec); err != nil {
 		t.Fatalf("parse frozen spec: %v", err)
 	}
 	schema, ok := spec.Components.Schemas["AgentTelemetryIngestDTO"]
-	if !ok {
+	if !ok || schema == nil {
 		t.Fatal("AgentTelemetryIngestDTO not in the frozen spec")
 	}
-	if schema.AdditionalProperties == nil || *schema.AdditionalProperties {
+	if !schema.closed() {
 		t.Fatal("AgentTelemetryIngestDTO is not a closed schema — this guard would be vacuous")
 	}
-	declared := map[string]bool{}
-	for name := range schema.Properties {
-		declared[name] = true
-	}
-	return declared
+	return schema
 }
 
-func undeclaredPayloadKeys(payload map[string]any, declared map[string]bool) []string {
+// undeclaredPayloadKeys walks payload against the schema and returns the
+// dotted paths of keys the frozen spec does not declare. It descends wherever
+// the schema declares properties for that path; a block that declares none
+// (binaries, tokens, command_result, …) is checked at its own level only, so
+// this reports drift, not "the spec is less detailed here".
+func undeclaredPayloadKeys(payload map[string]any, node *schemaNode) []string {
 	var extra []string
-	for key := range payload {
-		if !declared[key] {
-			extra = append(extra, key)
+	var walk func(map[string]any, *schemaNode, string)
+	walk = func(obj map[string]any, at *schemaNode, prefix string) {
+		for key, value := range obj {
+			child, declared := at.Properties[key]
+			if !declared {
+				extra = append(extra, prefix+key)
+				continue
+			}
+			if child == nil || len(child.Properties) == 0 {
+				continue // nothing declared below → nothing to check below
+			}
+			if nested, isObj := value.(map[string]any); isObj {
+				walk(nested, child, prefix+key+".")
+			}
 		}
 	}
+	walk(payload, node, "")
 	sort.Strings(extra)
 	return extra
+}
+
+// nodeAt resolves a dotted path of declared properties, failing the test when
+// the path is not declared. Used to state, as an assertion rather than as a
+// comment, that the guard above actually has somewhere to descend.
+func nodeAt(t *testing.T, root *schemaNode, path string) *schemaNode {
+	t.Helper()
+	at := root
+	for _, step := range strings.Split(path, ".") {
+		child, ok := at.Properties[step]
+		if !ok || child == nil {
+			t.Fatalf("the frozen spec no longer declares %q — the nested guard has "+
+				"nothing to descend into there and would pass any rename", path)
+		}
+		at = child
+	}
+	return at
+}
+
+// realHeartbeat builds the heartbeat payload from the REAL collectors, driven by
+// faked shell/fs seams — the same producers a live 30s cycle calls. Renaming a
+// key in any of them changes what this returns, which is the whole point: a
+// hand-written fixture would keep matching the spec after the producer drifted.
+func realHeartbeat(t *testing.T) map[string]any {
+	t.Helper()
+	runner := fakeRunner{out: fakeProbes}
+	hardware := collectHardware(runner, "darwin")
+	if len(hardware) == 0 {
+		t.Fatal("precondition: the hardware collector produced nothing to check")
+	}
+
+	prober, _, _, _ := newTestProber(newProbeRunner())
+	claude := prober.collect()
+	if len(claude) == 0 {
+		t.Fatal("precondition: the claude prober produced nothing to check")
+	}
+
+	// Both runtimes must RESOLVE, or collectRuntimeCapabilities reports
+	// installed:false and skips logged_in/version entirely — the guard would
+	// then never see the keys it exists to protect.
+	bin := filepath.Join(t.TempDir(), "codex")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("stage a resolvable codex: %v", err)
+	}
+	probes := map[string]string{}
+	for key, value := range fakeProbes {
+		probes[key] = value
+	}
+	probes[bin+" --version"] = "codex-cli 0.52.0"
+	probes[bin+" login status"] = "Logged in"
+	env := func(key string) string {
+		switch key {
+		case "OC_CLAUDE_BIN", "OC_CODEX_BIN":
+			return bin
+		}
+		return ""
+	}
+	runtimes := collectRuntimeCapabilities(env, fakeRunner{out: probes}, claude)
+
+	heartbeat, err := buildTelemetryPayload("m-1", "lab-1", hardware,
+		map[string]string{"ocwarden": "abc123abc123"}, claude, runtimes)
+	if err != nil {
+		t.Fatalf("buildTelemetryPayload: %v", err)
+	}
+	return heartbeat
 }
 
 // TestWardenTelemetryPayloadsMatchFrozenSchema covers all three payloads the
 // warden POSTs to the telemetry endpoint — the heartbeat, the command receipt and
 // the self-update announcement — because a single undeclared key kills whichever
-// one carries it.
+// one carries it. Since T-90be it checks NESTED keys too: a rename inside
+// hardware/claude/runtimes lands with a 200 and is then unreadable forever, so
+// CI is the only place that can notice.
 func TestWardenTelemetryPayloadsMatchFrozenSchema(t *testing.T) {
-	declared := frozenTelemetryProperties(t)
-
-	heartbeat, err := buildTelemetryPayload("m-1", "lab-1",
-		map[string]any{"cpu": "M5"},
-		map[string]string{"ocwarden": "abc123abc123"},
-		map[string]any{"version": "1.2.3"},
-		map[string]any{"claude": map[string]any{"installed": true}})
-	if err != nil {
-		t.Fatalf("buildTelemetryPayload: %v", err)
-	}
+	declared := frozenTelemetrySchema(t)
+	heartbeat := realHeartbeat(t)
 	cases := map[string]map[string]any{
 		"heartbeat": heartbeat,
 		"command_result": {"command_result": map[string]any{
@@ -95,16 +195,56 @@ func TestWardenTelemetryPayloadsMatchFrozenSchema(t *testing.T) {
 	}
 	for name, payload := range cases {
 		if extra := undeclaredPayloadKeys(payload, declared); len(extra) > 0 {
-			t.Errorf("%s payload has keys the frozen schema refuses %v — the whole report "+
-				"would 422; payload = %#v", name, extra, payload)
+			t.Errorf("%s payload carries keys the frozen spec does not declare %v.\n"+
+				"A TOP-LEVEL undeclared key 422s the whole report. A NESTED one is worse: "+
+				"the server answers 200, stores it, and no consumer ever reads it again — "+
+				"nothing outside this test can see that. Declare the key in "+
+				"spec/openapi.json (and teach the server to read it) or fix the producer.\n"+
+				"payload = %#v", name, extra, payload)
 		}
 	}
-	// The heartbeat must still actually carry its measurements (a payload that
-	// passed the schema by being empty would be worthless).
+	// COVERAGE. A payload that passed the schema by being empty would be
+	// worthless, and so would one whose nested blocks are empty: the walker only
+	// checks keys that are actually present, so an absent key is invisible to it.
+	// These are the keys the server reads by name, listed here so that "the
+	// producer stopped emitting it" is as red as "the producer renamed it".
+	// (Checked AFTER the drift assertion above, so a rename is reported as drift
+	// rather than as a missing key.)
 	for _, key := range []string{"machine", "hardware", "binaries", "claude", "runtimes"} {
 		if _, present := heartbeat[key]; !present {
 			t.Errorf("heartbeat dropped %s; payload = %#v", key, heartbeat)
 		}
+	}
+	blockKeys := map[string][]string{
+		"hardware": {"cpu_pct", "ram_pct", "battery_pct", "ac_power"},
+		"claude":   {"version", "cred_file", "sub_readable", "keychain"},
+	}
+	for name, keys := range blockKeys {
+		block, _ := heartbeat[name].(map[string]any)
+		for _, key := range keys {
+			if _, present := block[key]; !present {
+				t.Errorf("heartbeat %s carries no %s — the server reads that key by "+
+					"name, and a key the fixture never emits is a key this guard "+
+					"cannot protect; block = %v", name, key, block)
+			}
+		}
+	}
+	runtimes, _ := heartbeat["runtimes"].(map[string]any)
+	for _, name := range []string{"claude", "codex"} {
+		capability, _ := runtimes[name].(map[string]any)
+		// version is omitted when the runtime is not installed, and for claude it
+		// is transcribed from the claude probe (covered above); installed and
+		// logged_in are what machineSupportsRuntime gates placement on.
+		for _, key := range []string{"installed", "logged_in"} {
+			if _, present := capability[key]; !present {
+				t.Errorf("heartbeat runtimes.%s carries no %s — placement fail-closes "+
+					"without it and the machine silently stops accepting that "+
+					"runtime; capability = %v", name, key, capability)
+			}
+		}
+	}
+	if capability, _ := runtimes["codex"].(map[string]any); capability["version"] == nil {
+		t.Errorf("heartbeat runtimes.codex carries no version; capability = %v", capability)
 	}
 }
 
@@ -158,7 +298,7 @@ func TestRunLogsRefusedTelemetry(t *testing.T) {
 // frozen schema, including the runtime-specific ones (codex reports `effort` and
 // its own camelCase token names; claude reports neither).
 func TestCodexTelemetryPayloadsMatchFrozenSchema(t *testing.T) {
-	declared := frozenTelemetryProperties(t)
+	declared := frozenTelemetrySchema(t)
 	cases := map[string]map[string]any{
 		"identity": {"runtime": "codex", "account": "codex:abc", "account_label": "ChatGPT"},
 		"token usage": {"runtime": "codex", "effort": "medium",
@@ -172,5 +312,113 @@ func TestCodexTelemetryPayloadsMatchFrozenSchema(t *testing.T) {
 		if extra := undeclaredPayloadKeys(payload, declared); len(extra) > 0 {
 			t.Errorf("codex %s payload has keys the frozen schema refuses %v", name, extra)
 		}
+	}
+}
+
+// TestWardenTelemetryGuardSeesNestedRenames is the guard's own POSITIVE
+// CONTROL. TestWardenTelemetryPayloadsMatchFrozenSchema passing means "today's
+// payload matches today's spec" — which is also what a walker that never
+// descends would report, and what the old top-level-only walker DID report
+// while cpu_pct -> cpu_percent went silently unread in production.
+//
+// So: take the real heartbeat, rename ONE nested key at each of the three
+// depths, and require the guard to name it. It fails if the walker stops at the
+// top level, if it stops one level short of runtimes.<rt>.*, or if the spec
+// stops declaring the nested shape.
+func TestWardenTelemetryGuardSeesNestedRenames(t *testing.T) {
+	declared := frozenTelemetrySchema(t)
+	// The nested shape must be DECLARED — a walker with nothing to descend into
+	// passes every payload, which is the failure mode this whole test exists to
+	// rule out.
+	for _, path := range []string{"hardware", "claude", "runtimes",
+		"runtimes.claude", "runtimes.codex"} {
+		if node := nodeAt(t, declared, path); len(node.Properties) == 0 {
+			t.Fatalf("%s declares no properties — nothing below it can be checked", path)
+		}
+	}
+
+	rename := func(payload map[string]any, path []string, from, to string) {
+		at := payload
+		for _, step := range path {
+			next, ok := at[step].(map[string]any)
+			if !ok {
+				t.Fatalf("precondition: %v is not an object in the real payload", path)
+			}
+			at = next
+		}
+		value, present := at[from]
+		if !present {
+			t.Fatalf("precondition: the real producer no longer emits %v.%s", path, from)
+		}
+		delete(at, from)
+		at[to] = value
+	}
+
+	cases := []struct {
+		name       string
+		path       []string
+		from, to   string
+		wantReport string
+	}{
+		{"hardware", nil, "cpu_pct", "cpu_percent", "hardware.cpu_percent"},
+		{"claude", nil, "version", "cli_version", "claude.cli_version"},
+		{"runtimes", []string{"codex"}, "logged_in", "loggedIn", "runtimes.codex.loggedIn"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := realHeartbeat(t)
+			block, ok := payload[tc.name].(map[string]any)
+			if !ok {
+				t.Fatalf("precondition: heartbeat has no %s block", tc.name)
+			}
+			if extra := undeclaredPayloadKeys(payload, declared); len(extra) > 0 {
+				t.Fatalf("precondition: the untouched payload is already drifting %v", extra)
+			}
+			rename(block, tc.path, tc.from, tc.to)
+			extra := undeclaredPayloadKeys(payload, declared)
+			found := false
+			for _, key := range extra {
+				if key == tc.wantReport {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("renaming %s.%v.%s -> %s went UNREPORTED (guard said %v). A "+
+					"nested rename is accepted by the server with a 200, stored, and "+
+					"then read as null forever — CI is the only place it can be seen.",
+					tc.name, tc.path, tc.from, tc.to, extra)
+			}
+		})
+	}
+}
+
+// TestFrozenTelemetryNestedBlocksStayOpen is the COMPATIBILITY sentinel for the
+// owner ruling (rc-55861dd893c6): declare the shape, but keep accepting keys
+// the spec has not heard of.
+//
+// The tempting "improvement" is additionalProperties:false, because then the
+// server rejects a rename at runtime instead of only in CI. That refusal is not
+// per-key: DisallowUnknownFields fails the WHOLE body, so one undeclared nested
+// key nulls hardware, binaries, claude and runtimes together on every machine at
+// once — measured, and identical to the a7fa594 outage. The two failure modes
+// are not symmetric: a rename caught only by CI costs one red build, while a
+// closed nested schema costs the fleet's telemetry the moment any warden version
+// differs from the spec in either direction.
+func TestFrozenTelemetryNestedBlocksStayOpen(t *testing.T) {
+	declared := frozenTelemetrySchema(t)
+	for _, path := range []string{"hardware", "claude", "runtimes",
+		"runtimes.claude", "runtimes.codex"} {
+		if nodeAt(t, declared, path).closed() {
+			t.Errorf("%s has additionalProperties:false. Declaring the shape is for CI; "+
+				"closing it makes the SERVER 422 the entire heartbeat over one nested "+
+				"key it has not heard of — every machine's telemetry going null at "+
+				"once, which is the outage this declaration was written to avoid.", path)
+		}
+	}
+	// The top level is a different question and stays closed: those keys are the
+	// DTO's own fields, the server has always refused unknown ones there, and
+	// every producer in this module is checked against that list above.
+	if !declared.closed() {
+		t.Error("the top-level DTO must stay closed")
 	}
 }

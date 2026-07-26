@@ -235,7 +235,7 @@
         "type": "object"
       },
       "AgentTelemetryIngestDTO": {
-        "description": "Inbound warden/agent telemetry report (``POST /api/monitoring/telemetry``).\n\nThe reporter pushes what the model can't reliably read about itself: the\naccount-wide ``rate_limits`` (5h/7d windows), this session's own ``tokens``,\nthe host ``hardware`` snapshot (cpu/ram/battery/ac), the harness-computed\ncumulative ``cost``, and the session ``runtime``. Warden heartbeats additionally\ncarry ``binaries`` plus provider-neutral ``runtimes`` capability probes; the\nserver compares binary fingerprints against its embedded prebuilts and uses\nruntime readiness for placement. ``machine`` / ``account`` are merge tags\n(quota is per-account; hardware is per-host). Fields are permissive so a bad\nbody is a flat 400 (not a Pydantic 422); at least one telemetry field must be\npresent.\n\nThe reporting identity is the CALLER (the verified JWT ``sub``), NEVER a\nself-reported ``agent_id`` (identity-from-token audit) — that field was removed,\nso an agent can only ever report its OWN telemetry. NOTE: ``command_result.\nmember_id`` inside the body is a legit TARGET (the member a warden executed a\ncommand against) and is UNTOUCHED — it is not the caller's self-identity.",
+        "description": "Inbound warden/agent telemetry report (``POST /api/monitoring/telemetry``).\n\nThe reporter pushes what the model can't reliably read about itself: the\naccount-wide ``rate_limits`` (5h/7d windows), this session's own ``tokens``,\nthe host ``hardware`` snapshot (cpu/ram/battery/ac), the harness-computed\ncumulative ``cost``, and the session ``runtime``. Warden heartbeats additionally\ncarry ``binaries`` plus provider-neutral ``runtimes`` capability probes; the\nserver compares binary fingerprints against its embedded prebuilts and uses\nruntime readiness for placement. ``machine`` / ``account`` are merge tags\n(quota is per-account; hardware is per-host). Fields are permissive so a bad\nbody is a flat 400 (not a Pydantic 422); at least one telemetry field must be\npresent. EXCEPTION (T-90be): ``hardware`` / ``claude`` / ``runtimes`` now declare\ntheir nested shape and are typed as objects, so a non-object THERE is a\ndecode-time 422 instead of a 400; their CONTENTS stay permissive\n(``additionalProperties`` true) — no producer has ever sent a non-object, and no\nknown or future nested KEY is refused.\n\nThe reporting identity is the CALLER (the verified JWT ``sub``), NEVER a\nself-reported ``agent_id`` (identity-from-token audit) — that field was removed,\nso an agent can only ever report its OWN telemetry. NOTE: ``command_result.\nmember_id`` inside the body is a legit TARGET (the member a warden executed a\ncommand against) and is UNTOUCHED — it is not the caller's self-identity.",
         "properties": {
           "account": {
             "title": "Account"
@@ -247,8 +247,61 @@
             "title": "Binaries"
           },
           "claude": {
-            "description": "Warden heartbeats only — the host's local claude CLI probe (T-97ee). Sub-fields (all optional, presence-only, NEVER a secret value): ``version`` string (the resolved claude binary's ``--version`` first token; absent = claude unresolved / probe failed), ``cred_file`` bool (``~/.claude/.credentials.json`` exists), ``sub_readable`` bool (that file exists AND ``claudeAiOauth.subscriptionType`` is non-blank — the exact readability ocagent's account key derivation needs), ``keychain`` bool (macOS login-keychain item ``Claude Code-credentials`` present; absent on non-darwin).",
-            "title": "Claude"
+            "description": "Warden heartbeats only — the host's local claude CLI probe (T-97ee). Sub-fields (all optional, presence-only, NEVER a secret value): ``version`` string (the resolved claude binary's ``--version`` first token; absent = claude unresolved / probe failed), ``cred_file`` bool (``~/.claude/.credentials.json`` exists), ``sub_readable`` bool (that file exists AND ``claudeAiOauth.subscriptionType`` is non-blank — the exact readability ocagent's account key derivation needs), ``keychain`` bool (macOS login-keychain item ``Claude Code-credentials`` present; absent on non-darwin). The shape is DECLARED (T-90be) so a rename on either side fails CI; see ``hardware`` for why it is NOT closed.",
+            "properties": {
+              "cred_file": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "``~/.claude/.credentials.json`` exists. Folded with ``keychain`` into the machine row's ``claude_cred_source``.",
+                "title": "Cred File"
+              },
+              "keychain": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "macOS login-keychain item present; ABSENT (not false) on non-darwin, where the probe cannot answer.",
+                "title": "Keychain"
+              },
+              "sub_readable": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The cred file exists AND its ``claudeAiOauth.subscriptionType`` is non-blank.",
+                "title": "Sub Readable"
+              },
+              "version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The resolved claude binary's ``--version`` first token; absent = unresolved / probe failed.",
+                "title": "Version"
+              }
+            },
+            "title": "Claude",
+            "type": "object",
+            "additionalProperties": true,
+            "x-go-type": "map[string]interface{}"
           },
           "command_result": {
             "title": "Command Result"
@@ -260,7 +313,61 @@
             "title": "Effort"
           },
           "hardware": {
-            "title": "Hardware"
+            "description": "Warden heartbeats only — the host hardware snapshot (``collectHardware``; darwin-only probes, each one omit-on-fail, so any subset may be absent). The sub-fields are DECLARED (T-90be) because the server reads them by literal name: before this shape existed, a producer-side rename was accepted, stored, and then read as null forever — HTTP 200 with the measurement silently unreadable, every test green. Deliberately NOT closed: ``additionalProperties`` stays true (owner ruling rc-55861dd893c6) so a warden that grows a probe — or an older one missing a key — still lands its WHOLE report. Closing it would 422 the entire heartbeat on one undeclared nested key (hardware, binaries, claude and runtimes going null together), which is verbatim the a7fa594 outage. The Go type is pinned to ``map[string]interface{}`` (``x-go-type``) so the handler keeps its own per-field validation and its flat-400 face; the declaration's teeth are the CI guard (cli/ocwarden/telemetry_wire_test.go), not runtime rejection.",
+            "properties": {
+              "ac_power": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "On wall power (``pmset -g batt``). A real ``false`` is data, not absence.",
+                "title": "Ac Power"
+              },
+              "battery_pct": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Battery charge percent; absent on a machine with no battery / a failed probe.",
+                "title": "Battery Pct"
+              },
+              "cpu_pct": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "CPU busy percent (100 - idle, from ``top -l1 -n0``). Point-in-time, never summed.",
+                "title": "Cpu Pct"
+              },
+              "ram_pct": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Used / (used + unused) physical memory percent.",
+                "title": "Ram Pct"
+              }
+            },
+            "title": "Hardware",
+            "type": "object",
+            "additionalProperties": true,
+            "x-go-type": "map[string]interface{}"
           },
           "machine": {
             "title": "Machine"
@@ -273,8 +380,99 @@
             "title": "Runtime"
           },
           "runtimes": {
-            "description": "Warden heartbeats only — provider-neutral runtime capability map. Each ``claude``/``codex`` entry may report ``installed`` bool, ``logged_in`` bool/null, and ``version`` string/null; values are readiness metadata only, never credentials.",
-            "title": "Runtimes"
+            "description": "Warden heartbeats only — provider-neutral runtime capability map. Each ``claude``/``codex`` entry may report ``installed`` bool, ``logged_in`` bool/null, and ``version`` string/null; values are readiness metadata only, never credentials. The shape is DECLARED (T-90be) and this is the block where a silent rename costs the most: ``machineSupportsRuntime`` (api_machines.go) fail-closes to false when it cannot read ``installed``/``logged_in``, so the machine becomes permanently unsupported for codex and its workers sit stamped ``machine_unavailable`` — with nothing on screen saying why. NOT closed (see ``hardware``): an unknown runtime name or a new readiness key must not 422 the whole heartbeat.",
+            "properties": {
+              "claude": {
+                "description": "Claude readiness. Transcribed from the same ``claude`` probe (runtimeprobe.go), never a second exec.",
+                "properties": {
+                  "installed": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "The runtime binary resolves on this host.",
+                    "title": "Installed"
+                  },
+                  "logged_in": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Credentials present (presence only, never a value). Absent = not probed, which placement reads as unknown, not as false.",
+                    "title": "Logged In"
+                  },
+                  "version": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Version"
+                  }
+                },
+                "title": "Claude",
+                "type": "object",
+                "additionalProperties": true
+              },
+              "codex": {
+                "description": "Codex readiness (``codex --version`` + ``codex login status``). This is the entry ``machineSupportsRuntime`` gates codex placement on.",
+                "properties": {
+                  "installed": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "The runtime binary resolves on this host.",
+                    "title": "Installed"
+                  },
+                  "logged_in": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "``codex login status`` exited 0. Absent = not probed.",
+                    "title": "Logged In"
+                  },
+                  "version": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Version"
+                  }
+                },
+                "title": "Codex",
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "title": "Runtimes",
+            "type": "object",
+            "additionalProperties": true,
+            "x-go-type": "map[string]interface{}"
           },
           "self_update": {
             "title": "Self Update"

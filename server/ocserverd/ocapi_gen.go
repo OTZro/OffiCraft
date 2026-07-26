@@ -135,7 +135,11 @@ type AgentTelemetryDTO struct {
 // runtime readiness for placement. “machine“ / “account“ are merge tags
 // (quota is per-account; hardware is per-host). Fields are permissive so a bad
 // body is a flat 400 (not a Pydantic 422); at least one telemetry field must be
-// present.
+// present. EXCEPTION (T-90be): “hardware“ / “claude“ / “runtimes“ now declare
+// their nested shape and are typed as objects, so a non-object THERE is a
+// decode-time 422 instead of a 400; their CONTENTS stay permissive
+// (“additionalProperties“ true) — no producer has ever sent a non-object, and no
+// known or future nested KEY is refused.
 //
 // The reporting identity is the CALLER (the verified JWT “sub“), NEVER a
 // self-reported “agent_id“ (identity-from-token audit) — that field was removed,
@@ -147,22 +151,24 @@ type AgentTelemetryIngestDTO struct {
 	AccountLabel interface{} `json:"account_label,omitempty"`
 	Binaries     interface{} `json:"binaries,omitempty"`
 
-	// Claude Warden heartbeats only — the host's local claude CLI probe (T-97ee). Sub-fields (all optional, presence-only, NEVER a secret value): ``version`` string (the resolved claude binary's ``--version`` first token; absent = claude unresolved / probe failed), ``cred_file`` bool (``~/.claude/.credentials.json`` exists), ``sub_readable`` bool (that file exists AND ``claudeAiOauth.subscriptionType`` is non-blank — the exact readability ocagent's account key derivation needs), ``keychain`` bool (macOS login-keychain item ``Claude Code-credentials`` present; absent on non-darwin).
-	Claude        interface{} `json:"claude,omitempty"`
-	CommandResult interface{} `json:"command_result,omitempty"`
-	Cost          interface{} `json:"cost,omitempty"`
-	Effort        interface{} `json:"effort,omitempty"`
-	Hardware      interface{} `json:"hardware,omitempty"`
-	Machine       interface{} `json:"machine,omitempty"`
-	RateLimits    interface{} `json:"rate_limits,omitempty"`
+	// Claude Warden heartbeats only — the host's local claude CLI probe (T-97ee). Sub-fields (all optional, presence-only, NEVER a secret value): ``version`` string (the resolved claude binary's ``--version`` first token; absent = claude unresolved / probe failed), ``cred_file`` bool (``~/.claude/.credentials.json`` exists), ``sub_readable`` bool (that file exists AND ``claudeAiOauth.subscriptionType`` is non-blank — the exact readability ocagent's account key derivation needs), ``keychain`` bool (macOS login-keychain item ``Claude Code-credentials`` present; absent on non-darwin). The shape is DECLARED (T-90be) so a rename on either side fails CI; see ``hardware`` for why it is NOT closed.
+	Claude        *map[string]interface{} `json:"claude,omitempty"`
+	CommandResult interface{}             `json:"command_result,omitempty"`
+	Cost          interface{}             `json:"cost,omitempty"`
+	Effort        interface{}             `json:"effort,omitempty"`
+
+	// Hardware Warden heartbeats only — the host hardware snapshot (``collectHardware``; darwin-only probes, each one omit-on-fail, so any subset may be absent). The sub-fields are DECLARED (T-90be) because the server reads them by literal name: before this shape existed, a producer-side rename was accepted, stored, and then read as null forever — HTTP 200 with the measurement silently unreadable, every test green. Deliberately NOT closed: ``additionalProperties`` stays true (owner ruling rc-55861dd893c6) so a warden that grows a probe — or an older one missing a key — still lands its WHOLE report. Closing it would 422 the entire heartbeat on one undeclared nested key (hardware, binaries, claude and runtimes going null together), which is verbatim the a7fa594 outage. The Go type is pinned to ``map[string]interface{}`` (``x-go-type``) so the handler keeps its own per-field validation and its flat-400 face; the declaration's teeth are the CI guard (cli/ocwarden/telemetry_wire_test.go), not runtime rejection.
+	Hardware   *map[string]interface{} `json:"hardware,omitempty"`
+	Machine    interface{}             `json:"machine,omitempty"`
+	RateLimits interface{}             `json:"rate_limits,omitempty"`
 
 	// Runtime Optional session runtime: ``claude`` or ``codex``. Omitted leaves previously stored telemetry untouched.
 	Runtime interface{} `json:"runtime,omitempty"`
 
-	// Runtimes Warden heartbeats only — provider-neutral runtime capability map. Each ``claude``/``codex`` entry may report ``installed`` bool, ``logged_in`` bool/null, and ``version`` string/null; values are readiness metadata only, never credentials.
-	Runtimes   interface{} `json:"runtimes,omitempty"`
-	SelfUpdate interface{} `json:"self_update,omitempty"`
-	Tokens     interface{} `json:"tokens,omitempty"`
+	// Runtimes Warden heartbeats only — provider-neutral runtime capability map. Each ``claude``/``codex`` entry may report ``installed`` bool, ``logged_in`` bool/null, and ``version`` string/null; values are readiness metadata only, never credentials. The shape is DECLARED (T-90be) and this is the block where a silent rename costs the most: ``machineSupportsRuntime`` (api_machines.go) fail-closes to false when it cannot read ``installed``/``logged_in``, so the machine becomes permanently unsupported for codex and its workers sit stamped ``machine_unavailable`` — with nothing on screen saying why. NOT closed (see ``hardware``): an unknown runtime name or a new readiness key must not 422 the whole heartbeat.
+	Runtimes   *map[string]interface{} `json:"runtimes,omitempty"`
+	SelfUpdate interface{}             `json:"self_update,omitempty"`
+	Tokens     interface{}             `json:"tokens,omitempty"`
 }
 
 // AliasDTO The response to an account/machine display-name PATCH (AMD step1). “id“ is

@@ -168,9 +168,60 @@ func TestHandleIngestTelemetry_ClaudeProbeFoldAndEcho(t *testing.T) {
 	if probe, _ := entry["claude"].(map[string]any); probe["version"] != "2.1.211" {
 		t.Fatalf("claude must survive a claude-less report, got %v", entry["claude"])
 	}
-	// A non-object claude is the flat 400 every other object field gets.
-	if rec := doIngestTelemetry(api, "m-2", "m-2", `{"claude": "not-an-object"}`); rec.Code != 400 {
-		t.Fatalf("non-object claude: %d, want 400", rec.Code)
+	// A non-object claude is refused. It is a 422 rather than the flat 400 the
+	// UNDECLARED blocks (binaries above) still answer, because declaring the
+	// nested shape (T-90be) makes codegen type this field as an object, so the
+	// refusal now happens in the decoder instead of in the handler's own
+	// asObject check. Both are refusals and both are logged by the warden; the
+	// asymmetry is documented on AgentTelemetryIngestDTO in the frozen spec.
+	// Only the TYPE of the block moved — its CONTENTS stay permissive, which is
+	// pinned by TestHandleIngestTelemetry_UndeclaredNestedKeyStillLands below.
+	if rec := doIngestTelemetry(api, "m-2", "m-2", `{"claude": "not-an-object"}`); rec.Code != 422 {
+		t.Fatalf("non-object claude: %d, want 422", rec.Code)
+	}
+}
+
+// TestHandleIngestTelemetry_UndeclaredNestedKeyStillLands is the compatibility
+// SENTINEL for the nested declaration (T-90be, owner ruling rc-55861dd893c6).
+//
+// Declaring hardware/claude/runtimes buys CI a rename check; it must NOT buy
+// runtime a rejection. A warden that grows a probe (or an older one that never
+// had a key) sends nested keys this spec version has never heard of, and its
+// WHOLE report — hardware, binaries, claude and runtimes together — must still
+// land. Setting additionalProperties:false on any of these blocks turns exactly
+// this request into `422 unknown field`, which is the a7fa594 outage verbatim
+// (every machine's telemetry silently null at once). If someone "tightens" the
+// spec, this goes red before the fleet does.
+func TestHandleIngestTelemetry_UndeclaredNestedKeyStillLands(t *testing.T) {
+	api := &apiServer{telemetry: newMemStore(), hub: NewHub()}
+	body := `{"hardware": {"cpu_pct": 12, "disk_pct": 41},
+		"claude": {"version": "9.9.9", "cred_mtime": 1720000000},
+		"runtimes": {"claude": {"installed": true, "sandboxed": true}},
+		"binaries": {"ocwarden": "abc123abc123"}}`
+	rec := doIngestTelemetry(api, "m-1", "m-1", body)
+	if rec.Code != 200 {
+		t.Fatalf("a heartbeat carrying undeclared NESTED keys must still land: %d %s",
+			rec.Code, rec.Body.String())
+	}
+	entry := api.telemetry.Get("m-1")
+	hw, _ := entry["hardware"].(map[string]any)
+	if hw["cpu_pct"] != 12.0 {
+		t.Errorf("the declared sibling must survive: cpu_pct = %v, want 12", hw["cpu_pct"])
+	}
+	if hw["disk_pct"] != 41.0 {
+		t.Errorf("an undeclared nested key must be stored, not dropped: hardware = %v", hw)
+	}
+	probe, _ := entry["claude"].(map[string]any)
+	if probe["version"] != "9.9.9" || probe["cred_mtime"] != 1720000000.0 {
+		t.Errorf("claude = %v, want the whole probe kept", probe)
+	}
+	rts, _ := entry["runtimes"].(map[string]any)
+	claudeCap, _ := rts["claude"].(map[string]any)
+	if claudeCap["installed"] != true || claudeCap["sandboxed"] != true {
+		t.Errorf("runtimes.claude = %v, want the whole capability kept", claudeCap)
+	}
+	if bins, _ := entry["binaries"].(map[string]any); bins["ocwarden"] != "abc123abc123" {
+		t.Errorf("the rest of the report must land too: binaries = %v", bins)
 	}
 }
 

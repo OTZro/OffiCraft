@@ -384,6 +384,21 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 		}
 		return obj, true
 	}
+	// hardware / claude / runtimes DECLARE their nested shape in the frozen spec
+	// (T-90be), so codegen types them as *map[string]interface{} instead of the
+	// bare interface{} the undeclared blocks still get. The declaration is what
+	// lets the CI guard see a nested rename; it deliberately does NOT close the
+	// object (additionalProperties stays true), so an undeclared nested key is
+	// still accepted and stored exactly as before — a warden that grows a probe
+	// must never have its WHOLE report refused (that is the a7fa594 outage).
+	// Dereferencing here keeps every downstream line reading the same
+	// map[string]any it always did.
+	declaredObject := func(p *map[string]any) map[string]any {
+		if p == nil {
+			return nil
+		}
+		return *p
+	}
 	rateLimits, ok := asObject(body.RateLimits, "rate_limits")
 	if !ok {
 		return
@@ -392,22 +407,13 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	if !ok {
 		return
 	}
-	hardware, ok := asObject(body.Hardware, "hardware")
-	if !ok {
-		return
-	}
+	hardware := declaredObject(body.Hardware)
 	binaries, ok := asObject(body.Binaries, "binaries")
 	if !ok {
 		return
 	}
-	claude, ok := asObject(body.Claude, "claude")
-	if !ok {
-		return
-	}
-	runtimes, ok := asObject(body.Runtimes, "runtimes")
-	if !ok {
-		return
-	}
+	claude := declaredObject(body.Claude)
+	runtimes := declaredObject(body.Runtimes)
 	for name, raw := range runtimes {
 		if !ValidRuntime(name) {
 			writeError(w, http.StatusBadRequest, "runtimes keys must be 'claude' or 'codex'")
