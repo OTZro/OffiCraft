@@ -14,10 +14,8 @@
 #                              # different port/config (see the relocation gate)
 #      ./install.sh --restart-live
 #                              # consent to RESTARTING a service that is LIVE
-#                              # right now (see the live-service gate). NOT
-#                              # implied by --force: overwriting files and
-#                              # dropping every connected client are different
-#                              # acts and take separate consent.
+#                              # right now — see the live-service gate below.
+#                              # NOT implied by --force.
 #      ./install.sh --namespace <ns> --port <port>
 #                              # a SECOND, fully isolated instance: one key
 #                              # derives root, label, config, db. --port is
@@ -91,10 +89,8 @@
 #                           the existing job's OC_CONFIG rather than dropping it.
 #
 # Config: the server reads $OC_CONFIG (or ./oc.toml in CWD) for overrides —
-# default port is 7755 (the OffiCraft standard; 8770 belongs to the retired
-# open-company station and 8780 was the previous standard), default data root
-# ~/.officraft. No config is written
-# by this installer; convention defaults just work on a clean machine.
+# default port 7755, default data root ~/.officraft. No config is written by
+# this installer; convention defaults just work on a clean machine.
 #
 #   C. removal — the reverse of A/B, recognised BEFORE any mode detection or
 #      download so it never fetches a release just to delete one:
@@ -108,10 +104,10 @@
 #      to ~/.officraft.bak-<timestamp> (plist inside it, under launchd/) rather
 #      than deleting them, and prints a restore command that puts back both the
 #      files and the launchd registration. --purge deletes instead.
-#      --purge asks you to type "purge" unless --yes — but that prompt reads
-#      stdin, which over `curl … | bash` is the pipe carrying this script, so it
-#      cannot be typed into and always aborts: over a pipe, --purge does nothing
-#      without --yes. See the note at the confirmation itself.
+#      --purge asks you to type "purge" unless --yes — but over `curl … | bash`
+#      that prompt reads the pipe carrying this script, so it cannot be typed
+#      into and always aborts: over a pipe, --purge does nothing without --yes.
+#      Full mechanism: `--uninstall --help`, and the note at the confirmation.
 #      Ownership is decided from ~/.officraft/bin/ocserverd (this installer's own
 #      signature — a from-source `bin/ocserver install` never writes there) and
 #      from the launchd plist's ProgramArguments[0] (OC_LAUNCHD_LABEL is
@@ -142,22 +138,21 @@ set -euo pipefail
 # fails and it prints
 #   curl: (23|56) Failure writing output to destination, passed N returned 0
 # to stderr — AFTER our own output. A completely successful run therefore ends
-# on a red line that reads like a failure. That is precisely the disease the
-# rest of this file was rewritten to cure (see the SCOPE note above), so it does
-# not get a pass here: drain whatever is left before we go.
+# on a red line that reads like a failure. That is the disease the rest of this
+# file was rewritten to cure (see the SCOPE note above), so it gets no pass
+# here: drain whatever is left before we go.
 #
 # Three guards, and the reason for each:
 #   1. Only when the SCRIPT ITSELF arrived on stdin (`curl … | bash`, `bash -s`).
-#      The flag is computed HERE, at top level, because what BASH_SOURCE[0]
-#      reads as inside a function is VERSION-DEPENDENT: measured, stock macOS
+#      The flag is computed HERE, at top level, because what BASH_SOURCE[0] reads
+#      as inside a function is VERSION-DEPENDENT: measured, stock macOS
 #      /bin/bash 3.2.57 leaves it empty there, while bash 5.x reports a non-empty
-#      value ("bash" / an absolute path — it is $0). The measured consequence,
-#      on bash 5.x: re-deriving the flag inside the drain means it is never set
-#      and the drain becomes DEAD CODE that still looks installed. What that
-#      same move would do on 3.2.57 depends on how the script was invoked and is
-#      deliberately NOT asserted here — a previous draft claimed "always-on"
-#      there and review falsified it. Computing the flag at top level sidesteps
-#      the question entirely.
+#      value (it is $0). Measured consequence on bash 5.x: re-deriving the flag
+#      inside the drain means it is never set and the drain becomes DEAD CODE
+#      that still looks installed. What that move does on 3.2.57 depends on how
+#      the script was invoked and is deliberately NOT asserted — a previous draft
+#      claimed "always-on" there and review falsified it. Computing at top level
+#      sidesteps the question.
 #   2. Only when fd 0 is a PIPE. `bash install.sh`, `bash -s < file`, and an
 #      interactive terminal all fall out here, so this can never sit waiting for
 #      a human to type — the failure mode that has no way to report itself.
@@ -166,8 +161,8 @@ set -euo pipefail
 #      it alive forever (measured: a 30s dribbler held it 36.5s — the very hang
 #      an unbounded `cat >/dev/null` was rejected for). So there is also a TOTAL
 #      deadline. Giving up either way is not a regression: it just means curl
-#      prints the same line it prints today. This file does not trade a cosmetic
-#      wart for a hang, and "bounded" here has to mean bounded.
+#      prints the same line it prints today. A cosmetic wart is never worth a
+#      hang.
 #
 # The exit status of the whole script flows THROUGH this handler: a trap whose
 # last statement is non-zero rewrites it (measured: `trap` returning 3 turns
@@ -192,29 +187,28 @@ oc_drain_stdin() {
   #   - `set -e` is NOT suspended inside a trap handler: a `false` mid-handler
   #     truncates the handler and rewrites the script's status 0 → 1.
   # `if` produces no non-zero status in either place, so it needs no argument
-  # about which of those applies here — which is the point.
+  # about which one applies here — which is the point.
   while IFS= read -r -t "$_OC_DRAIN_IDLE_TIMEOUT" _discard; do
     if (( SECONDS >= _deadline )); then break; fi
   done
   return 0
 }
 # Non-enumerative on purpose: an EXIT trap covers every exit in this file,
-# including the ones added after this comment. A list of "drain here, and here"
-# call sites would be zero-coverage for whatever the next person adds.
+# including ones added after this comment. A list of "drain here, and here" call
+# sites would be zero-coverage for whatever the next person adds.
 trap oc_drain_stdin EXIT
 
-# ProgramArguments[0] of an existing plist, or "" if unreadable/absent. Shared
-# by --uninstall's ownership check below and the install-time ownership gate
-# further down (package mode) — one definition, same semantics both places.
+# ProgramArguments[0] of an existing plist, or "" if unreadable/absent. Shared by
+# --uninstall's ownership check below and the install-time ownership gate further
+# down (package mode) — one definition, same semantics both places.
 plist_program() {
   plutil -extract ProgramArguments.0 raw -o - "$1" 2>/dev/null || true
 }
 
 # ── --uninstall: reverse of this installer, never needs a download ──────────
-# See mode C in the header above for the flag shapes. This function is called
-# from the top-level dispatch immediately below, before IN_PACKAGE is even
-# resolved — uninstalling touches only what a PAST run of this installer left
-# behind, so it has no use for a fresh tarball.
+# See mode C in the header above for the flag shapes. Called from the top-level
+# dispatch below, before IN_PACKAGE is even resolved — uninstalling touches only
+# what a PAST run of this installer left behind, so it has no use for a tarball.
 cmd_uninstall_release() {
   local purge=0 dryrun=0 yes=0 ns="${OC_NAMESPACE:-}"
   while [[ $# -gt 0 ]]; do
@@ -309,7 +303,7 @@ EOF
   SERVER_DIR="$ROOT_DIR/server"
 
   # run: perform a mutating command, or in dry-run just print it. Read-only
-  # probes for control flow do NOT go through this.
+  # probes for control flow do NOT go through it.
   run() {
     if [[ "$dryrun" == "1" ]]; then
       echo "[install] DRYRUN would run: $*" >&2
@@ -320,13 +314,12 @@ EOF
 
   # ── ownership ──────────────────────────────────────────────────────────────
   # "ours" for FILES is decided from the binary, not the label: a from-source
-  # `bin/ocserver install` never writes ~/.officraft/bin, so its presence here
-  # is this installer's own signature regardless of which label ended up
-  # owning the launchd job. "ours" for the JOB is the same ProgramArguments[0]
-  # check install already uses at install time — a label pointing at a
-  # different program is a different install (or someone else's job entirely)
-  # and must not be touched, matching bin/ocserver's `OC_LAUNCHD_LABEL`
-  # respect for alt-labelled second installs.
+  # `bin/ocserver install` never writes ~/.officraft/bin, so its presence here is
+  # this installer's own signature whichever label ended up owning the launchd
+  # job. "ours" for the JOB is the same ProgramArguments[0] check install uses at
+  # install time — a label pointing at a different program is a different install
+  # (or someone else's job entirely) and must not be touched, matching
+  # bin/ocserver's `OC_LAUNCHD_LABEL` respect for alt-labelled second installs.
   local have_files=0
   [[ -x "$BIN_DIR/ocserverd" ]] && have_files=1
 
@@ -380,11 +373,11 @@ EOF
 
   # ── what we are NOT touching ───────────────────────────────────────────────
   # $ROOT_DIR holds runtime state this installer never created — agents/ (one
-  # workspace per agent that has ever run on this machine) and warden/ (a
-  # separate daemon with its OWN launchd job). A previous version moved the
-  # whole root aside while printing "nothing was deleted", so the blast radius
-  # silently covered both. We now enumerate what stays, BY NAME, so the message
-  # is sufficient to predict the outcome (T-fa39).
+  # workspace per agent ever run here) and warden/ (a separate daemon with its
+  # OWN launchd job). A previous version moved the whole root aside while
+  # printing "nothing was deleted", so the blast radius silently covered both.
+  # We enumerate what stays, BY NAME, so the message is sufficient to predict
+  # the outcome (T-fa39).
   local kept=() base
   shopt -s nullglob dotglob
   local top
@@ -398,11 +391,11 @@ EOF
   shopt -u nullglob dotglob
 
   # -H so that an agents/ that is itself a symlink is followed: `find` does not
-  # descend the argument's own symlink otherwise, and this would report 0 for a
+  # descend the argument's own symlink otherwise, so this would report 0 for a
   # directory holding dozens of workspaces — under-reporting in exactly the
   # place the whole disclosure hangs on. `|| agent_count=unknown` because the
   # pipeline returns non-zero when agents/ is unreadable, and under
-  # `set -euo pipefail` that would kill the script here with no output at all.
+  # `set -euo pipefail` that would kill the script here with no output.
   local agent_count=0
   if [[ -d "$ROOT_DIR/agents" ]]; then
     agent_count="$(find -H "$ROOT_DIR/agents" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')" || agent_count="unknown"
@@ -410,9 +403,8 @@ EOF
   fi
 
   # Announce what is actually PRESENT, not the full menu: on a half-installed
-  # machine a fixed list names things that are not there, which is the same
-  # over-claiming the "what moved" line below was fixed for. Both ends of the
-  # run now describe the same reality.
+  # machine a fixed list names things that are not there — the same over-claiming
+  # the "what moved" line below was fixed for. Both ends describe one reality.
   local will=() ent
   [[ -e "$BIN_DIR" ]] && will+=("$BIN_DIR (the whole directory)")
   for ent in data oc.toml log; do
@@ -462,22 +454,21 @@ EOF
 
   if [[ "$purge" == "1" && "$dryrun" != "1" && "$yes" != "1" ]]; then
     echo "[install] --purge will DELETE $BIN_DIR and the release-path parts of $SERVER_DIR, INCLUDING the database (your owner credential hash lives there). Irreversible." >&2
-    # KNOWN LIMITATION, stated out loud here and in --help rather than papered
-    # over: this reads fd 0, and in the documented
+    # KNOWN LIMITATION, also stated out loud in --help and the header rather than
+    # papered over: this reads fd 0, and under the documented
     # `curl … | bash -s -- --uninstall --purge` shape fd 0 is the pipe carrying
     # THIS SCRIPT. bash reads a non-seekable script line by line, so `read`
-    # consumes the script's NEXT LINE rather than anything you type. It can
-    # never equal "purge", so over a pipe this gate ALWAYS aborts: --purge is
-    # effectively unreachable without --yes.
+    # consumes the script's NEXT LINE, never anything you type and never
+    # "purge" — over a pipe this gate ALWAYS aborts and --purge is unreachable
+    # without --yes.
     #
-    # That is fail-closed and it is audible (the abort message below), which is
-    # why it is deliberately NOT "fixed" here. Reading /dev/tty instead would
-    # make this destructive path genuinely reachable for the first time, and
-    # this suite cannot drive a controlling terminal — the newly-reachable
-    # branch would ship with zero coverage, and an earlier revision of this very
-    # change also hung `bin/ci.sh` forever on any machine that had a tty.
-    # Tracked separately; doing it right needs pty-based tests, which is its own
-    # change and not this ticket's subject.
+    # That is fail-closed and audible (the abort message below), which is why it
+    # is deliberately NOT "fixed" here. Reading /dev/tty would make this
+    # destructive path genuinely reachable for the first time, and this suite
+    # cannot drive a controlling terminal — the newly-reachable branch would ship
+    # with zero coverage, and an earlier revision of this very change also hung
+    # `bin/ci.sh` forever on any machine that had a tty. Tracked separately;
+    # doing it right needs pty-based tests, its own change.
     #
     # `|| answer=""` matters: on EOF (`./install.sh --uninstall --purge </dev/null`)
     # a bare `read` returns non-zero and `set -e` would kill the script right
@@ -490,15 +481,14 @@ EOF
   fi
 
   # 1. launchd job: stop it (if running) and take the plist out of the way.
-  #    On the default (move) path the plist is MOVED next to the backup rather
-  #    than deleted: `rm`-ing it made the printed restore command a lie, since
-  #    putting the files back could not re-register a service whose plist no
-  #    longer existed (T-fa39). --purge still deletes it — that path promises
-  #    no way back.
+  #    On the default (move) path the plist is MOVED into the backup rather than
+  #    deleted: `rm`-ing it made the printed restore command a lie, since putting
+  #    the files back could not re-register a service whose plist no longer
+  #    existed (T-fa39). --purge deletes it — that path promises no way back.
   #    The plist is kept INSIDE the backup (launchd/ subdir), not beside it as
-  #    "$backup.plist": that sibling name matches the very same
-  #    ".officraft.bak-*" glob the backup directory uses, so anything counting
-  #    or globbing backups would see two where there is one.
+  #    "$backup.plist": that sibling name matches the same ".officraft.bak-*"
+  #    glob the backup dir uses, so anything globbing backups would see two
+  #    where there is one.
   local backup="" plist_backup=""
   if [[ "$purge" != "1" ]]; then
     backup="$ROOT_DIR.bak-$(date +%Y%m%d%H%M%S)"
@@ -528,11 +518,11 @@ EOF
 
   # 2. files: bin/ + server/{data,oc.toml,log}. NEVER server/repo, NEVER
   #    agents/, NEVER warden/, and never $ROOT_DIR itself. There is deliberately
-  #    no "and if the root looks empty, remove it too" branch any more: that was
-  #    the shape that let the blast radius depend on what happened to be lying
-  #    around, and it also under-reported itself under --dry-run (the preceding
-  #    delete had only been printed, so the root never looked empty and the
-  #    rm -rf was silently omitted from the preview). Same list, both modes.
+  #    no "and if the root looks empty, remove it too" branch any more: that let
+  #    the blast radius depend on what happened to be lying around, and it also
+  #    under-reported itself under --dry-run (the preceding delete had only been
+  #    printed, so the root never looked empty and the rm -rf was silently
+  #    omitted from the preview). Same list, both modes.
   local entry
   if [[ "$purge" == "1" ]]; then
     [[ -e "$BIN_DIR" ]] && run rm -rf "$BIN_DIR"
@@ -547,10 +537,10 @@ EOF
       echo "[install]   $ROOT_DIR was NOT removed."
     fi
   else
-    # Record what ACTUALLY moved rather than announcing a fixed list. On a
-    # partially-installed machine (plist ours, but bin/ or server/ already gone
-    # by hand) the fixed wording claimed moves that never happened — the same
-    # "says more than it did" defect this ticket is about, pointed the other way.
+    # Record what ACTUALLY moved rather than announcing a fixed list (the same
+    # rule as the "will touch" list above, pointed the other way): on a
+    # partially-installed machine — plist ours, bin/ or server/ already gone by
+    # hand — the fixed wording claimed moves that never happened.
     local moved=() restore_files=()
     if [[ -e "$BIN_DIR" ]]; then
       run mkdir -p "$backup"
@@ -585,10 +575,10 @@ EOF
     fi
 
     # The restore line has to put back BOTH halves — the files AND the launchd
-    # registration — or it hands you a way back that does not actually work.
-    # It is assembled from what was really moved: a fixed line referencing
-    # "$backup/bin" breaks its own `&&` chain on the first cp when bin/ was
-    # never there, and then the plist half never runs at all.
+    # registration — or it hands you a way back that does not work. It is
+    # assembled from what was really moved: a fixed line referencing
+    # "$backup/bin" breaks its own `&&` chain on the first cp when bin/ was never
+    # there, and the plist half then never runs at all.
     [[ "$plist_saved" == "1" ]] && restore_files+=("cp \"$plist_backup\" \"$PLIST\"" "launchctl bootstrap \"$GUI\" \"$PLIST\"")
     if [[ "${#restore_files[@]}" -gt 0 ]]; then
       local restore_cmd="${restore_files[0]}" i
@@ -616,8 +606,8 @@ unset _oc_arg
 
 # ── mode detection ───────────────────────────────────────────────────────────
 # Package mode = this file sits next to the three release binaries (unpacked
-# tarball). Anything else — including `curl … | bash`, where BASH_SOURCE is
-# empty because the script comes from stdin — is standalone bootstrap mode.
+# tarball). Anything else — including `curl … | bash`, where BASH_SOURCE is empty
+# because the script comes from stdin — is standalone bootstrap mode.
 SELF="${BASH_SOURCE[0]:-}"
 IN_PACKAGE=0
 if [[ -n "$SELF" && -f "$SELF" ]]; then
@@ -646,11 +636,11 @@ if [[ "$IN_PACKAGE" == 0 ]]; then
       --relocate) FWD+=("--relocate"); shift ;;
       --restart-live) FWD+=("--restart-live"); shift ;;
       # Forwarded verbatim: the namespace decision belongs to the packaged
-      # installer (one derivation point), this half only carries it across.
+      # installer (one derivation point); this half only carries it across.
       --namespace|--port)
-        # ARITY only — the packaged installer owns charset/pairing (one
-        # derivation point). Still needed: `--namespace --port 7756` would
-        # otherwise forward "--port" AS THE NAMESPACE.
+        # ARITY only — charset/pairing belongs to the packaged installer. Still
+        # needed here: `--namespace --port 7756` would otherwise forward
+        # "--port" AS THE NAMESPACE.
         [[ $# -ge 2 && -n "$2" ]] || { echo "[install] FATAL: $1 needs a value" >&2; exit 2; }
         FWD+=("$1" "$2"); shift 2 ;;
       --namespace=*|--port=*) FWD+=("$1"); shift ;;
@@ -719,13 +709,13 @@ EOF
   # Default (launchd) path: the delegated installer returns once the service is
   # registered and listening, and the trap removes the temp dir then — safe,
   # because launchd re-execs the binary from ~/.officraft/bin, not from here.
-  # With --foreground the delegated installer ends in `exec ocserverd serve` in
-  # a CHILD process, so this shell stays alive as its parent and the trap fires
+  # With --foreground the delegated installer ends in `exec ocserverd serve` in a
+  # CHILD process, so this shell stays alive as its parent and the trap fires
   # when serve exits (Ctrl-C).
   # Re-arms the stdin drain installed at the top of this file: a bare
-  # `trap … EXIT` REPLACES the handler, so leaving this one as
-  # `rm -rf "$TMP"` alone would silently retire the drain for the entire
-  # bootstrap path — the path a `curl … | bash` user is actually on.
+  # `trap … EXIT` REPLACES the handler, so leaving this one as `rm -rf "$TMP"`
+  # alone would silently retire the drain for the whole bootstrap path — the
+  # path a `curl … | bash` user is actually on.
   #
   # EXIT and INT/TERM are deliberately SPLIT. An INT handler that does not exit
   # RETURNS TO THE SCRIPT, and when the script came in on stdin the rest of the
@@ -733,8 +723,8 @@ EOF
   # remainder of the installer (demonstrated on a minimal repro: the commands
   # after the interrupted step simply never run). That is unreachable today only
   # because this whole `if` block is parsed up front and every path in it exits,
-  # which is an invariant nothing states or tests. An INT that does not exit
-  # still reaches the EXIT trap afterwards, so splitting costs nothing.
+  # an invariant nothing states or tests. An INT that does not exit still reaches
+  # the EXIT trap afterwards, so splitting costs nothing.
   trap 'rm -rf "$TMP"' INT TERM
   trap 'rm -rf "$TMP"; oc_drain_stdin' EXIT
 
@@ -865,7 +855,7 @@ config_port() {
 # Runs HERE, before anything is written: a REFUSAL that fires after the binaries
 # are swapped cannot honestly say "NOTHING was changed", and it said exactly that
 # from a point where it was already false. The gate moved to where its claim is
-# true, instead of the claim being softened to fit the gate.
+# true rather than the claim being softened to fit the gate.
 if [[ -n "$NS" && -f "$NS_CFG" ]]; then
   ns_old_port="$(config_port "$NS_CFG")"
   if [[ -n "$ns_old_port" && "$ns_old_port" != "$PORT_FLAG" ]]; then
@@ -890,16 +880,15 @@ done
 # gates further down.
 #
 # NOTE, and this is the whole reason the gate below exists: the label names a
-# singleton in the user's launchd GUI DOMAIN, and that domain is keyed on the
-# UID — it does NOT follow $HOME. Pointing HOME at a scratch directory relocates
-# ROOT_DIR/BIN_DIR/PLIST but leaves TARGET resolving to the SAME job the real
-# station runs under. "I ran it with a different HOME" is therefore NOT
-# isolation, and a run that believes it is sandboxed can still bootout the live
-# service. Only the LABEL decides which job is at stake — which is why
-# --namespace suffixes it (NS_DOT) rather than leaving that to the caller: a
-# namespaced run targets com.officraft.serve.<ns> BY CONSTRUCTION and can no
-# longer bootout the main station. Explicit OC_LAUNCHD_LABEL still wins (an
-# existing alt-labelled install must stay addressable).
+# singleton in launchd's GUI DOMAIN, and that domain is keyed on the UID — it
+# does NOT follow $HOME. A scratch HOME relocates ROOT_DIR/BIN_DIR/PLIST but
+# leaves TARGET resolving to the SAME job the real station runs under, so a run
+# that believes it is sandboxed can still bootout the live service. Only the
+# LABEL decides which job is at stake — hence --namespace suffixes it (NS_DOT)
+# rather than leaving that to the caller: a namespaced run targets
+# com.officraft.serve.<ns> BY CONSTRUCTION and can no longer bootout the main
+# station. Explicit OC_LAUNCHD_LABEL still wins (an existing alt-labelled
+# install must stay addressable).
 LABEL="${OC_LAUNCHD_LABEL:-com.officraft.serve$NS_DOT}"
 LA_DIR="$HOME/Library/LaunchAgents"
 PLIST="$LA_DIR/$LABEL.plist"
@@ -915,9 +904,9 @@ job_pid_of() {
   #
   # `launchctl print` is run SEPARATELY rather than at the head of the pipe on
   # purpose: an unregistered label exits non-zero, and under `set -o pipefail`
-  # that rc propagates out of the command substitution and `set -e` kills the
-  # installer — turning "no job is registered", the most ordinary state on a
-  # clean machine, into a silent abort with no diagnostic at all.
+  # that rc escapes the command substitution and `set -e` kills the installer —
+  # turning "no job is registered", the most ordinary state on a clean machine,
+  # into a silent abort with no diagnostic.
   local out
   out="$(launchctl print "$1" 2>/dev/null || true)"
   printf '%s\n' "$out" | sed -n 's/^[[:space:]]*pid = \([0-9]*\).*/\1/p' | head -1
@@ -926,16 +915,14 @@ job_pid_of() {
 listening_ports_of() {
   # Space-separated TCP ports a pid holds in LISTEN, or "" when it holds none.
   #
-  # Same pipefail trap as job_pid_of, spelled out again because this file has
-  # now fallen into it TWICE: real lsof exits NON-ZERO when the pid has no
-  # listening socket, and that is an ordinary state — a job still starting up,
-  # one that is crash-looping, or one bound only to a unix socket. Left at the
-  # head of a pipeline under `set -o pipefail`, that rc propagates out of the
-  # command substitution and `set -e` kills the installer RIGHT HERE, before a
-  # single one of the warning lines below has run. The operator gets exit 1 and
-  # a COMPLETELY BLANK screen — the worst possible outcome for a gate whose
-  # entire job is to explain itself. The port list is cosmetic; it must never
-  # be able to abort the run.
+  # Same pipefail trap as job_pid_of — this file has fallen into it TWICE. lsof
+  # exits NON-ZERO when the pid has no listening socket, and that is an ordinary
+  # state: a job still starting up, crash-looping, or bound only to a unix
+  # socket. Left at the head of a pipeline under `set -o pipefail` that rc
+  # escapes the command substitution and `set -e` kills the installer RIGHT
+  # HERE, before a single warning line below has run — exit 1 and a COMPLETELY
+  # BLANK screen, from a gate whose entire job is to explain itself. The port
+  # list is cosmetic; it must never be able to abort the run.
   local out
   out="$(lsof -nP -iTCP -sTCP:LISTEN -a -p "$1" 2>/dev/null || true)"
   printf '%s\n' "$out" \
@@ -943,30 +930,29 @@ listening_ports_of() {
 }
 
 # ── live-service gate ────────────────────────────────────────────────────────
-# The gates that already existed here reason about FILES: is there a binary, a
-# database, a plist naming our program, a config that would move. None of them
-# ask the one question that decides whether re-installing is disruptive — IS A
-# SERVER SERVING RIGHT NOW? On the maintainer's own machine every file-based
-# gate answers "same paths, same port, same config, this is a plain reload" and
-# waves the run through to `launchctl bootout` (line ~640), which drops the
-# running process and every client attached to it.
+# The other gates here reason about FILES: is there a binary, a database, a
+# plist naming our program, a config that would move. None of them ask the one
+# question that decides whether re-installing is disruptive — IS A SERVER
+# SERVING RIGHT NOW? On the maintainer's own machine every file-based gate
+# answers "same paths, same port, same config, a plain reload" and waves the run
+# through to `launchctl bootout`, which drops the running process and every
+# client attached to it.
 #
 # That outage was reachable through a gate whose text explicitly PROMISED it
 # would not happen ("keeps serving its old code until its next restart"), and
 # through --force, whose documented meaning is only about overwriting files.
 # Consent obtained against a wrong description of the harm is not consent, so
-# the restart now gets a gate of its own, phrased in the currency the operator
+# the restart gets a gate of its own, phrased in the currency the operator
 # actually cares about: connected clients.
 #
 # Ordering is deliberate — this runs BEFORE the binaries are copied and before
 # `ocserverd migrate` touches the database, so declining leaves the machine
-# byte-for-byte as it was. The ownership gate downstream stays exactly as it is;
-# it answers "is this job MINE", which is a different question from "is it BUSY",
-# and a hijack of someone else's job must keep failing closed on its own terms.
+# byte-for-byte as it was. The ownership gate downstream is unchanged: it
+# answers "is this job MINE", a different question from "is it BUSY", and a
+# hijack of someone else's job must keep failing closed on its own terms.
 #
 # --foreground is exempt: it never registers or boots out a launchd job. A live
-# service still blocks it, but as a port conflict, which is the honest diagnosis
-# there.
+# service still blocks it, but as a port conflict — the honest diagnosis there.
 LIVE_PID=""
 if [[ "$FOREGROUND" == 0 ]]; then
   LIVE_PID="$(job_pid_of "$TARGET")"
@@ -1016,9 +1002,9 @@ if [[ -n "$LIVE_PID" ]]; then
 fi
 
 # ── existing-install gate ────────────────────────────────────────────────────
-# An existing binary OR an existing database means this machine already runs
-# (or ran) OffiCraft: overwriting silently would swap the binary out from
-# under a live server on its next restart. Be loud, require an explicit yes.
+# An existing binary OR an existing database means this machine already runs (or
+# ran) OffiCraft: overwriting silently would swap the binary out from under a
+# live server on its next restart. Be loud, require an explicit yes.
 EXISTING=""
 [[ -x "$BIN_DIR/ocserverd" ]] && EXISTING="binary $BIN_DIR/ocserverd"
 if [[ -f "$DB_PATH" ]]; then
@@ -1029,11 +1015,11 @@ if [[ -n "$EXISTING" ]]; then
   echo "[install]    Continuing will OVERWRITE the installed binaries (the database is kept"
   echo "[install]    and migrated in place)."
   # Do NOT reassure the operator that a running server keeps serving until some
-  # later restart — on the launchd path this script boots it out a few hundred
-  # lines below, so the restart is IMMEDIATE and this prompt used to describe
-  # the wrong harm. When a live job exists the live-service gate above has
-  # already obtained consent for that outage in the correct terms; say which
-  # case applies rather than asserting the comfortable one.
+  # later restart — on the launchd path this script boots it out below, so the
+  # restart is IMMEDIATE and this prompt used to describe the wrong harm. When a
+  # live job exists the live-service gate above already took consent for that
+  # outage in the correct terms; say which case applies rather than asserting
+  # the comfortable one.
   if [[ -n "$LIVE_PID" ]]; then
     echo "[install]    The live '$LABEL' service will be RESTARTED as part of this run"
     echo "[install]    (you confirmed that above)."
@@ -1059,21 +1045,20 @@ fi
 echo "[install] installing binaries → $BIN_DIR"
 mkdir -p "$BIN_DIR"
 for b in ocserverd ocwarden ocagent; do
-  # Install via copy-then-rename so a running old binary is never truncated.
+  # copy-then-rename, so a running old binary is never truncated.
   cp "$HERE/$b" "$BIN_DIR/$b.new"
   chmod +x "$BIN_DIR/$b.new"
-  # Defensive: strip a quarantine flag if a browser download attached one
-  # (curl/tar does not; Safari does). Best-effort — absence is the norm.
+  # Strip a quarantine flag if a browser download attached one (curl/tar does
+  # not; Safari does). Best-effort — absence is the norm.
   xattr -d com.apple.quarantine "$BIN_DIR/$b.new" 2>/dev/null || true
   mv "$BIN_DIR/$b.new" "$BIN_DIR/$b"
 done
 
-
 # ── namespaced instance config ───────────────────────────────────────────────
 # A namespaced instance needs its own config BEFORE migrate: the DSN default
 # derives from [server].namespace, so without it migrate creates the MAIN
-# instance's database. Written only when absent — re-running is a reload, never a
-# silent retarget. (The port-mismatch refusal lives in ns_relocation_gate above.)
+# instance's database. Written only when absent — re-running is a reload, never
+# a silent retarget. (Port-mismatch refusal: ns_relocation_gate above.)
 if [[ -n "$NS" ]]; then
   mkdir -p "$(dirname "$NS_CFG")"
   if [[ -f "$NS_CFG" ]]; then
@@ -1092,22 +1077,20 @@ else
   "$BIN_DIR/ocserverd" migrate
 fi
 
-# Effective port: $OC_CONFIG / ./oc.toml [server].port override, else 7755
-# (the OffiCraft standard port — NOT 8770, which belongs to the retired
-# open-company station and collides on transition-period machines, and NOT the
-# previous 8780 standard).
+# Effective port: $OC_CONFIG / ./oc.toml [server].port override, else
+# $DEFAULT_PORT (defined above, with the 7755-not-8770/8780 reason).
 #
 # CFG_ABS records WHICH config file that port came from, as an ABSOLUTE path.
-# It matters for the launchd path: a relative ./oc.toml is resolved against the
-# CWD of whoever ran the installer, and the daemon has a different CWD. Baking
-# the absolute path into the plist's OC_CONFIG is what keeps the port the
-# installer gated on and the port the daemon binds identical.
+# It matters for the launchd path: a relative ./oc.toml resolves against the CWD
+# of whoever ran the installer, and the daemon has a different CWD. Baking the
+# absolute path into the plist's OC_CONFIG keeps the port the installer gated on
+# and the port the daemon binds identical.
 #
-# CFG_SRC records WHERE it came from — env (explicit OC_CONFIG), cwd (a
-# ./oc.toml that merely happened to be in the current directory), inherited
-# (carried over from the job we are replacing), or none. "cwd" is the one that
-# bites: it is the difference between a config the operator chose and a file
-# they happen to be standing next to. See the relocation gate below.
+# CFG_SRC records WHERE it came from — env (explicit OC_CONFIG), cwd (a ./oc.toml
+# that merely happened to be in the current directory), inherited (carried over
+# from the job we are replacing), or none. "cwd" is the one that bites: the
+# difference between a config the operator chose and a file they happen to be
+# standing next to. See the relocation gate below.
 PORT="$DEFAULT_PORT"
 CFG_ABS=""
 CFG_SRC="none"
@@ -1131,16 +1114,14 @@ else
 fi
 
 # ── same-label ownership gate ────────────────────────────────────────────────
-# (LABEL / PLIST / GUI / TARGET / LOG_DIR / SERVE_LOG were resolved at the top,
-# ahead of the live-service gate, which has to be able to abort before anything
-# is written. They are deliberately still resolved BEFORE the port gate: on a
-# re-install the process holding the port is usually OUR OWN previous service,
-# and that gate has to tell it apart from a genuine conflict.)
-# The label is a machine-wide singleton in the user's gui domain. If something
-# is ALREADY registered under it, blindly rendering over the plist and booting
-# it out would silently hijack — or kill — a service this installer did not
-# create (a hand-built job, or a repo-layout `bin/ocserver install` instance
-# that runs serve from a completely different path). So: adopt the label only
+# (LABEL / PLIST / GUI / TARGET / LOG_DIR / SERVE_LOG were resolved at the top —
+# see the note there for why, and the port gate below for why this must precede
+# it.)
+# The label is a machine-wide singleton (see the identity block above). If
+# something is ALREADY registered under it, blindly rendering over the plist and
+# booting it out would silently hijack — or kill — a service this installer did
+# not create (a hand-built job, or a repo-layout `bin/ocserver install` instance
+# serving from a completely different path). So: adopt the label only
 # when the existing plist demonstrably points at the binary WE just installed;
 # anything else is a hard stop that changes nothing.
 #
@@ -1176,20 +1157,20 @@ if [[ "$FOREGROUND" == 0 ]]; then
 fi
 
 # ── relocation gate ──────────────────────────────────────────────────────────
-# The ownership gate above only established "this is the same BINARY". What it
-# licenses, though, is far larger: bootout the running service and re-register
-# it with WHATEVER port and config this run happened to resolve. Those two
-# scopes are not the same size, and the gap is a foot-gun with a live trigger.
+# The ownership gate above established only "this is the same BINARY", but what
+# it licenses is far larger: bootout the running service and re-register it with
+# WHATEVER port and config this run happened to resolve. That gap is a foot-gun
+# with a live trigger.
 #
-# The trigger is the ./oc.toml fallback. Standing in a directory that happens to
-# contain an oc.toml — a repo checkout with a leftover e2e config, say — is
-# enough to move the owner's running server to a different port AND point it at
-# a different database. The port gate cannot catch it: it checks the NEW port,
-# which is free. The result is a service that looks freshly installed and a
-# cockpit that looks like all its data vanished, with nothing printed to connect
-# the two. Before this installer created launchd jobs the same misread was
-# harmless and reversible (it only affected a foreground process you could
-# Ctrl-C); bootout + a persistent plist is what turned it into a destructive act.
+# The trigger is the ./oc.toml fallback. Merely standing in a directory that
+# holds one — a checkout with a leftover e2e config, say — is enough to move the
+# owner's running server to a different port AND point it at a different
+# database. The port gate cannot catch it: it checks the NEW port, which is
+# free. The result is a service that looks freshly installed and a cockpit that
+# looks like all its data vanished, with nothing printed to connect the two.
+# Before this installer created launchd jobs the same misread was harmless and
+# reversible (a foreground process you could Ctrl-C); bootout + a persistent
+# plist is what turned it into a destructive act.
 #
 # So when replacing a job of ours, compare the parameters that decide WHERE the
 # service lives and WHAT data it serves:
@@ -1245,13 +1226,13 @@ fi
 # successful install — check first and fail with an actionable message.
 #
 # EXCEPT when the listener is the service we are about to replace. Re-running
-# the installer over a healthy install is supposed to be idempotent, but our own
-# running job holds the port, so a naive gate turns every second run into a
-# FATAL — an install that "already worked" reported as broken. When every
-# listener PID belongs to our own launchd job the port is not contended: we
-# boot that job out further down and the port is released before the new one
-# binds. A foreign squatter — or ANY listener in --foreground mode, where
-# nothing gets booted out — still fails exactly as before.
+# over a healthy install is supposed to be idempotent, but our own running job
+# holds the port, so a naive gate turns every second run into a FATAL — an
+# install that "already worked" reported as broken. When every listener PID
+# belongs to our own launchd job the port is not contended: we boot that job out
+# further down and it is released before the new one binds. A foreign squatter —
+# or ANY listener in --foreground mode, where nothing gets booted out — still
+# fails exactly as before.
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   port_conflict=1
   if [[ "$OURS" == 1 ]]; then
@@ -1296,16 +1277,16 @@ mkdir -p "$LA_DIR" "$LOG_DIR"
 
 # ── claude resolution for the fleet spawn chain (T-ba62) ─────────────────────
 # WHY THIS EXISTS HERE. This installer is the ONE link of the release launchd
-# chain that runs in the operator's interactive shell, with a rich PATH that
-# includes version-manager shims (asdf/nvm/volta). Everything downstream does
-# not: the serve daemon runs under launchd's minimal env, and the cockpit's
-# 「安裝」 (POST /api/machines/{id}/bootstrap-here) hands THAT env straight to
-# `ocwarden install`. So a plist without PATH/OC_CLAUDE_BIN guaranteed that on
-# every one-click install, the warden could not resolve claude — and (before
-# T-ba62's fail-closed change) installed anyway, went online, and refused every
-# spawn with zero owner-visible signal. bin/ocserver install has carried this
-# stamp for the source path all along; the release path was simply missing it,
-# which is why the ONE-CLICK path was the more broken of the two.
+# chain that runs in the operator's interactive shell, with a rich PATH holding
+# version-manager shims (asdf/nvm/volta). Nothing downstream does: the serve
+# daemon runs under launchd's minimal env, and the cockpit's 「安裝」 (POST
+# /api/machines/{id}/bootstrap-here) hands THAT env straight to `ocwarden
+# install`. So a plist without PATH/OC_CLAUDE_BIN guaranteed that on every
+# one-click install the warden could not resolve claude — and (before T-ba62's
+# fail-closed change) installed anyway, went online, and refused every spawn
+# with zero owner-visible signal. bin/ocserver install has carried this stamp
+# for the source path all along; the release path was missing it, which is why
+# ONE-CLICK was the more broken of the two.
 #
 # This mirrors bin/ocserver's block deliberately (same resolution order, same
 # XML hygiene, same two-probe shim detection) — keep them in step.
@@ -1352,8 +1333,8 @@ else
   echo "[install]          this installer with OC_CLAUDE_BIN=/absolute/path/to/claude (idempotent)." >&2
 fi
 
-# OC_CONFIG is emitted ONLY when a config file actually backed the port probe —
-# pointing the daemon at a nonexistent path would be worse than the default.
+# OC_CONFIG is emitted ONLY when a config file actually backed the port probe:
+# pointing the daemon at a nonexistent path is worse than the default.
 cfg_entry=""
 if [[ -n "$CFG_ABS" ]]; then
   cfg_entry="    <key>OC_CONFIG</key><string>$CFG_ABS</string>
@@ -1362,9 +1343,9 @@ fi
 
 # Rendered to a sibling temp file first, so a write failure (read-only
 # LaunchAgents, full disk) cannot leave a half-written plist where a valid one
-# used to be. The explicit guard is what keeps this path speaking the same
-# language as every other failure here — without it `set -e` aborts on a raw
-# shell redirection error and the operator gets a bare "Permission denied".
+# used to be. The explicit guard keeps this path speaking the same language as
+# every other failure here — without it `set -e` aborts on a raw shell
+# redirection error and the operator gets a bare "Permission denied".
 if ! cat 2>/dev/null > "$PLIST.new" <<PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -1414,15 +1395,15 @@ fi
 
 # bootout is ASYNC: the label can linger registered after the call returns, and
 # bootstrapping into that window fails with "service already bootstrapped" AND
-# can leave the job torn down but not re-registered — i.e. a re-run of the
-# installer that ENDS with the server dead. Poll until launchd really lets go.
+# can leave the job torn down but not re-registered — a re-run that ENDS with
+# the server dead. Poll until launchd really lets go.
 
 # Where the serve log ends RIGHT NOW, before this boot appends anything. The
 # claim link is scraped from the bytes after this mark and nowhere else:
-# StandardOutPath APPENDS, so every previous boot's setup link is still sitting
-# in the file. Scanning the whole log means a re-install happily reprints the
-# claim code from the very first install — long since consumed, so the link is
-# dead — and tells the owner to go set a password they already set.
+# StandardOutPath APPENDS, so every previous boot's setup link is still in the
+# file, and scanning the whole log makes a re-install reprint the very first
+# install's claim code — long since consumed, so the link is dead — telling the
+# owner to set a password they already set.
 log_mark=0
 [[ -f "$SERVE_LOG" ]] && log_mark="$(wc -c < "$SERVE_LOG" | tr -d ' ')"
 
@@ -1445,8 +1426,8 @@ launchctl kickstart "$TARGET" >/dev/null 2>&1 || true
 
 # Health gate: "bootstrap returned 0" only means launchd accepted the job, not
 # that serve bound the port. Wait for the socket before claiming success, so a
-# job that crash-loops on startup is reported as a failure here rather than as
-# a URL that refuses connections.
+# job that crash-loops on startup is reported as a failure here rather than as a
+# URL that refuses connections.
 up=0
 for _ in $(seq 1 50); do
   if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then up=1; break; fi
