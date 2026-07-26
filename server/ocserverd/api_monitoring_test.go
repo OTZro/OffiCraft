@@ -442,6 +442,116 @@ func TestGetMonitoring_NoLabelReportedOmitsAccountLabel(t *testing.T) {
 	}
 }
 
+// ── runtime provenance of the account key (T-69bc) ──────────────────────────
+
+// codexReportedAccount is one Codex-reported ChatGPT account telemetry report —
+// the eva-m5 shape: the machine's only registered account key is Codex's, and
+// the owner aliased it to a readable name.
+const codexReportedAccount = `{"runtime": "codex", "account": "codex:8906abc",
+	"account_label": "ChatGPT"}`
+
+// runtimeAccountServer seeds ONE member running memberRuntime and ingests one
+// telemetry report under that member's own id.
+func runtimeAccountServer(t *testing.T, memberRuntime, report string) *apiServer {
+	t.Helper()
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	m := fullMember("kyle")
+	m.RoleKey = "builder"
+	m.Runtime = memberRuntime
+	if err := s.dal.PutMember(m); err != nil {
+		t.Fatalf("seed member: %v", err)
+	}
+	if err := s.dal.PutAccountAlias(AccountAlias{
+		Account: "codex:8906abc", DisplayName: "EvaChatGPT"}); err != nil {
+		t.Fatalf("seed alias: %v", err)
+	}
+	if rec := doIngestTelemetry(s, "kyle", "m-eva-m5", report); rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	return s
+}
+
+func TestGetMonitoring_ClaudeSessionNeverServesCodexReportedAccount(t *testing.T) {
+	// The owner's report: a claude-runtime member's panel showed the machine's
+	// ChatGPT account behind the 「Claude Account」 label. The account key is
+	// runtime-namespaced, so a Codex-reported key must fold to honest-empty for a
+	// claude session — and must not attribute that session to the account's
+	// machine set / cost roll-up either.
+	s := runtimeAccountServer(t, RuntimeClaude, codexReportedAccount)
+	rec := doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"})
+	d := monitoringOf(t, rec)
+	session := d["sessions"].([]any)[0].(map[string]any)
+	if got := session["account"]; got != "" {
+		t.Fatalf("claude session account = %v, want \"\" (honest no-data dash)", got)
+	}
+	if accts := d["machines"].([]any)[0].(map[string]any)["accounts"].([]any); len(accts) != 0 {
+		t.Fatalf("claude-only machine accounts = %v, want none", accts)
+	}
+	if accounts := d["accounts"].([]any); len(accounts) != 0 {
+		t.Fatalf("accounts = %v, want no row built from a foreign-runtime key", accounts)
+	}
+	if strings.Contains(rec.Body.String(), "EvaChatGPT") {
+		t.Fatalf("claude-runtime fold leaked the ChatGPT account: %s", rec.Body.String())
+	}
+}
+
+func TestGetMonitoring_CodexSessionKeepsItsOwnAccount(t *testing.T) {
+	// SENTINEL: the guard is provenance-matched, not a blanket block — a codex
+	// member still resolves the account its own runtime reported, on every
+	// section (session row, machine account set, accounts row).
+	s := runtimeAccountServer(t, RuntimeCodex, codexReportedAccount)
+	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	if got := d["sessions"].([]any)[0].(map[string]any)["account"]; got != "EvaChatGPT" {
+		t.Fatalf("codex session account = %v, want EvaChatGPT", got)
+	}
+	accts := d["machines"].([]any)[0].(map[string]any)["accounts"].([]any)
+	if len(accts) != 1 || accts[0] != "codex:8906abc" {
+		t.Fatalf("codex machine accounts = %v, want the reported key", accts)
+	}
+	accounts := d["accounts"].([]any)
+	if len(accounts) != 1 || accounts[0].(map[string]any)["display_name"] != "EvaChatGPT" {
+		t.Fatalf("accounts = %v, want one aliased row", accounts)
+	}
+}
+
+func TestGetMonitoring_UnstampedAccountStillResolves(t *testing.T) {
+	// SENTINEL for the deliberate tolerance (telemetryAccount): a reporter that
+	// identifies no runtime leaves the account provenance-less, and the fold must
+	// keep resolving it rather than guess a runtime and drop a real account.
+	s := runtimeAccountServer(t, RuntimeClaude,
+		`{"hardware": {"cpu_pct": 1}, "account": "codex:8906abc"}`)
+	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	if got := d["sessions"].([]any)[0].(map[string]any)["account"]; got != "EvaChatGPT" {
+		t.Fatalf("unstamped session account = %v, want EvaChatGPT", got)
+	}
+}
+
+func TestHandleIngestTelemetry_AccountCarriesReportingRuntime(t *testing.T) {
+	// The provenance stamp rides the SAME write as the account key, so a later
+	// partial report (no account) can never leave the two describing different
+	// runtimes.
+	api := &apiServer{telemetry: newMemStore(), hub: NewHub()}
+	if rec := doIngestTelemetry(api, "kyle", "", codexReportedAccount); rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	if got, _ := api.telemetry.Get("kyle")[accountRuntimeKey].(string); got != RuntimeCodex {
+		t.Fatalf("account_runtime = %q, want codex", got)
+	}
+	if rec := doIngestTelemetry(api, "kyle", "", `{"runtime": "claude"}`); rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	entry := api.telemetry.Get("kyle")
+	if got, _ := entry[accountRuntimeKey].(string); got != RuntimeCodex {
+		t.Fatalf("account-less report must not re-stamp provenance, got %q", got)
+	}
+	// PRIVACY/wire: the internal stamp never reaches the agent-readable echo.
+	if strings.Contains(doIngestTelemetry(api, "kyle", "", codexReportedAccount).Body.String(),
+		accountRuntimeKey) {
+		t.Fatalf("ingest echo must not carry %s", accountRuntimeKey)
+	}
+}
+
 // TestFoldCommandResult_WorkerReceiptFoldsOntoWorkerRow (T-9ccf): a receipt
 // keyed on worker_id (a worker has NO roster member) must fold the last-op
 // fields onto the durable outsource_worker row — the worker twin of the member

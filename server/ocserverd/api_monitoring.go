@@ -481,8 +481,16 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	} else if machine, isStr := body.Machine.(string); isStr && machine != "" {
 		entry["machine"] = machine
 	}
+	// The account key is runtime-namespaced (see telemetryAccount): stamp the
+	// reporting runtime in the SAME write, so the read path can tell a ChatGPT
+	// key from an Anthropic one on an entry that outlives a runtime switch. A
+	// reporter that identifies no runtime stamps "" — honest unknown provenance.
 	if account, isStr := body.Account.(string); isStr && account != "" {
 		entry["account"] = account
+		entry[accountRuntimeKey] = ""
+		if runtime != nil {
+			entry[accountRuntimeKey] = NormalizeRuntime(*runtime)
+		}
 	}
 	// account_label (T-260e): the reporter's human-readable label for the
 	// account key (oauthAccount email/org — PII). Folded into the entry for the
@@ -612,7 +620,7 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		}
 		// Runtime facts fold through the SAME foldActorRuntime the outsource
 		// worker DTO reads (P7b read-path convergence — one fold, two wires).
-		rt := foldActorRuntime(entry, gauge[m.ID], m.BankedCost)
+		rt := foldActorRuntime(entry, gauge[m.ID], m.BankedCost, m.Runtime)
 		sessions = append(sessions, monitoringSessionDTO{
 			ID:              m.ID,
 			Name:            m.Name,
@@ -648,7 +656,10 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 				hwByHost[host] = hw
 			}
 		}
-		if account, ok := entry["account"].(string); ok && account != "" {
+		// Same runtime-provenance gate as the session row (ONE accessor): a
+		// foreign-runtime key must not attribute this member to that account's
+		// machine set either, or the accounts section re-tells the same lie.
+		if account := telemetryAccount(entry, m.Runtime); account != "" {
 			if acctByHost[host] == nil {
 				acctByHost[host] = map[string]bool{}
 			}
@@ -708,8 +719,8 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	acctHasCost := map[string]bool{}
 	for _, m := range members {
 		entry := tele(m.ID)
-		account, ok := entry["account"].(string)
-		if !ok || account == "" {
+		account := telemetryAccount(entry, m.Runtime)
+		if account == "" {
 			continue
 		}
 		ts, _ := entry["ts"].(float64)

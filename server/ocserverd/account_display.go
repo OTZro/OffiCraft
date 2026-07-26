@@ -37,6 +37,47 @@ func accountLabelOverlay(telemetry map[string]map[string]any, isOwner bool) map[
 	return labels
 }
 
+// telemetryAccount reads the account key a telemetry entry may be attributed to
+// for an actor that is CURRENTLY running actorRuntime — "" when the stored key
+// was reported by a different runtime.
+//
+// THIS IS THE ONE runtime-aware point on the whole account path (T-69bc), and it
+// has to be here: an account KEY is runtime-namespaced by construction. Codex
+// reports a ChatGPT account (`codex:<sha>`, cli/ocwarden/codex_session.go),
+// Claude Code reports an Anthropic OAuth account (`<userID>/<org>`,
+// cli/ocagent/contextreport.go) — two disjoint identity spaces that share one
+// `account` slot on the per-actor telemetry entry. The entry is a partial-report
+// MERGE that outlives any single session (only a hard member delete clears it),
+// so a member whose runtime was switched keeps the PREVIOUS runtime's account key
+// until the new runtime's reporter overwrites it. Serving that key regardless of
+// runtime is what put a ChatGPT account behind the panel's 「Claude Account」
+// label (the label is runtime-aware, the value was not). Everything else on the
+// path — ingest, fold, display resolution, both wires — stays ONE shared,
+// runtime-blind code path; this is a provenance equality check, not a
+// codex-vs-claude branch.
+//
+// Tolerance for an UNSTAMPED account: entries written before this stamp existed
+// (and by any reporter that omits `runtime`) carry no provenance, and guessing
+// one would be the same mistake in reverse — those keep resolving, so a
+// legitimately reported account is never silently dropped.
+func telemetryAccount(entry map[string]any, actorRuntime string) string {
+	account, _ := entry["account"].(string)
+	if account == "" {
+		return ""
+	}
+	reported, _ := entry[accountRuntimeKey].(string)
+	if reported != "" && reported != NormalizeRuntime(actorRuntime) {
+		return ""
+	}
+	return account
+}
+
+// accountRuntimeKey is the internal telemetry-entry key holding the runtime that
+// reported the entry's `account` — stamped in the SAME write as the account
+// itself (api_monitoring.go ingest) so the two can never drift apart the way a
+// free-floating `runtime` field would. Internal only: never echoed on any wire.
+const accountRuntimeKey = "account_runtime"
+
 // resolveAccountDisplay maps a raw account key to its human-readable name:
 // ① the owner's hand-set alias (accounts table) — highest precedence, never
 //

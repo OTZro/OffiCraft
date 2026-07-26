@@ -853,7 +853,7 @@ func TestNewOutsourceWorkerDTO_GoldenWireShape(t *testing.T) {
 
 func TestFoldActorRuntime(t *testing.T) {
 	t.Run("nil maps and zero banked fold all-empty", func(t *testing.T) {
-		f := foldActorRuntime(nil, nil, 0)
+		f := foldActorRuntime(nil, nil, 0, "claude")
 		if f.account != "" || f.cost != nil || f.contextPct != nil || f.bankedCost != nil {
 			t.Fatalf("empty fold = %+v, want all zero", f)
 		}
@@ -861,7 +861,7 @@ func TestFoldActorRuntime(t *testing.T) {
 	t.Run("reported facts fold through", func(t *testing.T) {
 		f := foldActorRuntime(
 			map[string]any{"account": "raw-key-1", "cost": 2.5},
-			map[string]any{"context_pct": 37.0}, 1.25)
+			map[string]any{"context_pct": 37.0}, 1.25, "claude")
 		if f.account != "raw-key-1" {
 			t.Errorf("account = %q, want raw-key-1", f.account)
 		}
@@ -875,10 +875,40 @@ func TestFoldActorRuntime(t *testing.T) {
 			t.Errorf("banked_cost = %v, want 1.25", f.bankedCost)
 		}
 	})
+	t.Run("account reported by another runtime folds empty", func(t *testing.T) {
+		// T-69bc: the account key is runtime-namespaced — a codex-reported
+		// ChatGPT key must not be served for a claude actor. Targeted: every
+		// other fact on the same entry still folds through.
+		f := foldActorRuntime(
+			map[string]any{"account": "codex:8906abc", "account_runtime": "codex", "cost": 2.5},
+			map[string]any{"context_pct": 37.0}, 0, "claude")
+		if f.account != "" {
+			t.Errorf("account = %q, want empty for a foreign-runtime key", f.account)
+		}
+		if f.cost == nil || *f.cost != 2.5 || f.contextPct == nil || *f.contextPct != 37.0 {
+			t.Errorf("the gate must touch account only, got %+v", f)
+		}
+	})
+	t.Run("account reported by the actor's own runtime folds through", func(t *testing.T) {
+		f := foldActorRuntime(
+			map[string]any{"account": "codex:8906abc", "account_runtime": "codex"},
+			nil, 0, "codex")
+		if f.account != "codex:8906abc" {
+			t.Errorf("account = %q, want the codex key", f.account)
+		}
+	})
+	t.Run("unstamped account folds through for either runtime", func(t *testing.T) {
+		for _, runtime := range []string{"claude", "codex", ""} {
+			f := foldActorRuntime(map[string]any{"account": "raw-key-1"}, nil, 0, runtime)
+			if f.account != "raw-key-1" {
+				t.Errorf("runtime %q: account = %q, want raw-key-1", runtime, f.account)
+			}
+		}
+	})
 	t.Run("wrong-typed entries fold empty not fabricated", func(t *testing.T) {
 		f := foldActorRuntime(
 			map[string]any{"account": 7, "cost": "x"},
-			map[string]any{"context_pct": "high"}, 0)
+			map[string]any{"context_pct": "high"}, 0, "claude")
 		if f.account != "" || f.cost != nil || f.contextPct != nil || f.bankedCost != nil {
 			t.Fatalf("mistyped fold = %+v, want all zero", f)
 		}

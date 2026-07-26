@@ -1072,7 +1072,8 @@ func newTaskManualListItemDTO(m TaskManual) taskManualDTO {
 // actorRuntimeFold carries the per-actor telemetry/gauge runtime facts BOTH
 // read paths serve — the member monitoring-session row (api_monitoring.go) and
 // the outsource-worker DTO below (P7b read-path convergence: one fold, two
-// wires). account is the RAW telemetry key ("" when unreported): each caller
+// wires). account is the RAW telemetry key ("" when unreported, or when the
+// stored key belongs to another runtime — telemetryAccount): each caller
 // applies its own display resolution and serialisation on top (session row →
 // resolved string, worker DTO → nullable resolved pointer), so neither wire
 // shape changes. cost / contextPct / bankedCost are nil when unreported /
@@ -1087,11 +1088,12 @@ type actorRuntimeFold struct {
 
 // foldActorRuntime folds one actor's telemetry entry, gauge entry, and durable
 // banked cost. Nil-map-safe: an actor with no entries folds all-empty.
-func foldActorRuntime(tele, gauge map[string]any, banked float64) actorRuntimeFold {
+// actorRuntime is the actor's CURRENT runtime ("" = claude): the account key is
+// only attributed when it was reported by that runtime (telemetryAccount — the
+// one runtime-aware point; a foreign-runtime key folds empty → honest dash).
+func foldActorRuntime(tele, gauge map[string]any, banked float64, actorRuntime string) actorRuntimeFold {
 	f := actorRuntimeFold{}
-	if a, ok := tele["account"].(string); ok {
-		f.account = a
-	}
+	f.account = telemetryAccount(tele, actorRuntime)
 	if c, ok := tele["cost"].(float64); ok {
 		f.cost = &c
 	}
@@ -1143,7 +1145,7 @@ func newOutsourceWorkerDTO(w OutsourceWorker, task *Task, p outsourceWorkerProje
 	// actor id) via the SAME foldActorRuntime the member session loop reads.
 	// Absent → nil → serialises null → honest dash, never fabricated (parity
 	// with the member fold's `awake && … || dash` gate).
-	rt := foldActorRuntime(p.tele, p.gaugeEntry, w.BankedCost)
+	rt := foldActorRuntime(p.tele, p.gaugeEntry, w.BankedCost, w.Runtime)
 	dto.Cost = rt.cost
 	dto.ContextPct = rt.contextPct
 	dto.CompactionCount = rt.compactionCount
