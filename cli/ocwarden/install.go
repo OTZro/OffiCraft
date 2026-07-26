@@ -127,7 +127,7 @@ func refuseInTestBinary(fn string) {
 // verify makes many one-shot calls — each individual call is well under this bound.
 func realSysOps() sysOps {
 	refuseInTestBinary("realSysOps")
-	r := execRunner{timeout: 30 * time.Second}
+	r := newCmdRunner(30 * time.Second)
 	return sysOps{
 		run:       r.Run,
 		mkdirAll:  os.MkdirAll,
@@ -189,7 +189,7 @@ type hostSeam struct {
 // realHostSeam is the ONLY place the real OS is wired into install/teardown.
 func realHostSeam() hostSeam {
 	refuseInTestBinary("realHostSeam")
-	probeOps := osUpdaterOps{runner: execRunner{timeout: selfUpdateProbeBudget}}
+	probeOps := osUpdaterOps{runner: newCmdRunner(selfUpdateProbeBudget)}
 	return hostSeam{
 		sys:         realSysOps(),
 		claudeProbe: realClaudeProbe,

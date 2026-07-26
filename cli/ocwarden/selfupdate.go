@@ -646,7 +646,7 @@ func newSelfUpdater(cfg Config, logf func(string, ...any)) *updater {
 	reportClient := &http.Client{Timeout: selfUpdateReportBudget}
 	return &updater{
 		get:          httpGetter(client, cfg.Base, cfg.Token),
-		ops:          osUpdaterOps{runner: execRunner{timeout: selfUpdateProbeBudget}},
+		ops:          osUpdaterOps{runner: newCmdRunner(selfUpdateProbeBudget)},
 		selfPath:     selfPath,
 		agentPath:    agentPath,
 		interval:     selfUpdateInterval,

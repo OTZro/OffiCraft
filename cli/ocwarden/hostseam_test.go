@@ -22,14 +22,31 @@
 //
 //   - every test, including ones written years from now, gets the fake;
 //   - a test does not have to remember to opt in;
-//   - and — the whole claim — deleting or breaking a guard IN THE CODE UNDER TEST
-//     (installer.guard, the namespace validation, the label derivation) cannot
-//     escalate into touching the host, because the code that would touch the host
-//     is not bound into the test binary at all.
+//   - and — the claim this actually buys — deleting or breaking a guard IN THE CODE
+//     UNDER TEST (installer.guard, the namespace validation, the label derivation)
+//     cannot escalate into touching the host, because an entry point that takes its
+//     effects from newHostSeam gets the fake no matter what its own logic does.
 //
-// TestHostSeam_SingleConstructionPoint machine-checks the "one production
-// construction point" half: reintroduce an inline realSysOps() in any entry point
-// and it goes red — without executing anything.
+// WHAT THE SEAM DOES **NOT** BUY (learned the hard way, twice)
+// -----------------------------------------------------------
+// The seam protects entry points that GO THROUGH IT. It cannot protect against an
+// entry point that assembles the wiring itself — `sysOps{run: execRunner{…}.Run,
+// rename: os.Rename, …}` inline in teardownCmd names neither realSysOps nor
+// realHostSeam, so the identifier-based scans stay green and the seam is simply not
+// consulted. Independent review built exactly that mutant and the test binary
+// issued a real `launchctl bootout gui/<uid>/com.officraft.ocwarden`.
+//
+// Two things close that, and BOTH are needed:
+//   - scanHostSeamSource check (4) pins the STRUCTURE, not just the names: the
+//     `sysOps{` and `execRunner{` composite literals may exist in exactly one place
+//     each. A hand-assembled seam is now a TestMain refusal before m.Run().
+//   - main.go's execRunner.Run opens with refuseInTestBinary. This is the only
+//     guard a hand-assembled struct cannot route around, because however the struct
+//     was built the subprocess still has to be started there. It fires BEFORE
+//     exec.Command, i.e. before the host is touched — not afterwards.
+//
+// TestHostSeam_StructureIsReported gives the static half a name in `go test -v`
+// output. It is a reporting wrapper only; TestMain is the gate.
 package main
 
 import (
@@ -39,6 +56,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // errHostSeamBlocked is what the test-binary seam returns for the effects that
@@ -115,7 +133,23 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	newHostSeam = fakeHostSeam
+	// The exec runner is rebound for the same reason and at the same moment: the
+	// real one now REFUSES inside a test binary (main.go execRunner.Run →
+	// refuseInTestBinary), so the telemetry/probe paths that legitimately shell out
+	// in production must take their runner from this seam. A test that wants to
+	// observe argv still injects its own recording runner locally, exactly as before.
+	newCmdRunner = func(time.Duration) CmdRunner { return blockedRunner{} }
 	os.Exit(m.Run())
+}
+
+// blockedRunner is the test binary's binding of newCmdRunner: it starts no process
+// and returns errHostSeamBlocked for every argv. Callers on the telemetry path all
+// treat a runner error as "this field is unavailable", so a `run --once` still
+// completes end to end without a single subprocess.
+type blockedRunner struct{}
+
+func (blockedRunner) Run(name string, args ...string) (string, error) {
+	return "", fmt.Errorf("%w: refusing to exec %s", errHostSeamBlocked, name)
 }
 
 // scanHostSeamSource is the whole static half of the guarantee, as a pure function
@@ -135,8 +169,18 @@ func TestMain(m *testing.M) {
 //	    there, so (1) alone stays green while the entry point is wired straight to
 //	    the real OS again.
 //	(3) THE RUNTIME BACKSTOP IS STILL WIRED — refuseInTestBinary must still open the
-//	    body of both real-seam constructors, because (1) and (2) are source scans and
-//	    a source scan is exactly what a bad edit can defeat.
+//	    body of the two real-seam constructors AND of execRunner.Run, because (1),
+//	    (2) and (4) are source scans and a source scan is exactly what a bad edit
+//	    can defeat.
+//	(4) NO HAND-ASSEMBLED HOST WIRING — `sysOps{` and `execRunner{` composite
+//	    literals may appear in exactly one place each (realSysOps's return, and
+//	    newCmdRunner's initialiser). This is the check whose ABSENCE independent
+//	    review exploited: (1) and (2) pin two IDENTIFIERS, so a mutant that writes
+//	    `sysOps{run: execRunner{…}.Run, rename: os.Rename, …}` inline in teardownCmd
+//	    mentions NEITHER name, keeps every scan above green, and reaches the live
+//	    launchd domain. (1)/(2) guard the front door of a house with no walls; this
+//	    is the wall, and refuseInTestBinary on execRunner.Run (3) is the runtime
+//	    proof that even a wall with a hole in it cannot let a test binary exec.
 func scanHostSeamSource() []string {
 	var out []string
 	entries, err := os.ReadDir(".")
@@ -144,6 +188,14 @@ func scanHostSeamSource() []string {
 		return []string{fmt.Sprintf("cannot read package sources to verify the host seam: %v (fail closed)", err)}
 	}
 	total := 0
+	// (4) counters for the two host-wiring composite literals, keyed by the file
+	// they are allowed to live in.
+	litTotals := map[string]int{"sysOps{": 0, "execRunner{": 0}
+	litHome := map[string]string{"sysOps{": "install.go", "execRunner{": "main.go"}
+	litWhere := map[string]string{
+		"sysOps{":     "install.go's realSysOps (the ONE place the real OS is wired)",
+		"execRunner{": "main.go's `var newCmdRunner` initialiser (the ONE place the real exec runner is built)",
+	}
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -180,9 +232,24 @@ func scanHostSeamSource() []string {
 					name, i+1, trimmed))
 			}
 		}
+
+		// (4) no hand-assembled host wiring anywhere else.
+		for lit := range litTotals {
+			n := countCodeOccurrences(src, lit)
+			if n > 0 && name != litHome[lit] {
+				out = append(out, fmt.Sprintf("%s builds a %s composite literal (%d time(s)) — real host wiring may only be assembled in %s. Assembling it by hand is how a mutant reaches launchctl without ever naming realSysOps or realHostSeam, which is exactly how this fleet's live warden was booted out during T-5047 verification.",
+					name, lit, n, litWhere[lit]))
+			}
+			litTotals[lit] += n
+		}
 	}
 	if total != 1 {
 		out = append(out, fmt.Sprintf("realSysOps() appears %d time(s) across the non-test sources, want exactly 1 (realHostSeam)", total))
+	}
+	for lit, n := range litTotals {
+		if n != 1 {
+			out = append(out, fmt.Sprintf("%s composite literals appear %d time(s) across the non-test sources, want exactly 1 (%s)", lit, n, litWhere[lit]))
+		}
 	}
 	raw, err := os.ReadFile("install.go")
 	if err != nil {
@@ -198,7 +265,37 @@ func scanHostSeamSource() []string {
 				strings.SplitN(fn, " {", 2)[0]))
 		}
 	}
+	// (3, cont.) …and at the PROCESS choke point, which is the only guard a
+	// hand-assembled sysOps cannot route around: whatever built the struct, the
+	// subprocess still has to be started in execRunner.Run.
+	mainRaw, err := os.ReadFile("main.go")
+	if err != nil {
+		return append(out, fmt.Sprintf("cannot read main.go to verify the exec choke point: %v (fail closed)", err))
+	}
+	if !strings.Contains(string(mainRaw), "func (r execRunner) Run(name string, args ...string) (string, error) {\n\trefuseInTestBinary(") {
+		out = append(out, "main.go lost the exec choke point: execRunner.Run's body must OPEN with refuseInTestBinary(...). The two identifier scans above can be defeated by an inline `sysOps{run: execRunner{…}.Run, …}` literal (independent review did exactly that, and the test binary issued a real launchctl bootout against this machine's live warden). The refusal on the exec syscall is what turns that from after-the-fact detection into prevention")
+	}
+	if !strings.Contains(string(mainRaw), "var newCmdRunner = func(timeout time.Duration) CmdRunner { return execRunner{timeout: timeout} }") {
+		out = append(out, "main.go must keep `var newCmdRunner` as the single rebindable construction point for the real exec runner — production code that needs a real subprocess takes it from there, and TestMain rebinds it so the refusal above is never hit by legitimate test traffic")
+	}
 	return out
+}
+
+// countCodeOccurrences counts occurrences of lit on CODE lines only. The comments
+// in this package discuss `sysOps{` and `execRunner{` at length on purpose (this
+// very function's doc comment does), so a scan that counted comment text would be
+// impossible to keep green while documenting itself — the pattern-(a) always-true
+// assertion this codebase has now been bitten by twice.
+func countCodeOccurrences(src, lit string) int {
+	n := 0
+	for _, line := range strings.Split(src, "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "//") {
+			continue
+		}
+		n += strings.Count(t, lit)
+	}
+	return n
 }
 
 // lastHostSeam returns the fake handed to the most recent entry-point call.
@@ -333,50 +430,24 @@ func TestTeardownCmd_CannotReachTheRealHost(t *testing.T) {
 	assertNoForbiddenProcessKill(t, f)
 }
 
-// TestHostSeam_SingleConstructionPoint is the DRIFT GUARD for the structural claim.
-// TestMain can only protect what it can rebind, so the real OS must be wired in
-// exactly ONE place in the non-test sources. This scans the package's own source:
-// reintroducing `realSysOps()` inside installCmd/teardownCmd (the pre-T-5047 shape)
-// makes it fail — with zero execution and zero risk, which is the only way to run a
-// counterfactual for this particular bug on a live machine.
-// It is a REPORTING wrapper over scanHostSeamSource, not the enforcement point:
-// TestMain already refused to reach this function if the scan found anything. It
-// stays as a named test so the property has a name in `go test -v` output and in
-// cli/CLAUDE.md, and so it still reports if TestMain's gate is ever weakened.
-func TestHostSeam_SingleConstructionPoint(t *testing.T) {
-	for _, v := range scanHostSeamSource() {
-		t.Errorf("host seam structure violated: %s", v)
-	}
-}
-
-// TestHostSeam_RealHostSeamIsNeverCalledDirectly closes the hole the version of
-// this file that shipped first left open.
+// TestHostSeam_StructureIsReported is the single named REPORTING WRAPPER over
+// scanHostSeamSource. It is NOT the enforcement point and it is NOT coverage: the
+// gate is TestMain, which runs the same scan before m.Run() and os.Exit(1)s on any
+// violation, so by the time this function is reachable the scan is known empty and
+// the loop body below never executes. It exists only so the property has a NAME in
+// `go test -v` output and in cli/CLAUDE.md, and so something still speaks if
+// TestMain's gate is ever weakened or removed.
 //
-// The counterfactual that exposed it: change installCmd's `host := newHostSeam()`
-// to `host := realHostSeam()`. Everything above stays GREEN — realSysOps() still
-// appears exactly once, `var newHostSeam` is still there — while the entry point
-// once again wires itself straight to the real OS. The runtime tests DO catch it,
-// but only by noticing afterwards that no seam was constructed, i.e. AFTER the
-// entry point has already run a real install against the machine. On the verb
-// that boots out a live launchd job, "we detected it afterwards" is not a
-// defence; install.go's own comment already says NEVER call realHostSeam from an
-// entry point, and until now nothing enforced that sentence.
-//
-// So: realHostSeam may be MENTIONED once as its own declaration and once as the
-// initialiser of newHostSeam, and CALLED nowhere.
-//
-// ⚠️ WHERE THIS IS ENFORCED, AND WHY IT MOVED
-// This scan lives in scanHostSeamSource, called from TestMain BEFORE m.Run(). The
-// version of this file that shipped first ran it as an ordinary Test* function and
-// claimed in this comment that it "fails before anything executes". That was false:
-// this function is declared BELOW TestInstallCmd_CannotReachTheRealHost, Go runs
-// tests in declaration order, and under the very mutant described above the real
-// seam is constructed in that earlier test — so on a machine with a live warden the
-// bootout happens first and this guard never runs. That is not a thought experiment:
-// it happened during T-5047 verification and unloaded this machine's live warden.
-// See TestMain for the full account. This function is now a reporting wrapper only;
-// the gate is TestMain, and realSysOps/realHostSeam additionally refuse at runtime.
-func TestHostSeam_RealHostSeamIsNeverCalledDirectly(t *testing.T) {
+// ⚠️ DO NOT ADD A SECOND ONE. There used to be two functions here —
+// TestHostSeam_SingleConstructionPoint and
+// TestHostSeam_RealHostSeamIsNeverCalledDirectly — with BYTE-IDENTICAL bodies,
+// both looping over the same already-empty slice. Independent review replaced both
+// loop bodies with panic(), ran the whole package, and got `ok` with both tests
+// reported as PASS: two green lines in the log, zero executed statements, and a
+// reader could reasonably have counted them as two independent checks. Each
+// property enforced by the scan is documented in scanHostSeamSource's own doc
+// comment (1)–(4); that is where a new property goes, not into a new no-op test.
+func TestHostSeam_StructureIsReported(t *testing.T) {
 	for _, v := range scanHostSeamSource() {
 		t.Errorf("host seam structure violated: %s", v)
 	}

@@ -173,7 +173,34 @@ type CmdRunner interface {
 // execRunner is the real (os/exec) runner: timeout-boxed, stdout on success.
 type execRunner struct{ timeout time.Duration }
 
+// newCmdRunner is the SINGLE production construction point for the real exec
+// runner, and — like newHostSeam (install.go) — it is a package-level var so the
+// test binary can rebind it in TestMain (hostseam_test.go). Production code must
+// obtain its runner from here, never by writing `execRunner{…}` inline.
+var newCmdRunner = func(timeout time.Duration) CmdRunner { return execRunner{timeout: timeout} }
+
+// Run execs one argv. THIS IS THE PROCESS CHOKE POINT OF THE WHOLE BINARY: every
+// launchctl bootout/bootstrap/kickstart, every plutil, every tmux and probe call
+// that is not already behind a seam ends up here, and here is the last place a
+// caller can still be stopped BEFORE the machine is touched.
+//
+// WHY refuseInTestBinary IS HERE AND NOT ONLY ON THE SEAM CONSTRUCTORS
+// -------------------------------------------------------------------
+// The static guards in hostseam_test.go pin two IDENTIFIERS (realSysOps,
+// realHostSeam). Independent review defeated them with a mutant that never
+// writes either name: an inline `sysOps{run: execRunner{…}.Run, rename: os.Rename,
+// …}` composite literal in teardownCmd. All the source scans stayed green, no
+// refusal fired, and the test binary issued a REAL
+// `launchctl bootout gui/<uid>/com.officraft.ocwarden` against the developer
+// machine's live warden — the runtime tests then failed, but only afterwards
+// ("no host seam was constructed"), which is detection, not defence.
+//
+// A guard on the seam CONSTRUCTORS can always be routed around, because a caller
+// can assemble the struct itself. A guard on the exec syscall cannot: however the
+// struct was assembled, the subprocess still has to be started here. So a test
+// binary that reaches a real exec dies here, before exec.Command runs.
 func (r execRunner) Run(name string, args ...string) (string, error) {
+	refuseInTestBinary("execRunner.Run(" + name + ")")
 	to := r.timeout
 	if to == 0 {
 		to = subprocessBudget
@@ -616,7 +643,7 @@ func realMain(argv []string, env func(string) string, out io.Writer) int {
 	// explicit OC_TOKEN still wins; a missing file leaves OC_TOKEN empty and the
 	// loops below fail-safe (no token/id → log + clean exit).
 	cfg := loadConfig(tokfileEnv(env, os.ReadFile))
-	runner := execRunner{timeout: subprocessBudget}
+	runner := newCmdRunner(subprocessBudget)
 	collect := func() map[string]any { return collectHardware(runner, runtime.GOOS) }
 	machine := func() string { return readMachineName(runner) }
 	post := httpPoster(&http.Client{Timeout: httpTimeout}, cfg.Base, cfg.Token)
