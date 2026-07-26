@@ -1559,12 +1559,6 @@ func (s *apiServer) HandleCreateTaskApiTasksPost(w http.ResponseWriter, r *http.
 		writeError(w, code, reason)
 		return
 	}
-	// Resolved here because inheritance needs the caller: a free 發包 inherits the
-	// DISPATCHING member's own spec, and the dispatcher is the verified token sub
-	// (§14 caller-identity), never a request field. caller.member is nil for the
-	// owner and for an outsource worker — both then inherit nothing, so the
-	// machine must be named explicitly.
-	//
 	// Resolved for EVERY task landing on the outsource track — an explicit 發包 and
 	// a manual-driven one alike (T-8a67). It used to be gated on dispatchTarget !=
 	// nil, so a typed task whose MANUAL routes it to outsource resolved NOTHING and
