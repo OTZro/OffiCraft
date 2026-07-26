@@ -28,11 +28,15 @@ rm -rf "$BINDIST"
 mkdir -p "$BINDIST"
 (cd "$ROOT/cli/ocwarden" && go build -ldflags="-s -w" -o "$BINDIST/ocwarden" ./...)
 (cd "$ROOT/cli/ocagent" && go build -ldflags="-s -w" -o "$BINDIST/ocagent" ./...)
-# T-33d5: sign the FLEET-SERVED artifacts with the stable release identity when
-# this machine holds it (the provisioned release host — bin/setup-codesign-cert),
-# so the wardens' self-update swap keeps a stable TCC identity across versions.
-# On every other machine the helper warns and the binaries stay adhoc-signed —
-# dev/CI builds are unchanged, and the COMMITTED bin/ prebuilts are never signed.
+# T-33d5: sign the FLEET-SERVED artifacts with the stable release identity — but
+# SINCE T-588c THIS IS A NO-OP UNLESS SIGNING WAS EXPLICITLY REQUESTED. The
+# helper returns before it consults the keychain, so this script (which runs on
+# every bin/ci.sh run) needs no keychain at all and concurrent CI runs do not
+# contend for one. T-33d5's rationale was that a stable identity would let the
+# wardens' self-update swap keep macOS TCC grants across versions; THAT WAS NEVER
+# VERIFIED and must not be restated here as established fact in either direction
+# — see the long note in bin/codesign-artifact. The COMMITTED bin/ prebuilts are
+# never signed regardless.
 bash "$ROOT/bin/codesign-artifact" "$BINDIST/ocwarden" com.officraft.ocwarden
 bash "$ROOT/bin/codesign-artifact" "$BINDIST/ocagent" com.officraft.ocagent
 cp "$ROOT/spec/mcp-catalog.json" "$BINDIST/"

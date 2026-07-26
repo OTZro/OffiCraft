@@ -6,13 +6,19 @@
 # "OffiCraft Code Signing"), imports it + its private key into the login
 # keychain, and trusts it for code signing, so bin/codesign-artifact (called
 # from bin/build-bindist and bin/build) finds the identity and signs the
-# released ocwarden/ocagent/ocserverd artifacts with a STABLE identity — the
-# thing that keeps macOS TCC grants alive across self-updates.
+# released ocwarden/ocagent/ocserverd artifacts with a STABLE identity.
+#
+# ⚠️ YOU PROBABLY DO NOT NEED TO RUN THIS (T-588c). Signing is OFF BY DEFAULT —
+# no build, no CI run and no `bin/release publish` consults the keychain unless
+# signing is explicitly requested (`bin/release publish --sign`). Provision this
+# only if you are deliberately cutting a signed release. T-33d5 justified signing
+# by arguing a stable identity keeps macOS TCC grants alive across self-updates;
+# THAT WAS NEVER VERIFIED and this file does not assert it in either direction —
+# see the long note in bin/codesign-artifact.
 #
 # Idempotent: if the identity already exists in the keychain this exits 0
 # without touching anything. Re-provisioning on purpose (e.g. after deleting
-# the identity) just re-runs this script — but note a NEW certificate is a NEW
-# TCC identity, so the fleet gets one final round of permission prompts.
+# the identity) just re-runs this script.
 #
 # What it does (macOS only; needs an interactive shell — sudo + keychain
 # prompts):
