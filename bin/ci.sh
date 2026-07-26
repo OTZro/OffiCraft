@@ -486,8 +486,8 @@ if ! GOTOOLCHAIN="${GOTOOLCHAIN:-auto}" PATH="$(dirname "$GO"):$PATH" \
   exit 1
 fi
 
-# The marker line itself stays BYTE-IDENTICAL ("[ci] all green" is the literal
-# land authority per CLAUDE.md) — the provenance goes on its own line beside it,
-# so even a tailed log pairs the verdict with the tree it was reached on.
+# The marker line stays BYTE-IDENTICAL and is the FINAL output line. Consumers
+# must only accept it with `tail -n 1 | grep -qFx '[ci] all green'`: nested
+# suites also use "all green", so a broad grep can certify a later failure.
+# The provenance stamp is emitted at startup, before any work.
 echo "[ci] all green"
-echo "[ci] green for commit $CI_SHA ($CI_BRANCH, tree $CI_TREE)"

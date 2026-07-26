@@ -550,4 +550,13 @@ fi
 
 echo "bin tests (incl. install guard): $PASS ok, $FAIL failed"
 [[ "$FAIL" == "0" ]] || exit 1
+
+# T-d3e3: the top-level marker is a final exact log authority, not a broad grep.
+MARKER_GUARD="$HERE/ci-success-marker.sh"
+if [[ -x "$MARKER_GUARD" ]]; then
+  bash "$MARKER_GUARD"
+else
+  echo "FATAL: ci success-marker guard missing/not executable: $MARKER_GUARD" >&2
+  exit 1
+fi
 exit 0

@@ -49,7 +49,7 @@ cd e2e_test && bash run_all.sh
 ## CI
 
 ```bash
-bin/ci.sh          # 讀到 [ci] all green 才算過（不是 exit 0）
+bin/ci.sh          # 僅整份輸出的最後一行精確為 [ci] all green 才算過（不是 exit 0 或寬鬆 grep）
 ```
 
 CI 跑在本地（不付 GitHub Actions），從第一個非零步驟就 fail-fast；push 前請自己跑到綠。gate 內容：go gate / 黑箱 lint / gitleaks / FE typecheck+drift。
