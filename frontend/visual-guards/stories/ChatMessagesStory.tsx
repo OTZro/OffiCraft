@@ -23,6 +23,22 @@ export function ChatMessagesStory() {
             </div>
           </div>
         </div>
+        <div className="chat__msg" data-testid="chat-image-row">
+          <div className="chat__msg-bubble" data-testid="chat-image-bubble">
+            <div className="chat__msg-attachments">
+              <span className="chat__msg-attachment">
+                <img
+                  className="chat__msg-image"
+                  data-testid="chat-image"
+                  alt="wide attachment"
+                  width={1200}
+                  height={600}
+                  src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1200' height='600'%3E%3C/svg%3E"
+                />
+              </span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
