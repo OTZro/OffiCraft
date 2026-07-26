@@ -56,14 +56,17 @@ type outsourceCandidate struct {
 	TypeKey   string
 	Priority  string
 	CreatedTS float64
-	// TargetRuntime / TargetModel / TargetEffort / TargetMachine is the task's explicit 發包
-	// target (T-35e0, task.outsource_*): non-empty for a create/reassign
-	// dispatch. When present, the decide mints from it (model/effort/machine)
-	// instead of the type manual's assignee spec — but the per-type copies cap
-	// still applies when the task carries a TypeKey whose manual sets a limit
-	// (T-b6e9, owner ruling 2026-07-24: per-type copies binds regardless of
-	// dispatch source). A typeless ad-hoc dispatch has no manual limit to apply,
-	// so it rides the global cap only.
+	// TargetRuntime / TargetModel / TargetEffort / TargetMachine is the resolved
+	// outsource spec on the task row (T-35e0, task.outsource_*). Dispatched below
+	// says which of its two meanings applies — never their emptiness (T-8a67):
+	// on an explicit dispatch the decide mints from these INSTEAD of the type
+	// manual's assignee spec; on a manual-driven task they are the creator
+	// snapshot and only fill what that manual leaves unset.
+	//
+	// Either way the per-type copies cap still applies when the task carries a
+	// TypeKey whose manual sets a limit (T-b6e9, owner ruling 2026-07-24: per-type
+	// copies binds regardless of dispatch source). A typeless ad-hoc dispatch has
+	// no manual limit to apply, so it rides the global cap only.
 	TargetRuntime string
 	TargetModel   string
 	TargetEffort  string
