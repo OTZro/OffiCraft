@@ -34,6 +34,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,9 +78,127 @@ func fakeHostSeam() hostSeam {
 // TestMain is the structural gate: it runs once, before every test in the package,
 // and there is no way for an individual test to be reached without passing through
 // it. Do NOT add an opt-out.
+//
+// WHY THE SOURCE SCANS RUN HERE AND NOT AS ORDINARY TESTS
+// ------------------------------------------------------
+// They used to be plain Test* functions whose own comments claimed they "fail before
+// anything executes". That claim was FALSE, and it was falsified by experiment — then
+// demonstrated the hard way. Go runs tests in declaration order, file by file in
+// sorted filename order: hostseam_test.go sorts before install_test.go, and within
+// this very file TestInstallCmd_CannotReachTheRealHost is declared ABOVE both static
+// guards. So under the one-line mutant the guards exist to catch (installCmd's
+// `newHostSeam()` → `realHostSeam()`, or teardownCmd's `newHostSeam().sys` →
+// `realSysOps()`), the run reaches the CannotReachTheRealHost tests — which drive the
+// FULL install/teardown at the CANONICAL label on purpose — and constructs the REAL
+// seam there. The guards had not run yet and never got the chance.
+//
+// 🔴 That is not a theoretical ordering argument. During T-5047 verification a mutant
+// run on a tree without these gates did exactly this and issued a real
+// `launchctl bootout gui/<uid>/com.officraft.ocwarden` against the developer
+// machine's LIVE warden: the job was unloaded and had to be re-bootstrapped by hand.
+// A detection that speaks after the bootout is not a defence.
+//
+// TestMain is the one place in a Go package guaranteed to run before any test
+// function. Failing here — before m.Run() — is what "before anything executes"
+// actually means. Do not move these back out into Test* functions.
 func TestMain(m *testing.M) {
+	if violations := scanHostSeamSource(); len(violations) > 0 {
+		fmt.Fprintf(os.Stderr, "\nFATAL: cli/ocwarden host-seam structure is broken — REFUSING TO RUN ANY TEST.\n"+
+			"These checks run in TestMain, before m.Run(), because a test binary in which an entry\n"+
+			"point can construct the real seam would act on this machine's LIVE launchd domain the\n"+
+			"first time any test drives install or teardown — which the very next tests do, at the\n"+
+			"canonical label, on purpose.\n\n")
+		for _, v := range violations {
+			fmt.Fprintf(os.Stderr, "  - %s\n", v)
+		}
+		fmt.Fprintln(os.Stderr)
+		os.Exit(1)
+	}
 	newHostSeam = fakeHostSeam
 	os.Exit(m.Run())
+}
+
+// scanHostSeamSource is the whole static half of the guarantee, as a pure function
+// over this package's non-test sources so TestMain can run it before m.Run(). It
+// returns one human-readable violation per problem found, empty when the structure
+// holds. Both halves are here because both are preconditions for the test binary
+// being safe at all, and neither is safe to discover late:
+//
+//	(1) SINGLE CONSTRUCTION POINT — realSysOps() may appear exactly once in the
+//	    non-test sources (realHostSeam's body). TestMain can only protect what it
+//	    can rebind; an inline realSysOps() in an entry point (the pre-T-5047 shape)
+//	    is unrebindable.
+//	(2) NO DIRECT realHostSeam() CALL — realHostSeam may be MENTIONED as its own
+//	    declaration and as newHostSeam's initialiser, and CALLED nowhere. This is
+//	    the hole the first version of this file left open: with the mutant in place
+//	    realSysOps() still appears exactly once and `var newHostSeam` is still
+//	    there, so (1) alone stays green while the entry point is wired straight to
+//	    the real OS again.
+//	(3) THE RUNTIME BACKSTOP IS STILL WIRED — refuseInTestBinary must still open the
+//	    body of both real-seam constructors, because (1) and (2) are source scans and
+//	    a source scan is exactly what a bad edit can defeat.
+func scanHostSeamSource() []string {
+	var out []string
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		return []string{fmt.Sprintf("cannot read package sources to verify the host seam: %v (fail closed)", err)}
+	}
+	total := 0
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			out = append(out, fmt.Sprintf("cannot read %s to verify the host seam: %v (fail closed)", name, err))
+			continue
+		}
+		src := string(raw)
+
+		// (1) single construction point.
+		if n := countRealSysOpsCalls(src); n > 0 {
+			if name != "install.go" {
+				out = append(out, fmt.Sprintf("%s calls realSysOps() directly (%d time(s)) — the real host must be wired ONLY in install.go's realHostSeam, reachable through newHostSeam, or the test binary cannot rebind it", name, n))
+			}
+			total += n
+		}
+
+		// (2) realHostSeam is never called.
+		for i, line := range strings.Split(src, "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "//") {
+				continue
+			}
+			// The two legitimate mentions, neither of which is a call site.
+			if strings.HasPrefix(trimmed, "func realHostSeam()") ||
+				strings.HasPrefix(trimmed, "var newHostSeam = realHostSeam") {
+				continue
+			}
+			if strings.Contains(trimmed, "realHostSeam()") {
+				out = append(out, fmt.Sprintf("%s:%d calls realHostSeam() directly:\n\t\t%s\n\t  Every entry point must go through newHostSeam() — calling realHostSeam bypasses the var TestMain rebinds, so the test binary is wired to the LIVE launchd domain again and no assertion can prevent the damage, only report it afterwards.",
+					name, i+1, trimmed))
+			}
+		}
+	}
+	if total != 1 {
+		out = append(out, fmt.Sprintf("realSysOps() appears %d time(s) across the non-test sources, want exactly 1 (realHostSeam)", total))
+	}
+	raw, err := os.ReadFile("install.go")
+	if err != nil {
+		return append(out, fmt.Sprintf("cannot read install.go to verify the host seam: %v (fail closed)", err))
+	}
+	if !strings.Contains(string(raw), "var newHostSeam = realHostSeam") {
+		out = append(out, "install.go must keep `var newHostSeam = realHostSeam` — a func (not a var) cannot be rebound by TestMain and the whole structural guarantee evaporates")
+	}
+	// (3) the runtime backstop must stay wired at BOTH real-seam entry points.
+	for _, fn := range []string{"func realSysOps() sysOps {\n\trefuseInTestBinary(", "func realHostSeam() hostSeam {\n\trefuseInTestBinary("} {
+		if !strings.Contains(string(raw), fn) {
+			out = append(out, fmt.Sprintf("install.go lost the runtime backstop: expected the body of %q to open with refuseInTestBinary(...) — that call is what makes constructing the real seam under `go test` impossible rather than merely detectable",
+				strings.SplitN(fn, " {", 2)[0]))
+		}
+	}
+	return out
 }
 
 // lastHostSeam returns the fake handed to the most recent entry-point call.
@@ -220,37 +339,13 @@ func TestTeardownCmd_CannotReachTheRealHost(t *testing.T) {
 // reintroducing `realSysOps()` inside installCmd/teardownCmd (the pre-T-5047 shape)
 // makes it fail — with zero execution and zero risk, which is the only way to run a
 // counterfactual for this particular bug on a live machine.
+// It is a REPORTING wrapper over scanHostSeamSource, not the enforcement point:
+// TestMain already refused to reach this function if the scan found anything. It
+// stays as a named test so the property has a name in `go test -v` output and in
+// cli/CLAUDE.md, and so it still reports if TestMain's gate is ever weakened.
 func TestHostSeam_SingleConstructionPoint(t *testing.T) {
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatalf("readdir: %v", err)
-	}
-	total := 0
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		src, err := os.ReadFile(name)
-		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
-		}
-		n := countRealSysOpsCalls(string(src))
-		if n > 0 && name != "install.go" {
-			t.Errorf("%s calls realSysOps() directly (%d time(s)) — the real host must be wired ONLY in install.go's realHostSeam, reachable through newHostSeam, or the test binary cannot rebind it", name, n)
-		}
-		total += n
-	}
-	// install.go: exactly one — the body of realHostSeam.
-	if total != 1 {
-		t.Errorf("realSysOps() appears %d time(s) across the non-test sources, want exactly 1 (realHostSeam)", total)
-	}
-	src, err := os.ReadFile("install.go")
-	if err != nil {
-		t.Fatalf("read install.go: %v", err)
-	}
-	if !strings.Contains(string(src), "var newHostSeam = realHostSeam") {
-		t.Error("install.go must keep `var newHostSeam = realHostSeam` — a func (not a var) cannot be rebound by TestMain and the whole structural guarantee evaporates")
+	for _, v := range scanHostSeamSource() {
+		t.Errorf("host seam structure violated: %s", v)
 	}
 }
 
@@ -268,38 +363,22 @@ func TestHostSeam_SingleConstructionPoint(t *testing.T) {
 // entry point, and until now nothing enforced that sentence.
 //
 // So: realHostSeam may be MENTIONED once as its own declaration and once as the
-// initialiser of newHostSeam, and CALLED nowhere. Source scan — it fails before
-// anything executes, which is the only counterfactual that is safe to run for
-// this bug on a machine with a live warden.
+// initialiser of newHostSeam, and CALLED nowhere.
+//
+// ⚠️ WHERE THIS IS ENFORCED, AND WHY IT MOVED
+// This scan lives in scanHostSeamSource, called from TestMain BEFORE m.Run(). The
+// version of this file that shipped first ran it as an ordinary Test* function and
+// claimed in this comment that it "fails before anything executes". That was false:
+// this function is declared BELOW TestInstallCmd_CannotReachTheRealHost, Go runs
+// tests in declaration order, and under the very mutant described above the real
+// seam is constructed in that earlier test — so on a machine with a live warden the
+// bootout happens first and this guard never runs. That is not a thought experiment:
+// it happened during T-5047 verification and unloaded this machine's live warden.
+// See TestMain for the full account. This function is now a reporting wrapper only;
+// the gate is TestMain, and realSysOps/realHostSeam additionally refuse at runtime.
 func TestHostSeam_RealHostSeamIsNeverCalledDirectly(t *testing.T) {
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatalf("readdir: %v", err)
-	}
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		src, err := os.ReadFile(name)
-		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
-		}
-		for i, line := range strings.Split(string(src), "\n") {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, "//") {
-				continue
-			}
-			// The two legitimate mentions, neither of which is a call site.
-			if strings.HasPrefix(trimmed, "func realHostSeam()") ||
-				strings.HasPrefix(trimmed, "var newHostSeam = realHostSeam") {
-				continue
-			}
-			if strings.Contains(trimmed, "realHostSeam()") {
-				t.Errorf("%s:%d calls realHostSeam() directly:\n\t%s\nEvery entry point must go through newHostSeam() — calling realHostSeam bypasses the var TestMain rebinds, so the test binary is wired to the LIVE launchd domain again and no assertion can prevent the damage, only report it afterwards.",
-					name, i+1, trimmed)
-			}
-		}
+	for _, v := range scanHostSeamSource() {
+		t.Errorf("host seam structure violated: %s", v)
 	}
 }
 

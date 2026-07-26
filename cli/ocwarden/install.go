@@ -42,6 +42,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	// testing is imported by PRODUCTION code on purpose: testing.Testing() is the
+	// only way for realSysOps/realHostSeam to know they are about to hand the LIVE
+	// machine to a `go test` process. See refuseInTestBinary below.
+	"testing"
 	"time"
 )
 
@@ -82,10 +86,47 @@ type sysOps struct {
 	sleep     func(time.Duration)
 }
 
+// refuseInTestBinary is the LAST-RESORT runtime tripwire on the two functions that
+// wire the real machine in. The static guards in hostseam_test.go run in TestMain,
+// so a mutant that reintroduces a direct call is normally rejected before any test
+// executes; this exists for the case where the source scan itself is wrong, deleted,
+// or defeated — a test binary must never be able to construct the real seam, and
+// "we noticed afterwards" is not a defence for a verb that boots out a live
+// launchd job.
+//
+// THIS IS NOT HYPOTHETICAL. While verifying T-5047 this exact path fired for real:
+// a mutant run against a tree where the static scan was not in effect reached
+// TestTeardownCmd_CannotReachTheRealHost, constructed the real seam, and booted out
+// this developer machine's live com.officraft.ocwarden job (files survived; the job
+// had to be re-bootstrapped by hand). The scan alone is not enough, because the
+// scan is precisely what a bad edit can remove.
+//
+// WHY os.Exit AND NOT panic: `sseTransport.handlePayload` (transport.go) wraps every
+// dispatched CommandDeps closure in a `recover()` so one bad frame cannot kill the
+// warden — and `CommandDeps.Teardown` is exactly such a closure. A panic raised from
+// realSysOps on that path would therefore be caught and downgraded to one log line.
+// os.Exit cannot be recovered, so the refusal stays loud on every path.
+//
+// This branch is unreachable in production: testing.Testing() is false in a binary
+// that was not built by `go test`.
+func refuseInTestBinary(fn string) {
+	if !testing.Testing() {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "\nFATAL: %s was reached from a test binary.\n"+
+		"The real host seam must NEVER be constructed under `go test` — doing so wires the\n"+
+		"test process to the LIVE launchd gui domain, where an install/teardown would boot\n"+
+		"out this machine's real com.officraft.ocwarden job.\n"+
+		"Every entry point must take its effects from newHostSeam(), which TestMain rebinds\n"+
+		"to a fake. See hostseam_test.go.\n", fn)
+	os.Exit(1)
+}
+
 // realSysOps wires the seam to the real OS. The runner reuses execRunner (main.go)
 // with a generous timeout: launchctl bootstrap/print are quick, but the health
 // verify makes many one-shot calls — each individual call is well under this bound.
 func realSysOps() sysOps {
+	refuseInTestBinary("realSysOps")
 	r := execRunner{timeout: 30 * time.Second}
 	return sysOps{
 		run:       r.Run,
@@ -147,6 +188,7 @@ type hostSeam struct {
 
 // realHostSeam is the ONLY place the real OS is wired into install/teardown.
 func realHostSeam() hostSeam {
+	refuseInTestBinary("realHostSeam")
 	probeOps := osUpdaterOps{runner: execRunner{timeout: selfUpdateProbeBudget}}
 	return hostSeam{
 		sys:         realSysOps(),
