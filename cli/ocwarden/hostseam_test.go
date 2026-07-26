@@ -254,6 +254,55 @@ func TestHostSeam_SingleConstructionPoint(t *testing.T) {
 	}
 }
 
+// TestHostSeam_RealHostSeamIsNeverCalledDirectly closes the hole the version of
+// this file that shipped first left open.
+//
+// The counterfactual that exposed it: change installCmd's `host := newHostSeam()`
+// to `host := realHostSeam()`. Everything above stays GREEN — realSysOps() still
+// appears exactly once, `var newHostSeam` is still there — while the entry point
+// once again wires itself straight to the real OS. The runtime tests DO catch it,
+// but only by noticing afterwards that no seam was constructed, i.e. AFTER the
+// entry point has already run a real install against the machine. On the verb
+// that boots out a live launchd job, "we detected it afterwards" is not a
+// defence; install.go's own comment already says NEVER call realHostSeam from an
+// entry point, and until now nothing enforced that sentence.
+//
+// So: realHostSeam may be MENTIONED once as its own declaration and once as the
+// initialiser of newHostSeam, and CALLED nowhere. Source scan — it fails before
+// anything executes, which is the only counterfactual that is safe to run for
+// this bug on a machine with a live warden.
+func TestHostSeam_RealHostSeamIsNeverCalledDirectly(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		for i, line := range strings.Split(string(src), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "//") {
+				continue
+			}
+			// The two legitimate mentions, neither of which is a call site.
+			if strings.HasPrefix(trimmed, "func realHostSeam()") ||
+				strings.HasPrefix(trimmed, "var newHostSeam = realHostSeam") {
+				continue
+			}
+			if strings.Contains(trimmed, "realHostSeam()") {
+				t.Errorf("%s:%d calls realHostSeam() directly:\n\t%s\nEvery entry point must go through newHostSeam() — calling realHostSeam bypasses the var TestMain rebinds, so the test binary is wired to the LIVE launchd domain again and no assertion can prevent the damage, only report it afterwards.",
+					name, i+1, trimmed)
+			}
+		}
+	}
+}
+
 // countRealSysOpsCalls counts CALL SITES of realSysOps() in Go source: comment
 // lines (which discuss the seam at length, on purpose) and the function's own
 // declaration are not call sites and must not be counted, or the guard would be

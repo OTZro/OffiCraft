@@ -239,6 +239,12 @@ booted_out() { [[ -f "$WORK/.booted-out" ]] && echo yes || echo no; }
 # usage error, which reads as "not found" — a false FAIL that looks like a real
 # one.
 tripwire_has() { grep -qF -e "$1" "$WORK/.tripwire"; }
+# EXACT-LINE variant. tripwire_has is a SUBSTRING match, which silently lies for
+# namespaced labels: "launchctl bootout gui/501/com.officraft.serve" is a prefix
+# of "…serve.lab", so asking "did it boot out the MAIN station?" answers yes for
+# a run that correctly booted out only its own namespaced job. Anything asserting
+# about one label NOT being addressed must use this.
+tripwire_has_exact() { grep -qxF -e "$1" "$WORK/.tripwire"; }
 
 echo "install.sh live-service gate — hermetic tests (default label, stubbed launchd)"
 
@@ -405,6 +411,156 @@ else
 fi
 case "$OUT" in *"http://127.0.0.1:7755/"*) ok "fresh install: the setup link the operator is handed is on 7755";; *) bad "fresh install: setup link is not on 7755 (output was: '$OUT')";; esac
 case "$OUT" in *8780*) bad "fresh install: the retired 8780 still appears in the run's output ('$OUT')";; *) ok "fresh install: no trace of the retired 8780 in the output";; esac
+
+# ── 10. --namespace: isolation BY CONSTRUCTION (T-5047) ─────────────────────
+# WHY THESE CASES EXIST. Before them, the 39 cases above passed identically with
+# the namespace derivation DELETED — mutate ROOT_DIR back to "$HOME/.officraft"
+# and LABEL back to "com.officraft.serve" (i.e. a namespaced install silently
+# targets the MAIN instance's root and boots out the MAIN instance's job, the
+# exact disaster the flag exists to prevent) and the whole suite stayed green.
+# A guard suite that cannot see that is not guarding the flag, it is guarding
+# the code that happened to be written first.
+#
+# The stub is LABEL-AWARE (see its header), which is what makes this testable:
+# SHIM_EXPECT_TARGET is set to the MAIN label while the run asks about the
+# NAMESPACED one, so a correct run sees "nothing registered" for its own job and
+# the tripwire records which label it actually addressed.
+NS="lab"
+NS_PORT="7756"
+MAIN_TARGET="gui/$(id -u)/com.officraft.serve"
+NS_TARGET="gui/$(id -u)/com.officraft.serve.$NS"
+
+# run_install_ns <job-state> <expect-target> [args…] — same as run_install but
+# lets a case choose WHICH label the launchctl oracle is willing to answer for.
+run_install_ns() {
+  local job="$1" expect="$2"; shift 2
+  OUT="$(cd "$WORK" && env -i \
+    PATH="$SHIMDIR:/usr/bin:/bin:/usr/sbin:/sbin" \
+    HOME="$FAKEHOME" SHIM_JOB="$job" SHIM_TRIPWIRE="$WORK/.tripwire" SHIM_STATE="$WORK" \
+    SHIM_EXPECT_TARGET="$expect" SHIM_NO_LISTEN="${SHIM_NO_LISTEN:-0}" \
+    bash "$PKG/install.sh" "$@" </dev/null 2>&1)"
+  RC=$?
+}
+
+# 10a. THE DISASTER CASE. A LIVE MAIN station is running, and an operator installs
+# a SECOND instance by name. The namespaced run must address its OWN label and
+# its OWN root — it must not so much as ask launchd about the main job, let alone
+# boot it out. This is the case that goes red the moment the derivation is lost.
+reset_fixture preinstalled
+run_install_ns running "$MAIN_TARGET" --namespace "$NS" --port "$NS_PORT"
+check "ns install alongside a LIVE main station: succeeds" "0" "$RC"
+if tripwire_has_exact "launchctl bootout $MAIN_TARGET"; then
+  bad "ns install BOOTED OUT THE MAIN STATION ($MAIN_TARGET) — tripwire: $(cat "$WORK/.tripwire")"
+else
+  ok "ns install never boots out the main station ($MAIN_TARGET)"
+fi
+if tripwire_has "launchctl bootstrap"; then
+  ok "ns install did register a job (the case is not passing by doing nothing)"
+else
+  bad "ns install never bootstrapped anything — tripwire: $(cat "$WORK/.tripwire")"
+fi
+if tripwire_has "$NS_TARGET"; then
+  ok "ns install addressed its OWN label ($NS_TARGET)"
+else
+  bad "ns install never addressed $NS_TARGET — tripwire: $(cat "$WORK/.tripwire")"
+fi
+# The MAIN instance's files must be untouched: the preinstalled fixture's marker
+# binary is the witness. Under a lost NS_DASH this gets overwritten.
+check "ns install leaves the MAIN instance's binaries untouched" "OLD-BINARY" "$(cat "$FAKEHOME/.officraft/bin/ocwarden" 2>/dev/null)"
+if [[ -d "$FAKEHOME/.officraft-$NS" ]]; then
+  ok "ns install created its own root (~/.officraft-$NS)"
+else
+  bad "ns install did NOT create ~/.officraft-$NS — it installed somewhere else"
+fi
+if [[ -f "$FAKEHOME/Library/LaunchAgents/com.officraft.serve.$NS.plist" ]]; then
+  ok "ns install wrote its own plist (com.officraft.serve.$NS.plist)"
+else
+  bad "ns install did not write com.officraft.serve.$NS.plist — plists: $(ls "$FAKEHOME/Library/LaunchAgents" 2>&1)"
+fi
+
+# 10b. the namespaced instance OWNS ITS CONFIG — written under its own root,
+# carrying the namespace and the port it was asked for. Without this the migrate
+# below would create the MAIN instance's database.
+NS_CFG="$FAKEHOME/.officraft-$NS/server/oc.toml"
+if [[ -f "$NS_CFG" ]]; then
+  ok "ns install wrote its own config ($NS_CFG)"
+  case "$(cat "$NS_CFG")" in *"namespace = \"$NS\""*) ok "ns config carries namespace = \"$NS\"";; *) bad "ns config lacks the namespace: $(cat "$NS_CFG")";; esac
+  case "$(cat "$NS_CFG")" in *"port = $NS_PORT"*) ok "ns config carries port = $NS_PORT";; *) bad "ns config lacks port $NS_PORT: $(cat "$NS_CFG")";; esac
+else
+  bad "ns install wrote no config under its own root"
+fi
+# and the port GATE probed the namespaced port, not the main instance's 7755.
+if tripwire_has "-iTCP:$NS_PORT"; then
+  ok "ns install gated the port it was given ($NS_PORT)"
+else
+  bad "ns install did not probe $NS_PORT — tripwire: $(cat "$WORK/.tripwire")"
+fi
+case "$OUT" in *"http://127.0.0.1:$NS_PORT/"*) ok "ns install hands the operator a link on $NS_PORT";; *) bad "ns install setup link is not on $NS_PORT (output: '$OUT')";; esac
+
+# 10c. a stray oc.toml in the CWD must NOT be able to redirect a run that asked
+# for a specific instance by name. (The main instance deliberately still honours
+# it — that is the relocation gate's job — but "I asked for instance lab" is not
+# a question the file next to me gets to answer.)
+reset_fixture fresh
+printf '[server]\nport = 9999\n' > "$WORK/oc.toml"
+run_install_ns absent "$MAIN_TARGET" --namespace "$NS" --port "$NS_PORT"
+rm -f "$WORK/oc.toml"
+check "ns install ignores a stray ./oc.toml: succeeds" "0" "$RC"
+if tripwire_has "-iTCP:9999"; then
+  bad "ns install was REDIRECTED by a stray ./oc.toml (probed 9999)"
+else
+  ok "ns install was not redirected by a stray ./oc.toml"
+fi
+
+# 10d. --port is REQUIRED with --namespace. Inheriting the default 7755 would
+# either collide with the main instance at the port gate or, worse, look
+# installed while fighting it for the socket.
+reset_fixture fresh
+run_install_ns absent "$MAIN_TARGET" --namespace "$NS"
+check "--namespace without --port: refused (exit 2)" "2" "$RC"
+case "$OUT" in *"requires --port"*) ok "--namespace without --port: says what is missing";; *) bad "--namespace without --port: unhelpful message ('$OUT')";; esac
+if [[ -e "$FAKEHOME/.officraft" ]]; then bad "--namespace without --port still touched the MAIN root"; else ok "--namespace without --port touched nothing"; fi
+
+# 10e. --port ALONE is refused too — otherwise it reads as "change the main
+# instance's port", which is a relocation and not this flag's job.
+reset_fixture fresh
+run_install_ns absent "$MAIN_TARGET" --port "$NS_PORT"
+check "--port without --namespace: refused (exit 2)" "2" "$RC"
+
+# 10f. a MALFORMED namespace must be a hard error, never a silent fold back to
+# the main instance's root and label — that fold is strictly worse than the error.
+reset_fixture preinstalled
+run_install_ns running "$MAIN_TARGET" --namespace "BAD_NS!" --port "$NS_PORT"
+check "malformed --namespace: refused (exit 2)" "2" "$RC"
+check "malformed --namespace: did NOT fall back to the main instance" "OLD-BINARY" "$(cat "$FAKEHOME/.officraft/bin/ocwarden" 2>/dev/null)"
+check "malformed --namespace: never boots anything out" "no" "$(booted_out)"
+case "$OUT" in *"[a-z0-9-]{1,16}"*) ok "malformed --namespace: names the accepted charset";; *) bad "malformed --namespace: does not name the charset ('$OUT')";; esac
+
+# 10g. re-running the SAME instance with a DIFFERENT port is a relocation, not a
+# reload: nothing may change until the operator says so deliberately.
+reset_fixture fresh
+run_install_ns absent "$MAIN_TARGET" --namespace "$NS" --port "$NS_PORT"
+check "ns install (first run): succeeds" "0" "$RC"
+printf 'MARKER-NS' > "$FAKEHOME/.officraft-$NS/bin/ocwarden"
+run_install_ns absent "$MAIN_TARGET" --namespace "$NS" --port "7799" --force
+check "ns re-install with a different port: refused (exit 1)" "1" "$RC"
+# --force is passed so the existing-install prompt cannot be what stopped the
+# run: the refusal under test has to be the PORT one.
+check "ns port change: the refusal is not just the existing-install prompt" "MARKER-NS" "$(cat "$FAKEHOME/.officraft-$NS/bin/ocwarden")"
+case "$OUT" in *"relocation, not a reload"*) ok "ns port change: explains it is a relocation";; *) bad "ns port change: unclear message ('$OUT')";; esac
+case "$(cat "$NS_CFG")" in *"port = $NS_PORT"*) ok "ns port change: the existing config was NOT rewritten";; *) bad "ns port change: config was mutated to $(cat "$NS_CFG")";; esac
+
+# 10h. THE EMPTY NAMESPACE CHANGES NOTHING — the sentinel. Every case above would
+# also pass on a build that broke the MAIN path outright, so pin that a plain
+# fresh install still lands on ~/.officraft / com.officraft.serve and creates NO
+# namespaced root.
+reset_fixture fresh
+run_install absent
+check "no --namespace: fresh install still succeeds" "0" "$RC"
+if [[ -d "$FAKEHOME/.officraft" ]]; then ok "no --namespace: still installs to ~/.officraft"; else bad "no --namespace: ~/.officraft was not created"; fi
+if compgen -G "$FAKEHOME/.officraft-*" >/dev/null; then bad "no --namespace: a namespaced root appeared out of nowhere"; else ok "no --namespace: no namespaced root is created"; fi
+if [[ -f "$FAKEHOME/$PLIST_REL" ]]; then ok "no --namespace: still uses com.officraft.serve.plist"; else bad "no --namespace: default plist missing"; fi
+if [[ -e "$FAKEHOME/.officraft/server/oc.toml" ]]; then bad "no --namespace: an instance config was invented for the MAIN instance"; else ok "no --namespace: no instance config is invented (main reads OC_CONFIG/./oc.toml as before)"; fi
 
 echo "install-guard tests: $PASS ok, $FAIL failed"
 [[ "$FAIL" == "0" ]] || exit 1

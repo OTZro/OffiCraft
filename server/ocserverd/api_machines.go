@@ -688,11 +688,23 @@ func ocwardenChildEnv(environ []string) []string {
 	return out
 }
 
-// runOcwarden runs `<ocwarden> <verb>` bounded by 60s (the injectable-runner
+// runOcwarden is the SEAM through which bootstrap-here / teardown-here reach the
+// ocwarden child. Production leaves it at execOcwarden; the test binary rebinds it
+// to a recorder so a test can assert on the EXACT env the child would have been
+// handed — which is the only way to pin the WIRING rather than the projection.
+//
+// WHY A VAR. ocwardenChildEnv (the allowlist) was fully unit-tested as a pure
+// function while NOTHING pinned that these two call sites actually call it: with
+// `env := ocwardenChildEnv(os.Environ())` reverted to `env := os.Environ()` at both
+// sites — the pre-T-5047 defect restored byte for byte — the whole server suite
+// stayed green. A projection nobody is proven to call is not a defence.
+var runOcwarden = execOcwarden
+
+// execOcwarden runs `<ocwarden> <verb>` bounded by 60s (the injectable-runner
 // twins of handlers._default_bootstrap_runner / _default_teardown_runner).
 // argv list only — zero command-injection surface; the wiring rides in env.
 // Returns (exitCode, mergedLog, timedOut).
-func runOcwarden(binPath string, args []string, env []string) (int, string, bool) {
+func execOcwarden(binPath string, args []string, env []string) (int, string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binPath, args...)
@@ -812,6 +824,25 @@ func (s *apiServer) runWardenInstallHere(machine Member, binPath, baseURL string
 	}, nil
 }
 
+// runWardenTeardownHere is the teardown-here CORE — the exact twin of
+// runWardenInstallHere, split out for the SAME reason: the env this builds is the
+// whole safety story of the verb, and it has to be reachable by a test without an
+// HTTP recorder, an embedded bindist, or a real launchd domain.
+//
+// teardown is identity-agnostic (HOME/uid only) — no OC_* wiring needed, EXCEPT
+// the instance namespace: a namespaced server must tear down its OWN warden
+// (label/tokfile under its namespace), never the main instance's. SAME ALLOWLIST
+// as bootstrap-here, and it matters MORE here: this verb BOOTS OUT a launchd job.
+// A main-instance server that merely inherited a stray OC_NAMESPACE used to tear
+// down a DIFFERENT instance's live warden.
+func (s *apiServer) runWardenTeardownHere(binPath string) (int, string, bool) {
+	env := ocwardenChildEnv(os.Environ())
+	if s.namespace != "" {
+		env = append(env, "OC_NAMESPACE="+s.namespace)
+	}
+	return runOcwarden(binPath, []string{"teardown"}, env)
+}
+
 // POST /api/machines/{machine_id}/teardown-here — tear the warden down ON THE
 // SERVER HOST (owner-only). CONFIRM-THEN-REMOVE: the member is soft-deleted
 // ONLY on a confirmed teardown (exit 0).
@@ -825,17 +856,7 @@ func (s *apiServer) HandleTeardownHereApiMachinesMachineIdTeardownHerePost(w htt
 	if !ok {
 		return
 	}
-	// teardown is identity-agnostic (HOME/uid only) — no OC_* wiring needed,
-	// EXCEPT the instance namespace: a namespaced server must tear down its OWN
-	// warden (label/tokfile under its namespace), never the main instance's.
-	// SAME ALLOWLIST as bootstrap-here, and it matters MORE here: this verb
-	// BOOTS OUT a launchd job. A main-instance server that merely inherited a
-	// stray OC_NAMESPACE used to tear down a DIFFERENT instance's live warden.
-	env := ocwardenChildEnv(os.Environ())
-	if s.namespace != "" {
-		env = append(env, "OC_NAMESPACE="+s.namespace)
-	}
-	exitCode, log, timedOut := runOcwarden(binPath, []string{"teardown"}, env)
+	exitCode, log, timedOut := s.runWardenTeardownHere(binPath)
 	if timedOut {
 		writeJSON(w, http.StatusOK, machineTeardownHereResultDTO{
 			MachineID: machine.ID,

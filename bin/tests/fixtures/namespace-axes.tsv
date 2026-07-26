@@ -1,0 +1,55 @@
+# namespace-axes.tsv — THE derivation table for OC_NAMESPACE, and the only copy.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# The same namespace→(root, launchd label, tmux socket, tokfile) derivation is
+# implemented FOUR times, in three languages, across two Go modules that cannot
+# import each other:
+#
+#   cli/ocwarden/namespace.go     wardenLabelFor / officraftRootFor /
+#                                 tmuxSocketFor / tokfileFor
+#   server/ocserverd/onboarding.go  wardenLaunchdLabel / officraftRootPath /
+#                                 wardenTokfilePath
+#   bin/install.sh                NS_DOT / NS_DASH
+#   bin/ocserver                  the same, on the from-source install path
+#
+# Those copies are HAND-TRANSCRIBED MIRRORS. The server derives a label to decide
+# "does this host already carry a warden?"; the warden derives a label to decide
+# which job to bootstrap and boot out. If the two ever disagree by one character,
+# the server concludes there is no warden here and installs a second one over the
+# live job — the exact three-times-repeated accident this ticket exists for. The
+# ticket calls this the single most fragile line in the whole case, and until
+# this file there was nothing but a `// keep them in sync` comment holding it.
+#
+# HOW IT IS ENFORCED
+# ------------------
+# Every implementation is tested against THIS TABLE, not against its neighbour.
+# Change one side and only that side goes red — which is what makes the failure
+# say WHICH copy drifted instead of merely that two copies differ:
+#
+#   cli/ocwarden/namespace_mirror_test.go       (go test ./cli/ocwarden/)
+#   server/ocserverd/onboarding_mirror_test.go  (go test ./server/ocserverd/)
+#   bin/tests/namespace-mirror-guard.sh         (the two bash copies + charset)
+#
+# The table is data, deliberately: adding a namespace case must not require
+# touching four implementations' test code.
+#
+# FORMAT (tab-separated; '#' comments and blank lines ignored)
+#   namespace <TAB> root_suffix <TAB> label <TAB> tmux_socket
+# The literal token <empty> means the empty string — a bare empty field between
+# two tabs is too easy for an editor, a shell, or a careless reader to eat, and
+# the empty namespace is precisely the row whose exactness matters most.
+#
+# root_suffix is appended to "$HOME/.officraft" — EMPTY for the main instance,
+# which is the property that makes the empty namespace byte-identical to the
+# historical literal. The tokfile is always <root>/warden/exec-warden.tok and is
+# derived, not listed, so it cannot disagree with root.
+#
+# CHARSET (all four implementations must carry this exact regex source):
+# charset	^[a-z0-9-]{1,16}$
+
+<empty>	<empty>	com.officraft.ocwarden	officraft
+lab	-lab	com.officraft.ocwarden.lab	officraft-lab
+x	-x	com.officraft.ocwarden.x	officraft-x
+seth-m1	-seth-m1	com.officraft.ocwarden.seth-m1	officraft-seth-m1
+0123456789abcdef	-0123456789abcdef	com.officraft.ocwarden.0123456789abcdef	officraft-0123456789abcdef

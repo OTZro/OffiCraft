@@ -91,6 +91,7 @@ curl -fsSL https://github.com/pkyosx/OffiCraft/releases/latest/download/install.
 | `bash -s -- --restart-live` | 額外授權「重啟一個正在服務的實例」，見下 |
 | `./install.sh --foreground` | 開發者模式：serve 跑在這個終端機裡，Ctrl-C 停止，**不裝任何 launchd job** |
 | `./install.sh --relocate` | 同意把既有服務搬到不同的埠或設定 |
+| `./install.sh --namespace <ns> --port <port>` | 在同一台機器上裝**第二個完全隔離的實例**，見下 |
 
 > [!WARNING]
 > **這台機器上已經有一個 OffiCraft 服務正在跑的話**，重裝會把它 bootout 再 bootstrap——
@@ -104,8 +105,43 @@ curl -fsSL https://github.com/pkyosx/OffiCraft/releases/latest/download/install.
 > curl -fsSL … | bash -s -- --force --restart-live
 > ```
 >
-> 不想動到現役服務的話，可以用不同 label 併裝：
-> `OC_LAUNCHD_LABEL=com.officraft.serve.alt ./install.sh --force`
+> 不想動到現役服務的話，用 `--namespace` 併裝（見下一節）。
+>
+> ⚠️ **不要用改 `$HOME` 的方式當隔離**。launchd label 是這個 uid 的 GUI domain 裡的
+> singleton，**它不跟著 `HOME` 走**：換了 `HOME` 只是把檔案搬走，job 目標仍然解析到
+> 同一個正在服役的服務，於是「我以為我在沙箱裡」的那次執行照樣把它 bootout。
+> 只設 `OC_LAUNCHD_LABEL` 也只解決一半——job 換了，檔案還是寫進第一個實例的
+> `~/.officraft`。要隔離就用 `--namespace`，它一把鑰匙同時決定 label 與 root。
+
+### 同機第二個實例（`--namespace`）
+
+要在同一台機器上再跑一個互不干擾的 OffiCraft，用一個名字把每一項 per-instance
+資源一次決定完：
+
+```bash
+./install.sh --namespace lab --port 7756
+```
+
+| 這個名字決定了 | `--namespace lab` | 主實例（不給 `--namespace`） |
+| --- | --- | --- |
+| 資料根目錄 | `~/.officraft-lab` | `~/.officraft` |
+| launchd label | `com.officraft.serve.lab` | `com.officraft.serve` |
+| 設定檔 | `~/.officraft-lab/server/oc.toml`（安裝時寫入） | `$OC_CONFIG` 或 `./oc.toml` |
+| 資料庫 | `~/.officraft-lab/server/data/` | `~/.officraft/server/data/` |
+| 它裝出來的 warden | `com.officraft.ocwarden.lab` | `com.officraft.ocwarden` |
+
+規則：
+
+- `<ns>` 必須符合 `[a-z0-9-]{1,16}`。**不合法就直接報錯中止**——絕不會默默退回主實例的
+  路徑與 label（那比報錯糟得多）。也可以用 `OC_NAMESPACE=<ns>` 給。
+- **`--port` 是必填的**。預設的 7755 是主實例的埠，沿用它不是撞在埠檢查上，就是更糟——
+  看起來裝好了，實際上兩個實例在搶同一個 socket。
+- 具名安裝**刻意忽略** `$OC_CONFIG` 與 `./oc.toml`：你已經指名要哪一個實例，
+  站在哪個目錄裡不該有權改道。
+- 已存在的實例改埠是**搬遷、不是重載**，會被擋下且什麼都不動——要嘛沿用原埠重跑，
+  要嘛自己去改那個實例的 `oc.toml`。
+- 移除也吃同一把鑰匙：`--uninstall --namespace lab` 只動 `~/.officraft-lab` 與
+  `com.officraft.serve.lab`；不給就是照舊處理主實例。
 
 ### 升級
 
@@ -145,6 +181,7 @@ curl -fsSL https://github.com/pkyosx/OffiCraft/releases/latest/download/install.
 ```bash
 curl -fsSL … | bash -s -- --uninstall --dry-run   # 只印出會做什麼，什麼都不動
 curl -fsSL … | bash -s -- --uninstall --purge --yes  # 真的刪光，含資料庫，不可回復
+curl -fsSL … | bash -s -- --uninstall --namespace lab  # 只移除具名的那個實例
 ```
 
 > ℹ️ **舊版會在最後多印一行紅字，那不是失敗。** 在這個修正發佈之前，用

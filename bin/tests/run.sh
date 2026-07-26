@@ -513,6 +513,27 @@ else
   bad "bin/tests/uninstall-guard.sh is missing"
 fi
 
+# ── namespace mirror across four hand-transcribed copies (T-5047) ──────────
+# The namespace→(root, launchd label) derivation exists FOUR times, in three
+# languages, across two Go modules that cannot import each other. The Go halves
+# are guarded by their own module tests (cli/ocwarden/namespace_mirror_test.go,
+# server/ocserverd/onboarding_mirror_test.go) against the same shared table; this
+# guard covers the two shell copies and the charset regex in all four. The
+# consequence of a one-character drift is not a wrong string — the server asks
+# launchd about a label the warden never registered, concludes "no warden here",
+# and installs a second one over the live job.
+NSMIRROR="$HERE/namespace-mirror-guard.sh"
+echo
+if [[ -f "$NSMIRROR" ]]; then
+  if run_guard "$NSMIRROR"; then
+    ok "namespace mirror suite passed"
+  else
+    bad "namespace mirror suite FAILED (see output above)"
+  fi
+else
+  bad "bin/tests/namespace-mirror-guard.sh is missing"
+fi
+
 # ── install.sh EXIT-time stdin drain (T-fa39) ──────────────────────────────
 # Own file, own temp HOME + fake label + launchctl shim. Guards the cosmetic
 # half of the same defect the --uninstall rewrite fixed: `curl … | bash` exits

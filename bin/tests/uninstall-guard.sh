@@ -517,6 +517,134 @@ check "symlinked agents/: exits 0" "0" "$RC"
 case "$OUT" in *"agents/ holds 3 agent workspace(s)"*) ok "symlinked agents/: counts through the symlink (not reported as 0)";; *) bad "symlinked agents/: miscounted through the symlink ('$OUT')";; esac
 check "symlinked agents/: the real workspaces are untouched" "3" "$(find "$FAKEHOME/agents-real" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
 
+# ── plist on disk, job NOT registered: an ANSWER, not an error (T-5047) ─────
+# THE BUG THIS PINS. `launchctl print` exits non-zero for the ordinary state
+# "there is a plist but the job is not loaded right now" (never bootstrapped,
+# freshly rebooted, already booted out). Under `set -euo pipefail` the pid probe
+# then failed the whole assignment and killed the run: `--uninstall` exited 1
+# having printed NOTHING AT ALL. The 123 cases above never saw it because they
+# only ever write a plist when the job state is also non-absent, so the probe
+# was unreachable in exactly the configuration that breaks it.
+#
+# This is the same blank-screen failure the install side was already fixed for,
+# on the more dangerous verb: the operator is told nothing, and the natural next
+# move is to reach for --purge.
+reset_fixture clean-install
+cat > "$FAKEHOME/Library/LaunchAgents/$LABEL.plist" <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key><array><string>$FAKEHOME/.officraft/bin/ocserverd</string><string>serve</string></array>
+</dict></plist>
+PL
+run_uninstall --dry-run
+check "plist present + job unregistered: exits 0" "0" "$RC"
+if [[ -n "$OUT" ]]; then ok "plist present + job unregistered: says something (not a blank exit)"; else bad "plist present + job unregistered: output was EMPTY — the run died before it could speak"; fi
+case "$OUT" in *"resolved: label=$LABEL"*) ok "plist present + job unregistered: reaches the plan and reports it";; *) bad "plist present + job unregistered: never reached the plan ('$OUT')";; esac
+check "plist present + job unregistered: --dry-run still changes nothing" "FAKE-DB-CONTENT" "$(cat "$FAKEHOME/.officraft/server/data/officraft.db" 2>/dev/null)"
+
+# ── --uninstall --namespace: removal is the EXACT inverse of install (T-5047) ─
+# WHY. --namespace on the install side would otherwise be a ONE-WAY DOOR: an
+# operator can create ~/.officraft-lab + com.officraft.serve.lab but has no
+# supported way to remove it, and the obvious attempt (`--uninstall` with no
+# flag) addresses the MAIN instance instead — i.e. reaching for the tool that
+# removes the second station is how you lose the first one.
+#
+# These cases deliberately do NOT set OC_LAUNCHD_LABEL: the label must come from
+# the SAME namespace key that derives the root, which is the whole property. The
+# launchctl stub only answers for its own $TARGET, so every other label reads as
+# "not registered" — and the tripwire still records which one was addressed.
+ns_reset() {
+  # A machine carrying BOTH instances: the main one (with a marker file that
+  # must survive) and a namespaced one.
+  local ns="$1"
+  rm -rf "$WORK/.tripwire" "$WORK/.booted-out" "$FAKEHOME"
+  : > "$WORK/.tripwire"
+  mkdir -p "$FAKEHOME/Library/LaunchAgents"
+  mkdir -p "$FAKEHOME/.officraft/bin" "$FAKEHOME/.officraft/server/data"
+  printf 'MAIN-BINARY-MARKER' > "$FAKEHOME/.officraft/bin/ocserverd"
+  # EXECUTABLE on purpose: the removal path's have_files probe is `-x`, so a
+  # non-executable fixture makes every case pass vacuously ("already clean").
+  chmod +x "$FAKEHOME/.officraft/bin/ocserverd"
+  printf 'MAIN-DB-MARKER' > "$FAKEHOME/.officraft/server/data/officraft.db"
+  mkdir -p "$FAKEHOME/.officraft-$ns/bin" "$FAKEHOME/.officraft-$ns/server/data"
+  printf 'NS-BINARY-MARKER' > "$FAKEHOME/.officraft-$ns/bin/ocserverd"
+  chmod +x "$FAKEHOME/.officraft-$ns/bin/ocserverd"
+  printf 'NS-DB-MARKER' > "$FAKEHOME/.officraft-$ns/server/data/officraft.db"
+  # a plist for the NAMESPACED label, pointing at the namespaced binary, so the
+  # ownership check adopts it and the launchd side of the removal is exercised.
+  cat > "$FAKEHOME/Library/LaunchAgents/com.officraft.serve.$ns.plist" <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.officraft.serve.$ns</string>
+  <key>ProgramArguments</key>
+  <array><string>$FAKEHOME/.officraft-$ns/bin/ocserverd</string><string>serve</string></array>
+</dict></plist>
+PL
+  SHIM_JOB="absent"
+}
+
+# run_uninstall_ns — like run_uninstall but with NO OC_LAUNCHD_LABEL, so the
+# label under test is the one --namespace derives.
+run_uninstall_ns() {
+  OUT="$(cd "$WORK" && env -i \
+    PATH="$SHIMDIR:/usr/bin:/bin:/usr/sbin:/sbin" \
+    HOME="$FAKEHOME" SHIM_JOB="$SHIM_JOB" \
+    bash "$SCRIPT" --uninstall "$@" </dev/null 2>&1)"
+  RC=$?
+}
+
+NSU="lab"
+ns_reset "$NSU"
+run_uninstall_ns --namespace "$NSU" --dry-run
+check "ns uninstall --dry-run: exits 0" "0" "$RC"
+case "$OUT" in *".officraft-$NSU"*) ok "ns uninstall --dry-run: names the NAMESPACED root";; *) bad "ns uninstall --dry-run: never mentions ~/.officraft-$NSU ('$OUT')";; esac
+case "$OUT" in *"com.officraft.serve.$NSU"*) ok "ns uninstall --dry-run: names the NAMESPACED label";; *) bad "ns uninstall --dry-run: never mentions com.officraft.serve.$NSU ('$OUT')";; esac
+check "ns uninstall --dry-run: changes nothing (main)" "MAIN-BINARY-MARKER" "$(cat "$FAKEHOME/.officraft/bin/ocserverd" 2>/dev/null)"
+check "ns uninstall --dry-run: changes nothing (ns)" "NS-BINARY-MARKER" "$(cat "$FAKEHOME/.officraft-$NSU/bin/ocserverd" 2>/dev/null)"
+
+# THE REAL ONE: removing the namespaced instance must leave the MAIN instance
+# byte-for-byte intact. Under a lost derivation this destroys the live station.
+ns_reset "$NSU"
+run_uninstall_ns --namespace "$NSU"
+check "ns uninstall: exits 0" "0" "$RC"
+check "ns uninstall: the MAIN instance's binary is untouched" "MAIN-BINARY-MARKER" "$(cat "$FAKEHOME/.officraft/bin/ocserverd" 2>/dev/null)"
+check "ns uninstall: the MAIN instance's database is untouched" "MAIN-DB-MARKER" "$(cat "$FAKEHOME/.officraft/server/data/officraft.db" 2>/dev/null)"
+if [[ -e "$FAKEHOME/.officraft-$NSU/bin/ocserverd" ]]; then
+  bad "ns uninstall: the NAMESPACED instance's bin/ was NOT removed (the run did nothing)"
+else
+  ok "ns uninstall: the NAMESPACED instance's bin/ was removed"
+fi
+# …and its database was KEPT (moved to a backup), same contract as the main path.
+if compgen -G "$FAKEHOME/.officraft-$NSU.bak-*" >/dev/null || [[ -f "$FAKEHOME/.officraft-$NSU/server/data/officraft.db" ]]; then
+  ok "ns uninstall: the namespaced database is kept (backup or in place)"
+else
+  bad "ns uninstall: the namespaced database vanished without --purge"
+fi
+if tripwire_has "com.officraft.serve.$NSU"; then
+  ok "ns uninstall addressed the namespaced launchd label"
+else
+  bad "ns uninstall never addressed com.officraft.serve.$NSU — tripwire: $(cat "$WORK/.tripwire")"
+fi
+
+# a MALFORMED namespace on the REMOVAL path is the most dangerous fold of all —
+# it would delete the main instance while the operator believed they named another.
+ns_reset "$NSU"
+run_uninstall_ns --namespace "BAD_NS!" --purge --yes
+check "malformed ns on uninstall: refused (exit 2)" "2" "$RC"
+check "malformed ns on uninstall: the MAIN instance is untouched" "MAIN-BINARY-MARKER" "$(cat "$FAKEHOME/.officraft/bin/ocserverd" 2>/dev/null)"
+check "malformed ns on uninstall: the ns instance is untouched too" "NS-BINARY-MARKER" "$(cat "$FAKEHOME/.officraft-$NSU/bin/ocserverd" 2>/dev/null)"
+case "$OUT" in *"Refusing to fall back"*) ok "malformed ns on uninstall: says it refuses to fall back to MAIN";; *) bad "malformed ns on uninstall: does not say what it refused ('$OUT')";; esac
+
+# SENTINEL: no --namespace still addresses the MAIN instance, exactly as before.
+ns_reset "$NSU"
+run_uninstall_ns --dry-run
+check "no --namespace on uninstall: exits 0" "0" "$RC"
+case "$OUT" in *".officraft-$NSU"*) bad "no --namespace: the removal wandered into ~/.officraft-$NSU ('$OUT')";; *) ok "no --namespace: the namespaced instance is not addressed";; esac
+case "$OUT" in *"$FAKEHOME/.officraft"*) ok "no --namespace: still addresses the MAIN root";; *) bad "no --namespace: does not address the main root ('$OUT')";; esac
+
 echo "uninstall-guard tests: $PASS ok, $FAIL failed"
 [[ "$FAIL" == "0" ]] || exit 1
 exit 0
