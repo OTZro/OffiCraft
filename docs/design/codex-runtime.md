@@ -242,6 +242,57 @@ only the per-actor session/machine attribution cells go honestly empty. Display 
 unchanged and orthogonal — the owner's hand-set alias stays visible to every caller rank,
 while the reporter-supplied `account_label` stays owner-only PII (T-260e).
 
+### The Codex account key identifies a person, not a workspace (v2)
+
+`codexAccountKey` (`cli/ocwarden/codex_session.go`) hashes the id_token claim
+`https://api.openai.com/auth`.`chatgpt_user_id` under the versioned prefix
+`officraft-codex-account-v2:`.
+
+v1 hashed `tokens.account_id` from `~/.codex/auth.json`, which is the ChatGPT
+**workspace/organization** id — byte-identical to the id_token's `chatgpt_account_id`
+claim (verified on a live machine). Its comment claimed only the half it got right
+("equal ChatGPT accounts on separate machines map to the same monitoring account") and
+was silent on the half it broke: two *different* people in one workspace also mapped to
+one key. Measured consequence: two machines logged in as different humans produced the
+identical key `codex:89064106…`, so their spend summed into one row and their separate
+5h/7d windows overwrote each other — the "latest report wins" rule for usage windows
+assumes one key means one quota, and for Codex that assumption did not hold.
+
+The version prefix moved to `v2` because the *input semantics* changed; v1 and v2 keys
+must not merge into one row. Rejected identifiers and the reasoning (email/name are
+mutable PII, `sub` is IdP-connection scoped, `sid`/`jti` are per-token) live in the
+function comment, which is the authority.
+
+**What the version bump actually does on upgrade.** The accounts fold groups by the key
+an actor is reporting *right now*, and `banked_cost` is a durable per-actor column that
+the fold adds under that current key. So the v1 row does **not** freeze: nobody reports
+it any more, so it disappears from `/api/monitoring`, and each actor's banked history
+re-attaches to its machine's v2 personal key — money that used to sit in the shared
+workspace row is re-credited to whoever is logged in on that machine now. What genuinely
+is stranded is the owner's hand-set alias: `account_alias` rows are keyed on the v1
+string and become orphans, so the owner re-aliases the new key once; until then the
+accounts row shows a bare `codex:…` digest. During a *mixed* fleet one person appears as
+two rows (old wardens send v1, new ones send v2) and converges only when the last warden
+is upgraded — upgrade the fleet in one pass.
+
+**Known trade-off: fail-empty is silent on the wire.** `applyAccountReport` treats
+"account empty + runtime present" as a no-op — it neither stores nor clears the pairing —
+so a machine that stops being able to read the claim keeps being served under its last
+successfully reported key until the server restarts, and no telemetry field separates
+"no Codex account here" from "could not read one". Accepted deliberately: the obvious
+remedy (fall back to the workspace id) is the defect being removed. If it ever needs
+solving, solve it server-side with an explicit unknown-account signal.
+
+Degradation is deliberately fail-empty: no `auth.json`, unparsable JSON, a malformed or
+undecodable id_token, or a missing/blank claim all yield `""` ("this machine has no
+identifiable Codex account"). It never falls back to the workspace id, because that
+would silently restore the v1 collision on exactly the machines whose token could not be
+read, with nothing in the telemetry to show which ones. Sentinels for both directions
+(different people → different keys; one person on two machines → one key) and for every
+degradation branch are in `cli/ocwarden/codex_session_test.go`; they run against
+`codexAccountKeyForHome(t.TempDir())` fixtures and never read the real home directory,
+which holds live credentials.
+
 ## Attribution
 
 OffiCraft-authored Codex commits use the human git author only and do not add a Codex

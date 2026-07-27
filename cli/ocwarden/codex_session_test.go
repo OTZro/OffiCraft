@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -242,5 +245,289 @@ func TestRuntimeCapabilitiesShape(t *testing.T) {
 	}
 	if codex["version"] != "0.145.0" {
 		t.Fatalf("unexpected Codex version capability: %#v", codex)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// codexAccountKey: the monitoring key must identify the PERSON, not the
+// ChatGPT workspace. Every fixture below is obviously synthetic; these tests
+// must never touch the real ~/.codex/auth.json, which holds live credentials.
+// ---------------------------------------------------------------------------
+
+// fakeIDToken builds an unsigned, obviously-fake JWT. The signature segment is
+// a literal placeholder: nothing in the production path verifies it.
+func fakeIDToken(t *testing.T, claims map[string]any) string {
+	t.Helper()
+	header, err := json.Marshal(map[string]any{"alg": "RS256", "typ": "JWT"})
+	if err != nil {
+		t.Fatalf("marshal header: %v", err)
+	}
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	enc := base64.RawURLEncoding
+	return enc.EncodeToString(header) + "." + enc.EncodeToString(payload) + ".not-a-real-signature"
+}
+
+// codexClaims is the shape of a real Codex id_token payload, with fake values.
+func codexClaims(chatgptUserID, workspaceID, email string) map[string]any {
+	return map[string]any{
+		"sub":   "google-oauth2|000000000000000000000",
+		"email": email,
+		"name":  "Fake Person",
+		"sid":   "session-fake",
+		"jti":   "jti-fake",
+		"https://api.openai.com/auth": map[string]any{
+			"chatgpt_user_id":    chatgptUserID,
+			"user_id":            chatgptUserID,
+			"chatgpt_account_id": workspaceID,
+			"chatgpt_plan_type":  "pro",
+			"organizations":      []any{map[string]any{"id": workspaceID, "is_default": true}},
+			"groups":             []any{},
+		},
+	}
+}
+
+// writeCodexHome lays out a fake machine's ~/.codex/auth.json and returns the
+// home directory to feed codexAccountKeyForHome.
+func writeCodexHome(t *testing.T, auth map[string]any) string {
+	t.Helper()
+	home := t.TempDir()
+	dir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir .codex: %v", err)
+	}
+	raw, err := json.Marshal(auth)
+	if err != nil {
+		t.Fatalf("marshal auth.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"), raw, 0o600); err != nil {
+		t.Fatalf("write auth.json: %v", err)
+	}
+	return home
+}
+
+func codexAuthFile(idToken, workspaceID string) map[string]any {
+	return map[string]any{
+		"auth_mode": "chatgpt",
+		"tokens": map[string]any{
+			"id_token":      idToken,
+			"access_token":  "fake-access-token",
+			"refresh_token": "fake-refresh-token",
+			"account_id":    workspaceID,
+		},
+		"last_refresh": "2026-07-27T00:00:00Z",
+	}
+}
+
+// SENTINEL 1. This is the defect: two people sharing one ChatGPT workspace used
+// to hash to the same key, so their spend was summed into one row and their
+// separate 5h/7d quotas overwrote each other. Reverting codexAccountKeyForHome
+// to hash tokens.account_id turns this test red.
+func TestCodexAccountKeyDistinguishesTwoPeopleInOneWorkspace(t *testing.T) {
+	const workspace = "11111111-2222-3333-4444-555555555555"
+	sethHome := writeCodexHome(t, codexAuthFile(
+		fakeIDToken(t, codexClaims("user_FAKE00000000000000000001", workspace, "fake.seth@example.invalid")),
+		workspace,
+	))
+	evaHome := writeCodexHome(t, codexAuthFile(
+		fakeIDToken(t, codexClaims("user_FAKE00000000000000000002", workspace, "fake.eva@example.invalid")),
+		workspace,
+	))
+	seth := codexAccountKeyForHome(sethHome)
+	eva := codexAccountKeyForHome(evaHome)
+	if seth == "" || eva == "" {
+		t.Fatalf("both machines must produce a key: seth=%q eva=%q", seth, eva)
+	}
+	if seth == eva {
+		t.Fatalf("two ChatGPT users in one workspace must not share a monitoring key: %q", seth)
+	}
+}
+
+// SENTINEL 2. The property v1 did get right must survive: one person, two
+// machines, one key. The two fixtures differ in everything that is per-machine
+// or per-refresh (access/refresh tokens, session and token ids, issue times,
+// last_refresh) so the assertion is not merely comparing identical inputs.
+//
+// Read this before deleting it: this test has ZERO discriminating power against
+// the workspace-vs-person defect — it stays green under the v1 mutant, because
+// v1 got cross-machine convergence right. Keep it anyway. What it guards is the
+// opposite regression class: someone later re-pointing the hash at a field that
+// churns (sid, jti, iat, at_hash, access_token, last_refresh — all of which this
+// fixture varies), which would silently fork one human into a new monitoring
+// account on every token refresh. SENTINEL 1 is the bug sentinel; this is the
+// don't-break-it-back-the-other-way sentinel.
+func TestCodexAccountKeyIsStableForOnePersonAcrossMachines(t *testing.T) {
+	const workspace = "11111111-2222-3333-4444-555555555555"
+	const person = "user_FAKE00000000000000000001"
+
+	machineA := codexClaims(person, workspace, "fake.seth@example.invalid")
+	machineA["sid"] = "session-machine-a"
+	machineA["jti"] = "jti-machine-a"
+	machineA["iat"] = 1000
+
+	machineB := codexClaims(person, workspace, "fake.seth@example.invalid")
+	machineB["sid"] = "session-machine-b"
+	machineB["jti"] = "jti-machine-b"
+	machineB["iat"] = 2000
+
+	authA := codexAuthFile(fakeIDToken(t, machineA), workspace)
+	authB := codexAuthFile(fakeIDToken(t, machineB), workspace)
+	authB["tokens"].(map[string]any)["access_token"] = "another-fake-access-token"
+	authB["tokens"].(map[string]any)["refresh_token"] = "another-fake-refresh-token"
+	authB["last_refresh"] = "2026-07-28T09:30:00Z"
+
+	keyA := codexAccountKeyForHome(writeCodexHome(t, authA))
+	keyB := codexAccountKeyForHome(writeCodexHome(t, authB))
+	if keyA == "" {
+		t.Fatalf("machine A produced no key")
+	}
+	if keyA != keyB {
+		t.Fatalf("one person on two machines must share one key: %q vs %q", keyA, keyB)
+	}
+}
+
+// The person's key must not move when workspace-scoped attributes change,
+// otherwise a workspace switch silently forks one human's usage history.
+func TestCodexAccountKeyIgnoresWorkspaceScopedFields(t *testing.T) {
+	const person = "user_FAKE00000000000000000001"
+	before := codexAccountKeyForHome(writeCodexHome(t, codexAuthFile(
+		fakeIDToken(t, codexClaims(person, "11111111-2222-3333-4444-555555555555", "fake.seth@example.invalid")),
+		"11111111-2222-3333-4444-555555555555",
+	)))
+	moved := codexClaims(person, "99999999-8888-7777-6666-555555555555", "fake.seth@example.invalid")
+	moved["https://api.openai.com/auth"].(map[string]any)["chatgpt_plan_type"] = "business"
+	after := codexAccountKeyForHome(writeCodexHome(t, codexAuthFile(
+		fakeIDToken(t, moved), "99999999-8888-7777-6666-555555555555",
+	)))
+	if before == "" {
+		t.Fatalf("baseline produced no key")
+	}
+	if before != after {
+		t.Fatalf("workspace change must not fork the person's key: %q vs %q", before, after)
+	}
+}
+
+// The key is an opaque, versioned sha256 of exactly one claim. The expected
+// digest is a literal rather than a recomputation of the production constant,
+// so bumping the version prefix or changing which claim is hashed goes red
+// here instead of passing by agreeing with itself.
+func TestCodexAccountKeyIsAVersionedOpaqueDigest(t *testing.T) {
+	const person = "user_FAKE00000000000000000001"
+	const email = "fake.seth@example.invalid"
+	got := codexAccountKeyForHome(writeCodexHome(t, codexAuthFile(
+		fakeIDToken(t, codexClaims(person, "11111111-2222-3333-4444-555555555555", email)),
+		"11111111-2222-3333-4444-555555555555",
+	)))
+	want := "codex:6e0629091bd61838068baf0b6a6790720345902dee7bf2ab19bd062acf099ed0"
+	if got != want {
+		t.Fatalf("account key digest changed: got %q want %q", got, want)
+	}
+	for _, leak := range []string{person, email, "11111111", "fake-access-token", "fake-refresh-token"} {
+		if strings.Contains(got, leak) {
+			t.Fatalf("key must not carry %q in cleartext: %q", leak, got)
+		}
+	}
+}
+
+// Degradation: anything that leaves us without the personal claim yields the
+// empty string ("this machine has no identifiable Codex account"), never a
+// fallback to the workspace id. Each case is paired with a control that proves
+// the assertion is not vacuous.
+func TestCodexAccountKeyDegradesToEmptyRatherThanTheWorkspaceID(t *testing.T) {
+	const workspace = "11111111-2222-3333-4444-555555555555"
+	workspaceKeySum := sha256.Sum256([]byte("officraft-codex-account-v1:" + workspace))
+	v1Key := "codex:" + fmt.Sprintf("%x", workspaceKeySum[:])
+
+	noClaim := codexClaims("user_FAKE00000000000000000001", workspace, "fake.seth@example.invalid")
+	delete(noClaim["https://api.openai.com/auth"].(map[string]any), "chatgpt_user_id")
+	delete(noClaim["https://api.openai.com/auth"].(map[string]any), "user_id")
+
+	blankClaim := codexClaims("   ", workspace, "fake.seth@example.invalid")
+
+	noCustomClaim := map[string]any{"sub": "google-oauth2|0", "email": "fake@example.invalid"}
+
+	cases := []struct {
+		name string
+		auth map[string]any
+	}{
+		{"claim absent", codexAuthFile(fakeIDToken(t, noClaim), workspace)},
+		{"claim blank", codexAuthFile(fakeIDToken(t, blankClaim), workspace)},
+		{"custom claim namespace absent", codexAuthFile(fakeIDToken(t, noCustomClaim), workspace)},
+		{"id_token absent", codexAuthFile("", workspace)},
+		{"id_token not a JWT", codexAuthFile("this-is-not-a-jwt", workspace)},
+		{"id_token wrong segment count", codexAuthFile("aaa.bbb", workspace)},
+		{"id_token payload not base64url", codexAuthFile("aaa.!!!not-base64!!!.ccc", workspace)},
+		{"id_token payload not JSON", codexAuthFile(
+			"aaa."+base64.RawURLEncoding.EncodeToString([]byte("plain text, not json"))+".ccc", workspace)},
+		{"id_token payload is a JSON array", codexAuthFile(
+			"aaa."+base64.RawURLEncoding.EncodeToString([]byte(`["nope"]`))+".ccc", workspace)},
+		// JSON null unmarshals into a struct without error and leaves it zeroed;
+		// only the explicit empty-claim check keeps this from producing a key
+		// over an empty string.
+		{"id_token payload is JSON null", codexAuthFile(
+			"aaa."+base64.RawURLEncoding.EncodeToString([]byte(`null`))+".ccc", workspace)},
+		// Wrong JSON types for the claim and for its namespace: both must fail
+		// closed rather than coerce.
+		{"chatgpt_user_id is a number", codexAuthFile(
+			"aaa."+base64.RawURLEncoding.EncodeToString(
+				[]byte(`{"https://api.openai.com/auth":{"chatgpt_user_id":12345}}`))+".ccc", workspace)},
+		{"custom claim namespace is a string", codexAuthFile(
+			"aaa."+base64.RawURLEncoding.EncodeToString(
+				[]byte(`{"https://api.openai.com/auth":"user_FAKE00000000000000000001"}`))+".ccc", workspace)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := codexAccountKeyForHome(writeCodexHome(t, tc.auth))
+			if got == v1Key {
+				t.Fatalf("degraded path fell back to the workspace id: %q", got)
+			}
+			if got != "" {
+				t.Fatalf("degraded path must report no account, got %q", got)
+			}
+		})
+	}
+
+	// Control: the same fixture shape WITH the claim present is not empty, so
+	// the assertions above are discriminating rather than always-true.
+	ok := codexAccountKeyForHome(writeCodexHome(t, codexAuthFile(
+		fakeIDToken(t, codexClaims("user_FAKE00000000000000000001", workspace, "fake.seth@example.invalid")),
+		workspace,
+	)))
+	if ok == "" {
+		t.Fatalf("control fixture must produce a key, otherwise the empty-string assertions prove nothing")
+	}
+	if ok == v1Key {
+		t.Fatalf("control fixture must not equal the v1 workspace key")
+	}
+}
+
+// The auth.json container itself can be missing or unusable. Same rule: empty,
+// and never a read of some other home directory.
+func TestCodexAccountKeyHandlesMissingOrUnreadableAuthFile(t *testing.T) {
+	if got := codexAccountKeyForHome(t.TempDir()); got != "" {
+		t.Fatalf("absent ~/.codex/auth.json must yield no key, got %q", got)
+	}
+
+	home := t.TempDir()
+	dir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if got := codexAccountKeyForHome(home); got != "" {
+		t.Fatalf("unparsable auth.json must yield no key, got %q", got)
+	}
+
+	// A directory where auth.json should be: read fails, not panics.
+	home2 := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home2, ".codex", "auth.json"), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if got := codexAccountKeyForHome(home2); got != "" {
+		t.Fatalf("unreadable auth.json must yield no key, got %q", got)
 	}
 }

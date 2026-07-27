@@ -11,6 +11,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -126,28 +127,150 @@ func (s *codexSession) allowUsageReport() bool {
 	return true
 }
 
-// codexAccountKey derives a stable opaque key from Codex's local account id.
-// It never returns credentials or the UUID itself, yet equal ChatGPT accounts
-// on separate machines map to the same monitoring account.
+// codexAccountKeyVersion versions the *input semantics* of the hash, not the
+// hash algorithm. v1 hashed the workspace id; v2 hashes the person. Bumping it
+// keeps the two generations of keys from silently merging into one row.
+//
+// What actually happens on upgrade (verified against the server fold, not
+// assumed): the accounts overview groups by the key an actor is reporting
+// RIGHT NOW, and `banked_cost` is a durable per-actor column that the fold adds
+// under that current key. So the moment a warden is upgraded,
+//
+//   - the v1 row does NOT freeze — no actor reports it any more, so the row
+//     disappears from /api/monitoring entirely;
+//   - each actor's banked history immediately re-attaches to that machine's v2
+//     personal key, i.e. money that used to sit in the shared workspace row is
+//     re-credited to whoever is logged in on that machine now;
+//   - what really is stranded is the owner's hand-set alias: `account_alias`
+//     rows are keyed on the v1 string and become orphans, so the owner must
+//     re-alias the new key once. Until they do, the cockpit shows a bare
+//     `codex:…` digest in that row.
+//
+// Operational consequence #1 — a mixed fleet shows one person as TWO rows for
+// as long as it stays mixed (old wardens still send v1, new ones send v2). It
+// converges only when the last warden is upgraded, so upgrade the fleet in one
+// pass rather than trickling it.
+const codexAccountKeyVersion = "officraft-codex-account-v2:"
+
+// codexAccountKey derives a stable opaque key for the *person* logged into
+// Codex on this machine. Both directions matter and v1 only got one of them
+// right:
+//
+//   - the same ChatGPT user on two machines must map to ONE monitoring
+//     account (that part v1 did satisfy), and
+//   - two different ChatGPT users must map to TWO monitoring accounts.
+//
+// v1 hashed `tokens.account_id`, which is the ChatGPT *workspace/organization*
+// id (verified locally: it is byte-identical to the id_token's
+// `chatgpt_account_id` claim). Everyone in one workspace therefore collapsed
+// into a single monitoring row: their spend was summed with no way to tell who
+// burned it, and the 5h/7d usage windows — which keep "whichever report
+// arrived last" on the assumption that one key means one quota — showed people
+// with separate quotas fighting over one row.
+//
+// The identifier chosen instead is the id_token claim
+// `https://api.openai.com/auth`.`chatgpt_user_id`: it is ChatGPT's own opaque
+// per-person id ("user_..."), identical on every machine that person logs in
+// from, and unchanged by token refresh (a refresh mints a new id_token with the
+// same claim). Rejected alternatives:
+//
+//   - `tokens.account_id` / `chatgpt_account_id` — workspace scoped: the bug.
+//   - `email` / `name` — human-mutable and PII; a key must survive a rename and
+//     must not carry identity in cleartext. They are fine as a *label*, which
+//     is a separate field, never as the key input.
+//   - `sub` — the IdP subject ("google-oauth2|..."), scoped to the login
+//     connection. The same person switching from Google SSO to a password
+//     login would look like a new account.
+//   - `https://api.openai.com/auth`.`user_id` — observed equal to
+//     chatgpt_user_id, so it adds no discrimination; accepting it as a silent
+//     alias would only create two ways to spell the same key.
+//   - `sid` / `jti` / `at_hash` — per-session or per-token; they change on
+//     every refresh.
+//   - `chatgpt_plan_type`, `organizations`, `groups` — attributes of the
+//     account, not identities of the person.
+//
+// The workspace id is deliberately NOT mixed in: a person's Codex quota follows
+// the person, so folding the workspace into the key would split one human's
+// history the day their workspace membership changes. Caveat we did not verify:
+// if a single ChatGPT user can hold two independently-metered quotas at once
+// (say a personal plan plus a business seat), this key would still merge them.
+//
+// The key stays an irreversible sha256 with a versioned prefix, and the raw
+// claim is never returned, logged, or posted anywhere.
 func codexAccountKey() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
+	return codexAccountKeyForHome(home)
+}
+
+// codexAccountKeyForHome is the injectable half of codexAccountKey. Tests must
+// never be pointed at a real home directory: ~/.codex/auth.json holds live
+// credentials.
+func codexAccountKeyForHome(home string) string {
 	raw, err := os.ReadFile(filepath.Join(home, ".codex", "auth.json"))
 	if err != nil {
 		return ""
 	}
 	var auth struct {
 		Tokens struct {
-			AccountID string `json:"account_id"`
+			IDToken string `json:"id_token"`
 		} `json:"tokens"`
 	}
-	if json.Unmarshal(raw, &auth) != nil || auth.Tokens.AccountID == "" {
+	if json.Unmarshal(raw, &auth) != nil {
 		return ""
 	}
-	sum := sha256.Sum256([]byte("officraft-codex-account-v1:" + auth.Tokens.AccountID))
+	user := codexUserIDFromIDToken(auth.Tokens.IDToken)
+	if user == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(codexAccountKeyVersion + user))
 	return "codex:" + fmt.Sprintf("%x", sum[:])
+}
+
+// codexUserIDFromIDToken reads the per-person claim out of the locally stored
+// id_token. The signature is deliberately NOT verified: this file is not a
+// trust boundary, it is Codex's own credential store on this machine, and
+// anyone who can rewrite it can already act as that account.
+//
+// Every failure mode — no file, unparsable JSON, a token that is not three
+// dot-separated segments, undecodable base64url, payload that is not an
+// object, claim absent or blank — returns the empty string, which OffiCraft
+// reads as "this machine has no identifiable Codex account". Falling back to
+// the workspace id would be worse than reporting nothing: it would silently
+// restore the v1 collision on exactly the machines whose id_token we could not
+// read, and nothing in the telemetry would show which ones those were.
+//
+// Operational consequence #2, and the likeliest thing here to bite later:
+// fail-empty is SILENT on the wire. `applyAccountReport` treats "account empty
+// + runtime present" as a no-op — it neither stores nor clears the pairing — so
+// a machine that stops being able to read the claim keeps being served under
+// its last successfully reported key until the server restarts, and no
+// telemetry field distinguishes "this machine has no Codex account" from "this
+// machine could not read one". That is an accepted trade-off, not an oversight:
+// the obvious "fix" — falling back to the workspace id — is exactly the defect
+// this function exists to remove. If it ever needs solving, solve it
+// server-side with an explicit unknown-account signal; do not reintroduce a
+// fallback here.
+func codexUserIDFromIDToken(idToken string) string {
+	parts := strings.Split(strings.TrimSpace(idToken), ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		OpenAI struct {
+			ChatGPTUserID string `json:"chatgpt_user_id"`
+		} `json:"https://api.openai.com/auth"`
+	}
+	if json.Unmarshal(payload, &claims) != nil {
+		return ""
+	}
+	return strings.TrimSpace(claims.OpenAI.ChatGPTUserID)
 }
 
 // activity is the human-readable, tmux-visible companion to the headless
