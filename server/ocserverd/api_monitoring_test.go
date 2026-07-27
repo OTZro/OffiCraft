@@ -1824,8 +1824,7 @@ func TestGetMonitoring_ReleasedOnlyHostKeepsRowAndAccountButCountsZeroAgents(t *
 // The fix is a membership rule, not a filter on values: WHICH BOXES EXIST is
 // the machine roster's answer (kind=warden ∧ roster=active — the same
 // predicate GET /api/machines lists), and telemetry only supplies the numbers
-// for a box that exists. The three tests below pin the two directions of that
-// rule plus the empty-host case.
+// for a box that exists. KEEP THIS LIST COMPLETE — one test, one category.
 //
 //	GAP-GUARDS — VERIFIED to FAIL on 2e74953 by running them against the
 //	pre-filter handler, not by reasoning:
@@ -1834,11 +1833,13 @@ func TestGetMonitoring_ReleasedOnlyHostKeepsRowAndAccountButCountsZeroAgents(t *
 //	    eva-m5-claude attribution and spend are untouched)
 //	  - UnplacedActorMintsNoBlankMachineRow (the machine:"" row)
 //
-//	REGRESSION-GUARD — VERIFIED to already PASS on 2e74953. It discriminates
-//	nothing about the orphan bug; it exists because the obvious cheap fixes for
-//	that bug (key on presence, key on "who reported recently") would all break
-//	it:
+//	REGRESSION-GUARDS — VERIFIED to already PASS on 2e74953. They discriminate
+//	nothing about the orphan bug; they are here because the tempting cheap
+//	fixes for it all go red on one of them — "key on presence" / "key on who
+//	reported recently" on the first, "removed and uninstalled are the same
+//	thing" on the second:
 //	  - RegisteredButSilentMachineStillListed
+//	  - UninstalledButUndeletedMachineStillListed
 // ---------------------------------------------------------------------------
 
 // TestGetMonitoring_RemovedMachineLeavesNoOrphanRow is the upper-bound
@@ -1859,8 +1860,10 @@ func TestGetMonitoring_ReleasedOnlyHostKeepsRowAndAccountButCountsZeroAgents(t *
 // telemetry too, this still passes — and that is fine, it is the same
 // invariant reached another way.
 //
-// MUTANT: drop the `if !registeredMachines[host] { continue }` guard from the
-// `hosts` fold -> RED on (1) here (the orphan row comes back).
+// MUTANT: derive `hosts` from the observed host set (`for host := range
+// hostCounts`) instead of from the roster -> RED on (1) here (the orphan row
+// comes back). It is also RED under the T-fc2f mutant that filters released
+// workers out of `actors` — on (2), which is the reverse half doing its job.
 func TestGetMonitoring_RemovedMachineLeavesNoOrphanRow(t *testing.T) {
 	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
 		telemetry: newMemStore(), gauge: newMemStore()}
@@ -1870,6 +1873,21 @@ func TestGetMonitoring_RemovedMachineLeavesNoOrphanRow(t *testing.T) {
 		`{"runtime":"claude","account":"eva-m5-claude","cost":3.0,`+
 			workerRateLimits+`}`); rec.Code != 200 {
 		t.Fatalf("worker ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	// A SECOND worker on the same box that is NOT released — assigned, holding
+	// no account, never online (so the delete route's 409 gate stays open).
+	//
+	// ⚠️ Load-bearing for the MUTANT, not for the story. Without it the only
+	// actor naming this host is a released one, which contributes to no counter
+	// at all, so reverting the row set to "hosts we observed" would leave this
+	// test green and the guard would only bite in combination with something
+	// else. With it, the host is observed by a live actor and the orphan row
+	// comes back the instant the roster stops deciding membership. Measured:
+	// green here without this worker under that mutant, red with it.
+	seedWorker(t, s, "ow-assigned", "A1", 0, WorkerStatusAssigned)
+	if rec := doIngestTelemetry(s, "ow-assigned", "m-eva-m5",
+		`{"runtime":"claude"}`); rec.Code != 200 {
+		t.Fatalf("second worker ingest: %d %s", rec.Code, rec.Body.String())
 	}
 	// Pre-condition: while the machine is registered, it HAS a row. Without
 	// this the test could pass by asserting the absence of something that was
@@ -1954,6 +1972,76 @@ func TestGetMonitoring_RegisteredButSilentMachineStillListed(t *testing.T) {
 	}
 	if got := mr["accounts"].([]any); len(got) != 0 {
 		t.Errorf("accounts = %v, want empty", got)
+	}
+}
+
+// TestGetMonitoring_UninstalledButUndeletedMachineStillListed pins boundary 3:
+// the machine roster predicate is roster_status, and DELIBERATELY not the
+// lifecycle intent. `POST /api/machines/{id}/uninstall` is a ONE-SHOT intent
+// (desired_state=uninstall, consumed back to offline when the warden really
+// disconnects — see spec/lifecycle.md §4.3) that keeps the member record on
+// purpose so the box can be re-installed. It never writes roster_status.
+//
+// So an uninstalled-but-undeleted box is still one of the owner's machines,
+// GET /api/machines still lists it, and monitoring must agree. The two
+// surfaces sharing one predicate is the reason this fix chose that predicate;
+// a monitoring list that quietly hides a box the machines page still shows
+// would be the same class of lie as the orphan row, pointing the other way.
+//
+// REGRESSION-GUARD, not a gap-guard: it passes on 2e74953 too. It is here
+// because "uninstalled" is the most tempting thing to fold into "removed"
+// while reading this ticket, and nothing else in the suite says no.
+//
+// MUTANT: add `&& m.DesiredState != DesiredStateUninstall` to the `hosts`
+// predicate -> RED here, and GREEN everywhere else in the file.
+func TestGetMonitoring_UninstalledButUndeletedMachineStillListed(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	// ARM (a) — INTENT IN FLIGHT. A box parked in desired_state=uninstall: what
+	// the route writes when the warden is still connected, i.e. the window
+	// between the owner's click and the warden actually disconnecting. This is
+	// the arm that discriminates: it is the only state in the suite where the
+	// lifecycle intent and the roster status disagree.
+	seedRegisteredMachine(t, s, "m-retiring")
+	armed, err := s.dal.GetMember("m-retiring")
+	if err != nil || armed == nil {
+		t.Fatalf("get machine member: %v %v", armed, err)
+	}
+	armed.DesiredState = DesiredStateUninstall
+	if err := s.dal.PutMember(*armed); err != nil {
+		t.Fatalf("arm uninstall intent: %v", err)
+	}
+
+	// ARM (b) — REAL ROUTE. Drives POST /api/machines/{id}/uninstall on an
+	// offline box (the arm that converges the intent straight back to offline),
+	// so the test also pins the PREMISE the boundary rests on: uninstall never
+	// writes roster_status, by either arm.
+	seedRegisteredMachine(t, s, "m-retired")
+	rec := httptest.NewRecorder()
+	s.HandleUninstallMachineApiMachinesMemberIdUninstallPost(rec,
+		httptest.NewRequest("POST", "/api/machines/m-retired/uninstall", nil), "m-retired")
+	if rec.Code != 200 {
+		t.Fatalf("uninstall machine: %d %s", rec.Code, rec.Body.String())
+	}
+	m, err := s.dal.GetMember("m-retired")
+	if err != nil || m == nil {
+		t.Fatalf("get machine member: %v %v", m, err)
+	}
+	if m.RosterStatus != RosterStatusActive {
+		t.Fatalf("premise broken: uninstall set roster_status=%q — if uninstall "+
+			"ever starts removing the record, this test is asserting the wrong "+
+			"thing and boundary 3 needs re-deciding, not re-greening",
+			m.RosterStatus)
+	}
+
+	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	for _, host := range []string{"m-retiring", "m-retired"} {
+		if mr := machineRowIn(d, host); mr == nil {
+			t.Errorf("uninstalled-but-undeleted machine %s vanished from monitoring: "+
+				"%v — the record is kept on purpose (re-installable) and "+
+				"GET /api/machines still lists it; the two surfaces must not "+
+				"disagree about what exists", host, d["machines"])
+		}
 	}
 }
 
