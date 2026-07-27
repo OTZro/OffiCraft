@@ -311,6 +311,12 @@ var workerBootSequenceExclusions = []sharedCoreExclusion{
 			"plan/step note + baton 接回。",
 	},
 	{
+		Anchor: "**啟動後任務盤點與排程（僅 member）。**",
+		Block:  true,
+		Why: "member 開機後盤點自己「所有」非終態任務並排程；worker 一 worker 綁一任務，" +
+			"照這段做只會讓它去找一批不存在的任務，直接牴觸 overlay §2 的 get_my_task 開機序列。",
+	},
+	{
 		Anchor: "## Claude Code 執行環境",
 		Why:    "Claude 的互動工具、context telemetry、model 上報是 runtime tail；worker 只接收自己的 runtime 版本。",
 	},

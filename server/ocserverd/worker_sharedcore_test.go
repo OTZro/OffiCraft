@@ -463,6 +463,37 @@ func TestWorkerBootContextExcludesMemberOnlySections(t *testing.T) {
 	}
 }
 
+// TestMemberLauncherTaskInventoryStaysMemberOnly pins the post-liveness
+// launcher rule on both member runtime tails. The worker has one bound task,
+// so giving it this multi-task scheduling instruction would contradict its
+// get_my_task boot sequence rather than make it more capable.
+func TestMemberLauncherTaskInventoryStaysMemberOnly(t *testing.T) {
+	s, member := memberCtx(t)
+	worker := workerCtx(t)
+	for _, want := range []string{
+		"啟動後任務盤點與排程（僅 member）",
+		"依優先權與可並行度排程",
+		"先接續上一代交接或已開始的任務",
+	} {
+		if !strings.Contains(member.Context, want) {
+			t.Errorf("member boot context is missing launcher task-inventory rule %q", want)
+		}
+		if strings.Contains(worker, want) {
+			t.Errorf("worker boot context must exclude member launcher task-inventory rule %q", want)
+		}
+	}
+	codexSeed, err := s.root.readSeedFile("boot_sequence_codex.md")
+	if err != nil {
+		t.Fatalf("read Codex boot seed: %v", err)
+	}
+	if !strings.Contains(codexSeed, "啟動後任務盤點與排程（僅 member）") {
+		t.Error("Codex member boot seed is missing the launcher task-inventory rule")
+	}
+	if !strings.Contains(worker, "一 worker 綁一任務") {
+		t.Error("worker boot context must retain its single-bound-task rule")
+	}
+}
+
 // TestWorkerSharedCoreKeepsSharedSections is the positive control for the
 // exclusion test above: without it, a filter that deleted the ENTIRE core
 // would pass "the excluded stuff is absent" trivially.
