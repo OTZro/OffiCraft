@@ -127,8 +127,16 @@ async function setWide(page, wide) {
   await page.waitForTimeout(400);
   await page.getByRole("button", { name: wide ? "寬版" : "窄版", exact: true }).click();
   await page.waitForTimeout(400);
-  await page.locator(".topbar button").last().click(); // 關掉下拉
-  await page.waitForTimeout(400);
+  // 關掉下拉:它蓋在 topbar 上,留著會擋住後續的點擊(也會讓 getByText 命中它自己的
+  // 「主題」標籤)。用「點外面」關 —— 下拉本身也在 .topbar 裡,拿 .topbar button 會點到
+  // 下拉自己的按鈕、關不掉(App.tsx 的 outside-click 判斷是 ref.contains)。
+  for (let i = 0; i < 3 && (await page.locator(".profile-dd").count()); i++) {
+    await page.locator(".app__main").click({ position: { x: 4, y: 4 }, force: true });
+    await page.waitForTimeout(300);
+  }
+  if (await page.locator(".profile-dd").count()) {
+    throw new Error("profile dropdown stayed open");
+  }
 }
 
 // ── group builtin：內建「辦公室」主題,寬窄版 / 不同寬度 / 手機寬度 ────────
