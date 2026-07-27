@@ -133,8 +133,8 @@ export const zh = {
     stepCardExpired: "已過期",
     // 頭部:進度用 server 算好的 progress_done/total(SPEC §3.1);文案照
     // mockup「步驟 N/M」(owner 2026-07-13)
-    progress: (done: number, total: number) => `步驟 ${done}/${total}`,
-    elapsed: (t: string) => `已歷時 ${t}`,
+    progressLabel: "步驟",
+    elapsedLabel: "已歷時",
     // 卡片預設摺疊;點整張卡切換展開(手機版重構 2026-07-17,chevron 已移
     // 除)——此兩句是卡片(role=button)的 aria-label
     expandCard: "展開工作流程",
@@ -146,7 +146,8 @@ export const zh = {
     // 過渡態(SPEC §3.1):外包未指派 → 等待指派;有執行者但零節點 →
     // 「等待 ○○ 建立 Steps」(○○ = 負責人顯示名,owner 核定 2026-07)
     waitingAssign: "等待指派",
-    planningBy: (name: string) => `等待 ${name} 建立 Steps`,
+    planningByLead: "等待",
+    planningByTail: "建立 Steps",
     stepsLoading: "載入中…",
     stepsLoadError: "工作流程載入失敗",
     stepsRetry: "重試",
@@ -156,10 +157,10 @@ export const zh = {
     // markdown parser。分隔號 · 在 JSX 裡當字面量(同 tasks.progress 那行)。
     waitingLabel: "等待中",
     // deps:「等 T-xxxx」chip 可多筆(mockup 樣式,owner 2026-07-13)
-    blockedBy: (taskNo: string) => `等 ${taskNo}`,
+    blockedByLabel: "等",
     // T-1d82:dep 指向的任務查不到(已刪 / 壞 id)。保留原始 id(那是僅剩的線索),
     // 但明說「查無此任務」,免得這列被讀成「連結壞了」。
-    blockedByMissing: (depId: string) => `等 ${depId}(查無此任務)`,
+    blockedByMissingSuffix: "(查無此任務)",
     depJump: (taskNo: string) => `跳到 ${taskNo}`,
     // 識別鍵徽章(值為 URL 時外連)
     openKeyLink: "開啟連結",
@@ -174,7 +175,7 @@ export const zh = {
     // 任務編號 chip 點擊複製(owner 2026-07-19 圈截圖):點 chip 把顯示的任務
     // 編號寫進剪貼簿,給一個短暫「已複製」回饋。copyTaskNo 是 chip 的 aria-label
     // (帶顯示號),taskNoCopied 是複製成功後的短暫提示文字。
-    copyTaskNo: (taskNo: string) => `複製任務編號 ${taskNo}`,
+    copyTaskNoLabel: "複製任務編號",
     taskNoCopied: "已複製",
     // 等我回覆:跳到卡內嵌的等我回覆卡。v5 起這是狀態下拉裡的一個選項(owner 明示
     // 知情裁示:原本點 badge 一步到位跳卡,現在收進下拉變兩步)。
@@ -185,23 +186,25 @@ export const zh = {
     // 導航到節點就從方便變成必要。
     statusJumpExternal: "查看等待外部節點",
     terminate: "終止",
-    terminateConfirmBody: (title: string) =>
-      `確定要終止「${title}」嗎？任務將移入已結束區，無法恢復；後端會通知負責人做結束處理。`,
+    terminateConfirmBodyLead: "確定要終止「",
+    terminateConfirmBodyTail:
+      "」嗎？任務將移入已結束區，無法恢復；後端會通知負責人做結束處理。",
     terminateConfirm: "確認終止",
     // 標記重複(T-02c9):負責人指向原票即可收斂,免 owner 逐張終止
     markDuplicate: "標記重複",
-    markDuplicateBody: (taskNo: string) =>
-      `把「${taskNo}」標記為某張原票的重複?任務將移入已結束區、無法恢復。請選擇原票:`,
+    markDuplicateBodyLead: "把「",
+    markDuplicateBodyTail:
+      "」標記為某張原票的重複?任務將移入已結束區、無法恢復。請選擇原票:",
     markDuplicatePick: "請選擇原票",
     markDuplicateConfirm: "確認標記重複",
-    duplicateOf: (taskNo: string) => `重複於 ${taskNo}`,
+    duplicateOfLabel: "重複於",
     duplicateJump: "跳到原票",
     actionError: "操作失敗，請稍後重試",
     // 轉派(T-160e,owner+特助限定):把任務交給另一位正職,或當場新起一位外包
     // (模型／投入度／機器同任務類型指派那套)。任務先進「轉派中」、雙方收到
     // 交接通知,由新負責人自己轉回進行中——前端不代轉。
     reassign: "轉派…",
-    reassignTitle: (taskNo: string) => `轉派 ${taskNo}`,
+    reassignTitleLabel: "轉派",
     reassignBody:
       "任務會先進入「轉派中」,雙方都會收到交接通知;新負責人讀完交接後,自己把狀態轉回進行中。",
     reassignToMember: "轉給成員",
@@ -250,16 +253,17 @@ export const zh = {
     // 全部處理完的空狀態
     empty: "✓ 目前沒有待處理的請示",
     loadError: "載入請示失敗，請稍後重試",
-    waited: (t: string) => `已等你 ${t}`,
+    waitedLabel: "已等你",
     // 開卡/已回覆一律絕對時間含日期(如 7/13 09:05),不用相對或「今天」。
-    openedAt: (time: string) => `開卡 ${time}`,
-    answeredAt: (time: string) => `已回覆 ${time}`,
-    expiredAt: (time: string) => `已過期 ${time}`,
+    openedAtLabel: "開卡",
+    answeredAtLabel: "已回覆",
+    expiredAtLabel: "已過期",
     // 標為過期(owner 專用終態、不是回答、不可復原)——按鈕開二次確認
     expire: "標為過期",
     expireConfirm: "確認標為過期",
-    expireConfirmBody: (summary: string) =>
-      `要把「${summary}」標為過期嗎?此動作不可復原、也不算回答——成員會收到通知,問題還在的話他會重新開一張新卡。`,
+    expireConfirmBodyLead: "要把「",
+    expireConfirmBodyTail:
+      "」標為過期嗎?此動作不可復原、也不算回答——成員會收到通知,問題還在的話他會重新開一張新卡。",
     expireError: "標為過期失敗，請稍後重試",
     expiredTag: "已過期",
     expiredNote: "你未回答、已標為過期;若問題還在,成員會重新開卡",
@@ -334,9 +338,9 @@ export const zh = {
       workerSub: (n: number) => `${n} 人`,
       capSuffix: (cap: string) => ` · 上限 ${cap}`,
       // 外包身分標籤的單一來源(T-3ed8,owner 2026-07-20 裁決 完全一致):聊天
-      // header/寄件者標籤、任務卡 chip、側欄外包列、監控頁 session 全走這支,
-      // 「外包 · 代號」四處一致、不漂移。
-      label: (codename: string) => `外包 · ${codename}`,
+      // header/寄件者標籤、任務卡 chip、側欄外包列、監控頁 session 全走這支
+      // (compose.ts 的 outsourceLabel,「外包 · 代號」四處一致、不漂移)——
+      // T-081b 起那支直接組上面的 title,不再另存一份同字的模板。
       // 並行上限;0 ＝ 暫停指派（要註明）
       paused: "已暫停指派",
       // 上限 popover（照 seth-member-2 mockup，owner 2026-07-13）；
@@ -369,11 +373,11 @@ export const zh = {
     effort: "投入度",
     status: "狀態",
     // 外包生命週期狀態（assigned → active → released）；未知值原樣顯示。
-    statusLabel: (s: string) =>
-      (({ assigned: "已指派", active: "工作中", released: "已釋放" }) as Record<
-        string,
-        string
-      >)[s] ?? s,
+    statusOf: {
+      assigned: "已指派",
+      active: "工作中",
+      released: "已釋放",
+    } as Record<string, string>,
     task: "委託任務",
     delegator: "委託人",
     // 委託人＝owner 本人建的票時顯示（真實來源，非佔位）。
@@ -401,7 +405,7 @@ export const zh = {
     refocusDone: "已送出",
     refocusError: "聚焦失敗",
     refocusSubmittedNote: "已送出重新聚焦 · 外包重生中…",
-    refocusSinceLabel: (t: string) => `上次換手 ${t}`,
+    refocusSinceLabel: "上次換手",
     // 停止／重啟（owner 明示；停止後座艙誠實顯示「已停止」，不自動救活）。
     stop: "停止",
     stopping: "停止中…",
@@ -525,6 +529,37 @@ export const zh = {
     relocateStep2:
       "等那台機器連上，背景重試就會把這次搬移送出去 —— 不必重按，新指定的機器已經存下來了。",
   },
+  // ── 主題的「身分名稱」(T-081b §6) ────────────────────────────────────────
+  // 這個子樹裡的每一條,都是某個主題自己的 name —— 主題下拉選單裡的那一列、
+  // 匯出檔案裡寫進去的 name、新建主題的預設名。主題包的 wording 覆寫**不准**
+  // 碰它們:一旦可覆寫,匯入「精靈村」就會把內建主題也改叫精靈村,使用者從此
+  // 找不到回去的那一列(owner 2026-07-27 回報)。
+  //
+  // 因此白名單產生器(scripts/gen-message-keys.mjs)整個跳過 themeIdentity 子樹
+  // —— 規則掛在**結構**上,不是另外手維一份 key 清單:以後多一個內建主題,把它的
+  // 名字放進這裡就自動不可覆寫。
+  //
+  // ⚠️ 場所稱呼不在這裡:導覽列的「辦公室」是 nav.office,照舊可被主題包換掉。
+  themeIdentity: {
+    office: "辦公室",
+    newTheme: "新主題",
+  },
+  // ── 主題的「結構標記」(T-081b 第三、四輪) ────────────────────────────────
+  // 這裡放的不是任何主題的名字,而是產品用來**區分**主題的標記:「內建/自訂」
+  // 分組標題(快選單的 <optgroup>,以及第四輪起「設定 › 主題」清單的分組標題與
+  // 列上的 chip —— 兩個介面共用同一個語意來源)、匯出副本檔名裡的「副本」。
+  // 它們和 themeIdentity 一樣
+  // 不可被 wording 覆寫,而且理由是同一個:
+  //   * 分組標題若可覆寫,主題包把「自訂」改成「內建」,分組就變成假的;
+  //   * 「副本」若可覆寫,主題包塞進 bidi 或 200 字,按內建主題的「下載」鈕
+  //     就會產出一個**產品自己會拒收**的檔案(主題名上限 80 字、擋 bidi)。
+  // 產生器(scripts/gen-message-keys.mjs)整個跳過這個子樹 —— 跟 themeIdentity
+  // 走同一套結構規則,不另外手維一份 key 清單。
+  themeMarkers: {
+    builtinGroup: "內建",
+    customGroup: "自訂",
+    copyTag: "副本",
+  },
   profile: {
     title: "個人檔案",
     rename: "改名",
@@ -535,9 +570,7 @@ export const zh = {
     back: "偏好設定",
     theme: "主題",
     themeManageHint: "在「設定 › 主題」新增與編輯",
-    themeOffice: "辦公室",
     themeAdd: "新增",
-    themeNewName: "新主題",
     themeImport: "匯入",
     themeExport: "匯出",
     themeEdit: "編輯",
@@ -549,6 +582,9 @@ export const zh = {
     themeImportDup: "已有相同 id 的自訂主題",
     themeImportReadFailed: "讀取檔案失敗",
     themeLimitReached: "自訂主題數量已達上限",
+    themeImportSkippedLead: "已匯入,但有",
+    themeImportSkippedMid: "個用詞代碼不認得、已略過:",
+    themeImportSkippedMore: "等",
     themeEditTitle: "編輯主題",
     themeNameLabel: "名稱",
     language: "語言",
@@ -574,21 +610,20 @@ export const zh = {
     pwdErrorMismatch: "兩次輸入的新密碼不一樣",
   },
   chat: {
-    offlineTitle: (name: string) => `${name} 目前離線`,
+    offlineTitleSuffix: "目前離線",
     offlineHint: "這位成員目前不在線上，喚醒後才能開始對話。",
     // T-94c1: offline/stopped can now be messaged (queues until wake).
-    offlineQueueHint: (name: string) =>
-      `你仍可在下方留言，${name} 上線後就會讀到。`,
+    offlineQueueHintLead: "你仍可在下方留言，",
+    offlineQueueHintTail: "上線後就會讀到。",
     // T-94c1 wake row (offline/stopped composer): queue notice + in-place wake.
-    wakeQueueHint: (name: string) =>
-      `${name} 目前離線中 — 訊息會排隊，或立即喚醒上線`,
+    wakeQueueHintSuffix: "目前離線中 — 訊息會排隊，或立即喚醒上線",
     wakeButton: "喚醒",
     wakePending: "喚醒中…",
     emptyRange: "這個範圍還沒有訊息",
     inputPlaceholder: (name: string) => `回覆 ${name}…`,
     // M2-4 composer lock: shown IN PLACE OF the reply input while the member
     // is not online (offline / stopped / waking / stopping).
-    composerOffline: (name: string) => `${name} 目前離線中`,
+    composerOfflineSuffix: "目前離線中",
     me: "我",
     // 系統自動訊息的發話者標籤(T-ba04 轉派交接通知等,sender="system")
     systemSender: "系統",
@@ -621,7 +656,11 @@ export const zh = {
     dateOnYear: (year: number, month: number, day: number, weekday: number) =>
       `${year}年${month}月${day}日 (週${"日一二三四五六"[weekday]})`,
     // 兩個成員(agent)彼此對話的段落預設收合，避免洗版;點擊展開/收合。
-    interAgentExpand: (count: number) => `${count} 則成員間對話 · 展開`,
+    // 英文有單複數(message / messages),中文用量詞「則」沒有 —— 靜態片段表達
+    // 不了那個 s,所以拆成單數／複數兩條可覆寫字串,分支留在 compose.ts;中文
+    // 兩條填一樣的字。
+    interAgentExpandOne: "則成員間對話 · 展開",
+    interAgentExpandMany: "則成員間對話 · 展開",
     interAgentCollapse: "收合成員間對話",
     // M2-3 對話檔案/圖片庫:標題列圖示開啟的面板。M2 批次 16 起收錄該成員
     // 「全部對話」的附件(owner↔成員雙向 + 成員↔其他 agent 雙向),
@@ -662,15 +701,15 @@ export const zh = {
     // 點喚醒後、server presence 尚未跟上前的即時回饋
     wakePendingNote: "喚醒中…",
     forceStopConfirmTitle: "強制停止?",
-    forceStopConfirmBody: (name: string) =>
-      `立即強制停止 ${name}——現在就砍掉 session、跳過正常收尾。進行中的未存工作會遺失。`,
+    forceStopConfirmBodyLead: "立即強制停止",
+    forceStopConfirmBodyTail:
+      "——現在就砍掉 session、跳過正常收尾。進行中的未存工作會遺失。",
     forceStopConfirmAction: "強制停止",
     forceStopBusy: "停止中…",
     model: "模型",
     agentRuntime: "AI 執行環境",
     effort: "EFFORT · 思考強度",
-    effortLevel: (e: Effort) =>
-      ({ low: "低", medium: "中", high: "高" })[e],
+    effortOf: { low: "低", medium: "中", high: "高" } as Record<Effort, string>,
     // model/effort 可設定（M2-2）— launch intents, 變更於下次喚醒生效
     // （編輯鈕本身用全站共用的 settings.edit 樣式/文案）
     modelEffortSave: "儲存",
@@ -694,7 +733,7 @@ export const zh = {
     // persistent note after a refocus is submitted — the compaction happens on
     // the agent side asynchronously, so "已送出" (not "已完成") is the honest state.
     refocusSubmittedNote: "已送出重新聚焦 · agent 壓縮中…",
-    refocusSinceLabel: (t: string) => `上次重新聚焦 ${t}`,
+    refocusSinceLabel: "上次重新聚焦",
     // fleet remote-ops stage 1 — 最近操作 (last warden op receipt)
     lastOp: "最近操作",
     lastOpStart: "啟動",
@@ -794,7 +833,7 @@ export const zh = {
     picker: {
       label: "選擇機器",
       // 目前綁定的機器離線時,於清單中停用並標註
-      offlineOption: (name: string) => `${name}（離線）`,
+      offlineOptionSuffix: "（離線）",
       spawnTitle: "選擇要運行的機器",
       spawnConfirm: "在此機器喚醒",
       relocateTitle: "選擇要遷移到的機器",
@@ -892,17 +931,18 @@ export const zh = {
       // 於伺服器安裝的結果 (POST /bootstrap-here):僅失敗顯示(成功即消失)
       bootstrapBusy: "安裝中…",
       bootstrapError: "安裝請求失敗",
-      // 伺服器有回錯誤細節時帶出(例:503 的 ocwarden binary 缺失原因)
-      bootstrapErrorDetail: (detail: string) => `安裝請求失敗:${detail}`,
-      bootstrapFailed: (exitCode: number) =>
-        `安裝失敗(結束碼 ${exitCode}),原因如下:`,
+      // 伺服器有回錯誤細節時,compose.ts 的 bootstrapErrorDetail 直接把細節接在
+      // 上面那句 bootstrapError 後面 —— 同一句話不再有第二個 key。
+      bootstrapFailedLead: "安裝失敗(結束碼 ",
+      bootstrapFailedTail: "),原因如下:",
       // T-ba62:成功也保留安裝記錄。原本成功分支把整份 log 丟掉,於是
       // 「裝好了」與「裝好了但裡面有警告」長得一模一樣。
       bootstrapSucceeded: "安裝完成,記錄如下:",
       // uninstall (POST /uninstall):驅動 uninstall RPC 給 warden(僅線上可用)
       uninstallConfirmTitle: "確認解除安裝",
-      uninstallConfirmBody: (name: string) =>
-        `確定要解除安裝「${name}」嗎？這會請該機器上的 warden 執行 ocwarden uninstall;成功後機器會變為離線,但記錄會保留(可再次安裝)。`,
+      uninstallConfirmBodyLead: "確定要解除安裝「",
+      uninstallConfirmBodyTail:
+        "」嗎？這會請該機器上的 warden 執行 ocwarden uninstall;成功後機器會變為離線,但記錄會保留(可再次安裝)。",
       uninstallConfirm: "確認解除安裝",
       uninstallBusy: "處理中…",
       uninstallError: "解除安裝失敗",
@@ -914,8 +954,12 @@ export const zh = {
       // uninstall 防呆:仍有成員「實際在線」於這台機器時,先跳警告
       // (離線但綁定在此的成員不計 —— 與 server 的 409 判準一致)
       uninstallWarnTitle: "尚有成員在這台機器上",
-      uninstallWarnBody: (name: string, count: number) =>
-        `「${name}」上還有 ${count} 位成員在線上。現在解除安裝會在成員仍在這台機器上時把 warden 拆除 —— 建議先將相關成員下線。仍要繼續嗎?`,
+      // 兩個參數、數字卡在句中(英文 member(s) 偽複數、中文量詞「位」),所以
+      // 每語言拆三段,鍵名帶 1/2/3 標明串接順序:1 + 機器名 + 2 + 人數 + 3。
+      uninstallWarnBody1: "「",
+      uninstallWarnBody2: "」上還有 ",
+      uninstallWarnBody3:
+        " 位成員在線上。現在解除安裝會在成員仍在這台機器上時把 warden 拆除 —— 建議先將相關成員下線。仍要繼續嗎?",
       uninstallWarnProceed: "確認繼續",
       // delete (DELETE /machines/{id}):不送任何 warden 指令,但 T-9cf8 之後
       // 它已經不是舊文案講的「只是動一筆記錄」:名冊是憑證的權威,把機器移出
@@ -924,8 +968,9 @@ export const zh = {
       // 取得同意 —— 這個 repo 已經記過一次同樣的缺陷(安裝的閘承諾不會中斷
       // 服務,實際會)。用錯誤描述換來的同意不算同意,所以文案要講出真正的代價。
       deleteConfirmTitle: "確認刪除機器",
-      deleteConfirmBody: (name: string) =>
-        `確定要刪除「${name}」嗎?該機器的憑證會立刻失效:機器無法再回報,還指派在這台機器上的 agent 也會一起失去存取權。機器上的 warden 不會被拆除(那是「解除安裝」),而且這個動作無法復原 —— 要恢復只能重新安裝。`,
+      deleteConfirmBodyLead: "確定要刪除「",
+      deleteConfirmBodyTail:
+        "」嗎?該機器的憑證會立刻失效:機器無法再回報,還指派在這台機器上的 agent 也會一起失去存取權。機器上的 warden 不會被拆除(那是「解除安裝」),而且這個動作無法復原 —— 要恢復只能重新安裝。",
       deleteConfirm: "確認刪除",
       deleteBusy: "刪除中…",
       deleteError: "刪除失敗",
@@ -977,13 +1022,13 @@ export const zh = {
     // ── 主題管理 (T-16a1 P3b): moved here from the profile dropdown ──
     themeManage: "主題",
     themeColorsSection: "顏色",
+    themeColorOpacity: "不透明度",
+    themeColorFollows: "跟隨",
     themeColorPicker: "取色器",
     themeWordingSection: "用詞",
     themeWordingHint: "填入替代字即可覆蓋介面用詞;留空則維持原文。",
     themeWordingSearch: "搜尋用詞…",
     themeWordingOverride: "替代字",
-    themeBuiltinTag: "內建",
-    themeCustomTag: "自訂",
     themeWordingTag: "用詞",
     // ── 字型 (T-16a1 P4): 從安全字型白名單挑內文／標題字型 ──
     themeFontsSection: "字型",
@@ -1015,8 +1060,21 @@ export const zh = {
     themeNavTasks: "任務圖示",
     themeNavMonitor: "監控圖示",
     themeNavGuide: "使用說明圖示",
-    themeDeleteConfirm: (name: string) =>
-      `刪除主題「${name}」?此動作無法復原。`,
+    // ── 外框背景圖 (T-081b) ──
+    themeCanvasBgSection: "外框背景",
+    themeCanvasBgHint:
+      "上傳疊在底色之上的圖(PNG / JPEG / WEBP,上限 64 KB),留空則只有純底色。平鋪與貼邊只畫在內容欄兩側的外框,因此在手機、窄視窗與寬版版面(外框寬度為 0)都看不到;滿版則畫滿整個視窗。",
+    themeCanvasBg: "外框底圖",
+    themeCanvasBgMode: "鋪法",
+    themeCanvasBgModeTile: "平鋪 — 重複鋪滿整個外框",
+    themeCanvasBgModeSides: "貼邊 — 左右各貼一張",
+    themeCanvasBgModeCover: "滿版 — 一張圖填滿整個視窗",
+    themeCanvasBgModeHint:
+      "貼邊適合本身站得住的圖(例如左右各一棵樹);不做鏡像,要左右對望請直接畫成左右對稱的圖。",
+    themeCanvasBgModeCoverHint:
+      "滿版只有在這個主題同時把頂列／頁籤列／內容區設成半透明色(#RRGGBBAA 或 rgba)時才看得到。那三層底下坐著文字,圖與文字的對比要由主題自己負責。",
+    themeDeleteConfirmLead: "刪除主題「",
+    themeDeleteConfirmTail: "」?此動作無法復原。",
     // ── 軟體更新 (honest build-identity card) ──
     currentVersion: "目前版本",
     upToDate: "已是最新版",
@@ -1075,8 +1133,9 @@ export const zh = {
     addRoleError: "建立失敗，請確認角色名後再試",
     customBadge: "自訂",
     deleteRole: "刪除",
-    deleteRoleConfirm: (name: string) =>
-      `確定刪除角色「${name}」？該角色的成員及其對話、學習經驗將一併移除，無法復原。`,
+    deleteRoleConfirmLead: "確定刪除角色「",
+    deleteRoleConfirmTail:
+      "」？該角色的成員及其對話、學習經驗將一併移除，無法復原。",
     deleteRoleConfirmAction: "確認刪除",
     deleteRoleOnline: "有成員在線上，無法刪除",
     deleteRoleError: "刪除失敗，請稍後重試",
@@ -1116,8 +1175,9 @@ export const zh = {
     addManualCancel: "取消",
     addManualError: "建立失敗，請確認顯示名稱後再試",
     deleteManual: "刪除",
-    deleteManualConfirm: (key: string) =>
-      `確定刪除任務類型「${key}」？其手冊（定義、SOP、學習經驗）將一併移除，無法復原。`,
+    deleteManualConfirmLead: "確定刪除任務類型「",
+    deleteManualConfirmTail:
+      "」？其手冊（定義、SOP、學習經驗）將一併移除，無法復原。",
     deleteManualConfirmAction: "確認刪除",
     // 有非終態任務 → server 409;講人話
     deleteManualOpenTasks: "這個類型還有未結束的任務，先讓它們結束才能刪除",

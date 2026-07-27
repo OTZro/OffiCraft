@@ -1,0 +1,25 @@
+=== BASELINE ===
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+   Start at  21:05:26
+   Duration  495ms (transform 19ms, setup 12ms, collect 6ms, tests 95ms, environment 161ms, prepare 37ms)
+
+
+=== RED PROOF 4 — put the SILENT prefix-only exclusion back ===
+-- an unregistered --color-marker-halo is now dropped from the whitelist in SILENCE:
+  exit=0  stdout='[gen-theme-tokens] wrote 72 tokens →\n  /var/folders/7v/jqg31v4s0kz0l63qy65zy6k80000gn/T/tmpyhhk1ejt/themeTokens.generate'  stderr=''
+  --color-marker-halo in generated whitelist: False
+-- and the tests go RED:
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+ FAIL  scripts/gen-theme-tokens.test.ts > gen-theme-tokens > names the excluded marker slots in its output instead of dropping them quietly
+ FAIL  scripts/gen-theme-tokens.test.ts > gen-theme-tokens > fails when theme.css adds a --color-marker-* token the exclusion list does not name
+ FAIL  scripts/gen-theme-tokens.test.ts > gen-theme-tokens > fails when a listed marker slot disappears from theme.css
+ Test Files  1 failed (1)
+      Tests  3 failed (3)
+
+=== RESTORED ===
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+   Start at  21:05:28
+   Duration  456ms (transform 17ms, setup 11ms, collect 7ms, tests 94ms, environment 193ms, prepare 22ms)
+

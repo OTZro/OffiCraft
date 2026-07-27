@@ -1631,6 +1631,158 @@ def test_settings_updater_channel_toggles_roundtrip(hctx: HCtx) -> None:
         assert body["updater_auto_update"] is False, body
 
 
+def test_settings_custom_theme_background_and_mode_round_trip(hctx: HCtx) -> None:
+    """The outer-canvas image and its lay-down mode are wire fields (T-081b), so
+    the server — not just the client validator — decides what is admissible and
+    what comes back. A legal image + mode round-trips durably; the mode
+    vocabulary is closed; and a mode naming a zone that carries no image is a
+    422 that writes nothing (a mode alone paints nothing, so it is a mistake
+    worth naming rather than ignoring)."""
+    h = _auth(hctx.owner_token)
+    png = (
+        "data:image/png;base64,"
+        "iVBORw0KGgoAAAABAAAAAQ=="  # PNG magic + filler; the gate checks magic+size
+    )
+    try:
+        r = hctx.client.patch(
+            "/api/settings",
+            json={
+                "custom_themes": [
+                    {
+                        "id": "conf-canvas",
+                        "name": "Conformance canvas",
+                        "colors": {"--color-bg": "#101018"},
+                        "backgrounds": {"canvas": png},
+                        "backgroundModes": {"canvas": "cover"},
+                    }
+                ]
+            },
+            headers=h,
+        )
+        assert r.status_code == 200, f"{r.status_code} {r.text}"
+        b = r.json()["custom_themes"][0]
+        assert b["backgrounds"] == {"canvas": png}, b
+        assert b["backgroundModes"] == {"canvas": "cover"}, b
+
+        # Durable across a re-read — an omitted passthrough would empty it here.
+        r = hctx.client.get("/api/settings", headers=h)
+        assert r.status_code == 200, f"{r.status_code} {r.text}"
+        b = r.json()["custom_themes"][0]
+        assert b["backgrounds"] == {"canvas": png}, b
+        assert b["backgroundModes"] == {"canvas": "cover"}, b
+
+        # The mode vocabulary is CLOSED — and unlike an unknown wording code,
+        # this one is not lenient: the whole bundle is refused.
+        for bad in ({"canvas": "contain"}, {"topbar": "tile"}):
+            r = hctx.client.patch(
+                "/api/settings",
+                json={
+                    "custom_themes": [
+                        {
+                            "id": "conf-bad-mode",
+                            "name": "Bad",
+                            "colors": {"--color-bg": "#101018"},
+                            "backgrounds": {"canvas": png},
+                            "backgroundModes": bad,
+                        }
+                    ]
+                },
+                headers=h,
+            )
+            assert r.status_code == 422, f"{bad}: {r.status_code} {r.text}"
+            assert r.json()["error"]["code"] == "validation_error", r.text
+
+        # A mode with no image behind it is refused too.
+        r = hctx.client.patch(
+            "/api/settings",
+            json={
+                "custom_themes": [
+                    {
+                        "id": "conf-lone-mode",
+                        "name": "Lone",
+                        "colors": {"--color-bg": "#101018"},
+                        "backgroundModes": {"canvas": "sides"},
+                    }
+                ]
+            },
+            headers=h,
+        )
+        assert r.status_code == 422, f"{r.status_code} {r.text}"
+
+        # …and none of the refusals disturbed what was already stored.
+        r = hctx.client.get("/api/settings", headers=h)
+        assert [b["id"] for b in r.json()["custom_themes"]] == ["conf-canvas"], r.text
+    finally:
+        r = hctx.client.patch("/api/settings", json={"custom_themes": []}, headers=h)
+        assert r.status_code == 200, f"restore failed: {r.status_code} {r.text}"
+
+
+def test_settings_custom_theme_unknown_wording_code_is_dropped_not_rejected(
+    hctx: HCtx,
+) -> None:
+    """custom_themes has ONE lenient rule inside an otherwise all-or-nothing
+    validator: a `wording` code outside the message-key whitelist does not 422
+    the bundle — it is dropped and the request succeeds, so an already-imported
+    theme pack stays usable when the whitelist shrinks (T-081b). The echo
+    therefore carries a wording map the client did not send. Everything else in
+    the overlay stays strict, and the surviving codes are durable."""
+    h = _auth(hctx.owner_token)
+    try:
+        r = hctx.client.patch(
+            "/api/settings",
+            json={
+                "custom_themes": [
+                    {
+                        "id": "conf-wording",
+                        "name": "Conformance wording",
+                        "colors": {"--color-bg": "#101018"},
+                        "wording": {
+                            "zh": {
+                                "nav.tasks": "待辦",
+                                "profile.themeOffice": "精靈村",
+                                "not.a.real.key": "x",
+                            }
+                        },
+                    }
+                ]
+            },
+            headers=h,
+        )
+        assert r.status_code == 200, f"{r.status_code} {r.text}"
+        zh = r.json()["custom_themes"][0]["wording"]["zh"]
+        assert zh == {"nav.tasks": "待辦"}, zh
+
+        # Durable: a re-read carries only the surviving code.
+        r = hctx.client.get("/api/settings", headers=h)
+        assert r.status_code == 200, f"{r.status_code} {r.text}"
+        zh = r.json()["custom_themes"][0]["wording"]["zh"]
+        assert zh == {"nav.tasks": "待辦"}, zh
+
+        # The leniency is scoped to the CODE. A language outside {zh,en} is
+        # still a 422 and still writes nothing.
+        r = hctx.client.patch(
+            "/api/settings",
+            json={
+                "custom_themes": [
+                    {
+                        "id": "conf-bad-lang",
+                        "name": "Bad",
+                        "colors": {"--color-bg": "#101018"},
+                        "wording": {"xian": {"nav.tasks": "仙"}},
+                    }
+                ]
+            },
+            headers=h,
+        )
+        assert r.status_code == 422, f"{r.status_code} {r.text}"
+        assert r.json()["error"]["code"] == "validation_error", r.text
+        r = hctx.client.get("/api/settings", headers=h)
+        assert [b["id"] for b in r.json()["custom_themes"]] == ["conf-wording"], r.text
+    finally:
+        r = hctx.client.patch("/api/settings", json={"custom_themes": []}, headers=h)
+        assert r.status_code == 200, f"restore failed: {r.status_code} {r.text}"
+
+
 def test_upload_then_ref_post_roundtrip(hctx: HCtx) -> None:
     """The send-side seam end to end: upload raw bytes → post_chat with the
     light {id} ref → the message stamps the STORED blob's mime/filename (a

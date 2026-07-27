@@ -18,6 +18,18 @@
   font-size: 13px;
 }
 
+/* Same banner shape as .set-error, in the warning tint: the thing it reports
+ * SUCCEEDED, only partly (an import that dropped unrecognised wording codes). */
+.set-warn {
+  padding: 10px 14px;
+  border-radius: var(--radius-card);
+  border: 1px solid var(--color-callout-warning);
+  background: var(--color-card);
+  color: var(--color-callout-warning);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
 .settings__title {
   margin: 4px 2px 6px;
   font-size: 22px;
@@ -1317,7 +1329,7 @@
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: var(--color-overlay);
+  background: var(--color-knob);
   transition: transform 0.18s;
 }
 .set-toggle--on .set-toggle__knob {

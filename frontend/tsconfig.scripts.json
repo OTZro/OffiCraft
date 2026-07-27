@@ -1,0 +1,24 @@
+{
+  // The build-time scripts' own TypeScript. `scripts/` is NOT part of the app
+  // (tsconfig.json includes only `src`), but check-token-roles.test.ts lives
+  // there — vitest runs it while `tsc --noEmit` did not see it at all, so its
+  // type errors showed up red in the editor and green in CI (T-081b review
+  // round 4, SHOULD-D). It is the same node-flavoured environment vite.config.ts
+  // gets in tsconfig.node.json, so it inherits the same shape: node types, no
+  // DOM, and vitest globals for the test file.
+  "compilerOptions": {
+    "skipLibCheck": true,
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "types": ["node", "vitest/globals"],
+    "noEmit": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
+  "include": ["scripts/**/*.ts"]
+}

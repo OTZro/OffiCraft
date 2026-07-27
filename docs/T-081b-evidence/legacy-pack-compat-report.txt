@@ -1,0 +1,10 @@
+── pre-T-081b LIGHT pack: base vs head ──
+same  .mp-webhook__count           color             base rgb(0, 0, 0)           head rgb(0, 0, 0)
+same  .mp-webhook__submit          color             base rgb(0, 0, 0)           head rgb(0, 0, 0)
+same  .mp-toggle__knob             background-color  base rgb(0, 0, 0)           head rgb(0, 0, 0)
+same  .chat__lightbox-close        color             base rgb(0, 0, 0)           head rgb(0, 0, 0)
+same  .nav-tab__badge              color             base rgb(0, 0, 0)           head rgb(0, 0, 0)
+same  .mp-webhook__requestdetail   background-color  base color(srgb 0.8 0.8 0.8 / 0.14) head color(srgb 0.8 0.8 0.8 / 0.14)
+same  .chat__share-btn             background-color  base color(srgb 0.8 0.8 0.8 / 0.55) head color(srgb 0.8 0.8 0.8 / 0.55)
+built-in dark theme: identical on all probes
+ALL OK

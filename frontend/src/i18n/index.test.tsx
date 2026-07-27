@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen, waitFor, act } from "@testing-library/react";
 import { I18nProvider, useI18n } from "./index";
 import { zh } from "./locales/zh";
+import { readDictMessage } from "./wording";
 import { mockApi, __resetMock } from "../api/mock";
 import { setToken, TOKEN_KEY } from "../api/auth";
 
@@ -272,6 +273,74 @@ describe("I18nProvider custom theme apply", () => {
     expect(root.style.getPropertyValue("--color-accent")).toBe("");
   });
 
+  it("applies the canvas background image alongside the canvas colour (T-081b)", () => {
+    const png =
+      "data:image/png;base64," +
+      btoa(
+        String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01)
+      );
+    act(() =>
+      ctx.commitCustomThemes([{ ...MIDNIGHT, backgrounds: { canvas: png } }])
+    );
+    act(() => ctx.setTheme("midnight"));
+
+    expect(root.style.getPropertyValue("--canvas-bg-image")).toBe(`url("${png}")`);
+    expect(root.style.getPropertyValue("--color-bg")).toBe("#040506");
+    // no mode named ⇒ the tiling values theme.css already defaults to
+    expect(root.style.getPropertyValue("--canvas-bg-repeat")).toBe("repeat");
+    expect(root.style.getPropertyValue("--canvas-bg-position")).toBe("0 0");
+    expect(root.style.getPropertyValue("--canvas-bg-size")).toBe("auto");
+    expect(root.style.getPropertyValue("--canvas-bg-attachment")).toBe("scroll");
+
+    // "sides" lays the same url twice — once against each viewport edge, ONE
+    // copy each (a repeat would put a second tree down a long page)
+    act(() =>
+      ctx.commitCustomThemes([
+        {
+          ...MIDNIGHT,
+          backgrounds: { canvas: png },
+          backgroundModes: { canvas: "sides" },
+        },
+      ])
+    );
+    expect(root.style.getPropertyValue("--canvas-bg-image")).toBe(
+      `url("${png}"), url("${png}")`
+    );
+    expect(root.style.getPropertyValue("--canvas-bg-repeat")).toBe(
+      "no-repeat, no-repeat"
+    );
+    expect(root.style.getPropertyValue("--canvas-bg-position")).toBe(
+      "left bottom, right bottom"
+    );
+    // pinned to the viewport, so a long page cannot scroll a second copy in
+    expect(root.style.getPropertyValue("--canvas-bg-attachment")).toBe(
+      "fixed, fixed"
+    );
+
+    // "cover" scales ONE copy to the whole viewport
+    act(() =>
+      ctx.commitCustomThemes([
+        {
+          ...MIDNIGHT,
+          backgrounds: { canvas: png },
+          backgroundModes: { canvas: "cover" },
+        },
+      ])
+    );
+    expect(root.style.getPropertyValue("--canvas-bg-image")).toBe(`url("${png}")`);
+    expect(root.style.getPropertyValue("--canvas-bg-repeat")).toBe("no-repeat");
+    expect(root.style.getPropertyValue("--canvas-bg-size")).toBe("cover");
+    expect(root.style.getPropertyValue("--canvas-bg-attachment")).toBe("fixed");
+
+    // and all five are cleared again when the next theme carries no image
+    act(() => ctx.setTheme("office"));
+    expect(root.style.getPropertyValue("--canvas-bg-image")).toBe("");
+    expect(root.style.getPropertyValue("--canvas-bg-repeat")).toBe("");
+    expect(root.style.getPropertyValue("--canvas-bg-position")).toBe("");
+    expect(root.style.getPropertyValue("--canvas-bg-size")).toBe("");
+    expect(root.style.getPropertyValue("--canvas-bg-attachment")).toBe("");
+  });
+
   it("caches a custom active id to localStorage", () => {
     act(() => ctx.commitCustomThemes([MIDNIGHT]));
     act(() => ctx.setTheme("midnight"));
@@ -339,6 +408,37 @@ describe("I18nProvider custom theme wording overlay", () => {
     expect(ctx.t.nav.tasks).toBe("任務榜");
     act(() => ctx.setTheme("office"));
     expect(ctx.t.nav.tasks).toBe(zh.nav.tasks);
+  });
+
+  it("keeps applying an already-stored pack whose overlay holds an unrecognised code", () => {
+    // Owner requirement 2026-07-27: 已匯入的主題包還是要能夠運作,只是不認得的會失效.
+    // A pack imported BEFORE T-081b de-whitelisted the theme-identity keys still
+    // sits in the store with those codes in it — the recognised overrides must
+    // all still land, and the unrecognised one must simply do nothing.
+    act(() =>
+      ctx.commitCustomThemes([
+        {
+          ...WORDED,
+          id: "legacy",
+          wording: {
+            zh: {
+              "nav.tasks": "任務榜",
+              "nav.replies": "傳訊台",
+              "profile.themeOffice": "精靈村",
+              "typo.not.a.key": "x",
+            },
+          },
+        },
+      ])
+    );
+    act(() => ctx.setTheme("legacy"));
+    expect(ctx.t.nav.tasks).toBe("任務榜");
+    expect(ctx.t.nav.replies).toBe("傳訊台");
+    // The unrecognised codes are inert: no leaf is invented for them, and the
+    // built-in theme keeps its own name.
+    expect(readDictMessage(ctx.t, "profile.themeOffice")).toBeNull();
+    expect(readDictMessage(ctx.t, "typo.not.a.key")).toBeNull();
+    expect(ctx.t.themeIdentity.office).toBe(zh.themeIdentity.office);
   });
 
   it("leaves a custom theme without wording on the base dict", () => {

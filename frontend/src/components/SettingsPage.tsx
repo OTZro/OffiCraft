@@ -1151,7 +1151,7 @@ function RolesLog({
    * already open (T-25b7). One-shot — seeds the initial state only. */
   autoCreate?: boolean;
 }) {
-  const { t } = useI18n();
+  const { t, msg } = useI18n();
 
   // ── 新增角色定義 — the INLINE create row (owner-aligned pattern): clicking
   // the add entry grows ONE editable row in the list with a single
@@ -1425,7 +1425,7 @@ function RolesLog({
             testId="role-delete-confirm"
             confirmTestId="role-delete-confirm-btn"
             danger
-            body={t.settings.deleteRoleConfirm(target.name || target.key)}
+            body={msg.deleteRoleConfirm(target.name || target.key)}
             error={deleteError}
             busy={deleteBusy}
             cancelLabel={t.settings.addRoleCancel}

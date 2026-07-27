@@ -160,7 +160,7 @@ func TestValidateThemeBundlesAvatars(t *testing.T) {
 	}
 
 	// Backward compatibility: a pre-T-ea81 bundle carrying only member/outsource
-	// avatars and no logo/navIcons stays valid unchanged.
+	// avatars and no logo/navIcons/backgrounds stays valid unchanged.
 	legacy := map[string]string{
 		"member":    dataURI("image/png", pngBytes),
 		"outsource": dataURI("image/webp", webpBytes),
@@ -242,20 +242,136 @@ func TestValidateNavIcons(t *testing.T) {
 	}
 }
 
-// TestValidateThemeBundlesImages checks the logo + navIcons overlays flow
-// through the top-level bundle validator (parity with avatars).
+func TestValidateBackgrounds(t *testing.T) {
+	// nil overlay is admissible (optional) — a bundle authored before T-081b.
+	if err := validateBackgrounds(nil, "t"); err != nil {
+		t.Fatalf("nil backgrounds must be admissible: %v", err)
+	}
+
+	// The canvas zone is legal and passes the shared avatar image gate.
+	ok := map[string]string{"canvas": dataURI("image/png", pngBytes)}
+	if err := validateBackgrounds(&ok, "t"); err != nil {
+		t.Fatalf("legal canvas background must pass: %v", err)
+	}
+
+	// The zones that sit under text are NOT openable to an image.
+	for _, zone := range []string{"topbar", "nav", "main"} {
+		bad := map[string]string{zone: dataURI("image/png", pngBytes)}
+		if err := validateBackgrounds(&bad, "t"); err == nil ||
+			!strings.Contains(err.Error(), "only canvas") {
+			t.Fatalf("zone %q must 422 naming the allowed zone set: %v", zone, err)
+		}
+	}
+
+	// A value under the legal zone still runs the SAME image gate as an avatar:
+	// same mime allowlist, same magic bytes, same 64 KiB cap (never relaxed).
+	big := make([]byte, maxAvatarBytes+1)
+	copy(big, pngBytes)
+	for _, tc := range []struct {
+		name   string
+		value  string
+		expect string
+	}{
+		{"svg rejected", dataURI("image/svg+xml", []byte(`<svg onload=alert(1)>`)), "not an allowed image type"},
+		{"oversize rejected", dataURI("image/png", big), "too large"},
+		{"bad magic rejected", dataURI("image/png", jpegBytes), "magic-byte"},
+	} {
+		bad := map[string]string{"canvas": tc.value}
+		err := validateBackgrounds(&bad, "cx[0]")
+		if err == nil || !strings.Contains(err.Error(), tc.expect) {
+			t.Fatalf("%s: expected %q, got %v", tc.name, tc.expect, err)
+		}
+		if !strings.Contains(err.Error(), "cx[0]: backgrounds[canvas]") {
+			t.Fatalf("%s: error must carry the backgrounds locator: %v", tc.name, err)
+		}
+	}
+}
+
+func TestValidateBackgroundModes(t *testing.T) {
+	images := map[string]string{"canvas": dataURI("image/png", pngBytes)}
+
+	// nil map is admissible and means every zone tiles — a bundle authored
+	// before the mode existed must render exactly as it did.
+	if err := validateBackgroundModes(nil, &images, "t"); err != nil {
+		t.Fatalf("nil backgroundModes must be admissible: %v", err)
+	}
+	for _, mode := range []string{"tile", "sides", "cover"} {
+		ok := map[string]string{"canvas": mode}
+		if err := validateBackgroundModes(&ok, &images, "t"); err != nil {
+			t.Fatalf("mode %q must pass: %v", mode, err)
+		}
+	}
+
+	// Same closed zone set as the images themselves.
+	badZone := map[string]string{"topbar": "tile"}
+	if err := validateBackgroundModes(&badZone, &images, "t"); err == nil ||
+		!strings.Contains(err.Error(), "only canvas") {
+		t.Fatalf("unknown zone must 422 naming the zone set: %v", err)
+	}
+
+	// The mode vocabulary is closed — case and whitespace included.
+	for _, mode := range []string{"Tile", "contain", "", "sides "} {
+		bad := map[string]string{"canvas": mode}
+		err := validateBackgroundModes(&bad, &images, "cx[0]")
+		if err == nil || !strings.Contains(err.Error(), "not a valid mode") {
+			t.Fatalf("mode %q must 422: %v", mode, err)
+		}
+		if !strings.Contains(err.Error(), "cx[0]: backgroundModes[canvas]") {
+			t.Fatalf("mode %q: error must carry the locator: %v", mode, err)
+		}
+	}
+
+	// A mode with no image paints nothing — named as a mistake, not ignored.
+	lone := map[string]string{"canvas": "sides"}
+	empty := map[string]string{"canvas": ""}
+	for _, bg := range []*map[string]string{nil, &empty} {
+		if err := validateBackgroundModes(&lone, bg, "t"); err == nil ||
+			!strings.Contains(err.Error(), "no image in backgrounds") {
+			t.Fatalf("mode without an image must 422: %v", err)
+		}
+	}
+}
+
+// TestValidateThemeBundlesImages checks the logo + navIcons + backgrounds
+// overlays flow through the top-level bundle validator (parity with avatars).
 func TestValidateThemeBundlesImages(t *testing.T) {
 	logo := dataURI("image/png", pngBytes)
 	navIcons := map[string]string{"office": dataURI("image/webp", webpBytes)}
+	backgrounds := map[string]string{"canvas": dataURI("image/jpeg", jpegBytes)}
+	backgroundModes := map[string]string{"canvas": "sides"}
 	legal := []ThemeBundleDTO{{
-		Id:       "midnight",
-		Name:     "Midnight",
-		Colors:   map[string]string{"--color-bg": "#101018"},
-		Logo:     &logo,
-		NavIcons: &navIcons,
+		Id:              "midnight",
+		Name:            "Midnight",
+		Colors:          map[string]string{"--color-bg": "#101018"},
+		Logo:            &logo,
+		NavIcons:        &navIcons,
+		Backgrounds:     &backgrounds,
+		BackgroundModes: &backgroundModes,
 	}}
 	if err := validateThemeBundles(legal); err != nil {
-		t.Fatalf("bundle with legal logo + navIcons must pass: %v", err)
+		t.Fatalf("bundle with legal logo + navIcons + backgrounds must pass: %v", err)
+	}
+
+	// …and an illegal mode is caught at the bundle level too.
+	badMode := map[string]string{"canvas": "contain"}
+	if err := validateThemeBundles([]ThemeBundleDTO{{
+		Id:              "midnight",
+		Name:            "Midnight",
+		Colors:          map[string]string{"--color-bg": "#101018"},
+		Backgrounds:     &backgrounds,
+		BackgroundModes: &badMode,
+	}}); err == nil || !strings.Contains(err.Error(), "not a valid mode") {
+		t.Fatalf("illegal background mode must 422 through the bundle: %v", err)
+	}
+
+	badBg := map[string]string{"canvas": dataURI("image/svg+xml", []byte("<svg onload=alert(1)>"))}
+	if err := validateThemeBundles([]ThemeBundleDTO{{
+		Id:          "midnight",
+		Name:        "Midnight",
+		Colors:      map[string]string{"--color-bg": "#101018"},
+		Backgrounds: &badBg,
+	}}); err == nil || !strings.Contains(err.Error(), "not an allowed image type") {
+		t.Fatalf("bundle with an SVG canvas background must 422: %v", err)
 	}
 
 	badLogo := dataURI("image/svg+xml", []byte("<svg onload=alert(1)>"))

@@ -1,0 +1,137 @@
+=================== B-1  TS drops Zs from its class set (one-sided drift)
+   × theme name validation · Go/TS parity > returns the identical verdict on both ends for every name 708ms
+     → ideographic_space_only ("　")
+    go: REJECT: name must not contain control, formatting, private-use, surrogate, separator or non-ASCII space characters
+    ts: ACCEPT
+  ideographic_space_pad ("　辦公室　")
+    go: REJECT: name must not contain control, formatting, private-use, surrogate, separator or non-ASCII space characters
+    ts: ACCEPT
+  ideographic_space_office ("　Office　")
+    go: REJECT: name must not contain control, formatting, private-use, surrogate, separator or non-ASCII space characters
+    ts: ACCEPT
+  nbsp_only (" ")
+    go: REJECT: name must not contain control, formatting, private-use, surrogate, separator or non-ASCII space characters
+    ts: ACCEPT
+  nbsp_pad_office (" Office ")
+    go: REJECT: name must not contain control, formatting, private-use, surrogate, separator or non-ASCII space characters
+    ts: ACCEPT
+  ogham_space (" Office ")
+    go: REJECT: name must not contain control, formatting, private-use, surrogate, separator or non-ASCII space characters
+    ts: ACCEPT: expected 'ideographic_space_only ("　")\n    go:…' to be '' // Object.is equality
+   × theme name validation · Go/TS parity > rejects every invisible-category name and keeps every legitimate one 1ms
+     → nbsp_pad_office: expected 'ACCEPT' to match /^REJECT: name must not contain contro…/
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+AssertionError: ideographic_space_only ("　")
+    go: REJECT: name must not contain control, formatting, private-use, surrogate, separator or non-ASCII space characters
+    ts: ACCEPT
+  ideographic_space_pad ("　辦公室　")
+    go: REJECT: name must not contain control, formatting, private-use, surrogate, separator or non-ASCII space characters
+    ts: ACCEPT
+  ideographic_space_office ("　Office　")
+    go: REJECT: name must not contain control, formatting, private-use, surrogate, separator or non-ASCII space characters
+=================== B-2  Go drops Zs from its category set (the other side)
+   × theme name validation · Go/TS parity > returns the identical verdict on both ends for every name 1753ms
+     → ideographic_space_only ("　")
+    go: ACCEPT
+    ts: REJECT: name must not contain control, formatting, private-use, surrogate, separator or non-ASCII space characters
+  ideographic_space_pad ("　辦公室　")
+    go: ACCEPT
+    ts: REJECT: name must not contain control, formatting, private-use, surrogate, separator or non-ASCII space characters
+  ideographic_space_office ("　Office　")
+    go: ACCEPT
+    ts: REJECT: name must not contain control, formatting, private-use, surrogate, separator or non-ASCII space characters
+  nbsp_only (" ")
+    go: ACCEPT
+    ts: REJECT: name must not contain control, formatting, private-use, surrogate, separator or non-ASCII space characters
+  nbsp_pad_office (" Office ")
+    go: ACCEPT
+    ts: REJECT: name must not contain control, formatting, private-use, surrogate, separator or non-ASCII space characters
+  ogham_space (" Office ")
+    go: ACCEPT
+    ts: REJECT: name must not contain control, formatting, private-use, surrogate, separator or non-ASCII space characters: expected 'ideographic_space_only ("　")\n    go:…' to be '' // Object.is equality
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+AssertionError: ideographic_space_only ("　")
+    go: ACCEPT
+    ts: REJECT: name must not contain control, formatting, private-use, surrogate, separator or non-ASCII space characters
+  ideographic_space_pad ("　辦公室　")
+    go: ACCEPT
+    ts: REJECT: name must not contain control, formatting, private-use, surrogate, separator or non-ASCII space characters
+  ideographic_space_office ("　Office　")
+    go: ACCEPT
+    ts: REJECT: name must not contain control, formatting, private-use, surrogate, separator or non-ASCII space characters
+  nbsp_only (" ")
+--- FAIL: TestValidateThemeBundles (0.00s)
+    --- FAIL: TestValidateThemeBundles/rejects_a_name_carrying_control,_formatting,_private-use,_surrogate,_separator_or_non-ASCII_space_characters (0.00s)
+        theme_bundle_test.go:68: name "\u00a0Office\u00a0" must be rejected, got <nil>
+FAIL
+FAIL	ocserverd	0.319s
+FAIL
+=================== B-3  both ends back to the round-3 CODEPOINT blacklist
+   × validateThemeBundle > rejects a name carrying control, formatting, private-use, surrogate, separator or non-ASCII space characters 3ms
+     → .toMatch() expects to receive a string, but got object
+   ✓ theme name validation · Go/TS parity > returns the identical verdict on both ends for every name 1767ms
+   × theme name validation · Go/TS parity > rejects every invisible-category name and keeps every legitimate one 3ms
+     → tag_char: expected 'ACCEPT' to match /^REJECT: name must not contain contro…/
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+    138|         validateThemeBundle({ ...ok, name }),
+    139|         JSON.stringify(name)
+    140|       ).toMatch(/control, formatting, private-use, surrogate, separato…
+       |         ^
+    141|     }
+    142|   });
+AssertionError: tag_char: expected 'ACCEPT' to match /^REJECT: name must not contain contro…/
+- Expected: 
++ Received: 
+    132|       "ogham_space",
+    133|     ]) {
+    134|       expect(verdict[k], k).toMatch(
+       |                             ^
+    135|         /^REJECT: name must not contain control, formatting, private-u…
+    136|       );
+      Tests  2 failed | 44 passed (46)
+   Start at  20:17:26
+   Duration  2.19s (transform 44ms, setup 24ms, collect 65ms, tests 1.78s, environment 421ms, prepare 77ms)
+--- FAIL: TestValidateThemeBundles (0.00s)
+    --- FAIL: TestValidateThemeBundles/rejects_a_name_carrying_control,_formatting,_private-use,_surrogate,_separator_or_non-ASCII_space_characters (0.00s)
+        theme_bundle_test.go:68: name "Off\u00adice" must be rejected, got <nil>
+FAIL
+FAIL	ocserverd	0.320s
+FAIL
+=================== B-4  both ends ALSO reject Mn (over-blocking legal emoji/accents)
+   × validateThemeBundle > accepts every legitimate name shape, including the new-theme default 3ms
+     → Heart ❤️: expected 'theme: name must not contain control,…' to be null
+   ✓ theme name validation · Go/TS parity > returns the identical verdict on both ends for every name 2160ms
+   × theme name validation · Go/TS parity > rejects every invisible-category name and keeps every legitimate one 4ms
+     → emoji_vs16_only: expected 'REJECT: name must not contain control…' to be 'ACCEPT' // Object.is equality
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+AssertionError: Heart ❤️: expected 'theme: name must not contain control,…' to be null
+- Expected: 
++ Received: 
+    184|       "Tiếng Việt", // combining marks (Mn) in an ordinary Latin name
+    185|     ]) {
+    186|       expect(validateThemeBundle({ ...ok, name }), name).toBeNull();
+       |                                                          ^
+    187|     }
+    188|   });
+AssertionError: emoji_vs16_only: expected 'REJECT: name must not contain control…' to be 'ACCEPT' // Object.is equality
+    148|       "new_theme_en",
+    149|     ]) {
+    150|       expect(verdict[k], k).toBe("ACCEPT");
+       |                             ^
+    151|     }
+    152|   });
+      Tests  2 failed | 44 passed (46)
+   Start at  20:17:29
+   Duration  2.57s (transform 48ms, setup 20ms, collect 66ms, tests 2.18s, environment 414ms, prepare 65ms)
+--- FAIL: TestValidateThemeBundles (0.00s)
+    --- FAIL: TestValidateThemeBundles/accepts_every_legitimate_name_shape,_including_the_new-theme_default (0.00s)
+        theme_bundle_test.go:118: name "Heart ❤️" must be accepted, got custom_themes[0]: name must not contain control, formatting, private-use, surrogate, separator or non-ASCII space characters
+FAIL
+FAIL	ocserverd	0.322s
+FAIL
+=================== RESTORED — expect all green
+   ✓ theme name validation · Go/TS parity > returns the identical verdict on both ends for every name 670ms
+      Tests  46 passed (46)
+   Start at  20:17:33
+   Duration  1.08s (transform 46ms, setup 17ms, collect 48ms, tests 679ms, environment 387ms, prepare 65ms)
+ok  	ocserverd	0.319s

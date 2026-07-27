@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -63,6 +64,136 @@ var (
 // is the only built-in now (修仙 is an importable custom bundle), so "xian" is a
 // perfectly legal custom id.
 var reservedThemeIDs = map[string]bool{"office": true}
+
+// invisibleNameCategories are the Unicode general CATEGORIES a theme display
+// name may not carry — categories, not a hand-listed set of codepoints (T-081b
+// review round 4, SHOULD-C). Round 3 listed six zero-width codepoints and every
+// unlisted member of the SAME categories walked straight through: U+00AD SOFT
+// HYPHEN, U+180E and the U+E00xx TAG block (all Cf, like the ZWSP that WAS
+// listed), U+2028/U+2029 (Zl/Zp), U+00A0 / U+1680 / U+3000 (Zs). Each of them
+// renders as — or renders away to — a built-in theme's name, which is exactly
+// what isBuiltinThemeName exists to stop.
+//
+//	Cc control · Cf format (bidi marks, ZWSP/ZWNJ/ZWJ, WORD JOINER, BOM,
+//	SOFT HYPHEN, the TAG block) · Co private use · Cs surrogate ·
+//	Zl line separator · Zp paragraph separator
+//
+// Zs (space separator) is NOT here — it is NORMALISED to U+0020 instead, see
+// normalizeThemeSpaces (T-081b review round 4 recheck, SHOULD-3). Rejecting it
+// blocked 「深海　之夜」, which is simply what a Chinese IME in full-width mode
+// emits when the user presses the space bar, and told them so in a message
+// written for implementers. Normalising loses nothing on the security side —
+// 「　辦公室　」 still fails, now against the reserved-name rule that names the
+// actual reason — and keeps the legitimate names.
+//
+// DELIBERATELY NOT REJECTED: the variation selectors (U+FE0F & co., category
+// Mn). They are zero-width, but they are also how a legitimate emoji name is
+// spelled (「Heart ❤️」), and Mn holds every combining accent besides — banning
+// the category would reject ordinary Vietnamese, Hebrew-with-points and
+// Devanagari names.
+//
+// These are the standard library's own tables, so this is not a third
+// hand-kept list; the TS twin (INVISIBLE_NAME_CLASS_RE in
+// frontend/src/lib/themeBundle.ts) reads the same categories through `u`-flag
+// property escapes, and frontend/src/lib/themeName.parity.test.ts feeds both ends
+// the same 61 names and fails on ANY divergence — including one caused by the
+// two runtimes shipping different Unicode versions.
+var invisibleNameCategories = []*unicode.RangeTable{
+	unicode.Cc, unicode.Cf, unicode.Co, unicode.Cs,
+	unicode.Zl, unicode.Zp,
+}
+
+// hasInvisibleNameRune reports whether s carries a rune from one of the
+// rejected categories. The twin of hasInvisibleNameRune in
+// frontend/src/lib/themeBundle.ts.
+func hasInvisibleNameRune(s string) bool {
+	for _, r := range s {
+		if unicode.In(r, invisibleNameCategories...) {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeThemeSpaces folds every space separator onto U+0020 — the FIRST
+// thing done to a name, before it is trimmed, measured or compared against a
+// built-in's.
+//
+// U+3000 IDEOGRAPHIC SPACE, U+00A0 NO-BREAK SPACE and the rest of Zs are
+// ordinary spaces as far as a human reading the name is concerned, so treating
+// them as one is what makes both halves come out right: 「深海　之夜」 is accepted
+// and stored as an ordinary two-word name, while 「　辦公室　」 collapses onto
+// 「辦公室」 and is refused BY THE RESERVED-NAME RULE, which can say so.
+//
+// The twin of normalizeThemeSpaces in frontend/src/lib/themeBundle.ts.
+func normalizeThemeSpaces(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.Is(unicode.Zs, r) {
+			r = ' '
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// trimThemeName normalises spaces, then trims ASCII whitespace ONLY.
+// Deliberately not strings.TrimSpace: that walks unicode.IsSpace, whose
+// membership differs from JS String.prototype.trim()'s ECMAScript WhiteSpace
+// set (U+FEFF, U+0085), so the two validators would decide name length — and
+// name identity — on different strings. An explicit ASCII set is identical BY
+// CONSTRUCTION on both sides, and it stays EXHAUSTIVE because
+// normalizeThemeSpaces runs first: every non-ASCII space has already become
+// U+0020, and every non-ASCII whitespace that is NOT a space (Zl/Zp, U+0085,
+// U+FEFF) is rejected outright. Nothing is left for the two languages to
+// disagree about.
+// The twin of trimThemeName in frontend/src/lib/themeBundle.ts.
+func trimThemeName(s string) string {
+	return strings.Trim(normalizeThemeSpaces(s), "\t\n\v\f\r ")
+}
+
+// normalizeThemeName is the comparison form of a theme display name: ASCII
+// trimmed and ASCII case-folded, so "  office " and "Office" both collide with
+// the built-in. Only A–Z is folded — NOT strings.ToLower, whose simple case
+// mapping sends U+0130 (İ) to 'i' while JS's full case mapping sends it to
+// "i̇", so "OFFİCE" was rejected by the server and accepted by the client.
+// An ASCII-only fold is identical BY CONSTRUCTION on both sides; the cost is
+// that a non-ASCII case dodge (「ＯＦＦＩＣＥ」) is not folded, which is the same
+// homoglyph class this rule has never claimed to cover.
+// The twin of normalizeThemeName in frontend/src/lib/themeBundle.ts.
+func normalizeThemeName(s string) string {
+	var b strings.Builder
+	for _, r := range trimThemeName(s) {
+		if r >= 'A' && r <= 'Z' {
+			r += 'a' - 'A'
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// isBuiltinThemeName reports whether name claims a BUILT-IN theme's display
+// name, in any UI language. The id is already guarded by reservedThemeIDs; this
+// is the guard on what the owner SEES — without it a pack called 「辦公室」 puts a
+// second 辦公室 row in the picker and the shipped theme becomes unfindable.
+//
+// The names are DERIVED: themeIdentityNames (generated from the i18n locales)
+// intersected with reservedThemeIDs, so the rule is language-independent and a
+// future built-in is covered the moment its name and id are added. The
+// intersection is also what keeps themeIdentityNames["newTheme"] claimable —
+// that is the default name a NEW custom theme gets, not a theme's identity.
+// The twin of isBuiltinThemeName in frontend/src/lib/themeBundle.ts.
+func isBuiltinThemeName(name string) bool {
+	norm := normalizeThemeName(name)
+	for id := range reservedThemeIDs {
+		for _, builtin := range themeIdentityNames[id] {
+			if normalizeThemeName(builtin) == norm {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // colorInjectionMarkers are structure-breaking substrings a concrete colour can
 // never legitimately contain. The allowlist grammar already rejects every one
@@ -116,10 +247,19 @@ func validateThemeBundles(bundles []ThemeBundleDTO) error {
 		}
 		seen[b.Id] = true
 
-		name := strings.TrimSpace(b.Name)
+		name := trimThemeName(b.Name)
 		if n := utf8.RuneCountInString(name); n < 1 || n > maxThemeNameLen {
 			return fmt.Errorf(
 				"%s: name must be 1..%d characters after trimming", where, maxThemeNameLen)
+		}
+		if hasInvisibleNameRune(b.Name) {
+			return fmt.Errorf(
+				"%s: name must not contain control, formatting, private-use, surrogate or line/paragraph separator characters",
+				where)
+		}
+		if isBuiltinThemeName(b.Name) {
+			return fmt.Errorf(
+				"%s: name %q is reserved for a built-in theme", where, name)
 		}
 		if n := len(b.Colors); n < minThemeColors || n > maxThemeColors {
 			return fmt.Errorf(
@@ -163,6 +303,20 @@ func validateThemeBundles(bundles []ThemeBundleDTO) error {
 			return err
 		}
 		if err := validateNavIcons(b.NavIcons, where); err != nil {
+			return err
+		}
+		// backgrounds (T-081b) is an OPTIONAL outer-canvas tiled-image overlay —
+		// same avatar image gate again, validated in full when present, a no-op
+		// when absent.
+		if err := validateBackgrounds(b.Backgrounds, where); err != nil {
+			return err
+		}
+		// backgroundModes (T-081b) says HOW each of those images is laid down
+		// (tile / sides). Absent = every zone tiles, i.e. the behaviour that
+		// predates the field, so an older bundle is unaffected.
+		if err := validateBackgroundModes(
+			b.BackgroundModes, b.Backgrounds, where,
+		); err != nil {
 			return err
 		}
 	}

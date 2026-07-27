@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useI18n } from "../i18n";
+import { effortText } from "../i18n/compose";
 import { formatCost } from "../lib/cost";
 import { ModelEffortEditor } from "./ModelEffortEditor";
 import { Markdown } from "./Markdown";
@@ -145,7 +146,7 @@ export function AgentDetailPanel({
   // now the ONE format); an unknown/custom effort string renders verbatim.
   const effortLevelText =
     shownEffort === "low" || shownEffort === "medium" || shownEffort === "high"
-      ? t.mp.effortLevel(shownEffort)
+      ? effortText(t, shownEffort)
       : null;
 
   function startMeEdit() {

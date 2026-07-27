@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -501,14 +502,14 @@ func TestDisplayPrefsSettingRoundTrips(t *testing.T) {
 	// 200, echoed, durable — keyed on whitelisted message codes with zh/en langs.
 	worded := `{"custom_themes":[{"id":"worded","name":"Worded","colors":` +
 		`{"--color-bg":"#101018"},"wording":{"zh":{"nav.tasks":"待辦"},` +
-		`"en":{"profile.themeOffice":"Office Mode"}}}]}`
+		`"en":{"nav.office":"Office Mode"}}}]}`
 	if status, data = doJSON(t, "PATCH", srv.URL+"/api/settings", owner, worded); status != 200 {
 		t.Fatalf("legal wording overlay must 200: %d %v", status, data)
 	}
 	if got := wordingValue(t, data, 0, "zh", "nav.tasks"); got != "待辦" {
 		t.Fatalf("wording overlay must echo the zh override: %q", got)
 	}
-	if got := wordingValue(t, data, 0, "en", "profile.themeOffice"); got != "Office Mode" {
+	if got := wordingValue(t, data, 0, "en", "nav.office"); got != "Office Mode" {
 		t.Fatalf("wording overlay must echo the en override: %q", got)
 	}
 	if v, err := d.GetSetting(settingDisplayCustomThemes); err != nil || v == nil ||
@@ -516,15 +517,41 @@ func TestDisplayPrefsSettingRoundTrips(t *testing.T) {
 		t.Fatalf("wording overlay must be durable: %v %v", v, err)
 	}
 
-	// Every illegal wording overlay → 422, and none is ever stored: a code
-	// outside the whitelist, a language other than zh/en, an over-cap value, and
-	// a value carrying a control character (newline).
+	// A code outside the whitelist no longer fails the bundle (T-081b, owner
+	// ruling 2026-07-27): the patch is accepted, the unknown code is dropped,
+	// and the known code beside it takes effect.
+	unknownCode := `{"custom_themes":[{"id":"worded","name":"Worded","colors":` +
+		`{"--color-bg":"#101018"},"wording":{"zh":{"nav.tasks":"待辦",` +
+		`"profile.themeOffice":"精靈村","not.a.real.key":"x"}}}]}`
+	if status, data = doJSON(t, "PATCH", srv.URL+"/api/settings", owner, unknownCode); status != 200 {
+		t.Fatalf("an unknown wording code must not fail the bundle: %d %v", status, data)
+	}
+	if got := wordingValue(t, data, 0, "zh", "nav.tasks"); got != "待辦" {
+		t.Fatalf("the known wording code must still take effect: %q", got)
+	}
+	for _, dropped := range []string{"profile.themeOffice", "not.a.real.key"} {
+		if got := wordingValue(t, data, 0, "zh", dropped); got != "" {
+			t.Fatalf("the unknown wording code %q must be dropped: %q", dropped, got)
+		}
+	}
+	if v, err := d.GetSetting(settingDisplayCustomThemes); err != nil || v == nil ||
+		strings.Contains(*v, "profile.themeOffice") {
+		t.Fatalf("the unknown wording code must not be stored: %v %v", v, err)
+	}
+
+	// Every illegal wording overlay → 422, and none is ever stored: a language
+	// other than zh/en, an over-cap value, a value carrying a control character
+	// (newline), and an over-cap entry count of RAW submitted keys.
+	junk := make([]string, 0, maxWordingEntriesPerLang+1)
+	for i := 0; i <= maxWordingEntriesPerLang; i++ {
+		junk = append(junk, fmt.Sprintf(`"junk.key.%d":"x"`, i))
+	}
 	for _, bad := range []string{
-		`"wording":{"zh":{"not.a.real.key":"x"}}`,                           // non-whitelisted code
 		`"wording":{"xian":{"nav.tasks":"仙"}}`,                              // language not in {zh,en}
 		`"wording":{"zh":{"nav.tasks":"` + strings.Repeat("字", 201) + `"}}`, // over the 200-rune cap
 		`"wording":{"zh":{"nav.tasks":"a\nb"}}`,                             // control character (newline)
 		`"wording":{"zh":{"nav.tasks":"   "}}`,                              // empty after trimming
+		`"wording":{"zh":{` + strings.Join(junk, ",") + `}}`,                // over the per-language entry cap
 	} {
 		body := `{"custom_themes":[{"id":"w2","name":"W2","colors":{"--color-bg":"#111"},` + bad + `}]}`
 		if status, _ := doJSON(t, "PATCH", srv.URL+"/api/settings", owner, body); status != 422 {

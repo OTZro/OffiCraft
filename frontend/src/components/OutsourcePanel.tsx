@@ -133,7 +133,7 @@ export function OutsourcePanel({
    * (owner report 2026-07-14: 點 task id 連到該任務頁). */
   onOpenTask: (taskId: string) => void;
 }) {
-  const { t } = useI18n();
+  const { t, msg } = useI18n();
   // Badge suppression parity with MemberCard: the open, WATCHED conversation
   // consumes reads immediately, so its row never accumulates a badge — but a
   // backgrounded window genuinely accumulates unread and must show it.
@@ -201,7 +201,7 @@ export function OutsourcePanel({
                  * other name), mirroring the member card's name line. */}
                 <span className="outsource-row__line">
                   <span className="outsource-row__codename">
-                    {t.office.outsource.label(w.codename)}
+                    {msg.outsourceLabel(w.codename)}
                   </span>
                 </span>
                 {/* line 2 — ONE line (owner 2026-07-16, second ruling):

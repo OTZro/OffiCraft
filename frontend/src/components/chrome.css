@@ -20,6 +20,16 @@
    (22px), so they survive untouched and the chrome just breathes wider. The
    narrow default is the absence of the attribute, so nothing here can affect an
    install that never opted in. */
+/* T-081b: 寬版維持吃滿視窗（外區 0px）。本票一度依 owner 2026-07-27 的「寬版
+   左右兩邊還是要有一點外區」改成每側保留 48px，同日他看過實際效果後改回
+   ——「寬版好像真的看不出什麼，不然寬版就不要留白好了」。⇒ 最外層畫布（含
+   主題背景圖）成為**窄版限定**的一層，寬版看不到它。
+   ⚠️ 留著這段給下一個要加外區的人：外區**不能**只寫 calc(100% - 96px)。視窗在
+   720~1136px 這一段，窄版是吃滿的，該式會讓「寬版」算出比窄版更窄的內容欄——
+   一個名為「寬版」的偏好反而讓內容變窄。要加就得寫成
+   max(1040px, calc(100% - 96px))，把「寬版永遠不得比窄版窄」這個不變式寫進算式
+   裡（不是靠斷點湊）。同理外區要用固定值而非百分比：百分比會讓螢幕愈大外區愈寬，
+   等於退回窄版行為。 */
 :root[data-layout="wide"] :is(.topbar, .nav-tabs, .app__main) {
   max-width: none;
 }
@@ -29,6 +39,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 14px 22px 10px;
+  background: var(--color-topbar-bg);
 }
 
 .topbar__brand {
@@ -187,6 +198,7 @@
 .nav-tabs {
   display: flex;
   padding: 2px 22px 12px;
+  background: var(--color-nav-bg);
 }
 
 /* segmented control frame around the tabs */
@@ -243,7 +255,9 @@
 }
 
 /* 等我回覆 waiting-count badge on its nav tab — the SAME red count pill recipe
- * as the roster's .member-card__unread (>99 → "99+"; count 0 not rendered). */
+ * as the roster's .member-card__unread (>99 → "99+"; count 0 not rendered).
+ * The fill is --color-danger-badge, not --color-danger: white on the latter is
+ * 2.85:1, below AA. */
 .nav-tab__badge {
   flex: none;
   min-width: 18px;
@@ -253,17 +267,26 @@
   align-items: center;
   justify-content: center;
   border-radius: 9px;
-  background: var(--color-danger);
-  color: var(--color-overlay);
+  background: var(--color-danger-badge);
+  color: var(--color-on-danger);
   font-size: 11px;
   font-weight: 700;
   line-height: 1;
+  /* 1px ring in the PAGE colour (T-081b review round 3, SHOULD-4). The pill's
+   * 3:1 "reads as a pill" margin was measured against --color-bg, but the pill
+   * does not sit on --color-bg: on an ACTIVE nav tab it sits on --color-indigo
+   * (2.74:1) and on a SELECTED member card on --color-card (3.26:1). No colour
+   * exists that clears 4.5:1 against white AND 3:1 against all three, so the
+   * ring separates the pill from whatever is behind it instead — the measured
+   * background becomes the ring, which is --color-bg everywhere. */
+  outline: 1px solid var(--color-bg);
 }
 
 .app__main {
   flex: 1;
   min-height: 0;
   padding: 4px 22px 20px;
+  background: var(--color-main-bg);
 }
 
 @media (max-width: 720px) {

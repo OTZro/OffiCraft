@@ -19,6 +19,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, fireEvent, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
+import { makeMessages } from "../i18n/compose";
 import { SettingsPage } from "./SettingsPage";
 import { api } from "../api";
 import { __resetMock, __setMockMemberOnline } from "../api/mock";
@@ -269,7 +270,7 @@ describe("SettingsPage · 角色誌 刪除 (M2-2)", () => {
     expect(modal.getAttribute("role")).toBe("dialog");
     expect(modal.getAttribute("aria-modal")).toBe("true");
     expect(
-      utils.getByText(s.deleteRoleConfirm("研究員"))
+      utils.getByText(makeMessages(zh, "zh").deleteRoleConfirm("研究員"))
     ).toBeTruthy();
     expect(utils.getByTestId(`role-delete-${custom.key}`)).toBeTruthy();
 

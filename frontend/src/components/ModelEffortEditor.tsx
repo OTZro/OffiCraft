@@ -17,6 +17,7 @@
 // PATCH); this component only renders the two fields and reports changes.
 
 import { useI18n } from "../i18n";
+import { effortText } from "../i18n/compose";
 import type { Effort } from "../types";
 import "./model-effort-editor.css";
 
@@ -144,7 +145,7 @@ export function ModelEffortEditor({
       >
         {EFFORTS.map((e) => (
           <option key={e} value={e}>
-            {t.mp.effortLevel(e)} ({e})
+            {effortText(t, e)} ({e})
           </option>
         ))}
       </select>

@@ -83,6 +83,10 @@ const TOKEN_META: Record<string, TokenMeta> = {
     label: { zh: "標誌漸層迄", en: "Logo gradient to" },
   },
   "--color-select": { group: "brand", label: { zh: "選取", en: "Selection" } },
+  "--color-knob": {
+    group: "brand",
+    label: { zh: "開關滑塊", en: "Switch knob" },
+  },
   "--color-switch-on": {
     group: "brand",
     label: { zh: "開關開啟", en: "Switch on" },
@@ -108,6 +112,19 @@ const TOKEN_META: Record<string, TokenMeta> = {
     group: "background",
     label: { zh: "頁面背景", en: "Page background" },
   },
+  // T-081b 版面分區:這三槽預設跟隨頁面背景,填了才分層。
+  "--color-topbar-bg": {
+    group: "background",
+    label: { zh: "頂列背景", en: "Top bar background" },
+  },
+  "--color-nav-bg": {
+    group: "background",
+    label: { zh: "頁籤列背景", en: "Nav bar background" },
+  },
+  "--color-main-bg": {
+    group: "background",
+    label: { zh: "內容區背景", en: "Content background" },
+  },
   "--color-card": {
     group: "background",
     label: { zh: "卡片背景", en: "Card background" },
@@ -128,6 +145,19 @@ const TOKEN_META: Record<string, TokenMeta> = {
     group: "background",
     label: { zh: "陰影", en: "Shadow" },
   },
+  // T-081b:自 --color-shadow / --color-overlay / --color-indigo 拆出的單一用途槽。
+  "--color-surface-sunken": {
+    group: "background",
+    label: { zh: "下沉表面", en: "Sunken surface" },
+  },
+  "--color-backdrop": {
+    group: "background",
+    label: { zh: "燈箱遮罩", en: "Lightbox backdrop" },
+  },
+  "--color-scrollbar-thumb": {
+    group: "background",
+    label: { zh: "捲軸拇指", en: "Scrollbar thumb" },
+  },
 
   "--color-text": { group: "text", label: { zh: "內文", en: "Body text" } },
   "--color-text-muted": {
@@ -146,6 +176,20 @@ const TOKEN_META: Record<string, TokenMeta> = {
     group: "text",
     label: { zh: "警告上文字", en: "Text on warning" },
   },
+  // T-081b:同 --color-on-accent / --color-on-warn 一族 —— 壓在某個底色上的前景,
+  // 對比對象是那個底色而不是頁面底色。
+  "--color-on-backdrop": {
+    group: "text",
+    label: { zh: "遮罩上文字", en: "Text on backdrop" },
+  },
+  "--color-on-danger": {
+    group: "text",
+    label: { zh: "危險上文字", en: "Text on danger" },
+  },
+  "--color-on-indigo": {
+    group: "text",
+    label: { zh: "靛藍上文字", en: "Text on indigo" },
+  },
   "--color-task-id": {
     group: "text",
     label: { zh: "任務編號", en: "Task id" },
@@ -157,6 +201,10 @@ const TOKEN_META: Record<string, TokenMeta> = {
 
   "--color-success": { group: "status", label: { zh: "成功", en: "Success" } },
   "--color-danger": { group: "status", label: { zh: "危險", en: "Danger" } },
+  "--color-danger-badge": {
+    group: "status",
+    label: { zh: "未讀徽章底", en: "Unread badge fill" },
+  },
   "--color-danger-soft": {
     group: "status",
     label: { zh: "危險(淡)", en: "Danger (soft)" },
@@ -316,6 +364,36 @@ export function groupLabel(group: TokenGroup, language: "zh" | "en"): string {
  * field). Accepts #rgb / #rgba / #rrggbb / #rrggbbaa — alpha is dropped for the
  * swatch only (the text field keeps the full value).
  */
+/** The alpha of a colour value as a 0-100 percentage, or null when the value is
+ * not one this editor can put an opacity slider on (T-081b). `#RRGGBBAA` and
+ * `#RGBA` carry it in the last channel; a plain hex is fully opaque. rgb()/hsl()
+ * are left alone — their alpha lives in a slash/4th argument this editor does
+ * not rewrite, so the slider hides rather than silently reformatting them. */
+export function alphaPercent(value: string): number | null {
+  const v = value.trim().toLowerCase();
+  const m = /^#([0-9a-f]{3,8})$/.exec(v);
+  if (!m) return null;
+  const h = m[1];
+  if (h.length === 4) return Math.round((parseInt(h[3] + h[3], 16) / 255) * 100);
+  if (h.length === 8) return Math.round((parseInt(h.slice(6, 8), 16) / 255) * 100);
+  if (h.length === 3 || h.length === 6) return 100;
+  return null;
+}
+
+/** Rewrite a colour value's alpha (0-100). Returns the 6-digit hex at 100% (so a
+ * fully opaque colour stays the plain form it was authored in) and #RRGGBBAA
+ * below that. Null when the value has no editable alpha — see alphaPercent. */
+export function withAlphaPercent(value: string, pct: number): string | null {
+  const base = toHex6(value);
+  if (base === null || alphaPercent(value) === null) return null;
+  const clamped = Math.max(0, Math.min(100, Math.round(pct)));
+  if (clamped === 100) return base;
+  const aa = Math.round((clamped / 100) * 255)
+    .toString(16)
+    .padStart(2, "0");
+  return `${base}${aa}`;
+}
+
 export function toHex6(value: string): string | null {
   const v = value.trim().toLowerCase();
   const m = /^#([0-9a-f]{3,8})$/.exec(v);

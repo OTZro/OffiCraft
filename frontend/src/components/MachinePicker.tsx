@@ -33,7 +33,7 @@ export function MachinePicker({
   onConfirm,
   onCancel,
 }: MachinePickerProps) {
-  const { t } = useI18n();
+  const { t, msg } = useI18n();
   const p = t.machine.picker;
 
   const online = machines.filter((m) => m.online);
@@ -76,7 +76,7 @@ export function MachinePicker({
             ))}
             {boundOffline && (
               <option value={boundOffline.machineId} disabled>
-                {p.offlineOption(boundOffline.displayName)}
+                {msg.machineOfflineOption(boundOffline.displayName)}
               </option>
             )}
           </select>

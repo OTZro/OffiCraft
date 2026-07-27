@@ -379,6 +379,15 @@ echo "[ci]   tsc --noEmit (frontend typecheck)"
 # un-restyled patch. This fails on any raw colour literal outside theme.css.
 echo "[ci]   css colour-token lint (no raw literals outside theme.css — T-16a1)"
 (cd "$FE" && "$NPM" run --silent lint:tokens)
+# 4b0b. Token ROLE lint (T-081b). Three tokens each used to carry two
+# semantically opposite jobs, so no single value satisfied both and every light
+# theme broke on the same wall; T-081b split the second job of each into its own
+# token. A later change can silently route a new call site back through the
+# original token, and that re-merge is INVISIBLE in the built-in dark theme
+# (where both jobs happen to agree) — it would ship and break only the users on
+# a light theme. This pins the partition so the re-merge fails here instead.
+echo "[ci]   token role lint (the T-081b splits stay split — T-081b)"
+(cd "$FE" && "$NPM" run --silent lint:token-roles)
 # 4b1. Theme-token whitelist drift (T-16a1 P2). styles/theme.css is the single
 # token contract; the user-theme validators (client lib/themeBundle.ts + server
 # theme_bundle.go) read a GENERATED whitelist of its --color-* names. Regenerate

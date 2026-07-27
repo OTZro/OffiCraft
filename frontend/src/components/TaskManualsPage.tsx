@@ -34,6 +34,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n";
+import { effortText } from "../i18n/compose";
 import type { Effort, Member } from "../types";
 import type {
   ManualAssigneeView,
@@ -81,7 +82,7 @@ export function TaskManualsList({
   onCreate: (displayName: string) => Promise<unknown>;
   onDelete: (typeKey: string) => Promise<void>;
 }) {
-  const { t } = useI18n();
+  const { t, msg } = useI18n();
 
   // Inline create row (the 角色誌 新增 pattern): one DISPLAY-NAME field
   // (T-fa76 — the id is the system's, the text is the human's; the server
@@ -270,7 +271,7 @@ export function TaskManualsList({
           confirmTestId="manual-delete-confirm-btn"
           danger
           // The modal names the type by its DISPLAY face (fallback = key).
-          body={t.settings.deleteManualConfirm(
+          body={msg.deleteManualConfirm(
             manuals.find((m) => m.typeKey === confirmKey)?.displayName ||
               confirmKey
           )}
@@ -930,7 +931,7 @@ function AssigneeCard({
       return `${t.settings.assigneeKindMember} · ${m?.name ?? a.memberId}`;
     }
     const effort =
-      t.mp.effortLevel((a.effort || "medium") as Effort) ?? a.effort;
+      effortText(t, (a.effort || "medium") as Effort) ?? a.effort;
     const model = a.model || "—";
     const machine = a.machine
       ? machineName(a.machine)
@@ -1135,7 +1136,7 @@ function AssigneeCard({
                 <Segmented
                   options={EFFORTS.map((e) => ({
                     value: e,
-                    label: t.mp.effortLevel(e),
+                    label: effortText(t, e),
                   }))}
                   value={effortDraft as (typeof EFFORTS)[number]}
                   onPick={(v) => setEffortDraft(v)}

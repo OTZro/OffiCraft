@@ -1,0 +1,7 @@
+{"file":"01-wide-1440-office.png","note":"寬版 1440 · 內建辦公室主題 · 監控頁","viewport":1440,"column":1440,"outerPerSide":0,"layout":"wide","scrollWidth":1440,"clientWidth":1440,"hScroll":false}
+{"file":"02-narrow-1440-office.png","note":"窄版 1440(預設版面)· 同一畫面對照","viewport":1440,"column":1040,"outerPerSide":200,"layout":"(none)","scrollWidth":1440,"clientWidth":1440,"hScroll":false}
+{"file":"03-wide-1280-office.png","note":"寬版 1280","viewport":1280,"column":1280,"outerPerSide":0,"layout":"wide","scrollWidth":1280,"clientWidth":1280,"hScroll":false}
+{"file":"04-wide-1040-office.png","note":"寬版 1040","viewport":1040,"column":1040,"outerPerSide":0,"layout":"wide","scrollWidth":1040,"clientWidth":1040,"hScroll":false}
+{"file":"05-narrow-480-office.png","note":"窄版 480(手機寬度)","viewport":480,"column":480,"outerPerSide":0,"layout":"(none)","scrollWidth":480,"clientWidth":480,"hScroll":false}
+{"file":"06-narrow-375-office.png","note":"窄版 375(手機寬度)","viewport":375,"column":375,"outerPerSide":0,"layout":"(none)","scrollWidth":375,"clientWidth":375,"hScroll":false}
+{"file":"11-smurf-wide-1440.png","note":"小精靈村主題包 · 寬版 1440","viewport":1440,"column":1440,"outerPerSide":0,"layout":"wide","scrollWidth":1440,"clientWidth":1440,"hScroll":false,"importWarning":"已匯入,但有1個用詞代碼不認得、已略過:profile.themeOffice"}

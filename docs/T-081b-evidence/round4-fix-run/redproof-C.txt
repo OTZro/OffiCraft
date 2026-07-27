@@ -1,0 +1,65 @@
+=================== C-1  measurement narrowed back to 'theme.css + literal :root'
+   × check-token-roles > fails when a higher-specificity :root:root overrides the badge fill 92ms
+     → [token-roles] ok — 3 split tokens keep to one role each; 7 carved-out tokens defined independently and in use; BUILT-IN theme's unread badge 4.52:1 vs --color-on-danger / 3.76:1 vs --color-bg (its 1px ring), both pinned at the 3 pill call sites. A theme pack may re-value --color-danger-badge, so these numbers describe the built-in theme only.
+: expected '[token-roles] ok — 3 split tokens kee…' to match /--color-danger-badge vs --color-on-da…/
+   × check-token-roles > fails when a later stylesheet's :root overrides the badge fill 89ms
+     → [token-roles] ok — 3 split tokens keep to one role each; 7 carved-out tokens defined independently and in use; BUILT-IN theme's unread badge 4.52:1 vs --color-on-danger / 3.76:1 vs --color-bg (its 1px ring), both pinned at the 3 pill call sites. A theme pack may re-value --color-danger-badge, so these numbers describe the built-in theme only.
+: expected '[token-roles] ok — 3 split tokens kee…' to match /--color-danger-badge vs --color-on-da…/
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+: expected '[token-roles] ok — 3 split tokens kee…' to match /--color-danger-badge vs --color-on-da…/
+- Expected: 
++ Received: 
+    125|       edit(THEME, (css) => `${css}\n:root:root { --color-danger-badge:…
+    126|     );
+    127|     expect(out, out).toMatch(/--color-danger-badge vs --color-on-dange…
+       |                      ^
+    128|     expect(code).toBe(1);
+    129|   });
+: expected '[token-roles] ok — 3 split tokens kee…' to match /--color-danger-badge vs --color-on-da…/
+- Expected: 
++ Received: 
+    136|       edit("styles/global.css", (css) => `${css}\n:root { --color-dang…
+=================== C-2  badge rules matched by the old split(' ').at(-1) again
+   × check-token-roles > fails when a compound selector re-paints a badge 91ms
+     → [token-roles] ok — 3 split tokens keep to one role each; 7 carved-out tokens defined independently and in use; BUILT-IN theme's unread badge 4.52:1 vs --color-on-danger / 3.76:1 vs --color-bg (its 1px ring), both pinned at the 3 pill call sites. A theme pack may re-value --color-danger-badge, so these numbers describe the built-in theme only.
+: expected '[token-roles] ok — 3 split tokens kee…' to match /\.nav-tab__badge's background does no…/
+   × check-token-roles > fails when a selector LIST re-paints a badge 84ms
+     → [token-roles] ok — 3 split tokens keep to one role each; 7 carved-out tokens defined independently and in use; BUILT-IN theme's unread badge 4.52:1 vs --color-on-danger / 3.76:1 vs --color-bg (its 1px ring), both pinned at the 3 pill call sites. A theme pack may re-value --color-danger-badge, so these numbers describe the built-in theme only.
+: expected '[token-roles] ok — 3 split tokens kee…' to match /\.nav-tab__badge's background does no…/
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+: expected '[token-roles] ok — 3 split tokens kee…' to match /\.nav-tab__badge's background does no…/
+- Expected: 
++ Received: 
+    146|       edit(CHROME, (css) => `${css}\n.nav-tab__badge.is-hot { backgrou…
+    147|     );
+    148|     expect(out, out).toMatch(
+       |                      ^
+    149|       /\.nav-tab__badge's background does not use --color-danger-badge/
+    150|     );
+: expected '[token-roles] ok — 3 split tokens kee…' to match /\.nav-tab__badge's background does no…/
+- Expected: 
++ Received: 
+    157|       edit(CHROME, (css) => `${css}\n.nav-tab__badge, .zz { background…
+=================== C-3  property families collapsed back to the shorthand only
+   × check-token-roles > fails when the outline-color longhand removes the badge's ring 95ms
+     → [token-roles] ok — 3 split tokens keep to one role each; 7 carved-out tokens defined independently and in use; BUILT-IN theme's unread badge 4.52:1 vs --color-on-danger / 3.76:1 vs --color-bg (its 1px ring), both pinned at the 3 pill call sites. A theme pack may re-value --color-danger-badge, so these numbers describe the built-in theme only.
+: expected '[token-roles] ok — 3 split tokens kee…' to match /\.nav-tab__badge's outline-color does…/
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+: expected '[token-roles] ok — 3 split tokens kee…' to match /\.nav-tab__badge's outline-color does…/
+- Expected: 
++ Received: 
+    169|       edit(CHROME, (css) => `${css}\n.nav-tab__badge { outline-color: …
+    170|     );
+    171|     expect(out, out).toMatch(
+       |                      ^
+    172|       /\.nav-tab__badge's outline-color does not use --color-bg/
+    173|     );
+      Tests  1 failed | 11 passed (12)
+   Start at  20:20:32
+   Duration  1.59s (transform 20ms, setup 11ms, collect 10ms, tests 1.24s, environment 179ms, prepare 30ms)
+=================== RESTORED — expect all green
+      Tests  12 passed (12)
+   Start at  20:20:33
+   Duration  1.58s (transform 20ms, setup 12ms, collect 10ms, tests 1.23s, environment 182ms, prepare 22ms)
+[token-roles] ok — 3 split tokens keep to one role each; 7 carved-out tokens defined independently and in use; BUILT-IN theme's unread badge 4.52:1 vs --color-on-danger / 3.76:1 vs --color-bg (its 1px ring), both pinned at the 3 pill call sites. A theme pack may re-value --color-danger-badge, so these numbers describe the built-in theme only.
+guard exit=0

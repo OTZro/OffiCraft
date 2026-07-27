@@ -5,7 +5,10 @@
 // same validator the server uses (lib/themeBundle.ts). Both directions go
 // through the one grammar, so an exported bundle re-imports without loss.
 
-import { THEME_COLOR_TOKENS } from "../styles/themeTokens.generated";
+import {
+  THEME_ALIAS_DEFAULT_TOKENS,
+  THEME_COLOR_TOKENS,
+} from "../styles/themeTokens.generated";
 import {
   isValidColorValue,
   validateThemeBundle,
@@ -13,21 +16,48 @@ import {
   type ThemeBundle,
 } from "./themeBundle";
 
+/** True when `tok` is an alias-default token (theme.css defines it as a bare
+ * `var(--other)`) that nobody has moved off its alias — i.e. it resolves to
+ * exactly what the token it defers to resolves to.
+ *
+ * WHY IT MATTERS (T-081b): the zone tokens --color-topbar-bg / --color-nav-bg /
+ * --color-main-bg default to `var(--color-bg)` so an untouched theme keeps one
+ * flat backdrop and starts layering only once someone picks a zone colour.
+ * getComputedStyle RESOLVES that var(), so a naive export bakes the built-in
+ * #191c24 into all three — and the seeded-from-office theme every new custom
+ * theme starts as would have its zones pinned forever: editing --color-bg would
+ * move the body and nothing else (in the wide layout, where the gutter is 0, it
+ * would move nothing visible at all). Omitting an unset alias keeps the
+ * deferral, while a zone the owner actually chose still differs from --color-bg
+ * and is exported normally. */
+function isUnsetAliasDefault(
+  tok: string,
+  resolved: string,
+  read: (t: string) => string
+): boolean {
+  const target = THEME_ALIAS_DEFAULT_TOKENS[tok];
+  return target !== undefined && read(target) === resolved;
+}
+
 /** Read the resolved value of each --color-* token off `el`'s computed style
  * and pack it into a bundle. Only tokens whose resolved value is a concrete
  * colour (per the shared grammar) are kept, so the result always re-imports
  * cleanly — a token that resolves to an unresolved color-mix()/var() is skipped
- * rather than poisoning the bundle. */
+ * rather than poisoning the bundle. Alias-default tokens still sitting on their
+ * alias are skipped too (see isUnsetAliasDefault). */
 export function exportComputedTheme(
   id: string,
   name: string,
   el: Element = document.documentElement
 ): ThemeBundle {
   const cs = getComputedStyle(el);
+  const read = (t: string) => cs.getPropertyValue(t).trim();
   const colors: Record<string, string> = {};
   for (const tok of THEME_COLOR_TOKENS) {
-    const v = cs.getPropertyValue(tok).trim();
-    if (v && isValidColorValue(v)) colors[tok] = v;
+    const v = read(tok);
+    if (!v || !isValidColorValue(v)) continue;
+    if (isUnsetAliasDefault(tok, v, read)) continue;
+    colors[tok] = v;
   }
   return { id, name, colors };
 }
@@ -71,23 +101,28 @@ export function nextCustomThemeId(existing: Iterable<string>): string {
   }
 }
 
-/** Parse and validate imported bundle text. Returns the normalized bundle or a
- * human error. Never mutates anything — the caller decides whether to save. */
+/** Parse and validate imported bundle text. Returns the normalized bundle plus
+ * `skippedWording` — the unrecognised message codes the validator dropped — or a
+ * human error. A dropped code NEVER fails the import (owner ruling 2026-07-27);
+ * it is handed back so the import UI can warn about what went inert. */
 export function parseImportedBundle(
   text: string
-): { bundle: ThemeBundle } | { error: string } {
+): { bundle: ThemeBundle; skippedWording: string[] } | { error: string } {
   let data: unknown;
   try {
     data = JSON.parse(text);
   } catch {
     return { error: "不是有效的 JSON" };
   }
-  const err = validateThemeBundle(data);
+  const skippedWording: string[] = [];
+  const err = validateThemeBundle(data, "theme", skippedWording);
   if (err) return { error: err };
   const b = data as ThemeBundle;
   // Carry the optional wording overlay through (T-16a1 P3) — it has already
   // passed the shared validator; dropping it would silently lose an imported
-  // theme's 用詞 pack. `colors`-only bundles keep `wording` absent.
+  // theme's 用詞 pack. `colors`-only bundles keep `wording` absent. The
+  // validator has already removed any code outside the whitelist (T-081b), so
+  // what is carried here is exactly what will be stored and re-exported.
   const bundle: ThemeBundle = { id: b.id, name: b.name, colors: b.colors };
   if (b.wording !== undefined) bundle.wording = b.wording;
   // Carry the optional font overlay through (T-16a1 P4) — already validated by
@@ -104,7 +139,16 @@ export function parseImportedBundle(
   // bundle by design, like avatars).
   if (b.logo !== undefined) bundle.logo = b.logo;
   if (b.navIcons !== undefined) bundle.navIcons = b.navIcons;
-  return { bundle };
+  // Carry the optional outer-canvas background image through (T-081b). It rides
+  // its OWN field rather than a --color-* token deliberately: its value is
+  // url("data:...") — not a colour — so a token would be dropped on the floor by
+  // exportComputedTheme's isValidColorValue filter and rejected by the bundle's
+  // colour grammar. Living beside logo/avatars, it round-trips like they do.
+  if (b.backgrounds !== undefined) bundle.backgrounds = b.backgrounds;
+  // …and its display mode beside it (T-081b) — dropping it would round-trip a
+  // "sides" theme back as a tiled one, i.e. silently change how it looks.
+  if (b.backgroundModes !== undefined) bundle.backgroundModes = b.backgroundModes;
+  return { bundle, skippedWording };
 }
 
 /** Serialize a bundle to pretty JSON (download / clipboard payload). */

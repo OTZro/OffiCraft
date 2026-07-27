@@ -4,13 +4,23 @@
 // overlay editor round-trip.
 
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { render, fireEvent, within, act } from "@testing-library/react";
+import { THEME_COLOR_TOKENS } from "../styles/themeTokens.generated";
+import { MESSAGE_KEYS } from "../i18n/messageKeys.generated";
+import { validateThemeBundle } from "../lib/themeBundle";
 import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
+import { makeMessages } from "../i18n/compose";
 import { ThemeSettings } from "./ThemeSettings";
+import { tokenMeta } from "../lib/themeTokenMeta";
 import { __resetMock } from "../api/mock";
 import { api } from "../api";
 import { setToken, clearToken } from "../api/auth";
+
+const SENTINEL = "偽造";
 
 const p = zh.profile;
 const s = zh.settings;
@@ -61,6 +71,205 @@ describe("ThemeSettings · import", () => {
     expect(await utils.findByText("午夜藍")).toBeTruthy();
     const srv = await api.getServerSettings();
     expect(srv.customThemes.map((b) => b.id)).toContain("midnight");
+
+    // Each row says WHICH KIND of theme it is, and the 內建 marker sits on the
+    // built-in row only — otherwise an imported pack is indistinguishable from
+    // the shipped theme (and a pack may not claim its name either).
+    const rows = Array.from(utils.container.querySelectorAll(".ts-row"));
+    const rowOf = (name: string) =>
+      rows.find((r) => r.textContent?.includes(name));
+    expect(rowOf(zh.themeIdentity.office)?.textContent).toContain(
+      zh.themeMarkers.builtinGroup
+    );
+    expect(rowOf("午夜藍")?.textContent).toContain(zh.themeMarkers.customGroup);
+    expect(rowOf("午夜藍")?.textContent).not.toContain(
+      zh.themeMarkers.builtinGroup
+    );
+  });
+
+  it("puts the built-in and the custom rows in separate labelled groups", async () => {
+    // Round 4 (BLOCKER-A): the row CHIP alone was forgeable — a pack controlled
+    // its text (settings.themeBuiltinTag was overridable), its colour
+    // (--color-seg-fill / --color-icon-violet-bg) and the row's own name, so two
+    // identical 「辦公室 [內建]」 rows could be produced. The grouping is what a
+    // theme cannot reach: it is structure, and its labels come from the
+    // non-overridable themeMarkers subtree — the same source the quick picker's
+    // <optgroup> uses.
+    setToken("owner-token");
+    const utils = await renderManage();
+    await importBundle(utils, {
+      id: "midnight",
+      name: "午夜藍",
+      colors: { "--color-accent": "#0b1020" },
+    });
+    await utils.findByText("午夜藍");
+
+    const groupOf = (name: string) => {
+      const row = Array.from(utils.container.querySelectorAll(".ts-row")).find(
+        (r) => r.textContent?.includes(name)
+      );
+      const list = row?.closest(".ts-list");
+      const head = list?.querySelector(".ts-group-head");
+      return { head: head?.textContent, labelled: list?.getAttribute("aria-labelledby"), id: head?.id };
+    };
+
+    const builtin = groupOf(zh.themeIdentity.office);
+    expect(builtin.head).toBe(zh.themeMarkers.builtinGroup);
+    expect(builtin.labelled).toBe(builtin.id);
+
+    const custom = groupOf("午夜藍");
+    expect(custom.head).toBe(zh.themeMarkers.customGroup);
+    expect(custom.labelled).toBe(custom.id);
+
+    // Two DIFFERENT groups — a custom row never lands under the built-in
+    // heading, whatever it is called.
+    expect(custom.id).not.toBe(builtin.id);
+  });
+
+  it("cannot be made to show two identical built-in rows by a theme's wording, colours or name", async () => {
+    // The whole round-3 BLOCKER-2 / round-4 BLOCKER-A recipe in one go: forge
+    // the marker TEXT through `wording`, forge the marker COLOUR through the
+    // tokens the chips used to read, and name the pack so it renders as the
+    // built-in.
+    setToken("owner-token");
+    const utils = await renderManage();
+    await importBundle(utils, {
+      id: "forge",
+      name: `${zh.themeIdentity.office}(${zh.themeMarkers.builtinGroup})`,
+      colors: {
+        "--color-seg-fill": "#8b7ae8",
+        "--color-icon-violet-bg": "#8b7ae8",
+      },
+      // EVERY overridable message code re-valued to a sentinel, plus a direct
+      // shot at the marker subtree. If the headings or the chips read any key a
+      // `wording` overlay can reach, the sentinel shows up on screen.
+      wording: {
+        zh: {
+          ...Object.fromEntries(MESSAGE_KEYS.map((k) => [k, SENTINEL])),
+          "themeMarkers.builtinGroup": zh.themeMarkers.customGroup,
+          "themeMarkers.customGroup": zh.themeMarkers.builtinGroup,
+        },
+      },
+    });
+    const forged = await utils.findByText(
+      `${zh.themeIdentity.office}(${zh.themeMarkers.builtinGroup})`
+    );
+    // Make the forging pack the ACTIVE theme, so its wording overlay is live.
+    await act(async () => {
+      fireEvent.click(forged);
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const chips = Array.from(utils.container.querySelectorAll(".ts-tag"));
+    expect(chips.length).toBe(2);
+    expect(chips[0].textContent).toBe(zh.themeMarkers.builtinGroup);
+    expect(chips[1].textContent).toBe(zh.themeMarkers.customGroup);
+    for (const chip of chips) expect(chip.textContent).not.toBe(SENTINEL);
+
+    // The headings are UNCHANGED — the wording overlay was dropped, so 內建 still
+    // means 內建 …
+    expect(utils.getByTestId("ts-group-builtin").textContent).toBe(
+      zh.themeMarkers.builtinGroup
+    );
+    expect(utils.getByTestId("ts-group-custom").textContent).toBe(
+      zh.themeMarkers.customGroup
+    );
+    // … and the forged row sits under 自訂, not under 內建.
+    expect(forged.closest(".ts-list")?.querySelector(".ts-group-head")?.textContent).toBe(
+      zh.themeMarkers.customGroup
+    );
+
+    // The chips AND the group headings draw their colour from the
+    // non-overridable slots, so the tokens a pack can re-value cannot reach
+    // either. The heading was the gap (round 4 recheck, NIT-1): it read the
+    // pack-settable --color-text-muted, so a pack could set that to the page
+    // colour and make BOTH 內建/自訂 headings disappear.
+    const css = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "theme-settings.css"),
+      "utf8"
+    );
+    const blockOf = (selector: string) => {
+      const at = css.indexOf(`${selector} {`);
+      expect(at, selector).toBeGreaterThan(-1);
+      return css.slice(at, css.indexOf("}", at) + 1);
+    };
+    const marked = [".ts-tag", ".ts-tag--custom", ".ts-group-head"]
+      .map(blockOf)
+      .join("\n");
+    for (const token of [
+      "--color-seg-fill",
+      "--color-icon-violet-bg",
+      "--color-bg",
+      "--color-text",
+      "--color-text-muted",
+    ]) {
+      expect(marked, marked).not.toContain(`var(${token})`);
+    }
+    for (const token of marked.match(/var\(\s*(--[\w-]+)/g) ?? []) {
+      expect(token.replace(/var\(\s*/, ""), marked).toMatch(/^--color-marker-/);
+    }
+  });
+
+  it("keeps the marker colour slots out of the pack-settable token whitelist", async () => {
+    // The colour half of BLOCKER-A. --color-marker-* is excluded by NAME at the
+    // generator, so a bundle naming one is not a theme colour token at all.
+    for (const token of THEME_COLOR_TOKENS) {
+      expect(token.startsWith("--color-marker-")).toBe(false);
+    }
+    expect(
+      validateThemeBundle({
+        id: "forge",
+        name: "Forge",
+        colors: { "--color-marker-custom": "#6076ba" },
+      })
+    ).toMatch(/is not a theme colour token/);
+  });
+
+  it("imports a pack with unrecognised wording codes and warns which were skipped", async () => {
+    setToken("owner-token");
+    const utils = await renderManage();
+    await importBundle(utils, {
+      id: "elfvillage",
+      name: "精靈村",
+      colors: { "--color-accent": "#0b1020" },
+      wording: {
+        zh: { "nav.tasks": "任務榜", "profile.themeOffice": "精靈村", "typo.not.a.key": "x" },
+      },
+    });
+    // The import SUCCEEDED — the pack is listed and landed on the server.
+    expect(await utils.findByText("精靈村")).toBeTruthy();
+    const srv = await api.getServerSettings();
+    expect(srv.customThemes.map((b) => b.id)).toContain("elfvillage");
+    // …and the recognised override survived while the unknown ones did not.
+    expect(srv.customThemes[0].wording).toEqual({ zh: { "nav.tasks": "任務榜" } });
+    // …and the drop is named on screen instead of being silent.
+    expect(utils.getByTestId("theme-import-skipped").textContent).toBe(
+      makeMessages(zh, "zh").themeImportSkipped(2, [
+        "profile.themeOffice",
+        "typo.not.a.key",
+      ])
+    );
+  });
+
+  it("names only the first few skipped codes and lets the count carry the rest", async () => {
+    setToken("owner-token");
+    const utils = await renderManage();
+    const junk: Record<string, string> = {};
+    for (let i = 1; i <= 30; i++) junk[`junk.key.${i}`] = "x";
+    await importBundle(utils, {
+      id: "noisy",
+      name: "吵雜",
+      colors: { "--color-accent": "#0b1020" },
+      wording: { zh: junk },
+    });
+    expect(await utils.findByText("吵雜")).toBeTruthy();
+    expect(utils.getByTestId("theme-import-skipped").textContent).toBe(
+      makeMessages(zh, "zh").themeImportSkipped(30, [
+        "junk.key.1",
+        "junk.key.2",
+        "junk.key.3",
+      ])
+    );
   });
 
   it("blocks an injection-shaped bundle inline and never reaches the server", async () => {
@@ -71,6 +280,7 @@ describe("ThemeSettings · import", () => {
       colors: { "--color-bg": "red; } body { background: url(x)" },
     });
     expect(utils.getByLabelText(p.themeImportTitle)).toBeTruthy();
+    expect(utils.container.querySelector(".set-error")).toBeTruthy();
     const srv = await api.getServerSettings();
     expect(srv.customThemes).toHaveLength(0);
   });
@@ -140,6 +350,152 @@ describe("ThemeSettings · wording overlay", () => {
     const b = srv.customThemes.find((x) => x.id === "midnight");
     expect(b?.wording?.zh?.["common.apply"]).toBe("套用替代");
   });
+
+  it("keeps the boundary spaces of a sentence-fragment override", async () => {
+    // Several codes T-081b made overridable are sentence FRAGMENTS whose
+    // leading/trailing space is load-bearing: uninstallWarnBody2 is 「」上還有 」
+    // and Body3 opens with a space, so the composed sentence reads
+    // 「Alpha」上還有 3 位成員…. Trimming what the owner typed would make the
+    // product's own editor render 「上還有3位成員」 — the editor corrupting the
+    // very strings the ticket just opened up.
+    setToken("owner-token");
+    const utils = await renderManage();
+    await importBundle(utils, {
+      id: "midnight",
+      name: "午夜藍",
+      colors: { "--color-accent": "#0b1020" },
+    });
+    fireEvent.click(await utils.findByLabelText(`${p.themeEdit} 午夜藍`));
+
+    fireEvent.change(utils.getByLabelText(s.themeWordingSearch), {
+      target: { value: "uninstallWarnBody2" },
+    });
+    const list = utils.container.querySelector(
+      ".ts-wording-list"
+    ) as HTMLElement;
+    fireEvent.change(within(list).getByRole("textbox"), {
+      target: { value: "」上頭還有 " },
+    });
+    fireEvent.click(utils.getByRole("button", { name: p.save }));
+
+    const srv = await api.getServerSettings();
+    const b = srv.customThemes.find((x) => x.id === "midnight");
+    const stored = b?.wording?.zh?.["monitor.machine.uninstallWarnBody2"];
+    expect(stored).toBe("」上頭還有 ");
+
+    // …and the fragment composes into a sentence that still has its spaces.
+    const themed = { ...zh, monitor: { ...zh.monitor, machine: { ...zh.monitor.machine, uninstallWarnBody2: stored! } } };
+    expect(makeMessages(themed, "zh").machineUninstallWarnBody("Alpha", 3)).toBe(
+      "「Alpha」上頭還有 3 位成員在線上。現在解除安裝會在成員仍在這台機器上時把 warden 拆除 —— 建議先將相關成員下線。仍要繼續嗎?"
+    );
+  });
+});
+
+describe("ThemeSettings · alias-default colours", () => {
+  it("offers the zone/split tokens a bundle never carries, and saves only the touched one", async () => {
+    setToken("owner-token");
+    const utils = await renderManage();
+    await importBundle(utils, {
+      id: "midnight",
+      name: "午夜藍",
+      colors: { "--color-accent": "#0b1020" },
+    });
+    fireEvent.click(await utils.findByLabelText(`${p.themeEdit} 午夜藍`));
+
+    // The content-area background follows --color-bg, so no bundle ever exports
+    // it — yet it must be reachable here, or only a hand-edited JSON can set it.
+    const mainBg = utils.getByLabelText(tokenMeta("--color-main-bg", "zh").label);
+    expect((mainBg as HTMLInputElement).value).toBe("");
+    fireEvent.change(mainBg, { target: { value: "#12345680" } });
+    fireEvent.click(utils.getByRole("button", { name: p.save }));
+
+    const b = (await api.getServerSettings()).customThemes.find(
+      (x) => x.id === "midnight"
+    );
+    expect(b?.colors["--color-main-bg"]).toBe("#12345680");
+    // …and the ones left alone stay ABSENT rather than baked to a literal —
+    // that is what keeps them following their parent.
+    expect("--color-nav-bg" in (b?.colors ?? {})).toBe(false);
+    expect("--color-knob" in (b?.colors ?? {})).toBe(false);
+  });
+
+  it("edits opacity through a slider, not only through hand-typed #RRGGBBAA", async () => {
+    setToken("owner-token");
+    const utils = await renderManage();
+    await importBundle(utils, {
+      id: "midnight",
+      name: "午夜藍",
+      colors: { "--color-card": "#242832" },
+    });
+    fireEvent.click(await utils.findByLabelText(`${p.themeEdit} 午夜藍`));
+
+    const label = tokenMeta("--color-card", "zh").label;
+    const slider = utils.getByLabelText(`${label} ${s.themeColorOpacity}`);
+    expect((slider as HTMLInputElement).value).toBe("100");
+    fireEvent.change(slider, { target: { value: "40" } });
+    fireEvent.click(utils.getByRole("button", { name: p.save }));
+
+    const b = (await api.getServerSettings()).customThemes.find(
+      (x) => x.id === "midnight"
+    );
+    expect(b?.colors["--color-card"]).toBe("#24283266");
+  });
+});
+
+describe("ThemeSettings · outer-canvas background", () => {
+  const png =
+    "data:image/png;base64," +
+    btoa(
+      String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01)
+    );
+
+  it("stores a non-default lay-down mode and drops it again on tile", async () => {
+    setToken("owner-token");
+    const utils = await renderManage();
+    await importBundle(utils, {
+      id: "midnight",
+      name: "午夜藍",
+      colors: { "--color-accent": "#0b1020" },
+      backgrounds: { canvas: png },
+    });
+    fireEvent.click(await utils.findByLabelText(`${p.themeEdit} 午夜藍`));
+
+    const mode = utils.getByLabelText(s.themeCanvasBgMode);
+    fireEvent.change(mode, { target: { value: "sides" } });
+    fireEvent.click(utils.getByRole("button", { name: p.save }));
+
+    let b = (await api.getServerSettings()).customThemes.find(
+      (x) => x.id === "midnight"
+    );
+    expect(b?.backgroundModes).toEqual({ canvas: "sides" });
+
+    // Back to the default and the field disappears entirely — a tiling theme
+    // stays byte-identical to one authored before the field existed.
+    fireEvent.click(await utils.findByLabelText(`${p.themeEdit} 午夜藍`));
+    fireEvent.change(utils.getByLabelText(s.themeCanvasBgMode), {
+      target: { value: "tile" },
+    });
+    fireEvent.click(utils.getByRole("button", { name: p.save }));
+
+    b = (await api.getServerSettings()).customThemes.find(
+      (x) => x.id === "midnight"
+    );
+    expect(b?.backgroundModes).toBeUndefined();
+    expect(b?.backgrounds).toEqual({ canvas: png });
+  });
+
+  it("offers no lay-down mode until there is an image to lay down", async () => {
+    setToken("owner-token");
+    const utils = await renderManage();
+    await importBundle(utils, {
+      id: "plain",
+      name: "純色",
+      colors: { "--color-accent": "#0b1020" },
+    });
+    fireEvent.click(await utils.findByLabelText(`${p.themeEdit} 純色`));
+
+    expect(utils.queryByLabelText(s.themeCanvasBgMode)).toBeNull();
+  });
 });
 
 describe("ThemeSettings · delete", () => {
@@ -180,7 +536,7 @@ describe("ThemeSettings · export", () => {
   it("office 列下載鈕可用,下載一個非保留 id 的 office 包(可再匯入)", async () => {
     const utils = await renderManage();
     const btn = utils.getByLabelText(
-      `${p.themeExport} ${p.themeOffice}`
+      `${p.themeExport} ${zh.themeIdentity.office}`
     ) as HTMLButtonElement;
     expect(btn.disabled).toBe(false);
 
@@ -207,6 +563,14 @@ describe("ThemeSettings · export", () => {
     });
     const payload = JSON.parse(text);
     expect(payload.id).toBe("office-base");
-    expect(payload.name).toBe(p.themeOffice);
+    // …and under a COPY name, not the built-in's own: since T-081b a bundle may
+    // not claim a built-in display name, so exporting under it would hand the
+    // owner a file the product then refuses to import back.
+    expect(payload.name).toBe(
+      makeMessages(zh, "zh").themeCopyName(zh.themeIdentity.office)
+    );
+    expect(payload.name).not.toBe(zh.themeIdentity.office);
+    // (that this name actually re-imports is pinned in themeExport.test.ts —
+    // jsdom has no stylesheet, so the payload here carries no colours to import)
   });
 });

@@ -1,0 +1,18 @@
+=================== D-1  a type error inside scripts/check-token-roles.test.ts
+scripts/check-token-roles.test.ts(202,7): error TS2322: Type 'string' is not assignable to type 'number'.
+typecheck exit=2
+=================== D-2  (first attempt) 'types' array alone — NOT a valid sabotage:
+  an explicit `import ... from "node:fs"` resolves through @types/node whatever
+  the `types` array says, so this stayed green. Redone below by removing the
+  PACKAGE, which is the actual SHOULD-D root cause.
+typecheck exit=0
+=================== RESTORED — expect clean
+
+> officraft-frontend@0.0.0 typecheck
+> tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json
+
+typecheck exit=0
+error TS2688: Cannot find type definition file for 'node'.
+  The file is in the program because:
+    Entry point of type library 'node' specified in compilerOptions
+typecheck exit=

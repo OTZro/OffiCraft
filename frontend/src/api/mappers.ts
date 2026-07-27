@@ -4,6 +4,7 @@
 // model the components consume. Keeping it pure + centralised means the real
 // backend only has to return the frozen wire shape — the UI never changes.
 
+import type { ThemeBundle } from "../lib/themeBundle";
 import type {
   Member,
   MemberStatus,
@@ -823,6 +824,15 @@ export function toServerSettings(w: WireServerSettings): ServerSettingsView {
       // read-back (reload + login), which also emptied them from theme export.
       ...(b.logo !== undefined ? { logo: b.logo } : {}),
       ...(b.navIcons !== undefined ? { navIcons: b.navIcons } : {}),
+      // Outer-canvas background image (T-081b) — optional; carried through
+      // verbatim when present, for the same reason logo/navIcons are: an
+      // omitted passthrough silently empties it on every read-back.
+      ...(b.backgrounds !== undefined ? { backgrounds: b.backgrounds } : {}),
+      ...(b.backgroundModes !== undefined
+        ? {
+            backgroundModes: b.backgroundModes as ThemeBundle["backgroundModes"],
+          }
+        : {}),
     })),
     // The first-run onboarding report (T-ba62). Absent/null is the NORMAL
     // state (onboarding never ran on this database) and maps to null — the

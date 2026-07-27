@@ -35,6 +35,7 @@ import { MonitorPage } from "./MonitorPage";
 import { zh } from "../i18n/locales/zh";
 import { en } from "../i18n/locales/en";
 import type { Dict } from "../i18n/locales/zh";
+import { makeMessages } from "../i18n/compose";
 import type { Member, MachineView } from "../types";
 
 const listMembers = vi.fn(async (): Promise<Member[]> => []);
@@ -63,7 +64,7 @@ interface Consequence {
 }
 
 interface LocaleCase {
-  name: string;
+  name: "zh" | "en";
   dict: Dict;
   must: Consequence[];
   /** The pre-T-9cf8 body, which described a strictly cheaper action. */
@@ -103,7 +104,9 @@ const MACHINE_NAME = "Alpha";
 
 describe("delete-machine confirm copy · it must name what deleting costs (T-9cf8)", () => {
   for (const loc of LOCALES) {
-    const body = loc.dict.monitor.machine.deleteConfirmBody(MACHINE_NAME);
+    const body = makeMessages(loc.dict, loc.name).machineDeleteConfirmBody(
+      MACHINE_NAME
+    );
     const lower = body.toLowerCase();
 
     it(`${loc.name}: names the machine and every consequence`, () => {

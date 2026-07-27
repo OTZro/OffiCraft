@@ -7,6 +7,13 @@ import {
   parseImportedBundle,
   serializeBundle,
 } from "./themeExport";
+import { isValidColorValue } from "./themeBundle";
+import { makeMessages } from "../i18n/compose";
+import { zh } from "../i18n/locales/zh";
+import {
+  THEME_ALIAS_DEFAULT_TOKENS,
+  THEME_COLOR_TOKENS,
+} from "../styles/themeTokens.generated";
 
 function freshRoot(): HTMLElement {
   const el = document.createElement("div");
@@ -46,6 +53,53 @@ describe("exportComputedTheme", () => {
     expect(bundle.colors).not.toHaveProperty("--color-text");
   });
 
+  it("omits an alias-default token still sitting on its alias, keeps one that was moved off it", () => {
+    // The zone tokens default to `var(--color-bg)` so an untouched theme stays
+    // one flat backdrop and layers only once someone picks a zone colour.
+    // getComputedStyle RESOLVES that var(), so baking the resolved value in
+    // would pin every newly seeded theme's zones to the built-in colour: the
+    // author edits --color-bg and nothing but the body moves (in the wide
+    // layout, where the gutter is 0, nothing visible moves at all).
+    expect(Object.keys(THEME_ALIAS_DEFAULT_TOKENS)).toContain(
+      "--color-topbar-bg"
+    );
+    const el = freshRoot();
+    // Each alias default follows a DIFFERENT target (the zone colours follow
+    // --color-bg; the T-081b split tokens follow --color-overlay / --color-shadow
+    // / --color-indigo), so give every target its own value and every follower
+    // exactly that value — which is what the browser reports for an untouched
+    // alias, and the only state "still following" can be recognised from.
+    const targetValue: Record<string, string> = {};
+    let n = 0;
+    for (const target of new Set(Object.values(THEME_ALIAS_DEFAULT_TOKENS))) {
+      targetValue[target] = `#11${(++n).toString().padStart(2, "0")}22`;
+      el.style.setProperty(target, targetValue[target]);
+    }
+    for (const [tok, target] of Object.entries(THEME_ALIAS_DEFAULT_TOKENS)) {
+      el.style.setProperty(tok, targetValue[target]);
+    }
+    el.style.setProperty("--color-topbar-bg", "#ff0000"); // deliberately chosen
+
+    const bundle = exportComputedTheme("mine", "Mine", el);
+
+    expect(bundle.colors["--color-bg"]).toBe(targetValue["--color-bg"]);
+    expect(bundle.colors["--color-topbar-bg"]).toBe("#ff0000");
+    for (const tok of Object.keys(THEME_ALIAS_DEFAULT_TOKENS)) {
+      if (tok === "--color-topbar-bg") continue;
+      expect(bundle.colors).not.toHaveProperty(tok);
+    }
+  });
+
+  it("cannot carry the canvas background image — no colour token holds a url()", () => {
+    // The image lives on bundle.backgrounds, never in the colour map: every
+    // colour token is exported through isValidColorValue, which no url("data:…")
+    // can pass, so a token-shaped image would be silently dropped here.
+    expect(THEME_COLOR_TOKENS.some((tok) => /image/.test(tok))).toBe(false);
+    expect(isValidColorValue('url("data:image/png;base64,iVBORw0KGgo=")')).toBe(
+      false
+    );
+  });
+
   it("produces a bundle that re-imports without loss", () => {
     const el = freshRoot();
     el.style.setProperty("--color-accent", "#0af");
@@ -82,13 +136,36 @@ describe("exportOfficeBaseTheme", () => {
     // The office 列下載 path exports under id "office-base"; the base read is
     // simulated here (jsdom has no stylesheet base) via exportComputedTheme.
     const round = parseImportedBundle(
-      serializeBundle(exportComputedTheme("office-base", "辦公室", el))
+      serializeBundle(exportComputedTheme("office-base", "我的辦公室", el))
     );
     expect("bundle" in round).toBe(true);
     // The reserved built-in id would be rejected on re-import.
     expect("error" in parseImportedBundle(
-      serializeBundle(exportComputedTheme("office", "辦公室", el))
+      serializeBundle(exportComputedTheme("office", "我的辦公室", el))
     )).toBe(true);
+  });
+
+  it("downloads the built-in as a COPY, so the file it produces imports back", () => {
+    // A custom bundle may no longer claim a built-in's display name (two 辦公室
+    // rows in the picker is the defect that rule removes). The 下載 on the
+    // built-in row therefore exports the name composed by msg.themeCopyName —
+    // 辦公室(副本) — NOT the built-in's own name, or the product would hand the
+    // owner a file it then refuses to take back.
+    const el = freshRoot();
+    el.style.setProperty("--color-accent", "#0af");
+    const copy = makeMessages(zh, "zh").themeCopyName(zh.themeIdentity.office);
+    expect(copy).not.toBe(zh.themeIdentity.office);
+    expect(
+      "bundle" in parseImportedBundle(
+        serializeBundle(exportComputedTheme("office-base", copy, el))
+      )
+    ).toBe(true);
+
+    // …and the rule itself still bites: the built-in's bare name is refused.
+    const res = parseImportedBundle(
+      serializeBundle(exportComputedTheme("office-base", zh.themeIdentity.office, el))
+    );
+    expect("error" in res).toBe(true);
   });
 });
 
@@ -118,6 +195,7 @@ describe("parseImportedBundle", () => {
         name: "Midnight",
         colors: { "--color-accent": "#0b1020" },
       },
+      skippedWording: [],
     });
   });
 
@@ -133,6 +211,7 @@ describe("parseImportedBundle", () => {
     expect("bundle" in res && res.bundle.wording).toEqual({
       zh: { "nav.tasks": "任務榜" },
     });
+    expect("bundle" in res && res.skippedWording).toEqual([]);
   });
 
   it("carries a valid avatars overlay through (bb2e3b4)", () => {
@@ -173,16 +252,57 @@ describe("parseImportedBundle", () => {
     expect("bundle" in res && res.bundle.navIcons).toEqual({ office: png, tasks: png });
   });
 
-  it("rejects a wording overlay keyed on a non-whitelisted code", () => {
+  it("round-trips a canvas background image through serialize → import (T-081b)", () => {
+    // The image value is url("data:…") — NOT a colour — so it must ride its own
+    // field. A colour token would be filtered out by the export's
+    // isValidColorValue and rejected by the bundle's colour grammar.
+    const png =
+      "data:image/png;base64," +
+      btoa(
+        String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01)
+      );
+    const exported = serializeBundle({
+      id: "tiled",
+      name: "Tiled",
+      colors: { "--color-bg": "#0b1020" },
+      backgrounds: { canvas: png },
+      backgroundModes: { canvas: "sides" },
+    });
+    const res = parseImportedBundle(exported);
+
+    expect("bundle" in res && res.bundle.backgrounds).toEqual({ canvas: png });
+    // the mode rides along — dropping it would round-trip a "sides" theme back
+    // as a tiled one, i.e. silently change how the theme looks
+    expect("bundle" in res && res.bundle.backgroundModes).toEqual({
+      canvas: "sides",
+    });
+    // and the colour beside it survives the same trip — colour and image coexist
+    expect("bundle" in res && res.bundle.colors["--color-bg"]).toBe("#0b1020");
+  });
+
+  it("imports a pack overriding a de-whitelisted code, without that code", () => {
+    // The real-world 精靈村 pack: T-081b removed profile.themeOffice from the
+    // whitelist, and the pack must still import (owner ruling 2026-07-27) —
+    // minus that code, so a re-export carries only live codes.
     const res = parseImportedBundle(
       JSON.stringify({
         id: "worded",
         name: "Worded",
         colors: { "--color-accent": "#0b1020" },
-        wording: { zh: { "not.a.real.code": "x" } },
+        wording: {
+          zh: { "nav.tasks": "任務榜", "profile.themeOffice": "精靈村", "not.a.real.code": "x" },
+        },
       })
     );
-    expect("error" in res).toBe(true);
+    expect("bundle" in res && res.bundle.wording).toEqual({
+      zh: { "nav.tasks": "任務榜" },
+    });
+    // …and it REPORTS what it dropped, so the import UI can warn (owner
+    // 2026-07-27: silent dropping is not acceptable).
+    expect("bundle" in res && res.skippedWording).toEqual([
+      "profile.themeOffice",
+      "not.a.real.code",
+    ]);
   });
 
   it("rejects malformed JSON with a plain-language error", () => {

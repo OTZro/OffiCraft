@@ -87,7 +87,7 @@ export function MemberDetailPanel({
   onRefocus,
   onRename,
 }: MemberDetailPanelProps) {
-  const { t } = useI18n();
+  const { t, msg } = useI18n();
   const online = member.status === "online";
   // Owner presence contract (T-2860): 機器 + Claude Account are RUNTIME facts that
   // exist only while the agent is actually up. When the member is NOT awakened
@@ -596,7 +596,7 @@ export function MemberDetailPanel({
           <div className="mp-confirm__box">
             <div className="mp-confirm__title">{t.mp.forceStopConfirmTitle}</div>
             <p className="mp-confirm__body">
-              {t.mp.forceStopConfirmBody(member.name)}
+              {msg.memberForceStopConfirmBody(member.name)}
             </p>
             <div className="mp-confirm__actions">
               <button
@@ -1156,7 +1156,7 @@ export function MemberDetailPanel({
         onRefocus: onRefocus ? async () => void (await onRefocus()) : undefined,
         refocusSince: member.refocusSince,
         refocusSubmittedNote: t.mp.refocusSubmittedNote,
-        refocusSinceLabel: t.mp.refocusSinceLabel,
+        refocusSinceLabel: msg.memberRefocusSince,
         lastOp: member.lastOp,
         lastOpVerb:
           member.lastOp === "start"

@@ -62,7 +62,7 @@ function handledTsOf(card: ReplyCard): number | null {
 }
 
 export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
-  const { t } = useI18n();
+  const { t, msg } = useI18n();
   // Light roster (T-cf91): the page attributes each card to its asker by
   // name + role only, so it takes the identity-only projection AND does not
   // refetch the roster when anyone in the company sends a chat message.
@@ -172,7 +172,7 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
     const m = members.find((x) => x.id === card.from);
     if (!m) {
       const cn = codenames.get(card.from);
-      return { name: cn ? t.office.outsource.label(cn) : card.from, role: "" };
+      return { name: cn ? msg.outsourceLabel(cn) : card.from, role: "" };
     }
     const role =
       (t.office.role as Record<string, string>)[m.role] ??
@@ -350,10 +350,10 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
           // relative-only display) above the existing ticking waited counter.
           <span className="reply-card__stamps">
             <span className="reply-card__opened-at" data-testid="opened-at">
-              {t.replies.openedAt(formatAbsolute(card.createdTs, nowTs))}
+              {msg.replyOpenedAt(formatAbsolute(card.createdTs, nowTs))}
             </span>
             <span className="reply-card__waited" data-testid="waited">
-              {t.replies.waited(formatDuration(nowTs - card.createdTs))}
+              {msg.replyWaited(formatDuration(nowTs - card.createdTs))}
             </span>
           </span>,
           true
@@ -399,8 +399,8 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
           ts !== null ? (
             <span className="reply-card__answered-at">
               {expired
-                ? t.replies.expiredAt(formatAbsolute(ts, nowTs))
-                : t.replies.answeredAt(formatAbsolute(ts, nowTs))}
+                ? msg.replyExpiredAt(formatAbsolute(ts, nowTs))
+                : msg.replyAnsweredAt(formatAbsolute(ts, nowTs))}
             </span>
           ) : undefined
         )}
@@ -486,7 +486,7 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
         <ConfirmModal
           testId="expire-confirm"
           confirmTestId="expire-confirm-btn"
-          body={t.replies.expireConfirmBody(expireTarget.summary)}
+          body={msg.replyExpireConfirmBody(expireTarget.summary)}
           cancelLabel={t.common.cancel}
           confirmLabel={t.replies.expireConfirm}
           busy={expireBusy}

@@ -101,17 +101,21 @@ describe("mock settings — display prefs (display_theme / display_language)", (
           name: "Worded",
           colors: { "--color-bg": "#101018" },
           wording: {
-            zh: { "nav.tasks": "待辦" },
-            en: { "profile.themeOffice": "Office Mode" },
+            // profile.themeOffice is no longer whitelisted (T-081b): the patch
+            // still succeeds, and the code is dropped rather than stored.
+            zh: { "nav.tasks": "待辦", "profile.themeOffice": "精靈村" },
+            en: { "nav.office": "Office Mode" },
           },
         },
       ],
     });
     expect(s.customThemes[0].wording?.zh["nav.tasks"]).toBe("待辦");
+    expect(s.customThemes[0].wording?.zh["profile.themeOffice"]).toBeUndefined();
     const again = await mockApi.getServerSettings();
-    expect(again.customThemes[0].wording?.en["profile.themeOffice"]).toBe(
+    expect(again.customThemes[0].wording?.en["nav.office"]).toBe(
       "Office Mode"
     );
+    expect(again.customThemes[0].wording?.zh["profile.themeOffice"]).toBeUndefined();
   });
 
   it("saves an avatar overlay and reads it back durably", async () => {
@@ -174,9 +178,11 @@ describe("mock settings — display prefs (display_theme / display_language)", (
   });
 
   it("422s an illegal wording overlay, writing nothing", async () => {
+    const overCap: Record<string, string> = {};
+    for (let i = 0; i <= 1000; i++) overCap[`junk.key.${i}`] = "x";
     const bad: Record<string, Record<string, string>>[] = [
-      { zh: { "not.a.real.key": "x" } }, // non-whitelisted code
       { xian: { "nav.tasks": "仙" } }, // language not in {zh,en}
+      { zh: overCap }, // over the per-language cap, counted on RAW entries
       { zh: { "nav.tasks": "字".repeat(201) } }, // over the 200-rune cap
       { zh: { "nav.tasks": "a\nb" } }, // control character (newline)
       { zh: { "nav.tasks": "   " } }, // empty after trimming

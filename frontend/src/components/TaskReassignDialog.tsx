@@ -24,6 +24,7 @@
 
 import { useState } from "react";
 import { useI18n } from "../i18n";
+import { effortText } from "../i18n/compose";
 import type { Effort, Member } from "../types";
 import type { TaskReassignInput, TaskView } from "../api/adapter";
 import { useMachines } from "../hooks/useMachines";
@@ -131,7 +132,7 @@ export function TaskReassignDialog({
   onReassign: (id: string, input: TaskReassignInput) => Promise<void>;
   onClose: () => void;
 }) {
-  const { t } = useI18n();
+  const { t, msg } = useI18n();
   // Candidates: real AI assistants (machines never execute tasks — the server
   // 400s a warden target) minus the current executor (a no-op reassign is a
   // 409; pre-filtering keeps the picker honest, the dupCandidates precedent).
@@ -209,7 +210,7 @@ export function TaskReassignDialog({
       body={
         <div className="task-reassign">
           <div className="task-reassign__title">
-            {t.tasks.reassignTitle(task.taskNo)}
+            {msg.taskReassignTitle(task.taskNo)}
           </div>
           <div className="task-reassign__hint">{t.tasks.reassignBody}</div>
 
@@ -224,7 +225,7 @@ export function TaskReassignDialog({
               setError(null);
             }}
             testidPrefix="reassign-kind"
-            ariaLabel={t.tasks.reassignTitle(task.taskNo)}
+            ariaLabel={msg.taskReassignTitle(task.taskNo)}
           />
 
           {kindDraft === "member" && (
@@ -343,7 +344,7 @@ export function TaskReassignDialog({
                 <Segmented
                   options={EFFORTS.map((e) => ({
                     value: e,
-                    label: t.mp.effortLevel(e),
+                    label: effortText(t, e),
                   }))}
                   value={effortDraft as Effort}
                   onPick={(v) => setEffortDraft(v)}

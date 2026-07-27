@@ -61,21 +61,52 @@
   color: var(--color-text-strong);
 }
 
+/* The 內建 / 自訂 group heading. The list's grouping is STRUCTURE, not text on a
+ * row — the twin of the quick picker's <optgroup> — so a theme can neither name
+ * itself into the built-in group nor repaint its way out of the custom one.
+ *
+ * The colour is a NON-OVERRIDABLE --color-marker-* slot, not --color-text-muted
+ * (T-081b review round 4 recheck, NIT-1). The heading's TEXT was already out of
+ * a pack's reach, but its colour was not: --color-text-muted is pack-settable,
+ * so a pack could set it to the page colour and both headings would vanish —
+ * one of the two labels that tell 內建 rows from 自訂 ones, gone. Mixed toward
+ * the marker surface for the muted weight the design wants; both ends of the
+ * mix are slots no pack can re-value, so the heading is always visible.
+ *
+ * 65% lands on #9fa0a7 against the built-in theme's #9aa0ad, i.e. the same
+ * muted grey to within a couple of levels per channel. Exactness would need a
+ * fifth marker slot, and the review is explicit that the family stays at four. */
+.ts-group-head {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--color-marker-fg) 65%, var(--color-marker-surface));
+  padding: 0 2px;
+}
+
 /* The row tags are small (11px = normal text), so they must clear WCAG AA
  * (≥4.5:1). A muted/violet text on the raw fills landed at ~1.4–1.7:1. Deepening
  * each fill toward the page background (a solid, opaque chip) and switching to
- * the near-white --color-text lifts both well past 4.5:1 while keeping the blue
- * (內建) / violet (自訂) hue identity that tells the two row kinds apart. */
+ * the near-white foreground lifts both well past 4.5:1 while keeping the blue
+ * (內建) / violet (自訂) hue identity that tells the two row kinds apart.
+ *
+ * The four colours are the NON-OVERRIDABLE --color-marker-* slots, never the
+ * pack-settable --color-seg-fill / --color-icon-violet-bg / --color-bg /
+ * --color-text they used to read: a pack that can paint both chips the same
+ * colour has erased the marker (T-081b review round 4, BLOCKER-A). The mix
+ * expressions and percentages are unchanged, and the slots default to the
+ * built-in values of the tokens they replace, so the built-in theme renders the
+ * identical computed colour. */
 .ts-tag {
   font-size: 11px;
   padding: 1px 6px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--color-seg-fill) 55%, var(--color-bg));
-  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-marker-builtin) 55%, var(--color-marker-surface));
+  color: var(--color-marker-fg);
 }
 .ts-tag--custom {
-  background: color-mix(in srgb, var(--color-icon-violet-bg) 55%, var(--color-bg));
-  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-marker-custom) 55%, var(--color-marker-surface));
+  color: var(--color-marker-fg);
 }
 
 .ts-icon-btn {
@@ -200,6 +231,25 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+/* Opacity slider (T-081b) — sits beside the swatch so making a layer see-through
+   is as reachable as picking its colour. */
+.ts-color-alpha {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.ts-color-alpha input[type="range"] {
+  width: 72px;
+  accent-color: var(--color-accent);
+}
+.ts-color-alpha__value {
+  flex: 0 0 34px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 .ts-color-name {
   flex: 0 0 42%;

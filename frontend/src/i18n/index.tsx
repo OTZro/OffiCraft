@@ -14,11 +14,14 @@ import { api } from "../api";
 import { hasToken, AUTH_LOGIN_EVENT } from "../api/auth";
 import {
   isValidDisplayTheme,
+  DEFAULT_BACKGROUND_MODE,
+  type BackgroundMode,
   type ThemeBundle,
   type AvatarKind,
   type NavIconKey,
 } from "../lib/themeBundle";
 import { applyWording } from "./wording";
+import { makeMessages, type Messages } from "./compose";
 
 export type Locale = "zh" | "en";
 /** User-selectable language (mockup 語言 toggle offers only 中文 / English). */
@@ -103,6 +106,11 @@ interface I18nContextValue {
    * decoupled, T-16a1 P1: a visual theme never hijacks the UI language). */
   locale: Locale;
   t: Dict;
+  /** The PARAMETERISED messages (T-081b), composed from `t`'s overridable
+   * static fragments — `m.taskTerminateConfirmBody(title)` rather than a
+   * template leaf a wording overlay could never reach. Rebuilt with `t`, so an
+   * active theme's re-worded fragment shows up here too. */
+  msg: Messages;
   language: Language;
   setLanguage: (next: Language) => void;
   /** Active theme: the built-in name ("office") or a custom bundle id. */
@@ -165,6 +173,11 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     return applyWording(base, overlay);
   }, [locale, theme, language, customThemes]);
 
+  // The composed parameterised messages ride the SAME memo inputs as `t` — a
+  // wording overlay change re-composes them, so no message can serve stale
+  // vocabulary after a theme switch.
+  const msg = useMemo(() => makeMessages(t, language), [t, language]);
+
   // The active custom theme's avatar images (T-16a1 P5). Unlike colours/fonts
   // (CSS vars applied to documentElement), avatars are IMAGES the Avatar
   // component renders as <img>, so they ride the context rather than the DOM.
@@ -225,6 +238,59 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       for (const [tok, val] of Object.entries(bundle.fonts ?? {})) {
         root.style.setProperty(tok, val);
         applied.push(tok);
+      }
+      // The optional outer-canvas background image (T-081b). Unlike avatars /
+      // logo / nav icons — which are <img> elements a component renders — the
+      // canvas is painted by CSS, so this one rides the DOM as a var, applied
+      // the SAME way (setProperty, never concatenated into a stylesheet). The
+      // value has already passed the shared image gate, whose base64 alphabet
+      // admits no quote, paren or backslash, so wrapping it in url("…") cannot
+      // break out of the value. Absent → the theme.css default `none` stands and
+      // the canvas is the plain --color-bg colour.
+      const canvas = bundle.backgrounds?.canvas;
+      if (canvas) {
+        // "sides" (T-081b) lays the SAME url down twice — one copy against each
+        // viewport edge — so a theme whose art is a pair of standing objects
+        // needs no extra DOM layer; "cover" scales one copy over the viewport.
+        // "tile" (and any theme naming no mode) writes the values theme.css
+        // already defaults to, so the pre-existing tiling is byte-identical.
+        const url = `url("${canvas}")`;
+        const mode: BackgroundMode =
+          bundle.backgroundModes?.canvas ?? DEFAULT_BACKGROUND_MODE;
+        // "sides" and "cover" pin to the VIEWPORT, not the document: the canvas
+        // background otherwise scrolls with a long page, and no image is tall
+        // enough to cover a page that keeps growing — the art would reappear
+        // down the page, which is exactly the "why are there repeated trees"
+        // these modes exist to avoid.
+        const lay = {
+          tile: { image: url, repeat: "repeat", position: "0 0", size: "auto", attachment: "scroll" },
+          sides: {
+            image: `${url}, ${url}`,
+            repeat: "no-repeat, no-repeat",
+            position: "left bottom, right bottom",
+            size: "auto, auto",
+            attachment: "fixed, fixed",
+          },
+          cover: {
+            image: url,
+            repeat: "no-repeat",
+            position: "center center",
+            size: "cover",
+            attachment: "fixed",
+          },
+        }[mode];
+        root.style.setProperty("--canvas-bg-image", lay.image);
+        root.style.setProperty("--canvas-bg-repeat", lay.repeat);
+        root.style.setProperty("--canvas-bg-position", lay.position);
+        root.style.setProperty("--canvas-bg-size", lay.size);
+        root.style.setProperty("--canvas-bg-attachment", lay.attachment);
+        applied.push(
+          "--canvas-bg-image",
+          "--canvas-bg-repeat",
+          "--canvas-bg-position",
+          "--canvas-bg-size",
+          "--canvas-bg-attachment"
+        );
       }
       appliedTokensRef.current = applied;
     }
@@ -391,6 +457,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     () => ({
       locale,
       t,
+      msg,
       language,
       setLanguage,
       theme,
@@ -407,6 +474,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     [
       locale,
       t,
+      msg,
       language,
       setLanguage,
       theme,

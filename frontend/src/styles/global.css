@@ -10,7 +10,22 @@ body,
 
 body {
   margin: 0;
-  background: var(--color-bg);
+  /* The OUTERMOST canvas. Colour and image coexist: --color-bg is the fill and
+     the theme's optional tile (T-081b) is layered on top of it, so a theme with
+     no image paints exactly the plain colour it always did. Only this zone gets
+     an image — .topbar / .nav-tabs / .app__main keep their opaque zone colours
+     (which is also what hides the tile behind the content column, and what
+     leaves the phone layout — where the gutters are 0 — untouched). */
+  background-color: var(--color-bg);
+  background-image: var(--canvas-bg-image, none);
+  /* repeat/position/size/attachment are theme-driven (T-081b) so the "sides"
+     (one copy against each viewport edge) and "cover" (one copy filling the
+     viewport) modes need no extra element. Their defaults in theme.css ARE the
+     tiling values, so a theme that names no mode paints what it always did. */
+  background-repeat: var(--canvas-bg-repeat, repeat);
+  background-position: var(--canvas-bg-position, 0 0);
+  background-size: var(--canvas-bg-size, auto);
+  background-attachment: var(--canvas-bg-attachment, scroll);
   color: var(--color-text);
   font-family: var(--font-sans);
   font-size: 14px;
@@ -26,7 +41,7 @@ body {
 /* Firefox */
 html {
   scrollbar-width: thin;
-  scrollbar-color: var(--color-indigo) transparent;
+  scrollbar-color: var(--color-scrollbar-thumb) transparent;
 }
 /* WebKit/Blink */
 ::-webkit-scrollbar {
@@ -37,7 +52,7 @@ html {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--color-indigo);
+  background: var(--color-scrollbar-thumb);
   border-radius: var(--radius-pill);
   border: 2px solid transparent;
   background-clip: padding-box;

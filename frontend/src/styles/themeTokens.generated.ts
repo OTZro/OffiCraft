@@ -12,6 +12,7 @@ export const THEME_COLOR_TOKENS: readonly string[] = [
   "--color-accent-soft",
   "--color-answered",
   "--color-artifacts",
+  "--color-backdrop",
   "--color-bg",
   "--color-border",
   "--color-callout-important",
@@ -19,6 +20,7 @@ export const THEME_COLOR_TOKENS: readonly string[] = [
   "--color-callout-warning",
   "--color-card",
   "--color-danger",
+  "--color-danger-badge",
   "--color-danger-soft",
   "--color-danger-strong",
   "--color-dep",
@@ -38,16 +40,23 @@ export const THEME_COLOR_TOKENS: readonly string[] = [
   "--color-icon-violet",
   "--color-icon-violet-bg",
   "--color-indigo",
+  "--color-knob",
   "--color-lock-reassigning",
   "--color-logo-grad-from",
   "--color-logo-grad-to",
+  "--color-main-bg",
+  "--color-nav-bg",
   "--color-on-accent",
+  "--color-on-backdrop",
+  "--color-on-danger",
+  "--color-on-indigo",
   "--color-on-warn",
   "--color-onboarding-bg",
   "--color-onboarding-border",
   "--color-onboarding-fg",
   "--color-overlay",
   "--color-scrim",
+  "--color-scrollbar-thumb",
   "--color-seg-border",
   "--color-seg-fill",
   "--color-select",
@@ -55,6 +64,7 @@ export const THEME_COLOR_TOKENS: readonly string[] = [
   "--color-status-duplicated",
   "--color-step-progress",
   "--color-success",
+  "--color-surface-sunken",
   "--color-switch-on",
   "--color-tab-active",
   "--color-task-id",
@@ -62,9 +72,29 @@ export const THEME_COLOR_TOKENS: readonly string[] = [
   "--color-text",
   "--color-text-muted",
   "--color-text-strong",
+  "--color-topbar-bg",
   "--color-wait-external",
   "--color-wait-external-text",
   "--color-warn-bg",
   "--color-warn-border",
   "--color-warn-fg",
 ];
+
+/** The tokens whose theme.css definition is a pure `var(--other)` alias —
+ * i.e. "follow that token unless a theme says otherwise". Maps the alias to
+ * the token it defers to. Export uses this to tell an UNSET alias apart from
+ * a deliberately chosen colour: getComputedStyle resolves the var(), so
+ * without it every exported bundle would bake the inherited colour in and the
+ * deferral would be lost for good. */
+export const THEME_ALIAS_DEFAULT_TOKENS: Readonly<Record<string, string>> = {
+  "--color-backdrop": "--color-shadow",
+  "--color-knob": "--color-overlay",
+  "--color-main-bg": "--color-bg",
+  "--color-nav-bg": "--color-bg",
+  "--color-on-backdrop": "--color-overlay",
+  "--color-on-danger": "--color-overlay",
+  "--color-on-indigo": "--color-overlay",
+  "--color-scrollbar-thumb": "--color-indigo",
+  "--color-surface-sunken": "--color-shadow",
+  "--color-topbar-bg": "--color-bg",
+};

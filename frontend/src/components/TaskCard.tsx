@@ -192,7 +192,7 @@ export function TaskCard({
    * is display-only (no × affordance). */
   onRemoveArtifact?: (taskId: string, artifactId: string) => Promise<void>;
 }) {
-  const { t } = useI18n();
+  const { t, msg } = useI18n();
   const closed = TERMINAL.has(task.status);
   const unassigned = task.executorKind === "outsource" && !task.executorId;
 
@@ -229,11 +229,11 @@ export function TaskCard({
     : task.executorKind === "member"
       ? member?.name || task.executorId
       : worker
-        ? `${t.office.outsource.label(worker.codename)} · ${worker.model || "—"} · ${
+        ? `${msg.outsourceLabel(worker.codename)} · ${worker.model || "—"} · ${
             t.tasks.effortOf[worker.effort] ?? worker.effort
           }`
         : releasedExecutorCodename
-          ? t.office.outsource.label(releasedExecutorCodename)
+          ? msg.outsourceLabel(releasedExecutorCodename)
           : t.tasks.outsource;
   // 類型 chip text: the manual's display name (T-fa76), falling back to the
   // raw key (deleted manual / legacy type), then the ad-hoc word.
@@ -272,7 +272,7 @@ export function TaskCard({
         workers.find((x) => x.id === task.creatorId)?.codename ??
         releasedCodenames.get(task.creatorId);
       return {
-        text: cn ? t.office.outsource.label(cn) : task.creatorId,
+        text: cn ? msg.outsourceLabel(cn) : task.creatorId,
         peerId: task.creatorId,
       };
     }
@@ -290,7 +290,7 @@ export function TaskCard({
     if (task.reassignedFromKind === "outsource" || id.startsWith("ow-")) {
       const cn =
         workers.find((x) => x.id === id)?.codename ?? releasedCodenames.get(id);
-      return { text: cn ? t.office.outsource.label(cn) : id, peerId: id };
+      return { text: cn ? msg.outsourceLabel(cn) : id, peerId: id };
     }
     const m = members.find((x) => x.id === id);
     return { text: m ? m.name : id, peerId: id };
@@ -899,8 +899,8 @@ export function TaskCard({
               type="button"
               className="task-card__id-badge task-card__id-badge--copy"
               data-testid="task-no"
-              aria-label={t.tasks.copyTaskNo(task.taskNo)}
-              title={t.tasks.copyTaskNo(task.taskNo)}
+              aria-label={msg.taskCopyTaskNo(task.taskNo)}
+              title={msg.taskCopyTaskNo(task.taskNo)}
               onClick={copyTaskNo}
             >
               {copied ? <CheckIcon size={13} /> : <TasksIcon size={13} />}#
@@ -1494,8 +1494,8 @@ export function TaskCard({
                       with it for free. */}
                   <span>
                     {unknown
-                      ? t.tasks.blockedBy(deriveTaskNo(depId))
-                      : t.tasks.blockedByMissing(deriveTaskNo(depId))}
+                      ? msg.taskBlockedBy(deriveTaskNo(depId))
+                      : msg.taskBlockedByMissing(deriveTaskNo(depId))}
                   </span>
                 </div>
               );
@@ -1538,7 +1538,7 @@ export function TaskCard({
                 </span>
                 {depClosed ? <CheckIcon size={13} /> : <ClockIcon size={13} />}
                 <span className="task-card__dep-no">
-                  {t.tasks.blockedBy(dep.taskNo)}
+                  {msg.taskBlockedBy(dep.taskNo)}
                 </span>
                 {/* Full text on hover: the row truncates at one line, and the
                     title attribute is the only affordance that survives both
@@ -1562,8 +1562,8 @@ export function TaskCard({
           />
         </div>
         <span className="task-card__progress-text" data-testid="task-progress">
-          {t.tasks.progress(task.progressDone, task.progressTotal)} ·{" "}
-          {t.tasks.elapsed(elapsedText)}
+          {msg.taskProgress(task.progressDone, task.progressTotal)} ·{" "}
+          {msg.taskElapsed(elapsedText)}
         </span>
       </div>
 
@@ -1598,7 +1598,7 @@ export function TaskCard({
                   This row was the third mouth of the same regression; the
                   ticket named only the two dep branches, but a surface owner
                   reads with the same eyes should not disagree with them. */}
-              {t.tasks.duplicateOf(
+              {msg.taskDuplicateOf(
                 allTasks.find((x) => x.id === task.duplicateOf)?.taskNo ??
                   deriveTaskNo(task.duplicateOf)
               )}
@@ -1657,7 +1657,7 @@ export function TaskCard({
               : task.executorKind === "member"
                 ? member?.name || task.executorId
                 : worker
-                  ? t.office.outsource.label(worker.codename)
+                  ? msg.outsourceLabel(worker.codename)
                   : t.tasks.outsource
           )}
           data-testid="task-msg-input"
@@ -1756,11 +1756,11 @@ export function TaskCard({
             // (member name / 外包 代號; owner ruling 2026-07). Resolved the same
             // way as the message-box placeholder above.
             <div className="task-card__transition" data-testid="task-transition">
-              {t.tasks.planningBy(
+              {msg.taskPlanningBy(
                 task.executorKind === "member"
                   ? member?.name || task.executorId
                   : worker
-                    ? t.office.outsource.label(worker.codename)
+                    ? msg.outsourceLabel(worker.codename)
                     : t.tasks.outsource
               )}
             </div>
@@ -1808,7 +1808,7 @@ export function TaskCard({
         <ConfirmModal
           testId="terminate-confirm"
           confirmTestId="terminate-confirm-btn"
-          body={t.tasks.terminateConfirmBody(task.title)}
+          body={msg.taskTerminateConfirmBody(task.title)}
           cancelLabel={t.common.cancel}
           confirmLabel={t.tasks.terminateConfirm}
           busy={busy}
@@ -1833,7 +1833,7 @@ export function TaskCard({
           confirmTestId="mark-duplicate-btn"
           body={
             <div className="task-card__dup-picker">
-              <div>{t.tasks.markDuplicateBody(task.taskNo)}</div>
+              <div>{msg.taskMarkDuplicateBody(task.taskNo)}</div>
               <select
                 className="task-card__dup-select"
                 data-testid="mark-duplicate-select"

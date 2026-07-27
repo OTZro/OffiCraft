@@ -1,0 +1,19 @@
+narrow 1920px  col 1040  gutter 440px/side  h-scroll none  bottom L#ff00ff R#00ff00 PINNED  above #191c24 SINGLE  past-image L#191c24 R#191c24 NO-H-REPEAT  column #191c24 (opaque)  
+narrow 1440px  col 1040  gutter 200px/side  h-scroll none  bottom L#ff00ff R#00ff00 PINNED  above #191c24 SINGLE  past-image L#191c24 R#191c24 NO-H-REPEAT  column #191c24 (opaque)  
+narrow 1200px  col 1040  gutter  80px/side  h-scroll none  bottom L#ff00ff R#00ff00 PINNED  above #191c24 SINGLE  past-image L#191c24 R#191c24 NO-H-REPEAT  column #191c24 (opaque)  
+narrow 1040px  col 1040  gutter   0px/side  h-scroll none  bottom L#191c24 R#191c24 (no gutter — invisible, expected)  above #191c24 -  past-image L#191c24 R#191c24 (gutter too narrow to tell)  column #191c24 (opaque)  
+narrow  900px  col  900  gutter   0px/side  h-scroll none  bottom L#191c24 R#191c24 (no gutter — invisible, expected)  above #191c24 -  past-image L#191c24 R#191c24 (gutter too narrow to tell)  column #191c24 (opaque)  
+narrow  720px  col  720  gutter   0px/side  h-scroll none  bottom L#191c24 R#191c24 (no gutter — invisible, expected)  above #191c24 -  past-image L#191c24 R#191c24 (gutter too narrow to tell)  column #191c24 (opaque)  
+narrow  480px  col  480  gutter   0px/side  h-scroll none  bottom L#191c24 R#191c24 (no gutter — invisible, expected)  above #191c24 -  past-image L#191c24 R#191c24 (gutter too narrow to tell)  column #191c24 (opaque)  
+narrow  375px  col  375  gutter   0px/side  h-scroll none  bottom L#191c24 R#191c24 (no gutter — invisible, expected)  above #191c24 -  past-image L#191c24 R#191c24 (gutter too narrow to tell)  column #191c24 (opaque)  
+wide   1920px  col 1920  gutter   0px/side  h-scroll none  bottom L#191c24 R#191c24 (no gutter — invisible, expected)  above #191c24 -  past-image L#191c24 R#191c24 (gutter too narrow to tell)  column #191c24 (opaque)  
+wide   1440px  col 1440  gutter   0px/side  h-scroll none  bottom L#191c24 R#191c24 (no gutter — invisible, expected)  above #191c24 -  past-image L#191c24 R#191c24 (gutter too narrow to tell)  column #191c24 (opaque)  
+wide   1280px  col 1280  gutter   0px/side  h-scroll none  bottom L#191c24 R#191c24 (no gutter — invisible, expected)  above #191c24 -  past-image L#191c24 R#191c24 (gutter too narrow to tell)  column #191c24 (opaque)  
+wide   1100px  col 1100  gutter   0px/side  h-scroll none  bottom L#191c24 R#191c24 (no gutter — invisible, expected)  above #191c24 -  past-image L#191c24 R#191c24 (gutter too narrow to tell)  column #191c24 (opaque)  
+wide   1040px  col 1040  gutter   0px/side  h-scroll none  bottom L#191c24 R#191c24 (no gutter — invisible, expected)  above #191c24 -  past-image L#191c24 R#191c24 (gutter too narrow to tell)  column #191c24 (opaque)  
+wide    720px  col  720  gutter   0px/side  h-scroll none  bottom L#191c24 R#191c24 (no gutter — invisible, expected)  above #191c24 -  past-image L#191c24 R#191c24 (gutter too narrow to tell)  column #191c24 (opaque)  
+wide    375px  col  375  gutter   0px/side  h-scroll none  bottom L#191c24 R#191c24 (no gutter — invisible, expected)  above #191c24 -  past-image L#191c24 R#191c24 (gutter too narrow to tell)  column #191c24 (opaque)  
+long page (doc 5084px, scrolled to 2000): bottom #ff00ff mid-gutter #191c24 — STILL PINNED + SINGLE
+control tile  1440px: #ff00ff/#ff00ff/#ff00ff — REPEATS BOTH AXES (unchanged)
+control none  1440px: gutter px #191c24 — expected #191c24 OK
+ALL OK

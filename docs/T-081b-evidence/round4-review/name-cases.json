@@ -1,0 +1,230 @@
+[
+{
+"k": "plain_ascii",
+"n": "Midnight"
+},
+{
+"k": "builtin_zh",
+"n": "辦公室"
+},
+{
+"k": "builtin_en",
+"n": "Office"
+},
+{
+"k": "builtin_upper",
+"n": "OFFICE"
+},
+{
+"k": "builtin_pad_ascii",
+"n": "  OFFICE  "
+},
+{
+"k": "builtin_dotted_I",
+"n": "OFFİCE"
+},
+{
+"k": "builtin_fullwidth",
+"n": "ＯＦＦＩＣＥ"
+},
+{
+"k": "builtin_kelvin",
+"n": "OFFICEK"
+},
+{
+"k": "bom_prefix_zh",
+"n": "﻿辦公室"
+},
+{
+"k": "bom_suffix_zh",
+"n": "辦公室﻿"
+},
+{
+"k": "bom_prefix_en",
+"n": "﻿Office"
+},
+{
+"k": "zwsp_inside",
+"n": "辦​公室"
+},
+{
+"k": "zwnj_persian",
+"n": "می‌خواهم"
+},
+{
+"k": "zwj_family_emoji",
+"n": "家庭 👨‍👩‍👧"
+},
+{
+"k": "zwj_rainbow_flag",
+"n": "Pride 🏳️‍🌈"
+},
+{
+"k": "zwj_woman_tech",
+"n": "Coder 👩‍💻"
+},
+{
+"k": "emoji_simple",
+"n": "🌙 Midnight 🌙"
+},
+{
+"k": "emoji_vs16_only",
+"n": "Heart ❤️"
+},
+{
+"k": "devanagari_zwj",
+"n": "क्‍ष theme"
+},
+{
+"k": "arabic_plain",
+"n": "سمة داكنة"
+},
+{
+"k": "hebrew_plain",
+"n": "ערכת נושא כהה"
+},
+{
+"k": "arabic_with_alm",
+"n": "سمة؜داكنة"
+},
+{
+"k": "rtl_override",
+"n": "‮abc"
+},
+{
+"k": "cjk",
+"n": "深海の夜"
+},
+{
+"k": "korean",
+"n": "밤하늘"
+},
+{
+"k": "ideographic_space_only",
+"n": "　"
+},
+{
+"k": "ideographic_space_pad",
+"n": "　辦公室　"
+},
+{
+"k": "ideographic_space_office",
+"n": "　Office　"
+},
+{
+"k": "nbsp_only",
+"n": " "
+},
+{
+"k": "nbsp_pad_office",
+"n": " Office "
+},
+{
+"k": "nel_u0085",
+"n": "Office"
+},
+{
+"k": "line_sep_u2028",
+"n": "Mid night"
+},
+{
+"k": "para_sep_u2029",
+"n": "Mid night"
+},
+{
+"k": "ogham_space",
+"n": " Office "
+},
+{
+"k": "mongolian_vowel_sep",
+"n": "Off᠎ice"
+},
+{
+"k": "soft_hyphen",
+"n": "Off­ice"
+},
+{
+"k": "tab_pad",
+"n": "\tMidnight\t"
+},
+{
+"k": "newline_inside",
+"n": "Mid\nnight"
+},
+{
+"k": "empty",
+"n": ""
+},
+{
+"k": "space_only",
+"n": "   "
+},
+{
+"k": "len_80_bmp",
+"n": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+},
+{
+"k": "len_81_bmp",
+"n": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+},
+{
+"k": "len_80_astral",
+"n": "🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙"
+},
+{
+"k": "len_81_astral",
+"n": "🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙🌙"
+},
+{
+"k": "spoof_builtin_marker_zh",
+"n": "辦公室（內建）"
+},
+{
+"k": "spoof_builtin_marker_en",
+"n": "Office (Built-in)"
+},
+{
+"k": "new_theme_zh",
+"n": "新主題"
+},
+{
+"k": "new_theme_en",
+"n": "New theme"
+},
+{
+"k": "nfd_office",
+"n": "Offíce"
+},
+{
+"k": "variation_sel_office",
+"n": "Office️"
+},
+{
+"k": "del_u007f",
+"n": "Office"
+},
+{
+"k": "c1_u009b",
+"n": "Office"
+},
+{
+"k": "tag_char",
+"n": "Office󠁁"
+},
+{
+"k": "word_joiner",
+"n": "Off⁠ice"
+},
+{
+"k": "lre_u202a",
+"n": "‪Office"
+},
+{
+"k": "isolate_u2066",
+"n": "⁦Office"
+},
+{
+"k": "rlm_u200f",
+"n": "‏سمة"
+}
+]

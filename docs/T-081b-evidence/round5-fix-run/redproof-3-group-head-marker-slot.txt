@@ -1,0 +1,15 @@
+=== RED PROOF 3 — revert .ts-group-head to the pack-settable --color-text-muted ===
+}: expected '.ts-tag {\n  font-size: 11px;\n  padd…' not to contain 'var(--color-text-muted)'
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+ FAIL  src/components/ThemeSettings.test.tsx > ThemeSettings · import > cannot be made to show two identical built-in rows by a theme's wording, colours or name
+AssertionError: .ts-tag {
+}: expected '.ts-tag {\n  font-size: 11px;\n  padd…' not to contain 'var(--color-text-muted)'
+ Test Files  1 failed (1)
+      Tests  1 failed | 17 passed (18)
+
+=== RESTORED ===
+ Test Files  1 passed (1)
+      Tests  18 passed (18)
+   Start at  21:03:36
+   Duration  2.64s (transform 153ms, setup 12ms, collect 205ms, tests 2.07s, environment 169ms, prepare 39ms)
+

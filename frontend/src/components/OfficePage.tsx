@@ -52,7 +52,7 @@ function blankChatPeer(id: string, name: string, kind: Member["kind"]): Member {
 }
 
 export function OfficePage() {
-  const { t } = useI18n();
+  const { t, msg } = useI18n();
   // T-66a8: the sidebar switches 正職/外包 by a top text tab (owner mockup
   // 2026-07-18), replacing the old two-stacked-groups rail. Plain component
   // state (not persisted) — the tab is a view toggle, not a route.
@@ -213,7 +213,7 @@ export function OfficePage() {
     ? {
         ...blankChatPeer(
           workerPeer.id,
-          t.office.outsource.label(workerPeer.codename),
+          msg.outsourceLabel(workerPeer.codename),
           "outsource",
         ),
         status: "online",

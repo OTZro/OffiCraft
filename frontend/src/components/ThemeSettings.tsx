@@ -10,11 +10,15 @@ import {
   NAV_ICON_KEYS,
   isValidAvatarValue,
   validateThemeBundle,
+  BACKGROUND_MODES,
+  DEFAULT_BACKGROUND_MODE,
   type AvatarKind,
+  type BackgroundMode,
   type NavIconKey,
   type ThemeBundle,
 } from "../lib/themeBundle";
 import { SAFE_FONT_FAMILIES } from "../styles/themeFonts.generated";
+import { THEME_ALIAS_DEFAULT_TOKENS } from "../styles/themeTokens.generated";
 import {
   bundleFilename,
   exportOfficeBaseTheme,
@@ -27,6 +31,8 @@ import {
   groupLabel,
   tokenMeta,
   toHex6,
+  alphaPercent,
+  withAlphaPercent,
   type TokenGroup,
 } from "../lib/themeTokenMeta";
 import { Breadcrumbs, type Crumb } from "./Breadcrumbs";
@@ -43,6 +49,10 @@ import "./theme-settings.css";
 type View = "list" | "import" | "edit";
 
 const DICTS_BY_LANG = { zh, en } as const;
+
+// How many skipped wording codes the import warning names before the count
+// carries the rest — a pack can skip dozens, and the banner must stay one line.
+const IMPORT_SKIPPED_SAMPLE = 3;
 
 // The two font tokens the editor offers a dropdown for (T-16a1 P4). Body =
 // --font-sans (interface text), Title = --font-title (page headings). The
@@ -92,7 +102,7 @@ const NAV_ICON_SLOTS: { key: NavIconKey; labelKey: NavIconLabelKey }[] = [
  * theme SELECTOR + language.
  */
 export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
-  const { t, theme, setTheme, language, customThemes, commitCustomThemes } =
+  const { t, msg, theme, setTheme, language, customThemes, commitCustomThemes } =
     useI18n();
 
   const [view, setView] = useState<View>("list");
@@ -100,6 +110,10 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
   // ── import state ──
   const [importText, setImportText] = useState("");
   const [importError, setImportError] = useState("");
+  // The unrecognised wording codes the last import dropped. An import with such
+  // codes SUCCEEDS (owner ruling 2026-07-27) — this is what makes the drop
+  // visible instead of silent, and it is shown on the list the import lands on.
+  const [importSkipped, setImportSkipped] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ── edit state ──
@@ -133,8 +147,19 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
   const [editNavIcons, setEditNavIcons] = useState<
     Partial<Record<NavIconKey, string>>
   >({});
+  // Outer-canvas background tile (T-081b): a single embedded base64 data URI
+  // ("" = none, the canvas stays the plain --color-bg colour). SAME image gate
+  // as the logo. Only this ONE zone is offered — the topbar / nav / main zones
+  // sit under text and are deliberately colour-only.
+  const [editCanvasBg, setEditCanvasBg] = useState<string>("");
+  // How that tile is laid down (T-081b) — tile (repeat both axes, the historical
+  // and default behaviour) or sides (one copy against each viewport edge).
+  const [editCanvasBgMode, setEditCanvasBgMode] = useState<BackgroundMode>(
+    DEFAULT_BACKGROUND_MODE
+  );
   const [brandError, setBrandError] = useState("");
   const logoInputRef = useRef<HTMLInputElement>(null);
+  const canvasBgInputRef = useRef<HTMLInputElement>(null);
   const navIconInputRefs = {
     office: useRef<HTMLInputElement>(null),
     replies: useRef<HTMLInputElement>(null),
@@ -172,7 +197,7 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
       return;
     }
     const id = nextCustomThemeId(customThemes.map((b) => b.id));
-    const bundle = exportOfficeBaseTheme(id, t.profile.themeNewName);
+    const bundle = exportOfficeBaseTheme(id, t.themeIdentity.newTheme);
     commitCustomThemes([...customThemes, bundle]);
     setAddError("");
     openEdit(bundle);
@@ -182,6 +207,7 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
   function openImport() {
     setImportText("");
     setImportError("");
+    setImportSkipped([]);
     setAddError("");
     setView("import");
   }
@@ -206,6 +232,7 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
       setImportError(err);
       return;
     }
+    setImportSkipped(res.skippedWording);
     setView("list");
   }
 
@@ -234,7 +261,19 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
   function openEdit(bundle: ThemeBundle) {
     setEditId(bundle.id);
     setEditName(bundle.name);
-    setEditColors(Object.entries(bundle.colors));
+    // Rows = what the bundle sets, PLUS every token whose default merely
+    // follows another token (the zone backgrounds, the T-081b split tokens).
+    // Those never appear in an exported bundle — that is deliberate, it is what
+    // lets them keep following — so without this they were unreachable in the
+    // product's own editor while being exactly the ones a theme needs to set
+    // apart (e.g. a translucent top bar, or a light theme's switch knob).
+    // An empty value means "leave it following"; only non-empty rows are saved.
+    setEditColors([
+      ...Object.entries(bundle.colors),
+      ...Object.keys(THEME_ALIAS_DEFAULT_TOKENS)
+        .filter((tok) => !(tok in bundle.colors))
+        .map((tok) => [tok, ""] as [string, string]),
+    ]);
     setEditWording(
       bundle.wording
         ? JSON.parse(JSON.stringify(bundle.wording))
@@ -245,6 +284,8 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
     setAvatarError("");
     setEditLogo(bundle.logo ?? "");
     setEditNavIcons({ ...(bundle.navIcons ?? {}) });
+    setEditCanvasBg(bundle.backgrounds?.canvas ?? "");
+    setEditCanvasBgMode(bundle.backgroundModes?.canvas ?? DEFAULT_BACKGROUND_MODE);
     setBrandError("");
     setWordingLang(language);
     setWordingSearch("");
@@ -314,6 +355,26 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
     setEditError("");
   }
 
+  async function handleCanvasBgPicked(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setBrandError("");
+    const dataUri = await readValidatedImage(file);
+    if (dataUri === null) {
+      setBrandError(t.settings.themeAvatarInvalid);
+      return;
+    }
+    setEditCanvasBg(dataUri);
+    setEditError("");
+  }
+
+  function clearCanvasBg() {
+    setEditCanvasBg("");
+    setBrandError("");
+    setEditError("");
+  }
+
   function clearLogo() {
     setEditLogo("");
     setBrandError("");
@@ -365,16 +426,24 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
   function handleSaveEdit() {
     if (editId == null) return;
     const colors: Record<string, string> = {};
-    for (const [tok, val] of editColors) colors[tok] = val;
+    // An empty row is "still following its default" — writing it would bake a
+    // literal value in and break exactly the following it is there to preserve.
+    for (const [tok, val] of editColors) if (val.trim() !== "") colors[tok] = val;
 
     // Prune empty overrides — the validator rejects an empty-after-trim value,
-    // and an empty override just means "no override".
+    // and an empty override just means "no override". The VALUE is stored
+    // verbatim, never trimmed: several overridable leaves are sentence FRAGMENTS
+    // whose boundary space is load-bearing (machine.uninstallWarnBody2 is
+    // `"” still has "`, …Body3 is `" member(s) online…"`), so trimming what the
+    // owner typed would render "still has3member(s)" / 「上還有3位成員」 — the
+    // product's own editor corrupting the very strings it just made overridable.
+    // Only the emptiness TEST trims, which is all it was ever protecting.
     const wording: Record<string, Record<string, string>> = {};
     for (const lang of ["zh", "en"] as const) {
       const entries = editWording[lang] ?? {};
       const kept: Record<string, string> = {};
       for (const [code, val] of Object.entries(entries)) {
-        if (typeof val === "string" && val.trim() !== "") kept[code] = val.trim();
+        if (typeof val === "string" && val.trim() !== "") kept[code] = val;
       }
       if (Object.keys(kept).length > 0) wording[lang] = kept;
     }
@@ -411,6 +480,16 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
     if (Object.keys(avatars).length > 0) bundle.avatars = avatars;
     if (editLogo !== "") bundle.logo = editLogo;
     if (Object.keys(navIcons).length > 0) bundle.navIcons = navIcons;
+    // The outer-canvas tile (T-081b) — absent means "no image", i.e. the plain
+    // --color-bg canvas an older bundle has always had.
+    if (editCanvasBg !== "") {
+      bundle.backgrounds = { canvas: editCanvasBg };
+      // Only a NON-default mode is written: a bundle that tiles stays byte-
+      // identical to one authored before the field existed.
+      if (editCanvasBgMode !== DEFAULT_BACKGROUND_MODE) {
+        bundle.backgroundModes = { canvas: editCanvasBgMode };
+      }
+    }
 
     const err = validateThemeBundle(bundle);
     if (err) {
@@ -564,6 +643,10 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
                 const [token, value] = editColors[i];
                 const hex = toHex6(value);
                 const meta = tokenMeta(token, language);
+                // An empty row is a token still FOLLOWING its default (see
+                // openEdit). Picking a colour is what starts it leading.
+                const follows = value.trim() === "";
+                const alpha = follows ? null : alphaPercent(value);
                 return (
                   <div key={token} className="ts-color-row">
                     <span className="ts-color-name" title={token}>
@@ -579,9 +662,44 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
                     <input
                       className="ts-input ts-color-value"
                       value={value}
+                      placeholder={
+                        follows
+                          ? `${t.settings.themeColorFollows} ${
+                              tokenMeta(
+                                THEME_ALIAS_DEFAULT_TOKENS[token],
+                                language
+                              ).label
+                            }`
+                          : undefined
+                      }
                       aria-label={meta.label}
                       onChange={(e) => setColorAt(i, e.target.value)}
                     />
+                    {/* Opacity is a first-class control, not something only a
+                        hand-written #RRGGBBAA can reach: a theme that floats the
+                        cockpit on a canvas image does it by making these layers
+                        translucent (owner 2026-07-27). Hidden for rgb()/hsl()
+                        values, whose alpha this editor does not rewrite. */}
+                    {alpha !== null && (
+                      <label className="ts-color-alpha">
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={alpha}
+                          aria-label={`${meta.label} ${t.settings.themeColorOpacity}`}
+                          onChange={(e) => {
+                            const next = withAlphaPercent(
+                              value,
+                              Number(e.target.value)
+                            );
+                            if (next !== null) setColorAt(i, next);
+                          }}
+                        />
+                        <span className="ts-color-alpha__value">{alpha}%</span>
+                      </label>
+                    )}
                   </div>
                 );
               })}
@@ -780,6 +898,90 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
               );
             })}
           </div>
+          {/* ── outer-canvas background (外框背景) — the ONE zone that takes an
+              image; the topbar/nav/main zones stay colour-only (readability) ── */}
+          <div className="ts-section-label">{t.settings.themeCanvasBgSection}</div>
+          <div className="ts-wording-sub">{t.settings.themeCanvasBgHint}</div>
+          <div className="ts-avatar-slots">
+            <div className="ts-avatar-slot">
+              <div className="ts-avatar-label">{t.settings.themeCanvasBg}</div>
+              <div className="ts-avatar-row">
+                <span
+                  className="avatar ts-avatar-preview"
+                  style={{ width: 48, height: 48 }}
+                >
+                  {editCanvasBg ? (
+                    <img
+                      className="avatar__img"
+                      src={editCanvasBg}
+                      alt=""
+                      width={48}
+                      height={48}
+                      draggable={false}
+                    />
+                  ) : (
+                    <UserIcon size={24} className="avatar__glyph" />
+                  )}
+                </span>
+                <input
+                  ref={canvasBgInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="ts-file"
+                  aria-label={t.settings.themeCanvasBg}
+                  onChange={handleCanvasBgPicked}
+                />
+                <button
+                  type="button"
+                  className="doc-btn"
+                  onClick={() => canvasBgInputRef.current?.click()}
+                >
+                  {t.settings.themeAvatarChoose}
+                </button>
+                {editCanvasBg && (
+                  <button type="button" className="doc-btn" onClick={clearCanvasBg}>
+                    {t.settings.themeAvatarClear}
+                  </button>
+                )}
+              </div>
+              {/* The mode only means anything once there IS an image, so it
+                  appears with one rather than sitting there inert (T-081b). */}
+              {editCanvasBg && (
+                <div className="ts-avatar-row">
+                  <label className="ts-avatar-label" htmlFor="ts-canvas-bg-mode">
+                    {t.settings.themeCanvasBgMode}
+                  </label>
+                  <select
+                    id="ts-canvas-bg-mode"
+                    className="ts-input ts-font-select"
+                    value={editCanvasBgMode}
+                    onChange={(e) =>
+                      setEditCanvasBgMode(e.target.value as BackgroundMode)
+                    }
+                  >
+                    {BACKGROUND_MODES.map((mode) => (
+                      <option key={mode} value={mode}>
+                        {
+                          {
+                            tile: t.settings.themeCanvasBgModeTile,
+                            sides: t.settings.themeCanvasBgModeSides,
+                            cover: t.settings.themeCanvasBgModeCover,
+                          }[mode]
+                        }
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {editCanvasBg && editCanvasBgMode !== "tile" && (
+                <div className="ts-wording-sub">
+                  {editCanvasBgMode === "sides"
+                    ? t.settings.themeCanvasBgModeHint
+                    : t.settings.themeCanvasBgModeCoverHint}
+                </div>
+              )}
+            </div>
+          </div>
           {brandError && <div className="set-error">{brandError}</div>}
 
           {/* ── wording overlay (用詞) ── */}
@@ -881,8 +1083,30 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
         </button>
       </div>
       {addError && <div className="set-error">{addError}</div>}
+      {importSkipped.length > 0 && (
+        <div className="set-warn" data-testid="theme-import-skipped">
+          {msg.themeImportSkipped(
+            importSkipped.length,
+            importSkipped.slice(0, IMPORT_SKIPPED_SAMPLE)
+          )}
+        </div>
+      )}
 
-      <div className="ts-list">
+      {/* 內建 / 自訂 is carried by the GROUP STRUCTURE, the twin of the quick
+       * picker's <optgroup> (ProfileDropdown.tsx) and fed by the same
+       * non-overridable themeMarkers subtree. Round 4 found the round-3 fix had
+       * only covered the quick picker: this list marked its rows with a text
+       * chip alone, and a pack controlled all three of that chip's signals — its
+       * TEXT (settings.themeBuiltinTag was overridable), its COLOUR
+       * (--color-seg-fill / --color-icon-violet-bg are pack-settable tokens) and
+       * the row's NAME — so it could still put two identical 「辦公室 [內建]」 rows
+       * on screen. A heading a theme cannot claim, a chip drawn from
+       * themeMarkers, and the non-overridable --color-marker-* slots close all
+       * three (T-081b review round 4, BLOCKER-A). */}
+      <div className="ts-list" role="group" aria-labelledby="ts-group-builtin">
+        <div className="ts-group-head" id="ts-group-builtin" data-testid="ts-group-builtin">
+          {t.themeMarkers.builtinGroup}
+        </div>
         {/* built-in: office is the only built-in — selectable and downloadable,
          * but not editable/deletable. Its download icon exports the office base
          * palette (owner: 辦公室主題不用擋下載); the edit/delete icons stay
@@ -894,17 +1118,17 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
             className={`ts-pick${theme === "office" ? " ts-pick--active" : ""}`}
             onClick={() => setTheme("office")}
           >
-            {t.profile.themeOffice}
-            <span className="ts-tag">{t.settings.themeBuiltinTag}</span>
+            {t.themeIdentity.office}
+            <span className="ts-tag">{t.themeMarkers.builtinGroup}</span>
           </button>
           <button
             type="button"
             className="ts-icon-btn"
-            aria-label={`${t.profile.themeExport} ${t.profile.themeOffice}`}
+            aria-label={`${t.profile.themeExport} ${t.themeIdentity.office}`}
             title={t.profile.themeExport}
             onClick={() =>
               downloadBundle(
-                exportOfficeBaseTheme("office-base", t.profile.themeOffice)
+                exportOfficeBaseTheme("office-base", msg.themeCopyName(t.themeIdentity.office))
               )
             }
           >
@@ -915,7 +1139,7 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
             className="ts-icon-btn"
             disabled
             aria-disabled="true"
-            aria-label={`${t.profile.themeEdit} ${t.profile.themeOffice}`}
+            aria-label={`${t.profile.themeEdit} ${t.themeIdentity.office}`}
             title={t.profile.themeEdit}
           >
             <PencilIcon size={15} />
@@ -925,14 +1149,20 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
             className="ts-icon-btn ts-icon-btn--danger"
             disabled
             aria-disabled="true"
-            aria-label={`${t.profile.themeDelete} ${t.profile.themeOffice}`}
+            aria-label={`${t.profile.themeDelete} ${t.themeIdentity.office}`}
             title={t.profile.themeDelete}
           >
             <TrashIcon size={15} />
           </button>
         </div>
+      </div>
 
-        {customThemes.map((b) => (
+      {customThemes.length > 0 && (
+        <div className="ts-list" role="group" aria-labelledby="ts-group-custom">
+          <div className="ts-group-head" id="ts-group-custom" data-testid="ts-group-custom">
+            {t.themeMarkers.customGroup}
+          </div>
+          {customThemes.map((b) => (
           <div key={b.id} className="ts-row">
             <button
               type="button"
@@ -941,7 +1171,7 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
             >
               {b.name}
               <span className="ts-tag ts-tag--custom">
-                {t.settings.themeCustomTag}
+                {t.themeMarkers.customGroup}
               </span>
             </button>
             <button
@@ -972,8 +1202,9 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
               <TrashIcon size={15} />
             </button>
           </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
       {(() => {
         const target = customThemes.find((b) => b.id === confirmDeleteId);
@@ -983,7 +1214,7 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
             testId="theme-delete-confirm"
             confirmTestId="theme-delete-confirm-btn"
             danger
-            body={t.settings.themeDeleteConfirm(target.name)}
+            body={msg.themeDeleteConfirm(target.name)}
             cancelLabel={t.settings.cancel}
             confirmLabel={t.profile.themeDelete}
             onCancel={() => setConfirmDeleteId(null)}

@@ -28,7 +28,7 @@ import { CopyIcon, CheckIcon, CloseIcon } from "./icons";
 import "./monitor.css";
 
 export function MonitorPage() {
-  const { t } = useI18n();
+  const { t, msg } = useI18n();
   const { monitoring, refetch } = useMonitoring();
   // The machine registry (GET /api/machines) is the source for the machines
   // panel identity + online + teardown target — NOT the monitoring telemetry.
@@ -342,7 +342,7 @@ export function MonitorPage() {
       const detail = e instanceof ApiError ? e.serverMessage : "";
       setBootstrapError(
         detail
-          ? t.monitor.machine.bootstrapErrorDetail(detail)
+          ? msg.machineBootstrapErrorDetail(detail)
           : t.monitor.machine.bootstrapError
       );
     } finally {
@@ -852,7 +852,7 @@ export function MonitorPage() {
                 <p className="mon-cmd__hint">
                   {bootstrapResult.ok
                     ? t.monitor.machine.bootstrapSucceeded
-                    : t.monitor.machine.bootstrapFailed(bootstrapResult.exitCode)}
+                    : msg.machineBootstrapFailed(bootstrapResult.exitCode)}
                 </p>
                 <pre className="mon-log" data-testid="mon-bootstrap-log">
                   {bootstrapResult.log}
@@ -912,7 +912,7 @@ export function MonitorPage() {
                 {t.monitor.machine.uninstallWarnTitle}
               </div>
               <p className="mon-confirm__body">
-                {t.monitor.machine.uninstallWarnBody(
+                {msg.machineUninstallWarnBody(
                   uninstallWarnTarget.displayName,
                   membersOnMachine(uninstallWarnTarget.machineId).length
                 )}
@@ -966,7 +966,7 @@ export function MonitorPage() {
                 {t.monitor.machine.uninstallConfirmTitle}
               </div>
               <p className="mon-confirm__body">
-                {t.monitor.machine.uninstallConfirmBody(
+                {msg.machineUninstallConfirmBody(
                   uninstallTarget.displayName
                 )}
               </p>
@@ -1037,7 +1037,7 @@ export function MonitorPage() {
                 {t.monitor.machine.deleteConfirmTitle}
               </div>
               <p className="mon-confirm__body">
-                {t.monitor.machine.deleteConfirmBody(deleteTarget.displayName)}
+                {msg.machineDeleteConfirmBody(deleteTarget.displayName)}
               </p>
               {deleteError && <div className="mon-error">{deleteError}</div>}
               <div className="mon-confirm__actions">
@@ -1478,7 +1478,7 @@ function OutsourceSessionRow({
   dash: string;
   onOpen: () => void;
 }) {
-  const { t } = useI18n();
+  const { t, msg } = useI18n();
 
   // Task context for the sub-line: the bound task's title first, then its type
   // name, then the T-xxxx number — honest dash when none resolved.
@@ -1511,7 +1511,7 @@ function OutsourceSessionRow({
           <Avatar size={34} kind="outsource" />
           <div className="mon-member__body">
             <div className="mon-member__name">
-              {worker.codename ? t.office.outsource.label(worker.codename) : dash}
+              {worker.codename ? msg.outsourceLabel(worker.codename) : dash}
             </div>
             <div className="mon-member__sub">
               <span>{context}</span>

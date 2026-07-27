@@ -287,3 +287,87 @@ owner/agent 自由文字會帶**不可斷的長 token**(長 URL、40-hex sha、�
 
 ## verify(root §13)
 純 FE UI 改動:headless build → `preview:4173` → Playwright,CI 綠即 land、**不上 prod 驗**。公開 URL https://officraft.hardcoretech.link/。`Monitor.tsx` 的 mock 部分無 telemetry backend(純前端 mock)。
+
+## i18n 帶參數文案 = 可覆寫片段 + `compose.ts`(T-081b)
+字典葉子**不再寫 interpolation 函式**。白名單產生器只收字串葉子,所以任何寫成
+`` (name) => `終止「${name}」嗎?` `` 的模板,裡面的字對主題包的 `wording` 覆寫是隱形的
+——「終止」按鈕換得掉、確認框內文換不掉(owner 2026-07-27 回報的正是這個)。
+- **寫法**:字拆成靜態葉子(`terminateConfirmBodyLead` / `…Tail`、`progressLabel`、
+  `blockedByLabel` …),組裝收在 `i18n/compose.ts` 的 `makeMessages(t, language)`;
+  元件寫 `const { t, msg } = useI18n()` 後叫 `msg.taskTerminateConfirmBody(title)`。
+  `msg` 與 `t` 同一個 memo 來源,主題換詞立刻反映。
+- **兩種接法**:兩語言空格一致 → `label + " " + 參數`(值裡不留看不見的空白);參數卡在
+  句中、中英標點/引號不同 → lead/tail **純串接**,標點寫進片段,兩語言各填各的、不強求對齊。
+  只有空格差異用 `sp`(zh 無空格)吸收。多參數(`uninstallWarnBody1/2/3`)在鍵名標順序。
+- **查表不要寫成模板**:狀態→顯示字用靜態物件葉子(`workerDetail.statusOf`、
+  `mp.effortOf`,同 `tasks.status` / `tasks.priority` 的寫法),成員才會逐條可覆寫。
+- **護欄**:`i18n/compose.test.ts` 把每一句在 zh/en 的**逐字輸出**釘死——拆片段不准改到
+  螢幕上的一個字元;新增一支 composer 沒進表會被 coverage 那條擋下。
+
+## 主題的身分名稱不可被主題包覆寫(T-081b §6)
+`themeIdentity.*` 子樹放的是**某個主題自己的 name**(主題下拉的那一列、匯出檔寫進去的
+`name`、新建主題的預設名)。`gen-message-keys.mjs` **整個跳過這個子樹**——規則掛在結構上,
+不是另外手維一份 key 清單。以後多一個內建主題,名字放進去就自動不可覆寫。
+導覽列的「辦公室」是 `nav.office`(場所稱呼),**照舊可換**。護欄:
+`i18n/messageKeys.theme-identity.test.ts`。
+
+## 匯入主題包:不認得的用詞代碼 = 警告,不是錯誤(T-081b)
+`wording` 覆寫裡不在白名單的 message code **一律丟棄、匯入照樣成功**(owner
+2026-07-27:「已匯入的主題包還是要能夠運作,只是不認得的會失效」),但**不准靜默**。
+- 丟棄的代碼經 `validateWording(wording, where, skipped)` / `validateThemeBundle(…, skipped)`
+  的 **out-param 警告通道**回報(跨語言同一代碼只回報一次),`parseImportedBundle`
+  再以 `skippedWording: string[]` 交給 UI。**它永遠不是回傳值(錯誤)** —— 真正不合法的
+  包(顏色注入、保留 id、非法 token)照舊由回傳值擋下、留在匯入頁顯 `.set-error`。
+- UI 面:匯入成功後落回主題列表,列表頂端出 `.set-warn` 黃框
+  (`data-testid="theme-import-skipped"`),文案 = `msg.themeImportSkipped(count, sample)`。
+  **比例原則**:只點名前 `IMPORT_SKIPPED_SAMPLE`(3)個代碼,其餘由 count 承載、尾巴接
+  「等」/「…」,30 個略過也只有一行。
+- 已存在的包(匯入時間早於白名單縮減)**不重驗、不清洗**:`applyWording` 的 `setPath`
+  只覆寫既有 string leaf,不認得的路徑自然無作用。護欄:`i18n/index.test.tsx`
+  「keeps applying an already-stored pack whose overlay holds an unrecognised code」。
+- server 端(`wording_bundle.go`)維持同樣的丟棄語意,但**沒有面向使用者的**警告通道:
+  PATCH 的回應形狀是凍結 wire(§13),加欄要先過 spec;而且 FE 在送出前已把不認得的
+  代碼濾掉,server 這側的丟棄對使用者不可見。要讓 server 也**回應**回報,是另一張票——
+  但**對 operator 一定要留痕**:每次丟棄寫一行 server log(bundle 位置+代碼)。
+  server 讀取既有 DB 列時也跑同一支裁剪(只裁剪、不拒收),否則舊列會一路被 GET 回顯。
+- **spec 是 wire 的 SSOT**:這條「不認得 = 丟棄 + 200 + 裁剪過的 echo」寫在
+  `spec/openapi.json` 的 `ThemeBundleDTO.wording` / `SettingsUpdateDTO.custom_themes`,
+  行為由 `conformance/test_rest_happy.py` 釘。改這個語意 = 先改 spec 再改碼。
+
+## 主題編輯器不准把作者打的字 trim 掉(T-081b)
+`wording` 覆寫的值**逐字存**,只有「是不是空的」那個判斷才 trim。
+T-081b 開放的葉子有好幾條是**句子片段**,邊界空白是有意義的
+(`monitor.machine.uninstallWarnBody2` = `"」上還有 "`、`…Body3` 開頭是空白),
+存之前 trim 會讓產品自己的編輯器產出「上還有3位成員」——編輯器弄壞它剛開放的字串。
+護欄:`ThemeSettings.test.tsx`「keeps the boundary spaces of a sentence-fragment override」。
+
+## 匯出不烘 alias 預設值(T-081b)
+theme.css 裡定義值是裸 `var(--other)` 的 token(分區三槽)是「跟隨」不是顏色。
+`getComputedStyle` 會把它解析掉,所以匯出/播種前必須先跳過**還坐在 alias 上**的槽,
+否則每個新主題的分區都被釘死在內建色。名單由 `gen-theme-tokens.mjs` 從 theme.css 推導
+(`THEME_ALIAS_DEFAULT_TOKENS`),不是手寫三個名字。護欄:`lib/themeExport.test.ts`。
+
+## 最外層畫布可吃背景圖(T-081b,rc-1e78b3b19082 選項 2)
+主題包新增 optional `backgrounds: { canvas: "data:image/…;base64,…" }`(spec 已凍結入
+`openapi.json` 的 ThemeBundleDTO)。**只有最外層畫布**(內容欄兩側那塊)有這一槽。
+- **為何是 zone map 而不是像 `logo` 的裸字串**:key 就是「哪一區」,把「只有畫布能吃圖」
+  這條規則寫進結構——`backgrounds.topbar` 會被具名擋下(422 / `only canvas`),不是
+  靠註解約定。頂列/頁籤列/內容區底下都坐著文字,**文字壓在花紋上沒有可讀性保證**,
+  所以不開放,不要「順手」加進 key set。
+- **圖片驗證原封不動重用頭像那道閘**:TS `isValidAvatarValue` / Go `validAvatarValue`
+  ——同一份 mime 白名單(PNG/JPEG/WEBP,SVG 永遠拒)、同一組 magic byte、同一個
+  **64 KiB 解碼上限**。256×256 的可平鋪紋理綽綽有餘;想塞 4K 桌布正是這個 cap 要擋的。
+  **不准為背景另開一套規則、不准調高 cap**;TS/Go 兩側是 twin,任一側加規則就得同步。
+- **色與圖並存**:`global.css` 的 body 改成 `background-color: var(--color-bg)` +
+  `background-image: var(--canvas-bg-image, none)` + `background-repeat: repeat`。
+  沒有圖 = 完全等同從前的純色;舊主題包(沒有這個欄位)一個像素都不會變。
+- **CSS 變數刻意不叫 `--color-*`**:它的值是 `url("data:…")` 不是顏色,掛進顏色契約
+  會被 `themeExport.ts` 的 `isValidColorValue` 濾掉、也過不了 bundle 的顏色文法。
+  因此圖片走**自己的 bundle 欄位**(與 avatars/logo 同路)round-trip,
+  套用則在 `i18n/index.tsx` 的 apply effect 以 `setProperty` 推 `--canvas-bg-image`,
+  並登記進 `appliedTokensRef` 讓換主題時清得掉。護欄:`lib/themeExport.test.ts`
+  「round-trips a canvas background image through serialize → import」+
+  「no colour token holds a url()」、`i18n/index.test.tsx` 的 apply 用例。
+- **手機不受影響**(owner 特別交代):視窗 ≤1136px 時 gutter 歸零,三個分區的不透明
+  底色蓋滿整幅,圖看不見也不影響版面;background 不參與 layout,所以不可能產生橫向捲動。
+  實測 narrow 1440/1040/900/720/480/375 與 wide 1440/1280/1040 皆 h-scroll = 0。

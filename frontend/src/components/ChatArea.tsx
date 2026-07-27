@@ -172,7 +172,7 @@ export function ChatArea({
   // taskless peer never grows an empty line here).
   headerTaskTitle?: string;
 }) {
-  const { t } = useI18n();
+  const { t, msg } = useI18n();
   const isOffline = member.status === "offline";
   // T-9c3c (owner 2026-07-24, "有時候離線還是沒辦法發訊息"): a REAL roster member
   // (onWake wired) can ALWAYS be messaged — the server NEVER gates on recipient
@@ -273,7 +273,7 @@ export function ChatArea({
     // cache.
     const codename =
       workers.find((w) => w.id === id)?.codename ?? codenames.get(id);
-    if (codename !== undefined) return t.office.outsource.label(codename);
+    if (codename !== undefined) return msg.outsourceLabel(codename);
     return id;
   };
   // Is the owner ACTUALLY looking (window focused + tab visible)? Read side
@@ -1053,7 +1053,7 @@ export function ChatArea({
           <span>
             {expanded
               ? t.chat.interAgentCollapse
-              : t.chat.interAgentExpand(group.messages.length)}
+              : msg.chatInterAgentExpand(group.messages.length)}
           </span>
         </button>
         {expanded && (
@@ -1259,7 +1259,7 @@ export function ChatArea({
               <MoonIcon size={26} />
             </span>
             <div className="chat__offline-title">
-              {t.chat.offlineTitle(member.name)}
+              {msg.chatOfflineTitle(member.name)}
             </div>
             {/* T-94c1: offline/stopped can now be messaged (queues until wake),
              * so the hint no longer says "喚醒後才能開始對話" (which contradicted
@@ -1267,7 +1267,7 @@ export function ChatArea({
              * the composer's wake row now, not on this card. */}
             <div className="chat__offline-hint">
               {offlineQueue
-                ? t.chat.offlineQueueHint(member.name)
+                ? msg.chatOfflineQueueHint(member.name)
                 : t.chat.offlineHint}
             </div>
           </div>
@@ -1287,7 +1287,7 @@ export function ChatArea({
            * reaches here. A plain, non-clickable notice: there is nothing to
            * wake and no live detail panel to open for these peers. */
           <div className="chat__composer-locked" role="status">
-            {t.chat.composerOffline(member.name)}
+            {msg.chatComposerOffline(member.name)}
           </div>
         ) : (
           <>
@@ -1301,7 +1301,7 @@ export function ChatArea({
               <div className="chat__wake-row">
                 <span className="chat__wake-row__hint">
                   <MoonIcon size={14} />
-                  {t.chat.wakeQueueHint(member.name)}
+                  {msg.chatWakeQueueHint(member.name)}
                 </span>
                 {onWake && (
                   <button

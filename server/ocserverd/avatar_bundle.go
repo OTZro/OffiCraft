@@ -192,6 +192,77 @@ func validateLogo(logo *string, where string) error {
 	return nil
 }
 
+// backgroundKeyAllowed is the closed set of chrome zones a backgrounds overlay
+// may carry (T-081b). It holds exactly ONE zone: `canvas`, the outermost canvas
+// beside the centred content column. The zone tokens above it (topbar / nav /
+// main) are deliberately NOT here — they sit under text, and text over a busy
+// tiled pattern has no readability guarantee. Any other key is a 422.
+var backgroundKeyAllowed = map[string]bool{"canvas": true}
+
+// validateBackgrounds validates a bundle's optional outer-canvas background
+// overlay (T-081b). A nil overlay is admissible. Each key must be an allowed
+// zone; each value passes the SAME strict image gate as an avatar value
+// (validAvatarValue — data-URI / raster-mime / 64 KiB size / magic-byte), so the
+// one gate stays the only image validator and the cap is NOT relaxed: a tileable
+// texture fits easily, a wallpaper is exactly what the cap must stop.
+func validateBackgrounds(backgrounds *map[string]string, where string) error {
+	if backgrounds == nil {
+		return nil
+	}
+	for key, value := range *backgrounds {
+		if !backgroundKeyAllowed[key] {
+			return fmt.Errorf(
+				"%s: background zone %q is not allowed (only canvas)", where, key)
+		}
+		if err := validAvatarValue(value); err != nil {
+			return fmt.Errorf("%s: backgrounds[%s] %v", where, key, err)
+		}
+	}
+	return nil
+}
+
+// backgroundModeAllowed is the closed set of display modes a background image
+// may be laid down with (T-081b). `tile` repeats it over both axes — the ONLY
+// behaviour before this field existed, hence the default for an unlisted zone;
+// `sides` pins ONE copy against each viewport edge for art that reads as a pair
+// of standing objects rather than a texture (not mirrored — a theme wanting
+// symmetry bakes it into the image, owner 2026-07-27); `cover` scales one copy
+// to fill the viewport, for a single scene the cockpit floats on. `cover` is
+// only visible where the theme also makes the chrome zone colours translucent
+// (the colour grammar already admits #RRGGBBAA / rgba()), which is where its
+// readability risk lives — owner accepted it on rc-f0e23286d75e.
+var backgroundModeAllowed = map[string]bool{"tile": true, "sides": true, "cover": true}
+
+// validateBackgroundModes validates a bundle's optional per-zone display-mode
+// map (T-081b). A nil map is admissible and means every zone tiles. Each key
+// must be an allowed zone AND must carry an image in the same bundle's
+// backgrounds — a mode on an imageless zone paints nothing, so it is a mistake
+// worth naming rather than ignoring. Each value must be an allowed mode.
+func validateBackgroundModes(
+	modes *map[string]string, backgrounds *map[string]string, where string,
+) error {
+	if modes == nil {
+		return nil
+	}
+	for key, value := range *modes {
+		if !backgroundKeyAllowed[key] {
+			return fmt.Errorf(
+				"%s: background zone %q is not allowed (only canvas)", where, key)
+		}
+		if backgrounds == nil || (*backgrounds)[key] == "" {
+			return fmt.Errorf(
+				"%s: backgroundModes[%s] has no image in backgrounds[%s]",
+				where, key, key)
+		}
+		if !backgroundModeAllowed[value] {
+			return fmt.Errorf(
+				"%s: backgroundModes[%s] %q is not a valid mode (only tile, sides, cover)",
+				where, key, value)
+		}
+	}
+	return nil
+}
+
 // validateNavIcons validates a bundle's optional per-tab nav-icon overlay
 // (T-ea81). A nil overlay is admissible. Each key must be one of the five nav
 // tabs (navIconKeyAllowed); each value passes the SAME strict image gate as an

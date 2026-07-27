@@ -1,5 +1,36 @@
 :root {
   --color-bg: #191c24;
+  /* T-081b 版面分區:在此之前整個座艙只有「頁底」與「卡片底」兩層可被主題換色
+   * ——.topbar / .nav-tabs / .app__main 都沒有自己的 background,一律吃 body 的
+   * --color-bg,所以主題只有「底色多深/多綠」這一個旋鈕,做不出區域層次。
+   * 這三槽把外殼的三個區域各自開放出來。預設值刻意是 var(--color-bg):內建主題
+   * 與所有既有主題包(只填 --color-bg 的)外觀完全不變,填了才分層。
+   * ⚠️ 寬版版面(data-layout="wide")解除內容欄寬度上限,兩側 gutter 消失,
+   *    最外層的 --color-bg 幾乎不可見——分層不要只押在最外層那一色。 */
+  /* T-081b:最外層畫布的背景圖(主題包 backgrounds.canvas)。刻意**不是**
+   * --color-* token:它的值是 url("data:…") 而非顏色,掛進顏色契約會被
+   * isValidColorValue 濾掉、也會被 bundle 的顏色文法擋下。預設 none = 純色。
+   * ⚠️ 只有最外層畫布有這一槽:頂列/頁籤列/內容區三個分區**不吃圖**。
+   *    但它們的色值可以是半透明(#RRGGBBAA / rgba(),顏色文法本來就收),
+   *    所以主題想做「整個座艙浮在一張圖上」時,是把那三槽調透、讓這張圖透出來,
+   *    不是給它們各自一張圖。⚠️ 那三層底下坐著文字,調透就等於把文字放到圖上,
+   *    可讀性由主題自己負責(owner 於 rc-f0e23286d75e 明示接受這個取捨)。 */
+  --canvas-bg-image: none;
+  /* T-081b:畫布背景圖的鋪法(主題包 backgroundModes.canvas)。這四個預設值就是
+   * 「tile」的值,所以沒填模式的主題包(以及這欄位存在之前的所有主題包)鋪法一個
+   * 像素都不會變。另兩種鋪法由 i18n/index.tsx 改寫這四槽:
+   *   sides — 兩層、各貼一邊、兩軸都不重複、貼齊視窗底部;
+   *   cover — 一層、縮放填滿視窗、置中。
+   * 兩者都用 attachment: fixed 釘在**視窗**上:畫布背景預設跟著文件捲動,而這個
+   * 座艙的文件真的會捲(實測),不釘住就會在長頁面上再冒出第二份。
+   * 不做鏡像(owner 2026-07-27):要左右對稱由主題包畫在圖裡。 */
+  --canvas-bg-repeat: repeat;
+  --canvas-bg-position: 0 0;
+  --canvas-bg-size: auto;
+  --canvas-bg-attachment: scroll;
+  --color-topbar-bg: var(--color-bg); /* 頂列 */
+  --color-nav-bg: var(--color-bg);    /* 頁籤列 */
+  --color-main-bg: var(--color-bg);   /* 內容區 */
   --color-card: #242832;
   --color-border: #242832;
   --color-text: #e7e8ee;
@@ -11,6 +42,9 @@
   --color-accent-cta-bg: #13312a;
   --color-accent-cta-bg-hover: #184035;
   --color-indigo: #2c3350;
+  /* T-081b:自 --color-indigo 拆出。捲軸拇指的對比對象是頁面底色,飽和動作底
+   * 的對比對象是它上面的字,兩者對深/淺要求相反,故各自一槽。 */
+  --color-scrollbar-thumb: var(--color-indigo);
   /* office sidebar active-tab underline (T-66a8): the mockup's blue indicator
    * under the selected 正職/外包 tab — a saturated blue, deliberately NOT the
    * green accent (which reads as CTA/link) nor the dark --color-indigo fill. */
@@ -53,6 +87,10 @@
   --color-overlay: #fff;   /* border/hover/背景 白疊層基色;淺色主題覆寫成深色即自動翻轉 */
   --color-shadow: #000;    /* box-shadow 黑 */
   --color-scrim: #0a0c12;  /* modal/picker 背景遮罩(深藍黑,非純黑) */
+  /* T-081b:以下三個自上面兩個色槽拆出,各自只做一件事。 */
+  --color-surface-sunken: var(--color-shadow);  /* 自 --color-shadow 拆出:下沉一層表面的背景淡染基色 */
+  --color-backdrop: var(--color-shadow);        /* 自 --color-shadow 拆出:燈箱/預覽遮罩基色,--color-scrim 的半透明對應物 */
+  --color-on-backdrop: var(--color-overlay);     /* 自 --color-overlay 拆出:坐在遮罩上的前景(燈箱關閉鈕的字與圓底) */
 
   /* 任務狀態 / badge 長尾 */
   --color-wait-external: #a08bd6;      /* 等待外部 status/step badge 紫 */
@@ -68,6 +106,24 @@
   --color-answered: #6fbf73;           /* 已回覆 gate / reply answered 橄欖綠 */
   --color-on-warn: #17110a;            /* 琥珀 gate badge 底上深墨字 */
   --color-on-accent: #10131a;          /* accent/CTA 綠底、勾選框上深墨字/勾 */
+  /* 未讀徽章的底色。刻意**不是** --color-danger:白字壓在 --color-danger
+   * (#f0736b)上只有 2.85:1,遠低於 WCAG AA 的 4.5:1。同色相壓深到 #ba5953 後,
+   * 白字對它 4.52:1(過關),它對頁面底 --color-bg(#191c24)仍有 3.76:1、看得出來。
+   * --color-danger 本身不跟著壓深:它還是錯誤文字/登出列的**前景**色,壓深會讓
+   * 那些字在深底上更難讀——底色與前景色對深淺的要求相反,故各自一槽。
+   * ⚠️ 那個 3.76:1 只在「徽章的底真的是 --color-bg」時成立,而徽章其實坐在
+   * active 頁籤的 --color-indigo(2.74:1)與選中卡片的 --color-card(3.26:1)上。
+   * 沒有任何顏色能同時滿足這三者,所以三顆徽章各自加了一圈 1px 的 --color-bg
+   * 外框,把徽章與背後的東西分開——量的那個底色因此成立(check-token-roles.mjs
+   * 同時釘住外框與比值)。 */
+  --color-danger-badge: #ba5953;
+  --color-on-danger: var(--color-overlay);             /* T-081b 自 --color-overlay 拆出:壓在 --color-danger-badge 徽章底上的未讀數字 */
+  /* T-081b 自 --color-overlay 拆出:壓在 --color-indigo 實色底上的徽章數字/送出鈕文字。
+   * ⚠️ 這個預設值 #fff 假設的是「--color-indigo 是深色底」(內建深色主題如此)。
+   * 淺色主題若把 --color-indigo 設成淺底(active 頁籤、送出鈕常見的做法),
+   * 這一槽必須跟著改成深色字,照抄預設的白會直接看不見。
+   * 判準很簡單:它要對比的是 --color-indigo,不是頁面底色。 */
+  --color-on-indigo: var(--color-overlay);
   --color-success: #2ea043;            /* 正向確認綠(非 mint accent、非 iOS switch) */
 
   /* 選取靛藍族(segmented active / pick-row active / 勾選框) */
@@ -83,6 +139,7 @@
   --color-icon-amber: #e0b060;     /* 琥珀圖示前景 + 無限 toggle 底/邊 */
   --color-icon-amber-text: #e8c283;/* 無限 toggle active 文字(較亮琥珀) */
   --color-switch-on: #34c759;      /* toggle / webhook 啟用 iOS 綠(刻意非 accent) */
+  --color-knob: var(--color-overlay);              /* T-081b 自 --color-overlay 拆出:iOS 風格開關的滑塊實色 */
 
   /* 危險柔紅 / 過熱 */
   --color-danger-soft: #e07a7a;   /* 破壞性動作/錯誤 柔紅(較 --color-danger 柔) */
@@ -103,6 +160,27 @@
   --color-onboarding-bg: #fff8ec;
   --color-onboarding-border: #e0b070;
   --color-onboarding-fg: #5a4020;
+
+  /* ── 主題「結構標記」專用色槽(T-081b 第四輪 BLOCKER-A)────────────────────
+   * 「內建 / 自訂」chip 的底色與字色,以及分組標題的字色。刻意**不是**主題包可
+   * 覆寫的 token:產生器(scripts/gen-theme-tokens.mjs)把這一族排除在
+   * THEME_COLOR_TOKENS / themeColorTokens 白名單之外。
+   * ⚠️ 這裡新增一顆 --color-marker-* 就必須同時登記進產生器的
+   * NON_OVERRIDABLE_TOKENS,否則 `npm run gen:tokens` 會直接報錯 —— 第四輪複驗
+   * NIT-2:只靠前綴排除是靜默的,一顆本意是「一般主題色」卻剛好用了這個前綴的
+   * token 會被無聲踢出白名單。
+   * 為什麼要專用槽:第四輪實測出 chip 原本吃 --color-seg-fill /
+   * --color-icon-violet-bg / --color-bg / --color-text,四顆全是主題包蓋得到的
+   * token,所以主題包可以把兩種 chip 調成同色,結構標記就失效了。
+   * 值刻意等同內建深色主題原本算出來的顏色(--color-seg-fill /
+   * --color-icon-violet-bg / --color-bg / --color-text 的內建值),連 color-mix
+   * 的算式都照舊,所以內建主題與任何沒動這四顆 token 的主題包外觀一個像素不變。
+   * ⚠️ 已知取捨:有動那四顆 token 的既有淺色包,chip 從此固定為這組深色 ——
+   * 換來的是「chip 顏色不可能被主題包偽造」,見 round4-fix-report.md。 */
+  --color-marker-builtin: #6076ba;
+  --color-marker-custom: #8b7ae8;
+  --color-marker-surface: #191c24;
+  --color-marker-fg: #e7e8ee;
 
   --radius-card: 11px;
   --radius-tab: 10px;

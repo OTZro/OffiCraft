@@ -341,6 +341,18 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 			return out, fmt.Errorf("settings %s: not a valid theme-bundle array: %v",
 				settingDisplayCustomThemes, err)
 		}
+		// Prune unrecognised wording codes on READ too (T-081b). The write path
+		// prunes, but a row written BEFORE the whitelist shrank still carries the
+		// retired codes, and this load is what GET /api/settings echoes — so
+		// without this the dead codes are served back until the owner happens to
+		// PATCH themes again. Prune only: a stored row is never re-REJECTED here
+		// (a whitelist that shrinks must not brick settings load, and the drop is
+		// exactly the write path's own semantics).
+		for i := range out.displayCustomThemes {
+			if w := out.displayCustomThemes[i].Wording; w != nil {
+				dropUnknownWordingCodes(*w, fmt.Sprintf("stored custom_themes[%d]", i))
+			}
+		}
 	}
 	return out, nil
 }

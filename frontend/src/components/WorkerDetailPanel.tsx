@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useI18n } from "../i18n";
+import { workerStatusText } from "../i18n/compose";
 import type { OutsourceWorkerView } from "../api/adapter";
 import { useMachines } from "../hooks/useMachines";
 import { AgentDetailPanel } from "./AgentDetailPanel";
@@ -62,7 +63,7 @@ export function WorkerDetailPanel({
   onSetModel,
   onFetchBootContext,
 }: WorkerDetailPanelProps) {
-  const { t } = useI18n();
+  const { t, msg } = useI18n();
   const dash = t.workerDetail.dash;
 
   const { machines } = useMachines();
@@ -148,7 +149,7 @@ export function WorkerDetailPanel({
       case "offline":
         return t.workerDetail.offline;
       case undefined:
-        return worker.status ? t.workerDetail.statusLabel(worker.status) : dash;
+        return worker.status ? workerStatusText(t, worker.status) : dash;
     }
   })();
 
@@ -220,7 +221,7 @@ export function WorkerDetailPanel({
       <div className="mp-identity__body">
         <div className="mp-identity__line">
           <span className="outsource-row__codename">
-            {t.office.outsource.label(worker.codename)}
+            {msg.outsourceLabel(worker.codename)}
           </span>
         </div>
         <div
@@ -366,7 +367,7 @@ export function WorkerDetailPanel({
           : undefined,
         refocusSince: worker.refocusSince ?? null,
         refocusSubmittedNote: t.workerDetail.refocusSubmittedNote,
-        refocusSinceLabel: t.workerDetail.refocusSinceLabel,
+        refocusSinceLabel: msg.workerRefocusSince,
         lastOp: worker.lastOp ?? "",
         lastOpVerb:
           worker.lastOp === "start" || worker.lastOp === "worker_start"

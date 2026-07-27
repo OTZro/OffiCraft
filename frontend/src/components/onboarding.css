@@ -63,7 +63,7 @@
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  background: color-mix(in srgb, var(--color-shadow) 4%, transparent);
+  background: color-mix(in srgb, var(--color-surface-sunken) 4%, transparent);
   border-radius: 6px;
   font-size: 12px;
 }

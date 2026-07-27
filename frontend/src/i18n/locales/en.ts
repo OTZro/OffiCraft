@@ -121,24 +121,25 @@ export const en: Dict = {
     gateAnnounced: "Awaiting my reply",
     stepCardAnswered: "Answered",
     stepCardExpired: "Expired",
-    progress: (done: number, total: number) => `Step ${done}/${total}`,
-    elapsed: (t: string) => `Elapsed ${t}`,
+    progressLabel: "Step",
+    elapsedLabel: "Elapsed",
     expandCard: "Expand workflow",
     collapseCard: "Collapse workflow",
     workflow: "Workflow",
     dod: "DoD",
     parallel: (n: number) => `In parallel · ${n} items`,
     waitingAssign: "Awaiting assignment",
-    planningBy: (name: string) => `Waiting for ${name} to create steps`,
+    planningByLead: "Waiting for",
+    planningByTail: "to create steps",
     stepsLoading: "Loading…",
     stepsLoadError: "Couldn't load the workflow.",
     stepsRetry: "Retry",
     waitingLabel: "Waiting",
-    blockedBy: (taskNo: string) => `Waiting on ${taskNo}`,
+    blockedByLabel: "Waiting on",
     // T-1d82: a dep row whose task cannot be resolved (deleted / bad id). Keeps
     // the raw id — it is the only handle left — but says plainly that there is
     // nothing to open, so the row is not mistaken for a broken link.
-    blockedByMissing: (depId: string) => `Waiting on ${depId} (task not found)`,
+    blockedByMissingSuffix: "(task not found)",
     depJump: (taskNo: string) => `Open ${taskNo}`,
     openKeyLink: "Open link",
     messagePlaceholder: (name: string) => `Message ${name}…`,
@@ -147,7 +148,7 @@ export const en: Dict = {
     statusMenuLabel: "Status actions",
     priorityLabel: "Priority",
     // Click-to-copy task-no chip (owner 2026-07-19).
-    copyTaskNo: (taskNo: string) => `Copy task number ${taskNo}`,
+    copyTaskNoLabel: "Copy task number",
     taskNoCopied: "Copied",
     // Jump to the embedded 等我回覆 reply card. Since v5 this is an ITEM in the
     // status dropdown (owner's informed ruling — the old one-click badge jump
@@ -160,16 +161,18 @@ export const en: Dict = {
     // alone, which turns navigating to it from convenience into a requirement.
     statusJumpExternal: "Show the waiting-external step",
     terminate: "Terminate",
-    terminateConfirmBody: (title: string) =>
-      `Terminate “${title}”? The task moves to Closed and cannot be resumed; the backend will notify the executor to wind it down.`,
+    terminateConfirmBodyLead: "Terminate “",
+    terminateConfirmBodyTail:
+      "”? The task moves to Closed and cannot be resumed; the backend will notify the executor to wind it down.",
     terminateConfirm: "Terminate",
     // Mark duplicate (T-02c9): the executor points at the original and closes it
     markDuplicate: "Mark duplicate",
-    markDuplicateBody: (taskNo: string) =>
-      `Mark “${taskNo}” a duplicate of another task? It moves to Closed and cannot be resumed. Pick the original:`,
+    markDuplicateBodyLead: "Mark “",
+    markDuplicateBodyTail:
+      "” a duplicate of another task? It moves to Closed and cannot be resumed. Pick the original:",
     markDuplicatePick: "Select the original task",
     markDuplicateConfirm: "Mark duplicate",
-    duplicateOf: (taskNo: string) => `Duplicate of ${taskNo}`,
+    duplicateOfLabel: "Duplicate of",
     duplicateJump: "Jump to the original",
     actionError: "The action failed. Please try again.",
     // Reassign (T-160e, owner + assistant only): hand the task to another staff
@@ -178,7 +181,7 @@ export const en: Dict = {
     // Reassigning and BOTH sides are notified; the new executor reports it back
     // to in-progress themselves — the FE never flips it.
     reassign: "Reassign…",
-    reassignTitle: (taskNo: string) => `Reassign ${taskNo}`,
+    reassignTitleLabel: "Reassign",
     reassignBody:
       "The task moves to Reassigning and both sides are notified to hand over. The new executor reports it back to in-progress once they have read the handover.",
     reassignToMember: "To a member",
@@ -221,18 +224,19 @@ export const en: Dict = {
       "Items you've answered or expired · answers changeable within a day",
     empty: "✓ No pending asks",
     loadError: "Failed to load your asks. Please try again.",
-    waited: (t: string) => `Waiting ${t}`,
+    waitedLabel: "Waiting",
     // Opened/answered stamps are always absolute with the date (e.g. 7/13
     // 09:05) — no relative time, no "Today" special case.
-    openedAt: (time: string) => `Opened ${time}`,
-    answeredAt: (time: string) => `Answered ${time}`,
-    expiredAt: (time: string) => `Expired ${time}`,
+    openedAtLabel: "Opened",
+    answeredAtLabel: "Answered",
+    expiredAtLabel: "Expired",
     // Mark expired (owner/admin-agent terminal since T-6020; not an answer; no
     // undo) — the button opens a double-confirm.
     expire: "Mark expired",
     expireConfirm: "Confirm mark expired",
-    expireConfirmBody: (summary: string) =>
-      `Mark "${summary}" as expired? This cannot be undone and does not count as an answer — the member is notified and will open a fresh card if the question still matters.`,
+    expireConfirmBodyLead: 'Mark "',
+    expireConfirmBodyTail:
+      '" as expired? This cannot be undone and does not count as an answer — the member is notified and will open a fresh card if the question still matters.',
     expireError: "Marking expired failed. Please try again.",
     expiredTag: "Expired",
     expiredNote:
@@ -288,8 +292,9 @@ export const en: Dict = {
       capSuffix: (cap: string) => ` · cap ${cap}`,
       // Single source of the outsource identity label (T-3ed8): chat header /
       // sender label, task-card chips, sidebar 外包 row and monitor session row
-      // all render through this so 「Outsource · 代號」never drifts.
-      label: (codename: string) => `Outsource · ${codename}`,
+      // all render through compose.ts's outsourceLabel, which composes THIS
+      // title so 「Outsource · 代號」never drifts (T-081b removed the second,
+      // identically-worded template that used to live here).
       paused: "Assignment paused",
       capTitle: "Outsource cap",
       capHint:
@@ -314,11 +319,11 @@ export const en: Dict = {
     model: "Model",
     effort: "Effort",
     status: "Status",
-    statusLabel: (s: string) =>
-      (({ assigned: "Assigned", active: "Active", released: "Released" }) as Record<
-        string,
-        string
-      >)[s] ?? s,
+    statusOf: {
+      assigned: "Assigned",
+      active: "Active",
+      released: "Released",
+    } as Record<string, string>,
     task: "Delegated task",
     delegator: "Delegated by",
     // Shown only when the owner personally created the bound task (a real
@@ -345,7 +350,7 @@ export const en: Dict = {
     refocusDone: "Sent",
     refocusError: "Refocus failed",
     refocusSubmittedNote: "Refocus sent · worker respawning…",
-    refocusSinceLabel: (t: string) => `Last handover ${t}`,
+    refocusSinceLabel: "Last handover",
     stop: "Stop",
     stopping: "Stopping…",
     restart: "Restart",
@@ -450,6 +455,43 @@ export const en: Dict = {
     relocateStep2:
       "Once that machine connects, the background retry sends this move out — no need to press again, the new machine is already saved.",
   },
+  // ── Theme IDENTITY names (T-081b §6) ─────────────────────────────────────
+  // Every leaf in this subtree is some theme's own `name`: the row in the theme
+  // picker, the `name` written into the file when a theme is exported, the
+  // default name a newly created theme gets. A theme bundle's wording overlay
+  // must NOT be able to touch them — while it could, importing a 「精靈村」 pack
+  // renamed the BUILT-IN theme to 「精靈村」 too and the owner lost the way back
+  // (owner report 2026-07-27).
+  //
+  // So the whitelist generator (scripts/gen-message-keys.mjs) skips this whole
+  // subtree — a STRUCTURAL rule, not a second hand-kept key list: add another
+  // built-in theme later, put its name here, and it is non-overridable for free.
+  //
+  // ⚠️ The place name is NOT here: the nav tab's 「辦公室」 is nav.office and
+  // stays overridable — a theme pack may rename the PLACE, never a THEME.
+  themeIdentity: {
+    office: "Office",
+    newTheme: "New theme",
+  },
+  // ── Theme STRUCTURAL markers (T-081b review round 3 / round 4) ────────────
+  // Not any theme's name: the labels the product uses to TELL themes apart —
+  // the built-in / custom group headings (the quick picker's <optgroup> labels
+  // AND, since round 4, the Settings › Theme list's group headings and row
+  // chips: ONE semantic source for both surfaces), and the tag the downloaded
+  // copy of a built-in theme is named with. Non-overridable for the same reason
+  // as themeIdentity:
+  //   * an overridable group heading lets a pack rename 「自訂」 to 「內建」 and the
+  //     grouping becomes a lie;
+  //   * an overridable copy tag lets a pack put bidi or 200 characters in it, so
+  //     the built-in theme's download button emits a file the product itself
+  //     then REFUSES to import (theme names cap at 80 and reject bidi).
+  // The generator (scripts/gen-message-keys.mjs) skips this whole subtree — the
+  // same structural rule themeIdentity uses, not a second hand-kept key list.
+  themeMarkers: {
+    builtinGroup: "Built-in",
+    customGroup: "Custom",
+    copyTag: "copy",
+  },
   profile: {
     title: "Profile",
     rename: "Rename",
@@ -460,9 +502,7 @@ export const en: Dict = {
     back: "Preferences",
     theme: "Theme",
     themeManageHint: "Add & edit in Settings › Theme",
-    themeOffice: "Office",
     themeAdd: "New",
-    themeNewName: "New theme",
     themeImport: "Import",
     themeExport: "Export",
     themeEdit: "Edit",
@@ -474,6 +514,9 @@ export const en: Dict = {
     themeImportDup: "A custom theme with that id already exists",
     themeImportReadFailed: "Could not read that file",
     themeLimitReached: "You've reached the custom-theme limit",
+    themeImportSkippedLead: "Imported, but",
+    themeImportSkippedMid: "wording code(s) were not recognised and were skipped:",
+    themeImportSkippedMore: "…",
     themeEditTitle: "Edit theme",
     themeNameLabel: "Name",
     language: "Language",
@@ -499,21 +542,20 @@ export const en: Dict = {
     pwdErrorMismatch: "The two new passwords don't match",
   },
   chat: {
-    offlineTitle: (name: string) => `${name} is offline`,
+    offlineTitleSuffix: "is offline",
     offlineHint: "This member is offline. Wake them to start a conversation.",
     // T-94c1: offline/stopped can now be messaged (queues until wake).
-    offlineQueueHint: (name: string) =>
-      `You can still leave a message — ${name} will read it once back online.`,
+    offlineQueueHintLead: "You can still leave a message —",
+    offlineQueueHintTail: "will read it once back online.",
     // T-94c1 wake row (offline/stopped composer): queue notice + in-place wake.
-    wakeQueueHint: (name: string) =>
-      `${name} is offline — your message will queue, or wake them now`,
+    wakeQueueHintSuffix: "is offline — your message will queue, or wake them now",
     wakeButton: "Wake",
     wakePending: "Waking…",
     emptyRange: "No messages in this range yet",
     inputPlaceholder: (name: string) => `Reply to ${name}…`,
     // M2-4 composer lock: shown IN PLACE OF the reply input while the member
     // is not online (offline / stopped / waking / stopping).
-    composerOffline: (name: string) => `${name} is currently offline`,
+    composerOfflineSuffix: "is currently offline",
     me: "Me",
     systemSender: "System",
     send: "Send",
@@ -544,8 +586,11 @@ export const en: Dict = {
       `${WEEKDAYS_EN[weekday]}, ${MONTHS_EN[month - 1]} ${day}`,
     dateOnYear: (year: number, month: number, day: number, weekday: number) =>
       `${WEEKDAYS_EN[weekday]}, ${MONTHS_EN[month - 1]} ${day}, ${year}`,
-    interAgentExpand: (count: number) =>
-      `${count} message${count === 1 ? "" : "s"} between agents · expand`,
+    // English carries an inline plural rule (message / messages) that a static
+    // fragment cannot express, so the singular and the plural are two separate
+    // overridable strings and only the BRANCH stays in code (compose.ts).
+    interAgentExpandOne: "message between agents · expand",
+    interAgentExpandMany: "messages between agents · expand",
     interAgentCollapse: "Collapse agent-to-agent messages",
     // M2-3 conversation file/image gallery (header icon → panel).
     tasksLink: "See this member's unfinished tasks",
@@ -584,15 +629,18 @@ export const en: Dict = {
     // Instant feedback after clicking Wake, before server presence catches up.
     wakePendingNote: "Waking…",
     forceStopConfirmTitle: "Force stop?",
-    forceStopConfirmBody: (name: string) =>
-      `Force-stop ${name} immediately — kill the session now, skipping the graceful shutdown. Any unsaved work in progress is lost.`,
+    forceStopConfirmBodyLead: "Force-stop",
+    forceStopConfirmBodyTail:
+      "immediately — kill the session now, skipping the graceful shutdown. Any unsaved work in progress is lost.",
     forceStopConfirmAction: "Force stop",
     forceStopBusy: "Stopping…",
     model: "Model",
     agentRuntime: "AI runtime",
     effort: "EFFORT · Thinking",
-    effortLevel: (e: Effort) =>
-      ({ low: "Low", medium: "Medium", high: "High" })[e],
+    effortOf: { low: "Low", medium: "Medium", high: "High" } as Record<
+      Effort,
+      string
+    >,
     modelEffortSave: "Save",
     modelEffortCancel: "Cancel",
     modelPlaceholder: "Custom model string (blank = default)",
@@ -612,7 +660,7 @@ export const en: Dict = {
     refocusDone: "Sent",
     refocusError: "Refocus failed",
     refocusSubmittedNote: "Refocus sent · agent compacting context…",
-    refocusSinceLabel: (t: string) => `Last refocus ${t}`,
+    refocusSinceLabel: "Last refocus",
     // fleet remote-ops stage 1 — last warden op receipt
     lastOp: "Last operation",
     lastOpStart: "Start",
@@ -706,7 +754,7 @@ export const en: Dict = {
     relocateSent: "Move request sent",
     picker: {
       label: "Choose a machine",
-      offlineOption: (name: string) => `${name} (offline)`,
+      offlineOptionSuffix: "(offline)",
       spawnTitle: "Choose a machine to run on",
       spawnConfirm: "Wake on this machine",
       relocateTitle: "Choose a machine to move to",
@@ -796,11 +844,11 @@ export const en: Dict = {
       // shows nothing — the row flips online)
       bootstrapBusy: "Installing…",
       bootstrapError: "Install request failed",
-      // shown when the server returned an error detail (e.g. the 503
-      // missing-ocwarden reason)
-      bootstrapErrorDetail: (detail: string) => `Install request failed: ${detail}`,
-      bootstrapFailed: (exitCode: number) =>
-        `Install failed (exit code ${exitCode}). Reason:`,
+      // When the server returned an error detail (e.g. the 503 missing-ocwarden
+      // reason), compose.ts appends it to bootstrapError above — the same
+      // sentence no longer lives under a second key.
+      bootstrapFailedLead: "Install failed (exit code ",
+      bootstrapFailedTail: "). Reason:",
       // T-ba62: the log is kept on SUCCESS too. The success branch used to
       // throw it away, so "installed" and "installed with warnings inside"
       // looked identical.
@@ -808,8 +856,9 @@ export const en: Dict = {
       // uninstall (POST /uninstall): drive the uninstall RPC to the warden
       // (online-only)
       uninstallConfirmTitle: "Confirm uninstall",
-      uninstallConfirmBody: (name: string) =>
-        `Uninstall “${name}”? This asks the warden on that machine to run ocwarden uninstall; on success the machine goes offline, but the record is KEPT (re-installable).`,
+      uninstallConfirmBodyLead: "Uninstall “",
+      uninstallConfirmBodyTail:
+        "”? This asks the warden on that machine to run ocwarden uninstall; on success the machine goes offline, but the record is KEPT (re-installable).",
       uninstallConfirm: "Confirm uninstall",
       uninstallBusy: "Working…",
       uninstallError: "Uninstall failed",
@@ -822,8 +871,13 @@ export const en: Dict = {
       // this machine (offline members merely bound here never count — same
       // criterion as the server's 409 gate)
       uninstallWarnTitle: "Members still on this machine",
-      uninstallWarnBody: (name: string, count: number) =>
-        `“${name}” still has ${count} member(s) online on it. Uninstalling now tears the warden off the machine while they are still on it — take the related members offline first. Proceed anyway?`,
+      // Two parameters with the number wedged mid-sentence (English pseudo-plural
+      // "member(s)", Chinese measure word 「位」), so each language gets THREE
+      // fragments and the key names carry the join order: 1 + name + 2 + count + 3.
+      uninstallWarnBody1: "“",
+      uninstallWarnBody2: "” still has ",
+      uninstallWarnBody3:
+        " member(s) online on it. Uninstalling now tears the warden off the machine while they are still on it — take the related members offline first. Proceed anyway?",
       uninstallWarnProceed: "Proceed anyway",
       // delete (DELETE /machines/{id}): no warden command is sent, but this is
       // NOT the cheap bookkeeping edit the old copy described. T-9cf8 made the
@@ -836,8 +890,9 @@ export const en: Dict = {
       // interrupt service and then did. Consent obtained from a wrong
       // description is not consent, so the copy states the real cost.
       deleteConfirmTitle: "Confirm delete machine",
-      deleteConfirmBody: (name: string) =>
-        `Delete “${name}”? Its credentials stop working immediately: the machine can no longer report in, and any agent still assigned to it loses access too. Nothing is torn down on the machine itself (that is “Uninstall”), and this cannot be undone — bringing it back means installing it again.`,
+      deleteConfirmBodyLead: "Delete “",
+      deleteConfirmBodyTail:
+        "”? Its credentials stop working immediately: the machine can no longer report in, and any agent still assigned to it loses access too. Nothing is torn down on the machine itself (that is “Uninstall”), and this cannot be undone — bringing it back means installing it again.",
       deleteConfirm: "Confirm delete",
       deleteBusy: "Deleting…",
       deleteError: "Delete failed",
@@ -899,14 +954,14 @@ export const en: Dict = {
     // ── theme management (T-16a1 P3b): moved here from the profile dropdown ──
     themeManage: "Theme",
     themeColorsSection: "Colours",
+    themeColorOpacity: "Opacity",
+    themeColorFollows: "follows",
     themeColorPicker: "colour picker",
     themeWordingSection: "Wording",
     themeWordingHint:
       "Fill in a replacement to override interface wording; leave blank to keep the original.",
     themeWordingSearch: "Search wording…",
     themeWordingOverride: "replacement",
-    themeBuiltinTag: "Built-in",
-    themeCustomTag: "Custom",
     themeWordingTag: "Wording",
     // ── fonts (T-16a1 P4): pick body / title font from a safe allowlist ──
     themeFontsSection: "Fonts",
@@ -940,8 +995,21 @@ export const en: Dict = {
     themeNavTasks: "Tasks icon",
     themeNavMonitor: "Monitor icon",
     themeNavGuide: "User guide icon",
-    themeDeleteConfirm: (name: string) =>
-      `Delete theme "${name}"? This cannot be undone.`,
+    // ── outer-canvas background image (T-081b) ──
+    themeCanvasBgSection: "Outer canvas",
+    themeCanvasBgHint:
+      "Upload an image to lay over the background colour (PNG / JPEG / WEBP, max 64 KB); leave empty for the plain colour. Tile and Sides only paint the canvas beside the content column, so they are invisible on phones, in narrow windows, and in the wide layout (all have no side canvas); Cover fills the whole window.",
+    themeCanvasBg: "Canvas tile",
+    themeCanvasBgMode: "How to lay it down",
+    themeCanvasBgModeTile: "Tile — repeat over the whole canvas",
+    themeCanvasBgModeSides: "Sides — one copy against each edge",
+    themeCanvasBgModeCover: "Cover — one copy filling the whole window",
+    themeCanvasBgModeHint:
+      "Sides suits art that stands on its own (a tree either side); it is not mirrored, so draw a symmetric image if you want the two sides to face each other.",
+    themeCanvasBgModeCoverHint:
+      "Cover only shows through where this theme also gives the top bar / tab bar / content area translucent colours (#RRGGBBAA or rgba). Those sit under text, so the image's contrast against that text is this theme's own responsibility.",
+    themeDeleteConfirmLead: 'Delete theme "',
+    themeDeleteConfirmTail: '"? This cannot be undone.',
     currentVersion: "Current version",
     upToDate: "Up to date",
     // Explicit check against GitHub Releases (GET /api/release/check)
@@ -990,8 +1058,9 @@ export const en: Dict = {
     addRoleError: "Create failed. Check the role name.",
     customBadge: "Custom",
     deleteRole: "Delete",
-    deleteRoleConfirm: (name: string) =>
-      `Delete role "${name}"? Its members and their conversations and lessons will be removed permanently.`,
+    deleteRoleConfirmLead: 'Delete role "',
+    deleteRoleConfirmTail:
+      '"? Its members and their conversations and lessons will be removed permanently.',
     deleteRoleConfirmAction: "Delete role",
     deleteRoleOnline: "A member is online — cannot delete",
     deleteRoleError: "Delete failed. Please try again.",
@@ -1029,8 +1098,9 @@ export const en: Dict = {
     addManualCancel: "Cancel",
     addManualError: "Creation failed. Check the display name and try again.",
     deleteManual: "Delete",
-    deleteManualConfirm: (key: string) =>
-      `Delete the task type “${key}”? Its manual (definition, SOP, learnings) is removed with it and cannot be restored.`,
+    deleteManualConfirmLead: "Delete the task type “",
+    deleteManualConfirmTail:
+      "”? Its manual (definition, SOP, learnings) is removed with it and cannot be restored.",
     deleteManualConfirmAction: "Delete",
     deleteManualOpenTasks:
       "This type still has open tasks — let them finish before deleting",

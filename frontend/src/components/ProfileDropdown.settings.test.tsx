@@ -7,13 +7,13 @@
 // ThemeSettings.test.tsx). Here we pin that the dropdown kept only selection.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
 import { ProfileDropdown } from "./ProfileDropdown";
 import { __resetMock } from "../api/mock";
 import { api } from "../api";
-import { clearToken } from "../api/auth";
+import { setToken, clearToken } from "../api/auth";
 
 const p = zh.profile;
 
@@ -55,13 +55,79 @@ describe("ProfileDropdown · preferences scope", () => {
   });
 
   it("keeps only the theme SELECTOR — no management affordances (moved to 設定/主題)", async () => {
+    setToken("owner-token");
+    await api.patchServerSettings({
+      customThemes: [
+        { id: "midnight", name: "午夜藍", colors: { "--color-bg": "#101018" } },
+      ],
+    });
     const utils = await openPreferences();
-    // The built-in selection row is present (office is the only built-in).
-    expect(utils.getByText(p.themeOffice)).toBeTruthy();
+    const select = utils.getByLabelText(p.theme);
+    const custom = await waitFor(() => {
+      const o = Array.from(select.querySelectorAll("option")).find(
+        (x) => x.value === "midnight"
+      );
+      expect(o).toBeTruthy();
+      return o!;
+    });
+    // 內建 / 自訂 is STRUCTURE: each option sits in the <optgroup> that says what
+    // it is, and each option's own text is just the theme's name.
+    const groupOf = (o: HTMLOptionElement) =>
+      (o.parentElement as HTMLOptGroupElement).label;
+    const builtin = Array.from(select.querySelectorAll("option")).find(
+      (o) => o.value === "office"
+    )!;
+    expect(builtin.textContent).toBe(zh.themeIdentity.office);
+    expect(groupOf(builtin)).toBe(zh.themeMarkers.builtinGroup);
+    expect(custom.textContent).toBe("午夜藍");
+    expect(groupOf(custom)).toBe(zh.themeMarkers.customGroup);
     // Management chips no longer live in the quick menu.
     expect(utils.queryByText(p.themeConfirmImport)).toBeNull();
     // A hint points the owner to the settings page instead.
     expect(utils.getByText(p.themeManageHint)).toBeTruthy();
+  });
+
+  it("cannot be made to show two identical built-in rows by a theme's NAME", async () => {
+    // The owner's original symptom, re-entered through the other door (T-081b
+    // review round 3, BLOCKER-2): while the marker was TEXT — 「辦公室」 + 「(內建)」 —
+    // a pack simply naming itself 「辦公室(內建)」 produced two byte-identical rows
+    // and the shipped theme became unfindable again. Both names are legal (neither
+    // equals the reserved 「辦公室」), so the fix cannot be a name rule: the marker
+    // has to be structure the name cannot reach.
+    setToken("owner-token");
+    const spoof = `${zh.themeIdentity.office}(${zh.themeMarkers.builtinGroup})`;
+    await api.patchServerSettings({
+      customThemes: [
+        { id: "spoofpack", name: spoof, colors: { "--color-bg": "#101018" } },
+      ],
+    });
+    const utils = await openPreferences();
+    const select = utils.getByLabelText(p.theme);
+    await waitFor(() => {
+      expect(
+        Array.from(select.querySelectorAll("option")).some((o) => o.value === "spoofpack")
+      ).toBe(true);
+    });
+    const options = Array.from(select.querySelectorAll("option"));
+    const builtin = options.find((o) => o.value === "office")!;
+    const forged = options.find((o) => o.value === "spoofpack")!;
+    // The spoof keeps its own name (it is legal), but it is NOT the built-in row…
+    expect(forged.textContent).toBe(spoof);
+    expect(builtin.textContent).not.toBe(forged.textContent);
+    // …and the thing that says which is which is the group, not the text.
+    expect((builtin.parentElement as HTMLOptGroupElement).label).toBe(
+      zh.themeMarkers.builtinGroup
+    );
+    expect((forged.parentElement as HTMLOptGroupElement).label).toBe(
+      zh.themeMarkers.customGroup
+    );
+    // The built-in group holds exactly the built-in.
+    const builtinGroup = Array.from(select.querySelectorAll("optgroup")).find(
+      (g) => g.label === zh.themeMarkers.builtinGroup
+    )!;
+    expect(
+      Array.from(builtinGroup.querySelectorAll("option")).map((o) => o.value)
+    ).toEqual(["office"]);
   });
 
   it("selects the built-in office theme from the quick picker", async () => {
