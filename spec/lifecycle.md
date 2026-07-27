@@ -103,6 +103,14 @@ retired `var/jwt_secret` fallback file has no successor.
      /api/machines/{member_id}/uninstall` KEEPS the record and therefore does NOT revoke
      anything; the machine stays on the roster and re-installable.
 
+     Because this cut turns "the server host's warden row was soft-deleted" into a
+     credential revocation that also takes every agent placed on `m-server-self`,
+     BOTH verbs that would soft-delete that row MUST refuse it with the same 409:
+     `DELETE /api/machines/{member_id}` (pre-existing) and
+     `POST /api/machines/{machine_id}/teardown-here` (added with this cut). The
+     teardown refusal MUST precede the `ocwarden` subprocess — a 409 written after
+     the daemon was booted out is worse than no guard.
+
   For every other agent token, expiry stays the only invalidation.
 
 ## 2. Boot context — the three-block assembly

@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 )
 
@@ -441,5 +442,129 @@ func TestRevocationRefusalUnitTable(t *testing.T) {
 		if got != "" {
 			t.Errorf("%s: must NOT be revoked, got refusal %q", c.name, got)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// server-self teardown guard (T-9cf8 follow-up)
+// ---------------------------------------------------------------------------
+//
+// WHY IT LIVES IN THIS FILE: it is not an independent hardening. T-9cf8 turned
+// "the server host's warden row got soft-deleted" from a machine going offline
+// into a credential revocation that also takes out every agent placed on
+// ServerSelfHost — which dbseed.go makes the DEFAULT placement. DELETE
+// /api/machines already refused server-self; teardown-here reached the same
+// soft-delete without the same guard. Raising the price of an action is what
+// obliges you to close its guard.
+//
+// The whole thing runs through the ocwardenFS / runOcwarden seams, so no real
+// warden is ever torn down — running the real binary here would be the incident
+// the guard exists to prevent.
+
+func newSelfTeardownServer(t *testing.T) (*apiServer, *[]recordedOcwardenRun) {
+	t.Helper()
+	s := newMachinesTestServer(t)
+	s.binCacheDir = filepath.Join(t.TempDir(), "cache-bin")
+	s.ocwardenFS = fstest.MapFS{"ocwarden": {Data: []byte("fake warden — never exec'd")}}
+	runs := withRecordedOcwarden(t, 0) // exit 0 = a teardown that WOULD soft-delete
+	// The server-local machine, exactly as dbseed.go seeds it.
+	putTestMember(t, s, Member{
+		ID: ServerSelfHost, Name: "this server", Kind: KindWarden, Effort: "medium",
+		DesiredState: DesiredStateOffline, RosterStatus: RosterStatusActive,
+	})
+	// A perfectly ordinary remote machine, for the collateral guard.
+	putTestMember(t, s, Member{
+		ID: "m-remote", Name: "remote", Kind: KindWarden, Effort: "medium",
+		DesiredState: DesiredStateOffline, RosterStatus: RosterStatusActive,
+	})
+	return s, runs
+}
+
+func postTeardownHereFor(t *testing.T, s *apiServer, id string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/machines/"+id+"/teardown-here", nil)
+	s.HandleTeardownHereApiMachinesMachineIdTeardownHerePost(rec, req, id)
+	return rec
+}
+
+// TestTeardownHereRefusesTheServerLocalMachine is the guard sentinel. It asserts
+// the refusal AND that nothing was executed — a 409 written after the daemon was
+// already booted out would be a worse bug than no guard at all.
+//
+// Mutant: delete the ServerSelfHost check in the teardown-here handler → this
+// test goes red on the 409, on the "no ocwarden run" claim, and on the roster
+// row surviving.
+func TestTeardownHereRefusesTheServerLocalMachine(t *testing.T) {
+	s, runs := newSelfTeardownServer(t)
+
+	rec := postTeardownHereFor(t, s, ServerSelfHost)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("teardown-here on the server-local machine: want 409, got %d %s",
+			rec.Code, rec.Body.String())
+	}
+	// Mirrored refusal — the SAME sentence DELETE /api/machines already speaks.
+	if !strings.Contains(rec.Body.String(), serverSelfUndeletableMsg) {
+		t.Fatalf("the refusal must mirror the delete verb's message %q, got %s",
+			serverSelfUndeletableMsg, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"conflict"`) {
+		t.Fatalf("refusal must ride the conflict envelope, got %s", rec.Body.String())
+	}
+	// The guard has to come BEFORE the subprocess, not after it.
+	if len(*runs) != 0 {
+		t.Fatalf("a refused teardown must never exec ocwarden, got %d run(s): %+v",
+			len(*runs), *runs)
+	}
+	m, err := s.dal.GetMember(ServerSelfHost)
+	if err != nil || m == nil {
+		t.Fatalf("get server-self: %v", err)
+	}
+	if m.RosterStatus != RosterStatusActive {
+		t.Fatalf("the server-local machine must stay on the roster, got roster=%q "+
+			"— off the roster its credentials AND every agent placed on it die (T-9cf8)",
+			m.RosterStatus)
+	}
+
+	// Same server, same refusal shape as the delete verb: the two must agree.
+	del := httptest.NewRecorder()
+	s.HandleDeleteMachineApiMachinesMemberIdDelete(del,
+		httptest.NewRequest("DELETE", "/api/machines/"+ServerSelfHost, nil), ServerSelfHost)
+	if del.Code != rec.Code || del.Body.String() != rec.Body.String() {
+		t.Fatalf("teardown-here and delete must refuse server-self identically:\n"+
+			"  teardown-here: %d %s\n  delete:        %d %s",
+			rec.Code, rec.Body.String(), del.Code, del.Body.String())
+	}
+}
+
+// TestTeardownHereStillWorksForAnOrdinaryMachine is the collateral guard for the
+// guard: the new refusal must be about server-self ONLY. A version that refused
+// every machine would still make the test above pass, and would silently retire
+// the one working way to take a machine off this host.
+//
+// Mutant: widen the check (e.g. refuse unconditionally, or key it on
+// Kind == machineKind) → this test goes red while the one above stays green.
+func TestTeardownHereStillWorksForAnOrdinaryMachine(t *testing.T) {
+	s, runs := newSelfTeardownServer(t)
+
+	rec := postTeardownHereFor(t, s, "m-remote")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("teardown-here on an ordinary machine must still work, got %d %s",
+			rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"removed":true`) {
+		t.Fatalf("a confirmed teardown must still soft-delete an ordinary machine: %s",
+			rec.Body.String())
+	}
+	if len(*runs) != 1 {
+		t.Fatalf("an ordinary teardown must still exec ocwarden exactly once, got %d",
+			len(*runs))
+	}
+	m, err := s.dal.GetMember("m-remote")
+	if err != nil || m == nil {
+		t.Fatalf("get m-remote: %v", err)
+	}
+	if m.RosterStatus != RosterStatusRemoved {
+		t.Fatalf("ordinary teardown must still soft-delete, roster=%q", m.RosterStatus)
 	}
 }
