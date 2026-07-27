@@ -128,7 +128,19 @@ SH
 printf '#!/usr/bin/env bash\nexit 0\n' > "$TOOLDIR/tmux"
 printf '#!/usr/bin/env bash\necho "9.9.9 (Claude Code)"\nexit 0\n' > "$TOOLDIR/claude"
 printf '#!/usr/bin/env bash\necho "codex-cli 9.9.9"\nexit 0\n' > "$TOOLDIR/codex"
-chmod +x "$SHIMDIR"/uname "$SHIMDIR"/launchctl "$SHIMDIR"/lsof \
+# curl: a TRIPWIRE, not a stub with an opinion. `env -i` clears the environment,
+# it does not remove network access — measured: with the gate deleted, the
+# standalone path really did reach api.github.com, download the release tarball,
+# verify its sha256 and run the packaged installer. A suite that calls itself
+# HERMETIC cannot leave that one regression away, so curl is replaced by something
+# that can only record the attempt and fail the way an unreachable host does.
+cat > "$SHIMDIR/curl" <<'SH'
+#!/usr/bin/env bash
+echo "curl $*" >> "$SHIM_STATE/.netwire"
+exit 6
+SH
+
+chmod +x "$SHIMDIR"/uname "$SHIMDIR"/launchctl "$SHIMDIR"/lsof "$SHIMDIR"/curl \
          "$TOOLDIR"/tmux "$TOOLDIR"/claude "$TOOLDIR"/codex
 
 # uname-alien: a non-darwin host, for the platform half of the preflight. Kept in
@@ -395,8 +407,14 @@ fi
 # Without this, 5d could be satisfied by ignoring OC_*_BIN altogether — which
 # would break the documented recovery (docs/guide/troubleshooting.md) for anyone
 # whose runtime lives outside PATH and the fallback dirs.
-if [[ -x /opt/homebrew/bin/claude || -x /usr/local/bin/claude ]]; then
-  echo "  skip — an absolute claude exists on this host; 'codex override only' is not constructible"
+# The precondition is "NO runtime resolves except through the override", so the
+# guard has to cover absolute CODEX as well — copied from 5b, where claude-only was
+# correct, it silently became wrong here. Measured: on a host with a fallback-dir
+# codex, a cheat mutant that ignores the override entirely still exits 0 and this
+# case reports PASS — a false green precisely on the machines codex support is
+# about. HAS_ABS_RUNTIME is the guard that matches this case's premise.
+if [[ "$HAS_ABS_RUNTIME" == 1 ]]; then
+  echo "  skip — an absolute claude/codex exists on this host; 'runtime ONLY via the override' is not constructible"
 else
   reset_fixture
   rundir="$WORK/run"; rm -rf "$rundir"; mkdir -p "$rundir"
@@ -417,10 +435,13 @@ fi
 # Every case above runs the PACKAGE installer, but the path the docs push is
 # `curl … | bash`, which takes a different branch (no sibling binaries ⇒
 # IN_PACKAGE=0) with its own arg parser and its own call site. A gate that exists
-# in only one of the two is a gate half the users never meet. The refusal must
-# also land BEFORE the download — no network is reachable in this suite, so a run
-# that got as far as curl would fail differently (and much slower).
+# in only one of the two is a gate half the users never meet. The refusal must also
+# land BEFORE the download, which is asserted two ways: the release-resolution line
+# must be absent from the output, AND the curl tripwire must be empty. Neither
+# depends on the network being down — that assumption was wrong when this case was
+# written (see the curl shim above).
 reset_fixture
+: > "$WORK/.netwire"
 STANDALONE="$WORK/standalone"; rm -rf "$STANDALONE"; mkdir -p "$STANDALONE"
 cp "$PKG/install.sh" "$STANDALONE/install.sh"   # NO ocserverd/ocwarden/ocagent beside it
 rundir="$WORK/run"; rm -rf "$rundir"; mkdir -p "$rundir"
@@ -439,6 +460,12 @@ case "$OUT" in
 $OUT" ;;
   *) ok "standalone: it refused BEFORE resolving/downloading a release" ;;
 esac
+if [[ -s "$WORK/.netwire" ]]; then
+  bad "standalone: the run invoked curl — the refusal is late enough to touch the network:
+$(cat "$WORK/.netwire")"
+else
+  ok "standalone: curl was never invoked (tripwire empty — this is what makes the case hermetic)"
+fi
 
 # ── 6. the preflight must not block the ways OUT ────────────────────────────
 # Removal and --help have to keep working on the exact machine the gate refuses
