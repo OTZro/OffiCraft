@@ -743,9 +743,13 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		})
 	}
 	for _, wk := range workers {
-		// Released workers are the worker twin of RosterStatusRemoved, which the
-		// member list above filters out — a retired session's spend is history,
-		// not current usage.
+		// Not merely the "twin" of the RosterStatusRemoved filter the member list
+		// applies above — it is literally the SAME predicate: workerFromMember
+		// derives Status via workerStatusFromMember, which returns released iff
+		// roster_status == RosterStatusRemoved. So the two branches of `actors`
+		// apply one roster filter, not two that happen to agree. A retired
+		// session's spend is history, not current usage.
+		// Pinned by TestGetMonitoring_ReleasedWorkerSpendLeavesTheAccount.
 		if wk.Status == WorkerStatusReleased {
 			continue
 		}
@@ -800,10 +804,25 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	// session must still attribute to the box it is burning on, and a host that
 	// carries nothing but workers must still get a row for that account to hang
 	// off. The agent count follows for the same reason — a row claiming 0 agents
-	// while naming an account observed there would contradict itself. The
-	// hardware fold is a provable no-op for workers: the agent-side reporter
-	// (cli/ocagent contextreport telemetryBody) has no `hardware` field at all —
-	// only the per-machine warden samples hardware.
+	// while naming an account observed there would contradict itself.
+	//
+	// Precisely what does and does not change for workers, since "no-op" is too
+	// coarse a word for this loop:
+	//   - hwByHost/hwTS: genuinely a no-op. The agent-side reporter (cli/ocagent
+	//     contextreport `telemetryBody`) has no `hardware` field at all, and the
+	//     ingest DTO is additionalProperties:false, so an `ow-` entry can never
+	//     carry one. Only the per-machine warden samples hardware.
+	//   - hostCounts: NOT a no-op, and not merely a count. Touching the map
+	//     MINTS the host key, and `hosts` is derived from it — so a box that
+	//     carries only workers gains a machines row it never had. That is the
+	//     point (see above), not a side effect.
+	// ⚠️ Pre-existing, widened here: an actor whose host resolves to "" mints a
+	// row with machine:"" / display_name:"". A member with no desired_machine_id
+	// already did this identically (verified, not assumed), so this is not new
+	// behaviour — but unplaced workers are far more common than unplaced members
+	// (see the `no_machine_selected` refusal in worker_spawn.go), so the empty
+	// row will be seen more often. Left alone deliberately: suppressing it is a
+	// change to the machines section's honest-empty contract, not part of T-fc2f.
 	for _, a := range actors {
 		entry := tele(a.id)
 		host := a.host
@@ -941,9 +960,15 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 			acctCost[account] += cost
 			acctHasCost[account] = true
 		}
-		// One banked balance per ACTOR, and members/workers are disjoint sets, so
-		// a key held by both a member and a worker sums two distinct balances
-		// rather than counting either one twice.
+		// One banked balance per ACTOR. Members and workers are disjoint at the
+		// SQL level — ListMembers is `WHERE kind != 'outsource'`, ListOutsourceWorkers
+		// is `WHERE kind = 'outsource'`, over the SAME member table — so no row
+		// can project into `actors` twice and no balance can be added twice.
+		// A key held by both a member and a worker therefore sums two DISTINCT
+		// balances. Do not take this paragraph's word for it: the arithmetic is
+		// pinned end-to-end by
+		// TestGetMonitoring_SharedAccountSumsMemberAndWorkerExactlyOnce, which
+		// goes red on both a missing worker and a double-counted one.
 		if a.banked != 0 {
 			acctCost[account] += a.banked
 			acctHasCost[account] = true

@@ -1372,3 +1372,241 @@ func TestGetMonitoring_ReportWithoutRuntimesCannotRefreshThem(t *testing.T) {
 			row["runtime_capabilities_stale"])
 	}
 }
+
+// ---------------------------------------------------------------------------
+// T-fc2f — the accounts overview must include OUTSOURCE usage.
+//
+// Root cause the sentinels below exist to keep dead: the three VALUE folds
+// (acctByHost / freshRL → five_hour+seven_day / acctCost) iterated `members`,
+// and `dal.ListMembers()` is `WHERE kind != 'outsource'` — so SQL removed every
+// worker before the fold ever ran. The accounts row itself was still MINTED,
+// because the raw-key loop near the end of the handler scans the WHOLE
+// telemetry snapshot. Net effect: a green card with three dashes.
+//
+// ⚠️ TestGetMonitoring_WorkerReportedLabelResolvesSessionAccount (above) does
+// NOT cover this. It seeds a member holding the very same key, so its
+// assertions pass with the member-only fold — the fixture supplies the value
+// the behaviour under test is supposed to supply. Do not treat it as coverage.
+// ---------------------------------------------------------------------------
+
+// seedWorker persists one outsource worker (a kind='outsource' member row, the
+// only thing ListOutsourceWorkers can see) with the given banked balance.
+func seedWorker(t *testing.T, s *apiServer, id, codename string, banked float64, status string) {
+	t.Helper()
+	if err := s.dal.PutOutsourceWorker(OutsourceWorker{
+		ID: id, Codename: codename, Runtime: RuntimeClaude, Model: "opus",
+		Effort: "medium", TaskID: "t-1", Status: status,
+		CreatedTS: 1.0, DesiredState: "online", BankedCost: banked,
+	}); err != nil {
+		t.Fatalf("seed worker %s: %v", id, err)
+	}
+}
+
+// accountRow returns the accounts row for key, or fails.
+func accountRow(t *testing.T, d map[string]any, key string) map[string]any {
+	t.Helper()
+	for _, raw := range d["accounts"].([]any) {
+		row := raw.(map[string]any)
+		if row["account"] == key {
+			return row
+		}
+	}
+	t.Fatalf("no accounts row for %q in %v", key, d["accounts"])
+	return nil
+}
+
+// machineRow returns the machines row for host, or nil.
+func machineRowIn(d map[string]any, host string) map[string]any {
+	for _, raw := range d["machines"].([]any) {
+		row := raw.(map[string]any)
+		if row["machine"] == host {
+			return row
+		}
+	}
+	return nil
+}
+
+const workerRateLimits = `"rate_limits":{"five_hour":{"used_percentage":42.0},` +
+	`"seven_day":{"used_percentage":7.0}}`
+
+// TestGetMonitoring_WorkerOnlyAccountFillsMachineCostAndWindows is the primary
+// T-fc2f sentinel. The world is deliberately WORKER-ONLY for the key under
+// test: a staff member exists and reports telemetry, but holds NO account at
+// all, so every value asserted here can only have come from the outsource
+// worker. Under the member-only fold all four cells are dash/absent and the
+// machines section is empty — that is the owner-reported eva-m5-claude shape.
+func TestGetMonitoring_WorkerOnlyAccountFillsMachineCostAndWindows(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	// A staff member that holds no account key — proves "a member exists" is not
+	// what makes the assertions below pass.
+	m := fullMember("mira")
+	m.RoleKey = "builder"
+	m.BankedCost = 0
+	if err := s.dal.PutMember(m); err != nil {
+		t.Fatalf("seed member: %v", err)
+	}
+	if rec := doIngestTelemetry(s, "mira", "m-seth-m5", `{"runtime":"claude"}`); rec.Code != 200 {
+		t.Fatalf("member ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	seedWorker(t, s, "ow-eva", "E1", 2.5, WorkerStatusActive)
+	if rec := doIngestTelemetry(s, "ow-eva", "m-eva-m5",
+		`{"runtime":"claude","account":"eva-m5-claude","cost":1.25,`+
+			workerRateLimits+`}`); rec.Code != 200 {
+		t.Fatalf("worker ingest: %d %s", rec.Code, rec.Body.String())
+	}
+
+	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	row := accountRow(t, d, "eva-m5-claude")
+
+	// (1) machine — the box the worker is burning on.
+	if row["machine"] != "m-eva-m5" {
+		t.Errorf("machine = %v, want m-eva-m5 — a worker-only account must still "+
+			"attribute to the host it runs on", row["machine"])
+	}
+	// (2) cost — live (1.25) + the worker's banked balance (2.5).
+	if row["cost"] != 3.75 {
+		t.Errorf("cost = %v, want 3.75 (live 1.25 + worker banked 2.5)", row["cost"])
+	}
+	// (3)+(4) both rate-limit windows.
+	for _, win := range []string{"five_hour", "seven_day"} {
+		shaped, ok := row[win].(map[string]any)
+		if !ok {
+			t.Fatalf("%s = %v, want a shaped window — an outsource session burns "+
+				"the same quota as a member one", win, row[win])
+		}
+		if shaped["used_pct"] == nil {
+			t.Errorf("%s.used_pct is nil, want the worker-reported figure", win)
+		}
+	}
+	// (5) the machines section must carry a row for the worker-only host, and
+	// that row must name the account. A host carrying nothing but workers did
+	// not exist at all before this fix.
+	mr := machineRowIn(d, "m-eva-m5")
+	if mr == nil {
+		t.Fatalf("no machines row for m-eva-m5 in %v", d["machines"])
+	}
+	found := false
+	for _, a := range mr["accounts"].([]any) {
+		if a == "eva-m5-claude" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("machines[m-eva-m5].accounts = %v, want it to contain eva-m5-claude",
+			mr["accounts"])
+	}
+}
+
+// TestGetMonitoring_SharedAccountSumsMemberAndWorkerExactlyOnce is the reverse
+// sentinel: the seth-m5-claude shape, a key held by a staff member AND an
+// outsource worker at once. It pins the exact total, so widening the fold to
+// `members ∪ workers` may not double-count either side's live cost or banked
+// balance. If members and workers ever stop being disjoint (they are disjoint
+// by SQL today: kind != 'outsource' vs kind = 'outsource'), this goes red.
+func TestGetMonitoring_SharedAccountSumsMemberAndWorkerExactlyOnce(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	m := fullMember("seth")
+	m.RoleKey = "builder"
+	m.BankedCost = 4.0
+	if err := s.dal.PutMember(m); err != nil {
+		t.Fatalf("seed member: %v", err)
+	}
+	if rec := doIngestTelemetry(s, "seth", "m-seth-m5",
+		`{"runtime":"claude","account":"seth-m5-claude","cost":1.0}`); rec.Code != 200 {
+		t.Fatalf("member ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	seedWorker(t, s, "ow-7", "S7", 0.25, WorkerStatusActive)
+	if rec := doIngestTelemetry(s, "ow-7", "m-seth-m5",
+		`{"runtime":"claude","account":"seth-m5-claude","cost":0.5}`); rec.Code != 200 {
+		t.Fatalf("worker ingest: %d %s", rec.Code, rec.Body.String())
+	}
+
+	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	row := accountRow(t, d, "seth-m5-claude")
+	// 1.0 + 4.0 (member) + 0.5 + 0.25 (worker) — each balance banked once.
+	if row["cost"] != 5.75 {
+		t.Errorf("cost = %v, want 5.75 (member 1.0+4.0, worker 0.5+0.25) — each "+
+			"actor's balance must contribute exactly once", row["cost"])
+	}
+	// Both sit on the same box, so the host set must stay a SET.
+	if row["machine"] != "m-seth-m5" {
+		t.Errorf("machine = %v, want the single host m-seth-m5", row["machine"])
+	}
+}
+
+// TestGetMonitoring_ReleasedWorkerSpendLeavesTheAccount pins the released
+// filter, the worker twin of the RosterStatusRemoved filter the member list
+// applies at the top of the handler (workerStatusFromMember maps
+// RosterStatusRemoved -> released, so it is literally the same predicate). A
+// retired session's spend is history, not current usage.
+func TestGetMonitoring_ReleasedWorkerSpendLeavesTheAccount(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	seedWorker(t, s, "ow-gone", "G1", 9.0, WorkerStatusReleased)
+	if rec := doIngestTelemetry(s, "ow-gone", "m-eva-m5",
+		`{"runtime":"claude","account":"eva-m5-claude","cost":3.0,`+
+			workerRateLimits+`}`); rec.Code != 200 {
+		t.Fatalf("worker ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	// The raw-key loop still mints the row (it scans the whole snapshot) — the
+	// VALUES are what must stay absent.
+	row := accountRow(t, d, "eva-m5-claude")
+	if row["cost"] != nil {
+		t.Errorf("cost = %v, want null — a released worker's spend is history", row["cost"])
+	}
+	if row["machine"] != "" {
+		t.Errorf("machine = %v, want \"\" — a released worker attributes to no box",
+			row["machine"])
+	}
+	if machineRowIn(d, "m-eva-m5") != nil {
+		t.Errorf("a released worker must not conjure a machines row: %v", d["machines"])
+	}
+}
+
+// TestGetMonitoring_WorkerAccountStillNeedsProvenance pins that widening the
+// fold to workers did NOT widen attribution. telemetryAccount's provenance gate
+// (T-69bc / 2eb6590) is the other half of the read: an account with no runtime
+// stamp, or one stamped for a runtime the actor has left, is unproven and must
+// stay unreadable — for a worker exactly as for a member.
+func TestGetMonitoring_WorkerAccountStillNeedsProvenance(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	seedWorker(t, s, "ow-eva", "E1", 0, WorkerStatusActive)
+	// A CODEX-stamped key under a CLAUDE worker: proven, but not for this
+	// runtime. The values must NOT be folded in under the worker's account.
+	s.telemetry.Set("ow-eva", map[string]any{
+		"machine": "m-eva-m5", "account": "codex:stale",
+		accountRuntimeKey: RuntimeCodex, "cost": 2.0, "ts": 5.0,
+	})
+	// A second worker whose account carries NO provenance stamp at all, next to
+	// an ordinary `runtime` field. That field is rewritten by every later
+	// heartbeat, so falling back to it is exactly the "account borrowed from an
+	// older runtime" regression 2eb6590 removed. Unstamped ⇒ unproven ⇒ empty.
+	seedWorker(t, s, "ow-kyle", "K1", 0, WorkerStatusActive)
+	s.telemetry.Set("ow-kyle", map[string]any{
+		"machine": "m-kyle-m5", "account": "claude:unstamped",
+		"runtime": RuntimeClaude, "cost": 8.0, "ts": 6.0,
+	})
+
+	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	row := accountRow(t, d, "codex:stale")
+	if row["cost"] != nil {
+		t.Errorf("cost = %v, want null — a key whose provenance does not match the "+
+			"worker's runtime must not be read under it", row["cost"])
+	}
+	if mr := machineRowIn(d, "m-eva-m5"); mr != nil && len(mr["accounts"].([]any)) != 0 {
+		t.Errorf("unproven key must not attribute to a host: %v", mr["accounts"])
+	}
+	unstamped := accountRow(t, d, "claude:unstamped")
+	if unstamped["cost"] != nil {
+		t.Errorf("cost = %v, want null — an UNSTAMPED account must never inherit "+
+			"provenance from the entry's mutable runtime field (2eb6590)",
+			unstamped["cost"])
+	}
+	if mr := machineRowIn(d, "m-kyle-m5"); mr != nil && len(mr["accounts"].([]any)) != 0 {
+		t.Errorf("unstamped key must not attribute to a host: %v", mr["accounts"])
+	}
+}
