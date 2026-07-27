@@ -274,6 +274,21 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Summary:  "Read one roster member (removed → 404).",
 			MCPTool:  "get_member",
 		},
+		// ⚠️ update_member sits at the machine FLOOR **deliberately** — owner
+		// 2026-07-27 (T-5336) looked at exactly this row and ruled "keep it".
+		// The premise is that roster members TRUST EACH OTHER: editing a
+		// colleague's display name / model / effort is office housekeeping, not
+		// a governance act, so it is not worth a choke.
+		//
+		// The asymmetry with DELETE on the SAME {member_id} — dismiss_member is
+		// principalAdminAgent, so "edit him" is easier than "fire him" — is
+		// KNOWN and ACCEPTED, not an oversight. Dismissal is irreversible and
+		// removes someone from the office; an edit is reversible by the next
+		// caller. They are different acts and they get different floors.
+		//
+		// This note exists so the NEXT permission audit does not re-open the
+		// question: it was asked, it was ruled on, and the answer was no change.
+		// Raising this row needs a fresh owner ruling, not a tidy-up commit.
 		{
 			Method:   "PATCH",
 			Path:     "/api/members/{member_id}",
