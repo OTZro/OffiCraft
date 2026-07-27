@@ -1124,7 +1124,7 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
             title={t.profile.themeExport}
             onClick={() =>
               downloadBundle(
-                exportOfficeBaseTheme("office-base", msg.themeCopyName(t.themeIdentity.office))
+                exportOfficeBaseTheme("office-base", t.themeIdentity.office)
               )
             }
           >

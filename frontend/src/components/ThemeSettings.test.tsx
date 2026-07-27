@@ -89,9 +89,10 @@ describe("ThemeSettings · import", () => {
     // its text (settings.themeBuiltinTag was overridable), its colour
     // (--color-seg-fill / --color-icon-violet-bg) and the row's own name, so two
     // identical 「辦公室 [內建]」 rows could be produced. The grouping is what a
-    // theme cannot reach: it is structure, and its labels come from the
-    // non-overridable themeMarkers subtree — the same source the quick picker's
-    // <optgroup> uses.
+    // theme cannot reach: it is STRUCTURE. Round 8 handed the heading text back
+    // to packs (themeMarkers.* is overridable wording again) and round 7 removed
+    // the quick picker's mirroring <optgroup>, so what this pins is the render —
+    // which group a row lands in — and nothing else.
     setToken("owner-token");
     const utils = await renderManage();
     await importBundle(utils, {
@@ -542,13 +543,15 @@ describe("ThemeSettings · export", () => {
     });
     const payload = JSON.parse(text);
     expect(payload.id).toBe("office-base");
-    // …and under a COPY name, not the built-in's own: since T-081b a bundle may
-    // not claim a built-in display name, so exporting under it would hand the
-    // owner a file the product then refuses to import back.
-    expect(payload.name).toBe(
-      makeMessages(zh, "zh").themeCopyName(zh.themeIdentity.office)
-    );
-    expect(payload.name).not.toBe(zh.themeIdentity.office);
+    // …under the BUILT-IN's own name, with nothing appended. Round 10 removed
+    // the 「(副本)」 tag (owner: 「我覺得檔名不用附註副本」), and with it the only
+    // pack-settable string that reached this name: themeMarkers.copyTag was
+    // ordinary overridable wording, so a pack could stretch it until this very
+    // download produced a file the product refused to import back (review round
+    // 9, SHOULD-2). The name now comes wholly from themeIdentity, which the
+    // wording whitelist excludes — pinned from the pack's side by
+    // 「keeps the built-in row's own name when a pack forges everything else」.
+    expect(payload.name).toBe(zh.themeIdentity.office);
     // (that this name actually re-imports is pinned in themeExport.test.ts —
     // jsdom has no stylesheet, so the payload here carries no colours to import)
   });

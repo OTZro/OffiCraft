@@ -57,9 +57,13 @@ const css = readFileSync(THEME_CSS, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 // exclusion and its guards are gone: no name is special any more, and an
 // exclusion mechanism nothing excludes is a guard that can never fire.
 //
-// What still cannot be forged is not colour: the heading's TEXT lives in the
-// non-overridable `themeMarkers` i18n subtree, and which group a row lands in is
-// decided by the render, not by anything a pack ships.
+// What still cannot be forged is neither the colour NOR the heading's text —
+// `themeMarkers.*` went back to being ordinary overridable wording in the same
+// round. It is WHICH GROUP A ROW LANDS IN: that is decided by the render, not by
+// anything a pack ships, so a pack that renames itself 辦公室 and re-words the
+// headings still cannot move its own row into the built-in group. The one string
+// held back from packs is the built-in theme's own name (`themeIdentity.*`,
+// excluded in gen-message-keys.mjs), so the shipped row keeps saying 辦公室.
 const tokens = [
   ...new Set([...css.matchAll(/(--color-[a-z0-9-]+)\s*:/g)].map((m) => m[1])),
 ].sort();

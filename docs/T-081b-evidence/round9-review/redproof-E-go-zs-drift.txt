@@ -1,0 +1,39 @@
+########## RED PROOF E — kill the Zs normalisation on the GO side ONLY (one-sided drift) ##########
+func normalizeThemeSpaces(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// trimThemeName normalises spaces, then trims ASCII whitespace ONLY.
+// Deliberately not strings.TrimSpace: that walks unicode.IsSpace, whose
+--- FAIL: TestValidateThemeBundles (0.00s)
+    --- FAIL: TestValidateThemeBundles/rejects_a_name_carrying_control,_formatting,_private-use,_surrogate_or_line/paragraph_separator_characters (0.00s)
+        theme_bundle_test.go:81: name "\u00a0Office\u00a0" kept a non-ASCII space after trimming: "\u00a0Office\u00a0"
+--- FAIL: TestTrimThemeName (0.00s)
+    theme_bundle_test.go:183: trimThemeName("\u3000辦公室") = "\u3000辦公室", want "辦公室"
+2026/07/28 00:13:59 [theme] custom_themes[0]: dropped 1 unrecognised wording code(s): "profile.themeOffice"
+FAIL
+FAIL	ocserverd	0.467s
+FAIL
+--- cross-language parity (61 corpus) ---
+   × theme name validation · Go/TS parity > returns the identical verdict on both ends for every name 548ms
+    go: ACCEPT
+    ts: REJECT: name must be 1..80 characters after trimming
+    go: ACCEPT
+    ts: REJECT: name must be 1..80 characters after trimming: expected 'ideographic_space_only ("　")\n    go:…' to be '' // Object.is equality
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+    go: ACCEPT
+    ts: REJECT: name must be 1..80 characters after trimming
+    go: ACCEPT
+    ts: REJECT: name must be 1..80 characters after trimming: expected 'ideographic_space_only ("　")\n    go:…' to be '' // Object.is equality
++     go: ACCEPT
++     ts: REJECT: name must be 1..80 characters after trimming
++     go: ACCEPT
++     ts: REJECT: name must be 1..80 characters after trimming
+    114|     expect(divergent.join("\n  "), divergent.join("\n  ")).toBe("");
+ Test Files  1 failed (1)
+      Tests  1 failed | 2 passed (3)
+RESTORED

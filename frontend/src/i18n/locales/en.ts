@@ -473,10 +473,9 @@ export const en: Dict = {
     office: "Office",
     newTheme: "New theme",
   },
-  // ── The 內建 / 自訂 labels + the downloaded-copy tag ───────────────────────
-  // Not any theme's name: the labels the Settings › Theme list groups rows under
-  // and the tag a downloaded copy of a built-in theme is named with. ONE
-  // semantic source, shared by every surface that says 內建 / 自訂.
+  // ── The 內建 / 自訂 labels ─────────────────────────────────────────────────
+  // Not any theme's name: the labels the Settings › Theme list groups rows
+  // under. ONE semantic source, shared by every surface that says 內建 / 自訂.
   //
   // Rounds 3–4 held them non-overridable so a pack could not swap 內建 and 自訂.
   // Round 8 gave them back — owner: 「這是大家自己用的,自己要怎麼搞我們不用特別管,
@@ -485,7 +484,6 @@ export const en: Dict = {
   themeMarkers: {
     builtinGroup: "Built-in",
     customGroup: "Custom",
-    copyTag: "copy",
   },
   profile: {
     title: "Profile",

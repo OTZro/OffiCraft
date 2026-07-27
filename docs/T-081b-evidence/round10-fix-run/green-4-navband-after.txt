@@ -1,0 +1,15 @@
+
+Running 5 tests using 5 workers
+
+@414 {"tabCount":5,"labelText":"使用說明","scrollW":414,"clientW":414,"tabLeft":320,"tabRight":412,"tabWidth":93,"labelLeft":351,"labelRight":404,"labelWidth":54,"visibleTab":93,"visibleLabel":54}
+@390 {"tabCount":5,"labelText":"使用說明","scrollW":390,"clientW":390,"tabLeft":320,"tabRight":412,"tabWidth":93,"labelLeft":351,"labelRight":404,"labelWidth":54,"visibleTab":70,"visibleLabel":39}
+@320 {"tabCount":5,"labelText":"使用說明","scrollW":320,"clientW":320,"tabLeft":320,"tabRight":412,"tabWidth":93,"labelLeft":351,"labelRight":404,"labelWidth":54,"visibleTab":0,"visibleLabel":0}
+  ✓  1 [chromium] › visual-guards/nav-tabs-narrow.ct.spec.tsx:66:3 › nav strip geometry @414 (182ms)
+@390 nav band {"padTop":7,"padBottom":7,"above":7,"below":7,"bandH":58,"segH":44}
+  ✓  3 [chromium] › visual-guards/nav-tabs-narrow.ct.spec.tsx:66:3 › nav strip geometry @390 (182ms)
+  ✓  5 [chromium] › visual-guards/nav-tabs-narrow.ct.spec.tsx:66:3 › nav strip geometry @320 (185ms)
+  ✓  2 [chromium] › visual-guards/nav-tabs-narrow.ct.spec.tsx:110:3 › nav band padding is symmetric and its height is unchanged @390 (188ms)
+@1280 nav band {"padTop":7,"padBottom":7,"above":7,"below":7,"bandH":58,"segH":44}
+  ✓  4 [chromium] › visual-guards/nav-tabs-narrow.ct.spec.tsx:110:3 › nav band padding is symmetric and its height is unchanged @1280 (209ms)
+
+  5 passed (674ms)

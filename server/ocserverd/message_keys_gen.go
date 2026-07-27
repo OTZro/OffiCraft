@@ -742,7 +742,6 @@ var messageKeys = map[string]bool{
 	"tasks.waitingLabel":                       true,
 	"tasks.workflow":                           true,
 	"themeMarkers.builtinGroup":                true,
-	"themeMarkers.copyTag":                     true,
 	"themeMarkers.customGroup":                 true,
 	"user":                                     true,
 	"workerDetail.back":                        true,

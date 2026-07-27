@@ -8,7 +8,8 @@ import {
   serializeBundle,
 } from "./themeExport";
 import { isValidColorValue } from "./themeBundle";
-import { makeMessages } from "../i18n/compose";
+import { applyWording } from "../i18n/wording";
+import { MESSAGE_KEYS } from "../i18n/messageKeys.generated";
 import { zh } from "../i18n/locales/zh";
 import {
   THEME_ALIAS_DEFAULT_TOKENS,
@@ -145,27 +146,31 @@ describe("exportOfficeBaseTheme", () => {
     )).toBe(true);
   });
 
-  it("downloads the built-in as a COPY, so the file it produces imports back", () => {
-    // 下載 on the built-in row exports the name composed by msg.themeCopyName —
-    // 辦公室(副本) — so the downloaded file lands as its OWN row rather than a
-    // second one spelled exactly like the shipped theme. Round 8 made the bare
-    // name legal too (the owner does not want duplicates policed), so both
-    // spellings must import back cleanly; what this pins is that the copy is
-    // still marked as a copy, and that neither form is refused.
+  it("downloads the built-in under a name no theme bundle can reach", () => {
+    // 下載 on the built-in row names the file after the BUILT-IN — 辦公室, read
+    // from the themeIdentity subtree, the one subtree the wording whitelist
+    // excludes. Round 10 removed the 「(副本)」 tag that used to be appended
+    // (owner: 「我覺得檔名不用附註副本」); the tag was the ONE pack-settable string
+    // that reached this name, and while it did, a pack could stretch it until the
+    // built-in row's download produced a file the product refused to import back
+    // — breaking the escape hatch to the shipped palette (review round 9,
+    // SHOULD-2). What pins that now is this: a pack that overrides EVERY code on
+    // the whitelist must not move this name by one character.
     const el = freshRoot();
     el.style.setProperty("--color-accent", "#0af");
-    const copy = makeMessages(zh, "zh").themeCopyName(zh.themeIdentity.office);
-    expect(copy).not.toBe(zh.themeIdentity.office);
+    const forged: Record<string, string> = {};
+    for (const code of MESSAGE_KEYS) forged[code] = "x".repeat(200);
+    const t = applyWording(zh, forged);
+
+    const name = t.themeIdentity.office;
+
+    expect(name).toBe(zh.themeIdentity.office);
+    expect(name).not.toContain("x");
     expect(
       "bundle" in parseImportedBundle(
-        serializeBundle(exportComputedTheme("office-base", copy, el))
+        serializeBundle(exportComputedTheme("office-base", name, el))
       )
     ).toBe(true);
-
-    const res = parseImportedBundle(
-      serializeBundle(exportComputedTheme("office-base", zh.themeIdentity.office, el))
-    );
-    expect("bundle" in res).toBe(true);
   });
 });
 

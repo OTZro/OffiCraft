@@ -62,11 +62,12 @@
 }
 
 /* The 內建 / 自訂 group heading. The list's grouping is STRUCTURE, not text on a
- * row — the twin of the quick picker's <optgroup> — so a theme can neither name
- * itself into the built-in group nor repaint its way out of the custom one.
- * That guarantee lives in the RENDER (which group a row lands in) and in the
- * non-overridable `themeMarkers` i18n subtree (what the heading says); neither
- * depends on the colour.
+ * row, so a theme can neither name itself into the built-in group nor repaint
+ * its way out of the custom one. That guarantee lives entirely in the RENDER —
+ * which group a row lands in — and depends on neither the colour nor the words:
+ * a pack may re-word the heading (`themeMarkers.*`, round 8) and rows still land
+ * where the render puts them. (The quick picker used to mirror this grouping
+ * with an <optgroup>; round 7 removed it — owner: 下拉不必再標一次.)
  *
  * The colour is the ordinary pack-settable --color-text-muted (T-081b round 8,
  * owner ruling). It briefly read a reserved marker slot so a pack could not

@@ -96,6 +96,62 @@ for (const width of [320, 390, 414]) {
   });
 }
 
+// The band's vertical padding must stay SYMMETRIC, and the band must stay the
+// height it has always been (T-081b round 10, owner ruling). It shipped as
+// `2px 22px 12px`, which sat the rounded .nav-tabs__seg frame 10px high inside
+// its band — invisible under the built-in dark theme, where the band is the same
+// colour as the page, and glaring under a light pack that gives --color-nav-bg a
+// colour of its own. 7px + 7px is the same 14px total, so nothing below moves.
+//
+// Measured in the real browser rather than asserted from the stylesheet text:
+// the band's box is what the two @media blocks, the flex layout and the
+// scrollbar-free strip actually produce.
+for (const width of [390, 1280]) {
+  test(`nav band padding is symmetric and its height is unchanged @${width}`, async ({
+    mount,
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 844 });
+    const cmp = await mount(<NavTabsNarrowStory />);
+    await expect(cmp.locator(".nav-tabs__seg")).toBeVisible();
+
+    const m = await cmp.locator(".nav-tabs").evaluate((band: HTMLElement) => {
+      const seg = band.querySelector(".nav-tabs__seg") as HTMLElement;
+      const b = band.getBoundingClientRect();
+      const s = seg.getBoundingClientRect();
+      const cs = getComputedStyle(band);
+      return {
+        padTop: parseFloat(cs.paddingTop),
+        padBottom: parseFloat(cs.paddingBottom),
+        above: Math.round((s.top - b.top) * 100) / 100,
+        below: Math.round((b.bottom - s.bottom) * 100) / 100,
+        bandH: Math.round(b.height * 100) / 100,
+        segH: Math.round(s.height * 100) / 100,
+      };
+    });
+    console.log(`@${width} nav band ` + JSON.stringify(m));
+
+    expect(m.padTop, "the band's top and bottom padding must be equal").toBe(
+      m.padBottom
+    );
+    // The frame's own gap above and below — the thing the eye reads — not just
+    // the declared padding.
+    expect(m.above, "the rounded frame must sit centred in its band").toBeCloseTo(
+      m.below,
+      1
+    );
+    // 2px + 12px = 7px + 7px: the band keeps its height, so nothing below it
+    // moves. A future 8/8 would be symmetric AND wrong.
+    expect(
+      m.padTop + m.padBottom,
+      "the band's total vertical padding must stay 14px"
+    ).toBe(14);
+    expect(m.bandH, "band height is exactly its frame plus that padding").toBe(
+      m.segH + 14
+    );
+  });
+}
+
 // 🔴 NOTHING TYPECHECKS THIS DIRECTORY. `frontend/tsconfig.json` is
 // `"include": ["src"]`, and CI's typecheck step is `npm run typecheck` →
 // `tsc --noEmit` against that same config (bin/ci.sh:349), so no .ct.spec.tsx

@@ -553,26 +553,31 @@ describe("validateWording", () => {
   });
 
   it("keeps a themeMarkers override and still drops a theme's identity", () => {
-    // Round 8 handed the 內建 / 自訂 labels and the 副本 tag back to the pack
-    // (owner: 「自己要怎麼搞我們不用特別管」), so an overlay aiming at themeMarkers.*
-    // now SURVIVES. The one code that must still be dropped is a theme's own
-    // name — themeIdentity.* is the single remaining exclusion, and
-    // settings.themeCopyTag is the tag's dead pre-round-3 path.
+    // Round 8 handed the 內建 / 自訂 labels back to the pack (owner: 「自己要怎麼搞
+    // 我們不用特別管」), so an overlay aiming at themeMarkers.* now SURVIVES —
+    // including a full-length one. The one code that must still be dropped is a
+    // theme's own name: themeIdentity.* is the single remaining exclusion, and
+    // settings.themeCopyTag / themeMarkers.copyTag are the retired 副本 tag's
+    // paths (round 10 removed the tag itself — the built-in's download is named
+    // after the built-in and nothing a pack writes reaches that name).
     const wording = {
       zh: {
         [aKey]: "文字",
         "settings.themeCopyTag": "副本\u202E",
-        "themeMarkers.copyTag": "備份",
-        "themeMarkers.builtinGroup": "自訂",
+        "themeMarkers.copyTag": "x".repeat(200),
+        "themeMarkers.builtinGroup": "自訂".repeat(100),
         "themeMarkers.customGroup": "內建",
         "themeIdentity.office": "精靈村",
       },
     };
     const skipped: string[] = [];
     expect(validateWording(wording, "theme", skipped)).toBeNull();
-    expect(skipped.sort()).toEqual(["settings.themeCopyTag", "themeIdentity.office"]);
-    expect(wording.zh["themeMarkers.builtinGroup"]).toBe("自訂");
-    expect(wording.zh["themeMarkers.copyTag"]).toBe("備份");
+    expect(skipped.sort()).toEqual([
+      "settings.themeCopyTag",
+      "themeIdentity.office",
+      "themeMarkers.copyTag",
+    ]);
+    expect(wording.zh["themeMarkers.builtinGroup"]).toBe("自訂".repeat(100));
     expect(wording.zh[aKey]).toBe("文字");
   });
 

@@ -1,0 +1,16 @@
+== shipped state ==
+fill #ba5953 vs white(--color-on-danger): 4.52
+  fill vs #191c24 = 3.76
+  fill vs #242832 = 3.26
+  fill vs #2c3350 = 2.74
+ring --color-bg #191c24 vs --color-indigo #2c3350 = 1.38 (NIT-1)
+
+== A. text pinned to WHITE (the premise chrome.css states) ==
+solutions: 0  → the claim IS true under this premise
+analytic proof: AA-vs-white needs Lf<=0.1833; 3:1 vs #2c3350 needs Lf>=0.2044 — disjoint.
+
+== B. text FREE (--color-on-danger is a token this ticket carved out;
+      its only readers are chrome.css:271, office.css:275, office.css:383) ==
+solutions with a dark count colour (step 4): 152663
+RED-hue-only solutions (independent, finer step 2 scan): 207800
+example #ff8f88: vs black 9.54 | vs three bgs 7.73 / 6.69 / 5.62 — no ring needed

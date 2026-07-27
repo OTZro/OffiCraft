@@ -77,7 +77,6 @@ export interface Messages {
   machineUninstallWarnBody: (name: string, count: number) => string;
   machineDeleteConfirmBody: (name: string) => string;
   // ── settings ──
-  themeCopyName: (name: string) => string;
   themeImportSkipped: (count: number, sample: string[]) => string;
   themeDeleteConfirm: (name: string) => string;
   deleteRoleConfirm: (name: string) => string;
@@ -161,13 +160,6 @@ export function makeMessages(t: Dict, language: Lang): Messages {
       `${mach.uninstallWarnBody1}${name}${mach.uninstallWarnBody2}${count}${mach.uninstallWarnBody3}`,
     machineDeleteConfirmBody: (name) =>
       `${mach.deleteConfirmBodyLead}${name}${mach.deleteConfirmBodyTail}`,
-
-    // The name a DOWNLOADED copy of a built-in theme carries — 辦公室(副本), so
-    // the file lands as its own row instead of a second one spelled exactly like
-    // the shipped theme. Round 8 made the bare name legal too (a duplicate
-    // display name is the user's own business now), so this is a courtesy, not a
-    // rule: the tag itself is ordinary overridable wording again.
-    themeCopyName: (name) => `${name}${sp}(${t.themeMarkers.copyTag})`,
 
     // `sample` is the SHORT head of the skipped set, never the whole thing; the
     // count carries the rest and the trailing marker says it was cut.

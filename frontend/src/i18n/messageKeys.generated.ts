@@ -741,7 +741,6 @@ export const MESSAGE_KEYS: readonly string[] = [
   "tasks.waitingLabel",
   "tasks.workflow",
   "themeMarkers.builtinGroup",
-  "themeMarkers.copyTag",
   "themeMarkers.customGroup",
   "user",
   "workerDetail.back",

@@ -1,0 +1,20 @@
+AssertionError: expected '偽造' to contain '辦公室'
+
+Expected: "辦公室"
+Received: "偽造"
+
+ ❯ src/components/ThemeSettings.test.tsx:171:40
+    169|     const builtinRows = Array.from(builtinList?.querySelectorAll(".ts-…
+    170|     expect(builtinRows.length).toBe(1);
+    171|     expect(builtinRows[0].textContent).toContain(zh.themeIdentity.offi…
+       |                                        ^
+    172|     expect(builtinRows[0].textContent).not.toContain(SENTINEL);
+    173|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+ Test Files  3 failed (3)
+      Tests  3 failed | 62 passed (65)
+   Start at  00:12:12
+   Duration  2.98s (transform 213ms, setup 36ms, collect 313ms, tests 2.35s, environment 676ms, prepare 135ms)
+
