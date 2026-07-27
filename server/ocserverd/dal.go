@@ -1027,6 +1027,24 @@ func (d *DAL) PutReplyCardWithChat(c ReplyCard, m ChatMessage, atts []ChatAttach
 	})
 }
 
+// PutReplyCardWithAttachments writes the card row and every fresh blob it names
+// in ONE transaction — the answer-side twin of PutReplyCardWithChat (there is
+// no companion message on this path; the card row IS the record that names the
+// blobs).
+func (d *DAL) PutReplyCardWithAttachments(c ReplyCard, atts []ChatAttachment) error {
+	if len(atts) == 0 {
+		return d.PutReplyCard(c)
+	}
+	return d.inTx(func(tx *sql.Tx) error {
+		for _, a := range atts {
+			if err := putChatAttachmentOn(tx, a); err != nil {
+				return err
+			}
+		}
+		return putReplyCardOn(tx, c)
+	})
+}
+
 // inTx runs fn inside a transaction, rolling back on any error (and on panic —
 // an un-rolled-back tx would hold the single pooled SQLite connection forever).
 func (d *DAL) inTx(fn func(tx *sql.Tx) error) error {

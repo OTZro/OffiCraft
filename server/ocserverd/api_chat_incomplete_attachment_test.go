@@ -16,9 +16,14 @@ import (
 // table row alone cannot tell the two worlds apart — and a sibling row failing
 // first would abort the run before this one is even reached.
 //
-// Removing the refusal in resolveChatAttachmentInputs turns the chat and
-// task-message cases below red with a 200: the message posts, and the file the
-// sender named is silently absent.
+// What each mutant proves (measured, review finding F6 corrected the earlier
+// overclaim): removing ONLY the refusal in resolveChatAttachmentInputs turns
+// these red with a 400 carrying the WRONG reason ("attachment is empty");
+// restoring the full pre-change shape — the refusal gone AND the chat handler's
+// pre-filter back — turns the chat case red with a 200 and a posted message
+// whose named file is absent, which is the defect itself. The task-message face
+// has its own test (api_tasks_incomplete_attachment_test.go); it is not covered
+// here.
 func TestIncompleteAttachmentIsRefusedOnEveryFace(t *testing.T) {
 	srv, secret, _ := newWiredTestServer(t)
 	now := time.Now().Unix()

@@ -36,6 +36,33 @@ func TestPutChatWithAttachments_FailedWriteLeavesNoBlob(t *testing.T) {
 	}
 }
 
+// T-e2b2 / independent review F3: the ANSWER side of a reply card had the same
+// shape the change was chartered to remove — blobs written one by one, then the
+// card row. Nothing reclaims a blob stranded there: the only cascade,
+// DeleteChatInvolving, walks from record refs, and a record that was never
+// written names nothing. Split PutReplyCardWithAttachments back into
+// PutChatAttachment + PutReplyCard and this goes red on the surviving blob.
+func TestPutReplyCardWithAttachments_FailedCardWriteLeavesNoBlob(t *testing.T) {
+	d := newTestDAL(t)
+	att := ChatAttachment{ID: "att-answer-rollback", Mime: "text/plain", Data: []byte("payload")}
+	card := ReplyCard{
+		ID: "rc-answer-rollback", FromMember: "mira", Kind: "decision", Summary: "ship it?",
+		Options: []string{"yes", "no"}, Status: replyCardStatusAnswered,
+		CreatedTS: 1, AnsweredTS: 2,
+		// Unencodable → the card write fails AFTER the blob has landed in the tx.
+		AnswerAttachments: []any{make(chan int)},
+	}
+	if err := d.PutReplyCardWithAttachments(card, []ChatAttachment{att}); err == nil {
+		t.Fatal("want the unencodable answer attachments to fail the write")
+	}
+	if got, err := d.GetReplyCard(card.ID); err != nil || got != nil {
+		t.Fatalf("card must not exist: card=%v err=%v", got, err)
+	}
+	if got, err := d.GetChatAttachment(att.ID); err != nil || got != nil {
+		t.Fatalf("blob must not survive the card that names it: att=%v err=%v", got, err)
+	}
+}
+
 // T-e2b2: the same rule across the card face, where a partial write is worse
 // than an orphan blob — the companion message's meta.reply_card_id would name a
 // card row that does not exist, i.e. a permanently unanswerable ask sitting in

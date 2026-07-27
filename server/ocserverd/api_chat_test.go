@@ -281,7 +281,7 @@ func TestHandlePostChatApiChatPost(t *testing.T) {
 	}{
 		"unknown ref":  {`{"to":"owner","attachments":[{"id":"att-nope"}]}`, "'att-nope' not found"},
 		"id plus data": {fmt.Sprintf(`{"to":"owner","attachments":[{"id":%q,"data_b64":"aGk="}]}`, id), "both id and data_b64"},
-		"empty item": {`{"to":"owner","attachments":[{"filename":"ghost.txt"}]}`, "neither id nor data_b64"},
+		"empty item":   {`{"to":"owner","attachments":[{"filename":"ghost.txt"}]}`, "neither id nor data_b64"},
 	} {
 		status, resp := postChat(tc.body)
 		if status != 400 || !strings.Contains(resp, tc.want) {

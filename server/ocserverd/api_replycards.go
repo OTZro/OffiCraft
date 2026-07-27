@@ -631,12 +631,15 @@ func (s *apiServer) applyReplyCardAnswer(w http.ResponseWriter, r *http.Request,
 			"answer must carry an option, text, or an attachment")
 		return
 	}
+	// The answer side obeys the same all-or-nothing rule as the question side
+	// (T-e2b2): blobs and the card row that names them go in ONE write. Before
+	// this, a blob written here and a failing PutReplyCard left a blob no record
+	// could ever name — and NOTHING reclaims it (the only cascade,
+	// DeleteChatInvolving, walks from record refs).
 	refs := []any{}
+	fresh := make([]ChatAttachment, 0, len(decoded))
 	for _, att := range decoded {
-		if err := s.dal.PutChatAttachment(*att); err != nil {
-			internalError(w, err)
-			return
-		}
+		fresh = append(fresh, *att)
 		refs = append(refs, attachmentRef(att))
 	}
 	card.Status = replyCardStatusAnswered
@@ -644,7 +647,7 @@ func (s *apiServer) applyReplyCardAnswer(w http.ResponseWriter, r *http.Request,
 	card.AnswerOptionIdx = body.OptionIdx
 	card.AnswerText = text
 	card.AnswerAttachments = refs
-	if err := s.dal.PutReplyCard(card); err != nil {
+	if err := s.dal.PutReplyCardWithAttachments(card, fresh); err != nil {
 		internalError(w, err)
 		return
 	}
