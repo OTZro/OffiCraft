@@ -4,14 +4,20 @@
 #
 # THE DEFECT UNDER TEST
 # ---------------------
-# Every member is a `claude` process running inside a tmux session
-# (cli/ocwarden/spawn.go: `tmux -L <socket> new-session -d …`, whose launch line
-# execs claude). Neither has a fallback. But install.sh never mentioned tmux at
+# Every member is a runtime session running inside tmux: `cli/ocwarden/spawn.go`
+# builds a codex launch line (:930) or a claude one (:934) and hands EITHER to the
+# same `tmuxNewSession` (:950), which fails as `spawn_exec_failed`. tmux therefore
+# has no fallback and no runtime exemption. But install.sh never mentioned tmux at
 # all: on a machine without it the install went GREEN, the cockpit opened, a hire
 # was accepted — and the member then sat at 「waking」 forever while nothing in the
 # installer, the server, or the cockpit ever named the cause. The owner's report
 # was literally "always waking but no progress, it turns out there is no tmux
 # installed".
+#
+# The RUNTIME half is deliberately weaker than tmux: claude OR codex satisfies it,
+# because `ocwarden install`'s own gate (cli/ocwarden/install.go:1057-1061,
+# runtime_bin_unresolved) refuses only when NEITHER resolves. A codex-only machine
+# is a supported configuration and must install cleanly — case 5b pins that.
 #
 # WHAT THIS SUITE PINS
 # --------------------
@@ -19,9 +25,10 @@
 #       is written (no ~/.officraft, no launchd plist);
 #   (b) the refusal names the tool AND the command that installs it, and offers
 #       NO bypass — a gate with a documented escape hatch is a gate nobody hits;
-#   (c) a machine with the tools present installs exactly as before — the
-#       sentinel every fail-closed gate needs, because "refuses when it should"
-#       is worthless without "does not refuse when it should not";
+#   (c) machines that are FINE install exactly as before — both the claude-shaped
+#       one and the codex-only one. This is the sentinel every fail-closed gate
+#       needs: "refuses when it should" is worthless without "does not refuse when
+#       it should not";
 #   (d) THE COUNTERFACTUAL: the same missing-tool run against a MUTANT install.sh
 #       with the `oc_preflight` call sites deleted must SUCCEED. That mutant is
 #       the pre-fix installer, so this case simultaneously reproduces the
@@ -37,10 +44,10 @@
 # asks whether they resolve, so a stub is a faithful stand-in, and using the real
 # ones would make the result depend on what the CI host happens to have.
 #
-# One honest limit: the claude half of the preflight mirrors ocwarden's own
-# resolution order, which ends in two ABSOLUTE paths (/opt/homebrew/bin/claude,
-# /usr/local/bin/claude) that no PATH shim can hide. On a host carrying either,
-# "no claude anywhere" is not constructible and those cases SKIP rather than
+# One honest limit: the runtime half of the preflight mirrors ocwarden's own
+# resolution order, which ends in ABSOLUTE paths (/opt/homebrew/bin, /usr/local/bin
+# for both claude and codex) that no PATH shim can hide. On a host carrying any of
+# them, "no runtime anywhere" is not constructible and those cases SKIP rather than
 # pretend. The tmux cases have no such hole (bare name, PATH only), which is why
 # the counterfactual is built on tmux.
 set -uo pipefail
@@ -120,7 +127,22 @@ SH
 
 printf '#!/usr/bin/env bash\nexit 0\n' > "$TOOLDIR/tmux"
 printf '#!/usr/bin/env bash\necho "9.9.9 (Claude Code)"\nexit 0\n' > "$TOOLDIR/claude"
-chmod +x "$SHIMDIR"/uname "$SHIMDIR"/launchctl "$SHIMDIR"/lsof "$TOOLDIR"/tmux "$TOOLDIR"/claude
+printf '#!/usr/bin/env bash\necho "codex-cli 9.9.9"\nexit 0\n' > "$TOOLDIR/codex"
+chmod +x "$SHIMDIR"/uname "$SHIMDIR"/launchctl "$SHIMDIR"/lsof \
+         "$TOOLDIR"/tmux "$TOOLDIR"/claude "$TOOLDIR"/codex
+
+# uname-alien: a non-darwin host, for the platform half of the preflight. Kept in
+# its own dir so it is opt-in per case.
+mkdir -p "$WORK/alien"
+cat > "$WORK/alien/uname" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  -s) echo Linux ;;
+  -m) echo x86_64 ;;
+  *)  echo Linux ;;
+esac
+SH
+chmod +x "$WORK/alien/uname"
 
 PLIST_REL="Library/LaunchAgents/com.officraft.serve.plist"
 
@@ -150,8 +172,13 @@ wrote_anything() { # did this run touch the machine at all?
   [[ -e "$FAKEHOME/.officraft" || -e "$FAKEHOME/$PLIST_REL" ]]
 }
 
-HAS_ABS_CLAUDE=0
-[[ -x /opt/homebrew/bin/claude || -x /usr/local/bin/claude ]] && HAS_ABS_CLAUDE=1
+# "No runtime anywhere" is only constructible when the host carries neither an
+# absolute claude nor an absolute codex (see the header note).
+HAS_ABS_RUNTIME=0
+for _abs in /opt/homebrew/bin/claude /usr/local/bin/claude \
+            /opt/homebrew/bin/codex  /usr/local/bin/codex; do
+  [[ -x "$_abs" ]] && HAS_ABS_RUNTIME=1
+done
 
 echo "install.sh tool preflight — hermetic tests"
 
@@ -177,7 +204,7 @@ esac
 # The failure the owner actually hit is invisible, so the refusal has to connect
 # the missing tool to the symptom — otherwise it is one more line nobody reads.
 case "$OUT" in
-  *"waking"*|*"tmux"*) ok "no tmux: the refusal explains the consequence (a member is claude inside tmux)" ;;
+  *"waking"*|*"tmux"*) ok "no tmux: the refusal explains the consequence (a member is claude/codex inside tmux)" ;;
   *) bad "no tmux: the refusal does not explain why tmux matters:
 $OUT" ;;
 esac
@@ -204,60 +231,114 @@ else
 $OUT"
 fi
 
-# ── 3. claude missing → refused the same way ────────────────────────────────
-if [[ "$HAS_ABS_CLAUDE" == 1 ]]; then
-  echo "  skip — /opt/homebrew/bin/claude or /usr/local/bin/claude exists on this host; 'no claude' is not constructible"
+# ── 3. NO runtime at all (neither claude nor codex) → refused the same way ──
+if [[ "$HAS_ABS_RUNTIME" == 1 ]]; then
+  echo "  skip — an absolute claude/codex exists on this host; 'no runtime anywhere' is not constructible"
 else
   reset_fixture
   run_install "$PKG" tmux
-  check "no claude: the install is refused" "1" "$RC"
+  check "no runtime: the install is refused" "1" "$RC"
   if wrote_anything; then
-    bad "no claude: the machine was touched anyway — the gate fired too late"
+    bad "no runtime: the machine was touched anyway — the gate fired too late"
   else
-    ok "no claude: NOTHING was written"
+    ok "no runtime: NOTHING was written"
   fi
+  # BOTH ways out have to be on offer. Naming only claude would send a codex user
+  # to install a runtime they deliberately did not choose.
   case "$OUT" in
-    *"npm install -g @anthropic-ai/claude-code"*) ok "no claude: the refusal says exactly how to fix it" ;;
-    *) bad "no claude: the refusal does not say how to fix it:
+    *"npm install -g @anthropic-ai/claude-code"*) ok "no runtime: the refusal gives the claude install command" ;;
+    *) bad "no runtime: the refusal does not say how to install claude:
+$OUT" ;;
+  esac
+  case "$OUT" in
+    *"codex"*) ok "no runtime: the refusal names codex as the other way out" ;;
+    *) bad "no runtime: the refusal never mentions codex — a codex user is told to install the wrong thing:
 $OUT" ;;
   esac
 fi
 
-# ── 4. both missing → BOTH are named in one pass ────────────────────────────
-# Reporting one tool, exiting, and reporting the next one only on the re-run is
-# how a five-minute fix becomes three round trips.
-if [[ "$HAS_ABS_CLAUDE" == 1 ]]; then
-  echo "  skip — cannot construct 'no claude' on this host (see above)"
+# ── 4. tmux + NO runtime → both problems reported in one pass ───────────────
+# Reporting one, exiting, and reporting the next only on the re-run is how a
+# five-minute fix becomes three round trips.
+if [[ "$HAS_ABS_RUNTIME" == 1 ]]; then
+  echo "  skip — cannot construct 'no runtime' on this host (see above)"
 else
   reset_fixture
   run_install "$PKG"
-  check "neither tool: the install is refused" "1" "$RC"
-  if [[ "$OUT" == *"tmux"* && "$OUT" == *"claude"* ]]; then
-    ok "neither tool: BOTH missing tools are named in one refusal"
+  check "neither tmux nor a runtime: the install is refused" "1" "$RC"
+  if [[ "$OUT" == *"tmux"* && "$OUT" == *"claude"* && "$OUT" == *"codex"* ]]; then
+    ok "neither: tmux AND the runtime choice are both named in one refusal"
   else
-    bad "neither tool: the refusal does not name both:
+    bad "neither: the refusal does not name both problems:
 $OUT"
   fi
 fi
 
-# ── 5. THE SENTINEL: tools present → the install is NOT blocked ─────────────
+# ── 5. THE SENTINEL: a machine that is fine must NOT be blocked ────────────
 # The whole point of a fail-closed gate is that it is invisible when the machine
 # is fine. This repo has already shipped a tightening that reddened nothing in CI
 # while killing four working paths, so the "does not misfire" half is asserted at
 # the same rank as the "does refuse" half, not left to hand-waving.
 reset_fixture
 run_install "$PKG" tmux claude
-check "tools present: the install succeeds" "0" "$RC"
+check "tmux + claude: the install succeeds" "0" "$RC"
 if [[ -f "$FAKEHOME/$PLIST_REL" ]]; then
-  ok "tools present: the serve plist was rendered (the install really ran, not just exited 0)"
+  ok "tmux + claude: the serve plist was rendered (the install really ran, not just exited 0)"
 else
-  bad "tools present: no serve plist — the install did not complete:
+  bad "tmux + claude: no serve plist — the install did not complete:
 $OUT"
 fi
 case "$OUT" in
-  *"FATAL"*) bad "tools present: the run printed a FATAL on a perfectly good machine:
+  *"FATAL"*) bad "tmux + claude: the run printed a FATAL on a perfectly good machine:
 $OUT" ;;
-  *) ok "tools present: no FATAL printed" ;;
+  *) ok "tmux + claude: no FATAL printed" ;;
+esac
+
+# ── 5b. THE SECOND SENTINEL: codex-only is a SUPPORTED machine ──────────────
+# We support two runtimes (cli/ocwarden/install.go:1057-1061 refuses only when
+# NEITHER resolves), so a machine that deliberately runs codex and never installed
+# claude must install cleanly. An earlier draft of this gate required claude
+# outright and would have locked those machines out — this case is what stops that
+# from coming back.
+if [[ -x /opt/homebrew/bin/claude || -x /usr/local/bin/claude ]]; then
+  echo "  skip — an absolute claude exists on this host; 'codex but no claude' is not constructible"
+else
+  reset_fixture
+  run_install "$PKG" tmux codex
+  check "codex only, no claude: the install succeeds" "0" "$RC"
+  if [[ -f "$FAKEHOME/$PLIST_REL" ]]; then
+    ok "codex only: the serve plist was rendered"
+  else
+    bad "codex only: no serve plist — a supported machine was blocked:
+$OUT"
+  fi
+  case "$OUT" in
+    *"FATAL"*) bad "codex only: the run printed a FATAL on a supported machine:
+$OUT" ;;
+    *) ok "codex only: no FATAL printed" ;;
+  esac
+  # …and it must not nag about the runtime it deliberately does not use.
+  case "$OUT" in
+    *"claude_bin_unresolved"*) bad "codex only: warned about claude_bin_unresolved on a host that runs codex:
+$OUT" ;;
+    *) ok "codex only: no claude nag (the plist simply carries no OC_CLAUDE_BIN)" ;;
+  esac
+fi
+
+# ── 5c. the platform half of the preflight still fires ─────────────────────
+# The darwin/arm64 check MOVED INTO oc_preflight (it was two copy-pasted blocks).
+# Without this case that move could delete the check outright and every other case
+# here would stay green, since they all run under a darwin-pinned uname shim.
+reset_fixture
+rundir="$WORK/run"; rm -rf "$rundir"; mkdir -p "$rundir"
+ln -s "$TOOLDIR/tmux" "$rundir/tmux"; ln -s "$TOOLDIR/claude" "$rundir/claude"
+OUT="$(cd "$WORK" && env -i PATH="$WORK/alien:$rundir:$SHIMDIR:/usr/bin:/bin:/usr/sbin:/sbin" \
+  HOME="$FAKEHOME" SHIM_STATE="$WORK" bash "$PKG/install.sh" </dev/null 2>&1)"; RC=$?
+check "non-darwin host: the install is refused" "1" "$RC"
+case "$OUT" in
+  *"Apple Silicon"*) ok "non-darwin host: the refusal is the platform one, not the tool one" ;;
+  *) bad "non-darwin host: the platform gate did not fire:
+$OUT" ;;
 esac
 
 # ── 6. the preflight must not block the ways OUT ────────────────────────────

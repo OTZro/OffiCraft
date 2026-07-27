@@ -36,8 +36,8 @@
 #      install the safe default still applies: abort unless --force.
 #
 # What it does, in order:
-#   1. platform gate      — macOS Apple Silicon only (darwin/arm64).
-#   1b. tool preflight    — tmux + claude CLI must both exist, or STOP untouched.
+#   1. preflight          — darwin/arm64 only, and tmux plus a runtime (claude OR
+#                           codex) must resolve, or STOP with nothing touched.
 #   2. live-service gate  — if the launchd label this run would claim is
 #                           ALREADY REGISTERED AND RUNNING, installing means
 #                           bootout+bootstrap: a REAL restart that DISCONNECTS
@@ -605,21 +605,30 @@ for _oc_arg in "$@"; do
 done
 unset _oc_arg
 
-# ── tool preflight ───────────────────────────────────────────────────────────
-# A member IS `claude` inside tmux (cli/ocwarden/spawn.go: tmux new-session, whose
-# launch line execs claude) — no fallback for either, and missing them the install
-# still goes green while members sit at 「waking」 unexplained. PRESENCE only.
+# ── preflight: platform + tools ──────────────────────────────────────────────
+# Everything that must hold BEFORE the machine is touched, both modes. tmux is
+# unconditional — BOTH runtimes' launch lines go through one tmuxNewSession
+# (cli/ocwarden/spawn.go:950). The runtime is claude OR codex, matching `ocwarden
+# install`'s runtime_bin_unresolved gate. Missing these the install goes green and
+# members sit at 「waking」 unexplained. PRESENCE only, no version compared.
 oc_preflight() {
-  local miss=() c p
+  local miss=() c x p
+  if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
+    echo "[install] FATAL: OffiCraft v0.x supports macOS Apple Silicon (darwin/arm64) only." >&2
+    echo "[install]        This machine reports: $(uname -s)/$(uname -m)" >&2
+    exit 1
+  fi
   command -v tmux >/dev/null 2>&1 || miss+=("tmux — brew install tmux")
   c="${OC_CLAUDE_BIN:-$(command -v claude 2>/dev/null || true)}"
-  for p in "$HOME/.local/bin" /opt/homebrew/bin /usr/local/bin; do
+  x="${OC_CODEX_BIN:-$(command -v codex 2>/dev/null || true)}"
+  for p in "$HOME/.local/bin" "$HOME/.npm-global/bin" /opt/homebrew/bin /usr/local/bin; do
     [[ -z "$c" && -x "$p/claude" ]] && c="$p/claude"
+    [[ -z "$x" && -x "$p/codex" ]] && x="$p/codex"
   done
-  [[ -n "$c" ]] || miss+=("claude — npm install -g @anthropic-ai/claude-code")
+  [[ -n "$c$x" ]] || miss+=("an agent runtime: claude (npm install -g @anthropic-ai/claude-code) or codex")
   [[ ${#miss[@]} -eq 0 ]] && { OC_PF_CLAUDE="$c"; return 0; }
-  echo "[install] FATAL: a member is claude inside tmux — NOTHING was installed." >&2
-  echo "[install]        Install the below, then re-run this installer:" >&2
+  echo "[install] FATAL: a member is claude or codex inside tmux. NOTHING was installed;" >&2
+  echo "[install]        install the below, then re-run:" >&2
   printf '[install]          %s\n' "${miss[@]}" >&2
   exit 1
 }
@@ -700,11 +709,6 @@ EOF
     esac
   done
 
-  if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
-    echo "[install] FATAL: OffiCraft v0.x supports macOS Apple Silicon (darwin/arm64) only." >&2
-    echo "[install]        This machine reports: $(uname -s)/$(uname -m)" >&2
-    exit 1
-  fi
   oc_preflight  # before the download
 
   if [[ -z "$TAG" ]]; then
@@ -855,11 +859,6 @@ if [[ -n "$PORT_FLAG" ]] && ! printf '%s' "$PORT_FLAG" | grep -qE '^[0-9]{2,5}$'
   exit 2
 fi
 
-if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
-  echo "[install] FATAL: OffiCraft v0.x supports macOS Apple Silicon (darwin/arm64) only." >&2
-  echo "[install]        This machine reports: $(uname -s)/$(uname -m)" >&2
-  exit 1
-fi
 oc_preflight
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -1311,8 +1310,7 @@ mkdir -p "$LA_DIR" "$LOG_DIR"
 # ONE-CLICK was the more broken of the two.
 #
 # The stamping mirrors bin/ocserver's block deliberately (same XML hygiene, same
-# two-probe shim detection) — keep them in step. The path itself comes from
-# oc_preflight, which already resolved it in bin/ocserver's order.
+# two-probe shim detection) — keep them in step. The path comes from oc_preflight.
 COMMON_PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 CLAUDE_BIN="${OC_PF_CLAUDE:-}"   # resolved once, in oc_preflight
 SERVE_PATH="$COMMON_PATH"
@@ -1338,12 +1336,13 @@ if [[ -n "$CLAUDE_BIN" ]]; then
   claude_entry="    <key>OC_CLAUDE_BIN</key><string>$CLAUDE_BIN</string>
 "
 else
-  # Absence is fatal in oc_preflight, so reaching here means claude resolved but
-  # was NOT stampable (WARN above). Still LOUD: with T-ba62's fail-closed
-  # `ocwarden install`, the cockpit's 「安裝」 here REFUSES, visibly.
-  echo "[install] WARNING: no stampable claude path — installing THIS machine's warden from the" >&2
-  echo "[install]          cockpit will REFUSE (claude_bin_unresolved). Fix: re-run with" >&2
-  echo "[install]          OC_CLAUDE_BIN=/absolute/path/to/claude (idempotent)." >&2
+  # Empty = claude absent (codex-only host: allowed, and NOT to be nagged about a
+  # runtime it does not use) or unstampable (WARN above). OC_PF_CLAUDE tells them
+  # apart; only the second is a problem.
+  if [[ -n "${OC_PF_CLAUDE:-}" ]]; then
+    echo "[install] WARNING: no stampable claude path — a claude member here may hit" >&2
+    echo "[install]          claude_bin_unresolved. Fix: re-run with OC_CLAUDE_BIN=/abs/path/claude" >&2
+  fi
 fi
 
 # OC_CONFIG is emitted ONLY when a config file actually backed the port probe:

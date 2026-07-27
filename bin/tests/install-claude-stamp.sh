@@ -159,32 +159,38 @@ else
 $PLIST_BODY"
 fi
 
-# ── 2. no claude anywhere → the install is REFUSED before anything is written ─
+# ── 2. no runtime at all → the install is REFUSED before anything is written ─
 # CONTRACT CHANGE (T-7f38): this case used to assert "install still succeeds (the
 # server works without claude)". It no longer does — the tool preflight stops a
 # run that cannot ever start a member, and it stops it BEFORE the plist is
 # rendered, so the assertion is "nothing was written", not "written without the
 # stamp". The positive control the old case provided (a plist that renders with a
 # PATH but no OC_CLAUDE_BIN) now lives in case 5, which reaches the renderer.
-if [[ -x /opt/homebrew/bin/claude || -x /usr/local/bin/claude ]]; then
-  # The preflight mirrors ocwarden's resolution order, which includes two ABSOLUTE
+#
+# NOTE the shape: the preflight wants claude OR CODEX, so "no claude" alone is no
+# longer a refusal (bin/tests/install-preflight-guard.sh case 5b covers the
+# codex-only machine). This suite's shim PATH carries neither, which is why the
+# run below is still refused — the run_install helper never puts codex on PATH.
+if [[ -x /opt/homebrew/bin/claude || -x /usr/local/bin/claude \
+   || -x /opt/homebrew/bin/codex  || -x /usr/local/bin/codex ]]; then
+  # The preflight mirrors ocwarden's resolution order, which includes ABSOLUTE
   # paths that no PATH shim can hide. On a host carrying one of them this case
-  # cannot construct "no claude anywhere", so it is skipped rather than faked —
+  # cannot construct "no runtime anywhere", so it is skipped rather than faked —
   # a green here would have meant nothing.
-  echo "  skip — /opt/homebrew/bin/claude or /usr/local/bin/claude exists on this host; 'no claude' is not constructible"
+  echo "  skip — an absolute claude/codex exists on this host; 'no runtime anywhere' is not constructible"
 else
   reset_fixture
   run_install 0
-  check "no claude anywhere: the install is refused" "1" "$RC"
+  check "no runtime anywhere: the install is refused" "1" "$RC"
   if [[ -f "$FAKEHOME/$PLIST_REL" ]]; then
-    bad "no claude: a serve plist was written anyway — the refusal came too late"
+    bad "no runtime: a serve plist was written anyway — the refusal came too late"
   else
-    ok "no claude: NO serve plist was written (the refusal precedes the renderer)"
+    ok "no runtime: NO serve plist was written (the refusal precedes the renderer)"
   fi
   case "$OUT" in
-    *"claude — npm install -g @anthropic-ai/claude-code"*)
-      ok "no claude: the refusal names claude AND how to install it" ;;
-    *) bad "no claude: the refusal does not say how to fix it:
+    *"npm install -g @anthropic-ai/claude-code"*)
+      ok "no runtime: the refusal names claude AND how to install it" ;;
+    *) bad "no runtime: the refusal does not say how to fix it:
 $OUT" ;;
   esac
 fi

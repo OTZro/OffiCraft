@@ -21,9 +21,10 @@
 官方 release 那條路，server 這台**平台與埠只有這兩項**——binary 是預編好的，不需要 Go / node / python3。
 
 > [!IMPORTANT]
-> **但安裝腳本另外硬性要求下面 B 組的 `tmux` 與 `claude` 兩支都在**（T-7f38）：缺任何一支，安裝**在動任何東西之前就停下**（沒有 `~/.officraft`、沒有 launchd plist），並印出補齊的指令。
+> **但安裝腳本另外硬性要求下面 B 組的東西**（T-7f38）：**`tmux` 一定要有**，而且 **`claude` 與 `codex` 至少要有一種**。缺就**在動任何東西之前停下**（沒有 `~/.officraft`、沒有 launchd plist），並印出補齊的指令。
 > 原因是缺 `tmux` 的機器以前會**整趟綠燈**——控制台打得開、成員請得到——然後成員永遠停在「waking」，而**沒有任何一處訊號指向真正的原因**。
-> 代價要講清楚：**一台只當 server、成員都跑在別台**的機器，現在也一樣要先裝好這兩支才裝得起來。**沒有跳過的開關**（給了就等於教人回到那個沉默失敗）。
+> `tmux` 沒有 runtime 之分：claude 與 codex 兩條啟動線都走同一個 `tmuxNewSession`（`cli/ocwarden/spawn.go:950`）。runtime 則是**二擇一**，跟 `ocwarden install` 的 `runtime_bin_unresolved` 同一條規則——**只裝 codex 的機器是合法配置，不會被擋**。
+> 代價要講清楚：**一台只當 server、成員都跑在別台**的機器，現在也要先備妥 `tmux` 與其中一種 runtime 才裝得起來。**沒有跳過的開關**（給了就等於教人回到那個沉默失敗）。
 
 ### B. 任何要跑成員的機器一定要的
 
@@ -31,7 +32,7 @@
 
 | 需求 | 最低版本 | 為什麼 |
 | --- | --- | --- |
-| **Claude Code CLI**（`claude`，而且已登入） | **2.1.98 以上**（必須新到內建 **Monitor** tool） | 每位成員底下就是一個 Claude Code session。**解析不到 `claude` 時，安裝腳本當場拒絕、warden 也拒絕安裝**（兩層 fail-closed，並在控制台橫幅說明原因），不會裝一個永遠起不了成員的 warden。裝法：`npm install -g @anthropic-ai/claude-code` |
+| **Claude Code CLI**（`claude`，而且已登入） | **2.1.98 以上**（必須新到內建 **Monitor** tool） | 每位成員底下就是一個 Claude Code session。**claude 與 codex 兩種都解析不到時，安裝腳本當場拒絕、warden 也拒絕安裝**（兩層 fail-closed，並在控制台橫幅說明原因），不會裝一個永遠起不了成員的 warden。只裝 codex 不會被擋。裝法：`npm install -g @anthropic-ai/claude-code` |
 | **`tmux`** | 3.0 以上（任何近代 3.x 都行） | 成員的 session 跑在 tmux 裡（`cli/ocwarden/spawn.go` 的 `tmux new-session`，沒有備援）。**解析不到時安裝腳本直接拒絕**，不會裝出一台成員永遠停在「waking」的機器 |
 
 > [!IMPORTANT]
@@ -39,7 +40,7 @@
 > 那條到 server 的 SSE 長連線——**持著連線＝online**（見 [架構與運作原理](architecture.md)）。`claude` 太舊、沒有
 > Monitor tool，成員就掛不住那條連線、**永遠亮不起來**（Waking 卡住或一直 Offline）。升級：`npm install -g @anthropic-ai/claude-code`。
 >
-> 注意：**安裝器擋「沒裝」，但不擋「太舊」**——它確認 `claude` 與 `tmux` 解析得到（缺就停），但**不比對版本號**。所以「2.1.98 以上」是**你要自己確保**的前提，不是安裝當下會替你把關的東西；裝了太舊的 `claude`，安裝照樣過，但成員之後亮不起來。
+> 注意：**安裝器擋「沒裝」，但不擋「太舊」**——它確認 `tmux` 與（claude／codex 至少一種）解析得到（缺就停），但**不比對版本號**。所以「2.1.98 以上」是**你要自己確保**的前提，不是安裝當下會替你把關的東西；裝了太舊的 `claude`，安裝照樣過，但成員之後亮不起來。
 
 > [!NOTE]
 > 用 asdf / nvm / volta 裝 `claude` 的人要注意：launchd 的 PATH 很小，找不到 shim。
