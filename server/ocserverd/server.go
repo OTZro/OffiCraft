@@ -199,7 +199,13 @@ func extractToken(r *http.Request) string {
 // floor was minted before the last password change and is refused — the one
 // stateful exception to stateless verification. Agent/warden tokens never
 // consult it.
-func requireAuth(secret []byte, ownerIatFloor func() int64, next http.Handler) http.Handler {
+//
+// lookup (nil = no cut) is the SECOND revocation seam, added here for T-9cf8
+// and deliberately in the same place: a credential belonging to a machine the
+// roster has deleted is refused (authz.go revocationRefusal). It sits AFTER
+// signature verification — a forged token is still just "invalid token" and
+// never reaches a roster read.
+func requireAuth(secret []byte, ownerIatFloor func() int64, lookup func(id string) (*Member, error), next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(secret) == 0 {
 			writeError(w, http.StatusUnauthorized, "auth not configured")
@@ -223,6 +229,10 @@ func requireAuth(secret []byte, ownerIatFloor func() int64, next http.Handler) h
 					return
 				}
 			}
+		}
+		if refusal := revocationRefusal(claims, lookup); refusal != "" {
+			writeError(w, http.StatusUnauthorized, refusal)
+			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), claimsContextKey, claims)))
 	})
@@ -279,7 +289,7 @@ func buildHandler(specs []RouteSpec, secret []byte, lookup func(id string) (*Mem
 			if spec.Requires != principalMachine {
 				h = requirePrincipalClass(spec.Requires, lookup, h)
 			}
-			h = requireAuth(secret, ownerIatFloor, h)
+			h = requireAuth(secret, ownerIatFloor, lookup, h)
 			if spec.ShareSig {
 				h = shareSigGate(secret, spec.Handler, h)
 			}

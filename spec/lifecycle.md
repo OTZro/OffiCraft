@@ -81,10 +81,29 @@ retired `var/jwt_secret` fallback file has no successor.
   Every failed redemption (unknown / expired / already used) is the same flat 401 with no
   distinguishing hint. The legacy `install.sh?token=` surface stays byte-identical
   indefinitely.
-- Token verification is stateless with ONE revocation cut: owner-scope tokens whose `iat`
-  is earlier than the DB `auth.password_changed_at` (stamped by
-  `POST /api/auth/change-password`) MUST be refused (401). Agent/warden tokens are
-  unaffected; for them expiry stays the only invalidation.
+- Token verification is stateless with TWO revocation cuts:
+  1. **owner scope — the password floor.** Owner-scope tokens whose `iat` is earlier than
+     the DB `auth.password_changed_at` (stamped by `POST /api/auth/change-password`) MUST
+     be refused (401).
+  2. **machine scope — the roster.** The machine roster is the authority over machine
+     credentials (T-9cf8). Once a warden's member row is soft-deleted
+     (`roster_status="removed"` — set by `DELETE /api/machines/{member_id}` and by a
+     CONFIRMED `POST /api/machines/{machine_id}/teardown-here`), every gated route MUST
+     refuse (401) both:
+     - the machine's own token (`sub` = that warden id — a warden's token carries
+       `machine_id: ""` by design, so this arm keys on `sub`), and
+     - a token booted ON that machine (`machine_id` claim = that warden id), UNLESS the
+       caller's own row now names a DIFFERENT `desired_machine_id` — i.e. the roster has
+       already relocated it and only a stale token still points at the deleted host.
+
+     Scope notes, all load-bearing: the cut applies to `kind="warden"` rows ONLY —
+     `roster_status="removed"` is ALSO how a released outsource worker and a dismissed
+     member are recorded, and a released worker is contractually still working (§6.3
+     close-out). A failed roster read MUST NOT revoke (unknown ≠ revoked). `POST
+     /api/machines/{member_id}/uninstall` KEEPS the record and therefore does NOT revoke
+     anything; the machine stays on the roster and re-installable.
+
+  For every other agent token, expiry stays the only invalidation.
 
 ## 2. Boot context — the three-block assembly
 

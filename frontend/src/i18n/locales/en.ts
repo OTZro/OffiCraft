@@ -825,10 +825,19 @@ export const en: Dict = {
       uninstallWarnBody: (name: string, count: number) =>
         `“${name}” still has ${count} member(s) online on it. Uninstalling now tears the warden off the machine while they are still on it — take the related members offline first. Proceed anyway?`,
       uninstallWarnProceed: "Proceed anyway",
-      // delete (DELETE /machines/{id}): a pure record delete, no warden command
+      // delete (DELETE /machines/{id}): no warden command is sent, but this is
+      // NOT the cheap bookkeeping edit the old copy described. T-9cf8 made the
+      // roster the authority over credentials: taking the machine off the
+      // roster revokes its token on the very next request, and every agent
+      // still pinned to it goes with it. The old copy ("this only removes the
+      // machine's record from the list") would now be buying consent with an
+      // inaccurate description of the consequence — the same defect this repo
+      // already booked once, when an install gate promised it would not
+      // interrupt service and then did. Consent obtained from a wrong
+      // description is not consent, so the copy states the real cost.
       deleteConfirmTitle: "Confirm delete machine",
       deleteConfirmBody: (name: string) =>
-        `Delete “${name}”? This only removes the machine's record from the list — it does NOT tear the warden off the machine (that is “Uninstall”).`,
+        `Delete “${name}”? Its credentials stop working immediately: the machine can no longer report in, and any agent still assigned to it loses access too. Nothing is torn down on the machine itself (that is “Uninstall”), and this cannot be undone — bringing it back means installing it again.`,
       deleteConfirm: "Confirm delete",
       deleteBusy: "Deleting…",
       deleteError: "Delete failed",
