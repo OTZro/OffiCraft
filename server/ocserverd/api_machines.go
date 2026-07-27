@@ -856,6 +856,12 @@ func (s *apiServer) runWardenTeardownHere(binPath string) (int, string, bool) {
 	return runOcwarden(binPath, args, env)
 }
 
+// serverSelfUndeletableMsg is the ONE refusal both verbs that would soft-delete
+// the server-local machine speak. It is a shared constant rather than two
+// literals because the two refusals must never drift into disagreeing about
+// whether server-self is retirable — the drift is the defect, not the wording.
+const serverSelfUndeletableMsg = "the server-local machine cannot be deleted"
+
 // POST /api/machines/{machine_id}/teardown-here — tear the warden down ON THE
 // SERVER HOST (requires=admin_agent since T-6020). CONFIRM-THEN-REMOVE: the member is soft-deleted
 // ONLY on a confirmed teardown (exit 0).
@@ -863,6 +869,40 @@ func (s *apiServer) HandleTeardownHereApiMachinesMachineIdTeardownHerePost(w htt
 	machine, err := s.resolveMachine(machineId)
 	if err != nil {
 		writeResolveError(w, err, "machine", machineId)
+		return
+	}
+	// server-self is NOT retirable — the SAME 409 DELETE /api/machines already
+	// speaks, mirrored here rather than reinvented (T-9cf8 follow-up).
+	//
+	// WHY THIS GUARD IS PART OF *THIS* TICKET AND NOT A DRIVE-BY: T-9cf8 did
+	// not create this hole, it RAISED THE PRICE OF FALLING INTO IT. Before,
+	// tearing down the server's own warden left the row soft-deleted and the
+	// host merely offline. Now the roster is the authority over machine
+	// credentials, so the same soft-delete ALSO revokes the token of every
+	// agent whose desired_machine_id is ServerSelfHost — which, per dbseed.go,
+	// is the default placement for the seeded roster. Whoever raises the cost
+	// of an action owns closing the guard; otherwise the bill goes to the next
+	// person who presses it.
+	//
+	// AND IT IS NOT A LEGITIMATE FLOW BEING BLOCKED — checked before writing it:
+	//   - NO UI path calls it. `teardownOnServer` exists in the frontend api
+	//     layer but is referenced by zero components; the only live driver is
+	//     the MCP tool uninstall_warden_on_server_host.
+	//   - it is ALREADY a one-way trip for every machine, self included:
+	//     teardown-here sets RosterStatusRemoved, and resolveMachine demands
+	//     RosterStatusActive, so bootstrap-here and boot-command both 404
+	//     afterwards and GET /api/machines filters the row out of the cockpit.
+	//     "Tear the server host down and rebuild it" therefore cannot be an
+	//     existing migration flow — there is no path back.
+	//   - a restart does not heal it either: seedOutOfBox only seeds
+	//     ServerSelfHost when GetMember returns nil, and a soft-deleted row is
+	//     not nil.
+	//   - instance decommission / e2e rebuild go through the SHELL
+	//     `ocwarden teardown` (e2e_test oc_teardown_bounded), not this endpoint,
+	//     so namespaced-instance cleanup is untouched by this refusal.
+	//   - conformance only ever aims this route at an unknown machine id (404).
+	if machine.ID == ServerSelfHost {
+		writeError(w, http.StatusConflict, serverSelfUndeletableMsg)
 		return
 	}
 	binPath, ok := s.resolveOcwardenBinary(w)
@@ -991,7 +1031,9 @@ func (s *apiServer) HandleDeleteMachineApiMachinesMemberIdDelete(w http.Response
 		return
 	}
 	if m.ID == ServerSelfHost {
-		writeError(w, http.StatusConflict, "the server-local machine cannot be deleted")
+		// Shared with teardown-here (the other verb that would soft-delete this
+		// row) so the two refusals cannot drift apart.
+		writeError(w, http.StatusConflict, serverSelfUndeletableMsg)
 		return
 	}
 	if agents := s.hub.AgentsOnMachine(m.ID); len(agents) > 0 {

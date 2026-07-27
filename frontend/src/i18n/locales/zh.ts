@@ -917,10 +917,15 @@ export const zh = {
       uninstallWarnBody: (name: string, count: number) =>
         `「${name}」上還有 ${count} 位成員在線上。現在解除安裝會在成員仍在這台機器上時把 warden 拆除 —— 建議先將相關成員下線。仍要繼續嗎?`,
       uninstallWarnProceed: "確認繼續",
-      // delete (DELETE /machines/{id}):純刪除記錄,不送任何 warden 指令
+      // delete (DELETE /machines/{id}):不送任何 warden 指令,但 T-9cf8 之後
+      // 它已經不是舊文案講的「只是動一筆記錄」:名冊是憑證的權威,把機器移出
+      // 名冊,它的 token 下一個請求就失效,還掛在這台機器上的 agent 一併失效。
+      // 舊文案(「這只會從清單移除該機器的記錄」)現在等於用一段不正確的描述
+      // 取得同意 —— 這個 repo 已經記過一次同樣的缺陷(安裝的閘承諾不會中斷
+      // 服務,實際會)。用錯誤描述換來的同意不算同意,所以文案要講出真正的代價。
       deleteConfirmTitle: "確認刪除機器",
       deleteConfirmBody: (name: string) =>
-        `確定要刪除「${name}」嗎?這只會從清單移除該機器的記錄,不會拆除機器上的 warden(那是「解除安裝」)。`,
+        `確定要刪除「${name}」嗎?該機器的憑證會立刻失效:機器無法再回報,還指派在這台機器上的 agent 也會一起失去存取權。機器上的 warden 不會被拆除(那是「解除安裝」),而且這個動作無法復原 —— 要恢復只能重新安裝。`,
       deleteConfirm: "確認刪除",
       deleteBusy: "刪除中…",
       deleteError: "刪除失敗",
