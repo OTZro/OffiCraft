@@ -321,6 +321,54 @@ func TestContextReportThrottle(t *testing.T) {
 	}
 }
 
+// TestReportStatePathsAreLiteralAndPerAgent pins the two cadence-state files to
+// their EXACT locations, spelled out here rather than computed by calling the
+// helpers under test.
+//
+// That is the whole point of the test. Every other assertion about these files
+// asks reportStampPath / reportBackoffPath where the file is and then checks
+// there, so the test and the code read the path from one source and agree with
+// each other no matter what that source says — a helper that dropped a path
+// component entirely would keep the whole suite green.
+//
+// 🔴 The dropped component that matters is the PER-AGENT one. cfg.Home in
+// production is the SHARED agents root, so `<home>/context_report.backoff`
+// (no id) would be one file for every agent on the box: one agent's outage would
+// back off — and so silence — every other agent on that machine. Same blast
+// radius for the stamp, whose absence is also the "this reporter is delivering"
+// evidence. If you are changing these paths, change the literals here too, on
+// purpose.
+func TestReportStatePathsAreLiteralAndPerAgent(t *testing.T) {
+	cfg := Config{Home: filepath.Join("/scratch", "agents"), ID: "Kyle"}
+	// Spelled out component by component: <home>/<lowercased id>/<file>.
+	wantDir := filepath.Join("/scratch", "agents", "kyle")
+	if got := reportStampPath(cfg); got != filepath.Join(wantDir, "context_report.stamp") {
+		t.Errorf("reportStampPath = %q, want %q", got, filepath.Join(wantDir, "context_report.stamp"))
+	}
+	if got := reportBackoffPath(cfg); got != filepath.Join(wantDir, "context_report.backoff") {
+		t.Errorf("reportBackoffPath = %q, want %q", got, filepath.Join(wantDir, "context_report.backoff"))
+	}
+	// An id-less agent gets its own "anon" segment — still NOT the bare home.
+	anon := Config{Home: filepath.Join("/scratch", "agents")}
+	wantAnon := filepath.Join("/scratch", "agents", "anon")
+	if got := reportStampPath(anon); got != filepath.Join(wantAnon, "context_report.stamp") {
+		t.Errorf("anon reportStampPath = %q, want %q", got, filepath.Join(wantAnon, "context_report.stamp"))
+	}
+	if got := reportBackoffPath(anon); got != filepath.Join(wantAnon, "context_report.backoff") {
+		t.Errorf("anon reportBackoffPath = %q, want %q", got, filepath.Join(wantAnon, "context_report.backoff"))
+	}
+	// Two agents under ONE home must never share either file.
+	a := Config{Home: filepath.Join("/scratch", "agents"), ID: "kyle"}
+	b := Config{Home: filepath.Join("/scratch", "agents"), ID: "robin"}
+	if reportBackoffPath(a) == reportBackoffPath(b) {
+		t.Errorf("two agents share a backoff record at %q — one agent's outage would silence the other",
+			reportBackoffPath(a))
+	}
+	if reportStampPath(a) == reportStampPath(b) {
+		t.Errorf("two agents share a throttle stamp at %q", reportStampPath(a))
+	}
+}
+
 // TestContextReportStampAdvances: after a non-throttled report the stamp is written
 // with `now`, so the next tick would be throttled.
 func TestContextReportStampAdvances(t *testing.T) {

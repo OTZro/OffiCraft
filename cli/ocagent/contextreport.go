@@ -519,9 +519,21 @@ func reportThrottled(stampPath string, now, window float64) bool {
 // state therefore has to live on disk beside the throttle stamp.
 // ---------------------------------------------------------------------------
 
-// reportBackoffState is the on-disk consecutive-refusal record: how many bursts
-// in a row the server refused, and when the last one was attempted. The zero
+// reportBackoffState is the on-disk consecutive-failure record: how many bursts
+// in a row were NOT delivered, and when the last one was attempted. The zero
 // value means "healthy" (no backoff in effect).
+//
+// "Not delivered" deliberately includes TRANSPORT FAULTS (connection refused, a
+// dead server, a timeout — reportPost's status-0 case), not just schema refusals.
+// ⚠️ This DIVERGES from ocwarden's report loop, which treats status 0 as
+// "not the server's fault" and RESETS its backoff (`result.Posted ||
+// result.Status == 0`). The divergence is intentional and the shapes are not
+// comparable: ocwarden holds its backoff in a live loop whose floor is already
+// one attempt per second, whereas this reporter is re-exec'd on every statusLine
+// render — several times a second — so "server is down" is precisely the case
+// where the unbounded retry storm was worst, and a down server is the LEAST able
+// to absorb it. Resetting on status 0 here would leave the original bug fully
+// intact for the most common outage of all.
 type reportBackoffState struct {
 	failures    int
 	lastAttempt float64

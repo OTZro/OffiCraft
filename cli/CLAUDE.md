@@ -50,6 +50,16 @@ statusLine render 都重跑一次,一秒好幾次),窗沒開 = **下一個 tick 
   30s(= 正常窗),所以**失敗中的 reporter 永遠不會比健康的更密**。封頂是刻意的:沒有它,
   一小時的 outage 會把重試間隔推得比 outage 本身還長,server 復活也沒人知道。
 - **送達一次就 `clearReportBackoff` 立刻歸零**——退避絕不可活得比造成它的 outage 久。
+- ⚠️ **傳輸故障(連不上 / connection refused / timeout,即 `reportPost` 的 status 0)也算失敗、
+  也會退避**(實測:server 沒起來時 5 個快 tick 只出 1 個 burst、`failures=1`)。這是**刻意
+  跟上面 `ocwarden` 的 `Posted || Status == 0 → reset` 相反**:那條把傳輸故障當「不是伺服器
+  的錯」而歸零,但兩者形狀不同——ocwarden 的退避活在 loop 裡、地板本來就是 1 秒一次;
+  這支是每次 render 重跑、一秒好幾次,「server 掛了」正是重送風暴最兇、而對方最沒能力吸收的
+  情況。這裡跟著歸零 = 對最常見的 outage 完全沒修到。
+- 路徑**每個 agent 一份**(`<home>/<id>/…`,無 id 則 `anon`):`cfg.Home` 在 production 是
+  **共用的 agents root**,少掉 id 那段會變成整台機器共用一個檔 → 一個 agent 的 outage 靜音
+  掉所有 agent。`TestReportStatePathsAreLiteralAndPerAgent` 用**字面路徑**釘住(不呼叫
+  `reportStampPath`/`reportBackoffPath` 算期望值——那樣測試只會跟自己同意,少一段也全綠)。
 - 讀檔一律 **fail-open**(缺檔 / 空 / 壞格式 = 不抑制),與 `reportThrottled` 同向。
 - 測試(`contextreport_test.go`)用 `driveTicks` 在**虛擬時間**上模擬 tick loop(`now` 本來
   就是注入參數,**不准真 sleep**),直接釘死 gap 序列 `[30 60 120 240 300 300 300 300]`;
