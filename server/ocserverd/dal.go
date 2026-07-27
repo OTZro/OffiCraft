@@ -50,18 +50,27 @@ type Member struct {
 	Effort           string
 	DesiredState     string
 	DesiredMachineID string
-	WakingSince      float64
-	StoppingSince    float64
-	StoppedSince     float64
-	RefocusSince     float64
-	BankedCost       float64
-	LastOp           string
-	LastOpOK         *bool // nil = no op reported yet (three-valued)
-	LastOpLog        string
-	LastOpReason     string // structured "<code>: <detail>" cause; "" = none reported
-	LastOpAt         float64
-	RosterStatus     string  // "active" | "removed" (dismiss is a SOFT delete)
-	LinkedTaskID     *string // task binding (migrations/00024); nil = unbound. Outsource members carry their bound task id here.
+	// LastMachineID is the durable STICKY-PLACEMENT anchor (T-98f4,
+	// migrations/00039): the machine a confirmed session of this entity last
+	// connected from (the SSE token's machine claim, stamped in onFirstConnect),
+	// "" when it has never landed anywhere. Read by the outsource placement chain
+	// as a PREFERENCE below the owner pin and above the configured (task row /
+	// 手冊) arms — 手冊 decides the birthplace, the last landing decides every
+	// rebirth after it. Unlike DesiredMachineID it never stalls a worker: an
+	// undispatchable last landing falls through to the configured chain.
+	LastMachineID string
+	WakingSince   float64
+	StoppingSince float64
+	StoppedSince  float64
+	RefocusSince  float64
+	BankedCost    float64
+	LastOp        string
+	LastOpOK      *bool // nil = no op reported yet (three-valued)
+	LastOpLog     string
+	LastOpReason  string // structured "<code>: <detail>" cause; "" = none reported
+	LastOpAt      float64
+	RosterStatus  string  // "active" | "removed" (dismiss is a SOFT delete)
+	LinkedTaskID  *string // task binding (migrations/00024); nil = unbound. Outsource members carry their bound task id here.
 	// ── A案 P7d (migrations/00025 — the outsource_worker fold) ────────────────
 	// Codename is the outsource display codename (O-7 / S-12 / H-3), globally
 	// unique and never reused (partial UNIQUE index); "" (stored NULL) on every
@@ -84,7 +93,7 @@ const (
 )
 
 const memberColumns = `id, name, kind, role_key, runtime, model, effort,
-	desired_state, desired_machine_id,
+	desired_state, desired_machine_id, last_machine_id,
 	waking_since, stopping_since, stopped_since, refocus_since, banked_cost,
 	last_op, last_op_ok, last_op_log, last_op_reason, last_op_at, roster_status,
 	linked_task_id, codename, created_ts, released_ts, activated_ts`
@@ -95,7 +104,7 @@ func scanMember(row interface{ Scan(...any) error }) (Member, error) {
 	var linkedTaskID, codename sql.NullString
 	err := row.Scan(
 		&m.ID, &m.Name, &m.Kind, &m.RoleKey, &m.Runtime, &m.Model, &m.Effort,
-		&m.DesiredState, &m.DesiredMachineID,
+		&m.DesiredState, &m.DesiredMachineID, &m.LastMachineID,
 		&m.WakingSince, &m.StoppingSince, &m.StoppedSince, &m.RefocusSince,
 		&m.BankedCost,
 		&m.LastOp, &lastOpOK, &m.LastOpLog, &m.LastOpReason, &m.LastOpAt, &m.RosterStatus,
@@ -171,13 +180,14 @@ func (d *DAL) PutMember(m Member) error {
 	}
 	_, err := d.db.Exec(`
 		INSERT INTO member (`+memberColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			name = excluded.name, kind = excluded.kind,
 			role_key = excluded.role_key, runtime = excluded.runtime,
 			model = excluded.model,
 			effort = excluded.effort, desired_state = excluded.desired_state,
 			desired_machine_id = excluded.desired_machine_id,
+			last_machine_id = excluded.last_machine_id,
 			waking_since = excluded.waking_since,
 			stopping_since = excluded.stopping_since,
 			stopped_since = excluded.stopped_since,
@@ -194,7 +204,7 @@ func (d *DAL) PutMember(m Member) error {
 			released_ts = excluded.released_ts,
 			activated_ts = excluded.activated_ts`,
 		m.ID, m.Name, m.Kind, m.RoleKey, NormalizeRuntime(m.Runtime), m.Model, m.Effort,
-		m.DesiredState, m.DesiredMachineID,
+		m.DesiredState, m.DesiredMachineID, m.LastMachineID,
 		m.WakingSince, m.StoppingSince, m.StoppedSince, m.RefocusSince,
 		m.BankedCost,
 		m.LastOp, lastOpOK, m.LastOpLog, m.LastOpReason, m.LastOpAt, m.RosterStatus,

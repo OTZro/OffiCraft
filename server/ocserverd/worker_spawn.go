@@ -332,6 +332,62 @@ func (s *apiServer) resolveWorkerPlacement(w OutsourceWorker, preferred string, 
 	return unavailable("does not exist")
 }
 
+// resolveStickyWorkerPlacement is the T-98f4 THREE-TIER placement decision, and
+// the only caller of resolveWorkerPlacement on the spawn path. `configured` is
+// what the configuration currently says (the in-memory 發包 pick, the task row,
+// the live 手冊 — notifyWorkerSpawn resolves that chain and hands the winner in).
+// The tiers, in the owner's decision order:
+//
+//  1. w.DesiredMachineID — the owner's explicit 改機器. HARD: if that machine
+//     cannot take the worker right now the spawn STALLS with a receipt and
+//     nothing else is tried. An owner pin is an instruction, not a hint, and
+//     silently booting somewhere else is the mis-placement the 2026-07-25 ruling
+//     removed. It also outranks the sticky arm below by construction — a
+//     relocate must always be able to MOVE a worker that is happily running.
+//  2. w.LastMachineID — where the worker's last confirmed session ran. SOFT: a
+//     preference, not a pin. When that machine is not dispatchable we fall
+//     through to (3) rather than stalling. That asymmetry with (1) is the whole
+//     safety argument of this feature: stickiness must never be able to strand a
+//     worker on a laptop that was closed, and 「機器下線」 has to keep moving it.
+//     Falling through is not the banned automatic placement either — (3) is
+//     itself an owner-authored source, so no machine nobody chose is ever used.
+//  3. configured — the pre-existing chain, unchanged, and still HARD. On a
+//     worker that has never landed anywhere (LastMachineID == "") this function
+//     is exactly the old one, which is what makes 手冊 govern the birthplace.
+//
+// ⚠️ OPEN OWNER QUESTION, deliberately NOT decided here (flagged 2026-07-27, an
+// owner ruling is pending): rule 1 says a hand-moved worker is pulled back by no
+// configuration, but the relocate handler's machine_id defaults to "" and is
+// written UNCONDITIONALLY, so a relocate body that omits the field CLEARS the
+// pin (the wire DTO documents that as intended). Those two statements are in
+// tension. This change touches neither the handler nor that default — it only
+// softens the consequence: with the pin cleared, tier (2) now keeps the worker
+// where it currently is instead of dropping it straight back onto the 手冊, so
+// the accidental clear no longer teleports a running worker. Whichever way the
+// owner rules, the fix belongs in relocateWorkerByID, not here.
+//
+// One reason-message subtlety: when the sticky machine is unavailable and there
+// is no OTHER configured destination to fall to, the receipt reports the STICKY
+// machine's unavailability. Reporting the empty configured chain instead would
+// say "no machine is selected for this worker", which is false — one was, it is
+// just offline — and would send the owner to the wrong screen.
+// Callers hold s.outsourceMu.
+func (s *apiServer) resolveStickyWorkerPlacement(w OutsourceWorker, configured string, now float64) (string, string) {
+	if w.DesiredMachineID != "" {
+		return s.resolveWorkerPlacement(w, w.DesiredMachineID, now)
+	}
+	if w.LastMachineID != "" {
+		id, why := s.resolveWorkerPlacement(w, w.LastMachineID, now)
+		if id != "" {
+			return id, ""
+		}
+		if configured == "" || configured == w.LastMachineID {
+			return "", why
+		}
+	}
+	return s.resolveWorkerPlacement(w, configured, now)
+}
+
 // The structured last_op_reason codes a refused spawn writes (the
 // "<code>: <detail>" convention member.last_op_reason already uses). They exist
 // so a stalled worker names its own cause on the cockpit instead of rendering as
@@ -546,10 +602,24 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 	// in-flight ad-hoc 發包 (no type manual to fall back to). Reading the task row
 	// is what makes "the resolved spec is re-read on handover/rebirth, never
 	// re-derived" true rather than aspirational.
-	machinePref := w.DesiredMachineID
-	if machinePref == "" {
-		machinePref = s.workerMachinePref[w.ID]
-	}
+	// T-98f4 sticky placement: the OWNER PIN is separated out from the rest of
+	// the chain, because the two now rank on opposite sides of the last landing.
+	// Owner ruling 2026-07-27, in his words: 「換手應該在原地,除非我有特別指定
+	// 要換去別處」 and 「手冊上的機器只對 outsource worker 第一次起來生效,一旦
+	// 我手動改到其他電腦上,再次換手應該活在其他電腦上」. Read as a decision
+	// order that is exactly three lines:
+	//
+	//   1. relocated by the owner  → live on the machine he moved it to, forever,
+	//      pulled back by no configuration (the pin, unchanged from before);
+	//   2. never relocated, FIRST boot → the configured chain below (手冊 / task
+	//      row) decides — the 手冊 governs the BIRTHPLACE;
+	//   3. never relocated, later boot → stay where it actually ran last round.
+	//
+	// So the 手冊 decides where a worker is born and the last landing decides
+	// where it lives afterwards; an owner relocate IS the act of changing that
+	// landing. What is NOT a decision arm remains not one: nothing here ever
+	// invents a machine nobody chose (owner ruling 2026-07-25).
+	machinePref := s.workerMachinePref[w.ID]
 	if machinePref == "" {
 		manualMachine := ""
 		if manual != nil {
@@ -569,7 +639,7 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 			machinePref = firstNonEmpty(manualMachine, t.OutsourceMachine)
 		}
 	}
-	warden, blocked := s.resolveWorkerPlacement(w, machinePref, now)
+	warden, blocked := s.resolveStickyWorkerPlacement(w, machinePref, now)
 	if warden == "" {
 		// Either nobody chose a machine, or the chosen one cannot take the worker
 		// right now (offline / benched after a failed boot / wrong runtime).
@@ -748,9 +818,17 @@ func (s *apiServer) reconcileWorkerLiveness(w OutsourceWorker, now float64) {
 		}
 		s.workerReconcileStates[w.ID] = decision.State
 		s.stopWorkerSessionOrPark(target, w.ID)
-		// DoD② 換機: this target kept a ghost the clobber-guard refused to
-		// overwrite — bench it for this worker so the respawn rotates to a
-		// different warden while the reap lands.
+		// This target kept a ghost the clobber-guard refused to overwrite — bench
+		// it for this worker so no respawn lands on it while the reap is still in
+		// flight. STALE-COMMENT FIX (T-98f4): this used to claim the respawn
+		// "rotates to a different warden". It does not, and has not since the
+		// 2026-07-25 no-automatic-placement ruling deleted every rotation arm —
+		// benching now simply makes the next resolve answer machine_unavailable
+		// and the worker STANDS STILL until workerSpawnCooldownSecs expires (the
+		// constant's own comment already says so). Behaviour unchanged here; only
+		// the sentence that mis-described it. Worth knowing while reading the
+		// sticky placement above: stickiness makes the standstill more likely to
+		// recur on the SAME machine, which is the accepted cost of staying put.
 		s.benchWorkerMachine(w.ID, target, now)
 		delete(s.workerSpawnAt, w.ID) // the respawn must not be throttled
 		outsourceLog("rescue %s (%s): %s — robust stop → %s, %s benched",

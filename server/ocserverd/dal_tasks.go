@@ -679,6 +679,15 @@ type OutsourceWorker struct {
 	// notifyWorkerSpawn prefers this over the manual pref;
 	// the relocate handler writes it and re-spawns onto the chosen machine.
 	DesiredMachineID string
+	// LastMachineID is the STICKY placement anchor (T-98f4, migrations/00039),
+	// mirroring member.last_machine_id: the machine this worker's last CONFIRMED
+	// session connected from ("" = it has never landed anywhere yet, i.e. the
+	// next boot is its first). notifyWorkerSpawn prefers it over the configured
+	// (task row / 手冊) arms but below the owner pin, and — unlike the pin —
+	// treats it as a soft preference that falls through when that machine cannot
+	// currently take the worker. Written only by the SSE first-connect edge; no
+	// owner verb writes it directly.
+	LastMachineID string
 	// RefocusSince is the in-flight context-handover marker (T-32e1,
 	// migrations/00019), the worker twin of member.RefocusSince: >0 while a
 	// refocus (owner 換手 button OR the context-high auto-handover) is mid-flight,
@@ -749,6 +758,7 @@ func workerFromMember(m Member) OutsourceWorker {
 		LastOpReason:     m.LastOpReason,
 		LastOpAt:         m.LastOpAt,
 		DesiredMachineID: m.DesiredMachineID,
+		LastMachineID:    m.LastMachineID,
 		RefocusSince:     m.RefocusSince,
 		StoppingSince:    m.StoppingSince,
 		StoppedSince:     m.StoppedSince,
@@ -789,6 +799,7 @@ func memberFromWorker(w OutsourceWorker) Member {
 		Effort:           w.Effort,
 		DesiredState:     w.DesiredState,
 		DesiredMachineID: w.DesiredMachineID,
+		LastMachineID:    w.LastMachineID,
 		RefocusSince:     w.RefocusSince,
 		StoppingSince:    w.StoppingSince,
 		StoppedSince:     w.StoppedSince,

@@ -98,6 +98,11 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 		// freshness comes from the spawn/stop boundary clearing it
 		// (clearSessionBootTS), so a genuinely new session re-stamps here.
 		s.onFirstConnect(memberID)
+		// T-98f4 sticky placement: this connection is the PROOF that the session
+		// actually came up, and its token's machine claim names where. Record it
+		// so the next rebirth stays put instead of re-deriving placement from a
+		// 手冊 that may have been edited since the worker was born.
+		s.stampLandedMachine(memberID, machineID)
 		// Cross-machine single-session enforcement (T-bb29 §1): if this is the
 		// 正身 confirmed on its desired machine (claim == desired_machine), reap
 		// any residual same-id session on OTHER machines. Fires only after the
@@ -348,6 +353,43 @@ func (s *apiServer) onFirstConnect(memberID string) {
 	}
 	entry["boot_ts"] = nowSecs()
 	s.gauge.Set(memberID, entry)
+}
+
+// stampLandedMachine records the machine an OUTSOURCE worker's session actually
+// connected from (T-98f4) — the durable anchor rule 3 of the placement decision
+// reads (「沒被搬過 + 不是第一次 → 留在上一輪實際跑的那台」).
+//
+// WHY THE CONNECT EDGE and not the dispatch: a dispatch is an intent that may
+// never boot (the whole X-46 family of stalls), and sticking to a machine the
+// worker never ran on would make a failed boot permanent. The SSE machine claim
+// comes off the worker's own minted token (notifyWorkerSpawn passes the resolved
+// warden into mintAgentToken), so it names the host the session is genuinely on
+// and it survives a server re-exec — unlike workerSpawnTarget, which is
+// in-memory by contract, and unlike hub.MachineOf, which only exists while the
+// session is live.
+//
+// SCOPED TO kind == outsource on purpose: staff members carry a durable
+// desired_machine_id that already pins them, so a second, weaker anchor would
+// only be a source of disagreement; wardens claim no machine of their own. A
+// blank claim writes nothing (an owner dashboard connection, or an agent token
+// minted before machine claims existed) — "" means "unknown", never "nowhere",
+// and erasing a known landing on an unknowable connect is how a worker would
+// silently fall back to the 手冊 again.
+//
+// Best-effort, and deliberately WRITE-ONLY-ON-CHANGE: a reconnect on the same
+// machine must not cost a row write plus an SSE delta.
+func (s *apiServer) stampLandedMachine(memberID, machineID string) {
+	if machineID == "" {
+		return
+	}
+	m, err := s.dal.GetMember(memberID)
+	if err != nil || m == nil || m.Kind != KindOutsource || m.LastMachineID == machineID {
+		return
+	}
+	m.LastMachineID = machineID
+	if err := s.putMember(*m, memberID); err != nil {
+		fmt.Fprintf(os.Stderr, "[sse] landed-machine stamp failed for %q: %v\n", memberID, err)
+	}
 }
 
 // clearSessionBootTS drops session-scoped gauge state from a member's / worker's

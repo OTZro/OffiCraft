@@ -1,0 +1,41 @@
+-- +goose Up
+-- T-98f4 sticky placement — the durable "where it ACTUALLY ran last" anchor.
+--
+-- Until now an outsource worker's machine was RE-DERIVED from scratch on every
+-- rebirth (notifyWorkerSpawn's fallback chain: owner pin → the in-memory
+-- reassign pref → the task row → the live type manual). Nothing recorded where
+-- the previous session actually landed: the two handles that knew
+-- (workerSpawnTarget, hub.MachineOf) are in-memory / read-only by design and
+-- deliberately never fed the placement decision. The consequence the owner hit:
+-- a 換手 silently moved a worker to another computer because the live 手冊 had
+-- changed since it was born — "換手應該在原地,除非我有特別指定要換去別處"
+-- (owner ruling 2026-07-27).
+--
+-- last_machine_id closes that gap:
+--
+--   ''    the entity has never had a confirmed session on any machine — this is
+--         the FIRST boot, so the configured chain (手冊 / task row) decides,
+--         exactly as before. Every pre-column row starts here, which is the
+--         honest state: nothing was recorded for them.
+--   <id>  the machine id carried by the token claim of the session that last
+--         CONNECTED (SSE first-connect, api_infra.go onFirstConnect) — proof of
+--         a landing, not merely of a dispatch. Subsequent rebirths prefer it
+--         over the configured chain, so 手冊 governs only the birthplace.
+--
+-- It is a PREFERENCE, never a pin: when the recorded machine is not currently
+-- dispatchable (offline / benched / wrong runtime) the resolver falls THROUGH to
+-- the configured chain, so a dead host can never strand a worker. The hard,
+-- stall-on-unavailable placement stays exclusively with the owner's explicit
+-- desired_machine_id pin (00018), which also outranks this column — an owner
+-- relocate must always win.
+--
+-- Lives on `member` (the P7d merged table) rather than an outsource-only table:
+-- workers ARE member rows since 00025. Only the outsource projection reads and
+-- writes it today; staff members carry a durable desired_machine_id instead, so
+-- the column stays '' for them.
+--
+-- A constant-DEFAULT ADD COLUMN (cheap metadata op, no table rebuild).
+ALTER TABLE member ADD COLUMN last_machine_id TEXT NOT NULL DEFAULT '';
+
+-- +goose Down
+ALTER TABLE member DROP COLUMN last_machine_id;
