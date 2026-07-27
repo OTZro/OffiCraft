@@ -41,6 +41,106 @@ const GEO = () => {
 
 const browser = await chromium.launch();
 
+// ── 色彩數學(WCAG)+ 兩種格式的計算色解析器 ─────────────────────────────
+const srgb = (c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+const lum = ([r, g, b]) =>
+  0.2126 * srgb(r / 255) + 0.7152 * srgb(g / 255) + 0.0722 * srgb(b / 255);
+const contrast = (a, b) => {
+  const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m);
+  return (x + 0.05) / (y + 0.05);
+};
+// getComputedStyle 對 color-mix() 回傳的是 `color(srgb 0.62 0.63 0.66)`(0–1 浮點),
+// 不是 rgb(0–255)。兩種都要吃,否則 0.62 會被當成 0.62/255 → 幾乎全黑、對比度全錯。
+const parseRGB = (s) => {
+  const n = s.match(/[\d.]+/g).slice(0, 3).map(Number);
+  return s.trim().startsWith("color(") ? n.map((v) => v * 255) : n;
+};
+const hex = ([r, g, b]) =>
+  "#" + [r, g, b].map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
+
+/** 實際「畫出來」的背景色:截這塊區域的圖,取出現次數最多的像素色。
+ *  這樣連 alpha 分區底色疊在背景圖上的結果都一起算進去,不是只算 CSS。 */
+async function modalPixel(page, clip) {
+  const buf = await page.screenshot({ clip });
+  const scratch = await browser.newContext({ viewport: { width: 200, height: 200 } });
+  const sp = await scratch.newPage();
+  await sp.setContent("<body></body>");
+  const top = await sp.evaluate(async (uri) => {
+    const img = new Image();
+    img.src = uri;
+    await img.decode();
+    const c = document.createElement("canvas");
+    c.width = img.width;
+    c.height = img.height;
+    const g = c.getContext("2d");
+    g.drawImage(img, 0, 0);
+    const d = g.getImageData(0, 0, c.width, c.height).data;
+    const hist = new Map();
+    for (let i = 0; i < d.length; i += 4) {
+      const k = `${d[i]},${d[i + 1]},${d[i + 2]}`;
+      hist.set(k, (hist.get(k) ?? 0) + 1);
+    }
+    const total = d.length / 4;
+    return [...hist.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([k, n]) => ({ rgb: k.split(",").map(Number), share: +(n / total).toFixed(3) }));
+  }, "data:image/png;base64," + buf.toString("base64"));
+  await scratch.close();
+  return top;
+}
+
+/** 每個 .ts-group-head:計算色 + 它實際坐的背景像素色 + WCAG 對比度。 */
+async function measureHeads(page, label) {
+  const heads = await page.evaluate(() => {
+    const decl = [...document.querySelectorAll(".ts-group-head")];
+    return decl.map((h) => {
+      const cs = getComputedStyle(h);
+      const r = h.getBoundingClientRect();
+      const layers = [];
+      for (let el = h; el; el = el.parentElement) {
+        const b = getComputedStyle(el).backgroundColor;
+        if (b !== "rgba(0, 0, 0, 0)")
+          layers.push({ sel: el.tagName.toLowerCase() + "." + (el.className || ""), bg: b });
+      }
+      return {
+        text: h.textContent,
+        color: cs.color,
+        fontSize: cs.fontSize,
+        fontWeight: cs.fontWeight,
+        rect: { x: r.x, y: r.y, w: r.width, h: r.height },
+        bgLayers: layers.slice(0, 4),
+      };
+    });
+  });
+  const out = [];
+  for (const h of heads) {
+    const px = await modalPixel(page, {
+      x: Math.round(h.rect.x),
+      y: Math.round(h.rect.y),
+      width: Math.max(2, Math.round(h.rect.w)),
+      height: Math.max(2, Math.round(h.rect.h)),
+    });
+    const fg = parseRGB(h.color);
+    const bg = px[0].rgb;
+    out.push({
+      theme: label,
+      text: h.text,
+      fgComputed: h.color,
+      fgHex: hex(fg),
+      bgPixel: `rgb(${bg.join(", ")})`,
+      bgHex: hex(bg),
+      bgPixelShare: px[0].share,
+      bgLayersCSS: h.bgLayers,
+      fontSize: h.fontSize,
+      fontWeight: h.fontWeight,
+      contrast: +contrast(fg, bg).toFixed(2),
+      passAA_normal: contrast(fg, bg) >= 4.5,
+    });
+  }
+  return out;
+}
+
 async function openApp({ width, height, wide, theme = "office" }) {
   const ctx = await browser.newContext({ viewport: { width, height } });
   await ctx.addInitScript(
@@ -423,105 +523,6 @@ if (group === "markers" || group === "markers2") {
     readFileSync(join(PACK, "smurf-village.theme.json"), "utf8")
   );
 
-  const srgb = (c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
-  const lum = ([r, g, b]) =>
-    0.2126 * srgb(r / 255) + 0.7152 * srgb(g / 255) + 0.0722 * srgb(b / 255);
-  const contrast = (a, b) => {
-    const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m);
-    return (x + 0.05) / (y + 0.05);
-  };
-  // getComputedStyle 對 color-mix() 回傳的是 `color(srgb 0.62 0.63 0.66)`(0–1 浮點),
-  // 不是 rgb(0–255)。兩種都要吃,否則 0.62 會被當成 0.62/255 → 幾乎全黑、對比度全錯。
-  const parseRGB = (s) => {
-    const n = s.match(/[\d.]+/g).slice(0, 3).map(Number);
-    return s.trim().startsWith("color(") ? n.map((v) => v * 255) : n;
-  };
-  const hex = ([r, g, b]) =>
-    "#" + [r, g, b].map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
-
-  /** 實際「畫出來」的背景色:截這塊區域的圖,取出現次數最多的像素色。
-   *  這樣連 alpha 分區底色疊在背景圖上的結果都一起算進去,不是只算 CSS。 */
-  async function modalPixel(page, clip) {
-    const buf = await page.screenshot({ clip });
-    const scratch = await browser.newContext({ viewport: { width: 200, height: 200 } });
-    const sp = await scratch.newPage();
-    await sp.setContent("<body></body>");
-    const top = await sp.evaluate(async (uri) => {
-      const img = new Image();
-      img.src = uri;
-      await img.decode();
-      const c = document.createElement("canvas");
-      c.width = img.width;
-      c.height = img.height;
-      const g = c.getContext("2d");
-      g.drawImage(img, 0, 0);
-      const d = g.getImageData(0, 0, c.width, c.height).data;
-      const hist = new Map();
-      for (let i = 0; i < d.length; i += 4) {
-        const k = `${d[i]},${d[i + 1]},${d[i + 2]}`;
-        hist.set(k, (hist.get(k) ?? 0) + 1);
-      }
-      const total = d.length / 4;
-      return [...hist.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 3)
-        .map(([k, n]) => ({ rgb: k.split(",").map(Number), share: +(n / total).toFixed(3) }));
-    }, "data:image/png;base64," + buf.toString("base64"));
-    await scratch.close();
-    return top;
-  }
-
-  /** 每個 .ts-group-head:計算色 + 它實際坐的背景像素色 + WCAG 對比度。 */
-  async function measureHeads(page, label) {
-    const heads = await page.evaluate(() => {
-      const decl = [...document.querySelectorAll(".ts-group-head")];
-      return decl.map((h) => {
-        const cs = getComputedStyle(h);
-        const r = h.getBoundingClientRect();
-        const layers = [];
-        for (let el = h; el; el = el.parentElement) {
-          const b = getComputedStyle(el).backgroundColor;
-          if (b !== "rgba(0, 0, 0, 0)")
-            layers.push({ sel: el.tagName.toLowerCase() + "." + (el.className || ""), bg: b });
-        }
-        return {
-          text: h.textContent,
-          color: cs.color,
-          fontSize: cs.fontSize,
-          fontWeight: cs.fontWeight,
-          rect: { x: r.x, y: r.y, w: r.width, h: r.height },
-          bgLayers: layers.slice(0, 4),
-        };
-      });
-    });
-    const out = [];
-    for (const h of heads) {
-      const px = await modalPixel(page, {
-        x: Math.round(h.rect.x),
-        y: Math.round(h.rect.y),
-        width: Math.max(2, Math.round(h.rect.w)),
-        height: Math.max(2, Math.round(h.rect.h)),
-      });
-      const fg = parseRGB(h.color);
-      const bg = px[0].rgb;
-      out.push({
-        theme: label,
-        text: h.text,
-        fgComputed: h.color,
-        fgHex: hex(fg),
-        bgPixel: `rgb(${bg.join(", ")})`,
-        bgHex: hex(bg),
-        bgPixelShare: px[0].share,
-        bgLayersCSS: h.bgLayers,
-        fontSize: h.fontSize,
-        fontWeight: h.fontWeight,
-        contrast: +contrast(fg, bg).toFixed(2),
-        passAA_normal: contrast(fg, bg) >= 4.5,
-      });
-    }
-    return out;
-  }
-
   const { ctx, page } = await openApp({ width: 1440, height: 900, wide: false });
   const warn = await importBundle(page, bundle);
   console.log("import warning:", warn);
@@ -625,6 +626,201 @@ if (group === "markers" || group === "markers2") {
     "設定 › 主題 清單 · **已套用精靈村** · 手機 375",
     { activeTheme, groupHeads: mobileHeads }
   );
+
+  await ctx.close();
+}
+
+// ── group remeasure(rebase 到 12b84d1 之後重量)────────────────────────
+// CI 蓋不到的那一塊:對比度實算 + 對照截圖。四項:
+//   ① .ts-group-head(內建深色 / 套用精靈村)
+//   ② 未讀徽章(白字對徽章底;徽章底對頁底 / 卡片 / active 分頁)
+//   ③ .login__hint(內建深色 / 精靈村)
+//   ④ 手機 375 無橫向捲動
+// 截圖 28(主題清單,已套精靈村)與 29(偏好設定面板,已套精靈村),窄版 1440。
+if (group === "remeasure") {
+  const bundle = JSON.parse(
+    readFileSync(join(PACK, "smurf-village.theme.json"), "utf8")
+  );
+
+  // alpha 版解析 + 疊色(半透明前景/卡片底要先壓在底下那層上才算得準)。
+  const parseA = (s) => {
+    const n = s.match(/[\d.]+/g).map(Number);
+    const scale = s.trim().startsWith("color(") ? 255 : 1;
+    return { rgb: n.slice(0, 3).map((v) => v * scale), a: n.length > 3 ? n[3] : 1 };
+  };
+  const over = (f, b) => f.rgb.map((v, i) => v * f.a + b[i] * (1 - f.a));
+  const flat = (s, base) => {
+    const p = parseA(s);
+    return p.a === 1 ? p.rgb : over(p, base);
+  };
+
+  /** 未讀徽章:白字 vs 徽章底,以及徽章底 vs 三種它真的會坐上去的底色。 */
+  async function measureBadge(page, label) {
+    const raw = await page.evaluate(() => {
+      const host = document.createElement("div");
+      host.id = "probe-badges";
+      host.style.cssText = "position:fixed;left:0;top:0;z-index:99999;opacity:0";
+      host.innerHTML = `
+        <div id="p-page" style="background:var(--color-bg);padding:8px">
+          <span class="nav-tab__badge" id="b-page">7</span></div>
+        <div id="p-card" class="member-card" style="background:var(--color-card);padding:8px">
+          <span class="member-card__unread" id="b-card">7</span></div>
+        <div id="p-tab" class="nav-tab nav-tab--active" style="padding:8px">
+          <span class="nav-tab__badge" id="b-tab">7</span></div>`;
+      document.body.appendChild(host);
+      const cs = (id) => getComputedStyle(document.getElementById(id));
+      const b = cs("b-page");
+      const out = {
+        fill: b.backgroundColor,
+        text: b.color,
+        outlineColor: b.outlineColor,
+        outlineWidth: b.outlineWidth,
+        pageBg: cs("p-page").backgroundColor,
+        cardBg: cs("p-card").backgroundColor,
+        activeTabBg: cs("p-tab").backgroundColor,
+      };
+      host.remove();
+      return out;
+    });
+    const base = [25, 28, 36];
+    const fill = flat(raw.fill, base);
+    const text = flat(raw.text, fill);
+    const ring = flat(raw.outlineColor, base);
+    const bgs = {
+      "頁底 --color-bg": flat(raw.pageBg, base),
+      "卡片 --color-card": flat(raw.cardBg, base),
+      "active 分頁 --color-indigo": flat(raw.activeTabBg, base),
+    };
+    return {
+      theme: label,
+      fillHex: hex(fill),
+      textHex: hex(text),
+      ringHex: hex(ring),
+      outlineWidth: raw.outlineWidth,
+      textOnFill: +contrast(text, fill).toFixed(2),
+      fillVs: Object.fromEntries(
+        Object.entries(bgs).map(([k, v]) => [k, +contrast(fill, v).toFixed(2)])
+      ),
+      ringVs: Object.fromEntries(
+        Object.entries(bgs).map(([k, v]) => [k, +contrast(ring, v).toFixed(2)])
+      ),
+      bgHex: Object.fromEntries(Object.entries(bgs).map(([k, v]) => [k, hex(v)])),
+    };
+  }
+
+  /** 登入/首啟頁提示文字:與 FirstRunPage 相同的結構,量它在卡片底上的對比。 */
+  async function measureLoginHint(page, label) {
+    const raw = await page.evaluate(() => {
+      const wrap = document.createElement("div");
+      wrap.className = "login";
+      wrap.style.cssText = "position:fixed;left:0;top:0;z-index:99999;opacity:0";
+      wrap.innerHTML =
+        '<div class="login__card"><p class="login__hint" id="probe-hint">提示文字</p></div>';
+      document.body.appendChild(wrap);
+      const hint = document.getElementById("probe-hint");
+      const card = hint.parentElement;
+      const out = {
+        color: getComputedStyle(hint).color,
+        cardBg: getComputedStyle(card).backgroundColor,
+        pageBg: getComputedStyle(document.body).backgroundColor,
+      };
+      wrap.remove();
+      return out;
+    });
+    const base = [25, 28, 36];
+    const page0 = flat(raw.pageBg, base);
+    const card = flat(raw.cardBg, page0);
+    const fg = flat(raw.color, card);
+    return {
+      theme: label,
+      cardHex: hex(card),
+      fgComputed: raw.color,
+      fgHex: hex(fg),
+      contrast: +contrast(fg, card).toFixed(2),
+      passAA_normal: contrast(fg, card) >= 4.5,
+    };
+  }
+
+  const { ctx, page } = await openApp({ width: 1440, height: 900, wide: false });
+  const warn = await importBundle(page, bundle);
+  console.log("import warning:", warn);
+  if (warn !== "(無警告)") throw new Error(`EXPECTED ZERO WARNINGS, GOT: ${warn}`);
+
+  // ① 內建深色主題(還沒切主題)。
+  await openThemeSettings(page);
+  const darkHeads = await measureHeads(page, "built-in dark (辦公室)");
+  console.log("DARK HEADS:", JSON.stringify(darkHeads, null, 1));
+  log({ file: "(measure only)", note: "REBASE 重量 · 群組標題對比度 · 內建深色主題", heads: darkHeads });
+
+  // ② + ③ 內建深色下的徽章與 login hint。
+  const darkBadge = await measureBadge(page, "built-in dark (辦公室)");
+  const darkHint = await measureLoginHint(page, "built-in dark (辦公室)");
+  console.log("DARK BADGE:", JSON.stringify(darkBadge, null, 1));
+  console.log("DARK HINT:", JSON.stringify(darkHint, null, 1));
+  log({ file: "(measure only)", note: "REBASE 重量 · 未讀徽章 · 內建深色主題", badge: darkBadge });
+  log({ file: "(measure only)", note: "REBASE 重量 · login hint · 內建深色主題", hint: darkHint });
+
+  // 切到精靈村(淺色自訂包)。
+  await pickTheme(page, bundle.name);
+  const activeTheme = await page.evaluate(() => localStorage.getItem("oc.theme"));
+  if (activeTheme !== bundle.id) throw new Error(`theme not applied: ${activeTheme}`);
+
+  await openThemeSettings(page);
+  const lightHeads = await measureHeads(page, "精靈村 (custom, light)");
+  console.log("LIGHT HEADS:", JSON.stringify(lightHeads, null, 1));
+  const lightBadge = await measureBadge(page, "精靈村 (custom, light)");
+  const lightHint = await measureLoginHint(page, "精靈村 (custom, light)");
+  console.log("LIGHT BADGE:", JSON.stringify(lightBadge, null, 1));
+  console.log("LIGHT HINT:", JSON.stringify(lightHint, null, 1));
+  log({ file: "(measure only)", note: "REBASE 重量 · 未讀徽章 · 精靈村", badge: lightBadge });
+  log({ file: "(measure only)", note: "REBASE 重量 · login hint · 精靈村", hint: lightHint });
+
+  // 28:主題清單(與第 27 張同角度)。
+  await shot(
+    page,
+    "28-smurf-applied-theme-list-rebase.png",
+    "設定 › 主題 清單 · **已套用精靈村** · 窄版 1440(rebase 到 12b84d1 後重拍,與第 27 張同角度)",
+    { activeTheme, importWarning: warn, groupHeads: lightHeads }
+  );
+
+  // 29:偏好設定面板(收合態),背後停在一般畫面。
+  await gotoMonitor(page);
+  await page.locator(".topbar button").last().click();
+  await page.waitForTimeout(400);
+  await page.getByText("偏好設定", { exact: true }).click();
+  await page.waitForTimeout(600);
+  const panel = await page.evaluate(() => {
+    const sel = document.querySelector("select.profile-dd__input");
+    return {
+      optgroupCount: sel.querySelectorAll("optgroup").length,
+      selectSize: sel.size,
+      selectValue: sel.value,
+      optionOrder: [...sel.querySelectorAll("option")].map((o) => ({
+        value: o.value,
+        text: o.textContent,
+      })),
+      sections: [...document.querySelectorAll(".profile-dd__section-label")].map(
+        (e) => e.textContent
+      ),
+    };
+  });
+  console.log("panel:", JSON.stringify(panel));
+  if (panel.selectSize !== 0) throw new Error("select was tampered with");
+  await shot(
+    page,
+    "29-smurf-applied-preferences-panel-rebase.png",
+    "偏好設定面板(收合態:主題/語言/版面)· **已套用精靈村** · 窄版 1440(rebase 到 12b84d1 後重拍)",
+    { activeTheme, ...panel }
+  );
+
+  // ④ 手機 375:有沒有橫向捲動。
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.waitForTimeout(400);
+  await page.keyboard.press("Escape");
+  await gotoMonitor(page);
+  const geo375 = await page.evaluate(GEO);
+  console.log("GEO375:", JSON.stringify(geo375));
+  log({ file: "(measure only)", note: "REBASE 重量 · 手機 375 橫向捲動檢查(已套精靈村)", ...geo375 });
 
   await ctx.close();
 }
