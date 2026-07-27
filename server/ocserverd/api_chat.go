@@ -280,19 +280,23 @@ func (s *apiServer) resolveChatAttachmentInputs(inputs []ChatAttachmentInputDTO)
 	return resolved, 0, ""
 }
 
-// storeResolvedAttachments stores every fresh blob and returns the light
-// [{id, mime, filename}] refs the message meta carries.
-func (s *apiServer) storeResolvedAttachments(resolved []resolvedAttachment) ([]any, error) {
+// pendingAttachments projects the resolved items into (a) the light
+// [{id, mime, filename}] refs the record's meta carries and (b) the fresh blobs
+// that still have to be written. NOTHING is stored here (T-e2b2): the caller
+// hands both halves to ONE transactional DAL write, so a failure anywhere in
+// the record's write path leaves no blob behind — a blob written before the
+// record that names it is unreachable by every consumer (the gallery and the
+// deletion cascade both start from the record's refs).
+func pendingAttachments(resolved []resolvedAttachment) ([]any, []ChatAttachment) {
 	refs := make([]any, 0, len(resolved))
+	var fresh []ChatAttachment
 	for _, ra := range resolved {
 		if ra.store {
-			if err := s.dal.PutChatAttachment(*ra.att); err != nil {
-				return nil, err
-			}
+			fresh = append(fresh, *ra.att)
 		}
 		refs = append(refs, attachmentRef(ra.att))
 	}
-	return refs, nil
+	return refs, fresh
 }
 
 // POST /api/chat — post one message. Sender = verified sub; the server mints
@@ -349,12 +353,10 @@ func (s *apiServer) HandlePostChatApiChatPost(w http.ResponseWriter, r *http.Req
 		writeResolveError(w, err, "chat recipient", trimString(body.To))
 		return
 	}
+	var fresh []ChatAttachment
 	if len(resolved) > 0 {
-		refs, err := s.storeResolvedAttachments(resolved)
-		if err != nil {
-			internalError(w, err)
-			return
-		}
+		var refs []any
+		refs, fresh = pendingAttachments(resolved)
 		meta["attachments"] = refs
 	}
 	if strOrEmpty(body.Body) == "" && meta["attachments"] == nil {
@@ -370,7 +372,7 @@ func (s *apiServer) HandlePostChatApiChatPost(w http.ResponseWriter, r *http.Req
 		TS:        nowSecs(),
 		Meta:      meta,
 	}
-	if err := s.dal.PutChat(msg); err != nil {
+	if err := s.dal.PutChatWithAttachments(msg, fresh); err != nil {
 		internalError(w, err)
 		return
 	}

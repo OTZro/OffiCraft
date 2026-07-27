@@ -901,12 +901,10 @@ func (s *apiServer) HandlePostTaskMessageApiTasksTaskIdMessagePost(w http.Respon
 		"task_type":  t.TypeKey,
 	}
 	text := trimmedOrEmpty(body.Body)
+	var fresh []ChatAttachment
 	if len(resolved) > 0 {
-		refs, err := s.storeResolvedAttachments(resolved)
-		if err != nil {
-			internalError(w, err)
-			return
-		}
+		var refs []any
+		refs, fresh = pendingAttachments(resolved)
 		meta["attachments"] = refs
 	} else if text == "" {
 		writeError(w, http.StatusBadRequest,
@@ -930,7 +928,7 @@ func (s *apiServer) HandlePostTaskMessageApiTasksTaskIdMessagePost(w http.Respon
 		TS:        nowSecs(),
 		Meta:      meta,
 	}
-	if err := s.dal.PutChat(msg); err != nil {
+	if err := s.dal.PutChatWithAttachments(msg, fresh); err != nil {
 		internalError(w, err)
 		return
 	}

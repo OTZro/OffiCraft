@@ -347,8 +347,18 @@ func (d *DAL) ListChatInvolving(participant string, limit int) ([]ChatMessage, e
 	return out, nil
 }
 
+// sqlExecer is the write seam shared by the standalone (d.db) and the
+// transactional (*sql.Tx) forms of every chat-side upsert — ONE statement per
+// record, reachable both ways, so the atomic variants below cannot drift from
+// the single-write ones.
+type sqlExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
 // PutChat upserts a chat message.
-func (d *DAL) PutChat(m ChatMessage) error {
+func (d *DAL) PutChat(m ChatMessage) error { return putChatOn(d.db, m) }
+
+func putChatOn(ex sqlExecer, m ChatMessage) error {
 	meta := m.Meta
 	if meta == nil {
 		meta = map[string]any{}
@@ -357,7 +367,7 @@ func (d *DAL) PutChat(m ChatMessage) error {
 	if err != nil {
 		return err
 	}
-	_, err = d.db.Exec(`
+	_, err = ex.Exec(`
 		INSERT INTO chat_message (id, sender, recipient, body, ts, meta)
 		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
@@ -517,11 +527,15 @@ type ChatAttachment struct {
 // PutChatAttachment stores an attachment blob (no SSE delta even at the
 // service layer — the message record carries the light refs).
 func (d *DAL) PutChatAttachment(a ChatAttachment) error {
+	return putChatAttachmentOn(d.db, a)
+}
+
+func putChatAttachmentOn(ex sqlExecer, a ChatAttachment) error {
 	var filename any
 	if a.Filename != nil {
 		filename = *a.Filename
 	}
-	_, err := d.db.Exec(`
+	_, err := ex.Exec(`
 		INSERT INTO chat_attachment (id, mime, data, filename)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
@@ -974,8 +988,63 @@ func (d *DAL) GetReplyCard(id string) (*ReplyCard, error) {
 	return &c, nil
 }
 
+// PutChatWithAttachments writes the message AND every fresh blob it references
+// in ONE transaction: a message never exists without the blobs its refs name,
+// and a failed write leaves NOTHING behind (the pre-T-e2b2 shape wrote each
+// blob first and the message last, so a failure between them left blobs no
+// record could ever name — invisible to the gallery, invisible to the GC walk
+// that starts from message meta).
+func (d *DAL) PutChatWithAttachments(m ChatMessage, atts []ChatAttachment) error {
+	if len(atts) == 0 {
+		return d.PutChat(m)
+	}
+	return d.inTx(func(tx *sql.Tx) error {
+		for _, a := range atts {
+			if err := putChatAttachmentOn(tx, a); err != nil {
+				return err
+			}
+		}
+		return putChatOn(tx, m)
+	})
+}
+
+// PutReplyCardWithChat writes the card, its companion chat message, and every
+// fresh question-side blob in ONE transaction — the same all-or-nothing rule as
+// PutChatWithAttachments, extended over the card row because the message's
+// meta.reply_card_id points AT that row: a message whose card write failed is a
+// permanently dangling ask in the owner's chat stream.
+func (d *DAL) PutReplyCardWithChat(c ReplyCard, m ChatMessage, atts []ChatAttachment) error {
+	return d.inTx(func(tx *sql.Tx) error {
+		for _, a := range atts {
+			if err := putChatAttachmentOn(tx, a); err != nil {
+				return err
+			}
+		}
+		if err := putChatOn(tx, m); err != nil {
+			return err
+		}
+		return putReplyCardOn(tx, c)
+	})
+}
+
+// inTx runs fn inside a transaction, rolling back on any error (and on panic —
+// an un-rolled-back tx would hold the single pooled SQLite connection forever).
+func (d *DAL) inTx(fn func(tx *sql.Tx) error) error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // PutReplyCard upserts a card row (the SSE delta is the handler's job).
-func (d *DAL) PutReplyCard(c ReplyCard) error {
+func (d *DAL) PutReplyCard(c ReplyCard) error { return putReplyCardOn(d.db, c) }
+
+func putReplyCardOn(ex sqlExecer, c ReplyCard) error {
 	options := c.Options
 	if options == nil {
 		options = []string{}
@@ -1004,7 +1073,7 @@ func (d *DAL) PutReplyCard(c ReplyCard) error {
 	if c.AnswerOptionIdx != nil {
 		optionIdx = *c.AnswerOptionIdx
 	}
-	_, err = d.db.Exec(`
+	_, err = ex.Exec(`
 		INSERT INTO reply_card (`+replyCardColumns+`)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET

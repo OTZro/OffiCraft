@@ -187,10 +187,7 @@ func (s *apiServer) openReplyCard(actor string, body ReplyCardCreateDTO, taskID,
 		}
 		return nil, problem, nil
 	}
-	refs, err := s.storeResolvedAttachments(resolved)
-	if err != nil {
-		return nil, "", err
-	}
+	refs, fresh := pendingAttachments(resolved)
 	now := nowSecs()
 	cardID := "rc-" + newHexID(12)
 	meta := map[string]any{"reply_card_id": cardID}
@@ -208,9 +205,6 @@ func (s *apiServer) openReplyCard(actor string, body ReplyCardCreateDTO, taskID,
 		TS:        now,
 		Meta:      meta,
 	}
-	if err := s.dal.PutChat(msg); err != nil {
-		return nil, "", err
-	}
 	card := ReplyCard{
 		ID:            cardID,
 		FromMember:    msg.Sender,
@@ -225,7 +219,10 @@ func (s *apiServer) openReplyCard(actor string, body ReplyCardCreateDTO, taskID,
 		TaskID:        taskID,
 		TaskStepID:    taskStepID,
 	}
-	if err := s.dal.PutReplyCard(card); err != nil {
+	// Blobs + companion message + card in ONE transaction: the message's
+	// meta.reply_card_id names the card, so a partial write would put a
+	// permanently dangling ask in the owner's stream (T-e2b2).
+	if err := s.dal.PutReplyCardWithChat(card, msg, fresh); err != nil {
 		return nil, "", err
 	}
 	s.hub.Publish("chat", "patch", "chat", wireOwnerID+"::"+msg.ID,
