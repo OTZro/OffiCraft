@@ -103,6 +103,20 @@ retired `var/jwt_secret` fallback file has no successor.
      /api/machines/{member_id}/uninstall` KEEPS the record and therefore does NOT revoke
      anything; the machine stays on the roster and re-installable.
 
+     **Scope of "immediate" — it is per REQUEST, not per connection.** The cut lives in
+     the auth gate, which runs when a request (or an SSE handshake) ARRIVES. It therefore
+     does NOT tear down an SSE stream that is already open: a deleted machine whose warden
+     is mid-stream keeps that stream, and keeps projecting `online`, until it disconnects
+     on its own; only its RECONNECT is refused. What it cannot do meanwhile is act — every
+     new request 401s, and both `reconcile` and `wardenTargetOf` require an ACTIVE roster
+     row, so nothing new is ever enqueued for it. Read "the credentials stop working
+     immediately" as "no request succeeds from now on", not "the socket drops now".
+
+     Refusal precedence on `GET /api/events`: the auth gate runs BEFORE the zombie stop
+     gate, so a removed WARDEN's reconnect is a 401 (this cut), while a dismissed
+     non-warden member's reconnect stays the pre-existing 409 (`sseStopGateRefusal`) —
+     the kind restriction above is what keeps those two apart.
+
      Because this cut turns "the server host's warden row was soft-deleted" into a
      credential revocation that also takes every agent placed on `m-server-self`,
      BOTH verbs that would soft-delete that row MUST refuse it with the same 409:

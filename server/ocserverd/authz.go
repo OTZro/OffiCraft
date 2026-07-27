@@ -183,6 +183,21 @@ func revocationRefusal(claims map[string]any, lookup func(id string) (*Member, e
 	if machineID == "" || machineID == sub {
 		return ""
 	}
+	// The `!= ""` half is NOT redundant, and the asymmetry is deliberate:
+	//   - pin set to ANOTHER machine → the roster has relocated this caller, so
+	//     only a stale token still points at the corpse. Do not revoke.
+	//   - pin EMPTY → that is AUTO placement (and `PATCH /api/members/{id}` can
+	//     clear a pin back to it), which means the roster is not claiming a
+	//     home at all. Then the token's own `machine_id` — stamped at spawn
+	//     with the host actually picked at dispatch time (worker_spawn.go binds
+	//     the warden the scheduler chose) — is the ONLY truthful statement
+	//     about where this process runs, so it decides. Dropping the `!= ""`
+	//     to "close the gap" would mean an unpinned worker genuinely running on
+	//     the deleted machine could never be revoked, which is the failure this
+	//     ticket exists to fix. The narrow cost is the reverse case: an
+	//     unpinned caller holding an OLD token that names the deleted machine
+	//     gets a 401 it could argue with. Cheaper than the alternative, and it
+	//     resolves itself on the next spawn (a fresh token names the new host).
 	if me != nil && me.DesiredMachineID != "" && me.DesiredMachineID != machineID {
 		return "" // already relocated by the roster — only the stale token points here
 	}

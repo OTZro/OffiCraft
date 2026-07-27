@@ -568,3 +568,59 @@ func TestTeardownHereStillWorksForAnOrdinaryMachine(t *testing.T) {
 		t.Fatalf("ordinary teardown must still soft-delete, roster=%q", m.RosterStatus)
 	}
 }
+
+// TestSSERefusalPrecedenceIsUnchangedForNonWardens pins the ONE cross-gate
+// interaction this cut has: `GET /api/events` now sits behind the auth gate as
+// well as the pre-existing zombie stop gate, and the auth gate runs FIRST.
+//
+// WHY IT IS PINNED HERE: conformance's `test_dismissed_member_reconnect_refused`
+// asserts a roster-removed member's reconnect is a **409** with code "conflict".
+// That test hires a plain member (kind=assistant), so the kind restriction keeps
+// it on the old path and it still passes — checked, not assumed. But the moment
+// someone widens this gate to every removed row, that conformance test flips to
+// 401 and fails in a suite this package does not run. This test makes the
+// contract fail HERE, in the package that owns the change, instead of there.
+func TestSSERefusalPrecedenceIsUnchangedForNonWardens(t *testing.T) {
+	srv, secret, api := revokeStack(t)
+	now := time.Now().Unix()
+
+	putTestMember(t, api, Member{
+		ID: "m-gone", Name: "gone", Kind: KindWarden, Effort: "medium",
+		DesiredState: DesiredStateOffline, RosterStatus: RosterStatusActive,
+	})
+	dismissed := testAgent("m-fired")
+	dismissed.DesiredMachineID = ""
+	putTestMember(t, api, dismissed)
+
+	wardenTok, err := mintJWT("m-gone", "agent", 3600, secret, now, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firedTok, err := mintJWT("m-fired", "agent", 3600, secret, now, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	revokeMachine(t, api, "m-gone")
+	dismissed.RosterStatus = RosterStatusRemoved
+	putTestMember(t, api, dismissed)
+
+	// The removed WARDEN: the new credential cut answers first.
+	st, body := revokeCall(t, "GET", srv.URL+"/api/events", wardenTok, "")
+	if st != http.StatusUnauthorized {
+		t.Fatalf("a removed machine's SSE reconnect: want 401 from the credential "+
+			"cut, got %d %s", st, body)
+	}
+
+	// The dismissed MEMBER: untouched, still the pre-existing zombie-gate 409
+	// with the conflict envelope — the exact pair conformance asserts.
+	st, body = revokeCall(t, "GET", srv.URL+"/api/events", firedTok, "")
+	if st != http.StatusConflict {
+		t.Fatalf("a dismissed member's SSE reconnect must stay the zombie gate's "+
+			"409 (conformance test_sse.py test_dismissed_member_reconnect_refused "+
+			"pins it), got %d %s", st, body)
+	}
+	if !strings.Contains(body, `"code":"conflict"`) {
+		t.Fatalf("the dismissed member's refusal must keep the conflict envelope, got %s", body)
+	}
+}
