@@ -571,14 +571,14 @@
     "mcp_tool": "replace_lessons",
     "method": "POST",
     "path": "/api/lessons/{role_key}/{task_type}",
-    "requires": "machine"
+    "requires": "agent"
   },
   {
     "auth": "gated",
     "mcp_tool": "patch_lessons",
     "method": "POST",
     "path": "/api/lessons/{role_key}/{task_type}/patch",
-    "requires": "machine"
+    "requires": "agent"
   },
   {
     "auth": "gated",

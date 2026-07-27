@@ -673,13 +673,17 @@ export interface paths {
          * Whole-doc replace of a per-role lessons doc ({text}).
          * @description Whole-doc replace of a PER-ROLE lessons doc (§3.4 #28).
          *
-         *     Per-role WRITE authz (load-bearing): an ``agent``-scoped caller may write ONLY
-         *     its OWN member's ``role_key`` — the server reads that role_key from the member row
-         *     keyed by the VERIFIED token ``sub`` (``actor``), NEVER from a client field; a
-         *     mismatch (or a member with no role) is a flat 403. Any NON-agent scope (the
-         *     owner's ``scope="owner"`` token, or a human principal) may write ANY role's
-         *     lessons. This replaces the old blanket governance choke: agents can now curate
-         *     their own role's learnings, but cannot poison another role's.
+         *     Per-role WRITE authz (load-bearing): a caller BELOW admin capability may write
+         *     ONLY its OWN member's ``role_key`` — the server reads that role_key from the
+         *     member row keyed by the VERIFIED token ``sub`` (``actor``), NEVER from a client
+         *     field; a mismatch (or a member with no role) is a flat 403. A caller at or above
+         *     the ``admin_agent`` principal class (the owner's ``scope="owner"`` token, and an
+         *     admin agent — an agent-scoped token whose member row carries
+         *     ``role_key="assistant"``) may write ANY role's lessons. This replaces the old
+         *     blanket governance choke: agents can now curate their own role's learnings, but
+         *     cannot poison another role's. NOTE (T-5336): the judge is the PRINCIPAL CLASS,
+         *     not the token scope — an admin agent's scope IS ``agent``, so a scope-based
+         *     reading wrongly confined the office's admin to its own role.
          *
          *     Writes the owner overlay (``is_default`` → False) and fans a ``lessons`` delta.
          */
@@ -705,7 +709,7 @@ export interface paths {
          *
          *     Semantics: ``edits`` apply IN ORDER against the doc ``get_lessons`` serves (overlay ⊕ seed fold); each non-empty ``old`` must match the current text exactly once (0 hits or >1 hits → flat 400, WHOLE batch rejected, zero writes); an empty ``old`` appends ``new`` at the end. Concurrency is last-write-wins with the unique anchor as a natural optimistic lock: a concurrent write that moved the anchor turns the next patch into a 400, never a silent mis-splice. A patch that empties the doc (or shrinks it below a tenth of its size) is refused unless ``allow_shrink=true`` — the r-76 wipe-guard posture.
          *
-         *     Per-role WRITE authz — identical to ``replace_lessons``: an ``agent``-scoped caller may patch ONLY its OWN member's ``role_key`` (read from the roster by the VERIFIED token sub, never a client field); any non-agent scope patches any role.
+         *     Per-role WRITE authz — identical to ``replace_lessons``: a caller below admin capability may patch ONLY its OWN member's ``role_key`` (read from the roster by the VERIFIED token sub, never a client field); a caller at or above the ``admin_agent`` principal class (owner, or an admin agent) patches any role.
          *
          *     Writes the owner overlay (``is_default`` → False) and fans a ``lessons`` delta. The receipt carries ``size``/``sha256`` verification anchors over the resulting doc.
          */

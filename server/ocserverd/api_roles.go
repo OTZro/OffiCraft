@@ -433,12 +433,29 @@ func blankArg(v any) bool {
 }
 
 // lessonsWriteAuthz enforces the per-role lessons WRITE authz shared by
-// replace_lessons and patch_lessons: an agent-scoped caller may write ONLY its
-// own member's role_key (read from the roster by the verified sub, never a
-// client field); any non-agent scope writes any role. Answers the error itself
-// and reports whether the caller may proceed.
+// replace_lessons and patch_lessons: a caller at or above principalAdminAgent
+// (owner, and the admin agent) writes ANY role's lessons; everyone else writes
+// ONLY its own member's role_key (read from the roster by the verified sub,
+// never a client field). Answers the error itself and reports whether the
+// caller may proceed.
+//
+// T-5336 — WHY THE JUDGE IS THE PRINCIPAL CLASS, NOT THE TOKEN SCOPE. This
+// used to read `currentScope(r) != "agent" → allow`, i.e. it recognised
+// exactly ONE privileged caller: the owner (the only non-agent scope minted).
+// The admin agent's token scope IS "agent" (api_auth.go mints every member
+// token with scope="agent"), so Mira's admin standing did not exist on this
+// path at all and she was folded into the self-role-only rule — she could
+// write only role_key="assistant" (her own), and 403'd on every other role.
+// The principal ladder is the office's ONE authority answer (authz.go), so
+// this asks it instead of re-deriving a weaker one from the scope claim.
+//
+// SCOPE OF THE WIDENING, stated without optimism: this ONLY moves admin agents
+// from "self role only" to "any role". Plain agents (rank agent) and wardens
+// (rank machine — role_key is always "", so they never matched any path role)
+// keep the exact self-role-only rule they had; the owner passed before and
+// passes now.
 func (s *apiServer) lessonsWriteAuthz(w http.ResponseWriter, r *http.Request, roleKey string) bool {
-	if currentScope(r) != "agent" {
+	if principalAtLeast(s.principalOfRequest(r), principalAdminAgent) {
 		return true
 	}
 	member, err := s.dal.GetMember(currentActor(r))
@@ -470,9 +487,10 @@ func (s *apiServer) HandleGetLessonsApiLessonsRoleKeyTaskTypeGet(w http.Response
 }
 
 // POST /api/lessons/{role_key}/{task_type} — whole-doc replace. Per-role
-// WRITE authz: an agent-scoped caller may write ONLY its own member's
-// role_key (read from the roster by the verified sub, never a client field);
-// any non-agent scope writes any role.
+// WRITE authz (lessonsWriteAuthz): a caller at or above principalAdminAgent
+// (owner / admin agent) writes ANY role; everyone else writes ONLY its own
+// member's role_key (read from the roster by the verified sub, never a client
+// field).
 func (s *apiServer) HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(w http.ResponseWriter, r *http.Request, roleKey string, taskType string) {
 	var body LessonsReplaceDTO
 	if !decodeJSONBodyStrict(w, r, &body, "text") {

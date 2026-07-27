@@ -678,30 +678,35 @@ MATRIX: dict[str, Route] = {
         path="/api/lessons/assistant/general",
     ),
     "POST /api/lessons/{role_key}/{task_type}": Route(
-        # per-role write authz ABOVE the machine floor (handler-level): owner
-        # writes ANY role; an agent-scoped caller writes ONLY its OWN member's
-        # role_key. admin_agent's role IS assistant → 200; the warden carries
-        # role_key="" → 403; agent B aims at assistant → 403 (cross-role
-        # poison denied); agent A writes its own role → 200.
-        requires="machine",
-        overrides={"warden": 403, "agent_other": 403},
+        # Per-role write authz ABOVE the declared floor (handler-level,
+        # lessonsWriteAuthz): admin capability (owner / admin_agent) writes ANY
+        # role; anyone else writes ONLY its OWN member's role_key.
+        # T-5336: the floor moved machine → agent (a warden's role_key is always
+        # "" so it could never write ANY role — the machine declaration was a
+        # lie), and the warden cell is now DERIVED 403 instead of an override.
+        # admin_agent deliberately aims at agent A's role — a role that is NOT
+        # its own — so this cell fails if the admin ever loses the cross-role
+        # write. agent B aims at assistant → 403 (cross-role poison denied);
+        # agent A writes its own role → 200.
+        requires="agent",
+        overrides={"agent_other": 403},
         path=lambda ctx, i: (
             f"/api/lessons/{ctx.agent_a.role_key}/general"
-            if i == "agent_self"
+            if i in ("agent_self", "admin_agent")
             else "/api/lessons/assistant/general"
         ),
         body={"text": "conformance lessons doc"},
     ),
     "POST /api/lessons/{role_key}/{task_type}/patch": Route(
         # anchor-addressed patch (T-8327): SAME per-role write authz seam as
-        # the whole-doc replace above (warden role_key="" → 403; agent B on
-        # assistant → 403; owner/admin/agent-self → 200). Positive faces use an
-        # always-valid APPEND edit (empty old) so cell order never matters.
-        requires="machine",
-        overrides={"warden": 403, "agent_other": 403},
+        # the whole-doc replace above (T-5336 floor + admin cross-role cell
+        # included). Positive faces use an always-valid APPEND edit (empty old)
+        # so cell order never matters.
+        requires="agent",
+        overrides={"agent_other": 403},
         path=lambda ctx, i: (
             f"/api/lessons/{ctx.agent_a.role_key}/general/patch"
-            if i == "agent_self"
+            if i in ("agent_self", "admin_agent")
             else "/api/lessons/assistant/general/patch"
         ),
         body={"edits": [{"old": "", "new": "conformance patch probe"}]},
@@ -713,7 +718,8 @@ MATRIX: dict[str, Route] = {
         requires="admin_agent",
         body={},
     ),
-    # ── tasks (M3) — the FIRST requires="agent" rows: warden (rank 0) is
+    # ── tasks (M3) — requires="agent" rows (the two lessons WRITE rows above
+    # joined this floor in T-5336): warden (rank 0) is
     # below the agent floor (rank 1) and derives to 403; the executor guard
     # (caller == executor unless admin capability) shows as agent_other=403.
     "GET /api/tasks": Route(requires="machine"),

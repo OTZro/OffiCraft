@@ -838,20 +838,33 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			MCPTool:  "get_lessons",
 		},
 		{
-			Method:   "POST",
-			Path:     "/api/lessons/{role_key}/{task_type}",
-			Handler:  w.HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost,
-			Auth:     authGated,
-			Requires: principalMachine,
+			Method:  "POST",
+			Path:    "/api/lessons/{role_key}/{task_type}",
+			Handler: w.HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost,
+			Auth:    authGated,
+			// T-5336: the two lessons WRITE rows sat on the machine FLOOR while
+			// 100% of their RBAC lived in the handler (buildHandler skips
+			// requirePrincipalClass for principalMachine) — the route table
+			// declared "any authenticated principal" for a row no warden can
+			// ever pass. principalAgent is the honest floor: a warden's member
+			// row carries role_key "" (api_machines.go onboard / dbseed), so the
+			// handler's self-role rule already 403'd every machine-class caller;
+			// raising the declaration refuses them one layer earlier and blocks
+			// nothing that used to succeed. Per-ROLE authz stays in the handler
+			// (lessonsWriteAuthz) — the ladder cannot express "own role only".
+			Requires: principalAgent,
 			Summary:  "Whole-doc replace of a per-role lessons doc ({text}).",
 			MCPTool:  "replace_lessons",
 		},
 		{
-			Method:   "POST",
-			Path:     "/api/lessons/{role_key}/{task_type}/patch",
-			Handler:  w.HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost,
-			Auth:     authGated,
-			Requires: principalMachine,
+			Method:  "POST",
+			Path:    "/api/lessons/{role_key}/{task_type}/patch",
+			Handler: w.HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost,
+			Auth:    authGated,
+			// T-5336: same honest floor as the whole-doc replace above (the two
+			// share lessonsWriteAuthz). READ stays on the machine floor — any
+			// authenticated identity may read any role's lessons.
+			Requires: principalAgent,
 			Summary:  "Patch a per-role lessons doc by unique anchors ({edits:[{old,new}]}).",
 			MCPTool:  "patch_lessons",
 		},
