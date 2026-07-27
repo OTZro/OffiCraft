@@ -462,7 +462,7 @@ func (s *apiServer) HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost
 		internalError(w, err)
 		return
 	}
-	s.respawnWorkerForOwnerOp(*worker, "restart")
+	s.respawnWorkerForOwnerOp(*worker, ownerOpRestart)
 	if fresh, ferr := s.dal.GetOutsourceWorker(id); ferr == nil && fresh != nil {
 		worker = fresh
 	}
@@ -529,7 +529,7 @@ func (s *apiServer) HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(
 	// branch point for all three owner verbs, and asking twice is how the two
 	// copies drift (this one used to skip silently, leaving no receipt).
 	if worker.Status == WorkerStatusActive && s.hub.IsOnline(worker.ID) {
-		s.respawnWorkerForOwnerOp(*worker, "runtime/model")
+		s.respawnWorkerForOwnerOp(*worker, ownerOpModel)
 		if fresh, ferr := s.dal.GetOutsourceWorker(id); ferr == nil && fresh != nil {
 			worker = fresh
 		}

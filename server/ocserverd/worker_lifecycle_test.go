@@ -579,10 +579,15 @@ func TestActiveOfflineWorker_TickRescues(t *testing.T) {
 
 // ── model (換 model) ───────────────────────────────────────────────────────────
 
-// TestSetWorkerModel_ActiveRespawns: 換 model on an active+online worker persists
-// the model+effort and kills+respawns so it takes effect NOW. Mutant: dropping
-// the respawn on the active branch → 0 frames (red).
-func TestSetWorkerModel_ActiveRespawns(t *testing.T) {
+// TestSetWorkerModel_ActiveWindsDownThenRespawns: 換 model on an active+online
+// worker persists the model+effort and — since T-98f4 rule 2 — opens the SAME
+// graceful wind-down 換手 has, instead of killing the session outright. The
+// respawn (carrying the new model) is the stopped-report's job.
+//
+// CONTRACT CHANGE, recorded: this test used to assert 2 frames (stop+start) at
+// the handler. Owner 2026-07-27:「我建議所有換手都可以給他機會收尾」 — the old
+// shape threw away whatever the session had not written down yet.
+func TestSetWorkerModel_ActiveWindsDownThenRespawns(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
 	workerID := newActiveOnlineWorker(t, api)
@@ -597,8 +602,28 @@ func TestSetWorkerModel_ActiveRespawns(t *testing.T) {
 	if w.Model != "claude-opus-4-8" || w.Effort != "high" {
 		t.Fatalf("model/effort not persisted: %q/%q", w.Model, w.Effort)
 	}
-	if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 2 {
-		t.Fatalf("active model change must kill+respawn (2 frames), got %d", got)
+	if w.RefocusSince <= 0 {
+		t.Fatal("an active model change must open a wind-down (refocus_since stamped)")
+	}
+	if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
+		t.Fatalf("the wind-down must dispatch no kill yet, got %d frames", got)
+	}
+
+	// The worker finishes its SOP and says so — the respawn is immediate, and it
+	// carries the NEW model (the row was written before the window opened).
+	rec = httptest.NewRecorder()
+	api.HandleReportStoppedApiSelfStoppedPost(rec,
+		taskReq(t, "POST", "/api/self/stopped", nil, workerID, "agent"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
+	}
+	frames := api.hub.DrainWardenCommands(ServerSelfHost)
+	if len(frames) != 2 {
+		t.Fatalf("the stopped-report must collect (stop+start), got %d frames", len(frames))
+	}
+	rpc, args := decodeWardenFrame(t, frames[1].Frame)
+	if rpc != reconcileCmdStart || args["model"] != "claude-opus-4-8" {
+		t.Fatalf("respawn frame = %s %v, want a start carrying the new model", rpc, args)
 	}
 }
 

@@ -1072,7 +1072,7 @@ func (s *apiServer) retryPendingWorkerStop(workerID string) {
 // a human's click rate.
 // Callers hold s.outsourceMu.
 func (s *apiServer) relocateWorkerNow(w OutsourceWorker) {
-	s.respawnWorkerForOwnerOp(w, "relocate")
+	s.respawnWorkerForOwnerOp(w, ownerOpRelocate)
 }
 
 // respawnWorkerForOwnerOp is the ONE path behind every owner verb that changes a
@@ -1102,6 +1102,101 @@ func (s *apiServer) respawnWorkerForOwnerOp(w OutsourceWorker, op string) {
 			"to run", nowSecs())
 		return
 	}
+	// T-98f4 rule 2 — 「我建議所有換手都可以給他機會收尾」. All three verbs used to
+	// go straight to the kill: no refocus stamp, no 預告, no grace. The 換手
+	// (refocus) path has had the full wind-down since T-ea82, and there is no
+	// principled reason a 改機器 or a 換 model should throw away the session's
+	// in-flight state when a 換手 does not — from the worker's side all four are
+	// the same event (this session ends, a new one continues the task).
+	if !ownerOpRevivesStoppedWorker(op) && s.workerHasStateToFlush(w) {
+		s.openOwnerOpHandover(w, op)
+		return
+	}
+	s.respawnWorkerForOwnerOpNow(w, op)
+}
+
+// The owner verbs that funnel through respawnWorkerForOwnerOp, named so the
+// wind-down table below cannot drift from its call sites (they were bare string
+// literals scattered across two files). `op` is still a free log tag elsewhere.
+const (
+	ownerOpRelocate = "relocate"      // 改機器
+	ownerOpRestart  = "restart"       // 重啟
+	ownerOpModel    = "runtime/model" // 換 model / runtime / effort
+)
+
+// ownerOpRevivesStoppedWorker distinguishes the ONE verb that acts on a worker
+// the owner has ALREADY stopped from the ones that act on a worker he wants to
+// keep running. 重啟 only reaches this code with desired_state just flipped
+// offline→online, i.e. the session it would displace is one 停止 already
+// dispatched a kill for: winding it down would mean fanning an SOP 預告 at a
+// session under a standing kill order and then waiting out the full deadline for
+// an answer that is never coming — the exact "owner waits for nothing" the rule
+// exists to prevent (the D6 argument openWorkerHandoverGrace already makes for
+// an offline worker; here the session is merely not dead YET).
+//
+// Deliberately a DENY-list, not an allow-list: a verb added later gets the
+// wind-down by default, because 「所有換手都給收尾機會」 is the rule and skipping
+// it is the exception that has to be argued for.
+func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
+
+// workerHasStateToFlush answers the ONE question rule 2 turns on: is there
+// anything for this worker to wind down, or should the owner's verb take effect
+// immediately? The owner's ask was 「有東西要存才等,沒有就立刻走」 — he must not
+// wait out a grace window just to change a model.
+//
+// The server can prove exactly TWO negatives, and both are structural rather
+// than guessed:
+//
+//   - NO LIVE SESSION (!hub.IsOnline). Nothing can hear the 預告 and nothing
+//     exists to flush; waiting would burn the whole deadline for certain. This
+//     is the pre-existing D6 rule openWorkerHandoverGrace already applies.
+//   - NEVER CLAIMED ITS TASK (Status != active, i.e. activated_ts == 0). The
+//     assigned→active flip IS the get_my_task claim, so a non-active worker has
+//     provably never been handed its task content. It has no task state to write
+//     back, and its ocagent may not even have finished booting.
+//
+// Everything else (active + online) opens the window — and the WAIT IS NOT THE
+// DEADLINE. StoppingTimeoutSecs is a ceiling, not a duration: the 收口 fires the
+// instant the worker answers report_stopped, so a session with nothing to save
+// ends in seconds. That is deliberately where the judgement is made, because the
+// only party that can see the agent's unsaved state is the agent. The server has
+// zero visibility into a transcript; any finer server-side test (context pct,
+// time since boot, message counts) would be a GUESS dressed as a criterion, and
+// guessing wrong here silently discards a round of learnings. Recorded honestly:
+// for the active+online case this is the 「照舊等滿但可提早結束」 fallback, not a
+// positive detection of unsaved work.
+// Callers hold s.outsourceMu.
+func (s *apiServer) workerHasStateToFlush(w OutsourceWorker) bool {
+	return w.Status == WorkerStatusActive && s.hub.IsOnline(w.ID)
+}
+
+// openOwnerOpHandover puts an owner verb through the graceful wind-down: stamp a
+// fresh refocus epoch (stale wind-down latches cleared — a new epoch never
+// inherits an old latch) and fan the SOP 預告, exactly as workerRestartSelf and
+// the context-high auto-handover do. NO kill goes out here; the 收口 belongs to
+// the worker's own report_stopped or autoHandoverWorker's grace deadline, and by
+// then the caller's new pin / model is already on the row, so the respawn picks
+// it up. A persist fault falls back to the immediate path rather than dropping
+// the owner's verb on the floor. Callers hold s.outsourceMu.
+func (s *apiServer) openOwnerOpHandover(w OutsourceWorker, op string) {
+	w.RefocusSince = nowSecs()
+	w.StoppingSince = 0.0
+	w.StoppedSince = 0.0
+	if err := s.dal.PutOutsourceWorker(w); err != nil {
+		outsourceLog("%s %s (%s): refocus stamp failed (%v) — falling back to an "+
+			"immediate respawn so the owner's action is not lost", op, w.ID, w.Codename, err)
+		s.respawnWorkerForOwnerOpNow(w, op)
+		return
+	}
+	s.publishOutsourceWorker(w, triggerServer)
+	s.openWorkerHandoverGrace(w, triggerServer)
+	outsourceLog("%s %s (%s): wind-down opened — collect on stopped-report or +%.0fs",
+		op, w.ID, w.Codename, StoppingTimeoutSecs)
+}
+
+// respawnWorkerForOwnerOpNow is the IMMEDIATE arm (nothing to wind down): the
+// pre-T-98f4 body, unchanged. Callers hold s.outsourceMu.
+func (s *apiServer) respawnWorkerForOwnerOpNow(w OutsourceWorker, op string) {
 	if s.respawnWorkerNow(w, op) {
 		return
 	}
