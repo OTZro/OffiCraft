@@ -648,27 +648,38 @@ func hardwareStampOf(entry map[string]any) float64 {
 // monitoringActor is the ONE thing the account/machine value folds need from an
 // actor: who it is (telemetry key), what runtime it is currently on (the
 // provenance gate's other half — NOT read off the entry, see telemetryAccount),
-// where it was observed, what it has already banked, and whether it is still
-// alive. Members and outsource workers project onto it identically; nothing
-// downstream of the projection can tell them apart, which is precisely the
-// point (T-fc2f).
+// where it was observed, what it has already banked, and whether it should be
+// COUNTED as an agent present on its box. Members and outsource workers project
+// onto it identically; nothing downstream of the projection can tell them
+// apart, which is precisely the point (T-fc2f).
 type monitoringActor struct {
 	id      string
 	runtime string
 	host    string
 	banked  float64
-	// live distinguishes the two DIFFERENT questions this struct is folded for,
-	// which T-fc2f originally conflated by running both off one loop condition:
+	// countsAsPresentAgent answers ONE narrow question — "should this actor be
+	// tallied into machines[].agents?" — and nothing else.
 	//
-	//	"what has been spent / observed here"  — history. Includes the dead.
-	//	"how many agents are on this box"      — present tense. Live only.
+	// ⚠️ NAMED THIS WAY ON PURPOSE. The obvious name, `live`, is a trap: the
+	// actors loop below argues at length that a released worker IS still alive
+	// and still burning money (SPEC §6.3 keeps its session up to run close-out
+	// duties), and that argument is why released workers are included in the
+	// COST fold. A field called `live` set to false for exactly those workers
+	// would flatly contradict the comment a dozen lines away, and the next
+	// reader would reasonably conclude the flag was inverted by mistake.
+	//
+	// The criterion here is NOT the "is it still spending?" test from the actors
+	// loop. Both readings are true at once and they are not in tension:
+	//
+	//	still spending?          → yes for a released worker  → counts for COST
+	//	present as a live agent? → no for a released worker   → not in the TALLY
 	//
 	// Members are only ever built into `actors` after the handler has filtered
-	// RosterStatusRemoved, so they are live by construction. For workers this is
+	// RosterStatusRemoved, so they are true by construction. For workers this is
 	// `Status != WorkerStatusReleased`. Note that released is the STEADY state
 	// for a worker (see the actors loop), so this flag is false for most of a
 	// worker's recorded lifetime — it is the common case, not the edge.
-	live bool
+	countsAsPresentAgent bool
 }
 
 // GET /api/monitoring — the three-section fold (sessions / machines /
@@ -753,6 +764,30 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	// api_roles.go). Nothing prunes either side, so this slice and the telemetry
 	// snapshot both grow without bound over the station's lifetime.
 	//
+	// The `machines` list inherits the same growth: its rows are the host keys
+	// minted from this slice, so it grows with the set of boxes that have EVER
+	// hosted a worker, not just currently-live ones.
+	//
+	// 🔴 ATTRIBUTION — GET THIS RIGHT BEFORE YOU "FIX" ANYTHING. That machines
+	// growth was introduced when the RELEASED FILTER WAS REMOVED from the worker
+	// branch above, which is what first admitted released workers into `actors`.
+	// It was NOT introduced by the zero-value mint in the machines fold below.
+	// An earlier revision of this comment blamed the mint; that was measured and
+	// found WRONG. Go's `hostCounts[host]++` already mints a missing key, so the
+	// revision before the mint existed minted exactly the same key set from
+	// exactly the same actors — the host-key sets of the two revisions are
+	// identical, only the counts differ. The zero-value mint is therefore purely
+	// NARROWING (it removes released workers from the tally) and can never widen
+	// the machines list.
+	//
+	// Why the distinction is load-bearing rather than pedantic: someone trying
+	// to bound this growth will read the attribution and go delete the mint.
+	// Doing that does not shrink anything — it deletes the machines row for a
+	// box whose workers have all been released, and takes that account's machine
+	// attribution down with it (measured; see the fold below). The lever that
+	// actually controls this growth is which workers enter `actors`, and that
+	// lever is deliberately set to "all of them" for the reasons above.
+	//
 	// What I checked: the arithmetic stays CORRECT — acctCost is a sum, and each
 	// row contributes its own live+banked exactly once, so no total drifts as
 	// the set grows. What I did NOT check: whether this handler's per-request
@@ -770,7 +805,7 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		actors = append(actors, monitoringActor{
 			id: m.ID, runtime: m.Runtime, host: s.observedHost(m), banked: m.BankedCost,
 			// `members` is already RosterStatusRemoved-filtered above.
-			live: true,
+			countsAsPresentAgent: true,
 		})
 	}
 	for _, wk := range workers {
@@ -808,11 +843,11 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		// a dash is. Pinned by
 		// TestGetMonitoring_ReleasedWorkerSpendStaysInTheAccount.
 		actors = append(actors, monitoringActor{
-			id:      wk.ID,
-			runtime: wk.Runtime,
-			host:    s.observedWorkerHost(wk.ID, telemetry[wk.ID]),
-			banked:  wk.BankedCost,
-			live:    wk.Status != WorkerStatusReleased,
+			id:                   wk.ID,
+			runtime:              wk.Runtime,
+			host:                 s.observedWorkerHost(wk.ID, telemetry[wk.ID]),
+			banked:               wk.BankedCost,
+			countsAsPresentAgent: wk.Status != WorkerStatusReleased,
 		})
 	}
 
@@ -878,13 +913,26 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	// Including released workers would be the behaviour CHANGE here; excluding
 	// them preserves what `agents` has always meant.
 	//
+	// THE ONE CASE THIS UNDERCOUNTS, and its exact bound. A released worker does
+	// keep its session briefly (SPEC §6.3, close-out duties), so for that window
+	// it is a real running process that `agents` does not count. The window is
+	// bounded at BOTH ends: dismissOutsourceWorkersForTask reclaims it the
+	// moment the close-out report lands, and the outsource tick force-reclaims
+	// it at workerReclaimGraceSecs = 120.0 (worker_spawn.go) after release
+	// regardless. So the undercount is at most ~120s per worker and then the
+	// session is genuinely gone — whereas the overcount from counting released
+	// workers is UNBOUNDED and grows with every task the box has ever run. A
+	// bounded 2-minute undercount is the better error, which is what makes 0 an
+	// acceptable answer rather than merely a defensible one.
+	//
 	// Hence the split below: EVERY actor mints its host key (so the row and its
 	// account attribution survive), but only a LIVE actor increments the count.
 	// These must stay separate statements — `hosts` is derived from the
 	// hostCounts key set, so folding them back together deletes the machines row
 	// for a box whose workers have all been released, and takes that account's
 	// machine attribution down with it. Verified by construction, not assumed:
-	// the naive `if !a.live { continue }` was measured and does exactly that.
+	// the naive `if !a.countsAsPresentAgent { continue }` was measured and does
+	// exactly that.
 	//
 	// Precisely what does and does not change for workers, since "no-op" is too
 	// coarse a word for this loop:
@@ -914,7 +962,7 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		}
 		// Count only the LIVE ones. 0 is an honest answer for a box whose
 		// workers have all been released; an inflated count is not.
-		if a.live {
+		if a.countsAsPresentAgent {
 			hostCounts[host]++
 		}
 		if hw, ok := entry["hardware"].(map[string]any); ok {

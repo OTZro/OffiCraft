@@ -1388,8 +1388,14 @@ func TestGetMonitoring_ReportWithoutRuntimesCannotRefreshThem(t *testing.T) {
 // assertions pass with the member-only fold — the fixture supplies the value
 // the behaviour under test is supposed to supply. Do not treat it as coverage.
 //
-// ⚠️ THE FOUR TESTS BELOW ARE NOT ALL THE SAME KIND OF TEST. Know which is
-// which before you trust one of them to protect you:
+// ⚠️ THE FIVE TESTS BELOW ARE NOT ALL THE SAME KIND OF TEST. Know which is
+// which before you trust one of them to protect you.
+//
+// KEEP THIS LIST COMPLETE. Every test in this block must appear in exactly one
+// category below. An earlier revision said "four tests" while five existed and
+// silently omitted one — which is precisely the failure mode this block exists
+// to prevent, committed by the block itself. If you add a sentinel here, run it
+// against e4a8872 and file it before you commit.
 //
 //	GAP-GUARDS — VERIFIED to FAIL against the base implementation (e4a8872) by
 //	checking that impl out and running them, not by reasoning. These are the
@@ -1399,6 +1405,8 @@ func TestGetMonitoring_ReportWithoutRuntimesCannotRefreshThem(t *testing.T) {
 //	    base because the worker's share is missing, AND it pins the exact total
 //	    so widening the fold cannot double-count either side)
 //	  - ReleasedWorkerSpendStaysInTheAccount
+//	  - ReleasedOnlyHostKeepsRowAndAccountButCountsZeroAgents (fails on base
+//	    because the row and its account attribution do not exist there at all)
 //
 //	REGRESSION-GUARD — VERIFIED to already PASS on e4a8872. It discriminates
 //	nothing about the T-fc2f gap; it exists so that widening the fold to
