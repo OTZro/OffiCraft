@@ -33,6 +33,31 @@
 早已恢復也要等下一個窗才知道。⚠️ 別把那行 `writeStamp` 搬回 POST 之前,也別「為了避免打爆
 server」而在失敗路徑補寫戳記——退避是退避,節流戳記是「上一次成功回報在何時」。
 
+### 失敗退避有上限(T-d11f;同檔的 `context_report.backoff`)
+上面那條修好之後留下另一半:`context-report` 是 **one-shot 進程**(Claude Code 每次
+statusLine render 都重跑一次,一秒好幾次),窗沒開 = **下一個 tick 立刻重送**。所以對一台
+持續拒收的 server,節流等於整個關掉——**實測**(真 binary × 一直回 500 的假端點,20 ticks)
+每次 tick 都送、間隔 ~0.4s、無上限。⚠️ **這是三條定期回報路徑裡唯一沒上限的那條**,另兩條
+不必動:`cli/ocwarden/main.go` 的 report loop 早有 `backoffStart`1s→`backoffCap`60s 的倍增
+(實測 gap 1/2/4/8/16s);`cli/ocwarden/codex_session.go` 的 `allowUsageReport()` 是
+**attempt 就蓋** 的 30s 節流,失敗根本不重試(它的問題是另一種:失敗不可見,不在本票)。
+- 修法是**第二個檔**,不是把狀態塞回戳記:`context_report.backoff`(戳記的 sibling,內容
+  `<連續失敗次數> <上次嘗試時間>`)。兩個 gate 各答各的問題——戳記答「上次**送達**在何時」,
+  backoff 答「server 已經拒了多久」。🔴 **絕不可為了退避而在失敗時蓋戳**,那等於把「100%
+  被拒的線路看起來很健康」那個 bug 再犯一次。
+- 曲線:`reportBackoffSecs(n)` = 30s 起、每多一次連續失敗翻倍、封頂
+  `reportBackoffCapSecs = 300`s → **30 / 60 / 120 / 240 / 300 / 300…**。第一次失敗刻意就是
+  30s(= 正常窗),所以**失敗中的 reporter 永遠不會比健康的更密**。封頂是刻意的:沒有它,
+  一小時的 outage 會把重試間隔推得比 outage 本身還長,server 復活也沒人知道。
+- **送達一次就 `clearReportBackoff` 立刻歸零**——退避絕不可活得比造成它的 outage 久。
+- 讀檔一律 **fail-open**(缺檔 / 空 / 壞格式 = 不抑制),與 `reportThrottled` 同向。
+- 測試(`contextreport_test.go`)用 `driveTicks` 在**虛擬時間**上模擬 tick loop(`now` 本來
+  就是注入參數,**不准真 sleep**),直接釘死 gap 序列 `[30 60 120 240 300 300 300 300]`;
+  `TestRefusedReportBacksOffToAnIntentionalCap` 的**名字與註解就寫明上限是刻意的**——舊的
+  `TestRefusedReportDoesNotStampThrottle` 把「每 tick 重送」釘成期望值,看不出無上限是刻意
+  還是沒想到。哨兵 `TestHealthyCadenceIsUnchangedByTheFailureBackoff` 釘成功路徑一字未變
+  (600s 內 burst 恰在 0/30/60/…,且**不產生** backoff 檔)。
+
 ## listen 自救(fail-closed,zombie 防線 B 的 client 半邊)
 `ocagent listen` 兩道自救原本 fail-open(probe 失敗照樣活 = 殭屍永生),已改 fail-closed 帶寬限(`listen.go` 常數 + `listen_run.go` foldProbe/foldRefusal):
 - **tmux session probe 三態**:alive / gone(tmux 明確答「無此 session」→ 2 連 miss 即自殺,不變)/ unknown(tmux 解析不到、spawn fault、timeout → 不再永遠當 alive:連續 `probeUnknownMin`(8)次 ∧ 滿 `probeUnknownGrace`(10min)才 self-exit;unknown 會重置 gone debounce,絕不瞬殺健康 listener)。

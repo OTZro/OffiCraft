@@ -746,15 +746,71 @@ func refusingServer(t *testing.T) (*httptest.Server, *[]string) {
 	return srv, &seen
 }
 
-// TestRefusedReportDoesNotStampThrottle: the throttle stamp is evidence of
-// DELIVERY, not of attempt. A refused burst must leave the window OPEN so the
-// very next tick retries — and must not leave behind a freshly-advanced stamp
-// that argues (falsely) that this reporter is healthy.
+// driveTicks simulates the statusLine tick loop over VIRTUAL time: it calls
+// cmdContextReport once every `step` virtual seconds from 0 to `until`, and
+// returns the virtual times at which a burst actually went out on the wire.
 //
-// This is the counterfactual for the whole ticket: before the fix the stamp was
-// written unconditionally, so tick 2 five seconds later saw a 2000.0 stamp, was
-// throttled, and sent NOTHING while 100% of reports were being refused.
-func TestRefusedReportDoesNotStampThrottle(t *testing.T) {
+// No real sleeping anywhere — `now` is already an injected parameter (the same
+// time seam every throttle test in this file uses), so a 30-minute simulation
+// runs in milliseconds. `count` reports how many requests the fake server has
+// seen so far; a tick counts as "a burst went out" iff that number moved.
+func driveTicks(t *testing.T, client httpClient, cfg Config, count func() int, until, step float64) []float64 {
+	t.Helper()
+	var attempts []float64
+	last := count()
+	// step is exactly representable in binary (0.5), so `now` accumulates exactly.
+	for now := 0.0; now <= until; now += step {
+		var out, errOut bytes.Buffer
+		cmdContextReport(client, cfg, testEnv(nil), now,
+			strings.NewReader(`{"context_window":{"used_percentage":50}}`), &out, &errOut)
+		if n := count(); n != last {
+			attempts = append(attempts, now)
+			last = n
+		}
+	}
+	return attempts
+}
+
+// gapsOf turns attempt timestamps into the intervals between them.
+func gapsOf(attempts []float64) []float64 {
+	var gaps []float64
+	for i := 1; i < len(attempts); i++ {
+		gaps = append(gaps, attempts[i]-attempts[i-1])
+	}
+	return gaps
+}
+
+func sameFloats(a, b []float64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestRefusedReportBacksOffToAnIntentionalCap pins BOTH halves of the failure
+// path, because each half was a real bug in turn:
+//
+//  1. the throttle stamp is evidence of DELIVERY, not of attempt — a refused
+//     burst must NOT advance it. (Before that fix a reporter whose every POST was
+//     422'd looked, from the outside, exactly like a healthy one.)
+//  2. leaving the stamp alone must not degrade into "re-POST on every tick". A
+//     statusLine ticks several times a SECOND, so binding the stamp to delivery
+//     switched the throttle fully OFF for a server that kept refusing: measured
+//     against a real always-500 endpoint, the shipped binary sent an unbounded
+//     ~0.4s-spaced burst stream for as long as the outage lasted.
+//
+// The retry spacing is therefore expected to GROW and to STOP growing. Both the
+// growth and the ceiling are DELIBERATE, and this test is where that intent is
+// recorded: 30s (never denser than a healthy reporter) → 60 → 120 → 240 → then
+// pinned at the 300s cap forever. If you are here because this test went red
+// after you changed reportBackoffCapSecs or reportBackoffSecs, the cap is not an
+// accident you may drop — read their doc comments first.
+func TestRefusedReportBacksOffToAnIntentionalCap(t *testing.T) {
 	srv, seen := refusingServer(t)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle", Home: t.TempDir()}
 	stamp := reportStampPath(cfg)
@@ -768,18 +824,117 @@ func TestRefusedReportDoesNotStampThrottle(t *testing.T) {
 	if raw, err := os.ReadFile(stamp); err == nil {
 		t.Errorf("a refused burst must NOT stamp the throttle window; stamp = %q", raw)
 	}
-
-	// Tick 2, five seconds later: well inside the 30s window. Because nothing was
-	// delivered, the window was never opened, so the retry must go out.
+	// Tick 2, five seconds later. It must be SILENT: the refusal opens a backoff,
+	// and this is the tick that used to re-POST (and did so several times a second).
 	cmdContextReport(srv.Client(), cfg, testEnv(nil), 2005.0, strings.NewReader(payload), &out, &errOut)
-	if len(*seen) != 4 {
-		t.Errorf("tick 2 must RETRY after a refusal (the refusal must not throttle it); saw %v", *seen)
+	if len(*seen) != 2 {
+		t.Errorf("a tick 5s after a refusal must be held by the backoff, saw %v", *seen)
 	}
+	// ...yet the stamp is STILL absent. Backing off must never be implemented by
+	// stamping the throttle window: that would re-tell the lie in (1).
 	if raw, err := os.ReadFile(stamp); err == nil {
-		t.Errorf("still refused ⇒ still no stamp; stamp = %q", raw)
+		t.Errorf("backing off must not stamp the window; stamp = %q", raw)
 	}
-	if strings.Count(errOut.String(), "FAILED") != 4 {
+	if strings.Count(errOut.String(), "FAILED") != 2 {
 		t.Errorf("every refused POST must keep leaving a trace; stderr = %q", errOut.String())
+	}
+
+	// Now the curve, over 30 virtual minutes of ticking against a server that never
+	// recovers. Attempts at 0, 30, 90, 210, 450, 750, 1050, 1350, 1650.
+	srv2, seen2 := refusingServer(t)
+	cfg2 := Config{Base: srv2.URL, Token: "t", ID: "kyle", Home: t.TempDir()}
+	attempts := driveTicks(t, srv2.Client(), cfg2, func() int { return len(*seen2) }, 1800.0, 0.5)
+	want := []float64{30, 60, 120, 240, 300, 300, 300, 300}
+	if got := gapsOf(attempts); !sameFloats(got, want) {
+		t.Errorf("retry spacing = %v, want %v (attempts at %v)", got, want, attempts)
+	}
+	// And the stamp is still untouched after 30 minutes of pure refusal.
+	if raw, err := os.ReadFile(reportStampPath(cfg2)); err == nil {
+		t.Errorf("30min of refusals must leave no stamp; stamp = %q", raw)
+	}
+}
+
+// TestAcceptedBurstResetsTheFailureBackoff: the backoff must not outlive the
+// outage that caused it. After several refusals have stretched the spacing, ONE
+// accepted burst returns the reporter to the plain 30s cadence immediately —
+// rather than making a recovered agent keep reporting at the outage's rate.
+func TestAcceptedBurstResetsTheFailureBackoff(t *testing.T) {
+	refuse := true
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		if refuse {
+			w.WriteHeader(422)
+			_, _ = w.Write([]byte(`{"error":{"code":"validation_error","message":"nope"}}`))
+			return
+		}
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle", Home: t.TempDir()}
+	payload := `{"context_window":{"used_percentage":50}}`
+	tick := func(now float64) int {
+		var out, errOut bytes.Buffer
+		cmdContextReport(srv.Client(), cfg, testEnv(nil), now, strings.NewReader(payload), &out, &errOut)
+		return len(seen)
+	}
+
+	// Four consecutive refusals (0, 30, 90, 210) stretch the spacing to 240s.
+	tick(0)
+	tick(30)
+	tick(90)
+	if n := tick(210); n != 8 {
+		t.Fatalf("expected 4 refused bursts (8 POSTs), saw %d: %v", n, seen)
+	}
+	if got := reportBackoffSecs(readReportBackoff(reportBackoffPath(cfg)).failures); got != 240 {
+		t.Fatalf("after 4 refusals the next wait should be 240s, got %v", got)
+	}
+
+	// The server recovers; the next permitted attempt (210+240=450) is accepted, and
+	// the failure record is gone.
+	refuse = false
+	if n := tick(450); n != 10 {
+		t.Fatalf("the attempt at +240s must go out, saw %d POSTs: %v", n, seen)
+	}
+	if _, err := os.Stat(reportBackoffPath(cfg)); err == nil {
+		t.Errorf("a delivered burst must clear the failure record at %s", reportBackoffPath(cfg))
+	}
+
+	// The discriminating part. The outage returns, and ONE fresh refusal must cost
+	// one fresh 30s step — NOT a resumption of the old curve. Without the reset the
+	// count would carry on at 5, demanding the 300s cap, and this recovered agent
+	// would be reporting ten times slower than it should for no live reason.
+	refuse = true
+	if n := tick(480); n != 12 {
+		t.Fatalf("the post-recovery tick must go out, saw %d POSTs: %v", n, seen)
+	}
+	if got := reportBackoffSecs(readReportBackoff(reportBackoffPath(cfg)).failures); got != 30 {
+		t.Errorf("a fresh refusal after recovery must be failure #1 (30s), got %v", got)
+	}
+	if n := tick(510); n != 14 {
+		t.Errorf("the retry 30s after a FIRST refusal must go out; saw %d POSTs: %v", n, seen)
+	}
+}
+
+// TestHealthyCadenceIsUnchangedByTheFailureBackoff is the SENTINEL: the failure
+// backoff must be invisible on the success path. A reporter the server keeps
+// accepting reports at exactly one burst per 30s window — not slower (a backoff
+// leaking into the healthy path), not denser — for the whole run.
+func TestHealthyCadenceIsUnchangedByTheFailureBackoff(t *testing.T) {
+	srv, posts := contextServer(t)
+	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle", Home: t.TempDir()}
+
+	attempts := driveTicks(t, srv.Client(), cfg, func() int { return len(*posts) }, 600.0, 0.5)
+	want := []float64{0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330, 360, 390, 420, 450, 480, 510, 540, 570, 600}
+	if !sameFloats(attempts, want) {
+		t.Errorf("healthy bursts at %v, want %v", attempts, want)
+	}
+	// ...and a healthy reporter never even creates the failure record.
+	if _, err := os.Stat(reportBackoffPath(cfg)); err == nil {
+		t.Errorf("the success path must not write a backoff record at %s", reportBackoffPath(cfg))
 	}
 }
 
@@ -829,8 +984,18 @@ func TestRefusedTelemetryAloneLeavesWindowOpen(t *testing.T) {
 	if _, err := os.ReadFile(reportStampPath(cfg)); err == nil {
 		t.Errorf("a partially refused burst must not stamp the window")
 	}
+	// The retry is BACKED OFF, not cancelled: silent at +5s, out at +30s (the first
+	// backoff step, which is exactly the healthy window — a refusing reporter is
+	// never denser than a healthy one).
 	cmdContextReport(srv.Client(), cfg, testEnv(nil), 2005.0, strings.NewReader(payload), &out, &errOut)
+	if len(seen) != 2 {
+		t.Errorf("the +5s tick must be held by the backoff; saw %v", seen)
+	}
+	cmdContextReport(srv.Client(), cfg, testEnv(nil), 2030.0, strings.NewReader(payload), &out, &errOut)
 	if len(seen) != 4 {
-		t.Errorf("telemetry refusal must not throttle the next tick; saw %v", seen)
+		t.Errorf("a partial refusal must still retry once the backoff elapses; saw %v", seen)
+	}
+	if _, err := os.ReadFile(reportStampPath(cfg)); err == nil {
+		t.Errorf("still partially refused ⇒ still no stamp")
 	}
 }

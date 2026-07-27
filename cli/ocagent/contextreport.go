@@ -41,6 +41,15 @@ import (
 // 30s window (both POSTs ride the SAME window).
 const reportThrottleSecs = 30.0
 
+// reportBackoffCapSecs is the CEILING on the retry spacing while the server keeps
+// refusing — one attempt per 5 minutes, and never slower than that no matter how
+// long the outage lasts. The cap is DELIBERATE and load-bearing, not an artefact:
+// without it an hour-long outage would push the retry spacing past the outage
+// itself, so a server that came back would go unnoticed for longer than it was
+// ever down. 10x the healthy window is the trade: ~12 attempts/hour while broken
+// (vs ~120/hour healthy), and recovery is still seen within 5 minutes.
+const reportBackoffCapSecs = 300.0
+
 // contextBody is the context POST wire body: {context_pct}.
 //
 // NO agent_id: the gauge key is the verified JWT sub (identity-from-token), the
@@ -124,7 +133,15 @@ func cmdContextReport(client httpClient, cfg Config, env func(string) string, no
 
 	if cfg.Token != "" && cfg.ID != "" {
 		stamp := reportStampPath(cfg)
-		if !reportThrottled(stamp, now, reportThrottleSecs) {
+		// TWO independent gates, and they answer two different questions. The stamp
+		// answers "did we DELIVER recently?" (the healthy 30s window). The backoff
+		// record answers "how long has the server been REFUSING?" — the state the
+		// stamp deliberately refuses to carry, because a stamp is evidence of
+		// delivery and must never be advanced by a failure. Splitting them is what
+		// lets a failing path slow down WITHOUT the stamp ever lying about health.
+		backoffFile := reportBackoffPath(cfg)
+		backoff := readReportBackoff(backoffFile)
+		if !reportThrottled(stamp, now, reportThrottleSecs) && !reportBackedOff(backoff, now) {
 			// Context POST needs a real pct: when pct is absent (fresh/compacted
 			// session — used_percentage is null) we honestly SKIP it rather than
 			// fabricate a fake 0. pct gates ONLY its own POST, never the telemetry.
@@ -162,8 +179,23 @@ func cmdContextReport(client httpClient, cfg Config, env func(string) string, no
 			// the refusal) until the server accepts. Success keeps the throttle exactly
 			// as before: one burst per window, so pct=None ticks never re-POST
 			// telemetry every tick.
+			//
+			// The backoff record is the SECOND half of that: leaving the window open
+			// meant the retry went out on the very next statusLine tick, and a
+			// statusLine ticks several times a SECOND. So against a server that keeps
+			// refusing, the throttle was effectively switched off — measured at ~0.4s
+			// between bursts, unbounded, for as long as the outage lasted. A refused
+			// burst therefore also records the consecutive-failure count, which spaces
+			// the retries out (30s, 60s, 120s, 240s, then the 300s cap). Delivery
+			// CLEARS the record, so one accepted burst restores the plain 30s cadence
+			// immediately — the backoff must never outlive the outage that caused it.
 			if delivered {
 				writeStamp(stamp, now)
+				clearReportBackoff(backoffFile)
+			} else {
+				writeReportBackoff(backoffFile, reportBackoffState{
+					failures: backoff.failures + 1, lastAttempt: now,
+				})
 			}
 		}
 	}
@@ -476,6 +508,103 @@ func reportThrottled(stampPath string, now, window float64) bool {
 		return false // unparseable ⇒ suppressed exception ⇒ NOT throttled
 	}
 	return (now - last) < window
+}
+
+// ---------------------------------------------------------------------------
+// failure backoff (T-d11f)
+//
+// `ocagent context-report` is a ONE-SHOT process: Claude Code re-execs it on
+// every statusLine render, so there is no in-process loop to hold a backoff in
+// (unlike ocwarden's report loop, which keeps `backoff` in a local). All cadence
+// state therefore has to live on disk beside the throttle stamp.
+// ---------------------------------------------------------------------------
+
+// reportBackoffState is the on-disk consecutive-refusal record: how many bursts
+// in a row the server refused, and when the last one was attempted. The zero
+// value means "healthy" (no backoff in effect).
+type reportBackoffState struct {
+	failures    int
+	lastAttempt float64
+}
+
+// reportBackoffPath is the failure record, a SIBLING of the throttle stamp (same
+// per-agent dir). Kept in its own file on purpose: the stamp's only meaning is
+// "when did we last DELIVER", and folding attempt state into it is exactly the
+// bug that made a 100%-refused reporter look healthy from the outside.
+func reportBackoffPath(cfg Config) string {
+	return filepath.Join(filepath.Dir(reportStampPath(cfg)), "context_report.backoff")
+}
+
+// reportBackoffSecs is the MINIMUM spacing between attempts after `failures`
+// consecutive refused bursts: the throttle window doubled once per extra failure,
+// CAPPED at reportBackoffCapSecs. failures<=0 (healthy) ⇒ 0, i.e. the plain
+// throttle governs and nothing about the healthy cadence changes.
+//
+// The first failure yields exactly reportThrottleSecs, so a REFUSING reporter is
+// never denser than a healthy one — and from there it strictly thins out.
+func reportBackoffSecs(failures int) float64 {
+	if failures <= 0 {
+		return 0
+	}
+	wait := reportThrottleSecs
+	for i := 1; i < failures; i++ {
+		wait *= 2
+		if wait >= reportBackoffCapSecs {
+			return reportBackoffCapSecs
+		}
+	}
+	return wait
+}
+
+// reportBackedOff is true iff a refused burst was attempted within this state's
+// backoff window (skip this tick). Mirrors reportThrottled's forgiving shape: a
+// zero/absent record is never a reason to suppress.
+func reportBackedOff(st reportBackoffState, now float64) bool {
+	if st.failures <= 0 {
+		return false
+	}
+	return (now - st.lastAttempt) < reportBackoffSecs(st.failures)
+}
+
+// readReportBackoff parses the failure record ("<failures> <lastAttempt>"). Any
+// fault — missing, empty, truncated, unparseable, nonsensical count — reads as
+// the healthy zero value, i.e. DO NOT suppress. Fail-open is the right direction
+// here for the same reason writeStamp is best-effort: an unreadable scratch file
+// must never be able to silence a working reporter. (The cost is symmetric: if
+// the record can never be WRITTEN, the backoff cannot engage — that is the same
+// pre-existing exposure the throttle stamp already has.)
+func readReportBackoff(path string) reportBackoffState {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return reportBackoffState{}
+	}
+	fields := strings.Fields(string(raw))
+	if len(fields) != 2 {
+		return reportBackoffState{}
+	}
+	failures, errN := strconv.Atoi(fields[0])
+	last, errT := strconv.ParseFloat(fields[1], 64)
+	if errN != nil || errT != nil || failures < 1 {
+		return reportBackoffState{}
+	}
+	return reportBackoffState{failures: failures, lastAttempt: last}
+}
+
+// writeReportBackoff records a refused burst best-effort (a write fault is
+// swallowed, matching writeStamp).
+func writeReportBackoff(path string, st reportBackoffState) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	_ = os.WriteFile(path, []byte(strconv.Itoa(st.failures)+" "+
+		strconv.FormatFloat(st.lastAttempt, 'f', -1, 64)), 0o644)
+}
+
+// clearReportBackoff drops the failure record after a delivered burst, so the very
+// next tick is governed by the plain throttle again. Best-effort; an absent file
+// is the normal case (a healthy reporter never writes one).
+func clearReportBackoff(path string) {
+	_ = os.Remove(path)
 }
 
 // writeStamp records the throttle window best-effort (mkdir -p + write str(now)).
