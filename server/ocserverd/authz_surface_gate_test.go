@@ -40,9 +40,24 @@ package main
 // NOT "ASSERT EMPTY, THEN RANGE OVER THE EMPTY SET". This repo has shipped that
 // bug before, so each gate proves its own corpus is populated BEFORE judging it:
 // gate (1) fails if fewer files/functions/predicates than a floor were seen, and
-// fails on a STALE inventory entry (so the list cannot be padded to silence a
-// finding); gate (2) fails if the route table has no write rows or no
-// machine-floor rows at all. A scanner that silently stops matching reddens.
+// fails on a STALE inventory entry; gate (2) fails if the route table has no
+// write rows or no machine-floor rows at all. A scanner that silently stops
+// matching reddens. (This is the antidote for THESE TWO GATES only — it says
+// nothing about that bug class elsewhere in the repo.)
+//
+// ⚠️ WHAT THESE GATES DO NOT DO — read this before trusting an entry. They
+// cannot judge whether a reason is HONEST. A correctly-keyed entry with a
+// plausible-sounding sentence ("legacy behaviour retained for backwards
+// compatibility, revisit later") passes both gates; the length checks stop a
+// one-word shrug, not a fluent one. Verified by the T-5336 review, which did
+// exactly that and got two green gates.
+//
+// So the value of these lists is NOT that they cannot be padded — they can.
+// It is that PADDING MUST SHOW UP IN THE DIFF: adding a decision outside the
+// route table now requires editing this file, in the same commit, where a
+// reviewer sees it. The gate converts a silent addition into a visible one.
+// The only thing that stops a bad entry is a human reading the diff, so read
+// new entries here as claims to check, not as decisions already approved.
 
 import (
 	"bytes"
@@ -80,6 +95,8 @@ var authzIdents = map[string]bool{
 	"adminRoleKey": true, "machineKind": true,
 	"KindAssistant": true, "KindOutsource": true,
 	"KindWarden": true, "KindHuman": true,
+	// comparing an id against the owner's wire id IS a privilege test.
+	"wireOwnerID": true,
 }
 
 // authzScanSkip are the files that ARE the central mechanism (or generated).
@@ -90,10 +107,59 @@ var authzScanSkip = map[string]bool{
 	"authz.go": true, "routes.go": true, "server.go": true, "ocapi_gen.go": true,
 }
 
+// callerContextTypes are the parameter / receiver types through which a
+// function can be handed the caller. ⚠️ A TYPO HERE IS SILENT: a name matching
+// nothing simply shrinks the scan, and the corpus floors do not notice because
+// the *http.Request functions alone clear them. That is not hypothetical — this
+// list shipped with "outsourceSpawnRequest", a type that never existed, and the
+// 發包 authorization choke sat outside the inventory from day one because of it.
+// TestCallerContextTypesAllExist is the tooth that makes the typo loud.
+// Written WITHOUT the leading `*`: baseTypeName strips pointer-ness from both
+// sides before comparing, so a pointer variant can never become a fourth way to
+// silently fall out of the scan. (The first run of the existence check below
+// caught exactly that — "*taskCaller" and "*outsourceGateRequest" were listed
+// and matched nothing.)
+var callerContextTypes = []string{
+	"http.Request",
+	"taskCaller",
+	"outsourceGateRequest",
+}
+
+// baseTypeName renders a type and strips one leading pointer star.
+func baseTypeName(fset *token.FileSet, n ast.Node) string {
+	return strings.TrimPrefix(exprText(fset, n), "*")
+}
+
 // authzSite is one found predicate, keyed the way the inventory keys it.
 type authzSite struct{ file, fn, expr string }
 
 func (s authzSite) key() string { return s.file + " :: " + s.fn + " :: " + s.expr }
+
+// classifiesPrincipal reports whether a function DERIVES a principal class,
+// whatever its signature. This is the second entry point into authz, and the
+// one a signature-only scan misses entirely: resolveDispatchInitiator takes a
+// bare `actorID string` and returns a principal class + member row — no caller
+// context type anywhere, yet it is the classifier the 發包 choke runs on.
+func classifiesPrincipal(fd *ast.FuncDecl) bool {
+	found := false
+	ast.Inspect(fd.Body, func(x ast.Node) bool {
+		switch v := x.(type) {
+		case *ast.CallExpr:
+			if id, ok := v.Fun.(*ast.Ident); ok && authzFuncs[id.Name] &&
+				(id.Name == "classifyMember" || id.Name == "principalAtLeast" ||
+					id.Name == "isOutsourceMember") {
+				found = true
+			}
+		case *ast.Ident:
+			n := v.Name
+			if strings.HasPrefix(n, "principal") && len(n) > 9 && n[9] >= 'A' && n[9] <= 'Z' {
+				found = true
+			}
+		}
+		return true
+	})
+	return found
+}
 
 // seesCaller reports whether a function can observe the caller at all. This is
 // the scope boundary that makes the corpus meaningful rather than noisy: a
@@ -102,10 +168,11 @@ func (s authzSite) key() string { return s.file + " :: " + s.fn + " :: " + s.exp
 // an already-resolved caller context) is a decision about the CALLER.
 func seesCaller(fset *token.FileSet, fd *ast.FuncDecl) bool {
 	isCallerType := func(n ast.Node) bool {
-		switch exprText(fset, n) {
-		case "*http.Request", "taskCaller", "*taskCaller",
-			"outsourceSpawnRequest", "*outsourceSpawnRequest":
-			return true
+		got := baseTypeName(fset, n)
+		for _, want := range callerContextTypes {
+			if got == want {
+				return true
+			}
 		}
 		return false
 	}
@@ -119,15 +186,14 @@ func seesCaller(fset *token.FileSet, fd *ast.FuncDecl) bool {
 			}
 		}
 	}
-	if fd.Type.Params == nil {
-		return false
-	}
-	for _, p := range fd.Type.Params.List {
-		if isCallerType(p.Type) {
-			return true
+	if fd.Type.Params != nil {
+		for _, p := range fd.Type.Params.List {
+			if isCallerType(p.Type) {
+				return true
+			}
 		}
 	}
-	return false
+	return classifiesPrincipal(fd)
 }
 
 func exprText(fset *token.FileSet, n ast.Node) string {
@@ -237,7 +303,8 @@ func scanAuthzSites(t *testing.T) (sites []authzSite, files, funcs int) {
 				case *ast.SelectorExpr:
 					name = f.Sel.Name
 				}
-				if name == "principalAtLeast" || name == "isOutsourceMember" {
+				if name == "principalAtLeast" || name == "isOutsourceMember" ||
+					name == "classifyMember" {
 					record(ce)
 				}
 				return true
@@ -250,9 +317,17 @@ func scanAuthzSites(t *testing.T) (sites []authzSite, files, funcs int) {
 
 // ── gate (1): the enumeration ───────────────────────────────────────────────
 
-// The corpus floors. Deliberately just under the counts observed on 2026-07-27
-// (28 sites / 25 files / 60 functions): high enough that a scanner which stops
-// matching reddens, low enough that ordinary refactoring does not.
+// The corpus floors. Deliberately well under the counts observed on 2026-07-27
+// (36 predicates / 58 files / 150 caller-visible functions — the test Logf's
+// them, so this comment can be re-checked instead of trusted): high enough that
+// a scanner which stops matching reddens, low enough that ordinary refactoring
+// does not.
+//
+// ⚠️ What these floors DO prove is "the scanner is alive". What they do NOT
+// prove is "the scanner reaches every entry point it claims to" — a mis-spelled
+// entry in callerContextTypes shrinks the scan while these stay satisfied, which
+// is how the 發包 choke went unlisted. TestCallerContextTypesAllExist is the
+// check for that second property; do not read these floors as covering it.
 const (
 	authzSiteFloor = 20
 	authzFileFloor = 15
@@ -376,6 +451,38 @@ var authzOutsideRouteTable = map[string]string{
 	"api_taskmanuals.go :: callerMaySetAssignee :: principalAtLeast(s.principalOfRequest(r), principalAdminAgent)": "" +
 		"assigning a manual to someone else is an admin act; assigning to yourself is " +
 		"not. Caller-vs-target again.",
+
+	// ── 發包 (outsource dispatch) choke — T-23cf ⑦ ───────────────────────────
+	// ⚠️ These two were MISSING from this inventory until the T-5336 review:
+	// callerContextTypes named a type that does not exist, so outsource_gate.go
+	// was never scanned. They are the reason TestCallerContextTypesAllExist now
+	// exists. Enumerated here only — the gate's ladder is NOT this ticket's to
+	// change (it looks self-consistent: deny only an initiator with no member
+	// row and below admin; T-23cf deliberately has no whitelist above that).
+	"outsource_gate.go :: outsourceSpawnGate :: principalAtLeast(req.PrincipalClass, principalAdminAgent)": "" +
+		"THE 發包 choke (④): admin+ is an 'approver' and clears authn outright; below " +
+		"that an initiator with no member row is denied (deny-by-default, mirroring " +
+		"classifyMember). Cannot be a route floor — the scheduler tick dispatches with " +
+		"no *http.Request in hand, so the same choke must serve both entry points.",
+	"outsource_gate.go :: resolveDispatchInitiator :: classifyMember(m)": "" +
+		"the classifier the choke above runs on, reached from a bare actorID (the " +
+		"verified token sub, or a task's creator on the scheduler path). Route floors " +
+		"cannot reach here at all: there is no request.",
+	"outsource_gate.go :: resolveDispatchInitiator :: actorID == wireOwnerID": "" +
+		"the owner short-circuit of that classifier — the owner has no roster row, so " +
+		"it must be recognised by its wire id before any member lookup.",
+
+	// ── owner's wire id as a routing/notification discriminator ──────────────
+	"api_chat.go :: HandlePostChatApiChatPost :: msg.Recipient == wireOwnerID": "" +
+		"NOT access control — it decides whether to enqueue a Web Push (only the owner " +
+		"has a browser subscription). Listed because it compares against the owner " +
+		"identity, and a scanner tuned to hide its own near-misses stops finding real ones.",
+	"api_chat.go :: HandlePostChatApiChatPost :: msg.Sender != wireOwnerID": "" +
+		"the other half of the same push condition: do not push the owner their own " +
+		"message back.",
+	"api_tasks.go :: taskCallerOf :: classifyMember(m)": "" +
+		"the classification step of the task-caller resolver (the owner branch above " +
+		"returns before this line). Same primitive as the 發包 path, different entry.",
 }
 
 func TestAuthzOutsideTheRouteTableIsEnumerated(t *testing.T) {
@@ -398,6 +505,12 @@ func TestAuthzOutsideTheRouteTableIsEnumerated(t *testing.T) {
 	if len(authzOutsideRouteTable) == 0 {
 		t.Fatalf("the inventory is empty — it is the artifact this gate exists to keep")
 	}
+	// Logged, not hard-coded in prose: any count quoted in a comment or in
+	// server/CLAUDE.md can be re-checked with `go test -v -run Enumerated`
+	// instead of being trusted. (The base commit of this ticket exists because
+	// a comment that disagrees with the code is worse than no comment.)
+	t.Logf("authz scan corpus: %d predicates / %d files / %d caller-visible functions "+
+		"(inventory holds %d)", len(sites), files, funcs, len(authzOutsideRouteTable))
 
 	found := make(map[string]bool, len(sites))
 	var unlisted []string
@@ -434,8 +547,9 @@ func TestAuthzOutsideTheRouteTableIsEnumerated(t *testing.T) {
 	if len(stale) > 0 {
 		t.Errorf("authzOutsideRouteTable lists predicate(s) that no longer exist:\n  %s\n"+
 			"Either the code moved (re-key the entry) or the decision was removed (drop "+
-			"it). A list that may contain entries matching nothing can be padded to "+
-			"silence a real finding.", strings.Join(stale, "\n  "))
+			"it). An entry matching nothing is dead weight that makes the list "+
+			"harder to read, and a stale key hides the fact that the live predicate "+
+			"it used to name is now unlisted.", strings.Join(stale, "\n  "))
 	}
 }
 
@@ -585,7 +699,8 @@ func TestMachineFloorWriteRoutesAreEachARuling(t *testing.T) {
 			!strings.Contains(ruling.Ruling, "CLAUDE.md") && !strings.Contains(ruling.Ruling, "M1") {
 			t.Errorf("%s: Ruling=%q names no ticket, owner date, or charter section — an "+
 				"exemption nobody can trace is a whitelist, and a whitelist is how this "+
-				"gate becomes decorative", key, ruling.Ruling)
+				"gate becomes decorative. This checks the FORM of the reference, not that the "+
+				"ruling says what you claim — that is the reviewer's job", key, ruling.Ruling)
 		}
 		if len(strings.TrimSpace(ruling.Why)) < 40 {
 			t.Errorf("%s: Why is %d chars; the next re-grade reads it to decide whether "+
@@ -605,7 +720,81 @@ func TestMachineFloorWriteRoutesAreEachARuling(t *testing.T) {
 	if len(stale) > 0 {
 		t.Errorf("machineFloorWriteRulings exempts route(s) that are no longer write rows "+
 			"at the machine floor:\n  %s\nDrop the entry (the route was raised — good) or "+
-			"re-key it. A list that can contain entries matching nothing can be padded.",
+			"re-key it — an entry matching no live row is dead weight, and it hides "+
+			"whether the row it used to name still needs an exemption.",
 			strings.Join(stale, "\n  "))
 	}
+}
+
+// TestCallerContextTypesAllExist is the tooth M1 of the T-5336 review bought.
+//
+// callerContextTypes is a list of TYPE NAMES compared as strings. A name that
+// matches nothing does not fail — it silently narrows the scan, and the corpus
+// floors in gate (1) cannot notice, because the *http.Request functions alone
+// clear them. So the floors prove "the scanner is alive", NOT "the scanner can
+// see every entry point it claims to". Those are different properties and only
+// the first one was being checked.
+//
+// This is not a hypothetical: the list shipped naming "outsourceSpawnRequest",
+// which has never existed in this tree (the real type is outsourceGateRequest),
+// and so the 發包 authorization choke — an admit/deny decision plus a principal
+// classifier — sat outside the inventory from the day the gate was written.
+func TestCallerContextTypesAllExist(t *testing.T) {
+	if len(callerContextTypes) == 0 {
+		t.Fatalf("callerContextTypes is empty — the scan would fall back to the " +
+			"principal-classifier criterion alone")
+	}
+	paths, err := filepath.Glob("*.go")
+	if err != nil || len(paths) == 0 {
+		t.Fatalf("glob: %v (%d files) — the check below would be vacuous", err, len(paths))
+	}
+	fset := token.NewFileSet()
+	hits := make(map[string]int, len(callerContextTypes))
+	funcs := 0
+	for _, p := range paths {
+		base := filepath.Base(p)
+		if strings.HasSuffix(base, "_test.go") || authzScanSkip[base] {
+			continue
+		}
+		f, err := parser.ParseFile(fset, p, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", p, err)
+		}
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			funcs++
+			var fields []*ast.Field
+			if fd.Recv != nil {
+				fields = append(fields, fd.Recv.List...)
+			}
+			if fd.Type.Params != nil {
+				fields = append(fields, fd.Type.Params.List...)
+			}
+			for _, fld := range fields {
+				text := baseTypeName(fset, fld.Type)
+				for _, want := range callerContextTypes {
+					if text == want {
+						hits[want]++
+					}
+				}
+			}
+		}
+	}
+	if funcs == 0 {
+		t.Fatalf("no function declarations parsed — this check would be vacuous")
+	}
+	for _, want := range callerContextTypes {
+		if hits[want] == 0 {
+			t.Errorf("callerContextTypes lists %q, which matches NO parameter or "+
+				"receiver in this package. A name that matches nothing does not fail "+
+				"loudly — it just shrinks the scan, and gate (1)'s corpus floors stay "+
+				"green because the *http.Request functions alone clear them. Fix the "+
+				"spelling, or drop the entry if the type is genuinely gone (and then "+
+				"check what stopped being scanned).", want)
+		}
+	}
+	t.Logf("caller-context type coverage over %d functions: %v", funcs, hits)
 }
