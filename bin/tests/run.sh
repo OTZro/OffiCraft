@@ -739,9 +739,13 @@ fi
 # Before T-c19c CLAUDE.md carried its own full copy of the instruction — two
 # copies of the same rule, free to drift apart until every reader obeyed whichever
 # one they opened. Each deferring site now pins the seed block's content hash, so
-# editing the rule turns all of them red at once. A green here does NOT prove
-# there is no unregistered fourth copy — see the guard's header for the honest
-# boundary before treating it as one.
+# editing the rule turns all of them red at once, and CLAUDE.md /
+# docs/guide/best-practices.md are each required BY PATH to carry a current
+# marker — a count alone was paddable (three markers in a junk file passed) and
+# its minimum was a knob (MIN_DEFER_SITES=0 asserted the empty set). A green here
+# does NOT prove there is no unregistered fourth copy, and a red does NOT prove
+# the rule's meaning changed — see the guard's header for the honest boundary
+# before treating it as either.
 RULEDEFER="$HERE/rule-defer-guard.sh"
 echo
 if [[ -f "$RULEDEFER" ]]; then
