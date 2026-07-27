@@ -124,7 +124,8 @@ func TestRelocateMember_Rejects(t *testing.T) {
 
 // TestRelocateMember_RejectsUnresolvableMachine: ANY non-"" machine_id must
 // resolve to a real machine — the legacy "auto" spelling has no exemption (it
-// named no machine, so the pin could never boot). "" still clears the pin.
+// named no machine, so the pin could never boot). "" is no longer a clear
+// either (owner 2026-07-27) — it is a 400, and an absent key a 422.
 func TestRelocateMember_RejectsUnresolvableMachine(t *testing.T) {
 	s := newReconcileTestServer(t)
 	putWarden(t, s, "mach-real")
@@ -153,12 +154,27 @@ func TestRelocateMember_RejectsUnresolvableMachine(t *testing.T) {
 			t.Fatalf("a rejected %q relocate must leave the pin alone: %+v", machineID, got)
 		}
 	}
-	// "" is the legal clear — the member then has no placement at all.
-	if rec := relocate(""); rec.Code != http.StatusOK {
-		t.Fatalf("clearing the pin must 200, got %d %s", rec.Code, rec.Body.String())
+	// Owner 2026-07-27: 搬遷一定要帶機器. "" used to be the legal UNPIN, which made
+	// the destroying form the one you got by forgetting a field — and it flatly
+	// contradicted the sticky-placement rule that a hand-moved worker is pulled
+	// back by no configuration. There is no unpin verb on this route any more.
+	if rec := relocate(""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("a blank machine_id must 400, got %d %s", rec.Code, rec.Body.String())
 	}
-	if got, _ := s.dal.GetMember("m-pin"); got == nil || got.DesiredMachineID != "" {
-		t.Fatalf("\"\" must clear the pin: %+v", got)
+	if got, _ := s.dal.GetMember("m-pin"); got == nil || got.DesiredMachineID != "mach-real" {
+		t.Fatalf("a refused blank relocate must leave the pin alone: %+v", got)
+	}
+	// An ABSENT key is the missing-required-field face (422), not a semantic
+	// refusal — the frozen decodeJSONBodyRequired contract.
+	rec := httptest.NewRecorder()
+	s.HandleRelocateMemberApiMembersMemberIdRelocatePost(rec,
+		taskReq(t, "POST", "/api/members/m-pin/relocate", map[string]any{}, wireOwnerID, "owner"),
+		"m-pin")
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("an absent machine_id must 422, got %d %s", rec.Code, rec.Body.String())
+	}
+	if got, _ := s.dal.GetMember("m-pin"); got == nil || got.DesiredMachineID != "mach-real" {
+		t.Fatalf("a refused absent relocate must leave the pin alone: %+v", got)
 	}
 }
 
@@ -243,5 +259,61 @@ func TestRelocateMember_WorkerIdFallback(t *testing.T) {
 			map[string]any{"machine_id": ServerSelfHost}, wireOwnerID, "owner"), workerID)
 	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "member") {
 		t.Fatalf("released worker id: want the member 404, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestRelocateMember_MachineIsMandatory (owner 2026-07-27: 搬遷一定要帶機器) is
+// the POSITIVE-and-NEGATIVE pair for the ruling on the member face.
+//
+// Before it, all three shapes — key absent, explicit null, "" — collapsed to ""
+// and CLEARED the pin. That made the destroying form the one you got by
+// forgetting a field, and it contradicted the sticky-placement rule that a
+// hand-moved agent is pulled back by no configuration: the same verb both set
+// and destroyed the placement. There is no unpin verb on this route any more.
+func TestRelocateMember_MachineIsMandatory(t *testing.T) {
+	s := newReconcileTestServer(t)
+	putWarden(t, s, "mach-new")
+	m := testAgent("m-mand")
+	m.DesiredMachineID = "mach-new"
+	putTestMember(t, s, m)
+
+	post := func(body any) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		s.HandleRelocateMemberApiMembersMemberIdRelocatePost(rec,
+			taskReq(t, "POST", "/api/members/m-mand/relocate", body, wireOwnerID, "owner"),
+			"m-mand")
+		return rec
+	}
+
+	// The refusals. Each one must ALSO leave the pin exactly as it was — a 400
+	// that had already half-executed would be the worse bug.
+	for _, tc := range []struct {
+		name string
+		body any
+		want int
+	}{
+		{"blank", map[string]any{"machine_id": ""}, http.StatusBadRequest},
+		{"null", map[string]any{"machine_id": nil}, http.StatusBadRequest},
+		{"absent", map[string]any{}, http.StatusUnprocessableEntity},
+	} {
+		rec := post(tc.body)
+		if rec.Code != tc.want {
+			t.Fatalf("%s machine_id: got %d %s, want %d",
+				tc.name, rec.Code, rec.Body.String(), tc.want)
+		}
+		got, _ := s.dal.GetMember("m-mand")
+		if got == nil || got.DesiredMachineID != "mach-new" {
+			t.Fatalf("%s machine_id must leave the pin alone: %+v", tc.name, got)
+		}
+	}
+
+	// SENTINEL: a real machine still relocates, so the refusals above are the
+	// rule and not a handler that stopped working.
+	putWarden(t, s, "mach-far")
+	if rec := post(map[string]any{"machine_id": "mach-far"}); rec.Code != http.StatusOK {
+		t.Fatalf("a named machine must still relocate: %d %s", rec.Code, rec.Body.String())
+	}
+	if got, _ := s.dal.GetMember("m-mand"); got == nil || got.DesiredMachineID != "mach-far" {
+		t.Fatalf("the relocate must land: %+v", got)
 	}
 }

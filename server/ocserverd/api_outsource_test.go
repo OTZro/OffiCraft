@@ -402,11 +402,24 @@ func TestRelocateOutsourceWorker_RejectsUnresolvableMachine(t *testing.T) {
 			t.Fatalf("a rejected %q relocate must leave the pin alone: %+v", machineID, w)
 		}
 	}
-	if rec := relocate(""); rec.Code != http.StatusOK {
-		t.Fatalf("clearing the pin must 200, got %d %s", rec.Code, rec.Body.String())
+	// Owner 2026-07-27: 搬遷一定要帶機器 — "" is no longer the unpin, it is a 400,
+	// and the pin it used to destroy survives untouched.
+	if rec := relocate(""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("a blank machine_id must 400, got %d %s", rec.Code, rec.Body.String())
 	}
-	if w, _ := api.dal.GetOutsourceWorker(workerID); w == nil || w.DesiredMachineID != "" {
-		t.Fatalf("\"\" must clear the worker pin: %+v", w)
+	if w, _ := api.dal.GetOutsourceWorker(workerID); w == nil || w.DesiredMachineID != "m-real" {
+		t.Fatalf("a refused blank relocate must leave the worker pin alone: %+v", w)
+	}
+	// Absent key ⇒ the missing-required-field 422 face.
+	rec := httptest.NewRecorder()
+	api.HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePost(rec,
+		taskReq(t, "POST", "/api/outsource-workers/"+workerID+"/relocate",
+			map[string]any{}, wireOwnerID, "owner"), workerID)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("an absent machine_id must 422, got %d %s", rec.Code, rec.Body.String())
+	}
+	if w, _ := api.dal.GetOutsourceWorker(workerID); w == nil || w.DesiredMachineID != "m-real" {
+		t.Fatalf("a refused absent relocate must leave the worker pin alone: %+v", w)
 	}
 }
 
@@ -786,33 +799,46 @@ func TestRelocateMintedOfflineWorker_UnreachablePinLeavesReceipt(t *testing.T) {
 	}
 }
 
-// TestRelocateMintedOfflineWorker_ClearedPinNeverStarts is the SENTINEL for the
-// placement ruling the fix above must not resurrect: clearing the pin ("") on the
-// same offline worker leaves it with no placement, and no placement starts
-// nothing — with the reason saying exactly that, not an "auto" boot somewhere.
-func TestRelocateMintedOfflineWorker_ClearedPinNeverStarts(t *testing.T) {
+// TestRelocateMintedOfflineWorker_BlankMachineRefusedAndStartsNothing replaces
+// the old _ClearedPinNeverStarts. Its whole premise — relocate with "" clears
+// the pin, leaving the worker with no placement — was DELETED by the owner
+// ruling of 2026-07-27 (搬遷一定要帶機器), so the state it asserted about is
+// unreachable through this route and re-asserting it would pin a contract the
+// server no longer has.
+//
+// What survives is the half that still means something, and it is the half the
+// original was really guarding: an owner action that names no destination must
+// not put the worker anywhere. That used to be "the pin is cleared and the
+// scheduler refuses"; it is now "the request itself is refused". BOTH are
+// checked, because a 400 that had already half-executed would be the worse bug:
+// nothing dispatched, and the pin the request never named is still intact.
+// (The 「no placement ⇒ no start, with a no_machine_selected receipt」 invariant
+// itself is unaffected and still pinned at its own source —
+// worker_spawn_test.go TestNotifyWorkerSpawn_StampsNoMachineSelectedReason and
+// reconcile_test.go's member twin.)
+func TestRelocateMintedOfflineWorker_BlankMachineRefusedAndStartsNothing(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
 	workerID := newActiveWorker(t, api, false)
 	api.hub.DrainWardenCommands(ServerSelfHost)
 	delete(api.workerSpawnTarget, workerID)
+	pinned := readWorker(t, api, workerID).DesiredMachineID
 	// An online, eligible machine exists — nothing may drift onto it unasked.
 	seedMachine(t, api, "m-idle")
 	connectWarden(t, api, "m-idle")
 
-	relocateOK(t, api, workerID, "")
-
+	rec := postWorker(t, api, workerID, "relocate", map[string]any{"machine_id": ""},
+		api.HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePost)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("a relocate naming no machine must 400, got %d %s", rec.Code, rec.Body.String())
+	}
 	for _, target := range []string{"m-idle", ServerSelfHost} {
 		if got := len(api.hub.DrainWardenCommands(target)); got != 0 {
-			t.Errorf("an unpinned worker must never be started (%s got %d frames)", target, got)
+			t.Errorf("a refused relocate must start nothing (%s got %d frames)", target, got)
 		}
 	}
-	w, err := api.dal.GetOutsourceWorker(workerID)
-	if err != nil || w == nil {
-		t.Fatalf("re-read worker: %v", err)
-	}
-	if !strings.HasPrefix(w.LastOpReason, placementReasonNoMachine+":") {
-		t.Errorf("want a %s receipt, got %q", placementReasonNoMachine, w.LastOpReason)
+	if got := readWorker(t, api, workerID).DesiredMachineID; got != pinned {
+		t.Errorf("a refused relocate must not touch the pin: %q, want %q", got, pinned)
 	}
 }
 
@@ -1317,5 +1343,54 @@ func TestRelocateOutsourceWorker_AdminGated(t *testing.T) {
 	ownerTok, _ := mintJWT("owner", "owner", 300, secret, now, "")
 	if status, body := relocate(ownerTok); status != 404 {
 		t.Fatalf("owner must pass the gate (honest 404 on ow-nope): got %d %s", status, body)
+	}
+}
+
+// TestRelocateOutsourceWorker_MachineIsMandatory is the worker twin of
+// TestRelocateMember_MachineIsMandatory (owner 2026-07-27: 搬遷一定要帶機器).
+// Both faces are pinned because they are two handlers, and a ruling enforced on
+// only one of them is the shape this repo has already been bitten by.
+func TestRelocateOutsourceWorker_MachineIsMandatory(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := newActiveWorker(t, api, false)
+	seedMachine(t, api, "m-far")
+	connectWarden(t, api, "m-far")
+	api.hub.DrainWardenCommands(ServerSelfHost)
+	pinned := readWorker(t, api, workerID).DesiredMachineID
+	if pinned == "" {
+		t.Fatal("fixture: this test needs a pin that could be destroyed")
+	}
+
+	for _, tc := range []struct {
+		name string
+		body any
+		want int
+	}{
+		{"blank", map[string]any{"machine_id": ""}, http.StatusBadRequest},
+		{"null", map[string]any{"machine_id": nil}, http.StatusBadRequest},
+		{"absent", map[string]any{}, http.StatusUnprocessableEntity},
+	} {
+		rec := httptest.NewRecorder()
+		api.HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePost(rec,
+			taskReq(t, "POST", "/api/outsource-workers/"+workerID+"/relocate",
+				tc.body, wireOwnerID, "owner"), workerID)
+		if rec.Code != tc.want {
+			t.Fatalf("%s machine_id: got %d %s, want %d",
+				tc.name, rec.Code, rec.Body.String(), tc.want)
+		}
+		if got := readWorker(t, api, workerID).DesiredMachineID; got != pinned {
+			t.Fatalf("%s machine_id must leave the pin alone: %q", tc.name, got)
+		}
+	}
+
+	// SENTINEL: a named machine still moves the worker.
+	rec := postWorker(t, api, workerID, "relocate", map[string]any{"machine_id": "m-far"},
+		api.HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePost)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("a named machine must still relocate: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := readWorker(t, api, workerID).DesiredMachineID; got != "m-far" {
+		t.Fatalf("the relocate must land: %q", got)
 	}
 }

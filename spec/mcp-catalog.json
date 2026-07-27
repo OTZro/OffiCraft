@@ -460,27 +460,20 @@
       "name": "activate_member"
     },
     {
-      "description": "Relocate a member to a machine (placement only; never touches desired_state). Also accepts an outsource-worker id: the same move-one-agent verb relocates the worker.",
+      "description": "Relocate a member to a machine (placement only; never touches desired_state). Also accepts an outsource-worker id: the same move-one-agent verb relocates the worker. machine_id is REQUIRED (owner 2026-07-27): a relocate NAMES the destination machine and no longer doubles as an unpin \u2014 an absent key is a 422, an explicit null or \"\" is a 400.",
       "inputSchema": {
         "properties": {
           "machine_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Machine Id"
+            "title": "Machine Id",
+            "type": "string"
           },
           "member_id": {
             "type": "string"
           }
         },
         "required": [
-          "member_id"
+          "member_id",
+          "machine_id"
         ],
         "additionalProperties": false,
         "type": "object"

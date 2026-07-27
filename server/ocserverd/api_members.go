@@ -340,26 +340,26 @@ func (s *apiServer) HandleActivateMemberApiMembersMemberIdActivatePost(w http.Re
 // touches desired_state (or the stopping/waking anchors): a relocate is not a
 // wake. 404 for an unknown / removed member; any non-"" machine_id that names no
 // real machine is a 404, so a stale/typo'd id never pins the member to a
-// placement that can never boot (the worker-relocate reasoning). "" clears the
-// pin — the member then has no placement and will not be started until the owner
-// picks one. The literal "auto" is NOT exempt from the resolve: it used to be
+// placement that can never boot (the worker-relocate reasoning). machine_id is
+// REQUIRED since owner 2026-07-27 (relocateNeedsMachineMsg): an absent key is a
+// 422 and an explicit null / "" is a 400 — a relocate names a destination and no
+// longer doubles as an unpin. The literal "auto" is NOT exempt from the resolve: it used to be
 // waved through as a pseudo-machine, which pinned the member to a destination
 // dispatch could never reach (IsOnline("auto") is always false) and reconcile
 // never healed — the very hole a nonexistent concrete id was already 404'd for.
 func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.ResponseWriter, r *http.Request, memberId string) {
 	var body MemberRelocateDTO
-	if !decodeJSONBody(w, r, &body) {
+	if !decodeJSONBodyRequired(w, r, &body, "machine_id") {
 		return
 	}
-	machineID := ""
-	if body.MachineId != nil {
-		machineID = *body.MachineId
+	if body.MachineId == "" {
+		writeError(w, http.StatusBadRequest, relocateNeedsMachineMsg)
+		return
 	}
-	if machineID != "" {
-		if _, err := s.resolveMachine(machineID); err != nil {
-			writeResolveError(w, err, "machine", machineID)
-			return
-		}
+	machineID := body.MachineId
+	if _, err := s.resolveMachine(machineID); err != nil {
+		writeResolveError(w, err, "machine", machineID)
+		return
 	}
 	m, err := s.resolveMember(memberId)
 	if err != nil {

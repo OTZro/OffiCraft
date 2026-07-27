@@ -1357,10 +1357,13 @@ def _desired_machine(hctx: HCtx, member_id: str) -> str:
 
 
 def test_relocate_requires_a_machine_that_resolves(hctx: HCtx) -> None:
-    """Placement is an EXPLICIT decision: relocate takes a real machine id or ""
-    (clear the pin). Every other non-blank value — the retired "auto" spelling
-    included — is the same honest 404 a typo'd id has always been, so a member
-    can never be pinned to a destination dispatch cannot reach."""
+    """Placement is an EXPLICIT decision: relocate takes a real machine id, and
+    since the owner ruling of 2026-07-27 it takes NOTHING ELSE. Every other
+    non-blank value — the retired "auto" spelling included — is the same honest
+    404 a typo'd id has always been, so a member can never be pinned to a
+    destination dispatch cannot reach; and "" is no longer the unpin it used to
+    be (that made the pin-destroying form the one you got by forgetting a
+    field), it is a 400 that leaves the pin exactly where it was."""
     member_id = hctx.fresh_member()
     h = _auth(hctx.owner_token)
     before = _desired_machine(hctx, member_id)
@@ -1377,11 +1380,14 @@ def test_relocate_requires_a_machine_that_resolves(hctx: HCtx) -> None:
         json={"machine_id": hctx.machine_id}, headers=h)
     assert r.status_code == 200, r.text
     assert r.json()["desired_machine_id"] == hctx.machine_id
-    # "" clears the pin — the member then has no placement.
-    r = hctx.client.post(
-        f"/api/members/{member_id}/relocate", json={"machine_id": ""}, headers=h)
-    assert r.status_code == 200, r.text
-    assert r.json()["desired_machine_id"] == ""
+    # "" is a semantic refusal (400) and the pin survives; an ABSENT key is the
+    # missing-required-field face (422). Both leave the machine just pinned.
+    for body, want in (({"machine_id": ""}, 400), ({}, 422)):
+        r = hctx.client.post(
+            f"/api/members/{member_id}/relocate", json=body, headers=h)
+        assert r.status_code == want, f"{body!r}: {r.status_code} {r.text[:200]}"
+        assert _desired_machine(hctx, member_id) == hctx.machine_id, (
+            f"a refused relocate must leave the pin untouched ({body!r})")
 
 
 def test_activate_requires_a_machine_that_resolves(hctx: HCtx) -> None:

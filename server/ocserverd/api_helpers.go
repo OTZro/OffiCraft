@@ -130,6 +130,22 @@ func decodeJSONBodyStrict(w http.ResponseWriter, r *http.Request, dst any, requi
 	return true
 }
 
+// relocateNeedsMachineMsg is the 400 a relocate answers when the body carries no
+// destination — owner ruling 2026-07-27: 搬遷一定要帶機器.
+//
+// Until that ruling all three shapes (key absent / explicit null / "") collapsed
+// to "" and CLEARED the owner's pin, which contradicted the sticky-placement
+// rule that a hand-moved worker is pulled back by no configuration: the same
+// verb both set and destroyed the pin, and the destroying form was the one you
+// got by forgetting a field. There is no longer an unpin verb on this route; a
+// relocate NAMES where to go. Absent key answers 422 (the frozen
+// validation_error face for a missing required field, decodeJSONBodyRequired);
+// a present-but-empty value is a semantic refusal and stays 400, matching the
+// decodeJSONBodyStrict contract. ONE message for both faces (member + worker) so
+// they cannot drift into two stories.
+const relocateNeedsMachineMsg = "machine_id must name a machine: a relocate moves " +
+	"an agent to a specific machine, and no longer clears its placement"
+
 // ── storage error fold ────────────────────────────────────────────────────────
 
 // internalError answers the honest 500 envelope for a storage/asset fault.

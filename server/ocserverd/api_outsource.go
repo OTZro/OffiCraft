@@ -237,17 +237,18 @@ func (s *apiServer) HandleGetWorkerBootContextApiOutsourceWorkersIdBootContextGe
 // worker stays assigned/active — a relocate is a placement change, not a state
 // change). Returns the freshly-projected worker so the panel adopts the new pin
 // immediately. 404 for an unknown / already-released worker (a released worker
-// has no session to move).
+// has no session to move). machine_id is REQUIRED since owner 2026-07-27
+// (relocateNeedsMachineMsg): absent key ⇒ 422, explicit null / "" ⇒ 400.
 func (s *apiServer) HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePost(w http.ResponseWriter, r *http.Request, id string) {
 	var body OutsourceWorkerRelocateDTO
-	if !decodeJSONBody(w, r, &body) {
+	if !decodeJSONBodyRequired(w, r, &body, "machine_id") {
 		return
 	}
-	machineID := ""
-	if body.MachineId != nil {
-		machineID = *body.MachineId
+	if body.MachineId == "" {
+		writeError(w, http.StatusBadRequest, relocateNeedsMachineMsg)
+		return
 	}
-	s.relocateWorkerByID(w, r, id, machineID)
+	s.relocateWorkerByID(w, r, id, body.MachineId)
 }
 
 // relocateWorkerByID is the shared 改機器 core: validate the pin, persist it,
@@ -255,17 +256,20 @@ func (s *apiServer) HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePo
 // route handler and by the member relocate fallback (relocate_member accepts a
 // worker id — P7c), so both faces serve identical semantics.
 func (s *apiServer) relocateWorkerByID(w http.ResponseWriter, r *http.Request, id, machineID string) {
-	// Any non-"" machine_id must name a real machine — reject a hand-typed /
-	// stale id with an honest 404 rather than pinning the worker to a placement
-	// that can never boot. "auto" is no longer exempt: waving it through pinned
-	// the worker to a pseudo-machine dispatch could never reach, the same hole a
-	// nonexistent concrete id was already 404'd for. "" clears the pin, and the
-	// worker then falls back to the task's own 發包 target / the type manual.
-	if machineID != "" {
-		if _, err := s.resolveMachine(machineID); err != nil {
-			writeResolveError(w, err, "machine", machineID)
-			return
-		}
+	// machine_id must name a real machine — reject a hand-typed / stale id with
+	// an honest 404 rather than pinning the worker to a placement that can never
+	// boot. "auto" is no longer exempt: waving it through pinned the worker to a
+	// pseudo-machine dispatch could never reach, the same hole a nonexistent
+	// concrete id was already 404'd for. "" no longer clears the pin either
+	// (owner 2026-07-27, relocateNeedsMachineMsg); both callers refuse it before
+	// they get here, and this arm keeps the core fail-closed on its own.
+	if machineID == "" {
+		writeError(w, http.StatusBadRequest, relocateNeedsMachineMsg)
+		return
+	}
+	if _, err := s.resolveMachine(machineID); err != nil {
+		writeResolveError(w, err, "machine", machineID)
+		return
 	}
 
 	s.outsourceMu.Lock()

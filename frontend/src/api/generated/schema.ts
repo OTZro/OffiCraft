@@ -4235,13 +4235,10 @@ export interface components {
         };
         /**
          * MemberRelocateDTO
-         * @description Relocate a member to a machine (POST /api/members/{member_id}/relocate) — the owner cockpit's 改機器 for a roster member, the member twin of OutsourceWorkerRelocateDTO. Writes the member's owner-pinned desired_machine_id, then runs the SAME event-driven reconcile the activate click uses (reconcileMemberNow): a LIVE member is auto-migrated onto the chosen machine (robust STOP the old session → next tick re-spawns on the pin), an offline member just re-pins so the next wake lands there. PLACEMENT ONLY — unlike activate it NEVER touches desired_state (a relocate is not a wake). machine_id is the STABLE machine id (the warden member's own id) or "" (clear the pin — the member then has no placement and is not started until one is chosen). Any non-blank value must resolve to a real machine.
+         * @description Relocate a member to a machine (POST /api/members/{member_id}/relocate) — the owner cockpit's 改機器 for a roster member, the member twin of OutsourceWorkerRelocateDTO. Writes the member's owner-pinned desired_machine_id, then runs the SAME event-driven reconcile the activate click uses (reconcileMemberNow): a LIVE member is auto-migrated onto the chosen machine (robust STOP the old session → next tick re-spawns on the pin), an offline member just re-pins so the next wake lands there. PLACEMENT ONLY — unlike activate it NEVER touches desired_state (a relocate is not a wake). machine_id is REQUIRED (owner 2026-07-27) and is the STABLE machine id (the warden member's own id): a relocate NAMES its destination and no longer doubles as an unpin. An absent key is a 422; an explicit null or "" is a 400. The value must resolve to a real machine.
          */
         MemberRelocateDTO: {
-            /**
-             * Machine Id
-             * @default
-             */
+            /** Machine Id */
             machine_id: string;
         };
         /**
@@ -4720,13 +4717,10 @@ export interface components {
         };
         /**
          * OutsourceWorkerRelocateDTO
-         * @description Relocate an outsource worker to a machine (POST /api/outsource-workers/{id}/relocate, T-f190) — the owner cockpit's 改機器 operation, the worker twin of MemberActivateDTO's machine bind. Writes the worker's desired_machine_id pin, kills the current session, and clears pacing so the next scheduler tick re-spawns on the chosen machine (no lifecycle change). machine_id is the STABLE machine id (the warden member's own id) or "" (clear the pin → fall back to the manual preference). Any non-blank value must resolve to a real machine.
+         * @description Relocate an outsource worker to a machine (POST /api/outsource-workers/{id}/relocate, T-f190) — the owner cockpit's 改機器 operation, the worker twin of MemberActivateDTO's machine bind. Writes the worker's desired_machine_id pin, kills the current session, and clears pacing so the next scheduler tick re-spawns on the chosen machine (no lifecycle change). machine_id is REQUIRED (owner 2026-07-27) and is the STABLE machine id (the warden member's own id): a relocate NAMES its destination and no longer clears the pin. An absent key is a 422; an explicit null or "" is a 400. The value must resolve to a real machine.
          */
         OutsourceWorkerRelocateDTO: {
-            /**
-             * Machine Id
-             * @default
-             */
+            /** Machine Id */
             machine_id: string;
         };
         /**
