@@ -1542,8 +1542,10 @@ export const httpApi: Api = {
     // isDefault=false). Whole-doc replace matching the backend
     // `handle_replace_lessons`. NOTE the POST verb — do NOT copy the
     // global-context save's PUT/DELETE, which mismatch this contract. PER-ROLE
-    // doc; "general" is the single fixed task_type key. WRITE authz is per-role:
-    // owner (this UI's scope) may write any role.
+    // doc; "general" is the single fixed task_type key. WRITE authz is per-role
+    // and keyed on the PRINCIPAL CLASS, not the token scope (T-5336): a caller
+    // at or above admin_agent — the owner (this UI's scope) and the admin agent
+    // — may write ANY role; every other agent may write only its own role.
     const wire = unwrap(
       await client.POST("/api/lessons/{role_key}/{task_type}", {
         params: { path: { role_key: roleKey, task_type: taskType } },

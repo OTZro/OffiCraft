@@ -861,7 +861,10 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			// that same request went 200 → 403 (classifyMember ranks
 			// kind=="warden" as machine regardless of role_key). Nothing this
 			// office builds for itself loses a write; a deliberately hired
-			// role-bearing warden loses exactly one. (Whether that kind/role_key
+			// role-bearing warden loses exactly one CAPABILITY — writing its own
+			// role's lessons — which it loses across BOTH of these rows at once
+			// (replace and patch share lessonsWriteAuthz), so counted as requests
+			// it is two. (Whether that kind/role_key
 			// combination should be refused at ingest at all is a separate
 			// question, deliberately not answered here.)
 			// Per-ROLE authz stays in the handler (lessonsWriteAuthz) — the
