@@ -25,9 +25,9 @@ import { dirname, join } from "node:path";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..", "..");
 // GEN_THEME_TOKENS_SRC / _OUT_DIR re-point the input and the two outputs — the
-// ONLY reason they exist is gen-theme-tokens.test.ts, which feeds the generator
-// a theme.css carrying an unregistered --color-marker-* token and asserts it
-// goes red. A generator whose refusal nobody has watched is not a refusal.
+// ONLY reason they exist is gen-theme-tokens.test.ts, which runs the generator
+// over a sabotaged copy of theme.css and watches what it emits (and what it
+// refuses). A generator whose refusal nobody has watched is not a refusal.
 const THEME_CSS =
   process.env.GEN_THEME_TOKENS_SRC ??
   join(ROOT, "frontend", "src", "styles", "theme.css");
@@ -47,56 +47,22 @@ const GO_OUT = OUT_DIR
 // a phantom token — and, worse for the alias scan below, a phantom alias.
 const css = readFileSync(THEME_CSS, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 
-// NON-OVERRIDABLE SLOT FAMILY (T-081b review round 4, BLOCKER-A). Every
-// --color-marker-* token is a STRUCTURAL marker's colour — the text of the
-// 內建 / 自訂 group headings the theme list uses to tell themes APART. A pack
-// that can re-value them can paint a heading into the page background and the
-// marker stops marking, which is the colour half of the same forgery the
-// themeMarkers i18n subtree closes on the text half.
+// EVERY --color-* token theme.css defines is pack-settable — the whitelist is
+// the token set, with no exclusions (T-081b round 8, owner ruling). There WAS a
+// reserved --color-marker-* family whose values a pack could not re-value (the
+// colour of the 內建 / 自訂 group headings), kept out of the whitelist here. It
+// was valued for the built-in dark theme, so a light pack left the headings at
+// 1.98:1 — unreadable for everyone, not only for a pack out to hide them. The
+// owner chose to let a pack decide the heading's colour, so the family, this
+// exclusion and its guards are gone: no name is special any more, and an
+// exclusion mechanism nothing excludes is a guard that can never fire.
 //
-// The exclusion is an EXPLICIT LIST, and the prefix is only a TRIPWIRE around it
-// (round 4 recheck, NIT-2). Prefix-only exclusion was silent in the direction
-// nobody was watching: a future --color-marker-something meant as an ORDINARY
-// theme colour would be dropped from the whitelist with no error, no warning and
-// no test — the editor would not show it, a pack naming it would be rejected,
-// and the author would only find it odd. So the two disagreeing is now an error
-// in BOTH directions: a prefixed token missing from the list, or a listed token
-// missing from theme.css.
-const NON_OVERRIDABLE_TOKENS = ["--color-marker-surface", "--color-marker-fg"];
-const NON_OVERRIDABLE_PREFIX = "--color-marker-";
-const NON_OVERRIDABLE = new Set(NON_OVERRIDABLE_TOKENS);
-
-const allTokens = [
+// What still cannot be forged is not colour: the heading's TEXT lives in the
+// non-overridable `themeMarkers` i18n subtree, and which group a row lands in is
+// decided by the render, not by anything a pack ships.
+const tokens = [
   ...new Set([...css.matchAll(/(--color-[a-z0-9-]+)\s*:/g)].map((m) => m[1])),
 ].sort();
-
-const unregistered = allTokens.filter(
-  (t) => t.startsWith(NON_OVERRIDABLE_PREFIX) && !NON_OVERRIDABLE.has(t)
-);
-if (unregistered.length) {
-  console.error(
-    `[gen-theme-tokens] ${unregistered.join(", ")} — theme.css defines a ` +
-      `${NON_OVERRIDABLE_PREFIX}* token that NON_OVERRIDABLE_TOKENS in this file ` +
-      `does not list, so it would be dropped from the pack-settable whitelist ` +
-      `WITHOUT anyone being told.\n` +
-      `  * if it really is a structural marker colour, add it to ` +
-      `NON_OVERRIDABLE_TOKENS here (a pack must not be able to re-value it);\n` +
-      `  * if it is an ordinary theme colour, rename it — the ` +
-      `${NON_OVERRIDABLE_PREFIX} prefix is reserved for the marker family.`
-  );
-  process.exit(1);
-}
-const stale = NON_OVERRIDABLE_TOKENS.filter((t) => !allTokens.includes(t));
-if (stale.length) {
-  console.error(
-    `[gen-theme-tokens] ${stale.join(", ")} — listed in NON_OVERRIDABLE_TOKENS ` +
-      `but no longer defined in theme.css. A marker slot that vanished takes the ` +
-      `heading colour it painted with it; restore it or drop it from the list.`
-  );
-  process.exit(1);
-}
-
-const tokens = allTokens.filter((t) => !NON_OVERRIDABLE.has(t));
 
 // ALIAS DEFAULTS — a token whose definition is nothing but `var(--other)`.
 // These are not colours: they are "inherit from that one unless you say
@@ -159,7 +125,4 @@ const go =
 
 writeFileSync(TS_OUT, ts);
 writeFileSync(GO_OUT, go);
-console.log(
-  `[gen-theme-tokens] wrote ${tokens.length} tokens →\n  ${TS_OUT}\n  ${GO_OUT}\n` +
-    `  excluded as non-overridable marker slots: ${NON_OVERRIDABLE_TOKENS.join(", ")}`
-);
+console.log(`[gen-theme-tokens] wrote ${tokens.length} tokens →\n  ${TS_OUT}\n  ${GO_OUT}`);

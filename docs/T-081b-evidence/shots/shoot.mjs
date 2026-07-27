@@ -411,4 +411,222 @@ if (group === "flat") {
   await ctx.close();
 }
 
+// ── group markers2(第八輪):與 markers 同條件重量一次 —— 標題色改吃可覆寫的
+// --color-text-muted 之後,內建深色 / 套用精靈村兩組對比度各是多少。截第 27 張,
+// 與第 24 張同視窗、同流程、同位置,可直接對照。
+//
+// ── group markers:套用「精靈村」(淺色自訂包)之後的 設定 › 主題 清單 + 偏好設定面板,
+// 外加「內建/自訂」群組標題的實測對比度。標題色吃不可覆寫的 --color-marker-*,
+// 那組值是為內建深色主題定的 —— 淺色包底下會不會對比不足,這一組就是去量它。
+if (group === "markers" || group === "markers2") {
+  const bundle = JSON.parse(
+    readFileSync(join(PACK, "smurf-village.theme.json"), "utf8")
+  );
+
+  const srgb = (c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  const lum = ([r, g, b]) =>
+    0.2126 * srgb(r / 255) + 0.7152 * srgb(g / 255) + 0.0722 * srgb(b / 255);
+  const contrast = (a, b) => {
+    const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m);
+    return (x + 0.05) / (y + 0.05);
+  };
+  // getComputedStyle 對 color-mix() 回傳的是 `color(srgb 0.62 0.63 0.66)`(0–1 浮點),
+  // 不是 rgb(0–255)。兩種都要吃,否則 0.62 會被當成 0.62/255 → 幾乎全黑、對比度全錯。
+  const parseRGB = (s) => {
+    const n = s.match(/[\d.]+/g).slice(0, 3).map(Number);
+    return s.trim().startsWith("color(") ? n.map((v) => v * 255) : n;
+  };
+  const hex = ([r, g, b]) =>
+    "#" + [r, g, b].map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
+
+  /** 實際「畫出來」的背景色:截這塊區域的圖,取出現次數最多的像素色。
+   *  這樣連 alpha 分區底色疊在背景圖上的結果都一起算進去,不是只算 CSS。 */
+  async function modalPixel(page, clip) {
+    const buf = await page.screenshot({ clip });
+    const scratch = await browser.newContext({ viewport: { width: 200, height: 200 } });
+    const sp = await scratch.newPage();
+    await sp.setContent("<body></body>");
+    const top = await sp.evaluate(async (uri) => {
+      const img = new Image();
+      img.src = uri;
+      await img.decode();
+      const c = document.createElement("canvas");
+      c.width = img.width;
+      c.height = img.height;
+      const g = c.getContext("2d");
+      g.drawImage(img, 0, 0);
+      const d = g.getImageData(0, 0, c.width, c.height).data;
+      const hist = new Map();
+      for (let i = 0; i < d.length; i += 4) {
+        const k = `${d[i]},${d[i + 1]},${d[i + 2]}`;
+        hist.set(k, (hist.get(k) ?? 0) + 1);
+      }
+      const total = d.length / 4;
+      return [...hist.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([k, n]) => ({ rgb: k.split(",").map(Number), share: +(n / total).toFixed(3) }));
+    }, "data:image/png;base64," + buf.toString("base64"));
+    await scratch.close();
+    return top;
+  }
+
+  /** 每個 .ts-group-head:計算色 + 它實際坐的背景像素色 + WCAG 對比度。 */
+  async function measureHeads(page, label) {
+    const heads = await page.evaluate(() => {
+      const decl = [...document.querySelectorAll(".ts-group-head")];
+      return decl.map((h) => {
+        const cs = getComputedStyle(h);
+        const r = h.getBoundingClientRect();
+        const layers = [];
+        for (let el = h; el; el = el.parentElement) {
+          const b = getComputedStyle(el).backgroundColor;
+          if (b !== "rgba(0, 0, 0, 0)")
+            layers.push({ sel: el.tagName.toLowerCase() + "." + (el.className || ""), bg: b });
+        }
+        return {
+          text: h.textContent,
+          color: cs.color,
+          fontSize: cs.fontSize,
+          fontWeight: cs.fontWeight,
+          rect: { x: r.x, y: r.y, w: r.width, h: r.height },
+          bgLayers: layers.slice(0, 4),
+        };
+      });
+    });
+    const out = [];
+    for (const h of heads) {
+      const px = await modalPixel(page, {
+        x: Math.round(h.rect.x),
+        y: Math.round(h.rect.y),
+        width: Math.max(2, Math.round(h.rect.w)),
+        height: Math.max(2, Math.round(h.rect.h)),
+      });
+      const fg = parseRGB(h.color);
+      const bg = px[0].rgb;
+      out.push({
+        theme: label,
+        text: h.text,
+        fgComputed: h.color,
+        fgHex: hex(fg),
+        bgPixel: `rgb(${bg.join(", ")})`,
+        bgHex: hex(bg),
+        bgPixelShare: px[0].share,
+        bgLayersCSS: h.bgLayers,
+        fontSize: h.fontSize,
+        fontWeight: h.fontWeight,
+        contrast: +contrast(fg, bg).toFixed(2),
+        passAA_normal: contrast(fg, bg) >= 4.5,
+      });
+    }
+    return out;
+  }
+
+  const { ctx, page } = await openApp({ width: 1440, height: 900, wide: false });
+  const warn = await importBundle(page, bundle);
+  console.log("import warning:", warn);
+  if (warn !== "(無警告)") throw new Error(`EXPECTED ZERO WARNINGS, GOT: ${warn}`);
+
+  // 先量「內建深色主題」的對照組(此時還沒切主題)。
+  await openThemeSettings(page);
+  const darkHeads = await measureHeads(page, "built-in dark (辦公室)");
+  console.log("DARK:", JSON.stringify(darkHeads, null, 1));
+  log({ file: "(measure only)", note: "群組標題對比度 · 內建深色主題", heads: darkHeads });
+
+  // 還有誰吃 marker 色槽?掃過所有樣式表的每一條規則。
+  const markerUsers = await page.evaluate(() => {
+    const hits = [];
+    for (const ss of document.styleSheets) {
+      let rules;
+      try {
+        rules = ss.cssRules;
+      } catch {
+        continue;
+      }
+      const walk = (list) => {
+        for (const r of list) {
+          if (r.cssRules) walk(r.cssRules);
+          if (r.style) {
+            for (const p of r.style) {
+              const v = r.style.getPropertyValue(p);
+              if (v.includes("--color-marker-"))
+                hits.push({ selector: r.selectorText, prop: p, value: v.trim() });
+            }
+          }
+        }
+      };
+      walk(rules);
+    }
+    return hits;
+  });
+  console.log("marker slot users:", JSON.stringify(markerUsers, null, 1));
+  log({ file: "(measure only)", note: "讀 --color-marker-* 的所有 CSS 規則", markerUsers });
+
+  // 切到精靈村(淺色自訂包)。
+  await pickTheme(page, bundle.name);
+  const activeTheme = await page.evaluate(() => localStorage.getItem("oc.theme"));
+  if (activeTheme !== bundle.id) throw new Error(`theme not applied: ${activeTheme}`);
+
+  await openThemeSettings(page);
+  const lightHeads = await measureHeads(page, "精靈村 (custom, light)");
+  console.log("LIGHT:", JSON.stringify(lightHeads, null, 1));
+  await shot(
+    page,
+    group === "markers2" ? "27-smurf-applied-theme-list-round8.png" : "24-smurf-applied-theme-list.png",
+    "設定 › 主題 清單 · **已套用精靈村** · 窄版 1440(重點:內建/自訂兩個群組標題在淺色底下的樣子)",
+    { activeTheme, importWarning: warn, groupHeads: lightHeads }
+  );
+
+  if (group === "markers2") {
+    await ctx.close();
+    await browser.close();
+    process.exit(0);
+  }
+
+  // 25:偏好設定面板(收合態),背後停在一般畫面。
+  await gotoMonitor(page);
+  await page.locator(".topbar button").last().click();
+  await page.waitForTimeout(400);
+  await page.getByText("偏好設定", { exact: true }).click();
+  await page.waitForTimeout(600);
+  const panel = await page.evaluate(() => {
+    const sel = document.querySelector("select.profile-dd__input");
+    return {
+      optgroupCount: sel.querySelectorAll("optgroup").length,
+      selectSize: sel.size,
+      selectValue: sel.value,
+      optionOrder: [...sel.querySelectorAll("option")].map((o) => ({
+        value: o.value,
+        text: o.textContent,
+      })),
+      sections: [...document.querySelectorAll(".profile-dd__section-label")].map(
+        (e) => e.textContent
+      ),
+    };
+  });
+  console.log("panel:", JSON.stringify(panel));
+  if (panel.selectSize !== 0) throw new Error("select was tampered with");
+  await shot(
+    page,
+    "25-smurf-applied-preferences-panel.png",
+    "偏好設定面板(收合態:主題/語言/版面)· **已套用精靈村** · 窄版 1440",
+    { activeTheme, ...panel }
+  );
+
+  // 26:手機 375 的主題清單。
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.waitForTimeout(400);
+  await openThemeSettings(page);
+  const mobileHeads = await measureHeads(page, "精靈村 (custom, light) @375");
+  console.log("MOBILE:", JSON.stringify(mobileHeads, null, 1));
+  await shot(
+    page,
+    "26-smurf-applied-theme-list-375.png",
+    "設定 › 主題 清單 · **已套用精靈村** · 手機 375",
+    { activeTheme, groupHeads: mobileHeads }
+  );
+
+  await ctx.close();
+}
+
 await browser.close();

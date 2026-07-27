@@ -162,13 +162,11 @@ export function makeMessages(t: Dict, language: Lang): Messages {
     machineDeleteConfirmBody: (name) =>
       `${mach.deleteConfirmBodyLead}${name}${mach.deleteConfirmBodyTail}`,
 
-    // The name a DOWNLOADED copy of a built-in theme carries. It must differ
-    // from the built-in's own display name: since T-081b a bundle may not claim
-    // that name (it would put a second 辦公室 in the picker), so exporting under
-    // it would produce a file the product then refuses to import back. The tag
-    // comes from the NON-OVERRIDABLE themeMarkers subtree for that same reason —
-    // an overridable tag could carry bidi or 200 characters and put the refused
-    // file back (T-081b review round 3, SHOULD-5).
+    // The name a DOWNLOADED copy of a built-in theme carries — 辦公室(副本), so
+    // the file lands as its own row instead of a second one spelled exactly like
+    // the shipped theme. Round 8 made the bare name legal too (a duplicate
+    // display name is the user's own business now), so this is a courtesy, not a
+    // rule: the tag itself is ordinary overridable wording again.
     themeCopyName: (name) => `${name}${sp}(${t.themeMarkers.copyTag})`,
 
     // `sample` is the SHORT head of the skipped set, never the whole thing; the

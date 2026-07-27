@@ -14,10 +14,7 @@ import {
   THEME_FONT_TOKENS,
   SAFE_FONT_FAMILIES,
 } from "../styles/themeFonts.generated";
-import {
-  MESSAGE_KEYS,
-  THEME_IDENTITY_NAMES,
-} from "../i18n/messageKeys.generated";
+import { MESSAGE_KEYS } from "../i18n/messageKeys.generated";
 
 /** One owner-authored theme colour bundle (mirrors ThemeBundleDTO). `wording`
  * is an OPTIONAL per-language message-key text-override overlay (T-16a1 P3).
@@ -406,8 +403,8 @@ function hasControlChar(s: string): boolean {
  * and every unlisted member of the SAME categories walked straight through:
  * U+00AD SOFT HYPHEN and U+180E and the U+E00xx TAG block (all Cf, like the
  * ZWSP that WAS listed), U+2028/U+2029 (Zl/Zp), U+00A0 / U+1680 / U+3000 (Zs).
- * Each of them renders as — or renders away to — a built-in theme's name, which
- * is exactly what isBuiltinThemeName exists to stop.
+ * Each of them is invisible in the rendered name, so two names that look
+ * identical on screen can differ in bytes — which is how bad data gets in.
  *
  *   Cc control · Cf format (bidi marks, ZWSP/ZWNJ/ZWJ, WORD JOINER, BOM,
  *   SOFT HYPHEN, the TAG block) · Co private use · Cs surrogate ·
@@ -470,55 +467,14 @@ function normalizeThemeSpaces(s: string): string {
 // for the two languages to disagree about. The twin of the Go trimThemeName.
 const ASCII_SPACE_EDGES_RE = /^[\t\n\v\f\r ]+|[\t\n\v\f\r ]+$/g;
 
-function trimThemeName(s: string): string {
+/** EXPORTED for its own unit test, not for call sites: it decides the LENGTH
+ * verdict on both ends of the wire, and nothing observable through
+ * validateThemeBundle can tell `.trim()` from the explicit ASCII set (they
+ * differ only on U+0085 / U+FEFF, which hasInvisibleNameRune rejects first). So
+ * the two sides' agreement is pinned on the normaliser itself, against the twin
+ * table in server/ocserverd/theme_bundle_test.go. */
+export function trimThemeName(s: string): string {
   return normalizeThemeSpaces(s).replace(ASCII_SPACE_EDGES_RE, "");
-}
-
-/** The comparison form of a theme display name: ASCII trimmed and ASCII
- * case-folded, so "  office " and "Office" both collide with the built-in. Only
- * A–Z is folded — NOT toLowerCase(), whose full case mapping sends U+0130 (İ) to
- * "i̇" while Go's simple mapping sends it to 'i', so "OFFİCE" was accepted by the
- * client and rejected by the server. An ASCII-only fold is identical BY
- * CONSTRUCTION on both sides; the cost is that a non-ASCII case dodge
- * (「ＯＦＦＩＣＥ」) is not folded, which is the same homoglyph class this rule has
- * never claimed to cover. The twin of the Go normalizeThemeName.
- *
- * EXPORTED for its own unit test, not for call sites. Nothing observable through
- * validateThemeBundle can tell an ASCII fold from toLowerCase() here — a fold
- * that collapses MORE characters can only ever reject more, and no spelling of
- * 「office」 exists that full case mapping collapses onto it and an ASCII fold does
- * not. So the two sides' agreement has to be pinned on the normaliser itself,
- * against the twin table in server/ocserverd/theme_bundle_test.go. */
-export function normalizeThemeName(s: string): string {
-  let out = "";
-  for (const ch of trimThemeName(s)) {
-    const cp = ch.codePointAt(0) ?? 0;
-    out += cp >= 0x41 && cp <= 0x5a ? String.fromCodePoint(cp + 0x20) : ch;
-  }
-  return out;
-}
-
-/** The display names the BUILT-IN themes are shown under, in EVERY language —
- * the generated themeIdentity subtree intersected with RESERVED_THEME_IDS.
- *
- * Deriving it (rather than hand-listing 「辦公室」/「Office」) is what makes the
- * rule language-independent and future-proof: a second built-in theme is
- * covered the moment its name lands in themeIdentity and its id in
- * RESERVED_THEME_IDS. The intersection also keeps `themeIdentity.newTheme`
- * claimable — that is the default name a NEW custom theme is created with, not
- * a theme's identity, and banning it would reject the app's own new-theme flow. */
-const BUILTIN_THEME_NAME_SET = new Set<string>(
-  (RESERVED_THEME_IDS as readonly string[]).flatMap((id) =>
-    (THEME_IDENTITY_NAMES[id] ?? []).map(normalizeThemeName)
-  )
-);
-
-/** Whether `name` claims a built-in theme's display name. The id is already
- * guarded by RESERVED_THEME_IDS; this is the guard on what the owner SEES —
- * without it a pack called 「辦公室」 puts a second 辦公室 row in the picker and
- * the shipped theme becomes unfindable. */
-export function isBuiltinThemeName(name: string): boolean {
-  return BUILTIN_THEME_NAME_SET.has(normalizeThemeName(name));
 }
 
 /** Validate a bundle's optional wording overlay (T-16a1 P3) — the twin of the
@@ -605,9 +561,6 @@ export function validateThemeBundle(
   }
   if (hasInvisibleNameRune(bundle.name)) {
     return `${where}: name must not contain control, formatting, private-use, surrogate or line/paragraph separator characters`;
-  }
-  if (isBuiltinThemeName(bundle.name)) {
-    return `${where}: name "${trimThemeName(bundle.name)}" is reserved for a built-in theme`;
   }
   if (
     typeof bundle.colors !== "object" ||

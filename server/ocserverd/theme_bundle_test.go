@@ -64,19 +64,21 @@ func TestValidateThemeBundles(t *testing.T) {
 			}
 		}
 		// Zs is NOT in that set — every space separator is NORMALISED to U+0020
-		// first (T-081b review round 4 recheck, SHOULD-3). A Zs-padded built-in
-		// name is still refused, but now by the rule that can name the actual
-		// reason: a user who typed a full-width space is told 「辦公室」 is
-		// reserved rather than that their name carries "non-ASCII space
-		// characters", which they cannot act on.
+		// first (T-081b review round 4 recheck, SHOULD-3), so these are ordinary
+		// names that simply lose their padding. Round 8 removed the reserved-name
+		// rule that used to catch them on the way out, so they are ACCEPTED, and
+		// the trim is what the assertion is really about: the stored name must be
+		// the normalised one, not the padded bytes.
 		for _, name := range []string{
 			"\u00A0Office\u00A0", // NO-BREAK SPACE (Zs) — renders as 「Office」
 			"\u3000辦公室\u3000",    // IDEOGRAPHIC SPACE (Zs) — renders as 「辦公室」
 			"\u1680Office",       // OGHAM SPACE MARK (Zs) — blank in most fonts
 		} {
-			err := validateThemeBundles(themeBundleNamed(name))
-			if err == nil || !strings.Contains(err.Error(), "reserved for a built-in theme") {
-				t.Fatalf("name %q must be rejected as reserved, got %v", name, err)
+			if err := validateThemeBundles(themeBundleNamed(name)); err != nil {
+				t.Fatalf("name %q must be accepted, got %v", name, err)
+			}
+			if got := trimThemeName(name); strings.ContainsAny(got, "\u00A0\u3000\u1680") {
+				t.Fatalf("name %q kept a non-ASCII space after trimming: %q", name, got)
 			}
 		}
 		// …and a name that is nothing BUT spaces has no name left after the
@@ -89,21 +91,23 @@ func TestValidateThemeBundles(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects a name that claims the built-in theme's display name", func(t *testing.T) {
-		// Language-independent: both spellings of the ONE built-in are blocked,
-		// and trimming + case-folding closes the trivial dodges. The id is
-		// guarded separately (reservedThemeIDs) — this is the guard on what the
-		// owner SEES in the picker.
-		// The fold is ASCII-ONLY on BOTH sides on purpose (T-081b review round 3,
-		// SHOULD-6): strings.ToLower's simple case mapping sends U+0130 (İ) to
-		// 'i' while JS's full mapping sends it to "i\u0307", so "OFF\u0130CE" was
-		// rejected here and accepted by the client. Neither side folds it now, so
-		// 「OFFİCE」 is an ordinary claimable name (see the accept table below).
+	t.Run("accepts a name that matches the built-in theme's display name", func(t *testing.T) {
+		// Until round 8 these were rejected: a pack calling itself 辦公室 put a
+		// second 辦公室 row in the picker. The owner dropped the rule — 「這是大家
+		// 自己用的,自己要怎麼搞我們不用特別管」 — so a duplicate display name is now
+		// the user's own business. What still holds is the BUILT-IN's name: it
+		// comes from the non-overridable themeIdentity subtree, so the shipped
+		// row keeps saying 辦公室 no matter what a pack calls itself.
+		// The id stays reserved (reservedThemeIDs); only the NAME is free.
 		for _, name := range []string{"辦公室", "Office", "office", "  OFFICE  ", " 辦公室 "} {
-			err := validateThemeBundles(themeBundleNamed(name))
-			if err == nil || !strings.Contains(err.Error(), "reserved for a built-in theme") {
-				t.Fatalf("name %q must be rejected, got %v", name, err)
+			if err := validateThemeBundles(themeBundleNamed(name)); err != nil {
+				t.Fatalf("name %q must be accepted, got %v", name, err)
 			}
+		}
+		if err := validateThemeBundles([]ThemeBundleDTO{{
+			Id: "office", Name: "Whatever", Colors: map[string]string{"--color-bg": "#101018"},
+		}}); err == nil || !strings.Contains(err.Error(), "reserved for a built-in theme") {
+			t.Fatalf("the built-in ID must stay reserved, got %v", err)
 		}
 	})
 
@@ -149,65 +153,34 @@ func TestValidateThemeBundles(t *testing.T) {
 	})
 }
 
-// TestNormalizeThemeName pins the comparison form character by character — the
-// twin table lives in frontend/src/lib/themeBundle.test.ts. Nothing observable
-// through validateThemeBundles can tell an ASCII fold from strings.ToLower here
-// (a fold that collapses MORE characters can only reject more), so the two
-// sides' agreement is pinned on the normaliser itself: this is what stopped
-// 「OFF\u0130CE」 being rejected here and accepted by the client, and 「\uFEFF辦公室」
-// the other way round.
-func TestNormalizeThemeName(t *testing.T) {
+// TestTrimThemeName pins the surviving normaliser character by character — the
+// twin table lives in frontend/src/lib/themeBundle.test.ts. It decides the
+// LENGTH verdict on both ends, and nothing observable through
+// validateThemeBundles can tell strings.TrimSpace from the explicit ASCII set
+// (they differ only on U+0085 / U+FEFF, which hasInvisibleNameRune rejects
+// first), so the two sides' agreement has to be pinned on the normaliser itself.
+func TestTrimThemeName(t *testing.T) {
 	for _, c := range []struct{ in, want string }{
-		{"Office", "office"},
-		{"  OFFICE  ", "office"},
-		{"\tOFFICE\r\n", "office"},
+		{"Office", "Office"},
+		{"  OFFICE  ", "OFFICE"},
+		{"\tOFFICE\r\n", "OFFICE"},
 		{"辦公室", "辦公室"},
-		// strings.ToLower would fold these; an ASCII fold must not.
-		{"OFF\u0130CE", "off\u0130ce"},
+		// Case is NOT folded — round 8 removed the name comparison that needed a
+		// fold, and the two sides' case mappings disagree (U+0130, U+212A).
+		{"OFF\u0130CE", "OFF\u0130CE"},
 		{"ＯＦＦＩＣＥ", "ＯＦＦＩＣＥ"},
-		{"\u212ANIGHT", "\u212Anight"},
+		{"\u212ANIGHT", "\u212ANIGHT"},
 		// Every Zs is folded onto U+0020 BEFORE the ASCII trim, so a
-		// full-width-padded name normalises exactly like an ASCII-padded one
-		// (round 4 recheck, SHOULD-3) — which is what makes 「　辦公室　」 collide
-		// with the built-in and be told so.
+		// full-width-padded name trims exactly like an ASCII-padded one
+		// (round 4 recheck, SHOULD-3).
 		{"\u3000辦公室", "辦公室"},
 		{"辦公室\u3000", "辦公室"},
-		{"\u00A0Office", "office"},
+		{"\u00A0Office", "Office"},
 		{"深海\u3000之夜", "深海 之夜"},
-		{"\u1680Deep\u2000Ocean\u3000", "deep ocean"},
+		{"\u1680Deep\u2000Ocean\u3000", "Deep Ocean"},
 	} {
-		if got := normalizeThemeName(c.in); got != c.want {
-			t.Fatalf("normalizeThemeName(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
-// TestIsBuiltinThemeName pins the DERIVATION, not the two literals: the banned
-// set is themeIdentityNames (generated from the i18n locales) intersected with
-// reservedThemeIDs. A future built-in must be covered automatically, and an id
-// outside the reserved set must stay claimable.
-func TestIsBuiltinThemeName(t *testing.T) {
-	for id := range reservedThemeIDs {
-		names := themeIdentityNames[id]
-		if len(names) == 0 {
-			t.Fatalf("built-in theme %q has no display name in themeIdentityNames — "+
-				"the name guard would silently pass for it", id)
-		}
-		for _, name := range names {
-			if !isBuiltinThemeName(name) {
-				t.Fatalf("built-in display name %q must be blocked", name)
-			}
-		}
-	}
-	for id, names := range themeIdentityNames {
-		if reservedThemeIDs[id] {
-			continue
-		}
-		for _, name := range names {
-			if isBuiltinThemeName(name) {
-				t.Fatalf("%q is themeIdentity.%s, not a built-in theme's name — "+
-					"it must stay claimable by a custom theme", name, id)
-			}
+		if got := trimThemeName(c.in); got != c.want {
+			t.Fatalf("trimThemeName(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }

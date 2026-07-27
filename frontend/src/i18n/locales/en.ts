@@ -473,20 +473,15 @@ export const en: Dict = {
     office: "Office",
     newTheme: "New theme",
   },
-  // ── Theme STRUCTURAL markers (T-081b review round 3 / round 4) ────────────
-  // Not any theme's name: the labels the product uses to TELL themes apart —
-  // the built-in / custom group headings (the quick picker's <optgroup> labels
-  // AND, since round 4, the Settings › Theme list's group headings and row
-  // chips: ONE semantic source for both surfaces), and the tag the downloaded
-  // copy of a built-in theme is named with. Non-overridable for the same reason
-  // as themeIdentity:
-  //   * an overridable group heading lets a pack rename 「自訂」 to 「內建」 and the
-  //     grouping becomes a lie;
-  //   * an overridable copy tag lets a pack put bidi or 200 characters in it, so
-  //     the built-in theme's download button emits a file the product itself
-  //     then REFUSES to import (theme names cap at 80 and reject bidi).
-  // The generator (scripts/gen-message-keys.mjs) skips this whole subtree — the
-  // same structural rule themeIdentity uses, not a second hand-kept key list.
+  // ── The 內建 / 自訂 labels + the downloaded-copy tag ───────────────────────
+  // Not any theme's name: the labels the Settings › Theme list groups rows under
+  // and the tag a downloaded copy of a built-in theme is named with. ONE
+  // semantic source, shared by every surface that says 內建 / 自訂.
+  //
+  // Rounds 3–4 held them non-overridable so a pack could not swap 內建 and 自訂.
+  // Round 8 gave them back — owner: 「這是大家自己用的,自己要怎麼搞我們不用特別管,
+  // 我們只要確定主題名稱不會隨著主題改變就好」. They are ordinary overridable wording;
+  // themeIdentity above is the only subtree a pack cannot reach.
   themeMarkers: {
     builtinGroup: "Built-in",
     customGroup: "Custom",

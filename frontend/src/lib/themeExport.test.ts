@@ -146,11 +146,12 @@ describe("exportOfficeBaseTheme", () => {
   });
 
   it("downloads the built-in as a COPY, so the file it produces imports back", () => {
-    // A custom bundle may no longer claim a built-in's display name (two 辦公室
-    // rows in the picker is the defect that rule removes). The 下載 on the
-    // built-in row therefore exports the name composed by msg.themeCopyName —
-    // 辦公室(副本) — NOT the built-in's own name, or the product would hand the
-    // owner a file it then refuses to take back.
+    // 下載 on the built-in row exports the name composed by msg.themeCopyName —
+    // 辦公室(副本) — so the downloaded file lands as its OWN row rather than a
+    // second one spelled exactly like the shipped theme. Round 8 made the bare
+    // name legal too (the owner does not want duplicates policed), so both
+    // spellings must import back cleanly; what this pins is that the copy is
+    // still marked as a copy, and that neither form is refused.
     const el = freshRoot();
     el.style.setProperty("--color-accent", "#0af");
     const copy = makeMessages(zh, "zh").themeCopyName(zh.themeIdentity.office);
@@ -161,11 +162,10 @@ describe("exportOfficeBaseTheme", () => {
       )
     ).toBe(true);
 
-    // …and the rule itself still bites: the built-in's bare name is refused.
     const res = parseImportedBundle(
       serializeBundle(exportComputedTheme("office-base", zh.themeIdentity.office, el))
     );
-    expect("error" in res).toBe(true);
+    expect("bundle" in res).toBe(true);
   });
 });
 

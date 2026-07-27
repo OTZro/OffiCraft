@@ -64,26 +64,27 @@
 /* The 內建 / 自訂 group heading. The list's grouping is STRUCTURE, not text on a
  * row — the twin of the quick picker's <optgroup> — so a theme can neither name
  * itself into the built-in group nor repaint its way out of the custom one.
+ * That guarantee lives in the RENDER (which group a row lands in) and in the
+ * non-overridable `themeMarkers` i18n subtree (what the heading says); neither
+ * depends on the colour.
  *
- * The colour is a NON-OVERRIDABLE --color-marker-* slot, not --color-text-muted
- * (T-081b review round 4 recheck, NIT-1). The heading's TEXT was already out of
- * a pack's reach, but its colour was not: --color-text-muted is pack-settable,
- * so a pack could set it to the page colour and both headings would vanish —
- * one of the two labels that tell 內建 rows from 自訂 ones, gone. Mixed toward
- * the marker surface for the muted weight the design wants; both ends of the
- * mix are slots no pack can re-value, so the heading is always visible.
+ * The colour is the ordinary pack-settable --color-text-muted (T-081b round 8,
+ * owner ruling). It briefly read a reserved marker slot so a pack could not
+ * paint the heading into the page — but that slot was valued for the
+ * built-in DARK theme, so under a light pack it measured 1.98:1 and the heading
+ * was near-invisible for everybody, not just for a hostile pack. The owner chose
+ * to let the pack decide, knowing a pack can now make the heading unreadable;
+ * that is the pack's own muted colour failing on its own background.
  *
- * 65% lands on #9fa0a7 against the built-in theme's #9aa0ad, i.e. the same
- * muted grey to within a couple of levels per channel.
- *
- * At 11px this is normal-size text, so it must clear WCAG AA (≥4.5:1) — it is
- * now the ONLY thing on screen that says which kind a row is (the per-row
- * 內建/自訂 chips are gone; the heading already said it). */
+ * At 11px this is normal-size text and should clear WCAG AA (≥4.5:1) — it is the
+ * ONLY thing on screen that says which kind a row is (the per-row 內建/自訂 chips
+ * are gone; the heading already said it). The visual guard measures it under the
+ * built-in theme. */
 .ts-group-head {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
-  color: color-mix(in srgb, var(--color-marker-fg) 65%, var(--color-marker-surface));
+  color: var(--color-text-muted);
   padding: 0 2px;
 }
 

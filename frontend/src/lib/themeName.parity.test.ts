@@ -84,7 +84,7 @@ describe("theme name validation · Go/TS parity", () => {
       "mongolian_vowel_sep", // Cf
       "line_sep_u2028", // Zl
       "para_sep_u2029", // Zp
-      "nbsp_pad_office", // Zs — normalised, then caught as a reserved name
+      "nbsp_pad_office", // Zs — normalised away, then an ordinary name
       "ideographic_space_pad", // Zs — same
       "ogham_space", // Zs — same
       "ideographic_space_inner", // Zs — normalised, and LEGAL: 「深海　之夜」
@@ -131,18 +131,17 @@ describe("theme name validation · Go/TS parity", () => {
         /^REJECT: name must not contain control, formatting, private-use, surrogate or line\/paragraph separator characters$/
       );
     }
-    // Zs is NORMALISED to U+0020, not rejected (round 4 recheck, SHOULD-3), so
-    // the Zs cases are pinned on the verdict they now get instead — which is the
-    // point of the change: 「　辦公室　」 is still refused, and the refusal now says
-    // WHY (辦公室 is a built-in's name) rather than naming a character class the
-    // user cannot see.
+    // Zs is NORMALISED to U+0020, not rejected (round 4 recheck, SHOULD-3), and
+    // round 8 removed the reserved-name rule that caught these on the way out —
+    // 「　辦公室　」 is simply a name the user chose. Both ends must agree on that,
+    // which is what the parity check above measures; here it is pinned outright.
     for (const k of [
       "nbsp_pad_office",
       "ideographic_space_pad",
       "ideographic_space_office",
       "ogham_space",
     ]) {
-      expect(verdict[k], k).toMatch(/^REJECT: name .* is reserved for a built-in theme$/);
+      expect(verdict[k], k).toBe("ACCEPT");
     }
     for (const k of ["nbsp_only", "ideographic_space_only"]) {
       expect(verdict[k], k).toMatch(/^REJECT: name must be 1\.\./);
@@ -156,6 +155,18 @@ describe("theme name validation · Go/TS parity", () => {
       "emoji_simple",
       "emoji_vs16_only",
       "variation_sel_office", // U+FE0F is Mn — a legal emoji spelling, see below
+      // The names round 8 freed: 「辦公室」/「Office」 and every trim/case/NFD
+      // spelling of them are ordinary custom-theme names now.
+      "builtin_zh",
+      "builtin_en",
+      "builtin_upper",
+      "builtin_pad_ascii",
+      "builtin_dotted_I",
+      "builtin_fullwidth",
+      "builtin_kelvin",
+      "nfd_office",
+      "spoof_builtin_marker_zh",
+      "spoof_builtin_marker_en",
       "new_theme_zh",
       "new_theme_en",
       "ideographic_space_inner", // 「深海　之夜」 — what a full-width IME emits

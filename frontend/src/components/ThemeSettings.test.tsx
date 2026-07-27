@@ -10,7 +10,6 @@ import { fileURLToPath } from "node:url";
 import { render, fireEvent, within, act } from "@testing-library/react";
 import { THEME_COLOR_TOKENS } from "../styles/themeTokens.generated";
 import { MESSAGE_KEYS } from "../i18n/messageKeys.generated";
-import { validateThemeBundle } from "../lib/themeBundle";
 import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
 import { makeMessages } from "../i18n/compose";
@@ -124,108 +123,86 @@ describe("ThemeSettings · import", () => {
     expect(custom.id).not.toBe(builtin.id);
   });
 
-  it("cannot be made to show two identical built-in rows by a theme's wording, colours or name", async () => {
-    // The whole round-3 BLOCKER-2 / round-4 BLOCKER-A recipe in one go: forge
-    // the marker TEXT through `wording`, forge the marker COLOUR through the
-    // tokens the markers used to read, and name the pack so it renders as the
-    // built-in.
+  it("keeps the built-in row's own name when a pack forges everything else", async () => {
+    // The round-3/4 recipe, re-pointed at what round 8 left standing. A pack may
+    // now re-word the 內建 / 自訂 labels, re-value every colour the headings read,
+    // and call ITSELF 辦公室 — the owner does not want any of that policed
+    // (「這是大家自己用的,自己要怎麼搞我們不用特別管」). The ONE thing it must not
+    // reach is the BUILT-IN theme's own name: that was the original bug — a
+    // 「精靈村」 pack renamed the shipped theme too and there was no way back to it.
     setToken("owner-token");
     const utils = await renderManage();
     await importBundle(utils, {
       id: "forge",
-      name: `${zh.themeIdentity.office}(${zh.themeMarkers.builtinGroup})`,
-      colors: {
-        "--color-seg-fill": "#8b7ae8",
-        "--color-icon-violet-bg": "#8b7ae8",
-      },
+      name: zh.themeIdentity.office,
+      colors: { "--color-text-muted": "#8b7ae8" },
       // EVERY overridable message code re-valued to a sentinel, plus a direct
-      // shot at the marker subtree. If the headings or the chips read any key a
+      // shot at the theme-identity subtree. If the built-in row reads any key a
       // `wording` overlay can reach, the sentinel shows up on screen.
       wording: {
         zh: {
           ...Object.fromEntries(MESSAGE_KEYS.map((k) => [k, SENTINEL])),
-          "themeMarkers.builtinGroup": zh.themeMarkers.customGroup,
-          "themeMarkers.customGroup": zh.themeMarkers.builtinGroup,
+          "themeIdentity.office": SENTINEL,
         },
       },
     });
-    const forged = await utils.findByText(
-      `${zh.themeIdentity.office}(${zh.themeMarkers.builtinGroup})`
-    );
+    const rowsNamedOffice = () =>
+      Array.from(utils.container.querySelectorAll(".ts-row")).filter((r) =>
+        r.textContent?.includes(zh.themeIdentity.office)
+      );
+    // Two rows called 辦公室 is now a legal state, and the import went through.
+    expect(rowsNamedOffice().length).toBe(2);
+
     // Make the forging pack the ACTIVE theme, so its wording overlay is live.
     await act(async () => {
-      fireEvent.click(forged);
+      fireEvent.click(rowsNamedOffice()[1].querySelector("button.ts-pick")!);
       await new Promise((r) => setTimeout(r, 0));
     });
+    // The overlay really IS live — without this the assertion below would pass
+    // on a page where no wording was applied at all.
+    expect(utils.getByTestId("ts-group-builtin").textContent).toBe(SENTINEL);
 
-    // Only the STRUCTURE marks a row now, so the forgery has exactly one thing
-    // left to beat: which group the row landed in.
-    expect(utils.container.querySelectorAll(".ts-tag").length).toBe(0);
-
-    // The headings are UNCHANGED — the wording overlay was dropped, so 內建 still
-    // means 內建 …
-    expect(utils.getByTestId("ts-group-builtin").textContent).toBe(
-      zh.themeMarkers.builtinGroup
-    );
-    expect(utils.getByTestId("ts-group-custom").textContent).toBe(
-      zh.themeMarkers.customGroup
-    );
-    // … and the forged row sits under 自訂, not under 內建, whatever it called
-    // itself.
-    expect(forged.closest(".ts-list")?.querySelector(".ts-group-head")?.textContent).toBe(
-      zh.themeMarkers.customGroup
-    );
-    // The 內建 group holds the shipped office row and NOTHING else — a pack
-    // cannot add a row to it.
+    // …and yet the built-in row STILL says 辦公室 — the overlay never reached
+    // themeIdentity, so the shipped theme is still findable and still
+    // selectable, which is the whole of the guarantee that remains.
     const builtinList = utils.getByTestId("ts-group-builtin").closest(".ts-list");
     const builtinRows = Array.from(builtinList?.querySelectorAll(".ts-row") ?? []);
     expect(builtinRows.length).toBe(1);
     expect(builtinRows[0].textContent).toContain(zh.themeIdentity.office);
-    expect(builtinRows[0].contains(forged)).toBe(false);
+    expect(builtinRows[0].textContent).not.toContain(SENTINEL);
+  });
 
-    // The group headings draw their colour from the non-overridable slots, so
-    // the tokens a pack can re-value cannot reach them (round 4 recheck,
-    // NIT-1): the heading read the pack-settable --color-text-muted, so a pack
-    // could set that to the page colour and make BOTH 內建/自訂 headings
-    // disappear.
+  it("paints the group headings with a pack-settable colour token", async () => {
+    // Round 4 pointed .ts-group-head at a reserved --color-marker-* slot so a
+    // pack could not hide the headings. The slot was valued for the built-in
+    // DARK theme, so under a light pack the headings measured 1.98:1 and were
+    // near-invisible for everyone — the guard cost more than it bought. Round 8
+    // sends the colour back through the ordinary theme slot the rest of the
+    // muted text uses, and drops the reserved family entirely.
     const css = readFileSync(
       join(dirname(fileURLToPath(import.meta.url)), "theme-settings.css"),
       "utf8"
     );
-    const blockOf = (selector: string) => {
-      const at = css.indexOf(`${selector} {`);
-      expect(at, selector).toBeGreaterThan(-1);
-      return css.slice(at, css.indexOf("}", at) + 1);
-    };
-    const marked = blockOf(".ts-group-head");
-    for (const token of [
-      "--color-seg-fill",
-      "--color-icon-violet-bg",
-      "--color-bg",
-      "--color-text",
-      "--color-text-muted",
-    ]) {
-      expect(marked, marked).not.toContain(`var(${token})`);
+    const at = css.indexOf(".ts-group-head {");
+    expect(at).toBeGreaterThan(-1);
+    const block = css.slice(at, css.indexOf("}", at) + 1);
+    expect(block, block).toContain("var(--color-text-muted)");
+    // Every var() it reads is a token a bundle may re-value…
+    const read = (block.match(/var\(\s*(--[\w-]+)/g) ?? []).map((v) =>
+      v.replace(/var\(\s*/, "")
+    );
+    expect(read.length).toBeGreaterThan(0);
+    for (const token of read) {
+      expect(THEME_COLOR_TOKENS, token).toContain(token);
     }
-    for (const token of marked.match(/var\(\s*(--[\w-]+)/g) ?? []) {
-      expect(token.replace(/var\(\s*/, ""), marked).toMatch(/^--color-marker-/);
-    }
-  });
-
-  it("keeps the marker colour slots out of the pack-settable token whitelist", async () => {
-    // The colour half of BLOCKER-A. --color-marker-* is excluded by NAME at the
-    // generator, so a bundle naming one is not a theme colour token at all.
+    // …and the reserved family is gone from the stylesheet and the whitelist
+    // alike, so nothing is left half-removed.
+    expect(css).not.toContain("--color-marker-");
     for (const token of THEME_COLOR_TOKENS) {
       expect(token.startsWith("--color-marker-")).toBe(false);
     }
-    expect(
-      validateThemeBundle({
-        id: "forge",
-        name: "Forge",
-        colors: { "--color-marker-fg": "#6076ba" },
-      })
-    ).toMatch(/is not a theme colour token/);
   });
+
 
   it("imports a pack with unrecognised wording codes and warns which were skipped", async () => {
     setToken("owner-token");

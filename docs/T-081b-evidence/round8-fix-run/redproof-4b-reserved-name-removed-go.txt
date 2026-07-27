@@ -1,0 +1,11 @@
+--- FAIL: TestValidateThemeBundles (0.00s)
+    --- FAIL: TestValidateThemeBundles/rejects_a_name_carrying_control,_formatting,_private-use,_surrogate_or_line/paragraph_separator_characters (0.00s)
+        theme_bundle_test.go:78: name "\u00a0Office\u00a0" must be accepted, got custom_themes[0]: name "Office" is reserved for a built-in theme
+    --- FAIL: TestValidateThemeBundles/accepts_a_name_that_matches_the_built-in_theme's_display_name (0.00s)
+        theme_bundle_test.go:104: name "辦公室" must be accepted, got custom_themes[0]: name "辦公室" is reserved for a built-in theme
+    --- FAIL: TestValidateThemeBundles/accepts_every_legitimate_name_shape,_including_the_new-theme_default (0.00s)
+        theme_bundle_test.go:150: name "OFFİCE" must be accepted, got custom_themes[0]: name "OFFİCE" is reserved for a built-in theme
+2026/07/27 23:34:16 [theme] custom_themes[0]: dropped 1 unrecognised wording code(s): "profile.themeOffice"
+FAIL
+FAIL	ocserverd	0.319s
+FAIL

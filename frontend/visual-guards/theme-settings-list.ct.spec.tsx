@@ -1,12 +1,14 @@
 // T-3738 visual guards for 設定 › 主題管理 (ThemeSettings list view):
 //
-//   ① the GROUP HEADINGS (內建 / 自訂) clear WCAG AA (≥4.5:1), and no per-row tag
-//      is rendered at all — the heading is the only 內建/自訂 marker now, so its
-//      legibility is the whole marker's legibility. Its colour resolves through
-//      color-mix(), so the shipped contrast is a COMPUTED-COLOUR fact jsdom
-//      cannot see. We sample the rendered foreground/background colour off each
-//      heading, composite it down to an opaque colour, and compute the WCAG
-//      contrast ratio.
+//   ① the GROUP HEADINGS (內建 / 自訂) clear WCAG AA (≥4.5:1) UNDER THE BUILT-IN
+//      THEME, and no per-row tag is rendered at all — the heading is the only
+//      內建/自訂 label now, so its legibility is the whole label's legibility.
+//      The shipped contrast is a COMPUTED-COLOUR fact jsdom cannot see: we
+//      sample the rendered foreground/background colour off each heading,
+//      composite it down to an opaque colour, and compute the WCAG ratio.
+//      Round 8 pointed the colour at the pack-settable --color-text-muted
+//      (owner: a pack may decide its own colours), so this measures what WE
+//      ship, not what an imported pack does to itself.
 //   ② the built-in office row and a custom row line up their trailing action
 //      column at 390 and 1280 — the built-in row carries the SAME three icon
 //      buttons for alignment; its download is active (owner: 辦公室主題不用擋

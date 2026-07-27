@@ -1,0 +1,62 @@
+
+ RUN  v2.1.9 /Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend
+
+ ❯ src/i18n/messageKeys.theme-identity.test.ts (5 tests | 1 failed) 3ms
+   × MESSAGE_KEYS > does let a theme bundle re-word the 內建 / 自訂 labels 2ms
+     → themeMarkers.builtinGroup: expected false to be true // Object.is equality
+ ❯ src/lib/themeBundle.test.ts (42 tests | 1 failed) 10ms
+   × validateWording > keeps a themeMarkers override and still drops a theme's identity 3ms
+     → expected [ 'settings.themeCopyTag', …(4) ] to deeply equal [ 'settings.themeCopyTag', …(1) ]
+ ✓ src/components/ThemeSettings.test.tsx (18 tests) 2162ms
+   ✓ ThemeSettings · outer-canvas background > stores a non-default lay-down mode and drops it again on tile 514ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/i18n/messageKeys.theme-identity.test.ts > MESSAGE_KEYS > does let a theme bundle re-word the 內建 / 自訂 labels
+AssertionError: themeMarkers.builtinGroup: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ src/i18n/messageKeys.theme-identity.test.ts:51:72
+     49|     // really gone rather than half-removed on one side of the wire.
+     50|     for (const name of Object.keys(zh.themeMarkers)) {
+     51|       expect(keys.has(`themeMarkers.${name}`), `themeMarkers.${name}`)…
+       |                                                                        ^
+     52|     }
+     53|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/lib/themeBundle.test.ts > validateWording > keeps a themeMarkers override and still drops a theme's identity
+AssertionError: expected [ 'settings.themeCopyTag', …(4) ] to deeply equal [ 'settings.themeCopyTag', …(1) ]
+
+- Expected
++ Received
+
+  Array [
+    "settings.themeCopyTag",
+    "themeIdentity.office",
++   "themeMarkers.builtinGroup",
++   "themeMarkers.copyTag",
++   "themeMarkers.customGroup",
+  ]
+
+ ❯ src/lib/themeBundle.test.ts:573:28
+    571|     const skipped: string[] = [];
+    572|     expect(validateWording(wording, "theme", skipped)).toBeNull();
+    573|     expect(skipped.sort()).toEqual(["settings.themeCopyTag", "themeIde…
+       |                            ^
+    574|     expect(wording.zh["themeMarkers.builtinGroup"]).toBe("自訂");
+    575|     expect(wording.zh["themeMarkers.copyTag"]).toBe("備份");
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+ Test Files  2 failed | 1 passed (3)
+      Tests  2 failed | 63 passed (65)
+   Start at  23:34:00
+   Duration  2.78s (transform 196ms, setup 36ms, collect 300ms, tests 2.18s, environment 668ms, prepare 130ms)
+

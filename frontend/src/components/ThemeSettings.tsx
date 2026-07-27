@@ -1093,8 +1093,8 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
       )}
 
       {/* 內建 / 自訂 is carried by the GROUP STRUCTURE ALONE, the twin of the
-       * quick picker's <optgroup> (ProfileDropdown.tsx) and fed by the same
-       * non-overridable themeMarkers subtree. The rows carry no per-row chip:
+       * quick picker's ordering (ProfileDropdown.tsx) and fed by the same
+       * themeMarkers wording. The rows carry no per-row chip:
        * a chip was forgeable on all three of its signals (its TEXT, its COLOUR
        * and the row's own NAME), and once the heading says it, a chip repeating
        * it adds nothing a theme could not already imitate. Which group a row

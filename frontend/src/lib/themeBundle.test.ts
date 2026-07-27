@@ -15,9 +15,7 @@ import {
   validateThemeBundle,
   validateThemeBundles,
   validateWording,
-  isBuiltinThemeName,
-  normalizeThemeName,
-  RESERVED_THEME_IDS,
+  trimThemeName,
   validateFonts,
   isValidDisplayTheme,
   MAX_AVATAR_BYTES,
@@ -27,7 +25,6 @@ import { THEME_COLOR_TOKENS } from "../styles/themeTokens.generated";
 import { SAFE_FONT_FAMILIES } from "../styles/themeFonts.generated";
 import {
   MESSAGE_KEYS,
-  THEME_IDENTITY_NAMES,
 } from "../i18n/messageKeys.generated";
 
 const aFontStack = SAFE_FONT_FAMILIES[0].stack;
@@ -137,17 +134,18 @@ describe("validateThemeBundle", () => {
       );
     }
     // Zs is NOT in that set — every space separator is NORMALISED to U+0020
-    // first (round 4 recheck, SHOULD-3). A Zs-padded built-in name is still
-    // refused, but now by the rule that can name the actual reason: a user who
-    // typed a full-width space is told 「辦公室」 is reserved rather than that
-    // their name carries "non-ASCII space characters".
+    // first (round 4 recheck, SHOULD-3), so these are ordinary names that simply
+    // lose their padding. Round 8 removed the reserved-name rule that used to
+    // catch them on the way out; what the assertion is about now is the trim —
+    // the accepted name must be the normalised one, not the padded bytes.
     for (const name of [
       "\u00A0Office\u00A0", // NO-BREAK SPACE (Zs) — renders as 「Office」
       "\u3000辦公室\u3000", // IDEOGRAPHIC SPACE (Zs) — renders as 「辦公室」
       "\u1680Office", // OGHAM SPACE MARK (Zs) — blank in most fonts
     ]) {
-      expect(validateThemeBundle({ ...ok, name }), JSON.stringify(name)).toMatch(
-        /reserved for a built-in theme/
+      expect(validateThemeBundle({ ...ok, name }), JSON.stringify(name)).toBeNull();
+      expect(trimThemeName(name), JSON.stringify(name)).not.toMatch(
+        /[\u00A0\u3000\u1680]/
       );
     }
     // …and a name that is nothing BUT spaces has no name left after the
@@ -159,20 +157,20 @@ describe("validateThemeBundle", () => {
     }
   });
 
-  it("rejects a name that claims the built-in theme's display name", () => {
-    // Language-independent: both spellings of the ONE built-in are blocked, and
-    // trimming + case-folding closes the trivial dodges. The id is guarded
-    // separately (RESERVED_THEME_IDS) — this is the guard on what the owner SEES.
-    // The fold is ASCII-ONLY on BOTH sides on purpose (T-081b review round 3,
-    // SHOULD-6): Go's simple case mapping sends U+0130 (İ) to 'i' while JS's full
-    // mapping sends it to "i\u0307", so "OFF\u0130CE" was rejected by the server and
-    // accepted by the client. Neither side folds it now, so 「OFFİCE」 is an
-    // ordinary claimable name (see the accept table below) and the two agree.
+  it("accepts a name that matches the built-in theme's display name", () => {
+    // Until round 8 these were rejected: a pack calling itself 辦公室 put a second
+    // 辦公室 row in the picker. The owner dropped the rule — 「這是大家自己用的,自己
+    // 要怎麼搞我們不用特別管」 — so a duplicate display name is the user's own
+    // business now. The built-in's OWN name is what still cannot move: it comes
+    // from the non-overridable themeIdentity subtree, so the shipped row keeps
+    // saying 辦公室 whatever a pack calls itself. Only the NAME is free — the id
+    // stays reserved (RESERVED_THEME_IDS).
     for (const name of ["辦公室", "Office", "office", "  OFFICE  ", " 辦公室 "]) {
-      expect(validateThemeBundle({ ...ok, name }), name).toMatch(
-        /reserved for a built-in theme/
-      );
+      expect(validateThemeBundle({ ...ok, name }), name).toBeNull();
     }
+    expect(validateThemeBundle({ ...ok, id: "office", name: "Whatever" })).toMatch(
+      /is reserved for a built-in theme/
+    );
   });
 
   it("accepts every legitimate name shape, including the new-theme default", () => {
@@ -554,29 +552,27 @@ describe("validateWording", () => {
     expect(skipped.sort()).toEqual(["profile.themeOffice", "typo.not.a.key"]);
   });
 
-  it("drops an override of the theme structural markers", () => {
-    // SHOULD-5: while `settings.themeCopyTag` was overridable, a pack could put
-    // bidi or 200 characters into it and the built-in theme's DOWNLOAD button
-    // composed a file name the product's own importer then refused. The tag moved
-    // into the non-overridable `themeMarkers` subtree, so an overlay aiming at
-    // either the old or the new path is dropped like any unknown code.
+  it("keeps a themeMarkers override and still drops a theme's identity", () => {
+    // Round 8 handed the 內建 / 自訂 labels and the 副本 tag back to the pack
+    // (owner: 「自己要怎麼搞我們不用特別管」), so an overlay aiming at themeMarkers.*
+    // now SURVIVES. The one code that must still be dropped is a theme's own
+    // name — themeIdentity.* is the single remaining exclusion, and
+    // settings.themeCopyTag is the tag's dead pre-round-3 path.
     const wording = {
       zh: {
         [aKey]: "文字",
         "settings.themeCopyTag": "副本\u202E",
-        "themeMarkers.copyTag": "x".repeat(200),
+        "themeMarkers.copyTag": "備份",
         "themeMarkers.builtinGroup": "自訂",
         "themeMarkers.customGroup": "內建",
+        "themeIdentity.office": "精靈村",
       },
     };
     const skipped: string[] = [];
     expect(validateWording(wording, "theme", skipped)).toBeNull();
-    expect(skipped.sort()).toEqual([
-      "settings.themeCopyTag",
-      "themeMarkers.builtinGroup",
-      "themeMarkers.copyTag",
-      "themeMarkers.customGroup",
-    ]);
+    expect(skipped.sort()).toEqual(["settings.themeCopyTag", "themeIdentity.office"]);
+    expect(wording.zh["themeMarkers.builtinGroup"]).toBe("自訂");
+    expect(wording.zh["themeMarkers.copyTag"]).toBe("備份");
     expect(wording.zh[aKey]).toBe("文字");
   });
 
@@ -623,63 +619,32 @@ describe("validateThemeBundles", () => {
   });
 });
 
-describe("normalizeThemeName", () => {
-  it("trims ASCII whitespace only and folds A–Z only", () => {
+describe("trimThemeName", () => {
+  it("normalises every Zs to U+0020 and trims ASCII whitespace only", () => {
     // The twin table lives in server/ocserverd/theme_bundle_test.go
-    // (TestNormalizeThemeName). The two validators disagreed on 「\uFEFF辦公室」 and on
-    // 「OFF\u0130CE」 because each called its own language's trim + lowercase; the
-    // fix is a normaliser identical BY CONSTRUCTION, so it is pinned character by
-    // character rather than through a validator verdict.
+    // (TestTrimThemeName). The two validators disagreed on 「\uFEFF辦公室」 because
+    // each called its own language's trim; the fix is a normaliser identical BY
+    // CONSTRUCTION, so it is pinned character by character rather than through a
+    // validator verdict. Case is NOT folded — round 8 removed the name
+    // comparison that needed a fold, and the two sides' case mappings disagree.
     for (const [input, want] of [
-      ["Office", "office"],
-      ["  OFFICE  ", "office"],
-      ["\tOFFICE\r\n", "office"],
+      ["Office", "Office"],
+      ["  OFFICE  ", "OFFICE"],
+      ["\tOFFICE\r\n", "OFFICE"],
       ["辦公室", "辦公室"],
-      // toLowerCase() would fold these; an ASCII fold must not.
-      ["OFF\u0130CE", "off\u0130ce"],
+      ["OFF\u0130CE", "OFF\u0130CE"],
       ["\uFF2F\uFF26\uFF26\uFF29\uFF23\uFF25", "\uFF2F\uFF26\uFF26\uFF29\uFF23\uFF25"],
-      ["\u212ANIGHT", "\u212Anight"],
+      ["\u212ANIGHT", "\u212ANIGHT"],
       // Every Zs is folded onto U+0020 BEFORE the ASCII trim, so a full-width
-      // padded name normalises exactly like an ASCII-padded one (round 4
-      // recheck, SHOULD-3) — which is what makes 「　辦公室　」 collide with the
-      // built-in and be told so.
+      // padded name trims exactly like an ASCII-padded one (round 4 recheck,
+      // SHOULD-3).
       ["\u3000辦公室", "辦公室"],
       ["辦公室\u3000", "辦公室"],
-      ["\u00A0Office", "office"],
+      ["\u00A0Office", "Office"],
       ["深海\u3000之夜", "深海 之夜"],
-      ["\u1680Deep\u2000Ocean\u3000", "deep ocean"],
+      ["\u1680Deep\u2000Ocean\u3000", "Deep Ocean"],
     ] as const) {
-      expect(normalizeThemeName(input), JSON.stringify(input)).toBe(want);
-    }
-  });
-});
-
-describe("isBuiltinThemeName", () => {
-  it("derives the banned set from the locales, not from two literals", () => {
-    // The twin of TestIsBuiltinThemeName in server/ocserverd/theme_bundle_test.go
-    // (NIT-8). The banned set is THEME_IDENTITY_NAMES intersected with
-    // RESERVED_THEME_IDS, and `THEME_IDENTITY_NAMES[id] ?? []` is a SILENT
-    // failure shape: give a future built-in a kebab-case theme id while its i18n
-    // key stays camelCase and the intersection is empty, so the client guard
-    // stops guarding while nothing else changes.
-    for (const id of RESERVED_THEME_IDS) {
-      const names = THEME_IDENTITY_NAMES[id] ?? [];
-      expect(
-        names.length,
-        `built-in theme "${id}" has no display name in THEME_IDENTITY_NAMES — ` +
-          `the name guard would silently pass for it`
-      ).toBeGreaterThan(0);
-      for (const name of names) {
-        expect(isBuiltinThemeName(name), name).toBe(true);
-      }
-    }
-    // …and an id OUTSIDE the reserved set stays claimable: themeIdentity.newTheme
-    // is the default name a NEW custom theme is created with.
-    for (const [id, names] of Object.entries(THEME_IDENTITY_NAMES)) {
-      if ((RESERVED_THEME_IDS as readonly string[]).includes(id)) continue;
-      for (const name of names) {
-        expect(isBuiltinThemeName(name), `themeIdentity.${id} = ${name}`).toBe(false);
-      }
+      expect(trimThemeName(input), JSON.stringify(input)).toBe(want);
     }
   });
 });

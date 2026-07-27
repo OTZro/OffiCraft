@@ -13,6 +13,11 @@
 // any theme name reappears in MESSAGE_KEYS — via a reverted generator rule, a
 // theme name moved back out of the subtree, or a new built-in theme whose name
 // was put somewhere overridable.
+//
+// Round 8 narrowed the guarantee to exactly this and nothing else: the 內建 /
+// 自訂 labels and a custom theme's freedom to reuse the built-in's name were
+// both given back to the user, so this file also pins that they really are
+// overridable now (owner: 「我們只要確定主題名稱不會隨著主題改變就好」).
 
 import { describe, it, expect } from "vitest";
 import { MESSAGE_KEYS } from "./messageKeys.generated";
@@ -36,26 +41,18 @@ describe("MESSAGE_KEYS", () => {
     expect(keys.has("profile.themeNewName")).toBe(false);
   });
 
-  it("does not let a theme bundle forge the markers that tell themes apart", () => {
-    // T-081b review round 3, SHOULD-5. `settings.themeCopyTag` WAS overridable,
-    // and it is what the built-in theme's download button names the file with —
-    // a pack could set it to a bidi-bearing or 200-character value and the
-    // product then emitted a bundle its own importer refuses. The picker's
-    // built-in / custom group headings are the same class of string one door
-    // along: overridable headings can be swapped so the grouping lies.
+  it("does let a theme bundle re-word the 內建 / 自訂 labels", () => {
+    // Rounds 3–4 held these non-overridable so a pack could not swap 內建 and
+    // 自訂 and make the grouping lie. Round 8 gave them back — owner ruling:
+    // 「這是大家自己用的,自己要怎麼搞我們不用特別管,我們只要確定主題名稱不會隨著
+    // 主題改變就好」. They are ordinary wording, and this asserts the exclusion is
+    // really gone rather than half-removed on one side of the wire.
     for (const name of Object.keys(zh.themeMarkers)) {
-      expect(
-        keys.has(`themeMarkers.${name}`),
-        `themeMarkers.${name} is a STRUCTURAL marker — a theme pack that can ` +
-          `re-word it forges the very distinction the marker exists to draw`
-      ).toBe(false);
+      expect(keys.has(`themeMarkers.${name}`), `themeMarkers.${name}`).toBe(true);
     }
-    // The pre-fix location, named explicitly, so moving the tag back under
-    // settings.* fails here rather than silently becoming overridable again.
-    expect(keys.has("settings.themeCopyTag")).toBe(false);
   });
 
-  it("keeps the theme markers present and non-empty in both languages", () => {
+  it("keeps the 內建 / 自訂 labels present and non-empty in both languages", () => {
     for (const dict of [zh, en]) {
       for (const value of Object.values(dict.themeMarkers)) {
         expect(value.length).toBeGreaterThan(0);

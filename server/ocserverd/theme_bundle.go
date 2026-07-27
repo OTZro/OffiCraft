@@ -70,9 +70,9 @@ var reservedThemeIDs = map[string]bool{"office": true}
 // review round 4, SHOULD-C). Round 3 listed six zero-width codepoints and every
 // unlisted member of the SAME categories walked straight through: U+00AD SOFT
 // HYPHEN, U+180E and the U+E00xx TAG block (all Cf, like the ZWSP that WAS
-// listed), U+2028/U+2029 (Zl/Zp), U+00A0 / U+1680 / U+3000 (Zs). Each of them
-// renders as — or renders away to — a built-in theme's name, which is exactly
-// what isBuiltinThemeName exists to stop.
+// listed), U+2028/U+2029 (Zl/Zp), U+00A0 / U+1680 / U+3000 (Zs). Each of them is
+// invisible in the rendered name, so two names that look identical on screen can
+// differ in bytes — which is how bad data gets in.
 //
 //	Cc control · Cf format (bidi marks, ZWSP/ZWNJ/ZWJ, WORD JOINER, BOM,
 //	SOFT HYPHEN, the TAG block) · Co private use · Cs surrogate ·
@@ -152,49 +152,6 @@ func trimThemeName(s string) string {
 	return strings.Trim(normalizeThemeSpaces(s), "\t\n\v\f\r ")
 }
 
-// normalizeThemeName is the comparison form of a theme display name: ASCII
-// trimmed and ASCII case-folded, so "  office " and "Office" both collide with
-// the built-in. Only A–Z is folded — NOT strings.ToLower, whose simple case
-// mapping sends U+0130 (İ) to 'i' while JS's full case mapping sends it to
-// "i̇", so "OFFİCE" was rejected by the server and accepted by the client.
-// An ASCII-only fold is identical BY CONSTRUCTION on both sides; the cost is
-// that a non-ASCII case dodge (「ＯＦＦＩＣＥ」) is not folded, which is the same
-// homoglyph class this rule has never claimed to cover.
-// The twin of normalizeThemeName in frontend/src/lib/themeBundle.ts.
-func normalizeThemeName(s string) string {
-	var b strings.Builder
-	for _, r := range trimThemeName(s) {
-		if r >= 'A' && r <= 'Z' {
-			r += 'a' - 'A'
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
-
-// isBuiltinThemeName reports whether name claims a BUILT-IN theme's display
-// name, in any UI language. The id is already guarded by reservedThemeIDs; this
-// is the guard on what the owner SEES — without it a pack called 「辦公室」 puts a
-// second 辦公室 row in the picker and the shipped theme becomes unfindable.
-//
-// The names are DERIVED: themeIdentityNames (generated from the i18n locales)
-// intersected with reservedThemeIDs, so the rule is language-independent and a
-// future built-in is covered the moment its name and id are added. The
-// intersection is also what keeps themeIdentityNames["newTheme"] claimable —
-// that is the default name a NEW custom theme gets, not a theme's identity.
-// The twin of isBuiltinThemeName in frontend/src/lib/themeBundle.ts.
-func isBuiltinThemeName(name string) bool {
-	norm := normalizeThemeName(name)
-	for id := range reservedThemeIDs {
-		for _, builtin := range themeIdentityNames[id] {
-			if normalizeThemeName(builtin) == norm {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // colorInjectionMarkers are structure-breaking substrings a concrete colour can
 // never legitimately contain. The allowlist grammar already rejects every one
 // of them; this second pass exists only to return a SPECIFIC error (so the
@@ -256,10 +213,6 @@ func validateThemeBundles(bundles []ThemeBundleDTO) error {
 			return fmt.Errorf(
 				"%s: name must not contain control, formatting, private-use, surrogate or line/paragraph separator characters",
 				where)
-		}
-		if isBuiltinThemeName(b.Name) {
-			return fmt.Errorf(
-				"%s: name %q is reserved for a built-in theme", where, name)
 		}
 		if n := len(b.Colors); n < minThemeColors || n > maxThemeColors {
 			return fmt.Errorf(
