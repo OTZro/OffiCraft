@@ -175,14 +175,19 @@ contract is a CI guard over our own payloads
 (`cli/ocwarden/telemetry_wire_test.go::TestWardenTelemetryValueTypesMatchFrozenSchema`) —
 it constrains the warden, not the wire.
 
-**Coverage, exactly**: the read-side marking is `hardware` ONLY, because that is the block
-the cockpit renders values from (MonitorPage's machine table joins registry rows for
-identity against THIS fold for every hardware cell; `MachineDTO` carries no hardware at
-all). `claude` and `runtimes` have the same wrong-type hole, still open and still SILENT —
-a number where `claude.version` belongs is a 200, stored, read back as null, with nothing
-on the wire saying a measurement was lost. Their only protection is the CI guard, which
-sees payloads OUR module builds and no others. Known, deliberately out of scope here,
-tracked separately.
+**Coverage, exactly** — the three declared blocks are protected by three different
+mechanisms, and conflating them sends the next reader to the wrong place:
+
+| block | wrong-typed nested VALUE | why |
+| --- | --- | --- |
+| `runtimes` | **400 at ingest**, per key (`installed` / `logged_in` / `version`) | pre-existing handler validation; the value never reaches the store, so a read-side marker there could never fire |
+| `hardware` | **200, stored, and NAMED on the read side** (`hardware_invalid`) | nothing is refused (owner ruling), so the read path is the only place it can surface — and it is the block the cockpit renders values from |
+| `claude` | **200, stored, read back as null, SILENT** | the remaining hole. Only guard is the warden-side CI test over OUR OWN payloads, so an older or third-party warden drifting there is invisible at runtime |
+
+That last row is known, deliberately out of scope here, and tracked separately. The
+read-side marking is `hardware` only because that is where the cockpit reads values from
+(MonitorPage's machine table joins registry rows for identity against THIS fold for every
+hardware cell; `MachineDTO` carries no hardware at all).
 
 ## 4. Reconcile producer — the decision surface
 

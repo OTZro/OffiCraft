@@ -63,23 +63,31 @@ import (
 // reporter" reddens a build instead of quietly emptying a column.
 //
 // ⚠️ AND THAT IS ALL IT BUYS — say it plainly, because a guard described more
-// broadly than it protects is how this repo has been bitten before. The blocks
-// below are covered UNEVENLY at runtime:
+// broadly than it protects is how this repo has been bitten before. Describing
+// it more NARROWLY is its own bug though: it sends the next person to build a
+// guard that can never fire. So, measured against the live handler rather than
+// assumed, the three declared blocks are covered by three different mechanisms:
 //
-//	hardware            — CI guard (here) + a READ-side marker. The server names
-//	                      the unreadable key on the wire (hardware_invalid), so a
-//	                      wrong-typed value from ANY warden, ours or not, is
-//	                      visible in the cockpit.
-//	claude / runtimes   — CI guard (here) and NOTHING ELSE. A wrong-typed
-//	                      claude.version or runtimes.codex.installed is still
-//	                      accepted with a 200, stored, and read back as null with
-//	                      nothing anywhere saying a value was lost. This test only
-//	                      sees payloads THIS module builds; an older or
-//	                      third-party warden drifting there stays invisible.
+//	runtimes  — FAIL-CLOSED AT INGEST already, and not by this change: the
+//	            handler type-checks installed / logged_in / version per key and
+//	            answers a flat 400 (`runtimes.codex.installed must be a
+//	            boolean`). A wrong-typed value never reaches the store. This
+//	            test is a second, earlier net for our own producers; runtimes is
+//	            NOT in the hole, and needs no read-side marker.
+//	hardware  — nothing is refused at ingest (owner ruling), so the READ side
+//	            carries it: the server names the unreadable key on the wire
+//	            (hardware_invalid), and a wrong-typed value from ANY warden,
+//	            ours or not, shows up in the cockpit.
+//	claude    — THIS TEST AND NOTHING ELSE. `claude: {"version": 9.9}` is
+//	            accepted with a 200, stored, and read back as null with nothing
+//	            anywhere saying a value was lost. This test only sees payloads
+//	            THIS module builds, so an older or third-party warden drifting
+//	            there stays invisible at runtime.
 //
-// That gap is known and deliberately unfixed (owner ruling: separate ticket, not
-// folded into this one). Do not read the green tick below as "the value layer is
-// covered" — it means "our producers are not the ones breaking it".
+// That last gap is known and deliberately unfixed (owner ruling: separate
+// ticket, not folded into this one). Do not read the green tick below as "the
+// value layer is covered" — for claude it means only "our producers are not the
+// ones breaking it".
 
 // schemaNode is as much of a JSON-Schema node as this guard needs: the declared
 // child properties, the declared value type(s), and whether the node is closed.

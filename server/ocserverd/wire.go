@@ -401,15 +401,27 @@ type monitoringMachineDTO struct {
 	// ARE mirrored across both DTOs — because both render them. The asymmetry
 	// follows from who renders what, not from anyone forgetting.)
 	//
-	// ⚠️ COVERAGE, stated so no one reads more protection into this than exists:
-	// this read-side marking covers `hardware` ONLY. The same wrong-type hole is
-	// still open and still SILENT on `claude` and `runtimes` — a claude.version
-	// sent as a number is stored and read back as null exactly as cpu_pct was,
-	// with nothing on the wire saying so. Those two have a CI guard
-	// (cli/ocwarden/telemetry_wire_test.go) that constrains OUR OWN producers and
-	// nothing else, so a third-party or older warden drifting there is still
-	// invisible at runtime. Deliberately out of scope for this change (owner
-	// ruling: separate ticket) — not fixed, not covered, just known.
+	// ⚠️ COVERAGE, stated so no one reads more protection into this than exists
+	// — and no LESS either, because underclaiming sends the next person to build
+	// something that can never fire. The three declared blocks are protected by
+	// three different mechanisms, and only one of them is this field:
+	//
+	//	hardware  — THIS field. Nothing is refused at ingest (owner ruling), so
+	//	            the read path is the only place a wrong-typed value can be
+	//	            surfaced, and it is surfaced per key.
+	//	runtimes  — already fail-closed AT INGEST, and has been since before this
+	//	            change: the handler type-checks installed / logged_in /
+	//	            version per key and answers a flat 400. NOT in the hole. Do
+	//	            not add a read-side marker here — a wrongly-typed value never
+	//	            reaches the store, so the marker could never fire.
+	//	claude    — the one that IS still open and still silent. `claude:
+	//	            {"version": 9.9}` is a 200, stored, and read back as null
+	//	            exactly as cpu_pct was, with nothing on the wire saying a
+	//	            value was lost. Its only guard is a CI test over OUR OWN
+	//	            producers (cli/ocwarden/telemetry_wire_test.go), so an older
+	//	            or third-party warden drifting there stays invisible at
+	//	            runtime. Deliberately out of scope here (owner ruling:
+	//	            separate ticket) — not fixed, just known.
 	HardwareInvalid []string `json:"hardware_invalid"`
 	// RuntimeCapabilitiesTS / RuntimeCapabilitiesStale carry the same freshness
 	// question for the capability probes. Their values are deliberately NOT

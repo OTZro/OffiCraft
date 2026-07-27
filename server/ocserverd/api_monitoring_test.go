@@ -1866,6 +1866,26 @@ func TestGetMonitoring_BrokenAndUnmeasuredHardwareAreDistinguishable(t *testing.
 // every probe that failed, and the frozen spec additionally declares null as a
 // legal value for each — so none of those may be reported as invalid. If this
 // goes red, the guard has started blaming healthy reporters.
+//
+// ⚠️ NOT ALL EIGHT CASES CARRY THEIR WEIGHT, and it is worth writing down which,
+// so that trimming this table later is a decision rather than a coin flip.
+// LOAD-BEARING — each of these fails against a plausible SIMPLER classifier, so
+// deleting it removes real protection:
+//   - "explicit declared nulls": a naive `_, ok := v.(float64)` sees a present,
+//     non-numeric value here and would accuse every failed probe on the fleet.
+//   - "the -1 未量到 sentinel": teleNum WITHHOLDS this value, so a classifier
+//     written as "the reader returned nil ⇒ blame the key" brands a perfectly
+//     healthy reporter. This is the case that separates "unreadable" from
+//     "deliberately withheld", and nothing else in the file covers it.
+//   - "an undeclared new probe": the owner-ruling boundary (rc-55861dd893c6). A
+//     classifier that walked the SAMPLE instead of the declared key set passes
+//     everything else here and fails only this.
+//
+// REDUNDANT-BUT-DOCUMENTARY — "omitted failed probes" and "every probe failed"
+// are both the absent-key path the first bullet already forces a classifier to
+// get right. They are kept because they name the two shapes a reader actually
+// wonders about, not because anything else would catch them; if this table ever
+// needs to shrink, those two are the safe ones to drop.
 func TestGetMonitoring_HealthyHardwareNamesNothing(t *testing.T) {
 	cases := map[string]string{
 		"a full healthy sample":    `{"cpu_pct": 47, "ram_pct": 61, "battery_pct": 88, "ac_power": true}`,
