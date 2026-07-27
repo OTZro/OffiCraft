@@ -845,13 +845,27 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			// T-5336: the two lessons WRITE rows sat on the machine FLOOR while
 			// 100% of their RBAC lived in the handler (buildHandler skips
 			// requirePrincipalClass for principalMachine) — the route table
-			// declared "any authenticated principal" for a row no warden can
-			// ever pass. principalAgent is the honest floor: a warden's member
-			// row carries role_key "" (api_machines.go onboard / dbseed), so the
-			// handler's self-role rule already 403'd every machine-class caller;
-			// raising the declaration refuses them one layer earlier and blocks
-			// nothing that used to succeed. Per-ROLE authz stays in the handler
-			// (lessonsWriteAuthz) — the ladder cannot express "own role only".
+			// declared "any authenticated principal" on rows whose real gate it
+			// could not see. principalAgent is the honest floor.
+			// ⚠️ THIS IS A REAL NARROWING, NOT A NO-OP — say it plainly, because
+			// an earlier draft of this comment claimed the opposite and an
+			// independent review disproved it by building the row. Both
+			// PRODUCTION warden creation points leave role_key empty
+			// (api_machines.go onboard, dbseed.go), and such a warden was
+			// already 403'd by the handler's self-role compare. But a warden row
+			// CAN carry a role_key: POST /api/members takes kind and role_key in
+			// the SAME body and cross-checks neither (a privilege-bearing hire —
+			// owner/admin only). That row's token is agent-scoped like every
+			// member token, so the old self-role compare matched and it could
+			// write its OWN role_key's lessons; measured across the two commits
+			// that same request went 200 → 403 (classifyMember ranks
+			// kind=="warden" as machine regardless of role_key). Nothing this
+			// office builds for itself loses a write; a deliberately hired
+			// role-bearing warden loses exactly one. (Whether that kind/role_key
+			// combination should be refused at ingest at all is a separate
+			// question, deliberately not answered here.)
+			// Per-ROLE authz stays in the handler (lessonsWriteAuthz) — the
+			// ladder cannot express "own role only".
 			Requires: principalAgent,
 			Summary:  "Whole-doc replace of a per-role lessons doc ({text}).",
 			MCPTool:  "replace_lessons",

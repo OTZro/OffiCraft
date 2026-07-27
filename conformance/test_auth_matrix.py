@@ -681,9 +681,14 @@ MATRIX: dict[str, Route] = {
         # Per-role write authz ABOVE the declared floor (handler-level,
         # lessonsWriteAuthz): admin capability (owner / admin_agent) writes ANY
         # role; anyone else writes ONLY its OWN member's role_key.
-        # T-5336: the floor moved machine → agent (a warden's role_key is always
-        # "" so it could never write ANY role — the machine declaration was a
-        # lie), and the warden cell is now DERIVED 403 instead of an override.
+        # T-5336: the floor moved machine → agent, and the warden cell is now a
+        # DERIVED 403 instead of a hand-written override. The warden THIS suite
+        # builds carries role_key "" (as do both production warden creation
+        # points), so its 403 is unchanged in cause and in code. That is NOT a
+        # claim that the move is a no-op for every warden: a warden row hired
+        # with a non-empty role_key (POST /api/members takes kind and role_key
+        # in one body, owner/admin only) used to pass the handler's self-role
+        # compare on its OWN role and now 403s at the floor. See routes.go.
         # admin_agent deliberately aims at agent A's role — a role that is NOT
         # its own — so this cell fails if the admin ever loses the cross-role
         # write. agent B aims at assistant → 403 (cross-role poison denied);

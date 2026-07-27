@@ -1371,8 +1371,10 @@ export interface Api {
   /**
    * Whole-doc replace of the PER-ROLE lessons for a `roleKey` + `task_type` →
    * returns the folded doc (`isDefault` flips false). Backend contract is POST
-   * (NOT the PUT/DELETE the global-context save uses). WRITE authz is per-role:
-   * an agent may write only its own role; owner (this UI's scope) any role.
+   * (NOT the PUT/DELETE the global-context save uses). WRITE authz is per-role
+   * and keyed on the PRINCIPAL CLASS, not the token scope (T-5336): a caller at
+   * or above admin_agent — the owner (this UI's scope) and the admin agent —
+   * may write ANY role; every other agent may write only its own role.
    */
   saveLessons(
     roleKey: string,

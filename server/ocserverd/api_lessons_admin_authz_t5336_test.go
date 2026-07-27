@@ -9,12 +9,20 @@ package main
 // into the self-role-only rule and 403'd on every role but her own
 // ("assistant"). Her admin standing did not exist on this path at all.
 //
-// THREE ARMS, one test each, because "the admin passes now" alone cannot tell
-// a fixed authz seam from a REMOVED one:
+// THREE ARMS, one test each. (b) and (c) together are what discriminates a
+// fixed authz seam from a REMOVED one; (a) is documentation, and says so:
 //
-//	(a) TestLessonsWriteArmA_LegacyScopeRuleRefusedTheAdminCrossRole — the
-//	    counterfactual: the retired predicate, applied to the SAME live request,
-//	    still refuses. Arm (b)'s green would otherwise be unfalsifiable prose.
+//	(a) TestLessonsWriteArmA_LegacyScopeRuleRefusedTheAdminCrossRole — a
+//	    DOCUMENTARY RECORD of the retired rule, NOT a counterfactual experiment.
+//	    ⚠️ It evaluates a copy of the old predicate that lives in this test file
+//	    and calls NOTHING in production: mutate lessonsWriteAuthz however you
+//	    like and this arm stays green, so it has ZERO discriminating power over
+//	    the shipped code. What it is good for is pinning, in executable form,
+//	    the two facts that explain the defect — the admin's token really is
+//	    agent-scoped (read from a REAL minted token), and the old rule refused
+//	    her on a foreign role while ALLOWING her on her own (which is why every
+//	    pre-existing admin-face test, all aimed at "assistant", stayed green).
+//	    Its one live assertion is a fixture control (READ is 200).
 //	(b) TestLessonsWriteArmB_AdminAgentWritesAnotherRolesLessons — the fix.
 //	(c) TestLessonsWriteArmC_PlainAgentStillRefusedAnotherRolesLessons — the
 //	    guard is narrowed, not deleted: a PLAIN agent aiming at someone else's
@@ -26,10 +34,11 @@ import (
 	"time"
 )
 
-// legacyScopeOnlyLessonsWriteAuthz is the RETIRED predicate, kept here (test
-// side only) as the counterfactual arm (a) evaluates. It is the pre-T-5336
-// lessonsWriteAuthz body reduced to its decision: scope-based allow, else
-// self-role-only. Nothing in production calls it.
+// legacyScopeOnlyLessonsWriteAuthz is a TEST-SIDE TRANSCRIPTION of the retired
+// predicate: the pre-T-5336 lessonsWriteAuthz body reduced to its decision
+// (scope-based allow, else self-role-only). Nothing in production calls it, and
+// nothing keeps it honest to the real history except this comment — it is a
+// record, not a probe.
 func legacyScopeOnlyLessonsWriteAuthz(scope, memberRoleKey, pathRoleKey string) bool {
 	if scope != "agent" {
 		return true
@@ -73,7 +82,7 @@ func t5336Fixture(t *testing.T) (string, string, string, string) {
 	return srv.URL, adminTok, plainTok, foreignRole
 }
 
-// ── arm (a) — the counterfactual ────────────────────────────────────────────
+// ── arm (a) — the documentary record (no production code is exercised) ──────
 
 func TestLessonsWriteArmA_LegacyScopeRuleRefusedTheAdminCrossRole(t *testing.T) {
 	url, adminTok, _, foreignRole := t5336Fixture(t)
@@ -91,19 +100,20 @@ func TestLessonsWriteArmA_LegacyScopeRuleRefusedTheAdminCrossRole(t *testing.T) 
 			"re-derive this whole arm", "agent", scope)
 	}
 
-	// The retired predicate, on this exact request: REFUSE. This is what
-	// shipped before T-5336, and it is why Mira could not write another role.
+	// The transcribed rule, on this exact triple: REFUSE. This is what shipped
+	// before T-5336, and it is why Mira could not write another role. Failing
+	// here means the TRANSCRIPTION drifted from the history it records — it says
+	// nothing about the shipped predicate either way.
 	if legacyScopeOnlyLessonsWriteAuthz(scope, adminRoleKey, foreignRole) {
-		t.Fatalf("counterfactual broken: the legacy scope-only rule must REFUSE "+
-			"an admin (scope=%q, role=%q) writing role %q — if it allows, arm (b) "+
-			"proves nothing", scope, adminRoleKey, foreignRole)
+		t.Fatalf("this record is mis-stated: the legacy scope-only rule REFUSED "+
+			"an admin (scope=%q, role=%q) writing role %q", scope, adminRoleKey, foreignRole)
 	}
 
 	// And the legacy rule was not refusing everybody: the admin writing its OWN
 	// role passed (which is exactly why the defect stayed invisible — every
 	// existing admin-face test aimed at "assistant").
 	if !legacyScopeOnlyLessonsWriteAuthz(scope, adminRoleKey, adminRoleKey) {
-		t.Fatalf("counterfactual mis-stated: the legacy rule DID allow the admin " +
+		t.Fatalf("this record is mis-stated: the legacy rule DID allow the admin " +
 			"to write its own role")
 	}
 

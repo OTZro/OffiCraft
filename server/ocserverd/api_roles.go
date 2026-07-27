@@ -449,11 +449,19 @@ func blankArg(v any) bool {
 // The principal ladder is the office's ONE authority answer (authz.go), so
 // this asks it instead of re-deriving a weaker one from the scope claim.
 //
-// SCOPE OF THE WIDENING, stated without optimism: this ONLY moves admin agents
-// from "self role only" to "any role". Plain agents (rank agent) and wardens
-// (rank machine — role_key is always "", so they never matched any path role)
-// keep the exact self-role-only rule they had; the owner passed before and
-// passes now.
+// SCOPE OF THE CHANGE, stated without optimism — it moves in BOTH directions.
+// The widening: admin agents go from "self role only" to "any role". Plain
+// agents (rank agent) keep the exact self-role-only rule they had; the owner
+// passed before and passes now.
+// The narrowing (real, measured — not a no-op; the argument lives at the two
+// route rows in routes.go): a warden-kind member row carrying a NON-EMPTY
+// role_key used to be able to write THAT role's lessons, because a warden's
+// token is agent-scoped like every other member token (mintMemberToken →
+// mintAgentToken) and the old self-role compare therefore matched. Such a row
+// now 403s at the route floor, because classifyMember ranks kind=="warden" as
+// machine regardless of role_key. Both production warden creation points leave
+// role_key empty (api_machines.go onboard, dbseed.go); the only way to build a
+// role-bearing warden is an explicit privileged hire.
 func (s *apiServer) lessonsWriteAuthz(w http.ResponseWriter, r *http.Request, roleKey string) bool {
 	if principalAtLeast(s.principalOfRequest(r), principalAdminAgent) {
 		return true
