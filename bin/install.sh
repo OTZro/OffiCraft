@@ -36,8 +36,7 @@
 #      install the safe default still applies: abort unless --force.
 #
 # What it does, in order:
-#   1. preflight          — darwin/arm64 only, and tmux plus a runtime (claude OR
-#                           codex) must resolve, or STOP with nothing touched.
+#   1. preflight          — darwin/arm64, tmux, claude OR codex — or STOP untouched.
 #   2. live-service gate  — if the launchd label this run would claim is
 #                           ALREADY REGISTERED AND RUNNING, installing means
 #                           bootout+bootstrap: a REAL restart that DISCONNECTS
@@ -607,10 +606,11 @@ unset _oc_arg
 
 # ── preflight: platform + tools ──────────────────────────────────────────────
 # Everything that must hold BEFORE the machine is touched, both modes. tmux is
-# unconditional — BOTH runtimes' launch lines go through one tmuxNewSession
-# (cli/ocwarden/spawn.go:950). The runtime is claude OR codex, matching `ocwarden
-# install`'s runtime_bin_unresolved gate. Missing these the install goes green and
-# members sit at 「waking」 unexplained. PRESENCE only, no version compared.
+# unconditional (both runtimes go through one tmuxNewSession, spawn.go:950); the
+# runtime is claude OR codex, like `ocwarden install`'s runtime_bin_unresolved gate.
+# PRESENCE only, no version — but an OC_*_BIN override must be an executable FILE
+# (transport.go), else a stale export buys a green install nothing honours. Why it
+# is fail-closed at all: bin/tests/install-preflight-guard.sh.
 oc_preflight() {
   local miss=() c x p
   if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
@@ -619,16 +619,16 @@ oc_preflight() {
     exit 1
   fi
   command -v tmux >/dev/null 2>&1 || miss+=("tmux — brew install tmux")
-  c="${OC_CLAUDE_BIN:-$(command -v claude 2>/dev/null || true)}"
-  x="${OC_CODEX_BIN:-$(command -v codex 2>/dev/null || true)}"
+  c="${OC_CLAUDE_BIN:-}"; [[ -f "$c" && -x "$c" ]] || c="$(command -v claude 2>/dev/null || true)"
+  x="${OC_CODEX_BIN:-}"; [[ -f "$x" && -x "$x" ]] || x="$(command -v codex 2>/dev/null || true)"
   for p in "$HOME/.local/bin" "$HOME/.npm-global/bin" /opt/homebrew/bin /usr/local/bin; do
     [[ -z "$c" && -x "$p/claude" ]] && c="$p/claude"
     [[ -z "$x" && -x "$p/codex" ]] && x="$p/codex"
   done
   [[ -n "$c$x" ]] || miss+=("an agent runtime: claude (npm install -g @anthropic-ai/claude-code) or codex")
   [[ ${#miss[@]} -eq 0 ]] && { OC_PF_CLAUDE="$c"; return 0; }
-  echo "[install] FATAL: a member is claude or codex inside tmux. NOTHING was installed;" >&2
-  echo "[install]        install the below, then re-run:" >&2
+  echo "[install] FATAL: a member is claude or codex inside tmux — without these one" >&2
+  echo "[install]        never leaves 「waking」. NOTHING was installed; install and re-run:" >&2
   printf '[install]          %s\n' "${miss[@]}" >&2
   exit 1
 }
@@ -1336,9 +1336,7 @@ if [[ -n "$CLAUDE_BIN" ]]; then
   claude_entry="    <key>OC_CLAUDE_BIN</key><string>$CLAUDE_BIN</string>
 "
 else
-  # Empty = claude absent (codex-only host: allowed, and NOT to be nagged about a
-  # runtime it does not use) or unstampable (WARN above). OC_PF_CLAUDE tells them
-  # apart; only the second is a problem.
+  # Empty = claude absent (codex-only host: do NOT nag) or unstampable (WARN above).
   if [[ -n "${OC_PF_CLAUDE:-}" ]]; then
     echo "[install] WARNING: no stampable claude path — a claude member here may hit" >&2
     echo "[install]          claude_bin_unresolved. Fix: re-run with OC_CLAUDE_BIN=/abs/path/claude" >&2

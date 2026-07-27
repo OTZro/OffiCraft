@@ -202,20 +202,32 @@ case "$OUT" in
 $OUT" ;;
 esac
 # The failure the owner actually hit is invisible, so the refusal has to connect
-# the missing tool to the symptom — otherwise it is one more line nobody reads.
+# the missing tool to the SYMPTOM — otherwise it is one more line nobody reads.
+# This asserted *"waking"*|*"tmux"* for one round, which the assertion two lines
+# above had already guaranteed: a tautology wearing the name of a real check.
 case "$OUT" in
-  *"waking"*|*"tmux"*) ok "no tmux: the refusal explains the consequence (a member is claude/codex inside tmux)" ;;
-  *) bad "no tmux: the refusal does not explain why tmux matters:
+  *"waking"*) ok "no tmux: the refusal names the symptom the owner actually saw (「waking」)" ;;
+  *) bad "no tmux: the refusal never connects the missing tool to the 「waking」 symptom:
 $OUT" ;;
 esac
 # NO BYPASS. A gate that advertises its own escape hatch gets escaped, and the
 # escapee lands back in exactly the silent 「waking」 state this fixes.
-for esc in "--skip" "--no-preflight" "OC_SKIP" "bypass" "ignore this" "at your own risk"; do
-  case "$OUT" in
-    *"$esc"*) bad "no tmux: the refusal advertises a bypass ('$esc') — it must not teach anyone around itself" ;;
-    *) ok "no tmux: the refusal offers no bypass ('$esc' absent)" ;;
-  esac
-done
+#
+# GUARDED ON RC. Checking only for the ABSENCE of a string is conditionally
+# vacuous: on a run that never refuses at all (the mutant below, or a future
+# regression that turns the gate off) there is no message, so all six "the string
+# is absent" checks pass and would go on certifying a gate that no longer exists.
+# Assert them only where there IS a refusal to inspect.
+if [[ "$RC" != 1 ]]; then
+  bad "no bypass: cannot check the refusal text — this run did not refuse (rc=$RC)"
+else
+  for esc in "--skip" "--no-preflight" "OC_SKIP" "bypass" "ignore this" "at your own risk"; do
+    case "$OUT" in
+      *"$esc"*) bad "no tmux: the refusal advertises a bypass ('$esc') — it must not teach anyone around itself" ;;
+      *) ok "no tmux: the refusal offers no bypass ('$esc' absent)" ;;
+    esac
+  done
+fi
 
 # ── 2. THE COUNTERFACTUAL: same run, preflight call removed → it installs ────
 # If this went red, case 1 above would be proving nothing: the refusal could be
@@ -339,6 +351,93 @@ case "$OUT" in
   *"Apple Silicon"*) ok "non-darwin host: the refusal is the platform one, not the tool one" ;;
   *) bad "non-darwin host: the platform gate did not fire:
 $OUT" ;;
+esac
+
+# ── 5d. an OC_*_BIN override that points at NOTHING must not satisfy the gate ─
+# Found by review, and it is the exact shape of the defect this ticket exists to
+# kill: with OC_CODEX_BIN=/nonexistent/codex the run went rc=0, wrote the plist,
+# and said NOTHING about a runtime — a green install whose members can never
+# start. The override is now honoured only when it is an executable file, which is
+# what cli/ocwarden/transport.go:446 has always done; anything else falls through
+# to PATH and then to the fallback dirs, exactly like ocwarden.
+#
+# Not a hostile input: one stale `export OC_CODEX_BIN=…` in a shell profile does
+# it, and docs/guide/troubleshooting.md actively teaches setting these.
+if [[ "$HAS_ABS_RUNTIME" == 1 ]]; then
+  echo "  skip — an absolute claude/codex exists on this host; the override cases need 'no runtime on PATH'"
+else
+  for v in OC_CODEX_BIN OC_CLAUDE_BIN; do
+    reset_fixture
+    rundir="$WORK/run"; rm -rf "$rundir"; mkdir -p "$rundir"
+    ln -s "$TOOLDIR/tmux" "$rundir/tmux"
+    OUT="$(cd "$WORK" && env -i PATH="$rundir:$SHIMDIR:/usr/bin:/bin:/usr/sbin:/sbin" \
+      HOME="$FAKEHOME" SHIM_STATE="$WORK" "$v=/nonexistent/runtime" \
+      bash "$PKG/install.sh" </dev/null 2>&1)"; RC=$?
+    check "$v pointing at a nonexistent path: the install is refused" "1" "$RC"
+    if [[ -f "$FAKEHOME/$PLIST_REL" ]]; then
+      bad "$v=/nonexistent: a plist was written — a bogus override bought a green install"
+    else
+      ok "$v=/nonexistent: NOTHING was written"
+    fi
+  done
+  # A non-executable file must not pass either — existence is not runnability.
+  reset_fixture
+  rundir="$WORK/run"; rm -rf "$rundir"; mkdir -p "$rundir"
+  ln -s "$TOOLDIR/tmux" "$rundir/tmux"
+  : > "$WORK/notexec"; chmod 644 "$WORK/notexec"
+  OUT="$(cd "$WORK" && env -i PATH="$rundir:$SHIMDIR:/usr/bin:/bin:/usr/sbin:/sbin" \
+    HOME="$FAKEHOME" SHIM_STATE="$WORK" OC_CODEX_BIN="$WORK/notexec" \
+    bash "$PKG/install.sh" </dev/null 2>&1)"; RC=$?
+  check "OC_CODEX_BIN pointing at a non-executable file: the install is refused" "1" "$RC"
+fi
+
+# 5e. SENTINEL for 5d: a VALID override with nothing on PATH must still install.
+# Without this, 5d could be satisfied by ignoring OC_*_BIN altogether — which
+# would break the documented recovery (docs/guide/troubleshooting.md) for anyone
+# whose runtime lives outside PATH and the fallback dirs.
+if [[ -x /opt/homebrew/bin/claude || -x /usr/local/bin/claude ]]; then
+  echo "  skip — an absolute claude exists on this host; 'codex override only' is not constructible"
+else
+  reset_fixture
+  rundir="$WORK/run"; rm -rf "$rundir"; mkdir -p "$rundir"
+  ln -s "$TOOLDIR/tmux" "$rundir/tmux"
+  OUT="$(cd "$WORK" && env -i PATH="$rundir:$SHIMDIR:/usr/bin:/bin:/usr/sbin:/sbin" \
+    HOME="$FAKEHOME" SHIM_STATE="$WORK" OC_CODEX_BIN="$TOOLDIR/codex" \
+    bash "$PKG/install.sh" </dev/null 2>&1)"; RC=$?
+  check "a VALID OC_CODEX_BIN with no runtime on PATH: the install succeeds" "0" "$RC"
+  if [[ -f "$FAKEHOME/$PLIST_REL" ]]; then
+    ok "valid OC_CODEX_BIN: the serve plist was rendered"
+  else
+    bad "valid OC_CODEX_BIN: the documented override no longer gets you installed:
+$OUT"
+  fi
+fi
+
+# ── 5f. STANDALONE mode (curl | bash) is gated too ──────────────────────────
+# Every case above runs the PACKAGE installer, but the path the docs push is
+# `curl … | bash`, which takes a different branch (no sibling binaries ⇒
+# IN_PACKAGE=0) with its own arg parser and its own call site. A gate that exists
+# in only one of the two is a gate half the users never meet. The refusal must
+# also land BEFORE the download — no network is reachable in this suite, so a run
+# that got as far as curl would fail differently (and much slower).
+reset_fixture
+STANDALONE="$WORK/standalone"; rm -rf "$STANDALONE"; mkdir -p "$STANDALONE"
+cp "$PKG/install.sh" "$STANDALONE/install.sh"   # NO ocserverd/ocwarden/ocagent beside it
+rundir="$WORK/run"; rm -rf "$rundir"; mkdir -p "$rundir"
+ln -s "$TOOLDIR/claude" "$rundir/claude"        # runtime present, tmux absent
+OUT="$(cd "$WORK" && env -i PATH="$rundir:$SHIMDIR:/usr/bin:/bin:/usr/sbin:/sbin" \
+  HOME="$FAKEHOME" SHIM_STATE="$WORK" bash "$STANDALONE/install.sh" </dev/null 2>&1)"; RC=$?
+check "standalone (curl|bash) shape, no tmux: the install is refused" "1" "$RC"
+case "$OUT" in
+  *"brew install tmux"*) ok "standalone: the same actionable refusal is printed" ;;
+  *) bad "standalone: the preflight did not fire on the curl|bash path:
+$OUT" ;;
+esac
+case "$OUT" in
+  *"resolving latest release"*|*"downloading"*)
+    bad "standalone: the run reached the download before refusing — the gate is too late:
+$OUT" ;;
+  *) ok "standalone: it refused BEFORE resolving/downloading a release" ;;
 esac
 
 # ── 6. the preflight must not block the ways OUT ────────────────────────────
