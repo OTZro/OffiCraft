@@ -743,16 +743,39 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		})
 	}
 	for _, wk := range workers {
-		// Not merely the "twin" of the RosterStatusRemoved filter the member list
-		// applies above — it is literally the SAME predicate: workerFromMember
-		// derives Status via workerStatusFromMember, which returns released iff
-		// roster_status == RosterStatusRemoved. So the two branches of `actors`
-		// apply one roster filter, not two that happen to agree. A retired
-		// session's spend is history, not current usage.
-		// Pinned by TestGetMonitoring_ReleasedWorkerSpendLeavesTheAccount.
-		if wk.Status == WorkerStatusReleased {
-			continue
-		}
+		// ⚠️ NO status filter here, and released workers are DELIBERATELY included.
+		//
+		// The criterion is: FOLLOW THE TELEMETRY LIFECYCLE, NOT THE ROSTER STATUS.
+		// The two loops in this handler must agree about who exists, because one
+		// of them (the raw-key loop near the end) MINTS the account row while this
+		// one supplies its values. Any actor the raw-key loop can see but this
+		// loop skips renders as a green card with dashes — that IS the T-fc2f bug,
+		// not a special case of it.
+		//
+		// So the member side's RosterStatusRemoved filter is NOT a precedent to
+		// copy, even though workerStatusFromMember makes released the exact same
+		// predicate. It is correct there for a reason that does not hold here:
+		// removing a member HARD-DELETES it and calls s.telemetry.Delete
+		// (api_roles.go — the only telemetry.Delete in the repo), so its entry is
+		// gone and the raw-key loop cannot mint a row either. Both loops agree by
+		// construction. A released worker's telemetry is never deleted, so
+		// filtering it here makes the two loops disagree.
+		//
+		// And released is the STEADY STATE for outsource workers, not an edge
+		// case: ReleaseWorkersForTask fires on every task close (api_tasks.go
+		// closeTask) and on every close-out report (dismissOutsourceWorkersForTask).
+		// A filter here would therefore hide almost all outsource spend — the
+		// owner-reported eva-m5-claude symptom, restored verbatim.
+		//
+		// Nor is a released worker even finished: SPEC §6.3 (see closeTask) keeps
+		// its SESSION alive on purpose to run the close-out duties, so it is still
+		// live and still burning money after the flip.
+		//
+		// Finally, money already spent is a historical fact. An account's
+		// cumulative cost must never JUMP BACKWARDS the instant a task closes; a
+		// total that silently shrinks is read as wrong data far more readily than
+		// a dash is. Pinned by
+		// TestGetMonitoring_ReleasedWorkerSpendStaysInTheAccount.
 		actors = append(actors, monitoringActor{
 			id:      wk.ID,
 			runtime: wk.Runtime,

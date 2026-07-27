@@ -1387,6 +1387,26 @@ func TestGetMonitoring_ReportWithoutRuntimesCannotRefreshThem(t *testing.T) {
 // NOT cover this. It seeds a member holding the very same key, so its
 // assertions pass with the member-only fold — the fixture supplies the value
 // the behaviour under test is supposed to supply. Do not treat it as coverage.
+//
+// ⚠️ THE FOUR TESTS BELOW ARE NOT ALL THE SAME KIND OF TEST. Know which is
+// which before you trust one of them to protect you:
+//
+//	GAP-GUARDS — VERIFIED to FAIL against the base implementation (e4a8872) by
+//	checking that impl out and running them, not by reasoning. These are the
+//	reason this ticket is fixed; break the fix and they go red:
+//	  - WorkerOnlyAccountFillsMachineCostAndWindows
+//	  - SharedAccountSumsMemberAndWorkerExactlyOnce (dual-purpose: it fails on
+//	    base because the worker's share is missing, AND it pins the exact total
+//	    so widening the fold cannot double-count either side)
+//	  - ReleasedWorkerSpendStaysInTheAccount
+//
+//	REGRESSION-GUARD — VERIFIED to already PASS on e4a8872. It discriminates
+//	nothing about the T-fc2f gap; it exists so that widening the fold to
+//	workers does not quietly cost us a property we already had:
+//	  - WorkerAccountStillNeedsProvenance (guards the T-69bc runtime gate)
+//
+// Do not cite the regression-guard as evidence that the outsource gap is
+// closed.
 // ---------------------------------------------------------------------------
 
 // seedWorker persists one outsource worker (a kind='outsource' member row, the
@@ -1536,14 +1556,34 @@ func TestGetMonitoring_SharedAccountSumsMemberAndWorkerExactlyOnce(t *testing.T)
 	}
 }
 
-// TestGetMonitoring_ReleasedWorkerSpendLeavesTheAccount pins the released
-// filter, the worker twin of the RosterStatusRemoved filter the member list
-// applies at the top of the handler (workerStatusFromMember maps
-// RosterStatusRemoved -> released, so it is literally the same predicate). A
-// retired session's spend is history, not current usage.
-func TestGetMonitoring_ReleasedWorkerSpendLeavesTheAccount(t *testing.T) {
+// TestGetMonitoring_ReleasedWorkerSpendStaysInTheAccount is the second
+// gap-guard, and it is the INVERSE of what this test asserted in its first
+// version. That first version filtered released workers out of the fold and
+// asserted the values were absent — i.e. it pinned the T-fc2f BUG SYMPTOM as
+// expected behaviour, which would have shipped the ticket unfixed.
+//
+// Why released must be INCLUDED (criterion: follow the telemetry lifecycle,
+// not the roster status):
+//   - released is the STEADY STATE for outsource workers, not an edge case.
+//     ReleaseWorkersForTask fires on every task close (api_tasks.go closeTask)
+//     and on every close-out report (dismissOutsourceWorkersForTask).
+//   - a released worker's telemetry entry is NEVER deleted. The repo's only
+//     s.telemetry.Delete is api_roles.go, on staff hard-delete. So the raw-key
+//     loop still mints the account row while a filtered fold starves it — the
+//     green-card-with-dashes shape, verbatim.
+//   - SPEC §6.3 keeps the released worker's SESSION alive on purpose to run
+//     close-out duties, so it is still live and still spending.
+//   - money already spent is a historical fact; a cumulative total that jumps
+//     backwards when a task closes reads as broken data more readily than a
+//     dash does.
+//
+// MUTANT: re-add `if wk.Status == WorkerStatusReleased { continue }` to the
+// worker branch of `actors` -> RED here.
+func TestGetMonitoring_ReleasedWorkerSpendStaysInTheAccount(t *testing.T) {
 	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
 		telemetry: newMemStore(), gauge: newMemStore()}
+	// Released AND worker-only: no member holds this key, so every value below
+	// can only have come from a released outsource worker.
 	seedWorker(t, s, "ow-gone", "G1", 9.0, WorkerStatusReleased)
 	if rec := doIngestTelemetry(s, "ow-gone", "m-eva-m5",
 		`{"runtime":"claude","account":"eva-m5-claude","cost":3.0,`+
@@ -1551,18 +1591,27 @@ func TestGetMonitoring_ReleasedWorkerSpendLeavesTheAccount(t *testing.T) {
 		t.Fatalf("worker ingest: %d %s", rec.Code, rec.Body.String())
 	}
 	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
-	// The raw-key loop still mints the row (it scans the whole snapshot) — the
-	// VALUES are what must stay absent.
 	row := accountRow(t, d, "eva-m5-claude")
-	if row["cost"] != nil {
-		t.Errorf("cost = %v, want null — a released worker's spend is history", row["cost"])
+	// live 3.0 + banked 9.0 — the close did not claw either back.
+	if row["cost"] != 12.0 {
+		t.Errorf("cost = %v, want 12 (live 3.0 + banked 9.0) — a task close must "+
+			"not make an account's cumulative spend jump backwards", row["cost"])
 	}
-	if row["machine"] != "" {
-		t.Errorf("machine = %v, want \"\" — a released worker attributes to no box",
+	if row["machine"] != "m-eva-m5" {
+		t.Errorf("machine = %v, want m-eva-m5 — a released worker still ran on a box",
 			row["machine"])
 	}
-	if machineRowIn(d, "m-eva-m5") != nil {
-		t.Errorf("a released worker must not conjure a machines row: %v", d["machines"])
+	for _, win := range []string{"five_hour", "seven_day"} {
+		if _, ok := row[win].(map[string]any); !ok {
+			t.Errorf("%s = %v, want a shaped window", win, row[win])
+		}
+	}
+	mr := machineRowIn(d, "m-eva-m5")
+	if mr == nil {
+		t.Fatalf("no machines row for m-eva-m5 in %v", d["machines"])
+	}
+	if len(mr["accounts"].([]any)) == 0 {
+		t.Errorf("machines[m-eva-m5].accounts is empty, want eva-m5-claude")
 	}
 }
 
@@ -1585,6 +1634,22 @@ func TestGetMonitoring_WorkerAccountStillNeedsProvenance(t *testing.T) {
 	// an ordinary `runtime` field. That field is rewritten by every later
 	// heartbeat, so falling back to it is exactly the "account borrowed from an
 	// older runtime" regression 2eb6590 removed. Unstamped ⇒ unproven ⇒ empty.
+	//
+	// ⚠️ HONEST LIMITATION — do not read this arm as proof that the provenance
+	// gate is guarded in production. This state is UNREACHABLE through the real
+	// ingest path: applyAccountReport (account_display.go) is the sole writer of
+	// entry["account"] in the repo, and its rule 2 (`account != "" && runtime ==
+	// nil`) CLEARS the pairing rather than storing a stampless key — so
+	// "account present, stamp absent" cannot be produced by any reporter. This
+	// test reaches it only by writing the telemetry entry directly.
+	//
+	// Consequence, measured not assumed: a mutant that adds a
+	// `reported == "" -> fall back to entry["runtime"]` branch to
+	// telemetryAccount is killed ONLY by this arm. In reachable states that
+	// mutant SURVIVES the whole suite. So what is guarded here is the pure
+	// function's defense-in-depth, not an end-to-end property. Kept deliberately:
+	// the invariant lives in a different file from the gate that relies on it,
+	// and nothing forces them to stay in agreement.
 	seedWorker(t, s, "ow-kyle", "K1", 0, WorkerStatusActive)
 	s.telemetry.Set("ow-kyle", map[string]any{
 		"machine": "m-kyle-m5", "account": "claude:unstamped",
