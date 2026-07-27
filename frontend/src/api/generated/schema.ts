@@ -3332,8 +3332,9 @@ export interface components {
          *     authoritative: ``filename``/``mime`` sent alongside ``id`` are IGNORED (so
          *     the upload response ``{id, mime, filename}`` can be pasted back verbatim).
          *     An unknown ``id`` is a 400; carrying BOTH ``id`` and ``data_b64`` is a 400
-         *     (ambiguous intent). An item with neither ``id`` nor ``data_b64`` is
-         *     silently dropped (legacy tolerance, unchanged).
+         *     (ambiguous intent). An item with neither ``id`` nor ``data_b64`` is a
+         *     400 (T-e2b2: it used to be dropped silently, so a sender that named a file it
+         *     never sent got a success and the recipient got nothing).
          */
         ChatAttachmentInputDTO: {
             /**

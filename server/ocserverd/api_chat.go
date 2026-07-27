@@ -270,6 +270,17 @@ func (s *apiServer) resolveChatAttachmentInputs(inputs []ChatAttachmentInputDTO)
 			resolved = append(resolved, resolvedAttachment{att: att})
 			continue
 		}
+		// Neither id nor bytes: the sender named a file it never sent. This
+		// used to be dropped on the chat faces (200, message posted, file
+		// silently absent — the sender believed it arrived) while the
+		// reply-card face already refused it; one mechanism, two answers.
+		// Owner ruled 2026-07-27 (rc-3a589dfec503): refuse everywhere. Only
+		// requests that were already malformed change — they turn from a false
+		// success into an honest error.
+		if strOrEmpty(a.DataB64) == "" {
+			return nil, http.StatusBadRequest,
+				"attachment carries neither id nor data_b64"
+		}
 		att, err := decodeChatAttachment(
 			strOrEmpty(a.DataB64), strOrEmpty(a.Filename), strOrEmpty(a.Mime))
 		if err != nil {
@@ -328,15 +339,11 @@ func (s *apiServer) HandlePostChatApiChatPost(w http.ResponseWriter, r *http.Req
 			meta[k] = v
 		}
 	}
+	// EVERY item goes to the resolver — an item carrying neither id nor
+	// data_b64 is a 400 there, not a silent drop (T-e2b2).
 	var inputs []ChatAttachmentInputDTO
 	if body.Attachments != nil {
-		for _, a := range *body.Attachments {
-			// An item with neither id nor data_b64 is silently dropped (legacy
-			// tolerance, unchanged).
-			if strOrEmpty(a.DataB64) != "" || trimmedOrEmpty(a.Id) != "" {
-				inputs = append(inputs, a)
-			}
-		}
+		inputs = *body.Attachments
 	}
 	if len(inputs) > chatAttachmentsMaxCount {
 		writeError(w, http.StatusBadRequest,

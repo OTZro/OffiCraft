@@ -271,16 +271,17 @@ func TestHandlePostChatApiChatPost(t *testing.T) {
 		t.Fatalf("mixed ref+inline: want 200 with two refs, got %d %s", status, resp)
 	}
 
-	// Fault faces: unknown ref 400; id together with data_b64 400; an item
-	// with NEITHER id nor data_b64 is silently dropped (legacy tolerance), so
-	// alone it leaves the message empty → 400.
+	// Fault faces: unknown ref 400; id together with data_b64 400; an item with
+	// NEITHER id nor data_b64 is its OWN 400 (T-e2b2, owner rc-3a589dfec503) —
+	// it used to be dropped silently, which meant a sender that named a file it
+	// never sent got a success and the recipient got nothing.
 	for name, tc := range map[string]struct {
 		body string
 		want string
 	}{
 		"unknown ref":  {`{"to":"owner","attachments":[{"id":"att-nope"}]}`, "'att-nope' not found"},
 		"id plus data": {fmt.Sprintf(`{"to":"owner","attachments":[{"id":%q,"data_b64":"aGk="}]}`, id), "both id and data_b64"},
-		"empty item":   {`{"to":"owner","attachments":[{"filename":"ghost.txt"}]}`, "text or an attachment"},
+		"empty item": {`{"to":"owner","attachments":[{"filename":"ghost.txt"}]}`, "neither id nor data_b64"},
 	} {
 		status, resp := postChat(tc.body)
 		if status != 400 || !strings.Contains(resp, tc.want) {

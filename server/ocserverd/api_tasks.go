@@ -877,13 +877,11 @@ func (s *apiServer) HandlePostTaskMessageApiTasksTaskIdMessagePost(w http.Respon
 			"task '"+taskId+"' has no executor yet (awaiting assignment)")
 		return
 	}
+	// EVERY item goes to the resolver (T-e2b2) — see api_chat.go: an item with
+	// neither id nor data_b64 is refused, never dropped.
 	var inputs []ChatAttachmentInputDTO
 	if body.Attachments != nil {
-		for _, a := range *body.Attachments {
-			if strOrEmpty(a.DataB64) != "" || trimmedOrEmpty(a.Id) != "" {
-				inputs = append(inputs, a)
-			}
-		}
+		inputs = *body.Attachments
 	}
 	if len(inputs) > chatAttachmentsMaxCount {
 		writeError(w, http.StatusBadRequest,
