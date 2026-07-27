@@ -267,8 +267,18 @@ func TestHandlePostChatApiChatPost(t *testing.T) {
 	inline := `{"data_b64":"aGVsbG8=","filename":"hi.txt","mime":"text/plain"}`
 	status, resp = postChat(fmt.Sprintf(
 		`{"to":"owner","attachments":[{"id":%q},%s]}`, id, inline))
-	if status != 200 || strings.Count(resp, `"id":"att-`) < 2 {
-		t.Fatalf("mixed ref+inline: want 200 with two refs, got %d %s", status, resp)
+	// Count DISTINCT ids, not occurrences (T-e2b2 review V1): the DTO echoes
+	// every attachment TWICE (meta.attachments and the top-level array), so a
+	// ONE-attachment response already contains two occurrences — the old
+	// `Count(…) < 2` check passed for a handler that kept only the first
+	// attachment and silently dropped the rest.
+	distinct := map[string]bool{}
+	for _, part := range strings.Split(resp, `"id":"att-`)[1:] {
+		distinct["att-"+part[:strings.Index(part, `"`)]] = true
+	}
+	if status != 200 || len(distinct) != 2 {
+		t.Fatalf("mixed ref+inline: want 200 naming two DISTINCT blobs, got %d %s",
+			status, resp)
 	}
 
 	// Fault faces: unknown ref 400; id together with data_b64 400; an item with

@@ -127,6 +127,43 @@ func idsInJSONColumn(t *testing.T, db *sql.DB, query string) map[string]string {
 	return out
 }
 
+// referencedAttachmentIDs maps every attachment id NAMED by a record to a
+// human description of the namer. This is the closed world the invariants are
+// judged against, so an omission here is a blind spot one level up — review V2
+// caught exactly that: task_artifact.attachment_id was missing, which made
+// invariant (1) FALSE-POSITIVE on a blob a task artifact legitimately names.
+func referencedAttachmentIDs(t *testing.T, db *sql.DB) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for owner, q := range map[string]string{
+		"chat message": `SELECT id, json_extract(meta, '$.attachments') FROM chat_message
+		                 WHERE json_extract(meta, '$.attachments') IS NOT NULL`,
+		"reply card question side": `SELECT id, attachments FROM reply_card`,
+		"reply card answer side":   `SELECT id, answer_attachments FROM reply_card`,
+	} {
+		for id, rec := range idsInJSONColumn(t, db, q) {
+			out[id] = owner + " " + rec
+		}
+	}
+	rows, err := db.Query(`SELECT task_id, attachment_id FROM task_artifact
+	                       WHERE attachment_id IS NOT NULL AND attachment_id != ''`)
+	if err != nil {
+		t.Fatalf("list task artifacts: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var taskID, attID string
+		if err := rows.Scan(&taskID, &attID); err != nil {
+			t.Fatalf("scan artifact: %v", err)
+		}
+		out[attID] = "task artifact on " + taskID
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("artifact rows: %v", err)
+	}
+	return out
+}
+
 // assertStoreIsConsistent is the observable, replacing row counting (review U1,
 // U2). Counting rows could not see two of the real defects: the answer face
 // UPSERTS its card, so the row count is constant in both a correct and a broken
@@ -145,17 +182,7 @@ func idsInJSONColumn(t *testing.T, db *sql.DB, query string) map[string]string {
 func assertStoreIsConsistent(t *testing.T, db *sql.DB, when string) {
 	t.Helper()
 
-	referenced := map[string]string{}
-	for owner, q := range map[string]string{
-		"chat message": `SELECT id, json_extract(meta, '$.attachments') FROM chat_message
-		                 WHERE json_extract(meta, '$.attachments') IS NOT NULL`,
-		"reply card question side": `SELECT id, attachments FROM reply_card`,
-		"reply card answer side":   `SELECT id, answer_attachments FROM reply_card`,
-	} {
-		for id, rec := range idsInJSONColumn(t, db, q) {
-			referenced[id] = owner + " " + rec
-		}
-	}
+	referenced := referencedAttachmentIDs(t, db)
 
 	stored := map[string]bool{}
 	rows, err := db.Query(`SELECT id FROM chat_attachment`)
@@ -248,7 +275,13 @@ type attachmentFace struct {
 }
 
 func attachmentFaces() []attachmentFace {
-	const inline = `{"data_b64":"aGVsbG8=","filename":"a.txt"}`
+	// TWO attachments, distinguishable (review V1): with a single one, an
+	// implementation that keeps only the FIRST attachment loses data
+	// SYMMETRICALLY — no orphan, no dangling ref, every invariant clean — and
+	// the sweep cannot see it. Consistency is not sufficiency; the positive
+	// control below asserts the declared attachments all LANDED.
+	const inline = `{"data_b64":"aGVsbG8=","filename":"a.txt"},` +
+		`{"data_b64":"c2Vjb25k","filename":"b.txt"}`
 	post := func(path, body string, asOwner bool) func(*testing.T, *httptest.Server, []byte, string) (int, string) {
 		return func(t *testing.T, srv *httptest.Server, secret []byte, _ string) (int, string) {
 			now := time.Now().Unix()
@@ -349,6 +382,19 @@ func attachmentFaces() []attachmentFace {
 // bad appeared" is satisfied by a request that never reached the attachment at
 // all — which is exactly how the previous answer-face guard passed while being
 // unable to fail (review T1).
+// assertBlobsAreReferenced pins that the store names exactly `want` distinct
+// attachments across every record column the sweep reads — the "declared
+// attachments all landed" half that the consistency invariants cannot express.
+func assertBlobsAreReferenced(t *testing.T, db *sql.DB, want int) {
+	t.Helper()
+	refs := referencedAttachmentIDs(t, db)
+	if len(refs) != want {
+		t.Fatalf("records name %d attachments, want %d — an attachment was "+
+			"accepted and then silently dropped (the ticket's founding defect)",
+			len(refs), want)
+	}
+}
+
 func faceSetup(t *testing.T, face attachmentFace, srv *httptest.Server, secret []byte) string {
 	t.Helper()
 	if face.setup == nil {
@@ -368,11 +414,15 @@ func TestAttachmentWritesAreAllOrNothing(t *testing.T) {
 				if status != 200 {
 					t.Fatalf("unbroken request must succeed, got %d %s", status, resp)
 				}
-				if got := countRows(t, db, "chat_attachment") - before; got != 1 {
-					t.Fatalf("unbroken request must write exactly one blob, wrote %d "+
-						"— the failure cases would then prove nothing", got)
+				if got := countRows(t, db, "chat_attachment") - before; got != 2 {
+					t.Fatalf("unbroken request declared TWO attachments and stored "+
+						"%d — either the failure cases below prove nothing, or "+
+						"attachments are being dropped silently (review V1)", got)
 				}
 				assertStoreIsConsistent(t, db, "after a successful request")
+				// Both blobs must be NAMED by the record too: storing them and
+				// referencing one is the same silent loss seen from the other side.
+				assertBlobsAreReferenced(t, db, 2)
 			})
 
 			t.Run("record write fails", func(t *testing.T) {
