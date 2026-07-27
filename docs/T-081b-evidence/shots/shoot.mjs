@@ -286,4 +286,129 @@ if (group === "pack2") {
   await ctx.close();
 }
 
+// ── group labels：拿掉每列重複標籤之後的樣子(commit 650754c)。
+// 匯入小精靈村包讓清單同時有「內建」「自訂」兩列,但**不切換主題** —— 維持內建深色,
+// 才跟 smurf-final-import.png 那張舊圖同條件可比。
+if (group === "labels") {
+  const bundle = JSON.parse(
+    readFileSync(join(PACK, "smurf-village.theme.json"), "utf8")
+  );
+  const { ctx, page } = await openApp({ width: 1440, height: 900, wide: false });
+  const warn = await importBundle(page, bundle);
+  console.log("import warning:", warn);
+
+  // 19：設定 › 主題 清單。停在匯入後的清單頁,主題仍是內建「辦公室」。
+  await shot(
+    page,
+    "19-theme-list-no-row-tags.png",
+    "設定 › 主題 清單(拿掉每列標籤後)· 內建主題 · 窄版 1440",
+    { importWarning: warn, activeTheme: await page.evaluate(() => localStorage.getItem("oc.theme")) }
+  );
+
+  // 20：主題下拉。它是原生 <select>,原生下拉的彈出層由作業系統畫、不會進頁面截圖,
+  // 所以用 size 把同一顆 select 攤成 in-page 清單框 —— DOM 與 <optgroup> 都是產品真的
+  // 渲染出來的那一份,只是強制展開。
+  await page.locator(".topbar button").last().click();
+  await page.waitForTimeout(400);
+  await page.getByText("偏好設定", { exact: true }).click();
+  await page.waitForTimeout(500);
+  const opt = await page.evaluate(() => {
+    const sel = document.querySelector("select.profile-dd__input");
+    sel.size = sel.querySelectorAll("option").length + sel.querySelectorAll("optgroup").length;
+    // .profile-dd__input 給的是固定行高,攤開後會被裁掉,放開高度讓兩組都露出來
+    sel.style.height = "auto";
+    sel.style.minHeight = "0";
+    sel.style.overflow = "visible";
+    return [...sel.querySelectorAll("optgroup")].map((g) => ({
+      group: g.label,
+      options: [...g.querySelectorAll("option")].map((o) => o.textContent),
+    }));
+  });
+  console.log("optgroups:", JSON.stringify(opt, null, 1));
+  await page.waitForTimeout(300);
+  await shot(page, "20-theme-select-optgroups.png", "主題下拉(展開)· <optgroup> 分成內建/自訂兩組", {
+    importWarning: warn,
+    optgroups: opt,
+  });
+  await ctx.close();
+}
+
+// ── group prefs：偏好設定面板「正常」的樣子 —— 主題下拉維持未展開的原始外觀,
+// 不做任何 size/height 手腳,連同語言、版面等其他偏好項目一起入鏡。
+if (group === "prefs") {
+  const bundle = JSON.parse(
+    readFileSync(join(PACK, "smurf-village.theme.json"), "utf8")
+  );
+  const { ctx, page } = await openApp({ width: 1440, height: 900, wide: false });
+  const warn = await importBundle(page, bundle);
+  console.log("import warning:", warn);
+  await gotoMonitor(page); // 背後停在一般畫面,不要停在設定頁
+  await page.locator(".topbar button").last().click();
+  await page.waitForTimeout(400);
+  await page.getByText("偏好設定", { exact: true }).click();
+  await page.waitForTimeout(600);
+  const panel = await page.evaluate(() => {
+    const sel = document.querySelector("select.profile-dd__input");
+    return {
+      selectSize: sel.size,
+      selectValue: sel.value,
+      options: [...sel.querySelectorAll("optgroup")].map((g) => ({
+        group: g.label,
+        options: [...g.querySelectorAll("option")].map((o) => o.textContent),
+      })),
+      sections: [...document.querySelectorAll(".profile-dd__section-label")].map(
+        (e) => e.textContent
+      ),
+    };
+  });
+  console.log("panel:", JSON.stringify(panel));
+  await shot(page, "21-preferences-panel.png", "偏好設定面板(正常狀態,主題下拉未展開)· 窄版 1440", {
+    importWarning: warn,
+    ...panel,
+  });
+  await ctx.close();
+}
+
+// ── group flat:拿掉 <optgroup> 之後的偏好設定面板(round 7)。條件與第 21 張同:
+// 先匯入小精靈村最終包讓清單同時有內建與自訂,**匯入後不切換主題**,窄版 1440。
+// 只拍收合態 —— 原生下拉的展開層由作業系統畫,已有第 22 張。
+if (group === "flat") {
+  const bundle = JSON.parse(
+    readFileSync(join(PACK, "smurf-village.theme.json"), "utf8")
+  );
+  const { ctx, page } = await openApp({ width: 1440, height: 900, wide: false });
+  const warn = await importBundle(page, bundle);
+  console.log("import warning:", warn);
+  await gotoMonitor(page); // 背後停在一般畫面,不要停在設定頁
+  await page.locator(".topbar button").last().click();
+  await page.waitForTimeout(400);
+  await page.getByText("偏好設定", { exact: true }).click();
+  await page.waitForTimeout(600);
+  const panel = await page.evaluate(() => {
+    const sel = document.querySelector("select.profile-dd__input");
+    return {
+      optgroupCount: sel.querySelectorAll("optgroup").length,
+      selectValue: sel.value,
+      // 順序就是防線本身:內建必須是第 0 顆。
+      optionOrder: [...sel.querySelectorAll("option")].map((o) => ({
+        value: o.value,
+        text: o.textContent,
+      })),
+      sections: [...document.querySelectorAll(".profile-dd__section-label")].map(
+        (e) => e.textContent
+      ),
+    };
+  });
+  console.log("panel:", JSON.stringify(panel, null, 1));
+  if (panel.optgroupCount !== 0) throw new Error("optgroup still present");
+  if (panel.optionOrder[0].value !== "office") throw new Error("built-in is not first");
+  await shot(
+    page,
+    "23-preferences-panel-flat-select.png",
+    "偏好設定面板(收合態)· 主題下拉已改平面清單、內建在前 · 窄版 1440",
+    { importWarning: warn, ...panel }
+  );
+  await ctx.close();
+}
+
 await browser.close();

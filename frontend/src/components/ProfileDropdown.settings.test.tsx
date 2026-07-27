@@ -70,17 +70,15 @@ describe("ProfileDropdown · preferences scope", () => {
       expect(o).toBeTruthy();
       return o!;
     });
-    // 內建 / 自訂 is STRUCTURE: each option sits in the <optgroup> that says what
-    // it is, and each option's own text is just the theme's name.
-    const groupOf = (o: HTMLOptionElement) =>
-      (o.parentElement as HTMLOptGroupElement).label;
+    // A flat list (owner 2026-07-27: no 分區 in the quick picker) — every
+    // option's text is the theme's own name and nothing else, and the 內建 /
+    // 自訂 marking lives in 設定 › 主題 (ThemeSettings.test.tsx).
+    expect(select.querySelectorAll("optgroup").length).toBe(0);
     const builtin = Array.from(select.querySelectorAll("option")).find(
       (o) => o.value === "office"
     )!;
     expect(builtin.textContent).toBe(zh.themeIdentity.office);
-    expect(groupOf(builtin)).toBe(zh.themeMarkers.builtinGroup);
     expect(custom.textContent).toBe("午夜藍");
-    expect(groupOf(custom)).toBe(zh.themeMarkers.customGroup);
     // Management chips no longer live in the quick menu.
     expect(utils.queryByText(p.themeConfirmImport)).toBeNull();
     // A hint points the owner to the settings page instead.
@@ -111,23 +109,40 @@ describe("ProfileDropdown · preferences scope", () => {
     const options = Array.from(select.querySelectorAll("option"));
     const builtin = options.find((o) => o.value === "office")!;
     const forged = options.find((o) => o.value === "spoofpack")!;
-    // The spoof keeps its own name (it is legal), but it is NOT the built-in row…
+    // The spoof keeps its own name (it is legal), but it is NOT the built-in row:
+    // the built-in's text is the bare identity name, so no pack name can be
+    // byte-identical to it while also carrying a 內建 marker — the picker prints
+    // no marker at all.
     expect(forged.textContent).toBe(spoof);
+    expect(builtin.textContent).toBe(zh.themeIdentity.office);
     expect(builtin.textContent).not.toBe(forged.textContent);
-    // …and the thing that says which is which is the group, not the text.
-    expect((builtin.parentElement as HTMLOptGroupElement).label).toBe(
-      zh.themeMarkers.builtinGroup
+    expect(select.textContent).not.toContain(
+      `${zh.themeIdentity.office}${zh.themeMarkers.builtinGroup}`
     );
-    expect((forged.parentElement as HTMLOptGroupElement).label).toBe(
-      zh.themeMarkers.customGroup
-    );
-    // The built-in group holds exactly the built-in.
-    const builtinGroup = Array.from(select.querySelectorAll("optgroup")).find(
-      (g) => g.label === zh.themeMarkers.builtinGroup
-    )!;
+    // And the pack cannot buy the built-in's place in the list by its name.
+    expect(options.indexOf(builtin)).toBe(0);
+  });
+
+  it("keeps the built-in first and the packs after, whatever they are named", async () => {
+    // The one thing the flat picker still asserts is ORDER (owner 2026-07-27).
+    // It has to come from the rendering, not from the data: neither a name that
+    // sorts first nor the order the packs were imported in may push a pack
+    // ahead of the built-in.
+    setToken("owner-token");
+    await api.patchServerSettings({
+      customThemes: [
+        { id: "aaa", name: "AAA 最前面", colors: { "--color-bg": "#101018" } },
+        { id: "zzz", name: "000 更前面", colors: { "--color-bg": "#181018" } },
+      ],
+    });
+    const utils = await openPreferences();
+    const select = utils.getByLabelText(p.theme);
+    await waitFor(() => {
+      expect(select.querySelectorAll("option").length).toBe(3);
+    });
     expect(
-      Array.from(builtinGroup.querySelectorAll("option")).map((o) => o.value)
-    ).toEqual(["office"]);
+      Array.from(select.querySelectorAll("option")).map((o) => o.value)
+    ).toEqual(["office", "aaa", "zzz"]);
   });
 
   it("selects the built-in office theme from the quick picker", async () => {

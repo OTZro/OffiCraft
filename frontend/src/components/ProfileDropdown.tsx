@@ -267,22 +267,22 @@ export function ProfileDropdown({
               </div>
             </div>
 
+            {/* A flat list, built-ins first (owner 2026-07-27: 「下拉式選單不用
+              * 使用分區」/「就算真的沒有顯示內建或自訂也沒關係,只要設定有標示出來
+              * 就好」). 內建 / 自訂 is shown in 設定 › 主題 only — this quick picker
+              * is a plain ordered list.
+              *
+              * What must NOT come back is a TEXT marker on the option itself: a
+              * pack naming itself 「辦公室(內建)」 then puts a second,
+              * byte-identical built-in-looking row here (T-081b review round 3,
+              * BLOCKER-2). Each option's text is the theme's own name and
+              * nothing else; the only thing this picker asserts is ORDER, and
+              * order comes from the rendering below — the built-in is written
+              * out first, the packs follow — so no field of a bundle can move a
+              * row ahead of the built-in. */}
             <select className="profile-dd__input" aria-label={t.profile.theme} value={theme} onChange={(e) => setTheme(e.target.value)}>
-              {/* 內建 / 自訂 is carried by the <optgroup> STRUCTURE, never by the
-               * option text. A text marker was forgeable: a pack simply naming
-               * itself 「辦公室(內建)」 put a second, byte-identical 「辦公室(內建)」
-               * row in this picker — the very symptom the marker existed to stop
-               * (T-081b review round 3, BLOCKER-2). A group label cannot be
-               * claimed by a theme name, and the labels themselves come from the
-               * non-overridable themeMarkers subtree. */}
-              <optgroup label={t.themeMarkers.builtinGroup}>
-                <option value="office">{t.themeIdentity.office}</option>
-              </optgroup>
-              {customThemes.length > 0 && (
-                <optgroup label={t.themeMarkers.customGroup}>
-                  {customThemes.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-                </optgroup>
-              )}
+              <option value="office">{t.themeIdentity.office}</option>
+              {customThemes.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
             </select>
           </div>
 
