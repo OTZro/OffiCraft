@@ -583,6 +583,7 @@ func runtimeAccountServer(t *testing.T, memberRuntime, report string) *apiServer
 			t.Fatalf("seed alias: %v", err)
 		}
 	}
+	seedRegisteredMachine(t, s, "m-eva-m5")
 	if rec := doIngestTelemetry(s, "kyle", "m-eva-m5", report); rec.Code != 200 {
 		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
 	}
@@ -607,7 +608,12 @@ func TestGetMonitoring_RuntimeAccountNeverBorrowsAnotherRuntime(t *testing.T) {
 	if got := d["sessions"].([]any)[0].(map[string]any)["account"]; got != "" {
 		t.Fatalf("claude session account = %v, want honest empty", got)
 	}
-	if got := d["machines"].([]any)[0].(map[string]any)["accounts"].([]any); len(got) != 0 {
+	// Addressed by host rather than by index: the machines list no longer
+	// contains every host that ever reported (T-b89d), so "row 0" is not a
+	// stable way to name the box under test.
+	if mr := machineRowIn(d, "m-eva-m5"); mr == nil {
+		t.Fatalf("registered machine m-eva-m5 lost its row: %v", d["machines"])
+	} else if got := mr["accounts"].([]any); len(got) != 0 {
 		t.Fatalf("foreign-runtime account leaked into machine fold: %v", got)
 	}
 	if got := d["accounts"].([]any); len(got) != 1 || got[0].(map[string]any)["display_name"] != "EvaChatGPT" {
@@ -991,6 +997,7 @@ func freshnessServer(t *testing.T, hw string) (*apiServer, func(ageSecs float64)
 	if err := s.dal.PutMember(m); err != nil {
 		t.Fatalf("seed member: %v", err)
 	}
+	seedRegisteredMachine(t, s, "m-abc123")
 	if rec := doIngestTelemetry(s, "mira", "m-abc123",
 		`{"runtime":"claude","hardware":`+hw+`}`); rec.Code != 200 {
 		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
@@ -999,6 +1006,34 @@ func freshnessServer(t *testing.T, hw string) (*apiServer, func(ageSecs float64)
 		entry := s.telemetry.Get("mira")
 		entry["hardware_ts"] = nowSecs() - ageSecs
 		s.telemetry.Set("mira", entry)
+	}
+}
+
+// seedRegisteredMachine registers the warden member that makes `id` a REAL
+// machine — the roster fact GET /api/machines lists and (since T-b89d) the
+// monitoring machines fold requires before it will emit a row for a host.
+//
+// ⚠️ Not decoration, and not "making the test pass": a host id can only ever
+// reach this handler by being a machine the server itself placed something on
+// (a member's desired_machine_id, an SSE machine claim, a worker's spawn
+// target — all of them warden member ids), so a fixture that reports telemetry
+// from an unregistered host was describing a world production cannot produce.
+// Registering it is what makes the fixture faithful; the T-b89d filter is what
+// made the difference visible.
+//
+// Two deliberate deviations from fullMember: a name sorting after "Mira" (the
+// warden is also a member, so it joins the `sessions` list — several tests
+// index sessions[0]) and a zeroed banked balance (so it cannot perturb a cost
+// total under any future fold).
+func seedRegisteredMachine(t *testing.T, s *apiServer, id string) {
+	t.Helper()
+	m := fullMember(id)
+	m.Kind = machineKind
+	m.Name = "zz-warden-" + id
+	m.BankedCost = 0
+	m.DesiredMachineID = ""
+	if err := s.dal.PutMember(m); err != nil {
+		t.Fatalf("seed machine %s: %v", id, err)
 	}
 }
 
@@ -1194,6 +1229,7 @@ func TestGetMonitoring_NeverReportedHardwareHasNoStamp(t *testing.T) {
 	if err := s.dal.PutMember(m); err != nil {
 		t.Fatalf("seed member: %v", err)
 	}
+	seedRegisteredMachine(t, s, "m-abc123")
 	if rec := doIngestTelemetry(s, "mira", "m-abc123",
 		`{"runtime":"claude","cost":1.5}`); rec.Code != 200 {
 		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
@@ -1477,6 +1513,9 @@ func TestGetMonitoring_WorkerOnlyAccountFillsMachineCostAndWindows(t *testing.T)
 	if rec := doIngestTelemetry(s, "mira", "m-seth-m5", `{"runtime":"claude"}`); rec.Code != 200 {
 		t.Fatalf("member ingest: %d %s", rec.Code, rec.Body.String())
 	}
+	// m-eva-m5 is a REGISTERED machine (T-b89d): a worker can only ever be
+	// spawned onto a warden member id, so this is the world production makes.
+	seedRegisteredMachine(t, s, "m-eva-m5")
 	seedWorker(t, s, "ow-eva", "E1", 2.5, WorkerStatusActive)
 	if rec := doIngestTelemetry(s, "ow-eva", "m-eva-m5",
 		`{"runtime":"claude","account":"eva-m5-claude","cost":1.25,`+
@@ -1591,7 +1630,10 @@ func TestGetMonitoring_ReleasedWorkerSpendStaysInTheAccount(t *testing.T) {
 	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
 		telemetry: newMemStore(), gauge: newMemStore()}
 	// Released AND worker-only: no member holds this key, so every value below
-	// can only have come from a released outsource worker.
+	// can only have come from a released outsource worker. The box it ran on is
+	// still REGISTERED — this test is about a released worker, not a removed
+	// machine (that is TestGetMonitoring_RemovedMachineLeavesNoOrphanRow).
+	seedRegisteredMachine(t, s, "m-eva-m5")
 	seedWorker(t, s, "ow-gone", "G1", 9.0, WorkerStatusReleased)
 	if rec := doIngestTelemetry(s, "ow-gone", "m-eva-m5",
 		`{"runtime":"claude","account":"eva-m5-claude","cost":3.0,`+
@@ -1710,7 +1752,9 @@ func TestGetMonitoring_WorkerAccountStillNeedsProvenance(t *testing.T) {
 func TestGetMonitoring_ReleasedOnlyHostKeepsRowAndAccountButCountsZeroAgents(t *testing.T) {
 	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
 		telemetry: newMemStore(), gauge: newMemStore()}
-	// m-eva-m5 carries NOTHING but a released worker.
+	// m-eva-m5 is a registered machine that carries NOTHING but a released
+	// worker — no live member, no live worker.
+	seedRegisteredMachine(t, s, "m-eva-m5")
 	seedWorker(t, s, "ow-gone", "G1", 9.0, WorkerStatusReleased)
 	if rec := doIngestTelemetry(s, "ow-gone", "m-eva-m5",
 		`{"runtime":"claude","account":"eva-m5-claude","cost":3.0,`+
@@ -1739,13 +1783,220 @@ func TestGetMonitoring_ReleasedOnlyHostKeepsRowAndAccountButCountsZeroAgents(t *
 		t.Errorf("machines[m-eva-m5].accounts = %v, want it to contain eva-m5-claude "+
 			"— the spend happened on this box", mr["accounts"])
 	}
-	// (3) ...and the agent count must be an honest 0, not an inflated 1.
-	if mr["agents"] != 0.0 {
-		t.Errorf("agents = %v, want 0 — a released worker is not a live agent; "+
-			"counting it inflates the number the owner reads", mr["agents"])
+	// (3) ...and the released worker must contribute NOTHING to the agent count.
+	//
+	// ⚠️ The expected number is 1, not 0, and the 1 is not the worker. Every
+	// registered machine's own warden IS a member (observedHost of a warden is
+	// its own id), so it is an actor on its own row and has always been counted
+	// live — that is pre-existing behaviour of this handler on 2e74953, not
+	// something T-b89d introduced, and this fixture only started seeing it when
+	// it started registering the machine (T-b89d: an unregistered host gets no
+	// row at all, so the old expectation of 0 was only reachable in a world
+	// where m-eva-m5 did not exist).
+	//
+	// The DISCRIMINATION is unchanged and is the whole point of the assertion:
+	// the mutant this pins — counting released workers in hostCounts, e.g. by
+	// dropping the countsAsPresentAgent guard — makes this 2. Verified, not
+	// reasoned: 1 with the guard, 2 without it.
+	if mr["agents"] != 1.0 {
+		t.Errorf("agents = %v, want 1 (the box's own warden, and ONLY it) — a "+
+			"released worker is not a live agent; counting it inflates the "+
+			"number the owner reads", mr["agents"])
 	}
 	// (4) the account row keeps its machine attribution end-to-end.
 	if row := accountRow(t, d, "eva-m5-claude"); row["machine"] != "m-eva-m5" {
 		t.Errorf("accounts[eva-m5-claude].machine = %v, want m-eva-m5", row["machine"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// T-b89d — the machines list has an UPPER bound, not just a lower one.
+//
+// Every sentinel above guards "this row MUST exist". None of them guarded
+// "this row must NOT exist", and the handler had no such bound at all: the row
+// set was minted from telemetry `machine` strings, telemetry is append-only
+// (the repo's only s.telemetry.Delete is the staff hard-delete in
+// api_roles.go), and deleting a machine flips its warden member's roster
+// status without touching a single telemetry entry. Net effect: a box the
+// owner removed came back on EVERY request, forever, resurrected by the
+// released workers that once ran on it.
+//
+// The fix is a membership rule, not a filter on values: WHICH BOXES EXIST is
+// the machine roster's answer (kind=warden ∧ roster=active — the same
+// predicate GET /api/machines lists), and telemetry only supplies the numbers
+// for a box that exists. The three tests below pin the two directions of that
+// rule plus the empty-host case.
+//
+//	GAP-GUARDS — VERIFIED to FAIL on 2e74953 by running them against the
+//	pre-filter handler, not by reasoning:
+//	  - RemovedMachineLeavesNoOrphanRow (the orphan row; also the REVERSE
+//	    sentinel — it asserts in the same body that the owner-reported
+//	    eva-m5-claude attribution and spend are untouched)
+//	  - UnplacedActorMintsNoBlankMachineRow (the machine:"" row)
+//
+//	REGRESSION-GUARD — VERIFIED to already PASS on 2e74953. It discriminates
+//	nothing about the orphan bug; it exists because the obvious cheap fixes for
+//	that bug (key on presence, key on "who reported recently") would all break
+//	it:
+//	  - RegisteredButSilentMachineStillListed
+// ---------------------------------------------------------------------------
+
+// TestGetMonitoring_RemovedMachineLeavesNoOrphanRow is the upper-bound
+// sentinel this ticket exists for, and it is deliberately built on the
+// HARDEST world for the fix to survive: the eva-m5-claude shape (a key held
+// ONLY by an outsource worker, and a RELEASED one) sitting on the machine
+// being removed. So the two halves pull against each other in one body:
+//
+//	the machines row must GO      — the owner removed that box
+//	the account must NOT be hurt  — its cost and its historical machine
+//	                                attribution are the owner-reported T-fc2f
+//	                                bug, and must not regress
+//
+// Removal goes through the REAL route (DELETE /api/machines/{id}), not a
+// hand-written roster flip, so the test also pins the premise the fix rests
+// on: deleting a machine is a pure roster soft-delete that leaves the worker's
+// telemetry `machine` string in place. If someone ever makes deletion clear
+// telemetry too, this still passes — and that is fine, it is the same
+// invariant reached another way.
+//
+// MUTANT: drop the `if !registeredMachines[host] { continue }` guard from the
+// `hosts` fold -> RED on (1) here (the orphan row comes back).
+func TestGetMonitoring_RemovedMachineLeavesNoOrphanRow(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	seedRegisteredMachine(t, s, "m-eva-m5")
+	seedWorker(t, s, "ow-gone", "G1", 9.0, WorkerStatusReleased)
+	if rec := doIngestTelemetry(s, "ow-gone", "m-eva-m5",
+		`{"runtime":"claude","account":"eva-m5-claude","cost":3.0,`+
+			workerRateLimits+`}`); rec.Code != 200 {
+		t.Fatalf("worker ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	// Pre-condition: while the machine is registered, it HAS a row. Without
+	// this the test could pass by asserting the absence of something that was
+	// never there.
+	if mr := machineRowIn(monitoringOf(t,
+		doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"})),
+		"m-eva-m5"); mr == nil {
+		t.Fatalf("pre-condition: a registered machine must have a machines row")
+	}
+
+	// The owner removes the machine, through the route they would actually use.
+	del := httptest.NewRecorder()
+	s.HandleDeleteMachineApiMachinesMemberIdDelete(del,
+		httptest.NewRequest("DELETE", "/api/machines/m-eva-m5", nil), "m-eva-m5")
+	if del.Code != 200 {
+		t.Fatalf("delete machine: %d %s", del.Code, del.Body.String())
+	}
+	// The premise, verified rather than assumed: removal did NOT touch the
+	// worker's telemetry, so the orphan-minting input is still present.
+	if got, _ := s.telemetry.Get("ow-gone")["machine"].(string); got != "m-eva-m5" {
+		t.Fatalf("premise broken: worker telemetry machine = %q, want it to still "+
+			"name the removed box (that is what used to mint the orphan)", got)
+	}
+
+	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	// (1) THE TICKET: a machine the owner removed must not be in the list.
+	if mr := machineRowIn(d, "m-eva-m5"); mr != nil {
+		t.Errorf("removed machine still listed: %v — telemetry is append-only, so "+
+			"a row set minted from it can only grow; membership must come from "+
+			"the machine roster", mr)
+	}
+	// (2) REVERSE SENTINEL — the owner-reported T-fc2f bug must not regress.
+	// A worker-only, released account still reports its full spend...
+	row := accountRow(t, d, "eva-m5-claude")
+	if row["cost"] != 12.0 {
+		t.Errorf("cost = %v, want 12 (live 3.0 + banked 9.0) — removing a machine "+
+			"must not claw back money that was spent on it", row["cost"])
+	}
+	// ...its rate-limit windows...
+	for _, win := range []string{"five_hour", "seven_day"} {
+		if _, ok := row[win].(map[string]any); !ok {
+			t.Errorf("%s = %v, want a shaped window", win, row[win])
+		}
+	}
+	// ...and its machine attribution, which is HISTORY and stays truthful.
+	// Deliberate: acctByHost is untouched by this fix. "That spend happened on
+	// m-eva-m5" does not stop being true when the box is decommissioned, and
+	// blanking it would delete the only record of where the money went.
+	if row["machine"] != "m-eva-m5" {
+		t.Errorf("accounts[eva-m5-claude].machine = %v, want m-eva-m5 — where the "+
+			"money was burned is a historical fact, not a live inventory lookup",
+			row["machine"])
+	}
+}
+
+// TestGetMonitoring_RegisteredButSilentMachineStillListed pins the boundary
+// that rules out every cheaper version of the fix. A machine that is
+// registered but has NOTHING on it — no member, no worker, no telemetry of its
+// own, no SSE connection — must still be listed. Existence is a roster fact,
+// not a liveness fact: a laptop that is closed has not stopped being one of
+// your machines, and a cockpit that hides it makes the owner think it was
+// deleted.
+//
+// This is a REGRESSION-GUARD, not a gap-guard: it passes on 2e74953 too
+// (the box's own warden member is an actor there as well, so the key was
+// minted). It is here because "key on presence" / "key on recent telemetry"
+// are the obvious ways to bound the machines list, and both go red here.
+func TestGetMonitoring_RegisteredButSilentMachineStillListed(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	seedRegisteredMachine(t, s, "m-quiet")
+
+	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	mr := machineRowIn(d, "m-quiet")
+	if mr == nil {
+		t.Fatalf("a registered machine with nothing running on it vanished from "+
+			"the list: %v — offline is not removed", d["machines"])
+	}
+	// It is honest about having nothing measured, rather than absent.
+	if got, present := mr["hardware_ts"]; !present || got != nil {
+		t.Errorf("hardware_ts = %v, want null", got)
+	}
+	if got := mr["accounts"].([]any); len(got) != 0 {
+		t.Errorf("accounts = %v, want empty", got)
+	}
+}
+
+// TestGetMonitoring_UnplacedActorMintsNoBlankMachineRow covers the second
+// symptom on the ticket. An actor whose host cannot be resolved
+// (observedWorkerHost's honest "" — the common case for a worker refused
+// placement, see the no_machine_selected refusal in worker_spawn.go) used to
+// mint a machines row with machine:"" / display_name:"", and since T-fc2f that
+// blank row also carried the actor's ACCOUNT. So the cockpit rendered a
+// nameless box, and hung real money off it.
+//
+// "" is not a machine id, it is the absence of one, so it can never be in the
+// registry and the row is now simply gone. The account is NOT lost with it:
+// the accounts section still carries the key, with an honest-empty machine
+// cell. "I don't know where this ran" is a true statement; "it ran on «blank»"
+// is not — and only one of the two can be acted on.
+//
+// MUTANT: drop the registry guard -> RED on (1) (the blank row returns,
+// carrying the account).
+func TestGetMonitoring_UnplacedActorMintsNoBlankMachineRow(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	// No machine claim and no self-reported machine: observedWorkerHost has
+	// nothing to resolve, exactly like a worker that never got placed.
+	seedWorker(t, s, "ow-nowhere", "N1", 1.0, WorkerStatusActive)
+	if rec := doIngestTelemetry(s, "ow-nowhere", "",
+		`{"runtime":"claude","account":"eva-m5-claude","cost":2.0}`); rec.Code != 200 {
+		t.Fatalf("worker ingest: %d %s", rec.Code, rec.Body.String())
+	}
+
+	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	// (1) no nameless row, with or without an account hanging off it.
+	if mr := machineRowIn(d, ""); mr != nil {
+		t.Errorf("blank machines row present: %v — \"\" is the absence of a "+
+			"machine id, so it must not render as a box", mr)
+	}
+	// (2) the account is still observable, and honest about not knowing where.
+	row := accountRow(t, d, "eva-m5-claude")
+	if row["cost"] != 3.0 {
+		t.Errorf("cost = %v, want 3 (live 2.0 + banked 1.0) — suppressing the blank "+
+			"ROW must not suppress the SPEND", row["cost"])
+	}
+	if row["machine"] != "" {
+		t.Errorf("accounts[eva-m5-claude].machine = %v, want honest empty", row["machine"])
 	}
 }

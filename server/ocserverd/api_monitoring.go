@@ -925,14 +925,26 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	// bounded 2-minute undercount is the better error, which is what makes 0 an
 	// acceptable answer rather than merely a defensible one.
 	//
-	// Hence the split below: EVERY actor mints its host key (so the row and its
-	// account attribution survive), but only a LIVE actor increments the count.
-	// These must stay separate statements — `hosts` is derived from the
-	// hostCounts key set, so folding them back together deletes the machines row
-	// for a box whose workers have all been released, and takes that account's
-	// machine attribution down with it. Verified by construction, not assumed:
-	// the naive `if !a.countsAsPresentAgent { continue }` was measured and does
-	// exactly that.
+	// Hence the split below: EVERY actor mints its host key, but only a LIVE
+	// actor increments the count.
+	//
+	// ⚠️ WHY THE SPLIT EXISTS HAS CHANGED — read this before citing it (T-b89d).
+	// T-fc2f wrote the split because `hosts` was derived from the hostCounts key
+	// SET, so folding the two statements together deleted the machines row for a
+	// box whose workers had all been released. That reasoning is now HISTORY:
+	// `hosts` comes from the machine REGISTRY (see the block below), and a
+	// registered box's own warden is always an actor on its own host key
+	// (observedHost of a warden is its own id, unconditionally), so its row
+	// exists whether or not anything else mints it.
+	//
+	// MEASURED, not reasoned: with this change in place, deleting the
+	// zero-value mint below leaves the whole suite GREEN — the T-fc2f mutant no
+	// longer discriminates, because the invariant it protected moved somewhere
+	// structurally stronger. The mint is kept anyway: it is what makes
+	// hostCounts' key set mean "every host any actor was observed on", which is
+	// the honest input to intersect with the registry, and T-fc2f's deliberate
+	// two-statement shape is not this ticket's to dismantle. Do NOT re-derive
+	// `hosts` from live actors only and assume the tests will catch you.
 	//
 	// Precisely what does and does not change for workers, since "no-op" is too
 	// coarse a word for this loop:
@@ -940,23 +952,20 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	//     contextreport `telemetryBody`) has no `hardware` field at all, and the
 	//     ingest DTO is additionalProperties:false, so an `ow-` entry can never
 	//     carry one. Only the per-machine warden samples hardware.
-	//   - hostCounts: NOT a no-op, and not merely a count. Touching the map
-	//     MINTS the host key, and `hosts` is derived from it — so a box that
-	//     carries only workers gains a machines row it never had. That is the
-	//     point (see above), not a side effect.
-	// ⚠️ Pre-existing, widened here: an actor whose host resolves to "" mints a
-	// row with machine:"" / display_name:"". A member with no desired_machine_id
-	// already did this identically (verified, not assumed), so this is not new
-	// behaviour — but unplaced workers are far more common than unplaced members
-	// (see the `no_machine_selected` refusal in worker_spawn.go), so the empty
-	// row will be seen more often. Left alone deliberately: suppressing it is a
-	// change to the machines section's honest-empty contract, not part of T-fc2f.
+	//   - hostCounts: still not merely a count — touching the map MINTS the host
+	//     key. Since T-b89d that no longer decides whether a row appears (the
+	//     registry does), but it is still what makes the key set complete.
+	//
+	// ⚠️ THE HOST KEY SET IS NOT THE ROW SET (T-b89d). Every actor's host is
+	// minted here — including hosts that are not machines at all ("") and hosts
+	// of boxes the owner has since removed — because hostCounts and acctByHost
+	// must describe what was OBSERVED. Which of those keys becomes a machines
+	// ROW is a separate, roster-driven decision made below.
 	for _, a := range actors {
 		entry := tele(a.id)
 		host := a.host
-		// Mint the host key for EVERY actor — this is what puts the row in
-		// `hosts` and gives the account somewhere to hang. Deliberately a
-		// zero-valued write, not an increment.
+		// Mint the host key for EVERY actor, so the key set is the observed set.
+		// Deliberately a zero-valued write, not an increment.
 		if _, minted := hostCounts[host]; !minted {
 			hostCounts[host] = 0
 		}
@@ -985,8 +994,77 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 			acctByHost[host][account] = true
 		}
 	}
+	// T-b89d — WHICH BOXES EXIST IS THE ROSTER'S ANSWER, NOT TELEMETRY'S.
+	//
+	// The rows above supply VALUES per host; they must not decide MEMBERSHIP.
+	// Telemetry is append-only in this repo (the only s.telemetry.Delete is the
+	// staff hard-delete in api_roles.go) and a worker's `machine` string is
+	// never rewritten when its box goes away, so a key set minted from
+	// "whoever reported" is a set that can only ever GROW. Deleting a machine
+	// flips its warden member to roster removed (api_machines.go
+	// HandleDeleteMachine…) and touches no telemetry at all — so before this
+	// filter, a deleted box kept a machines row FOREVER, resurrected on every
+	// request by the released workers that once ran on it. The owner was being
+	// shown, permanently, a machine they had removed.
+	//
+	// `registeredMachines` is the SAME predicate GET /api/machines lists and
+	// resolveMachine accepts (kind=warden ∧ roster=active) — deliberately the
+	// same one, so the cockpit's machine list and the monitoring machine list
+	// can never disagree about what exists. Note the predicate is roster-based,
+	// NOT presence-based and NOT uninstall-based.
+	//
+	// The four boundaries, each decided and each pinned by a test:
+	//
+	//  1. REGISTERED BUT OFFLINE (nobody running on it, warden not connected) —
+	//     ROW STAYS. Existence is a roster fact, not a liveness fact; a laptop
+	//     that is closed has not stopped being one of your machines. Falls out
+	//     of the predicate for free: the box's own warden member is in `actors`
+	//     (observedHost of a warden is its own id) regardless of connectivity,
+	//     so the key is minted and the registry admits it.
+	//     Pinned: TestGetMonitoring_RegisteredButSilentMachineStillListed.
+	//
+	//  2. REMOVED (deleted / decommissioned) — ROW GONE, even though its
+	//     telemetry lives on. This is the ticket.
+	//     Pinned: TestGetMonitoring_RemovedMachineLeavesNoOrphanRow.
+	//
+	//  3. UNINSTALLED BUT NOT DELETED — ROW STAYS. Uninstall keeps the record
+	//     on purpose ("re-installable", see the uninstall-convergence fold
+	//     above) and GET /api/machines still lists it; hiding it here only
+	//     while it is listed there would be the two surfaces disagreeing.
+	//
+	//  4. HOST UNRESOLVED ("") — NO ROW. "" is not a machine id, it is the
+	//     absence of one (observedWorkerHost's honest empty), so it can never
+	//     be in the registry. This deletes the blank machines row that unplaced
+	//     actors used to mint — and with it the surprise that an ACCOUNT could
+	//     be attributed to a machine that does not exist. The account itself is
+	//     NOT lost: acctByHost is untouched, so the accounts section still
+	//     carries the key with an honest-empty `machine` cell. "I don't know
+	//     where this ran" is a true statement; "it ran on «blank»" is not.
+	//     Pinned: TestGetMonitoring_UnplacedActorMintsNoBlankMachineRow.
+	//
+	// ⚠️ STRICTLY NARROWING, and that is the whole safety argument. This loop
+	// can only DROP keys; it can never add one, never change a count, and it
+	// does not touch acctByHost / acctHosts at all — so the accounts section
+	// (the surface T-fc2f fixed: an outsource-held key's cost, windows, and
+	// machine attribution) is bit-for-bit unaffected, including for a key whose
+	// box was later removed. Pinned by
+	// TestGetMonitoring_RemovedMachineLeavesNoOrphanRow, which asserts the row
+	// is gone and the account is intact in the same body.
+	//
+	// ⚠️ And it makes the zero-value mint above provably redundant — measured,
+	// see the note there. Deleting the mint is a real option, not a mistake,
+	// but it is T-fc2f's structure and a separate decision.
+	registeredMachines := map[string]bool{}
+	for _, m := range all {
+		if m.Kind == machineKind && m.RosterStatus == RosterStatusActive {
+			registeredMachines[m.ID] = true
+		}
+	}
 	hosts := make([]string, 0, len(hostCounts))
 	for host := range hostCounts {
+		if !registeredMachines[host] {
+			continue
+		}
 		hosts = append(hosts, host)
 	}
 	sort.Strings(hosts)
