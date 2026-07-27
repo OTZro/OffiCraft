@@ -385,6 +385,15 @@ behaviour beyond the string templating.
 
 ## Appendix B — doc↔code discrepancies found at freeze (code wins; spec follows code)
 
+> **Scope of "code wins": this appendix is a RECORD of how these specific
+> discrepancies were adjudicated AT THE M1 FREEZE — it is not a standing rule that
+> code beats docs whenever the two disagree.** Each item below was decided once,
+> at freeze, and the decision is frozen with the spec; do not re-derive it. For a
+> discrepancy found *now*, the standing rule applies instead: stop and ask the
+> owner (`seeds/system_interaction.md` §4.1), because the reason code "won" here
+> was a freeze-time judgement about a shipped wire, not evidence that code is the
+> more trustworthy authority in general.
+
 1. **`--no-reconcile` does not exist.** The migration plan (Phase 4 §2) requires a
    reconcile kill-switch for shadow deployment; the current implementation is
    unconditionally always-on. This spec freezes the always-on

@@ -18,9 +18,9 @@ This file is read by Claude Code agents working in this repo.
 
 7. **push 前審完整檔案 manifest**:push 前用 `git diff --stat`(未 commit)/ `git show --stat`(已 commit)把**每一個**新增、刪除、移動的檔逐一過一遍,確認**都有明確必要性理由**——不是只掃「預期改的檔」就放行。⚠️ 這是曾把 `owner_token`(真機密)+ scratchpad 垃圾誤 commit 進 origin/main 的**根因**:當時 review 只審預期檔、對雜檔視而不見,漏網檔就這樣上了遠端。manifest 上任何一個你講不出必要性的檔 = 停下、查清、清掉再 push。CI 第 7 道(path denylist + gitleaks)是硬防線,但**人眼審 manifest 是第一道**,別把它讓給 gate。
 
-8. **context 與碼共存(context lives with code)**:設計/context 文件與其描述的碼 **co-located**——放在一起(模組旁的 doc、或 `docs/` 下對應路徑),讓後人一眼找得到某塊碼的意圖。紀律:(a) **改碼與更新其 context doc 在同一個 commit**,doc 永不落後於碼;(b) **刪 legacy 碼時同一 commit 刪掉它的 context doc**,不留孤兒化石;(c) **動某塊碼前先讀它的 context doc** 建立正確心智模型,改完**同步更新**。理由:過時的 doc/碼會讓後來的 builder 在**錯誤概念**上疊床架屋,愈疊愈歪——主動防之。⚠️ **關鍵護欄**:doc 與碼**不一致時,別擅自假設「doc 是舊的」就刪 doc 遷就碼**——很可能是**碼漂離了原始設計、而 doc 才是意圖(design intent)**。git timeline 只當線索、不當判決;**最終真相源是 owner(Seth)**:發現 doc↔碼 misalignment,**先跟 Seth 確認哪個對,別自行裁定**、更別靜默改掉任一邊。
+8. **context 與碼共存(context lives with code)**:設計/context 文件與其描述的碼 **co-located**——放在一起(模組旁的 doc、或 `docs/` 下對應路徑),讓後人一眼找得到某塊碼的意圖。紀律:(a) **改碼與更新其 context doc 在同一個 commit**,doc 永不落後於碼;(b) **刪 legacy 碼時同一 commit 刪掉它的 context doc**,不留孤兒化石;(c) **動某塊碼前先讀它的 context doc** 建立正確心智模型,改完**同步更新**。理由:過時的 doc/碼會讓後來的 builder 在**錯誤概念**上疊床架屋,愈疊愈歪——主動防之。⚠️ **關鍵護欄(本條只給 doc↔碼 這個特例的判讀,規則本體不在這裡)**:doc 與碼**不一致時,別擅自假設「doc 是舊的」就刪 doc 遷就碼**——很可能是**碼漂離了原始設計、而 doc 才是意圖(design intent)**;git timeline 只當線索、不當判決。**這是「兩份權威互相矛盾」的一個實例,處置一律照 seed 通則辦:停下、開等我回覆卡問 owner,不自行裁定,也別靜默改掉任一邊。** 該規則的**唯一表述**在 `seeds/system_interaction.md` §4.1「第三種開卡理由——兩份權威打架時」,**本檔不重述**(只留上面 doc↔碼 特有的判讀)。 <!-- defers-to: rule:conflicting-authorities@db5ed69fc703 -->
 
-9. **reviewer code-hygiene checklist(每次 land-flow review 必查)**:review 一個 land 前,除既有 §7 manifest 審查外,逐條過這四點——(a) 有無**該清而沒清的 legacy 碼 / 過時 doc** 被留下?(b) 本次改動有無**建在過時或錯誤的概念**上(疊在已漂移的碼/doc 之上)?(c) 動到的碼,其 **context doc 有沒有隨碼同一波更新**(§8)?**特別地:凡動到 agent 互動面(MCP 工具、`ocagent` CLI、agent 要照做的流程),`seeds/`(global context)必須同一批更新**——agent 只知道 seed 教的做法,seed 不更新=新能力對全 fleet 隱形(owner 定調 2026-07-12;反例:attachment 送端 land 了、seed 卻還教舊法)?(d) 一旦發現 **doc↔碼 misalignment,就 flag Seth**、不自裁哪個對。任何一點不過 = 擋下、align 清楚再放行。
+9. **reviewer code-hygiene checklist(每次 land-flow review 必查)**:review 一個 land 前,除既有 §7 manifest 審查外,逐條過這四點——(a) 有無**該清而沒清的 legacy 碼 / 過時 doc** 被留下?(b) 本次改動有無**建在過時或錯誤的概念**上(疊在已漂移的碼/doc 之上)?(c) 動到的碼,其 **context doc 有沒有隨碼同一波更新**(§8)?**特別地:凡動到 agent 互動面(MCP 工具、`ocagent` CLI、agent 要照做的流程),`seeds/`(global context)必須同一批更新**——agent 只知道 seed 教的做法,seed 不更新=新能力對全 fleet 隱形(owner 定調 2026-07-12;反例:attachment 送端 land 了、seed 卻還教舊法)?(d) 一旦發現 **doc↔碼 misalignment** → 照 §8 的關鍵護欄辦(規則本體見 `seeds/system_interaction.md` §4.1),不自裁哪個對。 <!-- defers-to: rule:conflicting-authorities@db5ed69fc703 --> 任何一點不過 = 擋下、align 清楚再放行。
 
 ---
 
@@ -34,7 +34,7 @@ This file is read by Claude Code agents working in this repo.
 
 12. **結構約定**:
     - **路由 table-driven**:新增 server 端點 = 在 route 表(`server/ocserverd/routes.go`)加一行 `RouteSpec` + handler + test,不散寫 mount(且 wire 已凍結——先走 spec,見 §13)。
-    - **DTO 向後相容**:對外 DTO 加欄一律 `optional`(不破既有 client);要破壞相容**先問 Seth**(§8 同源)。
+    - **DTO 向後相容**:對外 DTO 加欄一律 `optional`(不破既有 client);要破壞相容**先問 Seth**(同源於「該停下來問 owner、不自行拍板」那一類;規則本體見 `seeds/system_interaction.md` §4.1,§8 是它在 doc↔碼 上的實例)。
 
 13. **land / verify 紀律(AI-friendly:宣告前先坐實)**:
     - **verify-at-source > 自報**:任何「做完了 / 能跑 / 現況是 X」的 claim,回**最源頭**坐實(git / curl / CI 實際輸出),不憑記憶或 exit code。CI 綠的判準是 **rc == 0 且整份輸出的最後一行**精確等於 `[ci] all green`(`tail -n 1 | grep -qFx '[ci] all green'`)——**兩個條件都要,寬鬆 grep 一律不算**。⚠️ 這條在 T-d3e3 從「只看最後一行」改成 AND,理由是兩半各自都不夠:step 0 的 `tests_guard` 第一步就印自己的 `all green`,所以任何爆掉的 log 都已含該子字串(寬鬆 grep 無效);而**被 dispatch 的 lane 只要 `echo "[ci] all green"; exit 1`,ci.sh 的 `set -e` 就在那裡中止、偽造權威剛好落在最後一行**(這個假綠被實作出來過)。舊文寫「不是 exit 0」講的是 **rc 不足以單獨判綠**(前例:`bin/common.sh` 的 `set -e` 打敗 `run_all.sh` 刻意的 rc 捕獲,失敗訊號靜默消失),**不是「rc 不該被檢查」**——要求兩者同時成立比任一半都嚴格,與原裁定相容。可執行形式見 `bin/tests/ci-success-marker.sh`(同時掃 ci.sh 與每個被 dispatch 的 lane 腳本)。⚠️ 連自跑 CI 也可能被 **working tree(含未 commit 的 fix)**騙——land 前確認 **working tree == commit**(`git status` clean),驗的是 commit 不是 tree。

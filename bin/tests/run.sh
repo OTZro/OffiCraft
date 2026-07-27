@@ -732,6 +732,28 @@ else
   bad "bin/tests/release-guard.sh is missing"
 fi
 
+# ── single-source rule defer markers (T-c19c) ───────────────────────────────
+# The "兩份權威打架" rule (stop and open a reply card when two authorities
+# contradict each other) has ONE body, in seeds/system_interaction.md §4.1, and
+# three sites that defer to it (CLAUDE.md §8, §9(d), docs/guide/best-practices.md).
+# Before T-c19c CLAUDE.md carried its own full copy of the instruction — two
+# copies of the same rule, free to drift apart until every reader obeyed whichever
+# one they opened. Each deferring site now pins the seed block's content hash, so
+# editing the rule turns all of them red at once. A green here does NOT prove
+# there is no unregistered fourth copy — see the guard's header for the honest
+# boundary before treating it as one.
+RULEDEFER="$HERE/rule-defer-guard.sh"
+echo
+if [[ -f "$RULEDEFER" ]]; then
+  if run_guard "$RULEDEFER"; then
+    ok "single-source rule defer-marker suite passed"
+  else
+    bad "single-source rule defer-marker suite FAILED (see output above)"
+  fi
+else
+  bad "bin/tests/rule-defer-guard.sh is missing"
+fi
+
 # ── guard-of-the-guard (T-d3e3 rework) ──────────────────────────────────────
 # The ci success-marker guard is dispatched at the very BOTTOM of this file,
 # AFTER the `[[ "$FAIL" == "0" ]] || exit 1` enforcement below, so its exit code

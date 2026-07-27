@@ -143,6 +143,10 @@ the **observed wire** (8 topics at M1; 9 with the approved M2 addition; 12 with 
 task batch). The
 directed band topics `context-high` and `warden-command` (§6, §7) are a separate envelope
 family, not entity-delta topics.
+**"Resolved in favour of the wire" is the record of THIS one adjudication, made at the M1
+freeze — not a standing rule that the wire (or the code) beats the docs whenever they
+disagree.** A discrepancy found today goes to the owner instead of being decided in place;
+see `seeds/system_interaction.md` §4.1.
 
 - A delta build MUST never raise into the durable write it follows:
   fan-out failure must not fail the HTTP write that triggered it.
