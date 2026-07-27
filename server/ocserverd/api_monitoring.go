@@ -645,6 +645,19 @@ func hardwareStampOf(entry map[string]any) float64 {
 	return ts
 }
 
+// monitoringActor is the ONE thing the account/machine value folds need from an
+// actor: who it is (telemetry key), what runtime it is currently on (the
+// provenance gate's other half — NOT read off the entry, see telemetryAccount),
+// where it was observed, and what it has already banked. Members and outsource
+// workers project onto it identically; nothing downstream of the projection can
+// tell them apart, which is precisely the point (T-fc2f).
+type monitoringActor struct {
+	id      string
+	runtime string
+	host    string
+	banked  float64
+}
+
 // GET /api/monitoring — the three-section fold (sessions / machines /
 // accounts) over the roster + gauge + warden telemetry. NEVER fabricates a
 // number: unmeasured stays null / honest-empty.
@@ -698,6 +711,52 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		return resolveAccountDisplay(accountNames, acctLabels, raw)
 	}
 
+	// actors = members ∪ LIVE outsource workers. The three VALUE folds below
+	// (machine attribution / rate-limit windows / cost) run over THIS list, not
+	// over `members` alone — `dal.ListMembers()` is `WHERE kind != 'outsource'`,
+	// so a member-only fold cannot see a single outsource session.
+	//
+	// That was the owner-reported bug (T-fc2f): the accounts overview HAPPILY
+	// grew a row for an outsource-held key — the raw-key loop further down scans
+	// the WHOLE telemetry snapshot — while machine / cost / five_hour / seven_day
+	// all came from folds that had never looked at a worker. A key held by BOTH a
+	// member and a worker (seth-m5-claude) hid it for months; a key held ONLY by a
+	// worker (eva-m5-claude) rendered as a green card with three dashes.
+	//
+	// NOT a widening of attribution: telemetryAccount's provenance gate still
+	// decides whether each entry's key may be read under that actor's runtime
+	// (T-69bc / 2eb6590 — an account must never be borrowed from an older
+	// runtime). This only fixes WHICH actors get asked.
+	//
+	// Members and workers are disjoint by construction (kind != 'outsource' vs
+	// kind = 'outsource'), so each actor — and each actor's banked_cost —
+	// contributes exactly once.
+	workers, err := s.dal.ListOutsourceWorkers()
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	actors := make([]monitoringActor, 0, len(members)+len(workers))
+	for _, m := range members {
+		actors = append(actors, monitoringActor{
+			id: m.ID, runtime: m.Runtime, host: s.observedHost(m), banked: m.BankedCost,
+		})
+	}
+	for _, wk := range workers {
+		// Released workers are the worker twin of RosterStatusRemoved, which the
+		// member list above filters out — a retired session's spend is history,
+		// not current usage.
+		if wk.Status == WorkerStatusReleased {
+			continue
+		}
+		actors = append(actors, monitoringActor{
+			id:      wk.ID,
+			runtime: wk.Runtime,
+			host:    s.observedWorkerHost(wk.ID, telemetry[wk.ID]),
+			banked:  wk.BankedCost,
+		})
+	}
+
 	sessions := []monitoringSessionDTO{}
 	for _, m := range members {
 		entry := tele(m.ID)
@@ -737,9 +796,17 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	hwByHost := map[string]map[string]any{}
 	hwTS := map[string]float64{}
 	acctByHost := map[string]map[string]bool{}
-	for _, m := range members {
-		entry := tele(m.ID)
-		host := s.observedHost(m)
+	// Over `actors`, not `members`: an account observed only on an outsource
+	// session must still attribute to the box it is burning on, and a host that
+	// carries nothing but workers must still get a row for that account to hang
+	// off. The agent count follows for the same reason — a row claiming 0 agents
+	// while naming an account observed there would contradict itself. The
+	// hardware fold is a provable no-op for workers: the agent-side reporter
+	// (cli/ocagent contextreport telemetryBody) has no `hardware` field at all —
+	// only the per-machine warden samples hardware.
+	for _, a := range actors {
+		entry := tele(a.id)
+		host := a.host
 		hostCounts[host]++
 		if hw, ok := entry["hardware"].(map[string]any); ok {
 			// Track the freshest sample per host REGARDLESS of age; whether its
@@ -754,7 +821,7 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 				}
 			}
 		}
-		if account := telemetryAccount(entry, m.Runtime); account != "" {
+		if account := telemetryAccount(entry, a.runtime); account != "" {
 			if acctByHost[host] == nil {
 				acctByHost[host] = map[string]bool{}
 			}
@@ -851,9 +918,15 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	rlTS := map[string]float64{}
 	acctCost := map[string]float64{}
 	acctHasCost := map[string]bool{}
-	for _, m := range members {
-		entry := tele(m.ID)
-		account := telemetryAccount(entry, m.Runtime)
+	// Same `actors` list, same reason: the freshest rate-limit window and the
+	// account's total spend are ACCOUNT-wide facts, and an outsource session
+	// burns the same quota and the same money as a member one. The agent-side
+	// reporter is identity-agnostic — cli/ocagent's contextreport POSTs
+	// rate_limits/cost keyed on nothing but its JWT sub — so a worker's entry
+	// carries exactly the same fields a member's does.
+	for _, a := range actors {
+		entry := tele(a.id)
+		account := telemetryAccount(entry, a.runtime)
 		if account == "" {
 			continue
 		}
@@ -868,8 +941,11 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 			acctCost[account] += cost
 			acctHasCost[account] = true
 		}
-		if m.BankedCost != 0 {
-			acctCost[account] += m.BankedCost
+		// One banked balance per ACTOR, and members/workers are disjoint sets, so
+		// a key held by both a member and a worker sums two distinct balances
+		// rather than counting either one twice.
+		if a.banked != 0 {
+			acctCost[account] += a.banked
 			acctHasCost[account] = true
 		}
 	}
