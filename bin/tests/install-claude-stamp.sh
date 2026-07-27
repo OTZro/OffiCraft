@@ -87,7 +87,11 @@ fi
 exit 1
 SH
 
-chmod +x "$SHIMDIR"/uname "$SHIMDIR"/launchctl "$SHIMDIR"/lsof
+# tmux: the tool preflight (T-7f38) refuses the install without it. Stubbed, never
+# invoked — this suite is about the claude stamp, not about tmux.
+printf '#!/usr/bin/env bash\nexit 0\n' > "$SHIMDIR/tmux"
+
+chmod +x "$SHIMDIR"/uname "$SHIMDIR"/launchctl "$SHIMDIR"/lsof "$SHIMDIR"/tmux
 
 # write_claude <path> <mode> — the claude under test. The mode is BAKED IN as a
 # literal, never read from the environment: install.sh probes claude with
@@ -155,36 +159,35 @@ else
 $PLIST_BODY"
 fi
 
-# ── 2. POSITIVE CONTROL for the assertions above ─────────────────────────────
-# Without this, "the stamp is present" could not be distinguished from "the
-# grep matches anything": the no-claude run must produce a plist that still
-# renders (PATH present) but carries NO OC_CLAUDE_BIN.
-reset_fixture
-run_install 0
-check "no claude anywhere: install still succeeds (the server works without claude)" "0" "$RC"
-if plist_has "OC_CLAUDE_BIN"; then
-  bad "no claude: plist must NOT fabricate an OC_CLAUDE_BIN stamp:
-$PLIST_BODY"
+# ── 2. no claude anywhere → the install is REFUSED before anything is written ─
+# CONTRACT CHANGE (T-7f38): this case used to assert "install still succeeds (the
+# server works without claude)". It no longer does — the tool preflight stops a
+# run that cannot ever start a member, and it stops it BEFORE the plist is
+# rendered, so the assertion is "nothing was written", not "written without the
+# stamp". The positive control the old case provided (a plist that renders with a
+# PATH but no OC_CLAUDE_BIN) now lives in case 5, which reaches the renderer.
+if [[ -x /opt/homebrew/bin/claude || -x /usr/local/bin/claude ]]; then
+  # The preflight mirrors ocwarden's resolution order, which includes two ABSOLUTE
+  # paths that no PATH shim can hide. On a host carrying one of them this case
+  # cannot construct "no claude anywhere", so it is skipped rather than faked —
+  # a green here would have meant nothing.
+  echo "  skip — /opt/homebrew/bin/claude or /usr/local/bin/claude exists on this host; 'no claude' is not constructible"
 else
-  ok "no claude: plist correctly carries no OC_CLAUDE_BIN"
-fi
-if plist_has "<key>PATH</key>"; then
-  ok "no claude: the plist still carries a (minimal) PATH"
-else
-  bad "no claude: plist lost its PATH entry"
-fi
-# and it must SAY SO — a missing claude is exactly the state that used to be
-# silent all the way to "every spawn fails".
-case "$OUT" in
-  *"claude CLI not found"*) ok "no claude: the installer says claude is missing" ;;
-  *) bad "no claude: the installer said nothing about claude:
+  reset_fixture
+  run_install 0
+  check "no claude anywhere: the install is refused" "1" "$RC"
+  if [[ -f "$FAKEHOME/$PLIST_REL" ]]; then
+    bad "no claude: a serve plist was written anyway — the refusal came too late"
+  else
+    ok "no claude: NO serve plist was written (the refusal precedes the renderer)"
+  fi
+  case "$OUT" in
+    *"claude — npm install -g @anthropic-ai/claude-code"*)
+      ok "no claude: the refusal names claude AND how to install it" ;;
+    *) bad "no claude: the refusal does not say how to fix it:
 $OUT" ;;
-esac
-case "$OUT" in
-  *"claude_bin_unresolved"*) ok "no claude: names the exact downstream failure code" ;;
-  *) bad "no claude: does not name claude_bin_unresolved:
-$OUT" ;;
-esac
+  esac
+fi
 
 # ── 3. version-manager shim → the FULL installer PATH is promoted ────────────
 # A shim that only runs when its manager dir is on PATH is the common asdf/nvm/
@@ -232,6 +235,22 @@ fi
 case "$OUT" in
   *"not stampable"*) ok "unstampable path: the installer explains the refusal" ;;
   *) bad "unstampable path: refused silently:
+$OUT" ;;
+esac
+# POSITIVE CONTROL for every "plist carries OC_CLAUDE_BIN" assertion above (it
+# moved here from case 2 when the no-claude run stopped reaching the renderer):
+# this run DOES render a plist, and that plist has a PATH and no stamp — so the
+# greps above are discriminating, not matching anything.
+check "unstampable path: the install itself still succeeds" "0" "$RC"
+if plist_has "<key>PATH</key>"; then
+  ok "unstampable path: the plist still renders, with a (minimal) PATH"
+else
+  bad "unstampable path: no plist rendered — this case can no longer serve as the control:
+$PLIST_BODY"
+fi
+case "$OUT" in
+  *"claude_bin_unresolved"*) ok "unstampable path: names the exact downstream failure code" ;;
+  *) bad "unstampable path: does not name claude_bin_unresolved:
 $OUT" ;;
 esac
 

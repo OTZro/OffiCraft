@@ -37,6 +37,7 @@
 #
 # What it does, in order:
 #   1. platform gate      — macOS Apple Silicon only (darwin/arm64).
+#   1b. tool preflight    — tmux + claude CLI must both exist, or STOP untouched.
 #   2. live-service gate  — if the launchd label this run would claim is
 #                           ALREADY REGISTERED AND RUNNING, installing means
 #                           bootout+bootstrap: a REAL restart that DISCONNECTS
@@ -604,6 +605,25 @@ for _oc_arg in "$@"; do
 done
 unset _oc_arg
 
+# ── tool preflight ───────────────────────────────────────────────────────────
+# A member IS `claude` inside tmux (cli/ocwarden/spawn.go: tmux new-session, whose
+# launch line execs claude) — no fallback for either, and missing them the install
+# still goes green while members sit at 「waking」 unexplained. PRESENCE only.
+oc_preflight() {
+  local miss=() c p
+  command -v tmux >/dev/null 2>&1 || miss+=("tmux — brew install tmux")
+  c="${OC_CLAUDE_BIN:-$(command -v claude 2>/dev/null || true)}"
+  for p in "$HOME/.local/bin" /opt/homebrew/bin /usr/local/bin; do
+    [[ -z "$c" && -x "$p/claude" ]] && c="$p/claude"
+  done
+  [[ -n "$c" ]] || miss+=("claude — npm install -g @anthropic-ai/claude-code")
+  [[ ${#miss[@]} -eq 0 ]] && { OC_PF_CLAUDE="$c"; return 0; }
+  echo "[install] FATAL: a member is claude inside tmux — NOTHING was installed." >&2
+  echo "[install]        Install the below, then re-run this installer:" >&2
+  printf '[install]          %s\n' "${miss[@]}" >&2
+  exit 1
+}
+
 # ── mode detection ───────────────────────────────────────────────────────────
 # Package mode = this file sits next to the three release binaries (unpacked
 # tarball). Anything else — including `curl … | bash`, where BASH_SOURCE is empty
@@ -685,6 +705,7 @@ EOF
     echo "[install]        This machine reports: $(uname -s)/$(uname -m)" >&2
     exit 1
   fi
+  oc_preflight  # before the download
 
   if [[ -z "$TAG" ]]; then
     echo "[install] resolving latest release of $OC_REPO …"
@@ -839,6 +860,7 @@ if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
   echo "[install]        This machine reports: $(uname -s)/$(uname -m)" >&2
   exit 1
 fi
+oc_preflight
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$HOME/.officraft$NS_DASH"  # NS_DASH="" ⇒ the historical literal
@@ -1288,18 +1310,11 @@ mkdir -p "$LA_DIR" "$LOG_DIR"
 # for the source path all along; the release path was missing it, which is why
 # ONE-CLICK was the more broken of the two.
 #
-# This mirrors bin/ocserver's block deliberately (same resolution order, same
-# XML hygiene, same two-probe shim detection) — keep them in step.
+# The stamping mirrors bin/ocserver's block deliberately (same XML hygiene, same
+# two-probe shim detection) — keep them in step. The path itself comes from
+# oc_preflight, which already resolved it in bin/ocserver's order.
 COMMON_PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-CLAUDE_BIN="${OC_CLAUDE_BIN:-}"
-if [[ -z "$CLAUDE_BIN" ]]; then
-  CLAUDE_BIN="$(command -v claude 2>/dev/null || true)"
-fi
-if [[ -z "$CLAUDE_BIN" ]]; then
-  for cand in "$HOME/.local/bin/claude" /opt/homebrew/bin/claude /usr/local/bin/claude; do
-    [[ -x "$cand" ]] && { CLAUDE_BIN="$cand"; break; }
-  done
-fi
+CLAUDE_BIN="${OC_PF_CLAUDE:-}"   # resolved once, in oc_preflight
 SERVE_PATH="$COMMON_PATH"
 if [[ -n "$CLAUDE_BIN" ]]; then
   if [[ "$CLAUDE_BIN" != /* || "$CLAUDE_BIN" == *[\ \	\"\'\<\>\&]* ]]; then
@@ -1323,14 +1338,12 @@ if [[ -n "$CLAUDE_BIN" ]]; then
   claude_entry="    <key>OC_CLAUDE_BIN</key><string>$CLAUDE_BIN</string>
 "
 else
-  # LOUD, and specific about the consequence: with T-ba62's fail-closed
-  # `ocwarden install`, the cockpit's 「安裝」 on this host will now REFUSE
-  # (visibly) instead of installing a warden that silently refuses every spawn.
-  echo "[install] WARNING: claude CLI not found on this machine." >&2
-  echo "[install]          The server installs fine, but installing THIS machine's warden from the" >&2
-  echo "[install]          cockpit will REFUSE (claude_bin_unresolved) until claude is available." >&2
-  echo "[install]          Fix: install claude (npm install -g @anthropic-ai/claude-code), or re-run" >&2
-  echo "[install]          this installer with OC_CLAUDE_BIN=/absolute/path/to/claude (idempotent)." >&2
+  # Absence is fatal in oc_preflight, so reaching here means claude resolved but
+  # was NOT stampable (WARN above). Still LOUD: with T-ba62's fail-closed
+  # `ocwarden install`, the cockpit's 「安裝」 here REFUSES, visibly.
+  echo "[install] WARNING: no stampable claude path — installing THIS machine's warden from the" >&2
+  echo "[install]          cockpit will REFUSE (claude_bin_unresolved). Fix: re-run with" >&2
+  echo "[install]          OC_CLAUDE_BIN=/absolute/path/to/claude (idempotent)." >&2
 fi
 
 # OC_CONFIG is emitted ONLY when a config file actually backed the port probe:

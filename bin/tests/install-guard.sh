@@ -173,7 +173,15 @@ if [[ -f "$SHIM_STATE/.bootstrapped" ]]; then
 fi
 exit 1
 SH
-chmod +x "$SHIMDIR"/uname "$SHIMDIR"/launchctl "$SHIMDIR"/lsof
+# tmux + claude: the tool preflight (T-7f38) refuses to install when either is
+# missing, so both are stubbed here to keep THIS suite about the live-service
+# gate. They are never invoked — the preflight only asks whether they resolve.
+# (Deliberately not the real binaries: a host without tmux must not silently
+# change what these cases test.)
+printf '#!/usr/bin/env bash\nexit 0\n' > "$SHIMDIR/tmux"
+printf '#!/usr/bin/env bash\necho "9.9.9 (Claude Code)"\nexit 0\n' > "$SHIMDIR/claude"
+
+chmod +x "$SHIMDIR"/uname "$SHIMDIR"/launchctl "$SHIMDIR"/lsof "$SHIMDIR"/tmux "$SHIMDIR"/claude
 
 PLIST_REL="Library/LaunchAgents/com.officraft.serve.plist"
 

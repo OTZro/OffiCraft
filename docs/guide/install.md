@@ -18,7 +18,12 @@
 | **macOS + Apple Silicon**（darwin/arm64） | — | 安裝腳本第一道就擋，其他平台直接拒絕 |
 | **7755 埠是空的** | — | 被占用時安裝當場失敗並提示換埠，不會裝一個起不來的服務 |
 
-官方 release 那條路，server 這台**只需要這兩項**——binary 是預編好的，不需要 Go / node / python3。
+官方 release 那條路，server 這台**平台與埠只有這兩項**——binary 是預編好的，不需要 Go / node / python3。
+
+> [!IMPORTANT]
+> **但安裝腳本另外硬性要求下面 B 組的 `tmux` 與 `claude` 兩支都在**（T-7f38）：缺任何一支，安裝**在動任何東西之前就停下**（沒有 `~/.officraft`、沒有 launchd plist），並印出補齊的指令。
+> 原因是缺 `tmux` 的機器以前會**整趟綠燈**——控制台打得開、成員請得到——然後成員永遠停在「waking」，而**沒有任何一處訊號指向真正的原因**。
+> 代價要講清楚：**一台只當 server、成員都跑在別台**的機器，現在也一樣要先裝好這兩支才裝得起來。**沒有跳過的開關**（給了就等於教人回到那個沉默失敗）。
 
 ### B. 任何要跑成員的機器一定要的
 
@@ -26,15 +31,15 @@
 
 | 需求 | 最低版本 | 為什麼 |
 | --- | --- | --- |
-| **Claude Code CLI**（`claude`，而且已登入） | **2.1.98 以上**（必須新到內建 **Monitor** tool） | 每位成員底下就是一個 Claude Code session。**解析不到 `claude` 時，warden 會直接拒絕安裝**（fail-closed，並在控制台橫幅說明原因），不會裝一個永遠起不了成員的 warden。裝法：`npm install -g @anthropic-ai/claude-code` |
-| **`tmux`** | 3.0 以上（任何近代 3.x 都行） | 成員的 session 跑在 tmux 裡 |
+| **Claude Code CLI**（`claude`，而且已登入） | **2.1.98 以上**（必須新到內建 **Monitor** tool） | 每位成員底下就是一個 Claude Code session。**解析不到 `claude` 時，安裝腳本當場拒絕、warden 也拒絕安裝**（兩層 fail-closed，並在控制台橫幅說明原因），不會裝一個永遠起不了成員的 warden。裝法：`npm install -g @anthropic-ai/claude-code` |
+| **`tmux`** | 3.0 以上（任何近代 3.x 都行） | 成員的 session 跑在 tmux 裡（`cli/ocwarden/spawn.go` 的 `tmux new-session`，沒有備援）。**解析不到時安裝腳本直接拒絕**，不會裝出一台成員永遠停在「waking」的機器 |
 
 > [!IMPORTANT]
 > **`claude` 一定要新到內建 Monitor tool（2.1.98 起）。** 成員靠 **Monitor** 這個內建工具持住 `ocagent listen`
 > 那條到 server 的 SSE 長連線——**持著連線＝online**（見 [架構與運作原理](architecture.md)）。`claude` 太舊、沒有
 > Monitor tool，成員就掛不住那條連線、**永遠亮不起來**（Waking 卡住或一直 Offline）。升級：`npm install -g @anthropic-ai/claude-code`。
 >
-> 注意：**安裝器不強制版本**——它只確認 `claude` 解析得到、`--version` 跑得起來，**不比對版本號、不擋舊版**。所以「2.1.98 以上」是**你要自己確保**的前提，不是安裝當下會替你把關的東西；裝了太舊的 `claude`，安裝照樣過，但成員之後亮不起來。
+> 注意：**安裝器擋「沒裝」，但不擋「太舊」**——它確認 `claude` 與 `tmux` 解析得到（缺就停），但**不比對版本號**。所以「2.1.98 以上」是**你要自己確保**的前提，不是安裝當下會替你把關的東西；裝了太舊的 `claude`，安裝照樣過，但成員之後亮不起來。
 
 > [!NOTE]
 > 用 asdf / nvm / volta 裝 `claude` 的人要注意：launchd 的 PATH 很小，找不到 shim。

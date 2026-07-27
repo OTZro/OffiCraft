@@ -594,6 +594,25 @@ else
   bad "bin/tests/install-claude-stamp.sh is missing"
 fi
 
+# ── install.sh tool preflight (T-7f38) ──────────────────────────────────────
+# Own file, own PATH shim, own temp HOME. It guards the fail-closed gate that
+# stops an install on a machine missing tmux or claude — the state where the
+# install goes green and every member then sits at 「waking」 with nothing naming
+# the cause. Its own counterfactual is inside the suite: the same run against a
+# mutant install.sh with the preflight call deleted must SUCCEED, so a gate that
+# stops firing reddens here instead of quietly passing.
+PREFLIGHT="$HERE/install-preflight-guard.sh"
+echo
+if [[ -f "$PREFLIGHT" ]]; then
+  if run_guard "$PREFLIGHT"; then
+    ok "install.sh tool preflight suite passed"
+  else
+    bad "install.sh tool preflight suite FAILED (see output above)"
+  fi
+else
+  bad "bin/tests/install-preflight-guard.sh is missing"
+fi
+
 # ── install.sh --uninstall/--purge/--dry-run ownership + safety (T-3ef9) ────
 # Own file, own PATH shim (launchctl only), own temp HOME. This is a NEW
 # destructive capability (stop a launchd job, move-or-delete files) — folded
