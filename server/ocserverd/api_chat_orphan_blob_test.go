@@ -94,10 +94,148 @@ func countRows(t *testing.T, db *sql.DB, table string) int {
 	return n
 }
 
+// idsInJSONColumn collects attachment ids out of a refs column
+// ([{id, mime, filename}, …]).
+func idsInJSONColumn(t *testing.T, db *sql.DB, query string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	rows, err := db.Query(query)
+	if err != nil {
+		t.Fatalf("query %q: %v", query, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var owner, blob string
+		if err := rows.Scan(&owner, &blob); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		var refs []struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal([]byte(blob), &refs) != nil {
+			continue
+		}
+		for _, r := range refs {
+			if r.ID != "" {
+				out[r.ID] = owner
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	return out
+}
+
+// assertStoreIsConsistent is the observable, replacing row counting (review U1,
+// U2). Counting rows could not see two of the real defects: the answer face
+// UPSERTS its card, so the row count is constant in both a correct and a broken
+// world, and the create face writes TWO records (companion message AND card)
+// while a single recordTable watched one of them. Both mutants passed.
+//
+// So assert the STATE the defects violate, not the size of a table:
+//
+//  1. every stored blob is named by some record   (no orphan blob)
+//  2. every record's attachment ref exists        (no dangling attachment ref)
+//  3. every message's reply_card_id exists        (no dangling ask — the
+//     companion-message half)
+//
+// Every one of these is a property a user or a consumer can actually observe,
+// and none of them depends on how many rows a write happens to touch.
+func assertStoreIsConsistent(t *testing.T, db *sql.DB, when string) {
+	t.Helper()
+
+	referenced := map[string]string{}
+	for owner, q := range map[string]string{
+		"chat message": `SELECT id, json_extract(meta, '$.attachments') FROM chat_message
+		                 WHERE json_extract(meta, '$.attachments') IS NOT NULL`,
+		"reply card question side": `SELECT id, attachments FROM reply_card`,
+		"reply card answer side":   `SELECT id, answer_attachments FROM reply_card`,
+	} {
+		for id, rec := range idsInJSONColumn(t, db, q) {
+			referenced[id] = owner + " " + rec
+		}
+	}
+
+	stored := map[string]bool{}
+	rows, err := db.Query(`SELECT id FROM chat_attachment`)
+	if err != nil {
+		t.Fatalf("list blobs: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan blob: %v", err)
+		}
+		stored[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+
+	for id := range stored {
+		if _, ok := referenced[id]; !ok {
+			t.Errorf("%s — ORPHAN BLOB %s: stored but named by no record; the "+
+				"only reclaim cascade walks from record refs, so it is "+
+				"unreachable forever", when, id)
+		}
+	}
+	for id, owner := range referenced {
+		if !stored[id] {
+			t.Errorf("%s — DANGLING REF: %s names attachment %s, which was "+
+				"never written; its reader 404s on the attachment",
+				when, owner, id)
+		}
+	}
+
+	// The third invariant: a companion message pointing at a card that is not
+	// there is a permanently unanswerable ask in the owner's stream.
+	cards := map[string]bool{}
+	crows, err := db.Query(`SELECT id FROM reply_card`)
+	if err != nil {
+		t.Fatalf("list cards: %v", err)
+	}
+	defer crows.Close()
+	for crows.Next() {
+		var id string
+		if err := crows.Scan(&id); err != nil {
+			t.Fatalf("scan card: %v", err)
+		}
+		cards[id] = true
+	}
+	if err := crows.Err(); err != nil {
+		t.Fatalf("card rows: %v", err)
+	}
+	mrows, err := db.Query(`SELECT id, json_extract(meta, '$.reply_card_id')
+	                        FROM chat_message
+	                        WHERE json_extract(meta, '$.reply_card_id') IS NOT NULL`)
+	if err != nil {
+		t.Fatalf("list asks: %v", err)
+	}
+	defer mrows.Close()
+	for mrows.Next() {
+		var msgID, cardID string
+		if err := mrows.Scan(&msgID, &cardID); err != nil {
+			t.Fatalf("scan ask: %v", err)
+		}
+		if cardID != "" && !cards[cardID] {
+			t.Errorf("%s — DANGLING ASK: message %s points at reply card %s, "+
+				"which was never written; the owner sees a question that can "+
+				"never be answered", when, msgID, cardID)
+		}
+	}
+	if err := mrows.Err(); err != nil {
+		t.Fatalf("ask rows: %v", err)
+	}
+}
+
 // attachmentFace is one request that carries an attachment, plus the table
 // holding the record that names it.
 type attachmentFace struct {
-	name        string
+	name string
+	// recordTable is the table whose WRITES get broken to simulate "the record
+	// failed"; it is NOT the observable — see assertStoreIsConsistent.
 	recordTable string
 	// setup runs BEFORE the row baseline is taken and before any write is
 	// broken, and returns whatever id send needs. Rows it writes (the card a
@@ -234,6 +372,7 @@ func TestAttachmentWritesAreAllOrNothing(t *testing.T) {
 					t.Fatalf("unbroken request must write exactly one blob, wrote %d "+
 						"— the failure cases would then prove nothing", got)
 				}
+				assertStoreIsConsistent(t, db, "after a successful request")
 			})
 
 			t.Run("record write fails", func(t *testing.T) {
@@ -248,16 +387,15 @@ func TestAttachmentWritesAreAllOrNothing(t *testing.T) {
 						status, resp)
 				}
 				if got := countRows(t, db, "chat_attachment"); got != before {
-					t.Fatalf("ORPHAN BLOB: chat_attachment went %d -> %d; the blob "+
-						"outlived the record that was supposed to name it, and "+
-						"nothing reclaims it", before, got)
+					t.Errorf("chat_attachment went %d -> %d across a failed request",
+						before, got)
 				}
+				assertStoreIsConsistent(t, db, "after a failed record write")
 			})
 
 			t.Run("blob write fails", func(t *testing.T) {
 				srv, secret, db := newWiredTestServerWithDB(t)
 				id := faceSetup(t, face, srv, secret)
-				before := countRows(t, db, face.recordTable)
 				disarm := breakWrites(t, db, "chat_attachment")
 				status, resp := face.send(t, srv, secret, id)
 				disarm()
@@ -265,11 +403,7 @@ func TestAttachmentWritesAreAllOrNothing(t *testing.T) {
 					t.Fatalf("a broken blob write must surface as an error, got %d %s",
 						status, resp)
 				}
-				if got := countRows(t, db, face.recordTable); got != before {
-					t.Fatalf("DANGLING REF: %s went %d -> %d; a record survived "+
-						"naming a blob that was never written — its reader 404s "+
-						"on the attachment", face.recordTable, before, got)
-				}
+				assertStoreIsConsistent(t, db, "after a failed blob write")
 			})
 		})
 	}

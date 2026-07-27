@@ -84,6 +84,11 @@ func TestReplyCardAnswerRefusesIncompleteAttachment(t *testing.T) {
 	for _, tc := range []struct{ name, item, want string }{
 		{"neither id nor bytes", `{"filename":"ghost.pdf"}`, "neither id nor data_b64"},
 		{"id-only ref", `{"id":"att-whatever"}`, "must carry data_b64"},
+		// Review U3: this face used to take the bytes, drop the id, and answer
+		// 200 — while the shared schema promised a 400 for an item carrying
+		// both. The last silent discard on the attachment surface.
+		{"both id and bytes", `{"id":"att-whatever","data_b64":"aGVsbG8="}`,
+			"both id and data_b64"},
 	} {
 		card := open()
 		status, resp := doRaw(t, "POST", srv.URL+"/api/reply-cards/"+card+"/answer",

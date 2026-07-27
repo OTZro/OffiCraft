@@ -619,6 +619,14 @@ func (s *apiServer) applyReplyCardAnswer(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	for _, a := range inputs {
+		// Review U3: this face used to take the bytes and drop the id on the
+		// floor, answering 200 — while the shared schema promises a 400 for an
+		// item carrying both. Same rule here as everywhere else.
+		if strOrEmpty(a.DataB64) != "" && trimmedOrEmpty(a.Id) != "" {
+			writeError(w, http.StatusBadRequest,
+				"attachment carries both id and data_b64")
+			return
+		}
 		if strOrEmpty(a.DataB64) != "" {
 			continue
 		}
