@@ -107,3 +107,32 @@ func TestReplyCardAnswerRefusesIncompleteAttachment(t *testing.T) {
 		}
 	}
 }
+
+// T-e2b2 / review W2: the 10-attachment cap on post_chat was unguarded —
+// removing it left the whole suite green (conformance pins only the reply-card
+// cap). This branch deliberately changed WHAT that cap counts (incomplete items
+// are no longer filtered out before it), so it should not leave the cap itself
+// resting on nothing.
+func TestPostChatAttachmentCapIsEnforced(t *testing.T) {
+	srv, secret, _ := newWiredTestServer(t)
+	now := time.Now().Unix()
+	agentTok, _ := mintJWT("mira", "agent", 300, secret, now, "")
+
+	items := make([]string, 0, chatAttachmentsMaxCount+1)
+	for i := 0; i <= chatAttachmentsMaxCount; i++ {
+		items = append(items, `{"data_b64":"aGVsbG8="}`)
+	}
+	status, resp := doRaw(t, "POST", srv.URL+"/api/chat", agentTok, "application/json",
+		[]byte(`{"to":"owner","body":"many","attachments":[`+strings.Join(items, ",")+`]}`))
+	if status != 400 || !strings.Contains(resp, "at most 10 attachments") {
+		t.Fatalf("over-cap post must be refused, got %d %s", status, resp)
+	}
+	// The sentinel half: exactly at the cap is legal, so the guard is not just
+	// "refuse everything with attachments".
+	status, resp = doRaw(t, "POST", srv.URL+"/api/chat", agentTok, "application/json",
+		[]byte(`{"to":"owner","body":"many","attachments":[`+
+			strings.Join(items[:chatAttachmentsMaxCount], ",")+`]}`))
+	if status != 200 {
+		t.Fatalf("a post exactly at the cap must succeed, got %d %s", status, resp)
+	}
+}

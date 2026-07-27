@@ -5,9 +5,11 @@ import "testing"
 // T-e2b2. The ONE DAL-level guard kept after review Q4: the outcome sweep in
 // api_chat_orphan_blob_test.go subsumes the other two (I replayed their defects
 // against the sweep alone and it caught all of them), but it cannot reach THIS
-// failure class — the sweep aborts a statement inside an executing transaction,
-// while this fails in Go, before any SQL is issued. Same rule, different half of
-// the write path.
+// failure class — the sweep aborts a statement the database is executing, while
+// this one fails in Go BETWEEN statements: the blob and the companion message
+// have already gone to the database, and the card never reaches it at all
+// (review W1 — the earlier wording said "before any SQL is issued", which its
+// own body comment contradicts ten lines below).
 //
 // The card face, where a partial write is worse
 // than an orphan blob — the companion message's meta.reply_card_id would name a
