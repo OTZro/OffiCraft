@@ -1,0 +1,21 @@
+ RUN  v2.1.9 /Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend
+stdout | forge.probe.test.tsx > FORGERY PROBE > id=office is rejected outright
+id office -> theme: id "office" is reserved for a built-in theme
+id OFFICE -> theme: id must match ^[a-z0-9][a-z0-9-]{1,63}$
+name=辦公室 -> theme: id must match ^[a-z0-9][a-z0-9-]{1,63}$
+stdout | forge.probe.test.tsx > FORGERY PROBE > every attack lands in the 自訂 group
+attack a1: validate -> null
+stdout | forge.probe.test.tsx > FORGERY PROBE > every attack lands in the 自訂 group
+attack a2: validate -> null
+stdout | forge.probe.test.tsx > FORGERY PROBE > every attack lands in the 自訂 group
+attack a3: validate -> theme: name "辦公室" is reserved for a built-in theme
+attack a4: validate -> null
+stdout | forge.probe.test.tsx > FORGERY PROBE > every attack lands in the 自訂 group
+GROUP "內建" id= ts-group-builtin ROWS= ["辦公室"]
+GROUP "自訂" id= ts-group-custom ROWS= ["辦公室(內建)","內建","x"]
+chips on screen: 0
+ ✓ forge.probe.test.tsx (2 tests) 46ms
+ Test Files  1 passed (1)
+      Tests  2 passed (2)
+   Start at  22:05:05
+   Duration  589ms (transform 153ms, setup 11ms, collect 203ms, tests 46ms, environment 180ms, prepare 25ms)

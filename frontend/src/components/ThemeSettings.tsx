@@ -1092,17 +1092,14 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
         </div>
       )}
 
-      {/* 內建 / 自訂 is carried by the GROUP STRUCTURE, the twin of the quick
-       * picker's <optgroup> (ProfileDropdown.tsx) and fed by the same
-       * non-overridable themeMarkers subtree. Round 4 found the round-3 fix had
-       * only covered the quick picker: this list marked its rows with a text
-       * chip alone, and a pack controlled all three of that chip's signals — its
-       * TEXT (settings.themeBuiltinTag was overridable), its COLOUR
-       * (--color-seg-fill / --color-icon-violet-bg are pack-settable tokens) and
-       * the row's NAME — so it could still put two identical 「辦公室 [內建]」 rows
-       * on screen. A heading a theme cannot claim, a chip drawn from
-       * themeMarkers, and the non-overridable --color-marker-* slots close all
-       * three (T-081b review round 4, BLOCKER-A). */}
+      {/* 內建 / 自訂 is carried by the GROUP STRUCTURE ALONE, the twin of the
+       * quick picker's <optgroup> (ProfileDropdown.tsx) and fed by the same
+       * non-overridable themeMarkers subtree. The rows carry no per-row chip:
+       * a chip was forgeable on all three of its signals (its TEXT, its COLOUR
+       * and the row's own NAME), and once the heading says it, a chip repeating
+       * it adds nothing a theme could not already imitate. Which group a row
+       * lands in is decided by the code that renders it, not by anything the
+       * pack ships (T-081b review round 4, BLOCKER-A). */}
       <div className="ts-list" role="group" aria-labelledby="ts-group-builtin">
         <div className="ts-group-head" id="ts-group-builtin" data-testid="ts-group-builtin">
           {t.themeMarkers.builtinGroup}
@@ -1119,7 +1116,6 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
             onClick={() => setTheme("office")}
           >
             {t.themeIdentity.office}
-            <span className="ts-tag">{t.themeMarkers.builtinGroup}</span>
           </button>
           <button
             type="button"
@@ -1170,9 +1166,6 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
               onClick={() => setTheme(b.id)}
             >
               {b.name}
-              <span className="ts-tag ts-tag--custom">
-                {t.themeMarkers.customGroup}
-              </span>
             </button>
             <button
               type="button"

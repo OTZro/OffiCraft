@@ -14,9 +14,9 @@ for (const width of [390, 1280]) {
     await page.setViewportSize({ width, height: 900 });
     const cmp = await mount(<ThemeSettingsAddStory />);
 
-    // Before: only the built-in office row, no custom tag.
+    // Before: only the built-in office row, and no 自訂 group at all.
     await expect(cmp.locator(".ts-list > .ts-row")).toHaveCount(1);
-    await expect(cmp.locator(".ts-tag--custom")).toHaveCount(0);
+    await expect(cmp.getByTestId("ts-group-custom")).toHaveCount(0);
 
     await cmp.getByRole("button", { name: "新增" }).click();
 
@@ -28,13 +28,13 @@ for (const width of [390, 1280]) {
     const colorRows = cmp.locator(".ts-color-row");
     expect(await colorRows.count()).toBeGreaterThan(5);
 
-    // Back to the list: customThemes grew by one, and the new row wears the 自訂
-    // badge (never a 用詞 badge).
+    // Back to the list: customThemes grew by one, and the new row lands in the
+    // 自訂 group (rows carry no badge of their own).
     await cmp.getByRole("button", { name: "取消" }).click();
     await expect(cmp.locator(".ts-list > .ts-row")).toHaveCount(2);
-    const customTags = cmp.locator(".ts-tag--custom");
-    await expect(customTags).toHaveCount(1);
-    await expect(cmp.locator(".ts-list > .ts-row").nth(1)).toContainText("新主題");
-    await expect(cmp.locator(".ts-tag--wording")).toHaveCount(0);
+    const customGroup = cmp.locator(".ts-list:has(#ts-group-custom)");
+    await expect(customGroup.locator(".ts-row")).toHaveCount(1);
+    await expect(customGroup.locator(".ts-row")).toContainText("新主題");
+    await expect(cmp.locator(".ts-tag")).toHaveCount(0);
   });
 }

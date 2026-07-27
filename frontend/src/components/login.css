@@ -85,13 +85,23 @@
   cursor: not-allowed;
 }
 
-/* First-run setup (FirstRunPage) — rides the same card. */
+/* First-run setup (FirstRunPage) — rides the same card.
+ *
+ * The colour is the product's SECONDARY TEXT slot, not a hard-coded
+ * `color-mix(--color-text 55%, transparent)` (T-081b round 6). The fixed
+ * percentage was the bug: it derives the hint from the BODY text colour, so a
+ * light theme — whose --color-text is a dark ink chosen for a light card — gets
+ * that ink washed 45% toward the card and lands at ~3.3:1, and no light theme
+ * can reach 4.5:1 no matter what it sets (even pure black bottoms out at 4.71
+ * on the smurf-village card). --color-text-muted is the slot a theme sets FOR
+ * secondary text, so each theme states its own muted colour instead of having
+ * one derived for it. The built-in dark theme goes 4.72 → 5.62. */
 .login__hint {
   margin: 0;
   text-align: center;
   font-size: 13px;
   line-height: 1.6;
-  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  color: var(--color-text-muted);
 }
 .login__hint--field {
   margin-top: -8px;

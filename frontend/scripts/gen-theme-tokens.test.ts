@@ -47,12 +47,7 @@ describe("gen-theme-tokens", () => {
     const { code, out } = run();
     expect(code).toBe(0);
     expect(out, out).toContain("excluded as non-overridable marker slots");
-    for (const token of [
-      "--color-marker-builtin",
-      "--color-marker-custom",
-      "--color-marker-surface",
-      "--color-marker-fg",
-    ]) {
+    for (const token of ["--color-marker-surface", "--color-marker-fg"]) {
       expect(out, out).toContain(token);
     }
   });
@@ -70,8 +65,8 @@ describe("gen-theme-tokens", () => {
   });
 
   it("fails when a listed marker slot disappears from theme.css", () => {
-    const { code, out } = run((css) => css.replace("--color-marker-custom: #8b7ae8;", ""));
-    expect(out, out).toMatch(/--color-marker-custom/);
+    const { code, out } = run((css) => css.replace("--color-marker-surface: #191c24;", ""));
+    expect(out, out).toMatch(/--color-marker-surface/);
     expect(out, out).toMatch(/no longer defined in theme\.css/);
     expect(code).toBe(1);
   });

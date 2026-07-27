@@ -162,23 +162,19 @@
   --color-onboarding-fg: #5a4020;
 
   /* ── 主題「結構標記」專用色槽(T-081b 第四輪 BLOCKER-A)────────────────────
-   * 「內建 / 自訂」chip 的底色與字色,以及分組標題的字色。刻意**不是**主題包可
-   * 覆寫的 token:產生器(scripts/gen-theme-tokens.mjs)把這一族排除在
-   * THEME_COLOR_TOKENS / themeColorTokens 白名單之外。
+   * 「內建 / 自訂」分組標題的字色。刻意**不是**主題包可覆寫的 token:產生器
+   * (scripts/gen-theme-tokens.mjs)把這一族排除在 THEME_COLOR_TOKENS /
+   * themeColorTokens 白名單之外。
    * ⚠️ 這裡新增一顆 --color-marker-* 就必須同時登記進產生器的
    * NON_OVERRIDABLE_TOKENS,否則 `npm run gen:tokens` 會直接報錯 —— 第四輪複驗
    * NIT-2:只靠前綴排除是靜默的,一顆本意是「一般主題色」卻剛好用了這個前綴的
    * token 會被無聲踢出白名單。
-   * 為什麼要專用槽:第四輪實測出 chip 原本吃 --color-seg-fill /
-   * --color-icon-violet-bg / --color-bg / --color-text,四顆全是主題包蓋得到的
-   * token,所以主題包可以把兩種 chip 調成同色,結構標記就失效了。
-   * 值刻意等同內建深色主題原本算出來的顏色(--color-seg-fill /
-   * --color-icon-violet-bg / --color-bg / --color-text 的內建值),連 color-mix
-   * 的算式都照舊,所以內建主題與任何沒動這四顆 token 的主題包外觀一個像素不變。
-   * ⚠️ 已知取捨:有動那四顆 token 的既有淺色包,chip 從此固定為這組深色 ——
-   * 換來的是「chip 顏色不可能被主題包偽造」,見 round4-fix-report.md。 */
-  --color-marker-builtin: #6076ba;
-  --color-marker-custom: #8b7ae8;
+   * 為什麼要專用槽:標題若吃 --color-text-muted 這種主題包蓋得到的 token,主題包
+   * 就能把它調成跟頁面同色讓兩個標題一起消失,結構標記就失效了。
+   * 值刻意等同內建深色主題原本算出來的顏色,所以內建主題與任何主題包的標題外觀
+   * 一個像素不變。
+   * (第六輪:每列的 chip 已移除 —— 分組標題已經說了同一件事 —— 所以原本只給
+   * chip 底色用的 --color-marker-builtin / --color-marker-custom 一併刪除。) */
   --color-marker-surface: #191c24;
   --color-marker-fg: #e7e8ee;
 

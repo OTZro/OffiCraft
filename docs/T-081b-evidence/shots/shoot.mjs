@@ -256,4 +256,34 @@ if (group === "pack") {
   await ctx.close();
 }
 
+// ── group pack2：小精靈村「最終包」(完整套用新架構:72 色槽 + 185 用語 +
+// backgrounds.canvas 走 cover 整頁鋪滿)。預期匯入零警告 —— 有警告就 throw。
+if (group === "pack2") {
+  const bundle = JSON.parse(
+    readFileSync(join(PACK, "smurf-village.theme.json"), "utf8")
+  );
+  const { ctx, page } = await openApp({ width: 1440, height: 900, wide: false });
+  const warn = await importBundle(page, bundle);
+  console.log("final pack import warning:", warn);
+  writeFileSync(join(OUT, "smurf-final-import-warning.txt"), warn + "\n");
+  await page.screenshot({ path: join(OUT, "smurf-final-import.png") });
+  if (warn !== "(無警告)") {
+    throw new Error(`EXPECTED ZERO WARNINGS, GOT: ${warn}`);
+  }
+
+  for (const [file, w, h, wide, note] of [
+    ["15-smurf-final-wide-1440.png", 1440, 900, true, "小精靈村最終包 · 寬版 1440"],
+    ["16-smurf-final-narrow-1440.png", 1440, 900, false, "小精靈村最終包 · 窄版 1440"],
+    ["17-smurf-final-narrow-480.png", 480, 900, false, "小精靈村最終包 · 窄版 480"],
+    ["18-smurf-final-narrow-375.png", 375, 812, false, "小精靈村最終包 · 窄版 375"],
+  ]) {
+    await page.setViewportSize({ width: w, height: h });
+    await pickTheme(page, bundle.name);
+    await setWide(page, wide);
+    await gotoMonitor(page);
+    await shot(page, file, note, { importWarning: warn });
+  }
+  await ctx.close();
+}
+
 await browser.close();

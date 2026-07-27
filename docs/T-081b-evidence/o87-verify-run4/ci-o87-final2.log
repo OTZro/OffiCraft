@@ -1,0 +1,3210 @@
+[ci] commit 5cc9c5e9afdfb307eab846938cd29814049eb110 (feat/T-081b-theme-token-split, tree DIRTY) — started 2026-07-27T14:23:02Z
+[ci] (0) e2e_test isolation-guard unit tests (hermetic)
+[tests_guard] hermetic isolation-layer unit tests
+  ok   — live warden + canonical → guard dies (rc=1)
+  ok   — die message names LIVE-FLEET GUARD
+  ok   — no fleet + canonical → guard passes
+  ok   — live warden + namespace → guard coexists (returns 0)
+  ok   — namespace-mode guard logs coexistence
+  ok   — member-* on canonical socket is detected
+  ok   — canonical 7755 listener is detected
+  ok   — clean host → detection empty
+  ok   — ns 'e2e0e09b521c' matches product charset [a-z0-9-]{1,16}
+  ok   — port 9603 is non-canonical/non-reserved
+  ok   — serve label namespaced (com.officraft.serve.e2e0e09b521c)
+  ok   — warden label namespaced (com.officraft.ocwarden.e2e0e09b521c)
+  ok   — root namespaced (/tmp/oc-guard-home/.officraft-e2e0e09b521c)
+  ok   — tmux socket namespaced (officraft-e2e0e09b521c)
+  ok   — canonical escape hatch → OC_NS empty
+  ok   — canonical guard ports = 7755 8766
+  ok   — canonical LOCAL_BASE port == 7755 (the port this run OWNS = current canonical)
+  ok   — canonical PUBLIC_HOST port == 7755
+  ok   — canonical coupling: owned port (LOCAL_BASE 7755) == guard port (SINGLE_PROD_PORTS[0] 7755)
+  ok   — agent_workdir namespaced under ns
+  ok   — agent_workdir canonical when ns unset (zero-diff)
+  ok   — no teardown/bootout invoked by any guard/allocator path
+  ok   — spec failure still PRINTS '[run_all] specs exit=7' (sourcing common.sh leaks no -e)
+  ok   — spec failure rc still propagates through run_all.sh
+  ok   — sourcing lib/common.sh does not turn on errexit in a non-'-e' caller
+  ok   — sourcing lib/common.sh preserves errexit for callers that set it
+  ok   — RC=$? is IMMEDIATELY after the playwright run (rc not clobbered)
+  ok   — the report echo immediately follows RC=$?
+  ok   — teardown.sh delegates webdist cleanup to oc_restore_webdist_pristine, no stderr swallow
+  ok   — webdist restore: clean dir returns 0
+  ok   — webdist restore: clean dir leaves only .gitkeep
+  ok   — webdist restore: clean dir prints 'restored', no WARN (positive control)
+  ok   — webdist restore: un-removable entry returns 1 (not swallowed)
+  ok   — webdist restore: a FAILED delete emits a loud WARN (weakness-2 mutant reddens)
+  ok   — a1_zombie derives owned_port from LOCAL_BASE (not a hardcoded literal)
+  ok   — a1_zombie post-teardown lsof probes the OWNED port (${LOCAL_BASE##*:}), not a stale constant
+  ok   — cross_machine LOCAL_BASE default port == 7755 (SSOT-derived, evaluated from the real line)
+  ok   — control: pre-fix shape evaluates to 8770 != 7755 (case 14 can actually redden)
+  ok   — sentinel: explicit LOCAL_BASE override still wins in cross_machine
+  ok   — common.sh REFUSES the CURRENT prod port (7755, SSOT-derived)
+  ok   — common.sh still refuses the RETIRED 8770 (added to, not swapped for, the SSOT entry)
+  ok   — sentinel: common.sh still ACCEPTS the legitimate isolated port 8791
+  ok   — common.sh FATALs when the SSOT (config.go defaultPort) is unparseable — no silent empty prod-port list
+  ok   — conformance/run.sh REFUSES the CURRENT prod port (7755, SSOT-derived)
+  ok   — conformance/run.sh still refuses the RETIRED 8770
+  ok   — sentinel: conformance/run.sh lets the legitimate port 8795 through the prod gate
+  ok   — conformance/run.sh FATALs (and SPEAKS) when the SSOT is unparseable — no silent empty refusal list
+  ok   — teardown.sh's 'prod untouched' line NAMES the current prod port (7755, SSOT-derived)
+  ok   — teardown.sh's line still lists the RETIRED 8770 (added to, not swapped for, the current port)
+  ok   — control: the pre-fix literal line never mentions 7755 (case 17 can actually redden)
+  ok   — namespaced teardown helper completes through hermetic shims
+  ok   — namespaced teardown passes OC_NAMESPACE=e2eproof to the ocwarden child
+  ok   — namespaced teardown never targets canonical warden label
+  ok   — namespaced teardown never targets canonical warden token
+  ok   — namespaced teardown never targets canonical officraft root
+  ok   — canonical token sentinel remains intact after namespaced teardown (no shim bypass)
+  ok   — MUT-D control: the mutated teardown still completes (mutation is reachable)
+  ok   — MUT-D control: the canonical-token tripwire FIRES on the 2026-07-25 incident (grep is not vacuous)
+  ok   — MUT-D control: the canonical-root tripwire FIRES on the 2026-07-25 incident
+  ok   — oc_teardown_bounded DIES on a namespaced run whose WARDEN_LABEL/OC_ROOT are still canonical (rc=1)
+  ok   — oc_teardown_bounded refusal names TEARDOWN TARGET GUARD
+  ok   — oc_teardown_bounded refused before booting out or deleting anything
+  ok   — oc_teardown_warden DIES on a namespaced run whose WARDEN_LABEL/OC_ROOT are still canonical (rc=1)
+  ok   — oc_teardown_warden refusal names TEARDOWN TARGET GUARD
+  ok   — oc_teardown_warden refused before booting out or deleting anything
+[tests_guard] PASS=65 FAIL=0
+[tests_guard] all green
+[ci] (0b) bin script unit tests (hermetic)
+codesign-artifact hermetic tests
+  ok   — DEFAULT (nothing requested) exits 0
+  ok   — DEFAULT leaves the binary untouched even with the identity PRESENT
+  ok   — DEFAULT never invokes codesign
+  ok   — D1: DEFAULT never even consults the keychain (no security find-identity)
+  ok   — DEFAULT says so out loud (signing NOT REQUESTED)
+  ok   — D2: DEFAULT with a BROKEN keychain check still exits 0 (never reached)
+  ok   — D2: DEFAULT with a BROKEN keychain check never consults it
+  ok   — D3: OC_CODESIGN_ENABLE=1 consults the keychain
+  ok   — D3: OC_CODESIGN_ENABLE=1 signs the artifact
+  ok   — D4: REQUIRE=1 alone (no ENABLE) still signs — REQUIRE implies ENABLE
+  ok   — D4: REQUIRE=1 alone exits 0 on a provisioned host
+  ok   — D4: REQUIRE=1 is not swallowed by the default-off gate
+  ok   — D5: DISABLE=1 beats ENABLE=1
+  ok   — D5: DISABLE=1 says which knob stopped it
+  ok   — bin/build leaves signing unrequested (default off — no shared keychain in CI)
+  ok   — bin/build-bindist leaves signing unrequested (default off — no shared keychain in CI)
+  ok   — bin/ci.sh leaves signing unrequested (default off — no shared keychain in CI)
+  ok   — non-darwin exits 0
+  ok   — non-darwin leaves the binary untouched
+  ok   — non-darwin never invokes codesign
+  ok   — missing identity exits 0 (never blocks a build)
+  ok   — missing identity leaves the binary untouched
+  ok   — missing identity never invokes codesign
+  ok   — missing identity warns with the provisioning pointer
+  ok   — signing exits 0
+  ok   — binary is replaced by the signed copy
+  ok   — codesign invoked with the stable identity + identifier
+  ok   — signature is verified after signing
+  ok   — no temp copy left behind
+  ok   — sign failure exits 0 (never blocks a deploy)
+  ok   — sign failure keeps the original binary
+  ok   — sign failure warns loudly
+  ok   — sign failure leaves no temp copy
+  ok   — verify failure exits 0
+  ok   — verify failure keeps the original binary
+  ok   — OC_CODESIGN_DISABLE=1 skips signing
+  ok   — OC_CODESIGN_DISABLE=1 never invokes codesign
+  ok   — missing target file exits 1
+  ok   — slow-writing security still signs (no SIGPIPE misjudge)
+  ok   — slow-writing security exits 0
+  ok   — slow-writing security still reports the identity as present
+  ok   — red control: the original 'security | grep -Fq' form takes SIGPIPE (rc=141) in this window
+  ok   — identity present prints the POSITIVE confirmation marker
+  ok   — REQUIRE=1 + missing identity exits 4 (blocks the build)
+  ok   — REQUIRE=1 + missing identity never invokes codesign
+  ok   — REQUIRE=1 + missing identity leaves the binary untouched
+  ok   — REQUIRE=1 + missing identity prints the FAIL-IDENTITY-MISSING marker
+  ok   — REQUIRE=1 + identity present still signs
+  ok   — REQUIRE=1 + identity present exits 0
+  ok   — unreadable identity list exits 3 (never silently adhoc)
+  ok   — unreadable identity list never invokes codesign
+  ok   — unreadable identity list prints the FAIL-CHECK-BROKEN marker
+  ok   — REQUIRE=1 + sign failure exits 5 (never ships adhoc)
+  ok   — REQUIRE=1 + sign failure leaves the adhoc binary unpublished
+  ok   — REQUIRE=1 + sign failure prints the FAIL-SIGN-FAILED marker
+  ok   — REQUIRE=1 + verify failure exits 5 (never ships adhoc)
+  ok   — REQUIRE=1 + verify failure leaves the adhoc binary unpublished
+  ok   — positive control: sign failure WITHOUT REQUIRE still exits 0 (dev unblocked)
+  ok   — sign failure without REQUIRE stays a warning, not a block
+codesign-artifact tests: 59 ok, 0 failed
+release-path enforcement tests (T-da4b owner ruling)
+  ok   — build-release exports OC_CODESIGN_REQUIRE=1 into the build
+  ok   — RELEASE + missing identity exits 4 (does not ship)
+  ok   — RELEASE + missing identity prints the FAIL-IDENTITY-MISSING marker
+  ok   — RELEASE + missing identity never invokes codesign
+  ok   — RELEASE + missing identity leaves the artifact unsigned/untouched
+  ok   — RELEASE + identity present exits 0
+  ok   — RELEASE + identity present signs the artifact
+  ok   — RELEASE + identity present prints the POSITIVE marker
+  ok   — DEV + missing identity exits 0 (dev Macs are NOT blocked)
+  ok   — DEV shape leaves OC_CODESIGN_REQUIRE unset (default off)
+  ok   — DEV + missing identity ships as built without asking to sign
+  ok   — bin/build leaves OC_CODESIGN_REQUIRE unset (dev/CI stay unblocked)
+  ok   — bin/build-bindist leaves OC_CODESIGN_REQUIRE unset (dev/CI stay unblocked)
+  ok   — bin/build-release sets the release requirement
+release-path tests: 73 ok, 0 failed
+setup-codesign-cert hermetic tests
+  ok   — openssl req failure exits 1
+  ok   — openssl req stderr is surfaced on failure
+  ok   — pkcs12 export pins SHA1-3DES PBE + SHA1 MAC (keychain-compatible)
+  ok   — pinned-flags p12 imports into a keychain (OpenSSL 3.6.3)
+  ok   — OpenSSL 3 default-params p12 still fails MAC verification (red control)
+bin tests: 78 ok, 0 failed
+
+install.sh live-service gate — hermetic tests (default label, stubbed launchd)
+  ok   — live job + non-interactive: aborts
+  ok   — live job + non-interactive: never boots the service out
+  ok   — live job: says WHAT it detected
+  ok   — live job: says what the CONSEQUENCE is (clients dropped)
+  ok   — live job: says what the operator CAN DO (--restart-live)
+  ok   — live job: offers the install-alongside escape hatch
+  ok   — live job + non-interactive: leaves the old binaries untouched
+  ok   — live job: install.sh interrogated the DEFAULT label (gui/501/com.officraft.serve)
+  ok   — live job w/o listening socket: still aborts
+  ok   — live job w/o listening socket: never boots the service out
+  ok   — live job w/o listening socket: STILL EXPLAINS ITSELF (does not die silently)
+  ok   — live job w/o listening socket: output is not empty
+  ok   — live job + --force: still aborts (force is about files, not uptime)
+  ok   — live job + --force: never boots the service out
+  ok   — live job + --force: explains why --force was not enough
+  ok   — live job + --restart-live: proceeds
+  ok   — live job + --restart-live: boots the old job out
+  ok   — live job + --restart-live: announces the restart
+  ok   — live job + --restart-live: bootout targeted the DEFAULT label (gui/501/com.officraft.serve)
+  ok   — live job + --restart-live: the service is bootstrapped back up (not left down)
+  ok   — no job: fresh install succeeds
+  ok   — no job: gate stays silent
+  ok   — loaded-but-stopped job: proceeds without prompting
+  ok   — loaded-but-stopped: gate stays silent
+  ok   — loaded-but-stopped: existing-install prompt tells the truth about uptime
+  ok   — --foreground + live job: live-service gate does not fire
+  ok   — --foreground: gate does not fire
+  ok   — install.sh no longer promises a running server is left alone
+  ok   — interactive + 'n': aborts
+  ok   — interactive + 'n': never boots the service out
+  ok   — interactive + 'n': confirms nothing was touched
+  ok   — interactive + bare Enter: defaults to NO
+  ok   — interactive + bare Enter: never boots the service out
+  ok   — interactive + 'y': proceeds
+  ok   — interactive + 'y': boots the old job out
+  ok   — fresh install: succeeds on the default path
+  ok   — fresh install: the port gate probed 7755 (the default is what gets gated)
+  ok   — fresh install: the setup link the operator is handed is on 7755
+  ok   — fresh install: no trace of the retired 8780 in the output
+  ok   — ns install alongside a LIVE main station: succeeds
+  ok   — ns install never boots out the main station (gui/501/com.officraft.serve)
+  ok   — ns install did register a job (the case is not passing by doing nothing)
+  ok   — ns install addressed its OWN label (gui/501/com.officraft.serve.lab)
+  ok   — ns install leaves the MAIN instance's binaries untouched
+  ok   — ns install created its own root (~/.officraft-lab)
+  ok   — ns install wrote its own plist (com.officraft.serve.lab.plist)
+  ok   — ns install wrote its own config (/var/folders/7v/jqg31v4s0kz0l63qy65zy6k80000gn/T/oc-install-guard.XXXXXX.Yu9LCSQKNQ/home/.officraft-lab/server/oc.toml)
+  ok   — ns config carries namespace = "lab"
+  ok   — ns config carries port = 7756
+  ok   — ns install gated the port it was given (7756)
+  ok   — ns install hands the operator a link on 7756
+  ok   — ns install ignores a stray ./oc.toml: succeeds
+  ok   — ns install was not redirected by a stray ./oc.toml
+  ok   — --namespace without --port: refused (exit 2)
+  ok   — --namespace without --port: says what is missing
+  ok   — --namespace without --port touched nothing
+  ok   — --port without --namespace: refused (exit 2)
+  ok   — malformed --namespace: refused (exit 2)
+  ok   — malformed --namespace: did NOT fall back to the main instance
+  ok   — malformed --namespace: never boots anything out
+  ok   — malformed --namespace: names the accepted charset
+  ok   — ns install (first run): succeeds
+  ok   — ns re-install with a different port: refused (exit 1)
+  ok   — ns port change: the refusal is not just the existing-install prompt
+  ok   — ns port change: explains it is a relocation
+  ok   — ns port change: the existing config was NOT rewritten
+  ok   — no --namespace: fresh install still succeeds
+  ok   — no --namespace: still installs to ~/.officraft
+  ok   — no --namespace: no namespaced root is created
+  ok   — no --namespace: still uses com.officraft.serve.plist
+  ok   — no --namespace: no instance config is invented (main reads OC_CONFIG/./oc.toml as before)
+install-guard tests: 71 ok, 0 failed
+  ok   — install.sh live-service gate suite passed
+
+default-port contract — oc.toml.example ↔ bin/ocserver render guard
+  ok   — oc.toml.example ships the standard default port line (port = 7755)
+  ok   — render-config with an explicit port: succeeds
+  ok   — render-config with an explicit port: the pinned port lands in the output
+  ok   — render-config with an explicit port: the template default is replaced, not duplicated
+  ok   — drifted template: render-config refuses (non-zero)
+  ok   — drifted template: the refusal NAMES the missing line (not a generic crash)
+  ok   — drifted template: nothing was written (fail-closed)
+  ok   — render-config without a port: succeeds
+  ok   — render-config without a port: the shipped default (7755) is what comes out
+port-default tests: 9 ok, 0 failed
+  ok   — default-port contract suite passed
+
+install.sh serve-plist claude stamp — hermetic tests
+  ok   — claude on PATH: install succeeds
+  ok   — claude on PATH: serve plist carries OC_CLAUDE_BIN pointing at the resolved claude
+  ok   — claude on PATH: serve plist carries a PATH (launchd grants none by default)
+  ok   — no claude anywhere: install still succeeds (the server works without claude)
+  ok   — no claude: plist correctly carries no OC_CLAUDE_BIN
+  ok   — no claude: the plist still carries a (minimal) PATH
+  ok   — no claude: the installer says claude is missing
+  ok   — no claude: names the exact downstream failure code
+  ok   — shim claude: install succeeds
+  ok   — shim claude: the installer PATH (incl. the shim dir) is promoted into the plist
+  ok   — explicit OC_CLAUDE_BIN: install succeeds
+  ok   — explicit OC_CLAUDE_BIN: the operator's path wins over PATH discovery
+  ok   — unstampable path: refused (no OC_CLAUDE_BIN rendered)
+  ok   — unstampable path: the installer explains the refusal
+install.sh claude stamp: 14 ok, 0 failed
+  ok   — install.sh serve-plist claude stamp suite passed
+
+bin/install.sh --uninstall — hermetic tests (label=com.officraft.serve.uninstallguardtest, stubbed launchd)
+  ok   — clean machine: exits 0 (idempotent, not an error)
+  ok   — clean machine: says so
+  ok   — clean machine: never calls launchctl
+  ok   — foreign label: refuses (exit 1)
+  ok   — foreign label: names the conflict
+  ok   — foreign label: says nothing changed
+  ok   — foreign label: leaves our own binary untouched
+  ok   — foreign label: leaves the foreign plist untouched
+  ok   — foreign label: never calls launchctl bootout
+  ok   — no files + foreign label: exits 0 (nothing OF OURS)
+  ok   — no files + foreign label: distinguishes itself from case 2's wording
+  ok   — no files + foreign label: leaves the foreign plist untouched
+  ok   — dry-run: exits 0
+  ok   — dry-run: announces the move it would make
+  ok   — dry-run: says nothing was changed
+  ok   — dry-run: never calls launchctl bootout
+  ok   — dry-run: binary still present
+  ok   — dry-run: database still present, untouched
+  ok   — dry-run: no .bak- directory was created
+  ok   — default uninstall: exits 0
+  ok   — default uninstall: calls launchctl bootout on OUR target
+  ok   — default uninstall: removes the plist
+  ok   — default uninstall: bin/ is gone from the live path
+  ok   — default uninstall: exactly one backup dir was created
+  ok   — default uninstall: the database moved into the backup, byte-identical
+  ok   — default uninstall: the binary moved into the backup too
+  ok   — default uninstall: prints a restore command
+  ok   — default uninstall: restore re-registers the launchd job, not just the files
+  ok   — default uninstall: the plist was preserved in the backup (not just deleted)
+  ok   — loaded-not-running: exits 0
+  ok   — loaded-not-running: does NOT call launchctl bootout
+  ok   — loaded-not-running: still removes the plist
+  ok   — purge, wrong confirmation: aborts (exit 1)
+  ok   — purge, wrong confirmation: says aborted
+  ok   — purge, wrong confirmation: binary still present
+  ok   — purge, wrong confirmation: never calls launchctl bootout
+  ok   — purge --yes: exits 0
+  ok   — purge --yes: calls launchctl bootout
+  ok   — purge --yes: bin/ is gone
+  ok   — purge --yes: database is gone
+  ok   — purge --yes: no backup dir was created (this is real deletion, not a move)
+  ok   — purge --yes: says purge complete
+  ok   — coexist + default uninstall: exits 0
+  ok   — coexist + default uninstall: repo/ survives, untouched, in place (not moved)
+  ok   — coexist + default uninstall: bin/ was still removed from the live path
+  ok   — coexist + purge: exits 0
+  ok   — coexist + purge: repo/ survives byte-identical
+  ok   — coexist + purge: the database (release-path's own) IS gone
+  ok   — no curl on PATH: --uninstall still runs to completion
+  ok   — no curl on PATH: never touched the downloader
+  ok   — flag order: --uninstall not first still exits 0
+  ok   — flag order: both flags parsed regardless of position
+  ok   — flag order: dry-run guarantee held (only announced, did not purge)
+  ok   — flag order: database survives (dry-run must mutate nothing)
+  ok   — station/default: exits 0
+  ok   — station/default: agents/ still in place (NOT moved into the backup)
+  ok   — station/default: every agent workspace survives
+  ok   — station/default: warden/ still in place
+  ok   — station/default: $ROOT_DIR itself still exists
+  ok   — station/default: exactly one backup dir
+  ok   — station/default: agents/ did NOT leak into the backup
+  ok   — station/default: warden/ did NOT leak into the backup
+  ok   — station/default: the release-path DB still made it into the backup
+  ok   — station/default: message states what it will not touch
+  ok   — station/default: names the agent-workspace count
+  ok   — station/default: points at the warden's own removal path with a RUNNABLE command
+  ok   — station/default: discloses the warden job it leaves registered
+  ok   — station/purge: exits 0
+  ok   — station/purge: the release DB really is gone
+  ok   — station/purge: agents/ survives deletion too
+  ok   — station/purge: warden/ survives deletion too
+  ok   — station/purge: $ROOT_DIR is NOT removed
+  ok   — station/purge/dry-run: exits 0
+  ok   — station/purge/dry-run: no wholesale $ROOT_DIR removal announced
+  ok   — station/purge/dry-run: control — it DOES announce the removals it should
+  ok   — control (no agents/): fixture genuinely has none, so 12's '3' means something
+  ok   — control (no agents/): stays silent about agents rather than inventing them
+  ok   — restore: a command line was actually printed
+  ok   — restore: precondition — the live binary really is gone before restoring
+  ok   — restore: precondition — the plist really is gone before restoring
+  ok   — restore: the printed one-liner runs clean
+  ok   — restore: the binary is back on the live path
+  ok   — restore: the database is back, byte-identical
+  ok   — restore: oc.toml is back
+  ok   — restore: the plist is back where launchd looks for it
+  ok   — restore: it re-registers the job (this is the half the old command silently dropped)
+  ok   — restore: agents/ were never involved either way
+  ok   — station/dry-run: exits 0
+  ok   — station/dry-run: binary untouched
+  ok   — station/dry-run: database untouched
+  ok   — station/dry-run: plist untouched
+  ok   — station/dry-run: agents/ untouched
+  ok   — station/dry-run: warden/ untouched
+  ok   — station/dry-run: no backup dir created
+  ok   — station/dry-run: announces the moves
+  ok   — station/dry-run: discloses the spared paths too
+  ok   — worker-only machine: still exits 0 (not blocked by the new enumeration)
+  ok   — worker-only machine: still reports already-clean
+  ok   — worker-only machine: never calls launchctl
+  ok   — worker-only machine: its agent workspace is untouched
+  ok   — worker-only machine: no backup dir was created
+  ok   — partial install: exits 0
+  ok   — partial install: does not claim moves that did not happen
+  ok   — partial install: 'will touch' only names what is actually present
+  ok   — partial install: 'will touch' does name the plist, which IS present (control)
+  ok   — partial install: says the plist was the only thing moved
+  ok   — partial install: the plist really is in the backup
+  ok   — partial install: no empty server/ dir was invented in the backup
+  ok   — partial install: a restore command was printed
+  ok   — partial install: the restore one-liner still runs clean (no dangling cp of a missing bin/)
+  ok   — partial install: the plist is back where launchd looks for it
+  ok   — partial install: it still re-registers the job
+  ok   — warden probe: correctly reports NO warden job when none is registered
+  ok   — warden probe: does not claim registration it never checked
+  ok   — warden probe: reports the job as registered when its plist IS there
+  ok   — warden probe: teardown hint is runnable — absolute path AND an explicit --canonical target
+  ok   — warden probe: the warden's own plist is left alone
+  ok   — unreadable agents/: script still completes instead of dying silently
+  ok   — unreadable agents/: still says something about the workspaces
+  ok   — unreadable agents/: reports the count as unknown rather than inventing 0
+  ok   — symlinked agents/: exits 0
+  ok   — symlinked agents/: counts through the symlink (not reported as 0)
+  ok   — symlinked agents/: the real workspaces are untouched
+  ok   — plist present + job unregistered: exits 0
+  ok   — plist present + job unregistered: says something (not a blank exit)
+  ok   — plist present + job unregistered: reaches the plan and reports it
+  ok   — plist present + job unregistered: --dry-run still changes nothing
+  ok   — ns uninstall --dry-run: exits 0
+  ok   — ns uninstall --dry-run: names the NAMESPACED root
+  ok   — ns uninstall --dry-run: names the NAMESPACED label
+  ok   — ns uninstall --dry-run: changes nothing (main)
+  ok   — ns uninstall --dry-run: changes nothing (ns)
+  ok   — ns uninstall: exits 0
+  ok   — ns uninstall: the MAIN instance's binary is untouched
+  ok   — ns uninstall: the MAIN instance's database is untouched
+  ok   — ns uninstall: the NAMESPACED instance's bin/ was removed
+  ok   — ns uninstall: the namespaced database is kept (backup or in place)
+  ok   — ns uninstall addressed the namespaced launchd label
+  ok   — ns uninstall: warden disclosure names the NAMESPACED ocwarden label
+  ok   — ns uninstall: warden disclosure does NOT name the MAIN ocwarden label
+  ok   — ns uninstall: reports the NAMESPACED warden job as registered (its plist is present)
+  ok   — ns uninstall: teardown hint carries OC_NAMESPACE and the namespaced absolute path
+  ok   — ns uninstall: teardown hint does NOT carry --canonical
+  ok   — ns uninstall: the namespaced warden/ is left in place
+  ok   — ns uninstall: the namespaced warden's plist is left alone
+  ok   — ns uninstall sentinel: no warden/ in the namespaced root → no warden disclosure
+  ok   — malformed ns on uninstall: refused (exit 2)
+  ok   — malformed ns on uninstall: the MAIN instance is untouched
+  ok   — malformed ns on uninstall: the ns instance is untouched too
+  ok   — malformed ns on uninstall: says it refuses to fall back to MAIN
+  ok   — no --namespace on uninstall: exits 0
+  ok   — no --namespace: the namespaced instance is not addressed
+  ok   — no --namespace: still addresses the MAIN root
+uninstall-guard tests: 153 ok, 0 failed
+  ok   — install.sh --uninstall ownership/safety suite passed
+
+namespace mirror — 11 hand-transcribed derivation sites in 7 files; 10 checked here or by module tests (e2e harness copy deliberately unguarded), + the charset in its 5 copies (4 grepped here, cli/ocagent's by value in its module test)
+  ok   — shared table declares the charset: ^[a-z0-9-]{1,16}$
+  ok   — cli/ocwarden/namespace.go carries the shared charset in CODE (1 site(s), comments excluded)
+  ok   — server/ocserverd/config.go carries the shared charset in CODE (1 site(s), comments excluded)
+  ok   — bin/install.sh carries the shared charset in CODE (2 site(s), comments excluded)
+  ok   — bin/ocserver carries the shared charset in CODE (1 site(s), comments excluded)
+  ok   — bin/install.sh: install-path root derived from the namespace key (1 code site(s))
+  ok   — bin/install.sh: install-path label derived from the namespace key (1 code site(s))
+  ok   — bin/install.sh: uninstall-path root derived from the namespace key (1 code site(s))
+  ok   — bin/install.sh: uninstall-path label derived from the namespace key (1 code site(s))
+  ok   — bin/install.sh: uninstall-path WARDEN label derived from the namespace key (1 code site(s))
+  ok   — bin/ocserver: root (install+uninstall) derived from the namespace key (2 code site(s))
+  ok   — bin/ocserver: SERVE label (install+uninstall) derived from the namespace key (2 code site(s))
+  ok   — bin/ocserver: AUTODEPLOY label (install+uninstall) derived from the namespace key (2 code site(s))
+  ok   — bin/ocserver: TUNNEL label (install+uninstall) derived from the namespace key (2 code site(s))
+  ok   — bin/ocserver: SERVE_LABEL_BASE is still com.officraft.serve
+  ok   — bin/ocserver: AUTODEPLOY_LABEL_BASE is still com.officraft.autodeploy
+  ok   — bin/ocserver: TUNNEL_LABEL_BASE is still com.officraft.tunnel
+  ok   — the table still pins the EMPTY namespace to the historical literals
+  ok   — the table carries at least one namespaced row as well
+namespace-mirror tests: 19 ok, 0 failed
+  ok   — namespace mirror suite passed
+
+== install.sh stdin drain (curl | bash) ==
+  ok   — curl|bash: the writer does NOT get EPIPE (no 'curl: (23|56)' for the user)
+  ok   — curl|bash: and the run itself still succeeds
+  ok   — positive control: a script WITHOUT the drain DOES leave its writer with EPIPE
+  ok   — a FAILING piped run keeps its exit status through the trap (rejected flag = 2)
+  ok   — curl|bash: the message the user reads is unchanged (still reaches 'Already clean.')
+  ok   — positive control: the pty runner detects a script waiting for typed input
+  ok   — guard 1 under a real pty (bash install.sh): install.sh still exits (never waits on the terminal; <3s means guard 1 skipped it, not merely bounded)
+  ok   — guard 1 under a real pty (bash install.sh): within the bound (0.0s < 3s)
+  ok   — guard 2: fd0 is a socket that never EOFs (not a pipe): install.sh still exits (the pipe check skipped the drain; >=3s means it ran and hit its bound)
+  ok   — guard 2: fd0 is a socket that never EOFs (not a pipe): within the bound (0.0s < 3s)
+  ok   — guard 1: script is a file arg while fd0 is a held-open pipe: install.sh still exits (the script-from-stdin check skipped the drain; >=3s means it ran)
+  ok   — guard 1: script is a file arg while fd0 is a held-open pipe: within the bound (0.0s < 3s)
+  ok   — writer holds the pipe open: install.sh still exits (the drain is bounded, not a hang)
+  ok   — writer holds the pipe open: within the bound (5.2s < 12s)
+  ok   — writer dribbles a line every 2s for 30s: install.sh still exits (the TOTAL deadline bounds it; an idle-only timeout would ride the dribbler out)
+  ok   — writer dribbles a line every 2s for 30s: within the bound (12.5s < 20s)
+  ok   — slow transfer (5 KB/s, curl-shaped 16 KB blocks): the writer still gets no EPIPE
+  ok   — slow transfer: and the run still succeeds
+  ok   — static: every EXIT trap in install.sh carries oc_drain_stdin (2 found)
+  ok   — static: no INT/TERM trap arms the drain (it would truncate the script's own source)
+  ok   — static: SIGINT still removes the temp dir (splitting the trap did not drop it)
+  ok   — static: SIGTERM still removes the temp dir (splitting the trap did not drop it)
+  ok   — static: install.sh is 76997 B — inside the margin case 5c depends on (cliff measured at 81,920 B = 5 x 16,384)
+  ok   — static: the from-stdin flag is computed at top level, where BASH_SOURCE is meaningful
+
+stdin drain guard: 24 ok, 0 failed
+  ok   — install.sh stdin-drain suite passed
+
+run_bounded process-hygiene tests
+  ok   — a 30s child under a 2s ceiling is killed with rc 124 (GNU timeout code)
+  ok   — and it returns at the ceiling (~2s), not after the child's 30s
+  ok   — the grandchild busy-loop was actually spawned (positive control)
+  ok   — the grandchild busy-loop is reaped with its parent (no orphan survives the timeout)
+  ok   — exit 0 is passed through
+  ok   — a non-zero exit (7) is passed through
+  ok   — the grandchild was spawned before the interrupt (positive control)
+  ok   — SIGTERM to run_bounded reaps the subtree (a framework interrupt leaves no orphan)
+
+proc hygiene guard: 8 ok, 0 failed
+  ok   — harness process-hygiene suite passed
+
+go test cache-defeat contract tests
+  ok   — parser finds a bare 'go test' call site and marks it UNFLAGGED
+  ok   — parser finds a 'go test -count=1' call site and marks it FLAGGED
+  ok   — comments, echo/printf strings and 'go build' are NOT counted as call sites
+  ok   — scan found 1 go test call site(s) across 39 shell script(s) — enumeration is not vacuous
+  ok   — scan covers bin/ci.sh (the CI go-test gate, step 1e)
+  ok   — every go test call site passes -count=1 (no run can be served from go's test cache)
+  ok   — mutant generator actually changed bin/ci.sh (the flag was there to remove)
+  ok   — mutant — bin/ci.sh with -count=1 removed is CAUGHT (mutant-ci.sh:223 )
+  ok   — sentinel — the real bin/ci.sh has go test call site(s) and ALL carry -count=1
+go test cache-defeat contract tests: 9 ok, 0 failed
+  ok   — go test cache-defeat suite passed
+
+bin/release hermetic tests (no network, no gh, no station, no product build)
+── S: read-back of what GitHub stored
+  ok   — S0 a correct prerelease reads back clean
+  ok   — S0 line 1 of the contract is the targetCommitish
+  ok   — S0 the fingerprint is name<TAB>size for all 3 assets, sorted
+  ok   — S1 gh release view FAILS (no such release) — exit 6, named [release-exists]
+  ok   — S2 gh release view returns NOTHING — exit 6, named [release-exists]
+  ok   — S1b gh release view FAILS but still printed a valid payload — exit 6, named [release-exists]
+  ok   — S3 GitHub answered about a DIFFERENT tag — exit 6, named [release-tag]
+  ok   — S4 the release is a DRAFT (invisible to every consumer) — exit 6, named [release-draft]
+  ok   — S5 publish stored a FINAL release, not a prerelease — exit 6, named [release-channel]
+  ok   — S6 promote left it a PRERELEASE — exit 6, named [release-channel]
+  ok   — S7 EMPTY targetCommitish (cannot say which commit shipped) — exit 6, named [release-target]
+  ok   — S8 the release is bound to the WRONG commit — exit 6, named [release-target]
+  ok   — S9 an asset is MISSING (half-populated release) — exit 6, named [asset-present]
+  ok   — S10 an asset is present but state!=uploaded (not downloadable) — exit 6, named [asset-uploaded]
+  ok   — S11 an asset is ZERO BYTES — exit 6, named [asset-uploaded]
+  ok   — S12 an UNEXPECTED extra asset (somebody uploaded behind us) — exit 6, named [asset-extra]
+  ok   — S13 an empty EXPECTED target accepts any concrete stored target
+  ok   — S14 EMPTY stored target with an empty EXPECTED target (promote's pre-flip shape) — exit 6, named [release-target]
+── T: settle (the live station moved onto this commit)
+  ok   — T0 station reports the target git_sha and healthy → settles
+  ok   — T1 station is on a DIFFERENT commit — exit 6, named [station-settle]
+  ok   — T2 station is on the right commit but /api/health is down — exit 6, named [station-health]
+  ok   — T3 a 1-char git_sha that PREFIX-MATCHES is still rejected — exit 6, named [station-settle]
+  ok   — T4 /api/version has no git_sha field at all — exit 6, named [station-settle]
+  ok   — T5 /api/version is not JSON — exit 6, named [station-settle]
+  ok   — T6 /api/version cannot be reached at all — exit 6, named [station-settle]
+── A: pre-upload artifact verification
+  ok   — A0 a correct artifact set verifies clean
+  ok   — A1 an expected artifact is missing from the output dir — exit 6, named [artifact-present]
+  ok   — A2 an artifact is empty — exit 6, named [artifact-nonempty]
+  ok   — A3 the tarball is MISSING a member (ocwarden) — exit 6, named [tarball-members]
+  ok   — A3b the tarball grew a STRAY member — exit 6, named [tarball-members]
+  ok   — A4 a shipped binary is not a darwin/arm64 Mach-O — exit 6, named [artifact-arch]
+  ok   — A5 ocserverd carries NO version stamp — exit 6, named [version-stamp]
+  ok   — A6 ocserverd is stamped with the WRONG appVersion — exit 6, named [version-stamp]
+  ok   — A7 ocserverd is stamped with the WRONG buildSHA — exit 6, named [version-stamp]
+  ok   — A8 checksums.txt covers only 1 of the 2 downloads — exit 6, named [checksums-scope]
+  ok   — A9 checksums.txt digests do NOT match the files — exit 6, named [checksums-match]
+── C: argument gates
+  ok   — C0 no subcommand → usage, exit 2
+  ok   — C1 publish without --target → exit 2
+  ok   — C2 publish without --beta → exit 2
+  ok   — C3 a tag without the v prefix → exit 2
+  ok   — C4 promote with a non-tag → exit 2
+  ok   — C5 promote with two tags → exit 2
+  ok   — C6 an unknown publish flag → exit 2
+  ok   — C7 the removed 'bin/release <tag>' form exits 2
+  ok   — C7 …and names the replacement command
+  ok   — C8 NOTHING in the argument gates ever invoked gh
+── E: end-to-end publish against a fixture repo
+  ok   — E0 --dry-run exits 0
+  ok   — E0 --dry-run invoked gh EXACTLY ZERO times
+  ok   — E0 --dry-run still produced the real artifacts
+  ok   — E0 --dry-run ran the real pre-upload verification
+  ok   — E0 default publish asked for NO signing
+  ok   — E0 default publish used bin/build, not bin/build-release
+  ok   — E0 the tag reached the build as OC_APP_VERSION
+  ok   — E1 a fully correct publish exits 0
+  ok   — E1 gh release create was called exactly once
+  ok   — E1 upload was --prerelease and --target the named sha
+  ok   — E2 upload OK but GitHub stored a DRAFT — exit 6, named [release-draft]
+  ok   — E2 …and it did upload first (this is a post-upload failure)
+  ok   — E3 upload+read-back OK but the STATION never moved — exit 6, named [station-settle]
+  ok   — E4 upload OK but the release is bound to another commit — exit 6, named [release-target]
+  ok   — E5 --sign exits 0 on a provisioned fixture
+  ok   — E5 --sign routed through bin/build-release
+  ok   — E5 --sign made the identity MANDATORY (REQUIRE=1)
+  ok   — E6 a failed gh release create fails the publish
+  ok   — E6 …and never proceeds to the read-back
+  ok   — E7 no staging worktree is left registered in the fixture repo
+── P: promote
+  ok   — P0 promote refuses a tag that is ALREADY final — exit 6, named [release-channel]
+  ok   — P1 a clean promote exits 0
+  ok   — P1 …and flipped it with exactly one gh release edit
+  ok   — P2 --dry-run promote exits 0
+  ok   — P2 --dry-run promote NEVER flips anything
+  ok   — P3 an asset was RE-UPLOADED under the flip (size changed) — exit 6, named [promote-assets]
+  ok   — P4 the target commit MOVED under the flip — exit 6, named [release-target]
+  ok   — P4 …naming both the stored and the expected commit
+  ok   — P5 the flip did not take (still a prerelease afterwards) — exit 6, named [release-channel]
+  ok   — P6 a failed gh release edit fails the promote
+release guard: 76 ok, 0 failed
+  ok   — bin/release publish/promote read-back suite passed
+
+  ok   — ci success-marker guard dispatch is exit-code-enforced (|| exit 1)
+bin tests (incl. install guard): 88 ok, 0 failed
+ci success-marker contract tests
+  ok   — ci.sh has one final exact success marker
+  ok   — a source with the marker deleted entirely counts 0 (guard survives, no pipefail death)
+  ok   — ci.sh with NO success marker is rejected
+  ok   — two emitters on ONE line count as 2 (occurrences, not lines)
+  ok   — completed log with rc=0 is accepted
+  ok   — partial log after nested green is rejected
+  ok   — a run whose last line IS the marker but whose rc is non-zero is REJECTED
+  ok   — rc!=0 rejects even an otherwise perfect log
+  ok   — rc=0 alone does NOT certify a run (last line still decides)
+  ok   — mutant with marker before later work is rejected
+  ok   — mutant with duplicate success marker is rejected
+  ok   — forged printf marker is rejected
+  ok   — forged split-argument echo marker is rejected
+  ok   — forged variable-built marker is rejected
+  ok   — forged heredoc marker is rejected
+  ok   — no shell script other than bin/ci.sh can emit the CI authority
+  ok   — lane scan covers e2e_test/tests_guard/run.sh
+  ok   — lane scan covers bin/tests/run.sh
+  ok   — lane scan covers conformance/run.sh
+  ok   — lane scan covers bin/build-bindist
+  ok   — a lane script carrying a forged marker is caught by the lane scan
+  ok   — sentinel — the real step-0 lane script passes the lane scan
+  ok   — bin/tests/run.sh still enforces its accounted-failure count (|| exit 1)
+  ok   — ci.sh contains no bare 'exit 0' (it reaches the marker or dies — never exits green early)
+  ok   — ci.sh still fails fast (set -euo pipefail) — the precondition of the marker
+  ok   — sentinel — the legitimate single echo form still PASSES
+  ok   — nested [tests_guard]/[conformance] markers are not mistaken for the CI marker
+ci success-marker contract tests: 27 ok, 0 failed
+[ci] (1/5) golang — gofmt + go vet + go build + committed-prebuilt parity + go test (cli/* + server/*)
+[ci]   staging embed assets (seedsdist + bindist) — embed-only asset seams (T-e731)
+[build-seedsdist] staged seeds → server/ocserverd/seedsdist (6 files)
+[build-docsdist] staged docs/guide → server/ocserverd/docsdist (13 docs, 6 assets)
+[codesign-artifact] signing NOT REQUESTED (default off since T-588c) — leaving /Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/server/ocserverd/bindist/ocwarden as built
+[codesign-artifact]   opt in with OC_CODESIGN_ENABLE=1, or 'bin/release publish --sign'
+[codesign-artifact] signing NOT REQUESTED (default off since T-588c) — leaving /Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/server/ocserverd/bindist/ocagent as built
+[codesign-artifact]   opt in with OC_CODESIGN_ENABLE=1, or 'bin/release publish --sign'
+[build-bindist] staged ocwarden + ocagent + mcp-catalog.json → server/ocserverd/bindist
+[ci]   (1d) parity dryrun skipped — no prebuilt bin/ocagent (zero-committed-binary policy)
+ok  	ocagent	0.809s
+[ci]   (1d) parity dryrun skipped — no prebuilt bin/ocwarden (zero-committed-binary policy)
+ok  	ocwarden	36.285s
+[ci]   (1d) parity dryrun skipped — no prebuilt bin/ocserverd (zero-committed-binary policy)
+ok  	ocserverd	49.529s
+[ci]   gen-ocapi drift: regenerate ocapi_gen.go from spec/openapi.json + diff committed
+[ci] (2/5) conformance blackbox-lint — conformance/ must import no server-implementation module
+[ci] (3/5) repo hygiene — path denylist + gitleaks secret scan
+[90m10:25PM[0m [32mINF[0m [1mscanned ~19999080 bytes (20 MB) in 937ms[0m
+[90m10:25PM[0m [32mINF[0m [1mno leaks found[0m
+[ci] (4/5) frontend — tsc typecheck + vitest + contract drift gate (spec/ SSOT)
+[ci]   npm ci (frontend)
+[ci]   tsc --noEmit (frontend typecheck)
+[ci]   css colour-token lint (no raw literals outside theme.css — T-16a1)
+[css-tokens] ok — no raw colour literals, no dead token refs outside the token layer.
+[ci]   token role lint (the T-081b splits stay split — T-081b)
+[token-roles] ok — 3 split tokens keep to one role each; 7 carved-out tokens defined independently and in use; BUILT-IN theme's unread badge 4.52:1 vs --color-on-danger / 3.76:1 vs --color-bg (its 1px ring), both pinned at the 3 pill call sites. A theme pack may re-value --color-danger-badge, so these numbers describe the built-in theme only.
+[ci]   theme-token whitelist drift: regenerate from theme.css + diff committed (T-16a1 P2)
+[ci]   message-key whitelist drift: regenerate from locales/en.ts + diff committed (T-16a1 P3)
+[ci]   font whitelist drift: regenerate from themeFonts.source.json + diff committed (T-16a1 P4)
+[ci]   vitest run (frontend unit suite)
+
+ RUN  v2.1.9 /Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend
+
+ ✓ src/lib/themeBundle.test.ts (43 tests) 16ms
+ ✓ src/components/Markdown.test.tsx (49 tests) 121ms
+stderr | src/components/GuidePage.test.tsx > 使用說明 · page header + navigation > an unknown slug in the hash self-heals to an error, not a fake doc
+UserGuideDoc: load failed ApiError: http 404 for GET /api/docs/nope
+    at Object.getDoc (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/api/mock.ts:2191:13)
+    at /Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/UserGuidePage.tsx:130:8
+    at commitHookEffectListMount (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/react-dom/cjs/react-dom.development.js:23189:26)
+    at commitPassiveMountOnFiber (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/react-dom/cjs/react-dom.development.js:24970:11)
+    at commitPassiveMountEffects_complete (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/react-dom/cjs/react-dom.development.js:24930:9)
+    at commitPassiveMountEffects_begin (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/react-dom/cjs/react-dom.development.js:24917:7)
+    at commitPassiveMountEffects (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/react-dom/cjs/react-dom.development.js:24905:3)
+    at flushPassiveEffectsImpl (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/react-dom/cjs/react-dom.development.js:27078:3)
+    at flushPassiveEffects (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/react-dom/cjs/react-dom.development.js:27023:14)
+    at commitRootImpl (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/react-dom/cjs/react-dom.development.js:26974:5) {
+  status: 404,
+  code: 'not_found',
+  serverMessage: "doc 'nope' not found"
+}
+
+stderr | src/components/MemberDetailPanel.dispatch-alert-hygiene.test.tsx > MemberDetailPanel · the notice does not outlive its truth (T-7fa1) > an IN-FLIGHT wake's verdict never lands on the member switched to (review r2 SHOULD-1)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/components/RepliesPage.test.tsx > RepliesPage > a 409 answer says the card is stale — never 請稍後重試 — and re-pulls the pane
+RepliesPage: answer failed ApiError: http 409 for POST /api/reply-cards/rc-1/answer
+    at /Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/RepliesPage.test.tsx:182:9
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:146:14
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:533:11
+    at runWithTimeout (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:39:7)
+    at runTest (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1056:17)
+    at runSuite (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runSuite (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runFiles (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1262:5)
+    at startTests (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1271:3)
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/vitest/dist/chunks/runBaseTests.3qpJUEJM.js:126:11 {
+  status: 409,
+  code: 'conflict',
+  serverMessage: "task 'T-69cf' is already closed (done) — this card is orphaned and can no longer be answered"
+}
+
+stderr | src/components/RepliesPage.test.tsx > RepliesPage > a 409 on 重新決定 says the card is stale too
+RepliesPage: re-answer failed ApiError: http 409 for PUT /api/reply-cards/rc-1/answer
+    at /Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/RepliesPage.test.tsx:218:7
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:146:14
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:533:11
+    at runWithTimeout (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:39:7)
+    at runTest (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1056:17)
+    at runSuite (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runSuite (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runFiles (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1262:5)
+    at startTests (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1271:3)
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/vitest/dist/chunks/runBaseTests.3qpJUEJM.js:126:11 {
+  status: 409,
+  code: 'conflict',
+  serverMessage: 'task is already closed — this card is orphaned'
+}
+
+stderr | src/components/RepliesPage.test.tsx > RepliesPage > a 500 answer keeps the retryable 回覆失敗，請稍後重試 wording
+RepliesPage: answer failed ApiError: http 500 for POST /api/reply-cards/rc-1/answer
+    at /Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/RepliesPage.test.tsx:237:7
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:146:14
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:533:11
+    at runWithTimeout (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:39:7)
+    at runTest (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1056:17)
+    at runSuite (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runSuite (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runFiles (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1262:5)
+    at startTests (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1271:3)
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/vitest/dist/chunks/runBaseTests.3qpJUEJM.js:126:11 {
+  status: 500,
+  code: 'internal_error',
+  serverMessage: 'boom'
+}
+
+stderr | src/components/TaskCard.card-toggle.test.tsx > TaskCard whole-card toggle (mobile refactor) > clicking a NON-interactive inner region (the title) still toggles
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at div
+    at section
+    at div
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at div
+    at section
+    at div
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/components/ChatArea.unread-jump.test.tsx (11 tests) 278ms
+stderr | src/components/MemberDetailPanel.dispatch-alert-hygiene.test.tsx > MemberDetailPanel · the relocate notice self-heals (review r1 SHOULD-2) > an IN-FLIGHT relocate's verdict never lands on the member switched to (relocate twin of r2 SHOULD-1)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/components/TaskCard.card-toggle.test.tsx > TaskCard whole-card toggle (mobile refactor) > the priority chip and its in-place options never toggle the card
+Warning: An update to TasksPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to TasksPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to TasksPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to TasksPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to TasksPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to TasksPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to TasksPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to TasksPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at div
+    at section
+    at div
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/components/MemberDetailPanel.dispatch-alert-hygiene.test.tsx (10 tests) 403ms
+stderr | src/components/TaskCard.card-toggle.test.tsx > TaskCard whole-card toggle (mobile refactor) > the message composer (paperclip / textarea / 送出) never toggles the card
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at div
+    at section
+    at div
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at div
+    at section
+    at div
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at div
+    at section
+    at div
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at div
+    at section
+    at div
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at div
+    at section
+    at div
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/components/GuidePage.test.tsx (16 tests) 569ms
+ ❯ src/components/useRelocateMachine.test.tsx (18 tests | 1 failed) 337ms
+   × useRelocateMachine > times out into a retryable notice when the move never lands 69ms
+     → expected '編輯' to contain '更換中…'
+stderr | src/components/TaskCard.header.test.tsx > TaskCard 卡頭對齊 owner spec (T-705e) > spec ① 兩排對調: badge 列第一排、標題第二排 > holds the swapped order while expanded
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at div
+    at section
+    at div
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at div
+    at section
+    at div
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/components/TaskCard.t17be.test.tsx (16 tests) 584ms
+stderr | src/components/TaskCard.card-toggle.test.tsx > TaskCard whole-card toggle (mobile refactor) > an active text selection suppresses the toggle
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at div
+    at section
+    at div
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at div
+    at section
+    at div
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/components/WorkerDetailPanel.test.tsx > WorkerDetailPanel — 改機器 relocate (T-f190 item 3) > SENTINEL: 改機器 enters 更換中 and blocks a duplicate operation
+Warning: An update to OfficePage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at OfficePage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/OfficePage.tsx:67:44)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to OfficePage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at OfficePage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/OfficePage.tsx:67:44)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to WorkerDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at WorkerDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/WorkerDetailPanel.tsx:24:3)
+    at OfficePage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/OfficePage.tsx:67:44)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/components/RepliesPage.test.tsx (20 tests) 698ms
+stderr | src/i18n/index.test.tsx > I18nProvider dual-layer theme/language > keeps the cache when the server pref is unset ("")
+Warning: An update to I18nProvider inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to I18nProvider inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/components/TaskCard.deps.test.tsx > T-1d82 ③ 壞 id: 明說查無, 不可點, 不炸版 > is NOT a button — a click-through would land on an empty filter
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at div
+    at section
+    at div
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at div
+    at section
+    at div
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/components/TaskCard.deps.test.tsx (14 tests) 792ms
+ ✓ src/components/TaskCard.header.test.tsx (21 tests) 795ms
+ ✓ src/components/TaskCard.card-toggle.test.tsx (13 tests) 809ms
+ ✓ src/i18n/index.test.tsx (24 tests) 256ms
+ ✓ src/components/SettingsPage.manuals.test.tsx (19 tests) 1195ms
+stderr | src/components/TaskCard.status-menu.test.tsx > spec ④ 右上三角展開指示器 > a closed task still shows the indicator and still expands
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at div
+    at section
+    at div
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at div
+    at section
+    at div
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/components/TaskCard.status-menu.test.tsx (18 tests) 1258ms
+ ✓ src/components/SettingsPage.roles.test.tsx (16 tests) 1303ms
+   ✓ SettingsPage · 自訂角色 改名 (custom-only rename) > renames a custom role from its detail page and the list follows 359ms
+ ✓ src/components/OutsourcePanel.test.tsx (23 tests) 1524ms
+stderr | src/components/TasksPage.test.tsx > TasksPage > light list + lazy detail on expand > surfaces an error + retry (never the fake 規劃中) when the detail hydrate fails, and recovers on retry
+TaskCard: detail hydrate failed Error: boom
+    at /Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.test.tsx:953:32
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:533:5
+    at runTest (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1056:11)
+    at runSuite (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runSuite (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runSuite (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runFiles (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1262:5)
+    at startTests (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1271:3)
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/vitest/dist/chunks/runBaseTests.3qpJUEJM.js:126:11
+    at withEnv (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/vitest/dist/chunks/runBaseTests.3qpJUEJM.js:90:5)
+
+ ✓ src/components/WorkerDetailPanel.test.tsx (34 tests) 1646ms
+ ✓ src/i18n/compose.test.ts (97 tests) 11ms
+ ✓ src/components/TasksPage.test.tsx (31 tests) 1914ms
+ ✓ src/lib/themeExport.test.ts (21 tests) 103ms
+stderr | src/components/ChatReplyCard.test.tsx > ChatReplyCard > an answer landing through the OTHER entry point flips the inline card (reply_card delta sync)
+Warning: An update to ChatReplyCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at ChatReplyCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/ChatReplyCard.tsx:22:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to ChatReplyCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at ChatReplyCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/ChatReplyCard.tsx:22:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/components/TaskCard.waiting-markdown.test.tsx > step 等待外部 reason markdown render (T-a20b shapes, T-c514 surface) > renders the reason's bold + inline code as elements — the exact shapes from owner's screenshot
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/components/ChatReplyCard.test.tsx (12 tests) 280ms
+stderr | src/components/TaskCard.waiting-markdown.test.tsx > step 等待外部 reason markdown render (T-a20b shapes, T-c514 surface) > keeps the i18n label OUT of the markdown container (the template must not be parsed)
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/api/mock.reassign.test.ts (7 tests) 8ms
+stderr | src/components/TaskCard.waiting-markdown.test.tsx > step 等待外部 reason markdown render (T-a20b shapes, T-c514 surface) > renders a fenced code block as <pre> inside the .doc-md container
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/components/TaskCard.waiting-markdown.test.tsx > step 等待外部 reason markdown render (T-a20b shapes, T-c514 surface) > sanitizes a malicious reason — no raw HTML injected, script text stays literal
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/components/TaskCard.waiting-markdown.test.tsx > waiting label carries no orphan separator (T-a20b) > renders the zh label with no trailing separator
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/components/TaskCard.waiting-markdown.test.tsx > waiting label carries no orphan separator (T-a20b) > renders the en label with no trailing separator
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/components/TaskCard.waiting-markdown.test.tsx > task-level waiting block is gone, step-level survives (T-c514) > waiting_external task: no block at the card top, reason present inside the step
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/components/TaskCard.waiting-markdown.test.tsx (9 tests) 357ms
+ ✓ src/components/TasksPage.jump.test.tsx (11 tests) 499ms
+ ✓ src/components/TaskCard.dep-status.test.tsx (9 tests) 492ms
+ ✓ src/components/TaskArtifactsPopover.test.tsx (12 tests) 460ms
+ ✓ src/components/ChatArea.markdown-render.test.tsx (13 tests) 337ms
+ ✓ src/components/ChatGalleryPanel.test.tsx (11 tests) 604ms
+ ✓ src/components/TaskCard.step-binding.test.tsx (5 tests) 611ms
+ ✓ src/lib/hashRoute.test.ts (17 tests) 24ms
+ ✓ src/api/http.sse-pool.test.ts (11 tests) 13ms
+ ✓ src/components/ChatArea.offline-lock.test.tsx (12 tests) 427ms
+stderr | src/components/TaskCard.reassign.test.tsx > TaskCard 轉派 commit > keeps the dialog open and surfaces the failure when the server refuses
+TaskReassignDialog: reassign failed ApiError: http 400 for POST /api/tasks/task-1/reassign
+    at badRequest (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/api/mock.ts:1651:7)
+    at Object.reassignTask (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/api/mock.ts:1666:13)
+    at /Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/hooks/useTasks.ts:152:17
+    at commit (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskReassignDialog.tsx:196:13)
+    at onConfirm (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskReassignDialog.tsx:402:29)
+    at HTMLUnknownElement.callCallback (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/react-dom/cjs/react-dom.development.js:4164:14)
+    at HTMLUnknownElement.callTheUserObjectsOperation (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/jsdom/lib/jsdom/living/generated/EventListener.js:26:30)
+    at innerInvokeEventListeners (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:350:25)
+    at invokeEventListeners (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:286:3)
+    at HTMLUnknownElementImpl._dispatch (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:233:9) {
+  status: 400,
+  code: 'bad_request',
+  serverMessage: "task 'task-1' is frozen; unfreeze it before reassigning"
+}
+
+ ✓ src/components/TaskCard.reassign.test.tsx (7 tests) 641ms
+ ✓ src/components/MemberDetailPanel.webhook-platform.test.tsx (5 tests) 372ms
+stderr | src/components/ProfileDropdown.settings.test.tsx > ProfileDropdown · notification email > enables Save only for unsaved edits and disables it again after saving
+Warning: An update to ProfileDropdown inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at ProfileDropdown (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/ProfileDropdown.tsx:18:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to ProfileDropdown inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at ProfileDropdown (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/ProfileDropdown.tsx:18:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to ProfileDropdown inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at ProfileDropdown (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/ProfileDropdown.tsx:18:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/components/ProfileDropdown.settings.test.tsx (9 tests) 285ms
+stderr | src/components/OnboardingBanner.test.tsx > OnboardingBanner > hides the raw tool log behind a toggle, then reveals it
+Warning: An update to OnboardingBanner inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at OnboardingBanner (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/OnboardingBanner.tsx:20:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/components/OnboardingBanner.test.tsx > OnboardingBanner > stays dismissed for the session once dismissed
+Warning: An update to OnboardingBanner inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at OnboardingBanner (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/OnboardingBanner.tsx:20:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/api/mock.display-prefs.test.ts (18 tests) 11ms
+ ✓ src/components/OnboardingBanner.test.tsx (12 tests) 221ms
+stderr | src/components/ChatArea.multi-attachment.test.tsx > ChatArea multi-attachment message rendering > renders EVERY attachment of one message (images + file chips)
+Warning: An update to I18nProvider inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to I18nProvider inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/components/ChatArea.multi-attachment.test.tsx (9 tests) 350ms
+stderr | src/components/SettingsPage.update-verify.test.tsx > SettingsPage · 軟體更新 · 檢查更新 (explicit fresh verdict) > checking does not add a second result element — 已是最新版 stays a single node
+Warning: An update to SoftwareUpdate inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SoftwareUpdate (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:864:3)
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/components/MonitorPage.account-detail.test.tsx (11 tests) 337ms
+ ✓ src/components/TaskCard.dep-taskno.test.tsx (5 tests) 192ms
+ ✓ src/components/ChatArea.header-actions.test.tsx (6 tests) 182ms
+ ✓ src/components/MonitorPage.upgrade-action.test.tsx (3 tests) 208ms
+stderr | src/components/SettingsPage.update-verify.test.tsx > SettingsPage · 軟體更新 · 自動更新存檔回讀 (存檔測連通) > a rejected write reads back as fail: 失敗 line + the switch stays put, never the success line
+useServerSettings: save failed Error: boom: server unreachable
+    at /Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.update-verify.test.tsx:186:7
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:533:5
+    at runTest (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1056:11)
+    at runSuite (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runSuite (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runFiles (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1262:5)
+    at startTests (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1271:3)
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/vitest/dist/chunks/runBaseTests.3qpJUEJM.js:126:11
+    at withEnv (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/vitest/dist/chunks/runBaseTests.3qpJUEJM.js:90:5)
+    at run (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/vitest/dist/chunks/runBaseTests.3qpJUEJM.js:112:3)
+
+ ✓ src/components/SettingsPage.update-verify.test.tsx (10 tests) 563ms
+ ✓ src/components/ChatArea.scrollback.test.tsx (5 tests) 314ms
+ ✓ src/components/TaskCard.progress-bar.test.tsx (13 tests) 345ms
+ ✓ src/components/MemberDetailPanel.webhook-stats.test.tsx (6 tests) 568ms
+ ✓ src/api/mock.reply-cards.test.ts (12 tests) 7ms
+ ✓ src/components/MonitorPage.outsource-sessions.test.tsx (6 tests) 370ms
+ ✓ src/components/TaskReassignDialog.uifix.test.tsx (7 tests) 299ms
+ ✓ src/components/ChatArea.inter-agent.test.tsx (6 tests) 168ms
+ ✓ src/components/MonitorPage.hardware-bad-value.test.tsx (6 tests) 175ms
+ ✓ src/components/TaskCard.stepless-detail.test.tsx (5 tests) 273ms
+stderr | src/components/SettingsPage.breadcrumbs.test.tsx > SettingsPage · unified breadcrumb header (T-8f6e) > landing: single 設定 segment with the title below
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/components/SettingsPage.breadcrumbs.test.tsx > SettingsPage · unified breadcrumb header (T-8f6e) > 軟體更新: 設定 › 軟體更新 + title, no back button
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/api/mock.unread.test.ts (11 tests) 11ms
+ ✓ src/components/SettingsPage.breadcrumbs.test.tsx (10 tests) 834ms
+ ✓ src/api/http.mutations.test.ts (10 tests) 122ms
+ ✓ src/hooks/useChat.scrollback.test.ts (5 tests) 410ms
+ ✓ src/components/ChatArea.wake-undispatched.test.tsx (6 tests) 316ms
+ ✓ src/components/OfficePage.jump-outsource.test.tsx (4 tests) 324ms
+ ✓ src/components/TaskCard.desc-placement.test.tsx (4 tests) 241ms
+ ✓ src/components/MonitorPage.delete-consequence.test.tsx (5 tests) 107ms
+ ✓ src/components/TaskCard.superseded.test.tsx (7 tests) 237ms
+ ✓ src/components/MonitorPage.pending-undispatched.test.tsx (4 tests) 338ms
+ ✓ src/hooks/useChatUnread.foreground.test.ts (4 tests) 515ms
+ ✓ src/i18n/dispatch-alert-copy.test.ts (8 tests) 50ms
+ ✓ src/components/MonitorPage.uninstall-guard.test.tsx (5 tests) 330ms
+ ✓ src/components/OfficePage.wake-undispatched.test.tsx (5 tests) 487ms
+ ✓ src/components/TaskReplyCard.test.tsx (6 tests) 188ms
+ ✓ src/components/MonitorPage.runtime-capabilities.test.tsx (5 tests) 159ms
+ ✓ scripts/check-token-roles.test.ts (14 tests) 6263ms
+   ✓ check-token-roles > passes on the tree as shipped 469ms
+   ✓ check-token-roles > fails when a badge's text colour stops using the measured token 334ms
+   ✓ check-token-roles > fails when a later declaration re-paints a badge with --color-danger 409ms
+   ✓ check-token-roles > fails when the badge fill drops below AA in :root, however it is patched elsewhere 332ms
+   ✓ check-token-roles > fails when a badge loses its page-colour ring 427ms
+   ✓ check-token-roles > fails when a higher-specificity :root:root also defines the badge fill 331ms
+   ✓ check-token-roles > fails when a DEEPER compound :root:root:root also defines the badge fill 306ms
+   ✓ check-token-roles > fails when a badge token's :root definition carries !important 307ms
+   ✓ check-token-roles > fails on a second :root definition whichever file holds which value 703ms
+   ✓ check-token-roles > fails when a compound selector re-paints a badge 328ms
+   ✓ check-token-roles > fails when the outline-color longhand removes the badge's ring 351ms
+   ✓ check-token-roles > still ignores a compliant value parked in an at-rule 347ms
+   ✓ check-token-roles > fails when a badge token is defined outside the theme's :root 445ms
+ ✓ src/components/MemberDetailPanel.model-effort.test.tsx (4 tests) 322ms
+stderr | src/components/MemberDetailPanel.model-effort.test.tsx > MemberDetailPanel · 名字 inline-edit > renames through the pencil InlineEdit and commits via onRename
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/hooks/useReplyCards.race.test.tsx (2 tests) 160ms
+ ✓ src/components/MemberDetailPanel.wake-undispatched.test.tsx (3 tests) 233ms
+ ✓ src/lib/themeName.parity.test.ts (3 tests) 1471ms
+   ✓ theme name validation · Go/TS parity > returns the identical verdict on both ends for every name 1467ms
+ ✓ src/components/Avatar.test.tsx (5 tests) 96ms
+ ✓ src/hooks/useChat.test.ts (6 tests) 367ms
+ ✓ src/components/MonitorPage.hardware-freshness.test.tsx (3 tests) 250ms
+ ✓ src/components/ChatArea.date-divider.test.tsx (5 tests) 247ms
+ ✓ src/components/TaskCardMessageBox.attachments.test.tsx (4 tests) 358ms
+ ✓ src/components/TaskCardMessageBox.multiline.test.tsx (6 tests) 298ms
+ ✓ src/components/MemberCard.presence-a11y.test.tsx (13 tests) 235ms
+ ✓ src/components/ChatArea.draft-persist.test.tsx (6 tests) 227ms
+stderr | src/components/TaskCard.priority-inline.test.tsx > TaskCard in-place priority editing (v2) > a closed task's priority is a plain badge — no picker
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at div
+    at section
+    at div
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to TaskCard inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TaskCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TaskCard.tsx:61:3)
+    at div
+    at section
+    at div
+    at TasksPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/TasksPage.tsx:47:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/components/TaskCard.priority-inline.test.tsx (5 tests) 332ms
+ ✓ src/api/client.test.ts (6 tests) 16ms
+ ✓ src/components/Breadcrumbs.test.tsx (6 tests) 139ms
+stderr | src/components/MemberDetailPanel.no-role-gear.test.tsx > MemberDetailPanel identity card — no role gear (T-dfae) > the identity card's status line carries presence ONLY — no jump control
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/components/MemberDetailPanel.no-role-gear.test.tsx > MemberDetailPanel identity card — no role gear (T-dfae) > the role settings jump is not offered anywhere in the panel
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/components/MemberDetailPanel.no-role-gear.test.tsx > MemberDetailPanel identity card — no role gear (T-dfae) > the status line still SHOWS the role — the gear went, the presence did not
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/components/MemberDetailPanel.no-role-gear.test.tsx (3 tests) 76ms
+ ✓ src/components/RepliesPage.markdown-render.test.tsx (5 tests) 209ms
+ ✓ src/lib/dateFormat.test.ts (13 tests) 5ms
+ ✓ src/api/mappers.presence.test.tsx (6 tests) 25ms
+ ✓ src/components/MemberDetailPanel.wake-pending.test.tsx (3 tests) 241ms
+stderr | src/components/ChatArea.gallery.test.tsx > ChatArea gallery toggle (M2-3) > does NOT bubble the toggle click into the clickable header (open detail)
+Warning: An update to ChatGalleryPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at ChatGalleryPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/ChatGalleryPanel.tsx:30:3)
+    at div
+    at ChatArea (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/ChatArea.tsx:79:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to ChatGalleryPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at ChatGalleryPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/ChatGalleryPanel.tsx:30:3)
+    at div
+    at ChatArea (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/ChatArea.tsx:79:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to ChatGalleryPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at ChatGalleryPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/ChatGalleryPanel.tsx:30:3)
+    at div
+    at ChatArea (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/ChatArea.tsx:79:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/components/ChatArea.gallery.test.tsx > ChatArea inbound (member→owner) attachment display > renders a member-sent image as a thumbnail and file as a chip, token-authed
+i18n reconcile: load failed TypeError: Cannot read properties of undefined (reading 'map')
+    at /Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:415:44
+
+ ✓ src/components/ChatArea.gallery.test.tsx (3 tests) 278ms
+ ✓ src/components/ChatArea.multiline.test.tsx (6 tests) 208ms
+ ✓ src/components/MonitorPage.relocate.test.tsx (2 tests) 165ms
+ ✓ src/components/MemberDetailPanel.presence-runtime.test.tsx (4 tests) 132ms
+ ✓ src/components/ReplyCardQuestionAttachments.test.tsx (3 tests) 140ms
+ ✓ src/api/mappers.artifacts.test.ts (7 tests) 4ms
+ ✓ src/components/OfficePage.roster-area.test.tsx (7 tests) 301ms
+ ✓ src/lib/stepBadge.i18n.test.ts (4 tests) 24ms
+ ✓ src/components/ReplyCardBody.md-preview.test.tsx (4 tests) 334ms
+ ✓ src/components/MemberCard.click.test.tsx (5 tests) 111ms
+ ✓ src/components/TaskCard.markdown-render.test.tsx (3 tests) 203ms
+ ✓ src/components/MemberCard.unread.test.tsx (6 tests) 42ms
+ ✓ src/components/TaskCard.duplicate.test.tsx (2 tests) 161ms
+ ✓ src/components/TaskCard.duplicate-link.test.tsx (2 tests) 58ms
+ ✓ src/components/FirstRunPage.test.tsx (6 tests) 254ms
+ ✓ src/components/MemberDetailPanel.relocate.test.tsx (2 tests) 85ms
+ ✓ src/i18n/messageKeys.theme-identity.test.ts (5 tests) 3ms
+stderr | src/App.nav-tabs.test.tsx > 主導覽分頁 > 使用說明 is the last tab, immediately right of 監控
+Warning: An update to App inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at App (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/App.tsx:50:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/App.nav-tabs.test.tsx > 主導覽分頁 > a #guide/<slug> deep link opens the guide tab
+Warning: An update to App inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at App (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/App.tsx:50:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/App.nav-tabs.test.tsx > 主導覽分頁 > opening Settings deactivates it, like every other tab
+Warning: An update to App inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at App (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/App.tsx:50:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/App.nav-tabs.test.tsx (4 tests) 187ms
+ ✓ src/components/SettingsPage.global-context.test.tsx (4 tests) 491ms
+ ✓ src/components/TaskCard.step-badge-i18n.test.tsx (1 test) 151ms
+ ✓ src/hooks/useChatUnread.test.ts (7 tests) 119ms
+ ✓ src/components/ReplyComposer.multiline.test.tsx (6 tests) 81ms
+ ✓ src/api/mock.artifacts.test.ts (7 tests) 5ms
+ ✓ src/components/MonitorPage.claude-column.test.tsx (4 tests) 258ms
+ ✓ src/components/MonitorPage.onboard-inline.test.tsx (2 tests) 247ms
+ ✓ src/components/MonitorPage.bootstrap-log-kept.test.tsx (2 tests) 272ms
+ ✓ src/api/http.pending-response.test.ts (6 tests) 45ms
+ ✓ src/components/ChatArea.ime.test.tsx (4 tests) 156ms
+stderr | src/components/ChatReplyCard.markdown-render.test.tsx > ChatReplyCard markdown render (T-13af) > still renders the fallbackSummary when the card has not landed
+ChatReplyCard: card load failed ApiError: http 404 for /api/reply-cards/rc-missing
+    at findReplyCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/api/mock.ts:602:11)
+    at Object.getReplyCard (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/api/mock.ts:1362:28)
+    at /Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/ChatReplyCard.tsx:74:29
+    at /Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/ChatReplyCard.tsx:85:5
+    at commitHookEffectListMount (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/react-dom/cjs/react-dom.development.js:23189:26)
+    at commitPassiveMountOnFiber (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/react-dom/cjs/react-dom.development.js:24970:11)
+    at commitPassiveMountEffects_complete (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/react-dom/cjs/react-dom.development.js:24930:9)
+    at commitPassiveMountEffects_begin (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/react-dom/cjs/react-dom.development.js:24917:7)
+    at commitPassiveMountEffects (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/react-dom/cjs/react-dom.development.js:24905:3)
+    at flushPassiveEffectsImpl (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/react-dom/cjs/react-dom.development.js:27078:3) {
+  status: 404,
+  code: 'not_found',
+  serverMessage: "reply card 'rc-missing' not found"
+}
+
+ ✓ src/components/ChatReplyCard.markdown-render.test.tsx (4 tests) 78ms
+ ✓ src/components/MonitorPage.hardware-join.test.tsx (1 test) 52ms
+ ✓ src/components/TaskCard.copy-taskno.test.tsx (3 tests) 102ms
+ ✓ src/components/OfficePage.member-detail-backto.test.tsx (3 tests) 186ms
+ ✓ src/lib/taskNo.test.ts (8 tests) 2ms
+ ✓ src/api/seeds.test.ts (12 tests) 3ms
+ ✓ src/api/mock.create-role.test.ts (4 tests) 14ms
+stderr | src/components/MarkdownPreviewOverlay.test.tsx > MarkdownPreviewOverlay > shows an honest error state on a failed fetch (never a blank render)
+MarkdownPreviewOverlay: load failed Error: http 404
+    at /Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MarkdownPreviewOverlay.tsx:43:26
+
+ ✓ src/components/MarkdownPreviewOverlay.test.tsx (5 tests) 229ms
+ ✓ src/hooks/useOutsourceWorkers.chat.test.ts (3 tests) 37ms
+ ✓ src/api/http.global-context.test.ts (3 tests) 12ms
+ ✓ src/components/TaskCard.artifact-freeze.test.tsx (2 tests) 162ms
+stderr | src/components/ChatArea.md-preview.test.tsx > chat .md preview action (T-a1c4 / T-7bc2) > renders the .md chip as a <button> (preview) and the pdf chip as an <a> (download)
+Warning: An update to I18nProvider inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to I18nProvider inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ scripts/gen-theme-tokens.test.ts (3 tests) 396ms
+ ✓ src/components/ChatArea.md-preview.test.tsx (2 tests) 200ms
+stderr | src/components/ChatArea.image.test.tsx > ChatArea image rendering > appends the owner token to a gated attachment img src
+Warning: An update to I18nProvider inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to I18nProvider inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/components/ChatArea.image.test.tsx > ChatArea image rendering > opens a lightbox on image click and closes it on Escape
+Warning: An update to I18nProvider inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to I18nProvider inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to ChatArea inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at ChatArea (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/ChatArea.tsx:79:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/components/ChatArea.image.test.tsx (3 tests) 152ms
+stderr | src/components/MemberDetailPanel.lastop-reason.test.tsx > MemberDetailPanel 最近操作 failure reason > shows the structured reason as an always-visible one-line summary
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/components/MemberDetailPanel.lastop-reason.test.tsx > MemberDetailPanel 最近操作 failure reason > renders status-only for an old record without a reason (never fabricated)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/components/MemberDetailPanel.lastop-reason.test.tsx > MemberDetailPanel 最近操作 failure reason > renders no reason line on a successful op
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to MemberDetailPanel inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemberDetailPanel (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/MemberDetailPanel.tsx:42:3)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/components/MemberDetailPanel.lastop-reason.test.tsx (3 tests) 168ms
+stderr | src/hooks/useOrgName.test.ts > useOrgName > keeps the fallback (never a phantom value) when the load fails
+useOrgName: load failed Error: boom
+    at /Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/hooks/useOrgName.test.ts:45:47
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:146:14
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:533:11
+    at runWithTimeout (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:39:7)
+    at runTest (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1056:17)
+    at runSuite (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runSuite (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runFiles (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1262:5)
+    at startTests (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1271:3)
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/vitest/dist/chunks/runBaseTests.3qpJUEJM.js:126:11
+
+stderr | src/hooks/useOrgName.test.ts > useOrgName > reverts the optimistic edit when the PATCH rejects
+useOrgName: save failed Error: nope
+    at /Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/hooks/useOrgName.test.ts:64:49
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:146:14
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:533:11
+    at runWithTimeout (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:39:7)
+    at runTest (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1056:17)
+    at runSuite (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runSuite (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runFiles (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1262:5)
+    at startTests (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1271:3)
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/vitest/dist/chunks/runBaseTests.3qpJUEJM.js:126:11
+
+ ✓ src/hooks/useOrgName.test.ts (5 tests) 233ms
+ ✓ src/hooks/useMembers.light.test.ts (4 tests) 44ms
+ ✓ src/components/TaskReplyCard.markdown-render.test.tsx (3 tests) 62ms
+stderr | src/hooks/useOwnerName.test.ts > useOwnerName > keeps the fallback (never a phantom value) when the load fails
+useOwnerName: load failed Error: boom
+    at /Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/hooks/useOwnerName.test.ts:44:47
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:146:14
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:533:11
+    at runWithTimeout (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:39:7)
+    at runTest (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1056:17)
+    at runSuite (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runSuite (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runFiles (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1262:5)
+    at startTests (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1271:3)
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/vitest/dist/chunks/runBaseTests.3qpJUEJM.js:126:11
+
+stderr | src/hooks/useOwnerName.test.ts > useOwnerName > reverts the optimistic edit when the PATCH rejects
+useOwnerName: save failed Error: nope
+    at /Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/hooks/useOwnerName.test.ts:63:49
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:146:14
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:533:11
+    at runWithTimeout (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:39:7)
+    at runTest (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1056:17)
+    at runSuite (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runSuite (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runFiles (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1262:5)
+    at startTests (file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/@vitest/runner/dist/index.js:1271:3)
+    at file:///Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/node_modules/vitest/dist/chunks/runBaseTests.3qpJUEJM.js:126:11
+
+ ✓ src/components/MonitorPage.bootstrap-error.test.tsx (2 tests) 85ms
+ ✓ src/hooks/useOwnerName.test.ts (5 tests) 192ms
+ ✓ src/components/SettingsPage.doc-load-gate.test.tsx (1 test) 104ms
+stderr | src/App.nav-unread.test.tsx > 辦公室 nav unread badge > renders the unread total as a count pill
+Warning: An update to App inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at App (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/App.tsx:50:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/App.nav-unread.test.tsx > 辦公室 nav unread badge > clamps counts above 99 to "99+"
+Warning: An update to App inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at App (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/App.tsx:50:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/App.nav-unread.test.tsx > 辦公室 nav unread badge > renders nothing when there is no unread
+Warning: An update to App inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at App (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/App.tsx:50:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/App.nav-unread.test.tsx (3 tests) 129ms
+ ✓ src/components/SettingsPage.software-version.test.tsx (3 tests) 130ms
+ ✓ src/api/mock.docs.test.ts (4 tests) 5ms
+ ✓ src/hooks/useMonitoring.enabled.test.ts (3 tests) 45ms
+stderr | src/components/SettingsPage.params.test.tsx > SettingsPage · 參數調整 > the landing lists the params entry after 角色誌
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+Warning: An update to SettingsPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at SettingsPage (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/components/SettingsPage.tsx:55:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/components/SettingsPage.params.test.tsx (4 tests) 183ms
+ ✓ src/lib/composerKeys.test.ts (7 tests) 3ms
+ ✓ src/hooks/useTasks.open.test.ts (2 tests) 95ms
+stderr | src/App.document-title.test.tsx > 瀏覽器分頁標題跟隨 org name > sets document.title to the owner's studio name
+Warning: An update to App inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at App (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/App.tsx:50:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+stderr | src/App.document-title.test.tsx > 瀏覽器分頁標題跟隨 org name > falls back to the localized default when the studio is unnamed
+Warning: An update to App inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at App (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/App.tsx:50:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/App.document-title.test.tsx (2 tests) 110ms
+ ✓ src/components/ChatArea.header-task-title.test.tsx (2 tests) 97ms
+ ✓ src/hooks/useWorkerCodenames.test.ts (4 tests) 201ms
+ ✓ src/components/CurrentTaskTitle.test.tsx (4 tests) 85ms
+ ✓ src/components/ThemeSettings.test.tsx (18 tests) 18560ms
+   ✓ ThemeSettings · colour editing > shows friendly names grouped by purpose — never the raw --color-* token 628ms
+   ✓ ThemeSettings · colour editing > round-trips an edited colour value through save 2301ms
+   ✓ ThemeSettings · wording overlay > stores a wording override and lands it on the server bundle 2314ms
+   ✓ ThemeSettings · wording overlay > keeps the boundary spaces of a sentence-fragment override 2485ms
+   ✓ ThemeSettings · alias-default colours > offers the zone/split tokens a bundle never carries, and saves only the touched one 2238ms
+   ✓ ThemeSettings · alias-default colours > edits opacity through a slider, not only through hand-typed #RRGGBBAA 2420ms
+   ✓ ThemeSettings · outer-canvas background > stores a non-default lay-down mode and drops it again on tile 4006ms
+   ✓ ThemeSettings · outer-canvas background > offers no lay-down mode until there is an image to lay down 1970ms
+ ✓ src/components/NavIcon.test.tsx (2 tests) 34ms
+stderr | src/App.topbar-version.test.tsx > topbar 版本顯示 > renders no version chip in the topbar
+Warning: An update to App inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at App (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/App.tsx:50:39)
+    at I18nProvider (/Users/eva/Desktop/gofreight/OffiCraft-wt-T081b/frontend/src/i18n/index.tsx:58:25)
+
+ ✓ src/App.topbar-version.test.tsx (1 test) 40ms
+ ✓ src/components/MonitorPage.machine-id.test.tsx (1 test) 80ms
+ ✓ src/components/InlineEdit.ime.test.tsx (3 tests) 82ms
+ ✓ src/components/ChatArea.compose-seed.test.tsx (2 tests) 61ms
+ ✓ src/api/mock.task-message.test.ts (2 tests) 4ms
+ ✓ src/lib/themeTokenMeta.test.ts (3 tests) 7ms
+ ✓ src/api/mock.owner-name.test.ts (4 tests) 3ms
+ ✓ src/components/MemberActionButtons.test.tsx (2 tests) 70ms
+ ✓ src/api/mappers.mon-account.test.ts (3 tests) 2ms
+ ✓ src/lib/versionFormat.test.ts (5 tests) 3ms
+ ✓ src/lib/avatarKind.test.ts (5 tests) 3ms
+ ✓ src/api/mock.org-name.test.ts (4 tests) 3ms
+ ✓ src/api/mock.settings-toggles.test.ts (2 tests) 2ms
+ ✓ src/lib/cost.test.ts (4 tests) 13ms
+ ✓ src/components/BrandLogo.test.tsx (2 tests) 24ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/components/useRelocateMachine.test.tsx > useRelocateMachine > times out into a retryable notice when the move never lands
+AssertionError: expected '編輯' to contain '更換中…'
+
+Expected: "更換中…"
+Received: "編輯"
+
+ ❯ src/components/useRelocateMachine.test.tsx:221:34
+    219|       vi.advanceTimersByTime(TIMEOUT_MS - 1);
+    220|     });
+    221|     expect(button().textContent).toContain(zh.machine.relocating);
+       |                                  ^
+    222| 
+    223|     act(() => {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+ Test Files  1 failed | 165 passed (166)
+      Tests  1 failed | 1321 passed (1322)
+   Start at  22:25:55
+   Duration  21.09s (transform 5.31s, setup 4.07s, collect 55.40s, tests 67.94s, environment 168.18s, prepare 18.55s)
+
+EXIT=1

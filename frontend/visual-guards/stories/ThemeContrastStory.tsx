@@ -1,0 +1,62 @@
+// CT story for the two contrast facts a THEME PACK can break and jsdom cannot
+// see, because both are computed colours (color-mix / alpha compositing) read
+// off real app CSS (T-081b round 6):
+//
+//   ① the 頂列 (topbar) inline-edit input. Its FILL is --color-bg while the bar
+//      under it is --color-topbar-bg — a pairing that only exists since this
+//      ticket split the shell into three zone tokens, and one a light theme
+//      collapses to ~1.11:1. What keeps the field visible is its BORDER, so the
+//      border is what the guard measures.
+//   ② the 登入 / 首啟 hint line (.login__hint) on the login card.
+//
+// A theme is applied the way the product applies one: --color-* custom
+// properties set on documentElement. `light` seeds the smurf-village palette
+// (docs/T-081b-evidence/shots-pack/smurf-village.theme.json) — a REAL pack, and
+// the one the audit measured — so the guard reports a shipped-theme fact, not a
+// synthetic worst case.
+import { InlineEdit } from "../../src/components/InlineEdit";
+import { I18nProvider } from "../../src/i18n";
+import "../../src/components/login.css";
+
+export const LIGHT_PACK: Record<string, string> = {
+  "--color-bg": "#c2d492",
+  "--color-card": "#fdfbf1",
+  "--color-text": "#33301f",
+  "--color-text-strong": "#1e1c10",
+  "--color-text-muted": "#403d2c",
+  "--color-topbar-bg": "rgba(179, 200, 134, 0.8)",
+  "--color-nav-bg": "rgba(215, 207, 164, 0.8)",
+  "--color-main-bg": "rgba(241, 234, 209, 0.8)",
+  "--color-border": "#b0ae83",
+  "--color-accent": "#2b450b",
+  "--color-overlay": "#241f0d",
+};
+
+export function ThemeContrastStory() {
+  const applyLight = () => {
+    for (const [k, v] of Object.entries(LIGHT_PACK))
+      document.documentElement.style.setProperty(k, v);
+  };
+  return (
+    <I18nProvider>
+      <button data-testid="apply-light" onClick={applyLight}>
+        light
+      </button>
+      <header className="topbar">
+        <div className="topbar__brand">
+          <InlineEdit
+            value="辦公室"
+            onCommit={() => {}}
+            ariaLabel="改名"
+            displayClassName="topbar__org"
+          />
+        </div>
+      </header>
+      <div className="login">
+        <div className="login__card">
+          <p className="login__hint">提示文字</p>
+        </div>
+      </div>
+    </I18nProvider>
+  );
+}

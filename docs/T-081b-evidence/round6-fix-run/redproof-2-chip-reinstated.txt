@@ -1,0 +1,40 @@
+- Expected
++ Received
+
+- 0
++ 1
+
+ ❯ src/components/ThemeSettings.test.tsx:77:64
+     75|     // WHICH KIND a theme is comes from the group it sits in — the rows
+     76|     // themselves carry no 內建/自訂 chip (the heading already says it…
+     77|     expect(utils.container.querySelectorAll(".ts-tag").length).toBe(0);
+       |                                                                ^
+     78|     const rows = Array.from(utils.container.querySelectorAll(".ts-row"…
+     79|     const rowOf = (name: string) =>
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/components/ThemeSettings.test.tsx > ThemeSettings · import > cannot be made to show two identical built-in rows by a theme's wording, colours or name
+AssertionError: expected 1 to be +0 // Object.is equality
+
+- Expected
++ Received
+
+- 0
++ 1
+
+ ❯ src/components/ThemeSettings.test.tsx:163:64
+    161|     // Only the STRUCTURE marks a row now, so the forgery has exactly …
+    162|     // left to beat: which group the row landed in.
+    163|     expect(utils.container.querySelectorAll(".ts-tag").length).toBe(0);
+       |                                                                ^
+    164| 
+    165|     // The headings are UNCHANGED — the wording overlay was dropped, s…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 16 passed (18)
+   Start at  22:04:07
+   Duration  2.57s (transform 152ms, setup 11ms, collect 206ms, tests 2.02s, environment 192ms, prepare 29ms)
+

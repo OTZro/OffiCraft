@@ -1,11 +1,12 @@
 // T-3738 visual guards for 設定 › 主題管理 (ThemeSettings list view):
 //
-//   ① the row TAGS (內建 / 自訂) clear WCAG AA (≥4.5:1), and the old 用詞 tag is
-//      gone (owner: label a row as custom, don't spell out what it changed). The
-//      fills resolve through color-mix(), so the shipped contrast is a
-//      COMPUTED-COLOUR fact jsdom cannot see. We sample the rendered
-//      foreground/background colour off each tag, composite the fill down to an
-//      opaque colour, and compute the WCAG contrast ratio.
+//   ① the GROUP HEADINGS (內建 / 自訂) clear WCAG AA (≥4.5:1), and no per-row tag
+//      is rendered at all — the heading is the only 內建/自訂 marker now, so its
+//      legibility is the whole marker's legibility. Its colour resolves through
+//      color-mix(), so the shipped contrast is a COMPUTED-COLOUR fact jsdom
+//      cannot see. We sample the rendered foreground/background colour off each
+//      heading, composite it down to an opaque colour, and compute the WCAG
+//      contrast ratio.
 //   ② the built-in office row and a custom row line up their trailing action
 //      column at 390 and 1280 — the built-in row carries the SAME three icon
 //      buttons for alignment; its download is active (owner: 辦公室主題不用擋
@@ -73,9 +74,9 @@ function contrast(fg: Rgba, bg: Rgba): number {
 }
 
 // Pull the rendered foreground colour and the effective (composited-to-opaque)
-// background colour of a tag, walking up the ancestor chain to resolve any
-// translucency in the fill — so the ratio reflects the pixels actually painted.
-async function sampleTagColours(cmp: import("@playwright/test").Locator) {
+// background colour of an element, walking up the ancestor chain to resolve any
+// translucency — so the ratio reflects the pixels actually painted.
+async function sampleColours(cmp: import("@playwright/test").Locator) {
   const { fgStr, bgLayers } = await cmp.evaluate((el) => {
     const c = getComputedStyle(el).color;
     const layers: string[] = [];
@@ -101,34 +102,29 @@ async function mountSeeded(mount: any, page: any, width: number) {
   await page.setViewportSize({ width, height: 900 });
   const cmp = await mount(<ThemeSettingsListStory />);
   await cmp.getByTestId("seed").click();
-  // The reconcile adds the custom row; wait for both tags to exist.
-  await expect(cmp.locator(".ts-tag")).toHaveCount(2);
+  // The reconcile adds the custom row, which is what mints the 自訂 group.
+  await expect(cmp.locator(".ts-group-head")).toHaveCount(2);
   return cmp;
 }
 
 for (const width of [390, 1280]) {
-  test(`width ${width}: 內建 built-in tag clears WCAG AA (≥4.5:1)`, async ({ mount, page }) => {
+  test(`width ${width}: 內建 group heading clears WCAG AA (≥4.5:1)`, async ({ mount, page }) => {
     const cmp = await mountSeeded(mount, page, width);
-    // The built-in tag is the .ts-tag that is NOT the custom variant.
-    const tag = cmp.locator(".ts-tag:not(.ts-tag--custom)");
-    await expect(tag).toHaveCount(1);
-    const { ratio } = await sampleTagColours(tag);
+    const { ratio } = await sampleColours(cmp.getByTestId("ts-group-builtin"));
     expect(ratio).toBeGreaterThanOrEqual(4.5);
   });
 
-  test(`width ${width}: 自訂 custom tag exists and clears WCAG AA (≥4.5:1)`, async ({ mount, page }) => {
+  test(`width ${width}: 自訂 group heading clears WCAG AA (≥4.5:1)`, async ({ mount, page }) => {
     const cmp = await mountSeeded(mount, page, width);
-    const tag = cmp.locator(".ts-tag--custom");
-    await expect(tag).toHaveCount(1);
-    const { ratio } = await sampleTagColours(tag);
+    const { ratio } = await sampleColours(cmp.getByTestId("ts-group-custom"));
     expect(ratio).toBeGreaterThanOrEqual(4.5);
   });
 
-  test(`width ${width}: the 用詞 wording badge is no longer rendered`, async ({ mount, page }) => {
-    // The seeded custom theme carries a wording overlay, yet no 用詞 badge shows —
-    // the badge was removed (the wording MECHANISM stays; only the label is gone).
+  test(`width ${width}: no per-row badge is rendered`, async ({ mount, page }) => {
+    // Neither the old 用詞 badge nor the 內建/自訂 chip: the group heading says
+    // which kind a row is, and repeating it on every row said nothing more.
     const cmp = await mountSeeded(mount, page, width);
-    await expect(cmp.locator(".ts-tag--wording")).toHaveCount(0);
+    await expect(cmp.locator(".ts-tag")).toHaveCount(0);
   });
 
   test(`width ${width}: built-in and custom rows align their action column`, async ({ mount, page }) => {

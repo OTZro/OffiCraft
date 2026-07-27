@@ -48,9 +48,9 @@ const GO_OUT = OUT_DIR
 const css = readFileSync(THEME_CSS, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 
 // NON-OVERRIDABLE SLOT FAMILY (T-081b review round 4, BLOCKER-A). Every
-// --color-marker-* token is a STRUCTURAL marker's colour — the fill and text of
-// the 內建 / 自訂 chips and group headings the theme list uses to tell themes
-// APART. A pack that can re-value them can paint both chips identically and the
+// --color-marker-* token is a STRUCTURAL marker's colour — the text of the
+// 內建 / 自訂 group headings the theme list uses to tell themes APART. A pack
+// that can re-value them can paint a heading into the page background and the
 // marker stops marking, which is the colour half of the same forgery the
 // themeMarkers i18n subtree closes on the text half.
 //
@@ -62,12 +62,7 @@ const css = readFileSync(THEME_CSS, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 // and the author would only find it odd. So the two disagreeing is now an error
 // in BOTH directions: a prefixed token missing from the list, or a listed token
 // missing from theme.css.
-const NON_OVERRIDABLE_TOKENS = [
-  "--color-marker-builtin",
-  "--color-marker-custom",
-  "--color-marker-surface",
-  "--color-marker-fg",
-];
+const NON_OVERRIDABLE_TOKENS = ["--color-marker-surface", "--color-marker-fg"];
 const NON_OVERRIDABLE_PREFIX = "--color-marker-";
 const NON_OVERRIDABLE = new Set(NON_OVERRIDABLE_TOKENS);
 
@@ -96,7 +91,7 @@ if (stale.length) {
   console.error(
     `[gen-theme-tokens] ${stale.join(", ")} — listed in NON_OVERRIDABLE_TOKENS ` +
       `but no longer defined in theme.css. A marker slot that vanished takes the ` +
-      `chip colour it painted with it; restore it or drop it from the list.`
+      `heading colour it painted with it; restore it or drop it from the list.`
   );
   process.exit(1);
 }

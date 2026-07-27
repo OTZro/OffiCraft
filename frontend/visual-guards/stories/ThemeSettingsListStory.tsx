@@ -1,7 +1,9 @@
 // CT story: the 設定 › 主題管理 list view in its REAL layout + REAL app CSS,
 // used by guards jsdom cannot reach:
-//   * the row TAGS (內建 / 自訂) must clear WCAG AA (≥4.5:1) — a computed-colour
-//     fact (the fills resolve through color-mix()) invisible to jsdom.
+//   * the GROUP HEADINGS (內建 / 自訂) must clear WCAG AA (≥4.5:1) — a
+//     computed-colour fact (the colour resolves through color-mix()) invisible
+//     to jsdom, and since the per-row chips were dropped the headings are the
+//     only thing marking which kind a row is.
 //   * the built-in office row and a custom row must line up their trailing
 //     action column at every width (the built-in row's download is active while
 //     its edit/delete icons are inert placeholders) — a layout fact jsdom's
@@ -10,8 +12,8 @@
 // The custom theme is seeded the SAME way production does it: patch the mock
 // server's settings, then mint a token so I18nProvider's reconcile adopts the
 // bundle (no test-only backdoor). The bundle carries a `wording` overlay ON
-// PURPOSE — the wording MECHANISM stays, but the row must NO LONGER render a 用詞
-// badge (only the always-on 自訂 badge). `displayTheme` stays "office" so the
+// PURPOSE — the wording MECHANISM stays, but the row must render no badge of
+// any kind. `displayTheme` stays "office" so the
 // ACTIVE theme is the built-in and every --color-* token resolves to its office
 // default — the contrast we ship by default.
 //

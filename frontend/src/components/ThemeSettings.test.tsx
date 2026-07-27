@@ -72,19 +72,17 @@ describe("ThemeSettings · import", () => {
     const srv = await api.getServerSettings();
     expect(srv.customThemes.map((b) => b.id)).toContain("midnight");
 
-    // Each row says WHICH KIND of theme it is, and the 內建 marker sits on the
-    // built-in row only — otherwise an imported pack is indistinguishable from
-    // the shipped theme (and a pack may not claim its name either).
+    // WHICH KIND a theme is comes from the group it sits in — the rows
+    // themselves carry no 內建/自訂 chip (the heading already says it).
+    expect(utils.container.querySelectorAll(".ts-tag").length).toBe(0);
     const rows = Array.from(utils.container.querySelectorAll(".ts-row"));
     const rowOf = (name: string) =>
       rows.find((r) => r.textContent?.includes(name));
-    expect(rowOf(zh.themeIdentity.office)?.textContent).toContain(
-      zh.themeMarkers.builtinGroup
-    );
-    expect(rowOf("午夜藍")?.textContent).toContain(zh.themeMarkers.customGroup);
-    expect(rowOf("午夜藍")?.textContent).not.toContain(
-      zh.themeMarkers.builtinGroup
-    );
+    const headOf = (name: string) =>
+      rowOf(name)?.closest(".ts-list")?.querySelector(".ts-group-head")
+        ?.textContent;
+    expect(headOf(zh.themeIdentity.office)).toBe(zh.themeMarkers.builtinGroup);
+    expect(headOf("午夜藍")).toBe(zh.themeMarkers.customGroup);
   });
 
   it("puts the built-in and the custom rows in separate labelled groups", async () => {
@@ -129,7 +127,7 @@ describe("ThemeSettings · import", () => {
   it("cannot be made to show two identical built-in rows by a theme's wording, colours or name", async () => {
     // The whole round-3 BLOCKER-2 / round-4 BLOCKER-A recipe in one go: forge
     // the marker TEXT through `wording`, forge the marker COLOUR through the
-    // tokens the chips used to read, and name the pack so it renders as the
+    // tokens the markers used to read, and name the pack so it renders as the
     // built-in.
     setToken("owner-token");
     const utils = await renderManage();
@@ -160,11 +158,9 @@ describe("ThemeSettings · import", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
 
-    const chips = Array.from(utils.container.querySelectorAll(".ts-tag"));
-    expect(chips.length).toBe(2);
-    expect(chips[0].textContent).toBe(zh.themeMarkers.builtinGroup);
-    expect(chips[1].textContent).toBe(zh.themeMarkers.customGroup);
-    for (const chip of chips) expect(chip.textContent).not.toBe(SENTINEL);
+    // Only the STRUCTURE marks a row now, so the forgery has exactly one thing
+    // left to beat: which group the row landed in.
+    expect(utils.container.querySelectorAll(".ts-tag").length).toBe(0);
 
     // The headings are UNCHANGED — the wording overlay was dropped, so 內建 still
     // means 內建 …
@@ -174,16 +170,24 @@ describe("ThemeSettings · import", () => {
     expect(utils.getByTestId("ts-group-custom").textContent).toBe(
       zh.themeMarkers.customGroup
     );
-    // … and the forged row sits under 自訂, not under 內建.
+    // … and the forged row sits under 自訂, not under 內建, whatever it called
+    // itself.
     expect(forged.closest(".ts-list")?.querySelector(".ts-group-head")?.textContent).toBe(
       zh.themeMarkers.customGroup
     );
+    // The 內建 group holds the shipped office row and NOTHING else — a pack
+    // cannot add a row to it.
+    const builtinList = utils.getByTestId("ts-group-builtin").closest(".ts-list");
+    const builtinRows = Array.from(builtinList?.querySelectorAll(".ts-row") ?? []);
+    expect(builtinRows.length).toBe(1);
+    expect(builtinRows[0].textContent).toContain(zh.themeIdentity.office);
+    expect(builtinRows[0].contains(forged)).toBe(false);
 
-    // The chips AND the group headings draw their colour from the
-    // non-overridable slots, so the tokens a pack can re-value cannot reach
-    // either. The heading was the gap (round 4 recheck, NIT-1): it read the
-    // pack-settable --color-text-muted, so a pack could set that to the page
-    // colour and make BOTH 內建/自訂 headings disappear.
+    // The group headings draw their colour from the non-overridable slots, so
+    // the tokens a pack can re-value cannot reach them (round 4 recheck,
+    // NIT-1): the heading read the pack-settable --color-text-muted, so a pack
+    // could set that to the page colour and make BOTH 內建/自訂 headings
+    // disappear.
     const css = readFileSync(
       join(dirname(fileURLToPath(import.meta.url)), "theme-settings.css"),
       "utf8"
@@ -193,9 +197,7 @@ describe("ThemeSettings · import", () => {
       expect(at, selector).toBeGreaterThan(-1);
       return css.slice(at, css.indexOf("}", at) + 1);
     };
-    const marked = [".ts-tag", ".ts-tag--custom", ".ts-group-head"]
-      .map(blockOf)
-      .join("\n");
+    const marked = blockOf(".ts-group-head");
     for (const token of [
       "--color-seg-fill",
       "--color-icon-violet-bg",
@@ -220,7 +222,7 @@ describe("ThemeSettings · import", () => {
       validateThemeBundle({
         id: "forge",
         name: "Forge",
-        colors: { "--color-marker-custom": "#6076ba" },
+        colors: { "--color-marker-fg": "#6076ba" },
       })
     ).toMatch(/is not a theme colour token/);
   });
