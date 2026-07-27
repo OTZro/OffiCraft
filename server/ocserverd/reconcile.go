@@ -1287,17 +1287,38 @@ func (s *apiServer) identitySweepOnConnect(memberID, machineClaim string) {
 	if err != nil || m == nil || m.Kind == KindWarden {
 		return
 	}
-	expected := m.DesiredMachineID
-	if m.Kind == KindOutsource {
-		if expected == "" {
-			expected, _ = s.workerSpawnObs(memberID)
-		}
-	}
 	if parseDesired(m.DesiredState) != DesiredStateOnline ||
-		expected == "" || expected != machineClaim {
+		!s.connectionIsTheGenuineArticle(*m, machineClaim) {
 		return // not the 正身 on its expected machine — do not initiate a sweep
 	}
 	s.reconcileMu.Lock()
 	defer s.reconcileMu.Unlock()
 	s.dispatchIdentitySweepNow(memberID, machineClaim, nowSecs())
+}
+
+// connectionIsTheGenuineArticle answers the ONE question both connect-edge folds
+// turn on: is the session that just opened this stream the 正身 the server
+// actually dispatched to THIS machine, or a wanderer whose claim carries no
+// authority? machineClaim is server-minted and unforgeable, so the whole test is
+// whether it equals the machine the server EXPECTED this member on:
+//
+//   - staff (kind=assistant): the owner-pinned desired_machine_id;
+//   - outsource: the owner pin when concrete, else the machine the server
+//     ACTUALLY dispatched the last start to (workerSpawnTarget — a task-level or
+//     manual placement leaves no durable pin on the worker row).
+//
+// "" on either side ⇒ UNVERIFIABLE ⇒ false. Restart amnesia / never-dispatched
+// reads "" and is deliberately fail-safe: an unverifiable connection neither
+// initiates a kill (identitySweepOnConnect) nor rewrites where the worker lives
+// (stampLandedMachine). Both callers reach this WITHOUT holding s.outsourceMu
+// (workerSpawnObs takes it).
+func (s *apiServer) connectionIsTheGenuineArticle(m Member, machineClaim string) bool {
+	if machineClaim == "" {
+		return false
+	}
+	expected := m.DesiredMachineID
+	if m.Kind == KindOutsource && expected == "" {
+		expected, _ = s.workerSpawnObs(m.ID)
+	}
+	return expected != "" && expected == machineClaim
 }

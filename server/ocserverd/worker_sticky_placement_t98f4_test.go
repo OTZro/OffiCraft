@@ -68,6 +68,22 @@ func spawnTarget(t *testing.T, s *apiServer, w OutsourceWorker, machines ...stri
 	return landed
 }
 
+// landOn records a GENUINE landing for a fixture: the server dispatched this
+// worker to `machine` AND a session then connected from there. Both halves are
+// required since the review-round-2 gate — stampLandedMachine now refuses a
+// claim the server cannot corroborate (connectionIsTheGenuineArticle), so a
+// fixture that only calls the stamp records nothing at all.
+func landOn(t *testing.T, s *apiServer, workerID, machine string) {
+	t.Helper()
+	s.outsourceMu.Lock()
+	s.workerSpawnTarget[workerID] = machine
+	s.outsourceMu.Unlock()
+	s.stampLandedMachine(workerID, machine)
+	if got := readWorker(t, s, workerID).LastMachineID; got != machine {
+		t.Fatalf("fixture: landing on %s did not stick (got %q)", machine, got)
+	}
+}
+
 // ── (A) the protection itself ────────────────────────────────────────────────
 
 // TestSticky_RebirthStaysPutWhenTheManualMoved is the reported bug, verbatim:
@@ -185,6 +201,11 @@ func TestSticky_ConnectStampsTheLandingFromTheTokenClaim(t *testing.T) {
 		s.HandleEventsApiEventsGet(httptest.NewRecorder(), req.WithContext(ctx))
 	}
 
+	// The server dispatched it to m-other, so the claim it echoes back is
+	// corroborated (connectionIsTheGenuineArticle).
+	s.outsourceMu.Lock()
+	s.workerSpawnTarget[w.ID] = "m-other"
+	s.outsourceMu.Unlock()
 	connect(w.ID, "m-other")
 	if got := readWorker(t, s, w.ID).LastMachineID; got != "m-other" {
 		t.Fatalf("last landing after connect = %q, want m-other", got)
@@ -196,7 +217,10 @@ func TestSticky_ConnectStampsTheLandingFromTheTokenClaim(t *testing.T) {
 	if got := readWorker(t, s, w.ID).LastMachineID; got != "m-other" {
 		t.Fatalf("a blank claim must not erase a known landing, got %q", got)
 	}
-	// Moving hosts re-stamps.
+	// Moving hosts re-stamps — once the server has actually dispatched there.
+	s.outsourceMu.Lock()
+	s.workerSpawnTarget[w.ID] = "m-third"
+	s.outsourceMu.Unlock()
 	connect(w.ID, "m-third")
 	if got := readWorker(t, s, w.ID).LastMachineID; got != "m-third" {
 		t.Fatalf("landing after a move = %q, want m-third", got)
@@ -207,6 +231,14 @@ func TestSticky_ConnectStampsTheLandingFromTheTokenClaim(t *testing.T) {
 		Kind: KindAssistant, DesiredState: DesiredStateOnline,
 		RosterStatus: RosterStatusActive}); err != nil {
 		t.Fatalf("put staff: %v", err)
+	}
+	staff, err := s.dal.GetMember("g-staff")
+	if err != nil || staff == nil {
+		t.Fatalf("read staff: %+v %v", staff, err)
+	}
+	staff.DesiredMachineID = "m-other" // corroborated, so only kind keeps it out
+	if err := s.dal.PutMember(*staff); err != nil {
+		t.Fatalf("pin staff: %v", err)
 	}
 	connect("g-staff", "m-other")
 	m, err := s.dal.GetMember("g-staff")
@@ -243,7 +275,7 @@ func TestSticky_OwnerRelocateStillMoves(t *testing.T) {
 	connectWarden(t, s, ServerSelfHost)
 	connectWarden(t, s, "m-other")
 	connectWarden(t, s, "m-third")
-	s.stampLandedMachine(w.ID, "m-other")
+	landOn(t, s, w.ID, "m-other")
 
 	// The owner pins m-third by hand.
 	moved := readWorker(t, s, w.ID)
@@ -257,7 +289,7 @@ func TestSticky_OwnerRelocateStillMoves(t *testing.T) {
 	// And once it lands there, the new host is what sticks — 「一旦我手動改到其他
 	// 電腦上,再次換手應該活在其他電腦上」. Even after the pin is dropped, the
 	// worker stays on m-third rather than snapping back to the 手冊's m-other.
-	s.stampLandedMachine(w.ID, "m-third")
+	landOn(t, s, w.ID, "m-third")
 	unpinned := readWorker(t, s, w.ID)
 	unpinned.DesiredMachineID = ""
 	if err := s.dal.PutOutsourceWorker(unpinned); err != nil {
@@ -277,7 +309,7 @@ func TestSticky_OfflineLastMachineFallsThroughToTheConfiguredOne(t *testing.T) {
 	connectWarden(t, s, ServerSelfHost)
 	connectWarden(t, s, "m-third")
 	// It last ran on m-other, which is now OFFLINE (never connected here).
-	s.stampLandedMachine(w.ID, "m-other")
+	landOn(t, s, w.ID, "m-other")
 
 	if got := spawnTarget(t, s, readWorker(t, s, w.ID), ServerSelfHost, "m-other", "m-third"); got != "m-third" {
 		t.Fatalf("offline last landing: got %q, want m-third (機器下線 must still move it)", got)
@@ -300,7 +332,7 @@ func TestSticky_BenchedLastMachineFallsThroughToTheConfiguredOne(t *testing.T) {
 	connectWarden(t, s, ServerSelfHost)
 	connectWarden(t, s, "m-other")
 	connectWarden(t, s, "m-third")
-	s.stampLandedMachine(w.ID, "m-other")
+	landOn(t, s, w.ID, "m-other")
 
 	s.outsourceMu.Lock()
 	s.benchWorkerMachine(w.ID, "m-other", nowSecs())
@@ -319,7 +351,7 @@ func TestSticky_UnreachableLastLandingWithNoAlternativeNamesItself(t *testing.T)
 	s := newWorkerTestServer(t)
 	w := stickyFixture(t, s, "ow-s09", "") // 手冊 names nothing
 	connectWarden(t, s, ServerSelfHost)
-	s.stampLandedMachine(w.ID, "m-other") // offline
+	landOn(t, s, w.ID, "m-other") // offline
 
 	if got := spawnTarget(t, s, readWorker(t, s, w.ID), ServerSelfHost, "m-other", "m-third"); got != "" {
 		t.Fatalf("unreachable landing with no alternative must dispatch nothing, got %q", got)
@@ -330,5 +362,70 @@ func TestSticky_UnreachableLastLandingWithNoAlternativeNamesItself(t *testing.T)
 	}
 	if !strings.Contains(reason, "m-other") {
 		t.Fatalf("receipt must name the machine that is down, got %q", reason)
+	}
+}
+
+// TestSticky_GhostConnectionNeverRewritesTheLanding (review round 2, MEDIUM) is
+// the BOTH-ARMS test of the 正身 gate on the landing stamp.
+//
+// The stamp is durable and it steers every future rebirth, so trusting any
+// connection at all was the wrong criterion: "連上了" is not proof, "連上了 而且
+// 確實是派到這裡的" is — precisely the check identitySweepOnConnect runs on the
+// very next line, and for the very same reason (a wanderer's claim carries no
+// authority). Sticky workers commonly have DesiredMachineID == "" and a server
+// re-exec empties workerSpawnTarget too, so a residual ocagent on an old host
+// is not even swept — its connection's only lasting effect on the fleet would
+// be to move the worker's address to the ghost.
+//
+// Arm 1 (the one a naive gate breaks): a LEGITIMATE first landing — blank pin,
+// dispatch target set — must still stamp.
+// Arm 2 (the defect): a connection from a machine the server never sent this
+// worker to must leave the known landing alone.
+func TestSticky_GhostConnectionNeverRewritesTheLanding(t *testing.T) {
+	s := newWorkerTestServer(t)
+	w := stickyFixture(t, s, "ow-s10", "m-other")
+	connect := func(id, machine string) {
+		req := httptest.NewRequest("GET", "/api/events", nil)
+		claims := map[string]any{"sub": id, "scope": "agent", "machine_id": machine}
+		ctx, cancel := context.WithCancel(
+			context.WithValue(req.Context(), claimsContextKey, claims))
+		cancel()
+		s.HandleEventsApiEventsGet(httptest.NewRecorder(), req.WithContext(ctx))
+	}
+
+	// Arm 1 — no pin at all (the ordinary sticky-worker shape), but the server
+	// really did dispatch the start to m-other. This MUST land.
+	if got := readWorker(t, s, w.ID).DesiredMachineID; got != "" {
+		t.Fatalf("fixture: this arm needs a blank pin, got %q", got)
+	}
+	s.outsourceMu.Lock()
+	s.workerSpawnTarget[w.ID] = "m-other"
+	s.outsourceMu.Unlock()
+	connect(w.ID, "m-other")
+	if got := readWorker(t, s, w.ID).LastMachineID; got != "m-other" {
+		t.Fatalf("a legitimate first landing must still stamp: got %q, want m-other", got)
+	}
+
+	// Arm 2 — a residual session on m-third connects. The server never sent this
+	// worker there and nothing pins it there, so the claim is uncorroborated.
+	connect(w.ID, "m-third")
+	if got := readWorker(t, s, w.ID).LastMachineID; got != "m-other" {
+		t.Fatalf("a ghost connection rewrote the landing to %q — the next rebirth "+
+			"would follow it", got)
+	}
+
+	// Arm 1b — the OTHER corroboration source: the owner's pin. Server restart
+	// amnesia (spawn target forgotten) must not block a pinned worker's landing.
+	s.outsourceMu.Lock()
+	delete(s.workerSpawnTarget, w.ID)
+	s.outsourceMu.Unlock()
+	pinned := readWorker(t, s, w.ID)
+	pinned.DesiredMachineID = "m-third"
+	if err := s.dal.PutOutsourceWorker(pinned); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	connect(w.ID, "m-third")
+	if got := readWorker(t, s, w.ID).LastMachineID; got != "m-third" {
+		t.Fatalf("a landing on the owner's own pin must stamp: got %q, want m-third", got)
 	}
 }

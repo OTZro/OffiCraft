@@ -376,6 +376,21 @@ func (s *apiServer) onFirstConnect(memberID string) {
 // and erasing a known landing on an unknowable connect is how a worker would
 // silently fall back to the 手冊 again.
 //
+// 🔴 GATED ON THE 正身 CHECK, not on the mere fact of a connection
+// (connectionIsTheGenuineArticle — the SAME predicate identitySweepOnConnect
+// runs on the next line, and for the same reason: a wanderer's claim carries no
+// authority). "連上了" is not the criterion; "連上了 而且 確實是派到這裡的" is.
+// Without the gate a residual ocagent left over on an old host — the exact
+// doppelganger the sweep exists to reap — would DURABLY overwrite last_machine_id
+// on connect, and the next rebirth would follow the ghost. Sticky workers
+// commonly carry DesiredMachineID == "", and after a server re-exec
+// workerSpawnTarget is empty too, so such a connection is not even swept: the
+// stamp would be the ghost's only lasting effect on the fleet. An unverifiable
+// connection therefore leaves the known landing alone (fail-safe, the same
+// direction as the blank-claim rule below). A LEGITIMATE first landing still
+// stamps: the pin may be blank, but the dispatch the server just made names the
+// machine, and that is what the token's claim echoes back.
+//
 // Best-effort, and deliberately WRITE-ONLY-ON-CHANGE: a reconnect on the same
 // machine must not cost a row write plus an SSE delta.
 func (s *apiServer) stampLandedMachine(memberID, machineID string) {
@@ -385,6 +400,9 @@ func (s *apiServer) stampLandedMachine(memberID, machineID string) {
 	m, err := s.dal.GetMember(memberID)
 	if err != nil || m == nil || m.Kind != KindOutsource || m.LastMachineID == machineID {
 		return
+	}
+	if !s.connectionIsTheGenuineArticle(*m, machineID) {
+		return // a wanderer's claim never rewrites where this worker lives
 	}
 	m.LastMachineID = machineID
 	if err := s.putMember(*m, memberID); err != nil {
