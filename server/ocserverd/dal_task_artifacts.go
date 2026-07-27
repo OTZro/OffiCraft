@@ -112,9 +112,20 @@ func (d *DAL) PutTaskArtifact(a TaskArtifact) error {
 
 // DeleteTaskArtifact hard-deletes one artifact by id (the owner's un-pin). The
 // referenced chat_attachment blob is deliberately left intact — a blob may be
-// shared with a chat message/reply card, and blob GC is not this system's
-// concern (the chat-attachment store has no delete path either). Returns true
-// iff a row was removed.
+// shared with a chat message / reply card, and blob GC is not this function's
+// concern.
+//
+// ⚠️ The old parenthetical here ("the chat-attachment store has no delete path
+// either") is FALSE as of T-62a8 and was removed: `DAL.DeleteChatInvolving`
+// deletes chat_attachment rows, and it now counts `task_artifact.attachment_id`
+// as a live reference — so an artifact row is what KEEPS a blob alive there.
+// The standing consequence: un-pinning here can leave a blob that nothing
+// references and that nothing will ever collect (that scan only ever considers
+// blobs the messages it just deleted referenced, and never revisits). That
+// bounded leak is accepted; changing it means changing this function's
+// contract, which is an owner call, not a drive-by.
+//
+// Returns true iff a row was removed.
 func (d *DAL) DeleteTaskArtifact(id string) (bool, error) {
 	res, err := d.db.Exec(`DELETE FROM task_artifact WHERE id = ?`, id)
 	if err != nil {

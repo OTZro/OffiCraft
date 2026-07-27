@@ -396,13 +396,43 @@ func refIDsFromJSON(blob string, into map[string]bool) {
 
 // DeleteChatInvolving HARD-deletes every message involving memberID (sender OR
 // recipient) plus the attachment blobs those messages reference through their
-// meta["attachments"] refs (the only linkage), so no blob is orphaned. A blob
-// is deleted ONLY when no surviving record still references it: ref-form
-// post_chat lets one blob ride several messages (and a reply-card blob —
-// answer- or question-side — could be re-referenced from chat), so the cascade
-// re-checks the survivors — surviving chat messages AND reply-card refs (both
-// answer_attachments and the T-5e8a question-side attachments) — before
-// dropping a blob.
+// meta["attachments"] refs (the only message→blob linkage), so no blob is
+// orphaned. A blob is deleted ONLY when no surviving record still references
+// it: ref-form post_chat lets one blob ride several messages, a reply-card
+// blob (answer- or question-side) could be re-referenced from chat, and a blob
+// uploaded in chat can be PINNED onto a task card as a deliverable — so the
+// cascade re-checks every survivor before dropping a blob.
+//
+// This is the ONLY production statement that deletes a chat_attachment row
+// (`DeleteTaskArtifact` deliberately leaves the blob alone), so the survivor
+// scan below is the whole liveness verdict for the blob store. As of T-62a8
+// the blob-referencing columns in the schema are exactly these four, and
+// `collectSurvivingBlobRefs` reads all four:
+//
+//	chat_message.meta $.attachments[].id
+//	reply_card.answer_attachments[].id
+//	reply_card.attachments[].id          (T-5e8a question side)
+//	task_artifact.attachment_id          (T-62a8 — file/image kinds; '' on link)
+//
+// ⚠️ Add a fifth referencing column anywhere and it MUST be added here in the
+// same commit; a blob whose only referrer is unknown to this scan is deleted
+// out from under that referrer with no error and no receipt. The failure mode
+// this closed was exactly that: a deliverable pinned on a task card went to a
+// dead link when the chat message it was uploaded in was removed — and a
+// terminal task's artifact set is frozen in both directions, so it could not
+// be re-attached.
+//
+// ⚠️ Honest limit — this scan is NOT a general GC. It only ever considers the
+// blobs the just-deleted messages referenced (`candidates`); nothing re-visits
+// a blob later. So a blob spared here because a task_artifact held it becomes
+// permanently uncollectable if that artifact is subsequently un-pinned
+// (`DeleteTaskArtifact` leaves blobs alone by decree, and un-pinning is
+// refused once the task is terminal, so the window is narrow). That is a
+// bounded disk leak accepted in exchange for not destroying a deliverable —
+// the two are not symmetric: the leak is recoverable by a future sweep, the
+// deletion is not recoverable at all. A real reachability sweep over the four
+// columns below is the proper fix and does not exist yet.
+//
 // Returns (deletedMessages, deletedAttachments).
 func (d *DAL) DeleteChatInvolving(memberID string) (int, int, error) {
 	tx, err := d.db.Begin()
@@ -431,34 +461,9 @@ func (d *DAL) DeleteChatInvolving(memberID string) (int, int, error) {
 
 	surviving := map[string]bool{}
 	if len(candidates) > 0 {
-		if err := collectChatMetaRefs(tx,
-			`SELECT meta FROM chat_message`, surviving); err != nil {
+		if err := collectSurvivingBlobRefs(tx, surviving); err != nil {
 			return 0, 0, err
 		}
-		// A card references blobs from BOTH sides: answer_attachments (the
-		// owner's answer) AND attachments (the T-5e8a question-side refs the
-		// card was opened with). Both keep a blob alive — the question refs
-		// are also stamped into the companion chat message's meta, so the
-		// companion's deletion puts them on the candidate list; the surviving
-		// card must veto that.
-		rows, err := tx.Query(`SELECT answer_attachments, attachments FROM reply_card`)
-		if err != nil {
-			return 0, 0, err
-		}
-		for rows.Next() {
-			var answerBlob, questionBlob string
-			if err := rows.Scan(&answerBlob, &questionBlob); err != nil {
-				rows.Close()
-				return 0, 0, err
-			}
-			refIDsFromJSON(answerBlob, surviving)
-			refIDsFromJSON(questionBlob, surviving)
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return 0, 0, err
-		}
-		rows.Close()
 	}
 
 	var deletedAtts int64
@@ -480,6 +485,77 @@ func (d *DAL) DeleteChatInvolving(memberID string) (int, int, error) {
 		return 0, 0, err
 	}
 	return int(deletedMsgs), int(deletedAtts), nil
+}
+
+// collectSurvivingBlobRefs folds every chat_attachment id that a STILL-STORED
+// record references into `into` — the complete liveness verdict for the blob
+// store (the four columns enumerated on DeleteChatInvolving). Called after the
+// chat_message rows are deleted inside the same tx, so "still stored" is read
+// against the post-delete state.
+//
+// Deliberately one function rather than three inline blocks: the bug this
+// closed (T-62a8) was a MISSING source, and a missing source is far easier to
+// notice against a list than against a stretch of procedural code.
+func collectSurvivingBlobRefs(tx *sql.Tx, into map[string]bool) error {
+	// 1. surviving chat messages — ref-form post_chat lets one blob ride
+	//    several messages, so a blob can outlive the message it arrived on.
+	if err := collectChatMetaRefs(tx, `SELECT meta FROM chat_message`, into); err != nil {
+		return err
+	}
+
+	// 2+3. reply cards (cards live forever). A card references blobs from
+	//      BOTH sides: answer_attachments (the owner's answer) AND
+	//      attachments (the T-5e8a question-side refs the card was opened
+	//      with). The question refs are also stamped into the companion chat
+	//      message's meta, so the companion's deletion puts them on the
+	//      candidate list; the surviving card must veto that.
+	rows, err := tx.Query(`SELECT answer_attachments, attachments FROM reply_card`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var answerBlob, questionBlob string
+		if err := rows.Scan(&answerBlob, &questionBlob); err != nil {
+			rows.Close()
+			return err
+		}
+		refIDsFromJSON(answerBlob, into)
+		refIDsFromJSON(questionBlob, into)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	// 4. task artifacts (T-62a8) — a deliverable pinned onto a task card.
+	//    task_artifact rows have no cascade of their own and a terminal
+	//    task's set is frozen in both directions, so this reference is the
+	//    strongest one in the schema: dropping its blob is unrecoverable.
+	//    The filter keeps LINK artifacts (no blob, attachment_id '') from
+	//    voting for a nonexistent empty-id blob.
+	//
+	//    COALESCE, not a bare `attachment_id <> ''`: the column is today
+	//    NOT NULL DEFAULT '' so NULL cannot occur — but if anyone ever makes
+	//    it nullable, `NULL <> ''` is NULL, the row silently stops voting,
+	//    and THE ORIGINAL DEFECT COMES BACK with nothing going red. The
+	//    fail-safe direction of this predicate is "vote", so write it so a
+	//    NULL still falls on the safe side.
+	artRows, err := tx.Query(
+		`SELECT attachment_id FROM task_artifact
+		 WHERE COALESCE(attachment_id, '') <> ''`)
+	if err != nil {
+		return err
+	}
+	defer artRows.Close()
+	for artRows.Next() {
+		var id string
+		if err := artRows.Scan(&id); err != nil {
+			return err
+		}
+		into[id] = true
+	}
+	return artRows.Err()
 }
 
 // collectChatMetaRefs folds every attachment id referenced by the

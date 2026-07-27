@@ -56,6 +56,10 @@ M3 REST 子批 A(oapi-codegen 佈線 + SPA 基座)+ 子批 B(50 條 handler 填�
   - **它證明的範圍就到這裡,別放大**:證的是「同一筆交易內,後續 INSERT 失敗會回捲先前的 INSERT」,四個面各自實測。**沒有**證:語句中途的部分回捲、真正的行程崩潰或磁碟滿的持久性、WAL/fsync、併發。
   - `api_chat_attachment_wiring_test.go` 的 AST 掃描只是「早一步指出行號」的便利品:獨立審查用三種寫法(抽成 helper、直接用 `putChatAttachmentOn` seam、取 method value)把它全綠繞過去——**別拿它的綠當證據**(這正是任務手冊 T-5047「釘名字不釘結構等於沒釘」那條的再現)。
 
+- 🔴 **同一份四欄清單現在有兩個家,兩邊都要改(T-62a8)**:上面那份是**測試側**的世界模型(`referencedAttachmentIDs`),判的是**寫入面**;`dal.go` 的 `collectSurvivingBlobRefs` 是**生產側**的存活判定,判的是**刪除面**——`DeleteChatInvolving` 是**全域唯一**刪 `chat_attachment` 的敘述,所以那個掃描就是 blob store 的全部存活裁決。**新增第五個引用欄位時兩邊都要加,而且同一個 commit**;只加測試側那份,生產的刪除路徑依舊看不見它。
+  - ⚠️ **別把測試側那份當成「已經有守衛在守生產」**——T-e2b2 把 `task_artifact.attachment_id` 納入的是不變式掃描,`DeleteChatInvolving` 的存活判定當時一行都沒動,於是一個被釘成任務交付物的 blob 會隨它所在的聊天訊息一起被刪掉(任務一進終態產物集雙向凍結 ⇒ **不可復原**)。T-62a8 補的是生產那半。兩個方向各有哨兵(`dal_blob_liveness_test.go`):被引用的不准刪、**沒人引用的仍然要刪**——只釘前者會把資料遺失換成沒人會發現的磁碟洩漏。
+  - **誠實邊界**:它**不是通用 GC**,只看「剛被刪的那些訊息引用過的 blob」、之後不重訪。所以被 artifact 保住的 blob 若日後被 un-pin 就永久收不回(`DeleteTaskArtifact` 依明文契約不刪 blob)。這是有界洩漏,換掉的是不可復原的刪除——要改等於改 `DeleteTaskArtifact` 的契約,屬 owner 裁定面。
+
 ## 已知邊界(誠實列,別當成熟功能用)
 - **config 預設路徑是 CWD-relative `oc.toml`**(binary 沒有 source-path 可錨 repo root);部署正解走 `$OC_CONFIG`。
 
