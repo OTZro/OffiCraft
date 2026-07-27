@@ -192,11 +192,18 @@ done <<<"$SITES"
 # The load-bearing anti-water-down check. Per-path and independent of the count:
 # deleting the real markers and pasting the same number into a junk file reddens
 # here even though the tally is untouched.
+# The two failure branches are DIFFERENT SITUATIONS and must say so. A rename is
+# a legitimate refactor, and telling that maintainer his restatement is
+# "unregistered" — in anti-water-down wording, without ever naming required_sites
+# or this file — accuses him of the wrong thing and leaves him with no idea what
+# the correct fix is. A rejection message has to teach the correct repair.
 for want_file in "${required_sites[@]}"; do
   if [[ " $CURRENT_FILES " == *" $want_file "* ]]; then
     ok "required site $want_file carries a marker at the current hash"
+  elif [[ ! -e "$ROOT/$want_file" ]]; then
+    bad "required site $want_file does not exist — was it moved or renamed? If so this is not a violation: update the required_sites list in $SELF_REL to the new path (and check the marker moved with the text). If the file was deleted outright, drop it from required_sites and lower MIN_DEFER_SITES / MIN_DEFER_SITES_FLOOR deliberately."
   else
-    bad "required site $want_file has NO marker at the current hash — the restatement there is unregistered (moving its marker into some other file does not count)"
+    bad "required site $want_file exists but carries NO marker at the current hash — the restatement there is unregistered. Re-read it against seeds/system_interaction.md §4.1 and re-stamp it with $WANT. (Parking the marker in some other file does not satisfy this check; the required paths are listed in $SELF_REL.)"
   fi
 done
 
