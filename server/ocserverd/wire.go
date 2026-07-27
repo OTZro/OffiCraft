@@ -390,6 +390,26 @@ type monitoringMachineDTO struct {
 	// siblings, so a row can serve a good ram_pct while naming cpu_pct here.
 	// Key NAMES only, never the offending value — that value is untrusted input
 	// and has no business being rendered in the cockpit.
+	//
+	// THIS DTO IS THE ONE THE COCKPIT ACTUALLY READS, which is why the field
+	// lives here and only here. Traced, not assumed: MonitorPage.tsx's machine
+	// table is a JOIN — it iterates the REGISTRY rows (MachineDTO, for identity /
+	// online / actions) but every hardware cell reads `hwByHost.get(machineId)`,
+	// i.e. THIS row. MachineDTO is not missing this field by oversight: it has
+	// never carried cpu_pct/ram_pct/battery_pct/ac_power at all, so it has no
+	// blank hardware cell that could need explaining. (claude_* and bin_status
+	// ARE mirrored across both DTOs — because both render them. The asymmetry
+	// follows from who renders what, not from anyone forgetting.)
+	//
+	// ⚠️ COVERAGE, stated so no one reads more protection into this than exists:
+	// this read-side marking covers `hardware` ONLY. The same wrong-type hole is
+	// still open and still SILENT on `claude` and `runtimes` — a claude.version
+	// sent as a number is stored and read back as null exactly as cpu_pct was,
+	// with nothing on the wire saying so. Those two have a CI guard
+	// (cli/ocwarden/telemetry_wire_test.go) that constrains OUR OWN producers and
+	// nothing else, so a third-party or older warden drifting there is still
+	// invisible at runtime. Deliberately out of scope for this change (owner
+	// ruling: separate ticket) — not fixed, not covered, just known.
 	HardwareInvalid []string `json:"hardware_invalid"`
 	// RuntimeCapabilitiesTS / RuntimeCapabilitiesStale carry the same freshness
 	// question for the capability probes. Their values are deliberately NOT

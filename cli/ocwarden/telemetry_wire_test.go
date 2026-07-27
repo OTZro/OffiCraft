@@ -56,13 +56,30 @@ import (
 // before this guard existed: the resulting machine row was byte-for-byte
 // identical to one from a host that has never had a CPU probe.
 //
-// The server's answer to that is on the READ side (hardware_invalid names the
-// unreadable key instead of blanking it silently) — a rejection at ingest is
-// exactly the fail-closed tightening the owner ruled out. This guard is the
-// other half, and it is aimed somewhere narrower: OUR OWN producers. It says
-// nothing about what the server accepts from a warden in the field, so it costs
-// no tolerance; what it buys is that "we broke our own reporter" reddens a build
-// instead of quietly emptying a column.
+// A rejection at ingest is exactly the fail-closed tightening the owner ruled
+// out, so nothing here is refused. This guard is aimed somewhere much narrower:
+// OUR OWN producers. It says nothing about what the server accepts from a warden
+// in the field, so it costs no tolerance; what it buys is that "we broke our own
+// reporter" reddens a build instead of quietly emptying a column.
+//
+// ⚠️ AND THAT IS ALL IT BUYS — say it plainly, because a guard described more
+// broadly than it protects is how this repo has been bitten before. The blocks
+// below are covered UNEVENLY at runtime:
+//
+//	hardware            — CI guard (here) + a READ-side marker. The server names
+//	                      the unreadable key on the wire (hardware_invalid), so a
+//	                      wrong-typed value from ANY warden, ours or not, is
+//	                      visible in the cockpit.
+//	claude / runtimes   — CI guard (here) and NOTHING ELSE. A wrong-typed
+//	                      claude.version or runtimes.codex.installed is still
+//	                      accepted with a 200, stored, and read back as null with
+//	                      nothing anywhere saying a value was lost. This test only
+//	                      sees payloads THIS module builds; an older or
+//	                      third-party warden drifting there stays invisible.
+//
+// That gap is known and deliberately unfixed (owner ruling: separate ticket, not
+// folded into this one). Do not read the green tick below as "the value layer is
+// covered" — it means "our producers are not the ones breaking it".
 
 // schemaNode is as much of a JSON-Schema node as this guard needs: the declared
 // child properties, the declared value type(s), and whether the node is closed.

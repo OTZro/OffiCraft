@@ -175,6 +175,15 @@ contract is a CI guard over our own payloads
 (`cli/ocwarden/telemetry_wire_test.go::TestWardenTelemetryValueTypesMatchFrozenSchema`) —
 it constrains the warden, not the wire.
 
+**Coverage, exactly**: the read-side marking is `hardware` ONLY, because that is the block
+the cockpit renders values from (MonitorPage's machine table joins registry rows for
+identity against THIS fold for every hardware cell; `MachineDTO` carries no hardware at
+all). `claude` and `runtimes` have the same wrong-type hole, still open and still SILENT —
+a number where `claude.version` belongs is a 200, stored, read back as null, with nothing
+on the wire saying a measurement was lost. Their only protection is the CI guard, which
+sees payloads OUR module builds and no others. Known, deliberately out of scope here,
+tracked separately.
+
 ## 4. Reconcile producer — the decision surface
 
 The server owns desired-state reconciliation; the warden is a stateless executor. Commands reach the warden over the SSE warden-command band

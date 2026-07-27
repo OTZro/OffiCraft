@@ -12,6 +12,15 @@
 // screen. `hardware_invalid` puts the difference on the wire; this file is the
 // half that makes it reach a human, and the half that keeps it from over-firing
 // on the healthy rows.
+//
+// It reaches the human THROUGH THE PRODUCTION JOIN, which is why this file
+// mounts both feeds rather than handing the component one object. The machine
+// table iterates registry rows from `listMachines` (MachineDTO — identity,
+// online, actions) and looks the hardware up per row from `getMonitoring`
+// (MonitoringMachineDTO). `hardware_invalid` rides the SECOND one, next to the
+// values it explains. A fixture that skipped the join would prove the chip
+// renders and prove nothing about whether the field survives the trip to the
+// cell — and "fixed but never reaches the screen" is the same as unfixed.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
