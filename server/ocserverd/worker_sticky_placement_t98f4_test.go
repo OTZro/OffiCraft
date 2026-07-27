@@ -429,3 +429,62 @@ func TestSticky_GhostConnectionNeverRewritesTheLanding(t *testing.T) {
 		t.Fatalf("a landing on the owner's own pin must stamp: got %q, want m-third", got)
 	}
 }
+
+// TestSticky_UnverifiableConnectionAfterReExecNeverRewritesTheLanding
+// (review round 3, MEDIUM) covers the OTHER leg of the 正身 gate — the
+// FAIL-SAFE one, where the server cannot corroborate the claim at all
+// (expected == "") rather than corroborating it against a different machine.
+//
+// Why it needs its own test: the ghost sentinel above only ever walks the
+// `expected != ""` leg (a spawn target exists and disagrees). Relaxing the gate
+// to 「驗不了就算正身」 — `expected == "" || expected == machineClaim` — therefore
+// leaves the ENTIRE sticky suite green while restoring the round-2 defect
+// verbatim. Measured, not assumed: under that mutant every test in this file
+// passes and only an identity-sweep test in another file reddens, so a
+// maintainer reading THIS file would see nothing at all.
+//
+// And `expected == ""` is not a corner: it is the exact production shape the
+// gate was introduced for — a sticky worker carries no pin, and a server
+// re-exec forgets workerSpawnTarget, so the residual ocagent on the old host is
+// not even swept. Its connection's only lasting effect on the fleet would be to
+// move the worker's address to the ghost.
+func TestSticky_UnverifiableConnectionAfterReExecNeverRewritesTheLanding(t *testing.T) {
+	s := newWorkerTestServer(t)
+	w := stickyFixture(t, s, "ow-s11", "m-other")
+	connect := func(id, machine string) {
+		req := httptest.NewRequest("GET", "/api/events", nil)
+		claims := map[string]any{"sub": id, "scope": "agent", "machine_id": machine}
+		ctx, cancel := context.WithCancel(
+			context.WithValue(req.Context(), claimsContextKey, claims))
+		cancel()
+		s.HandleEventsApiEventsGet(httptest.NewRecorder(), req.WithContext(ctx))
+	}
+
+	// It genuinely landed on m-other.
+	landOn(t, s, w.ID, "m-other")
+
+	// The server re-execs: workerSpawnTarget is in-memory BY CONTRACT, so the
+	// dispatch memory is gone. The worker has no pin either (the ordinary sticky
+	// shape) — the server now cannot corroborate ANY machine claim for it.
+	s.outsourceMu.Lock()
+	delete(s.workerSpawnTarget, w.ID)
+	s.outsourceMu.Unlock()
+	if got := readWorker(t, s, w.ID).DesiredMachineID; got != "" {
+		t.Fatalf("fixture: this leg needs an unpinned worker, got %q", got)
+	}
+	s.outsourceMu.Lock()
+	target := s.workerSpawnTarget[w.ID]
+	s.outsourceMu.Unlock()
+	if target != "" {
+		t.Fatalf("fixture: this leg needs an EMPTY spawn target, got %q", target)
+	}
+
+	// A residual ocagent on m-third — the doppelganger the sweep exists to reap,
+	// and which this very state stops the sweep from reaping — connects.
+	connect(w.ID, "m-third")
+
+	if got := readWorker(t, s, w.ID).LastMachineID; got != "m-other" {
+		t.Fatalf("an UNVERIFIABLE connection rewrote the landing to %q — the next "+
+			"rebirth would follow the ghost, and nothing swept it either", got)
+	}
+}
