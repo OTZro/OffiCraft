@@ -100,6 +100,68 @@ func teleBool(value any) *bool {
 	return &b
 }
 
+// declaredHardwareTypes is the hardware sub-shape the SERVER READS BY NAME, and
+// the JSON type each of those reads needs. It mirrors the frozen spec's
+// AgentTelemetryIngestDTO.hardware declaration (number for the three percents,
+// boolean for ac_power) — the same four keys teleNum/teleBool are applied to in
+// the machines fold, listed once so the classifier below and the readers below
+// cannot drift apart.
+//
+// Only DECLARED keys are listed, and that is the point: `additionalProperties`
+// on this block stays true (owner ruling rc-55861dd893c6) so a warden that grows
+// an undeclared probe still lands its whole report, and an undeclared key has no
+// declared type to be wrong about. Judging one would turn "a newer warden sent
+// something we have not heard of" into an on-screen defect — the same
+// intolerance the ruling rejected, moved from the ingest path to the read path.
+var declaredHardwareTypes = map[string]string{
+	"cpu_pct":     "number",
+	"ram_pct":     "number",
+	"battery_pct": "number",
+	"ac_power":    "boolean",
+}
+
+// hardwareInvalidKeys names the declared hardware keys that are PRESENT in this
+// sample but carry a value the reader cannot use — sorted, empty when the sample
+// is clean. It is what puts "measured, but unreadable" on the wire as something
+// other than silence; see monitoringMachineDTO.HardwareInvalid for why that
+// distinction is the whole point of the field.
+//
+// Three things are deliberately NOT invalid, because each is a real answer:
+//   - an ABSENT key. collectHardware omits every probe that failed, so a machine
+//     with no battery legitimately sends no battery_pct. That is "never
+//     measured", the case this field exists to stop being confused WITH.
+//   - an explicit null. The frozen spec declares every one of these as
+//     `anyOf: [<type>, null]`, so null is a declared way of saying the same
+//     thing an omission says.
+//   - a negative number. teleNum withholds it (-1 is the 未量到 sentinel), but it
+//     is a number: the type contract is met and the producer is not broken, so
+//     calling it invalid would blame a healthy reporter.
+//
+// What IS invalid is a value of the wrong JSON type — a string cpu_pct, a
+// stringly "yes" for ac_power — i.e. exactly the shapes that are accepted with a
+// 200, stored verbatim, and then read back as null forever.
+func hardwareInvalidKeys(hw map[string]any) []string {
+	invalid := []string{}
+	for key, want := range declaredHardwareTypes {
+		value, present := hw[key]
+		if !present || value == nil {
+			continue // absent / explicitly null — a declared way of saying "no reading"
+		}
+		ok := false
+		switch want {
+		case "number":
+			_, ok = value.(float64)
+		case "boolean":
+			_, ok = value.(bool)
+		}
+		if !ok {
+			invalid = append(invalid, key)
+		}
+	}
+	sort.Strings(invalid)
+	return invalid
+}
+
 // commandResultAtEpoch parses a command_result "at" (RFC3339 from the warden;
 // a bare epoch number accepted for robustness; garbage → 0.0 so a bad
 // timestamp can never shortcut presence).
@@ -1076,6 +1138,11 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 			ClaudeCredSource:    claudeCredSource,
 			ClaudeSubReadable:   claudeSubReadable,
 			RuntimeCapabilities: s.machineRuntimeCapabilities(host),
+			// Honest-empty, never null: the spec types this as a plain array,
+			// and "no key is broken" is a real answer that every row can give
+			// — including one with no sample at all, which has no key that
+			// COULD be broken. Same shape discipline as Accounts.
+			HardwareInvalid: []string{},
 		}
 		// A hardware sample is only SERVEABLE while it is fresh. Telemetry is
 		// never cleared on disconnect (only on dismissal), so without this gate a
@@ -1103,6 +1170,20 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 				row.RamPct = teleNum(hw["ram_pct"])
 				row.BatteryPct = teleNum(hw["battery_pct"])
 				row.ACPower = teleBool(hw["ac_power"])
+				// …and SAY when one of those four came back nil because the
+				// value was unusable rather than absent. The four readers above
+				// are total functions into nil: a string cpu_pct produces the
+				// exact same row as a machine that has never had a CPU probe,
+				// so without this the cockpit cannot tell a broken reporter
+				// from a box with no battery — the failure this whole field
+				// exists to end. See monitoringMachineDTO.HardwareInvalid.
+				//
+				// Scoped to the SERVED sample on purpose. A stale row's blanks
+				// already have a published reason (hardware_stale), and a row
+				// that is withholding its numbers anyway has no business also
+				// passing judgement on values it is not reading; naming keys
+				// there would put two competing explanations on one blank cell.
+				row.HardwareInvalid = hardwareInvalidKeys(hw)
 			}
 		}
 		// Capability probes carry the same age question with a different answer:

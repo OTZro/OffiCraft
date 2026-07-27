@@ -67,6 +67,8 @@ const card = (
   ...values,
   hardwareTs: stale == null ? null : 1_700_000_000,
   hardwareStale: stale,
+  // Clean by construction: this fixture is about AGE, not value validity.
+  hardwareInvalid: [],
   runtimeCapabilitiesTs: null,
   runtimeCapabilitiesStale: null,
   binStatus: null,

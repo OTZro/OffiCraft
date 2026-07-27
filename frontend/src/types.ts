@@ -403,6 +403,18 @@ export interface MonMachineView {
    * substitute (a fresh report whose probes all failed looks identical).
    */
   hardwareStale: boolean | null;
+  /**
+   * The declared hardware keys that arrived with the WRONG VALUE TYPE in the
+   * served sample (server-computed, honest-empty). This is the third reason a
+   * hardware cell can be blank, and the only one that used to be invisible:
+   * `cpu_pct: "47"` is accepted, stored, and read back as null, producing a row
+   * byte-for-byte identical to a machine that has never had a CPU probe. Read
+   * it PER KEY — one broken probe says nothing about its siblings — and render
+   * it as its own mark, distinct from the stale mark: "measured but unreadable"
+   * (someone's reporter is broken) and "measured a while ago" (nobody has
+   * looked lately) send the operator to different places.
+   */
+  hardwareInvalid: string[];
   claudeCredSource: ClaudeCredSource;
   claudeSubReadable: boolean | null;
 }

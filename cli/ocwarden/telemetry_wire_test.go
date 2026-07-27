@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -44,11 +45,153 @@ import (
 //   - the nested declaration is asserted to EXIST (a walker with nothing to
 //     descend into silently passes everything).
 
+// ── the VALUE layer (T-aad2) ────────────────────────────────────────────────
+//
+// Everything above is about KEY NAMES, and that is only half of what the
+// declaration says. A producer that keeps the name and changes the TYPE —
+// cpu_pct sent as the string "47" instead of the number 47 — walked straight
+// through: the nested blocks are open by owner ruling, so the server takes the
+// body with a 200 and stores it verbatim, and the reader (which needs a
+// float64) then serves null forever. Measured on the real ingest and read paths
+// before this guard existed: the resulting machine row was byte-for-byte
+// identical to one from a host that has never had a CPU probe.
+//
+// A rejection at ingest is exactly the fail-closed tightening the owner ruled
+// out, so nothing here is refused. This guard is aimed somewhere much narrower:
+// OUR OWN producers. It says nothing about what the server accepts from a warden
+// in the field, so it costs no tolerance; what it buys is that "we broke our own
+// reporter" reddens a build instead of quietly emptying a column.
+//
+// ⚠️ AND THAT IS ALL IT BUYS — say it plainly, because a guard described more
+// broadly than it protects is how this repo has been bitten before. Describing
+// it more NARROWLY is its own bug though: it sends the next person to build a
+// guard that can never fire. So, measured against the live handler rather than
+// assumed, the three declared blocks are covered by three different mechanisms:
+//
+//	runtimes  — FAIL-CLOSED AT INGEST already, and not by this change: the
+//	            handler type-checks installed / logged_in / version per key and
+//	            answers a flat 400 (`runtimes.codex.installed must be a
+//	            boolean`). A wrong-typed value never reaches the store. This
+//	            test is a second, earlier net for our own producers; runtimes is
+//	            NOT in the hole, and needs no read-side marker.
+//	hardware  — nothing is refused at ingest (owner ruling), so the READ side
+//	            carries it: the server names the unreadable key on the wire
+//	            (hardware_invalid), and a wrong-typed value from ANY warden,
+//	            ours or not, shows up in the cockpit.
+//	claude    — THIS TEST AND NOTHING ELSE. `claude: {"version": 9.9}` is
+//	            accepted with a 200, stored, and read back as null with nothing
+//	            anywhere saying a value was lost. This test only sees payloads
+//	            THIS module builds, so an older or third-party warden drifting
+//	            there stays invisible at runtime.
+//
+// That last gap is known and deliberately unfixed (owner ruling: separate
+// ticket, not folded into this one). Do not read the green tick below as "the
+// value layer is covered" — for claude it means only "our producers are not the
+// ones breaking it".
+
 // schemaNode is as much of a JSON-Schema node as this guard needs: the declared
-// child properties and whether the node is closed.
+// child properties, the declared value type(s), and whether the node is closed.
 type schemaNode struct {
 	Properties           map[string]*schemaNode `json:"properties"`
 	AdditionalProperties json.RawMessage        `json:"additionalProperties"`
+	Type                 string                 `json:"type"`
+	AnyOf                []*schemaNode          `json:"anyOf"`
+}
+
+// declaredTypes is the set of JSON type names this node accepts, flattening the
+// `anyOf: [{type: number}, {type: null}]` shape the spec uses for every nullable
+// field. Empty = the node declares no type at all (`{"title": "Binaries"}`), and
+// an undeclared node is skipped rather than guessed at — the same rule the key
+// walker follows for a block with no declared properties.
+func (n *schemaNode) declaredTypes() map[string]bool {
+	types := map[string]bool{}
+	if n.Type != "" {
+		types[n.Type] = true
+	}
+	for _, alt := range n.AnyOf {
+		if alt == nil {
+			continue
+		}
+		for name := range alt.declaredTypes() {
+			types[name] = true
+		}
+	}
+	return types
+}
+
+// jsonTypeOf names a decoded JSON value's type in JSON-Schema vocabulary. The
+// input must have been through encoding/json — the producers hand back Go-native
+// values (parseBattery returns an int, binaries is a map[string]string) and it is
+// the WIRE type, after marshalling, that the server and the spec are talking
+// about.
+func jsonTypeOf(value any) string {
+	switch value.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return "boolean"
+	case float64:
+		return "number"
+	case string:
+		return "string"
+	case []any:
+		return "array"
+	case map[string]any:
+		return "object"
+	}
+	return "unknown"
+}
+
+// mistypedPayloadValues walks payload against the schema and returns dotted
+// paths whose value type is not one the spec declares for that path, formatted
+// as `path: got <type>, want <types>`. Undeclared keys are the key walker's
+// business, not this one's, so they are skipped here; a declared node with no
+// declared type is skipped too.
+func mistypedPayloadValues(payload map[string]any, node *schemaNode) []string {
+	var bad []string
+	var walk func(map[string]any, *schemaNode, string)
+	walk = func(obj map[string]any, at *schemaNode, prefix string) {
+		for key, value := range obj {
+			child, declared := at.Properties[key]
+			if !declared || child == nil {
+				continue // undeclared — reported by undeclaredPayloadKeys instead
+			}
+			if want := child.declaredTypes(); len(want) > 0 && !want[jsonTypeOf(value)] {
+				names := make([]string, 0, len(want))
+				for name := range want {
+					names = append(names, name)
+				}
+				sort.Strings(names)
+				bad = append(bad, fmt.Sprintf("%s%s: got %s, want %s",
+					prefix, key, jsonTypeOf(value), strings.Join(names, "|")))
+				continue
+			}
+			if nested, isObj := value.(map[string]any); isObj && len(child.Properties) > 0 {
+				walk(nested, child, prefix+key+".")
+			}
+		}
+	}
+	walk(payload, node, "")
+	sort.Strings(bad)
+	return bad
+}
+
+// onTheWire round-trips a payload through encoding/json, so the walkers see the
+// values the SERVER sees rather than the Go types the producers happened to
+// build them from. Without this an int battery_pct would be judged against the
+// wrong vocabulary — and, worse, would look like a defect while being perfectly
+// fine on the wire.
+func onTheWire(t *testing.T, payload map[string]any) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("the payload does not even marshal: %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("re-decode the marshalled payload: %v", err)
+	}
+	return wire
 }
 
 // closed reports additionalProperties:false — the setting that makes the SERVER
@@ -389,6 +532,138 @@ func TestWardenTelemetryGuardSeesNestedRenames(t *testing.T) {
 					tc.name, tc.path, tc.from, tc.to, extra)
 			}
 		})
+	}
+}
+
+// TestWardenTelemetryValueTypesMatchFrozenSchema is the VALUE-layer twin of
+// TestWardenTelemetryPayloadsMatchFrozenSchema: same real producers, same frozen
+// spec, but it asks what TYPE each declared value arrives as instead of whether
+// the key is known.
+//
+// The failure it exists to catch is a producer-side type regression — a probe
+// parser that starts returning its number as a string, an `installed` flag that
+// becomes "true". None of that is refused anywhere: the block is open, the
+// server stores it, and the column it feeds goes blank. Nothing else in this
+// repo can see it.
+//
+// It is deliberately a check on OUR OWN payloads and nothing else. The server
+// stays as permissive as the owner ruling requires (rc-55861dd893c6); this is a
+// regression test for the warden, not a tightening of the wire.
+func TestWardenTelemetryValueTypesMatchFrozenSchema(t *testing.T) {
+	declared := frozenTelemetrySchema(t)
+
+	// COVERAGE FIRST. A walker whose leaves declare no type passes everything,
+	// which is indistinguishable from "the payload is fine". These are the exact
+	// leaves the server reads by name, asserted to carry a declared type before
+	// anything is judged against them.
+	for path, want := range map[string]string{
+		"hardware.cpu_pct":          "number",
+		"hardware.ram_pct":          "number",
+		"hardware.battery_pct":      "number",
+		"hardware.ac_power":         "boolean",
+		"claude.version":            "string",
+		"claude.cred_file":          "boolean",
+		"claude.sub_readable":       "boolean",
+		"claude.keychain":           "boolean",
+		"runtimes.claude.installed": "boolean",
+		"runtimes.codex.installed":  "boolean",
+		"runtimes.codex.logged_in":  "boolean",
+		"runtimes.codex.version":    "string",
+	} {
+		types := nodeAt(t, declared, path).declaredTypes()
+		if !types[want] {
+			t.Errorf("the frozen spec no longer declares %s as %s (got %v) — this "+
+				"guard would pass any value there", path, want, types)
+		}
+	}
+
+	heartbeat := onTheWire(t, realHeartbeat(t))
+	if bad := mistypedPayloadValues(heartbeat, declared); len(bad) > 0 {
+		t.Errorf("the heartbeat sends values the frozen spec does not declare %v.\n"+
+			"Nothing refuses this: the nested blocks are open by owner ruling, so "+
+			"the server answers 200 and stores it, and the reader — which needs the "+
+			"declared type — serves null forever. Fix the producer, or change the "+
+			"spec and teach the server to read the new type.\npayload = %#v",
+			bad, heartbeat)
+	}
+}
+
+// TestWardenTelemetryValueGuardSeesRetypedValues is that guard's own POSITIVE
+// CONTROL, and it is the reason the guard is worth having: a green
+// TestWardenTelemetryValueTypesMatchFrozenSchema is also exactly what a walker
+// that never compares anything reports.
+//
+// So: take the real heartbeat, change ONE nested value's type at each depth, and
+// require the guard to name it. It fails if the walker never descends, if the
+// spec stops declaring types, or if the comparison is vacuous.
+func TestWardenTelemetryValueGuardSeesRetypedValues(t *testing.T) {
+	declared := frozenTelemetrySchema(t)
+	cases := []struct {
+		name       string
+		path       []string
+		key        string
+		bad        any
+		wantReport string
+	}{
+		{"hardware number as string", []string{"hardware"}, "cpu_pct", "47",
+			"hardware.cpu_pct: got string, want null|number"},
+		{"hardware bool as string", []string{"hardware"}, "ac_power", "yes",
+			"hardware.ac_power: got string, want boolean|null"},
+		{"claude string as number", []string{"claude"}, "version", 9.9,
+			"claude.version: got number, want null|string"},
+		{"runtime bool as string", []string{"runtimes", "codex"}, "installed", "true",
+			"runtimes.codex.installed: got string, want boolean|null"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := onTheWire(t, realHeartbeat(t))
+			if bad := mistypedPayloadValues(payload, declared); len(bad) > 0 {
+				t.Fatalf("precondition: the untouched payload already mistypes %v", bad)
+			}
+			at := payload
+			for _, step := range tc.path {
+				next, isObj := at[step].(map[string]any)
+				if !isObj {
+					t.Fatalf("precondition: %v is not an object in the real payload", tc.path)
+				}
+				at = next
+			}
+			if _, present := at[tc.key]; !present {
+				t.Fatalf("precondition: the real producer no longer emits %v.%s",
+					tc.path, tc.key)
+			}
+			at[tc.key] = tc.bad
+			bad := mistypedPayloadValues(payload, declared)
+			found := false
+			for _, report := range bad {
+				if report == tc.wantReport {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("retyping %v.%s went UNREPORTED (guard said %v). A wrongly-"+
+					"typed value is accepted with a 200, stored, and then read as "+
+					"null forever — CI is the only place it can be seen.",
+					tc.path, tc.key, bad)
+			}
+		})
+	}
+}
+
+// TestWardenTelemetryValueGuardIgnoresUndeclaredKeys keeps the value guard
+// inside the owner ruling. `additionalProperties` stays true so a warden that
+// grows a probe still lands its whole report; an undeclared key has no declared
+// type, so this guard must have no opinion about its value either. Judging one
+// would re-import the intolerance the ruling rejected through the back door.
+func TestWardenTelemetryValueGuardIgnoresUndeclaredKeys(t *testing.T) {
+	declared := frozenTelemetrySchema(t)
+	payload := onTheWire(t, realHeartbeat(t))
+	hardware, _ := payload["hardware"].(map[string]any)
+	hardware["disk_pct"] = "n/a"
+	hardware["thermal"] = map[string]any{"nominal": true}
+	if bad := mistypedPayloadValues(payload, declared); len(bad) > 0 {
+		t.Errorf("an undeclared nested key was judged on its value %v — the spec "+
+			"declares nothing about it, so there is nothing for it to violate", bad)
 	}
 }
 

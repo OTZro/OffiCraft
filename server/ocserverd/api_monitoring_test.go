@@ -2088,3 +2088,217 @@ func TestGetMonitoring_UnplacedActorMintsNoBlankMachineRow(t *testing.T) {
 		t.Errorf("accounts[eva-m5-claude].machine = %v, want honest empty", row["machine"])
 	}
 }
+
+// Wrongly-typed hardware values (T-aad2)
+//
+// The KEY layer has had a guard since T-90be: a nested rename reddens CI. The
+// VALUE layer had none. `cpu_pct: "47"` was accepted (200), stored verbatim,
+// and read back as null — and that null was byte-for-byte the row a machine
+// with no CPU probe at all serves. Measured before the fix, on the real ingest
+// and read paths: the two rows were identical, hardware_ts and hardware_stale
+// included.
+//
+// The fix is deliberately NOT a refusal. Refusing the body is the fail-closed
+// move the owner already ruled against for these blocks (rc-55861dd893c6) and
+// its blast radius is the whole heartbeat. The report still lands exactly as
+// before; what changes is that the server now SAYS which declared key it could
+// not read.
+// ---------------------------------------------------------------------------
+
+// invalidOf reads the hardware_invalid list off a monitoring machine row.
+func invalidOf(t *testing.T, row map[string]any) []string {
+	t.Helper()
+	raw, present := row["hardware_invalid"]
+	if !present {
+		t.Fatalf("the machine row carries no hardware_invalid at all: %v", row)
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		t.Fatalf("hardware_invalid = %v, want an array (never null — 'nothing is "+
+			"broken' is an answer every row can give)", raw)
+	}
+	keys := []string{}
+	for _, v := range list {
+		s, isStr := v.(string)
+		if !isStr {
+			t.Fatalf("hardware_invalid must carry key NAMES only, got %v", v)
+		}
+		keys = append(keys, s)
+	}
+	return keys
+}
+
+// TestGetMonitoring_WrongTypedHardwareIsNamedNotSilent is the SENTINEL. A
+// declared key that arrived with the wrong type must be named on the wire, and
+// its healthy siblings must be unaffected.
+func TestGetMonitoring_WrongTypedHardwareIsNamedNotSilent(t *testing.T) {
+	s, _ := freshnessServer(t,
+		`{"cpu_pct": "47", "ram_pct": 61, "ac_power": "yes"}`)
+
+	// (1) COMPATIBILITY, checked at the source: the report still LANDED, whole
+	// and verbatim. This is the half the owner ruling protects — the fix must
+	// remove the silence, not the tolerance.
+	entry := s.telemetry.Get("mira")
+	hw, _ := entry["hardware"].(map[string]any)
+	if hw["cpu_pct"] != "47" || hw["ac_power"] != "yes" || hw["ram_pct"] != 61.0 {
+		t.Fatalf("the stored sample must be untouched, got %v — this fix does not "+
+			"reject, drop or coerce anything at ingest", hw)
+	}
+
+	// (2) the wire names exactly the broken keys, sorted.
+	row := machineRow(t, s, "m-abc123")
+	got := invalidOf(t, row)
+	want := []string{"ac_power", "cpu_pct"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("hardware_invalid = %v, want %v — the cockpit's only way to say "+
+			"'this WAS measured and IS unreadable' instead of showing the same "+
+			"blank a never-probed machine gets", got, want)
+	}
+
+	// (3) the values themselves stay null: naming the fault is not licence to
+	// serve a number the server does not have.
+	if row["cpu_pct"] != nil || row["ac_power"] != nil {
+		t.Errorf("cpu_pct = %v / ac_power = %v, want null — an unreadable value "+
+			"must not be rendered", row["cpu_pct"], row["ac_power"])
+	}
+
+	// (4) PER KEY, not per row: the healthy sibling is still served. One broken
+	// probe must not cost the operator the readings that did work.
+	if row["ram_pct"] != 61.0 {
+		t.Errorf("ram_pct = %v, want 61 — a wrongly-typed cpu_pct says nothing "+
+			"about ram_pct", row["ram_pct"])
+	}
+}
+
+// TestGetMonitoring_BrokenAndUnmeasuredHardwareAreDistinguishable is the
+// owner's actual acceptance criterion, stated as a comparison rather than as
+// two separate readings: the row of a machine whose cpu_pct arrived broken must
+// not be the same row as one whose cpu_pct never arrived. Before the fix these
+// two JSON objects were equal field for field.
+func TestGetMonitoring_BrokenAndUnmeasuredHardwareAreDistinguishable(t *testing.T) {
+	broken, _ := freshnessServer(t, `{"cpu_pct": "47", "ram_pct": 61}`)
+	never, _ := freshnessServer(t, `{"ram_pct": 61}`)
+
+	brokenRow := machineRow(t, broken, "m-abc123")
+	neverRow := machineRow(t, never, "m-abc123")
+
+	// Both really are blank in the value itself — that is the premise, and if it
+	// ever stops holding this test is asking the wrong question.
+	if brokenRow["cpu_pct"] != nil || neverRow["cpu_pct"] != nil {
+		t.Fatalf("precondition: both rows must blank cpu_pct; got %v / %v",
+			brokenRow["cpu_pct"], neverRow["cpu_pct"])
+	}
+	if len(invalidOf(t, brokenRow)) == 0 {
+		t.Errorf("the BROKEN row says nothing about why cpu_pct is blank: %v", brokenRow)
+	}
+	if got := invalidOf(t, neverRow); len(got) != 0 {
+		t.Errorf("the NEVER-MEASURED row must stay silent, got %v — an absent probe "+
+			"is not a defect, and calling it one would make every battery-less "+
+			"machine look broken", got)
+	}
+}
+
+// TestGetMonitoring_HealthyHardwareNamesNothing is the false-positive sentinel:
+// the legitimate shapes the real warden produces must go through untouched and
+// unaccused. collectHardware emits float64 percents and a bool ac_power, omits
+// every probe that failed, and the frozen spec additionally declares null as a
+// legal value for each — so none of those may be reported as invalid. If this
+// goes red, the guard has started blaming healthy reporters.
+//
+// ⚠️ NOT ALL EIGHT CASES CARRY THEIR WEIGHT, and it is worth writing down which,
+// so that trimming this table later is a decision rather than a coin flip.
+// LOAD-BEARING — each of these fails against a plausible SIMPLER classifier, so
+// deleting it removes real protection:
+//   - "explicit declared nulls": a naive `_, ok := v.(float64)` sees a present,
+//     non-numeric value here and would accuse every failed probe on the fleet.
+//   - "the -1 未量到 sentinel": teleNum WITHHOLDS this value, so a classifier
+//     written as "the reader returned nil ⇒ blame the key" brands a perfectly
+//     healthy reporter. This is the case that separates "unreadable" from
+//     "deliberately withheld", and nothing else in the file covers it.
+//   - "an undeclared new probe": the owner-ruling boundary (rc-55861dd893c6). A
+//     classifier that walked the SAMPLE instead of the declared key set passes
+//     everything else here and fails only this.
+//
+// REDUNDANT-BUT-DOCUMENTARY — "omitted failed probes" and "every probe failed"
+// are both the absent-key path the first bullet already forces a classifier to
+// get right. They are kept because they name the two shapes a reader actually
+// wonders about, not because anything else would catch them; if this table ever
+// needs to shrink, those two are the safe ones to drop.
+func TestGetMonitoring_HealthyHardwareNamesNothing(t *testing.T) {
+	cases := map[string]string{
+		"a full healthy sample":    `{"cpu_pct": 47, "ram_pct": 61, "battery_pct": 88, "ac_power": true}`,
+		"a false is data":          `{"cpu_pct": 47, "ac_power": false}`,
+		"omitted failed probes":    `{"cpu_pct": 47}`,
+		"explicit declared nulls":  `{"cpu_pct": null, "ram_pct": null, "battery_pct": null, "ac_power": null}`,
+		"every probe failed":       `{}`,
+		"the -1 未量到 sentinel":      `{"cpu_pct": -1, "ram_pct": 61}`,
+		"an undeclared new probe":  `{"cpu_pct": 47, "disk_pct": "n/a"}`,
+		"a zero is a real reading": `{"cpu_pct": 0, "ram_pct": 0, "ac_power": false}`,
+	}
+	for name, sample := range cases {
+		t.Run(name, func(t *testing.T) {
+			s, _ := freshnessServer(t, sample)
+			if got := invalidOf(t, machineRow(t, s, "m-abc123")); len(got) != 0 {
+				t.Errorf("%s was reported as invalid %v — this is a shape the real "+
+					"producers emit (or the frozen spec declares legal), and "+
+					"accusing it turns a healthy fleet into a red screen", sample, got)
+			}
+		})
+	}
+}
+
+// TestGetMonitoring_UndeclaredHardwareKeyIsNeverAccused is the compatibility
+// sentinel with teeth of its own. `additionalProperties` on the hardware block
+// stays TRUE by owner ruling, so a warden that grows a probe this spec version
+// has never heard of still lands its whole report. An undeclared key has no
+// declared type to violate, so judging one would move the very intolerance the
+// ruling rejected from the ingest path to the read path.
+func TestGetMonitoring_UndeclaredHardwareKeyIsNeverAccused(t *testing.T) {
+	s, _ := freshnessServer(t, `{"cpu_pct": 47, "disk_pct": {"nested": "junk"}}`)
+	if got := invalidOf(t, machineRow(t, s, "m-abc123")); len(got) != 0 {
+		t.Errorf("hardware_invalid = %v, want empty — disk_pct is not declared, so "+
+			"the server has no expectation for it to break", got)
+	}
+	// And the report is still stored whole, undeclared key and all.
+	hw, _ := s.telemetry.Get("mira")["hardware"].(map[string]any)
+	if _, present := hw["disk_pct"]; !present {
+		t.Errorf("the undeclared key must still be stored: %v", hw)
+	}
+}
+
+// TestGetMonitoring_StaleSampleAccusesNobody: a stale row's blanks already have
+// a published reason (hardware_stale), and the fold is not reading its values
+// at all — so it must not also pass judgement on them. Two competing
+// explanations for one blank cell is a worse screen than one.
+func TestGetMonitoring_StaleSampleAccusesNobody(t *testing.T) {
+	s, age := freshnessServer(t, `{"cpu_pct": "47"}`)
+	age(telemetryFreshSecs + 1)
+	row := machineRow(t, s, "m-abc123")
+	if row["hardware_stale"] != true {
+		t.Fatalf("precondition: the sample must be stale, got %v", row["hardware_stale"])
+	}
+	if got := invalidOf(t, row); len(got) != 0 {
+		t.Errorf("hardware_invalid = %v, want empty — hardware_stale already "+
+			"explains this row's blanks", got)
+	}
+}
+
+// TestHardwareInvalidKeys covers the classifier directly, including the mixed
+// case the fold-level tests cannot easily stage.
+func TestHardwareInvalidKeys(t *testing.T) {
+	got := hardwareInvalidKeys(map[string]any{
+		"cpu_pct":     "47",  // wrong type
+		"ram_pct":     true,  // wrong type
+		"battery_pct": 88.0,  // fine
+		"ac_power":    1.0,   // wrong type (a number is not a boolean)
+		"disk_pct":    "n/a", // undeclared — not ours to judge
+	})
+	want := "ac_power,cpu_pct,ram_pct"
+	if strings.Join(got, ",") != want {
+		t.Errorf("hardwareInvalidKeys = %v, want [%s] (sorted, declared keys only)",
+			got, want)
+	}
+	if got := hardwareInvalidKeys(map[string]any{}); len(got) != 0 {
+		t.Errorf("an empty sample accuses nobody, got %v", got)
+	}
+}

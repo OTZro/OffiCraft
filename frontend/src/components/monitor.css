@@ -178,6 +178,16 @@
   border: 1px solid var(--color-border);
 }
 
+/* A value that was REPORTED but is UNREADABLE (T-aad2) — same chip geometry as
+   .mon-stale, different colour, because the two blanks have different causes.
+   Muted grey would fold it back into "just old"; this one means someone's
+   reporter is sending garbage and the machine needs looking at. */
+.mon-bad {
+  color: var(--color-warn-fg);
+  background: var(--color-warn-bg);
+  border-color: var(--color-warn-border);
+}
+
 .mon-row--clickable {
   cursor: pointer;
   transition: background 0.15s;
