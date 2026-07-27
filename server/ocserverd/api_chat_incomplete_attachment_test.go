@@ -36,6 +36,8 @@ func TestIncompleteAttachmentIsRefusedOnEveryFace(t *testing.T) {
 		{"reply card", "/api/reply-cards",
 			`{"kind":"decision","summary":"ship it?","options":["yes","no"],"attachments":[` + ghost + `]}`},
 	} {
+		// The answer face is covered by TestReplyCardAnswerRefusesIncompleteAttachment
+		// below — it takes a live card id, so it cannot ride this table.
 		status, resp := doRaw(t, "POST", srv.URL+tc.path, agentTok,
 			"application/json", []byte(tc.body))
 		if status != 400 || !strings.Contains(resp, "neither id nor data_b64") {
@@ -49,5 +51,54 @@ func TestIncompleteAttachmentIsRefusedOnEveryFace(t *testing.T) {
 	status, resp := doRaw(t, "GET", srv.URL+"/api/chat?with=owner", agentTok, "", nil)
 	if status != 200 || strings.Contains(resp, "see attached") {
 		t.Fatalf("a refused post must leave no message: %d %s", status, resp)
+	}
+}
+
+// T-e2b2 / review R2: the reply-card ANSWER face kept the pre-filter this
+// ticket exists to delete — measured before the fix, the SAME input answered
+// 400 on the question side and 200 on the answer side, with the named file
+// simply gone from the answer. That is the ticket's founding complaint (one
+// mechanism, two opposite answers) surviving on a fourth face, inside a
+// function this change had already edited.
+//
+// The id-only case is refused with its own message rather than dropped: this
+// face decodes inline bytes and has never resolved {id} refs. Whether it should
+// GAIN ref support is a separate owner question, not something to smuggle in
+// under a bug fix.
+func TestReplyCardAnswerRefusesIncompleteAttachment(t *testing.T) {
+	srv, secret, _ := newWiredTestServer(t)
+	now := time.Now().Unix()
+	agentTok, _ := mintJWT("mira", "agent", 300, secret, now, "")
+	ownerTok, _ := mintJWT(wireOwnerID, "owner", 300, secret, now, "")
+
+	open := func() string {
+		status, resp := doRaw(t, "POST", srv.URL+"/api/reply-cards", agentTok,
+			"application/json",
+			[]byte(`{"kind":"decision","summary":"ship it?","options":["yes","no"]}`))
+		if status != 200 {
+			t.Fatalf("open card: %d %s", status, resp)
+		}
+		return replyCardIDFromJSON(t, resp)
+	}
+
+	for _, tc := range []struct{ name, item, want string }{
+		{"neither id nor bytes", `{"filename":"ghost.pdf"}`, "neither id nor data_b64"},
+		{"id-only ref", `{"id":"att-whatever"}`, "must carry data_b64"},
+	} {
+		card := open()
+		status, resp := doRaw(t, "POST", srv.URL+"/api/reply-cards/"+card+"/answer",
+			ownerTok, "application/json",
+			[]byte(`{"option_idx":0,"text":"see attached","attachments":[`+tc.item+`]}`))
+		if status != 400 || !strings.Contains(resp, tc.want) {
+			t.Errorf("%s: want 400 %q, got %d %s", tc.name, tc.want, status, resp)
+			continue
+		}
+		// The card must still be answerable — a refused answer is not a
+		// half-answered card.
+		status, resp = doRaw(t, "GET", srv.URL+"/api/reply-cards/"+card, ownerTok, "", nil)
+		if status != 200 || !strings.Contains(resp, `"status":"waiting"`) {
+			t.Errorf("%s: card must stay waiting after a refused answer, got %d %s",
+				tc.name, status, resp)
+		}
 	}
 }

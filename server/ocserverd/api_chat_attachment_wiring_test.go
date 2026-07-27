@@ -16,12 +16,21 @@ import (
 // and the whole suite, Go plus conformance, stayed green. A guard nothing calls
 // is not a guard.
 //
-// There is no runtime choke available here — the non-atomic DAL writes are
-// legitimately used by ~40 other call sites — so this is a STRUCTURAL scan
-// pinned at one place: inside a function that resolves attachment inputs, the
-// per-record writes must not appear. It is deliberately keyed on the CALL
-// EXPRESSION, not on a comment or a name, so writing the loop by hand does not
-// slip past.
+// ⚠️ THIS SCAN IS NOT THE GUARD. It pins a SPELLING, and the reviewer defeated
+// it three ways while reintroducing the defect, full suite green each time:
+// hoist the loop into a helper (the pre-T-e2b2 shape), write the loop inline
+// against the putChatAttachmentOn / putChatOn seams (plain identifiers, not
+// selectors, so this scan never sees them), or take a method value. Enumerating
+// ways of writing something has no end — that is the T-5047 lesson in the task
+// manual, arrived at again the hard way.
+//
+// The real guard is TestFailedRecordWriteOrphansNoBlob /
+// TestFailedAnswerWriteOrphansNoBlob (api_chat_orphan_blob_test.go), which
+// assert the OUTCOME — break the record write at the database, then ask the
+// database whether a blob appeared — and catch all three of those mutants.
+// This scan is kept only as a cheap early signal that names the offending line
+// while the outcome guard names only the symptom. Its value is legibility, not
+// coverage; never treat its green as evidence.
 func TestAttachmentCarryingHandlersWriteAtomically(t *testing.T) {
 	// The forbidden per-record writes: each one persists ONE row, so reaching
 	// for any of them inside an attachment-carrying function reintroduces the

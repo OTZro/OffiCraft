@@ -347,13 +347,15 @@ func (s *apiServer) HandlePostChatApiChatPost(w http.ResponseWriter, r *http.Req
 	}
 	if len(inputs) > chatAttachmentsMaxCount {
 		writeError(w, http.StatusBadRequest,
-			// Deliberately still counted BEFORE per-item validation (review
-			// finding F4): now that incomplete items are no longer pre-filtered
-			// away, an over-cap list of junk answers the cap message rather than
-			// the per-item one. Kept this way on purpose — validating first
-			// would mean decoding an unbounded number of blobs before the cap
-			// that exists to bound exactly that. The sender really did send
-			// more than ten items, so the message is not false.
+			// Deliberately still counted BEFORE per-item validation (review F4 /
+			// R5): with incomplete items no longer pre-filtered away, an
+			// over-cap list of junk now answers the cap message rather than the
+			// per-item one. Kept this order because base64-decoding up to N
+			// items before answering is real work this cap exists to bound.
+			// Stated honestly: the request BODY is already fully read by then
+			// (there is no MaxBytesReader on this route), so the cap bounds
+			// decode and storage, NOT peak memory of the request. Either
+			// message is true — the sender did send more than ten items.
 			"a message may carry at most 10 attachments")
 		return
 	}

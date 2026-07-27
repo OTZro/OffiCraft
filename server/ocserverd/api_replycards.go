@@ -600,17 +600,36 @@ func (s *apiServer) applyReplyCardAnswer(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusBadRequest, "option_idx out of range")
 		return
 	}
+	// EVERY item is judged (T-e2b2, review R2): this face used to drop anything
+	// without data_b64 — the ticket's founding defect surviving on a fourth
+	// face, and one the owner's ruling covers by name. An item with neither id
+	// nor bytes is refused exactly as on the chat faces; an item carrying ONLY
+	// an {id} ref is refused with its own message, because this face has never
+	// resolved refs (it decodes inline bytes only) and silently discarding one
+	// is the very thing being removed. Whether the answer side should GAIN ref
+	// support — server/CLAUDE.md claims answers reuse the chat mechanism
+	// wholesale, which is not true today — is an owner call, asked separately.
 	var inputs []ChatAttachmentInputDTO
 	if body.Attachments != nil {
-		for _, a := range *body.Attachments {
-			if strOrEmpty(a.DataB64) != "" {
-				inputs = append(inputs, a)
-			}
-		}
+		inputs = *body.Attachments
 	}
 	if len(inputs) > chatAttachmentsMaxCount {
 		writeError(w, http.StatusBadRequest,
 			"an answer may carry at most 10 attachments")
+		return
+	}
+	for _, a := range inputs {
+		if strOrEmpty(a.DataB64) != "" {
+			continue
+		}
+		if trimmedOrEmpty(a.Id) != "" {
+			writeError(w, http.StatusBadRequest,
+				"an answer attachment must carry data_b64; a stored-blob id "+
+					"reference is not accepted on this face")
+			return
+		}
+		writeError(w, http.StatusBadRequest,
+			"attachment carries neither id nor data_b64")
 		return
 	}
 	// All attachments decode/validate BEFORE any is stored (chat parity: a
