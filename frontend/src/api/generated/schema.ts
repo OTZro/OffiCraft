@@ -3334,7 +3334,10 @@ export interface components {
          *     An unknown ``id`` is a 400; carrying BOTH ``id`` and ``data_b64`` is a 400
          *     (ambiguous intent). An item with neither ``id`` nor ``data_b64`` is a
          *     400 (T-e2b2: it used to be dropped silently, so a sender that named a file it
-         *     never sent got a success and the recipient got nothing).
+         *     never sent got a success and the recipient got nothing). The reply-card ANSWER face is
+         *     inline-only: it decodes ``data_b64`` and has never resolved ``id`` references,
+         *     so an item carrying only an ``id`` there is a 400 (T-e2b2 — it used to be
+         *     dropped silently).
          */
         ChatAttachmentInputDTO: {
             /**

@@ -52,7 +52,9 @@ M3 REST 子批 A(oapi-codegen 佈線 + SPA 基座)+ 子批 B(50 條 handler 填�
 
 - **拒絕在儲存之前,寫入是全有全無。** 帶附件的四個面(`post_chat`、`post_task_message`、開請示卡、回答請示卡)先把**每一項**解析完才寫任何東西;**既無 `id` 也無 `data_b64` 的項目一律 400**(owner 2026-07-27 rc-3a589dfec503 拍板;此前聊天與任務訊息兩面是靜默丟棄、照樣回 200——寄件者以為檔案送到了)。
 - **三個原子入口(DAL)**:`PutChatWithAttachments`(blob+訊息)、`PutReplyCardWithChat`(blob+companion 訊息+卡)、`PutReplyCardWithAttachments`(blob+卡,回答面)。共用 `sqlExecer` seam,單筆與交易兩種形式跑同一條 SQL,所以原子版本不會跟單寫版本漂開。**帶附件的路徑不要直接呼叫 `PutChat`/`PutChatAttachment`/`PutReplyCard`**——先寫 blob 再寫紀錄,失敗就留下一個沒有任何紀錄指得到的 blob,而唯一的回收串接(`DeleteChatInvolving`)是從紀錄的 refs 走的,永遠掃不到它。
-- 🔴 **守衛在哪、以及哪一條才算數**:`api_chat_orphan_blob_test.go` 是真正的防線——它把紀錄的資料表改名讓最後一筆寫入失敗,再問資料庫有沒有多出 blob,**不管你怎麼寫都擋得住**。`api_chat_attachment_wiring_test.go` 的 AST 掃描只是「早一步指出行號」的便利品:獨立審查用三種寫法(抽成 helper、直接用 `putChatAttachmentOn` seam、取 method value)把它全綠繞過去——**別拿它的綠當證據**(這正是任務手冊 T-5047「釘名字不釘結構等於沒釘」那條的再現)。
+- 🔴 **守衛在哪、以及哪一條才算數**:`api_chat_orphan_blob_test.go`(`TestAttachmentWritesAreAllOrNothing`)是真正的防線——用 SQLite trigger 讓**某一張表的寫入**失敗(SELECT 仍可用,這點是關鍵:改用改表名會連路由自己的查詢一起打爛,那一版的回答面守衛因此**永遠不可能紅**),四個面各驗**兩個方向**:紀錄寫失敗→不得留下 blob;blob 寫失敗→不得留下紀錄。每個方向都先跑一次**陽性對照**(不注入故障時,同一個請求剛好寫進一個 blob),否則「有錯誤發生、而且沒看到壞東西」會被一個根本沒走到附件的請求滿足。
+  - **它證明的範圍就到這裡,別放大**:證的是「同一筆交易內,後續 INSERT 失敗會回捲先前的 INSERT」,四個面各自實測。**沒有**證:語句中途的部分回捲、真正的行程崩潰或磁碟滿的持久性、WAL/fsync、併發。
+  - `api_chat_attachment_wiring_test.go` 的 AST 掃描只是「早一步指出行號」的便利品:獨立審查用三種寫法(抽成 helper、直接用 `putChatAttachmentOn` seam、取 method value)把它全綠繞過去——**別拿它的綠當證據**(這正是任務手冊 T-5047「釘名字不釘結構等於沒釘」那條的再現)。
 
 ## 已知邊界(誠實列,別當成熟功能用)
 - **config 預設路徑是 CWD-relative `oc.toml`**(binary 沒有 source-path 可錨 repo root);部署正解走 `$OC_CONFIG`。
