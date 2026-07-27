@@ -648,14 +648,27 @@ func hardwareStampOf(entry map[string]any) float64 {
 // monitoringActor is the ONE thing the account/machine value folds need from an
 // actor: who it is (telemetry key), what runtime it is currently on (the
 // provenance gate's other half — NOT read off the entry, see telemetryAccount),
-// where it was observed, and what it has already banked. Members and outsource
-// workers project onto it identically; nothing downstream of the projection can
-// tell them apart, which is precisely the point (T-fc2f).
+// where it was observed, what it has already banked, and whether it is still
+// alive. Members and outsource workers project onto it identically; nothing
+// downstream of the projection can tell them apart, which is precisely the
+// point (T-fc2f).
 type monitoringActor struct {
 	id      string
 	runtime string
 	host    string
 	banked  float64
+	// live distinguishes the two DIFFERENT questions this struct is folded for,
+	// which T-fc2f originally conflated by running both off one loop condition:
+	//
+	//	"what has been spent / observed here"  — history. Includes the dead.
+	//	"how many agents are on this box"      — present tense. Live only.
+	//
+	// Members are only ever built into `actors` after the handler has filtered
+	// RosterStatusRemoved, so they are live by construction. For workers this is
+	// `Status != WorkerStatusReleased`. Note that released is the STEADY state
+	// for a worker (see the actors loop), so this flag is false for most of a
+	// worker's recorded lifetime — it is the common case, not the edge.
+	live bool
 }
 
 // GET /api/monitoring — the three-section fold (sessions / machines /
@@ -731,6 +744,22 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	// Members and workers are disjoint by construction (kind != 'outsource' vs
 	// kind = 'outsource'), so each actor — and each actor's banked_cost —
 	// contributes exactly once.
+	// ⚠️ KNOWN, DELIBERATELY NOT ADDRESSED HERE (registered as separate scope).
+	// `actors` grows MONOTONICALLY with every task this station has ever run.
+	// Two facts combine: ListOutsourceWorkers returns every kind='outsource'
+	// member row ever created (released included — row retention IS the audit
+	// trail, see its doc comment), and worker telemetry entries are never
+	// deleted (the repo's only s.telemetry.Delete is the staff hard-delete in
+	// api_roles.go). Nothing prunes either side, so this slice and the telemetry
+	// snapshot both grow without bound over the station's lifetime.
+	//
+	// What I checked: the arithmetic stays CORRECT — acctCost is a sum, and each
+	// row contributes its own live+banked exactly once, so no total drifts as
+	// the set grows. What I did NOT check: whether this handler's per-request
+	// cost (it is O(actors) on every GET /api/monitoring, with a DB read of the
+	// full worker table) stays acceptable after months of traffic, nor whether
+	// anything downstream assumes the actor set or the machines list is bounded.
+	// Do not read the correctness result as a performance result.
 	workers, err := s.dal.ListOutsourceWorkers()
 	if err != nil {
 		internalError(w, err)
@@ -740,6 +769,8 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	for _, m := range members {
 		actors = append(actors, monitoringActor{
 			id: m.ID, runtime: m.Runtime, host: s.observedHost(m), banked: m.BankedCost,
+			// `members` is already RosterStatusRemoved-filtered above.
+			live: true,
 		})
 	}
 	for _, wk := range workers {
@@ -781,6 +812,7 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 			runtime: wk.Runtime,
 			host:    s.observedWorkerHost(wk.ID, telemetry[wk.ID]),
 			banked:  wk.BankedCost,
+			live:    wk.Status != WorkerStatusReleased,
 		})
 	}
 
@@ -826,8 +858,33 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	// Over `actors`, not `members`: an account observed only on an outsource
 	// session must still attribute to the box it is burning on, and a host that
 	// carries nothing but workers must still get a row for that account to hang
-	// off. The agent count follows for the same reason — a row claiming 0 agents
-	// while naming an account observed there would contradict itself.
+	// off.
+	//
+	// ⚠️ The agent count does NOT follow for the same reason. An earlier revision
+	// of this comment argued that "a row claiming 0 agents while naming an
+	// account observed there would contradict itself" and used that to count
+	// released workers. THAT ARGUMENT IS REJECTED — do not reinstate it. The two
+	// columns answer different questions and are allowed to disagree:
+	//
+	//	accounts — money already burned on this box. HISTORY. Includes the dead.
+	//	agents   — who is alive on this box right now. PRESENT TENSE. Live only.
+	//
+	// There is no contradiction in "0 agents, one account": the spend happened,
+	// the spender left. Counting released workers would make a machine that has
+	// run forty closed-out tasks report forty agents while two are running —
+	// a number that misleads the owner, that nobody asked for, and that the
+	// member side has never produced (the handler filters RosterStatusRemoved
+	// before `actors` is built, so staff have always been counted live-only).
+	// Including released workers would be the behaviour CHANGE here; excluding
+	// them preserves what `agents` has always meant.
+	//
+	// Hence the split below: EVERY actor mints its host key (so the row and its
+	// account attribution survive), but only a LIVE actor increments the count.
+	// These must stay separate statements — `hosts` is derived from the
+	// hostCounts key set, so folding them back together deletes the machines row
+	// for a box whose workers have all been released, and takes that account's
+	// machine attribution down with it. Verified by construction, not assumed:
+	// the naive `if !a.live { continue }` was measured and does exactly that.
 	//
 	// Precisely what does and does not change for workers, since "no-op" is too
 	// coarse a word for this loop:
@@ -849,7 +906,17 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	for _, a := range actors {
 		entry := tele(a.id)
 		host := a.host
-		hostCounts[host]++
+		// Mint the host key for EVERY actor — this is what puts the row in
+		// `hosts` and gives the account somewhere to hang. Deliberately a
+		// zero-valued write, not an increment.
+		if _, minted := hostCounts[host]; !minted {
+			hostCounts[host] = 0
+		}
+		// Count only the LIVE ones. 0 is an honest answer for a box whose
+		// workers have all been released; an inflated count is not.
+		if a.live {
+			hostCounts[host]++
+		}
 		if hw, ok := entry["hardware"].(map[string]any); ok {
 			// Track the freshest sample per host REGARDLESS of age; whether its
 			// numbers may be served is decided per row below. Keeping the stamp

@@ -1675,3 +1675,69 @@ func TestGetMonitoring_WorkerAccountStillNeedsProvenance(t *testing.T) {
 		t.Errorf("unstamped key must not attribute to a host: %v", mr["accounts"])
 	}
 }
+
+// TestGetMonitoring_ReleasedOnlyHostKeepsRowAndAccountButCountsZeroAgents is
+// the third gap-guard, and it pins the ONE place where account attribution and
+// agent counting must part ways.
+//
+//	acctByHost  — follows the TELEMETRY lifecycle: released included. The
+//	              account was burned on that box; that is a historical fact.
+//	hostCounts  — follows the LIVE actor set: released excluded. "How many
+//	              agents are on this box" is a question about right now, and
+//	              the member side has always answered it that way (the handler
+//	              filters RosterStatusRemoved before it ever builds `actors`).
+//
+// ⚠️ The earlier revision of this file argued the opposite in a comment: that
+// "a row claiming 0 agents while naming an account observed there would
+// contradict itself", and used that to justify counting released workers.
+// That argument is REJECTED and must not be reinstated. There is no
+// contradiction: the account is money already spent on that box (history), the
+// agent count is who is alive on it (present tense). One may be non-empty while
+// the other is 0. A machine that has run forty closed-out tasks must not report
+// forty agents when two are running — that number misleads the owner, and nobody
+// asked for it. 0 is the honest answer.
+//
+// MUTANT: count released workers in hostCounts (e.g. drop the `a.live` guard)
+// -> RED on the agents assertion here.
+func TestGetMonitoring_ReleasedOnlyHostKeepsRowAndAccountButCountsZeroAgents(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	// m-eva-m5 carries NOTHING but a released worker.
+	seedWorker(t, s, "ow-gone", "G1", 9.0, WorkerStatusReleased)
+	if rec := doIngestTelemetry(s, "ow-gone", "m-eva-m5",
+		`{"runtime":"claude","account":"eva-m5-claude","cost":3.0,`+
+			workerRateLimits+`}`); rec.Code != 200 {
+		t.Fatalf("worker ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+
+	// (1) the machines row must SURVIVE — `hosts` is derived from the host-key
+	// set, so excluding released workers from the COUNT must not also stop the
+	// key from being minted. Losing this row would drop the account's machine
+	// attribution with it.
+	mr := machineRowIn(d, "m-eva-m5")
+	if mr == nil {
+		t.Fatalf("machines row for m-eva-m5 vanished — host-key minting must be "+
+			"separate from agent counting; got %v", d["machines"])
+	}
+	// (2) the account attribution must survive on that row.
+	found := false
+	for _, a := range mr["accounts"].([]any) {
+		if a == "eva-m5-claude" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("machines[m-eva-m5].accounts = %v, want it to contain eva-m5-claude "+
+			"— the spend happened on this box", mr["accounts"])
+	}
+	// (3) ...and the agent count must be an honest 0, not an inflated 1.
+	if mr["agents"] != 0.0 {
+		t.Errorf("agents = %v, want 0 — a released worker is not a live agent; "+
+			"counting it inflates the number the owner reads", mr["agents"])
+	}
+	// (4) the account row keeps its machine attribution end-to-end.
+	if row := accountRow(t, d, "eva-m5-claude"); row["machine"] != "m-eva-m5" {
+		t.Errorf("accounts[eva-m5-claude].machine = %v, want m-eva-m5", row["machine"])
+	}
+}
