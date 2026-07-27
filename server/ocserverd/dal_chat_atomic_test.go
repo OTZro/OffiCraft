@@ -46,12 +46,18 @@ func TestPutReplyCardWithChat_FailedCardWriteLeavesNoMessage(t *testing.T) {
 	att := ChatAttachment{ID: "att-card-rollback", Mime: "text/plain", Data: []byte("payload")}
 	msg := ChatMessage{
 		ID: "c-card-rollback", Sender: "mira", Recipient: "owner", Body: "ship it?", TS: 1,
-		Meta: map[string]any{"reply_card_id": "rc-rollback", "boom": make(chan int)},
+		Meta: map[string]any{"reply_card_id": "rc-rollback"},
 	}
+	// The failure is planted in the CARD's own marshalling, i.e. the LAST write:
+	// the blob and the companion message have already succeeded when it trips.
+	// That is the ordering the dangling-ask scenario needs — put it in the
+	// message's meta instead and the message never lands, so the test would pass
+	// while proving nothing about the message-vs-card window.
 	card := ReplyCard{
 		ID: "rc-rollback", FromMember: "mira", Kind: "decision", Summary: "ship it?",
 		Options: []string{"yes", "no"}, Status: replyCardStatusWaiting,
 		CreatedTS: 1, ChatMessageID: msg.ID,
+		AnswerAttachments: []any{make(chan int)},
 	}
 	if err := d.PutReplyCardWithChat(card, msg, []ChatAttachment{att}); err == nil {
 		t.Fatal("want the unencodable meta to fail the write")
