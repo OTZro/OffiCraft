@@ -249,3 +249,77 @@ func TestOwnerOp_StoppedWorkerStillOnlyGetsAReceipt(t *testing.T) {
 		t.Fatalf("a stopped worker must not be started, got %d frames", got)
 	}
 }
+
+// TestOwnerOp_VerbAfterTheCollectIsNotSwallowed (T-98f4 review round 2, HIGH):
+// the window between 「收口已latch」 and 「新 session 還沒連上」 must not eat an
+// owner verb.
+//
+// The shape: the collect has ALREADY dispatched kill + start for this epoch
+// (carrying the OLD pin), but the dying session is still hub.IsOnline because
+// its warden has not reaped it yet. Without the StoppedSince arm in
+// workerHasStateToFlush, the second verb takes the wind-down branch: it zeroes
+// the collected latch, re-stamps refocus_since — and dispatches NOTHING. The
+// in-flight OLD-config start then boots, boot_ts beats the new refocus_since,
+// autoHandoverWorker's loop-break clears the epoch, and the owner's second
+// 改機器 reaches no session at all: the cockpit shows m-third while the worker
+// lives on m-elsewhere forever (the FSM rescue is gated on !IsOnline, so
+// nothing heals it). That is the owner's original complaint coming back in
+// through a new door, so the collected window takes the IMMEDIATE path.
+func TestOwnerOp_VerbAfterTheCollectIsNotSwallowed(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := newActiveOnlineWorker(t, api)
+	seedMachine(t, api, "m-elsewhere")
+	connectWarden(t, api, "m-elsewhere")
+	seedMachine(t, api, "m-third")
+	connectWarden(t, api, "m-third")
+
+	// 1) 改機器 → wind-down opens (no kill yet).
+	if rec := postWorker(t, api, workerID, "relocate",
+		map[string]any{"machine_id": "m-elsewhere"},
+		api.HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePost); rec.Code != http.StatusOK {
+		t.Fatalf("relocate #1: %d %s", rec.Code, rec.Body.String())
+	}
+	// 2) the worker answers → the collect latches stopped_since and dispatches
+	//    kill + start with the pin as it stood THEN (m-elsewhere).
+	rec := httptest.NewRecorder()
+	api.HandleReportStoppedApiSelfStoppedPost(rec,
+		taskReq(t, "POST", "/api/self/stopped", nil, workerID, "agent"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
+	}
+	if w, _ := api.dal.GetOutsourceWorker(workerID); w.StoppedSince <= 0 {
+		t.Fatal("fixture: the collect must have latched stopped_since")
+	}
+	api.hub.DrainWardenCommands(ServerSelfHost)
+	api.hub.DrainWardenCommands("m-elsewhere")
+	// The in-flight session has not booted yet, and the dying one still looks
+	// online — this is exactly the window the bug lived in.
+	if !api.hub.IsOnline(workerID) {
+		t.Fatal("fixture: the old session must still look online for this test to bite")
+	}
+
+	// 3) the owner changes his mind mid-flight. It must GO OUT, not be swallowed.
+	if rec := postWorker(t, api, workerID, "relocate",
+		map[string]any{"machine_id": "m-third"},
+		api.HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePost); rec.Code != http.StatusOK {
+		t.Fatalf("relocate #2: %d %s", rec.Code, rec.Body.String())
+	}
+	if w, _ := api.dal.GetOutsourceWorker(workerID); w.DesiredMachineID != "m-third" {
+		t.Fatalf("pin = %q, want m-third", w.DesiredMachineID)
+	}
+	starts := api.hub.DrainWardenCommands("m-third")
+	if len(starts) != 1 {
+		t.Fatalf("a verb landing after the collect must dispatch NOW, got %d frames on "+
+			"the new machine (a second wind-down would dispatch nothing and the "+
+			"in-flight old-config start would then discard the epoch)", len(starts))
+	}
+	if rpc, args := decodeWardenFrame(t, starts[0].Frame); rpc != reconcileCmdStart ||
+		args["member_id"] != workerID {
+		t.Fatalf("frame = %s %v, want a start for %s", rpc, args, workerID)
+	}
+	// The collected latch must survive: zeroing it is what re-opened the window.
+	if w, _ := api.dal.GetOutsourceWorker(workerID); w.StoppedSince <= 0 {
+		t.Fatal("the already-collected latch must not be zeroed by a later owner verb")
+	}
+}

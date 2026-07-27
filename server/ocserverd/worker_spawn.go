@@ -1144,8 +1144,8 @@ func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
 // immediately? The owner's ask was 「有東西要存才等,沒有就立刻走」 — he must not
 // wait out a grace window just to change a model.
 //
-// The server can prove exactly TWO negatives, and both are structural rather
-// than guessed:
+// The server can prove exactly THREE negatives, and all three are structural
+// rather than guessed:
 //
 //   - NO LIVE SESSION (!hub.IsOnline). Nothing can hear the 預告 and nothing
 //     exists to flush; waiting would burn the whole deadline for certain. This
@@ -1154,6 +1154,19 @@ func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
 //     assigned→active flip IS the get_my_task claim, so a non-active worker has
 //     provably never been handed its task content. It has no task state to write
 //     back, and its ocagent may not even have finished booting.
+//   - THE WIND-DOWN IS ALREADY COLLECTED (StoppedSince > 0). 收口 latched: the
+//     flush is OVER and collectWorkerHandover has ALREADY dispatched this
+//     epoch's kill + re-start, carrying whatever pin/model the row held at that
+//     moment. The old session stays hub.IsOnline until its warden reaps it, so
+//     without this arm an owner verb landing in that window would open a SECOND
+//     wind-down: openOwnerOpHandover zeroes the collected latch, re-stamps the
+//     epoch — and dispatches NOTHING. The in-flight start (OLD model / OLD
+//     machine) then boots, its boot_ts beats the fresh refocus_since,
+//     autoHandoverWorker's loop-break calls clearWorkerRefocus, and the owner's
+//     change reaches NO session at all: the cockpit shows the new value while
+//     the worker runs the old one — and for 改機器 the worker stays on the old
+//     machine indefinitely, because the FSM rescue is gated on !IsOnline.
+//     A collected worker has nothing left to flush, so the verb goes out NOW.
 //
 // Everything else (active + online) opens the window — and the WAIT IS NOT THE
 // DEADLINE. StoppingTimeoutSecs is a ceiling, not a duration: the 收口 fires the
@@ -1167,7 +1180,7 @@ func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
 // positive detection of unsaved work.
 // Callers hold s.outsourceMu.
 func (s *apiServer) workerHasStateToFlush(w OutsourceWorker) bool {
-	return w.Status == WorkerStatusActive && s.hub.IsOnline(w.ID)
+	return w.Status == WorkerStatusActive && w.StoppedSince <= 0.0 && s.hub.IsOnline(w.ID)
 }
 
 // openOwnerOpHandover puts an owner verb through the graceful wind-down: stamp a
