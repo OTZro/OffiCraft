@@ -1154,7 +1154,9 @@ func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
 //     assigned→active flip IS the get_my_task claim, so a non-active worker has
 //     provably never been handed its task content. It has no task state to write
 //     back, and its ocagent may not even have finished booting.
-//   - THE WIND-DOWN IS ALREADY COLLECTED (StoppedSince > 0). 收口 latched: the
+//   - THIS EPOCH'S WIND-DOWN IS ALREADY COLLECTED (RefocusSince > 0 ∧
+//     StoppedSince > 0 — read the epoch guard note below; the RefocusSince half
+//     is load-bearing, not decoration). 收口 latched: the
 //     flush is OVER and collectWorkerHandover has ALREADY dispatched this
 //     epoch's kill + re-start, carrying whatever pin/model the row held at that
 //     moment. The old session stays hub.IsOnline until its warden reaps it, so
@@ -1178,9 +1180,32 @@ func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
 // guessing wrong here silently discards a round of learnings. Recorded honestly:
 // for the active+online case this is the 「照舊等滿但可提早結束」 fallback, not a
 // positive detection of unsaved work.
+// ⚠️ THE EPOCH GUARD ON THAT THIRD ARM (review round 3 — the hole round 2's
+// own fix opened). stopped_since is latched in TWO places and only one of them
+// is a handover: collectWorkerHandover latches it as the 收口 of a refocus
+// epoch, and workerReportStopped's ELSE arm latches it for a report arriving
+// outside any handover (an ordinary 停止 where the worker says it has finished).
+// NOTHING clears the second one — clearWorkerRefocus is only reachable while
+// refocus_since > 0, and the restart handler writes desired_state and nothing
+// else — so it outlives the whole stop→restart cycle. Read GLOBALLY, that stale
+// latch claims "already collected" forever, and every later 改機器 / 換 model on
+// that worker is shot on the spot, for the rest of its life. Pairing it with
+// RefocusSince > 0 asks the question that was actually meant: is THIS epoch's
+// wind-down collected? An epoch is the only thing a 收口 can belong to. The
+// stale latch then heals by itself, because opening the next epoch zeroes it
+// (openOwnerOpHandover). Sentinels: TestOwnerOp_VerbAfterTheCollectIsNotSwallowed
+// (the arm must exist) and TestOwnerOp_OrdinaryStopRestartStillWindsDownLater
+// (it must not over-reach).
+//
+// The full input table for this predicate lives at the top of
+// worker_ownerop_winddown_t98f4_test.go — every combination of
+// active/online/refocus/stopped with its expected verdict. Both HIGH defects in
+// this票 were mis-drawn boundaries of THIS function; a change here that the
+// table does not cover means the table is now wrong too.
 // Callers hold s.outsourceMu.
 func (s *apiServer) workerHasStateToFlush(w OutsourceWorker) bool {
-	return w.Status == WorkerStatusActive && w.StoppedSince <= 0.0 && s.hub.IsOnline(w.ID)
+	collectedThisEpoch := w.RefocusSince > 0.0 && w.StoppedSince > 0.0
+	return w.Status == WorkerStatusActive && !collectedThisEpoch && s.hub.IsOnline(w.ID)
 }
 
 // openOwnerOpHandover puts an owner verb through the graceful wind-down: stamp a

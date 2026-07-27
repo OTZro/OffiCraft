@@ -12,6 +12,83 @@ package main
 // The second half of the owner's ask is 「有東西要存才等,沒有就立刻走」, so this
 // file also pins the FAST paths. Which cases are fast is a stated criterion, not
 // a guess — see workerHasStateToFlush / ownerOpRevivesStoppedWorker.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// THE DECISION TABLE (written because BOTH HIGH defects in this票 were mis-drawn
+// boundaries of the SAME predicate — round 2 missed a state, round 3 drew the
+// range too wide). Anyone changing workerHasStateToFlush: find your change in
+// this table first. A cell you cannot state an expectation for is where the
+// third defect lives.
+//
+// TWO UPSTREAM GATES run BEFORE the predicate is even consulted, and they
+// dominate it (respawnWorkerForOwnerOp):
+//
+//	G1  desired_state == offline   → held_down receipt, NOTHING starts. An owner
+//	                                 停止 outranks every other owner verb.
+//	                                 (TestOwnerOp_StoppedWorkerStillOnlyGetsAReceipt)
+//	G2  op == restart              → immediate. The session it displaces is under
+//	                                 a standing kill order, so a 預告 waits for an
+//	                                 answer that is never coming (deny-list, so a
+//	                                 NEW verb gets the wind-down by default).
+//	                                 (TestOwnerOp_RestartNeverWindsDown)
+//
+// Then the predicate itself, over its four inputs. `active` is Status ==
+// WorkerStatusActive; `online` is hub.IsOnline; `refocus` / `stopped` are the
+// row's refocus_since / stopped_since anchors:
+//
+//	#   active online refocus stopped │ verdict   │ why
+//	──────────────────────────────────┼───────────┼──────────────────────────────
+//	1     Y      Y       0       0    │ WIND DOWN │ the ordinary case: a running
+//	                                  │           │ session, no handover in
+//	                                  │           │ progress. Only the agent can
+//	                                  │           │ know if it has unsaved work,
+//	                                  │           │ so ask it (ceiling, not a
+//	                                  │           │ fixed wait).
+//	2     Y      Y       0      >0    │ WIND DOWN │ ⚠️ ROUND-3 DEFECT CELL. A
+//	                                  │           │ stopped_since with NO epoch is
+//	                                  │           │ a leftover from an ordinary
+//	                                  │           │ 停止 (workerReportStopped's
+//	                                  │           │ else arm) that nothing clears.
+//	                                  │           │ It is not a collected
+//	                                  │           │ handover. Reading it as one
+//	                                  │           │ killed every later verb on
+//	                                  │           │ that worker, forever.
+//	                                  │           │ (_OrdinaryStopRestartStillWindsDownLater)
+//	3     Y      Y      >0       0    │ WIND DOWN │ a grace window is OPEN and NO
+//	                                  │           │ kill has gone out yet. Safe to
+//	                                  │           │ re-stamp: the new pin/model is
+//	                                  │           │ already on the row, so the
+//	                                  │           │ pending collect carries it.
+//	4     Y      Y      >0      >0    │ IMMEDIATE │ ⚠️ ROUND-2 DEFECT CELL. THIS
+//	                                  │           │ epoch is collected: kill+start
+//	                                  │           │ already went out with the OLD
+//	                                  │           │ values, and the dying session
+//	                                  │           │ only looks online until its
+//	                                  │           │ warden reaps it. Opening a
+//	                                  │           │ second wind-down here
+//	                                  │           │ dispatches NOTHING and the
+//	                                  │           │ in-flight boot then discards
+//	                                  │           │ the epoch.
+//	                                  │           │ (_VerbAfterTheCollectIsNotSwallowed)
+//	5-8   Y      N     any     any    │ IMMEDIATE │ D6: nothing can hear the 預告
+//	                                  │           │ and nothing exists to flush,
+//	                                  │           │ so waiting burns the whole
+//	                                  │           │ deadline for certain.
+//	                                  │           │ (_NoLiveSessionTakesEffectImmediately)
+//	9-16  N     any    any     any    │ IMMEDIATE │ assigned (activated_ts == 0)
+//	                                  │           │ ⇒ the get_my_task claim never
+//	                                  │           │ happened ⇒ provably no task
+//	                                  │           │ state to write back.
+//	                                  │           │ (_NeverClaimedItsTaskTakesEffectImmediately)
+//
+// stopping_since is deliberately NOT an input: a worker that has announced it is
+// stopping still owes a report_stopped, so it is mid-flush, not done.
+//
+// Cells 5-8 and 9-16 are collapsed because the earlier conjunct short-circuits —
+// that is a claim about the code, and it is why those rows need one test each
+// rather than four. Cells 1-4 are each pinned individually, because those four
+// are exactly where the boundary has been drawn wrong twice.
+// ─────────────────────────────────────────────────────────────────────────────
 
 import (
 	"net/http"
@@ -321,5 +398,149 @@ func TestOwnerOp_VerbAfterTheCollectIsNotSwallowed(t *testing.T) {
 	// The collected latch must survive: zeroing it is what re-opened the window.
 	if w, _ := api.dal.GetOutsourceWorker(workerID); w.StoppedSince <= 0 {
 		t.Fatal("the already-collected latch must not be zeroed by a later owner verb")
+	}
+}
+
+// TestOwnerOp_OrdinaryStopRestartStillWindsDownLater (T-98f4 review round 3,
+// HIGH — the hole the round-2 fix opened): the 「已收攏」 fast path must be
+// EPOCH-SCOPED, not a global read of stopped_since.
+//
+// stopped_since is latched in TWO places, and only one of them is a handover:
+// collectWorkerHandover latches it as the 收口 of a refocus epoch, but
+// workerReportStopped's else arm ALSO latches it for a report that arrives
+// outside any handover — an ordinary 停止 where the worker politely says it has
+// finished. Nothing clears that one: clearWorkerRefocus is only reachable while
+// refocus_since > 0, and the restart handler writes desired_state and nothing
+// else. So the latch outlives the whole stop→restart cycle.
+//
+// Read globally, that latch says "already collected" forever: every later 改機器
+// / 換 model on that worker is shot on the spot — no 預告, no grace, whatever
+// the session had not written down is gone — and it repeats for the rest of the
+// worker's life. That is the exact failure rule 2 exists to abolish, re-entering
+// through a broader and far more ordinary door than the one round 2 closed.
+func TestOwnerOp_OrdinaryStopRestartStillWindsDownLater(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := newActiveOnlineWorker(t, api)
+
+	// An ORDINARY 停止 → the worker reports it finished → 重啟. No handover
+	// anywhere in here: refocus_since is never stamped.
+	postWorker(t, api, workerID, "stop", nil,
+		api.HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost)
+	rec := httptest.NewRecorder()
+	api.HandleReportStoppedApiSelfStoppedPost(rec,
+		taskReq(t, "POST", "/api/self/stopped", nil, workerID, "agent"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
+	}
+	w, _ := api.dal.GetOutsourceWorker(workerID)
+	if w.RefocusSince != 0 || w.StoppedSince <= 0 {
+		t.Fatalf("fixture: this test needs a NON-handover latch "+
+			"(refocus=%v stopped=%v)", w.RefocusSince, w.StoppedSince)
+	}
+	if rec := postWorker(t, api, workerID, "restart", nil,
+		api.HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost); rec.Code != http.StatusOK {
+		t.Fatalf("restart: %d %s", rec.Code, rec.Body.String())
+	}
+	api.hub.DrainWardenCommands(ServerSelfHost)
+	if w, _ := api.dal.GetOutsourceWorker(workerID); w.StoppedSince <= 0 {
+		t.Fatal("fixture: the stale latch must survive the restart for this test to bite")
+	}
+	if !api.hub.IsOnline(workerID) {
+		t.Fatal("fixture: the worker must be online for the wind-down to be owed")
+	}
+
+	// Now the owner changes the model. This worker is running and has never been
+	// through a handover, so it is owed the FULL wind-down.
+	if rec := postWorker(t, api, workerID, "model",
+		map[string]any{"model": "claude-opus-4-8"},
+		api.HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost); rec.Code != http.StatusOK {
+		t.Fatalf("model: %d %s", rec.Code, rec.Body.String())
+	}
+	after, _ := api.dal.GetOutsourceWorker(workerID)
+	if after.RefocusSince <= 0 {
+		t.Fatal("a worker whose only stopped_since came from an ORDINARY stop must " +
+			"still get its 收尾 — a stale latch is not a collected handover")
+	}
+	if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
+		t.Fatalf("the wind-down must not kill the session yet, got %d frames", got)
+	}
+	// The fresh epoch also HEALS the stale latch, so the worker is not stuck
+	// re-deciding this every time.
+	if after.StoppedSince != 0 {
+		t.Fatalf("a new epoch must clear the stale latch, got stopped_since=%v",
+			after.StoppedSince)
+	}
+}
+
+// TestOwnerOp_SecondVerbDuringAnOpenWindowReStampsAndStillCollects pins cell 3
+// of the decision table: refocus > 0 ∧ stopped == 0 — a grace window that is
+// OPEN and not yet collected.
+//
+// It is the neighbour of the round-2 defect cell and the reason that fix had to
+// be an AND rather than "refocus > 0 ⇒ immediate": nothing has been dispatched
+// yet here, so re-stamping is harmless and the owner still gets his 收尾. What
+// makes it safe is that the new pin is persisted BEFORE the window is (re)opened,
+// so whichever collect eventually fires carries the LATEST value — checked below
+// by letting the worker answer and watching where it actually lands.
+func TestOwnerOp_SecondVerbDuringAnOpenWindowReStampsAndStillCollects(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := newActiveOnlineWorker(t, api)
+	seedMachine(t, api, "m-elsewhere")
+	connectWarden(t, api, "m-elsewhere")
+	seedMachine(t, api, "m-third")
+	connectWarden(t, api, "m-third")
+
+	if rec := postWorker(t, api, workerID, "relocate",
+		map[string]any{"machine_id": "m-elsewhere"},
+		api.HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePost); rec.Code != http.StatusOK {
+		t.Fatalf("relocate #1: %d %s", rec.Code, rec.Body.String())
+	}
+	first, _ := api.dal.GetOutsourceWorker(workerID)
+	if first.RefocusSince <= 0 || first.StoppedSince != 0 {
+		t.Fatalf("fixture: cell 3 needs an OPEN, uncollected window "+
+			"(refocus=%v stopped=%v)", first.RefocusSince, first.StoppedSince)
+	}
+	api.hub.DrainWardenCommands(ServerSelfHost)
+
+	// The owner changes his mind while the window is still open. Still a
+	// wind-down — and still no kill.
+	if rec := postWorker(t, api, workerID, "relocate",
+		map[string]any{"machine_id": "m-third"},
+		api.HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePost); rec.Code != http.StatusOK {
+		t.Fatalf("relocate #2: %d %s", rec.Code, rec.Body.String())
+	}
+	second, _ := api.dal.GetOutsourceWorker(workerID)
+	if second.RefocusSince <= 0 {
+		t.Fatal("a verb landing inside an OPEN window must keep the 收尾 open")
+	}
+	if second.DesiredMachineID != "m-third" {
+		t.Fatalf("pin = %q, want m-third", second.DesiredMachineID)
+	}
+	for _, target := range []string{ServerSelfHost, "m-elsewhere", "m-third"} {
+		if got := len(api.hub.DrainWardenCommands(target)); got != 0 {
+			t.Fatalf("nothing may be dispatched while the window is open "+
+				"(%s got %d frames)", target, got)
+		}
+	}
+
+	// It answers → the collect fires ONCE and carries the LATEST pin.
+	rec := httptest.NewRecorder()
+	api.HandleReportStoppedApiSelfStoppedPost(rec,
+		taskReq(t, "POST", "/api/self/stopped", nil, workerID, "agent"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := len(api.hub.DrainWardenCommands("m-elsewhere")); got != 0 {
+		t.Fatalf("the superseded destination must receive nothing, got %d frames", got)
+	}
+	starts := api.hub.DrainWardenCommands("m-third")
+	if len(starts) != 1 {
+		t.Fatalf("the collect must start on the LATEST pin, got %d frames", len(starts))
+	}
+	if rpc, args := decodeWardenFrame(t, starts[0].Frame); rpc != reconcileCmdStart ||
+		args["member_id"] != workerID {
+		t.Fatalf("frame = %s %v, want a start for %s", rpc, args, workerID)
 	}
 }
