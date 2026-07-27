@@ -568,18 +568,34 @@ export function MonitorPage() {
                      * readiness cell uses; one visual vocabulary for one
                      * freshness rule). `hardwareStale === true` and nothing
                      * else: false is a live sample whose probe simply had no
-                     * answer, null is a box that never measured. */}
+                     * answer, null is a box that never measured.
+                     *
+                     * And a THIRD blank (T-aad2), which the two above cannot
+                     * describe: the probe DID report, with a value the server
+                     * cannot read. That used to be pixel-identical to "never
+                     * measured", so a warden whose CPU reading turned into a
+                     * string looked exactly like a machine with no such probe.
+                     * `hardwareInvalid` names the keys per cell, so one broken
+                     * probe marks its own cell and leaves its siblings alone.
+                     * Separate mark from stale on purpose: "nobody has looked
+                     * lately" and "the reporter is broken" are different jobs
+                     * for whoever is reading this screen. */}
                     <td data-label={t.monitor.machineCol.cpu} data-testid="mon-cpu">
                       {pctText(hw?.cpuPct ?? null, dash)}
                       {hw?.hardwareStale === true && <HardwareStaleMark />}
+                      {badHardware(hw, "cpu_pct") && <HardwareBadMark />}
                     </td>
                     <td data-label={t.monitor.machineCol.ram} data-testid="mon-ram">
                       {pctText(hw?.ramPct ?? null, dash)}
                       {hw?.hardwareStale === true && <HardwareStaleMark />}
+                      {badHardware(hw, "ram_pct") && <HardwareBadMark />}
                     </td>
                     <td data-label={t.monitor.machineCol.power} data-testid="mon-power">
                       {powerText(hw ? hw.acPower : null, hw?.batteryPct ?? null, dash)}
                       {hw?.hardwareStale === true && <HardwareStaleMark />}
+                      {(badHardware(hw, "ac_power") || badHardware(hw, "battery_pct")) && (
+                        <HardwareBadMark />
+                      )}
                     </td>
                     {/* Runtime readiness (T-90be ⑤) — ALWAYS with its age
                      * (T-b36a). This is not a cosmetic column: when a machine
@@ -1112,6 +1128,33 @@ function HardwareStaleMark() {
       title={t.monitor.machine.hardwareStaleHint}
     >
       {t.monitor.machine.hardwareStale}
+    </span>
+  );
+}
+
+/** Whether this machine reported `key` with a value the server could not read.
+ * Undefined hardware (a host with no telemetry row at all) is not a defect —
+ * it is the "never measured" case, which is precisely what this mark must not
+ * be confused with. */
+function badHardware(hw: MonMachineView | undefined, key: string): boolean {
+  return hw?.hardwareInvalid?.includes(key) === true;
+}
+
+/** The marker for a cell that is blank because the reported value was
+ * UNREADABLE, not because it is old and not because it was never taken. It is
+ * deliberately not the `mon-stale` chip: the two blanks have different causes
+ * and different fixes (go look at that machine's warden, vs nobody has probed
+ * it lately), and collapsing them back into one chip would re-create exactly
+ * the ambiguity this field was added to remove. */
+function HardwareBadMark() {
+  const { t } = useI18n();
+  return (
+    <span
+      className="mon-stale mon-bad"
+      data-testid="mon-hardware-bad"
+      title={t.monitor.machine.hardwareBadHint}
+    >
+      {t.monitor.machine.hardwareBad}
     </span>
   );
 }

@@ -160,6 +160,21 @@ The whole table is executable in
 `server/ocserverd/api_monitoring_test.go::TestHandleIngestTelemetry_WrongTypedBlockStatusTable`,
 so this paragraph can only drift from the wire across a red test.
 
+Their nested VALUES stay permissive too, and that is a separate decision from the one above
+(T-aad2). A declared key carrying the wrong TYPE — `hardware: {"cpu_pct": "47"}` — is a
+**200**, stored verbatim: refusing it is the same fail-closed tightening the owner ruled out
+for these blocks (rc-55861dd893c6), and its blast radius is the whole heartbeat, not one
+field. What changes is that the READ path no longer hides it. `MonitoringMachineDTO.
+hardware_invalid` names the declared keys of the SERVED sample that arrived unreadable, so
+"measured but unusable" stops being byte-identical to "never measured" — the same job
+`hardware_stale` does for the expired case, and the reason all three blanks are now tellable
+apart. Honest-empty for a clean, stale or absent sample; key names only, never the offending
+value; per key, because one broken probe says nothing about its siblings; and NEVER for an
+undeclared key, which has no declared type to violate. The producer side of the same
+contract is a CI guard over our own payloads
+(`cli/ocwarden/telemetry_wire_test.go::TestWardenTelemetryValueTypesMatchFrozenSchema`) —
+it constrains the warden, not the wire.
+
 ## 4. Reconcile producer — the decision surface
 
 The server owns desired-state reconciliation; the warden is a stateless executor. Commands reach the warden over the SSE warden-command band

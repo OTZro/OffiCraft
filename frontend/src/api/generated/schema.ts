@@ -4393,6 +4393,11 @@ export interface components {
              * @description Whether the hardware sample behind ``hardware_ts`` is older than the server's freshness window; null = no sample was ever taken. Same window, same SERVER-side verdict as ``runtime_capabilities_stale`` (T-b36a) — the threshold has exactly one home and no client re-derives it from its own clock. True is what tells the two blank rows apart: cpu/ram/battery/ac are null here BECAUSE the sample expired ('nobody has measured this box lately'), not because the box has never reported hardware (``hardware_ts`` null too). A client that only reads the values collapses those two worlds back into one dash.
              */
             hardware_stale?: boolean | null;
+            /**
+             * Hardware Invalid
+             * @description The DECLARED hardware keys that arrived with the wrong VALUE TYPE in the sample behind ``hardware_ts`` (sorted; empty when the sample is clean, and empty for a stale/absent sample whose blanks are already explained). Nested telemetry blocks are deliberately permissive (owner ruling rc-55861dd893c6): a wrongly-typed ``cpu_pct`` is stored verbatim with a 200, and the reader — which needs a number — then serves null. Without this list that null is byte-identical to 'this probe never answered', so a broken reporter looks exactly like a machine with no battery. This field is the server's answer to 'why is that cell blank': the value WAS measured and IS unreadable. Same role hardware_stale plays for the expired case, and read the same way — per key, because one bad probe must not cast doubt on its siblings. It carries key NAMES only, never the offending value (untrusted input must not reach the cockpit as content).
+             */
+            hardware_invalid?: string[];
             /** Machine */
             machine: string;
             /** Ram Pct */

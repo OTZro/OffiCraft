@@ -363,6 +363,34 @@ type monitoringMachineDTO struct {
 	// there is exactly one freshness rule on this wire and both consumers of it
 	// ask the same question.
 	HardwareStale *bool `json:"hardware_stale"`
+	// HardwareInvalid names the DECLARED hardware keys that arrived in the
+	// served sample with the WRONG VALUE TYPE (sorted; empty for a clean, a
+	// stale, or an absent sample). It is the third answer to "why is that cell
+	// blank", and it exists because the first two were being used to cover a
+	// case neither of them describes.
+	//
+	// The nested telemetry blocks are permissive on purpose (owner ruling
+	// rc-55861dd893c6): the ingest handler checks hardware is an OBJECT and then
+	// stores its contents verbatim, so `cpu_pct: "47"` is a 200 and sits in the
+	// store as a string. teleNum wants a float64, does not get one, and returns
+	// nil — and null-because-unreadable was byte-for-byte the same row as
+	// null-because-never-probed (measured: a string cpu_pct produced a row
+	// identical to one that omitted the key entirely, hardware_ts and
+	// hardware_stale included). So a warden whose CPU probe started returning a
+	// string looked exactly like a machine that has no battery: nothing on the
+	// wire, and nothing on screen, said a measurement had been lost.
+	//
+	// Deliberately NOT a rejection. Refusing the report at ingest is the same
+	// fail-closed move the owner already ruled against for this block, and its
+	// blast radius is the whole heartbeat (hardware + binaries + claude +
+	// runtimes going null together, the a7fa594 outage). The data still lands
+	// exactly as before; only the SILENCE is removed.
+	//
+	// Per KEY, not per row: one broken probe must not cast doubt on its
+	// siblings, so a row can serve a good ram_pct while naming cpu_pct here.
+	// Key NAMES only, never the offending value — that value is untrusted input
+	// and has no business being rendered in the cockpit.
+	HardwareInvalid []string `json:"hardware_invalid"`
 	// RuntimeCapabilitiesTS / RuntimeCapabilitiesStale carry the same freshness
 	// question for the capability probes. Their values are deliberately NOT
 	// blanked when stale: "codex was not logged in as of 3h ago" is the only

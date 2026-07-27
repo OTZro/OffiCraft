@@ -857,6 +857,15 @@ export const en: Dict = {
       hardwareStale: "stale",
       hardwareStaleHint:
         "Measured a while ago and not since — the numbers are withheld rather than shown as current",
+      // ── wrongly-typed hardware value (T-aad2). A THIRD reason this cell
+      // is blank, and the one that used to be indistinguishable from "never
+      // measured": the probe DID report, with a value the server cannot read
+      // (a string where a number belongs). Kept separate from the stale mark
+      // on purpose — stale means nobody has looked lately, this means the
+      // reporter itself is broken, and they send you to different places.
+      hardwareBad: "bad value",
+      hardwareBadHint:
+        "This machine reported a value of the wrong type, so it cannot be shown — the probe ran, its reading is unusable. Check that machine's warden version.",
     },
   },
   settings: {

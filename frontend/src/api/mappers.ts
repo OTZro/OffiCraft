@@ -721,6 +721,9 @@ function toMonMachine(w: WireMonMachine): MonMachineView {
     runtimeCapabilitiesStale: w.runtime_capabilities_stale ?? null,
     hardwareTs: w.hardware_ts ?? null,
     hardwareStale: w.hardware_stale ?? null,
+    // Honest-empty, never null: "no key is broken" is an answer every row can
+    // give, so the component never has to branch on absence to render a blank.
+    hardwareInvalid: w.hardware_invalid ?? [],
   };
 }
 
