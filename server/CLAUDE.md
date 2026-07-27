@@ -70,6 +70,19 @@ M3 REST 子批 A(oapi-codegen 佈線 + SPA 基座)+ 子批 B(50 條 handler 填�
   - ⚠️ **別把測試側那份當成「已經有守衛在守生產」**——T-e2b2 把 `task_artifact.attachment_id` 納入的是不變式掃描,`DeleteChatInvolving` 的存活判定當時一行都沒動,於是一個被釘成任務交付物的 blob 會隨它所在的聊天訊息一起被刪掉(任務一進終態產物集雙向凍結 ⇒ **不可復原**)。T-62a8 補的是生產那半。兩個方向各有哨兵(`dal_blob_liveness_test.go`):被引用的不准刪、**沒人引用的仍然要刪**——只釘前者會把資料遺失換成沒人會發現的磁碟洩漏。
   - **誠實邊界**:它**不是通用 GC**,只看「剛被刪的那些訊息引用過的 blob」、之後不重訪。所以被 artifact 保住的 blob 若日後被 un-pin 就永久收不回(`DeleteTaskArtifact` 依明文契約不刪 blob)。這是有界洩漏,換掉的是不可復原的刪除——要改等於改 `DeleteTaskArtifact` 的契約,屬 owner 裁定面。
 
+## 累積型 context 文件的硬上限(T-3351,`domain.go DocCapBlocked`)
+
+owner 2026-07-27 兩句話 + 一個數字:「更新的時候不能塞超過這個大小」「已經超出的我們不 truncate 但是下次更新他只能縮小」,上限 **10,000**。
+
+- **單位是 rune,不是 byte**(`utf8.RuneCountInString`,對齊 `chatBodyMaxChars` 的口徑)。owner 挑 10,000 時看的分佈是 SQLite `length()`=**字元**;這些文件多為中文散文(2.2–3 bytes/字),拿 `len()` 當上限實際只剩約 3,300–4,500 個中文字,**比 owner 拍板的數字嚴格一倍以上**。⚠️ patch receipt 的 `size` 欄仍是 `len()`=**bytes**(凍結 wire 欄,不動),兩者單位不同是刻意的——所以拒絕訊息一律講 "chars"。
+- **三行語意(邊界含在內)**:新內容 ≤ L → 過;> L 且 **< 舊內容** → 過(允許超標者繼續往下縮);> L 且 **≥ 舊內容** → 拒,**含等長**(沒變短就不算收斂,不然超標文件可以永遠整份重寫)。**既有超標內容一律不動、不截斷**——這條規則只擋 WRITE。第一次寫(無舊內容)只看 ≤ L。
+- **比的是「caller 讀到、正在編輯的那份」**:lessons 用 `foldLessonsDTO` 的 overlay ⊕ seed 折疊結果,手冊用存的欄位。**刻意與 `LessonsShrinkBlocked` 用同一個 `before`**,兩道閘因此不可能對「現在的文件是什麼」各說各話。(seed 只有數十字元,所以 seed role 的第一次寫實務上就是「只看 ≤ L」;fold-vs-overlay 在現行 seed 大小下行為不可區分。)
+- **五個寫入面全覆蓋**:`replace_lessons` / `patch_lessons` / `write_task_learnings` / `patch_task_learnings` / **`update_task_manual`**。最後一個非補不可:它是 `sop_md` 的**唯一**寫入面,也是 learnings 的**第二個**寫入面(欄名 `learnings`,與 `write_task_learnings` 的 `text` 是同一份文件)——只擋前四個等於留一扇沒上鎖的門。**patch 面受檢的是「改完之後的結果」,不是 patch 自己的大小**(小 patch 疊上大文件正是把它撐大的東西)。
+- **與 `allow_shrink` 的關係:兩道閘方向相反、並存、互不代勞**。`allow_shrink` 擋的是「縮太多」(整份清空 / 縮到不到十分之一),這道擋的是「太大且沒變短」。**`allow_shrink=true` 不是本閘的旁路,本閘無條件檢查**;拒絕訊息也**刻意不提任何參數**——這是 fail-closed 閘,教人繞過等於把 owner 拍板的上限做成裝飾。兩者**由構造互斥**:本閘只在 after ≥ before 時觸發,shrink guard 只在 after 遠小於 before 時觸發,所以永遠不會同時擋住而讓人無路可走(43k → 4k 走 `allow_shrink`;43k → 40k 兩閘都不擋)。
+- 🔴 **「超標但變短」這條路一定會被用到**:立案時正式站有 **2 份 lessons**(43,029 / 12,132)與 **4 份 manual learnings**(19,336 / 14,691 / 11,031 / 10,557)已超標(sop_md 全數在界內,最大 3,546)。掉了這條,那六份文件**永遠改不了,連想變短都不行**。
+- **代價是具體的**:這是 agent 換手前把該輪教訓寫回去的那條縫,誤擋一次 = 那一輪的經驗無聲全掉。所以拒絕訊息(`docCapRefusal`,五個面共用一份、不可能漂成五種說法)一定講出**三個數字**(這次多長 / 上限 / 現在多長)與**唯一合法出路**(把這次寫的弄短:同一次寫入裡先刪過時內容)。seeds 同批教(`system_interaction.md` §9a / `worker_context.md`)——agent 只知道 seed 教的做法。
+- 哨兵 `api_context_cap_t3351_test.go`:(a) 超標被擋 ×6 面、(b) 合法寫入不被誤擋(含「9,000 中文字必須放行」的 rune 單位釘)、(c) 超標但變短放行 ×5 面、(d) 等長且超標被擋。四件**分開釘**,一個 mutant 只點名它壞掉的那一件(實測:整條閘拿掉 → (a)(d) 全紅而 (b)(c) 全綠;rune 改 byte → 中文那條 + (b) 紅;`>=` 改 `>` → 只有 (d) 紅)。
+
 ## 已知邊界(誠實列,別當成熟功能用)
 - **config 預設路徑是 CWD-relative `oc.toml`**(binary 沒有 source-path 可錨 repo root);部署正解走 `$OC_CONFIG`。
 

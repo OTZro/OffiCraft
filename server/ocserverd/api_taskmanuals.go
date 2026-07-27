@@ -323,6 +323,20 @@ func (s *apiServer) HandleUpdateTaskManualApiTaskManualsTypeKeyPost(w http.Respo
 			return
 		}
 	}
+	// T-3351 hard cap. This handler is the ONLY write face for sop_md, and a
+	// SECOND write face for learnings (spelled `learnings` here, `text` in
+	// write_task_learnings) — capping only the learnings-specific seams would
+	// have left both an uncapped door onto the same document and sop_md with no
+	// gate at all. Validated BEFORE any field is applied, so a refusal leaves
+	// the whole partial update unwritten (the handler's existing posture).
+	if body.SopMd != nil && DocCapBlocked(m.SopMD, *body.SopMd) {
+		writeError(w, http.StatusBadRequest, docCapRefusal("sop_md doc", m.SopMD, *body.SopMd))
+		return
+	}
+	if body.Learnings != nil && DocCapBlocked(m.Learnings, *body.Learnings) {
+		writeError(w, http.StatusBadRequest, docCapRefusal("learnings doc", m.Learnings, *body.Learnings))
+		return
+	}
 	// All validated — apply the partial update.
 	if body.DisplayName != nil {
 		m.DisplayName = trimString(*body.DisplayName)
@@ -424,6 +438,12 @@ func (s *apiServer) HandleWriteTaskLearningsApiTaskManualsTypeKeyLearningsPost(w
 				"if that is intended; nothing was written")
 		return
 	}
+	// T-3351 hard cap. Unconditional — allow_shrink governs the opposite
+	// direction (shrinking too far) and is not a bypass for this one.
+	if DocCapBlocked(m.Learnings, body.Text) {
+		writeError(w, http.StatusBadRequest, docCapRefusal("learnings doc", m.Learnings, body.Text))
+		return
+	}
 	m.Learnings = body.Text
 	m.UpdatedTS = nowSecs()
 	if err := s.dal.PutTaskManual(*m); err != nil {
@@ -496,6 +516,12 @@ func (s *apiServer) HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchP
 	if !allowShrink && LessonsShrinkBlocked(m.Learnings, next) {
 		writeError(w, http.StatusBadRequest,
 			"patch would empty (or shrink to under a tenth of) the learnings doc — pass allow_shrink=true if this is intended, or use write_task_learnings; nothing was written")
+		return
+	}
+	// T-3351 hard cap, judged on the RESULT of the patch (not the patch's own
+	// size). Unconditional: allow_shrink is not a bypass.
+	if DocCapBlocked(m.Learnings, next) {
+		writeError(w, http.StatusBadRequest, docCapRefusal("learnings doc", m.Learnings, next))
 		return
 	}
 	m.Learnings = next

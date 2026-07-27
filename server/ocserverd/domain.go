@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // ── member: kind (closed set) ────────────────────────────────────────────────
@@ -576,6 +577,73 @@ func LessonsShrinkBlocked(before, after string) bool {
 		return true
 	}
 	return len(before) >= lessonsShrinkGuardMinChars && len(after)*10 < len(before)
+}
+
+// ── context docs: the hard size cap (T-3351) ─────────────────────────────────
+
+// contextDocMaxChars is the HARD CAP, in UTF-8 CHARACTERS (runes), on the
+// accumulating context documents an agent writes back: a role's lessons doc
+// and a task manual's learnings / sop_md. Owner ruling (2026-07-27), stated in
+// two sentences: "an update must not push the doc past this size", and
+// "whatever is already over it we do NOT truncate — but its next update may
+// only make it smaller".
+//
+// RUNES, not bytes, deliberately — the same unit as chatBodyMaxChars
+// (utf8.RuneCountInString). The distribution the owner picked 10,000 from was
+// measured with SQLite length(), which counts CHARACTERS; these docs are
+// largely Chinese prose at ~2.2–3 bytes per character, so capping len() at
+// 10,000 would have been a ~4,000-character cap — more than twice as strict as
+// the number the owner actually signed off on. (Note: the patch receipts'
+// `size` field stays len() = BYTES; that is a frozen wire field and is NOT the
+// unit this gate speaks. The refusal message always says "chars".)
+const contextDocMaxChars = 10000
+
+// DocCapBlocked reports whether replacing before with after must be refused by
+// the hard cap. The three-line rule, boundaries included:
+//
+//   - after ≤ cap                      → allowed (the ordinary case);
+//   - after > cap AND after < before   → allowed (an over-cap doc is free to
+//     keep converging downward — this is the escape hatch the two live
+//     over-cap lessons docs and four over-cap manuals depend on);
+//   - after > cap AND after ≥ before   → REFUSED, EQUAL LENGTH INCLUDED. Not
+//     getting shorter is not converging, and admitting equal-length rewrites
+//     would let an over-cap doc be replaced wholesale forever.
+//
+// Existing over-cap content is never truncated or rewritten by this rule — it
+// only ever refuses a WRITE. A first write (no prior doc) sees before="" and is
+// therefore judged on the cap alone.
+//
+// It is measured on the doc the caller reads and edits (the folded overlay ⊕
+// seed for lessons; the stored column for a manual) — the same `before` the
+// shrink guard uses, so the two guards can never disagree about what "the
+// current doc" is.
+func DocCapBlocked(before, after string) bool {
+	n := utf8.RuneCountInString(after)
+	if n <= contextDocMaxChars {
+		return false
+	}
+	return n >= utf8.RuneCountInString(before)
+}
+
+// docCapRefusal is the ONE refusal text behind the cap, so the five write
+// seams cannot drift into five different explanations. It names the three
+// numbers a caller needs (proposed size, cap, current size) and the one legal
+// way forward: make the write smaller — delete stale material in the same
+// write, or in a shrinking write first.
+//
+// It deliberately advertises NO bypass. There is none: allow_shrink governs the
+// opposite failure (shrinking too far) and does not open this gate. Naming a
+// flag here would teach agents to route around a cap the owner set on purpose.
+func docCapRefusal(docName, before, after string) string {
+	return fmt.Sprintf(
+		"the %s you are writing is %d chars, over the %d-char cap, and is not shorter "+
+			"than the %d chars already stored — nothing was written. What is already "+
+			"stored is never truncated, but every update must land at or under the cap, "+
+			"or at least come out SHORTER than what is there now. Drop stale or "+
+			"superseded material as part of this write (or in a shrinking write first), "+
+			"then write again.",
+		docName, utf8.RuneCountInString(after), contextDocMaxChars,
+		utf8.RuneCountInString(before))
 }
 
 // ── user_context: the ADDITIVE user-custom block fold ────────────────────────

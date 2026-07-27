@@ -508,21 +508,27 @@ func (s *apiServer) HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(w http.Res
 		return
 	}
 	text := body.Text
+	current, err := s.foldLessonsDTO(roleKey, taskType)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
 	// T-2d99 wipe guard: replace_lessons was the one destructive whole-doc
 	// seam with NO guard at all — patch_lessons has had LessonsShrinkBlocked
 	// since r-76. Emptying a doc that had content now needs allow_shrink.
 	if !(body.AllowShrink != nil && *body.AllowShrink) {
-		current, err := s.foldLessonsDTO(roleKey, taskType)
-		if err != nil {
-			internalError(w, err)
-			return
-		}
 		if WholeDocWipeBlocked(current.Text, text) {
 			writeError(w, http.StatusBadRequest,
 				"this would replace the existing lessons doc with an empty one — pass allow_shrink=true "+
 					"if that is intended; nothing was written")
 			return
 		}
+	}
+	// T-3351 hard cap. Checked UNCONDITIONALLY — allow_shrink governs the
+	// opposite direction (shrinking too far) and is not a bypass for this one.
+	if DocCapBlocked(current.Text, text) {
+		writeError(w, http.StatusBadRequest, docCapRefusal("lessons doc", current.Text, text))
+		return
 	}
 	if err := s.dal.PutLessons(Lessons{
 		RoleKey:    roleKey,
@@ -599,6 +605,13 @@ func (s *apiServer) HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost(w http.
 	if !allowShrink && LessonsShrinkBlocked(current.Text, next) {
 		writeError(w, http.StatusBadRequest,
 			"patch would empty (or shrink to under a tenth of) the lessons doc — pass allow_shrink=true if this is intended, or use replace_lessons; nothing was written")
+		return
+	}
+	// T-3351 hard cap, judged on the RESULT of the patch (not the patch's own
+	// size) — the whole point is that a small patch onto a huge doc is what
+	// grows it. Unconditional: allow_shrink is not a bypass.
+	if DocCapBlocked(current.Text, next) {
+		writeError(w, http.StatusBadRequest, docCapRefusal("lessons doc", current.Text, next))
 		return
 	}
 	if err := s.dal.PutLessons(Lessons{
