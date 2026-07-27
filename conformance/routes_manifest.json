@@ -228,28 +228,28 @@
     "mcp_tool": null,
     "method": "GET",
     "path": "/api/members/{member_id}/webhooks",
-    "requires": "machine"
+    "requires": "admin_agent"
   },
   {
     "auth": "gated",
     "mcp_tool": null,
     "method": "POST",
     "path": "/api/members/{member_id}/webhooks",
-    "requires": "machine"
+    "requires": "admin_agent"
   },
   {
     "auth": "gated",
     "mcp_tool": null,
     "method": "PATCH",
     "path": "/api/members/{member_id}/webhooks/{endpoint_id}",
-    "requires": "machine"
+    "requires": "admin_agent"
   },
   {
     "auth": "gated",
     "mcp_tool": null,
     "method": "DELETE",
     "path": "/api/members/{member_id}/webhooks/{endpoint_id}",
-    "requires": "machine"
+    "requires": "admin_agent"
   },
   {
     "auth": "gated",

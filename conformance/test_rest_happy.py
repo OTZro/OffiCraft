@@ -555,7 +555,8 @@ HAPPY: dict[str, Happy] = {
         path=lambda ctx: f"/api/members/{ctx.fresh_member()}",
         check=lambda _c, r: _expect(r, lambda d: d["roster_status"] == "removed"),
     ),
-    # ── webhooks (M4) — a member's 回呼端點 config CRUD (machine floor) ────────
+    # ── webhooks (M4) — a member's 回呼端點 config CRUD (admin_agent floor since
+    # T-5336; the DTO carries the endpoint's plaintext inlet token) ───────────
     "GET /api/members/{member_id}/webhooks": Happy(
         path=lambda ctx: f"/api/members/{_happy_webhook(ctx)[0]}/webhooks",
         check=_nonempty_list,

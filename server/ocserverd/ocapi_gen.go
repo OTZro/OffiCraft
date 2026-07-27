@@ -1835,7 +1835,7 @@ type WebhookCreateDTO struct {
 // WebhookCreateDTOPlatform Verification preset for the public `/in` inlet. Omit or `generic` = current behaviour (URL token only). `slack`/`github` = the server applies that platform's preset: the Slack url_verification challenge handshake and X-Slack-Signature HMAC, or the GitHub X-Hub-Signature-256 HMAC. Immutable after creation.
 type WebhookCreateDTOPlatform string
 
-// WebhookEndpointDTO API representation of one webhook_endpoint (M4 回呼端點, §1). Carries the durable fields the member-detail panel renders. The `token` is the opaque secret the public `/in` inlet identifies (member · endpoint · purpose) by; it rides THIS authenticated owner-facing wire ONLY so the panel can compose + copy the callback URL (the UI masks it visually; copy yields the full URL). It is NEVER on any public or agent-facing wire. `endpoint_id` is the user-chosen, per-member-unique, immutable address key; `purpose` is editable free text; `status` is the enabled/disabled revocation toggle.
+// WebhookEndpointDTO API representation of one webhook_endpoint (M4 回呼端點, §1). Carries the durable fields the member-detail panel renders. The `token` is the opaque secret the public `/in` inlet identifies (member · endpoint · purpose) by; it rides THIS authenticated wire so the panel can compose + copy the callback URL (the UI masks it visually; copy yields the full URL). It is NEVER on any PUBLIC wire, and since T-5336 this operation requires the admin_agent floor, so a plain agent token cannot read it either. `endpoint_id` is the user-chosen, per-member-unique, immutable address key; `purpose` is editable free text; `status` is the enabled/disabled revocation toggle.
 type WebhookEndpointDTO struct {
 	CreatedTs float64 `json:"created_ts"`
 

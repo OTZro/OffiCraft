@@ -434,31 +434,36 @@ MATRIX: dict[str, Route] = {
         requires="admin_agent",
         path=_member_path("/api/members/{member_id}"),
     ),
-    # ── webhooks (M4) — a member's 回呼端點 config CRUD; machine floor like the
-    # members CRUD (no admin choke). GET/POST aim at agent A (list is safe; each
-    # create uses a UNIQUE endpoint_id so the per-identity faces never collide on
-    # the per-member uniqueness 409). PATCH/DELETE are DEGRADED — probed with a
-    # missing endpoint id (404 across authenticated identities) — see DEGRADED.
+    # ── webhooks (M4) — a member's 回呼端點 config CRUD; ALL FOUR verbs sit at
+    # the admin_agent floor since T-5336 (owner 2026-07-27). Every response here
+    # carries WebhookEndpointDTO, and that DTO carries the endpoint's PLAINTEXT
+    # inlet token — so the read face is exactly as sensitive as the write faces
+    # and gets the same floor. Before the ruling these were requires=machine and
+    # every below-floor cell below was a 200/404, not a 403.
+    # GET/POST aim at agent A (list is safe; each create uses a UNIQUE
+    # endpoint_id so the per-identity faces never collide on the per-member
+    # uniqueness 409). PATCH/DELETE are DEGRADED — probed with a missing
+    # endpoint id (404 for the AT-OR-ABOVE-floor faces only) — see DEGRADED.
     "GET /api/members/{member_id}/webhooks": Route(
-        requires="machine",
+        requires="admin_agent",
         path=lambda ctx, _i: f"/api/members/{ctx.agent_a.member_id}/webhooks",
     ),
     "POST /api/members/{member_id}/webhooks": Route(
-        requires="machine",
+        requires="admin_agent",
         path=lambda ctx, _i: f"/api/members/{ctx.agent_a.member_id}/webhooks",
         body=lambda _ctx, _i: {"endpoint_id": f"conf-hook-{uuid.uuid4().hex[:8]}"},
     ),
     "PATCH /api/members/{member_id}/webhooks/{endpoint_id}": Route(
-        requires="machine",
-        overrides={i: 404 for i in _IDENTITY_RANK},
+        requires="admin_agent",
+        overrides={i: 404 for i in _ADMIN_FACES},
         path=lambda ctx, _i: (
             f"/api/members/{ctx.agent_a.member_id}/webhooks/ep-conf-missing"
         ),
         body={"status": "disabled"},
     ),
     "DELETE /api/members/{member_id}/webhooks/{endpoint_id}": Route(
-        requires="machine",
-        overrides={i: 404 for i in _IDENTITY_RANK},
+        requires="admin_agent",
+        overrides={i: 404 for i in _ADMIN_FACES},
         path=lambda ctx, _i: (
             f"/api/members/{ctx.agent_a.member_id}/webhooks/ep-conf-missing"
         ),
@@ -1030,13 +1035,15 @@ DEGRADED: dict[str, str] = {
         "identities); the sig semantics are pinned in test_rest_happy.py."
     ),
     "PATCH /api/members/{member_id}/webhooks/{endpoint_id}": (
-        "probed with a missing endpoint id (404 across authenticated identities): "
-        "the machine-floor authz face passes, the webhook lookup 404s. The full "
-        "status/purpose edit is pinned in test_rest_happy.py."
+        "probed with a missing endpoint id (404 for the admin/owner faces only): "
+        "the admin_agent authz face passes, the webhook lookup 404s. Below-floor "
+        "identities are still a derived 403 (T-5336). The full status/purpose "
+        "edit is pinned in test_rest_happy.py."
     ),
     "DELETE /api/members/{member_id}/webhooks/{endpoint_id}": (
-        "probed with a missing endpoint id (404 across authenticated identities); "
-        "the full revoke round-trip is pinned in test_rest_happy.py."
+        "probed with a missing endpoint id (404 for the admin/owner faces only; "
+        "below-floor identities stay a derived 403 since T-5336); the full "
+        "revoke round-trip is pinned in test_rest_happy.py."
     ),
     "POST /api/members/{member_id}/refocus": (
         "owner face pinned at 409 (target offline; refocus is online-only) — the "

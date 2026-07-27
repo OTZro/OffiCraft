@@ -389,15 +389,31 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			MCPTool:  "dismiss_member",
 		},
 		// ── Webhooks — a member's 回呼端點 (M4) ─────────────────────────────────
-		// Owner-facing config CRUD (the machine floor, like the members CRUD).
-		// MCPExclude: UI-driven config, not an agent tool — kept off the MCP
-		// surface (and out of the catalog hash) entirely.
+		// Owner-facing config CRUD. T-5336 (owner 2026-07-27) moved ALL FOUR
+		// verbs from the machine floor to principalAdminAgent.
+		//
+		// ⚠️ WHY all four, read/list included: every one of these responses
+		// carries WebhookEndpointDTO, and that DTO carries the endpoint's
+		// PLAINTEXT `token` — the whole credential of the public `/in` inlet.
+		// A read is therefore not "less dangerous" than a write here: LIST
+		// hands out every one of a member's inlet secrets in one call, and
+		// anybody holding one can inject synthetic chat into that member.
+		//
+		// ⚠️ MCPExclude is NOT the boundary and never was. It keeps the rows
+		// off the MCP tool surface (and out of the catalog hash) — that is a
+		// discoverability fact about one client, not an authz fact. Any holder
+		// of an agent token could always call these over plain REST; before
+		// T-5336 the floor let them through. The wire.go / spec description of
+		// `token` claimed it "is NEVER on any public or agent-facing wire",
+		// which was simply false on the machine floor — that sentence was
+		// rewritten in the same change rather than left as a comment that
+		// argued the code was safe.
 		{
 			Method:     "GET",
 			Path:       "/api/members/{member_id}/webhooks",
 			Handler:    w.HandleListWebhooksApiMembersMemberIdWebhooksGet,
 			Auth:       authGated,
-			Requires:   principalMachine,
+			Requires:   principalAdminAgent,
 			Summary:    "List a member's webhook endpoints (WebhookEndpointDTO[]).",
 			MCPExclude: true,
 		},
@@ -406,7 +422,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Path:       "/api/members/{member_id}/webhooks",
 			Handler:    w.HandleCreateWebhookApiMembersMemberIdWebhooksPost,
 			Auth:       authGated,
-			Requires:   principalMachine,
+			Requires:   principalAdminAgent,
 			Summary:    "Create a webhook endpoint (server mints the token).",
 			MCPExclude: true,
 		},
@@ -415,7 +431,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Path:       "/api/members/{member_id}/webhooks/{endpoint_id}",
 			Handler:    w.HandleUpdateWebhookApiMembersMemberIdWebhooksEndpointIdPatch,
 			Auth:       authGated,
-			Requires:   principalMachine,
+			Requires:   principalAdminAgent,
 			Summary:    "Toggle status / edit purpose of a webhook endpoint.",
 			MCPExclude: true,
 		},
@@ -424,7 +440,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Path:       "/api/members/{member_id}/webhooks/{endpoint_id}",
 			Handler:    w.HandleDeleteWebhookApiMembersMemberIdWebhooksEndpointIdDelete,
 			Auth:       authGated,
-			Requires:   principalMachine,
+			Requires:   principalAdminAgent,
 			Summary:    "Delete (permanently revoke) a webhook endpoint.",
 			MCPExclude: true,
 		},

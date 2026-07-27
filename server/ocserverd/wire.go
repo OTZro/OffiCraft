@@ -1385,10 +1385,18 @@ func newReplyCardDTO(c ReplyCard) replyCardDTO {
 }
 
 // webhookEndpointDTO is the response shape for one webhook_endpoint (M4 回呼端點,
-// §1). The `token` is the opaque secret — it rides ONLY this authenticated
-// owner-facing wire (the panel renders the callback URL from it, masking the
-// token visually while the copy button yields the full URL). It is NEVER on any
-// public or agent-facing wire.
+// §1). The `token` is the opaque secret — it rides this authenticated wire (the
+// panel renders the callback URL from it, masking the token visually while the
+// copy button yields the full URL). It is NEVER on any PUBLIC wire.
+//
+// ⚠️ This comment used to end "It is NEVER on any public or agent-facing wire",
+// and on the machine floor that half was FALSE: the four webhook CRUD rows were
+// requires=machine, so any agent token read this DTO — token and all — straight
+// off the REST wire. MCPExclude only kept the rows out of the MCP tool list; it
+// is a discoverability flag, never an authz gate. T-5336 (owner 2026-07-27)
+// raised all four rows to requires=admin_agent, which is what now keeps a plain
+// agent off this DTO. The claim is enforced by the route table, NOT by this
+// comment — see the T-5336 note in routes.go and routes_t5336_webhook_authz_test.go.
 // Platform is the fixed verification preset (generic/slack/github).
 // HasSigningSecret exposes ONLY whether a secret is configured — the secret
 // itself is NEVER echoed on any wire (stricter than token, which the
