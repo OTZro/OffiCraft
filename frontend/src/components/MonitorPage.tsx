@@ -467,15 +467,19 @@ export function MonitorPage() {
           <table className="mon-table">
             <thead>
               <tr>
+                {/* 機器 + 狀態 are ONE column (T-674d): they were split, and the
+                 * name cell was narrow enough that the machine-id chip wrapped
+                 * to a second line on every row. Merging is not decoration —
+                 * the id is the machine's identity and belongs beside its name,
+                 * and the online badge is the same row's other identity fact.
+                 * The removed 狀態 header is a header only; the badge itself is
+                 * unchanged and still an honest passthrough of `online`. */}
                 <th className="mon-table__left">{t.monitor.machineCol.machine}</th>
-                <th className="mon-table__left">{t.monitor.machineCol.status}</th>
                 <th className="mon-table__left">{t.monitor.machineCol.claude}</th>
+                <th className="mon-table__left">{t.monitor.machineCol.codex}</th>
                 <th>{t.monitor.machineCol.cpu}</th>
                 <th>{t.monitor.machineCol.ram}</th>
                 <th>{t.monitor.machineCol.power}</th>
-                <th className="mon-table__left">
-                  {t.monitor.machineCol.runtimes}
-                </th>
                 <th className="mon-table__right">
                   {t.monitor.machine.actionsCol}
                 </th>
@@ -484,7 +488,7 @@ export function MonitorPage() {
             <tbody>
               {machines.length === 0 ? (
                 <tr>
-                  <td className="mon-table__left mon-muted" colSpan={8}>
+                  <td className="mon-table__left mon-muted" colSpan={7}>
                     {t.monitor.machine.machinesEmpty}
                   </td>
                 </tr>
@@ -523,37 +527,70 @@ export function MonitorPage() {
                         >
                           {m.machineId}
                         </span>
+                        {/* online badge — honest passthrough of the registry's
+                         * online, now living in the merged 機器 cell (T-674d).
+                         * Same markup, same source; only its column moved. */}
+                        <span
+                          className={`mon-online${
+                            m.online ? " mon-online--on" : " mon-online--off"
+                          }`}
+                        >
+                          <span
+                            className={`status-dot ${
+                              m.online
+                                ? "status-dot--online"
+                                : "status-dot--offline"
+                            }`}
+                            aria-hidden
+                          />
+                          {m.online
+                            ? t.monitor.machine.online
+                            : t.monitor.machine.offline}
+                        </span>
                       </div>
                     </td>
-                    {/* online badge — honest passthrough of the registry's online */}
-                    <td
-                      className="mon-table__left"
-                      data-label={t.monitor.machineCol.status}
-                    >
-                      <span
-                        className={`mon-online${
-                          m.online ? " mon-online--on" : " mon-online--off"
-                        }`}
-                      >
-                        <span
-                          className={`status-dot ${
-                            m.online ? "status-dot--online" : "status-dot--offline"
-                          }`}
-                          aria-hidden
-                        />
-                        {m.online
-                          ? t.monitor.machine.online
-                          : t.monitor.machine.offline}
-                      </span>
-                    </td>
-                    {/* warden-probed claude CLI version — honest dash when the
-                     * machine never reported one (old warden / no probe). */}
+                    {/* Per-runtime version columns (T-674d), replacing the old
+                     * ✓/✗ Runtimes digest. Both cells read the SAME capability
+                     * map the digest read — nothing new is collected, and no
+                     * version is ever synthesized.
+                     *
+                     * Claude additionally falls back to the registry's own
+                     * `claude_version` (its long-standing source, T-97ee/T-7c5b)
+                     * when the machine has no capability entry — that keeps the
+                     * column's meaning exactly as it was for older wardens.
+                     * Codex has no such registry field, so its ONLY source is
+                     * the capability map; absent means unknown, and the cell
+                     * says so rather than inventing a number.
+                     *
+                     * The ✗ states the digest carried are NOT dropped: they are
+                     * spelled out ("not installed" / "signed out"), because
+                     * they are the only on-screen explanation for a worker
+                     * parked on machine_unavailable. And because these values
+                     * come from telemetry that is never cleared on disconnect,
+                     * a non-fresh probe is MARKED, never shown plain. */}
                     <td
                       className="mon-table__left"
                       data-label={t.monitor.machineCol.claude}
                       data-testid="mon-claude-version"
                     >
-                      {m.claudeVersion ?? dash}
+                      <RuntimeVersionCell
+                        capability={hw?.runtimeCapabilities?.claude}
+                        fallbackVersion={m.claudeVersion}
+                        stale={hw?.runtimeCapabilitiesStale}
+                        testIdPrefix="mon-claude"
+                      />
+                    </td>
+                    <td
+                      className="mon-table__left"
+                      data-label={t.monitor.machineCol.codex}
+                      data-testid="mon-codex-version"
+                    >
+                      <RuntimeVersionCell
+                        capability={hw?.runtimeCapabilities?.codex}
+                        fallbackVersion={null}
+                        stale={hw?.runtimeCapabilitiesStale}
+                        testIdPrefix="mon-codex"
+                      />
                     </td>
                     {/* Hardware telemetry (joined by host). Honest dash when the
                      * host reported no telemetry — never a fabricated number.
@@ -595,38 +632,6 @@ export function MonitorPage() {
                       {hw?.hardwareStale === true && <HardwareStaleMark />}
                       {(badHardware(hw, "ac_power") || badHardware(hw, "battery_pct")) && (
                         <HardwareBadMark />
-                      )}
-                    </td>
-                    {/* Runtime readiness (T-90be ⑤) — ALWAYS with its age
-                     * (T-b36a). This is not a cosmetic column: when a machine
-                     * cannot launch codex, the server silently refuses to place
-                     * codex work on it and the worker sits stamped
-                     * machine_unavailable; this cell is the only place the
-                     * reason appears. And because telemetry is never cleared on
-                     * disconnect, the values outlive the machine that reported
-                     * them — so a stale probe is shown MARKED rather than shown
-                     * plain (which would be a second confidently-wrong field)
-                     * or dropped (which would delete the only explanation). */}
-                    <td
-                      className="mon-table__left"
-                      data-label={t.monitor.machineCol.runtimes}
-                      data-testid="mon-runtimes"
-                    >
-                      {runtimeCapabilityText(hw?.runtimeCapabilities) === null ? (
-                        <span title={t.monitor.machine.runtimeUnknown}>{dash}</span>
-                      ) : (
-                        <>
-                          <span>{runtimeCapabilityText(hw?.runtimeCapabilities)}</span>
-                          {hw?.runtimeCapabilitiesStale !== false && (
-                            <span
-                              className="mon-stale"
-                              data-testid="mon-runtimes-stale"
-                              title={t.monitor.machine.runtimeStaleHint}
-                            >
-                              {t.monitor.machine.runtimeStale}
-                            </span>
-                          )}
-                        </>
                       )}
                     </td>
                     {/* Actions — the machine-lifecycle verbs (T-IUD):
@@ -1159,33 +1164,109 @@ function HardwareBadMark() {
   );
 }
 
-/** One machine's runtime readiness, e.g. "claude ✓ · codex ✗". null when the
- * machine has never reported a capability map (an older warden, or no heartbeat
- * yet) — the caller renders that as the honest dash, NOT as "not ready".
+/** One runtime's cell in the machine table (T-674d) — the per-runtime version
+ * columns that replaced the single ✓/✗ Runtimes digest.
  *
- * A reported `false` is an ANSWER and must read as one: `installed:false` and
- * `loggedIn:false` are exactly the states that make placement refuse this
- * machine, so folding them into the same "—" as "never told us" would hide the
- * one thing this column exists to show. Only null is unknown ("?"). */
-export function runtimeCapabilityText(
-  capabilities: MonMachineView["runtimeCapabilities"]
-): string | null {
-  const entries = Object.entries(capabilities ?? {});
-  if (entries.length === 0) return null;
-  return entries
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([runtime, capability]) => {
-      const mark =
-        capability.installed == null
-          ? "?"
-          : !capability.installed || capability.loggedIn === false
-            ? "✗"
-            : capability.loggedIn == null
-              ? "?"
-              : "✓";
-      return `${runtime} ${mark}`;
-    })
-    .join(" · ");
+ * Reads the SAME capability map the digest read; nothing new is collected and
+ * no version is ever synthesized. What it must NOT lose is the digest's ✗: an
+ * `installed:false` / `loggedIn:false` is the reason placement refuses this
+ * machine and a worker sits stamped `machine_unavailable`, and this cell is
+ * still the only place that reason appears on screen. So those states are
+ * spelled out as words rather than expressed by an absent version — an empty
+ * cell would read as "we don't know", which is a different and wrong claim.
+ *
+ * The four honest outcomes, in order:
+ *   never reported     → dash, titled "never probed"
+ *   installed:false    → "not installed"
+ *   version present    → the version verbatim
+ *   installed, no ver. → "installed" (the probe answered, without a number)
+ * plus a "signed out" mark whenever `loggedIn === false`, which can accompany
+ * a perfectly good version — an installed, up-to-date, logged-out runtime is
+ * exactly the case the operator needs to see.
+ *
+ * `fallbackVersion` exists only for Claude: the machine registry has carried
+ * its own `claude_version` since T-97ee/T-7c5b, and an older warden reports
+ * that without a capability map. Using it keeps the Claude column meaning
+ * exactly what it meant before this change. Codex has no such registry field,
+ * so it passes null and an absent capability stays an honest unknown.
+ *
+ * Freshness follows the same rule as the digest (T-b36a): capability telemetry
+ * is never cleared on disconnect, so anything sourced from it is MARKED unless
+ * the server says it is fresh (`stale === false`). The registry fallback is not
+ * telemetry and carries no mark. */
+function RuntimeVersionCell({
+  capability,
+  fallbackVersion,
+  stale,
+  testIdPrefix,
+}: {
+  capability?: { installed: boolean | null; loggedIn: boolean | null; version: string | null };
+  fallbackVersion: string | null;
+  stale: boolean | null | undefined;
+  testIdPrefix: string;
+}) {
+  const { t } = useI18n();
+  const dash = t.monitor.dash;
+  const m = t.monitor.machine;
+
+  // No capability entry at all. Claude may still have the registry version;
+  // anything else is the honest "never probed" dash — never a guess.
+  if (!capability) {
+    return fallbackVersion != null ? (
+      <span>{fallbackVersion}</span>
+    ) : (
+      <span title={m.runtimeUnknown}>{dash}</span>
+    );
+  }
+
+  const staleMark = stale !== false && (
+    <span
+      className="mon-stale"
+      data-testid={`${testIdPrefix}-stale`}
+      title={m.runtimeStaleHint}
+    >
+      {m.runtimeStale}
+    </span>
+  );
+
+  // A reported false is an ANSWER: say it, do not leave the cell blank.
+  if (capability.installed === false) {
+    return (
+      <>
+        <span className="mon-muted" title={m.runtimeNotInstalledHint}>
+          {m.runtimeNotInstalled}
+        </span>
+        {staleMark}
+      </>
+    );
+  }
+
+  // installed === null with no version is "the probe told us nothing".
+  if (capability.installed == null && capability.version == null) {
+    return <span title={m.runtimeUnknown}>{dash}</span>;
+  }
+
+  return (
+    <>
+      {capability.version != null ? (
+        <span>{capability.version}</span>
+      ) : (
+        <span className="mon-muted" title={m.runtimeNoVersionHint}>
+          {m.runtimeNoVersion}
+        </span>
+      )}
+      {capability.loggedIn === false && (
+        <span
+          className="mon-stale mon-bad"
+          data-testid={`${testIdPrefix}-logged-out`}
+          title={m.runtimeLoggedOutHint}
+        >
+          {m.runtimeLoggedOut}
+        </span>
+      )}
+      {staleMark}
+    </>
+  );
 }
 
 /** Format a percentage, honest "—" when the source is null (never fabricated). */

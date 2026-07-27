@@ -221,12 +221,27 @@ telemetry 只在成員被解僱時清、**斷線不清**,所以資料會比回�
   沒回報過硬體」是**同一個 dash**。`hardwareStale === true` 時三格各掛一枚 `mon-stale`
   標記(`data-testid="mon-hardware-stale"`)講清楚 dash 的原因。判斷式只准是 `=== true`:
   `false` 是活樣本裡誠實的缺值、`null` 是從沒量過,兩者都不准被標成過期。
-- **Runtimes 欄**:`runtimeCapabilityText` 渲染 `claude ✓ · codex ✗`;過期(或年齡未知,
-  `stale !== false`)掛 `mon-stale`,但**值不收回**——「codex 三小時前沒登入」是 worker 卡在
-  `machine_unavailable` 唯一的解釋。**回報的 `false` 是答案**(`installed:false` /
-  `loggedIn:false` → ✗),只有 `null` 才是 `?`,空 map 才是 dash。
+- **Claude / Codex 兩欄各印版本(T-674d,取代舊的單一 Runtimes ✓/✗ 欄)**:共用
+  `RuntimeVersionCell`,兩欄讀的是**同一份** `runtimeCapabilities`,**沒有新採集、沒有
+  合成版本號**。舊的 ✗ 不准被「空格子」吃掉——空格子讀起來是「不知道」,那是另一個
+  (而且錯的)主張;所以 `installed:false` → 「未安裝」、`loggedIn:false` → 版本號旁掛
+  「未登入」chip(`mon-bad`)。四個誠實輸出:從未回報 → dash(title 從未探測)/
+  `installed:false` → 未安裝 / 有版本 → 原樣印 / 已安裝但版本探測沒回話 → 「已安裝」。
+  **Claude 多一條 registry fallback**:沒有 capability entry 時落回 `MachineView.claudeVersion`
+  (registry 自 T-97ee/T-7c5b 就有的欄),讓舊 warden 的 Claude 欄語意不變;**Codex 沒有
+  對應的 registry 欄,唯一來源就是 capability map**,缺就是誠實的 dash,不准借 claude 的值。
+  時效紀律照舊:capability 來源的值在 `stale !== false` 時掛 `mon-stale`、**值不收回**
+  ——「codex 三小時前沒登入」是 worker 卡在 `machine_unavailable` 唯一的解釋;registry
+  fallback 不是 telemetry,不掛時效標記。
+- **機器 + 狀態是同一欄(T-674d)**:兩欄拆開時,名字格窄到每一列的 machine-id chip 都
+  被擠到第二行。合併後 name / id chip / online badge 同一個 `<td>`;`.mon-machine-name`
+  只在 **desktop(min-width:721px)** `flex-wrap: nowrap`——≤720px 的卡片模式**不能**
+  nowrap,那個模式刻意拿掉了 `.mon-table-wrap` 的 `overflow-x: auto`(見長 token 那節),
+  沒有捲軸吸收的長 machine id 會把整頁推歪。
 - 護欄:`MonitorPage.hardware-freshness.test.tsx`(過期標記 / 從未回報不標 / 真 0 與真
-  false 仍正確顯示)、`MonitorPage.runtime-capabilities.test.tsx`。
+  false 仍正確顯示)、`MonitorPage.runtime-capabilities.test.tsx`(兩欄版本 / 未安裝 /
+  未登入 / 過期 / registry fallback)、`MonitorPage.machine-id.test.tsx`(合併欄的結構
+  不變量)。
 
 ## 長 token 溢出:單一來源在 `.doc-md` 基底(T-d451)
 owner/agent 自由文字會帶**不可斷的長 token**(長 URL、40-hex sha、無空白長字)。

@@ -62,4 +62,19 @@ describe("MonitorPage machine id badge", () => {
     expect(texts).toContain("m-0e7034bd5140");
     expect(texts).toContain("m-6e332737fc31");
   });
+
+  it("keeps the id chip and the online badge in the SAME cell as the name", async () => {
+    // T-674d: 機器 and 狀態 were two columns, which left the name cell narrow
+    // enough that the id chip wrapped to a second line on every row. Merging
+    // them is the fix, so the invariant to hold is structural — all three live
+    // in one <td>. Asserting only "the id renders" would keep passing if a
+    // later change split the columns back apart.
+    renderMonitor();
+    const ids = await screen.findAllByTestId("mon-machine-id");
+    const cell = ids[0].closest("td")!;
+    expect(cell.querySelector(".mon-machine-id")).toBeTruthy();
+    expect(cell.querySelector(".mon-online")).toBeTruthy();
+    // …and there is no separate 狀態 column left holding a second badge.
+    expect(document.querySelectorAll(".mon-online").length).toBe(ids.length);
+  });
 });

@@ -845,7 +845,7 @@ export const zh = {
       ram: "RAM",
       battery: "電量",
       power: "電源",
-      runtimes: "Runtime",
+      codex: "Codex",
     },
     // §3 session table headers
     sessionCol: {
@@ -945,6 +945,16 @@ export const zh = {
       runtimeStale: "過期",
       runtimeStaleHint: "距離上次探測已久,該機之後沒有再回報,這個能力狀態可能已經不成立",
       runtimeUnknown: "從未探測(舊版 warden,或還沒有心跳)",
+      // 各 runtime 自己的版本欄(T-674d)。原本 Runtime 欄的 ✓/✗ 摘要拿掉了,
+      // Claude 與 Codex 各自印出探測到的版本。但原本 ✗ 講的事情還是要講得出來
+      // ——那是 placement 拒絕這台機器的原因——所以「未安裝」「未登入」是格子裡
+      // 的字,不是一個默默消失的版本號。
+      runtimeNotInstalled: "未安裝",
+      runtimeNotInstalledHint: "warden 在這台機器上找不到這個 runtime 的執行檔,無法在此啟動",
+      runtimeNoVersion: "已安裝",
+      runtimeNoVersionHint: "執行檔存在,但版本探測沒有回傳結果",
+      runtimeLoggedOut: "未登入",
+      runtimeLoggedOutHint: "已安裝,但登入探測回報未登入,placement 不會把這個 runtime 派到這台機器",
       // 硬體樣本時效(T-b36a):過期的數值 server 會收回,於是 CPU/RAM/電源
       // 落回 dash——跟「從來沒回報過硬體」是同一個 dash。這兩個標籤就是把兩
       // 個世界分開的東西,要行動的只有後者(這台失聯了,不是它從沒說過話)。

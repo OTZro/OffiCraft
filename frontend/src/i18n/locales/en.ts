@@ -751,7 +751,7 @@ export const en: Dict = {
       ram: "RAM",
       battery: "Battery",
       power: "Power",
-      runtimes: "Runtimes",
+      codex: "Codex",
     },
     sessionCol: {
       member: "Member",
@@ -858,6 +858,20 @@ export const en: Dict = {
       runtimeStaleHint:
         "Last probed a while ago — this machine has not reported since, so this readiness may no longer be true",
       runtimeUnknown: "Never probed — an older warden, or no heartbeat yet",
+      // ── per-runtime version columns (T-674d). The Runtimes column's ✓/✗
+      // digest is gone; Claude and Codex each print their probed version. The
+      // ✗ states it used to carry still have to be sayable, because they are
+      // the reason placement refuses the machine — so "not installed" and "not
+      // signed in" are WORDS in the cell, never a silently missing version.
+      runtimeNotInstalled: "not installed",
+      runtimeNotInstalledHint:
+        "The warden could not resolve this runtime's binary on the machine — it cannot launch here",
+      runtimeNoVersion: "installed",
+      runtimeNoVersionHint:
+        "The binary resolved but its version probe returned nothing",
+      runtimeLoggedOut: "signed out",
+      runtimeLoggedOutHint:
+        "Installed, but the provider login probe says not signed in — placement refuses this runtime on this machine",
       // ── hardware sample age (T-b36a). The server WITHHOLDS the numbers of an
       // expired sample, so cpu/ram/power fall back to a dash — the same dash a
       // machine that has never reported hardware shows. These two labels are

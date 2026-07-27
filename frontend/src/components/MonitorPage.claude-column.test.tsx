@@ -83,13 +83,16 @@ describe("MonitorPage claude version column", () => {
     expect(cell.textContent).toBe("—");
   });
 
-  it("heads the claude column next to Status and keeps the empty row spanning it", async () => {
+  it("heads the claude column next to the merged 機器 column and keeps the empty row spanning it", async () => {
     listMachines.mockResolvedValue([]);
     const { container } = renderMonitor();
     await screen.findAllByRole("columnheader");
     const table = container.querySelector("table.mon-table")!;
     const headers = Array.from(table.querySelectorAll("thead th"));
-    expect(headers[2].textContent).toBe("Claude");
+    // 機器 and 狀態 merged into one column (T-674d), so Claude moved from
+    // index 2 to index 1 and Codex took index 2.
+    expect(headers[1].textContent).toBe("Claude");
+    expect(headers[2].textContent).toBe("Codex");
     // The empty-state cell spans the header count — a stale colSpan after a
     // column change misaligns the whole table without failing anything else.
     const emptyCell = table.querySelector("tbody td[colspan]")!;
