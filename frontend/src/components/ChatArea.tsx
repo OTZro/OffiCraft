@@ -306,7 +306,11 @@ export function ChatArea({
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   // A .md attachment opened in the in-cockpit preview overlay (T-a1c4; null =
   // closed) — carries the blob's display title + serve url.
-  const [mdPreview, setMdPreview] = useState<{ title: string; url: string } | null>(
+  const [mdPreview, setMdPreview] = useState<{
+    title: string;
+    url: string;
+    attachmentId: string;
+  } | null>(
     null,
   );
   // M2-3 file & image gallery panel (header icon toggles it).
@@ -965,6 +969,7 @@ export function ChatArea({
             setMdPreview({
               title: att.filename || t.chat.downloadAttachment,
               url: att.url,
+              attachmentId: att.id,
             })
           }
           renderExtra={(att) => renderAttachmentExtras(att)}
@@ -1429,6 +1434,7 @@ export function ChatArea({
         <MarkdownPreviewOverlay
           title={mdPreview.title}
           url={mdPreview.url}
+          attachmentId={mdPreview.attachmentId}
           onClose={() => setMdPreview(null)}
         />
       )}

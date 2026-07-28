@@ -13,23 +13,33 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n";
 import { authedAttachmentUrl } from "../api/http";
+import { copyAttachmentShareLink } from "../lib/shareLink";
 import { Markdown } from "./Markdown";
-import { CloseIcon, DownloadIcon, FileTextIcon } from "./icons";
+import {
+  CheckIcon,
+  CloseIcon,
+  CopyIcon,
+  DownloadIcon,
+  FileTextIcon,
+} from "./icons";
 
 export function MarkdownPreviewOverlay({
   title,
   url,
+  attachmentId,
   onClose,
 }: {
   /** Display name shown in the header (the blob's filename). */
   title: string;
   /** The blob's serve path (`/api/chat/attachment/<id>`); fetched as text. */
   url: string;
+  attachmentId: string;
   onClose: () => void;
 }) {
   const { t } = useI18n();
   const [source, setSource] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   // Fetch the markdown text once (the authed blob URL — same ?token= gate the
   // download/thumbnail paths use). A non-ok response / network error surfaces
@@ -55,6 +65,16 @@ export function MarkdownPreviewOverlay({
     };
   }, [url]);
 
+  async function onCopyShareLink() {
+    try {
+      await copyAttachmentShareLink(attachmentId);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      console.warn("MarkdownPreviewOverlay: copy share link failed", e);
+    }
+  }
+
   // Esc closes — bound only while mounted (the overlay only mounts open).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -79,6 +99,16 @@ export function MarkdownPreviewOverlay({
             {title}
           </span>
           <div className="md-preview__actions">
+            <button
+              type="button"
+              className="md-preview__download md-preview__share"
+              aria-label={copied ? t.chat.shareLinkCopied : t.chat.copyShareLink}
+              title={copied ? t.chat.shareLinkCopied : t.chat.copyShareLink}
+              onClick={() => void onCopyShareLink()}
+            >
+              {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+              {copied ? t.chat.shareLinkCopied : t.chat.copyShareLink}
+            </button>
             {/* Download — the SECOND action, distinct from preview: the authed
              * blob URL with a download attribute (server forces the bytes). */}
             <a

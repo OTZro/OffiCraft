@@ -1419,6 +1419,10 @@ button.chat__msg-file {
   color: var(--color-accent);
   border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
 }
+.md-preview__share {
+  cursor: pointer;
+  font-family: inherit;
+}
 .md-preview__close {
   display: flex;
   align-items: center;

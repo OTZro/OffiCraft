@@ -5,8 +5,9 @@
 // (pdf) stays a plain download <a>.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, fireEvent, waitFor } from "@testing-library/react";
+import { render, fireEvent, waitFor, within } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
+import { api } from "../api";
 import { ChatArea } from "./ChatArea";
 import type { Member } from "../types";
 import type { ChatMessage } from "../api/adapter";
@@ -103,7 +104,44 @@ describe("chat .md preview action (T-a1c4 / T-7bc2)", () => {
     fireEvent.click(container.querySelector("button.chat__msg-file")!);
     await waitFor(() => expect(getByRole("heading", { name: "Design" })).toBeTruthy());
     // Preview and download are separate: the overlay carries its own 下載 link.
-    const dl = container.querySelector(".md-preview__download") as HTMLAnchorElement;
+    const dl = container.querySelector("a.md-preview__download") as HTMLAnchorElement;
     expect(dl.getAttribute("download")).toBe("design.md");
+  });
+
+  it("carries a 複製分享連結 button that mints THIS attachment's share link", async () => {
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      text: async () => "# Design",
+    })) as unknown as typeof fetch;
+    const mint = vi
+      .spyOn(api, "getChatAttachmentShareLink")
+      .mockResolvedValue("/api/chat/attachment/a-md?sig=test-sig");
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    messages = [
+      msgWith([
+        { id: "a-md", url: "/api/chat/attachment/a-md", filename: "design.md", mime: "text/markdown", isImage: false },
+      ]),
+    ];
+    const { container, getByRole } = render(
+      <I18nProvider>
+        <ChatArea member={mkMember()} />
+      </I18nProvider>,
+    );
+    fireEvent.click(container.querySelector("button.chat__msg-file")!);
+    await waitFor(() => expect(getByRole("heading", { name: "Design" })).toBeTruthy());
+
+    const actions = container.querySelector(".md-preview__actions") as HTMLElement;
+    const share = within(actions).getByRole("button", { name: "複製分享連結" });
+    fireEvent.click(share);
+    await waitFor(() => expect(mint).toHaveBeenCalledWith("a-md"));
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(
+        `${window.location.origin}/api/chat/attachment/a-md?sig=test-sig`,
+      ),
+    );
   });
 });

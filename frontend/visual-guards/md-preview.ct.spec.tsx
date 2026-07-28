@@ -23,6 +23,6 @@ test("desktop 1024: overlay panel lays out with a rendered markdown body", async
   await expect(cmp.getByRole("heading", { name: "產物顯示架構設計" })).toBeVisible();
 
   // Preview and download are two actions: the header keeps a 下載 link.
-  const dl = cmp.locator(".md-preview__download");
+  const dl = cmp.locator("a.md-preview__download");
   await expect(dl).toBeVisible();
 });
