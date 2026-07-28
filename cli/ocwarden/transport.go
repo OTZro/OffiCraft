@@ -37,6 +37,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -355,9 +356,24 @@ func (t *sseTransport) handlePayload(payload []byte) {
 	// (heartbeat / member deltas) stay silent, so this line is signal not noise.
 	t.logf("[ocwarden] command reader: received %s frame (%s)", cmd.RPC, commandTargetLabel(cmd))
 	if err := dispatchCommand(cmd, t.deps); err != nil {
+		// Two different facts, two different lines. A RECEIPT fault means the op
+		// DID run — calling that "dispatch refused" would be a second false
+		// statement in place of the first one. What the operator needs to know is
+		// that this host's view and the server's view have diverged, and that the
+		// server-side receipt deadline (receipt_watch.go) is the thing that will
+		// actually surface it.
+		if errors.Is(err, errReceiptUndelivered) {
+			t.logf("[ocwarden] command reader: %s EXECUTED but its receipt did not reach "+
+				"the server (%s): %v — the server does not know this outcome",
+				cmd.RPC, commandTargetLabel(cmd), err)
+			return
+		}
 		t.logf("[ocwarden] command reader: dispatch refused: %v", err)
 		return
 	}
+	// Reached ONLY when the op ran AND its receipt landed. Until T-b36a step 3
+	// this line also printed for a start/stop whose receipt was dropped — 5,805
+	// of them in 8 days on one host, every one of them an unearned all-clear.
 	t.logf("[ocwarden] command reader: dispatched %s OK (%s)", cmd.RPC, commandTargetLabel(cmd))
 }
 
