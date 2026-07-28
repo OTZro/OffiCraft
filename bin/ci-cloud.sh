@@ -12,7 +12,7 @@
 # check simply stops running — a green with a hole in it).
 #
 # So the subset lives HERE, in the repo, in bash, next to ci.sh, and the
-# workflow does nothing but install a pinned toolchain and call this. Local and
+# workflow (.github/workflows/ci.yml) does nothing but install a pinned toolchain and call this. Local and
 # cloud run the SAME bytes.
 #
 # NAMING: this was `bin/ci-unit.sh` for exactly one day. The owner then widened
@@ -36,6 +36,9 @@
 #       CODE IS FINE. That is precisely why the workflow pins go + node to the
 #       dev machine's exact versions. If you loosen those pins, expect this
 #       class to be where it breaks first.
+#   (3) CONFORMANCE — the HTTP-only black-box behaviour suite: it runs against
+#       a throwaway ocserverd and SQLite database, so the frozen route/spec
+#       surface is checked against live server behaviour without touching prod.
 #
 # WHAT IS DELIBERATELY OUT, and why (NOT an oversight list):
 #   * Playwright CT visual guards — they need a REAL browser and assert
