@@ -862,9 +862,42 @@ func (s *apiServer) runWardenTeardownHere(binPath string) (int, string, bool) {
 // whether server-self is retirable — the drift is the defect, not the wording.
 const serverSelfUndeletableMsg = "the server-local machine cannot be deleted"
 
+// teardownHereForeignTargetMsg is the refusal for the defect T-42a0 exists to
+// close: `teardown-here` NEVER consumed the {machine_id} it was handed.
+// runWardenTeardownHere builds an argv+env addressed by HOME / uid / namespace
+// ONLY — there is no machine selector anywhere on that path — so pointing this
+// verb at machine B ran `ocwarden teardown` against THIS server host's own
+// warden and then wrote RosterStatusRemoved onto B. Two live daemons in one
+// click: the local one destroyed, the named one stranded off the roster (and,
+// since T-9cf8, with its credentials revoked). The name promised a target the
+// implementation could not reach.
+//
+// The refusal deliberately names the two verbs that DO what the caller meant,
+// and deliberately does NOT offer a way around itself: there is no flag, no
+// query parameter and no alternate route that makes this endpoint reach
+// another host. Teaching a bypass here would just re-open the hole under a
+// longer URL.
+func teardownHereForeignTargetMsg(machineID string) string {
+	return "teardown-here only ever tears down the warden running on THIS server " +
+		"host — it carries no machine selector, so it cannot reach " + machineID +
+		"; refusing rather than destroying this host's daemon under another " +
+		"machine's name. To retire a different machine, use POST " +
+		"/api/machines/{machine_id}/uninstall (the remote uninstall the target's " +
+		"own warden executes) and then DELETE /api/machines/{machine_id}. To " +
+		"repair this host's own warden, use install_warden_on_server_host — it " +
+		"runs `ocwarden install --force`, which overwrites an existing install, " +
+		"so nothing has to be torn down first."
+}
+
 // POST /api/machines/{machine_id}/teardown-here — tear the warden down ON THE
 // SERVER HOST (requires=admin_agent since T-6020). CONFIRM-THEN-REMOVE: the member is soft-deleted
 // ONLY on a confirmed teardown (exit 0).
+//
+// ⚠️ {machine_id} IS NOT A TARGET SELECTOR — it never was (T-42a0). The child
+// process is addressed by HOME / uid / OC_NAMESPACE, i.e. always THIS host.
+// The path parameter therefore only identifies which roster row the caller
+// claims to be talking about, and both possible answers are refused: see the
+// two guards below.
 func (s *apiServer) HandleTeardownHereApiMachinesMachineIdTeardownHerePost(w http.ResponseWriter, r *http.Request, machineId string) {
 	machine, err := s.resolveMachine(machineId)
 	if err != nil {
@@ -903,6 +936,26 @@ func (s *apiServer) HandleTeardownHereApiMachinesMachineIdTeardownHerePost(w htt
 	//   - conformance only ever aims this route at an unknown machine id (404).
 	if machine.ID == ServerSelfHost {
 		writeError(w, http.StatusConflict, serverSelfUndeletableMsg)
+		return
+	}
+	// T-42a0: BEHAVIOUR MUST MATCH THE NAME. Everything above this line assumed
+	// the {machine_id} steered the teardown. It never did — see
+	// teardownHereForeignTargetMsg. Naming any machine other than the
+	// server-local one is therefore a misuse with a destructive silent result,
+	// and the only honest answer is to refuse it. Like the guard above, this
+	// sits BEFORE the subprocess: a refusal written after the daemon was
+	// already booted out is worse than no refusal at all.
+	//
+	// CONSEQUENCE, WRITTEN DOWN RATHER THAN DISCOVERED LATER: together with the
+	// T-9cf8 guard above, every target is now refused — the server-local machine
+	// because retiring it revokes credentials fleet-wide, every other machine
+	// because this verb cannot reach it. The subprocess path below is therefore
+	// unreachable through HTTP today. It is kept (rather than deleted along with
+	// the route) because retiring an endpoint on the frozen wire is an owner
+	// decision, not a side effect of closing a defect; runWardenTeardownHere
+	// keeps its own direct tests.
+	if machine.ID != ServerSelfHost {
+		writeError(w, http.StatusConflict, teardownHereForeignTargetMsg(machine.ID))
 		return
 	}
 	binPath, ok := s.resolveOcwardenBinary(w)
