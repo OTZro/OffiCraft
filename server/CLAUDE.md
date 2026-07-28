@@ -157,6 +157,35 @@ owner 2026-07-27 兩句話 + 一個數字:「更新的時候不能塞超過這�
   update 也不得寫 `avatar_attachment_id`；只有專用 avatar mutator 可改該 pointer，
   避免 stale lifecycle/model snapshot 洗掉較新的頭像。
 
+## 收據死線 receipt_missing(T-b36a step 3;`receipt_watch.go`)
+warden 的 start/stop 收據(`command_result`)是「這個 op 真的執行了」的**唯一**證據,而
+warden 端那個 POST 是 best-effort:失敗的回傳值被 start/stop 呼叫端丟掉,於是**整個失敗事實
+不存在於任何地方**。座艙上「op 跑完了、只是我們沒收到回報」與「一切正常」長得一模一樣。
+- **只有被欠收據的那一方能觀察到收據缺席**——warden 沒辦法回報「我的回報失敗了」,那條線本身
+  就是壞的那條。所以死線在 server:frame **被 warden 接走之後**(`armReceiptWatch`,只在
+  enqueue 成功後掛;沒送出去的 frame 由既有 dispatch stamp 自己解釋,不該賴到收據通道頭上)
+  起算 `receiptDeadlineSecs`(90s),cadence tick 開頭 `sweepLapsedReceipts` 掃過期,把
+  `receipt_missing: <人話>` 寫進 member / worker 的 `last_op*`——**座艙「最近操作」既有的讀端**
+  (`mappers.ts` → `MemberDetailPanel` → `AgentDetailPanel` 的 `!lastOpOk && lastOpReason`)。
+  🔴 因此 stamp **必須** `last_op_ok=false`,ok=true 的 reason 在那個面板上根本不會被畫出來。
+- **90s 的來歷是 warden 自己的預算推導,不是量測**:`claudeProbeBudget` 20s + `nudgeSettle` 1s
+  (spawn)或 ~5s kill ladder(stop)+ `commandReportTimeout` 5s + 一個 30s tick 的掃描粒度
+  ≈ 56s,90s 再多留一個 tick。**frame→receipt 的實際分佈至今沒有端到端量測**(warden log 只有
+  warden 側時鐘,server 側 fold 不留 log),所以這裡寫的是推導、不是數據——要改成量測值請先補量測。
+- **解除死線的是「收據**抵達**」,不是「fold 成功寫進去」**:`noteReceiptArrived` 掛在
+  `foldCommandResult` **最前面**,在任何 early return 之前。no-op stop 收據(T-9adc)刻意不 fold,
+  身分掃描又會把它廣播給每一台 warden——綁在 fold 成功上會讓這些收到且讀過的收據全被判成失蹤。
+- 訊息刻意說 **UNKNOWN 而不是 failed**:沒收到收據不代表 op 失敗,可能是 SSE 下行半路死、可能
+  op 跑完 POST 被拒。寫成「失敗」會讓 owner 對一個可能已經在跑的 member 再開一槍。
+- 每次 dispatch **只 stamp 一次**(lapsed watch 被第一次 sweep 消費掉):否則每 30s 重寫
+  `last_op_at` + 噴一個 SSE delta,一次掉收據會變成永久事件流。
+- **繼承已知的單槽覆蓋**(`worker_spawn.go` spawnBlockedReasonCodes 上方那段 KNOWN LIMITATION):
+  `receipt_missing` 與其他 reason 共用同一組 `last_op*`,新的會蓋掉舊的。`receipt_missing`
+  **刻意不列入** `spawnBlockedReasonCodes`——它跟 `wake_timeout` 同類,是 dispatch 層診斷,
+  下一次 START 不該把「上一次沒人回話」洗掉。
+- **UNINSTALL 不掛死線**:它的收據在 warden 端本來就是硬條件(沒拿到 2xx 就不自殺),而且
+  reconcile 會一直重發——它的失敗模式是重試,不是安靜。
+
 ## 已知邊界(誠實列,別當成熟功能用)
 - **config 預設路徑是 CWD-relative `oc.toml`**(binary 沒有 source-path 可錨 repo root);部署正解走 `$OC_CONFIG`。
 

@@ -728,6 +728,10 @@ func (s *apiServer) reconcileOne(m Member, st reconcileState, now float64) recon
 		// A landed START begins a NEW session: drop any prior session's boot_ts
 		// anchor so the fresh agent's first connect re-stamps (T-8fb2 boot_ts fix).
 		s.clearSessionBootTS(m.ID)
+		// The warden now owes a command_result for this START. Armed AFTER the
+		// accepted enqueue only — an unlanded frame is already explained by its
+		// own dispatch stamp (receipt_watch.go).
+		s.armReceiptWatch(m.ID, reconcileCmdStart, warden, now)
 		return decision
 	default: // STOP / UNINSTALL — member_id-only frames, same retry discipline
 		frame, ok := buildTargetFrame(decision.Command, m.ID)
@@ -751,6 +755,19 @@ func (s *apiServer) reconcileOne(m Member, st reconcileState, now float64) recon
 		// stop, or the relocation STOP routed to the running machine's warden): drop
 		// its boot_ts so a later respawn's first connect re-stamps (T-8fb2).
 		s.clearSessionBootTS(m.ID)
+		// STOP only (receipt_watch.go). UNINSTALL is deliberately NOT watched:
+		// its receipt is already load-bearing on the warden side (the warden
+		// blocks on delivery and refuses to self-exit without a 2xx), and the
+		// reconcile keeps re-issuing it — an undelivered uninstall retries
+		// rather than going quiet, which is the failure mode this watch exists
+		// for.
+		if decision.Command == reconcileCmdStop {
+			warden := decision.DispatchWarden
+			if warden == "" {
+				warden = s.wardenTargetOf(m.ID)
+			}
+			s.armReceiptWatch(m.ID, reconcileCmdStop, warden, now)
+		}
 		return decision
 	}
 }
@@ -1129,6 +1146,11 @@ func (s *apiServer) runReconcileTick(now float64) {
 	s.clearRecycleMarkersOnRespawn(members)
 	s.clearStaleStoppingOnOnline(members)
 	s.consumeUninstallIntentOnOffline(members)
+	// The receipt deadline (receipt_watch.go) — swept BEFORE the decide pass so
+	// a start/stop armed by THIS tick always gets a full window, never a same-
+	// tick sweep. Covers workers too: their start/stop rides the member verbs
+	// and their receipts key on the same id namespace.
+	s.sweepLapsedReceipts(now)
 	reconcileLog("tick: %d candidate(s)", len(members))
 	for i := range members {
 		s.reconcileTickMemberLocked(members[i], now)

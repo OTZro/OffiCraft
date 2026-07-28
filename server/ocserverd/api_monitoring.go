@@ -243,6 +243,14 @@ func (s *apiServer) foldCommandResult(commandResult map[string]any, trigger stri
 	// route it to the worker fold FIRST. The warden sends exactly one id per
 	// receipt (command.go), so worker_id present ⇒ this is a worker receipt.
 	workerIDRaw, _ := commandResult["worker_id"].(string)
+	// DISARM THE RECEIPT DEADLINE FIRST (receipt_watch.go), before any of the
+	// routing below can return early. A receipt that ARRIVED proves the report
+	// channel worked, which is the entire question the deadline asks — even when
+	// the fold then declines to write it (a no-op stop receipt, an unknown
+	// member). Disarming only on a successful fold would stamp receipt_missing
+	// on rows whose receipt was received and read.
+	s.noteReceiptArrived(strings.TrimSpace(workerIDRaw))
+	s.noteReceiptArrived(strings.TrimSpace(memberIDRawOf(commandResult)))
 	if workerID := strings.TrimSpace(workerIDRaw); workerID != "" {
 		s.foldWorkerCommandResult(workerID, commandResult, trigger)
 		return

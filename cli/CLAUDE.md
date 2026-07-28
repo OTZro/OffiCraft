@@ -68,6 +68,27 @@ statusLine render 都重跑一次,一秒好幾次),窗沒開 = **下一個 tick 
   還是沒想到。哨兵 `TestHealthyCadenceIsUnchangedByTheFailureBackoff` 釘成功路徑一字未變
   (600s 內 burst 恰在 0/30/60/…,且**不產生** backoff 檔)。
 
+## `dispatched ... OK` 只在收據真的送達時才印(T-b36a step 3;`command.go` / `transport.go`)
+`handlePayload` 的 `dispatched %s OK` 原本只證明「dispatchCommand 沒回 error」,卻被寫成對外的
+成功宣告——而 start/stop 的 `deps.report(...)` 是**裸述句**,收據 POST 失敗(傳輸故障 / 非 2xx)
+的回傳值直接被丟掉。**實測**(2026-07-28,一台機器 8 天的 `ocwarden.out.log`):5,805 行
+`dispatched ... OK`,`receipt` / `command_result` / `500` **零命中**——一個收據被回 500 的 op,
+log 讀起來跟完美執行一模一樣。與 step 1 的 context-report 戳記同一個 bug 家族:**失敗也蓋成功戳**。
+- 修法:start / stop / worker_stop 接住 `deps.report` 的回傳,包成 `errReceiptUndelivered`
+  由 dispatchCommand 回出;`handlePayload` 用 `errors.Is` 分岔,印
+  `%s EXECUTED but its receipt did not reach the server` 而**不**印 OK 那行。
+- 🔴 **排序是刻意的:op 自己的失敗永遠壓過收據失敗**(spawn 被拒 → 回 spawn 的 error;stop
+  incomplete → 回 stop 的 error)。把兩者摻在一起會把「claude 沒起來」這個可行動的事實埋進
+  傳輸故障底下,而 `errReceiptUndelivered` 也會變成兩種意思。`command_receipt_test.go` 兩個
+  排序測試釘死這件事。
+- 🔴 **這條不是本票的 owner 訊號**,別這樣宣稱。實測 `ocwarden.err.log` / `out.log` **零 reader**
+  (現場 `lsof` 唯一持有者是 warden 自己的寫端 fd;repo 全域 grep 到的命中全是寫端,或 server 把
+  「去看那個檔」塞進 `last_op_reason` 的提示字串)。真正到得了 owner 的訊號在 server 端
+  (`server/ocserverd/receipt_watch.go` 的 `receipt_missing`)。這一半**移除的是反向訊號**——
+  一行主動宣稱相反事實的假成功。
+- **UNINSTALL 不變**:它的收據本來就是硬條件(`reportErr != nil` → 不 self-exit),沒有被改道
+  進新的 error class(`TestDispatchCommand_UninstallReceiptContractUnchanged` 釘住)。
+
 ## listen 自救(fail-closed,zombie 防線 B 的 client 半邊)
 `ocagent listen` 兩道自救原本 fail-open(probe 失敗照樣活 = 殭屍永生),已改 fail-closed 帶寬限(`listen.go` 常數 + `listen_run.go` foldProbe/foldRefusal):
 - **tmux session probe 三態**:alive / gone(tmux 明確答「無此 session」→ 2 連 miss 即自殺,不變)/ unknown(tmux 解析不到、spawn fault、timeout → 不再永遠當 alive:連續 `probeUnknownMin`(8)次 ∧ 滿 `probeUnknownGrace`(10min)才 self-exit;unknown 會重置 gone debounce,絕不瞬殺健康 listener)。
