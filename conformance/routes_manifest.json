@@ -288,7 +288,7 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "get_chat_attachment_share_link",
     "method": "GET",
     "path": "/api/chat/attachments/{attachment_id}/share-link",
     "requires": "machine"

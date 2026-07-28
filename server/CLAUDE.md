@@ -114,6 +114,19 @@ owner 原話:「我建議所有換手都可以給他機會收尾」。**relocate
   - 🔴 **判斷輸入的完整決策表在 `worker_ownerop_winddown_t98f4_test.go` 檔頭**(active × online × refocus × stopped 十六格逐格期望 + 兩道上游閘)。**兩個 HIGH 都出在這同一個判斷式**——第一次漏掉一個狀態、第二次把範圍畫太寬——所以表是刻意的:動這個函式前先在表上找到你的改動,**找不到對應格子 = 表過期了,或第三個洞就在那裡**。cell 1..4 各有自己的哨兵(上面三顆 mutant 就是在證明這件事),cell 5-8 / 9-16 因為前面的 conjunct 短路而各只需一條。
 
 
+## 分享連結的 mint seam 也是 agent 面(反轉一個既有決定)
+
+`GET /api/chat/attachments/{attachment_id}/share-link` 一直存在,但那一列原本帶著 `MCPExclude: true, // a UI convenience seam, not an agent tool` —— **那是刻意的決定,不是遺漏**。現在它反轉成 MCP 工具 `get_chat_attachment_share_link`。
+
+- **為什麼反轉**:agent 交付檔案的完整路徑是 upload → pin,而收件者要拿到 bytes,**唯一**的路是自己登入座艙、手動複製連結。也就是說 agent 產得出檔案、卻永遠產不出一條能交出去的連結——而那正是它唯一還缺的東西。
+- 🔴 **授權邊界一個字沒動**:`Requires` 仍是 `principalMachine`,任何已認證 principal 本來就打得到這條 REST。**但「可發現性提高」不等於「風險中性」**——工具進了 `tools/list` 之後 mint 會變得頻繁得多,而每一條 mint 出來的連結都是**永久、不可撤銷、免憑證**的(`sharesig.go`)。這兩句要一起讀:少讀哪一句都會得到一個過度樂觀或過度恐慌的結論。
+- **兩個既存事實**(解釋為何這不是新增讀取能力):(a) blob GET 同樣是 machine floor、同樣沒有 ownership 檢查,agent 拿自己的 token 本來就讀得到任何 blob;(b) `get_chat_attachments?with=<member_id>` 早就是 MCP 工具,列舉別人對話的 attachment id 早在 agent 面上。**沒有 ownership 檢查這件事因此是既有缺口、不是本次引入的**——要補是另一個 owner 決定(會改到既有端點行為)。
+- 🔴 **真正新增的是「把讀取權轉授給未認證第三方」的能力,(a)(b) 兩個事實講不到這一點**——本次之後,**組合**起來的這條路第一次整條都在 agent 工具面上:`get_chat_attachments(with=<任何成員>)` 拿到別人私訊裡的 attachment id → `get_chat_attachment_share_link(id)` → 一條永久、免憑證、撤不回的公開網址。本次之前第 2 步需要 agent 知道一條沒出現在 `tools/list` 的 REST 路徑;現在兩步都被 catalog 廣告、seed 還教了範例。**唯一的護欄是 seed 裡一句沒有任何強制力的規範**(「只為你本來就要交出去的東西簽」)。寫在這裡是為了讓下一個 reviewer 直接秤這個**組合**,不必自己重推一遍。
+- **blob GET 本身仍 `MCPExclude`**:bytes 走 streaming seam(`ocagent download`),永遠不進 JSON tool result。
+- ⚠️ **本次發現但**刻意未修**的 doc↔碼 矛盾(留給維護者裁,見憲章 §8 護欄)**:上面事實 (a) 說 blob GET 沒有 ownership 檢查(碼上確實如此——`api_chat.go` 的 handler 就是一個裸 `GetChatAttachment`,沒有任何 caller 比對),但**兩份文件說相反的話**:`routes.go` 該列的 `Summary` 寫 `owner-gated`,`spec/openapi.json` 該 operation 的 description 更寫明「scoped to that owner … **a caller can not fetch another owner's attachment**」。那是**退役 Python 多 owner 時代**的語言,描述一個 Go handler 裡已經不存在的 `owner` 依賴。單 owner 化之後那句「不能拿到**別的 owner** 的附件」變成空真,但 `owner-gated` 這個詞任何人都會讀成「只有 owner 拿得到」,而這條路由的門檻是 `principalMachine`。**沒有在本 PR 一併改**,因為 (i) 動 `spec/openapi.json` 是凍結 wire 面、依 §13 要 spec-first 過 owner,(ii) 依「兩份權威打架不自裁」原則,該由維護者定哪邊算數。**這是 T-5336 §(1) 處理過的同一種形狀**(description 承諾了地板守不住的事)——那次的裁定是「同批修掉那句話」。
+- **回的是 server-relative path**:server 的 host 寫死 loopback,它不知道自己的對外 origin(座艙是在瀏覽器端用 `window.location.origin` 絕對化的)。agent 端由 seed 教它自己前綴——**刻意不讓 server 猜**,猜就得新增一個會過期的設定項。
+- 同批更新(憲章 §9c):`spec/mcp-catalog.json`(手維護)、`conformance/routes_manifest.json` 的 `mcp_tool` 欄、`seeds/system_interaction.md` §4。哨兵 `api_chat_share_link_tool_test.go`:工具在面上**且 floor 沒動**、mint 出來的就是 `shareSigFor` 那一份(沒有第二條簽名路徑)、免憑證可讀、竄改/他檔/空 sig/裸請求/sig 打別條 route 全 401、未知 blob id 回 not_found(不 mint 進虛空)。**刻意沒有「過期」測試**——share sig 依設計就沒有效期,測一個不存在的機制等於釘一份 repo 沒有的契約。
+
 ## 聊天附件:一則訊息/一張卡與它的 blob 是同一筆寫入(T-e2b2)
 
 - **拒絕在儲存之前,寫入是全有全無。** 帶附件的四個面(`post_chat`、`post_task_message`、開請示卡、回答請示卡)先把**每一項**解析完才寫任何東西;**既無 `id` 也無 `data_b64` 的項目一律 400**(owner 2026-07-27 rc-3a589dfec503 拍板;此前聊天與任務訊息兩面是靜默丟棄、照樣回 200——寄件者以為檔案送到了)。

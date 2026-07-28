@@ -497,13 +497,28 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			ShareSig:   true,
 		},
 		{
-			Method:     "GET",
-			Path:       "/api/chat/attachments/{attachment_id}/share-link",
-			Handler:    w.HandleGetChatAttachmentShareLinkApiChatAttachmentsAttachmentIdShareLinkGet,
-			Auth:       authGated,
-			Requires:   principalMachine,
-			Summary:    "Mint a permanent single-file share link (?sig= HMAC; grants read of this one attachment only).",
-			MCPExclude: true, // a UI convenience seam, not an agent tool
+			Method:   "GET",
+			Path:     "/api/chat/attachments/{attachment_id}/share-link",
+			Handler:  w.HandleGetChatAttachmentShareLinkApiChatAttachmentsAttachmentIdShareLinkGet,
+			Auth:     authGated,
+			Requires: principalMachine,
+			Summary:  "Mint a permanent single-file share link (?sig= HMAC; grants read of this one attachment only).",
+			// This row used to read `MCPExclude: true, // a UI convenience
+			// seam, not an agent tool`. That call is REVERSED here, on
+			// purpose: minting is an agent seam too. An agent that produces a
+			// deliverable uploads the blob and pins it, and the only way its
+			// reader then gets the bytes is to sign in to the cockpit and copy
+			// the link by hand — the agent could make the file but never a
+			// usable link to it, which is the one thing it needed to hand over.
+			//
+			// The authz floor is UNCHANGED (machine): every authenticated
+			// principal already reached this route over REST, so no caller
+			// gains a capability it lacked. What changes is discoverability —
+			// and that is not risk-neutral: minting will happen far more often
+			// now, and every minted link is permanent, unrevocable, and
+			// credential-less (sharesig.go). Read that file before widening
+			// this seam any further.
+			MCPTool: "get_chat_attachment_share_link",
 		},
 		{
 			Method:   "GET",
