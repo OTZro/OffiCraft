@@ -6,11 +6,15 @@
 # went PUBLIC: standard-runner minutes are free for public repos. The real
 # reason this stays local is that the gate below includes host-shaped and
 # regenerate-and-byte-compare steps whose authority we do not want to move.)
-# A STRICT SUBSET — the frontend + backend UNIT suites only — now also runs on
-# every pull request via .github/workflows/unit.yml, which calls bin/ci-unit.sh;
-# that script is the single definition of the subset, so the cloud check cannot
-# grow a second, drifting list. It is a cross-check on a clean Linux box, NOT
-# land authority. Runs, in order, failing
+# A SUBSET — everything a Linux runner can honestly run: the unit suites, the
+# consistency / wire-freeze drift gates, and the black-box conformance suite —
+# now also runs on every pull request via .github/workflows/ci.yml, which calls
+# bin/ci-cloud.sh; that script is the single definition of the subset, so the
+# cloud check cannot grow a second, drifting list. What stays LOCAL-ONLY:
+# Playwright CT (real-browser layout — font/rasterisation差異 makes a runner red
+# for the wrong reason), gitleaks + path denylist, and e2e_test (real fleet
+# host). The cloud check is a cross-check on a clean Linux box, NOT land
+# authority. Runs, in order, failing
 # fast on the first non-zero step:
 #   1. golang            — gofmt + go vet + go build + committed-prebuilt
 #                          parity dryrun + go test -count=1 (cache-defeat: a
