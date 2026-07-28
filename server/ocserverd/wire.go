@@ -750,6 +750,9 @@ type taskDTO struct {
 	// handed over from (T-ba04); "" / "" when never reassigned.
 	ReassignedFrom     string        `json:"reassigned_from"`
 	ReassignedFromKind string        `json:"reassigned_from_kind"`
+	HandoverNote       string        `json:"handover_note"`
+	HandoverNoteTS     float64       `json:"handover_note_ts"`
+	HandoverNoteBy     string        `json:"handover_note_by"`
 	WaitingReason      string        `json:"waiting_reason"`
 	CreatedTS          float64       `json:"created_ts"`
 	UpdatedTS          float64       `json:"updated_ts"`
@@ -1040,6 +1043,9 @@ func newTaskDTO(t Task, steps []TaskStep, deps []string, cardStatus map[string]s
 		CreatorID:          t.CreatorID,
 		ReassignedFrom:     t.ReassignedFrom,
 		ReassignedFromKind: t.ReassignedFromKind,
+		HandoverNote:       t.HandoverNote,
+		HandoverNoteTS:     t.HandoverNoteTS,
+		HandoverNoteBy:     t.HandoverNoteBy,
 		WaitingReason:      t.WaitingReason,
 		CreatedTS:          t.CreatedTS,
 		UpdatedTS:          t.UpdatedTS,

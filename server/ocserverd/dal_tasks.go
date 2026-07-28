@@ -49,6 +49,9 @@ type Task struct {
 	// reassigned (or pre-column rows).
 	ReassignedFrom     string
 	ReassignedFromKind string
+	HandoverNote       string
+	HandoverNoteTS     float64
+	HandoverNoteBy     string
 	// OutsourceRuntime / OutsourceModel / OutsourceEffort / OutsourceMachine is
 	// the resolved outsource spec of a task on the outsource track (T-35e0,
 	// migrations/00029): what the worker minted for it is given. '' on every
@@ -97,6 +100,7 @@ const taskColumns = `id, type_key, title, dedupe_key, inputs, description,
 	status, lock, priority, executor_kind, executor_id, creator_id, waiting_reason,
 	created_ts, updated_ts, closed_ts, closeout_ts, duplicate_of,
 	reassigned_from, reassigned_from_kind,
+	handover_note, handover_note_ts, handover_note_by,
 	outsource_runtime, outsource_model, outsource_effort, outsource_machine,
 	outsource_dispatched,
 	handoff, handoff_note, handoff_task_id, frozen_by`
@@ -117,6 +121,7 @@ func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 		&t.WaitingReason,
 		&t.CreatedTS, &t.UpdatedTS, &t.ClosedTS, &t.CloseoutTS, &t.DuplicateOf,
 		&t.ReassignedFrom, &t.ReassignedFromKind,
+		&t.HandoverNote, &t.HandoverNoteTS, &t.HandoverNoteBy,
 		&t.OutsourceRuntime, &t.OutsourceModel, &t.OutsourceEffort, &t.OutsourceMachine,
 		&dispatched,
 		&t.Handoff, &t.HandoffNote, &t.HandoffTaskID, &t.FrozenBy,
@@ -259,7 +264,7 @@ func (d *DAL) PutTask(t Task) error {
 	}
 	_, err = d.db.Exec(`
 		INSERT INTO task (`+taskColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			type_key = excluded.type_key, title = excluded.title,
 			dedupe_key = excluded.dedupe_key, inputs = excluded.inputs,
@@ -275,6 +280,9 @@ func (d *DAL) PutTask(t Task) error {
 			duplicate_of = excluded.duplicate_of,
 			reassigned_from = excluded.reassigned_from,
 			reassigned_from_kind = excluded.reassigned_from_kind,
+			handover_note = excluded.handover_note,
+			handover_note_ts = excluded.handover_note_ts,
+			handover_note_by = excluded.handover_note_by,
 			outsource_runtime = excluded.outsource_runtime,
 			outsource_model = excluded.outsource_model,
 			outsource_effort = excluded.outsource_effort,
@@ -289,6 +297,7 @@ func (d *DAL) PutTask(t Task) error {
 		t.WaitingReason,
 		t.CreatedTS, t.UpdatedTS, t.ClosedTS, t.CloseoutTS, t.DuplicateOf,
 		t.ReassignedFrom, t.ReassignedFromKind,
+		t.HandoverNote, t.HandoverNoteTS, t.HandoverNoteBy,
 		NormalizeRuntime(t.OutsourceRuntime),
 		t.OutsourceModel, t.OutsourceEffort, t.OutsourceMachine,
 		dispatched,

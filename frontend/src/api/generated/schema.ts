@@ -5742,6 +5742,24 @@ export interface components {
              * @default
              */
             handoff_task_id: string;
+            /**
+             * Handover Note
+             * @description The latest durable reassign handover note.
+             * @default
+             */
+            handover_note: string;
+            /**
+             * Handover Note By
+             * @description Verified actor that wrote ``handover_note``.
+             * @default
+             */
+            handover_note_by: string;
+            /**
+             * Handover Note Ts
+             * @description Epoch seconds when ``handover_note`` was written.
+             * @default 0
+             */
+            handover_note_ts: number;
             /** Id */
             id: string;
             /** Inputs */
@@ -6136,7 +6154,7 @@ export interface components {
         };
         /**
          * TaskReassignDTO
-         * @description Reassign request (``POST /api/tasks/{task_id}/reassign`` / MCP ``reassign_task``): the new executor target plus an optional handover note the server appends to the new executor's notification chat message.
+         * @description Reassign request (``POST /api/tasks/{task_id}/reassign`` / MCP ``reassign_task``): the new executor target plus an optional handover note written as the task's latest durable handover context. Member targets also receive the existing notification chat message.
          */
         TaskReassignDTO: {
             /**

@@ -4417,6 +4417,24 @@
             "title": "Handoff Task Id",
             "type": "string"
           },
+          "handover_note": {
+            "default": "",
+            "description": "The latest durable reassign handover note.",
+            "title": "Handover Note",
+            "type": "string"
+          },
+          "handover_note_by": {
+            "default": "",
+            "description": "Verified actor that wrote ``handover_note``.",
+            "title": "Handover Note By",
+            "type": "string"
+          },
+          "handover_note_ts": {
+            "default": 0.0,
+            "description": "Epoch seconds when ``handover_note`` was written.",
+            "title": "Handover Note Ts",
+            "type": "number"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -5084,7 +5102,7 @@
         "type": "object"
       },
       "TaskReassignDTO": {
-        "description": "Reassign request (``POST /api/tasks/{task_id}/reassign`` / MCP ``reassign_task``): the new executor target plus an optional handover note the server appends to the new executor's notification chat message.",
+        "description": "Reassign request (``POST /api/tasks/{task_id}/reassign`` / MCP ``reassign_task``): the new executor target plus an optional handover note written as the task's latest durable handover context. Member targets also receive the existing notification chat message.",
         "properties": {
           "note": {
             "anyOf": [

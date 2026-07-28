@@ -170,6 +170,12 @@ func (s *apiServer) buildWorkerBootContext(w OutsourceWorker, t Task, manual *Ta
 		b.WriteString(strings.TrimSpace(t.Description))
 		b.WriteString("\n")
 	}
+	if t.HandoverNote != "" {
+		b.WriteString("\n## 交接備註\n\n")
+		fmt.Fprintf(&b, "- 時間：%.3f\n- 發送者：`%s`\n\n%s\n",
+			t.HandoverNoteTS, t.HandoverNoteBy, t.HandoverNote)
+		b.WriteString("這則備註保留自先前交接；請依時間與前任確認是否仍適用。\n")
+	}
 
 	// T-ba04: a task minted onto you while it is in `reassigning` is a TAKEOVER,
 	// not a fresh assignment — you have a predecessor to hand over WITH. Print

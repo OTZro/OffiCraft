@@ -638,10 +638,12 @@ func TestReassignOutsourceSuccessorClaimsViaGetMyTaskThenTakesOver(t *testing.T)
 	api.noOutsource = true
 	putActiveMember(t, api, "m-old", "Ken", KindAssistant)
 	task := createAdHocTask(t, api, "m-old")
+	note := strings.Repeat("交接", 1250)
 
 	// Reassign the member's task to outsource — the scheduler mints the successor.
 	rec := reassign(t, api, task.ID, map[string]any{
 		"target": map[string]any{"kind": "outsource", "model": "sonnet", "effort": "medium"},
+		"note":   note,
 	}, "owner", "owner")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reassign: %d %s", rec.Code, rec.Body.String())
@@ -669,6 +671,11 @@ func TestReassignOutsourceSuccessorClaimsViaGetMyTaskThenTakesOver(t *testing.T)
 		claimed.Task.ReassignedFromKind != TaskExecutorMember {
 		t.Fatalf("claim DTO must carry the predecessor stamp: %+v", claimed.Task)
 	}
+	if claimed.Task.HandoverNote != note ||
+		claimed.Task.HandoverNoteBy != "owner" ||
+		claimed.Task.HandoverNoteTS <= 0 {
+		t.Fatalf("worker claim must carry the durable handover note: %+v", claimed.Task)
+	}
 	if w, _ := api.dal.GetOutsourceWorker(workerID); w == nil || w.Status != WorkerStatusActive {
 		t.Fatalf("first claim must flip assigned→active")
 	}
@@ -680,6 +687,57 @@ func TestReassignOutsourceSuccessorClaimsViaGetMyTaskThenTakesOver(t *testing.T)
 	stored, _ := api.dal.GetTask(task.ID)
 	if stored == nil || stored.Lock != TaskLockNone {
 		t.Fatalf("takeover claim must clear the reassigning lock: %+v", stored)
+	}
+}
+
+func TestReassignPreservesHandoverNoteWhenLaterReassignOmitsNote(t *testing.T) {
+	api := newTasksTestServer(t)
+	putActiveMember(t, api, "m-old", "Ken", KindAssistant)
+	putActiveMember(t, api, "m-new", "Rei", KindAssistant)
+	task := createAdHocTask(t, api, "m-old")
+
+	if rec := reassign(t, api, task.ID, map[string]any{
+		"target": map[string]any{"kind": "member", "member_id": "m-new"},
+		"note":   "先確認已完成的匯入",
+	}, "owner", "owner"); rec.Code != http.StatusOK {
+		t.Fatalf("first reassign: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := reassign(t, api, task.ID,
+		memberTarget("m-old"), "owner", "owner"); rec.Code != http.StatusOK {
+		t.Fatalf("second reassign: %d %s", rec.Code, rec.Body.String())
+	}
+	stored, err := api.dal.GetTask(task.ID)
+	if err != nil || stored == nil || stored.HandoverNote != "先確認已完成的匯入" {
+		t.Fatalf("omitted note must preserve the existing handover note: %v %+v", err, stored)
+	}
+	if rec := reassign(t, api, task.ID, map[string]any{
+		"target": map[string]any{"kind": "member", "member_id": "m-new"},
+		"note":   "再確認匯入後的驗收",
+	}, "owner", "owner"); rec.Code != http.StatusOK {
+		t.Fatalf("third reassign: %d %s", rec.Code, rec.Body.String())
+	}
+	stored, err = api.dal.GetTask(task.ID)
+	if err != nil || stored == nil || stored.HandoverNote != "再確認匯入後的驗收" {
+		t.Fatalf("noted reassignment must replace the current handover note: %v %+v", err, stored)
+	}
+}
+
+func TestReassignRejectsHandoverNoteOverRuneLimit(t *testing.T) {
+	api := newTasksTestServer(t)
+	putActiveMember(t, api, "m-old", "Ken", KindAssistant)
+	putActiveMember(t, api, "m-new", "Rei", KindAssistant)
+	task := createAdHocTask(t, api, "m-old")
+
+	rec := reassign(t, api, task.ID, map[string]any{
+		"target": map[string]any{"kind": "member", "member_id": "m-new"},
+		"note":   strings.Repeat("交", chatBodyMaxChars+1),
+	}, "owner", "owner")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("over-limit note must reject without truncation: %d %s", rec.Code, rec.Body.String())
+	}
+	stored, err := api.dal.GetTask(task.ID)
+	if err != nil || stored == nil || stored.ExecutorID != "m-old" || stored.HandoverNote != "" {
+		t.Fatalf("rejected note must leave task untouched: %v %+v", err, stored)
 	}
 }
 

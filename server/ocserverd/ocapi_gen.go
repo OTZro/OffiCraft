@@ -1553,13 +1553,22 @@ type TaskDTO struct {
 	HandoffNote *string `json:"handoff_note,omitempty"`
 
 	// HandoffTaskId The successor task the handover points at ("" for ``handoff='none'``).
-	HandoffTaskId *string                 `json:"handoff_task_id,omitempty"`
-	Id            string                  `json:"id"`
-	Inputs        *map[string]interface{} `json:"inputs,omitempty"`
-	Lock          *string                 `json:"lock,omitempty"`
-	Priority      string                  `json:"priority"`
-	ProgressDone  int                     `json:"progress_done"`
-	ProgressTotal int                     `json:"progress_total"`
+	HandoffTaskId *string `json:"handoff_task_id,omitempty"`
+
+	// HandoverNote The latest durable reassign handover note.
+	HandoverNote *string `json:"handover_note,omitempty"`
+
+	// HandoverNoteBy Verified actor that wrote ``handover_note``.
+	HandoverNoteBy *string `json:"handover_note_by,omitempty"`
+
+	// HandoverNoteTs Epoch seconds when ``handover_note`` was written.
+	HandoverNoteTs *float64                `json:"handover_note_ts,omitempty"`
+	Id             string                  `json:"id"`
+	Inputs         *map[string]interface{} `json:"inputs,omitempty"`
+	Lock           *string                 `json:"lock,omitempty"`
+	Priority       string                  `json:"priority"`
+	ProgressDone   int                     `json:"progress_done"`
+	ProgressTotal  int                     `json:"progress_total"`
 
 	// ReassignedFrom The PREDECESSOR the task was last handed over from (T-ba04 轉派交接): the id (a member id or an outsource worker id) of the executor the task moved AWAY from on its most recent reassign, so the successor and the cockpit can name who to hand over WITH. "" on a task never reassigned (or rows created before the column existed). additive-optional.
 	ReassignedFrom *string `json:"reassigned_from,omitempty"`
@@ -1701,7 +1710,7 @@ type TaskPriorityUpdateDTO struct {
 	Priority string `json:"priority"`
 }
 
-// TaskReassignDTO Reassign request (“POST /api/tasks/{task_id}/reassign“ / MCP “reassign_task“): the new executor target plus an optional handover note the server appends to the new executor's notification chat message.
+// TaskReassignDTO Reassign request (“POST /api/tasks/{task_id}/reassign“ / MCP “reassign_task“): the new executor target plus an optional handover note written as the task's latest durable handover context. Member targets also receive the existing notification chat message.
 type TaskReassignDTO struct {
 	Note *string `json:"note,omitempty"`
 

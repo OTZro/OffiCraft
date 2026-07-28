@@ -33,7 +33,9 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // taskLog emits one task-lifecycle observability line to stderr. Used for the
@@ -990,6 +992,12 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 	if !decodeJSONBodyRequired(w, r, &body, "target") {
 		return
 	}
+	note := trimmedOrEmpty(body.Note)
+	if n := utf8.RuneCountInString(note); n > chatBodyMaxChars {
+		writeError(w, http.StatusBadRequest, "handover note is "+strconv.Itoa(n)+
+			" chars, over the "+strconv.Itoa(chatBodyMaxChars)+"-char limit")
+		return
+	}
 	t, err := s.resolveTask(taskId)
 	if err != nil {
 		writeResolveError(w, err, "task", taskId)
@@ -1244,6 +1252,11 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 	}
 	t.Status = DeriveTaskStatus(rsteps)
 	t.WaitingReason = ""
+	if note != "" {
+		t.HandoverNote = note
+		t.HandoverNoteTS = now
+		t.HandoverNoteBy = currentActor(r)
+	}
 	// Stamp the PREDECESSOR (T-ba04): the executor the task just moved AWAY from
 	// — persisted so the successor's boot context / chat pairing message and the
 	// cockpit 任務卡 can name who to hand over WITH, and so the takeover dismiss
