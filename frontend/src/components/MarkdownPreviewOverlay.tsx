@@ -9,6 +9,16 @@
 // panel does not dismiss): the caller holds the open state and passes the blob's
 // serve url + display title. Shared by the chat attachment strip AND the task
 // artifact popover — one preview surface, not two.
+//
+// TWO SOURCE MODES (one surface, still not two):
+//   - `url`    — a stored blob, fetched as text. It carries a REQUIRED
+//                `attachmentId`, so the header keeps both blob actions: the
+//                copyable share link and the 下載 link.
+//   - `source` — text the caller ALREADY holds (a chat message body). Nothing to
+//                fetch, nothing to download and nothing to share: the bytes
+//                never were a file, so both links are absent rather than
+//                pointing at a fabricated blob url. Single newlines are HARD
+//                breaks here, matching the chat bubble the text came from.
 
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n";
@@ -23,31 +33,53 @@ import {
   FileTextIcon,
 } from "./icons";
 
+type MarkdownPreviewOverlayProps = {
+  /** Display name shown in the header (the blob's filename, or the sender of
+   * the message being read). */
+  title: string;
+  onClose: () => void;
+} & (
+  | {
+      /** The blob's serve path (`/api/chat/attachment/<id>`); fetched as text. */
+      url: string;
+      /** The blob's own id — the subject of the copyable share link. REQUIRED
+       * with `url`: a stored blob always has one, and the union is what stops a
+       * caller from opening a file view with no way to share it. */
+      attachmentId: string;
+      source?: never;
+    }
+  | {
+      /** Markdown text the caller already holds — rendered as-is, no fetch. */
+      source: string;
+      url?: never;
+      /** No blob, so no share link: there is nothing for a link to point at. */
+      attachmentId?: never;
+    }
+);
+
 export function MarkdownPreviewOverlay({
   title,
   url,
   attachmentId,
+  source: inlineSource,
   onClose,
-}: {
-  /** Display name shown in the header (the blob's filename). */
-  title: string;
-  /** The blob's serve path (`/api/chat/attachment/<id>`); fetched as text. */
-  url: string;
-  attachmentId: string;
-  onClose: () => void;
-}) {
+}: MarkdownPreviewOverlayProps) {
   const { t } = useI18n();
-  const [source, setSource] = useState<string | null>(null);
+  const [fetched, setFetched] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
+  // The text to render. An inline source is authoritative and synchronous — it
+  // never passes through the loading/error states, which only describe a fetch.
+  const source = inlineSource ?? fetched;
 
   // Fetch the markdown text once (the authed blob URL — same ?token= gate the
   // download/thumbnail paths use). A non-ok response / network error surfaces
   // the honest error state, never a blank render.
   useEffect(() => {
+    if (url === undefined) return;
     let alive = true;
-    setSource(null);
+    setFetched(null);
     setFailed(false);
     fetch(authedAttachmentUrl(url))
       .then((r) => {
@@ -55,7 +87,7 @@ export function MarkdownPreviewOverlay({
         return r.text();
       })
       .then((text) => {
-        if (alive) setSource(text);
+        if (alive) setFetched(text);
       })
       .catch((e) => {
         if (alive) setFailed(true);
@@ -67,6 +99,9 @@ export function MarkdownPreviewOverlay({
   }, [url]);
 
   async function onCopyShareLink() {
+    // Only a stored blob has an id to share; the button below is not rendered
+    // for an inline source, so this guard is the type-level echo of that.
+    if (attachmentId === undefined) return;
     setCopyFailed(false);
     try {
       await copyAttachmentShareLink(attachmentId);
@@ -103,42 +138,50 @@ export function MarkdownPreviewOverlay({
             {title}
           </span>
           <div className="md-preview__actions">
-            <button
-              type="button"
-              className="md-preview__download md-preview__share"
-              aria-label={
-                copyFailed
-                  ? t.chat.shareLinkCopyFailed
-                  : copied
-                    ? t.chat.shareLinkCopied
-                    : t.chat.copyShareLink
-              }
-              title={
-                copyFailed
-                  ? t.chat.shareLinkCopyFailed
-                  : copied
-                    ? t.chat.shareLinkCopied
-                    : t.chat.copyShareLink
-              }
-              onClick={() => void onCopyShareLink()}
-            >
-              {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
-              {copyFailed
-                ? t.chat.shareLinkCopyFailed
-                : copied
-                  ? t.chat.shareLinkCopied
-                  : t.chat.copyShareLink}
-            </button>
-            {/* Download — the SECOND action, distinct from preview: the authed
-             * blob URL with a download attribute (server forces the bytes). */}
-            <a
-              className="md-preview__download"
-              href={authedAttachmentUrl(url)}
-              download={title || undefined}
-            >
-              <DownloadIcon size={14} />
-              {t.chat.mdPreview.download}
-            </a>
+            {/* Share + download are BLOB actions: both exist only in `url`
+             * mode. An inline source is not a file — it has no id to share and
+             * no bytes to download, so neither button is fabricated for it. */}
+            {url !== undefined && (
+              <>
+                <button
+                  type="button"
+                  className="md-preview__download md-preview__share"
+                  aria-label={
+                    copyFailed
+                      ? t.chat.shareLinkCopyFailed
+                      : copied
+                        ? t.chat.shareLinkCopied
+                        : t.chat.copyShareLink
+                  }
+                  title={
+                    copyFailed
+                      ? t.chat.shareLinkCopyFailed
+                      : copied
+                        ? t.chat.shareLinkCopied
+                        : t.chat.copyShareLink
+                  }
+                  onClick={() => void onCopyShareLink()}
+                >
+                  {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+                  {copyFailed
+                    ? t.chat.shareLinkCopyFailed
+                    : copied
+                      ? t.chat.shareLinkCopied
+                      : t.chat.copyShareLink}
+                </button>
+                {/* Download — the SECOND action, distinct from preview: the
+                 * authed blob URL with a download attribute (server forces the
+                 * bytes). */}
+                <a
+                  className="md-preview__download"
+                  href={authedAttachmentUrl(url)}
+                  download={title || undefined}
+                >
+                  <DownloadIcon size={14} />
+                  {t.chat.mdPreview.download}
+                </a>
+              </>
+            )}
             <button
               type="button"
               className="md-preview__close"
@@ -155,7 +198,24 @@ export function MarkdownPreviewOverlay({
           ) : source === null ? (
             <div className="md-preview__status">{t.chat.mdPreview.loading}</div>
           ) : (
-            <Markdown source={source} className="md-preview__md" />
+            /* `.doc-md` is the SHARED markdown skin (headings, code, tables,
+             * links, callouts) every other render site wears — the task manual,
+             * the role doc, the reply card, the chat bubble. Rendering without
+             * it left this overlay on bare UA defaults: black-on-card headings,
+             * unstyled code, no callout colour. One class, same document look
+             * as the surface the file was opened from. */
+            <Markdown
+              source={source}
+              className="md-preview__md doc-md"
+              /* An inline source is a CHAT message: Enter meant "new line"
+               * when it was typed and the bubble renders it that way, so the
+               * full-view read of the same text must keep those newlines.
+               * Standard markdown folds them into spaces, which reflowed a
+               * plain multi-line message into one run-on line. A fetched .md
+               * blob is a document, not a chat line — it keeps standard
+               * soft-wrap, same as every other document surface. */
+              breaks={inlineSource !== undefined}
+            />
           )}
         </div>
       </div>

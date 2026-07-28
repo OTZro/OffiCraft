@@ -798,6 +798,8 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  /* Anchors the incoming bubble's corner 放大閱讀 button (.chat__msg-expand). */
+  position: relative;
   /* T-84c8: see .chat__msg — clamp to the capped row so an unbreakable
    * markdown <pre> scrolls inside the bubble instead of widening it. */
   min-width: 0;
@@ -869,6 +871,60 @@
  * colour there and let the chip background carry the distinction. */
 .chat__msg--me .chat__msg-text.doc-md code {
   color: inherit;
+}
+/* 放大閱讀 — the corner button on an INCOMING bubble that reopens the message
+ * body in the shared full-view overlay (.md-preview). A long agent answer is a
+ * document; the thread column is not where you read one.
+ *
+ * Reveal follows the attachment 分享 button's established contract: hidden until
+ * the row is hovered or the button itself takes keyboard focus, so a quiet
+ * thread stays quiet.
+ *
+ * The bubble RESERVES the corner (--expandable below) rather than letting the
+ * button float over the text. Floating is what a full-width surface (Slack) can
+ * afford; a chat bubble shrink-wraps its content, so on a one-line message the
+ * button lands squarely on the last characters — a hovered 「短訊息也有按鈕嗎？」
+ * lost its 「？」. Reserved space costs ~19px of right padding on incoming text
+ * bubbles and never hides a glyph.
+ *
+ * Coarse pointers have no hover to reveal it with, so there it is always
+ * visible at reduced emphasis. */
+.chat__msg-bubble--expandable {
+  padding-right: 32px;
+}
+.chat__msg-expand {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--color-overlay) 10%, transparent);
+  border-radius: 6px;
+  background: var(--color-card);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    opacity 0.15s;
+}
+.chat__msg:hover .chat__msg-expand,
+.chat__msg-expand:focus-visible {
+  opacity: 1;
+}
+.chat__msg-expand:hover {
+  color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
+}
+@media (hover: none) {
+  .chat__msg-expand {
+    opacity: 0.55;
+  }
 }
 /* Attachment stack inside the bubble: each item (thumbnail / file chip) on its
  * own row, in message order. */
@@ -1451,6 +1507,19 @@ button.chat__msg-file {
   padding: 40px;
   color: var(--color-text-muted);
   font-size: 13px;
+}
+/* The rendered body wears the shared `.doc-md` document skin (settings.css) so
+ * this overlay reads like every other markdown surface. Only the skin's own
+ * page padding is handed back: `.md-preview__body` already owns the gutters,
+ * and a leading <h1>/<p> margin on top of them reads as an off-centre panel. */
+.md-preview__md.doc-md {
+  padding: 0;
+}
+.md-preview__md.doc-md > :first-child {
+  margin-top: 0;
+}
+.md-preview__md.doc-md > :last-child {
+  margin-bottom: 0;
 }
 
 .chat__composer {

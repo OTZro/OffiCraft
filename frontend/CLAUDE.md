@@ -44,6 +44,37 @@ ChatArea 兩個行為,皆不動 server:
 - **進房跳第一則未讀**:進對話時 snapshot `member.unreadCount`(**render 同步取**,搶在 listChat「list 即讀」清 watermark 之前——這是 race-free 的關鍵;server 清掉後 roster unreadCount 才歸 0)。第一則未讀 = thread 中 `from===peer && to===owner` 訊息的**最後 count 則之最早者**;其上渲染 `.chat__unread-divider`(「以下是未讀訊息」細線)並 `scrollIntoView({block:"start"})` 頂到視野頂;divider 整個 session 保留(如 LINE)。無未讀照舊落底。ChatArea 換 peer 不 remount → render-time guard 重置 session 追蹤;useChat 於 withId 換時**立即清空 messages**(防舊 thread 殘影 + 防未讀定位錨錯舊訊息)。
 - **房內新訊息浮條**:owner 上滾(沿用既有 `nearBottomRef` 判定,80px 帶)時新進 `to===owner` 訊息 → `.chat__new-msg-chip` 灰底 pill 浮在 `.chat__body` 底部;錨點 = 浮條出現後**第一則**未看訊息(session 內以 message-id diff 追蹤,不動 server);點擊 smooth 捲到該則(`[data-msg-id]`);**捲到底才消失**(onScroll near-bottom 清除),點擊本身不清。在底部時維持原自動跟底、永不出浮條。i18n key:`chat.newMessages` / `chat.unreadBelow`(三語)。
 
+## markdown 全幅閱覽 = 一個 overlay、兩種來源(owner 2026-07-28)
+`MarkdownPreviewOverlay` 是**唯一**的座艙內 markdown 全幅面,兩個入口共用:
+- **`url`**:已存檔的 .md 附件(T-a1c4),overlay 自己 fetch,header 保留「下載」
+  **與複製分享連結**;因此 `url` 一定**併帶必填的 `attachmentId`**(T-4fdc:分享連結
+  永遠用 blob 自己的 `att-` id 去 mint,不是 serve path、也不是 `ta-` 產物 id)。
+- **`source`**:呼叫端**手上已有**的文字(聊天訊息本文)。不 fetch、不進 loading 態,
+  **也沒有下載鈕、沒有分享鈕**——那串位元組從來不是檔案,給一個假造的 blob url 是
+  說謊,而且沒有 id 可以分享。
+  props 是 discriminated union(`url`+`attachmentId` / `source` 互斥),傳兩個是
+  compile error;`url` 少了 `attachmentId` 也是 compile error。
+
+**單一換行:`source` 開 `breaks`、`url` 不開**(Seth 2026-07-28 review PR #18)。
+聊天泡泡是 Enter=換行的介面(`breaks`),同一段文字被拿到全幅面讀時如果落回標準
+markdown 的 soft-wrap,一則普通多行訊息就被重排成一條長句——**同一份文字在兩個面
+長得不一樣**。反過來,已存檔的 .md 是文件、不是聊天行,維持標準 soft-wrap 跟其他
+17 個文件面一致。這是刻意的**分家**,兩邊都有測試釘住(改一邊、另一邊會紅):
+`MarkdownPreviewOverlay.test.tsx` 的 inline-breaks 與 blob-soft-wrap 兩支 +
+`ChatArea.msg-fullscreen.test.tsx` 的泡泡/全幅面同形對照。
+
+**render 一定要戴 `.doc-md`**:overlay 原本只掛自己的 `md-preview__md`,結果標題/
+程式碼/表格/callout/連結全落回 UA 預設值——面板是深色主題、內容卻沒上色(owner
+2026-07-28 回報)。`.doc-md` 是 17 個 render site 共用的文件皮膚,少戴一個 class
+就等於自成一格,別再犯。護欄:`MarkdownPreviewOverlay.test.tsx`。
+
+**聊天訊息的「放大閱讀」角落鈕**(`.chat__msg-expand`):只長在**對方(incoming)且
+有本文**的氣泡上——自己那句是剛打的、純附件氣泡的檔案 chip 本身就是預覽入口。
+hover(或鍵盤 focus)才現形,coarse pointer 恆顯低不透明度。⚠️ 位置是**氣泡讓位**
+(`.chat__msg-bubble--expandable` 的 padding-right),**不是**浮在文字上:氣泡會
+shrink-wrap 內容,單行訊息時浮動鈕會正好蓋掉最後一個字(實測「短訊息也有按鈕嗎？」
+的「？」被吃掉)。Slack 那種浮動作法只有在全寬列上才成立。
+
 ## 聊天/回覆輸入框(多行 composer)
 三個多行 composer——聊天(ChatArea)、回覆卡(ReplyComposer)、TaskCard 任務訊息
 框——都是 **textarea**(共用 `.chat__input`)。**送出決策收斂到單一 `lib/composerKeys.ts`

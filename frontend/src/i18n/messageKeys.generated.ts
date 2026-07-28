@@ -15,6 +15,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "chat.dateYesterday",
   "chat.downloadAttachment",
   "chat.emptyRange",
+  "chat.expandMessage",
   "chat.galleryClose",
   "chat.galleryDownloadHint",
   "chat.galleryEmptyFiles",

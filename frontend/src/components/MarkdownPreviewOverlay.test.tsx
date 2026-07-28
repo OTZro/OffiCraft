@@ -59,6 +59,145 @@ describe("MarkdownPreviewOverlay", () => {
     expect(dl.getAttribute("href")).toContain("/api/chat/attachment/att-1");
   });
 
+  // The rendered body wears `.doc-md`, the shared markdown skin every other
+  // render site uses (task manual, role doc, reply card, chat bubble). Without
+  // it the overlay fell back to bare UA defaults — unstyled headings, code,
+  // tables and callouts inside an otherwise themed panel (owner 2026-07-28:
+  // 「明明我們聊天的樣式很漂亮，但 .md 閱覽器就沒有對應的上色」).
+  it("wears the shared .doc-md markdown skin", async () => {
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      text: async () => "# Hello",
+    })) as unknown as typeof fetch;
+    const { container } = render(
+      <I18nProvider>
+        <MarkdownPreviewOverlay
+          title="x.md"
+          url="/api/chat/attachment/a"
+          attachmentId="a"
+          onClose={() => {}}
+        />
+      </I18nProvider>,
+    );
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Hello" })).toBeTruthy());
+    const md = container.querySelector(".md-preview__md")!;
+    expect(md.classList.contains("doc-md")).toBe(true);
+  });
+
+  // Second source mode (the chat 放大閱讀 button): text the caller already
+  // holds. Nothing to fetch, and no file to download.
+  it("renders an inline source without fetching, and offers no download", async () => {
+    globalThis.fetch = vi.fn(() => Promise.reject(new Error("must not fetch"))) as unknown as typeof fetch;
+    const { container } = render(
+      <I18nProvider>
+        <MarkdownPreviewOverlay title="Mira" source={"# Inline\n\nbody text"} onClose={() => {}} />
+      </I18nProvider>,
+    );
+    // Synchronous — an inline source never passes through the loading state.
+    expect(screen.getByRole("heading", { name: "Inline" })).toBeTruthy();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(screen.queryByText("載入預覽中…")).toBeNull();
+    expect(container.querySelector(".md-preview__download")).toBeNull();
+    expect(container.querySelector(".md-preview__md")!.classList.contains("doc-md")).toBe(true);
+  });
+
+  // A message body is a CHAT surface: Enter means "new line" there, and the
+  // bubble renders it with `breaks`. Reading the same text full-view must not
+  // reflow it — standard markdown folds a single newline into a space, so a
+  // plain multi-line message (the most common shape) came out as one run-on
+  // line the moment it was opened (Seth 2026-07-28 on PR #18).
+  it("keeps single newlines in an inline source (the bubble's own breaks)", () => {
+    const { container } = render(
+      <I18nProvider>
+        <MarkdownPreviewOverlay
+          title="Mira"
+          source={"先確認環境變數。\n不要直接在 prod 跑。\n有問題隨時問我。"}
+          onClose={() => {}}
+        />
+      </I18nProvider>,
+    );
+    const md = container.querySelector(".md-preview__md")!;
+    // Three source lines ⇒ two hard breaks inside one paragraph.
+    expect(md.querySelectorAll("br").length).toBe(2);
+    expect(md.querySelectorAll("p").length).toBe(1);
+    // POSITIVE CONTROL: the lines are all there…
+    expect(md.textContent).toContain("先確認環境變數。");
+    expect(md.textContent).toContain("有問題隨時問我。");
+    // …and were not welded together with a space (the exact default this guards).
+    expect(md.textContent).not.toContain("先確認環境變數。 不要直接在 prod 跑。");
+  });
+
+  // The OTHER half of that split, pinned so "turn breaks on everywhere" cannot
+  // pass as a fix: a stored .md file is a document, not a chat line, and keeps
+  // standard markdown soft-wrap the way every other document surface does.
+  it("keeps standard soft-wrap for a fetched .md blob (no hard breaks)", async () => {
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      text: async () => "alpha line\nbeta line",
+    })) as unknown as typeof fetch;
+    const { container } = render(
+      <I18nProvider>
+        <MarkdownPreviewOverlay
+          title="doc.md"
+          url="/api/chat/attachment/att-doc"
+          attachmentId="att-doc"
+          onClose={() => {}}
+        />
+      </I18nProvider>,
+    );
+    await waitFor(() => expect(screen.getByText(/alpha line/)).toBeTruthy());
+    const md = container.querySelector(".md-preview__md")!;
+    expect(md.querySelectorAll("br").length).toBe(0);
+    expect(md.textContent).toContain("alpha line beta line");
+  });
+
+  // The blob actions belong to `url` mode and must survive the message mode
+  // being added beside them (T-4fdc gave the share link a REQUIRED attachment
+  // id; PR #18 must not quietly drop either).
+  it("keeps the share link + download on a blob, and gives an inline source neither", async () => {
+    const mint = vi
+      .spyOn(api, "getChatAttachmentShareLink")
+      .mockResolvedValue("/api/chat/attachment/att-backing?sig=test");
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: vi.fn(async () => {}) },
+      configurable: true,
+    });
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      text: async () => "# doc",
+    })) as unknown as typeof fetch;
+
+    const blob = render(
+      <I18nProvider>
+        <MarkdownPreviewOverlay
+          title="doc.md"
+          url="/api/chat/attachment/att-doc"
+          attachmentId="att-backing"
+          onClose={() => {}}
+        />
+      </I18nProvider>,
+    );
+    await waitFor(() =>
+      expect(blob.container.querySelector("button.md-preview__share")).toBeTruthy(),
+    );
+    fireEvent.click(blob.container.querySelector("button.md-preview__share")!);
+    // The share link is minted for the ATTACHMENT ID, never the serve path.
+    await waitFor(() => expect(mint).toHaveBeenCalledWith("att-backing"));
+    expect(mint).not.toHaveBeenCalledWith("/api/chat/attachment/att-doc");
+    expect(
+      blob.container.querySelector("a.md-preview__download"),
+    ).toBeTruthy();
+    blob.unmount();
+
+    const inline = render(
+      <I18nProvider>
+        <MarkdownPreviewOverlay title="Mira" source="# body" onClose={() => {}} />
+      </I18nProvider>,
+    );
+    expect(inline.container.querySelector("button.md-preview__share")).toBeNull();
+    expect(inline.container.querySelector("a.md-preview__download")).toBeNull();
+  });
+
   it("shows an honest error state on a failed fetch (never a blank render)", async () => {
     globalThis.fetch = vi.fn(async () => ({ ok: false, status: 404 })) as unknown as typeof fetch;
     render(
