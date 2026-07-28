@@ -6231,6 +6231,28 @@ export interface components {
             waiting_reason: string;
         };
         /**
+         * TaskStepStatusReceiptDTO
+         * @description Bounded receipt returned after updating one task step. Fetch GET /api/tasks/{task_id} when full task detail is needed.
+         */
+        TaskStepStatusReceiptDTO: {
+            /** Closed Ts */
+            closed_ts: number | null;
+            /** Progress Done */
+            progress_done: number;
+            /** Progress Total */
+            progress_total: number;
+            /** Step Id */
+            step_id: string;
+            /** Step Status */
+            step_status: string;
+            /** Task Id */
+            task_id: string;
+            /** Task Status */
+            task_status: string;
+            /** Waiting Reason */
+            waiting_reason: string;
+        };
+        /**
          * TaskStepStatusUpdateDTO
          * @description Agent-reported step status (MCP ``update_step_status``): ``pending`` → ``in_progress`` → ``done`` — ``waiting_owner`` is NOT agent-reportable on either side (a step enters it only by opening a reply card: open_gate / create_reply_card auto-bind, and leaves it only when that card is answered, where the server restores in_progress), so reporting ``waiting_owner`` is a 400 and a move out of it is a 409; other illegal transitions are a 409. ``superseded`` is likewise not the agent's lever: the server freezes a replaced answered-card step itself on submit_plan (T-1aea), so reporting ``superseded`` is a 400 and no report moves a step out of it (409 — terminal). T-74f8 交棒閘: if applying this report would CLOSE the task (every step done) and the task's creator is not its executor, the server refuses the report with a 422 unless the ball's destination is declared IN THIS SAME CALL — ``handoff='return_to_creator'`` (the server mints a durable follow-up task on the creator, blocked by this one), ``handoff='follow_up'`` + ``handoff_task_id`` (the server attaches this task to that successor as a dependency), or ``handoff='none'`` + ``handoff_note`` (an explicit, recorded end of the line). The gate stands aside when a non-terminal task already depends on this one (the handover is already real). It refuses BEFORE any row is written, because a closed task can never be replanned (submit_plan turns into a permanent 409) — after the close there is nothing left to answer with.
          */
@@ -6889,6 +6911,8 @@ export interface operations {
                 before_ts?: number | null;
                 before_id?: string | null;
                 peek?: string | null;
+                /** @description When true, return only messages involving both the verified caller and the optional `with` participant. Omitted or false preserves the existing participant-wide result. */
+                caller_only?: boolean;
             };
             header?: never;
             path?: never;
@@ -12291,7 +12315,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskDTO"];
+                    "application/json": components["schemas"]["TaskStepStatusReceiptDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */

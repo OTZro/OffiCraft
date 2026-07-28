@@ -224,6 +224,19 @@ func TestListChatScrollbackCursor(t *testing.T) {
 	if wm := watermark(); wm != 4.0 {
 		t.Fatalf("cursorless list must auto-mark to the newest ts, got %v", wm)
 	}
+
+	callerOnly := true
+	owner := "owner"
+	rec = listChatRec(s, "mira", HandleListChatApiChatGetParams{With: &owner, CallerOnly: &callerOnly})
+	if got := ids(rec); len(got) != 4 || got[0] != "c-1" || got[len(got)-1] != "c-4" {
+		t.Fatalf("caller-only list: want mira thread only, got %v", got)
+	}
+
+	bts, bid = 5.0, "c-z"
+	rec = listChatRec(s, "mira", HandleListChatApiChatGetParams{With: &owner, BeforeTs: &bts, BeforeId: &bid, CallerOnly: &callerOnly})
+	if got := ids(rec); len(got) != 4 || got[0] != "c-1" || got[len(got)-1] != "c-4" {
+		t.Fatalf("caller-only history: want mira thread only, got %v", got)
+	}
 }
 
 func TestHandlePostChatApiChatPost(t *testing.T) {

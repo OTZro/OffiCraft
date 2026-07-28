@@ -452,6 +452,8 @@ func (s *apiServer) servedChatMessageDTO(m ChatMessage) chatMessageDTO {
 func (s *apiServer) HandleListChatApiChatGet(w http.ResponseWriter, r *http.Request, params HandleListChatApiChatGetParams) {
 	with := strOrEmpty(params.With)
 	peek := trimmedOrEmpty(params.Peek) == "true"
+	callerOnly := params.CallerOnly != nil && *params.CallerOnly
+	actor := currentActor(r)
 	limit := chatListDefaultLimit
 	if params.Limit != nil {
 		limit = *params.Limit
@@ -464,7 +466,11 @@ func (s *apiServer) HandleListChatApiChatGet(w http.ResponseWriter, r *http.Requ
 		}
 		// History page: cursor-bounded SQL read (LIMIT in the query — never a
 		// full-table pull) and NO PutChatRead — see the handler note above.
-		msgs, err := s.dal.ListChatBefore(with, *params.BeforeTs, *params.BeforeId, limit)
+		caller := ""
+		if callerOnly {
+			caller = actor
+		}
+		msgs, err := s.dal.listChatBefore(with, caller, *params.BeforeTs, *params.BeforeId, limit)
 		if err != nil {
 			internalError(w, err)
 			return
@@ -485,6 +491,15 @@ func (s *apiServer) HandleListChatApiChatGet(w http.ResponseWriter, r *http.Requ
 		filtered := msgs[:0]
 		for _, m := range msgs {
 			if m.Sender == with || m.Recipient == with {
+				filtered = append(filtered, m)
+			}
+		}
+		msgs = filtered
+	}
+	if callerOnly {
+		filtered := msgs[:0]
+		for _, m := range msgs {
+			if m.Sender == actor || m.Recipient == actor {
 				filtered = append(filtered, m)
 			}
 		}

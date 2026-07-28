@@ -1747,6 +1747,18 @@ type TaskStepDTO struct {
 	WaitingReason   *string  `json:"waiting_reason,omitempty"`
 }
 
+// TaskStepStatusReceiptDTO Bounded receipt returned after updating one task step. Fetch GET /api/tasks/{task_id} when full task detail is needed.
+type TaskStepStatusReceiptDTO struct {
+	ClosedTs      *float64 `json:"closed_ts"`
+	ProgressDone  int      `json:"progress_done"`
+	ProgressTotal int      `json:"progress_total"`
+	StepId        string   `json:"step_id"`
+	StepStatus    string   `json:"step_status"`
+	TaskId        string   `json:"task_id"`
+	TaskStatus    string   `json:"task_status"`
+	WaitingReason string   `json:"waiting_reason"`
+}
+
 // TaskStepStatusUpdateDTO Agent-reported step status (MCP “update_step_status“): “pending“ → “in_progress“ → “done“ — “waiting_owner“ is NOT agent-reportable on either side (a step enters it only by opening a reply card: open_gate / create_reply_card auto-bind, and leaves it only when that card is answered, where the server restores in_progress), so reporting “waiting_owner“ is a 400 and a move out of it is a 409; other illegal transitions are a 409. “superseded“ is likewise not the agent's lever: the server freezes a replaced answered-card step itself on submit_plan (T-1aea), so reporting “superseded“ is a 400 and no report moves a step out of it (409 — terminal). T-74f8 交棒閘: if applying this report would CLOSE the task (every step done) and the task's creator is not its executor, the server refuses the report with a 422 unless the ball's destination is declared IN THIS SAME CALL — “handoff='return_to_creator'“ (the server mints a durable follow-up task on the creator, blocked by this one), “handoff='follow_up'“ + “handoff_task_id“ (the server attaches this task to that successor as a dependency), or “handoff='none'“ + “handoff_note“ (an explicit, recorded end of the line). The gate stands aside when a non-terminal task already depends on this one (the handover is already real). It refuses BEFORE any row is written, because a closed task can never be replanned (submit_plan turns into a permanent 409) — after the close there is nothing left to answer with.
 type TaskStepStatusUpdateDTO struct {
 	// Handoff Where the ball goes when this report closes the task: ``return_to_creator`` | ``follow_up`` | ``none``. Read only on the report that would close the task.
@@ -1915,6 +1927,9 @@ type HandleListChatApiChatGetParams struct {
 	BeforeTs *float64 `form:"before_ts,omitempty" json:"before_ts,omitempty"`
 	BeforeId *string  `form:"before_id,omitempty" json:"before_id,omitempty"`
 	Peek     *string  `form:"peek,omitempty" json:"peek,omitempty"`
+
+	// CallerOnly When true, return only messages involving both the verified caller and the optional `with` participant. Omitted or false preserves the existing participant-wide result.
+	CallerOnly *bool `form:"caller_only,omitempty" json:"caller_only,omitempty"`
 }
 
 // HandleListChatAttachmentsApiChatAttachmentsGetParams defines parameters for HandleListChatAttachmentsApiChatAttachmentsGet.
@@ -2683,6 +2698,19 @@ func (siw *ServerInterfaceWrapper) HandleListChatApiChatGet(w http.ResponseWrite
 			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "peek"})
 		} else {
 			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "peek", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "caller_only" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "caller_only", r.URL.Query(), &params.CallerOnly, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "caller_only"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "caller_only", Err: err})
 		}
 		return
 	}

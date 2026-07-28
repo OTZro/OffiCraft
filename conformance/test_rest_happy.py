@@ -1014,8 +1014,9 @@ HAPPY: dict[str, Happy] = {
             *_happy_task_step(ctx)),
         body={"status": "in_progress"},
         check=lambda _c, r: _expect(
-            r, lambda d: d["steps"][0]["status"] == "in_progress"
-            and d["steps"][0]["started_ts"]
+            r, lambda d: d["step_status"] == "in_progress"
+            and d["task_status"] == "in_progress"
+            and d["progress_done"] == 0 and d["progress_total"] == 1
         ),
     ),
     "POST /api/tasks/{task_id}/steps/{step_id}/gate": Happy(

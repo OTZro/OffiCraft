@@ -325,6 +325,10 @@ func (d *DAL) ListChat() ([]ChatMessage, error) {
 // so a cursor stays valid forever. The LIMIT lives in SQL (never a full-table
 // pull). A NEGATIVE limit disables the cap; limit 0 reads nothing.
 func (d *DAL) ListChatBefore(participant string, beforeTS float64, beforeID string, limit int) ([]ChatMessage, error) {
+	return d.listChatBefore(participant, "", beforeTS, beforeID, limit)
+}
+
+func (d *DAL) listChatBefore(participant, caller string, beforeTS float64, beforeID string, limit int) ([]ChatMessage, error) {
 	if limit == 0 {
 		return nil, nil
 	}
@@ -335,6 +339,10 @@ func (d *DAL) ListChatBefore(participant string, beforeTS float64, beforeID stri
 	if participant != "" {
 		query += ` AND (sender = ? OR recipient = ?)`
 		args = append(args, participant, participant)
+	}
+	if caller != "" {
+		query += ` AND (sender = ? OR recipient = ?)`
+		args = append(args, caller, caller)
 	}
 	query += ` ORDER BY ts DESC, id DESC`
 	if limit > 0 {

@@ -659,6 +659,19 @@ type resumeTaskDTO struct {
 	UpdatedTS       float64 `json:"updated_ts"`
 }
 
+// taskStepStatusReceiptDTO is the bounded confirmation returned after an agent
+// reports one step. Full task detail remains available through get_task.
+type taskStepStatusReceiptDTO struct {
+	TaskID        string   `json:"task_id"`
+	StepID        string   `json:"step_id"`
+	StepStatus    string   `json:"step_status"`
+	WaitingReason string   `json:"waiting_reason"`
+	TaskStatus    string   `json:"task_status"`
+	ClosedTS      *float64 `json:"closed_ts"`
+	ProgressDone  int      `json:"progress_done"`
+	ProgressTotal int      `json:"progress_total"`
+}
+
 type bootstrapDTO struct {
 	Role     string  `json:"role"`
 	Name     string  `json:"name"`

@@ -693,6 +693,17 @@ func TestExecutorGuardDeniesAForeignAgentButAdmitsAdminCapability(t *testing.T) 
 		t.Fatalf("owner must pass the guard and land the report (200), got %d %s",
 			rec.Code, rec.Body.String())
 	}
+	var receipt map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &receipt); err != nil {
+		t.Fatalf("step-status receipt: %v", err)
+	}
+	if receipt["step_id"] != stepID || receipt["step_status"] != StepStatusInProgress ||
+		receipt["task_id"] != task.ID || receipt["progress_total"] != float64(1) {
+		t.Fatalf("unexpected step-status receipt: %#v", receipt)
+	}
+	if _, ok := receipt["steps"]; ok {
+		t.Fatalf("step-status must not return the full task: %#v", receipt)
+	}
 }
 
 // ── create dedupe (H1/H2) ────────────────────────────────────────────────────
@@ -1890,17 +1901,23 @@ func TestWaitingExternalRequiresAReasonAndClearsOnExit(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("enter waiting_external: %d %s", rec.Code, rec.Body.String())
 	}
-	if got := decodeBody[taskDTO](t, rec); got.Status != TaskStatusWaitingExternal ||
-		got.WaitingReason != "vendor sandbox pending" {
-		t.Fatalf("task must derive waiting_external + mirror the step's reason: %+v", got)
+	var receipt map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &receipt); err != nil {
+		t.Fatalf("waiting_external receipt: %v", err)
+	}
+	if receipt["task_status"] != TaskStatusWaitingExternal ||
+		receipt["waiting_reason"] != "vendor sandbox pending" {
+		t.Fatalf("task receipt must derive waiting_external + mirror the step's reason: %+v", receipt)
 	}
 	rec = reportStepStatus(t, api, task.ID, stepID, "m-exec", "in_progress", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("exit waiting_external: %d %s", rec.Code, rec.Body.String())
 	}
-	if got := decodeBody[taskDTO](t, rec); got.Status != TaskStatusInProgress ||
-		got.WaitingReason != "" {
-		t.Fatalf("reason must clear on exit and the task resume in_progress: %+v", got)
+	if err := json.Unmarshal(rec.Body.Bytes(), &receipt); err != nil {
+		t.Fatalf("in_progress receipt: %v", err)
+	}
+	if receipt["task_status"] != TaskStatusInProgress || receipt["waiting_reason"] != "" {
+		t.Fatalf("reason must clear on exit and the task resume in_progress: %+v", receipt)
 	}
 }
 

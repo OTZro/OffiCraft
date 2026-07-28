@@ -720,6 +720,10 @@
           "before_ts": {
             "type": "number"
           },
+          "caller_only": {
+            "default": false,
+            "type": "boolean"
+          },
           "limit": {
             "type": "integer"
           },
