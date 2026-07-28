@@ -646,7 +646,12 @@ export const en: Dict = {
     modelMachineDefault: "Use this machine's Codex default model",
     claudeAccount: "Claude Account",
     codexAccount: "Codex Account",
-    modelEffortNextWakeNote: "Changes take effect on the next wake / handover",
+    // T-b6d9 — see the zh note: an online member now hands over automatically
+    // on save and comes back on the new value; only an offline one waits for a
+    // wake. The key keeps its historical spelling (theme wording overlays are
+    // keyed on it); the copy is the part humans read.
+    modelEffortNextWakeNote:
+      "Applied via an automatic handover when online; on the next wake when offline",
     modelEffortError: "Save failed. Please try again.",
     runtime: "Runtime",
     machine: "Machine",

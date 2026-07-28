@@ -114,6 +114,34 @@ owner 原話:「我建議所有換手都可以給他機會收尾」。**relocate
   - 🔴 **判斷輸入的完整決策表在 `worker_ownerop_winddown_t98f4_test.go` 檔頭**(active × online × refocus × stopped 十六格逐格期望 + 兩道上游閘)。**兩個 HIGH 都出在這同一個判斷式**——第一次漏掉一個狀態、第二次把範圍畫太寬——所以表是刻意的:動這個函式前先在表上找到你的改動,**找不到對應格子 = 表過期了,或第三個洞就在那裡**。cell 1..4 各有自己的哨兵(上面三顆 mutant 就是在證明這件事),cell 5-8 / 9-16 因為前面的 conjunct 短路而各只需一條。
 
 
+## 正職成員的 owner 動詞也給收尾機會(T-b6d9,T-98f4 規則二的正職半邊)
+
+T-98f4 只做了外包 worker。正職這邊三個動詞各走各的,實測(2026-07-28 追碼 + 陽性對照)結果三種待遇:
+
+| 動詞 | 改動前 | 改動後 |
+|---|---|---|
+| **重啟**(`refocus_member` / `restart_self`) | 蓋 `refocus_since`、**不派任何東西**,由 `decideUp` 的 recycle 臂等 `report_stopped` 或 `RecycleGrace`(120s) | **一字未改**(哨兵 `TestRelocateMember_RestartIsUntouched`) |
+| **改機器**(relocate) | **零預告零寬限**:handler 只寫 pin,`reconcileMemberNow` 走 relocate 臂當場 `stop` → tmux kill-session。連 `stopping_since` 都不蓋,座艙上無聲消失 | 蓋 `refocus_since` → 走 **既有的** recycle 臂,agent 收到同一份五步 SOP,收口後下一 tick 的 START 自然帶新 pin |
+| **換模型 / runtime / effort**(`update_member`) | **完全不重啟**,回 200,新值等下次 spawn 才被讀 | 三欄**真的變了**才開窗;收口後以新值重生 |
+
+- 🔴 **判別式只有一個欄位**:五步 SOP 由 `cli/ocagent/listen_hooks.go` 的 `recycleHook.maybeRecycle` 印出,閘寫死 `desired_state==online ∧ refocus_since>0`。**沒蓋戳 = agent 從頭到尾看不到 SOP**,沒有「比較短的預告」這種中間狀態。
+- **漏斗 = `server/ocserverd/member_ownerop_winddown.go`**(`memberHasStateToFlush` / `armMemberOwnerOpHandover`),形狀比照外包的 `respawnWorkerForOwnerOp`。**caller 只做一次 `putMember`**:新 pin/model 與 refocus epoch 同一筆寫入,agent 醒來看到的那一則 delta 就已經帶著新值。
+- 🔴 **`memberHasStateToFlush` 是把 `workerHasStateToFlush` 照抄過來的,不是重寫的**——那張表**被兩輪獨立審查各抓過一個 HIGH**。逐格對照與每一格的理由寫在該檔檔頭;決策表在 `member_ownerop_winddown_tb6d9_test.go` 檔頭(kind × desired × online × refocus × stopped,七列各有自己的哨兵)。三處差異都寫明了:(a) 多一條 `kind==assistant`(warden 沒有 ocagent 讀得到這個戳);(b) worker 的「從沒認領任務」(`Status != active`)**正職沒有對應物**,刻意不發明——省略的方向是「多開窗」,是安全那邊;(c) worker 的 restart deny-list 正職 **N/A**(重啟本身就是換手,不進這個漏斗)。**epoch-scoped 的 `refocus_since>0 ∧ stopped_since>0` 一字照抄**——正職的 `HandleReportStoppedApiSelfStoppedPost` 同樣有第二個 latch 點(平常的 停止 也會蓋 `stopped_since`),讀成全域就會讓那個成員**從此每一次**改機器/換模型都被當場砍掉。
+- 🔴 **收口的 kill 改成打「session 真的在哪台」**(`memberKillTargetWarden`,以及 recycle 臂的 `DispatchWarden: obs.RunningMachine`)。原本兩條都用 `wardenTargetOf`(**desired** machine),而 改機器 的 pin 在開窗那一刻就已經指向**目的地**——不改的話收口會叫目的地的 warden 去殺一個它根本沒有的 session,舊 session 永遠活著。對「坐在自己 pin 上」的成員兩者同一台,所以 重新聚焦 觀察不到差異;`hub.MachineOf` 為空時退回 `wardenTargetOf`(即原行為)。
+- **`relocation_pending` 多了第二個成因**:原本只代表「STOP 派不出去」,現在「開了窗、還沒收口」同樣是 `pending=true`——那正是欄位的字面意思(move scheduled, not yet landed)。`api_members_relocate_pending_test.go` 那對紅綠測試的 fixture 因此**被改到「本 epoch 已收攏」那一格**(那格仍會當場派 STOP),鑑別力保住、只是換了到達路徑。
+- ⚠️ **`decideUp` 的 relocate 臂沒有刪,但語意降級成 backstop**:正常的 改機器 現在由上游的 recycle 臂接手。它原本那句註解說 relocate「recycled exactly like refocus」是**假的**(refocus 會等、relocate 一秒不等),已修——那句話害人對 owner 講錯過一次現況。
+- ⚠️ **既有測試的契約變更(誠實記下,兩條都是「原測試把硬砍釘成契約」)**:`TestRelocateMember_MigratesLiveMember` 原本斷言 handler 當場在舊機器 warden 上放**恰好 1 個 stop frame**,改寫成「開窗 + 零 frame,收口後才有那 1 個 stop」,並額外釘住 pin 活過收口;`TestReconcileDecide` 的「refocus 壓過 relocate」子測原本斷言 `DispatchWarden == ""`,改成斷言它等於 RunningMachine(釘住的是 Reason 那個優先序,不是位址)。
+- **座艙**:窗期間 `refocus_since>0`,與 重新聚焦 同一個投影(所以看得到「換手中」而不是無聲消失)。FE 那行 `mp.modelEffortNextWakeNote`「變更於下次喚醒／換手生效」在這之後是假話,同批改成「線上會自動換手後套用;離線則下次喚醒生效」;**key 名保留歷史拼法**(theme wording overlay 以 key 為契約)。
+- **agent 互動面零改動**(root §9c):同一則 member delta、同一次 refetch、同一份五步 SOP,無新工具無新步驟 ⇒ `seeds/` 不需要同批改。
+- **代價**:改機器/換模型之後,成員最多在**舊機器/舊模型**上多活一個 `RecycleGrace`(120s 天花板,不是時長——agent 一回 `report_stopped` 就收口)。這是 owner 要的交換。
+- **mutant 實測(2026-07-28,每顆前 `go clean -testcache`,還原一律用 scratchpad 備份,整個 package 計數)**:
+  - relocate 那道分流拿掉(`windDown := false`)→ **3 條紅**:`TestRelocateMember_MigratesLiveMember`、`TestRelocateMember_WindDownIsAlsoPending`、`TestMemberOwnerOp_SecondVerbDuringAnOpenWindowReStamps`。
+  - update_member 那道分流拿掉(`if false && launchIntentChanged`)→ **2 條紅**:`TestMemberOwnerOp_ModelChangeWindsDownThenRespawns`、`TestMemberOwnerOp_OrdinaryStopRestartStillWindsDownLater`。
+  - 讓 `refocus_member` 當場派 robust stop(破壞哨兵)→ **1 條紅**:`TestRelocateMember_RestartIsUntouched`。
+  - 已收攏判斷退回**全域** `stopped_since` → **1 條紅**:`TestMemberOwnerOp_OrdinaryStopRestartStillWindsDownLater`。
+  - 已收攏判斷只讀 `refocus_since` → **1 條紅**:`TestMemberOwnerOp_SecondVerbDuringAnOpenWindowReStamps`。
+  - kill 位址退回 `wardenTargetOf`(兩處一起)→ **4 條紅**:`TestRelocateMember_MigratesLiveMember`、`TestMemberOwnerOp_SecondVerbDuringAnOpenWindowReStamps`、`TestRelocateMember_LandedNoPending`、`TestReconcileDecide`。⚠️ **這顆是跨組的**——看到 `_LandedNoPending` 紅不要直接推論 pending 邏輯壞了。
+
 ## 聊天附件:一則訊息/一張卡與它的 blob 是同一筆寫入(T-e2b2)
 
 - **拒絕在儲存之前,寫入是全有全無。** 帶附件的四個面(`post_chat`、`post_task_message`、開請示卡、回答請示卡)先把**每一項**解析完才寫任何東西;**既無 `id` 也無 `data_b64` 的項目一律 400**(owner 2026-07-27 rc-3a589dfec503 拍板;此前聊天與任務訊息兩面是靜默丟棄、照樣回 200——寄件者以為檔案送到了)。

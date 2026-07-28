@@ -46,10 +46,19 @@ func TestRelocateMember_PlacementOnly(t *testing.T) {
 	}
 }
 
-// TestRelocateMember_MigratesLiveMember proves the event-driven reconcile is
-// wired: an ONLINE member running on the old machine, re-pinned to a new one,
-// gets a robust STOP dispatched to the OLD machine's warden RIGHT NOW (the
-// fbc5280 relocation recycle) — and desired_state (online) is left untouched.
+// TestRelocateMember_MigratesLiveMember is the END-TO-END 改機器 of a LIVE
+// member, and T-b6d9 changed its shape on purpose: it used to assert that the
+// handler dispatched a robust STOP to the old warden ON THE SPOT (exactly one
+// stop frame, same instant) — i.e. it pinned the hard kill as the contract, so
+// making the move graceful HAD to redden it.
+//
+// The move is now a wind-down: the pin lands, a refocus epoch is stamped (which
+// is the ONLY thing cli/ocagent's recycleHook gates the five-step SOP on), and
+// NOTHING is dispatched until the agent answers report_stopped (or RecycleGrace
+// expires). Both halves are asserted here, because either alone is satisfiable
+// by a broken implementation: "no frame yet" alone is also true of a relocate
+// that does nothing at all, and "refocus stamped" alone is also true of one that
+// stamps AND kills.
 func TestRelocateMember_MigratesLiveMember(t *testing.T) {
 	s := newReconcileTestServer(t)
 	putWarden(t, s, "mach-old")
@@ -81,14 +90,109 @@ func TestRelocateMember_MigratesLiveMember(t *testing.T) {
 	if got.DesiredState != DesiredStateOnline {
 		t.Errorf("a live member's desired_state must stay online across a relocate: got %q", got.DesiredState)
 	}
-	// The relocation STOP must land on the RUNNING (old) machine's warden — the
-	// session to kill lives there. Never on the new (target) machine.
+	// (a) the agent was TOLD. refocus_since > 0 with desired_state=online is the
+	// exact condition recycleHook.maybeRecycle refetches and prints the SOP on;
+	// without it the agent never learns the move is coming.
+	if got.RefocusSince <= 0.0 {
+		t.Errorf("a live 改機器 must stamp a refocus epoch (the ONLY thing the agent's "+
+			"recycle hook gates the wind-down SOP on): refocus_since = %v", got.RefocusSince)
+	}
+	// (b) and it was given TIME: no kill went out with the owner's click.
+	if f := drainFrames(t, s, "mach-old"); len(f) != 0 {
+		t.Fatalf("a graceful 改機器 dispatches NO kill on the click — the 收口 owns it: %+v", f)
+	}
+	if f := drainFrames(t, s, "mach-new"); len(f) != 0 {
+		t.Fatalf("the target (new) machine's warden must get nothing on the click: %+v", f)
+	}
+
+	// 收口: the agent finishes its dump and reports stopped → the robust STOP is
+	// dispatched NOW, and it must still land on the RUNNING (old) machine's
+	// warden — the session to kill lives there, never on the target.
+	rec = httptest.NewRecorder()
+	s.HandleReportStoppedApiSelfStoppedPost(rec,
+		taskReq(t, "POST", "/api/self/stopped", map[string]any{}, "m-move", "agent"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
+	}
 	oldFrames := drainFrames(t, s, "mach-old")
 	if len(oldFrames) != 1 || oldFrames[0].RPC != "stop" || oldFrames[0].Args["member_id"] != "m-move" {
-		t.Fatalf("relocate must dispatch a STOP to the old machine's warden: %+v", oldFrames)
+		t.Fatalf("the 收口 must dispatch a STOP to the old machine's warden: %+v", oldFrames)
 	}
 	if newFrames := drainFrames(t, s, "mach-new"); len(newFrames) != 0 {
 		t.Fatalf("the target (new) machine's warden must NOT get the relocation STOP: %+v", newFrames)
+	}
+	// The pin survives the wind-down, so the next tick's plain START lands on the
+	// NEW machine — the move actually completes, it is not merely deferred.
+	if after, _ := s.dal.GetMember("m-move"); after == nil || after.DesiredMachineID != "mach-new" {
+		t.Fatalf("the new pin must survive the 收口: %+v", after)
+	}
+}
+
+// TestRelocateMember_OfflineMemberIsNotWoundDown is the誤擋 half: 改機器 on a
+// member with NO live session must stay the instant re-pin it always was. There
+// is nothing to hear a 預告 and nothing to flush, so stamping a refocus epoch
+// would only park a marker no one will ever read (the agent's own gate re-checks
+// desired_state=online) and make the owner wait for a 收口 that cannot come.
+func TestRelocateMember_OfflineMemberIsNotWoundDown(t *testing.T) {
+	s := newReconcileTestServer(t)
+	putWarden(t, s, "mach-new")
+
+	m := testAgent("m-dark")
+	m.DesiredState = DesiredStateOnline // wants to run, but holds no SSE connection
+	m.DesiredMachineID = ServerSelfHost
+	putTestMember(t, s, m)
+
+	rec := httptest.NewRecorder()
+	s.HandleRelocateMemberApiMembersMemberIdRelocatePost(rec,
+		taskReq(t, "POST", "/api/members/m-dark/relocate",
+			map[string]any{"machine_id": "mach-new"}, wireOwnerID, "owner"), "m-dark")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("relocate: %d %s", rec.Code, rec.Body.String())
+	}
+	got, err := s.dal.GetMember("m-dark")
+	if err != nil || got == nil {
+		t.Fatalf("re-read member: %v", err)
+	}
+	if got.DesiredMachineID != "mach-new" {
+		t.Errorf("the pin must land immediately: %q", got.DesiredMachineID)
+	}
+	if got.RefocusSince != 0.0 {
+		t.Errorf("an offline member has nothing to wind down: refocus_since = %v", got.RefocusSince)
+	}
+}
+
+// TestRelocateMember_RestartIsUntouched is the SENTINEL for the one verb this
+// ticket must not move a millimetre: 重新聚焦 (refocus_member) stamps a refocus
+// epoch and dispatches NOTHING — the §4.5 recycle arm owns the kill. If the
+// staff wind-down funnel ever grew a dispatch (or a deny-list arm that skipped
+// the stamp), this is what would catch it.
+func TestRelocateMember_RestartIsUntouched(t *testing.T) {
+	s := newReconcileTestServer(t)
+	putWarden(t, s, "mach-old")
+
+	m := testAgent("m-refocus")
+	m.DesiredState = DesiredStateOnline
+	m.DesiredMachineID = "mach-old"
+	putTestMember(t, s, m)
+	connectOnline(t, s, "mach-old")
+	connectOnlineMachine(t, s, "m-refocus", "mach-old")
+
+	rec := httptest.NewRecorder()
+	s.HandleRefocusMemberApiMembersMemberIdRefocusPost(rec,
+		taskReq(t, "POST", "/api/members/m-refocus/refocus", map[string]any{},
+			wireOwnerID, "owner"), "m-refocus")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("refocus: %d %s", rec.Code, rec.Body.String())
+	}
+	got, _ := s.dal.GetMember("m-refocus")
+	if got == nil || got.RefocusSince <= 0.0 {
+		t.Fatalf("refocus must stamp the epoch: %+v", got)
+	}
+	if got.DesiredMachineID != "mach-old" {
+		t.Errorf("refocus must not touch the pin: %q", got.DesiredMachineID)
+	}
+	if f := drainFrames(t, s, "mach-old"); len(f) != 0 {
+		t.Fatalf("refocus dispatches nothing — the recycle arm owns the kill: %+v", f)
 	}
 }
 

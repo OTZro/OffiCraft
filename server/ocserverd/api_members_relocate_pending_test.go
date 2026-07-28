@@ -19,6 +19,18 @@ import (
 // unreachable → pending=true, reachable → pending absent. The pair is the
 // red/green guard — a "always set pending" mutant reddens the landed case, a
 // "never set pending" mutant reddens the unlanded case.
+//
+// ⚠️ T-b6d9 RETARGETED BOTH FIXTURES, deliberately. A live member's 改機器 now
+// opens a graceful wind-down and dispatches NOTHING on the click, so the state
+// these two are about — "the relocation STOP went out and did / did not land" —
+// is no longer reachable from a plain online member. It is still reachable, and
+// still exercised here, at the arm where the verb takes effect IMMEDIATELY:
+// this epoch's wind-down is already collected (refocus_since > 0 ∧
+// stopped_since > 0) while the old session has not been reaped yet, so
+// decideUp's recycle arm dispatches the robust STOP on the spot. The
+// discriminating pair is preserved; only the fixture that reaches it moved.
+// The wind-down arm's own pending contract is pinned by
+// TestRelocateMember_WindDownIsAlsoPending / _OfflineRelocateIsNotPending below.
 
 // online member re-pinned to a new machine while the OLD machine's warden (which
 // holds the session to STOP) is UNREACHABLE → the pin lands, status is 200, and
@@ -30,6 +42,8 @@ func TestRelocateMember_UnlandedSurfacesPending(t *testing.T) {
 	mover := testAgent("m-stuck")
 	mover.DesiredState = DesiredStateOnline
 	mover.DesiredMachineID = "mach-old"
+	mover.RefocusSince = 1000.0 // this epoch's wind-down is already collected, so
+	mover.StoppedSince = 1001.0 // the verb takes effect immediately (no new window)
 	putTestMember(t, s, mover)
 	connectOnlineMachine(t, s, "m-stuck", "mach-old") // the mover runs on the OLD machine
 	// The OLD machine's warden is deliberately NOT connected: the relocation STOP
@@ -71,6 +85,8 @@ func TestRelocateMember_LandedNoPending(t *testing.T) {
 	mover := testAgent("m-ok")
 	mover.DesiredState = DesiredStateOnline
 	mover.DesiredMachineID = "mach-old"
+	mover.RefocusSince = 1000.0 // already collected → the verb takes effect NOW
+	mover.StoppedSince = 1001.0 // (see the file header on the T-b6d9 retarget)
 	putTestMember(t, s, mover)
 	connectOnline(t, s, "mach-old")                // old warden reachable → the STOP can land
 	connectOnlineMachine(t, s, "m-ok", "mach-old") // the mover runs on the OLD machine
@@ -90,6 +106,86 @@ func TestRelocateMember_LandedNoPending(t *testing.T) {
 	}
 	if body.RelocationPending != nil {
 		t.Fatalf("a landed relocation must NOT carry relocation_pending, got %v (%s)",
+			*body.RelocationPending, rec.Body.String())
+	}
+}
+
+// T-b6d9, the wind-down arm's own pending contract. A LIVE member's 改機器 now
+// dispatches nothing on the click — the move happens at the 收口. That is
+// literally "scheduled, not yet landed", so the response must say pending.
+// Answering a clean landed 200 here would be the same silent false-success
+// T-8655 removed for the unreachable-warden case, just with a different cause.
+func TestRelocateMember_WindDownIsAlsoPending(t *testing.T) {
+	s := newReconcileTestServer(t)
+	putWarden(t, s, "mach-old")
+	putWarden(t, s, "mach-new")
+
+	mover := testAgent("m-grace")
+	mover.DesiredState = DesiredStateOnline
+	mover.DesiredMachineID = "mach-old"
+	putTestMember(t, s, mover)
+	connectOnline(t, s, "mach-old") // fully reachable: nothing here is "unlanded"
+	connectOnline(t, s, "mach-new")
+	connectOnlineMachine(t, s, "m-grace", "mach-old")
+
+	rec := httptest.NewRecorder()
+	s.HandleRelocateMemberApiMembersMemberIdRelocatePost(rec,
+		taskReq(t, "POST", "/api/members/m-grace/relocate",
+			map[string]any{"machine_id": "mach-new"}, wireOwnerID, "owner"), "m-grace")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("relocate: %d %s", rec.Code, rec.Body.String())
+	}
+	// Positive control that this really IS the wind-down arm and not an unlanded
+	// dispatch wearing its clothes: the epoch is stamped and no kill went out.
+	if got, _ := s.dal.GetMember("m-grace"); got == nil || got.RefocusSince <= 0.0 {
+		t.Fatalf("expected an open wind-down (refocus epoch stamped): %+v", got)
+	}
+	if f := drainFrames(t, s, "mach-old"); len(f) != 0 {
+		t.Fatalf("the wind-down dispatches nothing on the click: %+v", f)
+	}
+	var body struct {
+		RelocationPending *bool `json:"relocation_pending"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode relocate response: %v", err)
+	}
+	if body.RelocationPending == nil || !*body.RelocationPending {
+		t.Fatalf("a 改機器 still winding down must surface relocation_pending=true, got %v (%s)",
+			body.RelocationPending, rec.Body.String())
+	}
+}
+
+// …and the誤擋 half: an OFFLINE member's re-pin moves nothing and waits for
+// nothing, so it must NOT claim to be pending. Without this, "pending" could be
+// hard-wired true and the pair above would still pass.
+func TestRelocateMember_OfflineRelocateIsNotPending(t *testing.T) {
+	s := newReconcileTestServer(t)
+	putWarden(t, s, "mach-new")
+
+	m := testAgent("m-parked")
+	// Deliberately desired-OFFLINE: nothing is decided, nothing is dispatched, so
+	// neither pending cause can fire. (A desired-ONLINE member with no session is
+	// a different story — reconcile tries to START it, and an unreachable target
+	// warden there is a genuine unlanded dispatch, pending since T-8655.)
+	m.DesiredState = DesiredStateOffline
+	m.DesiredMachineID = ServerSelfHost
+	putTestMember(t, s, m)
+
+	rec := httptest.NewRecorder()
+	s.HandleRelocateMemberApiMembersMemberIdRelocatePost(rec,
+		taskReq(t, "POST", "/api/members/m-parked/relocate",
+			map[string]any{"machine_id": "mach-new"}, wireOwnerID, "owner"), "m-parked")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("relocate: %d %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		RelocationPending *bool `json:"relocation_pending"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode relocate response: %v", err)
+	}
+	if body.RelocationPending != nil {
+		t.Fatalf("re-pinning a member with no session is not a pending move, got %v (%s)",
 			*body.RelocationPending, rec.Body.String())
 	}
 }
