@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,9 +20,31 @@ import (
 // loopback address: a unit test must never reach the real api.github.com
 // (hermeticity + the anonymous rate limit). Tests that want a GitHub set the
 // per-server releaseAPIBase seam to an httptest fake.
+//
+// It also swaps the ocwarden exec seam for a REFUSING fake (T-42a0). Same
+// principle, higher stakes: `execOcwarden` boots a launchd job out of the
+// machine this test binary is running on. A test must never be one forgotten
+// `withRecordedOcwarden` away from that — and above all, a test that exists to
+// prove a GUARD works must not be relying on that same guard to keep itself
+// safe, because verifying the guard means deleting it. With this default, the
+// production system operation is simply not wired into the test binary: every
+// test either binds its own fake or fails loudly on a bin path of "".
 func TestMain(m *testing.M) {
 	releaseAPIDefault = "http://127.0.0.1:1"
+	runOcwarden = refuseToExecOcwarden
 	os.Exit(m.Run())
+}
+
+// refuseToExecOcwarden is the test binary's default ocwarden runner: it runs
+// nothing and reports a failure loud enough to read in a diff. Returning a
+// non-zero exit (rather than panicking) keeps the refusal on the code path the
+// handlers already have for "the local teardown did not complete", so a test
+// that forgot to bind a fake fails on its own assertion instead of taking the
+// whole package down with it.
+func refuseToExecOcwarden(binPath string, args []string, env []string) (int, string, bool) {
+	return 126, "refuseToExecOcwarden: the test binary never execs the real " +
+		"ocwarden (bind a fake with withRecordedOcwarden); refused " +
+		binPath + " " + strings.Join(args, " "), false
 }
 
 // fakeRelease is one release row the fake GitHub serves (newest first).

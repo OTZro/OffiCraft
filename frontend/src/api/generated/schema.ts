@@ -932,18 +932,43 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Teardown on server: tear this machine's warden down on the host.
-         * @description Teardown on server: tear a machine's warden down ON THE SERVER HOST in one
-         *     click (``POST /api/machines/{machine_id}/teardown-here``).
+         * Teardown on server: run ocwarden teardown on the server's OWN host; machine_id is not a target selector and every target is currently refused (409).
+         * @description Teardown on server: run ``<ocwarden> teardown`` ON THE SERVER HOST
+         *     (``POST /api/machines/{machine_id}/teardown-here``).
          *
-         *     The symmetric inverse of ``handle_bootstrap_here``. The common case is that the
-         *     officraft server RUNS ON the machine being torn down, so instead of copy-
-         *     pasting the teardown command into a shell the owner clicks once and the server
-         *     runs ``<ocwarden> teardown`` locally (``launchctl bootout`` + remove the install
-         *     artifacts — the daemon stops because launchd stops it, never pkill). It resolves
-         *     the ACTIVE warden member (404 otherwise), resolves the ocwarden binary the SAME
-         *     way ``handle_bootstrap_here`` does (503 if absent), and runs the teardown via an
-         *     INJECTABLE runner (``app.state.teardown_runner``).
+         *     WHAT IT CAN AND CANNOT ADDRESS. The child process is selected by HOME / uid /
+         *     ``OC_NAMESPACE`` and by nothing else — there is no machine selector anywhere on
+         *     that path — so this verb can only ever tear down the warden belonging to the
+         *     host the server itself runs on. ``machine_id`` IS THEREFORE NOT A TARGET
+         *     SELECTOR (T-42a0): it names the roster row the caller claims to be talking
+         *     about, and that is all it has ever done. Aiming it at another machine used to
+         *     tear down THIS host's daemon (``launchctl bootout`` + remove the install
+         *     artifacts — the daemon stops because launchd stops it, never pkill) and then
+         *     write ``roster_status = removed`` onto the machine that was NAMED and never
+         *     contacted — which, since the roster became the authority over machine
+         *     credentials, also revoked that machine's token.
+         *
+         *     REFUSALS — both possible targets are refused, and the refusal is written BEFORE
+         *     any subprocess runs (a 409 issued after the daemon was already booted out would
+         *     be worse than no guard at all):
+         *
+         *     * any ``machine_id`` other than the server-local machine → **409**, because this
+         *       verb cannot reach it. To retire a DIFFERENT machine use ``POST
+         *       /api/machines/{machine_id}/uninstall`` (the remote uninstall, executed by the
+         *       target's OWN warden) and then ``DELETE /api/machines/{member_id}``.
+         *     * the server-local machine itself → **409**, the SAME sentence ``DELETE
+         *       /api/machines`` speaks: taking it off the roster revokes its credentials and
+         *       the token of every member placed on it. To REPAIR this host's warden use
+         *       ``handle_bootstrap_here``, which runs ``ocwarden install --force`` over the
+         *       existing install — nothing has to be torn down first.
+         *
+         *     There is no flag, query parameter or alternate route that makes this endpoint
+         *     reach another host. An unknown ``machine_id`` still resolves FIRST and is a 404,
+         *     and a caller without ``admin_agent`` is still a flat 403 before either refusal.
+         *
+         *     It resolves the ACTIVE warden member (404 otherwise), resolves the ocwarden
+         *     binary the SAME way ``handle_bootstrap_here`` does (503 if absent), and runs the
+         *     teardown via an INJECTABLE runner (``app.state.teardown_runner``).
          *
          *     Governance: ``requires="admin_agent"`` — the SAME choke
          *     ``handle_bootstrap_here`` uses, and now the SAME one as the remote-command
@@ -951,7 +976,10 @@ export interface paths {
          *     2026-07-26). This runs code on the server host (a privileged local action), so it
          *     stays closed to every PLAIN agent and to wardens (flat 403 before any resolve).
          *
-         *     SAFETY — CONFIRM-THEN-REMOVE: the warden member is soft-deleted ONLY when the
+         *     SAFETY — CONFIRM-THEN-REMOVE (the semantics of the execution path; with both
+         *     refusals above in place that path is not reachable over HTTP today, and is
+         *     documented because the route, its result DTO and its status codes are unchanged
+         *     on the frozen wire): the warden member is soft-deleted ONLY when the
          *     daemon is CONFIRMED torn down (``exit_code == 0``). ocwarden teardown is
          *     idempotent and CONFIRMS the bootout (it polls ``launchctl print`` until launchd
          *     reports the label truly gone — bootout is async), so 0 means "the launchd job
@@ -1221,6 +1249,30 @@ export interface paths {
          *     all observed lifecycle fields (presence/desired_state/status) are untouched.
          */
         patch: operations["handle_update_member_api_members__member_id__patch"];
+        trace?: never;
+    };
+    "/api/members/{member_id}/avatar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Upload or replace a member's personal avatar (owner only).
+         * @description Upload or replace one staff or outsource member's personal avatar. The raw request body is the image bytes (not base64 and not multipart). Only PNG, JPEG, or WEBP is accepted; the optional ``mime`` declaration must match the bytes' magic signature, SVG is rejected, and the decoded body is capped at 64 KiB. ``filename`` is optional metadata. Owner-only: personal avatars are visual identity and cannot be changed by agents or machine tokens. Replacement atomically inserts a newly minted ``ava-...`` blob, switches the stable member id's pointer, and deletes the prior dedicated blob; the new URL naturally cache-busts. Staff publishes the existing ``member`` delta and outsource publishes ``outsource_worker``. Excluded from MCP because this is an owner UI binary-control seam.
+         */
+        put: operations["handle_put_member_avatar_api_members__member_id__avatar_put"];
+        post?: never;
+        /**
+         * Remove a member's personal avatar (owner only).
+         * @description Remove one staff or outsource member's personal avatar and return it to the client fallback chain (active theme role avatar, then built-in glyph). Owner-only: a personal avatar is visual identity, so admin agents, ordinary agents, and machine tokens cannot alter another actor's appearance. Idempotent when no personal avatar exists. The member pointer is cleared and the old dedicated blob is deleted in one transaction; staff publishes the existing ``member`` delta and outsource publishes ``outsource_worker``. Excluded from MCP because this is an owner UI binary-control seam.
+         */
+        delete: operations["handle_delete_member_avatar_api_members__member_id__avatar_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/members/{member_id}/activate": {
@@ -4092,6 +4144,11 @@ export interface components {
          */
         MemberDTO: {
             /**
+             * Avatar Url
+             * @description Authenticated URL of this stable member id's personal raster avatar. Empty means no personal image; clients fall back to the active theme's role avatar, then the built-in glyph. Additive-optional for older clients.
+             */
+            avatar_url?: string;
+            /**
              * Activation Pending
              * @description Set true ONLY on the activate response when the decided START could not be delivered to the target warden (no live SSE downstream) — the wake intent is persisted and the reconcile cadence retries, but nothing has been dispatched yet. Absent/null on every other member read. The activate twin of ``relocation_pending``: without it an activate against an unreachable warden returns a clean 200 with zero signal, which is indistinguishable from a wake that actually started (T-ba62 additive-optional).
              */
@@ -4209,6 +4266,26 @@ export interface components {
              * @default 0
              */
             unread_count: number;
+        };
+        /**
+         * MemberAvatarDTO
+         * @description Narrow result of an owner-only personal-avatar mutation. ``avatar_url`` is a newly minted authenticated blob path after upload and empty after removal; the changing blob id naturally cache-busts replacements.
+         */
+        MemberAvatarDTO: {
+            /**
+             * Avatar Url
+             * @default
+             */
+            avatar_url: string;
+            /** Filename */
+            filename?: string | null;
+            /** Member Id */
+            member_id: string;
+            /**
+             * Mime
+             * @default
+             */
+            mime: string;
         };
         /**
          * MemberHireDTO
@@ -4557,6 +4634,11 @@ export interface components {
              * @description The Claude account this worker's session runs under (telemetry entry keyed by the worker's actor id — the SAME per-actor telemetry the member roster reads). null when the worker has not reported one (never fabricated). T-f190 additive-optional.
              */
             account?: string | null;
+            /**
+             * Avatar Url
+             * @description Authenticated URL of this stable outsource-worker id's personal raster avatar. Empty means the client uses the outsource theme avatar or built-in glyph. Additive-optional.
+             */
+            avatar_url?: string;
             /**
              * Banked Cost
              * @description The worker's persistent historical cumulative cost (migrations/00021), the DIRECT twin of member banked_cost: the live cost is banked through the SAME bankLiveCost fold on every session end / kill+respawn (refocus / model change / relocate / stop / auto-handover), so a handover never zeroes the owner-visible spend. null when nothing banked yet. The panel shows live + banked summed, the member presentation. T-ba6b additive-optional.
@@ -6177,6 +6259,28 @@ export interface components {
             waiting_reason: string;
         };
         /**
+         * TaskStepStatusReceiptDTO
+         * @description Bounded receipt returned after updating one task step. Fetch GET /api/tasks/{task_id} when full task detail is needed.
+         */
+        TaskStepStatusReceiptDTO: {
+            /** Closed Ts */
+            closed_ts: number | null;
+            /** Progress Done */
+            progress_done: number;
+            /** Progress Total */
+            progress_total: number;
+            /** Step Id */
+            step_id: string;
+            /** Step Status */
+            step_status: string;
+            /** Task Id */
+            task_id: string;
+            /** Task Status */
+            task_status: string;
+            /** Waiting Reason */
+            waiting_reason: string;
+        };
+        /**
          * TaskStepStatusUpdateDTO
          * @description Agent-reported step status (MCP ``update_step_status``): ``pending`` → ``in_progress`` → ``done`` — ``waiting_owner`` is NOT agent-reportable on either side (a step enters it only by opening a reply card: open_gate / create_reply_card auto-bind, and leaves it only when that card is answered, where the server restores in_progress), so reporting ``waiting_owner`` is a 400 and a move out of it is a 409; other illegal transitions are a 409. ``superseded`` is likewise not the agent's lever: the server freezes a replaced answered-card step itself on submit_plan (T-1aea), so reporting ``superseded`` is a 400 and no report moves a step out of it (409 — terminal). T-74f8 交棒閘: if applying this report would CLOSE the task (every step done) and the task's creator is not its executor, the server refuses the report with a 422 unless the ball's destination is declared IN THIS SAME CALL — ``handoff='return_to_creator'`` (the server mints a durable follow-up task on the creator, blocked by this one), ``handoff='follow_up'`` + ``handoff_task_id`` (the server attaches this task to that successor as a dependency), or ``handoff='none'`` + ``handoff_note`` (an explicit, recorded end of the line). The gate stands aside when a non-terminal task already depends on this one (the handover is already real). It refuses BEFORE any row is written, because a closed task can never be replanned (submit_plan turns into a permanent 409) — after the close there is nothing left to answer with.
          */
@@ -6835,6 +6939,8 @@ export interface operations {
                 before_ts?: number | null;
                 before_id?: string | null;
                 peek?: string | null;
+                /** @description When true, return only messages involving both the verified caller and the optional `with` participant. Omitted or false preserves the existing participant-wide result. */
+                caller_only?: boolean;
             };
             header?: never;
             path?: never;
@@ -8647,6 +8753,120 @@ export interface operations {
                 };
             };
             /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_put_member_avatar_api_members__member_id__avatar_put: {
+        parameters: {
+            query?: {
+                filename?: string | null;
+                mime?: string | null;
+            };
+            header?: never;
+            path: {
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description Avatar stored and pointer replaced atomically. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberAvatarDTO"];
+                };
+            };
+            /** @description Image exceeds the 64 KiB cap. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Empty, unsupported, mismatched, or machine-target image. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Authentication, authorization, or not-found error. */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_delete_member_avatar_api_members__member_id__avatar_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Avatar removed, or already absent. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberAvatarDTO"];
+                };
+            };
+            /** @description Member is a machine/warden and cannot have a personal avatar. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Authentication, authorization, or not-found error. */
             "4XX": {
                 headers: {
                     [name: string]: unknown;
@@ -12123,7 +12343,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskDTO"];
+                    "application/json": components["schemas"]["TaskStepStatusReceiptDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */

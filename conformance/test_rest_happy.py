@@ -72,6 +72,7 @@ class HCtx:
     fresh_machine: Callable[[], str]
     fresh_role: Callable[[], str]
     _attachment: tuple[str, bytes] | None = field(default=None, repr=False)
+    _avatar_to_delete_url: str | None = field(default=None, repr=False)
 
     def token(self, identity: str) -> str | None:
         return {"owner": self.owner_token, "agent": self.agent.token, "none": None}[
@@ -193,6 +194,41 @@ def _check_upload_ref(ctx: HCtx, r: httpx.Response) -> None:
 def _check_attachment_roundtrip(ctx: HCtx, r: httpx.Response) -> None:
     _att_id, payload = ctx.attachment()
     assert r.content == payload, "attachment bytes did not round-trip"
+
+
+def _seeded_avatar_delete_path(ctx: HCtx) -> str:
+    """Give the DELETE happy row its own precondition.
+
+    Parametrized route order is not a contract, so the adjacent PUT row cannot
+    be the setup: without this seed a broken no-op DELETE still answers the
+    same empty avatar_url and the conformance row stays green.
+    """
+    path = f"/api/members/{ctx.agent.member_id}/avatar"
+    seeded = ctx.client.put(
+        path + "?filename=conf-delete.png&mime=image/png",
+        content=_PNG_BYTES,
+        headers=_auth(ctx.owner_token),
+    )
+    assert seeded.status_code == 200, f"avatar delete seed failed: {seeded.text}"
+    url = seeded.json()["avatar_url"]
+    assert url.startswith("/api/chat/attachment/ava-"), seeded.json()
+    ctx._avatar_to_delete_url = url
+    return path
+
+
+def _check_avatar_delete(ctx: HCtx, r: httpx.Response) -> None:
+    data = r.json()
+    assert data["member_id"] == ctx.agent.member_id and data["avatar_url"] == "", data
+    assert ctx._avatar_to_delete_url is not None, "DELETE row ran without its seed"
+    old = ctx.client.get(
+        ctx._avatar_to_delete_url,
+        headers=_auth(ctx.owner_token),
+    )
+    assert old.status_code == 404, (
+        f"DELETE left its previously referenced blob reachable: "
+        f"{old.status_code} {old.text[:200]}"
+    )
+    ctx._avatar_to_delete_url = None
 
 
 def _check_bootstrap_preview(_ctx: HCtx, r: httpx.Response) -> None:
@@ -525,6 +561,22 @@ HAPPY: dict[str, Happy] = {
         path=lambda ctx: f"/api/members/{ctx.fresh_member()}",
         body={"name": "conf-happy-renamed"},
         check=lambda _c, r: _expect(r, lambda d: d["name"] == "conf-happy-renamed"),
+    ),
+    "PUT /api/members/{member_id}/avatar": Happy(
+        path=lambda ctx: f"/api/members/{ctx.agent.member_id}/avatar"
+        "?filename=conf-avatar.png&mime=image/png",
+        body=_PNG_BYTES,
+        check=lambda ctx, r: _expect(
+            r,
+            lambda d: d["member_id"] == ctx.agent.member_id
+            and d["avatar_url"].startswith("/api/chat/attachment/ava-")
+            and d["mime"] == "image/png"
+            and d["filename"] == "conf-avatar.png",
+        ),
+    ),
+    "DELETE /api/members/{member_id}/avatar": Happy(
+        path=_seeded_avatar_delete_path,
+        check=_check_avatar_delete,
     ),
     "POST /api/members/{member_id}/activate": Happy(
         path=lambda ctx: f"/api/members/{ctx.fresh_member()}/activate",
@@ -962,8 +1014,9 @@ HAPPY: dict[str, Happy] = {
             *_happy_task_step(ctx)),
         body={"status": "in_progress"},
         check=lambda _c, r: _expect(
-            r, lambda d: d["steps"][0]["status"] == "in_progress"
-            and d["steps"][0]["started_ts"]
+            r, lambda d: d["step_status"] == "in_progress"
+            and d["task_status"] == "in_progress"
+            and d["progress_done"] == 0 and d["progress_total"] == 1
         ),
     ),
     "POST /api/tasks/{task_id}/steps/{step_id}/gate": Happy(
@@ -1127,7 +1180,13 @@ SKIPPED_HAPPY: dict[str, str] = {
         "effect the black-box harness must not trigger (matrix DEGRADED row)."
     ),
     "POST /api/machines/{machine_id}/teardown-here": (
-        "positive face runs `ocwarden teardown` on the host — same reasoning."
+        "no positive face EXISTS any more (T-42a0): the route refuses every "
+        "target — the server-local machine because retiring it revokes "
+        "credentials fleet-wide, any other machine because the verb carries no "
+        "machine selector and cannot reach it. Both 409s and the ordering "
+        "(unknown id still resolves to 404 first) are pinned in the server unit "
+        "tests (api_machines_teardown_target_t42a0_test.go); the authz faces are "
+        "fully asserted in the matrix."
     ),
     "POST /api/update/upgrade": (
         "the positive face needs a reachable GitHub Releases repo holding a "

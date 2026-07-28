@@ -334,6 +334,24 @@ func (s *apiServer) writeTask(w http.ResponseWriter, t Task) {
 	writeJSON(w, http.StatusOK, dto)
 }
 
+func (s *apiServer) writeTaskStepStatusReceipt(w http.ResponseWriter, t Task, step TaskStep) {
+	steps, err := s.dal.ListTaskSteps(t.ID)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	done, total := TaskProgress(steps)
+	var closedTS *float64
+	if t.ClosedTS > 0 {
+		closedTS = &t.ClosedTS
+	}
+	writeJSON(w, http.StatusOK, taskStepStatusReceiptDTO{
+		TaskID: t.ID, StepID: step.ID, StepStatus: step.Status,
+		WaitingReason: t.WaitingReason, TaskStatus: t.Status,
+		ClosedTS: closedTS, ProgressDone: done, ProgressTotal: total,
+	})
+}
+
 // callerMayDriveTask enforces the executor guard on the agent report routes
 // (plan / status / step status / gate / deps): the caller must BE the task's
 // executor — the caller-identity convention (root CLAUDE.md §14: a non-admin
@@ -2170,7 +2188,7 @@ func (s *apiServer) HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPos
 		internalError(w, err)
 		return
 	}
-	s.writeTask(w, *t)
+	s.writeTaskStepStatusReceipt(w, *t, *step)
 }
 
 // POST /api/tasks/{task_id}/steps/{step_id}/gate — arm a gate (contract §D):
@@ -2433,6 +2451,11 @@ func (s *apiServer) HandleAddTaskArtifactApiTasksTaskIdArtifactPost(w http.Respo
 		if attID == "" {
 			writeError(w, http.StatusBadRequest,
 				"attachment_id is required for a "+kind+" artifact")
+			return
+		}
+		if isMemberAvatarAttachmentID(attID) {
+			writeError(w, http.StatusBadRequest,
+				"attachment '"+attID+"' is reserved for a member avatar")
 			return
 		}
 		att, err := s.dal.GetChatAttachment(attID)

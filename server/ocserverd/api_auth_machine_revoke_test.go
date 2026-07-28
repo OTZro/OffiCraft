@@ -537,35 +537,48 @@ func TestTeardownHereRefusesTheServerLocalMachine(t *testing.T) {
 	}
 }
 
-// TestTeardownHereStillWorksForAnOrdinaryMachine is the collateral guard for the
-// guard: the new refusal must be about server-self ONLY. A version that refused
-// every machine would still make the test above pass, and would silently retire
-// the one working way to take a machine off this host.
+// TestTeardownHereRefusesAnOrdinaryMachineToo — this was
+// TestTeardownHereStillWorksForAnOrdinaryMachine, the collateral guard that
+// pinned the OPPOSITE claim: that an ordinary machine must still get a 200, a
+// soft-delete and one ocwarden run, on the stated grounds that this endpoint is
+// "the one working way to take a machine off this host".
 //
-// Mutant: widen the check (e.g. refuse unconditionally, or key it on
-// Kind == machineKind) → this test goes red while the one above stays green.
-func TestTeardownHereStillWorksForAnOrdinaryMachine(t *testing.T) {
+// THAT PREMISE WAS FALSE, and it is the whole of T-42a0. The subprocess is
+// addressed by HOME / uid / OC_NAMESPACE; nothing on that path can reach
+// another host. So the green 200 this test used to demand meant: the SERVER
+// HOST's warden was booted out of launchd, and m-remote — a machine that was
+// never contacted — was written off the roster (and since T-9cf8, had its
+// credentials revoked). The collateral guard was guarding the defect.
+//
+// It is kept, inverted, rather than deleted: the pairing with the test above
+// still matters. The two refusals have different reasons and must not merge.
+// The full T-42a0 sentinel set lives in
+// api_machines_teardown_target_t42a0_test.go.
+func TestTeardownHereRefusesAnOrdinaryMachineToo(t *testing.T) {
 	s, runs := newSelfTeardownServer(t)
 
 	rec := postTeardownHereFor(t, s, "m-remote")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("teardown-here on an ordinary machine must still work, got %d %s",
-			rec.Code, rec.Body.String())
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("teardown-here aimed at an ordinary machine must be refused, got "+
+			"%d %s — a 200 here means this host's own daemon was destroyed and "+
+			"m-remote was falsely marked removed", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"removed":true`) {
-		t.Fatalf("a confirmed teardown must still soft-delete an ordinary machine: %s",
-			rec.Body.String())
-	}
-	if len(*runs) != 1 {
-		t.Fatalf("an ordinary teardown must still exec ocwarden exactly once, got %d",
-			len(*runs))
+	if len(*runs) != 0 {
+		t.Fatalf("a refused teardown must never exec ocwarden, got %d run(s): %+v",
+			len(*runs), *runs)
 	}
 	m, err := s.dal.GetMember("m-remote")
 	if err != nil || m == nil {
 		t.Fatalf("get m-remote: %v", err)
 	}
-	if m.RosterStatus != RosterStatusRemoved {
-		t.Fatalf("ordinary teardown must still soft-delete, roster=%q", m.RosterStatus)
+	if m.RosterStatus != RosterStatusActive {
+		t.Fatalf("a machine that was never contacted must stay on the roster, "+
+			"roster=%q", m.RosterStatus)
+	}
+	// The two refusals must stay distinguishable — see the server-self test above.
+	if strings.Contains(rec.Body.String(), serverSelfUndeletableMsg) {
+		t.Fatalf("a foreign target must not be told the server-self sentence: %s",
+			rec.Body.String())
 	}
 }
 

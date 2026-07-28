@@ -615,6 +615,12 @@ export const en: Dict = {
   },
   mp: {
     back: "Back",
+    avatarUpload: "Change avatar",
+    avatarRemove: "Remove avatar",
+    avatarBusy: "Working…",
+    avatarTypeError: "Use a PNG, JPEG, or WEBP image",
+    avatarTooLarge: "Image must be 64 KiB or smaller",
+    avatarSaveError: "Could not save the avatar. Please try again.",
     rename: "Rename",
     renamePlaceholder: "Enter name",
     wake: "Wake",
@@ -640,7 +646,12 @@ export const en: Dict = {
     modelMachineDefault: "Use this machine's Codex default model",
     claudeAccount: "Claude Account",
     codexAccount: "Codex Account",
-    modelEffortNextWakeNote: "Changes take effect on the next wake / handover",
+    // T-b6d9 — see the zh note: an online member now hands over automatically
+    // on save and comes back on the new value; only an offline one waits for a
+    // wake. The key keeps its historical spelling (theme wording overlays are
+    // keyed on it); the copy is the part humans read.
+    modelEffortNextWakeNote:
+      "Applied via an automatic handover when online; on the next wake when offline",
     modelEffortError: "Save failed. Please try again.",
     runtime: "Runtime",
     machine: "Machine",

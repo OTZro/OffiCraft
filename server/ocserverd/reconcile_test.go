@@ -351,13 +351,25 @@ func TestReconcileDecide(t *testing.T) {
 
 	t.Run("refocus recycle takes precedence over a machine mismatch", func(t *testing.T) {
 		// A refocus already owns the member — the relocation recycle must not stack
-		// on top of it. The refocus STOP routes normally (no DispatchWarden override).
+		// on top of it. What pins the precedence is the REASON: only the recycle arm
+		// says "recycle:".
+		//
+		// ⚠️ It used to also assert DispatchWarden == "" ("routes normally"). T-b6d9
+		// made the recycle arm address the RUNNING machine, because a 改機器 is now
+		// collected BY this arm while the session is still on the origin and the pin
+		// already names the destination — routing by the pin there would ask the
+		// destination's warden to kill a session it does not hold, and the old one
+		// would live forever. For a member sitting on its own pin the two are the
+		// same machine, so nothing observable changed for 重新聚焦.
 		obs := obsRelocate("m", "mach-old", "mach-new")
 		obs.RefocusSince = 1000
 		obs.AgentStopped = true
 		d := reconcileDecide(obs, newReconcileState(), cfg, 1010)
-		if d.Command != reconcileCmdStop || d.DispatchWarden != "" {
+		if d.Command != reconcileCmdStop || !strings.HasPrefix(d.Reason, "recycle:") {
 			t.Fatalf("refocus must own the recycle, not the relocation path: %+v", d)
+		}
+		if d.DispatchWarden != "mach-old" {
+			t.Fatalf("a recycle STOP must be addressed to the RUNNING machine: %+v", d)
 		}
 	})
 

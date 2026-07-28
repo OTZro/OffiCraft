@@ -284,6 +284,13 @@ func decideUp(
 				return reconcileDecision{
 					Command: reconcileCmdStop, MemberID: obs.MemberID,
 					Reason: reason, State: st,
+					// Kill where the session ACTUALLY is, not where it is wanted.
+					// For a plain 重新聚焦 these are the same machine, so nothing
+					// changes; T-b6d9 made them differ, because a 改機器 now stamps
+					// refocus_since and is collected by THIS arm while the session
+					// is still running on the OLD machine. "" (no live claim) falls
+					// back to wardenTargetOf in reconcileOne, the prior behaviour.
+					DispatchWarden: obs.RunningMachine,
 				}
 			}
 			st.Phase = reconcilePhaseStopping
@@ -296,9 +303,18 @@ func decideUp(
 	if obs.Online {
 		// RELOCATION (§ owner re-pinned a LIVE member's desired_machine): an online,
 		// refocus-free member whose running machine no longer matches its target is
-		// recycled exactly like refocus — a robust STOP now, desired_state stays
-		// online, so the next tick's plain START re-mints the boot token on the NEW
-		// machine (wardenTargetOf routes START by desired_machine). The STOP is
+		// robust-STOPped NOW, desired_state stays online, so the next tick's plain
+		// START re-mints the boot token on the NEW machine (wardenTargetOf routes
+		// START by desired_machine). ⚠️ THIS ARM DOES NOT WAIT — do not read it as
+		// "recycled exactly like refocus" (it said so until T-b6d9, and that
+		// sentence was false: the refocus arm above waits for the agent's dump or
+		// RecycleGrace, this one kills on the first pass). The graceful path for an
+		// owner 改機器 is upstream, in the relocate HANDLER, which stamps
+		// refocus_since so the arm ABOVE owns the move (armMemberOwnerOpHandover,
+		// T-b6d9). What is left here is the BACKSTOP for a divergence nobody
+		// stamped for: a member re-pinned while offline that later booted on the
+		// old machine, or a pin written by something other than that handler.
+		// The STOP is
 		// routed to the RUNNING machine's warden (DispatchWarden), not the target's,
 		// because that is where the session to kill actually lives. Guarded to the
 		// SAFE cases ONLY: a pinned target, a KNOWN running machine (never "" — a
@@ -574,6 +590,20 @@ func (s *apiServer) wardenTargetOf(memberID string) string {
 // START, no ghost STOP into a dead buffer). Returns accepted.
 func (s *apiServer) enqueueWardenFrame(memberID string, frame []byte) bool {
 	return s.enqueueToWarden(memberID, s.wardenTargetOf(memberID), frame)
+}
+
+// memberKillTargetWarden is the member twin of resolveWorkerKillTarget: the
+// warden a KILL for this member must be addressed to. A kill names a running
+// session, and a session lives on the machine whose SSE claim carries it
+// (hub.MachineOf) — not on the machine the member is pinned to, which is a
+// statement about where it should run NEXT. Honest fallback to the pin when
+// nothing claims the member (no live connection / an older agent that sends no
+// machine claim), which is exactly what this used to do unconditionally.
+func (s *apiServer) memberKillTargetWarden(memberID string) string {
+	if running := s.hub.MachineOf(memberID); running != "" {
+		return running
+	}
+	return s.wardenTargetOf(memberID)
 }
 
 // enqueueToWarden pushes one frame onto an EXPLICIT warden's FIFO behind the
@@ -1195,7 +1225,13 @@ func (s *apiServer) dispatchRobustStopNow(memberID string) {
 	if !ok {
 		return
 	}
-	s.enqueueWardenFrame(memberID, frame)
+	// Addressed to the warden of the machine the session is ACTUALLY on, falling
+	// back to the desired machine when nothing claims it (the prior behaviour).
+	// Identical for a member sitting on its own pin; it diverges only after a
+	// T-b6d9 改機器 wind-down, where the pin has already moved to the DESTINATION
+	// while the session being collected still runs on the origin — addressing the
+	// destination there would leave the old session alive forever.
+	s.enqueueToWarden(memberID, s.memberKillTargetWarden(memberID), frame)
 	// The robust kill (force-stop, report_stopped recycle, relocate) ends the
 	// current session: drop its boot_ts so the respawn's first connect re-stamps
 	// a fresh anchor (T-8fb2 boot_ts fix).

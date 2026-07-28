@@ -118,6 +118,7 @@ type tokenDTO struct {
 
 type memberDTO struct {
 	ID                string  `json:"id"`
+	AvatarURL         string  `json:"avatar_url"`
 	MemberNo          string  `json:"member_no"`
 	Name              string  `json:"name"`
 	Kind              string  `json:"kind"`
@@ -658,6 +659,19 @@ type resumeTaskDTO struct {
 	UpdatedTS       float64 `json:"updated_ts"`
 }
 
+// taskStepStatusReceiptDTO is the bounded confirmation returned after an agent
+// reports one step. Full task detail remains available through get_task.
+type taskStepStatusReceiptDTO struct {
+	TaskID        string   `json:"task_id"`
+	StepID        string   `json:"step_id"`
+	StepStatus    string   `json:"step_status"`
+	WaitingReason string   `json:"waiting_reason"`
+	TaskStatus    string   `json:"task_status"`
+	ClosedTS      *float64 `json:"closed_ts"`
+	ProgressDone  int      `json:"progress_done"`
+	ProgressTotal int      `json:"progress_total"`
+}
+
 type bootstrapDTO struct {
 	Role     string  `json:"role"`
 	Name     string  `json:"name"`
@@ -854,6 +868,7 @@ type docDTO struct {
 
 type outsourceWorkerDTO struct {
 	ID         string  `json:"id"`
+	AvatarURL  string  `json:"avatar_url"`
 	Codename   string  `json:"codename"`
 	Runtime    string  `json:"runtime"`
 	Model      string  `json:"model"`
@@ -1205,6 +1220,7 @@ func foldActorRuntime(tele, gauge map[string]any, banked float64, actorRuntime s
 func newOutsourceWorkerDTO(w OutsourceWorker, task *Task, p outsourceWorkerProjection) outsourceWorkerDTO {
 	dto := outsourceWorkerDTO{
 		ID:          w.ID,
+		AvatarURL:   memberAvatarURL(w.AvatarAttachmentID),
 		Codename:    w.Codename,
 		Runtime:     NormalizeRuntime(w.Runtime),
 		Model:       w.Model,

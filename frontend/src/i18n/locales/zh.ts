@@ -690,6 +690,12 @@ export const zh = {
   },
   mp: {
     back: "返回",
+    avatarUpload: "更換頭像",
+    avatarRemove: "移除頭像",
+    avatarBusy: "處理中…",
+    avatarTypeError: "只支援 PNG、JPEG 或 WEBP",
+    avatarTooLarge: "圖片不可超過 64 KiB",
+    avatarSaveError: "頭像儲存失敗，請稍後重試",
     rename: "改名",
     renamePlaceholder: "輸入名字",
     wake: "喚醒",
@@ -714,7 +720,11 @@ export const zh = {
     modelMachineDefault: "使用此機器的 Codex 預設模型",
     claudeAccount: "Claude Account",
     codexAccount: "Codex Account",
-    modelEffortNextWakeNote: "變更於下次喚醒／換手生效",
+    // T-b6d9: 這行原本寫「變更於下次喚醒／換手生效」，在正職成員的 model/runtime/
+    // effort 改成「儲存即自動換手、收尾後以新值重生」之後就是假話了（線上成員不必
+    // 等下一次喚醒，也不必有人另外按換手）。key 名字保留歷史拼法（theme wording
+    // overlay 以 key 為契約），文案才是給人看的那一份。
+    modelEffortNextWakeNote: "線上會自動換手後套用；離線則下次喚醒生效",
     modelEffortError: "儲存失敗，請稍後重試",
     runtime: "運行狀況",
     machine: "機器",

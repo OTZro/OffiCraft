@@ -226,7 +226,8 @@ def test_full_task_loop(client, owner_token, executor):
     r = _step_status(client, executor.token, task["id"], ship["id"], "done")
     assert r.status_code == 200, r.text
     final = r.json()
-    assert final["status"] == "done"
+    assert final["step_status"] == "done"
+    assert final["task_status"] == "done"
     assert final["closed_ts"]
     assert final["progress_done"] == 3 and final["progress_total"] == 3
     # The badge counts open tasks only — the finished loop dropped off.
@@ -641,10 +642,12 @@ def test_status_machine_wire_guards(client, owner_token, executor):
     r = _step_status(client, executor.token, task["id"], step_id,
                      "waiting_external", reason="waiting for vendor credentials")
     assert r.status_code == 200
-    assert r.json()["status"] == "waiting_external"
+    assert r.json()["step_status"] == "waiting_external"
+    assert r.json()["task_status"] == "waiting_external"
     assert r.json()["waiting_reason"] == "waiting for vendor credentials"
     r = _step_status(client, executor.token, task["id"], step_id, "in_progress")
-    assert r.status_code == 200 and r.json()["status"] == "in_progress"
+    assert r.status_code == 200 and r.json()["step_status"] == "in_progress"
+    assert r.json()["task_status"] == "in_progress"
     assert r.json()["waiting_reason"] == ""
 
 

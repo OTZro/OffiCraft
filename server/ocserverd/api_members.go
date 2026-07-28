@@ -16,7 +16,9 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 )
 
 // minSelfRestartSecs is the restart_self minimum-liveness floor (T-4c71): a
@@ -60,6 +62,129 @@ func memberDeltaPayload(m Member) map[string]any {
 		"desired_state": m.DesiredState,
 		"owner_id":      wireOwnerID,
 	}
+}
+
+// resolveAvatarMember admits active staff and outsource rows but rejects
+// wardens: a machine is infrastructure, not a person with a visual identity.
+func (s *apiServer) resolveAvatarMember(memberID string) (*Member, error) {
+	m, err := s.dal.GetMember(memberID)
+	if err != nil {
+		return nil, err
+	}
+	if m == nil || m.RosterStatus == RosterStatusRemoved {
+		return nil, errNotFound
+	}
+	return m, nil
+}
+
+func (s *apiServer) publishMemberAvatarChanged(m Member, trigger string) {
+	if m.Kind == KindOutsource {
+		s.publishOutsourceWorker(workerFromMember(m), trigger)
+		return
+	}
+	s.hub.Publish("member", "patch", "member", wireOwnerID+"::"+m.ID,
+		memberDeltaPayload(m), audienceMembers(m.ID), trigger)
+}
+
+func memberAvatarResult(m Member, mime string, filename *string) MemberAvatarDTO {
+	url := memberAvatarURL(m.AvatarAttachmentID)
+	result := MemberAvatarDTO{MemberId: m.ID, AvatarUrl: &url}
+	if mime != "" {
+		result.Mime = &mime
+	}
+	result.Filename = filename
+	return result
+}
+
+// PUT /api/members/{member_id}/avatar — raw raster bytes, owner-only at the
+// route table. A fresh ava- id makes every replacement cache-safe.
+func (s *apiServer) HandlePutMemberAvatarApiMembersMemberIdAvatarPut(
+	w http.ResponseWriter,
+	r *http.Request,
+	memberID string,
+	params HandlePutMemberAvatarApiMembersMemberIdAvatarPutParams,
+) {
+	m, err := s.resolveAvatarMember(memberID)
+	if err != nil {
+		writeResolveError(w, err, "member", memberID)
+		return
+	}
+	if m.Kind == KindWarden {
+		writeError(w, http.StatusUnprocessableEntity, "a machine cannot have a personal avatar")
+		return
+	}
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxAvatarBytes+1))
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "could not read avatar image")
+		return
+	}
+	if len(raw) > maxAvatarBytes {
+		writeError(w, http.StatusRequestEntityTooLarge,
+			fmt.Sprintf("avatar image is too large (max %d bytes)", maxAvatarBytes))
+		return
+	}
+	if len(raw) == 0 {
+		writeError(w, http.StatusUnprocessableEntity, "avatar image is empty")
+		return
+	}
+	actualMime := sniffAttachmentMime(raw)
+	if _, ok := avatarMimeMagic[actualMime]; !ok {
+		writeError(w, http.StatusUnprocessableEntity,
+			"avatar must be PNG, JPEG, or WEBP raster bytes")
+		return
+	}
+	if params.Mime != nil {
+		declared := strings.TrimSpace(*params.Mime)
+		if declared != "" && declared != actualMime {
+			writeError(w, http.StatusUnprocessableEntity,
+				fmt.Sprintf("avatar mime %q does not match image bytes %q", declared, actualMime))
+			return
+		}
+	}
+	var filename *string
+	if params.Filename != nil {
+		trimmed := strings.TrimSpace(*params.Filename)
+		if trimmed != "" {
+			filename = &trimmed
+		}
+	}
+	avatar := ChatAttachment{
+		ID:       "ava-" + newHexID(12),
+		Mime:     actualMime,
+		Data:     raw,
+		Filename: filename,
+	}
+	if err := s.dal.ReplaceMemberAvatar(m.ID, avatar); err != nil {
+		internalError(w, err)
+		return
+	}
+	m.AvatarAttachmentID = avatar.ID
+	s.publishMemberAvatarChanged(*m, requestTrigger(r))
+	writeJSON(w, http.StatusOK, memberAvatarResult(*m, actualMime, filename))
+}
+
+// DELETE /api/members/{member_id}/avatar — idempotent fallback restoration.
+func (s *apiServer) HandleDeleteMemberAvatarApiMembersMemberIdAvatarDelete(
+	w http.ResponseWriter,
+	r *http.Request,
+	memberID string,
+) {
+	m, err := s.resolveAvatarMember(memberID)
+	if err != nil {
+		writeResolveError(w, err, "member", memberID)
+		return
+	}
+	if m.Kind == KindWarden {
+		writeError(w, http.StatusUnprocessableEntity, "a machine cannot have a personal avatar")
+		return
+	}
+	if err := s.dal.DeleteMemberAvatar(m.ID); err != nil {
+		internalError(w, err)
+		return
+	}
+	m.AvatarAttachmentID = ""
+	s.publishMemberAvatarChanged(*m, requestTrigger(r))
+	writeJSON(w, http.StatusOK, memberAvatarResult(*m, "", nil))
 }
 
 // GET /api/members — the roster (soft-removed rows omitted). online is the
@@ -235,7 +360,12 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 		}
 		m.Name = name
 	}
+	// The three LAUNCH INTENTS are tracked separately from the display name:
+	// only they are baked into a boot frame, so only they can be stale in a
+	// running session — renaming a member must never recycle it.
+	launchIntentChanged := false
 	if body.Model != nil {
+		launchIntentChanged = launchIntentChanged || *body.Model != m.Model
 		m.Model = *body.Model
 	}
 	if body.Runtime != nil {
@@ -245,6 +375,7 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 				"runtime must be one of [claude codex]; got '"+runtime+"'")
 			return
 		}
+		launchIntentChanged = launchIntentChanged || runtime != m.Runtime
 		m.Runtime = runtime
 	}
 	if body.Effort != nil {
@@ -253,7 +384,17 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 				"effort must be one of [high low medium]; got '"+*body.Effort+"'")
 			return
 		}
+		launchIntentChanged = launchIntentChanged || *body.Effort != m.Effort
 		m.Effort = *body.Effort
+	}
+	// T-b6d9: a launch intent used to be written and then simply ignored by the
+	// live session — the owner pressed 儲存, got a 200, and the member went on
+	// running the OLD model until something unrelated respawned it. Now the
+	// change opens the SAME graceful wind-down 重新聚焦 has always had, so the
+	// member finishes what it was doing and comes back on the new value. Same
+	// single write: the epoch and the new value can never land apart.
+	if launchIntentChanged {
+		s.armMemberOwnerOpHandover(m, memberOpModel)
 	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
@@ -333,10 +474,13 @@ func (s *apiServer) HandleActivateMemberApiMembersMemberIdActivatePost(w http.Re
 // member (admin-gated, route Requires=admin_agent — parity with the member
 // lifecycle family). The member twin of the outsource-worker relocate: write the
 // owner-pinned desired_machine_id, then run the SAME event-driven reconcile the
-// activate click uses (reconcileMemberNow) — a LIVE member is auto-migrated onto
-// the chosen machine (fbc5280: the online-converged reconcile branch robust-STOPs
-// the old session so the next tick re-spawns on the pin), an offline member just
-// re-pins so the next wake lands there. PLACEMENT ONLY — unlike activate it NEVER
+// activate click uses (reconcileMemberNow). A LIVE member is auto-migrated onto
+// the chosen machine, but SINCE T-b6d9 GRACEFULLY: the pin is written together
+// with a refocus epoch, the agent gets the ordinary five-step wind-down SOP, and
+// the kill+re-spawn happens at the 收口 (its own report_stopped, or the recycle
+// arm's RecycleGrace ceiling). It used to be an immediate robust STOP with no
+// warning at all (fbc5280). An offline member just re-pins so the next wake
+// lands there — no epoch, nothing to wind down. PLACEMENT ONLY — unlike activate it NEVER
 // touches desired_state (or the stopping/waking anchors): a relocate is not a
 // wake. 404 for an unknown / removed member; any non-"" machine_id that names no
 // real machine is a 404, so a stale/typo'd id never pins the member to a
@@ -381,16 +525,26 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 		writeResolveError(w, err, "member", memberId)
 		return
 	}
-	// The ONLY mutation is the placement pin — desired_state and the winding-down
-	// anchors are deliberately left untouched (the activate contrast).
+	// The placement pin is the only INTENT mutation — desired_state is
+	// deliberately left untouched (the activate contrast).
 	m.DesiredMachineID = machineID
+	// T-b6d9: a LIVE member used to be robust-STOPped on the spot by the
+	// reconcile below — no 預告, no grace, not even a stopping_since, so it just
+	// vanished from the cockpit with whatever it was mid-way through. It now
+	// gets the same wind-down 重新聚焦 has always had; the winding-down anchors
+	// ARE written in that case, and only in that case. Same putMember, so the
+	// new pin and the epoch land together and the delta the agent wakes on
+	// already names the destination.
+	windDown := s.armMemberOwnerOpHandover(m, memberOpRelocate)
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return
 	}
-	// Event-driven reconcile: an online member whose running machine no longer
-	// matches the fresh pin is migrated NOW (STOP old session → re-spawn on the
-	// pin next tick); an offline member is a no-op here (nothing to move). The
+	// Event-driven reconcile: with a wind-down open this decides "awaiting agent
+	// dump" and dispatches NOTHING (the 收口 owns the move); it still runs so the
+	// tick state is advanced here rather than up to 30s later, and it remains the
+	// path that migrates a member nobody stamped for (the decideUp relocate arm,
+	// now a backstop). An offline member is a no-op here (nothing to move). The
 	// pin is already persisted so the relocate never FAILS on dispatch — but we
 	// OBSERVE it: a decided recycle STOP / START that the warden could not accept
 	// (old/new machine unreachable) surfaces relocation_pending=true, so the
@@ -403,7 +557,12 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 		return
 	}
 	dto := s.newMemberDTO(*m, roleName, "", 0)
-	if dec.DispatchUnlanded {
+	// relocation_pending means what it has always meant — "move scheduled, not
+	// yet landed". T-b6d9 adds a SECOND way to be in that state: a wind-down was
+	// opened, so nothing has been dispatched YET and the member is still on the
+	// old machine until the 收口. Reporting a clean landed 200 there would be the
+	// same silent false-success T-8655 removed for the unreachable-warden case.
+	if dec.DispatchUnlanded || windDown {
 		pending := true
 		dto.RelocationPending = &pending
 	}
