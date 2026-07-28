@@ -154,7 +154,7 @@ describe("MarkdownPreviewOverlay 複製分享連結 (T-d10b)", () => {
     );
   });
 
-  it("never fakes 已複製連結 when the mint fails", async () => {
+  it("shows 複製連結失敗 when the mint fails instead of faking success", async () => {
     vi.spyOn(api, "getChatAttachmentShareLink").mockRejectedValue(new Error("boom"));
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const writeText = vi.fn(async () => {});
@@ -167,5 +167,6 @@ describe("MarkdownPreviewOverlay 複製分享連結 (T-d10b)", () => {
     fireEvent.click(screen.getByRole("button", { name: "複製分享連結" }));
     await waitFor(() => expect(writeText).not.toHaveBeenCalled());
     expect(screen.queryByRole("button", { name: "已複製連結" })).toBeNull();
+    expect(screen.getByRole("button", { name: "複製連結失敗" })).toBeTruthy();
   });
 });

@@ -678,6 +678,7 @@ export const zh = {
     // 檔案級永久分享連結(?sig= HMAC)— 複製到剪貼簿。
     copyShareLink: "複製分享連結",
     shareLinkCopied: "已複製連結",
+    shareLinkCopyFailed: "複製連結失敗",
     // .md 附件的座艙內預覽(T-a1c4):與下載分開的動作;overlay 內用
     // Markdown.tsx render(不是開新分頁看原始碼)。
     // T-7bc2: the chip itself is the trigger now — no separate "action" label.

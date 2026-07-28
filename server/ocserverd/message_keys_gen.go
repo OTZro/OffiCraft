@@ -48,6 +48,7 @@ var messageKeys = map[string]bool{
 	"chat.roleSettingsLink":                    true,
 	"chat.send":                                true,
 	"chat.shareLinkCopied":                     true,
+	"chat.shareLinkCopyFailed":                 true,
 	"chat.systemSender":                        true,
 	"chat.tasksLink":                           true,
 	"chat.unreadBelow":                         true,

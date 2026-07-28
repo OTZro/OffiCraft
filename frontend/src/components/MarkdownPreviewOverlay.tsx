@@ -40,6 +40,7 @@ export function MarkdownPreviewOverlay({
   const [source, setSource] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
 
   // Fetch the markdown text once (the authed blob URL — same ?token= gate the
   // download/thumbnail paths use). A non-ok response / network error surfaces
@@ -66,12 +67,15 @@ export function MarkdownPreviewOverlay({
   }, [url]);
 
   async function onCopyShareLink() {
+    setCopyFailed(false);
     try {
       await copyAttachmentShareLink(attachmentId);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch (e) {
       console.warn("MarkdownPreviewOverlay: copy share link failed", e);
+      setCopyFailed(true);
+      window.setTimeout(() => setCopyFailed(false), 2000);
     }
   }
 
@@ -102,12 +106,28 @@ export function MarkdownPreviewOverlay({
             <button
               type="button"
               className="md-preview__download md-preview__share"
-              aria-label={copied ? t.chat.shareLinkCopied : t.chat.copyShareLink}
-              title={copied ? t.chat.shareLinkCopied : t.chat.copyShareLink}
+              aria-label={
+                copyFailed
+                  ? t.chat.shareLinkCopyFailed
+                  : copied
+                    ? t.chat.shareLinkCopied
+                    : t.chat.copyShareLink
+              }
+              title={
+                copyFailed
+                  ? t.chat.shareLinkCopyFailed
+                  : copied
+                    ? t.chat.shareLinkCopied
+                    : t.chat.copyShareLink
+              }
               onClick={() => void onCopyShareLink()}
             >
               {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
-              {copied ? t.chat.shareLinkCopied : t.chat.copyShareLink}
+              {copyFailed
+                ? t.chat.shareLinkCopyFailed
+                : copied
+                  ? t.chat.shareLinkCopied
+                  : t.chat.copyShareLink}
             </button>
             {/* Download — the SECOND action, distinct from preview: the authed
              * blob URL with a download attribute (server forces the bytes). */}

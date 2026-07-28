@@ -283,13 +283,18 @@ function ArtifactsPopover({
               fileNameClassName="task-artifacts__chip-name"
               fileNameColClassName="task-artifacts__chip-text"
               onOpenImage={(src) => setLightboxSrc(src)}
-              onPreviewMarkdown={(att) =>
+              onPreviewMarkdown={(att) => {
+                // AttachmentStrip keeps the artifact id as `att.id`: it is
+                // the key used below to recover artifact metadata. The share
+                // link endpoint, however, accepts only the backing chat
+                // attachment id, so carry that separately into the preview.
+                const artifact = artifacts.find((a) => a.id === att.id);
                 setPreview({
                   title: att.filename,
                   url: att.url,
-                  attachmentId: att.id,
-                })
-              }
+                  attachmentId: artifact?.attachmentId ?? att.id,
+                });
+              }}
               renderExtra={renderExtra}
               renderMeta={(att) => {
                 const art = artifacts.find((a) => a.id === att.id);

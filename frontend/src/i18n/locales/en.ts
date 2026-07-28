@@ -603,6 +603,7 @@ export const en: Dict = {
     // Permanent single-file share link (?sig= HMAC) — copied to the clipboard.
     copyShareLink: "Copy share link",
     shareLinkCopied: "Link copied",
+    shareLinkCopyFailed: "Failed to copy link",
     // In-cockpit preview of a .md attachment (T-a1c4): a separate action from
     // download; the overlay renders via Markdown.tsx (not the raw-source new tab).
     // T-7bc2: the chip itself is the trigger now — no separate "action" label.

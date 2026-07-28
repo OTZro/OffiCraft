@@ -47,6 +47,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "chat.roleSettingsLink",
   "chat.send",
   "chat.shareLinkCopied",
+  "chat.shareLinkCopyFailed",
   "chat.systemSender",
   "chat.tasksLink",
   "chat.unreadBelow",

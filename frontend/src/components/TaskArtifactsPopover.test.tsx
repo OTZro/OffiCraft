@@ -8,19 +8,24 @@
 // every kind is listed at once), the .md 預覽 action, the owner-only 移除
 // affordance, and click-outside dismissal.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, waitFor, screen } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
+import { api } from "../api";
 import { TaskArtifactsBadge } from "./TaskArtifactsPopover";
 import type { TaskArtifactView } from "../api/adapter";
 
 // The popover keeps itself live via api.subscribeEvents (the ChatGalleryPanel
 // pattern) — stub it to a no-op unsubscribe so the unit test never touches SSE.
 vi.mock("../api", () => ({
-  api: { subscribeEvents: () => () => {} },
+  api: {
+    subscribeEvents: () => () => {},
+    getChatAttachmentShareLink: vi.fn(),
+  },
 }));
 
 let seq = 0;
+const realFetch = globalThis.fetch;
 function mkArtifact(over: Partial<TaskArtifactView>): TaskArtifactView {
   seq += 1;
   return {
@@ -56,6 +61,11 @@ function renderBadge(
 
 beforeEach(() => {
   seq = 0;
+});
+
+afterEach(() => {
+  globalThis.fetch = realFetch;
+  vi.restoreAllMocks();
 });
 
 describe("產物 badge visibility (the empty-set assertion + positive control)", () => {
@@ -236,6 +246,51 @@ describe("產物 popover — the one list (T-49fb)", () => {
     fireEvent.click(screen.getByTestId("task-artifacts-badge"));
     await waitFor(() => expect(screen.getByText("only a link")).toBeTruthy());
     expect(screen.queryByText("還沒有產物")).toBeNull();
+  });
+});
+
+describe("任務產物 markdown 預覽的分享連結", () => {
+  it("uses the backing att- id while keeping the ta- id for artifact lookup", async () => {
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      text: async () => "# task artifact",
+    })) as unknown as typeof fetch;
+    const mint = vi
+      .mocked(api.getChatAttachmentShareLink)
+      .mockResolvedValue("/api/chat/attachment/att-backing?sig=test");
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: vi.fn(async () => {}) },
+      configurable: true,
+    });
+    const { container } = renderBadge(
+      [
+        mkArtifact({
+          id: "ta-artifact",
+          kind: "file",
+          filename: "task.md",
+          mime: "text/markdown",
+          url: "/api/chat/attachment/ta-artifact",
+          attachmentId: "att-backing",
+        }),
+      ],
+      { count: 1 },
+    );
+
+    fireEvent.click(screen.getByTestId("task-artifacts-badge"));
+    await waitFor(() =>
+      expect(container.querySelector("button.task-artifacts__chip")).toBeTruthy(),
+    );
+    const chip = container.querySelector("button.task-artifacts__chip")!;
+    fireEvent.click(chip);
+    await screen.findByRole("heading", { name: "task artifact" });
+
+    // The message bubble also has a same-named hover button. Scope to this
+    // overlay's action row so this test cannot pass by clicking that twin.
+    const actions = container.querySelector(".md-preview__actions")!;
+    const share = actions.querySelector("button.md-preview__share")!;
+    fireEvent.click(share);
+    await waitFor(() => expect(mint).toHaveBeenCalledWith("att-backing"));
+    expect(mint).not.toHaveBeenCalledWith("ta-artifact");
   });
 });
 
