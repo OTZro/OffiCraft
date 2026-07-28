@@ -108,10 +108,6 @@ describe("chat .md preview action (T-a1c4 / T-7bc2)", () => {
     expect(dl.getAttribute("download")).toBe("design.md");
   });
 
-  // T-d10b: 產生分享連結 was on the thread bubble and the gallery row but NOT on
-  // the preview panel the owner had just opened — so once you were inside the
-  // preview, 下載 was the only way out. This pins the button onto the panel AND
-  // pins that it mints the link for the attachment the panel is showing.
   it("carries a 複製分享連結 button that mints THIS attachment's share link", async () => {
     globalThis.fetch = vi.fn(async () => ({
       ok: true,
@@ -138,9 +134,6 @@ describe("chat .md preview action (T-a1c4 / T-7bc2)", () => {
     fireEvent.click(container.querySelector("button.chat__msg-file")!);
     await waitFor(() => expect(getByRole("heading", { name: "Design" })).toBeTruthy());
 
-    // Scoped to the PANEL: the thread bubble has its own hover-revealed twin
-    // with the same accessible name, and it is precisely the panel's copy that
-    // was missing — an unscoped query would pass on the bubble's button alone.
     const actions = container.querySelector(".md-preview__actions") as HTMLElement;
     const share = within(actions).getByRole("button", { name: "複製分享連結" });
     fireEvent.click(share);

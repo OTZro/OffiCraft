@@ -96,10 +96,6 @@ describe("MarkdownPreviewOverlay", () => {
   });
 });
 
-// T-d10b: the header's THIRD action. 產生分享連結 already lived on the chat
-// bubble and the gallery row; this panel was the gap the owner hit ("點開
-// preview 的時候只能下載"). The button must reuse lib/shareLink.ts — a fourth
-// parallel mint is the drift this repo keeps paying for.
 describe("MarkdownPreviewOverlay 複製分享連結 (T-d10b)", () => {
   const realFetch = globalThis.fetch;
   afterEach(() => {
@@ -131,7 +127,6 @@ describe("MarkdownPreviewOverlay 複製分享連結 (T-d10b)", () => {
     const share = screen.getByRole("button", { name: "複製分享連結" });
     const dl = screen.getByText("下載").closest("a.md-preview__download")!;
     expect(actions.contains(share)).toBe(true);
-    // Node.DOCUMENT_POSITION_FOLLOWING === 4: `dl` comes after `share`.
     expect(share.compareDocumentPosition(dl) & 4).toBe(4);
   });
 
@@ -149,15 +144,11 @@ describe("MarkdownPreviewOverlay 複製分享連結 (T-d10b)", () => {
     fireEvent.click(screen.getByRole("button", { name: "複製分享連結" }));
 
     await waitFor(() => expect(mint).toHaveBeenCalledWith("att-7"));
-    // Absolutised against the page origin by lib/shareLink.ts — the server
-    // mints a server-RELATIVE path, so a bare path on the clipboard would be
-    // an unusable link.
     await waitFor(() =>
       expect(writeText).toHaveBeenCalledWith(
         `${window.location.origin}/api/chat/attachment/att-7?sig=test-sig`,
       ),
     );
-    // Feedback only AFTER both the mint and the clipboard write succeeded.
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "已複製連結" })).toBeTruthy(),
     );

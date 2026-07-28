@@ -9,15 +9,6 @@
 // panel does not dismiss): the caller holds the open state and passes the blob's
 // serve url + display title. Shared by the chat attachment strip AND the task
 // artifact popover — one preview surface, not two.
-//
-// T-d10b: the header carries THREE actions, not two — 複製分享連結 sits left of
-// 下載. 產生分享連結 already existed on the thread bubble (ChatArea) and the
-// gallery row (ChatGalleryPanel); this surface was the one place it was missing,
-// so the owner could only download what he had opened. It reuses the SAME
-// `lib/shareLink.ts` mint + the SAME `chat.copyShareLink` / `chat.shareLinkCopied`
-// keys as those two — a fourth parallel implementation is exactly the drift this
-// repo keeps paying for. `attachmentId` is REQUIRED (not optional) so a new call
-// site cannot quietly re-open the same hole.
 
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n";
@@ -42,17 +33,12 @@ export function MarkdownPreviewOverlay({
   title: string;
   /** The blob's serve path (`/api/chat/attachment/<id>`); fetched as text. */
   url: string;
-  /** The blob id the share link is minted for — the SAME id the serve url
-   * carries. Required: every caller already holds it, and making it optional
-   * would let a call site silently render a preview with no share action. */
   attachmentId: string;
   onClose: () => void;
 }) {
   const { t } = useI18n();
   const [source, setSource] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
-  // Transient 「已複製」 feedback — set ONLY after the mint + clipboard write
-  // both succeeded (same honesty rule as ChatArea / ChatGalleryPanel).
   const [copied, setCopied] = useState(false);
 
   // Fetch the markdown text once (the authed blob URL — same ?token= gate the
@@ -113,9 +99,6 @@ export function MarkdownPreviewOverlay({
             {title}
           </span>
           <div className="md-preview__actions">
-            {/* 複製分享連結 — mints the permanent ?sig= link for THIS blob via
-             * the shared lib/shareLink.ts (same call the thread bubble and the
-             * gallery row make). Sits left of 下載 (T-d10b). */}
             <button
               type="button"
               className="md-preview__download md-preview__share"

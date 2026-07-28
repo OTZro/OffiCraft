@@ -1419,9 +1419,6 @@ button.chat__msg-file {
   color: var(--color-accent);
   border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
 }
-/* T-d10b: 複製分享連結 rides the SAME pill as 下載 (it sits immediately left of
-   it in the header action row) — it is a <button>, so it only has to undo the
-   two things a button does not inherit from the <a>. No second pill design. */
 .md-preview__share {
   cursor: pointer;
   font-family: inherit;

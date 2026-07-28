@@ -104,10 +104,6 @@ describe("reply-card question attachments: .md preview (T-7bc2)", () => {
     );
     const dl = container.querySelector("a.md-preview__download") as HTMLAnchorElement;
     expect(dl.getAttribute("download")).toBe("design-proposal.md");
-    // T-d10b: the panel's THIRD action — 複製分享連結 for THIS blob, minted
-    // through the shared lib/shareLink.ts. The reply-card face is the third
-    // caller of the one preview surface; it must not be the place the button
-    // goes missing again.
     const actions = container.querySelector(".md-preview__actions") as HTMLElement;
     const share = within(actions).getByRole("button", { name: "複製分享連結" });
     fireEvent.click(share);
