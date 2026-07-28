@@ -40,6 +40,10 @@ const TIMEOUT_MS = 30_000;
 /** Same discipline for the one-shot chip's window. */
 const SENT_MS = 2_000;
 
+/** Captured at module scope, BEFORE any useFakeTimers() call, so the control
+ * test below can sleep in REAL time regardless of what the fake clock does. */
+const realSetTimeout = globalThis.setTimeout;
+
 interface HarnessProps {
   subjectId?: string;
   machines?: MachineView[];
@@ -124,7 +128,17 @@ function deferredRelocate() {
 }
 
 beforeEach(() => {
-  vi.useFakeTimers({ shouldAdvanceTime: true });
+  // Do NOT add `{ shouldAdvanceTime: true }` back. It registers a REAL 20ms
+  // interval that ticks the fake clock on its own, and this file has two
+  // assertions that hold a single millisecond: "times out into a retryable
+  // notice when the move never lands" (advances TIMEOUT_MS - 1 and demands the
+  // button still says 更換中…) and "drops the 已送出 chip by itself, so it can
+  // never read as a status"
+  // (advances SENT_MS - 1 and demands the chip still be there). One stray 20ms
+  // tick during an `await act()` yield crosses both boundaries and the file
+  // flakes. "does not advance the fake clock across a real-time yield" is the
+  // regression guard for exactly this.
+  vi.useFakeTimers();
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -229,6 +243,38 @@ describe("useRelocateMachine", () => {
     fireEvent.click(button());
     expect(calls).toEqual(["mach-a", "mach-a"]);
     expect(notice()).toBeNull();
+  });
+
+  // Guards the fake-clock setup itself, not the hook: the two assertions in
+  // this file that pin behaviour to a single millisecond (the TIMEOUT_MS - 1
+  // above and the SENT_MS - 1 below) are only measurable while the fake clock
+  // moves ONLY when the test moves it. Under
+  // `useFakeTimers({ shouldAdvanceTime: true })` a real 20ms interval ticks the
+  // fake clock behind the test's back, and any real-time yield — every
+  // `await act()` goes through setImmediate, which bypasses fake timers — lets
+  // it push the clock past the boundary. Here the real sleep makes that
+  // auto-tick certain instead of load-dependent, so re-adding
+  // `shouldAdvanceTime` turns this test red immediately rather than flaking in
+  // CI.
+  it("does not advance the fake clock across a real-time yield", async () => {
+    const { onRelocate, resolve } = deferredRelocate();
+    const { button } = mount({
+      onRelocate,
+      machines: [machine("mach-a")],
+    });
+
+    fireEvent.click(button());
+    await act(async () => {
+      resolve();
+    });
+
+    // A real 30ms window: long enough for at least one 20ms auto-tick.
+    await new Promise((r) => realSetTimeout(r, 30));
+
+    act(() => {
+      vi.advanceTimersByTime(TIMEOUT_MS - 1);
+    });
+    expect(button().textContent).toContain(zh.machine.relocating);
   });
 
   it("does not time out after the move landed", async () => {
