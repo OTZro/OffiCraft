@@ -972,7 +972,7 @@ func TestMigration00035NormalizesAutoMachinePlacement(t *testing.T) {
 	}
 }
 
-// TestMemberAvatarMigrationRollback pins the destructive half of 00038: an
+// TestMemberAvatarMigrationRollback pins the destructive half of 00040: an
 // avatar blob is owned only by member.avatar_attachment_id, so Down must remove
 // that blob before dropping its sole pointer. Unrelated chat blobs survive.
 func TestMemberAvatarMigrationRollback(t *testing.T) {
