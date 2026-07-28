@@ -41,16 +41,23 @@ import { ChevronRightIcon } from "./icons";
  * which file it belongs to. */
 function useMarkdownPreview() {
   const { t } = useI18n();
-  const [preview, setPreview] = useState<{ title: string; url: string } | null>(
-    null,
-  );
+  const [preview, setPreview] = useState<{
+    title: string;
+    url: string;
+    attachmentId: string;
+  } | null>(null);
   function onPreviewMarkdown(att: ChatAttachmentView) {
-    setPreview({ title: att.filename || t.chat.downloadAttachment, url: att.url });
+    setPreview({
+      title: att.filename || t.chat.downloadAttachment,
+      url: att.url,
+      attachmentId: att.id,
+    });
   }
   const overlay = preview ? (
     <MarkdownPreviewOverlay
       title={preview.title}
       url={preview.url}
+      attachmentId={preview.attachmentId}
       onClose={() => setPreview(null)}
     />
   ) : null;

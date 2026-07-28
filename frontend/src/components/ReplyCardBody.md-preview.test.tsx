@@ -5,8 +5,9 @@
 // button). Mirrors ChatArea.md-preview.test.tsx.
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, fireEvent, waitFor } from "@testing-library/react";
+import { render, fireEvent, waitFor, within } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
+import { api } from "../api";
 import { RepliesPage } from "./RepliesPage";
 import { ReplyCardsProvider } from "../hooks/useReplyCards";
 import { ReplyCardAnsweredBody } from "./ReplyCardBody";
@@ -81,6 +82,14 @@ describe("reply-card question attachments: .md preview (T-7bc2)", () => {
       ok: true,
       text: async () => "# design-proposal\n\nthe **plan**",
     })) as unknown as typeof fetch;
+    const mint = vi
+      .spyOn(api, "getChatAttachmentShareLink")
+      .mockResolvedValue("/api/chat/attachment/att-md?sig=test-sig");
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
     __resetMock();
     __injectMockReplyCard(mkCard({ attachments: [mdAtt()] }));
     const { container, findByTestId, getByRole } = render(
@@ -93,8 +102,21 @@ describe("reply-card question attachments: .md preview (T-7bc2)", () => {
     await waitFor(() =>
       expect(getByRole("heading", { name: "design-proposal" })).toBeTruthy()
     );
-    const dl = container.querySelector(".md-preview__download") as HTMLAnchorElement;
+    const dl = container.querySelector("a.md-preview__download") as HTMLAnchorElement;
     expect(dl.getAttribute("download")).toBe("design-proposal.md");
+    // T-d10b: the panel's THIRD action — 複製分享連結 for THIS blob, minted
+    // through the shared lib/shareLink.ts. The reply-card face is the third
+    // caller of the one preview surface; it must not be the place the button
+    // goes missing again.
+    const actions = container.querySelector(".md-preview__actions") as HTMLElement;
+    const share = within(actions).getByRole("button", { name: "複製分享連結" });
+    fireEvent.click(share);
+    await waitFor(() => expect(mint).toHaveBeenCalledWith("att-md"));
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(
+        `${window.location.origin}/api/chat/attachment/att-md?sig=test-sig`,
+      ),
+    );
   });
 
   it("renders no preview <button> when the card carries no .md attachment (pdf stays a plain <a>)", async () => {

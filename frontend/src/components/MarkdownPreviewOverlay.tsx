@@ -9,27 +9,51 @@
 // panel does not dismiss): the caller holds the open state and passes the blob's
 // serve url + display title. Shared by the chat attachment strip AND the task
 // artifact popover — one preview surface, not two.
+//
+// T-d10b: the header carries THREE actions, not two — 複製分享連結 sits left of
+// 下載. 產生分享連結 already existed on the thread bubble (ChatArea) and the
+// gallery row (ChatGalleryPanel); this surface was the one place it was missing,
+// so the owner could only download what he had opened. It reuses the SAME
+// `lib/shareLink.ts` mint + the SAME `chat.copyShareLink` / `chat.shareLinkCopied`
+// keys as those two — a fourth parallel implementation is exactly the drift this
+// repo keeps paying for. `attachmentId` is REQUIRED (not optional) so a new call
+// site cannot quietly re-open the same hole.
 
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n";
 import { authedAttachmentUrl } from "../api/http";
+import { copyAttachmentShareLink } from "../lib/shareLink";
 import { Markdown } from "./Markdown";
-import { CloseIcon, DownloadIcon, FileTextIcon } from "./icons";
+import {
+  CheckIcon,
+  CloseIcon,
+  CopyIcon,
+  DownloadIcon,
+  FileTextIcon,
+} from "./icons";
 
 export function MarkdownPreviewOverlay({
   title,
   url,
+  attachmentId,
   onClose,
 }: {
   /** Display name shown in the header (the blob's filename). */
   title: string;
   /** The blob's serve path (`/api/chat/attachment/<id>`); fetched as text. */
   url: string;
+  /** The blob id the share link is minted for — the SAME id the serve url
+   * carries. Required: every caller already holds it, and making it optional
+   * would let a call site silently render a preview with no share action. */
+  attachmentId: string;
   onClose: () => void;
 }) {
   const { t } = useI18n();
   const [source, setSource] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  // Transient 「已複製」 feedback — set ONLY after the mint + clipboard write
+  // both succeeded (same honesty rule as ChatArea / ChatGalleryPanel).
+  const [copied, setCopied] = useState(false);
 
   // Fetch the markdown text once (the authed blob URL — same ?token= gate the
   // download/thumbnail paths use). A non-ok response / network error surfaces
@@ -55,6 +79,16 @@ export function MarkdownPreviewOverlay({
     };
   }, [url]);
 
+  async function onCopyShareLink() {
+    try {
+      await copyAttachmentShareLink(attachmentId);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      console.warn("MarkdownPreviewOverlay: copy share link failed", e);
+    }
+  }
+
   // Esc closes — bound only while mounted (the overlay only mounts open).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -79,6 +113,19 @@ export function MarkdownPreviewOverlay({
             {title}
           </span>
           <div className="md-preview__actions">
+            {/* 複製分享連結 — mints the permanent ?sig= link for THIS blob via
+             * the shared lib/shareLink.ts (same call the thread bubble and the
+             * gallery row make). Sits left of 下載 (T-d10b). */}
+            <button
+              type="button"
+              className="md-preview__download md-preview__share"
+              aria-label={copied ? t.chat.shareLinkCopied : t.chat.copyShareLink}
+              title={copied ? t.chat.shareLinkCopied : t.chat.copyShareLink}
+              onClick={() => void onCopyShareLink()}
+            >
+              {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+              {copied ? t.chat.shareLinkCopied : t.chat.copyShareLink}
+            </button>
             {/* Download — the SECOND action, distinct from preview: the authed
              * blob URL with a download attribute (server forces the bytes). */}
             <a

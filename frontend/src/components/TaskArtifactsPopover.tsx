@@ -164,7 +164,11 @@ function ArtifactsPopover({
   const nowTs = Date.now() / 1000;
   // Open overlays (mutually exclusive; the caller-owned state pattern).
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
-  const [preview, setPreview] = useState<{ title: string; url: string } | null>(
+  const [preview, setPreview] = useState<{
+    title: string;
+    url: string;
+    attachmentId: string;
+  } | null>(
     null,
   );
 
@@ -279,7 +283,13 @@ function ArtifactsPopover({
               fileNameClassName="task-artifacts__chip-name"
               fileNameColClassName="task-artifacts__chip-text"
               onOpenImage={(src) => setLightboxSrc(src)}
-              onPreviewMarkdown={(att) => setPreview({ title: att.filename, url: att.url })}
+              onPreviewMarkdown={(att) =>
+                setPreview({
+                  title: att.filename,
+                  url: att.url,
+                  attachmentId: att.id,
+                })
+              }
               renderExtra={renderExtra}
               renderMeta={(att) => {
                 const art = artifacts.find((a) => a.id === att.id);
@@ -339,6 +349,7 @@ function ArtifactsPopover({
         <MarkdownPreviewOverlay
           title={preview.title}
           url={preview.url}
+          attachmentId={preview.attachmentId}
           onClose={() => setPreview(null)}
         />
       )}
