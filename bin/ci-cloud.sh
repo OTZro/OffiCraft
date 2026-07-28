@@ -94,7 +94,7 @@ fi
 FE="$ROOT/frontend"
 
 # ===========================================================================
-# (1/2) UNIT
+# (1/3) UNIT
 # ===========================================================================
 # Stage the embed assets FIRST (T-e731). seeds/*.md, docs/guide, the prebuilt
 # ocwarden/ocagent and spec/mcp-catalog.json are served EMBED-ONLY, and a clean
@@ -102,7 +102,7 @@ FE="$ROOT/frontend"
 # unit tests (they boot and read through the real embed) go red on a clean
 # checkout unless these run. A CI runner is by definition always a clean
 # checkout, so this is not optional here.
-echo "[ci-cloud] (1/2) unit — staging embed assets, then go test per module + frontend"
+echo "[ci-cloud] (1/3) unit — staging embed assets, then go test per module + frontend"
 PATH="$(dirname "$GO"):$PATH" bash "$ROOT/bin/build-seedsdist"
 PATH="$(dirname "$GO"):$PATH" bash "$ROOT/bin/build-docsdist"
 PATH="$(dirname "$GO"):$PATH" bash "$ROOT/bin/build-bindist"
@@ -122,13 +122,13 @@ echo "[ci-cloud]   vitest run (frontend unit suite)"
 (cd "$FE" && "$NPM" test)
 
 # ===========================================================================
-# (2/2) CONSISTENCY — regenerate-and-byte-compare drift gates
+# (2/3) CONSISTENCY — regenerate-and-byte-compare drift gates
 # ===========================================================================
 # Every gate below is the same shape: run the generator against its frozen
 # source, require the COMMITTED generated artifact to come back byte-identical.
 # Several regenerate IN PLACE, so those snapshot the committed bytes first and
 # restore them on failure — a red must not leave a mutated worktree behind.
-echo "[ci-cloud] (2/2) consistency — wire freeze + generated-artifact drift gates"
+echo "[ci-cloud] (2/3) consistency — wire freeze + generated-artifact drift gates"
 
 # 2a. gen-ocapi drift — the wire-freeze gate on the SERVER's REST surface.
 # server/ocserverd/ocapi_gen.go is generated from the frozen spec/openapi.json.
@@ -195,5 +195,29 @@ if ! diff -u "$FE/src/api/generated/schema.ts" "$FRESH_TS"; then
   exit 1
 fi
 rm -f "$FRESH_TS"
+
+# ===========================================================================
+# (3/3) CONFORMANCE — black-box HTTP behaviour guard
+# ===========================================================================
+# Keep the fast import guard explicit here as well as the full runner below:
+# a black-box violation should fail before we spend time building the isolated
+# server. The full runner then verifies the frozen route/spec surface against
+# live behaviour on a throwaway server and SQLite database.
+echo "[ci-cloud] (3/3) conformance — black-box lint + isolated HTTP behaviour suite"
+conf_hits="$(grep -RInE --include='*.py' \
+  '^[[:space:]]*(import|from)[[:space:]]+(backend|service|dal|domain|plumbing)([.[:space:]]|$)' \
+  "$ROOT/conformance" || true)"
+if [[ -n "$conf_hits" ]]; then
+  echo "[ci-cloud] FAIL — conformance black-box violation (suite must stay HTTP-only):"
+  printf '  %s\n' "$conf_hits"
+  echo "[ci-cloud] conformance tests speak ONLY HTTP to \$OC_TARGET_URL (see conformance/CLAUDE.md)."
+  exit 1
+fi
+
+if ! GOTOOLCHAIN="${GOTOOLCHAIN:-auto}" PATH="$(dirname "$GO"):$PATH" \
+    "$ROOT/conformance/run.sh" --target go; then
+  echo "[ci-cloud] FAIL — conformance suite went red. Reproduce: bash conformance/run.sh --target go"
+  exit 1
+fi
 
 echo "[ci-cloud] all cloud-runnable gates green"
