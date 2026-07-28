@@ -933,17 +933,42 @@ export interface paths {
         put?: never;
         /**
          * Teardown on server: tear this machine's warden down on the host.
-         * @description Teardown on server: tear a machine's warden down ON THE SERVER HOST in one
-         *     click (``POST /api/machines/{machine_id}/teardown-here``).
+         * @description Teardown on server: run ``<ocwarden> teardown`` ON THE SERVER HOST
+         *     (``POST /api/machines/{machine_id}/teardown-here``).
          *
-         *     The symmetric inverse of ``handle_bootstrap_here``. The common case is that the
-         *     officraft server RUNS ON the machine being torn down, so instead of copy-
-         *     pasting the teardown command into a shell the owner clicks once and the server
-         *     runs ``<ocwarden> teardown`` locally (``launchctl bootout`` + remove the install
-         *     artifacts — the daemon stops because launchd stops it, never pkill). It resolves
-         *     the ACTIVE warden member (404 otherwise), resolves the ocwarden binary the SAME
-         *     way ``handle_bootstrap_here`` does (503 if absent), and runs the teardown via an
-         *     INJECTABLE runner (``app.state.teardown_runner``).
+         *     WHAT IT CAN AND CANNOT ADDRESS. The child process is selected by HOME / uid /
+         *     ``OC_NAMESPACE`` and by nothing else — there is no machine selector anywhere on
+         *     that path — so this verb can only ever tear down the warden belonging to the
+         *     host the server itself runs on. ``machine_id`` IS THEREFORE NOT A TARGET
+         *     SELECTOR (T-42a0): it names the roster row the caller claims to be talking
+         *     about, and that is all it has ever done. Aiming it at another machine used to
+         *     tear down THIS host's daemon (``launchctl bootout`` + remove the install
+         *     artifacts — the daemon stops because launchd stops it, never pkill) and then
+         *     write ``roster_status = removed`` onto the machine that was NAMED and never
+         *     contacted — which, since the roster became the authority over machine
+         *     credentials, also revoked that machine's token.
+         *
+         *     REFUSALS — both possible targets are refused, and the refusal is written BEFORE
+         *     any subprocess runs (a 409 issued after the daemon was already booted out would
+         *     be worse than no guard at all):
+         *
+         *     * any ``machine_id`` other than the server-local machine → **409**, because this
+         *       verb cannot reach it. To retire a DIFFERENT machine use ``POST
+         *       /api/machines/{machine_id}/uninstall`` (the remote uninstall, executed by the
+         *       target's OWN warden) and then ``DELETE /api/machines/{machine_id}``.
+         *     * the server-local machine itself → **409**, the SAME sentence ``DELETE
+         *       /api/machines`` speaks: taking it off the roster revokes its credentials and
+         *       the token of every member placed on it. To REPAIR this host's warden use
+         *       ``handle_bootstrap_here``, which runs ``ocwarden install --force`` over the
+         *       existing install — nothing has to be torn down first.
+         *
+         *     There is no flag, query parameter or alternate route that makes this endpoint
+         *     reach another host. An unknown ``machine_id`` still resolves FIRST and is a 404,
+         *     and a caller without ``admin_agent`` is still a flat 403 before either refusal.
+         *
+         *     It resolves the ACTIVE warden member (404 otherwise), resolves the ocwarden
+         *     binary the SAME way ``handle_bootstrap_here`` does (503 if absent), and runs the
+         *     teardown via an INJECTABLE runner (``app.state.teardown_runner``).
          *
          *     Governance: ``requires="admin_agent"`` — the SAME choke
          *     ``handle_bootstrap_here`` uses, and now the SAME one as the remote-command
@@ -951,7 +976,10 @@ export interface paths {
          *     2026-07-26). This runs code on the server host (a privileged local action), so it
          *     stays closed to every PLAIN agent and to wardens (flat 403 before any resolve).
          *
-         *     SAFETY — CONFIRM-THEN-REMOVE: the warden member is soft-deleted ONLY when the
+         *     SAFETY — CONFIRM-THEN-REMOVE (the semantics of the execution path; with both
+         *     refusals above in place that path is not reachable over HTTP today, and is
+         *     documented because the route, its result DTO and its status codes are unchanged
+         *     on the frozen wire): the warden member is soft-deleted ONLY when the
          *     daemon is CONFIRMED torn down (``exit_code == 0``). ocwarden teardown is
          *     idempotent and CONFIRMS the bootout (it polls ``launchctl print`` until launchd
          *     reports the label truly gone — bootout is async), so 0 means "the launchd job
