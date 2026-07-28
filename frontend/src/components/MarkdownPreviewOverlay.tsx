@@ -204,7 +204,18 @@ export function MarkdownPreviewOverlay({
              * it left this overlay on bare UA defaults: black-on-card headings,
              * unstyled code, no callout colour. One class, same document look
              * as the surface the file was opened from. */
-            <Markdown source={source} className="md-preview__md doc-md" />
+            <Markdown
+              source={source}
+              className="md-preview__md doc-md"
+              /* An inline source is a CHAT message: Enter meant "new line"
+               * when it was typed and the bubble renders it that way, so the
+               * full-view read of the same text must keep those newlines.
+               * Standard markdown folds them into spaces, which reflowed a
+               * plain multi-line message into one run-on line. A fetched .md
+               * blob is a document, not a chat line — it keeps standard
+               * soft-wrap, same as every other document surface. */
+              breaks={inlineSource !== undefined}
+            />
           )}
         </div>
       </div>

@@ -143,4 +143,26 @@ describe("chat message 放大閱讀 button", () => {
       "Mira",
     );
   });
+
+  // End-to-end version of the overlay's `breaks` guard: the bubble and its
+  // full-view read must lay the SAME message out the same way. Opening a plain
+  // multi-line message used to reflow it into one run-on line.
+  it("reads a multi-line message with its newlines intact, like the bubble", async () => {
+    globalThis.fetch = vi.fn(() =>
+      Promise.reject(new Error("must not fetch")),
+    ) as unknown as typeof fetch;
+    messages = [msg({ body: "第一行\n第二行\n第三行" })];
+    const { container } = renderChat();
+
+    const bubble = container.querySelector(".chat__msg-text")!;
+    fireEvent.click(container.querySelector("button.chat__msg-expand")!);
+    await waitFor(() =>
+      expect(container.querySelector(".md-preview__md")).toBeTruthy(),
+    );
+    const reader = container.querySelector(".md-preview__md")!;
+    // Same shape on both surfaces — two hard breaks, one paragraph.
+    expect(bubble.querySelectorAll("br").length).toBe(2);
+    expect(reader.querySelectorAll("br").length).toBe(2);
+    expect(reader.textContent).not.toContain("第一行 第二行");
+  });
 });

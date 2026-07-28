@@ -46,10 +46,22 @@ ChatArea 兩個行為,皆不動 server:
 
 ## markdown 全幅閱覽 = 一個 overlay、兩種來源(owner 2026-07-28)
 `MarkdownPreviewOverlay` 是**唯一**的座艙內 markdown 全幅面,兩個入口共用:
-- **`url`**:已存檔的 .md 附件(T-a1c4),overlay 自己 fetch,header 保留「下載」。
+- **`url`**:已存檔的 .md 附件(T-a1c4),overlay 自己 fetch,header 保留「下載」
+  **與複製分享連結**;因此 `url` 一定**併帶必填的 `attachmentId`**(T-4fdc:分享連結
+  永遠用 blob 自己的 `att-` id 去 mint,不是 serve path、也不是 `ta-` 產物 id)。
 - **`source`**:呼叫端**手上已有**的文字(聊天訊息本文)。不 fetch、不進 loading 態,
-  **也沒有下載鈕**——那串位元組從來不是檔案,給一個假造的 blob url 是說謊。
-  props 是 discriminated union(`url`/`source` 互斥),傳兩個是 compile error。
+  **也沒有下載鈕、沒有分享鈕**——那串位元組從來不是檔案,給一個假造的 blob url 是
+  說謊,而且沒有 id 可以分享。
+  props 是 discriminated union(`url`+`attachmentId` / `source` 互斥),傳兩個是
+  compile error;`url` 少了 `attachmentId` 也是 compile error。
+
+**單一換行:`source` 開 `breaks`、`url` 不開**(Seth 2026-07-28 review PR #18)。
+聊天泡泡是 Enter=換行的介面(`breaks`),同一段文字被拿到全幅面讀時如果落回標準
+markdown 的 soft-wrap,一則普通多行訊息就被重排成一條長句——**同一份文字在兩個面
+長得不一樣**。反過來,已存檔的 .md 是文件、不是聊天行,維持標準 soft-wrap 跟其他
+17 個文件面一致。這是刻意的**分家**,兩邊都有測試釘住(改一邊、另一邊會紅):
+`MarkdownPreviewOverlay.test.tsx` 的 inline-breaks 與 blob-soft-wrap 兩支 +
+`ChatArea.msg-fullscreen.test.tsx` 的泡泡/全幅面同形對照。
 
 **render 一定要戴 `.doc-md`**:overlay 原本只掛自己的 `md-preview__md`,結果標題/
 程式碼/表格/callout/連結全落回 UA 預設值——面板是深色主題、內容卻沒上色(owner
