@@ -235,14 +235,24 @@ func (r execRunner) Run(name string, args ...string) (string, error) {
 }
 
 // ---------------------------------------------------------------------------
-// hardware parsers (IO-free, mirror warden/hardware.py) + collector
+// hardware parsers (IO-free) + collector
 // ---------------------------------------------------------------------------
 
 var (
 	battPctRe = regexp.MustCompile(`(\d{1,3})%`)
 	cpuIdleRe = regexp.MustCompile(`CPU usage:.*?([\d.]+)%\s*idle`)
-	ramRe     = regexp.MustCompile(`PhysMem:\s*([\d.]+)\s*([KMGT])\s*used.*?([\d.]+)\s*([KMGT])\s*unused`)
-	ramUnitMB = map[string]float64{"K": 1.0 / 1024.0, "M": 1.0, "G": 1024.0, "T": 1024.0 * 1024.0}
+	// vm_stat's header ("Mach Virtual Memory Statistics: (page size of 16384
+	// bytes)") — the page size is NOT assumed: it is 4096 on Intel and 16384 on
+	// Apple silicon, and hardcoding either turns every page count into a number
+	// four times wrong on the other architecture.
+	vmPageSizeRe = regexp.MustCompile(`page size of (\d+) bytes`)
+	// One vm_stat counter line: `Pages free:  230372.` — label, colon, count,
+	// optional trailing period. The separators are `[ \t]`, NOT `\s`: Go's `\s`
+	// matches a newline, so `\s+` would let a label whose own line carries no
+	// number reach across and adopt the NEXT line's digits (a counter that
+	// silently became someone else's value, which is worse than a missing one).
+	// Pinned by TestParseVMStat_ALabelNeverAdoptsTheNextLinesNumber.
+	vmCounterRe = regexp.MustCompile(`(?m)^[ \t]*"?([A-Za-z][^":]*?)"?:[ \t]*(\d+)\.?[ \t]*$`)
 )
 
 // parseBattery: `pmset -g batt` -> (pct, pctOK, ac, acOK). pct is the first
@@ -275,28 +285,119 @@ func parseCPUPct(text string) (float64, bool) {
 	return round1(math.Max(0, math.Min(100, 100-idle))), true
 }
 
-// parseRAMPct: `top -l1` PhysMem line -> used/(used+unused) % (1dp), ok=false otherwise.
-func parseRAMPct(text string) (float64, bool) {
-	m := ramRe.FindStringSubmatch(text)
+// parseVMStat: `vm_stat` -> page size in bytes + every counter line by label.
+// ok=false when the header carries no page size, because every count below is
+// meaningless without it.
+func parseVMStat(text string) (pageSize float64, counts map[string]float64, ok bool) {
+	m := vmPageSizeRe.FindStringSubmatch(text)
 	if m == nil {
+		return 0, nil, false
+	}
+	size, err := strconv.ParseFloat(m[1], 64)
+	if err != nil || size <= 0 {
+		return 0, nil, false
+	}
+	counts = map[string]float64{}
+	for _, line := range vmCounterRe.FindAllStringSubmatch(text, -1) {
+		if v, err := strconv.ParseFloat(line[2], 64); err == nil {
+			counts[strings.TrimSpace(line[1])] = v
+		}
+	}
+	return size, counts, true
+}
+
+// parseMemTotalBytes: `sysctl -n hw.memsize` -> installed physical memory in
+// bytes. This is the ONLY honest denominator for a "percent of RAM" reading.
+//
+// ParseUint, deliberately not ParseFloat. A byte count is an integer, and
+// ParseFloat additionally accepts "NaN", "+Inf" and hex-float forms — none of
+// which `v <= 0` rejects, because NaN compares false against everything. A NaN
+// denominator survives the clamp (math.Min(100, NaN) is NaN) and then makes
+// json.Marshal fail on the WHOLE heartbeat, which httpPoster reports as status 0
+// — indistinguishable from the server being unreachable. That is the shape where
+// hardware, binaries, claude and runtimes all go null at once and the reporter
+// still looks healthy; the parser is the cheap place to close it.
+func parseMemTotalBytes(text string) (float64, bool) {
+	v, err := strconv.ParseUint(strings.TrimSpace(text), 10, 64)
+	if err != nil || v == 0 {
 		return 0, false
 	}
-	uUnit, ok1 := ramUnitMB[m[2]]
-	nUnit, ok2 := ramUnitMB[m[4]]
-	if !ok1 || !ok2 {
+	return float64(v), true
+}
+
+// parseRAMPct reports memory USED as a percent of installed physical memory,
+// built from the same three constituents Activity Monitor's "Memory Used" is
+// composed of:
+//
+//	(App Memory + Wired + Compressed) / hw.memsize
+//	App Memory = Anonymous pages - Pages purgeable
+//
+// Deliberately NOT claimed to be byte-identical to what Activity Monitor prints:
+// no macOS interface returns that aggregate, so nothing here or in CI can verify
+// such a claim. What IS measured: on a 64 GiB box this computed 44.09 GB where
+// Activity Monitor showed 44.72 GB, and the three constituents were confirmed
+// mutually exclusive on real output (Anonymous + File-backed came to exactly
+// active + inactive + speculative, i.e. Anonymous excludes both wired and
+// compressor, so nothing is double-counted).
+//
+// It replaces a reading taken from `top`'s PhysMem line — `used / (used +
+// unused)` — which was wrong twice over, and wrong in the same direction both
+// times, so the cockpit reported a machine at 99% while Activity Monitor showed
+// it half empty with memory pressure green and zero swap:
+//
+//  1. DENOMINATOR. `used + unused` is not installed memory. On a 64 GiB box
+//     those two summed to 64281 MiB against a real 65536 MiB, inflating the
+//     ratio on its own.
+//  2. SEMANTICS, and this is the big one. macOS counts RECLAIMABLE file cache
+//     inside `used`, and a machine that has done any file I/O parks tens of GB
+//     there on purpose. Cache is not consumption: the kernel hands it back on
+//     demand, which is why pressure stays green while `used` reads ~99%. On the
+//     measured box 20.23 GB of the "used" total was cache — 19.62 GB of
+//     file-backed pages plus 0.61 GB purgeable.
+//
+// Every input is a page COUNT, and the page size is read from vm_stat's own
+// header (4096 on Intel, 16384 on Apple silicon) rather than assumed.
+//
+// The three constituent counters are REQUIRED — without any one of them the
+// answer is not "approximately used", it is a different quantity, so the probe
+// omits itself and the cockpit shows a blank it already knows how to explain.
+// `Pages purgeable` is treated as an optional CORRECTION (it subtracts volatile
+// allocations an app has told the kernel it may drop): missing it overstates by
+// well under a percentage point, which does not warrant discarding the reading.
+func parseRAMPct(vmStat, memTotal string) (float64, bool) {
+	total, ok := parseMemTotalBytes(memTotal)
+	if !ok {
 		return 0, false
 	}
-	usedV, err1 := strconv.ParseFloat(m[1], 64)
-	unusedV, err2 := strconv.ParseFloat(m[3], 64)
-	if err1 != nil || err2 != nil {
+	pageSize, counts, ok := parseVMStat(vmStat)
+	if !ok {
 		return 0, false
 	}
-	used := usedV * uUnit
-	total := used + unusedV*nUnit
-	if total <= 0 {
+	anonymous, hasAnonymous := counts["Anonymous pages"]
+	wired, hasWired := counts["Pages wired down"]
+	compressed, hasCompressed := counts["Pages occupied by compressor"]
+	if !hasAnonymous || !hasWired || !hasCompressed {
 		return 0, false
 	}
-	return round1(used / total * 100.0), true
+	// Purgeable is a subset of Anonymous on every macOS this runs on, so this
+	// cannot go negative today; the floor is here because the two counters are
+	// read from separate lines of a tool we do not control, and a negative App
+	// Memory would silently DEFLATE the reading — the one direction that turns a
+	// genuinely full machine into a quiet one.
+	app := anonymous - counts["Pages purgeable"]
+	if app < 0 {
+		app = 0
+	}
+	used := (app + wired + compressed) * pageSize
+	// One acknowledged inconsistency: everywhere else this function prefers to
+	// omit over reporting something plausible-but-wrong, and here an impossible
+	// ratio (more consumed than installed) is clamped to a clean 100% instead —
+	// which is the very number that was used to raise the false alarm. Clamping
+	// wins because the arithmetic cannot exceed 100 unless a counter and the
+	// denominator disagree about the machine, which no observed macOS does; a
+	// 140% would be a rendering bug on top of a data bug. Revisit if any real
+	// machine is ever seen hitting the ceiling.
+	return round1(math.Max(0, math.Min(100, used/total*100.0))), true
 }
 
 func round1(v float64) float64 { return math.Round(v*10) / 10 }
@@ -322,8 +423,17 @@ func collectHardware(r CmdRunner, platform string) map[string]any {
 		if cpu, ok := parseCPUPct(top); ok {
 			hw["cpu_pct"] = cpu
 		}
-		if ram, ok := parseRAMPct(top); ok {
-			hw["ram_pct"] = ram
+	}
+	// ram_pct needs BOTH memory probes: vm_stat for what is actually consumed,
+	// hw.memsize for what the box actually has. Either one missing omits the key
+	// rather than falling back to the old top-based reading — the cockpit already
+	// distinguishes "never measured" from a value, and a gauge that reads 99% on a
+	// healthy machine is worse than a blank one (it was used to raise an alarm).
+	if vmStat, err := r.Run("vm_stat"); err == nil {
+		if memTotal, err := r.Run("sysctl", "-n", "hw.memsize"); err == nil {
+			if ram, ok := parseRAMPct(vmStat, memTotal); ok {
+				hw["ram_pct"] = ram
+			}
 		}
 	}
 	return hw

@@ -3113,7 +3113,7 @@ export interface components {
                 cpu_pct?: number | null;
                 /**
                  * Ram Pct
-                 * @description Used / (used + unused) physical memory percent.
+                 * @description Memory USED as a percent of installed physical memory (``hw.memsize``), computed from ``vm_stat`` out of the same three constituents Activity Monitor's "Memory Used" is composed of: App Memory (Anonymous - Purgeable) + Wired + Compressed. Reclaimable file cache is deliberately NOT counted as used, which is why this reads far lower than ``top``'s PhysMem line on any box with a warm cache (measured: 64.5 where the retired reading said 94.5). Absent when either probe fails: half an answer is omitted rather than approximated.
                  */
                 ram_pct?: number | null;
             } & {
