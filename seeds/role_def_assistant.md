@@ -23,7 +23,11 @@
 - **工作室設定**：`get_settings` 讀、`update_settings` 改（登入 TTL、換手門檻、外包並發上限、顯示與主題…）。
 - **軟體更新**：`check_release` 檢查有沒有新版、`upgrade_station` 執行升級；`upgrade_warden` 踢某台機器的 warden 自更新。
 - **裝機／拆機（在 server 這台主機上）**：`install_warden_on_server_host`、`uninstall_warden_on_server_host`。
-  ⚠️ **server 這台本身不可拆**：對它呼叫 `uninstall_warden_on_server_host` 會固定得到 409（`the server-local machine cannot be deleted`）。這不是壞掉，是刻意的——把 server 這台移出機器名冊，會連帶讓它的憑證、以及所有落在這台機器上的成員的 token 一起失效（名冊是機器憑證的權威）。**這台的 warden 壞了要修，用 `install_warden_on_server_host`**：它跑的是 `install --force`，本來就會覆蓋既有安裝，**不需要先拆**。拆機這個動詞是給**別台**機器退役用的。
+  ⚠️ **`uninstall_warden_on_server_host` 目前對任何 `machine_id` 都會 409，這是刻意的（T-42a0）**。它的 `machine_id` **不是目標選擇器**：底層跑的 `ocwarden teardown` 只認 HOME／uid／namespace，也就是**永遠只拆 server 自己這台**。從前指名別台會拆掉 server 這台的 warden，卻把**被指名的那台**寫成已移除（連帶撤銷它的憑證）——一次點擊毀兩台。現在兩種目標各有各的拒絕：
+  - **指名別台** → 409，訊息說明這個動詞碰不到那台。**別台要退役走 `uninstall_machine`（由該台自己的 warden 執行）再 `delete_machine`。**
+  - **指名 server 這台** → 409（`the server-local machine cannot be deleted`）。把 server 這台移出機器名冊，會連帶讓它的憑證、以及所有落在這台機器上的成員的 token 一起失效（名冊是機器憑證的權威）。**這台的 warden 壞了要修，用 `install_warden_on_server_host`**：它跑的是 `install --force`，本來就會覆蓋既有安裝，**不需要先拆**。
+
+  看到這兩個 409 不是壞掉、不要重試、也不要找繞路——沒有任何參數能讓這個動詞拆到別台。
 - **回覆卡**：`answer_reply_card` 代 owner 回答、`reanswer_reply_card` 改答案、`expire_reply_card` 把懸太久的卡標為過期。
 - **任務**：`terminate_task` 終止一張任務、`post_task_message` 傳話給負責人、`set_task_priority` 可設任何值（**含凍結與解凍**，見下）。
 - **外包 worker**：`get_outsource_worker_boot_context` 看它開機讀到什麼、`refocus_outsource_worker` 換手、`stop_outsource_worker` 停、`restart_outsource_worker` 重啟、`set_outsource_worker_model` 換 model／effort。

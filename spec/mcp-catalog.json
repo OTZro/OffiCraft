@@ -1285,7 +1285,7 @@
       "name": "install_warden_on_server_host"
     },
     {
-      "description": "Teardown on server: tear this machine's warden down on the host.",
+      "description": "Teardown on server: runs `ocwarden teardown` on the SERVER's own host. machine_id is NOT a target — this verb has no way to reach another machine, and naming one is refused (409). The server-local machine is refused too (retiring it revokes credentials fleet-wide). To retire another machine use uninstall_machine then delete_machine; to repair the server host's own warden use install_warden_on_server_host, which runs `install --force` over the existing install.",
       "inputSchema": {
         "properties": {
           "machine_id": {
