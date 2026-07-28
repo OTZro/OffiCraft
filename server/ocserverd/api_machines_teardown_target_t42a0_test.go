@@ -60,12 +60,17 @@ func newForeignTeardownServer(t *testing.T) (*apiServer, *[]recordedOcwardenRun)
 
 // TestTeardownHere_NamingAnotherMachineIsRefused is the primary sentinel.
 //
-// MUTANT (this is how the guard is verified): delete the `machine.ID !=
-// ServerSelfHost` block from HandleTeardownHereApiMachinesMachineIdTeardownHerePost.
-// Then this test goes red on all three of its independent claims — the 409, the
-// "nothing was executed" claim, and the roster row surviving — because the
-// handler falls through to the subprocess and the CONFIRM-THEN-REMOVE write.
-// Nothing real is destroyed while that mutant runs: the fake runner absorbs it.
+// MUTANT (this is how the guard is verified): make teardownHereRefusal return
+// "" for a non-self target. Then this test goes red on all three of its
+// independent claims — the 409, the "nothing was executed" claim, and the
+// roster row surviving — because the handler falls through to the subprocess
+// and the CONFIRM-THEN-REMOVE write. Nothing real is destroyed while that
+// mutant runs: the fake runner absorbs it.
+//
+// The guard is ONE branch, not two: an earlier shape wrote the two refusals as
+// consecutive ifs, which made the second condition provably always true (an
+// independent review replaced it with `if true` and nothing went red). See
+// teardownHereRefusal.
 func TestTeardownHere_NamingAnotherMachineIsRefused(t *testing.T) {
 	s, runs := newForeignTeardownServer(t)
 
@@ -123,15 +128,36 @@ func TestTeardownHere_RefusalPointsAtTheRealPathAndOffersNoBypass(t *testing.T) 
 
 	// The two legitimate destinations, both of which really do act on another
 	// machine (uninstall is executed by the TARGET's own warden).
+	//
+	// The route strings are checked against the ACTUAL route table below rather
+	// than only as substrings: an independent review caught this message naming
+	// `/api/machines/{machine_id}/uninstall` when the real path parameter is
+	// `{member_id}`. A substring assertion cannot see that — it happily pins
+	// whatever typo the message already contains — and the entire value of this
+	// message is that its directions are precise.
 	for _, want := range []string{
-		"/api/machines/{machine_id}/uninstall",
-		"DELETE /api/machines/{machine_id}",
+		"POST /api/machines/{member_id}/uninstall",
+		"DELETE /api/machines/{member_id}",
 		"install_warden_on_server_host",
 		"install --force",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the refusal must name %q so the caller has somewhere to go; got %s",
 				want, body)
+		}
+	}
+	routed := map[string]bool{}
+	for _, spec := range routeSpecs(&ServerInterfaceWrapper{}) {
+		routed[spec.Method+" "+spec.Path] = true
+	}
+	for _, cited := range []string{
+		"POST /api/machines/{member_id}/uninstall",
+		"DELETE /api/machines/{member_id}",
+	} {
+		if !routed[cited] {
+			t.Fatalf("the refusal cites %q, which is not a route this server serves "+
+				"— a refusal whose directions do not resolve sends the caller in a "+
+				"circle; route table has no such method+path", cited)
 		}
 	}
 	// Vocabulary that would turn the refusal into instructions for defeating it.

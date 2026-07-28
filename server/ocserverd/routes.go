@@ -749,7 +749,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleTeardownHereApiMachinesMachineIdTeardownHerePost,
 			Auth:     authGated,
 			Requires: principalAdminAgent,
-			Summary:  "Teardown on server: tear this machine's warden down on the host.",
+			Summary:  "Teardown on server: run ocwarden teardown on the server's OWN host; machine_id is not a target selector and every target is currently refused (409).",
 			MCPTool:  "uninstall_warden_on_server_host",
 		},
 		{

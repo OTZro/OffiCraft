@@ -1180,7 +1180,13 @@ SKIPPED_HAPPY: dict[str, str] = {
         "effect the black-box harness must not trigger (matrix DEGRADED row)."
     ),
     "POST /api/machines/{machine_id}/teardown-here": (
-        "positive face runs `ocwarden teardown` on the host — same reasoning."
+        "no positive face EXISTS any more (T-42a0): the route refuses every "
+        "target — the server-local machine because retiring it revokes "
+        "credentials fleet-wide, any other machine because the verb carries no "
+        "machine selector and cannot reach it. Both 409s and the ordering "
+        "(unknown id still resolves to 404 first) are pinned in the server unit "
+        "tests (api_machines_teardown_target_t42a0_test.go); the authz faces are "
+        "fully asserted in the matrix."
     ),
     "POST /api/update/upgrade": (
         "the positive face needs a reachable GitHub Releases repo holding a "

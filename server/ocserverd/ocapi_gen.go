@@ -2237,7 +2237,7 @@ type ServerInterface interface {
 	// Bootstrap on server: install this machine's warden on the host.
 	// (POST /api/machines/{machine_id}/bootstrap-here)
 	HandleBootstrapHereApiMachinesMachineIdBootstrapHerePost(w http.ResponseWriter, r *http.Request, machineId string)
-	// Teardown on server: tear this machine's warden down on the host.
+	// Teardown on server: run ocwarden teardown on the server's OWN host; machine_id is not a target selector and every target is currently refused (409).
 	// (POST /api/machines/{machine_id}/teardown-here)
 	HandleTeardownHereApiMachinesMachineIdTeardownHerePost(w http.ResponseWriter, r *http.Request, machineId string)
 	// Delete a machine: soft-delete its warden record (no command sent).
