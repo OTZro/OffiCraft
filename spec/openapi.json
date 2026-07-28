@@ -4419,7 +4419,7 @@
           },
           "handover_note": {
             "default": "",
-            "description": "The latest durable reassign handover note. Omitted notes leave this value unchanged.",
+            "description": "The latest durable reassign handover note.",
             "title": "Handover Note",
             "type": "string"
           },

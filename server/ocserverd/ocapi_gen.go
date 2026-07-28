@@ -1555,7 +1555,7 @@ type TaskDTO struct {
 	// HandoffTaskId The successor task the handover points at ("" for ``handoff='none'``).
 	HandoffTaskId *string `json:"handoff_task_id,omitempty"`
 
-	// HandoverNote The latest durable reassign handover note. Omitted notes leave this value unchanged.
+	// HandoverNote The latest durable reassign handover note.
 	HandoverNote *string `json:"handover_note,omitempty"`
 
 	// HandoverNoteBy Verified actor that wrote ``handover_note``.

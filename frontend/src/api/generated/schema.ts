@@ -5744,7 +5744,7 @@ export interface components {
             handoff_task_id: string;
             /**
              * Handover Note
-             * @description The latest durable reassign handover note. Omitted notes leave this value unchanged.
+             * @description The latest durable reassign handover note.
              * @default
              */
             handover_note: string;

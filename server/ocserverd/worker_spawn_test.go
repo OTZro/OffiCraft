@@ -120,7 +120,7 @@ func TestBuildWorkerBootContext_FullAssembly(t *testing.T) {
 		"ow-abc", "O-7", "opus", "high", // identity block
 		TaskNo(task.ID), "Review PR 42", "review-pr", "https://pr/42",
 		"把 42 號 PR 看完", "pr_url", // task block
-		"交接備註", "m-kyle", "先跑既有測試",
+		"交接備註", "m-kyle", "先跑既有測試", "先前交接", "確認是否仍適用",
 		"review 一個 PR", "先看 diff 再留結論", "大 PR 先分檔看", // manual Q1/Q3/learnings
 		"必填、識別鍵", // Q2 field annotations
 		// T-fa76: the display face leads, the ADDRESSING type_key stays in
