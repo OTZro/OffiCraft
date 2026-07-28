@@ -931,8 +931,8 @@ func teardownHereRefusal(machineID string) string {
 // ⚠️ {machine_id} IS NOT A TARGET SELECTOR — it never was (T-42a0). The child
 // process is addressed by HOME / uid / OC_NAMESPACE, i.e. always THIS host.
 // The path parameter therefore only identifies which roster row the caller
-// claims to be talking about, and both possible answers are refused: see the
-// two guards below.
+// claims to be talking about, and both possible answers are refused by the
+// single guard below.
 func (s *apiServer) HandleTeardownHereApiMachinesMachineIdTeardownHerePost(w http.ResponseWriter, r *http.Request, machineId string) {
 	machine, err := s.resolveMachine(machineId)
 	if err != nil {
