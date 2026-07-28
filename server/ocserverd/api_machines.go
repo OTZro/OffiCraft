@@ -882,11 +882,46 @@ func teardownHereForeignTargetMsg(machineID string) string {
 		"host — it carries no machine selector, so it cannot reach " + machineID +
 		"; refusing rather than destroying this host's daemon under another " +
 		"machine's name. To retire a different machine, use POST " +
-		"/api/machines/{machine_id}/uninstall (the remote uninstall the target's " +
-		"own warden executes) and then DELETE /api/machines/{machine_id}. To " +
+		"/api/machines/{member_id}/uninstall (the remote uninstall the target's " +
+		"own warden executes) and then DELETE /api/machines/{member_id}. To " +
 		"repair this host's own warden, use install_warden_on_server_host — it " +
 		"runs `ocwarden install --force`, which overwrites an existing install, " +
 		"so nothing has to be torn down first."
+}
+
+// teardownHereRefusal answers ONE question — "what does teardown-here owe a
+// caller who named this machine?" — and returns "" when the target may proceed.
+//
+// WHY THE TWO REFUSALS SHARE A FUNCTION. Written as two consecutive guards in
+// the handler, the second condition (`machine.ID != ServerSelfHost`, reached
+// only after the first one returned) was PROVABLY ALWAYS TRUE: an independent
+// review replaced it with `if true` and the entire suite stayed green. A
+// condition with no discriminating power is worse than no condition, because it
+// reads like a second layer of protection that is not there. Here the branch is
+// a genuine either/or — WHICH sentence the caller gets — and both directions
+// are pinned (TestTeardownHere_ServerLocalRefusalIsUnchanged and
+// TestTeardownHereRefusesAnOrdinaryMachineToo fail if it is forced either way).
+//
+// WHY IT NEVER RETURNS "" TODAY, and why that is not hidden behind a bare
+// `return`: the server-local machine is unretirable (T-9cf8 — soft-deleting it
+// revokes its credentials and the token of every member placed on it), and
+// every other machine is unreachable (T-42a0 — this verb carries no machine
+// selector). So the handler's subprocess and its CONFIRM-THEN-REMOVE fold are
+// currently DEAD THROUGH HTTP. They are kept because retiring a route on the
+// frozen wire is an owner decision, not a side effect of closing a defect, and
+// the "" return is kept because the day that decision lands, this function is
+// the single place that changes. runWardenTeardownHere keeps its own direct
+// tests either way.
+//
+// THE TWO SENTENCES MUST NOT MERGE. They send the caller to different places —
+// server-self to `install --force` (repair), anything else to uninstall +
+// delete (retire) — so a caller given the wrong one goes looking for the wrong
+// fix. That is asserted, not just asked for.
+func teardownHereRefusal(machineID string) string {
+	if machineID == ServerSelfHost {
+		return serverSelfUndeletableMsg
+	}
+	return teardownHereForeignTargetMsg(machineID)
 }
 
 // POST /api/machines/{machine_id}/teardown-here — tear the warden down ON THE
@@ -904,8 +939,13 @@ func (s *apiServer) HandleTeardownHereApiMachinesMachineIdTeardownHerePost(w htt
 		writeResolveError(w, err, "machine", machineId)
 		return
 	}
+	// The refusals themselves live in teardownHereRefusal (below the DTO
+	// helpers); what follows is the RECORD OF WHY each one was written, kept
+	// next to the call site because that is where someone tempted to loosen
+	// them will be standing.
+	//
 	// server-self is NOT retirable — the SAME 409 DELETE /api/machines already
-	// speaks, mirrored here rather than reinvented (T-9cf8 follow-up).
+	// speaks, mirrored rather than reinvented (T-9cf8 follow-up).
 	//
 	// WHY THIS GUARD IS PART OF *THIS* TICKET AND NOT A DRIVE-BY: T-9cf8 did
 	// not create this hole, it RAISED THE PRICE OF FALLING INTO IT. Before,
@@ -934,28 +974,13 @@ func (s *apiServer) HandleTeardownHereApiMachinesMachineIdTeardownHerePost(w htt
 	//     `ocwarden teardown` (e2e_test oc_teardown_bounded), not this endpoint,
 	//     so namespaced-instance cleanup is untouched by this refusal.
 	//   - conformance only ever aims this route at an unknown machine id (404).
-	if machine.ID == ServerSelfHost {
-		writeError(w, http.StatusConflict, serverSelfUndeletableMsg)
-		return
-	}
-	// T-42a0: BEHAVIOUR MUST MATCH THE NAME. Everything above this line assumed
-	// the {machine_id} steered the teardown. It never did — see
-	// teardownHereForeignTargetMsg. Naming any machine other than the
-	// server-local one is therefore a misuse with a destructive silent result,
-	// and the only honest answer is to refuse it. Like the guard above, this
-	// sits BEFORE the subprocess: a refusal written after the daemon was
-	// already booted out is worse than no refusal at all.
-	//
-	// CONSEQUENCE, WRITTEN DOWN RATHER THAN DISCOVERED LATER: together with the
-	// T-9cf8 guard above, every target is now refused — the server-local machine
-	// because retiring it revokes credentials fleet-wide, every other machine
-	// because this verb cannot reach it. The subprocess path below is therefore
-	// unreachable through HTTP today. It is kept (rather than deleted along with
-	// the route) because retiring an endpoint on the frozen wire is an owner
-	// decision, not a side effect of closing a defect; runWardenTeardownHere
-	// keeps its own direct tests.
-	if machine.ID != ServerSelfHost {
-		writeError(w, http.StatusConflict, teardownHereForeignTargetMsg(machine.ID))
+	// ONE guard, not two (T-42a0). Both refusals live in teardownHereRefusal so
+	// that the branch here is a real question with a real answer, and so that
+	// nobody reads this spot as two independent layers of protection. See that
+	// function for why it currently never lets anything through, and for the
+	// discipline that keeps the two sentences from merging.
+	if refusal := teardownHereRefusal(machine.ID); refusal != "" {
+		writeError(w, http.StatusConflict, refusal)
 		return
 	}
 	binPath, ok := s.resolveOcwardenBinary(w)

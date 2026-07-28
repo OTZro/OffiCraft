@@ -932,7 +932,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Teardown on server: tear this machine's warden down on the host.
+         * Teardown on server: run ocwarden teardown on the server's OWN host; machine_id is not a target selector and every target is currently refused (409).
          * @description Teardown on server: run ``<ocwarden> teardown`` ON THE SERVER HOST
          *     (``POST /api/machines/{machine_id}/teardown-here``).
          *
@@ -955,7 +955,7 @@ export interface paths {
          *     * any ``machine_id`` other than the server-local machine → **409**, because this
          *       verb cannot reach it. To retire a DIFFERENT machine use ``POST
          *       /api/machines/{machine_id}/uninstall`` (the remote uninstall, executed by the
-         *       target's OWN warden) and then ``DELETE /api/machines/{machine_id}``.
+         *       target's OWN warden) and then ``DELETE /api/machines/{member_id}``.
          *     * the server-local machine itself → **409**, the SAME sentence ``DELETE
          *       /api/machines`` speaks: taking it off the roster revokes its credentials and
          *       the token of every member placed on it. To REPAIR this host's warden use
