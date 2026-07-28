@@ -16,6 +16,7 @@ var messageKeys = map[string]bool{
 	"chat.dateYesterday":                       true,
 	"chat.downloadAttachment":                  true,
 	"chat.emptyRange":                          true,
+	"chat.expandMessage":                       true,
 	"chat.galleryClose":                        true,
 	"chat.galleryDownloadHint":                 true,
 	"chat.galleryEmptyFiles":                   true,

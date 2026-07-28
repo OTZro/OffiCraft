@@ -324,6 +324,21 @@ export function EyeIcon({ size = 16, className }: IconProps) {
   );
 }
 
+/** Corner-arrows glyph — the 放大閱讀 action on an incoming chat bubble: open
+ * this message body in the full-view overlay. Distinct from EyeIcon (預覽 a
+ * FILE): nothing is being previewed here, the same text is being re-laid-out
+ * with room to read. */
+export function ExpandIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className}>
+      <polyline points="14 4 20 4 20 10" />
+      <polyline points="10 20 4 20 4 14" />
+      <line x1="20" y1="4" x2="13" y2="11" />
+      <line x1="4" y1="20" x2="11" y2="13" />
+    </svg>
+  );
+}
+
 /** Clock glyph — step 耗時 stamps + the 等待外部 reason row. */
 export function ClockIcon({ size = 16, className }: IconProps) {
   return (

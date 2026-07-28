@@ -41,6 +41,7 @@ import {
   CheckIcon,
   ChevronRightIcon,
   CopyIcon,
+  ExpandIcon,
   ImageIcon,
   MoonIcon,
   PaperclipIcon,
@@ -304,15 +305,23 @@ export function ChatArea({
   // An image opened full-size in the lightbox overlay (null = closed). Holds the
   // ready-to-render src (already token-authed for gated blobs, or a data: URI).
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
-  // A .md attachment opened in the in-cockpit preview overlay (T-a1c4; null =
-  // closed) — carries the blob's display title + serve url.
-  const [mdPreview, setMdPreview] = useState<{
-    title: string;
-    url: string;
-    attachmentId: string;
-  } | null>(
-    null,
-  );
+  // What the in-cockpit markdown overlay is showing (null = closed). TWO ways
+  // in, one surface: a .md ATTACHMENT (T-a1c4 — the overlay fetches the blob,
+  // offers 下載 and a share link, so it carries the blob's id) or an incoming
+  // MESSAGE body (the corner 放大閱讀 button — the text is already in hand, so
+  // there is nothing to fetch, download or share). The kind is carried
+  // explicitly so neither branch has to be guessed from which field happens to
+  // be set.
+  const [mdPreview, setMdPreview] = useState<
+    | {
+        kind: "attachment";
+        title: string;
+        url: string;
+        attachmentId: string;
+      }
+    | { kind: "message"; title: string; source: string }
+    | null
+  >(null);
   // M2-3 file & image gallery panel (header icon toggles it).
   const [galleryOpen, setGalleryOpen] = useState(false);
   // The attachment whose share link was just copied (transient 「已複製」
@@ -942,7 +951,35 @@ export function ChatArea({
         initialStatus={m.replyCardStatus}
       />
     ) : (
-      <div className="chat__msg-bubble">
+      <div
+        className={
+          "chat__msg-bubble" +
+          (!mine && m.body ? " chat__msg-bubble--expandable" : "")
+        }
+      >
+        {/* 放大閱讀 — the corner button that reopens THIS message body in the
+         * shared full-view overlay, the same surface a .md attachment opens
+         * into. Only on INCOMING messages with text: an agent answer is the
+         * long-form side of the thread (the owner's own line is what they just
+         * typed), and an attachment-only bubble has no body to lay out — the
+         * file chip already carries its own 預覽 action. */}
+        {!mine && m.body && (
+          <button
+            type="button"
+            className="chat__msg-expand"
+            aria-label={t.chat.expandMessage}
+            title={t.chat.expandMessage}
+            onClick={() =>
+              setMdPreview({
+                kind: "message",
+                title: senderLabel,
+                source: m.body,
+              })
+            }
+          >
+            <ExpandIcon size={12} />
+          </button>
+        )}
         {/* T-84c8: the message body is the purest owner/agent free text in the
          * app (and, via webhooks, can carry text from an EXTERNAL system), so
          * it renders through the shared XSS-safe `Markdown` — same posture as
@@ -967,6 +1004,7 @@ export function ChatArea({
           onOpenImage={(src) => setLightboxSrc(src)}
           onPreviewMarkdown={(att) =>
             setMdPreview({
+              kind: "attachment",
               title: att.filename || t.chat.downloadAttachment,
               url: att.url,
               attachmentId: att.id,
@@ -1428,16 +1466,25 @@ export function ChatArea({
 
       {/* Full-size overlay — the SHARED Lightbox (backdrop / × / Esc close). */}
       <Lightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
-      {/* .md preview overlay (T-a1c4) — in-cockpit markdown render, shared with
-       * the task artifact popover; separate action from the download chip. */}
-      {mdPreview && (
-        <MarkdownPreviewOverlay
-          title={mdPreview.title}
-          url={mdPreview.url}
-          attachmentId={mdPreview.attachmentId}
-          onClose={() => setMdPreview(null)}
-        />
-      )}
+      {/* Markdown full-view overlay (T-a1c4) — in-cockpit render, shared with
+       * the task artifact popover. A .md attachment rides the blob url + its id
+       * (the overlay fetches it and keeps its 下載 and share links); a 放大閱讀
+       * message rides the body text this component already holds. */}
+      {mdPreview &&
+        (mdPreview.kind === "attachment" ? (
+          <MarkdownPreviewOverlay
+            title={mdPreview.title}
+            url={mdPreview.url}
+            attachmentId={mdPreview.attachmentId}
+            onClose={() => setMdPreview(null)}
+          />
+        ) : (
+          <MarkdownPreviewOverlay
+            title={mdPreview.title}
+            source={mdPreview.source}
+            onClose={() => setMdPreview(null)}
+          />
+        ))}
     </div>
   );
 }

@@ -59,6 +59,48 @@ describe("MarkdownPreviewOverlay", () => {
     expect(dl.getAttribute("href")).toContain("/api/chat/attachment/att-1");
   });
 
+  // The rendered body wears `.doc-md`, the shared markdown skin every other
+  // render site uses (task manual, role doc, reply card, chat bubble). Without
+  // it the overlay fell back to bare UA defaults — unstyled headings, code,
+  // tables and callouts inside an otherwise themed panel (owner 2026-07-28:
+  // 「明明我們聊天的樣式很漂亮，但 .md 閱覽器就沒有對應的上色」).
+  it("wears the shared .doc-md markdown skin", async () => {
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      text: async () => "# Hello",
+    })) as unknown as typeof fetch;
+    const { container } = render(
+      <I18nProvider>
+        <MarkdownPreviewOverlay
+          title="x.md"
+          url="/api/chat/attachment/a"
+          attachmentId="a"
+          onClose={() => {}}
+        />
+      </I18nProvider>,
+    );
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Hello" })).toBeTruthy());
+    const md = container.querySelector(".md-preview__md")!;
+    expect(md.classList.contains("doc-md")).toBe(true);
+  });
+
+  // Second source mode (the chat 放大閱讀 button): text the caller already
+  // holds. Nothing to fetch, and no file to download.
+  it("renders an inline source without fetching, and offers no download", async () => {
+    globalThis.fetch = vi.fn(() => Promise.reject(new Error("must not fetch"))) as unknown as typeof fetch;
+    const { container } = render(
+      <I18nProvider>
+        <MarkdownPreviewOverlay title="Mira" source={"# Inline\n\nbody text"} onClose={() => {}} />
+      </I18nProvider>,
+    );
+    // Synchronous — an inline source never passes through the loading state.
+    expect(screen.getByRole("heading", { name: "Inline" })).toBeTruthy();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(screen.queryByText("載入預覽中…")).toBeNull();
+    expect(container.querySelector(".md-preview__download")).toBeNull();
+    expect(container.querySelector(".md-preview__md")!.classList.contains("doc-md")).toBe(true);
+  });
+
   it("shows an honest error state on a failed fetch (never a blank render)", async () => {
     globalThis.fetch = vi.fn(async () => ({ ok: false, status: 404 })) as unknown as typeof fetch;
     render(

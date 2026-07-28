@@ -613,6 +613,10 @@ export const en: Dict = {
       loading: "Loading preview…",
       error: "Could not load the preview",
     },
+    // Corner button on an incoming bubble: reopen this message body in the same
+    // full-view overlay (a long answer is hard to read in the thread column).
+    // Own messages do not carry it.
+    expandMessage: "Open full view",
   },
   mp: {
     back: "Back",
