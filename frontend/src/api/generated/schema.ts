@@ -5743,10 +5743,23 @@ export interface components {
              */
             handoff_task_id: string;
             /**
-             * Handover Notes
-             * @description Append-only notes attached to each reassign handover. A note records the dispatching actor, target executor kind, timestamp, and text; omitted notes do not alter prior records.
+             * Handover Note
+             * @description The latest durable reassign handover note. Omitted notes leave this value unchanged.
+             * @default
              */
-            handover_notes?: components["schemas"]["TaskHandoverNoteDTO"][];
+            handover_note: string;
+            /**
+             * Handover Note By
+             * @description Verified actor that wrote ``handover_note``.
+             * @default
+             */
+            handover_note_by: string;
+            /**
+             * Handover Note Ts
+             * @description Epoch seconds when ``handover_note`` was written.
+             * @default 0
+             */
+            handover_note_ts: number;
             /** Id */
             id: string;
             /** Inputs */
@@ -5810,20 +5823,6 @@ export interface components {
         TaskDepsDTO: {
             /** Blocked By */
             blocked_by: string[];
-        };
-        /**
-         * TaskHandoverNoteDTO
-         * @description One append-only note recorded when a task is reassigned. It preserves the handover context even when the new executor is minted after the request.
-         */
-        TaskHandoverNoteDTO: {
-            /** From Member Id */
-            from_member_id: string;
-            /** Text */
-            text: string;
-            /** To Executor Kind */
-            to_executor_kind: string;
-            /** Ts */
-            ts: number;
         };
         /**
          * TaskLearningsPatchDTO
@@ -6155,7 +6154,7 @@ export interface components {
         };
         /**
          * TaskReassignDTO
-         * @description Reassign request (``POST /api/tasks/{task_id}/reassign`` / MCP ``reassign_task``): the new executor target plus an optional handover note appended to the task's durable handover history. Member targets also receive the existing notification chat message.
+         * @description Reassign request (``POST /api/tasks/{task_id}/reassign`` / MCP ``reassign_task``): the new executor target plus an optional handover note written as the task's latest durable handover context. Member targets also receive the existing notification chat message.
          */
         TaskReassignDTO: {
             /**

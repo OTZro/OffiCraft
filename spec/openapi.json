@@ -4417,13 +4417,23 @@
             "title": "Handoff Task Id",
             "type": "string"
           },
-          "handover_notes": {
-            "description": "Append-only notes attached to each reassign handover. A note records the dispatching actor, target executor kind, timestamp, and text; omitted notes do not alter prior records.",
-            "items": {
-              "$ref": "#/components/schemas/TaskHandoverNoteDTO"
-            },
-            "title": "Handover Notes",
-            "type": "array"
+          "handover_note": {
+            "default": "",
+            "description": "The latest durable reassign handover note. Omitted notes leave this value unchanged.",
+            "title": "Handover Note",
+            "type": "string"
+          },
+          "handover_note_by": {
+            "default": "",
+            "description": "Verified actor that wrote ``handover_note``.",
+            "title": "Handover Note By",
+            "type": "string"
+          },
+          "handover_note_ts": {
+            "default": 0.0,
+            "description": "Epoch seconds when ``handover_note`` was written.",
+            "title": "Handover Note Ts",
+            "type": "number"
           },
           "id": {
             "title": "Id",
@@ -4530,36 +4540,6 @@
           "blocked_by"
         ],
         "title": "TaskDepsDTO",
-        "additionalProperties": false,
-        "type": "object"
-      },
-      "TaskHandoverNoteDTO": {
-        "description": "One append-only note recorded when a task is reassigned. It preserves the handover context even when the new executor is minted after the request.",
-        "properties": {
-          "from_member_id": {
-            "title": "From Member Id",
-            "type": "string"
-          },
-          "text": {
-            "title": "Text",
-            "type": "string"
-          },
-          "to_executor_kind": {
-            "title": "To Executor Kind",
-            "type": "string"
-          },
-          "ts": {
-            "title": "Ts",
-            "type": "number"
-          }
-        },
-        "required": [
-          "ts",
-          "from_member_id",
-          "to_executor_kind",
-          "text"
-        ],
-        "title": "TaskHandoverNoteDTO",
         "additionalProperties": false,
         "type": "object"
       },
@@ -5122,7 +5102,7 @@
         "type": "object"
       },
       "TaskReassignDTO": {
-        "description": "Reassign request (``POST /api/tasks/{task_id}/reassign`` / MCP ``reassign_task``): the new executor target plus an optional handover note appended to the task's durable handover history. Member targets also receive the existing notification chat message.",
+        "description": "Reassign request (``POST /api/tasks/{task_id}/reassign`` / MCP ``reassign_task``): the new executor target plus an optional handover note written as the task's latest durable handover context. Member targets also receive the existing notification chat message.",
         "properties": {
           "note": {
             "anyOf": [

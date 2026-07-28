@@ -170,18 +170,10 @@ func (s *apiServer) buildWorkerBootContext(w OutsourceWorker, t Task, manual *Ta
 		b.WriteString(strings.TrimSpace(t.Description))
 		b.WriteString("\n")
 	}
-	if len(t.HandoverNotes) > 0 {
-		latest := t.HandoverNotes[len(t.HandoverNotes)-1]
-		b.WriteString("\n## 最新交接備註\n\n")
-		fmt.Fprintf(&b, "- 時間：%.3f\n- 發送者：`%s`\n- 接手類型：%s\n\n%s\n",
-			latest.TS, latest.FromMemberID, latest.ToExecutorKind, latest.Text)
-		if len(t.HandoverNotes) > 1 {
-			b.WriteString("\n## 過往交接備註\n")
-			for _, note := range t.HandoverNotes[:len(t.HandoverNotes)-1] {
-				fmt.Fprintf(&b, "\n### %.3f · `%s` → %s\n\n%s\n",
-					note.TS, note.FromMemberID, note.ToExecutorKind, note.Text)
-			}
-		}
+	if t.HandoverNote != "" {
+		b.WriteString("\n## 交接備註\n\n")
+		fmt.Fprintf(&b, "- 時間：%.3f\n- 發送者：`%s`\n\n%s\n",
+			t.HandoverNoteTS, t.HandoverNoteBy, t.HandoverNote)
 	}
 
 	// T-ba04: a task minted onto you while it is in `reassigning` is a TAKEOVER,

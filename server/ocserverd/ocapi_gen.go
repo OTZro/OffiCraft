@@ -1555,14 +1555,20 @@ type TaskDTO struct {
 	// HandoffTaskId The successor task the handover points at ("" for ``handoff='none'``).
 	HandoffTaskId *string `json:"handoff_task_id,omitempty"`
 
-	// HandoverNotes Append-only notes attached to each reassign handover. A note records the dispatching actor, target executor kind, timestamp, and text; omitted notes do not alter prior records.
-	HandoverNotes *[]TaskHandoverNoteDTO  `json:"handover_notes,omitempty"`
-	Id            string                  `json:"id"`
-	Inputs        *map[string]interface{} `json:"inputs,omitempty"`
-	Lock          *string                 `json:"lock,omitempty"`
-	Priority      string                  `json:"priority"`
-	ProgressDone  int                     `json:"progress_done"`
-	ProgressTotal int                     `json:"progress_total"`
+	// HandoverNote The latest durable reassign handover note. Omitted notes leave this value unchanged.
+	HandoverNote *string `json:"handover_note,omitempty"`
+
+	// HandoverNoteBy Verified actor that wrote ``handover_note``.
+	HandoverNoteBy *string `json:"handover_note_by,omitempty"`
+
+	// HandoverNoteTs Epoch seconds when ``handover_note`` was written.
+	HandoverNoteTs *float64                `json:"handover_note_ts,omitempty"`
+	Id             string                  `json:"id"`
+	Inputs         *map[string]interface{} `json:"inputs,omitempty"`
+	Lock           *string                 `json:"lock,omitempty"`
+	Priority       string                  `json:"priority"`
+	ProgressDone   int                     `json:"progress_done"`
+	ProgressTotal  int                     `json:"progress_total"`
 
 	// ReassignedFrom The PREDECESSOR the task was last handed over from (T-ba04 轉派交接): the id (a member id or an outsource worker id) of the executor the task moved AWAY from on its most recent reassign, so the successor and the cockpit can name who to hand over WITH. "" on a task never reassigned (or rows created before the column existed). additive-optional.
 	ReassignedFrom *string `json:"reassigned_from,omitempty"`
@@ -1581,14 +1587,6 @@ type TaskDTO struct {
 // TaskDepsDTO Replace the blocking-deps list wholesale (MCP “set_task_deps“). Since T-74f8 a dep is a real hold: an unassigned outsource task with a live blocker is not minted by the 發包 scheduler, and the blocker reaching a terminal status releases the blocked task (durable notice to its executor + an immediate scheduler tick). It never rewrites the blocked task's status — that stays derived from its steps. A self-reference or an unknown task id is a 422.
 type TaskDepsDTO struct {
 	BlockedBy []string `json:"blocked_by"`
-}
-
-// TaskHandoverNoteDTO One append-only note recorded when a task is reassigned. It preserves the handover context even when the new executor is minted after the request.
-type TaskHandoverNoteDTO struct {
-	FromMemberId   string  `json:"from_member_id"`
-	Text           string  `json:"text"`
-	ToExecutorKind string  `json:"to_executor_kind"`
-	Ts             float64 `json:"ts"`
 }
 
 // TaskLearningsPatchDTO Anchor-addressed PATCH of a type's learnings (MCP “patch_task_learnings“ — the learnings twin of “patch_lessons“): “{edits: [{old, new}], allow_shrink?}“. The write cost scales with the CHANGE, not the doc — a whole-doc “write_task_learnings“ stops fitting in one model output as the learnings grow (30k chars observed), so this is the primary write seam and whole-doc replace stays the last resort. ATOMIC — edits apply sequentially to an in-memory copy and any failing anchor (absent or ambiguous “old“) rejects the ENTIRE batch with a flat 400 and ZERO writes. “allow_shrink“ (default false) must be set explicitly for a patch that empties the doc or shrinks it to under a tenth of its size — the r-76 wipe-guard posture.
@@ -1712,7 +1710,7 @@ type TaskPriorityUpdateDTO struct {
 	Priority string `json:"priority"`
 }
 
-// TaskReassignDTO Reassign request (“POST /api/tasks/{task_id}/reassign“ / MCP “reassign_task“): the new executor target plus an optional handover note appended to the task's durable handover history. Member targets also receive the existing notification chat message.
+// TaskReassignDTO Reassign request (“POST /api/tasks/{task_id}/reassign“ / MCP “reassign_task“): the new executor target plus an optional handover note written as the task's latest durable handover context. Member targets also receive the existing notification chat message.
 type TaskReassignDTO struct {
 	Note *string `json:"note,omitempty"`
 
