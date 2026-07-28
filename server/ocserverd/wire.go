@@ -731,6 +731,13 @@ type taskArtifactDTO struct {
 	CreatedBy    string  `json:"created_by"`
 }
 
+type taskHandoverNoteDTO struct {
+	TS             float64 `json:"ts"`
+	FromMemberID   string  `json:"from_member_id"`
+	ToExecutorKind string  `json:"to_executor_kind"`
+	Text           string  `json:"text"`
+}
+
 type taskDTO struct {
 	ID           string         `json:"id"`
 	TaskNo       string         `json:"task_no"`
@@ -748,16 +755,17 @@ type taskDTO struct {
 	CreatorID    string         `json:"creator_id"`
 	// ReassignedFrom / ReassignedFromKind: the predecessor the task was last
 	// handed over from (T-ba04); "" / "" when never reassigned.
-	ReassignedFrom     string        `json:"reassigned_from"`
-	ReassignedFromKind string        `json:"reassigned_from_kind"`
-	WaitingReason      string        `json:"waiting_reason"`
-	CreatedTS          float64       `json:"created_ts"`
-	UpdatedTS          float64       `json:"updated_ts"`
-	ClosedTS           *float64      `json:"closed_ts"` // null while open
-	Deps               []string      `json:"deps"`
-	Steps              []taskStepDTO `json:"steps"`
-	ProgressDone       int           `json:"progress_done"`
-	ProgressTotal      int           `json:"progress_total"`
+	ReassignedFrom     string                `json:"reassigned_from"`
+	ReassignedFromKind string                `json:"reassigned_from_kind"`
+	HandoverNotes      []taskHandoverNoteDTO `json:"handover_notes"`
+	WaitingReason      string                `json:"waiting_reason"`
+	CreatedTS          float64               `json:"created_ts"`
+	UpdatedTS          float64               `json:"updated_ts"`
+	ClosedTS           *float64              `json:"closed_ts"` // null while open
+	Deps               []string              `json:"deps"`
+	Steps              []taskStepDTO         `json:"steps"`
+	ProgressDone       int                   `json:"progress_done"`
+	ProgressTotal      int                   `json:"progress_total"`
 	// CloseoutReported flips true once the executor reports the close-out
 	// follow-ups done (report_task_closeout; §6.3 — terminal tasks only).
 	CloseoutReported bool `json:"closeout_reported"`
@@ -1040,6 +1048,7 @@ func newTaskDTO(t Task, steps []TaskStep, deps []string, cardStatus map[string]s
 		CreatorID:          t.CreatorID,
 		ReassignedFrom:     t.ReassignedFrom,
 		ReassignedFromKind: t.ReassignedFromKind,
+		HandoverNotes:      taskHandoverNotesDTO(t.HandoverNotes),
 		WaitingReason:      t.WaitingReason,
 		CreatedTS:          t.CreatedTS,
 		UpdatedTS:          t.UpdatedTS,
@@ -1062,6 +1071,17 @@ func newTaskDTO(t Task, steps []TaskStep, deps []string, cardStatus map[string]s
 		dto.ClosedTS = &ts
 	}
 	return dto
+}
+
+func taskHandoverNotesDTO(notes []TaskHandoverNote) []taskHandoverNoteDTO {
+	out := make([]taskHandoverNoteDTO, 0, len(notes))
+	for _, note := range notes {
+		out = append(out, taskHandoverNoteDTO{
+			TS: note.TS, FromMemberID: note.FromMemberID,
+			ToExecutorKind: note.ToExecutorKind, Text: note.Text,
+		})
+	}
+	return out
 }
 
 // newTaskArtifactDTO projects one artifact row onto the wire. att is the

@@ -96,6 +96,10 @@ func TestBuildWorkerBootContext_FullAssembly(t *testing.T) {
 		DedupeKey: "https://pr/42", Description: "把 42 號 PR 看完",
 		Priority: TaskPriorityHigh,
 		Inputs:   map[string]any{"pr_url": "https://pr/42", "repo": "x/y"},
+		HandoverNotes: []TaskHandoverNote{{
+			TS: 1, FromMemberID: "m-kyle", ToExecutorKind: TaskExecutorOutsource,
+			Text: "先跑既有測試",
+		}},
 	}
 	manual := &TaskManual{
 		TypeKey: "review-pr", DisplayName: "審查 PR",
@@ -119,6 +123,7 @@ func TestBuildWorkerBootContext_FullAssembly(t *testing.T) {
 		"ow-abc", "O-7", "opus", "high", // identity block
 		TaskNo(task.ID), "Review PR 42", "review-pr", "https://pr/42",
 		"把 42 號 PR 看完", "pr_url", // task block
+		"最新交接備註", "m-kyle", "先跑既有測試",
 		"review 一個 PR", "先看 diff 再留結論", "大 PR 先分檔看", // manual Q1/Q3/learnings
 		"必填、識別鍵", // Q2 field annotations
 		// T-fa76: the display face leads, the ADDRESSING type_key stays in

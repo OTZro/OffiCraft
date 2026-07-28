@@ -49,6 +49,7 @@ type Task struct {
 	// reassigned (or pre-column rows).
 	ReassignedFrom     string
 	ReassignedFromKind string
+	HandoverNotes      []TaskHandoverNote
 	// OutsourceRuntime / OutsourceModel / OutsourceEffort / OutsourceMachine is
 	// the resolved outsource spec of a task on the outsource track (T-35e0,
 	// migrations/00029): what the worker minted for it is given. '' on every
@@ -93,10 +94,18 @@ type Task struct {
 	FrozenBy string
 }
 
+type TaskHandoverNote struct {
+	TS             float64 `json:"ts"`
+	FromMemberID   string  `json:"from_member_id"`
+	ToExecutorKind string  `json:"to_executor_kind"`
+	Text           string  `json:"text"`
+}
+
 const taskColumns = `id, type_key, title, dedupe_key, inputs, description,
 	status, lock, priority, executor_kind, executor_id, creator_id, waiting_reason,
 	created_ts, updated_ts, closed_ts, closeout_ts, duplicate_of,
 	reassigned_from, reassigned_from_kind,
+	handover_notes,
 	outsource_runtime, outsource_model, outsource_effort, outsource_machine,
 	outsource_dispatched,
 	handoff, handoff_note, handoff_task_id, frozen_by`
@@ -111,12 +120,14 @@ func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 	var t Task
 	var inputs string
 	var dispatched int
+	var handoverNotes string
 	err := row.Scan(
 		&t.ID, &t.TypeKey, &t.Title, &t.DedupeKey, &inputs, &t.Description,
 		&t.Status, &t.Lock, &t.Priority, &t.ExecutorKind, &t.ExecutorID, &t.CreatorID,
 		&t.WaitingReason,
 		&t.CreatedTS, &t.UpdatedTS, &t.ClosedTS, &t.CloseoutTS, &t.DuplicateOf,
 		&t.ReassignedFrom, &t.ReassignedFromKind,
+		&handoverNotes,
 		&t.OutsourceRuntime, &t.OutsourceModel, &t.OutsourceEffort, &t.OutsourceMachine,
 		&dispatched,
 		&t.Handoff, &t.HandoffNote, &t.HandoffTaskID, &t.FrozenBy,
@@ -125,6 +136,9 @@ func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 		return Task{}, err
 	}
 	t.OutsourceDispatched = dispatched != 0
+	if err := json.Unmarshal([]byte(handoverNotes), &t.HandoverNotes); err != nil {
+		return Task{}, fmt.Errorf("task %s: bad handover_notes JSON: %w", t.ID, err)
+	}
 	if err := json.Unmarshal([]byte(inputs), &t.Inputs); err != nil {
 		return Task{}, fmt.Errorf("task %s: bad inputs JSON: %w", t.ID, err)
 	}
@@ -253,13 +267,17 @@ func (d *DAL) PutTask(t Task) error {
 	if err != nil {
 		return err
 	}
+	handoverNotes, err := json.Marshal(t.HandoverNotes)
+	if err != nil {
+		return err
+	}
 	dispatched := 0
 	if t.OutsourceDispatched {
 		dispatched = 1
 	}
 	_, err = d.db.Exec(`
 		INSERT INTO task (`+taskColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			type_key = excluded.type_key, title = excluded.title,
 			dedupe_key = excluded.dedupe_key, inputs = excluded.inputs,
@@ -275,6 +293,7 @@ func (d *DAL) PutTask(t Task) error {
 			duplicate_of = excluded.duplicate_of,
 			reassigned_from = excluded.reassigned_from,
 			reassigned_from_kind = excluded.reassigned_from_kind,
+			handover_notes = excluded.handover_notes,
 			outsource_runtime = excluded.outsource_runtime,
 			outsource_model = excluded.outsource_model,
 			outsource_effort = excluded.outsource_effort,
@@ -289,6 +308,7 @@ func (d *DAL) PutTask(t Task) error {
 		t.WaitingReason,
 		t.CreatedTS, t.UpdatedTS, t.ClosedTS, t.CloseoutTS, t.DuplicateOf,
 		t.ReassignedFrom, t.ReassignedFromKind,
+		string(handoverNotes),
 		NormalizeRuntime(t.OutsourceRuntime),
 		t.OutsourceModel, t.OutsourceEffort, t.OutsourceMachine,
 		dispatched,

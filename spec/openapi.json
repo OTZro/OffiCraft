@@ -4417,6 +4417,14 @@
             "title": "Handoff Task Id",
             "type": "string"
           },
+          "handover_notes": {
+            "description": "Append-only notes attached to each reassign handover. A note records the dispatching actor, target executor kind, timestamp, and text; omitted notes do not alter prior records.",
+            "items": {
+              "$ref": "#/components/schemas/TaskHandoverNoteDTO"
+            },
+            "title": "Handover Notes",
+            "type": "array"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -4522,6 +4530,36 @@
           "blocked_by"
         ],
         "title": "TaskDepsDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "TaskHandoverNoteDTO": {
+        "description": "One append-only note recorded when a task is reassigned. It preserves the handover context even when the new executor is minted after the request.",
+        "properties": {
+          "from_member_id": {
+            "title": "From Member Id",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "to_executor_kind": {
+            "title": "To Executor Kind",
+            "type": "string"
+          },
+          "ts": {
+            "title": "Ts",
+            "type": "number"
+          }
+        },
+        "required": [
+          "ts",
+          "from_member_id",
+          "to_executor_kind",
+          "text"
+        ],
+        "title": "TaskHandoverNoteDTO",
         "additionalProperties": false,
         "type": "object"
       },
@@ -5084,7 +5122,7 @@
         "type": "object"
       },
       "TaskReassignDTO": {
-        "description": "Reassign request (``POST /api/tasks/{task_id}/reassign`` / MCP ``reassign_task``): the new executor target plus an optional handover note the server appends to the new executor's notification chat message.",
+        "description": "Reassign request (``POST /api/tasks/{task_id}/reassign`` / MCP ``reassign_task``): the new executor target plus an optional handover note appended to the task's durable handover history. Member targets also receive the existing notification chat message.",
         "properties": {
           "note": {
             "anyOf": [
