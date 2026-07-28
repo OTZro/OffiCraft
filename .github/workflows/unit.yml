@@ -1,0 +1,69 @@
+# officraft — unit tests (frontend + backend) on every pull request.
+#
+# WHY THIS EXISTS, AND WHAT IT IS NOT
+# bin/ci.sh remains the canonical, AUTHORITATIVE land gate and runs LOCALLY.
+# This workflow does NOT replace it and does not certify a land. It is a second
+# pair of eyes on the two suites that are pure code — the Go unit tests and the
+# frontend unit tests — run on a clean Linux checkout, which is the one thing a
+# developer's Mac can never prove: that nothing depends on this machine.
+#
+# bin/ci.sh's header used to justify local-only CI with "we do not pay for
+# GitHub Actions". That premise no longer holds: this repo is PUBLIC, and
+# GitHub's standard-runner minutes are free for public repositories.
+#
+# ONE SOURCE OF TRUTH: this file deliberately contains NO list of modules, no
+# npm script names, no test paths. It installs a pinned toolchain and calls
+# bin/ci-unit.sh. Everything about WHAT runs lives in that script, in the repo,
+# next to bin/ci.sh — so the cloud check and a local run are the same bytes and
+# cannot drift. If you find yourself about to add a test invocation here, add it
+# to bin/ci-unit.sh instead.
+#
+# Trigger is pull_request ONLY. Pushes to a working branch are the local gate's
+# job; re-running the same suites on every push would just be noise.
+#
+# No secrets are used anywhere in this workflow, by design — so a fork PR runs
+# the identical, complete check.
+name: unit
+
+on:
+  pull_request:
+
+# A new push to the same PR makes the in-flight run obsolete — cancel it rather
+# than pay for (and wait on) a result nobody will read.
+concurrency:
+  group: unit-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    # ubuntu-latest on purpose: the point is to catch macOS-only assumptions.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # Versions pinned to what the repo actually develops against: go.mod says
+      # `go 1.26.4` in all three modules, and the dev machine runs node 22.10.0.
+      # check-latest:false + an exact version keeps the runner from silently
+      # drifting ahead of the developer.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+          check-latest: false
+          # Only server/ocserverd has third-party deps (hence a go.sum); the two
+          # cli/ modules are stdlib-only. setup-go errors on an unresolved path,
+          # so listing the nonexistent ones would break the job, not just the cache.
+          cache-dependency-path: server/ocserverd/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.10.0'
+          check-latest: false
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: unit suites (frontend + backend)
+        run: bash bin/ci-unit.sh

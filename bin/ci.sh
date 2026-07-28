@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 # officraft local CI — the canonical, AUTHORITATIVE quality gate.
 #
-# CI runs LOCALLY (we do not pay for GitHub Actions). Runs, in order, failing
+# CI runs LOCALLY and THIS script is the land authority. (The old reason given
+# here — "we do not pay for GitHub Actions" — was factually wrong once the repo
+# went PUBLIC: standard-runner minutes are free for public repos. The real
+# reason this stays local is that the gate below includes host-shaped and
+# regenerate-and-byte-compare steps whose authority we do not want to move.)
+# A STRICT SUBSET — the frontend + backend UNIT suites only — now also runs on
+# every pull request via .github/workflows/unit.yml, which calls bin/ci-unit.sh;
+# that script is the single definition of the subset, so the cloud check cannot
+# grow a second, drifting list. It is a cross-check on a clean Linux box, NOT
+# land authority. Runs, in order, failing
 # fast on the first non-zero step:
 #   1. golang            — gofmt + go vet + go build + committed-prebuilt
 #                          parity dryrun + go test -count=1 (cache-defeat: a
