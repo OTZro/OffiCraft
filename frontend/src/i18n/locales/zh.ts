@@ -876,7 +876,7 @@ export const zh = {
       title: "帳號詳情",
       close: "關閉",
       accountKey: "歸戶 key",
-      userId: "使用者 ID(雜湊)",
+      accountIdentifier: "帳號識別碼",
       orgUuid: "組織 UUID",
       email: "Email",
       org: "組織",

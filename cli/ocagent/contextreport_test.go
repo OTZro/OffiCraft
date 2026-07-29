@@ -447,19 +447,25 @@ func writeClaudeCredentials(t *testing.T, home, body string) {
 	}
 }
 
-// TestReadClaudeAccount: the account key is "<userID>/<organizationUuid>" (bare
-// userID when no org, "" when no userID) — and it NEVER depends on the
+// TestReadClaudeAccount: the account key is "<accountUuid>/<organizationUuid>" (bare
+// accountUuid when no org, "" when no account identity) — and it NEVER depends on the
 // credentials file / subscriptionType (T-f694: the same account must key the
 // same on every machine regardless of credential storage form).
 func TestReadClaudeAccount(t *testing.T) {
-	// The canonical key: userID + org from .claude.json.
+	// The canonical key: accountUuid + org from .claude.json.
 	teamHome := writeClaudeJSON(t,
-		`{"userID":"acct-123","oauthAccount":{"organizationUuid":"org-team"}}`)
+		`{"userID":"device-1","oauthAccount":{"accountUuid":"acct-123","organizationUuid":"org-team"}}`)
 	if got := readClaudeAccount(testEnv(map[string]string{"HOME": teamHome})); got != "acct-123/org-team" {
 		t.Errorf("team key = %q, want acct-123/org-team", got)
 	}
 
-	// REGRESSION (T-f694): same userID + org must produce the SAME key whatever
+	secondDeviceHome := writeClaudeJSON(t,
+		`{"userID":"device-2","oauthAccount":{"accountUuid":"acct-123","organizationUuid":"org-team"}}`)
+	if got := readClaudeAccount(testEnv(map[string]string{"HOME": secondDeviceHome})); got != "acct-123/org-team" {
+		t.Errorf("same account on another device = %q, want acct-123/org-team", got)
+	}
+
+	// REGRESSION (T-f694): the same accountUuid + org must produce the SAME key whatever
 	// the credentials file says (any subscriptionType, blank, bad json) or
 	// whether it exists at all — the plan never joins the key, so a file-creds
 	// machine and a Keychain-only machine can no longer split into two rows.
@@ -471,41 +477,41 @@ func TestReadClaudeAccount(t *testing.T) {
 		`{not json`,
 	} {
 		home := writeClaudeJSON(t,
-			`{"userID":"acct-123","oauthAccount":{"organizationUuid":"org-team"}}`)
+			`{"userID":"device-1","oauthAccount":{"accountUuid":"acct-123","organizationUuid":"org-team"}}`)
 		writeClaudeCredentials(t, home, credBody)
 		if got := readClaudeAccount(testEnv(map[string]string{"HOME": home})); got != "acct-123/org-team" {
 			t.Errorf("credentials %s ⇒ %q, want acct-123/org-team (creds file must not affect the key)", credBody, got)
 		}
 	}
 
-	// A personal login with no org degrades HONESTLY to the bare userID — no
+	// A personal login with no org degrades HONESTLY to the bare accountUuid — no
 	// dangling "acct-123/" suffix.
-	personalHome := writeClaudeJSON(t, `{"userID":"acct-123"}`)
+	personalHome := writeClaudeJSON(t, `{"userID":"device-1","oauthAccount":{"accountUuid":"acct-123"}}`)
 	if got := readClaudeAccount(testEnv(map[string]string{"HOME": personalHome})); got != "acct-123" {
 		t.Errorf("personal key = %q, want acct-123 (bare, no trailing slash)", got)
 	}
 
-	// The bug this fixes: SAME userID, DIFFERENT org must NOT collide.
+	// The same account in different orgs must not collide.
 	otherOrgHome := writeClaudeJSON(t,
-		`{"userID":"acct-123","oauthAccount":{"organizationUuid":"org-personal"}}`)
+		`{"userID":"device-2","oauthAccount":{"accountUuid":"acct-123","organizationUuid":"org-personal"}}`)
 	teamKey := readClaudeAccount(testEnv(map[string]string{"HOME": teamHome}))
 	otherKey := readClaudeAccount(testEnv(map[string]string{"HOME": otherOrgHome}))
 	if teamKey == otherKey {
-		t.Errorf("same userID, different org collided: both %q", teamKey)
+		t.Errorf("same account, different org collided: both %q", teamKey)
 	}
 
-	// And SAME userID with-org vs without-org must NOT collide either.
+	// And the same account with-org vs without-org must NOT collide either.
 	if teamKey == readClaudeAccount(testEnv(map[string]string{"HOME": personalHome})) {
-		t.Errorf("same userID, org vs no-org collided: %q", teamKey)
+		t.Errorf("same account, org vs no-org collided: %q", teamKey)
 	}
 
-	// A blank / non-string / null org is treated as absent ⇒ bare userID (never
+	// A blank / non-string / null org is treated as absent ⇒ bare accountUuid (never
 	// "acct-123/" or "acct-123/None").
 	for _, body := range []string{
-		`{"userID":"acct-123","oauthAccount":{"organizationUuid":""}}`,
-		`{"userID":"acct-123","oauthAccount":{"organizationUuid":null}}`,
-		`{"userID":"acct-123","oauthAccount":{"organizationUuid":42}}`,
-		`{"userID":"acct-123","oauthAccount":{}}`,
+		`{"userID":"device-1","oauthAccount":{"accountUuid":"acct-123","organizationUuid":""}}`,
+		`{"userID":"device-1","oauthAccount":{"accountUuid":"acct-123","organizationUuid":null}}`,
+		`{"userID":"device-1","oauthAccount":{"accountUuid":"acct-123","organizationUuid":42}}`,
+		`{"userID":"device-1","oauthAccount":{"accountUuid":"acct-123"}}`,
 	} {
 		home := writeClaudeJSON(t, body)
 		if got := readClaudeAccount(testEnv(map[string]string{"HOME": home})); got != "acct-123" {
@@ -514,15 +520,21 @@ func TestReadClaudeAccount(t *testing.T) {
 	}
 
 	// Split two-file layout: userID lives in ~/.claude/.claude.json while the
-	// oauthAccount (org) lives in ~/.claude.json — the org must still join the
-	// key, not silently degrade to the bare userID.
-	splitHome := writeClaudeJSON(t, `{"userID":"acct-123"}`)
+	// oauthAccount lives in ~/.claude.json — the account and org must still join
+	// the key.
+	splitHome := writeClaudeJSON(t, `{"userID":"device-1"}`)
 	if err := os.WriteFile(filepath.Join(splitHome, ".claude.json"),
-		[]byte(`{"oauthAccount":{"organizationUuid":"org-team"}}`), 0o644); err != nil {
+		[]byte(`{"oauthAccount":{"accountUuid":"acct-123","organizationUuid":"org-team"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if got := readClaudeAccount(testEnv(map[string]string{"HOME": splitHome})); got != "acct-123/org-team" {
 		t.Errorf("split-file key = %q, want acct-123/org-team", got)
+	}
+
+	legacyHome := writeClaudeJSON(t,
+		`{"userID":"legacy-device","oauthAccount":{"organizationUuid":"org-team"}}`)
+	if got := readClaudeAccount(testEnv(map[string]string{"HOME": legacyHome})); got != "legacy-device/org-team" {
+		t.Errorf("legacy key = %q, want legacy-device/org-team", got)
 	}
 
 	// Missing everywhere ⇒ "".

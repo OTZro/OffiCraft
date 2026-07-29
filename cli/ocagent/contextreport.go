@@ -640,19 +640,17 @@ func localHost(env func(string) string) string {
 }
 
 // readClaudeAccount returns the monitoring attribution key for the logged-in
-// Claude account: the stable OAuth userID joined with oauthAccount's
-// organizationUuid as "<userID>/<organizationUuid>" — bare userID when no org
-// is present (never a dangling "<userID>/"), "" when no userID is found. Both
-// dimensions come from .claude.json only, which the claude CLI writes
-// regardless of where credentials live (file or macOS Keychain), so the key is
-// stable across machines and credential storage forms. The plan's
-// subscriptionType deliberately does NOT join the key (T-f694): keying on it
-// made the same account split into two monitoring rows depending on whether
-// ~/.claude/.credentials.json was readable on a given machine (Keychain-only
-// installs fell back to the org dimension). Same userID under different orgs
-// still yields distinct keys. userID scans BOTH candidates
-// (~/.claude/.claude.json then ~/.claude.json) and each dimension resolves
-// INDEPENDENTLY — real installs split them across the two files.
+// Claude account: the OAuth accountUuid joined with oauthAccount's
+// organizationUuid as "<accountUuid>/<organizationUuid>" — bare accountUuid
+// when no org is present (never a dangling "<accountUuid>/"), "" when no
+// account identity is found. Both dimensions come from .claude.json only,
+// which the claude CLI writes regardless of where credentials live (file or
+// macOS Keychain), so the key is
+// stable across machines and credential storage forms. subscriptionType does
+// not join the key. Legacy config without accountUuid falls back to userID so
+// existing reports remain attributable. Both candidates
+// (~/.claude/.claude.json then ~/.claude.json) are scanned and each dimension
+// resolves independently — real installs split them across the two files.
 func readClaudeAccount(env func(string) string) string {
 	home := env("HOME")
 	if home == "" {
@@ -660,7 +658,7 @@ func readClaudeAccount(env func(string) string) string {
 			home = h
 		}
 	}
-	userID, org := "", ""
+	accountUUID, userID, org := "", "", ""
 	for _, path := range []string{
 		filepath.Join(home, ".claude", ".claude.json"),
 		filepath.Join(home, ".claude.json"),
@@ -678,23 +676,31 @@ func readClaudeAccount(env func(string) string) string {
 				userID = strings.TrimSpace(pyStr(uid))
 			}
 		}
+		if accountUUID == "" {
+			accountUUID = claudeAccountUUID(d)
+		}
 		if org == "" {
 			org = claudeOrgUUID(d)
 		}
 	}
-	if userID == "" {
+	identity := accountUUID
+	if identity == "" {
+		identity = userID
+	}
+	if identity == "" {
 		return ""
 	}
 	if org != "" {
-		return userID + "/" + org
+		return identity + "/" + org
 	}
-	return userID
+	return identity
 }
 
 // readClaudeAccountLabel returns the human-readable OWNER-FACING label for the
 // logged-in Claude account — "<emailAddress>(<organizationName>)" from
 // .claude.json's oauthAccount (T-260e). This is DISPLAY ONLY: the stable
-// account key stays readClaudeAccount's userID/org dimensions; the label never
+// account key stays readClaudeAccount's accountUuid/org dimensions; the label
+// never
 // joins the key. Same two-file discipline as readClaudeAccount (the T-713a
 // lesson): BOTH candidates (~/.claude/.claude.json then ~/.claude.json) are
 // scanned and each field resolves INDEPENDENTLY, because real installs split
@@ -757,8 +763,8 @@ func readClaudeAccountLabel(env func(string) string) string {
 // claudeOrgUUID pulls oauthAccount.organizationUuid — the org dimension of the
 // account key — out of a decoded .claude.json. Strict: a missing oauthAccount
 // object, a missing / null / non-string / blank organizationUuid all yield "",
-// so readClaudeAccount degrades to a bare-userID key rather than appending an
-// empty (or "None") suffix.
+// so readClaudeAccount omits the org suffix rather than appending an empty
+// (or "None") suffix.
 func claudeOrgUUID(d map[string]any) string {
 	oauth, ok := d["oauthAccount"].(map[string]any)
 	if !ok {
@@ -766,6 +772,15 @@ func claudeOrgUUID(d map[string]any) string {
 	}
 	org, _ := oauth["organizationUuid"].(string)
 	return strings.TrimSpace(org)
+}
+
+func claudeAccountUUID(d map[string]any) string {
+	oauth, ok := d["oauthAccount"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	account, _ := oauth["accountUuid"].(string)
+	return strings.TrimSpace(account)
 }
 
 // buildTelemetry parses a statusLine payload into the MEASURED telemetry pieces

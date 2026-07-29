@@ -1,8 +1,8 @@
 // 帳號詳情 modal (T-a9a7) — Monitor §1 account card "詳情" entry.
 //
 // The modal shows the REAL identity behind a claude account row: the stable
-// key 全文, the userID hash / org-uuid dimension split (T-f694: the key is
-// "<userID>/<orgUuid>", the plan never joins it), and the email/org derived
+// key 全文, the account identifier / org-uuid dimension split (T-f694: the key is
+// "<account identifier>/<orgUuid>", the plan never joins it), and the email/org derived
 // from the OWNER-ONLY account_label. Honesty lock: a null label renders the
 // email/org rows as "—" (never guessed from displayName).
 
@@ -73,7 +73,7 @@ beforeEach(() => {
 });
 
 describe("account detail modal", () => {
-  it("opens from the 詳情 button and shows key/userID/orgUuid/email/org/cost", async () => {
+  it("opens from the 詳情 button and shows key/account identifier/orgUuid/email/org/cost", async () => {
     renderMonitor();
     const modal = await openDetail();
     const body = within(modal).getByTestId("mon-acct-detail-body");
@@ -204,18 +204,18 @@ describe("account detail modal", () => {
 describe("splitAccountKey", () => {
   it("splits at the LAST slash", () => {
     expect(splitAccountKey("acct-123/9f8e-uuid")).toEqual({
-      userId: "acct-123",
+      accountIdentifier: "acct-123",
       orgUuid: "9f8e-uuid",
     });
-    // a userID that itself contains a slash still splits at the last one
+    // an account identifier that itself contains a slash still splits at the last one
     expect(splitAccountKey("a/b/9f8e-uuid")).toEqual({
-      userId: "a/b",
+      accountIdentifier: "a/b",
       orgUuid: "9f8e-uuid",
     });
   });
-  it("bare userID (no slash) → orgUuid null", () => {
+  it("bare account identifier (no slash) → orgUuid null", () => {
     expect(splitAccountKey("acct-123")).toEqual({
-      userId: "acct-123",
+      accountIdentifier: "acct-123",
       orgUuid: null,
     });
   });

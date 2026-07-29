@@ -1137,9 +1137,8 @@ func TestOutsourceWorker_RuntimeAccountNeverBorrowsAnotherRuntime(t *testing.T) 
 // TestGetOutsourceWorker_AccountResolvedOnDetailPath (T-f190fix): the owner-
 // reported bug lived on the DETAIL page, so the single-worker GET — not just the
 // list — must route the Claude account through the shared resolveAccountDisplay
-// fold. Its raw telemetry key is the real `<userID>/<organizationUuid>` shape
-// (readClaudeAccount, cli/ocagent/contextreport.go): a 64-hex user id joined to
-// an org uuid — exactly the credential string the panel used to leak. This locks
+// fold. Its raw telemetry key is the real `<accountUuid>/<organizationUuid>` shape
+// (readClaudeAccount, cli/ocagent/contextreport.go). This locks
 // the detail path so a regression that stopped resolving ONLY the single GET
 // (which every list-only account test would still pass) can never re-expose it.
 func TestGetOutsourceWorker_AccountResolvedOnDetailPath(t *testing.T) {
@@ -1148,8 +1147,7 @@ func TestGetOutsourceWorker_AccountResolvedOnDetailPath(t *testing.T) {
 	workerID := assignOneWorker(t, api)
 
 	// The warden reports a session's account as readClaudeAccount's
-	// `<userID(64-hex)>/<organizationUuid>` composite (the exact two-segment
-	// shape the owner's screenshot leaked). We use an OBVIOUSLY-synthetic
+	// `<accountUuid>/<organizationUuid>` composite. We use an OBVIOUSLY-synthetic
 	// stand-in carrying the repo's `-raw-key` marker (matching the sibling
 	// list tests) — a real 64-hex literal trips the CI gitleaks generic-api-key
 	// gate, and the test only needs the composite raw SHAPE, not real entropy.

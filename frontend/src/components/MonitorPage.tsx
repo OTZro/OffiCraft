@@ -1634,17 +1634,17 @@ function AccountCard({
   );
 }
 
-/** Split the stable account key "<userID>/<orgUuid>" at the LAST "/" — the
+/** Split the stable account key "<account identifier>/<orgUuid>" at the LAST "/" — the
  * reporter (contextreport.readClaudeAccount, T-f694) makes the second dimension
- * the org uuid OR absent, so a bare userID (no "/") yields orgUuid null.
+ * the org uuid OR absent, so a bare account identifier (no "/") yields orgUuid null.
  * Exported for unit tests. */
 export function splitAccountKey(key: string): {
-  userId: string;
+  accountIdentifier: string;
   orgUuid: string | null;
 } {
   const i = key.lastIndexOf("/");
-  if (i < 0) return { userId: key, orgUuid: null };
-  return { userId: key.slice(0, i), orgUuid: key.slice(i + 1) };
+  if (i < 0) return { accountIdentifier: key, orgUuid: null };
+  return { accountIdentifier: key.slice(0, i), orgUuid: key.slice(i + 1) };
 }
 
 /** Parse the reporter label "<base>(<org>)" (contextreport.readClaudeAccountLabel
@@ -1664,7 +1664,7 @@ export function parseAccountLabel(label: string): {
 }
 
 /** 帳號詳情 modal (T-a9a7) — the real identity behind one claude account row:
- * key 全文 / userID hash / org UUID 維度 / email / org / 回報標籤原文 / 機器 / 成本.
+ * key 全文 / account identifier / org UUID 維度 / email / org / 回報標籤原文 / 機器 / 成本.
  * email+org derive ONLY from the owner-only accountLabel (null → honest "—",
  * never guessed from displayName). Same dim-overlay + card language as
  * MemberDetailPanel's 事件統計 window; closes via ✕, Esc, or the backdrop. */
@@ -1685,13 +1685,13 @@ function AccountDetailModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const { userId, orgUuid } = splitAccountKey(account.account);
+  const { accountIdentifier, orgUuid } = splitAccountKey(account.account);
   const label =
     account.accountLabel != null ? parseAccountLabel(account.accountLabel) : null;
 
   const rows: { key: string; label: string; value: string; code?: boolean }[] = [
     { key: "key", label: t.monitor.detail.accountKey, value: account.account, code: true },
-    { key: "user", label: t.monitor.detail.userId, value: userId || dash, code: true },
+    { key: "account", label: t.monitor.detail.accountIdentifier, value: accountIdentifier || dash, code: true },
     {
       key: "orgUuid",
       label: t.monitor.detail.orgUuid,
