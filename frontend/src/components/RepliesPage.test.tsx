@@ -26,6 +26,7 @@ import { RepliesPage } from "./RepliesPage";
 import { ReplyCardsProvider } from "../hooks/useReplyCards";
 import {
   __resetMock,
+  __injectMockMember,
   __injectMockChat,
   __injectMockReplyCard,
 } from "../api/mock";
@@ -127,9 +128,9 @@ describe("RepliesPage", () => {
   });
 
   it("resolves an outsource asker to its 外包 代號, not the raw ow- id", async () => {
-    // "ow-rel" is never in the members roster (server excludes
-    // kind='outsource') — the identity row resolves through the codename
-    // cache; an unresolvable ow- id keeps the honest raw-id fallback.
+    // Default GET /api/members now contains outsource rows; that must not turn
+    // the card into a salaried-member identity.
+    __injectMockMember({ id: "ow-rel", kind: "outsource", name: "R-2" });
     __injectMockReplyCard(
       mkCard({ id: "rc-ow", from: "ow-rel", summary: "外包的請示" })
     );
@@ -427,6 +428,7 @@ describe("RepliesPage", () => {
   });
 
   it("clicking an outsource asker's avatar opens the worker panel (#office/worker/<id>), not the member one, same 返回 tag", async () => {
+    __injectMockMember({ id: "ow-rel", kind: "outsource", name: "R-2" });
     __injectMockReplyCard(mkCard({ id: "rc-ow", from: "ow-rel" }));
     const { findAllByTestId } = renderPage();
     const [card] = await findAllByTestId("waiting-card");

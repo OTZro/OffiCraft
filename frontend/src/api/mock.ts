@@ -3092,6 +3092,21 @@ export function __injectMockOutsourceWorker(w: OutsourceWorkerView): void {
   emitTopic("outsource_worker");
 }
 
+// Test-only hook: inject a row as GET /api/members would return it.  Keeping
+// this separate from __injectMockOutsourceWorker lets roster consumers test an
+// outsource worker arriving through the newly-inclusive member-list contract.
+export function __injectMockMember(
+  over: Partial<WireMember> & Pick<WireMember, "id" | "kind">
+): void {
+  wireMembers.push({
+    ...structuredClone(MOCK_WIRE_MEMBERS[1]),
+    member_no: `MB-TEST-${wireMembers.length}`,
+    name: over.id,
+    ...over,
+  });
+  emitTopic("member");
+}
+
 // Test-only hook: register a task type (任務手冊) so the type filter offers it.
 // Grows a full (blank-bodied) manual in the store — the type filter reads the
 // light narrowing, the manual editor the full shape, one source of truth.
