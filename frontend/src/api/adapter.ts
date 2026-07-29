@@ -596,6 +596,8 @@ export interface ServerSettingsView {
   handoverPct: number;
   /** Codex context compactions before automatic refocus (1..10). */
   codexCompactionThreshold: number;
+  /** Minimum seconds between telemetry-triggered monitoring refreshes (1..60). */
+  monitoringRefreshSeconds: number;
   /** M3: the GLOBAL cap on concurrently live outsource workers (-1..20;
    * **-1 ⇒ 無限 (unlimited — no global cap)**; 0 ⇒ outsource assignment is
    * PAUSED — the panel annotates it). */
@@ -665,6 +667,7 @@ export interface ServerSettingsPatch {
   tokenTtl?: number;
   handoverPct?: number;
   codexCompactionThreshold?: number;
+  monitoringRefreshSeconds?: number;
   outsourceMaxParallel?: number;
   /** Also admit GitHub prereleases in update checks (default false). */
   updaterReceiveBeta?: boolean;

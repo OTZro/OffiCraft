@@ -1164,6 +1164,9 @@ export const zh = {
     handoverSub: "Claude Code 的記憶用到這個比例，就自動交接給下一手（40–90%）",
     codexHandover: "Codex 自動換手回合",
     codexHandoverSub: "完成 3 次 context compaction 後自動重新聚焦；不依 context 百分比判斷",
+    monitoringRefresh: "監控刷新間隔",
+    monitoringRefreshSub: "收到連續事件時，最多每隔幾秒刷新一次（1–60）",
+    seconds: "秒",
     // ── 存檔回讀對帳（T-1c2e，rework 後住在軟體更新區：secret 只顯示
     // 已設定/未設定,絕不露明文;自動更新開關存檔後回讀對帳（寫入 → 重新
     // GET → 比對）,回饋誠實反映伺服器實際存了什麼）──

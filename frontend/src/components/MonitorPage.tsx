@@ -7,6 +7,7 @@ import { useMembers } from "../hooks/useMembers";
 import { useMonitoring } from "../hooks/useMonitoring";
 import { useMachines } from "../hooks/useMachines";
 import { useOutsourceWorkers } from "../hooks/useOutsourceWorkers";
+import { useServerSettings } from "../hooks/useServerSettings";
 import type {
   MonMachineView,
   MonAccountView,
@@ -29,10 +30,12 @@ import "./monitor.css";
 
 export function MonitorPage() {
   const { t, msg } = useI18n();
-  const { monitoring, refetch } = useMonitoring();
+  const { settings } = useServerSettings();
+  const refreshSeconds = settings?.monitoringRefreshSeconds ?? 5;
+  const { monitoring, refetch } = useMonitoring({ refreshSeconds });
   // The machine registry (GET /api/machines) is the source for the machines
   // panel identity + online + teardown target — NOT the monitoring telemetry.
-  const { machines, refetch: refetchMachines } = useMachines();
+  const { machines, refetch: refetchMachines } = useMachines({ refreshSeconds });
   // Inline-rename failure surface (e.g. server 422 on a blank/whitespace name).
   // Never silently swallow the PATCH rejection — show an honest banner.
   const [renameError, setRenameError] = useState<string | null>(null);

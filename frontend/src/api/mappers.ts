@@ -784,6 +784,7 @@ export function toServerSettings(w: WireServerSettings): ServerSettingsView {
     tokenTtl: w.token_ttl,
     handoverPct: w.handover_pct,
     codexCompactionThreshold: w.codex_compaction_threshold ?? 3,
+    monitoringRefreshSeconds: w.monitoring_refresh_seconds ?? 5,
     outsourceMaxParallel: w.outsource_max_parallel ?? 0,
     // The two software-update toggles (schema-optional for DTO-compat; the
     // Go wire always emits both — `?? false` only fires against an older

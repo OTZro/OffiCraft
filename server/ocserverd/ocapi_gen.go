@@ -1411,6 +1411,9 @@ type SettingsDTO struct {
 	DisplayWide *bool `json:"display_wide,omitempty"`
 	HandoverPct int   `json:"handover_pct"`
 
+	// MonitoringRefreshSeconds Minimum interval between monitoring and machine refreshes, in seconds (1 through 60).
+	MonitoringRefreshSeconds *int `json:"monitoring_refresh_seconds,omitempty"`
+
 	// Onboarding The first-run onboarding report (T-ba62), or null when onboarding never ran on this database. Governance-gated (owner/admin agent) by virtue of living on GET /api/settings — a failed step's detail can carry local paths, so it must never reach the PUBLIC /api/auth/status probe.
 	Onboarding *OnboardingReportDTO `json:"onboarding,omitempty"`
 
@@ -1454,6 +1457,9 @@ type SettingsUpdateDTO struct {
 	// DisplayWide Turn the WIDE cockpit layout on/off (T-756f) — true lifts the centred ~1040px content column (the side gutters stay), false restores it. A plain boolean with no unset state: omit the field to leave it unchanged.
 	DisplayWide *bool `json:"display_wide,omitempty"`
 	HandoverPct *int  `json:"handover_pct,omitempty"`
+
+	// MonitoringRefreshSeconds Minimum interval between monitoring and machine refreshes, in seconds. Must be 1 through 60.
+	MonitoringRefreshSeconds *int `json:"monitoring_refresh_seconds,omitempty"`
 
 	// OrgName The studio display name (T-d693) — trimmed, max 80 runes; "" clears it back to the localized default. A value longer than 80 runes is a 422.
 	OrgName              *string `json:"org_name,omitempty"`

@@ -116,6 +116,7 @@ type apiServer struct {
 	// evaluates each quiet tick (DB ctx.* settings; defaults when unset).
 	ctxhigh                  SseContextHighConfig
 	codexCompactionThreshold int
+	monitoringRefreshSeconds int
 	// root anchors the repo-file assets (seeds / prebuilt binaries / frozen
 	// MCP catalog) — see assets.go.
 	root assetRoot

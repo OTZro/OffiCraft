@@ -1373,6 +1373,7 @@ export const httpApi: Api = {
       token_ttl?: number;
       handover_pct?: number;
       codex_compaction_threshold?: number;
+      monitoring_refresh_seconds?: number;
       outsource_max_parallel?: number;
       updater_receive_beta?: boolean;
       updater_auto_update?: boolean;
@@ -1390,6 +1391,7 @@ export const httpApi: Api = {
     if (patch.tokenTtl !== undefined) body.token_ttl = patch.tokenTtl;
     if (patch.handoverPct !== undefined) body.handover_pct = patch.handoverPct;
     if (patch.codexCompactionThreshold !== undefined) body.codex_compaction_threshold = patch.codexCompactionThreshold;
+    if (patch.monitoringRefreshSeconds !== undefined) body.monitoring_refresh_seconds = patch.monitoringRefreshSeconds;
     if (patch.outsourceMaxParallel !== undefined) {
       body.outsource_max_parallel = patch.outsourceMaxParallel;
     }

@@ -40,6 +40,8 @@ const (
 	maxHandoverPct              = 90
 	minCodexCompactionThreshold = 1
 	maxCodexCompactionThreshold = 10
+	minMonitoringRefreshSeconds = 1
+	maxMonitoringRefreshSeconds = 60
 )
 
 // outsource_max_parallel bounds: -1 = 無限 (unlimited — no global cap; the
@@ -247,6 +249,10 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		writeError(w, http.StatusUnprocessableEntity, "codex_compaction_threshold must be between 1 and 10")
 		return
 	}
+	if body.MonitoringRefreshSeconds != nil && (*body.MonitoringRefreshSeconds < minMonitoringRefreshSeconds || *body.MonitoringRefreshSeconds > maxMonitoringRefreshSeconds) {
+		writeError(w, http.StatusUnprocessableEntity, "monitoring_refresh_seconds must be between 1 and 60")
+		return
+	}
 	if body.OutsourceMaxParallel != nil &&
 		(*body.OutsourceMaxParallel < minOutsourceParallel ||
 			*body.OutsourceMaxParallel > maxOutsourceParallel) {
@@ -342,6 +348,14 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 			return
 		}
 		s.codexCompactionThreshold = *body.CodexCompactionThreshold
+	}
+	if body.MonitoringRefreshSeconds != nil {
+		if err := s.dal.PutSetting(settingMonitoringRefreshSeconds, strconv.Itoa(*body.MonitoringRefreshSeconds)); err != nil {
+			s.settingsMu.Unlock()
+			internalError(w, err)
+			return
+		}
+		s.monitoringRefreshSeconds = *body.MonitoringRefreshSeconds
 	}
 	if body.OutsourceMaxParallel != nil {
 		if err := s.dal.PutSetting(settingOutsourceMaxParallel,
@@ -477,6 +491,7 @@ func (s *apiServer) settingsView() settingsDTO {
 		TokenTTL:                 s.tokenTTL,
 		HandoverPct:              s.ctxhigh.HandoverPct,
 		CodexCompactionThreshold: s.codexCompactionThreshold,
+		MonitoringRefreshSeconds: s.monitoringRefreshSeconds,
 		OutsourceMaxParallel:     s.outsourceMaxParallel,
 		UpdaterReceiveBeta:       s.updaterReceiveBeta,
 		UpdaterAutoUpdate:        s.updaterAutoUpdate,

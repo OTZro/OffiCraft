@@ -50,6 +50,7 @@ type settingsDTO struct {
 	TokenTTL                 int64 `json:"token_ttl"`
 	HandoverPct              int   `json:"handover_pct"`
 	CodexCompactionThreshold int   `json:"codex_compaction_threshold"`
+	MonitoringRefreshSeconds int   `json:"monitoring_refresh_seconds"`
 	OutsourceMaxParallel     int   `json:"outsource_max_parallel"`
 	// UpdaterReceiveBeta / UpdaterAutoUpdate are the two software-update
 	// toggles (default false): follow GitHub prereleases too / self-upgrade

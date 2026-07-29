@@ -47,6 +47,7 @@ describe("SettingsPage · 參數調整", () => {
     expect(select.value).toBe("86400");
     const pct = utils.getByLabelText(s.handover) as HTMLInputElement;
     expect(pct.value).toBe("50");
+    expect((utils.getByLabelText(s.monitoringRefresh) as HTMLInputElement).value).toBe("5");
   });
 
   it("changing the login TTL patches the server immediately", async () => {
@@ -75,5 +76,17 @@ describe("SettingsPage · 參數調整", () => {
     await utils.findByText(s.paramsSaveError);
     expect(pct.value).toBe("70");
     expect((await api.getServerSettings()).handoverPct).toBe(70);
+  });
+
+  it("persists the monitoring refresh interval and rejects zero", async () => {
+    const utils = await openParams();
+    const seconds = utils.getByLabelText(s.monitoringRefresh) as HTMLInputElement;
+    fireEvent.change(seconds, { target: { value: "12" } });
+    fireEvent.blur(seconds);
+    await waitFor(async () => expect((await api.getServerSettings()).monitoringRefreshSeconds).toBe(12));
+    fireEvent.change(seconds, { target: { value: "0" } });
+    fireEvent.blur(seconds);
+    await utils.findByText(s.paramsSaveError);
+    expect((await api.getServerSettings()).monitoringRefreshSeconds).toBe(12);
   });
 });

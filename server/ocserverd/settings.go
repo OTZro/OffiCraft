@@ -55,6 +55,7 @@ const (
 	settingCtxMinBootSecs           = "ctx.min_boot_secs"
 	settingCtxStaleGuard            = "ctx.stale_guard"
 	settingCodexCompactionThreshold = "codex.compaction_threshold"
+	settingMonitoringRefreshSeconds = "monitoring.refresh_seconds"
 	// settingOutsourceMaxParallel (M3, owner ruling ③) is the GLOBAL cap on
 	// concurrently live (assigned + active) outsource workers — the Phase 2
 	// assignment scheduler's admission knob; member tasks never count (H7).
@@ -137,6 +138,7 @@ var displayLanguageAllowed = map[string]bool{"zh": true, "en": true}
 // written.
 const defaultOutsourceMaxParallel = 3
 const defaultCodexCompactionThreshold = 3
+const defaultMonitoringRefreshSeconds = 5
 
 // authSettings is the boot-time snapshot cmdServe stamps onto the apiServer.
 type authSettings struct {
@@ -146,6 +148,7 @@ type authSettings struct {
 	tokenTTL                 int64
 	ctxhigh                  SseContextHighConfig
 	codexCompactionThreshold int
+	monitoringRefreshSeconds int
 	outsourceMaxParallel     int              // task.outsource_max_parallel (default 3)
 	updaterReceiveBeta       bool             // updater.receive_beta (default false = official releases only)
 	updaterAutoUpdate        bool             // updater.auto_update (default false = manual upgrades only)
@@ -178,6 +181,7 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 		tokenTTL:                 int64(cfg.Auth.TokenTTL),
 		ctxhigh:                  cfg.SseContextHigh,
 		codexCompactionThreshold: defaultCodexCompactionThreshold,
+		monitoringRefreshSeconds: defaultMonitoringRefreshSeconds,
 	}
 
 	stored, err := d.GetSetting(settingJWTSecret)
@@ -273,6 +277,15 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 			return out, fmt.Errorf("settings %s: must be 1..10: %q", settingCodexCompactionThreshold, *v)
 		}
 		out.codexCompactionThreshold = n
+	}
+	if v, err := d.GetSetting(settingMonitoringRefreshSeconds); err != nil {
+		return out, err
+	} else if v != nil {
+		n, err := strconv.Atoi(*v)
+		if err != nil || n < 1 || n > 60 {
+			return out, fmt.Errorf("settings %s: must be 1..60: %q", settingMonitoringRefreshSeconds, *v)
+		}
+		out.monitoringRefreshSeconds = n
 	}
 
 	out.outsourceMaxParallel = defaultOutsourceMaxParallel

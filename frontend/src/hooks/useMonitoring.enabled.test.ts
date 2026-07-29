@@ -6,7 +6,7 @@
 // otherwise — and a disabled hook must make ZERO requests and hold NO
 // subscription (merely being on the office page must not stream monitoring).
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, waitFor, act } from "@testing-library/react";
 
 const h = vi.hoisted(() => ({
@@ -36,6 +36,8 @@ beforeEach(() => {
   h.sseHandler = null;
 });
 
+afterEach(() => vi.useRealTimers());
+
 function emit(topic: string) {
   act(() => {
     h.sseHandler?.(topic);
@@ -43,11 +45,17 @@ function emit(topic: string) {
 }
 
 describe("useMonitoring enabled (default, e.g. Monitor page)", () => {
-  it("fetches on mount and refetches on a monitor heartbeat", async () => {
+  it("coalesces a burst into one trailing refresh", async () => {
+    vi.useFakeTimers();
     renderHook(() => useMonitoring());
-    await waitFor(() => expect(h.getMonitoring).toHaveBeenCalledTimes(1));
+    await act(async () => { await Promise.resolve(); });
+    expect(h.getMonitoring).toHaveBeenCalledTimes(1);
     emit("monitoring");
-    await waitFor(() => expect(h.getMonitoring).toHaveBeenCalledTimes(2));
+    emit("monitoring");
+    emit("monitoring");
+    expect(h.getMonitoring).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(h.getMonitoring).toHaveBeenCalledTimes(2);
   });
 });
 

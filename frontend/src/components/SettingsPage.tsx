@@ -540,6 +540,7 @@ function ServerParams({
   // keystroke would PATCH the server mid-typing ("5" on the way to "50").
   const [handoverDraft, setHandoverDraft] = useState<string | null>(null);
   const [codexHandoverDraft, setCodexHandoverDraft] = useState<string | null>(null);
+  const [monitoringRefreshDraft, setMonitoringRefreshDraft] = useState<string | null>(null);
   const [rangeError, setRangeError] = useState(false);
 
   const ttlLabel: Record<number, string> = {
@@ -572,6 +573,14 @@ function ServerParams({
     }
     setCodexHandoverDraft(null);
     if (n !== settings.codexCompactionThreshold) void onSave({ codexCompactionThreshold: n });
+  }
+
+  function commitMonitoringRefresh() {
+    if (!settings || monitoringRefreshDraft === null) return;
+    const n = Number(monitoringRefreshDraft);
+    if (!Number.isInteger(n) || n < 1 || n > 60) { setRangeError(true); setMonitoringRefreshDraft(null); return; }
+    setMonitoringRefreshDraft(null);
+    if (n !== settings.monitoringRefreshSeconds) void onSave({ monitoringRefreshSeconds: n });
   }
 
   return (
@@ -660,6 +669,21 @@ function ServerParams({
                 onKeyDown={(e) => { if (e.key === "Enter") commitCodexHandover(); }}
               />
               <span className="param-pct__sign">次</span>
+            </div>
+          </div>
+
+          <div className="param-row">
+            <div className="param-row__body">
+              <div className="param-row__name">{t.settings.monitoringRefresh}</div>
+              <div className="param-row__sub">{t.settings.monitoringRefreshSub}</div>
+            </div>
+            <div className="param-pct">
+              <input id="param-monitoring-refresh" className="param-input" type="number" min={1} max={60}
+                aria-label={t.settings.monitoringRefresh}
+                value={monitoringRefreshDraft ?? String(settings.monitoringRefreshSeconds)}
+                onChange={(e) => { setRangeError(false); onClearSaveError(); setMonitoringRefreshDraft(e.target.value); }}
+                onBlur={commitMonitoringRefresh} onKeyDown={(e) => { if (e.key === "Enter") commitMonitoringRefresh(); }} />
+              <span className="param-pct__sign">{t.settings.seconds}</span>
             </div>
           </div>
 
