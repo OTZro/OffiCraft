@@ -157,6 +157,18 @@
             ],
             "title": "Handover Pct"
           },
+          "monitoring_refresh_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Minimum interval between monitoring and machine refreshes, in seconds (1 through 60).",
+            "title": "Monitoring Refresh Seconds"
+          },
           "org_name": {
             "anyOf": [
               {

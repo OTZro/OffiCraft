@@ -35,8 +35,15 @@ export function useMonitoring(opts?: { enabled?: boolean; refreshSeconds?: numbe
   const requestVersion = useRef(0);
 
   const refetch = useCallback(async () => {
+    // Manual refreshes share the same generation as event-driven refreshes.
+    // They may overlap a request already in flight, but only the newest result
+    // is allowed to update the view.
+    const version = ++requestVersion.current;
     const next = await api.getMonitoring();
-    setMonitoring(next);
+    if (version === requestVersion.current) {
+      setMonitoring(next);
+      setError(false);
+    }
   }, []);
 
   useEffect(() => {

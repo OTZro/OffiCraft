@@ -4,7 +4,7 @@
 // seam as before (mock adapter here; validation parity with the server); the
 // PATCH echo is adopted, an invalid % snaps back to the server-confirmed value.
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
@@ -79,14 +79,18 @@ describe("SettingsPage · 參數調整", () => {
   });
 
   it("persists the monitoring refresh interval and rejects zero", async () => {
+    const patch = vi.spyOn(api, "patchServerSettings");
     const utils = await openParams();
     const seconds = utils.getByLabelText(s.monitoringRefresh) as HTMLInputElement;
     fireEvent.change(seconds, { target: { value: "12" } });
     fireEvent.blur(seconds);
     await waitFor(async () => expect((await api.getServerSettings()).monitoringRefreshSeconds).toBe(12));
+    expect(patch).toHaveBeenCalledWith({ monitoringRefreshSeconds: 12 });
     fireEvent.change(seconds, { target: { value: "0" } });
     fireEvent.blur(seconds);
     await utils.findByText(s.paramsSaveError);
     expect((await api.getServerSettings()).monitoringRefreshSeconds).toBe(12);
+    expect(patch).toHaveBeenCalledTimes(1);
+    patch.mockRestore();
   });
 });

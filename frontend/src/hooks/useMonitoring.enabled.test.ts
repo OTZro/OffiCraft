@@ -44,6 +44,12 @@ function emit(topic: string) {
   });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => { resolve = r; });
+  return { promise, resolve };
+}
+
 describe("useMonitoring enabled (default, e.g. Monitor page)", () => {
   it("coalesces a burst into one trailing refresh", async () => {
     vi.useFakeTimers();
@@ -56,6 +62,46 @@ describe("useMonitoring enabled (default, e.g. Monitor page)", () => {
     expect(h.getMonitoring).toHaveBeenCalledTimes(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     expect(h.getMonitoring).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for an in-flight request, drops its stale result, then refreshes once", async () => {
+    vi.useFakeTimers();
+    const first = deferred<{ sessions: string[] }>();
+    h.getMonitoring.mockImplementationOnce(() => first.promise);
+    const { result } = renderHook(() => useMonitoring({ refreshSeconds: 12 }));
+    expect(h.getMonitoring).toHaveBeenCalledTimes(1);
+
+    emit("monitoring");
+    emit("monitoring");
+    await act(async () => { await vi.advanceTimersByTimeAsync(12_000); });
+    expect(h.getMonitoring).toHaveBeenCalledTimes(1);
+
+    await act(async () => { first.resolve({ sessions: ["stale"] }); await Promise.resolve(); });
+    expect(result.current.monitoring).toBeNull();
+    h.getMonitoring.mockResolvedValueOnce({ sessions: ["fresh"] });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(h.getMonitoring).toHaveBeenCalledTimes(2);
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.monitoring).toEqual({ sessions: ["fresh"] });
+  });
+
+  it("does not let an older manual refresh overwrite a later event refresh", async () => {
+    vi.useFakeTimers();
+    const manual = deferred<{ sessions: string[] }>();
+    h.getMonitoring.mockResolvedValueOnce({ sessions: ["initial"] });
+    const { result } = renderHook(() => useMonitoring());
+    await act(async () => { await Promise.resolve(); });
+
+    h.getMonitoring.mockImplementationOnce(() => manual.promise);
+    void result.current.refetch();
+    emit("monitoring");
+    await act(async () => { manual.resolve({ sessions: ["stale-manual"] }); await Promise.resolve(); });
+    expect(result.current.monitoring).toEqual({ sessions: ["initial"] });
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    await act(async () => { await Promise.resolve(); });
+    expect(h.getMonitoring).toHaveBeenCalledTimes(3);
+    expect(result.current.monitoring).toEqual({ sessions: [] });
   });
 });
 
