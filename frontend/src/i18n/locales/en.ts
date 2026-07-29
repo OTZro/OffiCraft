@@ -629,6 +629,7 @@ export const en: Dict = {
     rename: "Rename",
     renamePlaceholder: "Enter name",
     wake: "Wake",
+    change: "Change",
     wakeManual: "Wake manually",
     // Instant feedback after clicking Wake, before server presence catches up.
     wakePendingNote: "Waking…",
