@@ -1,4 +1,4 @@
-"""Minimal black-box SSE client for the conformance suite (stdlib + httpx only).
+"""Minimal black-box SSE client for the conformance suite (stdlib only).
 
 Opens ``GET /api/events`` against ``OC_TARGET_URL`` and parses the raw SSE wire
 into event dicts on a background thread, pushing them onto a queue the test
@@ -19,12 +19,13 @@ with "\n" per the SSE spec, though the server never emits multi-line data).
 
 from __future__ import annotations
 
+import http.client
 import json
 import queue
+import socket
 import threading
 from typing import Any
-
-import httpx
+from urllib.parse import urlsplit
 
 CONNECT_TIMEOUT = 5.0
 # Longer than the 15 s heartbeat so a healthy stream never times out mid-read.
@@ -37,24 +38,31 @@ class SSEConnection:
     def __init__(self, base_url: str, token: str) -> None:
         self.events: "queue.Queue[dict[str, Any]]" = queue.Queue()
         self.status_code: int | None = None
-        self.headers: httpx.Headers | None = None
+        self.headers: http.client.HTTPMessage | None = None
         self.error_body: bytes = b""
         self._closed = threading.Event()
-        self._client = httpx.Client(
-            base_url=base_url,
-            timeout=httpx.Timeout(CONNECT_TIMEOUT, read=READ_TIMEOUT),
+        parsed = urlsplit(base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError(f"SSEConnection needs an HTTP(S) base URL, got {base_url!r}")
+        connection_type = (
+            http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
         )
-        self._cm = self._client.stream(
-            "GET", "/api/events", headers={"Authorization": f"Bearer {token}"}
+        self._client = connection_type(
+            parsed.hostname, parsed.port, timeout=CONNECT_TIMEOUT
         )
-        self._resp = self._cm.__enter__()
-        self.status_code = self._resp.status_code
+        self._client.request("GET", "/api/events", headers={"Authorization": f"Bearer {token}"})
+        # HTTPConnection uses its constructor timeout for both connect and
+        # header reads. Preserve the old 5 s connect / 20 s read contract
+        # before getresponse waits for the SSE response headers.
+        if self._client.sock is not None:
+            self._client.sock.settimeout(READ_TIMEOUT)
+        self._resp = self._client.getresponse()
+        self.status_code = self._resp.status
         self.headers = self._resp.headers
-        if self._resp.status_code != 200:
+        if self._resp.status != 200:
             # Refused before any stream bytes (401 / 409): capture the JSON body
             # and DON'T start the reader thread.
             self.error_body = self._resp.read()
-            self._cm.__exit__(None, None, None)
             self._client.close()
             self._closed.set()
             return
@@ -65,7 +73,13 @@ class SSEConnection:
     def _pump(self) -> None:
         buf = b""
         try:
-            for chunk in self._resp.iter_raw():
+            while True:
+                # read1 returns as soon as bytes are buffered; read(4096) is
+                # allowed to wait for a full buffer and would hide small SSE
+                # frames until the heartbeat fills it.
+                chunk = self._resp.read1(4096)
+                if not chunk:
+                    break
                 buf += chunk
                 while b"\n\n" in buf:
                     raw, buf = buf.split(b"\n\n", 1)
@@ -161,12 +175,17 @@ class SSEConnection:
         observes (its disconnect edge fires on the socket drop); the local pump
         thread is a daemon that dies on its own — tests that depend on the
         server-side edge POLL the observable surface instead of waiting here."""
+        # A cross-thread close of an HTTP/1.1 response need not interrupt a
+        # blocked read on Linux. Shut down the socket first so this client's
+        # pump wakes immediately and the server observes the TCP disconnect.
+        sock = self._client.sock
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
         try:
             self._resp.close()
-        except Exception:
-            pass
-        try:
-            self._cm.__exit__(None, None, None)
         except Exception:
             pass
         self._client.close()

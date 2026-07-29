@@ -1,0 +1,86 @@
+# officraft — the cloud-runnable gates, on every pull request.
+#
+# WHY THIS EXISTS, AND WHAT IT IS NOT
+# bin/ci.sh remains the canonical, AUTHORITATIVE land gate and runs LOCALLY.
+# This workflow does NOT replace it and does not certify a land. It runs
+# everything that a Linux runner can honestly run — unit tests (Go + frontend),
+# the consistency / wire-freeze drift gates, and the black-box conformance
+# suite — on a clean Linux checkout, which is the one thing a developer's Mac
+# can never prove: that nothing depends on this machine.
+#
+# bin/ci.sh's header used to justify local-only CI with "we do not pay for
+# GitHub Actions". That premise no longer holds: this repo is PUBLIC, and
+# GitHub's standard-runner minutes are free for public repositories.
+#
+# ONE SOURCE OF TRUTH: this file deliberately contains NO list of modules, no
+# npm script names, no test paths, no gate names. It installs a pinned toolchain
+# and calls bin/ci-cloud.sh. Everything about WHAT runs lives in that script,
+# in the repo, next to bin/ci.sh — so the cloud check and a local run are the same bytes and
+# cannot drift. If you find yourself about to add a test invocation here, add it
+# to bin/ci-cloud.sh instead.
+#
+# Trigger is pull_request ONLY. Pushes to a working branch are the local gate's
+# job; re-running the same suites on every push would just be noise.
+#
+# No secrets are used anywhere in this workflow, by design — so a fork PR runs
+# the identical, complete check.
+name: ci
+
+on:
+  pull_request:
+
+# A new push to the same PR makes the in-flight run obsolete — cancel it rather
+# than pay for (and wait on) a result nobody will read.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  cloud-gates:
+    # ubuntu-latest on purpose: the point is to catch macOS-only assumptions.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      # Versions pinned to what the repo actually develops against: go.mod says
+      # `go 1.26.4` in all three modules, and the dev machine runs node 22.10.0.
+      # check-latest:false + an exact version keeps the runner from silently
+      # drifting ahead of the developer.
+      #
+      # ⚠️ THESE PINS ARE LOAD-BEARING, not hygiene. bin/ci-cloud.sh runs the
+      # regenerate-and-byte-compare consistency gates, which assert that a
+      # generator reproduces a committed artifact EXACTLY. Let the runner float
+      # ahead of the dev machine's Go/Node and those gates start reddening on
+      # generator output changes while the code is perfectly fine — the precise
+      # false-red this whole check exists to avoid.
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.4'
+          check-latest: false
+          # Only server/ocserverd has third-party deps (hence a go.sum); the two
+          # cli/ modules are stdlib-only. setup-go errors on an unresolved path,
+          # so listing the nonexistent ones would break the job, not just the cache.
+          cache-dependency-path: server/ocserverd/go.sum
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22.10.0'
+          check-latest: false
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # zsh is NOT preinstalled on ubuntu-latest, but it is not optional here:
+      # cli/ocwarden's launch-prologue tests (agentenv_test.go) execute the real
+      # prologue under BOTH `sh` and `zsh` — zsh because that is the shell the
+      # spawned agents actually get on the macOS fleet. Making the test skip when
+      # zsh is absent would have turned a genuine guard into a silent no-op on
+      # every cloud run, so the runner gets the shell instead.
+      - name: install zsh and lsof (required by cloud test guards)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh lsof
+
+      - name: cloud gates (unit + consistency + conformance)
+        run: bash bin/ci-cloud.sh
