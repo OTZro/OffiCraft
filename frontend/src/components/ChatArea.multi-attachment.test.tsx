@@ -304,4 +304,24 @@ describe("ChatArea multi-attachment message rendering", () => {
     // horizontal scroll; the phone-width Chromium guard verifies geometry.
     expect(name.classList.contains("chat__msg-file-name")).toBe(true);
   });
+
+  it("renders a stored .log from the chat row as literal text, not markdown", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      text: async () => "# log heading\nraw *asterisks* stay literal",
+    })) as unknown as typeof fetch;
+    messages = [{
+      id: "log-file", from: "m1", to: "owner", body: "", ts: 1,
+      replyCardId: null,
+      attachments: [{ id: "att-log", url: "/api/chat/attachment/att-log", filename: "agent.log", mime: "text/plain", isImage: false }],
+    }];
+    const { container } = renderChat();
+    fireEvent.click(container.querySelector("button.chat__msg-file")!);
+    await waitFor(() =>
+      expect(container.querySelector("pre.md-preview__text")?.textContent).toContain("raw *asterisks* stay literal"),
+    );
+    expect(container.querySelector(".md-preview__md")).toBeNull();
+    globalThis.fetch = originalFetch;
+  });
 });

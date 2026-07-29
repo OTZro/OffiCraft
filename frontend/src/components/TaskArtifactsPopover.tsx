@@ -27,7 +27,6 @@ import { api } from "../api";
 import type { TaskArtifactView, ChatAttachmentView } from "../api/adapter";
 import { formatAbsolute } from "../lib/dateFormat";
 import { AttachmentStrip, Lightbox } from "./AttachmentStrip";
-import { MarkdownPreviewOverlay } from "./MarkdownPreviewOverlay";
 import {
   CloseIcon,
   ExternalLinkIcon,
@@ -165,13 +164,6 @@ function ArtifactsPopover({
   const nowTs = Date.now() / 1000;
   // Open overlays (mutually exclusive; the caller-owned state pattern).
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
-  const [preview, setPreview] = useState<{
-    title: string;
-    url: string;
-    attachmentId: string;
-  } | null>(
-    null,
-  );
 
   // Fetch the full artifact set on open, and keep it live while open (a task
   // delta fans when an artifact is pinned/removed) — the ChatGalleryPanel
@@ -198,11 +190,11 @@ function ArtifactsPopover({
   // Esc closes the popover (only when no overlay is capturing Esc itself).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !lightboxSrc && !preview) onClose();
+      if (e.key === "Escape" && !lightboxSrc) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, lightboxSrc, preview]);
+  }, [onClose, lightboxSrc]);
 
   // ONE list, grouped 檔案 → 圖片 → 連結 (the old tab order). File and image
   // rows share the AttachmentStrip renderer, so they are handed to it in a
@@ -284,18 +276,6 @@ function ArtifactsPopover({
               fileNameClassName="task-artifacts__chip-name"
               fileNameColClassName="task-artifacts__chip-text"
               onOpenImage={(src) => setLightboxSrc(src)}
-              onPreviewMarkdown={(att) => {
-                // AttachmentStrip keeps the artifact id as `att.id`: it is
-                // the key used below to recover artifact metadata. The share
-                // link endpoint, however, accepts only the backing chat
-                // attachment id, so carry that separately into the preview.
-                const artifact = artifacts.find((a) => a.id === att.id);
-                setPreview({
-                  title: att.filename,
-                  url: att.url,
-                  attachmentId: artifact?.attachmentId ?? att.id,
-                });
-              }}
               renderExtra={renderExtra}
               renderMeta={(att) => {
                 const art = artifacts.find((a) => a.id === att.id);
@@ -351,14 +331,6 @@ function ArtifactsPopover({
         )}
       </div>
       <Lightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
-      {preview && (
-        <MarkdownPreviewOverlay
-          title={preview.title}
-          url={preview.url}
-          attachmentId={preview.attachmentId}
-          onClose={() => setPreview(null)}
-        />
-      )}
     </div>
   );
 }

@@ -949,14 +949,6 @@ export function ChatArea({
           itemClassName="chat__msg-attachment"
           imageClassName="chat__msg-image chat__msg-image--clickable"
           onOpenImage={(src) => setLightboxSrc(src)}
-          onPreviewMarkdown={(att) =>
-            setMdPreview({
-              kind: "attachment",
-              title: att.filename || t.chat.downloadAttachment,
-              url: att.url,
-              attachmentId: att.id,
-            })
-          }
         />
       </div>
     );

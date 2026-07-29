@@ -17,7 +17,7 @@ import { useI18n } from "../i18n";
 import type { ChatAttachmentView } from "../api/adapter";
 import { authedAttachmentUrl } from "../api/http";
 import { copyAttachmentShareLink } from "../lib/shareLink";
-import { isPreviewableTextAttachment, MarkdownPreviewOverlay } from "./MarkdownPreviewOverlay";
+import { MarkdownPreviewOverlay } from "./MarkdownPreviewOverlay";
 import { CheckIcon, CopyIcon, PaperclipIcon } from "./icons";
 
 export function AttachmentStrip({
@@ -29,7 +29,6 @@ export function AttachmentStrip({
   fileNameClassName = "chat__msg-file-name",
   fileNameColClassName,
   showShareLink = false,
-  onPreviewMarkdown,
   renderExtra,
   renderMeta,
 }: {
@@ -64,12 +63,6 @@ export function AttachmentStrip({
    * receives the token-authed src and opens its own Lightbox. Absent ⇒ a
    * static thumbnail (the answered-card strip's existing behaviour). */
   onOpenImage?: (src: string) => void;
-  /** T-7bc2: makes a `.md` attachment's chip itself the preview trigger — a
-   * `<button>` instead of the download `<a>` (mirrors `onOpenImage`'s
-   * image-thumbnail contract: the caller owns the overlay's open state).
-   * Absent ⇒ every non-image chip (markdown included) stays a plain download
-   * link, byte-identical to before this knob existed. */
-  onPreviewMarkdown?: (att: ChatAttachmentView) => void;
   /** Per-item extra node rendered after the image/chip (ChatArea's hover
    * 複製分享連結 button). */
   renderExtra?: (att: ChatAttachmentView) => ReactNode;
@@ -151,29 +144,6 @@ export function AttachmentStrip({
         )}
       </>
     );
-    // A markdown file with `onPreviewMarkdown` wired ⇒ the chip itself opens
-    // the in-cockpit preview (same click-target contract as the image
-    // thumbnail's `onOpenImage`) instead of downloading. Accessible name
-    // stays the VISIBLE filename text — no `aria-label` override (T-a706 /
-    // T-5e8a lesson: `aria-label` replaces, not appends, so overriding it
-    // here would just re-say the filename and add nothing).
-    // Every stored blob opens the one shared modal. The modal itself decides
-    // whether to render its body (image/markdown/txt/log) or show the honest
-    // download-only state (PDF and opaque binary files).
-    if (isPreviewableTextAttachment(att.mime, att.filename) && onPreviewMarkdown) {
-      return <Fragment key={itemClassName ? undefined : att.id}>
-        <button
-          type="button"
-          key={itemClassName ? undefined : att.id}
-          className={fileChipClassName}
-          title={fullName}
-          onClick={() => setPreview(att)}
-        >
-          {content}
-        </button>
-        {share}
-      </Fragment>;
-    }
     // Files with no specialized caller (PDF and opaque binary attachments in
     // particular) still enter the common shell; it supplies download/share
     // and an honest non-previewable body instead of navigating away.

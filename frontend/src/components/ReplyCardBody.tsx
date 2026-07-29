@@ -26,43 +26,10 @@
 
 import { useState } from "react";
 import { useI18n } from "../i18n";
-import type { ChatAttachmentView, ReplyCard, ReplyCardAnswerInput } from "../api/adapter";
+import type { ReplyCard, ReplyCardAnswerInput } from "../api/adapter";
 import { AttachmentStrip } from "./AttachmentStrip";
-import { MarkdownPreviewOverlay } from "./MarkdownPreviewOverlay";
 import { ReplyComposer } from "./ReplyComposer";
 import { ChevronRightIcon } from "./icons";
-
-/** Shared by both attachment strips below (question-side and answer-side):
- * T-7bc2 (owner 2026-07-21) — a `.md` file's chip IS the preview trigger
- * (`AttachmentStrip`'s `onPreviewMarkdown`, same click-target contract as an
- * image thumbnail's `onOpenImage`), opening the SAME in-cockpit overlay
- * ChatArea and the task artifacts popover use (T-a1c4 / T-90df) — one preview
- * surface, not a third copy. No separate 眼睛 button, no ambiguity about
- * which file it belongs to. */
-function useMarkdownPreview() {
-  const { t } = useI18n();
-  const [preview, setPreview] = useState<{
-    title: string;
-    url: string;
-    attachmentId: string;
-  } | null>(null);
-  function onPreviewMarkdown(att: ChatAttachmentView) {
-    setPreview({
-      title: att.filename || t.chat.downloadAttachment,
-      url: att.url,
-      attachmentId: att.id,
-    });
-  }
-  const overlay = preview ? (
-    <MarkdownPreviewOverlay
-      title={preview.title}
-      url={preview.url}
-      attachmentId={preview.attachmentId}
-      onClose={() => setPreview(null)}
-    />
-  ) : null;
-  return { onPreviewMarkdown, overlay };
-}
 
 /** The quick-reply option chips. `pickable: false` renders them as a static
  * review (當初選項 before 重新決定 re-arms them); `currentIdx` marks the
@@ -121,17 +88,12 @@ export function ReplyOptionChips({
  * under this card face's existing classes. Renders nothing when the answer
  * carries none. */
 function ReplyAnswerAttachments({ card }: { card: ReplyCard }) {
-  const { onPreviewMarkdown, overlay } = useMarkdownPreview();
   return (
-    <>
-      <AttachmentStrip
-        attachments={card.answer?.attachments ?? []}
-        className="reply-card__answer-atts"
-        imageClassName="reply-card__answer-image"
-        onPreviewMarkdown={onPreviewMarkdown}
-      />
-      {overlay}
-    </>
+    <AttachmentStrip
+      attachments={card.answer?.attachments ?? []}
+      className="reply-card__answer-atts"
+      imageClassName="reply-card__answer-image"
+    />
   );
 }
 
@@ -147,18 +109,13 @@ export function ReplyCardQuestionAttachments({
   card: ReplyCard;
   onOpenImage?: (src: string) => void;
 }) {
-  const { onPreviewMarkdown, overlay } = useMarkdownPreview();
   return (
-    <>
-      <AttachmentStrip
-        attachments={card.attachments}
-        className="reply-card__answer-atts reply-card__question-atts"
-        imageClassName="reply-card__answer-image chat__msg-image--clickable"
-        onOpenImage={onOpenImage}
-        onPreviewMarkdown={onPreviewMarkdown}
-      />
-      {overlay}
-    </>
+    <AttachmentStrip
+      attachments={card.attachments}
+      className="reply-card__answer-atts reply-card__question-atts"
+      imageClassName="reply-card__answer-image chat__msg-image--clickable"
+      onOpenImage={onOpenImage}
+    />
   );
 }
 
