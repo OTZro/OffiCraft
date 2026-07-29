@@ -29,6 +29,7 @@ import { api } from "../api";
 import { authedAttachmentUrl } from "../api/http";
 import { copyAttachmentShareLink } from "../lib/shareLink";
 import { CheckIcon, CloseIcon, CopyIcon, FileTextIcon } from "./icons";
+import { MarkdownPreviewOverlay, isPreviewableTextAttachment } from "./MarkdownPreviewOverlay";
 
 // The owner's sender id — the real backend stamps `from` from the verified JWT
 // sub ("owner"); same constant as ChatArea's OWNER_ID (kept local to avoid an
@@ -87,6 +88,7 @@ export function ChatGalleryPanel({
   const [loaded, setLoaded] = useState(false);
   // The row whose share link was just copied (transient 「已複製」 feedback).
   const [shareCopiedId, setShareCopiedId] = useState<string | null>(null);
+  const [preview, setPreview] = useState<GalleryAttachment | null>(null);
 
   // Copy the row's permanent share link (?sig= HMAC — lib/shareLink.ts);
   // feedback only after fetch + clipboard both succeeded.
@@ -138,11 +140,11 @@ export function ChatGalleryPanel({
   // Esc closes the panel (bound while mounted — the panel only mounts open).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" && !preview) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, preview]);
 
   // Sender label: the owner reads as 「我」; everyone else by the SERVER-resolved
   // display name (fromName). A sender the server left unnamed (an outsource
@@ -260,24 +262,32 @@ export function ChatGalleryPanel({
         <div className="chat__gallery-list">
           {shown.map((e) => {
             const href = authedAttachmentUrl(e.url);
-            const previewable = isPreviewableMime(e.mime);
+            // This task only promotes images, markdown and plain .txt/.log
+            // files into the shared modal. PDF and opaque binaries retain the
+            // gallery's established download behaviour.
+            const previewable =
+              e.isImage ||
+              isPreviewableTextAttachment(e.mime, e.filename);
+            const externalPreview = !previewable && isPreviewableMime(e.mime);
             return (
               <a
                 key={`${e.messageId}-${e.id}`}
                 className="chat__gallery-item"
-                href={href}
-                // Preview/download split: previewable → new tab (server serves
-                // inline); else → download (server forces attachment).
+                href={previewable ? undefined : href}
+                role={previewable ? "button" : undefined}
+                tabIndex={previewable ? 0 : undefined}
                 {...(previewable
-                  ? {
-                      target: "_blank",
-                      rel: "noopener noreferrer",
-                      title: t.chat.galleryPreviewHint,
-                    }
-                  : {
-                      download: e.filename || undefined,
-                      title: t.chat.galleryDownloadHint,
-                    })}
+                  ? { title: t.chat.galleryPreviewHint }
+                  : externalPreview
+                    ? { target: "_blank", rel: "noopener noreferrer", title: t.chat.galleryPreviewHint }
+                    : { download: e.filename || undefined, title: t.chat.galleryDownloadHint })}
+                onClick={previewable ? () => setPreview(e) : undefined}
+                onKeyDown={previewable ? (event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setPreview(e);
+                  }
+                } : undefined}
               >
                 {e.isImage ? (
                   <img
@@ -330,6 +340,7 @@ export function ChatGalleryPanel({
           })}
         </div>
       )}
+      {preview && <MarkdownPreviewOverlay title={preview.filename || t.chat.downloadAttachment} url={preview.url} attachmentId={preview.id} mime={preview.mime} onClose={() => setPreview(null)} />}
     </div>
   );
 }

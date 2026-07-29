@@ -250,6 +250,31 @@ describe("產物 popover — the one list (T-49fb)", () => {
 });
 
 describe("任務產物 markdown 預覽的分享連結", () => {
+  it("shares a download-only artifact using its backing att- id", async () => {
+    const mint = vi
+      .mocked(api.getChatAttachmentShareLink)
+      .mockResolvedValue("/api/chat/attachment/att-backing?sig=test");
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: vi.fn(async () => {}) }, configurable: true,
+    });
+    const { container } = renderBadge([
+      mkArtifact({
+        id: "ta-binary", kind: "file", filename: "bundle.zip",
+        mime: "application/zip", url: "/api/chat/attachment/att-backing",
+        attachmentId: "att-backing",
+      }),
+    ]);
+    fireEvent.click(screen.getByTestId("task-artifacts-badge"));
+    const share = await waitFor(() => {
+      const button = container.querySelector("button.chat__share-btn") as HTMLButtonElement;
+      expect(button).toBeTruthy();
+      return button;
+    });
+    fireEvent.click(share);
+    await waitFor(() => expect(mint).toHaveBeenCalledWith("att-backing"));
+    expect(mint).not.toHaveBeenCalledWith("ta-binary");
+  });
+
   it("uses the backing att- id while keeping the ta- id for artifact lookup", async () => {
     globalThis.fetch = vi.fn(async () => ({
       ok: true,

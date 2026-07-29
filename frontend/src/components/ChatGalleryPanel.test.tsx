@@ -96,7 +96,7 @@ function renderPanel(
 }
 
 const itemsIn = (container: HTMLElement) => [
-  ...container.querySelectorAll<HTMLAnchorElement>(".chat__gallery-item"),
+  ...container.querySelectorAll<HTMLElement>(".chat__gallery-item"),
 ];
 
 describe("ChatGalleryPanel", () => {
@@ -140,7 +140,7 @@ describe("ChatGalleryPanel", () => {
     expect(container.textContent).not.toContain("shot.png");
   });
 
-  it("splits open behavior: previewable → new tab, opaque binary → download", async () => {
+  it("opens stored images and text in the shared modal while PDF remains outside this preview scope", async () => {
     galleryRows = [
       row("a1", "image/png", "owner", "", 100, "img.png"),
       row("a2", "text/markdown", "owner", "", 100, "notes.md"),
@@ -150,20 +150,53 @@ describe("ChatGalleryPanel", () => {
     const { container } = renderPanel();
     fireEvent.click(screen.getByRole("tab", { name: "檔案" }));
     await waitFor(() => expect(itemsIn(container).length).toBe(3));
-    const byName = (name: string) =>
-      itemsIn(container).find((a) => a.textContent?.includes(name))!;
-    for (const name of ["notes.md", "doc.pdf"]) {
-      const a = byName(name);
-      expect(a.target).toBe("_blank");
-      expect(a.hasAttribute("download")).toBe(false);
-    }
-    const zip = byName("bundle.zip");
-    expect(zip.target).toBe("");
-    expect(zip.getAttribute("download")).toBe("bundle.zip");
-    // The image tab keeps the new-tab preview behavior.
+    const byName = (name: string) => itemsIn(container).find((item) => item.textContent?.includes(name))!;
+    fireEvent.click(byName("notes.md"));
+    expect(await screen.findByRole("dialog", { name: "notes.md" })).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("關閉預覽"));
+    // PDF and opaque binaries do not become a fake modal trigger.
+    expect(byName("doc.pdf").getAttribute("role")).toBeNull();
+    expect(byName("bundle.zip").getAttribute("role")).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: "圖片" }));
     await waitFor(() => expect(itemsIn(container).length).toBe(1));
-    expect(itemsIn(container)[0].target).toBe("_blank");
+    fireEvent.click(itemsIn(container)[0]);
+    expect(await screen.findByRole("dialog", { name: "img.png" })).toBeTruthy();
+  });
+
+  it("keeps PDF external and binaries downloadable while their share buttons never navigate", async () => {
+    galleryRows = [
+      row("pdf-att", "application/pdf", "owner", "", 100, "doc.pdf"),
+      row("zip-att", "application/zip", "owner", "", 99, "bundle.zip"),
+    ];
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: vi.fn(async () => {}) }, configurable: true,
+    });
+    const { container } = renderPanel();
+    fireEvent.click(screen.getByRole("tab", { name: "檔案" }));
+    await waitFor(() => expect(itemsIn(container).length).toBe(2));
+    const pdf = itemsIn(container).find((item) => item.textContent?.includes("doc.pdf")) as HTMLAnchorElement;
+    const zip = itemsIn(container).find((item) => item.textContent?.includes("bundle.zip")) as HTMLAnchorElement;
+    expect(pdf.target).toBe("_blank");
+    expect(zip.getAttribute("download")).toBe("bundle.zip");
+    fireEvent.click(pdf.querySelector("button.chat__gallery-share")!);
+    fireEvent.click(zip.querySelector("button.chat__gallery-share")!);
+    await waitFor(() => expect(getChatAttachmentShareLink).toHaveBeenCalledWith("pdf-att"));
+    expect(getChatAttachmentShareLink).toHaveBeenCalledWith("zip-att");
+    expect(container.querySelector(".md-preview")).toBeNull();
+  });
+
+  it("opens a previewable row from Enter and Space without letting the nested share button open it", async () => {
+    galleryRows = [row("image-att", "image/png", "owner", "", 100, "shot.png")];
+    const { container } = renderPanel();
+    await waitFor(() => expect(itemsIn(container).length).toBe(1));
+    const galleryRow = itemsIn(container)[0];
+    expect(galleryRow.getAttribute("role")).toBe("button");
+    expect(galleryRow.getAttribute("tabindex")).toBe("0");
+    fireEvent.keyDown(galleryRow, { key: "Enter" });
+    expect(await screen.findByRole("dialog", { name: "shot.png" })).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("關閉預覽"));
+    fireEvent.keyDown(galleryRow, { key: " " });
+    expect(await screen.findByRole("dialog", { name: "shot.png" })).toBeTruthy();
   });
 
   it("shows per-tab honest empty states once loaded", async () => {
@@ -311,6 +344,19 @@ describe("ChatGalleryPanel", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets Escape close an open preview without also closing the gallery", async () => {
+    galleryRows = [row("a1", "image/png", "owner", "", 100, "shot.png")];
+    const onClose = vi.fn();
+    const { container } = renderPanel(onClose);
+    await waitFor(() => expect(itemsIn(container).length).toBe(1));
+    fireEvent.click(itemsIn(container)[0]);
+    expect(await screen.findByRole("dialog", { name: "shot.png" })).toBeTruthy();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "shot.png" })).toBeNull();
+    expect(container.querySelector(".chat__gallery")).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });
 

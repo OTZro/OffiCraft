@@ -66,6 +66,8 @@ export interface ChatMessage {
 export interface ChatAttachmentView {
   /** Opaque attachment blob id. */
   id: string;
+  /** Optional backing chat attachment id when `id` is a UI entity key. */
+  backingAttachmentId?: string;
   /** Served GET path for the blob (gated — render via authedAttachmentUrl). */
   url: string;
   /** Original upload filename (for the download-chip label); "" when none. */

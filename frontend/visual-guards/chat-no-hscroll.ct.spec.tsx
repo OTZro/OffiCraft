@@ -26,6 +26,8 @@
 import { test, expect } from "@playwright/experimental-ct-react";
 import { ChatMessagesStory } from "./stories/ChatMessagesStory";
 
+const SHOT_DIR = process.env.T_C645_MOBILE_SHOT_DIR ?? "test-results/t-c645-mobile";
+
 test("390px: .chat__messages is NOT a horizontal pan surface", async ({
   mount,
   page,
@@ -93,4 +95,24 @@ test("390px: .chat__messages is NOT a horizontal pan surface", async ({
     imageGeometry.imageRight - imageGeometry.bubbleRight,
     "chat image must not exceed its text bubble",
   ).toBeLessThanOrEqual(1);
+
+  // (6) A long filename is constrained by its phone-width bubble, leaving the
+  // non-wrapping sidemeta intact instead of making the row horizontally wider.
+  const fileGeometry = await cmp.getByTestId("chat-file-row").evaluate((el) => {
+    const row = el.getBoundingClientRect();
+    const bubble = document.querySelector('[data-testid="chat-file-bubble"]')!.getBoundingClientRect();
+    const file = document.querySelector('[data-testid="chat-file-row"] .chat__msg-file')!.getBoundingClientRect();
+    const time = document.querySelector('[data-testid="chat-file-time"]')!.getBoundingClientRect();
+    const name = document.querySelector('[data-testid="chat-file-name"]')!;
+    return {
+      row, bubble, file, time,
+      overflowX: getComputedStyle(name).overflowX,
+      scrollable: name.scrollWidth - name.clientWidth,
+    };
+  });
+  expect(fileGeometry.file.right - fileGeometry.bubble.right, "file chip stays in bubble").toBeLessThanOrEqual(1);
+  expect(fileGeometry.time.right - fileGeometry.bubble.left, "time stays beside, not under/over bubble").toBeLessThanOrEqual(1);
+  expect(fileGeometry.overflowX, "filename owns horizontal reading").toMatch(/auto|scroll/);
+  expect(fileGeometry.scrollable, "long filename exposes its full text by scrolling").toBeGreaterThan(1);
+  await page.screenshot({ path: `${SHOT_DIR}/mobile-long-filename.png`, fullPage: true });
 });

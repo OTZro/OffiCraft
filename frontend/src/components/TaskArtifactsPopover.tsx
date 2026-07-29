@@ -41,6 +41,7 @@ import {
 function asAttachmentView(a: TaskArtifactView): ChatAttachmentView {
   return {
     id: a.id,
+    backingAttachmentId: a.attachmentId,
     url: a.url,
     filename: a.filename || a.label,
     mime: a.mime,

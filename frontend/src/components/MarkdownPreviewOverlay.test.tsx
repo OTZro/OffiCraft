@@ -59,6 +59,19 @@ describe("MarkdownPreviewOverlay", () => {
     expect(dl.getAttribute("href")).toContain("/api/chat/attachment/att-1");
   });
 
+  it("renders an image in the shared header shell and changes its zoom", () => {
+    const { container } = render(
+      <I18nProvider>
+        <MarkdownPreviewOverlay title="shot.png" url="/api/chat/attachment/att-image" attachmentId="att-image" mime="image/png" onClose={() => {}} />
+      </I18nProvider>,
+    );
+    const image = container.querySelector<HTMLImageElement>(".md-preview__image")!;
+    expect(image.src).toContain("/api/chat/attachment/att-image");
+    expect(screen.getByText("100%")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "+" }));
+    expect(screen.getByText("125%")).toBeTruthy();
+  });
+
   // The rendered body wears `.doc-md`, the shared markdown skin every other
   // render site uses (task manual, role doc, reply card, chat bubble). Without
   // it the overlay fell back to bare UA defaults — unstyled headings, code,

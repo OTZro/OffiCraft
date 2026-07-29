@@ -71,7 +71,7 @@ afterEach(() => {
 });
 
 describe("reply-card question attachments", () => {
-  it("renders thumbnails + file chips on a waiting card (RepliesPage) and opens the lightbox on click", async () => {
+  it("renders thumbnails + file chips on a waiting card (RepliesPage) and opens the shared modal on click", async () => {
     __injectMockReplyCard(
       mkCard({ attachments: [imgAtt(), fileAtt()] })
     );
@@ -91,18 +91,15 @@ describe("reply-card question attachments", () => {
     expect(chip.textContent).toContain("report.pdf");
     expect(chip.getAttribute("download")).toBe("report.pdf");
 
-    // Click the thumbnail → the shared Lightbox opens full-size; × closes.
-    expect(container.querySelector(".chat__lightbox")).toBeNull();
+    // The answered and waiting sides both use the attachment-owned modal.
     fireEvent.click(img);
-    const lightbox = container.querySelector(".chat__lightbox");
-    expect(lightbox).not.toBeNull();
-    expect(
-      (lightbox!.querySelector(".chat__lightbox-image") as HTMLImageElement).src
-    ).toBe(IMG_DATA_URI);
-    fireEvent.click(
-      lightbox!.querySelector(".chat__lightbox-close") as HTMLButtonElement
-    );
-    expect(container.querySelector(".chat__lightbox")).toBeNull();
+    const modal = container.querySelector(".md-preview")!;
+    expect(modal).toBeTruthy();
+    const preview = modal.querySelector<HTMLImageElement>(".md-preview__image")!;
+    expect(preview.src).toBe(IMG_DATA_URI);
+    expect(preview.style.transform).toBe("scale(1)");
+    fireEvent.click(modal.querySelector(".md-preview__close") as HTMLButtonElement);
+    expect(container.querySelector(".md-preview")).toBeNull();
   });
 
   it("renders the same strip on the inline chat card (shared implementation)", async () => {
@@ -121,7 +118,9 @@ describe("reply-card question attachments", () => {
     fireEvent.click(
       container.querySelector(".reply-card__question-atts img") as HTMLElement
     );
-    expect(container.querySelector(".chat__lightbox")).not.toBeNull();
+    const modal = container.querySelector(".md-preview");
+    expect(modal).not.toBeNull();
+    expect(modal!.getAttribute("role")).toBe("dialog");
   });
 
   it("renders NO strip on a card without question attachments", async () => {

@@ -260,11 +260,11 @@ describe("TaskCard whole-card toggle (mobile refactor)", () => {
     });
 
     fireEvent.click(thumb);
-    // The card STAYS expanded, and the Lightbox overlay is up.
+    // The card STAYS expanded, and the attachment modal is up.
     expect(card.getAttribute("aria-expanded")).toBe("true");
-    const lightbox = card.querySelector(".chat__lightbox");
-    expect(lightbox).toBeTruthy();
-    expect(lightbox!.getAttribute("role")).toBe("dialog");
+    const modal = card.querySelector(".md-preview");
+    expect(modal).toBeTruthy();
+    expect(modal!.getAttribute("role")).toBe("dialog");
   });
 
   it("an active text selection suppresses the toggle", async () => {

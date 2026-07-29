@@ -11,13 +11,14 @@
 // extracted from ChatArea so every card face (等我回覆頁 / 聊天室內卡 /
 // 任務卡上的卡) gets the same 點開預覽 the chat thread has.
 
-import { useEffect } from "react";
+import { Fragment, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { useI18n } from "../i18n";
 import type { ChatAttachmentView } from "../api/adapter";
 import { authedAttachmentUrl } from "../api/http";
-import { isMarkdownAttachment } from "./MarkdownPreviewOverlay";
-import { PaperclipIcon } from "./icons";
+import { copyAttachmentShareLink } from "../lib/shareLink";
+import { isPreviewableTextAttachment, MarkdownPreviewOverlay } from "./MarkdownPreviewOverlay";
+import { CheckIcon, CopyIcon, PaperclipIcon } from "./icons";
 
 export function AttachmentStrip({
   attachments,
@@ -27,8 +28,7 @@ export function AttachmentStrip({
   fileChipClassName = "chat__msg-file",
   fileNameClassName = "chat__msg-file-name",
   fileNameColClassName,
-  onOpenImage,
-  onPreviewMarkdown,
+  showShareLink = true,
   renderExtra,
   renderMeta,
 }: {
@@ -56,6 +56,9 @@ export function AttachmentStrip({
    * filename `<span>` renders bare exactly as before, so every OTHER caller
    * (chat bubble, reply-card strip) stays byte-identical. */
   fileNameColClassName?: string;
+  /** Stored blobs expose one canonical share control even when their body is
+   * download-only (PDF/binary). ChatArea supplies its own hover control. */
+  showShareLink?: boolean;
   /** Makes image thumbnails clickable (role=button + keyboard): the caller
    * receives the token-authed src and opens its own Lightbox. Absent ⇒ a
    * static thumbnail (the answered-card strip's existing behaviour). */
@@ -75,26 +78,47 @@ export function AttachmentStrip({
   renderMeta?: (att: ChatAttachmentView) => ReactNode;
 }) {
   const { t } = useI18n();
+  const [preview, setPreview] = useState<ChatAttachmentView | null>(null);
+  const [shareCopiedId, setShareCopiedId] = useState<string | null>(null);
   if (attachments.length === 0) return null;
 
   function renderOne(att: ChatAttachmentView) {
+    const share = showShareLink ? (
+      <button
+        type="button"
+        className="chat__share-btn"
+        aria-label={shareCopiedId === att.id ? t.chat.shareLinkCopied : t.chat.copyShareLink}
+        title={shareCopiedId === att.id ? t.chat.shareLinkCopied : t.chat.copyShareLink}
+        onClick={() => {
+          const id = att.backingAttachmentId ?? att.id;
+          void copyAttachmentShareLink(id)
+            .then(() => {
+              setShareCopiedId(att.id);
+              window.setTimeout(() => setShareCopiedId((current) => current === att.id ? null : current), 2000);
+            })
+            .catch((error) => console.warn("AttachmentStrip: copy share link failed", error));
+        }}
+      >
+        {shareCopiedId === att.id ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+      </button>
+    ) : null;
     if (att.isImage) {
       const src = authedAttachmentUrl(att.url);
-      const clickable = onOpenImage
+      const clickable = true
         ? {
             role: "button",
             tabIndex: 0,
             "aria-label": t.chat.viewImageLabel,
-            onClick: () => onOpenImage(src ?? ""),
+            onClick: () => setPreview(att),
             onKeyDown: (e: React.KeyboardEvent) => {
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
-                onOpenImage(src ?? "");
+                setPreview(att);
               }
             },
           }
         : {};
-      return (
+      return <Fragment key={itemClassName ? undefined : att.id}>
         <img
           key={itemClassName ? undefined : att.id}
           className={imageClassName}
@@ -102,7 +126,8 @@ export function AttachmentStrip({
           alt={t.chat.imageAlt}
           {...clickable}
         />
-      );
+        {share}
+      </Fragment>;
     }
     // Non-image → a download chip/link (Content-Disposition: attachment on
     // the serve side downloads it under its stored filename). Same gated
@@ -131,18 +156,19 @@ export function AttachmentStrip({
     // stays the VISIBLE filename text — no `aria-label` override (T-a706 /
     // T-5e8a lesson: `aria-label` replaces, not appends, so overriding it
     // here would just re-say the filename and add nothing).
-    if (onPreviewMarkdown && isMarkdownAttachment(att.mime, att.filename)) {
-      return (
+    if (isPreviewableTextAttachment(att.mime, att.filename)) {
+      return <Fragment key={itemClassName ? undefined : att.id}>
         <button
           type="button"
           key={itemClassName ? undefined : att.id}
           className={fileChipClassName}
           title={fullName}
-          onClick={() => onPreviewMarkdown(att)}
+          onClick={() => setPreview(att)}
         >
           {content}
         </button>
-      );
+        {share}
+      </Fragment>;
     }
     // Non-image → a download chip/link (Content-Disposition: attachment on
     // the serve side downloads it under its stored filename). Same gated
@@ -150,7 +176,7 @@ export function AttachmentStrip({
     // `title` = the full filename: the chip name truncates with an ellipsis
     // when it outgrows its row, so hovering must still yield the whole name
     // (T-90df). Presentation only — href/download are untouched.
-    return (
+    return <Fragment key={itemClassName ? undefined : att.id}>
       <a
         key={itemClassName ? undefined : att.id}
         className={fileChipClassName}
@@ -160,10 +186,12 @@ export function AttachmentStrip({
       >
         {content}
       </a>
-    );
+      {share}
+    </Fragment>;
   }
 
   return (
+    <>
     <div className={className}>
       {attachments.map((att) =>
         itemClassName ? (
@@ -176,6 +204,8 @@ export function AttachmentStrip({
         )
       )}
     </div>
+    {preview && <MarkdownPreviewOverlay title={preview.filename || t.chat.downloadAttachment} url={preview.url} attachmentId={preview.backingAttachmentId ?? preview.id} mime={preview.mime} onClose={() => setPreview(null)} />}
+    </>
   );
 }
 

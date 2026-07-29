@@ -46,6 +46,9 @@ type MarkdownPreviewOverlayProps = {
        * with `url`: a stored blob always has one, and the union is what stops a
        * caller from opening a file view with no way to share it. */
       attachmentId: string;
+      /** The stored blob kind decides the body renderer. Omitted keeps the
+       * original markdown-file contract for existing callers. */
+      mime?: string;
       source?: never;
     }
   | {
@@ -54,6 +57,7 @@ type MarkdownPreviewOverlayProps = {
       url?: never;
       /** No blob, so no share link: there is nothing for a link to point at. */
       attachmentId?: never;
+      mime?: never;
     }
 );
 
@@ -61,6 +65,7 @@ export function MarkdownPreviewOverlay({
   title,
   url,
   attachmentId,
+  mime,
   source: inlineSource,
   onClose,
 }: MarkdownPreviewOverlayProps) {
@@ -71,13 +76,16 @@ export function MarkdownPreviewOverlay({
   const [copyFailed, setCopyFailed] = useState(false);
   // The text to render. An inline source is authoritative and synchronous — it
   // never passes through the loading/error states, which only describe a fetch.
+  const image = mime?.startsWith("image/") ?? false;
+  const plainText = !image && !isMarkdownAttachment(mime ?? "text/markdown", title);
   const source = inlineSource ?? fetched;
+  const [zoom, setZoom] = useState(1);
 
   // Fetch the markdown text once (the authed blob URL — same ?token= gate the
   // download/thumbnail paths use). A non-ok response / network error surfaces
   // the honest error state, never a blank render.
   useEffect(() => {
-    if (url === undefined) return;
+    if (url === undefined || image) return;
     let alive = true;
     setFetched(null);
     setFailed(false);
@@ -96,7 +104,9 @@ export function MarkdownPreviewOverlay({
     return () => {
       alive = false;
     };
-  }, [url]);
+  }, [url, image]);
+
+  useEffect(() => setZoom(1), [url]);
 
   async function onCopyShareLink() {
     // Only a stored blob has an id to share; the button below is not rendered
@@ -193,7 +203,25 @@ export function MarkdownPreviewOverlay({
           </div>
         </div>
         <div className="md-preview__body">
-          {failed ? (
+          {image && url !== undefined ? (
+            <div className="md-preview__image-wrap">
+              <img
+                className="md-preview__image"
+                src={authedAttachmentUrl(url)}
+                alt={title}
+                style={{ transform: `scale(${zoom})` }}
+                onWheel={(e) => {
+                  e.preventDefault();
+                  setZoom((current) => Math.min(4, Math.max(0.5, current + (e.deltaY < 0 ? 0.25 : -0.25))));
+                }}
+              />
+              <div className="md-preview__zoom" aria-label="image zoom controls">
+                <button type="button" onClick={() => setZoom((value) => Math.max(0.5, value - 0.25))}>−</button>
+                <span>{Math.round(zoom * 100)}%</span>
+                <button type="button" onClick={() => setZoom((value) => Math.min(4, value + 0.25))}>+</button>
+              </div>
+            </div>
+          ) : failed ? (
             <div className="md-preview__status">{t.chat.mdPreview.error}</div>
           ) : source === null ? (
             <div className="md-preview__status">{t.chat.mdPreview.loading}</div>
@@ -204,7 +232,9 @@ export function MarkdownPreviewOverlay({
              * it left this overlay on bare UA defaults: black-on-card headings,
              * unstyled code, no callout colour. One class, same document look
              * as the surface the file was opened from. */
-            <Markdown
+            plainText ? (
+              <pre className="md-preview__text">{source}</pre>
+            ) : <Markdown
               source={source}
               className="md-preview__md doc-md"
               /* An inline source is a CHAT message: Enter meant "new line"
@@ -230,4 +260,10 @@ export function isMarkdownAttachment(mime: string, filename: string): boolean {
   if (mime === "text/markdown" || mime === "text/x-markdown") return true;
   const name = filename.toLowerCase();
   return name.endsWith(".md") || name.endsWith(".markdown");
+}
+
+/** The stored text formats supported by the shared attachment modal. Keep this
+ * narrow: HTML/PDF and arbitrary text/* remain outside this preview contract. */
+export function isPreviewableTextAttachment(mime: string, filename: string): boolean {
+  return isMarkdownAttachment(mime, filename) || /\.(txt|log)$/i.test(filename);
 }

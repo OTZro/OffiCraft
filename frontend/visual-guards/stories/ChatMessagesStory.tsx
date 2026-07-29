@@ -39,6 +39,25 @@ export function ChatMessagesStory() {
             </div>
           </div>
         </div>
+        <div className="chat__msg chat__msg--me" data-testid="chat-file-row">
+          <div className="chat__msg-line">
+            <div className="chat__msg-sidemeta" data-testid="chat-file-time">11:59 PM</div>
+            <div className="chat__msg-content">
+              <div className="chat__msg-bubble" data-testid="chat-file-bubble">
+                <div className="chat__msg-attachments">
+                  <span className="chat__msg-attachment">
+                    <a className="chat__msg-file" href="#download" download>
+                      <span aria-hidden>📎</span>
+                      <span className="chat__msg-file-name" data-testid="chat-file-name">
+                        a-very-long-mobile-attachment-filename-that-must-truncate-before-it-can-push-the-timestamp-out-of-the-chat-row.zip
+                      </span>
+                    </a>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

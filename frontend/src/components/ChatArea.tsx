@@ -1001,6 +1001,7 @@ export function ChatArea({
           className="chat__msg-attachments"
           itemClassName="chat__msg-attachment"
           imageClassName="chat__msg-image chat__msg-image--clickable"
+          showShareLink={false}
           onOpenImage={(src) => setLightboxSrc(src)}
           onPreviewMarkdown={(att) =>
             setMdPreview({

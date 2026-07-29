@@ -98,26 +98,26 @@ describe("ChatArea image rendering", () => {
     expect(img.getAttribute("src")).toBe("/api/chat/attachment/abc");
   });
 
-  it("opens a lightbox on image click and closes it on Escape", () => {
+  it("opens the shared attachment popup on image click and closes it on Escape", () => {
     localStorage.setItem("oc_token", "jwt-123");
     const { container } = renderChat();
     const img = container.querySelector(
       "img.chat__msg-image"
     ) as HTMLImageElement;
 
-    expect(container.querySelector(".chat__lightbox")).toBeNull();
+    expect(container.querySelector(".md-preview")).toBeNull();
 
     fireEvent.click(img);
-    const lightbox = container.querySelector(".chat__lightbox");
-    expect(lightbox).toBeTruthy();
-    const full = lightbox?.querySelector(
-      "img.chat__lightbox-image"
+    const popup = container.querySelector(".md-preview");
+    expect(popup).toBeTruthy();
+    const full = popup?.querySelector(
+      "img.md-preview__image"
     ) as HTMLImageElement;
     expect(full.getAttribute("src")).toBe(
       "/api/chat/attachment/abc?token=jwt-123"
     );
 
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(container.querySelector(".chat__lightbox")).toBeNull();
+    expect(container.querySelector(".md-preview")).toBeNull();
   });
 });

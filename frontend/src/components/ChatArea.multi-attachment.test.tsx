@@ -289,4 +289,21 @@ describe("ChatArea multi-attachment message rendering", () => {
     // The text body still renders alongside the whole bundle.
     expect(container.textContent).toContain("bundle");
   });
+
+  it("keeps a long stored filename in the shrinkable, horizontally-scrollable chip contract", () => {
+    const filename = "a-very-long-mobile-attachment-filename-that-must-truncate-before-it-pushes-the-timestamp-out-of-the-row.zip";
+    messages = [{
+      id: "long-file", from: "m1", to: "owner", body: "", ts: 1,
+      replyCardId: null,
+      attachments: [{ id: "att-long", url: "/api/chat/attachment/att-long", filename, mime: "application/zip", isImage: false }],
+    }];
+    const { container } = renderChat();
+    const chip = container.querySelector(".chat__msg-file")!;
+    const name = container.querySelector(".chat__msg-file-name")!;
+    expect(chip.getAttribute("download")).toBe(filename);
+    expect(name.textContent).toBe(filename);
+    // CSS guard: this exact span is the flex item that owns the filename's
+    // horizontal scroll; the phone-width Chromium guard verifies geometry.
+    expect(name.classList.contains("chat__msg-file-name")).toBe(true);
+  });
 });
