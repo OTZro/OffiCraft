@@ -1493,6 +1493,59 @@ func machineRowIn(d map[string]any, host string) map[string]any {
 const workerRateLimits = `"rate_limits":{"five_hour":{"used_percentage":42.0},` +
 	`"seven_day":{"used_percentage":7.0}}`
 
+func TestGetMonitoring_NewRateLimitSnapshotSurvivesUnrelatedHeartbeat(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	for _, id := range []string{"new-session", "old-session"} {
+		m := fullMember(id)
+		m.RoleKey = "builder"
+		m.Runtime = RuntimeCodex
+		if err := s.dal.PutMember(m); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+	}
+	if rec := doIngestTelemetry(s, "new-session", "m-seth-m5", `{"runtime":"codex","account":"codex:seth",`+
+		`"rate_limits":{"seven_day":{"used_percentage":40,"resets_at":1785903125}}}`); rec.Code != 200 {
+		t.Fatalf("new snapshot ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doIngestTelemetry(s, "old-session", "m-seth-m5", `{"runtime":"codex","account":"codex:seth",`+
+		`"rate_limits":{"seven_day":{"used_percentage":66,"resets_at":1785829112}}}`); rec.Code != 200 {
+		t.Fatalf("old snapshot ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	old := s.telemetry.Get("old-session")
+	oldRateLimitsTS, ok := old["rate_limits_ts"].(float64)
+	if !ok {
+		t.Fatal("precondition: rate-limit report must receive its own timestamp")
+	}
+	if rec := doIngestTelemetry(s, "old-session", "m-seth-m5",
+		`{"runtime":"codex","account":"codex:seth"}`); rec.Code != 200 {
+		t.Fatalf("identity heartbeat ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	old = s.telemetry.Get("old-session")
+	if got, _ := old["rate_limits_ts"].(float64); got != oldRateLimitsTS {
+		t.Fatalf("heartbeat changed rate_limits_ts from %v to %v", oldRateLimitsTS, got)
+	}
+	newer := s.telemetry.Get("new-session")
+	newer["rate_limits_ts"] = 200.0
+	newer["ts"] = 100.0
+	s.telemetry.Set("new-session", newer)
+	old["rate_limits_ts"] = 100.0
+	old["ts"] = 300.0
+	s.telemetry.Set("old-session", old)
+
+	row := accountRow(t, monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"})), "codex:seth")
+	sevenDay, ok := row["seven_day"].(map[string]any)
+	if !ok {
+		t.Fatalf("seven_day = %v, want the newer snapshot's shaped window", row["seven_day"])
+	}
+	if got := sevenDay["used_pct"]; got != 40.0 {
+		t.Errorf("seven_day.used_pct = %v, want 40 from the newer rate-limit snapshot", got)
+	}
+	if got := sevenDay["resets_at"]; got != 1785903125.0 {
+		t.Errorf("seven_day.resets_at = %v, want the newer snapshot's reset time", got)
+	}
+}
+
 // TestGetMonitoring_WorkerOnlyAccountFillsMachineCostAndWindows is the primary
 // T-fc2f sentinel. The world is deliberately WORKER-ONLY for the key under
 // test: a staff member exists and reports telemetry, but holds NO account at

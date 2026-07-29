@@ -548,6 +548,7 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	}
 	if body.RateLimits != nil {
 		entry["rate_limits"] = rateLimits
+		entry["rate_limits_ts"] = nowSecs()
 	}
 	if body.Tokens != nil {
 		entry["tokens"] = tokens
@@ -693,6 +694,11 @@ const telemetryFreshSecs = 90.0
 // unknown age, and unknown age is not freshness.
 func runtimeCapabilitiesStampOf(entry map[string]any) float64 {
 	ts, _ := entry["runtimes_ts"].(float64)
+	return ts
+}
+
+func rateLimitStampOf(entry map[string]any) float64 {
+	ts, _ := entry["rate_limits_ts"].(float64)
 	return ts
 }
 
@@ -1233,7 +1239,7 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		if account == "" {
 			continue
 		}
-		ts, _ := entry["ts"].(float64)
+		ts := rateLimitStampOf(entry)
 		if rl, isObj := entry["rate_limits"].(map[string]any); isObj {
 			if prior, seen := rlTS[account]; !seen || ts > prior {
 				rlTS[account] = ts
