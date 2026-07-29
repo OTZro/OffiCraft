@@ -241,10 +241,10 @@ type CommandDeps struct {
 type CommandResult struct {
 	MemberID string // the addressed roster member (from the command args)
 	// WorkerID is the addressed outsource worker (ow-… id) for the worker verbs
-	// (worker_start / worker_stop). A worker is NOT a roster member, so its
-	// receipt keys on this id instead of MemberID — the server folds it onto the
-	// durable worker row's last-op fields (T-9ccf), the worker twin of the
-	// member last_op* fold. Exactly one of MemberID / WorkerID is set per receipt.
+	// (worker_start / worker_stop). A worker is a kind=outsource member row;
+	// receipt keys on this id so the server can project it through the
+	// worker-specific mapping onto that row's last-op fields. Exactly one of
+	// MemberID / WorkerID is set per receipt.
 	WorkerID string
 	RPC      string // "start" | "stop" | "uninstall" | "worker_start" | "worker_stop"
 	OK       bool   // start: SpawnOutcome.OK; stop: the robust-stop verdict

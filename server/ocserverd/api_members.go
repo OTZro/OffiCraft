@@ -207,7 +207,7 @@ func (s *apiServer) HandleDeleteMemberAvatarApiMembersMemberIdAvatarDelete(
 // trigger (a message never changes a name or role), so a company-wide chat
 // line no longer re-pulls this endpoint at all.
 func (s *apiServer) HandleListMembersApiMembersGet(w http.ResponseWriter, r *http.Request, params HandleListMembersApiMembersGetParams) {
-	members, err := s.dal.ListMembers()
+	members, err := s.dal.ListMembersIncludingOutsource()
 	if err != nil {
 		internalError(w, err)
 		return

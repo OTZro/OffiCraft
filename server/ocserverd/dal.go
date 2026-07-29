@@ -153,6 +153,27 @@ func (d *DAL) ListMembers() ([]Member, error) {
 	return out, rows.Err()
 }
 
+// ListMembersIncludingOutsource is only for the GET /api/members wire list.
+// Reconcile and every other member-surface fold must continue using
+// ListMembers, whose outsource exclusion keeps workers out of the member FSM.
+func (d *DAL) ListMembersIncludingOutsource() ([]Member, error) {
+	rows, err := d.db.Query(`SELECT ` + memberColumns +
+		` FROM member ORDER BY name COLLATE NOCASE`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Member
+	for rows.Next() {
+		m, err := scanMember(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 // GetMember returns one roster member by id, or nil if absent.
 func (d *DAL) GetMember(id string) (*Member, error) {
 	row := d.db.QueryRow(`SELECT `+memberColumns+` FROM member WHERE id = ?`, id)

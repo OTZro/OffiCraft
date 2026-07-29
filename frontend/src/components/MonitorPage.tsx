@@ -375,7 +375,7 @@ export function MonitorPage() {
   const membersOnMachine = (machineId: string) =>
     members.filter(
       (m) =>
-        m.kind !== "warden" && m.status === "online" && m.machine === machineId
+        m.kind === "assistant" && m.status === "online" && m.machine === machineId
     );
 
   // Machine mid-uninstall (①): the warden member still carries the one-shot
@@ -434,7 +434,7 @@ export function MonitorPage() {
   // can't prove it's non-AI).
   const aiSessions = sessions.filter((s) => {
     const m = members.find((x) => x.id === s.id);
-    return m?.kind !== "warden";
+    return m?.kind !== "warden" && m?.kind !== "outsource";
   });
 
   return (

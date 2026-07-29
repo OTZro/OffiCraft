@@ -213,3 +213,8 @@ owner 2026-07-27 兩句話 + 一個數字:「更新的時候不能塞超過這�
 - 改 Go → fresh build 驗證，**不 commit binary**(root §13)。需要可單檔 boot/裝機的 build 前，先跑 `bash bin/build-seedsdist && bash bin/build-bindist` 再 `go build -ldflags="-s -w"`——asset 已 embed-only，漏 staging 會默默丟掉單檔 boot/裝機能力；本機產物是 gitignored，部署 binary 由發版流程 fresh build，parity dryrun 的 `--help` 對比抓不到內容面漏 staging，故此步靠人工紀律。
 - 有別於 cli/ 的 stdlib-only:本模組帶第三方依賴(BurntSushi/toml、pressly/goose/v3、modernc.org/sqlite)——server 端 schema/config 需求正當化;新增依賴前先想能不能 stdlib。
 - 新端點 = RouteSpec 表加一行(`routes.go`),不散寫 mount;boot assertion 缺 requires 即拒起。
+
+## 正職與外包的刻意不對稱（T-072b）
+
+- `reconcileDecide` 只共用 desired×observed 的純決策。member 的觀測是完整的 member projection；worker 在進核前有 worker lifecycle 的遮罩與狀態投影，不能為了形式對齊而合併 producer 或抹平這些輸入差異。
+- 外包仍有三個專屬行為：(1) `outsource_sched.go::outsourceDecide` 依任務指派並由 `domain.go::DeriveCodename` 配發 task-minted codename；(2) 任務終態由 `dal_tasks.go::ReleaseWorkersForTask` 釋放，close-out 再由 `worker_spawn.go::dismissOutsourceWorkersForTask` 收回 session；(3) `DeriveCodename` 與 `ListOutsourceWorkers` 的完整集合 fold 保證已用 codename 永不重用。是否有第四項專屬行為必須先由 owner 裁定，不能在實作時自行擴張。

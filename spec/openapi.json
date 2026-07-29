@@ -8276,7 +8276,7 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "List the owner's roster (presence-derived MemberDTO[])."
+        "summary": "List members, including outsource members by default; fields=light preserves kind."
       },
       "post": {
         "description": "Hire a roster member (§3.4 #9; pure seam, no UI). The owner assigns the\ndisplay ``name``; the server mints the ``id`` (``m-<hex>`` — never client\nsupplied, it is the attribution key). The member starts offline/active; hiring\ndoes NOT spawn a runtime. ``runtime`` is claude/codex (absent = claude), and\n``model`` is provider-specific. A blank ``name`` or invalid runtime is a 422.\n\nPRIVILEGE GUARD (closes the hire escalation hole): ``kind`` / ``role_key``\nare PRIVILEGE-BEARING fields — ``kind=\"warden\"`` makes the row a MACHINE\nprincipal (a warden-command target) and ``role_key=\"assistant\"`` makes it an\nADMIN principal (governance capability). A plain hire (name/runtime/model/effort)\nstays open to any authenticated caller (unchanged), but a body carrying a\nnon-empty ``kind`` or ``role_key`` demands the caller itself resolve to at\nleast ``admin_agent`` (the same class the onboard / role-write seams\nrequire) — otherwise 403. Before this guard ANY agent token could self-serve\na warden or an admin member.",
