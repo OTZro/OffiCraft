@@ -82,14 +82,17 @@ describe("reply-card question attachments", () => {
     );
     await findByTestId("waiting-card");
 
-    // The strip: one image thumbnail + one download chip under its filename.
+    // The strip: one image thumbnail + one shared-popup trigger under its filename.
     const strip = container.querySelector(".reply-card__question-atts");
     expect(strip).not.toBeNull();
     const img = strip!.querySelector("img") as HTMLImageElement;
     expect(img.src).toBe(IMG_DATA_URI);
-    const chip = strip!.querySelector("a.chat__msg-file") as HTMLAnchorElement;
+    const chip = strip!.querySelector("button.chat__msg-file") as HTMLButtonElement;
     expect(chip.textContent).toContain("report.pdf");
-    expect(chip.getAttribute("download")).toBe("report.pdf");
+    fireEvent.click(chip);
+    expect(container.querySelector(".md-preview")).not.toBeNull();
+    expect(container.textContent).toContain("此檔案無法預覽，請下載");
+    fireEvent.click(container.querySelector(".md-preview__close") as HTMLButtonElement);
 
     // The answered and waiting sides both use the attachment-owned modal.
     fireEvent.click(img);

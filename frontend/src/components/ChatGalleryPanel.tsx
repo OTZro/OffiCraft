@@ -27,9 +27,8 @@ import type { Member } from "../types";
 import type { GalleryAttachment } from "../api/adapter";
 import { api } from "../api";
 import { authedAttachmentUrl } from "../api/http";
-import { copyAttachmentShareLink } from "../lib/shareLink";
-import { CheckIcon, CloseIcon, CopyIcon, FileTextIcon } from "./icons";
-import { MarkdownPreviewOverlay, isPreviewableTextAttachment } from "./MarkdownPreviewOverlay";
+import { CloseIcon, FileTextIcon } from "./icons";
+import { MarkdownPreviewOverlay } from "./MarkdownPreviewOverlay";
 
 // The owner's sender id — the real backend stamps `from` from the verified JWT
 // sub ("owner"); same constant as ChatArea's OWNER_ID (kept local to avoid an
@@ -86,24 +85,7 @@ export function ChatGalleryPanel({
   // Honest empty state: 「還沒有…」 only AFTER the fetch settles — never
   // flash it while loading.
   const [loaded, setLoaded] = useState(false);
-  // The row whose share link was just copied (transient 「已複製」 feedback).
-  const [shareCopiedId, setShareCopiedId] = useState<string | null>(null);
   const [preview, setPreview] = useState<GalleryAttachment | null>(null);
-
-  // Copy the row's permanent share link (?sig= HMAC — lib/shareLink.ts);
-  // feedback only after fetch + clipboard both succeeded.
-  async function onCopyShareLink(attachmentId: string) {
-    try {
-      await copyAttachmentShareLink(attachmentId);
-      setShareCopiedId(attachmentId);
-      window.setTimeout(
-        () => setShareCopiedId((cur) => (cur === attachmentId ? null : cur)),
-        2000,
-      );
-    } catch (e) {
-      console.warn("ChatGalleryPanel: copy share link failed", e);
-    }
-  }
 
   useEffect(() => {
     let alive = true;
@@ -262,32 +244,20 @@ export function ChatGalleryPanel({
         <div className="chat__gallery-list">
           {shown.map((e) => {
             const href = authedAttachmentUrl(e.url);
-            // This task only promotes images, markdown and plain .txt/.log
-            // files into the shared modal. PDF and opaque binaries retain the
-            // gallery's established download behaviour.
-            const previewable =
-              e.isImage ||
-              isPreviewableTextAttachment(e.mime, e.filename);
-            const externalPreview = !previewable && isPreviewableMime(e.mime);
             return (
-              <a
+              <div
                 key={`${e.messageId}-${e.id}`}
                 className="chat__gallery-item"
-                href={previewable ? undefined : href}
-                role={previewable ? "button" : undefined}
-                tabIndex={previewable ? 0 : undefined}
-                {...(previewable
-                  ? { title: t.chat.galleryPreviewHint }
-                  : externalPreview
-                    ? { target: "_blank", rel: "noopener noreferrer", title: t.chat.galleryPreviewHint }
-                    : { download: e.filename || undefined, title: t.chat.galleryDownloadHint })}
-                onClick={previewable ? () => setPreview(e) : undefined}
-                onKeyDown={previewable ? (event) => {
+                role="button"
+                tabIndex={0}
+                title={t.chat.galleryPreviewHint}
+                onClick={() => setPreview(e)}
+                onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
                     setPreview(e);
                   }
-                } : undefined}
+                }}
               >
                 {e.isImage ? (
                   <img
@@ -308,34 +278,7 @@ export function ChatGalleryPanel({
                     {senderLabel(e)} · {formatDateTime(e.ts)}
                   </span>
                 </div>
-                {/* 複製分享連結 — a button INSIDE the row anchor: stop the
-                 * click from bubbling into the preview/download navigation. */}
-                <button
-                  type="button"
-                  className="chat__share-btn chat__gallery-share"
-                  aria-label={
-                    shareCopiedId === e.id
-                      ? t.chat.shareLinkCopied
-                      : t.chat.copyShareLink
-                  }
-                  title={
-                    shareCopiedId === e.id
-                      ? t.chat.shareLinkCopied
-                      : t.chat.copyShareLink
-                  }
-                  onClick={(ev) => {
-                    ev.preventDefault();
-                    ev.stopPropagation();
-                    void onCopyShareLink(e.id);
-                  }}
-                >
-                  {shareCopiedId === e.id ? (
-                    <CheckIcon size={13} />
-                  ) : (
-                    <CopyIcon size={13} />
-                  )}
-                </button>
-              </a>
+              </div>
             );
           })}
         </div>

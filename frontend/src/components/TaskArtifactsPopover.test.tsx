@@ -121,16 +121,14 @@ describe("產物 popover — the one list (T-49fb)", () => {
     expect(rows.map(kindOf)).toEqual(["file", "file", "image", "link"]);
   });
 
-  it("T-7bc2: the markdown file's chip IS the preview trigger (a <button>); report.pdf stays a download <a>", async () => {
+  it("opens every stored artifact in the shared modal", async () => {
     const { container } = renderBadge(artifacts, { count: 4 });
     fireEvent.click(screen.getByTestId("task-artifacts-badge"));
     await waitFor(() => expect(screen.getByText("design.md")).toBeTruthy());
-    // design.md is markdown ⇒ its chip renders as a <button> (click opens the
-    // preview overlay); report.pdf is not ⇒ stays an <a href download>.
-    expect(container.querySelectorAll("button.task-artifacts__chip").length).toBe(1);
+    expect(container.querySelectorAll("button.task-artifacts__chip").length).toBe(2);
     const mdChip = screen.getByText("design.md").closest("button.task-artifacts__chip");
     expect(mdChip).not.toBeNull();
-    const pdfChip = screen.getByText("report.pdf").closest("a.task-artifacts__chip");
+    const pdfChip = screen.getByText("report.pdf").closest("button.task-artifacts__chip");
     expect(pdfChip).not.toBeNull();
   });
 
@@ -250,7 +248,7 @@ describe("產物 popover — the one list (T-49fb)", () => {
 });
 
 describe("任務產物 markdown 預覽的分享連結", () => {
-  it("shares a download-only artifact using its backing att- id", async () => {
+  it("shares a download-only artifact from the popup using its backing att- id", async () => {
     const mint = vi
       .mocked(api.getChatAttachmentShareLink)
       .mockResolvedValue("/api/chat/attachment/att-backing?sig=test");
@@ -265,8 +263,14 @@ describe("任務產物 markdown 預覽的分享連結", () => {
       }),
     ]);
     fireEvent.click(screen.getByTestId("task-artifacts-badge"));
+    const chip = await waitFor(() => {
+      const button = container.querySelector("button.task-artifacts__chip") as HTMLButtonElement;
+      expect(button).toBeTruthy();
+      return button;
+    });
+    fireEvent.click(chip);
     const share = await waitFor(() => {
-      const button = container.querySelector("button.chat__share-btn") as HTMLButtonElement;
+      const button = container.querySelector("button.md-preview__share") as HTMLButtonElement;
       expect(button).toBeTruthy();
       return button;
     });

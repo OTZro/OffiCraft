@@ -28,7 +28,8 @@ export function AttachmentStrip({
   fileChipClassName = "chat__msg-file",
   fileNameClassName = "chat__msg-file-name",
   fileNameColClassName,
-  showShareLink = true,
+  showShareLink = false,
+  onPreviewMarkdown,
   renderExtra,
   renderMeta,
 }: {
@@ -156,7 +157,10 @@ export function AttachmentStrip({
     // stays the VISIBLE filename text — no `aria-label` override (T-a706 /
     // T-5e8a lesson: `aria-label` replaces, not appends, so overriding it
     // here would just re-say the filename and add nothing).
-    if (isPreviewableTextAttachment(att.mime, att.filename)) {
+    // Every stored blob opens the one shared modal. The modal itself decides
+    // whether to render its body (image/markdown/txt/log) or show the honest
+    // download-only state (PDF and opaque binary files).
+    if (isPreviewableTextAttachment(att.mime, att.filename) && onPreviewMarkdown) {
       return <Fragment key={itemClassName ? undefined : att.id}>
         <button
           type="button"
@@ -170,22 +174,19 @@ export function AttachmentStrip({
         {share}
       </Fragment>;
     }
-    // Non-image → a download chip/link (Content-Disposition: attachment on
-    // the serve side downloads it under its stored filename). Same gated
-    // blob → same ?token= auth as the image.
-    // `title` = the full filename: the chip name truncates with an ellipsis
-    // when it outgrows its row, so hovering must still yield the whole name
-    // (T-90df). Presentation only — href/download are untouched.
+    // Files with no specialized caller (PDF and opaque binary attachments in
+    // particular) still enter the common shell; it supplies download/share
+    // and an honest non-previewable body instead of navigating away.
     return <Fragment key={itemClassName ? undefined : att.id}>
-      <a
+      <button
+        type="button"
         key={itemClassName ? undefined : att.id}
         className={fileChipClassName}
-        href={authedAttachmentUrl(att.url)}
-        download={att.filename || undefined}
         title={fullName}
+        onClick={() => setPreview(att)}
       >
         {content}
-      </a>
+      </button>
       {share}
     </Fragment>;
   }

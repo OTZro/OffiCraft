@@ -77,7 +77,9 @@ export function MarkdownPreviewOverlay({
   // The text to render. An inline source is authoritative and synchronous — it
   // never passes through the loading/error states, which only describe a fetch.
   const image = mime?.startsWith("image/") ?? false;
-  const plainText = !image && !isMarkdownAttachment(mime ?? "text/markdown", title);
+  const previewableText = isPreviewableTextAttachment(mime ?? "text/markdown", title);
+  const unavailable = url !== undefined && !image && !previewableText;
+  const plainText = previewableText && !isMarkdownAttachment(mime ?? "text/markdown", title);
   const source = inlineSource ?? fetched;
   const [zoom, setZoom] = useState(1);
 
@@ -85,7 +87,7 @@ export function MarkdownPreviewOverlay({
   // download/thumbnail paths use). A non-ok response / network error surfaces
   // the honest error state, never a blank render.
   useEffect(() => {
-    if (url === undefined || image) return;
+    if (url === undefined || image || unavailable) return;
     let alive = true;
     setFetched(null);
     setFailed(false);
@@ -104,7 +106,7 @@ export function MarkdownPreviewOverlay({
     return () => {
       alive = false;
     };
-  }, [url, image]);
+  }, [url, image, unavailable]);
 
   useEffect(() => setZoom(1), [url]);
 
@@ -221,6 +223,8 @@ export function MarkdownPreviewOverlay({
                 <button type="button" onClick={() => setZoom((value) => Math.min(4, value + 0.25))}>+</button>
               </div>
             </div>
+          ) : unavailable ? (
+            <div className="md-preview__status">{t.chat.mdPreview.unavailable}</div>
           ) : failed ? (
             <div className="md-preview__status">{t.chat.mdPreview.error}</div>
           ) : source === null ? (

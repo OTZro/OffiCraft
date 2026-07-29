@@ -10,10 +10,8 @@ import { useI18n } from "../i18n";
 import type { Member, MemberActivateResult } from "../types";
 import type {
   ChatMessage,
-  ChatAttachmentView,
   OutsourceWorkerView,
 } from "../api/adapter";
-import { copyAttachmentShareLink } from "../lib/shareLink";
 import { autosizeTextarea } from "../lib/autosize";
 import { getChatDraft, saveChatDraft } from "../lib/chatDraftStore";
 import { useChat } from "../hooks/useChat";
@@ -38,9 +36,7 @@ import { PresenceBadge } from "./PresenceBadge";
 import { CurrentTaskTitle } from "./CurrentTaskTitle";
 import {
   BoltIcon,
-  CheckIcon,
   ChevronRightIcon,
-  CopyIcon,
   ExpandIcon,
   ImageIcon,
   MoonIcon,
@@ -326,7 +322,6 @@ export function ChatArea({
   const [galleryOpen, setGalleryOpen] = useState(false);
   // The attachment whose share link was just copied (transient 「已複製」
   // feedback on that one button; null = none).
-  const [shareCopiedId, setShareCopiedId] = useState<string | null>(null);
   // Inter-agent (agent↔agent) groups that the owner has EXPANDED (keyed by the
   // group's first-message id). Collapsed is the default — a group is expanded
   // only once its id lands here, so the owner opts in per block.
@@ -868,52 +863,6 @@ export function ChatArea({
     }
   }
 
-  // Copy ONE attachment's permanent share link (?sig= HMAC — see
-  // lib/shareLink.ts) and flash 「已複製」 on that button only. Feedback fires
-  // ONLY after both the fetch and the clipboard write succeeded — honest.
-  async function onCopyShareLink(attachmentId: string) {
-    try {
-      await copyAttachmentShareLink(attachmentId);
-      setShareCopiedId(attachmentId);
-      window.setTimeout(
-        () => setShareCopiedId((cur) => (cur === attachmentId ? null : cur)),
-        2000,
-      );
-    } catch (e) {
-      console.warn("ChatArea: copy share link failed", e);
-    }
-  }
-
-  // The per-attachment 「複製分享連結」 button (thread bubbles; the gallery
-  // panel renders its own twin).
-  function renderShareButton(attachmentId: string) {
-    const copied = shareCopiedId === attachmentId;
-    const label = copied ? t.chat.shareLinkCopied : t.chat.copyShareLink;
-    return (
-      <button
-        type="button"
-        className="chat__share-btn"
-        aria-label={label}
-        title={label}
-        onClick={(e) => {
-          e.stopPropagation();
-          void onCopyShareLink(attachmentId);
-        }}
-      >
-        {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
-      </button>
-    );
-  }
-
-  // Per-attachment hover action: 複製分享連結. T-7bc2 (owner 2026-07-21):
-  // a markdown file's preview trigger moved from a separate hover-revealed
-  // 眼睛 button to the chip itself (AttachmentStrip's `onPreviewMarkdown`,
-  // always-visible, click-the-filename-to-preview) — one less ambiguous
-  // floating icon between two file chips.
-  function renderAttachmentExtras(att: ChatAttachmentView) {
-    return <span className="chat__att-actions">{renderShareButton(att.id)}</span>;
-  }
-
   // Render ONE message row (the LINE-style outgoing/incoming bubble). Extracted so
   // both the normal stream and an expanded inter-agent group render identically.
   // Incoming rows label the bubble with the message's TRUE sender (`nameOf(m.from)`)
@@ -993,15 +942,12 @@ export function ChatArea({
             breaks
           />
         )}
-        {/* Stored attachments — the SHARED AttachmentStrip (image → clickable
-         * thumbnail opening the lightbox; file → download chip), each item
-         * carrying the hover 複製分享連結 button. */}
+        {/* Stored attachments — one click target, opening the shared popup. */}
         <AttachmentStrip
           attachments={m.attachments}
           className="chat__msg-attachments"
           itemClassName="chat__msg-attachment"
           imageClassName="chat__msg-image chat__msg-image--clickable"
-          showShareLink={false}
           onOpenImage={(src) => setLightboxSrc(src)}
           onPreviewMarkdown={(att) =>
             setMdPreview({
@@ -1011,7 +957,6 @@ export function ChatArea({
               attachmentId: att.id,
             })
           }
-          renderExtra={(att) => renderAttachmentExtras(att)}
         />
       </div>
     );

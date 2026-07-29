@@ -612,6 +612,7 @@ export const en: Dict = {
       close: "Close preview",
       loading: "Loading preview…",
       error: "Could not load the preview",
+      unavailable: "This file cannot be previewed. Please download it.",
     },
     // Corner button on an incoming bubble: reopen this message body in the same
     // full-view overlay (a long answer is hard to read in the thread column).

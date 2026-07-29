@@ -280,11 +280,9 @@ describe("ChatArea multi-attachment message rendering", () => {
     expect(imgs[1].getAttribute("src")).toBe(
       "/api/chat/attachment/a3?token=jwt-1",
     );
-    const chip = container.querySelector(".chat__msg-file") as HTMLAnchorElement;
+    const chip = container.querySelector(".chat__msg-file") as HTMLButtonElement;
     expect(chip).toBeTruthy();
-    expect(chip.getAttribute("href")).toBe(
-      "/api/chat/attachment/a2?token=jwt-1",
-    );
+    expect(chip.getAttribute("type")).toBe("button");
     expect(chip.textContent).toContain("notes.pdf");
     // The text body still renders alongside the whole bundle.
     expect(container.textContent).toContain("bundle");
@@ -300,7 +298,7 @@ describe("ChatArea multi-attachment message rendering", () => {
     const { container } = renderChat();
     const chip = container.querySelector(".chat__msg-file")!;
     const name = container.querySelector(".chat__msg-file-name")!;
-    expect(chip.getAttribute("download")).toBe(filename);
+    expect(chip.getAttribute("type")).toBe("button");
     expect(name.textContent).toBe(filename);
     // CSS guard: this exact span is the flex item that owns the filename's
     // horizontal scroll; the phone-width Chromium guard verifies geometry.

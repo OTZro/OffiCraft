@@ -76,7 +76,7 @@ const ENTRY_FIXTURES = [
 ] as const;
 
 for (const [shotName, label, className, itemClassName] of ENTRY_FIXTURES) {
-  test(`${label}: stored attachment exposes the shared copy-link control`, async ({ mount, page }) => {
+  test(`${label}: stored attachment opens the popup that owns share and download`, async ({ mount, page }) => {
     await page.setViewportSize({ width: 760, height: 380 });
     const cmp = await mount(
       <I18nProvider>
@@ -99,13 +99,12 @@ for (const [shotName, label, className, itemClassName] of ENTRY_FIXTURES) {
         </main>
       </I18nProvider>,
     );
-    await expect(cmp.getByRole("button", { name: "複製分享連結" })).toBeVisible();
-    // The chat-thread affordance intentionally appears on pointer hover (and
-    // focus for keyboard users); capture its actionable state, not its idle
-    // state, so this owner-facing evidence shows the actual control.
-    if (shotName === "chat-attachment-row") {
-      await cmp.locator(".chat__msg-attachment").hover();
-    }
+    await cmp.getByRole("button", { name: "stored-document.pdf" }).click();
+    const popup = page.getByRole("dialog", { name: "stored-document.pdf" });
+    await expect(popup).toBeVisible();
+    await expect(popup.getByRole("button", { name: "複製分享連結" })).toBeVisible();
+    await expect(popup.getByRole("link", { name: "下載" })).toBeVisible();
+    await expect(popup.getByText("此檔案無法預覽，請下載")).toBeVisible();
     await page.screenshot({ path: `${SHOT_DIR}/${shotName}.png`, fullPage: true });
   });
 }

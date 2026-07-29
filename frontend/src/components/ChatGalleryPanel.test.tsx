@@ -140,7 +140,7 @@ describe("ChatGalleryPanel", () => {
     expect(container.textContent).not.toContain("shot.png");
   });
 
-  it("opens stored images and text in the shared modal while PDF remains outside this preview scope", async () => {
+  it("opens every stored attachment in the shared modal", async () => {
     galleryRows = [
       row("a1", "image/png", "owner", "", 100, "img.png"),
       row("a2", "text/markdown", "owner", "", 100, "notes.md"),
@@ -154,35 +154,34 @@ describe("ChatGalleryPanel", () => {
     fireEvent.click(byName("notes.md"));
     expect(await screen.findByRole("dialog", { name: "notes.md" })).toBeTruthy();
     fireEvent.click(screen.getByLabelText("關閉預覽"));
-    // PDF and opaque binaries do not become a fake modal trigger.
-    expect(byName("doc.pdf").getAttribute("role")).toBeNull();
-    expect(byName("bundle.zip").getAttribute("role")).toBeNull();
+    fireEvent.click(byName("doc.pdf"));
+    expect(await screen.findByRole("dialog", { name: "doc.pdf" })).toBeTruthy();
+    expect(screen.getByText("此檔案無法預覽，請下載")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("關閉預覽"));
+    fireEvent.click(byName("bundle.zip"));
+    expect(await screen.findByRole("dialog", { name: "bundle.zip" })).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "圖片" }));
     await waitFor(() => expect(itemsIn(container).length).toBe(1));
     fireEvent.click(itemsIn(container)[0]);
     expect(await screen.findByRole("dialog", { name: "img.png" })).toBeTruthy();
   });
 
-  it("keeps PDF external and binaries downloadable while their share buttons never navigate", async () => {
+  it("opens PDF and binaries only from their row, not a duplicate share button", async () => {
     galleryRows = [
       row("pdf-att", "application/pdf", "owner", "", 100, "doc.pdf"),
       row("zip-att", "application/zip", "owner", "", 99, "bundle.zip"),
     ];
-    Object.defineProperty(navigator, "clipboard", {
-      value: { writeText: vi.fn(async () => {}) }, configurable: true,
-    });
     const { container } = renderPanel();
     fireEvent.click(screen.getByRole("tab", { name: "檔案" }));
     await waitFor(() => expect(itemsIn(container).length).toBe(2));
-    const pdf = itemsIn(container).find((item) => item.textContent?.includes("doc.pdf")) as HTMLAnchorElement;
-    const zip = itemsIn(container).find((item) => item.textContent?.includes("bundle.zip")) as HTMLAnchorElement;
-    expect(pdf.target).toBe("_blank");
-    expect(zip.getAttribute("download")).toBe("bundle.zip");
-    fireEvent.click(pdf.querySelector("button.chat__gallery-share")!);
-    fireEvent.click(zip.querySelector("button.chat__gallery-share")!);
-    await waitFor(() => expect(getChatAttachmentShareLink).toHaveBeenCalledWith("pdf-att"));
-    expect(getChatAttachmentShareLink).toHaveBeenCalledWith("zip-att");
-    expect(container.querySelector(".md-preview")).toBeNull();
+    const pdf = itemsIn(container).find((item) => item.textContent?.includes("doc.pdf"))!;
+    const zip = itemsIn(container).find((item) => item.textContent?.includes("bundle.zip"))!;
+    expect(container.querySelector(".chat__gallery-share")).toBeNull();
+    fireEvent.click(pdf);
+    expect(await screen.findByRole("dialog", { name: "doc.pdf" })).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("關閉預覽"));
+    fireEvent.click(zip);
+    expect(await screen.findByRole("dialog", { name: "bundle.zip" })).toBeTruthy();
   });
 
   it("opens a previewable row from Enter and Space without letting the nested share button open it", async () => {
@@ -316,24 +315,14 @@ describe("ChatGalleryPanel", () => {
     expect(await screen.findByText("bob.pdf")).toBeTruthy();
   });
 
-  it("複製分享連結 copies the absolutized ?sig= URL and flashes 已複製", async () => {
+  it("keeps gallery rows free of a duplicate share control", async () => {
     galleryRows = [row("a1", "image/png", "owner", "", 100, "shot.png")];
-    const writeText = vi.fn(async () => {});
-    Object.defineProperty(navigator, "clipboard", {
-      value: { writeText },
-      configurable: true,
-    });
     const { container } = renderPanel();
     await waitFor(() => expect(itemsIn(container).length).toBe(1));
-    fireEvent.click(screen.getByRole("button", { name: "複製分享連結" }));
-    await waitFor(() =>
-      expect(writeText).toHaveBeenCalledWith(
-        `${window.location.origin}/api/chat/attachment/a1?sig=test-sig`,
-      ),
-    );
-    expect(getChatAttachmentShareLink).toHaveBeenCalledWith("a1");
-    // Transient copied feedback replaces the button label.
-    expect(screen.getByRole("button", { name: "已複製連結" })).toBeTruthy();
+    expect(container.querySelector(".chat__gallery-share")).toBeNull();
+    fireEvent.click(itemsIn(container)[0]);
+    const popup = await screen.findByRole("dialog", { name: "shot.png" });
+    expect(popup.querySelector("button.md-preview__share")).toBeTruthy();
   });
 
   it("closes via the close button and via Escape", async () => {

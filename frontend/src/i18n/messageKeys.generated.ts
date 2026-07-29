@@ -36,6 +36,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "chat.mdPreview.download",
   "chat.mdPreview.error",
   "chat.mdPreview.loading",
+  "chat.mdPreview.unavailable",
   "chat.me",
   "chat.newMessages",
   "chat.offlineHint",
