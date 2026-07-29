@@ -495,6 +495,20 @@ func (d *DAL) ListDocumentHistory(kind, key string) ([]DocumentHistory, error) {
 	return out, rows.Err()
 }
 
+func (d *DAL) GetDocumentHistory(kind, key string, id int64) (*DocumentHistory, error) {
+	var h DocumentHistory
+	err := d.db.QueryRow(`SELECT id, document_kind, document_key, content_json, created_ts, actor_id
+		FROM document_history WHERE document_kind = ? AND document_key = ? AND id = ?`, kind, key, id).
+		Scan(&h.ID, &h.DocumentKind, &h.DocumentKey, &h.ContentJSON, &h.CreatedTS, &h.ActorID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &h, nil
+}
+
 // PutChat upserts a chat message.
 func (d *DAL) PutChat(m ChatMessage) error { return putChatOn(d.db, m) }
 
