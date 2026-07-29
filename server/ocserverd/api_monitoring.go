@@ -548,6 +548,7 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	}
 	if body.RateLimits != nil {
 		entry["rate_limits"] = rateLimits
+		entry["rate_limits_ts"] = nowSecs()
 	}
 	if body.Tokens != nil {
 		entry["tokens"] = tokens
@@ -694,6 +695,27 @@ const telemetryFreshSecs = 90.0
 func runtimeCapabilitiesStampOf(entry map[string]any) float64 {
 	ts, _ := entry["runtimes_ts"].(float64)
 	return ts
+}
+
+func rateLimitStampOf(entry map[string]any) float64 {
+	ts, _ := entry["rate_limits_ts"].(float64)
+	return ts
+}
+
+func usableRateLimitWindow(raw any, windowSecs, now float64) (map[string]any, float64, bool) {
+	window, ok := raw.(map[string]any)
+	if !ok {
+		return nil, 0, false
+	}
+	resetAt := parseResetsAt(window["resets_at"])
+	if resetAt == nil {
+		return nil, 0, false
+	}
+	elapsedPct := (now - (*resetAt - windowSecs)) / windowSecs * 100
+	if elapsedPct < 0 || elapsedPct >= 100 {
+		return nil, 0, false
+	}
+	return window, *resetAt, true
 }
 
 // hardwareStampOf reads WHEN the entry's hardware sample was taken. Fail-closed:
@@ -1206,7 +1228,7 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		machines = append(machines, row)
 	}
 
-	// Accounts: freshest rate_limits per account + Σ(live cost + banked_cost);
+	// Accounts: current valid rate-limit window per account + Σ(live cost + banked_cost);
 	// machine = the observed host set, display-resolved and comma-joined.
 	acctHosts := map[string]map[string]bool{}
 	for host, accts := range acctByHost {
@@ -1218,10 +1240,11 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		}
 	}
 	freshRL := map[string]map[string]any{}
-	rlTS := map[string]float64{}
+	rlTS := map[string]map[string]float64{}
+	rlResetAt := map[string]map[string]float64{}
 	acctCost := map[string]float64{}
 	acctHasCost := map[string]bool{}
-	// Same `actors` list, same reason: the freshest rate-limit window and the
+	// Same `actors` list, same reason: the latest valid rate-limit window and the
 	// account's total spend are ACCOUNT-wide facts, and an outsource session
 	// burns the same quota and the same money as a member one. The agent-side
 	// reporter is identity-agnostic — cli/ocagent's contextreport POSTs
@@ -1233,11 +1256,24 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		if account == "" {
 			continue
 		}
-		ts, _ := entry["ts"].(float64)
 		if rl, isObj := entry["rate_limits"].(map[string]any); isObj {
-			if prior, seen := rlTS[account]; !seen || ts > prior {
-				rlTS[account] = ts
-				freshRL[account] = rl
+			if freshRL[account] == nil {
+				freshRL[account] = map[string]any{}
+				rlTS[account] = map[string]float64{}
+				rlResetAt[account] = map[string]float64{}
+			}
+			for windowKey, windowSecs := range WindowSeconds {
+				window, resetAt, usable := usableRateLimitWindow(rl[windowKey], windowSecs, now)
+				if !usable {
+					continue
+				}
+				priorTS, seen := rlTS[account][windowKey]
+				if !seen || resetAt > rlResetAt[account][windowKey] ||
+					(resetAt == rlResetAt[account][windowKey] && rateLimitStampOf(entry) > priorTS) {
+					rlTS[account][windowKey] = rateLimitStampOf(entry)
+					rlResetAt[account][windowKey] = resetAt
+					freshRL[account][windowKey] = window
+				}
 			}
 		}
 		if cost, isNum := entry["cost"].(float64); isNum {

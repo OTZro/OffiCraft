@@ -810,10 +810,12 @@ type MintRequestDTO struct {
 }
 
 // MonitoringAccountDTO One account's usage. One row per account that reports telemetry carrying an
-// “account“ tag: “five_hour“/“seven_day“ are that account's freshest
-// “rate_limits“ shaped into pacing windows, and “cost“ is the SUM of its
-// sessions' cost. Honest-None per field where no source reported; the accounts
-// list is empty ONLY when no telemetry carries an account tag.
+// “account“ tag: each “five_hour“/“seven_day“ window is selected
+// independently from that account's valid “rate_limits“ reports (later
+// “resets_at“ wins; ties use the report's rate-limit sample time), then shaped
+// into pacing data. A missing, invalid, expired, or implausibly future reset time
+// leaves that window honest-None. “cost“ is the SUM of its sessions' cost. The
+// accounts list is empty ONLY when no telemetry carries an account tag.
 //
 // “machine“ is the machine(s) the account is ACTUALLY USED ON — the OBSERVED
 // position(s) of the agent(s) drawing this account's quota, computed by the SAME
