@@ -309,16 +309,17 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
     expirable = false
   ) {
     const who = whoOf(card);
+    const asker = members.find((x) => x.id === card.from);
     return (
       <header className="reply-card__head">
         <ReplyCardAvatarButton
           onClick={() => openProfile(card)}
           src={
-            members.find((x) => x.id === card.from)?.avatarUrl ??
+            (asker?.kind === "outsource" ? undefined : asker?.avatarUrl) ??
             workerAvatarUrls.get(card.from)
           }
           kind={avatarKindForMember(
-            members.find((x) => x.id === card.from) ?? { id: card.from }
+            asker ?? { id: card.from }
           )}
         />
         <div className="reply-card__who">
