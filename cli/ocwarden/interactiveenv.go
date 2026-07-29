@@ -180,16 +180,22 @@ func captureInteractiveEnv(shell string, timeout time.Duration) (string, error) 
 	//
 	// Two independent defences, because this is the fail-safe of the fail-safe:
 	//
-	//  (1) Setpgid + a Cancel that signals the whole PROCESS GROUP, so the
+	//  (1) Setsid + a Cancel that signals the whole PROCESS GROUP, so the
 	//      grandchildren die with the shell instead of being orphaned onto the
-	//      machine. Negative pid = "the group", the standard POSIX idiom.
+	//      machine. Detaching the session also matters when the warden was
+	//      started from a terminal: an interactive rc file may read /dev/tty;
+	//      a merely separate foreground process group receives SIGTTIN and can
+	//      remain stopped forever. Negative pid = "the group", the standard
+	//      POSIX idiom.
 	//  (2) WaitDelay as the backstop: whatever survives (1), Wait force-closes
 	//      the pipes and returns anyway. This is what actually GUARANTEES a
 	//      bounded return, since (1) can only ever be best-effort — a process
 	//      can change its own group and escape.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// A session leader is also its own process-group leader, so -pid below still
+	// reaches the full descendant group while the capture has no controlling tty.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Cancel = func() error {
-		// Negative pid targets the group. Setpgid made the child its own group
+		// Negative pid targets the group. Setsid made the child its own group
 		// leader, so its pid IS the group id.
 		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
 			// Best-effort: fall back to the single process. WaitDelay below is
