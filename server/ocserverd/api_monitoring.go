@@ -712,7 +712,7 @@ func usableRateLimitWindow(raw any, windowSecs, now float64) (map[string]any, fl
 		return nil, 0, false
 	}
 	elapsedPct := (now - (*resetAt - windowSecs)) / windowSecs * 100
-	if elapsedPct < 0 || elapsedPct > 100 {
+	if elapsedPct < 0 || elapsedPct >= 100 {
 		return nil, 0, false
 	}
 	return window, *resetAt, true
@@ -1244,7 +1244,7 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	rlResetAt := map[string]map[string]float64{}
 	acctCost := map[string]float64{}
 	acctHasCost := map[string]bool{}
-	// Same `actors` list, same reason: the freshest rate-limit window and the
+	// Same `actors` list, same reason: the latest valid rate-limit window and the
 	// account's total spend are ACCOUNT-wide facts, and an outsource session
 	// burns the same quota and the same money as a member one. The agent-side
 	// reporter is identity-agnostic — cli/ocagent's contextreport POSTs

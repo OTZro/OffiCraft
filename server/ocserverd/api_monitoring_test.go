@@ -1505,12 +1505,13 @@ func TestGetMonitoring_SameWindowUsesNewestRateLimitSnapshot(t *testing.T) {
 			t.Fatalf("seed %s: %v", id, err)
 		}
 	}
+	resetAt := nowSecs() + 3600
 	if rec := doIngestTelemetry(s, "new-session", "m-seth-m5", `{"runtime":"codex","account":"codex:seth",`+
-		`"rate_limits":{"seven_day":{"used_percentage":40,"resets_at":1785903125}}}`); rec.Code != 200 {
+		fmt.Sprintf(`"rate_limits":{"seven_day":{"used_percentage":40,"resets_at":%g}}}`, resetAt)); rec.Code != 200 {
 		t.Fatalf("new snapshot ingest: %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := doIngestTelemetry(s, "old-session", "m-seth-m5", `{"runtime":"codex","account":"codex:seth",`+
-		`"rate_limits":{"seven_day":{"used_percentage":66,"resets_at":1785903125}}}`); rec.Code != 200 {
+		fmt.Sprintf(`"rate_limits":{"seven_day":{"used_percentage":66,"resets_at":%g}}}`, resetAt)); rec.Code != 200 {
 		t.Fatalf("old snapshot ingest: %d %s", rec.Code, rec.Body.String())
 	}
 	old := s.telemetry.Get("old-session")
@@ -1542,7 +1543,7 @@ func TestGetMonitoring_SameWindowUsesNewestRateLimitSnapshot(t *testing.T) {
 	if got := sevenDay["used_pct"]; got != 40.0 {
 		t.Errorf("seven_day.used_pct = %v, want 40 from the newer rate-limit snapshot", got)
 	}
-	if got := sevenDay["resets_at"]; got != 1785903125.0 {
+	if got := sevenDay["resets_at"]; got != resetAt {
 		t.Errorf("seven_day.resets_at = %v, want the newer snapshot's reset time", got)
 	}
 }
@@ -1558,12 +1559,15 @@ func TestGetMonitoring_NewerWindowBeatsNewerRateLimitSnapshot(t *testing.T) {
 			t.Fatalf("seed %s: %v", id, err)
 		}
 	}
+	now := nowSecs()
+	currentResetAt := now + 3600
+	olderResetAt := now + 1800
 	if rec := doIngestTelemetry(s, "current-window", "m-seth-m5", `{"runtime":"codex","account":"codex:seth",`+
-		`"rate_limits":{"seven_day":{"used_percentage":40,"resets_at":1785903125}}}`); rec.Code != 200 {
+		fmt.Sprintf(`"rate_limits":{"seven_day":{"used_percentage":40,"resets_at":%g}}}`, currentResetAt)); rec.Code != 200 {
 		t.Fatalf("current window ingest: %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := doIngestTelemetry(s, "expired-window", "m-seth-m5", `{"runtime":"codex","account":"codex:seth",`+
-		`"rate_limits":{"seven_day":{"used_percentage":66,"resets_at":1785829112}}}`); rec.Code != 200 {
+		fmt.Sprintf(`"rate_limits":{"seven_day":{"used_percentage":66,"resets_at":%g}}}`, olderResetAt)); rec.Code != 200 {
 		t.Fatalf("expired window ingest: %d %s", rec.Code, rec.Body.String())
 	}
 	current := s.telemetry.Get("current-window")
@@ -1581,8 +1585,8 @@ func TestGetMonitoring_NewerWindowBeatsNewerRateLimitSnapshot(t *testing.T) {
 	if got := sevenDay["used_pct"]; got != 40.0 {
 		t.Errorf("seven_day.used_pct = %v, want 40 from the current window", got)
 	}
-	if got := sevenDay["resets_at"]; got != 1785903125.0 {
-		t.Errorf("seven_day.resets_at = %v, want 1785903125 from the current window", got)
+	if got := sevenDay["resets_at"]; got != currentResetAt {
+		t.Errorf("seven_day.resets_at = %v, want %v from the current window", got, currentResetAt)
 	}
 }
 
@@ -1627,8 +1631,9 @@ func TestGetMonitoring_UnusableRateLimitWindowStaysEmpty(t *testing.T) {
 		"missing":    `{}`,
 		"nonnumeric": `{"five_hour":{"used_percentage":40,"resets_at":"bad"}}`,
 		"zero":       `{"five_hour":{"used_percentage":40,"resets_at":0}}`,
+		"negative":   `{"five_hour":{"used_percentage":40,"resets_at":-1}}`,
 		"expired":    fmt.Sprintf(`{"five_hour":{"used_percentage":40,"resets_at":%g}}`, now-1),
-		"too future": fmt.Sprintf(`{"five_hour":{"used_percentage":40,"resets_at":%g}}`, now+WindowSeconds["five_hour"]+1),
+		"too future": fmt.Sprintf(`{"five_hour":{"used_percentage":40,"resets_at":%g}}`, now+2*WindowSeconds["five_hour"]),
 	}
 	for name, rateLimits := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -1648,6 +1653,13 @@ func TestGetMonitoring_UnusableRateLimitWindowStaysEmpty(t *testing.T) {
 				t.Errorf("five_hour = %v, want nil for unusable window", got)
 			}
 		})
+	}
+}
+
+func TestUsableRateLimitWindow_EndedWindowIsRejected(t *testing.T) {
+	window, _, usable := usableRateLimitWindow(map[string]any{"resets_at": 100.0}, WindowSeconds["five_hour"], 100.0)
+	if usable || window != nil {
+		t.Errorf("ended window = %v, usable = %v; want rejected", window, usable)
 	}
 }
 
