@@ -83,14 +83,14 @@ export function useMachines(opts?: { refreshSeconds?: number }): UseMachines {
       })
       .finally(() => { if (alive) setLoading(false); });
 
-    // SSE: refetch on any machine/monitoring/member topic (a warden coming online
-    // flips a machine's `online`, and onboard/teardown change the registry).
+    // A registry mutation must reconcile immediately: it is normally the
+    // consequence of a user action (install, uninstall, upgrade) and drives
+    // the action-row state. Telemetry/member chatter, on the other hand, is
+    // bursty and uses the coalesced trailing path below.
     const unsubscribe = api.subscribeEvents((topic) => {
-      if (
-        topic.includes("machine") ||
-        topic.includes("monitor") ||
-        topic.includes("member")
-      ) {
+      if (topic.includes("machine")) {
+        refetch().catch((e) => console.warn("useMachines: registry refetch failed", e));
+      } else if (topic.includes("monitor") || topic.includes("member")) {
         requestVersion.current += 1;
         trailing = true;
         schedule();
@@ -102,7 +102,7 @@ export function useMachines(opts?: { refreshSeconds?: number }): UseMachines {
       if (timer) clearTimeout(timer);
       unsubscribe();
     };
-  }, [refreshSeconds]);
+  }, [refreshSeconds, refetch]);
 
   return { machines, loading, error, refetch };
 }
