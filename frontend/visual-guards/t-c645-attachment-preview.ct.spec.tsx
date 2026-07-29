@@ -64,6 +64,20 @@ test("text: shared header and literal txt/log content render in Chromium", async
   await page.screenshot({ path: `${SHOT_DIR}/text-modal.png`, fullPage: true });
 });
 
+test("390px: popup header keeps filename space while actions become labelled icons", async ({ mount, page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const cmp = await mountBlob(mount, {
+    title: "a-very-long-stored-attachment-filename-for-mobile.pdf",
+    url: "/api/chat/attachment/att-mobile-pdf",
+    attachmentId: "att-mobile-pdf",
+    mime: "application/pdf",
+  });
+  await expect(cmp.getByRole("button", { name: "複製分享連結" })).toBeVisible();
+  await expect(cmp.getByRole("link", { name: "下載" })).toBeVisible();
+  await expect(cmp.locator(".md-preview__action-label").first()).toBeHidden();
+  await page.screenshot({ path: `${SHOT_DIR}/mobile-popup-header.png`, fullPage: true });
+});
+
 // Each stored-attachment entrance owns its surrounding layout, but delegates
 // its actual controls to AttachmentStrip. These are deliberately separate
 // screenshots so the owner can inspect the four real entry shapes, not merely
@@ -99,6 +113,7 @@ for (const [shotName, label, className, itemClassName] of ENTRY_FIXTURES) {
         </main>
       </I18nProvider>,
     );
+    await page.screenshot({ path: `${SHOT_DIR}/${shotName}-outer.png`, fullPage: true });
     await cmp.getByRole("button", { name: "stored-document.pdf" }).click();
     const popup = page.getByRole("dialog", { name: "stored-document.pdf" });
     await expect(popup).toBeVisible();

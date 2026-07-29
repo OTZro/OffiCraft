@@ -70,7 +70,7 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("chat .md preview action (T-a1c4 / T-7bc2)", () => {
-  it("renders the .md chip as a <button> (preview) and the pdf chip as an <a> (download)", () => {
+  it("renders every stored file chip as a popup trigger", () => {
     messages = [
       msgWith([
         { id: "a-md", url: "/api/chat/attachment/a-md", filename: "design.md", mime: "text/markdown", isImage: false },
@@ -82,8 +82,8 @@ describe("chat .md preview action (T-a1c4 / T-7bc2)", () => {
         <ChatArea member={mkMember()} />
       </I18nProvider>,
     );
-    expect(container.querySelectorAll("button.chat__msg-file").length).toBe(1);
-    expect(container.querySelectorAll("a.chat__msg-file").length).toBe(1);
+    expect(container.querySelectorAll("button.chat__msg-file").length).toBe(2);
+    expect(container.querySelectorAll("a.chat__msg-file").length).toBe(0);
   });
 
   it("opens the preview overlay and renders the markdown on click", async () => {

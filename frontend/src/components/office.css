@@ -1476,6 +1476,26 @@ button.chat__msg-file {
   color: var(--color-accent);
   border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
 }
+@media (max-width: 600px) {
+  /* Mobile keeps the header on one line: title remains the readable priority,
+   * while labelled icon controls retain their accessible names + tooltips. */
+  .md-preview__header {
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .md-preview__actions {
+    gap: 4px;
+  }
+  .md-preview__download {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    justify-content: center;
+  }
+  .md-preview__action-label {
+    display: none;
+  }
+}
 .md-preview__share {
   cursor: pointer;
   font-family: inherit;

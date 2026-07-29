@@ -164,6 +164,7 @@ function ArtifactsPopover({
   const nowTs = Date.now() / 1000;
   // Open overlays (mutually exclusive; the caller-owned state pattern).
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [attachmentPreviewOpen, setAttachmentPreviewOpen] = useState(false);
 
   // Fetch the full artifact set on open, and keep it live while open (a task
   // delta fans when an artifact is pinned/removed) — the ChatGalleryPanel
@@ -190,11 +191,11 @@ function ArtifactsPopover({
   // Esc closes the popover (only when no overlay is capturing Esc itself).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !lightboxSrc) onClose();
+      if (e.key === "Escape" && !lightboxSrc && !attachmentPreviewOpen) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, lightboxSrc]);
+  }, [onClose, lightboxSrc, attachmentPreviewOpen]);
 
   // ONE list, grouped 檔案 → 圖片 → 連結 (the old tab order). File and image
   // rows share the AttachmentStrip renderer, so they are handed to it in a
@@ -276,6 +277,7 @@ function ArtifactsPopover({
               fileNameClassName="task-artifacts__chip-name"
               fileNameColClassName="task-artifacts__chip-text"
               onOpenImage={(src) => setLightboxSrc(src)}
+              onPreviewChange={setAttachmentPreviewOpen}
               renderExtra={renderExtra}
               renderMeta={(att) => {
                 const art = artifacts.find((a) => a.id === att.id);

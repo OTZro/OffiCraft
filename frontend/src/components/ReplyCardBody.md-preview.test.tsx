@@ -58,7 +58,7 @@ afterEach(() => {
 });
 
 describe("reply-card question attachments: .md preview (T-7bc2)", () => {
-  it("renders the .md chip as a <button> (preview) and the pdf chip as an <a> (download)", async () => {
+  it("renders every stored file chip as a popup trigger", async () => {
     __resetMock();
     __injectMockReplyCard(mkCard({ attachments: [mdAtt(), pdfAtt()] }));
     const { container, findByTestId } = render(
@@ -70,11 +70,11 @@ describe("reply-card question attachments: .md preview (T-7bc2)", () => {
     const mdButtons = container.querySelectorAll(
       ".reply-card__question-atts button.chat__msg-file"
     );
-    const pdfLinks = container.querySelectorAll(
+    const fileLinks = container.querySelectorAll(
       ".reply-card__question-atts a.chat__msg-file"
     );
-    expect(mdButtons.length).toBe(1);
-    expect(pdfLinks.length).toBe(1);
+    expect(mdButtons.length).toBe(2);
+    expect(fileLinks.length).toBe(0);
   });
 
   it("opens the preview overlay and renders the markdown on click", async () => {
@@ -115,7 +115,7 @@ describe("reply-card question attachments: .md preview (T-7bc2)", () => {
     );
   });
 
-  it("renders no preview <button> when the card carries no .md attachment (pdf stays a plain <a>)", async () => {
+  it("opens the common popup for a non-previewable PDF", async () => {
     __resetMock();
     __injectMockReplyCard(mkCard({ attachments: [pdfAtt()] }));
     const { container, findByTestId } = render(
@@ -124,8 +124,13 @@ describe("reply-card question attachments: .md preview (T-7bc2)", () => {
       </I18nProvider>
     );
     await findByTestId("waiting-card");
-    expect(container.querySelector("button.chat__msg-file")).toBeNull();
-    expect(container.querySelector("a.chat__msg-file")).not.toBeNull();
+    const file = container.querySelector<HTMLButtonElement>("button.chat__msg-file");
+    expect(file).not.toBeNull();
+    expect(container.querySelector("a.chat__msg-file")).toBeNull();
+    fireEvent.click(file!);
+    await waitFor(() =>
+      expect(container.querySelector(".md-preview__status")?.textContent).toContain("此檔案無法預覽")
+    );
   });
 });
 

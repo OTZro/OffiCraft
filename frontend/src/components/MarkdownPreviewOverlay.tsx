@@ -176,10 +176,10 @@ export function MarkdownPreviewOverlay({
                 >
                   {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
                   {copyFailed
-                    ? t.chat.shareLinkCopyFailed
+                    ? <span className="md-preview__action-label">{t.chat.shareLinkCopyFailed}</span>
                     : copied
-                      ? t.chat.shareLinkCopied
-                      : t.chat.copyShareLink}
+                      ? <span className="md-preview__action-label">{t.chat.shareLinkCopied}</span>
+                      : <span className="md-preview__action-label">{t.chat.copyShareLink}</span>}
                 </button>
                 {/* Download — the SECOND action, distinct from preview: the
                  * authed blob URL with a download attribute (server forces the
@@ -188,9 +188,11 @@ export function MarkdownPreviewOverlay({
                   className="md-preview__download"
                   href={authedAttachmentUrl(url)}
                   download={title || undefined}
+                  aria-label={t.chat.mdPreview.download}
+                  title={t.chat.mdPreview.download}
                 >
                   <DownloadIcon size={14} />
-                  {t.chat.mdPreview.download}
+                  <span className="md-preview__action-label">{t.chat.mdPreview.download}</span>
                 </a>
               </>
             )}

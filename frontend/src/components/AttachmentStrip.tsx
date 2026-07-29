@@ -29,6 +29,7 @@ export function AttachmentStrip({
   fileNameClassName = "chat__msg-file-name",
   fileNameColClassName,
   showShareLink = false,
+  onPreviewChange,
   renderExtra,
   renderMeta,
 }: {
@@ -59,6 +60,9 @@ export function AttachmentStrip({
   /** Stored blobs expose one canonical share control even when their body is
    * download-only (PDF/binary). ChatArea supplies its own hover control. */
   showShareLink?: boolean;
+  /** Lets a containing dialog defer its own Escape handling while this strip's
+   * shared popup is open. */
+  onPreviewChange?: (open: boolean) => void;
   /** Makes image thumbnails clickable (role=button + keyboard): the caller
    * receives the token-authed src and opens its own Lightbox. Absent ⇒ a
    * static thumbnail (the answered-card strip's existing behaviour). */
@@ -74,6 +78,11 @@ export function AttachmentStrip({
   const { t } = useI18n();
   const [preview, setPreview] = useState<ChatAttachmentView | null>(null);
   const [shareCopiedId, setShareCopiedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    onPreviewChange?.(preview !== null);
+    return () => onPreviewChange?.(false);
+  }, [preview, onPreviewChange]);
   if (attachments.length === 0) return null;
 
   function renderOne(att: ChatAttachmentView) {

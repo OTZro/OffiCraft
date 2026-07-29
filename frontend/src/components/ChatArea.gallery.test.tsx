@@ -145,10 +145,10 @@ describe("ChatArea inbound (member→owner) attachment display", () => {
     const img = container.querySelector<HTMLImageElement>(".chat__msg-image");
     expect(img).toBeTruthy();
     expect(img!.getAttribute("src")).toBe("/api/chat/attachment/a1?token=tkn");
-    // File → a chip linking the gated blob, same ?token= auth.
-    const chip = container.querySelector<HTMLAnchorElement>(".chat__msg-file");
+    // Stored files use the common preview popup; the popup owns download/share.
+    const chip = container.querySelector<HTMLButtonElement>("button.chat__msg-file");
     expect(chip).toBeTruthy();
-    expect(chip!.getAttribute("href")).toBe("/api/chat/attachment/a2?token=tkn");
+    expect(chip!.getAttribute("type")).toBe("button");
     expect(chip!.textContent).toContain("report.pdf");
   });
 });

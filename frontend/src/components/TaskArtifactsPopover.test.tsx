@@ -248,6 +248,19 @@ describe("產物 popover — the one list (T-49fb)", () => {
 });
 
 describe("任務產物 markdown 預覽的分享連結", () => {
+  it("Escape closes an artifact popup without closing its parent artifact panel", async () => {
+    const { container } = renderBadge([
+      mkArtifact({ id: "ta-escape", kind: "file", filename: "bundle.zip", mime: "application/zip", url: "/api/chat/attachment/att-escape", attachmentId: "att-escape" }),
+    ]);
+    fireEvent.click(screen.getByTestId("task-artifacts-badge"));
+    await waitFor(() => expect(container.querySelector("button.task-artifacts__chip")).toBeTruthy());
+    fireEvent.click(container.querySelector("button.task-artifacts__chip")!);
+    await waitFor(() => expect(container.querySelector(".md-preview")).toBeTruthy());
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(container.querySelector(".md-preview")).toBeNull();
+    expect(container.querySelector(".task-artifacts")).toBeTruthy();
+  });
+
   it("shares a download-only artifact from the popup using its backing att- id", async () => {
     const mint = vi
       .mocked(api.getChatAttachmentShareLink)
