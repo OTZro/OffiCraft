@@ -582,6 +582,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/document-history/{kind}/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List retained versions of an editable document. */
+        get: operations["handle_list_document_history_api_document_history__kind___key__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/document-history/{kind}/{key}/{id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore a retained document version as a new write. */
+        post: operations["handle_restore_document_history_api_document_history__kind___key___id__restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/global-context": {
         parameters: {
             query?: never;
@@ -2922,6 +2956,15 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        DocumentHistoryDTO: {
+            actor_id: string;
+            content: {
+                [key: string]: string;
+            };
+            created_ts: number;
+            /** Format: int64 */
+            id: number;
+        };
         /**
          * AgentContextDTO
          * @description Echo of a stored gauge entry (``POST /api/agent/context`` response).
@@ -7614,6 +7657,53 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_list_document_history_api_document_history__kind___key__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: string;
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentHistoryDTO"][];
+                };
+            };
+        };
+    };
+    handle_restore_document_history_api_document_history__kind___key___id__restore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: string;
+                key: string;
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentHistoryDTO"];
                 };
             };
         };

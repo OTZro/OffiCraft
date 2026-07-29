@@ -101,12 +101,26 @@ func (s *apiServer) HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdResto
 		internalError(w, err)
 		return
 	}
+	s.publishDocumentHistoryRestore(r, kind, key)
 	dto, err := documentHistoryDTO(*history)
 	if err != nil {
 		internalError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, dto)
+}
+
+func (s *apiServer) publishDocumentHistoryRestore(r *http.Request, kind, key string) {
+	switch kind {
+	case "global_context":
+		s.hub.Publish("global_context", "patch", "global_context", wireOwnerID, nil, audienceOwnerOnly(), requestTrigger(r))
+	case "role_definition":
+		s.hub.Publish("role", "patch", "role", wireOwnerID+"::"+key, nil, audienceOwnerOnly(), requestTrigger(r))
+	case "lessons":
+		s.hub.Publish("lessons", "patch", "lessons", wireOwnerID+"::"+key, nil, audienceOwnerOnly(), requestTrigger(r))
+	case "task_manual":
+		s.publishTaskManual(key, requestTrigger(r))
+	}
 }
 
 func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, content map[string]string) error {
@@ -163,7 +177,7 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 		if current == nil {
 			return errNotFound
 		}
-		if DocCapBlocked(current.Learnings, content["learnings"]) {
+		if DocCapBlocked(current.Learnings, content["learnings"]) || DocCapBlocked(current.SopMD, content["sop_md"]) {
 			return errDocumentHistoryCap
 		}
 		snapshot, err := taskManualHistorySnapshot(*current)
