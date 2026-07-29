@@ -791,7 +791,7 @@ export const en: Dict = {
       title: "Account details",
       close: "Close",
       accountKey: "Account key",
-      userId: "User ID (hash)",
+      accountIdentifier: "Account identifier",
       orgUuid: "Org UUID",
       email: "Email",
       org: "Organization",
