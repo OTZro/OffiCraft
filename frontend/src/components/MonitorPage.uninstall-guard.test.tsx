@@ -97,6 +97,16 @@ describe("MonitorPage uninstall members guard", () => {
         status: "online",
         name: "Mira",
       }),
+      // GET /api/members now includes outsource rows. They must not inflate a
+      // machine-uninstall warning, which is about salaried member sessions.
+      member({
+        id: "ow-guard",
+        kind: "outsource",
+        desiredMachineId: "m-1",
+        machine: "m-1",
+        status: "online",
+        name: "O-guard",
+      }),
       member({
         id: "bob",
         kind: "assistant",
@@ -118,6 +128,9 @@ describe("MonitorPage uninstall members guard", () => {
     expect(warn).toBeTruthy();
     expect(screen.getByTestId("mon-uninstall-warn-members").textContent).toContain(
       "Mira"
+    );
+    expect(screen.getByTestId("mon-uninstall-warn-members").textContent).not.toContain(
+      "O-guard"
     );
     expect(screen.queryByTestId("mon-uninstall-confirm")).toBeNull();
     expect(uninstallMachine).not.toHaveBeenCalled();
