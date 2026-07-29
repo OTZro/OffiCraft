@@ -14,7 +14,7 @@ func reportWaking(t *testing.T, api *apiServer, sub, model string) *httptest.Res
 	return rec
 }
 
-func TestReportWakingMemberKeepsOwnerConfiguredModel(t *testing.T) {
+func TestReportWakingMemberStoresReportedModelSeparately(t *testing.T) {
 	api, dal := newGateTestAPI(t)
 	putGateMember(t, dal, Member{ID: "wake-member", Kind: KindAssistant,
 		Model: "owner-selected", DesiredState: DesiredStateOnline,
@@ -31,12 +31,15 @@ func TestReportWakingMemberKeepsOwnerConfiguredModel(t *testing.T) {
 	if m.Model != "owner-selected" {
 		t.Fatalf("report_waking overwrote owner model: got %q", m.Model)
 	}
+	if m.ActualModel != "caller-supplied" {
+		t.Fatalf("actual_model = %q, want caller-supplied", m.ActualModel)
+	}
 	if m.WakingSince == 0 || m.RefocusSince != 0 || m.StoppingSince != 0 || m.StoppedSince != 0 {
 		t.Fatalf("report_waking must still stamp waking and clear recycle markers: %+v", *m)
 	}
 }
 
-func TestReportWakingOutsourceKeepsOwnerConfiguredModel(t *testing.T) {
+func TestReportWakingOutsourceStoresReportedModelSeparately(t *testing.T) {
 	api, dal := newGateTestAPI(t)
 	if err := dal.PutOutsourceWorker(OutsourceWorker{ID: "ow-wake-model", Codename: "X-wake-model",
 		Model: "owner-selected", Effort: "medium", TaskID: "t-wake-model",
@@ -55,6 +58,9 @@ func TestReportWakingOutsourceKeepsOwnerConfiguredModel(t *testing.T) {
 	}
 	if w.Model != "owner-selected" {
 		t.Fatalf("report_waking overwrote owner model: got %q", w.Model)
+	}
+	if w.ActualModel != "caller-supplied" {
+		t.Fatalf("actual_model = %q, want caller-supplied", w.ActualModel)
 	}
 	if w.RefocusSince != 0 || w.StoppingSince != 0 || w.StoppedSince != 0 {
 		t.Fatalf("report_waking must still clear recycle markers: %+v", *w)

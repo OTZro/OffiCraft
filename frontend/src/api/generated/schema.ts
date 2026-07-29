@@ -4144,6 +4144,11 @@ export interface components {
          */
         MemberDTO: {
             /**
+             * Actual Model
+             * @description The model reported by the member's current or most recent successful boot. Empty means the member has never reported a model; it is separate from the owner-configured `model` launch setting.
+             */
+            actual_model?: string;
+            /**
              * Avatar Url
              * @description Authenticated URL of this stable member id's personal raster avatar. Empty means no personal image; clients fall back to the active theme's role avatar, then the built-in glyph. Additive-optional for older clients.
              */
@@ -5044,9 +5049,8 @@ export interface components {
          * @description Body for ``report_waking()`` — the boot report (identity from token, NO
          *     member_id). Stamps the CALLER's ``waking_since`` and clears the recycle markers.
          *
-         *     ``model`` is OPTIONAL and accepted for API compatibility. Its value is ignored: the
-         *     owner-configured model remains authoritative and cannot be changed by a caller's
-         *     wake report.
+         *     ``model`` is OPTIONAL runtime telemetry. The server stores it separately as
+         *     ``actual_model``; it never changes the owner-configured launch model.
          */
         ReportWakingDTO: {
             /** Model */
