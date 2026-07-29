@@ -704,6 +704,7 @@ export const zh = {
     rename: "改名",
     renamePlaceholder: "輸入名字",
     wake: "喚醒",
+    change: "更改",
     wakeManual: "手動喚醒",
     // 點喚醒後、server presence 尚未跟上前的即時回饋
     wakePendingNote: "喚醒中…",

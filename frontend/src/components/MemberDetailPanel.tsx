@@ -20,6 +20,7 @@ import { Avatar } from "./Avatar";
 import { avatarKindForMember } from "../lib/avatarKind";
 import { ConfirmModal } from "./ConfirmModal";
 import { InlineEdit } from "./InlineEdit";
+import { ModelEffortEditor } from "./ModelEffortEditor";
 import { presenceVisual } from "./LifecycleDot";
 import type { LifecycleVisualStatus } from "./LifecycleDot";
 import { PresenceBadge } from "./PresenceBadge";
@@ -183,6 +184,44 @@ export function MemberDetailPanel({
   const onlineMachines = machines.filter((m) => m.online);
   const boundMachineId = member.desiredMachineId || null;
   const [spawnPickerOpen, setSpawnPickerOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsRuntime, setSettingsRuntime] = useState<"claude" | "codex">(
+    member.runtime || "claude",
+  );
+  const [settingsModel, setSettingsModel] = useState(member.model);
+  const [settingsEffort, setSettingsEffort] = useState(member.effort);
+  const [settingsMachineId, setSettingsMachineId] = useState(
+    member.desiredMachineId,
+  );
+  const [settingsBusy, setSettingsBusy] = useState(false);
+
+  function openSettings() {
+    setSettingsRuntime(member.runtime || "claude");
+    setSettingsModel(member.model);
+    setSettingsEffort(member.effort);
+    setSettingsMachineId(member.desiredMachineId || onlineMachines[0]?.machineId || "");
+    setSettingsOpen(true);
+  }
+
+  async function saveSettings() {
+    if (!settingsMachineId) return;
+    setSettingsBusy(true);
+    try {
+      await api.patchMember(member.id, {
+        runtime: settingsRuntime,
+        model: settingsModel.trim(),
+        effort: settingsEffort,
+      });
+      if (online || member.lifecycle === "waking") {
+        await onRelocate?.(settingsMachineId);
+      } else {
+        await onActivate?.(settingsMachineId);
+      }
+      setSettingsOpen(false);
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
 
   const runActivate = (machineId: string) => {
     setSpawnPickerOpen(false);
@@ -569,7 +608,7 @@ export function MemberDetailPanel({
         <div className="mp-identity__actions">
           <MemberActionButtons
             status={visual}
-            onSpawn={handleSpawn}
+            onSpawn={openSettings}
             onCancel={onDeactivate}
             onStop={onDeactivate}
             // In `stopping`, the Stop button IS force-stop → open the confirm first
@@ -586,6 +625,16 @@ export function MemberDetailPanel({
               wakePendingActive ? { spawn: t.mp.wakePendingNote } : undefined
             }
           />
+          {online && (
+            <button
+              type="button"
+              className="btn btn--accent-ghost"
+              data-testid="mp-change"
+              onClick={openSettings}
+            >
+              {t.mp.change}
+            </button>
+          )}
           {/* T-7fa1: sits directly under the wake button the owner just pressed
               — the click and its outcome in one place. */}
           {wakeUndispatched && (
@@ -647,6 +696,45 @@ export function MemberDetailPanel({
           onConfirm={runActivate}
           onCancel={() => setSpawnPickerOpen(false)}
         />
+      )}
+      {settingsOpen && (
+        <div className="machine-picker" role="dialog" aria-modal="true">
+          <div className="machine-picker__box">
+            <div className="machine-picker__title">
+              {online ? t.mp.change : t.lifecycle.action.spawn}
+            </div>
+            <ModelEffortEditor
+              runtime={settingsRuntime}
+              model={settingsModel}
+              effort={settingsEffort}
+              onRuntimeChange={setSettingsRuntime}
+              onModelChange={setSettingsModel}
+              onEffortChange={setSettingsEffort}
+            />
+            <label className="machine-picker__field">
+              <span className="machine-picker__label">{t.mp.machine}</span>
+              <select
+                className="machine-picker__select"
+                value={settingsMachineId}
+                onChange={(e) => setSettingsMachineId(e.target.value)}
+              >
+                {onlineMachines.map((machine) => (
+                  <option key={machine.machineId} value={machine.machineId}>
+                    {machine.displayName}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="machine-picker__actions">
+              <button type="button" className="btn btn--ghost" disabled={settingsBusy} onClick={() => setSettingsOpen(false)}>
+                {t.common.cancel}
+              </button>
+              <button type="button" className="btn btn--accent" disabled={settingsBusy || !settingsMachineId} onClick={() => void saveSettings()}>
+                {online ? t.mp.change : t.lifecycle.action.spawn}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       {relocatePicker}
     </>
@@ -1150,20 +1238,15 @@ export function MemberDetailPanel({
         testIdPrefix: "mp",
         online,
         runtime: member.runtime || "claude",
-        model: member.model,
+        // The details panel reports what is actually running. A configured
+        // launch model is intentionally kept out of this read-only surface.
+        model: awake ? (member.actualModel ?? "") : "",
         effort: member.effort,
         modelEffortNote: t.mp.modelEffortNextWakeNote,
-        // model/effort are LAUNCH INTENTS patched onto the member — a change
-        // takes effect on the NEXT wake/handover (the note above says so).
-        onSaveModelEffort: async (runtime, model, effort) => {
-          await api.patchMember(member.id, { runtime, model, effort });
-        },
         // Gate on `awake` (owner presence contract T-2860): 機器 + Claude
         // Account are runtime facts — not-awakened reads a bare dash, never a
         // desired/stale residual.
         machineText: awake ? machineName : "",
-        // 改機器 button next to the 機器 label (mirrors the worker panel's slot).
-        machineAction: relocateAction,
         accountText: (awake && member.account) || "",
         contextPct: member.contextPct,
         compactionCount: member.compactionCount,
