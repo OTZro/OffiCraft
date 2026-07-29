@@ -281,6 +281,7 @@ func (s *apiServer) newMemberDTO(m Member, roleName, observedMachine string, unr
 		RoleName:         roleName,
 		Runtime:          NormalizeRuntime(m.Runtime),
 		Model:            m.Model,
+		ActualModel:      m.ActualModel,
 		Effort:           m.Effort,
 		DesiredState:     m.DesiredState,
 		DesiredMachineID: m.DesiredMachineID,

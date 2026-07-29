@@ -1712,6 +1712,12 @@
             "description": "Set true ONLY on the activate response when the decided START could not be delivered to the target warden (no live SSE downstream) — the wake intent is persisted and the reconcile cadence retries, but nothing has been dispatched yet. Absent/null on every other member read. The activate twin of ``relocation_pending``: without it an activate against an unreachable warden returns a clean 200 with zero signal, which is indistinguishable from a wake that actually started (T-ba62 additive-optional).",
             "title": "Activation Pending"
           },
+          "actual_model": {
+            "default": "",
+            "description": "The model the member most recently reported while waking. This is observed runtime state, distinct from the owner's configured next-launch model. Empty means no report has supplied a model.",
+            "title": "Actual Model",
+            "type": "string"
+          },
           "desired_machine_id": {
             "default": "m-server-self",
             "title": "Desired Machine Id",

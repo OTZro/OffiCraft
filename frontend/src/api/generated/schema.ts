@@ -4154,6 +4154,12 @@ export interface components {
              */
             activation_pending?: boolean | null;
             /**
+             * Actual Model
+             * @description The model the member most recently reported while waking. This is observed runtime state, distinct from the owner's configured next-launch model. Empty means no report has supplied a model.
+             * @default
+             */
+            actual_model: string;
+            /**
              * Desired Machine Id
              * @default m-server-self
              */

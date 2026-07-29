@@ -682,9 +682,8 @@ func (s *apiServer) resolveSelf(r *http.Request) (*Member, error) {
 	return m, nil
 }
 
-// POST /api/self/waking — the boot report: stamps waking_since and clears ALL
-// the recycle markers. model remains accepted for wire compatibility but must
-// not overwrite the owner-configured member model.
+// POST /api/self/waking — the boot report: stamps waking_since, records the
+// reporter's actual model separately, and clears ALL recycle markers.
 func (s *apiServer) HandleReportWakingApiSelfWakingPost(w http.ResponseWriter, r *http.Request) {
 	var body ReportWakingDTO
 	if !decodeJSONBody(w, r, &body) {
@@ -708,6 +707,9 @@ func (s *apiServer) HandleReportWakingApiSelfWakingPost(w http.ResponseWriter, r
 		return
 	}
 	m.WakingSince = nowSecs()
+	if body.Model != nil {
+		m.ActualModel = *body.Model
+	}
 	m.RefocusSince = 0.0
 	m.StoppedSince = 0.0
 	m.StoppingSince = 0.0

@@ -49,6 +49,9 @@ export interface Member {
    */
   lifecycle: MemberLifecycle;
   runtime?: AgentRuntime;
+  /** The model the member last reported while waking. Empty means it has never
+   * reported one; the detail panel also hides it while the member is offline. */
+  actualModel?: string;
   model: string;
   effort: Effort;
   // The member's kind (e.g. "assistant" | "warden"). The office roster shows

@@ -14,7 +14,7 @@ func reportWaking(t *testing.T, api *apiServer, sub, model string) *httptest.Res
 	return rec
 }
 
-func TestReportWakingMemberKeepsOwnerConfiguredModel(t *testing.T) {
+func TestReportWakingMemberStoresActualModelWithoutChangingConfiguredModel(t *testing.T) {
 	api, dal := newGateTestAPI(t)
 	putGateMember(t, dal, Member{ID: "wake-member", Kind: KindAssistant,
 		Model: "owner-selected", DesiredState: DesiredStateOnline,
@@ -30,6 +30,9 @@ func TestReportWakingMemberKeepsOwnerConfiguredModel(t *testing.T) {
 	}
 	if m.Model != "owner-selected" {
 		t.Fatalf("report_waking overwrote owner model: got %q", m.Model)
+	}
+	if m.ActualModel != "caller-supplied" {
+		t.Fatalf("report_waking did not retain the reported model: got %q", m.ActualModel)
 	}
 	if m.WakingSince == 0 || m.RefocusSince != 0 || m.StoppingSince != 0 || m.StoppedSince != 0 {
 		t.Fatalf("report_waking must still stamp waking and clear recycle markers: %+v", *m)

@@ -733,6 +733,9 @@ type MemberDTO struct {
 	// ActivationPending Set true ONLY on the activate response when the decided START could not be delivered to the target warden (no live SSE downstream) — the wake intent is persisted and the reconcile cadence retries, but nothing has been dispatched yet. Absent/null on every other member read. The activate twin of ``relocation_pending``: without it an activate against an unreachable warden returns a clean 200 with zero signal, which is indistinguishable from a wake that actually started (T-ba62 additive-optional).
 	ActivationPending *bool `json:"activation_pending,omitempty"`
 
+	// ActualModel The model the member most recently reported while waking. This is observed runtime state, distinct from the owner's configured next-launch model. Empty means no report has supplied a model.
+	ActualModel *string `json:"actual_model,omitempty"`
+
 	// AvatarUrl Authenticated URL of this stable member id's personal raster avatar. Empty means no personal image; clients fall back to the active theme's role avatar, then the built-in glyph. Additive-optional for older clients.
 	AvatarUrl        *string  `json:"avatar_url,omitempty"`
 	DesiredMachineId *string  `json:"desired_machine_id,omitempty"`
