@@ -1652,7 +1652,36 @@ func TestGetMonitoring_UnusableRateLimitWindowStaysEmpty(t *testing.T) {
 			if got := row["five_hour"]; got != nil {
 				t.Errorf("five_hour = %v, want nil for unusable window", got)
 			}
+			if got := row["seven_day"]; got != nil {
+				t.Errorf("seven_day = %v, want nil when every window is unusable", got)
+			}
 		})
+	}
+}
+
+func TestGetMonitoring_EqualRateLimitCandidatesKeepExistingWindow(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(), telemetry: newMemStore(), gauge: newMemStore()}
+	for _, id := range []string{"a-session", "b-session"} {
+		m := fullMember(id)
+		m.RoleKey = "builder"
+		m.Runtime = RuntimeCodex
+		if err := s.dal.PutMember(m); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+	}
+	resetAt := nowSecs() + 3600
+	for id, used := range map[string]int{"a-session": 40, "b-session": 66} {
+		if rec := doIngestTelemetry(s, id, "m-seth-m5", fmt.Sprintf(`{"runtime":"codex","account":"codex:seth","rate_limits":{"five_hour":{"used_percentage":%d,"resets_at":%g}}}`, used, resetAt)); rec.Code != 200 {
+			t.Fatalf("ingest %s: %d %s", id, rec.Code, rec.Body.String())
+		}
+		entry := s.telemetry.Get(id)
+		entry["rate_limits_ts"] = 100.0
+		s.telemetry.Set(id, entry)
+	}
+	row := accountRow(t, monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"})), "codex:seth")
+	fiveHour, ok := row["five_hour"].(map[string]any)
+	if !ok || fiveHour["used_pct"] != 40.0 {
+		t.Errorf("five_hour = %v, want the existing candidate", row["five_hour"])
 	}
 }
 
