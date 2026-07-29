@@ -12,8 +12,9 @@
 # bin/ci-cloud.sh; that script is the single definition of the subset, so the
 # cloud check cannot grow a second, drifting list. What stays LOCAL-ONLY:
 # Playwright CT (real-browser layout — font/rasterisation差異 makes a runner red
-# for the wrong reason), gitleaks + path denylist, and e2e_test (real fleet
-# host). The cloud check is a cross-check on a clean Linux box, NOT land
+# for the wrong reason), the content-level gitleaks scan, and real-fleet e2e.
+# The path denylist plus e2e_test's hermetic isolation-guard suite run in cloud.
+# The cloud check is a cross-check on a clean Linux box, NOT land
 # authority. Runs, in order, failing
 # fast on the first non-zero step:
 #   1. golang            — gofmt + go vet + go build + committed-prebuilt
