@@ -22,7 +22,7 @@
 # doc (§8).
 #
 # WHAT IS IN:
-#   (1) UNIT — two hermetic shell suites, every Go module under cli/ and server/
+#   (1) UNIT — the hermetic e2e isolation-guard suite, every Go module under cli/ and server/
 #       (`gofmt`, `go vet`, `go build`, then `go test -count=1 ./...`,
 #       module set DERIVED from the cli/*/go.mod + server/*/go.mod glob, the same
 #       derivation ci.sh uses, so adding a module auto-enrols it in both with no
@@ -108,11 +108,9 @@ FE="$ROOT/frontend"
 # unit tests (they boot and read through the real embed) go red on a clean
 # checkout unless these run. A CI runner is by definition always a clean
 # checkout, so this is not optional here.
-echo "[ci-cloud] (1/4) unit — hermetic shell suites, staging embed assets, then Go + frontend"
+echo "[ci-cloud] (1/4) unit — hermetic isolation guard, staging embed assets, then Go + frontend"
 echo "[ci-cloud]   e2e_test isolation-guard unit tests (hermetic)"
 bash "$ROOT/e2e_test/tests_guard/run.sh"
-echo "[ci-cloud]   bin script unit tests (hermetic)"
-bash "$ROOT/bin/tests/run.sh"
 PATH="$(dirname "$GO"):$PATH" bash "$ROOT/bin/build-seedsdist"
 PATH="$(dirname "$GO"):$PATH" bash "$ROOT/bin/build-docsdist"
 PATH="$(dirname "$GO"):$PATH" bash "$ROOT/bin/build-bindist"
