@@ -1210,8 +1210,8 @@ func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
 // table does not cover means the table is now wrong too.
 // Callers hold s.outsourceMu.
 func (s *apiServer) workerHasStateToFlush(w OutsourceWorker) bool {
-	collectedThisEpoch := w.RefocusSince > 0.0 && w.StoppedSince > 0.0
-	return w.Status == WorkerStatusActive && !collectedThisEpoch && s.hub.IsOnline(w.ID)
+	return w.Status == WorkerStatusActive &&
+		hasUncollectedOnlineOwnerOpState(w.RefocusSince, w.StoppedSince, s.hub.IsOnline(w.ID))
 }
 
 // openOwnerOpHandover puts an owner verb through the graceful wind-down: stamp a

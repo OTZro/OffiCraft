@@ -2267,7 +2267,7 @@ type ServerInterface interface {
 	// MCP JSON-RPC transport (tools/list + tools/call over the routes).
 	// (POST /api/mcp)
 	HandleMcpApiMcpPost(w http.ResponseWriter, r *http.Request)
-	// List the owner's roster (presence-derived MemberDTO[]).
+	// List members, including outsource members by default; fields=light preserves kind.
 	// (GET /api/members)
 	HandleListMembersApiMembersGet(w http.ResponseWriter, r *http.Request, params HandleListMembersApiMembersGetParams)
 	// Hire a member (server mints the id). Pure seam, no UI (§9.1).

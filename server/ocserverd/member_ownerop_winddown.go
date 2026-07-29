@@ -115,8 +115,11 @@ func (s *apiServer) memberHasStateToFlush(m Member) bool {
 	if m.DesiredState != DesiredStateOnline {
 		return false
 	}
-	collectedThisEpoch := m.RefocusSince > 0.0 && m.StoppedSince > 0.0
-	return !collectedThisEpoch && s.hub.IsOnline(m.ID)
+	return hasUncollectedOnlineOwnerOpState(m.RefocusSince, m.StoppedSince, s.hub.IsOnline(m.ID))
+}
+
+func hasUncollectedOnlineOwnerOpState(refocusSince, stoppedSince float64, online bool) bool {
+	return online && !(refocusSince > 0.0 && stoppedSince > 0.0)
 }
 
 // armMemberOwnerOpHandover stamps a FRESH refocus epoch on the member when

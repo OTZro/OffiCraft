@@ -272,7 +272,7 @@
       "name": "upgrade_station"
     },
     {
-      "description": "List the owner's roster (presence-derived MemberDTO[]).",
+      "description": "List all members, including outsource members by default. fields=light preserves kind for every row (presence-derived MemberDTO[]).",
       "inputSchema": {
         "properties": {},
         "type": "object"

@@ -173,7 +173,7 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
   // codename, then the raw id / no role, never fabricate.
   function whoOf(card: ReplyCard): { name: string; role: string } {
     const m = members.find((x) => x.id === card.from);
-    if (!m) {
+    if (!m || m.kind === "outsource") {
       const cn = codenames.get(card.from);
       return { name: cn ? msg.outsourceLabel(cn) : card.from, role: "" };
     }
@@ -210,7 +210,9 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
   // since there was never a chat selected to return to. The marker tells
   // OfficePage's 返回 to land back on THIS page instead.
   function openProfile(card: ReplyCard) {
-    const isRosterMember = members.some((m) => m.id === card.from);
+    const isRosterMember = members.some(
+      (m) => m.id === card.from && m.kind === "assistant",
+    );
     setRoute(
       isRosterMember
         ? { page: "office", detailId: card.from, backTo: "replies" }
@@ -307,16 +309,17 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
     expirable = false
   ) {
     const who = whoOf(card);
+    const asker = members.find((x) => x.id === card.from);
     return (
       <header className="reply-card__head">
         <ReplyCardAvatarButton
           onClick={() => openProfile(card)}
           src={
-            members.find((x) => x.id === card.from)?.avatarUrl ??
+            (asker?.kind === "outsource" ? undefined : asker?.avatarUrl) ??
             workerAvatarUrls.get(card.from)
           }
           kind={avatarKindForMember(
-            members.find((x) => x.id === card.from) ?? { id: card.from }
+            asker ?? { id: card.from }
           )}
         />
         <div className="reply-card__who">

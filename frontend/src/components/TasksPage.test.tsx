@@ -26,6 +26,7 @@ import { TasksPage } from "./TasksPage";
 import {
   __resetMock,
   __injectMockTask,
+  __injectMockMember,
   __injectMockOutsourceWorker,
   __injectMockTaskType,
   __injectMockReplyCard,
@@ -1062,6 +1063,25 @@ describe("TasksPage filter enhancements (T-be18)", () => {
     await waitFor(() => expect(optOf("mira")).not.toBeNull());
     expect(optOf("outsource")).toBeNull();
     expect(optOf("unassigned")).toBeNull();
+  });
+
+  it("never offers an outsource row as a member executor filter", async () => {
+    // GET /api/members now includes this row.  Give it a matching task count so
+    // the zero-count hiding rule cannot mask a missing kind allowlist.
+    __injectMockMember({ id: "ow-filter", kind: "outsource", name: "X-9" });
+    __injectMockTask(
+      mkTask({ title: "正職任務", executorId: "mira", status: "in_progress" })
+    );
+    __injectMockTask(
+      mkTask({ title: "外包不該成為選項", executorId: "ow-filter", status: "in_progress" })
+    );
+
+    const { findByTestId } = renderPage();
+    fireEvent.click(await findByTestId("filter-executor"));
+    await waitFor(() =>
+      expect(document.querySelector('[data-testid="filter-executor-opt-mira"]')).not.toBeNull()
+    );
+    expect(document.querySelector('[data-testid="filter-executor-opt-ow-filter"]')).toBeNull();
   });
 
   it("keeps a checked executor visible when its count drops to 0, and drops it once unchecked", async () => {

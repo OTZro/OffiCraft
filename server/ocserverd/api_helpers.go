@@ -306,7 +306,8 @@ func (s *apiServer) newMemberDTO(m Member, roleName, observedMachine string, unr
 // — presence (hub), machine (observed host), unread_count (chat watermark) —
 // is left HONEST-EMPTY: not computed here, so a light consumer must not read
 // it. last_op* is likewise dropped (row text the identity view never shows),
-// which is where most of the per-member byte weight goes.
+// which is where most of the per-member byte weight goes. Kind remains present
+// for outsource rows returned by ListMembersIncludingOutsource.
 func (s *apiServer) newMemberLightDTO(m Member, roleName string) memberDTO {
 	return memberDTO{
 		ID:            m.ID,

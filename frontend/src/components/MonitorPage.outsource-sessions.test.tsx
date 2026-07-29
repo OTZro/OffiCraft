@@ -116,6 +116,32 @@ describe("MonitorPage AI Sessions — outsource workers", () => {
     expect(cells.queryByText("外包")).toBeNull();
   });
 
+  it("does not also render an outsource roster row as a salaried AI session", async () => {
+    // The member-list contract now includes ow-* rows, but this table has its
+    // own worker lane below and must not duplicate or reclassify them.
+    listMembers.mockResolvedValue([
+      {
+        id: "mira", memberId: "mira", name: "Mira", role: "assistant", roleName: "", kind: "assistant",
+        status: "online", lifecycle: "online", model: "", effort: "medium", runtime: "claude",
+        machine: "mbp5", desiredMachineId: "mbp5", account: "", contextPct: null, estimatedCost: null, bankedCost: null,
+        tmuxSession: "", refocusSince: null, lastOp: "", lastOpOk: null, lastOpLog: "", lastOpAt: null, unreadCount: 0,
+      } as Member,
+      {
+        id: "ow-in-list", memberId: "ow-in-list", name: "O-12", role: "", roleName: "", kind: "outsource",
+        status: "online", lifecycle: "online", model: "", effort: "medium", runtime: "codex",
+        machine: "mbp5", desiredMachineId: "mbp5", account: "", contextPct: null, estimatedCost: null, bankedCost: null,
+        tmuxSession: "", refocusSince: null, lastOp: "", lastOpOk: null, lastOpLog: "", lastOpAt: null, unreadCount: 0,
+      } as Member,
+    ]);
+    getMonitoring.mockResolvedValue({
+      accounts: [], machines: [], sessions: [session(), session({ id: "ow-in-list", name: "O-12" })],
+    });
+    renderMonitor();
+
+    expect(await screen.findByText("Eva")).toBeTruthy();
+    expect(screen.queryByText("O-12")).toBeNull();
+  });
+
   it("shows an honest dash for every column the worker never reported", async () => {
     listOutsourceWorkers.mockResolvedValue([
       worker({

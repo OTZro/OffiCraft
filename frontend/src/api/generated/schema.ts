@@ -1164,7 +1164,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List the owner's roster (presence-derived MemberDTO[]).
+         * List members, including outsource members by default; fields=light preserves kind.
          * @description List the owner's roster (§3.4 #8). Soft-removed members are omitted (the
          *     audit row survives). ``online`` is the live SSE-connection projection
          *     (``hub.online_members``) — the single online source, not the durable field.

@@ -258,6 +258,48 @@ def _nonempty_list(_ctx: HCtx, r: httpx.Response) -> None:
     assert isinstance(r.json(), list) and r.json(), "expected a non-empty list"
 
 
+def test_members_default_includes_outsource_workers_and_light_preserves_kind(
+    client, owner_token, hctx, fresh_machine
+):
+    before = client.get("/api/members", headers=_auth(owner_token))
+    assert before.status_code == 200, before.text
+    before_ids = {member["id"] for member in before.json()}
+
+    created = client.post(
+        "/api/tasks",
+        json={
+            "title": f"member-list-guard-{uuid.uuid4().hex[:8]}",
+            "executor_member_id": hctx.agent.member_id,
+        },
+        headers=_auth(hctx.agent.token),
+    )
+    assert created.status_code == 200, created.text
+    task_id = created.json()["task"]["id"]
+    reassigned = client.post(
+        f"/api/tasks/{task_id}/reassign",
+        json={"target": {"kind": "outsource", "machine": fresh_machine()}},
+        headers=_auth(owner_token),
+    )
+    assert reassigned.status_code == 200, reassigned.text
+    assert reassigned.json()["executor_id"] == ""
+
+    members = client.get("/api/members", headers=_auth(owner_token))
+    assert members.status_code == 200, members.text
+    workers = [
+        member
+        for member in members.json()
+        if member["id"].startswith("ow-") and member["id"] not in before_ids
+    ]
+    assert len(workers) == 1
+    assert workers[0]["kind"] == "outsource"
+    worker_id = workers[0]["id"]
+
+    light = client.get("/api/members?fields=light", headers=_auth(owner_token))
+    assert light.status_code == 200, light.text
+    light_worker = next(member for member in light.json() if member["id"] == worker_id)
+    assert light_worker["kind"] == "outsource"
+
+
 def _happy_card(ctx: HCtx) -> str:
     """A fresh WAITING reply card opened by the happy agent (the real
     initiator identity: agents open cards, owners answer them)."""
