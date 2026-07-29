@@ -887,7 +887,7 @@ if [[ -n "$NS" && -f "$NS_CFG" ]]; then
   fi
 fi
 
-for b in ocserverd ocwarden ocagent; do
+for b in ocserverd ocwarden ocagent officraft; do
   if [[ ! -f "$HERE/$b" ]]; then
     echo "[install] FATAL: $b missing next to install.sh — run this from the unpacked release directory." >&2
     exit 1
@@ -1065,7 +1065,7 @@ fi
 
 echo "[install] installing binaries → $BIN_DIR"
 mkdir -p "$BIN_DIR"
-for b in ocserverd ocwarden ocagent; do
+for b in ocserverd ocwarden ocagent officraft; do
   # copy-then-rename, so a running old binary is never truncated.
   cp "$HERE/$b" "$BIN_DIR/$b.new"
   chmod +x "$BIN_DIR/$b.new"
