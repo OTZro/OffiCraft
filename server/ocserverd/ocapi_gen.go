@@ -733,6 +733,9 @@ type MemberDTO struct {
 	// ActivationPending Set true ONLY on the activate response when the decided START could not be delivered to the target warden (no live SSE downstream) — the wake intent is persisted and the reconcile cadence retries, but nothing has been dispatched yet. Absent/null on every other member read. The activate twin of ``relocation_pending``: without it an activate against an unreachable warden returns a clean 200 with zero signal, which is indistinguishable from a wake that actually started (T-ba62 additive-optional).
 	ActivationPending *bool `json:"activation_pending,omitempty"`
 
+	// ActualModel The model reported by the member's current or most recent successful boot. Empty means the member has never reported a model; it is separate from the owner-configured `model` launch setting.
+	ActualModel *string `json:"actual_model,omitempty"`
+
 	// AvatarUrl Authenticated URL of this stable member id's personal raster avatar. Empty means no personal image; clients fall back to the active theme's role avatar, then the built-in glyph. Additive-optional for older clients.
 	AvatarUrl        *string  `json:"avatar_url,omitempty"`
 	DesiredMachineId *string  `json:"desired_machine_id,omitempty"`
@@ -1158,9 +1161,8 @@ type ReplyCardListItemDTO struct {
 // ReportWakingDTO Body for “report_waking()“ — the boot report (identity from token, NO
 // member_id). Stamps the CALLER's “waking_since“ and clears the recycle markers.
 //
-// “model“ is OPTIONAL and accepted for API compatibility. Its value is ignored: the
-// owner-configured model remains authoritative and cannot be changed by a caller's
-// wake report.
+// “model“ is OPTIONAL runtime telemetry. The server stores it separately as
+// “actual_model“; it never changes the owner-configured launch model.
 type ReportWakingDTO struct {
 	Model *string `json:"model,omitempty"`
 }

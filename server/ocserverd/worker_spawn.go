@@ -1569,12 +1569,12 @@ func (s *apiServer) resolveLiveWorker(id string) (*OutsourceWorker, error) {
 }
 
 // workerReportWaking is report_waking for a kind='outsource' caller: clear the
-// recycle markers (the durable loop-break, member parity). model is accepted
-// for wire compatibility but must not overwrite the owner-configured model.
+// recycle markers (the durable loop-break, member parity). The boot-reported
+// model is runtime telemetry, stored separately from the owner configuration.
 // waking_since itself is NOT carried on the worker vocabulary —
 // the worker's observable wake signal stays the get_my_task claim. Takes
 // s.outsourceMu.
-func (s *apiServer) workerReportWaking(id string, _ *string, trigger string) (*Member, error) {
+func (s *apiServer) workerReportWaking(id string, model *string, trigger string) (*Member, error) {
 	s.outsourceMu.Lock()
 	defer s.outsourceMu.Unlock()
 	w, err := s.resolveLiveWorker(id)
@@ -1585,6 +1585,9 @@ func (s *apiServer) workerReportWaking(id string, _ *string, trigger string) (*M
 	w.StoppingSince = 0.0
 	w.StoppedSince = 0.0
 	m := memberFromWorker(*w)
+	if model != nil {
+		m.ActualModel = *model
+	}
 	if err := s.putMember(m, trigger); err != nil {
 		return nil, err
 	}

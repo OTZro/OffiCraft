@@ -126,6 +126,7 @@ type memberDTO struct {
 	RoleName          string  `json:"role_name"`
 	Runtime           string  `json:"runtime"`
 	Model             string  `json:"model"`
+	ActualModel       string  `json:"actual_model"`
 	Effort            string  `json:"effort"`
 	DesiredState      string  `json:"desired_state"`
 	DesiredMachineID  string  `json:"desired_machine_id"`
