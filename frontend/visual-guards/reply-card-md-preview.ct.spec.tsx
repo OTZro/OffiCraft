@@ -12,14 +12,14 @@ import { test, expect } from "@playwright/experimental-ct-react";
 import { ReplyCardMdPreviewStory } from "./stories/ReplyCardMdPreviewStory";
 
 for (const width of [390, 1280]) {
-  test(`width ${width}: the .md chip renders as a <button>, the .pdf chip stays an <a>`, async ({
+  test(`width ${width}: every stored file chip opens the common popup`, async ({
     mount,
     page,
   }) => {
     await page.setViewportSize({ width, height: 800 });
     const cmp = await mount(<ReplyCardMdPreviewStory />);
-    await expect(cmp.locator("button.chat__msg-file")).toHaveCount(1);
-    await expect(cmp.locator("a.chat__msg-file")).toHaveCount(1);
+    await expect(cmp.locator("button.chat__msg-file")).toHaveCount(2);
+    await expect(cmp.locator("a.chat__msg-file")).toHaveCount(0);
   });
 
   test(`width ${width}: clicking the .md chip opens the overlay and renders the markdown body`, async ({
@@ -28,7 +28,7 @@ for (const width of [390, 1280]) {
   }) => {
     await page.setViewportSize({ width, height: 800 });
     const cmp = await mount(<ReplyCardMdPreviewStory />);
-    await cmp.locator("button.chat__msg-file").click();
+    await cmp.getByRole("button", { name: "design-proposal.md" }).click();
     const panel = cmp.locator(".md-preview__panel");
     await expect(panel).toBeVisible();
     await expect(
@@ -48,7 +48,7 @@ for (const width of [390, 1280]) {
   }) => {
     await page.setViewportSize({ width, height: 800 });
     const cmp = await mount(<ReplyCardMdPreviewStory />);
-    const btn = cmp.locator("button.chat__msg-file");
+    const btn = cmp.getByRole("button", { name: "design-proposal.md" });
 
     // Tab order: [.md chip button][.pdf chip <a>] — the story mounts the .md
     // attachment FIRST, so the button is the FIRST tab stop now (no separate
@@ -70,7 +70,7 @@ test("the .md chip's accessible name is the VISIBLE filename text (no aria-label
   mount,
 }) => {
   const cmp = await mount(<ReplyCardMdPreviewStory />);
-  const btn = cmp.locator("button.chat__msg-file");
+  const btn = cmp.getByRole("button", { name: "design-proposal.md" });
   const ariaLabel = await btn.getAttribute("aria-label");
   expect(ariaLabel).toBeNull();
   await expect(

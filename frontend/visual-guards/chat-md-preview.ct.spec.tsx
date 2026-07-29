@@ -11,14 +11,14 @@ import { test, expect } from "@playwright/experimental-ct-react";
 import { ChatMdPreviewStory } from "./stories/ChatMdPreviewStory";
 
 for (const width of [390, 1280]) {
-  test(`width ${width}: the .md chip renders as a <button>, the .pdf chip stays an <a>`, async ({
+  test(`width ${width}: every stored file chip opens the common popup`, async ({
     mount,
     page,
   }) => {
     await page.setViewportSize({ width, height: 800 });
     const cmp = await mount(<ChatMdPreviewStory />);
-    await expect(cmp.locator("button.chat__msg-file")).toHaveCount(1);
-    await expect(cmp.locator("a.chat__msg-file")).toHaveCount(1);
+    await expect(cmp.locator("button.chat__msg-file")).toHaveCount(2);
+    await expect(cmp.locator("a.chat__msg-file")).toHaveCount(0);
   });
 
   test(`width ${width}: clicking the .md chip opens the overlay`, async ({

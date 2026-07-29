@@ -267,7 +267,7 @@ test("Esc closes the popover (T-49fb)", async ({ mount, page }) => {
   await expect(cmp.locator(".task-artifacts")).toHaveCount(0);
 });
 
-test("opening the image Lightbox does not dismiss the popover (T-49fb)", async ({ mount, page }) => {
+test("opening the shared attachment popup does not dismiss the popover (T-49fb)", async ({ mount, page }) => {
   // The portal trap: if the Lightbox / MarkdownPreviewOverlay were portalled to
   // <body>, a `contains()`-based outside check would call them "outside" and
   // clicking a thumbnail or 預覽 would kill the popover under them. They render
@@ -280,12 +280,12 @@ test("opening the image Lightbox does not dismiss the popover (T-49fb)", async (
   await expect(popover).toBeVisible();
 
   await cmp.locator(".task-artifacts__thumb").click();
-  await expect(cmp.locator(".chat__lightbox")).toBeVisible();
+  await expect(cmp.locator(".md-preview")).toBeVisible();
   await expect(popover).toBeVisible();
 
-  // Dismissing the Lightbox by its own backdrop leaves the popover standing.
-  await cmp.locator(".chat__lightbox").click({ position: { x: 5, y: 5 } });
-  await expect(cmp.locator(".chat__lightbox")).toHaveCount(0);
+  // Dismissing the popup by its own backdrop leaves the popover standing.
+  await cmp.locator(".md-preview").click({ position: { x: 5, y: 5 } });
+  await expect(cmp.locator(".md-preview")).toHaveCount(0);
   await expect(popover).toBeVisible();
 
   // Same contract for the .md 預覽 overlay — the other in-popover overlay.
