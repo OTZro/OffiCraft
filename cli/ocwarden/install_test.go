@@ -250,7 +250,7 @@ func TestRenderPlist_SubstitutesAndIsWellFormed(t *testing.T) {
 	p := wardenPaths{
 		root: "/repo", home: "/Users/seth", ocBase: "http://127.0.0.1:7755",
 		tokfile: "/Users/seth/.officraft/exec-warden.tok",
-		logDir:  "/repo/var/log", binPath: "/repo/bin/ocwarden",
+		logDir:  "/repo/var/log", binPath: "/repo/bin/ocwarden", anchorPath: "/repo/bin/officraft",
 	}
 	out := renderPlist(p)
 	if err := xmlWellFormed(out); err != nil {
@@ -263,7 +263,7 @@ func TestRenderPlist_SubstitutesAndIsWellFormed(t *testing.T) {
 	}
 	must := []string{
 		"<string>com.officraft.ocwarden</string>",
-		"<array><string>/repo/bin/ocwarden</string><string>run</string></array>",
+		"<array><string>/repo/bin/officraft</string></array>",
 		"<key>OC_BASE</key><string>http://127.0.0.1:7755</string>",
 		"<key>HOME</key><string>/Users/seth</string>",
 		"<key>OC_WARDEN_TOKFILE</key><string>/Users/seth/.officraft/exec-warden.tok</string>",
@@ -295,6 +295,7 @@ func fixedPaths() wardenPaths {
 		laDir:     "/h/Library/LaunchAgents",
 		plistPath: "/h/Library/LaunchAgents/com.officraft.ocwarden.plist",
 		logDir:    "/h/.officraft/warden/log", binPath: "/h/.officraft/warden/ocwarden",
+		anchorSrc: "/tmp/officraft", anchorPath: "/h/.officraft/warden/officraft",
 		guiDomain: "gui/501",
 	}
 }
@@ -586,6 +587,26 @@ func TestCopyBinary_DryRunCopiesNothing(t *testing.T) {
 	}
 	if len(f.writes) != 0 || len(f.renames) != 0 || len(f.mkdirs) != 0 {
 		t.Errorf("dry-run must not copy; got writes=%v renames=%v mkdirs=%v", f.writes, f.renames, f.mkdirs)
+	}
+}
+
+func TestCopyAnchorIfAbsentWritesOnceAndNeverReplaces(t *testing.T) {
+	f := newFakeSys()
+	p := fixedPaths()
+	f.existing[p.anchorSrc] = []byte("FIXED-ANCHOR")
+	i := &installer{out: io.Discard, sys: f.ops()}
+	if err := i.copyAnchorIfAbsent(p); err != nil {
+		t.Fatalf("first install: %v", err)
+	}
+	if got := string(f.writes[p.anchorPath]); got != "FIXED-ANCHOR" {
+		t.Fatalf("anchor = %q, want fixed source bytes", got)
+	}
+	firstWrites := len(f.writes)
+	if err := i.copyAnchorIfAbsent(p); err != nil {
+		t.Fatalf("second install: %v", err)
+	}
+	if len(f.writes) != firstWrites || len(f.renames) != 0 {
+		t.Fatalf("existing anchor must never be replaced: writes=%v renames=%v", f.writes, f.renames)
 	}
 }
 

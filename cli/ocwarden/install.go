@@ -302,18 +302,20 @@ type wardenPaths struct {
 	// the launchd label derived from it (wardenLabelFor); the zero value falls
 	// back to the canonical wardenLabel (labelOrDefault) so hand-built fixtures
 	// keep their historical meaning.
-	namespace string
-	label     string
-	srcExe    string // the running binary to copy from (symlinks already resolved)
-	ocBase    string
-	ocToken   string
-	ocID      string // optional display id; server derives from token sub if empty
-	tokfile   string
-	laDir     string
-	plistPath string
-	logDir    string
-	binPath   string // STABLE home install target = $HOME/.officraft/warden/ocwarden
-	guiDomain string // gui/<uid>
+	namespace  string
+	label      string
+	srcExe     string // the running binary to copy from (symlinks already resolved)
+	ocBase     string
+	ocToken    string
+	ocID       string // optional display id; server derives from token sub if empty
+	tokfile    string
+	laDir      string
+	plistPath  string
+	logDir     string
+	binPath    string // STABLE home install target = $HOME/.officraft/warden/ocwarden
+	anchorSrc  string // fixed launcher shipped beside the running ocwarden
+	anchorPath string // NEVER-replaced TCC identity anchor under the stable home
+	guiDomain  string // gui/<uid>
 	// ocAgentSrc is an OPTIONAL install-time LOCAL OVERRIDE (from OC_AGENT_BIN env) for
 	// the ocagent binary. When set, installOcAgent copies THIS local file to ocAgentBin
 	// (dev/test/in-tree, no server needed). When EMPTY (the DEFAULT + production path),
@@ -428,6 +430,8 @@ func resolvePaths(env func(string) string, exe string, uid int) (wardenPaths, er
 		plistPath:  filepath.Join(home, "Library", "LaunchAgents", label+".plist"),
 		logDir:     filepath.Join(root, "warden", "log"),      // $HOME/.officraft/warden/log
 		binPath:    filepath.Join(root, "warden", "ocwarden"), // $HOME/.officraft/warden/ocwarden
+		anchorSrc:  filepath.Join(filepath.Dir(exe), "officraft"),
+		anchorPath: filepath.Join(root, "warden", "officraft"),
 		guiDomain:  fmt.Sprintf("gui/%d", uid),
 		ocAgentSrc: ocAgentSrc,
 		ocAgentBin: filepath.Join(root, "warden", "ocagent"), // sibling of ocwarden (home copy)
@@ -464,7 +468,7 @@ const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 <dict>
     <key>Label</key><string>%[7]s</string>
     <key>ProgramArguments</key>
-    <array><string>%[2]s</string><string>run</string></array>
+    <array><string>%[2]s</string></array>
     <key>WorkingDirectory</key><string>%[1]s</string>
     <key>EnvironmentVariables</key>
     <dict>
@@ -507,7 +511,7 @@ func renderPlist(p wardenPaths) string {
 	if pathVal == "" {
 		pathVal = wardenPlistPATH
 	}
-	return fmt.Sprintf(plistTemplate, p.root, p.binPath, p.ocBase, p.home, p.tokfile, p.logDir, p.labelOrDefault(), extraEnv, xmlEscape(pathVal), xmlCommentSafe(p.root))
+	return fmt.Sprintf(plistTemplate, p.root, p.anchorPath, p.ocBase, p.home, p.tokfile, p.logDir, p.labelOrDefault(), extraEnv, xmlEscape(pathVal), xmlCommentSafe(p.root))
 }
 
 // relayedCredCheck returns the OC_CLAUDE_CRED_CHECK value to stamp into the
@@ -722,6 +726,37 @@ func (i *installer) copyBinary(p wardenPaths) error {
 		return fmt.Errorf("atomic rename binary -> %s: %w", p.binPath, err)
 	}
 	i.logf("installed binary (0755): %s", p.binPath)
+	return nil
+}
+
+// copyAnchorIfAbsent installs the fixed TCC identity launcher exactly once.
+// Replacing even identical bytes changes the inode and can invalidate TCC's
+// grant, so an existing anchor is always preserved.
+func (i *installer) copyAnchorIfAbsent(p wardenPaths) error {
+	if _, err := i.sys.readFile(p.anchorPath); err == nil {
+		i.logf("fixed identity anchor already exists; preserving %s", p.anchorPath)
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("check fixed identity anchor %s: %w", p.anchorPath, err)
+	}
+	if i.dryRun {
+		i.logf("DRYRUN would: copy fixed identity anchor %s -> %s only if absent", p.anchorSrc, p.anchorPath)
+		return nil
+	}
+	if err := i.sys.mkdirAll(filepath.Dir(p.anchorPath), 0o755); err != nil {
+		return fmt.Errorf("mkdir anchor dir %s: %w", filepath.Dir(p.anchorPath), err)
+	}
+	data, err := i.sys.readFile(p.anchorSrc)
+	if err != nil {
+		return fmt.Errorf("read fixed identity anchor %s: %w", p.anchorSrc, err)
+	}
+	if err := i.sys.writeFile(p.anchorPath, data, 0o755); err != nil {
+		return fmt.Errorf("write fixed identity anchor %s: %w", p.anchorPath, err)
+	}
+	if err := i.sys.chmod(p.anchorPath, 0o755); err != nil {
+		return fmt.Errorf("chmod fixed identity anchor %s: %w", p.anchorPath, err)
+	}
+	i.logf("installed fixed identity anchor (0755): %s", p.anchorPath)
 	return nil
 }
 
@@ -1069,6 +1104,9 @@ func (i *installer) runInstall(p wardenPaths) error {
 		return err
 	}
 	if err := i.copyBinary(p); err != nil {
+		return err
+	}
+	if err := i.copyAnchorIfAbsent(p); err != nil {
 		return err
 	}
 	if err := i.installOcAgent(p); err != nil {
