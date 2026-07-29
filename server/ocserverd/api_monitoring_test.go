@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -1582,6 +1583,71 @@ func TestGetMonitoring_NewerWindowBeatsNewerRateLimitSnapshot(t *testing.T) {
 	}
 	if got := sevenDay["resets_at"]; got != 1785903125.0 {
 		t.Errorf("seven_day.resets_at = %v, want 1785903125 from the current window", got)
+	}
+}
+
+func TestGetMonitoring_PartialRateLimitSnapshotsChooseEachWindowIndependently(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	for _, id := range []string{"full-snapshot", "five-hour-snapshot"} {
+		m := fullMember(id)
+		m.RoleKey = "builder"
+		m.Runtime = RuntimeCodex
+		if err := s.dal.PutMember(m); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+	}
+	now := nowSecs()
+	if rec := doIngestTelemetry(s, "full-snapshot", "m-seth-m5", fmt.Sprintf(`{"runtime":"codex","account":"codex:seth",`+
+		`"rate_limits":{"five_hour":{"used_percentage":66,"resets_at":%g},`+
+		`"seven_day":{"used_percentage":66,"resets_at":%g}}}`,
+		now+1800, now+WindowSeconds["seven_day"]-1800)); rec.Code != 200 {
+		t.Fatalf("full snapshot ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doIngestTelemetry(s, "five-hour-snapshot", "m-seth-m5", fmt.Sprintf(`{"runtime":"codex","account":"codex:seth",`+
+		`"rate_limits":{"five_hour":{"used_percentage":40,"resets_at":%g}}}`,
+		now+3600)); rec.Code != 200 {
+		t.Fatalf("five-hour snapshot ingest: %d %s", rec.Code, rec.Body.String())
+	}
+
+	row := accountRow(t, monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"})), "codex:seth")
+	fiveHour, ok := row["five_hour"].(map[string]any)
+	if !ok || fiveHour["used_pct"] != 40.0 {
+		t.Errorf("five_hour = %v, want the newer five-hour window", row["five_hour"])
+	}
+	sevenDay, ok := row["seven_day"].(map[string]any)
+	if !ok || sevenDay["used_pct"] != 66.0 {
+		t.Errorf("seven_day = %v, want the only reported seven-day window", row["seven_day"])
+	}
+}
+
+func TestGetMonitoring_UnusableRateLimitWindowStaysEmpty(t *testing.T) {
+	now := nowSecs()
+	cases := map[string]string{
+		"missing":    `{}`,
+		"nonnumeric": `{"five_hour":{"used_percentage":40,"resets_at":"bad"}}`,
+		"zero":       `{"five_hour":{"used_percentage":40,"resets_at":0}}`,
+		"expired":    fmt.Sprintf(`{"five_hour":{"used_percentage":40,"resets_at":%g}}`, now-1),
+		"too future": fmt.Sprintf(`{"five_hour":{"used_percentage":40,"resets_at":%g}}`, now+WindowSeconds["five_hour"]+1),
+	}
+	for name, rateLimits := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+				telemetry: newMemStore(), gauge: newMemStore()}
+			m := fullMember("session")
+			m.RoleKey = "builder"
+			m.Runtime = RuntimeCodex
+			if err := s.dal.PutMember(m); err != nil {
+				t.Fatalf("seed member: %v", err)
+			}
+			if rec := doIngestTelemetry(s, "session", "m-seth-m5", `{"runtime":"codex","account":"codex:seth","rate_limits":`+rateLimits+`}`); rec.Code != 200 {
+				t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+			}
+			row := accountRow(t, monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"})), "codex:seth")
+			if got := row["five_hour"]; got != nil {
+				t.Errorf("five_hour = %v, want nil for unusable window", got)
+			}
+		})
 	}
 }
 
