@@ -423,6 +423,10 @@ var authzOutsideRouteTable = map[string]string{
 		"Admin+ writes any role; a plain agent writes only its OWN role (roster row's " +
 		"role_key vs path role_key). A per-caller/per-target comparison the route table " +
 		"has no column for. Pinned by api_lessons_admin_authz_t5336_test.go.",
+	"api_document_history.go :: documentHistoryAllowed :: principalAtLeast(s.principalOfRequest(r), principalAdminAgent)": "" +
+		"history reads use the machine floor, while restoring global context and role definitions must " +
+		"retain their admin-only write boundary. Lessons restoration delegates to the existing per-role " +
+		"write check; this caller-plus-document-kind decision cannot be expressed by one route floor.",
 	"api_roles.go :: fillLessonsIdentityArgs :: currentScope(r) == \"agent\"": "" +
 		"MCP-side default: an agent omitting role_key means ITS OWN role, resolved from " +
 		"the verified sub — the §14 'identity from auth, never a parameter' rule.",
