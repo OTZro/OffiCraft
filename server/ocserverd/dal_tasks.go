@@ -1014,7 +1014,11 @@ func (d *DAL) GetTaskManual(typeKey string) (*TaskManual, error) {
 
 // PutTaskManual upserts one manual row.
 func (d *DAL) PutTaskManual(m TaskManual) error {
-	_, err := d.db.Exec(`
+	return putTaskManualOn(d.db, m)
+}
+
+func putTaskManualOn(ex sqlExecer, m TaskManual) error {
+	_, err := ex.Exec(`
 		INSERT INTO task_manual (`+taskManualColumns+`)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (type_key) DO UPDATE SET

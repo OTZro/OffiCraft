@@ -439,6 +439,62 @@ type sqlExecer interface {
 	Exec(query string, args ...any) (sql.Result, error)
 }
 
+// DocumentHistory is one immutable pre-write snapshot. ContentJSON deliberately
+// stores the complete editable document so a restore never assembles fields
+// from revisions written at different times.
+type DocumentHistory struct {
+	ID           int64
+	DocumentKind string
+	DocumentKey  string
+	ContentJSON  string
+	CreatedTS    float64
+	ActorID      string
+}
+
+const documentHistoryKeep = 3
+
+// SaveWithDocumentHistory atomically retains the current document (when it is
+// non-empty), writes its replacement, and trims only snapshots older than the
+// newest three. Callers provide the existing document's complete JSON form.
+func (d *DAL) SaveWithDocumentHistory(kind, key, currentJSON, actorID string, write func(sqlExecer) error) error {
+	return d.inTx(func(tx *sql.Tx) error {
+		if currentJSON != "" && currentJSON != "{}" {
+			if _, err := tx.Exec(`INSERT INTO document_history
+				(document_kind, document_key, content_json, created_ts, actor_id)
+				VALUES (?, ?, ?, ?, ?)`, kind, key, currentJSON, nowSecs(), actorID); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`DELETE FROM document_history
+				WHERE document_kind = ? AND document_key = ? AND id NOT IN (
+					SELECT id FROM document_history
+					WHERE document_kind = ? AND document_key = ?
+					ORDER BY id DESC LIMIT ?
+				)`, kind, key, kind, key, documentHistoryKeep); err != nil {
+				return err
+			}
+		}
+		return write(tx)
+	})
+}
+
+func (d *DAL) ListDocumentHistory(kind, key string) ([]DocumentHistory, error) {
+	rows, err := d.db.Query(`SELECT id, document_kind, document_key, content_json, created_ts, actor_id
+		FROM document_history WHERE document_kind = ? AND document_key = ? ORDER BY id DESC`, kind, key)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DocumentHistory
+	for rows.Next() {
+		var h DocumentHistory
+		if err := rows.Scan(&h.ID, &h.DocumentKind, &h.DocumentKey, &h.ContentJSON, &h.CreatedTS, &h.ActorID); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
 // PutChat upserts a chat message.
 func (d *DAL) PutChat(m ChatMessage) error { return putChatOn(d.db, m) }
 
@@ -928,7 +984,11 @@ func (d *DAL) GetUserContext() (*UserContext, error) {
 
 // PutUserContext upserts the single block row.
 func (d *DAL) PutUserContext(uc UserContext) error {
-	_, err := d.db.Exec(`
+	return putUserContextOn(d.db, uc)
+}
+
+func putUserContextOn(ex sqlExecer, uc UserContext) error {
+	_, err := ex.Exec(`
 		INSERT INTO user_context (id, text, tombstoned) VALUES (?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			text = excluded.text, tombstoned = excluded.tombstoned`,
@@ -985,7 +1045,11 @@ func (d *DAL) GetRoleDef(roleKey string) (*RoleDef, error) {
 
 // PutRoleDef upserts a role-definition overlay.
 func (d *DAL) PutRoleDef(rd RoleDef) error {
-	_, err := d.db.Exec(`
+	return putRoleDefOn(d.db, rd)
+}
+
+func putRoleDefOn(ex sqlExecer, rd RoleDef) error {
+	_, err := ex.Exec(`
 		INSERT INTO role_def (role_key, name, definition_md, tombstoned)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT (role_key) DO UPDATE SET
@@ -1038,7 +1102,11 @@ func (d *DAL) GetLessons(roleKey, taskType string) (*Lessons, error) {
 
 // PutLessons upserts a per-role lessons overlay.
 func (d *DAL) PutLessons(l Lessons) error {
-	_, err := d.db.Exec(`
+	return putLessonsOn(d.db, l)
+}
+
+func putLessonsOn(ex sqlExecer, l Lessons) error {
+	_, err := ex.Exec(`
 		INSERT INTO lessons (role_key, task_type, text, tombstoned)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT (role_key, task_type) DO UPDATE SET

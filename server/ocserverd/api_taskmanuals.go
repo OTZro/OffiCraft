@@ -19,6 +19,12 @@ import (
 	"net/http"
 )
 
+func taskManualHistorySnapshot(m TaskManual) (string, error) {
+	return historyJSON(map[string]string{
+		"purpose": m.Purpose, "fields": m.Fields, "sop_md": m.SopMD, "learnings": m.Learnings,
+	})
+}
+
 // resolveTaskManual returns the manual for typeKey (errNotFound when absent).
 func (s *apiServer) resolveTaskManual(typeKey string) (*TaskManual, error) {
 	m, err := s.dal.GetTaskManual(typeKey)
@@ -294,6 +300,7 @@ func (s *apiServer) HandleUpdateTaskManualApiTaskManualsTypeKeyPost(w http.Respo
 		writeResolveError(w, err, "task manual", typeKey)
 		return
 	}
+	before := *m
 	if body.Fields != nil {
 		for _, f := range *body.Fields {
 			if trimString(f.Name) == "" {
@@ -375,7 +382,14 @@ func (s *apiServer) HandleUpdateTaskManualApiTaskManualsTypeKeyPost(w http.Respo
 		m.Assignee = string(blob)
 	}
 	m.UpdatedTS = nowSecs()
-	if err := s.dal.PutTaskManual(*m); err != nil {
+	snapshot, err := taskManualHistorySnapshot(before)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	if err := s.dal.SaveWithDocumentHistory("task_manual", typeKey, snapshot, currentActor(r), func(ex sqlExecer) error {
+		return putTaskManualOn(ex, *m)
+	}); err != nil {
 		internalError(w, err)
 		return
 	}
@@ -430,6 +444,7 @@ func (s *apiServer) HandleWriteTaskLearningsApiTaskManualsTypeKeyLearningsPost(w
 		writeResolveError(w, err, "task manual", typeKey)
 		return
 	}
+	before := *m
 	// Belt to the strict decoder's braces: even a well-formed {"text": ""}
 	// must not silently erase accumulated learnings.
 	if !(body.AllowShrink != nil && *body.AllowShrink) && WholeDocWipeBlocked(m.Learnings, body.Text) {
@@ -446,7 +461,14 @@ func (s *apiServer) HandleWriteTaskLearningsApiTaskManualsTypeKeyLearningsPost(w
 	}
 	m.Learnings = body.Text
 	m.UpdatedTS = nowSecs()
-	if err := s.dal.PutTaskManual(*m); err != nil {
+	snapshot, err := taskManualHistorySnapshot(before)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	if err := s.dal.SaveWithDocumentHistory("task_manual", typeKey, snapshot, currentActor(r), func(ex sqlExecer) error {
+		return putTaskManualOn(ex, *m)
+	}); err != nil {
 		internalError(w, err)
 		return
 	}
@@ -491,6 +513,7 @@ func (s *apiServer) HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchP
 		writeResolveError(w, err, "task manual", typeKey)
 		return
 	}
+	before := *m
 	edits := make([]LessonsEdit, len(body.Edits))
 	for i, e := range body.Edits {
 		// T-2d99 shape (shared with patch_lessons): an edit carrying NEITHER old
@@ -526,7 +549,14 @@ func (s *apiServer) HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchP
 	}
 	m.Learnings = next
 	m.UpdatedTS = nowSecs()
-	if err := s.dal.PutTaskManual(*m); err != nil {
+	snapshot, err := taskManualHistorySnapshot(before)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	if err := s.dal.SaveWithDocumentHistory("task_manual", typeKey, snapshot, currentActor(r), func(ex sqlExecer) error {
+		return putTaskManualOn(ex, *m)
+	}); err != nil {
 		internalError(w, err)
 		return
 	}

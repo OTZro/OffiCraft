@@ -9,10 +9,16 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
 )
+
+func historyJSON(v any) (string, error) {
+	b, err := json.Marshal(v)
+	return string(b), err
+}
 
 // ── user-custom context block ────────────────────────────────────────────────
 
@@ -48,7 +54,19 @@ func (s *apiServer) HandleReplaceGlobalContextApiGlobalContextPost(w http.Respon
 			return
 		}
 	}
-	if err := s.dal.PutUserContext(UserContext{Text: text, Tombstoned: false}); err != nil {
+	current, err := s.foldUserContextDTO()
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	snapshot, err := historyJSON(map[string]string{"text": current.Text})
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	if err := s.dal.SaveWithDocumentHistory("global_context", "global", snapshot, currentActor(r), func(ex sqlExecer) error {
+		return putUserContextOn(ex, UserContext{Text: text, Tombstoned: false})
+	}); err != nil {
 		internalError(w, err)
 		return
 	}
@@ -64,7 +82,19 @@ func (s *apiServer) HandleReplaceGlobalContextApiGlobalContextPost(w http.Respon
 
 // POST /api/global-context/reset — idempotent tombstone back to empty.
 func (s *apiServer) HandleResetGlobalContextApiGlobalContextResetPost(w http.ResponseWriter, r *http.Request) {
-	if err := s.dal.PutUserContext(UserContext{Text: "", Tombstoned: true}); err != nil {
+	current, err := s.foldUserContextDTO()
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	snapshot, err := historyJSON(map[string]string{"text": current.Text})
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	if err := s.dal.SaveWithDocumentHistory("global_context", "global", snapshot, currentActor(r), func(ex sqlExecer) error {
+		return putUserContextOn(ex, UserContext{Text: "", Tombstoned: true})
+	}); err != nil {
 		internalError(w, err)
 		return
 	}
@@ -236,11 +266,18 @@ func (s *apiServer) HandleUpdateRoleApiRolesRolePost(w http.ResponseWriter, r *h
 	if body.DefinitionMd != nil {
 		definitionMD = *body.DefinitionMd
 	}
-	if err := s.dal.PutRoleDef(RoleDef{
-		RoleKey:      role,
-		Name:         name,
-		DefinitionMD: definitionMD,
-		Tombstoned:   false,
+	snapshot, err := historyJSON(map[string]string{"name": current.Name, "definition_md": current.DefinitionMD})
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	if err := s.dal.SaveWithDocumentHistory("role_definition", role, snapshot, currentActor(r), func(ex sqlExecer) error {
+		return putRoleDefOn(ex, RoleDef{
+			RoleKey:      role,
+			Name:         name,
+			DefinitionMD: definitionMD,
+			Tombstoned:   false,
+		})
 	}); err != nil {
 		internalError(w, err)
 		return
@@ -264,7 +301,19 @@ func (s *apiServer) HandleResetRoleApiRolesRoleResetPost(w http.ResponseWriter, 
 		writeError(w, http.StatusNotFound, "role '"+role+"' not found")
 		return
 	}
-	if err := s.dal.PutRoleDef(RoleDef{RoleKey: role, Tombstoned: true}); err != nil {
+	current, err := s.foldRoleDefDTO(role)
+	if err != nil || current == nil {
+		internalError(w, err)
+		return
+	}
+	snapshot, err := historyJSON(map[string]string{"name": current.Name, "definition_md": current.DefinitionMD})
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	if err := s.dal.SaveWithDocumentHistory("role_definition", role, snapshot, currentActor(r), func(ex sqlExecer) error {
+		return putRoleDefOn(ex, RoleDef{RoleKey: role, Tombstoned: true})
+	}); err != nil {
 		internalError(w, err)
 		return
 	}
@@ -530,11 +579,18 @@ func (s *apiServer) HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(w http.Res
 		writeError(w, http.StatusBadRequest, docCapRefusal("lessons doc", current.Text, text))
 		return
 	}
-	if err := s.dal.PutLessons(Lessons{
-		RoleKey:    roleKey,
-		TaskType:   taskType,
-		Text:       text,
-		Tombstoned: false,
+	snapshot, err := historyJSON(map[string]string{"text": current.Text})
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	if err := s.dal.SaveWithDocumentHistory("lessons", roleKey+"::"+taskType, snapshot, currentActor(r), func(ex sqlExecer) error {
+		return putLessonsOn(ex, Lessons{
+			RoleKey:    roleKey,
+			TaskType:   taskType,
+			Text:       text,
+			Tombstoned: false,
+		})
 	}); err != nil {
 		internalError(w, err)
 		return
@@ -614,11 +670,18 @@ func (s *apiServer) HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost(w http.
 		writeError(w, http.StatusBadRequest, docCapRefusal("lessons doc", current.Text, next))
 		return
 	}
-	if err := s.dal.PutLessons(Lessons{
-		RoleKey:    roleKey,
-		TaskType:   taskType,
-		Text:       next,
-		Tombstoned: false,
+	snapshot, err := historyJSON(map[string]string{"text": current.Text})
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	if err := s.dal.SaveWithDocumentHistory("lessons", roleKey+"::"+taskType, snapshot, currentActor(r), func(ex sqlExecer) error {
+		return putLessonsOn(ex, Lessons{
+			RoleKey:    roleKey,
+			TaskType:   taskType,
+			Text:       next,
+			Tombstoned: false,
+		})
 	}); err != nil {
 		internalError(w, err)
 		return
