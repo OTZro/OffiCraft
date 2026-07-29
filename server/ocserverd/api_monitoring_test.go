@@ -1437,7 +1437,7 @@ func TestGetMonitoring_ReportWithoutRuntimesCannotRefreshThem(t *testing.T) {
 //	GAP-GUARDS — VERIFIED to FAIL against the base implementation (e4a8872) by
 //	checking that impl out and running them, not by reasoning. These are the
 //	reason this ticket is fixed; break the fix and they go red:
-//	  - WorkerOnlyAccountFillsMachineCostAndWindows
+//	  - WorkerOnlyAccountFillsMachineCostAndValidWindows
 //	  - SharedAccountSumsMemberAndWorkerExactlyOnce (dual-purpose: it fails on
 //	    base because the worker's share is missing, AND it pins the exact total
 //	    so widening the fold cannot double-count either side)
@@ -1491,8 +1491,15 @@ func machineRowIn(d map[string]any, host string) map[string]any {
 	return nil
 }
 
-const workerRateLimits = `"rate_limits":{"five_hour":{"used_percentage":42.0},` +
-	`"seven_day":{"used_percentage":7.0}}`
+// Worker fold fixtures use valid windows.  T-6166 deliberately changed the
+// old partial-window contract: owner decision rc-2fa255439eac requires an
+// unusable reset time to render that whole window as null, which is covered by
+// TestGetMonitoring_UnusableRateLimitWindowStaysEmpty instead.
+func workerRateLimits(now float64) string {
+	return fmt.Sprintf(`"rate_limits":{"five_hour":{"used_percentage":42.0,"resets_at":%g},`+
+		`"seven_day":{"used_percentage":7.0,"resets_at":%g}}`,
+		now+WindowSeconds["five_hour"]-60, now+WindowSeconds["seven_day"]-60)
+}
 
 func TestGetMonitoring_SameWindowUsesNewestRateLimitSnapshot(t *testing.T) {
 	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
@@ -1692,13 +1699,13 @@ func TestUsableRateLimitWindow_EndedWindowIsRejected(t *testing.T) {
 	}
 }
 
-// TestGetMonitoring_WorkerOnlyAccountFillsMachineCostAndWindows is the primary
+// TestGetMonitoring_WorkerOnlyAccountFillsMachineCostAndValidWindows is the primary
 // T-fc2f sentinel. The world is deliberately WORKER-ONLY for the key under
 // test: a staff member exists and reports telemetry, but holds NO account at
 // all, so every value asserted here can only have come from the outsource
 // worker. Under the member-only fold all four cells are dash/absent and the
 // machines section is empty — that is the owner-reported eva-m5-claude shape.
-func TestGetMonitoring_WorkerOnlyAccountFillsMachineCostAndWindows(t *testing.T) {
+func TestGetMonitoring_WorkerOnlyAccountFillsMachineCostAndValidWindows(t *testing.T) {
 	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
 		telemetry: newMemStore(), gauge: newMemStore()}
 	// A staff member that holds no account key — proves "a member exists" is not
@@ -1718,7 +1725,7 @@ func TestGetMonitoring_WorkerOnlyAccountFillsMachineCostAndWindows(t *testing.T)
 	seedWorker(t, s, "ow-eva", "E1", 2.5, WorkerStatusActive)
 	if rec := doIngestTelemetry(s, "ow-eva", "m-eva-m5",
 		`{"runtime":"claude","account":"eva-m5-claude","cost":1.25,`+
-			workerRateLimits+`}`); rec.Code != 200 {
+			workerRateLimits(nowSecs())+`}`); rec.Code != 200 {
 		t.Fatalf("worker ingest: %d %s", rec.Code, rec.Body.String())
 	}
 
@@ -1836,7 +1843,7 @@ func TestGetMonitoring_ReleasedWorkerSpendStaysInTheAccount(t *testing.T) {
 	seedWorker(t, s, "ow-gone", "G1", 9.0, WorkerStatusReleased)
 	if rec := doIngestTelemetry(s, "ow-gone", "m-eva-m5",
 		`{"runtime":"claude","account":"eva-m5-claude","cost":3.0,`+
-			workerRateLimits+`}`); rec.Code != 200 {
+			workerRateLimits(nowSecs())+`}`); rec.Code != 200 {
 		t.Fatalf("worker ingest: %d %s", rec.Code, rec.Body.String())
 	}
 	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
@@ -1957,7 +1964,7 @@ func TestGetMonitoring_ReleasedOnlyHostKeepsRowAndAccountButCountsZeroAgents(t *
 	seedWorker(t, s, "ow-gone", "G1", 9.0, WorkerStatusReleased)
 	if rec := doIngestTelemetry(s, "ow-gone", "m-eva-m5",
 		`{"runtime":"claude","account":"eva-m5-claude","cost":3.0,`+
-			workerRateLimits+`}`); rec.Code != 200 {
+			workerRateLimits(nowSecs())+`}`); rec.Code != 200 {
 		t.Fatalf("worker ingest: %d %s", rec.Code, rec.Body.String())
 	}
 	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
@@ -2070,7 +2077,7 @@ func TestGetMonitoring_RemovedMachineLeavesNoOrphanRow(t *testing.T) {
 	seedWorker(t, s, "ow-gone", "G1", 9.0, WorkerStatusReleased)
 	if rec := doIngestTelemetry(s, "ow-gone", "m-eva-m5",
 		`{"runtime":"claude","account":"eva-m5-claude","cost":3.0,`+
-			workerRateLimits+`}`); rec.Code != 200 {
+			workerRateLimits(nowSecs())+`}`); rec.Code != 200 {
 		t.Fatalf("worker ingest: %d %s", rec.Code, rec.Body.String())
 	}
 	// A SECOND worker on the same box that is NOT released — assigned, holding
