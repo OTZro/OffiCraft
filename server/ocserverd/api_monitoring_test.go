@@ -1493,7 +1493,7 @@ func machineRowIn(d map[string]any, host string) map[string]any {
 const workerRateLimits = `"rate_limits":{"five_hour":{"used_percentage":42.0},` +
 	`"seven_day":{"used_percentage":7.0}}`
 
-func TestGetMonitoring_NewRateLimitSnapshotSurvivesUnrelatedHeartbeat(t *testing.T) {
+func TestGetMonitoring_SameWindowUsesNewestRateLimitSnapshot(t *testing.T) {
 	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
 		telemetry: newMemStore(), gauge: newMemStore()}
 	for _, id := range []string{"new-session", "old-session"} {
@@ -1509,7 +1509,7 @@ func TestGetMonitoring_NewRateLimitSnapshotSurvivesUnrelatedHeartbeat(t *testing
 		t.Fatalf("new snapshot ingest: %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := doIngestTelemetry(s, "old-session", "m-seth-m5", `{"runtime":"codex","account":"codex:seth",`+
-		`"rate_limits":{"seven_day":{"used_percentage":66,"resets_at":1785829112}}}`); rec.Code != 200 {
+		`"rate_limits":{"seven_day":{"used_percentage":66,"resets_at":1785903125}}}`); rec.Code != 200 {
 		t.Fatalf("old snapshot ingest: %d %s", rec.Code, rec.Body.String())
 	}
 	old := s.telemetry.Get("old-session")
@@ -1543,6 +1543,45 @@ func TestGetMonitoring_NewRateLimitSnapshotSurvivesUnrelatedHeartbeat(t *testing
 	}
 	if got := sevenDay["resets_at"]; got != 1785903125.0 {
 		t.Errorf("seven_day.resets_at = %v, want the newer snapshot's reset time", got)
+	}
+}
+
+func TestGetMonitoring_NewerWindowBeatsNewerRateLimitSnapshot(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	for _, id := range []string{"current-window", "expired-window"} {
+		m := fullMember(id)
+		m.RoleKey = "builder"
+		m.Runtime = RuntimeCodex
+		if err := s.dal.PutMember(m); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+	}
+	if rec := doIngestTelemetry(s, "current-window", "m-seth-m5", `{"runtime":"codex","account":"codex:seth",`+
+		`"rate_limits":{"seven_day":{"used_percentage":40,"resets_at":1785903125}}}`); rec.Code != 200 {
+		t.Fatalf("current window ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doIngestTelemetry(s, "expired-window", "m-seth-m5", `{"runtime":"codex","account":"codex:seth",`+
+		`"rate_limits":{"seven_day":{"used_percentage":66,"resets_at":1785829112}}}`); rec.Code != 200 {
+		t.Fatalf("expired window ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	current := s.telemetry.Get("current-window")
+	current["rate_limits_ts"] = 100.0
+	s.telemetry.Set("current-window", current)
+	expired := s.telemetry.Get("expired-window")
+	expired["rate_limits_ts"] = 300.0
+	s.telemetry.Set("expired-window", expired)
+
+	row := accountRow(t, monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"})), "codex:seth")
+	sevenDay, ok := row["seven_day"].(map[string]any)
+	if !ok {
+		t.Fatalf("seven_day = %v, want the current window", row["seven_day"])
+	}
+	if got := sevenDay["used_pct"]; got != 40.0 {
+		t.Errorf("seven_day.used_pct = %v, want 40 from the current window", got)
+	}
+	if got := sevenDay["resets_at"]; got != 1785903125.0 {
+		t.Errorf("seven_day.resets_at = %v, want 1785903125 from the current window", got)
 	}
 }
 

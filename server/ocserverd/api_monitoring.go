@@ -702,6 +702,21 @@ func rateLimitStampOf(entry map[string]any) float64 {
 	return ts
 }
 
+func rateLimitWindowResetAt(rateLimits map[string]any) float64 {
+	var latest float64
+	for _, key := range []string{"five_hour", "seven_day"} {
+		window, ok := rateLimits[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		resetAt := parseResetsAt(window["resets_at"])
+		if resetAt != nil && *resetAt > latest {
+			latest = *resetAt
+		}
+	}
+	return latest
+}
+
 // hardwareStampOf reads WHEN the entry's hardware sample was taken. Fail-closed:
 // an entry carrying hardware with no hardware_ts has an UNKNOWN age, and unknown
 // age is not freshness — it reads as the epoch, i.e. stale. Every writer of
@@ -1225,6 +1240,7 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	}
 	freshRL := map[string]map[string]any{}
 	rlTS := map[string]float64{}
+	rlResetAt := map[string]float64{}
 	acctCost := map[string]float64{}
 	acctHasCost := map[string]bool{}
 	// Same `actors` list, same reason: the freshest rate-limit window and the
@@ -1241,8 +1257,11 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		}
 		ts := rateLimitStampOf(entry)
 		if rl, isObj := entry["rate_limits"].(map[string]any); isObj {
-			if prior, seen := rlTS[account]; !seen || ts > prior {
+			resetAt := rateLimitWindowResetAt(rl)
+			priorTS, seen := rlTS[account]
+			if !seen || resetAt > rlResetAt[account] || (resetAt == rlResetAt[account] && ts > priorTS) {
 				rlTS[account] = ts
+				rlResetAt[account] = resetAt
 				freshRL[account] = rl
 			}
 		}
