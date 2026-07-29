@@ -736,6 +736,21 @@
       "name": "get_chat"
     },
     {
+      "description": "Mint a permanent single-file share link (?sig= HMAC; grants read of this one attachment only). Returns {url} as a SERVER-RELATIVE path \u2014 prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link reads that one blob without signing in, forever, and it cannot be revoked. Mint it for deliverables you meant to hand over; do not paste it anywhere the blob itself would not belong.",
+      "inputSchema": {
+        "properties": {
+          "attachment_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "attachment_id"
+        ],
+        "type": "object"
+      },
+      "name": "get_chat_attachment_share_link"
+    },
+    {
       "description": "List every attachment of a member's conversations (?with=<member_id>; flattened, sender-labelled, newest\u2192oldest).",
       "inputSchema": {
         "properties": {

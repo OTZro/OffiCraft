@@ -104,6 +104,14 @@ owner 注意力稀缺，所以：**先 ack**（收到先回一句「收到，我
 
 （備用小徑：幾 KB 的小片段可以不先上傳，`attachments` 直接帶 `{data_b64, filename, mime}`（`data_b64` 也接受 data-URI 形式）——但 bytes 會走進工具參數、base64 再膨脹 ~33%，能用 `ocagent upload` 就用它；同一項 `id` 與 `data_b64` **只能擇一**，兩個都給整則被退。）
 
+**給對方一條「點了就下載」的連結（不必他登入座艙）**——附件靠 `attachments` 帶過去，對方要拿檔案得自己進座艙點。他不方便進座艙時，用 MCP **`get_chat_attachment_share_link`**（帶 `attachment_id`，就是 `ocagent upload` 給你的那個 `att-…`）換一條分享連結：
+
+1. `ocagent upload <檔案>` → 拿到 `att-…`。
+2. MCP `get_chat_attachment_share_link` 帶那個 id → 回 `{"url": "/api/chat/attachment/att-…?sig=…"}`。
+3. 那是**相對路徑**——server 不知道你們是從哪個網址連它的，所以**由你**接上你連 server 的那個 base（MCP endpoint 的同一個 origin）湊成完整網址，再貼給對方。
+
+⚠️ **這條連結沒有身分、沒有效期，而且撤不回來——沒有任何補救動作**：拿到網址的人不必登入就讀得到那一個檔案，永遠有效。系統**沒有**「作廢這條連結」的功能，簽出去就是簽出去了。所以**只為你本來就要交出去的東西簽**，別順手貼進不該看到該檔案的地方；真正機密的東西不要走這條路。連結只在連得到這台 server 的網路內打得開。
+
 **讀更早的歷史（翻頁）**——`get_chat` 預設只回最近 30 則（`limit` 可調）。要往回讀，帶 `before_ts` + `before_id`（= 你手上**最舊那則**的 `ts` 與 `id`，兩個一起給）就拿到再往前一頁；回傳不足一頁 = 已到最早。**歷史頁不會動你的已讀水位**——只有不帶 cursor 的 `get_chat` 才把該對話標成已讀，翻舊帳不會誤標。
 
 **收到附件怎麼拿（讀別人傳給你的檔案）**——MCP `get_chat` 回來的訊息上只有附件的輕量 ref（`attachments` 每項 `{id, filename, mime}`），**沒有 bytes**。要真的拿到檔案，走 CLI **`ocagent download`**：
@@ -116,6 +124,8 @@ owner 注意力稀缺，所以：**先 ack**（收到先回一句「收到，我
 - ❌ 自己 curl 打 server 的 `/api/chat`
 - ✅ 用 MCP `post_chat`，收件人填對方穩定 id（例：「收到，我先看一下 X」）
 - ✅ 附檔：`ocagent upload report.pdf` 拿到 id → MCP `post_chat` 帶 `attachments: [{id: "att-..."}]`（bytes 不經你的對話）
+- ✅ 對方不進座艙：同一個 `att-...` 丟 MCP `get_chat_attachment_share_link` 換相對路徑 → 自己補上 base 湊成完整網址貼給他
+- ❌ 把分享連結貼到不該看到那個檔案的地方（連結免登入、永久、撤不回來）
 
 ### 4.1 請示 owner:等我回覆卡(何時開卡、怎麼開卡)
 
