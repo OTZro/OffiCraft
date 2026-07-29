@@ -410,6 +410,14 @@ type DocSummaryDTO struct {
 	Title string `json:"title"`
 }
 
+// DocumentHistoryDTO defines model for DocumentHistoryDTO.
+type DocumentHistoryDTO struct {
+	ActorId   string            `json:"actor_id"`
+	Content   map[string]string `json:"content"`
+	CreatedTs float64           `json:"created_ts"`
+	Id        int64             `json:"id"`
+}
+
 // ErrorBodyDTO The inner “error“ object of the unified error envelope (see
 // “service.errors“ / “docs/design/api-error-envelope.md“). “code“ is
 // machine-readable snake_case from the closed vocabulary
@@ -2214,6 +2222,12 @@ type ServerInterface interface {
 	// Read one product-guide doc in full (markdown; unknown slug → 404).
 	// (GET /api/docs/{slug})
 	HandleGetDocApiDocsSlugGet(w http.ResponseWriter, r *http.Request, slug string)
+	// List retained versions of an editable document.
+	// (GET /api/document-history/{kind}/{key})
+	HandleListDocumentHistoryApiDocumentHistoryKindKeyGet(w http.ResponseWriter, r *http.Request, kind string, key string)
+	// Restore a retained document version as a new write.
+	// (POST /api/document-history/{kind}/{key}/{id}/restore)
+	HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdRestorePost(w http.ResponseWriter, r *http.Request, kind string, key string, id int64)
 	// SSE delta stream (owner-scoped fan-out; reconcile-by-refetch).
 	// (GET /api/events)
 	HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Request)
@@ -3011,6 +3025,85 @@ func (siw *ServerInterfaceWrapper) HandleGetDocApiDocsSlugGet(w http.ResponseWri
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.HandleGetDocApiDocsSlugGet(w, r, slug)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleListDocumentHistoryApiDocumentHistoryKindKeyGet operation middleware
+func (siw *ServerInterfaceWrapper) HandleListDocumentHistoryApiDocumentHistoryKindKeyGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "kind" -------------
+	var kind string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "kind", r.PathValue("kind"), &kind, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "kind", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "key" -------------
+	var key string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key", r.PathValue("key"), &key, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleListDocumentHistoryApiDocumentHistoryKindKeyGet(w, r, kind, key)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdRestorePost operation middleware
+func (siw *ServerInterfaceWrapper) HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdRestorePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "kind" -------------
+	var kind string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "kind", r.PathValue("kind"), &kind, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "kind", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "key" -------------
+	var key string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key", r.PathValue("key"), &key, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "id" -------------
+	var id int64
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdRestorePost(w, r, kind, key, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -5626,6 +5719,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/docs", wrapper.HandleListDocsApiDocsGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/docs/assets/{name}", wrapper.HandleGetDocAssetApiDocsAssetsNameGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/docs/{slug}", wrapper.HandleGetDocApiDocsSlugGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/document-history/{kind}/{key}", wrapper.HandleListDocumentHistoryApiDocumentHistoryKindKeyGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/document-history/{kind}/{key}/{id}/restore", wrapper.HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdRestorePost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/events", wrapper.HandleEventsApiEventsGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/global-context", wrapper.HandleGetGlobalContextApiGlobalContextGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/global-context", wrapper.HandleReplaceGlobalContextApiGlobalContextPost)

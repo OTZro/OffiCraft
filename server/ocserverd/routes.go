@@ -818,6 +818,24 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 		// ── User context / roles / lessons / bootstrap ───────────────────────
 		{
 			Method:   "GET",
+			Path:     "/api/document-history/{kind}/{key}",
+			Handler:  w.HandleListDocumentHistoryApiDocumentHistoryKindKeyGet,
+			Auth:     authGated,
+			Requires: principalMachine,
+			Summary:  "List the retained history of an editable document.",
+			MCPTool:  "list_document_history",
+		},
+		{
+			Method:   "POST",
+			Path:     "/api/document-history/{kind}/{key}/{id}/restore",
+			Handler:  w.HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdRestorePost,
+			Auth:     authGated,
+			Requires: principalAgent,
+			Summary:  "Restore one retained document version as a new write.",
+			MCPTool:  "restore_document_history",
+		},
+		{
+			Method:   "GET",
 			Path:     "/api/global-context",
 			Handler:  w.HandleGetGlobalContextApiGlobalContextGet,
 			Auth:     authGated,
