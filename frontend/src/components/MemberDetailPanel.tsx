@@ -281,7 +281,9 @@ export function MemberDetailPanel({
       }
       setSettingsOpen(false);
     } catch (error) {
-      setSettingsError(error instanceof Error ? error.message : t.common.error);
+      setSettingsError(
+        error instanceof Error ? error.message : t.mp.modelEffortError,
+      );
     } finally {
       setSettingsBusy(false);
     }
