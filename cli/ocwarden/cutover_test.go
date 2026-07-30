@@ -21,6 +21,7 @@ func blockedCutoverOps() cutoverOps {
 		ppidExe:       func(int) (string, error) { return "", block("ps") },
 		run:           func(n string, _ ...string) (string, error) { return "", block("exec " + n) },
 		runExit:       func(n string, _ ...string) (int, error) { return -1, block("exec " + n) },
+		runInstaller:  func(n string, _ ...string) (string, error) { return "", block("exec " + n) },
 		readFile:      func(p string) ([]byte, error) { return nil, block("read " + p) },
 		writeFile:     func(p string, _ []byte, _ os.FileMode) error { return block("write " + p) },
 		remove:        func(p string) error { return block("remove " + p) },
@@ -66,26 +67,31 @@ func newFakeCutover() *fakeCutover {
 }
 
 func (f *fakeCutover) ops() cutoverOps {
+	// run and runInstaller differ ONLY in their real-world timeout budget, so the
+	// fake answers both from one recorder — a test scripting "install fails" must
+	// not have to know which of the two the production code happened to pick.
+	run := func(name string, args ...string) (string, error) {
+		key := name
+		for _, a := range args {
+			key += " " + a
+		}
+		f.calls = append(f.calls, key)
+		if name == "launchctl" && len(args) > 0 && args[0] == "print" {
+			if err, ok := f.runErr[key]; ok {
+				return "", err
+			}
+			pid := f.nextPID()
+			if pid == "" {
+				return "", errors.New("no such process")
+			}
+			return "\tpid = " + pid + "\n", nil
+		}
+		return f.runOut[key], f.runErr[key]
+	}
 	return cutoverOps{
-		ppidExe: func(int) (string, error) { return f.files["__ppid_exe__"], nil },
-		run: func(name string, args ...string) (string, error) {
-			key := name
-			for _, a := range args {
-				key += " " + a
-			}
-			f.calls = append(f.calls, key)
-			if name == "launchctl" && len(args) > 0 && args[0] == "print" {
-				if err, ok := f.runErr[key]; ok {
-					return "", err
-				}
-				pid := f.nextPID()
-				if pid == "" {
-					return "", errors.New("no such process")
-				}
-				return "\tpid = " + pid + "\n", nil
-			}
-			return f.runOut[key], f.runErr[key]
-		},
+		ppidExe:      func(int) (string, error) { return f.files["__ppid_exe__"], nil },
+		run:          run,
+		runInstaller: run,
 		runExit: func(name string, args ...string) (int, error) {
 			key := name
 			for _, a := range args {
@@ -421,5 +427,46 @@ func assertNotCalled(t *testing.T, calls []string, unwanted string) {
 		if c == unwanted {
 			t.Fatalf("call %q must not have happened; got %v", unwanted, calls)
 		}
+	}
+}
+
+// The installer must NOT run on the short probe budget. This is not a tuning
+// preference: runInstall's health verify alone is up to 36s (30x1s to see a pid,
+// then 6x1s of stability), so a 30s budget kills a HEALTHY conversion, the kill
+// reads as an install failure, and the machine both rolls back and writes the
+// never-retried cutover.failed sentinel. A machine that was merely slow would
+// then be indistinguishable from one that rejected the conversion — permanently.
+func TestInstallDoesNotRunOnTheProbeBudget(t *testing.T) {
+	p := testPaths()
+	f := newFakeCutover()
+	f.files[p.plistPath] = legacyPlist
+
+	ops := f.ops()
+	ops.run = func(name string, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "install" {
+			t.Fatalf("install went through the probe-budget runner (%v); it must use runInstaller", args)
+		}
+		return "", nil
+	}
+	installed := 0
+	ops.runInstaller = func(name string, args ...string) (string, error) {
+		installed++
+		return "", nil
+	}
+
+	if rc := runCutover(ops, p, p.binPath, func(string, ...any) {}); rc != 0 {
+		t.Fatalf("runCutover = %d, want 0", rc)
+	}
+	if installed != 1 {
+		t.Fatalf("runInstaller called %d times, want 1", installed)
+	}
+}
+
+// The budget itself has to clear the worst case it exists to cover. 36s is
+// runInstall's verify alone; the conversion also downloads ocagent first.
+func TestInstallBudgetClearsTheInstallerWorstCase(t *testing.T) {
+	const verifyWorstCase = 36 * time.Second
+	if cutoverInstallBudget <= verifyWorstCase {
+		t.Fatalf("cutoverInstallBudget = %v, must exceed the %v verify alone (plus an ocagent download)", cutoverInstallBudget, verifyWorstCase)
 	}
 }

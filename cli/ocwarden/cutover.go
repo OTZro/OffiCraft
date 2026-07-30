@@ -104,6 +104,18 @@ const (
 	// the ONLY copy of the old shape once the install starts.
 	plistPrevSuffix = ".prev"
 
+	// cutoverInstallBudget bounds the ONE long call: `ocwarden install --force`.
+	// It cannot share the 30s budget the probe commands use, and this is not a
+	// safety margin — it is a correctness bug the short budget would cause:
+	// runInstall's health verify ALONE is up to 36s (30 x 1s to see a pid, then
+	// 6 x 1s of stability, install.go), and before that it DOWNLOADS ocagent over
+	// whatever link the machine has. Killing the installer at 30s reads as an
+	// install failure, so the machine rolls back AND writes the cutover.failed
+	// sentinel — which never retries. A short budget therefore does not make the
+	// conversion "slower to succeed"; it makes it PERMANENTLY fail on machines
+	// that were merely slow, while looking exactly like a machine that refused.
+	cutoverInstallBudget = 10 * time.Minute
+
 	// staleLockAge bounds how long a lockfile is honoured. A conversion is a
 	// bounded operation (install's own verify caps at ~36s); anything older than
 	// this is a corpse from a killed process, not a live conversion.
@@ -125,10 +137,14 @@ type cutoverOps struct {
 	// argument", the anchor's zero-side-effect usage path) and "some error" cannot
 	// distinguish that from "could not execute at all". A non-nil error means the
 	// process never ran; a nil error with a code means it ran and exited with it.
-	runExit   func(name string, args ...string) (int, error)
-	readFile  func(path string) ([]byte, error)
-	writeFile func(path string, data []byte, perm os.FileMode) error
-	remove    func(path string) error
+	runExit func(name string, args ...string) (int, error)
+	// runInstaller runs the conversion itself. Separate from run because it needs
+	// a budget an order of magnitude larger (cutoverInstallBudget) — sharing run's
+	// probe budget silently converts "slow machine" into "permanently refused".
+	runInstaller func(name string, args ...string) (string, error)
+	readFile     func(path string) ([]byte, error)
+	writeFile    func(path string, data []byte, perm os.FileMode) error
+	remove       func(path string) error
 	// createExcl creates path O_EXCL and reports whether THIS call created it.
 	createExcl func(path string) (bool, error)
 	// modTime is used only to age out a stale lock.
@@ -147,12 +163,13 @@ func realCutoverOps() cutoverOps {
 	refuseInTestBinary("realCutoverOps")
 	r := newCmdRunner(30 * time.Second)
 	return cutoverOps{
-		ppidExe:   psExePath(r),
-		run:       r.Run,
-		runExit:   realRunExit,
-		readFile:  os.ReadFile,
-		writeFile: os.WriteFile,
-		remove:    os.Remove,
+		ppidExe:      psExePath(r),
+		run:          r.Run,
+		runExit:      realRunExit,
+		runInstaller: newCmdRunner(cutoverInstallBudget).Run,
+		readFile:     os.ReadFile,
+		writeFile:    os.WriteFile,
+		remove:       os.Remove,
 		createExcl: func(path string) (bool, error) {
 			f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 			if err != nil {

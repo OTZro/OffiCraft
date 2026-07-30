@@ -88,7 +88,7 @@ func runCutover(ops cutoverOps, p wardenPaths, exe string, logf func(string, ...
 
 	// ---- 2. the conversion itself: the existing, idempotent installer --------
 	logf("running: %s install --force", exe)
-	installOut, installErr := ops.run(exe, "install", "--force")
+	installOut, installErr := ops.runInstaller(exe, "install", "--force")
 	if installOut != "" {
 		logf("install output:\n%s", installOut)
 	}
