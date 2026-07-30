@@ -101,6 +101,26 @@ var openapiOverweight = map[string][]string{
 	"open_gate": {"bind"},
 }
 
+// deliberatelyOffMCP is the THIRD category, and the one the comment above
+// knownCatalogDrift said this codebase could not express: openapi accepts the
+// parameter, the handler READS it, and the catalog omits it ON PURPOSE.
+//
+// ingest_telemetry.warden_shape: the value is which shape launchd is actually
+// executing, and the ONLY honest source for it is the reporting process's own
+// PARENT executable (cli/ocwarden/cutover.go detectShape). A warden can read
+// that; an agent cannot read anything about the launchd job that supervises its
+// machine, so a warden_shape arriving over MCP could only ever be invented.
+// Advertising it in tools/list would be an invitation to fabricate the exact
+// signal the fleet uses to decide whether a machine's migration succeeded.
+//
+// NOT filed under knownCatalogDrift, deliberately: every entry there was traced
+// to its read and confirmed MISSING (debt to be repaid), and that list is
+// checked for rot precisely so it shrinks. Recording an intentional omission as
+// debt would invite the next person to "repay" it by advertising this field.
+var deliberatelyOffMCP = map[string][]string{
+	"ingest_telemetry": {"warden_shape"},
+}
+
 type openapiSpec struct {
 	Paths map[string]map[string]struct {
 		Parameters []struct {
@@ -240,6 +260,10 @@ func TestFrozenCatalogAgreesWithOpenapiOnEveryToolsParameters(t *testing.T) {
 		for _, p := range openapiOverweight[name] {
 			overweight[p] = true
 		}
+		offMCP := map[string]bool{}
+		for _, p := range deliberatelyOffMCP[name] {
+			offMCP[p] = true
+		}
 		var missing, extra []string
 		for p := range want {
 			if got[p] {
@@ -256,9 +280,15 @@ func TestFrozenCatalogAgreesWithOpenapiOnEveryToolsParameters(t *testing.T) {
 						"an unread field — delete it from openapiOverweight and "+
 						"work out which side changed.", name, p)
 				}
+				if offMCP[p] {
+					t.Errorf("tool %q now advertises %q, which is recorded as "+
+						"deliberately off-MCP. Either the catalog gained a field "+
+						"agents cannot honestly produce, or the decision changed — "+
+						"read the note on deliberatelyOffMCP before deleting it.", name, p)
+				}
 				continue
 			}
-			if baseline[p] || overweight[p] {
+			if baseline[p] || overweight[p] || offMCP[p] {
 				continue
 			}
 			missing = append(missing, p)
