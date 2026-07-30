@@ -23,7 +23,7 @@ const patchMember = vi.fn(async (_id: string, patch: object) => ({
 
 vi.mock("../api", () => ({
   api: {
-    listMachines: () => Promise.resolve([]),
+    listMachines: () => Promise.resolve([{ machineId: "mach-1", displayName: "Mac", online: true }]),
     patchMember: (id: string, patch: object) => patchMember(id, patch),
     getBootstrap: () =>
       Promise.resolve({ role: "assistant", name: "", taskType: "", context: "" }),
@@ -79,6 +79,12 @@ function renderPanel(over: Partial<Member> = {}) {
   return { ...utils, onRename };
 }
 
+async function confirmSettings() {
+  const confirm = document.querySelector<HTMLButtonElement>(".machine-picker__actions .btn--accent")!;
+  await waitFor(() => expect(confirm.disabled).toBe(false));
+  fireEvent.click(confirm);
+}
+
 beforeEach(() => {
   patchMember.mockClear();
 });
@@ -86,8 +92,7 @@ beforeEach(() => {
 describe("MemberDetailPanel · model/effort quick-pick editor", () => {
   it("opens the shared chips editor; a chip fills the free input; save PATCHes", async () => {
     const utils = renderPanel();
-    fireEvent.click(utils.getByTestId("mp-model-effort-edit"));
-    utils.getByTestId("mp-model-effort-editor");
+    fireEvent.click(utils.getByTestId("member-action-spawn"));
 
     // The current model pre-fills the free input; the matching chip is active.
     const input = utils.getByTestId("me-model-input") as HTMLInputElement;
@@ -104,7 +109,7 @@ describe("MemberDetailPanel · model/effort quick-pick editor", () => {
       target: { value: "high" },
     });
 
-    fireEvent.click(utils.getByTestId("mp-model-effort-save"));
+    await confirmSettings();
     await waitFor(() =>
       expect(patchMember).toHaveBeenCalledWith("mira", {
         runtime: "claude",
@@ -116,7 +121,7 @@ describe("MemberDetailPanel · model/effort quick-pick editor", () => {
 
   it("switching provider clears Claude's model pick and offers Codex suggestions plus an override", async () => {
     const utils = renderPanel();
-    fireEvent.click(utils.getByTestId("mp-model-effort-edit"));
+    fireEvent.click(utils.getByTestId("member-action-spawn"));
     fireEvent.change(utils.getByTestId("me-runtime-select"), {
       target: { value: "codex" },
     });
@@ -124,7 +129,7 @@ describe("MemberDetailPanel · model/effort quick-pick editor", () => {
     expect(modelInput.value).toBe("");
     expect(utils.queryByTestId("me-model-chip-opus")).toBeNull();
     fireEvent.click(utils.getByTestId("me-codex-model-select-chip-gpt-5.6-terra"));
-    fireEvent.click(utils.getByTestId("mp-model-effort-save"));
+    await confirmSettings();
     await waitFor(() =>
       expect(patchMember).toHaveBeenCalledWith("mira", {
         runtime: "codex",
@@ -136,12 +141,12 @@ describe("MemberDetailPanel · model/effort quick-pick editor", () => {
 
   it("a hand-typed custom string overrides the chips; blank means default", async () => {
     const utils = renderPanel();
-    fireEvent.click(utils.getByTestId("mp-model-effort-edit"));
+    fireEvent.click(utils.getByTestId("member-action-spawn"));
     fireEvent.click(utils.getByTestId("me-model-chip-fable"));
     fireEvent.change(utils.getByTestId("me-model-input"), {
       target: { value: "claude-x-preview" },
     });
-    fireEvent.click(utils.getByTestId("mp-model-effort-save"));
+    await confirmSettings();
     await waitFor(() =>
       expect(patchMember).toHaveBeenCalledWith("mira", {
         runtime: "claude",
@@ -151,11 +156,11 @@ describe("MemberDetailPanel · model/effort quick-pick editor", () => {
     );
 
     // Blank input → "" (server/CLI default), never a fabricated pick.
-    fireEvent.click(utils.getByTestId("mp-model-effort-edit"));
+    fireEvent.click(utils.getByTestId("member-action-spawn"));
     fireEvent.change(utils.getByTestId("me-model-input"), {
       target: { value: "" },
     });
-    fireEvent.click(utils.getByTestId("mp-model-effort-save"));
+    await confirmSettings();
     await waitFor(() =>
       expect(patchMember).toHaveBeenLastCalledWith("mira", {
         runtime: "claude",

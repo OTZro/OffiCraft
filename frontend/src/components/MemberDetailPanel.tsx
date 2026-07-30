@@ -180,6 +180,7 @@ export function MemberDetailPanel({
   // bound machine is `member.desiredMachineId` (the machine_id the activate binds to).
   const { machines } = useMachines();
   const onlineMachines = machines.filter((m) => m.online);
+  const firstOnlineMachineId = onlineMachines[0]?.machineId;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsRuntime, setSettingsRuntime] = useState<"claude" | "codex">(
     member.runtime || "claude",
@@ -191,6 +192,15 @@ export function MemberDetailPanel({
   );
   const [settingsBusy, setSettingsBusy] = useState(false);
 
+  // The registry arrives asynchronously. If the owner opens settings before
+  // it has loaded, select the first available machine as soon as it does so
+  // the unified Wake/Change action cannot be left disabled forever.
+  useEffect(() => {
+    if (settingsOpen && !settingsMachineId && firstOnlineMachineId) {
+      setSettingsMachineId(firstOnlineMachineId);
+    }
+  }, [firstOnlineMachineId, settingsMachineId, settingsOpen]);
+
   function openSettings() {
     setSettingsRuntime(member.runtime || "claude");
     setSettingsModel(member.model);
@@ -200,6 +210,10 @@ export function MemberDetailPanel({
   }
 
   async function runActivate(machineId: string) {
+    // Read-only embeddings of the detail panel do not provide an activate
+    // callback. Never paint an optimistic wake in that case: no request can
+    // have been sent.
+    if (!onActivate) return;
     // Instant "waking…" feedback; a rejected activate reverts to the honest
     // offline visual so the owner can retry (no stuck fake-waking).
     setWakePending(true);
@@ -208,7 +222,7 @@ export function MemberDetailPanel({
     // has moved on to another member (review r2 SHOULD-1).
     const firedFor = member.id;
     try {
-      const result = await onActivate?.(machineId);
+      const result = await onActivate(machineId);
       if (shownMemberIdRef.current !== firedFor) return;
       // 🔴 THE FIX (T-7fa1). An activate answers 200 either way; this is the
       // ONLY thing that distinguishes "a START went out" from "nothing was
@@ -571,7 +585,11 @@ export function MemberDetailPanel({
         <div className="mp-identity__actions">
           <MemberActionButtons
             status={visual}
-            onSpawn={openSettings}
+            // Do not open a second settings flow while the first wake is in
+            // flight. `waking` still renders Spawn as the recovery affordance,
+            // but this local bridge keeps it honestly unavailable until the
+            // activate result or server lifecycle settles.
+            onSpawn={wakePendingActive ? undefined : openSettings}
             onCancel={onDeactivate}
             onStop={onDeactivate}
             // In `stopping`, the Stop button IS force-stop → open the confirm first

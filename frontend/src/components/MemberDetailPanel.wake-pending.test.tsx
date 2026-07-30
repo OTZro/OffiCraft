@@ -32,6 +32,7 @@ vi.mock("../api", () => ({
     updateWebhook: () =>
       Promise.resolve({ endpointId: "", purpose: "", status: "enabled", createdTs: 0, token: "" }),
     deleteWebhook: () => Promise.resolve(),
+    patchMember: () => Promise.resolve({}),
     subscribeEvents: () => () => {},
   },
 }));
@@ -67,6 +68,12 @@ function mkMember(over: Partial<Member> = {}): Member {
 const wakeLabel = zh.lifecycle.action.spawn;
 const pendingLabel = zh.mp.wakePendingNote;
 
+async function confirmWakeSettings() {
+  const confirm = document.querySelector<HTMLButtonElement>(".machine-picker__actions .btn--accent")!;
+  await waitFor(() => expect(confirm.disabled).toBe(false));
+  fireEvent.click(confirm);
+}
+
 function renderPanel(onActivate: (machineId?: string) => void | Promise<void>) {
   return render(
     <I18nProvider>
@@ -95,10 +102,11 @@ describe("MemberDetailPanel · wake-pending instant feedback", () => {
     });
 
     fireEvent.click(wakeBtn);
-    expect(onActivate).toHaveBeenCalledWith("mac-1");
+    await confirmWakeSettings();
+    await waitFor(() => expect(onActivate).toHaveBeenCalledWith("mac-1"));
     // Instant waking state: the wake button ITSELF carries the in-progress
     // label (machine-install style) and disables (no double fire).
-    const pendingBtn = utils.getByText(pendingLabel).closest("button")!;
+    const pendingBtn = await waitFor(() => utils.getByText(pendingLabel).closest("button")!);
     expect(pendingBtn.disabled).toBe(true);
     fireEvent.click(pendingBtn);
     expect(onActivate).toHaveBeenCalledTimes(1);
@@ -114,7 +122,8 @@ describe("MemberDetailPanel · wake-pending instant feedback", () => {
       return btn;
     });
     fireEvent.click(wakeBtn);
-    utils.getByText(pendingLabel);
+    await confirmWakeSettings();
+    await waitFor(() => utils.getByText(pendingLabel));
     await waitFor(() => expect(utils.queryByText(pendingLabel)).toBeNull());
     expect(utils.getByText(wakeLabel).closest("button")!.disabled).toBe(false);
   });
@@ -136,7 +145,8 @@ describe("MemberDetailPanel · wake-pending instant feedback", () => {
       return btn;
     });
     fireEvent.click(wakeBtn);
-    utils.getByText(pendingLabel);
+    await confirmWakeSettings();
+    await waitFor(() => utils.getByText(pendingLabel));
 
     // Server presence caught up: the refetched member arrives as waking.
     utils.rerender(

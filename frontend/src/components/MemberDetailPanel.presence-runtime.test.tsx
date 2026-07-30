@@ -132,4 +132,35 @@ describe("MemberDetailPanel · presence-gated machine + account", () => {
       modelEffortCell.indexOf(zh.mp.model)
     );
   });
+
+  it("shows the reported running model, never the configured launch model", async () => {
+    const { container, rerender } = renderPanel(
+      mkMember({
+        status: "online",
+        lifecycle: "online",
+        model: "configured-launch-model",
+        actualModel: "reported-runtime-model",
+      }),
+    );
+    const readModel = () =>
+      container.querySelector('[data-testid="mp-model-effort-cell"]')?.textContent ?? "";
+
+    await waitFor(() => expect(readModel()).toContain("reported-runtime-model"));
+    expect(readModel()).not.toContain("configured-launch-model");
+
+    rerender(
+      <I18nProvider>
+        <MemberDetailPanel
+          member={mkMember({
+            model: "configured-launch-model",
+            actualModel: "reported-runtime-model",
+          })}
+          onBack={() => {}}
+        />
+      </I18nProvider>,
+    );
+    await waitFor(() =>
+      expect(readModel()).not.toContain("reported-runtime-model"),
+    );
+  });
 });

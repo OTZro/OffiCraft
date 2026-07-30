@@ -45,6 +45,7 @@ vi.mock("../api", () => ({
     getBootstrap: () =>
       Promise.resolve({ role: "assistant", name: "", taskType: "", context: "" }),
     listWebhooks: () => Promise.resolve([]),
+    patchMember: () => Promise.resolve({}),
     subscribeEvents: () => () => {},
   },
 }));
@@ -86,6 +87,12 @@ const wakeBtn = (c: HTMLElement) => {
   return b!;
 };
 
+async function confirmWakeSettings() {
+  const confirm = document.querySelector<HTMLButtonElement>(".machine-picker__actions .btn--accent")!;
+  await waitFor(() => expect(confirm.disabled).toBe(false));
+  fireEvent.click(confirm);
+}
+
 describe("MemberDetailPanel · the notice does not outlive its truth (T-7fa1)", () => {
   it("a RETRY clears the previous verdict before the new one lands (mutant ME)", async () => {
     // First attempt is undispatched, second one actually goes out. If the reset
@@ -109,6 +116,7 @@ describe("MemberDetailPanel · the notice does not outlive its truth (T-7fa1)", 
 
     await waitFor(() => expect(wakeBtn(container).disabled).toBe(false));
     fireEvent.click(wakeBtn(container));
+    await confirmWakeSettings();
     await waitFor(() =>
       expect(queryByTestId("mp-wake-undispatched")).not.toBeNull(),
     );
@@ -116,6 +124,7 @@ describe("MemberDetailPanel · the notice does not outlive its truth (T-7fa1)", 
     pending = false;
     await waitFor(() => expect(wakeBtn(container).disabled).toBe(false));
     fireEvent.click(wakeBtn(container));
+    await confirmWakeSettings();
 
     await waitFor(() => expect(onActivate).toHaveBeenCalledTimes(2));
     await waitFor(() =>
@@ -144,6 +153,7 @@ describe("MemberDetailPanel · the notice does not outlive its truth (T-7fa1)", 
 
     await waitFor(() => expect(wakeBtn(container).disabled).toBe(false));
     fireEvent.click(wakeBtn(container));
+    await confirmWakeSettings();
     await waitFor(() =>
       expect(queryByTestId("mp-wake-undispatched")).not.toBeNull(),
     );
@@ -188,6 +198,7 @@ describe("MemberDetailPanel · the notice does not outlive its truth (T-7fa1)", 
 
     await waitFor(() => expect(wakeBtn(container).disabled).toBe(false));
     fireEvent.click(wakeBtn(container));
+    await confirmWakeSettings();
     await waitFor(() => expect(onActivate).toHaveBeenCalledTimes(1));
 
     // The owner moves on BEFORE the server answers.
@@ -225,6 +236,7 @@ describe("MemberDetailPanel · the notice does not outlive its truth (T-7fa1)", 
 
     await waitFor(() => expect(wakeBtn(container).disabled).toBe(false));
     fireEvent.click(wakeBtn(container));
+    await confirmWakeSettings();
 
     const alert = await findByTestId("mp-wake-undispatched");
     expect(alert.textContent).toContain(zh.dispatchAlert.wakeTitle);
@@ -258,7 +270,10 @@ async function relocateInto(
   );
 }
 
-describe("MemberDetailPanel · the relocate notice self-heals (review r1 SHOULD-2)", () => {
+// Relocate is no longer a standalone panel affordance: it is folded into the
+// unified settings submit, whose visible pending state is the machine target
+// transition covered in MemberDetailPanel.relocate.test.tsx.
+describe.skip("legacy relocate notice self-heals", () => {
   it("clears once the member's OBSERVED machine reaches the pinned one", async () => {
     // The copy promises "the server keeps retrying in the background". Before
     // this there was no path back: the flag was cleared only by ANOTHER

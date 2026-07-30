@@ -129,4 +129,21 @@ describe("MemberDetailPanel — unified wake/change settings", () => {
     );
     expect(queryByTestId("mp-machine-transition")).toBeNull();
   });
+
+  it("uses Change to apply an awake member's settings through one relocate", async () => {
+    const { getByTestId, onActivate, onRelocate } = renderPanel({
+      status: "online",
+      lifecycle: "online",
+      machine: "mach-a",
+    });
+    fireEvent.click(getByTestId("mp-change"));
+    const dialog = getByTestId("me-runtime-select").closest("[role=dialog]")!;
+    const select = dialog.querySelector("select.machine-picker__select") as HTMLSelectElement;
+    await waitFor(() => expect(select.options).toHaveLength(2));
+    fireEvent.change(select, { target: { value: "mach-b" } });
+    fireEvent.click(dialog.querySelector(".btn--accent")!);
+
+    await waitFor(() => expect(onRelocate).toHaveBeenCalledWith("mach-b"));
+    expect(onActivate).not.toHaveBeenCalled();
+  });
 });
