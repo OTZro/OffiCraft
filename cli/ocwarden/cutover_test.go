@@ -287,10 +287,13 @@ func TestEveryPostWritePlistFailureRollsBackToTheOldShape(t *testing.T) {
 
 			ops := f.ops()
 			// Simulate install having overwritten the plist before it failed.
-			// NOTE: this MUST hook runInstaller, the runner the install call
-			// actually goes through — hooking run instead leaves the plist
-			// untouched, and the assertion below then passes without the
-			// rollback ever running.
+			// The hook has to sit on the runner the install call ACTUALLY uses;
+			// hooking the other one leaves the plist untouched and every
+			// assertion below then holds without the rollback ever running.
+			// `overwritten` is what makes that mistake fail instead of pass —
+			// a comment cannot, and this test was silently vacuous for exactly
+			// one commit before the flag existed.
+			overwritten := false
 			origRun := ops.runInstaller
 			ops.runInstaller = func(name string, args ...string) (string, error) {
 				key := name
@@ -299,12 +302,16 @@ func TestEveryPostWritePlistFailureRollsBackToTheOldShape(t *testing.T) {
 				}
 				if key == installArgv {
 					f.files[p.plistPath] = "<plist>ANCHOR</plist>"
+					overwritten = true
 				}
 				return origRun(name, args...)
 			}
 
 			if rc := runCutover(ops, p, p.binPath, func(string, ...any) {}); rc != 0 {
 				t.Fatalf("runCutover = %d, want 0 (a successful rollback is the contracted outcome)", rc)
+			}
+			if !overwritten {
+				t.Fatal("the overwrite hook never fired — this test is not exercising a rollback at all (it is hooked to the wrong runner)")
 			}
 			// The assertion is the CONTENT, not the existence of a .prev file: a
 			// backup that is never put back is not a rollback.
@@ -329,12 +336,19 @@ func TestFailedRollbackReportsNonZero(t *testing.T) {
 	f.runErr["launchctl bootstrap "+p.guiDomain+" "+p.plistPath] = errors.New("Bootstrap failed: 5")
 
 	ops := f.ops()
+	overwritten := false
 	origRun := ops.runInstaller
 	ops.runInstaller = func(name string, args ...string) (string, error) {
 		f.files[p.plistPath] = "<plist>ANCHOR</plist>"
+		overwritten = true
 		return origRun(name, args...)
 	}
 
+	defer func() {
+		if !overwritten {
+			t.Error("the overwrite hook never fired — nothing was rolled back, so this test proves nothing")
+		}
+	}()
 	if rc := runCutover(ops, p, p.binPath, func(string, ...any) {}); rc == 0 {
 		t.Fatal("a rollback that did not restore a live warden must exit non-zero")
 	}
