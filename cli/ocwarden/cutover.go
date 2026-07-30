@@ -114,6 +114,23 @@ const (
 	// sentinel — which never retries. A short budget therefore does not make the
 	// conversion "slower to succeed"; it makes it PERMANENTLY fail on machines
 	// that were merely slow, while looking exactly like a machine that refused.
+	//
+	// The number is DERIVED from install's own bounded steps, not picked — every
+	// term below is an existing constant in this package, so a future reader can
+	// re-derive it instead of nudging a magic threshold:
+	//
+	//	claude resolve   <= 2 x claudeProbeBudget (20s)        =  40s
+	//	codex resolve    <= 2 x claudeProbeBudget (20s)        =  40s
+	//	ocagent download <= selfUpdateHTTPTimeout (60s)        =  60s
+	//	bootout poll     <= bootoutPollAttempts x Interval     =   5s
+	//	verify           <= 30 x 1s + 6 x 1s                   =  36s
+	//	                                                   total ~181s
+	//
+	// 10 minutes is that worst case with ~3x headroom, and headroom is the right
+	// posture here because this budget's ONLY job is to stop an install that has
+	// hung forever — it must never be the thing that decides a healthy conversion
+	// failed. Overshooting costs one detached process sitting idle; undershooting
+	// costs a machine, permanently.
 	cutoverInstallBudget = 10 * time.Minute
 
 	// staleLockAge bounds how long a lockfile is honoured. A conversion is a
