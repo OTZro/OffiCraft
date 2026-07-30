@@ -4,11 +4,12 @@
 # closed whenever source changes without an explicit binary refresh.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SOURCE_ROOT="${OFFICRAFT_DIST_SOURCE_ROOT:-$ROOT}"
 MANIFEST="${OFFICRAFT_DIST_MANIFEST:-$ROOT/dist/officraft/source.sha256}"
 BIN="${OFFICRAFT_DIST_BINARY:-$ROOT/dist/officraft/officraft}"
 [[ -x "$BIN" && -s "$BIN" ]] || { echo "[officraft-dist] missing executable: $BIN" >&2; exit 1; }
 [[ -f "$MANIFEST" ]] || { echo "[officraft-dist] missing source manifest: $MANIFEST" >&2; exit 1; }
-actual="$(cd "$ROOT" && shasum -a 256 cli/officraft/go.mod cli/officraft/main.go | shasum -a 256 | awk '{print $1}')"
+actual="$(cd "$SOURCE_ROOT" && shasum -a 256 cli/officraft/go.mod cli/officraft/main.go | shasum -a 256 | awk '{print $1}')"
 expected="$(awk 'NR==1 {print $1}' "$MANIFEST")"
 [[ "$actual" == "$expected" ]] || {
   echo "[officraft-dist] stale: cli/officraft source hash is $actual, dist records $expected" >&2
