@@ -27,12 +27,25 @@
 //                  there is nothing for a share link to point at and none is
 //                  rendered.
 //
+// T-7e68 — ZOOM MUST AFFECT LAYOUT. A `transform: scale()` on the <img> alone
+// paints bigger pixels but leaves the layout box the original size, so the
+// wrap's `overflow: auto` never has anything to scroll and every edge the zoom
+// pushed past the frame is clipped and unreachable (owner report: 「可以放大，但
+// 無法左右或上下移動」). The image therefore sits inside a STAGE div whose
+// width/height are the measured 100% box times the zoom factor: the stage is
+// what grows, so the wrap gets real scrollbars and the scaled image (origin
+// 0 0) lands exactly on it. Two ways to reach the overflow, not one — a pointer
+// drag and the native scroll (scrollbar, wheel, arrow keys on the focusable
+// wrap) — and both drive the SAME scrollLeft/scrollTop, so there is no second
+// offset to keep in sync and returning to 100% recentres with no residue.
+//
 // T-f014 — this is now the ONLY full-size image surface in the cockpit. The old
 // Lightbox overlay and its stylesheet block are gone; every image (stored or staged
 // composer preview) opens here and therefore gets the same shell: filename in
 // the header, 下載, close, Esc/backdrop dismissal and the zoom controls.
 
-import { useEffect, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { authedAttachmentUrl } from "../api/http";
 import { copyAttachmentShareLink } from "../lib/shareLink";
@@ -46,6 +59,14 @@ import {
   DownloadIcon,
   FileTextIcon,
 } from "./icons";
+
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 4;
+const ZOOM_STEP = 0.25;
+
+function clampZoom(value: number): number {
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value));
+}
 
 type MarkdownPreviewOverlayProps = {
   /** Display name shown in the header (the blob's filename, or the sender of
@@ -118,6 +139,32 @@ export function MarkdownPreviewOverlay({
   // as the download href by construction — the preview and the download must
   // never be able to point at different bytes.
   const imageBytes = image ? downloadHref : undefined;
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const imageRef = useRef<HTMLImageElement | null>(null);
+  // The image's box at 100% — the size CSS gives it after `max-width: 100%` /
+  // `max-height: 70vh` have had their say. Measured rather than recomputed in
+  // JS so the stage can never disagree with the stylesheet about what "fits".
+  const [fitBox, setFitBox] = useState<{ w: number; h: number } | null>(null);
+  const [panning, setPanning] = useState(false);
+
+  const measureFit = useCallback(() => {
+    const el = imageRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    // jsdom has no layout engine, so every rect is 0×0 there; a zero box is
+    // "not measured yet", never a real size to build a stage from.
+    if (rect.width > 0 && rect.height > 0) setFitBox({ w: rect.width, h: rect.height });
+  }, []);
+
+  // Only 100% shows the unstyled box, so that is the only moment the fit size
+  // is readable. A viewport resize changes it (both caps are relative), so it
+  // is re-read then too.
+  useLayoutEffect(() => {
+    if (!image || zoom !== 1) return;
+    measureFit();
+    window.addEventListener("resize", measureFit);
+    return () => window.removeEventListener("resize", measureFit);
+  }, [image, imageBytes, zoom, measureFit]);
 
   // Fetch the markdown text once (the authed blob URL — same ?token= gate the
   // download/thumbnail paths use). A non-ok response / network error surfaces
@@ -145,6 +192,66 @@ export function MarkdownPreviewOverlay({
   }, [url, image, unavailable]);
 
   useEffect(() => setZoom(1), [url, imageSrc]);
+
+  // Back at 100% the stage fits the frame again, so any pan offset left over
+  // from the zoomed view has to go with it — otherwise the recentred image
+  // sits behind a stale scroll position.
+  useEffect(() => {
+    if (zoom !== 1) return;
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    wrap.scrollLeft = 0;
+    wrap.scrollTop = 0;
+  }, [zoom]);
+
+  // Wheel-zoom is bound natively and non-passively: React 18 attaches its
+  // listeners at the root as passive, where `e.preventDefault()` in a JSX
+  // `onWheel` is ignored and the page scrolls behind the overlay while the
+  // image zooms.
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap || !image) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      setZoom((current) => clampZoom(current + (e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP)));
+    };
+    wrap.addEventListener("wheel", onWheel, { passive: false });
+    return () => wrap.removeEventListener("wheel", onWheel);
+  }, [image, imageBytes]);
+
+  // Dragging IS scrolling: the pointer delta is applied to the wrap's own
+  // scroll offset, the same offset the scrollbar and the arrow keys move. One
+  // source of truth for "where in the image am I", so the two routes to the
+  // overflow can never drift apart.
+  function onPanPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    const wrap = wrapRef.current;
+    // Touch already pans this scroll container natively, and capturing the
+    // pointer here would apply the same delta twice.
+    if (!wrap || e.button !== 0 || e.pointerType === "touch") return;
+    // The zoom cluster floats inside the wrap; pressing a control there is a
+    // click on a button, not the start of a drag.
+    if ((e.target as HTMLElement).closest(".md-preview__zoom")) return;
+    if (wrap.scrollWidth <= wrap.clientWidth && wrap.scrollHeight <= wrap.clientHeight) return;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startLeft = wrap.scrollLeft;
+    const startTop = wrap.scrollTop;
+    wrap.setPointerCapture(e.pointerId);
+    setPanning(true);
+    const onMove = (move: PointerEvent) => {
+      wrap.scrollLeft = startLeft - (move.clientX - startX);
+      wrap.scrollTop = startTop - (move.clientY - startY);
+    };
+    const onUp = () => {
+      wrap.removeEventListener("pointermove", onMove);
+      wrap.removeEventListener("pointerup", onUp);
+      wrap.removeEventListener("pointercancel", onUp);
+      setPanning(false);
+    };
+    wrap.addEventListener("pointermove", onMove);
+    wrap.addEventListener("pointerup", onUp);
+    wrap.addEventListener("pointercancel", onUp);
+  }
 
   async function onCopyShareLink() {
     // Only a stored blob has an id to share; the button below is not rendered
@@ -241,20 +348,48 @@ export function MarkdownPreviewOverlay({
         </div>
         <div className="md-preview__body">
           {image && imageBytes !== undefined ? (
-            <div className="md-preview__image-wrap">
-              <img
-                className="md-preview__image"
-                src={imageBytes}
-                /* The filename IS the alt text: it is the only thing known
-                 * about these bytes, and a generic 「圖片」 would tell a screen
-                 * reader nothing that the surrounding dialog did not. */
-                alt={title || t.chat.imageAlt}
-                style={{ transform: `scale(${zoom})` }}
-                onWheel={(e) => {
-                  e.preventDefault();
-                  setZoom((current) => Math.min(4, Math.max(0.5, current + (e.deltaY < 0 ? 0.25 : -0.25))));
-                }}
-              />
+            <div
+              className={
+                "md-preview__image-wrap" +
+                (fitBox !== null && zoom > 1 ? " md-preview__image-wrap--pannable" : "") +
+                (panning ? " md-preview__image-wrap--panning" : "")
+              }
+              ref={wrapRef}
+              /* Focusable and named so the overflow is reachable without a
+               * pointer at all: arrow keys / PageUp / Home scroll a focused
+               * overflow container natively. */
+              tabIndex={0}
+              role="group"
+              aria-label={t.chat.mdPreview.pan}
+              onPointerDown={onPanPointerDown}
+            >
+              <div
+                className="md-preview__image-stage"
+                /* THE zoom seam. The stage carries the zoomed size as real
+                 * layout, which is what gives the wrap something to scroll;
+                 * the <img> keeps its 100% box and is painted onto the stage by
+                 * the transform. Before the fit box is known (first paint, or
+                 * jsdom) there is no stage size to set and the image lays out
+                 * exactly as it did before. */
+                style={
+                  fitBox === null
+                    ? undefined
+                    : { width: fitBox.w * zoom, height: fitBox.h * zoom }
+                }
+              >
+                <img
+                  className="md-preview__image"
+                  ref={imageRef}
+                  src={imageBytes}
+                  /* The filename IS the alt text: it is the only thing known
+                   * about these bytes, and a generic 「圖片」 would tell a screen
+                   * reader nothing that the surrounding dialog did not. */
+                  alt={title || t.chat.imageAlt}
+                  draggable={false}
+                  onLoad={measureFit}
+                  style={{ transform: `scale(${zoom})` }}
+                />
+              </div>
               {/* The zoom cluster is a labelled group, and each control names
                * itself: the bare −/+ glyphs announce as "minus"/"plus" with no
                * hint of what they act on, and the hard-coded English label the
@@ -264,7 +399,7 @@ export function MarkdownPreviewOverlay({
                   type="button"
                   aria-label={t.chat.mdPreview.zoomOut}
                   title={t.chat.mdPreview.zoomOut}
-                  onClick={() => setZoom((value) => Math.max(0.5, value - 0.25))}
+                  onClick={() => setZoom((value) => clampZoom(value - ZOOM_STEP))}
                 >
                   −
                 </button>
@@ -273,7 +408,7 @@ export function MarkdownPreviewOverlay({
                   type="button"
                   aria-label={t.chat.mdPreview.zoomIn}
                   title={t.chat.mdPreview.zoomIn}
-                  onClick={() => setZoom((value) => Math.min(4, value + 0.25))}
+                  onClick={() => setZoom((value) => clampZoom(value + ZOOM_STEP))}
                 >
                   +
                 </button>

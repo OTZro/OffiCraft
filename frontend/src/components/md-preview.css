@@ -133,8 +133,21 @@
   color: var(--color-text-muted);
   font-size: 13px;
 }
-.md-preview__image-wrap { position: relative; display: grid; place-items: center; min-height: 360px; overflow: auto; background: var(--color-backdrop); }
-.md-preview__image { max-width: 100%; max-height: 70vh; object-fit: contain; transition: transform .12s ease; transform-origin: center; }
+/* The pan frame. `overflow: auto` only earns its keep because the STAGE below
+ * carries the zoom as real width/height — with the zoom living purely in the
+ * image's `transform` there is never any scrollable content and the magnified
+ * edges are simply clipped away (T-7e68). It is focusable (tabIndex in the
+ * component) so arrow keys reach the same overflow the drag does. */
+.md-preview__image-wrap { position: relative; display: grid; place-items: center; min-height: 360px; max-height: 70vh; overflow: auto; overscroll-behavior: contain; background: var(--color-backdrop); }
+.md-preview__image-wrap:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+/* Grab only when there is somewhere to go: at 100% the stage fits the frame
+ * and the cursor must not promise a drag that does nothing. */
+.md-preview__image-wrap--pannable { cursor: grab; }
+.md-preview__image-wrap--panning { cursor: grabbing; }
+/* The zoomed LAYOUT box. Its inline width/height (fit box × zoom) is what the
+ * frame scrolls; the image is painted onto it by the transform from 0 0. */
+.md-preview__image-stage { display: block; line-height: 0; }
+.md-preview__image { display: block; max-width: 100%; max-height: 70vh; object-fit: contain; transform-origin: 0 0; user-select: none; -webkit-user-drag: none; }
 .md-preview__zoom { position: absolute; bottom: 12px; display: inline-flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, var(--color-backdrop) 75%, transparent); color: var(--color-on-backdrop); }
 .md-preview__zoom button { width: 28px; height: 28px; border: 0; border-radius: 6px; cursor: pointer; }
 .md-preview__text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }

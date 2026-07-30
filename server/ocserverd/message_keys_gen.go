@@ -36,6 +36,7 @@ var messageKeys = map[string]bool{
 	"chat.mdPreview.download":                  true,
 	"chat.mdPreview.error":                     true,
 	"chat.mdPreview.loading":                   true,
+	"chat.mdPreview.pan":                       true,
 	"chat.mdPreview.unavailable":               true,
 	"chat.mdPreview.zoomControls":              true,
 	"chat.mdPreview.zoomIn":                    true,
