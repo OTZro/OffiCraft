@@ -2894,19 +2894,6 @@
       "name": "list_document_history"
     },
     {
-      "description": "Restore one retained document version as a new write.",
-      "inputSchema": {
-        "properties": {
-          "id": {"type": "integer"},
-          "key": {"type": "string"},
-          "kind": {"type": "string"}
-        },
-        "required": ["kind", "key", "id"],
-        "type": "object"
-      },
-      "name": "restore_document_history"
-    },
-    {
       "description": "List the product-guide docs (slug + title).",
       "inputSchema": {
         "properties": {},

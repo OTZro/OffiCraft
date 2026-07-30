@@ -702,6 +702,25 @@ MATRIX: dict[str, Route] = {
             f"{ctx.fresh_machine() if i in _ADMIN_FACES else ctx.machine_id}"
         ),
     ),
+    # ── document history (T-7d33) ───────────────────────────────────────────
+    # READING a document's retained versions is open to every authenticated
+    # caller (machine floor), the same floor as reading the document itself.
+    "GET /api/document-history/{kind}/{key}": Route(
+        requires="machine",
+        path=lambda ctx, i: "/api/document-history/global_context/global",
+    ),
+    # RESTORING is a write. The route floor is the agent floor, but each KIND
+    # then keeps its own document's write floor in the handler — this row aims
+    # at a task manual (no extra floor) with a revision id that does not exist,
+    # so every at-or-above-floor identity lands on the same semantic 404 and the
+    # row measures the FLOOR, not one document's governance rule. The
+    # per-document floors are pinned in the Go tests
+    # (TestRestoreDocumentHistoryKeepsEachDocumentsWriteFloor).
+    "POST /api/document-history/{kind}/{key}/{id}/restore": Route(
+        requires="agent",
+        path=lambda ctx, i: "/api/document-history/task_manual/tm-conf-missing/1/restore",
+        overrides={"agent_self": 404, "agent_other": 404, "admin_agent": 404, "owner": 404},
+    ),
     # ── global context / roles / lessons / bootstrap ─────────────────────────
     "GET /api/global-context": Route(requires="machine"),
     "POST /api/global-context": Route(
