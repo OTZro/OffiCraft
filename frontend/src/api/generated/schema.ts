@@ -2277,8 +2277,8 @@ export interface paths {
          *     before the SSE connects, so the new session can never inherit a stale marker and
          *     re-trigger a recycle (or derive *stopping*) on itself.
          *
-         *     ``model`` (optional) remains accepted for API compatibility, but its value is
-         *     ignored. The owner-configured model remains authoritative.
+         *     ``model`` is optional runtime telemetry. The server stores it as ``actual_model``
+         *     without changing the owner-configured launch model.
          */
         post: operations["handle_report_waking_api_self_waking_post"];
         delete?: never;
