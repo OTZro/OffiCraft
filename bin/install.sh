@@ -133,14 +133,22 @@ set -euo pipefail
 
 # ── `curl … | bash` leaves the download half writing into a pipe nobody reads ─
 # Every early exit in this file (--help, "already clean", a refused gate, the
-# whole --uninstall path) ends the script while curl may still have bytes in
-# flight. The reading end of the pipe then closes under it, so curl's next write
-# fails and it prints
+# whole --uninstall path) USED TO end the script while curl still had bytes in
+# flight. The reading end of the pipe then closed under it, so curl's next write
+# failed and it printed
 #   curl: (23|56) Failure writing output to destination, passed N returned 0
-# to stderr — AFTER our own output. A completely successful run therefore ends
-# on a red line that reads like a failure. That is the disease the rest of this
-# file was rewritten to cure (see the SCOPE note above), so it gets no pass
-# here: drain whatever is left before we go.
+# to stderr — AFTER our own output, so a completely successful run ended on a red
+# line that read like a failure.
+#
+# ⚠️ THE PRIMARY CURE IS NO LONGER THIS DRAIN — it is the oc_main() wrap further
+# down (T-4358): the body is one function the LAST line calls, and nothing before
+# it prints or exits, so the file is delivered in full before anything is
+# observable. Measured with the drain forced inert, a real 150,000 B curl|bash at
+# 5 KB/s still delivers 149,999/149,999 with curl rc=0 — this drain contributes
+# nothing to that path any more. It is kept as a second line of defence for a
+# writer that sends MORE than the script, and because retiring it is a larger
+# change than T-4358's scope (bin/tests/stdin-drain-guard.sh cases 6/6b pin its
+# trap shape). Structural guard: bin/tests/curl-bash-read-before-execute-guard.sh.
 #
 # Three guards, and the reason for each:
 #   1. Only when the SCRIPT ITSELF arrived on stdin (`curl … | bash`, `bash -s`).
@@ -631,18 +639,26 @@ fi
 # `curl … | bash` feeds this file to bash on a pipe, and bash executes a piped
 # script INCREMENTALLY: it reads a chunk, runs what parsed, reads the next. So
 # `--help` used to print and exit while curl still had ~70 KB in flight, the read
-# end closed under it, and a SUCCESSFUL run ended on curl: (23) — the disease the
-# drain above only papers over. A function definition is ONE command, so bash
-# cannot run any of this until it has read the closing brace, i.e. the whole file.
-# The drain stays regardless: it still covers a failure inside the prologue, and
-# the padding case in bin/tests/curl-bash-read-before-execute-guard.sh keeps both
-# honest.
+# end closed under it, and a SUCCESSFUL run ended on curl: (23). A function
+# definition is ONE command, so bash cannot run any of THIS BODY until it has
+# read the closing brace.
+#
+# ⚠️ STATE THE GUARANTEE EXACTLY. It is NOT "bash reads the whole file before it
+# executes anything" — the prologue above (set -euo pipefail, the from-stdin
+# flag, these function definitions, the trap, the mode detection, which really
+# does fork a subshell for SELF_DIR) all runs as it is parsed. What holds, and is
+# all this needs, is that none of it can PRINT or EXIT:
+#     install.sh produces no output and does not terminate
+#     until it has been read in full.
+# bin/tests/curl-bash-read-before-execute-guard.sh asserts both halves — the tail
+# shape, and that nothing before this line prints or exits.
 #
 # NOT re-indented, on purpose. The wrap has to be provably structure-only, and a
 # body at the original indentation makes that readable straight off `git diff`.
-# Nothing here is `local`: every variable stays global exactly as before, `exit`
-# stays `exit` (never `return`), and the file's last statement is still the same
-# `echo`, so the script's exit status is unchanged on every path.
+# Nothing at body level is `local` and nothing `return`s: every variable stays
+# global exactly as before, `exit` stays the only way out, and the file's last
+# statement is still the same `echo`, so the exit status is unchanged on every
+# path. Those three are asserted statically by the guard above, not just meant.
 oc_main() {
 
 for _oc_arg in "$@"; do

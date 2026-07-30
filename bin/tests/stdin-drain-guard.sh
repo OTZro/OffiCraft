@@ -2,11 +2,26 @@
 # bin/tests/stdin-drain-guard.sh — HERMETIC unit tests for bin/install.sh's
 # EXIT-time stdin drain (T-fa39, owner decision on rc-a75094435df1).
 #
-# THE DEFECT UNDER TEST
-# ---------------------
+# ⚠️ READ THIS FIRST (T-4358). This suite tests the drain, and the drain is NO
+# LONGER what fixes the defect described below. install.sh's body is now one
+# oc_main() that its LAST line calls, and nothing before that call prints or
+# exits, so the file is delivered in full before anything is observable —
+# measured with the drain forced INERT, a real 150,000 B curl|bash at 5 KB/s
+# still delivers 149,999/149,999 with curl rc=0. The structural property is
+# owned by bin/tests/curl-bash-read-before-execute-guard.sh; what remains here is
+# the drain's own shape (its two guards, its boundedness, its trap arrangement).
+# Two consequences worth knowing before trusting a green run:
+#   - case 5c no longer pins the two drain timeout constants; setting BOTH to 1
+#     leaves this whole suite green (see the note above 5c).
+#   - case 1 feeds the script PLUS 200 KB of padding. Real curl sends exactly the
+#     file, so post-wrap that residue is something the documented invocation
+#     cannot produce — which is why the drain still looks load-bearing here.
+#
+# THE DEFECT UNDER TEST (historical shape, pre-T-4358)
+# ----------------------------------------------------
 # `curl … | bash -s -- --uninstall --dry-run` is the documented invocation.
-# Every early exit in install.sh ends the script while the transfer may still be
-# in flight; the reading end of the pipe closes, and curl's next write fails:
+# Every early exit in install.sh ended the script while the transfer was still
+# in flight; the reading end of the pipe closed, and curl's next write failed:
 #
 # NOT a file-size story, though the first version of this header said it was:
 # a 53.8 KB release (comfortably under the 65,536 B pipe capacity here)
