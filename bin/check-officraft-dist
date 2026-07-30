@@ -6,12 +6,24 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE_ROOT="${OFFICRAFT_DIST_SOURCE_ROOT:-$ROOT}"
 MANIFEST="${OFFICRAFT_DIST_MANIFEST:-$ROOT/dist/officraft/source.sha256}"
+BIN_MANIFEST="${OFFICRAFT_DIST_BINARY_MANIFEST:-$ROOT/dist/officraft/binary.sha256}"
 BIN="${OFFICRAFT_DIST_BINARY:-$ROOT/dist/officraft/officraft}"
 [[ -x "$BIN" && -s "$BIN" ]] || { echo "[officraft-dist] missing executable: $BIN" >&2; exit 1; }
 [[ -f "$MANIFEST" ]] || { echo "[officraft-dist] missing source manifest: $MANIFEST" >&2; exit 1; }
+[[ -f "$BIN_MANIFEST" ]] || { echo "[officraft-dist] missing binary manifest: $BIN_MANIFEST" >&2; exit 1; }
 actual="$(cd "$SOURCE_ROOT" && shasum -a 256 cli/officraft/go.mod cli/officraft/main.go | shasum -a 256 | awk '{print $1}')"
 expected="$(awk 'NR==1 {print $1}' "$MANIFEST")"
 [[ "$actual" == "$expected" ]] || {
   echo "[officraft-dist] stale: cli/officraft source hash is $actual, dist records $expected" >&2
+  exit 1
+}
+# The source hash alone cannot see the binary. Refreshing the manifest without
+# rebuilding — or swapping the executable for something else entirely — leaves
+# the source check perfectly happy, so the recorded binary hash is what makes
+# the committed bytes mean anything at all.
+actual_bin="$(shasum -a 256 "$BIN" | awk '{print $1}')"
+expected_bin="$(awk 'NR==1 {print $1}' "$BIN_MANIFEST")"
+[[ "$actual_bin" == "$expected_bin" ]] || {
+  echo "[officraft-dist] binary does not match its record: $BIN hashes to $actual_bin, dist records $expected_bin" >&2
   exit 1
 }
