@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -18,12 +21,15 @@ func TestSaveWithDocumentHistoryKeepsThreePreWriteSnapshots(t *testing.T) {
 	if err := dal.PutUserContext(UserContext{Text: "one"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, next := range []string{"two", "three", "four", "five"} {
-		current, err := dal.GetUserContext()
+	snapshot := func(q sqlQuerier) (string, error) {
+		current, err := getUserContextOn(q)
 		if err != nil {
-			t.Fatal(err)
+			return "", err
 		}
-		if err := dal.SaveWithDocumentHistory("global_context", "global", `{"text":"`+current.Text+`"}`, "owner", func(ex sqlExecer) error {
+		return `{"text":"` + current.Text + `"}`, nil
+	}
+	for _, next := range []string{"two", "three", "four", "five"} {
+		if err := dal.SaveWithDocumentHistory("global_context", "global", "owner", snapshot, func(ex sqlExecer) error {
 			return putUserContextOn(ex, UserContext{Text: next})
 		}); err != nil {
 			t.Fatal(err)
@@ -47,5 +53,146 @@ func TestSaveWithDocumentHistoryKeepsThreePreWriteSnapshots(t *testing.T) {
 	}
 	if current.Text != "five" {
 		t.Fatalf("live text = %q, want five", current.Text)
+	}
+}
+
+// The revision chain must survive a writer that folded its replacement from a
+// read taken before someone else's write landed. Two callers reading "one" and
+// then writing in turn used to retain "one" twice, leaving the value written in
+// between recoverable from nowhere.
+func TestSaveWithDocumentHistoryRetainsTheValueItActuallyReplaced(t *testing.T) {
+	db, err := openSQLite(filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	dal := NewDAL(db)
+	if err := dal.PutUserContext(UserContext{Text: "one"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both writers read the document here, while it still says "one".
+	slow, err := dal.GetUserContext()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slow.Text != "one" {
+		t.Fatalf("baseline read = %q, want one — the fixture never set up the race", slow.Text)
+	}
+
+	write := func(next string) {
+		t.Helper()
+		if err := dal.SaveWithDocumentHistory("global_context", "global", "owner", userContextSnapshotIn, func(ex sqlExecer) error {
+			return putUserContextOn(ex, UserContext{Text: next})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("two")   // the fast writer commits first
+	write("three") // the slow writer, still holding the stale "one", writes next
+
+	history, err := dal.ListDocumentHistory("global_context", "global")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("history count = %d, want 2", len(history))
+	}
+	var texts []string
+	for _, h := range history {
+		texts = append(texts, h.ContentJSON)
+	}
+	if texts[0] != `{"text":"two","tombstoned":"false"}` {
+		t.Errorf("newest revision = %s, want the replaced value \"two\"", texts[0])
+	}
+	if texts[1] != `{"text":"one","tombstoned":"false"}` {
+		t.Errorf("oldest revision = %s, want \"one\"", texts[1])
+	}
+}
+
+// Concurrent writers must leave a contiguous chain: the retained revisions are
+// the values immediately preceding the live one, each retained once. A snapshot
+// read taken outside the write's own transaction lets two writers retain the
+// same ancestor, which shows up here as a duplicate revision and a value that
+// was live but is recoverable from nowhere.
+func TestSaveWithDocumentHistoryUnderConcurrentWritersKeepsTheChainContiguous(t *testing.T) {
+	db, err := openSQLite(filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	dal := NewDAL(db)
+	if err := dal.PutUserContext(UserContext{Text: "seed"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	var committed []string // the order the writes actually landed in
+	var wg sync.WaitGroup
+	for i := range 6 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			next := fmt.Sprintf("v%d", i)
+			if err := dal.SaveWithDocumentHistory("global_context", "global", "owner", userContextSnapshotIn, func(ex sqlExecer) error {
+				if err := putUserContextOn(ex, UserContext{Text: next}); err != nil {
+					return err
+				}
+				mu.Lock()
+				committed = append(committed, next)
+				mu.Unlock()
+				return nil
+			}); err != nil {
+				t.Errorf("write %s: %v", next, err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	history, err := dal.ListDocumentHistory("global_context", "global")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != documentHistoryKeep {
+		t.Fatalf("history count = %d, want %d", len(history), documentHistoryKeep)
+	}
+	var retained []string
+	seen := map[string]bool{}
+	for _, h := range history {
+		var content map[string]string
+		if err := json.Unmarshal([]byte(h.ContentJSON), &content); err != nil {
+			t.Fatal(err)
+		}
+		if seen[content["text"]] {
+			t.Fatalf("revision %q retained twice — two writers snapshotted the same ancestor: %v",
+				content["text"], history)
+		}
+		seen[content["text"]] = true
+		retained = append(retained, content["text"])
+	}
+	// history is newest-first; the commit order's last three values are the live
+	// one and the two revisions before it.
+	want := []string{
+		committed[len(committed)-2],
+		committed[len(committed)-3],
+		committed[len(committed)-4],
+	}
+	for i, w := range want {
+		if retained[i] != w {
+			t.Fatalf("retained = %v, want %v (commit order %v)", retained, want, committed)
+		}
+	}
+	current, err := dal.GetUserContext()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Text != committed[len(committed)-1] {
+		t.Fatalf("live text = %q, want %q", current.Text, committed[len(committed)-1])
 	}
 }

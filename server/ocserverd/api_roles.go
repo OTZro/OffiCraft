@@ -54,17 +54,7 @@ func (s *apiServer) HandleReplaceGlobalContextApiGlobalContextPost(w http.Respon
 			return
 		}
 	}
-	overlay, err := s.dal.GetUserContext()
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	snapshot, err := userContextHistorySnapshot(overlay)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	if err := s.dal.SaveWithDocumentHistory("global_context", "global", snapshot, currentActor(r), func(ex sqlExecer) error {
+	if err := s.dal.SaveWithDocumentHistory("global_context", "global", currentActor(r), userContextSnapshotIn, func(ex sqlExecer) error {
 		return putUserContextOn(ex, UserContext{Text: text, Tombstoned: false})
 	}); err != nil {
 		internalError(w, err)
@@ -82,17 +72,7 @@ func (s *apiServer) HandleReplaceGlobalContextApiGlobalContextPost(w http.Respon
 
 // POST /api/global-context/reset — idempotent tombstone back to empty.
 func (s *apiServer) HandleResetGlobalContextApiGlobalContextResetPost(w http.ResponseWriter, r *http.Request) {
-	overlay, err := s.dal.GetUserContext()
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	snapshot, err := userContextHistorySnapshot(overlay)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	if err := s.dal.SaveWithDocumentHistory("global_context", "global", snapshot, currentActor(r), func(ex sqlExecer) error {
+	if err := s.dal.SaveWithDocumentHistory("global_context", "global", currentActor(r), userContextSnapshotIn, func(ex sqlExecer) error {
 		return putUserContextOn(ex, UserContext{Text: "", Tombstoned: true})
 	}); err != nil {
 		internalError(w, err)
@@ -266,17 +246,7 @@ func (s *apiServer) HandleUpdateRoleApiRolesRolePost(w http.ResponseWriter, r *h
 	if body.DefinitionMd != nil {
 		definitionMD = *body.DefinitionMd
 	}
-	overlay, err := s.dal.GetRoleDef(role)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	snapshot, err := roleDefHistorySnapshot(overlay)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	if err := s.dal.SaveWithDocumentHistory("role_definition", role, snapshot, currentActor(r), func(ex sqlExecer) error {
+	if err := s.dal.SaveWithDocumentHistory("role_definition", role, currentActor(r), roleDefSnapshotIn(role), func(ex sqlExecer) error {
 		return putRoleDefOn(ex, RoleDef{
 			RoleKey:      role,
 			Name:         name,
@@ -311,17 +281,7 @@ func (s *apiServer) HandleResetRoleApiRolesRoleResetPost(w http.ResponseWriter, 
 		internalError(w, err)
 		return
 	}
-	overlay, err := s.dal.GetRoleDef(role)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	snapshot, err := roleDefHistorySnapshot(overlay)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	if err := s.dal.SaveWithDocumentHistory("role_definition", role, snapshot, currentActor(r), func(ex sqlExecer) error {
+	if err := s.dal.SaveWithDocumentHistory("role_definition", role, currentActor(r), roleDefSnapshotIn(role), func(ex sqlExecer) error {
 		return putRoleDefOn(ex, RoleDef{RoleKey: role, Tombstoned: true})
 	}); err != nil {
 		internalError(w, err)
@@ -589,17 +549,7 @@ func (s *apiServer) HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(w http.Res
 		writeError(w, http.StatusBadRequest, docCapRefusal("lessons doc", current.Text, text))
 		return
 	}
-	overlay, err := s.dal.GetLessons(roleKey, taskType)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	snapshot, err := lessonsHistorySnapshot(overlay)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	if err := s.dal.SaveWithDocumentHistory("lessons", roleKey+"::"+taskType, snapshot, currentActor(r), func(ex sqlExecer) error {
+	if err := s.dal.SaveWithDocumentHistory("lessons", roleKey+"::"+taskType, currentActor(r), lessonsSnapshotIn(roleKey, taskType), func(ex sqlExecer) error {
 		return putLessonsOn(ex, Lessons{
 			RoleKey:    roleKey,
 			TaskType:   taskType,
@@ -685,17 +635,7 @@ func (s *apiServer) HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost(w http.
 		writeError(w, http.StatusBadRequest, docCapRefusal("lessons doc", current.Text, next))
 		return
 	}
-	overlay, err := s.dal.GetLessons(roleKey, taskType)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	snapshot, err := lessonsHistorySnapshot(overlay)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	if err := s.dal.SaveWithDocumentHistory("lessons", roleKey+"::"+taskType, snapshot, currentActor(r), func(ex sqlExecer) error {
+	if err := s.dal.SaveWithDocumentHistory("lessons", roleKey+"::"+taskType, currentActor(r), lessonsSnapshotIn(roleKey, taskType), func(ex sqlExecer) error {
 		return putLessonsOn(ex, Lessons{
 			RoleKey:    roleKey,
 			TaskType:   taskType,

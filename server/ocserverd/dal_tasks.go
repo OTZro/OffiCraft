@@ -1000,7 +1000,11 @@ func (d *DAL) ListTaskManuals() ([]TaskManual, error) {
 
 // GetTaskManual returns one manual by type key, or nil if absent.
 func (d *DAL) GetTaskManual(typeKey string) (*TaskManual, error) {
-	row := d.db.QueryRow(
+	return getTaskManualOn(d.db, typeKey)
+}
+
+func getTaskManualOn(q sqlQuerier, typeKey string) (*TaskManual, error) {
+	row := q.QueryRow(
 		`SELECT `+taskManualColumns+` FROM task_manual WHERE type_key = ?`, typeKey)
 	m, err := scanTaskManual(row)
 	if errors.Is(err, sql.ErrNoRows) {

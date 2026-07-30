@@ -439,6 +439,15 @@ type sqlExecer interface {
 	Exec(query string, args ...any) (sql.Result, error)
 }
 
+// sqlQuerier is the read counterpart of sqlExecer. It exists so a document's
+// pre-write state can be read from inside the very transaction that overwrites
+// it: a snapshot read on d.db would be a different point in time from the
+// write, and two writers folding from the same read would then retain the same
+// old revision twice while one of their results became unrecoverable.
+type sqlQuerier interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
 // DocumentHistory is one immutable pre-write snapshot. ContentJSON deliberately
 // stores the complete editable document so a restore never assembles fields
 // from revisions written at different times.
@@ -455,9 +464,15 @@ const documentHistoryKeep = 3
 
 // SaveWithDocumentHistory atomically retains the current document (when it is
 // non-empty), writes its replacement, and trims only snapshots older than the
-// newest three. Callers provide the existing document's complete JSON form.
-func (d *DAL) SaveWithDocumentHistory(kind, key, currentJSON, actorID string, write func(sqlExecer) error) error {
+// newest three. snapshot re-reads and serializes the live document from inside
+// the transaction, so the retained revision is the state this write actually
+// replaced — not whatever the caller happened to read earlier.
+func (d *DAL) SaveWithDocumentHistory(kind, key, actorID string, snapshot func(sqlQuerier) (string, error), write func(sqlExecer) error) error {
 	return d.inTx(func(tx *sql.Tx) error {
+		currentJSON, err := snapshot(tx)
+		if err != nil {
+			return err
+		}
 		if currentJSON != "" && currentJSON != "{}" {
 			if _, err := tx.Exec(`INSERT INTO document_history
 				(document_kind, document_key, content_json, created_ts, actor_id)
@@ -982,9 +997,11 @@ const userContextRowID = 1
 
 // GetUserContext returns the block, or nil if never written (no row = the
 // block is skipped when assembling boot context).
-func (d *DAL) GetUserContext() (*UserContext, error) {
+func (d *DAL) GetUserContext() (*UserContext, error) { return getUserContextOn(d.db) }
+
+func getUserContextOn(q sqlQuerier) (*UserContext, error) {
 	var uc UserContext
-	err := d.db.QueryRow(
+	err := q.QueryRow(
 		`SELECT text, tombstoned FROM user_context WHERE id = ?`, userContextRowID,
 	).Scan(&uc.Text, &uc.Tombstoned)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1042,9 +1059,11 @@ func (d *DAL) ListRoleDefs() ([]RoleDef, error) {
 }
 
 // GetRoleDef returns one overlay by role key, or nil if never edited.
-func (d *DAL) GetRoleDef(roleKey string) (*RoleDef, error) {
+func (d *DAL) GetRoleDef(roleKey string) (*RoleDef, error) { return getRoleDefOn(d.db, roleKey) }
+
+func getRoleDefOn(q sqlQuerier, roleKey string) (*RoleDef, error) {
 	var rd RoleDef
-	err := d.db.QueryRow(
+	err := q.QueryRow(
 		`SELECT role_key, name, definition_md, tombstoned FROM role_def WHERE role_key = ?`,
 		roleKey,
 	).Scan(&rd.RoleKey, &rd.Name, &rd.DefinitionMD, &rd.Tombstoned)
@@ -1100,8 +1119,12 @@ type Lessons struct {
 // GetLessons returns the overlay for (roleKey, taskType), or nil if never
 // edited.
 func (d *DAL) GetLessons(roleKey, taskType string) (*Lessons, error) {
+	return getLessonsOn(d.db, roleKey, taskType)
+}
+
+func getLessonsOn(q sqlQuerier, roleKey, taskType string) (*Lessons, error) {
 	var l Lessons
-	err := d.db.QueryRow(`
+	err := q.QueryRow(`
 		SELECT role_key, task_type, text, tombstoned FROM lessons
 		WHERE role_key = ? AND task_type = ?`, roleKey, taskType,
 	).Scan(&l.RoleKey, &l.TaskType, &l.Text, &l.Tombstoned)

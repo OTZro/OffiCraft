@@ -128,7 +128,8 @@ func TestDocumentHistoryRestorePreservesOverlayTombstones(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := api.dal.SaveWithDocumentHistory("role_definition", role, tombstonedRole, "owner", func(ex sqlExecer) error {
+	seedTombstoned := func(sqlQuerier) (string, error) { return tombstonedRole, nil }
+	if err := api.dal.SaveWithDocumentHistory("role_definition", role, "owner", seedTombstoned, func(ex sqlExecer) error {
 		return putRoleDefOn(ex, RoleDef{RoleKey: role, Name: "later", DefinitionMD: "later"})
 	}); err != nil {
 		t.Fatal(err)

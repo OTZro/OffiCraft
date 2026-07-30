@@ -68,6 +68,52 @@ func lessonsHistorySnapshot(current *Lessons) (string, error) {
 	})
 }
 
+// The four readers below are what SaveWithDocumentHistory calls from inside the
+// write transaction. They deliberately re-read the document rather than trust a
+// value the handler folded earlier: the retained revision must be the state
+// this write replaced, otherwise two writers racing on one document both retain
+// the same ancestor and the revision written in between becomes unrecoverable.
+func userContextSnapshotIn(q sqlQuerier) (string, error) {
+	current, err := getUserContextOn(q)
+	if err != nil {
+		return "", err
+	}
+	return userContextHistorySnapshot(current)
+}
+
+func roleDefSnapshotIn(roleKey string) func(sqlQuerier) (string, error) {
+	return func(q sqlQuerier) (string, error) {
+		current, err := getRoleDefOn(q, roleKey)
+		if err != nil {
+			return "", err
+		}
+		return roleDefHistorySnapshot(current)
+	}
+}
+
+func lessonsSnapshotIn(roleKey, taskType string) func(sqlQuerier) (string, error) {
+	return func(q sqlQuerier) (string, error) {
+		current, err := getLessonsOn(q, roleKey, taskType)
+		if err != nil {
+			return "", err
+		}
+		return lessonsHistorySnapshot(current)
+	}
+}
+
+func taskManualSnapshotIn(typeKey string) func(sqlQuerier) (string, error) {
+	return func(q sqlQuerier) (string, error) {
+		current, err := getTaskManualOn(q, typeKey)
+		if err != nil {
+			return "", err
+		}
+		if current == nil {
+			return "{}", nil
+		}
+		return taskManualHistorySnapshot(*current)
+	}
+}
+
 func (s *apiServer) documentHistoryAllowed(w http.ResponseWriter, r *http.Request, kind, key string, write bool) bool {
 	primary, _, valid := historyKeyParts(kind, key)
 	if !valid {
@@ -165,15 +211,7 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 	actor := currentActor(r)
 	switch kind {
 	case "global_context":
-		current, err := s.dal.GetUserContext()
-		if err != nil {
-			return err
-		}
-		snapshot, err := userContextHistorySnapshot(current)
-		if err != nil {
-			return err
-		}
-		return s.dal.SaveWithDocumentHistory(kind, key, snapshot, actor, func(ex sqlExecer) error {
+		return s.dal.SaveWithDocumentHistory(kind, key, actor, userContextSnapshotIn, func(ex sqlExecer) error {
 			return putUserContextOn(ex, UserContext{Text: content["text"], Tombstoned: historyTombstoned(content)})
 		})
 	case "role_definition":
@@ -182,15 +220,7 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 		} else if folded == nil {
 			return errNotFound
 		}
-		current, err := s.dal.GetRoleDef(key)
-		if err != nil {
-			return err
-		}
-		snapshot, err := roleDefHistorySnapshot(current)
-		if err != nil {
-			return err
-		}
-		return s.dal.SaveWithDocumentHistory(kind, key, snapshot, actor, func(ex sqlExecer) error {
+		return s.dal.SaveWithDocumentHistory(kind, key, actor, roleDefSnapshotIn(key), func(ex sqlExecer) error {
 			return putRoleDefOn(ex, RoleDef{RoleKey: key, Name: content["name"], DefinitionMD: content["definition_md"], Tombstoned: historyTombstoned(content)})
 		})
 	case "lessons":
@@ -202,15 +232,7 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 		if DocCapBlocked(current.Text, content["text"]) {
 			return errDocumentHistoryCap
 		}
-		overlay, err := s.dal.GetLessons(roleKey, taskType)
-		if err != nil {
-			return err
-		}
-		snapshot, err := lessonsHistorySnapshot(overlay)
-		if err != nil {
-			return err
-		}
-		return s.dal.SaveWithDocumentHistory(kind, key, snapshot, actor, func(ex sqlExecer) error {
+		return s.dal.SaveWithDocumentHistory(kind, key, actor, lessonsSnapshotIn(roleKey, taskType), func(ex sqlExecer) error {
 			return putLessonsOn(ex, Lessons{RoleKey: roleKey, TaskType: taskType, Text: content["text"], Tombstoned: historyTombstoned(content)})
 		})
 	case "task_manual":
@@ -224,14 +246,10 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 		if DocCapBlocked(current.Learnings, content["learnings"]) || DocCapBlocked(current.SopMD, content["sop_md"]) {
 			return errDocumentHistoryCap
 		}
-		snapshot, err := taskManualHistorySnapshot(*current)
-		if err != nil {
-			return err
-		}
 		next := *current
 		next.Purpose, next.Fields, next.SopMD, next.Learnings = content["purpose"], content["fields"], content["sop_md"], content["learnings"]
 		next.UpdatedTS = nowSecs()
-		return s.dal.SaveWithDocumentHistory(kind, key, snapshot, actor, func(ex sqlExecer) error {
+		return s.dal.SaveWithDocumentHistory(kind, key, actor, taskManualSnapshotIn(key), func(ex sqlExecer) error {
 			return putTaskManualOn(ex, next)
 		})
 	}
