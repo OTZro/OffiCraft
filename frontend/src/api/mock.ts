@@ -750,6 +750,52 @@ let nextDocumentHistoryId = 1;
 
 const historySlot = (kind: DocumentKind, key: string) => `${kind}/${key}`;
 
+// The overlay kinds whose document ROW exists only once something has been
+// written: dal.go's SaveWithDocumentHistory retains a revision only when the
+// in-transaction snapshot is non-empty, and the snapshot readers return "{}"
+// when the row is absent. So the FIRST customization of a seed/default document
+// replaces nothing and retains NOTHING — history starts at the second write.
+// (A reset is a write too: it persists a tombstoned row, which the next write
+// then retains.) task_manual is not tracked here — its row is the manual
+// itself, created by createTaskManual.
+const documentRows = new Set<string>();
+
+const markDocumentRow = (kind: DocumentKind, key: string) =>
+  documentRows.add(historySlot(kind, key));
+
+function hasDocumentRow(kind: DocumentKind, key: string): boolean {
+  return kind === "task_manual"
+    ? taskManuals.some((m) => m.typeKey === key)
+    : documentRows.has(historySlot(kind, key));
+}
+
+/** Drop one document's retained revisions along with the document itself — the
+ * server does this in the SAME transaction as the delete (dal.go DeleteRoleDef
+ * / DeleteTaskManual), so a deleted document leaves no readable echo behind. */
+function dropDocumentHistory(kind: DocumentKind, key: string): void {
+  documentHistories.delete(historySlot(kind, key));
+  documentRows.delete(historySlot(kind, key));
+}
+
+/** Every "<role>::<task_type>" lessons document of one role. Matched by an
+ * explicit PREFIX, exactly like DeleteLessonsOfRole: the key is compound, so
+ * dropping only `<role>::general` would leave every other task type's history
+ * readable after the role is gone. */
+function dropRoleLessonsHistory(roleKey: string): void {
+  const prefix = `${roleKey}::`;
+  for (const slot of [...documentHistories.keys()]) {
+    if (slot.startsWith(historySlot("lessons", prefix))) {
+      documentHistories.delete(slot);
+    }
+  }
+  for (const slot of [...documentRows]) {
+    if (slot.startsWith(historySlot("lessons", prefix))) documentRows.delete(slot);
+  }
+  for (const key of [...lessonsOverlays.keys()]) {
+    if (key.startsWith(prefix)) lessonsOverlays.delete(key);
+  }
+}
+
 /** The document's CURRENT persisted state as a history content map, or null
  * when there is no such document (the server 404s / no-ops there). */
 function snapshotDocument(
@@ -804,6 +850,11 @@ function snapshotDocument(
 /** Retain the state a write is about to replace. Called BEFORE the mutation,
  * exactly like SaveWithDocumentHistory's in-transaction snapshot. */
 function recordDocumentHistory(kind: DocumentKind, key: string): void {
+  // This write persists the document's row; whether it retains anything depends
+  // on a row having been there ALREADY (see documentRows).
+  const replacesARow = hasDocumentRow(kind, key);
+  markDocumentRow(kind, key);
+  if (!replacesARow) return;
   const content = snapshotDocument(kind, key);
   if (content === null) return;
   const slot = historySlot(kind, key);
@@ -2388,6 +2439,7 @@ export const mockApi: Api = {
       );
     }
     taskManuals = taskManuals.filter((m) => m.typeKey !== typeKey);
+    dropDocumentHistory("task_manual", typeKey);
     emitTopic("task_manual");
   },
 
@@ -3035,6 +3087,10 @@ export const mockApi: Api = {
       Math.random().toString(16).slice(2, 8) +
       Math.random().toString(16).slice(2, 8);
     const roleKey = `r-${hex()}`;
+    // A custom role IS its own document row from the moment it is created, so
+    // its first EDIT already has a previous version to retain (server parity:
+    // handle_create_role writes the role_def row).
+    markDocumentRow("role_definition", roleKey);
     customRoles.set(roleKey, {
       key: roleKey,
       name,
@@ -3120,7 +3176,9 @@ export const mockApi: Api = {
       const [reader, peer] = k.split("::");
       if (ids.has(reader) || ids.has(peer)) chatReads.delete(k);
     }
-    lessonsOverlays.delete(lessonsKey(key, "general"));
+    // The role's documents go with it, retained revisions included.
+    dropRoleLessonsHistory(key);
+    dropDocumentHistory("role_definition", key);
     roleOverlays.delete(key);
     customRoles.delete(key);
   },
@@ -3252,6 +3310,7 @@ export function __resetMock(): void {
   customRoles.clear();
   lessonsOverlays.clear();
   documentHistories.clear();
+  documentRows.clear();
   nextDocumentHistoryId = 1;
   chatLog = [];
   chatReads.clear();

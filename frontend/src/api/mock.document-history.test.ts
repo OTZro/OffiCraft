@@ -12,24 +12,48 @@ beforeEach(() => {
 });
 
 describe("mockApi · document history", () => {
-  it("has no revisions for a document nobody has edited", async () => {
+  it("has no revisions for a document nobody has edited, nor after its first write", async () => {
     expect(await mockApi.listDocumentHistory("global_context", "global")).toEqual(
       []
     );
+
+    // The product boundary: a seed/default document has no previous version, so
+    // the FIRST customization replaces nothing and retains nothing. The server
+    // skips the empty snapshot (dal.go); a synthesized "was default" revision
+    // here would show the cockpit a version the real server never kept.
+    await mockApi.saveGlobalContext("first customization");
+    await mockApi.saveRole("assistant", { definitionMd: "first rewrite" });
+    await mockApi.saveLessons("assistant", "general", "first learnings");
+
+    expect(
+      await mockApi.listDocumentHistory("global_context", "global")
+    ).toEqual([]);
+    expect(
+      await mockApi.listDocumentHistory("role_definition", "assistant")
+    ).toEqual([]);
+    expect(
+      await mockApi.listDocumentHistory("lessons", "assistant::general")
+    ).toEqual([]);
   });
 
   it("retains the state each write replaced, newest first", async () => {
     await mockApi.saveGlobalContext("first");
     await mockApi.saveGlobalContext("second");
+    await mockApi.saveGlobalContext("third");
+    // A reset is a write too — it persists a tombstoned row, which the write
+    // after it retains.
+    await mockApi.resetGlobalContext();
+    await mockApi.saveGlobalContext("fourth");
 
     const versions = await mockApi.listDocumentHistory(
       "global_context",
       "global"
     );
-    expect(versions.map((v) => v.content.text)).toEqual(["first", ""]);
-    // The oldest one is what the doc looked like before it was ever edited —
-    // the tombstone flag is why a restore of it can honestly go back to seed.
-    expect(versions[1].content.tombstoned).toBe("true");
+    expect(versions.map((v) => v.content.text)).toEqual(["", "third", "second"]);
+    // The newest one is the doc as the reset left it — the tombstone flag is
+    // why a restore of it can honestly go back to seed.
+    expect(versions[0].content.tombstoned).toBe("true");
+    expect(versions[1].content.tombstoned).toBe("false");
     expect(versions[0].actorId).toBeTruthy();
     expect(versions[0].createdTs).toBeGreaterThan(0);
   });
@@ -47,6 +71,7 @@ describe("mockApi · document history", () => {
 
   it("scopes history per document, not per kind", async () => {
     await mockApi.saveLessons("assistant", "general", "assistant learnings");
+    await mockApi.saveLessons("assistant", "general", "assistant learnings v2");
     expect(
       await mockApi.listDocumentHistory("lessons", "researcher::general")
     ).toEqual([]);
@@ -78,6 +103,10 @@ describe("mockApi · document history", () => {
 
   it("restoring a tombstoned revision puts the document back on its seed", async () => {
     await mockApi.saveRole("assistant", { definitionMd: "owner rewrite" });
+    // The reset puts the role back on its seed (a tombstoned row); the write
+    // after it is what retains that state as a revision.
+    await mockApi.resetRole("assistant");
+    await mockApi.saveRole("assistant", { definitionMd: "second rewrite" });
     const [seedVersion] = await mockApi.listDocumentHistory(
       "role_definition",
       "assistant"
@@ -126,6 +155,59 @@ describe("mockApi · document history", () => {
     expect(back.fields).toEqual([
       { name: "pr_url", required: true, isKey: true },
     ]);
+  });
+
+  // Deleting a document takes its retained revisions with it, in the same
+  // transaction (dal.go DeleteRoleDef / DeleteLessonsOfRole / DeleteTaskManual):
+  // history is readable by any authenticated caller, so a leftover revision is a
+  // readable echo of a deleted document and makes the guide's 「永久移除」 false.
+  // No live cockpit path reaches a stale row today — role keys and manual
+  // type_keys are randomly minted, so a deleted key is never seen again — but
+  // the mock is the cockpit's stand-in for the contract: one that still lists
+  // history for a deleted document teaches the UI, and the next reader of this
+  // file, a behaviour the server does not have.
+  it("deleting a role drops its own history and the history of ALL its lessons", async () => {
+    const { role } = await mockApi.createRole({ name: "臨時角色" });
+    await mockApi.saveRole(role.key, { definitionMd: "改寫" });
+    // TWO task types: the lessons history key is compound (`<role>::<type>`),
+    // so a delete that only matched one exact key would leave the other behind.
+    for (const taskType of ["general", "planning"]) {
+      await mockApi.saveLessons(role.key, taskType, "第一版");
+      await mockApi.saveLessons(role.key, taskType, "第二版");
+      expect(
+        await mockApi.listDocumentHistory("lessons", `${role.key}::${taskType}`)
+      ).toHaveLength(1);
+    }
+    expect(
+      await mockApi.listDocumentHistory("role_definition", role.key)
+    ).toHaveLength(1);
+
+    await mockApi.deleteRole(role.key);
+
+    expect(
+      await mockApi.listDocumentHistory("role_definition", role.key)
+    ).toEqual([]);
+    expect(
+      await mockApi.listDocumentHistory("lessons", `${role.key}::general`)
+    ).toEqual([]);
+    expect(
+      await mockApi.listDocumentHistory("lessons", `${role.key}::planning`)
+    ).toEqual([]);
+  });
+
+  it("deleting a task manual drops its history", async () => {
+    const manual = await mockApi.createTaskManual("Review PR");
+    await mockApi.updateTaskManual(manual.typeKey, { purpose: "第一版" });
+    await mockApi.updateTaskManual(manual.typeKey, { purpose: "第二版" });
+    expect(
+      await mockApi.listDocumentHistory("task_manual", manual.typeKey)
+    ).toHaveLength(2);
+
+    await mockApi.deleteTaskManual(manual.typeKey);
+
+    expect(
+      await mockApi.listDocumentHistory("task_manual", manual.typeKey)
+    ).toEqual([]);
   });
 
   it("rejects a revision id this document does not have", async () => {

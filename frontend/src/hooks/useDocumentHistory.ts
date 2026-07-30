@@ -16,12 +16,12 @@ import { api } from "../api";
  * so this list can never end up watching a topic the doc does not publish.
  *
  * NOTE role_definition → "role_def": that is the topic the doc's own writes
- * publish (api_roles.go) and the one useRoles listens on. The server's
- * publishDocumentHistoryRestore currently publishes "role" for a RESTORE, which
- * is outside the closed 12-topic set (hub.go sseTopics) and is therefore
- * dropped at the publish seam — so a restore fans nothing at all today. Since
- * the restore path refreshes by direct refetch anyway, watching the real topic
- * is strictly better than mirroring a frame nobody ever receives. */
+ * publish (api_roles.go), the one useRoles listens on, and — since the restore
+ * path was fixed on this branch — the one a RESTORE publishes too
+ * (publishDocumentHistoryRestore). It used to publish "role", which is outside
+ * the closed 12-topic set (hub.go sseTopics) and was dropped at the publish
+ * seam, so a restore fanned nothing at all; watching the document's own topic
+ * was right then and is what keeps this list reconciling now. */
 const TOPIC_OF: Record<DocumentKind, string> = {
   global_context: "global_context",
   role_definition: "role_def",

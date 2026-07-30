@@ -48,25 +48,32 @@ describe("SettingsPage · 版本紀錄", () => {
   });
 
   it("lists each retained revision with when, who and a content preview", async () => {
+    // The FIRST write retains nothing (a default document has no previous
+    // version), so the retained set starts at the second one.
+    await mockApi.saveGlobalContext("第零版：草稿");
     await mockApi.saveGlobalContext("第一版：多用 emoji");
     await mockApi.saveGlobalContext("第二版：少用 emoji");
+    await mockApi.resetGlobalContext();
+    await mockApi.saveGlobalContext("第三版：重寫");
 
     const utils = await openUserCustomDoc();
     const rows = await waitFor(() => {
       const found = utils.container.querySelectorAll(".doc-hist__item");
-      expect(found).toHaveLength(2);
+      expect(found).toHaveLength(3);
       return found;
     });
 
-    // Newest first: the top row is the text the LAST write replaced. The
-    // preview is what makes two revisions of one doc distinguishable.
-    expect(within(rows[0] as HTMLElement).getByText("第一版：多用 emoji")).toBeTruthy();
-    expect(within(rows[0] as HTMLElement).getByText(s.historyField.text)).toBeTruthy();
+    // Newest first: the top row is what the LAST write replaced — the state the
+    // reset left behind, so the seed-state badge says so instead of showing a
+    // misleading empty preview.
+    expect(within(rows[0] as HTMLElement).getByText(s.historyDefaultBadge)).toBeTruthy();
+    // Below it, the owner's own revisions, each with the preview that makes two
+    // revisions of one doc distinguishable.
+    expect(within(rows[1] as HTMLElement).getByText("第二版：少用 emoji")).toBeTruthy();
+    expect(within(rows[1] as HTMLElement).getByText(s.historyField.text)).toBeTruthy();
+    expect(within(rows[2] as HTMLElement).getByText("第一版：多用 emoji")).toBeTruthy();
     // Who wrote it, through the dictionary label (never a bare id on its own).
-    expect((rows[0] as HTMLElement).textContent).toContain(s.historyByLabel);
-    // The oldest revision predates any owner edit — the seed-state badge says
-    // so instead of showing a misleading empty preview.
-    expect(within(rows[1] as HTMLElement).getByText(s.historyDefaultBadge)).toBeTruthy();
+    expect((rows[1] as HTMLElement).textContent).toContain(s.historyByLabel);
   });
 
   it("restore asks first, then rides the adapter and refreshes doc and list", async () => {
@@ -112,6 +119,7 @@ describe("SettingsPage · 版本紀錄", () => {
   });
 
   it("cancelling the confirmation leaves the document alone", async () => {
+    await mockApi.saveGlobalContext("更早的內容");
     await mockApi.saveGlobalContext("目前的內容");
     const restore = vi.spyOn(mockApi, "restoreDocumentHistory");
 
@@ -134,6 +142,7 @@ describe("SettingsPage · 版本紀錄", () => {
   });
 
   it("keeps a failed restore honest: the dialog stays open with the reason", async () => {
+    await mockApi.saveGlobalContext("更早的內容");
     await mockApi.saveGlobalContext("目前的內容");
     const restore = vi
       .spyOn(mockApi, "restoreDocumentHistory")
@@ -157,6 +166,9 @@ describe("SettingsPage · 版本紀錄", () => {
     // over the cap and not shrinking. Before this, the owner only found out by
     // clicking — which reads as a broken system rather than a stated limit.
     const overCap = "字".repeat(DOC_CAP_CHARS + 1);
+    // The doc's first write retains nothing, so the over-cap text has to be the
+    // SECOND one for it to become a retained revision at all.
+    await mockApi.saveLessons("assistant", "general", "原始經驗");
     await mockApi.saveLessons("assistant", "general", overCap);
     await mockApi.saveLessons("assistant", "general", "短");
 
@@ -190,6 +202,7 @@ describe("SettingsPage · 版本紀錄", () => {
   });
 
   it("leaves an ordinary revision restorable — the mark is not blanket", async () => {
+    await mockApi.saveLessons("assistant", "general", "第零版經驗");
     await mockApi.saveLessons("assistant", "general", "第一版經驗");
     await mockApi.saveLessons("assistant", "general", "第二版經驗");
 
@@ -221,6 +234,7 @@ describe("SettingsPage · 版本紀錄", () => {
   it("shows the delete-scope footnote exactly where a delete control exists", async () => {
     const created = await mockApi.createRole({ name: "臨時角色" });
     expect(created.role.isSeed).toBe(false);
+    const manual = await mockApi.createTaskManual("週報");
 
     const utils = render(
       <I18nProvider>
@@ -228,38 +242,82 @@ describe("SettingsPage · 版本紀錄", () => {
       </I18nProvider>
     );
 
-    // The delete control lives on the LIST, the footnote on the DETAIL page, so
-    // the probe reads one on each and compares them. Asserting the EQUIVALENCE
-    // is what makes this survive: showing the note everywhere and dropping it
-    // from a document that really is deletable are both invisible on screen,
-    // and a test that only looked at one surface would move for neither.
-    const probe = async (label: string, roleKey: string) => {
-      fireEvent.click(utils.getByText(s.roles));
-      await utils.findByText(label);
-      const deletable =
-        utils.queryByTestId(`role-delete-${roleKey}`) !== null;
-      fireEvent.click(utils.getByText(label));
+    // Back up to 設定 from wherever the previous probe ended — the trail's root
+    // crumb is the first clickable segment on every settings sub-page.
+    const goSettingsRoot = () => {
+      const [root] = utils.container.querySelectorAll(".crumbs__seg button");
+      if (root) fireEvent.click(root);
+    };
+    const readNote = async (surface: string, deletable: boolean) => {
       await waitFor(() =>
         expect(utils.getAllByText(s.historyTitle).length).toBeGreaterThan(0)
       );
-      const noted = utils.queryByTestId("doc-history-scope-note") !== null;
-      return { deletable, noted };
+      return {
+        surface,
+        deletable,
+        noted: utils.queryByTestId("doc-history-scope-note") !== null,
+      };
+    };
+
+    // The delete control lives on the LIST, the footnote on the DETAIL page, so
+    // each probe reads one on each and reports them together. Asserting the
+    // EQUIVALENCE is what makes this survive: showing the note everywhere and
+    // dropping it from a document that really is deletable are both invisible
+    // on screen, and a test that only looked at one surface would move for
+    // neither. The surface travels in the result so a failure names WHICH page
+    // drifted.
+    const probeRole = async (label: string, roleKey: string) => {
+      goSettingsRoot();
+      fireEvent.click(utils.getByText(s.roles));
+      await utils.findByText(label);
+      const deletable = utils.queryByTestId(`role-delete-${roleKey}`) !== null;
+      fireEvent.click(utils.getByText(label));
+      return readNote(`${s.roles} › ${label}`, deletable);
+    };
+
+    // A task manual carries the same footnote on BOTH of its document
+    // sub-pages: one retained revision covers the whole manual, and deleting
+    // the type takes every one of them with it.
+    const probeManual = async (entry: "definition" | "learnings") => {
+      goSettingsRoot();
+      fireEvent.click(utils.getByText(s.manuals));
+      await utils.findByTestId(`manual-open-${manual.typeKey}`);
+      const deletable =
+        utils.queryByTestId(`manual-delete-${manual.typeKey}`) !== null;
+      fireEvent.click(utils.getByTestId(`manual-open-${manual.typeKey}`));
+      fireEvent.click(await utils.findByTestId(`manual-entry-${entry}`));
+      return readNote(`${s.manuals} › ${manual.displayName} › ${entry}`, deletable);
     };
 
     // A seed role cannot be deleted, so the note — which says what history does
     // NOT cover — would be a false statement there.
-    expect(await probe(zh.office.role.assistant, "assistant")).toEqual({
+    expect(await probeRole(zh.office.role.assistant, "assistant")).toEqual({
+      surface: `${s.roles} › ${zh.office.role.assistant}`,
       deletable: false,
       noted: false,
     });
     // A custom role can be deleted whole, and that delete keeps no history.
-    expect(await probe("臨時角色", created.role.key)).toEqual({
+    expect(await probeRole("臨時角色", created.role.key)).toEqual({
+      surface: `${s.roles} › 臨時角色`,
+      deletable: true,
+      noted: true,
+    });
+    // Every task manual can be deleted whole — so the note belongs on both of
+    // its document pages, and the same equivalence binds them.
+    expect(await probeManual("definition")).toEqual({
+      surface: `${s.manuals} › 週報 › definition`,
+      deletable: true,
+      noted: true,
+    });
+    expect(await probeManual("learnings")).toEqual({
+      surface: `${s.manuals} › 週報 › learnings`,
       deletable: true,
       noted: true,
     });
   });
 
   it("shows the same card on a role definition, keyed to that role", async () => {
+    await mockApi.saveRole("assistant", { definitionMd: "角色定義初稿" });
     await mockApi.saveRole("assistant", { definitionMd: "角色定義改寫" });
     const created = await mockApi.createRole({ name: "臨時角色" });
     expect(created.role.isSeed).toBe(false);
