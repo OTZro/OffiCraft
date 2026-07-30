@@ -2273,8 +2273,9 @@ export const mockApi: Api = {
 
   async restartWorker(id: string): Promise<OutsourceWorkerView> {
     // 重啟 (T-f190). Inverse of stop: set desired_state back online + re-dispatch.
-    // 409 if not stopped; unknown/released → 404. The mock reflects the observable
-    // re-spawn as presence "waking" (the server re-dispatches; boots afresh).
+    // 409 only when the worker is actually ALIVE (T-7526 — see the guard below);
+    // unknown/released → 404. The mock reflects the observable re-spawn as presence
+    // "waking" (the server re-dispatches; boots afresh).
     const w = outsourceWorkers.find((x) => x.id === id);
     if (!w || w.status === "released") {
       throw new ApiError(
@@ -2289,7 +2290,7 @@ export const mockApi: Api = {
     if (w.desiredState !== "offline" && w.presence === "online") {
       throw new ApiError(
         `http 409 for POST /api/outsource-workers/${id}/restart`,
-        409, "conflict", "worker is not stopped — nothing to restart"
+        409, "conflict", "worker is still online — nothing to restart"
       );
     }
     w.desiredState = "online";

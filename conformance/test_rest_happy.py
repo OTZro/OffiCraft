@@ -1319,9 +1319,11 @@ SKIPPED_HAPPY: dict[str, str] = {
     "POST /api/outsource-workers/{id}/restart": (
         "T-f190 owner 重啟: the positive face needs a STOPPED worker row (no "
         "black-box mint path). The below-owner-403 / owner-404 faces are pinned in "
-        "the auth matrix; the not-stopped-409 + desired_state=online set + re-dispatch "
-        "in the server unit tests (worker_lifecycle_test.go, "
-        "TestRestartWorker_ClearsAndRedispatches)."
+        "the auth matrix; the still-alive-409 (T-7526: the guard is LIVENESS, not "
+        "'did anyone press stop' — a worker whose session died on its own IS "
+        "restartable) + desired_state=online set + re-dispatch in the server unit "
+        "tests (worker_lifecycle_test.go, TestRestartWorker_ClearsAndRedispatches / "
+        "TestRestartWorker_RevivesAWorkerWhoseSessionDiedOnItsOwn)."
     ),
     "POST /api/outsource-workers/{id}/model": (
         "T-f190 owner 換 model: the positive face needs a LIVE worker row (no "

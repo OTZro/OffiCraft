@@ -151,7 +151,13 @@ export function useRelocateMachine({
   // T-7fa1: the relocate answered 200 but its recycle STOP/START never reached a
   // warden — pinned, not landed. Surfaced by the caller as a DispatchAlert.
   //
-  // 🔴🔴 TWIN IMPLEMENTATION — the notice hygiene below (self-heal, the
+  // ⚠️ DEAD CODE SINCE T-7526 — this hook has NO production importer (the member
+  // panel dropped it in T-927a, the outsource panel in T-7526; only this file's
+  // own test suite and a CT story still reach it). It is kept, not deleted,
+  // pending an owner ruling — see docs/design/worker-panel-parity.md 連帶後果.
+  // Editing it changes nothing a user can see.
+  //
+  // 🔴🔴 WAS A TWIN of MemberDetailPanel's hand-written copy — the notice hygiene below (self-heal, the
   // observability gate, the subject-keyed reset, the in-flight subject guard)
   // also exists, hand-written, in MemberDetailPanel: that panel folded relocate
   // into its unified settings submit and stopped driving this hook. Change the

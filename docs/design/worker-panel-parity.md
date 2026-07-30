@@ -56,7 +56,7 @@
 
 | # | 項目 | 正職有什麼 | 外包有什麼 | 差在哪 | 期望行為 |
 |---|------|-----------|-----------|--------|---------|
-| D1 | 喚醒（`spawn`／`t.lifecycle.action.spawn`） | 有：離線／已停止／waking／stopping 皆提供，開設定 dialog 後 `activateMember` | 只有 `restartWorker`（**wire 規定「非 stopped 即 409」**） | 差 | **待裁定**。一個 `offline`（spawn 失敗／session 死掉）的外包在 UI 上**無法被叫起來**——`restart` 會 409。要補等價能力得動 wire。不自行發明 |
+| D1 | 喚醒（`spawn`／`t.lifecycle.action.spawn`） | 有：離線／已停止／waking／stopping 皆提供，開設定 dialog 後 `activateMember` | `restartWorker` | ~~差~~ **已修（T-7526 追加範圍，owner 核可）** | ✅ **已完成，不再是開放問題**。原本 `restart` 的守衛是 `desired_state != offline → 409`（問「有沒有人按過停止」），所以 session 自己死掉的外包（`desired_state` 仍是 online）叫不起來。守衛改成 `desired_state != offline && hub.IsOnline(id)`（問「還活著嗎」），座艙的 `noLiveSession = stopped \|\| offline` 讓那顆鍵在死掉的 worker 上顯示「重新啟動」。護欄：`TestRestartWorker_RevivesAWorkerWhoseSessionDiedOnItsOwn` |
 | D2 | 取消喚醒（`cancel`） | `waking` 時提供 → `deactivateMember` | 無 | 差 | **待裁定**，同 D1：外包的 `stop` 端點是否吃 `waking` 態，wire 沒明說 |
 | D3 | 強制停止 + 二次確認 | `stopping` 時 Stop 升級為 force-stop，`mp-force-stop-confirm` modal | **無此端點**（`spec/openapi.json` 只有 `/api/members/{id}/force-stop`） | 差 | **待裁定**。要對齊得新增 `/api/outsource-workers/{id}/force-stop`，屬 wire 變更（§13 先改 spec + owner 過目） |
 | D4 | 「只儲存，不喚醒」 | `mp-settings-save-only`，未喚醒時出現 | 無 | 差 | **不需要**（可自裁定）：外包 dialog 本來就**不啟動任何東西**（只打 `model` 與 `relocate` 兩個端點），所以整份 dialog 就是「只儲存」，多一顆同義鍵反而製造「另一顆會啟動」的錯覺 |
@@ -79,23 +79,33 @@
 
 ## 「待裁定」清單（交回 owner）
 
+> **狀態（最後更新：T-7526 追加範圍完成後）**：原本 8 格，現在剩 **6 格**開放。
+> 已關掉的兩格：**D1**（owner 核可並已實作完成，見上表 D1 列）、**B5**（owner 明示核可，見下方裁定段）。
+> 此表與上面的逐項表、與下方連帶後果段**必須同批更新**——文件把已完成的事仍標成待裁定，
+> 下一個人就會拿它去問一個已經有答案的問題。
+
 | 代號 | 一句話 |
 |------|--------|
 | A9 | 外包 relocate 的 wire 回傳沒有 `relocation_pending`，無法對齊正職的「已釘選但沒派出去」警示。要對齊＝改凍結 wire |
 | B2 | 外包 DTO 無 `actual_model`，模型格無法像正職那樣標「最近一次開機回報」。要不要加欄？ |
 | B4 | 要不要補「→ 要換到 ○○」遷移提示？外包的 `machine` 是派工目標而非觀測位置，文案有過度宣稱風險 |
-| B5 | 🔴 拿掉機器格就地「編輯」鍵，會一併失去外包目前獨有的「更換中…／30s 逾時／伺服器回執原文」進度投影（失敗那一半會由 dialog 錯誤行承接）。請明示認可 |
 | C1 | 「停止／重新啟動」要不要從狀態卡搬到身分卡動作列（＝正職的位置）？能力兩邊都有，只差擺放 |
-| D1 | `offline` 的外包無法被叫起來（`restart` 非 stopped 即 409）。要不要補等價「喚醒」能力？ |
 | D2 | `waking` 的外包無「取消喚醒」。`stop` 端點是否吃 waking 態，wire 未明說 |
 | D3 | 外包無「強制停止」端點。要不要新增 `/api/outsource-workers/{id}/force-stop`？ |
 
-### 連帶後果（不是新裁定，是 B5 的下游）
+### B5 的裁定結果與連帶後果
 
-- `frontend/visual-guards/relocate-progress-720.ct.spec.tsx` 與它的
-  `WorkerRelocateProgressStory` 已移除（檔案 `mv` 進 `trash/T-7526/`）。理由與 T-927a 移除
-  **正職那一半**時逐字相同：外包面板不再有 改機器 鍵、「更換中…」字樣與 30s 逾時提示，
-  這份量測不是紅、是**無從表達**；而外包的 機器 標題列現在完全沒有控制項，沒有寬度風險可量。
+✅ **B5 已由 owner 明示核可**（「進度顯示拿掉、對齊成正職的形狀」）：拿掉機器格的就地「編輯」鍵，
+連帶失去外包原本獨有的「更換中…／30s 逾時／伺服器回執原文」進度投影；失敗那一半由 dialog 的
+錯誤行（`ApiError.serverMessage`）承接。以下是它的下游後果，不是新的待裁定：
+
+- **`frontend/visual-guards/relocate-progress-720.ct.spec.tsx`**（整支 spec）已移除 —— `mv` 進
+  `trash/T-7526/`，**trash 裡就只有這一個檔**。理由與 T-927a 移除**正職那一半**時逐字相同：
+  外包面板不再有 改機器 鍵、「更換中…」字樣與 30s 逾時提示，這份量測不是紅、是**無從表達**；
+  而外包的 機器 標題列現在完全沒有控制項，沒有寬度風險可量。
+- **`frontend/visual-guards/stories/RelocateProgressStory.tsx` 沒有被移除，是就地編輯**：只刪掉
+  `WorkerRelocateProgressStory` 這一個 export 與它的 worker fixture／import。檔案本身還在、仍在
+  CT 跑，因為 `member-machine-transition.ct.spec.tsx` 還在用同檔的 `MemberMachineTransitionStory`。
 - `useRelocateMachine.tsx`（連同 `MachinePicker.tsx`）在本次改動後**已無任何 production
   importer**（僅剩自己的測試與 `MemberDetailPanel` 註解裡的 twin-implementation 交叉引用）。
   依 §9(a) 這是該清的 legacy，但刪掉一個 hook ＋ 它整份測試 ＋ 一個元件，範圍遠大於本票，

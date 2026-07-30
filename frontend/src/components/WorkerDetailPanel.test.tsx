@@ -864,4 +864,30 @@ describe("WorkerDetailPanel — initial-prompt preview (T-ba6b)", () => {
     );
     expect(boot).toHaveBeenCalledTimes(2);
   });
+
+  // The owner's actual symptom: 「關掉重開也救不回來」. The loaded stamp used to be
+  // written when the read STARTED, so once a read had been fired the effect bailed
+  // out for good — collapsing and re-expanding could not get past it either.
+  it("re-expanding after a failed read reads again instead of resurrecting 載入中", async () => {
+    __injectMockTask(mkTask({ id: "t-1" }));
+    __injectMockOutsourceWorker(mkWorker({ id: "ow-1", taskId: "t-1" }));
+    const boot = vi
+      .spyOn(api, "getWorkerBootContext")
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce("外包啟動指示");
+
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+    const toggle = await findByTestId("worker-detail-prompt-toggle");
+    fireEvent.click(toggle);
+    await findByTestId("worker-detail-prompt-error");
+    // Collapse, re-expand — the recovery path the owner actually tried.
+    fireEvent.click(toggle);
+    fireEvent.click(toggle);
+    await waitFor(async () =>
+      expect(
+        (await findByTestId("worker-detail-prompt-body")).textContent,
+      ).toContain("外包啟動指示"),
+    );
+    expect(boot).toHaveBeenCalledTimes(2);
+  });
 });

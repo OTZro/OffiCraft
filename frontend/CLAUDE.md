@@ -356,7 +356,10 @@ owner/agent 自由文字會帶**不可斷的長 token**(長 URL、40-hex sha、�
 (它就是這樣上線這麼久沒被抓到)。而 `rerender` **必須傳一個新的 element**——傳同一個
 element 物件 React 會 bail out、根本不重繪,測試會對著沒修的碼變綠。
 護欄:`MemberDetailPanel.initial-prompt.test.tsx` + `WorkerDetailPanel.test.tsx`
-的 initial-prompt 段(同一段程式,兩個 wrapper 各自證明)。
+的 initial-prompt 段。**同一段程式,但兩個 wrapper 各自證明三件事**(重繪中、失敗重試、
+收合再展開)——它們的 `vm.prompt.fetch` 是兩條不同的 arrow(正職在 vm 物件字面量裡、
+外包經 OfficePage 的 prop),只證一邊等於沒證另一邊那條線。
+mutant 紀錄:`docs/design/worker-panel-parity-mutants.md`。
 
 ## verify(root §13)
 純 FE UI 改動:headless build → `preview:4173` → Playwright,CI 綠即 land、**不上 prod 驗**。公開 URL https://officraft.hardcoretech.link/。`Monitor.tsx` 的 mock 部分無 telemetry backend(純前端 mock)。

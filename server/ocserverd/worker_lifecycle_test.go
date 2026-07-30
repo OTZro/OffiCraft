@@ -476,8 +476,10 @@ func TestStopWorker_Idempotent(t *testing.T) {
 
 // TestRestartWorker_ClearsAndRedispatches: restart on a stopped worker sets
 // desired_state back online and re-dispatches (worker_start). A non-stopped
-// worker → 409. Mutant: dropping the "not stopped → 409" guard → the non-stopped
-// case 200s (a hidden double-spawn) → red.
+// worker → 409. Mutant: dropping the still-alive guard → the LIVE case 200s
+// (a hidden double-spawn) → red. (The other half of that guard — a worker whose
+// session died on its own must NOT be refused — is
+// TestRestartWorker_RevivesAWorkerWhoseSessionDiedOnItsOwn below.)
 func TestRestartWorker_ClearsAndRedispatches(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
