@@ -676,6 +676,24 @@ else
   bad "bin/tests/stdin-drain-guard.sh is missing"
 fi
 
+# ── install.sh is fully read before it executes (T-4358) ───────────────────
+# The other half of the same defect. The drain above shortens the window in
+# which curl gets EPIPE; it cannot close it, because a piped bash acts on the
+# first chunk it parses while the rest of the file is still on the wire. The fix
+# is structural — one oc_main() the last line calls — so it needs its own real
+# HTTP probe rather than another assertion inside the drain suite.
+READBEFOREEXEC="$HERE/curl-bash-read-before-execute-guard.sh"
+echo
+if [[ -f "$READBEFOREEXEC" ]]; then
+  if run_guard "$READBEFOREEXEC"; then
+    ok "install.sh read-before-execute suite passed"
+  else
+    bad "install.sh read-before-execute suite FAILED (see output above)"
+  fi
+else
+  bad "bin/tests/curl-bash-read-before-execute-guard.sh is missing"
+fi
+
 # ── harness process hygiene (T-1a54) ────────────────────────────────────────
 # Pins run_bounded.py: the ceiling that stops a busy-loop mutant from running
 # forever, and the group-reap that stops anything a guard spawned from leaking

@@ -198,12 +198,24 @@ oc_drain_stdin() {
 # sites would be zero-coverage for whatever the next person adds.
 trap oc_drain_stdin EXIT
 
+# ── plutil readers ───────────────────────────────────────────────────────────
+# ONE reader, because both callers had the SAME defect and only one of them was
+# fixed. rc decides, not output: on macOS 15 plutil prints its "no value at that
+# key path" error on STDOUT (macOS 26 puts it on stderr), so `2>/dev/null || true`
+# hands that error TEXT back as if it were the value. T-5831 fixed plist_env this
+# way and left plist_program on the old shape, which then printed a plutil error
+# line in the field where the operator is told to read a program path.
+plist_raw() {
+  local v; v="$(plutil -extract "$2" raw -o - "$1" 2>/dev/null)" || return 0
+  printf '%s' "$v"
+}
 # ProgramArguments[0] of an existing plist, or "" if unreadable/absent. Shared by
 # --uninstall's ownership check below and the install-time ownership gate further
 # down (package mode) — one definition, same semantics both places.
-plist_program() {
-  plutil -extract ProgramArguments.0 raw -o - "$1" 2>/dev/null || true
-}
+plist_program() { plist_raw "$1" ProgramArguments.0; }
+# EnvironmentVariables.<key> of a plist, or "" when absent. Used by the
+# relocation gate far below.
+plist_env() { plist_raw "$1" "EnvironmentVariables.$2"; }
 
 # ── --uninstall: reverse of this installer, never needs a download ──────────
 # See mode C in the header above for the flag shapes. Called from the top-level
@@ -350,7 +362,8 @@ EOF
   if [[ "$plist_foreign" == 1 ]]; then
     echo "[install] FATAL: launchd label '$LABEL' is registered but points at a DIFFERENT program:" >&2
     echo "[install]        plist:    $PLIST" >&2
-    echo "[install]        program:  $(plist_program "$PLIST")" >&2
+    local prog; prog="$(plist_program "$PLIST")"
+    echo "[install]        program:  ${prog:-<unreadable>}" >&2
     echo "[install]        expected: $BIN_DIR/ocserverd" >&2
     echo "[install]        Refusing to touch a job this installer did not create, and refusing to remove" >&2
     echo "[install]        $ROOT_DIR since ownership of this machine's install is now ambiguous. NOTHING was changed." >&2
@@ -596,6 +609,42 @@ EOF
   fi
 }
 
+# ── mode detection ───────────────────────────────────────────────────────────
+# Package mode = this file sits next to the three release binaries (unpacked
+# tarball). Anything else — including `curl … | bash`, where BASH_SOURCE is empty
+# because the script comes from stdin — is standalone bootstrap mode.
+# TOP LEVEL, and it stays there for the same reason the from-stdin flag near the
+# top of this file does: this is the OTHER read of BASH_SOURCE[0], and what that
+# reads as inside a function is version-dependent. Everything below uses $SELF
+# rather than re-reading it. Pure computation — no output, no exit — so it cannot
+# break the read-before-execute property oc_main exists for.
+SELF="${BASH_SOURCE[0]:-}"
+IN_PACKAGE=0
+if [[ -n "$SELF" && -f "$SELF" ]]; then
+  SELF_DIR="$(cd "$(dirname "$SELF")" && pwd)"
+  if [[ -f "$SELF_DIR/ocserverd" && -f "$SELF_DIR/ocwarden" && -f "$SELF_DIR/ocagent" && -f "$SELF_DIR/officraft" ]]; then
+    IN_PACKAGE=1
+  fi
+fi
+
+# ── everything that ACTS lives in oc_main, called on the LAST line ───────────
+# `curl … | bash` feeds this file to bash on a pipe, and bash executes a piped
+# script INCREMENTALLY: it reads a chunk, runs what parsed, reads the next. So
+# `--help` used to print and exit while curl still had ~70 KB in flight, the read
+# end closed under it, and a SUCCESSFUL run ended on curl: (23) — the disease the
+# drain above only papers over. A function definition is ONE command, so bash
+# cannot run any of this until it has read the closing brace, i.e. the whole file.
+# The drain stays regardless: it still covers a failure inside the prologue, and
+# the padding case in bin/tests/curl-bash-read-before-execute-guard.sh keeps both
+# honest.
+#
+# NOT re-indented, on purpose. The wrap has to be provably structure-only, and a
+# body at the original indentation makes that readable straight off `git diff`.
+# Nothing here is `local`: every variable stays global exactly as before, `exit`
+# stays `exit` (never `return`), and the file's last statement is still the same
+# `echo`, so the script's exit status is unchanged on every path.
+oc_main() {
+
 for _oc_arg in "$@"; do
   if [[ "$_oc_arg" == "--uninstall" ]]; then
     cmd_uninstall_release "$@"
@@ -632,19 +681,6 @@ oc_preflight() {
   printf '[install]          %s\n' "${miss[@]}" >&2
   exit 1
 }
-
-# ── mode detection ───────────────────────────────────────────────────────────
-# Package mode = this file sits next to the three release binaries (unpacked
-# tarball). Anything else — including `curl … | bash`, where BASH_SOURCE is empty
-# because the script comes from stdin — is standalone bootstrap mode.
-SELF="${BASH_SOURCE[0]:-}"
-IN_PACKAGE=0
-if [[ -n "$SELF" && -f "$SELF" ]]; then
-  SELF_DIR="$(cd "$(dirname "$SELF")" && pwd)"
-  if [[ -f "$SELF_DIR/ocserverd" && -f "$SELF_DIR/ocwarden" && -f "$SELF_DIR/ocagent" && -f "$SELF_DIR/officraft" ]]; then
-    IN_PACKAGE=1
-  fi
-fi
 
 if [[ "$IN_PACKAGE" == 0 ]]; then
   # ── standalone bootstrap (curl | bash) ─────────────────────────────────────
@@ -809,7 +845,7 @@ while [[ $# -gt 0 ]]; do
     --port)        shift; PORT_FLAG="${1:-}" ;;
     --port=*)      PORT_FLAG="${1#*=}" ;;
     -h|--help)
-      sed -n '2,/^set -/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'
+      sed -n '2,/^set -/p' "$SELF" | sed '$d; s/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -861,7 +897,7 @@ fi
 
 oc_preflight
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HERE="$(cd "$(dirname "$SELF")" && pwd)"
 ROOT_DIR="$HOME/.officraft$NS_DASH"  # NS_DASH="" ⇒ the historical literal
 BIN_DIR="$ROOT_DIR/bin"
 DB_PATH="$ROOT_DIR/server/data/officraft.db"
@@ -1200,12 +1236,6 @@ fi
 #     and re-derive the port from it so the port gate checks the real port.
 #   - port or config would actually CHANGE       -> that is a relocation, not a
 #     reload. Hard stop, print the before/after, require --relocate.
-plist_env() {
-  # EnvironmentVariables.<key> of a plist, or "" when absent. rc decides, not
-  # output: macOS 15's plutil prints its "no value" error on STDOUT.
-  local v; v="$(plutil -extract "EnvironmentVariables.$2" raw -o - "$1" 2>/dev/null)" || return 0
-  printf '%s' "$v"
-}
 if [[ "$OURS" == 1 ]]; then
   OLD_CFG="$(plist_env "$PLIST" OC_CONFIG)"
 
@@ -1469,3 +1499,6 @@ echo "  open:    $URL"
 echo "  stop:    launchctl bootout $TARGET"
 echo "  remove:  launchctl bootout $TARGET && rm -f $PLIST"
 echo
+
+}
+oc_main "$@"
