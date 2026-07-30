@@ -2277,8 +2277,8 @@ export interface paths {
          *     before the SSE connects, so the new session can never inherit a stale marker and
          *     re-trigger a recycle (or derive *stopping*) on itself.
          *
-         *     ``model`` (optional) remains accepted for API compatibility, but its value is
-         *     ignored. The owner-configured model remains authoritative.
+         *     ``model`` is optional runtime telemetry. The server stores it as ``actual_model``
+         *     without changing the owner-configured launch model.
          */
         post: operations["handle_report_waking_api_self_waking_post"];
         delete?: never;
@@ -4144,6 +4144,12 @@ export interface components {
          */
         MemberDTO: {
             /**
+             * Actual Model
+             * @description The model reported by the member's current or most recent successful boot. Empty means the member has never reported a model; it is separate from the owner-configured `model` launch setting.
+             * @default
+             */
+            actual_model: string;
+            /**
              * Avatar Url
              * @description Authenticated URL of this stable member id's personal raster avatar. Empty means no personal image; clients fall back to the active theme's role avatar, then the built-in glyph. Additive-optional for older clients.
              */
@@ -4231,8 +4237,13 @@ export interface components {
              */
             refocus_since: number;
             /**
+             * Relocation Deferred
+             * @description Set true on the relocate response when the move was DELIBERATELY deferred: the member is live with uncollected state, so the server opened a graceful wind-down window instead of dispatching now. Nothing has been sent YET BY DESIGN — the move lands when the agent finishes its wrap-up round. This is the companion that disambiguates ``relocation_pending``, which is true for BOTH this case and a genuinely undeliverable move: a consumer must NOT raise a "nothing was dispatched" alert while this field is true. Absent/null on every other member read, and never set on any response other than relocate (T-927a additive-optional).
+             */
+            relocation_deferred?: boolean | null;
+            /**
              * Relocation Pending
-             * @description Set true ONLY on the relocate response when the recycle STOP/START that moves a LIVE member could not be delivered to the warden (old/new machine unreachable) — the owner-pinned move is scheduled but has not landed yet; the reconcile cadence retries. Absent/null on every other member read, so the cockpit shows “move scheduled / not yet landed” instead of a silent success (T-8655 additive-optional).
+             * @description Set true ONLY on the relocate response when the owner-pinned move is scheduled but has not landed yet. TWO causes, which this field does not distinguish: (a) the recycle STOP/START that moves a LIVE member could not be delivered to the warden (old/new machine unreachable) — the reconcile cadence retries; (b) since T-b6d9, a graceful wind-down window was opened, so nothing has been dispatched yet BY DESIGN. Read ``relocation_deferred`` to tell (b) apart from (a) — only (a) is a failure worth alerting on. Absent/null on every other member read, so the cockpit shows “move scheduled / not yet landed” instead of a silent success (T-8655 additive-optional).
              */
             relocation_pending?: boolean | null;
             /**
@@ -5044,9 +5055,8 @@ export interface components {
          * @description Body for ``report_waking()`` — the boot report (identity from token, NO
          *     member_id). Stamps the CALLER's ``waking_since`` and clears the recycle markers.
          *
-         *     ``model`` is OPTIONAL and accepted for API compatibility. Its value is ignored: the
-         *     owner-configured model remains authoritative and cannot be changed by a caller's
-         *     wake report.
+         *     ``model`` is OPTIONAL runtime telemetry. The server stores it separately as
+         *     ``actual_model``; it never changes the owner-configured launch model.
          */
         ReportWakingDTO: {
             /** Model */

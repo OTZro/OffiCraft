@@ -87,14 +87,34 @@ const worker: OutsourceWorkerView = {
   delegatedBy: "",
 };
 
-export function MemberRelocateProgressStory() {
+/** The member panel's replacement hotspot (T-927a). 改機器 is gone from this
+ * panel — the visible pending state is now a 「→ 要換到 ○○」 hint line rendered as a
+ * sibling AFTER the 機器 value inside the same 機器 field block, plus the action row
+ * that gained a second button (喚醒／更改 beside Stop). Both are width risks jsdom
+ * cannot see. Machine ids that the registry does not know fall back to the raw id
+ * (MemberDetailPanel's own resolution), which is how this stages the long-label
+ * worst case without inventing a mock machine. */
+const OBSERVED_MACHINE =
+  "eva-m5-mac-studio-primary-worker-node-with-a-very-long-owner-set-label";
+const PENDING_MACHINE =
+  "seth-m1-mac-mini-spare-runner-node-with-an-equally-long-owner-set-label";
+
+const movingMember: Member = {
+  ...member,
+  status: "online",
+  lifecycle: "online",
+  machine: OBSERVED_MACHINE,
+  desiredMachineId: PENDING_MACHINE,
+};
+
+export function MemberMachineTransitionStory() {
   const ready = useOnlineMachines();
   return (
     <I18nProvider>
       <div className="app__main">
         {ready && (
           <MemberDetailPanel
-            member={member}
+            member={movingMember}
             onBack={() => {}}
             onRelocate={neverLands}
           />

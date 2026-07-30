@@ -47,6 +47,7 @@ type Member struct {
 	RoleKey          string
 	Runtime          string
 	Model            string
+	ActualModel      string
 	Effort           string
 	DesiredState     string
 	DesiredMachineID string
@@ -95,7 +96,7 @@ const (
 	RosterStatusRemoved = "removed"
 )
 
-const memberColumns = `id, name, kind, role_key, runtime, model, effort,
+const memberColumns = `id, name, kind, role_key, runtime, model, actual_model, effort,
 	desired_state, desired_machine_id, last_machine_id,
 	waking_since, stopping_since, stopped_since, refocus_since, banked_cost,
 	last_op, last_op_ok, last_op_log, last_op_reason, last_op_at, roster_status,
@@ -107,7 +108,7 @@ func scanMember(row interface{ Scan(...any) error }) (Member, error) {
 	var lastOpOK sql.NullBool
 	var linkedTaskID, codename sql.NullString
 	err := row.Scan(
-		&m.ID, &m.Name, &m.Kind, &m.RoleKey, &m.Runtime, &m.Model, &m.Effort,
+		&m.ID, &m.Name, &m.Kind, &m.RoleKey, &m.Runtime, &m.Model, &m.ActualModel, &m.Effort,
 		&m.DesiredState, &m.DesiredMachineID, &m.LastMachineID,
 		&m.WakingSince, &m.StoppingSince, &m.StoppedSince, &m.RefocusSince,
 		&m.BankedCost,
@@ -210,11 +211,11 @@ func (d *DAL) PutMember(m Member) error {
 	}
 	_, err := d.db.Exec(`
 		INSERT INTO member (`+memberColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			name = excluded.name, kind = excluded.kind,
 			role_key = excluded.role_key, runtime = excluded.runtime,
-			model = excluded.model,
+			model = excluded.model, actual_model = excluded.actual_model,
 			effort = excluded.effort, desired_state = excluded.desired_state,
 			desired_machine_id = excluded.desired_machine_id,
 			last_machine_id = excluded.last_machine_id,
@@ -233,7 +234,7 @@ func (d *DAL) PutMember(m Member) error {
 			created_ts = excluded.created_ts,
 			released_ts = excluded.released_ts,
 			activated_ts = excluded.activated_ts`,
-		m.ID, m.Name, m.Kind, m.RoleKey, NormalizeRuntime(m.Runtime), m.Model, m.Effort,
+		m.ID, m.Name, m.Kind, m.RoleKey, NormalizeRuntime(m.Runtime), m.Model, m.ActualModel, m.Effort,
 		m.DesiredState, m.DesiredMachineID, m.LastMachineID,
 		m.WakingSince, m.StoppingSince, m.StoppedSince, m.RefocusSince,
 		m.BankedCost,

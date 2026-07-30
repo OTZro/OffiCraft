@@ -8,7 +8,7 @@
 // account show through. Locked here as two scenarios.
 
 import { describe, it, expect, vi } from "vitest";
-import { render, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, waitFor, within } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
 import { MemberDetailPanel } from "./MemberDetailPanel";
@@ -132,4 +132,110 @@ describe("MemberDetailPanel · presence-gated machine + account", () => {
       modelEffortCell.indexOf(zh.mp.model)
     );
   });
+
+  it("shows the reported running model, never the configured launch model", async () => {
+    const { container, rerender } = renderPanel(
+      mkMember({
+        status: "online",
+        lifecycle: "online",
+        model: "configured-launch-model",
+        actualModel: "reported-runtime-model",
+      }),
+    );
+    const readModel = () =>
+      container.querySelector('[data-testid="mp-model-effort-cell"]')?.textContent ?? "";
+
+    await waitFor(() => expect(readModel()).toContain("reported-runtime-model"));
+    expect(readModel()).not.toContain("configured-launch-model");
+
+    rerender(
+      <I18nProvider>
+        <MemberDetailPanel
+          member={mkMember({
+            model: "configured-launch-model",
+            actualModel: "reported-runtime-model",
+          })}
+          onBack={() => {}}
+        />
+      </I18nProvider>,
+    );
+    await waitFor(() =>
+      expect(readModel()).not.toContain("reported-runtime-model"),
+    );
+  });
+
+  it("tags the model row as a REPORTED value, and says so in the settings dialog too", async () => {
+    // 🔴 One heading, three rows, two meanings: runtime and effort are what the
+    // owner CONFIGURED, the model is what the agent REPORTED — and the dialog
+    // edits the configured one. Without both labels the owner sees two different
+    // values under one name and reasonably concludes the system is wrong. The
+    // card tag alone fixes half of it, which is why the dialog note is asserted
+    // in the same test: neither half is optional.
+    const { container, getByTestId } = renderPanel(
+      mkMember({
+        status: "online",
+        lifecycle: "online",
+        model: "configured-launch-model",
+        actualModel: "reported-runtime-model",
+      }),
+    );
+    // 🔴 Scoped by POSITION, not by "somewhere in this cell": the cell holds
+    // runtime, model and effort, so a whole-cell assertion would still pass if
+    // the tag moved onto the 投入度 row — which is exactly the confusion the tag
+    // exists to remove.
+    const cellText = async () => {
+      await waitFor(() =>
+        expect(
+          container.querySelector('[data-testid="mp-model-effort-cell"]')?.textContent ?? "",
+        ).toContain(zh.mp.modelReportedTag),
+      );
+      return (
+        container.querySelector('[data-testid="mp-model-effort-cell"]')?.textContent ?? ""
+      );
+    };
+    const text = await cellText();
+    expect(text.indexOf("reported-runtime-model")).toBeGreaterThan(-1);
+    expect(text.indexOf(zh.mp.modelReportedTag)).toBeGreaterThan(
+      text.indexOf("reported-runtime-model"),
+    );
+    expect(text.indexOf(zh.mp.modelReportedTag)).toBeLessThan(
+      text.indexOf(zh.mp.effort),
+    );
+
+    await waitFor(() =>
+      expect((getByTestId("mp-change") as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(getByTestId("mp-change"));
+    // Both halves for a member that HAS a reported model: what the dialog edits,
+    // and what the card above is.
+    const note = getByTestId("mp-settings-intent-note").textContent ?? "";
+    expect(note).toContain(zh.mp.settingsIntentNote);
+    expect(note).toContain(zh.mp.settingsIntentNoteReported);
+  });
+
+  it("leaves the model cell BLANK when nobody has reported one (never the configured value)", async () => {
+    // 🔴 Red line (c) of the ticket: the reported-model field must not be
+    // backfilled from the configured one, or "no report yet ⇒ blank" becomes
+    // unreachable — and the panel would be back to showing an intention as if it
+    // were an observation. The test above uses a member where BOTH fields are
+    // set, so it cannot see a backfill: mutate the cell to
+    // `member.actualModel || member.model` and it stays green. This one is the
+    // guard for that mutation.
+    const { container } = renderPanel(
+      mkMember({
+        status: "online",
+        lifecycle: "online",
+        model: "configured-launch-model",
+        actualModel: "",
+      }),
+    );
+    const readModel = () =>
+      container.querySelector('[data-testid="mp-model-effort-cell"]')?.textContent ?? "";
+    await waitFor(() => expect(readModel()).not.toBe(""));
+    expect(readModel()).not.toContain("configured-launch-model");
+    // …and nothing may be tagged as a reported value when there is no reported
+    // value: 「— 最近一次開機回報」 would assert a report that never happened.
+    expect(readModel()).not.toContain(zh.mp.modelReportedTag);
+  });
+
 });

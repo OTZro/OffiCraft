@@ -35,6 +35,9 @@ const machine = (id: string, displayName: string): MachineView => ({
   claudeSubReadable: null,
 });
 
+let detailOnline = false;
+let detailDesiredMachineId = "mach-a";
+
 // OFFLINE on purpose: the wake button only exists for a member that is not
 // already up, and the panel's wakePending bridge only holds while the lifecycle
 // stays offline/stopped — the exact window the bug lived in.
@@ -43,12 +46,12 @@ const mkMember = (over: Partial<Member> = {}): Member => ({
   memberId: "MB-AST001",
   name: "Eva",
   role: "assistant",
-  status: "offline",
-  lifecycle: "offline",
+  status: detailOnline ? "online" : "offline",
+  lifecycle: detailOnline ? "online" : "offline",
   model: "opus-4.8",
   effort: "medium",
   kind: "assistant",
-  desiredMachineId: "mach-a",
+  desiredMachineId: detailDesiredMachineId,
   // 🔴 machine (WHERE IT IS) must differ from desiredMachineId (WHERE IT WAS
   // PINNED) for a relocate to be pending at all — equal means the move already
   // landed, which is precisely the self-heal signal added for review r1
@@ -83,7 +86,7 @@ const session = (over: Partial<MonSessionView> = {}): MonSessionView => ({
   machine: "mach-b",
   account: "",
   runtime: "claude",
-  status: "offline",
+  status: detailOnline ? "online" : "offline",
   contextPct: 42,
   compactionCount: null,
   cost: null,
@@ -129,6 +132,8 @@ beforeEach(() => {
   activateMember.mockResolvedValue({ activationPending: false });
   relocateMember.mockClear();
   relocateMember.mockResolvedValue({ relocationPending: false });
+  detailOnline = false;
+  detailDesiredMachineId = "mach-a";
   Element.prototype.scrollIntoView = vi.fn();
 });
 
@@ -152,6 +157,9 @@ async function clickWake() {
     return b!;
   });
   fireEvent.click(btn);
+  const confirm = document.querySelector<HTMLButtonElement>(".machine-picker__actions .btn--accent")!;
+  await waitFor(() => expect(confirm.disabled).toBe(false));
+  fireEvent.click(confirm);
 }
 
 describe("Monitor entry · undispatched activate (T-7fa1)", () => {
@@ -174,27 +182,27 @@ describe("Monitor entry · undispatched activate (T-7fa1)", () => {
 
 describe("Monitor entry · undispatched relocate (T-7fa1)", () => {
   it("shows the relocate notice when relocation_pending comes back true", async () => {
+    detailOnline = true;
+    detailDesiredMachineId = "";
     relocateMember.mockResolvedValue({ relocationPending: true });
     await openDetail();
-    await waitFor(() =>
-      expect(
-        (screen.getByTestId("mp-relocate") as HTMLButtonElement).disabled,
-      ).toBe(false),
-    );
-    fireEvent.click(screen.getByTestId("mp-relocate"));
+    fireEvent.click(await screen.findByTestId("mp-change"));
+    const confirm = document.querySelector<HTMLButtonElement>(".machine-picker__actions .btn--accent")!;
+    await waitFor(() => expect(confirm.disabled).toBe(false));
+    fireEvent.click(confirm);
     await waitFor(() =>
       expect(screen.queryByTestId("mp-relocate-undispatched")).not.toBeNull(),
     );
   });
 
   it("shows NO relocate notice when the move landed", async () => {
+    detailOnline = true;
+    detailDesiredMachineId = "";
     await openDetail();
-    await waitFor(() =>
-      expect(
-        (screen.getByTestId("mp-relocate") as HTMLButtonElement).disabled,
-      ).toBe(false),
-    );
-    fireEvent.click(screen.getByTestId("mp-relocate"));
+    fireEvent.click(await screen.findByTestId("mp-change"));
+    const confirm = document.querySelector<HTMLButtonElement>(".machine-picker__actions .btn--accent")!;
+    await waitFor(() => expect(confirm.disabled).toBe(false));
+    fireEvent.click(confirm);
     await waitFor(() => expect(relocateMember).toHaveBeenCalledTimes(1));
     expect(screen.queryByTestId("mp-relocate-undispatched")).toBeNull();
   });

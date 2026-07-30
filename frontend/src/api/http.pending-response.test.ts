@@ -14,6 +14,9 @@
 //      undefined leaking into a `?.activationPending` branch.
 //   3. `null` → false as well (the OpenAPI type is `boolean | null`).
 //   4. the same three for relocate's `relocation_pending`.
+//   5. relocate's companion `relocation_deferred` (T-927a) maps the same way, and
+//      INDEPENDENTLY of pending: the panel suppresses its alert on deferred, so a
+//      mapper that dropped it would turn a normal wind-down into a false alarm.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { httpApi } from "./http";
@@ -84,6 +87,7 @@ describe("httpApi.relocateMember reads relocation_pending", () => {
     );
     expect(await httpApi.relocateMember("m-1", "mach-a")).toEqual({
       relocationPending: true,
+      relocationDeferred: false,
     });
   });
 
@@ -91,6 +95,31 @@ describe("httpApi.relocateMember reads relocation_pending", () => {
     fetchMock.mockImplementation(async () => jsonResponse(memberBody()));
     expect(await httpApi.relocateMember("m-1", "mach-a")).toEqual({
       relocationPending: false,
+      relocationDeferred: false,
+    });
+  });
+
+  it("relocation_deferred true → relocationDeferred true (a deliberate deferral)", async () => {
+    fetchMock.mockImplementation(async () =>
+      jsonResponse(
+        memberBody({ relocation_pending: true, relocation_deferred: true }),
+      ),
+    );
+    expect(await httpApi.relocateMember("m-1", "mach-a")).toEqual({
+      relocationPending: true,
+      relocationDeferred: true,
+    });
+  });
+
+  it("relocation_deferred null → relocationDeferred false", async () => {
+    fetchMock.mockImplementation(async () =>
+      jsonResponse(
+        memberBody({ relocation_pending: true, relocation_deferred: null }),
+      ),
+    );
+    expect(await httpApi.relocateMember("m-1", "mach-a")).toEqual({
+      relocationPending: true,
+      relocationDeferred: false,
     });
   });
 
@@ -100,6 +129,7 @@ describe("httpApi.relocateMember reads relocation_pending", () => {
     );
     expect(await httpApi.relocateMember("m-1", "mach-a")).toEqual({
       relocationPending: false,
+      relocationDeferred: false,
     });
   });
 });

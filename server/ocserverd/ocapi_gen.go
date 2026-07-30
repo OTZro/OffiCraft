@@ -733,6 +733,9 @@ type MemberDTO struct {
 	// ActivationPending Set true ONLY on the activate response when the decided START could not be delivered to the target warden (no live SSE downstream) — the wake intent is persisted and the reconcile cadence retries, but nothing has been dispatched yet. Absent/null on every other member read. The activate twin of ``relocation_pending``: without it an activate against an unreachable warden returns a clean 200 with zero signal, which is indistinguishable from a wake that actually started (T-ba62 additive-optional).
 	ActivationPending *bool `json:"activation_pending,omitempty"`
 
+	// ActualModel The model reported by the member's current or most recent successful boot. Empty means the member has never reported a model; it is separate from the owner-configured `model` launch setting.
+	ActualModel *string `json:"actual_model,omitempty"`
+
 	// AvatarUrl Authenticated URL of this stable member id's personal raster avatar. Empty means no personal image; clients fall back to the active theme's role avatar, then the built-in glyph. Additive-optional for older clients.
 	AvatarUrl        *string  `json:"avatar_url,omitempty"`
 	DesiredMachineId *string  `json:"desired_machine_id,omitempty"`
@@ -755,7 +758,10 @@ type MemberDTO struct {
 	Presence     *string  `json:"presence,omitempty"`
 	RefocusSince *float64 `json:"refocus_since,omitempty"`
 
-	// RelocationPending Set true ONLY on the relocate response when the recycle STOP/START that moves a LIVE member could not be delivered to the warden (old/new machine unreachable) — the owner-pinned move is scheduled but has not landed yet; the reconcile cadence retries. Absent/null on every other member read, so the cockpit shows “move scheduled / not yet landed” instead of a silent success (T-8655 additive-optional).
+	// RelocationDeferred Set true on the relocate response when the move was DELIBERATELY deferred: the member is live with uncollected state, so the server opened a graceful wind-down window instead of dispatching now. Nothing has been sent YET BY DESIGN — the move lands when the agent finishes its wrap-up round. This is the companion that disambiguates ``relocation_pending``, which is true for BOTH this case and a genuinely undeliverable move: a consumer must NOT raise a "nothing was dispatched" alert while this field is true. Absent/null on every other member read, and never set on any response other than relocate (T-927a additive-optional).
+	RelocationDeferred *bool `json:"relocation_deferred,omitempty"`
+
+	// RelocationPending Set true ONLY on the relocate response when the owner-pinned move is scheduled but has not landed yet. TWO causes, which this field does not distinguish: (a) the recycle STOP/START that moves a LIVE member could not be delivered to the warden (old/new machine unreachable) — the reconcile cadence retries; (b) since T-b6d9, a graceful wind-down window was opened, so nothing has been dispatched yet BY DESIGN. Read ``relocation_deferred`` to tell (b) apart from (a) — only (a) is a failure worth alerting on. Absent/null on every other member read, so the cockpit shows “move scheduled / not yet landed” instead of a silent success (T-8655 additive-optional).
 	RelocationPending *bool   `json:"relocation_pending,omitempty"`
 	RoleKey           *string `json:"role_key,omitempty"`
 	RoleName          *string `json:"role_name,omitempty"`
@@ -1160,9 +1166,8 @@ type ReplyCardListItemDTO struct {
 // ReportWakingDTO Body for “report_waking()“ — the boot report (identity from token, NO
 // member_id). Stamps the CALLER's “waking_since“ and clears the recycle markers.
 //
-// “model“ is OPTIONAL and accepted for API compatibility. Its value is ignored: the
-// owner-configured model remains authoritative and cannot be changed by a caller's
-// wake report.
+// “model“ is OPTIONAL runtime telemetry. The server stores it separately as
+// “actual_model“; it never changes the owner-configured launch model.
 type ReportWakingDTO struct {
 	Model *string `json:"model,omitempty"`
 }

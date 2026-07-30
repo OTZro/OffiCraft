@@ -118,6 +118,7 @@ const MOCK_WIRE_MEMBERS: WireMember[] = [
     role_name: "",
     runtime: "claude",
     model: "",
+    actual_model: "",
     effort: "medium",
     desired_state: "offline",
     desired_machine_id: MOCK_SERVER_SELF_ID,
@@ -143,6 +144,7 @@ const MOCK_WIRE_MEMBERS: WireMember[] = [
     role_name: "",
     runtime: "claude",
     model: "claude-sonnet-4.5",
+    actual_model: "",
     effort: "medium",
     desired_state: "offline",
     // `desired_machine_id` carries the machine BINDING id (the machine_id an activate
@@ -178,6 +180,7 @@ const MOCK_WIRE_MEMBERS: WireMember[] = [
     role_name: "",
     runtime: "claude",
     model: "",
+    actual_model: "",
     effort: "medium",
     desired_state: "offline",
     desired_machine_id: "mbp5",
@@ -910,6 +913,10 @@ function mockWebhookToken(): string {
 // behaviour), flipped only by an explicit test/dev hook.
 let activationPendingNext = false;
 let relocationPendingNext = false;
+// Mock parity for the wind-down half of the relocate verdict (T-927a). The mock
+// has no live agent to wind down, so this is staged rather than derived — same
+// shape as relocationPendingNext, and equally sticky.
+let relocationDeferredNext = false;
 
 export const mockApi: Api = {
   async listMembers(_opts?: { light?: boolean }): Promise<Member[]> {
@@ -1016,7 +1023,10 @@ export const mockApi: Api = {
     w.desired_machine_id = machineId;
     // T-7fa1: same honest default as activateMember — the mock has no warden to
     // fail to reach, so the re-pin always "lands" unless a test stages otherwise.
-    return { relocationPending: relocationPendingNext };
+    return {
+      relocationPending: relocationPendingNext,
+      relocationDeferred: relocationDeferredNext,
+    };
   },
 
   async deactivateMember(id: string): Promise<void> {
@@ -2328,6 +2338,7 @@ export const mockApi: Api = {
       role_name: "",
       runtime: "claude",
       model: "",
+      actual_model: "",
       effort: "medium",
       desired_state: "offline",
       desired_machine_id: machineId,
@@ -2878,6 +2889,7 @@ export const mockApi: Api = {
       role_name: name,
       runtime: input.runtime ?? "claude",
       model: (input.model ?? "").trim(),
+      actual_model: "",
       effort,
       desired_state: "offline",
       desired_machine_id: MOCK_SERVER_SELF_ID,
@@ -3047,6 +3059,7 @@ export function __resetMock(): void {
   mockServerSettings = { ...DEFAULT_MOCK_SETTINGS };
   activationPendingNext = false;
   relocationPendingNext = false;
+  relocationDeferredNext = false;
 }
 
 // Test-only hook: put the mock into the FIRST-RUN shape (no password set), the
@@ -3154,6 +3167,11 @@ export function __setMockRelocationPending(pending: boolean): void {
   relocationPendingNext = pending;
 }
 
+// Stage the DEFERRED half: pending says "not landed", this says "on purpose".
+export function __setMockRelocationDeferred(deferred: boolean): void {
+  relocationDeferredNext = deferred;
+}
+
 // Dev-only browser seam (T-160e UI screenshots). The __inject* hooks above are
 // module-scoped, so a Playwright session driving the RUNNING dev app can't seed
 // a task the way vitest does. Under Vite dev ONLY (import.meta.env.DEV), mirror
@@ -3169,6 +3187,7 @@ if (import.meta.env.DEV) {
     setMemberOnline: __setMockMemberOnline,
     setActivationPending: __setMockActivationPending,
     setRelocationPending: __setMockRelocationPending,
+    setRelocationDeferred: __setMockRelocationDeferred,
     reset: __resetMock,
   };
 }

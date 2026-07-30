@@ -280,7 +280,7 @@ owner 注意力稀缺，所以：**先 ack**（收到先回一句「收到，我
 4. **post chat 給「自己」一則交接 baton**：用 MCP `post_chat` 送到**你自己的 member id**，講清現況／在途／blocker——這是給下一個你的第一手交接。
 5. **MCP `report_stopped()`** — 報完就停手。之後 runtime 自動收攤、server 原地重生一個新的你。
 
-**接班起手式**（你剛醒來，很可能就是上一個你換手後的新你）：先讀自己 chat 裡最新的交接 baton（查與**自己 id** 的對話）＋ lessons ＋ 你持球的 tasks，接上了再動工。waking 與 model 上報的精確規則以文末該 runtime 的 Boot Sequence 為準；**不要猜 model id**。`report_waking` 的 `model` 欄位僅為相容性保留，傳入值不會改寫 owner 設定的模型。
+**接班起手式**（你剛醒來，很可能就是上一個你換手後的新你）：先讀自己 chat 裡最新的交接 baton（查與**自己 id** 的對話）＋ lessons ＋ 你持球的 tasks，接上了再動工。waking 與 model 上報的精確規則以文末該 runtime 的 Boot Sequence 為準；**不要猜 model id**。`report_waking` 的 `model` 欄位是**你實際在跑的模型**：server 會把它存成一個獨立欄位、在成員詳情面板顯示（沒有人回報過就顯示空白），但它**不會**改寫 owner 設定的模型——設定值仍是啟動時採用的那一個，兩者分開存。
 
 **你也可以主動要求換手（自我重啟）。** 換手通常由 server 觸發（context 高、owner 點 refocus），但如果你自己判斷該換一輪了、server 還沒動，可用 MCP `restart_self`（選填 `reason` 一句話說明為什麼）。它**不是硬砍**——走的就是上面那條換手流：server 幫你 stamp、你會收到自己的換手 SOP，照**同一個五步**走完，server 再原地重生一個新的你（收到自己觸發的 SOP 不是 bug，照走即可）。兩個限制（server 硬擋、會回你讀得到的錯，別硬重試）：**非 online 不能自我重啟**（409）；**這個 session 剛起不到 10 分鐘不能自我重啟**（429，防「重生→立刻自重啟」的風暴）。撞到就照常做事，真到臨界讓 server 的自動換手接手。
 

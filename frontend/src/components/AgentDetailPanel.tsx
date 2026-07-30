@@ -55,6 +55,15 @@ export interface AgentDetailVM {
   /** Resolved machine display text; "" ⇒ dash. Wrappers apply their own gate
    * (member: awake-only; worker: 尚未分配 fallback text). */
   machineText: string;
+  /** A pending relocation target. This supplements — never replaces — the
+   * observed machine, and disappears once both locations agree. */
+  machineTransition?: string;
+  /** True when the 模型 row shows what the agent REPORTED rather than what the
+   * owner configured (the member panel; T-927a). The row then carries a tag, or
+   * three values sit side by side under one heading with two different meanings
+   * and nothing telling them apart — and the settings dialog, which edits the
+   * CONFIGURED value, would look like it disagrees with the panel. */
+  modelIsReported?: boolean;
   /** Optional action next to the 機器 label (the worker's 改機器 button). */
   machineAction?: ReactNode;
   /** Readable Claude account name; "" ⇒ dash — NEVER a raw credential key
@@ -314,7 +323,23 @@ export function AgentDetailPanel({
               <div className="mp-field__label mp-field__label--stacked">
                 {t.mp.model}
               </div>
-              <div className="mp-field__value">{shownModel || dash}</div>
+              <div className="mp-field__value">
+                {shownModel || dash}
+                {/* Deliberately NOT the parenthesised form the 投入度 row uses
+                    below: that one restates the raw value, this one states the
+                    value's PROVENANCE. Same styling with the same punctuation
+                    would put two different kinds of thing in the same shape.
+                    `!meOverride` because after an in-place save `shownModel` is
+                    the freshly CONFIGURED model — tagging that as reported would
+                    be a fresh lie (unreachable from the member panel today, which
+                    passes no save handler; pinned here so it stays that way). */}
+                {vm.modelIsReported && shownModel && !meOverride && (
+                  <span className="mp-field__hint">
+                    {" · "}
+                    {t.mp.modelReportedTag}
+                  </span>
+                )}
+              </div>
               <div className="mp-field__label mp-field__label--stacked">
                 {t.mp.effort}
               </div>
@@ -378,6 +403,11 @@ export function AgentDetailPanel({
           <div className="mp-field__value" data-testid={`${p}-machine`}>
             {vm.machineText || dash}
           </div>
+          {vm.machineTransition && (
+            <div className="mp-field__hint" data-testid={`${p}-machine-transition`}>
+              {vm.machineTransition}
+            </div>
+          )}
           <div className="mp-field__label mp-field__label--stacked">
             {shownRuntime === "codex" ? t.mp.codexAccount : t.mp.claudeAccount}
           </div>

@@ -44,6 +44,7 @@ vi.mock("../api", () => ({
     getBootstrap: () =>
       Promise.resolve({ role: "assistant", name: "", taskType: "", context: "" }),
     listWebhooks: () => Promise.resolve([]),
+    patchMember: () => Promise.resolve({}),
     subscribeEvents: () => () => {},
   },
 }));
@@ -104,6 +105,12 @@ function wakeButton(container: HTMLElement): HTMLButtonElement {
   return btn!;
 }
 
+async function confirmWakeSettings() {
+  const confirm = document.querySelector<HTMLButtonElement>(".machine-picker__actions .btn--accent")!;
+  await waitFor(() => expect(confirm.disabled).toBe(false));
+  fireEvent.click(confirm);
+}
+
 describe("MemberDetailPanel · wake that was never dispatched (T-7fa1)", () => {
   it("rolls the optimistic 喚醒中… back and shows the notice when activation_pending is true", async () => {
     const onActivate = vi.fn(async () => ({ activationPending: true }));
@@ -114,6 +121,7 @@ describe("MemberDetailPanel · wake that was never dispatched (T-7fa1)", () => {
     expect(queryByTestId("mp-wake-undispatched")).toBeNull();
 
     fireEvent.click(btn);
+    await confirmWakeSettings();
 
     // MID-FLIGHT: the optimistic state is entered (this is correct behaviour —
     // and it is exactly the state that used to be permanent).
@@ -136,6 +144,7 @@ describe("MemberDetailPanel · wake that was never dispatched (T-7fa1)", () => {
     await waitFor(() => expect(btn.disabled).toBe(false));
 
     fireEvent.click(btn);
+    await confirmWakeSettings();
     await waitFor(() => expect(onActivate).toHaveBeenCalledTimes(1));
 
     // The member is still offline (presence has not caught up yet) — so the
@@ -153,6 +162,7 @@ describe("MemberDetailPanel · wake that was never dispatched (T-7fa1)", () => {
     await waitFor(() => expect(btn.disabled).toBe(false));
 
     fireEvent.click(btn);
+    await confirmWakeSettings();
     await waitFor(() => expect(onActivate).toHaveBeenCalledTimes(1));
 
     await waitFor(() => expect(wakeButton(container).disabled).toBe(true));

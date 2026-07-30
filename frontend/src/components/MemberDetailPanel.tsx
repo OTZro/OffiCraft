@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../api";
+import { ApiError } from "../api/errors";
 import type {
   Member,
   MemberActivateResult,
@@ -20,12 +21,11 @@ import { Avatar } from "./Avatar";
 import { avatarKindForMember } from "../lib/avatarKind";
 import { ConfirmModal } from "./ConfirmModal";
 import { InlineEdit } from "./InlineEdit";
+import { ModelEffortEditor } from "./ModelEffortEditor";
 import { presenceVisual } from "./LifecycleDot";
 import type { LifecycleVisualStatus } from "./LifecycleDot";
 import { PresenceBadge } from "./PresenceBadge";
 import { MemberActionButtons } from "./MemberActionButtons";
-import { MachinePicker } from "./MachinePicker";
-import { useRelocateMachine } from "./useRelocateMachine";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -151,6 +151,16 @@ export function MemberDetailPanel({
   useEffect(() => {
     setWakePending(false);
     setWakeUndispatched(false);
+    setRelocateUndispatched(false);
+    // 🔴 …and the settings DRAFT, not just the notices (independent review r3).
+    // The dialog is prefilled from the member it was opened for, and neither
+    // caller passes a `key`, so an open dialog survives the switch holding the
+    // PREVIOUS member's runtime/model/effort/machine — one confirm and those
+    // values are written to someone else. Closing it is the honest reset: the
+    // owner reopens against whoever is on screen now. (useRelocateMachine does
+    // the same for its picker; this hand-written twin had dropped that line.)
+    setSettingsOpen(false);
+    setSettingsError("");
   }, [member.id]);
   // 🔴 …and that reset is a RESET, not a CANCEL (review r2 SHOULD-1). An
   // activate still in flight when the owner switches members resolves AFTER the
@@ -174,18 +184,128 @@ export function MemberDetailPanel({
     ? "waking"
     : presenceVisual(member.lifecycle);
 
-  // ── Machine picker (wake / respawn) ─────────────────────────────────────────
-  // Fetch the machine registry so the owner picks WHICH online machine an agent
-  // runs on. Rules: 0 online → spawn disabled (reason tooltip); 1 online → no
-  // picker, auto-use it; 2+ online → show the picker. The member's currently
-  // bound machine is `member.desiredMachineId` (the machine_id the activate binds to).
+  // ── Unified launch settings (喚醒 / 更改) ────────────────────────────────────
+  // ONE dialog holds runtime + model + effort + machine, and it always opens (the
+  // old 0/1/2+-online picker rules are gone; what survives of them is that the
+  // entry button stays dead while no machine is online, with the reason in its
+  // tooltip). The member's current pin is `member.desiredMachineId` — the
+  // machine_id an activate binds to, and the value the machine row is seeded with.
   const { machines } = useMachines();
   const onlineMachines = machines.filter((m) => m.online);
-  const boundMachineId = member.desiredMachineId || null;
-  const [spawnPickerOpen, setSpawnPickerOpen] = useState(false);
+  const firstOnlineMachineId = onlineMachines[0]?.machineId;
+  // What the machine <select> may offer: every online machine, PLUS the member's
+  // own pin when that machine is not online right now — labelled 離線, exactly as
+  // MachinePicker does it. Without that entry the select's value would match no
+  // option (blank row, pin still submitted), and dropping the pin instead would
+  // move a member the owner deliberately parked. Both are "displayed ≠
+  // submitted"; this is the only shape that is neither.
+  // Whether the 模型 row upstairs is currently showing a reported value at all
+  // (same condition the tag uses): awake, and something was reported.
+  const reportedModelOnScreen = awake && (member.actualModel ?? "") !== "";
+  const pinnedOfflineMachine =
+    member.desiredMachineId &&
+    !onlineMachines.some((m) => m.machineId === member.desiredMachineId)
+      ? (machines.find((m) => m.machineId === member.desiredMachineId) ?? {
+          machineId: member.desiredMachineId,
+          displayName: member.desiredMachineId,
+        })
+      : undefined;
+  const settingsMachineOptions = [
+    ...onlineMachines.map((m) => ({
+      machineId: m.machineId,
+      label: m.displayName,
+      offline: false,
+    })),
+    ...(pinnedOfflineMachine
+      ? [
+          {
+            machineId: pinnedOfflineMachine.machineId,
+            label: msg.machineOfflineOption(pinnedOfflineMachine.displayName),
+            offline: true,
+          },
+        ]
+      : []),
+  ];
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsRuntime, setSettingsRuntime] = useState<"claude" | "codex">(
+    member.runtime || "claude",
+  );
+  const [settingsModel, setSettingsModel] = useState(member.model);
+  const [settingsEffort, setSettingsEffort] = useState(member.effort);
+  const [settingsMachineId, setSettingsMachineId] = useState(
+    member.desiredMachineId,
+  );
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [settingsError, setSettingsError] = useState("");
+  const [relocateUndispatched, setRelocateUndispatched] = useState(false);
 
-  const runActivate = (machineId: string) => {
-    setSpawnPickerOpen(false);
+  // 🔴🔴 TWIN IMPLEMENTATION — change this and `useRelocateMachine` TOGETHER.
+  // The outsource panel still gets this hygiene from the hook; this panel now
+  // carries its own copy because relocate folded into the unified submit. One
+  // side drifting from the other is exactly how the guarantees below went
+  // missing for a whole round while CI stayed green.
+  //
+  // 🔴 The relocate verdict's SELF-HEAL, carried over from useRelocateMachine
+  // (which the member panel no longer drives). The notice promises "the server
+  // keeps retrying in the background", so it needs a path back: without this it
+  // was cleared only by ANOTHER relocate, and a move the cadence did land left
+  // the panel insisting forever that it had not.
+  //
+  // `member.machine` is NOT a pure observation — the server's observedHost falls
+  // back to desired_machine_id when nobody can see the member, which makes
+  // `machine === desiredMachineId` true BY CONSTRUCTION for anyone not awake.
+  // Reading that as "it arrived" would retire the notice on a move that never
+  // happened, so the signal is gated on `awake` exactly like the 機器 cell, and
+  // the ""/null guards keep an UNPINNED member from comparing null === null and
+  // swallowing a live verdict.
+  const observedMachineId = awake && member.machine ? member.machine : null;
+  const relocateLanded =
+    observedMachineId != null &&
+    member.desiredMachineId !== "" &&
+    observedMachineId === member.desiredMachineId;
+  // A LATCH, not a momentary guard: once healed the verdict is dead for good, so
+  // a member that later drifts off the pin cannot resurrect a verdict about an
+  // attempt that is long over. (The render guard below is the momentary half —
+  // it lets `landed` win before this effect flushes. Both are load-bearing;
+  // deleting either leaves a lie on screen in one of the two timelines.)
+  useEffect(() => {
+    if (relocateLanded) setRelocateUndispatched(false);
+  }, [relocateLanded]);
+
+  // The registry arrives asynchronously. If the owner opens settings before
+  // it has loaded, select the first available machine as soon as it does so
+  // the unified Wake/Change action cannot be left disabled forever.
+  useEffect(() => {
+    if (settingsOpen && !settingsMachineId && firstOnlineMachineId) {
+      setSettingsMachineId(firstOnlineMachineId);
+    }
+  }, [firstOnlineMachineId, settingsMachineId, settingsOpen]);
+
+  function openSettings() {
+    setSettingsRuntime(member.runtime || "claude");
+    setSettingsModel(member.model);
+    setSettingsEffort(member.effort);
+    // 🔴 Seed the pin VERBATIM, and make sure the option list can hold it (see
+    // `settingsMachineOptions`). The first cut of this fixed "displayed ≠
+    // submitted" by falling back to the first ONLINE machine — which made
+    // `machineChanged` unconditionally true for anyone pinned to a machine that
+    // is merely asleep, so opening the dialog to edit a MODEL silently re-pinned
+    // the member somewhere else. That is the same defect in the other direction,
+    // and it lands hardest on "pin it to my sleeping laptop and save the model
+    // for later". MachinePicker's rule is the right one: keep the bound machine
+    // in the list, labelled offline, and never invent a different pin.
+    setSettingsMachineId(
+      member.desiredMachineId || onlineMachines[0]?.machineId || "",
+    );
+    setSettingsError("");
+    setSettingsOpen(true);
+  }
+
+  async function runActivate(machineId: string) {
+    // Read-only embeddings of the detail panel do not provide an activate
+    // callback. Never paint an optimistic wake in that case: no request can
+    // have been sent.
+    if (!onActivate) return;
     // Instant "waking…" feedback; a rejected activate reverts to the honest
     // offline visual so the owner can retry (no stuck fake-waking).
     setWakePending(true);
@@ -193,68 +313,151 @@ export function MemberDetailPanel({
     // WHOSE wake this is. Both branches below drop the verdict when the panel
     // has moved on to another member (review r2 SHOULD-1).
     const firedFor = member.id;
-    void (async () => {
-      try {
-        const result = await onActivate?.(machineId);
-        if (shownMemberIdRef.current !== firedFor) return;
-        // 🔴 THE FIX (T-7fa1). An activate answers 200 either way; this is the
-        // ONLY thing that distinguishes "a START went out" from "nothing was
-        // dispatched". Without this branch the panel keeps painting the amber
-        // 「喚醒中…」 until a lifecycle change that is never coming.
-        if (result?.activationPending) {
-          setWakePending(false);
-          setWakeUndispatched(true);
-        }
-      } catch {
-        if (shownMemberIdRef.current !== firedFor) return;
+    try {
+      const result = await onActivate(machineId);
+      if (shownMemberIdRef.current !== firedFor) return;
+      // 🔴 THE FIX (T-7fa1). An activate answers 200 either way; this is the
+      // ONLY thing that distinguishes "a START went out" from "nothing was
+      // dispatched". Without this branch the panel keeps painting the amber
+      // 「喚醒中…」 until a lifecycle change that is never coming.
+      if (result?.activationPending) {
         setWakePending(false);
+        setWakeUndispatched(true);
       }
-    })();
-  };
+    } catch {
+      if (shownMemberIdRef.current !== firedFor) return;
+      setWakePending(false);
+    }
+  }
 
-  // Spawn / wake / respawn handler. Undefined (→ button disabled) when there is
-  // no online machine to run on OR while a wake is already pending (double-click
-  // guard); auto-uses the single online machine; opens the picker for 2+.
-  const canSpawn = onlineMachines.length >= 1;
-  const handleSpawn =
-    onActivate && canSpawn && !wakePendingActive
-      ? () => {
-          if (onlineMachines.length === 1) runActivate(onlineMachines[0].machineId);
-          else setSpawnPickerOpen(true);
+  /** Persist the launch settings WITHOUT starting anything (creator ruling after
+   * independent review r3). Folding relocate + model/effort into one dialog had
+   * silently removed two capabilities the panel used to have for an offline
+   * member: editing model/effort without waking it, and re-pinning it for its
+   * next wake. Neither removal was asked for — the spec describes what the WAKE
+   * button does, it never says the settings become unreachable while a member is
+   * off. Offered only when the member is NOT AWAKENED (offline/stopped): a live
+   * member's settings change is what 更改 (graceful wind-down) is for, and for a
+   * `waking` member the confirm path reaches activate, so promising "saved, not
+   * started" there would be a lie. */
+  async function saveSettingsOnly() {
+    if (!settingsMachineId || awake) return;
+    const launchChanged =
+      settingsRuntime !== (member.runtime || "claude") ||
+      settingsModel.trim() !== member.model ||
+      settingsEffort !== member.effort;
+    const machineChanged = settingsMachineId !== member.desiredMachineId;
+    if (!launchChanged && !machineChanged) {
+      setSettingsOpen(false);
+      return;
+    }
+    setSettingsBusy(true);
+    setSettingsError("");
+    try {
+      if (launchChanged) {
+        await api.patchMember(member.id, {
+          runtime: settingsRuntime,
+          model: settingsModel.trim(),
+          effort: settingsEffort,
+        });
+      }
+      // Placement-only re-pin: the server's relocate never touches
+      // desired_state, so for an offline member this is the whole honest effect
+      // (it is what the retired 改機器 button did) — and it must NOT reach
+      // activate, or "save without waking" would wake.
+      if (machineChanged) await onRelocate?.(settingsMachineId);
+      setSettingsOpen(false);
+    } catch (error) {
+      setSettingsError(
+        (error instanceof ApiError && error.serverMessage) ||
+          t.mp.modelEffortError,
+      );
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  async function saveSettings() {
+    if (!settingsMachineId) return;
+    const launchChanged =
+      settingsRuntime !== (member.runtime || "claude") ||
+      settingsModel.trim() !== member.model ||
+      settingsEffort !== member.effort;
+    const machineChanged = settingsMachineId !== member.desiredMachineId;
+    // A live Change with no edits is a true no-op. Offline and waking both use
+    // this same dialog for Wake/force-revive, so they must still reach
+    // activate even when the owner accepts the prefilled settings unchanged.
+    if (online && !launchChanged && !machineChanged) {
+      setSettingsOpen(false);
+      return;
+    }
+    setSettingsBusy(true);
+    setSettingsError("");
+    // A fresh attempt drops the previous verdict (independent review r3): the
+    // wake path and useRelocateMachine both do this, and without it a relocate
+    // that FAILED and was then retried successfully leaves its "nothing was
+    // dispatched" alert on screen — a stale notice about an attempt that is over.
+    setRelocateUndispatched(false);
+    try {
+      // 🔴 D: the PATCH goes FIRST. This is one owner edit of one settings
+      // block, and the relocate is what actually restarts the agent on the new
+      // machine — so the launch intents must already be stored when it fires,
+      // or the freshly spawned session comes up on the OLD model/effort and the
+      // owner's edit only takes effect one handover later. Reversing these two
+      // lines is exactly that bug.
+      if (launchChanged) {
+        await api.patchMember(member.id, {
+          runtime: settingsRuntime,
+          model: settingsModel.trim(),
+          effort: settingsEffort,
+        });
+      }
+      // Only a confirmed online session is gracefully relocated. A `waking`
+      // member's Spawn action is the force-revive path and must reach activate.
+      if (online && machineChanged) {
+        // WHOSE move this verdict belongs to. The panel is given no `key` by
+        // either caller, so switching members is a prop change: a relocate
+        // still in flight resolves into a panel that may already be showing
+        // someone else (same guard the wake path documents above).
+        const firedFor = member.id;
+        const result = await onRelocate?.(settingsMachineId);
+        if (shownMemberIdRef.current !== firedFor) return;
+        // Alert only on the FAILURE half (T-927a). `relocationPending` is also
+        // true when the server deliberately deferred the move behind a graceful
+        // wind-down — nothing was dispatched, but nothing went wrong either, and
+        // the pending destination is already visible next to the 機器 cell. An
+        // alert there taught the owner to ignore the alert.
+        if (result?.relocationPending && !result.relocationDeferred) {
+          setRelocateUndispatched(true);
         }
-      : undefined;
-  const spawnReason = !canSpawn
-    ? t.machine.noOnlineMachine
-    : wakePendingActive
-      ? t.mp.wakePendingNote
-      : undefined;
-
-  // ── 改機器 (relocate) — the shared control both detail panels render ─────────
-  // Placement-only: re-pin the member to another machine (the server reconciles a
-  // live member onto it). Mirrors the spawn picker's 0/1/2+ online rule.
-  const { relocateAction, relocatePicker, relocateUndispatched } = useRelocateMachine({
-    subjectId: member.id,
-    machines,
-    boundMachineId,
-    onRelocate,
-    testId: "mp-relocate",
-    pickerTitle: t.machine.picker.relocateTitle,
-    pickerConfirmLabel: t.machine.picker.relocateConfirm,
-    noOnlineTitle: t.machine.noOnlineMachine,
-    withIcon: true,
-    // Self-heal signal for the "move scheduled, not landed" notice (review r1
-    // SHOULD-2): where the member is OBSERVED, vs boundMachineId = where it was
-    // pinned. Convergence means the background retry landed the move.
-    //
-    // 🔴 Gated on the SAME `awake` flag as the 機器 cell above (review r2).
-    // Outside online/waking, `member.machine` is not an observation — the
-    // server's observed_host falls back to desired_machine_id, so it equals the
-    // pin by construction and would read as "the move landed" for a member
-    // nobody can see. The panel already refuses to PRINT that value; it must
-    // not silently believe it either.
-    currentMachineId: awake ? member.machine : null,
-  });
-
+      }
+      // A live member's change is finished by the two calls above: the PATCH is
+      // the one graceful handover for a setting-only change, and a placement
+      // change was already sent — neither may be turned into an activate, and a
+      // relocate is never manufactured for a machine nobody changed. Only a
+      // member that is NOT online needs starting.
+      if (!online) await runActivate(settingsMachineId);
+      setSettingsOpen(false);
+    } catch (error) {
+      // ⚠️ `mp.modelEffortError` now has TWO consumers with different scopes:
+      // AgentDetailPanel's model/effort save, and this dialog's catch-all
+      // fallback (any failed launch-settings submit, machine included). Its
+      // wording must stay generic ("儲存失敗"). Narrowing it to model/effort
+      // would make this fallback lie, and no test would go red for it.
+      // 🔴 NOT `error.message` (independent review r3): every ApiError carries the
+      // historical `http <status> for <METHOD> <path>` text, which frontend's
+      // CLAUDE.md reserves for logs — and `ApiError extends Error`, so an
+      // `instanceof Error` ternary shows it to the owner and makes the fallback
+      // below dead code. The server's own envelope sentence is the only wire text
+      // fit to display; anything else falls back to the dictionary.
+      setSettingsError(
+        (error instanceof ApiError && error.serverMessage) ||
+          t.mp.modelEffortError,
+      );
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
   // ── 回呼端點 · WEBHOOK (M4) ───────────────────────────────────────────────
   // A collapsible section between the TMUX and initial-PROMPT cards. Webhooks
   // are external inlets bound to THIS member; the panel lists them, toggles
@@ -511,6 +714,28 @@ export function MemberDetailPanel({
     machines.find((m) => m.machineId === member.machine)?.displayName ||
     member.machine ||
     "";
+  const desiredMachine = machines.find(
+    (m) => m.machineId === member.desiredMachineId,
+  );
+  const desiredMachineNameRaw =
+    desiredMachine?.displayName || member.desiredMachineId || "";
+  // …and if the destination is not online, SAY so here too. The option list
+  // labels it 離線 two elements away; a hint that drops the label reads as a move
+  // that is merely in progress, when the destination cannot accept it at all.
+  const desiredMachineName =
+    desiredMachine && !desiredMachine.online
+      ? msg.machineOfflineOption(desiredMachineNameRaw)
+      : desiredMachineNameRaw;
+  // Relocation keeps the observed location truthful while making the pending
+  // destination visible. Once reconcile reports the new location, the note
+  // naturally disappears rather than leaving stale launch intent in the panel.
+  const machineTransition =
+    awake &&
+    member.machine &&
+    member.desiredMachineId &&
+    member.machine !== member.desiredMachineId
+      ? msg.memberMachineMovingTo(desiredMachineName)
+      : "";
   // 累計總花費 = 已 banked 的歷史成本 + 當前 live session 成本(dto 保證兩者分開不重疊)。
   // honest:兩者皆無源(null)才顯 dash;任一有值則計入(缺的一方視為尚未產生成本=0)。
   const totalCost =
@@ -569,15 +794,23 @@ export function MemberDetailPanel({
         <div className="mp-identity__actions">
           <MemberActionButtons
             status={visual}
-            onSpawn={handleSpawn}
+            // Do not open a second settings flow while the first wake is in
+            // flight. `waking` still renders Spawn as the recovery affordance,
+            // but this local bridge keeps it honestly unavailable until the
+            // activate result or server lifecycle settles.
+            onSpawn={wakePendingActive || onlineMachines.length === 0 ? undefined : openSettings}
             onCancel={onDeactivate}
             onStop={onDeactivate}
+            reasons={
+              onlineMachines.length === 0
+                ? { spawn: t.machine.noOnlineMachine }
+                : undefined
+            }
             // In `stopping`, the Stop button IS force-stop → open the confirm first
             // (an immediate kill that bypasses the graceful grace).
             onForceStop={
               onForceStop ? () => setForceStopConfirm(true) : undefined
             }
-            reasons={{ spawn: spawnReason }}
             // A locally pending wake precedes the server presence flip — carry
             // the instant feedback INSIDE the (disabled) wake button, the same
             // in-progress presentation the Monitor machine table uses for
@@ -586,12 +819,22 @@ export function MemberDetailPanel({
               wakePendingActive ? { spawn: t.mp.wakePendingNote } : undefined
             }
           />
+          {online && (
+            <button
+              type="button"
+              className="btn btn--accent-ghost"
+              data-testid="mp-change"
+              onClick={openSettings}
+            >
+              {t.mp.change}
+            </button>
+          )}
           {/* T-7fa1: sits directly under the wake button the owner just pressed
               — the click and its outcome in one place. */}
           {wakeUndispatched && (
             <DispatchAlert kind="wake" testId="mp-wake-undispatched" />
           )}
-          {relocateUndispatched && (
+          {relocateUndispatched && !relocateLanded && (
             <DispatchAlert kind="relocate" testId="mp-relocate-undispatched" />
           )}
         </div>
@@ -638,17 +881,98 @@ export function MemberDetailPanel({
         </div>
       )}
 
-      {spawnPickerOpen && (
-        <MachinePicker
-          machines={machines}
-          boundMachineId={boundMachineId}
-          title={t.machine.picker.spawnTitle}
-          confirmLabel={t.machine.picker.spawnConfirm}
-          onConfirm={runActivate}
-          onCancel={() => setSpawnPickerOpen(false)}
-        />
+      {settingsOpen && (
+        <div
+          className="machine-picker"
+          role="dialog"
+          aria-modal="true"
+          data-testid="mp-settings-dialog"
+        >
+          <div className="machine-picker__box">
+            {/* 🔴 C′: the wording follows `online`, NOT `awake`. Only a
+                confirmed online session takes the graceful path (relocate /
+                PATCH); a `waking` member's confirm reaches `runActivate`
+                (see saveSettings' `!online` branch), which is a start, not a
+                handover. Saying 「更改」 there promises a graceful wrap-up the
+                click never performs — the button text would be a lie. */}
+            <div className="machine-picker__title">
+              {online ? t.mp.change : t.lifecycle.action.spawn}
+            </div>
+            {/* The other half of the same honesty fix: this dialog edits the
+                CONFIGURED launch model, while the card above shows the REPORTED
+                one. Tagging only the card leaves the owner looking at two
+                different values under one name. */}
+            <div className="mp-field__hint" data-testid="mp-settings-intent-note">
+              {t.mp.settingsIntentNote}
+              {/* The second half only when the card actually HAS a reported model
+                  to compare against. Unconditional, it pointed at a dash and
+                  invited "so this agent never reported" — which is not what an
+                  empty cell means for a member that is simply not awake. */}
+              {reportedModelOnScreen && ` ${t.mp.settingsIntentNoteReported}`}
+            </div>
+            <ModelEffortEditor
+              runtime={settingsRuntime}
+              model={settingsModel}
+              effort={settingsEffort}
+              onRuntimeChange={setSettingsRuntime}
+              onModelChange={setSettingsModel}
+              onEffortChange={(effort) =>
+                setSettingsEffort(effort as typeof settingsEffort)
+              }
+            />
+            <label className="machine-picker__field">
+              <span className="machine-picker__label">{t.mp.machine}</span>
+              <select
+                className="machine-picker__select"
+                value={settingsMachineId}
+                onChange={(e) => setSettingsMachineId(e.target.value)}
+              >
+                {settingsMachineOptions.map((machine) => (
+                  <option
+                    key={machine.machineId}
+                    value={machine.machineId}
+                    // MachinePicker's other half: the offline entry exists so the
+                    // owner's own pin stays visible and unchanged, NOT so a live
+                    // member can be moved onto a machine whose warden is not
+                    // there — that would wind the member down into nothing, and
+                    // the deferred-move signal deliberately suppresses the alert.
+                    // A disabled option still renders as the current value.
+                    disabled={machine.offline}
+                  >
+                    {machine.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="machine-picker__actions">
+              <button type="button" className="btn btn--ghost" disabled={settingsBusy} onClick={() => setSettingsOpen(false)}>
+                {t.common.cancel}
+              </button>
+              {!awake && (
+                <button
+                  type="button"
+                  className="btn btn--ghost"
+                  data-testid="mp-settings-save-only"
+                  disabled={settingsBusy || !settingsMachineId}
+                  onClick={() => void saveSettingsOnly()}
+                >
+                  {t.mp.settingsSaveOnly}
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn btn--accent"
+                data-testid="mp-settings-confirm"
+                disabled={settingsBusy || !settingsMachineId}
+                onClick={() => void saveSettings()}
+              >
+                {online ? t.mp.change : t.lifecycle.action.spawn}
+              </button>
+            </div>
+            {settingsError && <div className="mp-field__hint mp-relocate__reason">{settingsError}</div>}
+          </div>
+        </div>
       )}
-      {relocatePicker}
     </>
   );
 
@@ -1150,20 +1474,17 @@ export function MemberDetailPanel({
         testIdPrefix: "mp",
         online,
         runtime: member.runtime || "claude",
-        model: member.model,
+        // The details panel reports what is actually running. A configured
+        // launch model is intentionally kept out of this read-only surface.
+        model: awake ? (member.actualModel ?? "") : "",
+        modelIsReported: true,
         effort: member.effort,
         modelEffortNote: t.mp.modelEffortNextWakeNote,
-        // model/effort are LAUNCH INTENTS patched onto the member — a change
-        // takes effect on the NEXT wake/handover (the note above says so).
-        onSaveModelEffort: async (runtime, model, effort) => {
-          await api.patchMember(member.id, { runtime, model, effort });
-        },
         // Gate on `awake` (owner presence contract T-2860): 機器 + Claude
         // Account are runtime facts — not-awakened reads a bare dash, never a
         // desired/stale residual.
         machineText: awake ? machineName : "",
-        // 改機器 button next to the 機器 label (mirrors the worker panel's slot).
-        machineAction: relocateAction,
+        machineTransition,
         accountText: (awake && member.account) || "",
         contextPct: member.contextPct,
         compactionCount: member.compactionCount,

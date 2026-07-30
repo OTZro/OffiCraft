@@ -630,6 +630,11 @@ export const en: Dict = {
     rename: "Rename",
     renamePlaceholder: "Enter name",
     wake: "Wake",
+    change: "Change",
+    settingsSaveOnly: "Save without waking",
+    modelReportedTag: "reported at last boot",
+    settingsIntentNote: "These are the values to launch WITH.",
+    settingsIntentNoteReported: "The model on the card above is what the agent reported at its most recent boot, which can differ from what is set here.",
     wakeManual: "Wake manually",
     // Instant feedback after clicking Wake, before server presence catches up.
     wakePendingNote: "Waking…",
@@ -661,6 +666,7 @@ export const en: Dict = {
     modelEffortError: "Save failed. Please try again.",
     runtime: "Runtime",
     machine: "Machine",
+    machineMovingToLabel: "→ Moving to",
     standby: "On standby",
     context: "context",
     compactionCount: (n: number) => `compact: ${n}`,
@@ -765,8 +771,6 @@ export const en: Dict = {
     picker: {
       label: "Choose a machine",
       offlineOptionSuffix: "(offline)",
-      spawnTitle: "Choose a machine to run on",
-      spawnConfirm: "Wake on this machine",
       relocateTitle: "Choose a machine to move to",
       relocateConfirm: "Move to this machine",
     },

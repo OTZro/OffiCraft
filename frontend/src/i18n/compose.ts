@@ -68,6 +68,7 @@ export interface Messages {
   // ── member panel ──
   memberForceStopConfirmBody: (name: string) => string;
   memberRefocusSince: (elapsed: string) => string;
+  memberMachineMovingTo: (machine: string) => string;
   // ── machine picker ──
   machineOfflineOption: (name: string) => string;
   // ── monitor › machines ──
@@ -144,6 +145,8 @@ export function makeMessages(t: Dict, language: Lang): Messages {
     memberForceStopConfirmBody: (name) =>
       `${mp.forceStopConfirmBodyLead} ${name}${sp}${mp.forceStopConfirmBodyTail}`,
     memberRefocusSince: (elapsed) => `${mp.refocusSinceLabel} ${elapsed}`,
+    // LABEL shape: zh and en both put exactly one space before the machine name.
+    memberMachineMovingTo: (machine) => `${mp.machineMovingToLabel} ${machine}`,
 
     machineOfflineOption: (name) =>
       `${name}${sp}${t.machine.picker.offlineOptionSuffix}`,

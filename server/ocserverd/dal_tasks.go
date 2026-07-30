@@ -667,9 +667,12 @@ type OutsourceWorker struct {
 	Codename string
 	Runtime  string
 	Model    string
-	Effort   string
-	TaskID   string
-	Status   string // closed set assigned|active|released (derived projection)
+	// ActualModel is the runtime-reported model, distinct from the owner's
+	// configured launch Model. Outsource workers project the same member row.
+	ActualModel string
+	Effort      string
+	TaskID      string
+	Status      string // closed set assigned|active|released (derived projection)
 	// ActivatedTS is the durable assigned→active anchor (member.activated_ts):
 	// 0 = never claimed its task; >0 = the first GET /api/self/task claim time.
 	// Writers normally leave it alone — the Put mapping stamps it when Status
@@ -758,6 +761,7 @@ func workerFromMember(m Member) OutsourceWorker {
 		Codename:           m.Codename,
 		Runtime:            NormalizeRuntime(m.Runtime),
 		Model:              m.Model,
+		ActualModel:        m.ActualModel,
 		Effort:             m.Effort,
 		TaskID:             taskID,
 		Status:             workerStatusFromMember(m.RosterStatus, m.ActivatedTS),
@@ -809,6 +813,7 @@ func memberFromWorker(w OutsourceWorker) Member {
 		RoleKey:            "",
 		Runtime:            NormalizeRuntime(w.Runtime),
 		Model:              w.Model,
+		ActualModel:        w.ActualModel,
 		Effort:             w.Effort,
 		DesiredState:       w.DesiredState,
 		DesiredMachineID:   w.DesiredMachineID,

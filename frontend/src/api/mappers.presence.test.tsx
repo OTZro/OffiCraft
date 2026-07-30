@@ -31,6 +31,7 @@ function mkWireMember(over: Partial<WireMember>): WireMember {
     role_name: "助理",
     kind: "assistant",
     model: "Opus 4.6",
+    actual_model: "",
     effort: "medium",
     runtime: "claude",
     presence: "offline",

@@ -566,6 +566,15 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 		pending := true
 		dto.RelocationPending = &pending
 	}
+	// …and WHICH of the two it is (T-927a). The wind-down case is a deliberate
+	// deferral, not a delivery failure, so the caller must be able to hold back
+	// the "nothing was dispatched" alert for it. Reported separately rather than
+	// by narrowing relocation_pending: that field's meaning is on the frozen
+	// wire and existing readers depend on it covering both.
+	if windDown {
+		deferred := true
+		dto.RelocationDeferred = &deferred
+	}
 	writeJSON(w, http.StatusOK, dto)
 }
 
@@ -683,8 +692,8 @@ func (s *apiServer) resolveSelf(r *http.Request) (*Member, error) {
 }
 
 // POST /api/self/waking — the boot report: stamps waking_since and clears ALL
-// the recycle markers. model remains accepted for wire compatibility but must
-// not overwrite the owner-configured member model.
+// recycle markers. The reported model is stored separately from the owner's
+// launch configuration.
 func (s *apiServer) HandleReportWakingApiSelfWakingPost(w http.ResponseWriter, r *http.Request) {
 	var body ReportWakingDTO
 	if !decodeJSONBody(w, r, &body) {
@@ -711,6 +720,9 @@ func (s *apiServer) HandleReportWakingApiSelfWakingPost(w http.ResponseWriter, r
 	m.RefocusSince = 0.0
 	m.StoppedSince = 0.0
 	m.StoppingSince = 0.0
+	if body.Model != nil {
+		m.ActualModel = *body.Model
+	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return

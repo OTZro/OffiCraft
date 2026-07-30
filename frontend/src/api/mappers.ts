@@ -160,6 +160,7 @@ export function toMember(w: WireMember): Member {
     // a fabricated value.
     lifecycle: presence,
     runtime: (w.runtime || "claude") as "claude" | "codex",
+    actualModel: w.actual_model || "",
     model: w.model, // direct
     effort: (w.effort || "medium") as Effort, // direct (narrowed to union)
     kind: w.kind, // "assistant" | "warden" | … — office roster keeps assistants only

@@ -127,6 +127,7 @@ type memberDTO struct {
 	RoleName          string  `json:"role_name"`
 	Runtime           string  `json:"runtime"`
 	Model             string  `json:"model"`
+	ActualModel       string  `json:"actual_model"`
 	Effort            string  `json:"effort"`
 	DesiredState      string  `json:"desired_state"`
 	DesiredMachineID  string  `json:"desired_machine_id"`
@@ -150,6 +151,14 @@ type memberDTO struct {
 	// from a wake that actually started — the caller has no way to tell "waking"
 	// from "nothing happened and nothing will until the cadence retries".
 	ActivationPending *bool `json:"activation_pending,omitempty"`
+	// RelocationDeferred (T-927a) disambiguates RelocationPending, which is true
+	// for TWO different situations: a move the warden could not accept, and a
+	// move deliberately held back because a graceful wind-down window was opened
+	// for a live member. Only the first is a failure. Without this field the
+	// cockpit cannot tell them apart, so it raised its "nothing was dispatched"
+	// alert over the perfectly normal wind-down case. Set only on the relocate
+	// response, and only when that window was opened; nil everywhere else.
+	RelocationDeferred *bool `json:"relocation_deferred,omitempty"`
 }
 
 type machineDTO struct {
