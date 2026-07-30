@@ -102,6 +102,12 @@ describe("MemberDetailPanel — unified wake/change settings", () => {
     expect(queryByTestId("mp-relocate")).toBeNull();
     expect(queryByTestId("mp-model-effort-edit")).toBeNull();
 
+    // The wake entry is gated on the machine registry (0 online ⇒ disabled),
+    // and that registry loads asynchronously — click too early and nothing
+    // opens.
+    await waitFor(() =>
+      expect((getByTestId("member-action-spawn") as HTMLButtonElement).disabled).toBe(false),
+    );
     fireEvent.click(getByTestId("member-action-spawn"));
     const dialog = getByTestId("me-runtime-select").closest("[role=dialog]")!;
     const select = dialog.querySelector("select.machine-picker__select") as HTMLSelectElement;

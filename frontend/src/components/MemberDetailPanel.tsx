@@ -704,8 +704,14 @@ export function MemberDetailPanel({
       {settingsOpen && (
         <div className="machine-picker" role="dialog" aria-modal="true">
           <div className="machine-picker__box">
+            {/* 🔴 C′: the wording follows `online`, NOT `awake`. Only a
+                confirmed online session takes the graceful path (relocate /
+                PATCH); a `waking` member's confirm reaches `runActivate`
+                (see saveSettings' `!online` branch), which is a start, not a
+                handover. Saying 「更改」 there promises a graceful wrap-up the
+                click never performs — the button text would be a lie. */}
             <div className="machine-picker__title">
-              {awake ? t.mp.change : t.lifecycle.action.spawn}
+              {online ? t.mp.change : t.lifecycle.action.spawn}
             </div>
             <ModelEffortEditor
               runtime={settingsRuntime}
@@ -736,7 +742,7 @@ export function MemberDetailPanel({
                 {t.common.cancel}
               </button>
               <button type="button" className="btn btn--accent" disabled={settingsBusy || !settingsMachineId} onClick={() => void saveSettings()}>
-                {awake ? t.mp.change : t.lifecycle.action.spawn}
+                {online ? t.mp.change : t.lifecycle.action.spawn}
               </button>
             </div>
             {settingsError && <div className="mp-field__hint mp-relocate__reason">{settingsError}</div>}
