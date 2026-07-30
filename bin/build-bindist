@@ -28,6 +28,7 @@ rm -rf "$BINDIST"
 mkdir -p "$BINDIST"
 (cd "$ROOT/cli/ocwarden" && go build -ldflags="-s -w" -o "$BINDIST/ocwarden" ./...)
 (cd "$ROOT/cli/ocagent" && go build -ldflags="-s -w" -o "$BINDIST/ocagent" ./...)
+(cd "$ROOT/cli/officraft" && go build -ldflags="-s -w" -o "$BINDIST/officraft" ./...)
 # T-33d5: sign the FLEET-SERVED artifacts with the stable release identity — but
 # SINCE T-588c THIS IS A NO-OP UNLESS SIGNING WAS EXPLICITLY REQUESTED. The
 # helper returns before it consults the keychain, so this script (which runs on

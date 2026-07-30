@@ -258,9 +258,10 @@ cmd_publish() {
   cp "$STAGE/.deploy/ocserverd"                     "$PKG/ocserverd"
   cp "$STAGE/server/ocserverd/bindist/ocwarden"     "$PKG/ocwarden"
   cp "$STAGE/server/ocserverd/bindist/ocagent"      "$PKG/ocagent"
+  cp "$STAGE/server/ocserverd/bindist/officraft"    "$PKG/officraft"
   cp "$STAGE/bin/install.sh"                        "$PKG/install.sh"
   cp "$STAGE/LICENSE"                               "$PKG/LICENSE"
-  chmod +x "$PKG/ocserverd" "$PKG/ocwarden" "$PKG/ocagent" "$PKG/install.sh"
+  chmod +x "$PKG/ocserverd" "$PKG/ocwarden" "$PKG/ocagent" "$PKG/officraft" "$PKG/install.sh"
   write_package_readme "$PKG/README.md" "$TAG" "$SHORT"
   tar -C "$STAGE/.release-pkg" -czf "$OUT/$NAME.tar.gz" "$NAME"
   # install.sh doubles as a standalone release asset (the documented curl|bash
@@ -371,7 +372,7 @@ verify_artifacts() {
   # The tarball's member list, EXACTLY. A tarball missing ocwarden — or one that
   # quietly grew a stray file — is a broken install, not a cosmetic issue.
   local want_members got_members
-  want_members="$(printf '%s\n' LICENSE README.md install.sh ocagent ocserverd ocwarden)"
+  want_members="$(printf '%s\n' LICENSE README.md install.sh ocagent ocserverd ocwarden officraft)"
   got_members="$(tar -tzf "$OUT/$NAME.tar.gz" \
     | sed -e "s|^$NAME/||" -e '/^$/d' | LC_ALL=C sort)"
   [[ "$got_members" == "$want_members" ]] || fail_item tarball-members \
@@ -392,7 +393,7 @@ verify_artifacts() {
   # file(1)'s prose is not a contract; the presence of the three tokens is what
   # this check is actually about.
   local b desc
-  for b in ocserverd ocwarden ocagent; do
+  for b in ocserverd ocwarden ocagent officraft; do
     desc="$(file -b "$vdir/$NAME/$b")"
     [[ "$desc" == *"Mach-O"* && "$desc" == *"arm64"* && "$desc" == *"executable"* ]] \
       || fail_item artifact-arch "$b is not a darwin/arm64 Mach-O executable (file says: $desc)"
