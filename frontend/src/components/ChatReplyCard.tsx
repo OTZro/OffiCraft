@@ -18,7 +18,6 @@ import { useI18n } from "../i18n";
 import type { ReplyCard, ReplyCardAnswerInput } from "../api/adapter";
 import { api } from "../api";
 import { useHashRoute } from "../lib/hashRoute";
-import { Lightbox } from "./AttachmentStrip";
 import { Markdown } from "./Markdown";
 import {
   ReplyCardAnsweredBody,
@@ -53,9 +52,6 @@ export function ChatReplyCard({
   const [card, setCard] = useState<ReplyCard | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  // A question attachment opened full-size (null = closed) — the shared
-  // Lightbox below.
-  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   // Lazy-load gate: a terminal-hinted card (answered/expired) starts COLLAPSED
   // (no fetch) and loads its full shape only on expand; every other case
   // starts expanded and loads eagerly.
@@ -193,7 +189,7 @@ export function ChatReplyCard({
       {/* QUESTION-side attachments (T-5e8a): thumbnails/chips under the body,
        * on every status — click an image to preview in the lightbox. */}
       {card && (
-        <ReplyCardQuestionAttachments card={card} onOpenImage={setLightboxSrc} />
+        <ReplyCardQuestionAttachments card={card} />
       )}
 
       {/* §3.6 請示 → 任務 (chat surface, same rule as RepliesPage): a
@@ -234,7 +230,6 @@ export function ChatReplyCard({
         ) : (
           <ReplyCardAnsweredBody card={card} onReanswer={doReanswer} />
         ))}
-      <Lightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
     </div>
   );
 }

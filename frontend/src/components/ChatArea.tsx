@@ -24,7 +24,7 @@ import {
 import { useWindowActive } from "../hooks/useWindowActive";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { enterShouldSend } from "../lib/composerKeys";
-import { AttachmentStrip, Lightbox } from "./AttachmentStrip";
+import { AttachmentStrip } from "./AttachmentStrip";
 import { Avatar } from "./Avatar";
 import { avatarKindForMember } from "../lib/avatarKind";
 import { ChatGalleryPanel } from "./ChatGalleryPanel";
@@ -298,16 +298,15 @@ export function ChatArea({
     clearAttachments,
     restoreAttachments,
   } = useAttachmentStaging();
-  // An image opened full-size in the lightbox overlay (null = closed). Holds the
-  // ready-to-render src (already token-authed for gated blobs, or a data: URI).
-  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
-  // What the in-cockpit markdown overlay is showing (null = closed). TWO ways
-  // in, one surface: a .md ATTACHMENT (T-a1c4 — the overlay fetches the blob,
-  // offers 下載 and a share link, so it carries the blob's id) or an incoming
-  // MESSAGE body (the corner 放大閱讀 button — the text is already in hand, so
-  // there is nothing to fetch, download or share). The kind is carried
-  // explicitly so neither branch has to be guessed from which field happens to
-  // be set.
+  // What the in-cockpit full-view overlay is showing (null = closed). THREE
+  // ways in, one surface: a stored ATTACHMENT (T-a1c4 — the overlay fetches the
+  // blob, offers 下載 and a share link, so it carries the blob's id), an
+  // incoming MESSAGE body (the corner 放大閱讀 button — the text is already in
+  // hand, so there is nothing to fetch, download or share), or a STAGED image
+  // still sitting in the composer (T-f014 — the bytes are in hand as a data:
+  // URI, so 下載 is honest but no blob id exists to share). The kind is carried
+  // explicitly so no branch has to be guessed from which field happens to be
+  // set.
   const [mdPreview, setMdPreview] = useState<
     | {
         kind: "attachment";
@@ -316,6 +315,7 @@ export function ChatArea({
         attachmentId: string;
       }
     | { kind: "message"; title: string; source: string }
+    | { kind: "staged-image"; title: string; imageSrc: string }
     | null
   >(null);
   // M2-3 file & image gallery panel (header icon toggles it).
@@ -795,7 +795,7 @@ export function ChatArea({
     if (newestTs > 0) void markRead(newestTs);
   }, [newestTs, markRead, windowActive, messagesPeer, member.id]);
 
-  // Lightbox Esc handling lives inside the shared <Lightbox> now.
+  // Esc handling for the full-view overlay lives inside MarkdownPreviewOverlay.
 
   // Drag-drop: dropping files anywhere on the chat window stages them —
   // unless the composer is LOCKED (M2-4: an offline member can't receive a
@@ -948,7 +948,6 @@ export function ChatArea({
           className="chat__msg-attachments"
           itemClassName="chat__msg-attachment"
           imageClassName="chat__msg-image chat__msg-image--clickable"
-          onOpenImage={(src) => setLightboxSrc(src)}
         />
       </div>
     );
@@ -1340,7 +1339,13 @@ export function ChatArea({
                 pendingAttachments={pendingAttachments}
                 attachError={attachError}
                 onRemove={removeAttachment}
-                onOpenImage={(src) => setLightboxSrc(src)}
+                onOpenImage={(att) =>
+                  setMdPreview({
+                    kind: "staged-image",
+                    title: att.filename || t.chat.pastedImageAlt,
+                    imageSrc: att.dataUri,
+                  })
+                }
               />
             )}
             <div className="chat__composer-row">
@@ -1402,18 +1407,23 @@ export function ChatArea({
         )}
       </footer>
 
-      {/* Full-size overlay — the SHARED Lightbox (backdrop / × / Esc close). */}
-      <Lightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
-      {/* Markdown full-view overlay (T-a1c4) — in-cockpit render, shared with
-       * the task artifact popover. A .md attachment rides the blob url + its id
-       * (the overlay fetches it and keeps its 下載 and share links); a 放大閱讀
-       * message rides the body text this component already holds. */}
+      {/* The ONE full-view overlay (T-a1c4, T-f014) — in-cockpit render, shared
+       * with the task artifact popover. A stored attachment rides the blob url +
+       * its id (the overlay fetches it and keeps its 下載 and share links); a
+       * 放大閱讀 message rides the body text this component already holds; a
+       * staged composer image rides its data: URI. */}
       {mdPreview &&
         (mdPreview.kind === "attachment" ? (
           <MarkdownPreviewOverlay
             title={mdPreview.title}
             url={mdPreview.url}
             attachmentId={mdPreview.attachmentId}
+            onClose={() => setMdPreview(null)}
+          />
+        ) : mdPreview.kind === "staged-image" ? (
+          <MarkdownPreviewOverlay
+            title={mdPreview.title}
+            imageSrc={mdPreview.imageSrc}
             onClose={() => setMdPreview(null)}
           />
         ) : (

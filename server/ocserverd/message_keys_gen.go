@@ -9,7 +9,6 @@ package main
 // frontend/src/i18n/locales/en.ts — the single message-code contract.
 var messageKeys = map[string]bool{
 	"chat.attachLabel":                         true,
-	"chat.closeImageLabel":                     true,
 	"chat.composerOfflineSuffix":               true,
 	"chat.copyShareLink":                       true,
 	"chat.dateToday":                           true,
@@ -38,6 +37,9 @@ var messageKeys = map[string]bool{
 	"chat.mdPreview.error":                     true,
 	"chat.mdPreview.loading":                   true,
 	"chat.mdPreview.unavailable":               true,
+	"chat.mdPreview.zoomControls":              true,
+	"chat.mdPreview.zoomIn":                    true,
+	"chat.mdPreview.zoomOut":                   true,
 	"chat.me":                                  true,
 	"chat.newMessages":                         true,
 	"chat.offlineHint":                         true,

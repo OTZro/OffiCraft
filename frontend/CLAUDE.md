@@ -44,16 +44,36 @@ ChatArea 兩個行為,皆不動 server:
 - **進房跳第一則未讀**:進對話時 snapshot `member.unreadCount`(**render 同步取**,搶在 listChat「list 即讀」清 watermark 之前——這是 race-free 的關鍵;server 清掉後 roster unreadCount 才歸 0)。第一則未讀 = thread 中 `from===peer && to===owner` 訊息的**最後 count 則之最早者**;其上渲染 `.chat__unread-divider`(「以下是未讀訊息」細線)並 `scrollIntoView({block:"start"})` 頂到視野頂;divider 整個 session 保留(如 LINE)。無未讀照舊落底。ChatArea 換 peer 不 remount → render-time guard 重置 session 追蹤;useChat 於 withId 換時**立即清空 messages**(防舊 thread 殘影 + 防未讀定位錨錯舊訊息)。
 - **房內新訊息浮條**:owner 上滾(沿用既有 `nearBottomRef` 判定,80px 帶)時新進 `to===owner` 訊息 → `.chat__new-msg-chip` 灰底 pill 浮在 `.chat__body` 底部;錨點 = 浮條出現後**第一則**未看訊息(session 內以 message-id diff 追蹤,不動 server);點擊 smooth 捲到該則(`[data-msg-id]`);**捲到底才消失**(onScroll near-bottom 清除),點擊本身不清。在底部時維持原自動跟底、永不出浮條。i18n key:`chat.newMessages` / `chat.unreadBelow`(三語)。
 
-## markdown 全幅閱覽 = 一個 overlay、兩種來源(owner 2026-07-28)
-`MarkdownPreviewOverlay` 是**唯一**的座艙內 markdown 全幅面,兩個入口共用:
+## 全幅閱覽 = 一個 overlay、三種來源(owner 2026-07-28;T-f014 收編圖片)
+`MarkdownPreviewOverlay` 是**唯一**的座艙內全幅面 —— markdown **與圖片都算**,
+三個入口共用:
 - **`url`**:已存檔的 .md 附件(T-a1c4),overlay 自己 fetch,header 保留「下載」
   **與複製分享連結**;因此 `url` 一定**併帶必填的 `attachmentId`**(T-4fdc:分享連結
   永遠用 blob 自己的 `att-` id 去 mint,不是 serve path、也不是 `ta-` 產物 id)。
 - **`source`**:呼叫端**手上已有**的文字(聊天訊息本文)。不 fetch、不進 loading 態,
   **也沒有下載鈕、沒有分享鈕**——那串位元組從來不是檔案,給一個假造的 blob url 是
   說謊,而且沒有 id 可以分享。
-  props 是 discriminated union(`url`+`attachmentId` / `source` 互斥),傳兩個是
-  compile error;`url` 少了 `attachmentId` 也是 compile error。
+- **`imageSrc`**:呼叫端手上已有的**圖片 bytes**(`data:` URI)——composer 裡還沒送出的
+  staged 附件(T-f014)。那是真的檔案,所以**下載誠實保留**;但還沒上傳、沒有 blob id,
+  所以**沒有分享鈕**——沒有東西可以指。
+  props 是 discriminated union(`url`+`attachmentId` / `source` / `imageSrc` 三者互斥),
+  傳兩個是 compile error;`url` 少了 `attachmentId` 也是 compile error。
+
+**T-f014:舊的 `Lightbox`(`chat__lightbox*`)已退役、連同樣式整塊刪除。**
+座艙裡**只剩這一個**全尺寸看圖面,所以每張圖(已存檔附件 / staged 預覽)都拿到同一組
+標題列:檔名、分享連結(僅已存檔)、下載、關閉、Esc/backdrop 關閉、縮放。
+退役前的實況比票面描述更糟:`AttachmentStrip` 早就**不讀** `onOpenImage` 了,
+於是五個 call site 一邊把 handler 傳進一個忽略它的元件、一邊掛著一個永遠打不開的第二層
+overlay,而**沒有任何東西是紅的**——沒用到的 prop 與到不了的元件都完全通過型別檢查。
+守衛:`bin/tests/lightbox-retired-guard.sh`(production 碼零 `<Lightbox`、
+stylesheet 零 `.chat__lightbox` 規則,附正負對照與 corpus 非空檢查)。
+
+**樣式所有權**:`.md-preview*` 已從 office.css 抽成 `md-preview.css`,由
+`MarkdownPreviewOverlay.tsx` **自己 import**。原本它是靠 OfficePage / RepliesPage /
+TasksPage 的 transitive import 搭便車拿到樣式,而這個彈窗還會從任務產物彈窗、任務卡上
+掛起來——正是 T-7526 那個「唯一 importer 一消失、連沒被碰到的畫面也一起壞」的形狀。
+護欄:`src/components/styleOwnership.test.ts`(用了 block 就要自己 import;
+且該 block 的規則只准有一個家)。
 
 **單一換行:`source` 開 `breaks`、`url` 不開**(Seth 2026-07-28 review PR #18)。
 聊天泡泡是 Enter=換行的介面(`breaks`),同一段文字被拿到全幅面讀時如果落回標準

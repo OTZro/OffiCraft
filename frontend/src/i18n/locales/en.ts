@@ -556,7 +556,6 @@ export const en: Dict = {
     pastedImageAlt: "Pasted screenshot",
     imageAlt: "Chat image",
     viewImageLabel: "View full size",
-    closeImageLabel: "Close image",
     attachLabel: "Attach a file",
     attachTooLarge: (maxMb: number) => `File is too large (${maxMb} MB max)`,
     attachTooMany: (max: number) => `At most ${max} attachments per message`,
@@ -613,6 +612,9 @@ export const en: Dict = {
       loading: "Loading preview…",
       error: "Could not load the preview",
       unavailable: "This file cannot be previewed. Please download it.",
+      zoomControls: "Zoom image",
+      zoomIn: "Zoom in",
+      zoomOut: "Zoom out",
     },
     // Corner button on an incoming bubble: reopen this message body in the same
     // full-view overlay (a long answer is hard to read in the thread column).

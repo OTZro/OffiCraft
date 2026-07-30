@@ -98,23 +98,20 @@ function ReplyAnswerAttachments({ card }: { card: ReplyCard }) {
 }
 
 /** The QUESTION-side attachments the initiator opened the card with (T-5e8a):
- * the same strip the answer side renders, but images are CLICKABLE — the
- * shell wires `onOpenImage` into its own Lightbox (點開預覽 on every card
- * face). Renders nothing when the card carries none; shown on every status
+ * the same strip the answer side renders, but images are CLICKABLE — the strip
+ * opens them in the shared preview overlay (點開預覽 on every card face).
+ * Renders nothing when the card carries none; shown on every status
  * (waiting / answered / expired) — the question's context never expires. */
 export function ReplyCardQuestionAttachments({
   card,
-  onOpenImage,
 }: {
   card: ReplyCard;
-  onOpenImage?: (src: string) => void;
 }) {
   return (
     <AttachmentStrip
       attachments={card.attachments}
       className="reply-card__answer-atts reply-card__question-atts"
       imageClassName="reply-card__answer-image chat__msg-image--clickable"
-      onOpenImage={onOpenImage}
     />
   );
 }

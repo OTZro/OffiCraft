@@ -67,9 +67,42 @@ describe("MarkdownPreviewOverlay", () => {
     );
     const image = container.querySelector<HTMLImageElement>(".md-preview__image")!;
     expect(image.src).toContain("/api/chat/attachment/att-image");
+    expect(image.alt).toBe("shot.png");
+    // The zoom cluster is reachable by name, not by the bare −/+ glyphs: those
+    // announce as "minus"/"plus" and say nothing about what they act on, and
+    // the group's label used to be a hard-coded English string invisible to the
+    // wording overlay.
+    expect(screen.getByRole("group", { name: "縮放圖片" })).toBeTruthy();
     expect(screen.getByText("100%")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "+" }));
+    fireEvent.click(screen.getByRole("button", { name: "放大" }));
     expect(screen.getByText("125%")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "縮小" }));
+    expect(screen.getByText("100%")).toBeTruthy();
+  });
+
+  // T-f014: staged composer attachments used to open a SECOND overlay
+  // (the retired Lightbox) with nothing but an ×. They now land in
+  // this shell — but the bytes have not been uploaded, so there is no blob id
+  // and therefore nothing a share link could point at. Download stays: the
+  // data: URI IS the file.
+  it("previews a staged image from bytes in hand, with download but no share link", () => {
+    const dataUri = "data:image/png;base64,iVBORw0KGgo=";
+    const { container } = render(
+      <I18nProvider>
+        <MarkdownPreviewOverlay title="pasted.png" imageSrc={dataUri} onClose={() => {}} />
+      </I18nProvider>,
+    );
+    const image = container.querySelector<HTMLImageElement>(".md-preview__image");
+    // Named, not a `!` deref: "the image element is missing" is a distinct
+    // failure from "it points at the wrong bytes", and a TypeError reports
+    // neither.
+    expect(image, "the staged bytes must render through the image branch").not.toBeNull();
+    expect(image!.getAttribute("src")).toBe(dataUri);
+    expect(container.querySelector("button.md-preview__share")).toBeNull();
+    const download = container.querySelector<HTMLAnchorElement>("a.md-preview__download");
+    expect(download, "staged bytes are a real file — the download stays").not.toBeNull();
+    expect(download!.getAttribute("href")).toBe(dataUri);
+    expect(download!.getAttribute("download")).toBe("pasted.png");
   });
 
   // The rendered body wears `.doc-md`, the shared markdown skin every other

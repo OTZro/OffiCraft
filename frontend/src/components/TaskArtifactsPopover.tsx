@@ -13,10 +13,10 @@
 // old tab order (檔案 → 圖片 → 連結) so the eye still reads them as three
 // families without a control to operate.
 //
-// File/image artifacts REUSE the shared attachment renderer (AttachmentStrip +
-// Lightbox) and the .md preview overlay — deliverable #2's 「復用聊天附件那套
-// 顯示」. A markdown file gets a 預覽 action (in-cockpit render) alongside its
-// download; an image opens the Lightbox. Links render as external-link chips.
+// File/image artifacts REUSE the shared attachment renderer (AttachmentStrip)
+// and its preview overlay — deliverable #2's 「復用聊天附件那套顯示」. Every
+// blob row, file or image, opens the one MarkdownPreviewOverlay (T-f014 retired
+// the separate Lightbox). Links render as external-link chips.
 // The owner may un-pin any artifact (a small × per row) when onRemoveArtifact
 // is wired — the executing agent pins via MCP but does not remove.
 
@@ -26,7 +26,7 @@ import { useI18n } from "../i18n";
 import { api } from "../api";
 import type { TaskArtifactView, ChatAttachmentView } from "../api/adapter";
 import { formatAbsolute } from "../lib/dateFormat";
-import { AttachmentStrip, Lightbox } from "./AttachmentStrip";
+import { AttachmentStrip } from "./AttachmentStrip";
 import {
   CloseIcon,
   ExternalLinkIcon,
@@ -93,8 +93,8 @@ export function TaskArtifactsBadge({
   // things fall out of that and are the reason this doesn't need extra guards:
   //   · a mousedown on the badge is INSIDE, so it never closes-then-reopens —
   //     the badge's own onClick stays the single toggle (the classic bug).
-  //   · the Lightbox and the MarkdownPreviewOverlay render INSIDE the popover
-  //     (neither uses createPortal), so opening a preview and clicking its
+  //   · the MarkdownPreviewOverlay renders INSIDE the popover (it does not use
+  //     createPortal), so opening a preview and clicking its
   //     backdrop stays inside the anchor and leaves the popover open.
   // `mousedown` (not `click`) matches the siblings and fires before the anchor
   // is torn down. Esc is handled by the popover itself (see ArtifactsPopover).
@@ -162,8 +162,8 @@ function ArtifactsPopover({
   // whether formatAbsolute prefixes the year, so a plain render-time read is
   // fine (no state/interval needed, unlike RepliesPage's counters).
   const nowTs = Date.now() / 1000;
-  // Open overlays (mutually exclusive; the caller-owned state pattern).
-  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  // Whether the strip's shared preview overlay is open (it owns that state and
+  // reports it here, so this popover can stand down from Escape while it is up).
   const [attachmentPreviewOpen, setAttachmentPreviewOpen] = useState(false);
 
   // Fetch the full artifact set on open, and keep it live while open (a task
@@ -191,11 +191,11 @@ function ArtifactsPopover({
   // Esc closes the popover (only when no overlay is capturing Esc itself).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !lightboxSrc && !attachmentPreviewOpen) onClose();
+      if (e.key === "Escape" && !attachmentPreviewOpen) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, lightboxSrc, attachmentPreviewOpen]);
+  }, [onClose, attachmentPreviewOpen]);
 
   // ONE list, grouped 檔案 → 圖片 → 連結 (the old tab order). File and image
   // rows share the AttachmentStrip renderer, so they are handed to it in a
@@ -209,15 +209,15 @@ function ArtifactsPopover({
 
   // Per-item extra: the owner un-pin ×. T-7bc2 (owner 2026-07-21): the .md
   // preview trigger moved OFF this cluster and onto the file chip itself
-  // (AttachmentStrip's `onPreviewMarkdown` — click-the-filename-to-preview,
-  // same contract as the image thumbnail's `onOpenImage`), so this no longer
+  // (click-the-filename-to-preview, the same contract the image thumbnail
+  // already had), so this no longer
   // renders a separate 眼睛 button. Bound by artifact id (the strip carries
   // att views).
   const renderExtra = (att: ChatAttachmentView): ReactNode => {
     const art = artifacts.find((a) => a.id === att.id);
     // An image row is [thumbnail][name chip][actions] — the name chip is added
     // here rather than inside AttachmentStrip so the image branch (and its
-    // Lightbox click) stays untouched. It gives the image row the SAME
+    // click-to-preview) stays untouched. It gives the image row the SAME
     // three-part shape as a file/link row, and the same hover-for-full-name.
     // Both filename and label are optional server-side, so fall back the way
     // the file branch does — an image row must never lose its chip, or it
@@ -276,7 +276,6 @@ function ArtifactsPopover({
               fileChipClassName="task-artifacts__chip"
               fileNameClassName="task-artifacts__chip-name"
               fileNameColClassName="task-artifacts__chip-text"
-              onOpenImage={(src) => setLightboxSrc(src)}
               onPreviewChange={setAttachmentPreviewOpen}
               renderExtra={renderExtra}
               renderMeta={(att) => {
@@ -332,7 +331,6 @@ function ArtifactsPopover({
           </>
         )}
       </div>
-      <Lightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
     </div>
   );
 }
