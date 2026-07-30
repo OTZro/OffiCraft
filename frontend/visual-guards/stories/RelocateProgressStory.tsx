@@ -1,5 +1,5 @@
-// CT stories for the 改機器 progress states (T-e0e3): the REAL MemberDetailPanel
-// and the REAL WorkerDetailPanel, so the guard measures the ACTUAL 機器 label row
+// CT story for the member panel's machine-transition hotspot: the REAL
+// MemberDetailPanel, so the guard measures the ACTUAL 機器 label row
 // (`.mp-field__head`, flex + space-between) with the ACTUAL app CSS — the row the
 // new `.mp-relocate` column and its notice line now live in.
 //
@@ -11,9 +11,7 @@
 import { useEffect, useState } from "react";
 import { I18nProvider } from "../../src/i18n";
 import { MemberDetailPanel } from "../../src/components/MemberDetailPanel";
-import { WorkerDetailPanel } from "../../src/components/WorkerDetailPanel";
 import type { Member } from "../../src/types";
-import type { OutsourceWorkerView } from "../../src/api/adapter";
 
 /** Flip every mock machine online, then report done so the panels mount AFTER
  * the registry says one is reachable (the panels fetch machines on mount). */
@@ -64,28 +62,6 @@ const member: Member = {
   unreadCount: 0,
 };
 
-const worker: OutsourceWorkerView = {
-  id: "ow-1",
-  codename: "O-19",
-  model: "claude-opus-4-8",
-  effort: "high",
-  status: "active",
-  taskId: "t-1",
-  taskTitle: "改機器進度狀態",
-  taskStatus: "in_progress",
-  taskNo: "T-e0e3",
-  taskTypeKey: "tm-05f7c776d6ff",
-  taskTypeName: "OffiCraft 開發",
-  presence: "online",
-  machine: "Warden · mbp5",
-  desiredMachineId: "",
-  account: "shawn-claude",
-  contextPct: 42,
-  cost: 7,
-  bankedCost: 0,
-  creatorId: "owner",
-  delegatedBy: "",
-};
 
 /** The member panel's replacement hotspot (T-927a). 改機器 is gone from this
  * panel — the visible pending state is now a 「→ 要換到 ○○」 hint line rendered as a
@@ -124,19 +100,9 @@ export function MemberMachineTransitionStory() {
   );
 }
 
-export function WorkerRelocateProgressStory() {
-  const ready = useOnlineMachines();
-  return (
-    <I18nProvider>
-      <div className="app__main">
-        {ready && (
-          <WorkerDetailPanel
-            worker={worker}
-            onBack={() => {}}
-            onRelocate={neverLands}
-          />
-        )}
-      </div>
-    </I18nProvider>
-  );
-}
+// ⚠️ `WorkerRelocateProgressStory` and its guard (relocate-progress-720.ct.spec)
+// are GONE (T-7526), for the same reason the MEMBER half went in T-927a: the
+// worker panel no longer has a 改機器 button, a 「更換中…」 label or the 30s
+// timeout notice — relocate folded into the unified 更改 dialog — so the old
+// measurement is not merely red, it is unrepresentable. The worker's 機器 label
+// row now carries no control at all, so it holds no width risk to measure.

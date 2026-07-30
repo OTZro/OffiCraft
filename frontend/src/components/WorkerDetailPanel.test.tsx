@@ -13,9 +13,11 @@
 // mock-adapter relocate round-trip. Pure visual styling (the stuck warn tint,
 // the picker's dark theme) is NOT asserted here — jsdom does not compute it.
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { render, fireEvent, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
+import { api } from "../api";
+import { ApiError } from "../api/errors";
 import { OfficePage } from "./OfficePage";
 import {
   __resetMock,
@@ -100,6 +102,13 @@ beforeEach(() => {
   __resetMock();
   window.location.hash = "";
   Element.prototype.scrollIntoView = vi.fn();
+});
+
+// Restore adapter spies even when the assertion that follows them throws — a
+// per-test mockRestore() is skipped on failure and leaks a mocked rejection
+// into the next test, turning one red into two and hiding which one is real.
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("WorkerDetailPanel — aligned real info (T-f190 item 1)", () => {
@@ -263,33 +272,55 @@ describe("WorkerDetailPanel — real delegator (T-f190 item 2)", () => {
   });
 });
 
-describe("WorkerDetailPanel — 改機器 relocate (T-f190 item 3)", () => {
-  it("disables 改機器 when there is no online machine (0-online path)", async () => {
-    __injectMockTask(mkTask({ id: "t-1" }));
-    __injectMockOutsourceWorker(mkWorker({ id: "ow-1", taskId: "t-1" }));
-    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    const btn = (await findByTestId(
-      "worker-detail-relocate",
-    )) as HTMLButtonElement;
-    expect(btn.disabled).toBe(true);
-  });
-
-  it("with ONE online machine, relocating dispatches and the machine cell adopts it", async () => {
-    // Bring one warden online → the mock registry has exactly one online machine
-    // (machine_id = the warden member id, display_name = its name).
+// ── T-7526: the panel is READ-ONLY and every setting goes through the 更改
+// dialog (the member panel's shape since T-927a). These replace the old 改機器
+// in-place-button suite: that control no longer exists, so its assertions are
+// not merely red, they are unrepresentable.
+describe("WorkerDetailPanel — 設定改走喚醒區 (T-7526 parity)", () => {
+  it("renders the 模型 and 機器 cells with NO in-place editor on either", async () => {
     __setMockMemberOnline("warden-mbp5", true);
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockOutsourceWorker(
-      mkWorker({ id: "ow-1", taskId: "t-1", machine: "" }),
+      mkWorker({ id: "ow-1", taskId: "t-1", model: "Opus 4.6" }),
     );
+    const { findByTestId, queryByTestId } = renderOfficeAt("#office/worker/ow-1");
+    // Positive control FIRST: both cells really are on screen holding real
+    // values. Without it "no edit button" would also pass on a panel that
+    // failed to render the cells at all.
+    const cell = await findByTestId("worker-detail-model-effort-cell");
+    expect(cell.textContent).toContain("Opus 4.6");
+    expect(await findByTestId("worker-detail-machine")).toBeTruthy();
+    // …and the settings entry that replaced them is live.
+    await findByTestId("worker-detail-change");
+    // The two in-place editors are gone.
+    expect(queryByTestId("worker-detail-model-effort-edit")).toBeNull();
+    expect(queryByTestId("worker-detail-relocate")).toBeNull();
+  });
+
+  it("更改 → changing the machine REACHES relocateWorker and the 機器 cell adopts it", async () => {
+    __setMockMemberOnline("warden-mbp5", true);
+    __injectMockTask(mkTask({ id: "t-1" }));
+    __injectMockOutsourceWorker(
+      mkWorker({ id: "ow-1", taskId: "t-1", machine: "", desiredMachineId: "" }),
+    );
+    const relocate = vi.spyOn(api, "relocateWorker");
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    const btn = (await findByTestId(
-      "worker-detail-relocate",
-    )) as HTMLButtonElement;
-    await waitFor(() => expect(btn.disabled).toBe(false));
-    fireEvent.click(btn);
-    // Single online machine → auto-relocate (no picker), the mock reflects the
-    // dispatch and the outsource_worker SSE delta refetches the panel.
+    fireEvent.click(await findByTestId("worker-detail-change"));
+    const select = (await findByTestId(
+      "worker-detail-settings-machine",
+    )) as HTMLSelectElement;
+    await waitFor(() =>
+      expect(
+        Array.from(select.options).map((o) => o.value),
+      ).toContain("warden-mbp5"),
+    );
+    fireEvent.change(select, { target: { value: "warden-mbp5" } });
+    fireEvent.click(await findByTestId("worker-detail-settings-confirm"));
+    // FIRED, not merely rendered: the adapter saw the call with the chosen id…
+    await waitFor(() =>
+      expect(relocate).toHaveBeenCalledWith("ow-1", "warden-mbp5"),
+    );
+    // …and the round-trip lands on the cell.
     await waitFor(async () =>
       expect((await findByTestId("worker-detail-machine")).textContent).toBe(
         "Warden · mbp5",
@@ -297,84 +328,100 @@ describe("WorkerDetailPanel — 改機器 relocate (T-f190 item 3)", () => {
     );
   });
 
-  // ── the relocate LIFECYCLE on THIS panel (T-e0e3 review E.1/E.2) ──────────
-  // Both cases mount the REAL WorkerDetailPanel through OfficePage. The hook's
-  // own suite drives a test-owned Harness and feeds `currentMachineId` itself,
-  // so it could not have caught what was actually broken: THIS panel passed
-  // nothing, `landed` was false by construction, and a 改機器 that succeeded in
-  // two seconds still span for the full 30s and then painted an error-styled
-  // timeout — on the exact panel the owner filed the report about. "The state
-  // machine is correct" and "it is wired up" are different claims, and only the
-  // second one was ever in doubt here.
-  //
-  // The receipt-driven failure/stale-receipt arms live in the hook suite: the
-  // mock adapter reflects EVERY relocate as landed, so a refusal cannot be
-  // staged through it without making the mock lie about the server.
-
-  it("SENTINEL: 改機器 enters 更換中 and blocks a duplicate operation", async () => {
-    // The over-correction guard for the case below. "Never enter 更換中" would
-    // also make a landed relocate look instantaneous while destroying the whole
-    // feature the owner asked for (「按了沒反應」 was half the report).
-    // Asserted SYNCHRONOUSLY after the click: the relocate promise resolves on a
-    // microtask, so anything awaited here could miss the state legitimately.
-    __setMockMemberOnline("warden-mbp5", true);
+  it("a rejected submit keeps the dialog open and shows the server's own message", async () => {
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockOutsourceWorker(
-      mkWorker({ id: "ow-1", taskId: "t-1", machine: "", desiredMachineId: "" }),
+      mkWorker({ id: "ow-1", taskId: "t-1", model: "Opus 4.6" }),
     );
-    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    const btn = (await findByTestId(
-      "worker-detail-relocate",
-    )) as HTMLButtonElement;
-    await waitFor(() => expect(btn.disabled).toBe(false));
-
-    fireEvent.click(btn);
-    expect(btn.textContent).toContain("更換中");
-    expect(btn.disabled).toBe(true); // no second dispatch from a double-click
-    fireEvent.click(btn);
-  });
-
-  it("a LANDED relocate ends 更換中 — this panel never times out on success", async () => {
-    __setMockMemberOnline("warden-mbp5", true);
-    __injectMockTask(mkTask({ id: "t-1" }));
-    __injectMockOutsourceWorker(
-      mkWorker({ id: "ow-1", taskId: "t-1", machine: "", desiredMachineId: "" }),
-    );
-    const { findByTestId, queryByTestId } = renderOfficeAt(
-      "#office/worker/ow-1",
-    );
-    const btn = (await findByTestId(
-      "worker-detail-relocate",
-    )) as HTMLButtonElement;
-    await waitFor(() => expect(btn.disabled).toBe(false));
-    fireEvent.click(btn);
-
-    // The move lands (the machine cell adopts the new machine) …
-    await waitFor(async () =>
-      expect((await findByTestId("worker-detail-machine")).textContent).toBe(
-        "Warden · mbp5",
+    vi.spyOn(api, "setWorkerModel").mockRejectedValue(
+      new ApiError(
+        "http 409 for POST /api/outsource-workers/ow-1/model",
+        409,
+        "conflict",
+        "這個外包已經被釋放了",
       ),
     );
-    // … and THAT is what must end the wait. No timer is advanced: if this ever
-    // needs a fake clock to pass, the landing signal has been lost again.
-    await waitFor(() => expect(btn.textContent).not.toContain("更換中"));
-    expect(btn.disabled).toBe(false);
-    expect(queryByTestId("worker-detail-relocate-notice")).toBeNull();
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+    fireEvent.click(await findByTestId("worker-detail-change"));
+    const input = (await findByTestId("me-model-input")) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "claude-opus-4-8" } });
+    fireEvent.click(await findByTestId("worker-detail-settings-confirm"));
+    expect((await findByTestId("worker-detail-settings-error")).textContent).toBe(
+      "這個外包已經被釋放了",
+    );
+    // The dialog stays up so the owner can retry — a closed dialog would read
+    // as a save that worked.
+    await findByTestId("worker-detail-settings-dialog");
   });
 
-  it("with TWO online machines, 改機器 opens the machine picker", async () => {
+  it("saves the launch settings BEFORE relocating, so the respawn uses the new model", async () => {
     __setMockMemberOnline("warden-mbp5", true);
-    __setMockMemberOnline("m-server-self", true);
     __injectMockTask(mkTask({ id: "t-1" }));
-    __injectMockOutsourceWorker(mkWorker({ id: "ow-1", taskId: "t-1" }));
+    __injectMockOutsourceWorker(
+      mkWorker({ id: "ow-1", taskId: "t-1", model: "Opus 4.6", desiredMachineId: "" }),
+    );
+    // A relocate kills the session and re-dispatches on the new machine, so a
+    // relocate that goes first spawns on the OLD model and the owner's edit only
+    // lands one respawn later.
+    const order: string[] = [];
+    vi.spyOn(api, "setWorkerModel").mockImplementation(async (id) => {
+      order.push("model");
+      return (await api.getOutsourceWorker(id)) as never;
+    });
+    vi.spyOn(api, "relocateWorker").mockImplementation(async (id) => {
+      order.push("relocate");
+      return (await api.getOutsourceWorker(id)) as never;
+    });
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    const btn = (await findByTestId(
-      "worker-detail-relocate",
-    )) as HTMLButtonElement;
-    await waitFor(() => expect(btn.disabled).toBe(false));
-    fireEvent.click(btn);
-    // The picker modal appears rather than an immediate move.
-    expect(await findByTestId("machine-picker")).toBeTruthy();
+    fireEvent.click(await findByTestId("worker-detail-change"));
+    const input = (await findByTestId("me-model-input")) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "claude-opus-4-8" } });
+    const select = (await findByTestId(
+      "worker-detail-settings-machine",
+    )) as HTMLSelectElement;
+    await waitFor(() =>
+      expect(Array.from(select.options).map((o) => o.value)).toContain(
+        "warden-mbp5",
+      ),
+    );
+    fireEvent.change(select, { target: { value: "warden-mbp5" } });
+    fireEvent.click(await findByTestId("worker-detail-settings-confirm"));
+    await waitFor(() => expect(order).toHaveLength(2));
+    expect(order).toEqual(["model", "relocate"]);
+  });
+
+  it("closes an open dialog when the panel switches to another worker", async () => {
+    __injectMockTask(mkTask({ id: "t-1" }));
+    __injectMockTask(mkTask({ id: "t-2" }));
+    __injectMockOutsourceWorker(
+      mkWorker({ id: "ow-1", taskId: "t-1", model: "Opus 4.6" }),
+    );
+    __injectMockOutsourceWorker(
+      mkWorker({ id: "ow-2", taskId: "t-2", model: "Sonnet 4.6" }),
+    );
+    const { findByTestId, queryByTestId, rerender } =
+      renderOfficeAt("#office/worker/ow-1");
+    fireEvent.click(await findByTestId("worker-detail-change"));
+    await findByTestId("worker-detail-settings-dialog");
+
+    // Neither caller passes a `key`, so this is a PROP change, not a remount: a
+    // surviving dialog would still hold ow-1's draft and one confirm would write
+    // those values onto ow-2.
+    window.location.hash = "#office/worker/ow-2";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    rerender(
+      <I18nProvider>
+        <OfficePage />
+      </I18nProvider>,
+    );
+    // Positive control: the panel really did move to ow-2 …
+    await waitFor(async () =>
+      expect(
+        (await findByTestId("worker-detail-model-effort-cell")).textContent,
+      ).toContain("Sonnet 4.6"),
+    );
+    // … and it moved there with the dialog closed.
+    expect(queryByTestId("worker-detail-settings-dialog")).toBeNull();
   });
 });
 
@@ -585,22 +632,32 @@ describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {
     );
   });
 
-  it("換 model: edit → save persists the new model via the adapter", async () => {
+  it("換 model: 更改 → save persists the new model via the adapter", async () => {
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockOutsourceWorker(
       mkWorker({ id: "ow-1", taskId: "t-1", model: "Opus 4.6", presence: "online" }),
     );
+    const setModel = vi.spyOn(api, "setWorkerModel");
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    fireEvent.click(await findByTestId("worker-detail-model-effort-edit"));
+    // The ONE settings entry (T-7526) — the model cell itself is read-only.
+    fireEvent.click(await findByTestId("worker-detail-change"));
     // The shared ModelEffortEditor's free custom-model input (data-testid pinned).
     const input = (await findByTestId("me-model-input")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "claude-opus-4-8" } });
-    fireEvent.click(await findByTestId("worker-detail-model-effort-save"));
-    // The editor closes on a successful save (mock resolves); the cell returns…
-    await findByTestId("worker-detail-model-effort-edit");
-    // …and the new model is reflected in the cell (the local override).
-    const cell = await findByTestId("worker-detail-model-effort-cell");
-    expect(cell.textContent).toContain("claude-opus-4-8");
+    fireEvent.click(await findByTestId("worker-detail-settings-confirm"));
+    // The endpoint was actually REACHED with the edited value…
+    await waitFor(() =>
+      expect(setModel).toHaveBeenCalledWith(
+        "ow-1",
+        expect.objectContaining({ model: "claude-opus-4-8" }),
+      ),
+    );
+    // …and the cell reflects it after the outsource_worker refetch.
+    await waitFor(async () =>
+      expect(
+        (await findByTestId("worker-detail-model-effort-cell")).textContent,
+      ).toContain("claude-opus-4-8"),
+    );
   });
 });
 

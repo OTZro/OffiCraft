@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { workerStatusText } from "../i18n/compose";
+import { ApiError } from "../api/errors";
 import type { OutsourceWorkerView } from "../api/adapter";
 import { useMachines } from "../hooks/useMachines";
 import { AgentDetailPanel } from "./AgentDetailPanel";
-import { useRelocateMachine } from "./useRelocateMachine";
+import { ModelEffortEditor } from "./ModelEffortEditor";
 import { ChevronRightIcon } from "./icons";
 import { AvatarEditor } from "./AvatarEditor";
 import { Avatar } from "./Avatar";
@@ -51,7 +52,10 @@ interface WorkerDetailPanelProps {
  * 一個系統會幫我產生跟刪除的正職員工」) — the shared cards (模型/投入度、機器/
  * Claude Account、運行狀況、最近操作、終端、初始 PROMPT) read the ONE unified
  * view model, and the worker-specific bits (外包角色頭像身分 + 任務 chip、狀態 +
- * 委託人、委託任務、改機器) plug in through the panel's slots. Everything the
+ * 委託人、委託任務) plug in through the panel's slots. Since T-7526 the shared
+ * cards are READ-ONLY here too (the member panel's shape since T-927a): 模型/
+ * 投入度 and 機器 carry no in-place editor, and every edit goes through the
+ * 更改 dialog on the identity card. Everything the
  * worker has not really reported renders an honest dash / 「尚未分配」 — never a
  * fabricated value (the shared panel's honest gate, the member's).
  */
@@ -72,54 +76,6 @@ export function WorkerDetailPanel({
   const dash = t.workerDetail.dash;
 
   const { machines } = useMachines();
-  // 🔴 The relocate progress signal, in the SHAPE the hook compares (review
-  // E.1/E.2). This panel used to pass nothing at all, so `landed` was false by
-  // construction and EVERY successful 改機器 here spun the full 30s and then
-  // painted an error-styled timeout — on the very panel the owner reported.
-  //
-  // It cannot be `worker.machine` raw: that is a DISPLAY NAME (server-side
-  // `machineDisplay`), and comparing it against `desiredMachineId` (a raw id)
-  // is never equal. Resolve it back through the machine registry — the same list
-  // the picker already binds — and fall through to the raw value, because
-  // machineDisplay itself falls back to the id when a machine has no label.
-  //
-  // WHAT IT HONESTLY MEANS, stated because the hook's prop doc warns about
-  // exactly this class of signal: for a worker, `machine` is the last DISPATCH
-  // TARGET. So convergence proves "the server acted on the new pin and sent the
-  // start there", NOT "the agent is up on it". That is the right end for
-  // 「更換中…」 — it is the owner's own operation completing — and it is a real
-  // transition, not a degenerate one: before the relocate this holds the OLD
-  // machine, so it can only equal the new pin after a dispatch actually
-  // happened. Arrival is a separate fact and is not claimed anywhere here.
-  const observedMachineId = (() => {
-    const shown = (worker.machine ?? "").trim();
-    if (!shown) return null;
-    const hit = machines.find(
-      (m) => m.displayName === shown || m.machineId === shown,
-    );
-    return hit ? hit.machineId : shown;
-  })();
-  // 改機器 (shared control — the member panel's, 文案統一 to 編輯): the picker's
-  // bound entry is the owner-pinned placement (raw machine id).
-  const { relocateAction, relocatePicker } = useRelocateMachine({
-    subjectId: worker.id,
-    machines,
-    boundMachineId: worker.desiredMachineId || null,
-    onRelocate,
-    testId: "worker-detail-relocate",
-    pickerTitle: t.workerDetail.relocateTitle,
-    pickerConfirmLabel: t.workerDetail.relocateConfirm,
-    noOnlineTitle: t.workerDetail.noOnlineMachine,
-    currentMachineId: observedMachineId,
-    // The failure half: the server writes a receipt for every refused spawn, so
-    // a relocate that cannot land is answerable in seconds instead of at the
-    // 30s ceiling.
-    dispatchReceipt: {
-      at: worker.lastOpAt ?? null,
-      ok: worker.lastOpOk ?? null,
-      reason: worker.lastOpReason ?? "",
-    },
-  });
 
   // ── honest presence projection (A案 P6 — the ONE member vocabulary) ────────
   // presence (wire `presence`, replacing the retired spawn_state) is the
@@ -201,6 +157,122 @@ export function WorkerDetailPanel({
       ? t.workerDetail.restart
       : t.workerDetail.stop;
 
+  // ── 設定區 (更改 — 與正職同一套形狀, T-7526) ───────────────────────────────
+  // ONE dialog holds 執行環境 + 模型 + 投入度 + 機器, opened from the identity
+  // action row. The panel itself is READ-ONLY: the cells state what is currently
+  // true, every edit goes through here — the member panel's shape since T-927a,
+  // now the outsource panel's too.
+  //
+  // It deliberately has NO 「只儲存，不喚醒」 twin button: this dialog starts
+  // nothing at all (it only reaches the model and relocate endpoints), so a
+  // second button saying "save only" would imply the first one launches.
+  const onlineMachines = machines.filter((m) => m.online);
+  // The pinned machine stays in the list even when it is not online — labelled
+  // 離線 and disabled, MachinePicker's rule. Dropping it would silently move a
+  // worker the owner deliberately parked; leaving it selectable would wind the
+  // worker down onto a machine with no warden.
+  const pinnedOfflineMachine =
+    worker.desiredMachineId &&
+    !onlineMachines.some((m) => m.machineId === worker.desiredMachineId)
+      ? (machines.find((m) => m.machineId === worker.desiredMachineId) ?? {
+          machineId: worker.desiredMachineId,
+          displayName: worker.desiredMachineId,
+        })
+      : undefined;
+  const settingsMachineOptions = [
+    ...onlineMachines.map((m) => ({
+      machineId: m.machineId,
+      label: m.displayName,
+      offline: false,
+    })),
+    ...(pinnedOfflineMachine
+      ? [
+          {
+            machineId: pinnedOfflineMachine.machineId,
+            label: msg.machineOfflineOption(pinnedOfflineMachine.displayName),
+            offline: true,
+          },
+        ]
+      : []),
+  ];
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsRuntime, setSettingsRuntime] = useState<"claude" | "codex">(
+    worker.runtime || "claude",
+  );
+  const [settingsModel, setSettingsModel] = useState(worker.model);
+  const [settingsEffort, setSettingsEffort] = useState(worker.effort);
+  const [settingsMachineId, setSettingsMachineId] = useState(
+    worker.desiredMachineId ?? "",
+  );
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [settingsError, setSettingsError] = useState("");
+  // Neither OfficePage nor MonitorPage passes a `key`, so switching which worker
+  // the panel shows is a prop change, not a remount: an open dialog would
+  // survive holding the PREVIOUS worker's draft, and one confirm would write
+  // those values onto someone else. (The member panel's `[member.id]` effect.)
+  useEffect(() => {
+    setSettingsOpen(false);
+    setSettingsError("");
+  }, [worker.id]);
+  // …and that reset is a RESET, not a CANCEL: a submit still in flight resolves
+  // after it. Same render-time ref discipline the member panel uses.
+  const shownWorkerIdRef = useRef(worker.id);
+  shownWorkerIdRef.current = worker.id;
+
+  function openSettings() {
+    setSettingsRuntime(worker.runtime || "claude");
+    setSettingsModel(worker.model);
+    setSettingsEffort(worker.effort);
+    // Seed the pin VERBATIM. Falling back to the first ONLINE machine would make
+    // `machineChanged` unconditionally true for a worker pinned to a sleeping
+    // machine, so opening the dialog to edit a MODEL would silently re-pin it.
+    setSettingsMachineId(
+      worker.desiredMachineId || onlineMachines[0]?.machineId || "",
+    );
+    setSettingsError("");
+    setSettingsOpen(true);
+  }
+
+  async function saveSettings() {
+    const launchChanged =
+      settingsRuntime !== (worker.runtime || "claude") ||
+      settingsModel.trim() !== worker.model ||
+      settingsEffort !== worker.effort;
+    const machineChanged =
+      settingsMachineId !== "" &&
+      settingsMachineId !== (worker.desiredMachineId ?? "");
+    if (!launchChanged && !machineChanged) {
+      setSettingsOpen(false);
+      return;
+    }
+    setSettingsBusy(true);
+    setSettingsError("");
+    const firedFor = worker.id;
+    try {
+      // 🔴 The model op goes FIRST. A relocate kills the session and re-dispatches
+      // on the new machine, so the launch intents must already be stored when it
+      // fires — otherwise the fresh session comes up on the OLD model and the
+      // owner's edit only takes effect one respawn later. Reversing these two
+      // lines is exactly that bug (the member panel's same ordering, same reason).
+      if (launchChanged) {
+        await onSetModel?.(settingsRuntime, settingsModel.trim(), settingsEffort);
+      }
+      if (machineChanged) await onRelocate?.(settingsMachineId);
+      if (shownWorkerIdRef.current !== firedFor) return;
+      setSettingsOpen(false);
+    } catch (error) {
+      if (shownWorkerIdRef.current !== firedFor) return;
+      // The server's own envelope sentence is the only wire text fit to display;
+      // ApiError.message carries the `http <status> for …` log form.
+      setSettingsError(
+        (error instanceof ApiError && error.serverMessage) ||
+          t.mp.modelEffortError,
+      );
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
   // 累計總花費 = 已 banked 的歷史成本 + 當前 live session 成本 (DTO 保證兩者
   // 分開不重疊 — 與正職同一口徑，T-ba6b)。兩者皆 null ⇒ null ⇒ 誠實 dash。
   const totalCost =
@@ -265,8 +337,105 @@ export function WorkerDetailPanel({
           </span>
         </div>
       </div>
+      {/* The settings entry — the ONE way to change 執行環境/模型/投入度/機器,
+          the member panel's 更改 in the same place. Hidden entirely when neither
+          endpoint is wired (a read-only embedding gets no dead affordance). */}
+      {(onSetModel || onRelocate) && (
+        <div className="mp-identity__actions">
+          <button
+            type="button"
+            className="btn btn--accent-ghost"
+            data-testid="worker-detail-change"
+            onClick={openSettings}
+          >
+            {t.mp.change}
+          </button>
+        </div>
+      )}
     </div>
   );
+
+  // ── 設定 dialog (身分卡的「更改」開這個) ────────────────────────────────────
+  const settingsDialog = settingsOpen ? (
+    <div
+      className="machine-picker"
+      role="dialog"
+      aria-modal="true"
+      data-testid="worker-detail-settings-dialog"
+    >
+      <div className="machine-picker__box">
+        <div className="machine-picker__title">{t.mp.change}</div>
+        {/* The worker endpoint's REAL semantics — deliberately not the member
+            panel's 「下次啟動要用哪一個」, which would be false for a working
+            outsource worker (its model op respawns it now). */}
+        <div
+          className="mp-field__hint"
+          data-testid="worker-detail-settings-note"
+        >
+          {t.workerDetail.modelNextSpawnNote}
+        </div>
+        <ModelEffortEditor
+          runtime={settingsRuntime}
+          model={settingsModel}
+          effort={settingsEffort}
+          onRuntimeChange={setSettingsRuntime}
+          onModelChange={setSettingsModel}
+          onEffortChange={setSettingsEffort}
+        />
+        {onRelocate && (
+          <label className="machine-picker__field">
+            <span className="machine-picker__label">{t.mp.machine}</span>
+            <select
+              className="machine-picker__select"
+              data-testid="worker-detail-settings-machine"
+              value={settingsMachineId}
+              onChange={(e) => setSettingsMachineId(e.target.value)}
+            >
+              {settingsMachineOptions.map((machine) => (
+                <option
+                  key={machine.machineId}
+                  value={machine.machineId}
+                  // The offline entry exists so the owner's own pin stays visible
+                  // and unchanged, NOT so a live worker can be moved onto a
+                  // machine whose warden is not there.
+                  disabled={machine.offline}
+                >
+                  {machine.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <div className="machine-picker__actions">
+          <button
+            type="button"
+            className="btn btn--ghost"
+            disabled={settingsBusy}
+            onClick={() => setSettingsOpen(false)}
+          >
+            {t.common.cancel}
+          </button>
+          <button
+            type="button"
+            className="btn btn--accent"
+            data-testid="worker-detail-settings-confirm"
+            disabled={settingsBusy}
+            onClick={() => void saveSettings()}
+          >
+            {t.mp.change}
+          </button>
+        </div>
+        {settingsError && (
+          <div
+            className="mp-field__hint mp-relocate__reason"
+            data-testid="worker-detail-settings-error"
+          >
+            {settingsError}
+          </div>
+        )}
+      </div>
+    </div>
+  ) : null;
 
   // ── afterInfoCards slot: 狀態 (+停止/重啟) | 委託人. ─────────────────────────
   const statusDelegatorCard = (
@@ -349,7 +518,7 @@ export function WorkerDetailPanel({
     <AgentDetailPanel
       onBack={onBack}
       identity={identity}
-      overlays={relocatePicker}
+      overlays={settingsDialog}
       afterIdentityCards={taskCard}
       afterInfoCards={statusDelegatorCard}
       vm={{
@@ -359,15 +528,12 @@ export function WorkerDetailPanel({
         model: worker.model,
         effort: worker.effort,
         modelEffortNote: t.workerDetail.modelNextSpawnNote,
-        // 換 model: active+online takes effect now (server kill+respawn),
-        // otherwise the next spawn bakes it in. Read-only when unwired.
-        onSaveModelEffort: onSetModel
-          ? async (runtime, model, effort) => {
-              await onSetModel(runtime, model, effort);
-            }
-          : undefined,
+        // NO `onSaveModelEffort` / `machineAction` (T-7526): this panel is
+        // READ-ONLY, exactly like the member panel since T-927a. The cells state
+        // what is currently true; every edit goes through the 更改 dialog above.
+        // Passing either callback back would re-grow an in-place editor here and
+        // put two disagreeing ways to change one setting on one screen.
         machineText,
-        machineAction: relocateAction,
         // Claude Account: the RESOLVED readable name (server already applied the
         // alias/label or nulled it — the raw credential key NEVER reaches here);
         // "" ⇒ the shared panel's honest dash (T-ba6b).
