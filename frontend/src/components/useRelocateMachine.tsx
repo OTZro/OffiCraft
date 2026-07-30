@@ -150,6 +150,13 @@ export function useRelocateMachine({
   const [phase, setPhase] = useState<RelocatePhase>("idle");
   // T-7fa1: the relocate answered 200 but its recycle STOP/START never reached a
   // warden — pinned, not landed. Surfaced by the caller as a DispatchAlert.
+  //
+  // 🔴🔴 TWIN IMPLEMENTATION — the notice hygiene below (self-heal, the
+  // observability gate, the subject-keyed reset, the in-flight subject guard)
+  // also exists, hand-written, in MemberDetailPanel: that panel folded relocate
+  // into its unified settings submit and stopped driving this hook. Change the
+  // two TOGETHER. They were allowed to drift once, and the missing half shipped
+  // as a notice that never went away.
   const [undispatched, setUndispatched] = useState(false);
   // The verdict AND the progress phase are about ONE agent: drop both when the
   // panel switches to another. Neither panel is remounted on that switch (no

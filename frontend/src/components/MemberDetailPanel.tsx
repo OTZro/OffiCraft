@@ -195,6 +195,12 @@ export function MemberDetailPanel({
   const [settingsError, setSettingsError] = useState("");
   const [relocateUndispatched, setRelocateUndispatched] = useState(false);
 
+  // 🔴🔴 TWIN IMPLEMENTATION — change this and `useRelocateMachine` TOGETHER.
+  // The outsource panel still gets this hygiene from the hook; this panel now
+  // carries its own copy because relocate folded into the unified submit. One
+  // side drifting from the other is exactly how the guarantees below went
+  // missing for a whole round while CI stayed green.
+  //
   // 🔴 The relocate verdict's SELF-HEAL, carried over from useRelocateMachine
   // (which the member panel no longer drives). The notice promises "the server
   // keeps retrying in the background", so it needs a path back: without this it
