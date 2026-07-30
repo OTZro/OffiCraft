@@ -22,15 +22,21 @@ type recordedRun struct {
 }
 
 type fakeSys struct {
-	runs     []recordedRun
-	runFn    func(name string, args ...string) (string, error)
-	writes   map[string][]byte
-	modes    map[string]os.FileMode
-	existing map[string][]byte // pre-seeded readable files (guard tokfile, copy source)
-	renames  [][2]string
-	removed  []string
-	mkdirs   []string
-	slept    int
+	runs   []recordedRun
+	runFn  func(name string, args ...string) (string, error)
+	writes map[string][]byte
+	// writeCount counts writeFile calls PER PATH. `writes` alone cannot see a
+	// rewrite: the second write of a key leaves both the map length and (for
+	// identical bytes) the value unchanged, so an assertion built on it is
+	// tautological. The anchor must never be rewritten at all — even identical
+	// bytes swap the inode and void the TCC grant.
+	writeCount map[string]int
+	modes      map[string]os.FileMode
+	existing   map[string][]byte // pre-seeded readable files (guard tokfile, copy source)
+	renames    [][2]string
+	removed    []string
+	mkdirs     []string
+	slept      int
 	// injection hooks
 	renameErr map[string]error
 	removeErr map[string]error
@@ -38,11 +44,12 @@ type fakeSys struct {
 
 func newFakeSys() *fakeSys {
 	return &fakeSys{
-		writes:    map[string][]byte{},
-		modes:     map[string]os.FileMode{},
-		existing:  map[string][]byte{},
-		renameErr: map[string]error{},
-		removeErr: map[string]error{},
+		writes:     map[string][]byte{},
+		writeCount: map[string]int{},
+		modes:      map[string]os.FileMode{},
+		existing:   map[string][]byte{},
+		renameErr:  map[string]error{},
+		removeErr:  map[string]error{},
 	}
 }
 
@@ -61,6 +68,7 @@ func (f *fakeSys) ops() sysOps {
 		},
 		writeFile: func(path string, data []byte, perm os.FileMode) error {
 			f.writes[path] = data
+			f.writeCount[path]++
 			f.modes[path] = perm
 			return nil
 		},
@@ -601,12 +609,21 @@ func TestCopyAnchorIfAbsentWritesOnceAndNeverReplaces(t *testing.T) {
 	if got := string(f.writes[p.anchorPath]); got != "FIXED-ANCHOR" {
 		t.Fatalf("anchor = %q, want fixed source bytes", got)
 	}
-	firstWrites := len(f.writes)
+	// A later install ships a REBUILT anchor. The installed one must keep the
+	// first bytes, and the path must not be written a second time at all —
+	// rewriting even identical bytes swaps the inode and voids the TCC grant.
+	f.existing[p.anchorSrc] = []byte("REBUILT-ANCHOR")
 	if err := i.copyAnchorIfAbsent(p); err != nil {
 		t.Fatalf("second install: %v", err)
 	}
-	if len(f.writes) != firstWrites || len(f.renames) != 0 {
-		t.Fatalf("existing anchor must never be replaced: writes=%v renames=%v", f.writes, f.renames)
+	if got := string(f.writes[p.anchorPath]); got != "FIXED-ANCHOR" {
+		t.Fatalf("existing anchor was replaced: anchor = %q, want the first install's bytes", got)
+	}
+	if n := f.writeCount[p.anchorPath]; n != 1 {
+		t.Fatalf("anchor written %d times, want exactly 1 (a rewrite voids the TCC grant)", n)
+	}
+	if len(f.renames) != 0 {
+		t.Fatalf("existing anchor must never be replaced: renames=%v", f.renames)
 	}
 }
 
