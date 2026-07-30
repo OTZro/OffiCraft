@@ -134,6 +134,40 @@ else
   ok "static: nothing before oc_main prints or exits (so nothing is observable until the file is read in full)"
 fi
 
+# ── 4. STATIC: the overturned claim must not come back ─────────────────────
+# THIS TICKET GOT THE SAME SHAPE WRONG THREE TIMES: change a thing, miss the
+# place that describes the thing. Twice it was caught by a human reading the
+# tree, and the third time the miss was the sentence this very package had just
+# proved false, sitting in bin/tests/run.sh. "I swept for it" is not a method —
+# it is a memory. So the sweep is now a grep that must return ZERO lines, and it
+# runs on every CI.
+#
+# The claim being banned is that bash defers ALL execution until EOF. It does
+# not: install.sh's prologue runs as it is parsed (see case 3). Lines that REFUTE
+# it are the point of this file, so the filter drops refutation markers.
+#
+# TWO SCOPE EXCLUSIONS, both stated rather than quietly applied:
+#   - docs/*-evidence/ holds captured CI logs from past runs. Those are immutable
+#     records of what was printed at the time, not claims this tree makes, and
+#     editing them would be falsifying evidence.
+#   - THIS FILE, which necessarily contains the banned phrases as its own pattern
+#     list — the first run of this check flagged itself. A rule cannot be written
+#     without naming what it forbids.
+# Everything else under bin/ and docs/ is in scope. Verified by mutation: putting
+# the claim back into bin/tests/run.sh turns this red.
+CLAIM_HITS="$WORK/claim.hits"
+grep -rnE 'before it executes|before it starts executing|才會開始動作|才會開始執行|讀完整份才' \
+  "$HERE/.." "$HERE/../../docs" 2>/dev/null \
+  | grep -v '/docs/[^/]*-evidence/' \
+  | grep -v 'curl-bash-read-before-execute-guard.sh' \
+  | grep -vE 'NOT true|is FALSE|NOT "fully read' \
+  > "$CLAIM_HITS" || true
+if [[ -s "$CLAIM_HITS" ]]; then
+  bad "static: the overturned claim ('read the whole file before it executes') is asserted somewhere again — the guarantee is 'no output and no exit until fully read'. Offending lines: $(sed 's#.*/##' "$CLAIM_HITS" | tr '\n' ' ')"
+else
+  ok "static: nothing in bin/ or docs/ re-asserts the overturned 'executes only after the whole file is read' claim"
+fi
+
 # The splice below needs the shape asserted above. Explode-with-a-traceback is a
 # worse report than the FAILs already printed, so stop here instead: the static
 # findings ARE the finding.
@@ -237,11 +271,15 @@ for path, args, marker in (
                     ran, f"executed={ran}"))
     # u_ran is REQUIRED: without it a control that died of an unrelated error
     # (a syntax error, a missing binary) reads as a working positive control.
-    # u_rc must be 23 specifically — curl's "failure writing output", the exact
-    # status the bug report quotes — not merely "non-zero".
+    # 23 OR 56, and the "or" is load-bearing: 23 is CURLE_WRITE_ERROR and 56 is
+    # CURLE_RECV_ERROR, and THIS PROJECT HAS OBSERVED BOTH for this one condition
+    # — bin/install.sh, docs/guide/install.md and docs/guide/troubleshooting.md
+    # all quote the symptom as "curl: (23|56)". Pinning 23 alone would assert that
+    # 56 is not a broken pipe, contradicting our own documentation, and would show
+    # up as a FLAKY positive control rather than as a real regression.
     results.append((f"{path}: positive control — the UNWRAPPED shape reaches the command AND breaks the pipe",
-                    (u_rc == 23 and u_sent < u_total and u_ran),
-                    f"control rc={u_rc} (want 23), sent {u_sent} of {u_total} B, executed={u_ran} (want True)"))
+                    (u_rc in (23, 56) and u_sent < u_total and u_ran),
+                    f"control rc={u_rc} (want 23 or 56), sent {u_sent} of {u_total} B, executed={u_ran} (want True)"))
 
 pathlib.Path(sys.argv[1], "results.tsv").write_text(
     "".join(f"{'PASS' if okv else 'FAIL'}\t{name}\t{detail}\n" for name, okv, detail in results))

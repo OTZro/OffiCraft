@@ -676,12 +676,15 @@ else
   bad "bin/tests/stdin-drain-guard.sh is missing"
 fi
 
-# ── install.sh is fully read before it executes (T-4358) ───────────────────
+# ── install.sh prints and exits nothing until fully read (T-4358) ──────────
 # The other half of the same defect. The drain above shortens the window in
 # which curl gets EPIPE; it cannot close it, because a piped bash acts on the
 # first chunk it parses while the rest of the file is still on the wire. The fix
 # is structural — one oc_main() the last line calls — so it needs its own real
 # HTTP probe rather than another assertion inside the drain suite.
+# NOT "fully read before it executes": install.sh's top-level prologue really
+# does run as it is parsed. What holds is that none of it prints or exits, so
+# nothing is observable until delivery completes. The guard asserts both halves.
 READBEFOREEXEC="$HERE/curl-bash-read-before-execute-guard.sh"
 echo
 if [[ -f "$READBEFOREEXEC" ]]; then
