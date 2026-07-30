@@ -212,6 +212,53 @@ describe("SettingsPage · 版本紀錄", () => {
     expect(utils.queryByTestId(`doc-history-blocked-${target.id}`)).toBeNull();
   });
 
+  // The footnote states what history does NOT cover, so it is only true on a
+  // document that can actually be deleted whole. Pinning it as an EQUIVALENCE —
+  // the note is present exactly where the delete control is — is what makes the
+  // condition survive: showing it everywhere and dropping it from a deletable
+  // document are both drifts nobody would see on screen, and neither would move
+  // a test that only checked one surface.
+  it("shows the delete-scope footnote exactly where a delete control exists", async () => {
+    const created = await mockApi.createRole({ name: "臨時角色" });
+    expect(created.role.isSeed).toBe(false);
+
+    const utils = render(
+      <I18nProvider>
+        <SettingsPage />
+      </I18nProvider>
+    );
+
+    // The delete control lives on the LIST, the footnote on the DETAIL page, so
+    // the probe reads one on each and compares them. Asserting the EQUIVALENCE
+    // is what makes this survive: showing the note everywhere and dropping it
+    // from a document that really is deletable are both invisible on screen,
+    // and a test that only looked at one surface would move for neither.
+    const probe = async (label: string, roleKey: string) => {
+      fireEvent.click(utils.getByText(s.roles));
+      await utils.findByText(label);
+      const deletable =
+        utils.queryByTestId(`role-delete-${roleKey}`) !== null;
+      fireEvent.click(utils.getByText(label));
+      await waitFor(() =>
+        expect(utils.getAllByText(s.historyTitle).length).toBeGreaterThan(0)
+      );
+      const noted = utils.queryByTestId("doc-history-scope-note") !== null;
+      return { deletable, noted };
+    };
+
+    // A seed role cannot be deleted, so the note — which says what history does
+    // NOT cover — would be a false statement there.
+    expect(await probe(zh.office.role.assistant, "assistant")).toEqual({
+      deletable: false,
+      noted: false,
+    });
+    // A custom role can be deleted whole, and that delete keeps no history.
+    expect(await probe("臨時角色", created.role.key)).toEqual({
+      deletable: true,
+      noted: true,
+    });
+  });
+
   it("shows the same card on a role definition, keyed to that role", async () => {
     await mockApi.saveRole("assistant", { definitionMd: "角色定義改寫" });
     const created = await mockApi.createRole({ name: "臨時角色" });
