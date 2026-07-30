@@ -28,16 +28,21 @@
   a path) — it exists to document the shape a reviewer signs off on. There is ONE
   path truth: the installer; this template deliberately holds no real path.
 
-  Execs the self-contained binary bin/ocwarden DIRECTLY (the former bin/warden-go
-  wrapper is folded in): the binary reads OC_WARDEN_TOKFILE to resolve the
-  execution-plane warden token/id itself, then the command reader starts
+  Starts the TCC identity anchor `officraft`, which FORKS the ocwarden sitting
+  beside it (with the "run" subcommand) and forwards launchd's stop signals to
+  it. launchd's job leader is the responsible process for the whole tree, and an
+  ad-hoc signed binary is identified by the hash of its bytes — so pointing this
+  at ocwarden, whose bytes self-update replaces, voided the machine's privacy
+  grants on every update. The anchor is installed once and never rewritten.
+  ocwarden itself is unchanged: it reads OC_WARDEN_TOKFILE to resolve the
+  execution-plane warden token/id, then the command reader starts
   unconditionally. Distinct from com.officraft.telemetry (hardware telemetry).
 -->
 <plist version="1.0">
 <dict>
     <key>Label</key><string>com.officraft.ocwarden</string>
     <key>ProgramArguments</key>
-    <array><string>__ROOT__/bin/ocwarden</string><string>run</string></array>
+    <array><string>__ROOT__/warden/officraft</string></array>
     <key>WorkingDirectory</key><string>__ROOT__</string>
     <key>EnvironmentVariables</key>
     <dict>

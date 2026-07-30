@@ -163,6 +163,10 @@ func TestLauncherForksInsteadOfExecing(t *testing.T) {
 	}
 	execSelectors := map[string]bool{
 		"Exec": true, "Execve": true, "Execveat": true, "ForkExec": true, "StartProcessExec": true,
+		// The raw-syscall spellings reach execve without ever naming it. The
+		// import allowlist already makes them impractical (you cannot build the
+		// pointer arguments without unsafe), but "impractical" is not "absent".
+		"Syscall": true, "Syscall6": true, "RawSyscall": true, "RawSyscall6": true,
 	}
 
 	forks := false
@@ -187,7 +191,13 @@ func TestLauncherForksInsteadOfExecing(t *testing.T) {
 								"thing this launcher exists to prevent",
 								name, id.Name, node.Sel.Name)
 						}
-						if id.Name == "os" && node.Sel.Name == "StartProcess" {
+					}
+				case *ast.CallExpr:
+					// A CALL, not a mention: `var _ = os.StartProcess` would satisfy a
+					// selector-presence check while the launcher started nothing at all.
+					if sel, isSel := node.Fun.(*ast.SelectorExpr); isSel {
+						if id, isIdent := sel.X.(*ast.Ident); isIdent &&
+							id.Name == "os" && sel.Sel.Name == "StartProcess" {
 							forks = true
 						}
 					}

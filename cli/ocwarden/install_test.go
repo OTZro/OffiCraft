@@ -652,6 +652,24 @@ func TestCopyAnchorIfAbsentUsesTheEmbeddedAnchorWhenNoSiblingExists(t *testing.T
 	}
 }
 
+// A zero-byte sibling is not an anchor. It matters more than it sounds, because
+// "never replace" would then protect the empty file forever.
+func TestCopyAnchorIfAbsentTreatsAnEmptySiblingAsNoAnchor(t *testing.T) {
+	f := newFakeSys()
+	p := fixedPaths()
+	f.existing[p.anchorSrc] = []byte{}
+	restore := swapEmbeddedAnchor([]byte("EMBEDDED-ANCHOR"))
+	defer restore()
+
+	i := &installer{out: io.Discard, sys: f.ops()}
+	if err := i.copyAnchorIfAbsent(p); err != nil {
+		t.Fatalf("an empty sibling must fall through to the embedded anchor: %v", err)
+	}
+	if got := string(f.writes[p.anchorPath]); got != "EMBEDDED-ANCHOR" {
+		t.Fatalf("anchor = %q, want the embedded bytes rather than an empty file", got)
+	}
+}
+
 // The fallback must not become a way to install without an anchor at all: a
 // build carrying neither is still refused, because a plist pointing at a binary
 // that does not exist is worse than an install that stops.

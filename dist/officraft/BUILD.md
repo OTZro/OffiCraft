@@ -6,7 +6,8 @@ Build command:
 
 ```sh
 (cd cli/officraft && go build -trimpath -buildvcs=false -ldflags='-s -w' -o ../../dist/officraft/officraft ./...)
-find cli/officraft -type f \( -name '*.go' -o -name 'go.mod' -o -name 'go.sum' \) \
+find cli/officraft \( -type f -o -type l \) \
+  \( -name '*.go' -o -name '*.s' -o -name 'go.mod' -o -name 'go.sum' \) \
   ! -name '*_test.go' | LC_ALL=C sort | xargs shasum -a 256 | shasum -a 256   # -> source.sha256
 (cd dist/officraft && shasum -a 256 officraft > binary.sha256)
 ```
@@ -27,8 +28,8 @@ committed copy and the shipped copy are the same bytes.
 Two records, because either one alone can be satisfied by a lie:
 
 - `source.sha256` — the aggregate hash of every non-test source file in the
-  module (the file list rides inside the digest, so adding or renaming a file
-  counts as a change). CI recomputes it, so changing the source without
+  module: `.go`, `.s`, `go.mod`, `go.sum`, symlinks included, with the file list
+  riding inside the digest so adding or renaming a file counts as a change. CI recomputes it, so changing the source without
   refreshing this record fails.
 - `binary.sha256` — the hash of the executable sitting next to it. Without it,
   refreshing `source.sha256` by hand (or replacing the executable outright)

@@ -93,7 +93,10 @@ owner 拍板「乾淨新建」:warden 長出**臨時 session** 形態伺候外�
 - **無 command_result 回報**:worker 無 member row,fold-back 通道不適用;喚醒成敗由 server 從 worker 自己的 get_my_task 領工觀察。
 
 ## deploy
-唯一安裝入口是 **`ocwarden install`**(Go,`cli/ocwarden/install.go`;flip 時期的 bash `bin/warden-install` 已退役刪除)。install 把發佈流程 fresh build 的 binary 安到 `~/.officraft/warden/`(home,per-machine)並 render 真實 plist;plist template 在 `cli/ocwarden/deploy/`(REFERENCE,實際 plist 由 install 於 runtime 寫)。cutover 史料見 `cli/ocwarden/CUTOVER.md`。
+唯一安裝入口是 **`ocwarden install`**(Go,`cli/ocwarden/install.go`;flip 時期的 bash `bin/warden-install` 已退役刪除)。
+
+🔴 **plist 起的不是 ocwarden,是 TCC 身分錨點 `officraft`(T-5831)**:launchd 的 job leader 是整棵樹的 TCC responsible process,而 adhoc 簽章的 binary 是用 bytes 的雜湊被認出來的——plist 指向會被 self-update 抽換的 ocwarden 時,每更新一次就作廢一次全機授權(症狀是**卡住、無 log**,不是被拒絕)。錨點只 fork 隔壁的 ocwarden(帶 `run`)、轉發停止訊號、用 child 的結束狀態當自己的;**裝過就永不覆寫**(連相同 bytes 也不行,重寫會換 inode)。它同時被 embed 進 ocwarden(`anchor_embed.go`,`bin/build-bindist` staging 進 `anchordist/`),因為座艙的一鍵安裝只下載 ocwarden 一支——embed、出貨、`dist/officraft/` 三份是**同一次 build 的同一份 bytes**,三份不同就是三個身分。
+install 把發佈流程 fresh build 的 binary 安到 `~/.officraft/warden/`(home,per-machine)並 render 真實 plist;plist template 在 `cli/ocwarden/deploy/`(REFERENCE,實際 plist 由 install 於 runtime 寫)。cutover 史料見 `cli/ocwarden/CUTOVER.md`。
 
 **claude 路徑鏈(OC_CLAUDE_BIN stamp)**:launchd warden 的 minimal PATH 找不到 version-manager(asdf/nvm/volta)的 claude → runtime `resolveClaudeBin`(transport.go)的 ②LookPath/③common-dirs 全 miss。解法是**在還找得到的環節解析、stamp 進 plist 讓優先序① 命中**:(a) `ocwarden install` 於安裝環境解析 claude(`resolveClaudeForInstall`,install.go:OC_CLAUDE_BIN env → LookPath → common dirs),用 `--version` 在 minimal PATH 下實測——過 = 只 stamp OC_CLAUDE_BIN;不過但在 installer PATH 下過(shim/env-shebang)= 連 installer PATH 一起 stamp 進 plist;都找不到 = 印人話 WARNING+指引(裝 claude 或 export OC_CLAUDE_BIN 重跑),不 fatal。(b) bootstrap-here 鏈(server 在 launchd minimal env 下跑 `ocwarden install`):`bin/ocserver install`(使用者互動 shell 跑)先解析 claude、stamp OC_CLAUDE_BIN(+必要時 full PATH)進 **serve plist**;bootstrap-here 的 env passthrough(`api_machines.go`)原樣帶給 ocwarden install → 其解析優先序① 命中 → 轉 stamp 進 warden plist。foreground `ocwarden run` 的 OC_CLAUDE_BIN env 優先序不變(同一個優先序①)。
 

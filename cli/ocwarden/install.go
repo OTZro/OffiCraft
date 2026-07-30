@@ -752,6 +752,12 @@ func (i *installer) copyAnchorIfAbsent(p wardenPaths) error {
 		return fmt.Errorf("mkdir anchor dir %s: %w", filepath.Dir(p.anchorPath), err)
 	}
 	data, err := i.sys.readFile(p.anchorSrc)
+	if err == nil && len(data) == 0 {
+		// A zero-byte sibling is not an anchor, and this one would be preserved
+		// forever — the same "never replace" rule that protects a real anchor
+		// would protect the empty file.
+		err = fmt.Errorf("anchor source %s is empty", p.anchorSrc)
+	}
 	if err != nil {
 		// The release tarball ships the anchor beside ocwarden, but the cockpit's
 		// one-liner downloads ocwarden ALONE — so the sibling is genuinely absent

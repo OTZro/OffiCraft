@@ -53,7 +53,7 @@
 #                           before overwriting. Interactive = y/N prompt
 #                           (default NO); non-interactive = abort unless
 #                           --force.
-#   3. install binaries   — ocserverd/ocwarden/ocagent → ~/.officraft/bin
+#   3. install binaries   — ocserverd/ocwarden/ocagent/officraft → ~/.officraft/bin
 #                           (ocserverd embeds the SPA + seeds + warden/agent
 #                           binaries; ocwarden/ocagent ship alongside for
 #                           direct CLI use).
@@ -641,7 +641,7 @@ SELF="${BASH_SOURCE[0]:-}"
 IN_PACKAGE=0
 if [[ -n "$SELF" && -f "$SELF" ]]; then
   SELF_DIR="$(cd "$(dirname "$SELF")" && pwd)"
-  if [[ -f "$SELF_DIR/ocserverd" && -f "$SELF_DIR/ocwarden" && -f "$SELF_DIR/ocagent" ]]; then
+  if [[ -f "$SELF_DIR/ocserverd" && -f "$SELF_DIR/ocwarden" && -f "$SELF_DIR/ocagent" && -f "$SELF_DIR/officraft" ]]; then
     IN_PACKAGE=1
   fi
 fi

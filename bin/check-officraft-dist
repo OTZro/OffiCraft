@@ -16,7 +16,12 @@ BIN="${OFFICRAFT_DIST_BINARY:-$ROOT/dist/officraft/officraft}"
 # guard would be blind to exactly the change most worth catching. The file list
 # rides inside the digest (shasum prints names), so an added, renamed or deleted
 # file moves it even when no existing file was edited.
-actual="$(cd "$SOURCE_ROOT" && find cli/officraft -type f \( -name '*.go' -o -name 'go.mod' -o -name 'go.sum' \) \
+# -type f OR -type l: a symlinked .go file compiles like any other and would
+# otherwise be invisible here. *.s too — assembly changes the built binary just
+# as much as Go does, and an .s file plus a body-less Go declaration was a live
+# way to move the bytes while this digest stood still.
+actual="$(cd "$SOURCE_ROOT" && find cli/officraft \( -type f -o -type l \) \
+  \( -name '*.go' -o -name '*.s' -o -name 'go.mod' -o -name 'go.sum' \) \
   ! -name '*_test.go' | LC_ALL=C sort | xargs shasum -a 256 | shasum -a 256 | awk '{print $1}')"
 expected="$(awk 'NR==1 {print $1}' "$MANIFEST")"
 [[ "$actual" == "$expected" ]] || {

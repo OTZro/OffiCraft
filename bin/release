@@ -597,6 +597,8 @@ Stop/start the service with
 
 - \`ocserverd\` — the server (web app, seeds and agent binaries embedded)
 - \`ocwarden\`, \`ocagent\` — fleet CLI binaries (also served by ocserverd)
+- \`officraft\` — the warden's fixed launchd identity; \`install.sh\` needs it
+  beside itself and refuses without it
 - \`install.sh\` — the installer above
 - \`LICENSE\` — MIT
 
