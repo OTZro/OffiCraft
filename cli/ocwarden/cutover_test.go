@@ -287,8 +287,12 @@ func TestEveryPostWritePlistFailureRollsBackToTheOldShape(t *testing.T) {
 
 			ops := f.ops()
 			// Simulate install having overwritten the plist before it failed.
-			origRun := ops.run
-			ops.run = func(name string, args ...string) (string, error) {
+			// NOTE: this MUST hook runInstaller, the runner the install call
+			// actually goes through — hooking run instead leaves the plist
+			// untouched, and the assertion below then passes without the
+			// rollback ever running.
+			origRun := ops.runInstaller
+			ops.runInstaller = func(name string, args ...string) (string, error) {
 				key := name
 				for _, a := range args {
 					key += " " + a
@@ -324,7 +328,14 @@ func TestFailedRollbackReportsNonZero(t *testing.T) {
 	f.runErr[p.binPath+" install --force"] = errors.New("bootstrap failed")
 	f.runErr["launchctl bootstrap "+p.guiDomain+" "+p.plistPath] = errors.New("Bootstrap failed: 5")
 
-	if rc := runCutover(f.ops(), p, p.binPath, func(string, ...any) {}); rc == 0 {
+	ops := f.ops()
+	origRun := ops.runInstaller
+	ops.runInstaller = func(name string, args ...string) (string, error) {
+		f.files[p.plistPath] = "<plist>ANCHOR</plist>"
+		return origRun(name, args...)
+	}
+
+	if rc := runCutover(ops, p, p.binPath, func(string, ...any) {}); rc == 0 {
 		t.Fatal("a rollback that did not restore a live warden must exit non-zero")
 	}
 	if _, ok := f.files[p.root+"/warden/"+cutoverFailedName]; !ok {
@@ -468,5 +479,80 @@ func TestInstallBudgetClearsTheInstallerWorstCase(t *testing.T) {
 	const verifyWorstCase = 36 * time.Second
 	if cutoverInstallBudget <= verifyWorstCase {
 		t.Fatalf("cutoverInstallBudget = %v, must exceed the %v verify alone (plus an ocagent download)", cutoverInstallBudget, verifyWorstCase)
+	}
+}
+
+// DIRECTION ①: the installer died before it modified anything (the field case is
+// an offline machine failing the ocagent download). Nothing can boot-loop, so the
+// permanent sentinel must NOT be written — otherwise a network blip permanently
+// excludes that machine from the migration.
+func TestFailureBeforeAnythingIsModifiedLeavesNoSentinel(t *testing.T) {
+	p := testPaths()
+	f := newFakeCutover()
+	f.files[p.plistPath] = legacyPlist
+	// The installer fails at the download step: the plist is never overwritten.
+	f.runErr[p.binPath+" install --force"] = errors.New("download ocagent: dial tcp: no route to host")
+
+	if rc := runCutover(f.ops(), p, p.binPath, func(string, ...any) {}); rc != 0 {
+		t.Fatalf("runCutover = %d, want 0 (an untouched machine is not a failure)", rc)
+	}
+	if _, ok := f.files[p.root+"/warden/"+cutoverFailedName]; ok {
+		t.Fatal("a machine that was never modified must not be marked as having rejected the conversion")
+	}
+	// Rolling back an untouched machine would boot out a healthy warden for no
+	// reason — the one window where a machine can end up with no warden at all.
+	assertNotCalled(t, f.calls, "launchctl bootout "+p.guiDomain+"/"+p.labelOrDefault())
+}
+
+// DIRECTION ②: the installer got far enough to replace the plist. Here the
+// sentinel IS required — without it the machine detects "legacy" on its next
+// start and converts again, forever.
+func TestFailureAfterThePlistWasReplacedLeavesTheSentinel(t *testing.T) {
+	p := testPaths()
+	installArgv := p.binPath + " install --force"
+	f := newFakeCutover()
+	f.files[p.plistPath] = legacyPlist
+	f.runErr[installArgv] = errors.New("Bootstrap failed: 5")
+
+	ops := f.ops()
+	origRun := ops.runInstaller
+	ops.runInstaller = func(name string, args ...string) (string, error) {
+		f.files[p.plistPath] = "<plist>ANCHOR</plist>"
+		return origRun(name, args...)
+	}
+
+	if rc := runCutover(ops, p, p.binPath, func(string, ...any) {}); rc != 0 {
+		t.Fatalf("runCutover = %d, want 0", rc)
+	}
+	if _, ok := f.files[p.root+"/warden/"+cutoverFailedName]; !ok {
+		t.Fatal("a machine whose plist was replaced must carry the sentinel, or it converts again on every start")
+	}
+}
+
+// The consequence the user actually feels, asserted end-to-end rather than as an
+// internal file: after a transient failure the machine is STILL CONVERTIBLE. A
+// test that stops at "no sentinel was written" would still pass if some other
+// gate had quietly excluded the machine.
+func TestTransientFailureLeavesTheMachineStillConvertible(t *testing.T) {
+	p := testPaths()
+	f := newFakeCutover()
+	f.files[p.plistPath] = legacyPlist
+	f.runErr[p.binPath+" install --force"] = errors.New("download ocagent: dial tcp: no route to host")
+
+	if rc := runCutover(f.ops(), p, p.binPath, func(string, ...any) {}); rc != 0 {
+		t.Fatalf("runCutover = %d, want 0", rc)
+	}
+
+	// Next warden start, same machine, network is back.
+	f.files["__ppid_exe__"] = "/sbin/launchd"
+	f.exitCodes[p.anchorPath+" --preflight"] = 2
+	delete(f.files, p.root+"/warden/"+cutoverLockName)
+	f.locked = map[string]bool{}
+	restore := swapCutoverOps(t, f)
+	defer restore()
+
+	maybeStartAnchorCutover(p, 1, func(string, ...any) {})
+	if len(f.spawned) == 0 {
+		t.Fatal("a machine that merely failed to reach the network must still be convertible on the next start")
 	}
 }

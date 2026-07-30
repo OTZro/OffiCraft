@@ -102,6 +102,29 @@ func runCutover(ops cutoverOps, p wardenPaths, exe string, logf func(string, ...
 	// verify) plus every pre-writePlist one — for those the restore is a no-op
 	// write of identical bytes, which is cheap and strictly safer than trying to
 	// guess how far the installer got.
+	// ---- 3a. did the installer actually CHANGE anything? --------------------
+	// The sentinel's one and only justification is stopping a boot-loop: a machine
+	// whose plist WAS replaced would otherwise detect "legacy" on the next start
+	// and convert again forever. That risk does not exist when the installer died
+	// before it modified anything — and treating those two the same turns a
+	// TRANSIENT environment condition (the machine happened to be offline, so the
+	// ocagent download failed) into a PERMANENT property of the machine: it is
+	// excluded from the migration for good, by a network blip.
+	//
+	// 🔴 The test for "did anything change" is the FACT (the on-disk plist no
+	// longer matches the backup), deliberately NOT "which step failed". A step
+	// index silently picks the wrong side the moment someone inserts a step, and
+	// nothing would go red. An unreadable plist counts as CHANGED — if we cannot
+	// establish that the machine is untouched, we must not claim it is.
+	if current, readErr := ops.readFile(p.plistPath); readErr == nil && string(current) == string(old) {
+		// Nothing to restore and nothing to boot-loop. Note this also skips a
+		// bootout→bootstrap cycle that would otherwise be run for no reason at
+		// all — needlessly opening the one window where a machine can end up with
+		// no warden.
+		logf("install FAILED (%v) but nothing was modified — machine is untouched, leaving no sentinel so the next start retries", installErr)
+		return 0
+	}
+
 	logf("install FAILED (%v) — rolling back to the pre-conversion shape", installErr)
 	if rbErr := rollback(ops, p, old, target, logf); rbErr != nil {
 		// The machine may now have no warden. Say so loudly and locally: this
