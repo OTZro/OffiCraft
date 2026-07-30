@@ -254,6 +254,7 @@ var messageKeys = map[string]bool{
 	"mp.lessonsSaveError":                      true,
 	"mp.lessonsShared":                         true,
 	"mp.machine":                               true,
+	"mp.machineMovingToLabel":                  true,
 	"mp.model":                                 true,
 	"mp.modelEffortCancel":                     true,
 	"mp.modelEffortError":                      true,

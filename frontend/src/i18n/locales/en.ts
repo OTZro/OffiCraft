@@ -662,7 +662,7 @@ export const en: Dict = {
     modelEffortError: "Save failed. Please try again.",
     runtime: "Runtime",
     machine: "Machine",
-    machineMovingTo: (machine: string) => `→ Moving to ${machine}`,
+    machineMovingToLabel: "→ Moving to",
     standby: "On standby",
     context: "context",
     compactionCount: (n: number) => `compact: ${n}`,

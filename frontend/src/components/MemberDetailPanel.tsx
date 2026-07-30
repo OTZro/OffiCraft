@@ -601,7 +601,7 @@ export function MemberDetailPanel({
     member.machine &&
     member.desiredMachineId &&
     member.machine !== member.desiredMachineId
-      ? t.mp.machineMovingTo(desiredMachineName)
+      ? msg.memberMachineMovingTo(desiredMachineName)
       : "";
   // 累計總花費 = 已 banked 的歷史成本 + 當前 live session 成本(dto 保證兩者分開不重疊)。
   // honest:兩者皆無源(null)才顯 dash;任一有值則計入(缺的一方視為尚未產生成本=0)。

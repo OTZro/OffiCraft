@@ -253,6 +253,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "mp.lessonsSaveError",
   "mp.lessonsShared",
   "mp.machine",
+  "mp.machineMovingToLabel",
   "mp.model",
   "mp.modelEffortCancel",
   "mp.modelEffortError",
