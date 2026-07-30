@@ -191,6 +191,8 @@ export function MemberDetailPanel({
     member.desiredMachineId,
   );
   const [settingsBusy, setSettingsBusy] = useState(false);
+  const [settingsError, setSettingsError] = useState("");
+  const [relocateUndispatched, setRelocateUndispatched] = useState(false);
 
   // The registry arrives asynchronously. If the owner opens settings before
   // it has loaded, select the first available machine as soon as it does so
@@ -206,6 +208,7 @@ export function MemberDetailPanel({
     setSettingsModel(member.model);
     setSettingsEffort(member.effort);
     setSettingsMachineId(member.desiredMachineId || onlineMachines[0]?.machineId || "");
+    setSettingsError("");
     setSettingsOpen(true);
   }
 
@@ -240,19 +243,42 @@ export function MemberDetailPanel({
 
   async function saveSettings() {
     if (!settingsMachineId) return;
+    const launchChanged =
+      settingsRuntime !== (member.runtime || "claude") ||
+      settingsModel.trim() !== member.model ||
+      settingsEffort !== member.effort;
+    const machineChanged = settingsMachineId !== member.desiredMachineId;
+    if (!launchChanged && !machineChanged) {
+      setSettingsOpen(false);
+      return;
+    }
     setSettingsBusy(true);
+    setSettingsError("");
     try {
-      await api.patchMember(member.id, {
-        runtime: settingsRuntime,
-        model: settingsModel.trim(),
-        effort: settingsEffort,
-      });
-      if (awake) {
-        await onRelocate?.(settingsMachineId);
-      } else {
+      // Only a confirmed online session is gracefully relocated. A `waking`
+      // member's Spawn action is the force-revive path and must reach activate.
+      if (online && machineChanged) {
+        const result = await onRelocate?.(settingsMachineId);
+        if (result?.relocationPending) setRelocateUndispatched(true);
+      }
+      if (launchChanged) {
+        await api.patchMember(member.id, {
+          runtime: settingsRuntime,
+          model: settingsModel.trim(),
+          effort: settingsEffort,
+        });
+      }
+      if (!online) {
         await runActivate(settingsMachineId);
+      } else if (!machineChanged && launchChanged) {
+        // PATCH is the one graceful handover for a setting-only online change.
+        // Do not manufacture a relocate when the machine was not changed.
+      } else {
+        // A placement-only online change was sent above.
       }
       setSettingsOpen(false);
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : t.common.error);
     } finally {
       setSettingsBusy(false);
     }
@@ -589,9 +615,14 @@ export function MemberDetailPanel({
             // flight. `waking` still renders Spawn as the recovery affordance,
             // but this local bridge keeps it honestly unavailable until the
             // activate result or server lifecycle settles.
-            onSpawn={wakePendingActive ? undefined : openSettings}
+            onSpawn={wakePendingActive || onlineMachines.length === 0 ? undefined : openSettings}
             onCancel={onDeactivate}
             onStop={onDeactivate}
+            reasons={
+              onlineMachines.length === 0
+                ? { spawn: t.machine.noOnlineMachine }
+                : undefined
+            }
             // In `stopping`, the Stop button IS force-stop → open the confirm first
             // (an immediate kill that bypasses the graceful grace).
             onForceStop={
@@ -619,6 +650,9 @@ export function MemberDetailPanel({
               — the click and its outcome in one place. */}
           {wakeUndispatched && (
             <DispatchAlert kind="wake" testId="mp-wake-undispatched" />
+          )}
+          {relocateUndispatched && (
+            <DispatchAlert kind="relocate" testId="mp-relocate-undispatched" />
           )}
         </div>
       </div>
@@ -702,6 +736,7 @@ export function MemberDetailPanel({
                 {awake ? t.mp.change : t.lifecycle.action.spawn}
               </button>
             </div>
+            {settingsError && <div className="mp-field__hint mp-relocate__reason">{settingsError}</div>}
           </div>
         </div>
       )}

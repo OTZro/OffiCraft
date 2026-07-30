@@ -152,6 +152,9 @@ async function clickWake() {
     return b!;
   });
   fireEvent.click(btn);
+  const confirm = document.querySelector<HTMLButtonElement>(".machine-picker__actions .btn--accent")!;
+  await waitFor(() => expect(confirm.disabled).toBe(false));
+  fireEvent.click(confirm);
 }
 
 describe("Monitor entry · undispatched activate (T-7fa1)", () => {

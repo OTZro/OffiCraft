@@ -129,27 +129,24 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
 });
 
-describe("MonitorPage entry — MemberDetailPanel 改機器", () => {
-  it("shows the 改機器 button once a session's detail is opened (onRelocate wired)", async () => {
+describe("MonitorPage entry — MemberDetailPanel unified Change", () => {
+  it("shows the Change button once an online session's detail is opened", async () => {
     renderMonitor();
     // Open the member's detail from the Monitor AI-session row.
     fireEvent.click(await screen.findByText("Eva"));
     await waitFor(() => {
-      expect(screen.getByTestId("mp-relocate")).toBeTruthy();
+      expect(screen.getByTestId("mp-change")).toBeTruthy();
     });
   });
 
-  it("relocates through relocateMember when the 改機器 button is clicked", async () => {
+  it("relocates through relocateMember when Change confirms a new machine", async () => {
     renderMonitor();
     fireEvent.click(await screen.findByText("Eva"));
 
-    // One online machine → clicking relocates straight to it (no picker).
-    await waitFor(() => {
-      expect(
-        (screen.getByTestId("mp-relocate") as HTMLButtonElement).disabled
-      ).toBe(false);
-    });
-    fireEvent.click(screen.getByTestId("mp-relocate"));
+    fireEvent.click(screen.getByTestId("mp-change"));
+    const confirm = document.querySelector<HTMLButtonElement>(".machine-picker__actions .btn--accent")!;
+    await waitFor(() => expect(confirm.disabled).toBe(false));
+    fireEvent.click(confirm);
 
     await waitFor(() => {
       expect(relocateMember).toHaveBeenCalledWith("mem-eva", "mach-a");

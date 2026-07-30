@@ -48,6 +48,12 @@ function renderOffice() {
   );
 }
 
+async function confirmSettings() {
+  const confirm = document.querySelector<HTMLButtonElement>(".machine-picker__actions .btn--accent")!;
+  await waitFor(() => expect(confirm.disabled).toBe(false));
+  fireEvent.click(confirm);
+}
+
 beforeEach(() => {
   __resetMock();
   window.location.hash = "";
@@ -72,6 +78,7 @@ describe("OfficePage · an undispatched wake reaches the UI (T-7fa1)", () => {
     });
 
     fireEvent.click(wake);
+    await confirmSettings();
 
     await waitFor(() =>
       expect(queryByTestId("mp-wake-undispatched")).not.toBeNull(),
@@ -98,6 +105,7 @@ describe("OfficePage · an undispatched wake reaches the UI (T-7fa1)", () => {
     });
 
     fireEvent.click(wake);
+    await confirmSettings();
 
     // Give the same async settling the positive case needed, then assert the
     // notice never appeared. (The mock DOES move presence here, so this also
