@@ -163,6 +163,44 @@ describe("MemberDetailPanel — unified wake/change settings", () => {
     expect(onActivate).not.toHaveBeenCalled();
   });
 
+  it("saves an OFFLINE member's settings without waking it (creator ruling r3)", async () => {
+    // Two capabilities the unified dialog had silently removed: editing an
+    // offline member's model/effort without starting it, and re-pinning it for
+    // its next wake. Both are restored through this second action, and the
+    // discriminating assertion is that activate is NOT reached — otherwise
+    // "save without waking" wakes.
+    const { getByTestId, onActivate, onRelocate } = renderPanel();
+    await waitFor(() =>
+      expect((getByTestId("member-action-spawn") as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(getByTestId("member-action-spawn"));
+    const dialog = getByTestId("me-runtime-select").closest("[role=dialog]")!;
+    const select = dialog.querySelector("select.machine-picker__select") as HTMLSelectElement;
+    await waitFor(() => expect(select.options).toHaveLength(2));
+    fireEvent.change(getByTestId("me-model-input"), { target: { value: "haiku" } });
+    fireEvent.change(select, { target: { value: "mach-b" } });
+    fireEvent.click(getByTestId("mp-settings-save-only"));
+
+    await waitFor(() => expect(wireCalls).toEqual(["patch", "relocate"]));
+    expect(patchMember).toHaveBeenCalledWith(
+      "mira",
+      expect.objectContaining({ model: "haiku" }),
+    );
+    expect(onRelocate).toHaveBeenCalledWith("mach-b");
+    expect(onActivate).not.toHaveBeenCalled();
+  });
+
+  it("offers no save-without-waking action for a LIVE member (that is what 更改 is)", async () => {
+    const { getByTestId, queryByTestId } = renderPanel({
+      status: "online",
+      lifecycle: "online",
+      machine: "mach-a",
+    });
+    fireEvent.click(getByTestId("mp-change"));
+    await waitFor(() => expect(getByTestId("me-runtime-select")).toBeTruthy());
+    expect(queryByTestId("mp-settings-save-only")).toBeNull();
+  });
+
   it("stores the launch settings BEFORE the relocate that restarts the agent", async () => {
     const { getByTestId } = renderPanel({
       status: "online",

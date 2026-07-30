@@ -274,6 +274,7 @@ var messageKeys = map[string]bool{
 	"mp.rename":                                true,
 	"mp.renamePlaceholder":                     true,
 	"mp.runtime":                               true,
+	"mp.settingsSaveOnly":                      true,
 	"mp.standby":                               true,
 	"mp.terminal":                              true,
 	"mp.terminalHint":                          true,

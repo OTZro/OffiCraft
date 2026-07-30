@@ -298,6 +298,51 @@ export function MemberDetailPanel({
     }
   }
 
+  /** Persist the launch settings WITHOUT starting anything (creator ruling after
+   * independent review r3). Folding relocate + model/effort into one dialog had
+   * silently removed two capabilities the panel used to have for an offline
+   * member: editing model/effort without waking it, and re-pinning it for its
+   * next wake. Neither removal was asked for — the spec describes what the WAKE
+   * button does, it never says the settings become unreachable while a member is
+   * off. Offered only when the member is not online, because a live member's
+   * settings change is exactly what 更改 (graceful wind-down) is for. */
+  async function saveSettingsOnly() {
+    if (!settingsMachineId) return;
+    const launchChanged =
+      settingsRuntime !== (member.runtime || "claude") ||
+      settingsModel.trim() !== member.model ||
+      settingsEffort !== member.effort;
+    const machineChanged = settingsMachineId !== member.desiredMachineId;
+    if (!launchChanged && !machineChanged) {
+      setSettingsOpen(false);
+      return;
+    }
+    setSettingsBusy(true);
+    setSettingsError("");
+    try {
+      if (launchChanged) {
+        await api.patchMember(member.id, {
+          runtime: settingsRuntime,
+          model: settingsModel.trim(),
+          effort: settingsEffort,
+        });
+      }
+      // Placement-only re-pin: the server's relocate never touches
+      // desired_state, so for an offline member this is the whole honest effect
+      // (it is what the retired 改機器 button did) — and it must NOT reach
+      // activate, or "save without waking" would wake.
+      if (machineChanged) await onRelocate?.(settingsMachineId);
+      setSettingsOpen(false);
+    } catch (error) {
+      setSettingsError(
+        (error instanceof ApiError && error.serverMessage) ||
+          t.mp.modelEffortError,
+      );
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
   async function saveSettings() {
     if (!settingsMachineId) return;
     const launchChanged =
@@ -836,6 +881,17 @@ export function MemberDetailPanel({
               <button type="button" className="btn btn--ghost" disabled={settingsBusy} onClick={() => setSettingsOpen(false)}>
                 {t.common.cancel}
               </button>
+              {!online && (
+                <button
+                  type="button"
+                  className="btn btn--ghost"
+                  data-testid="mp-settings-save-only"
+                  disabled={settingsBusy || !settingsMachineId}
+                  onClick={() => void saveSettingsOnly()}
+                >
+                  {t.mp.settingsSaveOnly}
+                </button>
+              )}
               <button type="button" className="btn btn--accent" disabled={settingsBusy || !settingsMachineId} onClick={() => void saveSettings()}>
                 {online ? t.mp.change : t.lifecycle.action.spawn}
               </button>
