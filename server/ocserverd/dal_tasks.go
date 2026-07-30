@@ -1000,7 +1000,11 @@ func (d *DAL) ListTaskManuals() ([]TaskManual, error) {
 
 // GetTaskManual returns one manual by type key, or nil if absent.
 func (d *DAL) GetTaskManual(typeKey string) (*TaskManual, error) {
-	row := d.db.QueryRow(
+	return getTaskManualOn(d.db, typeKey)
+}
+
+func getTaskManualOn(q sqlQuerier, typeKey string) (*TaskManual, error) {
+	row := q.QueryRow(
 		`SELECT `+taskManualColumns+` FROM task_manual WHERE type_key = ?`, typeKey)
 	m, err := scanTaskManual(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1014,7 +1018,11 @@ func (d *DAL) GetTaskManual(typeKey string) (*TaskManual, error) {
 
 // PutTaskManual upserts one manual row.
 func (d *DAL) PutTaskManual(m TaskManual) error {
-	_, err := d.db.Exec(`
+	return putTaskManualOn(d.db, m)
+}
+
+func putTaskManualOn(ex sqlExecer, m TaskManual) error {
+	_, err := ex.Exec(`
 		INSERT INTO task_manual (`+taskManualColumns+`)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (type_key) DO UPDATE SET
@@ -1031,11 +1039,27 @@ func (d *DAL) PutTaskManual(m TaskManual) error {
 // DeleteTaskManual hard-deletes one manual (pure owner data — no seed, no
 // tombstone). The open-task 409 guard is the handler's. Returns true iff a
 // row was deleted.
+//
+// The manual's retained history goes in the SAME transaction — see
+// DeleteRoleDef for why a half-applied delete is the state being avoided.
 func (d *DAL) DeleteTaskManual(typeKey string) (bool, error) {
-	res, err := d.db.Exec(`DELETE FROM task_manual WHERE type_key = ?`, typeKey)
+	var deleted bool
+	err := d.inTx(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`DELETE FROM task_manual WHERE type_key = ?`, typeKey)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		deleted = n > 0
+		_, err = tx.Exec(`DELETE FROM document_history
+			WHERE document_kind = 'task_manual' AND document_key = ?`, typeKey)
+		return err
+	})
 	if err != nil {
 		return false, err
 	}
-	n, err := res.RowsAffected()
-	return n > 0, err
+	return deleted, nil
 }

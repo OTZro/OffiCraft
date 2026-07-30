@@ -856,7 +856,7 @@ button.task-card__status-chip:hover {
    lands on the card toggle exactly like a click on the title. It shares the
    top-right corner — v5: it OWNS that corner, taking over the slot the ⋮ menu
    held before it was deleted (T-70fb behaviour 1 wanted a stable anchor there,
-   not that particular button). Unlike the ⋮ it also renders on closed cards. */
+   not that particular button). Unlike the ⋮ it also renders on closed cards.
    v6: the ▸/▾ TEXT GLYPHS became ChevronRight/ChevronDown ICONS at 18px — the
    settings page's drill-in size — so "expand" looks the same everywhere. The
    glyphs measured 5.27×11px, 1/15 the settings chevron's area (T-bc90).

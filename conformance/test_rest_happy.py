@@ -500,6 +500,25 @@ def _happy_webhook_requests_path(ctx: HCtx) -> str:
     return f"/api/members/{ctx.agent.member_id}/webhooks/{endpoint_id}/requests"
 
 
+def _happy_restorable_revision(ctx: HCtx) -> str:
+    """A restore path pointing at a revision that REALLY EXISTS.
+
+    Two writes to the global context leave the first one retained, so the row
+    exercises the real success path (200 + the restored version's DTO) instead
+    of a 404 dressed up as coverage. Owner identity throughout: replacing the
+    global context is governance, and so is restoring it.
+    """
+    h = {"Authorization": f"Bearer {ctx.owner_token}"}
+    for text in ("conformance happy history v1", "conformance happy history v2"):
+        r = ctx.client.post("/api/global-context", json={"text": text}, headers=h)
+        assert r.status_code == 200, f"history seed write failed: {r.status_code} {r.text}"
+    r = ctx.client.get("/api/document-history/global_context/global", headers=h)
+    assert r.status_code == 200, f"history read failed: {r.status_code} {r.text}"
+    versions = r.json()
+    assert versions, "two writes retained no version — nothing to restore"
+    return f"/api/document-history/global_context/global/{versions[0]['id']}/restore"
+
+
 HAPPY: dict[str, Happy] = {
     # ── public ───────────────────────────────────────────────────────────────
     "GET /api/health": Happy(identity="none"),
@@ -881,6 +900,14 @@ HAPPY: dict[str, Happy] = {
         path=lambda ctx: f"/api/machines/{ctx.fresh_machine()}",
     ),
     # ── global context / roles / lessons / bootstrap ─────────────────────────
+    # ── document history (T-7d33) ───────────────────────────────────────────
+    "GET /api/document-history/{kind}/{key}": Happy(
+        path="/api/document-history/global_context/global",
+    ),
+    "POST /api/document-history/{kind}/{key}/{id}/restore": Happy(
+        path=_happy_restorable_revision,
+        check=lambda _c, r: _expect(r, lambda d: d["id"] and d["content"]),
+    ),
     "GET /api/global-context": Happy(),
     "POST /api/global-context": Happy(
         body={"text": "conformance happy user-custom block"},

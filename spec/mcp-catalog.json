@@ -2882,6 +2882,18 @@
       "name": "patch_task_learnings"
     },
     {
+      "description": "READ the retained versions of one editable document (global_context | role_definition | lessons | task_manual): what each version held, when it was replaced and by whom. Read-only, at most the 3 most recent versions, newest first. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything. `key` is the document: \"global\" for global_context, the role key, \"<role_key>::<task_type>\" for lessons, the type_key for a task manual.",
+      "inputSchema": {
+        "properties": {
+          "key": {"type": "string"},
+          "kind": {"type": "string"}
+        },
+        "required": ["kind", "key"],
+        "type": "object"
+      },
+      "name": "list_document_history"
+    },
+    {
       "description": "List the product-guide docs (slug + title).",
       "inputSchema": {
         "properties": {},

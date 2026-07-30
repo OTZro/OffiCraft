@@ -17,6 +17,8 @@ import type {
   VersionView,
   ReleaseCheckView,
   GlobalContextView,
+  DocumentKind,
+  DocumentHistoryView,
   RoleDefView,
   BootstrapView,
   LessonsView,
@@ -1392,6 +1394,26 @@ export interface Api {
     taskType: string,
     text: string,
   ): Promise<LessonsView>;
+  /**
+   * The retained revisions of ONE editable long-form document, newest first
+   * (`GET /api/document-history/{kind}/{key}`). At most 3 are kept — the
+   * server prunes, the cockpit never has to.
+   */
+  listDocumentHistory(
+    kind: DocumentKind,
+    key: string,
+  ): Promise<DocumentHistoryView[]>;
+  /**
+   * Restore ONE retained revision over the LIVE document (destructive — the
+   * current text becomes just another retained revision). Returns the restored
+   * revision DTO; the caller re-reads the document itself, which is the only
+   * honest source for what is now on screen.
+   */
+  restoreDocumentHistory(
+    kind: DocumentKind,
+    key: string,
+    id: number,
+  ): Promise<DocumentHistoryView>;
   /**
    * PUBLIC first-run probe (`GET /api/auth/status`): true once an owner
    * password is set. AuthGate branches first-run setup vs login on it.

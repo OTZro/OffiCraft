@@ -1331,6 +1331,35 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Summary:  "Patch a type's learnings by unique anchors ({edits:[{old,new}]}).",
 			MCPTool:  "patch_task_learnings",
 		},
+		// ── Retained history of the editable documents above ────────────────
+		// One read + one restore for EVERY overwritable long-form document
+		// (global context, role definition, lessons, task manual), which is why
+		// they sit after the last of those write faces instead of inside any one
+		// group. Restore is a write, so it takes the agent floor.
+		{
+			Method:   "GET",
+			Path:     "/api/document-history/{kind}/{key}",
+			Handler:  w.HandleListDocumentHistoryApiDocumentHistoryKindKeyGet,
+			Auth:     authGated,
+			Requires: principalMachine,
+			Summary:  "List the retained history of an editable document.",
+			MCPTool:  "list_document_history",
+		},
+		{
+			Method:   "POST",
+			Path:     "/api/document-history/{kind}/{key}/{id}/restore",
+			Handler:  w.HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdRestorePost,
+			Auth:     authGated,
+			Requires: principalAgent,
+			Summary:  "Restore one retained document version as a new write.",
+			// owner ruling 2026-07-30 (rc-b5fd1135e2dd, option 1): READING the
+			// history is an agent tool; WRITING one back is not. Restoring is
+			// how a document returns to an earlier state, and that is the
+			// owner's call from the cockpit (or an assistant's), not something
+			// an agent reaches for on its own. The route itself is unchanged —
+			// the cockpit and the governance path still call it over REST.
+			MCPExclude: true,
+		},
 		// ── Product guide (docs/guide embed) — one source, three consumers ───
 		// The 座艙's 使用說明 nav tab renders these; the machine-floor read
 		// tools let an assistant agent read the same bytes to answer feature /

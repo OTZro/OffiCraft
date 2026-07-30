@@ -506,6 +506,32 @@ export interface GlobalContextView {
 }
 
 /**
+ * Which editable long-form document a retained revision belongs to. The four
+ * kinds the server keeps history for; the companion `key` is "global" for
+ * global_context, the role key for role_definition, "<role_key>::<task_type>"
+ * for lessons and the type_key for task_manual.
+ */
+export type DocumentKind =
+  | "global_context"
+  | "role_definition"
+  | "lessons"
+  | "task_manual";
+
+/**
+ * ONE retained revision of an editable long-form document. `content` is the
+ * field→value snapshot of the doc as it stood BEFORE the write that retained
+ * it — the field names belong to the kind, so the view keeps them verbatim
+ * rather than inventing a per-kind view model. At most 3 are kept per doc.
+ */
+export interface DocumentHistoryView {
+  id: number;
+  content: Record<string, string>;
+  createdTs: number;
+  /** Who wrote the version that replaced this one (owner id / member id). */
+  actorId: string;
+}
+
+/**
  * The folded role-definition doc (Settings › 角色誌 › 角色定義). `name` is the
  * role title and `definitionMd` the persona body (both from the real seed —
  * never the mockup's illustrative Chinese desc). `isDefault` true → seed ("預設").

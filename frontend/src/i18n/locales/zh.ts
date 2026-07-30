@@ -1135,6 +1135,37 @@ export const zh = {
     cancel: "取消",
     reset: "重置",
     editorPlaceholder: "以 Markdown 撰寫…",
+    // ── 版本紀錄（T-7d33）——每份可編輯長文件保留最近 3 次修改，可還原 ──
+    historyTitle: "版本紀錄",
+    historySub: "系統保留最近 3 次修改；還原會覆蓋目前內容。",
+    // 只在真的刪得掉的文件（任務手冊、自訂角色）下面出現——說明範圍，不是警告。
+    historyDeleteNote:
+      "版本紀錄只涵蓋這份文件的編輯；整份刪除不會留下紀錄，也無法從這裡還原。",
+    historyLoading: "載入版本紀錄中…",
+    historyError: "載入版本紀錄失敗，請稍後重試",
+    historyEmpty: "還沒有保留任何版本",
+    historyNoContent: "（當時是空白內容）",
+    historyByLabel: "修改者",
+    historyDefaultBadge: "當時為預設內容",
+    historyRestore: "還原這個版本",
+    historyRestoreConfirmLead: "確定還原「",
+    historyRestoreConfirmTail: "」這個版本？目前的內容會被覆蓋，但會存成新的版本紀錄。",
+    historyRestoreConfirmAction: "確認還原",
+    historyRestoreError: "還原失敗，請稍後重試",
+    // 超過長度上限、伺服器一定會拒絕的版本：照樣列出來，但標成不可還原。
+    historyBlockedBadge: "無法還原",
+    historyBlockedReasonLead: "「",
+    historyBlockedReasonMid: "」超過 ",
+    historyBlockedReasonTail: " 字上限，且不比目前的內容短——伺服器會拒絕這次還原。",
+    historyField: {
+      text: "內容",
+      name: "名稱",
+      definition_md: "角色定義",
+      purpose: "用途",
+      fields: "欄位",
+      sop_md: "SOP",
+      learnings: "學習經驗",
+    },
     // doc filenames
     // Honest load-failure notice — shown when the role/global-context fetch
     // REJECTED, so a failed load never reads as "no roles defined".

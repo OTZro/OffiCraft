@@ -59,6 +59,8 @@ const EXPECTED: [Lang, string, (string | number | string[])[], string][] = [
     ["zh", "themeImportSkipped", [30, ["a.b", "c.d", "e.f"]], "已匯入,但有30個用詞代碼不認得、已略過:a.b、c.d、e.f等"],
     ["zh", "themeDeleteConfirm", ["精靈村"], "刪除主題「精靈村」?此動作無法復原。"],
     ["zh", "deleteRoleConfirm", ["研究員"], "確定刪除角色「研究員」？該角色的成員及其對話、學習經驗將一併移除，無法復原。"],
+    ["zh", "docHistoryRestoreConfirm", ["7/29 14:03"], "確定還原「7/29 14:03」這個版本？目前的內容會被覆蓋，但會存成新的版本紀錄。"],
+    ["zh", "docHistoryBlockedReason", [["學習經驗", "SOP"], 10000], "「學習經驗、SOP」超過 10000 字上限，且不比目前的內容短——伺服器會拒絕這次還原。"],
     ["zh", "deleteManualConfirm", ["review-pr"], "確定刪除任務類型「review-pr」？其手冊（定義、SOP、學習經驗）將一併移除，無法復原。"],
     ["en", "taskProgress", [3,7], "Step 3/7"],
     ["en", "taskElapsed", ["2h"], "Elapsed 2h"],
@@ -99,6 +101,8 @@ const EXPECTED: [Lang, string, (string | number | string[])[], string][] = [
     ["en", "themeImportSkipped", [30, ["a.b", "c.d", "e.f"]], "Imported, but 30 wording code(s) were not recognised and were skipped: a.b, c.d, e.f …"],
     ["en", "themeDeleteConfirm", ["精靈村"], "Delete theme \"精靈村\"? This cannot be undone."],
     ["en", "deleteRoleConfirm", ["研究員"], "Delete role \"研究員\"? Its members and their conversations and lessons will be removed permanently."],
+    ["en", "docHistoryRestoreConfirm", ["7/29 14:03"], "Restore the version from \"7/29 14:03\"? The current content is overwritten, but is kept as a new revision."],
+    ["en", "docHistoryBlockedReason", [["Lessons", "SOP"], 10000], "\"Lessons, SOP\" is over the 10000-character limit and no shorter than what is stored now — the server would refuse this restore."],
     ["en", "deleteManualConfirm", ["review-pr"], "Delete the task type “review-pr”? Its manual (definition, SOP, learnings) is removed with it and cannot be restored."],
 ];
 
@@ -215,6 +219,11 @@ describe("makeMessages", () => {
       "settings.themeDeleteConfirmTail",
       "settings.deleteRoleConfirmLead",
       "settings.deleteRoleConfirmTail",
+      "settings.historyRestoreConfirmLead",
+      "settings.historyRestoreConfirmTail",
+      "settings.historyBlockedReasonLead",
+      "settings.historyBlockedReasonMid",
+      "settings.historyBlockedReasonTail",
       "settings.deleteManualConfirmLead",
       "settings.deleteManualConfirmTail",
     ]) {

@@ -439,6 +439,91 @@ type sqlExecer interface {
 	Exec(query string, args ...any) (sql.Result, error)
 }
 
+// sqlQuerier is the read counterpart of sqlExecer. It exists so a document's
+// pre-write state can be read from inside the very transaction that overwrites
+// it: a snapshot read on d.db would be a different point in time from the
+// write, and two writers folding from the same read would then retain the same
+// old revision twice while one of their results became unrecoverable.
+type sqlQuerier interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+// DocumentHistory is one immutable pre-write snapshot. ContentJSON deliberately
+// stores the complete editable document so a restore never assembles fields
+// from revisions written at different times.
+type DocumentHistory struct {
+	ID           int64
+	DocumentKind string
+	DocumentKey  string
+	ContentJSON  string
+	CreatedTS    float64
+	ActorID      string
+}
+
+const documentHistoryKeep = 3
+
+// SaveWithDocumentHistory atomically retains the current document (when it is
+// non-empty), writes its replacement, and trims only snapshots older than the
+// newest three. snapshot re-reads and serializes the live document from inside
+// the transaction, so the retained revision is the state this write actually
+// replaced — not whatever the caller happened to read earlier.
+func (d *DAL) SaveWithDocumentHistory(kind, key, actorID string, snapshot func(sqlQuerier) (string, error), write func(sqlExecer) error) error {
+	return d.inTx(func(tx *sql.Tx) error {
+		currentJSON, err := snapshot(tx)
+		if err != nil {
+			return err
+		}
+		if currentJSON != "" && currentJSON != "{}" {
+			if _, err := tx.Exec(`INSERT INTO document_history
+				(document_kind, document_key, content_json, created_ts, actor_id)
+				VALUES (?, ?, ?, ?, ?)`, kind, key, currentJSON, nowSecs(), actorID); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`DELETE FROM document_history
+				WHERE document_kind = ? AND document_key = ? AND id NOT IN (
+					SELECT id FROM document_history
+					WHERE document_kind = ? AND document_key = ?
+					ORDER BY id DESC LIMIT ?
+				)`, kind, key, kind, key, documentHistoryKeep); err != nil {
+				return err
+			}
+		}
+		return write(tx)
+	})
+}
+
+func (d *DAL) ListDocumentHistory(kind, key string) ([]DocumentHistory, error) {
+	rows, err := d.db.Query(`SELECT id, document_kind, document_key, content_json, created_ts, actor_id
+		FROM document_history WHERE document_kind = ? AND document_key = ? ORDER BY id DESC`, kind, key)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DocumentHistory
+	for rows.Next() {
+		var h DocumentHistory
+		if err := rows.Scan(&h.ID, &h.DocumentKind, &h.DocumentKey, &h.ContentJSON, &h.CreatedTS, &h.ActorID); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+func (d *DAL) GetDocumentHistory(kind, key string, id int64) (*DocumentHistory, error) {
+	var h DocumentHistory
+	err := d.db.QueryRow(`SELECT id, document_kind, document_key, content_json, created_ts, actor_id
+		FROM document_history WHERE document_kind = ? AND document_key = ? AND id = ?`, kind, key, id).
+		Scan(&h.ID, &h.DocumentKind, &h.DocumentKey, &h.ContentJSON, &h.CreatedTS, &h.ActorID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &h, nil
+}
+
 // PutChat upserts a chat message.
 func (d *DAL) PutChat(m ChatMessage) error { return putChatOn(d.db, m) }
 
@@ -912,9 +997,11 @@ const userContextRowID = 1
 
 // GetUserContext returns the block, or nil if never written (no row = the
 // block is skipped when assembling boot context).
-func (d *DAL) GetUserContext() (*UserContext, error) {
+func (d *DAL) GetUserContext() (*UserContext, error) { return getUserContextOn(d.db) }
+
+func getUserContextOn(q sqlQuerier) (*UserContext, error) {
 	var uc UserContext
-	err := d.db.QueryRow(
+	err := q.QueryRow(
 		`SELECT text, tombstoned FROM user_context WHERE id = ?`, userContextRowID,
 	).Scan(&uc.Text, &uc.Tombstoned)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -928,7 +1015,11 @@ func (d *DAL) GetUserContext() (*UserContext, error) {
 
 // PutUserContext upserts the single block row.
 func (d *DAL) PutUserContext(uc UserContext) error {
-	_, err := d.db.Exec(`
+	return putUserContextOn(d.db, uc)
+}
+
+func putUserContextOn(ex sqlExecer, uc UserContext) error {
+	_, err := ex.Exec(`
 		INSERT INTO user_context (id, text, tombstoned) VALUES (?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			text = excluded.text, tombstoned = excluded.tombstoned`,
@@ -968,9 +1059,11 @@ func (d *DAL) ListRoleDefs() ([]RoleDef, error) {
 }
 
 // GetRoleDef returns one overlay by role key, or nil if never edited.
-func (d *DAL) GetRoleDef(roleKey string) (*RoleDef, error) {
+func (d *DAL) GetRoleDef(roleKey string) (*RoleDef, error) { return getRoleDefOn(d.db, roleKey) }
+
+func getRoleDefOn(q sqlQuerier, roleKey string) (*RoleDef, error) {
 	var rd RoleDef
-	err := d.db.QueryRow(
+	err := q.QueryRow(
 		`SELECT role_key, name, definition_md, tombstoned FROM role_def WHERE role_key = ?`,
 		roleKey,
 	).Scan(&rd.RoleKey, &rd.Name, &rd.DefinitionMD, &rd.Tombstoned)
@@ -985,7 +1078,11 @@ func (d *DAL) GetRoleDef(roleKey string) (*RoleDef, error) {
 
 // PutRoleDef upserts a role-definition overlay.
 func (d *DAL) PutRoleDef(rd RoleDef) error {
-	_, err := d.db.Exec(`
+	return putRoleDefOn(d.db, rd)
+}
+
+func putRoleDefOn(ex sqlExecer, rd RoleDef) error {
+	_, err := ex.Exec(`
 		INSERT INTO role_def (role_key, name, definition_md, tombstoned)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT (role_key) DO UPDATE SET
@@ -1000,12 +1097,30 @@ func (d *DAL) PutRoleDef(rd RoleDef) error {
 // (PutRoleDef with Tombstoned), which stays the seed-role reset seam.
 // Returns true iff a row was deleted.
 func (d *DAL) DeleteRoleDef(roleKey string) (bool, error) {
-	res, err := d.db.Exec(`DELETE FROM role_def WHERE role_key = ?`, roleKey)
+	var deleted bool
+	err := d.inTx(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`DELETE FROM role_def WHERE role_key = ?`, roleKey)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		deleted = n > 0
+		// The retained versions go with the document, in the SAME transaction:
+		// a delete that removed the role but left its history would leave a
+		// readable echo of a deleted document behind (the history read face is
+		// open to every authenticated caller), and would make the guide's
+		// 「永久移除」 false.
+		_, err = tx.Exec(`DELETE FROM document_history
+			WHERE document_kind = 'role_definition' AND document_key = ?`, roleKey)
+		return err
+	})
 	if err != nil {
 		return false, err
 	}
-	n, err := res.RowsAffected()
-	return n > 0, err
+	return deleted, nil
 }
 
 // ── lessons (per-role; composite (role_key, task_type) key) ──────────────────
@@ -1022,8 +1137,12 @@ type Lessons struct {
 // GetLessons returns the overlay for (roleKey, taskType), or nil if never
 // edited.
 func (d *DAL) GetLessons(roleKey, taskType string) (*Lessons, error) {
+	return getLessonsOn(d.db, roleKey, taskType)
+}
+
+func getLessonsOn(q sqlQuerier, roleKey, taskType string) (*Lessons, error) {
 	var l Lessons
-	err := d.db.QueryRow(`
+	err := q.QueryRow(`
 		SELECT role_key, task_type, text, tombstoned FROM lessons
 		WHERE role_key = ? AND task_type = ?`, roleKey, taskType,
 	).Scan(&l.RoleKey, &l.TaskType, &l.Text, &l.Tombstoned)
@@ -1038,7 +1157,11 @@ func (d *DAL) GetLessons(roleKey, taskType string) (*Lessons, error) {
 
 // PutLessons upserts a per-role lessons overlay.
 func (d *DAL) PutLessons(l Lessons) error {
-	_, err := d.db.Exec(`
+	return putLessonsOn(d.db, l)
+}
+
+func putLessonsOn(ex sqlExecer, l Lessons) error {
+	_, err := ex.Exec(`
 		INSERT INTO lessons (role_key, task_type, text, tombstoned)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT (role_key, task_type) DO UPDATE SET
@@ -1051,12 +1174,30 @@ func (d *DAL) PutLessons(l Lessons) error {
 // types) — the custom-role cascade: per-role lessons have no meaning without
 // the role. Returns the deleted count.
 func (d *DAL) DeleteLessonsForRole(roleKey string) (int, error) {
-	res, err := d.db.Exec(`DELETE FROM lessons WHERE role_key = ?`, roleKey)
+	var deleted int
+	err := d.inTx(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`DELETE FROM lessons WHERE role_key = ?`, roleKey)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		deleted = int(n)
+		// Every "<role>::<task_type>" history key of this role, in the same
+		// transaction. Matched by an explicit prefix length rather than LIKE so
+		// a role key can never be read as a wildcard pattern.
+		prefix := roleKey + "::"
+		_, err = tx.Exec(`DELETE FROM document_history
+			WHERE document_kind = 'lessons' AND substr(document_key, 1, length(?)) = ?`,
+			prefix, prefix)
+		return err
+	})
 	if err != nil {
 		return 0, err
 	}
-	n, err := res.RowsAffected()
-	return int(n), err
+	return deleted, nil
 }
 
 // ── display-name overlays (account_alias / machine_alias) ────────────────────

@@ -1,6 +1,16 @@
 {
   "components": {
     "schemas": {
+      "DocumentHistoryDTO": {
+        "properties": {
+          "actor_id": {"type": "string"},
+          "content": {"additionalProperties": {"type": "string"}, "type": "object"},
+          "created_ts": {"type": "number"},
+          "id": {"type": "integer", "format": "int64"}
+        },
+        "required": ["id", "content", "created_ts", "actor_id"],
+        "type": "object"
+      },
       "AgentContextDTO": {
         "description": "Echo of a stored gauge entry (``POST /api/agent/context`` response).",
         "properties": {
@@ -7090,6 +7100,29 @@
           }
         },
         "summary": "SSE delta stream (owner-scoped fan-out; reconcile-by-refetch)."
+      }
+    },
+    "/api/document-history/{kind}/{key}": {
+      "get": {
+        "operationId": "handle_list_document_history_api_document_history__kind___key__get",
+        "parameters": [
+          {"in": "path", "name": "kind", "required": true, "schema": {"type": "string"}},
+          {"in": "path", "name": "key", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/DocumentHistoryDTO"}}}}}},
+        "summary": "List retained versions of an editable document."
+      }
+    },
+    "/api/document-history/{kind}/{key}/{id}/restore": {
+      "post": {
+        "operationId": "handle_restore_document_history_api_document_history__kind___key___id__restore_post",
+        "parameters": [
+          {"in": "path", "name": "kind", "required": true, "schema": {"type": "string"}},
+          {"in": "path", "name": "key", "required": true, "schema": {"type": "string"}},
+          {"in": "path", "name": "id", "required": true, "schema": {"type": "integer", "format": "int64"}}
+        ],
+        "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DocumentHistoryDTO"}}}}},
+        "summary": "Restore a retained document version as a new write."
       }
     },
     "/api/global-context": {

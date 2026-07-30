@@ -19,6 +19,12 @@ import (
 	"net/http"
 )
 
+func taskManualHistorySnapshot(m TaskManual) (string, error) {
+	return historyJSON(map[string]string{
+		"purpose": m.Purpose, "fields": m.Fields, "sop_md": m.SopMD, "learnings": m.Learnings,
+	})
+}
+
 // resolveTaskManual returns the manual for typeKey (errNotFound when absent).
 func (s *apiServer) resolveTaskManual(typeKey string) (*TaskManual, error) {
 	m, err := s.dal.GetTaskManual(typeKey)
@@ -375,7 +381,9 @@ func (s *apiServer) HandleUpdateTaskManualApiTaskManualsTypeKeyPost(w http.Respo
 		m.Assignee = string(blob)
 	}
 	m.UpdatedTS = nowSecs()
-	if err := s.dal.PutTaskManual(*m); err != nil {
+	if err := s.dal.SaveWithDocumentHistory("task_manual", typeKey, currentActor(r), taskManualSnapshotIn(typeKey), func(ex sqlExecer) error {
+		return putTaskManualOn(ex, *m)
+	}); err != nil {
 		internalError(w, err)
 		return
 	}
@@ -446,7 +454,9 @@ func (s *apiServer) HandleWriteTaskLearningsApiTaskManualsTypeKeyLearningsPost(w
 	}
 	m.Learnings = body.Text
 	m.UpdatedTS = nowSecs()
-	if err := s.dal.PutTaskManual(*m); err != nil {
+	if err := s.dal.SaveWithDocumentHistory("task_manual", typeKey, currentActor(r), taskManualSnapshotIn(typeKey), func(ex sqlExecer) error {
+		return putTaskManualOn(ex, *m)
+	}); err != nil {
 		internalError(w, err)
 		return
 	}
@@ -526,7 +536,9 @@ func (s *apiServer) HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchP
 	}
 	m.Learnings = next
 	m.UpdatedTS = nowSecs()
-	if err := s.dal.PutTaskManual(*m); err != nil {
+	if err := s.dal.SaveWithDocumentHistory("task_manual", typeKey, currentActor(r), taskManualSnapshotIn(typeKey), func(ex sqlExecer) error {
+		return putTaskManualOn(ex, *m)
+	}); err != nil {
 		internalError(w, err)
 		return
 	}

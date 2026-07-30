@@ -227,6 +227,13 @@ export type WireReleaseCheck = components["schemas"]["ReleaseCheckDTO"];
  * doc. `is_default` = seed (true) vs owner-edited (false). */
 export type WireGlobalContext = components["schemas"]["GlobalContextDTO"];
 
+/** Mirrors `DocumentHistoryDTO` — ONE retained revision of an editable
+ * long-form document (`GET /api/document-history/{kind}/{key}`). `content` is
+ * the field→value snapshot of the document as it stood BEFORE the write that
+ * retained it; the field names are the kind's own (text / name+definition_md /
+ * purpose+fields+sop_md+learnings), plus `tombstoned` on the overlay kinds. */
+export type WireDocumentHistory = components["schemas"]["DocumentHistoryDTO"];
+
 /** Mirrors `service/dto.py :: RoleDefDTO`. The folded role-definition doc. */
 export type WireRoleDef = components["schemas"]["RoleDefDTO"];
 

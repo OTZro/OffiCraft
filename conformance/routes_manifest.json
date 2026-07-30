@@ -848,6 +848,20 @@
   },
   {
     "auth": "gated",
+    "mcp_tool": "list_document_history",
+    "method": "GET",
+    "path": "/api/document-history/{kind}/{key}",
+    "requires": "machine"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
+    "method": "POST",
+    "path": "/api/document-history/{kind}/{key}/{id}/restore",
+    "requires": "agent"
+  },
+  {
+    "auth": "gated",
     "mcp_tool": "list_docs",
     "method": "GET",
     "path": "/api/docs",

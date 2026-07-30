@@ -9,10 +9,16 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
 )
+
+func historyJSON(v any) (string, error) {
+	b, err := json.Marshal(v)
+	return string(b), err
+}
 
 // ── user-custom context block ────────────────────────────────────────────────
 
@@ -48,7 +54,9 @@ func (s *apiServer) HandleReplaceGlobalContextApiGlobalContextPost(w http.Respon
 			return
 		}
 	}
-	if err := s.dal.PutUserContext(UserContext{Text: text, Tombstoned: false}); err != nil {
+	if err := s.dal.SaveWithDocumentHistory("global_context", "global", currentActor(r), userContextSnapshotIn, func(ex sqlExecer) error {
+		return putUserContextOn(ex, UserContext{Text: text, Tombstoned: false})
+	}); err != nil {
 		internalError(w, err)
 		return
 	}
@@ -64,7 +72,9 @@ func (s *apiServer) HandleReplaceGlobalContextApiGlobalContextPost(w http.Respon
 
 // POST /api/global-context/reset — idempotent tombstone back to empty.
 func (s *apiServer) HandleResetGlobalContextApiGlobalContextResetPost(w http.ResponseWriter, r *http.Request) {
-	if err := s.dal.PutUserContext(UserContext{Text: "", Tombstoned: true}); err != nil {
+	if err := s.dal.SaveWithDocumentHistory("global_context", "global", currentActor(r), userContextSnapshotIn, func(ex sqlExecer) error {
+		return putUserContextOn(ex, UserContext{Text: "", Tombstoned: true})
+	}); err != nil {
 		internalError(w, err)
 		return
 	}
@@ -236,11 +246,13 @@ func (s *apiServer) HandleUpdateRoleApiRolesRolePost(w http.ResponseWriter, r *h
 	if body.DefinitionMd != nil {
 		definitionMD = *body.DefinitionMd
 	}
-	if err := s.dal.PutRoleDef(RoleDef{
-		RoleKey:      role,
-		Name:         name,
-		DefinitionMD: definitionMD,
-		Tombstoned:   false,
+	if err := s.dal.SaveWithDocumentHistory("role_definition", role, currentActor(r), roleDefSnapshotIn(role), func(ex sqlExecer) error {
+		return putRoleDefOn(ex, RoleDef{
+			RoleKey:      role,
+			Name:         name,
+			DefinitionMD: definitionMD,
+			Tombstoned:   false,
+		})
 	}); err != nil {
 		internalError(w, err)
 		return
@@ -264,7 +276,14 @@ func (s *apiServer) HandleResetRoleApiRolesRoleResetPost(w http.ResponseWriter, 
 		writeError(w, http.StatusNotFound, "role '"+role+"' not found")
 		return
 	}
-	if err := s.dal.PutRoleDef(RoleDef{RoleKey: role, Tombstoned: true}); err != nil {
+	current, err := s.foldRoleDefDTO(role)
+	if err != nil || current == nil {
+		internalError(w, err)
+		return
+	}
+	if err := s.dal.SaveWithDocumentHistory("role_definition", role, currentActor(r), roleDefSnapshotIn(role), func(ex sqlExecer) error {
+		return putRoleDefOn(ex, RoleDef{RoleKey: role, Tombstoned: true})
+	}); err != nil {
 		internalError(w, err)
 		return
 	}
@@ -530,11 +549,13 @@ func (s *apiServer) HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(w http.Res
 		writeError(w, http.StatusBadRequest, docCapRefusal("lessons doc", current.Text, text))
 		return
 	}
-	if err := s.dal.PutLessons(Lessons{
-		RoleKey:    roleKey,
-		TaskType:   taskType,
-		Text:       text,
-		Tombstoned: false,
+	if err := s.dal.SaveWithDocumentHistory("lessons", roleKey+"::"+taskType, currentActor(r), lessonsSnapshotIn(roleKey, taskType), func(ex sqlExecer) error {
+		return putLessonsOn(ex, Lessons{
+			RoleKey:    roleKey,
+			TaskType:   taskType,
+			Text:       text,
+			Tombstoned: false,
+		})
 	}); err != nil {
 		internalError(w, err)
 		return
@@ -614,11 +635,13 @@ func (s *apiServer) HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost(w http.
 		writeError(w, http.StatusBadRequest, docCapRefusal("lessons doc", current.Text, next))
 		return
 	}
-	if err := s.dal.PutLessons(Lessons{
-		RoleKey:    roleKey,
-		TaskType:   taskType,
-		Text:       next,
-		Tombstoned: false,
+	if err := s.dal.SaveWithDocumentHistory("lessons", roleKey+"::"+taskType, currentActor(r), lessonsSnapshotIn(roleKey, taskType), func(ex sqlExecer) error {
+		return putLessonsOn(ex, Lessons{
+			RoleKey:    roleKey,
+			TaskType:   taskType,
+			Text:       next,
+			Tombstoned: false,
+		})
 	}); err != nil {
 		internalError(w, err)
 		return

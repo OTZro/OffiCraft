@@ -30,6 +30,8 @@ import type {
   VersionView,
   ReleaseCheckView,
   GlobalContextView,
+  DocumentKind,
+  DocumentHistoryView,
   RoleDefView,
   BootstrapView,
   LessonsView,
@@ -87,6 +89,7 @@ import {
   toVersion,
   toReleaseCheck,
   toGlobalContext,
+  toDocumentHistory,
   toRoleDef,
   toBootstrap,
   toLessons,
@@ -1481,6 +1484,38 @@ export const httpApi: Api = {
     // the doc path (405 against the real backend, compile error against schema).
     const wire = unwrap(await client.POST("/api/global-context/reset"));
     return toGlobalContext(wire);
+  },
+
+  async listDocumentHistory(
+    kind: DocumentKind,
+    key: string,
+  ): Promise<DocumentHistoryView[]> {
+    // GET /api/document-history/{kind}/{key} -> DocumentHistoryDTO[], newest
+    // first, at most 3 (the server prunes). `key` carries the "::" composite
+    // for lessons verbatim — openapi-fetch encodes it as one path segment.
+    const wire = unwrap(
+      await client.GET("/api/document-history/{kind}/{key}", {
+        params: { path: { kind, key } },
+      }),
+    );
+    return wire.map(toDocumentHistory);
+  },
+
+  async restoreDocumentHistory(
+    kind: DocumentKind,
+    key: string,
+    id: number,
+  ): Promise<DocumentHistoryView> {
+    // POST /api/document-history/{kind}/{key}/{id}/restore -> the restored
+    // revision DTO. This OVERWRITES the live document; a 404 (pruned id) and a
+    // 400 (restoring would breach the doc size cap) both reject as ApiError so
+    // the card can surface an honest failure instead of a silent no-op.
+    const wire = unwrap(
+      await client.POST("/api/document-history/{kind}/{key}/{id}/restore", {
+        params: { path: { kind, key, id } },
+      }),
+    );
+    return toDocumentHistory(wire);
   },
 
   async listRoles(): Promise<RoleDefView[]> {

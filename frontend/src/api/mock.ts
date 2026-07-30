@@ -11,6 +11,8 @@ import type {
   VersionView,
   ReleaseCheckView,
   GlobalContextView,
+  DocumentKind,
+  DocumentHistoryView,
   RoleDefView,
   BootstrapView,
   LessonsView,
@@ -63,6 +65,7 @@ import type {
   WireMonitoring,
   WireVersion,
   WireGlobalContext,
+  WireDocumentHistory,
   WireRoleDef,
   WireBootstrap,
   WireLessons,
@@ -78,6 +81,7 @@ import {
   toVersion,
   toReleaseCheck,
   toGlobalContext,
+  toDocumentHistory,
   toRoleDef,
   toBootstrap,
   toLessons,
@@ -731,6 +735,213 @@ function foldRole(key: string): WireRoleDef {
   return structuredClone(
     roleOverlays.get(key) ?? customRoles.get(key) ?? roleSeed(key)
   );
+}
+
+// ── retained document revisions (T-7d33) ───────────────────────────────────
+// Mirrors server/ocserverd/api_document_history.go: every write to an editable
+// long-form doc first RETAINS the state it replaced, newest first, capped at
+// DOCUMENT_HISTORY_CAP. The retained `content` uses the kind's OWN field names
+// (the wire contract), including the `tombstoned` flag the overlay kinds carry
+// — restoring a tombstoned revision must put the doc back on the seed, not
+// write the folded seed text back as an owner edit.
+const DOCUMENT_HISTORY_CAP = 3;
+const documentHistories = new Map<string, WireDocumentHistory[]>();
+let nextDocumentHistoryId = 1;
+
+const historySlot = (kind: DocumentKind, key: string) => `${kind}/${key}`;
+
+// The overlay kinds whose document ROW exists only once something has been
+// written: dal.go's SaveWithDocumentHistory retains a revision only when the
+// in-transaction snapshot is non-empty, and the snapshot readers return "{}"
+// when the row is absent. So the FIRST customization of a seed/default document
+// replaces nothing and retains NOTHING — history starts at the second write.
+// (A reset is a write too: it persists a tombstoned row, which the next write
+// then retains.) task_manual is not tracked here — its row is the manual
+// itself, created by createTaskManual.
+const documentRows = new Set<string>();
+
+const markDocumentRow = (kind: DocumentKind, key: string) =>
+  documentRows.add(historySlot(kind, key));
+
+function hasDocumentRow(kind: DocumentKind, key: string): boolean {
+  return kind === "task_manual"
+    ? taskManuals.some((m) => m.typeKey === key)
+    : documentRows.has(historySlot(kind, key));
+}
+
+/** Drop one document's retained revisions along with the document itself — the
+ * server does this in the SAME transaction as the delete (dal.go DeleteRoleDef
+ * / DeleteTaskManual), so a deleted document leaves no readable echo behind. */
+function dropDocumentHistory(kind: DocumentKind, key: string): void {
+  documentHistories.delete(historySlot(kind, key));
+  documentRows.delete(historySlot(kind, key));
+}
+
+/** Every "<role>::<task_type>" lessons document of one role. Matched by an
+ * explicit PREFIX, exactly like DeleteLessonsOfRole: the key is compound, so
+ * dropping only `<role>::general` would leave every other task type's history
+ * readable after the role is gone. */
+function dropRoleLessonsHistory(roleKey: string): void {
+  const prefix = `${roleKey}::`;
+  for (const slot of [...documentHistories.keys()]) {
+    if (slot.startsWith(historySlot("lessons", prefix))) {
+      documentHistories.delete(slot);
+    }
+  }
+  for (const slot of [...documentRows]) {
+    if (slot.startsWith(historySlot("lessons", prefix))) documentRows.delete(slot);
+  }
+  for (const key of [...lessonsOverlays.keys()]) {
+    if (key.startsWith(prefix)) lessonsOverlays.delete(key);
+  }
+}
+
+/** The document's CURRENT persisted state as a history content map, or null
+ * when there is no such document (the server 404s / no-ops there). */
+function snapshotDocument(
+  kind: DocumentKind,
+  key: string
+): Record<string, string> | null {
+  switch (kind) {
+    case "global_context": {
+      const overlay = globalContextOverlay;
+      return {
+        text: overlay?.text ?? "",
+        tombstoned: String(overlay === null),
+      };
+    }
+    case "role_definition": {
+      const overlay = roleOverlays.get(key) ?? customRoles.get(key);
+      if (overlay) {
+        return {
+          name: overlay.name,
+          definition_md: overlay.definition_md,
+          tombstoned: "false",
+        };
+      }
+      const seed = MOCK_WIRE_ROLES_SEED.find((r) => r.key === key);
+      if (!seed) return null;
+      return {
+        name: seed.name,
+        definition_md: seed.definition_md,
+        tombstoned: "true",
+      };
+    }
+    case "lessons": {
+      const overlay = lessonsOverlays.get(key);
+      return {
+        text: overlay?.text ?? SEED_LESSONS_MD,
+        tombstoned: String(overlay === undefined),
+      };
+    }
+    case "task_manual": {
+      const manual = taskManuals.find((m) => m.typeKey === key);
+      if (!manual) return null;
+      return {
+        purpose: manual.purpose,
+        fields: JSON.stringify(manual.fields),
+        sop_md: manual.sopMd,
+        learnings: manual.learnings,
+      };
+    }
+  }
+}
+
+/** Retain the state a write is about to replace. Called BEFORE the mutation,
+ * exactly like SaveWithDocumentHistory's in-transaction snapshot. */
+function recordDocumentHistory(kind: DocumentKind, key: string): void {
+  // This write persists the document's row; whether it retains anything depends
+  // on a row having been there ALREADY (see documentRows).
+  const replacesARow = hasDocumentRow(kind, key);
+  markDocumentRow(kind, key);
+  if (!replacesARow) return;
+  const content = snapshotDocument(kind, key);
+  if (content === null) return;
+  const slot = historySlot(kind, key);
+  const kept = documentHistories.get(slot) ?? [];
+  kept.unshift({
+    id: nextDocumentHistoryId++,
+    content,
+    created_ts: Date.now() / 1000,
+    actor_id: MOCK_OWNER_ID,
+  });
+  documentHistories.set(slot, kept.slice(0, DOCUMENT_HISTORY_CAP));
+}
+
+/** Write a retained revision back over the live document + fan the doc's own
+ * SSE topic, so every surface reading it reconciles by refetch. */
+function applyDocumentHistory(
+  kind: DocumentKind,
+  key: string,
+  content: Record<string, string>
+): void {
+  const tombstoned = content.tombstoned === "true";
+  switch (kind) {
+    case "global_context":
+      globalContextOverlay = tombstoned
+        ? null
+        : {
+            text: content.text ?? "",
+            owner_id: MOCK_OWNER_ID,
+            schema_version: 3,
+            is_default: false,
+            org_name: "",
+          };
+      emitTopic("global_context");
+      return;
+    case "role_definition": {
+      const isSeed = MOCK_WIRE_ROLES_SEED.some((r) => r.key === key);
+      if (tombstoned && isSeed) {
+        roleOverlays.delete(key);
+      } else {
+        const current = foldRole(key);
+        roleOverlays.set(key, {
+          ...current,
+          name: content.name ?? current.name,
+          definition_md: content.definition_md ?? current.definition_md,
+          is_default: false,
+        });
+      }
+      emitTopic("role_def");
+      return;
+    }
+    case "lessons": {
+      const [roleKey, taskType] = key.split("::");
+      if (tombstoned) {
+        lessonsOverlays.delete(key);
+      } else {
+        lessonsOverlays.set(key, {
+          role_key: roleKey,
+          task_type: taskType,
+          text: content.text ?? "",
+          owner_id: MOCK_OWNER_ID,
+          schema_version: 2,
+          is_default: false,
+        });
+      }
+      emitTopic("lessons");
+      return;
+    }
+    case "task_manual": {
+      const manual = taskManuals.find((m) => m.typeKey === key);
+      if (!manual) return;
+      manual.purpose = content.purpose ?? manual.purpose;
+      manual.sopMd = content.sop_md ?? manual.sopMd;
+      manual.learnings = content.learnings ?? manual.learnings;
+      if (content.fields !== undefined) {
+        // The retained value is the serialised field list; a value this mock
+        // cannot parse leaves the live fields alone rather than wiping them.
+        try {
+          manual.fields = JSON.parse(content.fields);
+        } catch {
+          /* keep the live fields */
+        }
+      }
+      manual.updatedTs = Date.now() / 1000;
+      emitTopic("task_manual");
+      return;
+    }
+  }
 }
 
 /** Map a wire member → view Member, folding in the M1-only view extras. */
@@ -2196,6 +2407,7 @@ export const mockApi: Api = {
     // Mirrors handle_update_task_manual: partial — only supplied fields
     // change; assignee is three-valued (omitted = unchanged, null = unset).
     const manual = findTaskManual(typeKey);
+    recordDocumentHistory("task_manual", typeKey);
     if (patch.displayName !== undefined) manual.displayName = patch.displayName;
     if (patch.purpose !== undefined) manual.purpose = patch.purpose;
     if (patch.sopMd !== undefined) manual.sopMd = patch.sopMd;
@@ -2227,6 +2439,7 @@ export const mockApi: Api = {
       );
     }
     taskManuals = taskManuals.filter((m) => m.typeKey !== typeKey);
+    dropDocumentHistory("task_manual", typeKey);
     emitTopic("task_manual");
   },
 
@@ -2756,6 +2969,7 @@ export const mockApi: Api = {
   },
 
   async saveGlobalContext(text: string): Promise<GlobalContextView> {
+    recordDocumentHistory("global_context", "global");
     // Whole-BLOCK replace of the user-custom additive block → store the overlay;
     // the folded read is now owner-edited (is_default=false).
     globalContextOverlay = {
@@ -2766,13 +2980,16 @@ export const mockApi: Api = {
       // Overwritten by foldGlobalContext with the live studio name.
       org_name: "",
     };
+    emitTopic("global_context");
     return toGlobalContext(foldGlobalContext());
   },
 
   async resetGlobalContext(): Promise<GlobalContextView> {
+    recordDocumentHistory("global_context", "global");
     // Idempotent tombstone: drop the overlay → the folded read is EMPTY again
     // (text=""/is_default=true; the assembled boot context skips the block).
     globalContextOverlay = null;
+    emitTopic("global_context");
     return toGlobalContext(foldGlobalContext());
   },
 
@@ -2796,6 +3013,7 @@ export const mockApi: Api = {
     // role's name applies — a seed role IGNORES a supplied name (ignore, not
     // reject). A custom rename also updates its members' resolved role_name
     // (the server re-folds it per list; the mock stores it on the wire row).
+    recordDocumentHistory("role_definition", key);
     const current = foldRole(key);
     const nameEditable = customRoles.has(key);
     const nextName =
@@ -2814,6 +3032,7 @@ export const mockApi: Api = {
         if (m.role_key === key) m.role_name = nextName;
       }
     }
+    emitTopic("role_def");
     return toRoleDef(foldRole(key));
   },
 
@@ -2831,7 +3050,9 @@ export const mockApi: Api = {
       );
     }
     // Idempotent tombstone: drop the overlay → the folded read is the seed again.
+    recordDocumentHistory("role_definition", key);
     roleOverlays.delete(key);
+    emitTopic("role_def");
     return toRoleDef(foldRole(key));
   },
 
@@ -2866,6 +3087,10 @@ export const mockApi: Api = {
       Math.random().toString(16).slice(2, 8) +
       Math.random().toString(16).slice(2, 8);
     const roleKey = `r-${hex()}`;
+    // A custom role IS its own document row from the moment it is created, so
+    // its first EDIT already has a previous version to retain (server parity:
+    // handle_create_role writes the role_def row).
+    markDocumentRow("role_definition", roleKey);
     customRoles.set(roleKey, {
       key: roleKey,
       name,
@@ -2951,7 +3176,9 @@ export const mockApi: Api = {
       const [reader, peer] = k.split("::");
       if (ids.has(reader) || ids.has(peer)) chatReads.delete(k);
     }
-    lessonsOverlays.delete(lessonsKey(key, "general"));
+    // The role's documents go with it, retained revisions included.
+    dropRoleLessonsHistory(key);
+    dropDocumentHistory("role_definition", key);
     roleOverlays.delete(key);
     customRoles.delete(key);
   },
@@ -3014,6 +3241,7 @@ export const mockApi: Api = {
   ): Promise<LessonsView> {
     // Whole-doc replace → store the per-role overlay; the folded read is now
     // owner-edited for THIS role_key only (a sibling role's doc is untouched).
+    recordDocumentHistory("lessons", lessonsKey(roleKey, taskType));
     const wire: WireLessons = {
       role_key: roleKey,
       task_type: taskType,
@@ -3023,7 +3251,40 @@ export const mockApi: Api = {
       is_default: false,
     };
     lessonsOverlays.set(lessonsKey(roleKey, taskType), wire);
+    emitTopic("lessons");
     return toLessons(wire);
+  },
+
+  async listDocumentHistory(
+    kind: DocumentKind,
+    key: string
+  ): Promise<DocumentHistoryView[]> {
+    // Newest first, at most DOCUMENT_HISTORY_CAP — the retention the server
+    // applies, so an offline cockpit sees the same bounded list.
+    const kept = documentHistories.get(historySlot(kind, key)) ?? [];
+    return kept.map((h) => toDocumentHistory(structuredClone(h)));
+  },
+
+  async restoreDocumentHistory(
+    kind: DocumentKind,
+    key: string,
+    id: number
+  ): Promise<DocumentHistoryView> {
+    const slot = historySlot(kind, key);
+    const found = (documentHistories.get(slot) ?? []).find((h) => h.id === id);
+    if (!found) {
+      throw new ApiError(
+        `http 404 for POST /api/document-history/${kind}/${key}/${id}/restore`,
+        404,
+        "not_found",
+        "document history version not found"
+      );
+    }
+    // The restore is itself a write: the state it overwrites becomes the
+    // newest retained revision (server parity — SaveWithDocumentHistory).
+    recordDocumentHistory(kind, key);
+    applyDocumentHistory(kind, key, found.content);
+    return toDocumentHistory(structuredClone(found));
   },
 
   subscribeEvents(onTopic: (topic: string) => void): () => void {
@@ -3048,6 +3309,9 @@ export function __resetMock(): void {
   roleOverlays.clear();
   customRoles.clear();
   lessonsOverlays.clear();
+  documentHistories.clear();
+  documentRows.clear();
+  nextDocumentHistoryId = 1;
   chatLog = [];
   chatReads.clear();
   replyCards = [];
