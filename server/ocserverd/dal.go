@@ -1097,12 +1097,30 @@ func putRoleDefOn(ex sqlExecer, rd RoleDef) error {
 // (PutRoleDef with Tombstoned), which stays the seed-role reset seam.
 // Returns true iff a row was deleted.
 func (d *DAL) DeleteRoleDef(roleKey string) (bool, error) {
-	res, err := d.db.Exec(`DELETE FROM role_def WHERE role_key = ?`, roleKey)
+	var deleted bool
+	err := d.inTx(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`DELETE FROM role_def WHERE role_key = ?`, roleKey)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		deleted = n > 0
+		// The retained versions go with the document, in the SAME transaction:
+		// a delete that removed the role but left its history would leave a
+		// readable echo of a deleted document behind (the history read face is
+		// open to every authenticated caller), and would make the guide's
+		// 「永久移除」 false.
+		_, err = tx.Exec(`DELETE FROM document_history
+			WHERE document_kind = 'role_definition' AND document_key = ?`, roleKey)
+		return err
+	})
 	if err != nil {
 		return false, err
 	}
-	n, err := res.RowsAffected()
-	return n > 0, err
+	return deleted, nil
 }
 
 // ── lessons (per-role; composite (role_key, task_type) key) ──────────────────
@@ -1156,12 +1174,30 @@ func putLessonsOn(ex sqlExecer, l Lessons) error {
 // types) — the custom-role cascade: per-role lessons have no meaning without
 // the role. Returns the deleted count.
 func (d *DAL) DeleteLessonsForRole(roleKey string) (int, error) {
-	res, err := d.db.Exec(`DELETE FROM lessons WHERE role_key = ?`, roleKey)
+	var deleted int
+	err := d.inTx(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`DELETE FROM lessons WHERE role_key = ?`, roleKey)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		deleted = int(n)
+		// Every "<role>::<task_type>" history key of this role, in the same
+		// transaction. Matched by an explicit prefix length rather than LIKE so
+		// a role key can never be read as a wildcard pattern.
+		prefix := roleKey + "::"
+		_, err = tx.Exec(`DELETE FROM document_history
+			WHERE document_kind = 'lessons' AND substr(document_key, 1, length(?)) = ?`,
+			prefix, prefix)
+		return err
+	})
 	if err != nil {
 		return 0, err
 	}
-	n, err := res.RowsAffected()
-	return int(n), err
+	return deleted, nil
 }
 
 // ── display-name overlays (account_alias / machine_alias) ────────────────────

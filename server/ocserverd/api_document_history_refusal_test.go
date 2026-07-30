@@ -82,47 +82,114 @@ func TestRestoreDocumentHistoryRefusesARevisionOfAnotherDocument(t *testing.T) {
 	}
 }
 
+// Every capped document, one case per capped FIELD: the task manual carries two
+// of them (learnings and sop_md) behind a single check, so a case that only
+// exercised one would leave the other free to revive an over-cap document.
 func TestRestoreDocumentHistoryRefusesToReviveAnOverCapRevision(t *testing.T) {
-	api := newTasksTestServer(t)
-	role, taskType := seedRoleAssistant, "tm-cap"
 	oversized := strings.Repeat("x", contextDocMaxChars+50)
+	const role, taskType = seedRoleAssistant, "tm-cap"
 
-	// The oversized document predates the cap (the cap never truncates what is
-	// already stored), and the write that replaced it retained it as a version.
-	if err := api.dal.PutLessons(Lessons{RoleKey: role, TaskType: taskType, Text: oversized}); err != nil {
+	for _, doc := range []struct {
+		name string
+		// seed stores an over-cap document (it predates the cap — the cap never
+		// truncates what is already stored), then shrinks it through the real
+		// write face, which retains the over-cap version. It returns the
+		// document's history address and the live text that must survive.
+		seed func(*testing.T, *apiServer) (kind, key string)
+		live func(*testing.T, *apiServer) string
+	}{
+		{
+			name: "lessons",
+			seed: func(t *testing.T, api *apiServer) (string, string) {
+				if err := api.dal.PutLessons(Lessons{RoleKey: role, TaskType: taskType, Text: oversized}); err != nil {
+					t.Fatal(err)
+				}
+				rec := httptest.NewRecorder()
+				api.HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(rec, taskReq(t, http.MethodPost,
+					"/api/lessons/"+role+"/"+taskType, map[string]any{"text": "short again"}, "owner", "owner"),
+					role, taskType)
+				if rec.Code != http.StatusOK {
+					t.Fatalf("shrinking write: %d %s", rec.Code, rec.Body.String())
+				}
+				return "lessons", role + "::" + taskType
+			},
+			live: func(t *testing.T, api *apiServer) string {
+				current, err := api.foldLessonsDTO(role, taskType)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return current.Text
+			},
+		},
+		{
+			name: "task manual learnings",
+			seed: func(t *testing.T, api *apiServer) (string, string) {
+				return seedOverCapManual(t, api, TaskManual{Learnings: oversized},
+					map[string]any{"learnings": "short again"})
+			},
+			live: func(t *testing.T, api *apiServer) string { return liveManual(t, api).Learnings },
+		},
+		{
+			name: "task manual sop_md",
+			seed: func(t *testing.T, api *apiServer) (string, string) {
+				return seedOverCapManual(t, api, TaskManual{SopMD: oversized},
+					map[string]any{"sop_md": "short again"})
+			},
+			live: func(t *testing.T, api *apiServer) string { return liveManual(t, api).SopMD },
+		},
+	} {
+		t.Run(doc.name, func(t *testing.T) {
+			api := newTasksTestServer(t)
+			kind, key := doc.seed(t, api)
+			stored, err := api.dal.ListDocumentHistory(kind, key)
+			if err != nil || len(stored) == 0 {
+				t.Fatalf("history = %+v, %v", stored, err)
+			}
+
+			rec := httptest.NewRecorder()
+			api.HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdRestorePost(rec, taskReq(t, http.MethodPost,
+				"/api/document-history/"+kind+"/"+key+"/restore", nil, "owner", "owner"),
+				kind, key, stored[0].ID)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("restoring an over-cap %s revision = %d %s, want 400 — restore may not do what "+
+					"the write faces refuse", doc.name, rec.Code, rec.Body.String())
+			}
+			// Which 400: the cap's, not some other refusal that happens to share it.
+			if !strings.Contains(rec.Body.String(), "size limit") {
+				t.Fatalf("%s refusal = %s, want the document size limit", doc.name, rec.Body.String())
+			}
+			if live := doc.live(t, api); live != "short again" {
+				t.Fatalf("refused %s restore still wrote: live text is %d chars", doc.name, len(live))
+			}
+		})
+	}
+}
+
+const overCapManualKey = "tm-over-cap"
+
+func seedOverCapManual(t *testing.T, api *apiServer, oversized TaskManual, shrink map[string]any) (string, string) {
+	t.Helper()
+	oversized.TypeKey, oversized.DisplayName = overCapManualKey, "Over cap"
+	oversized.Fields, oversized.Assignee, oversized.UpdatedTS = "[]", "{}", nowSecs()
+	if err := api.dal.PutTaskManual(oversized); err != nil {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	api.HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(rec, taskReq(t, http.MethodPost,
-		"/api/lessons/"+role+"/"+taskType, map[string]any{"text": "short again"}, "owner", "owner"),
-		role, taskType)
+	api.HandleUpdateTaskManualApiTaskManualsTypeKeyPost(rec, taskReq(t, http.MethodPost,
+		"/api/task-manuals/"+overCapManualKey, shrink, "owner", "owner"), overCapManualKey)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("shrinking write: %d %s", rec.Code, rec.Body.String())
 	}
+	return "task_manual", overCapManualKey
+}
 
-	stored, err := api.dal.ListDocumentHistory("lessons", role+"::"+taskType)
-	if err != nil || len(stored) == 0 {
-		t.Fatalf("history = %+v, %v", stored, err)
+func liveManual(t *testing.T, api *apiServer) TaskManual {
+	t.Helper()
+	m, err := api.dal.GetTaskManual(overCapManualKey)
+	if err != nil || m == nil {
+		t.Fatalf("read manual: %+v, %v", m, err)
 	}
-	rec = httptest.NewRecorder()
-	api.HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdRestorePost(rec, taskReq(t, http.MethodPost,
-		"/api/document-history/lessons/"+role+"::"+taskType+"/restore", nil, "owner", "owner"),
-		"lessons", role+"::"+taskType, stored[0].ID)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("restoring an over-cap revision = %d %s, want 400 — restore may not do what the "+
-			"write faces refuse", rec.Code, rec.Body.String())
-	}
-	// Which 400: the cap's, not some other refusal that happens to share it.
-	if !strings.Contains(rec.Body.String(), "size limit") {
-		t.Fatalf("refusal = %s, want the document size limit", rec.Body.String())
-	}
-	current, err := api.foldLessonsDTO(role, taskType)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if current.Text != "short again" {
-		t.Fatalf("refused restore still wrote: live text is %d chars", len(current.Text))
-	}
+	return *m
 }
 
 func TestDocumentHistoryRoutesRefuseUnknownKindsAndBlankKeys(t *testing.T) {

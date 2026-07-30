@@ -196,3 +196,137 @@ func TestSaveWithDocumentHistoryUnderConcurrentWritersKeepsTheChainContiguous(t 
 		t.Fatalf("live text = %q, want %q", current.Text, committed[len(committed)-1])
 	}
 }
+
+func newHistoryDAL(t *testing.T) *DAL {
+	t.Helper()
+	db, err := openSQLite(filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	return NewDAL(db)
+}
+
+// retainOneVersion writes the document twice so it exists AND has exactly one
+// retained revision — the two rows a delete has to remove together.
+func retainOneVersion(t *testing.T, d *DAL, kind, key string, write func(sqlExecer) error) {
+	t.Helper()
+	blank := func(sqlQuerier) (string, error) { return "{}", nil }
+	previous := func(sqlQuerier) (string, error) { return `{"text":"previous"}`, nil }
+	if err := d.SaveWithDocumentHistory(kind, key, "owner", blank, write); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SaveWithDocumentHistory(kind, key, "owner", previous, write); err != nil {
+		t.Fatal(err)
+	}
+	history, err := d.ListDocumentHistory(kind, key)
+	if err != nil || len(history) != 1 {
+		t.Fatalf("seed %s/%s history = %+v, %v; want exactly one revision", kind, key, history, err)
+	}
+}
+
+func refuseDeletesOn(t *testing.T, d *DAL, table string) {
+	t.Helper()
+	if _, err := d.db.Exec(`CREATE TRIGGER refuse_delete_` + table +
+		` BEFORE DELETE ON ` + table +
+		` BEGIN SELECT RAISE(ABORT, 'delete refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A delete that drops the document but keeps its retained revisions (or the
+// reverse) is the half-applied state the cascade exists to prevent, and neither
+// half is observable from a successful call. So each half is driven with the
+// OTHER half rigged to fail: whatever survives must be both rows or neither.
+func TestDeletingADocumentAndItsRetainedHistoryIsAllOrNothing(t *testing.T) {
+	const roleKey, typeKey = "r-doomed", "tm-doomed"
+	lessonsKey := roleKey + "::" + seedLessonsTaskType
+	for _, doc := range []struct {
+		name       string
+		table      string
+		kind, key  string
+		seed       func(*testing.T, *DAL)
+		remove     func(*DAL) error
+		documentIn func(*testing.T, *DAL) bool
+	}{
+		{
+			name: "role definition", table: "role_def", kind: "role_definition", key: roleKey,
+			seed: func(t *testing.T, d *DAL) {
+				retainOneVersion(t, d, "role_definition", roleKey, func(ex sqlExecer) error {
+					return putRoleDefOn(ex, RoleDef{RoleKey: roleKey, Name: "doomed", DefinitionMD: "live"})
+				})
+			},
+			remove: func(d *DAL) error { _, err := d.DeleteRoleDef(roleKey); return err },
+			documentIn: func(t *testing.T, d *DAL) bool {
+				rd, err := d.GetRoleDef(roleKey)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return rd != nil
+			},
+		},
+		{
+			name: "lessons", table: "lessons", kind: "lessons", key: lessonsKey,
+			seed: func(t *testing.T, d *DAL) {
+				retainOneVersion(t, d, "lessons", lessonsKey, func(ex sqlExecer) error {
+					return putLessonsOn(ex, Lessons{RoleKey: roleKey, TaskType: seedLessonsTaskType, Text: "live"})
+				})
+			},
+			remove: func(d *DAL) error { _, err := d.DeleteLessonsForRole(roleKey); return err },
+			documentIn: func(t *testing.T, d *DAL) bool {
+				l, err := d.GetLessons(roleKey, seedLessonsTaskType)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return l != nil
+			},
+		},
+		{
+			name: "task manual", table: "task_manual", kind: "task_manual", key: typeKey,
+			seed: func(t *testing.T, d *DAL) {
+				retainOneVersion(t, d, "task_manual", typeKey, func(ex sqlExecer) error {
+					return putTaskManualOn(ex, TaskManual{
+						TypeKey: typeKey, DisplayName: "doomed", Fields: "[]",
+						Assignee: "{}", Learnings: "live", UpdatedTS: nowSecs(),
+					})
+				})
+			},
+			remove: func(d *DAL) error { _, err := d.DeleteTaskManual(typeKey); return err },
+			documentIn: func(t *testing.T, d *DAL) bool {
+				m, err := d.GetTaskManual(typeKey)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return m != nil
+			},
+		},
+	} {
+		for _, failing := range []string{"document_history", doc.table} {
+			t.Run(doc.name+"/"+failing+" delete refused", func(t *testing.T) {
+				d := newHistoryDAL(t)
+				doc.seed(t, d)
+				refuseDeletesOn(t, d, failing)
+
+				if err := doc.remove(d); err == nil {
+					t.Fatalf("%s: deleting with %s refusing every DELETE reported success",
+						doc.name, failing)
+				}
+				if !doc.documentIn(t, d) {
+					t.Errorf("%s: the document is gone but deleting %s failed — "+
+						"the two deletes are not one transaction", doc.name, failing)
+				}
+				history, err := d.ListDocumentHistory(doc.kind, doc.key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(history) != 1 {
+					t.Errorf("%s: retained history = %d revisions but deleting %s failed — "+
+						"the two deletes are not one transaction", doc.name, len(history), failing)
+				}
+			})
+		}
+	}
+}

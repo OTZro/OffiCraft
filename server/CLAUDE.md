@@ -175,6 +175,18 @@ T-98f4 只做了外包 worker。正職這邊三個動詞各走各的,實測(2026
   - ⚠️ **別把測試側那份當成「已經有守衛在守生產」**——T-e2b2 把 `task_artifact.attachment_id` 納入的是不變式掃描,`DeleteChatInvolving` 的存活判定當時一行都沒動,於是一個被釘成任務交付物的 blob 會隨它所在的聊天訊息一起被刪掉(任務一進終態產物集雙向凍結 ⇒ **不可復原**)。T-62a8 補的是生產那半。兩個方向各有哨兵(`dal_blob_liveness_test.go`):被引用的不准刪、**沒人引用的仍然要刪**——只釘前者會把資料遺失換成沒人會發現的磁碟洩漏。
   - **誠實邊界**:它**不是通用 GC**,只看「剛被刪的那些訊息引用過的 blob」、之後不重訪。所以被 artifact 保住的 blob 若日後被 un-pin 就永久收不回(`DeleteTaskArtifact` 依明文契約不刪 blob)。這是有界洩漏,換掉的是不可復原的刪除——要改等於改 `DeleteTaskArtifact` 的契約,屬 owner 裁定面。
 
+## 文件版本歷史（T-7d33）：三類文件的還原行為為什麼不一樣
+
+`document_history` 對四類可覆寫長文各留最近三版（migration 00043）。**還原的前置條件三類不同，那是刻意的，不是漏寫**——加第四類文件的人先讀這一段：
+
+- **`role_definition` / `task_manual`：文件必須還存在，否則 404。** 還原是「把這份文件退回舊狀態」，不是「用一份歷史把已刪的文件生回來」。刪掉的角色／手冊要回來，走建立流程。
+- **`lessons`：折疊不要求角色存在**（`foldLessonsDTO` 只讀 overlay ⊕ seed，從不查 `role_def`），所以在角色已刪的情況下，**admin 以上**仍可把它的 lessons 還原成一列活的 overlay。一般 agent 過不了「只能寫自己角色」那道閘（已刪角色不再是任何人的角色），但那是**授權**擋下來的，不是這條路徑不存在。
+- **`global_context` 沒有刪除入口**，不會有這個問題。
+
+⇒ **刪除文件時必須在同一個交易裡刪掉它的歷史**（角色：自己的 `role_definition` 歷史 ＋ 每一份 `<role>::*` 的 lessons 歷史；手冊：自己的 `task_manual` 歷史）。少了這一步，刪掉的文件會留下**任何持 token 的 caller 都讀得到**的殘影（`GET /api/document-history/{kind}/{key}` 是 machine 地板），而且 `docs/guide/members.md` 那句「永久移除」會變成假話。串接補上之後，上面 `lessons` 那條路徑就沒有素材可用了，**但不對稱本身還在**——所以寫在這裡。
+
+🔴 **日後要盤點孤兒歷史列時的誤報坑**：判「這個 `document_key` 的文件還在不在」**不能只看 `role_def` 有沒有那一列**——**seed 角色在沒被自訂過之前根本沒有 `role_def` 列**（overlay 模型：沒有 overlay ＝ 用 seed），於是 seed 角色的 lessons 歷史會被**整批誤判成孤兒**。判準要併上 seed 角色清單，來源是 `assets.go` 的 `seedRoleKeys()`（不要手抄一份會過期的名單）。**一個會把正常資料標成待刪的盤點查詢，比沒有盤點查詢危險。**
+
 ## 累積型 context 文件的硬上限(T-3351,`domain.go DocCapBlocked`)
 
 owner 2026-07-27 兩句話 + 一個數字:「更新的時候不能塞超過這個大小」「已經超出的我們不 truncate 但是下次更新他只能縮小」,上限 **10,000**。
