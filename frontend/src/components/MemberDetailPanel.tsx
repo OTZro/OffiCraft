@@ -248,7 +248,10 @@ export function MemberDetailPanel({
       settingsModel.trim() !== member.model ||
       settingsEffort !== member.effort;
     const machineChanged = settingsMachineId !== member.desiredMachineId;
-    if (!launchChanged && !machineChanged) {
+    // A live Change with no edits is a true no-op. Offline and waking both use
+    // this same dialog for Wake/force-revive, so they must still reach
+    // activate even when the owner accepts the prefilled settings unchanged.
+    if (online && !launchChanged && !machineChanged) {
       setSettingsOpen(false);
       return;
     }
