@@ -271,7 +271,10 @@ const mkAwake = (over: Partial<Member> = {}): Member =>
  * when a "not dispatched" verdict becomes visible at all. That beat is
  * `afterRefetch` below, not test scaffolding: the pin is written even when
  * nothing was dispatched, so this is the state the owner really lands on. */
-async function relocateInto(getByTestId: (id: string) => HTMLElement) {
+async function relocateInto(
+  getByTestId: (id: string) => HTMLElement,
+  target: "mach-a" | "mach-b" = "mach-b",
+) {
   await waitFor(() =>
     expect((getByTestId("mp-change") as HTMLButtonElement).disabled).toBe(false),
   );
@@ -280,7 +283,7 @@ async function relocateInto(getByTestId: (id: string) => HTMLElement) {
     "select.machine-picker__select",
   )!;
   await waitFor(() => expect(select.options).toHaveLength(2));
-  fireEvent.change(select, { target: { value: "mach-b" } });
+  fireEvent.change(select, { target: { value: target } });
   const confirm = document.querySelector<HTMLButtonElement>(
     ".machine-picker__actions .btn--accent",
   )!;
@@ -498,6 +501,69 @@ describe("relocate notice self-heals", () => {
     resolveRelocate({ relocationPending: true });
     await new Promise((r) => setTimeout(r, 0));
     expect(queryByTestId("mp-relocate-undispatched")).toBeNull();
+  });
+
+  it("drops the previous verdict when a fresh attempt is fired", async () => {
+    // The wake half has this and so does the hook; the hand-written twin did not
+    // (independent review r3). Without it a relocate that failed and was then
+    // retried SUCCESSFULLY keeps its "nothing was dispatched" alert on screen —
+    // a notice about an attempt that is over, which is the exact lie this whole
+    // notice family exists to remove.
+    const verdicts: MemberRelocateResult[] = [
+      { relocationPending: true },
+      { relocationPending: false },
+    ];
+    const onRelocate = vi.fn(async () => verdicts.shift()!);
+    const { getByTestId, queryByTestId, rerender } = render(
+      panel(pinnedHome(), onRelocate),
+    );
+
+    await relocateInto(getByTestId);
+    rerender(panel(mkAwake({ desiredMachineId: "mach-b", machine: "mach-a" }), onRelocate));
+    await waitFor(() =>
+      expect(queryByTestId("mp-relocate-undispatched")).not.toBeNull(),
+    );
+
+    // Second attempt — back to the machine it is observed on, so the pin really
+    // changes again — and this time the move IS dispatched.
+    await relocateInto(getByTestId, "mach-a");
+    await waitFor(() => expect(onRelocate).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(queryByTestId("mp-relocate-undispatched")).toBeNull(),
+    );
+  });
+
+  it("closes the settings dialog when the owner switches members", async () => {
+    // 🔴 The dialog is PREFILLED from the member it was opened for, and neither
+    // caller passes a `key`, so switching members is a prop change: an open
+    // dialog survives holding the previous member's values, and one confirm
+    // writes them to somebody else (independent review r3). The member-keyed
+    // reset must therefore cover the draft, not only the notices.
+    const onRelocate = vi.fn(
+      async (): Promise<MemberRelocateResult> => ({ relocationPending: false }),
+    );
+    const { getByTestId, queryByTestId, rerender } = render(
+      panel(pinnedHome(), onRelocate),
+    );
+    await waitFor(() =>
+      expect((getByTestId("mp-change") as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(getByTestId("mp-change"));
+    expect(queryByTestId("me-runtime-select")).not.toBeNull();
+
+    rerender(
+      panel(
+        mkAwake({
+          id: "kyle",
+          name: "Kyle",
+          memberId: "MB-DEV001",
+          desiredMachineId: "mach-a",
+          machine: "mach-a",
+        }),
+        onRelocate,
+      ),
+    );
+    await waitFor(() => expect(queryByTestId("me-runtime-select")).toBeNull());
   });
 
   it("does NOT follow the owner onto a different member (relocate twin of r1 SHOULD-1)", async () => {
