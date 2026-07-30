@@ -172,7 +172,7 @@ func cmdContextReport(client httpClient, cfg Config, env func(string) string, no
 				Tokens:       tokens,
 				Account:      readClaudeAccount(env),
 				AccountLabel: readClaudeAccountLabel(env),
-				Effort:       effortValue(env),
+				Effort:       effortValue(payload),
 			}
 			if machine := localHost(env); machine != "" {
 				body.Machine = machine
@@ -285,7 +285,7 @@ func renderStatusline(payload string, env func(string) string, now float64) stri
 	obj, _ := safeJSON(payload).(map[string]any) // nil ⇒ every segment skips
 
 	var segs []string
-	if s := modelEffortSegment(obj, env); s != "" {
+	if s := modelEffortSegment(obj); s != "" {
 		segs = append(segs, s)
 	}
 	if s := contextBarSegment(payload); s != "" {
@@ -306,10 +306,11 @@ func renderStatusline(payload string, env func(string) string, now float64) stri
 // modelEffortSegment renders "◆ <display_name>[ (1M context)] ⚡<effort>". The
 // model (blue) is present iff model.display_name is a non-empty string; the "1M
 // context" hint is appended only when model.id signals the 1M tier ("[1m]") and
-// display_name doesn't already say so. The effort (yellow) is present iff
-// OC_EFFORT is set; a bare effort with no model still renders "⚡<effort>". Both
+// display_name doesn't already say so. The effort (yellow) is present iff the
+// payload carries effort.level; a bare effort with no model still renders
+// "⚡<effort>". Both
 // missing ⇒ "".
-func modelEffortSegment(obj map[string]any, env func(string) string) string {
+func modelEffortSegment(obj map[string]any) string {
 	model := ""
 	if m, ok := obj["model"].(map[string]any); ok {
 		if name, ok := m["display_name"].(string); ok {
@@ -328,7 +329,7 @@ func modelEffortSegment(obj map[string]any, env func(string) string) string {
 	if model != "" {
 		out = ansiBlue + "◆ " + model + ansiReset
 	}
-	if effort := effortLabel(env); effort != "" {
+	if effort := effortLabel(obj); effort != "" {
 		e := ansiYellow + "⚡" + effort + ansiReset
 		if out != "" {
 			out += " " + e
@@ -339,20 +340,42 @@ func modelEffortSegment(obj map[string]any, env func(string) string) string {
 	return out
 }
 
-// effortValue reads OC_EFFORT (the owner's launch intent, plumbed by ocwarden
-// spawn as an extra env pair), trimmed and VERBATIM. This is the wire value; the
-// status line's abbreviation lives in effortLabel and must never reach the POST
-// (the owner's monitoring fold would then read "med" for a session launched at
-// "medium", i.e. a value no launch flag ever names).
-func effortValue(env func(string) string) string {
-	return strings.TrimSpace(env("OC_EFFORT"))
+// effortValue reads the LIVE reasoning effort out of the statusLine payload
+// (`effort.level`), trimmed and VERBATIM. Claude Code carries the session's
+// CURRENT level there — it tracks a mid-session /effort change, which the launch
+// intent cannot — and OMITS the block entirely on models that have no effort
+// parameter, so an absent level is an honest "this session has no effort", not a
+// gap to paper over.
+//
+// 🔴 Deliberately NOT OC_EFFORT, and there is no fallback to it. OC_EFFORT is the
+// owner's LAUNCH INTENT (what the session was started with); the monitoring
+// surfaces must show what the session IS, never what it was configured to be
+// (owner, 2026-07-31). A fallback would reintroduce exactly that: a session that
+// dropped to low mid-run would keep displaying the "high" it was launched at, and
+// nobody could tell the difference from a live report.
+func effortValue(payload string) string {
+	obj, _ := safeJSON(payload).(map[string]any)
+	return effortLevel(obj)
 }
 
-// effortLabel reads OC_EFFORT (the owner's launch intent, plumbed by ocwarden
-// spawn as an extra env pair), trimmed. "medium" abbreviates to "med" to match
-// the owner's target layout; other values pass through verbatim. Empty ⇒ "".
-func effortLabel(env func(string) string) string {
-	e := effortValue(env)
+// effortLevel pulls `effort.level` out of an already-decoded payload. Absent or
+// malformed ⇒ "" (honest blank), never a fabricated default.
+func effortLevel(obj map[string]any) string {
+	block, ok := obj["effort"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	level, _ := block["level"].(string)
+	return strings.TrimSpace(level)
+}
+
+// effortLabel is the status-line rendering of the same live value. "medium"
+// abbreviates to "med" to match the owner's target layout; other values pass
+// through verbatim. Empty ⇒ "". The abbreviation is display-only and must never
+// reach the POST body — the cockpit would then read a level no /effort command
+// or launch flag ever names.
+func effortLabel(obj map[string]any) string {
+	e := effortLevel(obj)
 	if e == "medium" {
 		return "med"
 	}
