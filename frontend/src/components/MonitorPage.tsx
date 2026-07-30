@@ -1600,14 +1600,21 @@ function OutsourceSessionRow({
           </div>
         </div>
       </td>
+      {/* 機器 / 帳號 come off the SESSION, exactly like the member row above.
+        * The worker DTO's own machine is the spawn DISPATCH TARGET (server
+        * projectWorker prefers it over the observed host), i.e. where the
+        * worker was SENT — an intent, on a surface the owner ruled must show
+        * reported state. Owner accepted the cost explicitly: a just-dispatched
+        * worker that has not connected yet shows a dash here rather than the
+        * machine it was aimed at. */}
       <td className="mon-table__left" data-label={t.monitor.sessionCol.machine}>
-        {worker.machine || dash}
+        {session?.machine || dash}
       </td>
       <td
-        className={`mon-table__left${worker.account ? "" : " mon-muted"}`}
+        className={`mon-table__left${session?.account ? "" : " mon-muted"}`}
         data-label={t.monitor.sessionCol.account}
       >
-        {worker.account || dash}
+        {session?.account || dash}
       </td>
       <td className="mon-table__left" data-label={t.monitor.sessionCol.model}>
         <span className="mon-model">{session?.model || dash}</span>

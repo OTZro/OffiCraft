@@ -272,8 +272,11 @@ owner 2026-07-31:「成員面板以及監控台,一定要顯示回報回來的�
   honest-empty `""` → UI 顯示「—」。
 - **`GET /api/monitoring` 的 sessions 現在同時含正職與外包**(T-e12c);外包列靠 **`ow-` id
   前綴**辨識(server 沒有、也不該新增 kind 欄位——凍結 wire)。`MonitorPage` 的外包列因此
-  用 `findSessionFor(worker.id, sessions)` 取 model/effort/context/cost,**join 不到就一律
-  誠實留白**,絕不退回 `GET /api/outsource-workers` 的設定值。member 那條 lane 同時用
+  用 `findSessionFor(worker.id, sessions)` 取 model/effort/context/cost/**machine/account**,
+  **join 不到就一律誠實留白**,絕不退回 `GET /api/outsource-workers` 的設定值。⚠️ machine/account
+  那兩欄 owner 2026-07-31 在卡上**明知代價仍選擇這樣**(`rc-4a83a5723896` ①):worker 剛被派出去、
+  還沒連上的那段,機器欄就是**空白**——那不是 bug,**不要「修」成退回 worker DTO**,那份 machine
+  是 in-memory 的 dispatch target(意圖),不是觀測到的落點。member 那條 lane 同時用
   `ow-` 前綴排除,否則同一個 session 會畫兩列。
 - **設定值(啟動意圖)**:roster 的 `member.model` / `member.effort`、外包 DTO 的
   `worker.model` / `worker.effort`。它只活在**兩個地方**:model/effort **編輯器**(seed 與
