@@ -183,7 +183,7 @@ func realCutoverOps() cutoverOps {
 		ppidExe:      psExePath(r),
 		run:          r.Run,
 		runExit:      realRunExit,
-		runInstaller: newCmdRunner(cutoverInstallBudget).Run,
+		runInstaller: runInstallerCombined,
 		readFile:     os.ReadFile,
 		writeFile:    os.WriteFile,
 		remove:       os.Remove,
@@ -370,4 +370,28 @@ func acquireCutoverLock(ops cutoverOps, lockPath string) bool {
 	}
 	created, err = ops.createExcl(lockPath)
 	return err == nil && created
+}
+
+// runInstallerCombined runs `ocwarden install --force` and returns its output
+// WHETHER OR NOT IT FAILED.
+//
+// The shared execRunner deliberately drops stdout on a non-zero exit (it returns
+// "" plus an error carrying stderr). For every other caller that is fine — they
+// only classify the error. For this one caller it destroys the only account of
+// WHY a machine refused the conversion: the installer narrates its progress on
+// stdout, so a rolled-back machine's cutover.log read exactly
+// "install FAILED (exit status 1)" and nothing else. Offline, quarantined anchor,
+// plutil rejecting the plist and a launchd bootstrap failure are then
+// indistinguishable — on a user's machine, after the fact, with no other
+// telemetry. Observed on a real macOS 26 injection run before this existed.
+//
+// Same budget as before (cutoverInstallBudget) and the same test-binary refusal
+// as execRunner.Run: this starts a process, so it must be reachable only from
+// production, never from a test.
+func runInstallerCombined(name string, args ...string) (string, error) {
+	refuseInTestBinary("runInstallerCombined(" + name + ")")
+	ctx, cancel := context.WithTimeout(context.Background(), cutoverInstallBudget)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	return string(out), err
 }
