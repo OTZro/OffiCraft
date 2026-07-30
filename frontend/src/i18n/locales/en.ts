@@ -318,12 +318,7 @@ export const en: Dict = {
     codename: "Codename",
     model: "Model",
     effort: "Effort",
-    status: "Status",
-    statusOf: {
-      assigned: "Assigned",
-      active: "Active",
-      released: "Released",
-    } as Record<string, string>,
+    // T-7526: the 狀態 cell and its statusOf lookup are retired — see zh.ts.
     task: "Delegated task",
     delegator: "Delegated by",
     // Shown only when the owner personally created the bound task (a real
@@ -339,11 +334,8 @@ export const en: Dict = {
     context: "context",
     estimatedCost: "est. $",
     notAssigned: "Not yet assigned",
-    starting: "Starting",
-    offline: "Offline",
-    working: "Working",
+    // T-7526: the four presence words retired with the 狀態 cell — see zh.ts.
     // ── T-32e1/T-f190 lifecycle ops (aligned with the member detail panel) ──
-    stopped: "Stopped",
     refocus: "Refocus",
     refocusOfflineHint: "Refocus requires the worker online",
     refocusing: "Refocusing…",
@@ -351,10 +343,10 @@ export const en: Dict = {
     refocusError: "Refocus failed",
     refocusSubmittedNote: "Refocus sent · worker respawning…",
     refocusSinceLabel: "Last handover",
+    // ⚠️ No `restart` leaf: the wake word is the member panel's
+    // `lifecycle.action.spawn` on both panels — see zh.ts.
     stop: "Stop",
     stopping: "Stopping…",
-    restart: "Restart",
-    restarting: "Starting…",
     stopError: "Action failed, please retry",
     modelSave: "Save",
     modelCancel: "Cancel",

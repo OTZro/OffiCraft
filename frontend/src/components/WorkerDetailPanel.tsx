@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n";
-import { workerStatusText } from "../i18n/compose";
 import { ApiError } from "../api/errors";
 import type { OutsourceWorkerView } from "../api/adapter";
 import { useMachines } from "../hooks/useMachines";
@@ -35,8 +34,11 @@ interface WorkerDetailPanelProps {
   onRefocus?: () => Promise<void>;
   /** Stop (停止 — T-f190): kill + hold down (owner-explicit; no auto-revival). */
   onStop?: () => Promise<void>;
-  /** Restart (重啟 — T-f190): clear the stop + re-dispatch. */
-  onRestart?: () => Promise<void>;
+  /** Wake (喚醒 — T-7526): clear the stop + re-dispatch. ⚠️ The WIRE is still
+   * `POST /api/outsource-workers/{id}/restart` — a frozen contract (§13). Only
+   * the owner-facing WORD changed (owner 2026-07-31 「應該要統一」: 重啟 retired,
+   * 喚醒 is the one verb on both panels). Do NOT rename the endpoint to match. */
+  onWake?: () => Promise<void>;
   /** Change model/effort (換 model — T-f190): active → takes effect now,
    * assigned → next spawn. Undefined ⇒ the model cell is read-only. */
   onSetModel?: (
@@ -58,11 +60,12 @@ interface WorkerDetailPanelProps {
  * AgentDetailPanel the member detail page uses (owner constitution:「外包只是
  * 一個系統會幫我產生跟刪除的正職員工」) — the shared cards (模型/投入度、機器/
  * Claude Account、運行狀況、最近操作、終端、初始 PROMPT) read the ONE unified
- * view model, and the worker-specific bits (外包角色頭像身分 + 任務 chip、狀態 +
+ * view model, and the worker-specific bits (外包角色頭像身分 + 任務 chip、
  * 委託人、委託任務) plug in through the panel's slots. Since T-7526 the shared
  * cards are READ-ONLY here too (the member panel's shape since T-927a): 模型/
- * 投入度 and 機器 carry no in-place editor, and every edit goes through the
- * 更改 dialog on the identity card. Everything the
+ * 投入度 and 機器 carry no in-place editor, and every edit goes through the ONE
+ * dialog the identity card's action row opens — 更改 while it is running, 喚醒
+ * while it is not (owner 2026-07-31). Everything the
  * worker has not really reported renders an honest dash / 「尚未分配」 — never a
  * fabricated value (the shared panel's honest gate, the member's).
  */
@@ -73,7 +76,7 @@ export function WorkerDetailPanel({
   onRelocate,
   onRefocus,
   onStop,
-  onRestart,
+  onWake,
   onSetModel,
   onFetchBootContext,
   onUpdateAvatar,
@@ -94,39 +97,32 @@ export function WorkerDetailPanel({
   const online = worker.presence === "online";
   const offline = worker.presence === "offline";
   // stopping/stopped are both the owner-explicit hold-down (desired offline) —
-  // the toggle and the status cell treat them as one 已停止 mode.
+  // the action row treats them as one 已停止 mode.
   const stopped =
     worker.presence === "stopped" || worker.presence === "stopping";
-  // 🔴 The toggle keys off LIVENESS, not off who asked for it (T-7526). A worker
+  // 🔴 The action row keys off LIVENESS, not off who asked for it (T-7526). A worker
   // whose session died on its own reads `offline` — nobody pressed 停止, so the
   // old `stopped`-only test showed 停止 on a worker with nothing to stop, and the
   // ONE affordance that brings it back was nowhere on screen. Both no-live-session
-  // states take the restart arm; the server's restart guard was widened the same
+  // states take the 喚醒 arm; the server's restart guard was widened the same
   // way (INTENT → LIVENESS), so the two sides now agree.
   const noLiveSession = stopped || offline;
+  // Which of the two things the ONE settings dialog does when confirmed: wake a
+  // worker that is not running, or change a running one. Same split as the
+  // member panel's `online`, and it decides the dialog's title + confirm word
+  // too, so the button can never promise something the click does not do.
+  const wakeMode = noLiveSession;
   const machineText = worker.machine || t.workerDetail.notAssigned;
-  // The 狀態 CELL's wording is deliberately NOT the dot's label: it speaks the
-  // 外包 detail vocabulary (工作中/啟動中) and, when there is no presence at all,
-  // falls back to the worker's lifecycle status (已釋放…) — a fallback the dot
-  // cannot have. That is the ONLY split; the dot itself is the shared
-  // LifecycleDot below, so colour + a11y label can never drift from the roster.
-  // Exhaustive switch: presence is the five-state union, so a new state fails to
-  // compile here rather than silently landing in the fallback branch.
-  const statusText = ((): string => {
-    switch (worker.presence) {
-      case "online":
-        return t.workerDetail.working;
-      case "waking":
-        return t.workerDetail.starting;
-      case "stopping":
-      case "stopped":
-        return t.workerDetail.stopped;
-      case "offline":
-        return t.workerDetail.offline;
-      case undefined:
-        return worker.status ? workerStatusText(t, worker.status) : dash;
-    }
-  })();
+  // 🔴 There is NO 狀態 cell any more (owner 2026-07-31:「外包為什麼需要工作狀態
+  // 這個UI介面」). Four of its five words (工作中/啟動中/已停止/離線) restated what
+  // the identity card's LifecycleDot already says in colour AND in its
+  // aria-label — the same fact written twice, and a second place to drift from
+  // `presenceVisual`. The fifth, 已釋放, is the released worker, and the chat
+  // room's own banner (「已結案離隊，以下為歷史對話（唯讀）」) already says that
+  // where the owner actually meets it. So the whole cell went, and with it the
+  // `workerStatusText` lookup that existed only to feed it.
+  // What did NOT go is the offline REASON below — that is not a restatement of
+  // the dot, it is the only answer to "why is it grey".
 
   // 委託人 (item 2): the RESOLVED creator name replaces the former hardcoded
   // "System owner". delegatedBy carries a real member name; a blank name with
@@ -142,44 +138,46 @@ export function WorkerDetailPanel({
         ? worker.creatorId
         : t.workerDetail.delegatorSystem;
 
-  // The structured failure reason is surfaced in the 狀態 slot when the worker
-  // reads offline (a silently-failing spawn / died session); the shared panel
-  // owns the 最近操作 receipt block, so only that case's reason folds here.
+  // The structured failure reason, surfaced under the identity card's presence
+  // dot when the worker reads offline (a silently-failing spawn / died session);
+  // the shared panel owns the 最近操作 receipt block, so only that case's reason
+  // folds here.
   const offlineReason = (worker.lastOpReason ?? "").trim();
 
-  // ── stop / restart toggle (停止/重啟 — owner-explicit hold-down) ─────────────
+  // ── 停止 (owner-explicit hold-down) ────────────────────────────────────────
+  // The WAKE half of the old toggle is no longer a button that fires straight
+  // at an endpoint: it opens the settings dialog first (openSettings below), the
+  // member panel's shape. Only 停止 still acts on click.
   const [stopBusy, setStopBusy] = useState(false);
   const [stopError, setStopError] = useState(false);
-  async function handleStopToggle() {
-    const fn = noLiveSession ? onRestart : onStop;
-    if (!fn || stopBusy) return;
+  async function handleStop() {
+    if (!onStop || stopBusy) return;
     setStopBusy(true);
     setStopError(false);
     try {
-      await fn();
+      await onStop();
     } catch {
       setStopError(true);
     } finally {
       setStopBusy(false);
     }
   }
-  const stopToggleLabel = stopBusy
-    ? noLiveSession
-      ? t.workerDetail.restarting
-      : t.workerDetail.stopping
-    : noLiveSession
-      ? t.workerDetail.restart
-      : t.workerDetail.stop;
 
-  // ── 設定區 (更改 — 與正職同一套形狀, T-7526) ───────────────────────────────
+  // ── 設定區 (更改 / 喚醒 — 與正職同一套形狀, T-7526) ─────────────────────────
   // ONE dialog holds 執行環境 + 模型 + 投入度 + 機器, opened from the identity
-  // action row. The panel itself is READ-ONLY: the cells state what is currently
-  // true, every edit goes through here — the member panel's shape since T-927a,
-  // now the outsource panel's too.
+  // action row by BOTH 更改 (live worker) and 喚醒 (no live session). The panel
+  // itself is READ-ONLY: the cells state what is currently true, every edit goes
+  // through here — the member panel's shape since T-927a, now the outsource
+  // panel's too.
   //
-  // It deliberately has NO 「只儲存，不喚醒」 twin button: this dialog starts
-  // nothing at all (it only reaches the model and relocate endpoints), so a
-  // second button saying "save only" would imply the first one launches.
+  // ⚠️ It deliberately has NO 「只儲存，不喚醒」 twin button, and that is NOT the
+  // member panel's shape (the member offers one). The reason is the wire: the
+  // member's 「只儲存」 is a PATCH + a placement-only relocate, neither of which
+  // starts anything. The worker's relocate is not placement-only — it kills and
+  // re-dispatches unless desired_state is already offline — so a worker button
+  // promising "saved, not started" would be a lie for exactly the workers whose
+  // session merely died (desired_state still online). Offering it would need a
+  // pin-only worker endpoint, i.e. a frozen-wire change (§13).
   const onlineMachines = machines.filter((m) => m.online);
   // The pinned machine stays in the list even when it is not online — labelled
   // 離線 and disabled, MachinePicker's rule. Dropping it would silently move a
@@ -233,13 +231,25 @@ export function WorkerDetailPanel({
   const shownWorkerIdRef = useRef(worker.id);
   shownWorkerIdRef.current = worker.id;
 
+  /**
+   * Seed the dialog with WHAT IS CURRENTLY TRUE — all four cells (owner
+   * 2026-07-31:「我希望喚醒時，AI執行環境，模型，effort，機器，應該先預設跟原本
+   * 一樣」). Every one of them stays EDITABLE (owner, same session:「將外包統一跟
+   * 正職一樣，不是釘死」) — the defaults are a starting point, not a lock.
+   */
   function openSettings() {
     setSettingsRuntime(worker.runtime || "claude");
     setSettingsModel(worker.model);
     setSettingsEffort(worker.effort);
-    // Seed the pin VERBATIM. Falling back to the first ONLINE machine would make
-    // `machineChanged` unconditionally true for a worker pinned to a sleeping
-    // machine, so opening the dialog to edit a MODEL would silently re-pin it.
+    // 🔴 Seed the pin VERBATIM, carried over from the member panel's openSettings
+    // together with the defect it fixes. Falling back to the first ONLINE machine
+    // makes `machineChanged` unconditionally true for a worker pinned to a machine
+    // that is merely ASLEEP — so opening the dialog just to edit a MODEL silently
+    // re-pins the worker somewhere else. It lands hardest on "park it on my
+    // sleeping laptop and save the settings for later". The pinned-but-offline
+    // machine stays in `settingsMachineOptions`, labelled 離線 and disabled, so a
+    // disabled <option> can still render as the current value without being
+    // selectable — MachinePicker's rule, and the reason this seed is safe.
     setSettingsMachineId(
       worker.desiredMachineId || onlineMachines[0]?.machineId || "",
     );
@@ -247,6 +257,19 @@ export function WorkerDetailPanel({
     setSettingsOpen(true);
   }
 
+  /**
+   * Confirm. Two outcomes behind ONE dialog, exactly like the member panel:
+   * - live worker (更改): persist the launch settings, relocate if the machine
+   *   changed. Nothing is started; a no-edit confirm is a true no-op.
+   * - no live session (喚醒): persist, re-pin if needed, then WAKE. Accepting
+   *   the prefilled values unchanged must still wake — that is the whole point
+   *   of the button — so the no-op early-return is gated on `!wakeMode`.
+   *
+   * 🔴 All three legs are EXISTING endpoints (`/model`, `/relocate`,
+   * `/restart`); nothing new was added to the frozen wire. `/restart` is the one
+   * that starts the worker, and it takes no machine — which is why the pin has
+   * to be written by `/relocate` BEFORE it, not alongside it.
+   */
   async function saveSettings() {
     const launchChanged =
       settingsRuntime !== (worker.runtime || "claude") ||
@@ -255,7 +278,7 @@ export function WorkerDetailPanel({
     const machineChanged =
       settingsMachineId !== "" &&
       settingsMachineId !== (worker.desiredMachineId ?? "");
-    if (!launchChanged && !machineChanged) {
+    if (!wakeMode && !launchChanged && !machineChanged) {
       setSettingsOpen(false);
       return;
     }
@@ -272,6 +295,11 @@ export function WorkerDetailPanel({
         await onSetModel?.(settingsRuntime, settingsModel.trim(), settingsEffort);
       }
       if (machineChanged) await onRelocate?.(settingsMachineId);
+      // …and the wake goes LAST, after both intents are stored, so the session
+      // that comes up is the one the owner just described. For a STOPPED worker
+      // the two ops above are pure persistence (the server refuses to start
+      // anything while desired_state=offline), so this is the only dispatch.
+      if (wakeMode) await onWake?.();
       if (shownWorkerIdRef.current !== firedFor) return;
       setSettingsOpen(false);
     } catch (error) {
@@ -350,20 +378,67 @@ export function WorkerDetailPanel({
             {worker.taskTypeName || worker.taskTypeKey || t.tasks.adhoc}
           </span>
         </div>
+        {/* The offline REASON, moved here when the 狀態 cell went (owner
+            2026-07-31). It is the one thing that cell carried which the dot does
+            NOT: a bare grey dot on a worker whose spawn silently failed tells
+            the owner nothing, and the 最近操作 receipt only renders once a warden
+            op has actually reported (`hasLastOp`), which is precisely not the
+            case for a start that was never dispatched. So it now sits directly
+            under the dot it explains. Honest: hidden when nothing folded. */}
+        {offline && offlineReason && (
+          <div className="mp-field__hint" data-testid="worker-detail-stuck-reason">
+            {offlineReason}
+          </div>
+        )}
       </div>
-      {/* The settings entry — the ONE way to change 執行環境/模型/投入度/機器,
-          the member panel's 更改 in the same place. Hidden entirely when neither
-          endpoint is wired (a read-only embedding gets no dead affordance). */}
-      {(onSetModel || onRelocate) && (
+      {/* Right-hand action row — 更改 ＋ 停止 side by side (owner 2026-07-31
+          「全部變成左右並排」), the member panel's row in the member panel's
+          place. When there is no live session the pair collapses to the single
+          喚醒 button, which opens the SAME settings dialog 更改 does (the member
+          panel's shape: you say what it should come up as, then it starts).
+          Hidden entirely when nothing is wired — a read-only embedding gets no
+          dead affordance. */}
+      {(onSetModel || onRelocate || onStop || onWake) && (
         <div className="mp-identity__actions">
-          <button
-            type="button"
-            className="btn btn--accent-ghost"
-            data-testid="worker-detail-change"
-            onClick={openSettings}
-          >
-            {t.mp.change}
-          </button>
+          <div className="mp-identity__buttons">
+            {!wakeMode && (onSetModel || onRelocate) && (
+              <button
+                type="button"
+                className="btn btn--accent-ghost"
+                data-testid="worker-detail-change"
+                onClick={openSettings}
+              >
+                {t.mp.change}
+              </button>
+            )}
+            {wakeMode
+              ? onWake && (
+                  <button
+                    type="button"
+                    className="btn btn--accent-ghost"
+                    data-testid="worker-detail-wake"
+                    onClick={openSettings}
+                  >
+                    {t.lifecycle.action.spawn}
+                  </button>
+                )
+              : onStop && (
+                  <button
+                    type="button"
+                    className="btn btn--danger-ghost"
+                    data-testid="worker-detail-stop"
+                    disabled={stopBusy}
+                    onClick={() => void handleStop()}
+                  >
+                    {stopBusy ? t.workerDetail.stopping : t.workerDetail.stop}
+                  </button>
+                )}
+          </div>
+          {stopError && (
+            <div className="mp-field__hint mp-info2__error">
+              {t.workerDetail.stopError}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -378,7 +453,14 @@ export function WorkerDetailPanel({
       data-testid="worker-detail-settings-dialog"
     >
       <div className="machine-picker__box">
-        <div className="machine-picker__title">{t.mp.change}</div>
+        {/* The word follows what the confirm ACTUALLY does (the member panel's
+            same rule): 更改 on a live worker reaches only /model + /relocate,
+            while on a worker with no live session the confirm also reaches the
+            wake endpoint. Saying 更改 there would promise a settings-only edit
+            that the click does not perform. */}
+        <div className="machine-picker__title">
+          {wakeMode ? t.lifecycle.action.spawn : t.mp.change}
+        </div>
         {/* The worker endpoint's REAL semantics — deliberately not the member
             panel's 「下次啟動要用哪一個」, which would be false for a working
             outsource worker (its model op respawns it now). */}
@@ -436,7 +518,7 @@ export function WorkerDetailPanel({
             disabled={settingsBusy}
             onClick={() => void saveSettings()}
           >
-            {t.mp.change}
+            {wakeMode ? t.lifecycle.action.spawn : t.mp.change}
           </button>
         </div>
         {settingsError && (
@@ -451,50 +533,18 @@ export function WorkerDetailPanel({
     </div>
   ) : null;
 
-  // ── afterInfoCards slot: 狀態 (+停止/重啟) | 委託人. ─────────────────────────
-  const statusDelegatorCard = (
-    <div className="mp-card mp-info2">
+  // ── afterInfoCards slot: 委託人 only. ──────────────────────────────────────
+  // The 狀態 half of this card is GONE (owner 2026-07-31 — see the note at the
+  // top of the component), and the 停止/喚醒 button that lived in its header
+  // moved up to the identity card's action row. 委託人 stays: it is the one
+  // thing on this card that is outsource-only and appears nowhere else — the
+  // worker was minted on someone's behalf, and "whose" has no other home.
+  // Plain .mp-card, not .mp-info2: that grid existed to put 狀態 and 委託人 in
+  // two columns, and a `1fr 1fr` grid holding ONE field leaves the value
+  // floating in the left half of an empty card. .mp-field carries the padding.
+  const delegatorCard = (
+    <div className="mp-card">
       <div className="mp-field">
-        <div className="mp-field__head">
-          <div className="mp-field__label">{t.workerDetail.status}</div>
-          {/* 停止/重啟 toggle (owner-explicit hold-down): 停止 when live, 重啟
-              when already stopped. Hidden when neither handler is wired. */}
-          {(onStop || onRestart) && (
-            <button
-              type="button"
-              className="doc-btn"
-              data-testid="worker-detail-stop-toggle"
-              disabled={stopBusy || (noLiveSession ? !onRestart : !onStop)}
-              onClick={() => void handleStopToggle()}
-            >
-              {stopToggleLabel}
-            </button>
-          )}
-        </div>
-        <div
-          className={`mp-field__value${offline ? " mp-field__value--warn" : ""}`}
-          data-testid="worker-detail-status"
-        >
-          {statusText}
-        </div>
-        {/* On an offline (failing-spawn / died-session) worker, surface the
-            structured reason (never a bare 「離線」 with no why) — honest:
-            hidden when none folded. */}
-        {offline && offlineReason && (
-          <div
-            className="mp-field__hint"
-            data-testid="worker-detail-stuck-reason"
-          >
-            {offlineReason}
-          </div>
-        )}
-        {stopError && (
-          <div className="mp-field__hint mp-info2__error">
-            {t.workerDetail.stopError}
-          </div>
-        )}
-      </div>
-      <div className="mp-field mp-field--divider">
         <div className="mp-field__label">{t.workerDetail.delegator}</div>
         <div className="mp-field__value" data-testid="worker-detail-delegator">
           {delegatorText}
@@ -534,7 +584,7 @@ export function WorkerDetailPanel({
       identity={identity}
       overlays={settingsDialog}
       afterIdentityCards={taskCard}
-      afterInfoCards={statusDelegatorCard}
+      afterInfoCards={delegatorCard}
       vm={{
         testIdPrefix: "worker-detail",
         online,

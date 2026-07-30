@@ -303,7 +303,9 @@ export function OfficePage() {
         onStop={async () => {
           await api.stopWorker(workerDetail.id);
         }}
-        onRestart={async () => {
+        // 喚醒 (T-7526). The endpoint is still `restartWorker` → POST …/restart:
+        // the frozen wire keeps its name, only the owner-facing word changed.
+        onWake={async () => {
           await api.restartWorker(workerDetail.id);
         }}
         onSetModel={async (runtime, model, effort) => {

@@ -154,3 +154,32 @@ describe("MemberDetailPanel — 喚醒/更改 wording matches what is dispatched
     expect(onRelocate).not.toHaveBeenCalled();
   });
 });
+
+// owner 2026-07-31「全部變成左右並排」. The pair used to be STACKED: the action
+// group sat above 更改, an inheritance from the retired 「更換機器」 button that
+// once occupied the lower slot. Both panels now put them on one row, 更改 first.
+describe("MemberDetailPanel — 更改 ＋ 停止 sit on ONE row", () => {
+  it("puts 更改 and the stop action in the same button row, 更改 first", async () => {
+    const { getByTestId } = renderPanel({
+      status: "online",
+      lifecycle: "online",
+      machine: "mach-a",
+    });
+    const change = getByTestId("mp-change");
+    const stop = getByTestId("member-action-stop");
+    // Same row element — a COLUMN parent (the old shape) fails here.
+    expect(stop.closest(".mp-identity__buttons")).not.toBeNull();
+    expect(change.closest(".mp-identity__buttons")).toBe(
+      stop.closest(".mp-identity__buttons"),
+    );
+    // …and 更改 is written first, so the row reads 更改 ＋ 停止.
+    expect(
+      change.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // The row lives INSIDE the notice column, so a DispatchAlert still lands
+    // under the buttons rather than beside them.
+    expect(
+      change.closest(".mp-identity__buttons")!.parentElement!.className,
+    ).toContain("mp-identity__actions");
+  });
+});

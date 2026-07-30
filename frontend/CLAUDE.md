@@ -375,6 +375,34 @@ element 物件 React 會 bail out、根本不重繪,測試會對著沒修的碼�
 外包經 OfficePage 的 prop),只證一邊等於沒證另一邊那條線。
 mutant 紀錄:`docs/design/worker-panel-parity-mutants.md`。
 
+## 兩個詳情面板的動作列 = 一個形狀(T-7526, owner 2026-07-31)
+身分卡右上角**永遠是一列**:`.mp-identity__actions`(column,只裝 `DispatchAlert`)
+裡面包一個 `.mp-identity__buttons`(row) —— **更改 ＋ 停止** 並排,沒在跑的時候整列收成
+一顆 **喚醒**。正職外包同一份 CSS、同一個順序(更改在前)。
+- ⛔ **改這一列的 flex 方向時,≤720px 的 media query 要一起想**。舊規則是為了撐開一個
+  **column**;原封不動套在 row 上,`justify-content: flex-end` 會讓兩顆鍵擠在右邊界
+  ——「東西還在、但擺錯了」,而且**每一條「同一列/沒溢出」的斷言都還是綠的**。
+  護欄因此量的是**跨距與均分**,不是存在性:`visual-guards/identity-actions-row.ct.spec.tsx`。
+- **喚醒 = 先開設定再送,兩邊都是**。外包的喚醒以前是 `POST …/restart` 直接派工、什麼都不問;
+  現在開的是與 更改 **同一份** dialog,四格(執行環境/模型/投入度/機器)預設成**它原本的值**、
+  **且都可以改**。落地順序 `/model` → `/relocate`(機器有改才打) → `/restart`,**全是既有端點**。
+  ⚠️ `/restart` **不吃 machine_id**,所以釘選只能由 relocate 寫 —— 這是外包與正職(它的
+  `activate(machineId)` 自己帶機器)唯一的形狀差異,別把兩邊的順序抄來抄去。
+- 🔴 **釘住的機器只是「睡著」時,seed 一律逐字保留那一台**,不准 fallback「第一台在線的機器」。
+  否則 `machineChanged` 對一個停在睡著機器上的 agent **恆為 true**,開設定只想改模型的人會被
+  靜默搬走。兩個面板的 `openSettings` 都有這條,**改一邊要改兩邊**。
+  ⚠️ 測這一條時 fixture **必須有一台在線機器**,否則那個 mutant 無處可去、測試在壞碼上照樣綠。
+- **外包沒有「只儲存,不喚醒」,而且這是刻意不對齊**:正職的「只儲存」是 PATCH ＋
+  placement-only relocate,都不啟動;外包的 relocate **會 kill + re-dispatch**(除非
+  `desired_state` 已是 offline),所以那顆鍵對外包會是假話。要有它得新增 pin-only 端點＝動凍結 wire。
+- **外包沒有「狀態」卡**(owner:「外包為什麼需要工作狀態這個UI介面」):五個狀態字裡四個是
+  `LifecycleDot` 的複述,「已釋放」由聊天室橫幅承擔。**但離線原因(`worker-detail-stuck-reason`)
+  留著**,搬到那顆點下面 —— 它不是狀態字的複述,而且 `最近操作` 卡是 `hasLastOp` gated 的,
+  「一次都沒派出去」正好是它不渲染的情況。
+- **「重啟」這個字已退場**,兩邊一律 `t.lifecycle.action.spawn`＝「喚醒」。
+  ⛔ **REST 路徑仍是 `/restart`**(凍結 wire),`api.restartWorker` 也不改名 —— 退場的是字,不是契約。
+mutant 紀錄:`docs/design/worker-panel-parity-mutants.md` 第五批。
+
 ## verify(root §13)
 純 FE UI 改動:headless build → `preview:4173` → Playwright,CI 綠即 land、**不上 prod 驗**。公開 URL https://officraft.hardcoretech.link/。`Monitor.tsx` 的 mock 部分無 telemetry backend(純前端 mock)。
 
@@ -389,8 +417,9 @@ mutant 紀錄:`docs/design/worker-panel-parity-mutants.md`。
 - **兩種接法**:兩語言空格一致 → `label + " " + 參數`(值裡不留看不見的空白);參數卡在
   句中、中英標點/引號不同 → lead/tail **純串接**,標點寫進片段,兩語言各填各的、不強求對齊。
   只有空格差異用 `sp`(zh 無空格)吸收。多參數(`uninstallWarnBody1/2/3`)在鍵名標順序。
-- **查表不要寫成模板**:狀態→顯示字用靜態物件葉子(`workerDetail.statusOf`、
-  `mp.effortOf`,同 `tasks.status` / `tasks.priority` 的寫法),成員才會逐條可覆寫。
+- **查表不要寫成模板**:狀態→顯示字用靜態物件葉子(`mp.effortOf`、`office.presence`,
+  同 `tasks.status` / `tasks.priority` 的寫法),成員才會逐條可覆寫。
+  (曾經的 `workerDetail.statusOf` 是同族的第三個例子,已隨外包狀態卡一起退場 — T-7526。)
 - **護欄**:`i18n/compose.test.ts` 把每一句在 zh/en 的**逐字輸出**釘死——拆片段不准改到
   螢幕上的一個字元;新增一支 composer 沒進表會被 coverage 那條擋下。
 

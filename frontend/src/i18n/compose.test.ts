@@ -10,7 +10,7 @@
 import { describe, it, expect } from "vitest";
 import { zh, type Dict } from "./locales/zh";
 import { en } from "./locales/en";
-import { makeMessages, workerStatusText, effortText } from "./compose";
+import { makeMessages, effortText } from "./compose";
 import { applyWording } from "./wording";
 import { MESSAGE_KEYS } from "./messageKeys.generated";
 import type { Effort } from "../types";
@@ -184,9 +184,6 @@ describe("makeMessages", () => {
       "replies.expireConfirmBodyLead",
       "replies.expireConfirmBodyTail",
       "office.outsource.title",
-      "workerDetail.statusOf.assigned",
-      "workerDetail.statusOf.active",
-      "workerDetail.statusOf.released",
       "workerDetail.refocusSinceLabel",
       "chat.offlineTitleSuffix",
       "chat.offlineQueueHintLead",
@@ -229,26 +226,6 @@ describe("makeMessages", () => {
     ]) {
       expect(keys.has(code), `${code} must be overridable`).toBe(true);
     }
-  });
-});
-
-describe("workerStatusText", () => {
-  it.each([
-    ["zh", "assigned", "已指派"],
-    ["zh", "active", "工作中"],
-    ["zh", "released", "已釋放"],
-    ["en", "assigned", "Assigned"],
-    ["en", "active", "Active"],
-    ["en", "released", "Released"],
-  ] as [Lang, string, string][])(
-    "%s %s reads the same as the lookup template did",
-    (lang, status, want) => {
-      expect(workerStatusText(DICTS[lang], status)).toBe(want);
-    }
-  );
-
-  it("shows an unknown status verbatim rather than blank", () => {
-    expect(workerStatusText(zh, "quarantined")).toBe("quarantined");
   });
 });
 

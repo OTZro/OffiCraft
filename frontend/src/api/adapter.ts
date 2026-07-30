@@ -463,7 +463,8 @@ export interface OutsourceWorkerView {
   refocusSince?: number | null;
   /** Run-intent, a direct mirror of member.desiredState (wire `desired_state`,
    * T-f190): "online" (system wants it running) or "offline" (owner-explicit
-   * stop — presence is then "stopping"/"stopped"). Drives the 停止/重啟 toggle. "" from a
+   * stop — presence is then "stopping"/"stopped"). Drives the 停止/喚醒 arm of the
+   * worker panel's identity action row. "" from a
    * pre-column row reads as online. */
   desiredState?: string;
 }
@@ -1169,8 +1170,10 @@ export interface Api {
    * the session and hold it down (presence "stopping"/"stopped"); no auto-revival. The
    * bound task stays put. Idempotent; unknown/released → 404. (T-f190) */
   stopWorker(id: string): Promise<OutsourceWorkerView>;
-  /** Restart a stopped worker (`POST /api/outsource-workers/{id}/restart`,
-   * owner/admin-agent) — clear the stop and re-dispatch. The guard is LIVENESS,
+  /** WAKE a worker with no live session (`POST /api/outsource-workers/{id}/restart`,
+   * owner/admin-agent) — clear the stop and re-dispatch. ⚠️ The owner-facing word
+   * is 喚醒 since T-7526 (「重啟」 retired, one verb across both panels); the
+   * ENDPOINT keeps its frozen name, so the adapter method does too. The guard is LIVENESS,
    * not intent (T-7526): 409 only when the worker is BOTH not held down and
    * currently online, so a worker whose session died on its own is revivable.
    * unknown/released → 404. (T-f190) */

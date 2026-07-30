@@ -2272,7 +2272,7 @@ export const mockApi: Api = {
   },
 
   async restartWorker(id: string): Promise<OutsourceWorkerView> {
-    // 重啟 (T-f190). Inverse of stop: set desired_state back online + re-dispatch.
+    // 喚醒 (T-f190; the word since T-7526 — the path stays /restart). Inverse of stop: set desired_state back online + re-dispatch.
     // 409 only when the worker is actually ALIVE (T-7526 — see the guard below);
     // unknown/released → 404. The mock reflects the observable re-spawn as presence
     // "waking" (the server re-dispatches; boots afresh).

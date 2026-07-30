@@ -90,6 +90,13 @@ function mkWorker(over: Partial<OutsourceWorkerView>): OutsourceWorkerView {
   };
 }
 
+/** Absence probe. `findByTestId` can only prove presence; a "the cell is gone"
+ * assertion needs a query that RESOLVES TO NULL instead of throwing, or the
+ * test cannot tell "not rendered" from "rendered but unmatched". */
+function queryTestId(root: ParentNode, testId: string): HTMLElement | null {
+  return root.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
+}
+
 function renderOfficeAt(hash: string) {
   window.location.hash = hash;
   return render(
@@ -163,13 +170,18 @@ describe("WorkerDetailPanel — aligned real info (T-f190 item 1)", () => {
 });
 
 describe("WorkerDetailPanel — honest presence states (A案 P6 member vocabulary)", () => {
-  async function statusTextFor(over: Partial<OutsourceWorkerView>) {
+  // T-7526 (owner 2026-07-31): there is no 狀態 cell any more, so presence is
+  // read where it is now the ONLY copy — the identity card's LifecycleDot, whose
+  // aria-label is the shared `office.presence.*` wording.
+  async function presenceLabelFor(over: Partial<OutsourceWorkerView>) {
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockOutsourceWorker(
       mkWorker({ id: "ow-1", taskId: "t-1", ...over }),
     );
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    return (await findByTestId("worker-detail-status")).textContent ?? "";
+    return (await findByTestId("worker-detail-header-dot")).getAttribute(
+      "aria-label",
+    );
   }
 
   it("未分配機器: machine cell shows 尚未分配 (presence waking, never dispatched)", async () => {
@@ -187,12 +199,12 @@ describe("WorkerDetailPanel — honest presence states (A案 P6 member vocabular
     expect((await findByTestId("worker-detail-machine")).textContent).toBe(
       "尚未分配",
     );
-    expect((await findByTestId("worker-detail-status")).textContent).toBe(
-      "啟動中",
-    );
+    expect(
+      (await findByTestId("worker-detail-header-dot")).getAttribute("aria-label"),
+    ).toBe(zh.office.presence.waking);
   });
 
-  it("離線: presence offline renders 離線 + the structured reason", async () => {
+  it("離線: the dot reads 離線 and the structured reason survives the 狀態 cell's removal", async () => {
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockOutsourceWorker(
       mkWorker({
@@ -205,26 +217,31 @@ describe("WorkerDetailPanel — honest presence states (A案 P6 member vocabular
       }),
     );
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    expect((await findByTestId("worker-detail-status")).textContent).toBe(
-      "離線",
-    );
+    expect(
+      (await findByTestId("worker-detail-header-dot")).getAttribute("aria-label"),
+    ).toBe(zh.office.presence.offline);
+    // 🔴 The one thing the 狀態 cell carried that the dot does NOT: WHY it is
+    // grey. `lastOp` is blank here (a start that was never dispatched), so the
+    // 最近操作 receipt card does not render at all — this is the only copy.
     expect(
       (await findByTestId("worker-detail-stuck-reason")).textContent,
     ).toContain("spawn_timeout");
+    expect(queryTestId(document.body, "worker-detail-lastop-reason")).toBeNull();
   });
 
-  it("運行中: presence online renders 工作中", async () => {
-    expect(
-      await statusTextFor({ status: "active", presence: "online" }),
-    ).toBe("工作中");
-  });
-
-  it("released (no presence): falls back to the lifecycle status label", async () => {
-    expect(
-      await statusTextFor({ status: "released", presence: undefined }),
-    ).toBe(
-      "已釋放",
+  it("運行中: presence online reads the online label", async () => {
+    expect(await presenceLabelFor({ status: "active", presence: "online" })).toBe(
+      zh.office.presence["online-awake"],
     );
+  });
+
+  it("released (no presence): the dot falls back to offline, and NO 已釋放 status cell remains", async () => {
+    expect(
+      await presenceLabelFor({ status: "released", presence: undefined }),
+    ).toBe(zh.office.presence.offline);
+    // owner 2026-07-31: 已釋放 is the chat room banner's job, not the panel's.
+    expect(queryTestId(document.body, "worker-detail-status")).toBeNull();
+    expect(document.body.textContent).not.toContain("已釋放");
   });
 });
 
@@ -449,7 +466,7 @@ describe("WorkerDetailPanel — worker-specific bits carry over", () => {
   });
 });
 
-// ── T-32e1/T-f190 lifecycle ops (換手 / 停止・重啟 / 換 model) ──────────────────
+// ── T-32e1/T-f190 lifecycle ops (換手 / 停止・喚醒 / 換 model) ──────────────────
 // Rendered through OfficePage → the real mock-adapter round-trip (the mock models
 // the server's observable outcome). jsdom scope: DOM presence + state transitions
 // are asserted; pure styling (the refocus pulse tint) is NOT (jsdom does not
@@ -591,26 +608,38 @@ describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {
     await findByTestId("worker-detail-refocus-note");
   });
 
-  it("stop → the worker reads 已停止 and the toggle flips to 重啟", async () => {
+  it("stop → the dot flips to 已停止 and the row swaps 更改／停止 for 喚醒", async () => {
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockOutsourceWorker(
       mkWorker({ id: "ow-1", taskId: "t-1", presence: "online" }),
     );
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    const toggle = await findByTestId("worker-detail-stop-toggle");
-    expect(toggle.textContent).toBe("停止");
-    fireEvent.click(toggle);
+    // Live: 更改 ＋ 停止 side by side (owner 2026-07-31 「左右並排」).
+    const change = await findByTestId("worker-detail-change");
+    const stop = await findByTestId("worker-detail-stop");
+    expect(stop.textContent).toBe(zh.workerDetail.stop);
+    expect(change.parentElement).toBe(stop.parentElement);
+    expect(stop.parentElement?.className).toContain("mp-identity__buttons");
+    // 更改 is written FIRST so the row reads 更改 ＋ 停止, in that order.
+    expect(
+      change.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    fireEvent.click(stop);
     await waitFor(async () =>
       expect(
-        (await findByTestId("worker-detail-status")).textContent,
-      ).toBe("已停止"),
+        (await findByTestId("worker-detail-header-dot")).getAttribute("aria-label"),
+      ).toBe(zh.office.presence.stopped),
     );
-    expect((await findByTestId("worker-detail-stop-toggle")).textContent).toBe(
-      "重新啟動",
+    // …and the pair collapses to the ONE wake button.
+    expect((await findByTestId("worker-detail-wake")).textContent).toBe(
+      zh.lifecycle.action.spawn,
     );
+    expect(queryTestId(document.body, "worker-detail-change")).toBeNull();
+    expect(queryTestId(document.body, "worker-detail-stop")).toBeNull();
   });
 
-  it("a stopped worker shows 已停止 and restart flips it back to a live state", async () => {
+  it("喚醒 ASKS FIRST: it opens the settings dialog and reaches NO endpoint until confirmed", async () => {
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockOutsourceWorker(
       mkWorker({
@@ -620,23 +649,37 @@ describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {
         desiredState: "offline",
       }),
     );
+    const restart = vi.spyOn(api, "restartWorker");
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    expect((await findByTestId("worker-detail-status")).textContent).toBe(
-      "已停止",
-    );
-    fireEvent.click(await findByTestId("worker-detail-stop-toggle"));
-    // restart → the mock reflects the re-spawn as presence "waking".
+    // Nothing is open before the click — otherwise "the dialog is open after"
+    // would be true no matter what the button does.
+    expect(queryTestId(document.body, "worker-detail-settings-dialog")).toBeNull();
+
+    fireEvent.click(await findByTestId("worker-detail-wake"));
+    // 🔴 The dialog opened AND the wake endpoint was NOT reached: the whole
+    // point of the ruling is that the click asks before it sends.
+    await findByTestId("worker-detail-settings-dialog");
+    expect(restart).not.toHaveBeenCalled();
+    // The dialog says what the confirm will actually DO (喚醒, not 更改).
+    expect(
+      (await findByTestId("worker-detail-settings-confirm")).textContent,
+    ).toBe(zh.lifecycle.action.spawn);
+
+    fireEvent.click(await findByTestId("worker-detail-settings-confirm"));
+    await waitFor(() => expect(restart).toHaveBeenCalledWith("ow-1"));
+    // Accepting the prefilled values UNCHANGED must still wake — the no-edit
+    // early-return belongs to 更改, never to 喚醒.
     await waitFor(async () =>
       expect(
-        (await findByTestId("worker-detail-status")).textContent,
-      ).toBe("啟動中"),
+        (await findByTestId("worker-detail-header-dot")).getAttribute("aria-label"),
+      ).toBe(zh.office.presence.waking),
     );
   });
 
-  it("a worker whose session died on its own offers 重新啟動, and it revives it", async () => {
-    // presence offline + desired_state online = the session died on its own;
-    // nobody pressed 停止. The panel used to show 停止 here — a button with
-    // nothing to stop — and no way back at all.
+  it("喚醒's four cells are PRE-SEEDED with the worker's own current settings", async () => {
+    // A live online machine must exist, or "the pin survived" is vacuously true:
+    // a seed that PREFERS the first online machine has nothing to prefer.
+    __setMockMemberOnline("warden-mbp5", true);
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockOutsourceWorker(
       mkWorker({
@@ -644,23 +687,147 @@ describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {
         taskId: "t-1",
         presence: "offline",
         desiredState: "online",
+        runtime: "codex",
+        model: "gpt-5-codex",
+        effort: "low",
+        desiredMachineId: "m-asleep",
       }),
     );
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+    fireEvent.click(await findByTestId("worker-detail-wake"));
+    // owner 2026-07-31:「應該先預設跟原本一樣」— every one of the four.
+    const runtime = (await findByTestId("me-runtime-select")) as HTMLSelectElement;
+    const effort = (await findByTestId("me-effort-select")) as HTMLSelectElement;
+    const machine = (await findByTestId(
+      "worker-detail-settings-machine",
+    )) as HTMLSelectElement;
+    // codex runtime ⇒ the model field is the CodexModelSelect's free input.
+    const model = (await findByTestId(
+      "me-codex-model-select-input",
+    )) as HTMLInputElement;
+    expect(runtime.value).toBe("codex");
+    expect(model.value).toBe("gpt-5-codex");
+    expect(effort.value).toBe("low");
+    expect(machine.value).toBe("m-asleep");
+    // …and they are EDITABLE, not pinned (owner: 「不是釘死」). Changing the
+    // runtime is the strongest proof: it is the cell a "seed it and freeze it"
+    // reading would have locked hardest.
+    fireEvent.change(runtime, { target: { value: "claude" } });
+    expect(
+      ((await findByTestId("me-runtime-select")) as HTMLSelectElement).value,
+    ).toBe("claude");
+    fireEvent.change(effort, { target: { value: "high" } });
+    expect(
+      ((await findByTestId("me-effort-select")) as HTMLSelectElement).value,
+    ).toBe("high");
+    const input = (await findByTestId("me-model-input")) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "claude-opus-4-8" } });
+    expect(input.value).toBe("claude-opus-4-8");
+  });
+
+  it("喚醒 stores the launch settings and the pin BEFORE it wakes, so the new session boots as described", async () => {
+    __setMockMemberOnline("warden-mbp5", true);
+    __injectMockTask(mkTask({ id: "t-1" }));
+    __injectMockOutsourceWorker(
+      mkWorker({
+        id: "ow-1",
+        taskId: "t-1",
+        presence: "stopped",
+        desiredState: "offline",
+        model: "Opus 4.6",
+        desiredMachineId: "",
+      }),
+    );
+    const order: string[] = [];
+    const setModel = vi
+      .spyOn(api, "setWorkerModel")
+      .mockImplementation(async () => {
+        order.push("model");
+        return mkWorker({ id: "ow-1" });
+      });
+    const relocate = vi
+      .spyOn(api, "relocateWorker")
+      .mockImplementation(async () => {
+        order.push("relocate");
+        return mkWorker({ id: "ow-1" });
+      });
+    const restart = vi
+      .spyOn(api, "restartWorker")
+      .mockImplementation(async () => {
+        order.push("wake");
+        return mkWorker({ id: "ow-1" });
+      });
+
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+    fireEvent.click(await findByTestId("worker-detail-wake"));
+    const input = (await findByTestId("me-model-input")) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "claude-opus-4-8" } });
+    const select = (await findByTestId(
+      "worker-detail-settings-machine",
+    )) as HTMLSelectElement;
+    await waitFor(() =>
+      expect(Array.from(select.options).map((o) => o.value)).toContain(
+        "warden-mbp5",
+      ),
+    );
+    const target = "warden-mbp5";
+    fireEvent.change(select, { target: { value: target } });
+    fireEvent.click(await findByTestId("worker-detail-settings-confirm"));
+
+    await waitFor(() => expect(restart).toHaveBeenCalledWith("ow-1"));
+    expect(setModel).toHaveBeenCalledWith(
+      "ow-1",
+      expect.objectContaining({ model: "claude-opus-4-8" }),
+    );
+    expect(relocate).toHaveBeenCalledWith("ow-1", target);
+    // 🔴 The wake is LAST. Waking first boots the OLD model on the OLD machine
+    // and the owner's edit only lands one respawn later.
+    expect(order).toEqual(["model", "relocate", "wake"]);
+  });
+
+  it("opening 喚醒 on a worker pinned to a SLEEPING machine never silently re-pins it", async () => {
+    // The defect this rule exists for: seeding the machine cell with "the first
+    // ONLINE machine" makes machineChanged unconditionally true for a worker
+    // parked on a machine that is merely asleep — so editing the MODEL moves it.
+    // 🔴 The online machine is REQUIRED, not scenery: with an empty registry the
+    // buggy seed falls through to the pin anyway and this test passes on the
+    // defect. There must be somewhere else to be re-pinned TO.
+    __setMockMemberOnline("warden-mbp5", true);
+    __injectMockTask(mkTask({ id: "t-1" }));
+    __injectMockOutsourceWorker(
+      mkWorker({
+        id: "ow-1",
+        taskId: "t-1",
+        presence: "stopped",
+        desiredState: "offline",
+        model: "Opus 4.6",
+        desiredMachineId: "m-asleep",
+      }),
+    );
+    const relocate = vi.spyOn(api, "relocateWorker");
     const restart = vi.spyOn(api, "restartWorker");
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    const toggle = await findByTestId("worker-detail-stop-toggle");
-    expect(toggle.textContent).toBe("重新啟動");
-    expect((toggle as HTMLButtonElement).disabled).toBe(false);
-
-    // PRESSED, not merely rendered: the revive endpoint is actually reached …
-    fireEvent.click(toggle);
-    await waitFor(() => expect(restart).toHaveBeenCalledWith("ow-1"));
-    // … and the panel adopts the revived state.
-    await waitFor(async () =>
-      expect(
-        (await findByTestId("worker-detail-status")).textContent,
-      ).toBe("啟動中"),
+    fireEvent.click(await findByTestId("worker-detail-wake"));
+    // The sleeping pin is still the selected value (and offered, disabled) —
+    // not swapped for whichever machine happens to be up.
+    const select = (await findByTestId(
+      "worker-detail-settings-machine",
+    )) as HTMLSelectElement;
+    await waitFor(() =>
+      expect(Array.from(select.options).map((o) => o.value)).toContain(
+        "warden-mbp5",
+      ),
     );
+    expect(select.value).toBe("m-asleep");
+    // Edit ONLY the model, then confirm.
+    fireEvent.change((await findByTestId("me-model-input")) as HTMLInputElement, {
+      target: { value: "claude-opus-4-8" },
+    });
+    fireEvent.click(await findByTestId("worker-detail-settings-confirm"));
+    await waitFor(() => expect(restart).toHaveBeenCalledWith("ow-1"));
+    // 🔴 Positive control on the TARGET, not on "something happened": the wake
+    // went out, and relocate — the one call that would have moved him — did not.
+    expect(relocate).not.toHaveBeenCalled();
   });
 
   it("換 model: 更改 → save persists the new model via the adapter", async () => {

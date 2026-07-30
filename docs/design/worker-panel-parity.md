@@ -28,7 +28,7 @@
 | A4 | 成員編號 chip | `member.memberId` badge | 無 | 差（結構性） | **保留現狀**，理由同 A3（代號本身就是識別） |
 | A5 | presence 指示 | `PresenceBadge`（點＋角色名） | `LifecycleDot` + `presenceVisual`（同一份映射） | 視覺元件不同、映射同源 | **保留現狀**：`frontend/CLAUDE.md` 明文「presence→視覺的推導只有一份」，兩者都走 `presenceVisual`，未漂移；外包沒有角色名可顯示，套 `PresenceBadge` 會多出一個空欄 |
 | A6 | 任務 chip（`T-xxxx`）+ 任務類型 | 無 | 有，可點 → `#tasks/<id>` | 外包獨有 | **保留**。外包的「角色」就是它綁的任務類型，這是 rail 列形的同一條裁定（`frontend/CLAUDE.md` 外包面板節），移除等於拔掉外包唯一的身分線索 |
-| A7 | 動作鍵列（喚醒／取消／停止／強制停止） | `MemberActionButtons`，依 `visual` 五態切換按鈕集合 | **無此列**（停止鍵改長在 C1 狀態卡裡） | 差 | 見 C1／D 區逐項 |
+| A7 | 動作鍵列（喚醒／取消／停止／強制停止） | `MemberActionButtons`，依 `visual` 五態切換按鈕集合 | ~~無此列~~ **已補（owner 2026-07-31）**：身分卡右上角有 `worker-detail-change` ＋ `worker-detail-stop`／`worker-detail-wake` | ~~差~~ **已對齊** | ✅ 見下方「owner 2026-07-31 四項裁定」 |
 | A8 | 「更改」鍵 | `mp-change`，`online` 時出現，開啟動設定 dialog | **無** | 差 🔴 | **外包要有等價入口**：開一份同形狀的設定 dialog（執行環境／模型／投入度／機器）。這是步驟 2 的主改動 |
 | A9 | 未派送警示 | `DispatchAlert`（`mp-wake-undispatched` / `mp-relocate-undispatched`） | **無** | 差 | **待裁定**：外包的 `relocateWorker` wire 回傳 `OutsourceWorkerView`，**沒有** member 那個 `relocation_pending` 欄位，所以外包端根本沒有訊號可投影。要對齊得改 `spec/openapi.json`（wire 已凍結，§13）。本票不動 |
 
@@ -47,8 +47,8 @@
 
 | # | 項目 | 正職有什麼 | 外包有什麼 | 差在哪 | 期望行為 |
 |---|------|-----------|-----------|--------|---------|
-| C1 | 狀態欄 + 停止／重新啟動 切換鍵 | 狀態字收在 `PresenceBadge`；停止走 A7 的 `MemberActionButtons`（`stop` / `force-stop` / `cancel`） | `worker-detail-status` 欄 + `worker-detail-stop-toggle` 一顆鍵，`stopped` 時文字翻成「重新啟動」 | 位置不同、能力**兩邊都有** | **保留能力，位置待裁定**。⚠️ 派工單說「『下班』是外包自己畫的、正職沒有這顆」——**與原碼不符**：正職有 `MemberActionButtons` 的 `stop`（`t.lifecycle.action.stop`），外包這顆的字面也不是「下班」而是 `t.workerDetail.stop` =「停止」。要不要把它搬進身分卡動作列（＝正職的位置），交 owner |
-| C2 | 離線原因 | 無對應（正職走 `最近操作` 卡） | `worker-detail-stuck-reason`：presence=offline 時把 `lastOpReason` 攤在狀態欄下 | 外包多 | **保留**。理由：spawn 靜默失敗時，光一個「離線」對 owner 無資訊；正職沒有這個病是因為正職的停止是 owner 自己按的 |
+| C1 | 狀態欄 + 停止／喚醒 | 狀態字收在 `PresenceBadge`；停止走 A7 的 `MemberActionButtons` | ~~`worker-detail-status` 欄 + `worker-detail-stop-toggle`~~ **狀態欄已刪、鍵已搬到身分卡動作列** | ~~位置不同~~ **已對齊** | ✅ **owner 2026-07-31 裁定**：狀態欄整個退場（見下方裁定段），鍵搬到身分卡右上角 |
+| C2 | 離線原因 | 無對應（正職走 `最近操作` 卡） | `worker-detail-stuck-reason`：presence=offline 時攤 `lastOpReason`；**狀態欄刪掉後移到身分卡的點下面** | 外包多 | **保留**（位置改了、東西沒少）。理由：spawn 靜默失敗時光一個灰點對 owner 無資訊，而 `最近操作` 卡只在 `lastOp` 非空時才渲染——「從沒派出去」正好就是它不渲染的情況 |
 | C3 | 委託人 | 無 | `worker-detail-delegator`（真實建票人／系統排程 fallback） | 外包獨有 | **保留**。外包是系統代 owner 生出來的，「誰委託的」是外包才有的來歷資訊，正職沒有對應概念 |
 | C4 | 委託任務卡 | 無 | `worker-detail-task`，可點 → `#tasks/<id>` | 外包獨有 | **保留**。外包與任務一對一綁定（任務終態即 release），這是外包存在的理由本身 |
 
@@ -79,8 +79,9 @@
 
 ## 「待裁定」清單（交回 owner）
 
-> **狀態（最後更新：T-7526 追加範圍完成後）**：原本 8 格，現在剩 **6 格**開放。
-> 已關掉的兩格：**D1**（owner 核可並已實作完成，見上表 D1 列）、**B5**（owner 明示核可，見下方裁定段）。
+> **狀態（最後更新：owner 2026-07-31 四項裁定完成後）**：原本 8 格，現在剩 **5 格**開放。
+> 已關掉的三格：**D1**（owner 核可並已實作完成，見上表 D1 列）、**B5**（owner 明示核可，見下方裁定段）、
+> **C1**（owner 2026-07-31 裁定，見下方「owner 2026-07-31 四項裁定」）。
 > 此表與上面的逐項表、與下方連帶後果段**必須同批更新**——文件把已完成的事仍標成待裁定，
 > 下一個人就會拿它去問一個已經有答案的問題。
 
@@ -89,7 +90,6 @@
 | A9 | 外包 relocate 的 wire 回傳沒有 `relocation_pending`，無法對齊正職的「已釘選但沒派出去」警示。要對齊＝改凍結 wire |
 | B2 | 外包 DTO 無 `actual_model`，模型格無法像正職那樣標「最近一次開機回報」。要不要加欄？ |
 | B4 | 要不要補「→ 要換到 ○○」遷移提示？外包的 `machine` 是派工目標而非觀測位置，文案有過度宣稱風險 |
-| C1 | 「停止／重新啟動」要不要從狀態卡搬到身分卡動作列（＝正職的位置）？能力兩邊都有，只差擺放 |
 | D2 | `waking` 的外包無「取消喚醒」。`stop` 端點是否吃 waking 態，wire 未明說 |
 | D3 | 外包無「強制停止」端點。要不要新增 `/api/outsource-workers/{id}/force-stop`？ |
 
@@ -129,3 +129,86 @@ DoD 第 1 條明文指定的改動，且**能力本身沒有消失**（改模型
 5. 切換到另一個外包時關掉 dialog、清錯誤（正職 `[member.id]` effect 的同一個理由：
    兩個呼叫端都沒傳 `key`，dialog 會帶著上一個外包的草稿活下來）。
 6. `docs/guide/members.md`「你能做的幾個動作」逐條標明適用面板，讓每一句對外包為真。
+
+---
+
+## owner 2026-07-31 四項裁定（第二輪）
+
+owner 凌晨連續下了四條，逐條落地如下。四條共同的方向是「**外包沒有理由跟正職長得不一樣**」。
+
+### ① 「全部變成左右並排」——更改 ＋ 停止 同一列
+
+`.mp-identity__actions` 原本是 `flex-direction: column`：它當初是為了讓狀態按鈕列**疊在**已退役的
+「更換機器」之上，「更改」後來繼承了那個下方位子。現在 buttons 抽成 `.mp-identity__buttons`
+（row / wrap / justify-end），`.mp-identity__actions` 維持 column **但只裝 `DispatchAlert`**
+——關於某次點擊的判決要在那顆按鈕**下面**，不是旁邊。
+
+⚠️ **≤720px 的 media query 是一起改的，不是順帶**：舊規則
+（`align-items: stretch` + `.member-actions { width: 100% }`）是為了把一個 **column** 撐開；
+原封不動套在 row 上，`justify-content: flex-end` 會讓兩顆鍵擠在右邊界——owner 明講不要的那個。
+現在窄螢幕下 `.mp-identity__buttons > * { flex: 1 1 0 }` 讓兩顆均分整張卡的寬度。
+護欄：`visual-guards/identity-actions-row.ct.spec.tsx`（desktop ＋ narrow 兩個 viewport）。
+**兩個 viewport 各自承重**，見 mutants 檔的 R1 / R2。
+
+### ② 「外包為什麼需要工作狀態這個UI介面」——狀態卡退場
+
+`statusDelegatorCard` 的狀態格顯示五種字，其中**四種**（工作中／啟動中／已停止／離線）與身分卡那顆
+`LifecycleDot` 完全重複——同一個事實寫兩次，而且是第二個會從 `presenceVisual` 漂走的地方。
+第五種「已釋放」是 released worker，**owner 明示**聊天室那條
+「已結案離隊，以下為歷史對話（唯讀）」橫幅已經講夠，面板不必再留。
+
+⇒ 狀態格、`t.workerDetail.status` / `starting` / `offline` / `working` / `stopped` /
+`statusOf`、以及只為餵它而存在的 `compose.ts::workerStatusText` **一起刪掉**。
+剩下的卡只有「委託人」（外包獨有、別處沒有），所以不再是 `.mp-info2` 兩欄格，改成單欄 `.mp-card`。
+
+⚠️ **有一樣東西刻意沒跟著刪**：`worker-detail-stuck-reason`（離線原因）。
+它不是狀態字的複述，而是「為什麼是灰的」的唯一答案；而 `最近操作` 回執卡是
+`hasLastOp` gated 的，**「一次都沒派出去」剛好就是它不渲染的情況**。
+所以它搬到身分卡、掛在那顆點底下。
+
+### ③ 「應該要統一」——「重啟」退場，一律叫「喚醒」
+
+`t.workerDetail.restart` / `restarting` 兩片葉子刪掉；外包的喚醒字直接用正職那一份
+`t.lifecycle.action.spawn`＝「喚醒」。**兩個面板同一個葉子**，主題包換詞只換一次。
+
+🔴 **REST 路徑一個字都沒動**：仍是 `POST /api/outsource-workers/{id}/restart`
+（凍結 wire，§13），`api.restartWorker` 也維持原名。只有 panel 的 prop 從
+`onRestart` 改成 `onWake`——那是顯示層的名字，不是契約。
+
+### ④ 「喚醒時四格應該先預設跟原本一樣」＋「將外包統一跟正職一樣，不是釘死」
+
+外包的喚醒**不再是按了就送**（舊行為：`POST …/restart` 直接設 `desired_state=online` 並立刻
+respawn，什麼都不問）。現在它開的是**與更改同一份 dialog**，四格預設成 worker 現在的值，
+**四格都可以改**。
+
+**設定怎麼落地——全部走既有端點，沒有新增任何一條**：
+
+| 步驟 | 端點 | 為什麼是這個順序 |
+|------|------|------------------|
+| 1 | `POST …/model`（`runtime` / `model` / `effort`） | relocate 與 restart 都會重生 session，設定必須先落地，否則新 session 用舊模型起來 |
+| 2 | `POST …/relocate`（只在機器有改時） | **`/restart` 不吃 machine_id**，所以釘選只能由 relocate 寫。這正是外包與正職的形狀差異：正職的 `activate(machineId)` 自己帶機器 |
+| 3 | `POST …/restart` | 唯一會把它叫起來的那條 |
+
+對一個 **stopped**（`desired_state=offline`）的 worker，步驟 1、2 是**純持久化**——
+server 的 `respawnWorkerForOwnerOp` 在 `desired_state=offline` 時只記錄、不啟動任何東西
+（`spawnReasonHeldDown` 回執），所以步驟 3 是唯一一次派工。
+
+🔴 **釘住的機器只是「睡著」時不可被偷改**這條規則跟著一起搬過來了
+（`openSettings` 逐字 seed `worker.desiredMachineId`，不 fallback 第一台在線機器）。
+它防的缺陷是：**開設定只想改模型，結果人被靜默重新釘到別台**。
+「預設保留原本那台」與「使用者可以改」不衝突：預設是起點，不是鎖。
+
+**沒有「只儲存，不喚醒」那顆鍵**，而且這一條**刻意不與正職對齊**：正職的「只儲存」是
+PATCH ＋ placement-only relocate，兩者都不啟動任何東西；外包的 relocate **不是** placement-only
+（`desired_state` 不是 offline 時它會 kill + re-dispatch），所以對「session 自己死掉、
+`desired_state` 仍是 online」的 worker，一顆說「存了但沒啟動」的鍵會是假話。
+要提供它得新增一條 pin-only 的外包端點＝動凍結 wire（§13）——**未做，列為 follow-up**。
+
+### ④ 的已知代價（誠實記錄，不是待裁定）
+
+對一個 **offline**（session 自己死掉、`desired_state` 仍是 online）的 worker，**且**owner 在
+dialog 裡改了機器：步驟 2 的 relocate 本身就會 kill + re-dispatch，步驟 3 的 restart 再做一次
+——**多一次 kill＋spawn 的 churn**。終態是對的（跑在選的那台、用新設定），
+FE 也沒有可靠訊號能分辨「relocate 已經派出去了」，因為 relocate 的回應與 held-down 的回應
+形狀相同。要消掉它得讓 relocate 回報「有沒有真的派」＝改凍結 wire。
+**不改機器時（最常見）沒有這個 churn**，因為 relocate 根本不會被呼叫。

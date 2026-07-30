@@ -166,12 +166,28 @@
 .presence-badge__sub {
   color: var(--color-text-muted);
 }
-/* Right-side action cluster: the state-ized action buttons stacked over the
-   optional "Move agent" button. */
+/* Right-side action cluster. The COLUMN here is for the after-the-fact notices
+   (DispatchAlert) that must sit UNDER the button that produced them — not for
+   the buttons themselves. The buttons live in .mp-identity__buttons below.
+   (It used to be a plain column because the button set was stacked OVER the
+   retired 「更換機器」 button, and 更改 later inherited that slot underneath;
+   owner 2026-07-31 ruled the pair reads as one row: 更改 ＋ 停止 side by side.) */
 .mp-identity__actions {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
+  gap: 8px;
+}
+/* 更改 ＋ 停止/喚醒 on ONE row (owner 2026-07-31 「全部變成左右並排」), the same
+   shape on the member and the outsource panel. `wrap` is what keeps a long
+   label pair from overflowing the card on a mid-width window — the ≤720px
+   rules below then stretch the row and split it evenly. */
+.mp-identity__buttons {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
   gap: 8px;
 }
 /* ---- info card 1: model | effort ---- */
@@ -578,10 +594,22 @@
     flex-basis: 100%;
     align-items: stretch;
   }
-  .mp-identity__actions .member-actions {
-    width: 100%;
+  /* The row spans the card and its members share the width evenly, so 更改 ＋
+   * 停止 stay side by side instead of crushing into the right edge. Direct
+   * children (the 更改 button and the .member-actions group) each take a share;
+   * the group's own buttons then fill that share. */
+  .mp-identity__buttons {
+    align-self: stretch;
+    justify-content: stretch;
   }
-  .mp-identity__actions .member-actions .btn {
+  .mp-identity__buttons > * {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .mp-identity__buttons .member-actions {
+    width: auto;
+  }
+  .mp-identity__buttons .member-actions .btn {
     flex: 1 1 auto;
   }
   /* The id badge must never wrap its member id onto two lines or get clipped by

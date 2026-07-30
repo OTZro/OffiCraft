@@ -803,6 +803,22 @@ export function MemberDetailPanel({
             backend seam with no button.) MemberActionButtons' button map is
             aligned to the five real presence states. */}
         <div className="mp-identity__actions">
+          {/* 更改 ＋ 停止 on ONE row (owner 2026-07-31). 更改 is written FIRST so
+              the reading order matches the ruling's wording and the outsource
+              panel's row — the DispatchAlerts below stay in the column, because
+              a verdict about a click belongs UNDER the button that was clicked,
+              not beside it. */}
+          <div className="mp-identity__buttons">
+          {online && (
+            <button
+              type="button"
+              className="btn btn--accent-ghost"
+              data-testid="mp-change"
+              onClick={openSettings}
+            >
+              {t.mp.change}
+            </button>
+          )}
           <MemberActionButtons
             status={visual}
             // Do not open a second settings flow while the first wake is in
@@ -830,16 +846,7 @@ export function MemberDetailPanel({
               wakePendingActive ? { spawn: t.mp.wakePendingNote } : undefined
             }
           />
-          {online && (
-            <button
-              type="button"
-              className="btn btn--accent-ghost"
-              data-testid="mp-change"
-              onClick={openSettings}
-            >
-              {t.mp.change}
-            </button>
-          )}
+          </div>
           {/* T-7fa1: sits directly under the wake button the owner just pressed
               — the click and its outcome in one place. */}
           {wakeUndispatched && (

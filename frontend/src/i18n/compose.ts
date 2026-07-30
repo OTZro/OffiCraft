@@ -191,13 +191,10 @@ export function makeMessages(t: Dict, language: Lang): Messages {
   };
 }
 
-/** The two former lookup-map leaves are plain object leaves now (the shape
+/** The former lookup-map leaf is a plain object leaf now (the shape
  * tasks.status / tasks.priority already use), so each entry is individually
- * overridable. These readers keep the honest fallbacks the templates had. */
-export function workerStatusText(t: Dict, status: string): string {
-  return t.workerDetail.statusOf[status] ?? status;
-}
-
+ * overridable. This reader keeps the honest fallback the template had.
+ * (Its twin `workerStatusText` retired with the 外包 狀態 cell — T-7526.) */
 export function effortText(t: Dict, effort: Effort): string {
   return t.mp.effortOf[effort];
 }

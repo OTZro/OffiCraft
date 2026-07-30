@@ -371,13 +371,8 @@ export const zh = {
     codename: "代號",
     model: "模型",
     effort: "投入度",
-    status: "狀態",
-    // 外包生命週期狀態（assigned → active → released）；未知值原樣顯示。
-    statusOf: {
-      assigned: "已指派",
-      active: "工作中",
-      released: "已釋放",
-    } as Record<string, string>,
+    // T-7526（owner 2026-07-31）：狀態欄與它的 statusOf 對照表整個退場。四個狀態
+    // 字與身分卡那顆 LifecycleDot 完全重複，「已釋放」則由聊天室橫幅承擔。
     task: "委託任務",
     delegator: "委託人",
     // 委託人＝owner 本人建的票時顯示（真實來源，非佔位）。
@@ -393,11 +388,9 @@ export const zh = {
     estimatedCost: "估計$",
     // presence（成員同一套詞彙——A案 P6）的誠實文案（不留空白假值）。
     notAssigned: "尚未分配",
-    starting: "啟動中",
-    offline: "離線",
-    working: "工作中",
+    // T-7526：啟動中／離線／工作中／已停止 四個 presence 字隨狀態欄一起退場——
+    // 它們是 LifecycleDot 的 aria-label（office.presence.*）的第二份副本。
     // ── T-32e1/T-f190 生命週期操作（對齊成員詳情：換手／停止／換 model）──────
-    stopped: "已停止",
     // 換手（refocus）：僅線上可觸發；送出後由外包端非同步重生，故保留「已送出」註記。
     refocus: "重新聚焦",
     refocusOfflineHint: "僅線上可重新聚焦",
@@ -406,11 +399,12 @@ export const zh = {
     refocusError: "聚焦失敗",
     refocusSubmittedNote: "已送出重新聚焦 · 外包重生中…",
     refocusSinceLabel: "上次換手",
-    // 停止／重啟（owner 明示；停止後座艙誠實顯示「已停止」，不自動救活）。
+    // 停止（owner 明示；停止後不自動救活）。
+    // ⚠️ 沒有 restart 這條字了（owner 2026-07-31「應該要統一」）：喚醒的字一律用
+    // 正職那一份 `lifecycle.action.spawn`＝「喚醒」，兩個面板同一個葉子，主題包
+    // 換詞也只換一次。REST 路徑仍是 /restart（凍結 wire），只有字退場。
     stop: "停止",
     stopping: "停止中…",
-    restart: "重新啟動",
-    restarting: "啟動中…",
     stopError: "操作失敗，請稍後重試",
     // 換 model（沿用成員 model/effort 編輯器）。
     modelSave: "儲存",
