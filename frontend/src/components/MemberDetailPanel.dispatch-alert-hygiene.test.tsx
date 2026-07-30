@@ -346,6 +346,33 @@ describe("relocate notice self-heals", () => {
     );
   });
 
+  it("stays quiet until the refetch moves the pin (the momentary render guard)", async () => {
+    // 🔴 The render-time `!relocateLanded` short-circuit is the OTHER half of
+    // the pair, and it is not redundant: between the submit and the parent's
+    // refetch the panel still holds the pre-move props, where observed === pin.
+    // `relocateLanded` is therefore ALREADY true and does not change, so the
+    // latch effect never re-runs — without this guard the verdict would appear
+    // over a member the panel is simultaneously drawing as sitting at home, and
+    // nothing would ever take it down again.
+    const onRelocate = vi.fn(
+      async (): Promise<MemberRelocateResult> => ({ relocationPending: true }),
+    );
+    const { getByTestId, queryByTestId, rerender } = render(
+      panel(pinnedHome(), onRelocate),
+    );
+
+    await relocateInto(getByTestId);
+    await waitFor(() => expect(onRelocate).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(queryByTestId("mp-relocate-undispatched")).toBeNull();
+
+    // …and it is not swallowed either: the refetch makes it visible.
+    rerender(panel(mkAwake({ desiredMachineId: "mach-b", machine: "mach-a" }), onRelocate));
+    await waitFor(() =>
+      expect(queryByTestId("mp-relocate-undispatched")).not.toBeNull(),
+    );
+  });
+
   it("does NOT clear on a placement nobody can observe (review r2 SHOULD-2)", async () => {
     // 🔴 `member.machine` is not a pure observation. The server's observedHost
     // falls back to `desired_machine_id` when the hub has no session and
