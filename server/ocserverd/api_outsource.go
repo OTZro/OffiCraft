@@ -455,7 +455,15 @@ func (s *apiServer) HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost
 		writeResolveError(w, errNotFound, "outsource worker", id)
 		return
 	}
-	if worker.DesiredState != DesiredStateOffline {
+	// 🔴 The guard asks "is it ALIVE?", not "did anyone press STOP?" (T-7526).
+	// It used to be `DesiredState != offline` alone — pure INTENT — so a worker
+	// whose session died on its own still carried desired_state=online and the
+	// ONE endpoint that could bring it back answered 409. Nothing else could
+	// either (the panel's restart affordance keys off presence, which reads
+	// offline there), so the owner had no way to revive it at all.
+	// Both halves are load-bearing: a genuinely live worker is still refused, so
+	// restart can never become a hidden double-spawn.
+	if worker.DesiredState != DesiredStateOffline && s.hub.IsOnline(id) {
 		s.outsourceMu.Unlock()
 		writeError(w, http.StatusConflict, "worker is not stopped — nothing to restart")
 		return

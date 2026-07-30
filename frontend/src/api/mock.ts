@@ -2282,7 +2282,11 @@ export const mockApi: Api = {
         404, "not_found", `outsource worker ${id} not found`
       );
     }
-    if (w.desiredState !== "offline") {
+    // Mock ↔ http parity (T-7526): the guard asks whether the worker is ALIVE,
+    // not whether anyone pressed 停止. A worker whose session died on its own
+    // keeps desired_state=online and must still be revivable; a genuinely live
+    // one is still refused.
+    if (w.desiredState !== "offline" && w.presence === "online") {
       throw new ApiError(
         `http 409 for POST /api/outsource-workers/${id}/restart`,
         409, "conflict", "worker is not stopped — nothing to restart"

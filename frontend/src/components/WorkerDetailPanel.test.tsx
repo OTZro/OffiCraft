@@ -633,6 +633,36 @@ describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {
     );
   });
 
+  it("a worker whose session died on its own offers 重新啟動, and it revives it", async () => {
+    // presence offline + desired_state online = the session died on its own;
+    // nobody pressed 停止. The panel used to show 停止 here — a button with
+    // nothing to stop — and no way back at all.
+    __injectMockTask(mkTask({ id: "t-1" }));
+    __injectMockOutsourceWorker(
+      mkWorker({
+        id: "ow-1",
+        taskId: "t-1",
+        presence: "offline",
+        desiredState: "online",
+      }),
+    );
+    const restart = vi.spyOn(api, "restartWorker");
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+    const toggle = await findByTestId("worker-detail-stop-toggle");
+    expect(toggle.textContent).toBe("重新啟動");
+    expect((toggle as HTMLButtonElement).disabled).toBe(false);
+
+    // PRESSED, not merely rendered: the revive endpoint is actually reached …
+    fireEvent.click(toggle);
+    await waitFor(() => expect(restart).toHaveBeenCalledWith("ow-1"));
+    // … and the panel adopts the revived state.
+    await waitFor(async () =>
+      expect(
+        (await findByTestId("worker-detail-status")).textContent,
+      ).toBe("啟動中"),
+    );
+  });
+
   it("換 model: 更改 → save persists the new model via the adapter", async () => {
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockOutsourceWorker(

@@ -9958,7 +9958,7 @@
     },
     "/api/outsource-workers/{id}/restart": {
       "post": {
-        "description": "Restart (重啟) a stopped outsource worker (T-f190 lifecycle), the inverse of stop: set desired_state back to 'online' and re-dispatch (重啟 = 再 dispatch, a fresh worker_start onto the pinned/preferred machine). 409 when the worker is not stopped (desired_state != offline) (nothing to restart); 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. Exposed as an MCP tool since T-6020.",
+        "description": "Restart (重啟) an outsource worker (T-f190 lifecycle), the inverse of stop: set desired_state back to 'online' and re-dispatch (重啟 = 再 dispatch, a fresh worker_start onto the pinned/preferred machine). The guard asks whether the worker is ALIVE, not whether anyone pressed stop (T-7526): 409 only when it is BOTH not held down (desired_state != offline) AND currently online. A worker whose session died on its own keeps desired_state=online and is restartable — it used to be a 409, which left the owner with no way to revive it at all. 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. Exposed as an MCP tool since T-6020.",
         "operationId": "handle_restart_outsource_worker_api_outsource_workers__id__restart_post",
         "parameters": [
           {
@@ -10013,7 +10013,7 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Restart (重啟) a stopped outsource worker (owner/admin agent; 409 if not stopped)."
+        "summary": "Restart (重啟) an outsource worker that has no live session (owner/admin agent; 409 only when it is actually alive)."
       }
     },
     "/api/outsource-workers/{id}/stop": {

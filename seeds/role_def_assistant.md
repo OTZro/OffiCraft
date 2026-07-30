@@ -30,7 +30,7 @@
   看到這兩個 409 不是壞掉、不要重試、也不要找繞路——沒有任何參數能讓這個動詞拆到別台。
 - **回覆卡**：`answer_reply_card` 代 owner 回答、`reanswer_reply_card` 改答案、`expire_reply_card` 把懸太久的卡標為過期。
 - **任務**：`terminate_task` 終止一張任務、`post_task_message` 傳話給負責人、`set_task_priority` 可設任何值（**含凍結與解凍**，見下）。
-- **外包 worker**：`get_outsource_worker_boot_context` 看它開機讀到什麼、`refocus_outsource_worker` 換手、`stop_outsource_worker` 停、`restart_outsource_worker` 重啟、`set_outsource_worker_model` 換 model／effort。
+- **外包 worker**：`get_outsource_worker_boot_context` 看它開機讀到什麼、`refocus_outsource_worker` 換手、`stop_outsource_worker` 停、`restart_outsource_worker` 重啟（T-7526 起判準是「還活著嗎」不是「有沒有人按過停止」——session 自己死掉的 worker `desired_state` 還是 online，照樣叫得起來；只有真的在線上才 409）、`set_outsource_worker_model` 換 model／effort。
 - **任務手冊治理面**：`create_task_manual`／`update_task_manual` 可以帶 `assignee`（誰執行這個型別）、`delete_task_manual` 可以刪型別。
 - **除錯**：`list_webhook_requests` 看某個 webhook 端點最近 5 筆原始請求。
 

@@ -1170,7 +1170,9 @@ export interface Api {
    * bound task stays put. Idempotent; unknown/released → 404. (T-f190) */
   stopWorker(id: string): Promise<OutsourceWorkerView>;
   /** Restart a stopped worker (`POST /api/outsource-workers/{id}/restart`,
-   * owner/admin-agent) — clear the stop and re-dispatch. 409 if not stopped;
+   * owner/admin-agent) — clear the stop and re-dispatch. The guard is LIVENESS,
+   * not intent (T-7526): 409 only when the worker is BOTH not held down and
+   * currently online, so a worker whose session died on its own is revivable.
    * unknown/released → 404. (T-f190) */
   restartWorker(id: string): Promise<OutsourceWorkerView>;
   /** Change a worker's model/effort (`POST /api/outsource-workers/{id}/model`,

@@ -515,6 +515,44 @@ func TestRestartWorker_ClearsAndRedispatches(t *testing.T) {
 	}
 }
 
+// TestRestartWorker_RevivesAWorkerWhoseSessionDiedOnItsOwn (T-7526): the guard
+// used to read `desired_state != offline → 409`, i.e. it asked "did anyone press
+// STOP?" (INTENT) when the question is "is it actually alive?" (LIVENESS). A
+// worker whose session died on its own still carries desired_state=online, so
+// the one endpoint that could bring it back answered 409 — and the panel, whose
+// restart affordance keys off presence, offered 停止 instead of 重新啟動. The
+// owner had no way to revive it at all.
+func TestRestartWorker_RevivesAWorkerWhoseSessionDiedOnItsOwn(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	// online=false: claimed then died — desired_state stays online, no live SSE.
+	workerID := newActiveWorker(t, api, false)
+	if w, _ := api.dal.GetOutsourceWorker(workerID); w.DesiredState != DesiredStateOnline {
+		t.Fatalf("fixture must keep desired_state online (nobody pressed stop), got %q",
+			w.DesiredState)
+	}
+	if api.hub.IsOnline(workerID) {
+		t.Fatal("fixture must have NO live session")
+	}
+	api.hub.DrainWardenCommands(ServerSelfHost)
+
+	rec := postWorker(t, api, workerID, "restart", nil,
+		api.HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("restarting a dead-session worker: want 200, got %d %s",
+			rec.Code, rec.Body.String())
+	}
+	sawStart := false
+	for _, f := range api.hub.DrainWardenCommands(ServerSelfHost) {
+		if rpc, _ := decodeWardenFrame(t, f.Frame); rpc == reconcileCmdStart {
+			sawStart = true
+		}
+	}
+	if !sawStart {
+		t.Fatal("reviving a dead-session worker must re-dispatch a worker_start")
+	}
+}
+
 // TestStoppedWorker_TickNeverRevives (the team-lead warning): once stopped, the
 // scheduler tick must NOT revive the worker — neither the assigned recover+respawn
 // nor the active auto-handover branch. Mutant: dropping the `desired_state ==

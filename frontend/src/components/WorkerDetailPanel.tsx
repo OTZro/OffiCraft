@@ -90,6 +90,13 @@ export function WorkerDetailPanel({
   // the toggle and the status cell treat them as one 已停止 mode.
   const stopped =
     worker.presence === "stopped" || worker.presence === "stopping";
+  // 🔴 The toggle keys off LIVENESS, not off who asked for it (T-7526). A worker
+  // whose session died on its own reads `offline` — nobody pressed 停止, so the
+  // old `stopped`-only test showed 停止 on a worker with nothing to stop, and the
+  // ONE affordance that brings it back was nowhere on screen. Both no-live-session
+  // states take the restart arm; the server's restart guard was widened the same
+  // way (INTENT → LIVENESS), so the two sides now agree.
+  const noLiveSession = stopped || offline;
   const machineText = worker.machine || t.workerDetail.notAssigned;
   // The 狀態 CELL's wording is deliberately NOT the dot's label: it speaks the
   // 外包 detail vocabulary (工作中/啟動中) and, when there is no presence at all,
@@ -137,7 +144,7 @@ export function WorkerDetailPanel({
   const [stopBusy, setStopBusy] = useState(false);
   const [stopError, setStopError] = useState(false);
   async function handleStopToggle() {
-    const fn = stopped ? onRestart : onStop;
+    const fn = noLiveSession ? onRestart : onStop;
     if (!fn || stopBusy) return;
     setStopBusy(true);
     setStopError(false);
@@ -150,10 +157,10 @@ export function WorkerDetailPanel({
     }
   }
   const stopToggleLabel = stopBusy
-    ? stopped
+    ? noLiveSession
       ? t.workerDetail.restarting
       : t.workerDetail.stopping
-    : stopped
+    : noLiveSession
       ? t.workerDetail.restart
       : t.workerDetail.stop;
 
@@ -450,7 +457,7 @@ export function WorkerDetailPanel({
               type="button"
               className="doc-btn"
               data-testid="worker-detail-stop-toggle"
-              disabled={stopBusy || (stopped ? !onRestart : !onStop)}
+              disabled={stopBusy || (noLiveSession ? !onRestart : !onStop)}
               onClick={() => void handleStopToggle()}
             >
               {stopToggleLabel}

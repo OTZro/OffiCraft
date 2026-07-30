@@ -586,15 +586,38 @@ func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w htt
 		writeResolveError(w, err, "member", memberId)
 		return
 	}
+	// 🔴 CANCELLING A WAKE IS NOT A GRACEFUL STOP (T-7526). Read BEFORE the
+	// mutation below — stamping stopping_since is itself what ends the waking
+	// projection.
+	//
+	// decideDown's first branch is `if !obs.Online { converged offline }`, and a
+	// waking member is BY DEFINITION not online (deriveLiveness projects waking
+	// only when !Online). So for the whole waking window the cadence dispatched
+	// NOTHING: the process the earlier START already put on the machine booted
+	// anyway, connected, went green, and only then — as a now-online member with
+	// desired_state=offline — did decideDown arm its 120s grace. The owner's
+	// 取消 read as "the button did nothing", which is exactly what it did.
+	//
+	// There is also nothing to wind down: a member that has not connected has
+	// taken no work, so the grace window it cannot enter would buy nothing.
+	cancellingWake := PresenceState(*m, nowSecs(), s.hub.IsOnline(m.ID)) ==
+		MemberPresenceWaking
 	m.DesiredState = DesiredStateOffline
 	m.StoppingSince = nowSecs()
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return
 	}
+	if cancellingWake {
+		// The same immediate robust STOP force-stop uses. NOT widened to the
+		// online case: a live member's stop keeps its graceful grace.
+		s.dispatchRobustStopNow(m.ID)
+	}
 	// Event-driven reconcile: arm the 120s grace clock immediately (a graceful
 	// stop dispatches NOTHING inside the grace; the eventual robust stop stays
-	// the cadence's job).
+	// the cadence's job). Still armed after a cancel — the raw dispatch above
+	// does not touch the reconcile store, and the cadence STOP arm is its
+	// idempotent backstop.
 	s.reconcileMemberNow(m.ID)
 	s.writeMemberDTO(w, *m)
 }
@@ -719,7 +742,15 @@ func (s *apiServer) HandleReportWakingApiSelfWakingPost(w http.ResponseWriter, r
 	m.WakingSince = nowSecs()
 	m.RefocusSince = 0.0
 	m.StoppedSince = 0.0
-	m.StoppingSince = 0.0
+	// 🔴 …but NOT the stop trace of a member the owner has already cancelled
+	// (T-7526). Clearing a stale anchor is right for an ORDINARY boot; doing it
+	// unconditionally erased the only mark a mid-wake 取消 left behind, so the
+	// agent that was already booting when the cancel landed came up painting a
+	// fresh green over an intent that is still offline. The intent itself
+	// (desired_state) is what says whether this boot is wanted.
+	if m.DesiredState == DesiredStateOnline {
+		m.StoppingSince = 0.0
+	}
 	if body.Model != nil {
 		m.ActualModel = *body.Model
 	}
