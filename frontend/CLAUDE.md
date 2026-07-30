@@ -284,8 +284,13 @@ owner 2026-07-31:「成員面板以及監控台,一定要顯示回報回來的�
   🔴 **`AgentDetailPanel` 的 `configuredModel`/`configuredEffort` 是 required、且刻意不對
   readout 做 fallback**:readout 是遙測(或 `""`),讓它當退路 = 一次儲存就把自報值寫回
   owner 的設定,未回報時甚至寫進空值而被 closed vocabulary 422。
-- **`MemberDetailPanel` 資訊卡的 模型/投入度 = 自報值**(`actualModel`/`actualEffort`,
-  awake 才顯示);設定值只出現在底下的 設定 對話框裡。
+- **兩個詳情面板資訊卡的 模型/投入度 都是自報值,且都唯讀**:成員走
+  `actualModel`/`actualEffort`(awake 才顯示,T-927a),外包走 `session?.model`/`.effort`
+  (`findSessionFor(worker.id, sessions)`,與監控台同一條 join,T-7526 之後 OfficePage 也
+  在開外包面板時才拉 monitoring)。設定值只出現在各自的 設定／更改 對話框,那裡 seed 自
+  member/worker DTO、存回也是它。⚠️ 兩個面板現在都**不傳** `onSaveModelEffort`,所以
+  `AgentDetailPanel` 裡那顆 in-place 編輯器沒有 production caller——要讓它復活前先想清楚
+  T-7526 拆掉它的理由(同一個畫面出現兩個改同一設定的地方)。
 - **缺值守衛(T-e12c)**:「還沒回報任何東西」與「正在回報別的東西、卻獨缺 effort」以前
   長得一模一樣(都是空白),故障因此偽裝成設計躺了很久。`isReportingTelemetry(session)`
   (online ∧ 至少有一個純遙測值:context% / cost / account)為真而 effort 為空時,

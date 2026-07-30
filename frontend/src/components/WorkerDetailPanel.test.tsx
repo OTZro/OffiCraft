@@ -20,7 +20,6 @@ import { api } from "../api";
 import { zh } from "../i18n/locales/zh";
 import { ApiError } from "../api/errors";
 import { OfficePage } from "./OfficePage";
-import { api } from "../api";
 import {
   __resetMock,
   __injectMockTask,
@@ -30,6 +29,7 @@ import {
   __setMockMemberOnline,
 } from "../api/mock";
 import type { TaskView, OutsourceWorkerView } from "../api/adapter";
+import type { WireMonSession } from "../api/wire";
 
 let seq = 0;
 
@@ -99,6 +99,31 @@ function queryTestId(root: ParentNode, testId: string): HTMLElement | null {
   return root.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
 }
 
+/** Land a telemetry row for `id` reporting `model` (+ optional effort).
+ *
+ * T-e12c: the 模型/投入度 cells read the SELF-REPORTED pair, so a fixture that
+ * only configures a worker leaves those cells at the honest dash. Tests whose
+ * subject is something else (the runtime cells, the absence of an in-place
+ * editor, the dialog lifecycle) say "and it is running <model>" with this,
+ * rather than reaching back to the configured value the cells no longer show. */
+function reportsModel(id: string, model: string, effort = "high") {
+  __injectMockMonitoringSession({
+    id,
+    name: id,
+    role: "",
+    runtime: "claude",
+    model,
+    effort,
+    machine: "",
+    account: "",
+    presence: "online",
+    context_pct: null,
+    cost: null,
+    banked_cost: null,
+    tokens: null,
+  });
+}
+
 function renderOfficeAt(hash: string) {
   window.location.hash = hash;
   return render(
@@ -137,6 +162,7 @@ describe("WorkerDetailPanel — aligned real info (T-f190 item 1)", () => {
         cost: 3.5,
       }),
     );
+    reportsModel("ow-1", "Opus 4.6");
 
     const { findByTestId, container } = renderOfficeAt("#office/worker/ow-1");
     await findByTestId("worker-detail-task");
@@ -347,6 +373,7 @@ describe("WorkerDetailPanel — 設定改走喚醒區 (T-7526 parity)", () => {
     __injectMockOutsourceWorker(
       mkWorker({ id: "ow-1", taskId: "t-1", model: "Opus 4.6" }),
     );
+    reportsModel("ow-1", "Opus 4.6");
     const { findByTestId, queryByTestId } = renderOfficeAt("#office/worker/ow-1");
     // Positive control FIRST: both cells really are on screen holding real
     // values. Without it "no edit button" would also pass on a panel that
@@ -463,6 +490,8 @@ describe("WorkerDetailPanel — 設定改走喚醒區 (T-7526 parity)", () => {
     __injectMockOutsourceWorker(
       mkWorker({ id: "ow-2", taskId: "t-2", model: "Sonnet 4.6" }),
     );
+    reportsModel("ow-1", "Opus 4.6");
+    reportsModel("ow-2", "Sonnet 4.6");
     const { findByTestId, queryByTestId, rerender } =
       renderOfficeAt("#office/worker/ow-1");
     fireEvent.click(await findByTestId("worker-detail-change"));
@@ -896,11 +925,17 @@ describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {
         expect.objectContaining({ model: "claude-opus-4-8" }),
       ),
     );
-    // …and the cell reflects it after the outsource_worker refetch.
+    // …and the panel adopts it after the outsource_worker refetch. Read back
+    // from the DIALOG, not the 模型 cell: since T-e12c that cell states the
+    // SELF-REPORTED model, which does not change just because a new launch
+    // intent was stored (the running session is still on the old one until it
+    // respawns). The dialog is where the configured value lives, so that is
+    // where "the save landed and the UI adopted it" is honestly observable.
+    fireEvent.click(await findByTestId("worker-detail-change"));
     await waitFor(async () =>
       expect(
-        (await findByTestId("worker-detail-model-effort-cell")).textContent,
-      ).toContain("claude-opus-4-8"),
+        ((await findByTestId("me-model-input")) as HTMLInputElement).value,
+      ).toBe("claude-opus-4-8"),
     );
   });
 });
@@ -1105,13 +1140,15 @@ describe("WorkerDetailPanel — initial-prompt preview (T-ba6b)", () => {
   });
 });
 
-// ── T-e12c: the 模型/投入度 cell states what is RUNNING; the editor owns the
-// SETTING. Owner ruling 2026-07-31:「成員面板以及監控台，一定要顯示回報回來的
-// 狀態，不能顯示設定值」. The two halves are pinned together on purpose — the
-// readout must never fall back to the configured pair, and the editor must
-// never seed from (and therefore save back) a telemetry value or a blank.
+// ── T-e12c: the 模型/投入度 cell states what is RUNNING; the 更改／喚醒 dialog
+// owns the SETTING. Owner ruling 2026-07-31:「成員面板以及監控台，一定要顯示
+// 回報回來的狀態，不能顯示設定值」. The two halves are pinned together on
+// purpose — the readout must never fall back to the configured pair, and the
+// dialog must never seed from (and therefore save back) a telemetry value or a
+// blank. T-7526 moved the editor out of the cell and into the dialog; these
+// pin the RULE, so they follow it there rather than the markup it used to have.
 describe("WorkerDetailPanel — reported state vs configured launch intent (T-e12c)", () => {
-  it("reads out the REPORTED model/effort while the editor holds the configured pair", async () => {
+  function liveWorkerReporting(over: Partial<WireMonSession> = {}) {
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockOutsourceWorker(
       mkWorker({
@@ -1136,7 +1173,12 @@ describe("WorkerDetailPanel — reported state vs configured launch intent (T-e1
       cost: null,
       banked_cost: null,
       tokens: null,
+      ...over,
     });
+  }
+
+  it("reads out the REPORTED model/effort while the dialog holds the configured pair", async () => {
+    liveWorkerReporting();
 
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
     expect((await findByTestId("worker-detail-model-value")).textContent).toBe(
@@ -1145,15 +1187,10 @@ describe("WorkerDetailPanel — reported state vs configured launch intent (T-e1
     expect(
       (await findByTestId("worker-detail-effort-value")).textContent,
     ).toContain("low");
-    // The configured pair is present but SEPARATE, labelled as the setting.
-    const configured = await findByTestId(
-      "worker-detail-model-effort-configured",
-    );
-    expect(configured.textContent).toContain("Opus 4.6");
-    expect(configured.textContent).toContain("high");
 
-    // The editor seeds from the SETTING, not from the reported state.
-    fireEvent.click(await findByTestId("worker-detail-model-effort-edit"));
+    // The setting lives in the 更改 dialog and is seeded from the WORKER, not
+    // from what the session happens to be running.
+    fireEvent.click(await findByTestId("worker-detail-change"));
     expect(
       ((await findByTestId("me-model-input")) as HTMLInputElement).value,
     ).toBe("Opus 4.6");
@@ -1181,44 +1218,32 @@ describe("WorkerDetailPanel — reported state vs configured launch intent (T-e1
     expect((await findByTestId("worker-detail-effort-value")).textContent).toBe(
       "—",
     );
-    // …and the configured pair is still readable in its own labelled line.
+    // …and the configured pair is intact, just not on the readout: the dialog
+    // still opens on it. A blank must never reach the save body either.
+    fireEvent.click(await findByTestId("worker-detail-change"));
     expect(
-      (await findByTestId("worker-detail-model-effort-configured")).textContent,
-    ).toContain("Opus 4.6");
+      ((await findByTestId("me-model-input")) as HTMLInputElement).value,
+    ).toBe("Opus 4.6");
+    expect(
+      ((await findByTestId("me-effort-select")) as HTMLSelectElement).value,
+    ).toBe("high");
   });
 
-  it("saves the CONFIGURED value, never the reported one, when the editor is confirmed unchanged", async () => {
-    __injectMockTask(mkTask({ id: "t-1" }));
-    __injectMockOutsourceWorker(
-      mkWorker({
-        id: "ow-1",
-        taskId: "t-1",
-        presence: "online",
-        model: "Opus 4.6",
-        effort: "high",
-      }),
-    );
-    __injectMockMonitoringSession({
-      id: "ow-1",
-      name: "O-1",
-      role: "",
-      runtime: "claude",
-      model: "claude-sonnet-4.9",
-      effort: "low",
-      machine: "",
-      account: "",
-      presence: "online",
-      context_pct: null,
-      cost: null,
-      banked_cost: null,
-      tokens: null,
-    });
+  it("writes nothing when the dialog is confirmed unchanged, so no telemetry value can reach the save", async () => {
+    liveWorkerReporting();
+    const setModel = vi.spyOn(api, "setWorkerModel");
 
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    fireEvent.click(await findByTestId("worker-detail-model-effort-edit"));
-    fireEvent.click(await findByTestId("worker-detail-model-effort-save"));
-    await findByTestId("worker-detail-model-effort-edit");
+    fireEvent.click(await findByTestId("worker-detail-change"));
+    // Seeded from the worker, so a no-edit confirm is a true no-op. Were the
+    // dialog seeded from the REPORTED pair instead, launchChanged would be true
+    // and this click would silently overwrite the owner's intent with telemetry.
+    fireEvent.click(await findByTestId("worker-detail-settings-confirm"));
 
+    await waitFor(async () =>
+      expect(await findByTestId("worker-detail-change")).toBeTruthy(),
+    );
+    expect(setModel).not.toHaveBeenCalled();
     const workers = await api.listOutsourceWorkers();
     const saved = workers.find((w) => w.id === "ow-1")!;
     expect(saved.model).toBe("Opus 4.6");
