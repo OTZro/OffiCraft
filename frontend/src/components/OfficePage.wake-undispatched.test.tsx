@@ -31,6 +31,7 @@ import {
   __resetMock,
   __setMockActivationPending,
   __setMockMemberOnline,
+  __setMockRelocationPending,
 } from "../api/mock";
 
 /** The seeded warden member IS the machine registry row (mock listMachines
@@ -51,6 +52,47 @@ async function confirmSettings() {
   const confirm = document.querySelector<HTMLButtonElement>(".machine-picker__actions .btn--accent")!;
   await waitFor(() => expect(confirm.disabled).toBe(false));
   fireEvent.click(confirm);
+}
+
+/** The OTHER online machine in the mock registry (the seeded server-self warden)
+ * — the member is pinned to SEED_WARDEN, so picking this one is what makes the
+ * unified submit actually dispatch a relocate. */
+const SELF_MACHINE = "m-server-self";
+const SELF_MACHINE_NAME = "伺服器這一台";
+
+/** Drive a live member's 更改 → pick the other machine → confirm, and wait for
+ * the relocate verdict to settle. `pending` stages whether the mock reports the
+ * relocate as undispatched. */
+async function relocateThroughChange(pending: boolean) {
+  __setMockMemberOnline(SEED_WARDEN, true);
+  __setMockMemberOnline(SELF_MACHINE, true);
+  __setMockMemberOnline("mira", true);
+  __setMockRelocationPending(pending);
+  window.location.hash = "#office/member/mira";
+  const utils = renderOffice();
+  await utils.findByText("Mira");
+
+  const change = (await utils.findByTestId("mp-change")) as HTMLButtonElement;
+  await waitFor(() => expect(change.disabled).toBe(false));
+  fireEvent.click(change);
+
+  const select = document.querySelector<HTMLSelectElement>(
+    "select.machine-picker__select",
+  )!;
+  await waitFor(() =>
+    expect(
+      Array.from(select.options).some((o) => o.value === SELF_MACHINE),
+    ).toBe(true),
+  );
+  fireEvent.change(select, { target: { value: SELF_MACHINE } });
+  await confirmSettings();
+
+  if (pending) {
+    await waitFor(() =>
+      expect(utils.queryByTestId("mp-relocate-undispatched")).not.toBeNull(),
+    );
+  }
+  return utils;
 }
 
 beforeEach(() => {
@@ -125,6 +167,32 @@ describe("OfficePage · an undispatched wake reaches the UI (T-7fa1)", () => {
     await findByText("Mira");
     expect(await findByTestId("mp-change")).toBeTruthy();
     expect(queryByTestId("mp-relocate")).toBeNull();
+  });
+
+  it("member detail: 更改 surfaces the relocate notice too (mutant MB)", async () => {
+    // 🔴 THIS ONE WAS FOUND BY THE REVIEWER, NOT BY ME. Four call sites of the
+    // identical shape drop-a-return; round 1 guarded three and left this one
+    // bare — the reviewer's mutant MB deleted its `return result` and all 900
+    // tests stayed green. Exactly the class of silent drop the commit message
+    // names as the original bug, reproduced inside the fix for it.
+    //
+    // The entry moved (改機器 → the unified 更改 dialog), so this drives the
+    // NEW flow — but the chain under test is the same one, and it has to stay
+    // covered at the CALL SITE: OfficePage wires `onRelocate` itself, and
+    // asserting only that the retired button is gone would have retired the
+    // guarantee with it.
+    await relocateThroughChange(true);
+  });
+
+  it("member detail: a relocate that LANDED shows no notice (negative control)", async () => {
+    const { queryByTestId, findByTestId } = await relocateThroughChange(false);
+    expect(queryByTestId("mp-relocate-undispatched")).toBeNull();
+    // Positive control: the relocate really went out and re-pinned the member —
+    // without this, a submit that silently did nothing would satisfy the
+    // assertion above just as well.
+    expect((await findByTestId("mp-machine-transition")).textContent).toContain(
+      SELF_MACHINE_NAME,
+    );
   });
 
   it("chat room: the in-place ⚡喚醒 surfaces the notice too (separate handler)", async () => {

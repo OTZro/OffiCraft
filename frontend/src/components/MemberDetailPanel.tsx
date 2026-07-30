@@ -150,6 +150,7 @@ export function MemberDetailPanel({
   useEffect(() => {
     setWakePending(false);
     setWakeUndispatched(false);
+    setRelocateUndispatched(false);
   }, [member.id]);
   // 🔴 …and that reset is a RESET, not a CANCEL (review r2 SHOULD-1). An
   // activate still in flight when the owner switches members resolves AFTER the
@@ -193,6 +194,33 @@ export function MemberDetailPanel({
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsError, setSettingsError] = useState("");
   const [relocateUndispatched, setRelocateUndispatched] = useState(false);
+
+  // 🔴 The relocate verdict's SELF-HEAL, carried over from useRelocateMachine
+  // (which the member panel no longer drives). The notice promises "the server
+  // keeps retrying in the background", so it needs a path back: without this it
+  // was cleared only by ANOTHER relocate, and a move the cadence did land left
+  // the panel insisting forever that it had not.
+  //
+  // `member.machine` is NOT a pure observation — the server's observedHost falls
+  // back to desired_machine_id when nobody can see the member, which makes
+  // `machine === desiredMachineId` true BY CONSTRUCTION for anyone not awake.
+  // Reading that as "it arrived" would retire the notice on a move that never
+  // happened, so the signal is gated on `awake` exactly like the 機器 cell, and
+  // the ""/null guards keep an UNPINNED member from comparing null === null and
+  // swallowing a live verdict.
+  const observedMachineId = awake && member.machine ? member.machine : null;
+  const relocateLanded =
+    observedMachineId != null &&
+    member.desiredMachineId !== "" &&
+    observedMachineId === member.desiredMachineId;
+  // A LATCH, not a momentary guard: once healed the verdict is dead for good, so
+  // a member that later drifts off the pin cannot resurrect a verdict about an
+  // attempt that is long over. (The render guard below is the momentary half —
+  // it lets `landed` win before this effect flushes. Both are load-bearing;
+  // deleting either leaves a lie on screen in one of the two timelines.)
+  useEffect(() => {
+    if (relocateLanded) setRelocateUndispatched(false);
+  }, [relocateLanded]);
 
   // The registry arrives asynchronously. If the owner opens settings before
   // it has loaded, select the first available machine as soon as it does so
@@ -274,7 +302,13 @@ export function MemberDetailPanel({
       // Only a confirmed online session is gracefully relocated. A `waking`
       // member's Spawn action is the force-revive path and must reach activate.
       if (online && machineChanged) {
+        // WHOSE move this verdict belongs to. The panel is given no `key` by
+        // either caller, so switching members is a prop change: a relocate
+        // still in flight resolves into a panel that may already be showing
+        // someone else (same guard the wake path documents above).
+        const firedFor = member.id;
         const result = await onRelocate?.(settingsMachineId);
+        if (shownMemberIdRef.current !== firedFor) return;
         if (result?.relocationPending) setRelocateUndispatched(true);
       }
       if (!online) {
@@ -287,6 +321,11 @@ export function MemberDetailPanel({
       }
       setSettingsOpen(false);
     } catch (error) {
+      // ⚠️ `mp.modelEffortError` now has TWO consumers with different scopes:
+      // AgentDetailPanel's model/effort save, and this dialog's catch-all
+      // fallback (any failed launch-settings submit, machine included). Its
+      // wording must stay generic ("儲存失敗"). Narrowing it to model/effort
+      // would make this fallback lie, and no test would go red for it.
       setSettingsError(
         error instanceof Error ? error.message : t.mp.modelEffortError,
       );
@@ -662,7 +701,7 @@ export function MemberDetailPanel({
           {wakeUndispatched && (
             <DispatchAlert kind="wake" testId="mp-wake-undispatched" />
           )}
-          {relocateUndispatched && (
+          {relocateUndispatched && !relocateLanded && (
             <DispatchAlert kind="relocate" testId="mp-relocate-undispatched" />
           )}
         </div>

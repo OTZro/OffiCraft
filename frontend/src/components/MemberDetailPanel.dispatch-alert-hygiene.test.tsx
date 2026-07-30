@@ -39,9 +39,16 @@ const ONLINE_MACHINE = {
   claudeSubReadable: null,
 };
 
+const ONLINE_MACHINE_B = {
+  ...ONLINE_MACHINE,
+  machineId: "mach-b",
+  displayName: "Mac B",
+  isSelf: false,
+};
+
 vi.mock("../api", () => ({
   api: {
-    listMachines: () => Promise.resolve([ONLINE_MACHINE]),
+    listMachines: () => Promise.resolve([ONLINE_MACHINE, ONLINE_MACHINE_B]),
     getBootstrap: () =>
       Promise.resolve({ role: "assistant", name: "", taskType: "", context: "" }),
     listWebhooks: () => Promise.resolve([]),
@@ -254,63 +261,85 @@ describe("MemberDetailPanel · the notice does not outlive its truth (T-7fa1)", 
 const mkAwake = (over: Partial<Member> = {}): Member =>
   mkMember({ status: "online", lifecycle: "online", ...over });
 
-/** Click 改機器 and wait for the "not dispatched" notice to appear. */
-async function relocateInto(
-  getByTestId: (id: string) => HTMLElement,
-  queryByTestId: (id: string) => HTMLElement | null,
-) {
+/** Fire a relocate through the unified 更改 dialog (the standalone 改機器 button
+ * is gone) and wait until the handler has actually been called.
+ *
+ * The dialog is what WRITES the pin now, so the timeline below has one more
+ * beat than it used to: the member enters observed-on-and-pinned-to `mach-a`
+ * (nothing outstanding), the dialog moves the pin to `mach-b`, and the parent's
+ * refetch is what makes the panel see `desiredMachineId: "mach-b"` — which is
+ * when a "not dispatched" verdict becomes visible at all. That beat is
+ * `afterRefetch` below, not test scaffolding: the pin is written even when
+ * nothing was dispatched, so this is the state the owner really lands on. */
+async function relocateInto(getByTestId: (id: string) => HTMLElement) {
   await waitFor(() =>
-    expect((getByTestId("mp-relocate") as HTMLButtonElement).disabled).toBe(
-      false,
-    ),
+    expect((getByTestId("mp-change") as HTMLButtonElement).disabled).toBe(false),
   );
-  fireEvent.click(getByTestId("mp-relocate"));
-  await waitFor(() =>
-    expect(queryByTestId("mp-relocate-undispatched")).not.toBeNull(),
-  );
+  fireEvent.click(getByTestId("mp-change"));
+  const select = document.querySelector<HTMLSelectElement>(
+    "select.machine-picker__select",
+  )!;
+  await waitFor(() => expect(select.options).toHaveLength(2));
+  fireEvent.change(select, { target: { value: "mach-b" } });
+  const confirm = document.querySelector<HTMLButtonElement>(
+    ".machine-picker__actions .btn--accent",
+  )!;
+  await waitFor(() => expect(confirm.disabled).toBe(false));
+  fireEvent.click(confirm);
 }
 
+/** The member as the panel enters: observed exactly where it is pinned, so
+ * nothing is outstanding and no verdict can be hiding. */
+const pinnedHome = (over: Partial<Member> = {}): Member =>
+  mkAwake({ desiredMachineId: "mach-a", machine: "mach-a", ...over });
+
+const panel = (member: Member, onRelocate: MemberDetailPanelRelocate) => (
+  <I18nProvider>
+    <MemberDetailPanel member={member} onBack={() => {}} onRelocate={onRelocate} />
+  </I18nProvider>
+);
+
+type MemberDetailPanelRelocate = (
+  machineId: string,
+) => void | Promise<MemberRelocateResult | void>;
+
 // Relocate is no longer a standalone panel affordance: it is folded into the
-// unified settings submit, whose visible pending state is the machine target
-// transition covered in MemberDetailPanel.relocate.test.tsx.
-describe.skip("legacy relocate notice self-heals", () => {
+// unified settings submit. But the notice's HYGIENE — how long it lives, which
+// member it belongs to, whether it can come back — is a property of the NOTICE,
+// not of the entry point. These ran under `describe.skip` for one round, and
+// that skip was hiding removed BEHAVIOUR, not a retired button: the member panel
+// dropped `useRelocateMachine` for a bare `useState`, and with it the self-heal,
+// the observability gate, the member-keyed reset and the in-flight subject
+// guard. The hook still holds them for the outsource panel; only this panel lost
+// them. Restored in the panel; each one is pinned by the test that goes red when
+// it is taken away again.
+describe("relocate notice self-heals", () => {
   it("clears once the member's OBSERVED machine reaches the pinned one", async () => {
     // The copy promises "the server keeps retrying in the background". Before
     // this there was no path back: the flag was cleared only by ANOTHER
     // relocate, so a move that the cadence successfully landed left the panel
     // insisting it had not — indefinitely.
     //
-    // 🔴 The "landed" fixture moves ONLY `machine` (review r2 NIT-3). The
-    // previous one changed `machine` AND `desiredMachineId` together, so it
-    // could not tell "the member reached the pin" (a landed move) apart from
-    // "the pin retreated to the member" (no move at all) — and only one of
-    // those is what this self-heal claims to detect.
+    // 🔴 The "landed" step moves ONLY `machine` (review r2 NIT-3). Moving the
+    // pin with it could not tell "the member reached the pin" (a landed move)
+    // apart from "the pin retreated to the member" (no move at all) — and only
+    // one of those is what this self-heal claims to detect.
     const onRelocate = vi.fn(
       async (): Promise<MemberRelocateResult> => ({ relocationPending: true }),
     );
-    const before = mkAwake({ desiredMachineId: "mach-b", machine: "mach-a" });
     const { getByTestId, queryByTestId, rerender } = render(
-      <I18nProvider>
-        <MemberDetailPanel
-          member={before}
-          onBack={() => {}}
-          onRelocate={onRelocate}
-        />
-      </I18nProvider>,
+      panel(pinnedHome(), onRelocate),
     );
 
-    await relocateInto(getByTestId, queryByTestId);
+    await relocateInto(getByTestId);
+    // The refetch: the pin moved, the member has not.
+    rerender(panel(mkAwake({ desiredMachineId: "mach-b", machine: "mach-a" }), onRelocate));
+    await waitFor(() =>
+      expect(queryByTestId("mp-relocate-undispatched")).not.toBeNull(),
+    );
 
     // The background retry lands: the pin is untouched, the member arrives.
-    rerender(
-      <I18nProvider>
-        <MemberDetailPanel
-          member={mkAwake({ desiredMachineId: "mach-b", machine: "mach-b" })}
-          onBack={() => {}}
-          onRelocate={onRelocate}
-        />
-      </I18nProvider>,
-    );
+    rerender(panel(mkAwake({ desiredMachineId: "mach-b", machine: "mach-b" }), onRelocate));
 
     await waitFor(() =>
       expect(queryByTestId("mp-relocate-undispatched")).toBeNull(),
@@ -329,28 +358,18 @@ describe.skip("legacy relocate notice self-heals", () => {
       async (): Promise<MemberRelocateResult> => ({ relocationPending: true }),
     );
     const { getByTestId, queryByTestId, rerender } = render(
-      <I18nProvider>
-        <MemberDetailPanel
-          member={mkAwake({ desiredMachineId: "mach-b", machine: "mach-a" })}
-          onBack={() => {}}
-          onRelocate={onRelocate}
-        />
-      </I18nProvider>,
+      panel(pinnedHome(), onRelocate),
     );
 
-    await relocateInto(getByTestId, queryByTestId);
+    await relocateInto(getByTestId);
+    rerender(panel(mkAwake({ desiredMachineId: "mach-b", machine: "mach-a" }), onRelocate));
+    await waitFor(() =>
+      expect(queryByTestId("mp-relocate-undispatched")).not.toBeNull(),
+    );
 
     // The member drops offline; `machine` now MIRRORS the pin because nobody
     // can see it — the exact shape of the false "landed".
-    rerender(
-      <I18nProvider>
-        <MemberDetailPanel
-          member={mkMember({ desiredMachineId: "mach-b", machine: "mach-b" })}
-          onBack={() => {}}
-          onRelocate={onRelocate}
-        />
-      </I18nProvider>,
-    );
+    rerender(panel(mkMember({ desiredMachineId: "mach-b", machine: "mach-b" }), onRelocate));
 
     await new Promise((r) => setTimeout(r, 0));
     expect(queryByTestId("mp-relocate-undispatched")).not.toBeNull();
@@ -366,16 +385,13 @@ describe.skip("legacy relocate notice self-heals", () => {
       async (): Promise<MemberRelocateResult> => ({ relocationPending: true }),
     );
     const { getByTestId, queryByTestId } = render(
-      <I18nProvider>
-        <MemberDetailPanel
-          member={mkAwake({ desiredMachineId: "", machine: null })}
-          onBack={() => {}}
-          onRelocate={onRelocate}
-        />
-      </I18nProvider>,
+      panel(mkAwake({ desiredMachineId: "", machine: null }), onRelocate),
     );
 
-    await relocateInto(getByTestId, queryByTestId);
+    await relocateInto(getByTestId);
+    await waitFor(() =>
+      expect(queryByTestId("mp-relocate-undispatched")).not.toBeNull(),
+    );
     // …and it is the RELOCATE half of the copy, steps included — the wake steps
     // hedge two possible causes, which is the wrong shape for this flag.
     const alert = getByTestId("mp-relocate-undispatched");
@@ -395,48 +411,30 @@ describe.skip("legacy relocate notice self-heals", () => {
       async (): Promise<MemberRelocateResult> => ({ relocationPending: true }),
     );
     const { getByTestId, queryByTestId, rerender } = render(
-      <I18nProvider>
-        <MemberDetailPanel
-          member={mkAwake({ desiredMachineId: "mach-b", machine: "mach-a" })}
-          onBack={() => {}}
-          onRelocate={onRelocate}
-        />
-      </I18nProvider>,
+      panel(pinnedHome(), onRelocate),
     );
 
-    await relocateInto(getByTestId, queryByTestId);
-
-    rerender(
-      <I18nProvider>
-        <MemberDetailPanel
-          member={mkAwake({ desiredMachineId: "mach-b", machine: "mach-b" })}
-          onBack={() => {}}
-          onRelocate={onRelocate}
-        />
-      </I18nProvider>,
+    await relocateInto(getByTestId);
+    rerender(panel(mkAwake({ desiredMachineId: "mach-b", machine: "mach-a" }), onRelocate));
+    await waitFor(() =>
+      expect(queryByTestId("mp-relocate-undispatched")).not.toBeNull(),
     );
+
+    rerender(panel(mkAwake({ desiredMachineId: "mach-b", machine: "mach-b" }), onRelocate));
     await waitFor(() =>
       expect(queryByTestId("mp-relocate-undispatched")).toBeNull(),
     );
 
     // The member is later moved AWAY from the pin by something else entirely.
     // The old verdict must stay dead.
-    rerender(
-      <I18nProvider>
-        <MemberDetailPanel
-          member={mkAwake({ desiredMachineId: "mach-b", machine: "mach-a" })}
-          onBack={() => {}}
-          onRelocate={onRelocate}
-        />
-      </I18nProvider>,
-    );
+    rerender(panel(mkAwake({ desiredMachineId: "mach-b", machine: "mach-a" }), onRelocate));
 
     await new Promise((r) => setTimeout(r, 0));
     expect(queryByTestId("mp-relocate-undispatched")).toBeNull();
   });
 
   it("an IN-FLIGHT relocate's verdict never lands on the member switched to (relocate twin of r2 SHOULD-1)", async () => {
-    // The subjectId reset below is a reset, not a cancel — the wake half needed
+    // The subject reset below is a reset, not a cancel — the wake half needed
     // both guards and so does this one. Written at the same time as the guard,
     // because "the mechanism is obviously right" is exactly what the last two
     // rounds' green mutants were.
@@ -448,37 +446,26 @@ describe.skip("legacy relocate notice self-heals", () => {
         }),
     );
     const { getByTestId, queryByTestId, rerender } = render(
-      <I18nProvider>
-        <MemberDetailPanel
-          member={mkAwake({ desiredMachineId: "mach-b", machine: "mach-a" })}
-          onBack={() => {}}
-          onRelocate={onRelocate}
-        />
-      </I18nProvider>,
+      panel(pinnedHome(), onRelocate),
     );
 
-    await waitFor(() =>
-      expect((getByTestId("mp-relocate") as HTMLButtonElement).disabled).toBe(
-        false,
-      ),
-    );
-    fireEvent.click(getByTestId("mp-relocate"));
+    await relocateInto(getByTestId);
     await waitFor(() => expect(onRelocate).toHaveBeenCalledTimes(1));
 
+    // The owner switches members while the relocate is still in flight — and
+    // the member switched TO is one whose pin is outstanding, so a leaked
+    // verdict would be perfectly visible on it.
     rerender(
-      <I18nProvider>
-        <MemberDetailPanel
-          member={mkAwake({
-            id: "kyle",
-            name: "Kyle",
-            memberId: "MB-DEV001",
-            desiredMachineId: "mach-b",
-            machine: "mach-a",
-          })}
-          onBack={() => {}}
-          onRelocate={onRelocate}
-        />
-      </I18nProvider>,
+      panel(
+        mkAwake({
+          id: "kyle",
+          name: "Kyle",
+          memberId: "MB-DEV001",
+          desiredMachineId: "mach-b",
+          machine: "mach-a",
+        }),
+        onRelocate,
+      ),
     );
 
     resolveRelocate({ relocationPending: true });
@@ -488,39 +475,34 @@ describe.skip("legacy relocate notice self-heals", () => {
 
   it("does NOT follow the owner onto a different member (relocate twin of r1 SHOULD-1)", async () => {
     // The wake notice was given a member-keyed reset in round 1; the relocate
-    // notice lives in useRelocateMachine and had none. It was MASKED: before
-    // the observability gate `landed` was accidentally true for most
-    // not-observable members and quietly swallowed the leak. Same class, same
-    // panel, same lie — asserted here so it cannot come back.
+    // notice had none. It was MASKED: before the observability gate `landed` was
+    // accidentally true for most not-observable members and quietly swallowed
+    // the leak. Same class, same panel, same lie — asserted here so it cannot
+    // come back.
     const onRelocate = vi.fn(
       async (): Promise<MemberRelocateResult> => ({ relocationPending: true }),
     );
     const { getByTestId, queryByTestId, rerender } = render(
-      <I18nProvider>
-        <MemberDetailPanel
-          member={mkAwake({ desiredMachineId: "mach-b", machine: "mach-a" })}
-          onBack={() => {}}
-          onRelocate={onRelocate}
-        />
-      </I18nProvider>,
+      panel(pinnedHome(), onRelocate),
     );
 
-    await relocateInto(getByTestId, queryByTestId);
+    await relocateInto(getByTestId);
+    rerender(panel(mkAwake({ desiredMachineId: "mach-b", machine: "mach-a" }), onRelocate));
+    await waitFor(() =>
+      expect(queryByTestId("mp-relocate-undispatched")).not.toBeNull(),
+    );
 
     rerender(
-      <I18nProvider>
-        <MemberDetailPanel
-          member={mkAwake({
-            id: "kyle",
-            name: "Kyle",
-            memberId: "MB-DEV001",
-            desiredMachineId: "mach-b",
-            machine: "mach-a",
-          })}
-          onBack={() => {}}
-          onRelocate={onRelocate}
-        />
-      </I18nProvider>,
+      panel(
+        mkAwake({
+          id: "kyle",
+          name: "Kyle",
+          memberId: "MB-DEV001",
+          desiredMachineId: "mach-b",
+          machine: "mach-a",
+        }),
+        onRelocate,
+      ),
     );
 
     await waitFor(() =>

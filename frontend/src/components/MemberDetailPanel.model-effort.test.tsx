@@ -79,6 +79,19 @@ function renderPanel(over: Partial<Member> = {}) {
   return { ...utils, onRename };
 }
 
+/** Open the unified settings dialog. The wake/change entry is gated on the
+ * machine registry (0 online machines => dead affordance) and that registry
+ * loads asynchronously - clicking before it lands hits a disabled button and
+ * opens nothing. */
+async function openSettings(utils: { getByTestId: (id: string) => HTMLElement }) {
+  await waitFor(() =>
+    expect(
+      (utils.getByTestId("member-action-spawn") as HTMLButtonElement).disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(utils.getByTestId("member-action-spawn"));
+}
+
 async function confirmSettings() {
   const confirm = document.querySelector<HTMLButtonElement>(".machine-picker__actions .btn--accent")!;
   await waitFor(() => expect(confirm.disabled).toBe(false));
@@ -92,7 +105,7 @@ beforeEach(() => {
 describe("MemberDetailPanel · model/effort quick-pick editor", () => {
   it("opens the shared chips editor; a chip fills the free input; save PATCHes", async () => {
     const utils = renderPanel();
-    fireEvent.click(utils.getByTestId("member-action-spawn"));
+    await openSettings(utils);
 
     // The current model pre-fills the free input; the matching chip is active.
     const input = utils.getByTestId("me-model-input") as HTMLInputElement;
@@ -121,7 +134,7 @@ describe("MemberDetailPanel · model/effort quick-pick editor", () => {
 
   it("switching provider clears Claude's model pick and offers Codex suggestions plus an override", async () => {
     const utils = renderPanel();
-    fireEvent.click(utils.getByTestId("member-action-spawn"));
+    await openSettings(utils);
     fireEvent.change(utils.getByTestId("me-runtime-select"), {
       target: { value: "codex" },
     });
@@ -141,7 +154,7 @@ describe("MemberDetailPanel · model/effort quick-pick editor", () => {
 
   it("a hand-typed custom string overrides the chips; blank means default", async () => {
     const utils = renderPanel();
-    fireEvent.click(utils.getByTestId("member-action-spawn"));
+    await openSettings(utils);
     fireEvent.click(utils.getByTestId("me-model-chip-fable"));
     fireEvent.change(utils.getByTestId("me-model-input"), {
       target: { value: "claude-x-preview" },
@@ -156,7 +169,7 @@ describe("MemberDetailPanel · model/effort quick-pick editor", () => {
     );
 
     // Blank input → "" (server/CLI default), never a fabricated pick.
-    fireEvent.click(utils.getByTestId("member-action-spawn"));
+    await openSettings(utils);
     fireEvent.change(utils.getByTestId("me-model-input"), {
       target: { value: "" },
     });
