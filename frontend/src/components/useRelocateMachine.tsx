@@ -3,6 +3,11 @@ import { useI18n } from "../i18n";
 import type { MachineView, MemberRelocateResult } from "../types";
 import { MachinePicker } from "./MachinePicker";
 import { PencilIcon } from "./icons";
+// Draws `.mp-*` markup, so it owns that stylesheet's import rather than relying
+// on a caller to have pulled it in (T-7526). This module currently has no
+// production importer and is pending an owner ruling on deletion; the import
+// stays correct either way, and removing the file removes it with the file.
+import "./member-detail.css";
 
 /** How long 「更換中…」 may stay up before the control calls it a timeout.
  *

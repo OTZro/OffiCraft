@@ -45,8 +45,21 @@ const DIR = join(__dirname);
  * exclusion list) is the real fix and is tracked separately. */
 const OWNED_SHEETS = ["machine-picker.css", "member-detail.css", "md-preview.css"] as const;
 
+/** Sheets whose BEM block is not just the filename. `member-detail.css` owns the
+ * `.mp-*` block, so deriving the block from the filename made its entry check an
+ * EMPTY set — a vacuous green sitting inside the very guard written to catch
+ * vacuous greens. It only surfaced when the two branches' versions were merged
+ * and the stronger side's non-empty-corpus assertion applied to it.
+ *
+ * ⚠️ The value is a block PREFIX, not one exact block: member-detail.css holds a
+ * family (`mp-identity__*`, `mp-card__*`, `mp-confirm__*`, …). Matching only the
+ * literal `mp__` found exactly one file and left the four real consumers
+ * unchecked — non-empty, and still nearly vacuous. Corpus size is not the same
+ * question as corpus coverage. */
+const BLOCK_OVERRIDES: Record<string, string> = { "member-detail.css": "mp" };
+
 function blockOf(sheet: string): string {
-  return sheet.replace(/\.css$/, "");
+  return BLOCK_OVERRIDES[sheet] ?? sheet.replace(/\.css$/, "");
 }
 
 function componentsUsing(block: string): string[] {
@@ -55,7 +68,7 @@ function componentsUsing(block: string): string[] {
     if (!file.endsWith(".tsx") || file.endsWith(".test.tsx")) continue;
     const src = readFileSync(join(DIR, file), "utf8");
     // Only count REAL usage in markup, not a mention in prose/comments.
-    if (new RegExp(`className=[{"\`][^"\`}]*\\b${block}__`).test(src)) users.push(file);
+    if (new RegExp(`className=[{"\`][^"\`}]*\\b${block}[a-z0-9-]*__`).test(src)) users.push(file);
   }
   return users;
 }
