@@ -5,7 +5,7 @@
 # bin/ci.sh is the canonical, AUTHORITATIVE land gate and stays that way. But it
 # is all-or-nothing — there was no way to say "run everything that a Linux CI
 # runner can honestly run" without re-listing the modules, the npm scripts and
-# the drift gates somewhere else. GitHub Actions (.github/workflows/unit.yml)
+# the drift gates somewhere else. GitHub Actions (.github/workflows/ci.yml)
 # needs exactly that subset, and the one thing this repo must never grow is a
 # SECOND list of what the checks are: a YAML file enumerating them would drift
 # from ci.sh the first time something is added, and drift SILENTLY (the missing
@@ -22,11 +22,14 @@
 # doc (§8).
 #
 # WHAT IS IN:
-#   (1) UNIT — every Go module under cli/ and server/ (`go test -count=1 ./...`,
+#   (1) UNIT — the hermetic e2e isolation-guard suite, every Go module under cli/ and server/
+#       (`gofmt`, `go vet`, `go build`, then `go test -count=1 ./...`,
 #       module set DERIVED from the cli/*/go.mod + server/*/go.mod glob, the same
 #       derivation ci.sh uses, so adding a module auto-enrols it in both with no
 #       list to keep in sync) + frontend typecheck + vitest.
-#   (2) CONSISTENCY — the regenerate-and-byte-compare drift gates: gen-ocapi
+#   (2) HYGIENE — the tracked-file path denylist. The content-level gitleaks
+#       scan deliberately stays local.
+#   (3) CONSISTENCY — the regenerate-and-byte-compare drift gates: gen-ocapi
 #       (server wire), FE schema.ts (client wire), theme tokens, message keys,
 #       font whitelist, plus the two CSS token lints. These are the M1
 #       wire-freeze gates.
@@ -36,7 +39,7 @@
 #       CODE IS FINE. That is precisely why the workflow pins go + node to the
 #       dev machine's exact versions. If you loosen those pins, expect this
 #       class to be where it breaks first.
-#   (3) CONFORMANCE — the HTTP-only black-box behaviour suite: it runs against
+#   (4) CONFORMANCE — the HTTP-only black-box behaviour suite: it runs against
 #       a throwaway ocserverd and SQLite database, so the frozen route/spec
 #       surface is checked against live server behaviour without touching prod.
 #
@@ -47,12 +50,13 @@
 #     whole value is that a red means "the layout broke", and a runner would
 #     make it mean "the runner has different fonts". Stays in ci.sh (still gated
 #     on every land, locally).
-#   * gitleaks + path denylist — repo hygiene, not one of the classes moved to
-#     the cloud. .githooks/pre-commit + ci.sh keep it.
+#   * gitleaks — the content-level secret scan stays local by design. The
+#     tracked-file path denylist runs below because it is safe on Linux.
+#   * bin/tests/run.sh — its 16 Linux assertion failures come from BSD/GNU
+#     `mktemp -t` semantics, SIGPIPE, and macOS-shaped install.sh fixtures.
+#     It remains a local gate until those platform assumptions are made portable.
 #   * e2e_test — real-machine end-to-end; it drives launchd/tmux on a real fleet
 #     host. Local, pre-release, by design.
-#   * gofmt / go vet — style + static analysis. (`go test` compiles the test
-#     files anyway, so test-compilation breakage is still caught here.)
 #   * the committed-prebuilt parity dryrun — it only applies when a local
 #     gitignored prebuilt exists, which is never true on a fresh runner.
 #
@@ -69,6 +73,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+source "$ROOT/bin/lib/tracked-path-denylist.sh"
 
 echo "[ci-cloud] start $(date -u '+%Y-%m-%dT%H:%M:%SZ') — $(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
 
@@ -84,6 +89,8 @@ if [[ -z "$GO" || ! -x "$GO" ]]; then
   echo "[ci-cloud] FAIL — go not found. It is a HARD dependency, never a skip."
   exit 1
 fi
+GOFMT="$(dirname "$GO")/gofmt"
+[[ -x "$GOFMT" ]] || GOFMT="$(command -v gofmt 2>/dev/null || echo gofmt)"
 NPM="$(command -v npm 2>/dev/null || true)"
 if [[ -z "$NPM" ]]; then
   for cand in "$HOME/.asdf/shims/npm" /opt/homebrew/bin/npm /usr/local/bin/npm; do
@@ -97,7 +104,7 @@ fi
 FE="$ROOT/frontend"
 
 # ===========================================================================
-# (1/3) UNIT
+# (1/4) UNIT
 # ===========================================================================
 # Stage the embed assets FIRST (T-e731). seeds/*.md, docs/guide, the prebuilt
 # ocwarden/ocagent and spec/mcp-catalog.json are served EMBED-ONLY, and a clean
@@ -105,7 +112,9 @@ FE="$ROOT/frontend"
 # unit tests (they boot and read through the real embed) go red on a clean
 # checkout unless these run. A CI runner is by definition always a clean
 # checkout, so this is not optional here.
-echo "[ci-cloud] (1/3) unit — staging embed assets, then go test per module + frontend"
+echo "[ci-cloud] (1/4) unit — hermetic isolation guard, staging embed assets, then Go + frontend"
+echo "[ci-cloud]   e2e_test isolation-guard unit tests (hermetic)"
+bash "$ROOT/e2e_test/tests_guard/run.sh"
 PATH="$(dirname "$GO"):$PATH" bash "$ROOT/bin/build-seedsdist"
 PATH="$(dirname "$GO"):$PATH" bash "$ROOT/bin/build-docsdist"
 PATH="$(dirname "$GO"):$PATH" bash "$ROOT/bin/build-bindist"
@@ -113,8 +122,25 @@ PATH="$(dirname "$GO"):$PATH" bash "$ROOT/bin/build-bindist"
 for gomod in "$ROOT"/cli/*/go.mod "$ROOT"/server/*/go.mod; do
   [[ -f "$gomod" ]] || continue
   mod_dir="$(dirname "$gomod")"
-  echo "[ci-cloud]   go test ${mod_dir#"$ROOT"/}"
-  (cd "$mod_dir" && "$GO" test -count=1 ./...)
+  module="${mod_dir#"$ROOT"/}"
+  binary="$(basename "$mod_dir")"
+  echo "[ci-cloud]   gofmt + vet + build + test $module"
+  if ! grep -qE "^module ${binary}$" "$mod_dir/go.mod"; then
+    echo "[ci-cloud] FAIL — naming: $module/go.mod must declare module $binary"
+    exit 1
+  fi
+  (
+    cd "$mod_dir"
+    unformatted="$("$GOFMT" -l . 2>/dev/null || true)"
+    if [[ -n "$unformatted" ]]; then
+      echo "[ci-cloud] FAIL — gofmt: unformatted golang files in $module:"
+      printf '  %s\n' $unformatted
+      exit 1
+    fi
+    "$GO" vet ./...
+    "$GO" build -o "$binary" ./...
+    "$GO" test -count=1 ./...
+  )
 done
 
 echo "[ci-cloud]   npm ci (frontend)"
@@ -125,13 +151,24 @@ echo "[ci-cloud]   vitest run (frontend unit suite)"
 (cd "$FE" && "$NPM" test)
 
 # ===========================================================================
-# (2/3) CONSISTENCY — regenerate-and-byte-compare drift gates
+# (2/4) HYGIENE — tracked-file path denylist
+# ===========================================================================
+echo "[ci-cloud] (2/4) hygiene — tracked-file path denylist"
+denylist_hits="$(tracked_path_denylist_hits)"
+if [[ -n "$denylist_hits" ]]; then
+  echo "[ci-cloud] FAIL — forbidden files are tracked (path denylist):"
+  printf '  %s\n' $denylist_hits
+  exit 1
+fi
+
+# ===========================================================================
+# (3/4) CONSISTENCY — regenerate-and-byte-compare drift gates
 # ===========================================================================
 # Every gate below is the same shape: run the generator against its frozen
 # source, require the COMMITTED generated artifact to come back byte-identical.
 # Several regenerate IN PLACE, so those snapshot the committed bytes first and
 # restore them on failure — a red must not leave a mutated worktree behind.
-echo "[ci-cloud] (2/3) consistency — wire freeze + generated-artifact drift gates"
+echo "[ci-cloud] (3/4) consistency — wire freeze + generated-artifact drift gates"
 
 # 2a. gen-ocapi drift — the wire-freeze gate on the SERVER's REST surface.
 # server/ocserverd/ocapi_gen.go is generated from the frozen spec/openapi.json.
@@ -200,13 +237,13 @@ fi
 rm -f "$FRESH_TS"
 
 # ===========================================================================
-# (3/3) CONFORMANCE — black-box HTTP behaviour guard
+# (4/4) CONFORMANCE — black-box HTTP behaviour guard
 # ===========================================================================
 # Keep the fast import guard explicit here as well as the full runner below:
 # a black-box violation should fail before we spend time building the isolated
 # server. The full runner then verifies the frozen route/spec surface against
 # live behaviour on a throwaway server and SQLite database.
-echo "[ci-cloud] (3/3) conformance — black-box lint + isolated HTTP behaviour suite"
+echo "[ci-cloud] (4/4) conformance — black-box lint + isolated HTTP behaviour suite"
 conf_hits="$(grep -RInE --include='*.py' \
   '^[[:space:]]*(import|from)[[:space:]]+(backend|service|dal|domain|plumbing)([.[:space:]]|$)' \
   "$ROOT/conformance" || true)"

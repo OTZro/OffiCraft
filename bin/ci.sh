@@ -6,14 +6,17 @@
 # went PUBLIC: standard-runner minutes are free for public repos. The real
 # reason this stays local is that the gate below includes host-shaped and
 # regenerate-and-byte-compare steps whose authority we do not want to move.)
-# A SUBSET — everything a Linux runner can honestly run: the unit suites, the
-# consistency / wire-freeze drift gates, and the black-box conformance suite —
+# A SUBSET — the Linux-portable guards, consistency / wire-freeze drift gates,
+# and the black-box conformance suite —
 # now also runs on every pull request via .github/workflows/ci.yml, which calls
 # bin/ci-cloud.sh; that script is the single definition of the subset, so the
 # cloud check cannot grow a second, drifting list. What stays LOCAL-ONLY:
-# Playwright CT (real-browser layout — font/rasterisation差異 makes a runner red
-# for the wrong reason), gitleaks + path denylist, and e2e_test (real fleet
-# host). The cloud check is a cross-check on a clean Linux box, NOT land
+# bin/tests/run.sh (16 Linux assertions currently red: BSD/GNU `mktemp -t`
+# semantics, SIGPIPE, and macOS-shaped install.sh fixtures), Playwright CT
+# (real-browser layout — font/rasterisation差異 makes a runner red for the wrong
+# reason), the content-level gitleaks scan, and real-fleet e2e.
+# The path denylist plus e2e_test's hermetic isolation-guard suite run in cloud.
+# The cloud check is a cross-check on a clean Linux box, NOT land
 # authority. Runs, in order, failing
 # fast on the first non-zero step:
 #   1. golang            — gofmt + go vet + go build + committed-prebuilt
@@ -52,6 +55,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+source "$ROOT/bin/lib/tracked-path-denylist.sh"
 
 # ---------------------------------------------------------------------------
 # Provenance stamp (T-da4b). "[ci] all green" is the land authority, but a green
@@ -306,20 +310,7 @@ echo "[ci] (3/5) repo hygiene — path denylist + gitleaks secret scan"
 # Python source (*.py) is deliberately exempt from the `_token` filename rule:
 # legit test sources (conformance/) can carry "token" in the name, and their
 # *contents* are already covered by the gitleaks scan in 3b.
-denylist_hits="$(
-  git ls-files -z | tr '\0' '\n' | grep -iE \
-    -e '(^|/)scratchpad/' \
-    -e '\.bak$' \
-    -e '\.pem$' \
-    -e '\.key$' \
-    -e '\.secret$' \
-    -e '(^|/)oc\.toml$' \
-    -e '(^|/)oc\.lock$' \
-    | { grep -vE '\.py$' || true; }
-  # `_token` filename rule, source-exempt so it never fires on *.py test files.
-  git ls-files -z | tr '\0' '\n' | grep -iE '_token' | grep -vE '\.py$' || true
-)"
-denylist_hits="$(printf '%s\n' "$denylist_hits" | grep -vE '^$' | sort -u || true)"
+denylist_hits="$(tracked_path_denylist_hits)"
 if [[ -n "$denylist_hits" ]]; then
   echo "[ci] FAIL — forbidden files are tracked (path denylist):"
   printf '  %s\n' $denylist_hits
