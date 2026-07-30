@@ -910,6 +910,7 @@ func TestRunInstall_ReRunOverHalfInstallSucceeds(t *testing.T) {
 	p.ocToken = fakeJWT("m-aaa")
 	f.existing[p.tokfile] = []byte(fakeJWT("m-aaa")) // half-install leftover
 	f.existing[p.srcExe] = []byte("OCWARDEN-BYTES")
+	f.existing[p.anchorSrc] = []byte("FIXED-ANCHOR")
 	p.ocAgentSrc = "/src/ocagent"
 	f.existing[p.ocAgentSrc] = []byte("OCAGENT-BYTES")
 
@@ -1107,6 +1108,7 @@ func TestRunInstall_StampsClaudeIntoWrittenPlist(t *testing.T) {
 	f.runFn = stableLaunchctl()
 	p := fixedPaths()
 	f.existing[p.srcExe] = []byte("OCWARDEN-BYTES")
+	f.existing[p.anchorSrc] = []byte("FIXED-ANCHOR")
 	p.ocAgentSrc = "/src/ocagent"
 	f.existing[p.ocAgentSrc] = []byte("OCAGENT-BYTES")
 	i := &installer{
@@ -1131,6 +1133,7 @@ func TestRunInstall_MissingAllRuntimesFailsClosedWithReason(t *testing.T) {
 	f.runFn = stableLaunchctl()
 	p := fixedPaths()
 	f.existing[p.srcExe] = []byte("OCWARDEN-BYTES")
+	f.existing[p.anchorSrc] = []byte("FIXED-ANCHOR")
 	p.ocAgentSrc = "/src/ocagent"
 	f.existing[p.ocAgentSrc] = []byte("OCAGENT-BYTES")
 	var sb strings.Builder
@@ -1167,6 +1170,7 @@ func TestRunInstall_CodexOnlyHostIsValid(t *testing.T) {
 	f.runFn = stableLaunchctl()
 	p := fixedPaths()
 	f.existing[p.srcExe] = []byte("OCWARDEN-BYTES")
+	f.existing[p.anchorSrc] = []byte("FIXED-ANCHOR")
 	p.ocAgentSrc = "/src/ocagent"
 	f.existing[p.ocAgentSrc] = []byte("OCAGENT-BYTES")
 	var sb strings.Builder

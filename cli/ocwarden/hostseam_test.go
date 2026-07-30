@@ -337,6 +337,7 @@ func TestInstallCmd_CannotReachTheRealHost(t *testing.T) {
 	// off disk goes through the seam.
 	hostSeamSeed = func(f *fakeSys) {
 		f.existing[selfExe] = []byte("ocwarden-bytes")
+		f.existing[filepath.Join(filepath.Dir(selfExe), "officraft")] = []byte("officraft-anchor-bytes")
 		f.existing[agentSrc] = []byte("ocagent-bytes")
 	}
 	defer func() { hostSeamSeed = nil }()
