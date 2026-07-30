@@ -199,6 +199,9 @@ export function MemberDetailPanel({
   // option (blank row, pin still submitted), and dropping the pin instead would
   // move a member the owner deliberately parked. Both are "displayed ≠
   // submitted"; this is the only shape that is neither.
+  // Whether the 模型 row upstairs is currently showing a reported value at all
+  // (same condition the tag uses): awake, and something was reported.
+  const reportedModelOnScreen = awake && (member.actualModel ?? "") !== "";
   const pinnedOfflineMachine =
     member.desiredMachineId &&
     !onlineMachines.some((m) => m.machineId === member.desiredMachineId)
@@ -211,12 +214,14 @@ export function MemberDetailPanel({
     ...onlineMachines.map((m) => ({
       machineId: m.machineId,
       label: m.displayName,
+      offline: false,
     })),
     ...(pinnedOfflineMachine
       ? [
           {
             machineId: pinnedOfflineMachine.machineId,
             label: msg.machineOfflineOption(pinnedOfflineMachine.displayName),
+            offline: true,
           },
         ]
       : []),
@@ -709,10 +714,18 @@ export function MemberDetailPanel({
     machines.find((m) => m.machineId === member.machine)?.displayName ||
     member.machine ||
     "";
+  const desiredMachine = machines.find(
+    (m) => m.machineId === member.desiredMachineId,
+  );
+  const desiredMachineNameRaw =
+    desiredMachine?.displayName || member.desiredMachineId || "";
+  // …and if the destination is not online, SAY so here too. The option list
+  // labels it 離線 two elements away; a hint that drops the label reads as a move
+  // that is merely in progress, when the destination cannot accept it at all.
   const desiredMachineName =
-    machines.find((m) => m.machineId === member.desiredMachineId)?.displayName ||
-    member.desiredMachineId ||
-    "";
+    desiredMachine && !desiredMachine.online
+      ? msg.machineOfflineOption(desiredMachineNameRaw)
+      : desiredMachineNameRaw;
   // Relocation keeps the observed location truthful while making the pending
   // destination visible. Once reconcile reports the new location, the note
   // naturally disappears rather than leaving stale launch intent in the panel.
@@ -891,6 +904,11 @@ export function MemberDetailPanel({
                 different values under one name. */}
             <div className="mp-field__hint" data-testid="mp-settings-intent-note">
               {t.mp.settingsIntentNote}
+              {/* The second half only when the card actually HAS a reported model
+                  to compare against. Unconditional, it pointed at a dash and
+                  invited "so this agent never reported" — which is not what an
+                  empty cell means for a member that is simply not awake. */}
+              {reportedModelOnScreen && ` ${t.mp.settingsIntentNoteReported}`}
             </div>
             <ModelEffortEditor
               runtime={settingsRuntime}
@@ -910,7 +928,17 @@ export function MemberDetailPanel({
                 onChange={(e) => setSettingsMachineId(e.target.value)}
               >
                 {settingsMachineOptions.map((machine) => (
-                  <option key={machine.machineId} value={machine.machineId}>
+                  <option
+                    key={machine.machineId}
+                    value={machine.machineId}
+                    // MachinePicker's other half: the offline entry exists so the
+                    // owner's own pin stays visible and unchanged, NOT so a live
+                    // member can be moved onto a machine whose warden is not
+                    // there — that would wind the member down into nothing, and
+                    // the deferred-move signal deliberately suppresses the alert.
+                    // A disabled option still renders as the current value.
+                    disabled={machine.offline}
+                  >
                     {machine.label}
                   </option>
                 ))}

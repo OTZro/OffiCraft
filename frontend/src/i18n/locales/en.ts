@@ -632,8 +632,9 @@ export const en: Dict = {
     wake: "Wake",
     change: "Change",
     settingsSaveOnly: "Save without waking",
-    modelReportedTag: "reported",
-    settingsIntentNote: "These are the values to launch WITH. The model on the card above is what the agent reported it is actually running, so the two can differ.",
+    modelReportedTag: "reported at last boot",
+    settingsIntentNote: "These are the values to launch WITH.",
+    settingsIntentNoteReported: "The model on the card above is what the agent reported at its most recent boot, which can differ from what is set here.",
     wakeManual: "Wake manually",
     // Instant feedback after clicking Wake, before server presence catches up.
     wakePendingNote: "Waking…",

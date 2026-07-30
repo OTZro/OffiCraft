@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
+import { zh } from "../i18n/locales/zh";
 import { MemberDetailPanel } from "./MemberDetailPanel";
 import type { Member } from "../types";
 import type { MachineView } from "../types";
@@ -167,6 +168,20 @@ describe("MemberDetailPanel — unified wake/change settings", () => {
     expect(onActivate).not.toHaveBeenCalled();
   });
 
+  it("omits the dialog's comparison note when the card has no reported model to compare with", async () => {
+    // The note pointed at a dash unconditionally, which reads as "this agent
+    // never reported" — but for a member that is merely not awake the cell is
+    // empty by the presence contract, not by absence of reports.
+    const { getByTestId } = renderPanel({ actualModel: "" });
+    await waitFor(() =>
+      expect((getByTestId("member-action-spawn") as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(getByTestId("member-action-spawn"));
+    const note = getByTestId("mp-settings-intent-note").textContent ?? "";
+    expect(note).toContain(zh.mp.settingsIntentNote);
+    expect(note).not.toContain(zh.mp.settingsIntentNoteReported);
+  });
+
   it("saves an OFFLINE member's settings without waking it (creator ruling r3)", async () => {
     // Two capabilities the unified dialog had silently removed: editing an
     // offline member's model/effort without starting it, and re-pinning it for
@@ -223,9 +238,20 @@ describe("MemberDetailPanel — unified wake/change settings", () => {
     const select = dialog.querySelector("select.machine-picker__select") as HTMLSelectElement;
     await waitFor(() => expect(select.options).toHaveLength(3));
     expect(select.value).toBe("mach-sleep");
-    expect(
-      Array.from(select.options).find((o) => o.value === "mach-sleep")?.textContent,
-    ).toContain("Sleeping Mac");
+    const sleepingOption = Array.from(select.options).find(
+      (o) => o.value === "mach-sleep",
+    )!;
+    expect(sleepingOption.textContent).toContain("Sleeping Mac");
+    // It must SAY it is offline — an entry indistinguishable from the online ones
+    // invites the owner to pick it…
+    expect(sleepingOption.textContent).toContain(
+      zh.machine.picker.offlineOptionSuffix,
+    );
+    // …and it must not be pickable: keeping the owner's own pin visible is the
+    // reason it exists; moving a live member onto a machine with no warden would
+    // wind it down into nothing, with the deferred-move signal suppressing the
+    // alert that would otherwise say so.
+    expect(sleepingOption.disabled).toBe(true);
 
     fireEvent.change(getByTestId("me-model-input"), { target: { value: "haiku" } });
     fireEvent.click(dialog.querySelector(".btn--accent")!);

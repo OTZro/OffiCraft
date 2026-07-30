@@ -274,6 +274,7 @@ var messageKeys = map[string]bool{
 	"mp.renamePlaceholder":                     true,
 	"mp.runtime":                               true,
 	"mp.settingsIntentNote":                    true,
+	"mp.settingsIntentNoteReported":            true,
 	"mp.settingsSaveOnly":                      true,
 	"mp.standby":                               true,
 	"mp.terminal":                              true,

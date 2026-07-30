@@ -706,8 +706,9 @@ export const zh = {
     wake: "喚醒",
     change: "更改",
     settingsSaveOnly: "只儲存，不喚醒",
-    modelReportedTag: "回報值",
-    settingsIntentNote: "這裡設定的是「要用哪一個」；上面資訊卡的模型是 agent 回報的實際值，兩者可能不同。",
+    modelReportedTag: "最近一次開機回報",
+    settingsIntentNote: "這裡設定的是「下次啟動要用哪一個」。",
+    settingsIntentNoteReported: "上面資訊卡的模型是 agent 最近一次開機時回報的，跟這裡的設定可能不同。",
     wakeManual: "手動喚醒",
     // 點喚醒後、server presence 尚未跟上前的即時回饋
     wakePendingNote: "喚醒中…",

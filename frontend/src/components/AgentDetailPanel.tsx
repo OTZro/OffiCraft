@@ -325,10 +325,18 @@ export function AgentDetailPanel({
               </div>
               <div className="mp-field__value">
                 {shownModel || dash}
-                {vm.modelIsReported && shownModel && (
+                {/* Deliberately NOT the parenthesised form the 投入度 row uses
+                    below: that one restates the raw value, this one states the
+                    value's PROVENANCE. Same styling with the same punctuation
+                    would put two different kinds of thing in the same shape.
+                    `!meOverride` because after an in-place save `shownModel` is
+                    the freshly CONFIGURED model — tagging that as reported would
+                    be a fresh lie (unreachable from the member panel today, which
+                    passes no save handler; pinned here so it stays that way). */}
+                {vm.modelIsReported && shownModel && !meOverride && (
                   <span className="mp-field__hint">
-                    {" "}
-                    ({t.mp.modelReportedTag})
+                    {" · "}
+                    {t.mp.modelReportedTag}
                   </span>
                 )}
               </div>

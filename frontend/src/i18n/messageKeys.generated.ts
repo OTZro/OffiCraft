@@ -273,6 +273,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "mp.renamePlaceholder",
   "mp.runtime",
   "mp.settingsIntentNote",
+  "mp.settingsIntentNoteReported",
   "mp.settingsSaveOnly",
   "mp.standby",
   "mp.terminal",

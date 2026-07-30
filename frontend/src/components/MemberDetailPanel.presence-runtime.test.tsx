@@ -179,19 +179,38 @@ describe("MemberDetailPanel · presence-gated machine + account", () => {
         actualModel: "reported-runtime-model",
       }),
     );
-    await waitFor(() =>
-      expect(
-        container.querySelector('[data-testid="mp-model-effort-cell"]')?.textContent ?? "",
-      ).toContain(zh.mp.modelReportedTag),
+    // 🔴 Scoped by POSITION, not by "somewhere in this cell": the cell holds
+    // runtime, model and effort, so a whole-cell assertion would still pass if
+    // the tag moved onto the 投入度 row — which is exactly the confusion the tag
+    // exists to remove.
+    const cellText = async () => {
+      await waitFor(() =>
+        expect(
+          container.querySelector('[data-testid="mp-model-effort-cell"]')?.textContent ?? "",
+        ).toContain(zh.mp.modelReportedTag),
+      );
+      return (
+        container.querySelector('[data-testid="mp-model-effort-cell"]')?.textContent ?? ""
+      );
+    };
+    const text = await cellText();
+    expect(text.indexOf("reported-runtime-model")).toBeGreaterThan(-1);
+    expect(text.indexOf(zh.mp.modelReportedTag)).toBeGreaterThan(
+      text.indexOf("reported-runtime-model"),
+    );
+    expect(text.indexOf(zh.mp.modelReportedTag)).toBeLessThan(
+      text.indexOf(zh.mp.effort),
     );
 
     await waitFor(() =>
       expect((getByTestId("mp-change") as HTMLButtonElement).disabled).toBe(false),
     );
     fireEvent.click(getByTestId("mp-change"));
-    expect(getByTestId("mp-settings-intent-note").textContent).toBe(
-      zh.mp.settingsIntentNote,
-    );
+    // Both halves for a member that HAS a reported model: what the dialog edits,
+    // and what the card above is.
+    const note = getByTestId("mp-settings-intent-note").textContent ?? "";
+    expect(note).toContain(zh.mp.settingsIntentNote);
+    expect(note).toContain(zh.mp.settingsIntentNoteReported);
   });
 
   it("leaves the model cell BLANK when nobody has reported one (never the configured value)", async () => {
@@ -214,5 +233,9 @@ describe("MemberDetailPanel · presence-gated machine + account", () => {
       container.querySelector('[data-testid="mp-model-effort-cell"]')?.textContent ?? "";
     await waitFor(() => expect(readModel()).not.toBe(""));
     expect(readModel()).not.toContain("configured-launch-model");
+    // …and nothing may be tagged as a reported value when there is no reported
+    // value: 「— 最近一次開機回報」 would assert a report that never happened.
+    expect(readModel()).not.toContain(zh.mp.modelReportedTag);
   });
+
 });
