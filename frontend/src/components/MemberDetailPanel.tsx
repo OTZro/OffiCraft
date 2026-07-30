@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../api";
+import { ApiError } from "../api/errors";
 import type {
   Member,
   MemberActivateResult,
@@ -151,6 +152,15 @@ export function MemberDetailPanel({
     setWakePending(false);
     setWakeUndispatched(false);
     setRelocateUndispatched(false);
+    // 🔴 …and the settings DRAFT, not just the notices (independent review r3).
+    // The dialog is prefilled from the member it was opened for, and neither
+    // caller passes a `key`, so an open dialog survives the switch holding the
+    // PREVIOUS member's runtime/model/effort/machine — one confirm and those
+    // values are written to someone else. Closing it is the honest reset: the
+    // owner reopens against whoever is on screen now. (useRelocateMachine does
+    // the same for its picker; this hand-written twin had dropped that line.)
+    setSettingsOpen(false);
+    setSettingsError("");
   }, [member.id]);
   // 🔴 …and that reset is a RESET, not a CANCEL (review r2 SHOULD-1). An
   // activate still in flight when the owner switches members resolves AFTER the
@@ -241,7 +251,20 @@ export function MemberDetailPanel({
     setSettingsRuntime(member.runtime || "claude");
     setSettingsModel(member.model);
     setSettingsEffort(member.effort);
-    setSettingsMachineId(member.desiredMachineId || onlineMachines[0]?.machineId || "");
+    // 🔴 The select lists ONLINE machines only, so a member pinned to a machine
+    // that is currently offline must NOT seed its pin (independent review r3):
+    // a <select> whose value matches no option renders blank while the submit
+    // sends the pin — displayed ≠ submitted, which MachinePicker forbids in so
+    // many words. Fall back to the first online machine: what the owner reads is
+    // then what a confirm actually sends.
+    const pinIsOnline = onlineMachines.some(
+      (m) => m.machineId === member.desiredMachineId,
+    );
+    setSettingsMachineId(
+      (pinIsOnline ? member.desiredMachineId : "") ||
+        onlineMachines[0]?.machineId ||
+        "",
+    );
     setSettingsError("");
     setSettingsOpen(true);
   }
@@ -291,6 +314,11 @@ export function MemberDetailPanel({
     }
     setSettingsBusy(true);
     setSettingsError("");
+    // A fresh attempt drops the previous verdict (independent review r3): the
+    // wake path and useRelocateMachine both do this, and without it a relocate
+    // that FAILED and was then retried successfully leaves its "nothing was
+    // dispatched" alert on screen — a stale notice about an attempt that is over.
+    setRelocateUndispatched(false);
     try {
       // 🔴 D: the PATCH goes FIRST. This is one owner edit of one settings
       // block, and the relocate is what actually restarts the agent on the new
@@ -339,8 +367,15 @@ export function MemberDetailPanel({
       // fallback (any failed launch-settings submit, machine included). Its
       // wording must stay generic ("儲存失敗"). Narrowing it to model/effort
       // would make this fallback lie, and no test would go red for it.
+      // 🔴 NOT `error.message` (independent review r3): every ApiError carries the
+      // historical `http <status> for <METHOD> <path>` text, which frontend's
+      // CLAUDE.md reserves for logs — and `ApiError extends Error`, so an
+      // `instanceof Error` ternary shows it to the owner and makes the fallback
+      // below dead code. The server's own envelope sentence is the only wire text
+      // fit to display; anything else falls back to the dictionary.
       setSettingsError(
-        error instanceof Error ? error.message : t.mp.modelEffortError,
+        (error instanceof ApiError && error.serverMessage) ||
+          t.mp.modelEffortError,
       );
     } finally {
       setSettingsBusy(false);

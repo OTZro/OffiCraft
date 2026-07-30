@@ -163,4 +163,26 @@ describe("MemberDetailPanel · presence-gated machine + account", () => {
       expect(readModel()).not.toContain("reported-runtime-model"),
     );
   });
+
+  it("leaves the model cell BLANK when nobody has reported one (never the configured value)", async () => {
+    // 🔴 Red line (c) of the ticket: the reported-model field must not be
+    // backfilled from the configured one, or "no report yet ⇒ blank" becomes
+    // unreachable — and the panel would be back to showing an intention as if it
+    // were an observation. The test above uses a member where BOTH fields are
+    // set, so it cannot see a backfill: mutate the cell to
+    // `member.actualModel || member.model` and it stays green. This one is the
+    // guard for that mutation.
+    const { container } = renderPanel(
+      mkMember({
+        status: "online",
+        lifecycle: "online",
+        model: "configured-launch-model",
+        actualModel: "",
+      }),
+    );
+    const readModel = () =>
+      container.querySelector('[data-testid="mp-model-effort-cell"]')?.textContent ?? "";
+    await waitFor(() => expect(readModel()).not.toBe(""));
+    expect(readModel()).not.toContain("configured-launch-model");
+  });
 });
