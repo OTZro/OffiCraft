@@ -2,11 +2,26 @@
 # bin/tests/stdin-drain-guard.sh — HERMETIC unit tests for bin/install.sh's
 # EXIT-time stdin drain (T-fa39, owner decision on rc-a75094435df1).
 #
-# THE DEFECT UNDER TEST
-# ---------------------
+# ⚠️ READ THIS FIRST (T-4358). This suite tests the drain, and the drain is NO
+# LONGER what fixes the defect described below. install.sh's body is now one
+# oc_main() that its LAST line calls, and nothing before that call prints or
+# exits, so the file is delivered in full before anything is observable —
+# measured with the drain forced INERT, a real 150,000 B curl|bash at 5 KB/s
+# still delivers 149,999/149,999 with curl rc=0. The structural property is
+# owned by bin/tests/curl-bash-read-before-execute-guard.sh; what remains here is
+# the drain's own shape (its two guards, its boundedness, its trap arrangement).
+# Two consequences worth knowing before trusting a green run:
+#   - case 5c no longer pins the two drain timeout constants; setting BOTH to 1
+#     leaves this whole suite green (see the note above 5c).
+#   - case 1 feeds the script PLUS 200 KB of padding. Real curl sends exactly the
+#     file, so post-wrap that residue is something the documented invocation
+#     cannot produce — which is why the drain still looks load-bearing here.
+#
+# THE DEFECT UNDER TEST (historical shape, pre-T-4358)
+# ----------------------------------------------------
 # `curl … | bash -s -- --uninstall --dry-run` is the documented invocation.
-# Every early exit in install.sh ends the script while the transfer may still be
-# in flight; the reading end of the pipe closes, and curl's next write fails:
+# Every early exit in install.sh ended the script while the transfer was still
+# in flight; the reading end of the pipe closed, and curl's next write failed:
 #
 # NOT a file-size story, though the first version of this header said it was:
 # a 53.8 KB release (comfortably under the 65,536 B pipe capacity here)
@@ -396,34 +411,41 @@ OUT="$(run_env python3 "$WORK/runner.py" dribble 40 "unused" "$SCRIPT" 2 30 --un
 timing_case "writer dribbles a line every 2s for 30s" "0" "20" "$OUT" "the TOTAL deadline bounds it; an idle-only timeout would ride the dribbler out"
 
 # ── 5c. THE PRODUCTION CONDITION: a slow transfer, shaped like curl ─────────
-# Both timeout constants are load-bearing, and NOTHING above pins either of
-# them: every other writer here runs at local-disk speed, where shrinking both
-# to 1 leaves the whole suite green. Independent review demonstrated that and
-# overturned the argument (mine) that no useful assertion existed.
-#
 # The shape is half the point. curl delivers ~16 KB blocks, so a slow transfer
 # is a big block every few SECONDS — that gap is what the idle timeout is sized
 # against. A writer emitting rate/10 every 100 ms moves the same bytes per
 # second and never produces a gap, so it can only pin the total deadline.
 #
-# WHAT MAKES THIS GREEN — and an admission. THREE successive versions of this
-# comment asserted a mechanism ("the drain still finishes"; "what is still owed
-# fits in one pipe buffer"; "the drain gets through the whole file before its
-# deadline") and independent review measured each one false. So this version
-# states the OBSERVATIONS and stops there:
-#   - green: at the moment the drain stops, the writer owes ZERO more bytes...
-#   - ...yet the drain has left ~16 KB of the file UNREAD in the pipe.
-#   - red: the writer owes as little as ONE byte and still gets EPIPE.
-#   - the cliff sits at exactly 81,920 B = 5 x 16,384 (the writer's chunk size).
+# THE "CLIFF" IS EXPLAINED NOW, and it was never a byte boundary. Three earlier
+# rounds guessed a mechanism and were each measured false, so the comment here
+# used to record 81,920 B as reproducible-but-unexplained and case 6c held
+# install.sh under 78,000 B to stay clear of it. Measured, on the UNWRAPPED
+# structure, by moving the delivery rate and watching the threshold:
+#     5 KB/s  -> EPIPE between  98,304 and 114,688 B
+#    10 KB/s  -> EPIPE between 114,688 and 131,072 B
+#    20 KB/s  -> EPIPE between 163,840 and 180,224 B
+#   reader lifetime ~20.3 s at EVERY payload size, 5 KB/s
+# A byte boundary does not move when you change the rate. What is actually fixed
+# is the READER'S LIFETIME — time to read far enough to hit the early exit, plus
+# _OC_DRAIN_TOTAL_TIMEOUT — and the tolerated payload is just rate x lifetime.
+# Fixing the rate at 5000 B/s in this case is what turned a TIME budget into a
+# byte number. "5 x 16,384" was a quantisation artefact: EPIPE is only observable
+# at a chunk-write boundary, so ANY threshold lands on a multiple of the chunk.
 #
-# Those coexist, and I do not have a verified account of why. Do not reason
-# forward from a guess about it — three guesses have been wrong here, and the
-# last one WAS committed as 6c's rationale for a round before review caught it. Treat 81,920 as a MEASURED
-# boundary: reproducible, bisected twice, mechanism unexplained.
+# And it belonged to the OLD STRUCTURE. install.sh's body is now one oc_main()
+# that the last line calls, so bash cannot execute anything until it has read the
+# closing brace — the writer is never left holding bytes for a reader that has
+# gone. Measured on the wrapped file at this exact rate and chunk size, 114,687 /
+# 180,223 / 262,143 / 524,287 B all deliver in FULL with no EPIPE, elapsed
+# tracking delivery time (23.9 / 37.3 / 54.4 / 108.7 s). The unwrapped control
+# gets EPIPE at every one of those sizes, always at ~20.3 s. The size-dependence
+# is gone by construction, not moved to a larger number.
 #
-# Case 6c turns the dependency into an assertion that speaks, so a commit that
-# grows install.sh past it fails with an explanation instead of
-# making this case mysteriously flaky.
+# ⚠️ WHAT THIS CASE NO LONGER DOES. It used to be the only case pinning the two
+# drain constants from below. It is not any more: measured, setting BOTH to 1
+# leaves this entire suite green, because the drain is no longer what makes this
+# case pass. That is a real coverage gap opened by the wrap. It is recorded here
+# rather than quietly absorbed, and closing it is not this ticket's call.
 OUT="$(run_env python3 "$WORK/runner.py" ratelimit 60 "unused" "$SCRIPT" 5000 16384 --uninstall --dry-run)"
 check "slow transfer (5 KB/s, curl-shaped 16 KB blocks): the writer still gets no EPIPE" "0" "$(py_field "$OUT" epipe)"
 check "slow transfer: and the run still succeeds" "0" "$(py_field "$OUT" rc)"
@@ -472,29 +494,24 @@ for sig in INT TERM; do
   fi
 done
 
-# ── 6c. STATIC: the slow-transfer case's margin ─────────────────────────────
-# Case 5c passes only while install.sh stays under a MEASURED boundary — see the
-# admission above 5c: the boundary is reproducible (81,920 B = 5 x 16,384, the
-# writer's chunk size, bisected twice) but its mechanism is NOT established, and
-# three attempts to state one were each measured false. install.sh is ~78 KB and
-# the boundary below is 78,000 B, so the remaining margin is now SMALL — tens of
-# bytes, not kilobytes. Do not read this check's green as room to grow.
-# Left implicit, growing install.sh would one day turn 5c red for a reason that
-# looks like flakiness and has nothing to do with the drain.
-# ⚠️ If you are here because this went red: the right move is to re-measure the
-# cliff AND this boundary together and move both, or to compress install.sh — not
-# to raise the number on its own. It is a measured guard, not a style preference.
-SCRIPT_BYTES="$(wc -c < "$SCRIPT" | tr -d ' ')"
-if [[ "$SCRIPT_BYTES" -le 78000 ]]; then
-  ok "static: install.sh is ${SCRIPT_BYTES} B — inside the margin case 5c depends on (cliff measured at 81,920 B = 5 x 16,384)"
-else
-  # Deliberately NOT suggesting "raise _OC_DRAIN_TOTAL_TIMEOUT": measured, that
-  # buys 5c room but pushes case 5b (the dribbler) to 23.0s and past ITS bound.
-  # A remedy that moves the failure to a neighbouring case is not a remedy, and
-  # an unverified suggestion in a failure message is how the next person spends
-  # an hour.
-  bad "static: install.sh has grown to ${SCRIPT_BYTES} B; case 5c's cliff is at 81,920 B (5 x 16,384). Trim the file, or re-measure the cliff AND case 5b's bound together and move both — do NOT just relax this number"
-fi
+# ── 6c. RETIRED (T-4358): the 78,000 B ceiling on install.sh ────────────────
+# This asserted install.sh stayed under 78,000 B, to keep case 5c clear of a
+# boundary measured at 81,920 B whose mechanism was explicitly unestablished.
+# The measurements above 5c retire both halves: the "cliff" was the reader's TIME
+# budget expressed in bytes by this suite's fixed 5 KB/s rate (it moves when the
+# rate moves, so it is not a byte boundary), and the oc_main() wrap removes the
+# size-dependence outright rather than pushing it to a bigger number — 524,287 B
+# delivers in full with no EPIPE where the unwrapped control fails at 114,688 B.
+#
+# Retired on evidence, not relaxed to make a commit go green: 5/5 consecutive
+# 150,000 B real curl|bash runs at rc=0 with complete delivery, and the positive
+# control red (rc=23) every one of those runs.
+#
+# Left as a comment because a bare deletion reads like an oversight to whoever
+# greps for "78000" next. The property that REPLACED it is structural and lives
+# in bin/tests/curl-bash-read-before-execute-guard.sh: install.sh must END with
+# oc_main's closing brace and then the call, or a piped bash begins executing
+# before delivery finishes and every one of these numbers comes back.
 
 # ── 7. STATIC: the from-stdin flag must stay at TOP LEVEL ───────────────────
 # What BASH_SOURCE[0] reads as inside a function is VERSION-DEPENDENT: measured,

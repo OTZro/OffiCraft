@@ -19,9 +19,15 @@
 # that OC_LAUNCHD_LABEL is ALSO always set to a per-suite test label, so even
 # if the ownership check had a bug, the worst it could do is bootout/register
 # a fake label under `launchctl`, which is itself stubbed here and never talks
-# to the real launchd domain. `plutil` is deliberately NOT stubbed — like
-# install-guard.sh, it only ever reads a plist this suite wrote inside its own
-# temp dir, so the real tool gives a more faithful test at zero risk.
+# to the real launchd domain. `plutil` is deliberately NOT stubbed HERE: it only
+# ever reads a plist this suite wrote inside its own temp dir, so the real tool
+# gives a more faithful test at zero risk.
+# ⚠️ Do not read that as a statement about install-guard.sh. It said the same
+# until T-5831, which added a plutil shim there — a pass-through unless a case
+# sets SHIM_PLUTIL_STDOUT_ERR, which reproduces macOS 15 printing "no value at
+# that key path" on STDOUT. The --uninstall side of that defect (plist_program
+# via plist_raw) is therefore covered in install-guard.sh §11, where the shim
+# lives, not in this file.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

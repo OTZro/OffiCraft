@@ -606,20 +606,142 @@ if [[ -e "$FAKEHOME/.officraft/server/oc.toml" ]]; then bad "no --namespace: an 
 reset_fixture preinstalled
 PLUTIL_LOG="$WORK/.plutil-calls"; : > "$PLUTIL_LOG"
 SHIM_PLUTIL_STDOUT_ERR=1 SHIM_PLUTIL_LOG="$PLUTIL_LOG" run_install running --force --restart-live
-unset SHIM_PLUTIL_STDOUT_ERR SHIM_PLUTIL_LOG
 # Positive control FIRST: if install.sh never consulted plutil through the stub,
 # everything below would pass for the wrong reason.
-if [[ -s "$PLUTIL_LOG" ]]; then
-  ok "macOS-15 plutil: install.sh actually consulted the stub (case is live)"
-else
-  bad "macOS-15 plutil: the stub was never called — this case proves nothing"
-fi
+# IT MUST NAME THE EXTRACT. An earlier version asked only "is the log non-empty",
+# and the log is filled by calls that have nothing to do with this case —
+# plist_program's ProgramArguments.0, and the `plutil -lint` on the rendered
+# plist. Measured: with that control, replacing plist_env's whole body with
+# `return 0` — deleting config inheritance and half the relocation gate — left
+# this suite at 80 ok / 0 failed. A control that a total deletion satisfies is
+# not a control.
+case "$(cat "$PLUTIL_LOG")" in
+  *"EnvironmentVariables.OC_CONFIG"*)
+    ok "macOS-15 plutil: install.sh actually asked for EnvironmentVariables.OC_CONFIG (case is live)" ;;
+  *)
+    bad "macOS-15 plutil: no EnvironmentVariables.OC_CONFIG extract in the log — plist_env was never reached, so this case proves nothing. Log: $(cat "$PLUTIL_LOG")" ;;
+esac
 check "macOS-15 plutil: a re-install still proceeds" "0" "$RC"
 case "$OUT" in
   *"would MOVE the running"*) bad "macOS-15 plutil: re-install misread as a relocation (gate fired on an absent-key error string)" ;;
   *) ok "macOS-15 plutil: re-install is not misread as a relocation" ;;
 esac
 check "macOS-15 plutil: the old job is booted out" "yes" "$(booted_out)"
+
+# ── 10b. plist_env must return the VALUE, not merely "not an error" ─────────
+# Case 10 only ever asks plist_env about a key that is ABSENT, so it constrains
+# one direction: do not hand back an error string. Nothing in this tree exercised
+# the other direction — the branch where the key IS present and its value is what
+# the installer then acts on. `grep -rn "carrying over" bin/tests/` had zero hits
+# before this case, which is why `plist_env() { return 0; }` was a silent no-op
+# against the whole suite.
+#
+# The observable is config INHERITANCE: a run that resolves no config of its own,
+# over a job whose plist carries OC_CONFIG, must adopt that config AND re-derive
+# the port from it. Asserting the PORT is the point — it can only come from
+# reading the file plist_env pointed at, so an empty return cannot fake it.
+reset_fixture preinstalled
+INHERIT_CFG="$FAKEHOME/.officraft/server/inherited.toml"
+printf '[server]\nport = 7799\n' > "$INHERIT_CFG"
+cat > "$FAKEHOME/$PLIST_REL" <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.officraft.serve</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$FAKEHOME/.officraft/bin/ocserverd</string>
+    <string>serve</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>OC_CONFIG</key><string>$INHERIT_CFG</string></dict>
+  <key>RunAtLoad</key><true/>
+</dict>
+</plist>
+PL
+PLUTIL_LOG="$WORK/.plutil-calls"; : > "$PLUTIL_LOG"
+SHIM_PLUTIL_STDOUT_ERR=1 SHIM_PLUTIL_LOG="$PLUTIL_LOG" run_install loaded --force
+case "$(cat "$PLUTIL_LOG")" in
+  *"EnvironmentVariables.OC_CONFIG"*)
+    ok "config inheritance: install.sh asked for EnvironmentVariables.OC_CONFIG (case is live)" ;;
+  *)
+    bad "config inheritance: no EnvironmentVariables.OC_CONFIG extract in the log — this case proves nothing" ;;
+esac
+check "config inheritance: the re-install proceeds" "0" "$RC"
+case "$OUT" in
+  *"carrying over the existing service's config: $INHERIT_CFG"*)
+    ok "config inheritance: the existing job's OC_CONFIG is adopted, not dropped" ;;
+  *)
+    bad "config inheritance: expected 'carrying over the existing service's config: $INHERIT_CFG' — plist_env returned nothing usable ($OUT)" ;;
+esac
+case "$OUT" in
+  *"(port 7799)"*) ok "config inheritance: the port is re-derived FROM that config (7799), so the value really was read" ;;
+  *) bad "config inheritance: the inherited config's port 7799 never reached the port gate — an empty plist_env would look exactly like this ($OUT)" ;;
+esac
+case "$OUT" in
+  *"would MOVE the running"*) bad "config inheritance: adopting the old config was misread as a relocation" ;;
+  *) ok "config inheritance: adopting the old config is not a relocation" ;;
+esac
+if tripwire_has "lsof -nP -iTCP:7799"; then
+  ok "config inheritance: the port gate probed 7799, the INHERITED port"
+else
+  bad "config inheritance: the port gate never probed 7799 — it checked a port the inherited config does not name"
+fi
+
+# ── 11. the SAME defect on the other plutil reader (T-4358) ─────────────────
+# plist_env got the rc-decides treatment in T-5831; plist_program was left on
+# `2>/dev/null || true`, which on macOS 15 captures plutil's error TEXT and hands
+# it back as the value. The ownership gate then printed that error line in the
+# field the operator is told to read a program path out of — the one fact the
+# refusal exists to convey. Both now go through plist_raw, so this case is what
+# stops the two from drifting apart again.
+#
+# The fixture is a plist with NO ProgramArguments at all: the ordinary
+# "key is absent" answer, which is the shape the defect needs. As in case 10, the
+# stub is what gives this teeth on a macOS 26 runner.
+reset_fixture preinstalled
+cat > "$FAKEHOME/$PLIST_REL" <<'PL'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.officraft.serve</string>
+  <key>RunAtLoad</key><true/>
+</dict>
+</plist>
+PL
+PLUTIL_LOG="$WORK/.plutil-calls"; : > "$PLUTIL_LOG"
+SHIM_PLUTIL_STDOUT_ERR=1 SHIM_PLUTIL_LOG="$PLUTIL_LOG" run_install absent --force
+# Same rule as case 10's control: name the extract this case is about. "The log
+# is non-empty" is satisfied by plutil -lint alone.
+case "$(cat "$PLUTIL_LOG")" in
+  *"ProgramArguments.0"*)
+    ok "macOS-15 plutil / plist_program: install.sh asked for ProgramArguments.0 (case is live)" ;;
+  *)
+    bad "macOS-15 plutil / plist_program: no ProgramArguments.0 extract in the log — this case proves nothing. Log: $(cat "$PLUTIL_LOG")" ;;
+esac
+check "macOS-15 plutil / plist_program: an unidentifiable label is still refused" "1" "$RC"
+case "$OUT" in
+  *"Could not extract value"*)
+    bad "macOS-15 plutil / plist_program: plutil's ERROR TEXT was reported as the program name" ;;
+  *) ok "macOS-15 plutil / plist_program: the error text never reaches the report" ;;
+esac
+case "$OUT" in
+  *"program: <unreadable>"*) ok "macOS-15 plutil / plist_program: an absent key reads as <unreadable>" ;;
+  *) bad "macOS-15 plutil / plist_program: expected 'program: <unreadable>' in the refusal ($OUT)" ;;
+esac
+# The uninstall side shares the helper and the same field; it went blank rather
+# than garbled before, which is the same failure to say what was found.
+# (No `unset` after these: a prefix assignment on a FUNCTION call does not
+# persist in bash — measured on 3.2.57 and 5.3 — so the variable is already gone.)
+SHIM_PLUTIL_STDOUT_ERR=1 run_install absent --uninstall --dry-run
+case "$OUT" in
+  *"Could not extract value"*)
+    bad "macOS-15 plutil / --uninstall: plutil's ERROR TEXT was reported as the program name" ;;
+  *"program:  <unreadable>"*) ok "macOS-15 plutil / --uninstall: an absent key reads as <unreadable>" ;;
+  *) bad "macOS-15 plutil / --uninstall: expected 'program:  <unreadable>' in the refusal ($OUT)" ;;
+esac
 
 echo "install-guard tests: $PASS ok, $FAIL failed"
 [[ "$FAIL" == "0" ]] || exit 1
