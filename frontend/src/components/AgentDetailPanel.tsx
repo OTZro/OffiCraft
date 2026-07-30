@@ -55,6 +55,9 @@ export interface AgentDetailVM {
   /** Resolved machine display text; "" ⇒ dash. Wrappers apply their own gate
    * (member: awake-only; worker: 尚未分配 fallback text). */
   machineText: string;
+  /** A pending relocation target. This supplements — never replaces — the
+   * observed machine, and disappears once both locations agree. */
+  machineTransition?: string;
   /** Optional action next to the 機器 label (the worker's 改機器 button). */
   machineAction?: ReactNode;
   /** Readable Claude account name; "" ⇒ dash — NEVER a raw credential key
@@ -378,6 +381,11 @@ export function AgentDetailPanel({
           <div className="mp-field__value" data-testid={`${p}-machine`}>
             {vm.machineText || dash}
           </div>
+          {vm.machineTransition && (
+            <div className="mp-field__hint" data-testid={`${p}-machine-transition`}>
+              {vm.machineTransition}
+            </div>
+          )}
           <div className="mp-field__label mp-field__label--stacked">
             {shownRuntime === "codex" ? t.mp.codexAccount : t.mp.claudeAccount}
           </div>

@@ -733,6 +733,7 @@ export const zh = {
     modelEffortError: "儲存失敗，請稍後重試",
     runtime: "運行狀況",
     machine: "機器",
+    machineMovingTo: (machine: string) => `→ 要換到 ${machine}`,
     standby: "待命中",
     context: "context",
     compactionCount: (n: number) => `壓縮：${n}`,

@@ -73,20 +73,22 @@ function mkMember(over: Partial<Member> = {}): Member {
   };
 }
 
-function renderPanel() {
+function renderPanel(over: Partial<Member> = {}) {
   const onRelocate = vi.fn(async (machineId: string) => {
     await relocateMember("mira", machineId);
   });
+  const onActivate = vi.fn(async () => ({ activationPending: false }));
   const utils = render(
     <I18nProvider>
       <MemberDetailPanel
-        member={mkMember()}
+        member={mkMember(over)}
         onBack={vi.fn()}
+        onActivate={onActivate}
         onRelocate={onRelocate}
       />
     </I18nProvider>,
   );
-  return { ...utils, onRelocate };
+  return { ...utils, onActivate, onRelocate };
 }
 
 beforeEach(() => {
@@ -95,37 +97,37 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
 });
 
-describe("MemberDetailPanel — 改機器 relocate", () => {
-  it("renders the 編輯 button next to the 機器 label (label parity with 模型)", async () => {
-    const { getByTestId } = renderPanel();
-    await waitFor(() => {
-      expect(getByTestId("mp-relocate")).toBeTruthy();
-    });
-    // The 機器 control reads 「編輯」 — the SAME i18n key the 模型 edit button uses
-    // (owner: 「一樣叫做編輯就好了」). Behaviour is still relocate-only (the picker).
-    expect(getByTestId("mp-relocate").textContent).toContain(zh.settings.edit);
+describe("MemberDetailPanel — unified wake/change settings", () => {
+  it("keeps the detail fields read-only and sends an offline setting once through activate", async () => {
+    const { getByTestId, queryByTestId, onActivate } = renderPanel();
+    expect(queryByTestId("mp-relocate")).toBeNull();
+    expect(queryByTestId("mp-model-effort-edit")).toBeNull();
+
+    fireEvent.click(getByTestId("member-action-spawn"));
+    const dialog = getByTestId("me-runtime-select").closest("[role=dialog]")!;
+    const select = dialog.querySelector("select.machine-picker__select") as HTMLSelectElement;
+    await waitFor(() => expect(select.options).toHaveLength(2));
+    fireEvent.change(select, { target: { value: "mach-b" } });
+    fireEvent.click(dialog.querySelector(".btn--accent")!);
+
+    await waitFor(() => expect(onActivate).toHaveBeenCalledWith("mach-b"));
   });
 
-  it("with TWO online machines opens the picker and relocates to the chosen machine", async () => {
-    const { getByTestId, onRelocate } = renderPanel();
-
-    // Wait for useMachines to load the two online machines (button enabled).
-    await waitFor(() => {
-      expect(
-        (getByTestId("mp-relocate") as HTMLButtonElement).disabled,
-      ).toBe(false);
+  it("shows the observed machine plus a pending target, then removes the target after arrival", async () => {
+    const initial = mkMember({
+      status: "online", lifecycle: "online", machine: "mach-a", desiredMachineId: "mach-b",
     });
+    const { getByTestId, queryByTestId, rerender } = render(
+      <I18nProvider><MemberDetailPanel member={initial} onBack={vi.fn()} /></I18nProvider>,
+    );
+    await waitFor(() => expect(getByTestId("mp-machine").textContent).toContain("Machine A"));
+    expect(getByTestId("mp-machine-transition").textContent).toContain("→ 要換到 Machine B");
 
-    fireEvent.click(getByTestId("mp-relocate"));
-    // 2+ online → the picker opens (never an auto-relocate).
-    const select = getByTestId("machine-picker-select") as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: "mach-b" } });
-    fireEvent.click(getByTestId("machine-picker-confirm"));
-
-    await waitFor(() => {
-      expect(onRelocate).toHaveBeenCalledWith("mach-b");
-    });
-    // Placement-only: it routed through relocateMember, never activateMember.
-    expect(relocateMember).toHaveBeenCalledWith("mira", "mach-b");
+    rerender(
+      <I18nProvider><MemberDetailPanel member={mkMember({
+        status: "online", lifecycle: "online", machine: "mach-b", desiredMachineId: "mach-b",
+      })} onBack={vi.fn()} /></I18nProvider>,
+    );
+    expect(queryByTestId("mp-machine-transition")).toBeNull();
   });
 });
