@@ -27,6 +27,7 @@ trash/
 .deploy/
 cli/ocagent/ocagent
 cli/ocwarden/ocwarden
+cli/officraft/officraft
 cli/ocwarden/ocwarden.prev
 cli/ocwarden/ocagent
 cli/ocwarden/ocagent.prev

@@ -76,6 +76,8 @@ CI 跑在本地、`bin/ci.sh` 是 land 權威，從第一個非零步驟就 fail
 
 改 Go 後只需 fresh build 驗證；`bin/ocagent`、`bin/ocwarden`、`bin/ocserverd` 若出現都是 gitignored build artifact，**永不 commit**。CI 一律編譯 source；只有本機恰有 prebuilt 時才做 parity dryrun。部署 binary 由 `bin/release` / GitHub Release fresh build 產出。
 
+**唯一的例外是 TCC 身分錨點 `dist/officraft/officraft`（owner 明確核可，T-5831）**：它是 launchd 的 responsible process，而 TCC 用 bytes 認身分，所以那份 bytes 本身就是要被審的東西。`.gitignore` 只放行 `dist/officraft/` 底下四個路徑，其餘 `dist/` 照舊全擋。它附兩份紀錄（`source.sha256` 與 `binary.sha256`），由 `bin/check-officraft-dist` 在 CI step 3 比對；重建方式與**為什麼 build 一定要帶 `-trimpath -buildvcs=false`** 寫在 `dist/officraft/BUILD.md`。
+
 ## wire freeze
 
 wire（HTTP OpenAPI 面、MCP tool 面）已凍結：**動 wire 一律 spec 先行**——先改 `spec/openapi.json` / `spec/mcp-catalog.json`（+ owner 過目），再 `bash bin/gen-ocapi` 重生、動碼。CI 的 wire-freeze gate 擋任何未過 spec 的漂移；行為面由 `conformance/run.sh --target go` 收官。完整紀律見 [CLAUDE.md](../../CLAUDE.md) §13。

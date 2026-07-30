@@ -16,7 +16,7 @@
   - `TestHostSeam_StructureIsReported` 是**唯一一條** reporting wrapper(不是 enforcement、不是覆蓋率:`TestMain` 已先跑同一個 scan 並 `os.Exit(1)`,所以它的迴圈體恆不執行)。⚠️ **不要再加第二條**:原本這裡有兩條函式本體逐字相同的守護測試,審查者把兩者迴圈體換成 `panic` 跑整包,照樣 `ok` + 兩條 `--- PASS`。新性質加進 `scanHostSeamSource`,不要加新的 no-op 測試。
 
 ## 自更新 binary
-- **改 Go → fresh build 驗證，binary 永不 commit**(root §13)。CI Go gate 跑 gofmt、vet、build 與 test；只有本機剛好留有 gitignored `bin/ocagent` / `bin/ocwarden` 時才做 parity dryrun。發佈的 binary 由 release 流程 fresh build。
+- **改 Go → fresh build 驗證，binary 永不 commit**(root §13,唯一例外是 TCC 身分錨點 `dist/officraft/officraft`,見該節)。CI Go gate 跑 gofmt、vet、build 與 test；只有本機剛好留有 gitignored `bin/ocagent` / `bin/ocwarden` 時才做 parity dryrun。發佈的 binary 由 release 流程 fresh build。
 - **self-update**:content-hash swap oracle + 防自殺 verify-before-swap(swap 前先驗新 binary 可跑)。install `env -u OC_ID`(防 shell OC_ID 污染)+ 餵回同 tokfile。ocwarden 換掉自己後 **exec-in-place**(`syscall.Exec` 同 PID、同 argv/env 原地換新,exec 失敗才 fallback exit(0))——**絕不賭 launchd KeepAlive 重拉**:實測 macOS gui-domain LaunchAgent 對 exit 0 的 warden 不重拉(job 停在 not running 直到人工 kickstart),exit-and-relaunch 舊路會讓每次 self-update 殺死該機看門狗。
 - **warden restart 不斷 agent online**:ocagent 是獨立進程、持自己的 SSE,warden 重啟不影響。
 - **發佈簽章 = 觀測不 enforce(T-33d5),且 T-588c 起預設不簽**:`bin/codesign-artifact` 可以用穩定 self-signed 憑證簽 bindist 的 ocwarden/ocagent,但**預設完全不跑、連 keychain 都不看**,要簽得明確要求(`bin/release publish --sign`)。所以實務上這個 loop 換進去的 binary 是 adhoc 的。self-update swap 後只 **log** 新 binary 的簽章身分(`signatureOf` seam → `codesignIdentity`),**絕不驗簽硬擋**——self-signed 憑證在未信任機器上 verify 必非零,硬擋會 brick fleet。簽章只活在發佈 artifact，不進 git。

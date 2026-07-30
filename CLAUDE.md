@@ -41,7 +41,7 @@ This file is read by Claude Code agents working in this repo.
     - **recon 一律基於 `origin/main`**:此 repo 的 `local main` 是條**孤兒 old-flat-layout 歷史**(與 origin/main 無共同祖先),讀它 = 全錯 layout。verify-at-source 的 source = `origin/main`。
     - **wire 已凍結(M1)**:動 wire(HTTP OpenAPI 面或 MCP tool 面)= **先改 `spec/*.json`(spec/openapi.json / spec/mcp-catalog.json)+ owner 過目,再動碼**;ci wire-freeze gate(step 1g gen-ocapi drift:committed `ocapi_gen.go` 必須從凍結 spec byte-identical 重生 + step 4 FE schema drift;MCP 描述子由 ocserverd 直服凍結 `spec/mcp-catalog.json`,by construction 不漂)會擋任何未過 spec 的漂移;行為面由 `conformance/run.sh --target go` 收官。
     - **land pipeline**:off `origin/main` 開分支 → 隔離 worktree、標死 scope → 親驗全 diff(無 scope-creep)+ 親讀關鍵邏輯碼 → `bash bin/ci.sh` **rc == 0 且最後一行**精確為 `[ci] all green` → FF fast-forward push(`git push origin <b>:main`)→ 雙源坐實(`git ls-remote` + `gh api .../commits/main --jq .sha`)→ autodeploy 盯 `/api/version` git_sha(公開免 auth;version 欄恆 0.0.0,對賬看 git_sha)→ 收退路(`worktree remove` + `branch -D`)。
-    - **改 Go → fresh build 驗證即可；binary 永不 commit**。CI 會編譯 source；若本機剛好有 gitignored prebuilt，才做 parity dryrun。
+    - **改 Go → fresh build 驗證即可；binary 永不 commit**。CI 會編譯 source；若本機剛好有 gitignored prebuilt，才做 parity dryrun。⚠️ **唯一例外：TCC 身分錨點 `dist/officraft/officraft`**（owner 明確核可，T-5831 / 卡 `rc-2e5e4e616d1d`）——它是 launchd 的 responsible process，TCC 用 bytes 認身分，所以那份 bytes 就是要被審的東西。`.gitignore` 只放行 `dist/officraft/` 底下四個路徑；`bin/check-officraft-dist`（CI step 3）比對它的原始碼雜湊與 binary 雜湊，重建方式見 `dist/officraft/BUILD.md`。**這是一條被核可的例外，不是可以再擴張的先例**。
     - **§7 push 前審完整 manifest**:逐檔必要性,別把第一道審查讓給 gate。
 
 14. **caller 身分來自 auth、非參數;intent-per-tool**(owner 定案 2026-07-10;對齊 §1「乾淨身分、不借權」;全 spec 見 `docs/design/caller-identity-convention.md`):

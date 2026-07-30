@@ -52,7 +52,7 @@
 
 | 需求 | 最低版本 | 為什麼 |
 | --- | --- | --- |
-| **Go** | 1.26 以上 | 從原始碼 build `ocserverd` / `ocwarden` / `ocagent` |
+| **Go** | 1.26 以上 | 從原始碼 build `ocserverd` / `ocwarden` / `ocagent` / `officraft` |
 | **node + npm** | node 18 以上（建議 20 LTS 以上），npm 隨 node 附帶 | build 前端控制台 |
 | **python3** | 3.11 以上 | 開發用腳本 |
 | **`cloudflared`** | — | **只有**要開對外 tunnel 才需要；不開就不裝 |
@@ -81,7 +81,7 @@ curl -fsSL https://github.com/pkyosx/OffiCraft/releases/latest/download/install.
 1. **平台閘** — 只支援 macOS Apple Silicon，其他平台直接拒絕。
 2. **既有安裝閘** — `~/.officraft/bin` 有 binary 或已有資料庫時大聲警告並要求確認（互動 y/N 預設否；非互動要 `--force`），否則中止、什麼都不動。
 3. **現役服務閘** — 見下方警告。
-4. **裝 binary + 資料庫升級** — `ocserverd` / `ocwarden` / `ocagent` 落到 `~/.officraft/bin`，跑 migration（資料保留、原地升級）。
+4. **裝 binary + 資料庫升級** — `ocserverd` / `ocwarden` / `ocagent` / `officraft` 落到 `~/.officraft/bin`，跑 migration（資料保留、原地升級）。（`officraft` 是 warden 的固定身分錨點：launchd 起的是它、再由它把隔壁的 `ocwarden` 帶起來，好讓這台機器的隱私授權不會因為 warden 自我更新而作廢。）
 5. **埠閘** — 預設 **7755**（`$OC_CONFIG` 或當前目錄的 `./oc.toml` 可覆蓋）。
 6. **註冊背景服務** — launchd job `com.officraft.serve`（`RunAtLoad` / `KeepAlive`，log 落在 `~/.officraft/server/log/serve.log`）。**不佔用你的終端機，關掉也不會停。**
 7. **印出一次性設定連結** — `http://127.0.0.1:7755/?code=…`，打開它設定 owner 密碼。
