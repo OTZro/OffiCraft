@@ -49,6 +49,8 @@ export interface Member {
    */
   lifecycle: MemberLifecycle;
   runtime?: AgentRuntime;
+  /** Model last reported by a live boot; absent on older API payloads. */
+  actualModel?: string;
   model: string;
   effort: Effort;
   // The member's kind (e.g. "assistant" | "warden"). The office roster shows

@@ -180,7 +180,6 @@ export function MemberDetailPanel({
   // bound machine is `member.desiredMachineId` (the machine_id the activate binds to).
   const { machines } = useMachines();
   const onlineMachines = machines.filter((m) => m.online);
-  const boundMachineId = member.desiredMachineId || null;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsRuntime, setSettingsRuntime] = useState<"claude" | "codex">(
     member.runtime || "claude",
@@ -244,17 +243,6 @@ export function MemberDetailPanel({
       setSettingsBusy(false);
     }
   }
-    // pinned. Convergence means the background retry landed the move.
-    //
-    // 🔴 Gated on the SAME `awake` flag as the 機器 cell above (review r2).
-    // Outside online/waking, `member.machine` is not an observation — the
-    // server's observed_host falls back to desired_machine_id, so it equals the
-    // pin by construction and would read as "the move landed" for a member
-    // nobody can see. The panel already refuses to PRINT that value; it must
-    // not silently believe it either.
-    currentMachineId: awake ? member.machine : null,
-  });
-
   // ── 回呼端點 · WEBHOOK (M4) ───────────────────────────────────────────────
   // A collapsible section between the TMUX and initial-PROMPT cards. Webhooks
   // are external inlets bound to THIS member; the panel lists them, toggles
@@ -591,7 +579,6 @@ export function MemberDetailPanel({
             onForceStop={
               onForceStop ? () => setForceStopConfirm(true) : undefined
             }
-            reasons={{ spawn: spawnReason }}
             // A locally pending wake precedes the server presence flip — carry
             // the instant feedback INSIDE the (disabled) wake button, the same
             // in-progress presentation the Monitor machine table uses for
@@ -614,9 +601,6 @@ export function MemberDetailPanel({
               — the click and its outcome in one place. */}
           {wakeUndispatched && (
             <DispatchAlert kind="wake" testId="mp-wake-undispatched" />
-          )}
-          {relocateUndispatched && (
-            <DispatchAlert kind="relocate" testId="mp-relocate-undispatched" />
           )}
         </div>
       </div>
@@ -662,21 +646,11 @@ export function MemberDetailPanel({
         </div>
       )}
 
-      {spawnPickerOpen && (
-        <MachinePicker
-          machines={machines}
-          boundMachineId={boundMachineId}
-          title={t.machine.picker.spawnTitle}
-          confirmLabel={t.machine.picker.spawnConfirm}
-          onConfirm={runActivate}
-          onCancel={() => setSpawnPickerOpen(false)}
-        />
-      )}
       {settingsOpen && (
         <div className="machine-picker" role="dialog" aria-modal="true">
           <div className="machine-picker__box">
             <div className="machine-picker__title">
-              {online ? t.mp.change : t.lifecycle.action.spawn}
+              {awake ? t.mp.change : t.lifecycle.action.spawn}
             </div>
             <ModelEffortEditor
               runtime={settingsRuntime}
@@ -684,7 +658,9 @@ export function MemberDetailPanel({
               effort={settingsEffort}
               onRuntimeChange={setSettingsRuntime}
               onModelChange={setSettingsModel}
-              onEffortChange={setSettingsEffort}
+              onEffortChange={(effort) =>
+                setSettingsEffort(effort as typeof settingsEffort)
+              }
             />
             <label className="machine-picker__field">
               <span className="machine-picker__label">{t.mp.machine}</span>
@@ -705,13 +681,12 @@ export function MemberDetailPanel({
                 {t.common.cancel}
               </button>
               <button type="button" className="btn btn--accent" disabled={settingsBusy || !settingsMachineId} onClick={() => void saveSettings()}>
-                {online ? t.mp.change : t.lifecycle.action.spawn}
+                {awake ? t.mp.change : t.lifecycle.action.spawn}
               </button>
             </div>
           </div>
         </div>
       )}
-      {relocatePicker}
     </>
   );
 

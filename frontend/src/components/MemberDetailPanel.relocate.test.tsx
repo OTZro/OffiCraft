@@ -11,7 +11,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
-import { zh } from "../i18n/locales/zh";
 import { MemberDetailPanel } from "./MemberDetailPanel";
 import type { Member } from "../types";
 import type { MachineView } from "../types";
