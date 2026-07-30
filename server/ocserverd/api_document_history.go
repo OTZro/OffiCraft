@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -28,6 +29,43 @@ func documentHistoryDTO(h DocumentHistory) (DocumentHistoryDTO, error) {
 		return DocumentHistoryDTO{}, err
 	}
 	return DocumentHistoryDTO{Id: h.ID, Content: content, CreatedTs: h.CreatedTS, ActorId: h.ActorID}, nil
+}
+
+// Overlay documents must retain their persisted tombstone state, not only the
+// folded text exposed to readers. A tombstone means "follow the seed"; writing
+// that same text back as a live overlay would silently turn a default document
+// into a customized one.
+func historyTombstoned(content map[string]string) bool {
+	value, _ := strconv.ParseBool(content["tombstoned"])
+	return value
+}
+
+func userContextHistorySnapshot(current *UserContext) (string, error) {
+	if current == nil {
+		return "{}", nil
+	}
+	return historyJSON(map[string]string{
+		"text": current.Text, "tombstoned": strconv.FormatBool(current.Tombstoned),
+	})
+}
+
+func roleDefHistorySnapshot(current *RoleDef) (string, error) {
+	if current == nil {
+		return "{}", nil
+	}
+	return historyJSON(map[string]string{
+		"name": current.Name, "definition_md": current.DefinitionMD,
+		"tombstoned": strconv.FormatBool(current.Tombstoned),
+	})
+}
+
+func lessonsHistorySnapshot(current *Lessons) (string, error) {
+	if current == nil {
+		return "{}", nil
+	}
+	return historyJSON(map[string]string{
+		"text": current.Text, "tombstoned": strconv.FormatBool(current.Tombstoned),
+	})
 }
 
 func (s *apiServer) documentHistoryAllowed(w http.ResponseWriter, r *http.Request, kind, key string, write bool) bool {
@@ -127,31 +165,33 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 	actor := currentActor(r)
 	switch kind {
 	case "global_context":
-		current, err := s.foldUserContextDTO()
+		current, err := s.dal.GetUserContext()
 		if err != nil {
 			return err
 		}
-		snapshot, err := historyJSON(map[string]string{"text": current.Text})
+		snapshot, err := userContextHistorySnapshot(current)
 		if err != nil {
 			return err
 		}
 		return s.dal.SaveWithDocumentHistory(kind, key, snapshot, actor, func(ex sqlExecer) error {
-			return putUserContextOn(ex, UserContext{Text: content["text"], Tombstoned: false})
+			return putUserContextOn(ex, UserContext{Text: content["text"], Tombstoned: historyTombstoned(content)})
 		})
 	case "role_definition":
-		current, err := s.foldRoleDefDTO(key)
+		if folded, err := s.foldRoleDefDTO(key); err != nil {
+			return err
+		} else if folded == nil {
+			return errNotFound
+		}
+		current, err := s.dal.GetRoleDef(key)
 		if err != nil {
 			return err
 		}
-		if current == nil {
-			return errNotFound
-		}
-		snapshot, err := historyJSON(map[string]string{"name": current.Name, "definition_md": current.DefinitionMD})
+		snapshot, err := roleDefHistorySnapshot(current)
 		if err != nil {
 			return err
 		}
 		return s.dal.SaveWithDocumentHistory(kind, key, snapshot, actor, func(ex sqlExecer) error {
-			return putRoleDefOn(ex, RoleDef{RoleKey: key, Name: content["name"], DefinitionMD: content["definition_md"]})
+			return putRoleDefOn(ex, RoleDef{RoleKey: key, Name: content["name"], DefinitionMD: content["definition_md"], Tombstoned: historyTombstoned(content)})
 		})
 	case "lessons":
 		roleKey, taskType, _ := historyKeyParts(kind, key)
@@ -162,12 +202,16 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 		if DocCapBlocked(current.Text, content["text"]) {
 			return errDocumentHistoryCap
 		}
-		snapshot, err := historyJSON(map[string]string{"text": current.Text})
+		overlay, err := s.dal.GetLessons(roleKey, taskType)
+		if err != nil {
+			return err
+		}
+		snapshot, err := lessonsHistorySnapshot(overlay)
 		if err != nil {
 			return err
 		}
 		return s.dal.SaveWithDocumentHistory(kind, key, snapshot, actor, func(ex sqlExecer) error {
-			return putLessonsOn(ex, Lessons{RoleKey: roleKey, TaskType: taskType, Text: content["text"]})
+			return putLessonsOn(ex, Lessons{RoleKey: roleKey, TaskType: taskType, Text: content["text"], Tombstoned: historyTombstoned(content)})
 		})
 	case "task_manual":
 		current, err := s.dal.GetTaskManual(key)

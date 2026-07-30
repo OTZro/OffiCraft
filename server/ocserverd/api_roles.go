@@ -54,12 +54,12 @@ func (s *apiServer) HandleReplaceGlobalContextApiGlobalContextPost(w http.Respon
 			return
 		}
 	}
-	current, err := s.foldUserContextDTO()
+	overlay, err := s.dal.GetUserContext()
 	if err != nil {
 		internalError(w, err)
 		return
 	}
-	snapshot, err := historyJSON(map[string]string{"text": current.Text})
+	snapshot, err := userContextHistorySnapshot(overlay)
 	if err != nil {
 		internalError(w, err)
 		return
@@ -82,12 +82,12 @@ func (s *apiServer) HandleReplaceGlobalContextApiGlobalContextPost(w http.Respon
 
 // POST /api/global-context/reset — idempotent tombstone back to empty.
 func (s *apiServer) HandleResetGlobalContextApiGlobalContextResetPost(w http.ResponseWriter, r *http.Request) {
-	current, err := s.foldUserContextDTO()
+	overlay, err := s.dal.GetUserContext()
 	if err != nil {
 		internalError(w, err)
 		return
 	}
-	snapshot, err := historyJSON(map[string]string{"text": current.Text})
+	snapshot, err := userContextHistorySnapshot(overlay)
 	if err != nil {
 		internalError(w, err)
 		return
@@ -266,7 +266,12 @@ func (s *apiServer) HandleUpdateRoleApiRolesRolePost(w http.ResponseWriter, r *h
 	if body.DefinitionMd != nil {
 		definitionMD = *body.DefinitionMd
 	}
-	snapshot, err := historyJSON(map[string]string{"name": current.Name, "definition_md": current.DefinitionMD})
+	overlay, err := s.dal.GetRoleDef(role)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	snapshot, err := roleDefHistorySnapshot(overlay)
 	if err != nil {
 		internalError(w, err)
 		return
@@ -306,7 +311,12 @@ func (s *apiServer) HandleResetRoleApiRolesRoleResetPost(w http.ResponseWriter, 
 		internalError(w, err)
 		return
 	}
-	snapshot, err := historyJSON(map[string]string{"name": current.Name, "definition_md": current.DefinitionMD})
+	overlay, err := s.dal.GetRoleDef(role)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	snapshot, err := roleDefHistorySnapshot(overlay)
 	if err != nil {
 		internalError(w, err)
 		return
@@ -579,7 +589,12 @@ func (s *apiServer) HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(w http.Res
 		writeError(w, http.StatusBadRequest, docCapRefusal("lessons doc", current.Text, text))
 		return
 	}
-	snapshot, err := historyJSON(map[string]string{"text": current.Text})
+	overlay, err := s.dal.GetLessons(roleKey, taskType)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	snapshot, err := lessonsHistorySnapshot(overlay)
 	if err != nil {
 		internalError(w, err)
 		return
@@ -670,7 +685,12 @@ func (s *apiServer) HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost(w http.
 		writeError(w, http.StatusBadRequest, docCapRefusal("lessons doc", current.Text, next))
 		return
 	}
-	snapshot, err := historyJSON(map[string]string{"text": current.Text})
+	overlay, err := s.dal.GetLessons(roleKey, taskType)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	snapshot, err := lessonsHistorySnapshot(overlay)
 	if err != nil {
 		internalError(w, err)
 		return
