@@ -25,8 +25,6 @@ import { presenceVisual } from "./LifecycleDot";
 import type { LifecycleVisualStatus } from "./LifecycleDot";
 import { PresenceBadge } from "./PresenceBadge";
 import { MemberActionButtons } from "./MemberActionButtons";
-import { MachinePicker } from "./MachinePicker";
-import { useRelocateMachine } from "./useRelocateMachine";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -183,7 +181,6 @@ export function MemberDetailPanel({
   const { machines } = useMachines();
   const onlineMachines = machines.filter((m) => m.online);
   const boundMachineId = member.desiredMachineId || null;
-  const [spawnPickerOpen, setSpawnPickerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsRuntime, setSettingsRuntime] = useState<"claude" | "codex">(
     member.runtime || "claude",
@@ -203,6 +200,31 @@ export function MemberDetailPanel({
     setSettingsOpen(true);
   }
 
+  async function runActivate(machineId: string) {
+    // Instant "waking…" feedback; a rejected activate reverts to the honest
+    // offline visual so the owner can retry (no stuck fake-waking).
+    setWakePending(true);
+    setWakeUndispatched(false); // a fresh attempt clears the previous verdict
+    // WHOSE wake this is. Both branches below drop the verdict when the panel
+    // has moved on to another member (review r2 SHOULD-1).
+    const firedFor = member.id;
+    try {
+      const result = await onActivate?.(machineId);
+      if (shownMemberIdRef.current !== firedFor) return;
+      // 🔴 THE FIX (T-7fa1). An activate answers 200 either way; this is the
+      // ONLY thing that distinguishes "a START went out" from "nothing was
+      // dispatched". Without this branch the panel keeps painting the amber
+      // 「喚醒中…」 until a lifecycle change that is never coming.
+      if (result?.activationPending) {
+        setWakePending(false);
+        setWakeUndispatched(true);
+      }
+    } catch {
+      if (shownMemberIdRef.current !== firedFor) return;
+      setWakePending(false);
+    }
+  }
+
   async function saveSettings() {
     if (!settingsMachineId) return;
     setSettingsBusy(true);
@@ -212,77 +234,16 @@ export function MemberDetailPanel({
         model: settingsModel.trim(),
         effort: settingsEffort,
       });
-      if (online || member.lifecycle === "waking") {
+      if (awake) {
         await onRelocate?.(settingsMachineId);
       } else {
-        await onActivate?.(settingsMachineId);
+        await runActivate(settingsMachineId);
       }
       setSettingsOpen(false);
     } finally {
       setSettingsBusy(false);
     }
   }
-
-  const runActivate = (machineId: string) => {
-    setSpawnPickerOpen(false);
-    // Instant "waking…" feedback; a rejected activate reverts to the honest
-    // offline visual so the owner can retry (no stuck fake-waking).
-    setWakePending(true);
-    setWakeUndispatched(false); // a fresh attempt clears the previous verdict
-    // WHOSE wake this is. Both branches below drop the verdict when the panel
-    // has moved on to another member (review r2 SHOULD-1).
-    const firedFor = member.id;
-    void (async () => {
-      try {
-        const result = await onActivate?.(machineId);
-        if (shownMemberIdRef.current !== firedFor) return;
-        // 🔴 THE FIX (T-7fa1). An activate answers 200 either way; this is the
-        // ONLY thing that distinguishes "a START went out" from "nothing was
-        // dispatched". Without this branch the panel keeps painting the amber
-        // 「喚醒中…」 until a lifecycle change that is never coming.
-        if (result?.activationPending) {
-          setWakePending(false);
-          setWakeUndispatched(true);
-        }
-      } catch {
-        if (shownMemberIdRef.current !== firedFor) return;
-        setWakePending(false);
-      }
-    })();
-  };
-
-  // Spawn / wake / respawn handler. Undefined (→ button disabled) when there is
-  // no online machine to run on OR while a wake is already pending (double-click
-  // guard); auto-uses the single online machine; opens the picker for 2+.
-  const canSpawn = onlineMachines.length >= 1;
-  const handleSpawn =
-    onActivate && canSpawn && !wakePendingActive
-      ? () => {
-          if (onlineMachines.length === 1) runActivate(onlineMachines[0].machineId);
-          else setSpawnPickerOpen(true);
-        }
-      : undefined;
-  const spawnReason = !canSpawn
-    ? t.machine.noOnlineMachine
-    : wakePendingActive
-      ? t.mp.wakePendingNote
-      : undefined;
-
-  // ── 改機器 (relocate) — the shared control both detail panels render ─────────
-  // Placement-only: re-pin the member to another machine (the server reconciles a
-  // live member onto it). Mirrors the spawn picker's 0/1/2+ online rule.
-  const { relocateAction, relocatePicker, relocateUndispatched } = useRelocateMachine({
-    subjectId: member.id,
-    machines,
-    boundMachineId,
-    onRelocate,
-    testId: "mp-relocate",
-    pickerTitle: t.machine.picker.relocateTitle,
-    pickerConfirmLabel: t.machine.picker.relocateConfirm,
-    noOnlineTitle: t.machine.noOnlineMachine,
-    withIcon: true,
-    // Self-heal signal for the "move scheduled, not landed" notice (review r1
-    // SHOULD-2): where the member is OBSERVED, vs boundMachineId = where it was
     // pinned. Convergence means the background retry landed the move.
     //
     // 🔴 Gated on the SAME `awake` flag as the 機器 cell above (review r2).
@@ -550,6 +511,20 @@ export function MemberDetailPanel({
     machines.find((m) => m.machineId === member.machine)?.displayName ||
     member.machine ||
     "";
+  const desiredMachineName =
+    machines.find((m) => m.machineId === member.desiredMachineId)?.displayName ||
+    member.desiredMachineId ||
+    "";
+  // Relocation keeps the observed location truthful while making the pending
+  // destination visible. Once reconcile reports the new location, the note
+  // naturally disappears rather than leaving stale launch intent in the panel.
+  const machineTransition =
+    awake &&
+    member.machine &&
+    member.desiredMachineId &&
+    member.machine !== member.desiredMachineId
+      ? t.mp.machineMovingTo(desiredMachineName)
+      : "";
   // 累計總花費 = 已 banked 的歷史成本 + 當前 live session 成本(dto 保證兩者分開不重疊)。
   // honest:兩者皆無源(null)才顯 dash;任一有值則計入(缺的一方視為尚未產生成本=0)。
   const totalCost =
@@ -1247,6 +1222,7 @@ export function MemberDetailPanel({
         // Account are runtime facts — not-awakened reads a bare dash, never a
         // desired/stale residual.
         machineText: awake ? machineName : "",
+        machineTransition,
         accountText: (awake && member.account) || "",
         contextPct: member.contextPct,
         compactionCount: member.compactionCount,
