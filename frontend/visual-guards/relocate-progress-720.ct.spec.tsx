@@ -14,10 +14,7 @@
 //     relocate-progress-720
 import { test, expect } from "@playwright/experimental-ct-react";
 import type { Locator, Page } from "@playwright/test";
-import {
-  MemberRelocateProgressStory,
-  WorkerRelocateProgressStory,
-} from "./stories/RelocateProgressStory";
+import { WorkerRelocateProgressStory } from "./stories/RelocateProgressStory";
 
 const WIDTH = 720;
 const SHOT_DIR = process.env.RELOCATE_SHOT_DIR ?? "test-results/relocate-720";
@@ -98,15 +95,13 @@ async function driveAndShoot(
   });
 }
 
-test(`width ${WIDTH}: MEMBER panel 改機器 row holds through 更換中 and the timeout notice`, async ({
-  mount,
-  page,
-}) => {
-  await page.setViewportSize({ width: WIDTH, height: 900 });
-  const cmp = await mount(<MemberRelocateProgressStory />);
-  await driveAndShoot(cmp, page, "member", "mp-relocate");
-});
-
+// ⚠️ The MEMBER half of this guard MOVED, it was not dropped (T-927a). The member
+// panel no longer has a 改機器 button, a 「更換中…」 label, or the 30s timeout notice
+// — relocate folded into the unified settings submit — so the old measurement is
+// not merely red, it is unrepresentable. Its replacement is
+// member-machine-transition.ct.spec.tsx, which measures the row that now carries
+// the same class of width risk. The WORKER half below is untouched: the worker
+// panel still drives useRelocateMachine with its own 改機器 control.
 test(`width ${WIDTH}: WORKER panel 改機器 row holds through 更換中 and the timeout notice`, async ({
   mount,
   page,
