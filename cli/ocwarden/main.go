@@ -722,6 +722,12 @@ func realMain(argv []string, env func(string) string, out io.Writer) int {
 				return 2
 			}
 			return teardownCmd(env, out, canonical)
+		case cutoverSubcmd:
+			// Internal step of the automatic legacy->anchor shape migration
+			// (T-ff5d), spawned detached by a legacy-shape `run`. Deliberately
+			// absent from the usage banner below: it is not an operator verb, and
+			// CI's committed-prebuilt parity dryrun diffs --help.
+			return cutoverCmd(env, out)
 		case "codex-session":
 			return runCodexSession(argv[1:], env, out)
 		case "version", "--version", "-v":
@@ -761,7 +767,11 @@ func realMain(argv []string, env func(string) string, out io.Writer) int {
 	// bin/warden-go launcher: OC_WARDEN_TOKFILE → token → OC_ID via jwtSub). An
 	// explicit OC_TOKEN still wins; a missing file leaves OC_TOKEN empty and the
 	// loops below fail-safe (no token/id → log + clean exit).
-	cfg := loadConfig(tokfileEnv(env, os.ReadFile))
+	// renv is env with OC_TOKEN folded in from the tokfile; both loadConfig and
+	// the shape check below need the resolved token (the launchd warden's env
+	// carries OC_WARDEN_TOKFILE, never the token itself).
+	renv := tokfileEnv(env, os.ReadFile)
+	cfg := loadConfig(renv)
 	runner := newCmdRunner(subprocessBudget)
 	collect := func() map[string]any { return collectHardware(runner, runtime.GOOS) }
 	machine := func() string { return readMachineName(runner) }
@@ -806,6 +816,19 @@ func realMain(argv []string, env func(string) string, out io.Writer) int {
 	logf := func(format string, args ...any) {
 		fmt.Fprintf(out, "%s "+format+"\n", append([]any{time.Now().UTC().Format(time.RFC3339)}, args...)...)
 	}
+	// T-ff5d: one-shot launchd SHAPE check. Self-update is a syscall.Exec in-place
+	// swap (same PID), so a machine that has just updated is running this code
+	// immediately — the conversion does not wait for a launchd restart. Skipped on
+	// --once (a test hook, never a launchd job) and when there is no token to hand
+	// the installer. Best-effort by contract: it never fails the warden.
+	if cfg.Token != "" && iters == 0 {
+		if exe, err := os.Executable(); err == nil {
+			if p, perr := resolvePaths(renv, exe, os.Getuid()); perr == nil {
+				maybeStartAnchorCutover(p, os.Getppid(), logf)
+			}
+		}
+	}
+
 	if cfg.Token != "" && cfg.ID != "" && iters == 0 {
 		transport := newCommandTransport(cfg, env, runner, logf)
 

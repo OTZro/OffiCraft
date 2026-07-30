@@ -139,6 +139,13 @@ func TestMain(m *testing.M) {
 	// in production must take their runner from this seam. A test that wants to
 	// observe argv still injects its own recording runner locally, exactly as before.
 	newCmdRunner = func(time.Duration) CmdRunner { return blockedRunner{} }
+	// T-ff5d: the anchor-cutover seam is rebound here for the same reason and at
+	// the same moment. Its production binding reads and WRITES real paths — the
+	// live plist, its .prev backup, the lock and failure sentinels — and drives
+	// launchctl bootout/bootstrap on the canonical label. Rebinding it in TestMain
+	// means every test in this package gets the fake without opting in, including
+	// tests written later and tests that neuter the guard under test.
+	newCutoverOps = blockedCutoverOps
 	os.Exit(m.Run())
 }
 
