@@ -118,13 +118,14 @@ type telemetryBody struct {
 	// server must see absent, not "").
 	AccountLabel string `json:"account_label,omitempty"`
 	Machine      string `json:"machine,omitempty"`
-	// Effort is the session's OWN reasoning effort, read RAW from OC_EFFORT — the
-	// same value the status line renders, but never its abbreviation (the wire
-	// carries "medium", the status line shows "med"). The key is already declared
-	// on the frozen AgentTelemetryIngestDTO, so this is not a wire change; the
-	// codex sidecar has been sending it all along and the monitoring session DTO
-	// has always served it. Omitted when unset: an empty string would turn "not
-	// reported" into a reported blank, which is exactly the failure this fixes.
+	// Effort is the session's LIVE reasoning effort, read verbatim from the
+	// statusLine payload's effort.level (see effortValue: never OC_EFFORT, never
+	// the status line's "med" abbreviation). The key is already declared on the
+	// frozen AgentTelemetryIngestDTO, so this is not a wire change; the codex
+	// sidecar has been sending it all along and the monitoring session DTO has
+	// always served it. Omitted when the payload carries no effort block: an empty
+	// string would turn "this model has no effort" into a reported blank, and that
+	// blank is exactly what hid this bug for as long as it lasted.
 	Effort string `json:"effort,omitempty"`
 }
 
@@ -209,7 +210,7 @@ func cmdContextReport(client httpClient, cfg Config, env func(string) string, no
 		}
 	}
 
-	fmt.Fprintln(out, renderStatusline(payload, env, now))
+	fmt.Fprintln(out, renderStatusline(payload, now))
 	return 0
 }
 
@@ -276,12 +277,12 @@ const (
 	statusBarWidth = 10 // context progress-bar cell count
 )
 
-// renderStatusline builds the full status line from a statusLine JSON payload,
-// the process env (for OC_EFFORT), and now (fractional unix seconds, for the
-// rate-limit reset/elapsed maths — injected so tests are deterministic). Returns
+// renderStatusline builds the full status line from a statusLine JSON payload and
+// now (fractional unix seconds, for the rate-limit reset/elapsed maths — injected
+// so tests are deterministic). Every segment now comes out of the payload. Returns
 // the ready-to-print line WITHOUT a trailing newline. Never panics: a nil / junk
 // payload yields an empty line.
-func renderStatusline(payload string, env func(string) string, now float64) string {
+func renderStatusline(payload string, now float64) string {
 	obj, _ := safeJSON(payload).(map[string]any) // nil ⇒ every segment skips
 
 	var segs []string
@@ -308,8 +309,7 @@ func renderStatusline(payload string, env func(string) string, now float64) stri
 // context" hint is appended only when model.id signals the 1M tier ("[1m]") and
 // display_name doesn't already say so. The effort (yellow) is present iff the
 // payload carries effort.level; a bare effort with no model still renders
-// "⚡<effort>". Both
-// missing ⇒ "".
+// "⚡<effort>". Both missing ⇒ "".
 func modelEffortSegment(obj map[string]any) string {
 	model := ""
 	if m, ok := obj["model"].(map[string]any); ok {

@@ -695,7 +695,7 @@ func TestRenderStatuslineFull(t *testing.T) {
 			"seven_day":{"used_percentage":16,"resets_at":` + strconv.FormatFloat(sevenReset, 'f', -1, 64) + `}
 		}
 	}`
-	got := renderStatusline(payload, testEnv(nil), now)
+	got := renderStatusline(payload, now)
 
 	// Colours must be present (Claude Code statusLine honours ANSI).
 	if !strings.Contains(got, "\x1b[") {
@@ -726,7 +726,7 @@ func TestRenderStatuslinePartialNull(t *testing.T) {
 		}
 	}`
 	want := "⚡med | $1.50 | 7d:40%(50%elapsed)"
-	if plain := stripANSI(renderStatusline(payload, testEnv(nil), now)); plain != want {
+	if plain := stripANSI(renderStatusline(payload, now)); plain != want {
 		t.Errorf("partial-null statusline:\n got  %q\n want %q", plain, want)
 	}
 }
@@ -735,7 +735,7 @@ func TestRenderStatuslinePartialNull(t *testing.T) {
 // line (never a panic, never a stray "◆"/separators).
 func TestRenderStatuslineAllMissing(t *testing.T) {
 	for _, payload := range []string{`{}`, `not json`, ``, `null`} {
-		if got := renderStatusline(payload, testEnv(nil), 1000.0); got != "" {
+		if got := renderStatusline(payload, 1000.0); got != "" {
 			t.Errorf("payload %q ⇒ %q, want empty line", payload, got)
 		}
 	}

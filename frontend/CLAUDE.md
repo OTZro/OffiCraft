@@ -165,9 +165,11 @@ hold 釋放)。status union 全線(adapter/mappers join)= waiting|answered|expir
   superseded 不算 `progress_done/total`(server 除名)→ 「全 superseded」任務誠實
   報 0/0 但 steps 非空:TaskCard 的 hydrate loading gate 不再要求 progressTotal>0
   (未指派例外,等待指派可從輕量列直接投影),避免落「等待建立 Steps」謊態。
-- **外包顯示誠實線**:「外包 代號 · 模型 · 投入度」只從 LIVE
+- **外包顯示誠實線**:TaskCard 的「外包 代號 · 模型 · 投入度」只從 LIVE
   `GET /api/outsource-workers` 解析;worker 已 release(結案)→ 誠實退回裸「外包」,
-  永不捏代號。未指派(kind=outsource, executor_id="")→「未指派」+ 訊息框 disabled
+  永不捏代號。⚠️ **這條講的是任務卡上的 chip,它描述的是「這張任務要用什麼開外包」
+  ——launch intent,刻意留設定值**;監控台那張表的外包列走的是**另一條**(自報值,
+  見下方「effort」節),兩者別互抄。未指派(kind=outsource, executor_id="")→「未指派」+ 訊息框 disabled
   (server 會 409)。過渡態:未指派→「等待指派」、有執行者零節點→「規劃中」。
 - 訊息框 → `POST /api/tasks/{id}/message`(server 幫掛 task context meta 成普通聊天
   訊息)。已歷時自 created_ts ticking(`lib/duration.ts` 的 `formatDuration`,與
@@ -258,10 +260,34 @@ one-shot,可重跳);未知/過期 id 誠實自癒(消費 anchor、不高亮)。
 - **ProfileDropdown 三 view**:main → preferences(主題/語言 + **伺服器設定**:登入有效期下拉 12h/24h/7d/30d、自動換手門檻 40–90%,經 api seam `getServerSettings`/`patchServerSettings` 即時生效)→ password(改密碼)。設定載入失敗 = 誠實不渲染該區塊。
 - **⚠️ 密碼端點不走 openapi-fetch client**:client middleware 把任何 401 變成 clear-token + `oc-auth-expired`(登出彈跳)——打錯「目前密碼」/claim token 必須是 inline 表單錯誤,所以 `setPassword`/`changePassword` 走 http.ts 的 `credentialPost` 裸 fetch(丟同款 `ApiError`),成功後 `setToken` 換上 server 新發的 token(change-password 會撤銷所有舊 owner session)。settings GET/PATCH 照常走 typed client。
 
-## effort:即時 vs owner-intent(兩個來源別混)
-- **`session.effort`(MonitorPage AI Sessions 徽章)= 真實即時**:agent 當下 reasoning-effort,由 telemetry 鏈餵——statusLine `effort.level` → backend `_build_telemetry` → `/api/monitoring/telemetry` → `MonitoringSessionDTO.effort` → `session.effort`。`wire.ts` / `mappers.ts` 直通(`w.effort || ""`),honest-empty `""` → UI 顯示「—」(`MonitorPage.tsx`)。**不是** roster 的 `member.effort`。
-- **`member.effort`(MemberDetailPanel 資訊卡)= owner-intent**:passthrough `w.effort`(缺省 fallback `medium`),是「想要多少」的意圖、非即時值;M2-2 起 owner 可在詳情面板編輯 model/effort(`patchMember`,變更於下次喚醒生效——spawn `--effort` 已改吃 server 下推的 member.effort,空值才 fallback medium)。
-- ⚠️ 別在 MonitorPage 拿 roster 的 member.effort 當徽章——那是假值;一律用 session 自己 telemetry 的 `session.effort`。
+## effort / model:自報值 vs 設定值(兩個來源別混;T-e12c 之後界線更硬)
+
+owner 2026-07-31:「成員面板以及監控台,一定要顯示回報回來的狀態,不能顯示設定值」。
+
+- **自報值(狀態)**:`MonitoringSessionDTO.model` / `.effort` → `session.model` / `session.effort`。
+  鏈路 = Claude Code statusLine payload 的 `model.display_name` / **`effort.level`** →
+  `ocagent context-report` → `POST /api/monitoring/telemetry` → server 的 in-memory
+  telemetry entry(key = token sub)→ monitoring session 列。effort 取的是 **live**
+  等級(跟得上中途 `/effort`),**不是** `OC_EFFORT` 那個啟動意圖,**而且沒有 fallback**。
+  honest-empty `""` → UI 顯示「—」。
+- **`GET /api/monitoring` 的 sessions 現在同時含正職與外包**(T-e12c);外包列靠 **`ow-` id
+  前綴**辨識(server 沒有、也不該新增 kind 欄位——凍結 wire)。`MonitorPage` 的外包列因此
+  用 `findSessionFor(worker.id, sessions)` 取 model/effort/context/cost,**join 不到就一律
+  誠實留白**,絕不退回 `GET /api/outsource-workers` 的設定值。member 那條 lane 同時用
+  `ow-` 前綴排除,否則同一個 session 會畫兩列。
+- **設定值(啟動意圖)**:roster 的 `member.model` / `member.effort`、外包 DTO 的
+  `worker.model` / `worker.effort`。它只活在**兩個地方**:model/effort **編輯器**(seed 與
+  存回都是它),以及描述「這張任務要用什麼開外包」的 TaskCard chip 與任務手冊預設值。
+  🔴 **`AgentDetailPanel` 的 `configuredModel`/`configuredEffort` 是 required、且刻意不對
+  readout 做 fallback**:readout 是遙測(或 `""`),讓它當退路 = 一次儲存就把自報值寫回
+  owner 的設定,未回報時甚至寫進空值而被 closed vocabulary 422。
+- **`MemberDetailPanel` 資訊卡的 模型/投入度 = 自報值**(`actualModel`/`actualEffort`,
+  awake 才顯示);設定值只出現在底下的 設定 對話框裡。
+- **缺值守衛(T-e12c)**:「還沒回報任何東西」與「正在回報別的東西、卻獨缺 effort」以前
+  長得一模一樣(都是空白),故障因此偽裝成設計躺了很久。`isReportingTelemetry(session)`
+  (online ∧ 至少有一個純遙測值:context% / cost / account)為真而 effort 為空時,
+  `EffortBadge` 改渲染 `mon-stale` 那顆「這個空白有原因」的 chip(既有視覺語彙,不是警告色
+  ——沒有東西壞掉,只是欠一個值);什麼都沒回報則維持乾淨空白。
 
 ## 監控 › 機器表:硬體與 Runtime 的時效(T-90be ⑤ + T-b36a)
 `MonitorPage` 機器表有兩組會過期的 telemetry 欄,**兩組都必須連時效一起顯示**,理由是

@@ -63,6 +63,7 @@ import type {
 import type {
   WireMember,
   WireMonitoring,
+  WireMonSession,
   WireVersion,
   WireGlobalContext,
   WireDocumentHistory,
@@ -3365,6 +3366,18 @@ export function __injectMockReplyCard(card: ReplyCard): void {
 export function __injectMockTask(task: TaskView): void {
   tasks.push(task);
   emitTopic("task");
+}
+
+// Test-only hook: land one live telemetry session row, the way an agent's
+// statusLine report would surface it under /api/monitoring. Members AND
+// outsource workers (`ow-` id) ride the same array — this is what lets a test
+// give a worker a REPORTED model/effort distinct from its configured one.
+export function __injectMockMonitoringSession(s: WireMonSession): void {
+  wireMonitoring.sessions = [
+    ...wireMonitoring.sessions.filter((x) => x.id !== s.id),
+    s,
+  ];
+  emitTopic("monitoring");
 }
 
 // Test-only hook: land a LIVE outsource worker (codename/model/effort bound to

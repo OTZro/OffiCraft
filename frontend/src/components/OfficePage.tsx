@@ -7,7 +7,7 @@ import { useMembers } from "../hooks/useMembers";
 import { useMonitoring } from "../hooks/useMonitoring";
 import { useOutsourceWorkers } from "../hooks/useOutsourceWorkers";
 import { useIsMobile } from "../hooks/useIsMobile";
-import { joinSessionRuntime } from "../lib/runtime";
+import { joinSessionRuntime, findSessionFor } from "../lib/runtime";
 import { useHashRoute } from "../lib/hashRoute";
 import { updateCachedWorkerAvatar } from "../hooks/useWorkerCodenames";
 import { MemberCard } from "./MemberCard";
@@ -82,11 +82,14 @@ export function OfficePage() {
   const workerDetailId = route.workerId ?? null;
   // Live session telemetry — the SAME source the Monitor page reads — so the
   // member-detail panel's context/cost match the monitor row (never divergent).
-  // GATED (T-ec2c): only fetched/subscribed while a MEMBER detail panel is open
-  // (the only consumer, joinSessionRuntime below). With no panel open, merely
-  // being on the office page makes zero monitoring requests — no per-heartbeat
-  // refetch of the large fold.
-  const { monitoring } = useMonitoring({ enabled: detailId !== null });
+  // GATED (T-ec2c): only fetched/subscribed while a detail panel is open — the
+  // member panel (joinSessionRuntime) or the worker panel (findSessionFor,
+  // which reads that worker's own `ow-` session row). With no panel open,
+  // merely being on the office page makes zero monitoring requests — no
+  // per-heartbeat refetch of the large fold.
+  const { monitoring } = useMonitoring({
+    enabled: detailId !== null || workerDetailId !== null,
+  });
   const setSelectedId = (id: string) =>
     setRoute({ page: "office", chatId: id || undefined });
   // Opening/closing the detail keeps the chat selection (both live in the hash).
@@ -312,6 +315,10 @@ export function OfficePage() {
     return (
       <WorkerDetailPanel
         worker={workerDetail}
+        // The worker's OWN telemetry row — the same `sessions` array the
+        // monitor rows join, so panel and row can never disagree about what it
+        // is running.
+        session={findSessionFor(workerDetail.id, monitoring?.sessions ?? [])}
         onBack={backFromWorkerDetail}
         onOpenTask={
           workerDetail.taskId

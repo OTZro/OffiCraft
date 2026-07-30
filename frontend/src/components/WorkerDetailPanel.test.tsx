@@ -20,11 +20,13 @@ import { api } from "../api";
 import { zh } from "../i18n/locales/zh";
 import { ApiError } from "../api/errors";
 import { OfficePage } from "./OfficePage";
+import { api } from "../api";
 import {
   __resetMock,
   __injectMockTask,
   __injectMockOutsourceWorker,
   __injectMockTaskType,
+  __injectMockMonitoringSession,
   __setMockMemberOnline,
 } from "../api/mock";
 import type { TaskView, OutsourceWorkerView } from "../api/adapter";
@@ -1100,5 +1102,126 @@ describe("WorkerDetailPanel — initial-prompt preview (T-ba6b)", () => {
       ).toContain("外包啟動指示"),
     );
     expect(boot).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── T-e12c: the 模型/投入度 cell states what is RUNNING; the editor owns the
+// SETTING. Owner ruling 2026-07-31:「成員面板以及監控台，一定要顯示回報回來的
+// 狀態，不能顯示設定值」. The two halves are pinned together on purpose — the
+// readout must never fall back to the configured pair, and the editor must
+// never seed from (and therefore save back) a telemetry value or a blank.
+describe("WorkerDetailPanel — reported state vs configured launch intent (T-e12c)", () => {
+  it("reads out the REPORTED model/effort while the editor holds the configured pair", async () => {
+    __injectMockTask(mkTask({ id: "t-1" }));
+    __injectMockOutsourceWorker(
+      mkWorker({
+        id: "ow-1",
+        taskId: "t-1",
+        presence: "online",
+        model: "Opus 4.6",
+        effort: "high",
+      }),
+    );
+    __injectMockMonitoringSession({
+      id: "ow-1",
+      name: "O-1",
+      role: "",
+      runtime: "claude",
+      model: "claude-sonnet-4.9",
+      effort: "low",
+      machine: "",
+      account: "",
+      presence: "online",
+      context_pct: null,
+      cost: null,
+      banked_cost: null,
+      tokens: null,
+    });
+
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+    expect((await findByTestId("worker-detail-model-value")).textContent).toBe(
+      "claude-sonnet-4.9",
+    );
+    expect(
+      (await findByTestId("worker-detail-effort-value")).textContent,
+    ).toContain("low");
+    // The configured pair is present but SEPARATE, labelled as the setting.
+    const configured = await findByTestId(
+      "worker-detail-model-effort-configured",
+    );
+    expect(configured.textContent).toContain("Opus 4.6");
+    expect(configured.textContent).toContain("high");
+
+    // The editor seeds from the SETTING, not from the reported state.
+    fireEvent.click(await findByTestId("worker-detail-model-effort-edit"));
+    expect(
+      ((await findByTestId("me-model-input")) as HTMLInputElement).value,
+    ).toBe("Opus 4.6");
+    expect(
+      ((await findByTestId("me-effort-select")) as HTMLSelectElement).value,
+    ).toBe("high");
+  });
+
+  it("blanks the readout when nothing was reported, even though the worker IS configured", async () => {
+    __injectMockTask(mkTask({ id: "t-1" }));
+    __injectMockOutsourceWorker(
+      mkWorker({
+        id: "ow-1",
+        taskId: "t-1",
+        presence: "online",
+        model: "Opus 4.6",
+        effort: "high",
+      }),
+    );
+
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+    expect((await findByTestId("worker-detail-model-value")).textContent).toBe(
+      "—",
+    );
+    expect((await findByTestId("worker-detail-effort-value")).textContent).toBe(
+      "—",
+    );
+    // …and the configured pair is still readable in its own labelled line.
+    expect(
+      (await findByTestId("worker-detail-model-effort-configured")).textContent,
+    ).toContain("Opus 4.6");
+  });
+
+  it("saves the CONFIGURED value, never the reported one, when the editor is confirmed unchanged", async () => {
+    __injectMockTask(mkTask({ id: "t-1" }));
+    __injectMockOutsourceWorker(
+      mkWorker({
+        id: "ow-1",
+        taskId: "t-1",
+        presence: "online",
+        model: "Opus 4.6",
+        effort: "high",
+      }),
+    );
+    __injectMockMonitoringSession({
+      id: "ow-1",
+      name: "O-1",
+      role: "",
+      runtime: "claude",
+      model: "claude-sonnet-4.9",
+      effort: "low",
+      machine: "",
+      account: "",
+      presence: "online",
+      context_pct: null,
+      cost: null,
+      banked_cost: null,
+      tokens: null,
+    });
+
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+    fireEvent.click(await findByTestId("worker-detail-model-effort-edit"));
+    fireEvent.click(await findByTestId("worker-detail-model-effort-save"));
+    await findByTestId("worker-detail-model-effort-edit");
+
+    const workers = await api.listOutsourceWorkers();
+    const saved = workers.find((w) => w.id === "ow-1")!;
+    expect(saved.model).toBe("Opus 4.6");
+    expect(saved.effort).toBe("high");
   });
 });

@@ -41,8 +41,19 @@ export interface AgentDetailVM {
    * (the server 409s an offline refocus on both kinds). */
   online: boolean;
   runtime: "claude" | "codex";
+  /** STATE readout — what the agent self-reported it is running right now.
+   * "" ⇒ the honest dash; never the configured launch value (owner ruling
+   * 2026-07-31:「成員面板以及監控台，一定要顯示回報回來的狀態，不能顯示設定值」). */
   model: string;
   effort: string;
+  /** LAUNCH INTENT — the owner-configured pair the editor seeds from and writes
+   * back. REQUIRED, and deliberately not defaulted to the readout above: the
+   * readout is telemetry (or ""), and falling back to it would let a save
+   * round-trip a reported value into the owner's setting — or write the blank
+   * that the closed low/medium/high vocabulary rejects. Every caller states its
+   * own configured pair. */
+  configuredModel: string;
+  configuredEffort: string;
   /** The note under the model/effort editor (member: next-wake semantics;
    * worker: active-respawn semantics). */
   modelEffortNote: string;
@@ -149,8 +160,14 @@ export function AgentDetailPanel({
     effort: string;
   } | null>(null);
   const shownRuntime = meOverride?.runtime ?? vm.runtime;
-  const shownModel = meOverride?.model ?? vm.model;
-  const shownEffort = meOverride?.effort ?? vm.effort;
+  // The readout is the REPORTED state and an editor save must not rewrite it:
+  // storing a launch intent does not change what the session is already running.
+  const shownModel = vm.model;
+  const shownEffort = vm.effort;
+  // The launch intent the editor owns. `meOverride` belongs HERE (a save just
+  // changed the setting, and the parent may not have refetched yet).
+  const configuredModel = meOverride?.model ?? vm.configuredModel;
+  const configuredEffort = meOverride?.effort ?? vm.configuredEffort;
   // Known effort levels render 中文字 + the raw key (the member page's format,
   // now the ONE format); an unknown/custom effort string renders verbatim.
   const effortLevelText =
@@ -160,8 +177,8 @@ export function AgentDetailPanel({
 
   function startMeEdit() {
     setMeRuntime(shownRuntime);
-    setMeModel(shownModel);
-    setMeEffort(shownEffort || "medium");
+    setMeModel(configuredModel);
+    setMeEffort(configuredEffort || "medium");
     setMeError(false);
     setMeEditing(true);
   }
@@ -356,17 +373,16 @@ export function AgentDetailPanel({
               <div className="mp-field__label mp-field__label--stacked">
                 {t.mp.model}
               </div>
-              <div className="mp-field__value">
+              <div
+                className="mp-field__value"
+                data-testid={`${p}-model-value`}
+              >
                 {shownModel || dash}
                 {/* Deliberately NOT the parenthesised form the 投入度 row uses
                     below: that one restates the raw value, this one states the
                     value's PROVENANCE. Same styling with the same punctuation
-                    would put two different kinds of thing in the same shape.
-                    `!meOverride` because after an in-place save `shownModel` is
-                    the freshly CONFIGURED model — tagging that as reported would
-                    be a fresh lie (unreachable from the member panel today, which
-                    passes no save handler; pinned here so it stays that way). */}
-                {vm.modelIsReported && shownModel && !meOverride && (
+                    would put two different kinds of thing in the same shape. */}
+                {vm.modelIsReported && shownModel && (
                   <span className="mp-field__hint">
                     {" · "}
                     {t.mp.modelReportedTag}
@@ -376,7 +392,10 @@ export function AgentDetailPanel({
               <div className="mp-field__label mp-field__label--stacked">
                 {t.mp.effort}
               </div>
-              <div className="mp-field__value">
+              <div
+                className="mp-field__value"
+                data-testid={`${p}-effort-value`}
+              >
                 {effortLevelText != null ? (
                   <>
                     {effortLevelText}{" "}
@@ -386,6 +405,20 @@ export function AgentDetailPanel({
                   shownEffort || dash
                 )}
               </div>
+              {/* The owner's SETTING, kept visibly apart from the state rows
+                  above and labelled by what it does (it is the value the next
+                  launch uses). Only where an editor exists — elsewhere the
+                  readout already is the configured value and a second copy
+                  would just be noise. */}
+              {vm.onSaveModelEffort && (
+                <div
+                  className="mp-field__hint"
+                  data-testid={`${p}-model-effort-configured`}
+                >
+                  {t.mp.settingsIntentNote} {configuredModel || dash} ·{" "}
+                  {configuredEffort || dash}
+                </div>
+              )}
             </>
           ) : (
             <div

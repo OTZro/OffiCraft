@@ -766,6 +766,30 @@ type monitoringActor struct {
 	countsAsPresentAgent bool
 }
 
+// monitoringSessionSource is one row's worth of NON-telemetry input to the
+// sessions loop — everything that legitimately differs between a staff member
+// and an outsource worker, and nothing else. An outsource worker reaches it
+// through memberFromWorker, so `member` is a real roster row for both kinds and
+// id / name / runtime / role / banked cost need no per-kind branch downstream.
+//
+// The three overrides exist because the worker vocabulary answers each of them
+// with a different, already-tested projection:
+//
+//	model    — a worker serves its SELF-REPORTED boot model (ActualModel), so an
+//	           unreported one blanks instead of echoing the launch intent that
+//	           GET /api/outsource-workers exists to round-trip.
+//	host     — observedWorkerHost, the restart-proof fold (a worker has no
+//	           desired_machine_id fallback the way observedHost gives a member).
+//	presence — workerPresence, which anchors "waking" on the spawn dispatch;
+//	           PresenceState would read a just-dispatched worker as offline
+//	           because a worker row carries no waking_since.
+type monitoringSessionSource struct {
+	member   Member
+	model    string
+	host     string
+	presence string
+}
+
 // GET /api/monitoring — the three-section fold (sessions / machines /
 // accounts) over the roster + gauge + warden telemetry. NEVER fabricates a
 // number: unmeasured stays null / honest-empty.
@@ -935,8 +959,58 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		})
 	}
 
-	sessions := []monitoringSessionDTO{}
+	// sessions = EVERY live AI session, staff and outsource alike (owner ruling
+	// rc-1f8156f25b7a ①). The cockpit's 「AI 會話」 table used to JOIN this list
+	// with GET /api/outsource-workers, and the two wires do not mean the same
+	// thing by the same column name: the worker DTO's `effort`/`model` are the
+	// owner's CONFIGURED launch intent (its editor round-trips them), while a
+	// session row's are what the session itself REPORTED. Merging two such lists
+	// client-side renders one table whose columns silently change meaning per row.
+	//
+	// Both kinds are built by the single loop below, from a source list, so the
+	// two row shapes cannot drift apart. Only what is genuinely per-kind is
+	// carried on the source: the roster row, the observed model, the observed
+	// host, and the liveness projection. Everything telemetry-sourced — effort,
+	// account, cost, banked_cost, context_pct, compaction_count, tokens — is
+	// read from THIS actor's own telemetry/gauge entry, keyed by its id (a
+	// worker's id is its token sub, so its ocagent already posts under that key).
+	sources := make([]monitoringSessionSource, 0, len(members)+len(workers))
 	for _, m := range members {
+		sources = append(sources, monitoringSessionSource{
+			member:   m,
+			model:    m.Model,
+			host:     s.observedHost(m),
+			presence: PresenceState(m, now, s.hub.IsOnline(m.ID)),
+		})
+	}
+	for _, wk := range workers {
+		// Released ⇒ off the table, which is the member filter (`memberFromWorker`
+		// maps released onto RosterStatusRemoved, the exact predicate `members`
+		// was filtered by above), not a second rule. The actors fold deliberately
+		// keeps released workers because money already spent is a historical fact;
+		// a SESSION list is present tense, and `actors` grows monotonically with
+		// every task this station has ever run.
+		if wk.Status == WorkerStatusReleased {
+			continue
+		}
+		_, spawnAt := s.workerSpawnObs(wk.ID)
+		sources = append(sources, monitoringSessionSource{
+			member: memberFromWorker(wk),
+			// The worker's SELF-REPORTED boot model, never its configured
+			// launch Model: a worker that has reported nothing shows a blank,
+			// the same honest blank an unreported effort shows.
+			model: wk.ActualModel,
+			// The SAME host the machine/account folds attribute this worker to
+			// in this very response, so the session's machine cell and the
+			// machines row can never name different boxes for one worker.
+			host:     s.observedWorkerHost(wk.ID, telemetry[wk.ID]),
+			presence: workerPresence(wk, now, s.hub.IsOnline(wk.ID), spawnAt),
+		})
+	}
+
+	sessions := []monitoringSessionDTO{}
+	for _, src := range sources {
+		m := src.member
 		entry := tele(m.ID)
 		roleName, err := s.memberRoleName(m)
 		if err != nil {
@@ -955,11 +1029,11 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 			Name:            m.Name,
 			Role:            roleName,
 			Runtime:         NormalizeRuntime(m.Runtime),
-			Model:           m.Model,
+			Model:           src.model,
 			Effort:          effort,
-			Machine:         resolveDisplay(machineNames, s.observedHost(m)),
+			Machine:         resolveDisplay(machineNames, src.host),
 			Account:         resolveSessionAccount(rt.account),
-			Presence:        PresenceState(m, now, s.hub.IsOnline(m.ID)),
+			Presence:        src.presence,
 			ContextPct:      rt.contextPct,
 			CompactionCount: rt.compactionCount,
 			Cost:            rt.cost,

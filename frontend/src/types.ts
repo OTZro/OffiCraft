@@ -51,6 +51,11 @@ export interface Member {
   runtime?: AgentRuntime;
   /** Model last reported by a live boot; absent on older API payloads. */
   actualModel?: string;
+  /** Effort last SELF-REPORTED by the live session. There is no member wire
+   * field for it — `lib/runtime.joinSessionRuntime` folds it from the
+   * monitoring session, so it is absent/"" whenever nothing reported. NEVER
+   * substitute `effort` below: that is the owner's launch intent, not state. */
+  actualEffort?: string;
   model: string;
   effort: Effort;
   // The member's kind (e.g. "assistant" | "warden"). The office roster shows

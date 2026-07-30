@@ -218,6 +218,18 @@ owner 2026-07-27 兩句話 + 一個數字:「更新的時候不能塞超過這�
   update 也不得寫 `avatar_attachment_id`；只有專用 avatar mutator 可改該 pointer，
   避免 stale lifecycle/model snapshot 洗掉較新的頭像。
 
+## AI 會話清單 = 正職 ∪ 外包,而且每一欄都是自報值(T-e12c,owner 2026-07-31)
+
+owner 兩句裁定:「理想上應該是同一支 API 同時取得所有 AI session(包含外包跟正職)」「成員面板以及監控台,一定要顯示回報回來的狀態,不能顯示設定值」。
+
+- **`GET /api/monitoring` 的 `sessions` 現在同時含成員與 live 外包 worker**(`api_monitoring.go` 的 `monitoringSessionSource`)。外包經既有的 `memberFromWorker` 進同一個迴圈,**沒有 per-kind 的第二條建構路徑**——兩種列不可能各自漂走。**沒有新增任何 DTO 欄位**:`MonitoringSessionDTO` 是 `additionalProperties:false`,加欄就是動凍結 wire;外包列靠 **`ow-` id 前綴**辨識(既有慣例),`role` 誠實留 `""`(worker 的 member row 本來就 `RoleKey: ""`,不編一個假角色名出來)。
+- **每一個遙測欄都取該 actor 自己的 telemetry/gauge entry**(key = token sub,外包就是 `ow-` id);沒回報就 null/`""`,**一律不退回名冊設定值**。外包的 `model` 取 `wk.ActualModel`(自報)而非 `wk.Model`(設定),同一條規則。
+- **`GET /api/outsource-workers` / `outsourceWorkerDTO` 一字未動**:那份 `model`/`effort` 是 owner 的**啟動意圖**,座艙的編輯器讀它、存回去也是它。⚠️ **把它換成自報值會讓 owner 按一次儲存就把自己的設定改掉(未回報時甚至存進空值,被 closed vocabulary 422)** —— 顯示面與編輯面必須分開,這是 T-e12c 唯一刻意保留設定值的地方。
+- **released worker 不進 `sessions`**(`RosterStatusRemoved`,與 members 同一個判準),但**仍留在 `actors`** —— 花費不會因為列消失而消失。`actors` 隨著這台站跑過的每一張任務單調成長,現在式的會話表不能長那樣。
+- ⚠️ **已知不對稱**:`sessions` 的 `machine` 用 `observedWorkerHost`(與同一份回應的 machines fold 同一個運算式,兩處不可能各說各話),而**外包詳情面板**走 `projectWorker`、會先看 in-memory 的 dispatch target ⇒ 剛派出去還沒連上的 worker,面板顯示目標機器、會話列顯示 `""`。誠實留白 vs 顯示意圖,兩處的問法不同。
+- **agent 端的來源見 `cli/CLAUDE.md` 的 session effort 條**:effort 取 statusLine payload 的 `effort.level`(**live**,跟得上中途 `/effort`),**不是** `OC_EFFORT` 那個啟動意圖,而且**沒有 fallback**。
+- 哨兵:`TestGetMonitoring_SessionsListStaffAndOutsourceAlike` / `_WorkerSessionReadsItsOwnTelemetry` / `_SilentWorkerSessionShowsHonestBlanks`(設定了 opus/medium 卻沒回報 ⇒ 全空且**仍然列出**)/ `_ReleasedWorkerIsNotASession`(連帶釘住「拿掉它的列不可以拿掉它的錢」)/ `_SessionEffortRoundTrips`(ingest→GET 往返;這條路先前**零覆蓋**,正是 effort 從沒被送過卻沒有任何東西會紅的原因)。
+
 ## 已知邊界(誠實列,別當成熟功能用)
 - **config 預設路徑是 CWD-relative `oc.toml`**(binary 沒有 source-path 可錨 repo root);部署正解走 `$OC_CONFIG`。
 

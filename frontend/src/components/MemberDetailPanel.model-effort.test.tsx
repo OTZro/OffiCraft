@@ -104,12 +104,17 @@ beforeEach(() => {
 
 describe("MemberDetailPanel · model/effort quick-pick editor", () => {
   it("opens the shared chips editor; a chip fills the free input; save PATCHes", async () => {
-    const utils = renderPanel();
+    // A reported pair distinct from the configured one: the editor must seed
+    // from the SETTING (T-e12c), never from what the session happens to run.
+    const utils = renderPanel({ actualModel: "claude-sonnet-4.9", actualEffort: "low" });
     await openSettings(utils);
 
     // The current model pre-fills the free input; the matching chip is active.
     const input = utils.getByTestId("me-model-input") as HTMLInputElement;
     expect(input.value).toBe("opus");
+    expect(
+      (utils.getByTestId("me-effort-select") as HTMLSelectElement).value
+    ).toBe("medium");
 
     // Quick chip → fills the input (the input stays the single truth).
     fireEvent.click(utils.getByTestId("me-model-chip-sonnet"));
@@ -181,6 +186,33 @@ describe("MemberDetailPanel · model/effort quick-pick editor", () => {
         effort: "medium",
       })
     );
+  });
+});
+
+// T-e12c — owner ruling 2026-07-31:「成員面板以及監控台，一定要顯示回報回來的
+// 狀態，不能顯示設定值」. The info card states what the member is RUNNING; the
+// settings dialog above stays the one place the launch intent is shown and
+// written. Both halves are pinned here so neither can quietly absorb the other.
+describe("MemberDetailPanel · 投入度 readout vs configured launch intent", () => {
+  it("reads out the REPORTED effort, not the configured one", () => {
+    const utils = renderPanel({
+      status: "online",
+      lifecycle: "online",
+      effort: "medium",
+      actualEffort: "high",
+    });
+    const readout = utils.getByTestId("mp-effort-value").textContent ?? "";
+    expect(readout).toContain("high");
+    expect(readout).not.toContain("medium");
+  });
+
+  it("blanks the readout when nothing was reported, never the configured value", () => {
+    const utils = renderPanel({
+      status: "online",
+      lifecycle: "online",
+      effort: "medium",
+    });
+    expect(utils.getByTestId("mp-effort-value").textContent).toBe("—");
   });
 });
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { ApiError } from "../api/errors";
 import type { OutsourceWorkerView } from "../api/adapter";
+import type { MonSessionView } from "../types";
 import { useMachines } from "../hooks/useMachines";
 import { AgentDetailPanel } from "./AgentDetailPanel";
 import { ModelEffortEditor } from "./ModelEffortEditor";
@@ -20,6 +21,11 @@ import "./member-detail.css";
 
 interface WorkerDetailPanelProps {
   worker: OutsourceWorkerView;
+  /** This worker's live telemetry row from `GET /api/monitoring` (workers ride
+   * the SAME `sessions` array as members, keyed by their `ow-` id). It — not
+   * the worker DTO — is the source for the 模型 / 投入度 STATE readout;
+   * `undefined` (nothing reported) renders the honest dash. */
+  session?: MonSessionView;
   onBack: () => void;
   /** Jump to the bound task (#tasks/<taskId>); only wired when the worker has a
    * resolvable task. */
@@ -71,6 +77,7 @@ interface WorkerDetailPanelProps {
  */
 export function WorkerDetailPanel({
   worker,
+  session,
   onBack,
   onOpenTask,
   onRelocate,
@@ -642,8 +649,13 @@ export function WorkerDetailPanel({
         testIdPrefix: "worker-detail",
         online,
         runtime: worker.runtime || "claude",
-        model: worker.model,
-        effort: worker.effort,
+        // STATE readout = what the worker's own telemetry reported; honest ""
+        // when it reported nothing. The configured pair below is what the
+        // editor seeds from and saves — the two must never be the same value.
+        model: session?.model ?? "",
+        effort: session?.effort ?? "",
+        configuredModel: worker.model,
+        configuredEffort: worker.effort,
         modelEffortNote: t.workerDetail.modelNextSpawnNote,
         // NO `onSaveModelEffort` / `machineAction` (T-7526): this panel is
         // READ-ONLY, exactly like the member panel since T-927a. The cells state
