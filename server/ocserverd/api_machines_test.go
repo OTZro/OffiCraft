@@ -119,7 +119,10 @@ func TestHandleBootstrapHere(t *testing.T) {
 }
 
 func TestResolveOcwardenBinaryFrom(t *testing.T) {
-	embedded := fstest.MapFS{"ocwarden": {Data: []byte("embedded warden bytes")}}
+	embedded := fstest.MapFS{
+		"ocwarden":  {Data: []byte("embedded warden bytes")},
+		"officraft": {Data: []byte("embedded fixed anchor bytes")},
+	}
 
 	// EMBED-ONLY (T-e731): a stale bin/ocwarden under the CWD must never shadow
 	// the embed — disk-first once had bootstrap-here exec a frozen checkout's
@@ -170,6 +173,10 @@ func TestResolveOcwardenBinaryFrom(t *testing.T) {
 		raw, _ := os.ReadFile(got)
 		if string(raw) != "embedded warden bytes" {
 			t.Fatalf("materialized bytes drifted: %q", raw)
+		}
+		anchor, err := os.ReadFile(filepath.Join(s.binCacheDir, "officraft"))
+		if err != nil || string(anchor) != "embedded fixed anchor bytes" {
+			t.Fatalf("anchor sibling = %q (%v), want embedded fixed anchor", anchor, err)
 		}
 
 		// Idempotent: a second resolve reuses the same path without error.

@@ -48,7 +48,7 @@ FAKEHOME="$WORK/home"
 mkdir -p "$SHIMDIR" "$EXTRADIR" "$PKG"
 
 cp "$SCRIPT" "$PKG/install.sh"
-for b in ocserverd ocwarden ocagent; do
+for b in ocserverd ocwarden ocagent officraft; do
   printf '#!/usr/bin/env bash\nexit 0\n' > "$PKG/$b"
   chmod +x "$PKG/$b"
 done

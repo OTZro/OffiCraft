@@ -16,7 +16,7 @@
   - `TestHostSeam_StructureIsReported` 是**唯一一條** reporting wrapper(不是 enforcement、不是覆蓋率:`TestMain` 已先跑同一個 scan 並 `os.Exit(1)`,所以它的迴圈體恆不執行)。⚠️ **不要再加第二條**:原本這裡有兩條函式本體逐字相同的守護測試,審查者把兩者迴圈體換成 `panic` 跑整包,照樣 `ok` + 兩條 `--- PASS`。新性質加進 `scanHostSeamSource`,不要加新的 no-op 測試。
 
 ## 自更新 binary
-- **改 Go → fresh build 驗證，binary 永不 commit**(root §13)。CI Go gate 跑 gofmt、vet、build 與 test；只有本機剛好留有 gitignored `bin/ocagent` / `bin/ocwarden` 時才做 parity dryrun。發佈的 binary 由 release 流程 fresh build。
+- **改 Go → fresh build 驗證，binary 永不 commit**(root §13,唯一例外是 TCC 身分錨點 `dist/officraft/officraft`,見該節)。CI Go gate 跑 gofmt、vet、build 與 test；只有本機剛好留有 gitignored `bin/ocagent` / `bin/ocwarden` 時才做 parity dryrun。發佈的 binary 由 release 流程 fresh build。
 - **self-update**:content-hash swap oracle + 防自殺 verify-before-swap(swap 前先驗新 binary 可跑)。install `env -u OC_ID`(防 shell OC_ID 污染)+ 餵回同 tokfile。ocwarden 換掉自己後 **exec-in-place**(`syscall.Exec` 同 PID、同 argv/env 原地換新,exec 失敗才 fallback exit(0))——**絕不賭 launchd KeepAlive 重拉**:實測 macOS gui-domain LaunchAgent 對 exit 0 的 warden 不重拉(job 停在 not running 直到人工 kickstart),exit-and-relaunch 舊路會讓每次 self-update 殺死該機看門狗。
 - **warden restart 不斷 agent online**:ocagent 是獨立進程、持自己的 SSE,warden 重啟不影響。
 - **發佈簽章 = 觀測不 enforce(T-33d5),且 T-588c 起預設不簽**:`bin/codesign-artifact` 可以用穩定 self-signed 憑證簽 bindist 的 ocwarden/ocagent,但**預設完全不跑、連 keychain 都不看**,要簽得明確要求(`bin/release publish --sign`)。所以實務上這個 loop 換進去的 binary 是 adhoc 的。self-update swap 後只 **log** 新 binary 的簽章身分(`signatureOf` seam → `codesignIdentity`),**絕不驗簽硬擋**——self-signed 憑證在未信任機器上 verify 必非零,硬擋會 brick fleet。簽章只活在發佈 artifact，不進 git。
@@ -93,7 +93,10 @@ owner 拍板「乾淨新建」:warden 長出**臨時 session** 形態伺候外�
 - **無 command_result 回報**:worker 無 member row,fold-back 通道不適用;喚醒成敗由 server 從 worker 自己的 get_my_task 領工觀察。
 
 ## deploy
-唯一安裝入口是 **`ocwarden install`**(Go,`cli/ocwarden/install.go`;flip 時期的 bash `bin/warden-install` 已退役刪除)。install 把發佈流程 fresh build 的 binary 安到 `~/.officraft/warden/`(home,per-machine)並 render 真實 plist;plist template 在 `cli/ocwarden/deploy/`(REFERENCE,實際 plist 由 install 於 runtime 寫)。cutover 史料見 `cli/ocwarden/CUTOVER.md`。
+唯一安裝入口是 **`ocwarden install`**(Go,`cli/ocwarden/install.go`;flip 時期的 bash `bin/warden-install` 已退役刪除)。
+
+🔴 **plist 起的不是 ocwarden,是 TCC 身分錨點 `officraft`(T-5831)**:launchd 的 job leader 是整棵樹的 TCC responsible process,而 adhoc 簽章的 binary 是用 bytes 的雜湊被認出來的——plist 指向會被 self-update 抽換的 ocwarden 時,每更新一次就作廢一次全機授權(症狀是**卡住、無 log**,不是被拒絕)。錨點只 fork 隔壁的 ocwarden(帶 `run`)、轉發停止訊號、用 child 的結束狀態當自己的;**裝過就永不覆寫**(連相同 bytes 也不行,重寫會換 inode)。它同時被 embed 進 ocwarden(`anchor_embed.go`,`bin/build-bindist` staging 進 `anchordist/`),因為座艙的一鍵安裝只下載 ocwarden 一支——embed、出貨、`dist/officraft/` 三份是**同一次 build 的同一份 bytes**,三份不同就是三個身分。
+install 把發佈流程 fresh build 的 binary 安到 `~/.officraft/warden/`(home,per-machine)並 render 真實 plist;plist template 在 `cli/ocwarden/deploy/`(REFERENCE,實際 plist 由 install 於 runtime 寫)。cutover 史料見 `cli/ocwarden/CUTOVER.md`。
 
 **claude 路徑鏈(OC_CLAUDE_BIN stamp)**:launchd warden 的 minimal PATH 找不到 version-manager(asdf/nvm/volta)的 claude → runtime `resolveClaudeBin`(transport.go)的 ②LookPath/③common-dirs 全 miss。解法是**在還找得到的環節解析、stamp 進 plist 讓優先序① 命中**:(a) `ocwarden install` 於安裝環境解析 claude(`resolveClaudeForInstall`,install.go:OC_CLAUDE_BIN env → LookPath → common dirs),用 `--version` 在 minimal PATH 下實測——過 = 只 stamp OC_CLAUDE_BIN;不過但在 installer PATH 下過(shim/env-shebang)= 連 installer PATH 一起 stamp 進 plist;都找不到 = 印人話 WARNING+指引(裝 claude 或 export OC_CLAUDE_BIN 重跑),不 fatal。(b) bootstrap-here 鏈(server 在 launchd minimal env 下跑 `ocwarden install`):`bin/ocserver install`(使用者互動 shell 跑)先解析 claude、stamp OC_CLAUDE_BIN(+必要時 full PATH)進 **serve plist**;bootstrap-here 的 env passthrough(`api_machines.go`)原樣帶給 ocwarden install → 其解析優先序① 命中 → 轉 stamp 進 warden plist。foreground `ocwarden run` 的 OC_CLAUDE_BIN env 優先序不變(同一個優先序①)。
 

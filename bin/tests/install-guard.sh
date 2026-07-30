@@ -32,9 +32,11 @@
 # only so the file-side gates have a sandbox to look at — never as the safety
 # mechanism.
 #
-# plutil is deliberately NOT stubbed: it only ever reads a plist this suite
-# wrote inside its own temp dir, so the real tool gives a more faithful test at
-# zero risk.
+# plutil runs REAL by default — it only ever reads a plist this suite wrote
+# inside its own temp dir, so the real tool gives the more faithful test at zero
+# risk. It is stubbed only when a case opts in via SHIM_PLUTIL_STDOUT_ERR, to
+# reproduce a host-version behaviour the runner's own macOS may not have; see
+# the relocation case at the bottom.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -54,9 +56,9 @@ PKG="$WORK/pkg"
 FAKEHOME="$WORK/home"
 mkdir -p "$SHIMDIR" "$PKG"
 
-# ── the package under test: install.sh + its three sibling binaries ──────────
+# ── the package under test: install.sh + its four sibling binaries ───────────
 cp "$SCRIPT" "$PKG/install.sh"
-for b in ocserverd ocwarden ocagent; do
+for b in ocserverd ocwarden ocagent officraft; do
   printf '#!/usr/bin/env bash\nexit 0\n' > "$PKG/$b"
   chmod +x "$PKG/$b"
 done
@@ -178,10 +180,27 @@ SH
 # gate. They are never invoked — the preflight only asks whether they resolve.
 # (Deliberately not the real binaries: a host without tmux must not silently
 # change what these cases test.)
+# plutil: real by default. Under SHIM_PLUTIL_STDOUT_ERR=1 it reproduces macOS
+# 15, which prints "no value at that key path" on STDOUT and exits non-zero —
+# macOS 26 prints that on stderr. Without this shim the relocation coverage
+# below only has teeth on a macOS 15 host, so the fix it guards could be
+# reverted and every newer machine's CI would stay green.
+cat > "$SHIMDIR/plutil" <<'SH'
+#!/usr/bin/env bash
+[[ -n "${SHIM_PLUTIL_LOG:-}" ]] && printf '%s\n' "$*" >> "$SHIM_PLUTIL_LOG"
+if [[ "${SHIM_PLUTIL_STDOUT_ERR:-0}" == 1 ]]; then
+  if out="$(/usr/bin/plutil "$@" 2>/dev/null)"; then
+    printf '%s\n' "$out"; exit 0
+  fi
+  printf '%s: Could not extract value, error: No value at that key path or invalid key path: %s\n' "${!#}" "${2:-}"
+  exit 1
+fi
+exec /usr/bin/plutil "$@"
+SH
 printf '#!/usr/bin/env bash\nexit 0\n' > "$SHIMDIR/tmux"
 printf '#!/usr/bin/env bash\necho "9.9.9 (Claude Code)"\nexit 0\n' > "$SHIMDIR/claude"
 
-chmod +x "$SHIMDIR"/uname "$SHIMDIR"/launchctl "$SHIMDIR"/lsof "$SHIMDIR"/tmux "$SHIMDIR"/claude
+chmod +x "$SHIMDIR"/uname "$SHIMDIR"/launchctl "$SHIMDIR"/lsof "$SHIMDIR"/tmux "$SHIMDIR"/claude "$SHIMDIR"/plutil
 
 PLIST_REL="Library/LaunchAgents/com.officraft.serve.plist"
 
@@ -235,6 +254,7 @@ run_install() {
     PATH="$SHIMDIR:/usr/bin:/bin:/usr/sbin:/sbin" \
     HOME="$FAKEHOME" SHIM_JOB="$job" SHIM_TRIPWIRE="$WORK/.tripwire" SHIM_STATE="$WORK" \
     SHIM_EXPECT_TARGET="$EXPECT_TARGET" SHIM_NO_LISTEN="${SHIM_NO_LISTEN:-0}" \
+    SHIM_PLUTIL_STDOUT_ERR="${SHIM_PLUTIL_STDOUT_ERR:-0}" SHIM_PLUTIL_LOG="${SHIM_PLUTIL_LOG:-}" \
     bash "$PKG/install.sh" "$@" </dev/null 2>&1)"
   RC=$?
 }
@@ -569,6 +589,37 @@ if [[ -d "$FAKEHOME/.officraft" ]]; then ok "no --namespace: still installs to ~
 if compgen -G "$FAKEHOME/.officraft-*" >/dev/null; then bad "no --namespace: a namespaced root appeared out of nowhere"; else ok "no --namespace: no namespaced root is created"; fi
 if [[ -f "$FAKEHOME/$PLIST_REL" ]]; then ok "no --namespace: still uses com.officraft.serve.plist"; else bad "no --namespace: default plist missing"; fi
 if [[ -e "$FAKEHOME/.officraft/server/oc.toml" ]]; then bad "no --namespace: an instance config was invented for the MAIN instance"; else ok "no --namespace: no instance config is invented (main reads OC_CONFIG/./oc.toml as before)"; fi
+
+# ── 10. a reinstall is not a relocation, on EVERY macOS ─────────────────────
+# The plist this suite writes has no EnvironmentVariables at all, so asking it
+# for OC_CONFIG is the ordinary "key is absent" case. macOS 15's plutil answers
+# that on STDOUT with a non-zero rc, so reading the OUTPUT rather than the rc
+# captured the error TEXT as the old config — and install.sh then compared that
+# text against the real one, called the difference a relocation, and refused
+# every re-install over a live service on those machines. The port printed in
+# its own refusal was identical before and after, which is what a relocation
+# never looks like.
+#
+# The stub is what makes this case mean anything on a newer host: without it a
+# macOS 26 runner takes the stderr path, passes no matter how plist_env is
+# written, and the fix could be reverted with CI still green.
+reset_fixture preinstalled
+PLUTIL_LOG="$WORK/.plutil-calls"; : > "$PLUTIL_LOG"
+SHIM_PLUTIL_STDOUT_ERR=1 SHIM_PLUTIL_LOG="$PLUTIL_LOG" run_install running --force --restart-live
+unset SHIM_PLUTIL_STDOUT_ERR SHIM_PLUTIL_LOG
+# Positive control FIRST: if install.sh never consulted plutil through the stub,
+# everything below would pass for the wrong reason.
+if [[ -s "$PLUTIL_LOG" ]]; then
+  ok "macOS-15 plutil: install.sh actually consulted the stub (case is live)"
+else
+  bad "macOS-15 plutil: the stub was never called — this case proves nothing"
+fi
+check "macOS-15 plutil: a re-install still proceeds" "0" "$RC"
+case "$OUT" in
+  *"would MOVE the running"*) bad "macOS-15 plutil: re-install misread as a relocation (gate fired on an absent-key error string)" ;;
+  *) ok "macOS-15 plutil: re-install is not misread as a relocation" ;;
+esac
+check "macOS-15 plutil: the old job is booted out" "yes" "$(booted_out)"
 
 echo "install-guard tests: $PASS ok, $FAIL failed"
 [[ "$FAIL" == "0" ]] || exit 1

@@ -27,9 +27,15 @@ trash/
 .deploy/
 cli/ocagent/ocagent
 cli/ocwarden/ocwarden
+cli/officraft/officraft
 cli/ocwarden/ocwarden.prev
 cli/ocwarden/ocagent
 cli/ocwarden/ocagent.prev
 
 # Release pipeline artifacts (bin/release) — never commit
-/dist/
+/dist/*
+!/dist/officraft/
+!/dist/officraft/officraft
+!/dist/officraft/source.sha256
+!/dist/officraft/binary.sha256
+!/dist/officraft/BUILD.md

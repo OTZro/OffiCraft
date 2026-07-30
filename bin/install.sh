@@ -53,7 +53,7 @@
 #                           before overwriting. Interactive = y/N prompt
 #                           (default NO); non-interactive = abort unless
 #                           --force.
-#   3. install binaries   — ocserverd/ocwarden/ocagent → ~/.officraft/bin
+#   3. install binaries   — ocserverd/ocwarden/ocagent/officraft → ~/.officraft/bin
 #                           (ocserverd embeds the SPA + seeds + warden/agent
 #                           binaries; ocwarden/ocagent ship alongside for
 #                           direct CLI use).
@@ -641,7 +641,7 @@ SELF="${BASH_SOURCE[0]:-}"
 IN_PACKAGE=0
 if [[ -n "$SELF" && -f "$SELF" ]]; then
   SELF_DIR="$(cd "$(dirname "$SELF")" && pwd)"
-  if [[ -f "$SELF_DIR/ocserverd" && -f "$SELF_DIR/ocwarden" && -f "$SELF_DIR/ocagent" ]]; then
+  if [[ -f "$SELF_DIR/ocserverd" && -f "$SELF_DIR/ocwarden" && -f "$SELF_DIR/ocagent" && -f "$SELF_DIR/officraft" ]]; then
     IN_PACKAGE=1
   fi
 fi
@@ -887,7 +887,7 @@ if [[ -n "$NS" && -f "$NS_CFG" ]]; then
   fi
 fi
 
-for b in ocserverd ocwarden ocagent; do
+for b in ocserverd ocwarden ocagent officraft; do
   if [[ ! -f "$HERE/$b" ]]; then
     echo "[install] FATAL: $b missing next to install.sh — run this from the unpacked release directory." >&2
     exit 1
@@ -1065,7 +1065,7 @@ fi
 
 echo "[install] installing binaries → $BIN_DIR"
 mkdir -p "$BIN_DIR"
-for b in ocserverd ocwarden ocagent; do
+for b in ocserverd ocwarden ocagent officraft; do
   # copy-then-rename, so a running old binary is never truncated.
   cp "$HERE/$b" "$BIN_DIR/$b.new"
   chmod +x "$BIN_DIR/$b.new"
@@ -1201,8 +1201,10 @@ fi
 #   - port or config would actually CHANGE       -> that is a relocation, not a
 #     reload. Hard stop, print the before/after, require --relocate.
 plist_env() {
-  # EnvironmentVariables.<key> of a plist, or "" when absent.
-  plutil -extract "EnvironmentVariables.$2" raw -o - "$1" 2>/dev/null || true
+  # EnvironmentVariables.<key> of a plist, or "" when absent. rc decides, not
+  # output: macOS 15's plutil prints its "no value" error on STDOUT.
+  local v; v="$(plutil -extract "EnvironmentVariables.$2" raw -o - "$1" 2>/dev/null)" || return 0
+  printf '%s' "$v"
 }
 if [[ "$OURS" == 1 ]]; then
   OLD_CFG="$(plist_env "$PLIST" OC_CONFIG)"

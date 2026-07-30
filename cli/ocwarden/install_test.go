@@ -22,15 +22,21 @@ type recordedRun struct {
 }
 
 type fakeSys struct {
-	runs     []recordedRun
-	runFn    func(name string, args ...string) (string, error)
-	writes   map[string][]byte
-	modes    map[string]os.FileMode
-	existing map[string][]byte // pre-seeded readable files (guard tokfile, copy source)
-	renames  [][2]string
-	removed  []string
-	mkdirs   []string
-	slept    int
+	runs   []recordedRun
+	runFn  func(name string, args ...string) (string, error)
+	writes map[string][]byte
+	// writeCount counts writeFile calls PER PATH. `writes` alone cannot see a
+	// rewrite: the second write of a key leaves both the map length and (for
+	// identical bytes) the value unchanged, so an assertion built on it is
+	// tautological. The anchor must never be rewritten at all — even identical
+	// bytes swap the inode and void the TCC grant.
+	writeCount map[string]int
+	modes      map[string]os.FileMode
+	existing   map[string][]byte // pre-seeded readable files (guard tokfile, copy source)
+	renames    [][2]string
+	removed    []string
+	mkdirs     []string
+	slept      int
 	// injection hooks
 	renameErr map[string]error
 	removeErr map[string]error
@@ -38,11 +44,12 @@ type fakeSys struct {
 
 func newFakeSys() *fakeSys {
 	return &fakeSys{
-		writes:    map[string][]byte{},
-		modes:     map[string]os.FileMode{},
-		existing:  map[string][]byte{},
-		renameErr: map[string]error{},
-		removeErr: map[string]error{},
+		writes:     map[string][]byte{},
+		writeCount: map[string]int{},
+		modes:      map[string]os.FileMode{},
+		existing:   map[string][]byte{},
+		renameErr:  map[string]error{},
+		removeErr:  map[string]error{},
 	}
 }
 
@@ -61,6 +68,7 @@ func (f *fakeSys) ops() sysOps {
 		},
 		writeFile: func(path string, data []byte, perm os.FileMode) error {
 			f.writes[path] = data
+			f.writeCount[path]++
 			f.modes[path] = perm
 			return nil
 		},
@@ -250,7 +258,7 @@ func TestRenderPlist_SubstitutesAndIsWellFormed(t *testing.T) {
 	p := wardenPaths{
 		root: "/repo", home: "/Users/seth", ocBase: "http://127.0.0.1:7755",
 		tokfile: "/Users/seth/.officraft/exec-warden.tok",
-		logDir:  "/repo/var/log", binPath: "/repo/bin/ocwarden",
+		logDir:  "/repo/var/log", binPath: "/repo/bin/ocwarden", anchorPath: "/repo/bin/officraft",
 	}
 	out := renderPlist(p)
 	if err := xmlWellFormed(out); err != nil {
@@ -263,7 +271,7 @@ func TestRenderPlist_SubstitutesAndIsWellFormed(t *testing.T) {
 	}
 	must := []string{
 		"<string>com.officraft.ocwarden</string>",
-		"<array><string>/repo/bin/ocwarden</string><string>run</string></array>",
+		"<array><string>/repo/bin/officraft</string></array>",
 		"<key>OC_BASE</key><string>http://127.0.0.1:7755</string>",
 		"<key>HOME</key><string>/Users/seth</string>",
 		"<key>OC_WARDEN_TOKFILE</key><string>/Users/seth/.officraft/exec-warden.tok</string>",
@@ -295,6 +303,7 @@ func fixedPaths() wardenPaths {
 		laDir:     "/h/Library/LaunchAgents",
 		plistPath: "/h/Library/LaunchAgents/com.officraft.ocwarden.plist",
 		logDir:    "/h/.officraft/warden/log", binPath: "/h/.officraft/warden/ocwarden",
+		anchorSrc: "/tmp/officraft", anchorPath: "/h/.officraft/warden/officraft",
 		guiDomain: "gui/501",
 	}
 }
@@ -589,6 +598,109 @@ func TestCopyBinary_DryRunCopiesNothing(t *testing.T) {
 	}
 }
 
+func TestCopyAnchorIfAbsentWritesOnceAndNeverReplaces(t *testing.T) {
+	f := newFakeSys()
+	p := fixedPaths()
+	f.existing[p.anchorSrc] = []byte("FIXED-ANCHOR")
+	i := &installer{out: io.Discard, sys: f.ops()}
+	if err := i.copyAnchorIfAbsent(p); err != nil {
+		t.Fatalf("first install: %v", err)
+	}
+	if got := string(f.writes[p.anchorPath]); got != "FIXED-ANCHOR" {
+		t.Fatalf("anchor = %q, want fixed source bytes", got)
+	}
+	// A later install ships a REBUILT anchor. The installed one must keep the
+	// first bytes, and the path must not be written a second time at all —
+	// rewriting even identical bytes swaps the inode and voids the TCC grant.
+	f.existing[p.anchorSrc] = []byte("REBUILT-ANCHOR")
+	if err := i.copyAnchorIfAbsent(p); err != nil {
+		t.Fatalf("second install: %v", err)
+	}
+	if got := string(f.writes[p.anchorPath]); got != "FIXED-ANCHOR" {
+		t.Fatalf("existing anchor was replaced: anchor = %q, want the first install's bytes", got)
+	}
+	if n := f.writeCount[p.anchorPath]; n != 1 {
+		t.Fatalf("anchor written %d times, want exactly 1 (a rewrite voids the TCC grant)", n)
+	}
+	if len(f.renames) != 0 {
+		t.Fatalf("existing anchor must never be replaced: renames=%v", f.renames)
+	}
+}
+
+// The cockpit's one-liner for a new machine downloads ocwarden ALONE — no
+// tarball, no sibling anchor — so this, not the unpacked release directory, is
+// the shape every remote onboarding actually has. It has to install.
+func TestCopyAnchorIfAbsentUsesTheEmbeddedAnchorWhenNoSiblingExists(t *testing.T) {
+	f := newFakeSys()
+	p := fixedPaths() // note: p.anchorSrc is deliberately NOT seeded
+	restore := swapEmbeddedAnchor([]byte("EMBEDDED-ANCHOR"))
+	defer restore()
+
+	i := &installer{out: io.Discard, sys: f.ops()}
+	if err := i.copyAnchorIfAbsent(p); err != nil {
+		t.Fatalf("a lone ocwarden must still be able to install its anchor: %v", err)
+	}
+	if got := string(f.writes[p.anchorPath]); got != "EMBEDDED-ANCHOR" {
+		t.Fatalf("anchor = %q, want the embedded bytes", got)
+	}
+	// Still written exactly once, and still never replaced on a re-install.
+	if err := i.copyAnchorIfAbsent(p); err != nil {
+		t.Fatalf("second install: %v", err)
+	}
+	if n := f.writeCount[p.anchorPath]; n != 1 {
+		t.Fatalf("anchor written %d times, want exactly 1", n)
+	}
+}
+
+// A zero-byte sibling is not an anchor. It matters more than it sounds, because
+// "never replace" would then protect the empty file forever.
+func TestCopyAnchorIfAbsentTreatsAnEmptySiblingAsNoAnchor(t *testing.T) {
+	f := newFakeSys()
+	p := fixedPaths()
+	f.existing[p.anchorSrc] = []byte{}
+	restore := swapEmbeddedAnchor([]byte("EMBEDDED-ANCHOR"))
+	defer restore()
+
+	i := &installer{out: io.Discard, sys: f.ops()}
+	if err := i.copyAnchorIfAbsent(p); err != nil {
+		t.Fatalf("an empty sibling must fall through to the embedded anchor: %v", err)
+	}
+	if got := string(f.writes[p.anchorPath]); got != "EMBEDDED-ANCHOR" {
+		t.Fatalf("anchor = %q, want the embedded bytes rather than an empty file", got)
+	}
+}
+
+// The fallback must not become a way to install without an anchor at all: a
+// build carrying neither is still refused, because a plist pointing at a binary
+// that does not exist is worse than an install that stops.
+func TestCopyAnchorIfAbsentRefusesWhenNeitherSiblingNorEmbeddedAnchorExists(t *testing.T) {
+	f := newFakeSys()
+	p := fixedPaths()
+	restore := swapEmbeddedAnchor(nil)
+	defer restore()
+
+	i := &installer{out: io.Discard, sys: f.ops()}
+	err := i.copyAnchorIfAbsent(p)
+	if err == nil {
+		t.Fatal("install must refuse when no anchor is available from either source")
+	}
+	if !strings.Contains(err.Error(), "embedded anchor") {
+		t.Fatalf("the refusal must say BOTH sources were tried, got: %v", err)
+	}
+	if len(f.writes) != 0 {
+		t.Fatalf("a refused anchor install must write nothing, got: %v", f.writes)
+	}
+}
+
+// swapEmbeddedAnchor substitutes the embedded-anchor source for one test and
+// returns the restore. Tests that do not call it keep whatever this build was
+// staged with, which on a plain `go test` is nothing.
+func swapEmbeddedAnchor(b []byte) func() {
+	prev := embeddedAnchor
+	embeddedAnchor = func() []byte { return b }
+	return func() { embeddedAnchor = prev }
+}
+
 // ---------------------------------------------------------------------------
 // installOcAgent — self-contained: DEFAULT download from GET /api/agent/binary, or
 // OC_AGENT_BIN local-override copy; either way → home sibling (never in the plist env)
@@ -872,6 +984,7 @@ func TestRunInstall_ReRunOverHalfInstallSucceeds(t *testing.T) {
 	p.ocToken = fakeJWT("m-aaa")
 	f.existing[p.tokfile] = []byte(fakeJWT("m-aaa")) // half-install leftover
 	f.existing[p.srcExe] = []byte("OCWARDEN-BYTES")
+	f.existing[p.anchorSrc] = []byte("FIXED-ANCHOR")
 	p.ocAgentSrc = "/src/ocagent"
 	f.existing[p.ocAgentSrc] = []byte("OCAGENT-BYTES")
 
@@ -1069,6 +1182,7 @@ func TestRunInstall_StampsClaudeIntoWrittenPlist(t *testing.T) {
 	f.runFn = stableLaunchctl()
 	p := fixedPaths()
 	f.existing[p.srcExe] = []byte("OCWARDEN-BYTES")
+	f.existing[p.anchorSrc] = []byte("FIXED-ANCHOR")
 	p.ocAgentSrc = "/src/ocagent"
 	f.existing[p.ocAgentSrc] = []byte("OCAGENT-BYTES")
 	i := &installer{
@@ -1093,6 +1207,7 @@ func TestRunInstall_MissingAllRuntimesFailsClosedWithReason(t *testing.T) {
 	f.runFn = stableLaunchctl()
 	p := fixedPaths()
 	f.existing[p.srcExe] = []byte("OCWARDEN-BYTES")
+	f.existing[p.anchorSrc] = []byte("FIXED-ANCHOR")
 	p.ocAgentSrc = "/src/ocagent"
 	f.existing[p.ocAgentSrc] = []byte("OCAGENT-BYTES")
 	var sb strings.Builder
@@ -1129,6 +1244,7 @@ func TestRunInstall_CodexOnlyHostIsValid(t *testing.T) {
 	f.runFn = stableLaunchctl()
 	p := fixedPaths()
 	f.existing[p.srcExe] = []byte("OCWARDEN-BYTES")
+	f.existing[p.anchorSrc] = []byte("FIXED-ANCHOR")
 	p.ocAgentSrc = "/src/ocagent"
 	f.existing[p.ocAgentSrc] = []byte("OCAGENT-BYTES")
 	var sb strings.Builder

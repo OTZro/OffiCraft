@@ -298,6 +298,7 @@ if [[ -d "$ROOT/conformance" ]]; then
 fi
 
 echo "[ci] (3/5) repo hygiene — path denylist + gitleaks secret scan"
+"$ROOT/bin/check-officraft-dist"
 # ---------------------------------------------------------------------------
 # 3a. Path denylist — a HARD gate over TRACKED files.
 #

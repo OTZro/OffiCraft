@@ -753,8 +753,15 @@ func (s *apiServer) resolveOcwardenBinaryFrom(embedded fs.FS) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	anchor, err := fs.ReadFile(embedded, "officraft")
+	if err != nil {
+		return "", err
+	}
 	if s.binCacheDir == "" {
 		return "", errors.New("no binary cache directory configured")
+	}
+	if _, err := materializeBinary(s.binCacheDir, "officraft", anchor); err != nil {
+		return "", err
 	}
 	return materializeBinary(s.binCacheDir, "ocwarden", data)
 }

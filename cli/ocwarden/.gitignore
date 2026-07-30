@@ -1,1 +1,3 @@
 /ocwarden
+/anchordist/*
+!/anchordist/.gitkeep

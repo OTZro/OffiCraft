@@ -142,8 +142,11 @@ func TestRenderPlist_NamespacedStampsLabelAndEnv(t *testing.T) {
 }
 
 func TestRenderPlist_EmptyNamespaceOmitsStamp(t *testing.T) {
-	// Byte-level zero-diff: an empty namespace renders the EXACT bytes the
-	// pre-namespace renderer produced (label const, no OC_NAMESPACE key).
+	// Byte-level pin: an empty namespace renders EXACTLY these bytes (label
+	// const, no OC_NAMESPACE key). ProgramArguments names the TCC identity
+	// anchor, which forks the sibling ocwarden — launchd must never exec
+	// ocwarden directly, or the responsible identity moves with every
+	// self-update.
 	p := fixedPaths()
 	got := renderPlist(p)
 	if strings.Contains(got, "OC_NAMESPACE") {
@@ -156,7 +159,7 @@ func TestRenderPlist_EmptyNamespaceOmitsStamp(t *testing.T) {
 <dict>
     <key>Label</key><string>com.officraft.ocwarden</string>
     <key>ProgramArguments</key>
-    <array><string>` + p.binPath + `</string><string>run</string></array>
+    <array><string>` + p.anchorPath + `</string></array>
     <key>WorkingDirectory</key><string>` + p.root + `</string>
     <key>EnvironmentVariables</key>
     <dict>
