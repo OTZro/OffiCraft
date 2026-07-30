@@ -199,7 +199,10 @@ func (s *apiServer) publishDocumentHistoryRestore(r *http.Request, kind, key str
 	case "global_context":
 		s.hub.Publish("global_context", "patch", "global_context", wireOwnerID, nil, audienceOwnerOnly(), requestTrigger(r))
 	case "role_definition":
-		s.hub.Publish("role", "patch", "role", wireOwnerID+"::"+key, nil, audienceOwnerOnly(), requestTrigger(r))
+		// "role_def", the topic every other write to this document publishes.
+		// "role" is not in the closed topic set, so it was dropped at the
+		// publish seam and a restore fanned nothing at all.
+		s.hub.Publish("role_def", "patch", "role_def", wireOwnerID+"::"+key, nil, audienceOwnerOnly(), requestTrigger(r))
 	case "lessons":
 		s.hub.Publish("lessons", "patch", "lessons", wireOwnerID+"::"+key, nil, audienceOwnerOnly(), requestTrigger(r))
 	case "task_manual":

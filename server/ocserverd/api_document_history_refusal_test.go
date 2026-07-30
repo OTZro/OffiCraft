@@ -195,3 +195,64 @@ func TestRestoreDocumentHistoryKeepsEachDocumentsWriteFloor(t *testing.T) {
 		t.Fatalf("a forbidden restore still wrote: live text = %q", current.Text)
 	}
 }
+
+// Every restore must fan a delta on the SAME topic the document's ordinary
+// writes use, or a cockpit that reconciles on SSE keeps showing the version it
+// just replaced. A topic outside the closed vocabulary is dropped at the
+// publish seam, silently, with no error anywhere.
+func TestRestoreDocumentHistoryFansTheDocumentsOwnTopic(t *testing.T) {
+	for _, tc := range []struct{ name, kind, key, topic string }{
+		{"global context", "global_context", "global", "global_context"},
+		{"role definition", "role_definition", seedRoleAssistant, "role_def"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newTasksTestServer(t)
+			// Two writes so there is a revision to restore.
+			switch tc.kind {
+			case "global_context":
+				for _, text := range []string{"one", "two"} {
+					rec := httptest.NewRecorder()
+					api.HandleReplaceGlobalContextApiGlobalContextPost(rec, taskReq(t, http.MethodPost,
+						"/api/global-context", map[string]any{"text": text}, "owner", "owner"))
+					if rec.Code != http.StatusOK {
+						t.Fatalf("seed write: %d %s", rec.Code, rec.Body.String())
+					}
+				}
+			case "role_definition":
+				for _, definition := range []string{"one", "two"} {
+					rec := httptest.NewRecorder()
+					api.HandleUpdateRoleApiRolesRolePost(rec, taskReq(t, http.MethodPost,
+						"/api/roles/"+tc.key, map[string]any{"definition_md": definition}, "owner", "owner"), tc.key)
+					if rec.Code != http.StatusOK {
+						t.Fatalf("seed write: %d %s", rec.Code, rec.Body.String())
+					}
+				}
+			}
+			stored, err := api.dal.ListDocumentHistory(tc.kind, tc.key)
+			if err != nil || len(stored) == 0 {
+				t.Fatalf("history = %+v, %v", stored, err)
+			}
+
+			listener, err := api.hub.Connect("", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			api.HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdRestorePost(rec, taskReq(t, http.MethodPost,
+				"/api/document-history/"+tc.kind+"/"+tc.key+"/restore", nil, "owner", "owner"),
+				tc.kind, tc.key, stored[0].ID)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("restore: %d %s", rec.Code, rec.Body.String())
+			}
+			frame := listener.pop()
+			if len(frame) == 0 {
+				t.Fatalf("restoring %s fanned no SSE frame at all", tc.kind)
+			}
+			_, envelope := parseSSEFrame(t, frame)
+			if envelope["topic"] != tc.topic {
+				t.Fatalf("restore fanned topic %v, want %q — the cockpit listens on that one",
+					envelope["topic"], tc.topic)
+			}
+		})
+	}
+}
