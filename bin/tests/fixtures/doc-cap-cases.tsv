@@ -1,0 +1,71 @@
+# doc-cap-cases.tsv — THE truth table for the document size cap, and the only copy.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# The cap rule is implemented TWICE, in two languages, with no compiler between
+# them:
+#
+#   server/ocserverd/domain.go      DocCapBlocked      — the AUTHORITY. It is
+#                                   what actually refuses a write (HTTP 400).
+#   frontend/src/api/docCap.ts      docCapBlocked      — a stand-in, so the
+#                                   cockpit can mark a revision un-restorable
+#                                   BEFORE the owner clicks it.
+#
+# The frontend copy is temporary: once DocumentHistoryDTO carries a per-revision
+# `restorable` + `reason` (a frozen-wire change, blocked on owner approval) it is
+# deleted and this table loses half its readers. Until then a drift does not
+# produce an error anywhere — it produces a cockpit that LIES: a row shown as
+# restorable that the server refuses, or worse, a perfectly good revision greyed
+# out with a reason that is not true. Neither side would notice.
+#
+# So both sides are checked against THIS table rather than against each other.
+# A mock of one side inside the other's test proves only that the mock matches;
+# the table is the shared truth, and a drift names the side that drifted.
+#
+#   server/ocserverd/doc_cap_mirror_test.go   the Go half
+#   frontend/src/api/docCap.test.ts           the TS half
+#
+# THE RULE (both sides, boundaries included)
+# ------------------------------------------
+#   after ≤ cap                    → allowed
+#   after > cap AND after < before → allowed  (an over-cap doc may converge down)
+#   after > cap AND after ≥ before → REFUSED  (equal length included)
+#
+# THE UNIT IS UNICODE CODE POINTS (runes) — not bytes, not UTF-16 units. Go says
+# utf8.RuneCountInString; TypeScript must say [...s].length, because
+# String.length counts UTF-16 units and double-counts every astral character.
+# The `astral-*` and `cjk-*` rows below are the ones that make that difference
+# observable: they are engineered so that a byte count or a UTF-16 count gives
+# the OPPOSITE verdict to the rune count. If a test only carries ASCII rows,
+# swapping the unit passes silently — which is the whole reason those rows exist.
+#
+# cap<TAB><n> below is read by both tests, so the threshold is not a third copy.
+# cap	10000
+#
+# COLUMNS  case<TAB>before_runes<TAB>after_runes<TAB>blocked<TAB>fill
+#
+#   case          row name, used in failure messages
+#   before_runes  length of the CURRENT stored document, in runes
+#   after_runes   length of the PROPOSED replacement, in runes
+#   blocked       expected verdict: true = the server refuses the write
+#   fill          the single code point both strings are built by repeating.
+#                 This column is what gives the table discriminating power: with
+#                 lengths alone, every row is ASCII and the unit cannot be
+#                 tested at all.
+#
+case	before_runes	after_runes	blocked	fill
+empty-both	0	0	false	a
+first-write-small	0	1	false	a
+under-cap	0	9999	false	a
+at-cap-exactly	0	10000	false	a
+first-write-over-cap	0	10001	true	a
+over-cap-growing	9000	10001	true	a
+over-cap-equal	10001	10001	true	a
+over-cap-one-more	10001	10002	true	a
+over-cap-shrinking	12000	10001	false	a
+over-cap-shrinking-to-cap	12000	10000	false	a
+cjk-under-cap-in-runes-over-in-bytes	0	6000	false	情
+cjk-over-cap	0	10001	true	情
+astral-under-cap-in-runes-over-in-utf16	0	6000	false	🙂
+astral-over-cap	0	10001	true	🙂
+astral-over-cap-shrinking	12000	10001	false	🙂

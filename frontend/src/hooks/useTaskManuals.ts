@@ -16,6 +16,9 @@ interface UseTaskManuals {
   manuals: TaskManualView[];
   loading: boolean;
   error: boolean;
+  /** Re-read the list — used by 版本紀錄 restore (T-7d33), whose write lands
+   * server-side and must not be assumed into local state. */
+  refetch: () => Promise<void>;
   /** Create by DISPLAY NAME (T-fa76) — the server mints the tm- type_key. */
   create: (displayName: string) => Promise<TaskManualView>;
   update: (typeKey: string, patch: TaskManualPatch) => Promise<TaskManualView>;
@@ -83,5 +86,5 @@ export function useTaskManuals(): UseTaskManuals {
     [refetch]
   );
 
-  return { manuals, loading, error, create, update, remove };
+  return { manuals, loading, error, refetch, create, update, remove };
 }

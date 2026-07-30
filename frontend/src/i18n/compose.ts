@@ -81,6 +81,8 @@ export interface Messages {
   themeImportSkipped: (count: number, sample: string[]) => string;
   themeDeleteConfirm: (name: string) => string;
   deleteRoleConfirm: (name: string) => string;
+  docHistoryRestoreConfirm: (when: string) => string;
+  docHistoryBlockedReason: (fields: string[], cap: number) => string;
   deleteManualConfirm: (key: string) => string;
 }
 
@@ -175,6 +177,15 @@ export function makeMessages(t: Dict, language: Lang): Messages {
       `${set.themeDeleteConfirmLead}${name}${set.themeDeleteConfirmTail}`,
     deleteRoleConfirm: (name) =>
       `${set.deleteRoleConfirmLead}${name}${set.deleteRoleConfirmTail}`,
+    // `when` is the revision's own timestamp — the only thing that tells two
+    // retained versions of the same doc apart in one sentence.
+    docHistoryRestoreConfirm: (when) =>
+      `${set.historyRestoreConfirmLead}${when}${set.historyRestoreConfirmTail}`,
+    // Names the FIELDS that breach the cap, not just "this revision" — a task
+    // manual caps two of them and the owner cannot act on an unnamed one.
+    docHistoryBlockedReason: (fields, cap) =>
+      `${set.historyBlockedReasonLead}${fields.join(listSep)}` +
+      `${set.historyBlockedReasonMid}${cap}${set.historyBlockedReasonTail}`,
     deleteManualConfirm: (key) =>
       `${set.deleteManualConfirmLead}${key}${set.deleteManualConfirmTail}`,
   };

@@ -30,6 +30,7 @@ import {
 import { isHttpStatus } from "../api/errors";
 import { Markdown } from "./Markdown";
 import { LessonsCard } from "./LessonsCard";
+import { DocumentHistoryCard } from "./DocumentHistoryCard";
 import { navigateHash } from "../lib/hashRoute";
 import { Breadcrumbs, type Crumb } from "./Breadcrumbs";
 import {
@@ -291,12 +292,14 @@ export function SettingsPage({
         manual={manual}
         crumbs={subCrumbs}
         onSave={onSave}
+        onRestored={manualsH.refetch}
       />
     ) : (
       <TaskManualLearningsPage
         manual={manual}
         crumbs={subCrumbs}
         onSave={onSave}
+        onRestored={manualsH.refetch}
       />
     );
   }
@@ -352,6 +355,15 @@ export function SettingsPage({
         crumbs={[crumbRoot, crumbRoles, { label: t.settings.customName }]}
         onSave={gc.save}
         onReset={gc.reset}
+        // 版本紀錄 (T-7d33): restoring rewrites the live block, so the visible
+        // doc is re-read from the server rather than assumed.
+        extra={
+          <DocumentHistoryCard
+            kind="global_context"
+            docKey="global"
+            onRestored={gc.refetch}
+          />
+        }
       />
     );
   }
@@ -417,7 +429,16 @@ export function SettingsPage({
         // role's doc IS its only truth (the server 404s its reset — verified
         // live), so the affordance is omitted rather than left half-dead.
         onReset={role?.isSeed ? () => rolesH.reset(view.key) : undefined}
-        extra={<LessonsCard roleKey={view.key} />}
+        extra={
+          <>
+            <DocumentHistoryCard
+              kind="role_definition"
+              docKey={view.key}
+              onRestored={rolesH.refetch}
+            />
+            <LessonsCard roleKey={view.key} />
+          </>
+        }
       />
     );
   }

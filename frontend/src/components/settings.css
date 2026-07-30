@@ -1356,3 +1356,123 @@
 .config-status--ok {
   color: var(--color-dot-online);
 }
+
+/* ── 版本紀錄 card (T-7d33) ─────────────────────────────────────────────────
+ * The retained-revision list that sits under every editable long-form doc.
+ * Shell is the shared .doc-card, so it inherits the card surface + border and
+ * needs no colour of its own beyond the semantic tokens below. */
+.doc-hist {
+  margin-top: 14px;
+}
+.doc-hist__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-strong);
+}
+.doc-hist__icon {
+  color: var(--color-text-muted);
+  flex: none;
+}
+.doc-hist__note {
+  margin: 12px 0 4px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+.doc-hist__empty {
+  padding: 8px 0 12px;
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+.doc-hist__list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.doc-hist__item {
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--color-overlay) 6%, transparent);
+  background: var(--color-surface-sunken);
+  min-width: 0;
+}
+/* The meta row wraps rather than pushing the card wide at narrow widths; the
+ * restore button is pinned to the trailing edge while there is room for it. */
+.doc-hist__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.doc-hist__when {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-strong);
+}
+.doc-hist__actor {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.doc-hist__restore {
+  margin-left: auto;
+  flex: none;
+}
+.doc-hist__fields {
+  margin: 10px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.doc-hist__field {
+  min-width: 0;
+}
+.doc-hist__field-name {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
+/* The preview of a long-form revision: CLAMPED height with its own scrollbar,
+ * and `overflow-wrap: anywhere` so an unbreakable 40-hex token shrinks with
+ * the container instead of widening the whole page (T-d451 — this
+ * is plain text, so it does NOT inherit the .doc-md base). */
+.doc-hist__field-value {
+  margin: 2px 0 0;
+  max-height: 132px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-text);
+}
+
+/* A revision the server would refuse (over the size cap, not shrinking). It
+ * stays on the list — it is the only place that content still exists — but it
+ * reads as inert: muted surface, warning-tinted badge, dead restore control. */
+.doc-hist__item--blocked {
+  border-color: color-mix(in srgb, var(--color-callout-warning) 35%, transparent);
+  opacity: 0.75;
+}
+.set-badge--blocked {
+  color: var(--color-callout-warning);
+  border-color: color-mix(in srgb, var(--color-callout-warning) 45%, transparent);
+}
+.doc-hist__blocked {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-callout-warning);
+  overflow-wrap: anywhere;
+}

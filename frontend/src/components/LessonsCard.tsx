@@ -12,6 +12,7 @@ import { useState } from "react";
 import { useI18n } from "../i18n";
 import { useLessons } from "../hooks/useLessons";
 import { Markdown } from "./Markdown";
+import { DocumentHistoryCard } from "./DocumentHistoryCard";
 import { LayersIcon, PencilIcon } from "./icons";
 import "./member-detail.css";
 
@@ -28,6 +29,7 @@ export function LessonsCard({ roleKey, taskType = "general" }: LessonsCardProps)
     lessons,
     loading,
     error,
+    refetch,
     save: saveLessons,
   } = useLessons(roleKey, taskType);
 
@@ -64,6 +66,7 @@ export function LessonsCard({ roleKey, taskType = "general" }: LessonsCardProps)
   }
 
   return (
+    <>
     <div className="mp-card mp-lessons">
       <div className="mp-lessons__head">
         <span className="mp-lessons__title">
@@ -128,5 +131,14 @@ export function LessonsCard({ roleKey, taskType = "general" }: LessonsCardProps)
         )}
       </div>
     </div>
+    {/* 版本紀錄 (T-7d33) — the lessons doc's own key is the composite
+      * "<role_key>::<task_type>" the wire uses. */}
+    <DocumentHistoryCard
+      kind="lessons"
+      docKey={`${roleKey}::${taskType}`}
+      currentContent={lessons ? { text: lessons.text } : undefined}
+      onRestored={refetch}
+    />
+    </>
   );
 }

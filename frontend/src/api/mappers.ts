@@ -18,6 +18,7 @@ import type {
   VersionView,
   ReleaseCheckView,
   GlobalContextView,
+  DocumentHistoryView,
   RoleDefView,
   BootstrapView,
   LessonsView,
@@ -42,6 +43,7 @@ import type {
   WireVersion,
   WireReleaseCheck,
   WireGlobalContext,
+  WireDocumentHistory,
   WireRoleDef,
   WireBootstrap,
   WireLessons,
@@ -904,6 +906,20 @@ export function toGlobalContext(w: WireGlobalContext): GlobalContextView {
     ownerId: w.owner_id,
     schemaVersion: w.schema_version,
     isDefault: w.is_default,
+  };
+}
+
+/** Map one wire retained revision → the view model (snake→camel). `content`
+ * keeps the kind's OWN field names verbatim — they are data, not a schema the
+ * cockpit gets to rename. */
+export function toDocumentHistory(
+  w: WireDocumentHistory
+): DocumentHistoryView {
+  return {
+    id: w.id,
+    content: { ...w.content },
+    createdTs: w.created_ts,
+    actorId: w.actor_id,
   };
 }
 

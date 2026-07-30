@@ -48,6 +48,7 @@ import { useMonitoring } from "../hooks/useMonitoring";
 import { Markdown } from "./Markdown";
 import { InlineEdit } from "./InlineEdit";
 import { Breadcrumbs, type Crumb } from "./Breadcrumbs";
+import { DocumentHistoryCard } from "./DocumentHistoryCard";
 import "./stepper.css";
 import { ConfirmModal } from "./ConfirmModal";
 import { CODEX_MODEL_OPTIONS, MODEL_QUICK_PICKS, EFFORTS } from "./ModelEffortEditor";
@@ -390,10 +391,14 @@ export function TaskManualDefinitionPage({
   manual,
   crumbs,
   onSave,
+  onRestored,
 }: {
   manual: TaskManualView;
   crumbs: Crumb[];
   onSave: (patch: TaskManualPatch) => Promise<unknown>;
+  /** Re-read the manual after a 版本紀錄 restore (T-7d33) — one retained
+   * revision covers the WHOLE manual, so both sub-pages refresh the same way. */
+  onRestored?: () => Promise<unknown> | void;
 }) {
   const { t } = useI18n();
   return (
@@ -403,6 +408,15 @@ export function TaskManualDefinitionPage({
         {t.settings.manualTabDefinition}
       </h1>
       <DefinitionCard manual={manual} onSave={onSave} />
+      <DocumentHistoryCard
+        kind="task_manual"
+        docKey={manual.typeKey}
+        currentContent={{
+          learnings: manual.learnings,
+          sop_md: manual.sopMd,
+        }}
+        onRestored={onRestored}
+      />
     </div>
   );
 }
@@ -411,10 +425,13 @@ export function TaskManualLearningsPage({
   manual,
   crumbs,
   onSave,
+  onRestored,
 }: {
   manual: TaskManualView;
   crumbs: Crumb[];
   onSave: (patch: TaskManualPatch) => Promise<unknown>;
+  /** Re-read the manual after a 版本紀錄 restore (T-7d33). */
+  onRestored?: () => Promise<unknown> | void;
 }) {
   const { t } = useI18n();
   return (
@@ -424,6 +441,15 @@ export function TaskManualLearningsPage({
         {t.settings.manualTabLearnings}
       </h1>
       <LearningsCard manual={manual} onSave={onSave} />
+      <DocumentHistoryCard
+        kind="task_manual"
+        docKey={manual.typeKey}
+        currentContent={{
+          learnings: manual.learnings,
+          sop_md: manual.sopMd,
+        }}
+        onRestored={onRestored}
+      />
     </div>
   );
 }
