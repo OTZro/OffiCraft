@@ -308,9 +308,11 @@ export const en: Dict = {
       loadError: "Failed to load outsource workers. Please try again.",
       viewDetail: "Outsource details",
       openTask: "Open task details",
-      releasedChatTitle: "Outsource · released",
-      releasedChatSub:
-        "This outsource worker was released when its task closed; the history below is read-only.",
+      // The ONE home for the "released" sentence — read by BOTH entries (chat
+      // and the detail panel). Deliberately entry-neutral; see zh.ts.
+      releasedTitle: "Outsource · released",
+      releasedSub:
+        "This outsource worker was released when its task closed; what you see here is a read-only record.",
     },
   },
   workerDetail: {

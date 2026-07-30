@@ -401,7 +401,21 @@ mutant 紀錄:`docs/design/worker-panel-parity-mutants.md`。
   「一次都沒派出去」正好是它不渲染的情況。
 - **「重啟」這個字已退場**,兩邊一律 `t.lifecycle.action.spawn`＝「喚醒」。
   ⛔ **REST 路徑仍是 `/restart`**(凍結 wire),`api.restartWorker` 也不改名 —— 退場的是字,不是契約。
-mutant 紀錄:`docs/design/worker-panel-parity-mutants.md` 第五批。
+- 🔴 **「已結案(released)」由身分那一層講,兩個入口同一句話**(owner 2026-07-31:
+  「為什麼從不同進入頁面會有不同的顯示方式?不是應該要一致嗎」)。released worker 被 server
+  從 LIVE 名單濾掉,所以只剩**兩個**入口看得到它:**聊天室**與**直接開的詳情面板**。
+  - 文案只有一個家:`office.outsource.releasedTitle` / `releasedSub`。
+    ⛔ **不准為某一邊加第二份字串** —— 舊名字是 `releasedChatSub`,那個 `Chat` 就是病灶。
+    措辭必須**與入口無關**(「以下為歷史對話」對面板是假話);**沒有測試會擋措辭,只擋副本**。
+  - 判 released 一律看 `worker.status === "released"`。
+    ⛔ **不要動 `presenceVisual` 的五態 no-default switch**:`presence` 對 released 與
+    對「從沒派工過」**都是 `undefined`**,那顆點分不出來,而拓寬它會波及正職 roster。
+  - released 面板**不畫共用卡片、不留任何生命週期按鍵**:server 對 released worker 的
+    `/stop` `/restart` `/model` `/relocate` `/refocus` **一律 404**,留著就是 dead affordance;
+    八張全是 dash 的卡也只是把那句話埋了。
+  - 測這一條要有**真的 released fixture** ＋ **一條 offline(非 released)對照**,
+    否則只證明了「有字」,沒證明「分得出來」。
+mutant 紀錄:`docs/design/worker-panel-parity-mutants.md` 第五、六批。
 
 ## verify(root §13)
 純 FE UI 改動:headless build → `preview:4173` → Playwright,CI 綠即 land、**不上 prod 驗**。公開 URL https://officraft.hardcoretech.link/。`Monitor.tsx` 的 mock 部分無 telemetry backend(純前端 mock)。

@@ -12,7 +12,7 @@
    再 `shasum -a 256 -c` 驗還原後**逐位元組相同**。
 5. Go 的每一支 mutant 前先 `go clean -testcache`，否則會讀到上一支的快取結果。
 
-全部 22 支的還原檢查都是 `OK`（13 支第一輪 ＋ 9 支 owner 2026-07-31 第二輪）。
+全部 29 支的還原檢查都是 `OK`（13 支第一輪 ＋ 9 支第二輪 ＋ 7 支第三輪）。
 
 ## 第一批：外包面板對齊（`WorkerDetailPanel.tsx`）
 
@@ -163,7 +163,85 @@ git grep -nE '\*\*重新啟動\*\*|「重新啟動」|翻成\*\*重新啟動|res
   -- docs/guide frontend/src $EXCL
 ```
 
+🔴 **寫這些 grep 時踩到的 shell 陷阱（會讓「回 0 行」變成假的）**：
+`zsh` **不會**對未加引號的參數展開做斷詞。把排除清單放進一個字串變數再寫 `$EXCL`，
+整串會被當成**一個** pathspec，**每一條排除都靜默失效**。
+排除清單必須用**陣列**（`EXCL=(':!a' ':!b')` ＋ `"${EXCL[@]}"`）。
+本檔第一次寫時就是這個形狀，只是碰巧當時**不加排除也是 0 行**（＝比預期更嚴格），
+結論沒受影響；但同一個寫法在別處會讓一條什麼都沒排除的 grep 看起來像「已排除、且乾淨」。
+
 跑這四條時實際抓到、而列舉清單漏掉的三處：`frontend/CLAUDE.md` 拿 `workerDetail.statusOf`
 當「查表葉子」的範例（那個 key 已經不存在）、`WorkerDetailPanel.test.tsx` 的 describe 分隔註解
 仍寫「停止・重啟」、以及 `server/ocserverd/message_keys_gen.go`（**Go 那份 generated 清單**
 ——`npm run gen:msgkeys` 一次寫兩個檔，只看 TS 那份會漏）。
+
+## 第六批：已結案要由身分那一層講（owner 2026-07-31 追加裁定）
+
+判準是「同一個事實，不論從哪個入口，說同一句話、來自同一個來源」，所以 mutant 也分成兩族：
+**「有沒有說」**與**「是不是同一個來源」**。後者才是這一批的重點 —— 前者用一份複製的字串
+就能通過。
+
+| # | Mutant | 打哪一半 | 紅了哪條 |
+|---|---|---|---|
+| N1 | 詳情入口退回靜默掉到 roster（`false &&` 掉合成） | 有沒有說 | `the chat entry and the detail entry render the SAME released sentence` |
+| N2 | 面板不再認得 released（`false && status === "released"`） | 有沒有說 | 上述 ＋ `released: the panel says 已結案 in the SAME words…`（2 條） |
+| N3 | 🔴 **面板自己留一份幾乎一樣的字串**，不讀共用葉子 | **同一個來源** | 同上 2 條 |
+| N4 | released view 整句拿掉（只剩灰身分） | 有沒有說 | 同上 2 條 |
+| N5 | 合成的 view 改回 `status: "active"`（生命週期按鍵復活） | 誠實 | `the chat entry and the detail entry…` |
+| N6 | 過度修正：`released \|\| noLiveSession`（凡是沒在跑的都當已結案） | 分不分得出來 | **11 條**，含專門的對照 `released vs merely OFFLINE are told apart…` |
+
+🔴 **N3 是這一批唯一非做不可的一支。** N1／N2／N4 只證明「面板會說一句話」——
+**把那句話硬編碼成第二份副本，這三支全部照樣綠**，而「兩份副本各自漂移」正是這次要修的病本身。
+測試因此不是比對字面，而是**兩個入口互比 ＋ 兩邊都比字典**：第一條擋「其中一邊不顯示」，
+第二條擋「兩份人工同步的副本」。少任何一條，N3 就殺不死。
+
+🔴 **N6 是 N-族的過度修正哨兵**，也是「對照組不是裝飾」的證據：`presence` 對 released 與
+對「從沒派工過」**都是 `undefined`**，光看那顆點永遠分不出來。沒有那條 offline 對照，
+「面板會說已結案」會被一個**對每個灰 worker 都這樣說**的實作滿足。
+
+### ⚠️ 一支**刻意不紅**的 mutant（誠實記錄，不是漏網）
+
+| # | Mutant | 結果 |
+|---|---|---|
+| N7 | 把葉子的措辭改回聊天室專用的「以下為歷史對話（唯讀）」 | **綠** |
+
+**為什麼綠是對的**：測試比對的是「兩個入口 vs 同一片葉子」，改葉子會同時改動兩邊，
+所以它證明的是**單一來源**，不是**措辭**。**「這句話對兩個入口都為真」是 review-time 的性質，
+沒有機械護欄** —— 寫死「不可包含『以下』」這種斷言跨語言會立刻變成噪音。
+把它記在這裡，是為了讓下一個改這片葉子的人知道：**沒有測試會擋你，請自己確認新措辭在面板上
+也不是假話。**
+
+### 第六批的覆蓋面 grep（同樣必須回 0 行）
+
+```sh
+# ⚠️ 陣列,不是字串 —— 見上面的 zsh 陷阱
+EXCL=(':!docs/T-081b-evidence' ':!docs/T-081b-token-split-mapping.md'
+      ':!docs/design/worker-panel-parity.md' ':!docs/design/worker-panel-parity-mutants.md'
+      ':!frontend/CLAUDE.md')   # 後三個檔的工作就是點名那個被退場的 key
+
+# G5 聊天室專用的舊 key 名沒有任何存活的引用
+git grep -nE 'releasedChatSub|releasedChatTitle' -- . "${EXCL[@]}"
+
+# G6 那句話的「字串字面」只存在於兩份 locale,別處一律靠讀葉子
+#    (刻意比對帶引號的位置 —— 註解裡引述那句話是合法的,複製成第二份字串不是)
+git grep -nE '"[^"]*(已結案釋出|was released when its task closed)' \
+  -- frontend/src ':!frontend/src/i18n/locales'
+
+# G7 TS 與 Go 兩份 generated 清單都有新葉子、都沒有舊葉子
+for k in releasedSub releasedTitle; do
+  for f in frontend/src/i18n/messageKeys.generated.ts server/ocserverd/message_keys_gen.go; do
+    grep -q "office.outsource.$k\"" $f || echo "MISSING $k in $f"
+  done
+done
+grep -n 'releasedChat' frontend/src/i18n/messageKeys.generated.ts server/ocserverd/message_keys_gen.go
+```
+
+### ⚠️ 改 message key 名字的連帶後果（主題包）
+
+`themeBundle.ts` 對**不認得的 key 是 DROP + 回報 `skipped`,不是拒絕匯入**
+（owner 2026-07-27 裁定 rc-1599a0026a80,T-081b 退場 theme-identity keys 時立的規矩）。
+所以把 `releasedChatSub` 改名成 `releasedSub` **不會讓既有主題包無法匯入**,
+但**那個包對這句話的覆寫會靜默失效**（匯入 UI 會在 `skipped` 裡說）。
+第二輪退場的 `workerDetail.status` / `restart` / `statusOf.*` 等等同理。
+`docs/T-081b-evidence/shots-pack/smurf-village.theme.json` 就是一份會受影響的範例包
+（它覆寫了 `office.outsource.releasedChatTitle`/`ChatSub`）——**那是凍結的存證,刻意不改**。

@@ -235,13 +235,57 @@ describe("WorkerDetailPanel — honest presence states (A案 P6 member vocabular
     );
   });
 
-  it("released (no presence): the dot falls back to offline, and NO 已釋放 status cell remains", async () => {
+  // owner 2026-07-31:「為什麼從不同進入頁面會有不同的顯示方式?不是應該要一致嗎」
+  // A released worker is reachable from exactly two entries — the chat room and
+  // the detail panel — and both must say the SAME sentence from the SAME leaf.
+  it("released: the panel says 已結案 in the SAME words the chat room uses", async () => {
+    __injectMockTask(mkTask({ id: "t-1" }));
+    __injectMockOutsourceWorker(
+      mkWorker({ id: "ow-1", taskId: "t-1", status: "released" }),
+    );
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+    await findByTestId("worker-detail-released");
+    // 🔴 The SAME leaf the chat header reads — asserted against the dictionary,
+    // not against a literal copied into this test. A second string added for the
+    // panel would still satisfy a hard-coded literal here; it cannot satisfy this.
     expect(
-      await presenceLabelFor({ status: "released", presence: undefined }),
+      (await findByTestId("worker-detail-released-sub")).textContent,
+    ).toBe(zh.office.outsource.releasedSub);
+    // The lifecycle affordances are gone — every worker endpoint 404s on a
+    // released worker, so any of them would be a dead affordance.
+    expect(queryTestId(document.body, "worker-detail-change")).toBeNull();
+    expect(queryTestId(document.body, "worker-detail-wake")).toBeNull();
+    expect(queryTestId(document.body, "worker-detail-stop")).toBeNull();
+  });
+
+  it("released vs merely OFFLINE are told apart, though both project the same grey dot", async () => {
+    // 🔴 The negative control that makes the test above mean something.
+    // `presence` is undefined for a released worker AND for one that was never
+    // dispatched, so `presenceVisual` maps both to `offline` — the dot CANNOT
+    // distinguish them. Without this case, "the panel says 已結案" would be
+    // satisfiable by a panel that says it for every grey worker.
+    __injectMockTask(mkTask({ id: "t-2" }));
+    __injectMockOutsourceWorker(
+      mkWorker({
+        id: "ow-2",
+        taskId: "t-2",
+        status: "active",
+        presence: "offline",
+      }),
+    );
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-2");
+    // The ordinary panel, NOT the released view…
+    expect(
+      (await findByTestId("worker-detail-header-dot")).getAttribute("aria-label"),
     ).toBe(zh.office.presence.offline);
-    // owner 2026-07-31: 已釋放 is the chat room banner's job, not the panel's.
-    expect(queryTestId(document.body, "worker-detail-status")).toBeNull();
-    expect(document.body.textContent).not.toContain("已釋放");
+    expect(queryTestId(document.body, "worker-detail-released")).toBeNull();
+    // …and it says nothing about being released.
+    expect(document.body.textContent).not.toContain(
+      zh.office.outsource.releasedSub,
+    );
+    // The wake affordance IS there — a dead session is revivable; a released
+    // worker is not. That difference is the whole point of telling them apart.
+    await findByTestId("worker-detail-wake");
   });
 });
 

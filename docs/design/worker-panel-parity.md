@@ -154,8 +154,8 @@ owner 凌晨連續下了四條，逐條落地如下。四條共同的方向是�
 
 `statusDelegatorCard` 的狀態格顯示五種字，其中**四種**（工作中／啟動中／已停止／離線）與身分卡那顆
 `LifecycleDot` 完全重複——同一個事實寫兩次，而且是第二個會從 `presenceVisual` 漂走的地方。
-第五種「已釋放」是 released worker，**owner 明示**聊天室那條
-「已結案離隊，以下為歷史對話（唯讀）」橫幅已經講夠，面板不必再留。
+第五種「已釋放」是 released worker。**owner 原本明示**聊天室那條橫幅已經講夠、面板不必再留
+—— 這一條**在同一天稍後被 owner 自己推翻**，見下方「② 的後續：已結案要由身分那一層講」。
 
 ⇒ 狀態格、`t.workerDetail.status` / `starting` / `offline` / `working` / `stopped` /
 `statusOf`、以及只為餵它而存在的 `compose.ts::workerStatusText` **一起刪掉**。
@@ -212,3 +212,46 @@ dialog 裡改了機器：步驟 2 的 relocate 本身就會 kill + re-dispatch�
 FE 也沒有可靠訊號能分辨「relocate 已經派出去了」，因為 relocate 的回應與 held-down 的回應
 形狀相同。要消掉它得讓 relocate 回報「有沒有真的派」＝改凍結 wire。
 **不改機器時（最常見）沒有這個 churn**，因為 relocate 根本不會被呼叫。
+
+---
+
+## ② 的後續：已結案要由身分那一層講（owner 2026-07-31 追加裁定）
+
+**怎麼被抓到的**：② 落地後我在回報裡點名一個隱憂 —— 拿掉狀態卡之後，released worker 在面板上
+沒有任何「已結案」的字。把它攤給 owner，他的回覆是：
+
+> **「為什麼從不同進入頁面會有不同的顯示方式？不是應該要一致嗎」**
+
+**實際情況比原本的隱憂更糟（逐行讀原碼確認）**：released worker 被 server 從 LIVE 名單濾掉
+（`api_outsource.go:126`），所以 `outsource.workers.find(...)` 一定 miss，
+`#office/worker/<ow-id>` **不是顯示一顆灰點，而是靜默掉回 roster**、什麼都不說。
+同一個 worker 從聊天室進去卻明白寫著「已結案釋出」。**那就是 owner 說的不一致。**
+
+### 判準
+
+同一個事實，不論從哪個入口看到那個外包，**說同一句話、來自同一個來源**。
+能看到 released worker 的入口只有兩個（它已從 LIVE 名單掉出去，別無他處）：聊天室、直接開的詳情。
+
+### 做法
+
+| 面向 | 決定 |
+|------|------|
+| 判 released 的來源 | `worker.status === "released"`（`WorkerStatusReleased` 那條線）。**不動 `presenceVisual`**：`presence` 對 released 與「從沒派工過」**都是 `undefined`**，五態 switch 分不出來，而拓寬它會波及正職 roster |
+| 文案的家 | `office.outsource.releasedTitle` / `releasedSub` **一份**。原本叫 `releasedChatTitle`/`ChatSub`，**名字裡的 Chat 就是病灶**：它在邀請下一個人為面板再複製一份 |
+| 措辭 | 改成**與入口無關**：原文「以下為歷史對話（唯讀）」對聊天室為真、**對面板是假話**。新文案「這裡是唯讀的歷史紀錄」兩邊逐字為真，所以**不需要組字、不需要第二片葉子** |
+| 誰負責畫 | **只有 `WorkerDetailPanel`**。`OfficePage` 對那條路由合成一個只帶 `id` 的 released view 丟給它，而不是自己再畫一份 |
+| 合成的誠實邊界 | 只填**我們真的知道的那一個欄位（id）**。`codename` 留空、面板回退到誠實的 released 標籤 —— **不為一個已經查不到的 id 捏一個代號** |
+| 已結案還顯示什麼 | 共用卡片全部不畫。released worker 沒有 session／機器／context%／live 花費／boot context，八張卡會是八個 dash ——**八個誠實的 dash 不比一句話更誠實，只是把那句話埋了**。生命週期按鍵也全拿掉：server 對 released worker 的 `/stop` `/restart` `/model` `/relocate` `/refocus` **一律 404**，留著就是 by construction 的 dead affordance |
+
+護欄：`OfficePage.jump-outsource.test.tsx` 的
+`the chat entry and the detail entry render the SAME released sentence`
+—— **同一個 id、兩個入口各開一次，先斷言兩邊相等，再斷言兩邊都等於字典那片葉子**。
+只比「兩邊相等」擋不住有人維護兩份同步的副本；只比「等於字典」擋不住其中一個入口根本不顯示。
+兩條一起才是 owner 要的那件事。
+
+### 順帶修掉的一個 mock↔http parity 缺口（讀碼發現，未改）
+
+`mock.ts::listOutsourceWorkers` 的註解寫著「LIVE workers only」，但它**沒有濾掉
+`status === "released"`** —— 它只是因為 mock 的釋出是「整列刪掉」才看起來對。真 server 是明確
+`continue` 掉。目前沒有測試靠這個差異（我的 released 測試是直接 inject 一列 released 進去，
+那正好是這個缺口讓它到得了面板），**但這是一個 mock 說得比做得多的地方**，列為 follow-up。

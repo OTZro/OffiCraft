@@ -5,7 +5,7 @@ import type { OutsourceWorkerView } from "../api/adapter";
 import { useMachines } from "../hooks/useMachines";
 import { AgentDetailPanel } from "./AgentDetailPanel";
 import { ModelEffortEditor } from "./ModelEffortEditor";
-import { ChevronRightIcon } from "./icons";
+import { ChevronLeftIcon, ChevronRightIcon } from "./icons";
 import { AvatarEditor } from "./AvatarEditor";
 import { Avatar } from "./Avatar";
 import { LifecycleDot, presenceVisual } from "./LifecycleDot";
@@ -107,6 +107,14 @@ export function WorkerDetailPanel({
   // states take the 喚醒 arm; the server's restart guard was widened the same
   // way (INTENT → LIVENESS), so the two sides now agree.
   const noLiveSession = stopped || offline;
+  // 🔴 RELEASED is not a presence — it is the worker's own lifecycle end
+  // (WorkerStatusReleased on the wire). It deliberately does NOT come from the
+  // dot: `presence` is `undefined` for a released worker AND for one that was
+  // never dispatched, so `presenceVisual` maps both to the same grey `offline`
+  // and cannot tell them apart. Reading it from `status` is the only honest
+  // source — and it is why `presenceVisual`'s five-state no-default switch was
+  // left alone (widening it would reach the 正職 roster, which has no such state).
+  const released = worker.status === "released";
   // Which of the two things the ONE settings dialog does when confirmed: wake a
   // worker that is not running, or change a running one. Same split as the
   // member panel's `online`, and it decides the dialog's title + confirm word
@@ -577,6 +585,51 @@ export function WorkerDetailPanel({
       )}
     </div>
   );
+
+  // ── released: the worker finished its task and left ──────────────────────
+  // 🔴 ONE renderer, ONE sentence (owner 2026-07-31:「為什麼從不同進入頁面會有
+  // 不同的顯示方式?不是應該要一致嗎」). The chat room's header reads the SAME
+  // `office.outsource.released*` leaves; nothing here restates them in its own
+  // words, because a second copy is exactly the bug being fixed.
+  //
+  // The shared cards are NOT rendered: a released worker has no session, no
+  // machine, no context%, no live cost and no boot context, so every one of them
+  // would render a dash. Eight honest dashes are not more honest than one
+  // sentence — they just bury it. Every lifecycle affordance is gone for the
+  // same reason it must be: the server answers 404 on /stop, /restart, /model,
+  // /relocate and /refocus for a released worker, so a 更改 or 喚醒 button here
+  // would be a dead affordance by construction.
+  if (released) {
+    return (
+      <div className="mp" data-testid="worker-detail-released">
+        <button type="button" className="mp__back" onClick={onBack}>
+          <ChevronLeftIcon size={18} />
+          <span>{t.mp.back}</span>
+        </button>
+        <div className="mp-card mp-identity">
+          <Avatar size={52} kind="outsource" src={worker.avatarUrl} />
+          <div className="mp-identity__body">
+            <div className="mp-identity__line">
+              {/* The codename when we still have it (the worker was in view when
+                  it finished), else the honest released label — never a
+                  fabricated codename for an id we can no longer resolve. */}
+              <span className="outsource-row__codename">
+                {worker.codename
+                  ? msg.outsourceLabel(worker.codename)
+                  : t.office.outsource.releasedTitle}
+              </span>
+            </div>
+            <div className="mp-identity__status">
+              <span data-testid="worker-detail-released-sub">
+                {t.office.outsource.releasedSub}
+              </span>
+            </div>
+          </div>
+        </div>
+        {taskCard}
+      </div>
+    );
+  }
 
   return (
     <AgentDetailPanel
