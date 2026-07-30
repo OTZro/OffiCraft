@@ -627,6 +627,62 @@ func TestCopyAnchorIfAbsentWritesOnceAndNeverReplaces(t *testing.T) {
 	}
 }
 
+// The cockpit's one-liner for a new machine downloads ocwarden ALONE — no
+// tarball, no sibling anchor — so this, not the unpacked release directory, is
+// the shape every remote onboarding actually has. It has to install.
+func TestCopyAnchorIfAbsentUsesTheEmbeddedAnchorWhenNoSiblingExists(t *testing.T) {
+	f := newFakeSys()
+	p := fixedPaths() // note: p.anchorSrc is deliberately NOT seeded
+	restore := swapEmbeddedAnchor([]byte("EMBEDDED-ANCHOR"))
+	defer restore()
+
+	i := &installer{out: io.Discard, sys: f.ops()}
+	if err := i.copyAnchorIfAbsent(p); err != nil {
+		t.Fatalf("a lone ocwarden must still be able to install its anchor: %v", err)
+	}
+	if got := string(f.writes[p.anchorPath]); got != "EMBEDDED-ANCHOR" {
+		t.Fatalf("anchor = %q, want the embedded bytes", got)
+	}
+	// Still written exactly once, and still never replaced on a re-install.
+	if err := i.copyAnchorIfAbsent(p); err != nil {
+		t.Fatalf("second install: %v", err)
+	}
+	if n := f.writeCount[p.anchorPath]; n != 1 {
+		t.Fatalf("anchor written %d times, want exactly 1", n)
+	}
+}
+
+// The fallback must not become a way to install without an anchor at all: a
+// build carrying neither is still refused, because a plist pointing at a binary
+// that does not exist is worse than an install that stops.
+func TestCopyAnchorIfAbsentRefusesWhenNeitherSiblingNorEmbeddedAnchorExists(t *testing.T) {
+	f := newFakeSys()
+	p := fixedPaths()
+	restore := swapEmbeddedAnchor(nil)
+	defer restore()
+
+	i := &installer{out: io.Discard, sys: f.ops()}
+	err := i.copyAnchorIfAbsent(p)
+	if err == nil {
+		t.Fatal("install must refuse when no anchor is available from either source")
+	}
+	if !strings.Contains(err.Error(), "embedded anchor") {
+		t.Fatalf("the refusal must say BOTH sources were tried, got: %v", err)
+	}
+	if len(f.writes) != 0 {
+		t.Fatalf("a refused anchor install must write nothing, got: %v", f.writes)
+	}
+}
+
+// swapEmbeddedAnchor substitutes the embedded-anchor source for one test and
+// returns the restore. Tests that do not call it keep whatever this build was
+// staged with, which on a plain `go test` is nothing.
+func swapEmbeddedAnchor(b []byte) func() {
+	prev := embeddedAnchor
+	embeddedAnchor = func() []byte { return b }
+	return func() { embeddedAnchor = prev }
+}
+
 // ---------------------------------------------------------------------------
 // installOcAgent — self-contained: DEFAULT download from GET /api/agent/binary, or
 // OC_AGENT_BIN local-override copy; either way → home sibling (never in the plist env)

@@ -11,7 +11,13 @@ BIN="${OFFICRAFT_DIST_BINARY:-$ROOT/dist/officraft/officraft}"
 [[ -x "$BIN" && -s "$BIN" ]] || { echo "[officraft-dist] missing executable: $BIN" >&2; exit 1; }
 [[ -f "$MANIFEST" ]] || { echo "[officraft-dist] missing source manifest: $MANIFEST" >&2; exit 1; }
 [[ -f "$BIN_MANIFEST" ]] || { echo "[officraft-dist] missing binary manifest: $BIN_MANIFEST" >&2; exit 1; }
-actual="$(cd "$SOURCE_ROOT" && shasum -a 256 cli/officraft/go.mod cli/officraft/main.go | shasum -a 256 | awk '{print $1}')"
+# Hash the whole module, not two fixed filenames: adding a new .go file changes
+# what the anchor DOES while leaving a two-file hash untouched, so a naming
+# guard would be blind to exactly the change most worth catching. The file list
+# rides inside the digest (shasum prints names), so an added, renamed or deleted
+# file moves it even when no existing file was edited.
+actual="$(cd "$SOURCE_ROOT" && find cli/officraft -type f \( -name '*.go' -o -name 'go.mod' -o -name 'go.sum' \) \
+  ! -name '*_test.go' | LC_ALL=C sort | xargs shasum -a 256 | shasum -a 256 | awk '{print $1}')"
 expected="$(awk 'NR==1 {print $1}' "$MANIFEST")"
 [[ "$actual" == "$expected" ]] || {
   echo "[officraft-dist] stale: cli/officraft source hash is $actual, dist records $expected" >&2

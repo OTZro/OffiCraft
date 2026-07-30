@@ -34,7 +34,9 @@
 #                   with appVersion stamped to <tag> and buildSHA/buildTime to
 #                   <sha> (so /api/version self-identifies the release).
 #   4. package    — dist/release/officraft-<tag>-darwin-arm64.tar.gz (ocserverd,
-#                   ocwarden, ocagent, install.sh, LICENSE, README.md) plus
+#                   ocwarden, ocagent, officraft, install.sh, LICENSE, README.md)
+#                   — officraft is the TCC identity anchor launchd starts instead
+#                   of ocwarden; install.sh refuses without it. plus
 #                   install.sh as its OWN asset (the documented curl|bash
 #                   one-liner downloads that file: docs/guide/install.md) plus
 #                   checksums.txt (sha256 of the tarball + install.sh).

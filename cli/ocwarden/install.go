@@ -454,10 +454,15 @@ func resolvePaths(env func(string) string, exe string, uid int) (wardenPaths, er
 // runtime and the install-time OC_CLAUDE_BIN stamp exists.
 const wardenPlistPATH = "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-// plistTemplate mirrors the retired bash installer's render_plist heredoc exactly: the same
-// keys, ProgramArguments (BIN + "run"), EnvironmentVariables (PATH/OC_BASE/HOME/
-// OC_WARDEN_TOKFILE), RunAtLoad/KeepAlive/ThrottleInterval, and the ocwarden.*
-// log paths. %[1]s=ROOT %[2]s=BIN %[3]s=OC_BASE %[4]s=HOME %[5]s=TOKFILE %[6]s=LOGDIR
+// plistTemplate mirrors the retired bash installer's render_plist heredoc: the same
+// keys, EnvironmentVariables (PATH/OC_BASE/HOME/OC_WARDEN_TOKFILE),
+// RunAtLoad/KeepAlive/ThrottleInterval, and the ocwarden.* log paths.
+//
+// ProgramArguments is the ONE deliberate divergence: it names the TCC identity
+// anchor with no arguments, and the anchor forks the sibling ocwarden. launchd's
+// job leader is the responsible process for the whole tree, so pointing it at
+// ocwarden (which self-update replaces) voids the machine's privacy grants on
+// every update. %[1]s=ROOT %[2]s=ANCHOR %[3]s=OC_BASE %[4]s=HOME %[5]s=TOKFILE %[6]s=LOGDIR
 // %[7]s=LABEL %[8]s=optional extra env lines (OC_NAMESPACE / OC_CLAUDE_BIN; "" for
 // the main instance with no resolved claude — that render stays byte-identical to
 // the historical output) %[9]s=PATH value (wardenPlistPATH unless overridden).
@@ -748,7 +753,17 @@ func (i *installer) copyAnchorIfAbsent(p wardenPaths) error {
 	}
 	data, err := i.sys.readFile(p.anchorSrc)
 	if err != nil {
-		return fmt.Errorf("read fixed identity anchor %s: %w", p.anchorSrc, err)
+		// The release tarball ships the anchor beside ocwarden, but the cockpit's
+		// one-liner downloads ocwarden ALONE — so the sibling is genuinely absent
+		// on every remote onboarding, and the embedded copy is the only anchor
+		// that machine will ever see. Identical bytes either way; see
+		// anchor_embed.go for why that identity has to hold.
+		if embedded := embeddedAnchor(); len(embedded) > 0 {
+			i.logf("no anchor beside ocwarden; using the copy embedded in this binary")
+			data = embedded
+		} else {
+			return fmt.Errorf("read fixed identity anchor %s (and this ocwarden carries no embedded anchor): %w", p.anchorSrc, err)
+		}
 	}
 	if err := i.sys.writeFile(p.anchorPath, data, 0o755); err != nil {
 		return fmt.Errorf("write fixed identity anchor %s: %w", p.anchorPath, err)

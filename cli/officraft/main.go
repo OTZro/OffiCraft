@@ -18,8 +18,8 @@ type child interface {
 
 var executable = os.Executable
 
-var startChild = func(path string) (child, error) {
-	return os.StartProcess(path, []string{path, "run"}, &os.ProcAttr{
+var startChild = func(path string, argv []string) (child, error) {
+	return os.StartProcess(path, argv, &os.ProcAttr{
 		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
 		Env:   os.Environ(),
 	})
@@ -43,7 +43,10 @@ func realMain(args []string, out io.Writer) int {
 		return 1
 	}
 	path := filepath.Join(filepath.Dir(exe), "ocwarden")
-	c, err := startChild(path)
+	// argv is built here, not inside the seam, so a test can see it: dropping the
+	// "run" subcommand would start ocwarden in a mode nobody intends, and every
+	// test stubs the seam out, so nothing else would notice.
+	c, err := startChild(path, []string{path, "run"})
 	if err != nil {
 		fmt.Fprintf(out, "[officraft] FATAL: cannot start sibling ocwarden: %v\n", err)
 		return 1
