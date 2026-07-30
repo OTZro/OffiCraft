@@ -380,7 +380,7 @@ make_out() { # make_out <serverd-binary> [member-to-omit]
   rm -rf "$AOUT" "$WORK/pkg"; mkdir -p "$AOUT" "$WORK/pkg/officraft-$TAG-darwin-arm64"
   local pkg="$WORK/pkg/officraft-$TAG-darwin-arm64" skip="${2:-}"
   cp "$1" "$pkg/ocserverd"
-  cp "$STAMPED" "$pkg/ocwarden"; cp "$STAMPED" "$pkg/ocagent"
+  cp "$STAMPED" "$pkg/ocwarden"; cp "$STAMPED" "$pkg/ocagent"; cp "$STAMPED" "$pkg/officraft"
   printf '#!/bin/sh\n' > "$pkg/install.sh"; printf 'MIT\n' > "$pkg/LICENSE"
   printf '# OffiCraft %s\n' "$TAG" > "$pkg/README.md"
   [[ -n "$skip" ]] && rm -f "$pkg/$skip"
@@ -521,6 +521,7 @@ mkdir -p "$R/.deploy" "$R/server/ocserverd/bindist"
     -o "$R/.deploy/ocserverd" . )
 ( cd "$R/gosrc" && "$GO_BIN" build -o "$R/server/ocserverd/bindist/ocwarden" . )
 cp "$R/server/ocserverd/bindist/ocwarden" "$R/server/ocserverd/bindist/ocagent"
+cp "$R/server/ocserverd/bindist/ocwarden" "$R/server/ocserverd/bindist/officraft"
 SH
 cat > "$SRC/bin/build-release" <<'SH'
 #!/usr/bin/env bash
