@@ -358,10 +358,15 @@ export const zh = {
       viewDetail: "外包詳情",
       // 第三行任務代號 chip 的 aria/title：點了跳 #tasks/<id> 任務頁定位。
       openTask: "開啟任務詳情",
-      // 跳到原訊息時,外包 worker 已結案釋出、掉出 LIVE 名單(拿不到代號):不再
-      // 落到 roster[0](Mira),改用這組誠實文案渲染其歷史對話(唯讀)。
-      releasedChatTitle: "外包 · 已釋出",
-      releasedChatSub: "此外包成員已結案釋出,以下為歷史對話(唯讀)",
+      // 外包 worker 已結案釋出、掉出 LIVE 名單(拿不到代號)時的誠實身分。
+      // 🔴 這兩片葉子是「已結案」這個事實的**唯一一份文案**(owner 2026-07-31:
+      // 「為什麼從不同進入頁面會有不同的顯示方式?不是應該要一致嗎」)。能看到一個
+      // released worker 的入口有兩個 —— 聊天室與直接開的詳情面板 —— 兩邊讀的都是
+      // 這裡。所以措辭刻意寫成**與入口無關**:原本的「以下為歷史對話」對聊天室為真、
+      // 對面板是假話,一旦為了面板另外複製一份字串,就正是這次要修的病。
+      // ⛔ 不要因為「聊天室那句更貼切」而在任何一邊加第二份字串。
+      releasedTitle: "外包 · 已釋出",
+      releasedSub: "此外包成員已結案釋出,這裡是唯讀的歷史紀錄",
     },
   },
   // ── 外包 worker 詳情面板（前端 only 精簡版：只放外包真有的欄位，
@@ -371,13 +376,8 @@ export const zh = {
     codename: "代號",
     model: "模型",
     effort: "投入度",
-    status: "狀態",
-    // 外包生命週期狀態（assigned → active → released）；未知值原樣顯示。
-    statusOf: {
-      assigned: "已指派",
-      active: "工作中",
-      released: "已釋放",
-    } as Record<string, string>,
+    // T-7526（owner 2026-07-31）：狀態欄與它的 statusOf 對照表整個退場。四個狀態
+    // 字與身分卡那顆 LifecycleDot 完全重複，「已釋放」則由聊天室橫幅承擔。
     task: "委託任務",
     delegator: "委託人",
     // 委託人＝owner 本人建的票時顯示（真實來源，非佔位）。
@@ -393,11 +393,9 @@ export const zh = {
     estimatedCost: "估計$",
     // presence（成員同一套詞彙——A案 P6）的誠實文案（不留空白假值）。
     notAssigned: "尚未分配",
-    starting: "啟動中",
-    offline: "離線",
-    working: "工作中",
+    // T-7526：啟動中／離線／工作中／已停止 四個 presence 字隨狀態欄一起退場——
+    // 它們是 LifecycleDot 的 aria-label（office.presence.*）的第二份副本。
     // ── T-32e1/T-f190 生命週期操作（對齊成員詳情：換手／停止／換 model）──────
-    stopped: "已停止",
     // 換手（refocus）：僅線上可觸發；送出後由外包端非同步重生，故保留「已送出」註記。
     refocus: "重新聚焦",
     refocusOfflineHint: "僅線上可重新聚焦",
@@ -406,11 +404,12 @@ export const zh = {
     refocusError: "聚焦失敗",
     refocusSubmittedNote: "已送出重新聚焦 · 外包重生中…",
     refocusSinceLabel: "上次換手",
-    // 停止／重啟（owner 明示；停止後座艙誠實顯示「已停止」，不自動救活）。
+    // 停止（owner 明示；停止後不自動救活）。
+    // ⚠️ 沒有 restart 這條字了（owner 2026-07-31「應該要統一」）：喚醒的字一律用
+    // 正職那一份 `lifecycle.action.spawn`＝「喚醒」，兩個面板同一個葉子，主題包
+    // 換詞也只換一次。REST 路徑仍是 /restart（凍結 wire），只有字退場。
     stop: "停止",
     stopping: "停止中…",
-    restart: "重新啟動",
-    restarting: "啟動中…",
     stopError: "操作失敗，請稍後重試",
     // 換 model（沿用成員 model/effort 編輯器）。
     modelSave: "儲存",
@@ -768,6 +767,7 @@ export const zh = {
     initialPrompt: "初始 PROMPT",
     promptLoading: "載入中…",
     promptError: "讀取初始 PROMPT 失敗",
+    promptRetry: "重試",
     lessons: "過往學習經驗",
     expandableHint: "下次喚醒／聚焦生效",
     lessonsLoading: "載入中…",

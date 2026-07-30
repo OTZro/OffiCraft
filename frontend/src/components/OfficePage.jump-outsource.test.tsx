@@ -17,6 +17,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { OfficePage } from "./OfficePage";
+import { zh } from "../i18n/locales/zh";
 import {
   __resetMock,
   __injectMockChat,
@@ -195,5 +196,75 @@ describe("OfficePage — 跳到原訊息 to an outsource sender", () => {
     const sub = container.querySelector('[data-testid="released-chat-sub"]');
     expect(sub).not.toBeNull();
     expect(sub?.textContent ?? "").not.toContain("外包");
+  });
+});
+
+// owner 2026-07-31:「為什麼從不同進入頁面會有不同的顯示方式?不是應該要一致嗎」
+//
+// A released outsource worker is reachable from exactly TWO entries — it has
+// dropped off the LIVE list, so nothing else can surface it:
+//   1. the chat room  (#office/chat/<ow-id>)   — the header subtitle
+//   2. the detail panel (#office/worker/<ow-id>) — used to self-heal to the
+//      roster SILENTLY, which is the inconsistency owner objected to
+// Both must say the same thing, and it must come from the same leaf.
+describe("OfficePage — a released worker says the same thing from either entry", () => {
+  const workerId = "ow-353820f2c636";
+
+  it("the chat entry and the detail entry render the SAME released sentence", async () => {
+    __injectMockChat({
+      id: "m-orig",
+      from: workerId,
+      to: "owner",
+      body: "外包回報:任務初稿完成,請確認。",
+      ts: Date.now() / 1000 - 120,
+      attachments: [],
+      replyCardId: null,
+    });
+
+    // ── entry 1: the chat room ──
+    window.location.hash = `#office/chat/${workerId}`;
+    const chat = renderOffice();
+    const chatSentence = (
+      await chat.findByTestId("released-chat-sub")
+    ).textContent;
+    chat.unmount();
+
+    // ── entry 2: the detail panel ──
+    window.location.hash = `#office/worker/${workerId}`;
+    const panel = renderOffice();
+    // 🔴 It RENDERS — this is the half that used to silently bounce to the
+    // roster. `findByTestId` throws if the released view never appears, so a
+    // regression to self-healing fails loudly instead of passing vacuously.
+    await panel.findByTestId("worker-detail-released");
+    const panelSentence = (
+      await panel.findByTestId("worker-detail-released-sub")
+    ).textContent;
+
+    // 🔴 THE ASSERTION owner asked for: the two entries agree…
+    expect(panelSentence).toBe(chatSentence);
+    // …and they agree because they read the ONE leaf, not because someone kept
+    // two copies in sync. Comparing both to the dictionary is what makes a
+    // second, duplicated string fail here.
+    expect(chatSentence).toBe(zh.office.outsource.releasedSub);
+    expect(panelSentence).toBe(zh.office.outsource.releasedSub);
+  });
+
+  it("a LIVE worker's detail entry is the ordinary panel, not the released view", async () => {
+    // The control: the released view must be reachable ONLY for a worker that
+    // really is gone. Without this, "the detail route shows 已結案" would be
+    // satisfied by a route that shows it for everyone.
+    __injectMockOutsourceWorker({
+      id: workerId,
+      codename: "O-7",
+      model: "Opus 4.6",
+      effort: "high",
+      status: "active",
+      taskId: "t-live",
+      presence: "online",
+    });
+    window.location.hash = `#office/worker/${workerId}`;
+    const { findByTestId, queryByTestId } = renderOffice();
+    await findByTestId("worker-detail-change");
+    expect(queryByTestId("worker-detail-released")).toBeNull();
   });
 });

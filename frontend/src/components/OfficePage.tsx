@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import type { Member } from "../types";
+import type { OutsourceWorkerView } from "../api/adapter";
 import { api } from "../api";
 import { useMembers } from "../hooks/useMembers";
 import { useMonitoring } from "../hooks/useMonitoring";
@@ -259,7 +260,7 @@ export function OfficePage() {
       ? blankChatPeer(
           selectedId,
           isReleasedWorkerId
-            ? t.office.outsource.releasedChatTitle
+            ? t.office.outsource.releasedTitle
             : t.office.chatUnavailableTitle,
           isReleasedWorkerId ? "outsource" : "assistant",
         )
@@ -274,11 +275,38 @@ export function OfficePage() {
     : undefined;
 
   // Outsource-worker detail: resolve the live worker behind #office/worker/<id>.
-  // A released worker (task closed) drops off the live list → the lookup misses
-  // and the page self-heals to the roster (same as a stale detailId).
   const workerDetail = workerDetailId
     ? outsource.workers.find((w) => w.id === workerDetailId)
     : undefined;
+  // 🔴 A RELEASED worker (task closed) is dropped from the live list by the
+  // server, so the lookup above misses and this route used to self-heal to the
+  // roster — SILENTLY. That was the inconsistency owner 2026-07-31 objected to
+  // (「為什麼從不同進入頁面會有不同的顯示方式?不是應該要一致嗎」): the chat entry
+  // said 「已結案釋出」 for the very same worker while this entry said nothing at
+  // all and dumped you somewhere else.
+  //
+  // The test is the SAME one the released CHAT peer below uses, for the same
+  // reason — an `ow-` id (the server mints `ow-`+hex, outsource_sched.go) that
+  // is not in the LIVE list once BOTH lists have settled. The `loading` gate is
+  // load-bearing: without it a not-yet-loaded LIVE worker flashes as released.
+  // We synthesise only what we honestly know — the id — and let the panel render
+  // its released view; the codename is left blank rather than invented, and the
+  // panel falls back to the honest released label.
+  const releasedWorkerDetail: OutsourceWorkerView | undefined =
+    workerDetailId &&
+    !workerDetail &&
+    workerDetailId.startsWith("ow-") &&
+    !loading &&
+    !outsource.loading
+      ? {
+          id: workerDetailId,
+          codename: "",
+          model: "",
+          effort: "",
+          status: "released",
+          taskId: "",
+        }
+      : undefined;
 
   if (workerDetail) {
     return (
@@ -303,7 +331,9 @@ export function OfficePage() {
         onStop={async () => {
           await api.stopWorker(workerDetail.id);
         }}
-        onRestart={async () => {
+        // 喚醒 (T-7526). The endpoint is still `restartWorker` → POST …/restart:
+        // the frozen wire keeps its name, only the owner-facing word changed.
+        onWake={async () => {
           await api.restartWorker(workerDetail.id);
         }}
         onSetModel={async (runtime, model, effort) => {
@@ -327,6 +357,18 @@ export function OfficePage() {
         onFetchBootContext={async () =>
           api.getWorkerBootContext(workerDetail.id)
         }
+      />
+    );
+  }
+
+  // The released detail entry — the SAME WorkerDetailPanel, so the sentence has
+  // exactly one renderer. Only onBack is wired: every lifecycle endpoint answers
+  // 404 for a released worker, so any other handler would be a dead affordance.
+  if (releasedWorkerDetail) {
+    return (
+      <WorkerDetailPanel
+        worker={releasedWorkerDetail}
+        onBack={backFromWorkerDetail}
       />
     );
   }
@@ -539,7 +581,7 @@ export function OfficePage() {
                   data-testid="released-chat-sub"
                 >
                   {isReleasedWorkerId
-                    ? t.office.outsource.releasedChatSub
+                    ? t.office.outsource.releasedSub
                     : t.office.chatUnavailableSub}
                 </span>
               }

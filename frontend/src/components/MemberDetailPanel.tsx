@@ -36,6 +36,13 @@ import {
   TrashIcon,
 } from "./icons";
 import { DispatchAlert } from "./DispatchAlert";
+// 🔴 This panel renders its settings dialog with the .machine-picker* classes,
+// so it must import their stylesheet ITSELF (T-7526). Both panels used to
+// free-ride on WorkerDetailPanel → useRelocateMachine → MachinePicker →
+// machine-picker.css; when the worker panel stopped driving that hook, the
+// last production importer went with it and BOTH dialogs rendered unstyled.
+// Style ownership follows the class names, not a transitive accident.
+import "./machine-picker.css";
 import "./member-detail.css";
 
 interface MemberDetailPanelProps {
@@ -239,11 +246,15 @@ export function MemberDetailPanel({
   const [settingsError, setSettingsError] = useState("");
   const [relocateUndispatched, setRelocateUndispatched] = useState(false);
 
-  // 🔴🔴 TWIN IMPLEMENTATION — change this and `useRelocateMachine` TOGETHER.
-  // The outsource panel still gets this hygiene from the hook; this panel now
-  // carries its own copy because relocate folded into the unified submit. One
-  // side drifting from the other is exactly how the guarantees below went
-  // missing for a whole round while CI stayed green.
+  // ⚠️ NO LONGER A TWIN (T-7526). This block used to be the hand-written copy of
+  // `useRelocateMachine`'s notice hygiene, and the instruction here was "change
+  // both TOGETHER" — because the outsource panel still drove the hook. It does
+  // not any more: its relocate folded into the same 更改 dialog, so this is now
+  // the ONLY implementation and the hook has no production importer left.
+  // Do NOT go and edit `useRelocateMachine` to match a change made here — that
+  // file is dead code pending an owner ruling on deleting it (see
+  // docs/design/worker-panel-parity.md, 連帶後果). Kept because the reasoning
+  // below is load-bearing, not because a second copy exists.
   //
   // 🔴 The relocate verdict's SELF-HEAL, carried over from useRelocateMachine
   // (which the member panel no longer drives). The notice promises "the server
@@ -792,6 +803,22 @@ export function MemberDetailPanel({
             backend seam with no button.) MemberActionButtons' button map is
             aligned to the five real presence states. */}
         <div className="mp-identity__actions">
+          {/* 更改 ＋ 停止 on ONE row (owner 2026-07-31). 更改 is written FIRST so
+              the reading order matches the ruling's wording and the outsource
+              panel's row — the DispatchAlerts below stay in the column, because
+              a verdict about a click belongs UNDER the button that was clicked,
+              not beside it. */}
+          <div className="mp-identity__buttons">
+          {online && (
+            <button
+              type="button"
+              className="btn btn--accent-ghost"
+              data-testid="mp-change"
+              onClick={openSettings}
+            >
+              {t.mp.change}
+            </button>
+          )}
           <MemberActionButtons
             status={visual}
             // Do not open a second settings flow while the first wake is in
@@ -819,16 +846,7 @@ export function MemberDetailPanel({
               wakePendingActive ? { spawn: t.mp.wakePendingNote } : undefined
             }
           />
-          {online && (
-            <button
-              type="button"
-              className="btn btn--accent-ghost"
-              data-testid="mp-change"
-              onClick={openSettings}
-            >
-              {t.mp.change}
-            </button>
-          )}
+          </div>
           {/* T-7fa1: sits directly under the wake button the owner just pressed
               — the click and its outcome in one place. */}
           {wakeUndispatched && (

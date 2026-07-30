@@ -338,6 +338,85 @@ owner/agent 自由文字會帶**不可斷的長 token**(長 URL、40-hex sha、�
   這樣一路綠著,卻沒攔到 owner 手機上的 bug。見
   `stories/TaskArtifactsOverflowStory.tsx`。
 
+## 用了哪份 CSS 的 class,就要自己 import 那份 CSS(T-7526)
+`machine-picker.css` 全 repo 只有 `MachinePicker.tsx` 一個 importer,而它只透過
+`WorkerDetailPanel → useRelocateMachine → MachinePicker` 進入 module graph。**兩個詳情面板
+都用 `.machine-picker*` 畫自己的設定 dialog,卻都沒有 import 那份 CSS** —— 一直在搭那條
+transitive import 的便車。外包面板不再驅動那個 hook 的那一刻,最後一個 production importer
+跟著消失,**兩邊的 dialog 全部變成無樣式**:沒有置中的框、沒有暗底,機器欄變成瀏覽器原生
+`<select>`。**連沒被那次改動碰到的正職面板也一起壞了。**
+🔴 **沒有任何自動檢查抓得到**:jsdom 不算 CSS,所以整套 vitest 全綠;`tsc` 看不出 class
+字串和 stylesheet 的關係;唯一render 過 machine picker 的 CT guard 又在同一張票裡退場。
+**它是靠人看截圖發現的。**
+⇒ 護欄 `src/components/styleOwnership.test.ts`:某個元件的 markup 用到 `<block>__*`,
+就必須自己 `import "./<block>.css"`。**樣式的所有權跟著 class 名字走,不跟著 transitive
+import 的偶然走。**
+
+## lazy fetch:別把 inline arrow 放進 effect deps(T-7526)
+`AgentDetailPanel` 的初始 PROMPT 卡曾經**永遠停在「載入中…」**,而且關掉重開救不回來。
+兩個成因缺一不可,修的時候也必須兩個都修:
+- **不穩定的 deps**:`vm.prompt.fetch` 在兩個 wrapper 都是**每次 render 重建的 inline
+  arrow**(正職是 `async () => (await api.getBootstrap(member.role)).context`,外包是
+  OfficePage 重建的 `onFetchBootContext`)。它一進 deps,**任何一次重繪**(一個 SSE
+  delta 就夠)就把 effect 拆掉,cleanup 的 `alive = false` 讓 `.then` 與 `.catch`
+  **兩條都寫不了 state**。⇒ 讀取函式走 **ref**,deps 只留真正該重讀的東西(換一個
+  agent = `cacheKey`);重繪不是重讀的理由,也不是取消的理由。
+- **在「開始讀」時就蓋已載入章**:`loadedKeyRef` 原本在 fetch **啟動**時就寫,所以
+  effect 重跑一律早退——收合再展開也早退。⇒ **只在文字真的到手時蓋章**,in-flight 另
+  用一個 ref 擋重複發射;過期與否**比對 key**,不用會被重繪翻掉的 `alive` flag。
+- **失敗要說失敗**:`.catch` 必須落到錯誤態 + 一顆重試鈕(`*-prompt-error` /
+  `*-prompt-retry`),停在「載入中…」會被讀成「還在跑」而且無處可按。
+⚠️ **測試要「讀到一半觸發重繪」才看得到這個病**:render 一次就斷言的測試對它完全是盲的
+(它就是這樣上線這麼久沒被抓到)。而 `rerender` **必須傳一個新的 element**——傳同一個
+element 物件 React 會 bail out、根本不重繪,測試會對著沒修的碼變綠。
+護欄:`MemberDetailPanel.initial-prompt.test.tsx` + `WorkerDetailPanel.test.tsx`
+的 initial-prompt 段。**同一段程式,但兩個 wrapper 各自證明三件事**(重繪中、失敗重試、
+收合再展開)——它們的 `vm.prompt.fetch` 是兩條不同的 arrow(正職在 vm 物件字面量裡、
+外包經 OfficePage 的 prop),只證一邊等於沒證另一邊那條線。
+mutant 紀錄:`docs/design/worker-panel-parity-mutants.md`。
+
+## 兩個詳情面板的動作列 = 一個形狀(T-7526, owner 2026-07-31)
+身分卡右上角**永遠是一列**:`.mp-identity__actions`(column,只裝 `DispatchAlert`)
+裡面包一個 `.mp-identity__buttons`(row) —— **更改 ＋ 停止** 並排,沒在跑的時候整列收成
+一顆 **喚醒**。正職外包同一份 CSS、同一個順序(更改在前)。
+- ⛔ **改這一列的 flex 方向時,≤720px 的 media query 要一起想**。舊規則是為了撐開一個
+  **column**;原封不動套在 row 上,`justify-content: flex-end` 會讓兩顆鍵擠在右邊界
+  ——「東西還在、但擺錯了」,而且**每一條「同一列/沒溢出」的斷言都還是綠的**。
+  護欄因此量的是**跨距與均分**,不是存在性:`visual-guards/identity-actions-row.ct.spec.tsx`。
+- **喚醒 = 先開設定再送,兩邊都是**。外包的喚醒以前是 `POST …/restart` 直接派工、什麼都不問;
+  現在開的是與 更改 **同一份** dialog,四格(執行環境/模型/投入度/機器)預設成**它原本的值**、
+  **且都可以改**。落地順序 `/model` → `/relocate`(機器有改才打) → `/restart`,**全是既有端點**。
+  ⚠️ `/restart` **不吃 machine_id**,所以釘選只能由 relocate 寫 —— 這是外包與正職(它的
+  `activate(machineId)` 自己帶機器)唯一的形狀差異,別把兩邊的順序抄來抄去。
+- 🔴 **釘住的機器只是「睡著」時,seed 一律逐字保留那一台**,不准 fallback「第一台在線的機器」。
+  否則 `machineChanged` 對一個停在睡著機器上的 agent **恆為 true**,開設定只想改模型的人會被
+  靜默搬走。兩個面板的 `openSettings` 都有這條,**改一邊要改兩邊**。
+  ⚠️ 測這一條時 fixture **必須有一台在線機器**,否則那個 mutant 無處可去、測試在壞碼上照樣綠。
+- **外包沒有「只儲存,不喚醒」,而且這是刻意不對齊**:正職的「只儲存」是 PATCH ＋
+  placement-only relocate,都不啟動;外包的 relocate **會 kill + re-dispatch**(除非
+  `desired_state` 已是 offline),所以那顆鍵對外包會是假話。要有它得新增 pin-only 端點＝動凍結 wire。
+- **外包沒有「狀態」卡**(owner:「外包為什麼需要工作狀態這個UI介面」):五個狀態字裡四個是
+  `LifecycleDot` 的複述,「已釋放」由聊天室橫幅承擔。**但離線原因(`worker-detail-stuck-reason`)
+  留著**,搬到那顆點下面 —— 它不是狀態字的複述,而且 `最近操作` 卡是 `hasLastOp` gated 的,
+  「一次都沒派出去」正好是它不渲染的情況。
+- **「重啟」這個字已退場**,兩邊一律 `t.lifecycle.action.spawn`＝「喚醒」。
+  ⛔ **REST 路徑仍是 `/restart`**(凍結 wire),`api.restartWorker` 也不改名 —— 退場的是字,不是契約。
+- 🔴 **「已結案(released)」由身分那一層講,兩個入口同一句話**(owner 2026-07-31:
+  「為什麼從不同進入頁面會有不同的顯示方式?不是應該要一致嗎」)。released worker 被 server
+  從 LIVE 名單濾掉,所以只剩**兩個**入口看得到它:**聊天室**與**直接開的詳情面板**。
+  - 文案只有一個家:`office.outsource.releasedTitle` / `releasedSub`。
+    ⛔ **不准為某一邊加第二份字串** —— 舊名字是 `releasedChatSub`,那個 `Chat` 就是病灶。
+    措辭必須**與入口無關**(「以下為歷史對話」對面板是假話);**沒有測試會擋措辭,只擋副本**。
+  - 判 released 一律看 `worker.status === "released"`。
+    ⛔ **不要動 `presenceVisual` 的五態 no-default switch**:`presence` 對 released 與
+    對「從沒派工過」**都是 `undefined`**,那顆點分不出來,而拓寬它會波及正職 roster。
+  - released 面板**不畫共用卡片、不留任何生命週期按鍵**:server 對 released worker 的
+    `/stop` `/restart` `/model` `/relocate` `/refocus` **一律 404**,留著就是 dead affordance;
+    八張全是 dash 的卡也只是把那句話埋了。
+  - 測這一條要有**真的 released fixture** ＋ **一條 offline(非 released)對照**,
+    否則只證明了「有字」,沒證明「分得出來」。
+mutant 紀錄:`docs/design/worker-panel-parity-mutants.md` 第五、六批。
+
 ## verify(root §13)
 純 FE UI 改動:headless build → `preview:4173` → Playwright,CI 綠即 land、**不上 prod 驗**。公開 URL https://officraft.hardcoretech.link/。`Monitor.tsx` 的 mock 部分無 telemetry backend(純前端 mock)。
 
@@ -352,8 +431,9 @@ owner/agent 自由文字會帶**不可斷的長 token**(長 URL、40-hex sha、�
 - **兩種接法**:兩語言空格一致 → `label + " " + 參數`(值裡不留看不見的空白);參數卡在
   句中、中英標點/引號不同 → lead/tail **純串接**,標點寫進片段,兩語言各填各的、不強求對齊。
   只有空格差異用 `sp`(zh 無空格)吸收。多參數(`uninstallWarnBody1/2/3`)在鍵名標順序。
-- **查表不要寫成模板**:狀態→顯示字用靜態物件葉子(`workerDetail.statusOf`、
-  `mp.effortOf`,同 `tasks.status` / `tasks.priority` 的寫法),成員才會逐條可覆寫。
+- **查表不要寫成模板**:狀態→顯示字用靜態物件葉子(`mp.effortOf`、`office.presence`,
+  同 `tasks.status` / `tasks.priority` 的寫法),成員才會逐條可覆寫。
+  (曾經的 `workerDetail.statusOf` 是同族的第三個例子,已隨外包狀態卡一起退場 — T-7526。)
 - **護欄**:`i18n/compose.test.ts` 把每一句在 zh/en 的**逐字輸出**釘死——拆片段不准改到
   螢幕上的一個字元;新增一支 composer 沒進表會被 coverage 那條擋下。
 

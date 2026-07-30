@@ -226,6 +226,37 @@ owner 2026-07-27 兩句話 + 一個數字:「更新的時候不能塞超過這�
 - 有別於 cli/ 的 stdlib-only:本模組帶第三方依賴(BurntSushi/toml、pressly/goose/v3、modernc.org/sqlite)——server 端 schema/config 需求正當化;新增依賴前先想能不能 stdlib。
 - 新端點 = RouteSpec 表加一行(`routes.go`),不散寫 mount;boot assertion 缺 requires 即拒起。
 
+## 取消喚醒 / 復活死掉的 session：兩個「問錯問題」的守衛（T-7526）
+
+兩個缺陷形狀相同：**守衛問的是「有沒有人下過指令」（INTENT），該問的是「它現在是什麼狀態」（LIVENESS）。**
+
+- **取消喚醒（deactivate 打在 waking 成員身上）原本一個指令都沒發出去。** owner 親自遇到、以為自己記錯。`decideDown` 第一個分支是 `if !obs.Online { converged offline }`，而 **waking 依定義就是 `!online`**（`deriveLiveness` 只在 `!Online` 時投影 waking），所以整個 waking 窗內 cadence 什麼都不派：先前 START 已經放上機器的那個 process 照常開完機、連上、變綠，然後才以「online + desired offline」的身分進 `decideDown`，開始它的 120s 寬限。owner 看到的就是「按了沒反應，兩分鐘後才停」。
+  - 修在 **handler**（`HandleDeactivateMember…`），不在 reconcile 核：presence 是 waking 就 `dispatchRobustStopNow`。**`cancellingWake` 必須在 `StoppingSince` 被蓋之前算**——蓋那一筆本身就會終結 waking 投影。
+  - **刻意只給 waking 這一格**：線上成員的停止**保留 120s 寬限**（它手上有東西要收），已離線的成員**什麼都不派**（沒有 session、也沒有在途的喚醒）。三格各有自己的哨兵，`_OnlineMemberKeepsTheGracefulGrace` 就是防「把取消寬限化成每次停止都 force-stop」的那道。
+  - **沒有寬限可失去**：還沒連上的成員沒領過任何工作，它進不去的那個窗買不到東西。
+  - **`reconcileMemberNow` 照舊呼叫**：raw dispatch 不碰 reconcile store，cadence 的 STOP 臂仍是冪等 backstop。
+  - 🔴 **治理面沒有變寬**：deactivate 與 force-stop **本來就同在 `principalAdminAgent`**（唯一的非座艙入口是 MCP 工具 `deactivate_member`；**CLI 沒有這個入口**——`cli/officraft` 只是 launchd shim），所以這裡沒有讓任何人取得原本取得不到的能力。`TestDeactivateMember_StaysAdminGatedAfterTheCancelDispatch` 兩件事一起釘：一般 agent 打 deactivate 是 403，**而且**兩列的 `Requires` 必須相等——哪天有人把 deactivate 調低，那顆 mutant 就會紅。
+- **`report_waking` 會抹掉取消留下的唯一痕跡。** 它無條件 `StoppingSince = 0`，於是那個「已經在開機、取消才追到」的 agent 一連上就畫出一片新的綠，蓋在一個仍然是 offline 的意圖上面。改成**只有 `desired_state == online` 才清**：清掉陳舊錨點對**普通**開機是對的（否則每個停過的成員回來都像還在收尾——`_ClearsTheStopTraceOnAnOrdinaryBoot` 釘住這半），但那份意圖本身才是「這次開機到底要不要」的權威。
+- **外包 restart 的守衛同一個病**：`desired_state != offline → 409` 問的是「有沒有人按過停止」。**session 自己死掉時 `desired_state` 還是 online**，所以唯一能把它叫回來的端點回 409；而座艙的重啟入口是看 presence 的（此時 offline），畫出來的是「停止」。兩邊合起來 = owner 對一個死掉的 worker **完全沒有任何復活途徑**。改成 `desired_state != offline && hub.IsOnline(id)`：**兩半都是承重的**——真的活著仍然 409，restart 不會變成偷偷的雙重 spawn（`_ClearsAndRedispatches` 的第一段就是那道，`B1b` mutant 會紅）。
+  - **座艙同批**（`WorkerDetailPanel.tsx` 的 `noLiveSession = stopped || offline`）與 **mock 同批**（mock↔http parity；不改的話 FE 測試會對著一個仍然壞掉的假 server 變綠）。
+  - **舊文「409 if not stopped」在新守衛下是假的（不是過時），所以要同批清乾淨**（§13 spec-first、§9c 動到 agent 互動面就要同批教）。
+    🔴 **不要照抄清單去信任地跳過** —— 第一版這裡就列了 5 個位置、實際有 9 個，漏掉的其中一個還在被改的那個函式自己的 godoc 裡（`mock.ts` 更慘：同一個函式裡新舊註解互相矛盾）。**判準不是清單，是這條 grep 必須回 0 行**：
+    ```
+    grep -rn "409 if not stopped\|not stopped (nothing to restart)" \
+      --exclude-dir=node_modules --exclude-dir=.git . | grep -v "seedsdist\|docsdist"
+    ```
+    同理，409 的 envelope 訊息本身也從「worker is not stopped」改成「worker is still online」（server 與 mock **成對**改，mock↔http parity）。
+- ⚠️ **從乾淨 worktree 跑 `go test` 前要先 staging embed assets**（asset 是 embed-only，見上方 `assets.go` 條）——`bin/ci.sh` 會做，手跑不會：
+  ```
+  bash bin/build-seedsdist && bash bin/build-docsdist
+  ```
+  沒 staging 時**至少 5 條**會紅，而且它們長得很像你剛改壞的東西（**都不是回歸**，在 `origin/main` 上同樣紅）：
+  - 缺 `seedsdist` → `TestRestartWorker_ClearsAndRedispatches`、`TestRestartWorker_NoKillTarget_StillAttemptsStart`（`boot_context_failed: open system_interaction.md`）
+  - 缺 `docsdist` → `TestDocsMcpToolsCallableByAssistantAgent`、`TestGetDocHandlerServesStagedEmbed`、`TestDocsdistEmbedsExactlyGuide`
+  🔴 **這個列表同樣是「清單型」的東西**：第一版只揭露了前兩條，漏掉的三條照樣會騙下一個人。判準是**先 staging 再判紅**，不是背這張表。
+
+- **mutant 驗證紀錄**：`docs/design/worker-panel-parity-mutants.md`（13 支，含 3 支第一輪存活、補測試後才紅的）。
+
 ## 正職與外包的刻意不對稱（T-072b）
 
 - `reconcileDecide` 只共用 desired×observed 的純決策。member 的觀測是完整的 member projection；worker 在進核前有 worker lifecycle 的遮罩與狀態投影，不能為了形式對齊而合併 producer 或抹平這些輸入差異。

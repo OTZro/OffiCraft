@@ -24,8 +24,10 @@ for (const width of [375, 390, 1280]) {
     // fail loudly, never silently satisfy an order/overflow assertion below).
     const taskCard = cmp.locator(".mp-worker-task");
     await expect(taskCard).toBeVisible();
-    // The model/machine card is the FIRST .mp-info2 (AgentDetailPanel renders
-    // it before the worker's own afterInfoCards 狀態/委託人 .mp-info2).
+    // The model/machine card is the ONLY .mp-info2 on the worker panel since
+    // T-7526 (the worker's own afterInfoCards card lost its 狀態 half and with
+    // it the two-column grid). `.first()` is kept so this locator survives a
+    // future second grid card.
     const modelMachineCard = cmp.locator(".mp-info2").first();
     await expect(modelMachineCard).toBeVisible();
 

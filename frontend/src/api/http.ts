@@ -1032,7 +1032,8 @@ export const httpApi: Api = {
 
   async restartWorker(id: string): Promise<OutsourceWorkerView> {
     // POST /api/outsource-workers/{id}/restart -> OutsourceWorkerDTO (owner/admin-agent,
-    // 409 if not stopped). Clears the stop and re-dispatches.
+    // 409 only when the worker is actually alive — T-7526). Clears the stop and
+    // re-dispatches; a worker whose session died on its own is revivable here.
     const wire = unwrap(
       await client.POST("/api/outsource-workers/{id}/restart", {
         params: { path: { id } },

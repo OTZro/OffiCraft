@@ -256,28 +256,61 @@ export function AgentDetailPanel({
     loading: boolean;
     error: boolean;
   }>({ text: "", loading: false, error: false });
+  // 🔴 Which key has actually been READ (set on success ONLY) and which read is
+  // currently in flight. They were one ref stamped at fetch START, and that is
+  // what made the card stick on 「載入中…」 forever:
+  //
+  //   `vm.prompt.fetch` is an inline arrow in BOTH wrappers (the member's
+  //   `async () => (await api.getBootstrap(member.role)).context`, the worker's
+  //   `onFetchBootContext` prop, itself an arrow rebuilt by OfficePage), so its
+  //   identity changes on EVERY render. With it in the deps, any repaint —
+  //   an SSE delta is enough — tore the effect down (`alive = false`, so neither
+  //   `.then` nor `.catch` could write state) and the rerun bailed at the
+  //   already-stamped key. Collapsing and re-expanding could not recover it
+  //   either: the stamp said "loaded" for a read that never landed.
+  //
+  // So: the fetch is read through a ref (a repaint is NOT a reason to re-read —
+  // only a different agent is), the loaded stamp is written when the text
+  // arrives, and staleness is decided by comparing the key instead of by an
+  // `alive` flag a repaint can flip.
   const loadedKeyRef = useRef<string | null>(null);
+  const inFlightKeyRef = useRef<string | null>(null);
   const promptFetch = vm.prompt?.fetch;
+  const promptFetchRef = useRef(promptFetch);
+  promptFetchRef.current = promptFetch;
   const promptKey = vm.prompt?.cacheKey;
-  useEffect(() => {
-    if (!showPrompt || !promptFetch || promptKey == null) return;
-    if (loadedKeyRef.current === promptKey) return;
-    let alive = true;
-    loadedKeyRef.current = promptKey;
+
+  function runPromptFetch(key: string) {
+    const fetchFn = promptFetchRef.current;
+    if (!fetchFn) return;
+    inFlightKeyRef.current = key;
     setPrompt({ text: "", loading: true, error: false });
-    promptFetch()
+    fetchFn()
       .then((text) => {
-        if (alive) setPrompt({ text, loading: false, error: false });
+        // A newer key superseded this read (the owner switched agents) — its own
+        // effect owns the card now, so this answer is stale.
+        if (inFlightKeyRef.current !== key) return;
+        inFlightKeyRef.current = null;
+        loadedKeyRef.current = key; // stamped on ARRIVAL, never on departure
+        setPrompt({ text, loading: false, error: false });
       })
       .catch(() => {
-        if (!alive) return;
-        loadedKeyRef.current = null; // allow a retry on re-expand
+        if (inFlightKeyRef.current !== key) return;
+        inFlightKeyRef.current = null;
+        // No stamp: the read failed, so re-expanding (or 重試) must read again.
         setPrompt({ text: "", loading: false, error: true });
       });
-    return () => {
-      alive = false;
-    };
-  }, [showPrompt, promptFetch, promptKey]);
+  }
+
+  useEffect(() => {
+    if (!showPrompt || promptKey == null) return;
+    if (loadedKeyRef.current === promptKey) return;
+    if (inFlightKeyRef.current === promptKey) return;
+    runPromptFetch(promptKey);
+    // NO cleanup that cancels the read: unmount/repaint is not a cancellation,
+    // and the key check above is what keeps a stale answer off the screen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showPrompt, promptKey]);
 
   const contextText = vm.contextPct != null ? `${Math.round(vm.contextPct)}%` : dash;
   const contextDisplay =
@@ -572,7 +605,22 @@ export function AgentDetailPanel({
               {prompt.loading ? (
                 t.mp.promptLoading
               ) : prompt.error ? (
-                t.mp.promptError
+                // A failed read says so AND offers the way out. Leaving it on
+                // 「載入中…」 was the old shape: it read as "still working" and
+                // there was nothing to press.
+                <div data-testid={`${p}-prompt-error`}>
+                  <span>{t.mp.promptError}</span>{" "}
+                  <button
+                    type="button"
+                    className="doc-btn"
+                    data-testid={`${p}-prompt-retry`}
+                    onClick={() => {
+                      if (promptKey != null) runPromptFetch(promptKey);
+                    }}
+                  >
+                    {t.mp.promptRetry}
+                  </button>
+                </div>
               ) : (
                 <>
                   {vm.prompt.note && (

@@ -439,8 +439,10 @@ func (s *apiServer) HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost(w htt
 
 // POST /api/outsource-workers/{id}/restart — the cockpit's 重啟 (owner/admin agent since T-6020),
 // the inverse of stop: set desired_state back to "online" and re-dispatch (重啟 =
-// 再 dispatch — a fresh worker_start onto the pinned / preferred machine). 409 when
-// the worker is not stopped (nothing to restart — avoids a hidden double-spawn); 404
+// 再 dispatch — a fresh worker_start onto the pinned / preferred machine). 409 ONLY
+// when the worker is actually ALIVE (T-7526: not held down AND online — nothing to
+// restart, and refusing there is what stops a hidden double-spawn). A worker whose
+// session died on its own keeps desired_state=online and IS restartable; 404
 // unknown/released.
 func (s *apiServer) HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost(w http.ResponseWriter, r *http.Request, id string) {
 	s.outsourceMu.Lock()
@@ -455,9 +457,17 @@ func (s *apiServer) HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost
 		writeResolveError(w, errNotFound, "outsource worker", id)
 		return
 	}
-	if worker.DesiredState != DesiredStateOffline {
+	// 🔴 The guard asks "is it ALIVE?", not "did anyone press STOP?" (T-7526).
+	// It used to be `DesiredState != offline` alone — pure INTENT — so a worker
+	// whose session died on its own still carried desired_state=online and the
+	// ONE endpoint that could bring it back answered 409. Nothing else could
+	// either (the panel's restart affordance keys off presence, which reads
+	// offline there), so the owner had no way to revive it at all.
+	// Both halves are load-bearing: a genuinely live worker is still refused, so
+	// restart can never become a hidden double-spawn.
+	if worker.DesiredState != DesiredStateOffline && s.hub.IsOnline(id) {
 		s.outsourceMu.Unlock()
-		writeError(w, http.StatusConflict, "worker is not stopped — nothing to restart")
+		writeError(w, http.StatusConflict, "worker is still online — nothing to restart")
 		return
 	}
 	worker.DesiredState = DesiredStateOnline

@@ -1251,7 +1251,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost,
 			Auth:     authGated,
 			Requires: principalAdminAgent,
-			Summary:  "Restart (重啟) a stopped outsource worker (owner/admin agent; 409 if not stopped).",
+			Summary:  "Restart (重啟) an outsource worker that has no live session (owner/admin agent; 409 only when it is actually alive).",
 			MCPTool:  "restart_outsource_worker",
 		},
 		{

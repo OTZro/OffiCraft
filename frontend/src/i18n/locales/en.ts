@@ -308,9 +308,11 @@ export const en: Dict = {
       loadError: "Failed to load outsource workers. Please try again.",
       viewDetail: "Outsource details",
       openTask: "Open task details",
-      releasedChatTitle: "Outsource · released",
-      releasedChatSub:
-        "This outsource worker was released when its task closed; the history below is read-only.",
+      // The ONE home for the "released" sentence — read by BOTH entries (chat
+      // and the detail panel). Deliberately entry-neutral; see zh.ts.
+      releasedTitle: "Outsource · released",
+      releasedSub:
+        "This outsource worker was released when its task closed; what you see here is a read-only record.",
     },
   },
   workerDetail: {
@@ -318,12 +320,7 @@ export const en: Dict = {
     codename: "Codename",
     model: "Model",
     effort: "Effort",
-    status: "Status",
-    statusOf: {
-      assigned: "Assigned",
-      active: "Active",
-      released: "Released",
-    } as Record<string, string>,
+    // T-7526: the 狀態 cell and its statusOf lookup are retired — see zh.ts.
     task: "Delegated task",
     delegator: "Delegated by",
     // Shown only when the owner personally created the bound task (a real
@@ -339,11 +336,8 @@ export const en: Dict = {
     context: "context",
     estimatedCost: "est. $",
     notAssigned: "Not yet assigned",
-    starting: "Starting",
-    offline: "Offline",
-    working: "Working",
+    // T-7526: the four presence words retired with the 狀態 cell — see zh.ts.
     // ── T-32e1/T-f190 lifecycle ops (aligned with the member detail panel) ──
-    stopped: "Stopped",
     refocus: "Refocus",
     refocusOfflineHint: "Refocus requires the worker online",
     refocusing: "Refocusing…",
@@ -351,10 +345,10 @@ export const en: Dict = {
     refocusError: "Refocus failed",
     refocusSubmittedNote: "Refocus sent · worker respawning…",
     refocusSinceLabel: "Last handover",
+    // ⚠️ No `restart` leaf: the wake word is the member panel's
+    // `lifecycle.action.spawn` on both panels — see zh.ts.
     stop: "Stop",
     stopping: "Stopping…",
-    restart: "Restart",
-    restarting: "Starting…",
     stopError: "Action failed, please retry",
     modelSave: "Save",
     modelCancel: "Cancel",
@@ -695,6 +689,7 @@ export const en: Dict = {
     initialPrompt: "Initial prompt",
     promptLoading: "Loading…",
     promptError: "Failed to load initial prompt",
+    promptRetry: "Retry",
     lessons: "Past lessons",
     expandableHint: "applies on next wake / refocus",
     lessonsLoading: "Loading…",
