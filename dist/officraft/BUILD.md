@@ -5,10 +5,23 @@ Source commit: `6c37523` (the source snapshot before this binary/provenance comm
 Build command:
 
 ```sh
-(cd cli/officraft && go build -ldflags='-s -w' -o ../../dist/officraft/officraft ./...)
+(cd cli/officraft && go build -trimpath -buildvcs=false -ldflags='-s -w' -o ../../dist/officraft/officraft ./...)
 shasum -a 256 cli/officraft/go.mod cli/officraft/main.go | shasum -a 256   # -> source.sha256
 (cd dist/officraft && shasum -a 256 officraft > binary.sha256)
 ```
+
+Both flags are load-bearing, and neither is cosmetic:
+
+- `-trimpath` keeps the build directory out of the bytes, so the same source
+  built in two places produces the same binary.
+- `-buildvcs=false` keeps the git revision, build time and dirty-tree flag out.
+  Without it the anchor's bytes change on **every commit** even when the source
+  is untouched, and a reviewer rebuilding from a fresh clone can never reproduce
+  the committed bytes. Measured, not assumed: with `-trimpath` alone, the same
+  source built inside the repo and outside it differed.
+
+`bin/build-bindist` builds the shipped anchor with exactly these flags, so the
+committed copy and the shipped copy are the same bytes.
 
 Two records, because either one alone can be satisfied by a lie:
 

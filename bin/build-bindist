@@ -28,7 +28,14 @@ rm -rf "$BINDIST"
 mkdir -p "$BINDIST"
 (cd "$ROOT/cli/ocwarden" && go build -ldflags="-s -w" -o "$BINDIST/ocwarden" ./...)
 (cd "$ROOT/cli/ocagent" && go build -ldflags="-s -w" -o "$BINDIST/ocagent" ./...)
-(cd "$ROOT/cli/officraft" && go build -ldflags="-s -w" -o "$BINDIST/officraft" ./...)
+# -trimpath -buildvcs=false: the anchor is a TCC identity, and TCC identifies an
+# ad-hoc signed binary by the hash of its bytes. Both flags are load-bearing —
+# -trimpath keeps the build directory out of the bytes, and -buildvcs=false keeps
+# the git revision and the dirty-tree flag out (without it the anchor's bytes
+# change on every commit, and building the same source twice from different
+# checkouts gives two different identities). dist/officraft/BUILD.md builds the
+# committed reference copy with exactly these flags.
+(cd "$ROOT/cli/officraft" && go build -trimpath -buildvcs=false -ldflags="-s -w" -o "$BINDIST/officraft" ./...)
 # T-33d5: sign the FLEET-SERVED artifacts with the stable release identity — but
 # SINCE T-588c THIS IS A NO-OP UNLESS SIGNING WAS EXPLICITLY REQUESTED. The
 # helper returns before it consults the keychain, so this script (which runs on
