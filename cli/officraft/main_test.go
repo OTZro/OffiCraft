@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -103,5 +106,22 @@ func TestExitStatusKeepsChildSignalCause(t *testing.T) {
 	}
 	if got := exitStatusFromWait(syscall.WaitStatus(int(syscall.SIGKILL))); got != 128+int(syscall.SIGKILL) {
 		t.Fatalf("SIGKILL exit = %d, want %d", got, 128+int(syscall.SIGKILL))
+	}
+}
+
+// The anchor's entire TCC purpose depends on keeping its own process identity.
+// StartProcess forks a child; syscall.Exec would silently replace that identity.
+func TestLauncherForksInsteadOfExecing(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate launcher source")
+	}
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "main.go"))
+	if err != nil {
+		t.Fatalf("read launcher source: %v", err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "os.StartProcess(") || strings.Contains(body, "syscall.Exec(") {
+		t.Fatalf("anchor launcher must fork with os.StartProcess, never exec: %s", body)
 	}
 }
