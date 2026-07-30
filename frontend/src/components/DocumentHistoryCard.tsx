@@ -55,6 +55,7 @@ export function DocumentHistoryCard({
   kind,
   docKey,
   currentContent,
+  docDeletable,
   onRestored,
 }: {
   kind: DocumentKind;
@@ -69,6 +70,14 @@ export function DocumentHistoryCard({
    * an empty document. See api/docCap.ts.
    */
   currentContent?: Record<string, string>;
+  /**
+   * True when THIS document can be deleted whole from the cockpit (a task
+   * manual, a custom role). Such a delete keeps no history, so the card states
+   * that limit — otherwise it reads as a general undo. Left false where no
+   * delete flow exists (global context, seed roles, lessons): a footnote that
+   * is false for the document on screen is worse than no footnote.
+   */
+  docDeletable?: boolean;
   /** Re-read the document this card sits under, after a successful restore. */
   onRestored?: () => Promise<unknown> | void;
 }) {
@@ -202,6 +211,11 @@ export function DocumentHistoryCard({
               );
             })}
           </ul>
+        )}
+        {docDeletable && (
+          <p className="doc-hist__scope" data-testid="doc-history-scope-note">
+            {t.settings.historyDeleteNote}
+          </p>
         )}
       </div>
 

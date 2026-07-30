@@ -1066,6 +1066,8 @@ export const en: Dict = {
     historyTitle: "Version history",
     historySub:
       "The last 3 revisions are kept; restoring overwrites the current content.",
+    historyDeleteNote:
+      "Version history covers edits to this document only; deleting the document itself keeps no history and cannot be restored here.",
     historyLoading: "Loading version history…",
     historyError: "Failed to load version history. Please try again.",
     historyEmpty: "No revisions retained yet",

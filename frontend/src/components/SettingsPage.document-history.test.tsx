@@ -42,6 +42,9 @@ describe("SettingsPage · 版本紀錄", () => {
     const utils = await openUserCustomDoc();
     expect(utils.getByText(s.historyTitle)).toBeTruthy();
     await utils.findByText(s.historyEmpty);
+    // The global-context block cannot be deleted, so the delete-scope footnote
+    // would be false here and is not shown.
+    expect(utils.queryByTestId("doc-history-scope-note")).toBeNull();
   });
 
   it("lists each retained revision with when, who and a content preview", async () => {
@@ -211,6 +214,8 @@ describe("SettingsPage · 版本紀錄", () => {
 
   it("shows the same card on a role definition, keyed to that role", async () => {
     await mockApi.saveRole("assistant", { definitionMd: "角色定義改寫" });
+    const created = await mockApi.createRole({ name: "臨時角色" });
+    expect(created.role.isSeed).toBe(false);
 
     const utils = render(
       <I18nProvider>
@@ -226,5 +231,15 @@ describe("SettingsPage · 版本紀錄", () => {
       ).toBeGreaterThan(0)
     );
     expect(utils.getAllByText(s.historyTitle).length).toBeGreaterThan(0);
+    // A seed role has no delete affordance, so the delete-scope footnote —
+    // which states what history does NOT cover — stays off this page.
+    expect(utils.queryByTestId("doc-history-scope-note")).toBeNull();
+
+    // A CUSTOM role can be deleted whole, and that delete keeps no history:
+    // there the card says so, in the dictionary's own words.
+    fireEvent.click(utils.getByText(s.roles));
+    fireEvent.click(await utils.findByText("臨時角色"));
+    const note = await utils.findByTestId("doc-history-scope-note");
+    expect(note.textContent).toBe(s.historyDeleteNote);
   });
 });

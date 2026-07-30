@@ -1382,6 +1382,15 @@
   font-size: 12px;
   color: var(--color-text-muted);
 }
+/* Footnote stating what history does NOT cover, on the documents that can be
+ * deleted whole. Muted and secondary — a stated limit, not a warning. */
+.doc-hist__scope {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
 .doc-hist__empty {
   padding: 8px 0 12px;
   font-size: 13px;

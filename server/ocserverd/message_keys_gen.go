@@ -543,6 +543,7 @@ var messageKeys = map[string]bool{
 	"settings.historyBlockedReasonTail":        true,
 	"settings.historyByLabel":                  true,
 	"settings.historyDefaultBadge":             true,
+	"settings.historyDeleteNote":               true,
 	"settings.historyEmpty":                    true,
 	"settings.historyError":                    true,
 	"settings.historyField.definition_md":      true,

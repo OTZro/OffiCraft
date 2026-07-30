@@ -434,6 +434,9 @@ export function SettingsPage({
             <DocumentHistoryCard
               kind="role_definition"
               docKey={view.key}
+              // Only a CUSTOM role has a delete affordance (seed roles are
+              // server-refused), so only there is the scope note true.
+              docDeletable={role ? !role.isSeed : false}
               onRestored={rolesH.refetch}
             />
             <LessonsCard roleKey={view.key} />

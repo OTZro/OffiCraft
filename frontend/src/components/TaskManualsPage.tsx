@@ -415,6 +415,7 @@ export function TaskManualDefinitionPage({
           learnings: manual.learnings,
           sop_md: manual.sopMd,
         }}
+        docDeletable
         onRestored={onRestored}
       />
     </div>
@@ -448,6 +449,7 @@ export function TaskManualLearningsPage({
           learnings: manual.learnings,
           sop_md: manual.sopMd,
         }}
+        docDeletable
         onRestored={onRestored}
       />
     </div>

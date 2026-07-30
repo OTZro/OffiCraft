@@ -542,6 +542,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "settings.historyBlockedReasonTail",
   "settings.historyByLabel",
   "settings.historyDefaultBadge",
+  "settings.historyDeleteNote",
   "settings.historyEmpty",
   "settings.historyError",
   "settings.historyField.definition_md",
