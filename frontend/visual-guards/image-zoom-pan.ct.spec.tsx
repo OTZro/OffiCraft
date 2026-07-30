@@ -13,7 +13,7 @@
 // presence of a property, a class or an element.
 import { test, expect } from "@playwright/experimental-ct-react";
 import type { Locator, Page } from "@playwright/test";
-import { ImageZoomPanStory } from "./stories/ImageZoomPanStory";
+import { ImageZoomPanStory, WideShortImageZoomStory } from "./stories/ImageZoomPanStory";
 
 type Geometry = {
   image: { left: number; top: number; right: number; bottom: number };
@@ -153,8 +153,24 @@ test("the frame's own scroll travel reaches the far corner", async ({ mount, pag
   ).toBe(true);
 });
 
-// Keyboard-only, at 150% so the travel fits in a handful of presses (Chromium
-// animates key scrolling, so presses need to be paced or they coalesce).
+// Keyboard-only, at 150% so the travel is short. ⚠️ Do NOT calibrate this to a
+// fixed number of presses: an arrow key scrolls ~39px in Chromium but only
+// ~11.5px in WebKit, so "16 presses" silently means "arrives" in one engine and
+// "gives up a third of the way" in the other. Press until the offset stops
+// moving instead — that is engine-independent and it is also the real question
+// (can the keyboard reach the end, not does it travel at some rate).
+async function pressUntilSettled(page: Page, wrap: Locator, key: string) {
+  let previous = -1;
+  for (let i = 0; i < 400; i++) {
+    const at = await wrap.evaluate((el) => el.scrollLeft + el.scrollTop);
+    if (at === previous) return;
+    previous = at;
+    await page.keyboard.press(key);
+    await page.waitForTimeout(20);
+  }
+  throw new Error(`${key} never settled — the frame kept scrolling past any sane bound`);
+}
+
 test("the keyboard reaches the far corner — panning is not mouse-only", async ({ mount, page }) => {
   const { cmp, wrap } = await mountStory(mount, page);
   for (let i = 0; i < 2; i++) await cmp.getByRole("button", { name: "放大" }).click();
@@ -164,17 +180,11 @@ test("the keyboard reaches the far corner — panning is not mouse-only", async 
   expect(inside({ x: zoomed.image.right, y: zoomed.image.bottom }, zoomed.frame)).toBe(false);
 
   await wrap.focus();
-  for (let i = 0; i < 16; i++) {
-    await page.keyboard.press("ArrowRight");
-    await page.waitForTimeout(80);
-  }
-  for (let i = 0; i < 4; i++) {
-    await page.keyboard.press("PageDown");
-    await page.waitForTimeout(120);
-  }
+  await pressUntilSettled(page, wrap, "ArrowRight");
+  await pressUntilSettled(page, wrap, "ArrowDown");
 
   const g = await geometry(wrap);
-  expect(g.scrollLeft).toBeGreaterThan(0);
+  expect(g.scrollLeft, "arrow keys must actually move the frame").toBeGreaterThan(0);
   expect(
     inside({ x: g.image.right, y: g.image.bottom }, g.frame),
     "arrow keys on the focused frame must reach the bottom-right corner",
@@ -199,12 +209,144 @@ test("returning to 100% recentres the image with no leftover pan offset", async 
   expect(back.image.right).toBeCloseTo(at100.image.right, 0);
 });
 
+// The controls must survive the travel. An absolutely positioned child of a
+// scroll container is laid out against its PADDING box, so a zoom cluster
+// parented to the frame rides the content: panned to the far corner at 400% it
+// measured x ≈ -2031, i.e. two thousand pixels outside the frame. Every other
+// assertion in this file stayed green through that — Playwright scrolls a
+// control back into view before clicking it, so "the button still works" is not
+// the same question as "the user can still see it".
+test("the zoom controls stay on screen while the image is panned", async ({ mount, page }) => {
+  const { cmp, wrap } = await mountStory(mount, page);
+  await zoomTo400(cmp);
+  await wrap.evaluate((el) => {
+    el.scrollLeft = el.scrollWidth;
+    el.scrollTop = el.scrollHeight;
+  });
+  const cluster = cmp.locator(".md-preview__zoom");
+  const c = (await cluster.boundingBox())!;
+  const f = (await geometry(wrap)).frame;
+  expect(c.x, "the zoom cluster must not travel out of the frame with the content").toBeGreaterThanOrEqual(f.left - EPS);
+  expect(c.x + c.width).toBeLessThanOrEqual(f.right + EPS);
+  expect(c.y).toBeGreaterThanOrEqual(f.top - EPS);
+  expect(c.y + c.height).toBeLessThanOrEqual(f.bottom + EPS);
+});
+
+// The readout must not lie. This aspect ratio is fitted by the frame's WIDTH,
+// so the stylesheet's `max-width: 100%` still had room to resolve against the
+// zoomed parent and grew the image a second time: at "200%" the painted box was
+// 2872px against a 718px fit box — 4×, not 2×. Percentages of a box that is
+// itself the zoom cannot be left switched on.
+test("the zoom percentage is the true magnification for a width-fitted image", async ({ mount, page }) => {
+  await page.setViewportSize({ width: 900, height: 700 });
+  const cmp = await mount(<WideShortImageZoomStory />);
+  const wrap = cmp.locator(".md-preview__image-wrap");
+  await expect(wrap).toBeVisible();
+  await expect.poll(async () => (await geometry(wrap)).image.right - (await geometry(wrap)).image.left).toBeGreaterThan(100);
+
+  const fit = await geometry(wrap);
+  const fitW = fit.image.right - fit.image.left;
+  const fitH = fit.image.bottom - fit.image.top;
+
+  for (let i = 0; i < 4; i++) await cmp.getByRole("button", { name: "放大" }).click();
+  await expect(cmp.getByText("200%")).toBeVisible();
+
+  const at200 = await geometry(wrap);
+  expect(at200.image.right - at200.image.left, "200% must paint exactly twice the fitted width").toBeCloseTo(fitW * 2, 0);
+  expect(at200.image.bottom - at200.image.top, "200% must paint exactly twice the fitted height").toBeCloseTo(fitH * 2, 0);
+  // And the frame's scrollable extent agrees with what is painted — the pan
+  // range has to be the real one, not one derived from a stale layout box.
+  expect(at200.overflowX).toBeCloseTo(fitW * 2 - (at200.frame.right - at200.frame.left), 0);
+});
+
+// ONE overflow, ONE scrollbar. The frame's caps are viewport units, but the
+// frame does not get the whole viewport — the overlay inset, the panel border,
+// the header and the body padding come off first. At 900x500 the frame's
+// `min-height: 360px` / `max-height: 70vh` both overshot the 340px the body
+// actually had, so `.md-preview__body` grew a scrollbar of its own BEHIND the
+// frame's: two scrollbars for one overflow. Relaxing only the min-height to
+// `min(360px, 50vh)` left 10px of it, so this asserts the body is quiet at
+// every height, not just the one that was reported.
+for (const height of [420, 500, 560, 700]) {
+  test(`a ${height}px-tall viewport gives the image ONE scrollbar, not two`, async ({ mount, page }) => {
+    await page.setViewportSize({ width: 900, height });
+    const cmp = await mount(<ImageZoomPanStory />);
+    const wrap = cmp.locator(".md-preview__image-wrap");
+    await expect(wrap).toBeVisible();
+    await expect.poll(async () => (await geometry(wrap)).image.right - (await geometry(wrap)).image.left).toBeGreaterThan(100);
+
+    const body = cmp.locator(".md-preview__body");
+    const bodyOverflow = await body.evaluate((el) => el.scrollHeight - el.clientHeight);
+    expect(bodyOverflow, "the panel body must not scroll behind the image frame's own scrollbar").toBeLessThanOrEqual(1);
+
+    // …and the frame is still a real pan surface at this height: it must fit
+    // the image at 100% and genuinely overflow once zoomed. A cap that merely
+    // collapsed the frame to nothing would also silence the body.
+    const at100 = await geometry(wrap);
+    expect(at100.overflowY, "at 100% the image fits its frame").toBeLessThanOrEqual(1);
+    expect(at100.frame.bottom - at100.frame.top, "the frame must not collapse").toBeGreaterThan(200);
+    await zoomTo400(cmp);
+    const at400 = await geometry(wrap);
+    expect(at400.overflowX, "zoomed, the frame still owns real travel").toBeGreaterThan(100);
+    expect(at400.overflowY).toBeGreaterThan(100);
+    expect(await body.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1);
+  });
+}
+
+// ⚠️ This scrolls DOWN on purpose. The first version wheeled UP from
+// `scrollY === 0`, where the page cannot move in that direction no matter what
+// the handler does — the assertion was true of every possible implementation,
+// including one with no `preventDefault` at all. Down is the direction with
+// 3000px of page underneath it to actually lose.
+//
+// What actually holds the page still is a PAIR, and it is not the obvious half:
+// deleting `e.preventDefault()` from the wheel handler leaves this green,
+// because `.md-preview__image-wrap`'s `overscroll-behavior: contain` already
+// stops the scroll chaining out to the document. Only removing BOTH moves the
+// page (measured: scrollY 120). So do not read a green here as "the JS handler
+// is doing its job", and do not drop the CSS on the grounds that the JS covers
+// it — in Chromium it is the other way round.
 test("wheel-zoom over the image does not scroll the page behind the overlay", async ({ mount, page }) => {
   const { cmp, wrap } = await mountStory(mount, page);
+  expect(await page.evaluate(() => document.documentElement.scrollHeight > window.innerHeight),
+    "the story must have a scrollable page for this assertion to mean anything").toBe(true);
+
   const box = (await wrap.boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 3);
-  for (let i = 0; i < 4; i++) await page.mouse.wheel(0, -120);
+  for (let i = 0; i < 2; i++) await page.mouse.wheel(0, 120);
 
-  await expect(cmp.getByText("200%")).toBeVisible();
+  await expect(cmp.getByText("50%")).toBeVisible();
   expect(await page.evaluate(() => window.scrollY), "the page must stay put while the image zooms").toBe(0);
+});
+
+// A resize moves the 100% box, so the zoom factor has to be recomputed against
+// the NEW fit or the readout starts lying. Measured before the fix: 300% at
+// 900x700 stayed 2154px wide after shrinking to 500x420, where the true fit is
+// ~394px — a real ~5.5x still calling itself 300%. The transform version did
+// not drift this way, so this is a regression guard, not a nicety.
+test("the zoom factor survives a window resize instead of drifting", async ({ mount, page }) => {
+  const { cmp, wrap } = await mountStory(mount, page);
+  for (let i = 0; i < 8; i++) await cmp.getByRole("button", { name: "放大" }).click();
+  await expect(cmp.getByText("300%")).toBeVisible();
+
+  await page.setViewportSize({ width: 500, height: 420 });
+  // Settle: the resize listener re-measures and React re-renders off that.
+  await expect.poll(async () => Math.round((await geometry(wrap)).image.right - (await geometry(wrap)).image.left))
+    .toBeLessThan(2000);
+
+  const after = await geometry(wrap);
+  const painted = after.image.right - after.image.left;
+  // The honest 100% width at THIS viewport, read straight off the element with
+  // its inline size stripped — the same box the component claims to zoom from.
+  const fitNow = await wrap.evaluate((el) => {
+    const img = el.querySelector("img.md-preview__image") as HTMLImageElement;
+    const keep = { w: img.style.width, h: img.style.height, mw: img.style.maxWidth, mh: img.style.maxHeight };
+    img.style.width = ""; img.style.height = ""; img.style.maxWidth = ""; img.style.maxHeight = "";
+    const w = img.getBoundingClientRect().width;
+    img.style.width = keep.w; img.style.height = keep.h; img.style.maxWidth = keep.mw; img.style.maxHeight = keep.mh;
+    return w;
+  });
+
+  await expect(cmp.getByText("300%")).toBeVisible();
+  expect(painted / fitNow, "what is painted must still be 3x the CURRENT fit box").toBeCloseTo(3, 1);
 });

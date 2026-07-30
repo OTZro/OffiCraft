@@ -133,22 +133,58 @@
   color: var(--color-text-muted);
   font-size: 13px;
 }
-/* The pan frame. `overflow: auto` only earns its keep because the STAGE below
- * carries the zoom as real width/height — with the zoom living purely in the
- * image's `transform` there is never any scrollable content and the magnified
- * edges are simply clipped away (T-7e68). It is focusable (tabIndex in the
+/* The zoom controls must NOT live inside the pan frame. An absolutely
+ * positioned child of a scroll container is laid out against its padding box,
+ * so it travels with the content: panned to a far corner at 400% the cluster
+ * sits ~2000px outside the frame and the user loses the −/+ that got them
+ * there. This wrapper is the shared positioning parent instead.
+ *
+ * ⚠️ Moving the cluster back under `.md-preview__image-wrap` also silently
+ * removes the reason `onPanPointerDown` no longer needs a
+ * `closest(".md-preview__zoom")` bail-out: inside the frame, a press on −/+ is
+ * a press on the pan surface and starts a drag. That guard was deleted WITH
+ * this restructure, so putting the cluster back without restoring it turns
+ * every zoom click into a drag — and the whole spec goes red at once with
+ * nothing pointing at this line. Move one, look at the other. */
+.md-preview__image-viewport { position: relative; }
+/* The pan frame. `overflow: auto` only earns its keep because the IMAGE below
+ * carries the zoom as real width/height — with the zoom living in a
+ * `transform` there is never any scrollable content and the magnified edges
+ * are simply clipped away (T-7e68). It is focusable (tabIndex in the
  * component) so arrow keys reach the same overflow the drag does. */
-.md-preview__image-wrap { position: relative; display: grid; place-items: center; min-height: 360px; max-height: 70vh; overflow: auto; overscroll-behavior: contain; background: var(--color-backdrop); }
+/* ONE overflow deserves ONE scrollbar. These caps are viewport units, but the
+ * frame does not get the whole viewport: the overlay's 32px inset (top+bottom),
+ * the panel border, the header and the body's 18px padding (top+bottom) come off
+ * first — 160px of chrome. Ignore it and at a short viewport the frame overshoots
+ * the space the body actually has, so `.md-preview__body` grows a scrollbar of
+ * its OWN behind the frame's: two scrollbars for one overflow (measured at
+ * 900x500: the body scrolled by 20px).
+ *
+ * The min-height alone is not the culprit — relaxing only it to `min(360px, 50vh)`
+ * still left 10px, because `max-height: 70vh` is the half that overshoots once the
+ * viewport is short. Both caps have to know about the chrome.
+ *
+ * The expression is written out at both call sites rather than hoisted into a
+ * shared custom property: there are only two, and the frame and the image have
+ * to agree exactly, so seeing the same text twice is easier to check than
+ * chasing an indirection. (A `--md-preview-*` property works fine here too —
+ * an earlier version of this comment claimed it went stale across a resize;
+ * that was a stale CT dev-server build being measured, not a browser
+ * behaviour. Don't repeat that claim.)
+ *
+ * 160px is measured, so a header that changes height silently invalidates it —
+ * the short-viewport guards in image-zoom-pan.ct.spec.tsx are what turn that
+ * drift into a red test instead of a second scrollbar. */
+.md-preview__image-wrap { display: grid; place-items: center; min-height: min(360px, 70vh, calc(100vh - 160px)); max-height: min(70vh, calc(100vh - 160px)); overflow: auto; overscroll-behavior: contain; background: var(--color-backdrop); }
 .md-preview__image-wrap:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
-/* Grab only when there is somewhere to go: at 100% the stage fits the frame
+/* Grab only when there is somewhere to go: at 100% the image fits the frame
  * and the cursor must not promise a drag that does nothing. */
 .md-preview__image-wrap--pannable { cursor: grab; }
 .md-preview__image-wrap--panning { cursor: grabbing; }
-/* The zoomed LAYOUT box. Its inline width/height (fit box × zoom) is what the
- * frame scrolls; the image is painted onto it by the transform from 0 0. */
-.md-preview__image-stage { display: block; line-height: 0; }
-.md-preview__image { display: block; max-width: 100%; max-height: 70vh; object-fit: contain; transform-origin: 0 0; user-select: none; -webkit-user-drag: none; }
-.md-preview__zoom { position: absolute; bottom: 12px; display: inline-flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, var(--color-backdrop) 75%, transparent); color: var(--color-on-backdrop); }
+/* The caps here define the 100% box the component measures its fit box from;
+ * above 100% the component sets width/height inline and turns them off. */
+.md-preview__image { display: block; max-width: 100%; max-height: min(70vh, calc(100vh - 160px)); object-fit: contain; user-select: none; -webkit-user-drag: none; }
+.md-preview__zoom { position: absolute; left: 50%; transform: translateX(-50%); bottom: 12px; display: inline-flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, var(--color-backdrop) 75%, transparent); color: var(--color-on-backdrop); }
 .md-preview__zoom button { width: 28px; height: 28px; border: 0; border-radius: 6px; cursor: pointer; }
 .md-preview__text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
 /* The rendered body wears the shared `.doc-md` document skin (settings.css) so

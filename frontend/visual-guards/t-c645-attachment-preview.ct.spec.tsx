@@ -30,7 +30,31 @@ test("image: shared header and zoomed image render in Chromium", async ({ mount,
     mime: "image/png",
   });
   await expect(page.getByRole("dialog", { name: "preview.png" })).toBeVisible();
-  await expect(cmp.locator(".md-preview__image")).toHaveCSS("transform", "matrix(1, 0, 0, 1, 0, 0)");
+  // This is a REAL browser, so say something about the image itself: at 100%
+  // the stylesheet owns the size (no inline width) and the whole picture sits
+  // inside its frame. The zoom readout on its own would be near-vacuous —
+  // `Math.round(useState(1) * 100)` is true the instant the component mounts.
+  await expect(cmp.getByRole("group", { name: "縮放圖片" })).toContainText("100%");
+  const fit = await cmp.locator(".md-preview__image-wrap").evaluate((el) => {
+    const img = el.querySelector("img.md-preview__image") as HTMLImageElement;
+    const i = img.getBoundingClientRect();
+    const w = el.getBoundingClientRect();
+    const left = w.left + el.clientLeft;
+    const top = w.top + el.clientTop;
+    return {
+      inlineWidth: img.style.width,
+      contained:
+        i.left >= left - 1.5 && i.right <= left + el.clientWidth + 1.5 &&
+        i.top >= top - 1.5 && i.bottom <= top + el.clientHeight + 1.5,
+      overflow: [el.scrollWidth - el.clientWidth, el.scrollHeight - el.clientHeight],
+      painted: [i.width, i.height],
+    };
+  });
+  expect(fit.inlineWidth, "at 100% the stylesheet sizes the image, not an inline style").toBe("");
+  expect(fit.painted[0], "the image must actually be painted").toBeGreaterThan(50);
+  expect(fit.contained, "at 100% the whole image sits inside its frame").toBe(true);
+  expect(fit.overflow[0]).toBeLessThanOrEqual(1);
+  expect(fit.overflow[1]).toBeLessThanOrEqual(1);
   await page.screenshot({ path: `${SHOT_DIR}/image-modal.png`, fullPage: true });
 });
 

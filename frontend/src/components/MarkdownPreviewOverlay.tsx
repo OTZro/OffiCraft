@@ -27,17 +27,25 @@
 //                  there is nothing for a share link to point at and none is
 //                  rendered.
 //
-// T-7e68 — ZOOM MUST AFFECT LAYOUT. A `transform: scale()` on the <img> alone
-// paints bigger pixels but leaves the layout box the original size, so the
-// wrap's `overflow: auto` never has anything to scroll and every edge the zoom
-// pushed past the frame is clipped and unreachable (owner report: 「可以放大，但
-// 無法左右或上下移動」). The image therefore sits inside a STAGE div whose
-// width/height are the measured 100% box times the zoom factor: the stage is
-// what grows, so the wrap gets real scrollbars and the scaled image (origin
-// 0 0) lands exactly on it. Two ways to reach the overflow, not one — a pointer
-// drag and the native scroll (scrollbar, wheel, arrow keys on the focusable
-// wrap) — and both drive the SAME scrollLeft/scrollTop, so there is no second
-// offset to keep in sync and returning to 100% recentres with no residue.
+// T-7e68 — ZOOM MUST AFFECT LAYOUT. A `transform: scale()` on the <img> paints
+// bigger pixels but leaves the layout box the original size, so the wrap's
+// `overflow: auto` never has anything to scroll and every edge the zoom pushed
+// past the frame is clipped and unreachable (owner report: 「可以放大，但無法左
+// 右或上下移動」). The zoom is therefore the image's own width/height — the
+// measured 100% box times the zoom factor, with the stylesheet's percentage
+// caps switched off so they cannot scale it a second time. The wrap then has
+// genuine scrollable content, and TWO ways to reach it, not one: a pointer drag
+// and the native scroll (scrollbar, wheel, arrow keys on the focusable wrap).
+// Both drive the SAME scrollLeft/scrollTop, so there is no second offset to
+// keep in sync and returning to 100% recentres with no residue.
+//
+// 🔴 THE CHEAP FIX DOES NOT WORK, and it is the first thing anyone will try:
+// keeping `transform: scale()` and adding `transform-origin: 0 0` (with or
+// without padding on the parent to "reserve" the space). Transformed overflow
+// does NOT contribute to an ancestor scroll container's scrollable region —
+// measured at 400%, `scrollWidth - clientWidth` stays 0, so there is still
+// nothing to scroll and the corners are still unreachable. The zoom has to be
+// real layout. Do not spend the afternoon re-deriving this.
 //
 // T-f014 — this is now the ONLY full-size image surface in the cockpit. The old
 // Lightbox overlay and its stylesheet block are gone; every image (stored or staged
@@ -143,28 +151,66 @@ export function MarkdownPreviewOverlay({
   const imageRef = useRef<HTMLImageElement | null>(null);
   // The image's box at 100% — the size CSS gives it after `max-width: 100%` /
   // `max-height: 70vh` have had their say. Measured rather than recomputed in
-  // JS so the stage can never disagree with the stylesheet about what "fits".
+  // JS so the zoom can never disagree with the stylesheet about what "fits".
   const [fitBox, setFitBox] = useState<{ w: number; h: number } | null>(null);
   const [panning, setPanning] = useState(false);
 
   const measureFit = useCallback(() => {
     const el = imageRef.current;
     if (!el) return;
+    // Read the box the STYLESHEET would give this image — which means the
+    // inline size has to come off for the duration of the read. Above 100% the
+    // inline size IS the zoom, so measuring through it would just echo the zoom
+    // back as the new "fit" and every later recompute would compound on it.
+    const inline = {
+      width: el.style.width,
+      height: el.style.height,
+      maxWidth: el.style.maxWidth,
+      maxHeight: el.style.maxHeight,
+    };
+    el.style.width = "";
+    el.style.height = "";
+    el.style.maxWidth = "";
+    el.style.maxHeight = "";
     const rect = el.getBoundingClientRect();
+    Object.assign(el.style, inline);
     // jsdom has no layout engine, so every rect is 0×0 there; a zero box is
-    // "not measured yet", never a real size to build a stage from.
+    // "not measured yet", never a real size to zoom from.
     if (rect.width > 0 && rect.height > 0) setFitBox({ w: rect.width, h: rect.height });
   }, []);
 
-  // Only 100% shows the unstyled box, so that is the only moment the fit size
-  // is readable. A viewport resize changes it (both caps are relative), so it
-  // is re-read then too.
+  // THE zoom seam. The zoom is the image's own LAYOUT size, so the frame gets
+  // real scrollable content; a `transform: scale()` paints bigger pixels while
+  // the layout box stays put, leaving `overflow: auto` with nothing to scroll
+  // and every magnified edge clipped away (T-7e68).
+  //
+  // The stylesheet's caps have to be turned off with it. They are percentages
+  // of whatever box contains the image, so leaving them on lets the image grow
+  // a second time on its own — a 1600×400 shot at 200% painted at 4× the fit
+  // box, and the "200%" readout was simply a lie.
+  //
+  // At 100% the size is left to the stylesheet: that is the state `measureFit`
+  // reads the fit box out of, so pinning it there would freeze the first
+  // measurement forever.
+  const zoomedSize =
+    fitBox === null || zoom === 1
+      ? undefined
+      : { width: fitBox.w * zoom, height: fitBox.h * zoom, maxWidth: "none", maxHeight: "none" };
+
+  // Both caps are viewport-relative, so a resize moves the 100% box and the fit
+  // must be re-read — AT ANY ZOOM, not only at 100%. Skipping the re-read while
+  // zoomed made the percentage lie: 300% measured at 900x700 stayed 2154px wide
+  // after the window shrank to 500x420, where the true 100% box is ~394px — a
+  // real 5.5x still announcing itself as 300%. (The transform version had no
+  // such drift, so leaving this out would have been a regression, not a
+  // leftover.) `measureFit` strips the inline size before reading, which is
+  // what makes measuring while zoomed meaningful at all.
   useLayoutEffect(() => {
-    if (!image || zoom !== 1) return;
+    if (!image) return;
     measureFit();
     window.addEventListener("resize", measureFit);
     return () => window.removeEventListener("resize", measureFit);
-  }, [image, imageBytes, zoom, measureFit]);
+  }, [image, imageBytes, measureFit]);
 
   // Fetch the markdown text once (the authed blob URL — same ?token= gate the
   // download/thumbnail paths use). A non-ok response / network error surfaces
@@ -228,9 +274,6 @@ export function MarkdownPreviewOverlay({
     // Touch already pans this scroll container natively, and capturing the
     // pointer here would apply the same delta twice.
     if (!wrap || e.button !== 0 || e.pointerType === "touch") return;
-    // The zoom cluster floats inside the wrap; pressing a control there is a
-    // click on a button, not the start of a drag.
-    if ((e.target as HTMLElement).closest(".md-preview__zoom")) return;
     if (wrap.scrollWidth <= wrap.clientWidth && wrap.scrollHeight <= wrap.clientHeight) return;
     const startX = e.clientX;
     const startY = e.clientY;
@@ -348,34 +391,21 @@ export function MarkdownPreviewOverlay({
         </div>
         <div className="md-preview__body">
           {image && imageBytes !== undefined ? (
-            <div
-              className={
-                "md-preview__image-wrap" +
-                (fitBox !== null && zoom > 1 ? " md-preview__image-wrap--pannable" : "") +
-                (panning ? " md-preview__image-wrap--panning" : "")
-              }
-              ref={wrapRef}
-              /* Focusable and named so the overflow is reachable without a
-               * pointer at all: arrow keys / PageUp / Home scroll a focused
-               * overflow container natively. */
-              tabIndex={0}
-              role="group"
-              aria-label={t.chat.mdPreview.pan}
-              onPointerDown={onPanPointerDown}
-            >
+            <div className="md-preview__image-viewport">
               <div
-                className="md-preview__image-stage"
-                /* THE zoom seam. The stage carries the zoomed size as real
-                 * layout, which is what gives the wrap something to scroll;
-                 * the <img> keeps its 100% box and is painted onto the stage by
-                 * the transform. Before the fit box is known (first paint, or
-                 * jsdom) there is no stage size to set and the image lays out
-                 * exactly as it did before. */
-                style={
-                  fitBox === null
-                    ? undefined
-                    : { width: fitBox.w * zoom, height: fitBox.h * zoom }
+                className={
+                  "md-preview__image-wrap" +
+                  (fitBox !== null && zoom > 1 ? " md-preview__image-wrap--pannable" : "") +
+                  (panning ? " md-preview__image-wrap--panning" : "")
                 }
+                ref={wrapRef}
+                /* Focusable and named so the overflow is reachable without a
+                 * pointer at all: arrow keys / PageUp / Home scroll a focused
+                 * overflow container natively. */
+                tabIndex={0}
+                role="group"
+                aria-label={t.chat.mdPreview.pan}
+                onPointerDown={onPanPointerDown}
               >
                 <img
                   className="md-preview__image"
@@ -387,7 +417,7 @@ export function MarkdownPreviewOverlay({
                   alt={title || t.chat.imageAlt}
                   draggable={false}
                   onLoad={measureFit}
-                  style={{ transform: `scale(${zoom})` }}
+                  style={zoomedSize}
                 />
               </div>
               {/* The zoom cluster is a labelled group, and each control names
