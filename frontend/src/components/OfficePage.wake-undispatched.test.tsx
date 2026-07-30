@@ -31,7 +31,6 @@ import {
   __resetMock,
   __setMockActivationPending,
   __setMockMemberOnline,
-  __setMockRelocationPending,
 } from "../api/mock";
 
 /** The seeded warden member IS the machine registry row (mock listMachines
@@ -118,40 +117,14 @@ describe("OfficePage · an undispatched wake reaches the UI (T-7fa1)", () => {
     expect(queryByTestId("mp-wake-undispatched")).toBeNull();
   });
 
-  it("member detail: 改機器 surfaces the relocate notice too (mutant MB)", async () => {
-    // 🔴 THIS ONE WAS FOUND BY THE REVIEWER, NOT BY ME. Four call sites of the
-    // identical shape drop-a-return; round 1 guarded three and left this one
-    // bare — the reviewer's mutant MB deleted its `return result` and all 900
-    // tests stayed green. Exactly the class of silent drop the commit message
-    // names as the original bug, reproduced inside the fix for it.
+  it("member detail: an online member exposes Change, not the retired relocate control", async () => {
     __setMockMemberOnline(SEED_WARDEN, true);
-    __setMockRelocationPending(true);
+    __setMockMemberOnline("mira", true);
     window.location.hash = "#office/member/mira";
     const { findByText, findByTestId, queryByTestId } = renderOffice();
     await findByText("Mira");
-
-    const relocate = (await findByTestId("mp-relocate")) as HTMLButtonElement;
-    await waitFor(() => expect(relocate.disabled).toBe(false));
-    fireEvent.click(relocate);
-
-    await waitFor(() =>
-      expect(queryByTestId("mp-relocate-undispatched")).not.toBeNull(),
-    );
-  });
-
-  it("member detail: a relocate that LANDED shows no notice (negative control)", async () => {
-    __setMockMemberOnline(SEED_WARDEN, true);
-    __setMockRelocationPending(false);
-    window.location.hash = "#office/member/mira";
-    const { findByText, findByTestId, queryByTestId } = renderOffice();
-    await findByText("Mira");
-
-    const relocate = (await findByTestId("mp-relocate")) as HTMLButtonElement;
-    await waitFor(() => expect(relocate.disabled).toBe(false));
-    fireEvent.click(relocate);
-
-    await waitFor(() => expect(queryByTestId("mp-relocate")).not.toBeNull());
-    expect(queryByTestId("mp-relocate-undispatched")).toBeNull();
+    expect(await findByTestId("mp-change")).toBeTruthy();
+    expect(queryByTestId("mp-relocate")).toBeNull();
   });
 
   it("chat room: the in-place ⚡喚醒 surfaces the notice too (separate handler)", async () => {
