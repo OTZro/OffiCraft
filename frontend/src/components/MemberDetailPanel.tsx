@@ -192,6 +192,34 @@ export function MemberDetailPanel({
   const { machines } = useMachines();
   const onlineMachines = machines.filter((m) => m.online);
   const firstOnlineMachineId = onlineMachines[0]?.machineId;
+  // What the machine <select> may offer: every online machine, PLUS the member's
+  // own pin when that machine is not online right now — labelled 離線, exactly as
+  // MachinePicker does it. Without that entry the select's value would match no
+  // option (blank row, pin still submitted), and dropping the pin instead would
+  // move a member the owner deliberately parked. Both are "displayed ≠
+  // submitted"; this is the only shape that is neither.
+  const pinnedOfflineMachine =
+    member.desiredMachineId &&
+    !onlineMachines.some((m) => m.machineId === member.desiredMachineId)
+      ? (machines.find((m) => m.machineId === member.desiredMachineId) ?? {
+          machineId: member.desiredMachineId,
+          displayName: member.desiredMachineId,
+        })
+      : undefined;
+  const settingsMachineOptions = [
+    ...onlineMachines.map((m) => ({
+      machineId: m.machineId,
+      label: m.displayName,
+    })),
+    ...(pinnedOfflineMachine
+      ? [
+          {
+            machineId: pinnedOfflineMachine.machineId,
+            label: msg.machineOfflineOption(pinnedOfflineMachine.displayName),
+          },
+        ]
+      : []),
+  ];
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsRuntime, setSettingsRuntime] = useState<"claude" | "codex">(
     member.runtime || "claude",
@@ -251,19 +279,17 @@ export function MemberDetailPanel({
     setSettingsRuntime(member.runtime || "claude");
     setSettingsModel(member.model);
     setSettingsEffort(member.effort);
-    // 🔴 The select lists ONLINE machines only, so a member pinned to a machine
-    // that is currently offline must NOT seed its pin (independent review r3):
-    // a <select> whose value matches no option renders blank while the submit
-    // sends the pin — displayed ≠ submitted, which MachinePicker forbids in so
-    // many words. Fall back to the first online machine: what the owner reads is
-    // then what a confirm actually sends.
-    const pinIsOnline = onlineMachines.some(
-      (m) => m.machineId === member.desiredMachineId,
-    );
+    // 🔴 Seed the pin VERBATIM, and make sure the option list can hold it (see
+    // `settingsMachineOptions`). The first cut of this fixed "displayed ≠
+    // submitted" by falling back to the first ONLINE machine — which made
+    // `machineChanged` unconditionally true for anyone pinned to a machine that
+    // is merely asleep, so opening the dialog to edit a MODEL silently re-pinned
+    // the member somewhere else. That is the same defect in the other direction,
+    // and it lands hardest on "pin it to my sleeping laptop and save the model
+    // for later". MachinePicker's rule is the right one: keep the bound machine
+    // in the list, labelled offline, and never invent a different pin.
     setSettingsMachineId(
-      (pinIsOnline ? member.desiredMachineId : "") ||
-        onlineMachines[0]?.machineId ||
-        "",
+      member.desiredMachineId || onlineMachines[0]?.machineId || "",
     );
     setSettingsError("");
     setSettingsOpen(true);
@@ -304,10 +330,12 @@ export function MemberDetailPanel({
    * member: editing model/effort without waking it, and re-pinning it for its
    * next wake. Neither removal was asked for — the spec describes what the WAKE
    * button does, it never says the settings become unreachable while a member is
-   * off. Offered only when the member is not online, because a live member's
-   * settings change is exactly what 更改 (graceful wind-down) is for. */
+   * off. Offered only when the member is NOT AWAKENED (offline/stopped): a live
+   * member's settings change is what 更改 (graceful wind-down) is for, and for a
+   * `waking` member the confirm path reaches activate, so promising "saved, not
+   * started" there would be a lie. */
   async function saveSettingsOnly() {
-    if (!settingsMachineId) return;
+    if (!settingsMachineId || awake) return;
     const launchChanged =
       settingsRuntime !== (member.runtime || "claude") ||
       settingsModel.trim() !== member.model ||
@@ -870,9 +898,9 @@ export function MemberDetailPanel({
                 value={settingsMachineId}
                 onChange={(e) => setSettingsMachineId(e.target.value)}
               >
-                {onlineMachines.map((machine) => (
+                {settingsMachineOptions.map((machine) => (
                   <option key={machine.machineId} value={machine.machineId}>
-                    {machine.displayName}
+                    {machine.label}
                   </option>
                 ))}
               </select>
@@ -881,7 +909,7 @@ export function MemberDetailPanel({
               <button type="button" className="btn btn--ghost" disabled={settingsBusy} onClick={() => setSettingsOpen(false)}>
                 {t.common.cancel}
               </button>
-              {!online && (
+              {!awake && (
                 <button
                   type="button"
                   className="btn btn--ghost"

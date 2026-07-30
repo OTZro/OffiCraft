@@ -533,6 +533,33 @@ describe("relocate notice self-heals", () => {
     );
   });
 
+  it("does not wipe a live verdict just because the dialog was opened and cancelled", async () => {
+    // 🔴 Pins WHERE the fresh-attempt clear lives (independent review r2). Moving
+    // it into `openSettings` keeps the sibling test green while making
+    // open-then-cancel erase a verdict about a move that is still outstanding —
+    // the notice would vanish with nothing having changed.
+    const onRelocate = vi.fn(
+      async (): Promise<MemberRelocateResult> => ({ relocationPending: true }),
+    );
+    const { getByTestId, queryByTestId, rerender } = render(
+      panel(pinnedHome(), onRelocate),
+    );
+    await relocateInto(getByTestId);
+    rerender(panel(mkAwake({ desiredMachineId: "mach-b", machine: "mach-a" }), onRelocate));
+    await waitFor(() =>
+      expect(queryByTestId("mp-relocate-undispatched")).not.toBeNull(),
+    );
+
+    fireEvent.click(getByTestId("mp-change"));
+    const cancel = document.querySelector<HTMLButtonElement>(
+      ".machine-picker__actions .btn--ghost",
+    )!;
+    fireEvent.click(cancel);
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(queryByTestId("mp-relocate-undispatched")).not.toBeNull();
+  });
+
   it("closes the settings dialog when the owner switches members", async () => {
     // 🔴 The dialog is PREFILLED from the member it was opened for, and neither
     // caller passes a `key`, so switching members is a prop change: an open

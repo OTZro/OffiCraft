@@ -26,7 +26,11 @@ const machine = (id: string, displayName: string): MachineView => ({
   claudeSubReadable: null,
 });
 const listMachines = vi.fn<() => Promise<MachineView[]>>(() =>
-  Promise.resolve([machine("mach-a", "Machine A"), machine("mach-b", "Machine B")]),
+  Promise.resolve([
+    machine("mach-a", "Machine A"),
+    machine("mach-b", "Machine B"),
+    { ...machine("mach-sleep", "Sleeping Mac"), online: false },
+  ]),
 );
 // Order of the two wire calls a single Change can make. The relocate restarts
 // the agent, so the settings PATCH has to be stored BEFORE it goes out.
@@ -199,6 +203,66 @@ describe("MemberDetailPanel — unified wake/change settings", () => {
     fireEvent.click(getByTestId("mp-change"));
     await waitFor(() => expect(getByTestId("me-runtime-select")).toBeTruthy());
     expect(queryByTestId("mp-settings-save-only")).toBeNull();
+  });
+
+  it("keeps a pin on an OFFLINE machine instead of silently re-pinning it", async () => {
+    // 🔴 Regression guard (independent review r2). The select lists online
+    // machines, so an earlier fix seeded the first ONLINE machine whenever the
+    // pin was asleep — which made `machineChanged` true the moment the dialog
+    // opened, and editing only the MODEL moved the member off the machine the
+    // owner had parked it on. Both halves are asserted: the pin stays selectable
+    // (labelled offline) AND a model-only edit dispatches no relocate.
+    const { getByTestId, onRelocate } = renderPanel({
+      status: "online",
+      lifecycle: "online",
+      machine: "mach-sleep",
+      desiredMachineId: "mach-sleep",
+    });
+    fireEvent.click(getByTestId("mp-change"));
+    const dialog = getByTestId("me-runtime-select").closest("[role=dialog]")!;
+    const select = dialog.querySelector("select.machine-picker__select") as HTMLSelectElement;
+    await waitFor(() => expect(select.options).toHaveLength(3));
+    expect(select.value).toBe("mach-sleep");
+    expect(
+      Array.from(select.options).find((o) => o.value === "mach-sleep")?.textContent,
+    ).toContain("Sleeping Mac");
+
+    fireEvent.change(getByTestId("me-model-input"), { target: { value: "haiku" } });
+    fireEvent.click(dialog.querySelector(".btn--accent")!);
+
+    await waitFor(() => expect(wireCalls).toEqual(["patch"]));
+    expect(onRelocate).not.toHaveBeenCalled();
+  });
+
+  it("hides the save-without-waking action for a WAKING member too (its confirm activates)", async () => {
+    const { getByTestId, queryByTestId } = renderPanel({
+      status: "waking",
+      lifecycle: "waking",
+      machine: "mach-a",
+    });
+    await waitFor(() =>
+      expect((getByTestId("member-action-spawn") as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(getByTestId("member-action-spawn"));
+    await waitFor(() => expect(getByTestId("me-runtime-select")).toBeTruthy());
+    expect(queryByTestId("mp-settings-save-only")).toBeNull();
+    // …and a waking member is not offered 更改 either: its confirm is an
+    // activate, and 更改 promises a graceful handover (guard gap MED-5).
+    expect(queryByTestId("mp-change")).toBeNull();
+  });
+
+  it("does not print a transition hint for a member nobody can observe", async () => {
+    // Guard gap MED-4: the `awake &&` gate on the hint had no test. Without it an
+    // offline member shows 「→ 要換到 X」 beside a dashed 機器 cell — the desired
+    // -state leak the presence contract forbids.
+    const { queryByTestId } = renderPanel({
+      status: "offline",
+      lifecycle: "offline",
+      machine: "mach-a",
+      desiredMachineId: "mach-b",
+    });
+    await waitFor(() => expect(listMachines).toHaveBeenCalled());
+    expect(queryByTestId("mp-machine-transition")).toBeNull();
   });
 
   it("stores the launch settings BEFORE the relocate that restarts the agent", async () => {
