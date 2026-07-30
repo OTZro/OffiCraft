@@ -52,6 +52,9 @@
 #     on every land, locally).
 #   * gitleaks — the content-level secret scan stays local by design. The
 #     tracked-file path denylist runs below because it is safe on Linux.
+#   * bin/tests/run.sh — its 16 Linux assertion failures come from BSD/GNU
+#     `mktemp -t` semantics, SIGPIPE, and macOS-shaped install.sh fixtures.
+#     It remains a local gate until those platform assumptions are made portable.
 #   * e2e_test — real-machine end-to-end; it drives launchd/tmux on a real fleet
 #     host. Local, pre-release, by design.
 #   * the committed-prebuilt parity dryrun — it only applies when a local
@@ -70,6 +73,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+source "$ROOT/bin/lib/tracked-path-denylist.sh"
 
 echo "[ci-cloud] start $(date -u '+%Y-%m-%dT%H:%M:%SZ') — $(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
 
@@ -150,19 +154,7 @@ echo "[ci-cloud]   vitest run (frontend unit suite)"
 # (2/4) HYGIENE — tracked-file path denylist
 # ===========================================================================
 echo "[ci-cloud] (2/4) hygiene — tracked-file path denylist"
-denylist_hits="$(
-  git ls-files -z | tr '\0' '\n' | grep -iE \
-    -e '(^|/)scratchpad/' \
-    -e '\.bak$' \
-    -e '\.pem$' \
-    -e '\.key$' \
-    -e '\.secret$' \
-    -e '(^|/)oc\.toml$' \
-    -e '(^|/)oc\.lock$' \
-    | { grep -vE '\.py$' || true; }
-  git ls-files -z | tr '\0' '\n' | grep -iE '_token' | grep -vE '\.py$' || true
-)"
-denylist_hits="$(printf '%s\n' "$denylist_hits" | grep -vE '^$' | sort -u || true)"
+denylist_hits="$(tracked_path_denylist_hits)"
 if [[ -n "$denylist_hits" ]]; then
   echo "[ci-cloud] FAIL — forbidden files are tracked (path denylist):"
   printf '  %s\n' $denylist_hits

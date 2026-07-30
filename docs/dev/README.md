@@ -70,7 +70,7 @@ CI 跑在本地、`bin/ci.sh` 是 land 權威，從第一個非零步驟就 fail
 
 ⚠️ **workflow 裡的 go / node 版本釘選是承重的、不是衛生習慣**：一致性檢查斷言的是「重生的位元組與 committed 完全相同」，runner 的 toolchain 一旦浮動超前開發機，這一類就會在「碼完全沒問題」的情況下變紅。
 
-**留在本機的**：Playwright CT（真瀏覽器版面守衛；macOS↔Linux 的字型與光柵化差異會讓紅燈的意思從「版面壞了」變成「runner 字型不同」）、gitleaks（內容級機密掃描）、`e2e_test` 的真機端到端測試（要真的 fleet host）。tracked-file path denylist 與 `e2e_test` 的 hermetic isolation-guard 已在雲端流程執行。整條雲端流程不用任何 secret，所以 fork PR 也能跑完整。
+**留在本機的**：`bin/tests/run.sh`（Linux 上目前有 16 條 assertion 失敗；根因是 BSD/GNU `mktemp -t` 語意、SIGPIPE 與 macOS 形狀的 `install.sh` fixture，尚未移植）、Playwright CT（真瀏覽器版面守衛；macOS↔Linux 的字型與光柵化差異會讓紅燈的意思從「版面壞了」變成「runner 字型不同」）、gitleaks（內容級機密掃描）、`e2e_test` 的真機端到端測試（要真的 fleet host）。tracked-file path denylist 與 `e2e_test` 的 hermetic isolation-guard 已在雲端流程執行。整條雲端流程不用任何 secret，所以 fork PR 也能跑完整。
 
 **Go 測試一律 `-count=1`（T-bedc）**：CI step 1e 是 `go test -count=1 ./...`，`-count=1` 是「不吃 go 的測試結果快取」，**不可省**。省掉的後果是實測過的——log 裡出現 `ok  ocwarden  (cached)`，那格綠燈認證的是一次**根本沒執行**的跑。兩個獨立理由：(a) 快取 key 只涵蓋 package 的**輸入**，不涵蓋測試真正碰的世界（port、時鐘、launchd、host fleet、staged embed assets 的**效果**），所以今天會紅的 package 照樣報 ok；(b) 它**結構性地藏 flake**——一個 suite 只在「第一個改到它輸入的 commit」上跑過一次，間歇性失敗於是被攤平到近乎零觀測機率，`[ci] all green` 變成在講快取而不是在講碼。可執行形式是 `bin/tests/go-test-nocache-guard.sh`（CI step 0b 派出）：它以**命令位置解析**（不是 substring grep——那會匹配到 ci.sh 與守衛自己的說明文字）掃全 repo 的 shell 腳本，任何 `go test` 呼叫點少了 `-count=1` 就紅。注意 `go build` / `go vet` 的快取**刻意不管**：那是對編譯本身做 content-addressed，命中等價於未命中；只有**測試結果**快取會宣稱「行為被觀察過」而其實沒有。
 
