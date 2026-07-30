@@ -695,6 +695,7 @@ export const en: Dict = {
     initialPrompt: "Initial prompt",
     promptLoading: "Loading…",
     promptError: "Failed to load initial prompt",
+    promptRetry: "Retry",
     lessons: "Past lessons",
     expandableHint: "applies on next wake / refocus",
     lessonsLoading: "Loading…",

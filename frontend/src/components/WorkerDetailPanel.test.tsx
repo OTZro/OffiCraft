@@ -17,6 +17,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { render, fireEvent, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { api } from "../api";
+import { zh } from "../i18n/locales/zh";
 import { ApiError } from "../api/errors";
 import { OfficePage } from "./OfficePage";
 import {
@@ -769,5 +770,68 @@ describe("WorkerDetailPanel — initial-prompt preview (T-ba6b)", () => {
     // The honesty caveat is present (目前版本重組, 非派工當下逐字版).
     const note = await findByTestId("worker-detail-prompt-note");
     expect(note.textContent ?? "").toContain("非派工當下");
+  });
+
+  // T-7526: the shared card's load lifecycle. `vm.prompt.fetch` is an inline
+  // arrow OfficePage rebuilds on every render, so a repaint mid-read used to
+  // cancel the read AND leave a "loaded" stamp behind — the card sat on
+  // 「載入中…」 for good. The member half of this proof lives in
+  // MemberDetailPanel.initial-prompt.test.tsx.
+  it("still shows the prompt when the panel repaints while the read is in flight", async () => {
+    __injectMockTask(mkTask({ id: "t-1" }));
+    __injectMockOutsourceWorker(mkWorker({ id: "ow-1", taskId: "t-1" }));
+    let land: (v: string) => void = () => {};
+    const boot = vi
+      .spyOn(api, "getWorkerBootContext")
+      .mockImplementation(
+        () => new Promise<string>((resolve) => (land = resolve)),
+      );
+
+    const { findByTestId, rerender } = renderOfficeAt("#office/worker/ow-1");
+    fireEvent.click(await findByTestId("worker-detail-prompt-toggle"));
+    // Positive control: the read really is under way, so the repaint below has
+    // something to interrupt.
+    expect(
+      (await findByTestId("worker-detail-prompt-body")).textContent,
+    ).toContain(zh.mp.promptLoading);
+
+    // A repaint — an ordinary SSE delta is enough in the running app.
+    rerender(
+      <I18nProvider>
+        <OfficePage />
+      </I18nProvider>,
+    );
+    land("外包啟動指示");
+
+    await waitFor(async () =>
+      expect(
+        (await findByTestId("worker-detail-prompt-body")).textContent,
+      ).toContain("外包啟動指示"),
+    );
+    // A repaint is not a reason to re-read either — the ONE read that was
+    // already under way is the one that lands.
+    expect(boot).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed read shows the error with a retry that actually re-reads", async () => {
+    __injectMockTask(mkTask({ id: "t-1" }));
+    __injectMockOutsourceWorker(mkWorker({ id: "ow-1", taskId: "t-1" }));
+    const boot = vi
+      .spyOn(api, "getWorkerBootContext")
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce("外包啟動指示");
+
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+    fireEvent.click(await findByTestId("worker-detail-prompt-toggle"));
+    const err = await findByTestId("worker-detail-prompt-error");
+    expect(err.textContent).toContain(zh.mp.promptError);
+
+    fireEvent.click(await findByTestId("worker-detail-prompt-retry"));
+    await waitFor(async () =>
+      expect(
+        (await findByTestId("worker-detail-prompt-body")).textContent,
+      ).toContain("外包啟動指示"),
+    );
+    expect(boot).toHaveBeenCalledTimes(2);
   });
 });

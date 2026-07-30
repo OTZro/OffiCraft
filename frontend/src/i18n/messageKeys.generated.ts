@@ -264,6 +264,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "mp.modelReportedTag",
   "mp.promptError",
   "mp.promptLoading",
+  "mp.promptRetry",
   "mp.refocus",
   "mp.refocusDone",
   "mp.refocusError",

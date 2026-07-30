@@ -338,6 +338,26 @@ owner/agent 自由文字會帶**不可斷的長 token**(長 URL、40-hex sha、�
   這樣一路綠著,卻沒攔到 owner 手機上的 bug。見
   `stories/TaskArtifactsOverflowStory.tsx`。
 
+## lazy fetch:別把 inline arrow 放進 effect deps(T-7526)
+`AgentDetailPanel` 的初始 PROMPT 卡曾經**永遠停在「載入中…」**,而且關掉重開救不回來。
+兩個成因缺一不可,修的時候也必須兩個都修:
+- **不穩定的 deps**:`vm.prompt.fetch` 在兩個 wrapper 都是**每次 render 重建的 inline
+  arrow**(正職是 `async () => (await api.getBootstrap(member.role)).context`,外包是
+  OfficePage 重建的 `onFetchBootContext`)。它一進 deps,**任何一次重繪**(一個 SSE
+  delta 就夠)就把 effect 拆掉,cleanup 的 `alive = false` 讓 `.then` 與 `.catch`
+  **兩條都寫不了 state**。⇒ 讀取函式走 **ref**,deps 只留真正該重讀的東西(換一個
+  agent = `cacheKey`);重繪不是重讀的理由,也不是取消的理由。
+- **在「開始讀」時就蓋已載入章**:`loadedKeyRef` 原本在 fetch **啟動**時就寫,所以
+  effect 重跑一律早退——收合再展開也早退。⇒ **只在文字真的到手時蓋章**,in-flight 另
+  用一個 ref 擋重複發射;過期與否**比對 key**,不用會被重繪翻掉的 `alive` flag。
+- **失敗要說失敗**:`.catch` 必須落到錯誤態 + 一顆重試鈕(`*-prompt-error` /
+  `*-prompt-retry`),停在「載入中…」會被讀成「還在跑」而且無處可按。
+⚠️ **測試要「讀到一半觸發重繪」才看得到這個病**:render 一次就斷言的測試對它完全是盲的
+(它就是這樣上線這麼久沒被抓到)。而 `rerender` **必須傳一個新的 element**——傳同一個
+element 物件 React 會 bail out、根本不重繪,測試會對著沒修的碼變綠。
+護欄:`MemberDetailPanel.initial-prompt.test.tsx` + `WorkerDetailPanel.test.tsx`
+的 initial-prompt 段(同一段程式,兩個 wrapper 各自證明)。
+
 ## verify(root §13)
 純 FE UI 改動:headless build → `preview:4173` → Playwright,CI 綠即 land、**不上 prod 驗**。公開 URL https://officraft.hardcoretech.link/。`Monitor.tsx` 的 mock 部分無 telemetry backend(純前端 mock)。
 

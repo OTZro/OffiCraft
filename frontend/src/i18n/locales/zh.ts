@@ -768,6 +768,7 @@ export const zh = {
     initialPrompt: "初始 PROMPT",
     promptLoading: "載入中…",
     promptError: "讀取初始 PROMPT 失敗",
+    promptRetry: "重試",
     lessons: "過往學習經驗",
     expandableHint: "下次喚醒／聚焦生效",
     lessonsLoading: "載入中…",

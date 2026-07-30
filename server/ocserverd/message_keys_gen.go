@@ -265,6 +265,7 @@ var messageKeys = map[string]bool{
 	"mp.modelReportedTag":                      true,
 	"mp.promptError":                           true,
 	"mp.promptLoading":                         true,
+	"mp.promptRetry":                           true,
 	"mp.refocus":                               true,
 	"mp.refocusDone":                           true,
 	"mp.refocusError":                          true,
