@@ -28,7 +28,15 @@ const machine = (id: string, displayName: string): MachineView => ({
 const listMachines = vi.fn<() => Promise<MachineView[]>>(() =>
   Promise.resolve([machine("mach-a", "Machine A"), machine("mach-b", "Machine B")]),
 );
-const relocateMember = vi.fn(async (_id: string, _machineId: string) => {});
+// Order of the two wire calls a single Change can make. The relocate restarts
+// the agent, so the settings PATCH has to be stored BEFORE it goes out.
+const wireCalls: string[] = [];
+const relocateMember = vi.fn(async (_id: string, _machineId: string) => {
+  wireCalls.push("relocate");
+});
+const patchMember = vi.fn(async (_id: string, _patch: object) => {
+  wireCalls.push("patch");
+});
 
 vi.mock("../api", () => ({
   api: {
@@ -36,7 +44,7 @@ vi.mock("../api", () => ({
     relocateMember: (id: string, machineId: string) =>
       relocateMember(id, machineId),
     activateMember: vi.fn(),
-    patchMember: vi.fn(),
+    patchMember: (id: string, patch: object) => patchMember(id, patch),
     getBootstrap: () =>
       Promise.resolve({ role: "assistant", name: "", taskType: "", context: "" }),
     listWebhooks: () => Promise.resolve([]),
@@ -93,6 +101,8 @@ function renderPanel(over: Partial<Member> = {}) {
 beforeEach(() => {
   listMachines.mockClear();
   relocateMember.mockClear();
+  patchMember.mockClear();
+  wireCalls.length = 0;
   Element.prototype.scrollIntoView = vi.fn();
 });
 
@@ -151,5 +161,27 @@ describe("MemberDetailPanel — unified wake/change settings", () => {
 
     await waitFor(() => expect(onRelocate).toHaveBeenCalledWith("mach-b"));
     expect(onActivate).not.toHaveBeenCalled();
+  });
+
+  it("stores the launch settings BEFORE the relocate that restarts the agent", async () => {
+    const { getByTestId } = renderPanel({
+      status: "online",
+      lifecycle: "online",
+      machine: "mach-a",
+    });
+    fireEvent.click(getByTestId("mp-change"));
+    const dialog = getByTestId("me-runtime-select").closest("[role=dialog]")!;
+    const select = dialog.querySelector("select.machine-picker__select") as HTMLSelectElement;
+    await waitFor(() => expect(select.options).toHaveLength(2));
+    // Both halves of the one settings block change, so both wire calls fire.
+    fireEvent.change(getByTestId("me-model-input"), { target: { value: "sonnet" } });
+    fireEvent.change(select, { target: { value: "mach-b" } });
+    fireEvent.click(dialog.querySelector(".btn--accent")!);
+
+    await waitFor(() => expect(wireCalls).toEqual(["patch", "relocate"]));
+    expect(patchMember).toHaveBeenCalledWith(
+      "mira",
+      expect.objectContaining({ model: "sonnet" }),
+    );
   });
 });

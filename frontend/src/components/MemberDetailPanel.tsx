@@ -258,18 +258,24 @@ export function MemberDetailPanel({
     setSettingsBusy(true);
     setSettingsError("");
     try {
-      // Only a confirmed online session is gracefully relocated. A `waking`
-      // member's Spawn action is the force-revive path and must reach activate.
-      if (online && machineChanged) {
-        const result = await onRelocate?.(settingsMachineId);
-        if (result?.relocationPending) setRelocateUndispatched(true);
-      }
+      // 🔴 D: the PATCH goes FIRST. This is one owner edit of one settings
+      // block, and the relocate is what actually restarts the agent on the new
+      // machine — so the launch intents must already be stored when it fires,
+      // or the freshly spawned session comes up on the OLD model/effort and the
+      // owner's edit only takes effect one handover later. Reversing these two
+      // lines is exactly that bug.
       if (launchChanged) {
         await api.patchMember(member.id, {
           runtime: settingsRuntime,
           model: settingsModel.trim(),
           effort: settingsEffort,
         });
+      }
+      // Only a confirmed online session is gracefully relocated. A `waking`
+      // member's Spawn action is the force-revive path and must reach activate.
+      if (online && machineChanged) {
+        const result = await onRelocate?.(settingsMachineId);
+        if (result?.relocationPending) setRelocateUndispatched(true);
       }
       if (!online) {
         await runActivate(settingsMachineId);
