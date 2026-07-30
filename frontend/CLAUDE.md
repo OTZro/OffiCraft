@@ -338,6 +338,20 @@ owner/agent 自由文字會帶**不可斷的長 token**(長 URL、40-hex sha、�
   這樣一路綠著,卻沒攔到 owner 手機上的 bug。見
   `stories/TaskArtifactsOverflowStory.tsx`。
 
+## 用了哪份 CSS 的 class,就要自己 import 那份 CSS(T-7526)
+`machine-picker.css` 全 repo 只有 `MachinePicker.tsx` 一個 importer,而它只透過
+`WorkerDetailPanel → useRelocateMachine → MachinePicker` 進入 module graph。**兩個詳情面板
+都用 `.machine-picker*` 畫自己的設定 dialog,卻都沒有 import 那份 CSS** —— 一直在搭那條
+transitive import 的便車。外包面板不再驅動那個 hook 的那一刻,最後一個 production importer
+跟著消失,**兩邊的 dialog 全部變成無樣式**:沒有置中的框、沒有暗底,機器欄變成瀏覽器原生
+`<select>`。**連沒被那次改動碰到的正職面板也一起壞了。**
+🔴 **沒有任何自動檢查抓得到**:jsdom 不算 CSS,所以整套 vitest 全綠;`tsc` 看不出 class
+字串和 stylesheet 的關係;唯一render 過 machine picker 的 CT guard 又在同一張票裡退場。
+**它是靠人看截圖發現的。**
+⇒ 護欄 `src/components/styleOwnership.test.ts`:某個元件的 markup 用到 `<block>__*`,
+就必須自己 `import "./<block>.css"`。**樣式的所有權跟著 class 名字走,不跟著 transitive
+import 的偶然走。**
+
 ## lazy fetch:別把 inline arrow 放進 effect deps(T-7526)
 `AgentDetailPanel` 的初始 PROMPT 卡曾經**永遠停在「載入中…」**,而且關掉重開救不回來。
 兩個成因缺一不可,修的時候也必須兩個都修:

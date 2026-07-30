@@ -36,6 +36,13 @@ import {
   TrashIcon,
 } from "./icons";
 import { DispatchAlert } from "./DispatchAlert";
+// 🔴 This panel renders its settings dialog with the .machine-picker* classes,
+// so it must import their stylesheet ITSELF (T-7526). Both panels used to
+// free-ride on WorkerDetailPanel → useRelocateMachine → MachinePicker →
+// machine-picker.css; when the worker panel stopped driving that hook, the
+// last production importer went with it and BOTH dialogs rendered unstyled.
+// Style ownership follows the class names, not a transitive accident.
+import "./machine-picker.css";
 import "./member-detail.css";
 
 interface MemberDetailPanelProps {

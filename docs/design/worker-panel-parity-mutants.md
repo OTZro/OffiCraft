@@ -68,3 +68,17 @@ deps 沒變，cleanup 根本不會執行。**兩個成因是耦合的，mutant �
 
 ⚠️ **A1 的第一版是 `if false {`，Go 編譯不過**（`cancellingWake` 變成未使用）。
 **編譯失敗不是「紅」** —— 它什麼都沒證明，得換成 `_ = cancellingWake` 重跑。
+
+## 第四批:樣式所有權(截圖階段才發現的回歸)
+
+**這一條不是測試抓到的,是看截圖看到的** —— dialog 整個沒有樣式。成因:`machine-picker.css`
+的最後一個 production importer 隨著外包面板不再驅動 `useRelocateMachine` 而消失,**兩邊**的
+設定 dialog 一起變裸,包含這次根本沒動到的正職面板。
+
+| # | Mutant | 紅了哪條 |
+|---|---|---|
+| S1 | 拿掉正職面板自己的 `import "./machine-picker.css"`(＝原始回歸的形狀) | `component style ownership > every component using .machine-picker__* imports ./machine-picker.css`,而且斷言直接把 `MemberDetailPanel.tsx` 的檔名列出來 |
+
+⚠️ **這類回歸對整套既有檢查是完全隱形的**:jsdom 不算 CSS、`tsc` 不知道 class 字串屬於哪份
+stylesheet、而唯一會 render machine picker 的 CT guard 在同一張票裡退場了。護欄因此改成
+**原始碼層級**的不變式,而不是靠瀏覽器量測。
