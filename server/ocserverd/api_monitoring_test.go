@@ -522,6 +522,50 @@ func TestGetMonitoring_SessionAccountNeverServesRawKey(t *testing.T) {
 	}
 }
 
+// TestGetMonitoring_SessionEffortRoundTrips pins the reported effort all the way
+// from ingest to the session row. The whole path (parse, store, serve) was
+// already built and had NO test at all, so when the Claude reporter turned out
+// never to have sent the key, nothing anywhere went red — the monitoring page
+// simply showed a blank effort for every session, which is exactly what an
+// honestly-not-yet-reported session looks like. The second case pins that blank:
+// an unreported effort must stay empty, never fall back to the roster's
+// owner-intent value.
+func TestGetMonitoring_SessionEffortRoundTrips(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	reported := fullMember("kyle")
+	reported.Effort = "medium"
+	silent := fullMember("mira")
+	silent.Effort = "high"
+	for _, m := range []Member{reported, silent} {
+		if err := s.dal.PutMember(m); err != nil {
+			t.Fatalf("seed member: %v", err)
+		}
+	}
+	rec := doIngestTelemetry(s, "kyle", "m-abc123", `{"runtime":"claude","effort":"medium"}`)
+	if rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	// mira reports too, but without effort: a live session that simply never
+	// carried the field must NOT borrow its configured "high".
+	if rec := doIngestTelemetry(s, "mira", "m-abc123", `{"runtime":"claude"}`); rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+
+	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	got := map[string]any{}
+	for _, raw := range d["sessions"].([]any) {
+		row := raw.(map[string]any)
+		got[row["id"].(string)] = row["effort"]
+	}
+	if got["kyle"] != "medium" {
+		t.Errorf("reported effort = %v, want medium", got["kyle"])
+	}
+	if got["mira"] != "" {
+		t.Errorf("unreported effort = %v, want \"\" (never the roster's high)", got["mira"])
+	}
+}
+
 func TestGetMonitoring_WorkerReportedLabelResolvesSessionAccount(t *testing.T) {
 	// T-ba6b (recon §6-4/§6-6): the label overlay scans the WHOLE telemetry
 	// snapshot, so an account_label reported by an OUTSOURCE-WORKER session

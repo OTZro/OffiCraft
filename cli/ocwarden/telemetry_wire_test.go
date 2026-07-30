@@ -438,8 +438,9 @@ func TestRunLogsRefusedTelemetry(t *testing.T) {
 // TestCodexTelemetryPayloadsMatchFrozenSchema is the sentinel for the OTHER
 // runtime: the Codex sidecar reports through the same endpoint and must stay
 // unaffected by the Claude-side fix. Its keys are asserted against the same
-// frozen schema, including the runtime-specific ones (codex reports `effort` and
-// its own camelCase token names; claude reports neither).
+// frozen schema, including the runtime-specific ones (its own camelCase token
+// names; `effort` is no longer runtime-specific — T-e12c gave the Claude reporter
+// the same key, which it had been omitting since the field was declared).
 func TestCodexTelemetryPayloadsMatchFrozenSchema(t *testing.T) {
 	declared := frozenTelemetrySchema(t)
 	cases := map[string]map[string]any{

@@ -118,6 +118,14 @@ type telemetryBody struct {
 	// server must see absent, not "").
 	AccountLabel string `json:"account_label,omitempty"`
 	Machine      string `json:"machine,omitempty"`
+	// Effort is the session's OWN reasoning effort, read RAW from OC_EFFORT — the
+	// same value the status line renders, but never its abbreviation (the wire
+	// carries "medium", the status line shows "med"). The key is already declared
+	// on the frozen AgentTelemetryIngestDTO, so this is not a wire change; the
+	// codex sidecar has been sending it all along and the monitoring session DTO
+	// has always served it. Omitted when unset: an empty string would turn "not
+	// reported" into a reported blank, which is exactly the failure this fixes.
+	Effort string `json:"effort,omitempty"`
 }
 
 // cmdContextReport implements `ocagent context-report`. `now` is the current unix
@@ -164,6 +172,7 @@ func cmdContextReport(client httpClient, cfg Config, env func(string) string, no
 				Tokens:       tokens,
 				Account:      readClaudeAccount(env),
 				AccountLabel: readClaudeAccountLabel(env),
+				Effort:       effortValue(env),
 			}
 			if machine := localHost(env); machine != "" {
 				body.Machine = machine
@@ -330,11 +339,20 @@ func modelEffortSegment(obj map[string]any, env func(string) string) string {
 	return out
 }
 
+// effortValue reads OC_EFFORT (the owner's launch intent, plumbed by ocwarden
+// spawn as an extra env pair), trimmed and VERBATIM. This is the wire value; the
+// status line's abbreviation lives in effortLabel and must never reach the POST
+// (the owner's monitoring fold would then read "med" for a session launched at
+// "medium", i.e. a value no launch flag ever names).
+func effortValue(env func(string) string) string {
+	return strings.TrimSpace(env("OC_EFFORT"))
+}
+
 // effortLabel reads OC_EFFORT (the owner's launch intent, plumbed by ocwarden
 // spawn as an extra env pair), trimmed. "medium" abbreviates to "med" to match
 // the owner's target layout; other values pass through verbatim. Empty ⇒ "".
 func effortLabel(env func(string) string) string {
-	e := strings.TrimSpace(env("OC_EFFORT"))
+	e := effortValue(env)
 	if e == "medium" {
 		return "med"
 	}
