@@ -315,7 +315,14 @@ export function MemberDetailPanel({
         const firedFor = member.id;
         const result = await onRelocate?.(settingsMachineId);
         if (shownMemberIdRef.current !== firedFor) return;
-        if (result?.relocationPending) setRelocateUndispatched(true);
+        // Alert only on the FAILURE half (T-927a). `relocationPending` is also
+        // true when the server deliberately deferred the move behind a graceful
+        // wind-down — nothing was dispatched, but nothing went wrong either, and
+        // the pending destination is already visible next to the 機器 cell. An
+        // alert there taught the owner to ignore the alert.
+        if (result?.relocationPending && !result.relocationDeferred) {
+          setRelocateUndispatched(true);
+        }
       }
       if (!online) {
         await runActivate(settingsMachineId);

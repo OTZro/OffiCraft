@@ -443,7 +443,12 @@ export const httpApi: Api = {
         body: { machine_id: machineId },
       }),
     );
-    return { relocationPending: wire.relocation_pending === true };
+    // …and `relocation_deferred` says which of pending's two causes this is: a
+    // deliberately deferred move (wind-down open) must not be alerted on.
+    return {
+      relocationPending: wire.relocation_pending === true,
+      relocationDeferred: wire.relocation_deferred === true,
+    };
   },
 
   async deactivateMember(id: string): Promise<void> {

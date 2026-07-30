@@ -758,7 +758,10 @@ type MemberDTO struct {
 	Presence     *string  `json:"presence,omitempty"`
 	RefocusSince *float64 `json:"refocus_since,omitempty"`
 
-	// RelocationPending Set true ONLY on the relocate response when the recycle STOP/START that moves a LIVE member could not be delivered to the warden (old/new machine unreachable) — the owner-pinned move is scheduled but has not landed yet; the reconcile cadence retries. Absent/null on every other member read, so the cockpit shows “move scheduled / not yet landed” instead of a silent success (T-8655 additive-optional).
+	// RelocationDeferred Set true on the relocate response when the move was DELIBERATELY deferred: the member is live with uncollected state, so the server opened a graceful wind-down window instead of dispatching now. Nothing has been sent YET BY DESIGN — the move lands when the agent finishes its wrap-up round. This is the companion that disambiguates ``relocation_pending``, which is true for BOTH this case and a genuinely undeliverable move: a consumer must NOT raise a "nothing was dispatched" alert while this field is true. Absent/null on every other member read, and never set on any response other than relocate (T-927a additive-optional).
+	RelocationDeferred *bool `json:"relocation_deferred,omitempty"`
+
+	// RelocationPending Set true ONLY on the relocate response when the owner-pinned move is scheduled but has not landed yet. TWO causes, which this field does not distinguish: (a) the recycle STOP/START that moves a LIVE member could not be delivered to the warden (old/new machine unreachable) — the reconcile cadence retries; (b) since T-b6d9, a graceful wind-down window was opened, so nothing has been dispatched yet BY DESIGN. Read ``relocation_deferred`` to tell (b) apart from (a) — only (a) is a failure worth alerting on. Absent/null on every other member read, so the cockpit shows “move scheduled / not yet landed” instead of a silent success (T-8655 additive-optional).
 	RelocationPending *bool   `json:"relocation_pending,omitempty"`
 	RoleKey           *string `json:"role_key,omitempty"`
 	RoleName          *string `json:"role_name,omitempty"`

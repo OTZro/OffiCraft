@@ -31,6 +31,7 @@ import {
   __resetMock,
   __setMockActivationPending,
   __setMockMemberOnline,
+  __setMockRelocationDeferred,
   __setMockRelocationPending,
 } from "../api/mock";
 
@@ -63,11 +64,15 @@ const SELF_MACHINE_NAME = "伺服器這一台";
 /** Drive a live member's 更改 → pick the other machine → confirm, and wait for
  * the relocate verdict to settle. `pending` stages whether the mock reports the
  * relocate as undispatched. */
-async function relocateThroughChange(pending: boolean) {
+async function relocateThroughChange(
+  pending: boolean,
+  opts: { deferred?: boolean } = {},
+) {
   __setMockMemberOnline(SEED_WARDEN, true);
   __setMockMemberOnline(SELF_MACHINE, true);
   __setMockMemberOnline("mira", true);
   __setMockRelocationPending(pending);
+  __setMockRelocationDeferred(opts.deferred === true);
   window.location.hash = "#office/member/mira";
   const utils = renderOffice();
   await utils.findByText("Mira");
@@ -87,9 +92,15 @@ async function relocateThroughChange(pending: boolean) {
   fireEvent.change(select, { target: { value: SELF_MACHINE } });
   await confirmSettings();
 
-  if (pending) {
+  // The notice is expected for the FAILURE half only; a deferred move settles
+  // into the transition indicator instead, so the caller asserts that itself.
+  if (pending && opts.deferred !== true) {
     await waitFor(() =>
       expect(utils.queryByTestId("mp-relocate-undispatched")).not.toBeNull(),
+    );
+  } else {
+    await waitFor(() =>
+      expect(document.querySelector(".machine-picker")).toBeNull(),
     );
   }
   return utils;
@@ -190,6 +201,24 @@ describe("OfficePage · an undispatched wake reaches the UI (T-7fa1)", () => {
     // Positive control: the relocate really went out and re-pinned the member —
     // without this, a submit that silently did nothing would satisfy the
     // assertion above just as well.
+    expect((await findByTestId("mp-machine-transition")).textContent).toContain(
+      SELF_MACHINE_NAME,
+    );
+  });
+
+  it("member detail: a DEFERRED move is not alarmed about — the wind-down is normal", async () => {
+    // 🔴 T-927a, the other direction of the same wire pair. `relocation_pending`
+    // is also true when the server deliberately held the move back behind a
+    // graceful wind-down: nothing was dispatched, but nothing went wrong. Raising
+    // the "nothing was sent" alert there fires it on ROUTINE operation, and an
+    // alert that cries on normal days is one the owner learns to ignore — which
+    // costs more than having no alert at all.
+    const { queryByTestId, findByTestId } = await relocateThroughChange(true, {
+      deferred: true,
+    });
+    expect(queryByTestId("mp-relocate-undispatched")).toBeNull();
+    // Positive control: the move really was requested and the owner can still
+    // see where it is going — the pending destination, not an alarm.
     expect((await findByTestId("mp-machine-transition")).textContent).toContain(
       SELF_MACHINE_NAME,
     );

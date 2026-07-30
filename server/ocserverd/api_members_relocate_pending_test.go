@@ -189,3 +189,97 @@ func TestRelocateMember_OfflineRelocateIsNotPending(t *testing.T) {
 			*body.RelocationPending, rec.Body.String())
 	}
 }
+
+// T-927a: `relocation_pending` is true for TWO unrelated situations, and the
+// cockpit alerts on only one of them. So the wire has to say WHICH — otherwise
+// the perfectly ordinary wind-down case raises a "nothing was dispatched" alarm,
+// and an alarm that fires on normal operation is one everybody learns to ignore.
+//
+// The pair below is the discriminating one: same field pair, both causes, and
+// each direction is asserted, because "deferred is always true" and "deferred is
+// never true" are both mutants that a single test would let through.
+func TestRelocateMember_WindDownIsDeferred(t *testing.T) {
+	s := newReconcileTestServer(t)
+	putWarden(t, s, "mach-old")
+	putWarden(t, s, "mach-new")
+
+	mover := testAgent("m-grace2")
+	mover.DesiredState = DesiredStateOnline
+	mover.DesiredMachineID = "mach-old"
+	putTestMember(t, s, mover)
+	connectOnline(t, s, "mach-old")
+	connectOnline(t, s, "mach-new")
+	connectOnlineMachine(t, s, "m-grace2", "mach-old")
+
+	rec := httptest.NewRecorder()
+	s.HandleRelocateMemberApiMembersMemberIdRelocatePost(rec,
+		taskReq(t, "POST", "/api/members/m-grace2/relocate",
+			map[string]any{"machine_id": "mach-new"}, wireOwnerID, "owner"), "m-grace2")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("relocate: %d %s", rec.Code, rec.Body.String())
+	}
+	// Positive control that this is really the wind-down arm: the epoch is
+	// stamped and nothing was sent to the old machine.
+	if got, _ := s.dal.GetMember("m-grace2"); got == nil || got.RefocusSince <= 0.0 {
+		t.Fatalf("expected an open wind-down (refocus epoch stamped): %+v", got)
+	}
+	if f := drainFrames(t, s, "mach-old"); len(f) != 0 {
+		t.Fatalf("the wind-down dispatches nothing on the click: %+v", f)
+	}
+	var body struct {
+		RelocationPending  *bool `json:"relocation_pending"`
+		RelocationDeferred *bool `json:"relocation_deferred"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode relocate response: %v", err)
+	}
+	if body.RelocationPending == nil || !*body.RelocationPending {
+		t.Fatalf("the wind-down is still 'not landed', so pending stays true: %v (%s)",
+			body.RelocationPending, rec.Body.String())
+	}
+	if body.RelocationDeferred == nil || !*body.RelocationDeferred {
+		t.Fatalf("a deliberately deferred move must say so: relocation_deferred=%v (%s)",
+			body.RelocationDeferred, rec.Body.String())
+	}
+}
+
+// …and the other direction: a move that genuinely could not be delivered is NOT
+// deferred, so the field must be ABSENT (omitempty) and the cockpit must still
+// alert. Without this half, hard-wiring deferred=true would silence the alert
+// everywhere and the test above would stay green.
+func TestRelocateMember_UndeliverableIsNotDeferred(t *testing.T) {
+	s := newReconcileTestServer(t)
+	putWarden(t, s, "mach-new")
+
+	mover := testAgent("m-stuck2")
+	mover.DesiredState = DesiredStateOnline
+	mover.DesiredMachineID = "mach-old"
+	mover.RefocusSince = 1000.0 // this epoch's wind-down is already collected, so
+	mover.StoppedSince = 1001.0 // the verb takes effect immediately (no new window)
+	putTestMember(t, s, mover)
+	connectOnlineMachine(t, s, "m-stuck2", "mach-old")
+	// The OLD machine's warden is deliberately NOT connected.
+
+	rec := httptest.NewRecorder()
+	s.HandleRelocateMemberApiMembersMemberIdRelocatePost(rec,
+		taskReq(t, "POST", "/api/members/m-stuck2/relocate",
+			map[string]any{"machine_id": "mach-new"}, wireOwnerID, "owner"), "m-stuck2")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("relocate: %d %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		RelocationPending  *bool `json:"relocation_pending"`
+		RelocationDeferred *bool `json:"relocation_deferred"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode relocate response: %v", err)
+	}
+	if body.RelocationPending == nil || !*body.RelocationPending {
+		t.Fatalf("an undeliverable relocation STOP still surfaces pending: %v (%s)",
+			body.RelocationPending, rec.Body.String())
+	}
+	if body.RelocationDeferred != nil {
+		t.Fatalf("an undeliverable move is a failure, not a deferral: relocation_deferred=%v (%s)",
+			*body.RelocationDeferred, rec.Body.String())
+	}
+}

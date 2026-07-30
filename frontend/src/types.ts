@@ -152,6 +152,15 @@ export interface MemberActivateResult {
  */
 export interface MemberRelocateResult {
   relocationPending: boolean;
+  /**
+   * WHY the move has not landed (wire `relocation_deferred`, T-927a). True means
+   * the server deliberately held it back: the member is live with uncollected
+   * state, so a graceful wind-down window was opened and the move lands with the
+   * agent's wrap-up. `relocationPending` is true for that case AND for a move no
+   * warden would accept, so a "nothing was dispatched" alert must be suppressed
+   * while this is true — the alert is for the failure, not for the design.
+   */
+  relocationDeferred?: boolean;
 }
 
 /**

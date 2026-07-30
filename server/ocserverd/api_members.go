@@ -566,6 +566,15 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 		pending := true
 		dto.RelocationPending = &pending
 	}
+	// …and WHICH of the two it is (T-927a). The wind-down case is a deliberate
+	// deferral, not a delivery failure, so the caller must be able to hold back
+	// the "nothing was dispatched" alert for it. Reported separately rather than
+	// by narrowing relocation_pending: that field's meaning is on the frozen
+	// wire and existing readers depend on it covering both.
+	if windDown {
+		deferred := true
+		dto.RelocationDeferred = &deferred
+	}
 	writeJSON(w, http.StatusOK, dto)
 }
 
