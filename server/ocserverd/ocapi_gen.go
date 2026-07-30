@@ -122,6 +122,9 @@ type AgentTelemetryDTO struct {
 	SelfUpdate *map[string]interface{}          `json:"self_update,omitempty"`
 	Tokens     *map[string]int                  `json:"tokens,omitempty"`
 	Ts         float64                          `json:"ts"`
+
+	// WardenShape Echo of the stored warden shape verdict (see ``AgentTelemetryIngestDTO.warden_shape``); null when never reported.
+	WardenShape *string `json:"warden_shape,omitempty"`
 }
 
 // AgentTelemetryIngestDTO Inbound warden/agent telemetry report (“POST /api/monitoring/telemetry“).
@@ -169,6 +172,9 @@ type AgentTelemetryIngestDTO struct {
 	Runtimes   *map[string]interface{} `json:"runtimes,omitempty"`
 	SelfUpdate interface{}             `json:"self_update,omitempty"`
 	Tokens     interface{}             `json:"tokens,omitempty"`
+
+	// WardenShape Warden heartbeats only — which SHAPE this warden is actually running under, read from the PARENT process's executable path (the only signal that cannot lie: an anchor file existing on disk does NOT mean launchd is executing it). ``anchor`` = the parent exe is the deployed anchor binary; ``legacy`` = the parent is launchd itself, i.e. launchd execs the swappable ocwarden directly; ``unknown`` = the warden could not read its parent. OMITTED by every warden build older than the anchor-cutover release — absent is NOT a synonym for ``unknown`` and the server must never infer one from the other: absent means 'this machine has not received the new build yet', ``unknown`` means 'the new build ran and could not tell'. Permissive like the other scalars here: a value outside the three states is a flat 400, never a 422.
+	WardenShape interface{} `json:"warden_shape,omitempty"`
 }
 
 // AliasDTO The response to an account/machine display-name PATCH (AMD step1). “id“ is
@@ -566,6 +572,9 @@ type MachineDTO struct {
 
 	// RuntimeCapabilities Provider-neutral runtime readiness keyed by ``claude``/``codex``. Empty for an older warden that has not reported capability probes. Codex placement requires an explicit installed=true and logged_in!=false report. During rolling upgrades only, a completely absent capability map preserves legacy Claude placement; once a map is reported, Claude also requires installed=true and logged_in!=false.
 	RuntimeCapabilities *map[string]RuntimeCapabilityDTO `json:"runtime_capabilities,omitempty"`
+
+	// WardenShape Which shape this machine's warden is actually running under, taken verbatim from its heartbeat (``anchor`` | ``legacy`` | ``unknown``; see ``AgentTelemetryIngestDTO.warden_shape``). null = this warden build does not report a shape at all, i.e. it has not received the anchor-cutover release yet — DISTINCT from ``unknown`` (new build ran, could not read its parent). The server never infers one from the other and never derives the verdict itself: unlike ``bin_status`` this is reported, not computed, because only the reporting process can see its own parent.
+	WardenShape *string `json:"warden_shape,omitempty"`
 }
 
 // MachineDeleteResultDTO The DELETE result (“DELETE /api/machines/{member_id}“, T-IUD).
@@ -906,6 +915,9 @@ type MonitoringMachineDTO struct {
 
 	// RuntimeCapabilitiesTs Epoch seconds when ``runtime_capabilities`` was probed; null = never reported. Same per-sample stamp as ``hardware_ts`` (T-b36a).
 	RuntimeCapabilitiesTs *float64 `json:"runtime_capabilities_ts,omitempty"`
+
+	// WardenShape Same reported warden shape verdict the machine registry row carries (``anchor`` | ``legacy`` | ``unknown``; null = warden too old to report one) — see ``MachineDTO.warden_shape``.
+	WardenShape *string `json:"warden_shape,omitempty"`
 }
 
 // MonitoringSessionDTO One live AI session. “context_pct“ comes from the in-memory gauge;
