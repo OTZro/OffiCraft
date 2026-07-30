@@ -1,15 +1,16 @@
 // AttachmentStrip — the ONE renderer for STORED attachments (served refs with
 // a download url), extracted from ChatArea.renderAttachment /
 // ReplyCardBody.ReplyAnswerAttachments (T-5e8a) so the reply card's new
-// question-side attachments never become a third copy-paste. Image → inline
-// thumbnail (clickable when the caller wires `onOpenImage` — the caller owns
-// the Lightbox state); non-image → a download chip under the blob's stored
-// filename. Class knobs keep each call site's EXISTING markup/classes
-// byte-identical — this is a move, not a redesign.
+// question-side attachments never become a third copy-paste. Class knobs keep
+// each call site's EXISTING markup/classes byte-identical.
 //
-// Lightbox — the full-size image overlay (click backdrop / × / Esc closes),
-// extracted from ChatArea so every card face (等我回覆頁 / 聊天室內卡 /
-// 任務卡上的卡) gets the same 點開預覽 the chat thread has.
+// EVERY item — image thumbnail and non-image chip alike — opens the SAME
+// MarkdownPreviewOverlay. The strip owns that state; callers do not pass an
+// image-open callback and cannot route images anywhere else. Before T-f014 the
+// image branch nominally deferred to a caller-owned Lightbox via an
+// `onOpenImage` prop; the prop had already stopped being read, so five call
+// sites were passing a handler into a component that ignored it and mounting a
+// second overlay that could never open.
 
 import { Fragment, useEffect, useState } from "react";
 import type { ReactNode } from "react";
@@ -63,10 +64,6 @@ export function AttachmentStrip({
   /** Lets a containing dialog defer its own Escape handling while this strip's
    * shared popup is open. */
   onPreviewChange?: (open: boolean) => void;
-  /** Makes image thumbnails clickable (role=button + keyboard): the caller
-   * receives the token-authed src and opens its own Lightbox. Absent ⇒ a
-   * static thumbnail (the answered-card strip's existing behaviour). */
-  onOpenImage?: (src: string) => void;
   /** Per-item extra node rendered after the image/chip (ChatArea's hover
    * 複製分享連結 button). */
   renderExtra?: (att: ChatAttachmentView) => ReactNode;
@@ -107,20 +104,18 @@ export function AttachmentStrip({
     ) : null;
     if (att.isImage) {
       const src = authedAttachmentUrl(att.url);
-      const clickable = true
-        ? {
-            role: "button",
-            tabIndex: 0,
-            "aria-label": t.chat.viewImageLabel,
-            onClick: () => setPreview(att),
-            onKeyDown: (e: React.KeyboardEvent) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                setPreview(att);
-              }
-            },
+      const clickable = {
+        role: "button",
+        tabIndex: 0,
+        "aria-label": t.chat.viewImageLabel,
+        onClick: () => setPreview(att),
+        onKeyDown: (e: React.KeyboardEvent) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setPreview(att);
           }
-        : {};
+        },
+      };
       return <Fragment key={itemClassName ? undefined : att.id}>
         <img
           key={itemClassName ? undefined : att.id}
@@ -186,52 +181,5 @@ export function AttachmentStrip({
     </div>
     {preview && <MarkdownPreviewOverlay title={preview.filename || t.chat.downloadAttachment} url={preview.url} attachmentId={preview.backingAttachmentId ?? preview.id} mime={preview.mime} onClose={() => setPreview(null)} />}
     </>
-  );
-}
-
-/** The full-size image overlay: click the backdrop, the × button or Esc to
- * close; a click ON the image does not dismiss. The caller holds the open
- * state (`src` null ⇒ render nothing). */
-export function Lightbox({
-  src,
-  onClose,
-}: {
-  src: string | null;
-  onClose: () => void;
-}) {
-  const { t } = useI18n();
-  // Esc closes — bound only while open.
-  useEffect(() => {
-    if (!src) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [src, onClose]);
-  if (!src) return null;
-  return (
-    <div
-      className="chat__lightbox"
-      role="dialog"
-      aria-modal="true"
-      aria-label={t.chat.imageAlt}
-      onClick={onClose}
-    >
-      <button
-        type="button"
-        className="chat__lightbox-close"
-        aria-label={t.chat.closeImageLabel}
-        onClick={onClose}
-      >
-        ×
-      </button>
-      <img
-        className="chat__lightbox-image"
-        src={src}
-        alt={t.chat.imageAlt}
-        onClick={(e) => e.stopPropagation()}
-      />
-    </div>
   );
 }

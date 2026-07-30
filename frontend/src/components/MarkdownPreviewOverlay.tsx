@@ -10,21 +10,34 @@
 // serve url + display title. Shared by the chat attachment strip AND the task
 // artifact popover — one preview surface, not two.
 //
-// TWO SOURCE MODES (one surface, still not two):
-//   - `url`    — a stored blob, fetched as text. It carries a REQUIRED
-//                `attachmentId`, so the header keeps both blob actions: the
-//                copyable share link and the 下載 link.
-//   - `source` — text the caller ALREADY holds (a chat message body). Nothing to
-//                fetch, nothing to download and nothing to share: the bytes
-//                never were a file, so both links are absent rather than
-//                pointing at a fabricated blob url. Single newlines are HARD
-//                breaks here, matching the chat bubble the text came from.
+// THREE SOURCE MODES (one surface, still not three):
+//   - `url`      — a stored blob, fetched as text (or rendered as an image when
+//                  its mime says so). It carries a REQUIRED `attachmentId`, so
+//                  the header keeps both blob actions: the copyable share link
+//                  and the 下載 link.
+//   - `source`   — text the caller ALREADY holds (a chat message body). Nothing
+//                  to fetch, nothing to download and nothing to share: the bytes
+//                  never were a file, so both links are absent rather than
+//                  pointing at a fabricated blob url. Single newlines are HARD
+//                  breaks here, matching the chat bubble the text came from.
+//   - `imageSrc` — image bytes the caller ALREADY holds as a `data:` URI: a
+//                  STAGED composer attachment that has not been sent yet
+//                  (T-f014, retiring the separate Lightbox overlay). It is a
+//                  real file, so 下載 is honest — but it has no blob id yet, so
+//                  there is nothing for a share link to point at and none is
+//                  rendered.
+//
+// T-f014 — this is now the ONLY full-size image surface in the cockpit. The old
+// Lightbox overlay and its stylesheet block are gone; every image (stored or staged
+// composer preview) opens here and therefore gets the same shell: filename in
+// the header, 下載, close, Esc/backdrop dismissal and the zoom controls.
 
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n";
 import { authedAttachmentUrl } from "../api/http";
 import { copyAttachmentShareLink } from "../lib/shareLink";
 import { Markdown } from "./Markdown";
+import "./md-preview.css";
 import {
   CheckIcon,
   CloseIcon,
@@ -50,6 +63,7 @@ type MarkdownPreviewOverlayProps = {
        * original markdown-file contract for existing callers. */
       mime?: string;
       source?: never;
+      imageSrc?: never;
     }
   | {
       /** Markdown text the caller already holds — rendered as-is, no fetch. */
@@ -58,6 +72,17 @@ type MarkdownPreviewOverlayProps = {
       /** No blob, so no share link: there is nothing for a link to point at. */
       attachmentId?: never;
       mime?: never;
+      imageSrc?: never;
+    }
+  | {
+      /** Image bytes the caller already holds (`data:` URI) — a staged composer
+       * attachment. Downloadable (the bytes ARE the file) but not shareable:
+       * nothing has been uploaded, so no blob id exists to mint a link from. */
+      imageSrc: string;
+      url?: never;
+      attachmentId?: never;
+      mime?: never;
+      source?: never;
     }
 );
 
@@ -66,6 +91,7 @@ export function MarkdownPreviewOverlay({
   url,
   attachmentId,
   mime,
+  imageSrc,
   source: inlineSource,
   onClose,
 }: MarkdownPreviewOverlayProps) {
@@ -76,12 +102,21 @@ export function MarkdownPreviewOverlay({
   const [copyFailed, setCopyFailed] = useState(false);
   // The text to render. An inline source is authoritative and synchronous — it
   // never passes through the loading/error states, which only describe a fetch.
-  const image = mime?.startsWith("image/") ?? false;
+  const image = imageSrc !== undefined || (mime?.startsWith("image/") ?? false);
   const previewableText = isPreviewableTextAttachment(mime ?? "text/markdown", title);
   const unavailable = url !== undefined && !image && !previewableText;
   const plainText = previewableText && !isMarkdownAttachment(mime ?? "text/markdown", title);
   const source = inlineSource ?? fetched;
   const [zoom, setZoom] = useState(1);
+  // The bytes the header's 下載 link points at. A stored blob needs the ?token=
+  // gate; a staged data: URI already IS the bytes. An inline text `source` has
+  // neither — nothing is fabricated for it.
+  const downloadHref =
+    imageSrc ?? (url !== undefined ? authedAttachmentUrl(url) : undefined);
+  // The <img> src, for whichever of the two image modes is in play. Same value
+  // as the download href by construction — the preview and the download must
+  // never be able to point at different bytes.
+  const imageBytes = image ? downloadHref : undefined;
 
   // Fetch the markdown text once (the authed blob URL — same ?token= gate the
   // download/thumbnail paths use). A non-ok response / network error surfaces
@@ -108,7 +143,7 @@ export function MarkdownPreviewOverlay({
     };
   }, [url, image, unavailable]);
 
-  useEffect(() => setZoom(1), [url]);
+  useEffect(() => setZoom(1), [url, imageSrc]);
 
   async function onCopyShareLink() {
     // Only a stored blob has an id to share; the button below is not rendered
@@ -150,51 +185,50 @@ export function MarkdownPreviewOverlay({
             {title}
           </span>
           <div className="md-preview__actions">
-            {/* Share + download are BLOB actions: both exist only in `url`
-             * mode. An inline source is not a file — it has no id to share and
-             * no bytes to download, so neither button is fabricated for it. */}
-            {url !== undefined && (
-              <>
-                <button
-                  type="button"
-                  className="md-preview__download md-preview__share"
-                  aria-label={
-                    copyFailed
-                      ? t.chat.shareLinkCopyFailed
-                      : copied
-                        ? t.chat.shareLinkCopied
-                        : t.chat.copyShareLink
-                  }
-                  title={
-                    copyFailed
-                      ? t.chat.shareLinkCopyFailed
-                      : copied
-                        ? t.chat.shareLinkCopied
-                        : t.chat.copyShareLink
-                  }
-                  onClick={() => void onCopyShareLink()}
-                >
-                  {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
-                  {copyFailed
-                    ? <span className="md-preview__action-label">{t.chat.shareLinkCopyFailed}</span>
+            {/* Share needs a STORED blob id. Download only needs bytes, so it
+             * also serves a staged `imageSrc`. An inline text source has
+             * neither — nothing is fabricated for it. */}
+            {attachmentId !== undefined && (
+              <button
+                type="button"
+                className="md-preview__download md-preview__share"
+                aria-label={
+                  copyFailed
+                    ? t.chat.shareLinkCopyFailed
                     : copied
-                      ? <span className="md-preview__action-label">{t.chat.shareLinkCopied}</span>
-                      : <span className="md-preview__action-label">{t.chat.copyShareLink}</span>}
-                </button>
-                {/* Download — the SECOND action, distinct from preview: the
-                 * authed blob URL with a download attribute (server forces the
-                 * bytes). */}
-                <a
-                  className="md-preview__download"
-                  href={authedAttachmentUrl(url)}
-                  download={title || undefined}
-                  aria-label={t.chat.mdPreview.download}
-                  title={t.chat.mdPreview.download}
-                >
-                  <DownloadIcon size={14} />
-                  <span className="md-preview__action-label">{t.chat.mdPreview.download}</span>
-                </a>
-              </>
+                      ? t.chat.shareLinkCopied
+                      : t.chat.copyShareLink
+                }
+                title={
+                  copyFailed
+                    ? t.chat.shareLinkCopyFailed
+                    : copied
+                      ? t.chat.shareLinkCopied
+                      : t.chat.copyShareLink
+                }
+                onClick={() => void onCopyShareLink()}
+              >
+                {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+                {copyFailed
+                  ? <span className="md-preview__action-label">{t.chat.shareLinkCopyFailed}</span>
+                  : copied
+                    ? <span className="md-preview__action-label">{t.chat.shareLinkCopied}</span>
+                    : <span className="md-preview__action-label">{t.chat.copyShareLink}</span>}
+              </button>
+            )}
+            {/* Download — the SECOND action, distinct from preview: the authed
+             * blob URL (or the staged data: URI) with a download attribute. */}
+            {downloadHref !== undefined && (
+              <a
+                className="md-preview__download"
+                href={downloadHref}
+                download={title || undefined}
+                aria-label={t.chat.mdPreview.download}
+                title={t.chat.mdPreview.download}
+              >
+                <DownloadIcon size={14} />
+                <span className="md-preview__action-label">{t.chat.mdPreview.download}</span>
+              </a>
             )}
             <button
               type="button"
@@ -207,22 +241,43 @@ export function MarkdownPreviewOverlay({
           </div>
         </div>
         <div className="md-preview__body">
-          {image && url !== undefined ? (
+          {image && imageBytes !== undefined ? (
             <div className="md-preview__image-wrap">
               <img
                 className="md-preview__image"
-                src={authedAttachmentUrl(url)}
-                alt={title}
+                src={imageBytes}
+                /* The filename IS the alt text: it is the only thing known
+                 * about these bytes, and a generic 「圖片」 would tell a screen
+                 * reader nothing that the surrounding dialog did not. */
+                alt={title || t.chat.imageAlt}
                 style={{ transform: `scale(${zoom})` }}
                 onWheel={(e) => {
                   e.preventDefault();
                   setZoom((current) => Math.min(4, Math.max(0.5, current + (e.deltaY < 0 ? 0.25 : -0.25))));
                 }}
               />
-              <div className="md-preview__zoom" aria-label="image zoom controls">
-                <button type="button" onClick={() => setZoom((value) => Math.max(0.5, value - 0.25))}>−</button>
+              {/* The zoom cluster is a labelled group, and each control names
+               * itself: the bare −/+ glyphs announce as "minus"/"plus" with no
+               * hint of what they act on, and the hard-coded English label the
+               * first version carried was invisible to the wording overlay. */}
+              <div className="md-preview__zoom" role="group" aria-label={t.chat.mdPreview.zoomControls}>
+                <button
+                  type="button"
+                  aria-label={t.chat.mdPreview.zoomOut}
+                  title={t.chat.mdPreview.zoomOut}
+                  onClick={() => setZoom((value) => Math.max(0.5, value - 0.25))}
+                >
+                  −
+                </button>
                 <span>{Math.round(zoom * 100)}%</span>
-                <button type="button" onClick={() => setZoom((value) => Math.min(4, value + 0.25))}>+</button>
+                <button
+                  type="button"
+                  aria-label={t.chat.mdPreview.zoomIn}
+                  title={t.chat.mdPreview.zoomIn}
+                  onClick={() => setZoom((value) => Math.min(4, value + 0.25))}
+                >
+                  +
+                </button>
               </div>
             </div>
           ) : unavailable ? (

@@ -23,7 +23,6 @@ import { useI18n } from "../i18n";
 import type { ReplyCard, ReplyCardAnswerInput } from "../api/adapter";
 import { api } from "../api";
 import { useHashRoute } from "../lib/hashRoute";
-import { Lightbox } from "./AttachmentStrip";
 import { Markdown } from "./Markdown";
 import {
   ReplyCardAnsweredBody,
@@ -55,9 +54,6 @@ export function TaskReplyCard({
   const [card, setCard] = useState<ReplyCard | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  // A question attachment opened full-size (null = closed) — the shared
-  // Lightbox below.
-  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   // Answered-card collapse (owner 2026-07-14): an answered card shows as a
   // one-line summary unless expanded — or answered right here (doAnswer flips
   // this true). Default collapsed.
@@ -271,7 +267,7 @@ export function TaskReplyCard({
       {/* QUESTION-side attachments (T-5e8a): thumbnails/chips under the body,
        * on every status — click an image to preview in the lightbox. */}
       {card && (
-        <ReplyCardQuestionAttachments card={card} onOpenImage={setLightboxSrc} />
+        <ReplyCardQuestionAttachments card={card} />
       )}
 
       {loadError && (
@@ -287,7 +283,6 @@ export function TaskReplyCard({
         ) : (
           <ReplyCardAnsweredBody card={card} onReanswer={doReanswer} />
         ))}
-      <Lightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
     </div>
   );
 }

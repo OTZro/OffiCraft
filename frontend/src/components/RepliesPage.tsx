@@ -42,7 +42,6 @@ import { ReplyCardAvatarButton } from "./ReplyCardAvatarButton";
 import { ChevronRightIcon } from "./icons";
 import { ConfirmModal } from "./ConfirmModal";
 import { Markdown } from "./Markdown";
-import { Lightbox } from "./AttachmentStrip";
 import {
   ReplyCardAnsweredBody,
   ReplyCardExpiredBody,
@@ -115,9 +114,6 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
   // collapsed — expanding pulls them (loadHandled); the header 「· N」 comes
   // from the counts.
   const [handledOpen, setHandledOpen] = useState(false);
-  // A question attachment opened full-size (null = closed) — ONE page-level
-  // shared Lightbox serves every card on the page.
-  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
   // A notification tap carries the card id in the hash.  Waiting cards are
   // already loaded; a handled one needs its collapsed pane fetched and opened
@@ -378,7 +374,7 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
         )}
         {/* QUESTION-side attachments (T-5e8a): thumbnails/chips under the
          * body — click an image to preview in the page's lightbox. */}
-        <ReplyCardQuestionAttachments card={card} onOpenImage={setLightboxSrc} />
+        <ReplyCardQuestionAttachments card={card} />
         {renderTaskRef(card)}
 
         <ReplyCardWaitingBody
@@ -419,7 +415,7 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
         <Markdown source={card.summary} className="reply-card__summary doc-md" />
         {/* The question's attachments outlive its settling — same strip on a
          * handled card (answered/expired). */}
-        <ReplyCardQuestionAttachments card={card} onOpenImage={setLightboxSrc} />
+        <ReplyCardQuestionAttachments card={card} />
         {renderTaskRef(card)}
 
         {expired ? (
@@ -506,8 +502,6 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
         />
       )}
 
-      {/* Full-size preview of a question attachment — the shared Lightbox. */}
-      <Lightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
     </div>
   );
 }

@@ -1,11 +1,12 @@
 // Chat image rendering — the gated attachment blob is fetched by a bare <img>,
 // which cannot send an Authorization header. The src must therefore carry the
 // owner JWT as a ?token= query param (mirroring the SSE downlink), else the
-// server answers 401 and the image renders broken. Clicking an image opens a
-// full-size lightbox that Esc / backdrop dismisses.
+// server answers 401 and the image renders broken. Clicking an image — stored
+// in the thread or still staged in the composer — opens the ONE shared preview
+// overlay that Esc / backdrop dismisses.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { ChatArea } from "./ChatArea";
 import type { Member } from "../types";
@@ -119,5 +120,34 @@ describe("ChatArea image rendering", () => {
 
     fireEvent.keyDown(window, { key: "Escape" });
     expect(container.querySelector(".md-preview")).toBeNull();
+  });
+
+  // T-f014: the staged composer thumbnail was the LAST surface still opening
+  // the separate `<Lightbox>` overlay (a bare backdrop + ×). It now opens the
+  // same shell every other attachment does — but the bytes are still in the
+  // composer, so there is no blob id and no share link may be offered.
+  it("opens a staged composer image in the same shell, without a share link", async () => {
+    const { container } = renderChat();
+    const input = container.querySelector("input.chat__file-input") as HTMLInputElement;
+    const file = new File(["png-bytes"], "pasted.png", { type: "image/png" });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    const thumb = await waitFor(() => {
+      const el = container.querySelector("img.chat__preview-image");
+      expect(el).toBeTruthy();
+      return el as HTMLImageElement;
+    });
+    const staged = thumb.getAttribute("src")!;
+    expect(staged.startsWith("data:image/png;")).toBe(true);
+
+    fireEvent.click(thumb);
+    const popup = container.querySelector(".md-preview");
+    expect(popup, "the staged thumbnail must open the SHARED overlay").not.toBeNull();
+    const full = popup!.querySelector<HTMLImageElement>("img.md-preview__image");
+    expect(full, "the shared overlay must render the staged bytes as an image").not.toBeNull();
+    expect(full!.getAttribute("src")).toBe(staged);
+    expect(popup!.querySelector(".md-preview__title")?.textContent).toContain("pasted.png");
+    expect(popup!.querySelector("button.md-preview__share")).toBeNull();
+    expect(container.querySelector(".chat__lightbox")).toBeNull();
   });
 });

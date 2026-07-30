@@ -1,0 +1,153 @@
+/* md-preview.css — the shared full-view attachment overlay (`.md-preview*`).
+ *
+ * Extracted from office.css by T-f014. It is the cockpit's ONE modal preview
+ * shell: markdown/plain-text blobs, images (stored AND staged) and the
+ * 放大閱讀 message reader all render through it, from surfaces that have
+ * nothing else to do with the chat sheet (the task artifact popover, the
+ * replies page, the task card). Owning its own sheet is what lets
+ * MarkdownPreviewOverlay.tsx import the styles it draws with instead of
+ * free-riding on whoever happens to import office.css — see
+ * styleOwnership.test.ts for the bug that rule exists for.
+ *
+ * A centered modal panel over a backdrop, with a header (title + share +
+ * 下載 + close) and a scrolling body. */
+.md-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: color-mix(in srgb, var(--color-backdrop) 75%, transparent);
+}
+.md-preview__panel {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  max-height: 100%;
+  border: 1px solid color-mix(in srgb, var(--color-overlay) 8%, transparent);
+  border-radius: 14px;
+  background: var(--color-card);
+  box-shadow: 0 20px 48px color-mix(in srgb, var(--color-shadow) 50%, transparent);
+  overflow: hidden;
+}
+.md-preview__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-overlay) 6%, transparent);
+}
+.md-preview__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--color-text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.md-preview__title svg {
+  flex: none;
+}
+.md-preview__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.md-preview__download {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--color-overlay) 10%, transparent);
+  background: color-mix(in srgb, var(--color-overlay) 3%, transparent);
+  color: var(--color-text);
+  text-decoration: none;
+  font-size: 12.5px;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+.md-preview__download:hover {
+  color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
+}
+@media (max-width: 600px) {
+  /* Mobile keeps the header on one line: title remains the readable priority,
+   * while labelled icon controls retain their accessible names + tooltips. */
+  .md-preview__header {
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .md-preview__actions {
+    gap: 4px;
+  }
+  .md-preview__download {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    justify-content: center;
+  }
+  .md-preview__action-label {
+    display: none;
+  }
+}
+.md-preview__share {
+  cursor: pointer;
+  font-family: inherit;
+}
+.md-preview__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.md-preview__close:hover {
+  color: var(--color-text-strong);
+  background: color-mix(in srgb, var(--color-overlay) 6%, transparent);
+}
+.md-preview__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 20px;
+}
+.md-preview__status {
+  display: grid;
+  place-items: center;
+  padding: 40px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+.md-preview__image-wrap { position: relative; display: grid; place-items: center; min-height: 360px; overflow: auto; background: var(--color-backdrop); }
+.md-preview__image { max-width: 100%; max-height: 70vh; object-fit: contain; transition: transform .12s ease; transform-origin: center; }
+.md-preview__zoom { position: absolute; bottom: 12px; display: inline-flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, var(--color-backdrop) 75%, transparent); color: var(--color-on-backdrop); }
+.md-preview__zoom button { width: 28px; height: 28px; border: 0; border-radius: 6px; cursor: pointer; }
+.md-preview__text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* The rendered body wears the shared `.doc-md` document skin (settings.css) so
+ * this overlay reads like every other markdown surface. Only the skin's own
+ * page padding is handed back: `.md-preview__body` already owns the gutters,
+ * and a leading <h1>/<p> margin on top of them reads as an off-centre panel. */
+.md-preview__md.doc-md {
+  padding: 0;
+}
+.md-preview__md.doc-md > :first-child {
+  margin-top: 0;
+}
+.md-preview__md.doc-md > :last-child {
+  margin-bottom: 0;
+}

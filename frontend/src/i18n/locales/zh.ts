@@ -628,7 +628,6 @@ export const zh = {
     pastedImageAlt: "貼上的截圖",
     imageAlt: "聊天圖片",
     viewImageLabel: "檢視原圖",
-    closeImageLabel: "關閉圖片",
     attachLabel: "附加檔案",
     attachTooLarge: (maxMb: number) => `檔案太大（上限 ${maxMb} MB）`,
     // 件數上限防呆:一則訊息最多帶 N 個附件(超過的不入列)。
@@ -688,6 +687,9 @@ export const zh = {
       loading: "載入預覽中…",
       error: "無法載入預覽",
       unavailable: "此檔案無法預覽，請下載",
+      zoomControls: "縮放圖片",
+      zoomIn: "放大",
+      zoomOut: "縮小",
     },
     // 對方訊息角落的「放大閱讀」小按鈕：把這則訊息本文丟進同一個
     // 全幅 overlay 讀（長回覆在對話欄裡很難讀）。自己發的訊息沒有。

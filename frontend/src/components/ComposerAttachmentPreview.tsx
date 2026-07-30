@@ -2,9 +2,11 @@
 // composer (thumbnails + filename chips, each with a × remove control, plus
 // the shared error line), extracted from the three copy-pastes in ChatArea /
 // ReplyComposer / TaskCard (T-5e8a — one visual language for "composing a
-// message", one markup to maintain). Pure move: same `chat__composer-preview`
-// / `chat__preview-*` classes, same behaviour — the chat composer's clickable
-// thumbnail (open in the lightbox) rides the optional `onOpenImage`.
+// message", one markup to maintain). Same `chat__composer-preview` /
+// `chat__preview-*` classes — the chat composer's clickable thumbnail rides the
+// optional `onOpenImage`, which hands the WHOLE staged attachment back (T-f014:
+// the shared overlay titles itself with the filename, so a bare data: URI is
+// no longer enough).
 //
 // The caller keeps the `(pendingAttachments.length > 0 || attachError)`
 // mount guard — this component always renders its strip.
@@ -24,9 +26,10 @@ export function ComposerAttachmentPreview({
   attachError: string | null;
   onRemove: (key: string) => void;
   /** When set, image thumbnails are clickable (role=button + keyboard) and
-   * hand their data-URI to the caller's lightbox — the chat composer's
-   * behaviour. Absent ⇒ static thumbnails (ReplyComposer / TaskCard). */
-  onOpenImage?: (src: string) => void;
+   * hand the staged attachment to the caller's full-view overlay — the chat
+   * composer's behaviour. Absent ⇒ static thumbnails (ReplyComposer /
+   * TaskCard). */
+  onOpenImage?: (att: PendingAttachment) => void;
 }) {
   const { t } = useI18n();
   return (
@@ -47,11 +50,11 @@ export function ComposerAttachmentPreview({
                     role: "button",
                     tabIndex: 0,
                     "aria-label": t.chat.viewImageLabel,
-                    onClick: () => onOpenImage(att.dataUri),
+                    onClick: () => onOpenImage(att),
                     onKeyDown: (e: React.KeyboardEvent) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        onOpenImage(att.dataUri);
+                        onOpenImage(att);
                       }
                     },
                   }

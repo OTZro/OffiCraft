@@ -8,7 +8,6 @@
  * client wording validator (lib/themeBundle.ts) and the mock API. */
 export const MESSAGE_KEYS: readonly string[] = [
   "chat.attachLabel",
-  "chat.closeImageLabel",
   "chat.composerOfflineSuffix",
   "chat.copyShareLink",
   "chat.dateToday",
@@ -37,6 +36,9 @@ export const MESSAGE_KEYS: readonly string[] = [
   "chat.mdPreview.error",
   "chat.mdPreview.loading",
   "chat.mdPreview.unavailable",
+  "chat.mdPreview.zoomControls",
+  "chat.mdPreview.zoomIn",
+  "chat.mdPreview.zoomOut",
   "chat.me",
   "chat.newMessages",
   "chat.offlineHint",
