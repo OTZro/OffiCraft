@@ -1201,8 +1201,10 @@ fi
 #   - port or config would actually CHANGE       -> that is a relocation, not a
 #     reload. Hard stop, print the before/after, require --relocate.
 plist_env() {
-  # EnvironmentVariables.<key> of a plist, or "" when absent.
-  plutil -extract "EnvironmentVariables.$2" raw -o - "$1" 2>/dev/null || true
+  # EnvironmentVariables.<key> of a plist, or "" when absent. rc decides, not
+  # output: macOS 15's plutil prints its "no value" error on STDOUT.
+  local v; v="$(plutil -extract "EnvironmentVariables.$2" raw -o - "$1" 2>/dev/null)" || return 0
+  printf '%s' "$v"
 }
 if [[ "$OURS" == 1 ]]; then
   OLD_CFG="$(plist_env "$PLIST" OC_CONFIG)"
