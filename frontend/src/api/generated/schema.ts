@@ -4146,8 +4146,9 @@ export interface components {
             /**
              * Actual Model
              * @description The model reported by the member's current or most recent successful boot. Empty means the member has never reported a model; it is separate from the owner-configured `model` launch setting.
+             * @default
              */
-            actual_model?: string;
+            actual_model: string;
             /**
              * Avatar Url
              * @description Authenticated URL of this stable member id's personal raster avatar. Empty means no personal image; clients fall back to the active theme's role avatar, then the built-in glyph. Additive-optional for older clients.

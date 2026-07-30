@@ -1696,6 +1696,7 @@
         "description": "API representation of one ``domain.Member`` (a roster member; §3.4 #8/#10).\n\nCarries the durable roster fields PLUS two projections the domain computes at\nread time: ``member_no`` (the ``MB-XXX###`` display badge derived from ``id``,\n§3.10) and ``presence`` (the DERIVED five-state\noffline/waking/online/stopping/stopped, §3.6 — never stored; the SINGLE\npresence word on this wire). The raw ``online`` / ``waking_since`` /\n``stopping_timed_out`` projections were removed from the wire (2026-07-11\naudit): the FE mapper never mapped them and no agent read them — every\nconsumer reads ``presence``. ``roster_status`` is the\nactive/removed LIFECYCLE (the durable ``member.status``), orthogonal to\npresence — named ``roster_status`` on the wire because the FE view model\nalready uses ``status`` for its presence tint (three layers, one word was a\ncollision). The member's TOKEN is NEVER on this DTO.\n\n``role_name`` is the role's display title, resolved by the handler from the\nrole roster (empty until role definitions land in build order B2).",
         "properties": {
           "actual_model": {
+            "default": "",
             "description": "The model reported by the member's current or most recent successful boot. Empty means the member has never reported a model; it is separate from the owner-configured `model` launch setting.",
             "title": "Actual Model",
             "type": "string"

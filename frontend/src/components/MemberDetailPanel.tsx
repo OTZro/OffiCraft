@@ -184,11 +184,12 @@ export function MemberDetailPanel({
     ? "waking"
     : presenceVisual(member.lifecycle);
 
-  // ── Machine picker (wake / respawn) ─────────────────────────────────────────
-  // Fetch the machine registry so the owner picks WHICH online machine an agent
-  // runs on. Rules: 0 online → spawn disabled (reason tooltip); 1 online → no
-  // picker, auto-use it; 2+ online → show the picker. The member's currently
-  // bound machine is `member.desiredMachineId` (the machine_id the activate binds to).
+  // ── Unified launch settings (喚醒 / 更改) ────────────────────────────────────
+  // ONE dialog holds runtime + model + effort + machine, and it always opens (the
+  // old 0/1/2+-online picker rules are gone; what survives of them is that the
+  // entry button stays dead while no machine is online, with the reason in its
+  // tooltip). The member's current pin is `member.desiredMachineId` — the
+  // machine_id an activate binds to, and the value the machine row is seeded with.
   const { machines } = useMachines();
   const onlineMachines = machines.filter((m) => m.online);
   const firstOnlineMachineId = onlineMachines[0]?.machineId;
@@ -425,14 +426,12 @@ export function MemberDetailPanel({
           setRelocateUndispatched(true);
         }
       }
-      if (!online) {
-        await runActivate(settingsMachineId);
-      } else if (!machineChanged && launchChanged) {
-        // PATCH is the one graceful handover for a setting-only online change.
-        // Do not manufacture a relocate when the machine was not changed.
-      } else {
-        // A placement-only online change was sent above.
-      }
+      // A live member's change is finished by the two calls above: the PATCH is
+      // the one graceful handover for a setting-only change, and a placement
+      // change was already sent — neither may be turned into an activate, and a
+      // relocate is never manufactured for a machine nobody changed. Only a
+      // member that is NOT online needs starting.
+      if (!online) await runActivate(settingsMachineId);
       setSettingsOpen(false);
     } catch (error) {
       // ⚠️ `mp.modelEffortError` now has TWO consumers with different scopes:
@@ -870,7 +869,12 @@ export function MemberDetailPanel({
       )}
 
       {settingsOpen && (
-        <div className="machine-picker" role="dialog" aria-modal="true">
+        <div
+          className="machine-picker"
+          role="dialog"
+          aria-modal="true"
+          data-testid="mp-settings-dialog"
+        >
           <div className="machine-picker__box">
             {/* 🔴 C′: the wording follows `online`, NOT `awake`. Only a
                 confirmed online session takes the graceful path (relocate /
@@ -880,6 +884,13 @@ export function MemberDetailPanel({
                 click never performs — the button text would be a lie. */}
             <div className="machine-picker__title">
               {online ? t.mp.change : t.lifecycle.action.spawn}
+            </div>
+            {/* The other half of the same honesty fix: this dialog edits the
+                CONFIGURED launch model, while the card above shows the REPORTED
+                one. Tagging only the card leaves the owner looking at two
+                different values under one name. */}
+            <div className="mp-field__hint" data-testid="mp-settings-intent-note">
+              {t.mp.settingsIntentNote}
             </div>
             <ModelEffortEditor
               runtime={settingsRuntime}
@@ -920,7 +931,13 @@ export function MemberDetailPanel({
                   {t.mp.settingsSaveOnly}
                 </button>
               )}
-              <button type="button" className="btn btn--accent" disabled={settingsBusy || !settingsMachineId} onClick={() => void saveSettings()}>
+              <button
+                type="button"
+                className="btn btn--accent"
+                data-testid="mp-settings-confirm"
+                disabled={settingsBusy || !settingsMachineId}
+                onClick={() => void saveSettings()}
+              >
                 {online ? t.mp.change : t.lifecycle.action.spawn}
               </button>
             </div>
@@ -1432,6 +1449,7 @@ export function MemberDetailPanel({
         // The details panel reports what is actually running. A configured
         // launch model is intentionally kept out of this read-only surface.
         model: awake ? (member.actualModel ?? "") : "",
+        modelIsReported: true,
         effort: member.effort,
         modelEffortNote: t.mp.modelEffortNextWakeNote,
         // Gate on `awake` (owner presence contract T-2860): 機器 + Claude

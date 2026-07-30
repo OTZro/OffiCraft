@@ -8,7 +8,7 @@
 // account show through. Locked here as two scenarios.
 
 import { describe, it, expect, vi } from "vitest";
-import { render, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, waitFor, within } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
 import { MemberDetailPanel } from "./MemberDetailPanel";
@@ -161,6 +161,36 @@ describe("MemberDetailPanel · presence-gated machine + account", () => {
     );
     await waitFor(() =>
       expect(readModel()).not.toContain("reported-runtime-model"),
+    );
+  });
+
+  it("tags the model row as a REPORTED value, and says so in the settings dialog too", async () => {
+    // 🔴 One heading, three rows, two meanings: runtime and effort are what the
+    // owner CONFIGURED, the model is what the agent REPORTED — and the dialog
+    // edits the configured one. Without both labels the owner sees two different
+    // values under one name and reasonably concludes the system is wrong. The
+    // card tag alone fixes half of it, which is why the dialog note is asserted
+    // in the same test: neither half is optional.
+    const { container, getByTestId } = renderPanel(
+      mkMember({
+        status: "online",
+        lifecycle: "online",
+        model: "configured-launch-model",
+        actualModel: "reported-runtime-model",
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-testid="mp-model-effort-cell"]')?.textContent ?? "",
+      ).toContain(zh.mp.modelReportedTag),
+    );
+
+    await waitFor(() =>
+      expect((getByTestId("mp-change") as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(getByTestId("mp-change"));
+    expect(getByTestId("mp-settings-intent-note").textContent).toBe(
+      zh.mp.settingsIntentNote,
     );
   });
 

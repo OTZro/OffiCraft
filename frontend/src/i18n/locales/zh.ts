@@ -706,6 +706,8 @@ export const zh = {
     wake: "喚醒",
     change: "更改",
     settingsSaveOnly: "只儲存，不喚醒",
+    modelReportedTag: "回報值",
+    settingsIntentNote: "這裡設定的是「要用哪一個」；上面資訊卡的模型是 agent 回報的實際值，兩者可能不同。",
     wakeManual: "手動喚醒",
     // 點喚醒後、server presence 尚未跟上前的即時回饋
     wakePendingNote: "喚醒中…",
@@ -848,8 +850,6 @@ export const zh = {
       label: "選擇機器",
       // 目前綁定的機器離線時,於清單中停用並標註
       offlineOptionSuffix: "（離線）",
-      spawnTitle: "選擇要運行的機器",
-      spawnConfirm: "在此機器喚醒",
       relocateTitle: "選擇要遷移到的機器",
       relocateConfirm: "遷移到此機器",
     },

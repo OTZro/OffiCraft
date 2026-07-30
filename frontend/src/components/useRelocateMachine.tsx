@@ -157,6 +157,13 @@ export function useRelocateMachine({
   // into its unified settings submit and stopped driving this hook. Change the
   // two TOGETHER. They were allowed to drift once, and the missing half shipped
   // as a notice that never went away.
+  //
+  // NOT parity, deliberately: the panel copy has ONLY those four items. `phase`
+  // /「更換中…」, RELOCATE_TIMEOUT_MS, the dispatch-receipt failure arm, the
+  // one-shot 「已送出」 nonce and the double-fire phase guard live here and here
+  // only — the panel's submit is modal and its pending state is the machine
+  // transition hint, so it has nothing to spin. Do not read the four as "the
+  // whole hook was copied".
   const [undispatched, setUndispatched] = useState(false);
   // The verdict AND the progress phase are about ONE agent: drop both when the
   // panel switches to another. Neither panel is remounted on that switch (no

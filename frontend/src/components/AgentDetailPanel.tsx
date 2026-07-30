@@ -58,6 +58,12 @@ export interface AgentDetailVM {
   /** A pending relocation target. This supplements — never replaces — the
    * observed machine, and disappears once both locations agree. */
   machineTransition?: string;
+  /** True when the 模型 row shows what the agent REPORTED rather than what the
+   * owner configured (the member panel; T-927a). The row then carries a tag, or
+   * three values sit side by side under one heading with two different meanings
+   * and nothing telling them apart — and the settings dialog, which edits the
+   * CONFIGURED value, would look like it disagrees with the panel. */
+  modelIsReported?: boolean;
   /** Optional action next to the 機器 label (the worker's 改機器 button). */
   machineAction?: ReactNode;
   /** Readable Claude account name; "" ⇒ dash — NEVER a raw credential key
@@ -317,7 +323,15 @@ export function AgentDetailPanel({
               <div className="mp-field__label mp-field__label--stacked">
                 {t.mp.model}
               </div>
-              <div className="mp-field__value">{shownModel || dash}</div>
+              <div className="mp-field__value">
+                {shownModel || dash}
+                {vm.modelIsReported && shownModel && (
+                  <span className="mp-field__hint">
+                    {" "}
+                    ({t.mp.modelReportedTag})
+                  </span>
+                )}
+              </div>
               <div className="mp-field__label mp-field__label--stacked">
                 {t.mp.effort}
               </div>

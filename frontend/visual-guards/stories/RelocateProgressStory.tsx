@@ -88,8 +88,8 @@ const worker: OutsourceWorkerView = {
 };
 
 /** The member panel's replacement hotspot (T-927a). 改機器 is gone from this
- * panel — the visible pending state is now the 「→ 要換到 ○○」 transition label
- * sitting in the SAME `.mp-field__head` row as the 機器 value, plus the action row
+ * panel — the visible pending state is now a 「→ 要換到 ○○」 hint line rendered as a
+ * sibling AFTER the 機器 value inside the same 機器 field block, plus the action row
  * that gained a second button (喚醒／更改 beside Stop). Both are width risks jsdom
  * cannot see. Machine ids that the registry does not know fall back to the raw id
  * (MemberDetailPanel's own resolution), which is how this stages the long-label

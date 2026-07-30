@@ -632,6 +632,8 @@ export const en: Dict = {
     wake: "Wake",
     change: "Change",
     settingsSaveOnly: "Save without waking",
+    modelReportedTag: "reported",
+    settingsIntentNote: "These are the values to launch WITH. The model on the card above is what the agent reported it is actually running, so the two can differ.",
     wakeManual: "Wake manually",
     // Instant feedback after clicking Wake, before server presence catches up.
     wakePendingNote: "Waking…",
@@ -768,8 +770,6 @@ export const en: Dict = {
     picker: {
       label: "Choose a machine",
       offlineOptionSuffix: "(offline)",
-      spawnTitle: "Choose a machine to run on",
-      spawnConfirm: "Wake on this machine",
       relocateTitle: "Choose a machine to move to",
       relocateConfirm: "Move to this machine",
     },
