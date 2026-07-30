@@ -41,7 +41,9 @@ const mkMember = (over: Partial<Member> = {}): Member => ({
   model: "opus-4.8",
   effort: "medium",
   kind: "assistant",
-  desiredMachineId: "mach-a",
+  // An unpinned online member defaults the unified Change dialog to the one
+  // available machine, making this a real placement change.
+  desiredMachineId: "",
   machine: "mach-a",
   account: null,
   contextPct: null,
@@ -143,7 +145,7 @@ describe("MonitorPage entry — MemberDetailPanel unified Change", () => {
     renderMonitor();
     fireEvent.click(await screen.findByText("Eva"));
 
-    fireEvent.click(screen.getByTestId("mp-change"));
+    fireEvent.click(await screen.findByTestId("mp-change"));
     const confirm = document.querySelector<HTMLButtonElement>(".machine-picker__actions .btn--accent")!;
     await waitFor(() => expect(confirm.disabled).toBe(false));
     fireEvent.click(confirm);
