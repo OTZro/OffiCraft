@@ -132,7 +132,9 @@ type AgentTelemetryDTO struct {
 // The reporter pushes what the model can't reliably read about itself: the
 // account-wide “rate_limits“ (5h/7d windows), this session's own “tokens“,
 // the host “hardware“ snapshot (cpu/ram/battery/ac), the harness-computed
-// cumulative “cost“, and the session “runtime“. Warden heartbeats additionally
+// cumulative “cost“, the session “runtime“, and the “model“ / “effort“ pair the
+// session is LIVE running under (reported state, never the launch configuration —
+// see those two fields). Warden heartbeats additionally
 // carry “binaries“ plus provider-neutral “runtimes“ capability probes; the
 // server compares binary fingerprints against its embedded prebuilts and uses
 // runtime readiness for placement. “machine“ / “account“ are merge tags
@@ -161,9 +163,12 @@ type AgentTelemetryIngestDTO struct {
 	Effort        interface{}             `json:"effort,omitempty"`
 
 	// Hardware Warden heartbeats only — the host hardware snapshot (``collectHardware``; darwin-only probes, each one omit-on-fail, so any subset may be absent). The sub-fields are DECLARED (T-90be) because the server reads them by literal name: before this shape existed, a producer-side rename was accepted, stored, and then read as null forever — HTTP 200 with the measurement silently unreadable, every test green. Deliberately NOT closed: ``additionalProperties`` stays true (owner ruling rc-55861dd893c6) so a warden that grows a probe — or an older one missing a key — still lands its WHOLE report. Closing it would 422 the entire heartbeat on one undeclared nested key (hardware, binaries, claude and runtimes going null together), which is verbatim the a7fa594 outage. The Go type is pinned to ``map[string]interface{}`` (``x-go-type``) so the handler keeps its own per-field validation and its flat-400 face; the declaration's teeth are the CI guard (cli/ocwarden/telemetry_wire_test.go), not runtime rejection.
-	Hardware   *map[string]interface{} `json:"hardware,omitempty"`
-	Machine    interface{}             `json:"machine,omitempty"`
-	RateLimits interface{}             `json:"rate_limits,omitempty"`
+	Hardware *map[string]interface{} `json:"hardware,omitempty"`
+	Machine  interface{}             `json:"machine,omitempty"`
+
+	// Model The session's LIVE model, reported verbatim by the harness that is actually running it — the Claude Code statusLine payload's ``model.id`` for the claude runtime, the sidecar's launch model for codex. ``model.id`` and NOT ``model.display_name``: the id is what the boot seed already tells a member to report ("填 Claude Code 提供的真實 model id,不要猜值"), and it is the only one of the two that carries the ``[1m]`` 1M-context marker — a distinction the cockpit column shows today and must not lose. It carries the same INGEST contract as ``effort``: what the session IS, never the owner-configured launch setting it was started with (a mid-session model switch is visible here and nowhere else). The two diverge AFTER ingest — see ``MonitoringSessionDTO.model`` — so the shared contract is about what a producer must send, not about how the server stores it. OMITTED when the harness reports no model — an empty string would turn "not measured" into a reported blank, which is exactly the failure mode this field exists to end. Omitted leaves previously stored telemetry untouched.
+	Model      interface{} `json:"model,omitempty"`
+	RateLimits interface{} `json:"rate_limits,omitempty"`
 
 	// Runtime Optional session runtime: ``claude`` or ``codex``. Omitted leaves previously stored telemetry untouched.
 	Runtime interface{} `json:"runtime,omitempty"`
@@ -750,7 +755,7 @@ type MemberDTO struct {
 	// ActivationPending Set true ONLY on the activate response when the decided START could not be delivered to the target warden (no live SSE downstream) — the wake intent is persisted and the reconcile cadence retries, but nothing has been dispatched yet. Absent/null on every other member read. The activate twin of ``relocation_pending``: without it an activate against an unreachable warden returns a clean 200 with zero signal, which is indistinguishable from a wake that actually started (T-ba62 additive-optional).
 	ActivationPending *bool `json:"activation_pending,omitempty"`
 
-	// ActualModel The model reported by the member's current or most recent successful boot. Empty means the member has never reported a model; it is separate from the owner-configured `model` launch setting.
+	// ActualModel The model the member's session is REPORTED to be running, from its own live telemetry (``AgentTelemetryIngestDTO.model``) — durably persisted, so it survives a server restart and outlives the session that reported it. Empty means nothing has ever reported a model for this member; it is separate from, and NEVER falls back to, the owner-configured `model` launch setting. Applies identically to ``kind=outsource`` rows, whose reports arrive under their own ``ow-`` token sub. WAS: written only by ``report_waking``, which no outsource worker calls (a worker's boot signal is ``get_my_task``), so it was structurally always empty for them.
 	ActualModel *string `json:"actual_model,omitempty"`
 
 	// AvatarUrl Authenticated URL of this stable member id's personal raster avatar. Empty means no personal image; clients fall back to the active theme's role avatar, then the built-in glyph. Additive-optional for older clients.
@@ -939,10 +944,14 @@ type MonitoringSessionDTO struct {
 	Effort          *string  `json:"effort,omitempty"`
 	Id              string   `json:"id"`
 	Machine         *string  `json:"machine,omitempty"`
-	Model           *string  `json:"model,omitempty"`
-	Name            string   `json:"name"`
-	Presence        *string  `json:"presence,omitempty"`
-	Role            *string  `json:"role,omitempty"`
+
+	// Model The model this session REPORTED it is running (the roster row's ``actual_model``), for staff and outsource rows ALIKE — one column, one meaning. Honest-empty until something reports one, and it NEVER falls back to the owner-configured launch model. WAS: staff rows served the configured ``member.model`` while outsource rows served the reported value, so a single column header meant two different things depending on the row.
+	//
+	// ⚠️ NOT symmetric with the ``effort`` beside it, despite both being reported state. ``model`` is read from the DURABLE ``actual_model`` column, so it survives a server restart and outlives the session that reported it; ``effort`` is read from the in-memory telemetry entry and is therefore blanked fleet-wide by any server re-exec. There is no ``actual_effort`` column. Do not describe the two as twins and do not infer one's storage from the other's — pinned by TestGetMonitoring_ReportedModelSurvivesATelemetryWipe, which passes for model and would fail for effort.
+	Model    *string `json:"model,omitempty"`
+	Name     string  `json:"name"`
+	Presence *string `json:"presence,omitempty"`
+	Role     *string `json:"role,omitempty"`
 
 	// Runtime The session's selected provider runtime.
 	Runtime *AgentRuntime   `json:"runtime,omitempty"`
@@ -1026,7 +1035,9 @@ type OutsourceWorkerDTO struct {
 
 	// Machine The machine the worker's session was ACTUALLY dispatched to (last_spawn_target resolved to its registry display name) — the REAL placement result, NOT the manual's preference. "" when never dispatched (未分配 — the panel renders "尚未分配", never a fabricated machine). T-f190 additive-optional.
 	Machine *string `json:"machine,omitempty"`
-	Model   *string `json:"model,omitempty"`
+
+	// Model The owner-CONFIGURED launch model this worker was (or will be) started with — the intent the 喚醒／更改 dialog round-trips and saves. Deliberately NOT the reported one: that is ``MemberDTO.actual_model`` / ``MonitoringSessionDTO.model``. The two must never be merged into one cell — this DTO exists to round-trip the setting, and a settings editor that displayed reported state could not save.
+	Model *string `json:"model,omitempty"`
 
 	// Presence REAL-liveness projection on the ONE member presence vocabulary (A案 P6 — deriveLiveness; replaces the retired ``spawn_state`` closed set starting/stuck/online/stopped). Distinct from lifecycle ``status`` so a worker whose session is not actually up is not rendered as a live green row. Uses the same SSE-presence authority (hub.IsOnline) the member roster reads. Closed set: ``online`` (holding a live SSE connection), ``waking`` (not online with a fresh wake in flight — last start dispatch / row birth within the waking TTL), ``offline`` (not online and no fresh wake — a silently-failing spawn or a died-after-claim session; the FSM rescue owns recovery), ``stopping``/``stopped`` (owner-explicit stop: held down, no auto-revival), ``""`` (released; off-panel). Optional-with-default: absent reads as "" for older clients.
 	Presence *string `json:"presence,omitempty"`

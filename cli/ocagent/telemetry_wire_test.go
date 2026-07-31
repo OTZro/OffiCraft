@@ -29,10 +29,21 @@ import (
 // re-couples them the only way available: it reads the frozen spec off disk and
 // checks the real POST bodies against it. No server, no network.
 
-// frozenIngestProperties loads the declared property names of one request schema
-// from the frozen spec, and asserts the schema really is closed (a schema that
-// tolerated extra keys would make this whole test vacuous).
-func frozenIngestProperties(t *testing.T, schemaName string) map[string]bool {
+// frozenIngestProperties loads one request schema's declared properties from the
+// frozen spec as name → declared JSON type ("" when the property declares none),
+// and asserts the schema really is closed (a schema that tolerated extra keys
+// would make this whole test vacuous).
+//
+// The type comes along because a NAME-ONLY comparison answers half the question.
+// A key can be declared and still be refused at runtime for having the wrong
+// shape: the handler hand-validates the permissive scalars and returns a flat
+// 400 for a non-string effort/model, and the codegen'd decoder 422s a non-object
+// hardware/claude/runtimes. Either way the WHOLE report dies, which is the same
+// silent-dark failure this file exists to prevent — and a name-only test stays
+// green through it. (This is not hypothetical: the change that added `model`
+// here shipped alongside a producer that could have sent the payload's nested
+// model OBJECT instead of its id string.)
+func frozenIngestProperties(t *testing.T, schemaName string) map[string]string {
 	t.Helper()
 	specPath := filepath.Join("..", "..", "spec", "openapi.json")
 	raw, err := os.ReadFile(specPath)
@@ -42,8 +53,10 @@ func frozenIngestProperties(t *testing.T, schemaName string) map[string]bool {
 	var spec struct {
 		Components struct {
 			Schemas map[string]struct {
-				Properties           map[string]json.RawMessage `json:"properties"`
-				AdditionalProperties *bool                      `json:"additionalProperties"`
+				Properties map[string]struct {
+					Type string `json:"type"`
+				} `json:"properties"`
+				AdditionalProperties *bool `json:"additionalProperties"`
 			} `json:"schemas"`
 		} `json:"components"`
 	}
@@ -57,26 +70,113 @@ func frozenIngestProperties(t *testing.T, schemaName string) map[string]bool {
 	if schema.AdditionalProperties == nil || *schema.AdditionalProperties {
 		t.Fatalf("%s is not a closed schema — this guard would be vacuous", schemaName)
 	}
-	declared := map[string]bool{}
-	for name := range schema.Properties {
-		declared[name] = true
+	declared := map[string]string{}
+	for name, prop := range schema.Properties {
+		declared[name] = prop.Type
 	}
 	return declared
 }
 
-func undeclaredKeys(body string, declared map[string]bool) []string {
+// jsonKind reports the JSON type of a raw value, in OpenAPI's vocabulary.
+func jsonKind(raw json.RawMessage) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return "invalid"
+	}
+	switch trimmed[0] {
+	case '{':
+		return "object"
+	case '[':
+		return "array"
+	case '"':
+		return "string"
+	case 't', 'f':
+		return "boolean"
+	case 'n':
+		return "null"
+	default:
+		return "number"
+	}
+}
+
+// schemaViolations reports every key in body the frozen schema would refuse:
+// undeclared names, plus declared names carrying the wrong JSON type.
+//
+// A property that declares NO type is skipped on purpose — the ingest schemas
+// leave the scalars deliberately permissive so a bad value is a flat 400 rather
+// than a Pydantic-style 422, and inventing an expectation here would make this
+// test assert something the contract does not say. `null` is likewise always
+// allowed: it is how a producer says "not measured" for a declared-object block.
+func schemaViolations(body string, declared map[string]string) []string {
 	var obj map[string]json.RawMessage
 	if json.Unmarshal([]byte(body), &obj) != nil {
 		return []string{"<body is not a JSON object>"}
 	}
-	var extra []string
-	for key := range obj {
-		if !declared[key] {
-			extra = append(extra, key)
+	var bad []string
+	for key, raw := range obj {
+		want, isDeclared := declared[key]
+		if !isDeclared {
+			bad = append(bad, key+" (undeclared)")
+			continue
+		}
+		if want == "" {
+			continue
+		}
+		if got := jsonKind(raw); got != "null" && got != want &&
+			!(want == "number" && got == "number") &&
+			!(want == "integer" && got == "number") {
+			bad = append(bad, key+" (declared "+want+", sent "+got+")")
 		}
 	}
-	sort.Strings(extra)
-	return extra
+	sort.Strings(bad)
+	return bad
+}
+
+// handlerValidatedKinds is the OTHER half of the type contract, and it exists
+// because the frozen schema deliberately cannot express it.
+//
+// The ingest scalars are declared WITHOUT a type on purpose: the server
+// hand-validates them so a bad value is a flat 400 instead of a codegen 422
+// (see AgentTelemetryIngestDTO's description). The cost of that choice is that
+// schemaViolations, which can only read what the schema declares, is blind to
+// exactly these keys — it would stay green while the reporter sent an object
+// where the handler demands a string and every report died with a 400.
+//
+// That blindness is not theoretical for `model`: the statusLine payload's
+// `model` IS a nested object ({id, display_name}), and the reporter's job is to
+// reduce it to one string. Sending the object through is a one-line slip that
+// the schema, the compiler, and a name-only comparison all accept.
+//
+// So this table mirrors the handler's own validation (api_monitoring.go's
+// HandleIngestTelemetry...): each entry is a key the handler 400s on when the
+// JSON kind is wrong. Keep it in step with that handler — it is a copy of a
+// contract, and the whole point of this file is that copies drift.
+var handlerValidatedKinds = map[string]string{
+	"runtime": "string",
+	"effort":  "string",
+	"model":   "string",
+	"cost":    "number",
+}
+
+// handlerKindViolations reports keys whose JSON kind the SERVER would reject
+// with a flat 400, independent of what the (deliberately permissive) schema says.
+func handlerKindViolations(body string) []string {
+	var obj map[string]json.RawMessage
+	if json.Unmarshal([]byte(body), &obj) != nil {
+		return []string{"<body is not a JSON object>"}
+	}
+	var bad []string
+	for key, want := range handlerValidatedKinds {
+		raw, present := obj[key]
+		if !present {
+			continue
+		}
+		if got := jsonKind(raw); got != want {
+			bad = append(bad, key+" (handler demands "+want+", sent "+got+")")
+		}
+	}
+	sort.Strings(bad)
+	return bad
 }
 
 // TestContextReportBodiesMatchFrozenIngestSchemas drives the real reporter over
@@ -136,14 +236,18 @@ func TestContextReportBodiesMatchFrozenIngestSchemas(t *testing.T) {
 			if tel == nil {
 				t.Fatalf("no telemetry POST; posts=%v", *posts)
 			}
-			if extra := undeclaredKeys(tel.body, telemetryDeclared); len(extra) > 0 {
+			if bad := schemaViolations(tel.body, telemetryDeclared); len(bad) > 0 {
 				t.Errorf("telemetry body has keys the frozen schema refuses %v — the whole "+
-					"report (usage AND account) would 422; body=%s", extra, tel.body)
+					"report (usage AND account) would 400/422; body=%s", bad, tel.body)
+			}
+			if bad := handlerKindViolations(tel.body); len(bad) > 0 {
+				t.Errorf("telemetry body has values the SERVER refuses %v — the whole "+
+					"report would 400; body=%s", bad, tel.body)
 			}
 			if ctx := findPost(*posts, "/api/agent/context"); ctx != nil {
-				if extra := undeclaredKeys(ctx.body, contextDeclared); len(extra) > 0 {
+				if bad := schemaViolations(ctx.body, contextDeclared); len(bad) > 0 {
 					t.Errorf("context body has keys the frozen schema refuses %v — the gauge "+
-						"would 422; body=%s", extra, ctx.body)
+						"would 400/422; body=%s", bad, ctx.body)
 				}
 			}
 		})
@@ -203,6 +307,87 @@ func TestContextReportSendsSessionEffort(t *testing.T) {
 			if ctx := findPost(*posts, "/api/agent/context"); ctx != nil {
 				if strings.Contains(ctx.body, "effort") {
 					t.Errorf("effort rode the context POST; it would 422; body=%s", ctx.body)
+				}
+			}
+		})
+	}
+}
+
+// TestContextReportSendsSessionModel is the model twin of the effort test above:
+// the model was on the status-line string from day one and in no POST body ever,
+// so the cockpit's 模型 column had nothing reported to serve and fell back to the
+// owner's configured launch value — a fallback an outsource worker does not even
+// have, which is why its column was blank forever.
+//
+// Beyond presence it pins WHICH of the payload's two model strings goes on the
+// wire: `model.id`, never `model.display_name`. The id is the vocabulary the boot
+// seed already tells members to report, and it is the only one carrying the
+// "[1m]" 1M-context marker — display_name reads "Opus 4.5" for both tiers, so
+// sending it would collapse two genuinely different sessions onto one string.
+//
+// ⚠️ COVERAGE NOTE — do not read the `want: nil` cases as more than they are.
+// Only the two positive cases could have failed before this change; the two
+// absent-cases were vacuously true then, because the reporter sent no `model`
+// key under ANY input. What they guard is the omit-vs-blank distinction INSIDE
+// the new design (an unmeasured model must be OMITTED, never sent as ""), which
+// is the distinction the server's stamp guard depends on. They are not evidence
+// that the field is being sent at all — the positive cases are.
+func TestContextReportSendsSessionModel(t *testing.T) {
+	home := writeClaudeJSON(t, `{"userID":"acct-1"}`)
+
+	cases := []struct {
+		name  string
+		model string
+		want  any
+	}{
+		{
+			name:  "the id is sent verbatim",
+			model: `"model":{"id":"claude-opus-4-5-20251101","display_name":"Opus 4.5"},`,
+			want:  "claude-opus-4-5-20251101",
+		},
+		{
+			name:  "the 1M marker survives",
+			model: `"model":{"id":"claude-opus-4-5-20251101[1m]","display_name":"Opus 4.5"},`,
+			want:  "claude-opus-4-5-20251101[1m]",
+		},
+		{
+			name:  "no model block is omitted, never a blank",
+			model: "",
+			want:  nil,
+		},
+		{
+			name:  "a display_name with no id is omitted, never guessed",
+			model: `"model":{"display_name":"Opus 4.5"},`,
+			want:  nil,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, posts := contextServer(t)
+			cfg := Config{Base: srv.URL, Token: "t", ID: "kyle", Home: t.TempDir()}
+			payload := `{` + tc.model + `"context_window":{"used_percentage":41.5}}`
+			var out, errOut bytes.Buffer
+			cmdContextReport(srv.Client(), cfg,
+				testEnv(map[string]string{"HOME": home, "OC_HOST": "lab-1"}), 1000.0,
+				strings.NewReader(payload), &out, &errOut)
+
+			tel := findPost(*posts, "/api/monitoring/telemetry")
+			if tel == nil {
+				t.Fatalf("no telemetry POST; posts=%v", *posts)
+			}
+			var body map[string]any
+			if err := json.Unmarshal([]byte(tel.body), &body); err != nil {
+				t.Fatalf("telemetry body is not JSON: %v", err)
+			}
+			if got := body["model"]; got != tc.want {
+				t.Errorf("telemetry model = %v, want %v; body=%s", got, tc.want, tel.body)
+			}
+			// AgentContextIngestDTO declares no model and refuses undeclared keys,
+			// so one stray copy there would 422 the whole gauge POST.
+			if ctx := findPost(*posts, "/api/agent/context"); ctx != nil {
+				if strings.Contains(ctx.body, "model") {
+					t.Errorf("model rode the context POST; it would 422; body=%s", ctx.body)
 				}
 			}
 		})

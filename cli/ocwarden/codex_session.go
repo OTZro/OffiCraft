@@ -514,10 +514,24 @@ func (s *codexSession) reportTokenUsage(params map[string]any) {
 			tokens[key] = value
 		}
 	}
-	s.post("/api/monitoring/telemetry", map[string]any{
+	body := map[string]any{
 		"runtime": "codex", "tokens": tokens, "effort": s.effort,
 		"account": s.account, "account_label": "ChatGPT",
-	})
+	}
+	// The codex twin of the claude reporter's model telemetry. This sidecar is
+	// the only thing on the codex path that knows which model the session is
+	// actually running, so without this the cockpit's 模型 column has no reported
+	// value for ANY codex session and has to fall back to the launch setting.
+	//
+	// Blank is OMITTED, not sent as "": a blank s.model means the OffiCraft launch
+	// model was unset and the machine's own Codex default is in force (see
+	// codexPersonaInstruction), i.e. we genuinely do not know the name. Sending ""
+	// would record that unknown as a reported blank, which is the exact
+	// "measured" vs "never measured" collapse this field exists to end.
+	if m := strings.TrimSpace(s.model); m != "" {
+		body["model"] = m
+	}
+	s.post("/api/monitoring/telemetry", body)
 }
 
 // reportRateLimits maps the App Server's primary/secondary rolling windows to

@@ -224,7 +224,14 @@ owner 2026-07-27 兩句話 + 一個數字:「更新的時候不能塞超過這�
 owner 兩句裁定:「理想上應該是同一支 API 同時取得所有 AI session(包含外包跟正職)」「成員面板以及監控台,一定要顯示回報回來的狀態,不能顯示設定值」。
 
 - **`GET /api/monitoring` 的 `sessions` 現在同時含成員與 live 外包 worker**(`api_monitoring.go` 的 `monitoringSessionSource`)。外包經既有的 `memberFromWorker` 進同一個迴圈,**沒有 per-kind 的第二條建構路徑**——兩種列不可能各自漂走。**沒有新增任何 DTO 欄位**:`MonitoringSessionDTO` 是 `additionalProperties:false`,加欄就是動凍結 wire;外包列靠 **`ow-` id 前綴**辨識(既有慣例),`role` 誠實留 `""`(worker 的 member row 本來就 `RoleKey: ""`,不編一個假角色名出來)。
-- **每一個遙測欄都取該 actor 自己的 telemetry/gauge entry**(key = token sub,外包就是 `ow-` id);沒回報就 null/`""`,**一律不退回名冊設定值**。外包的 `model` 取 `wk.ActualModel`(自報)而非 `wk.Model`(設定),同一條規則。
+- **每一個遙測欄都取該 actor 自己的 telemetry/gauge entry**(key = token sub,外包就是 `ow-` id);沒回報就 null/`""`,**一律不退回名冊設定值**。
+- 🔴 **`model` 這一欄在 T-e12c 當時只做了一半,已於本批補齊(owner 2026-07-31 第二次裁定:「正職跟外包都是用回傳值,不存在第二個選項的什麼正職維持看設定值」)**。當時外包取 `wk.ActualModel`(自報)、**正職仍取 `m.Model`(設定)**,所以同一個欄位標題底下是兩種語意;而更糟的是外包那半**結構上取不到值**:`ActualModel` 全庫只有兩個寫入點、都掛在 `report_waking` 上,而 `seeds/worker_context.md` §2 明文把 `report_waking` 從 worker 的開機序列拿掉(worker 的上線訊號是 `get_my_task`,那條路徑完全不碰這個欄位)⇒ **每個外包 worker 的 model 永遠是空字串**,而空字串與「還沒回報」長得一模一樣。現在:
+  - **寫入端接在真正活著的那條管道上**——Claude Code statusLine reporter(`ocagent context-report`)與 codex sidecar 各自把 live model 放進 `POST /api/monitoring/telemetry` 的新 `model` 欄(**上行契約**與 `effort` 相同:回報狀態、量不到就省略;spawn 對兩種 kind 不分支,所以 worker 早就在用自己的 `ow-` id 送遙測——`effort` 有值就是這條管道對 `ow-` 通的活證據)。**不是**把 `report_waking` 加回 worker 開機序列,那是刻意的設計決定。
+- ⚠️ **`model` 與 `effort` 只有上行契約相同,落地之後不對稱,別互相推論**:`model` 讀持久欄 `actual_model`(撐得過 server 重啟、活得比 session 久),`effort` 只活在 in-memory telemetry entry ⇒ **server 一 re-exec 就全機隊抹白**。**全庫沒有 `actual_effort` 這個欄位**。實測:`TestGetMonitoring_ReportedModelSurvivesATelemetryWipe` 對 model 綠,同樣的情境對 effort 是紅的。effort 要不要也做成持久欄是**另一個範圍**,本批刻意不動。
+  - **`stampReportedModel` 把它落庫**(write-on-change,空值 no-op 不擦既有值,`kind=outsource` 取 `outsourceMu`)。遙測是 in-memory,只存那裡的話 server 每次 re-exec 就把全 fleet 的模型欄清空 —— 就是這個 bug 換個計時器重演。
+  - **讀取端兩種 kind 同一行 `m.ActualModel`**;`monitoringSessionSource` 的 `model` 覆寫欄**已刪除**(兩臂都寫同一個運算式的欄位不該留著,再分歧就得改碼而不是改一個 call site)。
+  - **代價 owner 已知並接受**:從沒回報過的正職在下次開機前顯示空白。那一列的 effort / cost / account / context_pct **本來就全空**,model 是最後一個還在宣稱自己知道的格子。
+- **哨兵**:`TestGetMonitoring_SessionModelRoundTrips`(ingest→GET 往返,三列**各斷言具體字串**——改動前該欄是 `""`,所以 `!= nil` / has-key 這類寫法在這裡是恆真,實測過)、`TestGetMonitoring_ReportedModelSurvivesATelemetryWipe`(把 `s.telemetry` 換成空 store 模擬 re-exec,拿掉落庫那一步只有它會紅)、producer 側 `TestContextReportSendsSessionModel`(送 `model.id` 而非 `display_name`——id 是 boot seed 已經教的詞彙,也是唯一帶 `[1m]` 標記的那個)與 `TestReportTokenUsageSendsSessionModel`(codex;空值省略不送 `""`)。
 - **`GET /api/outsource-workers` / `outsourceWorkerDTO` 一字未動**:那份 `model`/`effort` 是 owner 的**啟動意圖**,座艙的編輯器讀它、存回去也是它。⚠️ **把它換成自報值會讓 owner 按一次儲存就把自己的設定改掉(未回報時甚至存進空值,被 closed vocabulary 422)** —— 顯示面與編輯面必須分開,這是 T-e12c 唯一刻意保留設定值的地方。
 - **released worker 不進 `sessions`**(`RosterStatusRemoved`,與 members 同一個判準),但**仍留在 `actors`** —— 花費不會因為列消失而消失。`actors` 隨著這台站跑過的每一張任務單調成長,現在式的會話表不能長那樣。
 - ⚠️ **已知不對稱**:`sessions` 的 `machine` 用 `observedWorkerHost`(與同一份回應的 machines fold 同一個運算式,兩處不可能各說各話),而**外包詳情面板**走 `projectWorker`、會先看 in-memory 的 dispatch target ⇒ 剛派出去還沒連上的 worker,面板顯示目標機器、會話列顯示 `""`。誠實留白 vs 顯示意圖,兩處的問法不同。
@@ -263,10 +270,11 @@ owner 兩句裁定:「理想上應該是同一支 API 同時取得所有 AI sess
   ```
   bash bin/build-seedsdist && bash bin/build-docsdist
   ```
-  沒 staging 時**至少 5 條**會紅，而且它們長得很像你剛改壞的東西（**都不是回歸**，在 `origin/main` 上同樣紅）：
+  沒 staging 時會紅一大片，而且它們長得很像你剛改壞的東西（**都不是回歸**，在 `origin/main` 上同樣紅）：
   - 缺 `seedsdist` → `TestRestartWorker_ClearsAndRedispatches`、`TestRestartWorker_NoKillTarget_StillAttemptsStart`（`boot_context_failed: open system_interaction.md`）
   - 缺 `docsdist` → `TestDocsMcpToolsCallableByAssistantAgent`、`TestGetDocHandlerServesStagedEmbed`、`TestDocsdistEmbedsExactlyGuide`
-  🔴 **這個列表同樣是「清單型」的東西**：第一版只揭露了前兩條，漏掉的三條照樣會騙下一個人。判準是**先 staging 再判紅**，不是背這張表。
+  🔴 **這個列表同樣是「清單型」的東西**：第一版只揭露了前兩條，第二版寫「至少 5 條」，**兩版都低估**。實測（兩個 dist 都清空、其餘不動）：**132 條紅**，含整批 `TestContextDocCap_*`、`TestPatchLessons*`、`TestDocumentHistory*`、`TestLessonsWrite*`——沒有一條的名字看得出跟 embed staging 有關。判準是**先 staging 再判紅**，不是背這張表。
+  ✅ **`bin/build-bindist` 不是 `go test` 的前置**（實測：只清空 bindist、`go test ./...` 仍 0 紅）。它是**單檔 boot/裝機**能力的前置，見上方 `assets.go` 條；跑測試只要 seedsdist + docsdist。
 
 - **mutant 驗證紀錄**：`docs/design/worker-panel-parity-mutants.md`（13 支，含 3 支第一輪存活、補測試後才紅的）。
 

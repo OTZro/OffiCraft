@@ -3080,7 +3080,9 @@ export interface components {
          *     The reporter pushes what the model can't reliably read about itself: the
          *     account-wide ``rate_limits`` (5h/7d windows), this session's own ``tokens``,
          *     the host ``hardware`` snapshot (cpu/ram/battery/ac), the harness-computed
-         *     cumulative ``cost``, and the session ``runtime``. Warden heartbeats additionally
+         *     cumulative ``cost``, the session ``runtime``, and the ``model`` / ``effort`` pair the
+         *     session is LIVE running under (reported state, never the launch configuration —
+         *     see those two fields). Warden heartbeats additionally
          *     carry ``binaries`` plus provider-neutral ``runtimes`` capability probes; the
          *     server compares binary fingerprints against its embedded prebuilts and uses
          *     runtime readiness for placement. ``machine`` / ``account`` are merge tags
@@ -3169,6 +3171,11 @@ export interface components {
             };
             /** Machine */
             machine?: unknown;
+            /**
+             * Model
+             * @description The session's LIVE model, reported verbatim by the harness that is actually running it — the Claude Code statusLine payload's ``model.id`` for the claude runtime, the sidecar's launch model for codex. ``model.id`` and NOT ``model.display_name``: the id is what the boot seed already tells a member to report ("填 Claude Code 提供的真實 model id,不要猜值"), and it is the only one of the two that carries the ``[1m]`` 1M-context marker — a distinction the cockpit column shows today and must not lose. It carries the same INGEST contract as ``effort``: what the session IS, never the owner-configured launch setting it was started with (a mid-session model switch is visible here and nowhere else). The two diverge AFTER ingest — see ``MonitoringSessionDTO.model`` — so the shared contract is about what a producer must send, not about how the server stores it. OMITTED when the harness reports no model — an empty string would turn "not measured" into a reported blank, which is exactly the failure mode this field exists to end. Omitted leaves previously stored telemetry untouched.
+             */
+            model?: unknown;
             /** Rate Limits */
             rate_limits?: unknown;
             /**
@@ -4203,7 +4210,7 @@ export interface components {
         MemberDTO: {
             /**
              * Actual Model
-             * @description The model reported by the member's current or most recent successful boot. Empty means the member has never reported a model; it is separate from the owner-configured `model` launch setting.
+             * @description The model the member's session is REPORTED to be running, from its own live telemetry (``AgentTelemetryIngestDTO.model``) — durably persisted, so it survives a server restart and outlives the session that reported it. Empty means nothing has ever reported a model for this member; it is separate from, and NEVER falls back to, the owner-configured `model` launch setting. Applies identically to ``kind=outsource`` rows, whose reports arrive under their own ``ow-`` token sub. WAS: written only by ``report_waking``, which no outsource worker calls (a worker's boot signal is ``get_my_task``), so it was structurally always empty for them.
              * @default
              */
             actual_model: string;
@@ -4616,6 +4623,9 @@ export interface components {
             machine: string;
             /**
              * Model
+             * @description The model this session REPORTED it is running (the roster row's ``actual_model``), for staff and outsource rows ALIKE — one column, one meaning. Honest-empty until something reports one, and it NEVER falls back to the owner-configured launch model. WAS: staff rows served the configured ``member.model`` while outsource rows served the reported value, so a single column header meant two different things depending on the row.
+             *
+             *     ⚠️ NOT symmetric with the ``effort`` beside it, despite both being reported state. ``model`` is read from the DURABLE ``actual_model`` column, so it survives a server restart and outlives the session that reported it; ``effort`` is read from the in-memory telemetry entry and is therefore blanked fleet-wide by any server re-exec. There is no ``actual_effort`` column. Do not describe the two as twins and do not infer one's storage from the other's — pinned by TestGetMonitoring_ReportedModelSurvivesATelemetryWipe, which passes for model and would fail for effort.
              * @default
              */
             model: string;
@@ -4810,6 +4820,7 @@ export interface components {
             machine: string;
             /**
              * Model
+             * @description The owner-CONFIGURED launch model this worker was (or will be) started with — the intent the 喚醒／更改 dialog round-trips and saves. Deliberately NOT the reported one: that is ``MemberDTO.actual_model`` / ``MonitoringSessionDTO.model``. The two must never be merged into one cell — this DTO exists to round-trip the setting, and a settings editor that displayed reported state could not save.
              * @default
              */
             model: string;

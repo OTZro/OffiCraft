@@ -268,7 +268,14 @@ const MOCK_WIRE_MONITORING: MockMonitoring = {
       name: "Mira",
       role: "assistant",
       runtime: "claude",
-      model: "claude-sonnet-4.5",
+      // honest-empty, for the SAME reason as effort/account below: this column
+      // serves the REPORTED model (the roster row's actual_model) for staff and
+      // outsource rows alike, and mock Mira has reported nothing. It used to
+      // carry "claude-sonnet-4.5" here while her member row's actual_model was
+      // "" — that is the configured value, which the server no longer falls back
+      // to for either kind, so leaving it would make the mock the only place the
+      // old two-meanings-per-column behaviour still existed.
+      model: "",
       effort: "", // honest-empty — mock Mira has no telemetry
       machine: "mbp5",
       account: "", // honest-empty — mock Mira has no telemetry
