@@ -282,7 +282,7 @@ func decideTaskCloseNudge(t Task, manualLabel string) *taskCloseSignal {
 		TaskNo: no,
 		Type:   t.TypeKey,
 		Status: t.Status,
-		Reason: "任務 " + no + " 已結束（" + t.Status + "）。請處理結束後續：" +
+		Reason: "任務 " + no + " 已結束（" + t.Status + "）。請處理收尾事項：" +
 			"若這一趟有值得留下的經驗（踩坑、更好做法），用 write_task_learnings" +
 			"（type_key=`" + t.TypeKey + "`）整併回「" + manualLabel +
 			"」的任務手冊（先 get_task_manual 讀現況、同主題合併後整份寫回）；" +

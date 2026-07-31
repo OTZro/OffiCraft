@@ -201,8 +201,8 @@ func handoverSOP(selfID string) []string {
 	return []string{
 		"recycle: server 已標記回收（refocus）— 請立刻照換手 SOP 收尾（約 120 秒寬限，逾時 server 會強制回收，未落盤的 context 就沒了）：",
 		"recycle:   1) MCP report_stopping() — 先告知世界你開始收尾（座艙即顯停止中；server 不會因此提前收你）",
-		"recycle:   2) 把在飛的工作寫回 task step note（做到哪、下一步接什麼）",
-		"recycle:   3) 用 MCP get_lessons / replace_lessons 整併這輪的耐久教訓（合併、更新、刪過時，不是往後貼）",
+		"recycle:   2) 把還在進行中的工作寫回 task step note（做到哪、下一步接什麼）",
+		"recycle:   3) 用 MCP get_lessons / replace_lessons 整併這輪的長期教訓（合併、更新、刪過時，不是往後貼）",
 		"recycle:   4) 用 MCP post_chat 給自己（to=" + selfID + "）發一則交接 baton：現況 / 在途 / blocker",
 		"recycle:   5) MCP report_stopped() — 報完就停手；runtime 會自動收攤，server 原地重生新的你",
 	}

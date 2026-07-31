@@ -1,5 +1,5 @@
 -- +goose Up
--- M3 §6.3 close-out report — the executor's "結束後續已處理完" mark. After a
+-- M3 §6.3 close-out report — the executor's "收尾事項已處理完" mark. After a
 -- task lands in a terminal status (done/terminated) the executor writes the
 -- learnings back and cleans the task's scratch, then reports the follow-ups
 -- DONE through MCP report_task_closeout. One REAL column is the whole record

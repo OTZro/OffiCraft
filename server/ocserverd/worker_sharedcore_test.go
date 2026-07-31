@@ -257,7 +257,7 @@ func TestWorkerBootContextKnownMemberOnlyResidueStaysRemoved(t *testing.T) {
 		},
 		{
 			"§8b 換手 SOP 第 3 步 lessons",
-			"用 lessons 工具整併耐久教訓",
+			"用 lessons 工具整併長期教訓",
 			"指向已排除的 §9，且在 ~120 秒寬限下會被照著執行。",
 		},
 		{
@@ -281,8 +281,8 @@ func TestWorkerBootContextKnownMemberOnlyResidueStaysRemoved(t *testing.T) {
 		},
 		{
 			"§10.3 你當 scrum master 政策本體",
-			"吃 context 的重活交給 sub-agent，你當 scrum master",
-			"「不自己下場做重活」對 worker 完全相反——它正是被授權下場的角色（overlay §4）。",
+			"吃 context 的粗重工作交給 sub-agent，你當 scrum master",
+			"「不自己下場做粗重工作」對 worker 完全相反——它正是被授權下場的角色（overlay §4）。",
 		},
 		{
 			"§10.4 resume_summary 接手路徑",
@@ -301,7 +301,7 @@ func TestWorkerBootContextKnownMemberOnlyResidueStaysRemoved(t *testing.T) {
 		},
 		{
 			"§10.4 你是窗口：轉交／喚醒外包",
-			"你是窗口：轉交負責成員，或建好交伺服器喚醒外包",
+			"你是窗口：轉交負責成員，或建好交給 server 喚醒外包",
 			"直接指派讀者身分為派工窗口並叫它轉包——與已排除的 §10.1c「worker 就是被發包的" +
 				"那一方，不轉包」是同一件事，只是換了措辭、沒有 §N 指標。",
 		},
@@ -350,7 +350,7 @@ func TestWorkerHandoverSOPIsSelfConsistent(t *testing.T) {
 	// The surviving steps must be numbered 1..4 with no gap.
 	for _, want := range []string{
 		"1. **MCP `report_stopping()`**",
-		"2. **把還在飛的工作寫回 task step note**",
+		"2. **把還在進行中的工作寫回 task step note**",
 		"3. **post chat 給「自己」一則交接 baton**",
 		"4. **MCP `report_stopped()`**",
 	} {
@@ -422,7 +422,7 @@ func TestWorkerBootSequenceDropsMemberOnlySteps(t *testing.T) {
 	// the presence tools; they are just not its BOOT sequence). What must go is
 	// the member boot SOP itself.
 	for _, gone := range []string{
-		"照序做這三步",           // 啟動程序 intro (step count wrong for a worker)
+		"依序做這三步",           // 啟動程序 intro (step count wrong for a worker)
 		"報 waking（不掛 SSE）", // 啟動程序 step 1
 		"接回脈絡（兩步",          // 啟動程序 step 2
 		"### 5.1 開機程序",     // stale pointer to "文末的啟動程序段落"
@@ -451,7 +451,7 @@ func TestWorkerBootContextExcludesMemberOnlySections(t *testing.T) {
 	// Distinctive BODY text from inside each excluded region — proves the
 	// subtree went, not just its heading line.
 	for _, body := range []string{
-		"per 角色 × 任務型", // §9 role lessons (NOT "掛在角色身上" — the overlay
+		"依角色 × 任務類型各存一份", // §9 role lessons (NOT "掛在角色身上" — the overlay
 		// legitimately uses that phrase to say the worker has no such thing)
 		"三條路建立",       // §10.1 接案
 		"負責設定歸 owner", // §10.1b manual governance
@@ -472,7 +472,7 @@ func TestMemberLauncherTaskInventoryStaysMemberOnly(t *testing.T) {
 	worker := workerCtx(t)
 	for _, want := range []string{
 		"啟動後任務盤點與排程（僅 member）",
-		"依優先權與可並行度排程",
+		"依優先權與可否並行排程",
 		"先接續上一代交接或已開始的任務",
 	} {
 		if !strings.Contains(member.Context, want) {

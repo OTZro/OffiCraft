@@ -144,14 +144,14 @@ func TestBuildWorkerBootContext_CodexRuntimeTailHasFinalPrecedence(t *testing.T)
 	if err != nil {
 		t.Fatalf("fold: %v", err)
 	}
-	tail := strings.LastIndex(got, "# Runtime 開機尾步（Codex App Server）")
+	tail := strings.LastIndex(got, "# Runtime 開機最後一步（Codex App Server）")
 	if tail < 0 {
 		t.Fatal("Codex worker must receive its runtime boot tail")
 	}
 	if !strings.Contains(got[tail:], "不要**自行啟動 `ocagent listen`") {
 		t.Fatal("Codex runtime tail must transfer listener ownership to the sidecar")
 	}
-	if strings.Contains(got, "# Runtime 開機尾步（Claude Code）") {
+	if strings.Contains(got, "# Runtime 開機最後一步（Claude Code）") {
 		t.Fatal("Codex worker must not receive Claude's runtime boot tail")
 	}
 }
@@ -165,11 +165,11 @@ func TestBuildWorkerBootContext_ClaudeRuntimeTailHasFinalPrecedence(t *testing.T
 	if err != nil {
 		t.Fatalf("fold: %v", err)
 	}
-	tail := strings.LastIndex(got, "# Runtime 開機尾步（Claude Code）")
+	tail := strings.LastIndex(got, "# Runtime 開機最後一步（Claude Code）")
 	if tail < 0 || !strings.Contains(got[tail:], "Monitor 在背景跑 bare `ocagent listen`") {
 		t.Fatal("Claude worker must receive its Monitor-owned listener tail")
 	}
-	if strings.Contains(got, "# Runtime 開機尾步（Codex App Server）") {
+	if strings.Contains(got, "# Runtime 開機最後一步（Codex App Server）") {
 		t.Fatal("Claude worker must not receive Codex's runtime boot tail")
 	}
 }

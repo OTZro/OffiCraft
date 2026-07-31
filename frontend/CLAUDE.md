@@ -24,15 +24,15 @@
 `style={{background:"#6b7280"}}` 會整個繞過那道 gate,而且會讓四個非 online 態塌成
 同一色,違反「點的顏色是 roster 上唯一的 presence 訊號」)。型別面:worker 的
 `OutsourceWorkerView.presence` 是 **`MemberLifecycle` 五態 union**(不是裸 string),
-因此打錯字或漏處理新態都是 compile error,不是靜默漂移。
+因此打錯字或漏處理新態都是 compile error,不是默默漂移。
 
-**wire 字串的收斂只有一個 seam**:`mappers.ts::toPresence`(**不是 worker 專用**——
+**wire 字串的統一只有一個 seam**:`mappers.ts::toPresence`(**不是 worker 專用**——
 member 與 outsource worker 共用同一套 presence 詞彙,所以共用同一個 narrower)。
 wire 那頭是裸 `string`(spec 已凍結),不認得的字 → `undefined`,再由各 caller 落到
 自己誠實的地板:**member** 的 `lifecycle` 不可為空 → 落 `offline`(`status` 同源同落,
-兩個投影不會各說各話);**worker** 保留 `undefined`(released / 從未派工本身就是資訊)。
+兩邊不會各說各話);**worker** 保留 `undefined`(released / 從未派工本身就是資訊)。
 兩者最後都由 `presenceVisual` 畫成 offline 點,**永不假綠**。⚠️ 別把這個 narrower 拿掉:
-未收斂的字會直接掉出 `presenceVisual` 的 no-default switch,渲染成
+沒被統一過的字會直接掉出 `presenceVisual` 的 no-default switch,渲染成
 `lifecycle-dot--undefined`——**沒有顏色、`role="img"` 卻沒有 aria-label**,對讀屏是整個
 消失的元素,而且不會有任何其他測試變紅。護欄:`api/mappers.presence.test.tsx`。
 
@@ -198,7 +198,7 @@ DOM listener 依註冊順序觸發,覆蓋層先關掉自己、把 `false` 回報
 
 ## 聊天/回覆輸入框(多行 composer)
 三個多行 composer——聊天(ChatArea)、回覆卡(ReplyComposer)、TaskCard 任務訊息
-框——都是 **textarea**(共用 `.chat__input`)。**送出決策收斂到單一 `lib/composerKeys.ts`
+框——都是 **textarea**(共用 `.chat__input`)。**送出決策統一到單一 `lib/composerKeys.ts`
 的 `enterShouldSend`**(T-6bad),三處 onKeyDown 都走它、行為永不漂移:
 - **桌面**(視窗 >720px):**Enter=送出、Shift+Enter=換行**(不變)。
 - **手機**(視窗 ≤720px,`useIsMobile`):**Enter=換行、送出走送出鈕**——手機沒有
@@ -218,7 +218,7 @@ inline 卡,訊息帶 `replyCardId` = wire `meta.reply_card_id` 時取代 bubble)
 渲染 **共用的 `ReplyCardBody.tsx`**(選項 chips/你選的/AI 建議 tag/重新決定流程)
 + 共用 `ReplyComposer`(打字/附檔/貼圖)——兩面永不漂移。同步 = reconcile-by-
 refetch:兩側都訂 `reply_card` topic;聊天卡另走 `GET /api/reply-cards/{id}`
-單卡 refetch。**list wire 輕量化(T-3f31)**:`GET /api/reply-cards` 只回輕量列
+單卡 refetch。**list wire 輕量化(T-3f31)**:`GET /api/reply-cards` 只回輕量摘要
 (summary+決策 digest,無 body/options 全文)——http adapter 的 `listReplyCards`
 逐卡 hydrate(list 拿 id 序 → per-id `GET /api/reply-cards/{id}`)還原完整
 `ReplyCard[]`,adapter 契約與 pane 渲染(chips/body)不變;mock 本就出全卡,
@@ -255,7 +255,7 @@ hold 釋放)。status union 全線(adapter/mappers join)= waiting|answered|expir
 - **進度/狀態全 passthrough**:`progress_done/total` 用 server 算好的,UI 不自算;
   狀態推進 agent 回報、owner 只有「終止」這一個直接狀態動作(ConfirmModal 二次確認)
   + 優先權調整(含凍結/解凍,同一 `/priority` knob)。
-- **gate 投影**:`is_gate` + `reply_card_id==""` = 虛線「等我回覆」預告;非空 = 生效
+- **gate 狀態**:`is_gate` + `reply_card_id==""` = 虛線「等我回覆」預告;非空 = 生效
   → 內嵌 `TaskReplyCard`(可多張),內裡**絕對重用** M2 `ReplyCardBody.tsx`
   (單卡 refetch + `reply_card` topic,同 ChatReplyCard 模式——回覆同步反映到
   等我回覆頁)。**H4 配套**:gate step 仍 `waiting_owner` 而綁卡已 answered →
@@ -265,7 +265,7 @@ hold 釋放)。status union 全線(adapter/mappers join)= waiting|answered|expir
   問答內容仍由內嵌卡承載;gate 預告分支對終態(done/superseded)不再虛線預告。
   superseded 不算 `progress_done/total`(server 除名)→ 「全 superseded」任務誠實
   報 0/0 但 steps 非空:TaskCard 的 hydrate loading gate 不再要求 progressTotal>0
-  (未指派例外,等待指派可從輕量列直接投影),避免落「等待建立 Steps」謊態。
+  (未指派例外,等待指派可從輕量摘要直接推導),避免落「等待建立 Steps」謊態。
 - **外包顯示誠實線**:TaskCard 的「外包 代號 · 模型 · 投入度」只從 LIVE
   `GET /api/outsource-workers` 解析;worker 已 release(結案)→ 誠實退回裸「外包」,
   永不捏代號。⚠️ **這條講的是任務卡上的 chip,它描述的是「這張任務要用什麼開外包」
@@ -311,9 +311,9 @@ stepper+無限鈕+完成,照 seth-member-2):上限 = `settings.outsource_max_par
 指派」;settings 沒載到 → 誠實只顯 N,不捏上限)。**點列 = 開聊天頻道**:worker 的 `ow-` id 直接
 走 `#office/chat/<id>` 同一個 chatId 槽(OfficePage 先查 workers 再 fallback
 roster,released 自癒回預設成員聊天);ChatArea 完整重用,以 synthetic Member
-+ `headerSub` prop **替換** PresenceBadge——**理由不是「worker 無 presence 可投影」**
++ `headerSub` prop **替換** PresenceBadge——**理由不是「worker 沒有 presence 可顯示」**
 (那句已隨上面的不變量一起廢除:worker 有真的 wire `presence`),而是版面裁定
-**presence 只在 rail 那一個地方投影**,chat header 不長第二個 presence 來源,改顯任務行;
+**presence 只在 rail 那一個地方顯示**,chat header 不長第二個 presence 來源,改顯任務行;
 worker 詳情 header 則走與 rail 同一顆 `LifecycleDot`;
 標題「外包 · 代號」;無詳情面板(不傳 onOpenDetail)、無 unread 計數。
 
@@ -523,10 +523,10 @@ mutant 紀錄:`docs/design/worker-panel-parity-mutants.md`。
   **且都可以改**。落地順序 `/model` → `/relocate`(機器有改才打) → `/restart`,**全是既有端點**。
   ⚠️ `/restart` **不吃 machine_id**,所以釘選只能由 relocate 寫 —— 這是外包與正職(它的
   `activate(machineId)` 自己帶機器)唯一的形狀差異,別把兩邊的順序抄來抄去。
-- 🔴 **釘住的機器只是「睡著」時,seed 一律逐字保留那一台**,不准 fallback「第一台在線的機器」。
+- 🔴 **釘住的機器只是「睡著」時,seed 一律逐字保留那一台**,不准 fallback「第一台線上的機器」。
   否則 `machineChanged` 對一個停在睡著機器上的 agent **恆為 true**,開設定只想改模型的人會被
-  靜默搬走。兩個面板的 `openSettings` 都有這條,**改一邊要改兩邊**。
-  ⚠️ 測這一條時 fixture **必須有一台在線機器**,否則那個 mutant 無處可去、測試在壞碼上照樣綠。
+  默默搬走。兩個面板的 `openSettings` 都有這條,**改一邊要改兩邊**。
+  ⚠️ 測這一條時 fixture **必須有一台線上機器**,否則那個 mutant 無處可去、測試在壞碼上照樣綠。
 - **外包沒有「只儲存,不喚醒」,而且這是刻意不對齊**:正職的「只儲存」是 PATCH ＋
   placement-only relocate,都不啟動;外包的 relocate **會 kill + re-dispatch**(除非
   `desired_state` 已是 offline),所以那顆鍵對外包會是假話。要有它得新增 pin-only 端點＝動凍結 wire。
@@ -581,7 +581,7 @@ mutant 紀錄:`docs/design/worker-panel-parity-mutants.md` 第五、六批。
 
 ## 匯入主題包:不認得的用詞代碼 = 警告,不是錯誤(T-081b)
 `wording` 覆寫裡不在白名單的 message code **一律丟棄、匯入照樣成功**(owner
-2026-07-27:「已匯入的主題包還是要能夠運作,只是不認得的會失效」),但**不准靜默**。
+2026-07-27:「已匯入的主題包還是要能夠運作,只是不認得的會失效」),但**不准無聲無息**。
 - 丟棄的代碼經 `validateWording(wording, where, skipped)` / `validateThemeBundle(…, skipped)`
   的 **out-param 警告通道**回報(跨語言同一代碼只回報一次),`parseImportedBundle`
   再以 `skippedWording: string[]` 交給 UI。**它永遠不是回傳值(錯誤)** —— 真正不合法的

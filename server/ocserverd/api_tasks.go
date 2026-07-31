@@ -1299,14 +1299,14 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 		s.postTaskChat(*t, wireSystemSender, oldExecutor,
 			"["+no+"] 此任務已轉派給 "+newExecutorLabel+"。"+
 				"請停止推進，改為去跟接手人做交接：對方接手後會主動 post_chat 找你，"+
-				"回答他關於目前進度、在飛事項、要注意的坑的提問，直到他確認交接完成。交接完成後這張任務就不再是你的了。",
+				"他問目前進度、進行中的事項、有哪些雷要注意，你都要答得出來，直到他確認交接完成。交接完成後這張任務就不再是你的了。",
 			trigger)
 	}
 	if oldExecutor != "" && newExecutorID != "" {
 		predecessorLabel := s.executorLabel(oldKind, oldExecutor)
 		msg := "[" + no + "] 你接手了任務「" + t.Title + "」。你的前任是 " +
 			predecessorLabel + "（id `" + oldExecutor + "`）。請先跟他確認交接完成" +
-			"（直接 post_chat 給他，問清楚目前進度與在飛事項），確認後再由你自己呼叫 claim_task" +
+			"（直接 post_chat 給他，問清楚目前進度與進行中的事項），確認後再由你自己呼叫 claim_task" +
 			"（認領）解除轉派鎖——只有你這個新負責人動得了；任務狀態一律照步驟推導，不必也不能自己報。"
 		if note := trimmedOrEmpty(body.Note); note != "" {
 			msg += "\n\n交接備註：" + note

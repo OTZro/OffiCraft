@@ -114,7 +114,7 @@ var workerSharedCoreExclusions = []sharedCoreExclusion{
 	// 不只是「被後面覆寫」。連同下面兩條 renumber rewrite 與 五步→四步，一起
 	// 讓外包讀到一份自洽的四步 SOP，不留孤兒編號。
 	{
-		Anchor: "3. **用 lessons 工具整併耐久教訓**",
+		Anchor: "3. **用 lessons 工具整併長期教訓**",
 		Line:   true,
 		Why: "角色 lessons 對 worker 不成立，且這一步指向已排除的 §9。worker 的等價物" +
 			"是 write_task_learnings（overlay §3），不放進換手 SOP 的編號步驟裡。",
@@ -162,7 +162,7 @@ var workerSharedCoreExclusions = []sharedCoreExclusion{
 			"翻轉成「我是協調窗口，§10.5 這三步不用我做」——而它出現的位置，正好在 overlay §6" +
 			"（「這三步就是你的退場程序」）之前約 80 行，是同一份文件裡對同一件事的兩種相反讀法，" +
 			"而且錯的那個在前面、會先被讀到。" +
-			"刪掉之後 §10.5 開頭「你（負責人）要把結束後續處理完」對 worker 直接讀成正確的——" +
+			"刪掉之後 §10.5 開頭「你（負責人）要把收尾事項處理完」對 worker 直接讀成正確的——" +
 			"worker 本來就是這張任務的負責人。括號裡唯一 worker 需要知道的資訊（回報收尾後" +
 			"伺服器會解僱它、那是正常退場）overlay §6 第 4 點已完整涵蓋，所以整行刪掉不損失內容，" +
 			"就地改寫反而會在共用核心裡複製一份 overlay 已有的內容——正是本票要消滅的漂移來源。",
@@ -180,13 +180,13 @@ var workerSharedCoreExclusions = []sharedCoreExclusion{
 			"沒有下一張可開（overlay §1）。",
 	},
 	{
-		Anchor: "- **吃 context 的重活交給 sub-agent，你當 scrum master。**",
+		Anchor: "- **吃 context 的粗重工作交給 sub-agent，你當 scrum master。**",
 		Line:   true,
 		Why: "§10.3 的政策本體，比 §10.4 那條 DO/DON'T 一行更實質：「你這個 main session 的" +
-			"角色是 scrum master……**不自己下場做重活**」。對 worker 完全相反——它正是被授權" +
-			"下場的角色。這條連自己的括號都寫著「外包 worker……可以自己下場做重活——你不行」，" +
+			"角色是 scrum master……**不自己下場做粗重工作**」。對 worker 完全相反——它正是被授權" +
+			"下場的角色。這條連自己的括號都寫著「外包 worker……可以自己下場做粗重工作——你不行」，" +
 			"整段是寫給成員讀的，用第二人稱送給外包只會讀成反的。overlay §4 已完整涵蓋" +
-			"（可以下場 ＋ context 預算照守 ＋ 重活丟 sub-agent ＋ 開發/review 不同 actor）。" +
+			"（可以下場 ＋ context 預算照守 ＋ 粗重工作丟 sub-agent ＋ 開發/review 不同 actor）。" +
 			"（第八處殘留，量自實際組出來的內容，不在 review 清單上。）",
 	},
 	{
@@ -256,7 +256,7 @@ var workerSharedCoreRewrites = []sharedCoreRewrite{
 	// 成立、而且很重要的紀律一起丟掉，所以就地改寫中間那段機制描述。
 	{
 		Anchor:  "換手／換機（§8b）時，你手上任務的完整狀態",
-		Find:    "接手的新 session **先用 MCP `peek_resume_summary_size` 探快照多大**（只回大小／counts ＋ `estimated_total_chars`、不含任何內容），再決定怎麼接回:小（經驗門檻 < 20000 字元、約 5k tokens）就直接用 `resume_summary` 拿回、大就派便宜 sub-agent（如 haiku）去 `resume_summary` 拉回並回壓縮摘要——然後**接著跑完**。`resume_summary` 快照是**輕量列**（省你的開機 context）：每張任務只有編號／標題／狀態／優先權／當前節點名稱＋進度，**不含 steps／DoD 全文**；`overview` 欄帶大小概要（開放任務總數、省略掉的計畫文字字數 `detail_chars`、快照 chat 字數 `chat_chars`、你的等回覆卡數，peek 讀的就是這塊）——**先看大小再決定**：細節按需 `get_task` 逐張拉，`detail_chars` 很大就丟給 sub-agent 消化、別整包塞進自己的 context；卡片列表用 `list_reply_cards`（有 `limit` 可截量，列表只給標題＋決策要點，全文 `get_reply_card`）。",
+		Find:    "接手的新 session **先用 MCP `peek_resume_summary_size` 探快照多大**（只回大小／counts ＋ `estimated_total_chars`、不含任何內容），再決定怎麼接回：小（經驗法則的門檻：小於 20000 字元、約 5k tokens）就直接用 `resume_summary` 拿回、大就派便宜 sub-agent（如 haiku）去 `resume_summary` 拉回並回壓縮摘要——然後**接著跑完**。`resume_summary` 快照是**輕量摘要**（省你的開機 context）：每張任務只有編號／標題／狀態／優先權／當前節點名稱＋進度，**不含 steps／DoD 全文**；`overview` 欄帶大小概要（未結案任務總數、省略掉的計畫文字字數 `detail_chars`、快照 chat 字數 `chat_chars`、你的等回覆卡數，peek 讀的就是這塊）——**先看大小再決定**：細節按需 `get_task` 逐張拉，`detail_chars` 很大就丟給 sub-agent 消化、別整包塞進自己的 context；卡片列表用 `list_reply_cards`（有 `limit` 可限制筆數，列表只給標題＋決策要點，全文 `get_reply_card`）。",
 		Replace: "接手的新你用 MCP `get_my_task` 領回這張任務的全文＋手冊快照，再照 task plan／step note ＋ 你上一代留給自己的交接 baton 接回進度——然後**接著跑完**。細節按需 `get_task` 拉；很大就丟給 sub-agent 消化、別整包塞進自己的 context。",
 		Why: "peek_resume_summary_size / resume_summary 是成員的身分快照路徑，已從 worker 的" +
 			"啟動程序排除；留著這句等於叫 worker 去用一條它沒有的路。",
@@ -265,16 +265,16 @@ var workerSharedCoreRewrites = []sharedCoreRewrite{
 	// §10.5 結案後續：拿掉「角色 lessons」那一軌。
 	{
 		Anchor:  "1. **經驗回寫**",
-		Find:    "（有值得沉澱的就分兩軌）",
-		Replace: "（有值得沉澱的就寫回手冊）",
+		Find:    "（有值得留下來的就分兩軌）",
+		Replace: "（有值得留下來的就寫回手冊）",
 		Why:     "worker 只有手冊這一軌，沒有角色那一軌。",
 	},
 	{
 		Anchor: "1. **經驗回寫**",
 		Find: "；**屬你這個角色的**（對你之後做任何事都成立的通則）→ 照 §9 整併進你角色的" +
 			"學習筆記（lessons）。兩軌同一個整併紀律：整理不是往後貼，而且**兩軌都吃 §9a 那個一份 " +
-			"10,000 字的硬上限**（超標而且沒變短就整份不寫，留時間整理）。ad-hoc 任務無手冊，只有角色這一軌。",
-		Replace: "。整併紀律：整理不是往後貼，而且手冊的學習經驗有**一份 10,000 字的硬上限**" +
+			"10,000 字的上限**（超標而且沒變短就整份不寫，留時間整理）。ad-hoc 任務無手冊，只有角色這一軌。",
+		Replace: "。整併紀律：整理不是往後貼，而且手冊的學習經驗有**一份 10,000 字的上限**" +
 			"（超標而且沒變短就整份不寫，留時間整理）。對你之後做任何事都成立的通則，一樣寫進手冊的" +
 			"學習經驗；ad-hoc 任務沒有手冊，就寫進 step note 的交接說明。",
 		Why: "第二個指向已排除 §9 的 lessons 指標（T-3351 起這句同時指向同樣已排除的 §9a" +
@@ -295,7 +295,7 @@ var workerSharedCoreRewrites = []sharedCoreRewrite{
 // they are excluded rather than left to be overridden further down.
 var workerBootSequenceExclusions = []sharedCoreExclusion{
 	{
-		Anchor: "剛醒過來、開機當下照序做這三步",
+		Anchor: "剛醒過來、開機當下依序做這三步",
 		Block:  true,
 		Why:    "「三步」的步數與內容對 worker 不成立；worker 的開機序列在 overlay §2。",
 	},
