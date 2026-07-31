@@ -978,19 +978,21 @@ type MonitoringSessionDTO struct {
 	CompactionCount *int     `json:"compaction_count,omitempty"`
 	ContextPct      *float64 `json:"context_pct,omitempty"`
 	Cost            *float64 `json:"cost,omitempty"`
-	Effort          *string  `json:"effort,omitempty"`
-	Id              string   `json:"id"`
-	Machine         *string  `json:"machine,omitempty"`
+
+	// Effort The effort level this session REPORTED it is running at (the roster row's ``actual_effort``). Honest-empty until something reports one, and it NEVER falls back to the owner-configured ``effort`` launch setting. Durable since T-7f28 — see ``model`` for the shared contract.
+	Effort  *string `json:"effort,omitempty"`
+	Id      string  `json:"id"`
+	Machine *string `json:"machine,omitempty"`
 
 	// Model The model this session REPORTED it is running (the roster row's ``actual_model``), for staff and outsource rows ALIKE — one column, one meaning. Honest-empty until something reports one, and it NEVER falls back to the owner-configured launch model. WAS: staff rows served the configured ``member.model`` while outsource rows served the reported value, so a single column header meant two different things depending on the row.
 	//
-	// ⚠️ NOT symmetric with the ``effort`` beside it, despite both being reported state. ``model`` is read from the DURABLE ``actual_model`` column, so it survives a server restart and outlives the session that reported it; ``effort`` is read from the in-memory telemetry entry and is therefore blanked fleet-wide by any server re-exec. There is no ``actual_effort`` column. Do not describe the two as twins and do not infer one's storage from the other's — pinned by TestGetMonitoring_ReportedModelSurvivesATelemetryWipe, which passes for model and would fail for effort.
+	// Symmetric with the ``runtime`` and ``effort`` beside it since T-7f28: all three are reported state read from DURABLE columns (``actual_model`` / ``actual_runtime`` / ``actual_effort``), so all three survive a server restart and outlive the session that reported them. WAS asymmetric — ``effort`` and ``runtime`` were read from the in-memory telemetry entry and blanked fleet-wide on every re-exec, and the spec text here said so. Pinned by TestGetMonitoring_ReportedLaunchFactsSurviveAReExec (all three) and TestGetMonitoring_ReportedLaunchFactsNeverFallBackToTheConfiguredValue.
 	Model    *string `json:"model,omitempty"`
 	Name     string  `json:"name"`
 	Presence *string `json:"presence,omitempty"`
 	Role     *string `json:"role,omitempty"`
 
-	// Runtime The session's selected provider runtime.
+	// Runtime The runtime this session REPORTED it is running (the roster row's ``actual_runtime``). Honest-empty until something reports one, and it NEVER falls back to the owner-configured ``runtime`` launch setting. WAS: this served the CONFIGURED value under a comment claiming it folded through the reported telemetry, so the cell flipped the instant the owner changed the setting and a runtime switch that had not happened yet was indistinguishable from one that had (T-7f28).
 	Runtime *AgentRuntime   `json:"runtime,omitempty"`
 	Tokens  *map[string]int `json:"tokens,omitempty"`
 }
@@ -1085,7 +1087,7 @@ type OutsourceWorkerDTO struct {
 	// Machine The machine the worker's session was ACTUALLY dispatched to (last_spawn_target resolved to its registry display name) — the REAL placement result, NOT the manual's preference. "" when never dispatched (未分配 — the panel renders "尚未分配", never a fabricated machine). T-f190 additive-optional.
 	Machine *string `json:"machine,omitempty"`
 
-	// Model The owner-CONFIGURED launch model this worker was (or will be) started with — the intent the 喚醒／更改 dialog round-trips and saves. Deliberately NOT the reported one: that is ``MemberDTO.actual_model`` / ``MonitoringSessionDTO.model``. The two must never be merged into one cell — this DTO exists to round-trip the setting, and a settings editor that displayed reported state could not save.
+	// Model The owner-CONFIGURED launch model this worker was (or will be) started with — the intent the 喚醒／更改 dialog round-trips and saves. Deliberately NOT the reported one: that is ``actual_model`` on this same DTO since T-7f28 (also ``MemberDTO.actual_model`` / ``MonitoringSessionDTO.model``) — the panel now shows both, side by side, so a change that has not taken effect is legible as pending. The two must never be merged into one cell — this DTO exists to round-trip the setting, and a settings editor that displayed reported state could not save.
 	Model *string `json:"model,omitempty"`
 
 	// Presence REAL-liveness projection on the ONE member presence vocabulary (A案 P6 — deriveLiveness; replaces the retired ``spawn_state`` closed set starting/stuck/online/stopped). Distinct from lifecycle ``status`` so a worker whose session is not actually up is not rendered as a live green row. Uses the same SSE-presence authority (hub.IsOnline) the member roster reads. Closed set: ``online`` (holding a live SSE connection), ``waking`` (not online with a fresh wake in flight — last start dispatch / row birth within the waking TTL), ``offline`` (not online and no fresh wake — a silently-failing spawn or a died-after-claim session; the FSM rescue owns recovery), ``stopping``/``stopped`` (owner-explicit stop: held down, no auto-revival), ``""`` (released; off-panel). Optional-with-default: absent reads as "" for older clients.

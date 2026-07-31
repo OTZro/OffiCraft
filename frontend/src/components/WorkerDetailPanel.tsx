@@ -134,15 +134,24 @@ export function WorkerDetailPanel({
   // has had all along. Same rule, same shared helper, so the two panels cannot
   // drift apart again. `worker.machine` is the display name the server already
   // resolved, so the pin is resolved the same way before they are compared.
-  const desiredMachineDisplay =
-    machines.find((m) => m.machineId === worker.desiredMachineId)?.displayName ??
-    worker.desiredMachineId ??
-    "";
+  //
+  // 🔴 BOTH SIDES ARE RESOLVED TO DISPLAY NAMES BEFORE THEY ARE COMPARED. The
+  // worker wire is asymmetric: `machine` arrives ALREADY resolved server-side
+  // ("Mac Studio (mac-1)") while `desired_machine_id` and `actual_machine` are
+  // raw ids. Comparing a display name against a raw id makes every correctly
+  // placed worker look mid-relocation — the false-positive twin of the bug
+  // this ticket exists to kill, and it would have shipped as a hint on every
+  // healthy row.
+  const machineDisplay = (id: string) =>
+    machines.find((m) => m.machineId === id)?.displayName || id;
+  const desiredMachineDisplay = machineDisplay(worker.desiredMachineId ?? "");
   const pendingMachine = pendingChangeHint(
-    worker.desiredMachineId ?? "",
-    reportedMachine(worker.machine ?? "", worker.actualMachine ?? ""),
-    msg.workerMachineMovingTo,
     desiredMachineDisplay,
+    reportedMachine(
+      worker.machine ?? "",
+      machineDisplay(worker.actualMachine ?? ""),
+    ),
+    msg.workerMachineMovingTo,
   );
   const pendingRuntime = pendingChangeHint(
     worker.runtime || "claude",

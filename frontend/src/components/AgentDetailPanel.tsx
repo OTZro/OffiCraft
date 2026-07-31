@@ -192,7 +192,7 @@ export function AgentDetailPanel({
   // handler and the "configured value" hint beneath the readouts were all dead
   // — along with the local override state that existed to paper over a save the
   // parent had not refetched yet. The live editor is the member panel's
-  // settings dialog. `AgentDetailPanel.dead-editor.test.tsx` pins the absence.
+  // settings dialog. `AgentDetailPanel.pending-change.test.tsx` pins the absence.
   const shownModel = vm.model;
   const shownEffort = vm.effort;
   // Known effort levels render 中文字 + the raw key (the member page's format,
@@ -475,7 +475,10 @@ export function AgentDetailPanel({
           </div>
         )}
         {!windDownNote && refocusSinceText && (
-          <div className="mp-runtime__note mp-runtime__note--muted">
+          <div
+            className="mp-runtime__note mp-runtime__note--muted"
+            data-testid={`${p}-refocus-since`}
+          >
             {vm.refocusSinceLabel(refocusSinceText)}
           </div>
         )}

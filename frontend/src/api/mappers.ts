@@ -706,7 +706,10 @@ function toMonSession(w: WireMonSession): MonSessionView {
     effort: w.effort || "", // live self-reported effort; "" passes through → "—"
     machine: w.machine,
     account: w.account,
-    runtime: (w.runtime || "claude") as "claude" | "codex",
+    // The REPORTED runtime, honest-empty until something reports one — the wire
+    // stopped serving the configured value here (T-7f28), so flooring it to
+    // "claude" would just put the fabrication back one layer up.
+    runtime: (w.runtime || "") as "claude" | "codex" | "",
     status: w.presence as MemberStatus,
     // Telemetry is null-until-reported on the wire; a defaulted-away field
     // arrives as `undefined` — coalesce to null so the UI renders "—", never a

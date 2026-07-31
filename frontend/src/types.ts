@@ -424,7 +424,8 @@ export interface MonSessionView {
   effort: string;
   machine: string;
   account: string;
-  runtime: "claude" | "codex";
+  /** REPORTED runtime; "" until something reports one (T-7f28). */
+  runtime: "claude" | "codex" | "";
   /** presence tri-state mapped 1:1 onto the member status. */
   status: MemberStatus;
   contextPct: number | null;

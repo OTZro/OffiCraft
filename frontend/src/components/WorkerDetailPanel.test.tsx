@@ -1296,13 +1296,15 @@ describe("WorkerDetailPanel — pending launch changes (T-7f28)", () => {
         runtime: "codex",
         model: "Opus 4.6",
         effort: "high",
-        desiredMachineId: "mbp5",
-        // …versus what the worker's session actually reported.
+        desiredMachineId: "warden-mbp5",
+        // …versus what the worker's session actually reported. `machine` is the
+        // server-RESOLVED display name; `actualMachine` is a raw id, like the
+        // pin — the panel has to resolve before it compares.
         actualRuntime: "claude",
         actualModel: "claude-sonnet-4-5",
         actualEffort: "low",
         machine: "",
-        actualMachine: "mbp1",
+        actualMachine: "warden-elsewhere",
       }),
     );
 
@@ -1318,7 +1320,7 @@ describe("WorkerDetailPanel — pending launch changes (T-7f28)", () => {
     ).toContain("high");
     expect(
       (await findByTestId("worker-detail-machine-pending")).textContent,
-    ).toContain("mbp5");
+    ).toContain("Warden · mbp5");
     // The READOUTS stay on the reported side — the whole point is that the two
     // are legible as different things at the same time.
     expect((await findByTestId("worker-detail-runtime-value")).textContent).toBe(
@@ -1338,9 +1340,13 @@ describe("WorkerDetailPanel — pending launch changes (T-7f28)", () => {
         actualModel: "Opus 4.6",
         effort: "high",
         actualEffort: "high",
-        desiredMachineId: "mbp5",
-        machine: "mbp5",
-        actualMachine: "mbp5",
+        // 🔴 The regression this case exists for: the pin is a raw id and the
+        // OBSERVED machine arrives already resolved to its display name. A
+        // comparison that forgets to resolve marks every correctly placed
+        // worker as mid-relocation.
+        desiredMachineId: "warden-mbp5",
+        machine: "Warden · mbp5",
+        actualMachine: "warden-mbp5",
       }),
     );
 
