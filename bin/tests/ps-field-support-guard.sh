@@ -61,9 +61,18 @@ bad() { FAIL=$((FAIL+1)); printf '  FAIL — %s\n' "$1"; }
 # field was still in it) and the guard went green having checked nothing about
 # the probe that vanished. Mutation testing caught exactly that. Every scanned
 # file must contribute at least one field, or this guard says so.
-FIELDS=()
+#
+# ⚠️ NO `mapfile` HERE. It is a bash 4+ builtin and macOS ships bash 3.2 as
+# /bin/bash — a fleet machine without a newer bash on PATH aborts the guard with
+# "mapfile: command not found" instead of checking anything. Found by running
+# this guard on a SECOND machine, which is the same lesson the guard itself
+# exists to teach: it had been verified on exactly one host.
+FIELDS=""
 for src in "$SRC" "$SHAPE_SRC"; do
-  mapfile -t found < <(
+  found=()
+  while IFS= read -r field; do
+    [[ -n "$field" ]] && found+=("$field")
+  done < <(
     grep -hoE '"-o", "[a-z_]+="' "$src" \
       | sed -E 's/.*"-o", "([a-z_]+)=".*/\1/' | sort -u
   )
@@ -72,15 +81,15 @@ for src in "$SRC" "$SHAPE_SRC"; do
     continue
   fi
   printf '  ..   — %s asks for: %s\n' "${src#"$ROOT"/}" "${found[*]}"
-  FIELDS+=("${found[@]}")
+  FIELDS="$FIELDS ${found[*]}"
 done
-if [[ ${#FIELDS[@]} -eq 0 ]]; then
+FIELDS="$(printf '%s\n' $FIELDS | sort -u)"
+if [[ -z "$FIELDS" ]]; then
   printf 'ps-field-support: %d ok, %d failed\n' "$PASS" "$FAIL"
   exit 1
 fi
-mapfile -t FIELDS < <(printf '%s\n' "${FIELDS[@]}" | sort -u)
 
-for field in "${FIELDS[@]}"; do
+for field in $FIELDS; do
   if ! out="$(ps -p $$ -o "${field}=" 2>&1)"; then
     bad "ps -o ${field}= is NOT supported by this host's ps (rc!=0): ${out%%$'\n'*}"
     continue
