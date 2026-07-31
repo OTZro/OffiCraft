@@ -169,6 +169,17 @@ type apiServer struct {
 	// in-memory, restart-amnesia safe (a forgotten entry just allows one extra
 	// idempotent sweep).
 	identitySweepAt map[string]float64
+	// ── receipt deadline state (receipt_watch.go; T-b36a step 3) ─────────────
+	// receiptPending → target id (member id OR outsource worker id — the P5b
+	// verbs share one namespace) → the start/stop still owed a command_result.
+	// Guarded by its OWN mutex, never reconcileMu/outsourceMu: it is armed from
+	// both producers and disarmed from the telemetry ingest goroutine, so
+	// borrowing either producer's lock would couple them through the ingest path.
+	// In-memory, restart-amnesia by design (the same posture as reconcileStates):
+	// a forgotten watch just means one dispatch goes unwatched, never a false
+	// receipt_missing on a member the server never dispatched to.
+	receiptMu      sync.Mutex
+	receiptPending map[string]pendingReceipt
 	// ── outsource assignment scheduler state (outsource_sched.go; M3 Phase 2) ──
 	// outsourceMu serializes the scheduler's 30s cadence tick with the
 	// event-driven create_task tick. There is no in-memory ledger to guard —

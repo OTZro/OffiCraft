@@ -359,6 +359,7 @@ func newAPIServer(dal *DAL, hub *Hub, secret []byte, tokenTTL int64, root assetR
 		reconcileStates:       map[string]reconcileState{},
 		reconcileCfg:          defaultReconcileConfig(),
 		identitySweepAt:       map[string]float64{},
+		receiptPending:        map[string]pendingReceipt{},
 		workerSpawnAt:         map[string]float64{},
 		workerSpawnTarget:     map[string]string{},
 		workerSpawnAttempts:   map[string]int{},

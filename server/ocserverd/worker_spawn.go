@@ -725,6 +725,10 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 	}
 	s.workerSpawnAt[w.ID] = now
 	s.workerSpawnTarget[w.ID] = warden
+	// The warden now owes a command_result for this worker START — same deadline
+	// as the member arm (receipt_watch.go); a worker start rides the member verb
+	// since P5b, so its receipt keys on this same id.
+	s.armReceiptWatch(w.ID, reconcileCmdStart, warden, now)
 	// Spawn observability is IN-MEMORY since the P7d fold (the member-reconcile
 	// posture; the former durable spawn_attempts / last_spawn_ts /
 	// last_spawn_target columns were deliberately not carried into the member
@@ -997,6 +1001,11 @@ func (s *apiServer) enqueueWorkerStop(target, workerID string) bool {
 	if s.workerStopPending[workerID] == target {
 		delete(s.workerStopPending, workerID) // the owed kill just went out
 	}
+	// The kill landed on a warden's FIFO: a command_result is now owed for it
+	// (receipt_watch.go). Without this arm a worker STOP that executed but whose
+	// receipt never came back left the row reading whatever it read before —
+	// the exact silence this watch exists to break.
+	s.armReceiptWatch(workerID, reconcileCmdStop, target, nowSecs())
 	return true
 }
 

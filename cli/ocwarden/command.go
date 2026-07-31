@@ -46,6 +46,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -265,11 +266,27 @@ func truncLog(s string) string {
 	return s
 }
 
+// errReceiptUndelivered marks a dispatch whose OP RAN but whose command_result did
+// not reach the server (T-b36a step 3). It is a distinct error class on purpose:
+// "the op was refused" and "the op ran and the server will never learn it" are
+// different facts with different next moves, and collapsing them into one log line
+// would trade one silence for one lie. handlePayload (transport.go) branches on it.
+//
+// WHY IT IS NOT SIMPLY LOGGED AND SWALLOWED: the warden's log file has, measured,
+// zero readers (2026-07-28: the only fd on ocwarden.err.log is the warden's own
+// write end; nothing in the server, the cockpit or the MCP surface reads it). So an
+// extra log line is NOT the signal this fixes — the signal is server-side (the
+// receipt deadline). What this error buys is the REMOVAL of the counter-signal: the
+// `dispatched %s OK` line, which today is printed on exactly this path and states
+// the opposite of what happened.
+var errReceiptUndelivered = errors.New("command_result receipt undelivered")
+
 // report is the nil-safe emit of ONE CommandResult. It normalises the log cap + the
 // timestamp, then forwards to deps.Report and RETURNS its delivery verdict (nil when
-// deps.Report is nil — a silent skip is not a failure). The start/stop callers discard
-// this return (best-effort, unchanged); the uninstall caller REQUIRES a nil before it
-// self-exits, so the receipt is proven delivered before the warden dies.
+// deps.Report is nil — a silent skip is not a failure). start/stop now RETURN this
+// verdict too (wrapped in errReceiptUndelivered), ranked BELOW the op's own outcome;
+// the uninstall caller REQUIRES a nil before it self-exits, so the receipt is proven
+// delivered before the warden dies.
 func (deps CommandDeps) report(cr CommandResult) error {
 	if deps.Report == nil {
 		return nil
@@ -308,10 +325,10 @@ func dispatchCommand(cmd *Command, deps CommandDeps) error {
 			// closed code set — see SpawnOutcome.Reason); the fallback below only fires
 			// for an out-of-tree Spawn seam that reports a bare OK=false.
 			out := deps.Spawn(params)
-			// Best-effort receipt of the EXECUTED start (toothless: reported AFTER the
-			// spawn ran, never gating the return). The reason doubles as the log so a
-			// refusal cause is visible server-side.
-			deps.report(CommandResult{
+			// Receipt of the EXECUTED start — still TOOTHLESS over the spawn itself
+			// (reported AFTER the spawn ran, never gating it). The reason doubles as
+			// the log so a refusal cause is visible server-side.
+			receiptErr := deps.report(CommandResult{
 				MemberID: params.MemberID,
 				RPC:      rpcStart,
 				OK:       out.OK,
@@ -323,7 +340,18 @@ func dispatchCommand(cmd *Command, deps CommandDeps) error {
 				if reason == "" {
 					reason = "spawn refused (warden reported no reason)"
 				}
+				// RANKED FIRST, deliberately: a spawn refusal is the more actionable
+				// fact and it is the one the operator must see. Reporting the receipt
+				// fault here instead would fold "the spawn failed" into "we could not
+				// tell you" — the findings' explicit warning against conflating the
+				// two errors on the start arm.
 				return fmt.Errorf("command: start for %q did not spawn: %s", params.MemberID, reason)
+			}
+			if receiptErr != nil {
+				// The spawn SUCCEEDED and the server will never hear about it. Returned
+				// so handlePayload prints the honest line instead of "dispatched OK".
+				return fmt.Errorf("command: start for %q ran but %w: %v",
+					params.MemberID, errReceiptUndelivered, receiptErr)
 			}
 		}
 		return nil
@@ -349,7 +377,7 @@ func dispatchCommand(cmd *Command, deps CommandDeps) error {
 		if !ok {
 			stopReason = "stop incomplete (session still present / sweep survivor)"
 		}
-		deps.report(CommandResult{
+		receiptErr := deps.report(CommandResult{
 			WorkerID: workerID,
 			RPC:      rpcWorkerStop,
 			OK:       ok,
@@ -358,6 +386,10 @@ func dispatchCommand(cmd *Command, deps CommandDeps) error {
 		})
 		if !ok {
 			return fmt.Errorf("command: worker_stop incomplete for %q (session still present / sweep survivor)", session)
+		}
+		if receiptErr != nil {
+			return fmt.Errorf("command: worker_stop for %q ran but %w: %v",
+				session, errReceiptUndelivered, receiptErr)
 		}
 		return nil
 	case rpcUpdate:
@@ -403,13 +435,21 @@ func dispatchCommand(cmd *Command, deps CommandDeps) error {
 			if !ok {
 				reason = "stop incomplete (session still present / broken probe / member process survived the sweep)"
 			}
-			deps.report(CommandResult{
+			receiptErr := deps.report(CommandResult{
 				MemberID: memberID,
 				RPC:      rpcStop,
 				OK:       ok,
 				Reason:   reason,
 				Log:      fmt.Sprintf("session=%s: %s", session, reason),
 			})
+			if receiptErr != nil {
+				// The stop's own verdict (ok / no-op) still rode the receipt that did
+				// not land, so the server holds NO version of this stop's outcome.
+				// Surfaced as the receipt class so the OK line is suppressed; the
+				// server-side deadline is what actually reaches the owner.
+				return fmt.Errorf("command: stop for session %q ran (%s) but %w: %v",
+					session, reason, errReceiptUndelivered, receiptErr)
+			}
 		}
 		return nil
 	case rpcUninstall:
