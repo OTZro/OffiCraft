@@ -461,6 +461,108 @@ func TestOutsourceWorkerCarriesItsBoundTaskFacts(t *testing.T) {
 	}
 }
 
+func TestOutsourceWorkerOnAClosedTaskStillCarriesItsLabels(t *testing.T) {
+	// 🔴 票上的驗收條件之一:綁在**已結案**任務上的外包,其任務標籤仍要正確顯示。
+	// 這一格以前只是「碼路徑上沒有狀態條件、結構上安全」——一個沒有測試的推論。
+	// 而它剛好是最容易被「順手最佳化」掉的一格:任務清單那一側整批在學習
+	// 「別載入已結案母體」,同一句直覺套到 worker 的 join 上就會把這裡弄壞,
+	// 而面板上的後果是列標籤與排序鍵一起消失(task_created_ts 是排序鍵)。
+	//
+	// 為什麼 worker 還 active 而任務已結案:close 只把 worker 標成 released 是
+	// close-out **回報之後**的事(§6.3),中間那個窗口正是面板上看得到的狀態。
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	if err := s.dal.PutTaskManual(TaskManual{
+		TypeKey: "tm-review", DisplayName: "程式碼審查", UpdatedTS: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// 兩種終態各一張:done 與 terminated。壓成一種就分不出「擋的是 done」
+	// 與「擋的是終態」。
+	mk := func(taskID, workerID, codename, status string, created float64) {
+		if err := s.dal.PutTask(Task{
+			ID: taskID, Title: "審這支 PR", TypeKey: "tm-review",
+			Status: status, Priority: TaskPriorityMid,
+			ExecutorKind: TaskExecutorOutsource, ExecutorID: workerID,
+			CreatedTS: created, UpdatedTS: created, ClosedTS: created + 1,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.dal.PutOutsourceWorker(OutsourceWorker{
+			ID: workerID, Codename: codename, Model: "claude-opus-5",
+			Effort: "medium", TaskID: taskID, Status: WorkerStatusActive,
+			CreatedTS: created,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("t-closed0000a1", "ow-done", "O-11", TaskStatusDone, 5150)
+	mk("t-closed0000b2", "ow-term", "O-12", TaskStatusTerminated, 5250)
+
+	rec := httptest.NewRecorder()
+	s.HandleListOutsourceWorkersApiOutsourceWorkersGet(rec, perfReq("owner", "owner"))
+	if rec.Code != 200 {
+		t.Fatalf("list workers → %d: %s", rec.Code, rec.Body.String())
+	}
+	var rows []outsourceWorkerDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byID := map[string]outsourceWorkerDTO{}
+	for _, r := range rows {
+		byID[r.ID] = r
+	}
+	// 語料自證:兩個 worker 都必須真的在回應裡,否則下面每一條斷言都是對
+	// 零值做比較(那時它什麼都沒證明,只證明了 map 是空的)。
+	if len(byID) != 2 {
+		t.Fatalf("兩個綁已結案任務的 worker 都必須列出來,got %d: %+v", len(byID), rows)
+	}
+	for _, tc := range []struct {
+		workerID, taskID string
+		created          float64
+	}{
+		{"ow-done", "t-closed0000a1", 5150},
+		{"ow-term", "t-closed0000b2", 5250},
+	} {
+		got := byID[tc.workerID]
+		// MUTANT:在 worker 的 task join 上加任何 `TaskIsTerminal` 條件
+		// (handler 的 GetTask 之後、或 projectWorker 裡把 task 換成 nil),
+		// 這四條全部歸零/歸空,而既有那條 in_progress 的測試照樣綠。
+		if got.TaskNo != TaskNo(tc.taskID) {
+			t.Fatalf("%s: 已結案任務的 task_no 不見了: %q", tc.workerID, got.TaskNo)
+		}
+		if got.TaskCreatedTS != tc.created {
+			t.Fatalf("%s: 已結案任務的 task_created_ts(排序鍵)不見了: %v",
+				tc.workerID, got.TaskCreatedTS)
+		}
+		if got.TaskTypeKey != "tm-review" {
+			t.Fatalf("%s: 已結案任務的 task_type_key 不見了: %q",
+				tc.workerID, got.TaskTypeKey)
+		}
+		if got.TaskTypeName != "程式碼審查" {
+			t.Fatalf("%s: 已結案任務的 task_type_name 不見了: %q",
+				tc.workerID, got.TaskTypeName)
+		}
+	}
+
+	// 單筆讀取面(面板 relocate 後的 refresh)走同一個 projection,一併釘住——
+	// 兩個面各有自己的 taskTypeDisplayNames() 呼叫點,漂開不會有人知道。
+	one := httptest.NewRecorder()
+	s.HandleGetOutsourceWorkerApiOutsourceWorkersIdGet(
+		one, perfReq("owner", "owner"), "ow-done")
+	if one.Code != 200 {
+		t.Fatalf("get worker → %d: %s", one.Code, one.Body.String())
+	}
+	var solo outsourceWorkerDTO
+	if err := json.Unmarshal(one.Body.Bytes(), &solo); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if solo.TaskNo != TaskNo("t-closed0000a1") || solo.TaskTypeName != "程式碼審查" ||
+		solo.TaskCreatedTS != 5150 || solo.TaskTypeKey != "tm-review" {
+		t.Fatalf("單筆讀取面也必須帶已結案任務的四欄: %+v", solo)
+	}
+}
+
 func TestOutsourceWorkerTypeNameFallsBackToTheRawKey(t *testing.T) {
 	// A manual with no display name (or none at all) must leave task_type_name
 	// empty so the client prints the raw key — the same honest fallback it had

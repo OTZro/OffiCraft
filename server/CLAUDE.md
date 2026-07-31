@@ -352,20 +352,31 @@ owner 原話三句:「tasks 也一次拿太多了 說真的我們在意的只有
   的三方對質會擋:routes 表 ≡ openapi ≡ 凍結 catalog 的參數集合);`catalog_hash` 只由**工具名**
   推導(`catalogHashOf` 讀 route 表),所以加一個參數不動 hash。seeds 同批教(§9c)。
 - 哨兵:`api_perf_status_set_test.go`(集合/lock/400 點名/空集合/舊參數逐條不變/dep 解析到被
-  filter 排除的那張/`dep_tasks` 恆為陣列/worker 四欄含 fallback/count 的 open≠total),
+  filter 排除的那張/`dep_tasks` 恆為陣列/worker 四欄含 fallback/**worker 綁在已結案任務上四欄
+  照樣有值**(`TestOutsourceWorkerOnAClosedTaskStillCarriesItsLabels`,done 與 terminated 各一、
+  清單面與單筆面各一;mutant:在 `projectWorker` 的 task join 上加 `TaskIsTerminal` 判斷 →
+  整個 package 恰好這 1 條紅)/count 的 open≠total),
   conformance `test_tasks.py` 的 `test_status_set_*` / `test_dep_tasks_*` / `test_task_count_*` /
   `test_outsource_worker_carries_*`。
-  🔴 **沒有覆蓋到的:查詢次數,而且「替代品」實測是零鑑別力**(review 實測 M6,不是推論):
-  把 handler 的 join 改寫成**逐 dep `s.dal.GetTask(id)`**,整包 `go test` **一條都沒紅**。
-  所以上面那句「釘住『被排除的 dep 也解得出來』這個性質」**不能當成 N+1 的替代覆蓋**——
-  那條性質守的是「join 被整個拿掉」與「母體被縮小成只有回應那幾列」這兩件事,**不是查詢次數**;
-  逐 dep 查一樣答得出被排除的 dep,只是慢。要補的最小形狀:`DAL` 上一個**只給測試讀**的
-  `queryCount`,釘「一次 list 請求的 task 讀取次數**不隨 dep 數成長**」——**那是另一張票的工作**,
-  本批沒做。
-  ✅ 唯一真的有靜態保證的部分:`newTaskDepRefDTOs` 的簽章裡**既沒有 `*DAL` 也沒有 `*apiServer`**
+  ✅ **查詢次數現在有守衛了(`api_perf_query_count_test.go`,本票同批補;此前是缺口)**:
+  `TestTaskListTaskReadsDoNotGrowWithDepCount` 跑兩次 `?statuses=in_progress`(2 個 dep vs
+  25 個 dep),斷言**一次 list 請求打到 `task` 表的讀取次數相等**(實測都是 **1** 次,就是
+  `ListTasks`)。量測面是 **database/sql 的 driver seam**——測試檔自己把真 sqlite driver 包一層
+  註冊成第二個名字、數 `\bFROM\s+task\b` 的 statement(`task_step`/`task_dep`/`task_artifact`
+  因為 `_` 是 word char 所以天然不計),**production 一個 byte 都沒動**,而且它看得到任何路徑
+  的查詢,不限於 `GetTask`。**反恆真三道**:兩跑都先斷言每個 dep 真的被解析出來(有 title/status)
+  且數量不同(語料非空)、計數器自己必須數到 > 0(seam 死掉時 `0 == 0` 會恆真地過)、次數還要
+  ≤ 2(「同樣地大」不算)。
+  🔴 **這個缺口曾經是真的,留著當理由**:review 實測 M6 把 handler 的 join 改寫成**逐 dep
+  `s.dal.GetTask(id)`**,整包 `go test` **一條都沒紅**。所以上面那句「釘住『被排除的 dep 也
+  解得出來』這個性質」**不能當成 N+1 的替代覆蓋**——那條性質守的是「join 被整個拿掉」與
+  「母體被縮小成只有回應那幾列」,**不是查詢次數**;逐 dep 查一樣答得出被排除的 dep,只是慢。
+  同一顆 mutant 重跑(2026-08-01,`go clean -testcache`,還原用自備 `.orig` 不用 `git checkout --`):
+  **整個 package 恰好 1 條紅**,就是這條新測試(few=3 次 / many=26 次),還原後全綠。
+  ✅ 另外一半的靜態保證仍然成立:`newTaskDepRefDTOs` 的簽章裡**既沒有 `*DAL` 也沒有 `*apiServer`**
   (只收 `[]string` 與 `map[string]Task`),所以**那個函式**在編譯期就不可能查資料庫。
-  ⚠️ 但這個保證只涵蓋它自己——**handler 仍然可以用逐 dep 查詢去餵那張 map**,而那正是 M6 做的、
-  而且沒有任何測試會紅。別把函式的保證讀成端點的保證。
+  ⚠️ 但那個保證只涵蓋它自己——**handler 仍然可以用逐 dep 查詢去餵那張 map**(M6 做的正是這件事),
+  別把函式的保證讀成端點的保證;**端點那一半現在是由上面那條計數測試守的,不是由簽章守的。**
 
 ## 已知邊界(誠實列,別當成熟功能用)
 - **config 預設路徑是 CWD-relative `oc.toml`**(binary 沒有 source-path 可錨 repo root);部署正解走 `$OC_CONFIG`。
