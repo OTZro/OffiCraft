@@ -150,6 +150,65 @@ func TestContextReportBodiesMatchFrozenIngestSchemas(t *testing.T) {
 	}
 }
 
+// TestContextReportSendsSessionEffort pins the session's LIVE reasoning effort
+// onto the telemetry body. It was never sent at all: the reporter only ever put
+// effort on the status-line string, so every Claude session reported a blank
+// effort forever while the server, the frozen schema and the monitoring page were
+// all already wired for it — and a blank is indistinguishable from a session that
+// simply has not reported yet, which is why it survived unnoticed until the owner
+// spotted it on screen. Two properties are pinned beyond presence: the value is
+// the payload's LIVE effort.level (never the launch intent, which cannot follow a
+// mid-session /effort change), and it is VERBATIM (the status line's "med"
+// abbreviation must never leak onto the wire).
+func TestContextReportSendsSessionEffort(t *testing.T) {
+	home := writeClaudeJSON(t, `{"userID":"acct-1"}`)
+
+	cases := []struct {
+		name   string
+		effort string
+		want   any
+	}{
+		{name: "reported verbatim", effort: "medium", want: "medium"},
+		{name: "non-default passes through", effort: "xhigh", want: "xhigh"},
+		{name: "no effort block is omitted, never a blank", effort: "", want: nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, posts := contextServer(t)
+			cfg := Config{Base: srv.URL, Token: "t", ID: "kyle", Home: t.TempDir()}
+			payload := `{"context_window":{"used_percentage":41.5}}`
+			if tc.effort != "" {
+				payload = `{"context_window":{"used_percentage":41.5},` +
+					`"effort":{"level":"` + tc.effort + `"}}`
+			}
+			var out, errOut bytes.Buffer
+			cmdContextReport(srv.Client(), cfg,
+				testEnv(map[string]string{"HOME": home, "OC_HOST": "lab-1"}), 1000.0,
+				strings.NewReader(payload), &out, &errOut)
+
+			tel := findPost(*posts, "/api/monitoring/telemetry")
+			if tel == nil {
+				t.Fatalf("no telemetry POST; posts=%v", *posts)
+			}
+			var body map[string]any
+			if err := json.Unmarshal([]byte(tel.body), &body); err != nil {
+				t.Fatalf("telemetry body is not JSON: %v", err)
+			}
+			if got := body["effort"]; got != tc.want {
+				t.Errorf("telemetry effort = %v, want %v; body=%s", got, tc.want, tel.body)
+			}
+			// The context gauge DTO does not declare effort and refuses undeclared
+			// keys, so one stray copy there would 422 the whole gauge POST.
+			if ctx := findPost(*posts, "/api/agent/context"); ctx != nil {
+				if strings.Contains(ctx.body, "effort") {
+					t.Errorf("effort rode the context POST; it would 422; body=%s", ctx.body)
+				}
+			}
+		})
+	}
+}
+
 // transcriptToday writes a one-row transcript dated today so the tokens source is
 // live, and returns its path.
 func transcriptToday(t *testing.T) string {

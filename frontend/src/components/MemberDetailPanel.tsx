@@ -1496,7 +1496,15 @@ export function MemberDetailPanel({
         // launch model is intentionally kept out of this read-only surface.
         model: awake ? (member.actualModel ?? "") : "",
         modelIsReported: true,
-        effort: member.effort,
+        // Same rule as 模型 one line up: the panel states what is RUNNING. The
+        // configured effort lives in the 設定 dialog below, which is the only
+        // place it may be shown or written.
+        effort: awake ? (member.actualEffort ?? "") : "",
+        // The 設定 dialog is the only place the configured pair may be shown or
+        // written, so the panel still has to carry it — the readout above must
+        // never be what a save writes back.
+        configuredModel: member.model,
+        configuredEffort: member.effort,
         modelEffortNote: t.mp.modelEffortNextWakeNote,
         // Gate on `awake` (owner presence contract T-2860): 機器 + Claude
         // Account are runtime facts — not-awakened reads a bare dash, never a

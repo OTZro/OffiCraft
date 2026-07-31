@@ -687,6 +687,7 @@ func TestRenderStatuslineFull(t *testing.T) {
 	sevenReset := now + 90720        // ⇒ 85% of the 7-day window elapsed
 	payload := `{
 		"model":{"display_name":"Opus 4.8","id":"claude-opus-4-8[1m]"},
+		"effort":{"level":"medium"},
 		"context_window":{"used_percentage":5},
 		"cost":{"total_cost_usd":0.46,"total_duration_ms":14000},
 		"rate_limits":{
@@ -694,8 +695,7 @@ func TestRenderStatuslineFull(t *testing.T) {
 			"seven_day":{"used_percentage":16,"resets_at":` + strconv.FormatFloat(sevenReset, 'f', -1, 64) + `}
 		}
 	}`
-	env := testEnv(map[string]string{"OC_EFFORT": "medium"})
-	got := renderStatusline(payload, env, now)
+	got := renderStatusline(payload, now)
 
 	// Colours must be present (Claude Code statusLine honours ANSI).
 	if !strings.Contains(got, "\x1b[") {
@@ -717,6 +717,7 @@ func TestRenderStatuslinePartialNull(t *testing.T) {
 	sevenReset := now + 302400 // ⇒ 50% elapsed
 	payload := `{
 		"model":{"id":"claude-sonnet-4"},
+		"effort":{"level":"medium"},
 		"context_window":{"used_percentage":null},
 		"cost":{"total_cost_usd":1.5},
 		"rate_limits":{
@@ -724,9 +725,8 @@ func TestRenderStatuslinePartialNull(t *testing.T) {
 			"seven_day":{"used_percentage":40,"resets_at":` + strconv.FormatFloat(sevenReset, 'f', -1, 64) + `}
 		}
 	}`
-	env := testEnv(map[string]string{"OC_EFFORT": "medium"})
 	want := "⚡med | $1.50 | 7d:40%(50%elapsed)"
-	if plain := stripANSI(renderStatusline(payload, env, now)); plain != want {
+	if plain := stripANSI(renderStatusline(payload, now)); plain != want {
 		t.Errorf("partial-null statusline:\n got  %q\n want %q", plain, want)
 	}
 }
@@ -735,7 +735,7 @@ func TestRenderStatuslinePartialNull(t *testing.T) {
 // line (never a panic, never a stray "◆"/separators).
 func TestRenderStatuslineAllMissing(t *testing.T) {
 	for _, payload := range []string{`{}`, `not json`, ``, `null`} {
-		if got := renderStatusline(payload, testEnv(nil), 1000.0); got != "" {
+		if got := renderStatusline(payload, 1000.0); got != "" {
 			t.Errorf("payload %q ⇒ %q, want empty line", payload, got)
 		}
 	}
@@ -754,20 +754,26 @@ func TestModelEffort1M(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			obj := map[string]any{"model": map[string]any{"display_name": c.displayName, "id": c.id}}
-			if got := stripANSI(modelEffortSegment(obj, testEnv(nil))); got != c.want {
+			if got := stripANSI(modelEffortSegment(obj)); got != c.want {
 				t.Errorf("got %q, want %q", got, c.want)
 			}
 		})
 	}
 }
 
-// TestEffortLabel: medium abbreviates to "med"; other values pass through; empty
-// yields "".
+// TestEffortLabel: medium abbreviates to "med"; other values pass through; a
+// payload with no effort block (the model has no effort parameter) yields "".
 func TestEffortLabel(t *testing.T) {
-	cases := map[string]string{"medium": "med", "high": "high", "low": "low", "": ""}
+	cases := map[string]string{"medium": "med", "high": "high", "low": "low", "xhigh": "xhigh"}
 	for in, want := range cases {
-		if got := effortLabel(testEnv(map[string]string{"OC_EFFORT": in})); got != want {
-			t.Errorf("OC_EFFORT=%q ⇒ %q, want %q", in, got, want)
+		obj := map[string]any{"effort": map[string]any{"level": in}}
+		if got := effortLabel(obj); got != want {
+			t.Errorf("effort.level=%q ⇒ %q, want %q", in, got, want)
+		}
+	}
+	for _, obj := range []map[string]any{nil, {}, {"effort": map[string]any{}}, {"effort": "high"}} {
+		if got := effortLabel(obj); got != "" {
+			t.Errorf("no readable effort.level ⇒ %q, want \"\"", got)
 		}
 	}
 }

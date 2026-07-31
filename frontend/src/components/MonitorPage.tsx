@@ -18,7 +18,11 @@ import type {
   BootstrapResultView,
 } from "../types";
 import type { OutsourceWorkerView } from "../api/adapter";
-import { joinSessionRuntime } from "../lib/runtime";
+import {
+  joinSessionRuntime,
+  findSessionFor,
+  isReportingTelemetry,
+} from "../lib/runtime";
 import { useHashRoute } from "../lib/hashRoute";
 import { Avatar } from "./Avatar";
 import { avatarKindForMember } from "../lib/avatarKind";
@@ -49,10 +53,10 @@ export function MonitorPage() {
   // detail panel needs. subscribeEvents inside each hook reconciles by refetch.
   const { members, refetch: refetchMembers } = useMembers();
   // Outsource workers (O-xx) are ALSO live AI sessions — they burn context and
-  // cost the same way members do (owner report 2026-07-19). The office 外包 panel's
-  // existing hook already carries every column this table needs
-  // (machine/account/model/context_pct/cost + banked), so we reuse it verbatim
-  // and render its rows alongside the member sessions below — no wire change.
+  // cost the same way members do (owner report 2026-07-19). This hook supplies
+  // their IDENTITY (codename / avatar / bound task) and the row controls; their
+  // TELEMETRY columns come from the monitoring `sessions` array below, which
+  // now carries a row per worker under its own `ow-` id.
   const outsource = useOutsourceWorkers();
   // The open member-detail rides on the URL hash (#monitor/member/<id>) so a
   // refresh restores it; a stale id self-heals (lookup below misses → list view).
@@ -432,7 +436,15 @@ export function MonitorPage() {
   // warden≠LLM rule; the office roster is already filtered the same way in
   // OfficePage). A session with no roster match is left visible (honest: we
   // can't prove it's non-AI).
+  //
+  // Outsource workers are excluded HERE by their `ow-` id prefix rather than by
+  // a roster lookup: their telemetry rides this same array, and the worker lane
+  // below already renders them (with identity + controls a bare session row has
+  // no way to draw). The prefix is the contract — a worker that happens to be
+  // missing from the roster fold must not fall through into this lane and get
+  // listed twice.
   const aiSessions = sessions.filter((s) => {
+    if (s.id.startsWith("ow-")) return false;
     const m = members.find((x) => x.id === s.id);
     return m?.kind !== "warden" && m?.kind !== "outsource";
   });
@@ -1111,6 +1123,12 @@ export function MonitorPage() {
                 <OutsourceSessionRow
                   key={w.id}
                   worker={w}
+                  // Telemetry columns come from the worker's OWN session row —
+                  // joined by id, never from the worker DTO's configured
+                  // model/effort (that pair is the launch intent and is always
+                  // populated, which is precisely why a missing report was
+                  // invisible here for so long).
+                  session={findSessionFor(w.id, sessions)}
                   dash={dash}
                   // T-cf32: owner ruling — the whole row is clickable, SAME
                   // affordance as the member SessionRow above (no separate
@@ -1277,6 +1295,45 @@ function RuntimeVersionCell({
       )}
       {staleMark}
     </>
+  );
+}
+
+/** The effort chip of one AI-session row, and the guard that keeps its blank
+ * honest.
+ *
+ * Three outcomes, deliberately three:
+ *   reported          → the value, in the usual `mon-badge` pill
+ *   nothing reporting → nothing at all (the row's other columns are dashes too;
+ *                       a marker here would be noise)
+ *   reporting, absent → a `mon-stale` chip holding the dash
+ *
+ * The third is the whole point. An agent that is online and landing context% /
+ * cost / account but never sends `effort` looked EXACTLY like one that has not
+ * started reporting — both were an empty badge slot — and that is how a missing
+ * field survived unnoticed for months. The chip is the same quiet muted-outline
+ * marker the machine table already uses to say "this blank has a reason"
+ * (`mon-stale`, T-b36a), NOT the alarming `mon-bad` tint: nothing is broken on
+ * the operator's side, a value is simply owed and absent. */
+function EffortBadge({
+  effort,
+  reporting,
+  dash,
+}: {
+  effort: string;
+  reporting: boolean;
+  dash: string;
+}) {
+  const { t } = useI18n();
+  if (effort) return <span className="mon-badge">{effort}</span>;
+  if (!reporting) return null;
+  return (
+    <span
+      className="mon-stale"
+      data-testid="mon-effort-missing"
+      title={t.mp.effort}
+    >
+      {dash}
+    </span>
   );
 }
 
@@ -1453,7 +1510,11 @@ function SessionRow({
       </td>
       <td className="mon-table__left" data-label={t.monitor.sessionCol.model}>
         <span className="mon-model">{session.model || dash}</span>
-        {effort && <span className="mon-badge">{effort}</span>}
+        <EffortBadge
+          effort={effort}
+          reporting={isReportingTelemetry(session)}
+          dash={dash}
+        />
       </td>
       <td data-label={t.monitor.sessionCol.context}>
         {contextText(session.contextPct, session.runtime, session.compactionCount, dash, t.mp.compactionCount)}
@@ -1486,10 +1547,14 @@ function SessionRow({
  * of duplicating it here). */
 function OutsourceSessionRow({
   worker,
+  session,
   dash,
   onOpen,
 }: {
   worker: OutsourceWorkerView;
+  /** The worker's own row in the unified `sessions` array (joined by `ow-` id).
+   * `undefined` = it has reported no telemetry at all. */
+  session?: MonSessionView;
   dash: string;
   onOpen: () => void;
 }) {
@@ -1501,11 +1566,12 @@ function OutsourceSessionRow({
     worker.taskTitle || worker.taskTypeName || worker.taskNo || dash;
 
   // Cumulative cost = live + banked (same summing rule as the member SessionRow);
-  // honest dash only when BOTH sources are null.
+  // honest dash only when BOTH sources are null. Read off the SESSION, not the
+  // worker DTO — one telemetry source for both kinds of row.
   const totalCost =
-    worker.cost == null && worker.bankedCost == null
+    session?.cost == null && session?.bankedCost == null
       ? null
-      : (worker.cost ?? 0) + (worker.bankedCost ?? 0);
+      : (session?.cost ?? 0) + (session?.bankedCost ?? 0);
 
   return (
     <tr
@@ -1534,21 +1600,32 @@ function OutsourceSessionRow({
           </div>
         </div>
       </td>
+      {/* 機器 / 帳號 come off the SESSION, exactly like the member row above.
+        * The worker DTO's own machine is the spawn DISPATCH TARGET (server
+        * projectWorker prefers it over the observed host), i.e. where the
+        * worker was SENT — an intent, on a surface the owner ruled must show
+        * reported state. Owner accepted the cost explicitly: a just-dispatched
+        * worker that has not connected yet shows a dash here rather than the
+        * machine it was aimed at. */}
       <td className="mon-table__left" data-label={t.monitor.sessionCol.machine}>
-        {worker.machine || dash}
+        {session?.machine || dash}
       </td>
       <td
-        className={`mon-table__left${worker.account ? "" : " mon-muted"}`}
+        className={`mon-table__left${session?.account ? "" : " mon-muted"}`}
         data-label={t.monitor.sessionCol.account}
       >
-        {worker.account || dash}
+        {session?.account || dash}
       </td>
       <td className="mon-table__left" data-label={t.monitor.sessionCol.model}>
-        <span className="mon-model">{worker.model || dash}</span>
-        {worker.effort && <span className="mon-badge">{worker.effort}</span>}
+        <span className="mon-model">{session?.model || dash}</span>
+        <EffortBadge
+          effort={session?.effort ?? ""}
+          reporting={isReportingTelemetry(session)}
+          dash={dash}
+        />
       </td>
       <td data-label={t.monitor.sessionCol.context}>
-        {contextText(worker.contextPct ?? null, worker.runtime || "claude", worker.compactionCount ?? null, dash, t.mp.compactionCount)}
+        {contextText(session?.contextPct ?? null, session?.runtime ?? "claude", session?.compactionCount ?? null, dash, t.mp.compactionCount)}
       </td>
       <td data-label={t.monitor.sessionCol.estCost}>
         {totalCost != null ? formatCost(totalCost) : dash}

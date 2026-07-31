@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -519,6 +520,226 @@ func TestGetMonitoring_SessionAccountNeverServesRawKey(t *testing.T) {
 	row := d["accounts"].([]any)[0].(map[string]any)
 	if row["display_name"] != "acct-123/team" {
 		t.Fatalf("accounts-row display_name keeps the raw-key fallback, got %v", row["display_name"])
+	}
+}
+
+// TestGetMonitoring_SessionEffortRoundTrips pins the reported effort all the way
+// from ingest to the session row. The whole path (parse, store, serve) was
+// already built and had NO test at all, so when the Claude reporter turned out
+// never to have sent the key, nothing anywhere went red — the monitoring page
+// simply showed a blank effort for every session, which is exactly what an
+// honestly-not-yet-reported session looks like. The second case pins that blank:
+// an unreported effort must stay empty, never fall back to the roster's
+// owner-intent value.
+func TestGetMonitoring_SessionEffortRoundTrips(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	reported := fullMember("kyle")
+	reported.Effort = "medium"
+	silent := fullMember("mira")
+	silent.Effort = "high"
+	for _, m := range []Member{reported, silent} {
+		if err := s.dal.PutMember(m); err != nil {
+			t.Fatalf("seed member: %v", err)
+		}
+	}
+	rec := doIngestTelemetry(s, "kyle", "m-abc123", `{"runtime":"claude","effort":"medium"}`)
+	if rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	// mira reports too, but without effort: a live session that simply never
+	// carried the field must NOT borrow its configured "high".
+	if rec := doIngestTelemetry(s, "mira", "m-abc123", `{"runtime":"claude"}`); rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+
+	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	got := map[string]any{}
+	for _, raw := range d["sessions"].([]any) {
+		row := raw.(map[string]any)
+		got[row["id"].(string)] = row["effort"]
+	}
+	if got["kyle"] != "medium" {
+		t.Errorf("reported effort = %v, want medium", got["kyle"])
+	}
+	if got["mira"] != "" {
+		t.Errorf("unreported effort = %v, want \"\" (never the roster's high)", got["mira"])
+	}
+}
+
+// sessionRows indexes the sessions fold by row id.
+func sessionRows(t *testing.T, d map[string]any) map[string]map[string]any {
+	t.Helper()
+	out := map[string]map[string]any{}
+	for _, raw := range d["sessions"].([]any) {
+		row := raw.(map[string]any)
+		out[row["id"].(string)] = row
+	}
+	return out
+}
+
+// sessionIDs returns the sessions fold's ids in wire order.
+func sessionIDs(d map[string]any) []string {
+	var out []string
+	for _, raw := range d["sessions"].([]any) {
+		out = append(out, raw.(map[string]any)["id"].(string))
+	}
+	return out
+}
+
+// TestGetMonitoring_SessionsListStaffAndOutsourceAlike pins owner ruling
+// rc-1f8156f25b7a ①: ONE list for every AI session. The cockpit used to JOIN
+// this list with GET /api/outsource-workers, where `effort`/`model` mean the
+// owner's configured LAUNCH INTENT (the detail panel's editor round-trips
+// them) — so one table rendered two columns whose meaning changed per row.
+func TestGetMonitoring_SessionsListStaffAndOutsourceAlike(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	if err := s.dal.PutMember(fullMember("mira")); err != nil {
+		t.Fatalf("seed member: %v", err)
+	}
+	seedWorker(t, s, "ow-eva", "E1", 2.5, WorkerStatusActive)
+
+	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	if got, want := sessionIDs(d), []string{"mira", "ow-eva"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("session ids = %v, want %v (staff first, then workers by created_ts)", got, want)
+	}
+	rows := sessionRows(t, d)
+	worker := rows["ow-eva"]
+	if worker["name"] != "E1" {
+		t.Errorf("worker name = %v, want its codename E1", worker["name"])
+	}
+	// A worker's member row carries role_key "" by construction
+	// (memberFromWorker), so the honest answer is the empty role a role-less
+	// member already serves — never a fabricated 「外包」 that no role registry
+	// would resolve. The cockpit tells the kinds apart by the `ow-` id prefix.
+	if worker["role"] != "" {
+		t.Errorf("worker role = %v, want \"\" — a worker has no role_key", worker["role"])
+	}
+	if worker["runtime"] != RuntimeClaude {
+		t.Errorf("worker runtime = %v, want claude", worker["runtime"])
+	}
+	if worker["banked_cost"] != 2.5 {
+		t.Errorf("worker banked_cost = %v, want 2.5", worker["banked_cost"])
+	}
+	member := rows["mira"]
+	if member["name"] != "Mira" || member["role"] != "Assistant" || member["model"] != "opus" {
+		t.Errorf("staff row changed: %v", member)
+	}
+}
+
+// TestGetMonitoring_WorkerSessionReadsItsOwnTelemetry: every telemetry-sourced
+// column on a worker row comes from THAT worker's entry (keyed by its `ow-` id,
+// which is its token sub — its ocagent already posts under that key), never
+// from a member's and never from the roster's launch intent.
+func TestGetMonitoring_WorkerSessionReadsItsOwnTelemetry(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	if err := s.dal.PutMember(fullMember("mira")); err != nil {
+		t.Fatalf("seed member: %v", err)
+	}
+	seedRegisteredMachine(t, s, "m-eva-m5")
+	if err := s.dal.PutOutsourceWorker(OutsourceWorker{
+		ID: "ow-eva", Codename: "E1", Runtime: RuntimeClaude,
+		// Configured launch intent, deliberately DIFFERENT from what the
+		// session reports below.
+		Model: "opus", Effort: "medium",
+		ActualModel: "sonnet-4.6",
+		TaskID:      "t-1", Status: WorkerStatusActive,
+		CreatedTS: 1.0, DesiredState: "online",
+	}); err != nil {
+		t.Fatalf("seed worker: %v", err)
+	}
+	if rec := doIngestTelemetry(s, "mira", "m-seth-m5",
+		`{"runtime":"claude","effort":"high","cost":9.5}`); rec.Code != 200 {
+		t.Fatalf("member ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doIngestTelemetry(s, "ow-eva", "m-eva-m5",
+		`{"runtime":"claude","effort":"low","cost":1.25}`); rec.Code != 200 {
+		t.Fatalf("worker ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	s.gauge.Set("ow-eva", map[string]any{"context_pct": 37.0})
+	s.gauge.Set("mira", map[string]any{"context_pct": 88.0})
+
+	rows := sessionRows(t, monitoringOf(t,
+		doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"})))
+	worker := rows["ow-eva"]
+	if worker["effort"] != "low" {
+		t.Errorf("worker effort = %v, want the reported low (never the configured medium)",
+			worker["effort"])
+	}
+	if worker["model"] != "sonnet-4.6" {
+		t.Errorf("worker model = %v, want the self-reported sonnet-4.6 (never the configured opus)",
+			worker["model"])
+	}
+	if worker["cost"] != 1.25 {
+		t.Errorf("worker cost = %v, want 1.25", worker["cost"])
+	}
+	if worker["context_pct"] != 37.0 {
+		t.Errorf("worker context_pct = %v, want 37", worker["context_pct"])
+	}
+	if worker["machine"] != "m-eva-m5" {
+		t.Errorf("worker machine = %v, want m-eva-m5", worker["machine"])
+	}
+	member := rows["mira"]
+	if member["effort"] != "high" || member["cost"] != 9.5 || member["context_pct"] != 88.0 {
+		t.Errorf("staff row must keep its OWN telemetry, got %v", member)
+	}
+}
+
+// TestGetMonitoring_SilentWorkerSessionShowsHonestBlanks is the counterpart:
+// a worker that has reported NOTHING must render blank, exactly like a silent
+// staff session. Falling back to its configured model/effort would republish
+// the owner's launch intent as an observation — the blank IS the finding.
+func TestGetMonitoring_SilentWorkerSessionShowsHonestBlanks(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	seedWorker(t, s, "ow-quiet", "Q1", 0, WorkerStatusAssigned) // Model opus, Effort medium
+
+	worker := sessionRows(t, monitoringOf(t,
+		doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"})))["ow-quiet"]
+	if worker == nil {
+		t.Fatalf("a silent worker must still list as a session")
+	}
+	if worker["effort"] != "" {
+		t.Errorf("effort = %v, want \"\" (never the configured medium)", worker["effort"])
+	}
+	if worker["model"] != "" {
+		t.Errorf("model = %v, want \"\" (never the configured opus)", worker["model"])
+	}
+	for _, k := range []string{"cost", "context_pct"} {
+		if worker[k] != nil {
+			t.Errorf("%s = %v, want null", k, worker[k])
+		}
+	}
+	if worker["account"] != "" || worker["machine"] != "" {
+		t.Errorf("unobserved account/machine must stay empty, got %v", worker)
+	}
+}
+
+// TestGetMonitoring_ReleasedWorkerIsNotASession: released is the STEADY state
+// for a worker (every task close releases one) and worker rows are retained
+// forever as the audit trail, so listing them would grow this table with every
+// task the station has ever run. Released maps onto RosterStatusRemoved, the
+// same predicate the staff side is filtered by — one rule, not two. The
+// accounts fold keeps counting their spend (ReleasedWorkerSpendStaysInTheAccount).
+func TestGetMonitoring_ReleasedWorkerIsNotASession(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	seedWorker(t, s, "ow-live", "L1", 0, WorkerStatusActive)
+	seedWorker(t, s, "ow-gone", "G1", 3.0, WorkerStatusReleased)
+	if rec := doIngestTelemetry(s, "ow-gone", "m-eva-m5",
+		`{"runtime":"claude","account":"eva-m5-claude","cost":1.0}`); rec.Code != 200 {
+		t.Fatalf("worker ingest: %d %s", rec.Code, rec.Body.String())
+	}
+
+	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	if got, want := sessionIDs(d), []string{"ow-live"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("session ids = %v, want %v", got, want)
+	}
+	if row := accountRow(t, d, "eva-m5-claude"); row["cost"] != 4.0 {
+		t.Errorf("released worker's spend = %v, want 4 (live 1 + banked 3) — "+
+			"dropping its SESSION must not drop its money", row["cost"])
 	}
 }
 

@@ -118,6 +118,15 @@ type telemetryBody struct {
 	// server must see absent, not "").
 	AccountLabel string `json:"account_label,omitempty"`
 	Machine      string `json:"machine,omitempty"`
+	// Effort is the session's LIVE reasoning effort, read verbatim from the
+	// statusLine payload's effort.level (see effortValue: never OC_EFFORT, never
+	// the status line's "med" abbreviation). The key is already declared on the
+	// frozen AgentTelemetryIngestDTO, so this is not a wire change; the codex
+	// sidecar has been sending it all along and the monitoring session DTO has
+	// always served it. Omitted when the payload carries no effort block: an empty
+	// string would turn "this model has no effort" into a reported blank, and that
+	// blank is exactly what hid this bug for as long as it lasted.
+	Effort string `json:"effort,omitempty"`
 }
 
 // cmdContextReport implements `ocagent context-report`. `now` is the current unix
@@ -164,6 +173,7 @@ func cmdContextReport(client httpClient, cfg Config, env func(string) string, no
 				Tokens:       tokens,
 				Account:      readClaudeAccount(env),
 				AccountLabel: readClaudeAccountLabel(env),
+				Effort:       effortValue(payload),
 			}
 			if machine := localHost(env); machine != "" {
 				body.Machine = machine
@@ -200,7 +210,7 @@ func cmdContextReport(client httpClient, cfg Config, env func(string) string, no
 		}
 	}
 
-	fmt.Fprintln(out, renderStatusline(payload, env, now))
+	fmt.Fprintln(out, renderStatusline(payload, now))
 	return 0
 }
 
@@ -267,16 +277,16 @@ const (
 	statusBarWidth = 10 // context progress-bar cell count
 )
 
-// renderStatusline builds the full status line from a statusLine JSON payload,
-// the process env (for OC_EFFORT), and now (fractional unix seconds, for the
-// rate-limit reset/elapsed maths — injected so tests are deterministic). Returns
+// renderStatusline builds the full status line from a statusLine JSON payload and
+// now (fractional unix seconds, for the rate-limit reset/elapsed maths — injected
+// so tests are deterministic). Every segment now comes out of the payload. Returns
 // the ready-to-print line WITHOUT a trailing newline. Never panics: a nil / junk
 // payload yields an empty line.
-func renderStatusline(payload string, env func(string) string, now float64) string {
+func renderStatusline(payload string, now float64) string {
 	obj, _ := safeJSON(payload).(map[string]any) // nil ⇒ every segment skips
 
 	var segs []string
-	if s := modelEffortSegment(obj, env); s != "" {
+	if s := modelEffortSegment(obj); s != "" {
 		segs = append(segs, s)
 	}
 	if s := contextBarSegment(payload); s != "" {
@@ -297,10 +307,10 @@ func renderStatusline(payload string, env func(string) string, now float64) stri
 // modelEffortSegment renders "◆ <display_name>[ (1M context)] ⚡<effort>". The
 // model (blue) is present iff model.display_name is a non-empty string; the "1M
 // context" hint is appended only when model.id signals the 1M tier ("[1m]") and
-// display_name doesn't already say so. The effort (yellow) is present iff
-// OC_EFFORT is set; a bare effort with no model still renders "⚡<effort>". Both
-// missing ⇒ "".
-func modelEffortSegment(obj map[string]any, env func(string) string) string {
+// display_name doesn't already say so. The effort (yellow) is present iff the
+// payload carries effort.level; a bare effort with no model still renders
+// "⚡<effort>". Both missing ⇒ "".
+func modelEffortSegment(obj map[string]any) string {
 	model := ""
 	if m, ok := obj["model"].(map[string]any); ok {
 		if name, ok := m["display_name"].(string); ok {
@@ -319,7 +329,7 @@ func modelEffortSegment(obj map[string]any, env func(string) string) string {
 	if model != "" {
 		out = ansiBlue + "◆ " + model + ansiReset
 	}
-	if effort := effortLabel(env); effort != "" {
+	if effort := effortLabel(obj); effort != "" {
 		e := ansiYellow + "⚡" + effort + ansiReset
 		if out != "" {
 			out += " " + e
@@ -330,11 +340,42 @@ func modelEffortSegment(obj map[string]any, env func(string) string) string {
 	return out
 }
 
-// effortLabel reads OC_EFFORT (the owner's launch intent, plumbed by ocwarden
-// spawn as an extra env pair), trimmed. "medium" abbreviates to "med" to match
-// the owner's target layout; other values pass through verbatim. Empty ⇒ "".
-func effortLabel(env func(string) string) string {
-	e := strings.TrimSpace(env("OC_EFFORT"))
+// effortValue reads the LIVE reasoning effort out of the statusLine payload
+// (`effort.level`), trimmed and VERBATIM. Claude Code carries the session's
+// CURRENT level there — it tracks a mid-session /effort change, which the launch
+// intent cannot — and OMITS the block entirely on models that have no effort
+// parameter, so an absent level is an honest "this session has no effort", not a
+// gap to paper over.
+//
+// 🔴 Deliberately NOT OC_EFFORT, and there is no fallback to it. OC_EFFORT is the
+// owner's LAUNCH INTENT (what the session was started with); the monitoring
+// surfaces must show what the session IS, never what it was configured to be
+// (owner, 2026-07-31). A fallback would reintroduce exactly that: a session that
+// dropped to low mid-run would keep displaying the "high" it was launched at, and
+// nobody could tell the difference from a live report.
+func effortValue(payload string) string {
+	obj, _ := safeJSON(payload).(map[string]any)
+	return effortLevel(obj)
+}
+
+// effortLevel pulls `effort.level` out of an already-decoded payload. Absent or
+// malformed ⇒ "" (honest blank), never a fabricated default.
+func effortLevel(obj map[string]any) string {
+	block, ok := obj["effort"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	level, _ := block["level"].(string)
+	return strings.TrimSpace(level)
+}
+
+// effortLabel is the status-line rendering of the same live value. "medium"
+// abbreviates to "med" to match the owner's target layout; other values pass
+// through verbatim. Empty ⇒ "". The abbreviation is display-only and must never
+// reach the POST body — the cockpit would then read a level no /effort command
+// or launch flag ever names.
+func effortLabel(obj map[string]any) string {
+	e := effortLevel(obj)
 	if e == "medium" {
 		return "med"
 	}

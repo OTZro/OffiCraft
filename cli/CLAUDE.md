@@ -68,6 +68,26 @@ statusLine render 都重跑一次,一秒好幾次),窗沒開 = **下一個 tick 
   還是沒想到。哨兵 `TestHealthyCadenceIsUnchangedByTheFailureBackoff` 釘成功路徑一字未變
   (600s 內 burst 恰在 0/30/60/…,且**不產生** backoff 檔)。
 
+### session effort 走 telemetry,取 payload 的 LIVE 值(T-e12c;同檔 `telemetryBody.Effort`)
+effort 原本**只**被畫進 status line 字串,從不進任何 POST body ⇒ 監控台每個 claude session 的
+effort **永遠是空字串**。而空字串正是「這個 session 還沒回報」的誠實形狀 —— 故障與正常同形,
+所以躺到 owner 自己看畫面才發現(server 的解析/儲存/回吐、凍結 spec 的 `effort` 欄、前端的
+badge 全都早就備好了;codex sidecar 一直有送,是這條鏈可用的活證據)。
+- 🔴 **來源是 statusLine payload 的 `effort.level`,不是 `OC_EFFORT`,而且沒有 fallback。**
+  payload 帶的是**當下**的等級(會跟著 session 中途 `/effort` 改變),`OC_EFFORT` 只是 warden
+  spawn 注入的**啟動意圖**。owner 2026-07-31 定調:成員面板與監控台一律顯示回報回來的狀態、
+  不得顯示設定值——退回 `OC_EFFORT` 等於讓一個中途降到 low 的 session 繼續顯示啟動時的 high,
+  而且從畫面上分辨不出來。模型不支援 effort 參數時 Claude Code **整塊省略**,所以讀不到就是
+  誠實的「這個 session 沒有 effort」。
+- 送的是 `effortValue`/`effortLevel`(**verbatim**),不是 `effortLabel`——後者把 `medium` 縮成
+  `med` 只為版面,讓它上線等於在監控台顯示一個 `/effort` 與啟動旗標都叫不出來的值。
+- **只掛 `/api/monitoring/telemetry`**;`AgentContextIngestDTO` 沒宣告 effort 且
+  `additionalProperties:false`,塞進 context POST 會 422 掉整個 gauge 回報並拖上面那條退避。
+- 空值 `omitempty` 省略,**絕不送空字串**——那會把「沒回報」變成「回報了一個空的」。
+- 釘住它的是 `telemetry_wire_test.go` 的 `TestContextReportSendsSessionEffort`(在/不在/不縮寫)
+  與 server 側 `TestGetMonitoring_SessionEffortRoundTrips`(ingest→GET 往返,且未回報者不得
+  退回名冊設定值)。⚠️ 這條路先前**零測試**,所以它從未送過這個欄位時沒有任何東西會紅。
+
 ## listen 自救(fail-closed,zombie 防線 B 的 client 半邊)
 `ocagent listen` 兩道自救原本 fail-open(probe 失敗照樣活 = 殭屍永生),已改 fail-closed 帶寬限(`listen.go` 常數 + `listen_run.go` foldProbe/foldRefusal):
 - **tmux session probe 三態**:alive / gone(tmux 明確答「無此 session」→ 2 連 miss 即自殺,不變)/ unknown(tmux 解析不到、spawn fault、timeout → 不再永遠當 alive:連續 `probeUnknownMin`(8)次 ∧ 滿 `probeUnknownGrace`(10min)才 self-exit;unknown 會重置 gone debounce,絕不瞬殺健康 listener)。
