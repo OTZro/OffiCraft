@@ -131,7 +131,7 @@ install 把發佈流程 fresh build 的 binary 安到 `~/.officraft/warden/`(hom
 
 | 路徑 | 是什麼 | 可不可以手動刪 |
 |---|---|---|
-| `officraft` | TCC 身分錨點,新的 launchd job leader。**裝過就永不覆寫**(連相同 bytes 也不行——重寫換 inode = 換身分 = 掉授權) | ❌ 刪了下次 install 會重放一份**新**的,等於換身分、重問授權 |
+| `officraft` | TCC 身分錨點,新的 launchd job leader。**裝過就永不覆寫**(連相同 bytes 也不行——重寫換 inode = 換身分 = 掉授權)。**沒有的話,轉換會在 preflight 之前先從內嵌副本放一份**(見下方 preflight 順序節) | ❌ 刪了下次 install 會重放一份**新**的,等於換身分、重問授權 |
 | `cutover.lock` | O_EXCL 鎖,只防兩個 warden 同時轉。轉完就刪;超過 15 分鐘的視為屍體自動清掉 | ✅ 安全(機器在轉換中途被砍才會留下) |
 | `cutover.failed` | **哨兵:這台試過、而且回滾了**。存在 = 這台**永遠不再嘗試遷移** | ⚠️ 見下 |
 | `log/cutover.log` | detached 轉換行程的完整 stdout+stderr(installer 的逐步敘述都在裡面) | ✅ 純 log |
@@ -143,6 +143,23 @@ install 把發佈流程 fresh build 的 binary 安到 `~/.officraft/warden/`(hom
 - 轉換發生過就一定有 `log/cutover.log`;什麼都沒有 = 這台從沒進過這條路。
 
 **它做了什麼**(給要判讀 log 的人,不是實作導覽):`ocwarden run` 啟動時看一次自己的**父行程**。是 legacy 才動作,而且是丟出一個 **detached 孫行程**(`ocwarden cutover-anchor`,setsid 自成 session)後**立刻返回**——因為轉換第一件事就是把自己這個 launchd job bootout 掉,不脫離就會連自己一起死。孫行程備份 plist → 跑既有的 `ocwarden install --force`(**零新安裝邏輯**:部署 anchor、render 新 plist、bootout、bootstrap、健康驗證)。
+
+#### 🔴 preflight 曾經把**它自己要建立的東西**當前置條件(v0.5.55 出貨即失效,已修)
+第一版的 gate 順序是 shape → sentinel → **`anchorPreflight`** → lock,而 `anchorPreflight` 要求 `warden/officraft` **已經**在磁碟上可執行。**唯一**會放那個檔的是 `ocwarden install`(`installFixedAnchor`)——也就是這個 gate 擋在前面的那個東西。於是:
+
+- **anchor shape 之前裝的機器** = legacy plist **且沒有 anchor 檔**;self-update 只換 ocwarden/ocagent(`selfupdate.go` 從不碰 plist、也從不部署 anchor),那個檔**不會自己出現**。
+- ⇒ gate **恆偽**,轉換**一次都不會啟動**。而**被擋掉的正是這個遷移唯一要救的母群體**。
+- 現場(fleet 三台跑 T-ff5d build 的機器,實查其中一台的 `log/ocwarden.err/out.log`):每次啟動都印 `anchor cutover: skipped — anchor preflight: cannot execute …/warden/officraft: no such file or directory`,而且**沒有** `cutover.lock`、**沒有** `cutover.failed`、**沒有** `log/cutover.log` —— 孫行程從未被生出來。心跳照實回報 `legacy`,座艙照實顯示 LEGACY;**回報是誠實的,失效的是動作**。這也是為什麼「等它自己收斂」是錯的建議:那個 skip 是決定性的,每次啟動都會再跳過一次。
+
+**修法**:gate 中間插一步 `ensureAnchorPresent`(順序變成 shape → sentinel → **anchor-present** → preflight → lock)。沒有 anchor 就先把它放上去,再 preflight。
+
+- **來源優先序照抄 `installFixedAnchor`**:sibling `anchorSrc` → 本 binary 內嵌的那份(`anchor_embed.go`)。⚠️ home 安裝下 `anchorSrc` **就是** `anchorPath`(anchor 是執行中 ocwarden 的兄弟檔),所以實際落地的**一定是內嵌那份**——而 embed / 出貨 / `dist/officraft/` 三份是同一次 build 的同一份 bytes,換來源就是換身分。
+- **絕不覆寫既有 anchor**:有檔就整段短路,一個 write 都不發。**判準是「沒有發生寫入」而不是「內容沒變」**——`anchorSrc == anchorPath` 時,少掉 exists-check 的版本會把機器自己的 anchor 讀出來原樣寫回去,**bytes 一模一樣但 inode 換了 = 身分換了**,只比內容的斷言看不到這件事。
+- **兩邊都拿不到 anchor(無 sibling、無內嵌)= 照樣拒絕轉換**。把母群體救回來不等於「無條件轉」。
+- **preflight 失敗時,只清掉「這一輪自己寫的」那份**;既有的一律留著。理由對稱:`installFixedAnchor` 對它找到的 anchor 只保留不取代,所以留下一份壞的等於讓它**永久**變成這台的身分;反過來,刪掉 operator 既有的 anchor 則是親手毀掉這個 shape 要保護的東西。
+- **preflight 本身沒有被削弱**:anchor 仍然在任何破壞性步驟(bootout)之前被證明可執行。這其實是**加強**——現在證明的是實際會被 launchd 起的那份 bytes,而不是「有沒有這個檔」。
+
+**內嵌 anchor 非空是這個修法的前提,已實測坐實(非讀碼推論)**:把 `dist/officraft/officraft`(1,742,642 bytes、`sha256 710a2525…`,= `dist/officraft/binary.sha256`)當 needle,在**實際出貨、fleet 正在跑的** ocwarden(`sha256 7bbd5491…`)裡做完整 byte 包含搜尋 → **命中於 offset 2953472**。所以 gate 修好之後 `install --force` 確實拿得到 anchor;若內嵌是空的,gate 修了也只會在下一步失敗,而**外觀與修好一模一樣**。
 
 **bootout→bootstrap 之間有一段真空**:那幾秒該機**沒有 warden**(server 看到它 offline)。**agent 不受影響**——`ocagent` 是獨立行程、各自持有自己的 SSE,warden 重啟不斷線。install 的健康驗證會等到新 job 真的穩定(看到 pid 後再連續 6 秒)才算數。
 

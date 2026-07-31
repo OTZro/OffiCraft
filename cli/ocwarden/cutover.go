@@ -166,7 +166,12 @@ type cutoverOps struct {
 	runInstaller func(name string, args ...string) (string, error)
 	readFile     func(path string) ([]byte, error)
 	writeFile    func(path string, data []byte, perm os.FileMode) error
-	remove       func(path string) error
+	// chmod makes a freshly materialised anchor executable regardless of the
+	// launchd job's umask. writeFile's perm argument is masked, and an anchor that
+	// lands 0644 fails the preflight for a reason that has nothing to do with the
+	// bytes — mirrors installFixedAnchor, which chmods for the same reason.
+	chmod  func(path string, perm os.FileMode) error
+	remove func(path string) error
 	// createExcl creates path O_EXCL and reports whether THIS call created it.
 	createExcl func(path string) (bool, error)
 	// modTime is used only to age out a stale lock.
@@ -191,6 +196,7 @@ func realCutoverOps() cutoverOps {
 		runInstaller: runInstallerCombined,
 		readFile:     os.ReadFile,
 		writeFile:    os.WriteFile,
+		chmod:        os.Chmod,
 		remove:       os.Remove,
 		createExcl: func(path string) (bool, error) {
 			f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
@@ -319,6 +325,77 @@ func newShapeReporter(anchorPath string, ppid int) func() string {
 	}
 }
 
+// ensureAnchorPresent materialises the anchor when this machine has none, so the
+// preflight below has something real to probe. It reports whether THIS call
+// created the file.
+//
+// 🔴 WHY THIS EXISTS: THE PREFLIGHT WAS GATING ON ITS OWN OUTPUT
+// --------------------------------------------------------------
+// anchorPreflight requires an executable at p.anchorPath. The only thing that
+// ever puts one there is `ocwarden install` (installFixedAnchor) — which is
+// exactly what the conversion runs. So a machine that has never had an anchor
+// could never pass the gate, and the gate is the thing standing in front of the
+// install that would have created it.
+//
+// That is not an edge case, it is THE POPULATION THIS MIGRATION EXISTS FOR: a
+// box installed before the anchor shape shipped has a legacy plist and no anchor
+// file, self-update only ever swaps ocwarden/ocagent (selfupdate.go — it never
+// touches the plist and never deploys the anchor), so the file cannot appear on
+// its own. Observed on three of three fleet machines running the T-ff5d build:
+// every start logged
+//
+//	anchor cutover: skipped — anchor preflight: cannot execute
+//	  …/warden/officraft: no such file or directory
+//
+// with no cutover.lock, no cutover.failed and no cutover.log — the converter was
+// never spawned even once. The feature reported `legacy` honestly and then
+// declined to do the one thing it was shipped to do, on every machine, forever.
+//
+// WHY MATERIALISE HERE RATHER THAN LET install DO IT
+// ---------------------------------------------------
+// Moving the preflight after the install would mean proving the anchor works
+// only AFTER launchd has already been booted out — the destructive step. Putting
+// the bytes down first keeps the original ordering intact: the anchor is still
+// proven executable BEFORE anything is torn down. This strictly strengthens the
+// fail-safe contract; it does not weaken the gate. A machine whose anchor cannot
+// exec is still refused, it just now gets refused on evidence instead of on the
+// absence of a file nobody was ever going to create.
+//
+// The source precedence is installFixedAnchor's, deliberately — the sibling
+// first, then the copy embedded in this binary — because the embedded, the
+// shipped and the committed dist/officraft copies are one build's bytes, and TCC
+// identifies the anchor BY those bytes. Two sources would be two identities.
+//
+// ⚠️ NEVER REPLACES AN EXISTING ANCHOR. Rewriting it changes the inode and
+// therefore the machine's TCC identity, which is the same "never replace" rule
+// installFixedAnchor obeys. An existing anchor short-circuits this entirely, so
+// an already-converted or already-anchored machine sees no writes at all.
+func ensureAnchorPresent(ops cutoverOps, p wardenPaths, logf func(string, ...any)) (bool, error) {
+	if _, err := ops.modTime(p.anchorPath); err == nil {
+		return false, nil
+	}
+	// In a home install the running ocwarden IS p.anchorPath's sibling, so
+	// anchorSrc and anchorPath name the same directory and this read normally
+	// misses — the embedded copy is the one that actually lands. The sibling is
+	// still consulted first so a release-tarball layout keeps using the bytes it
+	// shipped with rather than a second copy.
+	data, err := ops.readFile(p.anchorSrc)
+	if err != nil || len(data) == 0 {
+		data = embeddedAnchor()
+	}
+	if len(data) == 0 {
+		return false, fmt.Errorf("no anchor at %s, no usable source at %s, and this ocwarden carries no embedded anchor", p.anchorPath, p.anchorSrc)
+	}
+	if err := ops.writeFile(p.anchorPath, data, 0o755); err != nil {
+		return false, fmt.Errorf("write anchor %s: %w", p.anchorPath, err)
+	}
+	if err := ops.chmod(p.anchorPath, 0o755); err != nil {
+		return true, fmt.Errorf("chmod anchor %s: %w", p.anchorPath, err)
+	}
+	logf("[ocwarden] anchor cutover: no anchor on this machine; materialised %s (%d bytes) for the preflight", p.anchorPath, len(data))
+	return true, nil
+}
+
 // anchorPreflight proves the anchor is present, executable and not quarantined,
 // with ZERO side effects: `officraft <any arg>` prints usage and exits 2 (see
 // cli/officraft/main.go realMain) — it forks nothing. Any other outcome (missing
@@ -376,7 +453,26 @@ func maybeStartAnchorCutover(p wardenPaths, ppid int, logf func(string, ...any))
 		logf("[ocwarden] anchor cutover: skipped — a previous attempt rolled back (%s)", failedPath)
 		return
 	}
+	// The anchor has to EXIST before it can be probed, and on the machines this
+	// migration targets it does not — see ensureAnchorPresent for why the gate
+	// used to be unsatisfiable by construction. Runs after the sentinel check so a
+	// machine that already rejected the conversion is still touched by nothing.
+	created, err := ensureAnchorPresent(ops, p, logf)
+	if err != nil {
+		logf("[ocwarden] anchor cutover: skipped — %v", err)
+		return
+	}
 	if err := anchorPreflight(ops, p.anchorPath); err != nil {
+		// An anchor WE just wrote that cannot exec must not be left behind:
+		// installFixedAnchor preserves whatever it finds and never replaces it, so
+		// a bad copy left here would be adopted permanently as this machine's TCC
+		// identity. One we did not create is left exactly as found — removing an
+		// operator's anchor would change the identity we are trying to protect.
+		if created {
+			if rmErr := ops.remove(p.anchorPath); rmErr != nil {
+				logf("[ocwarden] anchor cutover: WARN could not remove the anchor this run wrote (%s): %v", p.anchorPath, rmErr)
+			}
+		}
 		logf("[ocwarden] anchor cutover: skipped — %v", err)
 		return
 	}
