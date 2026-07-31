@@ -24,7 +24,7 @@
 |---|------|-----------|-----------|--------|---------|
 | A1 | 返回鍵 | `mp__back`（共用面板畫） | 同 | 同 | 維持共用，不動 |
 | A2 | 頭像上傳／移除 | `AvatarEditor`，未傳 handler 時降級成唯讀 `Avatar` | 同（kind=`outsource`） | 同 | 維持 |
-| A3 | 名字 | `InlineEdit` 就地改名 → `onRename` | 無；顯示系統鑄造的代號 `msg.outsourceLabel(codename)` | 差（結構性） | **保留現狀**。外包代號是系統鑄造的匿名識別，不是人取的名字；給外包改名等於發明一個後端沒有的欄位 |
+| A3 | 名字 | `InlineEdit` 就地改名 → `onRename` | 無；顯示系統建立的代號 `msg.outsourceLabel(codename)` | 差（結構性） | **保留現狀**。外包代號是系統建立的匿名識別，不是人取的名字；給外包改名等於發明一個後端沒有的欄位 |
 | A4 | 成員編號 chip | `member.memberId` badge | 無 | 差（結構性） | **保留現狀**，理由同 A3（代號本身就是識別） |
 | A5 | presence 指示 | `PresenceBadge`（點＋角色名） | `LifecycleDot` + `presenceVisual`（同一份映射） | 視覺元件不同、映射同源 | **保留現狀**：`frontend/CLAUDE.md` 明文「presence→視覺的推導只有一份」，兩者都走 `presenceVisual`，未漂移；外包沒有角色名可顯示，套 `PresenceBadge` 會多出一個空欄 |
 | A6 | 任務 chip（`T-xxxx`）+ 任務類型 | 無 | 有，可點 → `#tasks/<id>` | 外包獨有 | **保留**。外包的「角色」就是它綁的任務類型，這是 rail 列形的同一條裁定（`frontend/CLAUDE.md` 外包面板節），移除等於拔掉外包唯一的身分線索 |
@@ -48,7 +48,7 @@
 | # | 項目 | 正職有什麼 | 外包有什麼 | 差在哪 | 期望行為 |
 |---|------|-----------|-----------|--------|---------|
 | C1 | 狀態欄 + 停止／喚醒 | 狀態字收在 `PresenceBadge`；停止走 A7 的 `MemberActionButtons` | ~~`worker-detail-status` 欄 + `worker-detail-stop-toggle`~~ **狀態欄已刪、鍵已搬到身分卡動作列** | ~~位置不同~~ **已對齊** | ✅ **owner 2026-07-31 裁定**：狀態欄整個退場（見下方裁定段），鍵搬到身分卡右上角 |
-| C2 | 離線原因 | 無對應（正職走 `最近操作` 卡） | `worker-detail-stuck-reason`：presence=offline 時攤 `lastOpReason`；**狀態欄刪掉後移到身分卡的點下面** | 外包多 | **保留**（位置改了、東西沒少）。理由：spawn 靜默失敗時光一個灰點對 owner 無資訊，而 `最近操作` 卡只在 `lastOp` 非空時才渲染——「從沒派出去」正好就是它不渲染的情況 |
+| C2 | 離線原因 | 無對應（正職走 `最近操作` 卡） | `worker-detail-stuck-reason`：presence=offline 時攤 `lastOpReason`；**狀態欄刪掉後移到身分卡的點下面** | 外包多 | **保留**（位置改了、東西沒少）。理由：spawn 默默失敗時光一個灰點對 owner 無資訊，而 `最近操作` 卡只在 `lastOp` 非空時才渲染——「從沒派出去」正好就是它不渲染的情況 |
 | C3 | 委託人 | 無 | `worker-detail-delegator`（真實建票人／系統排程 fallback） | 外包獨有 | **保留**。外包是系統代 owner 生出來的，「誰委託的」是外包才有的來歷資訊，正職沒有對應概念 |
 | C4 | 委託任務卡 | 無 | `worker-detail-task`，可點 → `#tasks/<id>` | 外包獨有 | **保留**。外包與任務一對一綁定（任務終態即 release），這是外包存在的理由本身 |
 
@@ -189,13 +189,13 @@ respawn，什麼都不問）。現在它開的是**與更改同一份 dialog**�
 | 2 | `POST …/relocate`（只在機器有改時） | **`/restart` 不吃 machine_id**，所以釘選只能由 relocate 寫。這正是外包與正職的形狀差異：正職的 `activate(machineId)` 自己帶機器 |
 | 3 | `POST …/restart` | 唯一會把它叫起來的那條 |
 
-對一個 **stopped**（`desired_state=offline`）的 worker，步驟 1、2 是**純持久化**——
+對一個 **stopped**（`desired_state=offline`）的 worker，步驟 1、2 是**純存下來**——
 server 的 `respawnWorkerForOwnerOp` 在 `desired_state=offline` 時只記錄、不啟動任何東西
 （`spawnReasonHeldDown` 回執），所以步驟 3 是唯一一次派工。
 
 🔴 **釘住的機器只是「睡著」時不可被偷改**這條規則跟著一起搬過來了
-（`openSettings` 逐字 seed `worker.desiredMachineId`，不 fallback 第一台在線機器）。
-它防的缺陷是：**開設定只想改模型，結果人被靜默重新釘到別台**。
+（`openSettings` 逐字 seed `worker.desiredMachineId`，不 fallback 第一台線上機器）。
+它防的缺陷是：**開設定只想改模型，結果人被默默重新釘到別台**。
 「預設保留原本那台」與「使用者可以改」不衝突：預設是起點，不是鎖。
 
 **沒有「只儲存，不喚醒」那顆鍵**，而且這一條**刻意不與正職對齊**：正職的「只儲存」是
@@ -224,7 +224,7 @@ FE 也沒有可靠訊號能分辨「relocate 已經派出去了」，因為 relo
 
 **實際情況比原本的隱憂更糟（逐行讀原碼確認）**：released worker 被 server 從 LIVE 名單濾掉
 （`api_outsource.go:126`），所以 `outsource.workers.find(...)` 一定 miss，
-`#office/worker/<ow-id>` **不是顯示一顆灰點，而是靜默掉回 roster**、什麼都不說。
+`#office/worker/<ow-id>` **不是顯示一顆灰點，而是默默掉回 roster**、什麼都不說。
 同一個 worker 從聊天室進去卻明白寫著「已結案釋出」。**那就是 owner 說的不一致。**
 
 ### 判準

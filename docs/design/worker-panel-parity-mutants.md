@@ -111,7 +111,7 @@ stylesheet、而唯一會 render machine picker 的 CT guard 在同一張票裡�
 | # | Mutant | 對應裁定 | 紅了哪條 |
 |---|---|---|---|
 | M8 | 喚醒鍵改成直接 `onWake?.()`（＝裁定前的「按了就送」） | ④ | `喚醒 ASKS FIRST…` ＋ 另外 3 條（共 4） |
-| M9 | `openSettings` 的機器 seed 改成優先第一台**在線**機器 | ④ | `…PRE-SEEDED…` ＋ `…pinned to a SLEEPING machine never silently re-pins it` |
+| M9 | `openSettings` 的機器 seed 改成優先第一台**線上**機器 | ④ | `…PRE-SEEDED…` ＋ `…pinned to a SLEEPING machine never silently re-pins it` |
 | M10 | 喚醒排到 model／relocate **之前** | ④ | `喚醒 stores the launch settings and the pin BEFORE it wakes…` |
 | M11 | 無編輯的早退也套用到喚醒（照原值確認＝什麼都不做） | ④ | `喚醒 ASKS FIRST…` |
 | M12 | 狀態格（含「已釋放」）加回去 | ② | `released…and NO 已釋放 status cell remains` |
@@ -121,8 +121,8 @@ stylesheet、而唯一會 render machine picker 的 CT guard 在同一張票裡�
 | M16 | 正職的 `.mp-identity__buttons` 換掉 | ① | `puts 更改 and the stop action in the same button row, 更改 first` |
 | M16b | 正職那一列裡把「更改」拿掉（順序／存在性半邊） | ① | 上述 ＋ 既有的 `says 更改 for an online member…` |
 
-🔴 **M9 第一版是綠的，而且是這一輪最危險的一支**：那兩條測試的 fixture **沒有任何在線機器**，
-所以「優先第一台在線機器」這個 mutant **無處可去**，fallback 仍落回原本的釘選——
+🔴 **M9 第一版是綠的，而且是這一輪最危險的一支**：那兩條測試的 fixture **沒有任何線上機器**，
+所以「優先第一台線上機器」這個 mutant **無處可去**，fallback 仍落回原本的釘選——
 斷言在**有缺陷的碼上照樣通過**。補上 `__setMockMemberOnline("warden-mbp5", true)`（＝「有別的地方
 可以被偷偷搬過去」）之後才紅。
 **陽性對照必須讓被測的那個錯誤有機會發生**，否則它證明的是 fixture、不是碼。
@@ -165,7 +165,7 @@ git grep -nE '\*\*重新啟動\*\*|「重新啟動」|翻成\*\*重新啟動|res
 
 🔴 **寫這些 grep 時踩到的 shell 陷阱（會讓「回 0 行」變成假的）**：
 `zsh` **不會**對未加引號的參數展開做斷詞。把排除清單放進一個字串變數再寫 `$EXCL`，
-整串會被當成**一個** pathspec，**每一條排除都靜默失效**。
+整串會被當成**一個** pathspec，**每一條排除都默默失效**。
 排除清單必須用**陣列**（`EXCL=(':!a' ':!b')` ＋ `"${EXCL[@]}"`）。
 本檔第一次寫時就是這個形狀，只是碰巧當時**不加排除也是 0 行**（＝比預期更嚴格），
 結論沒受影響；但同一個寫法在別處會讓一條什麼都沒排除的 grep 看起來像「已排除、且乾淨」。
@@ -183,7 +183,7 @@ git grep -nE '\*\*重新啟動\*\*|「重新啟動」|翻成\*\*重新啟動|res
 
 | # | Mutant | 打哪一半 | 紅了哪條 |
 |---|---|---|---|
-| N1 | 詳情入口退回靜默掉到 roster（`false &&` 掉合成） | 有沒有說 | `the chat entry and the detail entry render the SAME released sentence` |
+| N1 | 詳情入口退回默默掉到 roster（`false &&` 掉合成） | 有沒有說 | `the chat entry and the detail entry render the SAME released sentence` |
 | N2 | 面板不再認得 released（`false && status === "released"`） | 有沒有說 | 上述 ＋ `released: the panel says 已結案 in the SAME words…`（2 條） |
 | N3 | 🔴 **面板自己留一份幾乎一樣的字串**，不讀共用葉子 | **同一個來源** | 同上 2 條 |
 | N4 | released view 整句拿掉（只剩灰身分） | 有沒有說 | 同上 2 條 |
@@ -191,7 +191,7 @@ git grep -nE '\*\*重新啟動\*\*|「重新啟動」|翻成\*\*重新啟動|res
 | N6 | 過度修正：`released \|\| noLiveSession`（凡是沒在跑的都當已結案） | 分不分得出來 | **11 條**，含專門的對照 `released vs merely OFFLINE are told apart…` |
 
 🔴 **N3 是這一批唯一非做不可的一支。** N1／N2／N4 只證明「面板會說一句話」——
-**把那句話硬編碼成第二份副本，這三支全部照樣綠**，而「兩份副本各自漂移」正是這次要修的病本身。
+**把那句話寫死碼成第二份副本，這三支全部照樣綠**，而「兩份副本各自漂移」正是這次要修的病本身。
 測試因此不是比對字面，而是**兩個入口互比 ＋ 兩邊都比字典**：第一條擋「其中一邊不顯示」，
 第二條擋「兩份人工同步的副本」。少任何一條，N3 就殺不死。
 
@@ -241,7 +241,7 @@ grep -n 'releasedChat' frontend/src/i18n/messageKeys.generated.ts server/ocserve
 `themeBundle.ts` 對**不認得的 key 是 DROP + 回報 `skipped`,不是拒絕匯入**
 （owner 2026-07-27 裁定 rc-1599a0026a80,T-081b 退場 theme-identity keys 時立的規矩）。
 所以把 `releasedChatSub` 改名成 `releasedSub` **不會讓既有主題包無法匯入**,
-但**那個包對這句話的覆寫會靜默失效**（匯入 UI 會在 `skipped` 裡說）。
+但**那個包對這句話的覆寫會默默失效**（匯入 UI 會在 `skipped` 裡說）。
 第二輪退場的 `workerDetail.status` / `restart` / `statusOf.*` 等等同理。
 `docs/T-081b-evidence/shots-pack/smurf-village.theme.json` 就是一份會受影響的範例包
 （它覆寫了 `office.outsource.releasedChatTitle`/`ChatSub`）——**那是凍結的存證,刻意不改**。

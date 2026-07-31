@@ -245,7 +245,7 @@ owner 兩句裁定:「理想上應該是同一支 API 同時取得所有 AI sess
 
 - **取消喚醒（deactivate 打在 waking 成員身上）原本一個指令都沒發出去。** owner 親自遇到、以為自己記錯。`decideDown` 第一個分支是 `if !obs.Online { converged offline }`，而 **waking 依定義就是 `!online`**（`deriveLiveness` 只在 `!Online` 時投影 waking），所以整個 waking 窗內 cadence 什麼都不派：先前 START 已經放上機器的那個 process 照常開完機、連上、變綠，然後才以「online + desired offline」的身分進 `decideDown`，開始它的 120s 寬限。owner 看到的就是「按了沒反應，兩分鐘後才停」。
   - 修在 **handler**（`HandleDeactivateMember…`），不在 reconcile 核：presence 是 waking 就 `dispatchRobustStopNow`。**`cancellingWake` 必須在 `StoppingSince` 被蓋之前算**——蓋那一筆本身就會終結 waking 投影。
-  - **刻意只給 waking 這一格**：線上成員的停止**保留 120s 寬限**（它手上有東西要收），已離線的成員**什麼都不派**（沒有 session、也沒有在途的喚醒）。三格各有自己的哨兵，`_OnlineMemberKeepsTheGracefulGrace` 就是防「把取消寬限化成每次停止都 force-stop」的那道。
+  - **刻意只給 waking 這一格**：線上成員的停止**保留 120s 寬限**（它手上有東西要收），已離線的成員**什麼都不派**（沒有 session、也沒有進行中的喚醒）。三格各有自己的哨兵，`_OnlineMemberKeepsTheGracefulGrace` 就是防「把取消寬限化成每次停止都 force-stop」的那道。
   - **沒有寬限可失去**：還沒連上的成員沒領過任何工作，它進不去的那個窗買不到東西。
   - **`reconcileMemberNow` 照舊呼叫**：raw dispatch 不碰 reconcile store，cadence 的 STOP 臂仍是冪等 backstop。
   - 🔴 **治理面沒有變寬**：deactivate 與 force-stop **本來就同在 `principalAdminAgent`**（唯一的非座艙入口是 MCP 工具 `deactivate_member`；**CLI 沒有這個入口**——`cli/officraft` 只是 launchd shim），所以這裡沒有讓任何人取得原本取得不到的能力。`TestDeactivateMember_StaysAdminGatedAfterTheCancelDispatch` 兩件事一起釘：一般 agent 打 deactivate 是 403，**而且**兩列的 `Requires` 必須相等——哪天有人把 deactivate 調低，那顆 mutant 就會紅。

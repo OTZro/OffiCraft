@@ -523,10 +523,10 @@ mutant 紀錄:`docs/design/worker-panel-parity-mutants.md`。
   **且都可以改**。落地順序 `/model` → `/relocate`(機器有改才打) → `/restart`,**全是既有端點**。
   ⚠️ `/restart` **不吃 machine_id**,所以釘選只能由 relocate 寫 —— 這是外包與正職(它的
   `activate(machineId)` 自己帶機器)唯一的形狀差異,別把兩邊的順序抄來抄去。
-- 🔴 **釘住的機器只是「睡著」時,seed 一律逐字保留那一台**,不准 fallback「第一台在線的機器」。
+- 🔴 **釘住的機器只是「睡著」時,seed 一律逐字保留那一台**,不准 fallback「第一台線上的機器」。
   否則 `machineChanged` 對一個停在睡著機器上的 agent **恆為 true**,開設定只想改模型的人會被
-  靜默搬走。兩個面板的 `openSettings` 都有這條,**改一邊要改兩邊**。
-  ⚠️ 測這一條時 fixture **必須有一台在線機器**,否則那個 mutant 無處可去、測試在壞碼上照樣綠。
+  默默搬走。兩個面板的 `openSettings` 都有這條,**改一邊要改兩邊**。
+  ⚠️ 測這一條時 fixture **必須有一台線上機器**,否則那個 mutant 無處可去、測試在壞碼上照樣綠。
 - **外包沒有「只儲存,不喚醒」,而且這是刻意不對齊**:正職的「只儲存」是 PATCH ＋
   placement-only relocate,都不啟動;外包的 relocate **會 kill + re-dispatch**(除非
   `desired_state` 已是 offline),所以那顆鍵對外包會是假話。要有它得新增 pin-only 端點＝動凍結 wire。
