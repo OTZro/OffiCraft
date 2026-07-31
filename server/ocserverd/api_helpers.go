@@ -171,6 +171,13 @@ var errNotFound = errors.New("not found")
 // member API surface deliberately keeps its pre-fold semantics — worker
 // lifecycle rides the outsource routes / the relocate fallback, and an ow- id
 // on a member endpoint stays an honest 404, exactly as before the merge.
+//
+// ⚠️ This 404 coexists with dal.ListMembersIncludingOutsource, which DOES put
+// ow- rows in the GET /api/members response. So a caller can see a worker in
+// the roster list and still get a 404 from every member verb — deliberately.
+// Anything that reads "it is in members, therefore I may call member verbs on
+// it" is wrong at runtime; the two halves are only consistent when read
+// together (see the twin note on ListMembersIncludingOutsource in dal.go).
 func (s *apiServer) resolveMember(memberID string) (*Member, error) {
 	m, err := s.dal.GetMember(memberID)
 	if err != nil {
