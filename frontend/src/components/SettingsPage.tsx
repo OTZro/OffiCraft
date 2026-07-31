@@ -30,7 +30,10 @@ import {
 import { isHttpStatus } from "../api/errors";
 import { Markdown } from "./Markdown";
 import { LessonsCard } from "./LessonsCard";
-import { DocumentHistoryCard } from "./DocumentHistoryCard";
+import {
+  DocumentHistoryEntry,
+  type DocumentHistoryEntryProps,
+} from "./DocumentHistoryEntry";
 import { navigateHash } from "../lib/hashRoute";
 import { Breadcrumbs, type Crumb } from "./Breadcrumbs";
 import {
@@ -355,15 +358,20 @@ export function SettingsPage({
         crumbs={[crumbRoot, crumbRoles, { label: t.settings.customName }]}
         onSave={gc.save}
         onReset={gc.reset}
-        // 版本紀錄 (T-7d33): restoring rewrites the live block, so the visible
-        // doc is re-read from the server rather than assumed.
-        extra={
-          <DocumentHistoryCard
-            kind="global_context"
-            docKey="global"
-            onRestored={gc.refetch}
-          />
-        }
+        // 版本紀錄 (T-1f39): the entry sits in the EDIT toolbar, where 重置
+        // used to. Restoring rewrites the live block, so the visible doc is
+        // re-read from the server rather than assumed.
+        history={{
+          kind: "global_context",
+          docKey: "global",
+          title: t.settings.historyGlobalTitle,
+          // The live block under its WIRE field name — the modal's diff
+          // compares a revision against what the server currently stores,
+          // which is exactly the text this page is rendering. `undefined`
+          // while it loads, so the diff never compares against a blank.
+          currentContent: gc.ctx ? { text: gc.ctx.text } : undefined,
+          onRestored: gc.refetch,
+        }}
       />
     );
   }
@@ -427,21 +435,29 @@ export function SettingsPage({
         onSave={(text) => rolesH.save(view.key, { definitionMd: text })}
         // 重置 = "restore the FILE SEED" — only a seed role has one. A custom
         // role's doc IS its only truth (the server 404s its reset — verified
-        // live), so the affordance is omitted rather than left half-dead.
+        // live), so the affordance is omitted rather than left half-dead: on a
+        // seed role it becomes the list's 初始版本 row, on a custom one there
+        // is no such row at all.
         onReset={role?.isSeed ? () => rolesH.reset(view.key) : undefined}
-        extra={
-          <>
-            <DocumentHistoryCard
-              kind="role_definition"
-              docKey={view.key}
-              // Only a CUSTOM role has a delete affordance (seed roles are
-              // server-refused), so only there is the scope note true.
-              docDeletable={role ? !role.isSeed : false}
-              onRestored={rolesH.refetch}
-            />
-            <LessonsCard roleKey={view.key} />
-          </>
-        }
+        history={{
+          kind: "role_definition",
+          docKey: view.key,
+          // This page carries TWO versioned documents (the definition and,
+          // below it, the lessons), so a list headed plain 「版本紀錄」 cannot
+          // say which one it holds.
+          title: t.settings.historyRoleDefTitle,
+          // The definition text alone: the role's name is not versioned
+          // (owner ruling 2026-07-31), so putting it on this side would make a
+          // rename show up as a difference nothing can restore.
+          currentContent: role
+            ? { definition_md: role.definitionMd }
+            : undefined,
+          // Only a CUSTOM role has a delete affordance (seed roles are
+          // server-refused), so only there is the scope note true.
+          docDeletable: role ? !role.isSeed : false,
+          onRestored: rolesH.refetch,
+        }}
+        extra={<LessonsCard roleKey={view.key} />}
       />
     );
   }
@@ -1508,6 +1524,7 @@ function DocDetail({
   crumbs,
   onSave,
   onReset,
+  history,
   extra,
   readOnly = false,
   badge,
@@ -1524,6 +1541,11 @@ function DocDetail({
    * studio SOP with no owner overlay). */
   onSave?: (text: string) => Promise<void> | void;
   onReset?: () => Promise<void> | void;
+  /** The document's 版本紀錄 (T-1f39). Rendered in the EDIT toolbar, in the
+   * slot 重置 used to hold; the reset itself survives as the list's 初始版本
+   * row and is wired from `onReset` here, so a document without a seed simply
+   * does not grow that row. */
+  history?: Omit<DocumentHistoryEntryProps, "onReset" | "disabled">;
   /** Optional content rendered below the doc card (e.g. the persona page's
    * per-role <LessonsCard>). The global-context view passes none. */
   extra?: ReactNode;
@@ -1607,18 +1629,24 @@ function DocDetail({
           </span>
           {readOnly ? null : editing ? (
             <div className="doc-card__actions">
-              {/* 重置 renders only where a seed exists to restore (onReset
-               * omitted ⇒ no button — e.g. custom roles, whose reset the
-               * server 404s). */}
-              {onReset && (
-                <button
-                  type="button"
-                  className="doc-btn"
-                  onClick={doReset}
+              {/* 版本紀錄 stands where 重置 stood (owner 2026-07-31). The reset
+               * did not disappear — it is the 初始版本 row inside, and only
+               * where a seed exists (onReset omitted ⇒ no such row, e.g. a
+               * custom role whose reset the server 404s). */}
+              {history && (
+                <DocumentHistoryEntry
+                  {...history}
+                  // A restore rewrote the document under the editor, so the
+                  // editor's draft is now a pending overwrite of the version
+                  // just restored. Leave edit mode with it — the same exit the
+                  // reset has always made.
+                  onRestored={async () => {
+                    await history.onRestored?.();
+                    cancelEdit();
+                  }}
+                  onReset={onReset ? doReset : undefined}
                   disabled={busy}
-                >
-                  {t.settings.reset}
-                </button>
+                />
               )}
               <button
                 type="button"

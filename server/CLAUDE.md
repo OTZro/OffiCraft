@@ -180,11 +180,13 @@ T-98f4 只做了外包 worker。正職這邊三個動詞各走各的,實測(2026
 
 `document_history` 對四類可覆寫長文各留最近三版（migration 00043）。**還原的前置條件三類不同，那是刻意的，不是漏寫**——加第四類文件的人先讀這一段：
 
-- **`role_definition` / `task_manual`：文件必須還存在，否則 404。** 還原是「把這份文件退回舊狀態」，不是「用一份歷史把已刪的文件生回來」。刪掉的角色／手冊要回來，走建立流程。
+**T-1f39 之後手冊不是一個 kind 而是兩條獨立序列**：`task_manual_sop`（`{sop_md}`）與 `task_manual_learnings`（`{learnings}`），key 都是 `type_key`，各自留三版、各自修剪；`purpose`／識別鍵／`display_name`／`assignee` **完全不留版**（owner 裁定）。還原時的 10,000 rune 上限只檢查該序列真的寫回的那一欄。舊的 `task_manual` 四欄整包**已退場**：owner 2026-07-31 裁定「不需要管舊歷史，舊歷史資料直接刪除就好，不要留技術債」，migration `00044_drop_legacy_task_manual_history.sql` 刪掉全部 9 列（不備份，owner 在知情下選的；Down 是**明示的 no-op**，救不回來）。`documentHistoryAllowed` 現在對 `task_manual` **回 400 並指名兩個新 kind**——回空清單的話「沒有歷史」與「你用錯 kind」會長得一模一樣。常數 `docKindTaskManual` 只為了認出這個舊名字而留著，不再有任何讀寫路徑。
+
+- **`role_definition` / `task_manual_sop` / `task_manual_learnings`：文件必須還存在，否則 404。** 還原是「把這份文件退回舊狀態」，不是「用一份歷史把已刪的文件生回來」。刪掉的角色／手冊要回來，走建立流程。
 - **`lessons`：折疊不要求角色存在**（`foldLessonsDTO` 只讀 overlay ⊕ seed，從不查 `role_def`），所以在角色已刪的情況下，**admin 以上**仍可把它的 lessons 還原成一列活的 overlay。一般 agent 過不了「只能寫自己角色」那道閘（已刪角色不再是任何人的角色），但那是**授權**擋下來的，不是這條路徑不存在。
 - **`global_context` 沒有刪除入口**，不會有這個問題。
 
-⇒ **刪除文件時必須在同一個交易裡刪掉它的歷史**（角色：自己的 `role_definition` 歷史 ＋ 每一份 `<role>::*` 的 lessons 歷史；手冊：自己的 `task_manual` 歷史）。少了這一步，刪掉的文件會留下**任何持 token 的 caller 都讀得到**的殘影（`GET /api/document-history/{kind}/{key}` 是 machine 地板），而且 `docs/guide/members.md` 那句「永久移除」會變成假話。串接補上之後，上面 `lessons` 那條路徑就沒有素材可用了，**但不對稱本身還在**——所以寫在這裡。
+⇒ **刪除文件時必須在同一個交易裡刪掉它的歷史**（角色：自己的 `role_definition` 歷史 ＋ 每一份 `<role>::*` 的 lessons 歷史；手冊：`task_manual_sop`、`task_manual_learnings` **兩條序列全清**；退場的那個舊 kind 不在其中，00044 之後它一列都不會再存在）。少了這一步，刪掉的文件會留下**任何持 token 的 caller 都讀得到**的殘影（`GET /api/document-history/{kind}/{key}` 是 machine 地板），而且 `docs/guide/members.md` 那句「永久移除」會變成假話。串接補上之後，上面 `lessons` 那條路徑就沒有素材可用了，**但不對稱本身還在**——所以寫在這裡。
 
 🔴 **日後要盤點孤兒歷史列時的誤報坑**：判「這個 `document_key` 的文件還在不在」**不能只看 `role_def` 有沒有那一列**——**seed 角色在沒被自訂過之前根本沒有 `role_def` 列**（overlay 模型：沒有 overlay ＝ 用 seed），於是 seed 角色的 lessons 歷史會被**整批誤判成孤兒**。判準要併上 seed 角色清單，來源是 `assets.go` 的 `seedRoleKeys()`（不要手抄一份會過期的名單）。**一個會把正常資料標成待刪的盤點查詢，比沒有盤點查詢危險。**
 

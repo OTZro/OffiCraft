@@ -62,6 +62,12 @@ const EXPECTED: [Lang, string, (string | number | string[])[], string][] = [
     ["zh", "docHistoryRestoreConfirm", ["7/29 14:03"], "確定還原「7/29 14:03」這個版本？目前的內容會被覆蓋，但會存成新的版本紀錄。"],
     ["zh", "docHistoryBlockedReason", [["學習經驗", "SOP"], 10000], "「學習經驗、SOP」超過 10000 字上限，且不比目前的內容短——伺服器會拒絕這次還原。"],
     ["zh", "deleteManualConfirm", ["review-pr"], "確定刪除任務類型「review-pr」？其手冊（定義、SOP、學習經驗）將一併移除，無法復原。"],
+    ["zh", "manualEditSection", ["這是什麼任務？"], "編輯「這是什麼任務？」"],
+    ["zh", "docHistoryVersionLabel", ["7/29 14:03"], "此版本（7/29 14:03）"],
+    ["zh", "docHistoryActor", ["Kyle", "m-f663"], "Kyle（m-f663）"],
+    ["zh", "docHistoryActor", ["", "ow-c975"], "ow-c975"],
+    ["zh", "diffSkipped", [11], "已略過 11 行未變更內容"],
+    ["zh", "diffTooLarge", [2400], "內容太長，無法逐行比對（2400 行）。"],
     ["en", "taskProgress", [3,7], "Step 3/7"],
     ["en", "taskElapsed", ["2h"], "Elapsed 2h"],
     ["en", "taskPlanningBy", ["Mira"], "Waiting for Mira to create steps"],
@@ -104,6 +110,12 @@ const EXPECTED: [Lang, string, (string | number | string[])[], string][] = [
     ["en", "docHistoryRestoreConfirm", ["7/29 14:03"], "Restore the version from \"7/29 14:03\"? The current content is overwritten, but is kept as a new revision."],
     ["en", "docHistoryBlockedReason", [["Lessons", "SOP"], 10000], "\"Lessons, SOP\" is over the 10000-character limit and no shorter than what is stored now — the server would refuse this restore."],
     ["en", "deleteManualConfirm", ["review-pr"], "Delete the task type “review-pr”? Its manual (definition, SOP, learnings) is removed with it and cannot be restored."],
+    ["en", "manualEditSection", ["What is this task?"], "Edit “What is this task?”"],
+    ["en", "docHistoryVersionLabel", ["7/29 14:03"], "This version (7/29 14:03)"],
+    ["en", "docHistoryActor", ["Kyle", "m-f663"], "Kyle (m-f663)"],
+    ["en", "docHistoryActor", ["", "ow-c975"], "ow-c975"],
+    ["en", "diffSkipped", [11], "Hidden: 11 unchanged lines"],
+    ["en", "diffTooLarge", [2400], "Too long to compare line by line (2400 lines)."],
 ];
 
 describe("makeMessages", () => {
@@ -223,6 +235,12 @@ describe("makeMessages", () => {
       "settings.historyBlockedReasonTail",
       "settings.deleteManualConfirmLead",
       "settings.deleteManualConfirmTail",
+      "settings.historyVersionLabelLead",
+      "settings.historyVersionLabelTail",
+      "diff.skippedLead",
+      "diff.skippedTail",
+      "diff.tooLargeLead",
+      "diff.tooLargeTail",
     ]) {
       expect(keys.has(code), `${code} must be overridable`).toBe(true);
     }

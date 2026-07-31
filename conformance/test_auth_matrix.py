@@ -718,7 +718,7 @@ MATRIX: dict[str, Route] = {
     # (TestRestoreDocumentHistoryKeepsEachDocumentsWriteFloor).
     "POST /api/document-history/{kind}/{key}/{id}/restore": Route(
         requires="agent",
-        path=lambda ctx, i: "/api/document-history/task_manual/tm-conf-missing/1/restore",
+        path=lambda ctx, i: "/api/document-history/task_manual_sop/tm-conf-missing/1/restore",
         overrides={"agent_self": 404, "agent_other": 404, "admin_agent": 404, "owner": 404},
     ),
     # ── global context / roles / lessons / bootstrap ─────────────────────────

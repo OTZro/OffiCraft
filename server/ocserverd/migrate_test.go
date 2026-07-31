@@ -1017,3 +1017,110 @@ func TestMemberAvatarMigrationRollback(t *testing.T) {
 		t.Fatal("rollback must drop member.avatar_attachment_id")
 	}
 }
+
+// TestMigration00044DeletesOnlyTheRetiredTaskManualHistory pins the surgical
+// half of the irreversible delete (T-1f39, owner-approved): every
+// 'task_manual' row goes, and every other document_kind — including the two
+// replacement manual streams keyed by the SAME document_key — survives with
+// its content byte-for-byte. The fixture deliberately puts rows a wider WHERE
+// clause would take (same key, neighbouring kinds; same kind prefix) in the
+// blast radius, so a mutant that drops or widens the predicate has somewhere
+// to do damage.
+func TestMigration00044DeletesOnlyTheRetiredTaskManualHistory(t *testing.T) {
+	db, err := openSQLite(filepath.Join(t.TempDir(), "legacy-manual-history.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	if err := runMigrations(db); err != nil {
+		t.Fatalf("goose up: %v", err)
+	}
+	// Seed the world as it stood the moment before the deletion.
+	if err := goose.DownTo(db, "migrations", 43); err != nil {
+		t.Fatalf("down to 43: %v", err)
+	}
+
+	type row struct{ kind, key, content string }
+	seeded := []row{
+		{"task_manual", "tm-alpha", `{"purpose":"p1","fields":"[]","sop_md":"sop v1","learnings":"l v1"}`},
+		{"task_manual", "tm-alpha", `{"purpose":"p2","fields":"[]","sop_md":"sop v2","learnings":"l v2"}`},
+		{"task_manual", "tm-beta", `{"purpose":"p1","fields":"[]","sop_md":"sop v1","learnings":"l v1"}`},
+		{"task_manual_sop", "tm-alpha", `{"sop_md":"sop v1"}`},
+		{"task_manual_sop", "tm-beta", `{"sop_md":"sop v1"}`},
+		{"task_manual_learnings", "tm-alpha", `{"learnings":"l v1"}`},
+		{"task_manual_learnings", "tm-beta", `{"learnings":"l v2"}`},
+		{"lessons", "r-assistant::review-pr", `{"text":"lesson v1","tombstoned":"false"}`},
+		{"global_context", "global", `{"text":"context v1","tombstoned":"false"}`},
+		{"role_definition", "r-assistant", `{"name":"Assistant","definition_md":"def v1","tombstoned":"false"}`},
+	}
+	for i, r := range seeded {
+		if _, err := db.Exec(`INSERT INTO document_history
+			(document_kind, document_key, content_json, created_ts, actor_id)
+			VALUES (?, ?, ?, ?, 'owner')`, r.kind, r.key, r.content, float64(1000+i)); err != nil {
+			t.Fatalf("seed %s/%s: %v", r.kind, r.key, err)
+		}
+	}
+
+	if err := runMigrations(db); err != nil {
+		t.Fatalf("delete up: %v", err)
+	}
+
+	var legacy int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM document_history WHERE document_kind = 'task_manual'`,
+	).Scan(&legacy); err != nil {
+		t.Fatalf("count legacy: %v", err)
+	}
+	if legacy != 0 {
+		t.Errorf("the retired bundle still has %d rows", legacy)
+	}
+
+	survivors := map[row]bool{}
+	rows, err := db.Query(`SELECT document_kind, document_key, content_json FROM document_history`)
+	if err != nil {
+		t.Fatalf("read survivors: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var got row
+		if err := rows.Scan(&got.kind, &got.key, &got.content); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		survivors[got] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+
+	want := map[row]bool{}
+	for _, r := range seeded {
+		if r.kind != "task_manual" {
+			want[r] = true
+		}
+	}
+	for r := range want {
+		if !survivors[r] {
+			t.Errorf("the delete took a %s row it had no business touching: %s/%s %s",
+				r.kind, r.kind, r.key, r.content)
+		}
+	}
+	if len(survivors) != len(want) {
+		t.Errorf("document_history holds %d rows after the delete, want the %d non-legacy rows",
+			len(survivors), len(want))
+	}
+
+	// Down cannot restore what Up deleted, and must not pretend otherwise by
+	// leaving anything behind: rolling back leaves the survivors exactly as the
+	// Up left them and revives nothing.
+	if err := goose.DownTo(db, "migrations", 43); err != nil {
+		t.Fatalf("down to 43: %v", err)
+	}
+	var after int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM document_history`).Scan(&after); err != nil {
+		t.Fatalf("count after down: %v", err)
+	}
+	if after != len(want) {
+		t.Errorf("rollback changed the table to %d rows, want the same %d — the Down is a no-op "+
+			"and the deletion is irreversible by design", after, len(want))
+	}
+}

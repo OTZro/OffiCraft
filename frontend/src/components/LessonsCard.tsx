@@ -12,7 +12,7 @@ import { useState } from "react";
 import { useI18n } from "../i18n";
 import { useLessons } from "../hooks/useLessons";
 import { Markdown } from "./Markdown";
-import { DocumentHistoryCard } from "./DocumentHistoryCard";
+import { DocumentHistoryEntry } from "./DocumentHistoryEntry";
 import { LayersIcon, PencilIcon } from "./icons";
 import "./member-detail.css";
 
@@ -66,7 +66,6 @@ export function LessonsCard({ roleKey, taskType = "general" }: LessonsCardProps)
   }
 
   return (
-    <>
     <div className="mp-card mp-lessons">
       <div className="mp-lessons__head">
         <span className="mp-lessons__title">
@@ -75,6 +74,23 @@ export function LessonsCard({ roleKey, taskType = "general" }: LessonsCardProps)
         </span>
         {editing ? (
           <div className="mp-lessons__actions">
+            {/* 版本紀錄 (T-1f39) — in the edit toolbar, like every other
+              * long-form document. This doc has NO file seed, so its list
+              * carries no 初始版本 row. The doc's own key is the composite
+              * "<role_key>::<task_type>" the wire uses. */}
+            <DocumentHistoryEntry
+              kind="lessons"
+              docKey={`${roleKey}::${taskType}`}
+              title={t.settings.historyLessonsTitle}
+              currentContent={lessons ? { text: lessons.text } : undefined}
+              // A restore rewrote the doc under the editor — leaving the draft
+              // up would turn 完成編輯 into an undo of the restore.
+              onRestored={async () => {
+                await refetch();
+                cancelEdit();
+              }}
+              disabled={busy}
+            />
             <button
               type="button"
               className="doc-btn"
@@ -131,14 +147,5 @@ export function LessonsCard({ roleKey, taskType = "general" }: LessonsCardProps)
         )}
       </div>
     </div>
-    {/* 版本紀錄 (T-7d33) — the lessons doc's own key is the composite
-      * "<role_key>::<task_type>" the wire uses. */}
-    <DocumentHistoryCard
-      kind="lessons"
-      docKey={`${roleKey}::${taskType}`}
-      currentContent={lessons ? { text: lessons.text } : undefined}
-      onRestored={refetch}
-    />
-    </>
   );
 }

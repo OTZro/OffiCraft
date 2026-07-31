@@ -536,16 +536,25 @@ export interface GlobalContextView {
 }
 
 /**
- * Which editable long-form document a retained revision belongs to. The four
- * kinds the server keeps history for; the companion `key` is "global" for
- * global_context, the role key for role_definition, "<role_key>::<task_type>"
- * for lessons and the type_key for task_manual.
+ * Which editable long-form document a retained revision belongs to. The
+ * companion `key` is "global" for global_context, the role key for
+ * role_definition, "<role_key>::<task_type>" for lessons and the type_key for
+ * every task_manual kind.
+ *
+ * `task_manual` is the RETIRED four-field bundle: T-1f39 split a manual's SOP
+ * and learnings into their own series (purpose and the identifier fields are no
+ * longer versioned at all), migration 00044 deleted every existing row, and
+ * BOTH document-history routes now answer 400 for it, naming the two
+ * replacements. The name stays in this union only so the cockpit can still
+ * spell what the server refuses — nothing may list, restore or write it.
  */
 export type DocumentKind =
   | "global_context"
   | "role_definition"
   | "lessons"
-  | "task_manual";
+  | "task_manual"
+  | "task_manual_sop"
+  | "task_manual_learnings";
 
 /**
  * ONE retained revision of an editable long-form document. `content` is the

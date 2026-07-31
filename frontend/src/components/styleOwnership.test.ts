@@ -43,7 +43,15 @@ const DIR = join(__dirname);
  * here on merge; the resolution is the UNION, never a pick of one side. Deriving
  * the list from the filesystem (every component `.css` minus a justified
  * exclusion list) is the real fix and is tracked separately. */
-const OWNED_SHEETS = ["machine-picker.css", "member-detail.css", "md-preview.css"] as const;
+const OWNED_SHEETS = [
+  "machine-picker.css",
+  "member-detail.css",
+  "md-preview.css",
+  // T-1f39: the retained-revision reader. Mounted from DocumentHistoryEntry —
+  // which imports settings.css — so it would free-ride exactly like the two
+  // above until the day something else opens it.
+  "doc-hist-modal.css",
+] as const;
 
 /** Sheets whose BEM block is not just the filename. `member-detail.css` owns the
  * `.mp-*` block, so deriving the block from the filename made its entry check an

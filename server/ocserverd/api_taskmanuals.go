@@ -19,10 +19,34 @@ import (
 	"net/http"
 )
 
-func taskManualHistorySnapshot(m TaskManual) (string, error) {
-	return historyJSON(map[string]string{
-		"purpose": m.Purpose, "fields": m.Fields, "sop_md": m.SopMD, "learnings": m.Learnings,
-	})
+// The two live manual history kinds, plus the RETIRED four-field bundle name.
+// Nothing writes, reads or stores task_manual any more: T-1f39 split SOP and
+// learnings into their own series and migration 00044 deleted the stranded
+// rows. The constant survives solely so documentHistoryAllowed can refuse the
+// old name by name instead of falling through to "unknown kind".
+const (
+	docKindTaskManual          = "task_manual"
+	docKindTaskManualSop       = "task_manual_sop"
+	docKindTaskManualLearnings = "task_manual_learnings"
+)
+
+// The two split snapshots carry ONE field each, and answer "{}" — the sentinel
+// SaveWithDocumentHistories reads as "nothing worth retaining" — when that
+// field is empty. A manual ships blank, so without this the first SOP write of
+// every manual would burn a version slot on an empty document, which is the
+// rule the four-field bundle already applied to a manual that did not exist.
+func taskManualSopHistorySnapshot(m TaskManual) (string, error) {
+	if m.SopMD == "" {
+		return "{}", nil
+	}
+	return historyJSON(map[string]string{"sop_md": m.SopMD})
+}
+
+func taskManualLearningsHistorySnapshot(m TaskManual) (string, error) {
+	if m.Learnings == "" {
+		return "{}", nil
+	}
+	return historyJSON(map[string]string{"learnings": m.Learnings})
 }
 
 // resolveTaskManual returns the manual for typeKey (errNotFound when absent).
@@ -343,7 +367,10 @@ func (s *apiServer) HandleUpdateTaskManualApiTaskManualsTypeKeyPost(w http.Respo
 		writeError(w, http.StatusBadRequest, docCapRefusal("learnings doc", m.Learnings, *body.Learnings))
 		return
 	}
-	// All validated — apply the partial update.
+	// All validated — apply the partial update. The two versioned fields are
+	// remembered as they stood so the write below can retain a revision only
+	// for the ones this call actually changes (T-1f39).
+	sopBefore, learningsBefore := m.SopMD, m.Learnings
 	if body.DisplayName != nil {
 		m.DisplayName = trimString(*body.DisplayName)
 	}
@@ -381,7 +408,9 @@ func (s *apiServer) HandleUpdateTaskManualApiTaskManualsTypeKeyPost(w http.Respo
 		m.Assignee = string(blob)
 	}
 	m.UpdatedTS = nowSecs()
-	if err := s.dal.SaveWithDocumentHistory("task_manual", typeKey, currentActor(r), taskManualSnapshotIn(typeKey), func(ex sqlExecer) error {
+	streams := taskManualHistoryStreams(typeKey, currentActor(r),
+		m.SopMD != sopBefore, m.Learnings != learningsBefore)
+	if err := s.dal.SaveWithDocumentHistories(streams, func(ex sqlExecer) error {
 		return putTaskManualOn(ex, *m)
 	}); err != nil {
 		internalError(w, err)
@@ -454,9 +483,11 @@ func (s *apiServer) HandleWriteTaskLearningsApiTaskManualsTypeKeyLearningsPost(w
 	}
 	m.Learnings = body.Text
 	m.UpdatedTS = nowSecs()
-	if err := s.dal.SaveWithDocumentHistory("task_manual", typeKey, currentActor(r), taskManualSnapshotIn(typeKey), func(ex sqlExecer) error {
-		return putTaskManualOn(ex, *m)
-	}); err != nil {
+	if err := s.dal.SaveWithDocumentHistories(
+		taskManualHistoryStreams(typeKey, currentActor(r), false, true),
+		func(ex sqlExecer) error {
+			return putTaskManualOn(ex, *m)
+		}); err != nil {
 		internalError(w, err)
 		return
 	}
@@ -536,9 +567,11 @@ func (s *apiServer) HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchP
 	}
 	m.Learnings = next
 	m.UpdatedTS = nowSecs()
-	if err := s.dal.SaveWithDocumentHistory("task_manual", typeKey, currentActor(r), taskManualSnapshotIn(typeKey), func(ex sqlExecer) error {
-		return putTaskManualOn(ex, *m)
-	}); err != nil {
+	if err := s.dal.SaveWithDocumentHistories(
+		taskManualHistoryStreams(typeKey, currentActor(r), false, true),
+		func(ex sqlExecer) error {
+			return putTaskManualOn(ex, *m)
+		}); err != nil {
 		internalError(w, err)
 		return
 	}

@@ -246,7 +246,12 @@ func (s *apiServer) HandleUpdateRoleApiRolesRolePost(w http.ResponseWriter, r *h
 	if body.DefinitionMd != nil {
 		definitionMD = *body.DefinitionMd
 	}
-	if err := s.dal.SaveWithDocumentHistory("role_definition", role, currentActor(r), roleDefSnapshotIn(role), func(ex sqlExecer) error {
+	// The NAME is not versioned (owner ruling, T-1f39), so a write that only
+	// renames the role retains nothing — otherwise a rename would push a real
+	// revision of the TEXT out of the three retained slots without changing a
+	// word of it. Same rule the task manual's two series follow.
+	streams := roleDefHistoryStreams(role, currentActor(r), definitionMD != current.DefinitionMD)
+	if err := s.dal.SaveWithDocumentHistories(streams, func(ex sqlExecer) error {
 		return putRoleDefOn(ex, RoleDef{
 			RoleKey:      role,
 			Name:         name,

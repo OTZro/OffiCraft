@@ -8,17 +8,20 @@
 //      clicking 任務定義 / 學習經驗 PUSHES its own breadcrumb sub-page (設定 ›
 //      任務手冊 › <type> › 任務定義/學習經驗, owner 2026-07-20), where the
 //      <type> crumb returns to the hub; never shows a filename.
-//   4. 任務定義 editing (owner T-8a4a r3 — one explicit edit switch for the
-//      whole area): READ-ONLY by default; 編輯 flips Q1 purpose text, Q2 field
-//      list (add/remove, 必填 toggle, 識別鍵 marking — composite allowed) and
-//      Q3 SOP markdown into their editors at once; 完成編輯 persists every
-//      change in one PATCH; 取消 discards. (No 重置 — manuals have no seed.)
+//   4. 任務定義 editing (owner 2026-07-31, proposal P1 — 三塊各自編輯): every
+//      block is READ-ONLY by default and carries its OWN 編輯 in its own
+//      heading; 完成編輯 persists THAT BLOCK ALONE ({purpose} / {fields} /
+//      {sopMd}); 取消 discards its draft alone. ALL THREE may be open at once,
+//      each holding its own draft (owner 2026-07-31, superseding the
+//      one-block-at-a-time rule). The 版本紀錄 entry belongs to block ③'s edit
+//      row only (only the SOP is versioned).
+//      (No 重置 — manuals have no seed.)
 //   5. 學習經驗 is editable (agent write-back surface, owner-editable too).
 //   6. 負責成員 card: member pick or 外包 (model + effort + copies ×N).
 //   7. Delete: confirm modal; a type with OPEN tasks survives its 409 with the
 //      honest 先讓它們結束 message; a closed-task type deletes.
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, fireEvent, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { SettingsPage } from "./SettingsPage";
@@ -83,10 +86,26 @@ async function renderManualsList() {
   return utils;
 }
 
+/** Every PATCH 任務定義 sent, in order — the only place the per-block scoping
+ * is visible: a payload carrying a key the owner never opened looks identical
+ * on screen to one that does not. */
+let updateManualPatches: Record<string, unknown>[] = [];
+
 beforeEach(() => {
   __resetMock();
   window.location.hash = "";
+  updateManualPatches = [];
+  vi.spyOn(api, "updateTaskManual").mockImplementation(async (key, patch) => {
+    updateManualPatches.push({ ...patch });
+    return realUpdateTaskManual(key, patch);
+  });
 });
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+const realUpdateTaskManual = api.updateTaskManual.bind(api);
 
 describe("設定 › 任務手冊 — list", () => {
   it("starts honestly empty (出廠不含任何類型)", async () => {
@@ -211,9 +230,12 @@ describe("設定 › 任務手冊 — detail", () => {
     expect(crumbText).toContain("審查 PR");
     expect(crumbText).toContain("任務定義");
 
-    // Default is READ-ONLY on the sub-page: 編輯 switch shown, no editors, and
-    // every section renders the stored content read-only.
-    expect(queryByTestId("manual-def-edit")).not.toBeNull();
+    // Default is READ-ONLY on the sub-page: each block carries its OWN 編輯
+    // switch, no editors, and every section renders the stored content
+    // read-only.
+    expect(queryByTestId("manual-def-edit-1")).not.toBeNull();
+    expect(queryByTestId("manual-def-edit-2")).not.toBeNull();
+    expect(queryByTestId("manual-def-edit-3")).not.toBeNull();
     expect(queryByTestId("manual-purpose-input")).toBeNull();
     expect(getByTestId("manual-purpose-view").textContent).toBe(
       "Review 進來的 PR。"
@@ -230,57 +252,85 @@ describe("設定 › 任務手冊 — detail", () => {
     expect(queryByTestId("manual-entry-definition")).not.toBeNull();
   });
 
-  it("編輯 → 完成編輯 persists all three sections in one go (owner T-8a4a r3)", async () => {
+  it("每一塊各自 編輯 → 完成編輯, and the PATCH carries that block's key alone (owner 2026-07-31 P1)", async () => {
     __injectMockTaskManual(
       mkManual({
         typeKey: "review-pr",
         fields: [{ name: "PR 連結", required: true, isKey: true }],
       })
     );
-    const { findByTestId, getByTestId } = await renderManualsList();
+    const { findByTestId, getByTestId, queryByTestId } =
+      await renderManualsList();
     fireEvent.click(await findByTestId("manual-open-review-pr"));
     fireEvent.click(await findByTestId("manual-entry-definition"));
     await findByTestId("manual-definition-card");
 
-    // Enter edit mode: the three editors mount, seeded from the manual.
-    fireEvent.click(getByTestId("manual-def-edit"));
+    // ① 這是什麼任務? — opening block 1 mounts ITS editor and no other.
+    fireEvent.click(getByTestId("manual-def-edit-1"));
     await findByTestId("manual-purpose-input");
-    expect((getByTestId("manual-field-name-0") as HTMLInputElement).value).toBe(
-      "PR 連結"
-    );
-
-    // §1 purpose, §2 a second composite field, §3 SOP — all edited in one pass.
+    expect(queryByTestId("manual-fields-editor")).toBeNull();
+    expect(queryByTestId("manual-sop-input")).toBeNull();
     fireEvent.change(getByTestId("manual-purpose-input"), {
       target: { value: "Review 進來的 Pull Request。" },
     });
+    // Nothing saved until 完成編輯.
+    expect((await api.getTaskManual("review-pr")).purpose).toBe("");
+    fireEvent.click(getByTestId("manual-def-done-1"));
+    await waitFor(async () =>
+      expect((await api.getTaskManual("review-pr")).purpose).toBe(
+        "Review 進來的 Pull Request。"
+      )
+    );
+    // Back to read-only after saving.
+    await waitFor(() => expect(getByTestId("manual-def-edit-1")).toBeTruthy());
+
+    // ② 需要哪些資訊? — a second composite field, saved on its own.
+    fireEvent.click(getByTestId("manual-def-edit-2"));
+    await findByTestId("manual-fields-editor");
+    expect((getByTestId("manual-field-name-0") as HTMLInputElement).value).toBe(
+      "PR 連結"
+    );
     fireEvent.click(getByTestId("manual-field-add"));
     fireEvent.change(getByTestId("manual-field-name-1"), {
       target: { value: "repo" },
     });
     fireEvent.click(getByTestId("manual-field-required-1")); // 選填 → 必填
     fireEvent.click(getByTestId("manual-field-key-1")); // 🔑識別鍵 (複合)
-    fireEvent.change(getByTestId("manual-sop-input"), {
-      target: { value: "# steps\n1. review" },
-    });
-
-    // Nothing saved until 完成編輯.
-    expect((await api.getTaskManual("review-pr")).purpose).toBe("");
-
-    fireEvent.click(getByTestId("manual-def-done"));
-    await waitFor(async () => {
-      const m = await api.getTaskManual("review-pr");
-      expect(m.purpose).toBe("Review 進來的 Pull Request。");
-      expect(m.fields).toEqual([
+    fireEvent.click(getByTestId("manual-def-done-2"));
+    await waitFor(async () =>
+      expect((await api.getTaskManual("review-pr")).fields).toEqual([
         { name: "PR 連結", required: true, isKey: true },
         { name: "repo", required: true, isKey: true },
-      ]);
-      expect(m.sopMd).toBe("# steps\n1. review");
+      ])
+    );
+
+    // ③ 該怎麼做? — the SOP, saved on its own.
+    fireEvent.click(await findByTestId("manual-def-edit-3"));
+    fireEvent.change(await findByTestId("manual-sop-input"), {
+      target: { value: "# steps\n1. review" },
     });
-    // Back to read-only after saving.
-    await waitFor(() => expect(getByTestId("manual-def-edit")).toBeTruthy());
+    fireEvent.click(getByTestId("manual-def-done-3"));
+    await waitFor(async () =>
+      expect((await api.getTaskManual("review-pr")).sopMd).toBe(
+        "# steps\n1. review"
+      )
+    );
+
+    // The three writes were three PATCHes, each naming ONE key: a block's
+    // 完成編輯 must never carry a draft the owner did not open.
+    expect(updateManualPatches).toEqual([
+      { purpose: "Review 進來的 Pull Request。" },
+      {
+        fields: [
+          { name: "PR 連結", required: true, isKey: true },
+          { name: "repo", required: true, isKey: true },
+        ],
+      },
+      { sopMd: "# steps\n1. review" },
+    ]);
   });
 
-  it("編輯 → 取消 discards the drafts and saves nothing (owner T-8a4a r3)", async () => {
+  it("編輯 → 取消 discards that block's draft and saves nothing (owner 2026-07-31 P1)", async () => {
     __injectMockTaskManual(
       mkManual({
         typeKey: "review-pr",
@@ -294,22 +344,198 @@ describe("設定 › 任務手冊 — detail", () => {
     fireEvent.click(await findByTestId("manual-entry-definition"));
     await findByTestId("manual-definition-card");
 
-    fireEvent.click(getByTestId("manual-def-edit"));
+    fireEvent.click(getByTestId("manual-def-edit-1"));
     fireEvent.change(await findByTestId("manual-purpose-input"), {
       target: { value: "改壞的草稿" },
     });
-    fireEvent.click(getByTestId("manual-field-remove-0")); // delete the field
-    fireEvent.click(getByTestId("manual-def-cancel"));
-
-    // Read-only again, showing the ORIGINAL content — nothing persisted.
+    fireEvent.click(getByTestId("manual-def-cancel-1"));
     expect(queryByTestId("manual-purpose-input")).toBeNull();
     expect(getByTestId("manual-purpose-view").textContent).toBe("原本的用途");
+
+    fireEvent.click(getByTestId("manual-def-edit-2"));
+    fireEvent.click(await findByTestId("manual-field-remove-0"));
+    fireEvent.click(getByTestId("manual-def-cancel-2"));
+
+    // Read-only again, showing the ORIGINAL content — nothing persisted.
     expect(getByTestId("manual-field-view-0").textContent).toContain(
       "PR 連結"
     );
     const m = await api.getTaskManual("review-pr");
     expect(m.purpose).toBe("原本的用途");
     expect(m.fields).toEqual([{ name: "PR 連結", required: true, isKey: true }]);
+    expect(updateManualPatches).toEqual([]);
+  });
+
+  it("saves ONE block while the other two are open and dirty — the PATCH carries that block's key alone (owner 2026-07-31)", async () => {
+    // The case that can actually clobber. With every block open and holding
+    // unfinished text, a card-wide payload would push the two the owner did not
+    // press 完成編輯 on — and the screen looks identical either way.
+    __injectMockTaskManual(
+      mkManual({
+        typeKey: "review-pr",
+        purpose: "原本的用途",
+        fields: [{ name: "PR 連結", required: true, isKey: true }],
+        sopMd: "# 舊 SOP",
+      })
+    );
+    const { findByTestId, getByTestId } = await renderManualsList();
+    fireEvent.click(await findByTestId("manual-open-review-pr"));
+    fireEvent.click(await findByTestId("manual-entry-definition"));
+    await findByTestId("manual-definition-card");
+
+    // Open all three and type in each.
+    fireEvent.click(getByTestId("manual-def-edit-1"));
+    fireEvent.click(getByTestId("manual-def-edit-2"));
+    fireEvent.click(getByTestId("manual-def-edit-3"));
+    fireEvent.change(await findByTestId("manual-purpose-input"), {
+      target: { value: "還在寫的用途" },
+    });
+    fireEvent.change(getByTestId("manual-field-name-0"), {
+      target: { value: "還在寫的欄位" },
+    });
+    fireEvent.change(getByTestId("manual-sop-input"), {
+      target: { value: "# 還在寫的 SOP" },
+    });
+
+    // 完成編輯 on ② only.
+    fireEvent.click(getByTestId("manual-def-done-2"));
+    await waitFor(async () =>
+      expect((await api.getTaskManual("review-pr")).fields).toEqual([
+        { name: "還在寫的欄位", required: true, isKey: true },
+      ])
+    );
+
+    // The server saw ②'s key and nothing else…
+    expect(updateManualPatches).toEqual([
+      { fields: [{ name: "還在寫的欄位", required: true, isKey: true }] },
+    ]);
+    const m = await api.getTaskManual("review-pr");
+    expect(m.purpose).toBe("原本的用途");
+    expect(m.sopMd).toBe("# 舊 SOP");
+
+    // …and ① and ③ are still open, still showing their unsaved text.
+    expect(
+      (getByTestId("manual-purpose-input") as HTMLTextAreaElement).value
+    ).toBe("還在寫的用途");
+    expect((getByTestId("manual-sop-input") as HTMLTextAreaElement).value).toBe(
+      "# 還在寫的 SOP"
+    );
+  });
+
+  it("keeps all three blocks open at once, each holding its own draft (owner 2026-07-31)", async () => {
+    // Supersedes the one-block-at-a-time rule: nothing is disabled, because
+    // per-block drafts leave no way for a block change to lose typing.
+    __injectMockTaskManual(
+      mkManual({
+        typeKey: "review-pr",
+        purpose: "原本的用途",
+        sopMd: "# 舊 SOP",
+      })
+    );
+    const { findByTestId, getByTestId } = await renderManualsList();
+    fireEvent.click(await findByTestId("manual-open-review-pr"));
+    fireEvent.click(await findByTestId("manual-entry-definition"));
+    await findByTestId("manual-definition-card");
+
+    fireEvent.click(getByTestId("manual-def-edit-1"));
+    fireEvent.change(await findByTestId("manual-purpose-input"), {
+      target: { value: "①的草稿" },
+    });
+
+    // Opening another block is a live affordance, never a dead one…
+    const third = getByTestId("manual-def-edit-3") as HTMLButtonElement;
+    expect(third.disabled).toBe(false);
+    expect(third.getAttribute("title")).toBeNull();
+    fireEvent.click(third);
+    fireEvent.change(await findByTestId("manual-sop-input"), {
+      target: { value: "# ③的草稿" },
+    });
+    fireEvent.click(getByTestId("manual-def-edit-2"));
+    await findByTestId("manual-field-add");
+
+    // …and all three editors hold their own text at the same time.
+    expect(
+      (getByTestId("manual-purpose-input") as HTMLTextAreaElement).value
+    ).toBe("①的草稿");
+    expect((getByTestId("manual-sop-input") as HTMLTextAreaElement).value).toBe(
+      "# ③的草稿"
+    );
+    expect(getByTestId("manual-fields-editor")).toBeTruthy();
+
+    // 取消 on ① discards ①'s draft and closes ① — and touches nothing else.
+    fireEvent.click(getByTestId("manual-def-cancel-1"));
+    expect(getByTestId("manual-purpose-view").textContent).toBe("原本的用途");
+    expect((getByTestId("manual-sop-input") as HTMLTextAreaElement).value).toBe(
+      "# ③的草稿"
+    );
+    expect(getByTestId("manual-fields-editor")).toBeTruthy();
+    // Re-opening ① shows the STORED content: the cancelled draft is gone.
+    fireEvent.click(getByTestId("manual-def-edit-1"));
+    expect(
+      (getByTestId("manual-purpose-input") as HTMLTextAreaElement).value
+    ).toBe("原本的用途");
+  });
+
+  it("keeps block ③'s open 版本紀錄 list up while the SOP draft is typed into", async () => {
+    // The list is the block switch's CHILD, so it survives only while the
+    // switch keeps its component identity across renders — and a render happens
+    // on every keystroke in the SOP. Declared inside DefinitionCard the switch
+    // would be a NEW component type each time, remounting the entry and closing
+    // the list from under the reader. Nothing else in the suite would notice.
+    __injectMockTaskManual(mkManual({ typeKey: "review-pr", sopMd: "# 舊 SOP" }));
+    const { findByTestId, getByTestId } = await renderManualsList();
+    fireEvent.click(await findByTestId("manual-open-review-pr"));
+    fireEvent.click(await findByTestId("manual-entry-definition"));
+    await findByTestId("manual-definition-card");
+    fireEvent.click(getByTestId("manual-def-edit-3"));
+    fireEvent.click(await findByTestId("doc-history-entry-task_manual_sop"));
+    await findByTestId("doc-history-list");
+
+    fireEvent.change(getByTestId("manual-sop-input"), {
+      target: { value: "# 舊 SOP\n改一個字" },
+    });
+    expect(getByTestId("doc-history-list")).toBeTruthy();
+  });
+
+  it("names the three otherwise identical 編輯 buttons by their block", async () => {
+    __injectMockTaskManual(mkManual({ typeKey: "review-pr" }));
+    const { findByTestId, getByTestId } = await renderManualsList();
+    fireEvent.click(await findByTestId("manual-open-review-pr"));
+    fireEvent.click(await findByTestId("manual-entry-definition"));
+    await findByTestId("manual-definition-card");
+
+    expect(getByTestId("manual-def-edit-1").getAttribute("aria-label")).toBe(
+      "編輯「這是什麼任務？」"
+    );
+    expect(getByTestId("manual-def-edit-2").getAttribute("aria-label")).toBe(
+      "編輯「需要哪些資訊？」"
+    );
+    expect(getByTestId("manual-def-edit-3").getAttribute("aria-label")).toBe(
+      "編輯「該怎麼做？」"
+    );
+  });
+
+  it("puts the 版本紀錄 entry in block ③'s edit row and nowhere else (owner 2026-07-31 P1)", async () => {
+    __injectMockTaskManual(mkManual({ typeKey: "review-pr", sopMd: "# sop" }));
+    const { findByTestId, getByTestId, queryByTestId } =
+      await renderManualsList();
+    fireEvent.click(await findByTestId("manual-open-review-pr"));
+    fireEvent.click(await findByTestId("manual-entry-definition"));
+    await findByTestId("manual-definition-card");
+
+    // Read-only: no version entry anywhere on the page.
+    expect(queryByTestId("doc-history-entry-task_manual_sop")).toBeNull();
+
+    // Editing ① or ② — the blocks that are NOT versioned — must not offer one.
+    fireEvent.click(getByTestId("manual-def-edit-1"));
+    fireEvent.click(getByTestId("manual-def-edit-2"));
+    expect(queryByTestId("doc-history-entry-task_manual_sop")).toBeNull();
+
+    // Only ③ 該怎麼做? — the SOP is the one versioned document on this page —
+    // and it sits inside that block's own edit row.
+    fireEvent.click(getByTestId("manual-def-edit-3"));
+    const entry = await findByTestId("doc-history-entry-task_manual_sop");
+    expect(getByTestId("manual-section-3").contains(entry)).toBe(true);
   });
 
   it("顯示名稱 renames via the hub-title inline-edit pencil (owner T-8a4a: moved out of 任務定義, same affordance as the 角色設定 title)", async () => {
@@ -344,11 +570,11 @@ describe("設定 › 任務手冊 — detail", () => {
 
     // The synthesized "<type>.md" filename is gone from the SOP card head…
     expect(queryByText("review-pr.md")).toBeNull();
-    // …and there is no per-section SOP 編輯 toggle any more (owner T-8a4a r3):
-    // the ONE card-level 編輯 switch owns the SOP editor too.
+    // …and the SOP's editor opens from block ③'s own switch (owner 2026-07-31
+    // P1), not from a card-level one and not from an ex-per-section toggle.
     expect(queryByTestId("manual-sop-edit")).toBeNull();
-    expect(queryByTestId("manual-def-edit")).not.toBeNull();
-    fireEvent.click(getByTestId("manual-def-edit"));
+    expect(queryByTestId("manual-def-edit-3")).not.toBeNull();
+    fireEvent.click(getByTestId("manual-def-edit-3"));
     expect(await findByTestId("manual-sop-input")).toBeTruthy();
     // 顯示名稱 is no longer an inline field inside 任務定義 (moved to the title).
     expect(queryByTestId("manual-display-name-input")).toBeNull();
@@ -365,7 +591,7 @@ describe("設定 › 任務手冊 — detail", () => {
     fireEvent.click(await findByTestId("manual-open-review-pr"));
     fireEvent.click(await findByTestId("manual-entry-definition"));
     await findByTestId("manual-definition-card");
-    fireEvent.click(getByTestId("manual-def-edit"));
+    fireEvent.click(getByTestId("manual-def-edit-2"));
 
     // Mark 識別鍵 on a not-yet-required field → 必填 must auto-turn on, so the
     // committed payload carries required:true (never the isKey && !required
@@ -376,7 +602,7 @@ describe("設定 › 任務手冊 — detail", () => {
         getByTestId("manual-field-required-0").getAttribute("aria-pressed")
       ).toBe("true")
     );
-    fireEvent.click(getByTestId("manual-def-done"));
+    fireEvent.click(getByTestId("manual-def-done-2"));
     await waitFor(async () =>
       expect((await api.getTaskManual("review-pr")).fields).toEqual([
         { name: "PR 連結", required: true, isKey: true },
@@ -384,14 +610,14 @@ describe("設定 › 任務手冊 — detail", () => {
     );
 
     // Clearing 必填 also clears 識別鍵 (a key can't be optional).
-    fireEvent.click(await findByTestId("manual-def-edit"));
+    fireEvent.click(await findByTestId("manual-def-edit-2"));
     fireEvent.click(getByTestId("manual-field-required-0"));
     await waitFor(() =>
       expect(
         getByTestId("manual-field-key-0").getAttribute("aria-pressed")
       ).toBe("false")
     );
-    fireEvent.click(getByTestId("manual-def-done"));
+    fireEvent.click(getByTestId("manual-def-done-2"));
     await waitFor(async () =>
       expect((await api.getTaskManual("review-pr")).fields).toEqual([
         { name: "PR 連結", required: false, isKey: false },
@@ -413,9 +639,9 @@ describe("設定 › 任務手冊 — detail", () => {
     fireEvent.click(await findByTestId("manual-open-review-pr"));
     fireEvent.click(await findByTestId("manual-entry-definition"));
     await findByTestId("manual-definition-card");
-    fireEvent.click(getByTestId("manual-def-edit"));
+    fireEvent.click(getByTestId("manual-def-edit-2"));
     fireEvent.click(await findByTestId("manual-field-remove-1"));
-    fireEvent.click(getByTestId("manual-def-done"));
+    fireEvent.click(getByTestId("manual-def-done-2"));
     await waitFor(async () => {
       expect((await api.getTaskManual("review-pr")).fields).toEqual([
         { name: "PR 連結", required: true, isKey: true },

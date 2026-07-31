@@ -60,7 +60,14 @@ export const CAPPED_FIELDS: Record<DocumentKind, readonly string[]> = {
   global_context: [],
   role_definition: [],
   lessons: ["text"],
+  // The retired bundle has no restore path left at all (both routes 400 since
+  // T-1f39); its entry is kept only because this table is total over
+  // DocumentKind. The two split kinds each write back exactly ONE field, and
+  // restoreTaskManualField judges the cap on that field alone — an over-cap
+  // learnings doc no longer blocks a SOP restore.
   task_manual: ["learnings", "sop_md"],
+  task_manual_sop: ["sop_md"],
+  task_manual_learnings: ["learnings"],
 };
 
 /**
