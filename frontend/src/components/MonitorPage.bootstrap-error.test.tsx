@@ -54,6 +54,7 @@ describe("MonitorPage bootstrap-on-server error surface", () => {
         isSelf: true,
         binStatus: null,
         wardenShape: null,
+        cutoverEffect: null,
         claudeVersion: null,
         claudeCredSource: null,
         claudeSubReadable: null,

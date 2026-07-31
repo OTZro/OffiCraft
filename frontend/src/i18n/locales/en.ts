@@ -908,15 +908,6 @@ export const en: Dict = {
       deleteConfirm: "Confirm delete",
       deleteBusy: "Deleting…",
       deleteError: "Delete failed",
-      // ── one-click upgrade (T-5f01 rework: lives in the action group) ──
-      upgrade: "Upgrade",
-      upgrading: "Upgrading…",
-      upgradeCurrentHint: "Already up to date",
-      upgradeUnknownHint:
-        "No version fingerprints reported yet — cannot tell whether an update is available",
-      upgradeOfflineHint:
-        "Machine offline — cannot dispatch an upgrade (it self-updates when it reconnects)",
-      upgradeError: "Failed to dispatch the upgrade command — try again",
       // ── runtime readiness (T-90be ⑤ + T-b36a): rendered WITH its age. The
       // server keeps stale capability values on the wire on purpose (they are
       // the only explanation for a worker parked on machine_unavailable), so
@@ -956,25 +947,18 @@ export const en: Dict = {
       hardwareBad: "bad value",
       hardwareBadHint:
         "This machine reported a value of the wrong type, so it cannot be shown — the probe ran, its reading is unusable. Check that machine's warden version.",
-      // ── launchd shape the warden REPORTS about itself (anchor cutover).
-      // Four labels for four facts, and the pair that matters most is the last
-      // two: "shape unknown" is a machine running the new build that cannot
-      // read its own parent; "not reported" is a machine that never got the
-      // new build. Same-looking blank, opposite next step (go debug that box
-      // vs go ship it the release), which is precisely why the cockpit was
-      // flying blind before this row existed.
-      shapeAnchor: "anchor",
-      shapeAnchorHint:
-        "This warden reports it is running under the anchor shape — the cutover took on this machine",
-      shapeLegacy: "legacy",
-      shapeLegacyHint:
-        "This warden reports it is still running under the old shape — either it has not been cut over yet, or it tried and rolled back",
-      shapeUnknown: "shape unknown",
-      shapeUnknownHint:
-        "This warden runs a build that reports its shape, but it could not determine which shape it is running under — the machine itself is unsure, so go look at it",
-      shapeUnreported: "not reported",
-      shapeUnreportedHint:
-        "This warden does not report a shape at all — it has not received the anchor-cutover release yet. NOT the same as “shape unknown”: nothing on this box has tried to answer the question.",
+      // ── the ONE cutover message a reader ever sees, and only on the machine
+      // that has the problem. No "all good" counterpart exists on purpose: the
+      // green badge this replaced is what let a machine whose cutover had NOT
+      // taken effect look healthy for three hours.
+      //
+      // 🔴 The copy carries NO internal vocabulary. "anchor" / "legacy" are
+      // names for launchd plist shapes and mean nothing to the people reading
+      // this screen (owner, verbatim: nobody outside knows what anchor is), so
+      // the sentence says what is true of THEIR machine instead. It also stops
+      // at describing the state — it does not tell anyone to restart anything.
+      cutoverNotInEffect:
+        "A recent change to how this machine runs its agents has not reached the agents currently running on it — they were started before the change.",
     },
   },
   settings: {

@@ -279,6 +279,12 @@ export interface MachineView {
    */
   wardenShape: WardenShape;
   /**
+   * Whether that cutover is actually IN EFFECT for the processes that carry
+   * agents on this machine. Passthrough of the wire `cutover_effect` — see
+   * `CutoverEffect` for why "unproven" is its own state and never a green one.
+   */
+  cutoverEffect: CutoverEffect;
+  /**
    * The local claude CLI version this machine's warden heartbeat probed
    * (`--version` first token, e.g. "2.1.211"); null = unknown (claude
    * unresolved, probe failed, or an older warden that never probes) — the
@@ -328,6 +334,27 @@ export type BinStatus = "current" | "stale" | null;
  * the FE.
  */
 export type WardenShape = "anchor" | "legacy" | "unknown" | null;
+
+/**
+ * Whether the anchor cutover has actually TAKEN EFFECT for the agent-carrying
+ * processes on a machine (`cutover_effect`). Four states again, and the third
+ * one is the reason this type exists:
+ *   "effective"     — proven: the carriers were created under the new identity
+ *   "not_effective" — proven otherwise: a carrier predates that identity
+ *   "unproven"      — could not be shown either way
+ *   null            — this warden does not report the verdict AT ALL
+ *
+ * 🔴 "unproven" is NOT a shade of "effective". A machine whose cutover had not
+ * taken effect showed a green badge for three hours because the only signal
+ * available was two-valued; folding the third state back into the good one
+ * re-creates that exact defect. Absent/unrecognised narrows to null, never to
+ * one of the three verdicts.
+ */
+export type CutoverEffect =
+  | "effective"
+  | "not_effective"
+  | "unproven"
+  | null;
 
 /** The machine claude credential-source vocabulary (`claude_cred_source`). */
 export type ClaudeCredSource = "file" | "keychain" | "both" | "none" | null;
@@ -415,6 +442,8 @@ export interface MonMachineView {
   binStatus: BinStatus;
   /** Same reported shape as `MachineView.wardenShape` (registry row). */
   wardenShape: WardenShape;
+  /** Same reported verdict as `MachineView.cutoverEffect` (registry row). */
+  cutoverEffect: CutoverEffect;
   /** Same probe columns as the registry row (`MachineView.claude*`). */
   claudeVersion: string | null;
   runtimeCapabilities?: MachineView["runtimeCapabilities"];

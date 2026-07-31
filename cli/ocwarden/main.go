@@ -476,7 +476,7 @@ func readMachineName(r CmdRunner) string {
 // accident, but it would also mean a warden that cannot answer still asserts
 // something, and absent vs "unknown" are different claims on that wire.
 func buildTelemetryPayload(agentID, machine string, hardware map[string]any,
-	binaries map[string]string, claude map[string]any, shape string,
+	binaries map[string]string, claude map[string]any, shape, effect string,
 	runtimes ...map[string]any) (map[string]any, error) {
 	aid := strings.TrimSpace(agentID)
 	if aid == "" {
@@ -497,6 +497,9 @@ func buildTelemetryPayload(agentID, machine string, hardware map[string]any,
 	}
 	if shape != "" {
 		payload["warden_shape"] = shape
+	}
+	if effect != "" {
+		payload["cutover_effect"] = effect
 	}
 	if len(runtimes) > 0 && len(runtimes[0]) > 0 {
 		payload["runtimes"] = runtimes[0]
@@ -580,7 +583,7 @@ func nextBackoff(cur time.Duration) time.Duration {
 // is shape (nil-safe, same shape as the other two).
 func runOnce(cfg Config, collect func() map[string]any, machine func() string, post Poster,
 	binaries func() map[string]string, claude func() map[string]any, shape func() string,
-	runtimes ...func() map[string]any) ReportResult {
+	effect func() string, runtimes ...func() map[string]any) ReportResult {
 	if cfg.Token == "" || cfg.ID == "" {
 		return ReportResult{Reason: "no OC_TOKEN/OC_ID"}
 	}
@@ -597,14 +600,18 @@ func runOnce(cfg Config, collect func() map[string]any, machine func() string, p
 	if shape != nil {
 		shp = shape()
 	}
+	var eff string
+	if effect != nil {
+		eff = effect()
+	}
 	var runtimeCaps map[string]any
 	if len(runtimes) > 0 && runtimes[0] != nil {
 		runtimeCaps = runtimes[0]()
 	}
-	if len(hardware) == 0 && len(bins) == 0 && len(cl) == 0 && shp == "" && len(runtimeCaps) == 0 {
+	if len(hardware) == 0 && len(bins) == 0 && len(cl) == 0 && shp == "" && eff == "" && len(runtimeCaps) == 0 {
 		return ReportResult{Reason: "no hardware probed (skip POST)"}
 	}
-	payload, err := buildTelemetryPayload(cfg.ID, machine(), hardware, bins, cl, shp, runtimeCaps)
+	payload, err := buildTelemetryPayload(cfg.ID, machine(), hardware, bins, cl, shp, eff, runtimeCaps)
 	if err != nil {
 		return ReportResult{Reason: "build rejected: " + err.Error()}
 	}
@@ -632,7 +639,7 @@ func runOnce(cfg Config, collect func() map[string]any, machine func() string, p
 // before (byte-identical wire behaviour; tests inject an instant sleep seam).
 func run(ctx context.Context, cfg Config, collect func() map[string]any, machine func() string, post Poster,
 	binaries func() map[string]string, claude func() map[string]any, shape func() string,
-	sleep func(context.Context, time.Duration) bool, iterations int, out io.Writer,
+	effect func() string, sleep func(context.Context, time.Duration) bool, iterations int, out io.Writer,
 	runtimes ...func() map[string]any) int {
 
 	if cfg.Token == "" || cfg.ID == "" {
@@ -644,7 +651,7 @@ func run(ctx context.Context, cfg Config, collect func() map[string]any, machine
 		if ctx.Err() != nil {
 			return 0 // cancelled between cycles → clean exit
 		}
-		result := runOnce(cfg, collect, machine, post, binaries, claude, shape, runtimes...)
+		result := runOnce(cfg, collect, machine, post, binaries, claude, shape, effect, runtimes...)
 		wait := backoff
 		if result.Posted || result.Status == 0 {
 			backoff = backoffStart
@@ -797,10 +804,16 @@ func realMain(argv []string, env func(string) string, out io.Writer) int {
 	// leaves anchorPath empty, which every consumer reads as "cannot say".
 	var wardenPathsOrNil *wardenPaths
 	anchorPath := ""
+	// The tmux socket this instance's agents live on. Derived from the SAME
+	// wardenPaths as anchorPath so a namespaced instance judges its own carriers
+	// rather than the canonical instance's; empty when paths did not resolve,
+	// which every consumer reads as "cannot say".
+	agentSocket := ""
 	if exe, err := os.Executable(); err == nil {
 		if p, perr := resolvePaths(renv, exe, os.Getuid()); perr == nil {
 			wardenPathsOrNil = &p
 			anchorPath = p.anchorPath
+			agentSocket = tmuxSocketFor(p.namespace)
 		}
 	}
 	// The live-binary fingerprints riding each heartbeat (T-5f01) — cached by
@@ -812,6 +825,12 @@ func realMain(argv []string, env func(string) string, out io.Writer) int {
 	// machine that completed the legacy->anchor migration from one that never
 	// started it — the whole point of shipping the migration.
 	wardenShapeOf := newShapeReporter(anchorPath, os.Getppid())
+	// Whether that cutover is actually IN EFFECT for the processes that carry
+	// agents (T-17b4). warden_shape above answers "who is WARDEN's parent"; this
+	// answers "were the tmux servers the agents live in created under the anchor
+	// identity", which is the question people were reading off the shape badge and
+	// which it cannot answer. Three-valued and fail-closed — see cutovereffect.go.
+	cutoverEffectOf := newCutoverEffectReporter(anchorPath, agentSocket, os.Getppid())
 	// The local claude CLI probe riding the heartbeat (T-97ee) — TTL-cached
 	// (claudeprobe.go), so most cycles cost nothing; the tokfile-wrapped env is
 	// NOT needed here (the probe reads HOME/OC_CLAUDE_BIN, never OC_TOKEN).
@@ -897,7 +916,7 @@ func realMain(argv []string, env func(string) string, out io.Writer) int {
 		return collectRuntimeCapabilities(env, runner, claudeProbe.collect())
 	}
 	rc := run(ctx, cfg, collect, machine, post, fingerprints.collect, claudeProbe.collect,
-		wardenShapeOf, sleepUntil, iters, out, runtimeProbe)
+		wardenShapeOf, cutoverEffectOf, sleepUntil, iters, out, runtimeProbe)
 
 	// Graceful shutdown: the root ctx is now cancelled — either a signal fired, or
 	// run() returned on its own (--once, or a mis-wire). Stop relaying signals, then

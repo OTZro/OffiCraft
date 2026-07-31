@@ -196,6 +196,17 @@ type machineDTO struct {
 	// which is a DIFFERENT fact from the reported "unknown" (that build ran and
 	// could not tell). Neither is ever turned into the other.
 	WardenShape *string `json:"warden_shape"`
+	// CutoverEffect is whether that cutover is actually IN EFFECT for the
+	// processes that CARRY agents ("effective" | "not_effective" | "unproven"),
+	// reported verbatim. WardenShape above cannot answer this: it observes
+	// warden's own parent, while the agents hang off a tmux server that keeps its
+	// original identity across a warden restart — so a converted machine can and
+	// did show "anchor" for hours while every agent still ran under the old one.
+	//
+	// Three-valued on purpose. "unproven" is a reported verdict, never a shade of
+	// "effective"; collapsing it into green is the exact defect being retired.
+	// nil = this warden build does not report the verdict at all.
+	CutoverEffect *string `json:"cutover_effect"`
 }
 
 type machineOnboardResultDTO struct {
@@ -338,7 +349,10 @@ type agentTelemetryDTO struct {
 	// WardenShape echoes the stored launchd-shape verdict so the POST response
 	// round-trips what was just merged; nil when this reporter has never sent one.
 	WardenShape *string `json:"warden_shape"`
-	TS          float64 `json:"ts"`
+	// CutoverEffect echoes the stored cutover-effect verdict, same round-trip
+	// contract as WardenShape above.
+	CutoverEffect *string `json:"cutover_effect"`
+	TS            float64 `json:"ts"`
 }
 
 type monitoringSessionDTO struct {
@@ -463,6 +477,8 @@ type monitoringMachineDTO struct {
 	// launchd shape) — both tables render it, the same reason bin_status and the
 	// claude_* columns are mirrored. Reported, never computed; nil stays nil.
 	WardenShape *string `json:"warden_shape"`
+	// CutoverEffect mirrors machineDTO.CutoverEffect for the same reason.
+	CutoverEffect *string `json:"cutover_effect"`
 }
 
 type monitoringAccountDTO struct {
