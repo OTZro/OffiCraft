@@ -159,16 +159,30 @@ test("the frame's own scroll travel reaches the far corner", async ({ mount, pag
 // "gives up a third of the way" in the other. Press until the offset stops
 // moving instead — that is engine-independent and it is also the real question
 // (can the keyboard reach the end, not does it travel at some rate).
-async function pressUntilSettled(page: Page, wrap: Locator, key: string) {
-  let previous = -1;
-  for (let i = 0; i < 400; i++) {
-    const at = await wrap.evaluate((el) => el.scrollLeft + el.scrollTop);
-    if (at === previous) return;
-    previous = at;
-    await page.keyboard.press(key);
-    await page.waitForTimeout(20);
+/** Press arrow keys (bounded) until the image's bottom-right corner is inside
+ * the visible frame, and hand back the geometry the caller should assert on.
+ *
+ * ⚠️ Do NOT rewrite this as "press until the scroll offset stops changing".
+ * That proxy broke twice on WebKit and neither break was a product fault:
+ * Desktop Safari swallows the FIRST arrow key on a freshly focused scroll
+ * container (measured: scrollLeft 0 → 0 → 28 → 40 over three presses), so a
+ * loop that stops at the first no-op quits during the warm-up; and WebKit
+ * ANIMATES key scrolling, so a loop that stops on a stall can also stop
+ * mid-animation and measure a position the user never sees settle. Chromium
+ * does neither, which is exactly why a Chromium-only guard was happy.
+ *
+ * Asking the real question instead is both engine-independent and stricter: an
+ * implementation whose keyboard genuinely cannot pan never satisfies it and the
+ * caller's assertions still fail on a frame that never moved. */
+async function pressUntilCornerVisible(page: Page, wrap: Locator, maxPresses = 200) {
+  const keys = ["ArrowRight", "ArrowDown"];
+  for (let i = 0; i < maxPresses; i++) {
+    const g = await geometry(wrap);
+    if (inside({ x: g.image.right, y: g.image.bottom }, g.frame)) return g;
+    await page.keyboard.press(keys[i % keys.length]);
+    await page.waitForTimeout(30);
   }
-  throw new Error(`${key} never settled — the frame kept scrolling past any sane bound`);
+  return geometry(wrap);
 }
 
 test("the keyboard reaches the far corner — panning is not mouse-only", async ({ mount, page }) => {
@@ -180,10 +194,8 @@ test("the keyboard reaches the far corner — panning is not mouse-only", async 
   expect(inside({ x: zoomed.image.right, y: zoomed.image.bottom }, zoomed.frame)).toBe(false);
 
   await wrap.focus();
-  await pressUntilSettled(page, wrap, "ArrowRight");
-  await pressUntilSettled(page, wrap, "ArrowDown");
+  const g = await pressUntilCornerVisible(page, wrap);
 
-  const g = await geometry(wrap);
   expect(g.scrollLeft, "arrow keys must actually move the frame").toBeGreaterThan(0);
   expect(
     inside({ x: g.image.right, y: g.image.bottom }, g.frame),
@@ -306,6 +318,55 @@ for (const height of [420, 500, 560, 700]) {
 // page (measured: scrollY 120). So do not read a green here as "the JS handler
 // is doing its job", and do not drop the CSS on the grounds that the JS covers
 // it — in Chromium it is the other way round.
+// TOUCH. owner 2026-07-31: 「圖片滑動很難使用,不能改成滑鼠以及手機畫面可以可拉動
+// 的方法嗎?」 — reported against v0.5.53, i.e. the UNFIXED build where the zoom
+// was a transform and nothing could move at all.
+//
+// GESTURE OWNERSHIP, decided here and enforced by `onPanPointerDown`'s
+// `pointerType === "touch"` bail-out: on touch the BROWSER owns the movement,
+// not our JS. One finger pans the scroll container natively (with inertia and
+// rubber-banding we would otherwise have to reimplement), two fingers stay with
+// the UA's pinch-zoom, and the page behind is protected by
+// `overscroll-behavior: contain` rather than by swallowing the gesture. Running
+// our pointer drag as well would apply the same delta twice — one finger-width
+// of travel would move the image two — which is exactly why the bail-out is
+// there. Do not "add touch support" by deleting it.
+//
+// This guard drives REAL input-layer touch events through CDP, not
+// `dispatchEvent` of a synthetic TouchEvent: it asserts the gesture works, not
+// merely that some branch was taken. Chromium-only — WebKit's driver exposes no
+// equivalent, so Safari touch remains unguarded (see the branch-level unit test
+// in MarkdownPreviewOverlay.test.tsx, which pins the ownership decision itself).
+test.describe("touch", () => {
+  test.use({ hasTouch: true });
+
+  test("one finger pans the zoomed image — the browser does the moving", async ({ mount, page, browserName }) => {
+    test.skip(browserName !== "chromium", "CDP touch injection is Chromium-only");
+    const { cmp, wrap } = await mountStory(mount, page);
+    await zoomTo400(cmp);
+
+    const box = (await wrap.boundingBox())!;
+    const cx = Math.round(box.x + box.width / 2);
+    const cy = Math.round(box.y + box.height / 2);
+    const cdp = await page.context().newCDPSession(page);
+    const touch = (type: string, x: number, y: number) =>
+      cdp.send("Input.dispatchTouchEvent", {
+        type,
+        touchPoints: type === "touchEnd" ? [] : [{ x, y, radiusX: 12, radiusY: 12, force: 1 }],
+      });
+
+    await touch("touchStart", cx, cy);
+    for (let i = 1; i <= 10; i++) await touch("touchMove", cx - i * 20, cy - i * 12);
+    await touch("touchEnd", cx - 200, cy - 120);
+    await page.waitForTimeout(700);
+
+    const g = await geometry(wrap);
+    // Measured: 0 → 451 with the fix, 0 → 0 with the zoom back in a transform.
+    expect(g.scrollLeft, "a real one-finger swipe must pan the zoomed image").toBeGreaterThan(100);
+    expect(await page.evaluate(() => window.scrollY), "the page behind must not travel with it").toBe(0);
+  });
+});
+
 test("wheel-zoom over the image does not scroll the page behind the overlay", async ({ mount, page }) => {
   const { cmp, wrap } = await mountStory(mount, page);
   expect(await page.evaluate(() => document.documentElement.scrollHeight > window.innerHeight),

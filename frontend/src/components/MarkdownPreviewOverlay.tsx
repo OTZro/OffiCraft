@@ -271,8 +271,17 @@ export function MarkdownPreviewOverlay({
   // overflow can never drift apart.
   function onPanPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
     const wrap = wrapRef.current;
-    // Touch already pans this scroll container natively, and capturing the
-    // pointer here would apply the same delta twice.
+    // GESTURE OWNERSHIP — on touch the BROWSER moves the image, not this
+    // handler, and that is a decision rather than an omission (owner asked for
+    // phone dragging on 2026-07-31, against the unfixed build where nothing
+    // moved at all). Now that the zoom is real layout, one finger pans this
+    // scroll container natively, with inertia and rubber-banding we would
+    // otherwise have to reimplement, and two fingers keep the UA's pinch-zoom.
+    // Running the drag below as WELL would apply the same delta twice — a
+    // finger-width of travel would move the image two — so exactly one of the
+    // two may be in charge. Verified with real input-layer touch events:
+    // scrollLeft 0 → 451 for a 200px swipe. Deleting this bail-out to "add
+    // touch support" re-introduces the double-apply.
     if (!wrap || e.button !== 0 || e.pointerType === "touch") return;
     if (wrap.scrollWidth <= wrap.clientWidth && wrap.scrollHeight <= wrap.clientHeight) return;
     const startX = e.clientX;
