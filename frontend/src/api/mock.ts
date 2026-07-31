@@ -224,6 +224,16 @@ const mockWardenShape = new Map<string, "anchor" | "legacy" | "unknown">([
   [MOCK_SERVER_SELF_ID, "anchor"],
 ]);
 
+// ── Fixture: per-machine cutover-effect verdict (cutover_effect). Reported like
+// the shape above, and deliberately NOT derived from it — the pair being able to
+// disagree ("anchor" + "not_effective") is the whole reason the second field
+// exists, and it is the state the incident actually had. server-self therefore
+// carries that pair; the seed remote warden reports nothing (→ absent).
+const mockCutoverEffect = new Map<
+  string,
+  "effective" | "not_effective" | "unproven"
+>([[MOCK_SERVER_SELF_ID, "not_effective"]]);
+
 // ── Fixture: per-machine claude CLI probe columns (T-97ee). Mirrors the
 // server synthesizing the warden heartbeat's `claude` probe into the machine
 // registry rows: the seed remote warden last probed a version (→ the claude
@@ -2520,6 +2530,7 @@ export const mockApi: Api = {
           is_self: m.id === MOCK_SERVER_SELF_ID,
           bin_status: mockBinStatus.get(m.id) ?? null,
           warden_shape: mockWardenShape.get(m.id) ?? null,
+          cutover_effect: mockCutoverEffect.get(m.id) ?? null,
           // claude probe columns (T-97ee): same honest-null contract as
           // bin_status — no probe fixture reads as the all-null unknown.
           claude_version: mockClaudeInfo.get(m.id)?.version ?? null,

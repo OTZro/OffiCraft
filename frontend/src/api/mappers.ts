@@ -32,6 +32,7 @@ import type {
   BinStatus,
   ClaudeCredSource,
   WardenShape,
+  CutoverEffect,
 } from "../types";
 import type {
   WireMember,
@@ -712,6 +713,7 @@ function toMonMachine(w: WireMonMachine): MonMachineView {
     // Same narrowing as the registry row — the monitoring projection of a
     // machine must not disagree with the machine table about its own shape.
     wardenShape: toWardenShape(w.warden_shape),
+    cutoverEffect: toCutoverEffect(w.cutover_effect),
     claudeVersion: w.claude_version ?? null,
     claudeCredSource: toClaudeCredSource(w.claude_cred_source),
     claudeSubReadable: w.claude_sub_readable ?? null,
@@ -984,6 +986,9 @@ export function toMachine(w: WireMachine): MachineView {
     // Reported, not computed: absent means the box has not received the build
     // that reports a shape — a different fact from the reported "unknown".
     wardenShape: toWardenShape(w.warden_shape),
+    // Reported, not computed, for the same reason and with the same absent-vs-
+    // reported distinction as the shape above.
+    cutoverEffect: toCutoverEffect(w.cutover_effect),
     // The claude CLI probe columns (T-97ee): absent (older server) and null
     // (unknown — an older warden that never probed) both read as the honest
     // unknown; the UI shows only claudeVersion (table column, "—" on null).
@@ -1021,6 +1026,19 @@ function toBinStatus(v: string | null | undefined): BinStatus {
  * nothing we understand about its shape". */
 function toWardenShape(v: string | null | undefined): WardenShape {
   return v === "anchor" || v === "legacy" || v === "unknown" ? v : null;
+}
+
+/** Narrow the wire `cutover_effect` to the closed CutoverEffect vocabulary.
+ *
+ * The same trap as `toWardenShape`, one notch sharper: "unproven" sounds like a
+ * fallback and is not one. It is a REPORTED verdict — the machine ran the check
+ * and could not settle it — so narrowing an unrecognised string to it would
+ * assert a check that may never have run. Absent/null/unrecognised all fall to
+ * `null`, and nothing here ever narrows toward "effective". */
+function toCutoverEffect(v: string | null | undefined): CutoverEffect {
+  return v === "effective" || v === "not_effective" || v === "unproven"
+    ? v
+    : null;
 }
 
 /** Narrow the wire `claude_cred_source` to the closed vocabulary; anything

@@ -429,10 +429,11 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	if body.RateLimits == nil && body.Tokens == nil && body.Hardware == nil &&
 		body.Binaries == nil && body.Claude == nil && body.Cost == nil &&
 		body.Effort == nil && body.Runtime == nil && body.Runtimes == nil &&
-		body.SelfUpdate == nil && body.CommandResult == nil && body.WardenShape == nil {
+		body.SelfUpdate == nil && body.CommandResult == nil && body.WardenShape == nil &&
+		body.CutoverEffect == nil {
 		writeError(w, http.StatusBadRequest,
 			"rate_limits, tokens, hardware, binaries, claude, cost, effort, runtime, runtimes, "+
-				"self_update, command_result or warden_shape is required")
+				"self_update, command_result, warden_shape or cutover_effect is required")
 		return
 	}
 	asObject := func(v any, name string) (map[string]any, bool) {
@@ -530,6 +531,17 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 		}
 		wardenShape = &text
 	}
+	// cutover_effect: same closed-vocabulary handler check, same reasoning.
+	var cutoverEffect *string
+	if body.CutoverEffect != nil {
+		text, isStr := body.CutoverEffect.(string)
+		if !isStr || !ValidCutoverEffect(text) {
+			writeError(w, http.StatusBadRequest,
+				"cutover_effect must be 'effective', 'not_effective' or 'unproven'")
+			return
+		}
+		cutoverEffect = &text
+	}
 	var cost *float64
 	if body.Cost != nil {
 		n, isNum := body.Cost.(float64)
@@ -597,6 +609,11 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	// report a shape", i.e. the absent case, which means something else entirely.
 	if wardenShape != nil {
 		entry["warden_shape"] = *wardenShape
+	}
+	// Partial-merge for the same reason as warden_shape: a receipt that carries no
+	// verdict must not clear the stored one into the absent case.
+	if cutoverEffect != nil {
+		entry["cutover_effect"] = *cutoverEffect
 	}
 	if body.Claude != nil {
 		entry["claude"] = claude
@@ -686,6 +703,7 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 		SelfUpdate:    entryObj(entry, "self_update"),
 		CommandResult: entryObj(entry, "command_result"),
 		WardenShape:   entryStr(entry, "warden_shape"),
+		CutoverEffect: entryStr(entry, "cutover_effect"),
 		TS:            entry["ts"].(float64),
 	})
 }
@@ -1346,6 +1364,7 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 			ClaudeSubReadable:   claudeSubReadable,
 			RuntimeCapabilities: s.machineRuntimeCapabilities(host),
 			WardenShape:         s.machineWardenShape(host),
+			CutoverEffect:       s.machineCutoverEffect(host),
 			// Honest-empty, never null: the spec types this as a plain array,
 			// and "no key is broken" is a real answer that every row can give
 			// — including one with no sample at all, which has no key that

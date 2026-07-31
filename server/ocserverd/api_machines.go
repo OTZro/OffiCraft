@@ -348,6 +348,48 @@ func (s *apiServer) machineWardenShape(machineID string) *string {
 	return &shape
 }
 
+// cutover_effect wire vocabulary (AgentTelemetryIngestDTO.cutover_effect →
+// machineDTO.cutover_effect / MonitoringMachineDTO): whether the anchor cutover
+// is actually IN EFFECT for the processes that carry agents. Mirrors the
+// producer's own consts (cli/ocwarden/cutovereffect.go) across the module
+// boundary, exactly like the shape vocabulary above.
+const (
+	cutoverEffectEffective    = "effective"
+	cutoverEffectNotEffective = "not_effective"
+	cutoverEffectUnproven     = "unproven"
+)
+
+// ValidCutoverEffect gates the ingest handler's closed enum.
+//
+// 🔴 "unproven" is a REPORTED verdict of its own, not a degenerate "effective".
+// The whole reason this field exists is that a two-valued light let a machine
+// whose cutover had NOT taken effect show green for three hours, so nothing on
+// this side may ever collapse the third state into either of the other two.
+func ValidCutoverEffect(effect string) bool {
+	return effect == cutoverEffectEffective || effect == cutoverEffectNotEffective ||
+		effect == cutoverEffectUnproven
+}
+
+// machineCutoverEffect reads back the verdict machineID's warden REPORTED. Like
+// machineWardenShape it derives nothing: only the reporting machine can see its
+// own carrier processes, so the server has no second source to compute from. An
+// absent value stays absent — nil is "this warden build does not report the
+// verdict", which the wire keeps distinct from the reported "unproven".
+func (s *apiServer) machineCutoverEffect(machineID string) *string {
+	if s.telemetry == nil {
+		return nil
+	}
+	entry := s.telemetry.Get(machineID)
+	if entry == nil {
+		return nil
+	}
+	effect, isStr := entry["cutover_effect"].(string)
+	if !isStr || effect == "" {
+		return nil
+	}
+	return &effect
+}
+
 // claude_cred_source wire vocabulary (machineDTO.claude_cred_source /
 // monitoringMachineDTO): where the machine's claude CLI credentials live,
 // synthesized from the warden probe's presence bools.
@@ -511,6 +553,7 @@ func (s *apiServer) HandleListMachinesApiMachinesGet(w http.ResponseWriter, r *h
 			ClaudeSubReadable:   claudeSubReadable,
 			RuntimeCapabilities: s.machineRuntimeCapabilities(m.ID),
 			WardenShape:         s.machineWardenShape(m.ID),
+			CutoverEffect:       s.machineCutoverEffect(m.ID),
 		})
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].IsSelf && !rows[j].IsSelf })

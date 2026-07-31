@@ -189,6 +189,13 @@ type cutoverOps struct {
 	createExcl func(path string) (bool, error)
 	// modTime is used only to age out a stale lock.
 	modTime func(path string) (time.Time, error)
+	// birthTime returns an inode's CREATION time (st_birthtime), which modTime
+	// cannot answer: mtime moves whenever contents change and is settable, while
+	// birthtime is fixed at creation. The anchor is never rewritten once promoted
+	// (create-if-absent os.Link), so its birthtime is the instant this machine's
+	// anchor identity came into existence — the operand cutovereffect.go's
+	// deterministic negative rests on.
+	birthTime func(path string) (time.Time, error)
 	// spawnDetached starts a setsid'd grandchild that outlives this process's
 	// launchd job being booted out, and does NOT wait for it.
 	spawnDetached func(bin string, args []string, env []string, logPath string) error
@@ -230,6 +237,7 @@ func realCutoverOps() cutoverOps {
 			}
 			return fi.ModTime(), nil
 		},
+		birthTime:     statBirthTime,
 		spawnDetached: spawnDetachedProcess,
 		sleep:         time.Sleep,
 	}

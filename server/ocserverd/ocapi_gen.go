@@ -109,6 +109,9 @@ type AgentTelemetryDTO struct {
 	Claude        *map[string]interface{} `json:"claude,omitempty"`
 	CommandResult *map[string]interface{} `json:"command_result,omitempty"`
 	Cost          *float64                `json:"cost,omitempty"`
+
+	// CutoverEffect Echo of the stored cutover-effect verdict (see ``AgentTelemetryIngestDTO.cutover_effect``); null when never reported.
+	CutoverEffect *string                 `json:"cutover_effect,omitempty"`
 	Effort        *string                 `json:"effort,omitempty"`
 	Hardware      *map[string]interface{} `json:"hardware,omitempty"`
 	Machine       *string                 `json:"machine,omitempty"`
@@ -160,7 +163,10 @@ type AgentTelemetryIngestDTO struct {
 	Claude        *map[string]interface{} `json:"claude,omitempty"`
 	CommandResult interface{}             `json:"command_result,omitempty"`
 	Cost          interface{}             `json:"cost,omitempty"`
-	Effort        interface{}             `json:"effort,omitempty"`
+
+	// CutoverEffect Warden heartbeats only — whether the anchor cutover is actually IN EFFECT for the processes that CARRY agents, which ``warden_shape`` cannot answer: that field observes warden's own parent process, while the agents live under a tmux server that keeps its original identity across a warden restart — the two populations diverge at exactly the moment the cutover lands. Deliberately THREE-VALUED and fail-closed: ``effective`` = launchd is running the anchor now AND every process carrying an agent session is younger than the current anchor job leader, so it can only have been forked under the anchor identity; ``not_effective`` = a carrier predates the anchor file itself and therefore cannot hold that identity (the one deterministic negative); ``unproven`` = cannot be shown either way, which is NOT a synonym for ``effective`` and must never be rendered as one — a boolean green light is the exact defect this field exists to retire. OMITTED by every warden build older than this release: absent means 'this machine has not received the new build yet', ``unproven`` means 'the new build ran and could not prove it'. Permissive like the other scalars here: a value outside the three states is a flat 400, never a 422.
+	CutoverEffect interface{} `json:"cutover_effect,omitempty"`
+	Effort        interface{} `json:"effort,omitempty"`
 
 	// Hardware Warden heartbeats only — the host hardware snapshot (``collectHardware``; darwin-only probes, each one omit-on-fail, so any subset may be absent). The sub-fields are DECLARED (T-90be) because the server reads them by literal name: before this shape existed, a producer-side rename was accepted, stored, and then read as null forever — HTTP 200 with the measurement silently unreadable, every test green. Deliberately NOT closed: ``additionalProperties`` stays true (owner ruling rc-55861dd893c6) so a warden that grows a probe — or an older one missing a key — still lands its WHOLE report. Closing it would 422 the entire heartbeat on one undeclared nested key (hardware, binaries, claude and runtimes going null together), which is verbatim the a7fa594 outage. The Go type is pinned to ``map[string]interface{}`` (``x-go-type``) so the handler keeps its own per-field validation and its flat-400 face; the declaration's teeth are the CI guard (cli/ocwarden/telemetry_wire_test.go), not runtime rejection.
 	Hardware *map[string]interface{} `json:"hardware,omitempty"`
@@ -580,6 +586,9 @@ type MachineDTO struct {
 
 	// ClaudeVersion The local claude CLI version the warden heartbeat probed (``--version`` first token, e.g. ``2.1.211``); null = unknown (claude unresolved, probe failed, or an old warden that never probed).
 	ClaudeVersion *string `json:"claude_version,omitempty"`
+
+	// CutoverEffect Whether the anchor cutover is actually in effect for the agent-carrying processes on this machine, taken verbatim from its heartbeat (``effective`` | ``not_effective`` | ``unproven``; see ``AgentTelemetryIngestDTO.cutover_effect``). null = this warden build does not report the verdict at all — DISTINCT from ``unproven`` (new build ran, could not prove it). The server never infers one from the other and never derives the verdict itself: only the reporting machine can see its own carrier processes.
+	CutoverEffect *string `json:"cutover_effect,omitempty"`
 	DisplayName   *string `json:"display_name,omitempty"`
 	IsSelf        *bool   `json:"is_self,omitempty"`
 	MachineId     string  `json:"machine_id"`
@@ -909,7 +918,10 @@ type MonitoringMachineDTO struct {
 	// ClaudeVersion Same probed claude CLI version the machine registry row carries (null unknown) — see ``MachineDTO.claude_version``.
 	ClaudeVersion *string  `json:"claude_version,omitempty"`
 	CpuPct        *float64 `json:"cpu_pct,omitempty"`
-	DisplayName   *string  `json:"display_name,omitempty"`
+
+	// CutoverEffect Same reported cutover-effect verdict the machine registry row carries (``effective`` | ``not_effective`` | ``unproven``; null = warden too old to report one) — see ``MachineDTO.cutover_effect``.
+	CutoverEffect *string `json:"cutover_effect,omitempty"`
+	DisplayName   *string `json:"display_name,omitempty"`
 
 	// HardwareInvalid The DECLARED hardware keys that arrived with the wrong VALUE TYPE in the sample behind ``hardware_ts`` (sorted; empty when the sample is clean, and empty for a stale/absent sample whose blanks are already explained). Nested telemetry blocks are deliberately permissive (owner ruling rc-55861dd893c6): a wrongly-typed ``cpu_pct`` is stored verbatim with a 200, and the reader — which needs a number — then serves null. Without this list that null is byte-identical to 'this probe never answered', so a broken reporter looks exactly like a machine with no battery. This field is the server's answer to 'why is that cell blank': the value WAS measured and IS unreadable. Same role hardware_stale plays for the expired case, and read the same way — per key, because one bad probe must not cast doubt on its siblings. It carries key NAMES only, never the offending value (untrusted input must not reach the cockpit as content).
 	HardwareInvalid *[]string `json:"hardware_invalid,omitempty"`
