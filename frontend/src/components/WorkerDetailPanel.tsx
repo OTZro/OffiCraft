@@ -4,7 +4,8 @@ import { ApiError } from "../api/errors";
 import type { OutsourceWorkerView } from "../api/adapter";
 import type { MonSessionView } from "../types";
 import { useMachines } from "../hooks/useMachines";
-import { AgentDetailPanel } from "./AgentDetailPanel";
+import { AgentDetailPanel, runtimeLabel } from "./AgentDetailPanel";
+import { pendingChangeHint, reportedMachine } from "../lib/pendingChange";
 import { ModelEffortEditor } from "./ModelEffortEditor";
 import { ChevronLeftIcon, ChevronRightIcon } from "./icons";
 import { AvatarEditor } from "./AvatarEditor";
@@ -128,6 +129,37 @@ export function WorkerDetailPanel({
   // too, so the button can never promise something the click does not do.
   const wakeMode = noLiveSession;
   const machineText = worker.machine || t.workerDetail.notAssigned;
+  // ── the four "changed, not applied yet" hints (T-7f28) ────────────────────
+  // This panel had NONE of these — not even for 機器, which the member panel
+  // has had all along. Same rule, same shared helper, so the two panels cannot
+  // drift apart again. `worker.machine` is the display name the server already
+  // resolved, so the pin is resolved the same way before they are compared.
+  const desiredMachineDisplay =
+    machines.find((m) => m.machineId === worker.desiredMachineId)?.displayName ??
+    worker.desiredMachineId ??
+    "";
+  const pendingMachine = pendingChangeHint(
+    worker.desiredMachineId ?? "",
+    reportedMachine(worker.machine ?? "", worker.actualMachine ?? ""),
+    msg.workerMachineMovingTo,
+    desiredMachineDisplay,
+  );
+  const pendingRuntime = pendingChangeHint(
+    worker.runtime || "claude",
+    worker.actualRuntime ?? "",
+    msg.agentPendingChange,
+    runtimeLabel(worker.runtime || "claude"),
+  );
+  const pendingModel = pendingChangeHint(
+    worker.model,
+    worker.actualModel ?? "",
+    msg.agentPendingChange,
+  );
+  const pendingEffort = pendingChangeHint(
+    worker.effort,
+    worker.actualEffort ?? "",
+    msg.agentPendingChange,
+  );
   // 🔴 There is NO 狀態 cell any more (owner 2026-07-31:「外包為什麼需要工作狀態
   // 這個UI介面」). Four of its five words (工作中/啟動中/已停止/離線) restated what
   // the identity card's LifecycleDot already says in colour AND in its
@@ -650,18 +682,22 @@ export function WorkerDetailPanel({
         online,
         runtime: worker.runtime || "claude",
         // STATE readout = what the worker's own telemetry reported; honest ""
-        // when it reported nothing. The configured pair below is what the
-        // editor seeds from and saves — the two must never be the same value.
-        model: session?.model ?? "",
-        effort: session?.effort ?? "",
-        configuredModel: worker.model,
-        configuredEffort: worker.effort,
-        modelEffortNote: t.workerDetail.modelNextSpawnNote,
-        // NO `onSaveModelEffort` / `machineAction` (T-7526): this panel is
-        // READ-ONLY, exactly like the member panel since T-927a. The cells state
-        // what is currently true; every edit goes through the 更改 dialog above.
-        // Passing either callback back would re-grow an in-place editor here and
-        // put two disagreeing ways to change one setting on one screen.
+        // when it reported nothing — never the configured value beside it.
+        // Model/effort prefer the live monitoring session and fall back to the
+        // DURABLE reported column, so they survive the session ending (T-7f28);
+        // runtime has no session source and reads the column directly.
+        reportedRuntime: worker.actualRuntime ?? "",
+        model: session?.model || (worker.actualModel ?? ""),
+        effort: session?.effort || (worker.actualEffort ?? ""),
+        pending: {
+          runtime: pendingRuntime,
+          model: pendingModel,
+          effort: pendingEffort,
+          machine: pendingMachine,
+        },
+        // NO `machineAction` (T-7526): this panel is READ-ONLY, exactly like
+        // the member panel since T-927a. The cells state what is currently
+        // true; every edit goes through the 更改 dialog above.
         machineText,
         // Claude Account: the RESOLVED readable name (server already applied the
         // alias/label or nulled it — the raw credential key NEVER reaches here);
@@ -674,6 +710,8 @@ export function WorkerDetailPanel({
           ? async () => void (await onRefocus())
           : undefined,
         refocusSince: worker.refocusSince ?? null,
+        refocusOp: worker.refocusOp,
+        refocusDeadline: worker.refocusDeadline,
         refocusSubmittedNote: t.workerDetail.refocusSubmittedNote,
         refocusSinceLabel: msg.workerRefocusSince,
         lastOp: worker.lastOp ?? "",

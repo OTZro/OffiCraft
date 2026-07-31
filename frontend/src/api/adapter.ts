@@ -369,9 +369,19 @@ export interface OutsourceWorkerView {
   avatarUrl?: string;
   /** Model-flavoured anonymous codename (O-7 / S-3 / H-1 …). */
   codename: string;
+  /** The owner-CONFIGURED launch trio — what the settings dialog round-trips. */
   runtime?: "claude" | "codex";
   model: string;
   effort: string;
+  /** Their REPORTED twins (wire `actual_*`): what the worker's own session
+   * says it is running. "" = never reported. Never a fallback to the
+   * configured value beside it (T-7f28). */
+  actualRuntime?: "claude" | "codex" | "";
+  actualModel?: string;
+  actualEffort?: string;
+  /** The DURABLE last-observed machine — survives the worker going offline,
+   * which `machine` (the in-memory dispatch target) does not. */
+  actualMachine?: string;
   /** Worker lifecycle status (assigned → active → released). OPTIONAL so
    * hand-built fixtures stay valid (taskTitle precedent); the mapper always
    * sets it (honest "" when absent). */
@@ -460,6 +470,11 @@ export interface OutsourceWorkerView {
    * panel's 換手中 acknowledgement (parity with the member panel's refocusSince).
    * The mapper converts the wire 0 → null so the panel never shows a fake time. */
   refocusSince?: number | null;
+  /** Which operation opened that window ("" when none), and the epoch it is
+   * collected by at the latest (null when none) — the panel says "winding
+   * down so your change can take effect" instead of "last handover". */
+  refocusOp?: string;
+  refocusDeadline?: number | null;
   /** Run-intent, a direct mirror of member.desiredState (wire `desired_state`,
    * T-f190): "online" (system wants it running) or "offline" (owner-explicit
    * stop — presence is then "stopping"/"stopped"). Drives the 停止/喚醒 arm of the

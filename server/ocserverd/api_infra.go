@@ -355,9 +355,10 @@ func (s *apiServer) onFirstConnect(memberID string) {
 	s.gauge.Set(memberID, entry)
 }
 
-// stampLandedMachine records the machine an OUTSOURCE worker's session actually
-// connected from (T-98f4) — the durable anchor rule 3 of the placement decision
-// reads (「沒被搬過 + 不是第一次 → 留在上一輪實際跑的那台」).
+// stampLandedMachine records the machine a session actually connected from
+// (T-98f4) — the durable anchor rule 3 of the outsource placement decision
+// reads (「沒被搬過 + 不是第一次 → 留在上一輪實際跑的那台」), and, for every
+// kind, the last-observed machine the cockpit compares the owner's pin against.
 //
 // WHY THE CONNECT EDGE and not the dispatch: a dispatch is an intent that may
 // never boot (the whole X-46 family of stalls), and sticking to a machine the
@@ -368,10 +369,14 @@ func (s *apiServer) onFirstConnect(memberID string) {
 // in-memory by contract, and unlike hub.MachineOf, which only exists while the
 // session is live.
 //
-// SCOPED TO kind == outsource on purpose: staff members carry a durable
-// desired_machine_id that already pins them, so a second, weaker anchor would
-// only be a source of disagreement; wardens claim no machine of their own. A
-// blank claim writes nothing (an owner dashboard connection, or an agent token
+// NO LONGER SCOPED TO kind == outsource (T-7f28). It was, on the reasoning that
+// a staff member's desired_machine_id already pins it — but a pin is the
+// INTENT, and the moment the owner re-pins a member the intent stops describing
+// where it is. Without a durable observation an offline member has nothing to
+// compare the new pin against, so a move that has not happened yet cannot be
+// told from one that has. The anchor stays a PLACEMENT input for outsource only
+// (notifyWorkerSpawn is the sole reader); for staff it is purely observational.
+// A blank claim writes nothing (an owner dashboard connection, or an agent token
 // minted before machine claims existed) — "" means "unknown", never "nowhere",
 // and erasing a known landing on an unknowable connect is how a worker would
 // silently fall back to the 手冊 again.
@@ -398,7 +403,7 @@ func (s *apiServer) stampLandedMachine(memberID, machineID string) {
 		return
 	}
 	m, err := s.dal.GetMember(memberID)
-	if err != nil || m == nil || m.Kind != KindOutsource || m.LastMachineID == machineID {
+	if err != nil || m == nil || m.LastMachineID == machineID {
 		return
 	}
 	if !s.connectionIsTheGenuineArticle(*m, machineID) {

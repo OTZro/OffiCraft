@@ -1233,6 +1233,7 @@ func (s *apiServer) workerHasStateToFlush(w OutsourceWorker) bool {
 // the owner's verb on the floor. Callers hold s.outsourceMu.
 func (s *apiServer) openOwnerOpHandover(w OutsourceWorker, op string) {
 	w.RefocusSince = nowSecs()
+	w.RefocusOp = op
 	w.StoppingSince = 0.0
 	w.StoppedSince = 0.0
 	if err := s.dal.PutOutsourceWorker(w); err != nil {
@@ -1459,6 +1460,7 @@ func (s *apiServer) autoHandoverWorker(w OutsourceWorker, now float64) {
 		return
 	}
 	fresh.RefocusSince = now
+	fresh.RefocusOp = refocusOpContextHigh
 	fresh.StoppingSince = 0.0 // a new handover epoch never inherits a stale latch
 	fresh.StoppedSince = 0.0
 	if err := s.dal.PutOutsourceWorker(*fresh); err != nil {
@@ -1487,6 +1489,7 @@ func (s *apiServer) clearWorkerRefocus(id, reason string) {
 		return
 	}
 	fresh.RefocusSince = 0.0
+	fresh.RefocusOp = ""
 	fresh.StoppingSince = 0.0
 	fresh.StoppedSince = 0.0
 	if err := s.dal.PutOutsourceWorker(*fresh); err != nil {
@@ -1591,6 +1594,7 @@ func (s *apiServer) workerReportWaking(id string, model *string, trigger string)
 		return nil, err
 	}
 	w.RefocusSince = 0.0
+	w.RefocusOp = ""
 	w.StoppingSince = 0.0
 	w.StoppedSince = 0.0
 	m := memberFromWorker(*w)
@@ -1666,6 +1670,7 @@ func (s *apiServer) workerRestartSelf(id string, now float64, trigger string) (*
 		return nil, err
 	}
 	w.RefocusSince = now
+	w.RefocusOp = refocusOpRestartSelf
 	w.StoppingSince = 0.0
 	w.StoppedSince = 0.0
 	if err := s.dal.PutOutsourceWorker(*w); err != nil {

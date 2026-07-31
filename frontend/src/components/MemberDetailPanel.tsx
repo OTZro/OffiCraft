@@ -16,7 +16,8 @@ import type {
   WebhookPlatform,
   WebhookRequestLog,
 } from "../api/adapter";
-import { AgentDetailPanel } from "./AgentDetailPanel";
+import { AgentDetailPanel, runtimeLabel } from "./AgentDetailPanel";
+import { pendingChangeHint, reportedMachine } from "../lib/pendingChange";
 import { AvatarEditor } from "./AvatarEditor";
 import { Avatar } from "./Avatar";
 import { avatarKindForMember } from "../lib/avatarKind";
@@ -741,13 +742,36 @@ export function MemberDetailPanel({
   // Relocation keeps the observed location truthful while making the pending
   // destination visible. Once reconcile reports the new location, the note
   // naturally disappears rather than leaving stale launch intent in the panel.
-  const machineTransition =
-    awake &&
-    member.machine &&
-    member.desiredMachineId &&
-    member.machine !== member.desiredMachineId
-      ? msg.memberMachineMovingTo(desiredMachineName)
-      : "";
+  //
+  // 🔴 No `awake` gate (T-7f28). There used to be one, so re-pinning an OFFLINE
+  // member showed nothing at all — the single case where the owner has no other
+  // way to tell the move is still outstanding. The comparison now runs against
+  // the DURABLE last landing, which is what makes that possible.
+  const pendingMachine = pendingChangeHint(
+    member.desiredMachineId,
+    reportedMachine(member.machine ?? "", member.actualMachine ?? ""),
+    msg.memberMachineMovingTo,
+    desiredMachineName,
+  );
+  // The other three cells, same rule, same grey line. `member.runtime` /
+  // `.model` / `.effort` are the owner's settings; the `actual*` twins are what
+  // the agent reported.
+  const pendingRuntime = pendingChangeHint(
+    member.runtime || "claude",
+    member.actualRuntime ?? "",
+    msg.agentPendingChange,
+    runtimeLabel(member.runtime || "claude"),
+  );
+  const pendingModel = pendingChangeHint(
+    member.model,
+    member.actualModel ?? "",
+    msg.agentPendingChange,
+  );
+  const pendingEffort = pendingChangeHint(
+    member.effort,
+    member.actualEffort ?? "",
+    msg.agentPendingChange,
+  );
   // 累計總花費 = 已 banked 的歷史成本 + 當前 live session 成本(dto 保證兩者分開不重疊)。
   // honest:兩者皆無源(null)才顯 dash;任一有值則計入(缺的一方視為尚未產生成本=0)。
   const totalCost =
@@ -1494,6 +1518,15 @@ export function MemberDetailPanel({
         testIdPrefix: "mp",
         online,
         runtime: member.runtime || "claude",
+        // The READOUT is the reported runtime — honest dash until something
+        // reports one. The configured value above only labels the account row.
+        reportedRuntime: member.actualRuntime ?? "",
+        pending: {
+          runtime: pendingRuntime,
+          model: pendingModel,
+          effort: pendingEffort,
+          machine: pendingMachine,
+        },
         // The details panel reports what is actually running. A configured
         // launch model is intentionally kept out of this read-only surface.
         model: awake ? (member.actualModel ?? "") : "",
@@ -1502,23 +1535,18 @@ export function MemberDetailPanel({
         // configured effort lives in the 設定 dialog below, which is the only
         // place it may be shown or written.
         effort: awake ? (member.actualEffort ?? "") : "",
-        // The 設定 dialog is the only place the configured pair may be shown or
-        // written, so the panel still has to carry it — the readout above must
-        // never be what a save writes back.
-        configuredModel: member.model,
-        configuredEffort: member.effort,
-        modelEffortNote: t.mp.modelEffortNextWakeNote,
         // Gate on `awake` (owner presence contract T-2860): 機器 + Claude
         // Account are runtime facts — not-awakened reads a bare dash, never a
         // desired/stale residual.
         machineText: awake ? machineName : "",
-        machineTransition,
         accountText: (awake && member.account) || "",
         contextPct: member.contextPct,
         compactionCount: member.compactionCount,
         cost: totalCost,
         onRefocus: onRefocus ? async () => void (await onRefocus()) : undefined,
         refocusSince: member.refocusSince,
+        refocusOp: member.refocusOp,
+        refocusDeadline: member.refocusDeadline,
         refocusSubmittedNote: t.mp.refocusSubmittedNote,
         refocusSinceLabel: msg.memberRefocusSince,
         lastOp: member.lastOp,

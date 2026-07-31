@@ -4243,11 +4243,29 @@ export interface components {
          */
         MemberDTO: {
             /**
+             * Actual Effort
+             * @description The effort level the member's session is REPORTED to be running at, from its own live telemetry (``AgentTelemetryIngestDTO.effort``) — durably persisted alongside ``actual_model``, so it survives a server restart and outlives the session that reported it. Empty means nothing has ever reported an effort for this member; it is separate from, and NEVER falls back to, the owner-configured ``effort`` launch setting. WAS: reported effort lived ONLY in the in-memory telemetry store, so a server restart blanked it fleet-wide and no detail panel could tell a configured effort from a running one (T-7f28).
+             * @default
+             */
+            actual_effort: string;
+            /**
+             * Actual Machine
+             * @description The machine this member was LAST OBSERVED running on, durably persisted — the offline-surviving twin of the live ``machine`` projection. Empty means this member has never been observed on any machine. It is separate from, and NEVER falls back to, the owner-configured ``desired_machine_id`` placement: a pending relocation must stay legible as pending even while the member is offline (T-7f28).
+             * @default
+             */
+            actual_machine: string;
+            /**
              * Actual Model
              * @description The model the member's session is REPORTED to be running, from its own live telemetry (``AgentTelemetryIngestDTO.model``) — durably persisted, so it survives a server restart and outlives the session that reported it. Empty means nothing has ever reported a model for this member; it is separate from, and NEVER falls back to, the owner-configured `model` launch setting. Applies identically to ``kind=outsource`` rows, whose reports arrive under their own ``ow-`` token sub. WAS: written only by ``report_waking``, which no outsource worker calls (a worker's boot signal is ``get_my_task``), so it was structurally always empty for them.
              * @default
              */
             actual_model: string;
+            /**
+             * Actual Runtime
+             * @description The AI CLI runtime the member's session is REPORTED to be running, from its own live telemetry (``AgentTelemetryIngestDTO.runtime``) — durably persisted alongside ``actual_model``. Empty means nothing has ever reported a runtime for this member; it is separate from, and NEVER falls back to, the owner-configured ``runtime`` launch setting. WAS: the reported runtime was ingested and then discarded on every read path — every wire that carried a ``runtime`` re-served the roster's CONFIGURED value, so the detail panel flipped the instant the owner changed the setting and a not-yet-applied change was indistinguishable from a live one (T-7f28).
+             * @default
+             */
+            actual_runtime: string;
             /**
              * Avatar Url
              * @description Authenticated URL of this stable member id's personal raster avatar. Empty means no personal image; clients fall back to the active theme's role avatar, then the built-in glyph. Additive-optional for older clients.
@@ -4330,6 +4348,18 @@ export interface components {
              * @default offline
              */
             presence: string;
+            /**
+             * Refocus Deadline
+             * @description Epoch seconds by which the in-flight handover stamped in ``refocus_since`` is force-collected (``refocus_since`` + the reconcile recycle grace), 0 when no handover is in flight. Derived at read time, never stored. It exists so a client can say WHEN a pending launch change takes effect at the latest without hard-coding a server constant; the collection fires the instant the agent answers ``report_stopped``, so this is a CEILING, not a prediction (T-7f28). Additive-optional.
+             * @default 0
+             */
+            refocus_deadline: number;
+            /**
+             * Refocus Op
+             * @description Which owner operation opened the in-flight handover stamped in ``refocus_since``, empty when none is in flight. One of ``relocate`` (machine change), ``runtime/model`` (runtime / model / effort change), ``context_high`` (automatic context-pressure handover), ``refocus`` (owner-pressed refocus) or ``restart_self`` (agent-requested). Stamped and cleared in lockstep with ``refocus_since``. WAS: the cause lived only in a server log line, so a client could only say 'last refocus' — which reads as history — where it meant 'winding down right now so your change can take effect' (T-7f28). Additive-optional.
+             * @default
+             */
+            refocus_op: string;
             /**
              * Refocus Since
              * @default 0
@@ -4755,6 +4785,30 @@ export interface components {
          */
         OutsourceWorkerDTO: {
             /**
+             * Actual Effort
+             * @description The effort level this worker's session is REPORTED to be running at — the same durably-persisted roster field ``MemberDTO.actual_effort`` serves (an ``ow-`` row IS a member row with ``kind=outsource``). Empty means nothing has ever reported one. Separate from, and NEVER a fallback to, the owner-configured ``effort`` launch setting this DTO round-trips (T-7f28).
+             * @default
+             */
+            actual_effort: string;
+            /**
+             * Actual Machine
+             * @description The machine this worker was LAST OBSERVED running on, durably persisted — the offline-surviving twin of the live ``machine`` projection. Empty means it has never been observed anywhere. Separate from, and NEVER a fallback to, ``desired_machine_id`` (T-7f28).
+             * @default
+             */
+            actual_machine: string;
+            /**
+             * Actual Model
+             * @description The model this worker's session is REPORTED to be running — the same durably-persisted roster field ``MemberDTO.actual_model`` serves. Empty means nothing has ever reported one. WAS: absent from this DTO entirely, so the worker detail panel had to join ``GET /api/monitoring`` to show a reported model at all, and had no reported value to compare the configured ``model`` against (T-7f28).
+             * @default
+             */
+            actual_model: string;
+            /**
+             * Actual Runtime
+             * @description The AI CLI runtime this worker's session is REPORTED to be running — the same durably-persisted roster field ``MemberDTO.actual_runtime`` serves. Empty means nothing has ever reported one. Separate from, and NEVER a fallback to, the owner-configured ``runtime`` launch setting this DTO round-trips (T-7f28).
+             * @default
+             */
+            actual_runtime: string;
+            /**
              * Account
              * @description The Claude account this worker's session runs under (telemetry entry keyed by the worker's actor id — the SAME per-actor telemetry the member roster reads). null when the worker has not reported one (never fabricated). T-f190 additive-optional.
              */
@@ -4869,6 +4923,18 @@ export interface components {
              * @default
              */
             presence: string;
+            /**
+             * Refocus Deadline
+             * @description Epoch seconds by which the in-flight handover stamped in ``refocus_since`` is force-collected (``refocus_since`` + the reconcile recycle grace), 0 when none is in flight. Derived at read time, never stored. A CEILING, not a prediction: the collection fires the instant the worker answers ``report_stopped`` (T-7f28). Additive-optional.
+             * @default 0
+             */
+            refocus_deadline: number;
+            /**
+             * Refocus Op
+             * @description Which owner operation opened the in-flight handover stamped in ``refocus_since``, empty when none is in flight. Same closed set as ``MemberDTO.refocus_op``. Stamped and cleared in lockstep with ``refocus_since`` (T-7f28). Additive-optional.
+             * @default
+             */
+            refocus_op: string;
             /**
              * Refocus Since
              * @description Epoch seconds of the in-flight context-handover stamp (T-32e1), 0 when none. >0 = a refocus (owner 換手 OR context-high auto-handover) is mid-flight; the FE maps 0→null. Additive-optional.

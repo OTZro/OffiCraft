@@ -1784,10 +1784,28 @@
       "MemberDTO": {
         "description": "API representation of one ``domain.Member`` (a roster member; §3.4 #8/#10).\n\nCarries the durable roster fields PLUS two projections the domain computes at\nread time: ``member_no`` (the ``MB-XXX###`` display badge derived from ``id``,\n§3.10) and ``presence`` (the DERIVED five-state\noffline/waking/online/stopping/stopped, §3.6 — never stored; the SINGLE\npresence word on this wire). The raw ``online`` / ``waking_since`` /\n``stopping_timed_out`` projections were removed from the wire (2026-07-11\naudit): the FE mapper never mapped them and no agent read them — every\nconsumer reads ``presence``. ``roster_status`` is the\nactive/removed LIFECYCLE (the durable ``member.status``), orthogonal to\npresence — named ``roster_status`` on the wire because the FE view model\nalready uses ``status`` for its presence tint (three layers, one word was a\ncollision). The member's TOKEN is NEVER on this DTO.\n\n``role_name`` is the role's display title, resolved by the handler from the\nrole roster (empty until role definitions land in build order B2).",
         "properties": {
+          "actual_effort": {
+            "default": "",
+            "description": "The effort level the member's session is REPORTED to be running at, from its own live telemetry (``AgentTelemetryIngestDTO.effort``) — durably persisted alongside ``actual_model``, so it survives a server restart and outlives the session that reported it. Empty means nothing has ever reported an effort for this member; it is separate from, and NEVER falls back to, the owner-configured ``effort`` launch setting. WAS: reported effort lived ONLY in the in-memory telemetry store, so a server restart blanked it fleet-wide and no detail panel could tell a configured effort from a running one (T-7f28).",
+            "title": "Actual Effort",
+            "type": "string"
+          },
+          "actual_machine": {
+            "default": "",
+            "description": "The machine this member was LAST OBSERVED running on, durably persisted — the offline-surviving twin of the live ``machine`` projection. Empty means this member has never been observed on any machine. It is separate from, and NEVER falls back to, the owner-configured ``desired_machine_id`` placement: a pending relocation must stay legible as pending even while the member is offline (T-7f28).",
+            "title": "Actual Machine",
+            "type": "string"
+          },
           "actual_model": {
             "default": "",
             "description": "The model the member's session is REPORTED to be running, from its own live telemetry (``AgentTelemetryIngestDTO.model``) — durably persisted, so it survives a server restart and outlives the session that reported it. Empty means nothing has ever reported a model for this member; it is separate from, and NEVER falls back to, the owner-configured `model` launch setting. Applies identically to ``kind=outsource`` rows, whose reports arrive under their own ``ow-`` token sub. WAS: written only by ``report_waking``, which no outsource worker calls (a worker's boot signal is ``get_my_task``), so it was structurally always empty for them.",
             "title": "Actual Model",
+            "type": "string"
+          },
+          "actual_runtime": {
+            "default": "",
+            "description": "The AI CLI runtime the member's session is REPORTED to be running, from its own live telemetry (``AgentTelemetryIngestDTO.runtime``) — durably persisted alongside ``actual_model``. Empty means nothing has ever reported a runtime for this member; it is separate from, and NEVER falls back to, the owner-configured ``runtime`` launch setting. WAS: the reported runtime was ingested and then discarded on every read path — every wire that carried a ``runtime`` re-served the roster's CONFIGURED value, so the detail panel flipped the instant the owner changed the setting and a not-yet-applied change was indistinguishable from a live one (T-7f28).",
+            "title": "Actual Runtime",
             "type": "string"
           },
           "avatar_url": {
@@ -1890,6 +1908,18 @@
           "presence": {
             "default": "offline",
             "title": "Presence",
+            "type": "string"
+          },
+          "refocus_deadline": {
+            "default": 0.0,
+            "description": "Epoch seconds by which the in-flight handover stamped in ``refocus_since`` is force-collected (``refocus_since`` + the reconcile recycle grace), 0 when no handover is in flight. Derived at read time, never stored. It exists so a client can say WHEN a pending launch change takes effect at the latest without hard-coding a server constant; the collection fires the instant the agent answers ``report_stopped``, so this is a CEILING, not a prediction (T-7f28). Additive-optional.",
+            "title": "Refocus Deadline",
+            "type": "number"
+          },
+          "refocus_op": {
+            "default": "",
+            "description": "Which owner operation opened the in-flight handover stamped in ``refocus_since``, empty when none is in flight. One of ``relocate`` (machine change), ``runtime/model`` (runtime / model / effort change), ``context_high`` (automatic context-pressure handover), ``refocus`` (owner-pressed refocus) or ``restart_self`` (agent-requested). Stamped and cleared in lockstep with ``refocus_since``. WAS: the cause lived only in a server log line, so a client could only say 'last refocus' — which reads as history — where it meant 'winding down right now so your change can take effect' (T-7f28). Additive-optional.",
+            "title": "Refocus Op",
             "type": "string"
           },
           "refocus_since": {
@@ -2682,6 +2712,30 @@
       "OutsourceWorkerDTO": {
         "description": "One outsource worker row of the panel (SPEC §4.1): the anonymous codename (model prefix + sequence), runtime/model/effort, lifecycle status (assigned → active → released), and its ONE bound task's id / title / status.",
         "properties": {
+          "actual_effort": {
+            "default": "",
+            "description": "The effort level this worker's session is REPORTED to be running at — the same durably-persisted roster field ``MemberDTO.actual_effort`` serves (an ``ow-`` row IS a member row with ``kind=outsource``). Empty means nothing has ever reported one. Separate from, and NEVER a fallback to, the owner-configured ``effort`` launch setting this DTO round-trips (T-7f28).",
+            "title": "Actual Effort",
+            "type": "string"
+          },
+          "actual_machine": {
+            "default": "",
+            "description": "The machine this worker was LAST OBSERVED running on, durably persisted — the offline-surviving twin of the live ``machine`` projection. Empty means it has never been observed anywhere. Separate from, and NEVER a fallback to, ``desired_machine_id`` (T-7f28).",
+            "title": "Actual Machine",
+            "type": "string"
+          },
+          "actual_model": {
+            "default": "",
+            "description": "The model this worker's session is REPORTED to be running — the same durably-persisted roster field ``MemberDTO.actual_model`` serves. Empty means nothing has ever reported one. WAS: absent from this DTO entirely, so the worker detail panel had to join ``GET /api/monitoring`` to show a reported model at all, and had no reported value to compare the configured ``model`` against (T-7f28).",
+            "title": "Actual Model",
+            "type": "string"
+          },
+          "actual_runtime": {
+            "default": "",
+            "description": "The AI CLI runtime this worker's session is REPORTED to be running — the same durably-persisted roster field ``MemberDTO.actual_runtime`` serves. Empty means nothing has ever reported one. Separate from, and NEVER a fallback to, the owner-configured ``runtime`` launch setting this DTO round-trips (T-7f28).",
+            "title": "Actual Runtime",
+            "type": "string"
+          },
           "account": {
             "anyOf": [
               {
@@ -2837,6 +2891,18 @@
             "default": "",
             "description": "REAL-liveness projection on the ONE member presence vocabulary (A案 P6 — deriveLiveness; replaces the retired ``spawn_state`` closed set starting/stuck/online/stopped). Distinct from lifecycle ``status`` so a worker whose session is not actually up is not rendered as a live green row. Uses the same SSE-presence authority (hub.IsOnline) the member roster reads. Closed set: ``online`` (holding a live SSE connection), ``waking`` (not online with a fresh wake in flight — last start dispatch / row birth within the waking TTL), ``offline`` (not online and no fresh wake — a silently-failing spawn or a died-after-claim session; the FSM rescue owns recovery), ``stopping``/``stopped`` (owner-explicit stop: held down, no auto-revival), ``\"\"`` (released; off-panel). Optional-with-default: absent reads as \"\" for older clients.",
             "title": "Presence",
+            "type": "string"
+          },
+          "refocus_deadline": {
+            "default": 0.0,
+            "description": "Epoch seconds by which the in-flight handover stamped in ``refocus_since`` is force-collected (``refocus_since`` + the reconcile recycle grace), 0 when none is in flight. Derived at read time, never stored. A CEILING, not a prediction: the collection fires the instant the worker answers ``report_stopped`` (T-7f28). Additive-optional.",
+            "title": "Refocus Deadline",
+            "type": "number"
+          },
+          "refocus_op": {
+            "default": "",
+            "description": "Which owner operation opened the in-flight handover stamped in ``refocus_since``, empty when none is in flight. Same closed set as ``MemberDTO.refocus_op``. Stamped and cleared in lockstep with ``refocus_since`` (T-7f28). Additive-optional.",
+            "title": "Refocus Op",
             "type": "string"
           },
           "refocus_since": {

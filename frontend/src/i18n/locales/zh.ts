@@ -741,6 +741,16 @@ export const zh = {
     runtime: "運行狀況",
     machine: "機器",
     machineMovingToLabel: "→ 要換到",
+    // The same 「→ …」 shape the machine cell has always used, widened to the
+    // other three configurable cells (T-7f28). 「換到」 reads as a place;
+    // 「換成」 reads as a value — one word each, so the two never blur.
+    pendingChangeLabel: "→ 要換成",
+    // The wind-down line. It replaces 「上次重新聚焦」 while a window is open:
+    // that phrasing reads as history, and the owner needs to know the change
+    // is being APPLIED right now.
+    windDownForChangeLabel: "正在收尾以套用你的改動",
+    windDownByLabel: "最晚",
+    windDownEffectSuffix: "生效",
     standby: "待命中",
     context: "context",
     compactionCount: (n: number) => `壓縮：${n}`,

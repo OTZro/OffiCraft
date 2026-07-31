@@ -143,14 +143,14 @@ describe("MemberDetailPanel — unified wake/change settings", () => {
       <I18nProvider><MemberDetailPanel member={initial} onBack={vi.fn()} /></I18nProvider>,
     );
     await waitFor(() => expect(getByTestId("mp-machine").textContent).toContain("Machine A"));
-    expect(getByTestId("mp-machine-transition").textContent).toContain("→ 要換到 Machine B");
+    expect(getByTestId("mp-machine-pending").textContent).toContain("→ 要換到 Machine B");
 
     rerender(
       <I18nProvider><MemberDetailPanel member={mkMember({
         status: "online", lifecycle: "online", machine: "mach-b", desiredMachineId: "mach-b",
       })} onBack={vi.fn()} /></I18nProvider>,
     );
-    expect(queryByTestId("mp-machine-transition")).toBeNull();
+    expect(queryByTestId("mp-machine-pending")).toBeNull();
   });
 
   it("uses Change to apply an awake member's settings through one relocate", async () => {
@@ -279,18 +279,43 @@ describe("MemberDetailPanel — unified wake/change settings", () => {
     expect(queryByTestId("mp-change")).toBeNull();
   });
 
-  it("does not print a transition hint for a member nobody can observe", async () => {
-    // Guard gap MED-4: the `awake &&` gate on the hint had no test. Without it an
-    // offline member shows 「→ 要換到 X」 beside a dashed 機器 cell — the desired
-    // -state leak the presence contract forbids.
-    const { queryByTestId } = renderPanel({
+  it("still prints the pending target for an OFFLINE member, beside a dashed cell", async () => {
+    // 🔴 REVERSED in T-7f28. This used to assert the opposite: an `awake &&`
+    // gate hid the hint whenever the member was not up, on the reasoning that
+    // showing the pin would leak desired state into an observed cell.
+    //
+    // The gate over-corrected. Offline is precisely when the owner has NO other
+    // way to tell a re-pin has not taken effect — the machine cell is a dash
+    // either way, so hiding the hint made "moved" and "not moved yet" look
+    // identical. The presence contract is about not presenting intent AS
+    // observation, and both halves of that still hold below: the 機器 cell
+    // stays dashed, and the pin appears only in the labelled 「→ 要換到」 line.
+    const { queryByTestId, getByTestId } = renderPanel({
       status: "offline",
       lifecycle: "offline",
       machine: "mach-a",
       desiredMachineId: "mach-b",
     });
     await waitFor(() => expect(listMachines).toHaveBeenCalled());
-    expect(queryByTestId("mp-machine-transition")).toBeNull();
+    expect(getByTestId("mp-machine-pending").textContent).toContain(
+      "→ 要換到 Machine B",
+    );
+    // …and the OBSERVED cell is still honest about not observing anything.
+    expect(getByTestId("mp-machine").textContent).toBe("—");
+    expect(queryByTestId("mp-relocate-undispatched")).toBeNull();
+  });
+
+  it("prints nothing at all when the pin and the last landing agree", async () => {
+    // The no-clutter half of the owner's condition (2026-07-31:「但又不想要畫面
+    // 太雜亂」): no pending change ⇒ no node, not an empty one.
+    const { queryByTestId } = renderPanel({
+      status: "offline",
+      lifecycle: "offline",
+      machine: "mach-b",
+      desiredMachineId: "mach-b",
+    });
+    await waitFor(() => expect(listMachines).toHaveBeenCalled());
+    expect(queryByTestId("mp-machine-pending")).toBeNull();
   });
 
   it("stores the launch settings BEFORE the relocate that restarts the agent", async () => {

@@ -548,7 +548,9 @@ func monitoringOf(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 }
 
 func TestHandleIngestTelemetry_AccountLabelFolds(t *testing.T) {
-	api := &apiServer{telemetry: newMemStore(), hub: NewHub()}
+	// Carries a runtime, so the ingest reaches stampReportedLaunchFacts and
+	// needs a real DAL (a runtime report is durable now — T-7f28).
+	api := &apiServer{dal: newTestDAL(t), telemetry: newMemStore(), hub: NewHub()}
 	rec := doIngestTelemetry(api, "m-1", "", teleWithLabel)
 	if rec.Code != 200 {
 		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
@@ -944,18 +946,18 @@ func TestStampReportedModel_TelemetryNeverResurrectsADismissedMember(t *testing.
 	}
 }
 
-// TestGetMonitoring_ReportedModelIsNotSymmetricWithEffort records, as an
-// executable fact, the asymmetry the spec text for MonitoringSessionDTO.model
-// now calls out: both columns are reported state, but only model is durable.
-// There is no actual_effort column, so a server re-exec blanks effort fleet-wide
-// while model survives.
+// TestGetMonitoring_ReportedLaunchFactsSurviveAReExec records, as an executable
+// fact, that all THREE reported launch facts are now durable columns: a server
+// re-exec throws away the in-memory telemetry store and the fold still answers
+// from actual_model / actual_runtime / actual_effort.
 //
-// Pinned because the first version of that spec text asserted the OPPOSITE
-// ("honest-empty until something reports one, exactly like the effort beside
-// it"), which was false the moment this change landed. A prose claim about two
-// fields' storage is exactly the kind of thing that rots silently; this makes
-// the next person's edit fail instead.
-func TestGetMonitoring_ReportedModelIsNotSymmetricWithEffort(t *testing.T) {
+// This assertion used to pin the OPPOSITE for effort and runtime — the
+// asymmetry where only model survived — and said in so many words that adding
+// an actual_effort column had to update the spec text in the same commit
+// (T-7f28 did). Kept as a re-exec test rather than deleted: if any of the three
+// goes back to being read off s.telemetry, this fails instead of the cockpit
+// quietly blanking fleet-wide on the next restart.
+func TestGetMonitoring_ReportedLaunchFactsSurviveAReExec(t *testing.T) {
 	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
 		telemetry: newMemStore(), gauge: newMemStore()}
 	seedWorker(t, s, "ow-eva", "E1", 0, WorkerStatusActive)
@@ -967,13 +969,43 @@ func TestGetMonitoring_ReportedModelIsNotSymmetricWithEffort(t *testing.T) {
 
 	row := sessionRows(t, monitoringOf(t,
 		doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"})))["ow-eva"]
-	if row["model"] != "claude-opus-5" {
-		t.Errorf("model after re-exec = %v, want claude-opus-5 (durable column)", row["model"])
+	for _, c := range []struct{ field, want string }{
+		{"model", "claude-opus-5"},
+		{"runtime", RuntimeClaude},
+		{"effort", "xhigh"},
+	} {
+		if row[c.field] != c.want {
+			t.Errorf("%s after re-exec = %v, want %q (durable column)",
+				c.field, row[c.field], c.want)
+		}
 	}
-	if row["effort"] != "" {
-		t.Errorf("effort after re-exec = %v, want \"\" — if this now survives, an "+
-			"actual_effort column was added and the spec text calling the two "+
-			"asymmetric must be updated in the same commit", row["effort"])
+}
+
+// TestGetMonitoring_ReportedLaunchFactsNeverFallBackToTheConfiguredValue is the
+// half the re-exec test cannot see: a member that has reported NOTHING must
+// read blank on all three, not echo what the owner configured. A fallback here
+// is what made a launch change that had not taken effect yet
+// byte-indistinguishable from one that had (T-7f28 — the reason the ticket
+// exists).
+func TestGetMonitoring_ReportedLaunchFactsNeverFallBackToTheConfiguredValue(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	configured := fullMember("mira")
+	configured.Runtime = RuntimeClaude
+	configured.Model = "opus"
+	configured.Effort = "xhigh"
+	if err := s.dal.PutMember(configured); err != nil {
+		t.Fatalf("seed member: %v", err)
+	}
+
+	row := sessionRows(t, monitoringOf(t,
+		doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"})))["mira"]
+	for _, field := range []string{"model", "runtime", "effort"} {
+		if row[field] != "" {
+			t.Errorf("%s = %v, want \"\" — nothing has reported one, and serving "+
+				"the configured value here makes a pending change look applied",
+				field, row[field])
+		}
 	}
 }
 
@@ -1026,8 +1058,12 @@ func TestGetMonitoring_SessionsListStaffAndOutsourceAlike(t *testing.T) {
 	if worker["role"] != "" {
 		t.Errorf("worker role = %v, want \"\" — a worker has no role_key", worker["role"])
 	}
-	if worker["runtime"] != RuntimeClaude {
-		t.Errorf("worker runtime = %v, want claude", worker["runtime"])
+	// Reported runtime, honest-empty: seedWorker configures claude but nothing
+	// has reported one. Serving the configured value here is what made a
+	// runtime change look applied the instant it was saved (T-7f28).
+	if worker["runtime"] != "" {
+		t.Errorf("worker runtime = %v, want \"\" — nothing has reported one",
+			worker["runtime"])
 	}
 	if worker["banked_cost"] != 2.5 {
 		t.Errorf("worker banked_cost = %v, want 2.5", worker["banked_cost"])
@@ -1287,7 +1323,9 @@ func TestGetMonitoring_RuntimeAccountKeepsCodexAndOwnerGate(t *testing.T) {
 // unit, and any report that cannot prove the pairing retires it instead of
 // leaving a stale one standing for a later report to inherit.
 func TestHandleIngestTelemetry_AccountPairingIsAtomic(t *testing.T) {
-	api := &apiServer{telemetry: newMemStore(), hub: NewHub()}
+	// Its reports carry a runtime, so the ingest reaches
+	// stampReportedLaunchFacts and needs a real DAL (T-7f28).
+	api := &apiServer{dal: newTestDAL(t), telemetry: newMemStore(), hub: NewHub()}
 	entry := func() map[string]any { return api.telemetry.Get("kyle") }
 	ingest := func(body string) {
 		t.Helper()

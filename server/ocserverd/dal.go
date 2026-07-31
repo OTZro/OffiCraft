@@ -41,14 +41,22 @@ func NewDAL(db *sql.DB) *DAL {
 // OR a warden (machine = the kind=='warden' row; its id IS the machine_id).
 // Intent only; presence/location are observed and never stored.
 type Member struct {
-	ID               string
-	Name             string
-	Kind             string // closed set: "assistant" | "warden" | "outsource" (schema CHECK)
-	RoleKey          string
-	Runtime          string
-	Model            string
-	ActualModel      string
-	Effort           string
+	ID          string
+	Name        string
+	Kind        string // closed set: "assistant" | "warden" | "outsource" (schema CHECK)
+	RoleKey     string
+	Runtime     string
+	Model       string
+	ActualModel string
+	Effort      string
+	// ActualRuntime / ActualEffort are the REPORTED twins of Runtime / Effort —
+	// what the member's own telemetry says it is running, durably persisted the
+	// way ActualModel already is. "" means nothing has ever reported one; they
+	// NEVER fall back to the configured value, because a value that stands in for
+	// a missing report is indistinguishable from a change that already took
+	// effect (T-7f28).
+	ActualRuntime    string
+	ActualEffort     string
 	DesiredState     string
 	DesiredMachineID string
 	// LastMachineID is the durable STICKY-PLACEMENT anchor (T-98f4,
@@ -64,14 +72,19 @@ type Member struct {
 	StoppingSince float64
 	StoppedSince  float64
 	RefocusSince  float64
-	BankedCost    float64
-	LastOp        string
-	LastOpOK      *bool // nil = no op reported yet (three-valued)
-	LastOpLog     string
-	LastOpReason  string // structured "<code>: <detail>" cause; "" = none reported
-	LastOpAt      float64
-	RosterStatus  string  // "active" | "removed" (dismiss is a SOFT delete)
-	LinkedTaskID  *string // task binding (migrations/00024); nil = unbound. Outsource members carry their bound task id here.
+	// RefocusOp names the operation that opened the window RefocusSince stamps
+	// ("relocate" | "runtime/model" | "context_high" | "refocus" |
+	// "restart_self"), "" when none is in flight. Stamped and cleared in lockstep
+	// with RefocusSince — see refocusOp* in member_ownerop_winddown.go.
+	RefocusOp    string
+	BankedCost   float64
+	LastOp       string
+	LastOpOK     *bool // nil = no op reported yet (three-valued)
+	LastOpLog    string
+	LastOpReason string // structured "<code>: <detail>" cause; "" = none reported
+	LastOpAt     float64
+	RosterStatus string  // "active" | "removed" (dismiss is a SOFT delete)
+	LinkedTaskID *string // task binding (migrations/00024); nil = unbound. Outsource members carry their bound task id here.
 	// ── A案 P7d (migrations/00025 — the outsource_worker fold) ────────────────
 	// Codename is the outsource display codename (O-7 / S-12 / H-3), globally
 	// unique and never reused (partial UNIQUE index); "" (stored NULL) on every
@@ -97,8 +110,9 @@ const (
 )
 
 const memberColumns = `id, name, kind, role_key, runtime, model, actual_model, effort,
+	actual_runtime, actual_effort,
 	desired_state, desired_machine_id, last_machine_id,
-	waking_since, stopping_since, stopped_since, refocus_since, banked_cost,
+	waking_since, stopping_since, stopped_since, refocus_since, refocus_op, banked_cost,
 	last_op, last_op_ok, last_op_log, last_op_reason, last_op_at, roster_status,
 	linked_task_id, codename, created_ts, released_ts, activated_ts,
 	avatar_attachment_id`
@@ -109,8 +123,9 @@ func scanMember(row interface{ Scan(...any) error }) (Member, error) {
 	var linkedTaskID, codename sql.NullString
 	err := row.Scan(
 		&m.ID, &m.Name, &m.Kind, &m.RoleKey, &m.Runtime, &m.Model, &m.ActualModel, &m.Effort,
+		&m.ActualRuntime, &m.ActualEffort,
 		&m.DesiredState, &m.DesiredMachineID, &m.LastMachineID,
-		&m.WakingSince, &m.StoppingSince, &m.StoppedSince, &m.RefocusSince,
+		&m.WakingSince, &m.StoppingSince, &m.StoppedSince, &m.RefocusSince, &m.RefocusOp,
 		&m.BankedCost,
 		&m.LastOp, &lastOpOK, &m.LastOpLog, &m.LastOpReason, &m.LastOpAt, &m.RosterStatus,
 		&linkedTaskID, &codename, &m.CreatedTS, &m.ReleasedTS, &m.ActivatedTS,
@@ -217,11 +232,13 @@ func (d *DAL) PutMember(m Member) error {
 	}
 	_, err := d.db.Exec(`
 		INSERT INTO member (`+memberColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			name = excluded.name, kind = excluded.kind,
 			role_key = excluded.role_key, runtime = excluded.runtime,
 			model = excluded.model, actual_model = excluded.actual_model,
+			actual_runtime = excluded.actual_runtime,
+			actual_effort = excluded.actual_effort,
 			effort = excluded.effort, desired_state = excluded.desired_state,
 			desired_machine_id = excluded.desired_machine_id,
 			last_machine_id = excluded.last_machine_id,
@@ -229,6 +246,7 @@ func (d *DAL) PutMember(m Member) error {
 			stopping_since = excluded.stopping_since,
 			stopped_since = excluded.stopped_since,
 			refocus_since = excluded.refocus_since,
+			refocus_op = excluded.refocus_op,
 			banked_cost = excluded.banked_cost,
 			last_op = excluded.last_op, last_op_ok = excluded.last_op_ok,
 			last_op_log = excluded.last_op_log,
@@ -241,8 +259,9 @@ func (d *DAL) PutMember(m Member) error {
 			released_ts = excluded.released_ts,
 			activated_ts = excluded.activated_ts`,
 		m.ID, m.Name, m.Kind, m.RoleKey, NormalizeRuntime(m.Runtime), m.Model, m.ActualModel, m.Effort,
+		m.ActualRuntime, m.ActualEffort,
 		m.DesiredState, m.DesiredMachineID, m.LastMachineID,
-		m.WakingSince, m.StoppingSince, m.StoppedSince, m.RefocusSince,
+		m.WakingSince, m.StoppingSince, m.StoppedSince, m.RefocusSince, m.RefocusOp,
 		m.BankedCost,
 		m.LastOp, lastOpOK, m.LastOpLog, m.LastOpReason, m.LastOpAt, m.RosterStatus,
 		linkedTaskID, codename, m.CreatedTS, m.ReleasedTS, m.ActivatedTS,
