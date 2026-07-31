@@ -605,6 +605,10 @@ export interface ServerSettingsView {
    * **-1 ⇒ 無限 (unlimited — no global cap)**; 0 ⇒ outsource assignment is
    * PAUSED — the panel annotates it). */
   outsourceMaxParallel: number;
+  /** T-3aeb: the size cap on the accumulating context documents (lessons,
+   * task-manual learnings + sop_md), in CHARACTERS (runes). Default 10000;
+   * adjustable 10000..100000 — the floor is the default, so it only goes up. */
+  docCapChars: number;
   /** Whether the GitHub-release update check also admits prereleases
    * (false = official releases only, the default). */
   updaterReceiveBeta: boolean;
@@ -672,6 +676,8 @@ export interface ServerSettingsPatch {
   codexCompactionThreshold?: number;
   monitoringRefreshSeconds?: number;
   outsourceMaxParallel?: number;
+  /** T-3aeb document size cap, in characters. Must be 10000..100000. */
+  docCapChars?: number;
   /** Also admit GitHub prereleases in update checks (default false). */
   updaterReceiveBeta?: boolean;
   /** Arm unattended background self-upgrade (default false = manual-only). */

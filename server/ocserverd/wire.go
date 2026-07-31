@@ -18,6 +18,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"unicode/utf8"
 )
 
 // wireOwnerID is the fixed single-tenant owner id (service.deps.DEFAULT_OWNER).
@@ -52,6 +53,10 @@ type settingsDTO struct {
 	CodexCompactionThreshold int   `json:"codex_compaction_threshold"`
 	MonitoringRefreshSeconds int   `json:"monitoring_refresh_seconds"`
 	OutsourceMaxParallel     int   `json:"outsource_max_parallel"`
+	// DocCapChars is the live size cap on the accumulating context documents,
+	// in CHARACTERS (runes) — the same unit the patch receipts and the refusal
+	// message speak (T-3aeb).
+	DocCapChars int `json:"doc_cap_chars"`
 	// UpdaterReceiveBeta / UpdaterAutoUpdate are the two software-update
 	// toggles (default false): follow GitHub prereleases too / self-upgrade
 	// in the background when a newer release exists.
@@ -525,6 +530,12 @@ type roleDeleteResultDTO struct {
 }
 
 type lessonsDTO struct {
+	// SizeChars / CapChars let a caller size its NEXT edit before making it
+	// (T-3aeb). Without them the only way to learn the limit is to be refused,
+	// and the settings surface that holds it is admin-only — a worker cannot
+	// look it up.
+	SizeChars     int    `json:"size_chars"`
+	CapChars      int    `json:"cap_chars"`
 	RoleKey       string `json:"role_key"`
 	TaskType      string `json:"task_type"`
 	Text          string `json:"text"`
@@ -533,14 +544,21 @@ type lessonsDTO struct {
 	IsDefault     bool   `json:"is_default"`
 }
 
-// lessonsPatchResultDTO is the patch_lessons receipt (T-8327): size (UTF-8
-// bytes) + sha256 (hex) are verification anchors over the RESULTING doc text
-// so the caller can confirm the write without re-reading the full doc.
+// lessonsPatchResultDTO is the patch_lessons receipt (T-8327): size
+// (CHARACTERS — runes) + sha256 (hex) are verification anchors over the
+// RESULTING doc text so the caller can confirm the write without re-reading the
+// full doc.
+//
+// size counted BYTES until T-3aeb (owner 2026-07-31). It now speaks the same
+// unit as the doc.cap_chars cap the write was just judged against, so a caller
+// can compare the two directly — which is the whole point of a receipt on a
+// capped write. Two units for one subject was the defect, not the field.
 type lessonsPatchResultDTO struct {
 	RoleKey       string `json:"role_key"`
 	TaskType      string `json:"task_type"`
 	AppliedEdits  int    `json:"applied_edits"`
-	Size          int    `json:"size"`
+	SizeChars     int    `json:"size_chars"`
+	CapChars      int    `json:"cap_chars"`
 	Sha256        string `json:"sha256"`
 	OwnerID       string `json:"owner_id"`
 	SchemaVersion int    `json:"schema_version"`
@@ -548,16 +566,18 @@ type lessonsPatchResultDTO struct {
 }
 
 // taskLearningsPatchResultDTO is the patch_task_learnings receipt (T-9ffd): the
-// task-manual learnings twin of lessonsPatchResultDTO. size (UTF-8 bytes) +
-// sha256 (hex) are verification anchors over the RESULTING learnings text so
-// the caller can confirm the write without re-reading the full 30k-char doc;
+// task-manual learnings twin of lessonsPatchResultDTO. size (CHARACTERS —
+// runes, the cap's unit since T-3aeb) + sha256 (hex) are verification anchors
+// over the RESULTING learnings text so the caller can confirm the write
+// without re-reading the full doc;
 // applied_edits is the count that ACTUALLY changed the doc (a no-op does not
 // count). No owner_id/is_default — a manual's learnings is not a per-owner
 // overlay the way a role's lessons doc is.
 type taskLearningsPatchResultDTO struct {
 	TypeKey      string `json:"type_key"`
 	AppliedEdits int    `json:"applied_edits"`
-	Size         int    `json:"size"`
+	SizeChars    int    `json:"size_chars"`
+	CapChars     int    `json:"cap_chars"`
 	Sha256       string `json:"sha256"`
 }
 
@@ -863,14 +883,20 @@ type taskCountDTO struct {
 }
 
 type taskManualDTO struct {
-	TypeKey     string         `json:"type_key"`
-	DisplayName string         `json:"display_name"`
-	Purpose     string         `json:"purpose"`
-	Fields      []ManualField  `json:"fields"`
-	SopMD       string         `json:"sop_md"`
-	Learnings   string         `json:"learnings"`
-	Assignee    map[string]any `json:"assignee"`
-	UpdatedTS   float64        `json:"updated_ts"`
+	// Per-CAPPED-DOCUMENT sizes plus the live cap (T-3aeb). Two numbers, not
+	// one total: the cap applies to learnings and sop_md separately, so a
+	// combined figure would answer neither question.
+	LearningsChars int            `json:"learnings_chars"`
+	SopMDChars     int            `json:"sop_md_chars"`
+	CapChars       int            `json:"cap_chars"`
+	TypeKey        string         `json:"type_key"`
+	DisplayName    string         `json:"display_name"`
+	Purpose        string         `json:"purpose"`
+	Fields         []ManualField  `json:"fields"`
+	SopMD          string         `json:"sop_md"`
+	Learnings      string         `json:"learnings"`
+	Assignee       map[string]any `json:"assignee"`
+	UpdatedTS      float64        `json:"updated_ts"`
 }
 
 type taskManualDeleteResultDTO struct {
@@ -1163,7 +1189,7 @@ func newTaskListItemDTO(t Task, deps []string, done, total, artifactCount int) t
 
 // newTaskManualDTO projects one manual row onto the wire (stored JSON blobs
 // parsed; a corrupt blob is an error, never a silent empty).
-func newTaskManualDTO(m TaskManual) (taskManualDTO, error) {
+func newTaskManualDTO(m TaskManual, capChars int) (taskManualDTO, error) {
 	fields, err := ParseManualFields(m.Fields)
 	if err != nil {
 		return taskManualDTO{}, err
@@ -1179,14 +1205,17 @@ func newTaskManualDTO(m TaskManual) (taskManualDTO, error) {
 		}
 	}
 	return taskManualDTO{
-		TypeKey:     m.TypeKey,
-		DisplayName: m.DisplayName,
-		Purpose:     m.Purpose,
-		Fields:      fields,
-		SopMD:       m.SopMD,
-		Learnings:   m.Learnings,
-		Assignee:    assignee,
-		UpdatedTS:   m.UpdatedTS,
+		LearningsChars: utf8.RuneCountInString(m.Learnings),
+		SopMDChars:     utf8.RuneCountInString(m.SopMD),
+		CapChars:       capChars,
+		TypeKey:        m.TypeKey,
+		DisplayName:    m.DisplayName,
+		Purpose:        m.Purpose,
+		Fields:         fields,
+		SopMD:          m.SopMD,
+		Learnings:      m.Learnings,
+		Assignee:       assignee,
+		UpdatedTS:      m.UpdatedTS,
 	}, nil
 }
 
@@ -1197,14 +1226,22 @@ func newTaskManualDTO(m TaskManual) (taskManualDTO, error) {
 // fields an empty list, assignee an empty object. It never parses the stored
 // fields/assignee JSON, so unlike newTaskManualDTO it cannot fail on a corrupt
 // blob (the light path deliberately does not touch those columns).
-func newTaskManualListItemDTO(m TaskManual) taskManualDTO {
+func newTaskManualListItemDTO(m TaskManual, capChars int) taskManualDTO {
+	// The sizes are measured on the STORED row, not on the blanked-out wire
+	// fields: this projection omits the bulky text but must not therefore
+	// report it as 0 chars — a zero that looks like a measurement is worse
+	// than the omission it describes. Sizes without the bulk is exactly what
+	// a list view wants.
 	return taskManualDTO{
-		TypeKey:     m.TypeKey,
-		DisplayName: m.DisplayName,
-		Purpose:     m.Purpose,
-		Fields:      []ManualField{},
-		Assignee:    map[string]any{},
-		UpdatedTS:   m.UpdatedTS,
+		LearningsChars: utf8.RuneCountInString(m.Learnings),
+		SopMDChars:     utf8.RuneCountInString(m.SopMD),
+		CapChars:       capChars,
+		TypeKey:        m.TypeKey,
+		DisplayName:    m.DisplayName,
+		Purpose:        m.Purpose,
+		Fields:         []ManualField{},
+		Assignee:       map[string]any{},
+		UpdatedTS:      m.UpdatedTS,
 	}
 }
 

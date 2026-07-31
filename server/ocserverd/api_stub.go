@@ -60,6 +60,10 @@ type apiServer struct {
 	// workers (DB task.outsource_max_parallel; M3 owner ruling ③) — read by
 	// the Phase 2 assignment scheduler.
 	outsourceMaxParallel int
+	// docCapChars is the live size cap on the accumulating context documents
+	// (DB doc.cap_chars; T-3aeb owner ruling 2026-07-31) — read by every
+	// DocCapBlocked call site through docCap().
+	docCapChars int
 	// updaterReceiveBeta picks which GitHub releases the update check follows
 	// (false = official only, true = prereleases too); updaterAutoUpdate arms
 	// the background self-upgrade cadence (auto_update.go). Both default OFF
@@ -323,6 +327,16 @@ func (s *apiServer) outsourceParallelCap() int {
 	s.settingsMu.RLock()
 	defer s.settingsMu.RUnlock()
 	return s.outsourceMaxParallel
+}
+
+// docCap returns the live cap, in runes, on the accumulating context documents
+// (T-3aeb). Every DocCapBlocked / docCapRefusal call site reads it HERE, at
+// request time, rather than caching it: a PATCH to the setting takes effect on
+// the next write with no restart, and there is no second copy to drift.
+func (s *apiServer) docCap() int {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.docCapChars
 }
 
 // orgNameSnapshot returns the live studio display name (org.name; T-d693).

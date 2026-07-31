@@ -4,7 +4,7 @@ package main
 // be reachable with no test at all, and three of them (corrupt row, foreign
 // revision id, over-cap restore) fail in a direction that LOOKS like success:
 // an empty list, a restore of the wrong document, or a document written past
-// the 10,000-character cap the write faces refuse to cross.
+// the character cap (10,000 by default; a setting since T-3aeb) the write faces refuse to cross.
 
 import (
 	"encoding/json"
@@ -86,7 +86,7 @@ func TestRestoreDocumentHistoryRefusesARevisionOfAnotherDocument(t *testing.T) {
 // of them (learnings and sop_md) behind a single check, so a case that only
 // exercised one would leave the other free to revive an over-cap document.
 func TestRestoreDocumentHistoryRefusesToReviveAnOverCapRevision(t *testing.T) {
-	oversized := strings.Repeat("x", contextDocMaxChars+50)
+	oversized := strings.Repeat("x", contextDocMaxCharsDefault+50)
 	const role, taskType = seedRoleAssistant, "tm-cap"
 
 	for _, doc := range []struct {

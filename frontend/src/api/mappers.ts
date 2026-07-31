@@ -793,6 +793,9 @@ export function toServerSettings(w: WireServerSettings): ServerSettingsView {
     codexCompactionThreshold: w.codex_compaction_threshold ?? 3,
     monitoringRefreshSeconds: w.monitoring_refresh_seconds ?? 5,
     outsourceMaxParallel: w.outsource_max_parallel ?? 0,
+    // ?? the shipped default, not 0: a server too old to send the field still
+    // caps at 10000, and a 0 here would read as "no cap" to every caller.
+    docCapChars: w.doc_cap_chars ?? 10000,
     // The two software-update toggles (schema-optional for DTO-compat; the
     // Go wire always emits both — `?? false` only fires against an older
     // server, where OFF is exactly the honest reading).

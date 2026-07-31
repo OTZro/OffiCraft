@@ -954,13 +954,18 @@ HAPPY: dict[str, Happy] = {
     "POST /api/lessons/{role_key}/{task_type}/patch": Happy(
         # Anchor-addressed patch (T-8327): an APPEND edit (empty old) always
         # lands regardless of the doc's current content; the receipt carries
-        # size/sha256 verification anchors instead of the full text.
+        # size_chars/cap_chars/sha256 verification anchors instead of the full
+        # text. T-3aeb renamed `size` -> `size_chars` (a size field must carry
+        # its unit) and added the cap the write was judged against, so a caller
+        # can compute its remaining budget without a second request.
         path="/api/lessons/assistant/general/patch",
         body={"edits": [{"old": "", "new": "conformance happy patch line"}]},
         check=lambda _c, r: _expect(
             r,
             lambda d: d["applied_edits"] == 1
-            and d["size"] > 0
+            and d["size_chars"] > 0
+            and d["cap_chars"] >= d["size_chars"]
+            and "size" not in d
             and len(d["sha256"]) == 64
             and d["is_default"] is False,
         ),

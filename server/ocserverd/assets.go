@@ -42,6 +42,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // The staged seed files (see the module comment). `all:` tolerates the
@@ -219,6 +220,8 @@ func (s *apiServer) foldLessonsDTO(roleKey, taskType string) (*lessonsDTO, error
 	}
 	text, isDefault := FoldLessons(overlay, seedText)
 	return &lessonsDTO{
+		SizeChars:     utf8.RuneCountInString(text),
+		CapChars:      s.docCap(),
 		RoleKey:       roleKey,
 		TaskType:      taskType,
 		Text:          text,

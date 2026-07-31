@@ -581,22 +581,37 @@ func LessonsShrinkBlocked(before, after string) bool {
 
 // ── context docs: the hard size cap (T-3351) ─────────────────────────────────
 
-// contextDocMaxChars is the HARD CAP, in UTF-8 CHARACTERS (runes), on the
-// accumulating context documents an agent writes back: a role's lessons doc
-// and a task manual's learnings / sop_md. Owner ruling (2026-07-27), stated in
-// two sentences: "an update must not push the doc past this size", and
-// "whatever is already over it we do NOT truncate — but its next update may
-// only make it smaller".
+// contextDocMaxCharsDefault is the SHIPPED DEFAULT of the cap, in UTF-8
+// CHARACTERS (runes), on the accumulating context documents an agent writes
+// back: a role's lessons doc and a task manual's learnings / sop_md. Owner
+// ruling (2026-07-27), stated in two sentences: "an update must not push the
+// doc past this size", and "whatever is already over it we do NOT truncate —
+// but its next update may only make it smaller".
 //
 // RUNES, not bytes, deliberately — the same unit as chatBodyMaxChars
 // (utf8.RuneCountInString). The distribution the owner picked 10,000 from was
 // measured with SQLite length(), which counts CHARACTERS; these docs are
 // largely Chinese prose at ~2.2–3 bytes per character, so capping len() at
 // 10,000 would have been a ~4,000-character cap — more than twice as strict as
-// the number the owner actually signed off on. (Note: the patch receipts'
-// `size` field stays len() = BYTES; that is a frozen wire field and is NOT the
-// unit this gate speaks. The refusal message always says "chars".)
-const contextDocMaxChars = 10000
+// the number the owner actually signed off on.
+//
+// T-3aeb (owner 2026-07-31): the number is no longer a constant the code owns
+// — it is the `doc.cap_chars` setting, adjustable at runtime, and this is only
+// its default. The EFFECTIVE cap always arrives as a parameter, so there is no
+// second copy for a caller to read by accident. The floor of the adjustable
+// range equals this default, so the cap can only ever be RAISED: lowering it
+// would turn documents that are legal today into shrink-only ones.
+//
+// The patch receipts' `size` field speaks THIS unit too, since T-3aeb — it
+// counted bytes until the owner ruled that one subject may not have two units.
+const contextDocMaxCharsDefault = 10000
+
+// minDocCapChars / maxDocCapChars bound the adjustable cap. The floor is the
+// default by design (see above), not a coincidence to be "tidied up".
+const (
+	minDocCapChars = contextDocMaxCharsDefault
+	maxDocCapChars = 100000
+)
 
 // DocCapBlocked reports whether replacing before with after must be refused by
 // the hard cap. The three-line rule, boundaries included:
@@ -617,9 +632,9 @@ const contextDocMaxChars = 10000
 // seed for lessons; the stored column for a manual) — the same `before` the
 // shrink guard uses, so the two guards can never disagree about what "the
 // current doc" is.
-func DocCapBlocked(before, after string) bool {
+func DocCapBlocked(cap int, before, after string) bool {
 	n := utf8.RuneCountInString(after)
-	if n <= contextDocMaxChars {
+	if n <= cap {
 		return false
 	}
 	return n >= utf8.RuneCountInString(before)
@@ -634,7 +649,7 @@ func DocCapBlocked(before, after string) bool {
 // It deliberately advertises NO bypass. There is none: allow_shrink governs the
 // opposite failure (shrinking too far) and does not open this gate. Naming a
 // flag here would teach agents to route around a cap the owner set on purpose.
-func docCapRefusal(docName, before, after string) string {
+func docCapRefusal(cap int, docName, before, after string) string {
 	return fmt.Sprintf(
 		"the %s you are writing is %d chars, over the %d-char cap, and is not shorter "+
 			"than the %d chars already stored — nothing was written. What is already "+
@@ -642,7 +657,7 @@ func docCapRefusal(docName, before, after string) string {
 			"or at least come out SHORTER than what is there now. Drop stale or "+
 			"superseded material as part of this write (or in a shrinking write first), "+
 			"then write again.",
-		docName, utf8.RuneCountInString(after), contextDocMaxChars,
+		docName, utf8.RuneCountInString(after), cap,
 		utf8.RuneCountInString(before))
 }
 

@@ -14,7 +14,7 @@ import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
 import { SettingsPage } from "./SettingsPage";
 import { __resetMock, mockApi } from "../api/mock";
-import { DOC_CAP_CHARS } from "../api/docCap";
+import { DOC_CAP_CHARS_DEFAULT } from "../api/docCap";
 
 const s = zh.settings;
 
@@ -161,11 +161,49 @@ describe("SettingsPage · 版本紀錄", () => {
     restore.mockRestore();
   });
 
+  it("follows the owner's raised cap instead of the shipped default", async () => {
+    // T-3aeb: the cap is a SETTING. A revision that is over the DEFAULT but
+    // under the owner's raised cap is one the server would ACCEPT, so marking
+    // it un-restorable would be the cockpit lying — and it is the direction
+    // that matters, because the cap can only ever be raised.
+    const overDefault = "字".repeat(DOC_CAP_CHARS_DEFAULT + 100);
+    await mockApi.patchServerSettings({ docCapChars: 50000 });
+    await mockApi.saveLessons("assistant", "general", "原始經驗");
+    await mockApi.saveLessons("assistant", "general", overDefault);
+    await mockApi.saveLessons("assistant", "general", "短");
+
+    const utils = render(
+      <I18nProvider>
+        <SettingsPage />
+      </I18nProvider>
+    );
+    fireEvent.click(utils.getByText(s.roles));
+    fireEvent.click(await utils.findByText(zh.office.role.assistant));
+
+    const [target] = await mockApi.listDocumentHistory(
+      "lessons",
+      "assistant::general"
+    );
+    expect(target.content.text).toBe(overDefault);
+
+    const row = await utils.findByTestId(`doc-history-item-${target.id}`);
+    // Not marked, and the control is LIVE — the server would take this restore.
+    await waitFor(() => {
+      expect(
+        (utils.getByTestId(
+          `doc-history-restore-${target.id}`
+        ) as HTMLButtonElement).disabled
+      ).toBe(false);
+    });
+    expect(within(row).queryByText(s.historyBlockedBadge)).toBeNull();
+    expect(utils.queryByTestId(`doc-history-blocked-${target.id}`)).toBeNull();
+  });
+
   it("marks an over-cap revision un-restorable up front, with the reason", async () => {
     // The revision the server WOULD refuse with a 400: a lessons doc that is
     // over the cap and not shrinking. Before this, the owner only found out by
     // clicking — which reads as a broken system rather than a stated limit.
-    const overCap = "字".repeat(DOC_CAP_CHARS + 1);
+    const overCap = "字".repeat(DOC_CAP_CHARS_DEFAULT + 1);
     // The doc's first write retains nothing, so the over-cap text has to be the
     // SECOND one for it to become a retained revision at all.
     await mockApi.saveLessons("assistant", "general", "原始經驗");
@@ -193,7 +231,7 @@ describe("SettingsPage · 版本紀錄", () => {
     // The reason is IN the row, and names the field and the cap.
     const reason = utils.getByTestId(`doc-history-blocked-${target.id}`);
     expect(reason.textContent).toContain(s.historyField.text);
-    expect(reason.textContent).toContain(String(DOC_CAP_CHARS));
+    expect(reason.textContent).toContain(String(DOC_CAP_CHARS_DEFAULT));
     // …and the control is dead, so the 400 can never be reached from here.
     expect(
       (utils.getByTestId(`doc-history-restore-${target.id}`) as HTMLButtonElement)

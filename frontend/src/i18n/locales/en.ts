@@ -1143,6 +1143,10 @@ export const en: Dict = {
     monitoringRefresh: "Monitoring refresh interval",
     monitoringRefreshSub: "Minimum seconds between monitoring refreshes (1–60)",
     seconds: "seconds",
+    docCap: "Document size cap",
+    docCapSub:
+      "Per-document limit on lessons and task-manual learnings/SOP (10000–100000). The floor is the shipped default, so this can only be raised — lowering it would leave documents that are legal today able to shrink only.",
+    chars: "characters",
     // ── Verified-save read-back (T-1c2e; lives in the software-update view
     // after the rework: secrets show only set/unset, never the plaintext, and
     // the auto-update switch verifies a save by reading the value back) ──

@@ -95,6 +95,18 @@
             "description": "Codex context-compaction threshold, 1 through 10.",
             "title": "Codex Compaction Threshold"
           },
+          "doc_cap_chars": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The size cap on the accumulating context documents (lessons, task-manual learnings and sop_md), in CHARACTERS (Unicode code points). Must be 10000 through 100000.",
+            "title": "Doc Cap Chars"
+          },
           "custom_themes": {
             "anyOf": [
               {

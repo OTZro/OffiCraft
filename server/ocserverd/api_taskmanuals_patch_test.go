@@ -25,6 +25,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // patchLearnings drives the handler directly (like writeLearnings) and returns
@@ -67,8 +68,8 @@ func TestPatchTaskLearningsUniqueAnchorReplace(t *testing.T) {
 	if got, _ := data["sha256"].(string); got != hex.EncodeToString(sum[:]) {
 		t.Fatalf("sha256 anchor mismatch: %v", data["sha256"])
 	}
-	if got, _ := data["size"].(float64); int(got) != len(want) {
-		t.Fatalf("size anchor mismatch: got %v want %d", data["size"], len(want))
+	if got, _ := data["size_chars"].(float64); int(got) != utf8.RuneCountInString(want) {
+		t.Fatalf("size_chars anchor mismatch: got %v want %d", data["size_chars"], utf8.RuneCountInString(want))
 	}
 	if got, _ := data["applied_edits"].(float64); int(got) != 1 {
 		t.Fatalf("applied_edits mismatch: %v", data["applied_edits"])

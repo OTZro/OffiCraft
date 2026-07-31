@@ -565,6 +565,7 @@ function ServerParams({
   const [handoverDraft, setHandoverDraft] = useState<string | null>(null);
   const [codexHandoverDraft, setCodexHandoverDraft] = useState<string | null>(null);
   const [monitoringRefreshDraft, setMonitoringRefreshDraft] = useState<string | null>(null);
+  const [docCapDraft, setDocCapDraft] = useState<string | null>(null);
   const [rangeError, setRangeError] = useState(false);
 
   const ttlLabel: Record<number, string> = {
@@ -605,6 +606,16 @@ function ServerParams({
     if (!Number.isInteger(n) || n < 1 || n > 60) { setRangeError(true); setMonitoringRefreshDraft(null); return; }
     setMonitoringRefreshDraft(null);
     if (n !== settings.monitoringRefreshSeconds) void onSave({ monitoringRefreshSeconds: n });
+  }
+
+  // The floor is the shipped default, so this knob only raises the cap (owner
+  // 2026-07-31) — the local guard mirrors the server's 422 range exactly.
+  function commitDocCap() {
+    if (!settings || docCapDraft === null) return;
+    const n = Number(docCapDraft);
+    if (!Number.isInteger(n) || n < 10000 || n > 100000) { setRangeError(true); setDocCapDraft(null); return; }
+    setDocCapDraft(null);
+    if (n !== settings.docCapChars) void onSave({ docCapChars: n });
   }
 
   return (
@@ -708,6 +719,21 @@ function ServerParams({
                 onChange={(e) => { setRangeError(false); onClearSaveError(); setMonitoringRefreshDraft(e.target.value); }}
                 onBlur={commitMonitoringRefresh} onKeyDown={(e) => { if (e.key === "Enter") commitMonitoringRefresh(); }} />
               <span className="param-pct__sign">{t.settings.seconds}</span>
+            </div>
+          </div>
+
+          <div className="param-row">
+            <div className="param-row__body">
+              <div className="param-row__name">{t.settings.docCap}</div>
+              <div className="param-row__sub">{t.settings.docCapSub}</div>
+            </div>
+            <div className="param-pct">
+              <input id="param-doc-cap" className="param-input" type="number" min={10000} max={100000}
+                aria-label={t.settings.docCap}
+                value={docCapDraft ?? String(settings.docCapChars)}
+                onChange={(e) => { setRangeError(false); onClearSaveError(); setDocCapDraft(e.target.value); }}
+                onBlur={commitDocCap} onKeyDown={(e) => { if (e.key === "Enter") commitDocCap(); }} />
+              <span className="param-pct__sign">{t.settings.chars}</span>
             </div>
           </div>
 

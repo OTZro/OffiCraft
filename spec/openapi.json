@@ -1217,6 +1217,18 @@
       "LessonsDTO": {
         "description": "The folded per-role lessons doc (§3.4 #27). ``role_key`` scopes the doc to a\nrole (per-role-learnings step1); ``task_type`` is the single fixed key (§9.7).\n``is_default`` = seed-vs-edited.",
         "properties": {
+          "cap_chars": {
+            "default": 0,
+            "description": "The document size cap now in force, in CHARACTERS (the doc_cap_chars setting). Served on the READ face so an agent can size an edit BEFORE writing it — the alternative is discovering the limit by being refused, and the settings surface is admin-only.",
+            "title": "Cap Chars",
+            "type": "integer"
+          },
+          "size_chars": {
+            "default": 0,
+            "description": "Size of `text` in CHARACTERS (Unicode code points) — the same unit as cap_chars.",
+            "title": "Size Chars",
+            "type": "integer"
+          },
           "is_default": {
             "default": true,
             "title": "Is Default",
@@ -1294,7 +1306,7 @@
         "type": "object"
       },
       "LessonsPatchResultDTO": {
-        "description": "Receipt of a lessons PATCH (§3.4 #28b). ``size`` (UTF-8 bytes) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING doc text, so the caller can confirm the write landed without re-reading the full doc.",
+        "description": "Receipt of a lessons PATCH (§3.4 #28b). ``size`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc_cap_chars`` cap the write is judged against) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING doc text, so the caller can confirm the write landed without re-reading the full doc. ``size`` counted UTF-8 BYTES until 2026-07-31, when the owner ruled the receipt must speak the cap's unit.",
         "properties": {
           "applied_edits": {
             "default": 0,
@@ -1326,9 +1338,16 @@
             "title": "Sha256",
             "type": "string"
           },
-          "size": {
+          "cap_chars": {
             "default": 0,
-            "title": "Size",
+            "description": "The document size cap in force when this write was judged, in CHARACTERS (the doc_cap_chars setting). Returned so a caller can see its remaining budget without a second request — the cap is adjustable and agents cannot read the settings surface.",
+            "title": "Cap Chars",
+            "type": "integer"
+          },
+          "size_chars": {
+            "default": 0,
+            "description": "Size of the RESULTING document in CHARACTERS (Unicode code points) — the same unit as cap_chars. Named `size` until 2026-07-31, when the owner ruled a size field must carry its unit in its name.",
+            "title": "Size Chars",
             "type": "integer"
           },
           "task_type": {
@@ -3840,7 +3859,7 @@
         "type": "object"
       },
       "SettingsDTO": {
-        "description": "The org-adjustable settings surface (`GET /api/settings`; owner or admin agent since T-6020). `token_ttl` —\nthe owner-login JWT lifetime (seconds). `handover_pct` — the context\nhandover threshold. `outsource_max_parallel` — the global cap on\nconcurrently live outsource workers (-1 = unlimited, 0 pauses assignment).\n`updater_receive_beta` — whether the GitHub-release update check also\nadmits prereleases (default false: official releases only).\n`updater_auto_update` — arms unattended background self-upgrade to the\nnewest admissible GitHub release (default false: upgrading stays an\nexplicit owner action). `org_name` — the studio display name (\"\" = unset).\n`owner_name` — the owner's display nickname (\"\" = unset). `display_theme` /\n`display_language` — the owner's cockpit visual prefs (\"\" = unset).\n`display_wide` — whether the cockpit uses the wide layout (default false =\nthe narrow centred column).",
+        "description": "The org-adjustable settings surface (`GET /api/settings`; owner or admin agent since T-6020). `token_ttl` —\nthe owner-login JWT lifetime (seconds). `handover_pct` — the context\nhandover threshold. `outsource_max_parallel` — the global cap on\nconcurrently live outsource workers (-1 = unlimited, 0 pauses assignment).\n`updater_receive_beta` — whether the GitHub-release update check also\nadmits prereleases (default false: official releases only).\n`updater_auto_update` — arms unattended background self-upgrade to the\nnewest admissible GitHub release (default false: upgrading stays an\nexplicit owner action). `org_name` — the studio display name (\"\" = unset).\n`owner_name` — the owner's display nickname (\"\" = unset). `display_theme` /\n`display_language` — the owner's cockpit visual prefs (\"\" = unset).\n`display_wide` — whether the cockpit uses the wide layout (default false =\nthe narrow centred column). `doc_cap_chars` — the size cap on the\naccumulating context documents (a role's lessons doc; a task manual's\nlearnings and sop_md), in CHARACTERS (Unicode code points), default 10000.",
         "properties": {
           "codex_compaction_threshold": {
             "default": 3,
@@ -3874,6 +3893,12 @@
             },
             "title": "Custom Themes",
             "type": "array"
+          },
+          "doc_cap_chars": {
+            "default": 10000,
+            "description": "The size cap on the accumulating context documents (a role's lessons doc; a task manual's learnings and sop_md), in CHARACTERS (Unicode code points — Chinese prose counts one per character), 10000 through 100000. An update may not push a doc past it; whatever is already over it is never truncated, but its next update may only come out shorter.",
+            "title": "Doc Cap Chars",
+            "type": "integer"
           },
           "handover_pct": {
             "title": "Handover Pct",
@@ -3943,7 +3968,7 @@
         "type": "object"
       },
       "SettingsUpdateDTO": {
-        "description": "Partial settings edit (`PATCH /api/settings`) — only supplied fields change,\neffective immediately (no restart). `token_ttl` MUST be one of 43200 / 86400 /\n604800 / 2592000 seconds (12h / 24h / 7d / 30d — a whitelist, so a stray 0 can\nnever lock every future login out); `handover_pct` MUST be 40..90 (the warn\nband sits at 40 — a handover threshold below it would fire before the\nwarning). Anything else is a 422. `outsource_max_parallel` MUST be -1..20 (-1 = 無限/unlimited — no global cap; 0 pauses outsource assignment).\n`updater_receive_beta` toggles whether the GitHub-release update check also\nadmits prereleases; `updater_auto_update` toggles unattended background\nself-upgrade to the newest admissible release (both booleans, default false;\nthe manual upgrade endpoint is unaffected).",
+        "description": "Partial settings edit (`PATCH /api/settings`) — only supplied fields change,\neffective immediately (no restart). `token_ttl` MUST be one of 43200 / 86400 /\n604800 / 2592000 seconds (12h / 24h / 7d / 30d — a whitelist, so a stray 0 can\nnever lock every future login out); `handover_pct` MUST be 40..90 (the warn\nband sits at 40 — a handover threshold below it would fire before the\nwarning). Anything else is a 422. `outsource_max_parallel` MUST be -1..20 (-1 = 無限/unlimited — no global cap; 0 pauses outsource assignment).\n`updater_receive_beta` toggles whether the GitHub-release update check also\nadmits prereleases; `updater_auto_update` toggles unattended background\nself-upgrade to the newest admissible release (both booleans, default false;\nthe manual upgrade endpoint is unaffected). `doc_cap_chars` MUST be\n10000..100000 — the floor equals the shipped default, so the context-document\ncap can only ever be RAISED (owner ruling 2026-07-31): lowering it would turn\ndocuments that are legal today into shrink-only ones.",
         "properties": {
           "codex_compaction_threshold": {
             "anyOf": [
@@ -3952,6 +3977,14 @@
             ],
             "description": "Codex context-compaction threshold, 1 through 10.",
             "title": "Codex Compaction Threshold"
+          },
+          "doc_cap_chars": {
+            "anyOf": [
+              {"type": "integer"},
+              {"type": "null"}
+            ],
+            "description": "The size cap on the accumulating context documents (lessons, task-manual learnings and sop_md), in CHARACTERS (Unicode code points). Must be 10000 through 100000.",
+            "title": "Doc Cap Chars"
           },
           "display_language": {
             "anyOf": [
@@ -4655,7 +4688,7 @@
         "type": "object"
       },
       "TaskLearningsPatchResultDTO": {
-        "description": "Receipt of a task-learnings PATCH (MCP ``patch_task_learnings``). ``size`` (UTF-8 bytes) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING learnings text, so the caller can confirm the write landed without re-reading the full doc. ``applied_edits`` is the number of edits that ACTUALLY changed the doc (a no-op append/replace does not count), so \"0 applied\" is expressible and a silent no-op cannot masquerade as success.",
+        "description": "Receipt of a task-learnings PATCH (MCP ``patch_task_learnings``). ``size`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc_cap_chars`` cap the write is judged against; it counted UTF-8 BYTES until 2026-07-31, when the owner ruled the receipt must speak the cap's unit) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING learnings text, so the caller can confirm the write landed without re-reading the full doc. ``applied_edits`` is the number of edits that ACTUALLY changed the doc (a no-op append/replace does not count), so \"0 applied\" is expressible and a silent no-op cannot masquerade as success.",
         "properties": {
           "applied_edits": {
             "default": 0,
@@ -4667,9 +4700,16 @@
             "title": "Sha256",
             "type": "string"
           },
-          "size": {
+          "cap_chars": {
             "default": 0,
-            "title": "Size",
+            "description": "The document size cap in force when this write was judged, in CHARACTERS (the doc_cap_chars setting). Returned so a caller can see its remaining budget without a second request — the cap is adjustable and agents cannot read the settings surface.",
+            "title": "Cap Chars",
+            "type": "integer"
+          },
+          "size_chars": {
+            "default": 0,
+            "description": "Size of the RESULTING document in CHARACTERS (Unicode code points) — the same unit as cap_chars. Named `size` until 2026-07-31, when the owner ruled a size field must carry its unit in its name.",
+            "title": "Size Chars",
             "type": "integer"
           },
           "type_key": {
@@ -4883,6 +4923,24 @@
       "TaskManualDTO": {
         "description": "One task manual (任務手冊 — a task type / playbook): purpose (Q1), input fields (Q2; is_key fields form the dedupe identity key), the SOP markdown (Q3 — the plan blueprint), the accumulated learnings, and the type's executor assignee setting ({} = unset). An outsource assignee is {\"kind\":\"outsource\",\"runtime\":\"claude|codex\",\"model\":…,\"effort\":…,\"copies\":N,\"machine\":…}; absent runtime means claude. `copies` is the per-type parallel-worker cap — an integer >= 1, or 0 = 無限 (UNLIMITED: no per-type cap; the global outsource_max_parallel still applies); `machine` is the machine the type's workers boot on — a machine id that must resolve to a real machine; absent means the type names none. A machine that is offline or lacks the selected runtime at spawn time is NOT substituted: nothing is dispatched and the worker row carries the reason (last_op_reason).",
         "properties": {
+          "cap_chars": {
+            "default": 0,
+            "description": "The document size cap now in force, in CHARACTERS (the doc_cap_chars setting). Served on the READ face so an agent can size an edit BEFORE writing it.",
+            "title": "Cap Chars",
+            "type": "integer"
+          },
+          "learnings_chars": {
+            "default": 0,
+            "description": "Size of `learnings` in CHARACTERS. Reported PER CAPPED DOCUMENT rather than as one total, because the cap applies to each of learnings and sop_md separately. Carried on the light ?view=list projection too, where the bulky text itself is omitted but its size is not.",
+            "title": "Learnings Chars",
+            "type": "integer"
+          },
+          "sop_md_chars": {
+            "default": 0,
+            "description": "Size of `sop_md` in CHARACTERS. See learnings_chars.",
+            "title": "Sop Md Chars",
+            "type": "integer"
+          },
           "assignee": {
             "additionalProperties": true,
             "title": "Assignee",

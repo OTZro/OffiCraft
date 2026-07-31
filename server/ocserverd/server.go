@@ -352,6 +352,7 @@ func newAPIServer(dal *DAL, hub *Hub, secret []byte, tokenTTL int64, root assetR
 		secret:                secret,
 		tokenTTL:              tokenTTL,
 		outsourceMaxParallel:  defaultOutsourceMaxParallel,
+		docCapChars:           contextDocMaxCharsDefault,
 		ctxhigh:               defaultSseContextHigh(),
 		root:                  root,
 		binHashes:             bindistBinaryHashesFrom(bindistFS()),
@@ -481,6 +482,7 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 	api.codexCompactionThreshold = auth.codexCompactionThreshold
 	api.monitoringRefreshSeconds = auth.monitoringRefreshSeconds
 	api.outsourceMaxParallel = auth.outsourceMaxParallel
+	api.docCapChars = auth.docCapChars
 	api.updaterReceiveBeta = auth.updaterReceiveBeta
 	api.updaterAutoUpdate = auth.updaterAutoUpdate
 	// $OC_RELEASE_API_BASE is a HARNESS seam (conformance/e2e): it re-points
