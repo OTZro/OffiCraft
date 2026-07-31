@@ -1890,7 +1890,14 @@ export const mockApi: Api = {
       if (opts?.open && TERMINAL_TASK_STATUSES.has(t.status)) return false;
       if (wanted.size === 0) return true;
       if (wanted.has(t.status)) return true;
-      return wanted.has("reassigning") && t.lock === "reassigning";
+      // The lock counts only while the task is OPEN — terminate never clears it
+      // (T-a3e4). Same rule as the server's taskStatusSetMatch and TasksPage's
+      // matchesStatus; all three are deliberately identical.
+      return (
+        wanted.has("reassigning") &&
+        t.lock === "reassigning" &&
+        !TERMINAL_TASK_STATUSES.has(t.status)
+      );
     });
     // dep_tasks (T-a3e4): resolved against the WHOLE mock population, like the
     // server's single-query join — so a filtered list still names a dep the

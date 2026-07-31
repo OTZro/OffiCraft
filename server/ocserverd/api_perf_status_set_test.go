@@ -142,6 +142,69 @@ func TestTasksStatusSetMatchesTheReassigningLock(t *testing.T) {
 	}
 }
 
+func TestTasksStatusSetIgnoresAResidualLockOnAClosedTask(t *testing.T) {
+	// 🔴 Found by review, not by me. `closeTask` never clears `t.Lock` and the
+	// terminate guard only reads the STATUS, so "reassign, then change your mind
+	// and terminate" leaves `status=terminated, lock=reassigning` in the DB
+	// permanently. The 狀態 dropdown ticks 轉派中 BY DEFAULT ⇒ without the
+	// terminal guard in taskStatusSetMatch, a default view the owner never
+	// touched surfaces a CLOSED task — and one the old ?open=true path could not
+	// have returned, so it is also a divergence from the behaviour being replaced.
+	//
+	// The parity assertion below is the point: the default set and ?open=true must
+	// AGREE about this row. Asserting only "not returned" would still pass if the
+	// set filter had gone wrong in some other direction.
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub()}
+	mk := func(id, status, lock string, closed float64) {
+		if err := s.dal.PutTask(Task{
+			ID: id, Title: id, Status: status, Lock: lock,
+			Priority: TaskPriorityMid, ExecutorKind: TaskExecutorMember,
+			ExecutorID: "m-1", CreatedTS: 1000, UpdatedTS: 1000, ClosedTS: closed,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("t-residue", TaskStatusTerminated, TaskLockReassigning, 2000) // the residue
+	mk("t-live-handover", TaskStatusInProgress, TaskLockReassigning, 0)
+
+	// The DEFAULT cockpit ask: the five non-terminal states, 轉派中 included.
+	defaultSet := strsptr(TaskStatusNotStarted, TaskStatusInProgress,
+		TaskStatusWaitingOwner, TaskStatusWaitingExternal, TaskStatusReassigning)
+	got := idsOf(listTaskRows(t, s, HandleListTasksApiTasksGetParams{
+		Statuses: defaultSet,
+	}))
+	// MUTANT: drop `&& !TaskIsTerminal(t.Status)` from taskStatusSetMatch → red.
+	if got["t-residue"] {
+		t.Fatalf("a TERMINATED task with a residual handover lock must not read as "+
+			"轉派中 in the default view: %v", got)
+	}
+	// The other direction, in the same test: a real in-flight handover still shows.
+	if !got["t-live-handover"] {
+		t.Fatalf("a genuinely reassigning (open) task must still be returned: %v", got)
+	}
+
+	// Parity with the path this replaces — both must exclude the residue row.
+	open := idsOf(listTaskRows(t, s, HandleListTasksApiTasksGetParams{
+		Open: strptr("true"),
+	}))
+	if open["t-residue"] {
+		t.Fatalf("?open=true must not return the residue row either: %v", open)
+	}
+	if got["t-residue"] != open["t-residue"] {
+		t.Fatalf("default set and ?open=true disagree about the residue row: "+
+			"set=%v open=%v", got["t-residue"], open["t-residue"])
+	}
+
+	// Ticking 已終止 explicitly IS how you see it — the row is not unreachable,
+	// it is just not 轉派中.
+	byStatus := idsOf(listTaskRows(t, s, HandleListTasksApiTasksGetParams{
+		Statuses: strsptr(TaskStatusTerminated),
+	}))
+	if !byStatus["t-residue"] {
+		t.Fatalf("statuses=[terminated] must still return it: %v", byStatus)
+	}
+}
+
 func TestTasksStatusSetRejectsAnUnknownValueByName(t *testing.T) {
 	s := &apiServer{dal: newTestDAL(t), hub: NewHub()}
 	seedTasksMix(t, s)

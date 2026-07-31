@@ -832,11 +832,24 @@ func parseTaskStatusSet(raw *[]string) (set map[string]bool, badStatus string) {
 // page back to downloading the whole archive whenever it is ticked. The single
 // ?status= param is NOT widened this way (it 400s on `reassigning` and matches
 // the literal column only) — that is frozen wire a live client already sends.
+//
+// 🔴 The lock only counts while the task is still OPEN. `closeTask` never clears
+// `t.Lock` and the terminate guard only looks at the STATUS, so "reassign, then
+// change your mind and terminate" leaves `status=terminated, lock=reassigning`
+// behind for good. Without the terminal guard here, the DEFAULT view (which
+// ticks 轉派中) would surface that row — a closed task appearing in a live list
+// the owner never asked to widen, and one the old ?open=true path could not
+// return. A terminated task is not 「轉派中」: the lock is RESIDUE, not intent,
+// and the dropdown row it answers means "handovers in flight".
+// ⚠️ The residue itself (closeTask leaving the lock set) is a PRE-EXISTING bug
+// and deliberately NOT fixed here — that would change what terminate writes.
+// This function only refuses to read the residue as an intent.
 func taskStatusSetMatch(t Task, set map[string]bool) bool {
 	if set[t.Status] {
 		return true
 	}
-	return set[TaskStatusReassigning] && t.Lock == TaskLockReassigning
+	return set[TaskStatusReassigning] && t.Lock == TaskLockReassigning &&
+		!TaskIsTerminal(t.Status)
 }
 
 // GET /api/tasks/count — the tasks nav badge (non-terminal tasks) plus the

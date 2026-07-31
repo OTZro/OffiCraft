@@ -355,9 +355,17 @@ owner 原話三句:「tasks 也一次拿太多了 說真的我們在意的只有
   filter 排除的那張/`dep_tasks` 恆為陣列/worker 四欄含 fallback/count 的 open≠total),
   conformance `test_tasks.py` 的 `test_status_set_*` / `test_dep_tasks_*` / `test_task_count_*` /
   `test_outsource_worker_carries_*`。
-  ⚠️ **沒有覆蓋到的**:查詢**次數**。這個套件沒有 SQL round-trip 計數器,所以沒有任何測試會在
-  有人把 join 改寫成逐 dep `GetTask` 時變紅;釘住的是「被排除的 dep 也解得出來」這個性質
-  (逐列查找做不到),不是查詢數本身。
+  🔴 **沒有覆蓋到的:查詢次數,而且「替代品」實測是零鑑別力**(review 實測 M6,不是推論):
+  把 handler 的 join 改寫成**逐 dep `s.dal.GetTask(id)`**,整包 `go test` **一條都沒紅**。
+  所以上面那句「釘住『被排除的 dep 也解得出來』這個性質」**不能當成 N+1 的替代覆蓋**——
+  那條性質守的是「join 被整個拿掉」與「母體被縮小成只有回應那幾列」這兩件事,**不是查詢次數**;
+  逐 dep 查一樣答得出被排除的 dep,只是慢。要補的最小形狀:`DAL` 上一個**只給測試讀**的
+  `queryCount`,釘「一次 list 請求的 task 讀取次數**不隨 dep 數成長**」——**那是另一張票的工作**,
+  本批沒做。
+  ✅ 唯一真的有靜態保證的部分:`newTaskDepRefDTOs` 的簽章裡**既沒有 `*DAL` 也沒有 `*apiServer`**
+  (只收 `[]string` 與 `map[string]Task`),所以**那個函式**在編譯期就不可能查資料庫。
+  ⚠️ 但這個保證只涵蓋它自己——**handler 仍然可以用逐 dep 查詢去餵那張 map**,而那正是 M6 做的、
+  而且沒有任何測試會紅。別把函式的保證讀成端點的保證。
 
 ## 已知邊界(誠實列,別當成熟功能用)
 - **config 預設路徑是 CWD-relative `oc.toml`**(binary 沒有 source-path 可錨 repo root);部署正解走 `$OC_CONFIG`。

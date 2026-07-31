@@ -227,7 +227,17 @@ export function TasksPage() {
     if (statusFilter.has(task.status)) return true;
     // "reassigning" is an orthogonal LOCK, not a status (T-9ca5) — match it off
     // task.lock (a reassigned task still carries its honest derived status too).
-    if (statusFilter.has("reassigning") && task.lock === "reassigning") {
+    // 🔴 …but only while the task is OPEN, byte-for-byte the server's
+    // taskStatusSetMatch rule (T-a3e4): terminate never clears the lock, so a
+    // task terminated mid-handover keeps `lock="reassigning"` forever, and that
+    // residue is not an intent. The three copies of this rule (server, here,
+    // mock) must stay identical — a divergence means the list the server sent
+    // and the list this page shows disagree about the same row.
+    if (
+      statusFilter.has("reassigning") &&
+      task.lock === "reassigning" &&
+      !TERMINAL.has(task.status)
+    ) {
       return true;
     }
     return false;
