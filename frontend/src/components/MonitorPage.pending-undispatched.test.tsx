@@ -163,6 +163,20 @@ async function clickWake() {
   fireEvent.click(confirm);
 }
 
+/** Open 更改 and pick a machine the member is NOT on, so a relocate really fires.
+ * The dialog opens on the member's CURRENT machine (`mach-b` in this fixture),
+ * and a confirm that changes nothing dispatches nothing — accepting the defaults
+ * must never move an agent. */
+async function clickChangeAndPick(machineId: string) {
+  fireEvent.click(await screen.findByTestId("mp-change"));
+  const select = document.querySelector<HTMLSelectElement>(".machine-picker__select")!;
+  await waitFor(() => expect(select.options.length).toBeGreaterThan(1));
+  fireEvent.change(select, { target: { value: machineId } });
+  const confirm = document.querySelector<HTMLButtonElement>(".machine-picker__actions .btn--accent")!;
+  await waitFor(() => expect(confirm.disabled).toBe(false));
+  fireEvent.click(confirm);
+}
+
 describe("Monitor entry · undispatched activate (T-7fa1)", () => {
   it("shows the notice when activation_pending comes back true", async () => {
     activateMember.mockResolvedValue({ activationPending: true });
@@ -187,10 +201,7 @@ describe("Monitor entry · undispatched relocate (T-7fa1)", () => {
     detailDesiredMachineId = "";
     relocateMember.mockResolvedValue({ relocationPending: true });
     await openDetail();
-    fireEvent.click(await screen.findByTestId("mp-change"));
-    const confirm = document.querySelector<HTMLButtonElement>(".machine-picker__actions .btn--accent")!;
-    await waitFor(() => expect(confirm.disabled).toBe(false));
-    fireEvent.click(confirm);
+    await clickChangeAndPick("mach-a");
     await waitFor(() =>
       expect(screen.queryByTestId("mp-relocate-undispatched")).not.toBeNull(),
     );
@@ -200,10 +211,7 @@ describe("Monitor entry · undispatched relocate (T-7fa1)", () => {
     detailOnline = true;
     detailDesiredMachineId = "";
     await openDetail();
-    fireEvent.click(await screen.findByTestId("mp-change"));
-    const confirm = document.querySelector<HTMLButtonElement>(".machine-picker__actions .btn--accent")!;
-    await waitFor(() => expect(confirm.disabled).toBe(false));
-    fireEvent.click(confirm);
+    await clickChangeAndPick("mach-a");
     await waitFor(() => expect(relocateMember).toHaveBeenCalledTimes(1));
     expect(screen.queryByTestId("mp-relocate-undispatched")).toBeNull();
   });

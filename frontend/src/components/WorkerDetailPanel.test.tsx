@@ -905,6 +905,171 @@ describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {
     expect(relocate).not.toHaveBeenCalled();
   });
 
+  it("更改 on a SCHEDULER-PLACED worker (no pin) seeds the machine it is actually on, and confirming moves nothing", async () => {
+    // 🔴 The owner-found defect. A worker the scheduler placed has an EMPTY
+    // desired_machine_id, so the old seed fell through to `onlineMachines[0]` —
+    // a machine the worker has never been on — and the confirm relocated it.
+    // Two online machines are REQUIRED: with only one, "the first online" and
+    // "the machine it is on" are the same string and the defect passes.
+    __setMockMemberOnline("m-server-self", true); // sorts FIRST — the wrong answer
+    __setMockMemberOnline("warden-mbp5", true);
+    __injectMockTask(mkTask({ id: "t-1" }));
+    __injectMockOutsourceWorker(
+      mkWorker({
+        id: "ow-1",
+        taskId: "t-1",
+        presence: "online",
+        desiredState: "online",
+        runtime: "claude",
+        model: "Opus 4.6",
+        effort: "high",
+        desiredMachineId: "", // placed by the scheduler, never pinned by the owner
+        // The worker DTO's `machine` is a display LABEL, not an id.
+        machine: "Warden · mbp5",
+      }),
+    );
+    const relocate = vi.spyOn(api, "relocateWorker");
+    const setModel = vi.spyOn(api, "setWorkerModel");
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+    fireEvent.click(await findByTestId("worker-detail-change"));
+    const select = (await findByTestId(
+      "worker-detail-settings-machine",
+    )) as HTMLSelectElement;
+    await waitFor(() =>
+      expect(Array.from(select.options).map((o) => o.value)).toEqual([
+        "m-server-self",
+        "warden-mbp5",
+      ]),
+    );
+    // The four cells state what is TRUE NOW, machine included — and the machine
+    // is named, not merely "not empty": the value it must NOT hold is the string
+    // one line above it in the option list.
+    expect(select.value).toBe("warden-mbp5");
+    expect(
+      ((await findByTestId("me-runtime-select")) as HTMLSelectElement).value,
+    ).toBe("claude");
+    expect(
+      ((await findByTestId("me-model-input")) as HTMLInputElement).value,
+    ).toBe("Opus 4.6");
+    expect(
+      ((await findByTestId("me-effort-select")) as HTMLSelectElement).value,
+    ).toBe("high");
+
+    fireEvent.change((await findByTestId("me-model-input")) as HTMLInputElement, {
+      target: { value: "claude-opus-4-8" },
+    });
+    fireEvent.click(await findByTestId("worker-detail-settings-confirm"));
+    await waitFor(() =>
+      expect(setModel).toHaveBeenCalledWith(
+        "ow-1",
+        expect.objectContaining({ model: "claude-opus-4-8" }),
+      ),
+    );
+    // 🔴 The edit landed AND the worker did not move. `not.toHaveBeenCalled` is
+    // only meaningful because the positive control above proves the confirm ran.
+    expect(relocate).not.toHaveBeenCalled();
+  });
+
+  it("喚醒 on a STOPPED unpinned worker proposes NO machine, so the wake carries no relocate", async () => {
+    // 🔴 The half the observed-machine seed cannot cover. A stopped worker
+    // reports machine:"" — the observation dies with the session — and this is
+    // the live shape of the reported defect (O-103: stopped, desired_machine_id
+    // "", last on eva-m1, dialog offering the first online machine). The cockpit
+    // has no wire field for "the machine it last landed on", but the SERVER does
+    // and `restart` consults it, so the honest cockpit answer is to send no
+    // machine at all rather than name one it made up.
+    __setMockMemberOnline("m-server-self", true);
+    __setMockMemberOnline("warden-mbp5", true);
+    __injectMockTask(mkTask({ id: "t-1" }));
+    __injectMockOutsourceWorker(
+      mkWorker({
+        id: "ow-1",
+        taskId: "t-1",
+        presence: "stopped",
+        desiredState: "offline",
+        model: "Opus 4.6",
+        desiredMachineId: "",
+        machine: "",
+      }),
+    );
+    const relocate = vi.spyOn(api, "relocateWorker");
+    const restart = vi.spyOn(api, "restartWorker");
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+    fireEvent.click(await findByTestId("worker-detail-wake"));
+    const select = (await findByTestId(
+      "worker-detail-settings-machine",
+    )) as HTMLSelectElement;
+    // The registry HAS loaded — otherwise "no machine is proposed" would be true
+    // for the trivial reason that there was nothing to propose.
+    await waitFor(() =>
+      expect(Array.from(select.options).map((o) => o.value)).toEqual([
+        "", // 尚未分配 — the honest "nothing chosen" entry, see below
+        "m-server-self",
+        "warden-mbp5",
+      ]),
+    );
+    // 🔴 Read the DOM value, not the draft state: a controlled select whose value
+    // matches no option renders as its first option, so without the "" entry this
+    // would read "m-server-self" and the owner would be shown a machine the
+    // confirm never sends.
+    expect(select.value).toBe("");
+    expect(
+      Array.from(select.options).find((o) => o.value === "")!.textContent,
+    ).toBe(zh.workerDetail.notAssigned);
+
+    fireEvent.click(await findByTestId("worker-detail-settings-confirm"));
+    await waitFor(() => expect(restart).toHaveBeenCalledWith("ow-1"));
+    // 🔴 The wake went out and no placement rode with it — the server's own
+    // pin → last-landed → dispatch-preference chain decides where it comes back.
+    expect(relocate).not.toHaveBeenCalled();
+  });
+
+  it("更改 on a PINNED worker seeds the pin, even when it is running somewhere else", async () => {
+    // The other direction of the same rule: where a pin exists it is the
+    // configuration, and a drifted session (mid-relocate, or a stale placement)
+    // must not overwrite the owner's choice with the observation.
+    __setMockMemberOnline("m-server-self", true);
+    __setMockMemberOnline("warden-mbp5", true);
+    __injectMockTask(mkTask({ id: "t-1" }));
+    __injectMockOutsourceWorker(
+      mkWorker({
+        id: "ow-1",
+        taskId: "t-1",
+        presence: "online",
+        desiredState: "online",
+        model: "Opus 4.6",
+        desiredMachineId: "warden-mbp5",
+        machine: "伺服器這一台", // still running on the OLD machine
+      }),
+    );
+    const relocate = vi.spyOn(api, "relocateWorker");
+    const setModel = vi.spyOn(api, "setWorkerModel");
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+    fireEvent.click(await findByTestId("worker-detail-change"));
+    const select = (await findByTestId(
+      "worker-detail-settings-machine",
+    )) as HTMLSelectElement;
+    await waitFor(() =>
+      expect(Array.from(select.options).map((o) => o.value)).toContain(
+        "warden-mbp5",
+      ),
+    );
+    expect(select.value).toBe("warden-mbp5");
+    fireEvent.change((await findByTestId("me-model-input")) as HTMLInputElement, {
+      target: { value: "claude-opus-4-8" },
+    });
+    fireEvent.click(await findByTestId("worker-detail-settings-confirm"));
+    await waitFor(() =>
+      expect(setModel).toHaveBeenCalledWith(
+        "ow-1",
+        expect.objectContaining({ model: "claude-opus-4-8" }),
+      ),
+    );
+    // Confirming the pin unchanged never re-sends it — and never sends the
+    // machine the session merely happens to sit on.
+    expect(relocate).not.toHaveBeenCalled();
+  });
+
   it("換 model: 更改 → save persists the new model via the adapter", async () => {
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockOutsourceWorker(

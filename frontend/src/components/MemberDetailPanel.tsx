@@ -196,8 +196,8 @@ export function MemberDetailPanel({
   // ONE dialog holds runtime + model + effort + machine, and it always opens (the
   // old 0/1/2+-online picker rules are gone; what survives of them is that the
   // entry button stays dead while no machine is online, with the reason in its
-  // tooltip). The member's current pin is `member.desiredMachineId` — the
-  // machine_id an activate binds to, and the value the machine row is seeded with.
+  // tooltip). The machine row is seeded with `currentMachineId` below — the pin
+  // when the owner set one, otherwise the machine the member is really on.
   const { machines } = useMachines();
   const onlineMachines = machines.filter((m) => m.online);
   const firstOnlineMachineId = onlineMachines[0]?.machineId;
@@ -210,12 +210,27 @@ export function MemberDetailPanel({
   // Whether the 模型 row upstairs is currently showing a reported value at all
   // (same condition the tag uses): awake, and something was reported.
   const reportedModelOnScreen = awake && (member.actualModel ?? "") !== "";
+  // 🔴 WHERE THIS MEMBER CURRENTLY IS, as a machine id: the owner's pin when there
+  // is one, otherwise the machine it is ACTUALLY running on. The pin is normally
+  // set for staff, but `activate_member` accepts an explicit "" (which CLEARS it),
+  // so an online member with no pin is reachable — and for that member seeding the
+  // cell from the pin alone left it empty and the `|| onlineMachines[0]` fallback
+  // then named a machine it has never been on, so a confirm meant to change the
+  // model relocated it. Same defect the outsource panel carried (owner 2026-07-31:
+  // 「一定要跟原本的配置一模一樣」).
+  //
+  // `member.machine` IS a raw machine id on the member wire (unlike the worker
+  // DTO's display label), but it is NOT a pure observation: the server's
+  // observedHost falls it back to desired_machine_id for anyone nobody can see, so
+  // it is only trusted while awake — the same gate the 機器 cell uses.
+  const currentMachineId =
+    member.desiredMachineId || (awake && member.machine ? member.machine : "");
   const pinnedOfflineMachine =
-    member.desiredMachineId &&
-    !onlineMachines.some((m) => m.machineId === member.desiredMachineId)
-      ? (machines.find((m) => m.machineId === member.desiredMachineId) ?? {
-          machineId: member.desiredMachineId,
-          displayName: member.desiredMachineId,
+    currentMachineId &&
+    !onlineMachines.some((m) => m.machineId === currentMachineId)
+      ? (machines.find((m) => m.machineId === currentMachineId) ?? {
+          machineId: currentMachineId,
+          displayName: currentMachineId,
         })
       : undefined;
   const settingsMachineOptions = [
@@ -240,9 +255,7 @@ export function MemberDetailPanel({
   );
   const [settingsModel, setSettingsModel] = useState(member.model);
   const [settingsEffort, setSettingsEffort] = useState(member.effort);
-  const [settingsMachineId, setSettingsMachineId] = useState(
-    member.desiredMachineId,
-  );
+  const [settingsMachineId, setSettingsMachineId] = useState(currentMachineId);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsError, setSettingsError] = useState("");
   const [relocateUndispatched, setRelocateUndispatched] = useState(false);
@@ -306,9 +319,7 @@ export function MemberDetailPanel({
     // and it lands hardest on "pin it to my sleeping laptop and save the model
     // for later". MachinePicker's rule is the right one: keep the bound machine
     // in the list, labelled offline, and never invent a different pin.
-    setSettingsMachineId(
-      member.desiredMachineId || onlineMachines[0]?.machineId || "",
-    );
+    setSettingsMachineId(currentMachineId || onlineMachines[0]?.machineId || "");
     setSettingsError("");
     setSettingsOpen(true);
   }
@@ -358,7 +369,7 @@ export function MemberDetailPanel({
       settingsRuntime !== (member.runtime || "claude") ||
       settingsModel.trim() !== member.model ||
       settingsEffort !== member.effort;
-    const machineChanged = settingsMachineId !== member.desiredMachineId;
+    const machineChanged = settingsMachineId !== currentMachineId;
     if (!launchChanged && !machineChanged) {
       setSettingsOpen(false);
       return;
@@ -395,7 +406,9 @@ export function MemberDetailPanel({
       settingsRuntime !== (member.runtime || "claude") ||
       settingsModel.trim() !== member.model ||
       settingsEffort !== member.effort;
-    const machineChanged = settingsMachineId !== member.desiredMachineId;
+    // Against the CURRENT machine, not the pin: an unpinned but running member
+    // would otherwise read as "the owner changed the machine" on every confirm.
+    const machineChanged = settingsMachineId !== currentMachineId;
     // A live Change with no edits is a true no-op. Offline and waking both use
     // this same dialog for Wake/force-revive, so they must still reach
     // activate even when the owner accepts the prefilled settings unchanged.

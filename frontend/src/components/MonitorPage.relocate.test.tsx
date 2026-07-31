@@ -6,9 +6,9 @@
 // was the only member-detail surface still missing onRelocate). This test locks:
 //   1. Opening a session's detail from the Monitor entry shows the 改機器 button
 //      (data-testid mp-relocate) — proving onRelocate is wired at this entry.
-//   2. Clicking it (with a single online machine → direct relocate, no picker)
-//      routes through relocateMember(id, machineId) — a placement, never a wake
-//      (never activateMember).
+//   2. Confirming a DIFFERENT machine in the dialog routes through
+//      relocateMember(id, machineId) — a placement, never a wake (never
+//      activateMember).
 //
 // Red/green guard: with onRelocate absent at the Monitor entry, MemberDetailPanel
 // renders NO mp-relocate button, so assertion (1) fails — this test is red before
@@ -42,8 +42,11 @@ const mkMember = (over: Partial<Member> = {}): Member => ({
   model: "opus-4.8",
   effort: "medium",
   kind: "assistant",
-  // An unpinned online member defaults the unified Change dialog to the one
-  // available machine, making this a real placement change.
+  // An UNPINNED online member: the unified Change dialog defaults to the machine
+  // it is actually on (`machine` below), so the test has to PICK a different one
+  // to make a real placement change. It used to rely on the dialog defaulting to
+  // the first online machine and firing a relocate on a confirm that changed
+  // nothing — the defect, not the wiring this file is about.
   desiredMachineId: "",
   machine: "mach-a",
   account: null,
@@ -80,6 +83,7 @@ const session = (over: Partial<MonSessionView> = {}): MonSessionView => ({
 const listMembers = vi.fn(async (): Promise<Member[]> => [mkMember()]);
 const listMachines = vi.fn(async (): Promise<MachineView[]> => [
   machine("mach-a", "Machine A"),
+  machine("mach-b", "Machine B"),
 ]);
 const getMonitoring = vi.fn(async () => ({
   accounts: [],
@@ -122,7 +126,10 @@ function renderMonitor() {
 beforeEach(() => {
   window.location.hash = "";
   listMembers.mockResolvedValue([mkMember()]);
-  listMachines.mockResolvedValue([machine("mach-a", "Machine A")]);
+  listMachines.mockResolvedValue([
+    machine("mach-a", "Machine A"),
+    machine("mach-b", "Machine B"),
+  ]);
   getMonitoring.mockResolvedValue({
     accounts: [],
     sessions: [session()],
@@ -147,12 +154,18 @@ describe("MonitorPage entry — MemberDetailPanel unified Change", () => {
     fireEvent.click(await screen.findByText("Eva"));
 
     fireEvent.click(await screen.findByTestId("mp-change"));
+    const select = document.querySelector<HTMLSelectElement>(".machine-picker__select")!;
+    await waitFor(() => expect(select.options).toHaveLength(2));
+    // It opens on the machine the member is REALLY on; moving it means picking
+    // the other one.
+    expect(select.value).toBe("mach-a");
+    fireEvent.change(select, { target: { value: "mach-b" } });
     const confirm = document.querySelector<HTMLButtonElement>(".machine-picker__actions .btn--accent")!;
     await waitFor(() => expect(confirm.disabled).toBe(false));
     fireEvent.click(confirm);
 
     await waitFor(() => {
-      expect(relocateMember).toHaveBeenCalledWith("mem-eva", "mach-a");
+      expect(relocateMember).toHaveBeenCalledWith("mem-eva", "mach-b");
     });
   });
 });

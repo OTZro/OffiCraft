@@ -194,19 +194,66 @@ export function WorkerDetailPanel({
   // session merely died (desired_state still online). Offering it would need a
   // pin-only worker endpoint, i.e. a frozen-wire change (§13).
   const onlineMachines = machines.filter((m) => m.online);
-  // The pinned machine stays in the list even when it is not online — labelled
+  // 🔴 WHERE THIS WORKER CURRENTLY IS, as a machine id. `desiredMachineId` is the
+  // owner's PIN and it is EMPTY for every worker the scheduler placed — which is
+  // most of them. Seeding the machine cell from the pin alone therefore left the
+  // cell blank for a scheduler-placed worker and the old `|| onlineMachines[0]`
+  // fallback then filled it with WHICHEVER MACHINE HAPPENED TO BE FIRST, so a
+  // confirm meant to change the model silently relocated the worker to a machine
+  // it had never been on (owner, 2026-07-31: O-103 runs on eva-m1, the dialog
+  // offered seth-m5). What the dialog must state is what is TRUE NOW: the pin
+  // when the owner set one, otherwise the machine the session is actually on.
+  //
+  // `worker.machine` is a DISPLAY LABEL (the server resolves the observed host
+  // through the machine-name map before it reaches the wire), so it is reverse
+  // resolved through the same registry the picker is built from — and only when
+  // EXACTLY ONE row matches. An ambiguous or unknown label resolves to "" (we do
+  // not know which machine that is) and the cell then offers nothing rather than
+  // guessing; "" is also what a never-dispatched worker honestly has.
+  const observedMachineMatches = worker.machine
+    ? machines.filter(
+        (m) =>
+          m.machineId === worker.machine || m.displayName === worker.machine,
+      )
+    : [];
+  const observedMachineId =
+    observedMachineMatches.length === 1
+      ? observedMachineMatches[0].machineId
+      : "";
+  const currentMachineId = worker.desiredMachineId || observedMachineId;
+  // The current machine stays in the list even when it is not online — labelled
   // 離線 and disabled, MachinePicker's rule. Dropping it would silently move a
   // worker the owner deliberately parked; leaving it selectable would wind the
   // worker down onto a machine with no warden.
   const pinnedOfflineMachine =
-    worker.desiredMachineId &&
-    !onlineMachines.some((m) => m.machineId === worker.desiredMachineId)
-      ? (machines.find((m) => m.machineId === worker.desiredMachineId) ?? {
-          machineId: worker.desiredMachineId,
-          displayName: worker.desiredMachineId,
+    currentMachineId &&
+    !onlineMachines.some((m) => m.machineId === currentMachineId)
+      ? (machines.find((m) => m.machineId === currentMachineId) ?? {
+          machineId: currentMachineId,
+          displayName: currentMachineId,
         })
       : undefined;
+  // 🔴 There is NO "first online machine" fallback here, and that is the point.
+  // A STOPPED worker reports `machine: ""` — the observation dies with the
+  // session — so a fallback would fire on exactly the worker whose original
+  // placement is least visible from the cockpit, which is how O-103 (stopped,
+  // unpinned, last on eva-m1) was offered seth-m5. Leaving the cell empty makes
+  // `machineChanged` false, so the wake carries NO relocate and the server places
+  // the worker from its own durable memory (pin → last landed machine → the
+  // task's dispatch preference) — strictly better informed than this panel, since
+  // none of that reaches the wire. The owner can still pick a machine explicitly;
+  // only the invented default is gone.
+  const currentMachineSeed = currentMachineId;
   const settingsMachineOptions = [
+    // 🔴 The "" entry is REQUIRED whenever there is no current machine, not
+    // decoration: a controlled <select value=""> with no matching option renders
+    // as its FIRST option, so the cell would display a machine while the draft
+    // holds "" — the same "displayed ≠ submitted" lie in the other direction,
+    // and the owner would read it as a promise to move there. Same word the 機器
+    // cell shows for this worker, so the two cannot contradict each other.
+    ...(currentMachineId
+      ? []
+      : [{ machineId: "", label: t.workerDetail.notAssigned, offline: false }]),
     ...onlineMachines.map((m) => ({
       machineId: m.machineId,
       label: m.displayName,
@@ -228,9 +275,7 @@ export function WorkerDetailPanel({
   );
   const [settingsModel, setSettingsModel] = useState(worker.model);
   const [settingsEffort, setSettingsEffort] = useState(worker.effort);
-  const [settingsMachineId, setSettingsMachineId] = useState(
-    worker.desiredMachineId ?? "",
-  );
+  const [settingsMachineId, setSettingsMachineId] = useState(currentMachineSeed);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsError, setSettingsError] = useState("");
   // Neither OfficePage nor MonitorPage passes a `key`, so switching which worker
@@ -256,18 +301,16 @@ export function WorkerDetailPanel({
     setSettingsRuntime(worker.runtime || "claude");
     setSettingsModel(worker.model);
     setSettingsEffort(worker.effort);
-    // 🔴 Seed the pin VERBATIM, carried over from the member panel's openSettings
-    // together with the defect it fixes. Falling back to the first ONLINE machine
-    // makes `machineChanged` unconditionally true for a worker pinned to a machine
-    // that is merely ASLEEP — so opening the dialog just to edit a MODEL silently
-    // re-pins the worker somewhere else. It lands hardest on "park it on my
-    // sleeping laptop and save the settings for later". The pinned-but-offline
-    // machine stays in `settingsMachineOptions`, labelled 離線 and disabled, so a
-    // disabled <option> can still render as the current value without being
-    // selectable — MachinePicker's rule, and the reason this seed is safe.
-    setSettingsMachineId(
-      worker.desiredMachineId || onlineMachines[0]?.machineId || "",
-    );
+    // 🔴 Seed the CURRENT machine — the pin when the owner set one, otherwise the
+    // machine the worker is actually on (see `currentMachineId`). Falling back to
+    // the first ONLINE machine makes `machineChanged` unconditionally true for a
+    // worker whose machine is merely ASLEEP, or whose placement the scheduler made
+    // (empty pin) — so opening the dialog just to edit a MODEL silently moves the
+    // worker somewhere else. The current-but-offline machine stays in
+    // `settingsMachineOptions`, labelled 離線 and disabled, so a disabled <option>
+    // can still render as the current value without being selectable —
+    // MachinePicker's rule, and the reason this seed is safe.
+    setSettingsMachineId(currentMachineSeed);
     setSettingsError("");
     setSettingsOpen(true);
   }
@@ -290,9 +333,12 @@ export function WorkerDetailPanel({
       settingsRuntime !== (worker.runtime || "claude") ||
       settingsModel.trim() !== worker.model ||
       settingsEffort !== worker.effort;
+    // 🔴 Compared against the CURRENT machine, not against the pin. Against the
+    // pin, every scheduler-placed worker (pin "") reads as "the owner changed the
+    // machine" the moment the cell holds anything at all — which is how a confirm
+    // that only touched the model relocated a running worker.
     const machineChanged =
-      settingsMachineId !== "" &&
-      settingsMachineId !== (worker.desiredMachineId ?? "");
+      settingsMachineId !== "" && settingsMachineId !== currentMachineId;
     if (!wakeMode && !launchChanged && !machineChanged) {
       setSettingsOpen(false);
       return;

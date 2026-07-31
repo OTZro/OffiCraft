@@ -261,6 +261,36 @@ describe("MemberDetailPanel — unified wake/change settings", () => {
     expect(onRelocate).not.toHaveBeenCalled();
   });
 
+  it("seeds an UNPINNED live member's machine cell with the machine it is actually on", async () => {
+    // 🔴 The pin's twin gap (owner 2026-07-31:「一定要跟原本的配置一模一樣」).
+    // `activate_member` accepts an explicit "" and CLEARS the pin, so a running
+    // member with no pin is reachable — and for that member the seed fell through
+    // to the first online machine, which is NOT where it is. `mach-a` is that
+    // first machine, so the value asserted below is the one the defect produces.
+    const { getByTestId, onRelocate } = renderPanel({
+      status: "online",
+      lifecycle: "online",
+      machine: "mach-b",
+      desiredMachineId: "",
+    });
+    fireEvent.click(getByTestId("mp-change"));
+    const dialog = getByTestId("me-runtime-select").closest("[role=dialog]")!;
+    const select = dialog.querySelector("select.machine-picker__select") as HTMLSelectElement;
+    await waitFor(() => expect(select.options).toHaveLength(2));
+    expect(select.value).toBe("mach-b");
+    // …and the other three cells state the member's own configuration, so a
+    // confirm re-launches it exactly as it is.
+    expect((getByTestId("me-runtime-select") as HTMLSelectElement).value).toBe("claude");
+    expect((getByTestId("me-model-input") as HTMLInputElement).value).toBe("opus");
+    expect((getByTestId("me-effort-select") as HTMLSelectElement).value).toBe("medium");
+
+    fireEvent.change(getByTestId("me-model-input"), { target: { value: "haiku" } });
+    fireEvent.click(dialog.querySelector(".btn--accent")!);
+
+    await waitFor(() => expect(wireCalls).toEqual(["patch"]));
+    expect(onRelocate).not.toHaveBeenCalled();
+  });
+
   it("hides the save-without-waking action for a WAKING member too (its confirm activates)", async () => {
     const { getByTestId, queryByTestId } = renderPanel({
       status: "waking",
