@@ -618,9 +618,6 @@ var sanctionedProcessStarters = map[string]processStarter{
 		why:        "Builds the execSelf closure whose syscall.Exec REPLACES THIS PROCESS IMAGE with the swapped ocwarden. Under `go test` that would replace the test binary itself, so the constructor refuses rather than relying on nobody ever invoking the closure.",
 		mustRefuse: true,
 	},
-	"selfupdate.go:codesignIdentity": {
-		why: "Reads a binary's code-signing identity via `/usr/bin/codesign -dv`. Read-only, mutates nothing, touches no launchd domain, and is reached through the updater's signatureOf seam which every test binds to a stub.",
-	},
 	"install.go:realClaudeProbe": {
 		why: "Runs `<claude> --version` to prove the resolved CLI is executable under a minimal PATH. Read-only, and it is one of the fields of hostSeam, so TestMain's rebinding of newHostSeam already keeps every test off it.",
 	},
@@ -796,7 +793,6 @@ var realHostFunctions = map[string]string{
 	"realRunExit":          "execs for an exit code outside execRunner",
 	"spawnDetachedProcess": "starts a setsid'd child that outlives the test run",
 	"runInstallerCombined": "runs the machine conversion",
-	"codesignIdentity":     "shells out to /usr/bin/codesign",
 }
 
 // scanTestsForRealHostCalls returns one row per direct call from a TEST file to

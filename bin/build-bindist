@@ -49,20 +49,14 @@ touch "$ANCHORDIST/.gitkeep"
 
 # ocwarden LAST of the two, so its embed picks up the anchor staged just above.
 (cd "$ROOT/cli/ocwarden" && go build -ldflags="-s -w" -o "$BINDIST/ocwarden" ./...)
-# T-33d5: sign the FLEET-SERVED artifacts with the stable release identity — but
-# SINCE T-588c THIS IS A NO-OP UNLESS SIGNING WAS EXPLICITLY REQUESTED. The
-# helper returns before it consults the keychain, so this script (which runs on
-# every bin/ci.sh run) needs no keychain at all and concurrent CI runs do not
-# contend for one. T-33d5's rationale was that a stable identity would let the
-# wardens' self-update swap keep macOS TCC grants across versions. THAT CLAIM IS
-# NOT ESTABLISHED: whether self-signed codesign is effective for macOS TCC is
-# only STRONGLY SUSPECTED to be INEFFECTIVE, with no 100% conclusion in
-# EITHER direction (owner, 2026-07-26; basis: during the period when signing WAS
-# on, he still hit permission prompts more than once). Canonical statement:
-# bin/codesign-artifact. Do not paraphrase it here.
-# The COMMITTED bin/ prebuilts are never signed regardless.
-bash "$ROOT/bin/codesign-artifact" "$BINDIST/ocwarden" com.officraft.ocwarden
-bash "$ROOT/bin/codesign-artifact" "$BINDIST/ocagent" com.officraft.ocagent
+# THE FLEET-SERVED BINARIES ARE NOT CODE-SIGNED, and this script has no way to
+# sign them (T-0398, owner 2026-07-31). They carry whatever `go build` produces —
+# an adhoc signature with a fresh cdhash per build. The signing machinery is
+# DELETED rather than switched off, escape hatch included, so this script needs no
+# keychain and concurrent bin/ci.sh runs cannot contend for one. ⚠️ This is NOT
+# the same subject as the TCC identity anchor above: the anchor is recognised by
+# its BYTES (which is why it is byte-pinned and never overwritten), and that
+# mechanism never depended on a signing identity.
 cp "$ROOT/spec/mcp-catalog.json" "$BINDIST/"
 touch "$BINDIST/.gitkeep"
 echo "[build-bindist] staged ocwarden (anchor embedded) + ocagent + officraft + mcp-catalog.json → server/ocserverd/bindist"

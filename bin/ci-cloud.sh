@@ -52,9 +52,10 @@
 #     on every land, locally).
 #   * gitleaks — the content-level secret scan stays local by design. The
 #     tracked-file path denylist runs below because it is safe on Linux.
-#   * bin/tests/run.sh — its 16 Linux assertion failures come from BSD/GNU
-#     `mktemp -t` semantics, SIGPIPE, and macOS-shaped install.sh fixtures.
-#     It remains a local gate until those platform assumptions are made portable.
+#   * bin/tests/run.sh — its Linux assertion failures come from BSD/GNU
+#     `mktemp -t` semantics and macOS-shaped install.sh fixtures. It remains a
+#     local gate until those platform assumptions are made portable. (No count is
+#     stated on purpose: the old "16" went stale the first time the suite changed.)
 #   * e2e_test — real-machine end-to-end; it drives launchd/tmux on a real fleet
 #     host. Local, pre-release, by design.
 #   * the committed-prebuilt parity dryrun — it only applies when a local

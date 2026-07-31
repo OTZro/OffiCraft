@@ -70,27 +70,15 @@ fi
 (cd "$ROOT/server/ocserverd" && go build \
   -ldflags="$LDFLAGS" \
   -o "$ROOT/.deploy/ocserverd" .)
-# T-33d5: sign the deploy/publish artifact with the stable release identity — but
-# SINCE T-588c THIS IS A NO-OP UNLESS SIGNING WAS EXPLICITLY REQUESTED, and the
-# helper stops above the keychain probe, so a plain build touches no keychain.
-# T-33d5's rationale was that a stable identity would let the server binary's
-# macOS TCC grants survive autodeploy / GitHub-release upgrades. THAT CLAIM IS
-# NOT ESTABLISHED: whether self-signed codesign is effective for macOS TCC is
-# only STRONGLY SUSPECTED to be INEFFECTIVE, with no 100% conclusion in
-# EITHER direction (owner, 2026-07-26; basis: during the period when signing WAS
-# on, he still hit permission prompts more than once). Canonical statement:
-# bin/codesign-artifact. Do not paraphrase it here.
-# The owner's reason for switching signing off is operational and is the only
-# reason: it was obstructing the tests and the act of publishing.
+# NO CODE SIGNING HAPPENS HERE, AND THERE IS NO WAY TO ASK FOR IT (T-0398, owner
+# 2026-07-31). This build produces whatever `go build` produces — an adhoc
+# signature whose cdhash changes every build — and that is the whole story. The
+# machinery that used to sign this artifact with a stable self-signed identity
+# (bin/codesign-artifact, bin/setup-codesign-cert, bin/build-release,
+# `bin/release publish --sign`) is DELETED, not gated: the owner ruled to take it
+# all out including the manual escape hatch. Do not reintroduce a signing step
+# here — bring it back as a decision, not as a helpful patch.
 #
-# NOT the release path (T-da4b). This script also runs on every dev Mac and on
-# the prod host via bin/autodeploy, so signing stays advisory here: no identity =
-# warn and carry on, never a block. RELEASING is bin/build-release, which wraps
-# this script with the identity made mandatory (owner ruling rc-e43a3aae0912:
-# 憑證不在就不出貨). Do NOT hoist that requirement into this file — it would
-# hard-block every dev Mac without the cert, the option the owner did not pick.
-# bin/tests/run.sh enforces both halves of that split.
-bash "$ROOT/bin/codesign-artifact" "$ROOT/.deploy/ocserverd" com.officraft.ocserverd
 # Restore webdist to pristine so the checkout stays clean for the next ff-pull.
 # seedsdist AND bindist are left STAGED on purpose: assets are served
 # embed-only, so a follow-up committed-prebuilt rebuild must embed BOTH the

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # officraft — THE release command. Two subcommands, one job each:
 #
-#   bin/release publish --beta <tag> --target <sha> [--sign] [--dry-run]
+#   bin/release publish --beta <tag> --target <sha> [--dry-run]
 #   bin/release promote <tag>                       [--dry-run]
 #
 # WHY THIS FILE HAS SUBCOMMANDS (T-588c). The old form was `bin/release <tag>`:
@@ -83,38 +83,21 @@
 # asset set that changed under promote means someone re-uploaded behind our back,
 # and that is a failure, not a warning.
 #
-# ── CODESIGNING IS OFF BY DEFAULT ───────────────────────────────────────────
-# (owner ruling, T-588c: "可以保留但是我們預設都不跑" / "以後我們想要拿回來繼續
-# sign 我們再說吧".) THE OWNER'S STATED REASON is operational, and it is the only
-# reason: signing was blocking both the test suite and the act of publishing
-# ("它卡測試又卡發佈"), so it is skipped to let development proceed. The default
-# publish path sets NO signing env at all and therefore never touches the login
-# keychain — see bin/codesign-artifact's default-off gate. `--sign` is the only
-# way to sign, and it does so by delegating the build to bin/build-release, which
-# sets OC_CODESIGN_REQUIRE=1: a missing identity, a locked keychain or a failed
-# verify HARD-STOPS the release. There is deliberately NO adhoc fallback under
-# --sign; if you asked for a signed release you get one or you get nothing.
-#   ⚠️ --sign IS NOT VERIFIED AGAINST A REAL KEYCHAIN. As of T-588c no signed
-#   release has been produced end to end on a provisioned machine. The tests prove
-#   the ROUTING (that --sign reaches bin/build-release with the identity made
-#   mandatory), not that real signing works. Accepted known boundary — stated here
-#   so nobody mistakes a green suite for a proven path.
-#   ⚠️ DO NOT write "the cost of not signing is macOS re-prompting for TCC
-#   permissions", and do NOT write the opposite ("self-signing provably does
-#   nothing for TCC"). Both are over-claims: whether self-signed codesign is
-#   effective for macOS TCC authorization is only STRONGLY SUSPECTED to be
-#   INEFFECTIVE, with NO 100% conclusion in either direction (owner, 2026-07-26;
-#   his basis: during the period when signing WAS on, he still hit permission
-#   prompts more than once). The canonical statement — including why the
-#   default-off decision does not depend on that question at all — lives in
-#   bin/codesign-artifact. Read it there; do not paraphrase it here.
+# ── RELEASES ARE NOT CODE-SIGNED, AND THERE IS NO OPTION TO SIGN ────────────
+# (owner ruling, T-0398, 2026-07-31: take the whole thing out, INCLUDING the
+# manual escape hatch.) A published release carries whatever `go build`
+# produced — an adhoc signature whose cdhash changes every build. There is no
+# `--sign` flag, no OC_CODESIGN_* knob, no bin/codesign-artifact and no
+# bin/build-release: that machinery is DELETED, not gated off, so no publish path
+# can reach the login keychain. If signing is ever wanted back it comes back as a
+# decision with its own ticket — do not re-add a flag here because a caller
+# looked like it wanted one.
 #
 # The repo tree stays ZERO-BINARY: artifacts land in dist/release/ (gitignored),
 # nothing is committed, and the staging worktree is removed on exit.
 #
 # knobs (env) — all defaulted; the overrides exist so bin/tests/release-guard.sh
-# can drive the real control flow hermetically (same posture as bin/build-release's
-# OC_BUILD_CMD seam):
+# can drive the real control flow hermetically:
 #   OC_RELEASE_SRC        git repo the staging worktree is cut from (default: this repo)
 #   OC_RELEASE_OUT        artifact output dir (default: <repo>/dist/release)
 #   OC_RELEASE_GH_REPO    GitHub repo for gh calls (default: pkyosx/OffiCraft)
@@ -124,10 +107,8 @@
 # There is deliberately NO "override the build command" knob. Step 3 runs
 # `$STAGE/bin/build` — a path INSIDE the staging worktree — so OC_RELEASE_SRC
 # pointing at a small fixture repo that carries its own bin/build is already
-# enough to drive steps 4-8 hermetically, and it exercises the REAL
-# builder-selection (bin/build vs bin/build-release under --sign) instead of
-# bypassing it. A build-command override would have replaced the one branch that
-# decides whether a release is signed with a branch the tests never take.
+# enough to drive steps 4-8 hermetically, and it exercises the REAL build
+# invocation instead of bypassing it.
 #
 # ── SOURCEABLE ──────────────────────────────────────────────────────────────
 # Dispatch is guarded by "am I being executed", so bin/tests/release-guard.sh can
@@ -157,7 +138,7 @@ fail_item() { echo "[release] VERIFY-FAILED [$1]: $2" >&2; exit 6; }
 usage() {
   cat >&2 <<'USAGE'
 usage:
-  bin/release publish --beta <tag> --target <sha> [--sign] [--dry-run]
+  bin/release publish --beta <tag> --target <sha> [--dry-run]
   bin/release promote <tag> [--dry-run]
 
   publish   build <tag> from a clean staging worktree at <sha>, verify the
@@ -166,8 +147,6 @@ usage:
   promote   flip an existing, verified prerelease to the final release.
             Rebuilds nothing. Reads back that the flip landed.
 
-  --sign    sign the build (delegates to bin/build-release, identity MANDATORY).
-            Default: no signing at all, and no keychain is touched.
   --dry-run publish: stop after artifact verification and print the upload
             command. promote: verify the prerelease and print the flip command.
 USAGE
@@ -191,12 +170,11 @@ asset_names() { # asset_names <tag>
 # publish
 # ═══════════════════════════════════════════════════════════════════════════
 cmd_publish() {
-  local TAG="" TARGET="" SIGN=0 DRY=0
+  local TAG="" TARGET="" DRY=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --beta)     TAG="${2:-}";    shift 2 ;;
       --target)   TARGET="${2:-}"; shift 2 ;;
-      --sign)     SIGN=1;          shift ;;
       --dry-run)  DRY=1;           shift ;;
       *) echo "[release] unknown publish argument: $1" >&2; usage ;;
     esac
@@ -217,11 +195,6 @@ cmd_publish() {
 
   local NAME="officraft-$TAG-darwin-arm64"
   say "publish $TAG (prerelease) from $SHORT ($SHA)"
-  if [[ "$SIGN" == 1 ]]; then
-    say "  signing: REQUESTED (--sign) — identity is MANDATORY, no adhoc fallback"
-  else
-    say "  signing: off (default) — no keychain is touched"
-  fi
 
   # 2. staging worktree at exactly $SHA. Detached, throwaway, removed on exit.
   #    `git worktree add` refuses to reuse an existing path, so leftovers are a
@@ -243,10 +216,9 @@ cmd_publish() {
 
   # 3. build. bin/build owns the embed ordering (SPA -> webdist, seeds ->
   #    seedsdist, fresh ocwarden/ocagent -> bindist, then the ocserverd build
-  #    that embeds all three). --sign routes through bin/build-release, whose
-  #    ONLY job is to make the codesigning identity mandatory.
+  #    that embeds all three). There is exactly ONE builder — no signed variant
+  #    (T-0398).
   local BUILDER="bin/build"
-  [[ "$SIGN" == 1 ]] && BUILDER="bin/build-release"
   say "build: OC_APP_VERSION=$TAG bash $BUILDER (in the staging worktree)"
   ( cd "$STAGE" && OC_APP_VERSION="$TAG" bash "$STAGE/$BUILDER" ) \
     || die "the release build failed — nothing was uploaded."
@@ -647,9 +619,6 @@ case "$SUB" in
 [release] Then, once the beta is proven, promote it WITHOUT rebuilding:
 [release]
 [release]   bin/release promote $SUB
-[release]
-[release] Codesigning is OFF by default now; add --sign only if you deliberately
-[release] want a signed build (a missing identity then HARD-FAILS).
 EOM
     exit 2 ;;
   *) echo "[release] unknown subcommand: $SUB" >&2; usage ;;

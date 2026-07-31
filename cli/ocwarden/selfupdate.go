@@ -45,25 +45,21 @@
 //   - BACKOFF: a failed cycle (server down / auth reject / verify fail) never swaps
 //     and retreats onto an exponential backoff so a broken server is not hammered.
 //
-// SIGNATURE OBSERVABILITY, NEVER ENFORCEMENT (T-33d5): release machines COULD sign
-// the served binaries with a stable self-signed identity (bin/codesign-artifact),
-// and T-33d5's stated hope was that this would make macOS TCC grants survive
-// swaps. Two corrections, both since T-588c:
-//   - SIGNING IS OFF BY DEFAULT and nothing in the normal build/CI/publish path
-//     signs anything, so in practice the binaries this loop swaps in are adhoc.
-//   - THAT TCC CLAIM IS NOT ESTABLISHED. Whether self-signed codesign is effective
-//     for macOS TCC authorization is only STRONGLY SUSPECTED TO BE INEFFECTIVE,
-//     with no 100% conclusion in either direction (owner, 2026-07-26; his basis:
-//     during the period when signing WAS on, he still hit permission prompts more
-//     than once). Do not write it as fact in either direction. The one canonical
-//     statement lives in bin/codesign-artifact — read it there.
+// NO CODE-SIGNING IS INVOLVED IN THIS LOOP AT ALL (T-0398, owner 2026-07-31).
+// The binaries it swaps in are plain `go build` output with an adhoc signature.
+// This loop never verified a signature and it no longer OBSERVES one either: the
+// old `signatureOf`/`codesignIdentity` seam, which shelled out to
+// `/usr/bin/codesign -dv` after a swap purely to log who signed the new bytes, was
+// removed together with the repo's signing machinery (bin/codesign-artifact,
+// bin/setup-codesign-cert, bin/build-release). A signature was never a gate here
+// and must not become one: a self-built certificate fails `codesign --verify` on
+// any machine that never trusted it, so a hard gate would brick every fleet
+// update. The anti-suicide gates are the exec probe + content hash, and that is
+// the complete list.
 //
-// None of this changes what the code does. After a swap the loop LOGS the new binary's
-// code-signing identity (adhoc / the signing CN / unsigned) purely for the
-// operator's eyeballs. It deliberately does NOT verify-or-refuse: a self-built
-// certificate fails `codesign --verify` on any machine that never trusted it,
-// so a hard gate would brick every fleet update. The anti-suicide gates remain
-// the exec probe + content hash alone.
+// ⚠️ Do NOT conflate this with the TCC identity anchor (cli/officraft): the anchor
+// is recognised by its BYTES, which is why it is byte-pinned and never
+// overwritten. That mechanism never depended on a signing identity.
 //
 // ocwarden vs ocagent DIFFERENCE: after replacing ITSELF, ocwarden execs the new
 // binary in place (see above). After replacing ocagent it does NOTHING — ocagent
@@ -82,7 +78,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -261,13 +256,6 @@ type updater struct {
 	execSelf func() error
 	exit     func(int) // process-exit seam (os.Exit) — the exec-failure FALLBACK
 	logf     func(string, ...any)
-
-	// signatureOf reports the code-signing identity of the binary at a path,
-	// logged after a successful swap so the operator can see whether the fleet
-	// runs release-signed or adhoc builds (see the SIGNATURE OBSERVABILITY
-	// header). Purely informational — its answer never gates a swap. nil
-	// (tests / unwired) skips the log line; production wires codesignIdentity.
-	signatureOf func(path string) string
 
 	// post + agentID are the OBSERVABILITY seam: after a successful ocwarden swap the
 	// loop announces it on the existing telemetry endpoint (best-effort). post reuses
@@ -518,49 +506,7 @@ func (u *updater) reconcileBinary(path, livePath, name string) (bool, error) {
 		NewHash: hashPrefix(body),
 		At:      u.clock().UTC().Format(time.RFC3339),
 	}
-	// SIGNATURE OBSERVABILITY (see the file header): name who signed the binary
-	// we just swapped in. Informational only — never gates the swap.
-	if u.signatureOf != nil {
-		if sig := u.signatureOf(livePath); sig != "" {
-			u.logf("[ocwarden] self-update: %s signing identity: %s", name, sig)
-		}
-	}
 	return true, nil
-}
-
-// codesignIdentity shells out to /usr/bin/codesign -dv and distills the signing
-// identity of the binary at path: "adhoc", the leaf Authority CN (e.g.
-// "OffiCraft Code Signing" on release-signed artifacts), "unsigned", or ""
-// when codesign itself is unavailable/unreadable (non-darwin dev hosts — the
-// caller then skips the log line). SOFT by design (T-33d5): a self-built
-// certificate does not VERIFY on machines that never trusted it, so the
-// identity is logged, never enforced.
-func codesignIdentity(path string) string {
-	// codesign prints the -dv details on stderr, so capture combined output.
-	out, err := exec.Command("/usr/bin/codesign", "-dv", "--verbose=2", path).CombinedOutput()
-	if err != nil {
-		if strings.Contains(string(out), "not signed") {
-			return "unsigned"
-		}
-		return ""
-	}
-	return parseCodesignIdentity(string(out))
-}
-
-// parseCodesignIdentity extracts the identity from `codesign -dv --verbose=2`
-// output: "Signature=adhoc" ⇒ "adhoc"; else the FIRST "Authority=" line (the
-// leaf certificate's CN); else "".
-func parseCodesignIdentity(out string) string {
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "Signature=adhoc" {
-			return "adhoc"
-		}
-		if v, ok := strings.CutPrefix(line, "Authority="); ok {
-			return v
-		}
-	}
-	return ""
 }
 
 // clock returns the injected clock or time.Now when unset, so the announce timestamp
@@ -686,11 +632,10 @@ func newSelfUpdater(cfg Config, logf func(string, ...any)) *updater {
 			_ = os.Stderr.Sync()
 			return syscall.Exec(selfPath, os.Args, os.Environ())
 		},
-		exit:        os.Exit,
-		logf:        logf,
-		signatureOf: codesignIdentity,
-		post:        httpPoster(reportClient, cfg.Base, cfg.Token),
-		agentID:     cfg.ID,
-		now:         time.Now,
+		exit:    os.Exit,
+		logf:    logf,
+		post:    httpPoster(reportClient, cfg.Base, cfg.Token),
+		agentID: cfg.ID,
+		now:     time.Now,
 	}
 }

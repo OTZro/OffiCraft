@@ -3,10 +3,8 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -690,88 +688,5 @@ func TestRun_KickTriggersImmediateCheck(t *testing.T) {
 	case <-exited:
 	case <-time.After(2 * time.Second):
 		t.Fatal("run did not reach the exit seam after the kicked warden swap")
-	}
-}
-
-// SIGNATURE OBSERVABILITY (T-33d5): a successful swap logs the new binary's
-// signing identity — informational only, resolved AFTER the swap on the live
-// path, and its answer never gates anything.
-func TestReconcileBinary_LogsSigningIdentityAfterSwap(t *testing.T) {
-	dir := t.TempDir()
-	live := filepath.Join(dir, "ocwarden")
-	writeLive(t, live, "OLD-BINARY")
-
-	get := recordingGetter(map[string]getResult{
-		wardenBinaryPath: {status: 200, body: []byte("NEW-BINARY")},
-	}, nil)
-	u := newTestUpdater(stubOps{}, get, live, "")
-	var askedPath string
-	var logged []string
-	u.signatureOf = func(path string) string {
-		askedPath = path
-		return "OffiCraft Code Signing"
-	}
-	u.logf = func(format string, args ...any) {
-		logged = append(logged, fmt.Sprintf(format, args...))
-	}
-
-	swapped, err := u.reconcileBinary(wardenBinaryPath, live, "ocwarden")
-	if err != nil || !swapped {
-		t.Fatalf("expected a clean swap, got swapped=%v err=%v", swapped, err)
-	}
-	if askedPath != live {
-		t.Fatalf("signatureOf should be asked about the LIVE (swapped-in) path %s, got %s", live, askedPath)
-	}
-	want := "[ocwarden] self-update: ocwarden signing identity: OffiCraft Code Signing"
-	found := false
-	for _, line := range logged {
-		if line == want {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("expected the signing-identity log line %q in %q", want, logged)
-	}
-}
-
-func TestReconcileBinary_EmptySigningIdentitySkipsLog(t *testing.T) {
-	dir := t.TempDir()
-	live := filepath.Join(dir, "ocwarden")
-	writeLive(t, live, "OLD-BINARY")
-
-	get := recordingGetter(map[string]getResult{
-		wardenBinaryPath: {status: 200, body: []byte("NEW-BINARY")},
-	}, nil)
-	u := newTestUpdater(stubOps{}, get, live, "")
-	u.signatureOf = func(string) string { return "" } // codesign unavailable
-	var logged []string
-	u.logf = func(format string, args ...any) {
-		logged = append(logged, fmt.Sprintf(format, args...))
-	}
-
-	if swapped, err := u.reconcileBinary(wardenBinaryPath, live, "ocwarden"); err != nil || !swapped {
-		t.Fatalf("expected a clean swap, got swapped=%v err=%v", swapped, err)
-	}
-	for _, line := range logged {
-		if strings.Contains(line, "signing identity") {
-			t.Fatalf("no signing-identity line expected when the identity is unknown, got %q", line)
-		}
-	}
-}
-
-func TestParseCodesignIdentity(t *testing.T) {
-	cases := []struct {
-		name, out, want string
-	}{
-		{"adhoc", "Executable=/x/ocwarden\nIdentifier=ocwarden\nSignature=adhoc\nInfo.plist=not bound", "adhoc"},
-		{"release identity takes the leaf Authority", "Executable=/x/ocwarden\nIdentifier=com.officraft.ocwarden\nAuthority=OffiCraft Code Signing\nTimestamp=none", "OffiCraft Code Signing"},
-		{"first Authority wins over the chain", "Authority=Leaf CN\nAuthority=Intermediate CN\nAuthority=Root CN", "Leaf CN"},
-		{"no signature info", "Executable=/x/ocwarden\nIdentifier=ocwarden", ""},
-		{"empty", "", ""},
-	}
-	for _, c := range cases {
-		if got := parseCodesignIdentity(c.out); got != c.want {
-			t.Errorf("%s: parseCodesignIdentity => %q, want %q", c.name, got, c.want)
-		}
 	}
 }
