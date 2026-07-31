@@ -93,6 +93,26 @@ badge 全都早就備好了;codex sidecar 一直有送,是這條鏈可用的活�
   與 server 側 `TestGetMonitoring_SessionEffortRoundTrips`(ingest→GET 往返,且未回報者不得
   退回名冊設定值)。⚠️ 這條路先前**零測試**,所以它從未送過這個欄位時沒有任何東西會紅。
 
+### session model 同一條路,同一個 bug,晚一批修(`telemetryBody.Model`)
+`model` 與 `effort` 是同一份 statusLine payload 裡的孿生欄位,而且**犯的是同一個錯**:
+`modelEffortSegment` 從第一天就讀它來畫狀態列那個 `◆ Opus 4.5`,**卻從來沒有進過任何 POST body**。
+差別在後果更重——監控台的模型欄因此只能退回 owner 的**設定值**,而**外包 worker 在那條讀取路徑上
+根本沒有設定值可退**,所以每個 worker 的模型欄結構上永遠是空的。
+- 🔴 **送 `model.id`,不是 `model.display_name`**(`modelValue`/`modelID`)。狀態列畫的是
+  display_name,但上線的必須是 id:(a) `seeds/boot_sequence.md` 早就教成員「填 Claude Code
+  提供的**真實 model id**,不要猜值」,用 display_name 會讓正職自報與這支自報變成兩種詞彙;
+  (b) **只有 id 帶 `[1m]`**——display_name 對 1M 與標準版都寫「Opus 4.5」,送它等於把兩種
+  不同的 session 併成同一個字串,而座艙現在就在顯示這個區別。
+- 空值 `omitempty` 省略,**絕不送空字串**(與 effort 同理)。
+- **只掛 `/api/monitoring/telemetry`**;`AgentContextIngestDTO` 沒宣告 model 且
+  `additionalProperties:false`,塞進 context POST 會 422 掉整個 gauge 回報。
+- **codex 那半在 `ocwarden/codex_session.go`**:那條 runtime 沒有 Claude Code 狀態列,sidecar
+  是唯一知道 session 跑什麼模型的東西,所以它的 telemetry post 也帶 `model`(`s.model` 為空
+  代表 OffiCraft 沒設、機器的 Codex 預設生效 = 真的不知道名字 ⇒ 省略,不送 `""`)。
+- 釘住它的是 `TestContextReportSendsSessionModel`(id/1M 標記/缺 model/只有 display_name 四例)、
+  `TestReportTokenUsageSendsSessionModel`(codex),與 server 側
+  `TestGetMonitoring_SessionModelRoundTrips` + `TestGetMonitoring_ReportedModelSurvivesATelemetryWipe`。
+
 ## listen 自救(fail-closed,zombie 防線 B 的 client 半邊)
 `ocagent listen` 兩道自救原本 fail-open(probe 失敗照樣活 = 殭屍永生),已改 fail-closed 帶寬限(`listen.go` 常數 + `listen_run.go` foldProbe/foldRefusal):
 - **tmux session probe 三態**:alive / gone(tmux 明確答「無此 session」→ 2 連 miss 即自殺,不變)/ unknown(tmux 解析不到、spawn fault、timeout → 不再永遠當 alive:連續 `probeUnknownMin`(8)次 ∧ 滿 `probeUnknownGrace`(10min)才 self-exit;unknown 會重置 gone debounce,絕不瞬殺健康 listener)。

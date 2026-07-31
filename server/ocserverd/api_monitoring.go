@@ -548,6 +548,15 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 		}
 		effort = &text
 	}
+	var model *string
+	if body.Model != nil {
+		text, isStr := body.Model.(string)
+		if !isStr {
+			writeError(w, http.StatusBadRequest, "model must be a string")
+			return
+		}
+		model = &text
+	}
 	selfUpdate, ok := asObject(body.SelfUpdate, "self_update")
 	if !ok {
 		return
@@ -612,6 +621,9 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	if effort != nil {
 		entry["effort"] = *effort
 	}
+	if model != nil {
+		entry["model"] = *model
+	}
 	if selfUpdate != nil {
 		entry["self_update"] = selfUpdate
 		fmt.Fprintf(os.Stderr,
@@ -641,6 +653,9 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	applyAccountReport(entry, body.Account, body.AccountLabel, runtime)
 	entry["ts"] = nowSecs()
 	s.telemetry.Set(agentID, entry)
+	if model != nil {
+		s.stampReportedModel(agentID, *model, requestTrigger(r))
+	}
 	// No agent consumes the monitoring signal on the wire; owner cockpit only.
 	s.hub.Publish("monitoring", "signal", "monitoring", agentID, nil, audienceOwnerOnly(), requestTrigger(r))
 
@@ -666,6 +681,67 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 		WardenShape:   entryStr(entry, "warden_shape"),
 		TS:            entry["ts"].(float64),
 	})
+}
+
+// stampReportedModel persists a session's live self-reported model onto the
+// caller's OWN roster row (identity-from-token: agentID is the verified sub).
+//
+// Why the telemetry entry alone is not enough, and why this step is not
+// optional: s.telemetry is an IN-MEMORY map. The 模型 column is the one place
+// the owner looks to answer "what is this session actually running", and if it
+// lived only in that map then every server re-exec would blank it for the whole
+// fleet until each session's next report — the same fleet-wide blank this whole
+// change exists to remove, just on a timer. actual_model is a durable column,
+// so one report makes the answer survive restarts AND outlive the session.
+//
+// WRITE-ON-CHANGE, deliberately. Reports arrive every ~30s per session and the
+// model almost never changes, so an unconditional write would push a member SSE
+// delta per session per cadence tick at zero information gain — the same reason
+// stampWorkerPlacementBlocked only writes when its reason changes.
+//
+// A blank report is a no-op, never an erasure: producers omit the field when
+// they cannot read a model (see AgentTelemetryIngestDTO.model), so "" arriving
+// here means "not measured", and letting that clear a known-good value would
+// make the column flicker for exactly the sessions it is meant to describe.
+//
+// Rows this cannot touch: an unknown sub (a mint-token reporter with no roster
+// row) and a dismissed one. Neither is a member whose session the cockpit
+// lists, and upserting either would CREATE or RESURRECT a roster row from a
+// telemetry POST.
+//
+// Outsource callers take outsourceMu for the same reason workerReportWaking
+// does: an ow- row is a kind='outsource' row in the SAME member table, and the
+// outsource tick does its own read-modify-write on it. Without the lock this
+// read-modify-write can interleave and drop the tick's fold.
+func (s *apiServer) stampReportedModel(agentID, model, trigger string) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return
+	}
+	m, err := s.dal.GetMember(agentID)
+	if err != nil || m == nil || m.RosterStatus == RosterStatusRemoved {
+		return
+	}
+	if m.Kind == KindOutsource {
+		s.outsourceMu.Lock()
+		defer s.outsourceMu.Unlock()
+		// Re-read under the lock: the copy above was fetched unlocked purely to
+		// learn the kind, so anything the tick wrote in between must not be
+		// clobbered by this write.
+		if m, err = s.dal.GetMember(agentID); err != nil || m == nil ||
+			m.RosterStatus == RosterStatusRemoved {
+			return
+		}
+	}
+	if m.ActualModel == model {
+		return
+	}
+	m.ActualModel = model
+	if err := s.putMember(*m, trigger); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"[monitoring] actual_model stamp failed: agent=%s model=%s: %v\n",
+			agentID, model, err)
+	}
 }
 
 func orUnknown(v any) any {
@@ -796,20 +872,24 @@ type monitoringActor struct {
 // through memberFromWorker, so `member` is a real roster row for both kinds and
 // id / name / runtime / role / banked cost need no per-kind branch downstream.
 //
-// The three overrides exist because the worker vocabulary answers each of them
+// The two overrides exist because the worker vocabulary answers each of them
 // with a different, already-tested projection:
 //
-//	model    — a worker serves its SELF-REPORTED boot model (ActualModel), so an
-//	           unreported one blanks instead of echoing the launch intent that
-//	           GET /api/outsource-workers exists to round-trip.
 //	host     — observedWorkerHost, the restart-proof fold (a worker has no
 //	           desired_machine_id fallback the way observedHost gives a member).
 //	presence — workerPresence, which anchors "waking" on the spawn dispatch;
 //	           PresenceState would read a just-dispatched worker as offline
 //	           because a worker row carries no waking_since.
+//
+// `model` is deliberately NOT among them any more. It used to be, because the
+// two kinds genuinely disagreed: a worker served its self-reported ActualModel
+// while a staff row served the owner-configured Model. That disagreement WAS
+// the bug — one column, two meanings — so the field is gone rather than set to
+// the same expression twice. Both kinds now read member.ActualModel off the
+// roster row below, which makes re-divergence a code change instead of a
+// one-line edit at a call site.
 type monitoringSessionSource struct {
 	member   Member
-	model    string
 	host     string
 	presence string
 }
@@ -1002,7 +1082,6 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	for _, m := range members {
 		sources = append(sources, monitoringSessionSource{
 			member:   m,
-			model:    m.Model,
 			host:     s.observedHost(m),
 			presence: PresenceState(m, now, s.hub.IsOnline(m.ID)),
 		})
@@ -1019,11 +1098,9 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		}
 		_, spawnAt := s.workerSpawnObs(wk.ID)
 		sources = append(sources, monitoringSessionSource{
+			// memberFromWorker carries ActualModel across, so the model cell is
+			// served by the shared line below — one expression for both kinds.
 			member: memberFromWorker(wk),
-			// The worker's SELF-REPORTED boot model, never its configured
-			// launch Model: a worker that has reported nothing shows a blank,
-			// the same honest blank an unreported effort shows.
-			model: wk.ActualModel,
 			// The SAME host the machine/account folds attribute this worker to
 			// in this very response, so the session's machine cell and the
 			// machines row can never name different boxes for one worker.
@@ -1049,11 +1126,14 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		// worker DTO reads (P7b read-path convergence — one fold, two wires).
 		rt := foldActorRuntime(entry, gauge[m.ID], m.BankedCost, m.Runtime)
 		sessions = append(sessions, monitoringSessionDTO{
-			ID:              m.ID,
-			Name:            m.Name,
-			Role:            roleName,
-			Runtime:         NormalizeRuntime(m.Runtime),
-			Model:           src.model,
+			ID:      m.ID,
+			Name:    m.Name,
+			Role:    roleName,
+			Runtime: NormalizeRuntime(m.Runtime),
+			// ONE expression for staff and outsource alike — the reported model
+			// off the roster row, honest-empty until something reports one, and
+			// with no fallback to the owner-configured m.Model for either kind.
+			Model:           m.ActualModel,
 			Effort:          effort,
 			Machine:         resolveDisplay(machineNames, src.host),
 			Account:         resolveSessionAccount(rt.account),

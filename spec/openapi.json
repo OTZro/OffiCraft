@@ -257,7 +257,7 @@
         "type": "object"
       },
       "AgentTelemetryIngestDTO": {
-        "description": "Inbound warden/agent telemetry report (``POST /api/monitoring/telemetry``).\n\nThe reporter pushes what the model can't reliably read about itself: the\naccount-wide ``rate_limits`` (5h/7d windows), this session's own ``tokens``,\nthe host ``hardware`` snapshot (cpu/ram/battery/ac), the harness-computed\ncumulative ``cost``, and the session ``runtime``. Warden heartbeats additionally\ncarry ``binaries`` plus provider-neutral ``runtimes`` capability probes; the\nserver compares binary fingerprints against its embedded prebuilts and uses\nruntime readiness for placement. ``machine`` / ``account`` are merge tags\n(quota is per-account; hardware is per-host). Fields are permissive so a bad\nbody is a flat 400 (not a Pydantic 422); at least one telemetry field must be\npresent. EXCEPTION (T-90be): ``hardware`` / ``claude`` / ``runtimes`` now declare\ntheir nested shape and are typed as objects, so a non-object THERE is a\ndecode-time 422 instead of a 400; their CONTENTS stay permissive\n(``additionalProperties`` true) — no producer has ever sent a non-object, and no\nknown or future nested KEY is refused.\n\nThe reporting identity is the CALLER (the verified JWT ``sub``), NEVER a\nself-reported ``agent_id`` (identity-from-token audit) — that field was removed,\nso an agent can only ever report its OWN telemetry. NOTE: ``command_result.\nmember_id`` inside the body is a legit TARGET (the member a warden executed a\ncommand against) and is UNTOUCHED — it is not the caller's self-identity.",
+        "description": "Inbound warden/agent telemetry report (``POST /api/monitoring/telemetry``).\n\nThe reporter pushes what the model can't reliably read about itself: the\naccount-wide ``rate_limits`` (5h/7d windows), this session's own ``tokens``,\nthe host ``hardware`` snapshot (cpu/ram/battery/ac), the harness-computed\ncumulative ``cost``, the session ``runtime``, and the ``model`` / ``effort`` pair the\nsession is LIVE running under (reported state, never the launch configuration —\nsee those two fields). Warden heartbeats additionally\ncarry ``binaries`` plus provider-neutral ``runtimes`` capability probes; the\nserver compares binary fingerprints against its embedded prebuilts and uses\nruntime readiness for placement. ``machine`` / ``account`` are merge tags\n(quota is per-account; hardware is per-host). Fields are permissive so a bad\nbody is a flat 400 (not a Pydantic 422); at least one telemetry field must be\npresent. EXCEPTION (T-90be): ``hardware`` / ``claude`` / ``runtimes`` now declare\ntheir nested shape and are typed as objects, so a non-object THERE is a\ndecode-time 422 instead of a 400; their CONTENTS stay permissive\n(``additionalProperties`` true) — no producer has ever sent a non-object, and no\nknown or future nested KEY is refused.\n\nThe reporting identity is the CALLER (the verified JWT ``sub``), NEVER a\nself-reported ``agent_id`` (identity-from-token audit) — that field was removed,\nso an agent can only ever report its OWN telemetry. NOTE: ``command_result.\nmember_id`` inside the body is a legit TARGET (the member a warden executed a\ncommand against) and is UNTOUCHED — it is not the caller's self-identity.",
         "properties": {
           "account": {
             "title": "Account"
@@ -393,6 +393,10 @@
           },
           "machine": {
             "title": "Machine"
+          },
+          "model": {
+            "description": "The session's LIVE model, reported verbatim by the harness that is actually running it — the Claude Code statusLine payload's ``model.id`` for the claude runtime, the sidecar's launch model for codex. ``model.id`` and NOT ``model.display_name``: the id is what the boot seed already tells a member to report (\"填 Claude Code 提供的真實 model id,不要猜值\"), and it is the only one of the two that carries the ``[1m]`` 1M-context marker — a distinction the cockpit column shows today and must not lose. It is the twin of ``effort`` and carries the same contract: what the session IS, never the owner-configured launch setting it was started with (a mid-session model switch is visible here and nowhere else). OMITTED when the harness reports no model — an empty string would turn \"not measured\" into a reported blank, which is exactly the failure mode this field exists to end. Omitted leaves previously stored telemetry untouched.",
+            "title": "Model"
           },
           "rate_limits": {
             "title": "Rate Limits"
@@ -1735,7 +1739,7 @@
         "properties": {
           "actual_model": {
             "default": "",
-            "description": "The model reported by the member's current or most recent successful boot. Empty means the member has never reported a model; it is separate from the owner-configured `model` launch setting.",
+            "description": "The model the member's session is REPORTED to be running, from its own live telemetry (``AgentTelemetryIngestDTO.model``) — durably persisted, so it survives a server restart and outlives the session that reported it. Empty means nothing has ever reported a model for this member; it is separate from, and NEVER falls back to, the owner-configured `model` launch setting. Applies identically to ``kind=outsource`` rows, whose reports arrive under their own ``ow-`` token sub. WAS: written only by ``report_waking``, which no outsource worker calls (a worker's boot signal is ``get_my_task``), so it was structurally always empty for them.",
             "title": "Actual Model",
             "type": "string"
           },
@@ -2475,6 +2479,7 @@
           },
           "model": {
             "default": "",
+            "description": "The model this session REPORTED it is running (the roster row's ``actual_model``), for staff and outsource rows ALIKE — one column, one meaning. Honest-empty until something reports one, exactly like the ``effort`` beside it, and it NEVER falls back to the owner-configured launch model. WAS: staff rows served the configured ``member.model`` while outsource rows served the reported value, so a single column header meant two different things depending on the row.",
             "title": "Model",
             "type": "string"
           },
@@ -2765,6 +2770,7 @@
           },
           "model": {
             "default": "",
+            "description": "The owner-CONFIGURED launch model this worker was (or will be) started with — the intent the 喚醒／更改 dialog round-trips and saves. Deliberately NOT the reported one: that is ``MemberDTO.actual_model`` / ``MonitoringSessionDTO.model``. The two must never be merged into one cell — this DTO exists to round-trip the setting, and a settings editor that displayed reported state could not save.",
             "title": "Model",
             "type": "string"
           },

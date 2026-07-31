@@ -224,7 +224,13 @@ owner 2026-07-27 兩句話 + 一個數字:「更新的時候不能塞超過這�
 owner 兩句裁定:「理想上應該是同一支 API 同時取得所有 AI session(包含外包跟正職)」「成員面板以及監控台,一定要顯示回報回來的狀態,不能顯示設定值」。
 
 - **`GET /api/monitoring` 的 `sessions` 現在同時含成員與 live 外包 worker**(`api_monitoring.go` 的 `monitoringSessionSource`)。外包經既有的 `memberFromWorker` 進同一個迴圈,**沒有 per-kind 的第二條建構路徑**——兩種列不可能各自漂走。**沒有新增任何 DTO 欄位**:`MonitoringSessionDTO` 是 `additionalProperties:false`,加欄就是動凍結 wire;外包列靠 **`ow-` id 前綴**辨識(既有慣例),`role` 誠實留 `""`(worker 的 member row 本來就 `RoleKey: ""`,不編一個假角色名出來)。
-- **每一個遙測欄都取該 actor 自己的 telemetry/gauge entry**(key = token sub,外包就是 `ow-` id);沒回報就 null/`""`,**一律不退回名冊設定值**。外包的 `model` 取 `wk.ActualModel`(自報)而非 `wk.Model`(設定),同一條規則。
+- **每一個遙測欄都取該 actor 自己的 telemetry/gauge entry**(key = token sub,外包就是 `ow-` id);沒回報就 null/`""`,**一律不退回名冊設定值**。
+- 🔴 **`model` 這一欄在 T-e12c 當時只做了一半,已於本批補齊(owner 2026-07-31 第二次裁定:「正職跟外包都是用回傳值,不存在第二個選項的什麼正職維持看設定值」)**。當時外包取 `wk.ActualModel`(自報)、**正職仍取 `m.Model`(設定)**,所以同一個欄位標題底下是兩種語意;而更糟的是外包那半**結構上取不到值**:`ActualModel` 全庫只有兩個寫入點、都掛在 `report_waking` 上,而 `seeds/worker_context.md` §2 明文把 `report_waking` 從 worker 的開機序列拿掉(worker 的上線訊號是 `get_my_task`,那條路徑完全不碰這個欄位)⇒ **每個外包 worker 的 model 永遠是空字串**,而空字串與「還沒回報」長得一模一樣。現在:
+  - **寫入端接在真正活著的那條管道上**——Claude Code statusLine reporter(`ocagent context-report`)與 codex sidecar 各自把 live model 放進 `POST /api/monitoring/telemetry` 的新 `model` 欄(`effort` 的孿生;spawn 對兩種 kind 不分支,所以 worker 早就在用自己的 `ow-` id 送遙測——`effort` 有值就是這條管道對 `ow-` 通的活證據)。**不是**把 `report_waking` 加回 worker 開機序列,那是刻意的設計決定。
+  - **`stampReportedModel` 把它落庫**(write-on-change,空值 no-op 不擦既有值,`kind=outsource` 取 `outsourceMu`)。遙測是 in-memory,只存那裡的話 server 每次 re-exec 就把全 fleet 的模型欄清空 —— 就是這個 bug 換個計時器重演。
+  - **讀取端兩種 kind 同一行 `m.ActualModel`**;`monitoringSessionSource` 的 `model` 覆寫欄**已刪除**(兩臂都寫同一個運算式的欄位不該留著,再分歧就得改碼而不是改一個 call site)。
+  - **代價 owner 已知並接受**:從沒回報過的正職在下次開機前顯示空白。那一列的 effort / cost / account / context_pct **本來就全空**,model 是最後一個還在宣稱自己知道的格子。
+- **哨兵**:`TestGetMonitoring_SessionModelRoundTrips`(ingest→GET 往返,三列**各斷言具體字串**——改動前該欄是 `""`,所以 `!= nil` / has-key 這類寫法在這裡是恆真,實測過)、`TestGetMonitoring_ReportedModelSurvivesATelemetryWipe`(把 `s.telemetry` 換成空 store 模擬 re-exec,拿掉落庫那一步只有它會紅)、producer 側 `TestContextReportSendsSessionModel`(送 `model.id` 而非 `display_name`——id 是 boot seed 已經教的詞彙,也是唯一帶 `[1m]` 標記的那個)與 `TestReportTokenUsageSendsSessionModel`(codex;空值省略不送 `""`)。
 - **`GET /api/outsource-workers` / `outsourceWorkerDTO` 一字未動**:那份 `model`/`effort` 是 owner 的**啟動意圖**,座艙的編輯器讀它、存回去也是它。⚠️ **把它換成自報值會讓 owner 按一次儲存就把自己的設定改掉(未回報時甚至存進空值,被 closed vocabulary 422)** —— 顯示面與編輯面必須分開,這是 T-e12c 唯一刻意保留設定值的地方。
 - **released worker 不進 `sessions`**(`RosterStatusRemoved`,與 members 同一個判準),但**仍留在 `actors`** —— 花費不會因為列消失而消失。`actors` 隨著這台站跑過的每一張任務單調成長,現在式的會話表不能長那樣。
 - ⚠️ **已知不對稱**:`sessions` 的 `machine` 用 `observedWorkerHost`(與同一份回應的 machines fold 同一個運算式,兩處不可能各說各話),而**外包詳情面板**走 `projectWorker`、會先看 in-memory 的 dispatch target ⇒ 剛派出去還沒連上的 worker,面板顯示目標機器、會話列顯示 `""`。誠實留白 vs 顯示意圖,兩處的問法不同。

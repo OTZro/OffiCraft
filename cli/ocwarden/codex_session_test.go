@@ -182,6 +182,61 @@ func TestReportTokenUsageUsesLatestTurnForContextGauge(t *testing.T) {
 	}
 }
 
+// TestReportTokenUsageSendsSessionModel pins the codex half of the reported-model
+// telemetry. This sidecar is the only thing on the codex path that knows which
+// model the session is running, so without it the cockpit's 模型 column has no
+// reported value for ANY codex session — and since that column no longer falls
+// back to the configured launch model, "no reporter" now means "blank forever".
+//
+// The blank case is the load-bearing one: an empty s.model means the OffiCraft
+// launch model was unset and the machine's own Codex default is in force, i.e.
+// the name is genuinely unknown. It must be OMITTED, because sending "" would
+// record that unknown as a reported blank — the exact "measured" vs "never
+// measured" collapse the field exists to end.
+func TestReportTokenUsageSendsSessionModel(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		model string
+		want  any
+	}{
+		{name: "configured model is reported", model: "gpt-5-codex", want: "gpt-5-codex"},
+		{name: "blank is omitted, never a reported blank", model: "", want: nil},
+		{name: "whitespace is not a model name", model: "   ", want: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var telemetryBody map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Errorf("decode %s: %v", r.URL.Path, err)
+				}
+				if r.URL.Path == "/api/monitoring/telemetry" {
+					telemetryBody = body
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+
+			session := &codexSession{base: server.URL, token: "member-token",
+				effort: "low", model: tc.model}
+			session.reportTokenUsage(map[string]any{
+				"tokenUsage": map[string]any{
+					"modelContextWindow": float64(1000),
+					"last":               map[string]any{"totalTokens": float64(250)},
+					"total":              map[string]any{"totalTokens": float64(1150)},
+				},
+			})
+			if telemetryBody == nil {
+				t.Fatalf("no telemetry POST")
+			}
+			if got := telemetryBody["model"]; got != tc.want {
+				t.Errorf("telemetry model = %#v, want %#v; body=%#v",
+					got, tc.want, telemetryBody)
+			}
+		})
+	}
+}
+
 func TestRecordCompactionCountsOnlyContextCompactionItems(t *testing.T) {
 	session := &codexSession{}
 	session.recordCompaction(map[string]any{"item": map[string]any{"type": "agentMessage"}})

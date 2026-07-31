@@ -1202,6 +1202,10 @@
             "default": null,
             "title": "Machine"
           },
+          "model": {
+            "default": null,
+            "title": "Model"
+          },
         "rate_limits": {
           "default": null,
           "title": "Rate Limits"

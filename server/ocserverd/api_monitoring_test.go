@@ -659,6 +659,105 @@ func TestGetMonitoring_SessionEffortRoundTrips(t *testing.T) {
 	}
 }
 
+// TestGetMonitoring_SessionModelRoundTrips is the model twin of the effort test
+// above, and it exists because the same shape broke twice on the same wire.
+//
+// The OUTSOURCE case is the one the owner reported. A worker's model column was
+// served from ActualModel, whose only two writers both sit on report_waking —
+// and seeds/worker_context.md §2 deliberately removes report_waking from a
+// worker's boot sequence (a worker's online signal is get_my_task, which never
+// touches the field). So every outsource worker's model was STRUCTURALLY the
+// empty string, forever, and empty is indistinguishable from "has not reported
+// yet". Nothing was red because nothing tested the path end to end.
+//
+// The STAFF case is the other half of the same ruling (owner, 2026-07-31: both
+// kinds read the reported value, with no fall-back-to-configured branch left
+// anywhere). A staff row that has never reported now blanks, which is what the
+// row's every other cell already does.
+//
+// 🔴 Each assertion below names a CONCRETE string. Asserting non-nil, or key
+// presence, or "not the configured value" would all have passed BEFORE this
+// change — the field was "" on every row, so those shapes are tautologies here.
+func TestGetMonitoring_SessionModelRoundTrips(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	staff := fullMember("kyle")
+	staff.Model = "opus"
+	silent := fullMember("mira")
+	silent.Model = "opus"
+	for _, m := range []Member{staff, silent} {
+		if err := s.dal.PutMember(m); err != nil {
+			t.Fatalf("seed member: %v", err)
+		}
+	}
+	// The worker is configured "sonnet" and reports something else, so a row
+	// serving the configured value is distinguishable from one serving the
+	// reported value — the assertion cannot be satisfied by either fallback.
+	seedWorker(t, s, "ow-eva", "E1", 0, WorkerStatusActive)
+	wk, err := s.dal.GetOutsourceWorker("ow-eva")
+	if err != nil || wk == nil {
+		t.Fatalf("seed worker: %v", err)
+	}
+	wk.Model = "sonnet"
+	if err := s.dal.PutOutsourceWorker(*wk); err != nil {
+		t.Fatalf("seed worker model: %v", err)
+	}
+
+	for _, tc := range []struct{ actor, body string }{
+		{"kyle", `{"runtime":"claude","model":"claude-opus-4-5-20251101[1m]"}`},
+		{"ow-eva", `{"runtime":"claude","model":"claude-sonnet-4-5-20250929"}`},
+		// mira reports, but carries no model: a live session that never sent the
+		// field must not borrow its configured "opus".
+		{"mira", `{"runtime":"claude"}`},
+	} {
+		if rec := doIngestTelemetry(s, tc.actor, "m-abc123", tc.body); rec.Code != 200 {
+			t.Fatalf("ingest %s: %d %s", tc.actor, rec.Code, rec.Body.String())
+		}
+	}
+
+	rows := sessionRows(t, monitoringOf(t,
+		doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"})))
+	for _, tc := range []struct{ id, want, why string }{
+		{"kyle", "claude-opus-4-5-20251101[1m]", "the staff session's reported model"},
+		{"ow-eva", "claude-sonnet-4-5-20250929", "the worker's reported model, not its configured sonnet"},
+		{"mira", "", "never reported ⇒ blank, never the configured opus"},
+	} {
+		row, ok := rows[tc.id]
+		if !ok {
+			t.Fatalf("no session row for %s; got %v", tc.id, sessionIDs(monitoringOf(t,
+				doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))))
+		}
+		if row["model"] != tc.want {
+			t.Errorf("%s model = %v, want %q (%s)", tc.id, row["model"], tc.want, tc.why)
+		}
+	}
+}
+
+// TestGetMonitoring_ReportedModelSurvivesATelemetryWipe pins the durable half.
+// The telemetry store is in-memory, so serving the model out of it alone would
+// blank the whole fleet's 模型 column on every server re-exec — the same
+// fleet-wide blank this change exists to remove, just on a timer. Dropping the
+// stampReportedModel call makes this red while the round-trip test above stays
+// green, so the two failures point at different halves of the fix.
+func TestGetMonitoring_ReportedModelSurvivesATelemetryWipe(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	seedWorker(t, s, "ow-eva", "E1", 0, WorkerStatusActive)
+	if rec := doIngestTelemetry(s, "ow-eva", "m-abc123",
+		`{"runtime":"claude","model":"claude-opus-5"}`); rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	// Exactly what a re-exec does to the process-local telemetry map.
+	s.telemetry = newMemStore()
+
+	rows := sessionRows(t, monitoringOf(t,
+		doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"})))
+	if got := rows["ow-eva"]["model"]; got != "claude-opus-5" {
+		t.Errorf("model after telemetry wipe = %v, want claude-opus-5 — the report "+
+			"must be persisted on the roster row, not only in memory", got)
+	}
+}
+
 // sessionRows indexes the sessions fold by row id.
 func sessionRows(t *testing.T, d map[string]any) map[string]map[string]any {
 	t.Helper()
@@ -715,8 +814,18 @@ func TestGetMonitoring_SessionsListStaffAndOutsourceAlike(t *testing.T) {
 		t.Errorf("worker banked_cost = %v, want 2.5", worker["banked_cost"])
 	}
 	member := rows["mira"]
-	if member["name"] != "Mira" || member["role"] != "Assistant" || member["model"] != "opus" {
+	if member["name"] != "Mira" || member["role"] != "Assistant" {
 		t.Errorf("staff row changed: %v", member)
+	}
+	// fullMember("mira") is configured model "opus" and has reported nothing, so
+	// the honest answer is the SAME blank the worker beside it shows. This
+	// assertion used to read `== "opus"` — it pinned the configured launch value
+	// onto a column the owner has since ruled is reported state for both kinds
+	// (2026-07-31), which is the half of rc-1f8156f25b7a this fold had not
+	// finished: one list, but still two meanings under one header.
+	if member["model"] != "" {
+		t.Errorf("staff model = %v, want \"\" — unreported means blank, never the "+
+			"configured opus", member["model"])
 	}
 }
 

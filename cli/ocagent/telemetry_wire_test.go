@@ -209,6 +209,79 @@ func TestContextReportSendsSessionEffort(t *testing.T) {
 	}
 }
 
+// TestContextReportSendsSessionModel is the model twin of the effort test above:
+// the model was on the status-line string from day one and in no POST body ever,
+// so the cockpit's 模型 column had nothing reported to serve and fell back to the
+// owner's configured launch value — a fallback an outsource worker does not even
+// have, which is why its column was blank forever.
+//
+// Beyond presence it pins WHICH of the payload's two model strings goes on the
+// wire: `model.id`, never `model.display_name`. The id is the vocabulary the boot
+// seed already tells members to report, and it is the only one carrying the
+// "[1m]" 1M-context marker — display_name reads "Opus 4.5" for both tiers, so
+// sending it would collapse two genuinely different sessions onto one string.
+func TestContextReportSendsSessionModel(t *testing.T) {
+	home := writeClaudeJSON(t, `{"userID":"acct-1"}`)
+
+	cases := []struct {
+		name  string
+		model string
+		want  any
+	}{
+		{
+			name:  "the id is sent verbatim",
+			model: `"model":{"id":"claude-opus-4-5-20251101","display_name":"Opus 4.5"},`,
+			want:  "claude-opus-4-5-20251101",
+		},
+		{
+			name:  "the 1M marker survives",
+			model: `"model":{"id":"claude-opus-4-5-20251101[1m]","display_name":"Opus 4.5"},`,
+			want:  "claude-opus-4-5-20251101[1m]",
+		},
+		{
+			name:  "no model block is omitted, never a blank",
+			model: "",
+			want:  nil,
+		},
+		{
+			name:  "a display_name with no id is omitted, never guessed",
+			model: `"model":{"display_name":"Opus 4.5"},`,
+			want:  nil,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, posts := contextServer(t)
+			cfg := Config{Base: srv.URL, Token: "t", ID: "kyle", Home: t.TempDir()}
+			payload := `{` + tc.model + `"context_window":{"used_percentage":41.5}}`
+			var out, errOut bytes.Buffer
+			cmdContextReport(srv.Client(), cfg,
+				testEnv(map[string]string{"HOME": home, "OC_HOST": "lab-1"}), 1000.0,
+				strings.NewReader(payload), &out, &errOut)
+
+			tel := findPost(*posts, "/api/monitoring/telemetry")
+			if tel == nil {
+				t.Fatalf("no telemetry POST; posts=%v", *posts)
+			}
+			var body map[string]any
+			if err := json.Unmarshal([]byte(tel.body), &body); err != nil {
+				t.Fatalf("telemetry body is not JSON: %v", err)
+			}
+			if got := body["model"]; got != tc.want {
+				t.Errorf("telemetry model = %v, want %v; body=%s", got, tc.want, tel.body)
+			}
+			// AgentContextIngestDTO declares no model and refuses undeclared keys,
+			// so one stray copy there would 422 the whole gauge POST.
+			if ctx := findPost(*posts, "/api/agent/context"); ctx != nil {
+				if strings.Contains(ctx.body, "model") {
+					t.Errorf("model rode the context POST; it would 422; body=%s", ctx.body)
+				}
+			}
+		})
+	}
+}
+
 // transcriptToday writes a one-row transcript dated today so the tokens source is
 // live, and returns its path.
 func transcriptToday(t *testing.T) string {

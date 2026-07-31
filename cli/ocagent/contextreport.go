@@ -127,6 +127,14 @@ type telemetryBody struct {
 	// string would turn "this model has no effort" into a reported blank, and that
 	// blank is exactly what hid this bug for as long as it lasted.
 	Effort string `json:"effort,omitempty"`
+	// Model is the session's LIVE model id, read from the statusLine payload's
+	// model.id (see modelValue). Twin of Effort in every respect, including the
+	// bug that motivated it: the model was on the status-line string from the
+	// start and in no POST body ever, so the cockpit's 模型 column had to fall
+	// back to the owner's configured launch value to show anything at all — and
+	// for an outsource worker, which has no configured value on that read path,
+	// it showed nothing at all. Omitted when the payload carries no model.
+	Model string `json:"model,omitempty"`
 }
 
 // cmdContextReport implements `ocagent context-report`. `now` is the current unix
@@ -174,6 +182,7 @@ func cmdContextReport(client httpClient, cfg Config, env func(string) string, no
 				Account:      readClaudeAccount(env),
 				AccountLabel: readClaudeAccountLabel(env),
 				Effort:       effortValue(payload),
+				Model:        modelValue(payload),
 			}
 			if machine := localHost(env); machine != "" {
 				body.Machine = machine
@@ -356,6 +365,40 @@ func modelEffortSegment(obj map[string]any) string {
 func effortValue(payload string) string {
 	obj, _ := safeJSON(payload).(map[string]any)
 	return effortLevel(obj)
+}
+
+// modelValue reads the LIVE model out of the statusLine payload (`model.id`),
+// trimmed and VERBATIM. Same contract as effortValue: reported state, never the
+// launch configuration, and no fallback to OC_MODEL / the roster's configured
+// model — a session the owner started as "opus" but that is actually running
+// something else must not keep displaying the intent.
+//
+// 🔴 `model.id` and NOT `model.display_name`, which is what the status-line
+// SEGMENT renders. Two reasons, both load-bearing:
+//
+//   - The id is the identifier the boot seed already tells a member to report
+//     ("填 Claude Code 提供的真實 model id,不要猜值"), so member self-reports and
+//     this reporter land the same vocabulary in the same column.
+//   - Only the id carries the "[1m]" 1M-context marker. display_name says
+//     "Opus 4.5" for both the 1M and the standard tier, so sending it would
+//     collapse two genuinely different sessions onto one string — and the
+//     cockpit shows that distinction today.
+//
+// Absent or malformed ⇒ "" (honest blank, omitted by omitempty), never a
+// fabricated default.
+func modelValue(payload string) string {
+	obj, _ := safeJSON(payload).(map[string]any)
+	return modelID(obj)
+}
+
+// modelID pulls `model.id` out of an already-decoded payload.
+func modelID(obj map[string]any) string {
+	block, ok := obj["model"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	id, _ := block["id"].(string)
+	return strings.TrimSpace(id)
 }
 
 // effortLevel pulls `effort.level` out of an already-decoded payload. Absent or
