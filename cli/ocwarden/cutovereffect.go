@@ -86,8 +86,16 @@ type carrierProbe struct {
 	// machine's anchor identity came into existence. The anchor is never
 	// rewritten once installed (ensureAnchorPresent promotes via create-if-absent
 	// os.Link), so its birthtime is a filesystem FACT about that identity rather
-	// than anyone's claim about it.
+	// than anyone's claim about it. Only meaningful when anchorBirthKnown.
 	anchorBirth time.Time
+	// anchorBirthKnown says whether B was actually read. It is a SEPARATE field
+	// rather than "anchorBirth is the zero time" because the zero time is a real
+	// instant in year 1: every carrier is born after it, so a sentinel makes the
+	// "B is unavailable" branch indistinguishable from "B is very old" by
+	// outcome, and therefore untestable — a guard no test can redden is a guard
+	// that can be deleted by accident. Off darwin this is always false
+	// (birthtime_other.go), which is also CI's platform.
+	anchorBirthKnown bool
 	// sampledAt is the wall clock of this sample, used ONLY to turn a carrier's
 	// elapsed seconds into a creation instant for the negative comparison.
 	sampledAt time.Time
@@ -141,8 +149,10 @@ func judgeCutoverEffect(p carrierProbe) cutoverEffect {
 		return effectUnproven
 	}
 	// Deterministic negative first: a carrier predating the anchor file is proof,
-	// and it must not be masked by C2/C3 also failing.
-	if !p.anchorBirth.IsZero() {
+	// and it must not be masked by C2/C3 also failing. It requires B to have been
+	// READ — an unread B is not "the beginning of time", it is no evidence, and
+	// accusing a machine on no evidence is the mirror image of the false green.
+	if p.anchorBirthKnown {
 		for _, c := range p.carriers {
 			born := p.sampledAt.Add(-time.Duration(c.elapsed) * time.Second)
 			if born.Before(p.anchorBirth) {
@@ -153,6 +163,20 @@ func judgeCutoverEffect(p carrierProbe) cutoverEffect {
 	if len(p.carriers) == 0 {
 		return effectUnproven
 	}
+	// An unreadable leader age (processElapsedSecs never guesses, so it arrives
+	// as 0) cannot order anything.
+	//
+	// ⚠️ HONEST NOTE, because the alternative is a comment that lies: mutation
+	// testing shows NO test reddens when this check alone is deleted, and that is
+	// not a coverage gap to be papered over with a new case — it is arithmetic.
+	// C2 below rejects any carrier with `elapsed >= leaderElapsed`, and every
+	// carrier age is positive by construction, so a zero or negative leader age
+	// already fails C2 for every carrier. The check is kept anyway, as intent:
+	// without it, C2's comparison silently becomes load-bearing for a second,
+	// unrelated purpose, and the next person to touch that line has no way to
+	// know it. The fail-closed behaviour ITSELF is pinned twice — by the "leader's
+	// age is unavailable" row in the judge's table and by the sampler's own
+	// refusal when processElapsedSecs fails.
 	if p.leaderElapsed <= 0 {
 		return effectUnproven
 	}
@@ -197,19 +221,115 @@ func tmuxMemberSessionCount(run func(string, ...string) (string, error), socket 
 	return n, true
 }
 
-// processElapsedSecs reads a pid's elapsed running seconds (`ps -o etimes=`).
-// Returns (0,false) on any fault or non-numeric output — never a guess, because
+// psElapsedArgs is the ONE definition of the argv that reads a process's age.
+// Production calls it and the test fake keys its scripted answers off it, so
+// the two can never end up describing different commands — which is exactly how
+// the defect documented on processElapsedSecs stayed green.
+//
+// Sharing the definition is only half of the guard, because a shared WRONG argv
+// is still wrong in both places at once. The other half is
+// TestPsProbeArgvIsPinnedToALiteral, which pins this against a hand-written
+// string, and bin/tests/ps-field-support-guard.sh, which runs the real `ps` and
+// proves that string is something this host actually understands.
+func psElapsedArgs(pid int) []string {
+	return []string{"-p", strconv.Itoa(pid), "-o", "etime="}
+}
+
+// processElapsedSecs reads a pid's elapsed running seconds.
+//
+// 🔴 `-o etime=`, NOT `-o etimes=`. The seconds-valued `etimes` is a GNU/procps
+// extension that BSD ps does not have, and this warden only ever runs on macOS
+// (the anchor identity question is a TCC question). There, `ps -p 1 -o etimes=`
+// exits 1 with "keyword not found" — so the original reader could not read ANY
+// age on the only platform it runs on. Every machine in the fleet folded to
+// `unproven` forever: the three-valued light this file exists to provide had
+// exactly one reachable value, and the red state — the incident it all answers
+// to — could never appear. The portable field costs one parse.
+//
+// The unit suite could not catch that, and worse, endorsed it: the fake was
+// keyed on the same wrong argv, so it answered the broken flag politely and the
+// suite went green. Evidence existing is not the same as evidence bearing on
+// the thing you are trying to prove.
+//
+// Returns (0,false) on any fault or unparseable output — never a guess, because
 // a fabricated age is exactly how a false green would be manufactured.
 func processElapsedSecs(run func(string, ...string) (string, error), pid int) (int, bool) {
 	if pid <= 0 {
 		return 0, false
 	}
-	out, err := run("ps", "-p", strconv.Itoa(pid), "-o", "etimes=")
+	out, err := run("ps", psElapsedArgs(pid)...)
 	if err != nil {
 		return 0, false
 	}
-	n := atoiStrict(strings.TrimSpace(out))
-	if n <= 0 {
+	n, ok := parseEtime(strings.TrimSpace(out))
+	if !ok || n <= 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+// parseEtime converts ps's elapsed-time field to seconds. The format is
+// [[dd-]hh:]mm:ss with the smaller fields zero-padded to two digits — real
+// readings from this fleet: "05:12", "01:48:50", "52-03:47:57".
+//
+// Deliberately strict, for the same reason atoiStrict is: every value it
+// returns becomes an operand of a verdict about whether a machine is healthy,
+// so a shape this function does not fully understand must come back as
+// "unreadable" (which folds the verdict to unproven) rather than as a number
+// that merely happened to parse. In particular the minute and second fields
+// must BE two digits and be in range: "1:2:3" and "00:99" are not ps output,
+// and reading them as 3723s / 99s would be inventing an age out of something
+// unrecognised.
+func parseEtime(s string) (int, bool) {
+	days, hasDays := 0, false
+	if i := strings.IndexByte(s, '-'); i >= 0 {
+		d, ok := etimeField(s[:i], 1, 9, 1<<20)
+		if !ok {
+			return 0, false
+		}
+		days, hasDays = d, true
+		s = s[i+1:]
+	}
+	parts := strings.Split(s, ":")
+	// A day count only ever appears with a full hh:mm:ss tail.
+	if hasDays && len(parts) != 3 {
+		return 0, false
+	}
+	hours, mins, secs := "0", "", ""
+	switch len(parts) {
+	case 2:
+		mins, secs = parts[0], parts[1]
+	case 3:
+		hours, mins, secs = parts[0], parts[1], parts[2]
+	default:
+		return 0, false
+	}
+	// ps rolls hours into days past 24, so the hour field is never out of range;
+	// minutes and seconds are always printed two-wide.
+	h, hok := etimeField(hours, 1, 2, 23)
+	m, mok := etimeField(mins, 1, 2, 59)
+	sec, sok := etimeField(secs, 2, 2, 59)
+	if !hok || !mok || !sok {
+		return 0, false
+	}
+	return days*86400 + h*3600 + m*60 + sec, true
+}
+
+// etimeField parses one all-digit field of an etime, enforcing both its digit
+// WIDTH and its upper bound. Width matters because ps zero-pads: a field of an
+// unexpected length means this parser does not actually recognise the string it
+// is looking at, and the honest answer to that is "unreadable".
+func etimeField(s string, minDigits, maxDigits, max int) (int, bool) {
+	if len(s) < minDigits || len(s) > maxDigits {
+		return 0, false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n > max {
 		return 0, false
 	}
 	return n, true
@@ -262,13 +382,13 @@ func sampleCutoverEffect(ops cutoverOps, anchorPath, socket string, ppid int, no
 		}
 		p.carriers = append(p.carriers, carrier{pid: pid, elapsed: e})
 	}
-	birth, err := ops.birthTime(anchorPath)
-	if err != nil {
-		// B is only ever used to REACH the negative verdict, so losing it can only
-		// cost a red, never create a green. Keep going with a zero B.
-		birth = time.Time{}
+	// B is only ever used to REACH the negative verdict, so losing it can only
+	// cost a red, never create a green — this is the one operand whose absence
+	// does NOT fail the whole sample closed. It is recorded as unknown rather
+	// than as a zero time: see carrierProbe.anchorBirthKnown.
+	if birth, err := ops.birthTime(anchorPath); err == nil {
+		p.anchorBirth, p.anchorBirthKnown = birth, true
 	}
-	p.anchorBirth = birth
 	p.ok = true
 	return judgeCutoverEffect(p)
 }

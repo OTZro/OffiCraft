@@ -324,10 +324,16 @@ func realHeartbeat(t *testing.T) map[string]any {
 	//
 	// Asserted as "unproven" specifically, NOT as "non-empty". The collector
 	// stringifies a closed three-value type, so it can never return "" and a
-	// non-empty check would be true no matter what the judge did — including if
-	// it started answering "effective" to a machine it could not measure, which
-	// is the one failure this whole feature exists to prevent. Every probe here
-	// is refused by the blocked seam, so fail-closed is the only correct answer.
+	// non-empty check is true no matter what the code does — a dead assertion
+	// wearing the shape of a precondition.
+	//
+	// Be precise about what this DOES pin, because the obvious reading is wrong:
+	// with every probe refused by the blocked seam, sampleCutoverEffect returns
+	// at its own fail-closed guards and judgeCutoverEffect is never reached. So
+	// this covers the SAMPLER's refusal to answer without operands — not the
+	// judge's truth table, which is pinned in cutovereffect_test.go. Claiming it
+	// covered the judge would be a second dead assertion, just a better dressed
+	// one.
 	effect := newCutoverEffectReporter("/home/u/.officraft/warden/officraft", "officraft", 4242)()
 	if effect != string(effectUnproven) {
 		t.Fatalf("a collector whose every probe is blocked reported %q, want %q — "+

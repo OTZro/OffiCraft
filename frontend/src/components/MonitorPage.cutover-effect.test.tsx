@@ -24,6 +24,7 @@
 //   (4) none of the copy may carry internal vocabulary or tell anyone to
 //       restart something.
 
+import { readFile } from "node:fs/promises";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
@@ -133,6 +134,32 @@ describe("MonitorPage cutover-effect line", () => {
     }
   });
 
+  it("binds each state to ITS OWN sentence, not merely to a different one", async () => {
+    // Pairwise inequality above proves the three sentences differ. It does NOT
+    // prove each state gets the RIGHT one: swapping "could not tell" with
+    // "never reported" keeps all three distinct and passes every other test in
+    // this file. Those two imply opposite next steps — go look at that machine
+    // vs go ship it the release — so the binding is the substance, and it has
+    // to be asserted against the actual copy.
+    //
+    // I18nProvider defaults to zh (i18n/index.tsx), so zh is what renders here.
+    const m = zh.monitor.machine;
+    for (const [effect, mine, theirs] of [
+      ["not_effective", m.cutoverNotInEffect, m.cutoverUnproven],
+      ["unproven", m.cutoverUnproven, m.cutoverUnreported],
+      [null, m.cutoverUnreported, m.cutoverUnproven],
+    ] as ReadonlyArray<readonly [CutoverEffect, string, string]>) {
+      const text = await cellTextFor(effect);
+      expect(text, `${effect ?? "null"} did not render its own sentence`).toContain(
+        mine
+      );
+      expect(
+        text,
+        `${effect ?? "null"} rendered another state's sentence`
+      ).not.toContain(theirs);
+    }
+  });
+
   it("keeps the proven failure visually apart from the two grey ones", async () => {
     // Colour is the second channel, and it carries the only distinction that
     // matters at a glance: one machine has a problem, the other two merely have
@@ -161,6 +188,25 @@ describe("MonitorPage cutover-effect line", () => {
       ).not.toBe(warnClass);
       cleanup();
     }
+  });
+
+  it("paints the two quiet states grey and the failure amber, in the stylesheet", async () => {
+    // The class-name check above only proves the two are DIFFERENT. The ticket's
+    // requirement is stronger and directional: the states with no answer get
+    // muted grey, and the alarm colour stays reserved for the machine that
+    // actually has a problem. Reading the stylesheet is the only place that
+    // distinction exists — jsdom does not apply the imported CSS.
+    // Read from the repo path rather than through `import.meta.url`: vitest
+    // does not hand test modules a file: URL, so resolving against it throws.
+    const css = await readFile("src/components/monitor.css", "utf8");
+    const ruleFor = (cls: string) => {
+      const m = css.match(new RegExp(`\\.${cls}\\s*\\{([^}]*)\\}`));
+      if (m === null) throw new Error(`no .${cls} rule in monitor.css`);
+      return m[1];
+    };
+    expect(ruleFor("mon-cutover-note")).toContain("var(--color-text-muted)");
+    expect(ruleFor("mon-cutover-note")).not.toContain("var(--color-warn-fg)");
+    expect(ruleFor("mon-cutover-warn")).toContain("var(--color-warn-fg)");
   });
 
   it("renders no cutover element whatsoever on a proven-effective machine", async () => {

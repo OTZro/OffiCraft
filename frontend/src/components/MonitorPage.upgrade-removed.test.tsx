@@ -16,6 +16,8 @@ import { render, screen } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { MonitorPage } from "./MonitorPage";
 import { mockApi } from "../api/mock";
+import { en } from "../i18n/locales/en";
+import { zh } from "../i18n/locales/zh";
 import type { Member, MachineView, BinStatus } from "../types";
 
 const listMembers = vi.fn(async (): Promise<Member[]> => []);
@@ -62,9 +64,14 @@ describe("MonitorPage machine actions", () => {
     );
     await screen.findByTestId("mon-machine-id");
     expect(screen.queryByTestId("mon-upgrade-btn")).toBeNull();
-    // Also by name, so a button that comes back under a new testid is still
-    // caught. /i because the label's case is not the point.
-    expect(screen.queryByRole("button", { name: /upgrade/i })).toBeNull();
+    // Also BY NAME, so a button that comes back under a different testid — or
+    // with none at all — is still caught. The pattern has to cover zh: the
+    // provider defaults to it (i18n/index.tsx), so an English-only regex here
+    // could never match the rendered accessible name and the assertion would be
+    // decorative.
+    expect(
+      screen.queryByRole("button", { name: /升級|upgrade/i })
+    ).toBeNull();
   });
 
   it("has no upgrade entry point left on the client at all", async () => {
@@ -72,5 +79,15 @@ describe("MonitorPage machine actions", () => {
     // `upgradeMachine` on the client keeps the wire call, its mapper and its
     // fixture alive as dead weight that reads like a supported feature.
     expect(Object.keys(mockApi)).not.toContain("upgradeMachine");
+  });
+
+  it("has no upgrade wording left to render", () => {
+    // The copy is the other half of the removal, in BOTH locales: a dictionary
+    // that still defines "升級" / "Upgrade" is a button waiting to be wired back
+    // up, and it is what a name-based query would have to be updated for.
+    for (const dict of [zh, en]) {
+      const keys = Object.keys(dict.monitor.machine);
+      expect(keys.filter((k) => k.toLowerCase().startsWith("upgrad"))).toEqual([]);
+    }
   });
 });

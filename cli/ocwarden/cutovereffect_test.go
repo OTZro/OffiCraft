@@ -33,12 +33,13 @@ var anchorBorn = time.Date(2026, 7, 31, 11, 58, 0, 0, time.UTC)
 // a row that stopped being red, not as a row nobody wrote.
 func probe(mutate func(*carrierProbe)) carrierProbe {
 	p := carrierProbe{
-		shape:         shapeAnchor,
-		leaderElapsed: 7200,
-		carriers:      []carrier{{pid: 500, elapsed: 60}},
-		anchorBirth:   anchorBorn,
-		sampledAt:     anchorBorn.Add(2 * time.Hour),
-		ok:            true,
+		shape:            shapeAnchor,
+		leaderElapsed:    7200,
+		carriers:         []carrier{{pid: 500, elapsed: 60}},
+		anchorBirth:      anchorBorn,
+		anchorBirthKnown: true,
+		sampledAt:        anchorBorn.Add(2 * time.Hour),
+		ok:               true,
 	}
 	if mutate != nil {
 		mutate(&p)
@@ -167,23 +168,28 @@ func TestJudgeCutoverEffect(t *testing.T) {
 			want: effectUnproven,
 		},
 		{
-			// B unreadable (every non-darwin platform, and any stat fault) arrives
-			// as the zero time. Comparing against it would make EVERY carrier look
-			// born-after-the-identity, so the guard must skip the negative
-			// entirely rather than let a zero B answer the question.
-			name: "an unreadable identity birth loses the negative, not the caution",
+			// B unreadable — every non-darwin build (birthtime_other.go), which is
+			// also CI's platform, plus any stat fault. The carrier here IS older
+			// than the timestamp sitting in the field, so the ONLY thing standing
+			// between this row and a red accusation is the judge refusing to use
+			// an unread operand. Deleting that check turns this row
+			// not_effective: an unknown B is no evidence, and convicting a machine
+			// on no evidence is the mirror image of the false green.
+			name: "an identity birth that was never read cannot convict",
 			p: probe(func(p *carrierProbe) {
-				p.anchorBirth = time.Time{}
+				p.anchorBirthKnown = false
 				p.leaderElapsed = 600
 				p.carriers = []carrier{{pid: 500, elapsed: 9 * 24 * 3600}}
 			}),
 			want: effectUnproven,
 		},
 		{
-			// The other direction of the same guard: a zero B must not block a
-			// green that C1+C2+C3 have earned on their own.
-			name: "an unreadable identity birth still allows a proven green",
-			p:    probe(func(p *carrierProbe) { p.anchorBirth = time.Time{} }),
+			// The other direction of the same guard: losing B must cost the
+			// NEGATIVE only. It must not block a green that C1+C2+C3 have earned
+			// on their own — otherwise no machine could ever read as effective on
+			// a platform without a birthtime.
+			name: "an unread identity birth still allows a proven green",
+			p:    probe(func(p *carrierProbe) { p.anchorBirthKnown = false }),
 			want: effectEffective,
 		},
 	} {
@@ -220,10 +226,11 @@ func TestJudgeCutoverEffect_EvaM5Incident(t *testing.T) {
 			// why the old signal read green.
 			leaderElapsed: int(at.Sub(born) / time.Second),
 			// The tmux server carrying every agent, started nine days earlier.
-			carriers:    []carrier{{pid: 4242, elapsed: 9 * 24 * 3600}},
-			anchorBirth: born,
-			sampledAt:   at,
-			ok:          true,
+			carriers:         []carrier{{pid: 4242, elapsed: 9 * 24 * 3600}},
+			anchorBirth:      born,
+			anchorBirthKnown: true,
+			sampledAt:        at,
+			ok:               true,
 		})
 		if got != effectNotEffective {
 			t.Fatalf("incident verdict = %q, want %q — this is the exact machine "+
@@ -235,12 +242,13 @@ func TestJudgeCutoverEffect_EvaM5Incident(t *testing.T) {
 		restartedAt := born.Add(2*time.Hour + 54*time.Minute) // 14:52
 		at := restartedAt.Add(8 * time.Minute)
 		got := judgeCutoverEffect(carrierProbe{
-			shape:         shapeAnchor,
-			leaderElapsed: int(at.Sub(born) / time.Second),
-			carriers:      []carrier{{pid: 9001, elapsed: int(at.Sub(restartedAt) / time.Second)}},
-			anchorBirth:   born,
-			sampledAt:     at,
-			ok:            true,
+			shape:            shapeAnchor,
+			leaderElapsed:    int(at.Sub(born) / time.Second),
+			carriers:         []carrier{{pid: 9001, elapsed: int(at.Sub(restartedAt) / time.Second)}},
+			anchorBirth:      born,
+			anchorBirthKnown: true,
+			sampledAt:        at,
+			ok:               true,
 		})
 		if got != effectEffective {
 			t.Fatalf("post-restart verdict = %q, want %q — the repair that "+
@@ -261,6 +269,14 @@ const (
 	testSocket     = "officraft"
 )
 
+// psCallKey is the fake's key for the age probe, built from the SAME argv
+// definition production uses. A test that hand-wrote this string would drift
+// from the code the moment the flags changed — and answering a stale argv
+// politely is precisely how the `etimes` defect went green everywhere.
+func psCallKey(pid int) string {
+	return "ps " + strings.Join(psElapsedArgs(pid), " ")
+}
+
 // scriptSample wires a fakeCutover for the cutover-effect probe: the parent exe
 // (detectShape's operand), the leader's and carrier's ages, the tmux session
 // list and the anchor's birth.
@@ -278,15 +294,15 @@ type sampleScript struct {
 func (s sampleScript) fake() *fakeCutover {
 	f := newFakeCutover()
 	f.files["__ppid_exe__"] = s.parentExe
-	f.runOut["ps -p 4242 -o etimes="] = s.leaderElapsed
+	f.runOut[psCallKey(4242)] = s.leaderElapsed
 	f.runOut["tmux -L "+testSocket+" list-sessions -F #{session_name}"] = s.sessions
 	if s.sessionsErr != nil {
 		f.runErr["tmux -L "+testSocket+" list-sessions -F #{session_name}"] = s.sessionsErr
 	}
 	f.runOut["tmux -L "+testSocket+" display-message -p #{pid}"] = s.tmuxPID
-	f.runOut["ps -p 500 -o etimes="] = s.carrierAge
+	f.runOut[psCallKey(500)] = s.carrierAge
 	if s.carrierAgeErr != nil {
-		f.runErr["ps -p 500 -o etimes="] = s.carrierAgeErr
+		f.runErr[psCallKey(500)] = s.carrierAgeErr
 	}
 	if s.birth != nil {
 		f.birthTimes[testAnchorPath] = *s.birth
@@ -305,10 +321,10 @@ func TestSampleCutoverEffect(t *testing.T) {
 			name: "a fully readable anchor machine with a fresh carrier",
 			script: sampleScript{
 				parentExe:     testAnchorPath,
-				leaderElapsed: "7200",
+				leaderElapsed: "02:00:00",
 				sessions:      "member-m-one\nmember-m-two\n",
 				tmuxPID:       "500",
-				carrierAge:    "60",
+				carrierAge:    "01:00",
 				birth:         &anchorBorn,
 			},
 			want: effectEffective,
@@ -319,10 +335,10 @@ func TestSampleCutoverEffect(t *testing.T) {
 			name: "a carrier older than the anchor file",
 			script: sampleScript{
 				parentExe:     testAnchorPath,
-				leaderElapsed: "7200",
+				leaderElapsed: "02:00:00",
 				sessions:      "member-m-one\n",
 				tmuxPID:       "500",
-				carrierAge:    "777600", // nine days
+				carrierAge:    "09-00:00:00", // nine days
 				birth:         &anchorBorn,
 			},
 			want: effectNotEffective,
@@ -334,7 +350,7 @@ func TestSampleCutoverEffect(t *testing.T) {
 			name: "no tmux server on the socket",
 			script: sampleScript{
 				parentExe:     testAnchorPath,
-				leaderElapsed: "7200",
+				leaderElapsed: "02:00:00",
 				sessionsErr:   errors.New("no server running on /tmp/tmux-501/officraft"),
 				birth:         &anchorBorn,
 			},
@@ -347,7 +363,7 @@ func TestSampleCutoverEffect(t *testing.T) {
 			name: "an unreadable session enumeration",
 			script: sampleScript{
 				parentExe:     testAnchorPath,
-				leaderElapsed: "7200",
+				leaderElapsed: "02:00:00",
 				sessionsErr:   errors.New("connection refused: something unclassifiable"),
 				birth:         &anchorBorn,
 			},
@@ -357,7 +373,7 @@ func TestSampleCutoverEffect(t *testing.T) {
 			name: "sessions exist but the carrier's age is unreadable",
 			script: sampleScript{
 				parentExe:     testAnchorPath,
-				leaderElapsed: "7200",
+				leaderElapsed: "02:00:00",
 				sessions:      "member-m-one\n",
 				tmuxPID:       "500",
 				carrierAgeErr: errors.New("ps: no such process"),
@@ -372,7 +388,7 @@ func TestSampleCutoverEffect(t *testing.T) {
 				leaderElapsed: "not-a-number",
 				sessions:      "member-m-one\n",
 				tmuxPID:       "500",
-				carrierAge:    "60",
+				carrierAge:    "01:00",
 				birth:         &anchorBorn,
 			},
 			want: effectUnproven,
@@ -383,10 +399,10 @@ func TestSampleCutoverEffect(t *testing.T) {
 			name: "only non-member sessions on the socket",
 			script: sampleScript{
 				parentExe:     testAnchorPath,
-				leaderElapsed: "7200",
+				leaderElapsed: "02:00:00",
 				sessions:      "scratch\nbuild-box\n",
 				tmuxPID:       "500",
-				carrierAge:    "60",
+				carrierAge:    "01:00",
 				birth:         &anchorBorn,
 			},
 			want: effectUnproven,
@@ -395,10 +411,10 @@ func TestSampleCutoverEffect(t *testing.T) {
 			name: "a machine still booted from the old shape",
 			script: sampleScript{
 				parentExe:     "/sbin/launchd",
-				leaderElapsed: "7200",
+				leaderElapsed: "02:00:00",
 				sessions:      "member-m-one\n",
 				tmuxPID:       "500",
-				carrierAge:    "60",
+				carrierAge:    "01:00",
 				birth:         &anchorBorn,
 			},
 			want: effectUnproven,
@@ -409,10 +425,10 @@ func TestSampleCutoverEffect(t *testing.T) {
 			name: "no readable anchor birthtime still reaches a proven green",
 			script: sampleScript{
 				parentExe:     testAnchorPath,
-				leaderElapsed: "7200",
+				leaderElapsed: "02:00:00",
 				sessions:      "member-m-one\n",
 				tmuxPID:       "500",
-				carrierAge:    "60",
+				carrierAge:    "01:00",
 			},
 			want: effectEffective,
 		},
@@ -461,10 +477,10 @@ func TestSampleCutoverEffect_ProbesTheInstanceOwnSocket(t *testing.T) {
 	const ns = "officraft-lab"
 	f := newFakeCutover()
 	f.files["__ppid_exe__"] = testAnchorPath
-	f.runOut["ps -p 4242 -o etimes="] = "7200"
+	f.runOut[psCallKey(4242)] = "02:00:00"
 	f.runOut["tmux -L "+ns+" list-sessions -F #{session_name}"] = "member-m-one\n"
 	f.runOut["tmux -L "+ns+" display-message -p #{pid}"] = "500"
-	f.runOut["ps -p 500 -o etimes="] = "60"
+	f.runOut[psCallKey(500)] = "01:00"
 	f.birthTimes[testAnchorPath] = anchorBorn
 
 	if got := sampleCutoverEffect(f.ops(), testAnchorPath, ns, 4242, anchorBorn.Add(time.Hour)); got != effectEffective {
@@ -500,4 +516,134 @@ func TestAtoiStrict(t *testing.T) {
 			t.Errorf("atoiStrict(%q) = %d, want %d", tc.in, got, tc.want)
 		}
 	}
+}
+
+// TestPsProbeArgvIsPinnedToALiteral is the tripwire the `etimes` defect needed
+// and did not have.
+//
+// 🔴 WHY A HAND-WRITTEN LITERAL. Everything else in this file reaches `ps`
+// through psElapsedArgs, including the fake — which is correct (it stops the
+// two from describing different commands) and is ALSO how the original defect
+// survived: production asked for a flag that does not exist on macOS, the fake
+// answered it politely, and the whole suite went green while the probe was dead
+// on every real machine. A shared definition cannot catch a shared mistake. So
+// the argv is written out ONCE, by hand, here — changing the flags without
+// coming back to this line reddens.
+//
+// This test proves the argv is what we think it is. It cannot prove the host
+// supports it; that is bin/tests/ps-field-support-guard.sh, which runs the real
+// `ps`. Neither half is sufficient: the literal alone is just a second guess,
+// and the host guard alone would not notice the code drifting away from the
+// flag it verified. See also the note there on why the host half CANNOT live in
+// this package — TestMain refuses real exec inside the test binary, by design.
+func TestPsProbeArgvIsPinnedToALiteral(t *testing.T) {
+	got := "ps " + strings.Join(psElapsedArgs(4242), " ")
+	const want = "ps -p 4242 -o etime="
+	if got != want {
+		t.Fatalf("age probe argv = %q, want %q.\n"+
+			"If you changed this on purpose: `etimes` (seconds) is GNU/procps only "+
+			"and does NOT exist on macOS, the only platform this warden runs on — "+
+			"asking for it makes every machine unreadable forever. Update "+
+			"bin/tests/ps-field-support-guard.sh's expectations too, and run it.", got, want)
+	}
+
+	// And the argv really is the one that goes out on the wire, not just a
+	// helper nobody calls: drive the production reader through a recording fake
+	// and assert the recorded call.
+	f := newFakeCutover()
+	f.runOut[want] = "01:00"
+	if _, ok := processElapsedSecs(f.ops().run, 4242); !ok {
+		t.Fatalf("processElapsedSecs could not read a scripted %q; calls: %v", want, f.calls)
+	}
+	if len(f.calls) != 1 || f.calls[0] != want {
+		t.Fatalf("processElapsedSecs issued %v, want exactly [%q]", f.calls, want)
+	}
+}
+
+// TestParseEtime is the truth table for ps's elapsed-time format,
+// [[dd-]hh:]mm:ss. The three real shapes come from actual readings on a fleet
+// machine; the rejections are the point of the function.
+//
+// Every rejection below would, if accepted, hand the judge a NUMBER — and a
+// number is indistinguishable downstream from a real measurement. "00:99" as 99
+// seconds or "1:2:3" as 3723 is not a lenient parse, it is a fabricated age,
+// and a fabricated age is how a false verdict gets manufactured.
+func TestParseEtime(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want int
+		ok   bool
+	}{
+		// The three shapes ps actually prints (real readings from eva-m5).
+		{"05:12", 5*60 + 12, true},
+		{"01:48:50", 1*3600 + 48*60 + 50, true},
+		{"52-03:47:57", 52*86400 + 3*3600 + 47*60 + 57, true},
+		{"00:00", 0, true},
+		{"00:01", 1, true},
+		{"23:59:59", 23*3600 + 59*60 + 59, true},
+		{"1-00:00:00", 86400, true},
+		// Rejections.
+		{"", 0, false},
+		{"7200", 0, false},        // the seconds form this parser must NOT accept
+		{"1:2:3", 0, false},       // not zero-padded → not ps output
+		{"00:99", 0, false},       // out of range
+		{"00:60:00", 0, false},    // out of range
+		{"24:00:00", 0, false},    // ps rolls past 24h into days
+		{"1-05:12", 0, false},     // a day count without a full h:m:s tail
+		{"-01:00:00", 0, false},   // empty day field
+		{"a-01:00:00", 0, false},  // non-numeric day field
+		{"01:00:00:00", 0, false}, // four fields
+		{"01:0a", 0, false},
+		{" 05:12", 0, false},
+		{"05:12 ", 0, false},
+		{"+5:12", 0, false},
+	} {
+		got, ok := parseEtime(tc.in)
+		if ok != tc.ok || got != tc.want {
+			t.Errorf("parseEtime(%q) = (%d,%v), want (%d,%v)", tc.in, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+// TestTmuxMemberSessionCount pins the distinction the enumeration exists to
+// make: "there are zero member sessions here" and "I could not find out" are
+// different claims, and only the first one is allowed to influence a verdict.
+//
+// Asserted on the FUNCTION rather than through sampleCutoverEffect, because
+// through the sampler both paths land on `unproven` — so an end-to-end test
+// cannot tell them apart, and folding the broken case into the clean zero
+// leaves the whole package green (it did). The difference only becomes visible
+// downstream later, the day a caller starts trusting a zero.
+func TestTmuxMemberSessionCount(t *testing.T) {
+	const socket = "officraft"
+	key := "tmux -L " + socket + " list-sessions -F #{session_name}"
+
+	t.Run("counts only member sessions", func(t *testing.T) {
+		f := newFakeCutover()
+		f.runOut[key] = "member-m-one\nscratch\nmember-m-two\nbuild-box\n"
+		n, listed := tmuxMemberSessionCount(f.ops().run, socket)
+		if n != 2 || !listed {
+			t.Fatalf("= (%d,%v), want (2,true)", n, listed)
+		}
+	})
+
+	t.Run("a clean absence is a POSITIVE zero", func(t *testing.T) {
+		f := newFakeCutover()
+		f.runErr[key] = errors.New("no server running on /tmp/tmux-501/officraft")
+		n, listed := tmuxMemberSessionCount(f.ops().run, socket)
+		if n != 0 || !listed {
+			t.Fatalf("= (%d,%v), want (0,true) — a tmux that positively reports no "+
+				"server HAS answered the question", n, listed)
+		}
+	})
+
+	t.Run("an unclassifiable failure is NOT zero sessions", func(t *testing.T) {
+		f := newFakeCutover()
+		f.runErr[key] = errors.New("something nobody has seen before")
+		n, listed := tmuxMemberSessionCount(f.ops().run, socket)
+		if listed {
+			t.Fatalf("= (%d,%v), want listed=false — a broken probe must not be "+
+				"reported as an idle machine", n, listed)
+		}
+	})
 }

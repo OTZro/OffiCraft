@@ -651,6 +651,20 @@ func TestMachineCutoverEffect(t *testing.T) {
 		if got := s.machineCutoverEffect("m-box"); got != nil {
 			t.Fatalf("effect = %s, want nil (reported a shape, no effect)", effect(got))
 		}
+		// An empty string is not a verdict either. The ingest handler refuses it,
+		// but the read-back is also reached from entries written before that
+		// handler existed and from any future writer, and an empty string on the
+		// wire would narrow to null on the client anyway — so the honest thing is
+		// to not put it there.
+		s.telemetry.Set("m-box", map[string]any{"cutover_effect": ""})
+		if got := s.machineCutoverEffect("m-box"); got != nil {
+			t.Fatalf("effect = %q, want nil (an empty string is not a verdict)", effect(got))
+		}
+		// Nor is a value of the wrong type.
+		s.telemetry.Set("m-box", map[string]any{"cutover_effect": 5})
+		if got := s.machineCutoverEffect("m-box"); got != nil {
+			t.Fatalf("effect = %s, want nil (a non-string is not a verdict)", effect(got))
+		}
 	})
 
 	for _, want := range []string{"effective", "not_effective", "unproven"} {
