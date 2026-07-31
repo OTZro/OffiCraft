@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useI18n } from "../i18n";
+import { useEscapeLayer } from "../lib/useEscapeLayer";
 import { api } from "../api";
 import { ApiError } from "../api/errors";
 import type {
@@ -513,14 +514,14 @@ export function MemberDetailPanel({
   >(null);
   const [statsRequestsError, setStatsRequestsError] = useState(false);
   const [expandedRequest, setExpandedRequest] = useState<number | null>(null);
-  useEffect(() => {
-    if (statsEndpointId == null) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setStatsEndpointId(null);
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [statsEndpointId]);
+  // The stats window lives inside a still-mounted panel, so it holds a layer
+  // only while it is open.
+  const statsModalRef = useRef<HTMLDivElement>(null);
+  useEscapeLayer(
+    () => setStatsEndpointId(null),
+    statsModalRef,
+    statsEndpointId != null,
+  );
   useEffect(() => {
     setStatsRequests(null);
     setStatsRequestsError(false);
@@ -1307,6 +1308,7 @@ export function MemberDetailPanel({
           information) and no delivered tile. */}
       {statsWebhook && (
         <div
+          ref={statsModalRef}
           className="mp-webhook__statsmodal"
           role="dialog"
           aria-modal="true"

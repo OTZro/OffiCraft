@@ -1434,7 +1434,12 @@ function RolesLog({
                   return;
                 }
                 if (e.key === "Enter" && !createBusy) void submitCreate();
-                if (e.key === "Escape") resetForm();
+                if (e.key === "Escape") {
+                  // Spent here — see InlineEdit: the shared Esc dispatcher
+                  // must not also close the surface around this field.
+                  e.preventDefault();
+                  resetForm();
+                }
               }}
               data-testid="role-create-name"
             />

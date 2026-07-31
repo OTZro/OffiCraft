@@ -256,9 +256,14 @@ describe("任務產物 markdown 預覽的分享連結", () => {
     await waitFor(() => expect(container.querySelector("button.task-artifacts__chip")).toBeTruthy());
     fireEvent.click(container.querySelector("button.task-artifacts__chip")!);
     await waitFor(() => expect(container.querySelector(".md-preview")).toBeTruthy());
+    // Two layers are up. The first Esc must reach the preview ALONE…
     fireEvent.keyDown(window, { key: "Escape" });
     expect(container.querySelector(".md-preview")).toBeNull();
     expect(container.querySelector(".task-artifacts")).toBeTruthy();
+    // …and only the second one, now that the preview is gone, closes the
+    // popover underneath it.
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(container.querySelector(".task-artifacts")).toBeNull();
   });
 
   it("shares a download-only artifact from the popup using its backing att- id", async () => {

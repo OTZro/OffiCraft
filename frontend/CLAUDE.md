@@ -95,6 +95,40 @@ hover(或鍵盤 focus)才現形,coarse pointer 恆顯低不透明度。⚠️ �
 shrink-wrap 內容,單行訊息時浮動鈕會正好蓋掉最後一個字(實測「短訊息也有按鈕嗎？」
 的「？」被吃掉)。Slack 那種浮動作法只有在全寬列上才成立。
 
+## Esc 只給最內層:`lib/escapeLayers.ts` + `useEscapeLayer`(T-esc)
+每個可關閉的面以前**各自** `window.addEventListener("keydown")`,於是**一次 Esc 被送給
+全部的人**,每個人自己判斷該不該關。任務產物彈窗因此得去問「有沒有覆蓋層開著」
+(`onPreviewChange` → `attachmentPreviewOpen`),而它問的時候答案**已經被拆掉了**:
+DOM listener 依註冊順序觸發,覆蓋層先關掉自己、把 `false` 回報上來,彈窗的 listener
+才跑。誰先誰後取決於誰先註冊,所以 `artifacts-badge.ct.spec.tsx` 那條 `.md chip` 守衛
+**時綠時紅**。實測(乾淨 worktree,`origin/main` 原碼,n=15):**12 紅 3 綠**,而且
+**與負載的相關性是反的** —— 紅落在 load 1.4–17.8、3 次綠都落在 load 17–18。
+⚠️ **它的紅是 `mdChip.focus()` 等滿 30 秒逾時**,那個逾時**就是這個 bug**
+(彈窗被連帶關掉 ⇒ chip 永遠不會回來),**不是負載造成的假紅、不准調寬逾時**。
+- **機制**:全 app 只有**一個** window listener,Esc 交給**最內層**那一層。下面的層
+  根本收不到,所以**沒有人需要去問上面有誰**。
+- 🔴 **誰在最上層由 DOM 包含關係決定,不是註冊順序**。React 的**子元件 effect 先於
+  父元件**,所以巢狀面若與宿主**同一個 commit** mount 就會**先**註冊 —— 用註冊順序排
+  會**完全顛倒**(三層巢狀時 Esc 給最外層,最內層永遠收不到)。「巢狀面一定是後續互動
+  才開的」**沒有任何東西在維持**,deep-link 就會踩到。註冊順序只留給**互不包含**的兩
+  個面(兩個並排 dialog)當 tie-break:後開的在上。
+- **用法**:`useEscapeLayer(onEscape, ref)` —— `ref` 指向這個面的根節點,巢狀關係就是
+  從它讀的,**會被別的面包住的都要傳**;常駐元件裡的子視窗傳第三個參數 `active`
+  (關著就不佔位)。handler 身分每次 render 變都沒關係,**層的位置不會動**。
+- **層內要吞掉 Esc 就在 handler 裡判**(`ConfirmModal` 送出中即如此),別讓它漏到下面。
+- **element-level 的 Esc 要 `preventDefault()`**:輸入框自己的 `onKeyDown`(`InlineEdit`
+  / 角色新增列 / 手冊新增列 / 機器 onboard 列)與 layer **兩個都會跑**,不擋就會「取消
+  編輯」**順便**把它所在的那個面也關掉。dispatcher 認 `e.defaultPrevented`,四個
+  handler 各自 `preventDefault`。⚠️ 六個 layer **沒有一個真的做 focus trap**(只宣告了
+  `aria-modal`),所以按 Tab 是回得到後面的輸入框的 —— 這條不是理論。
+- 🔴 護欄的重點是 `lib/escapeLayerOwnership.test.ts`:**只有 `lib/escapeLayers.ts` 可以
+  綁 window keydown**。理由是實測的 —— 把彈窗改回舊機制,**整套 1489 條 jsdom 只有這一條
+  紅**,而唯一抓得到的 CT 守衛每跑只有約 1/3 機率紅 ⇒ 沒有它,單次 CI 偵測率約 33%。
+- 其餘護欄:`lib/escapeLayers.test.ts`(派發規則,含三層同 commit 的顛倒案)、
+  `lib/useEscapeLayer.test.tsx`(同 commit 巢狀/掛載/強制卸載/gated/重繪保位)、
+  `TaskArtifactsPopover.test.tsx` 的兩層用例、`visual-guards/artifacts-badge.ct.spec.tsx`
+  的 `.md chip` 那條(真瀏覽器)。
+
 ## 聊天/回覆輸入框(多行 composer)
 三個多行 composer——聊天(ChatArea)、回覆卡(ReplyComposer)、TaskCard 任務訊息
 框——都是 **textarea**(共用 `.chat__input`)。**送出決策收斂到單一 `lib/composerKeys.ts`

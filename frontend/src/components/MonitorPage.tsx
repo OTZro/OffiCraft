@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n";
+import { useEscapeLayer } from "../lib/useEscapeLayer";
 import { api } from "../api";
 import { ApiError } from "../api/errors";
 import { formatCost } from "../lib/cost";
@@ -813,7 +814,12 @@ export function MonitorPage() {
                     return;
                   }
                   if (e.key === "Enter") void addMachine();
-                  if (e.key === "Escape") resetOnboardRow();
+                  if (e.key === "Escape") {
+                    // Spent here — see InlineEdit: the shared Esc dispatcher
+                    // must not also close the surface around this field.
+                    e.preventDefault();
+                    resetOnboardRow();
+                  }
                 }}
                 data-testid="mon-onboard-name"
               />
@@ -1757,13 +1763,8 @@ function AccountDetailModal({
 }) {
   const { t } = useI18n();
   const dash = t.monitor.dash;
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEscapeLayer(onClose, rootRef);
 
   const { accountIdentifier, orgUuid } = splitAccountKey(account.account);
   const label =
@@ -1799,6 +1800,7 @@ function AccountDetailModal({
 
   return (
     <div
+      ref={rootRef}
       className="mon-detailmodal"
       role="dialog"
       aria-modal="true"

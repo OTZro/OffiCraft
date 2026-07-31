@@ -12,7 +12,7 @@
 // sites were passing a handler into a component that ignored it and mounting a
 // second overlay that could never open.
 
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useState } from "react";
 import type { ReactNode } from "react";
 import { useI18n } from "../i18n";
 import type { ChatAttachmentView } from "../api/adapter";
@@ -30,7 +30,6 @@ export function AttachmentStrip({
   fileNameClassName = "chat__msg-file-name",
   fileNameColClassName,
   showShareLink = false,
-  onPreviewChange,
   renderExtra,
   renderMeta,
 }: {
@@ -61,9 +60,6 @@ export function AttachmentStrip({
   /** Stored blobs expose one canonical share control even when their body is
    * download-only (PDF/binary). ChatArea supplies its own hover control. */
   showShareLink?: boolean;
-  /** Lets a containing dialog defer its own Escape handling while this strip's
-   * shared popup is open. */
-  onPreviewChange?: (open: boolean) => void;
   /** Per-item extra node rendered after the image/chip (ChatArea's hover
    * 複製分享連結 button). */
   renderExtra?: (att: ChatAttachmentView) => ReactNode;
@@ -76,10 +72,6 @@ export function AttachmentStrip({
   const [preview, setPreview] = useState<ChatAttachmentView | null>(null);
   const [shareCopiedId, setShareCopiedId] = useState<string | null>(null);
 
-  useEffect(() => {
-    onPreviewChange?.(preview !== null);
-    return () => onPreviewChange?.(false);
-  }, [preview, onPreviewChange]);
   if (attachments.length === 0) return null;
 
   function renderOne(att: ChatAttachmentView) {

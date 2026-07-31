@@ -21,8 +21,9 @@
 // (the server serves those inline); anything else (zip and other opaque
 // binaries) downloads (the server forces Content-Disposition: attachment).
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n";
+import { useEscapeLayer } from "../lib/useEscapeLayer";
 import type { Member } from "../types";
 import type { GalleryAttachment } from "../api/adapter";
 import { api } from "../api";
@@ -119,14 +120,11 @@ export function ChatGalleryPanel({
     };
   }, [member.id]);
 
-  // Esc closes the panel (bound while mounted — the panel only mounts open).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !preview) onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, preview]);
+  // Esc closes the panel — while it is the TOP layer. The preview overlay it
+  // renders registers above it, so an open preview takes the first Esc and the
+  // gallery is not asked to guess whether one is up.
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEscapeLayer(onClose, rootRef);
 
   // Sender label: the owner reads as 「我」; everyone else by the SERVER-resolved
   // display name (fromName). A sender the server left unnamed (an outsource
@@ -159,6 +157,7 @@ export function ChatGalleryPanel({
 
   return (
     <div
+      ref={rootRef}
       className="chat__gallery"
       role="dialog"
       aria-label={t.chat.galleryLabel}

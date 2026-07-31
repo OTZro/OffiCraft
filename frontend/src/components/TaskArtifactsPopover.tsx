@@ -26,6 +26,7 @@ import { useI18n } from "../i18n";
 import { api } from "../api";
 import type { TaskArtifactView, ChatAttachmentView } from "../api/adapter";
 import { formatAbsolute } from "../lib/dateFormat";
+import { useEscapeLayer } from "../lib/useEscapeLayer";
 import { AttachmentStrip } from "./AttachmentStrip";
 import {
   CloseIcon,
@@ -162,9 +163,6 @@ function ArtifactsPopover({
   // whether formatAbsolute prefixes the year, so a plain render-time read is
   // fine (no state/interval needed, unlike RepliesPage's counters).
   const nowTs = Date.now() / 1000;
-  // Whether the strip's shared preview overlay is open (it owns that state and
-  // reports it here, so this popover can stand down from Escape while it is up).
-  const [attachmentPreviewOpen, setAttachmentPreviewOpen] = useState(false);
 
   // Fetch the full artifact set on open, and keep it live while open (a task
   // delta fans when an artifact is pinned/removed) — the ChatGalleryPanel
@@ -188,14 +186,13 @@ function ArtifactsPopover({
     };
   }, [taskId, onHydrate]);
 
-  // Esc closes the popover (only when no overlay is capturing Esc itself).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !attachmentPreviewOpen) onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, attachmentPreviewOpen]);
+  // Esc closes the popover — but only while it is the TOP layer. A preview
+  // overlay opened from one of its rows registers above it, so the first Esc
+  // reaches the overlay alone and this popover stays open. It no longer has to
+  // ask whether an overlay is up (the old flag was read after the overlay had
+  // already unmounted and cleared it).
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEscapeLayer(onClose, rootRef);
 
   // ONE list, grouped 檔案 → 圖片 → 連結 (the old tab order). File and image
   // rows share the AttachmentStrip renderer, so they are handed to it in a
@@ -247,6 +244,7 @@ function ArtifactsPopover({
 
   return (
     <div
+      ref={rootRef}
       className="task-artifacts"
       role="dialog"
       aria-label={t.tasks.artifacts.panelTitle}
@@ -276,7 +274,6 @@ function ArtifactsPopover({
               fileChipClassName="task-artifacts__chip"
               fileNameClassName="task-artifacts__chip-name"
               fileNameColClassName="task-artifacts__chip-text"
-              onPreviewChange={setAttachmentPreviewOpen}
               renderExtra={renderExtra}
               renderMeta={(att) => {
                 const art = artifacts.find((a) => a.id === att.id);
