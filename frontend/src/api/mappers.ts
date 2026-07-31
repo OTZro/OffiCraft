@@ -25,7 +25,6 @@ import type {
   OnboardResultView,
   DeleteResultView,
   UninstallResultView,
-  UpgradeResultView,
   TeardownHereResultView,
   BootstrapResultView,
   MachineView,
@@ -52,7 +51,6 @@ import type {
   WireOnboardResult,
   WireDeleteResult,
   WireUninstallResult,
-  WireUpgradeResult,
   WireTeardownHereResult,
   WireBootstrapResult,
   WireChatRead,
@@ -1073,16 +1071,6 @@ export function toDeleteResult(w: WireDeleteResult): DeleteResultView {
 /** Map the uninstall wire result → the view model (snake→camel). Pure rename;
  * `dispatched` passes through verbatim (whether the uninstall RPC was driven). */
 export function toUninstallResult(w: WireUninstallResult): UninstallResultView {
-  return {
-    memberId: w.member_id,
-    machineId: w.machine_id,
-    dispatched: w.dispatched,
-  };
-}
-
-/** Map the upgrade wire result → the view model (snake→camel). Pure rename;
- * `dispatched` passes through verbatim (whether the update RPC was enqueued). */
-export function toUpgradeResult(w: WireUpgradeResult): UpgradeResultView {
   return {
     memberId: w.member_id,
     machineId: w.machine_id,

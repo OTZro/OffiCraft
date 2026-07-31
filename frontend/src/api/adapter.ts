@@ -25,7 +25,6 @@ import type {
   OnboardResultView,
   DeleteResultView,
   UninstallResultView,
-  UpgradeResultView,
   TeardownHereResultView,
   BootstrapResultView,
   MachineView,
@@ -1284,20 +1283,6 @@ export interface Api {
    * uninstall). The caller refetches afterwards to pick up the new online state.
    */
   uninstallMachine(memberId: string): Promise<UninstallResultView>;
-
-  /**
-   * UPGRADE a machine's binaries NOW (`POST /api/machines/{member_id}/upgrade`,
-   * T-5f01, owner/admin-agent) — the one-click face of the machine table's "stale"
-   * verdict. Fire-and-forget: the server enqueues the `update` warden-command
-   * onto the machine's live SSE downstream and the warden kicks its own
-   * self-update reconcile (download + verify + atomic swap); nothing durable
-   * changes server-side. Returns `{memberId, machineId, dispatched}`:
-   * `dispatched` is TRUE when the warden was online (command enqueued), FALSE
-   * when offline (nothing commanded — an offline warden self-updates on its
-   * next connect anyway). Convergence is observed, not returned: the row's
-   * `binStatus` flips to "current" on a later refetch once the swap lands.
-   */
-  upgradeMachine(memberId: string): Promise<UpgradeResultView>;
 
   /**
    * Re-fetch a machine's copy-paste install command anytime (`GET

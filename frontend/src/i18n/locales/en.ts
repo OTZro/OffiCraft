@@ -947,18 +947,30 @@ export const en: Dict = {
       hardwareBad: "bad value",
       hardwareBadHint:
         "This machine reported a value of the wrong type, so it cannot be shown — the probe ran, its reading is unusable. Check that machine's warden version.",
-      // ── the ONE cutover message a reader ever sees, and only on the machine
-      // that has the problem. No "all good" counterpart exists on purpose: the
-      // green badge this replaced is what let a machine whose cutover had NOT
-      // taken effect look healthy for three hours.
+      // ── the cutover lines. THREE of the four states speak; the fourth —
+      // proven in effect — renders nothing at all, and that silence is the
+      // whole contract: a blank row now means "we measured this machine and it
+      // is fine", and nothing else may look like it.
+      //
+      // Before this, "measured and fine", "measured and could not tell" and
+      // "never measured" were the same blank, which is how a machine whose
+      // cutover had NOT taken effect stayed green for three hours. The first
+      // line below is the proven failure (amber — a real problem); the two
+      // after it are the absence of an answer (grey — nothing is known to be
+      // wrong, but nothing is known to be right either).
       //
       // 🔴 The copy carries NO internal vocabulary. "anchor" / "legacy" are
       // names for launchd plist shapes and mean nothing to the people reading
       // this screen (owner, verbatim: nobody outside knows what anchor is), so
-      // the sentence says what is true of THEIR machine instead. It also stops
-      // at describing the state — it does not tell anyone to restart anything.
+      // the sentences say what is true of THEIR machine instead. They also stop
+      // at describing the state — none of them tells anyone to restart
+      // anything, which is the option the owner ruled out explicitly.
       cutoverNotInEffect:
         "A recent change to how this machine runs its agents has not reached the agents currently running on it — they were started before the change.",
+      cutoverUnproven:
+        "This machine checked whether a recent change to how it runs its agents reached the agents currently running on it, and could not tell either way.",
+      cutoverUnreported:
+        "This machine has never reported whether a recent change to how it runs its agents reached the agents running on it — the software on it is too old to check.",
     },
   },
   settings: {

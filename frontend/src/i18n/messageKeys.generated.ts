@@ -136,6 +136,8 @@ export const MESSAGE_KEYS: readonly string[] = [
   "monitor.machine.copyBootCmd",
   "monitor.machine.copyBootCmdError",
   "monitor.machine.cutoverNotInEffect",
+  "monitor.machine.cutoverUnproven",
+  "monitor.machine.cutoverUnreported",
   "monitor.machine.deleteBusy",
   "monitor.machine.deleteConfirm",
   "monitor.machine.deleteConfirmBodyLead",

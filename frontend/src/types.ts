@@ -390,18 +390,6 @@ export interface UninstallResultView {
   dispatched: boolean;
 }
 
-/**
- * Result of `POST /api/machines/{member_id}/upgrade` (one-click upgrade):
- * `dispatched` reports whether the `update` command was actually enqueued
- * onto the warden's live SSE downstream (false = offline, nothing commanded).
- * Passthrough (never fabricated).
- */
-export interface UpgradeResultView {
-  memberId: string;
-  machineId: string;
-  dispatched: boolean;
-}
-
 // ── Monitoring view models (camelCase; mapped from the Wire* mon shapes) ──────
 // Same honesty rule as `Member`: `null` means "no real source yet" → the UI
 // renders "—", never a fabricated number.

@@ -38,7 +38,6 @@ import type {
   OnboardResultView,
   DeleteResultView,
   UninstallResultView,
-  UpgradeResultView,
   BootstrapResultView,
   TeardownHereResultView,
   MachineView,
@@ -96,7 +95,6 @@ import {
   toOnboardResult,
   toDeleteResult,
   toUninstallResult,
-  toUpgradeResult,
   toBootstrapResult,
   toTeardownHereResult,
   toMachine,
@@ -1253,21 +1251,6 @@ export const httpApi: Api = {
       }),
     );
     return toUninstallResult(wire);
-  },
-
-  async upgradeMachine(memberId: string): Promise<UpgradeResultView> {
-    // POST /api/machines/{member_id}/upgrade -> MachineUpgradeResultDTO
-    // {member_id, machine_id, dispatched}. Enqueues the `update` warden-command
-    // (the warden kicks its own self-update reconcile). Fire-and-forget: no
-    // durable write — `dispatched` is TRUE when the warden was online, FALSE
-    // when offline. A non-2xx (transport/gate) throws via the client. The
-    // caller refetches later to observe binStatus converging to "current".
-    const wire = unwrap(
-      await client.POST("/api/machines/{member_id}/upgrade", {
-        params: { path: { member_id: memberId } },
-      }),
-    );
-    return toUpgradeResult(wire);
   },
 
   async getMachineBootCommand(machineId: string): Promise<string> {

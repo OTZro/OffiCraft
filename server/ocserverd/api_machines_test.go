@@ -622,6 +622,89 @@ func TestMachineWardenShape(t *testing.T) {
 	})
 }
 
+// TestMachineCutoverEffect is the registry-row read-back for the verdict that
+// says whether the cutover actually reached the agent-carrying processes.
+//
+// Same passthrough contract as the shape above, and the same absent-vs-reported
+// distinction — but the words are NOT the same three, and the pair is allowed to
+// DISAGREE. "anchor" plus "not_effective" is not a contradiction for the server
+// to reconcile: it is the state the incident had, and the reason this second
+// field exists at all. A server that derived either from the other would erase
+// exactly the case worth seeing.
+func TestMachineCutoverEffect(t *testing.T) {
+	effect := func(v *string) string {
+		if v == nil {
+			return "<nil>"
+		}
+		return *v
+	}
+
+	t.Run("a machine that has never reported one reads nil", func(t *testing.T) {
+		s := newMachinesTestServer(t)
+		if got := s.machineCutoverEffect("m-box"); got != nil {
+			t.Fatalf("effect = %s, want nil (no telemetry entry)", effect(got))
+		}
+		// A heartbeat that carries a SHAPE but no effect is the warden build in
+		// between the two releases. It must not borrow the shape's answer, and it
+		// must not read as the reported "unproven".
+		s.telemetry.Set("m-box", map[string]any{"warden_shape": "anchor"})
+		if got := s.machineCutoverEffect("m-box"); got != nil {
+			t.Fatalf("effect = %s, want nil (reported a shape, no effect)", effect(got))
+		}
+	})
+
+	for _, want := range []string{"effective", "not_effective", "unproven"} {
+		t.Run("a reported "+want+" passes through verbatim", func(t *testing.T) {
+			s := newMachinesTestServer(t)
+			s.telemetry.Set("m-box", map[string]any{"cutover_effect": want})
+			if got := s.machineCutoverEffect("m-box"); got == nil || *got != want {
+				t.Fatalf("effect = %s, want %q", effect(got), want)
+			}
+		})
+	}
+
+	t.Run("the machine list row carries shape and effect independently", func(t *testing.T) {
+		s := newMachinesTestServer(t)
+		putTestMember(t, s, Member{
+			ID: "m-box", Name: "box", Kind: KindWarden, Effort: "medium",
+			DesiredState: DesiredStateOffline, RosterStatus: RosterStatusActive,
+		})
+		s.telemetry.Set("m-box", map[string]any{
+			"warden_shape": "anchor", "cutover_effect": "not_effective",
+		})
+		rec := httptest.NewRecorder()
+		s.HandleListMachinesApiMachinesGet(rec, httptest.NewRequest("GET", "/api/machines", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list machines: %d %s", rec.Code, rec.Body.String())
+		}
+		var rows []map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		byID := map[string]map[string]any{}
+		for _, row := range rows {
+			byID[row["machine_id"].(string)] = row
+		}
+		if got := byID["m-box"]["warden_shape"]; got != "anchor" {
+			t.Fatalf("m-box warden_shape = %v, want anchor", got)
+		}
+		if got := byID["m-box"]["cutover_effect"]; got != "not_effective" {
+			t.Fatalf("m-box cutover_effect = %v, want not_effective — the row must "+
+				"carry the disagreement, not resolve it", got)
+		}
+		// The seeded server-self warden has never reported → the key is on the
+		// wire and null, NOT "unproven".
+		row, listed := byID[ServerSelfHost]
+		if !listed {
+			t.Fatalf("server-self row missing from %v", byID)
+		}
+		if got, present := row["cutover_effect"]; !present || got != nil {
+			t.Fatalf("server-self cutover_effect = %v (present=%v), want an explicit null",
+				got, present)
+		}
+	})
+}
+
 func TestMachineClaudeInfo(t *testing.T) {
 	report := func(s *apiServer, id string, probe map[string]any) {
 		s.telemetry.Set(id, map[string]any{"claude": probe})

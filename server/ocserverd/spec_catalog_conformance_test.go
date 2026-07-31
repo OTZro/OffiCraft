@@ -117,12 +117,21 @@ var openapiOverweight = map[string][]string{
 // Advertising it in tools/list would be an invitation to fabricate the exact
 // signal the fleet uses to decide whether a machine's migration succeeded.
 //
+// ingest_telemetry.cutover_effect: the same argument, one step further in. The
+// verdict is computed from the ages of the tmux server processes that CARRY
+// agent sessions on that machine, measured against the birth of its anchor
+// inode (cli/ocwarden/cutovereffect.go). Only a process on the box can see any
+// of those operands. And this field is the one that was added BECAUSE a signal
+// nobody could falsify still read green while the cutover had not taken effect
+// — putting a hand-typed version of it on the MCP surface would hand out the
+// falsification the incident did not even need.
+//
 // NOT filed under knownCatalogDrift, deliberately: every entry there was traced
 // to its read and confirmed MISSING (debt to be repaid), and that list is
 // checked for rot precisely so it shrinks. Recording an intentional omission as
 // debt would invite the next person to "repay" it by advertising this field.
 var deliberatelyOffMCP = map[string][]string{
-	"ingest_telemetry": {"warden_shape"},
+	"ingest_telemetry": {"warden_shape", "cutover_effect"},
 }
 
 type openapiSpec struct {

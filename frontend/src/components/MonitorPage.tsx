@@ -522,17 +522,16 @@ export function MonitorPage() {
                             ? t.monitor.machine.online
                             : t.monitor.machine.offline}
                         </span>
-                        {/* Nothing is rendered here in the normal case. The
-                         * badge that used to live here named an internal shape
-                         * vocabulary nobody outside this codebase can read, and
-                         * its green face asserted a cutover had taken effect
-                         * when it only ever observed warden's own parent. The
-                         * one thing worth a reader's attention now is the
-                         * machine having agents the change has NOT reached —
-                         * and that speaks for itself below. */}
-                        <CutoverNotInEffectWarning
-                          effect={m.cutoverEffect}
-                        />
+                        {/* Nothing is rendered here for a machine whose
+                         * cutover is PROVEN in effect — and that silence is
+                         * now the point: a blank means "measured, fine", and
+                         * the two states that used to share that blank say so
+                         * for themselves below. The badge that used to live
+                         * here named an internal shape vocabulary nobody
+                         * outside this codebase can read, and its green face
+                         * asserted a cutover had taken effect when it only
+                         * ever observed warden's own parent. */}
+                        <CutoverEffectLine effect={m.cutoverEffect} />
                       </div>
                     </td>
                     {/* Per-runtime version columns (T-674d), replacing the old
@@ -1083,30 +1082,50 @@ export function MonitorPage() {
   );
 }
 
-/** The ONE thing this row says about the cutover, and only when it has
- * something to say: the machine is running agents the change has not reached.
+/** What this row says about the cutover — which for exactly one of the four
+ * states is NOTHING, and that is the contract:
  *
- * Everything else renders NOTHING. There is no green face, no "all good" chip,
- * no placeholder holding the space — the previous badge's green state is what
- * let a machine whose cutover had not taken effect look healthy for three
- * hours, and replacing it with a differently-worded chip would keep the same
- * habit of reading a colour instead of a fact.
+ *   "effective"     proven in effect → silence. A row with no line under it
+ *                   means this machine was measured and passed, and no other
+ *                   state may look like that.
+ *   "not_effective" proven otherwise → the amber sentence. Something is wrong.
+ *   "unproven"      the machine checked and could not settle it → grey.
+ *   null            the machine has never reported → grey, its own sentence.
+ *
+ * The last two are grey rather than amber because they are the ABSENCE of an
+ * answer, not a problem: nothing is known to be wrong on those machines, but
+ * nothing is known to be right either, and colouring them like a fault would
+ * train readers to ignore the colour that does mean a fault. They still have to
+ * SAY something, though — the three of them sharing one blank is the defect
+ * being retired, and a green face for the fourth is the defect before that.
  *
  * The copy carries NO internal vocabulary. "anchor" and "legacy" are names for
  * launchd plist shapes that mean nothing to anyone who has not read this
- * repository, and a warning nobody can act on is not a warning. It also does
- * not tell anyone to restart anything: this surface makes the state VISIBLE and
- * stops there — deciding when to act is a person's call, deliberately. */
-function CutoverNotInEffectWarning({ effect }: { effect: CutoverEffect }) {
+ * repository, and a warning nobody can act on is not a warning. None of it
+ * tells anyone to restart anything either: this surface makes the state VISIBLE
+ * and stops there — deciding when to act is a person's call, deliberately. */
+function CutoverEffectLine({ effect }: { effect: CutoverEffect }) {
   const { t } = useI18n();
-  if (effect !== "not_effective") return null;
+  const m = t.monitor.machine;
+  if (effect === "effective") return null;
+  if (effect === "not_effective") {
+    return (
+      <span
+        className="mon-cutover-warn"
+        data-testid="mon-cutover-warning"
+        role="status"
+      >
+        {m.cutoverNotInEffect}
+      </span>
+    );
+  }
+  // The two quiet states. Keyed by the state's own name rather than falling
+  // through a `??` to a shared default: "the machine could not tell" and "the
+  // machine never said" are opposite next steps (go look at that box vs ship it
+  // the release), and a shared sentence would send a reader to the wrong one.
   return (
-    <span
-      className="mon-cutover-warn"
-      data-testid="mon-cutover-warning"
-      role="status"
-    >
-      {t.monitor.machine.cutoverNotInEffect}
+    <span className="mon-cutover-note" data-testid="mon-cutover-note">
+      {effect === "unproven" ? m.cutoverUnproven : m.cutoverUnreported}
     </span>
   );
 }

@@ -420,7 +420,20 @@
   line-height: 1.35;
   color: var(--color-warn-fg);
 }
-
+/* "we have no answer for this machine" — the two states that are the ABSENCE
+   of a verdict (the box checked and could not tell; the box has never checked).
+   Same sentence geometry as the warning above so the row reads the same way,
+   and a deliberately different COLOUR: muted grey, because nothing is known to
+   be wrong here. Amber is reserved for the machine that has a real problem —
+   painting "no data" like a fault teaches readers to ignore the fault colour,
+   and the good case still has no face at all. */
+.mon-cutover-note {
+  display: block;
+  margin-top: 0.25em;
+  font-size: 0.8em;
+  line-height: 1.35;
+  color: var(--color-text-muted);
+}
 
 /* neutral ghost button (cancel / close) — shares the .btn silhouette */
 .btn--ghost {

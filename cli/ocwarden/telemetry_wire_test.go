@@ -320,11 +320,18 @@ func realHeartbeat(t *testing.T) map[string]any {
 	}
 
 	// Same reasoning for the cutover-effect verdict: the real collector, whose
-	// probes are all blocked inside the test binary, so it fails closed to
-	// "unproven" — its own word, not one typed here.
+	// probes are all blocked inside the test binary.
+	//
+	// Asserted as "unproven" specifically, NOT as "non-empty". The collector
+	// stringifies a closed three-value type, so it can never return "" and a
+	// non-empty check would be true no matter what the judge did — including if
+	// it started answering "effective" to a machine it could not measure, which
+	// is the one failure this whole feature exists to prevent. Every probe here
+	// is refused by the blocked seam, so fail-closed is the only correct answer.
 	effect := newCutoverEffectReporter("/home/u/.officraft/warden/officraft", "officraft", 4242)()
-	if effect == "" {
-		t.Fatal("precondition: the cutover-effect collector produced nothing to check")
+	if effect != string(effectUnproven) {
+		t.Fatalf("a collector whose every probe is blocked reported %q, want %q — "+
+			"an unmeasurable machine must never claim a verdict", effect, effectUnproven)
 	}
 
 	heartbeat, err := buildTelemetryPayload("m-1", "lab-1", hardware,
