@@ -354,31 +354,41 @@ func atoiStrict(s string) int {
 	return n
 }
 
-// sampleCutoverEffect takes the whole sample through the seam and judges it.
+// sampleCarrierProbe reads every operand through the seam and returns what it
+// found, WITHOUT judging.
+//
+// Split from the verdict on purpose. Several of this function's decisions are
+// invisible downstream — an unreadable session list is not "zero sessions", an
+// unread birthtime is not "a birthtime of zero" — but all of them fold to the
+// same `unproven`, so a test that reads only the verdict cannot tell a correct
+// collector from a broken one. Mutation testing showed exactly that: folding
+// the two cases the other way left the whole package green. The operands have
+// to be assertable directly, and now they are.
+//
 // ppid is the launchd job leader (warden's parent — the anchor process itself
 // when the machine is converted).
-func sampleCutoverEffect(ops cutoverOps, anchorPath, socket string, ppid int, now time.Time) cutoverEffect {
-	if anchorPath == "" || socket == "" {
-		return effectUnproven
-	}
+func sampleCarrierProbe(ops cutoverOps, anchorPath, socket string, ppid int, now time.Time) carrierProbe {
 	p := carrierProbe{sampledAt: now}
+	if anchorPath == "" || socket == "" {
+		return p
+	}
 	p.shape = detectShape(ops, ppid, anchorPath)
 	// Read the rest even when the shape is not anchor: the operands are cheap and
 	// keeping the sample complete keeps the judge a pure truth table.
 	if e, ok := processElapsedSecs(ops.run, ppid); ok {
 		p.leaderElapsed = e
 	} else {
-		return effectUnproven
+		return p
 	}
 	members, listed := tmuxMemberSessionCount(ops.run, socket)
 	if !listed {
-		return effectUnproven
+		return p
 	}
 	if members > 0 {
 		pid := tmuxServerPID(ops.run, socket)
 		e, ok := processElapsedSecs(ops.run, pid)
 		if !ok {
-			return effectUnproven
+			return p
 		}
 		p.carriers = append(p.carriers, carrier{pid: pid, elapsed: e})
 	}
@@ -390,7 +400,12 @@ func sampleCutoverEffect(ops cutoverOps, anchorPath, socket string, ppid int, no
 		p.anchorBirth, p.anchorBirthKnown = birth, true
 	}
 	p.ok = true
-	return judgeCutoverEffect(p)
+	return p
+}
+
+// sampleCutoverEffect takes the whole sample through the seam and judges it.
+func sampleCutoverEffect(ops cutoverOps, anchorPath, socket string, ppid int, now time.Time) cutoverEffect {
+	return judgeCutoverEffect(sampleCarrierProbe(ops, anchorPath, socket, ppid, now))
 }
 
 // newCutoverEffectReporter builds the 30s heartbeat's collector, mirroring

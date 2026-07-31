@@ -54,16 +54,31 @@ bad() { FAIL=$((FAIL+1)); printf '  FAIL — %s\n' "$1"; }
 # Read them OUT OF THE CODE rather than hand-copying them here: a guard holding
 # its own copy of the argv is one more place to drift, and drift is the whole
 # defect.
-mapfile -t FIELDS < <(
-  grep -hoE '"-o", "[a-z_]+="' "$SRC" "$SHAPE_SRC" \
-    | sed -E 's/.*"-o", "([a-z_]+)=".*/\1/' | sort -u
-)
+#
+# ⚠️ PER FILE, not pooled. Pooling was this guard's own version of the bug it
+# exists to catch: with the two files' fields merged into one list, a call site
+# that stopped matching the pattern left the list non-empty (the OTHER file's
+# field was still in it) and the guard went green having checked nothing about
+# the probe that vanished. Mutation testing caught exactly that. Every scanned
+# file must contribute at least one field, or this guard says so.
+FIELDS=()
+for src in "$SRC" "$SHAPE_SRC"; do
+  mapfile -t found < <(
+    grep -hoE '"-o", "[a-z_]+="' "$src" \
+      | sed -E 's/.*"-o", "([a-z_]+)=".*/\1/' | sort -u
+  )
+  if [[ ${#found[@]} -eq 0 ]]; then
+    bad "no 'ps -o <field>=' call site found in ${src#"$ROOT"/} — either the probe moved or it is now assembled in a way this scan cannot see, and in both cases this guard has stopped checking it"
+    continue
+  fi
+  printf '  ..   — %s asks for: %s\n' "${src#"$ROOT"/}" "${found[*]}"
+  FIELDS+=("${found[@]}")
+done
 if [[ ${#FIELDS[@]} -eq 0 ]]; then
-  bad "no 'ps -o <field>=' call site found in the warden probe sources — this guard has stopped discriminating (it would pass vacuously)"
   printf 'ps-field-support: %d ok, %d failed\n' "$PASS" "$FAIL"
   exit 1
 fi
-printf '  ..   — fields asked for by the source: %s\n' "${FIELDS[*]}"
+mapfile -t FIELDS < <(printf '%s\n' "${FIELDS[@]}" | sort -u)
 
 for field in "${FIELDS[@]}"; do
   if ! out="$(ps -p $$ -o "${field}=" 2>&1)"; then

@@ -647,3 +647,86 @@ func TestTmuxMemberSessionCount(t *testing.T) {
 		}
 	})
 }
+
+// TestSampleCarrierProbe_RecordsWhatItCouldNotRead asserts the OPERANDS, not
+// the verdict.
+//
+// 🔴 WHY THIS EXISTS SEPARATELY. Every failure below folds to the same
+// `unproven` once judged, so a verdict-level test cannot distinguish a
+// collector that refused from one that quietly substituted a plausible value.
+// Mutation testing proved that: making an unreadable session list count as zero
+// sessions, and recording a failed birthtime read as a birthtime of zero, both
+// left the entire package green. The substitutions are invisible TODAY and
+// become wrong the day anything downstream starts trusting the operand — which
+// is precisely the shape of the bug this whole file answers to.
+func TestSampleCarrierProbe_RecordsWhatItCouldNotRead(t *testing.T) {
+	base := sampleScript{
+		parentExe:     testAnchorPath,
+		leaderElapsed: "02:00:00",
+		sessions:      "member-m-one\n",
+		tmuxPID:       "500",
+		carrierAge:    "01:00",
+		birth:         &anchorBorn,
+	}
+	now := anchorBorn.Add(90 * time.Minute)
+
+	t.Run("a complete read is marked complete", func(t *testing.T) {
+		p := sampleCarrierProbe(base.fake().ops(), testAnchorPath, testSocket, 4242, now)
+		if !p.ok || !p.anchorBirthKnown || len(p.carriers) != 1 || p.leaderElapsed != 7200 {
+			t.Fatalf("probe = %+v, want a complete sample", p)
+		}
+	})
+
+	t.Run("an unreadable session list is not zero sessions", func(t *testing.T) {
+		s := base
+		s.sessionsErr = errors.New("something unclassifiable")
+		p := sampleCarrierProbe(s.fake().ops(), testAnchorPath, testSocket, 4242, now)
+		if p.ok {
+			t.Fatalf("probe.ok = true with an unreadable enumeration (%+v) — "+
+				"a broken probe was recorded as a machine with no agents", p)
+		}
+	})
+
+	t.Run("a positively absent tmux server IS zero sessions", func(t *testing.T) {
+		// The other direction, so "mark everything unreadable" is not a way to
+		// pass the case above: a tmux that cleanly reports no server HAS answered.
+		s := base
+		s.sessionsErr = errors.New("no server running on /tmp/tmux-501/officraft")
+		p := sampleCarrierProbe(s.fake().ops(), testAnchorPath, testSocket, 4242, now)
+		if !p.ok {
+			t.Fatalf("probe.ok = false on a clean absence (%+v) — that is an answer, "+
+				"not a fault", p)
+		}
+		if len(p.carriers) != 0 {
+			t.Fatalf("probe.carriers = %v, want empty", p.carriers)
+		}
+	})
+
+	t.Run("a failed birthtime read is recorded as UNKNOWN, not as zero", func(t *testing.T) {
+		s := base
+		s.birth = nil // the fake answers os.ErrNotExist
+		p := sampleCarrierProbe(s.fake().ops(), testAnchorPath, testSocket, 4242, now)
+		if !p.ok {
+			t.Fatalf("probe.ok = false (%+v) — losing B must cost the negative only", p)
+		}
+		if p.anchorBirthKnown {
+			t.Fatalf("probe.anchorBirthKnown = true after a failed read (birth=%v). "+
+				"The zero time is a real instant in year 1, so recording it as a "+
+				"KNOWN birth makes every carrier look born-after-the-identity — the "+
+				"verdict is the same today and silently wrong the moment anything "+
+				"reads the operand", p.anchorBirth)
+		}
+	})
+
+	t.Run("unresolved install paths read nothing at all", func(t *testing.T) {
+		f := base.fake()
+		p := sampleCarrierProbe(f.ops(), "", testSocket, 4242, now)
+		if p.ok {
+			t.Fatalf("probe.ok = true with no anchor path (%+v)", p)
+		}
+		if len(f.calls) != 0 {
+			t.Fatalf("probed %v with unknown install paths — nothing may be measured "+
+				"before we know what we are measuring", f.calls)
+		}
+	})
+}
