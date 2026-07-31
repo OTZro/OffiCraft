@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -198,17 +202,61 @@ func TestDetectShape(t *testing.T) {
 	}
 }
 
+// ⚠️ THE PREFLIGHT MUST PASS IN EVERY GATE TEST BELOW, AND THAT IS NOT BOILERPLATE.
+//
+// maybeStartAnchorCutover refuses in a fixed order: shape, then sentinel, then
+// preflight, then lock. newFakeCutover leaves exitCodes empty, so runExit answers
+// 0 — and anchorPreflight demands exactly 2. Without the line below, the PREFLIGHT
+// refuses first and `len(f.spawned) == 0` holds for a reason that has nothing to
+// do with the gate the test is named after.
+//
+// That is not hypothetical: these three tests shipped without it, and independent
+// review deleted the shape guard, the sentinel guard and the lock guard OUTRIGHT,
+// one at a time, with the whole suite staying green each time. Giving the preflight
+// a passing exit code is what makes each test able to fail.
+func passingPreflight(f *fakeCutover, p wardenPaths) {
+	f.exitCodes[p.anchorPath+" --preflight"] = 2
+}
+
 // A machine whose shape cannot be established must be left alone. Guessing
 // "probably legacy" would convert machines nobody has evidence about.
 func TestUnknownShapeStartsNoConversion(t *testing.T) {
+	p := testPaths()
 	f := newFakeCutover()
 	f.files["__ppid_exe__"] = "/bin/zsh"
+	passingPreflight(f, p)
 	restore := swapCutoverOps(t, f)
 	defer restore()
 
-	maybeStartAnchorCutover(testPaths(), 4242, func(string, ...any) {})
+	maybeStartAnchorCutover(p, 4242, func(string, ...any) {})
 	if len(f.spawned) != 0 {
 		t.Fatalf("converter was started for an unknown shape: %v", f.spawned)
+	}
+}
+
+// A machine ALREADY ON THE ANCHOR SHAPE must not convert. This case had no test
+// at all, and it is the one every healthy machine in the fleet is in after the
+// migration: converting again would boot out a working job, re-run install, and
+// put a machine that had nothing wrong with it through the one window where it
+// can end up with no warden.
+func TestAnchorShapeStartsNoConversion(t *testing.T) {
+	p := testPaths()
+	f := newFakeCutover()
+	f.files["__ppid_exe__"] = p.anchorPath
+	passingPreflight(f, p)
+	restore := swapCutoverOps(t, f)
+	defer restore()
+
+	maybeStartAnchorCutover(p, 90, func(string, ...any) {})
+	if len(f.spawned) != 0 {
+		t.Fatalf("an already-converted machine started a second conversion: %v", f.spawned)
+	}
+	// Nothing may be touched at all — not even the lock. A converted machine that
+	// leaves a lockfile behind blocks the retry of a machine that genuinely needs
+	// one only if they share a disk, but it also means this path did work it had
+	// no business doing.
+	if len(f.locked) != 0 {
+		t.Fatalf("an already-converted machine took the conversion lock: %v", f.locked)
 	}
 }
 
@@ -219,6 +267,7 @@ func TestRolledBackMachineIsNotRetried(t *testing.T) {
 	f := newFakeCutover()
 	f.files["__ppid_exe__"] = "/sbin/launchd"
 	f.files[p.root+"/warden/"+cutoverFailedName] = "previous attempt rolled back"
+	passingPreflight(f, p)
 	restore := swapCutoverOps(t, f)
 	defer restore()
 
@@ -235,6 +284,7 @@ func TestHeldLockStartsNoSecondConversion(t *testing.T) {
 	f.files["__ppid_exe__"] = "/sbin/launchd"
 	f.locked[p.root+"/warden/"+cutoverLockName] = true
 	f.modTimes[p.root+"/warden/"+cutoverLockName] = time.Now()
+	passingPreflight(f, p)
 	restore := swapCutoverOps(t, f)
 	defer restore()
 
@@ -568,5 +618,119 @@ func TestTransientFailureLeavesTheMachineStillConvertible(t *testing.T) {
 	maybeStartAnchorCutover(p, 1, func(string, ...any) {})
 	if len(f.spawned) == 0 {
 		t.Fatal("a machine that merely failed to reach the network must still be convertible on the next start")
+	}
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// THE CROSS-MODULE CONTRACT: anchorPreflight's "exit 2" is the ANCHOR's answer
+// ───────────────────────────────────────────────────────────────────────────
+//
+// anchorPreflight refuses to convert unless `officraft --preflight` exits
+// EXACTLY 2. That number is produced in a different Go module (cli/officraft),
+// with no import between them and no compiler to notice if the two sides part
+// company. The failure it hides is invisible and fleet-wide: add a flag to the
+// anchor, `--preflight` stops meaning "reject the argument", every machine's
+// preflight fails, every machine silently skips the migration FOREVER, and
+// nothing anywhere goes red — the refusal is fail-closed, so there is no
+// symptom other than a migration that never happens.
+//
+// WHY THIS TEST BUILDS AND RUNS THE REAL ANCHOR instead of asserting `2`
+// ---------------------------------------------------------------------
+// Because two assertions against the same number are not a contract. A fixture
+// table (the namespace-axes.tsv pattern) would be one source, but each side
+// still asserts against a COPY of the value, and the anchor could grow a flag
+// that changes what `--preflight` MEANS while the exit code stays 2. So this
+// compares the two ACTUAL values: the real anchor, built from source at test
+// time, is fed to the real anchorPreflight. There is no literal on either side
+// of the comparison — the anchor binary IS the source of truth, and drift is
+// whatever makes the real preflight stop succeeding.
+//
+// It runs a process, and that is a deliberate, bounded exception to this
+// package's "tests never exec" posture: the binary is freshly built into
+// t.TempDir(), the argv is the anchor's ZERO-SIDE-EFFECT usage path (it prints
+// usage and forks nothing — that property is exactly what is being verified),
+// and nothing here touches launchd, HOME, the plist or the real seam. It does
+// NOT call realRunExit; it supplies its own runner, which is the same rule every
+// other test in this package follows.
+
+// goTool locates the toolchain that is already running this test.
+func goTool(t *testing.T) string {
+	t.Helper()
+	if path, err := exec.LookPath("go"); err == nil {
+		return path
+	}
+	path := filepath.Join(runtime.GOROOT(), "bin", "go")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("cannot locate the go toolchain to build the anchor: %v", err)
+	}
+	return path
+}
+
+// buildRealAnchor compiles cli/officraft — the actual TCC identity anchor the
+// production plist names — and returns the path to the binary.
+func buildRealAnchor(t *testing.T) string {
+	t.Helper()
+	src := filepath.Join("..", "officraft")
+	if _, err := os.Stat(filepath.Join(src, "main.go")); err != nil {
+		t.Fatalf("the anchor's source is not where this contract expects it (%s): %v.\n"+
+			"anchorPreflight's whole go/no-go decision is the exit code of THAT program; "+
+			"if it moved, this contract needs re-pointing, not skipping", src, err)
+	}
+	out := filepath.Join(t.TempDir(), "officraft")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, goTool(t), "build", "-o", out, ".")
+	cmd.Dir = src
+	if combined, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build the real anchor: %v\n%s", err, combined)
+	}
+	return out
+}
+
+// realExitCodeRunner is a runExit that actually runs the command, so
+// anchorPreflight is exercised against a real process instead of a script.
+func realExitCodeRunner(t *testing.T) func(string, ...string) (int, error) {
+	t.Helper()
+	return func(name string, args ...string) (int, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		err := exec.CommandContext(ctx, name, args...).Run()
+		if err == nil {
+			return 0, nil
+		}
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return exit.ExitCode(), nil
+		}
+		return -1, err
+	}
+}
+
+func TestAnchorPreflightAgreesWithTheRealAnchorBinary(t *testing.T) {
+	anchor := buildRealAnchor(t)
+	ops := newFakeCutover().ops()
+	ops.runExit = realExitCodeRunner(t)
+
+	if err := anchorPreflight(ops, anchor); err != nil {
+		t.Fatalf("the REAL anchor no longer satisfies the preflight this fleet gates its "+
+			"migration on: %v\n"+
+			"Nothing else can catch this. anchorPreflight is fail-closed, so a machine whose "+
+			"anchor answers differently does not error — it silently declines to convert, "+
+			"forever, with no symptom. Either cli/officraft changed how it answers an "+
+			"argument, or cutover.go changed what it demands; the two must be brought back "+
+			"together deliberately.", err)
+	}
+
+	// NEGATIVE CONTROL. Without it the assertion above would also pass if
+	// anchorPreflight accepted anything at all, and the real runner would be
+	// unproven too. A stand-in that exits 0 — the shape of an anchor that
+	// ACCEPTED the argument instead of rejecting it — must be refused.
+	accepting := filepath.Join(t.TempDir(), "accepting-anchor")
+	if err := os.WriteFile(accepting, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("stage the negative control: %v", err)
+	}
+	if err := anchorPreflight(ops, accepting); err == nil {
+		t.Fatal("a binary that ACCEPTS the probe argument must fail the preflight — " +
+			"otherwise the check above proves only that anchorPreflight returns nil")
 	}
 }

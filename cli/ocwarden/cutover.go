@@ -99,9 +99,14 @@ const (
 	// conversion"; removing it by hand is the deliberate way to retry.
 	cutoverFailedName = "cutover.failed"
 
-	// plistPrevSuffix names the pre-conversion plist backup. writePlist overwrites
-	// unconditionally and CUTOVER.md documents that no backup is kept, so this is
-	// the ONLY copy of the old shape once the install starts.
+	// plistPrevSuffix names the pre-conversion plist backup. install.go's
+	// writePlist overwrites the LaunchAgents plist unconditionally and keeps no
+	// copy of its own, so this is the ONLY copy of the old shape once the install
+	// starts. (An earlier version of this comment credited CUTOVER.md with
+	// documenting that; it does not — CUTOVER.md is the historical python→golang
+	// runbook, and its "no plist backup is kept" line is about retiring the
+	// python-era com.officraft.warden / com.officraft.telemetry plists, a
+	// different migration and different files.)
 	plistPrevSuffix = ".prev"
 
 	// cutoverInstallBudget bounds the ONE long call: `ocwarden install --force`.
@@ -232,7 +237,15 @@ func psExePath(r CmdRunner) func(int) (string, error) {
 // this job — measured on macOS 26.5, and the whole reason no one-shot launchd job
 // or extra daemon is needed. Its output goes to logPath because the grandchild
 // outlives the log stream launchd gave its parent.
+// It opens with refuseInTestBinary for the same reason execRunner.Run does, only
+// more urgently: this is a PROCESS CHOKE POINT that a hand-assembled cutoverOps
+// literal cannot route around, and what it starts in production is a real machine
+// conversion (`ocwarden cutover-anchor` → `install --force` → launchctl bootout of
+// the live canonical job). It is strictly worse than the T-5047 case the static
+// guards were written for: Setsid + Release means the process OUTLIVES `go test`,
+// so an escape is not even bounded by the test run that caused it.
 func spawnDetachedProcess(bin string, args []string, env []string, logPath string) error {
+	refuseInTestBinary("spawnDetachedProcess(" + bin + ")")
 	cmd := exec.Command(bin, args...)
 	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -326,7 +339,12 @@ func anchorPreflight(ops cutoverOps, anchorPath string) error {
 // budget the self-update probe uses — the anchor's usage path returns instantly,
 // so anything slower is a hung or quarantined binary, which must read as "do not
 // convert" rather than block the warden's startup indefinitely.
+// Same process-choke-point refusal as runInstallerCombined and
+// spawnDetachedProcess: it calls exec directly rather than going through
+// execRunner.Run, so it needs its own guard — a struct assembled by hand still has
+// to start its subprocess here.
 func realRunExit(name string, args ...string) (int, error) {
+	refuseInTestBinary("realRunExit(" + name + ")")
 	ctx, cancel := context.WithTimeout(context.Background(), selfUpdateProbeBudget)
 	defer cancel()
 	err := exec.CommandContext(ctx, name, args...).Run()

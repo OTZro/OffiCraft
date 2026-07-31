@@ -11,7 +11,11 @@
   - ⚠️ **跨 module 手抄鏡像(T-5047)**:同一條導出在**五個地方**各寫一遍——`cli/ocwarden/namespace.go`、`cli/ocagent/config.go`(`fallbackAgentsHome`,agents-home fallback root;T-5047 二輪審查前這裡**根本沒有 namespace**,硬寫 `~/.officraft/agents`,所以一個 namespaced ocagent 失去 `OC_AGENT_HOME` 就把 SSE cursor / reply-card seen / context-report stamp 寫進**主 instance** 的 agents 目錄)、`server/ocserverd/onboarding.go`(`wardenLaunchdLabel`/`officraftRootPath`/`wardenTokfilePath`)、`bin/install.sh`(`NS_DOT`/`NS_DASH`,install 與 uninstall 各一份)、`bin/ocserver`。兩個 go module 之間沒有 import、沒有編譯器,**差一個字元的後果不是字串錯**:server 問 launchd「`com.officraft.ocwarden.lab` 在不在?」得到「不在」(因為 warden 註冊的是別的 label),於是判定本機沒有 warden,**在活的 job 上再裝一個**。五份全部對**同一張表** `bin/tests/fixtures/namespace-axes.tsv` 對質(go 側 `cli/ocwarden/namespace_mirror_test.go` / `cli/ocagent/namespace_mirror_test.go` / `onboarding_mirror_test.go`,bash 側 + charset 走 `bin/tests/namespace-mirror-guard.sh`),所以漂掉時**紅的是漂掉那一份**,而不是只說「兩份不一樣」。加 namespace 案例改表就好,不必動五份測試碼。⚠️ ocagent 那份的**負向控制**在 `TestAgentsHomeFallback_RefusesRatherThanFoldingBack`:非法 namespace 必須 derive 出空字串,**絕不准折回主 instance 的 `~/.officraft/agents`**(namespace.go 自己就寫「malformed namespace 靜默折回主實例比硬錯誤糟得多」),而且它是唯一一份把 namespace **join 進路徑**的複本,charset 因此是防路徑逃逸(`../x`)而非裝飾。
 - **`ocwarden install` / `teardown` 的 host seam(T-5047)**:所有真主機副作用(launchctl/檔案系統、claude/codex probe、ocagent 下載與 probe)在 production 只在 `realHostSeam()` 一處組裝,而且只能經 package 變數 `newHostSeam` 取得。`hostseam_test.go` 的 `TestMain` 在任何測試跑之前把它換成 fake,所以**凡是經由 `newHostSeam` 取得副作用的 entry point,在測試裡都拿到 fake**——新測試不必 opt-in、不必記得塞 fake,連「把待測碼裡的 guard 刪掉」也升不出去碰主機。
   - 🔴 **這個保證的邊界要講清楚,絕對形式是假的(獨立審查實證)**。舊版本檔寫「所有真主機副作用只在 `realHostSeam()` 一處組裝…兩條靜態守衛釘住這個結構」,而那兩條守衛只釘 **`realSysOps` / `realHostSeam` 兩個識別字**。審查者在 `teardownCmd` 直接寫 `sysOps{run: execRunner{…}.Run, rename: os.Rename, …}` 的 composite literal——不出現那兩個字串——三道守衛全綠、`refuseInTestBinary` 沒被呼叫,test binary 真的對本機 live warden 發出 `launchctl bootout`;測試最後才紅,訊息是「no host seam was constructed」= **事後偵測,不是事前阻止**。seam 保護的是「走過 seam 的 entry point」,不是「任何自己動手接線的碼」。
-  - **現在真正的保護範圍(三層,由弱到強)**:(1) `scanHostSeamSource` 的識別字守衛——`realSysOps()` 全非測試碼只准出現一次、任何 entry point 不得直接呼叫 `realHostSeam()`;(2) **釘結構而非釘名字**——`sysOps{` 與 `execRunner{` 兩個 composite literal 在非測試碼各只准出現一次(分別在 `realSysOps` 與 `main.go` 的 `var newCmdRunner`),所以上面那個 hand-assembled mutant 現在在 `TestMain`、`m.Run()` 之前就被拒(親驗:整包零測試執行、`launchctl` PATH shim 零命中);(3) **process 咽喉點**——`execRunner.Run`(`main.go`)的 body 第一行就是 `refuseInTestBinary`。這一層是 hand-assembled struct **繞不過去**的:struct 是誰組的都無所謂,子行程還是得從那裡起。親驗:把 (2) 整條刪掉再跑同一個 mutant,`FATAL: execRunner.Run(launchctl) was reached from a test binary` + `os.Exit(1)`,shim log 空的(launchctl 行程從未被建立)、live warden 還在跑——**擋在碰到主機之前**。
+  - 🔴 **同一個形狀在 T-ff5d 又發生一次,而且證明了「補一條規則」不是修法**。`cutover.go` 帶進**第二個 seam**(`cutoverOps`——真綁定會對 canonical label 下 `launchctl bootout`、覆寫 live plist、丟出 detached 的機器轉換),而底下三層**一條都沒聽過它**:審查者把 T-5047 那個 mutant 原樣搬過來(`cutoverOps{runExit: realRunExit, spawnDetached: spawnDetachedProcess}` 寫在非測試函式裡),全綠,而且**真的從 test binary 起了行程**。`spawnDetachedProcess` 比原案更糟:setsid + Release,子行程**活得比 `go test` 久**,而它 production 的 argv 是一次真的機器轉換。⚠️ 病灶不是「少列了 cutoverOps」,是**守衛的 scope 來自一張人工列舉的清單**——清單過期時它不會紅,它會**默默縮小自己的覆蓋範圍然後保持綠**。
+  - **所以現在多一層 (4):零列查詢(`scanProcessStarters`)**。用 AST 列舉**非測試碼裡每一個能生出行程的呼叫點**(`exec.Command` / `exec.CommandContext` / `syscall.Exec` / `ForkExec` / `os.StartProcess` / 手搓 `exec.Cmd{}` literal),減掉 `sanctionedProcessStarters` 這張**寫明理由**的白名單,**要求餘數為空**。新檔、新函式、新 seam 一律自動落進餘數 → TestMain 在 `m.Run()` 之前拒跑。清單過期的兩個方向都是 finding:沒列到 = 紅,列了卻已不存在(stale)= 也紅。白名單裡標 `mustRefuse` 的那幾個(`execRunner.Run`、`spawnDetachedProcess`、`realRunExit`、`runInstallerCombined`、`newSelfUpdater`)**函式本體第一行必須是 `refuseInTestBinary`**,也由 AST 驗(不是字串比對)。⚠️ **這道查詢上線第一跑就自己抓到一個**:`newSelfUpdater` 建的 `execSelf` closure 會 `syscall.Exec` **取代呼叫端的行程映像**——在 test binary 裡就是把測試行程換成 ocwarden,沒有任何守衛看得見。已補上拒絕。
+  - **另一半:測試不准直接碰真函式**。`scanTestsForRealHostCalls` 掃 `_test.go` 的 AST,要求對 `realSysOps`/`realHostSeam`/`realCutoverOps`/`realRunExit`/`spawnDetachedProcess`/`runInstallerCombined`/`codesignIdentity` 的**直接呼叫數為 0**(用 AST 所以註解與字串字面值天然不算——這個檔自己就在正文裡寫滿這些名字)。`captureInteractiveEnv` **刻意不在名單上**:它跑的是測試自己寫進 `t.TempDir()` 的 stub shell,那就是待測行為;這條線畫的是「會不會影響這台機器的 warden」,不是「會不會 fork」。
+  - 🔴 **守衛自己有「已知壞例」正控**(`TestHostSeamGuards_RejectHandAssembledSeams` / `TestProcessStarterQuery_*` / `TestRealHostFunctionsAreNeverCalledFromTests`):把整包非測試原始碼 stage 到 temp dir,**先斷言乾淨副本零違規**(否則每個 mutant case 都會因為別的原因「通過」),再逐一寫入**壞檔**(T-5047 的 sysOps mutant、T-ff5d 的 cutoverOps mutant、新檔裡的 `exec.Command`、手搓 `exec.Cmd{}`、`syscall.Exec`、以及「`spawnDetachedProcess` 的 refusal 被刪掉」),要求掃描**點名它**。⚠️ **這幾條不是上面說的「第二條 reporting wrapper」,別照那條規則刪掉**:`TestHostSeam_StructureIsReported` 重跑的是 TestMain 已經過的**同一棵樹**(迴圈體恆不執行),這幾條餵的是**不同的輸入**,規則被拿掉時它們會紅——親驗四個 mutant 全紅。壞例寫在**測試裡當 fixture**,不寫在註解裡:註解裡的 mutant 保護不了任何東西,這個 repo 已經證明過。
+  - **現在真正的保護範圍(四層,由弱到強)**:(1) `scanHostSeamSource` 的識別字守衛——`realSysOps()` 全非測試碼只准出現一次、任何 entry point 不得直接呼叫 `realHostSeam()`;(2) **釘結構而非釘名字**——`sysOps{`、`execRunner{`、`cutoverOps{` 三個 composite literal 在非測試碼各只准出現一次(分別在 `realSysOps`、`main.go` 的 `var newCmdRunner`、`realCutoverOps`),所以上面那個 hand-assembled mutant 現在在 `TestMain`、`m.Run()` 之前就被拒(親驗:整包零測試執行、`launchctl` PATH shim 零命中);(3) **process 咽喉點**——`execRunner.Run`(`main.go`)、以及 `cutover.go` 的 `spawnDetachedProcess` / `realRunExit` / `runInstallerCombined`,body 第一行就是 `refuseInTestBinary`。這一層是 hand-assembled struct **繞不過去**的:struct 是誰組的都無所謂,子行程還是得從那裡起。親驗(T-5047):把 (2) 整條刪掉再跑同一個 mutant,`FATAL: execRunner.Run(launchctl) was reached from a test binary` + `os.Exit(1)`,shim log 空的(launchctl 行程從未被建立)、live warden 還在跑——**擋在碰到主機之前**。親驗(T-ff5d,同法重做一次):把 (2) 的 cutoverOps 規則**與** (4) 一起關掉、把 cutoverOps mutant 放進真的 package、讓它去 spawn 一支會寫檔的 tripwire 腳本 → `FATAL: spawnDetachedProcess(...) was reached from a test binary`,而 **tripwire 檔不存在**(行程從未被建立)。(4) 見下一條的**零列查詢**——它不列舉名字,所以下一個新 seam 不必靠人記得。
   - 靜態守衛的比對一律只掃 code 行(`countCodeOccurrences` / `countRealSysOpsCalls` 剝註解),否則守衛會被自己的文件滿足——同一個坑 `bin/tests/namespace-mirror-guard.sh` 的 `code_only()` 早已踩過,server 側 `api_machines_childenv_wiring_test.go` 也才剛因此被抓到一條恆真斷言。
   - `TestHostSeam_StructureIsReported` 是**唯一一條** reporting wrapper(不是 enforcement、不是覆蓋率:`TestMain` 已先跑同一個 scan 並 `os.Exit(1)`,所以它的迴圈體恆不執行)。⚠️ **不要再加第二條**:原本這裡有兩條函式本體逐字相同的守護測試,審查者把兩者迴圈體換成 `panic` 跑整包,照樣 `ok` + 兩條 `--- PASS`。新性質加進 `scanHostSeamSource`,不要加新的 no-op 測試。
 
@@ -117,7 +121,45 @@ owner 拍板「乾淨新建」:warden 長出**臨時 session** 形態伺候外�
 唯一安裝入口是 **`ocwarden install`**(Go,`cli/ocwarden/install.go`;flip 時期的 bash `bin/warden-install` 已退役刪除)。
 
 🔴 **plist 起的不是 ocwarden,是 TCC 身分錨點 `officraft`(T-5831)**:launchd 的 job leader 是整棵樹的 TCC responsible process,而 adhoc 簽章的 binary 是用 bytes 的雜湊被認出來的——plist 指向會被 self-update 抽換的 ocwarden 時,每更新一次就作廢一次全機授權(症狀是**卡住、無 log**,不是被拒絕)。錨點只 fork 隔壁的 ocwarden(帶 `run`)、轉發停止訊號、用 child 的結束狀態當自己的;**裝過就永不覆寫**(連相同 bytes 也不行,重寫會換 inode)。它同時被 embed 進 ocwarden(`anchor_embed.go`,`bin/build-bindist` staging 進 `anchordist/`),因為座艙的一鍵安裝只下載 ocwarden 一支——embed、出貨、`dist/officraft/` 三份是**同一次 build 的同一份 bytes**,三份不同就是三個身分。
-install 把發佈流程 fresh build 的 binary 安到 `~/.officraft/warden/`(home,per-machine)並 render 真實 plist;plist template 在 `cli/ocwarden/deploy/`(REFERENCE,實際 plist 由 install 於 runtime 寫)。cutover 史料見 `cli/ocwarden/CUTOVER.md`。
+install 把發佈流程 fresh build 的 binary 安到 `~/.officraft/warden/`(home,per-machine)並 render 真實 plist;plist template 在 `cli/ocwarden/deploy/`(REFERENCE,實際 plist 由 install 於 runtime 寫)。⚠️ `cli/ocwarden/CUTOVER.md` 是 **2024 年 python→golang 的歷史 runbook**,跟下面這條 anchor 遷移無關(它那句「No plist backup is kept」講的是退休 `com.officraft.warden`/`com.officraft.telemetry` 兩份 python 期 plist,別拿來當本節的依據)。
+
+### legacy→anchor 自動遷移(T-ff5d;`cutover.go`)— 面向「要處理一台使用者機器」的人
+
+**為什麼存在**:anchor shape 出貨了,但 self-update 只換 **binary**,不動 plist。所以 anchor 之前裝的機器會**永遠**留在 legacy plist(`ProgramArguments = […/warden/ocwarden, run]`),而那正是「每次 self-update 都作廢一次全機 TCC 授權」的形狀(launchd 的 job leader 就是那個被抽換的檔)。OffiCraft 有外部使用者,「請大家重跑一次 installer」不是遷移計畫。
+
+**這台機器上會多出什麼**(全部在 `~/.officraft/warden/`,namespaced 實例則是 `~/.officraft-<ns>/warden/`):
+
+| 路徑 | 是什麼 | 可不可以手動刪 |
+|---|---|---|
+| `officraft` | TCC 身分錨點,新的 launchd job leader。**裝過就永不覆寫**(連相同 bytes 也不行——重寫換 inode = 換身分 = 掉授權) | ❌ 刪了下次 install 會重放一份**新**的,等於換身分、重問授權 |
+| `cutover.lock` | O_EXCL 鎖,只防兩個 warden 同時轉。轉完就刪;超過 15 分鐘的視為屍體自動清掉 | ✅ 安全(機器在轉換中途被砍才會留下) |
+| `cutover.failed` | **哨兵:這台試過、而且回滾了**。存在 = 這台**永遠不再嘗試遷移** | ⚠️ 見下 |
+| `log/cutover.log` | detached 轉換行程的完整 stdout+stderr(installer 的逐步敘述都在裡面) | ✅ 純 log |
+| `~/Library/LaunchAgents/com.officraft.ocwarden.plist.prev` | 轉換前那份 plist 的**唯一**副本(`writePlist` 是無條件覆寫、自己不留底) | ⚠️ 這是手動回滾唯一的依據,救援結束前別刪 |
+
+**怎麼從外面看出一台轉了沒**:
+- **座艙(不用登入那台)**:機器表的 `warden_shape` 欄——`anchor` = 轉好了、`legacy` = 還沒、`unknown` = 新 build 跑了但讀不到父行程。**空白/null 不是「沒轉」**,是「這台的 warden build 還沒收到這次發佈,根本不會回報」。這欄每 30s 隨心跳更新。
+- **在那台機器上**:`launchctl print gui/$(id -u)/com.officraft.ocwarden | grep -A3 arguments` —— 印出 `…/warden/officraft` = anchor;印出 `…/warden/ocwarden run` = legacy。(判準刻意是 **launchd 實際在跑什麼**,不是「磁碟上有沒有 officraft 這個檔」——機器可以有檔卻仍被 legacy plist 起著,那正是要修的狀態。)
+- 轉換發生過就一定有 `log/cutover.log`;什麼都沒有 = 這台從沒進過這條路。
+
+**它做了什麼**(給要判讀 log 的人,不是實作導覽):`ocwarden run` 啟動時看一次自己的**父行程**。是 legacy 才動作,而且是丟出一個 **detached 孫行程**(`ocwarden cutover-anchor`,setsid 自成 session)後**立刻返回**——因為轉換第一件事就是把自己這個 launchd job bootout 掉,不脫離就會連自己一起死。孫行程備份 plist → 跑既有的 `ocwarden install --force`(**零新安裝邏輯**:部署 anchor、render 新 plist、bootout、bootstrap、健康驗證)。
+
+**bootout→bootstrap 之間有一段真空**:那幾秒該機**沒有 warden**(server 看到它 offline)。**agent 不受影響**——`ocagent` 是獨立行程、各自持有自己的 SSE,warden 重啟不斷線。install 的健康驗證會等到新 job 真的穩定(看到 pid 後再連續 6 秒)才算數。
+
+**失敗一律回到「舊 shape、warden 活著」**。任何 non-zero 的 install 結束都會把 `.prev` 放回去、重新 bootstrap、再驗一次。**只有回滾自己也失敗**才 exit 非零——那是唯一需要人介入的狀態。
+
+**`cutover.failed` 要講白**:一台回滾過的機器會留下它,而它的意思是**這台永遠不會再自動嘗試遷移**——不是「等下次」、不是「隔天重試」,是**永久**,直到有人手動刪掉那個檔。這是刻意的:沒有它,一台會失敗的機器每次開機都重跑同一個失敗,無限迴圈。所以**要重試就是 `rm ~/.officraft/warden/cutover.failed` 然後重啟 warden**(`launchctl kickstart -k gui/$(id -u)/com.officraft.ocwarden`),而且重試之前先讀 `log/cutover.log` 弄清楚上次為什麼退回來。
+
+**手動回滾(自動回滾也失敗時)**:
+```sh
+launchctl bootout gui/$(id -u)/com.officraft.ocwarden          # 可能已經不在,忽略錯誤
+cp ~/Library/LaunchAgents/com.officraft.ocwarden.plist{.prev,} # 唯一的舊 shape 副本
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.officraft.ocwarden.plist
+launchctl print gui/$(id -u)/com.officraft.ocwarden | head     # 確認真的起來了
+```
+留著 `cutover.failed`(否則下次啟動又會再轉一次)。
+
+**10 分鐘的 install 預算(`cutoverInstallBudget`)不是安全邊際,是正確性**:短預算會把「慢的機器」變成「永久拒絕的機器」——installer 被砍讀起來就是 install 失敗,於是回滾**並且**寫下那個永不重試的哨兵。數字是從 install 自己的有界步驟**推導**的,不是拍的:claude resolve ≤40s + codex resolve ≤40s + ocagent 下載 ≤60s + bootout poll ≤5s + 健康驗證 ≤36s ≈ **181s**,取約 3 倍餘裕。超估的代價是一個閒置的 detached 行程,低估的代價是一台機器,永久。
 
 **claude 路徑鏈(OC_CLAUDE_BIN stamp)**:launchd warden 的 minimal PATH 找不到 version-manager(asdf/nvm/volta)的 claude → runtime `resolveClaudeBin`(transport.go)的 ②LookPath/③common-dirs 全 miss。解法是**在還找得到的環節解析、stamp 進 plist 讓優先序① 命中**:(a) `ocwarden install` 於安裝環境解析 claude(`resolveClaudeForInstall`,install.go:OC_CLAUDE_BIN env → LookPath → common dirs),用 `--version` 在 minimal PATH 下實測——過 = 只 stamp OC_CLAUDE_BIN;不過但在 installer PATH 下過(shim/env-shebang)= 連 installer PATH 一起 stamp 進 plist;都找不到 = 印人話 WARNING+指引(裝 claude 或 export OC_CLAUDE_BIN 重跑),不 fatal。(b) bootstrap-here 鏈(server 在 launchd minimal env 下跑 `ocwarden install`):`bin/ocserver install`(使用者互動 shell 跑)先解析 claude、stamp OC_CLAUDE_BIN(+必要時 full PATH)進 **serve plist**;bootstrap-here 的 env passthrough(`api_machines.go`)原樣帶給 ocwarden install → 其解析優先序① 命中 → 轉 stamp 進 warden plist。foreground `ocwarden run` 的 OC_CLAUDE_BIN env 優先序不變(同一個優先序①)。
 
