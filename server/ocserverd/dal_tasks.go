@@ -1071,7 +1071,7 @@ func (d *DAL) DeleteTaskManual(typeKey string) (bool, error) {
 		}
 		deleted = n > 0
 		// Both manual streams (T-1f39). The retired four-field bundle is not
-		// listed: migration 00044 removed every row of it and nothing can write
+		// listed: migration 00045 removed every row of it and nothing can write
 		// another, so there is nothing left for this cascade to reach.
 		_, err = tx.Exec(`DELETE FROM document_history
 			WHERE document_key = ? AND document_kind IN (?, ?)`,

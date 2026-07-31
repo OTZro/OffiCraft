@@ -471,7 +471,7 @@ func TestDocumentHistoryRestoresOneTaskManualStreamWithoutTouchingTheOther(t *te
 	}
 }
 
-// The retired four-field bundle. Migration 00044 deleted its rows (owner
+// The retired four-field bundle. Migration 00045 deleted its rows (owner
 // ruling, T-1f39), so both faces must refuse the old name LOUDLY and name the
 // two replacements: an empty list or a 404 would read as "this manual has no
 // history" and hide the fact that the caller is asking under a dead kind.

@@ -54,9 +54,9 @@ owner 原話（2026-07-31，逐字）：
 ## 3. 既有歷史的處置 ❓Q1
 
 > ⚠️ **本節是提案，已被 owner 2026-07-31 的 Q1 裁定推翻**（見「裁定紀錄」）：不遷移、直接刪除。
-> `00044` 這個編號仍然用上了，但內容是 `DELETE FROM document_history WHERE document_kind = 'task_manual'`，不是拆分。
+> `00045` 這個編號仍然用上了，但內容是 `DELETE FROM document_history WHERE document_kind = 'task_manual'`，不是拆分。
 
-**建議（未採用）：遷移（migration `00044`），把每一列舊的 `task_manual` 快照就地拆成最多兩列新 kind，保留原本的 `created_ts` 與 `actor_id`，然後移除舊列。**
+**建議（未採用）：遷移（migration `00045`），把每一列舊的 `task_manual` 快照就地拆成最多兩列新 kind，保留原本的 `created_ts` 與 `actor_id`，然後移除舊列。**
 
 - 拆完超過 3 版的照樣修剪。
 - `sop_md` 或 `learnings` 為空的那半不產生列。
@@ -167,12 +167,12 @@ owner 原話（2026-07-31，逐字）：
    `shasum -a 256` 驗還原後逐位元組相同。
 5. **每一支 mutant 前先 `go clean -testcache`** —— 這個 repo 的既有規矩，快取結果在這裡燒過人。
 
-還原檢查：`migrations/00044_drop_legacy_task_manual_history.sql` = `f5fa5f69…16d5c`、
+還原檢查：`migrations/00045_drop_legacy_task_manual_history.sql` = `f5fa5f69…16d5c`、
 `api_document_history.go` = `b9644401…9cc3`，兩支收工時皆 `OK`。
 
-### A. 遷移的外科精準度 — `migrations/00044_drop_legacy_task_manual_history.sql`
+### A. 遷移的外科精準度 — `migrations/00045_drop_legacy_task_manual_history.sql`
 
-測試：`TestMigration00044DeletesOnlyTheRetiredTaskManualHistory`（`migrate_test.go`）。
+測試：`TestMigration00045DeletesOnlyTheRetiredTaskManualHistory`（`migrate_test.go`）。
 fixture 刻意**放進會被錯誤刪掉的東西**：同一個 `document_key` 底下的 `task_manual_sop` /
 `task_manual_learnings`（同前綴、只差後綴），以及 `lessons` / `global_context` / `role_definition`。
 沒有這些列，這支測試證明的是 fixture，不是碼。
@@ -210,9 +210,9 @@ list ／ restore 兩個 subtest ＋ 尾端的陽性對照（兩個新 kind 在**
 git grep -n '\bdocKindTaskManual\b' -- 'server/ocserverd/*.go' ':!server/ocserverd/*_test.go' \
   | grep -vE 'api_taskmanuals\.go:[0-9]+:\s*docKindTaskManual +=|api_document_history\.go:[0-9]+:\s*case docKindTaskManual:'
 
-# G2 除了 00044 那支刪除以外,沒有任何 SQL 拿這個 kind 當字面值讀寫
+# G2 除了 00045 那支刪除以外,沒有任何 SQL 拿這個 kind 當字面值讀寫
 git grep -nE "document_kind[^)]*task_manual'" -- server \
-  ':!server/ocserverd/migrations/00044_drop_legacy_task_manual_history.sql' ':!server/ocserverd/*_test.go'
+  ':!server/ocserverd/migrations/00045_drop_legacy_task_manual_history.sql' ':!server/ocserverd/*_test.go'
 
 # G3a 沒有任何 fixture／文件還拿舊 kind 去定址那兩條路由
 git grep -n 'document-history/task_manual/' -- . ':!frontend'
@@ -707,7 +707,7 @@ mock 後端，read／edit 兩張），與本檔 §D 同樣的處置：記下來�
 
 `types.ts`、`api/mock.ts`、`api/docCap.ts` 三段註解原本寫著「伺服器仍然 list／restore 既有列」
 「既有列仍可讀」「legacy bundle 一次還原四個欄位」——**三句都與 Q2 裁定相反**：
-兩條路由都回 400（`api_document_history.go:179-185`），列也被 00044 刪光。三段都改寫成現況。
+兩條路由都回 400（`api_document_history.go:179-185`），列也被 00045 刪光。三段都改寫成現況。
 
 但註解只是症狀。真正的分歧是 **mock 不拒絕這個 kind**：伺服器回 400 的地方，mock 回 200／404。
 mock 是每一支前端測試唯一跑得到的 adapter，所以「還在對死掉的 kind 定址」的介面在測試裡看起來

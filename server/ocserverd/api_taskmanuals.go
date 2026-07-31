@@ -22,7 +22,7 @@ import (
 
 // The two live manual history kinds, plus the RETIRED four-field bundle name.
 // Nothing writes, reads or stores task_manual any more: T-1f39 split SOP and
-// learnings into their own series and migration 00044 deleted the stranded
+// learnings into their own series and migration 00045 deleted the stranded
 // rows. The constant survives solely so documentHistoryAllowed can refuse the
 // old name by name instead of falling through to "unknown kind".
 const (

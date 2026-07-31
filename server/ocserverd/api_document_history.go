@@ -178,7 +178,7 @@ func (s *apiServer) documentHistoryAllowed(w http.ResponseWriter, r *http.Reques
 		}
 	case docKindTaskManualSop, docKindTaskManualLearnings:
 	case docKindTaskManual:
-		// The legacy four-field bundle. Its rows were deleted by migration 00044
+		// The legacy four-field bundle. Its rows were deleted by migration 00045
 		// (owner ruling, T-1f39), so the kind names nothing at all — an empty
 		// list here would be indistinguishable from "this manual has no history".
 		writeError(w, http.StatusBadRequest, legacyTaskManualKindMsg)

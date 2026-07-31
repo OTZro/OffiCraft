@@ -53,7 +53,7 @@
 還原：`cp` 自 scratchpad 備份，`shasum -a 256` = `7d7dbfba…de89` 相符。
 
 **A-D1 — migration 的 WHERE 放寬成前綴**
-`migrations/00044_drop_legacy_task_manual_history.sql`，`= 'task_manual'` → `LIKE 'task_manual%'`。
+`migrations/00045_drop_legacy_task_manual_history.sql`，`= 'task_manual'` → `LIKE 'task_manual%'`。
 → **紅**：`migrate_test.go:1103` 逐列點名 4 個被誤刪的鄰居（`task_manual_sop/tm-alpha`、`/tm-beta`、
 `task_manual_learnings/tm-alpha`、`/tm-beta`）＋`:1108`「holds 3 rows … want the 7 non-legacy rows」
 ＋`:1123` 回滾列數。fixture 確實放了「會被錯誤刪掉的東西」，不是自證。
@@ -75,7 +75,7 @@
 `frontend/src/components/DocumentHistoryModal.test.tsx:173`、`:193`、`:222` 三處用 `kind: "task_manual"` 當 fixture。
 拆包後 `DOC_FIELD_ORDER`（`lib/docHistoryFields.ts:19-28`）裡**每一個活著的 kind 都只有一個欄位**，
 所以 `comparedFieldNames` 的「取兩側欄位聯集」（`docHistoryFields.ts:76-90`）、多欄位渲染、欄位排序
-這幾件事，**唯一的覆蓋來源是一個伺服器已回 400、資料列已被 00044 刪光的 kind**。
+這幾件事，**唯一的覆蓋來源是一個伺服器已回 400、資料列已被 00045 刪光的 kind**。
 
 具體後果：任何人做「把 `task_manual` 從 `DocumentKind` 拿掉」這個自然的清理，會同時撞掉這三條測試，
 而且拿不到任何等價替代——因為現實中已經沒有多欄位的 kind 了。等於這段邏輯**實質上沒有活的護欄**。
@@ -175,7 +175,7 @@ seed 列不需要任何伺服器資料，應該在 error 分支裡照樣渲染�
 ### should-fix ③：三處 production 註解直接寫反了 Q2 裁定
 
 - `frontend/src/types.ts:546-547`：「the server still lists and restores existing rows, so the kind stays on the wire」
-  ——伺服器兩條路徑都回 400（`api_document_history.go:180-184`），列也被 00044 刪光了。
+  ——伺服器兩條路徑都回 400（`api_document_history.go:180-184`），列也被 00045 刪光了。
 - `frontend/src/api/mock.ts:2469-2470`：「existing rows stay readable」——同上。
 - `frontend/src/api/docCap.ts:63-65`：「The legacy bundle restores all four fields at once」——已無此路徑。
 
@@ -255,7 +255,7 @@ restore-apply（`:963-980`）。設計檔 H2 那支 mutant 打的正是「錯誤
 - **未重放設計檔的其餘 mutant**（A-D2/D3、B-H1/H2、C2-A1~A3、E1~E5、F1~F6/G1、G-R1~R3、I-P1、K1~K6）。
   依交辦只 spot-check 兩支：B-H3 與 A-D1，兩支都屬實。其餘各節的紅燈記載我是**採信**設計檔的，
   沒有獨立坐實。
-- **未查證 migration 00044 在真實 production 資料上的效果**（設計檔說是 9 列）。我只驗了
+- **未查證 migration 00045 在真實 production 資料上的效果**（設計檔說是 9 列）。我只驗了
   `migrate_test.go` 的合成 fixture。
 - **`frontend/src/components/settings.css` 我只掃了 `.doc-hist*` 家族**，其餘 62 行 diff 未逐條審。
 - **`server/CLAUDE.md`、`frontend/CLAUDE.md` 的散文我讀了 diff 但未去核對它引用的每一個事實**

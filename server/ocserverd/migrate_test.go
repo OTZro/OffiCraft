@@ -1018,7 +1018,7 @@ func TestMemberAvatarMigrationRollback(t *testing.T) {
 	}
 }
 
-// TestMigration00044DeletesOnlyTheRetiredTaskManualHistory pins the surgical
+// TestMigration00045DeletesOnlyTheRetiredTaskManualHistory pins the surgical
 // half of the irreversible delete (T-1f39, owner-approved): every
 // 'task_manual' row goes, and every other document_kind — including the two
 // replacement manual streams keyed by the SAME document_key — survives with
@@ -1026,7 +1026,7 @@ func TestMemberAvatarMigrationRollback(t *testing.T) {
 // clause would take (same key, neighbouring kinds; same kind prefix) in the
 // blast radius, so a mutant that drops or widens the predicate has somewhere
 // to do damage.
-func TestMigration00044DeletesOnlyTheRetiredTaskManualHistory(t *testing.T) {
+func TestMigration00045DeletesOnlyTheRetiredTaskManualHistory(t *testing.T) {
 	db, err := openSQLite(filepath.Join(t.TempDir(), "legacy-manual-history.db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
