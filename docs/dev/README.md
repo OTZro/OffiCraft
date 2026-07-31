@@ -120,8 +120,23 @@ isDraft False | isPrerelease True | targetCommitish fb89a69aad8c
 
 ⚠️ **不要把這條跟 TCC 身分錨點搞混**:`dist/officraft/officraft`(launchd 的 responsible process)是**用 bytes 認身分**的,所以它 byte-pinned、`bin/check-officraft-dist` 在 CI step 3 比對雜湊、裝過就永不覆寫。那套機制從來不依賴簽章憑證,**owner 核可保留,與本節無關**。
 
+📌 **一份不隨簽章走的結論已搬家**:本節原本夾帶一份 repo 級的 shell 掃描結論(`pipefail` + 提前關 pipe 的消費者),它的主要案例當年是 `codesign-artifact`,但通則與逐檔判定跟簽章無關 ⇒ 見本文件最後一節〈shell 陷阱:`pipefail` 與提前關 pipe 的消費者〉。
+
 ⚠️ **兩句話都不要寫**:不要寫「不簽章的代價是 macOS 會重問 TCC 權限」,也不要寫「已證實 self-signed 對 TCC 完全無用」。self-signed codesign 對 macOS TCC 授權是否有效,**只是高度懷疑無效、從未有 100% 結論**(owner 2026-07-26;依據:在有簽章的那段期間他仍碰過不只一次授權詢問)。刪除的理由是**作業面的**:它卡測試又卡發佈。真的需要答案就在真機上量,拿證據回來。
 
 ## 安裝器內部
 
 `bin/ocserver install` 的逐步細節（canonical layout、oc.toml 渲染、launchd plists、health check、首設啟用碼 banner、env override `OC_SERVER_ROOT` / `OC_SERVE_PORT` / `OC_CLOUDFLARED_CONFIG`）都寫在 `bin/ocserver` 檔頭註解與各 step 註解裡，那份是權威；tunnel 一律不代 provision，config + tunnel id + cloudflared binary 三者齊全才會掛 tunnel job。
+
+## shell 陷阱:`pipefail` 與提前關 pipe 的消費者(T-da4b,已掃全 repo,結論=不動)
+
+> **這一節與簽章無關,不要因為它的主要案例當年在 `codesign-artifact` 就把它一起丟掉。** 它原本寫在〈發佈簽章〉節裡,T-0398 移除簽章時搬到這裡並保留逐檔判定與通則——刪掉它的代價是下一個人碰到同一個構造時要重掃一次全 repo。
+
+當年掃過全 repo **24 支**帶 `set -o pipefail` 的 shell script(其中 3 支——`codesign-artifact`／`setup-codesign-cert`／`build-release`——已於 T-0398 隨簽章刪除),逐一檢查 `| grep -q` / `| head` / `| sed -n Np` 這種「讀夠就關 pipe」的組合:writer 還在寫時消費者關掉 pipe,writer 吃 SIGPIPE(141),`set -o pipefail` 讓整條 pipeline 取 141。**結論是其餘一律不改**,因為判準不是「構造在不在」,而是**誤判往哪個方向倒**:
+
+- **rc 根本沒被消費** → `| head -1 || true`(`bin/ocserver:103`)。`|| true` 吃掉 141,無害。(原本這裡還列了 `conformance/run.sh` 的 listener 查詢;**T-a3ba 已把它整段刪掉**——那行 `lsof … | head -1 || true` 換成「候選數 ≠ 1 就 FATAL」的 while-read 迴圈,`head -1` 的默默取第一個本來就是這張票要殺的東西,不再是本節的案例。)
+- **倒向假紅(誤報失敗)** → `e2e_test/a1_zombie_e2e.sh:506/510/512`(`sed`/`head`/`tail | grep -qE`)、`e2e_test/tests_guard/run.sh`(`run_snippet` 的 `grep -q` 斷言)、`e2e_test/setup.sh:121`(`printf '%s' "$RESP" | py -c …`,T-a3ba 後 writer 是 builtin `printf` 而非 `curl`,窗更小)、`e2e_test/setup.sh:186`(登入取 token)。SIGPIPE → 141 → 測試紅／腳本中止。**吵,但不會騙人**,而且這些檔案 `bin/ci.sh` 只跑 tests_guard,其餘沒有活體證據可驗 —— 改了也證不了,是純 churn。
+  > 行號是寫作當下的快照,會漂;以構造(不是行號)為準。上一版這兩行的行號在寫下時就已經對不上了。
+- **倒向「看得見的 skip」**:**這是唯一另一個「檢查可能不執行」的方向**——`if <pipeline>` 守著一段可選的測試,141 讓它靜靜跳過而不是報錯。當年唯一的實例是 `bin/tests/run.sh` 裡 `openssl version | grep -q '^OpenSSL 3'` 守著一個 red control,而它**已隨簽章測試於 T-0398 一併刪除,repo 現在沒有這個構造的實例**。判準本身保留,因為方向分類是下面那條通則的一部分:當年它之所以可接受,是 else 分支會**印出 `skip — …`**、不是默默消失;再加上 `openssl version` 一口氣寫 ~25 bytes 就退出,窗開不起來。**新寫這種 guard 時要同時滿足這兩點。**
+- **`echo "$VAR" | grep -q` 一律低risk**:writer 是 builtin、字串遠小於 64KB pipe buffer,grep 收到 EOF 前 write 早已完成。
+- **通則(給後面的人):`pipefail` + 早關 pipe 只有在「141 會把某個 `if`/`if !` 翻成『壞事不存在』並讓流程默默往下走」時才是地雷。** 倒向紅、倒向可見 skip、rc 被 `|| true` 吃掉的,都不是同一種病。當年那個地雷是 `bin/codesign-artifact`(已刪):它是唯一一個誤判會**默默翻轉「出不出貨」**的點——`security find-identity | grep -Fq` 在第一行命中就關 pipe,憑證明明在卻被判成不在,於是默默降級出貨。修法是**把輸出整個收進變數再比對**(collect-then-compare),那支腳本已不存在,但**修法與判準對下一個同型構造仍然適用**。
