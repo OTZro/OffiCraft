@@ -42,6 +42,7 @@ const machine = (
   isSelf: false,
   binStatus: null,
   wardenShape: null,
+  cutoverEffect: null,
   ...claude,
 });
 

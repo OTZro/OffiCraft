@@ -201,7 +201,7 @@ describe("OfficePage · an undispatched wake reaches the UI (T-7fa1)", () => {
     // Positive control: the relocate really went out and re-pinned the member —
     // without this, a submit that silently did nothing would satisfy the
     // assertion above just as well.
-    expect((await findByTestId("mp-machine-transition")).textContent).toContain(
+    expect((await findByTestId("mp-machine-pending")).textContent).toContain(
       SELF_MACHINE_NAME,
     );
   });
@@ -219,7 +219,7 @@ describe("OfficePage · an undispatched wake reaches the UI (T-7fa1)", () => {
     expect(queryByTestId("mp-relocate-undispatched")).toBeNull();
     // Positive control: the move really was requested and the owner can still
     // see where it is going — the pending destination, not an alarm.
-    expect((await findByTestId("mp-machine-transition")).textContent).toContain(
+    expect((await findByTestId("mp-machine-pending")).textContent).toContain(
       SELF_MACHINE_NAME,
     );
   });

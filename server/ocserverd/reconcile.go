@@ -1010,7 +1010,17 @@ func (s *apiServer) stampContextHighRecycle(members []Member, now float64) {
 		if !s.hub.IsOnline(m.ID) {
 			continue // only-online (symmetric with the manual refocus gate)
 		}
+		// …and only when the server still WANTS it online (T-ccc7). hub.IsOnline
+		// is a live-socket fact, not an intent: a member deactivated seconds ago
+		// keeps its stream for the whole stop grace, so this loop used to stamp
+		// a wind-down epoch onto a member already on its way out — invisible to
+		// the agent, unread by decideDown, and not cleared by activate. See
+		// aRefocusStampWouldReachTheAgent.
+		if !aRefocusStampWouldReachTheAgent(*m) {
+			continue
+		}
 		m.RefocusSince = now
+		m.RefocusOp = refocusOpContextHigh
 		if err := s.putMember(*m, triggerServer); err != nil {
 			reconcileLog("recycle: auto-stamp persist failed for %s: %v", m.ID, err)
 			continue
@@ -1050,6 +1060,7 @@ func (s *apiServer) clearRecycleMarkersOnRespawn(members []Member) {
 			continue // still online = recycle-PENDING (dump in flight), not a respawn
 		}
 		m.RefocusSince = 0.0
+		m.RefocusOp = ""
 		m.StoppedSince = 0.0
 		m.StoppingSince = 0.0
 		if err := s.putMember(*m, triggerServer); err != nil {

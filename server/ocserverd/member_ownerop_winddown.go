@@ -100,6 +100,18 @@ const (
 	memberOpModel    = "runtime/model" // 換 model / runtime / effort
 )
 
+// The remaining causes that stamp refocus_since WITHOUT going through
+// armMemberOwnerOpHandover. Together with the two above these are the closed
+// set MemberDTO.refocus_op serves: the cockpit needs the cause to say "winding
+// down so your change can take effect" instead of "last refocus", which reads
+// as history. They are stamped and cleared in lockstep with refocus_since —
+// a cause outliving its window would be worse than none.
+const (
+	refocusOpContextHigh = "context_high" // reconcile's context-pressure handover
+	refocusOpRefocus     = "refocus"      // owner pressed 重新聚焦
+	refocusOpRestartSelf = "restart_self" // the agent asked for its own handover
+)
+
 // memberHasStateToFlush answers the one question the rule turns on: is there
 // anything for this member to wind down, or should the owner's verb take
 // effect immediately? See the cell-by-cell mapping above — this is
@@ -112,10 +124,36 @@ func (s *apiServer) memberHasStateToFlush(m Member) bool {
 	if m.Kind != KindAssistant {
 		return false
 	}
-	if m.DesiredState != DesiredStateOnline {
+	if !aRefocusStampWouldReachTheAgent(m) {
 		return false
 	}
 	return hasUncollectedOnlineOwnerOpState(m.RefocusSince, m.StoppedSince, s.hub.IsOnline(m.ID))
+}
+
+// aRefocusStampWouldReachTheAgent is the server half of a CROSS-LAYER contract
+// (root CLAUDE.md §9c; T-ccc7). The agent prints the five-step wind-down SOP
+// from cli/ocagent/listen_hooks.go maybeRecycle, whose FIRST condition is
+// `desired_state == online`. So stamping refocus_since on a member the server
+// has already decided should be offline is not a weaker signal — it is NO
+// signal: the agent returns early and prints nothing, while reconcile only
+// reads RefocusSince on the decideUp arm a desired-offline member never takes.
+// The stamp is then stranded: activate does not clear it, so the marker
+// outlives the stop and the next wake can be robust-stopped on an epoch that
+// expired while nobody was listening.
+//
+// Every site that stamps a member's refocus epoch must satisfy this. Two of
+// the four do so through a CORRELATION rather than by name: POST
+// /members/{id}/refocus and POST /self/refocus refuse 409 earlier because
+// PresenceState stops projecting online once StoppingSince > 0, and every path
+// that sets desired offline sets that anchor in the same write. PresenceState
+// itself never reads DesiredState on its online arm — so the thing protecting
+// those two handlers is an agreement between two other files, and adding the
+// check to them was measured to be dead code (T-ccc7). The predicate is named
+// and shared so the invariant has one place to point at when that agreement
+// breaks. The third site, the context-high auto-stamp in reconcile.go, had no
+// proxy at all and stamped members on their way offline until T-ccc7.
+func aRefocusStampWouldReachTheAgent(m Member) bool {
+	return m.DesiredState == DesiredStateOnline
 }
 
 func hasUncollectedOnlineOwnerOpState(refocusSince, stoppedSince float64, online bool) bool {
@@ -135,6 +173,7 @@ func (s *apiServer) armMemberOwnerOpHandover(m *Member, op string) bool {
 		return false
 	}
 	m.RefocusSince = nowSecs()
+	m.RefocusOp = op
 	m.StoppingSince = 0.0
 	m.StoppedSince = 0.0
 	reconcileLog("recycle: %s %s — wind-down opened (collect on stopped-report or +%.0fs)",

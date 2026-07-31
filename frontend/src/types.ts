@@ -48,7 +48,13 @@ export interface Member {
    * lifecycle dot + action button group need. Never fabricated.
    */
   lifecycle: MemberLifecycle;
+  /** The owner-CONFIGURED launch runtime — the settings value, not state. */
   runtime?: AgentRuntime;
+  /** Runtime last SELF-REPORTED by the live session (wire `actual_runtime`).
+   * "" = nothing has ever reported one. NEVER substitute `runtime` above: it
+   * is the owner's intent, and serving it here made a runtime change look
+   * applied the instant it was saved (T-7f28). */
+  actualRuntime?: AgentRuntime | "";
   /** Model last reported by a live boot; absent on older API payloads. */
   actualModel?: string;
   /** Effort last SELF-REPORTED by the live session. There is no member wire
@@ -94,6 +100,19 @@ export interface Member {
    * fabricated time — the detail panel hides the "last refocus" line when null.
    */
   refocusSince: number | null;
+
+  /** Which operation opened the in-flight wind-down (wire `refocus_op`):
+   * "relocate" | "runtime/model" | "context_high" | "refocus" |
+   * "restart_self"; "" when none. */
+  refocusOp?: string;
+  /** Epoch by which that wind-down is collected at the latest (wire
+   * `refocus_deadline`), null when none is in flight. A CEILING, not a
+   * prediction — the collect fires as soon as the agent reports stopped. */
+  refocusDeadline?: number | null;
+  /** The DURABLE last-observed machine (wire `actual_machine`). `machine`
+   * above blanks the moment the member stops running; this survives, so a
+   * pending relocation stays legible while it is offline. */
+  actualMachine?: string;
 
   /**
    * Fleet remote-ops stage 1 — the "most recent operation" receipt the warden
@@ -279,6 +298,12 @@ export interface MachineView {
    */
   wardenShape: WardenShape;
   /**
+   * Whether that cutover is actually IN EFFECT for the processes that carry
+   * agents on this machine. Passthrough of the wire `cutover_effect` — see
+   * `CutoverEffect` for why "unproven" is its own state and never a green one.
+   */
+  cutoverEffect: CutoverEffect;
+  /**
    * The local claude CLI version this machine's warden heartbeat probed
    * (`--version` first token, e.g. "2.1.211"); null = unknown (claude
    * unresolved, probe failed, or an older warden that never probes) — the
@@ -329,6 +354,27 @@ export type BinStatus = "current" | "stale" | null;
  */
 export type WardenShape = "anchor" | "legacy" | "unknown" | null;
 
+/**
+ * Whether the anchor cutover has actually TAKEN EFFECT for the agent-carrying
+ * processes on a machine (`cutover_effect`). Four states again, and the third
+ * one is the reason this type exists:
+ *   "effective"     — proven: the carriers were created under the new identity
+ *   "not_effective" — proven otherwise: a carrier predates that identity
+ *   "unproven"      — could not be shown either way
+ *   null            — this warden does not report the verdict AT ALL
+ *
+ * 🔴 "unproven" is NOT a shade of "effective". A machine whose cutover had not
+ * taken effect showed a green badge for three hours because the only signal
+ * available was two-valued; folding the third state back into the good one
+ * re-creates that exact defect. Absent/unrecognised narrows to null, never to
+ * one of the three verdicts.
+ */
+export type CutoverEffect =
+  | "effective"
+  | "not_effective"
+  | "unproven"
+  | null;
+
 /** The machine claude credential-source vocabulary (`claude_cred_source`). */
 export type ClaudeCredSource = "file" | "keychain" | "both" | "none" | null;
 
@@ -363,18 +409,6 @@ export interface UninstallResultView {
   dispatched: boolean;
 }
 
-/**
- * Result of `POST /api/machines/{member_id}/upgrade` (one-click upgrade):
- * `dispatched` reports whether the `update` command was actually enqueued
- * onto the warden's live SSE downstream (false = offline, nothing commanded).
- * Passthrough (never fabricated).
- */
-export interface UpgradeResultView {
-  memberId: string;
-  machineId: string;
-  dispatched: boolean;
-}
-
 // ── Monitoring view models (camelCase; mapped from the Wire* mon shapes) ──────
 // Same honesty rule as `Member`: `null` means "no real source yet" → the UI
 // renders "—", never a fabricated number.
@@ -390,7 +424,8 @@ export interface MonSessionView {
   effort: string;
   machine: string;
   account: string;
-  runtime: "claude" | "codex";
+  /** REPORTED runtime; "" until something reports one (T-7f28). */
+  runtime: "claude" | "codex" | "";
   /** presence tri-state mapped 1:1 onto the member status. */
   status: MemberStatus;
   contextPct: number | null;
@@ -415,6 +450,8 @@ export interface MonMachineView {
   binStatus: BinStatus;
   /** Same reported shape as `MachineView.wardenShape` (registry row). */
   wardenShape: WardenShape;
+  /** Same reported verdict as `MachineView.cutoverEffect` (registry row). */
+  cutoverEffect: CutoverEffect;
   /** Same probe columns as the registry row (`MachineView.claude*`). */
   claudeVersion: string | null;
   runtimeCapabilities?: MachineView["runtimeCapabilities"];

@@ -430,14 +430,14 @@ export const zh = {
     modelSave: "儲存",
     modelCancel: "取消",
     modelError: "儲存失敗，請稍後重試",
-    modelNextSpawnNote: "工作中立即生效；已指派則下次啟動生效",
+    modelNextSpawnNote: "工作中立即生效；已指派則下次喚醒生效",
     // 改機器（owner-only）：picker 標題／確認、無線上機器提示。
     relocateTitle: "選擇要遷移到的機器",
     relocateConfirm: "遷移到此機器",
     noOnlineMachine: "沒有線上的機器",
     // 最近操作（沿用成員面板語意；P5b 後外包 verb 就是成員的 start／stop）。
     lastOp: "最近操作",
-    lastOpStart: "啟動",
+    lastOpStart: "喚醒",
     lastOpStop: "停止",
     lastOpOk: "成功",
     lastOpFail: "失敗",
@@ -503,7 +503,7 @@ export const zh = {
   // 上有一個醒著的助理本身就是訊號;失敗時它是使用者唯一看得到的「為什麼」。
   onboarding: {
     titleFailed: "自動設定沒有全部完成",
-    intro: "設完密碼之後,系統會自動幫你裝好這台機器、叫醒助理。這次有一步沒過:",
+    intro: "設完密碼之後,系統會自動幫你裝好這台機器、喚醒助理。這次有一步沒過:",
     stepInstallWarden: "安裝這台機器",
     stepWakeAssistant: "喚醒助理",
     detailShow: "顯示詳細記錄",
@@ -724,7 +724,7 @@ export const zh = {
     change: "更改",
     settingsSaveOnly: "只儲存，不喚醒",
     modelReportedTag: "最近一次開機回報",
-    settingsIntentNote: "這裡設定的是「下次啟動要用哪一個」。",
+    settingsIntentNote: "這裡設定的是「下次喚醒要用哪一個」。",
     settingsIntentNoteReported: "上面資訊卡的模型是 agent 最近一次開機時回報的，跟這裡的設定可能不同。",
     wakeManual: "手動喚醒",
     // 點喚醒後、server presence 尚未跟上前的即時回饋
@@ -756,6 +756,16 @@ export const zh = {
     runtime: "運行狀況",
     machine: "機器",
     machineMovingToLabel: "→ 要換到",
+    // The same 「→ …」 shape the machine cell has always used, widened to the
+    // other three configurable cells (T-7f28). 「換到」 reads as a place;
+    // 「換成」 reads as a value — one word each, so the two never blur.
+    pendingChangeLabel: "→ 要換成",
+    // The wind-down line. It replaces 「上次重新聚焦」 while a window is open:
+    // that phrasing reads as history, and the owner needs to know the change
+    // is being APPLIED right now.
+    windDownForChangeLabel: "正在收尾以套用你的改動",
+    windDownByLabel: "最晚",
+    windDownEffectSuffix: "生效",
     standby: "待命中",
     context: "context",
     compactionCount: (n: number) => `壓縮：${n}`,
@@ -770,7 +780,7 @@ export const zh = {
     refocusSinceLabel: "上次重新聚焦",
     // fleet remote-ops stage 1 — 最近操作 (last warden op receipt)
     lastOp: "最近操作",
-    lastOpStart: "啟動",
+    lastOpStart: "喚醒",
     lastOpStop: "停止",
     lastOpOk: "成功",
     lastOpFail: "失敗",
@@ -1007,16 +1017,6 @@ export const zh = {
       deleteConfirm: "確認刪除",
       deleteBusy: "刪除中…",
       deleteError: "刪除失敗",
-      // ── 一鍵升級 (T-5f01,改版:併入操作鈕群,無版本欄) ──
-      // 只有已安裝(warden 在線)的機器顯示;伺服器指紋比對說有新版(stale)
-      // 才可按,最新/未知為 disabled(tooltip 說明原因)。按下後轉「升級中」,
-      // 直到該機在之後的心跳收斂為最新才恢復。
-      upgrade: "升級",
-      upgrading: "升級中…",
-      upgradeCurrentHint: "已是最新版",
-      upgradeUnknownHint: "尚未回報版本指紋,無法判斷是否有新版",
-      upgradeOfflineHint: "機器離線,無法下發升級(上線時會自動更新)",
-      upgradeError: "升級指令下發失敗,請重試",
       // runtime 能力(T-90be ⑤ + T-b36a):一定連時效一起顯示。過期的值 server
       // 刻意留在 wire 上(那是 worker 卡在 machine_unavailable 唯一的解釋),
       // 所以畫面的責任是「照顯示、但不冒充現況」。
@@ -1028,7 +1028,7 @@ export const zh = {
       // ——那是 placement 拒絕這台機器的原因——所以「未安裝」「未登入」是格子裡
       // 的字,不是一個默默消失的版本號。
       runtimeNotInstalled: "未安裝",
-      runtimeNotInstalledHint: "warden 在這台機器上找不到這個 runtime 的執行檔,無法在此啟動",
+      runtimeNotInstalledHint: "warden 在這台機器上找不到這個 runtime 的執行檔,無法在此喚醒",
       runtimeNoVersion: "已安裝",
       runtimeNoVersionHint: "執行檔存在,但版本探測沒有回傳結果",
       runtimeLoggedOut: "未登入",
@@ -1044,20 +1044,25 @@ export const zh = {
       // 回報端本身壞了,要查的東西不同。
       hardwareBad: "值異常",
       hardwareBadHint: "這台回報了型別不對的值,無法呈現——探測有跑,但讀數不可用。請檢查該機 warden 版本。",
-      // warden 自己回報的 launchd shape(anchor 切換)。四個事實四個標籤,最要
-      // 命的是後兩個:「形態不明」是新版跑起來了但讀不到自己的 parent;「未回報」
-      // 是這台根本還沒拿到新版。畫面上原本一樣是空的,但要去做的事相反(去查那台
-      // vs 去把版本推給它)——座艙「盲飛」講的就是這件事。
-      shapeAnchor: "anchor",
-      shapeAnchorHint: "這台 warden 回報自己跑在 anchor 形態上——切換在這台成功了",
-      shapeLegacy: "legacy",
-      shapeLegacyHint: "這台 warden 回報自己還跑在舊形態上——還沒切換,或切換過又退回",
-      shapeUnknown: "形態不明",
-      shapeUnknownHint:
-        "這台跑的是會回報形態的新版,但它判斷不出自己跑在哪個形態上——機器自己也不確定,要去看那台",
-      shapeUnreported: "未回報",
-      shapeUnreportedHint:
-        "這台 warden 根本不回報形態——它還沒拿到 anchor 切換的版本。與「形態不明」不同:這台上面沒有任何東西試圖回答過這個問題。",
+      // 切換狀態的三行字。四種狀態裡只有三種會說話,第四種——已量到、確認生效
+      // ——完全不顯示,而那份沉默就是整個契約:這一列空白,只代表「這台量過了、
+      // 沒問題」,不准有別的情況長成同一個樣子。
+      //
+      // 在這之前,「量過沒問題」「量了但判斷不出來」「從來沒量過」是同一片空白,
+      // 那正是一台其實沒生效的機器看起來很健康三個小時的原因。下面第一行是
+      // 已證實的失敗(琥珀色——真的出事);後兩行是「沒有答案」(灰字——沒有
+      // 已知的問題,但也沒有已知的正常)。
+      //
+      // 🔴 文案不帶任何內部術語。anchor / legacy 是 launchd plist 形態的名字,
+      // 對看這個畫面的人沒有意義(owner 原話:anchor 對其他人來說根本不知道是
+      // 什麼),所以句子講的是「他們那台機器發生了什麼」。而且只描述狀態,一律
+      // 不叫任何人去重啟什麼——那是 owner 明確排除掉的選項。
+      cutoverNotInEffect:
+        "這台機器最近改變了執行 agent 的方式,但目前正在跑的 agent 還沒套用到——它們是在改變之前就開始執行的。",
+      cutoverUnproven:
+        "這台機器檢查過「最近改變的執行 agent 方式」有沒有套用到目前正在跑的 agent,但兩邊都判斷不出來。",
+      cutoverUnreported:
+        "這台機器從來沒回報過「最近改變的執行 agent 方式」有沒有套用到正在跑的 agent——它上面的軟體太舊,還不會做這項檢查。",
     },
   },
   settings: {
@@ -1355,7 +1360,7 @@ export const zh = {
     assigneeMachineOffline: "離線",
     assigneeMachineUnset: "未選機器",
     assigneeMachineNote:
-      "這個類型的外包只會在你選的機器上啟動。沒選機器、或該機器離線時，一律不啟動，原因會顯示在該外包上。",
+      "這個類型的外包只會在你選的機器上喚醒。沒選機器、或該機器離線時，一律不喚醒，原因會顯示在該外包上。",
     assigneeCopies: "雇用數量",
     assigneeCopiesDecrease: "減少",
     assigneeCopiesIncrease: "增加",

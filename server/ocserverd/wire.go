@@ -133,12 +133,17 @@ type memberDTO struct {
 	Runtime           string  `json:"runtime"`
 	Model             string  `json:"model"`
 	ActualModel       string  `json:"actual_model"`
+	ActualRuntime     string  `json:"actual_runtime"`
+	ActualEffort      string  `json:"actual_effort"`
+	ActualMachine     string  `json:"actual_machine"`
 	Effort            string  `json:"effort"`
 	DesiredState      string  `json:"desired_state"`
 	DesiredMachineID  string  `json:"desired_machine_id"`
 	Machine           string  `json:"machine"`
 	Presence          string  `json:"presence"`
 	RefocusSince      float64 `json:"refocus_since"`
+	RefocusOp         string  `json:"refocus_op"`
+	RefocusDeadline   float64 `json:"refocus_deadline"`
 	LastOp            string  `json:"last_op"`
 	LastOpOK          *bool   `json:"last_op_ok"`
 	LastOpLog         string  `json:"last_op_log"`
@@ -196,6 +201,17 @@ type machineDTO struct {
 	// which is a DIFFERENT fact from the reported "unknown" (that build ran and
 	// could not tell). Neither is ever turned into the other.
 	WardenShape *string `json:"warden_shape"`
+	// CutoverEffect is whether that cutover is actually IN EFFECT for the
+	// processes that CARRY agents ("effective" | "not_effective" | "unproven"),
+	// reported verbatim. WardenShape above cannot answer this: it observes
+	// warden's own parent, while the agents hang off a tmux server that keeps its
+	// original identity across a warden restart — so a converted machine can and
+	// did show "anchor" for hours while every agent still ran under the old one.
+	//
+	// Three-valued on purpose. "unproven" is a reported verdict, never a shade of
+	// "effective"; collapsing it into green is the exact defect being retired.
+	// nil = this warden build does not report the verdict at all.
+	CutoverEffect *string `json:"cutover_effect"`
 }
 
 type machineOnboardResultDTO struct {
@@ -338,7 +354,10 @@ type agentTelemetryDTO struct {
 	// WardenShape echoes the stored launchd-shape verdict so the POST response
 	// round-trips what was just merged; nil when this reporter has never sent one.
 	WardenShape *string `json:"warden_shape"`
-	TS          float64 `json:"ts"`
+	// CutoverEffect echoes the stored cutover-effect verdict, same round-trip
+	// contract as WardenShape above.
+	CutoverEffect *string `json:"cutover_effect"`
+	TS            float64 `json:"ts"`
 }
 
 type monitoringSessionDTO struct {
@@ -463,6 +482,8 @@ type monitoringMachineDTO struct {
 	// launchd shape) — both tables render it, the same reason bin_status and the
 	// claude_* columns are mirrored. Reported, never computed; nil stays nil.
 	WardenShape *string `json:"warden_shape"`
+	// CutoverEffect mirrors machineDTO.CutoverEffect for the same reason.
+	CutoverEffect *string `json:"cutover_effect"`
 }
 
 type monitoringAccountDTO struct {
@@ -923,17 +944,25 @@ type docDTO struct {
 }
 
 type outsourceWorkerDTO struct {
-	ID         string  `json:"id"`
-	AvatarURL  string  `json:"avatar_url"`
-	Codename   string  `json:"codename"`
-	Runtime    string  `json:"runtime"`
-	Model      string  `json:"model"`
-	Effort     string  `json:"effort"`
-	Status     string  `json:"status"`
-	TaskID     string  `json:"task_id"`
-	TaskTitle  string  `json:"task_title"`
-	TaskStatus string  `json:"task_status"`
-	CreatedTS  float64 `json:"created_ts"`
+	ID        string `json:"id"`
+	AvatarURL string `json:"avatar_url"`
+	Codename  string `json:"codename"`
+	Runtime   string `json:"runtime"`
+	Model     string `json:"model"`
+	Effort    string `json:"effort"`
+	// Actual* are the REPORTED twins of the three configured launch fields
+	// above, read off the same roster row the member DTO serves. "" = nothing
+	// has ever reported one; they never fall back to the configured value, so
+	// the panel can tell "you changed this, it has not taken effect yet" from
+	// "this is what it is running" (T-7f28).
+	ActualModel   string  `json:"actual_model"`
+	ActualRuntime string  `json:"actual_runtime"`
+	ActualEffort  string  `json:"actual_effort"`
+	Status        string  `json:"status"`
+	TaskID        string  `json:"task_id"`
+	TaskTitle     string  `json:"task_title"`
+	TaskStatus    string  `json:"task_status"`
+	CreatedTS     float64 `json:"created_ts"`
 	// The caller's unread count for this worker's chat — the SAME chat_read
 	// watermark inverse the member roster serves (UnreadCounts); the office
 	// 外包 row's red badge (owner report 2026-07-14: 外包也要有未讀紅點).
@@ -965,6 +994,10 @@ type outsourceWorkerDTO struct {
 	// (relocate target; the picker's bound machine) — raw id, resolved FE-side.
 	Machine          string `json:"machine"`
 	DesiredMachineID string `json:"desired_machine_id"`
+	// ActualMachine is the DURABLE last-observed machine (last_machine_id), the
+	// offline-surviving twin of Machine: a relocation stays legible as pending
+	// while the worker is down, which the in-memory Machine cannot express.
+	ActualMachine string `json:"actual_machine"`
 	// Account / ContextPct / Cost are RUNTIME facts folded from the SAME
 	// per-actor telemetry+gauge the member roster reads (keyed by the worker's
 	// actor id). Nullable — nil serialises null → the panel shows a bare dash,
@@ -1001,7 +1034,13 @@ type outsourceWorkerDTO struct {
 	// run-intent the stop/restart toggle drives; spawn_state is "stopped" while
 	// "offline".
 	RefocusSince float64 `json:"refocus_since"`
-	DesiredState string  `json:"desired_state"`
+	// RefocusOp names which operation opened that window ("" when none is in
+	// flight); RefocusDeadline is the epoch it is force-collected by. Together
+	// they let the panel say "winding down so your change can take effect, by
+	// HH:MM" instead of "last handover", which reads as history (T-7f28).
+	RefocusOp       string  `json:"refocus_op"`
+	RefocusDeadline float64 `json:"refocus_deadline"`
+	DesiredState    string  `json:"desired_state"`
 }
 
 // outsourceWorkerProjection carries the per-worker runtime facts the DTO folds
@@ -1289,17 +1328,21 @@ func foldActorRuntime(tele, gauge map[string]any, banked float64, actorRuntime s
 // handler computes it with the same UnreadCounts fold the member roster uses).
 func newOutsourceWorkerDTO(w OutsourceWorker, task *Task, p outsourceWorkerProjection) outsourceWorkerDTO {
 	dto := outsourceWorkerDTO{
-		ID:          w.ID,
-		AvatarURL:   memberAvatarURL(w.AvatarAttachmentID),
-		Codename:    w.Codename,
-		Runtime:     NormalizeRuntime(w.Runtime),
-		Model:       w.Model,
-		Effort:      w.Effort,
-		Status:      w.Status,
-		TaskID:      w.TaskID,
-		CreatedTS:   w.CreatedTS,
-		UnreadCount: p.unread,
-		Presence:    workerPresence(w, p.now, p.online, p.spawnAt),
+		ID:            w.ID,
+		AvatarURL:     memberAvatarURL(w.AvatarAttachmentID),
+		Codename:      w.Codename,
+		Runtime:       NormalizeRuntime(w.Runtime),
+		Model:         w.Model,
+		Effort:        w.Effort,
+		ActualModel:   w.ActualModel,
+		ActualRuntime: w.ActualRuntime,
+		ActualEffort:  w.ActualEffort,
+		ActualMachine: w.LastMachineID,
+		Status:        w.Status,
+		TaskID:        w.TaskID,
+		CreatedTS:     w.CreatedTS,
+		UnreadCount:   p.unread,
+		Presence:      workerPresence(w, p.now, p.online, p.spawnAt),
 		// Machine = the worker's OBSERVED host (dispatch target, or the
 		// restart-proof fallback folded upstream in projectWorker — T-c23a)
 		// resolved to a display label; "" when nothing is observed — the panel
@@ -1343,6 +1386,10 @@ func newOutsourceWorkerDTO(w OutsourceWorker, task *Task, p outsourceWorkerProje
 	// so the panel never renders a fabricated time); desired_state echoes the run
 	// intent ("" from a pre-column/never-set row reads as online client-side).
 	dto.RefocusSince = w.RefocusSince
+	dto.RefocusOp = w.RefocusOp
+	// StoppingTimeoutSecs is the worker collect ceiling openWorkerHandoverGrace
+	// announces — quoted here so the client need not know it.
+	dto.RefocusDeadline = refocusDeadline(w.RefocusSince, StoppingTimeoutSecs)
 	dto.DesiredState = w.DesiredState
 	return dto
 }

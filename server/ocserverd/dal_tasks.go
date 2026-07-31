@@ -667,12 +667,18 @@ type OutsourceWorker struct {
 	Codename string
 	Runtime  string
 	Model    string
-	// ActualModel is the runtime-reported model, distinct from the owner's
-	// configured launch Model. Outsource workers project the same member row.
-	ActualModel string
-	Effort      string
-	TaskID      string
-	Status      string // closed set assigned|active|released (derived projection)
+	// ActualModel / ActualRuntime / ActualEffort are the runtime-REPORTED twins
+	// of the owner's configured launch Model / Runtime / Effort. Outsource
+	// workers project the same member row, so all three MUST round-trip through
+	// memberFromWorker: that function rebuilds a Member from scratch, and any
+	// column it forgets is zeroed on the next worker write — which would silently
+	// erase a reported value the telemetry path had just stamped.
+	ActualModel   string
+	ActualRuntime string
+	ActualEffort  string
+	Effort        string
+	TaskID        string
+	Status        string // closed set assigned|active|released (derived projection)
 	// ActivatedTS is the durable assigned→active anchor (member.activated_ts):
 	// 0 = never claimed its task; >0 = the first GET /api/self/task claim time.
 	// Writers normally leave it alone — the Put mapping stamps it when Status
@@ -706,6 +712,10 @@ type OutsourceWorker struct {
 	// 0 otherwise. Set by both refocus paths, used as the auto-handover cooldown,
 	// and cleared by the tick's loop-break once a fresh session boots after it.
 	RefocusSince float64
+	// RefocusOp names WHICH operation opened that window ("" when none is in
+	// flight) — the worker twin of member.refocus_op. Stamped and cleared in
+	// lockstep with RefocusSince.
+	RefocusOp string
 	// StoppingSince / StoppedSince are the graceful-handover wind-down anchors
 	// (T-ea82), DIRECT mirrors of the member columns (the row has carried them
 	// since the P7d fold): stopping_since marks the SOP started; stopped_since
@@ -762,6 +772,8 @@ func workerFromMember(m Member) OutsourceWorker {
 		Runtime:            NormalizeRuntime(m.Runtime),
 		Model:              m.Model,
 		ActualModel:        m.ActualModel,
+		ActualRuntime:      m.ActualRuntime,
+		ActualEffort:       m.ActualEffort,
 		Effort:             m.Effort,
 		TaskID:             taskID,
 		Status:             workerStatusFromMember(m.RosterStatus, m.ActivatedTS),
@@ -776,6 +788,7 @@ func workerFromMember(m Member) OutsourceWorker {
 		DesiredMachineID:   m.DesiredMachineID,
 		LastMachineID:      m.LastMachineID,
 		RefocusSince:       m.RefocusSince,
+		RefocusOp:          m.RefocusOp,
 		StoppingSince:      m.StoppingSince,
 		StoppedSince:       m.StoppedSince,
 		DesiredState:       m.DesiredState,
@@ -814,11 +827,14 @@ func memberFromWorker(w OutsourceWorker) Member {
 		Runtime:            NormalizeRuntime(w.Runtime),
 		Model:              w.Model,
 		ActualModel:        w.ActualModel,
+		ActualRuntime:      w.ActualRuntime,
+		ActualEffort:       w.ActualEffort,
 		Effort:             w.Effort,
 		DesiredState:       w.DesiredState,
 		DesiredMachineID:   w.DesiredMachineID,
 		LastMachineID:      w.LastMachineID,
 		RefocusSince:       w.RefocusSince,
+		RefocusOp:          w.RefocusOp,
 		StoppingSince:      w.StoppingSince,
 		StoppedSince:       w.StoppedSince,
 		BankedCost:         w.BankedCost,

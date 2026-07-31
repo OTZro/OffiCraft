@@ -171,6 +171,13 @@ var errNotFound = errors.New("not found")
 // member API surface deliberately keeps its pre-fold semantics — worker
 // lifecycle rides the outsource routes / the relocate fallback, and an ow- id
 // on a member endpoint stays an honest 404, exactly as before the merge.
+//
+// ⚠️ This 404 coexists with dal.ListMembersIncludingOutsource, which DOES put
+// ow- rows in the GET /api/members response. So a caller can see a worker in
+// the roster list and still get a 404 from every member verb — deliberately.
+// Anything that reads "it is in members, therefore I may call member verbs on
+// it" is wrong at runtime; the two halves are only consistent when read
+// together (see the twin note on ListMembersIncludingOutsource in dal.go).
 func (s *apiServer) resolveMember(memberID string) (*Member, error) {
 	m, err := s.dal.GetMember(memberID)
 	if err != nil {
@@ -249,9 +256,32 @@ func (s *apiServer) memberRoleName(m Member) (string, error) {
 	return "", nil
 }
 
+// refocusDeadline is the epoch by which an in-flight wind-down is force-
+// collected — the CEILING the cockpit quotes when it says when a pending launch
+// change takes effect at the latest. 0 in, 0 out (no window, no deadline).
+//
+// It is derived here rather than stored because the grace is reconcile
+// configuration, not a property of the stamp: storing it would let the two
+// drift the first time the grace is retuned.
+func refocusDeadline(refocusSince, grace float64) float64 {
+	if refocusSince <= 0.0 {
+		return 0.0
+	}
+	return refocusSince + grace
+}
+
 // observedHost resolves a member's OBSERVED machine (handlers.observed_host):
-// SSE machine claim → self-reported telemetry.machine → desired_machine_id; a
-// warden attributes to its own id. Honest-empty "" when nothing is observed.
+// SSE machine claim → self-reported telemetry.machine; a warden attributes to
+// its own id. Honest-empty "" when nothing is observed.
+//
+// 🔴 It does NOT fall back to desired_machine_id (T-7f28). It used to — against
+// its own doc comment — and that made an offline member read as though it were
+// already running on the machine the owner had just pinned it to: the observed
+// cell and the intent cell showed the same value, so a move that had not
+// happened was byte-indistinguishable from one that had. A missing observation
+// is information; substituting the intent destroys it. The durable
+// last-observed machine lives in last_machine_id (MemberDTO.actual_machine),
+// which is what a client compares the pin against.
 func (s *apiServer) observedHost(m Member) string {
 	if m.Kind == machineKind {
 		return m.ID
@@ -264,7 +294,7 @@ func (s *apiServer) observedHost(m Member) string {
 			return tele
 		}
 	}
-	return m.DesiredMachineID
+	return ""
 }
 
 // newMemberDTO projects one member onto the wire (dto.MemberDTO.from_domain):
@@ -282,12 +312,17 @@ func (s *apiServer) newMemberDTO(m Member, roleName, observedMachine string, unr
 		Runtime:          NormalizeRuntime(m.Runtime),
 		Model:            m.Model,
 		ActualModel:      m.ActualModel,
+		ActualRuntime:    m.ActualRuntime,
+		ActualEffort:     m.ActualEffort,
+		ActualMachine:    m.LastMachineID,
 		Effort:           m.Effort,
 		DesiredState:     m.DesiredState,
 		DesiredMachineID: m.DesiredMachineID,
 		Machine:          observedMachine,
 		Presence:         PresenceState(m, nowSecs(), s.hub.IsOnline(m.ID)),
 		RefocusSince:     m.RefocusSince,
+		RefocusOp:        m.RefocusOp,
+		RefocusDeadline:  refocusDeadline(m.RefocusSince, s.reconcileCfg.RecycleGrace),
 		LastOp:           m.LastOp,
 		LastOpOK:         m.LastOpOK,
 		LastOpLog:        m.LastOpLog,

@@ -400,11 +400,12 @@ owner 2026-07-31:「成員面板以及監控台,一定要顯示回報回來的�
   - `model` 取 **`model.id`** 而**不是** `display_name`(狀態列上畫的那個):id 是 boot seed
     已經教成員回報的詞彙,也是**唯一**帶 `[1m]` 1M-context 標記的那個——`display_name` 對
     1M 與標準版都寫「Opus 4.5」,送它等於把兩種 session 併成同一個字串。
-  - 🔴 **`model` 這一欄多一個 effort 沒有的持久層**:server 除了寫 telemetry entry,還會
-    在值改變時落進 roster row 的 `actual_model`(`stampReportedModel`)。telemetry 是
-    in-memory,只靠它的話 server 每次 re-exec 就把全 fleet 的模型欄清空。**所以正職與外包
-    的 model 都是「上一次回報的值」,而且活得比 session 久**;effort 沒有這一層,session
-    一停就跟著空。
+  - 🔴 **`model` / `runtime` / `effort` 三者都有持久層(T-7f28 起對稱)**:server 除了寫
+    telemetry entry,還會在值改變時落進 roster row 的 `actual_model` / `actual_runtime` /
+    `actual_effort`(`stampReportedLaunchFacts`)。telemetry 是 in-memory,只靠它的話
+    server 每次 re-exec 就把全 fleet 清空。**所以正職與外包的三欄都是「上一次回報的值」,
+    活得比 session 久**,而且**都不退回設定值**——退回設定值會讓「改了還沒生效」與
+    「已經生效」長得一模一樣,那正是 T-7f28 要修的東西。
   - **codex runtime 由 sidecar 送**(`cli/ocwarden/codex_session.go`),不是 statusLine ——
     那條 runtime 沒有 Claude Code 的狀態列。
 - **`GET /api/monitoring` 的 sessions 現在同時含正職與外包**(T-e12c);外包列靠 **`ow-` id

@@ -47,12 +47,16 @@ import (
 // not tell whether this was intentional" is exactly the kind of shrug that lets
 // a real gap live forever:
 //
-//	list_tasks.open          → api_tasks.go:534        trimmedOrEmpty(params.Open) == "true"
-//	get_chat.peek            → api_chat.go:399         trimmedOrEmpty(params.Peek) == "true"
-//	get_members.fields       → api_members.go:90       trimmedOrEmpty(params.Fields) == "light"
-//	list_task_manuals.view   → api_taskmanuals.go:123  trimmedOrEmpty(params.View) == "list"
-//	update_task_manual.display_name → api_taskmanuals.go:279-280
-//	ingest_telemetry.binaries/claude → api_monitoring.go:339,343,388,391
+// (Anchored on handler names, not line numbers: every one of these six line
+// refs had rotted by T-ccc7 — get_members.fields alone had drifted 90 → 215 —
+// and a stale pointer reads as "traced" while pointing at nothing.)
+//
+//	list_tasks.open          → HandleListTasksApiTasksGet          trimmedOrEmpty(params.Open) == "true"
+//	get_chat.peek            → HandleListChatApiChatGet            trimmedOrEmpty(params.Peek) == "true"
+//	get_members.fields       → HandleListMembersApiMembersGet      trimmedOrEmpty(params.Fields) == "light"
+//	list_task_manuals.view   → HandleListTaskManualsApiTaskManualsGet  trimmedOrEmpty(params.View) == "list"
+//	update_task_manual.display_name → HandleCreateTaskManualApiTaskManualsPost + HandleUpdateTaskManualApiTaskManualsTypeKeyPost
+//	ingest_telemetry.binaries/claude → HandleIngestTelemetryApiMonitoringTelemetryPost (the asObject reads)
 //
 // The last one deserves a note because it was initially GUESSED to be
 // CLI-only: binaries and claude are read in the same handler, by the same
@@ -113,12 +117,21 @@ var openapiOverweight = map[string][]string{
 // Advertising it in tools/list would be an invitation to fabricate the exact
 // signal the fleet uses to decide whether a machine's migration succeeded.
 //
+// ingest_telemetry.cutover_effect: the same argument, one step further in. The
+// verdict is computed from the ages of the tmux server processes that CARRY
+// agent sessions on that machine, measured against the birth of its anchor
+// inode (cli/ocwarden/cutovereffect.go). Only a process on the box can see any
+// of those operands. And this field is the one that was added BECAUSE a signal
+// nobody could falsify still read green while the cutover had not taken effect
+// — putting a hand-typed version of it on the MCP surface would hand out the
+// falsification the incident did not even need.
+//
 // NOT filed under knownCatalogDrift, deliberately: every entry there was traced
 // to its read and confirmed MISSING (debt to be repaid), and that list is
 // checked for rot precisely so it shrinks. Recording an intentional omission as
 // debt would invite the next person to "repay" it by advertising this field.
 var deliberatelyOffMCP = map[string][]string{
-	"ingest_telemetry": {"warden_shape"},
+	"ingest_telemetry": {"warden_shape", "cutover_effect"},
 }
 
 type openapiSpec struct {

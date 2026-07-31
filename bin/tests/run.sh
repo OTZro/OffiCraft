@@ -801,6 +801,33 @@ else
   bad "bin/tests/rule-defer-guard.sh is missing"
 fi
 
+# ── ps field support (T-1ac8) ────────────────────────────────────────────────
+# HOST-SHAPED on purpose, and the only guard here that is. The warden's
+# cutover-effect probe asks `ps` for named output fields; the Go suite reaches
+# ps through a seam, and the fake was keyed on the same argv production used —
+# so when production asked for `etimes` (a GNU/procps field BSD ps does not
+# have, on macOS, the only platform this warden runs on) the fake answered it
+# politely and the entire suite went green while the probe was dead on every
+# real machine. Three separate readings of that code missed it because all three
+# were reading rather than running. This guard runs the real ps.
+#
+# It CANNOT be a Go test: cli/ocwarden's TestMain refuses real exec inside the
+# test binary (refuseInTestBinary), deliberately, so that a test can never act
+# on this machine's live launchd domain. That refusal is what makes the Go side
+# structurally blind here, and it is why "tidy this into the Go suite" is not
+# available to a future reader.
+PSFIELDS="$HERE/ps-field-support-guard.sh"
+echo
+if [[ -f "$PSFIELDS" ]]; then
+  if run_guard "$PSFIELDS"; then
+    ok "ps output fields the warden probes are supported on this host"
+  else
+    bad "ps output-field support suite FAILED (see output above)"
+  fi
+else
+  bad "bin/tests/ps-field-support-guard.sh is missing"
+fi
+
 # ── guard-of-the-guard (T-d3e3 rework) ──────────────────────────────────────
 # The ci success-marker guard is dispatched at the very BOTTOM of this file,
 # AFTER the `[[ "$FAIL" == "0" ]] || exit 1` enforcement below, so its exit code

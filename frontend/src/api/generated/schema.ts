@@ -3033,6 +3033,11 @@ export interface components {
             } | null;
             /** Cost */
             cost?: number | null;
+            /**
+             * Cutover Effect
+             * @description Echo of the stored cutover-effect verdict (see ``AgentTelemetryIngestDTO.cutover_effect``); null when never reported.
+             */
+            cutover_effect?: string | null;
             /** Effort */
             effort?: string | null;
             /** Hardware */
@@ -3139,6 +3144,11 @@ export interface components {
             command_result?: unknown;
             /** Cost */
             cost?: unknown;
+            /**
+             * Cutover Effect
+             * @description Warden heartbeats only — whether the anchor cutover is actually IN EFFECT for the processes that CARRY agents, which ``warden_shape`` cannot answer: that field observes warden's own parent process, while the agents live under a tmux server that keeps its original identity across a warden restart — the two populations diverge at exactly the moment the cutover lands. Deliberately THREE-VALUED and fail-closed: ``effective`` = launchd is running the anchor now AND every process carrying an agent session is younger than the current anchor job leader, so it can only have been forked under the anchor identity; ``not_effective`` = a carrier predates the anchor file itself and therefore cannot hold that identity (the one deterministic negative); ``unproven`` = cannot be shown either way, which is NOT a synonym for ``effective`` and must never be rendered as one — a boolean green light is the exact defect this field exists to retire. OMITTED by every warden build older than this release: absent means 'this machine has not received the new build yet', ``unproven`` means 'the new build ran and could not prove it'. Permissive like the other scalars here: a value outside the three states is a flat 400, never a 422.
+             */
+            cutover_effect?: unknown;
             /** Effort */
             effort?: unknown;
             /**
@@ -3967,6 +3977,11 @@ export interface components {
              */
             claude_version?: string | null;
             /**
+             * Cutover Effect
+             * @description Whether the anchor cutover is actually in effect for the agent-carrying processes on this machine, taken verbatim from its heartbeat (``effective`` | ``not_effective`` | ``unproven``; see ``AgentTelemetryIngestDTO.cutover_effect``). null = this warden build does not report the verdict at all — DISTINCT from ``unproven`` (new build ran, could not prove it). The server never infers one from the other and never derives the verdict itself: only the reporting machine can see its own carrier processes.
+             */
+            cutover_effect?: string | null;
+            /**
              * Display Name
              * @default
              */
@@ -4228,11 +4243,29 @@ export interface components {
          */
         MemberDTO: {
             /**
+             * Actual Effort
+             * @description The effort level the member's session is REPORTED to be running at, from its own live telemetry (``AgentTelemetryIngestDTO.effort``) — durably persisted alongside ``actual_model``, so it survives a server restart and outlives the session that reported it. Empty means nothing has ever reported an effort for this member; it is separate from, and NEVER falls back to, the owner-configured ``effort`` launch setting. WAS: reported effort lived ONLY in the in-memory telemetry store, so a server restart blanked it fleet-wide and no detail panel could tell a configured effort from a running one (T-7f28).
+             * @default
+             */
+            actual_effort: string;
+            /**
+             * Actual Machine
+             * @description The machine this member was LAST OBSERVED running on, durably persisted — the offline-surviving twin of the live ``machine`` projection. Empty means this member has never been observed on any machine. It is separate from, and NEVER falls back to, the owner-configured ``desired_machine_id`` placement: a pending relocation must stay legible as pending even while the member is offline (T-7f28).
+             * @default
+             */
+            actual_machine: string;
+            /**
              * Actual Model
              * @description The model the member's session is REPORTED to be running, from its own live telemetry (``AgentTelemetryIngestDTO.model``) — durably persisted, so it survives a server restart and outlives the session that reported it. Empty means nothing has ever reported a model for this member; it is separate from, and NEVER falls back to, the owner-configured `model` launch setting. Applies identically to ``kind=outsource`` rows, whose reports arrive under their own ``ow-`` token sub. WAS: written only by ``report_waking``, which no outsource worker calls (a worker's boot signal is ``get_my_task``), so it was structurally always empty for them.
              * @default
              */
             actual_model: string;
+            /**
+             * Actual Runtime
+             * @description The AI CLI runtime the member's session is REPORTED to be running, from its own live telemetry (``AgentTelemetryIngestDTO.runtime``) — durably persisted alongside ``actual_model``. Empty means nothing has ever reported a runtime for this member; it is separate from, and NEVER falls back to, the owner-configured ``runtime`` launch setting. WAS: the reported runtime was ingested and then discarded on every read path — every wire that carried a ``runtime`` re-served the roster's CONFIGURED value, so the detail panel flipped the instant the owner changed the setting and a not-yet-applied change was indistinguishable from a live one (T-7f28).
+             * @default
+             */
+            actual_runtime: string;
             /**
              * Avatar Url
              * @description Authenticated URL of this stable member id's personal raster avatar. Empty means no personal image; clients fall back to the active theme's role avatar, then the built-in glyph. Additive-optional for older clients.
@@ -4315,6 +4348,18 @@ export interface components {
              * @default offline
              */
             presence: string;
+            /**
+             * Refocus Deadline
+             * @description Epoch seconds by which the in-flight handover stamped in ``refocus_since`` is force-collected (``refocus_since`` + the reconcile recycle grace), 0 when no handover is in flight. Derived at read time, never stored. It exists so a client can say WHEN a pending launch change takes effect at the latest without hard-coding a server constant; the collection fires the instant the agent answers ``report_stopped``, so this is a CEILING, not a prediction (T-7f28). Additive-optional.
+             * @default 0
+             */
+            refocus_deadline: number;
+            /**
+             * Refocus Op
+             * @description Which owner operation opened the in-flight handover stamped in ``refocus_since``, empty when none is in flight. One of ``relocate`` (machine change), ``runtime/model`` (runtime / model / effort change), ``context_high`` (automatic context-pressure handover), ``refocus`` (owner-pressed refocus) or ``restart_self`` (agent-requested). Stamped and cleared in lockstep with ``refocus_since``. WAS: the cause lived only in a server log line, so a client could only say 'last refocus' — which reads as history — where it meant 'winding down right now so your change can take effect' (T-7f28). Additive-optional.
+             * @default
+             */
+            refocus_op: string;
             /**
              * Refocus Since
              * @default 0
@@ -4554,6 +4599,11 @@ export interface components {
             /** Cpu Pct */
             cpu_pct?: number | null;
             /**
+             * Cutover Effect
+             * @description Same reported cutover-effect verdict the machine registry row carries (``effective`` | ``not_effective`` | ``unproven``; null = warden too old to report one) — see ``MachineDTO.cutover_effect``.
+             */
+            cutover_effect?: string | null;
+            /**
              * Display Name
              * @default
              */
@@ -4630,6 +4680,7 @@ export interface components {
             cost?: number | null;
             /**
              * Effort
+             * @description The effort level this session REPORTED it is running at (the roster row's ``actual_effort``). Honest-empty until something reports one, and it NEVER falls back to the owner-configured ``effort`` launch setting. Durable since T-7f28 — see ``model`` for the shared contract.
              * @default
              */
             effort: string;
@@ -4644,7 +4695,7 @@ export interface components {
              * Model
              * @description The model this session REPORTED it is running (the roster row's ``actual_model``), for staff and outsource rows ALIKE — one column, one meaning. Honest-empty until something reports one, and it NEVER falls back to the owner-configured launch model. WAS: staff rows served the configured ``member.model`` while outsource rows served the reported value, so a single column header meant two different things depending on the row.
              *
-             *     ⚠️ NOT symmetric with the ``effort`` beside it, despite both being reported state. ``model`` is read from the DURABLE ``actual_model`` column, so it survives a server restart and outlives the session that reported it; ``effort`` is read from the in-memory telemetry entry and is therefore blanked fleet-wide by any server re-exec. There is no ``actual_effort`` column. Do not describe the two as twins and do not infer one's storage from the other's — pinned by TestGetMonitoring_ReportedModelSurvivesATelemetryWipe, which passes for model and would fail for effort.
+             *     Symmetric with the ``runtime`` and ``effort`` beside it since T-7f28: all three are reported state read from DURABLE columns (``actual_model`` / ``actual_runtime`` / ``actual_effort``), so all three survive a server restart and outlive the session that reported them. WAS asymmetric — ``effort`` and ``runtime`` were read from the in-memory telemetry entry and blanked fleet-wide on every re-exec, and the spec text here said so. Pinned by TestGetMonitoring_ReportedLaunchFactsSurviveAReExec (all three) and TestGetMonitoring_ReportedLaunchFactsNeverFallBackToTheConfiguredValue.
              * @default
              */
             model: string;
@@ -4662,10 +4713,11 @@ export interface components {
             role: string;
             /**
              * Runtime
-             * @description The session's selected provider runtime.
-             * @default claude
+             * @description The runtime this session REPORTED it is running (the roster row's ``actual_runtime``). Honest-empty until something reports one, and it NEVER falls back to the owner-configured ``runtime`` launch setting. WAS: this served the CONFIGURED value under a comment claiming it folded through the reported telemetry, so the cell flipped the instant the owner changed the setting and a runtime switch that had not happened yet was indistinguishable from one that had (T-7f28). NOT an ``AgentRuntime`` $ref like the CONFIGURED runtime fields: this one admits "" for "nothing has reported yet", and the closed two-value vocabulary has no member for that. Widening the shared enum instead would have let "unknown" leak into every owner-configured runtime field, where it is not a legal setting.
+             * @default
+             * @enum {string}
              */
-            runtime: components["schemas"]["AgentRuntime"];
+            runtime: "" | "claude" | "codex";
             /** Tokens */
             tokens?: {
                 [key: string]: number;
@@ -4734,6 +4786,30 @@ export interface components {
          * @description One outsource worker row of the panel (SPEC §4.1): the anonymous codename (model prefix + sequence), runtime/model/effort, lifecycle status (assigned → active → released), and its ONE bound task's id / title / status.
          */
         OutsourceWorkerDTO: {
+            /**
+             * Actual Effort
+             * @description The effort level this worker's session is REPORTED to be running at — the same durably-persisted roster field ``MemberDTO.actual_effort`` serves (an ``ow-`` row IS a member row with ``kind=outsource``). Empty means nothing has ever reported one. Separate from, and NEVER a fallback to, the owner-configured ``effort`` launch setting this DTO round-trips (T-7f28).
+             * @default
+             */
+            actual_effort: string;
+            /**
+             * Actual Machine
+             * @description The machine this worker was LAST OBSERVED running on, durably persisted — the offline-surviving twin of the live ``machine`` projection. Empty means it has never been observed anywhere. Separate from, and NEVER a fallback to, ``desired_machine_id`` (T-7f28).
+             * @default
+             */
+            actual_machine: string;
+            /**
+             * Actual Model
+             * @description The model this worker's session is REPORTED to be running — the same durably-persisted roster field ``MemberDTO.actual_model`` serves. Empty means nothing has ever reported one. WAS: absent from this DTO entirely, so the worker detail panel had to join ``GET /api/monitoring`` to show a reported model at all, and had no reported value to compare the configured ``model`` against (T-7f28).
+             * @default
+             */
+            actual_model: string;
+            /**
+             * Actual Runtime
+             * @description The AI CLI runtime this worker's session is REPORTED to be running — the same durably-persisted roster field ``MemberDTO.actual_runtime`` serves. Empty means nothing has ever reported one. Separate from, and NEVER a fallback to, the owner-configured ``runtime`` launch setting this DTO round-trips (T-7f28).
+             * @default
+             */
+            actual_runtime: string;
             /**
              * Account
              * @description The Claude account this worker's session runs under (telemetry entry keyed by the worker's actor id — the SAME per-actor telemetry the member roster reads). null when the worker has not reported one (never fabricated). T-f190 additive-optional.
@@ -4839,7 +4915,7 @@ export interface components {
             machine: string;
             /**
              * Model
-             * @description The owner-CONFIGURED launch model this worker was (or will be) started with — the intent the 喚醒／更改 dialog round-trips and saves. Deliberately NOT the reported one: that is ``MemberDTO.actual_model`` / ``MonitoringSessionDTO.model``. The two must never be merged into one cell — this DTO exists to round-trip the setting, and a settings editor that displayed reported state could not save.
+             * @description The owner-CONFIGURED launch model this worker was (or will be) started with — the intent the 喚醒／更改 dialog round-trips and saves. Deliberately NOT the reported one: that is ``actual_model`` on this same DTO since T-7f28 (also ``MemberDTO.actual_model`` / ``MonitoringSessionDTO.model``) — the panel now shows both, side by side, so a change that has not taken effect is legible as pending. The two must never be merged into one cell — this DTO exists to round-trip the setting, and a settings editor that displayed reported state could not save.
              * @default
              */
             model: string;
@@ -4849,6 +4925,18 @@ export interface components {
              * @default
              */
             presence: string;
+            /**
+             * Refocus Deadline
+             * @description Epoch seconds by which the in-flight handover stamped in ``refocus_since`` is force-collected (``refocus_since`` + the reconcile recycle grace), 0 when none is in flight. Derived at read time, never stored. A CEILING, not a prediction: the collection fires the instant the worker answers ``report_stopped`` (T-7f28). Additive-optional.
+             * @default 0
+             */
+            refocus_deadline: number;
+            /**
+             * Refocus Op
+             * @description Which owner operation opened the in-flight handover stamped in ``refocus_since``, empty when none is in flight. Same closed set as ``MemberDTO.refocus_op``. Stamped and cleared in lockstep with ``refocus_since`` (T-7f28). Additive-optional.
+             * @default
+             */
+            refocus_op: string;
             /**
              * Refocus Since
              * @description Epoch seconds of the in-flight context-handover stamp (T-32e1), 0 when none. >0 = a refocus (owner 換手 OR context-high auto-handover) is mid-flight; the FE maps 0→null. Additive-optional.

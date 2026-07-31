@@ -69,6 +69,9 @@ export interface Messages {
   memberForceStopConfirmBody: (name: string) => string;
   memberRefocusSince: (elapsed: string) => string;
   memberMachineMovingTo: (machine: string) => string;
+  agentPendingChange: (value: string) => string;
+  workerMachineMovingTo: (machine: string) => string;
+  agentWindDownForChange: (by: string) => string;
   // ── machine picker ──
   machineOfflineOption: (name: string) => string;
   // ── monitor › machines ──
@@ -156,6 +159,16 @@ export function makeMessages(t: Dict, language: Lang): Messages {
     memberRefocusSince: (elapsed) => `${mp.refocusSinceLabel} ${elapsed}`,
     // LABEL shape: zh and en both put exactly one space before the machine name.
     memberMachineMovingTo: (machine) => `${mp.machineMovingToLabel} ${machine}`,
+    // The other three cells: same LABEL shape, one space before the value.
+    agentPendingChange: (value) => `${mp.pendingChangeLabel} ${value}`,
+    // Machines get 「→ 要換到」 (a place) rather than 「→ 要換成」 (a value) —
+    // the wording the member panel has always used, now on both panels.
+    workerMachineMovingTo: (machine) => `${mp.machineMovingToLabel} ${machine}`,
+    // 「正在收尾以套用你的改動 · 最晚 14:32 生效」 — the deadline is a CEILING
+    // (the collect fires as soon as the agent reports stopped), so the wording
+    // says 最晚 rather than promising a time.
+    agentWindDownForChange: (by) =>
+      `${mp.windDownForChangeLabel}${sp}·${sp}${mp.windDownByLabel} ${by} ${mp.windDownEffectSuffix}`,
 
     machineOfflineOption: (name) =>
       `${name}${sp}${t.machine.picker.offlineOptionSuffix}`,

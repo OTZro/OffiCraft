@@ -319,8 +319,29 @@ func realHeartbeat(t *testing.T) map[string]any {
 		t.Fatal("precondition: the shape collector produced nothing to check")
 	}
 
+	// Same reasoning for the cutover-effect verdict: the real collector, whose
+	// probes are all blocked inside the test binary.
+	//
+	// Asserted as "unproven" specifically, NOT as "non-empty". The collector
+	// stringifies a closed three-value type, so it can never return "" and a
+	// non-empty check is true no matter what the code does — a dead assertion
+	// wearing the shape of a precondition.
+	//
+	// Be precise about what this DOES pin, because the obvious reading is wrong:
+	// with every probe refused by the blocked seam, sampleCutoverEffect returns
+	// at its own fail-closed guards and judgeCutoverEffect is never reached. So
+	// this covers the SAMPLER's refusal to answer without operands — not the
+	// judge's truth table, which is pinned in cutovereffect_test.go. Claiming it
+	// covered the judge would be a second dead assertion, just a better dressed
+	// one.
+	effect := newCutoverEffectReporter("/home/u/.officraft/warden/officraft", "officraft", 4242)()
+	if effect != string(effectUnproven) {
+		t.Fatalf("a collector whose every probe is blocked reported %q, want %q — "+
+			"an unmeasurable machine must never claim a verdict", effect, effectUnproven)
+	}
+
 	heartbeat, err := buildTelemetryPayload("m-1", "lab-1", hardware,
-		map[string]string{"ocwarden": "abc123abc123"}, claude, shape, runtimes)
+		map[string]string{"ocwarden": "abc123abc123"}, claude, shape, effect, runtimes)
 	if err != nil {
 		t.Fatalf("buildTelemetryPayload: %v", err)
 	}
@@ -419,7 +440,7 @@ func TestRunLogsRefusedTelemetry(t *testing.T) {
 		}}
 	}
 	var out bytes.Buffer
-	run(context.Background(), cfg, collect, machine, refuse, nil, nil, nil, noSleep, 1, &out)
+	run(context.Background(), cfg, collect, machine, refuse, nil, nil, nil, nil, noSleep, 1, &out)
 	log := out.String()
 	if !strings.Contains(log, "422") || !strings.Contains(log, "unknown field") {
 		t.Errorf("a refused heartbeat must log the status AND the server's reason; got %q", log)
@@ -431,7 +452,7 @@ func TestRunLogsRefusedTelemetry(t *testing.T) {
 	// A server that is merely unreachable must NOT spam the log.
 	down := func(string, map[string]any) (int, map[string]any) { return 0, nil }
 	var quiet bytes.Buffer
-	run(context.Background(), cfg, collect, machine, down, nil, nil, nil, noSleep, 1, &quiet)
+	run(context.Background(), cfg, collect, machine, down, nil, nil, nil, nil, noSleep, 1, &quiet)
 	if quiet.Len() != 0 {
 		t.Errorf("an unreachable server is expected, not a refusal; log = %q", quiet.String())
 	}
@@ -439,7 +460,7 @@ func TestRunLogsRefusedTelemetry(t *testing.T) {
 	// And a stored report says nothing either.
 	okPost := func(string, map[string]any) (int, map[string]any) { return 200, map[string]any{} }
 	var silent bytes.Buffer
-	run(context.Background(), cfg, collect, machine, okPost, nil, nil, nil, noSleep, 1, &silent)
+	run(context.Background(), cfg, collect, machine, okPost, nil, nil, nil, nil, noSleep, 1, &silent)
 	if silent.Len() != 0 {
 		t.Errorf("a stored report must stay quiet; log = %q", silent.String())
 	}

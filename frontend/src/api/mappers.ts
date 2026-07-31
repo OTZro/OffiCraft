@@ -25,13 +25,13 @@ import type {
   OnboardResultView,
   DeleteResultView,
   UninstallResultView,
-  UpgradeResultView,
   TeardownHereResultView,
   BootstrapResultView,
   MachineView,
   BinStatus,
   ClaudeCredSource,
   WardenShape,
+  CutoverEffect,
 } from "../types";
 import type {
   WireMember,
@@ -51,7 +51,6 @@ import type {
   WireOnboardResult,
   WireDeleteResult,
   WireUninstallResult,
-  WireUpgradeResult,
   WireTeardownHereResult,
   WireBootstrapResult,
   WireChatRead,
@@ -164,6 +163,12 @@ export function toMember(w: WireMember): Member {
     lifecycle: presence,
     runtime: (w.runtime || "claude") as "claude" | "codex",
     actualModel: w.actual_model || "",
+    // The reported twins of `runtime` / `effort` (T-7f28). "" = nothing has
+    // ever reported one — honest-unknown, NEVER floored to the configured
+    // value beside it: a substitute here is exactly what made a launch change
+    // that had not taken effect look like one that had.
+    actualRuntime: (w.actual_runtime || "") as "claude" | "codex" | "",
+    actualEffort: w.actual_effort || "",
     model: w.model, // direct
     effort: (w.effort || "medium") as Effort, // direct (narrowed to union)
     kind: w.kind, // "assistant" | "warden" | … — office roster keeps assistants only
@@ -196,6 +201,16 @@ export function toMember(w: WireMember): Member {
     // detail panel); 0 → null (never refocused) so the panel shows no fabricated
     // "last refocus" time. Same honest ">0 else null" rule as last_alive.
     refocusSince: w.refocus_since > 0 ? w.refocus_since : null,
+    // Which operation opened that window, and the epoch it is collected by at
+    // the latest ("" / null when none is in flight) — so the panel can say
+    // "winding down so your change can take effect" instead of "last refocus",
+    // which reads as history (T-7f28).
+    refocusOp: w.refocus_op || "",
+    refocusDeadline: w.refocus_deadline > 0 ? w.refocus_deadline : null,
+    // The DURABLE last-observed machine. `machine` above goes blank the moment
+    // the member stops running; this one survives, so a pending relocation is
+    // still legible while it is offline.
+    actualMachine: w.actual_machine || "",
 
     // fleet remote-ops stage 1: the last warden-op receipt (snake→camel passthrough).
     // last_op_at > 0 → real epoch (shown as the op time); 0 → null (no op yet) so the
@@ -492,6 +507,12 @@ export function toOutsourceWorker(w: WireOutsourceWorker): OutsourceWorkerView {
     // server-side); "" when never dispatched → the panel shows 「尚未分配」.
     machine: w.machine ?? "",
     desiredMachineId: w.desired_machine_id ?? "",
+    // See the member mapper: reported twins + durable last landing, all
+    // honest-empty rather than falling back to the configured value (T-7f28).
+    actualRuntime: (w.actual_runtime || "") as "claude" | "codex" | "",
+    actualModel: w.actual_model ?? "",
+    actualEffort: w.actual_effort ?? "",
+    actualMachine: w.actual_machine ?? "",
     // Runtime facts: nullable on the wire (null = unreported). A defaulted-away
     // field arrives as undefined — coalesce to null (the honest dash), never 0.
     account: w.account ?? null,
@@ -518,6 +539,9 @@ export function toOutsourceWorker(w: WireOutsourceWorker): OutsourceWorkerView {
     // time; member.refocus_since style); desired_state mirrors member ("" reads
     // as online — the stop/restart toggle only trips on an explicit "offline").
     refocusSince: w.refocus_since && w.refocus_since > 0 ? w.refocus_since : null,
+    refocusOp: w.refocus_op ?? "",
+    refocusDeadline:
+      w.refocus_deadline && w.refocus_deadline > 0 ? w.refocus_deadline : null,
     desiredState: w.desired_state ?? "online",
   };
 }
@@ -682,7 +706,10 @@ function toMonSession(w: WireMonSession): MonSessionView {
     effort: w.effort || "", // live self-reported effort; "" passes through → "—"
     machine: w.machine,
     account: w.account,
-    runtime: (w.runtime || "claude") as "claude" | "codex",
+    // The REPORTED runtime, honest-empty until something reports one — the wire
+    // stopped serving the configured value here (T-7f28), so flooring it to
+    // "claude" would just put the fabrication back one layer up.
+    runtime: (w.runtime || "") as "claude" | "codex" | "",
     status: w.presence as MemberStatus,
     // Telemetry is null-until-reported on the wire; a defaulted-away field
     // arrives as `undefined` — coalesce to null so the UI renders "—", never a
@@ -712,6 +739,7 @@ function toMonMachine(w: WireMonMachine): MonMachineView {
     // Same narrowing as the registry row — the monitoring projection of a
     // machine must not disagree with the machine table about its own shape.
     wardenShape: toWardenShape(w.warden_shape),
+    cutoverEffect: toCutoverEffect(w.cutover_effect),
     claudeVersion: w.claude_version ?? null,
     claudeCredSource: toClaudeCredSource(w.claude_cred_source),
     claudeSubReadable: w.claude_sub_readable ?? null,
@@ -984,6 +1012,9 @@ export function toMachine(w: WireMachine): MachineView {
     // Reported, not computed: absent means the box has not received the build
     // that reports a shape — a different fact from the reported "unknown".
     wardenShape: toWardenShape(w.warden_shape),
+    // Reported, not computed, for the same reason and with the same absent-vs-
+    // reported distinction as the shape above.
+    cutoverEffect: toCutoverEffect(w.cutover_effect),
     // The claude CLI probe columns (T-97ee): absent (older server) and null
     // (unknown — an older warden that never probed) both read as the honest
     // unknown; the UI shows only claudeVersion (table column, "—" on null).
@@ -1023,6 +1054,19 @@ function toWardenShape(v: string | null | undefined): WardenShape {
   return v === "anchor" || v === "legacy" || v === "unknown" ? v : null;
 }
 
+/** Narrow the wire `cutover_effect` to the closed CutoverEffect vocabulary.
+ *
+ * The same trap as `toWardenShape`, one notch sharper: "unproven" sounds like a
+ * fallback and is not one. It is a REPORTED verdict — the machine ran the check
+ * and could not settle it — so narrowing an unrecognised string to it would
+ * assert a check that may never have run. Absent/null/unrecognised all fall to
+ * `null`, and nothing here ever narrows toward "effective". */
+function toCutoverEffect(v: string | null | undefined): CutoverEffect {
+  return v === "effective" || v === "not_effective" || v === "unproven"
+    ? v
+    : null;
+}
+
 /** Narrow the wire `claude_cred_source` to the closed vocabulary; anything
  * absent/unrecognized reads as the honest unknown (null), never a verdict. */
 function toClaudeCredSource(v: string | null | undefined): ClaudeCredSource {
@@ -1055,16 +1099,6 @@ export function toDeleteResult(w: WireDeleteResult): DeleteResultView {
 /** Map the uninstall wire result → the view model (snake→camel). Pure rename;
  * `dispatched` passes through verbatim (whether the uninstall RPC was driven). */
 export function toUninstallResult(w: WireUninstallResult): UninstallResultView {
-  return {
-    memberId: w.member_id,
-    machineId: w.machine_id,
-    dispatched: w.dispatched,
-  };
-}
-
-/** Map the upgrade wire result → the view model (snake→camel). Pure rename;
- * `dispatched` passes through verbatim (whether the update RPC was enqueued). */
-export function toUpgradeResult(w: WireUpgradeResult): UpgradeResultView {
   return {
     memberId: w.member_id,
     machineId: w.machine_id,

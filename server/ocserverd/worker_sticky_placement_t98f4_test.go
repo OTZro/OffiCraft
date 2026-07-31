@@ -225,8 +225,13 @@ func TestSticky_ConnectStampsTheLandingFromTheTokenClaim(t *testing.T) {
 	if got := readWorker(t, s, w.ID).LastMachineID; got != "m-third" {
 		t.Fatalf("landing after a move = %q, want m-third", got)
 	}
-	// Staff members are OUT of scope: they carry a durable desired_machine_id
-	// that already pins them, and a second weaker anchor would only disagree.
+	// Staff members stamp the anchor too (T-7f28). They used to be excluded on
+	// the reasoning that desired_machine_id already pins them — but a pin is the
+	// INTENT, and the moment the owner re-pins, it stops describing where the
+	// member is. Without a durable observation an offline member has nothing to
+	// compare a new pin against, so a move that has not happened cannot be told
+	// from one that has. For staff the anchor is purely observational; the
+	// placement chain still reads it for outsource only (TestSticky_* below).
 	if err := s.dal.PutMember(Member{ID: "g-staff", Name: "staff",
 		Kind: KindAssistant, DesiredState: DesiredStateOnline,
 		RosterStatus: RosterStatusActive}); err != nil {
@@ -236,7 +241,7 @@ func TestSticky_ConnectStampsTheLandingFromTheTokenClaim(t *testing.T) {
 	if err != nil || staff == nil {
 		t.Fatalf("read staff: %+v %v", staff, err)
 	}
-	staff.DesiredMachineID = "m-other" // corroborated, so only kind keeps it out
+	staff.DesiredMachineID = "m-other" // corroborates the claim below
 	if err := s.dal.PutMember(*staff); err != nil {
 		t.Fatalf("pin staff: %v", err)
 	}
@@ -245,8 +250,25 @@ func TestSticky_ConnectStampsTheLandingFromTheTokenClaim(t *testing.T) {
 	if err != nil || m == nil {
 		t.Fatalf("re-read staff: %+v %v", m, err)
 	}
-	if m.LastMachineID != "" {
-		t.Fatalf("staff member must not carry a landing anchor, got %q", m.LastMachineID)
+	if m.LastMachineID != "m-other" {
+		t.Fatalf("staff landing anchor = %q, want m-other", m.LastMachineID)
+	}
+	// …and an UNCORROBORATED staff claim still writes nothing: the 正身 gate is
+	// what keeps a wanderer from rewriting where a member lives, and widening
+	// the kind scope must not have widened that too.
+	staff2 := Member{ID: "g-staff2", Name: "staff2", Kind: KindAssistant,
+		DesiredState: DesiredStateOnline, RosterStatus: RosterStatusActive}
+	if err := s.dal.PutMember(staff2); err != nil {
+		t.Fatalf("put staff2: %v", err)
+	}
+	connect("g-staff2", "m-wanderer") // no pin ⇒ unverifiable
+	m2, err := s.dal.GetMember("g-staff2")
+	if err != nil || m2 == nil {
+		t.Fatalf("re-read staff2: %+v %v", m2, err)
+	}
+	if m2.LastMachineID != "" {
+		t.Fatalf("an unverifiable claim must not stamp a landing, got %q",
+			m2.LastMachineID)
 	}
 }
 

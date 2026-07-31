@@ -437,10 +437,11 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	if body.RateLimits == nil && body.Tokens == nil && body.Hardware == nil &&
 		body.Binaries == nil && body.Claude == nil && body.Cost == nil &&
 		body.Effort == nil && body.Runtime == nil && body.Runtimes == nil &&
-		body.SelfUpdate == nil && body.CommandResult == nil && body.WardenShape == nil {
+		body.SelfUpdate == nil && body.CommandResult == nil && body.WardenShape == nil &&
+		body.CutoverEffect == nil {
 		writeError(w, http.StatusBadRequest,
 			"rate_limits, tokens, hardware, binaries, claude, cost, effort, runtime, runtimes, "+
-				"self_update, command_result or warden_shape is required")
+				"self_update, command_result, warden_shape or cutover_effect is required")
 		return
 	}
 	asObject := func(v any, name string) (map[string]any, bool) {
@@ -538,6 +539,17 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 		}
 		wardenShape = &text
 	}
+	// cutover_effect: same closed-vocabulary handler check, same reasoning.
+	var cutoverEffect *string
+	if body.CutoverEffect != nil {
+		text, isStr := body.CutoverEffect.(string)
+		if !isStr || !ValidCutoverEffect(text) {
+			writeError(w, http.StatusBadRequest,
+				"cutover_effect must be 'effective', 'not_effective' or 'unproven'")
+			return
+		}
+		cutoverEffect = &text
+	}
 	var cost *float64
 	if body.Cost != nil {
 		n, isNum := body.Cost.(float64)
@@ -606,6 +618,11 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	if wardenShape != nil {
 		entry["warden_shape"] = *wardenShape
 	}
+	// Partial-merge for the same reason as warden_shape: a receipt that carries no
+	// verdict must not clear the stored one into the absent case.
+	if cutoverEffect != nil {
+		entry["cutover_effect"] = *cutoverEffect
+	}
 	if body.Claude != nil {
 		entry["claude"] = claude
 	}
@@ -630,8 +647,9 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 		entry["effort"] = *effort
 	}
 	// 🔴 model is deliberately NOT stashed on the telemetry entry the way effort
-	// is. Its home is the DURABLE actual_model column (stampReportedModel,
-	// below); a copy here would have no reader, would not be echoed on the
+	// is. Its home is the DURABLE actual_model column
+	// (stampReportedLaunchFacts, below); a copy here would have no reader,
+	// would not be echoed on the
 	// response DTO, and would sit in the one map a reader naturally treats as
 	// this handler's source of truth. That is not a harmless duplicate — the
 	// next person to touch this column would read the in-memory copy, and the
@@ -668,9 +686,8 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	applyAccountReport(entry, body.Account, body.AccountLabel, runtime)
 	entry["ts"] = nowSecs()
 	s.telemetry.Set(agentID, entry)
-	if model != nil {
-		s.stampReportedModel(agentID, *model, requestTrigger(r))
-	}
+	s.stampReportedLaunchFacts(agentID,
+		derefOr(model, ""), derefOr(runtime, ""), derefOr(effort, ""), requestTrigger(r))
 	// No agent consumes the monitoring signal on the wire; owner cockpit only.
 	s.hub.Publish("monitoring", "signal", "monitoring", agentID, nil, audienceOwnerOnly(), requestTrigger(r))
 
@@ -694,20 +711,29 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 		SelfUpdate:    entryObj(entry, "self_update"),
 		CommandResult: entryObj(entry, "command_result"),
 		WardenShape:   entryStr(entry, "warden_shape"),
+		CutoverEffect: entryStr(entry, "cutover_effect"),
 		TS:            entry["ts"].(float64),
 	})
 }
 
-// stampReportedModel persists a session's live self-reported model onto the
-// caller's OWN roster row (identity-from-token: agentID is the verified sub).
+// stampReportedLaunchFacts persists a session's live self-reported model,
+// runtime and effort onto the caller's OWN roster row (identity-from-token:
+// agentID is the verified sub). Each field is independent: a report that
+// carries only one of them leaves the other two alone.
 //
 // Why the telemetry entry alone is not enough, and why this step is not
-// optional: s.telemetry is an IN-MEMORY map. The 模型 column is the one place
-// the owner looks to answer "what is this session actually running", and if it
-// lived only in that map then every server re-exec would blank it for the whole
-// fleet until each session's next report — the same fleet-wide blank this whole
-// change exists to remove, just on a timer. actual_model is a durable column,
-// so one report makes the answer survive restarts AND outlive the session.
+// optional: s.telemetry is an IN-MEMORY map. These three columns are where the
+// owner looks to answer "what is this session actually running", and if they
+// lived only in that map then every server re-exec would blank them for the
+// whole fleet until each session's next report — the same fleet-wide blank this
+// whole change exists to remove, just on a timer. They are durable columns, so
+// one report makes the answer survive restarts AND outlive the session.
+//
+// Runtime and effort joined model here in T-7f28: an offline agent must still
+// be able to say what it was LAST running, because that is the only thing a
+// pending launch change can be compared against. Without it the detail panel
+// had to show the configured value, which made "changed, not yet applied"
+// indistinguishable from "already applied".
 //
 // WRITE-ON-CHANGE, deliberately. Reports arrive every ~30s per session and the
 // model almost never changes, so an unconditional write would push a member SSE
@@ -728,9 +754,11 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 // does: an ow- row is a kind='outsource' row in the SAME member table, and the
 // outsource tick does its own read-modify-write on it. Without the lock this
 // read-modify-write can interleave and drop the tick's fold.
-func (s *apiServer) stampReportedModel(agentID, model, trigger string) {
+func (s *apiServer) stampReportedLaunchFacts(agentID, model, runtime, effort, trigger string) {
 	model = strings.TrimSpace(model)
-	if model == "" {
+	runtime = strings.TrimSpace(runtime)
+	effort = strings.TrimSpace(effort)
+	if model == "" && runtime == "" && effort == "" {
 		return
 	}
 	m, err := s.dal.GetMember(agentID)
@@ -748,14 +776,29 @@ func (s *apiServer) stampReportedModel(agentID, model, trigger string) {
 			return
 		}
 	}
-	if m.ActualModel == model {
+	changed := false
+	for _, f := range []struct {
+		name     string
+		reported string
+		column   *string
+	}{
+		{"actual_model", model, &m.ActualModel},
+		{"actual_runtime", runtime, &m.ActualRuntime},
+		{"actual_effort", effort, &m.ActualEffort},
+	} {
+		if f.reported == "" || *f.column == f.reported {
+			continue
+		}
+		*f.column = f.reported
+		changed = true
+	}
+	if !changed {
 		return
 	}
-	m.ActualModel = model
 	if err := s.putMember(*m, trigger); err != nil {
 		fmt.Fprintf(os.Stderr,
-			"[monitoring] actual_model stamp failed: agent=%s model=%s: %v\n",
-			agentID, model, err)
+			"[monitoring] reported launch-fact stamp failed: agent=%s model=%s runtime=%s effort=%s: %v\n",
+			agentID, model, runtime, effort, err)
 	}
 }
 
@@ -1133,18 +1176,27 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 			internalError(w, err)
 			return
 		}
-		effort := ""
-		if e, ok := entry["effort"].(string); ok {
-			effort = e
-		}
+		// Reported effort off the DURABLE roster column, symmetric with model
+		// and runtime. It used to be read straight off the in-memory telemetry
+		// entry, so a server re-exec blanked it fleet-wide while the model
+		// beside it survived — two columns of the same kind with two different
+		// storage lifetimes (T-7f28).
+		effort := m.ActualEffort
 		// Runtime facts fold through the SAME foldActorRuntime the outsource
 		// worker DTO reads (P7b read-path convergence — one fold, two wires).
 		rt := foldActorRuntime(entry, gauge[m.ID], m.BankedCost, m.Runtime)
 		sessions = append(sessions, monitoringSessionDTO{
-			ID:      m.ID,
-			Name:    m.Name,
-			Role:    roleName,
-			Runtime: NormalizeRuntime(m.Runtime),
+			ID:   m.ID,
+			Name: m.Name,
+			Role: roleName,
+			// The REPORTED runtime off the roster row, honest-empty until
+			// something reports one — the same shape Model has, and for the
+			// same reason. It used to serve NormalizeRuntime(m.Runtime), the
+			// owner-CONFIGURED value, directly under a comment claiming it
+			// folded: the cell flipped the instant the setting changed, so a
+			// runtime switch that had not happened yet looked like one that had
+			// (T-7f28).
+			Runtime: m.ActualRuntime,
 			// ONE expression for staff and outsource alike — the reported model
 			// off the roster row, honest-empty until something reports one, and
 			// with no fallback to the owner-configured m.Model for either kind.
@@ -1354,6 +1406,7 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 			ClaudeSubReadable:   claudeSubReadable,
 			RuntimeCapabilities: s.machineRuntimeCapabilities(host),
 			WardenShape:         s.machineWardenShape(host),
+			CutoverEffect:       s.machineCutoverEffect(host),
 			// Honest-empty, never null: the spec types this as a plain array,
 			// and "no key is broken" is a real answer that every row can give
 			// — including one with no sample at all, which has no key that

@@ -25,7 +25,6 @@ import type {
   OnboardResultView,
   DeleteResultView,
   UninstallResultView,
-  UpgradeResultView,
   TeardownHereResultView,
   BootstrapResultView,
   MachineView,
@@ -370,9 +369,19 @@ export interface OutsourceWorkerView {
   avatarUrl?: string;
   /** Model-flavoured anonymous codename (O-7 / S-3 / H-1 …). */
   codename: string;
+  /** The owner-CONFIGURED launch trio — what the settings dialog round-trips. */
   runtime?: "claude" | "codex";
   model: string;
   effort: string;
+  /** Their REPORTED twins (wire `actual_*`): what the worker's own session
+   * says it is running. "" = never reported. Never a fallback to the
+   * configured value beside it (T-7f28). */
+  actualRuntime?: "claude" | "codex" | "";
+  actualModel?: string;
+  actualEffort?: string;
+  /** The DURABLE last-observed machine — survives the worker going offline,
+   * which `machine` (the in-memory dispatch target) does not. */
+  actualMachine?: string;
   /** Worker lifecycle status (assigned → active → released). OPTIONAL so
    * hand-built fixtures stay valid (taskTitle precedent); the mapper always
    * sets it (honest "" when absent). */
@@ -461,6 +470,11 @@ export interface OutsourceWorkerView {
    * panel's 換手中 acknowledgement (parity with the member panel's refocusSince).
    * The mapper converts the wire 0 → null so the panel never shows a fake time. */
   refocusSince?: number | null;
+  /** Which operation opened that window ("" when none), and the epoch it is
+   * collected by at the latest (null when none) — the panel says "winding
+   * down so your change can take effect" instead of "last handover". */
+  refocusOp?: string;
+  refocusDeadline?: number | null;
   /** Run-intent, a direct mirror of member.desiredState (wire `desired_state`,
    * T-f190): "online" (system wants it running) or "offline" (owner-explicit
    * stop — presence is then "stopping"/"stopped"). Drives the 停止/喚醒 arm of the
@@ -1284,20 +1298,6 @@ export interface Api {
    * uninstall). The caller refetches afterwards to pick up the new online state.
    */
   uninstallMachine(memberId: string): Promise<UninstallResultView>;
-
-  /**
-   * UPGRADE a machine's binaries NOW (`POST /api/machines/{member_id}/upgrade`,
-   * T-5f01, owner/admin-agent) — the one-click face of the machine table's "stale"
-   * verdict. Fire-and-forget: the server enqueues the `update` warden-command
-   * onto the machine's live SSE downstream and the warden kicks its own
-   * self-update reconcile (download + verify + atomic swap); nothing durable
-   * changes server-side. Returns `{memberId, machineId, dispatched}`:
-   * `dispatched` is TRUE when the warden was online (command enqueued), FALSE
-   * when offline (nothing commanded — an offline warden self-updates on its
-   * next connect anyway). Convergence is observed, not returned: the row's
-   * `binStatus` flips to "current" on a later refetch once the swap lands.
-   */
-  upgradeMachine(memberId: string): Promise<UpgradeResultView>;
 
   /**
    * Re-fetch a machine's copy-paste install command anytime (`GET
