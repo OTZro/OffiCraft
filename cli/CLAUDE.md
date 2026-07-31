@@ -131,7 +131,8 @@ install 把發佈流程 fresh build 的 binary 安到 `~/.officraft/warden/`(hom
 
 | 路徑 | 是什麼 | 可不可以手動刪 |
 |---|---|---|
-| `officraft` | TCC 身分錨點,新的 launchd job leader。**裝過就永不覆寫**(連相同 bytes 也不行——重寫換 inode = 換身分 = 掉授權)。**沒有的話,轉換會在 preflight 之前先從內嵌副本放一份**(見下方 preflight 順序節) | ❌ 刪了下次 install 會重放一份**新**的,等於換身分、重問授權 |
+| `officraft` | TCC 身分錨點,新的 launchd job leader。**裝過就永不覆寫**(連相同 bytes 也不行——重寫換 inode = 換身分 = 掉授權)。**沒有的話,轉換會先 stage/probe 再升格出一份**(見下方 stage→probe→promote 節)⚠️ **轉換的拒絕路徑也可能留下它**:物化排在取鎖之前,所以鎖被佔或 spawn 失敗時,anchor 已經在了而轉換沒發生——無害(下次啟動直接走既有 anchor),但別把「有這個檔」讀成「轉換成功過」 | ❌ 刪了下次 install 會重放一份**新**的,等於換身分、重問授權 |
+| `officraft.probe` | 上面那份的**暫存副本**,只在 stage→probe→promote 中間活著,**每條退出路徑都會刪掉** | ✅ 安全(機器在物化中途被砍才會留下;下次啟動會覆寫它) |
 | `cutover.lock` | O_EXCL 鎖,只防兩個 warden 同時轉。轉完就刪;超過 15 分鐘的視為屍體自動清掉 | ✅ 安全(機器在轉換中途被砍才會留下) |
 | `cutover.failed` | **哨兵:這台試過、而且回滾了**。存在 = 這台**永遠不再嘗試遷移** | ⚠️ 見下 |
 | `log/cutover.log` | detached 轉換行程的完整 stdout+stderr(installer 的逐步敘述都在裡面) | ✅ 純 log |
@@ -145,21 +146,39 @@ install 把發佈流程 fresh build 的 binary 安到 `~/.officraft/warden/`(hom
 **它做了什麼**(給要判讀 log 的人,不是實作導覽):`ocwarden run` 啟動時看一次自己的**父行程**。是 legacy 才動作,而且是丟出一個 **detached 孫行程**(`ocwarden cutover-anchor`,setsid 自成 session)後**立刻返回**——因為轉換第一件事就是把自己這個 launchd job bootout 掉,不脫離就會連自己一起死。孫行程備份 plist → 跑既有的 `ocwarden install --force`(**零新安裝邏輯**:部署 anchor、render 新 plist、bootout、bootstrap、健康驗證)。
 
 #### 🔴 preflight 曾經把**它自己要建立的東西**當前置條件(v0.5.55 出貨即失效,已修)
-第一版的 gate 順序是 shape → sentinel → **`anchorPreflight`** → lock,而 `anchorPreflight` 要求 `warden/officraft` **已經**在磁碟上可執行。**唯一**會放那個檔的是 `ocwarden install`(`installFixedAnchor`)——也就是這個 gate 擋在前面的那個東西。於是:
+第一版的 gate 順序是 shape → sentinel → **`anchorPreflight`** → lock,而 `anchorPreflight` 要求 `warden/officraft` **已經**在磁碟上可執行。**唯一**會放那個檔的是 `ocwarden install`(`copyAnchorIfAbsent`)——也就是這個 gate 擋在前面的那個東西。於是:
 
 - **anchor shape 之前裝的機器** = legacy plist **且沒有 anchor 檔**;self-update 只換 ocwarden/ocagent(`selfupdate.go` 從不碰 plist、也從不部署 anchor),那個檔**不會自己出現**。
 - ⇒ gate **恆偽**,轉換**一次都不會啟動**。而**被擋掉的正是這個遷移唯一要救的母群體**。
 - 現場(fleet 三台跑 T-ff5d build 的機器,實查其中一台的 `log/ocwarden.err/out.log`):每次啟動都印 `anchor cutover: skipped — anchor preflight: cannot execute …/warden/officraft: no such file or directory`,而且**沒有** `cutover.lock`、**沒有** `cutover.failed`、**沒有** `log/cutover.log` —— 孫行程從未被生出來。心跳照實回報 `legacy`,座艙照實顯示 LEGACY;**回報是誠實的,失效的是動作**。這也是為什麼「等它自己收斂」是錯的建議:那個 skip 是決定性的,每次啟動都會再跳過一次。
 
-**修法**:gate 中間插一步 `ensureAnchorPresent`(順序變成 shape → sentinel → **anchor-present** → preflight → lock)。沒有 anchor 就先把它放上去,再 preflight。
+**修法**:gate 中間插一步 `ensureAnchorPresent`(順序變成 shape → sentinel → **anchor-present** → preflight → lock),形狀是 **stage → probe → promote**:
 
-- **來源優先序照抄 `installFixedAnchor`**:sibling `anchorSrc` → 本 binary 內嵌的那份(`anchor_embed.go`)。⚠️ home 安裝下 `anchorSrc` **就是** `anchorPath`(anchor 是執行中 ocwarden 的兄弟檔),所以實際落地的**一定是內嵌那份**——而 embed / 出貨 / `dist/officraft/` 三份是同一次 build 的同一份 bytes,換來源就是換身分。
-- **絕不覆寫既有 anchor**:有檔就整段短路,一個 write 都不發。**判準是「沒有發生寫入」而不是「內容沒變」**——`anchorSrc == anchorPath` 時,少掉 exists-check 的版本會把機器自己的 anchor 讀出來原樣寫回去,**bytes 一模一樣但 inode 換了 = 身分換了**,只比內容的斷言看不到這件事。
+1. bytes 寫到**另一個路徑** `officraft.probe`(`anchorProbeSuffix`);
+2. 在那裡 chmod、在那裡 preflight;
+3. **答對了才升格**成 `officraft`,而升格用的是 `os.Link`(**create-if-absent**,目標存在就 `EEXIST`,不是覆寫);
+4. `officraft.probe` **每一條退出路徑都刪掉**(含成功路徑)。
+
+⚠️ **`anchorPath` 從頭到尾沒有被寫過、沒有被截斷過、沒有被取代過**——它要嘛不存在,要嘛裝著一份「已經自己通過 preflight」的副本。這不是靠小心記帳達成的,是形狀本身,所以下面幾件事**結構性**消失:
+
+- **never-replace**:升格是 create-if-absent,**不管先前那個 stat 說了什麼**。⚠️ 這條刻意**不**依賴開頭那個 `modTime` 快速路徑——`modTime != nil` 會把 EACCES/EIO/dangling symlink 一律讀成「不存在」,而 home 安裝下 `anchorSrc == anchorPath`,於是會把機器自己的 anchor 原樣寫回去:**bytes 一模一樣、inode 換了、TCC 身分換了**。快速路徑現在純粹是省事,拿掉它 never-replace 照樣成立(親驗:刪掉那三行,相關測試全綠)。
+- **半截檔磚化**:ENOSPC/EIO 截斷的是 `.probe`。若截斷落在 `anchorPath`,下次開機 `modTime` 會成功 → 短路 → preflight 對著壞檔失敗 → 跳過,而 `copyAnchorIfAbsent` 只保留不取代 ⇒ **那份壞檔永久變成這台的身分**,而且外觀與「已經轉好了」無法區分。
+- **chmod 失敗磚化**:同上,不可執行的是 `.probe`。
+- **「這一輪是不是我建的」記帳**:沒有 `created` bool、沒有條件式清理,所以沒有記錯的餘地。
+
+**任何一步失敗,機器與進來時一模一樣。**
+
+- **來源優先序照抄 `copyAnchorIfAbsent`**:sibling `anchorSrc` → 本 binary 內嵌的那份(`anchor_embed.go`)。⚠️ home 安裝下 `anchorSrc` **就是** `anchorPath`,所以實際落地的**一定是內嵌那份**——而 embed / 出貨 / `dist/officraft/` 三份是同一次 build 的同一份 bytes,換來源就是換身分。
 - **兩邊都拿不到 anchor(無 sibling、無內嵌)= 照樣拒絕轉換**。把母群體救回來不等於「無條件轉」。
-- **preflight 失敗時,只清掉「這一輪自己寫的」那份**;既有的一律留著。理由對稱:`installFixedAnchor` 對它找到的 anchor 只保留不取代,所以留下一份壞的等於讓它**永久**變成這台的身分;反過來,刪掉 operator 既有的 anchor 則是親手毀掉這個 shape 要保護的東西。
-- **preflight 本身沒有被削弱**:anchor 仍然在任何破壞性步驟(bootout)之前被證明可執行。這其實是**加強**——現在證明的是實際會被 launchd 起的那份 bytes,而不是「有沒有這個檔」。
+- **最終 gate 仍然是對 `anchorPath` 做 preflight**,不是對 `.probe`——重要的是**launchd 真正會起的那個檔**答對。已經有 anchor 的機器只會發生這一次 probe。
+
+**🔴 為什麼 preflight 留在 cutover 這側,而不是搬進 `runInstall`**(這條**不是**順序問題——preflight 大可放在 install 的 anchor deploy 之後、仍然早於任何破壞性步驟):**理由是失敗的後果**。放進 `runInstall`,一次 preflight 失敗 = install 非零退出 = `runCutover` 判定轉換失敗 ⇒ 回滾**並寫下 `cutover.failed`** ⇒ **這台永遠不再嘗試**。一台只是這次開機剛好被 Gatekeeper 隔離的機器,會因此被永久排除在遷移之外。留在這一側,同樣的失敗只是一次安靜的 skip,重試機會全部保留——那才是對一個通常是暫時性的狀況該有的反應。
+
+**🔴 這個形狀的前提:anchor 對 argv[0] 不敏感**(`.probe` 這個檔名下也必須 exit 2,否則等於「驗的是 A、部署的是 B」)。`cli/officraft` 的 `realMain` 只看 `len(args)`,但這種東西日後很容易被「順手」改掉而全樹無人察覺——所以 `TestAnchorPreflightAgreesWithTheRealAnchorBinary` 直接**拿真 binary 複製成 `officraft.probe` 再驗一次**。實測三種檔名(`officraft` / `officraft.probe` / 完全不相干的名字)皆 exit 2。
 
 **內嵌 anchor 非空是這個修法的前提,已實測坐實(非讀碼推論)**:把 `dist/officraft/officraft`(1,742,642 bytes、`sha256 710a2525…`,= `dist/officraft/binary.sha256`)當 needle,在**實際出貨、fleet 正在跑的** ocwarden(`sha256 7bbd5491…`)裡做完整 byte 包含搜尋 → **命中於 offset 2953472**。所以 gate 修好之後 `install --force` 確實拿得到 anchor;若內嵌是空的,gate 修了也只會在下一步失敗,而**外觀與修好一模一樣**。
+
+⚠️ **寫測試的人注意:`anchordist/` 是 gitignored,而 `bin/ci.sh` 在跑 `go test` 之前會 stage embed assets** ⇒ **CI 底下 `embeddedAnchor()` 是非空的**。所以「這個測試需要空的內嵌 anchor」**絕不能靠不去 stage 它**——那種測試在乾淨 checkout 綠、在 CI 紅、而且**任何跑過一次 `ci.sh` 的開發機從此都紅,`git status` 還什麼都不顯示**。兩個方向都要自己綁(`withEmbeddedAnchor` / `withoutEmbeddedAnchor`)。這條已經真的發生過一次。
 
 **bootout→bootstrap 之間有一段真空**:那幾秒該機**沒有 warden**(server 看到它 offline)。**agent 不受影響**——`ocagent` 是獨立行程、各自持有自己的 SSE,warden 重啟不斷線。install 的健康驗證會等到新 job 真的穩定(看到 pid 後再連續 6 秒)才算數。
 

@@ -29,6 +29,7 @@ func blockedCutoverOps() cutoverOps {
 		readFile:      func(p string) ([]byte, error) { return nil, block("read " + p) },
 		writeFile:     func(p string, _ []byte, _ os.FileMode) error { return block("write " + p) },
 		chmod:         func(p string, _ os.FileMode) error { return block("chmod " + p) },
+		link:          func(o, n string) error { return block("link " + o + " -> " + n) },
 		remove:        func(p string) error { return block("remove " + p) },
 		createExcl:    func(p string) (bool, error) { return false, block("create " + p) },
 		modTime:       func(p string) (time.Time, error) { return time.Time{}, block("stat " + p) },
@@ -139,6 +140,25 @@ func (f *fakeCutover) ops() cutoverOps {
 			f.calls = append(f.calls, "chmod "+p)
 			return nil
 		},
+		// Create-if-absent, like os.Link: an existing target is EEXIST, never a
+		// clobber. This fake would be worthless if it overwrote — the whole reason
+		// production uses link over rename is that the syscall itself refuses.
+		link: func(oldpath, newpath string) error {
+			if err, ok := f.runErr["link:"+newpath]; ok {
+				return err
+			}
+			if _, exists := f.files[newpath]; exists {
+				return os.ErrExist
+			}
+			body, ok := f.files[oldpath]
+			if !ok {
+				return os.ErrNotExist
+			}
+			f.calls = append(f.calls, "link "+oldpath+" -> "+newpath)
+			f.files[newpath] = body
+			f.modTimes[newpath] = time.Now()
+			return nil
+		},
 		remove: func(p string) error {
 			delete(f.files, p)
 			delete(f.locked, p)
@@ -236,15 +256,25 @@ const (
 
 // withEmbeddedAnchor rebinds the anchor compiled into ocwarden for one test.
 //
-// The test binary's anchordist/ holds only .gitkeep, so the real embeddedAnchor()
-// is EMPTY here. That is load-bearing in both directions: a test that needs a
-// machine to be convertible has to say so out loud, and a test that needs "no
-// anchor obtainable anywhere" gets that state by simply not calling this.
+// 🔴 EVERY test that depends on the embedded copy MUST bind it, in BOTH
+// directions — present AND absent. Whether the real embeddedAnchor() is empty is
+// a property of the WORKING DIRECTORY, not of the source: cli/ocwarden/anchordist
+// is gitignored and `bin/ci.sh` deliberately stages the embed assets BEFORE it
+// runs `go test`, so under CI the embedded anchor is NON-empty. An earlier
+// revision of this file assumed "the test binary's anchordist holds only
+// .gitkeep" and left the no-anchor case unbound; that test passes on a fresh
+// checkout, goes red under CI, and then goes red on any dev machine that has
+// ever run ci.sh — with `git status` showing nothing to explain why.
 func withEmbeddedAnchor(t *testing.T, body string) {
 	t.Helper()
-	prev := embeddedAnchor
-	embeddedAnchor = func() []byte { return []byte(body) }
-	t.Cleanup(func() { embeddedAnchor = prev })
+	t.Cleanup(swapEmbeddedAnchor([]byte(body)))
+}
+
+// withoutEmbeddedAnchor is the other half, and it is never optional: see above
+// for why "just don't stage one" is not a way to get an empty embed.
+func withoutEmbeddedAnchor(t *testing.T) {
+	t.Helper()
+	t.Cleanup(swapEmbeddedAnchor(nil))
 }
 
 // anchorAlreadyOnDisk models a machine that already carries an anchor. modTime is
@@ -260,9 +290,9 @@ func anchorAlreadyOnDisk(f *fakeCutover, p wardenPaths, body string) {
 // maybeStartAnchorCutover refuses in a fixed order: shape, then sentinel, then
 // anchor-present, then preflight, then lock. newFakeCutover leaves exitCodes
 // empty, so runExit answers 0 — and anchorPreflight demands exactly 2. It also
-// leaves the machine with no anchor and no embedded copy. Without BOTH lines
-// below, an earlier gate refuses first and `len(f.spawned) == 0` holds for a
-// reason that has nothing to do with the gate the test is named after.
+// leaves the machine with no anchor on disk. Without BOTH lines below, an earlier
+// gate refuses first and `len(f.spawned) == 0` holds for a reason that has
+// nothing to do with the gate the test is named after.
 //
 // That is not hypothetical: these three tests shipped without the preflight line,
 // and independent review deleted the shape guard, the sentinel guard and the lock
@@ -274,6 +304,9 @@ func passingPreflight(t *testing.T, f *fakeCutover, p wardenPaths) {
 	t.Helper()
 	withEmbeddedAnchor(t, buildAnchorBytes)
 	f.exitCodes[p.anchorPath+" --preflight"] = 2
+	// The staged copy is probed under its own name before it is promoted, so a
+	// machine with no anchor answers this argv, not the one above.
+	f.exitCodes[p.anchorPath+anchorProbeSuffix+" --preflight"] = 2
 }
 
 // A machine whose shape cannot be established must be left alone. Guessing
@@ -537,15 +570,13 @@ func TestPreflightFailureStartsNoConversion(t *testing.T) {
 // returned true": the shipped bug was precisely a gate that reported a truthful
 // refusal forever, so a test that stops at the gate's own verdict would have
 // passed against the broken build too.
-//
-// Remove the ensureAnchorPresent call from maybeStartAnchorCutover and this goes
-// red — verified, not assumed.
 func TestMachineWithNoAnchorFileStillConverts(t *testing.T) {
 	p := testPaths()
 	f := newFakeCutover()
 	f.files["__ppid_exe__"] = "/sbin/launchd"
 	withEmbeddedAnchor(t, buildAnchorBytes)
 	f.exitCodes[p.anchorPath+" --preflight"] = 2
+	f.exitCodes[p.anchorPath+anchorProbeSuffix+" --preflight"] = 2
 	restore := swapCutoverOps(t, f)
 	defer restore()
 
@@ -563,9 +594,98 @@ func TestMachineWithNoAnchorFileStillConverts(t *testing.T) {
 	if got := f.files[p.anchorPath]; got != buildAnchorBytes {
 		t.Fatalf("anchor on disk = %q, want the embedded copy %q", got, buildAnchorBytes)
 	}
-	// Executable regardless of the launchd job's umask; a 0644 anchor cannot be a
-	// job leader and would fail the preflight for reasons unrelated to its bytes.
-	assertCalled(t, f.calls, "chmod "+p.anchorPath)
+	assertNoStagedAnchorLeftBehind(t, f, p)
+}
+
+// The staged copy is scaffolding: it must not survive the function on ANY path,
+// success included. A leftover .probe is a second, unmanaged copy of the TCC
+// anchor sitting next to the real one.
+func TestStagedAnchorNeverSurvivesTheRun(t *testing.T) {
+	p := testPaths()
+	probeArgv := p.anchorPath + anchorProbeSuffix + " --preflight"
+	for _, tc := range []struct {
+		name   string
+		break_ func(f *fakeCutover)
+	}{
+		{"the conversion succeeds", func(f *fakeCutover) {}},
+		{"staging the bytes fails", func(f *fakeCutover) {
+			f.runErr["write:"+p.anchorPath+anchorProbeSuffix] = errors.New("no space left on device")
+		}},
+		{"chmod on the staged copy fails", func(f *fakeCutover) {
+			f.runErr["chmod:"+p.anchorPath+anchorProbeSuffix] = errors.New("operation not permitted")
+		}},
+		{"the staged copy fails its own probe", func(f *fakeCutover) {
+			f.exitErrs[probeArgv] = errors.New("killed by Gatekeeper")
+		}},
+		{"promotion fails", func(f *fakeCutover) {
+			f.runErr["link:"+p.anchorPath] = errors.New("cross-device link")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeCutover()
+			f.files["__ppid_exe__"] = "/sbin/launchd"
+			withEmbeddedAnchor(t, buildAnchorBytes)
+			f.exitCodes[p.anchorPath+" --preflight"] = 2
+			f.exitCodes[probeArgv] = 2
+			tc.break_(f)
+			restore := swapCutoverOps(t, f)
+			defer restore()
+
+			maybeStartAnchorCutover(p, 1, func(string, ...any) {})
+			assertNoStagedAnchorLeftBehind(t, f, p)
+		})
+	}
+}
+
+// 🔴 THE BRICKING REGRESSIONS. Every one of these failures used to be able to
+// leave a file AT p.anchorPath that is not a working anchor — a truncated write,
+// or bytes whose chmod never landed. The next boot would then find that file,
+// short-circuit, fail the preflight against it, and skip; and because
+// copyAnchorIfAbsent preserves whatever it finds rather than replacing it, the
+// broken copy becomes this machine's identity PERMANENTLY. Indistinguishable
+// from a machine that converted cleanly, and with no alert.
+//
+// stage->probe->promote makes it structural: the damage lands on the staging
+// path, and p.anchorPath is only ever created by a link from bytes that already
+// answered the preflight correctly.
+func TestNoFailureCanLeaveABrokenAnchorToBeAdopted(t *testing.T) {
+	p := testPaths()
+	probeArgv := p.anchorPath + anchorProbeSuffix + " --preflight"
+	for _, tc := range []struct {
+		name   string
+		break_ func(f *fakeCutover)
+	}{
+		{"the write is truncated by ENOSPC", func(f *fakeCutover) {
+			f.runErr["write:"+p.anchorPath+anchorProbeSuffix] = errors.New("no space left on device")
+		}},
+		{"chmod never lands, so the bytes are not executable", func(f *fakeCutover) {
+			f.runErr["chmod:"+p.anchorPath+anchorProbeSuffix] = errors.New("operation not permitted")
+		}},
+		{"the bytes are quarantined and cannot exec", func(f *fakeCutover) {
+			f.exitErrs[probeArgv] = errors.New("killed by Gatekeeper")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeCutover()
+			f.files["__ppid_exe__"] = "/sbin/launchd"
+			withEmbeddedAnchor(t, buildAnchorBytes)
+			f.exitCodes[p.anchorPath+" --preflight"] = 2
+			f.exitCodes[probeArgv] = 2
+			tc.break_(f)
+			restore := swapCutoverOps(t, f)
+			defer restore()
+
+			maybeStartAnchorCutover(p, 1, func(string, ...any) {})
+
+			if body, ok := f.files[p.anchorPath]; ok {
+				t.Fatalf("a failed run left %q at the anchor path; the next boot adopts it as this machine's identity forever", body)
+			}
+			assertNotCalled(t, f.calls, "write "+p.anchorPath)
+			if len(f.spawned) != 0 {
+				t.Fatalf("converter started despite an anchor that never became usable: %v", f.spawned)
+			}
+		})
+	}
 }
 
 // The other side of the gate: with no anchor on disk, no usable source and no
@@ -576,9 +696,11 @@ func TestNoObtainableAnchorStartsNoConversion(t *testing.T) {
 	p := testPaths()
 	f := newFakeCutover()
 	f.files["__ppid_exe__"] = "/sbin/launchd"
-	// Deliberately NO withEmbeddedAnchor: the test binary's anchordist holds only
-	// .gitkeep, so this is a genuinely empty embedded copy.
+	// Bound explicitly, NOT left to whatever anchordist/ happens to hold — under
+	// ci.sh the embed is staged and non-empty. See withEmbeddedAnchor.
+	withoutEmbeddedAnchor(t)
 	f.exitCodes[p.anchorPath+" --preflight"] = 2
+	f.exitCodes[p.anchorPath+anchorProbeSuffix+" --preflight"] = 2
 	restore := swapCutoverOps(t, f)
 	defer restore()
 
@@ -589,9 +711,10 @@ func TestNoObtainableAnchorStartsNoConversion(t *testing.T) {
 	if _, ok := f.files[p.anchorPath]; ok {
 		t.Fatal("an empty anchor source must never be written to disk")
 	}
+	assertNoStagedAnchorLeftBehind(t, f, p)
 }
 
-// TCC identifies the anchor by its BYTES, and installFixedAnchor preserves
+// TCC identifies the anchor by its BYTES, and copyAnchorIfAbsent preserves
 // whatever it finds rather than replacing it. Rewriting an existing anchor would
 // change the inode and therefore the machine's identity — the exact thing the
 // anchor shape exists to keep stable.
@@ -602,6 +725,11 @@ func TestExistingAnchorIsNeverReplaced(t *testing.T) {
 	anchorAlreadyOnDisk(f, p, operatorAnchorBytes)
 	withEmbeddedAnchor(t, buildAnchorBytes)
 	f.exitCodes[p.anchorPath+" --preflight"] = 2
+	// Deliberately answered too, so that removing the fast-path exists-check does
+	// NOT make this test red by accident: with the probe able to pass, the only
+	// thing still protecting the existing anchor is the create-if-absent promotion.
+	// That is the property under test, and it must hold structurally.
+	f.exitCodes[p.anchorPath+anchorProbeSuffix+" --preflight"] = 2
 	restore := swapCutoverOps(t, f)
 	defer restore()
 
@@ -613,40 +741,51 @@ func TestExistingAnchorIsNeverReplaced(t *testing.T) {
 	// install anchorSrc IS anchorPath, so a version that dropped the exists-check
 	// would read the machine's own anchor and write those exact bytes back — byte
 	// comparison stays green while the inode, and therefore the TCC identity,
-	// changes underneath it. Verified: with the exists-check removed, the content
-	// assertion above still passes and only this one goes red.
+	// changes underneath it.
 	assertNotCalled(t, f.calls, "write "+p.anchorPath)
+	assertNotCalled(t, f.calls, "link "+p.anchorPath+anchorProbeSuffix+" -> "+p.anchorPath)
 	if len(f.spawned) != 1 {
 		t.Fatalf("spawned = %v, want the conversion to proceed on an already-anchored machine", f.spawned)
 	}
 }
 
-// An anchor THIS RUN wrote that then fails the preflight must be taken back off
-// the machine. installFixedAnchor never replaces an anchor it finds, so a broken
-// copy left behind here would be adopted permanently as this machine's identity —
-// the failure would outlive the run that caused it.
-func TestUnusableAnchorWrittenByThisRunIsRemoved(t *testing.T) {
+// never-replace must not depend on the stat that opened the function. A stat can
+// fail for reasons other than absence (EACCES, EIO, a dangling symlink), and an
+// anchor can also appear between the stat and the promotion. Either way the
+// promotion is create-if-absent, so the existing anchor wins and the run carries
+// on with it.
+func TestPromotionRefusesToOverwriteAnAnchorTheStatDidNotSee(t *testing.T) {
 	p := testPaths()
 	f := newFakeCutover()
 	f.files["__ppid_exe__"] = "/sbin/launchd"
 	withEmbeddedAnchor(t, buildAnchorBytes)
-	f.exitErrs[p.anchorPath+" --preflight"] = errors.New("killed by Gatekeeper")
+	// On disk, but invisible to modTime — exactly what an EACCES stat looks like
+	// to the fast path.
+	f.files[p.anchorPath] = operatorAnchorBytes
+	f.exitCodes[p.anchorPath+" --preflight"] = 2
+	f.exitCodes[p.anchorPath+anchorProbeSuffix+" --preflight"] = 2
 	restore := swapCutoverOps(t, f)
 	defer restore()
 
 	maybeStartAnchorCutover(p, 1, func(string, ...any) {})
-	if len(f.spawned) != 0 {
-		t.Fatalf("converter started despite an anchor that cannot execute: %v", f.spawned)
+	if got := f.files[p.anchorPath]; got != operatorAnchorBytes {
+		t.Fatalf("anchor on disk = %q, want the untouched %q — the promotion clobbered an anchor the stat could not see", got, operatorAnchorBytes)
 	}
-	if body, ok := f.files[p.anchorPath]; ok {
-		t.Fatalf("the unusable anchor this run wrote was left on the machine (%q); install would preserve it forever", body)
+	// 🔴 Again the INODE, not the bytes — and here it is the only assertion with
+	// any power at all. anchorSrc IS anchorPath, so a promotion that overwrote
+	// would read the machine's own anchor and write those exact bytes back: the
+	// content check above passes while the identity changes. Verified: with the
+	// promotion replaced by an overwriting write, only this line goes red.
+	assertNotCalled(t, f.calls, "write "+p.anchorPath)
+	if len(f.spawned) != 1 {
+		t.Fatalf("spawned = %v, want the conversion to proceed using the anchor that was already there", f.spawned)
 	}
+	assertNoStagedAnchorLeftBehind(t, f, p)
 }
 
-// The mirror of the case above, and the reason the cleanup is conditional: an
-// anchor we did NOT write is the machine's existing identity. Deleting it because
-// a probe failed would destroy the very thing the anchor shape protects, and
-// would hand the next install a clean slate to mint a NEW identity on.
+// A pre-existing anchor that fails the preflight is left exactly as found:
+// deleting it would destroy the very identity the anchor shape protects, and hand
+// the next install a clean slate to mint a NEW one on.
 func TestPreexistingAnchorSurvivesAFailedPreflight(t *testing.T) {
 	p := testPaths()
 	f := newFakeCutover()
@@ -662,6 +801,13 @@ func TestPreexistingAnchorSurvivesAFailedPreflight(t *testing.T) {
 	}
 	if len(f.spawned) != 0 {
 		t.Fatalf("converter started despite a failed preflight: %v", f.spawned)
+	}
+}
+
+func assertNoStagedAnchorLeftBehind(t *testing.T, f *fakeCutover, p wardenPaths) {
+	t.Helper()
+	if body, ok := f.files[p.anchorPath+anchorProbeSuffix]; ok {
+		t.Fatalf("the staged anchor copy was left at %s (%q); it is an unmanaged second copy of the TCC anchor", p.anchorPath+anchorProbeSuffix, body)
 	}
 }
 
@@ -956,5 +1102,29 @@ func TestAnchorPreflightAgreesWithTheRealAnchorBinary(t *testing.T) {
 	if err := anchorPreflight(ops, accepting); err == nil {
 		t.Fatal("a binary that ACCEPTS the probe argument must fail the preflight — " +
 			"otherwise the check above proves only that anchorPreflight returns nil")
+	}
+
+	// 🔴 THE PREMISE OF stage->probe->promote: the anchor must answer the same way
+	// under ANY filename. ensureAnchorPresent proves the bytes by probing them at
+	// <anchor>.probe and only then promotes them, so an anchor that inspected its
+	// own argv[0] would pass the probe and could still refuse under its real name —
+	// the migration would deploy an anchor it never actually validated.
+	//
+	// cli/officraft's realMain branches on len(args) alone, but that is exactly the
+	// kind of thing that gets "helpfully" changed later, and nothing else in the
+	// tree would notice. Asserted against the real binary, under the real suffix.
+	renamed := filepath.Join(filepath.Dir(anchor), "officraft"+anchorProbeSuffix)
+	body, err := os.ReadFile(anchor)
+	if err != nil {
+		t.Fatalf("read the real anchor: %v", err)
+	}
+	if err := os.WriteFile(renamed, body, 0o755); err != nil {
+		t.Fatalf("stage the real anchor under the probe name: %v", err)
+	}
+	if err := anchorPreflight(ops, renamed); err != nil {
+		t.Fatalf("the real anchor answers differently when it is called %q: %v\n"+
+			"ensureAnchorPresent probes the staged copy under exactly this name before "+
+			"promoting it, so an argv[0]-sensitive anchor would be validated under one "+
+			"name and deployed under another.", filepath.Base(renamed), err)
 	}
 }
