@@ -200,6 +200,36 @@ func TestPatchTaskLearningsReceiptSizeIsCharsNotBytes(t *testing.T) {
 	}
 }
 
+// TestReplaceLessonsReceiptReportsSizeAndCap — the whole-document write face
+// answers with the same two numbers, from a THIRD literal expression. It needs
+// its own pin: before this test, a mutant that reported the wrong cap here, and
+// one that counted its size in bytes, each reddened NOTHING in the suite.
+func TestReplaceLessonsReceiptReportsSizeAndCap(t *testing.T) {
+	srv, _, tok := capLessonsServer(t)
+	doc := cjkDoc(t, 500)
+
+	status, data := replaceLessons(t, srv, tok, doc, false)
+	if status != http.StatusOK {
+		t.Fatalf("replace must land, got %d: %v", status, data)
+	}
+	if got, _ := data["size_chars"].(float64); int(got) != utf8.RuneCountInString(doc) {
+		t.Fatalf("size_chars must be CHARACTERS: got %v want %d (bytes=%d)",
+			data["size_chars"], utf8.RuneCountInString(doc), len(doc))
+	}
+	if got, _ := data["cap_chars"].(float64); int(got) != contextDocMaxCharsDefault {
+		t.Fatalf("cap_chars must be the live cap: got %v", data["cap_chars"])
+	}
+
+	// And it FOLLOWS the setting instead of quoting the shipped default.
+	if status, data := patchSettings(t, srv.URL, tok, `{"doc_cap_chars":41000}`); status != http.StatusOK {
+		t.Fatalf("raise the cap: %d %v", status, data)
+	}
+	_, data = replaceLessons(t, srv, tok, doc+cjkDoc(t, 10), false)
+	if got, _ := data["cap_chars"].(float64); int(got) != 41000 {
+		t.Fatalf("cap_chars must track the setting, got %v", data["cap_chars"])
+	}
+}
+
 // ── the setting's own surface ────────────────────────────────────────────────
 
 // TestUpdateSettingsDocCapCharsRange pins the range the owner set, both ends,
