@@ -243,8 +243,8 @@ owner 兩句裁定:「理想上應該是同一支 API 同時取得所有 AI sess
 
 兩個缺陷形狀相同：**守衛問的是「有沒有人下過指令」（INTENT），該問的是「它現在是什麼狀態」（LIVENESS）。**
 
-- **取消喚醒（deactivate 打在 waking 成員身上）原本一個指令都沒發出去。** owner 親自遇到、以為自己記錯。`decideDown` 第一個分支是 `if !obs.Online { converged offline }`，而 **waking 依定義就是 `!online`**（`deriveLiveness` 只在 `!Online` 時投影 waking），所以整個 waking 窗內 cadence 什麼都不派：先前 START 已經放上機器的那個 process 照常開完機、連上、變綠，然後才以「online + desired offline」的身分進 `decideDown`，開始它的 120s 寬限。owner 看到的就是「按了沒反應，兩分鐘後才停」。
-  - 修在 **handler**（`HandleDeactivateMember…`），不在 reconcile 核：presence 是 waking 就 `dispatchRobustStopNow`。**`cancellingWake` 必須在 `StoppingSince` 被蓋之前算**——蓋那一筆本身就會終結 waking 投影。
+- **取消喚醒（deactivate 打在 waking 成員身上）原本一個指令都沒發出去。** owner 親自遇到、以為自己記錯。`decideDown` 第一個分支是 `if !obs.Online { converged offline }`，而 **waking 依定義就是 `!online`**（`deriveLiveness` 只在 `!Online` 時算成 waking），所以整個 waking 窗內 cadence 什麼都不派：先前 START 已經放上機器的那個 process 照常開完機、連上、變綠，然後才以「online + desired offline」的身分進 `decideDown`，開始它的 120s 寬限。owner 看到的就是「按了沒反應，兩分鐘後才停」。
+  - 修在 **handler**（`HandleDeactivateMember…`），不在 reconcile 核：presence 是 waking 就 `dispatchRobustStopNow`。**`cancellingWake` 必須在 `StoppingSince` 被蓋之前算**——蓋那一筆本身就會終結 waking 的判定。
   - **刻意只給 waking 這一格**：線上成員的停止**保留 120s 寬限**（它手上有東西要收），已離線的成員**什麼都不派**（沒有 session、也沒有進行中的喚醒）。三格各有自己的哨兵，`_OnlineMemberKeepsTheGracefulGrace` 就是防「把取消寬限化成每次停止都 force-stop」的那道。
   - **沒有寬限可失去**：還沒連上的成員沒領過任何工作，它進不去的那個窗買不到東西。
   - **`reconcileMemberNow` 照舊呼叫**：raw dispatch 不碰 reconcile store，cadence 的 STOP 臂仍是冪等 backstop。
