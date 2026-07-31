@@ -211,6 +211,11 @@ describe("MemberDetailPanel · presence-gated machine + account", () => {
     const note = getByTestId("mp-settings-intent-note").textContent ?? "";
     expect(note).toContain(zh.mp.settingsIntentNote);
     expect(note).toContain(zh.mp.settingsIntentNoteReported);
+    // owner 2026-07-31 (rc-b7d1c642f2d2): ONE verb — the note said 下次啟動
+    // while the button that opens this dialog says 喚醒. The two assertions
+    // above read the SAME constant the component renders, so they hold for any
+    // wording; this one is literal on purpose.
+    expect(note).toContain("下次喚醒要用哪一個");
   });
 
   it("leaves the model cell BLANK when nobody has reported one (never the configured value)", async () => {

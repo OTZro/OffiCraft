@@ -76,6 +76,14 @@ describe("MemberDetailPanel 最近操作 failure reason", () => {
     expect(getByTestId("mp-lastop-reason").textContent).toBe(REASON);
   });
 
+  // owner 2026-07-31 (rc-b7d1c642f2d2): ONE verb for this action, and it is
+  // 喚醒. The receipt used to say 啟動 while the button right above it said
+  // 喚醒 — the same act under two names on one screen.
+  it("names the start op with the same verb the button uses (喚醒, not 啟動)", () => {
+    const { container } = renderPanel(mkMember());
+    expect(container.querySelector(".mp-lastop__verb")?.textContent).toBe("喚醒");
+  });
+
   it("renders status-only for an old record without a reason (never fabricated)", () => {
     const { queryByTestId, container } = renderPanel(
       mkMember({ lastOpReason: "" }),

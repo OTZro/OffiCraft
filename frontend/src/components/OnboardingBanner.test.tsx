@@ -63,6 +63,11 @@ describe("OnboardingBanner", () => {
     expect(banner.textContent).toContain(
       "installing this machine's warden failed (exit 1)"
     );
+    // owner 2026-07-31 (rc-b7d1c642f2d2): ONE verb. This intro said 叫醒助理
+    // while the step right beside it said 喚醒助理 — two words for one act, on
+    // one banner. The phrase carries its neighbouring punctuation so the step
+    // label cannot satisfy this assertion by itself.
+    expect(banner.textContent).toContain("、喚醒助理。");
   });
 
   it("hides the raw tool log behind a toggle, then reveals it", async () => {

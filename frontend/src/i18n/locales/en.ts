@@ -354,12 +354,12 @@ export const en: Dict = {
     modelCancel: "Cancel",
     modelError: "Save failed, please retry",
     modelNextSpawnNote:
-      "Takes effect now while working; on the next spawn if only assigned",
+      "Takes effect now while working; on the next wake if only assigned",
     relocateTitle: "Choose a machine to move to",
     relocateConfirm: "Move to this machine",
     noOnlineMachine: "No online machine",
     lastOp: "Last operation",
-    lastOpStart: "Start",
+    lastOpStart: "Wake",
     lastOpStop: "Stop",
     lastOpOk: "OK",
     lastOpFail: "Failed",
@@ -630,7 +630,7 @@ export const en: Dict = {
     change: "Change",
     settingsSaveOnly: "Save without waking",
     modelReportedTag: "reported at last boot",
-    settingsIntentNote: "These are the values to launch WITH.",
+    settingsIntentNote: "These are the values to wake WITH.",
     settingsIntentNoteReported: "The model on the card above is what the agent reported at its most recent boot, which can differ from what is set here.",
     wakeManual: "Wake manually",
     // Instant feedback after clicking Wake, before server presence catches up.
@@ -676,7 +676,7 @@ export const en: Dict = {
     refocusSinceLabel: "Last refocus",
     // fleet remote-ops stage 1 — last warden op receipt
     lastOp: "Last operation",
-    lastOpStart: "Start",
+    lastOpStart: "Wake",
     lastOpStop: "Stop",
     lastOpOk: "succeeded",
     lastOpFail: "failed",
@@ -932,7 +932,7 @@ export const en: Dict = {
       // signed in" are WORDS in the cell, never a silently missing version.
       runtimeNotInstalled: "not installed",
       runtimeNotInstalledHint:
-        "The warden could not resolve this runtime's binary on the machine — it cannot launch here",
+        "The warden could not resolve this runtime's binary on the machine — it cannot wake one here",
       runtimeNoVersion: "installed",
       runtimeNoVersionHint:
         "The binary resolved but its version probe returned nothing",
@@ -1216,7 +1216,7 @@ export const en: Dict = {
     assigneeMachineOffline: "Offline",
     assigneeMachineUnset: "No machine chosen",
     assigneeMachineNote:
-      "Workers of this type boot on the chosen machine and nowhere else. While no machine is chosen, or the chosen one is offline, none is started \u2014 the reason is shown on the worker.",
+      "Workers of this type wake on the chosen machine and nowhere else. While no machine is chosen, or the chosen one is offline, none is woken \u2014 the reason is shown on the worker.",
     assigneeCopies: "Hire count",
     assigneeCopiesDecrease: "Decrease",
     assigneeCopiesIncrease: "Increase",

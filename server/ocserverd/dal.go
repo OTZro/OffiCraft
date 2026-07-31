@@ -157,6 +157,12 @@ func (d *DAL) ListMembers() ([]Member, error) {
 // ListMembersIncludingOutsource is only for the GET /api/members wire list.
 // Reconcile and every other member-surface fold must continue using
 // ListMembers, whose outsource exclusion keeps workers out of the member FSM.
+//
+// ⚠️ Being in THIS list does not mean the member API works on the row: the
+// twin of this decision is resolveMember (api_helpers.go), which still answers
+// 404 for every ow- id. "In the roster list" ≠ "a member verb resolves" — the
+// invariant lives in the interaction of these two functions and nowhere else,
+// so neither may be changed without reading the other.
 func (d *DAL) ListMembersIncludingOutsource() ([]Member, error) {
 	rows, err := d.db.Query(`SELECT ` + memberColumns +
 		` FROM member ORDER BY name COLLATE NOCASE`)
