@@ -15,16 +15,37 @@ import (
 
 // Defines values for AgentRuntime.
 const (
-	Claude AgentRuntime = "claude"
-	Codex  AgentRuntime = "codex"
+	AgentRuntimeClaude AgentRuntime = "claude"
+	AgentRuntimeCodex  AgentRuntime = "codex"
 )
 
 // Valid indicates whether the value is a known member of the AgentRuntime enum.
 func (e AgentRuntime) Valid() bool {
 	switch e {
-	case Claude:
+	case AgentRuntimeClaude:
 		return true
-	case Codex:
+	case AgentRuntimeCodex:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MonitoringSessionDTORuntime.
+const (
+	MonitoringSessionDTORuntimeClaude MonitoringSessionDTORuntime = "claude"
+	MonitoringSessionDTORuntimeCodex  MonitoringSessionDTORuntime = "codex"
+	MonitoringSessionDTORuntimeEmpty  MonitoringSessionDTORuntime = ""
+)
+
+// Valid indicates whether the value is a known member of the MonitoringSessionDTORuntime enum.
+func (e MonitoringSessionDTORuntime) Valid() bool {
+	switch e {
+	case MonitoringSessionDTORuntimeClaude:
+		return true
+	case MonitoringSessionDTORuntimeCodex:
+		return true
+	case MonitoringSessionDTORuntimeEmpty:
 		return true
 	default:
 		return false
@@ -992,10 +1013,13 @@ type MonitoringSessionDTO struct {
 	Presence *string `json:"presence,omitempty"`
 	Role     *string `json:"role,omitempty"`
 
-	// Runtime The runtime this session REPORTED it is running (the roster row's ``actual_runtime``). Honest-empty until something reports one, and it NEVER falls back to the owner-configured ``runtime`` launch setting. WAS: this served the CONFIGURED value under a comment claiming it folded through the reported telemetry, so the cell flipped the instant the owner changed the setting and a runtime switch that had not happened yet was indistinguishable from one that had (T-7f28).
-	Runtime *AgentRuntime   `json:"runtime,omitempty"`
-	Tokens  *map[string]int `json:"tokens,omitempty"`
+	// Runtime The runtime this session REPORTED it is running (the roster row's ``actual_runtime``). Honest-empty until something reports one, and it NEVER falls back to the owner-configured ``runtime`` launch setting. WAS: this served the CONFIGURED value under a comment claiming it folded through the reported telemetry, so the cell flipped the instant the owner changed the setting and a runtime switch that had not happened yet was indistinguishable from one that had (T-7f28). NOT an ``AgentRuntime`` $ref like the CONFIGURED runtime fields: this one admits "" for "nothing has reported yet", and the closed two-value vocabulary has no member for that. Widening the shared enum instead would have let "unknown" leak into every owner-configured runtime field, where it is not a legal setting.
+	Runtime *MonitoringSessionDTORuntime `json:"runtime,omitempty"`
+	Tokens  *map[string]int              `json:"tokens,omitempty"`
 }
+
+// MonitoringSessionDTORuntime The runtime this session REPORTED it is running (the roster row's “actual_runtime“). Honest-empty until something reports one, and it NEVER falls back to the owner-configured “runtime“ launch setting. WAS: this served the CONFIGURED value under a comment claiming it folded through the reported telemetry, so the cell flipped the instant the owner changed the setting and a runtime switch that had not happened yet was indistinguishable from one that had (T-7f28). NOT an “AgentRuntime“ $ref like the CONFIGURED runtime fields: this one admits "" for "nothing has reported yet", and the closed two-value vocabulary has no member for that. Widening the shared enum instead would have let "unknown" leak into every owner-configured runtime field, where it is not a legal setting.
+type MonitoringSessionDTORuntime string
 
 // MyTaskDTO The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active.
 type MyTaskDTO struct {
