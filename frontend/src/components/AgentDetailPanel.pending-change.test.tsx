@@ -28,6 +28,7 @@ const machine = (id: string, displayName: string): MachineView => ({
   claudeVersion: null,
   claudeCredSource: null,
   claudeSubReadable: null,
+  cutoverEffect: null,
 });
 const listMachines = vi.fn<() => Promise<MachineView[]>>(() =>
   Promise.resolve([machine("mach-a", "Machine A"), machine("mach-b", "Machine B")]),
