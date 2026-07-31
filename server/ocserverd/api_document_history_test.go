@@ -270,13 +270,21 @@ func TestDeletingATaskManualRemovesItsRetainedDocumentHistory(t *testing.T) {
 			t.Fatalf("update manual: status=%d body=%s", rec.Code, rec.Body.String())
 		}
 	}
+	kinds := []string{docKindTaskManualSop, docKindTaskManualLearnings}
 	doomed, neighbour := create("Doomed"), create("Neighbour")
 	for _, typeKey := range []string{doomed, neighbour} {
 		update(typeKey, "learnings v1")
 		update(typeKey, "learnings v2")
+		f.api.HandleUpdateTaskManualApiTaskManualsTypeKeyPost(httptest.NewRecorder(),
+			f.req(http.MethodPost, "/api/task-manuals/"+typeKey, map[string]any{"sop_md": "sop v1"}), typeKey)
+		update(typeKey, "learnings v3")
+		f.api.HandleUpdateTaskManualApiTaskManualsTypeKeyPost(httptest.NewRecorder(),
+			f.req(http.MethodPost, "/api/task-manuals/"+typeKey, map[string]any{"sop_md": "sop v2"}), typeKey)
 	}
-	if len(agentList(t, f.api, "task_manual", doomed)) == 0 {
-		t.Fatal("the fixture retained nothing — the deletion assertion below would prove nothing")
+	for _, kind := range kinds {
+		if len(agentList(t, f.api, kind, doomed)) == 0 {
+			t.Fatalf("the fixture retained no %s version — the deletion assertion below would prove nothing", kind)
+		}
 	}
 
 	rec := httptest.NewRecorder()
@@ -290,11 +298,13 @@ func TestDeletingATaskManualRemovesItsRetainedDocumentHistory(t *testing.T) {
 		t.Errorf("delete result = %+v, want the manual reported deleted — the cascade changed the answer", result)
 	}
 
-	if history := agentList(t, f.api, "task_manual", doomed); len(history) != 0 {
-		t.Errorf("the deleted manual still has %d readable versions: %+v", len(history), history)
-	}
-	if len(agentList(t, f.api, "task_manual", neighbour)) == 0 {
-		t.Error("deleting one manual also erased another manual's history")
+	for _, kind := range kinds {
+		if history := agentList(t, f.api, kind, doomed); len(history) != 0 {
+			t.Errorf("the deleted manual still has %d readable %s versions: %+v", len(history), kind, history)
+		}
+		if len(agentList(t, f.api, kind, neighbour)) == 0 {
+			t.Errorf("deleting one manual also erased another manual's %s history", kind)
+		}
 	}
 }
 
@@ -429,7 +439,7 @@ func TestEveryDocumentWriteFaceRetainsTheVersionItReplaced(t *testing.T) {
 				typeKey := newManual(t, api)
 				updateManual(t, api, typeKey, map[string]any{"sop_md": "sop v1"})
 				updateManual(t, api, typeKey, map[string]any{"sop_md": "sop v2"})
-				return "task_manual", typeKey, "sop_md", "sop v1"
+				return docKindTaskManualSop, typeKey, "sop_md", "sop v1"
 			},
 		},
 		{
@@ -438,7 +448,7 @@ func TestEveryDocumentWriteFaceRetainsTheVersionItReplaced(t *testing.T) {
 				typeKey := newManual(t, api)
 				writeLearnings(t, api, typeKey, "learnings one")
 				writeLearnings(t, api, typeKey, "learnings two")
-				return "task_manual", typeKey, "learnings", "learnings one"
+				return docKindTaskManualLearnings, typeKey, "learnings", "learnings one"
 			},
 		},
 		{
@@ -452,7 +462,7 @@ func TestEveryDocumentWriteFaceRetainsTheVersionItReplaced(t *testing.T) {
 							map[string]any{"edits": []map[string]any{{"old": "learnings one", "new": "learnings two"}}}),
 						typeKey)
 				})
-				return "task_manual", typeKey, "learnings", "learnings one"
+				return docKindTaskManualLearnings, typeKey, "learnings", "learnings one"
 			},
 		},
 	} {

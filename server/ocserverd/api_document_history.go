@@ -10,6 +10,11 @@ import (
 
 var errDocumentHistoryCap = errors.New("restoring this version would violate the existing document size limit")
 
+// Naming both replacements is the whole point of refusing loudly: a caller who
+// still says "task_manual" learns which of the two series it wanted.
+const legacyTaskManualKindMsg = "document history kind \"task_manual\" was retired: " +
+	"use \"task_manual_sop\" or \"task_manual_learnings\""
+
 func historyKeyParts(kind, key string) (string, string, bool) {
 	if kind != "lessons" {
 		return key, "", key != ""
@@ -53,9 +58,14 @@ func roleDefHistorySnapshot(current *RoleDef) (string, error) {
 	if current == nil {
 		return "{}", nil
 	}
+	// The role's NAME is deliberately absent (owner ruling, T-1f39: 「名稱不用留
+	// 版本」— 角色誌本身不說明它自己叫什麼，只說明它做什麼). It is a label on the
+	// document, not part of it: a rename retains nothing, and a restore leaves
+	// the current name standing rather than silently renaming the role behind
+	// a reader who came to put the TEXT back.
 	return historyJSON(map[string]string{
-		"name": current.Name, "definition_md": current.DefinitionMD,
-		"tombstoned": strconv.FormatBool(current.Tombstoned),
+		"definition_md": current.DefinitionMD,
+		"tombstoned":    strconv.FormatBool(current.Tombstoned),
 	})
 }
 
@@ -101,7 +111,7 @@ func lessonsSnapshotIn(roleKey, taskType string) func(sqlQuerier) (string, error
 	}
 }
 
-func taskManualSnapshotIn(typeKey string) func(sqlQuerier) (string, error) {
+func manualSnapshotIn(typeKey string, of func(TaskManual) (string, error)) func(sqlQuerier) (string, error) {
 	return func(q sqlQuerier) (string, error) {
 		current, err := getTaskManualOn(q, typeKey)
 		if err != nil {
@@ -110,8 +120,44 @@ func taskManualSnapshotIn(typeKey string) func(sqlQuerier) (string, error) {
 		if current == nil {
 			return "{}", nil
 		}
-		return taskManualHistorySnapshot(*current)
+		return of(*current)
 	}
+}
+
+// taskManualHistoryStreams names the series a manual write must retain. SOP and
+// learnings are versioned INDEPENDENTLY and only when the write actually
+// changes them; purpose, the identifier fields, display_name and assignee are
+// not versioned at all (owner ruling, T-1f39), so a write touching only those
+// returns no streams and retains nothing anywhere.
+func taskManualHistoryStreams(typeKey, actor string, sopChanged, learningsChanged bool) []documentHistoryStream {
+	var streams []documentHistoryStream
+	if sopChanged {
+		streams = append(streams, documentHistoryStream{
+			Kind: docKindTaskManualSop, Key: typeKey, ActorID: actor,
+			Snapshot: manualSnapshotIn(typeKey, taskManualSopHistorySnapshot),
+		})
+	}
+	if learningsChanged {
+		streams = append(streams, documentHistoryStream{
+			Kind: docKindTaskManualLearnings, Key: typeKey, ActorID: actor,
+			Snapshot: manualSnapshotIn(typeKey, taskManualLearningsHistorySnapshot),
+		})
+	}
+	return streams
+}
+
+// roleDefHistoryStreams is the role's counterpart of taskManualHistoryStreams:
+// the ONE series a role write may retain, and only when the definition text
+// itself changed. A rename touches no versioned field, so it returns nothing
+// and the write retains nothing anywhere.
+func roleDefHistoryStreams(roleKey, actor string, definitionChanged bool) []documentHistoryStream {
+	if !definitionChanged {
+		return nil
+	}
+	return []documentHistoryStream{{
+		Kind: "role_definition", Key: roleKey, ActorID: actor,
+		Snapshot: roleDefSnapshotIn(roleKey),
+	}}
 }
 
 func (s *apiServer) documentHistoryAllowed(w http.ResponseWriter, r *http.Request, kind, key string, write bool) bool {
@@ -130,7 +176,13 @@ func (s *apiServer) documentHistoryAllowed(w http.ResponseWriter, r *http.Reques
 		if write && !s.lessonsWriteAuthz(w, r, primary) {
 			return false
 		}
-	case "task_manual":
+	case docKindTaskManualSop, docKindTaskManualLearnings:
+	case docKindTaskManual:
+		// The legacy four-field bundle. Its rows were deleted by migration 00045
+		// (owner ruling, T-1f39), so the kind names nothing at all — an empty
+		// list here would be indistinguishable from "this manual has no history".
+		writeError(w, http.StatusBadRequest, legacyTaskManualKindMsg)
+		return false
 	default:
 		writeError(w, http.StatusBadRequest, "unknown document history kind")
 		return false
@@ -205,7 +257,7 @@ func (s *apiServer) publishDocumentHistoryRestore(r *http.Request, kind, key str
 		s.hub.Publish("role_def", "patch", "role_def", wireOwnerID+"::"+key, nil, audienceOwnerOnly(), requestTrigger(r))
 	case "lessons":
 		s.hub.Publish("lessons", "patch", "lessons", wireOwnerID+"::"+key, nil, audienceOwnerOnly(), requestTrigger(r))
-	case "task_manual":
+	case docKindTaskManualSop, docKindTaskManualLearnings:
 		s.publishTaskManual(key, requestTrigger(r))
 	}
 }
@@ -218,13 +270,19 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 			return putUserContextOn(ex, UserContext{Text: content["text"], Tombstoned: historyTombstoned(content)})
 		})
 	case "role_definition":
-		if folded, err := s.foldRoleDefDTO(key); err != nil {
+		folded, err := s.foldRoleDefDTO(key)
+		if err != nil {
 			return err
-		} else if folded == nil {
+		}
+		if folded == nil {
 			return errNotFound
 		}
+		// The CURRENT name stands: it is not versioned, so a revision has no
+		// name to put back (older rows may still carry one — it is ignored on
+		// purpose rather than resurrected).
+		name := folded.Name
 		return s.dal.SaveWithDocumentHistory(kind, key, actor, roleDefSnapshotIn(key), func(ex sqlExecer) error {
-			return putRoleDefOn(ex, RoleDef{RoleKey: key, Name: content["name"], DefinitionMD: content["definition_md"], Tombstoned: historyTombstoned(content)})
+			return putRoleDefOn(ex, RoleDef{RoleKey: key, Name: name, DefinitionMD: content["definition_md"], Tombstoned: historyTombstoned(content)})
 		})
 	case "lessons":
 		roleKey, taskType, _ := historyKeyParts(kind, key)
@@ -238,23 +296,47 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 		return s.dal.SaveWithDocumentHistory(kind, key, actor, lessonsSnapshotIn(roleKey, taskType), func(ex sqlExecer) error {
 			return putLessonsOn(ex, Lessons{RoleKey: roleKey, TaskType: taskType, Text: content["text"], Tombstoned: historyTombstoned(content)})
 		})
-	case "task_manual":
-		current, err := s.dal.GetTaskManual(key)
-		if err != nil {
-			return err
-		}
-		if current == nil {
-			return errNotFound
-		}
-		if docCap := s.docCap(); DocCapBlocked(docCap, current.Learnings, content["learnings"]) || DocCapBlocked(docCap, current.SopMD, content["sop_md"]) {
-			return errDocumentHistoryCap
-		}
-		next := *current
-		next.Purpose, next.Fields, next.SopMD, next.Learnings = content["purpose"], content["fields"], content["sop_md"], content["learnings"]
-		next.UpdatedTS = nowSecs()
-		return s.dal.SaveWithDocumentHistory(kind, key, actor, taskManualSnapshotIn(key), func(ex sqlExecer) error {
-			return putTaskManualOn(ex, next)
-		})
+	case docKindTaskManualSop:
+		return s.restoreTaskManualField(key, taskManualHistoryStreams(key, actor, true, false),
+			func(m *TaskManual) error {
+				if DocCapBlocked(s.docCap(), m.SopMD, content["sop_md"]) {
+					return errDocumentHistoryCap
+				}
+				m.SopMD = content["sop_md"]
+				return nil
+			})
+	case docKindTaskManualLearnings:
+		return s.restoreTaskManualField(key, taskManualHistoryStreams(key, actor, false, true),
+			func(m *TaskManual) error {
+				if DocCapBlocked(s.docCap(), m.Learnings, content["learnings"]) {
+					return errDocumentHistoryCap
+				}
+				m.Learnings = content["learnings"]
+				return nil
+			})
 	}
 	return errNotFound
+}
+
+// restoreTaskManualField writes back exactly the one field its stream versions
+// and leaves every other field of the manual as it stands. apply also judges
+// the cap, on THAT field alone: restoring a SOP has nothing to do with how long
+// the current learnings doc is, and before the split (T-1f39) an over-cap
+// learnings doc blocked the SOP restore too.
+func (s *apiServer) restoreTaskManualField(key string, streams []documentHistoryStream, apply func(*TaskManual) error) error {
+	current, err := s.dal.GetTaskManual(key)
+	if err != nil {
+		return err
+	}
+	if current == nil {
+		return errNotFound
+	}
+	next := *current
+	if err := apply(&next); err != nil {
+		return err
+	}
+	next.UpdatedTS = nowSecs()
+	return s.dal.SaveWithDocumentHistories(streams, func(ex sqlExecer) error {
+		return putTaskManualOn(ex, next)
+	})
 }

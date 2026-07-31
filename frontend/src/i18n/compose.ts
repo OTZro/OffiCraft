@@ -86,7 +86,13 @@ export interface Messages {
   deleteRoleConfirm: (name: string) => string;
   docHistoryRestoreConfirm: (when: string) => string;
   docHistoryBlockedReason: (fields: string[], cap: number) => string;
+  docHistoryVersionLabel: (when: string) => string;
+  docHistoryActor: (name: string, actorId: string) => string;
   deleteManualConfirm: (key: string) => string;
+  manualEditSection: (section: string) => string;
+  // ── diff ──
+  diffSkipped: (count: number) => string;
+  diffTooLarge: (lines: number) => string;
 }
 
 /** Build the composed messages for one (already wording-overlaid) dict. */
@@ -101,6 +107,7 @@ export function makeMessages(t: Dict, language: Lang): Messages {
   const mach = t.monitor.machine;
   const set = t.settings;
   const prof = t.profile;
+  const diff = t.diff;
   // The list separator between two codes: a join, not vocabulary.
   const listSep = language === "zh" ? "、" : ", ";
   return {
@@ -201,6 +208,32 @@ export function makeMessages(t: Dict, language: Lang): Messages {
       `${set.historyBlockedReasonMid}${cap}${set.historyBlockedReasonTail}`,
     deleteManualConfirm: (key) =>
       `${set.deleteManualConfirmLead}${key}${set.deleteManualConfirmTail}`,
+    // 任務定義 has THREE identical-looking 編輯 buttons since the blocks became
+    // separately editable — the accessible name has to carry which block, and
+    // the block's own question is the only label the reader already knows.
+    manualEditSection: (section) =>
+      `${set.manualEditSectionLead}${section}${set.manualEditSectionTail}`,
+    // The `-` side of the history diff. Naming the version by its timestamp is
+    // what stops the two columns reading as an unlabelled before/after pair —
+    // the reader has to know WHICH version they are looking at.
+    docHistoryVersionLabel: (when) =>
+      `${set.historyVersionLabelLead}${when}${set.historyVersionLabelTail}`,
+    // Name AND id, never the name alone: a display name is editable and gets
+    // reused, while the id is what the history row was actually written under.
+    // Callers pass name="" for an actor the roster cannot resolve (dismissed
+    // member, released outsource worker, the owner himself) — then the id
+    // stands alone rather than wearing empty brackets.
+    docHistoryActor: (name, actorId) =>
+      name
+        ? `${name}${set.historyActorLead}${actorId}${set.historyActorTail}`
+        : actorId,
+
+    // The COUNT is the whole point of a collapsed run — "some lines hidden"
+    // leaves the reader unable to tell a 2-line gap from a 200-line one.
+    diffSkipped: (count) => `${diff.skippedLead}${count}${diff.skippedTail}`,
+    // Reports the longer side's line count, the only number the refused diff
+    // still knows (lib/lineDiff returns the counts even when it declines).
+    diffTooLarge: (lines) => `${diff.tooLargeLead}${lines}${diff.tooLargeTail}`,
   };
 }
 

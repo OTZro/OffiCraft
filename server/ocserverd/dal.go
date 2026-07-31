@@ -487,34 +487,64 @@ type DocumentHistory struct {
 
 const documentHistoryKeep = 3
 
+// documentHistoryStream addresses one retained-version series plus the reader
+// that serializes its live state. One row can carry SEVERAL independent series:
+// a task manual versions its SOP and its learnings separately (T-1f39), so a
+// write touching both retains one revision in each — inside the single
+// transaction that writes the row, never as two writes.
+type documentHistoryStream struct {
+	Kind     string
+	Key      string
+	ActorID  string
+	Snapshot func(sqlQuerier) (string, error)
+}
+
 // SaveWithDocumentHistory atomically retains the current document (when it is
 // non-empty), writes its replacement, and trims only snapshots older than the
 // newest three. snapshot re-reads and serializes the live document from inside
 // the transaction, so the retained revision is the state this write actually
 // replaced — not whatever the caller happened to read earlier.
 func (d *DAL) SaveWithDocumentHistory(kind, key, actorID string, snapshot func(sqlQuerier) (string, error), write func(sqlExecer) error) error {
+	return d.SaveWithDocumentHistories([]documentHistoryStream{
+		{Kind: kind, Key: key, ActorID: actorID, Snapshot: snapshot},
+	}, write)
+}
+
+// SaveWithDocumentHistories is the several-streams form: every stream is
+// retained and trimmed independently, then the single write lands. An empty
+// stream list is a legal write that versions nothing — that is what an edit to
+// an unversioned field (a manual's purpose or identifier fields) is.
+func (d *DAL) SaveWithDocumentHistories(streams []documentHistoryStream, write func(sqlExecer) error) error {
 	return d.inTx(func(tx *sql.Tx) error {
-		currentJSON, err := snapshot(tx)
-		if err != nil {
-			return err
-		}
-		if currentJSON != "" && currentJSON != "{}" {
-			if _, err := tx.Exec(`INSERT INTO document_history
-				(document_kind, document_key, content_json, created_ts, actor_id)
-				VALUES (?, ?, ?, ?, ?)`, kind, key, currentJSON, nowSecs(), actorID); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(`DELETE FROM document_history
-				WHERE document_kind = ? AND document_key = ? AND id NOT IN (
-					SELECT id FROM document_history
-					WHERE document_kind = ? AND document_key = ?
-					ORDER BY id DESC LIMIT ?
-				)`, kind, key, kind, key, documentHistoryKeep); err != nil {
+		for _, stream := range streams {
+			if err := retainDocumentVersion(tx, stream); err != nil {
 				return err
 			}
 		}
 		return write(tx)
 	})
+}
+
+func retainDocumentVersion(tx *sql.Tx, stream documentHistoryStream) error {
+	currentJSON, err := stream.Snapshot(tx)
+	if err != nil {
+		return err
+	}
+	if currentJSON == "" || currentJSON == "{}" {
+		return nil
+	}
+	if _, err := tx.Exec(`INSERT INTO document_history
+		(document_kind, document_key, content_json, created_ts, actor_id)
+		VALUES (?, ?, ?, ?, ?)`, stream.Kind, stream.Key, currentJSON, nowSecs(), stream.ActorID); err != nil {
+		return err
+	}
+	_, err = tx.Exec(`DELETE FROM document_history
+		WHERE document_kind = ? AND document_key = ? AND id NOT IN (
+			SELECT id FROM document_history
+			WHERE document_kind = ? AND document_key = ?
+			ORDER BY id DESC LIMIT ?
+		)`, stream.Kind, stream.Key, stream.Kind, stream.Key, documentHistoryKeep)
+	return err
 }
 
 func (d *DAL) ListDocumentHistory(kind, key string) ([]DocumentHistory, error) {

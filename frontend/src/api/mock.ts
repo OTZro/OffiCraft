@@ -783,6 +783,26 @@ let nextDocumentHistoryId = 1;
 
 const historySlot = (kind: DocumentKind, key: string) => `${kind}/${key}`;
 
+/** The RETIRED four-field bundle. `documentHistoryAllowed` (api_document_history.go)
+ * answers 400 for it on BOTH routes, naming the two replacements — and the mock
+ * is the adapter every frontend test runs against, so a mock that answered 200
+ * here would hide exactly the class of bug the server refusal exists to catch:
+ * a surface still addressing the dead kind looks alive under test and 400s in
+ * production. Message kept verbatim in step with `legacyTaskManualKindMsg`. */
+const RETIRED_DOCUMENT_KIND_MSG =
+  'document history kind "task_manual" was retired: ' +
+  'use "task_manual_sop" or "task_manual_learnings"';
+
+function refuseRetiredDocumentKind(kind: DocumentKind, call: string): void {
+  if (kind !== "task_manual") return;
+  throw new ApiError(
+    `http 400 for ${call}`,
+    400,
+    "bad_request",
+    RETIRED_DOCUMENT_KIND_MSG
+  );
+}
+
 // The overlay kinds whose document ROW exists only once something has been
 // written: dal.go's SaveWithDocumentHistory retains a revision only when the
 // in-transaction snapshot is non-empty, and the snapshot readers return "{}"
@@ -796,8 +816,14 @@ const documentRows = new Set<string>();
 const markDocumentRow = (kind: DocumentKind, key: string) =>
   documentRows.add(historySlot(kind, key));
 
+const MANUAL_KINDS: readonly DocumentKind[] = [
+  "task_manual",
+  "task_manual_sop",
+  "task_manual_learnings",
+];
+
 function hasDocumentRow(kind: DocumentKind, key: string): boolean {
-  return kind === "task_manual"
+  return MANUAL_KINDS.includes(kind)
     ? taskManuals.some((m) => m.typeKey === key)
     : documentRows.has(historySlot(kind, key));
 }
@@ -876,6 +902,20 @@ function snapshotDocument(
         sop_md: manual.sopMd,
         learnings: manual.learnings,
       };
+    }
+    // The two SPLIT series (T-1f39): one field each, and an EMPTY field is
+    // "nothing worth retaining" — taskManualSopHistorySnapshot answers "{}"
+    // there, which SaveWithDocumentHistories drops. Without that, the first SOP
+    // a blank manual is ever given would burn a version slot on emptiness.
+    case "task_manual_sop": {
+      const manual = taskManuals.find((m) => m.typeKey === key);
+      if (!manual || manual.sopMd === "") return null;
+      return { sop_md: manual.sopMd };
+    }
+    case "task_manual_learnings": {
+      const manual = taskManuals.find((m) => m.typeKey === key);
+      if (!manual || manual.learnings === "") return null;
+      return { learnings: manual.learnings };
     }
   }
 }
@@ -971,6 +1011,19 @@ function applyDocumentHistory(
           /* keep the live fields */
         }
       }
+      manual.updatedTs = Date.now() / 1000;
+      emitTopic("task_manual");
+      return;
+    }
+    // restoreTaskManualField (T-1f39): exactly the one field this series
+    // versions goes back, and every other field of the manual is left as it
+    // stands — restoring a SOP must not resurrect the 用途 it was written under.
+    case "task_manual_sop":
+    case "task_manual_learnings": {
+      const manual = taskManuals.find((m) => m.typeKey === key);
+      if (!manual) return;
+      if (kind === "task_manual_sop") manual.sopMd = content.sop_md ?? "";
+      else manual.learnings = content.learnings ?? "";
       manual.updatedTs = Date.now() / 1000;
       emitTopic("task_manual");
       return;
@@ -2457,7 +2510,18 @@ export const mockApi: Api = {
     // Mirrors handle_update_task_manual: partial — only supplied fields
     // change; assignee is three-valued (omitted = unchanged, null = unset).
     const manual = findTaskManual(typeKey);
-    recordDocumentHistory("task_manual", typeKey);
+    // T-1f39 — SOP and 學習經驗 are versioned INDEPENDENTLY, and only when this
+    // write actually changes them; 用途／識別鍵／display_name／assignee are not
+    // versioned at all, so a write touching only those retains nothing anywhere
+    // (taskManualHistoryStreams). The legacy `task_manual` bundle is retired:
+    // nothing writes it, migration 00044 deleted its rows, and both
+    // document-history routes now refuse it with 400 (server and mock alike).
+    if (patch.sopMd !== undefined && patch.sopMd !== manual.sopMd) {
+      recordDocumentHistory("task_manual_sop", typeKey);
+    }
+    if (patch.learnings !== undefined && patch.learnings !== manual.learnings) {
+      recordDocumentHistory("task_manual_learnings", typeKey);
+    }
     if (patch.displayName !== undefined) manual.displayName = patch.displayName;
     if (patch.purpose !== undefined) manual.purpose = patch.purpose;
     if (patch.sopMd !== undefined) manual.sopMd = patch.sopMd;
@@ -2489,7 +2553,9 @@ export const mockApi: Api = {
       );
     }
     taskManuals = taskManuals.filter((m) => m.typeKey !== typeKey);
-    dropDocumentHistory("task_manual", typeKey);
+    // All THREE series go with the manual, the legacy bundle included: a
+    // readable revision of a deleted document makes 「永久移除」 false.
+    for (const kind of MANUAL_KINDS) dropDocumentHistory(kind, typeKey);
     emitTopic("task_manual");
   },
 
@@ -3310,6 +3376,7 @@ export const mockApi: Api = {
     kind: DocumentKind,
     key: string
   ): Promise<DocumentHistoryView[]> {
+    refuseRetiredDocumentKind(kind, `GET /api/document-history/${kind}/${key}`);
     // Newest first, at most DOCUMENT_HISTORY_CAP — the retention the server
     // applies, so an offline cockpit sees the same bounded list.
     const kept = documentHistories.get(historySlot(kind, key)) ?? [];
@@ -3321,6 +3388,10 @@ export const mockApi: Api = {
     key: string,
     id: number
   ): Promise<DocumentHistoryView> {
+    refuseRetiredDocumentKind(
+      kind,
+      `POST /api/document-history/${kind}/${key}/${id}/restore`
+    );
     const slot = historySlot(kind, key);
     const found = (documentHistories.get(slot) ?? []).find((h) => h.id === id);
     if (!found) {

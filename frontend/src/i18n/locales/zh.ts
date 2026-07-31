@@ -7,6 +7,21 @@ export const zh = {
     apply: "套用",
     cancel: "取消",
   },
+  // ── 逐行比對（components/DiffView）——版本紀錄的差異呈現 ──
+  diff: {
+    ariaLabel: "逐行比對",
+    beforeLabel: "先前版本",
+    afterLabel: "目前內容",
+    // +/- 記號的可讀名稱：顏色以外的第二條線索。
+    addedLine: "新增的行",
+    removedLine: "刪除的行",
+    contextLine: "未變更的行",
+    noChanges: "這兩個版本的內容完全相同",
+    skippedLead: "已略過 ",
+    skippedTail: " 行未變更內容",
+    tooLargeLead: "內容太長，無法逐行比對（",
+    tooLargeTail: " 行）。",
+  },
   nav: {
     office: "辦公室",
     officeUnread: "有未讀訊息",
@@ -1174,11 +1189,46 @@ export const zh = {
     historyRestoreConfirmTail: "」這個版本？目前的內容會被覆蓋，但會存成新的版本紀錄。",
     historyRestoreConfirmAction: "確認還原",
     historyRestoreError: "還原失敗，請稍後重試",
+    // ── 初始版本（T-1f39，owner 2026-07-31）——重置鈕退場後，清單最後一項就是
+    //    這份文件出廠時的內容，也是唯一的重置入口，因此走同一個破壞性確認框。
+    historySeedTitle: "初始版本",
+    historySeedNote: "這份文件最初附帶的內容。",
+    historySeedRestore: "還原成初始版本",
+    historySeedConfirm: "確定還原成初始版本？目前的內容會被覆蓋。",
+    // 讀完一個版本退回清單——關閉是離開版本紀錄，這是回上一層。
+    historyBack: "返回版本列表",
     // 超過長度上限、伺服器一定會拒絕的版本：照樣列出來，但標成不可還原。
     historyBlockedBadge: "無法還原",
     historyBlockedReasonLead: "「",
     historyBlockedReasonMid: "」超過 ",
     historyBlockedReasonTail: " 字上限，且不比目前的內容短——伺服器會拒絕這次還原。",
+    // ── 版本 modal（T-1f39）——點一列打開；預設看內容，右上角切到逐行差異 ──
+    historyOpen: "檢視這個版本",
+    historyPaneLabel: "顯示方式",
+    historyPaneContent: "版本內容",
+    historyPaneDiff: "與目前的差異",
+    // 講明白比的是「伺服器上存著的」，不是編輯框裡還沒存的草稿。
+    historyDiffNote: "與伺服器上目前存著的內容比較；編輯框裡尚未儲存的修改不算在內。",
+    historyDiffPending: "目前的內容還沒載入完成，暫時無法比較。",
+    historyVersionLabelLead: "此版本（",
+    historyVersionLabelTail: "）",
+    // 修改者：名字後面永遠附代號——名字會被改、代號不會，而還原是照代號認人的。
+    historyActorLead: "（",
+    historyActorTail: "）",
+    historyCurrentLabel: "目前存檔內容",
+    historyModalEmpty: "這個版本沒有任何內容。",
+    historyClose: "關閉",
+    // 一頁上同時放著兩份可編輯長文時（角色誌＝角色定義＋學習經驗），標題只寫
+    // 「版本紀錄」看不出管的是哪一份——卡片得自己講清楚。owner 2026-07-31 實際
+    // 在畫面上踩到這件事。
+    historyRoleDefTitle: "角色定義的版本紀錄",
+    historyLessonsTitle: "學習經驗的版本紀錄",
+    historyGlobalTitle: "全域情境的版本紀錄",
+    historyManualLearningsTitle: "學習經驗的版本紀錄",
+    // 任務定義頁：purpose／識別鍵已經不再留版本，卡片得說清楚它只代表 SOP。
+    historySopTitle: "SOP 版本紀錄",
+    historySopSub:
+      "只有 SOP 會保留版本；用途與識別鍵的修改不留版本紀錄。系統保留最近 3 次修改；還原只會覆蓋 SOP。",
     historyField: {
       text: "內容",
       name: "名稱",
@@ -1271,6 +1321,10 @@ export const zh = {
       "執行前一定要有的欄位。把其中一個設成 🔑識別鍵，接案窗口就用它判斷是不是同一個任務（例如同一個 PR 連結 = 同一個任務，後續訊息會併入而非開新任務）。",
     manualQ3: "該怎麼做？",
     manualQ3Hint: "執行手冊 · AI 參考它規劃 workflow",
+    // 三塊各自編輯（owner 2026-07-31 選定 P1）：每一塊的標頭各有一顆 編輯，
+    // 三顆長得一樣，所以無障礙名稱要把區塊名帶進去。
+    manualEditSectionLead: "編輯「",
+    manualEditSectionTail: "」",
     manualEmptyHint: "尚未填寫",
     manualFieldNamePlaceholder: "欄位名稱",
     manualFieldRequired: "必填",

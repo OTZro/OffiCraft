@@ -1,0 +1,186 @@
+/* doc-hist-modal.css — the retained-revision reader (`.doc-hist-modal*`).
+ *
+ * Same shell language as md-preview / confirm-modal: fixed scrim, centred card,
+ * header with the identity on the left and the controls on the right, a
+ * scrolling body, a footer of actions. It owns its own sheet (rather than
+ * living in settings.css) because the component that draws these classes must
+ * be the one that imports them — see styleOwnership.test.ts.
+ *
+ * THE BODY IS THE ONLY SCROLLER. A 10,000-character revision must not push the
+ * panel past the viewport or hand the PAGE a scrollbar: the panel is capped at
+ * the scrim's height, and the body's own `overflow-y` is what makes it a scroll
+ * container. No `min-height: 0` is needed on either — declaring overflow already
+ * drops a flex item's automatic minimum size, and the CT guard stays green with
+ * both removed (recorded honestly in the ticket's mutant table rather than left
+ * in as cargo). */
+.doc-hist-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: color-mix(in srgb, var(--color-backdrop) 75%, transparent);
+}
+.doc-hist-modal__panel {
+  display: flex;
+  flex-direction: column;
+  width: min(820px, 100%);
+  max-height: 100%;
+  border: 1px solid color-mix(in srgb, var(--color-overlay) 8%, transparent);
+  border-radius: 14px;
+  background: var(--color-card);
+  box-shadow: 0 20px 48px color-mix(in srgb, var(--color-shadow) 50%, transparent);
+  overflow: hidden;
+}
+.doc-hist-modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-overlay) 6%, transparent);
+  flex: none;
+}
+.doc-hist-modal__ident {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.doc-hist-modal__when {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--color-text-strong);
+}
+.doc-hist-modal__actor {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+/* TOP-RIGHT: the pane toggle, then the close button (owner's placement). */
+.doc-hist-modal__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.doc-hist-modal__tabs {
+  display: inline-flex;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--color-overlay) 10%, transparent);
+  overflow: hidden;
+}
+.doc-hist-modal__tab {
+  padding: 5px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.doc-hist-modal__tab:hover {
+  color: var(--color-text);
+}
+/* The selected pane is marked by FILL and WEIGHT, not colour alone. */
+.doc-hist-modal__tab--on {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-weight: 600;
+}
+.doc-hist-modal__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--color-overlay) 10%, transparent);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.doc-hist-modal__close:hover {
+  color: var(--color-text);
+}
+.doc-hist-modal__body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  /* An unbreakable token belongs to the diff's own horizontal scroller (or to
+   * `overflow-wrap` in the markdown skin), never to this box — the long-token
+   * rule (T-d451). */
+  overflow-x: hidden;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.doc-hist-modal__field {
+  min-width: 0;
+}
+.doc-hist-modal__field-name {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.doc-hist-modal__md {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.doc-hist-modal__notice,
+.doc-hist-modal__diff-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+}
+.doc-hist-modal__blocked {
+  flex: none;
+  padding: 10px 16px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-callout-warning);
+  border-top: 1px solid color-mix(in srgb, var(--color-callout-warning) 25%, transparent);
+  overflow-wrap: anywhere;
+}
+.doc-hist-modal__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid color-mix(in srgb, var(--color-overlay) 6%, transparent);
+  flex: none;
+}
+/* 返回版本列表 sits at the LEADING edge, away from the two actions on the
+ * trailing one: going back is navigation, not a decision about this version. */
+.doc-hist-modal__back {
+  margin-right: auto;
+}
+/* Restore is DESTRUCTIVE and is now the only route to it, so it reads as the
+ * dangerous action it is rather than as the panel's primary button. */
+.doc-hist-modal__restore {
+  color: var(--color-danger-soft);
+  border-color: color-mix(in srgb, var(--color-danger-soft) 35%, transparent);
+  font-weight: 600;
+}
+.doc-hist-modal__restore:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (max-width: 720px) {
+  .doc-hist-modal {
+    padding: 12px;
+  }
+  .doc-hist-modal__header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

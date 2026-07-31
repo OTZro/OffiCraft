@@ -909,14 +909,6 @@
   flex-direction: column;
   gap: 26px;
 }
-/* The single edit switch for the whole task-definition area (owner T-8a4a r3):
- * 編輯 in read-only, 取消/完成編輯 while editing — right-aligned above §1. */
-.manual-def__head {
-  display: flex;
-  justify-content: flex-end;
-  min-height: 30px;
-  margin-bottom: -8px;
-}
 /* Read-only purpose paragraph (§1 default view). */
 .manual-readonly-text {
   margin: 8px 0 0;
@@ -958,6 +950,13 @@
   display: flex;
   align-items: center;
   gap: 10px;
+}
+/* Each block's own edit switch (owner 2026-07-31, P1 三塊各自編輯) — pushed to
+ * the far end of that block's heading, so 編輯 and 版本紀錄 read as belonging to
+ * the block they sit on rather than to the page. Replaces the card-wide
+ * .manual-def__head row that used to float above §1. */
+.manual-sec__switch {
+  margin-left: auto;
 }
 /* The numbered rounded-square block — a dark indigo tile with a light numeral,
  * per the spec (deliberately squarer + larger than the old round pip). */
@@ -1411,8 +1410,34 @@
   background: var(--color-surface-sunken);
   min-width: 0;
 }
-/* The meta row wraps rather than pushing the card wide at narrow widths; the
- * restore button is pinned to the trailing edge while there is room for it. */
+/* T-1f39: the whole row is the door to the version modal (restore lives in
+ * there now). It is a real tab stop with a real focus ring — a click target
+ * that only mice can find is not a control. */
+.doc-hist__row {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  text-align: start;
+  cursor: pointer;
+  border-radius: 8px;
+}
+.doc-hist__row:hover .doc-hist__open,
+.doc-hist__row:focus-visible .doc-hist__open {
+  color: var(--color-accent);
+}
+.doc-hist__row:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+/* The affordance's NAME, pinned to the trailing edge of the meta line — the
+ * row has to say what clicking it does, not merely react to the pointer. */
+.doc-hist__open {
+  margin-left: auto;
+  flex: none;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+/* The meta row wraps rather than pushing the card wide at narrow widths. */
 .doc-hist__meta {
   display: flex;
   flex-wrap: wrap;
@@ -1430,10 +1455,6 @@
   color: var(--color-text-muted);
   overflow-wrap: anywhere;
   min-width: 0;
-}
-.doc-hist__restore {
-  margin-left: auto;
-  flex: none;
 }
 .doc-hist__fields {
   margin: 10px 0 0;
@@ -1465,6 +1486,19 @@
   font-size: 12px;
   line-height: 1.6;
   color: var(--color-text);
+}
+
+/* 初始版本 — the file seed as the list's LAST entry (T-1f39, owner
+ * 2026-07-31). It is a real row, not a footer button: it is one of the states
+ * this document has been, and it is the only remaining way to reset. */
+.doc-hist__item--seed {
+  border-style: dashed;
+}
+.doc-hist__seed-note {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-text-muted);
 }
 
 /* A revision the server would refuse (over the size cap, not shrinking). It

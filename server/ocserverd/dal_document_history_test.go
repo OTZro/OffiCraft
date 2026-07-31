@@ -285,9 +285,9 @@ func TestDeletingADocumentAndItsRetainedHistoryIsAllOrNothing(t *testing.T) {
 			},
 		},
 		{
-			name: "task manual", table: "task_manual", kind: "task_manual", key: typeKey,
+			name: "task manual", table: "task_manual", kind: docKindTaskManualLearnings, key: typeKey,
 			seed: func(t *testing.T, d *DAL) {
-				retainOneVersion(t, d, "task_manual", typeKey, func(ex sqlExecer) error {
+				retainOneVersion(t, d, docKindTaskManualLearnings, typeKey, func(ex sqlExecer) error {
 					return putTaskManualOn(ex, TaskManual{
 						TypeKey: typeKey, DisplayName: "doomed", Fields: "[]",
 						Assignee: "{}", Learnings: "live", UpdatedTS: nowSecs(),

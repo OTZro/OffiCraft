@@ -373,24 +373,43 @@ describe("SettingsPage · 角色詳情清理 (no filename chip · custom-role re
     expect(utils.queryByText(/^role-.+\.md$/)).toBeNull();
   });
 
-  it("edit mode offers 重置 on a seed role but NOT on a custom role", async () => {
+  // T-1f39 (owner 2026-07-31): 重置 lost its own button — the slot now holds
+  // 版本紀錄, and the reset survives as the 初始版本 row inside it. The role
+  // page is where the SEED/CUSTOM split still has to hold: a seed role has a
+  // file to go back to, a custom one does not (the server 404s its reset), so
+  // the row must be there for one and absent for the other.
+  it("edit mode offers a way back to the seed on a seed role but NOT on a custom role", async () => {
     const utils = await openRolesLog();
 
-    // Seed assistant: edit mode carries the reset (back-to-seed) button.
+    // Seed assistant: edit mode carries 版本紀錄, whose list ends in 初始版本.
     fireEvent.click(utils.getByText(zh.office.role.assistant));
     fireEvent.click((await utils.findAllByText(zh.settings.edit))[0]);
-    expect(utils.getByText(zh.settings.reset)).toBeTruthy();
+    expect(utils.queryByText(zh.settings.reset)).toBeNull();
+    fireEvent.click(utils.getByTestId("doc-history-entry-role_definition"));
+    expect(await utils.findByTestId("doc-history-seed")).toBeTruthy();
+    fireEvent.click(utils.getByTestId("doc-history-list-close"));
     fireEvent.click(utils.getByText(zh.settings.cancel));
     // Back to the list via the 角色誌 breadcrumb (T-8f6e: no back button).
     fireEvent.click(utils.getByRole("button", { name: zh.settings.roles }));
 
-    // Custom role: NO reset affordance — there is no seed to restore (the
-    // server 404s a custom reset; verified live), so the button is omitted
-    // instead of left half-dead.
+    // Custom role: NO seed row — there is nothing to restore, so the entry is
+    // omitted instead of left half-dead.
     await createViaRow(utils);
+    // Two writes first: a document with no retained revisions renders the
+    // 「還沒有保留任何版本」 line instead of the list, and the seed row's
+    // absence from a list that was never drawn proves nothing.
+    const custom = (await api.listRoles()).find((r) => r.name === "研究員")!;
+    await api.saveRole(custom.key, { definitionMd: "第零版定義" });
+    await api.saveRole(custom.key, { definitionMd: "第一版定義" });
     fireEvent.click(utils.getByText("研究員"));
     fireEvent.click((await utils.findAllByText(zh.settings.edit))[0]);
-    expect(utils.queryByText(zh.settings.reset)).toBeNull();
+    fireEvent.click(utils.getByTestId("doc-history-entry-role_definition"));
+    const list = await utils.findByTestId("doc-history-list");
+    await waitFor(() =>
+      expect(list.querySelectorAll(".doc-hist__item").length).toBeGreaterThan(0)
+    );
+    expect(utils.queryByTestId("doc-history-seed")).toBeNull();
+    fireEvent.click(utils.getByTestId("doc-history-list-close"));
     expect(utils.getByText(zh.settings.doneEdit)).toBeTruthy(); // still editable
   });
 });

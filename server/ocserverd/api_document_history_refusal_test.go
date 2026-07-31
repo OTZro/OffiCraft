@@ -124,7 +124,7 @@ func TestRestoreDocumentHistoryRefusesToReviveAnOverCapRevision(t *testing.T) {
 		{
 			name: "task manual learnings",
 			seed: func(t *testing.T, api *apiServer) (string, string) {
-				return seedOverCapManual(t, api, TaskManual{Learnings: oversized},
+				return seedOverCapManual(t, api, docKindTaskManualLearnings, TaskManual{Learnings: oversized},
 					map[string]any{"learnings": "short again"})
 			},
 			live: func(t *testing.T, api *apiServer) string { return liveManual(t, api).Learnings },
@@ -132,7 +132,7 @@ func TestRestoreDocumentHistoryRefusesToReviveAnOverCapRevision(t *testing.T) {
 		{
 			name: "task manual sop_md",
 			seed: func(t *testing.T, api *apiServer) (string, string) {
-				return seedOverCapManual(t, api, TaskManual{SopMD: oversized},
+				return seedOverCapManual(t, api, docKindTaskManualSop, TaskManual{SopMD: oversized},
 					map[string]any{"sop_md": "short again"})
 			},
 			live: func(t *testing.T, api *apiServer) string { return liveManual(t, api).SopMD },
@@ -167,7 +167,7 @@ func TestRestoreDocumentHistoryRefusesToReviveAnOverCapRevision(t *testing.T) {
 
 const overCapManualKey = "tm-over-cap"
 
-func seedOverCapManual(t *testing.T, api *apiServer, oversized TaskManual, shrink map[string]any) (string, string) {
+func seedOverCapManual(t *testing.T, api *apiServer, kind string, oversized TaskManual, shrink map[string]any) (string, string) {
 	t.Helper()
 	oversized.TypeKey, oversized.DisplayName = overCapManualKey, "Over cap"
 	oversized.Fields, oversized.Assignee, oversized.UpdatedTS = "[]", "{}", nowSecs()
@@ -180,7 +180,57 @@ func seedOverCapManual(t *testing.T, api *apiServer, oversized TaskManual, shrin
 	if rec.Code != http.StatusOK {
 		t.Fatalf("shrinking write: %d %s", rec.Code, rec.Body.String())
 	}
-	return "task_manual", overCapManualKey
+	return kind, overCapManualKey
+}
+
+// The cap is judged per STREAM (T-1f39). Before the split one over-cap field
+// blocked the restore of the whole four-field bundle, so an over-long learnings
+// doc — the field that actually goes over the cap in the field, several manuals
+// already do — made every SOP version of that manual unrestorable too.
+func TestRestoringATaskManualSopIsNotBlockedByAnOverCapLearningsDoc(t *testing.T) {
+	api := newTasksTestServer(t)
+	oversized := strings.Repeat("x", contextDocMaxCharsDefault+50)
+	if err := api.dal.PutTaskManual(TaskManual{
+		TypeKey: overCapManualKey, DisplayName: "Over cap", Fields: "[]", Assignee: "{}",
+		SopMD: "sop v1", Learnings: oversized, UpdatedTS: nowSecs(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	api.HandleUpdateTaskManualApiTaskManualsTypeKeyPost(rec, taskReq(t, http.MethodPost,
+		"/api/task-manuals/"+overCapManualKey,
+		map[string]any{"sop_md": "sop v2", "learnings": "short again"}, "owner", "owner"),
+		overCapManualKey)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("shrinking write: %d %s", rec.Code, rec.Body.String())
+	}
+
+	restore := func(kind string) int {
+		t.Helper()
+		stored, err := api.dal.ListDocumentHistory(kind, overCapManualKey)
+		if err != nil || len(stored) != 1 {
+			t.Fatalf("%s history = %+v, %v; want the one replaced version", kind, stored, err)
+		}
+		rec := httptest.NewRecorder()
+		api.HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdRestorePost(rec, taskReq(t, http.MethodPost,
+			"/api/document-history/"+kind+"/"+overCapManualKey+"/restore", nil, "owner", "owner"),
+			kind, overCapManualKey, stored[0].ID)
+		return rec.Code
+	}
+
+	if code := restore(docKindTaskManualLearnings); code != http.StatusBadRequest {
+		t.Fatalf("restoring the over-cap learnings version = %d, want 400", code)
+	}
+	if code := restore(docKindTaskManualSop); code != http.StatusOK {
+		t.Fatalf("restoring the sop version = %d, want 200 — the cap on a neighbouring field is not this stream's business", code)
+	}
+	live := liveManual(t, api)
+	if live.SopMD != "sop v1" {
+		t.Fatalf("restored sop_md = %q, want \"sop v1\"", live.SopMD)
+	}
+	if live.Learnings != "short again" {
+		t.Fatalf("the refused learnings restore still wrote: learnings is %d chars", len(live.Learnings))
+	}
 }
 
 func liveManual(t *testing.T, api *apiServer) TaskManual {

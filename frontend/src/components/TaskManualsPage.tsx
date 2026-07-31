@@ -33,6 +33,7 @@
 //                   copies=0 = unlimited, spec TaskManualDTO).
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { useI18n } from "../i18n";
 import { effortText } from "../i18n/compose";
 import type { Effort, Member } from "../types";
@@ -48,7 +49,7 @@ import { useMonitoring } from "../hooks/useMonitoring";
 import { Markdown } from "./Markdown";
 import { InlineEdit } from "./InlineEdit";
 import { Breadcrumbs, type Crumb } from "./Breadcrumbs";
-import { DocumentHistoryCard } from "./DocumentHistoryCard";
+import { DocumentHistoryEntry } from "./DocumentHistoryEntry";
 import "./stepper.css";
 import { ConfirmModal } from "./ConfirmModal";
 import { CODEX_MODEL_OPTIONS, MODEL_QUICK_PICKS, EFFORTS } from "./ModelEffortEditor";
@@ -401,8 +402,9 @@ export function TaskManualDefinitionPage({
   manual: TaskManualView;
   crumbs: Crumb[];
   onSave: (patch: TaskManualPatch) => Promise<unknown>;
-  /** Re-read the manual after a 版本紀錄 restore (T-7d33) — one retained
-   * revision covers the WHOLE manual, so both sub-pages refresh the same way. */
+  /** Re-read the manual after a 版本紀錄 restore (T-7d33). A restore writes ONE
+   * field of the manual back (T-1f39), but the manual is fetched whole, so both
+   * sub-pages still refresh the same way. */
   onRestored?: () => Promise<unknown> | void;
 }) {
   const { t } = useI18n();
@@ -412,17 +414,11 @@ export function TaskManualDefinitionPage({
       <h1 className="settings__title settings__title--doc">
         {t.settings.manualTabDefinition}
       </h1>
-      <DefinitionCard manual={manual} onSave={onSave} />
-      <DocumentHistoryCard
-        kind="task_manual"
-        docKey={manual.typeKey}
-        currentContent={{
-          learnings: manual.learnings,
-          sop_md: manual.sopMd,
-        }}
-        docDeletable
-        onRestored={onRestored}
-      />
+      {/* 版本紀錄 lives in this card's own edit toolbar (T-1f39, owner
+        * 2026-07-31) and covers the SOP ONLY — this page also edits 用途 and
+        * 識別鍵, which are not versioned at all, so the list names the SOP in
+        * both its heading and its note. */}
+      <DefinitionCard manual={manual} onSave={onSave} onRestored={onRestored} />
     </div>
   );
 }
@@ -446,17 +442,10 @@ export function TaskManualLearningsPage({
       <h1 className="settings__title settings__title--doc">
         {t.settings.manualTabLearnings}
       </h1>
-      <LearningsCard manual={manual} onSave={onSave} />
-      <DocumentHistoryCard
-        kind="task_manual"
-        docKey={manual.typeKey}
-        currentContent={{
-          learnings: manual.learnings,
-          sop_md: manual.sopMd,
-        }}
-        docDeletable
-        onRestored={onRestored}
-      />
+      {/* The manual's learnings have their OWN revision series since T-1f39, so
+        * a SOP rewrite no longer washes the list out — and restoring from the
+        * card's own 版本紀錄 puts back the learnings alone. */}
+      <LearningsCard manual={manual} onSave={onSave} onRestored={onRestored} />
     </div>
   );
 }
@@ -482,16 +471,101 @@ function autosize(el: HTMLTextAreaElement | null) {
   el.style.height = `${el.scrollHeight}px`;
 }
 
+/** The three numbered blocks of 任務定義, in render order. The block number is
+ * the section's identity everywhere: state, testids, PATCH key. */
+type DefBlock = 1 | 2 | 3;
+
+/** One block's edit switch, sitting at the end of that block's own heading:
+ * 編輯 while the block is read-only, 取消/完成編輯 while it is open. It knows
+ * nothing about the other two blocks — any number of them may be open at once.
+ *
+ * Module-level on purpose. Declared inside DefinitionCard it would be a new
+ * component type on every keystroke, remounting `children` — and block ③'s
+ * child is the 版本紀錄 entry, whose open list would close itself the moment the
+ * SOP draft changed underneath it. */
+function SectionEditSwitch({
+  block,
+  sectionTitle,
+  editing,
+  busy,
+  onEdit,
+  onCancel,
+  onDone,
+  children,
+}: {
+  block: DefBlock;
+  /** The block's own question — the only thing that tells the three otherwise
+   * identical 編輯 buttons apart for a screen reader. */
+  sectionTitle: string;
+  editing: boolean;
+  busy: boolean;
+  onEdit: () => void;
+  onCancel: () => void;
+  onDone: () => void;
+  /** Extra controls for this block's edit row (block ③'s 版本紀錄 entry). */
+  children?: ReactNode;
+}) {
+  const { t, msg } = useI18n();
+  if (editing) {
+    return (
+      <div className="manual-sec__switch doc-card__actions">
+        {children}
+        <button
+          type="button"
+          className="doc-btn"
+          disabled={busy}
+          data-testid={`manual-def-cancel-${block}`}
+          onClick={onCancel}
+        >
+          {t.settings.cancel}
+        </button>
+        <button
+          type="button"
+          className="doc-btn doc-btn--accent"
+          disabled={busy}
+          data-testid={`manual-def-done-${block}`}
+          onClick={onDone}
+        >
+          {t.settings.doneEdit}
+        </button>
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="manual-sec__switch doc-btn doc-btn--edit"
+      aria-label={msg.manualEditSection(sectionTitle)}
+      data-testid={`manual-def-edit-${block}`}
+      onClick={onEdit}
+    >
+      <PencilIcon size={14} />
+      <span>{t.settings.edit}</span>
+    </button>
+  );
+}
+
 /** 任務定義 — the three numbered sections (spec T-8a4a, mockup
  * att-fed0a5a3d1fa). §1「這是什麼任務?」/ §2「需要哪些資訊?」/ §3「該怎麼做?」
- * share ONE explicit edit switch (owner T-8a4a round 3): the whole card is
- * READ-ONLY by default (purpose text / field rows / rendered SOP markdown);
- * 編輯 flips all three into their editors at once; 完成編輯 persists every
- * change in a SINGLE partial `update_task_manual` PATCH ({purpose} / {fields} /
- * {sopMd}, only the changed keys); 取消 drops the drafts and returns to
- * read-only. There is NO per-section save any more — the ex-always-editable
- * §1/§2 blur saves and the ex-per-section §3 SOP 編輯 toggle are folded into
- * this one switch for a consistent experience.
+ * are edited SEPARATELY (owner 2026-07-31, proposal P1): each block carries its
+ * own 編輯 switch in its own heading, and 完成編輯 writes a PATCH holding THAT
+ * BLOCK'S KEY ALONE ({purpose} / {fields} / {sopMd}). The card-wide single
+ * switch it replaces is why the 版本紀錄 entry read as the page's: only the SOP
+ * is versioned, so the entry now lives in block ③'s edit row and nowhere else.
+ *
+ * ALL THREE MAY BE OPEN AT ONCE, each holding its own draft (owner 2026-07-31,
+ * superseding the one-block-at-a-time rule this shipped with). That rule
+ * disabled the other two switches so a block change could not discard typing —
+ * which avoided the problem rather than removing it. Per-block drafts remove
+ * it: opening, cancelling or saving one block does not touch another's state,
+ * so "switching lost my typing" has nowhere left to happen and no switch needs
+ * to be dead.
+ *
+ * Scoping the PATCH to the committing block is what makes that safe. With the
+ * neighbours open and dirty, a card-wide payload would push their unfinished
+ * drafts to the server on someone else's 完成編輯 — and the screen looks
+ * identical either way. Same reasoning covers a concurrent write: only the
+ * committing block's draft was seeded from what the owner actually saw.
  *
  * Server quality gate (migration 00010): an identity-key field MUST be
  * required. The 必填/識別鍵 badges enforce it here — marking 識別鍵 forces 必填
@@ -500,17 +574,26 @@ function autosize(el: HTMLTextAreaElement | null) {
 function DefinitionCard({
   manual,
   onSave,
+  onRestored,
 }: {
   manual: TaskManualView;
   onSave: (patch: TaskManualPatch) => Promise<unknown>;
+  /** Re-read the manual after a 版本紀錄 restore. */
+  onRestored?: () => Promise<unknown> | void;
 }) {
   const { t } = useI18n();
-  const [editing, setEditing] = useState(false);
-  const [busy, setBusy] = useState(false);
+  /** Which blocks are open. Any number of them, independently — see the card's
+   * doc comment. Empty = the whole card read-only. */
+  const [openBlocks, setOpenBlocks] = useState<ReadonlySet<DefBlock>>(
+    () => new Set()
+  );
+  /** The block whose 完成編輯 is in flight — only ITS buttons go dead. */
+  const [savingBlock, setSavingBlock] = useState<DefBlock | null>(null);
   const [saveError, setSaveError] = useState(false);
-  // Edit-mode drafts — seeded from the manual on 編輯 (startEdit), discarded on
-  // 取消. The read-only view renders `manual.*` directly (always server-fresh),
-  // so an SSE refetch can never clobber an in-flight edit.
+  // Edit-mode drafts — the open block's is seeded from the manual on 編輯
+  // (startEdit), discarded on 取消. The read-only view renders `manual.*`
+  // directly (always server-fresh), so an SSE refetch can never clobber an
+  // in-flight edit.
   const [purposeDraft, setPurposeDraft] = useState(manual.purpose);
   const [fieldsDraft, setFieldsDraft] = useState<TaskManualFieldView[]>(() =>
     structuredClone(manual.fields)
@@ -524,52 +607,95 @@ function DefinitionCard({
   useEffect(() => {
     if (seededKey.current === manual.typeKey) return;
     seededKey.current = manual.typeKey;
-    setEditing(false);
+    setOpenBlocks(new Set());
     setSaveError(false);
   }, [manual]);
 
-  // Keep the purpose textarea sized to its content while editing.
+  // Keep the purpose textarea sized to its content while §1 is open.
   useLayoutEffect(() => {
-    if (editing) autosize(purposeRef.current);
-  }, [editing, purposeDraft]);
+    if (openBlocks.has(1)) autosize(purposeRef.current);
+  }, [openBlocks, purposeDraft]);
 
-  function startEdit() {
-    setPurposeDraft(manual.purpose);
-    setFieldsDraft(structuredClone(manual.fields));
-    setSopDraft(manual.sopMd);
-    setSaveError(false);
-    setEditing(true);
+  /** Add/remove ONE block from the open set, leaving the others exactly as they
+   * were — open, and holding whatever their owner has typed. */
+  function setBlockOpen(block: DefBlock, open: boolean) {
+    setOpenBlocks((prev) => {
+      const next = new Set(prev);
+      if (open) next.add(block);
+      else next.delete(block);
+      return next;
+    });
   }
 
-  function cancelEdit() {
-    setEditing(false);
+  function startEdit(block: DefBlock) {
+    // Seed THIS block's draft from the manual. The other two are untouched:
+    // re-seeding them here is what would throw away a neighbour's typing.
+    if (block === 1) setPurposeDraft(manual.purpose);
+    if (block === 2) setFieldsDraft(structuredClone(manual.fields));
+    if (block === 3) setSopDraft(manual.sopMd);
+    setSaveError(false);
+    setBlockOpen(block, true);
+  }
+
+  /** 取消 — discard THIS block's draft (back to the stored content) and close
+   * it. The other blocks keep both their editors and their drafts. */
+  function cancelEdit(block: DefBlock) {
+    if (block === 1) setPurposeDraft(manual.purpose);
+    if (block === 2) setFieldsDraft(structuredClone(manual.fields));
+    if (block === 3) setSopDraft(manual.sopMd);
+    setBlockOpen(block, false);
     setSaveError(false);
   }
 
-  // 完成編輯 — persist every changed section in ONE partial PATCH, then leave
-  // edit mode. Blank-named field rows are drafts-in-progress: dropped from the
-  // payload (the server rejects a blank name). A no-op edit skips the call.
-  async function commit() {
+  // 完成編輯 — persist THIS BLOCK's change as a partial PATCH carrying its key
+  // alone, then leave edit mode. Blank-named field rows are drafts-in-progress:
+  // dropped from the payload (the server rejects a blank name). A no-op edit
+  // skips the call.
+  async function commit(block: DefBlock) {
     const patch: TaskManualPatch = {};
-    if (purposeDraft !== manual.purpose) patch.purpose = purposeDraft;
-    const fieldsPayload = fieldsDraft.filter((f) => f.name.trim() !== "");
-    if (!fieldsEqual(fieldsPayload, manual.fields)) patch.fields = fieldsPayload;
-    if (sopDraft !== manual.sopMd) patch.sopMd = sopDraft;
+    if (block === 1 && purposeDraft !== manual.purpose) {
+      patch.purpose = purposeDraft;
+    }
+    if (block === 2) {
+      const fieldsPayload = fieldsDraft.filter((f) => f.name.trim() !== "");
+      if (!fieldsEqual(fieldsPayload, manual.fields)) {
+        patch.fields = fieldsPayload;
+      }
+    }
+    if (block === 3 && sopDraft !== manual.sopMd) patch.sopMd = sopDraft;
     if (Object.keys(patch).length === 0) {
-      setEditing(false);
+      setBlockOpen(block, false);
       return;
     }
-    setBusy(true);
+    setSavingBlock(block);
     setSaveError(false);
     try {
       await onSave(patch);
-      setEditing(false);
+      setBlockOpen(block, false);
     } catch (e) {
       console.warn("TaskManualsPage: definition save failed", e);
       setSaveError(true);
     } finally {
-      setBusy(false);
+      setSavingBlock(null);
     }
+  }
+
+  /** The switch every block's heading ends with — same shape for all three, the
+   * 版本紀錄 entry passed in for ③ only. */
+  function switchFor(block: DefBlock, sectionTitle: string, extra?: ReactNode) {
+    return (
+      <SectionEditSwitch
+        block={block}
+        sectionTitle={sectionTitle}
+        editing={openBlocks.has(block)}
+        busy={savingBlock === block}
+        onEdit={() => startEdit(block)}
+        onCancel={() => cancelEdit(block)}
+        onDone={() => void commit(block)}
+      >
+        {extra}
+      </SectionEditSwitch>
+    );
   }
 
   function mapField(
@@ -599,52 +725,16 @@ function DefinitionCard({
 
   return (
     <div className="manual-def" data-testid="manual-definition-card">
-      {/* One edit switch for the whole task-definition area (owner T-8a4a r3):
-       * 編輯 in read-only, 取消/完成編輯 while editing. */}
-      <div className="manual-def__head">
-        {editing ? (
-          <div className="doc-card__actions">
-            <button
-              type="button"
-              className="doc-btn"
-              disabled={busy}
-              data-testid="manual-def-cancel"
-              onClick={cancelEdit}
-            >
-              {t.settings.cancel}
-            </button>
-            <button
-              type="button"
-              className="doc-btn doc-btn--accent"
-              disabled={busy}
-              data-testid="manual-def-done"
-              onClick={() => void commit()}
-            >
-              {t.settings.doneEdit}
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            className="doc-btn doc-btn--edit"
-            data-testid="manual-def-edit"
-            onClick={startEdit}
-          >
-            <PencilIcon size={14} />
-            <span>{t.settings.edit}</span>
-          </button>
-        )}
-      </div>
-
       {/* ① 這是什麼任務? — purpose. Read-only text by default; autosizing textarea
        * while editing. */}
       <section className="manual-sec" data-testid="manual-section-1">
         <div className="manual-sec__head">
           <span className="manual-sec__num">1</span>
           <span className="manual-sec__title">{t.settings.manualQ1}</span>
+          {switchFor(1, t.settings.manualQ1)}
         </div>
         <div className="manual-sec__sub">{t.settings.manualQ1Hint}</div>
-        {editing ? (
+        {openBlocks.has(1) ? (
           <textarea
             ref={purposeRef}
             className="manual-input manual-input--purpose"
@@ -672,9 +762,10 @@ function DefinitionCard({
         <div className="manual-sec__head">
           <span className="manual-sec__num">2</span>
           <span className="manual-sec__title">{t.settings.manualQ2}</span>
+          {switchFor(2, t.settings.manualQ2)}
         </div>
         <div className="manual-sec__sub">{t.settings.manualQ2Hint}</div>
-        {editing ? (
+        {openBlocks.has(2) ? (
           <div className="manual-fields" data-testid="manual-fields-editor">
             {fieldsDraft.map((f, idx) => (
               <div className="manual-field manual-field--edit" key={idx}>
@@ -780,10 +871,32 @@ function DefinitionCard({
           <span className="manual-sec__num">3</span>
           <span className="manual-sec__title">{t.settings.manualQ3}</span>
           <span className="manual-sec__aside">{t.settings.manualQ3Hint}</span>
+          {/* 版本紀錄 — the ONLY place it appears on this page: only the SOP is
+            * versioned, and this is the SOP's own edit row. A task manual has no
+            * file seed, so its list carries no 初始版本 row. */}
+          {switchFor(
+            3,
+            t.settings.manualQ3,
+            <DocumentHistoryEntry
+              kind="task_manual_sop"
+              docKey={manual.typeKey}
+              title={t.settings.historySopTitle}
+              note={t.settings.historySopSub}
+              currentContent={{ sop_md: manual.sopMd }}
+              docDeletable
+              // A restore rewrote the SOP under the editor — leaving the draft
+              // up would turn 完成編輯 into an undo of the restore.
+              onRestored={async () => {
+                await onRestored?.();
+                cancelEdit(3);
+              }}
+              disabled={savingBlock === 3}
+            />
+          )}
         </div>
         <div className="doc-card manual-sop-card">
           <div className="doc-card__body">
-            {editing ? (
+            {openBlocks.has(3) ? (
               <textarea
                 className="doc-editor manual-input--sop"
                 value={sopDraft}
@@ -1329,9 +1442,12 @@ function AssigneeCard({
 function LearningsCard({
   manual,
   onSave,
+  onRestored,
 }: {
   manual: TaskManualView;
   onSave: (patch: TaskManualPatch) => Promise<unknown>;
+  /** Re-read the manual after a 版本紀錄 restore. */
+  onRestored?: () => Promise<unknown> | void;
 }) {
   const { t } = useI18n();
   const [editing, setEditing] = useState(false);
@@ -1365,6 +1481,18 @@ function LearningsCard({
         <span className="doc-card__file" />
         {editing ? (
           <div className="doc-card__actions">
+            <DocumentHistoryEntry
+              kind="task_manual_learnings"
+              docKey={manual.typeKey}
+              title={t.settings.historyManualLearningsTitle}
+              currentContent={{ learnings: manual.learnings }}
+              docDeletable
+              onRestored={async () => {
+                await onRestored?.();
+                setEditing(false);
+              }}
+              disabled={busy}
+            />
             <button
               type="button"
               className="doc-btn"
