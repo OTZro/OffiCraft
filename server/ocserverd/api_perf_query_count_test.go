@@ -9,8 +9,17 @@ package main
 // 這是效能票,payload 修好卻換來 N+1 等於沒修,所以這裡量的是**次數**,不是答案。
 //
 // 量測面是 database/sql 的 **driver seam**,不是 DAL 上的欄位:計數器活在測試檔裡,
-// production 一個 byte 都沒動,而且它看得到**每一條**打到 `task` 表的 SQL——不管
-// 未來有人用 `GetTask` 、自己寫一句 `SELECT` 、還是繞道別的 DAL method。
+// production 一個 byte 都沒動,而且它是**文字比對 SQL**、不是掛在某個 DAL method 上,
+// 所以 `GetTask`、手寫一句 `SELECT`、或任何別的 DAL method 走的都是同一條路。
+//
+// 🔴 **但它不是「看得到每一條」——它認的是一份具名的形狀清單,射程之外一律漏數,
+// 而漏數的方向是誤綠。** 射程與邊界由 `TestTaskTableReadPatternKnowsItsOwnBoundary`
+// 逐條釘住(那是護欄自己的測試:邊界要被斷言,不能只寫在註解裡)。**仍在射程外**的
+// 已知形狀:讀取透過 VIEW / CTE 名字 / 子查詢別名間接發生(`FROM (SELECT … )` 之後
+// 對別名取用)、`FROM /*註解*/ task` 這種中間夾註解、以及本 package 以外的碼。
+// ⚠️ **部分漏數比 seam 全死更危險**:合法的 `ListTasks` 那一次仍會被數到,所以下面
+// 那道 `> 0` 自檢**不會響**——一個用射程外寫法做的 N+1 會安靜地全綠。review 實測過
+// 這件事(M7:`SELECT … FROM "task" WHERE id = ?`,舊 regexp 停在 1 次、測試全綠)。
 //
 // 🔴 反恆真:語料非空是**先斷言的**。如果那一跑根本沒有帶相依的任務,查詢次數當然
 // 不會成長——那時「次數沒成長」什麼都沒證明。所以下面先確認回應裡真的有 dep、
@@ -31,11 +40,69 @@ import (
 
 // ── the driver seam ──────────────────────────────────────────────────────────
 
-// taskTableRead matches a read of the `task` table itself. `\b` after `task`
-// is what keeps `task_step` / `task_dep` / `task_artifact` (the grouped COUNTs
-// the light list also issues) OUT of the count — `_` is a word character, so
-// those never match, and the number below is about the TASK rows only.
-var taskTableRead = regexp.MustCompile(`(?i)\bfrom\s+task\b`)
+// taskTableRead matches a read of the `task` table itself.
+//
+// 涵蓋:`FROM` 與 `JOIN` 兩個動詞、可選的 schema 限定(`main.task`)、以及 SQLite
+// 合法的四種 identifier 引號(`"task"` / `'task'` / 反引號 / `[task]`)。
+// 排除:`task_step` / `task_dep` / `task_artifact`(輕量清單也會發的那幾句 grouped
+// COUNT)——`_` 是 word character,所以 `task\b` 不匹配,加引號的分支也要求引號緊貼
+// 在 `task` 之後,`"task_step"` 同樣不匹配。
+//
+// 🔴 這個 pattern 的射程就是這條護欄的射程,所以它自己有測試
+// (`TestTaskTableReadPatternKnowsItsOwnBoundary`);射程外的形狀見檔頭。
+var taskTableRead = regexp.MustCompile(
+	`(?i)\b(?:from|join)\s+(?:[a-z_][a-z0-9_]*\.)?` +
+		"(?:\"task\"|'task'|`task`|\\[task\\]|task\\b)")
+
+// TestTaskTableReadPatternKnowsItsOwnBoundary 直接對字串斷言 pattern 的兩側。
+//
+// 為什麼要有這一條:M7 反例證明了「N+1 只要換一種合法的 identifier 寫法就整條漏數」,
+// 而漏數的方向是**誤綠**。護欄的邊界必須被釘住,不能只寫在註解裡——這正是這張票的
+// 精神:不要用推論代替覆蓋。
+func TestTaskTableReadPatternKnowsItsOwnBoundary(t *testing.T) {
+	mustMatch := []string{
+		// 現行 DAL 的兩種真實寫法(改動時這兩條會先紅)。
+		"SELECT id FROM task ORDER BY created_ts",
+		"SELECT id FROM task WHERE id = ?",
+		// M7 反例本體:雙引號 identifier,SQLite 合法。
+		`SELECT title, status FROM "task" WHERE id = ?`,
+		"SELECT title FROM 'task' WHERE id = ?",
+		"SELECT title FROM `task` WHERE id = ?",
+		"SELECT title FROM [task] WHERE id = ?",
+		// schema 限定。
+		"SELECT id FROM main.task WHERE id = ?",
+		`SELECT id FROM main."task" WHERE id = ?`,
+		// JOIN 動詞(alias 與否都算)。
+		"SELECT t.id FROM task_dep d JOIN task t ON t.id = d.dep_id",
+		"SELECT t.id FROM task_dep d JOIN task ON task.id = d.dep_id",
+		// 大小寫與換行(SQL 常這樣排版)。
+		"select id\n\tfrom\n\ttask\n\twhere id = ?",
+	}
+	for _, q := range mustMatch {
+		if !taskTableRead.MatchString(q) {
+			t.Errorf("必須算成 task 表讀取,卻漏數了(誤綠方向): %q", q)
+		}
+	}
+
+	mustNotMatch := []string{
+		// 輕量清單自己發的三句 grouped COUNT — 數進去會讓基準膨脹、把 N+1 藏在雜訊裡。
+		"SELECT task_id, COUNT(*) FROM task_step GROUP BY task_id",
+		"SELECT task_id, dep_id FROM task_dep",
+		"SELECT task_id, COUNT(*) FROM task_artifact GROUP BY task_id",
+		`SELECT task_id FROM "task_step"`,
+		"SELECT task_id FROM main.task_dep",
+		"SELECT id FROM task_manual",
+		"SELECT id FROM taskish",
+		// 只是提到 task 這個字,不是從它讀。
+		"SELECT task_id FROM chat_message",
+		"UPDATE task SET title = ?",
+	}
+	for _, q := range mustNotMatch {
+		if taskTableRead.MatchString(q) {
+			t.Errorf("不該算成 task 表讀取,卻數進去了: %q", q)
+		}
+	}
+}
 
 // queryCounter counts task-table reads while armed. Arming is explicit so that
 // migrations and seeding (which run before the request under test) cannot

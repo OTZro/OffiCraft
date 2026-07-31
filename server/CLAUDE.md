@@ -362,11 +362,19 @@ owner 原話三句:「tasks 也一次拿太多了 說真的我們在意的只有
   `TestTaskListTaskReadsDoNotGrowWithDepCount` 跑兩次 `?statuses=in_progress`(2 個 dep vs
   25 個 dep),斷言**一次 list 請求打到 `task` 表的讀取次數相等**(實測都是 **1** 次,就是
   `ListTasks`)。量測面是 **database/sql 的 driver seam**——測試檔自己把真 sqlite driver 包一層
-  註冊成第二個名字、數 `\bFROM\s+task\b` 的 statement(`task_step`/`task_dep`/`task_artifact`
-  因為 `_` 是 word char 所以天然不計),**production 一個 byte 都沒動**,而且它看得到任何路徑
-  的查詢,不限於 `GetTask`。**反恆真三道**:兩跑都先斷言每個 dep 真的被解析出來(有 title/status)
-  且數量不同(語料非空)、計數器自己必須數到 > 0(seam 死掉時 `0 == 0` 會恆真地過)、次數還要
-  ≤ 2(「同樣地大」不算)。
+  註冊成第二個名字、對 statement 文字比對,**production 一個 byte 都沒動**,而且因為是文字比對
+  而不是掛在某個 DAL method 上,`GetTask`／手寫 `SELECT`／任何別的 DAL method 走的都是同一條路。
+  **反恆真三道**:兩跑都先斷言每個 dep 真的被解析出來(有 title/status)且數量不同(語料非空)、
+  計數器自己必須數到 > 0(seam 死掉時 `0 == 0` 會恆真地過)、次數還要 ≤ 2(「同樣地大」不算)。
+  🔴 **但它不是「看得到任何路徑的查詢」——它認的是一份具名的形狀清單,射程外一律漏數,而漏數
+  的方向是誤綠。** pattern 吃 `FROM`/`JOIN` ＋ 可選 schema 限定 ＋ 四種 SQLite identifier 引號
+  (`"task"`/`'task'`/反引號/`[task]`),排除 `task_step`/`task_dep`/`task_artifact`。**射程與
+  兩側邊界由 `TestTaskTableReadPatternKnowsItsOwnBoundary` 逐條對字串斷言**(護欄自己的邊界要被
+  釘住,不能只寫在註解裡)。**仍在射程外**:讀取透過 VIEW／CTE 名字／子查詢別名間接發生、
+  `FROM /*註解*/ task`、本 package 以外的碼。⚠️ **部分漏數比 seam 全死更危險**——合法的
+  `ListTasks` 那一次仍被數到,所以 `> 0` 那道自檢**不會響**。這不是推論:review 實測 M7 用
+  `SELECT title, status FROM "task" WHERE id = ?` 做 N+1,**舊 pattern(只認 `\bFROM\s+task\b`)
+  下計數器停在 1、測試全綠**;pattern 放寬後同一顆 mutant **整個 package 恰好 1 條紅**。
   🔴 **這個缺口曾經是真的,留著當理由**:review 實測 M6 把 handler 的 join 改寫成**逐 dep
   `s.dal.GetTask(id)`**,整包 `go test` **一條都沒紅**。所以上面那句「釘住『被排除的 dep 也
   解得出來』這個性質」**不能當成 N+1 的替代覆蓋**——那條性質守的是「join 被整個拿掉」與
