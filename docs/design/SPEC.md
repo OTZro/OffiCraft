@@ -34,8 +34,8 @@
 | 思考強度（Effort）| 低 / 中 / 高 |
 
 ### 成員狀態機
-presence 是 **server 端的投影**，不是 agent 自報的心跳狀態。核心錨點只有兩個變數：
-1. **online = SSE 連線投影**（`online == connected`）——server 依 agent 是否「正持著 `ocagent listen` 的 SSE 連線」直接投影：持著＝online、SSE 一斷＝offline。**沒有 agent 要自己維持的 heartbeat**（舊設計的 heartbeat 已移除）。**warden 亦同一套**——warden 自己連上 SSE ＝ online（2026-07-10 起 member 與 warden 一視同仁；權威 spec 見 `docs/design/state-model.md`）。
+presence 是 **server 端算出來的**，不是 agent 自報的心跳狀態。核心錨點只有兩個變數：
+1. **online = 由 SSE 連線判定**（`online == connected`）——server 依 agent 是否「正持著 `ocagent listen` 的 SSE 連線」直接判定：持著＝online、SSE 一斷＝offline。**沒有 agent 要自己維持的 heartbeat**（舊設計的 heartbeat 已移除）。**warden 亦同一套**——warden 自己連上 SSE ＝ online（2026-07-10 起 member 與 warden 一視同仁；權威 spec 見 `docs/design/state-model.md`）。
 2. **喚醒中（waking）** 由 boot 起手一次性的 `ocagent presence --phase waking`（獨立 HTTP、不掛 SSE）錨定，發生在掛 listen **之前**。
 
 其餘態由 server 從這兩個錨點 ＋ graceful-shutdown 訊號**衍生**（單一衍生函數 `presence_state()`）：
@@ -47,7 +47,7 @@ presence 是 **server 端的投影**，不是 agent 自報的心跳狀態。核�
 ```
 - **離線 / stopped**：灰點
 - **喚醒中（waking）**：黃點 ＋ `喚醒中` 徽章（已報 waking、SSE 尚未連上）
-- **線上（online）**：綠點（server 見 agent 正持著 SSE 連線——純連線投影，非 heartbeat）
+- **線上（online）**：綠點（server 見 agent 正持著 SSE 連線——純看連線，非 heartbeat）
 - **stopping**：winding-down 內部衍生態（graceful-shutdown 訊號已設、SSE 未斷），由 server 算出，agent 不用管。
 
 > **單一 presence 信號、單一畫點處。** 成員的狀態點由 **PresenceBadge / LifecycleDot** 這一個 presence 信號源畫；**Avatar 本身不畫點**（頭像只是頭像），避免兩處各畫一顆點而彼此不同步。
@@ -95,9 +95,9 @@ presence 是 **server 端的投影**，不是 agent 自報的心跳狀態。核�
 ### 1.5 喚醒流程
 面板按「喚醒」→ **直接在本機啟動 agent**（一鍵，無選擇視窗）。
 
-喚醒動作本身**不會改變成員狀態**；狀態是 server 端投影（見「成員狀態機」）：
+喚醒動作本身**不會改變成員狀態**；狀態由 server 端算出來（見「成員狀態機」）：
 - agent boot 起手報 `presence --phase waking` → 轉 **喚醒中**
-- agent 掛上 `ocagent listen`、server 見 SSE 連上 → 轉 **線上**（`online == connected`，純 SSE 連線投影，無 heartbeat）
+- agent 掛上 `ocagent listen`、server 見 SSE 連上 → 轉 **線上**（`online == connected`，純由 SSE 連線判定，無 heartbeat）
 
 狀態為「喚醒中」時，喚醒按鈕**照常顯示、不做 disable**。
 

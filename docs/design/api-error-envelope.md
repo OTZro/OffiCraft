@@ -21,7 +21,7 @@ FE 只好放棄讀 body、退化成從 thrown message 字串 regex 出 status。
   推導——handler 只給 status + message,錯誤寫出統一摺進 envelope;要新 code 加進
   映射表,不在 handler 內散寫字串。
 - **`message`**:人讀文字 = 原本的 `detail` 字串(語意逐條保留)。
-  request-validation 錯誤被摺成一條人讀字串(deterministic)。500 兜底 message
+  request-validation 錯誤被摺成一條人讀字串(deterministic)。500 的保底 message
   固定 `"internal server error"`——內部細節永不上 wire(traceback 留 server log)。
 - **不帶 `fields`**:掃過 FE 全部消費面(client.ts / mock.ts / isHttpStatus /
   各 component),**沒有任何地方逐欄消費 validation 錯誤**——極簡優先,先不加;
@@ -44,7 +44,7 @@ FE 只好放棄讀 body、退化成從 thrown message 字串 regex 出 status。
 ## 覆蓋面(no escape)
 
 錯誤路徑全數走同一個寫出:handler 錯誤的全部 4xx/5xx、框架自發 404/405、
-param-bind 失敗的 422、未處理 crash 的 500 兜底——一律 envelope。
+param-bind 失敗的 422、未處理 crash 的 500 保底——一律 envelope。
 
 **MCP 面免費對齊**:tools/call 是 in-process loopback,錯誤 body 原樣進
 `structuredContent` —— tool error 同樣是 envelope 形狀。
