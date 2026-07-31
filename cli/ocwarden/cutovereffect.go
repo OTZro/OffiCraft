@@ -177,6 +177,13 @@ func judgeCutoverEffect(p carrierProbe) cutoverEffect {
 	// know it. The fail-closed behaviour ITSELF is pinned twice — by the "leader's
 	// age is unavailable" row in the judge's table and by the sampler's own
 	// refusal when processElapsedSecs fails.
+	//
+	// 🔴 READ THIS BEFORE TOUCHING C2. The reason nothing guards this line is that
+	// C2 currently rejects every carrier with `elapsed >= leaderElapsed`. LOOSEN
+	// C2 — to `>`, to a subset of carriers, to anything — and this check stops
+	// being redundant and becomes the ONLY thing standing between an unreadable
+	// leader age and a green verdict, with no test watching it. If you widen C2,
+	// come back here and write the case that was impossible to write today.
 	if p.leaderElapsed <= 0 {
 		return effectUnproven
 	}
