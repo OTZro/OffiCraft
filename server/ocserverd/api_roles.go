@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"unicode/utf8"
 )
 
 func historyJSON(v any) (string, error) {
@@ -545,8 +546,10 @@ func (s *apiServer) HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(w http.Res
 	}
 	// T-3351 hard cap. Checked UNCONDITIONALLY — allow_shrink governs the
 	// opposite direction (shrinking too far) and is not a bypass for this one.
-	if DocCapBlocked(current.Text, text) {
-		writeError(w, http.StatusBadRequest, docCapRefusal("lessons doc", current.Text, text))
+	// One read, reused by the response below.
+	cap := s.docCap()
+	if DocCapBlocked(cap, current.Text, text) {
+		writeError(w, http.StatusBadRequest, docCapRefusal(cap, "lessons doc", current.Text, text))
 		return
 	}
 	if err := s.dal.SaveWithDocumentHistory("lessons", roleKey+"::"+taskType, currentActor(r), lessonsSnapshotIn(roleKey, taskType), func(ex sqlExecer) error {
@@ -562,6 +565,8 @@ func (s *apiServer) HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(w http.Res
 	}
 	s.hub.Publish("lessons", "patch", "lessons", wireOwnerID+"::"+roleKey+"::"+taskType, nil, audienceOwnerOnly(), requestTrigger(r))
 	writeJSON(w, http.StatusOK, lessonsDTO{
+		SizeChars:     utf8.RuneCountInString(text),
+		CapChars:      cap,
 		RoleKey:       roleKey,
 		TaskType:      taskType,
 		Text:          text,
@@ -631,8 +636,11 @@ func (s *apiServer) HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost(w http.
 	// T-3351 hard cap, judged on the RESULT of the patch (not the patch's own
 	// size) — the whole point is that a small patch onto a huge doc is what
 	// grows it. Unconditional: allow_shrink is not a bypass.
-	if DocCapBlocked(current.Text, next) {
-		writeError(w, http.StatusBadRequest, docCapRefusal("lessons doc", current.Text, next))
+	// One read, reused by the receipt below: the number the caller is told is
+	// then provably the number its write was judged against.
+	cap := s.docCap()
+	if DocCapBlocked(cap, current.Text, next) {
+		writeError(w, http.StatusBadRequest, docCapRefusal(cap, "lessons doc", current.Text, next))
 		return
 	}
 	if err := s.dal.SaveWithDocumentHistory("lessons", roleKey+"::"+taskType, currentActor(r), lessonsSnapshotIn(roleKey, taskType), func(ex sqlExecer) error {
@@ -652,7 +660,8 @@ func (s *apiServer) HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost(w http.
 		RoleKey:       roleKey,
 		TaskType:      taskType,
 		AppliedEdits:  applied,
-		Size:          len(next),
+		SizeChars:     utf8.RuneCountInString(next),
+		CapChars:      cap,
 		Sha256:        hex.EncodeToString(sum[:]),
 		OwnerID:       wireOwnerID,
 		SchemaVersion: wireSchemaVersion,

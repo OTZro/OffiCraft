@@ -95,10 +95,10 @@ func capErrMessage(data map[string]any) string {
 func TestContextDocCap_OverCapWriteIsRefused(t *testing.T) {
 	t.Run("replace_lessons", func(t *testing.T) {
 		srv, dal, tok := capLessonsServer(t)
-		before := capDoc(t, contextDocMaxChars-10)
+		before := capDoc(t, contextDocMaxCharsDefault-10)
 		seedLessonsOverlay(t, dal, "assistant", "general", before)
 
-		status, data := replaceLessons(t, srv, tok, capDoc(t, contextDocMaxChars+1), false)
+		status, data := replaceLessons(t, srv, tok, capDoc(t, contextDocMaxCharsDefault+1), false)
 		if status != http.StatusBadRequest {
 			t.Fatalf("over-cap replace must be refused, got %d: %v", status, data)
 		}
@@ -110,7 +110,7 @@ func TestContextDocCap_OverCapWriteIsRefused(t *testing.T) {
 
 	t.Run("patch_lessons", func(t *testing.T) {
 		srv, dal, tok := capLessonsServer(t)
-		before := capDoc(t, contextDocMaxChars-10)
+		before := capDoc(t, contextDocMaxCharsDefault-10)
 		seedLessonsOverlay(t, dal, "assistant", "general", before)
 
 		// The patch itself is tiny; what it PRODUCES is over the cap. The gate
@@ -127,10 +127,10 @@ func TestContextDocCap_OverCapWriteIsRefused(t *testing.T) {
 
 	t.Run("write_task_learnings", func(t *testing.T) {
 		api := newTasksTestServer(t)
-		before := capDoc(t, contextDocMaxChars-10)
+		before := capDoc(t, contextDocMaxCharsDefault-10)
 		key := seedManualWithLearnings(t, api, before)
 
-		rec := writeLearnings(t, api, key, map[string]any{"text": capDoc(t, contextDocMaxChars+1)})
+		rec := writeLearnings(t, api, key, map[string]any{"text": capDoc(t, contextDocMaxCharsDefault+1)})
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("over-cap learnings replace must be refused, got %d: %s", rec.Code, rec.Body.String())
 		}
@@ -141,7 +141,7 @@ func TestContextDocCap_OverCapWriteIsRefused(t *testing.T) {
 
 	t.Run("patch_task_learnings", func(t *testing.T) {
 		api := newTasksTestServer(t)
-		before := capDoc(t, contextDocMaxChars-10)
+		before := capDoc(t, contextDocMaxCharsDefault-10)
 		key := seedManualWithLearnings(t, api, before)
 
 		status, data := patchLearnings(t, api, key, map[string]any{
@@ -160,11 +160,11 @@ func TestContextDocCap_OverCapWriteIsRefused(t *testing.T) {
 	// left an uncapped door onto the same document.
 	t.Run("update_task_manual_learnings", func(t *testing.T) {
 		api := newTasksTestServer(t)
-		before := capDoc(t, contextDocMaxChars-10)
+		before := capDoc(t, contextDocMaxCharsDefault-10)
 		key := seedManualWithLearnings(t, api, before)
 
 		rec := capUpdateManual(t, api, key, map[string]any{
-			"learnings": capDoc(t, contextDocMaxChars+1),
+			"learnings": capDoc(t, contextDocMaxCharsDefault+1),
 		})
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("over-cap learnings via update_task_manual must be refused, got %d: %s",
@@ -178,11 +178,11 @@ func TestContextDocCap_OverCapWriteIsRefused(t *testing.T) {
 	t.Run("update_task_manual_sop_md", func(t *testing.T) {
 		api := newTasksTestServer(t)
 		key := seedManualWithLearnings(t, api, "")
-		before := capDoc(t, contextDocMaxChars-10)
+		before := capDoc(t, contextDocMaxCharsDefault-10)
 		setManualSopMD(t, api, key, before)
 
 		rec := capUpdateManual(t, api, key, map[string]any{
-			"sop_md": capDoc(t, contextDocMaxChars+1),
+			"sop_md": capDoc(t, contextDocMaxCharsDefault+1),
 		})
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("over-cap sop_md must be refused, got %d: %s", rec.Code, rec.Body.String())
@@ -201,11 +201,11 @@ func TestContextDocCap_LegalWritesAreNotRefused(t *testing.T) {
 		srv, dal, tok := capLessonsServer(t)
 		seedLessonsOverlay(t, dal, "assistant", "general", capDoc(t, 500))
 
-		want := capDoc(t, contextDocMaxChars) // exactly L — the ≤ boundary
+		want := capDoc(t, contextDocMaxCharsDefault) // exactly L — the ≤ boundary
 		status, data := replaceLessons(t, srv, tok, want, false)
 		if status != http.StatusOK {
 			t.Fatalf("a doc of exactly %d chars must be admitted, got %d: %v",
-				contextDocMaxChars, status, data)
+				contextDocMaxCharsDefault, status, data)
 		}
 		if got := getLessonsText(t, srv.URL, tok, "assistant", "general"); got != want {
 			t.Fatalf("admitted write did not land")
@@ -231,7 +231,7 @@ func TestContextDocCap_LegalWritesAreNotRefused(t *testing.T) {
 		api := newTasksTestServer(t)
 		key := seedManualWithLearnings(t, api, capDoc(t, 500))
 
-		want := capDoc(t, contextDocMaxChars)
+		want := capDoc(t, contextDocMaxCharsDefault)
 		if rec := writeLearnings(t, api, key, map[string]any{"text": want}); rec.Code != http.StatusOK {
 			t.Fatalf("in-bounds learnings write must land, got %d: %s", rec.Code, rec.Body.String())
 		}
@@ -259,8 +259,8 @@ func TestContextDocCap_LegalWritesAreNotRefused(t *testing.T) {
 		api := newTasksTestServer(t)
 		key := seedManualWithLearnings(t, api, capDoc(t, 500))
 
-		wantSop := capDoc(t, contextDocMaxChars)
-		wantLearn := capDoc(t, contextDocMaxChars)
+		wantSop := capDoc(t, contextDocMaxCharsDefault)
+		wantLearn := capDoc(t, contextDocMaxCharsDefault)
 		rec := capUpdateManual(t, api, key, map[string]any{
 			"sop_md": wantSop, "learnings": wantLearn,
 		})
@@ -281,7 +281,7 @@ func TestContextDocCap_LegalWritesAreNotRefused(t *testing.T) {
 		seedLessonsOverlay(t, dal, "assistant", "general", "起點")
 
 		want := strings.Repeat("教訓", 4500) // 9,000 runes, 27,000 bytes
-		if utf8.RuneCountInString(want) > contextDocMaxChars || len(want) <= contextDocMaxChars {
+		if utf8.RuneCountInString(want) > contextDocMaxCharsDefault || len(want) <= contextDocMaxCharsDefault {
 			t.Fatalf("fixture must be under the cap in runes and over it in bytes: %d runes, %d bytes",
 				utf8.RuneCountInString(want), len(want))
 		}
@@ -330,7 +330,7 @@ func TestContextDocCap_OverCapDocMayStillShrink(t *testing.T) {
 		if utf8.RuneCountInString(got) >= utf8.RuneCountInString(before) {
 			t.Fatalf("the shrinking patch did not land: %d runes", utf8.RuneCountInString(got))
 		}
-		if utf8.RuneCountInString(got) <= contextDocMaxChars {
+		if utf8.RuneCountInString(got) <= contextDocMaxCharsDefault {
 			t.Fatalf("fixture bug: the point is that the RESULT is still over the cap")
 		}
 	})
@@ -364,7 +364,7 @@ func TestContextDocCap_OverCapDocMayStillShrink(t *testing.T) {
 		if utf8.RuneCountInString(got) >= utf8.RuneCountInString(before) {
 			t.Fatalf("the shrinking patch did not land")
 		}
-		if utf8.RuneCountInString(got) <= contextDocMaxChars {
+		if utf8.RuneCountInString(got) <= contextDocMaxCharsDefault {
 			t.Fatalf("fixture bug: the RESULT must still be over the cap")
 		}
 	})
@@ -481,10 +481,10 @@ func TestContextDocCap_EqualLengthOverCapIsRefused(t *testing.T) {
 // deliberately.
 func TestContextDocCap_RefusalIsActionableAndAdvertisesNoBypass(t *testing.T) {
 	srv, dal, tok := capLessonsServer(t)
-	before := capDoc(t, contextDocMaxChars-10)
+	before := capDoc(t, contextDocMaxCharsDefault-10)
 	seedLessonsOverlay(t, dal, "assistant", "general", before)
 
-	attempt := capDoc(t, contextDocMaxChars+250)
+	attempt := capDoc(t, contextDocMaxCharsDefault+250)
 	status, data := replaceLessons(t, srv, tok, attempt, false)
 	if status != http.StatusBadRequest {
 		t.Fatalf("expected a refusal, got %d", status)
@@ -492,7 +492,7 @@ func TestContextDocCap_RefusalIsActionableAndAdvertisesNoBypass(t *testing.T) {
 	msg := capErrMessage(data)
 	for _, want := range []string{
 		strconv.Itoa(utf8.RuneCountInString(attempt)), // how long the write is
-		strconv.Itoa(contextDocMaxChars),              // what the cap is
+		strconv.Itoa(contextDocMaxCharsDefault),       // what the cap is
 		strconv.Itoa(utf8.RuneCountInString(before)),  // how long the doc is now
 		"chars",   // the unit, stated
 		"SHORTER", // the legal way out
@@ -515,10 +515,10 @@ func TestContextDocCap_RefusalIsActionableAndAdvertisesNoBypass(t *testing.T) {
 // doc that got too small, the other refuses one that stayed too big.
 func TestContextDocCap_AllowShrinkIsNotABypass(t *testing.T) {
 	srv, dal, tok := capLessonsServer(t)
-	before := capDoc(t, contextDocMaxChars-10)
+	before := capDoc(t, contextDocMaxCharsDefault-10)
 	seedLessonsOverlay(t, dal, "assistant", "general", before)
 
-	status, data := replaceLessons(t, srv, tok, capDoc(t, contextDocMaxChars+1), true)
+	status, data := replaceLessons(t, srv, tok, capDoc(t, contextDocMaxCharsDefault+1), true)
 	if status != http.StatusBadRequest {
 		t.Fatalf("allow_shrink must not admit an over-cap write, got %d: %v", status, data)
 	}
@@ -560,7 +560,7 @@ func TestContextDocCap_ShrinkGuardAndCapCompose(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("allow_shrink must still admit a deep shrink to under the cap, got %d: %v", status, data)
 	}
-	if n := utf8.RuneCountInString(getLessonsText(t, srv.URL, tok, "assistant", "general")); n > contextDocMaxChars {
+	if n := utf8.RuneCountInString(getLessonsText(t, srv.URL, tok, "assistant", "general")); n > contextDocMaxCharsDefault {
 		t.Fatalf("the deep shrink did not land: %d runes", n)
 	}
 }
@@ -576,16 +576,16 @@ func TestContextDocCap_SeedRoleFirstWriteIsCapped(t *testing.T) {
 	srv, _, tok := capLessonsServer(t)
 
 	// No overlay was seeded: this role folds to the shared seed.
-	if got := getLessonsText(t, srv.URL, tok, "r-fresh", "general"); utf8.RuneCountInString(got) > contextDocMaxChars {
+	if got := getLessonsText(t, srv.URL, tok, "r-fresh", "general"); utf8.RuneCountInString(got) > contextDocMaxCharsDefault {
 		t.Fatalf("fixture assumption broken: the seed itself is over the cap (%d runes)",
 			utf8.RuneCountInString(got))
 	}
-	status, data := replaceLessons2(t, srv, tok, "r-fresh", capDoc(t, contextDocMaxChars+1))
+	status, data := replaceLessons2(t, srv, tok, "r-fresh", capDoc(t, contextDocMaxCharsDefault+1))
 	if status != http.StatusBadRequest {
 		t.Fatalf("a first over-cap write on a seed role must be refused, got %d: %v", status, data)
 	}
 	status, data = patchLessons(t, srv.URL, tok, "r-fresh", "general",
-		`{"edits":[{"old":"","new":"`+strings.Repeat("z", contextDocMaxChars+1)+`"}]}`)
+		`{"edits":[{"old":"","new":"`+strings.Repeat("z", contextDocMaxCharsDefault+1)+`"}]}`)
 	if status != http.StatusBadRequest {
 		t.Fatalf("a first over-cap PATCH on a seed role must be refused, got %d: %v", status, data)
 	}

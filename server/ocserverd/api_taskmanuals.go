@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"unicode/utf8"
 )
 
 func taskManualHistorySnapshot(m TaskManual) (string, error) {
@@ -54,7 +55,7 @@ func manualDisplayLabel(displayName, typeKey string) string {
 
 // writeTaskManual is the common single-manual response tail.
 func (s *apiServer) writeTaskManual(w http.ResponseWriter, m TaskManual) {
-	dto, err := newTaskManualDTO(m)
+	dto, err := newTaskManualDTO(m, s.docCap())
 	if err != nil {
 		internalError(w, err)
 		return
@@ -170,12 +171,15 @@ func (s *apiServer) HandleListTaskManualsApiTaskManualsGet(w http.ResponseWriter
 	}
 	list := trimmedOrEmpty(params.View) == "list"
 	out := []taskManualDTO{}
+	// Read the cap ONCE for the whole listing: per-row reads could straddle a
+	// PATCH and hand back one list quoting two different caps.
+	capChars := s.docCap()
 	for _, m := range manuals {
 		if list {
-			out = append(out, newTaskManualListItemDTO(m))
+			out = append(out, newTaskManualListItemDTO(m, capChars))
 			continue
 		}
-		dto, err := newTaskManualDTO(m)
+		dto, err := newTaskManualDTO(m, capChars)
 		if err != nil {
 			internalError(w, err)
 			return
@@ -335,12 +339,16 @@ func (s *apiServer) HandleUpdateTaskManualApiTaskManualsTypeKeyPost(w http.Respo
 	// have left both an uncapped door onto the same document and sop_md with no
 	// gate at all. Validated BEFORE any field is applied, so a refusal leaves
 	// the whole partial update unwritten (the handler's existing posture).
-	if body.SopMd != nil && DocCapBlocked(m.SopMD, *body.SopMd) {
-		writeError(w, http.StatusBadRequest, docCapRefusal("sop_md doc", m.SopMD, *body.SopMd))
+	// Both fields are judged against ONE read of the live cap (T-3aeb): two
+	// reads could straddle a concurrent PATCH and judge one doc by a cap the
+	// other never saw.
+	docCap := s.docCap()
+	if body.SopMd != nil && DocCapBlocked(docCap, m.SopMD, *body.SopMd) {
+		writeError(w, http.StatusBadRequest, docCapRefusal(docCap, "sop_md doc", m.SopMD, *body.SopMd))
 		return
 	}
-	if body.Learnings != nil && DocCapBlocked(m.Learnings, *body.Learnings) {
-		writeError(w, http.StatusBadRequest, docCapRefusal("learnings doc", m.Learnings, *body.Learnings))
+	if body.Learnings != nil && DocCapBlocked(docCap, m.Learnings, *body.Learnings) {
+		writeError(w, http.StatusBadRequest, docCapRefusal(docCap, "learnings doc", m.Learnings, *body.Learnings))
 		return
 	}
 	// All validated — apply the partial update.
@@ -448,8 +456,8 @@ func (s *apiServer) HandleWriteTaskLearningsApiTaskManualsTypeKeyLearningsPost(w
 	}
 	// T-3351 hard cap. Unconditional — allow_shrink governs the opposite
 	// direction (shrinking too far) and is not a bypass for this one.
-	if DocCapBlocked(m.Learnings, body.Text) {
-		writeError(w, http.StatusBadRequest, docCapRefusal("learnings doc", m.Learnings, body.Text))
+	if cap := s.docCap(); DocCapBlocked(cap, m.Learnings, body.Text) {
+		writeError(w, http.StatusBadRequest, docCapRefusal(cap, "learnings doc", m.Learnings, body.Text))
 		return
 	}
 	m.Learnings = body.Text
@@ -530,8 +538,10 @@ func (s *apiServer) HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchP
 	}
 	// T-3351 hard cap, judged on the RESULT of the patch (not the patch's own
 	// size). Unconditional: allow_shrink is not a bypass.
-	if DocCapBlocked(m.Learnings, next) {
-		writeError(w, http.StatusBadRequest, docCapRefusal("learnings doc", m.Learnings, next))
+	// One read, reused by the receipt below (see api_roles.go).
+	cap := s.docCap()
+	if DocCapBlocked(cap, m.Learnings, next) {
+		writeError(w, http.StatusBadRequest, docCapRefusal(cap, "learnings doc", m.Learnings, next))
 		return
 	}
 	m.Learnings = next
@@ -547,7 +557,8 @@ func (s *apiServer) HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchP
 	writeJSON(w, http.StatusOK, taskLearningsPatchResultDTO{
 		TypeKey:      typeKey,
 		AppliedEdits: applied,
-		Size:         len(next),
+		SizeChars:    utf8.RuneCountInString(next),
+		CapChars:     cap,
 		Sha256:       hex.EncodeToString(sum[:]),
 	})
 }

@@ -16,7 +16,8 @@ import { useState } from "react";
 import { useI18n } from "../i18n";
 import type { DocumentHistoryView, DocumentKind } from "../types";
 import { useDocumentHistory } from "../hooks/useDocumentHistory";
-import { DOC_CAP_CHARS, docCapBlockedFields } from "../api/docCap";
+import { docCapBlockedFields } from "../api/docCap";
+import { useServerSettings } from "../hooks/useServerSettings";
 import { ApiError } from "../api/errors";
 import { ConfirmModal } from "./ConfirmModal";
 import { formatAbsolute } from "../lib/dateFormat";
@@ -83,6 +84,11 @@ export function DocumentHistoryCard({
 }) {
   const { t, msg } = useI18n();
   const { versions, loading, error, restore } = useDocumentHistory(kind, docKey);
+  // The size cap is a SETTING (T-3aeb), so the un-restorable marking has to
+  // follow the live value — a card still judging by the shipped default would
+  // grey out revisions the server accepts the moment the owner raises it.
+  // `undefined` until it loads, which makes the marking abstain (docCap.ts).
+  const docCapChars = useServerSettings().settings?.docCapChars;
 
   const [confirming, setConfirming] = useState<DocumentHistoryView | null>(null);
   const [busy, setBusy] = useState(false);
@@ -139,7 +145,8 @@ export function DocumentHistoryCard({
               const blockedFields = docCapBlockedFields(
                 kind,
                 v.content,
-                currentContent
+                currentContent,
+                docCapChars
               );
               const blocked = blockedFields.length > 0;
               return (
@@ -184,7 +191,7 @@ export function DocumentHistoryCard({
                     >
                       {msg.docHistoryBlockedReason(
                         blockedFields.map(fieldLabel),
-                        DOC_CAP_CHARS
+                        docCapChars ?? 0
                       )}
                     </div>
                   )}

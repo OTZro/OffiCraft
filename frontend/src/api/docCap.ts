@@ -1,8 +1,9 @@
 // api/docCap.ts — the frontend's ONE copy of the server's document size cap.
 //
 // ⚠️ THE AUTHORITY FOR THIS RULE IS THE SERVER, NOT THIS FILE.
-// `DocCapBlocked` + `contextDocMaxChars` in server/ocserverd/domain.go decide
-// whether a write is refused; this module exists only so the cockpit can MARK a
+// `DocCapBlocked` in server/ocserverd/domain.go decides whether a write is
+// refused, against the live `doc.cap_chars` setting (T-3aeb — the cap is no
+// longer a constant on either side, so this module takes it as a parameter); this module exists only so the cockpit can MARK a
 // revision as un-restorable BEFORE the owner clicks, instead of letting them
 // click and collect an HTTP 400 that reads like a broken system.
 //
@@ -26,9 +27,12 @@
 
 import type { DocumentKind } from "../types";
 
-/** contextDocMaxChars (server/ocserverd/domain.go). The ONE constant — do not
- * inline this number anywhere else. */
-export const DOC_CAP_CHARS = 10000;
+/** contextDocMaxCharsDefault (server/ocserverd/domain.go) — the SHIPPED DEFAULT
+ * of the cap, not the cap itself. Since T-3aeb the live value is the
+ * `doc_cap_chars` setting, so callers pass the cap in; this constant exists only
+ * as the fallback for a caller that has no server value yet, and as the shared
+ * fixture's anchor. Do not inline this number anywhere else. */
+export const DOC_CAP_CHARS_DEFAULT = 10000;
 
 /** Length in UNICODE CODE POINTS — the unit the server measures in
  * (utf8.RuneCountInString). `String.length` is UTF-16 units and would count an
@@ -48,9 +52,13 @@ export function runeLength(s: string): number {
  *     downward — the escape hatch that keeps existing over-cap docs editable);
  *   - after > cap AND after ≥ before → REFUSED, EQUAL LENGTH INCLUDED.
  */
-export function docCapBlocked(before: string, after: string): boolean {
+export function docCapBlocked(
+  cap: number,
+  before: string,
+  after: string
+): boolean {
   const n = runeLength(after);
-  if (n <= DOC_CAP_CHARS) return false;
+  if (n <= cap) return false;
   return n >= runeLength(before);
 }
 
@@ -72,16 +80,24 @@ export const CAPPED_FIELDS: Record<DocumentKind, readonly string[]> = {
  * string, which would mark a perfectly restorable revision as blocked. An
  * abstention is the honest degraded state — the owner can still click, and the
  * server's own 400 surfaces in the dialog exactly as it did before.
+ *
+ * `cap` abstains the same way and for the same reason (T-3aeb). Falling back to
+ * the shipped default while the setting is still loading would be WRONG in the
+ * one direction that matters: the cap can only ever be RAISED, so judging by
+ * the default can only ever grey out a revision the server would have accepted
+ * — the "greyed out with a reason that is not true" failure this module's
+ * header calls the worse of the two.
  */
 export function docCapBlockedFields(
   kind: DocumentKind,
   content: Record<string, string>,
-  current: Record<string, string> | undefined
+  current: Record<string, string> | undefined,
+  cap: number | undefined
 ): string[] {
-  if (!current) return [];
+  if (!current || cap === undefined) return [];
   return CAPPED_FIELDS[kind].filter(
     (field) =>
       current[field] !== undefined &&
-      docCapBlocked(current[field], content[field] ?? "")
+      docCapBlocked(cap, current[field], content[field] ?? "")
   );
 }

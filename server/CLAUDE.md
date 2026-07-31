@@ -188,11 +188,21 @@ T-98f4 只做了外包 worker。正職這邊三個動詞各走各的,實測(2026
 
 🔴 **日後要盤點孤兒歷史列時的誤報坑**：判「這個 `document_key` 的文件還在不在」**不能只看 `role_def` 有沒有那一列**——**seed 角色在沒被自訂過之前根本沒有 `role_def` 列**（overlay 模型：沒有 overlay ＝ 用 seed），於是 seed 角色的 lessons 歷史會被**整批誤判成孤兒**。判準要併上 seed 角色清單，來源是 `assets.go` 的 `seedRoleKeys()`（不要手抄一份會過期的名單）。**一個會把正常資料標成待刪的盤點查詢，比沒有盤點查詢危險。**
 
-## 累積型 context 文件的上限(T-3351,`domain.go DocCapBlocked`)
+## 累積型 context 文件的上限(T-3351 + T-3aeb,`domain.go DocCapBlocked`)
 
 owner 2026-07-27 兩句話 + 一個數字:「更新的時候不能塞超過這個大小」「已經超出的我們不 truncate 但是下次更新他只能縮小」,上限 **10,000**。
 
-- **單位是 rune,不是 byte**(`utf8.RuneCountInString`,對齊 `chatBodyMaxChars` 的口徑)。owner 挑 10,000 時看的分佈是 SQLite `length()`=**字元**;這些文件多為中文散文(2.2–3 bytes/字),拿 `len()` 當上限實際只剩約 3,300–4,500 個中文字,**比 owner 拍板的數字嚴格一倍以上**。⚠️ patch receipt 的 `size` 欄仍是 `len()`=**bytes**(凍結 wire 欄,不動),兩者單位不同是刻意的——所以拒絕訊息一律講 "chars"。
+🔴 **T-3aeb(owner 2026-07-31):那個數字不再是常數,是設定 `doc.cap_chars`(預設 10,000,範圍 10,000..100,000)。** 三行語意一個字沒動,動的只有「上限從哪裡來」:
+- `contextDocMaxChars` 這個常數**已經不存在**,取而代之的是 `contextDocMaxCharsDefault`(只是預設值)。`DocCapBlocked` 與 `docCapRefusal` 現在**第一個參數就是 cap**——刻意不做成 package 變數或 `*apiServer` 方法:參數化之後,**漏改一個呼叫點是編譯錯誤**,而那正是這種「同一個值散在 9 個地方」的改動唯一可靠的守衛。
+- 每個呼叫點在 **request time** 讀 `s.docCap()`(RLock),所以 PATCH 完下一次寫入就生效、免重啟;不快取、沒有第二份會漂的副本。`update_task_manual` 那個 handler **一次讀、兩個欄位共用**——兩次讀可能跨過一次並行 PATCH,讓 sop_md 與 learnings 被兩個不同的上限審判。
+- 🔴 **範圍的下限等於預設值,這是設計不是巧合**:owner 明示這個旋鈕只能**調高**。調低會讓今天合法的文件立刻變成 shrink-only(立案時實測:9 份手冊裡 2 份已超過一萬字、3 份在 8.6k~10k),所以 `minDocCapChars = contextDocMaxCharsDefault`,別「順手整理」成一個更小的數字。
+- **回應同時報「現在多少字／上限多少」(owner 2026-07-31 第二次裁定,卡 `rc-3800e090f5e1`)**:`size` 這個不帶單位的名字**已移除**,改名 `size_chars`,並在兩個讀取面與兩張回條都加上 `cap_chars`。理由是 owner 要「寫之前就知道自己多長」——設定面是 admin-only,**一般 agent 讀不到上限**,所以上限必須跟著文件本身送出去,否則唯一的學習途徑就是被拒絕。
+  - **手冊報兩個尺寸(`learnings_chars` / `sop_md_chars`)不是一個總和**:cap 是逐份套用的,一個合計數兩個問題都答不了。
+  - 🔴 **`?view=list` 這條輕量投影量的是「資料列」不是「被清空的 wire 欄位」**:它刻意不送 sop_md/learnings 的內文,若順手拿被清空的欄位去數就會回 0——**一個看起來像量測結果的 0,比誠實省略更糟**,而「哪一份手冊快到上限」正是列表視圖會問的問題。哨兵 `TestListViewOmitsTheTextButNotItsSize`(mutant:把兩個尺寸寫死 0 → 紅)。
+  - `newTaskManualDTO` / `newTaskManualListItemDTO` 改成**收 cap 參數**(同一個理由:漏改的呼叫點是編譯錯誤);列表 handler **整批只讀一次 cap**,免得同一份清單報出兩個不同的上限。
+- **前端那份鏡像也跟著吃設定**:`docCap.ts` 匯出的是 `DOC_CAP_CHARS_DEFAULT`,`docCapBlocked` / `docCapBlockedFields` 都收 cap;cap 還沒載到時**棄權不標記**(與 `current` 未載入同一個姿勢)。理由是方向性的:cap 只會被調高,拿預設值去判只可能**把 server 會接受的版本標成不可還原**——正是那個模組自己說「更糟」的那一種錯。
+
+- **單位是 rune,不是 byte**(`utf8.RuneCountInString`,對齊 `chatBodyMaxChars` 的口徑)。owner 挑 10,000 時看的分佈是 SQLite `length()`=**字元**;這些文件多為中文散文(2.2–3 bytes/字),拿 `len()` 當上限實際只剩約 3,300–4,500 個中文字,**比 owner 拍板的數字嚴格一倍以上**。⚠️ **T-3aeb(owner 2026-07-31)已把這條反轉:patch receipt 的 `size` 欄現在也是 rune**。舊文寫「凍結 wire 欄,不動,兩者單位不同是刻意的」——owner 明示同一件事不該有兩個單位,親自推翻了那個決定(卡 `rc-33b88ed80212`,選項 ①)。動它之前先確認:實查當時全 repo **沒有任何** UI／CLI／conformance 依賴舊單位,而且**所有既有測試在兩種單位下都會過**(夾具全是 ASCII),所以那次改動本身在 CI 上是隱形的——鑑別力靠新加的多位元組夾具,不是靠既有測試。
 - **三行語意(邊界含在內)**:新內容 ≤ L → 過;> L 且 **< 舊內容** → 過(允許超標者繼續往下縮);> L 且 **≥ 舊內容** → 拒,**含等長**(沒變短就不算收斂,不然超標文件可以永遠整份重寫)。**既有超標內容一律不動、不截斷**——這條規則只擋 WRITE。第一次寫(無舊內容)只看 ≤ L。
 - **比的是「caller 讀到、正在編輯的那份」**:lessons 用 `foldLessonsDTO` 的 overlay ⊕ seed 折疊結果,手冊用存的欄位。**刻意與 `LessonsShrinkBlocked` 用同一個 `before`**,兩道閘因此不可能對「現在的文件是什麼」各說各話。(`seeds/lessons.md` 實測 **40 bytes = 14 runes**——這張票的主旨就是 rune≠byte,所以兩個單位都寫明、不含糊講「字元」;不論用哪個尺都遠小於 L,所以 seed role 的第一次寫實務上就是「只看 ≤ L」,fold-vs-overlay 在現行 seed 大小下行為不可區分。)
 - **五個寫入面全覆蓋**:`replace_lessons` / `patch_lessons` / `write_task_learnings` / `patch_task_learnings` / **`update_task_manual`**。最後一個非補不可:它是 `sop_md` 的**唯一**寫入面,也是 learnings 的**第二個**寫入面(欄名 `learnings`,與 `write_task_learnings` 的 `text` 是同一份文件)——只擋前四個等於留一扇沒上鎖的門。**patch 面受檢的是「改完之後的結果」,不是 patch 自己的大小**(小 patch 疊上大文件正是把它撐大的東西)。

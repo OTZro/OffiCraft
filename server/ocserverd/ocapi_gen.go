@@ -482,12 +482,17 @@ type HealthDTO struct {
 // role (per-role-learnings step1); “task_type“ is the single fixed key (§9.7).
 // “is_default“ = seed-vs-edited.
 type LessonsDTO struct {
+	// CapChars The document size cap now in force, in CHARACTERS (the doc_cap_chars setting). Served on the READ face so an agent can size an edit BEFORE writing it — the alternative is discovering the limit by being refused, and the settings surface is admin-only.
+	CapChars      *int    `json:"cap_chars,omitempty"`
 	IsDefault     *bool   `json:"is_default,omitempty"`
 	OwnerId       *string `json:"owner_id,omitempty"`
 	RoleKey       *string `json:"role_key,omitempty"`
 	SchemaVersion *int    `json:"schema_version,omitempty"`
-	TaskType      *string `json:"task_type,omitempty"`
-	Text          *string `json:"text,omitempty"`
+
+	// SizeChars Size of `text` in CHARACTERS (Unicode code points) — the same unit as cap_chars.
+	SizeChars *int    `json:"size_chars,omitempty"`
+	TaskType  *string `json:"task_type,omitempty"`
+	Text      *string `json:"text,omitempty"`
 }
 
 // LessonsEditDTO One “patch_lessons“ edit (§3.4 #28b): replace the occurrence of “old“ with “new“. “old“ must match the current doc EXACTLY ONCE (0 or >1 hits reject the whole batch — the unique anchor doubles as an optimistic concurrency check); an EMPTY “old“ appends “new“ at the end of the doc (joined with a newline when the doc does not already end in one).
@@ -502,16 +507,21 @@ type LessonsPatchDTO struct {
 	Edits       []LessonsEditDTO `json:"edits"`
 }
 
-// LessonsPatchResultDTO Receipt of a lessons PATCH (§3.4 #28b). “size“ (UTF-8 bytes) and “sha256“ (hex) are lightweight verification anchors over the RESULTING doc text, so the caller can confirm the write landed without re-reading the full doc.
+// LessonsPatchResultDTO Receipt of a lessons PATCH (§3.4 #28b). “size“ (CHARACTERS — Unicode code points, the SAME unit as the “doc_cap_chars“ cap the write is judged against) and “sha256“ (hex) are lightweight verification anchors over the RESULTING doc text, so the caller can confirm the write landed without re-reading the full doc. “size“ counted UTF-8 BYTES until 2026-07-31, when the owner ruled the receipt must speak the cap's unit.
 type LessonsPatchResultDTO struct {
-	AppliedEdits  *int    `json:"applied_edits,omitempty"`
+	AppliedEdits *int `json:"applied_edits,omitempty"`
+
+	// CapChars The document size cap in force when this write was judged, in CHARACTERS (the doc_cap_chars setting). Returned so a caller can see its remaining budget without a second request — the cap is adjustable and agents cannot read the settings surface.
+	CapChars      *int    `json:"cap_chars,omitempty"`
 	IsDefault     *bool   `json:"is_default,omitempty"`
 	OwnerId       *string `json:"owner_id,omitempty"`
 	RoleKey       *string `json:"role_key,omitempty"`
 	SchemaVersion *int    `json:"schema_version,omitempty"`
 	Sha256        *string `json:"sha256,omitempty"`
-	Size          *int    `json:"size,omitempty"`
-	TaskType      *string `json:"task_type,omitempty"`
+
+	// SizeChars Size of the RESULTING document in CHARACTERS (Unicode code points) — the same unit as cap_chars. Named `size` until 2026-07-31, when the owner ruled a size field must carry its unit in its name.
+	SizeChars *int    `json:"size_chars,omitempty"`
+	TaskType  *string `json:"task_type,omitempty"`
 }
 
 // LessonsReplaceDTO Whole-doc replace of a lessons doc (§3.4 #28): “{text}“. “text“ is REQUIRED — a whole-doc replace must never infer "empty" from a missing key (T-2d99). “allow_shrink“ (default false) must be set explicitly to replace existing content with an empty doc — the r-76 wipe-guard posture.
@@ -1431,7 +1441,9 @@ type SetPasswordDTO struct {
 // `owner_name` — the owner's display nickname ("" = unset). `display_theme` /
 // `display_language` — the owner's cockpit visual prefs ("" = unset).
 // `display_wide` — whether the cockpit uses the wide layout (default false =
-// the narrow centred column).
+// the narrow centred column). `doc_cap_chars` — the size cap on the
+// accumulating context documents (a role's lessons doc; a task manual's
+// learnings and sop_md), in CHARACTERS (Unicode code points), default 10000.
 type SettingsDTO struct {
 	// CodexCompactionThreshold Codex context-compaction threshold, 1 through 10.
 	CodexCompactionThreshold *int `json:"codex_compaction_threshold,omitempty"`
@@ -1447,7 +1459,10 @@ type SettingsDTO struct {
 
 	// DisplayWide Whether the cockpit uses the WIDE layout — the centred ~1040px content column is lifted, the side gutters stay (T-756f). false (the default) = the narrow centred column, the shipped look. Same dual-layer contract as display_theme: the frontend keeps a localStorage cache for the pre-auth paint and reconciles this server value in at login as the cross-device source of truth.
 	DisplayWide *bool `json:"display_wide,omitempty"`
-	HandoverPct int   `json:"handover_pct"`
+
+	// DocCapChars The size cap on the accumulating context documents (a role's lessons doc; a task manual's learnings and sop_md), in CHARACTERS (Unicode code points — Chinese prose counts one per character), 10000 through 100000. An update may not push a doc past it; whatever is already over it is never truncated, but its next update may only come out shorter.
+	DocCapChars *int `json:"doc_cap_chars,omitempty"`
+	HandoverPct int  `json:"handover_pct"`
 
 	// MonitoringRefreshSeconds Minimum interval between monitoring and machine refreshes, in seconds (1 through 60).
 	MonitoringRefreshSeconds *int `json:"monitoring_refresh_seconds,omitempty"`
@@ -1478,7 +1493,10 @@ type SettingsDTO struct {
 // `updater_receive_beta` toggles whether the GitHub-release update check also
 // admits prereleases; `updater_auto_update` toggles unattended background
 // self-upgrade to the newest admissible release (both booleans, default false;
-// the manual upgrade endpoint is unaffected).
+// the manual upgrade endpoint is unaffected). `doc_cap_chars` MUST be
+// 10000..100000 — the floor equals the shipped default, so the context-document
+// cap can only ever be RAISED (owner ruling 2026-07-31): lowering it would turn
+// documents that are legal today into shrink-only ones.
 type SettingsUpdateDTO struct {
 	// CodexCompactionThreshold Codex context-compaction threshold, 1 through 10.
 	CodexCompactionThreshold *int `json:"codex_compaction_threshold,omitempty"`
@@ -1494,7 +1512,10 @@ type SettingsUpdateDTO struct {
 
 	// DisplayWide Turn the WIDE cockpit layout on/off (T-756f) — true lifts the centred ~1040px content column (the side gutters stay), false restores it. A plain boolean with no unset state: omit the field to leave it unchanged.
 	DisplayWide *bool `json:"display_wide,omitempty"`
-	HandoverPct *int  `json:"handover_pct,omitempty"`
+
+	// DocCapChars The size cap on the accumulating context documents (lessons, task-manual learnings and sop_md), in CHARACTERS (Unicode code points). Must be 10000 through 100000.
+	DocCapChars *int `json:"doc_cap_chars,omitempty"`
+	HandoverPct *int `json:"handover_pct,omitempty"`
 
 	// MonitoringRefreshSeconds Minimum interval between monitoring and machine refreshes, in seconds. Must be 1 through 60.
 	MonitoringRefreshSeconds *int `json:"monitoring_refresh_seconds,omitempty"`
@@ -1639,12 +1660,17 @@ type TaskLearningsPatchDTO struct {
 	Edits       []LessonsEditDTO `json:"edits"`
 }
 
-// TaskLearningsPatchResultDTO Receipt of a task-learnings PATCH (MCP “patch_task_learnings“). “size“ (UTF-8 bytes) and “sha256“ (hex) are lightweight verification anchors over the RESULTING learnings text, so the caller can confirm the write landed without re-reading the full doc. “applied_edits“ is the number of edits that ACTUALLY changed the doc (a no-op append/replace does not count), so "0 applied" is expressible and a silent no-op cannot masquerade as success.
+// TaskLearningsPatchResultDTO Receipt of a task-learnings PATCH (MCP “patch_task_learnings“). “size“ (CHARACTERS — Unicode code points, the SAME unit as the “doc_cap_chars“ cap the write is judged against; it counted UTF-8 BYTES until 2026-07-31, when the owner ruled the receipt must speak the cap's unit) and “sha256“ (hex) are lightweight verification anchors over the RESULTING learnings text, so the caller can confirm the write landed without re-reading the full doc. “applied_edits“ is the number of edits that ACTUALLY changed the doc (a no-op append/replace does not count), so "0 applied" is expressible and a silent no-op cannot masquerade as success.
 type TaskLearningsPatchResultDTO struct {
-	AppliedEdits *int    `json:"applied_edits,omitempty"`
-	Sha256       *string `json:"sha256,omitempty"`
-	Size         *int    `json:"size,omitempty"`
-	TypeKey      *string `json:"type_key,omitempty"`
+	AppliedEdits *int `json:"applied_edits,omitempty"`
+
+	// CapChars The document size cap in force when this write was judged, in CHARACTERS (the doc_cap_chars setting). Returned so a caller can see its remaining budget without a second request — the cap is adjustable and agents cannot read the settings surface.
+	CapChars *int    `json:"cap_chars,omitempty"`
+	Sha256   *string `json:"sha256,omitempty"`
+
+	// SizeChars Size of the RESULTING document in CHARACTERS (Unicode code points) — the same unit as cap_chars. Named `size` until 2026-07-31, when the owner ruled a size field must carry its unit in its name.
+	SizeChars *int    `json:"size_chars,omitempty"`
+	TypeKey   *string `json:"type_key,omitempty"`
 }
 
 // TaskLearningsReplaceDTO Whole-doc replace of a type's learnings (MCP “write_task_learnings“ — the agent's task-close write-back; the replace_lessons shape). “text“ is REQUIRED — a whole-doc replace must never infer "empty" from a missing key (T-2d99). “allow_shrink“ (default false) must be set explicitly to replace existing content with an empty doc — the r-76 wipe-guard posture.
@@ -1692,14 +1718,23 @@ type TaskManualCreateDTO struct {
 
 // TaskManualDTO One task manual (任務手冊 — a task type / playbook): purpose (Q1), input fields (Q2; is_key fields form the dedupe identity key), the SOP markdown (Q3 — the plan blueprint), the accumulated learnings, and the type's executor assignee setting ({} = unset). An outsource assignee is {"kind":"outsource","runtime":"claude|codex","model":…,"effort":…,"copies":N,"machine":…}; absent runtime means claude. `copies` is the per-type parallel-worker cap — an integer >= 1, or 0 = 無限 (UNLIMITED: no per-type cap; the global outsource_max_parallel still applies); `machine` is the machine the type's workers boot on — a machine id that must resolve to a real machine; absent means the type names none. A machine that is offline or lacks the selected runtime at spawn time is NOT substituted: nothing is dispatched and the worker row carries the reason (last_op_reason).
 type TaskManualDTO struct {
-	Assignee    map[string]interface{} `json:"assignee"`
-	DisplayName string                 `json:"display_name"`
-	Fields      []TaskManualFieldDTO   `json:"fields"`
-	Learnings   *string                `json:"learnings,omitempty"`
-	Purpose     *string                `json:"purpose,omitempty"`
-	SopMd       *string                `json:"sop_md,omitempty"`
-	TypeKey     string                 `json:"type_key"`
-	UpdatedTs   *float64               `json:"updated_ts,omitempty"`
+	Assignee map[string]interface{} `json:"assignee"`
+
+	// CapChars The document size cap now in force, in CHARACTERS (the doc_cap_chars setting). Served on the READ face so an agent can size an edit BEFORE writing it.
+	CapChars    *int                 `json:"cap_chars,omitempty"`
+	DisplayName string               `json:"display_name"`
+	Fields      []TaskManualFieldDTO `json:"fields"`
+	Learnings   *string              `json:"learnings,omitempty"`
+
+	// LearningsChars Size of `learnings` in CHARACTERS. Reported PER CAPPED DOCUMENT rather than as one total, because the cap applies to each of learnings and sop_md separately. Carried on the light ?view=list projection too, where the bulky text itself is omitted but its size is not.
+	LearningsChars *int    `json:"learnings_chars,omitempty"`
+	Purpose        *string `json:"purpose,omitempty"`
+	SopMd          *string `json:"sop_md,omitempty"`
+
+	// SopMdChars Size of `sop_md` in CHARACTERS. See learnings_chars.
+	SopMdChars *int     `json:"sop_md_chars,omitempty"`
+	TypeKey    string   `json:"type_key"`
+	UpdatedTs  *float64 `json:"updated_ts,omitempty"`
 }
 
 // TaskManualDeleteResultDTO Manual delete receipt (open tasks of the type → 409).

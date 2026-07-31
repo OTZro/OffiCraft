@@ -104,8 +104,8 @@ func TestDocCapBlocked_MatchesTheSharedTable(t *testing.T) {
 	rows, cap := loadDocCapCases(t)
 
 	// The threshold itself is on the table, so 10000 is not a third copy.
-	if contextDocMaxChars != cap {
-		t.Errorf("contextDocMaxChars = %d, shared table says %d — the two implementations are now capping at different sizes", contextDocMaxChars, cap)
+	if contextDocMaxCharsDefault != cap {
+		t.Errorf("contextDocMaxCharsDefault = %d, shared table says %d — the two implementations are now capping at different sizes", contextDocMaxCharsDefault, cap)
 	}
 
 	sawMultiByte := false
@@ -115,7 +115,7 @@ func TestDocCapBlocked_MatchesTheSharedTable(t *testing.T) {
 		}
 		before := strings.Repeat(r.fill, r.before)
 		after := strings.Repeat(r.fill, r.after)
-		if got := DocCapBlocked(before, after); got != r.blocked {
+		if got := DocCapBlocked(cap, before, after); got != r.blocked {
 			t.Errorf("%s:%d %s: DocCapBlocked(before=%d×%q, after=%d×%q) = %v, table says %v — server/ocserverd has drifted from the shared rule (the cockpit's frontend/src/api/docCap.ts copy still follows the table, so the two now disagree about which revisions are restorable)",
 				docCapCasesPath, r.line, r.name, r.before, r.fill, r.after, r.fill, got, r.blocked)
 		}

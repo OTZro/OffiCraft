@@ -260,6 +260,17 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 			"outsource_max_parallel must be between -1 and 20 (-1 = unlimited)")
 		return
 	}
+	// The floor is the shipped default, so this knob only ever RAISES the cap
+	// (owner 2026-07-31). Lowering it would strand every document that is legal
+	// today in shrink-only mode — the refusal says so rather than making the
+	// caller infer it from a bare range.
+	if body.DocCapChars != nil &&
+		(*body.DocCapChars < minDocCapChars || *body.DocCapChars > maxDocCapChars) {
+		writeError(w, http.StatusUnprocessableEntity,
+			fmt.Sprintf("doc_cap_chars must be between %d and %d characters — the floor is the shipped default, so the document cap can only be raised, never lowered",
+				minDocCapChars, maxDocCapChars))
+		return
+	}
 	var orgName string
 	if body.OrgName != nil {
 		orgName = strings.TrimSpace(*body.OrgName)
@@ -365,6 +376,15 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 			return
 		}
 		s.outsourceMaxParallel = *body.OutsourceMaxParallel
+	}
+	if body.DocCapChars != nil {
+		if err := s.dal.PutSetting(settingDocCapChars,
+			strconv.Itoa(*body.DocCapChars)); err != nil {
+			s.settingsMu.Unlock()
+			internalError(w, err)
+			return
+		}
+		s.docCapChars = *body.DocCapChars
 	}
 	// A channel flip changes WHO "latest" is (official-only vs prereleases
 	// too) — it re-kicks the GitHub check so the software-update card follows
@@ -493,6 +513,7 @@ func (s *apiServer) settingsView() settingsDTO {
 		CodexCompactionThreshold: s.codexCompactionThreshold,
 		MonitoringRefreshSeconds: s.monitoringRefreshSeconds,
 		OutsourceMaxParallel:     s.outsourceMaxParallel,
+		DocCapChars:              s.docCapChars,
 		UpdaterReceiveBeta:       s.updaterReceiveBeta,
 		UpdaterAutoUpdate:        s.updaterAutoUpdate,
 		OrgName:                  s.orgName,

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // seedLessonsOverlay writes a known overlay doc directly through the DAL so
@@ -73,8 +74,8 @@ func TestPatchLessonsUniqueAnchorReplaceAndAnchors(t *testing.T) {
 	if got, _ := data["sha256"].(string); got != hex.EncodeToString(sum[:]) {
 		t.Fatalf("sha256 anchor mismatch: %v", data["sha256"])
 	}
-	if got, _ := data["size"].(float64); int(got) != len(want) {
-		t.Fatalf("size anchor mismatch: got %v want %d", data["size"], len(want))
+	if got, _ := data["size_chars"].(float64); int(got) != utf8.RuneCountInString(want) {
+		t.Fatalf("size_chars anchor mismatch: got %v want %d", data["size_chars"], utf8.RuneCountInString(want))
 	}
 	if got, _ := data["applied_edits"].(float64); int(got) != 1 {
 		t.Fatalf("applied_edits mismatch: %v", data["applied_edits"])
@@ -299,11 +300,17 @@ func TestPatchLessonsReceiptWireShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, key := range []string{
-		"role_key", "task_type", "applied_edits", "size", "sha256",
-		"owner_id", "schema_version", "is_default",
+		"role_key", "task_type", "applied_edits", "size_chars", "cap_chars",
+		"sha256", "owner_id", "schema_version", "is_default",
 	} {
 		if !strings.Contains(string(raw), `"`+key+`"`) {
 			t.Fatalf("receipt missing wire key %q: %s", key, raw)
 		}
+	}
+	// The old unit-less name is GONE, not merely joined by a new one (T-3aeb:
+	// the owner ruled a size field must carry its unit in its name). Without
+	// this, keeping `size` alongside `size_chars` would pass the loop above.
+	if strings.Contains(string(raw), `"size"`) {
+		t.Fatalf("the unit-less `size` key must be gone, not kept alongside size_chars: %s", raw)
 	}
 }
