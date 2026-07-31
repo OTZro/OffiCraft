@@ -3755,6 +3755,18 @@ export interface components {
          */
         LessonsDTO: {
             /**
+             * Cap Chars
+             * @description The document size cap now in force, in CHARACTERS (the doc_cap_chars setting). Served on the READ face so an agent can size an edit BEFORE writing it — the alternative is discovering the limit by being refused, and the settings surface is admin-only.
+             * @default 0
+             */
+            cap_chars: number;
+            /**
+             * Size Chars
+             * @description Size of `text` in CHARACTERS (Unicode code points) — the same unit as cap_chars.
+             * @default 0
+             */
+            size_chars: number;
+            /**
              * Is Default
              * @default true
              */
@@ -3816,7 +3828,7 @@ export interface components {
         };
         /**
          * LessonsPatchResultDTO
-         * @description Receipt of a lessons PATCH (§3.4 #28b). ``size`` (UTF-8 bytes) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING doc text, so the caller can confirm the write landed without re-reading the full doc.
+         * @description Receipt of a lessons PATCH (§3.4 #28b). ``size`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc_cap_chars`` cap the write is judged against) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING doc text, so the caller can confirm the write landed without re-reading the full doc. ``size`` counted UTF-8 BYTES until 2026-07-31, when the owner ruled the receipt must speak the cap's unit.
          */
         LessonsPatchResultDTO: {
             /**
@@ -3850,10 +3862,17 @@ export interface components {
              */
             sha256: string;
             /**
-             * Size
+             * Cap Chars
+             * @description The document size cap in force when this write was judged, in CHARACTERS (the doc_cap_chars setting). Returned so a caller can see its remaining budget without a second request — the cap is adjustable and agents cannot read the settings surface.
              * @default 0
              */
-            size: number;
+            cap_chars: number;
+            /**
+             * Size Chars
+             * @description Size of the RESULTING document in CHARACTERS (Unicode code points) — the same unit as cap_chars. Named `size` until 2026-07-31, when the owner ruled a size field must carry its unit in its name.
+             * @default 0
+             */
+            size_chars: number;
             /**
              * Task Type
              * @default
@@ -5473,7 +5492,9 @@ export interface components {
          *     `owner_name` — the owner's display nickname ("" = unset). `display_theme` /
          *     `display_language` — the owner's cockpit visual prefs ("" = unset).
          *     `display_wide` — whether the cockpit uses the wide layout (default false =
-         *     the narrow centred column).
+         *     the narrow centred column). `doc_cap_chars` — the size cap on the
+         *     accumulating context documents (a role's lessons doc; a task manual's
+         *     learnings and sop_md), in CHARACTERS (Unicode code points), default 10000.
          */
         SettingsDTO: {
             /**
@@ -5506,6 +5527,12 @@ export interface components {
              * @default []
              */
             custom_themes: components["schemas"]["ThemeBundleDTO"][];
+            /**
+             * Doc Cap Chars
+             * @description The size cap on the accumulating context documents (a role's lessons doc; a task manual's learnings and sop_md), in CHARACTERS (Unicode code points — Chinese prose counts one per character), 10000 through 100000. An update may not push a doc past it; whatever is already over it is never truncated, but its next update may only come out shorter.
+             * @default 10000
+             */
+            doc_cap_chars: number;
             /** Handover Pct */
             handover_pct: number;
             /**
@@ -5563,7 +5590,10 @@ export interface components {
          *     `updater_receive_beta` toggles whether the GitHub-release update check also
          *     admits prereleases; `updater_auto_update` toggles unattended background
          *     self-upgrade to the newest admissible release (both booleans, default false;
-         *     the manual upgrade endpoint is unaffected).
+         *     the manual upgrade endpoint is unaffected). `doc_cap_chars` MUST be
+         *     10000..100000 — the floor equals the shipped default, so the context-document
+         *     cap can only ever be RAISED (owner ruling 2026-07-31): lowering it would turn
+         *     documents that are legal today into shrink-only ones.
          */
         SettingsUpdateDTO: {
             /**
@@ -5571,6 +5601,11 @@ export interface components {
              * @description Codex context-compaction threshold, 1 through 10.
              */
             codex_compaction_threshold?: number | null;
+            /**
+             * Doc Cap Chars
+             * @description The size cap on the accumulating context documents (lessons, task-manual learnings and sop_md), in CHARACTERS (Unicode code points). Must be 10000 through 100000.
+             */
+            doc_cap_chars?: number | null;
             /**
              * Display Language
              * @description The owner's cockpit language (T-0b41-p2) — trimmed; "" clears it back to unset. Must be one of zh, en (or ""); anything else is a 422.
@@ -5936,7 +5971,7 @@ export interface components {
         };
         /**
          * TaskLearningsPatchResultDTO
-         * @description Receipt of a task-learnings PATCH (MCP ``patch_task_learnings``). ``size`` (UTF-8 bytes) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING learnings text, so the caller can confirm the write landed without re-reading the full doc. ``applied_edits`` is the number of edits that ACTUALLY changed the doc (a no-op append/replace does not count), so "0 applied" is expressible and a silent no-op cannot masquerade as success.
+         * @description Receipt of a task-learnings PATCH (MCP ``patch_task_learnings``). ``size`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc_cap_chars`` cap the write is judged against; it counted UTF-8 BYTES until 2026-07-31, when the owner ruled the receipt must speak the cap's unit) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING learnings text, so the caller can confirm the write landed without re-reading the full doc. ``applied_edits`` is the number of edits that ACTUALLY changed the doc (a no-op append/replace does not count), so "0 applied" is expressible and a silent no-op cannot masquerade as success.
          */
         TaskLearningsPatchResultDTO: {
             /**
@@ -5950,10 +5985,17 @@ export interface components {
              */
             sha256: string;
             /**
-             * Size
+             * Cap Chars
+             * @description The document size cap in force when this write was judged, in CHARACTERS (the doc_cap_chars setting). Returned so a caller can see its remaining budget without a second request — the cap is adjustable and agents cannot read the settings surface.
              * @default 0
              */
-            size: number;
+            cap_chars: number;
+            /**
+             * Size Chars
+             * @description Size of the RESULTING document in CHARACTERS (Unicode code points) — the same unit as cap_chars. Named `size` until 2026-07-31, when the owner ruled a size field must carry its unit in its name.
+             * @default 0
+             */
+            size_chars: number;
             /**
              * Type Key
              * @default
@@ -6095,6 +6137,24 @@ export interface components {
          * @description One task manual (任務手冊 — a task type / playbook): purpose (Q1), input fields (Q2; is_key fields form the dedupe identity key), the SOP markdown (Q3 — the plan blueprint), the accumulated learnings, and the type's executor assignee setting ({} = unset). An outsource assignee is {"kind":"outsource","runtime":"claude|codex","model":…,"effort":…,"copies":N,"machine":…}; absent runtime means claude. `copies` is the per-type parallel-worker cap — an integer >= 1, or 0 = 無限 (UNLIMITED: no per-type cap; the global outsource_max_parallel still applies); `machine` is the machine the type's workers boot on — a machine id that must resolve to a real machine; absent means the type names none. A machine that is offline or lacks the selected runtime at spawn time is NOT substituted: nothing is dispatched and the worker row carries the reason (last_op_reason).
          */
         TaskManualDTO: {
+            /**
+             * Cap Chars
+             * @description The document size cap now in force, in CHARACTERS (the doc_cap_chars setting). Served on the READ face so an agent can size an edit BEFORE writing it.
+             * @default 0
+             */
+            cap_chars: number;
+            /**
+             * Learnings Chars
+             * @description Size of `learnings` in CHARACTERS. Reported PER CAPPED DOCUMENT rather than as one total, because the cap applies to each of learnings and sop_md separately. Carried on the light ?view=list projection too, where the bulky text itself is omitted but its size is not.
+             * @default 0
+             */
+            learnings_chars: number;
+            /**
+             * Sop Md Chars
+             * @description Size of `sop_md` in CHARACTERS. See learnings_chars.
+             * @default 0
+             */
+            sop_md_chars: number;
             /** Assignee */
             assignee: {
                 [key: string]: unknown;

@@ -18,7 +18,7 @@ import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
 import { DocumentHistoryModal } from "./DocumentHistoryModal";
 import { ApiError } from "../api/errors";
-import { DOC_CAP_CHARS } from "../api/docCap";
+import { DOC_CAP_CHARS_DEFAULT } from "../api/docCap";
 import type { DocumentHistoryView, DocumentKind } from "../types";
 
 const s = zh.settings;
@@ -60,6 +60,7 @@ function open(opts: {
         version={version(content)}
         actorLine="Mira（owner-1）"
         currentContent={currentContent}
+        docCapChars={DOC_CAP_CHARS_DEFAULT}
         onBack={onBack}
         onRestore={onRestore}
         onClose={onClose}
@@ -207,7 +208,7 @@ describe("DocumentHistoryModal", () => {
     // legacy four-field bundle restores both and is still refused — the
     // contrast is what makes this a statement about scope rather than about
     // this one fixture.
-    const overCap = "字".repeat(DOC_CAP_CHARS + 1);
+    const overCap = "字".repeat(DOC_CAP_CHARS_DEFAULT + 1);
     const content = { sop_md: "短 SOP", learnings: overCap };
     const current = { sop_md: "短 SOP", learnings: "短" };
 
@@ -284,7 +285,7 @@ describe("DocumentHistoryModal", () => {
     // Over the cap AND no shorter than what is stored now — the shape the
     // server refuses with a 400. The current content must be SHORTER than the
     // revision for the rule to bite at all.
-    const overCap = "字".repeat(DOC_CAP_CHARS + 1);
+    const overCap = "字".repeat(DOC_CAP_CHARS_DEFAULT + 1);
     const utils = open({
       content: { text: overCap },
       currentContent: { text: "短" },
@@ -297,7 +298,7 @@ describe("DocumentHistoryModal", () => {
     ).toBeTruthy();
     const reason = utils.getByTestId("doc-history-modal-blocked");
     expect(reason.textContent).toContain(s.historyField.text);
-    expect(reason.textContent).toContain(String(DOC_CAP_CHARS));
+    expect(reason.textContent).toContain(String(DOC_CAP_CHARS_DEFAULT));
 
     const restore = utils.getByTestId(
       "doc-history-modal-restore"

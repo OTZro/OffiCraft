@@ -190,11 +190,21 @@ T-98f4 只做了外包 worker。正職這邊三個動詞各走各的,實測(2026
 
 🔴 **日後要盤點孤兒歷史列時的誤報坑**：判「這個 `document_key` 的文件還在不在」**不能只看 `role_def` 有沒有那一列**——**seed 角色在沒被自訂過之前根本沒有 `role_def` 列**（overlay 模型：沒有 overlay ＝ 用 seed），於是 seed 角色的 lessons 歷史會被**整批誤判成孤兒**。判準要併上 seed 角色清單，來源是 `assets.go` 的 `seedRoleKeys()`（不要手抄一份會過期的名單）。**一個會把正常資料標成待刪的盤點查詢，比沒有盤點查詢危險。**
 
-## 累積型 context 文件的上限(T-3351,`domain.go DocCapBlocked`)
+## 累積型 context 文件的上限(T-3351 + T-3aeb,`domain.go DocCapBlocked`)
 
 owner 2026-07-27 兩句話 + 一個數字:「更新的時候不能塞超過這個大小」「已經超出的我們不 truncate 但是下次更新他只能縮小」,上限 **10,000**。
 
-- **單位是 rune,不是 byte**(`utf8.RuneCountInString`,對齊 `chatBodyMaxChars` 的口徑)。owner 挑 10,000 時看的分佈是 SQLite `length()`=**字元**;這些文件多為中文散文(2.2–3 bytes/字),拿 `len()` 當上限實際只剩約 3,300–4,500 個中文字,**比 owner 拍板的數字嚴格一倍以上**。⚠️ patch receipt 的 `size` 欄仍是 `len()`=**bytes**(凍結 wire 欄,不動),兩者單位不同是刻意的——所以拒絕訊息一律講 "chars"。
+🔴 **T-3aeb(owner 2026-07-31):那個數字不再是常數,是設定 `doc.cap_chars`(預設 10,000,範圍 10,000..100,000)。** 三行語意一個字沒動,動的只有「上限從哪裡來」:
+- `contextDocMaxChars` 這個常數**已經不存在**,取而代之的是 `contextDocMaxCharsDefault`(只是預設值)。`DocCapBlocked` 與 `docCapRefusal` 現在**第一個參數就是 cap**——刻意不做成 package 變數或 `*apiServer` 方法:參數化之後,**漏改一個呼叫點是編譯錯誤**,而那正是這種「同一個值散在 9 個地方」的改動唯一可靠的守衛。
+- 每個呼叫點在 **request time** 讀 `s.docCap()`(RLock),所以 PATCH 完下一次寫入就生效、免重啟;不快取、沒有第二份會漂的副本。`update_task_manual` 那個 handler **一次讀、兩個欄位共用**——兩次讀可能跨過一次並行 PATCH,讓 sop_md 與 learnings 被兩個不同的上限審判。
+- 🔴 **範圍的下限等於預設值,這是設計不是巧合**:owner 明示這個旋鈕只能**調高**。調低會讓今天合法的文件立刻變成 shrink-only(立案時實測:9 份手冊裡 2 份已超過一萬字、3 份在 8.6k~10k),所以 `minDocCapChars = contextDocMaxCharsDefault`,別「順手整理」成一個更小的數字。
+- **回應同時報「現在多少字／上限多少」(owner 2026-07-31 第二次裁定,卡 `rc-3800e090f5e1`)**:`size` 這個不帶單位的名字**已移除**,改名 `size_chars`,並在兩個讀取面與兩張回條都加上 `cap_chars`。理由是 owner 要「寫之前就知道自己多長」——設定面是 admin-only,**一般 agent 讀不到上限**,所以上限必須跟著文件本身送出去,否則唯一的學習途徑就是被拒絕。
+  - **手冊報兩個尺寸(`learnings_chars` / `sop_md_chars`)不是一個總和**:cap 是逐份套用的,一個合計數兩個問題都答不了。
+  - 🔴 **`?view=list` 這條輕量投影量的是「資料列」不是「被清空的 wire 欄位」**:它刻意不送 sop_md/learnings 的內文,若順手拿被清空的欄位去數就會回 0——**一個看起來像量測結果的 0,比誠實省略更糟**,而「哪一份手冊快到上限」正是列表視圖會問的問題。哨兵 `TestListViewOmitsTheTextButNotItsSize`(mutant:把兩個尺寸寫死 0 → 紅)。
+  - `newTaskManualDTO` / `newTaskManualListItemDTO` 改成**收 cap 參數**(同一個理由:漏改的呼叫點是編譯錯誤);列表 handler **整批只讀一次 cap**,免得同一份清單報出兩個不同的上限。
+- **前端那份鏡像也跟著吃設定**:`docCap.ts` 匯出的是 `DOC_CAP_CHARS_DEFAULT`,`docCapBlocked` / `docCapBlockedFields` 都收 cap;cap 還沒載到時**棄權不標記**(與 `current` 未載入同一個姿勢)。理由是方向性的:cap 只會被調高,拿預設值去判只可能**把 server 會接受的版本標成不可還原**——正是那個模組自己說「更糟」的那一種錯。
+
+- **單位是 rune,不是 byte**(`utf8.RuneCountInString`,對齊 `chatBodyMaxChars` 的口徑)。owner 挑 10,000 時看的分佈是 SQLite `length()`=**字元**;這些文件多為中文散文(2.2–3 bytes/字),拿 `len()` 當上限實際只剩約 3,300–4,500 個中文字,**比 owner 拍板的數字嚴格一倍以上**。⚠️ **T-3aeb(owner 2026-07-31)已把這條反轉:patch receipt 的 `size` 欄現在也是 rune**。舊文寫「凍結 wire 欄,不動,兩者單位不同是刻意的」——owner 明示同一件事不該有兩個單位,親自推翻了那個決定(卡 `rc-33b88ed80212`,選項 ①)。動它之前先確認:實查當時全 repo **沒有任何** UI／CLI／conformance 依賴舊單位,而且**所有既有測試在兩種單位下都會過**(夾具全是 ASCII),所以那次改動本身在 CI 上是隱形的——鑑別力靠新加的多位元組夾具,不是靠既有測試。
 - **三行語意(邊界含在內)**:新內容 ≤ L → 過;> L 且 **< 舊內容** → 過(允許超標者繼續往下縮);> L 且 **≥ 舊內容** → 拒,**含等長**(沒變短就不算收斂,不然超標文件可以永遠整份重寫)。**既有超標內容一律不動、不截斷**——這條規則只擋 WRITE。第一次寫(無舊內容)只看 ≤ L。
 - **比的是「caller 讀到、正在編輯的那份」**:lessons 用 `foldLessonsDTO` 的 overlay ⊕ seed 折疊結果,手冊用存的欄位。**刻意與 `LessonsShrinkBlocked` 用同一個 `before`**,兩道閘因此不可能對「現在的文件是什麼」各說各話。(`seeds/lessons.md` 實測 **40 bytes = 14 runes**——這張票的主旨就是 rune≠byte,所以兩個單位都寫明、不含糊講「字元」;不論用哪個尺都遠小於 L,所以 seed role 的第一次寫實務上就是「只看 ≤ L」,fold-vs-overlay 在現行 seed 大小下行為不可區分。)
 - **五個寫入面全覆蓋**:`replace_lessons` / `patch_lessons` / `write_task_learnings` / `patch_task_learnings` / **`update_task_manual`**。最後一個非補不可:它是 `sop_md` 的**唯一**寫入面,也是 learnings 的**第二個**寫入面(欄名 `learnings`,與 `write_task_learnings` 的 `text` 是同一份文件)——只擋前四個等於留一扇沒上鎖的門。**patch 面受檢的是「改完之後的結果」,不是 patch 自己的大小**(小 patch 疊上大文件正是把它撐大的東西)。
@@ -239,6 +249,34 @@ owner 兩句裁定:「理想上應該是同一支 API 同時取得所有 AI sess
 - ⚠️ **已知不對稱**:`sessions` 的 `machine` 用 `observedWorkerHost`(與同一份回應的 machines fold 同一個運算式,兩處不可能各說各話),而**外包詳情面板**走 `projectWorker`、會先看 in-memory 的 dispatch target ⇒ 剛派出去還沒連上的 worker,面板顯示目標機器、會話列顯示 `""`。誠實留白 vs 顯示意圖,兩處的問法不同。
 - **agent 端的來源見 `cli/CLAUDE.md` 的 session effort 條**:effort 取 statusLine payload 的 `effort.level`(**live**,跟得上中途 `/effort`),**不是** `OC_EFFORT` 那個啟動意圖,而且**沒有 fallback**。
 - 哨兵:`TestGetMonitoring_SessionsListStaffAndOutsourceAlike` / `_WorkerSessionReadsItsOwnTelemetry` / `_SilentWorkerSessionShowsHonestBlanks`(設定了 opus/medium 卻沒回報 ⇒ 全空且**仍然列出**)/ `_ReleasedWorkerIsNotASession`(連帶釘住「拿掉它的列不可以拿掉它的錢」)/ `_SessionEffortRoundTrips`(ingest→GET 往返;這條路先前**零覆蓋**,正是 effort 從沒被送過卻沒有任何東西會紅的原因)。
+## 收據死線 receipt_missing(T-b36a step 3;`receipt_watch.go`)
+warden 的 start/stop 收據(`command_result`)是「這個 op 真的執行了」的**唯一**證據,而
+warden 端那個 POST 是 best-effort:失敗的回傳值被 start/stop 呼叫端丟掉,於是**整個失敗事實
+不存在於任何地方**。座艙上「op 跑完了、只是我們沒收到回報」與「一切正常」長得一模一樣。
+- **只有被欠收據的那一方能觀察到收據缺席**——warden 沒辦法回報「我的回報失敗了」,那條線本身
+  就是壞的那條。所以死線在 server:frame **被 warden 接走之後**(`armReceiptWatch`,只在
+  enqueue 成功後掛;沒送出去的 frame 由既有 dispatch stamp 自己解釋,不該賴到收據通道頭上)
+  起算 `receiptDeadlineSecs`(90s),cadence tick 開頭 `sweepLapsedReceipts` 掃過期,把
+  `receipt_missing: <人話>` 寫進 member / worker 的 `last_op*`——**座艙「最近操作」既有的讀端**
+  (`mappers.ts` → `MemberDetailPanel` → `AgentDetailPanel` 的 `!lastOpOk && lastOpReason`)。
+  🔴 因此 stamp **必須** `last_op_ok=false`,ok=true 的 reason 在那個面板上根本不會被畫出來。
+- **90s 的來歷是 warden 自己的預算推導,不是量測**:`claudeProbeBudget` 20s + `nudgeSettle` 1s
+  (spawn)或 ~5s kill ladder(stop)+ `commandReportTimeout` 5s + 一個 30s tick 的掃描粒度
+  ≈ 56s,90s 再多留一個 tick。**frame→receipt 的實際分佈至今沒有端到端量測**(warden log 只有
+  warden 側時鐘,server 側 fold 不留 log),所以這裡寫的是推導、不是數據——要改成量測值請先補量測。
+- **解除死線的是「收據**抵達**」,不是「fold 成功寫進去」**:`noteReceiptArrived` 掛在
+  `foldCommandResult` **最前面**,在任何 early return 之前。no-op stop 收據(T-9adc)刻意不 fold,
+  身分掃描又會把它廣播給每一台 warden——綁在 fold 成功上會讓這些收到且讀過的收據全被判成失蹤。
+- 訊息刻意說 **UNKNOWN 而不是 failed**:沒收到收據不代表 op 失敗,可能是 SSE 下行半路死、可能
+  op 跑完 POST 被拒。寫成「失敗」會讓 owner 對一個可能已經在跑的 member 再開一槍。
+- 每次 dispatch **只 stamp 一次**(lapsed watch 被第一次 sweep 消費掉):否則每 30s 重寫
+  `last_op_at` + 噴一個 SSE delta,一次掉收據會變成永久事件流。
+- **繼承已知的單槽覆蓋**(`worker_spawn.go` spawnBlockedReasonCodes 上方那段 KNOWN LIMITATION):
+  `receipt_missing` 與其他 reason 共用同一組 `last_op*`,新的會蓋掉舊的。`receipt_missing`
+  **刻意不列入** `spawnBlockedReasonCodes`——它跟 `wake_timeout` 同類,是 dispatch 層診斷,
+  下一次 START 不該把「上一次沒人回話」洗掉。
+- **UNINSTALL 不掛死線**:它的收據在 warden 端本來就是硬條件(沒拿到 2xx 就不自殺),而且
+  reconcile 會一直重發——它的失敗模式是重試,不是安靜。
 
 ## 已知邊界(誠實列,別當成熟功能用)
 - **config 預設路徑是 CWD-relative `oc.toml`**(binary 沒有 source-path 可錨 repo root);部署正解走 `$OC_CONFIG`。

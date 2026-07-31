@@ -13,7 +13,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { DOC_CAP_CHARS, docCapBlocked, runeLength } from "./docCap";
+import { DOC_CAP_CHARS_DEFAULT, docCapBlocked, runeLength } from "./docCap";
 
 const CASES_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -87,7 +87,7 @@ const { rows, cap } = loadCases();
 describe("docCapBlocked · the shared cap table", () => {
   it("caps at the size the shared table names", () => {
     // The threshold is ON the table, so 10000 is not a third copy of itself.
-    expect(DOC_CAP_CHARS).toBe(cap);
+    expect(DOC_CAP_CHARS_DEFAULT).toBe(cap);
   });
 
   it.each(rows.map((r) => [r.name, r] as const))(
@@ -98,7 +98,7 @@ describe("docCapBlocked · the shared cap table", () => {
       // A drift here means the cockpit and server/ocserverd's DocCapBlocked now
       // disagree about which revisions are restorable — the cockpit would grey
       // out a good revision, or offer one the server refuses with a 400.
-      expect(docCapBlocked(before, after)).toBe(r.blocked);
+      expect(docCapBlocked(cap, before, after)).toBe(r.blocked);
     }
   );
 

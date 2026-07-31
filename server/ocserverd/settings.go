@@ -60,6 +60,11 @@ const (
 	// concurrently live (assigned + active) outsource workers — the Phase 2
 	// assignment scheduler's admission knob; member tasks never count (H7).
 	settingOutsourceMaxParallel = "task.outsource_max_parallel"
+	// settingDocCapChars (T-3aeb, owner 2026-07-31) is the size cap on the
+	// accumulating context documents — see contextDocMaxCharsDefault in
+	// domain.go for the rule it feeds. Adjustable so the owner can raise it
+	// without a release; the floor equals the default, so it only ever goes UP.
+	settingDocCapChars = "doc.cap_chars"
 	// The retired updater.url / updater.invite_code keys belonged to the
 	// removed ocupdaterd updater-server chain (updates now ship as GitHub
 	// Releases on pkyosx/OffiCraft — update_check.go). They are no longer
@@ -150,6 +155,7 @@ type authSettings struct {
 	codexCompactionThreshold int
 	monitoringRefreshSeconds int
 	outsourceMaxParallel     int              // task.outsource_max_parallel (default 3)
+	docCapChars              int              // doc.cap_chars (default contextDocMaxCharsDefault)
 	updaterReceiveBeta       bool             // updater.receive_beta (default false = official releases only)
 	updaterAutoUpdate        bool             // updater.auto_update (default false = manual upgrades only)
 	orgName                  string           // org.name ("" = never set → localized default in the topbar)
@@ -299,6 +305,23 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 				settingOutsourceMaxParallel, *v)
 		}
 		out.outsourceMaxParallel = n
+	}
+
+	// doc.cap_chars — range-checked at load like the other bounded integers, so
+	// a hand-edited DB row can never install a cap that the PATCH face would
+	// have refused. The floor is the default (owner 2026-07-31: the cap only
+	// ever goes up), so a stored value below it is corruption, not a downgrade.
+	out.docCapChars = contextDocMaxCharsDefault
+	if v, err := d.GetSetting(settingDocCapChars); err != nil {
+		return out, err
+	} else if v != nil {
+		n, err := strconv.Atoi(*v)
+		if err != nil || n < minDocCapChars || n > maxDocCapChars {
+			return out, fmt.Errorf(
+				"settings %s: must be %d..%d: %q",
+				settingDocCapChars, minDocCapChars, maxDocCapChars, *v)
+		}
+		out.docCapChars = n
 	}
 
 	getBool := func(key string, dst *bool) error {

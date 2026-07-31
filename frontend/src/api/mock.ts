@@ -969,6 +969,7 @@ function applyDocumentHistory(
         lessonsOverlays.delete(key);
       } else {
         lessonsOverlays.set(key, {
+          ...docSizeFields(content.text ?? ""),
           role_key: roleKey,
           task_type: taskType,
           text: content.text ?? "",
@@ -1039,6 +1040,8 @@ const DEFAULT_MOCK_SETTINGS = {
   monitoring_refresh_seconds: 5,
   // M3 global outsource cap — mirrors the server's code-side default (3).
   outsource_max_parallel: 3,
+  // T-3aeb document size cap — mirrors the server default (10000 characters).
+  doc_cap_chars: 10000,
   // The two software-update toggles — both OFF out of the box, mirroring the
   // server (updates come from GitHub Releases; there is no updater server to
   // configure any more).
@@ -1069,6 +1072,15 @@ const DEFAULT_MOCK_SETTINGS = {
     avatars?: { member?: string; outsource?: string };
   }[],
 };
+
+/** Mirror of the server's per-document size/cap reporting (T-3aeb). Runes, not
+ * UTF-16 units — same reason docCap.ts spells it [...s].length. */
+function docSizeFields(text: string) {
+  return {
+    size_chars: [...text].length,
+    cap_chars: mockServerSettings.doc_cap_chars,
+  };
+}
 let mockServerSettings = { ...DEFAULT_MOCK_SETTINGS };
 const MOCK_CLAIM_TOKEN = "mock-claim-token";
 const TOKEN_TTL_CHOICES = new Set([43200, 86400, 604800, 2592000]);
@@ -2893,6 +2905,19 @@ export const mockApi: Api = {
       );
     }
     if (
+      patch.docCapChars !== undefined &&
+      (patch.docCapChars < 10000 || patch.docCapChars > 100000)
+    ) {
+      // Server parity (T-3aeb): the floor IS the shipped default, so the
+      // document cap can only ever be raised.
+      throw new ApiError(
+        "http 422 for PATCH /api/settings",
+        422,
+        "validation_error",
+        "doc_cap_chars must be between 10000 and 100000 characters — the floor is the shipped default, so the document cap can only be raised, never lowered"
+      );
+    }
+    if (
       patch.orgName !== undefined &&
       [...patch.orgName.trim()].length > 80
     ) {
@@ -2972,6 +2997,9 @@ export const mockApi: Api = {
     }
     if (patch.outsourceMaxParallel !== undefined) {
       mockServerSettings.outsource_max_parallel = patch.outsourceMaxParallel;
+    }
+    if (patch.docCapChars !== undefined) {
+      mockServerSettings.doc_cap_chars = patch.docCapChars;
     }
     if (patch.updaterReceiveBeta !== undefined) {
       mockServerSettings.updater_receive_beta = patch.updaterReceiveBeta;
@@ -3314,6 +3342,7 @@ export const mockApi: Api = {
     // diverges (each role_key gets its own overlay slot).
     const overlay = lessonsOverlays.get(lessonsKey(roleKey, taskType));
     const wire: WireLessons = overlay ?? {
+      ...docSizeFields(SEED_LESSONS_MD),
       role_key: roleKey,
       task_type: taskType,
       text: SEED_LESSONS_MD,
@@ -3333,6 +3362,7 @@ export const mockApi: Api = {
     // owner-edited for THIS role_key only (a sibling role's doc is untouched).
     recordDocumentHistory("lessons", lessonsKey(roleKey, taskType));
     const wire: WireLessons = {
+      ...docSizeFields(text),
       role_key: roleKey,
       task_type: taskType,
       text,

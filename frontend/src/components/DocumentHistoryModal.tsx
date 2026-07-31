@@ -28,7 +28,7 @@
 import { useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import type { DocumentHistoryView, DocumentKind } from "../types";
-import { DOC_CAP_CHARS, docCapBlockedFields } from "../api/docCap";
+import { docCapBlockedFields } from "../api/docCap";
 import { ApiError } from "../api/errors";
 import { comparedFieldNames, documentFields } from "../lib/docHistoryFields";
 import { formatAbsolute } from "../lib/dateFormat";
@@ -52,6 +52,7 @@ export function DocumentHistoryModal({
   version,
   actorLine,
   currentContent,
+  docCapChars,
   onBack,
   onClose,
   onRestore,
@@ -68,6 +69,14 @@ export function DocumentHistoryModal({
    * still loading: the diff then says so instead of comparing against nothing,
    * and the cap verdict abstains exactly as it does on the list. */
   currentContent?: Record<string, string>;
+  /** The LIVE document size cap (the `doc_cap_chars` setting, T-3aeb) — not a
+   * constant on either side any more. Resolved by the host for the same reason
+   * `actorLine` is: a modal pulling its own copy would refetch the settings
+   * every time a row is clicked. `undefined` while it loads, which makes the
+   * cap verdict abstain rather than judge by the shipped default — the cap can
+   * only ever be RAISED, so the default can only ever mark a revision the
+   * server would have accepted. */
+  docCapChars?: number;
   /** Step back to the version LIST this reader was opened from (T-1f39, owner
    * 2026-07-31). Omitted where there is no list behind it. Distinct from
    * `onClose`, which leaves the history altogether: a reader you can only exit
@@ -97,7 +106,12 @@ export function DocumentHistoryModal({
   const fieldLabel = (name: string) =>
     (t.settings.historyField as Record<string, string>)[name] ?? name;
 
-  const blockedFields = docCapBlockedFields(kind, version.content, currentContent);
+  const blockedFields = docCapBlockedFields(
+    kind,
+    version.content,
+    currentContent,
+    docCapChars
+  );
   const blocked = blockedFields.length > 0;
   const fields = documentFields(kind, version.content);
   const compared = currentContent
@@ -261,7 +275,7 @@ export function DocumentHistoryModal({
           >
             {msg.docHistoryBlockedReason(
               blockedFields.map(fieldLabel),
-              DOC_CAP_CHARS
+              docCapChars ?? 0
             )}
           </div>
         )}

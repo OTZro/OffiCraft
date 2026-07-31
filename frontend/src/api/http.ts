@@ -1384,6 +1384,7 @@ export const httpApi: Api = {
       codex_compaction_threshold?: number;
       monitoring_refresh_seconds?: number;
       outsource_max_parallel?: number;
+      doc_cap_chars?: number;
       updater_receive_beta?: boolean;
       updater_auto_update?: boolean;
       org_name?: string;
@@ -1403,6 +1404,9 @@ export const httpApi: Api = {
     if (patch.monitoringRefreshSeconds !== undefined) body.monitoring_refresh_seconds = patch.monitoringRefreshSeconds;
     if (patch.outsourceMaxParallel !== undefined) {
       body.outsource_max_parallel = patch.outsourceMaxParallel;
+    }
+    if (patch.docCapChars !== undefined) {
+      body.doc_cap_chars = patch.docCapChars;
     }
     if (patch.updaterReceiveBeta !== undefined) {
       body.updater_receive_beta = patch.updaterReceiveBeta;

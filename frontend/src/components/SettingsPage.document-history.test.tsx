@@ -25,7 +25,7 @@ import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
 import { SettingsPage } from "./SettingsPage";
 import { __resetMock, mockApi } from "../api/mock";
-import { DOC_CAP_CHARS } from "../api/docCap";
+import { DOC_CAP_CHARS_DEFAULT } from "../api/docCap";
 
 const s = zh.settings;
 
@@ -631,7 +631,7 @@ describe("SettingsPage · 版本紀錄", () => {
     // The revision the server WOULD refuse with a 400: a lessons doc that is
     // over the cap and not shrinking. Before this, the owner only found out by
     // clicking — which reads as a broken system rather than a stated limit.
-    const overCap = "字".repeat(DOC_CAP_CHARS + 1);
+    const overCap = "字".repeat(DOC_CAP_CHARS_DEFAULT + 1);
     // The doc's first write retains nothing, so the over-cap text has to be the
     // SECOND one for it to become a retained revision at all.
     await mockApi.saveLessons("assistant", "general", "原始經驗");
@@ -662,7 +662,7 @@ describe("SettingsPage · 版本紀錄", () => {
     // The reason is IN the row, and names the field and the cap.
     const reason = utils.getByTestId(`doc-history-blocked-${target.id}`);
     expect(reason.textContent).toContain(s.historyField.text);
-    expect(reason.textContent).toContain(String(DOC_CAP_CHARS));
+    expect(reason.textContent).toContain(String(DOC_CAP_CHARS_DEFAULT));
 
     // …and opening it does not become a way around that: the modal repeats the
     // verdict and its restore control is dead too, so the 400 is unreachable
@@ -677,6 +677,48 @@ describe("SettingsPage · 版本紀錄", () => {
       (utils.getByTestId("doc-history-modal-restore") as HTMLButtonElement)
         .disabled
     ).toBe(true);
+  });
+
+  it("follows the owner's raised cap instead of the shipped default", async () => {
+    // T-3aeb: the cap is a SETTING. A revision that is over the DEFAULT but
+    // under the owner's raised cap is one the server would ACCEPT, so marking
+    // it un-restorable would be the cockpit lying — and it is the direction
+    // that matters, because the cap can only ever be raised.
+    const overDefault = "字".repeat(DOC_CAP_CHARS_DEFAULT + 100);
+    await mockApi.patchServerSettings({ docCapChars: 50000 });
+    await mockApi.saveLessons("assistant", "general", "原始經驗");
+    await mockApi.saveLessons("assistant", "general", overDefault);
+    await mockApi.saveLessons("assistant", "general", "短");
+
+    const utils = render(
+      <I18nProvider>
+        <SettingsPage />
+      </I18nProvider>
+    );
+    fireEvent.click(utils.getByText(s.roles));
+    fireEvent.click(await utils.findByText(zh.office.role.assistant));
+    fireEvent.click((await utils.findAllByText(s.edit))[1]);
+    fireEvent.click(utils.getByTestId("doc-history-entry-lessons"));
+
+    const [target] = await mockApi.listDocumentHistory(
+      "lessons",
+      "assistant::general"
+    );
+    expect(target.content.text).toBe(overDefault);
+
+    const row = await utils.findByTestId(`doc-history-item-${target.id}`);
+    expect(within(row).queryByText(s.historyBlockedBadge)).toBeNull();
+    expect(utils.queryByTestId(`doc-history-blocked-${target.id}`)).toBeNull();
+
+    // …and the control the ruling actually left is LIVE: restore lives in the
+    // modal now, so that is where "the server would take this" has to show.
+    fireEvent.click(utils.getByTestId(`doc-history-open-${target.id}`));
+    await waitFor(() =>
+      expect(
+        (utils.getByTestId("doc-history-modal-restore") as HTMLButtonElement)
+          .disabled
+      ).toBe(false)
+    );
   });
 
   it("leaves an ordinary revision restorable — the mark is not blanket", async () => {

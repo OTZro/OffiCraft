@@ -106,20 +106,46 @@ stylesheet 零 `.chat__lightbox` 規則,附正負對照與 corpus 非空檢查)�
   **自己那條**捲軸躲在 frame 的後面(900×500 實測 body 溢出 20px)。⚠️ **只放寬
   `min-height` 不夠**:改成 `min(360px, 50vh)` 仍剩 10px,因為溢出的另一半是
   `max-height: 70vh`,兩條都要扣。
-- **手勢歸屬:觸控由瀏覽器移動,不是我們的 JS**(owner 2026-07-31 要求手機可拉動;
-  他當時摸的是還沒 land 的 v0.5.53,也就是**完全拖不動**的舊行為)。縮放變成真 layout
-  之後,`.md-preview__image-wrap` 本身就是個可捲容器,**單指原生就能拖**(附帶慣性與
-  回彈,自己實作要重寫一遍),雙指留給 UA 的 pinch-zoom,背後頁面由
-  `overscroll-behavior: contain` 擋住。所以 `onPanPointerDown` 對
-  `pointerType === "touch"` **早退是刻意的**:再跑一次我們的 drag 會把同一段位移**套用
-  兩次**(手指移一格、圖移兩格)。**兩者只能有一個負責移動**——想「補上觸控支援」而把
-  那個早退刪掉,就是把 double-apply 裝回去。實測(真 input-layer 觸控事件):200px 滑動
-  → scrollLeft 0 → 451;把縮放改回 transform 則 0 → 0。
+- **手勢歸屬按手指數拆兩半,兩半的理由相反**(owner 2026-07-31 要求手機可拉動;
+  他當時摸的是還沒 land 的 v0.5.53,也就是**完全拖不動**的舊行為)。
+  - **單指歸瀏覽器**:縮放變成真 layout 之後,`.md-preview__image-wrap` 本身就是個可捲
+    容器,**單指原生就能拖**(附帶慣性與回彈,自己實作要重寫一遍),背後頁面由
+    `overscroll-behavior: contain` 擋住。所以 `onPanPointerDown` 對
+    `pointerType === "touch"` **早退是刻意的**:再跑一次我們的 drag 會把同一段位移**套用
+    兩次**(手指移一格、圖移兩格)。**兩者只能有一個負責移動**——想「補上觸控支援」而把
+    那個早退刪掉,就是把 double-apply 裝回去。實測(真 input-layer 觸控事件):200px 滑動
+    → scrollLeft 0 → 451;把縮放改回 transform 則 0 → 0。
+  - 🔴 **雙指歸我們,不再交給 UA(T-043e;owner 2026-07-31:「在手機上二指撐開,要放大
+    的是圖片本身,頁面不動」)**。交給 UA 時,pinch 縮放的是 **visual viewport**,而這個
+    彈窗是 `position: fixed` 貼 **layout viewport** ⇒ header、按鈕、backdrop 跟著一起被
+    放大,放大的是「整個彈窗」而不是照片。**很可能這就是整份回報的唯一根因**:只用雙指的
+    人根本不會去按 −/+,app 自己的 zoom 從頭到尾沒動過。
+    - **正解是兩件事,缺一不可**:(a) frame 上宣告 `touch-action: pan-x pan-y`
+      ——**不是** `manipulation`(那個仍把 pinch 交給 UA),讓 compositor 在 JS 跑之前就
+      不把手勢送去頁面縮放;(b) 元件自己接 `touchstart`/`touchmove`(non-passive,雙指才
+      `preventDefault`)把兩指距離比例換成自己的 zoom state。實測 Chromium:**(a) 單獨就
+      能把 `visualViewport.scale` 壓在 1,但沒有任何東西被放大**;**(b) 單獨能放大圖片,
+      但頁面照樣被縮放**。
+    - **iOS Safari 另接 WebKit 專屬的 `gesturestart`/`gesturechange`** 當第二條路
+      (`touch-action` 抑制 pinch 在 Safari 歷來不完整)。兩條路用 `pinching` flag 互斥
+      ——iOS 兩種事件會同時發,兩條都改 zoom 就是套用兩次。
+    - 🔴 **絕對不准**用 `user-scalable=no` / `maximum-scale=1` 達成:owner 已明確否決
+      (全站失去放大能力是無障礙倒退)。要的是「這個元素把手勢**接管**」,不是「對整個
+      document **禁用**」。
+    - ⚠️ **驗不到的部分**:守衛只有 headless Chromium。**Chromium 綠不等於 iPhone 上會動**
+      ——WebKit 的 driver 開不出 `gesture*` 事件,那條路完全沒有自動化覆蓋。真正的驗收在
+      owner 的手機上。
 - **護衛**:`visual-guards/image-zoom-pan.ct.spec.tsx`(真 Chromium,**每一條斷言
   都量座標**、沒有一條靠屬性/class 就能滿足):四角可拖到、捲軸與方向鍵各自到得了
   遠角、控制列不隨內容跑掉、寬扁圖的百分比就是真倍率、矮視窗不出雙捲軸、resize 後
   倍率不漂。故事有**兩種長寬比**——1600×1000(高度受限)與 1600×400(寬度受限),
-  只守前者會整個漏掉倍率說謊那條。
+  只守前者會整個漏掉倍率說謊那條。雙指那組(T-043e)另加四條:撐開讀數真的變大且 frame
+  兩軸都有行程、捏合會縮回、pinch 完單指滑動 `scrollTop`/`scrollLeft` 真的動、
+  **`visualViewport.scale` 維持 1**。
+  ⚠️ 最後那條**不是恆真的**,已實測:拿掉修補後,CDP 注入的雙指真的會驅動 Chromium 自己的
+  頁面 pinch-zoom(scale 量到 **3**,而 app 讀數還停在 100%)——正是回報的 bug 在這個引擎裡
+  重現。寫這種「某某沒有發生」的斷言前,**先把修補拿掉量一次**,否則你只是寫了一條擋不住
+  任何東西的斷言。
 - ⚠️ **寫這類守衛的三個陷阱**(都真的發生過):(a) **方向要選有東西可失去的那一邊**
   ——滾輪那條原本在 `scrollY === 0` 往上滾,任何實作都不可能往上動,斷言恆真;
   (b) **不要用固定按鍵次數校準捲動距離**——方向鍵每次捲多少各引擎不同,「按 16 次」

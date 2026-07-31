@@ -290,7 +290,7 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 		if err != nil {
 			return err
 		}
-		if DocCapBlocked(current.Text, content["text"]) {
+		if DocCapBlocked(s.docCap(), current.Text, content["text"]) {
 			return errDocumentHistoryCap
 		}
 		return s.dal.SaveWithDocumentHistory(kind, key, actor, lessonsSnapshotIn(roleKey, taskType), func(ex sqlExecer) error {
@@ -299,7 +299,7 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 	case docKindTaskManualSop:
 		return s.restoreTaskManualField(key, taskManualHistoryStreams(key, actor, true, false),
 			func(m *TaskManual) error {
-				if DocCapBlocked(m.SopMD, content["sop_md"]) {
+				if DocCapBlocked(s.docCap(), m.SopMD, content["sop_md"]) {
 					return errDocumentHistoryCap
 				}
 				m.SopMD = content["sop_md"]
@@ -308,7 +308,7 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 	case docKindTaskManualLearnings:
 		return s.restoreTaskManualField(key, taskManualHistoryStreams(key, actor, false, true),
 			func(m *TaskManual) error {
-				if DocCapBlocked(m.Learnings, content["learnings"]) {
+				if DocCapBlocked(s.docCap(), m.Learnings, content["learnings"]) {
 					return errDocumentHistoryCap
 				}
 				m.Learnings = content["learnings"]

@@ -265,23 +265,129 @@ export function MarkdownPreviewOverlay({
     return () => wrap.removeEventListener("wheel", onWheel);
   }, [image, imageBytes]);
 
+  // T-043e — PINCH ZOOMS THE IMAGE, NOT THE PAGE.
+  //
+  // Before this, two fingers on the image were left to the UA, and on a phone
+  // that does not magnify the picture: an untouched viewport meta means a pinch
+  // scales the VISUAL viewport, while this overlay is `position: fixed` against
+  // the LAYOUT viewport — so header, buttons and backdrop grow with it and the
+  // owner is looking at a blown-up modal rather than a blown-up photo. That is
+  // the「整個視窗變大」half of the report, and quite possibly all of it: an
+  // owner who only ever pinches never reaches the −/+ controls at all, so the
+  // app's own zoom never moves and the picture never gets bigger.
+  //
+  // 🔴 The one-line "fix" is forbidden: `user-scalable=no` / `maximum-scale=1`
+  // on the viewport meta would stop it by taking page zoom away from the WHOLE
+  // app — an accessibility regression the owner explicitly rejected. The zoom
+  // has to be claimed by this element instead of denied to the document.
+  //
+  // Claiming it is two things, because one is not portable:
+  //   - `touch-action: pan-x pan-y` on the frame (md-preview.css) tells the
+  //     compositor this element takes panning but NOT pinch-zoom, so the UA
+  //     stops routing the gesture to page zoom before any JS runs. Measured in
+  //     Chromium: this half alone already holds `visualViewport.scale` at 1.
+  //   - the handlers below, which turn the two-finger distance ratio into the
+  //     app's own zoom state — the half that actually magnifies anything.
+  //     `preventDefault()` on the two-finger touchstart / touchmove is also
+  //     what keeps the gesture ours where `touch-action` is not honoured: iOS
+  //     Safari's suppression of pinch through it has historically been partial,
+  //     which is why the WebKit-only `gesturestart`/`gesturechange` pair is
+  //     bound as a second route.
+  //
+  // The two routes are mutually exclusive by `pinching`: iOS fires gesture
+  // events ALONGSIDE touch events, and letting both drive `setZoom` would apply
+  // the same spread twice.
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap || !image) return;
+    let pinching = false;
+    let startSpread = 0;
+    let startZoom = 1;
+    let gestureZoom = 1;
+
+    const spread = (touches: TouchList) =>
+      Math.hypot(
+        touches[0].clientX - touches[1].clientX,
+        touches[0].clientY - touches[1].clientY,
+      );
+
+    const onTouchStart = (e: TouchEvent) => {
+      // One finger is NOT ours — it is the native scroll of this container
+      // (see the gesture-ownership note on `onPanPointerDown`).
+      if (e.touches.length !== 2) return;
+      e.preventDefault();
+      pinching = true;
+      startSpread = spread(e.touches);
+      startZoom = zoomRef.current;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (!pinching || e.touches.length !== 2) return;
+      e.preventDefault();
+      if (startSpread <= 0) return;
+      setZoom(clampZoom(startZoom * (spread(e.touches) / startSpread)));
+    };
+    const onTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) pinching = false;
+    };
+
+    // WebKit-only. Bound on the frame rather than the document so a pinch
+    // started anywhere ELSE on the page still zooms the page normally — the
+    // accessibility escape hatch stays open, it is only the image that claims
+    // the gesture.
+    const onGestureStart = (e: Event) => {
+      e.preventDefault();
+      gestureZoom = zoomRef.current;
+    };
+    const onGestureChange = (e: Event) => {
+      e.preventDefault();
+      if (pinching) return;
+      const scale = (e as Event & { scale?: number }).scale;
+      if (typeof scale !== "number" || scale <= 0) return;
+      setZoom(clampZoom(gestureZoom * scale));
+    };
+
+    wrap.addEventListener("touchstart", onTouchStart, { passive: false });
+    wrap.addEventListener("touchmove", onTouchMove, { passive: false });
+    wrap.addEventListener("touchend", onTouchEnd);
+    wrap.addEventListener("touchcancel", onTouchEnd);
+    wrap.addEventListener("gesturestart", onGestureStart as EventListener, { passive: false });
+    wrap.addEventListener("gesturechange", onGestureChange as EventListener, { passive: false });
+    wrap.addEventListener("gestureend", onGestureStart as EventListener, { passive: false });
+    return () => {
+      wrap.removeEventListener("touchstart", onTouchStart);
+      wrap.removeEventListener("touchmove", onTouchMove);
+      wrap.removeEventListener("touchend", onTouchEnd);
+      wrap.removeEventListener("touchcancel", onTouchEnd);
+      wrap.removeEventListener("gesturestart", onGestureStart as EventListener);
+      wrap.removeEventListener("gesturechange", onGestureChange as EventListener);
+      wrap.removeEventListener("gestureend", onGestureStart as EventListener);
+    };
+  }, [image, imageBytes]);
+
   // Dragging IS scrolling: the pointer delta is applied to the wrap's own
   // scroll offset, the same offset the scrollbar and the arrow keys move. One
   // source of truth for "where in the image am I", so the two routes to the
   // overflow can never drift apart.
   function onPanPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
     const wrap = wrapRef.current;
-    // GESTURE OWNERSHIP — on touch the BROWSER moves the image, not this
-    // handler, and that is a decision rather than an omission (owner asked for
-    // phone dragging on 2026-07-31, against the unfixed build where nothing
-    // moved at all). Now that the zoom is real layout, one finger pans this
-    // scroll container natively, with inertia and rubber-banding we would
-    // otherwise have to reimplement, and two fingers keep the UA's pinch-zoom.
-    // Running the drag below as WELL would apply the same delta twice — a
-    // finger-width of travel would move the image two — so exactly one of the
-    // two may be in charge. Verified with real input-layer touch events:
-    // scrollLeft 0 → 451 for a 200px swipe. Deleting this bail-out to "add
-    // touch support" re-introduces the double-apply.
+    // GESTURE OWNERSHIP, ONE FINGER — on touch the BROWSER moves the image,
+    // not this handler, and that is a decision rather than an omission (owner
+    // asked for phone dragging on 2026-07-31, against the unfixed build where
+    // nothing moved at all). Now that the zoom is real layout, one finger pans
+    // this scroll container natively, with inertia and rubber-banding we would
+    // otherwise have to reimplement. Running the drag below as WELL would apply
+    // the same delta twice — a finger-width of travel would move the image two
+    // — so exactly one of the two may be in charge. Verified with real
+    // input-layer touch events: scrollLeft 0 → 451 for a 200px swipe. Deleting
+    // this bail-out to "add touch support" re-introduces the double-apply.
+    //
+    // ⚠️ TWO fingers are NO LONGER the UA's (T-043e, 2026-07-31 owner ruling:
+    // 「在手機上二指撐開，要放大的是圖片本身，頁面不動」). The pinch handler
+    // above claims them and drives this component's zoom state; that is a
+    // separate route on separate events, so it does not resurrect the
+    // double-apply this bail-out exists to prevent. Keep both.
     if (!wrap || e.button !== 0 || e.pointerType === "touch") return;
     if (wrap.scrollWidth <= wrap.clientWidth && wrap.scrollHeight <= wrap.clientHeight) return;
     const startX = e.clientX;

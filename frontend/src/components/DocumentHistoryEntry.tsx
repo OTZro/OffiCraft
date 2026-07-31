@@ -25,9 +25,10 @@ import { useI18n } from "../i18n";
 import type { DocumentHistoryView, DocumentKind } from "../types";
 import { useDocumentHistory } from "../hooks/useDocumentHistory";
 import { useMembers } from "../hooks/useMembers";
+import { useServerSettings } from "../hooks/useServerSettings";
 import { OWNER_ACTOR_ID, actorDisplayName } from "../lib/actorLabel";
 import { ApiError } from "../api/errors";
-import { DOC_CAP_CHARS, docCapBlockedFields } from "../api/docCap";
+import { docCapBlockedFields } from "../api/docCap";
 import { documentFields } from "../lib/docHistoryFields";
 import { formatAbsolute } from "../lib/dateFormat";
 import { useEscapeLayer } from "../lib/useEscapeLayer";
@@ -107,6 +108,11 @@ export function DocumentHistoryEntry({
   // Identity only — this list never shows presence or unread counts, so the
   // light roster is the right pull (no refetch when anyone speaks in chat).
   const { members } = useMembers({ light: true });
+  // The cap is a SETTING (T-3aeb), so the un-restorable marking has to follow
+  // the LIVE value: judging by the shipped default would grey out revisions the
+  // server accepts the moment the owner raises it. `undefined` until it loads,
+  // which makes the marking abstain (api/docCap.ts).
+  const docCapChars = useServerSettings().settings?.docCapChars;
 
   const listRef = useRef<HTMLDivElement>(null);
   useEscapeLayer(() => setOpen(false), listRef, open && reading === null);
@@ -226,7 +232,8 @@ export function DocumentHistoryEntry({
                     const blockedFields = docCapBlockedFields(
                       kind,
                       v.content,
-                      currentContent
+                      currentContent,
+                      docCapChars
                     );
                     const blocked = blockedFields.length > 0;
                     return (
@@ -283,7 +290,7 @@ export function DocumentHistoryEntry({
                             >
                               {msg.docHistoryBlockedReason(
                                 blockedFields.map(fieldLabel),
-                                DOC_CAP_CHARS
+                                docCapChars ?? 0
                               )}
                             </div>
                           )}
@@ -386,6 +393,7 @@ export function DocumentHistoryEntry({
           version={reading}
           actorLine={actorLine(reading.actorId)}
           currentContent={currentContent}
+          docCapChars={docCapChars}
           // Reading one version is a step INTO the list, so there is a step
           // back out of it — closing is what leaves the history altogether.
           onBack={() => setReading(null)}
