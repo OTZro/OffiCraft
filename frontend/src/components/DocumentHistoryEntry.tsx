@@ -19,11 +19,21 @@
 //
 // 清單列本身沿用原本卡片的內容（時間／修改者／逐欄預覽／超上限的不可還原徽章／
 // 當時為預設內容），點一列進 DocumentHistoryModal 讀、比、還原，讀完可以退回清單。
+//
+// T-40f0（owner rc-28885813e065 ①）:「初始版本」那一列**行為與其他版本完全一致**。
+// 在此之前它是唯一一列點下去直接跳還原確認的——因為 seed 的內容根本沒交到前端，
+// 伺服器只在「重置之後」才吐出它。現在它一樣先進 DocumentHistoryModal（帶 `seed`），
+// 先看得到內容與差異，還原仍在同一個破壞性確認框後面。
+// 🔴 兩件事刻意沒變：那一列站的位置（入口不變、不會更難找），以及「初始版本不做別人
+//    的人質」——它仍然在 GET 版本清單失敗時照樣長出來，而且 seed 內容自己那個 GET
+//    失敗時，還原照樣按得下去（modal 的 `seedUnavailable` 誠實說明看不到，而不是
+//    假裝這個版本是空白的）。
 
 import { useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import type { DocumentHistoryView, DocumentKind } from "../types";
 import { useDocumentHistory } from "../hooks/useDocumentHistory";
+import { useDocumentSeed } from "../hooks/useDocumentSeed";
 import { useMembers } from "../hooks/useMembers";
 import { useServerSettings } from "../hooks/useServerSettings";
 import { OWNER_ACTOR_ID, actorDisplayName } from "../lib/actorLabel";
@@ -33,7 +43,6 @@ import type { DocCaps } from "../api/docCap";
 import { documentFields } from "../lib/docHistoryFields";
 import { formatAbsolute } from "../lib/dateFormat";
 import { useEscapeLayer } from "../lib/useEscapeLayer";
-import { ConfirmModal } from "./ConfirmModal";
 import { DocumentHistoryModal } from "./DocumentHistoryModal";
 import { CloseIcon, LayersIcon } from "./icons";
 // The list wears the modal shell (`.doc-hist-modal*`) and the row atoms that
@@ -95,10 +104,12 @@ export function DocumentHistoryEntry({
 }: DocumentHistoryEntryProps) {
   const { t, msg } = useI18n();
   const [open, setOpen] = useState(false);
-  const [reading, setReading] = useState<DocumentHistoryView | null>(null);
-  const [resetting, setResetting] = useState(false);
-  const [resetBusy, setResetBusy] = useState(false);
-  const [resetError, setResetError] = useState<string | null>(null);
+  // What the reader is showing: one retained revision, or the shipped default.
+  // A discriminated union rather than two booleans — "both at once" is not a
+  // state this surface can be in, so it must not be representable.
+  const [reading, setReading] = useState<
+    { kind: "version"; version: DocumentHistoryView } | { kind: "seed" } | null
+  >(null);
 
   // 點了才載入 — 這是 owner 裁定的字面意思，不是效能微調。
   const { versions, loading, error, restore } = useDocumentHistory(
@@ -125,6 +136,12 @@ export function DocumentHistoryEntry({
     learning: settings.docCapCharsLearning,
     manual: settings.docCapCharsManual,
   } : undefined;
+  // The shipped default, so the 初始版本 row can be READ and COMPARED like every
+  // other row (T-40f0). Fetched only where that row exists (`onReset`) and only
+  // once the list is open — same 「點了才打 API」 rule the history itself follows.
+  const seedDoc = useDocumentSeed(kind, docKey, {
+    enabled: open && onReset !== undefined,
+  });
 
   const listRef = useRef<HTMLDivElement>(null);
   useEscapeLayer(() => setOpen(false), listRef, open && reading === null);
@@ -143,28 +160,6 @@ export function DocumentHistoryEntry({
   function closeAll() {
     setOpen(false);
     setReading(null);
-    setResetting(false);
-    setResetError(null);
-  }
-
-  async function commitReset() {
-    if (!onReset) return;
-    setResetBusy(true);
-    setResetError(null);
-    try {
-      await onReset();
-      closeAll();
-    } catch (e) {
-      // The server's own message when it has one; the generic line otherwise.
-      // Both dialogs stay open — the reason has to survive on screen.
-      setResetError(
-        e instanceof ApiError && e.serverMessage
-          ? e.serverMessage
-          : t.settings.historyRestoreError
-      );
-    } finally {
-      setResetBusy(false);
-    }
   }
 
   return (
@@ -187,9 +182,7 @@ export function DocumentHistoryEntry({
           role="dialog"
           aria-modal="true"
           aria-label={title}
-          onClick={() => {
-            if (!resetting) setOpen(false);
-          }}
+          onClick={() => setOpen(false)}
         >
           <div
             className="doc-hist-modal__panel"
@@ -267,11 +260,11 @@ export function DocumentHistoryEntry({
                           role="button"
                           tabIndex={0}
                           title={t.settings.historyOpen}
-                          onClick={() => setReading(v)}
+                          onClick={() => setReading({ kind: "version", version: v })}
                           onKeyDown={(e) => {
                             if (e.key === "Enter" || e.key === " ") {
                               e.preventDefault();
-                              setReading(v);
+                              setReading({ kind: "version", version: v });
                             }
                           }}
                         >
@@ -339,16 +332,12 @@ export function DocumentHistoryEntry({
                         data-testid="doc-history-seed-open"
                         role="button"
                         tabIndex={0}
-                        title={t.settings.historySeedRestore}
-                        onClick={() => {
-                          setResetting(true);
-                          setResetError(null);
-                        }}
+                        title={t.settings.historyOpen}
+                        onClick={() => setReading({ kind: "seed" })}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
                             e.preventDefault();
-                            setResetting(true);
-                            setResetError(null);
+                            setReading({ kind: "seed" });
                           }
                         }}
                       >
@@ -356,8 +345,11 @@ export function DocumentHistoryEntry({
                           <span className="doc-hist__when">
                             {t.settings.historySeedTitle}
                           </span>
+                          {/* 「檢視這個版本」, the same affordance every other row
+                            * offers — the row no longer promises a restore it is
+                            * not about to perform (T-40f0). */}
                           <span className="doc-hist__open">
-                            {t.settings.historySeedRestore}
+                            {t.settings.historyOpen}
                           </span>
                         </div>
                         <div className="doc-hist__seed-note">
@@ -379,31 +371,36 @@ export function DocumentHistoryEntry({
             </div>
           </div>
 
-          {resetting && (
-            <ConfirmModal
-              testId="doc-history-seed-confirm"
-              confirmTestId="doc-history-seed-confirm-btn"
-              danger
-              body={t.settings.historySeedConfirm}
-              error={resetError}
-              busy={resetBusy}
-              cancelLabel={t.settings.cancel}
-              confirmLabel={t.settings.historyRestoreConfirmAction}
-              onCancel={() => {
-                setResetting(false);
-                setResetError(null);
-              }}
-              onConfirm={() => void commitReset()}
-            />
-          )}
         </div>
       )}
 
       {reading && (
         <DocumentHistoryModal
           kind={kind}
-          version={reading}
-          actorLine={actorLine(reading.actorId)}
+          // The seed rides in as a PSEUDO-version so the reader, the diff and
+          // the cap verdict stay one code path. Its id/actor/timestamp are the
+          // honest "nobody and never" (`seed` makes the modal name it 初始版本
+          // instead of rendering a fabricated 修改者 line), and its content is
+          // `{}` only while the seed GET is in flight or failed — which is the
+          // case `seedUnavailable` exists to state out loud rather than let it
+          // read as 「這個版本沒有內容」.
+          version={
+            reading.kind === "version"
+              ? reading.version
+              : {
+                  id: 0,
+                  content: seedDoc.content ?? {},
+                  createdTs: 0,
+                  actorId: "",
+                }
+          }
+          seed={reading.kind === "seed"}
+          seedUnavailable={
+            reading.kind === "seed" && seedDoc.content === undefined
+          }
+          actorLine={
+            reading.kind === "version" ? actorLine(reading.version.actorId) : ""
+          }
           currentContent={currentContent}
           docCaps={docCaps}
           // Reading one version is a step INTO the list, so there is a step
@@ -411,7 +408,15 @@ export function DocumentHistoryEntry({
           onBack={() => setReading(null)}
           onClose={closeAll}
           onRestore={async () => {
-            await restore(reading.id);
+            if (reading.kind === "seed") {
+              // The reset, unchanged in everything but where its confirmation
+              // lives: same call, same destructiveness, and it deliberately does
+              // NOT run `onRestored` — the reset's own caller already re-reads
+              // the document and leaves edit mode (SettingsPage's doReset).
+              await onReset?.();
+              return;
+            }
+            await restore(reading.version.id);
             await onRestored?.();
           }}
         />

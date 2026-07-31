@@ -236,6 +236,11 @@ export type WireGlobalContext = components["schemas"]["GlobalContextDTO"];
  * purpose+fields+sop_md+learnings), plus `tombstoned` on the overlay kinds. */
 export type WireDocumentHistory = components["schemas"]["DocumentHistoryDTO"];
 
+/** Mirrors `DocumentSeedDTO` — the SHIPPED DEFAULT of an editable long-form
+ * document (`GET /api/document-history/{kind}/{key}/seed`). `content` carries
+ * the same field names a retained revision does, so one reader serves both. */
+export type WireDocumentSeed = components["schemas"]["DocumentSeedDTO"];
+
 /** Mirrors `service/dto.py :: RoleDefDTO`. The folded role-definition doc. */
 export type WireRoleDef = components["schemas"]["RoleDefDTO"];
 

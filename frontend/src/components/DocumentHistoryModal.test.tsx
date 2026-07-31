@@ -360,4 +360,107 @@ describe("DocumentHistoryModal", () => {
     const utils = open({ content: { text: "" }, currentContent: { text: "" } });
     expect(utils.getByText(s.historyModalEmpty)).toBeTruthy();
   });
+
+  // ── 初始版本 as a pseudo-version (T-40f0) ──────────────────────────────────
+  // The list's bottom row used to jump straight to a reset confirmation, because
+  // the seed's content was never sent to the cockpit. It now arrives here and
+  // reads/diffs/restores through this one code path, with two differences that
+  // both come from the same fact: nobody wrote it and it has no timestamp.
+  describe("the shipped default (初始版本)", () => {
+    function openSeed(opts: {
+      content?: Record<string, string>;
+      currentContent?: Record<string, string>;
+      seedUnavailable?: boolean;
+      onRestore?: () => Promise<void>;
+    }) {
+      return render(
+        <I18nProvider>
+          <DocumentHistoryModal
+            kind="global_context"
+            version={{
+              id: 0,
+              content: opts.content ?? { text: "", tombstoned: "true" },
+              createdTs: 0,
+              actorId: "",
+            }}
+            seed
+            seedUnavailable={opts.seedUnavailable}
+            actorLine=""
+            currentContent={opts.currentContent ?? { text: "owner's block" }}
+            docCapChars={DOC_CAP_CHARS_DEFAULT}
+            onRestore={opts.onRestore ?? (async () => {})}
+            onClose={() => {}}
+          />
+        </I18nProvider>
+      );
+    }
+
+    it("names itself instead of inventing a timestamp and an author", () => {
+      const utils = openSeed({});
+      const header = utils.container.querySelector(
+        ".doc-hist-modal__header"
+      ) as HTMLElement;
+      expect(header.textContent).toContain(s.historySeedTitle);
+      // No 修改者 line: there is nobody to name, and naming nobody as somebody
+      // is the failure mode a bare `actorLine` would have produced.
+      expect(header.textContent).not.toContain(s.historyByLabel);
+      expect(
+        utils.container.querySelector(".doc-hist-modal__when")?.textContent
+      ).toBe(s.historySeedTitle);
+    });
+
+    it("diffs against the live document with the default on the - side", () => {
+      const utils = openSeed({
+        content: { text: "shipped default", tombstoned: "true" },
+        currentContent: { text: "owner's rewrite" },
+      });
+      fireEvent.click(utils.getByTestId("doc-history-pane-diff"));
+      expect(diffRows(utils.container)).toEqual([
+        ["1", "", "-", "shipped default"],
+        ["", "1", "+", "owner's rewrite"],
+      ]);
+      // The `-` side is labelled 初始版本 — the same slot a retained revision
+      // fills with its timestamp.
+      expect(
+        utils.container.querySelector(".diff-view__label--before")?.textContent
+      ).toBe(`-${s.historySeedTitle}`);
+    });
+
+    it("restores through the SAME confirmation, with the reset's own wording", async () => {
+      const onRestore = vi.fn().mockResolvedValue(undefined);
+      const utils = openSeed({ onRestore });
+
+      const restore = utils.getByTestId("doc-history-modal-restore");
+      expect(restore.textContent).toBe(s.historySeedRestore);
+      fireEvent.click(restore);
+      // Looking was free; going back is not, and the gate is the same one.
+      expect(onRestore).not.toHaveBeenCalled();
+      expect(
+        utils.getByTestId("doc-history-restore-confirm").textContent
+      ).toContain(s.historySeedConfirm);
+
+      fireEvent.click(utils.getByTestId("doc-history-restore-confirm-btn"));
+      await waitFor(() => expect(onRestore).toHaveBeenCalledTimes(1));
+    });
+
+    it("says the default could not be READ, and keeps restoring it possible", () => {
+      // The two must not be conflated: 「這個版本沒有內容」 is a claim about the
+      // document, and it is false here. Restoring needs nothing from this
+      // client, so the control stays live.
+      const utils = openSeed({ content: {}, seedUnavailable: true });
+      expect(
+        utils.getByTestId("doc-history-seed-unavailable").textContent
+      ).toBe(s.historySeedUnavailable);
+      expect(utils.queryByText(s.historyModalEmpty)).toBeNull();
+      expect(
+        (utils.getByTestId("doc-history-modal-restore") as HTMLButtonElement)
+          .disabled
+      ).toBe(false);
+
+      // …in BOTH panes — switching does not find a different story.
+      fireEvent.click(utils.getByTestId("doc-history-pane-diff"));
+      expect(utils.getByTestId("doc-history-seed-unavailable")).toBeTruthy();
+      expect(utils.container.querySelector(".diff-view")).toBeNull();
+    });
+  });
 });

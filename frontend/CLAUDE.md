@@ -1158,6 +1158,29 @@ mutant 紀錄:`docs/design/worker-panel-parity-mutants.md`。
     否則只證明了「有字」,沒證明「分得出來」。
 mutant 紀錄:`docs/design/worker-panel-parity-mutants.md` 第五、六批。
 
+## 差異呈現:三層各自只負責一件事(T-40f0;全文 `docs/design/T-40f0-history-diff-ux.md`)
+
+`lib/lineDiff.ts`(**哪幾行**不同)→ `lib/wordDiff.ts`(一對取代列之間**哪些字**動了)→
+`components/DiffView.tsx`(怎麼畫)。**只有第三層知道 owner 挑了什麼樣式**,前兩層是純函數。
+- 🔴 **`lineDiff` 是行結構的唯一權威,`wordDiff` 不准碰到它的產出**:拿掉 `wordDiff`,差異照樣
+  畫得出來、列與行號一個都不會變,只是少了字級底色。要加字級規則就改 `wordDiff`,別下沉到 `lineDiff`。
+- 🔴 **摺疊只在呈現層退場,不是在 `lineDiff` 裡拿掉**(owner:「showing entire content」):
+  `DiffView` 固定送 `collapseUnchanged: false` 並且**不再渲染 `@@` 分隔列**;`lineDiff` 的
+  `collapse()` 仍是該模組自己的 API、仍有測試。`DiffView` 的 `options` 因此窄成自有的
+  `DiffViewOptions`(只剩 `maxLines`)——留著 `collapseUnchanged` 這個 knob 等於在介面上廣告
+  一個這個面拒絕擁有的行為。
+- **字級標亮有兩個刻意的「不標」**,兩者都不是缺口:①兩行**毫無共同 token** 時整行不標(整列的顏色
+  已經說完「這行被整個換掉」,再逐 token 標會讓它與「只改幾個字」長得一樣);②每側 **400 token 上限**
+  (token LCS 是 O(n·m)、每對變更列各跑一次,一行 base64 只能少一層底色、不能讓 tab 卡死)。
+  ⚠️ 相似度**只數非空白 token**——`"  "` 對上 `"  "` 在任何兩行之間都成立,算進去就會把兩行無關的
+  縮排文字整片標亮。
+- 🔴 **兩種「看起來空白」的狀態永不合流**:`diff-view-empty`(兩版相同)與 `diff-view-too-large`
+  (太大、拒絕比對且**報出行數**)。兩條測試各自**同時斷言另一個不在場**,所以「拒絕」不可能偽裝成
+  「沒有差異」。**不要為了少一個分支把它們併成一個空面板。**
+- **顏色的斷言在真引擎**:jsdom 把 `color-mix(...)` 原樣吐回,兩個 kind 指到同一個 token 在 jsdom
+  是綠的 —— 那一半由 `visual-guards/diff-view.ct.spec.tsx` 守;jsdom 那邊守的是「tint 掛在 `<tr>` 上、
+  兩個行號格與 marker 格都在它裡面」(整列上色的結構條件)。
+
 ## verify(root §13)
 純 FE UI 改動:headless build → `preview:4173` → Playwright,CI 綠即 land、**不上 prod 驗**。公開 URL https://officraft.hardcoretech.link/。`Monitor.tsx` 的 mock 部分無 telemetry backend(純前端 mock)。
 

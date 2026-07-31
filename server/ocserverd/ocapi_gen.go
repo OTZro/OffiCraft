@@ -504,6 +504,13 @@ type DocumentHistoryDTO struct {
 	Id        int64             `json:"id"`
 }
 
+// DocumentSeedDTO The SHIPPED DEFAULT of an editable long-form document — what a reset puts back, expressed in the SAME field names a retained revision uses so one reader can compare either against the live document. READ-ONLY: this route writes nothing, so looking at 初始版本 can never overwrite anything. 404 when the document has no shipped default (a custom role, a task manual, per-role lessons) — exactly the documents whose reset the server also 404s.
+type DocumentSeedDTO struct {
+	Content map[string]string `json:"content"`
+	Key     string            `json:"key"`
+	Kind    string            `json:"kind"`
+}
+
 // ErrorBodyDTO The inner “error“ object of the unified error envelope (see
 // “service.errors“ / “docs/design/api-error-envelope.md“). “code“ is
 // machine-readable snake_case from the closed vocabulary
@@ -2710,6 +2717,9 @@ type ServerInterface interface {
 	// List retained versions of an editable document.
 	// (GET /api/document-history/{kind}/{key})
 	HandleListDocumentHistoryApiDocumentHistoryKindKeyGet(w http.ResponseWriter, r *http.Request, kind string, key string)
+	// Read the shipped default of an editable document.
+	// (GET /api/document-history/{kind}/{key}/seed)
+	HandleGetDocumentSeedApiDocumentHistoryKindKeySeedGet(w http.ResponseWriter, r *http.Request, kind string, key string)
 	// Restore a retained document version as a new write.
 	// (POST /api/document-history/{kind}/{key}/{id}/restore)
 	HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdRestorePost(w http.ResponseWriter, r *http.Request, kind string, key string, id int64)
@@ -3583,6 +3593,41 @@ func (siw *ServerInterfaceWrapper) HandleListDocumentHistoryApiDocumentHistoryKi
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.HandleListDocumentHistoryApiDocumentHistoryKindKeyGet(w, r, kind, key)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleGetDocumentSeedApiDocumentHistoryKindKeySeedGet operation middleware
+func (siw *ServerInterfaceWrapper) HandleGetDocumentSeedApiDocumentHistoryKindKeySeedGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "kind" -------------
+	var kind string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "kind", r.PathValue("kind"), &kind, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "kind", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "key" -------------
+	var key string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key", r.PathValue("key"), &key, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleGetDocumentSeedApiDocumentHistoryKindKeySeedGet(w, r, kind, key)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -6475,6 +6520,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/docs/assets/{name}", wrapper.HandleGetDocAssetApiDocsAssetsNameGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/docs/{slug}", wrapper.HandleGetDocApiDocsSlugGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/document-history/{kind}/{key}", wrapper.HandleListDocumentHistoryApiDocumentHistoryKindKeyGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/document-history/{kind}/{key}/seed", wrapper.HandleGetDocumentSeedApiDocumentHistoryKindKeySeedGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/document-history/{kind}/{key}/{id}/restore", wrapper.HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdRestorePost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/events", wrapper.HandleEventsApiEventsGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/global-context", wrapper.HandleGetGlobalContextApiGlobalContextGet)

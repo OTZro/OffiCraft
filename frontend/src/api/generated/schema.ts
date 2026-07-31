@@ -635,6 +635,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/document-history/{kind}/{key}/seed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the shipped default of an editable document.
+         * @description Read the document's shipped default — the 初始版本 row of the cockpit's version list. It exists so that row can be COMPARED against the live document before anyone decides to go back to it; before this route the seed text only ever reached a client AFTER a reset had already overwritten the document, so "look first" was impossible for exactly the one entry whose restore is least reversible. Read-only, same floor as reading the retained versions. 404 where no seed exists.
+         */
+        get: operations["handle_get_document_seed_api_document_history__kind___key__seed_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/document-history/{kind}/{key}/{id}/restore": {
         parameters: {
             query?: never;
@@ -3223,6 +3243,14 @@ export interface components {
             created_ts: number;
             /** Format: int64 */
             id: number;
+        };
+        /** @description The SHIPPED DEFAULT of an editable long-form document — what a reset puts back, expressed in the SAME field names a retained revision uses so one reader can compare either against the live document. READ-ONLY: this route writes nothing, so looking at 初始版本 can never overwrite anything. 404 when the document has no shipped default (a custom role, a task manual, per-role lessons) — exactly the documents whose reset the server also 404s. */
+        DocumentSeedDTO: {
+            content: {
+                [key: string]: string;
+            };
+            key: string;
+            kind: string;
         };
         /**
          * AgentContextDTO
@@ -8619,6 +8647,29 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DocumentHistoryDTO"][];
+                };
+            };
+        };
+    };
+    handle_get_document_seed_api_document_history__kind___key__seed_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: string;
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentSeedDTO"];
                 };
             };
         };
