@@ -273,6 +273,25 @@ export interface TaskStepView {
  * leaf counts — the UI never recomputes progress from steps. `deps` are
  * blocking task IDS (display markers only — a blocked task stays in_progress).
  */
+/** One entry of {@link TaskView.depTasks} — a blocking task resolved to what the
+ * dep row shows (wire `TaskDepRefDTO`, T-a3e4). `taskNo` is filled even for a
+ * dep whose task is gone (it is a pure projection of the id); `title`/`status`
+ * are "" in exactly that case, and the row then says 查無此任務 rather than
+ * inventing a status. */
+export interface TaskDepRefView {
+  id: string;
+  taskNo: string;
+  title: string;
+  status: string;
+}
+
+/** `GET /api/tasks/count`: the nav badge's open count + the unfiltered total
+ * (T-a3e4 — what makes 目前沒有任務 an honest claim under a filtered list). */
+export interface TaskCountView {
+  open: number;
+  total: number;
+}
+
 export interface TaskView {
   id: string;
   /** Display number (e.g. "T-7d40") — presentation only, never a lookup key. */
@@ -313,6 +332,21 @@ export interface TaskView {
   dedupeKey: string;
   /** Blocking task IDS (被 T-xxx 擋住, 可多筆) — resolved to task_no for display. */
   deps: string[];
+  /** The SERVER's resolution of every id in {@link deps} (wire `dep_tasks`,
+   * T-a3e4): one entry per dep, same order, carrying what the 「等 T-xxxx
+   * <標題>」 row prints. The card renders straight from this — it no longer
+   * looks deps up in the loaded task list, which is why the page no longer has
+   * to download the closed population just so a finished blocker can be named.
+   *
+   * 🔴 THREE states, and they are not interchangeable: an entry with a
+   * `status` is a resolved dep; an entry whose `status` is "" is a dep whose
+   * task is GONE (查無此任務); the whole field being `undefined` means the
+   * SERVER did not resolve deps at all (a pre-T-a3e4 server, or a hand-built
+   * fixture) — that is "cannot name it yet", NOT "does not exist". This is the
+   * same honesty split `closedLoaded` used to carry, moved to where the fact
+   * actually lives. Optional-additive: the mappers pass the wire field through
+   * verbatim, absent stays absent. */
+  depTasks?: TaskDepRefView[];
   /** One-line reason while status is waiting_external; "" otherwise. */
   waitingReason: string;
   /** The ORIGINAL task's id this one duplicates; "" unless status is
@@ -396,18 +430,24 @@ export interface OutsourceWorkerView {
   /** Worker mint epoch (wire created_ts; 0 when absent) — the panel's
    * fallback sort key when the bound task cannot be resolved. */
   createdTs?: number;
-  /** The bound task's display number (T-xxxx) / 識別鍵 value / type key — NOT
-   * wire fields: useOutsourceWorkers joins them from GET /api/tasks (the panel
-   * row is 名稱 / task type + presence 點 / 可點的 T-xxxx — owner report
-   * 2026-07-14, aligned with the member card's three-line shape).
-   * Honest "" when the task cannot be resolved. */
+  /** The bound task's display number (T-xxxx) and type — the panel row is 名稱 /
+   * task type + presence 點 / 可點的 T-xxxx (owner report 2026-07-14, aligned
+   * with the member card's three-line shape). WIRE FIELDS since T-a3e4
+   * (`task_no` / `task_type_key`): they used to be a CLIENT-side join against
+   * the unfiltered `GET /api/tasks`, i.e. the whole task history downloaded on
+   * every worker/chat delta to label a handful of rows. Honest "" when the
+   * bound task cannot be resolved. */
   taskNo?: string;
-  dedupeKey?: string;
   taskTypeKey?: string;
-  /** The bound task type's DISPLAY name (T-fa76) — joined by
-   * useOutsourceWorkers from the manuals list; honest "" when the manual is
-   * gone (the row then falls back to the raw taskTypeKey). */
+  /** The bound task type's DISPLAY name (T-fa76), wire `task_type_name` since
+   * T-a3e4 (was a client-side join against the manuals list); honest "" when
+   * the manual is gone or names nothing — the row then falls back to the raw
+   * taskTypeKey. */
   taskTypeName?: string;
+  /** The bound task's createdTs (wire `task_created_ts`, T-a3e4) — the panel's
+   * sort key (依任務建立時間新→舊). 0/absent ⇒ the row falls back to the
+   * worker's own {@link createdTs} mint stamp, an honest proxy. */
+  taskCreatedTs?: number;
   /** The owner's unread chat count for this worker's conversation (wire
    * `unread_count`, the same watermark inverse the member roster serves) —
    * the row's red badge (owner report 2026-07-14: 外包也要有未讀紅點).
@@ -1094,10 +1134,20 @@ export interface Api {
    * the terminal (done/terminated/duplicated) rows so the DEFAULT 任務頁 view,
    * which only shows the 未結束 partition, pulls a handful of rows instead of
    * the whole history. Omit it (the default) for the full population — the
-   * 清除篩選 全部 view and the outsource-panel join both need every task, and
-   * that call is byte-for-byte the unfiltered list as before.
+   * 清除篩選 全部 view needs every task, and that call is byte-for-byte the
+   * unfiltered list as before.
+   *
+   * `opts.statuses` (T-a3e4) sends one repeated `?statuses=` per state — ASK
+   * FOR WHAT IS TICKED. `open=true` only removes the archive; the page was
+   * still downloading every live task and then hiding most of them in the
+   * browser. Pass the 狀態 dropdown's set verbatim, `reassigning` included (the
+   * server matches that one against the handover lock, the same rule the
+   * client-side predicate uses). An empty/omitted set means no constraint.
    */
-  listTasks(opts?: { open?: boolean }): Promise<TaskView[]>;
+  listTasks(opts?: {
+    open?: boolean;
+    statuses?: string[];
+  }): Promise<TaskView[]>;
   /**
    * Fetch ONE task's FULL detail (`GET /api/tasks/{id}`): steps, description
    * and the rest of the heavy payload the light list omits. The 任務卡 calls
@@ -1105,10 +1155,13 @@ export interface Api {
    * updatedTs moves while expanded) to hydrate the workflow timeline.
    */
   getTask(id: string): Promise<TaskView>;
-  /** The open (non-terminal) task count behind the tasks nav badge
-   * (`GET /api/tasks/count`) — a cheap dedicated endpoint so the badge can
-   * refetch on every "task" SSE delta without pulling the list. */
-  getTaskCount(): Promise<number>;
+  /** The task counts behind the nav badge (`GET /api/tasks/count`) — a cheap
+   * dedicated endpoint so the badge can refetch on every "task" SSE delta
+   * without pulling the list. `open` = non-terminal (the badge). `total` = every
+   * task, terminal included (T-a3e4): since the list fetch now asks for a STATUS
+   * SET, an empty list cannot by itself justify 目前沒有任務, and this is the
+   * cheap way to know — never a widened list fetch. */
+  getTaskCount(): Promise<TaskCountView>;
   /**
    * Terminate a task (`POST /api/tasks/{id}/terminate`) — the ONLY owner-side
    * status change (spec §3.7). Non-terminal only (done/terminated → 409,

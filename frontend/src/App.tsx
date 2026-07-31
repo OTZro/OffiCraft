@@ -76,7 +76,7 @@ export default function App({ onLogout }: { onLogout?: () => void } = {}) {
   const chatUnread = useChatUnread();
   // The 任務 nav badge: how many tasks are OPEN (non-terminal; 已完成/終止
   // never count — spec §1). Live via /api/tasks/count + "task" SSE deltas.
-  const taskCount = useTaskCount();
+  const taskCount = useTaskCount().open;
   // The gear opens Settings as an OVERLAY route (#settings); clicking a nav
   // tab navigates back to that tab.
   const settingsOpen = route.page === "settings";

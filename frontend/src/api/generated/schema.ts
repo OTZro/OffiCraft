@@ -2456,7 +2456,7 @@ export interface paths {
         };
         /**
          * List tasks (?executor=&type=&status=; light list items — get_task for full).
-         * @description List tasks (LIGHT ``TaskListItemDTO`` projection — the fields the 任務清單 card renders collapsed; ``steps``/``description``/``inputs`` are NOT included, fetch the full task with ``GET /api/tasks/{task_id}``). ``progress_done``/``progress_total`` are still counted. Optional exact-match filters: ``?executor=`` (an executor id, or the special values ``outsource`` / ``unassigned``), ``?type=`` (a type_key), ``?status=`` (the six-state closed set; anything else is a 400). Partitioning (未結束/已結束) and priority ordering are the FE's.
+         * @description List tasks (LIGHT ``TaskListItemDTO`` projection — the fields the 任務清單 card renders collapsed; ``steps``/``description``/``inputs`` are NOT included, fetch the full task with ``GET /api/tasks/{task_id}``). ``progress_done``/``progress_total`` are still counted. Optional exact-match filters: ``?executor=`` (an executor id, or the special values ``outsource`` / ``unassigned``), ``?type=`` (a type_key), ``?status=`` (the six-state closed set; anything else is a 400). ``?statuses=`` (repeatable, T-a3e4) is the SET form the cockpit's 狀態 dropdown speaks — see its own description. Every filter present is ANDed. Partitioning (未結束/已結束) and priority ordering are the FE's.
          */
         get: operations["handle_list_tasks_api_tasks_get"];
         put?: never;
@@ -4951,8 +4951,20 @@ export interface components {
             runtime: components["schemas"]["AgentRuntime"];
             /** Status */
             status: string;
+            /**
+             * Task Created Ts
+             * @description The bound task's ``created_ts`` — the panel orders its rows 依任務建立時間新→舊 and used to get this key by downloading the ENTIRE task list on every worker/chat delta just to sort five rows (T-a3e4). 0.0 when the task cannot be resolved; the client then falls back to the worker's own mint stamp (an honest proxy, never fabricated). additive-optional.
+             * @default 0
+             */
+            task_created_ts: number;
             /** Task Id */
             task_id: string;
+            /**
+             * Task No
+             * @description The bound task's display number (T-xxxx) — the panel row's third line, previously joined client-side from ``GET /api/tasks`` (T-a3e4). "" when the task cannot be resolved. additive-optional.
+             * @default
+             */
+            task_no: string;
             /**
              * Task Status
              * @default
@@ -4963,6 +4975,18 @@ export interface components {
              * @default
              */
             task_title: string;
+            /**
+             * Task Type Key
+             * @description The bound task's ``type_key`` — the panel row's second line (外包沒有角色名, the task type IS its role line). "" = 自由代辦 / unresolvable task. Previously a client-side join against ``GET /api/tasks`` (T-a3e4). additive-optional.
+             * @default
+             */
+            task_type_key: string;
+            /**
+             * Task Type Name
+             * @description The DISPLAY name of ``task_type_key`` as the task manual currently spells it (T-fa76's label, resolved here so the panel no longer pulls the whole manuals list to translate one key — T-a3e4). "" when the manual is gone or names nothing; the client then falls back to the raw ``task_type_key``. additive-optional.
+             * @default
+             */
+            task_type_name: string;
             /**
              * Unread Count
              * @description The CALLER's unread chat-message count for this worker's conversation (the same chat_read watermark inverse the member roster serves) — the office 外包 row's red badge. Optional-with-default: absent reads as 0 for older clients.
@@ -5820,11 +5844,17 @@ export interface components {
         };
         /**
          * TaskCountDTO
-         * @description Open (non-terminal) task count — the tasks nav badge.
+         * @description Open (non-terminal) task count — the tasks nav badge. ``total`` (T-a3e4) is the count of ALL tasks, terminal ones included: once the list endpoint answers a status SET (``?statuses=``), an empty list no longer tells a client whether the workshop is empty or merely has nothing in those states, and 目前沒有任務 is a claim about the workshop. One grouped count, so a client never widens a list fetch just to word an empty screen.
          */
         TaskCountDTO: {
             /** Open */
             open: number;
+            /**
+             * Total
+             * @description Every task ever, terminal included — the honest basis for 「這個工作室一張任務都沒有」. additive-optional (absent reads as 0 for older servers).
+             * @default 0
+             */
+            total: number;
         };
         /**
          * TaskCreateDTO
@@ -6107,6 +6137,26 @@ export interface components {
             text: string;
         };
         /**
+         * TaskDepRefDTO
+         * @description One dependency of a task, resolved to the facts the 「等 T-xxxx」 row shows (T-a3e4): the dep's own ``task_no``, ``title`` and ``status``. ``id`` is the dep id as stored on the depending task, so the client can pair an entry with ``deps`` positionally OR by id. ``task_no`` is the same pure projection of the id every other surface prints, so it is filled even for a dep whose task row is GONE; ``title``/``status`` are "" in exactly that case — an unresolvable dep, never a fabricated 尚未執行.
+         */
+        TaskDepRefDTO: {
+            /** Id */
+            id: string;
+            /**
+             * Status
+             * @default
+             */
+            status: string;
+            /** Task No */
+            task_no: string;
+            /**
+             * Title
+             * @default
+             */
+            title: string;
+        };
+        /**
          * TaskListItemDTO
          * @description One task in the LIGHT list projection (``GET /api/tasks`` / MCP ``list_tasks``): the fields the 任務清單 card needs to render collapsed. Drops the heavy per-task detail (``steps``, ``description``, ``inputs``) which the list never shows collapsed — fetch the full ``TaskDTO`` with ``GET /api/tasks/{task_id}`` (MCP ``get_task``) to read those. ``progress_done``/``progress_total`` are still counted (from step leaves) so the card's progress bar renders without the steps payload. ``creator_id`` is the verified token sub of the task's creator (a member id, an outsource worker id, or the literal "owner"); "" on rows created before the column existed.
          */
@@ -6135,6 +6185,11 @@ export interface components {
             dedupe_key: string;
             /** Deps */
             deps: string[];
+            /**
+             * Dep Tasks
+             * @description The DISPLAY facts for each id in ``deps``, resolved server-side against the WHOLE task table — one entry per dep, in the same order (T-a3e4). The client renders the 「等 T-xxxx <標題>」 row straight from this: no follow-up fetch, and no need to download the closed population just so an already-finished dep can be named. A dep whose task no longer exists is still listed, with ``status``/``title`` empty — that is the honest 查無此任務 row. The field being ABSENT is a third, different thing (an older server that cannot resolve deps at all), so a client must not read absence as non-existence. additive-optional.
+             */
+            dep_tasks?: components["schemas"]["TaskDepRefDTO"][];
             /**
              * Duplicate Of
              * @default
@@ -11863,6 +11918,8 @@ export interface operations {
         parameters: {
             query?: {
                 executor?: string | null;
+                /** @description REPEATABLE status set (``?statuses=not_started&statuses=in_progress``) — the cockpit asks for exactly the states the owner ticked instead of downloading the whole archive and filtering in the browser (T-a3e4). A task matches when its ``status`` is in the set OR when the set contains ``reassigning`` and the task's ``lock`` is ``reassigning`` — the set vocabulary is the COCKPIT's 狀態 dropdown, which lists reassigning as a row even though T-9ca5 moved it from status to the orthogonal ``lock``. Accepted values: the seven statuses plus ``reassigning``; anything else is a 400. Absent or empty = no constraint. Deliberately a SECOND parameter rather than a widened ``?status=``: ``status=`` is frozen wire that REJECTS ``reassigning`` with a 400 and matches the literal column only, so teaching the set semantics to that name would change what a live client already sends. Both may be given — they are ANDed, as is ``open=true``. additive-optional. */
+                statuses?: string[];
                 status?: string | null;
                 type?: string | null;
                 open?: string | null;

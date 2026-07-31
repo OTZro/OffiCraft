@@ -54,6 +54,7 @@ import type {
   TaskReassignInput,
   OutsourceWorkerView,
   TaskTypeView,
+  TaskCountView,
   TaskManualView,
   TaskManualPatch,
   DocSummaryView,
@@ -664,6 +665,32 @@ function mockReplyCardStatusOf(
 /** Terminal task statuses (spec: 已完成/終止 為終態) — shared by the mock's
  * count / terminate / priority guards (mirrors the server's closed-set rule). */
 const TERMINAL_TASK_STATUSES = new Set(["done", "terminated", "duplicated"]);
+
+// The server's task_no projection of an id (domain.go TaskNo) — the mock needs
+// it for a dep whose task row is absent, exactly where the server derives it
+// rather than leaving the number blank (T-a3e4).
+function deriveMockTaskNo(taskId: string): string {
+  return `T-${taskId.slice(2, 6)}`;
+}
+
+// withWorkerTaskJoin fills the bound-task fields the SERVER now folds into the
+// worker DTO (T-a3e4: task_no / task_created_ts / task_type_key /
+// task_type_name). Mock parity matters here in a specific way: the panel used
+// to compute these itself from a full task-list download, so if the mock kept
+// leaving them blank, the hook change would look correct in tests while the
+// real panel lost its labels. Honest ""/0 when the task cannot be resolved.
+function withWorkerTaskJoin(w: OutsourceWorkerView): OutsourceWorkerView {
+  const task = tasks.find((t) => t.id === w.taskId);
+  const typeKey = task?.typeKey ?? "";
+  return {
+    ...w,
+    taskNo: task?.taskNo ?? "",
+    taskCreatedTs: task?.createdTs ?? 0,
+    taskTypeKey: typeKey,
+    taskTypeName:
+      taskManuals.find((m) => m.typeKey === typeKey)?.displayName ?? "",
+  };
+}
 
 /** Terminal STEP statuses (done = finished, superseded = re-plan history) — a
  * reassign rewinds every OTHER step to pending, mirroring the server. */
@@ -1843,20 +1870,46 @@ export const mockApi: Api = {
     return structuredClone(card);
   },
 
-  async listTasks(opts?: { open?: boolean }): Promise<TaskView[]> {
+  async listTasks(opts?: {
+    open?: boolean;
+    statuses?: string[];
+  }): Promise<TaskView[]> {
     // The LIGHT list (mirrors GET /api/tasks — partitioning / ordering /
     // filtering are the FE's). Strip the heavy steps/description the real light
     // projection omits, so the mock exercises the same "hydrate on expand via
     // getTask" path as the server. Clone so callers never mutate. `open`
     // (T-2b9d) drops the terminal rows, mirroring ?open=true byte-for-byte in
     // behaviour so mock and http agree.
-    const rows = opts?.open
-      ? tasks.filter((t) => !TERMINAL_TASK_STATUSES.has(t.status))
-      : tasks;
+    // `statuses` (T-a3e4) is the SET form, ANDed with `open` exactly as the
+    // server ANDs them — including the one rule that is not a plain status
+    // comparison: `reassigning` in the set matches the handover LOCK (T-9ca5),
+    // never the status column. Getting that wrong here would let a mock-backed
+    // test go green against a server that hides every 轉派中 row.
+    const wanted = new Set(opts?.statuses ?? []);
+    const rows = tasks.filter((t) => {
+      if (opts?.open && TERMINAL_TASK_STATUSES.has(t.status)) return false;
+      if (wanted.size === 0) return true;
+      if (wanted.has(t.status)) return true;
+      return wanted.has("reassigning") && t.lock === "reassigning";
+    });
+    // dep_tasks (T-a3e4): resolved against the WHOLE mock population, like the
+    // server's single-query join — so a filtered list still names a dep the
+    // filter excluded. A dep with no task keeps its derived number and stays
+    // title/status-less (the card's 查無此任務 row).
+    const byId = new Map(tasks.map((t) => [t.id, t]));
     return structuredClone(rows).map((t) => ({
       ...t,
       steps: [],
       description: "",
+      depTasks: (t.deps ?? []).map((id) => {
+        const dep = byId.get(id);
+        return {
+          id,
+          taskNo: dep?.taskNo ?? deriveMockTaskNo(id),
+          title: dep?.title ?? "",
+          status: dep?.status ?? "",
+        };
+      }),
       // Light list parity (T-3dc5): no artifact rows, only the count (the
       // server's grouped COUNT) — the collapsed card's 「產物 N」 badge.
       artifacts: [],
@@ -1871,6 +1924,9 @@ export const mockApi: Api = {
     const task = structuredClone(findTask(id));
     return {
       ...task,
+      // TaskDTO carries no dep_tasks (T-a3e4 put the dep join on the LIGHT list
+      // only) — drop it so a mock-mode detail cannot be richer than the wire's.
+      depTasks: undefined,
       steps: task.steps.map((st) => ({
         ...st,
         replyCardStatus: mockReplyCardStatusOf(st.replyCardId || null),
@@ -1881,10 +1937,14 @@ export const mockApi: Api = {
     };
   },
 
-  async getTaskCount(): Promise<number> {
+  async getTaskCount(): Promise<TaskCountView> {
     // Open (non-terminal) count — computed live, same rule as the server's
-    // count endpoint (done/terminated never count).
-    return tasks.filter((t) => !TERMINAL_TASK_STATUSES.has(t.status)).length;
+    // count endpoint (done/terminated never count) — plus the unfiltered total
+    // (T-a3e4), which is every task INCLUDING the terminal ones.
+    return {
+      open: tasks.filter((t) => !TERMINAL_TASK_STATUSES.has(t.status)).length,
+      total: tasks.length,
+    };
   },
 
   async terminateTask(id: string): Promise<TaskView> {
@@ -2268,7 +2328,7 @@ export const mockApi: Api = {
     // roster's unread_count uses (http parity: the server injects it on the
     // wire DTO) — tests inject a worker→owner message via __injectMockChat.
     return structuredClone(outsourceWorkers).map((w) => ({
-      ...w,
+      ...withWorkerTaskJoin(w),
       unreadCount: unreadCountOf(w.id),
     }));
   },
@@ -2286,7 +2346,10 @@ export const mockApi: Api = {
         `outsource worker ${id} not found`
       );
     }
-    return { ...structuredClone(w), unreadCount: unreadCountOf(w.id) };
+    return {
+      ...withWorkerTaskJoin(structuredClone(w)),
+      unreadCount: unreadCountOf(w.id),
+    };
   },
 
   async relocateWorker(
@@ -2319,7 +2382,10 @@ export const mockApi: Api = {
       w.machine = m ? m.name : machineId;
     }
     emitTopic("outsource_worker");
-    return { ...structuredClone(w), unreadCount: unreadCountOf(w.id) };
+    return {
+      ...withWorkerTaskJoin(structuredClone(w)),
+      unreadCount: unreadCountOf(w.id),
+    };
   },
 
   async refocusWorker(id: string): Promise<OutsourceWorkerView> {
@@ -2348,7 +2414,10 @@ export const mockApi: Api = {
     }
     w.refocusSince = Date.now() / 1000;
     emitTopic("outsource_worker");
-    return { ...structuredClone(w), unreadCount: unreadCountOf(w.id) };
+    return {
+      ...withWorkerTaskJoin(structuredClone(w)),
+      unreadCount: unreadCountOf(w.id),
+    };
   },
 
   async stopWorker(id: string): Promise<OutsourceWorkerView> {
@@ -2366,7 +2435,10 @@ export const mockApi: Api = {
     w.refocusSince = null;
     w.presence = "stopped";
     emitTopic("outsource_worker");
-    return { ...structuredClone(w), unreadCount: unreadCountOf(w.id) };
+    return {
+      ...withWorkerTaskJoin(structuredClone(w)),
+      unreadCount: unreadCountOf(w.id),
+    };
   },
 
   async restartWorker(id: string): Promise<OutsourceWorkerView> {
@@ -2394,7 +2466,10 @@ export const mockApi: Api = {
     w.desiredState = "online";
     w.presence = "waking";
     emitTopic("outsource_worker");
-    return { ...structuredClone(w), unreadCount: unreadCountOf(w.id) };
+    return {
+      ...withWorkerTaskJoin(structuredClone(w)),
+      unreadCount: unreadCountOf(w.id),
+    };
   },
 
   async setWorkerModel(
@@ -2413,7 +2488,10 @@ export const mockApi: Api = {
     w.model = patch.model;
     if (patch.effort !== undefined && patch.effort !== "") w.effort = patch.effort;
     emitTopic("outsource_worker");
-    return { ...structuredClone(w), unreadCount: unreadCountOf(w.id) };
+    return {
+      ...withWorkerTaskJoin(structuredClone(w)),
+      unreadCount: unreadCountOf(w.id),
+    };
   },
 
   async getWorkerBootContext(id: string): Promise<string> {

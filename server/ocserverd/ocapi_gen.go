@@ -1127,11 +1127,23 @@ type OutsourceWorkerDTO struct {
 	RefocusSince *float64 `json:"refocus_since,omitempty"`
 
 	// Runtime The worker's selected AI CLI runtime. Existing rows default to ``claude``.
-	Runtime    *AgentRuntime `json:"runtime,omitempty"`
-	Status     string        `json:"status"`
-	TaskId     string        `json:"task_id"`
-	TaskStatus *string       `json:"task_status,omitempty"`
-	TaskTitle  *string       `json:"task_title,omitempty"`
+	Runtime *AgentRuntime `json:"runtime,omitempty"`
+	Status  string        `json:"status"`
+
+	// TaskCreatedTs The bound task's ``created_ts`` — the panel orders its rows 依任務建立時間新→舊 and used to get this key by downloading the ENTIRE task list on every worker/chat delta just to sort five rows (T-a3e4). 0.0 when the task cannot be resolved; the client then falls back to the worker's own mint stamp (an honest proxy, never fabricated). additive-optional.
+	TaskCreatedTs *float64 `json:"task_created_ts,omitempty"`
+	TaskId        string   `json:"task_id"`
+
+	// TaskNo The bound task's display number (T-xxxx) — the panel row's third line, previously joined client-side from ``GET /api/tasks`` (T-a3e4). "" when the task cannot be resolved. additive-optional.
+	TaskNo     *string `json:"task_no,omitempty"`
+	TaskStatus *string `json:"task_status,omitempty"`
+	TaskTitle  *string `json:"task_title,omitempty"`
+
+	// TaskTypeKey The bound task's ``type_key`` — the panel row's second line (外包沒有角色名, the task type IS its role line). "" = 自由代辦 / unresolvable task. Previously a client-side join against ``GET /api/tasks`` (T-a3e4). additive-optional.
+	TaskTypeKey *string `json:"task_type_key,omitempty"`
+
+	// TaskTypeName The DISPLAY name of ``task_type_key`` as the task manual currently spells it (T-fa76's label, resolved here so the panel no longer pulls the whole manuals list to translate one key — T-a3e4). "" when the manual is gone or names nothing; the client then falls back to the raw ``task_type_key``. additive-optional.
+	TaskTypeName *string `json:"task_type_name,omitempty"`
 
 	// UnreadCount The CALLER's unread chat-message count for this worker's conversation (the same chat_read watermark inverse the member roster serves) — the office 外包 row's red badge. Optional-with-default: absent reads as 0 for older clients.
 	UnreadCount *int `json:"unread_count,omitempty"`
@@ -1627,9 +1639,12 @@ type TaskArtifactInputDTO struct {
 	Url          *string `json:"url,omitempty"`
 }
 
-// TaskCountDTO Open (non-terminal) task count — the tasks nav badge.
+// TaskCountDTO Open (non-terminal) task count — the tasks nav badge. “total“ (T-a3e4) is the count of ALL tasks, terminal ones included: once the list endpoint answers a status SET (“?statuses=“), an empty list no longer tells a client whether the workshop is empty or merely has nothing in those states, and 目前沒有任務 is a claim about the workshop. One grouped count, so a client never widens a list fetch just to word an empty screen.
 type TaskCountDTO struct {
 	Open int `json:"open"`
+
+	// Total Every task ever, terminal included — the honest basis for 「這個工作室一張任務都沒有」. additive-optional (absent reads as 0 for older servers).
+	Total *int `json:"total,omitempty"`
 }
 
 // TaskCreateDTO Create one task (agent-side; MCP “create_task“). With “type_key“ the server derives the dedupe key from the manual's is_key fields over “inputs“ and resolves the executor from the manual's assignee (member → bound directly; outsource → unassigned, awaiting the scheduler); an unset manual assignee requires an explicit “executor_member_id“. Without “type_key“ (ad-hoc 自由代辦) “executor_member_id“ is mandatory. A dedupe hit on a NON-terminal task answers 200 with the EXISTING task and “deduped: true“ — dedupe is the normal path, never an error. Caller authorization (正職授權矩陣, T-23cf): an outsource worker (kind=outsource) may NEVER create a task (403); a 發包 create (“target.kind=outsource“ or a manual outsource assignee) is open to any 正職, owner/admin included; a typed task the manual assigns to a member X may be created ONLY by X — owner/admin are NOT exempt (403 otherwise); an ad-hoc (or manual-assignee-less) task with a member executor may name only the caller itself, unless the caller is the owner or an admin agent — a 一般正職 pointing “executor_member_id“ at another member is 403 (self, or a 發包, only). The authz gate precedes dedupe, so an unauthorized caller never receives the existing twin.
@@ -1720,6 +1735,14 @@ type TaskDTO struct {
 	WaitingReason      *string       `json:"waiting_reason,omitempty"`
 }
 
+// TaskDepRefDTO One dependency of a task, resolved to the facts the 「等 T-xxxx」 row shows (T-a3e4): the dep's own “task_no“, “title“ and “status“. “id“ is the dep id as stored on the depending task, so the client can pair an entry with “deps“ positionally OR by id. “task_no“ is the same pure projection of the id every other surface prints, so it is filled even for a dep whose task row is GONE; “title“/“status“ are "" in exactly that case — an unresolvable dep, never a fabricated 尚未執行.
+type TaskDepRefDTO struct {
+	Id     string  `json:"id"`
+	Status *string `json:"status,omitempty"`
+	TaskNo string  `json:"task_no"`
+	Title  *string `json:"title,omitempty"`
+}
+
 // TaskDepsDTO Replace the blocking-deps list wholesale (MCP “set_task_deps“). Since T-74f8 a dep is a real hold: an unassigned outsource task with a live blocker is not minted by the 發包 scheduler, and the blocker reaching a terminal status releases the blocked task (durable notice to its executor + an immediate scheduler tick). It never rewrites the blocked task's status — that stays derived from its steps. A self-reference or an unknown task id is a 422.
 type TaskDepsDTO struct {
 	BlockedBy []string `json:"blocked_by"`
@@ -1757,15 +1780,18 @@ type TaskListItemDTO struct {
 	CreatedTs     *float64 `json:"created_ts,omitempty"`
 	CreatorId     *string  `json:"creator_id,omitempty"`
 	DedupeKey     *string  `json:"dedupe_key,omitempty"`
-	Deps          []string `json:"deps"`
-	DuplicateOf   *string  `json:"duplicate_of,omitempty"`
-	ExecutorId    *string  `json:"executor_id,omitempty"`
-	ExecutorKind  string   `json:"executor_kind"`
-	Id            string   `json:"id"`
-	Lock          *string  `json:"lock,omitempty"`
-	Priority      string   `json:"priority"`
-	ProgressDone  int      `json:"progress_done"`
-	ProgressTotal int      `json:"progress_total"`
+
+	// DepTasks The DISPLAY facts for each id in ``deps``, resolved server-side against the WHOLE task table — one entry per dep, in the same order (T-a3e4). The client renders the 「等 T-xxxx <標題>」 row straight from this: no follow-up fetch, and no need to download the closed population just so an already-finished dep can be named. A dep whose task no longer exists is still listed, with ``status``/``title`` empty — that is the honest 查無此任務 row. The field being ABSENT is a third, different thing (an older server that cannot resolve deps at all), so a client must not read absence as non-existence. additive-optional.
+	DepTasks      *[]TaskDepRefDTO `json:"dep_tasks,omitempty"`
+	Deps          []string         `json:"deps"`
+	DuplicateOf   *string          `json:"duplicate_of,omitempty"`
+	ExecutorId    *string          `json:"executor_id,omitempty"`
+	ExecutorKind  string           `json:"executor_kind"`
+	Id            string           `json:"id"`
+	Lock          *string          `json:"lock,omitempty"`
+	Priority      string           `json:"priority"`
+	ProgressDone  int              `json:"progress_done"`
+	ProgressTotal int              `json:"progress_total"`
 
 	// ReassignedFrom The PREDECESSOR the task was last handed over from (T-ba04 轉派交接): the id of the executor the task moved AWAY from on its most recent reassign. "" on a task never reassigned (or pre-column rows). additive-optional.
 	ReassignedFrom *string `json:"reassigned_from,omitempty"`
@@ -2132,9 +2158,12 @@ type HandleListTaskManualsApiTaskManualsGetParams struct {
 // HandleListTasksApiTasksGetParams defines parameters for HandleListTasksApiTasksGet.
 type HandleListTasksApiTasksGetParams struct {
 	Executor *string `form:"executor,omitempty" json:"executor,omitempty"`
-	Status   *string `form:"status,omitempty" json:"status,omitempty"`
-	Type     *string `form:"type,omitempty" json:"type,omitempty"`
-	Open     *string `form:"open,omitempty" json:"open,omitempty"`
+
+	// Statuses REPEATABLE status set (``?statuses=not_started&statuses=in_progress``) — the cockpit asks for exactly the states the owner ticked instead of downloading the whole archive and filtering in the browser (T-a3e4). A task matches when its ``status`` is in the set OR when the set contains ``reassigning`` and the task's ``lock`` is ``reassigning`` — the set vocabulary is the COCKPIT's 狀態 dropdown, which lists reassigning as a row even though T-9ca5 moved it from status to the orthogonal ``lock``. Accepted values: the seven statuses plus ``reassigning``; anything else is a 400. Absent or empty = no constraint. Deliberately a SECOND parameter rather than a widened ``?status=``: ``status=`` is frozen wire that REJECTS ``reassigning`` with a 400 and matches the literal column only, so teaching the set semantics to that name would change what a live client already sends. Both may be given — they are ANDed, as is ``open=true``. additive-optional.
+	Statuses *[]string `form:"statuses,omitempty" json:"statuses,omitempty"`
+	Status   *string   `form:"status,omitempty" json:"status,omitempty"`
+	Type     *string   `form:"type,omitempty" json:"type,omitempty"`
+	Open     *string   `form:"open,omitempty" json:"open,omitempty"`
 }
 
 // HandleReceiveWebhookInPostParams defines parameters for HandleReceiveWebhookInPost.
@@ -5087,6 +5116,19 @@ func (siw *ServerInterfaceWrapper) HandleListTasksApiTasksGet(w http.ResponseWri
 			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "executor"})
 		} else {
 			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "executor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "statuses" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "statuses", r.URL.Query(), &params.Statuses, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "statuses"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "statuses", Err: err})
 		}
 		return
 	}

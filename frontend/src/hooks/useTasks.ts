@@ -6,6 +6,12 @@
 // roster (assignment / release) and "task_manual" the type-filter options. The
 // owner actions (terminate / priority / reassign / message) also refetch
 // directly so the mock behaves identically.
+//
+// T-a3e4: the list is fetched by STATUS SET (`setStatuses`), not by a boolean
+// "also include closed". The page hands down what its 狀態 dropdown has ticked
+// and the server answers with those rows only, so an SSE-triggered refetch
+// costs the ~20 rows on screen instead of the whole task history. `interface
+// UseTasks` documents why the boolean had to go rather than be extended.
 
 import { useCallback, useEffect, useState } from "react";
 import type {
@@ -18,7 +24,10 @@ import type {
 import { api } from "../api";
 
 interface UseTasks {
-  /** EVERY task, unfiltered/unsorted (the page partitions + orders + filters). */
+  /** The tasks the LAST fetch asked for — every status when no set was given,
+   * otherwise exactly the ticked ones (T-a3e4). Still unordered/unpartitioned:
+   * the page partitions + orders, and applies the executor/type axes, which
+   * stay client-side (they are not what made this payload 400 KB). */
   tasks: TaskView[];
   /** LIVE outsource workers — the 外包 executor display resolves through this. */
   workers: OutsourceWorkerView[];
@@ -45,49 +54,62 @@ interface UseTasks {
   getDetail: (id: string) => Promise<TaskView>;
   /** Owner/admin un-pin of one task artifact (T-3dc5), then refetch. */
   removeArtifact: (taskId: string, artifactId: string) => Promise<void>;
-  /** Whether the list currently includes terminal (已結束) tasks. Default view
-   * (未結束 only) loads open-only (T-2b9d, `GET /api/tasks?open=true`); the page
-   * flips this true the moment its filters could surface a terminal task (a
-   * cleared/terminal status filter or a single-task jump anchor), which
-   * refetches the FULL population. */
-  includeClosed: boolean;
-  setIncludeClosed: (v: boolean) => void;
-  /** Whether `tasks` as it stands came from a closed-inclusive fetch (T-1d82).
-   * Distinguishes "not in the list because it has not been loaded" from "not
-   * in the list because it does not exist" — the only honest basis for telling
-   * the owner a dep is 查無此任務. */
-  closedLoaded: boolean;
+  /** Ask the server for EXACTLY these statuses (T-a3e4): the page hands down
+   * the set its 狀態 dropdown has ticked and the fetch sends one `?statuses=`
+   * per state. `undefined` (or an empty array) = no status constraint, i.e. the
+   * full population — what 清除篩選 全部 and a single-task jump anchor need.
+   *
+   * This REPLACED a boolean `includeClosed` (T-2b9d's `?open=true`). open-only
+   * removed the archive but still shipped every live task regardless of the
+   * filter, so the default view downloaded rows it had already decided not to
+   * render; and the flag had to be re-derived from the rendered list, which is
+   * what made it latch. Asking for what is ticked needs no derivation. */
+  setStatuses: (statuses: string[] | undefined) => void;
 }
 
-export function useTasks(): UseTasks {
+// initialStatuses is the status set the CALLER's filter opens on — the page's
+// own default, passed in rather than duplicated here. It matters for exactly one
+// frame and that frame is the expensive one: the mount fetch happens before any
+// effect can state the filter, so a hook that defaulted to "no constraint" would
+// download the whole archive on every page open and then immediately re-ask for
+// the twenty rows it renders. Pass [] to genuinely open on 所有狀態.
+export function useTasks(initialStatuses: string[]): UseTasks {
   const [tasks, setTasks] = useState<TaskView[]>([]);
   const [workers, setWorkers] = useState<OutsourceWorkerView[]>([]);
   const [taskTypes, setTaskTypes] = useState<TaskTypeView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
-  // Default: 未結束-only (the page opens on that partition). The page flips this
-  // true when a view could show a terminal task, refetching the full list.
-  const [includeClosed, setIncludeClosed] = useState(false);
-  // T-1d82: whether the tasks CURRENTLY in state came from a closed-inclusive
-  // fetch. `includeClosed` alone cannot answer that — it flips the moment the
-  // page asks, while `tasks` still holds the open-only rows until the refetch
-  // lands. Anything that must distinguish 「找不到，因為還沒載到」 from
-  // 「找不到，因為真的不存在」 has to read THIS, or it will state the second
-  // during the frames that are only the first (see TaskCard's dep rows).
-  const [closedLoaded, setClosedLoaded] = useState(false);
+  // The status set the page is currently asking for (T-a3e4). undefined until
+  // the page states its filter, and undefined again whenever the view genuinely
+  // needs every status (清除篩選 全部 / a single-task anchor that may point at a
+  // closed task). Held as a joined KEY, not an array, so that a re-render
+  // producing an equal-but-new array does not re-fire the fetch — the page
+  // rebuilds its Set on every render, and a raw array in the dep list would
+  // refetch the list on every keystroke elsewhere on the page.
+  const [statusKey, setStatusKey] = useState<string | undefined>(() =>
+    initialStatuses.length === 0
+      ? undefined
+      : [...initialStatuses].sort().join(",")
+  );
+  const setStatuses = useCallback((next: string[] | undefined) => {
+    setStatusKey(
+      next === undefined || next.length === 0
+        ? undefined
+        : [...next].sort().join(",")
+    );
+  }, []);
 
   const refetch = useCallback(async () => {
     const [t, w] = await Promise.all([
-      api.listTasks(includeClosed ? undefined : { open: true }),
+      api.listTasks(
+        statusKey === undefined ? undefined : { statuses: statusKey.split(",") }
+      ),
       api.listOutsourceWorkers(),
     ]);
     setTasks(t);
     setWorkers(w);
-    // Set from the value this fetch actually USED, together with its rows —
-    // never from the live flag, which may already have moved on.
-    setClosedLoaded(includeClosed);
     setError(false);
-  }, [includeClosed]);
+  }, [statusKey]);
 
   const refetchTypes = useCallback(async () => {
     setTaskTypes(await api.listTaskTypes());
@@ -185,8 +207,6 @@ export function useTasks(): UseTasks {
     sendMessage,
     getDetail,
     removeArtifact,
-    includeClosed,
-    setIncludeClosed,
-    closedLoaded,
+    setStatuses,
   };
 }

@@ -144,7 +144,6 @@ export function TaskCard({
   typeNames,
   nowTs,
   located = false,
-  depsResolvable = true,
   onTerminate,
   onMarkDuplicate,
   onSetPriority,
@@ -154,15 +153,9 @@ export function TaskCard({
   onRemoveArtifact,
 }: {
   task: TaskView;
-  /** The whole list — dep ids resolve to display task_no through it. */
+  /** The whole loaded list — the 重複於 link resolves its target's task_no
+   * through it (deps do NOT: they read task.depTasks, the server's join). */
   allTasks: TaskView[];
-  /** Whether `allTasks` is the FULL population, so an unresolved dep id can be
-   * called 查無此任務 honestly (T-1d82). False while the list is still the
-   * open-only fast path: a dep that merely CLOSED is absent then, and saying
-   * 查無此任務 about a perfectly healthy task would be a lie the owner acts on.
-   * Defaults true so hand-built fixtures (which pass the whole list) keep
-   * working. */
-  depsResolvable?: boolean;
   members: Member[];
   /** LIVE outsource workers — resolves the 外包 codename/model/effort. */
   workers: OutsourceWorkerView[];
@@ -1452,9 +1445,16 @@ export function TaskCard({
       {/* T-1d82 (owner 2026-07-20): the row used to be a dead <div> printing
            `等 <task_no>` — and for a dep that had already closed, not even that:
            the lookup missed and it fell back to the raw id (`等 t-35e06c8e63c8`,
-           what owner screenshotted). Two fixes, one cause — TasksPage now loads
-           the closed population whenever any card carries a dep, so `dep`
-           resolves for terminal deps too (see TasksPage's needClosed).
+           what owner screenshotted). T-1d82 fixed that by making TasksPage load
+           the CLOSED population whenever any card carried a dep — which, with
+           deps on live tasks being ordinary, meant the page re-downloaded the
+           whole archive on every task SSE delta (408 KB vs 17 KB).
+           🔴 T-a3e4 moved the resolution to where the fact lives: the server
+           ships `dep_tasks` (task_no + title + status per dep, joined off the
+           read it already does), so a closed dep is named WITHOUT loading the
+           closed list, and the widening clause is gone. Do not reintroduce an
+           `allTasks.find` here — that lookup IS the reason the payload ticket
+           existed.
            Here the row gains what the id never carried: the dep's TITLE (that is
            what "看不出在等什麼" was asking for) and a click through to that card,
            reusing the duplicated-link vocabulary right below (navigateHash +
@@ -1468,16 +1468,24 @@ export function TaskCard({
       {task.deps.length > 0 && (
         <div className="task-card__deps">
           {task.deps.map((depId) => {
-            const dep = allTasks.find((x) => x.id === depId);
+            // T-a3e4: the dep's facts come from the SERVER's dep_tasks join, not
+            // from a lookup in the loaded list — that lookup is what forced the
+            // page to download the closed population (see TasksPage). An entry
+            // with an empty status is a dep whose task is gone; NO entry at all
+            // (a pre-join server / a hand-built fixture) is the different, older
+            // silence: we cannot name it yet. Both branches below keep saying
+            // exactly which silence it is.
+            const ref = task.depTasks?.find((x) => x.id === depId);
+            const dep = ref && ref.status !== "" ? ref : undefined;
             if (!dep) {
               // Two different silences, and only one of them is 查無此任務.
-              // While the list is still the open-only fast path, a dep that
-              // simply CLOSED is missing from it too — claiming the task does
-              // not exist during those frames would be a confident lie about a
-              // healthy task (worse than the raw id it replaced). So until the
-              // full population is in hand, the row says only what is true:
-              // it is waiting on this id, and cannot name it yet.
-              const unknown = !depsResolvable;
+              // `ref === undefined` = nobody resolved this dep at all (no
+              // dep_tasks on the row): claiming non-existence there would be a
+              // confident lie about what may be a perfectly healthy task —
+              // worse than the raw id it replaced. A ref WITH an empty status is
+              // the server's answer that the task is gone, and only that earns
+              // 查無此任務.
+              const unknown = ref === undefined;
               return (
                 <div
                   key={depId}

@@ -881,13 +881,34 @@ type taskListItemDTO struct {
 	UpdatedTS          float64  `json:"updated_ts"`
 	ClosedTS           *float64 `json:"closed_ts"` // null while open
 	Deps               []string `json:"deps"`
-	ProgressDone       int      `json:"progress_done"`
-	ProgressTotal      int      `json:"progress_total"`
+	// DepTasks carries the DISPLAY facts of every id in Deps (T-a3e4), resolved
+	// against the whole task table by the ONE ListTasks read the handler already
+	// does — one entry per dep, same order. The card's 「等 T-xxxx <標題>」 row
+	// renders straight from this, so a dep that has already CLOSED no longer
+	// forces the client to download the closed population to name it. Never nil
+	// (an empty list is honest for a task with no deps); a dep whose task is
+	// gone still gets an entry, with Status/Title "".
+	DepTasks      []taskDepRefDTO `json:"dep_tasks"`
+	ProgressDone  int             `json:"progress_done"`
+	ProgressTotal int             `json:"progress_total"`
 	// ArtifactCount is the number of pinned deliverables (T-3dc5) — the collapsed
 	// card's 「產物 N」 badge; 0 (the zero value) when none, so the badge hides.
 	// The light list never loads the artifact rows themselves (get_task folds
 	// the full set).
 	ArtifactCount int `json:"artifact_count"`
+}
+
+// taskDepRefDTO is one entry of taskListItemDTO.DepTasks: a dep id resolved to
+// what the row actually prints (T-a3e4). TaskNo is the pure projection of the
+// id, so it is filled even when the dep's task row is GONE — Status/Title are
+// "" in exactly that case, which is the client's honest 查無此任務 row. Nothing
+// is ever defaulted to a plausible-looking status: the absence of one IS the
+// signal.
+type taskDepRefDTO struct {
+	ID     string `json:"id"`
+	TaskNo string `json:"task_no"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
 }
 
 type taskCreateResultDTO struct {
@@ -901,6 +922,13 @@ type taskCreateResultDTO struct {
 
 type taskCountDTO struct {
 	Open int `json:"open"`
+	// Total is every task, terminal included (T-a3e4). The nav badge only wants
+	// Open; Total exists so the 任務頁 can word its empty screen honestly now
+	// that the list endpoint answers a STATUS SET — an empty list alone cannot
+	// tell 「什麼都沒有」 from 「這幾個狀態裡沒有」, and 目前沒有任務 is a claim
+	// about the whole workshop. It is a count, not a list: nobody has to widen a
+	// list fetch to find this out.
+	Total int `json:"total"`
 }
 
 type taskManualDTO struct {
@@ -962,6 +990,18 @@ type outsourceWorkerDTO struct {
 	TaskID        string  `json:"task_id"`
 	TaskTitle     string  `json:"task_title"`
 	TaskStatus    string  `json:"task_status"`
+	// The bound task's display number / created stamp / type — what the office
+	// 外包 row prints and orders by (T-a3e4). They were a CLIENT-side join
+	// against the unfiltered GET /api/tasks (the whole task history pulled on
+	// every worker/chat delta to label a handful of rows); the server owns the
+	// join now. task_type_name is the manual's human label for task_type_key,
+	// "" when the manual is gone — the client then shows the raw key, the same
+	// honest fallback it had when it held the manuals list itself. All four are
+	// zero/"" when the bound task cannot be resolved.
+	TaskNo        string  `json:"task_no"`
+	TaskCreatedTS float64 `json:"task_created_ts"`
+	TaskTypeKey   string  `json:"task_type_key"`
+	TaskTypeName  string  `json:"task_type_name"`
 	CreatedTS     float64 `json:"created_ts"`
 	// The caller's unread count for this worker's chat — the SAME chat_read
 	// watermark inverse the member roster serves (UnreadCounts); the office
@@ -1073,6 +1113,11 @@ type outsourceWorkerProjection struct {
 	// honest dash — the raw credential hash NEVER reaches the wire (T-ba6b).
 	accountDisplay func(string) string
 	delegatedBy    string // resolved creator name ("" = honest fallback)
+	// typeDisplay resolves the bound task's type_key to the manual's human
+	// label (T-a3e4) — the panel's second line. nil or a "" result leaves
+	// task_type_name empty and the client falls back to the raw key, exactly
+	// as it did when it looked the manuals up itself.
+	typeDisplay func(string) string
 }
 
 type myTaskDTO struct {
@@ -1192,7 +1237,17 @@ func newTaskArtifactDTO(a TaskArtifact, att *ChatAttachment) taskArtifactDTO {
 // onto the LIGHT list wire (GET /api/tasks). done/total come from
 // dal.AllTaskStepProgress (a grouped COUNT) so the list never loads step rows;
 // closed_ts serialises null while open, exactly like newTaskDTO.
-func newTaskListItemDTO(t Task, deps []string, done, total, artifactCount int) taskListItemDTO {
+//
+// byID is the caller's map of the WHOLE task population (the handler builds it
+// from the single ListTasks read it already does) — it resolves each dep into
+// the display facts the card's 「等 T-xxxx」 row needs. Pass nil ONLY where the
+// population is genuinely not in hand; deps then serve as unresolvable entries,
+// which the client reads as 查無此任務. There is deliberately no per-dep lookup
+// here: this endpoint is the payload/latency hot path, so dep resolution must
+// cost zero extra queries (T-a3e4).
+func newTaskListItemDTO(
+	t Task, deps []string, done, total, artifactCount int, byID map[string]Task,
+) taskListItemDTO {
 	if deps == nil {
 		deps = []string{}
 	}
@@ -1216,6 +1271,7 @@ func newTaskListItemDTO(t Task, deps []string, done, total, artifactCount int) t
 		CreatedTS:          t.CreatedTS,
 		UpdatedTS:          t.UpdatedTS,
 		Deps:               deps,
+		DepTasks:           newTaskDepRefDTOs(deps, byID),
 		ProgressDone:       done,
 		ProgressTotal:      total,
 	}
@@ -1224,6 +1280,23 @@ func newTaskListItemDTO(t Task, deps []string, done, total, artifactCount int) t
 		dto.ClosedTS = &ts
 	}
 	return dto
+}
+
+// newTaskDepRefDTOs resolves each dep id against an already-loaded task
+// population. Never nil. A dep missing from byID keeps its derived TaskNo and
+// leaves Title/Status "" — the client's 查無此任務 row; inventing a status here
+// would launder "this task is gone" into "this task has not started".
+func newTaskDepRefDTOs(deps []string, byID map[string]Task) []taskDepRefDTO {
+	out := make([]taskDepRefDTO, 0, len(deps))
+	for _, id := range deps {
+		ref := taskDepRefDTO{ID: id, TaskNo: TaskNo(id)}
+		if dep, ok := byID[id]; ok {
+			ref.Title = dep.Title
+			ref.Status = dep.Status
+		}
+		out = append(out, ref)
+	}
+	return out
 }
 
 // newTaskManualDTO projects one manual row onto the wire (stored JSON blobs
@@ -1381,6 +1454,18 @@ func newOutsourceWorkerDTO(w OutsourceWorker, task *Task, p outsourceWorkerProje
 		dto.TaskTitle = task.Title
 		dto.TaskStatus = task.Status
 		dto.CreatorID = task.CreatorID
+		// T-a3e4: the panel's sort key + row labels ride the worker DTO now.
+		// They used to be a client-side join against the UNFILTERED
+		// GET /api/tasks — the whole task history downloaded on every worker /
+		// chat delta to order and label a handful of rows. Honest zero/"" when
+		// the task cannot be resolved (task == nil): the client then falls back
+		// to the worker's own mint stamp for ordering and prints 自由代辦.
+		dto.TaskNo = TaskNo(task.ID)
+		dto.TaskCreatedTS = task.CreatedTS
+		dto.TaskTypeKey = task.TypeKey
+		if p.typeDisplay != nil {
+			dto.TaskTypeName = p.typeDisplay(task.TypeKey)
+		}
 	}
 	// refocus_since passes through as epoch seconds (0.0 = unset; the FE maps 0→null
 	// so the panel never renders a fabricated time); desired_state echoes the run

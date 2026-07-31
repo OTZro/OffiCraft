@@ -67,7 +67,6 @@ function renderCard(task: TaskView) {
       <TaskCard
         task={task}
         allTasks={[task]}
-        depsResolvable
         members={[]}
         workers={[]}
         nowTs={Date.now() / 1000}

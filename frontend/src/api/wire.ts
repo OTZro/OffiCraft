@@ -155,6 +155,13 @@ export type WireTask = components["schemas"]["TaskDTO"];
  * `GET /api/tasks/{id}` (getTask) to hydrate a card on expand. */
 export type WireTaskListItem = components["schemas"]["TaskListItemDTO"];
 
+/** Mirrors `TaskDepRefDTO` (T-a3e4): one entry of `TaskListItemDTO.dep_tasks` —
+ * a blocking task id resolved SERVER-SIDE to the `task_no`/`title`/`status` the
+ * 「等 T-xxxx」 row prints, so a dep that has already closed can be named
+ * without the client loading the closed population. `title`/`status` are ''
+ * when the dep's task no longer exists (查無此任務). */
+export type WireTaskDepRef = components["schemas"]["TaskDepRefDTO"];
+
 /** Mirrors `TaskReassignDTO` (`POST /api/tasks/{task_id}/reassign` / MCP
  * `reassign_task`): the new executor target + an optional handover note the
  * server appends to the new executor's notification. `target.kind='member'`

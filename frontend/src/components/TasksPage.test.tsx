@@ -1,6 +1,8 @@
 // 任務 page (M3 任務卡). Locked here — the SPEC §2/§3 acceptance behaviors:
-//   1. Empty states ×2: no tasks at all → 目前沒有任務; filters matching
-//      nothing → 沒有符合篩選條件的任務 (+ 清除篩選 restores).
+//   1. Empty states ×2: no tasks at all → 目前沒有任務 (T-a3e4: judged from
+//      GET /api/tasks/count's unfiltered `total`, since the list itself now
+//      answers only the ticked statuses); filters matching nothing →
+//      沒有符合篩選條件的任務 (+ 清除篩選 restores).
 //   2. 未結束 is ONE list ordered 高→中→低→凍結 (凍結永遠最後), createdTs
 //      newest-first within a level — never grouped by status.
 //   3. 已結束 (已完成+終止) is collapsible and COLLAPSED BY DEFAULT; the
@@ -130,6 +132,27 @@ describe("TasksPage", () => {
     const { findByTestId } = renderPage();
     const empty = await findByTestId("tasks-empty");
     expect(empty.textContent).toBe("目前沒有任務");
+  });
+
+  it("does NOT say 目前沒有任務 when the archive is non-empty (T-a3e4)", async () => {
+    // 目前沒有任務 is a claim about the WHOLE workshop, and the list fetch now
+    // only asks for the ticked statuses — so an empty DEFAULT view over a
+    // workshop that has finished tasks must read as the FILTERED empty state.
+    // 🔴 Not true on e7120c5: there the same fixture fetched ?open=true, got
+    // zero rows, and asserted 目前沒有任務 over five archived tasks.
+    for (let i = 0; i < 5; i += 1) {
+      __injectMockTask(
+        mkTask({
+          title: `早就做完的 ${i}`,
+          status: "done",
+          closedTs: Date.now() / 1000 - 100,
+        })
+      );
+    }
+    const { findByTestId } = renderPage();
+    const empty = await findByTestId("tasks-empty-filtered");
+    expect(empty.textContent).toBe("沒有符合篩選條件的任務");
+    expect(document.querySelector('[data-testid="tasks-empty"]')).toBeNull();
   });
 
   it("orders 未結束 by priority 高→中→低→凍結 (凍結墊底), createdTs newest-first within a level", async () => {

@@ -44,6 +44,19 @@ const LONG_TASK = mkTask({
   title: "外包/worker 子系統收斂",
   status: "waiting_external",
   deps: [DEP_TASK.id],
+  // T-a3e4: the dep row renders from the SERVER's join, so the fixture has to
+  // carry it — leaving it out would silently downgrade this row to the
+  // "cannot name it yet" shape, and the guard below would then be measuring a
+  // narrower row with no status badge on it (its own non-vacuity check catches
+  // that, but only after the fact).
+  depTasks: [
+    {
+      id: DEP_TASK.id,
+      taskNo: DEP_TASK.taskNo,
+      title: DEP_TASK.title,
+      status: DEP_TASK.status,
+    },
+  ],
   waitingReason: `等待 member ${TOKEN} 遷移完成`,
   description: `接 A案:00017-21 已把 outsource worker 欄位對齊 member ${TOKEN} → 合表資料形狀收斂已半完成。`,
   progressDone: 1,
@@ -64,7 +77,6 @@ export function TaskCardLongTokenStory() {
       <TaskCard
         task={LONG_TASK}
         allTasks={[LONG_TASK, DEP_TASK]}
-        depsResolvable
         members={[MIRA]}
         workers={WORKERS}
         nowTs={3000}
