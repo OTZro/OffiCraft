@@ -72,7 +72,7 @@ DoD 把「做好了」變成一句可以驗證的話——**它不是給 AI 的�
   規則本體在 `seeds/system_interaction.md` §4.1。**上面這段觸發情境與理由是那一節的複述**（改寫成 owner 這一側的說法），
   處置方式（成員該怎麼做）才是不重述、一律以 seed 為準的部分。**seed 那一節改了，這段文字要一起重讀**——
   下面的 marker 釘著 seed 的內容雜湊，就是為了逼出這次重讀。
-  <!-- defers-to: rule:conflicting-authorities@2b646b6664c2 -->
+  <!-- defers-to: rule:conflicting-authorities@6a56076a857f -->
 
 規劃任務時，把這些節點**預先標成 gate**，好處是控制台會**在計畫送出當下就預告**「這件事後面要你點頭一次」——
 你一眼就知道整件事會在哪裡需要你，不會被半途殺出的問題打斷。

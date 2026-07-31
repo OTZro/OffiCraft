@@ -169,7 +169,7 @@ func TestMemberBootContextHasNoDanglingSectionRefs(t *testing.T) {
 // work itself.
 var riskLanguageFloor = []string{
 	"安全邊界",
-	"成本剎車",
+	"成本煞車",
 	"backup-before-destructive",
 	"verify-before-assert",
 }

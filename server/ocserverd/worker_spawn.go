@@ -189,7 +189,7 @@ func (s *apiServer) buildWorkerBootContext(w OutsourceWorker, t Task, manual *Ta
 		fmt.Fprintf(&b, "- 前任：%s（聊天 id `%s`）\n",
 			s.executorLabel(t.ReassignedFromKind, t.ReassignedFrom), t.ReassignedFrom)
 		b.WriteString("\n**接手序列（先交接、確認完成，才由你自己認領）：**\n")
-		b.WriteString("1. 先 `post_chat` 給前任，問清楚目前進度、在飛事項、要注意的坑；來回確認到你有把握接得住。\n")
+		b.WriteString("1. 先 `post_chat` 給前任，問清楚目前進度、進行中的事項、有哪些雷要注意；反覆確認到你有把握接得住。\n")
 		b.WriteString("2. 確認交接完成後，**由你自己**呼叫 `claim_task`（認領）解除轉派鎖" +
 			"——只有你這個新負責人動得了；server 不會自動幫你解。任務狀態一律照步驟推導，不必也不能自己報。\n")
 		b.WriteString("3. 未完成的節點已被 server 退回「待辦」——照實況續推，或照常 `submit_plan` 重規劃" +
@@ -241,13 +241,13 @@ func (s *apiServer) buildWorkerBootContext(w OutsourceWorker, t Task, manual *Ta
 
 func workerRuntimeBootTail(runtime string) string {
 	if NormalizeRuntime(runtime) == RuntimeCodex {
-		return `# Runtime 開機尾步（Codex App Server）
+		return `# Runtime 開機最後一步（Codex App Server）
 
 - ` + "`get_my_task`" + ` 成功後，完成這個 boot turn。**不要**自行啟動 ` + "`ocagent listen`" + `、Monitor 或前景空轉迴圈；OffiCraft 的 App Server sidecar 會在 ` + "`turn/completed`" + ` 後啟動並持有 listener。
 - 權限模式是 ` + "`danger-full-access`" + `，approval policy 是 ` + "`never`" + `。` + "`request_user_input`" + ` 已禁用；需要 owner 決策或動作時，用 OffiCraft ` + "`create_reply_card`" + `，不要等待 terminal 鍵盤。
 - context 使用量由 App Server token-usage 自動上報；不要手動跑 ` + "`context-report`" + `。`
 	}
-	return `# Runtime 開機尾步（Claude Code）
+	return `# Runtime 開機最後一步（Claude Code）
 
 - ` + "`get_my_task`" + ` 成功後，用內建 Monitor 在背景跑 bare ` + "`ocagent listen`" + `（spawn 已把 ` + "`ocagent`" + ` 放進 cwd 並 prepend 進 PATH）；不要寫前景空轉迴圈。
 - ` + "`AskUserQuestion`" + ` 已禁用；需要 owner 決策或動作時，用 OffiCraft ` + "`create_reply_card`" + `，不要等待 terminal 互動選單。
@@ -1711,7 +1711,7 @@ func (s *apiServer) reclaimWorkerSession(w OutsourceWorker) {
 
 // dismissOutsourceWorkersForTask is the CLOSE-OUT HOOK (SPEC §6.3 step 2):
 // the close-out report handler calls it the moment a task's executor reports
-// "結束後續已處理完" — the server then fires the outsource worker(s) bound to
+// "收尾事項已處理完" — the server then fires the outsource worker(s) bound to
 // that task: any not-yet-released row flips released (idempotent — closeTask
 // usually already did this when the task landed terminal) and every bound
 // worker's session is reclaimed NOW rather than waiting out the grace
