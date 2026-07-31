@@ -1,20 +1,30 @@
-// DiffView — the git-style unified diff surface.
+// DiffView — the GitHub "Files changed" shaped diff surface (T-40f0).
 //
-//   1. A one-line edit is exactly one `-` row and one `+` row, each carrying
-//      its own side's line number (the pair a reader lines up).
-//   2. A collapsed run announces HOW MANY lines it hid, not just that it hid.
-//   3. "identical" and "refused because too large" are two different screens.
-//   4. Every visible string comes from the dictionary, in both languages.
+// The owner ruled on six things; four of them are FACTS ABOUT THIS COMPONENT and
+// each gets its own test here, deliberately NOT a snapshot (a snapshot goes red
+// for every one of them at once and tells you nothing about which):
+//   1. 單欄 is the DEFAULT and 兩欄對照 is reachable — `renders unified by
+//      default…` + `switches to the two-column view…`
+//   2. WHOLE-ROW colour — `tints the entire row…`
+//   3. TWO number columns — asserted cell by cell in the unified test
+//   4. CHARACTER-level tint — `marks only the characters that changed…`
+// Plus the two the owner explicitly did NOT want: no collapsing
+// (`renders every unchanged line…`), and the -/+ gutter kept as a second cue
+// (`labels the marker cell…`).
+//
+// RED LINE, pinned twice below: the two states that LOOK blank must stay
+// distinguishable. "the two versions are identical" and "the comparison was
+// refused because the document is too large" are different screens, and a
+// refusal must never be able to wear the identical-versions message.
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { render } from "@testing-library/react";
+import { render, fireEvent } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
 import { en } from "../i18n/locales/en";
-import { DiffView } from "./DiffView";
-import type { LineDiffOptions } from "../lib/lineDiff";
+import { DiffView, type DiffViewOptions } from "./DiffView";
 
-function renderDiff(before: string, after: string, options?: LineDiffOptions) {
+function renderDiff(before: string, after: string, options?: DiffViewOptions) {
   return render(
     <I18nProvider>
       <DiffView before={before} after={after} options={options} />
@@ -22,7 +32,7 @@ function renderDiff(before: string, after: string, options?: LineDiffOptions) {
   );
 }
 
-/** [beforeLine, afterLine, marker] per row, in render order. */
+/** Every `<td>` of every row, in render order. */
 function rowCells(container: HTMLElement): string[][] {
   return Array.from(container.querySelectorAll(".diff-view__row")).map((row) =>
     Array.from(row.querySelectorAll("td")).map((td) => td.textContent ?? "")
@@ -38,20 +48,28 @@ const NUMBERED = (count: number) =>
 describe("DiffView", () => {
   beforeEach(() => localStorage.clear());
 
-  it("renders a one-line edit as one removed row and one added row with both side's line numbers", () => {
+  // ── ① 單欄 is the default; ③ two number columns ───────────────────────────
+  it("renders unified by default: one full-width row per line, both sides' line numbers", () => {
     const { container } = renderDiff(
       "alpha\nbravo\ncharlie",
       "alpha\nBRAVO\ncharlie"
     );
 
-    const removed = container.querySelectorAll('[data-kind="removed"]');
-    const added = container.querySelectorAll('[data-kind="added"]');
-    expect(removed.length).toBe(1);
-    expect(added.length).toBe(1);
+    expect(
+      container.querySelector(".diff-view")?.getAttribute("data-mode")
+    ).toBe("unified");
+    expect(
+      container.querySelectorAll(".diff-view__mode--on")[0]?.textContent
+    ).toBe(zh.diff.viewUnified);
+    // No two-column rows exist while unified is on.
+    expect(
+      container.querySelectorAll('[data-testid="diff-view-split-row"]')
+    ).toHaveLength(0);
 
-    // The removed line is #2 on the before side and nowhere on the after side;
-    // the added line is the mirror. Getting these backwards is the classic
-    // unified-diff bug, so they are asserted cell by cell.
+    // ③ The removed line is #2 on the before side and nowhere on the after
+    // side; the added line is the mirror; unchanged lines carry BOTH. Getting
+    // these backwards is the classic unified-diff bug, so they are asserted
+    // cell by cell.
     expect(rowCells(container)).toEqual([
       ["1", "1", NBSP, "alpha"],
       ["2", "", "-", "bravo"],
@@ -60,6 +78,76 @@ describe("DiffView", () => {
     ]);
   });
 
+  // ── ① 兩欄對照 stays reachable as the second option ────────────────────────
+  it("switches to the two-column view and back, pairing the replaced line with its replacement", () => {
+    const { container, getByTestId } = renderDiff(
+      "alpha\nbravo\ncharlie",
+      "alpha\nBRAVO\ncharlie"
+    );
+
+    fireEvent.click(getByTestId("diff-view-mode-split"));
+
+    expect(
+      container.querySelector(".diff-view")?.getAttribute("data-mode")
+    ).toBe("split");
+    // Three visual rows, not four: the `-` and the `+` that replaced it share
+    // one row — that is what "side by side" means. Six cells per row: number,
+    // gutter and text for each side.
+    const split = Array.from(
+      container.querySelectorAll('[data-testid="diff-view-split-row"]')
+    );
+    expect(split).toHaveLength(3);
+    expect(rowCells(container)).toEqual([
+      ["1", NBSP, "alpha", "1", NBSP, "alpha"],
+      ["2", "-", "bravo", "2", "+", "BRAVO"],
+      ["3", NBSP, "charlie", "3", NBSP, "charlie"],
+    ]);
+    // The sides are labelled per row so the tint can live on the halves.
+    expect(split[1].getAttribute("data-left-kind")).toBe("removed");
+    expect(split[1].getAttribute("data-right-kind")).toBe("added");
+
+    // …and back to the default, which must still be the one-column view.
+    fireEvent.click(getByTestId("diff-view-mode-unified"));
+    expect(
+      container.querySelector(".diff-view")?.getAttribute("data-mode")
+    ).toBe("unified");
+    expect(rowCells(container)[1]).toEqual(["2", "", "-", "bravo"]);
+  });
+
+  it("puts an insertion with nothing to pair against on the right half alone", () => {
+    // The shape the pairing rule has to get right: a pure insertion has no `-`
+    // to sit beside, so its left half is empty rather than borrowing a
+    // neighbouring deletion.
+    const { container, getByTestId } = renderDiff("alpha", "alpha\nbravo");
+    fireEvent.click(getByTestId("diff-view-mode-split"));
+    expect(rowCells(container)).toEqual([
+      ["1", NBSP, "alpha", "1", NBSP, "alpha"],
+      ["", NBSP, NBSP, "2", "+", "bravo"],
+    ]);
+  });
+
+  // ── ② the whole row is coloured, not a glyph at its start ─────────────────
+  it("tints the entire row — the number gutter included — and keeps the two kinds apart", () => {
+    // jsdom does not resolve `color-mix`, so the CT guard
+    // (visual-guards/diff-view.ct.spec.tsx) owns the "these two fills really
+    // look different" half. What is checkable HERE is that the tint lives on the
+    // ROW element and that every cell — both number columns and the gutter — is
+    // inside it, which is what "edge to edge" requires.
+    const { container } = renderDiff("bravo", "BRAVO");
+    const removed = container.querySelector<HTMLElement>(
+      '[data-kind="removed"]'
+    )!;
+    const added = container.querySelector<HTMLElement>('[data-kind="added"]')!;
+    expect(removed.classList.contains("diff-view__row--removed")).toBe(true);
+    expect(added.classList.contains("diff-view__row--added")).toBe(true);
+    expect(removed.className).not.toBe(added.className);
+    expect(removed.tagName).toBe("TR");
+    expect(removed.querySelectorAll("td")).toHaveLength(4);
+    expect(removed.querySelectorAll(".diff-view__ln")).toHaveLength(2);
+    expect(removed.querySelector(".diff-view__marker")).toBeTruthy();
+  });
+
+  // ── ⑤ the gutter stays, as the non-colour cue ─────────────────────────────
   it("labels the marker cell so added/removed is not carried by colour alone", () => {
     const { container } = renderDiff("bravo", "BRAVO");
     const marker = (kind: string) =>
@@ -68,35 +156,101 @@ describe("DiffView", () => {
         ?.getAttribute("aria-label");
     expect(marker("removed")).toBe(zh.diff.removedLine);
     expect(marker("added")).toBe(zh.diff.addedLine);
+    expect(
+      container.querySelector('[data-kind="added"] .diff-view__marker')
+        ?.textContent
+    ).toBe("+");
   });
 
-  it("renders a separator carrying the number of unchanged lines it collapsed", () => {
+  // ── ④ character-level tint ────────────────────────────────────────────────
+  it("marks only the characters that changed when a line was edited in place", () => {
+    const { container } = renderDiff(
+      "- 對 owner 預設中文，講功能與取捨。",
+      "- 對 owner 預設中文，講功能與影響、取捨。"
+    );
+
+    const marked = (kind: string) =>
+      Array.from(
+        container.querySelectorAll(
+          `[data-kind="${kind}"] .diff-view__word--${kind}`
+        )
+      ).map((n) => n.textContent);
+
+    // The insertion is named exactly, and nothing else on the row is: a rule
+    // that tinted the whole line would return the entire sentence here.
+    expect(marked("added")).toEqual(["影響、"]);
+    // The removed side of the pair shares every character, so it has nothing
+    // marked — the surrounding text must NOT be reported as changed.
+    expect(marked("removed")).toEqual([]);
+    // The full text is still there, character for character — the tint wraps
+    // the run, it does not replace or drop it.
+    expect(
+      container.querySelector('[data-kind="added"] .diff-view__text')
+        ?.textContent
+    ).toBe("- 對 owner 預設中文，講功能與影響、取捨。");
+  });
+
+  it("marks nothing inside a line that shares nothing with the one it replaced", () => {
+    // The row colour already says "this whole line changed". Tinting every
+    // character on top of it would make this indistinguishable from the case
+    // above, and telling the two apart is the entire point of the feature.
+    const { container } = renderDiff(
+      "alpha\n舊的第二行\ncharlie",
+      "alpha\nBRAVO\ncharlie"
+    );
+    expect(container.querySelectorAll(".diff-view__word")).toHaveLength(0);
+    expect(rowCells(container)[1]).toEqual(["2", "", "-", "舊的第二行"]);
+  });
+
+  it("marks nothing on a line that was only added, with no counterpart to compare", () => {
+    const { container } = renderDiff("alpha", "alpha\nbravo");
+    expect(container.querySelectorAll(".diff-view__word")).toHaveLength(0);
+  });
+
+  // ── ⑥ no collapsing, no expanding: the whole document is on screen ────────
+  it("renders every unchanged line, with no collapse separator anywhere", () => {
     const before = NUMBERED(20);
     const after = before.replace("line 15", "line 15 edited");
-    const { container, getByTestId } = renderDiff(before, after);
+    const { container, queryByTestId, getByTestId } = renderDiff(before, after);
 
-    const skip = getByTestId("diff-view-skip");
-    // 14 leading context lines minus the 3-line radius the hunk keeps.
-    expect(skip.getAttribute("data-skipped")).toBe("11");
-    expect(skip.textContent).toContain("11");
-    expect(skip.textContent).toContain(zh.diff.skippedTail);
-    // The @@ header still reports the hunk's extents on both sides.
-    expect(skip.textContent).toContain("@@ -12,7 +12,7 @@");
-    // The collapse is real: the first rendered row is line 12, not line 1.
-    expect(rowCells(container)[0][0]).toBe("12");
+    // 20 before-side lines + the one added line = 21 rows. A surface that
+    // folded the distant unchanged runs away would render about eight.
+    expect(container.querySelectorAll(".diff-view__row")).toHaveLength(21);
+    // The FIRST row is line 1 — the old behaviour started at line 12.
+    expect(rowCells(container)[0]).toEqual(["1", "1", NBSP, "line 1"]);
+    // …and the last is line 20, so nothing was trimmed from the tail either.
+    expect(rowCells(container)[20]).toEqual(["20", "20", NBSP, "line 20"]);
+    // The retired separator is gone, not merely empty.
+    expect(queryByTestId("diff-view-skip")).toBeNull();
+    expect(container.textContent).not.toContain("@@");
+    // And the surface says out loud that nothing is hidden.
+    expect(getByTestId("diff-view-whole-note").textContent).toBe(
+      zh.diff.wholeDocNote
+    );
   });
 
-  it("renders the no-difference message and no rows for identical inputs", () => {
+  it("counts the added and removed lines in its header", () => {
+    const { getByTestId } = renderDiff(
+      "alpha\nbravo\ncharlie",
+      "alpha\nBRAVO\nBRAVISSIMO\ncharlie"
+    );
+    expect(getByTestId("diff-view-stat-added").textContent).toBe("+2");
+    expect(getByTestId("diff-view-stat-removed").textContent).toBe("-1");
+  });
+
+  // ── RED LINE: the two blank-looking states stay distinguishable ───────────
+  it("says the two versions are IDENTICAL rather than drawing an empty diff", () => {
     const { container, getByTestId, queryByTestId } = renderDiff(
       "alpha\nbravo",
       "alpha\nbravo"
     );
     expect(getByTestId("diff-view-empty").textContent).toBe(zh.diff.noChanges);
-    expect(container.querySelectorAll(".diff-view__row").length).toBe(0);
+    expect(container.querySelectorAll(".diff-view__row")).toHaveLength(0);
+    // It must not be mistakeable for the refusal.
     expect(queryByTestId("diff-view-too-large")).toBeNull();
   });
 
-  it("renders the too-large message and no rows when the diff is refused", () => {
+  it("says the comparison was REFUSED for size, never that the versions match", () => {
     const { container, getByTestId, queryByTestId } = renderDiff(
       NUMBERED(5),
       NUMBERED(6),
@@ -107,9 +261,12 @@ describe("DiffView", () => {
     expect(getByTestId("diff-view-too-large").textContent).toBe(
       `${zh.diff.tooLargeLead}6${zh.diff.tooLargeTail}`
     );
-    expect(container.querySelectorAll(".diff-view__row").length).toBe(0);
-    // A refusal must never read as "the two versions match".
+    expect(container.querySelectorAll(".diff-view__row")).toHaveLength(0);
+    // A refusal must never read as "the two versions match" — this is the
+    // assertion that keeps a refusal from hiding behind good news, and it is
+    // the exact mirror of the one in the test above.
     expect(queryByTestId("diff-view-empty")).toBeNull();
+    expect(container.textContent).not.toContain(zh.diff.noChanges);
   });
 
   it.each([
@@ -124,14 +281,13 @@ describe("DiffView", () => {
     );
     identical.unmount();
 
-    const before = NUMBERED(20);
-    const { container, getByTestId } = renderDiff(
-      before,
-      before.replace("line 15", "line 15 edited")
+    const refused = renderDiff(NUMBERED(5), NUMBERED(6), { maxLines: 2 });
+    expect(refused.getByTestId("diff-view-too-large").textContent).toBe(
+      `${dict.diff.tooLargeLead}6${dict.diff.tooLargeTail}`
     );
-    expect(getByTestId("diff-view-skip").textContent).toBe(
-      `@@ -12,7 +12,7 @@${dict.diff.skippedLead}11${dict.diff.skippedTail}`
-    );
+    refused.unmount();
+
+    const { container, getByTestId } = renderDiff("bravo", "BRAVO");
     expect(
       container.querySelector(".diff-view__table")?.getAttribute("aria-label")
     ).toBe(dict.diff.ariaLabel);
@@ -141,6 +297,20 @@ describe("DiffView", () => {
     expect(
       container.querySelector(".diff-view__label--after")?.textContent
     ).toBe(`+${dict.diff.afterLabel}`);
+    // The layout switch and the "nothing folded" note are new strings — both
+    // languages, or the switch is unreadable in one of them.
+    expect(getByTestId("diff-view-mode-unified").textContent).toBe(
+      dict.diff.viewUnified
+    );
+    expect(getByTestId("diff-view-mode-split").textContent).toBe(
+      dict.diff.viewSplit
+    );
+    expect(getByTestId("diff-view-whole-note").textContent).toBe(
+      dict.diff.wholeDocNote
+    );
+    expect(
+      container.querySelector(".diff-view__modes")?.getAttribute("aria-label")
+    ).toBe(dict.diff.viewLabel);
   });
 
   it("uses caller-supplied side labels over the dictionary defaults", () => {

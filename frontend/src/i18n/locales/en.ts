@@ -24,8 +24,10 @@ export const en: Dict = {
     removedLine: "Removed line",
     contextLine: "Unchanged line",
     noChanges: "These two versions are identical",
-    skippedLead: "Hidden: ",
-    skippedTail: " unchanged lines",
+    viewLabel: "Comparison layout",
+    viewUnified: "Single column",
+    viewSplit: "Side by side",
+    wholeDocNote: "Whole document (nothing folded)",
     tooLargeLead: "Too long to compare line by line (",
     tooLargeTail: " lines).",
   },
@@ -1115,6 +1117,8 @@ export const en: Dict = {
     historySeedRestore: "Restore the initial version",
     historySeedConfirm:
       "Restore the initial version? The current content is overwritten.",
+    historySeedUnavailable:
+      "The initial version's content cannot be read right now, so it cannot be shown or compared. Restoring it still works.",
     historyBack: "Back to the version list",
     historyBlockedBadge: "Cannot restore",
     historyBlockedReasonLead: '"',

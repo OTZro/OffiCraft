@@ -74,7 +74,6 @@ const EXPECTED: [Lang, string, (string | number | string[])[], string][] = [
     ["zh", "docHistoryVersionLabel", ["7/29 14:03"], "此版本（7/29 14:03）"],
     ["zh", "docHistoryActor", ["Kyle", "m-f663"], "Kyle（m-f663）"],
     ["zh", "docHistoryActor", ["", "ow-c975"], "ow-c975"],
-    ["zh", "diffSkipped", [11], "已略過 11 行未變更內容"],
     ["zh", "diffTooLarge", [2400], "內容太長，無法逐行比對（2400 行）。"],
     ["en", "taskProgress", [3,7], "Step 3/7"],
     ["en", "taskElapsed", ["2h"], "Elapsed 2h"],
@@ -130,7 +129,6 @@ const EXPECTED: [Lang, string, (string | number | string[])[], string][] = [
     ["en", "docHistoryVersionLabel", ["7/29 14:03"], "This version (7/29 14:03)"],
     ["en", "docHistoryActor", ["Kyle", "m-f663"], "Kyle (m-f663)"],
     ["en", "docHistoryActor", ["", "ow-c975"], "ow-c975"],
-    ["en", "diffSkipped", [11], "Hidden: 11 unchanged lines"],
     ["en", "diffTooLarge", [2400], "Too long to compare line by line (2400 lines)."],
 ];
 
@@ -253,8 +251,6 @@ describe("makeMessages", () => {
       "settings.deleteManualConfirmTail",
       "settings.historyVersionLabelLead",
       "settings.historyVersionLabelTail",
-      "diff.skippedLead",
-      "diff.skippedTail",
       "diff.tooLargeLead",
       "diff.tooLargeTail",
     ]) {

@@ -1346,6 +1346,23 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			MCPTool:  "list_document_history",
 		},
 		{
+			Method:   "GET",
+			Path:     "/api/document-history/{kind}/{key}/seed",
+			Handler:  w.HandleGetDocumentSeedApiDocumentHistoryKindKeySeedGet,
+			Auth:     authGated,
+			Requires: principalMachine,
+			Summary:  "Read the shipped default of an editable document.",
+			// MCPExclude even though the sibling READ is a tool. This route
+			// carries nothing an agent cannot already see: the seed of a role
+			// definition is the very text the boot context injects into that
+			// role's persona, and the global block's default is the empty
+			// document. It exists so the COCKPIT can put 初始版本 through the
+			// same look-before-you-restore reader as every other version; a
+			// tool for it would advertise a second, weaker way to read a seed
+			// the agent is handed at boot anyway.
+			MCPExclude: true,
+		},
+		{
 			Method:   "POST",
 			Path:     "/api/document-history/{kind}/{key}/{id}/restore",
 			Handler:  w.HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdRestorePost,

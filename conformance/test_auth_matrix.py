@@ -709,6 +709,16 @@ MATRIX: dict[str, Route] = {
         requires="machine",
         path=lambda ctx, i: "/api/document-history/global_context/global",
     ),
+    # The SHIPPED DEFAULT (初始版本) of the same document — the same read floor,
+    # because comparing against it is reading. It aims at global_context, whose
+    # default always exists (the empty document), so every at-or-above-floor
+    # identity lands on a 200 and the row measures the FLOOR rather than one
+    # document's seed. The "no seed → 404" half is pinned in the Go tests
+    # (TestGetDocumentSeed*) and in test_rest_happy.
+    "GET /api/document-history/{kind}/{key}/seed": Route(
+        requires="machine",
+        path=lambda ctx, i: "/api/document-history/global_context/global/seed",
+    ),
     # RESTORING is a write. The route floor is the agent floor, but each KIND
     # then keeps its own document's write floor in the handler — this row aims
     # at a task manual (no extra floor) with a revision id that does not exist,

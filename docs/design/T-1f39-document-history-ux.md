@@ -4,6 +4,18 @@
 撰寫：外包 O-103，2026-07-31
 基準：`main` @ 42fe2bc
 
+> 🔴 **部分內容已被 T-40f0 取代（owner 2026-07-31，卡 `rc-28885813e065` ①＋`rc-b69722f81136` ①）。**
+> 本檔仍是 T-1f39 的裁定紀錄，**不要拿它當現況讀**。兩處具體被推翻：
+> 1. **「初始版本」那一列不再直接跳還原確認**——它現在跟其他版本一樣先開閱讀面（可看內容、可比差異），還原仍在同一個破壞性確認框後面。相關的
+>    `doc-history-seed-confirm` / `doc-history-seed-confirm-btn` 兩個 testid **已不存在**，改走
+>    `doc-history-modal-restore` → `doc-history-restore-confirm`。
+> 2. **差異呈現的摺疊（`@@` 分隔列、`diff-view-skip`、`collapseUnchanged`）已從畫面上移除**——現在整份顯示。
+>    `lib/lineDiff.ts` 的 collapse 機制本體仍在（那是該模組自己的 API，仍有測試），只是 `DiffView` 永不要求它，
+>    所以本檔 §E / L2 那些提到 `diff-view-skip` 與 `collapse()` mutant 的段落**描述的是當時的呈現層**，不是現況。
+>
+> 現況（含新的 `GET /api/document-history/{kind}/{key}/seed` 讀取面與 GitHub 式差異呈現）寫在
+> `docs/design/T-40f0-history-diff-ux.md`。
+
 owner 原話（2026-07-31，逐字）：
 
 > 長文的學習經驗現在的user experence現在很差，應該要可以在編輯可能可以選擇history之類的，點進去跳出一個modal，預設是秀原本的內容，但右上角可能有個與現在的diff，看能不能像git一樣顯示出哪些有改，而任務手冊的purpose跟識別鍵都不需要版本控制，只要SOP跟學習經驗就好，兩者分開，不用同一包，而角色誌的部分也套用同樣做法

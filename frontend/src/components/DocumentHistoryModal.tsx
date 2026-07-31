@@ -19,6 +19,15 @@
 // editor above — `historyDiffNote` says so on screen, because the two differ
 // exactly when the owner is mid-edit and that is when the diff is read.
 //
+// 初始版本 USES THE SAME READER (T-40f0, owner rc-28885813e065 ①). The list's
+// bottom row — the document's shipped default — used to go STRAIGHT to a restore
+// confirmation, because the seed text was something the server only ever handed
+// back AFTER a reset had already overwritten the document. So the ONE entry whose
+// restore is least reversible was also the only one nobody could look at first.
+// It now arrives here as a pseudo-version (`seed`), reads and diffs through the
+// very same panes, and restores through the very same confirmation — the row
+// itself did not move, so the entry is no harder to find than it was.
+//
 // RESTORE MOVED IN HERE and is reachable nowhere else. Everything the row-level
 // button carried came with it, unchanged: it is DESTRUCTIVE so it still goes
 // through ConfirmModal; a failure surfaces the SERVER's own message and leaves
@@ -56,6 +65,8 @@ export function DocumentHistoryModal({
   onBack,
   onClose,
   onRestore,
+  seed,
+  seedUnavailable,
 }: {
   kind: DocumentKind;
   version: DocumentHistoryView;
@@ -86,6 +97,20 @@ export function DocumentHistoryModal({
   /** Restore THIS revision over the live document. Rejects on failure — the
    * modal maps the rejection to the message it shows and stays open. */
   onRestore: () => Promise<void>;
+  /**
+   * TRUE when `version` is not a retained revision but the document's SHIPPED
+   * DEFAULT (初始版本). It has no timestamp and no actor — nobody wrote it — so
+   * the header names it instead of pretending someone did, and the confirmation
+   * uses the reset's own wording.
+   */
+  seed?: boolean;
+  /**
+   * `seed` only: the default's content could not be read. Neither pane may then
+   * claim the default is EMPTY (that is a different, and false, statement), so
+   * both say so instead — while restore stays live, because putting the document
+   * back on its default needs nothing from this client.
+   */
+  seedUnavailable?: boolean;
 }) {
   const { t, msg } = useI18n();
   const [pane, setPane] = useState<Pane>("content");
@@ -103,6 +128,17 @@ export function DocumentHistoryModal({
   }, rootRef);
 
   const when = formatAbsolute(version.createdTs, Date.now() / 1000);
+  /** What the diff's `-` side is called, and what the confirmation names. The
+   * seed has no timestamp to name it by — 初始版本 IS its name. */
+  const versionLabel = seed
+    ? t.settings.historySeedTitle
+    : msg.docHistoryVersionLabel(when);
+  // One confirmation code path, two sentences: the retained-revision wording
+  // names the timestamp it is going back to; the seed's says the current content
+  // is overwritten by the shipped default.
+  const confirmBody = seed
+    ? t.settings.historySeedConfirm
+    : msg.docHistoryRestoreConfirm(when);
   const fieldLabel = (name: string) =>
     (t.settings.historyField as Record<string, string>)[name] ?? name;
 
@@ -158,12 +194,18 @@ export function DocumentHistoryModal({
         <div className="doc-hist-modal__header">
           {/* WHICH version this is — the timestamp and the actor, the same two
             * facts the row carries, so the modal is never an anonymous body of
-            * text the reader has to trace back to a row. */}
+            * text the reader has to trace back to a row. The SEED has neither:
+            * nobody wrote it and it has no time, so it is named instead of being
+            * given a fabricated 修改者 line. */}
           <div className="doc-hist-modal__ident">
-            <span className="doc-hist-modal__when">{when}</span>
-            <span className="doc-hist-modal__actor">
-              {t.settings.historyByLabel} {actorLine}
+            <span className="doc-hist-modal__when">
+              {seed ? t.settings.historySeedTitle : when}
             </span>
+            {!seed && (
+              <span className="doc-hist-modal__actor">
+                {t.settings.historyByLabel} {actorLine}
+              </span>
+            )}
             {version.content.tombstoned === "true" && (
               <span className="set-badge">{t.settings.historyDefaultBadge}</span>
             )}
@@ -207,7 +249,17 @@ export function DocumentHistoryModal({
         </div>
 
         <div className="doc-hist-modal__body" data-pane={pane}>
-          {pane === "content" ? (
+          {/* The default's content did not load. Saying 「這個版本沒有內容」 here
+            * would be a different — and false — claim, so both panes say what
+            * actually happened and the footer's restore stays live. */}
+          {seedUnavailable ? (
+            <p
+              className="doc-hist-modal__notice"
+              data-testid="doc-history-seed-unavailable"
+            >
+              {t.settings.historySeedUnavailable}
+            </p>
+          ) : pane === "content" ? (
             fields.length === 0 ? (
               <p className="doc-hist-modal__notice">
                 {t.settings.historyModalEmpty}
@@ -257,7 +309,7 @@ export function DocumentHistoryModal({
                     <DiffView
                       before={version.content[name] ?? ""}
                       after={currentContent[name] ?? ""}
-                      beforeLabel={msg.docHistoryVersionLabel(when)}
+                      beforeLabel={versionLabel}
                       afterLabel={t.settings.historyCurrentLabel}
                       testId={`doc-history-diff-${name}`}
                     />
@@ -309,7 +361,7 @@ export function DocumentHistoryModal({
               setRestoreError(null);
             }}
           >
-            {t.settings.historyRestore}
+            {seed ? t.settings.historySeedRestore : t.settings.historyRestore}
           </button>
         </div>
       </div>
@@ -319,7 +371,7 @@ export function DocumentHistoryModal({
           testId="doc-history-restore-confirm"
           confirmTestId="doc-history-restore-confirm-btn"
           danger
-          body={msg.docHistoryRestoreConfirm(when)}
+          body={confirmBody}
           error={restoreError}
           busy={busy}
           cancelLabel={t.settings.cancel}

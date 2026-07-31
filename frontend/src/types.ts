@@ -608,6 +608,25 @@ export interface DocumentHistoryView {
 }
 
 /**
+ * The document's SHIPPED DEFAULT — the 初始版本 row of the version list
+ * (`GET /api/document-history/{kind}/{key}/seed`, T-40f0).
+ *
+ * `content` uses the SAME field names a retained revision does, which is the
+ * whole point: the reader and the diff that serve every other row serve this
+ * one unchanged, so 初始版本 can be COMPARED before anyone decides to go back
+ * to it. Reading it writes nothing.
+ *
+ * Only the two documents that own a reset have one (the global block's default
+ * is the empty document, a seed role's is its file seed); everywhere else the
+ * route 404s, exactly where the 初始版本 row is not rendered either.
+ */
+export interface DocumentSeedView {
+  kind: DocumentKind;
+  key: string;
+  content: Record<string, string>;
+}
+
+/**
  * The folded role-definition doc (Settings › 角色誌 › 角色定義). `name` is the
  * role title and `definitionMd` the persona body (both from the real seed —
  * never the mockup's illustrative Chinese desc). `isDefault` true → seed ("預設").

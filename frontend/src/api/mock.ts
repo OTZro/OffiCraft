@@ -13,6 +13,7 @@ import type {
   GlobalContextView,
   DocumentKind,
   DocumentHistoryView,
+  DocumentSeedView,
   RoleDefView,
   BootstrapView,
   LessonsView,
@@ -67,6 +68,7 @@ import type {
   WireVersion,
   WireGlobalContext,
   WireDocumentHistory,
+  WireDocumentSeed,
   WireRoleDef,
   WireBootstrap,
   WireLessons,
@@ -82,6 +84,7 @@ import {
   toReleaseCheck,
   toGlobalContext,
   toDocumentHistory,
+  toDocumentSeed,
   toRoleDef,
   toBootstrap,
   toLessons,
@@ -3474,6 +3477,31 @@ export const mockApi: Api = {
     // applies, so an offline cockpit sees the same bounded list.
     const kept = documentHistories.get(historySlot(kind, key)) ?? [];
     return kept.map((h) => toDocumentHistory(structuredClone(h)));
+  },
+
+  async getDocumentSeed(
+    kind: DocumentKind,
+    key: string
+  ): Promise<DocumentSeedView> {
+    const route = `GET /api/document-history/${kind}/${key}/seed`;
+    refuseRetiredDocumentKind(kind, route);
+    // Mirrors api_document_history.go's documentSeedContent, INCLUDING which
+    // documents have no default at all: the global block's default is the empty
+    // document, a seed role's is its file seed, and everything else 404s —
+    // exactly where resetGlobalContext / resetRole would also refuse. Reading
+    // writes nothing here either: no recordDocumentHistory, no overlay touched.
+    const content: Record<string, string> | null =
+      kind === "global_context"
+        ? { text: "", tombstoned: "true" }
+        : kind === "role_definition" &&
+            MOCK_WIRE_ROLES_SEED.some((r) => r.key === key)
+          ? { definition_md: roleSeed(key).definition_md, tombstoned: "true" }
+          : null;
+    if (content === null) {
+      throw new ApiError(`http 404 for ${route}`, 404, "not_found", `document '${kind}/${key}' has no shipped default to compare against`);
+    }
+    const wire: WireDocumentSeed = { kind, key, content };
+    return toDocumentSeed(structuredClone(wire));
   },
 
   async restoreDocumentHistory(

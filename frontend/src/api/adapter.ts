@@ -19,6 +19,7 @@ import type {
   GlobalContextView,
   DocumentKind,
   DocumentHistoryView,
+  DocumentSeedView,
   RoleDefView,
   BootstrapView,
   LessonsView,
@@ -1506,6 +1507,17 @@ export interface Api {
     kind: DocumentKind,
     key: string,
   ): Promise<DocumentHistoryView[]>;
+  /**
+   * The document's SHIPPED DEFAULT — the version list's 初始版本 row
+   * (`GET /api/document-history/{kind}/{key}/seed`, T-40f0).
+   *
+   * READ-ONLY: this is what makes 初始版本 comparable BEFORE its restore, which
+   * is the one restore in the list that throws away everything the owner ever
+   * wrote. Rejects with a 404 `ApiError` for a document that has no default
+   * (a custom role, a task manual, per-role lessons) — the same documents whose
+   * reset the server 404s, and the same ones whose 初始版本 row is not drawn.
+   */
+  getDocumentSeed(kind: DocumentKind, key: string): Promise<DocumentSeedView>;
   /**
    * Restore ONE retained revision over the LIVE document (destructive — the
    * current text becomes just another retained revision). Returns the restored

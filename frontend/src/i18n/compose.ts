@@ -91,7 +91,6 @@ export interface Messages {
   deleteManualConfirm: (key: string) => string;
   manualEditSection: (section: string) => string;
   // ── diff ──
-  diffSkipped: (count: number) => string;
   diffTooLarge: (lines: number) => string;
 }
 
@@ -228,9 +227,6 @@ export function makeMessages(t: Dict, language: Lang): Messages {
         ? `${name}${set.historyActorLead}${actorId}${set.historyActorTail}`
         : actorId,
 
-    // The COUNT is the whole point of a collapsed run — "some lines hidden"
-    // leaves the reader unable to tell a 2-line gap from a 200-line one.
-    diffSkipped: (count) => `${diff.skippedLead}${count}${diff.skippedTail}`,
     // Reports the longer side's line count, the only number the refused diff
     // still knows (lib/lineDiff returns the counts even when it declines).
     diffTooLarge: (lines) => `${diff.tooLargeLead}${lines}${diff.tooLargeTail}`,

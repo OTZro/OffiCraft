@@ -84,6 +84,27 @@ describe("httpApi · document-history wire methods", () => {
     );
   });
 
+  // T-40f0: the 初始版本 read. The METHOD is the contract here — this is the one
+  // seam on which "look at the shipped default" must not be able to become
+  // "write the shipped default", so a GET is asserted, not just the path.
+  it("getDocumentSeed GETs the /seed sub-path and sends no body", async () => {
+    body = {
+      kind: "role_definition",
+      key: "assistant",
+      content: { definition_md: "the shipped persona", tombstoned: "true" },
+    };
+    const seed = await httpApi.getDocumentSeed("role_definition", "assistant");
+    const { url, method, body: sent } = await lastCall();
+    expect(url).toBe("/api/document-history/role_definition/assistant/seed");
+    expect(method).toBe("GET");
+    expect(sent).toBeUndefined();
+    expect(seed).toEqual({
+      kind: "role_definition",
+      key: "assistant",
+      content: { definition_md: "the shipped persona", tombstoned: "true" },
+    });
+  });
+
   it("restoreDocumentHistory POSTs the /{id}/restore sub-path with no body", async () => {
     body = WIRE_VERSION;
     const restored = await httpApi.restoreDocumentHistory(
