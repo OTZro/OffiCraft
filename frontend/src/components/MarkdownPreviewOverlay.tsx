@@ -32,10 +32,11 @@
 // composer preview) opens here and therefore gets the same shell: filename in
 // the header, 下載, close, Esc/backdrop dismissal and the zoom controls.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { authedAttachmentUrl } from "../api/http";
 import { copyAttachmentShareLink } from "../lib/shareLink";
+import { useEscapeLayer } from "../lib/useEscapeLayer";
 import { Markdown } from "./Markdown";
 import "./md-preview.css";
 import {
@@ -161,17 +162,15 @@ export function MarkdownPreviewOverlay({
     }
   }
 
-  // Esc closes — bound only while mounted (the overlay only mounts open).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  // Esc closes — as the TOP layer. The overlay only mounts open, so it holds a
+  // layer for exactly its lifetime; whatever opened it (a popover, a gallery,
+  // a chat thread) sits below and does not see the key.
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEscapeLayer(onClose, rootRef);
 
   return (
     <div
+      ref={rootRef}
       className="md-preview"
       role="dialog"
       aria-modal="true"

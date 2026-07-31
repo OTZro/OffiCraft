@@ -1,5 +1,6 @@
-import { useEffect, type ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import "./confirm-modal.css";
+import { useEscapeLayer } from "../lib/useEscapeLayer";
 
 /**
  * Minimal reusable centered confirm modal (overlay + card), dark-themed to
@@ -37,16 +38,17 @@ export function ConfirmModal({
   testId?: string;
   confirmTestId?: string;
 }) {
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape" && !busy) onCancel();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [busy, onCancel]);
+  // Esc cancels — and while the confirm is in flight the modal SWALLOWS it
+  // rather than letting it fall through to whatever is underneath: a busy modal
+  // is still the top layer, it just has nothing to do with the key yet.
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEscapeLayer(() => {
+    if (!busy) onCancel();
+  }, rootRef);
 
   return (
     <div
+      ref={rootRef}
       className="confirm-modal"
       data-testid={testId}
       role="dialog"

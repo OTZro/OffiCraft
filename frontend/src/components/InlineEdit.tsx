@@ -112,7 +112,13 @@ export function InlineEdit({
             return;
           }
           if (e.key === "Enter") commit();
-          if (e.key === "Escape") cancel();
+          if (e.key === "Escape") {
+            // This Esc is spent HERE: preventDefault stops the shared
+            // dispatcher (lib/escapeLayers.ts) from ALSO closing the surface
+            // this field sits in.
+            e.preventDefault();
+            cancel();
+          }
         }}
       />
       <button
