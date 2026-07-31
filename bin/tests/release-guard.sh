@@ -493,26 +493,25 @@ check "C8 NOTHING in the argument gates ever invoked gh" "" "$(cat "$GHWIRE")"
 # ═══════════════════════════════════════════════════════════════════════════
 # E — END TO END. Real staging worktree, real packaging, real read-back.
 # ═══════════════════════════════════════════════════════════════════════════
-# The fixture repo carries its own bin/build and bin/build-release, and
-# bin/release runs `$STAGE/bin/build` — a path inside the staging worktree it cut
-# from OC_RELEASE_SRC. So this drives the genuine control flow (including the
-# --sign builder choice) with a build that finishes in a second.
+# The fixture repo carries its own bin/build, and bin/release runs
+# `$STAGE/bin/build` — a path inside the staging worktree it cut from
+# OC_RELEASE_SRC. So this drives the genuine control flow with a build that
+# finishes in a second.
 echo "── E: end-to-end publish against a fixture repo"
 SRC="$WORK/src"; mkdir -p "$SRC/bin" "$SRC/gosrc"
 cp "$GOSRC/main.go" "$SRC/gosrc/main.go"
 cp "$GOSRC/go.mod"  "$SRC/gosrc/go.mod"
 printf 'MIT\n' > "$SRC/LICENSE"
 printf '#!/bin/sh\necho fixture installer\n' > "$SRC/bin/install.sh"
-# The fixture build records the codesigning env it was handed. That is the
-# behavioural assertion for "default = not signed": not "the artifact has no
-# signature" (which a gate BELOW the keychain probe would also produce) but
-# "publish asked for no signing at all", observed at the build seam itself.
+# The fixture build records WHICH builder publish invoked. Since T-0398 there is
+# exactly one (bin/build) — the signed variant and every OC_CODESIGN_* knob are
+# deleted — so this wire's remaining job is to pin that publish still routes
+# through the staging worktree's own bin/build and hands it the tag.
 cat > "$SRC/bin/build" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 R="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-echo "ENABLE=${OC_CODESIGN_ENABLE:-unset} REQUIRE=${OC_CODESIGN_REQUIRE:-unset}" > "$BUILD_WIRE"
-echo "builder=bin/build" >> "$BUILD_WIRE"
+echo "builder=bin/build" > "$BUILD_WIRE"
 echo "OC_APP_VERSION=${OC_APP_VERSION:-unset}" >> "$BUILD_WIRE"
 SHORT="$(git -C "$R" rev-parse --short HEAD)"
 mkdir -p "$R/.deploy" "$R/server/ocserverd/bindist"
@@ -523,15 +522,7 @@ mkdir -p "$R/.deploy" "$R/server/ocserverd/bindist"
 cp "$R/server/ocserverd/bindist/ocwarden" "$R/server/ocserverd/bindist/ocagent"
 cp "$R/server/ocserverd/bindist/ocwarden" "$R/server/ocserverd/bindist/officraft"
 SH
-cat > "$SRC/bin/build-release" <<'SH'
-#!/usr/bin/env bash
-set -euo pipefail
-R="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export OC_CODESIGN_REQUIRE=1
-bash "$R/bin/build"
-echo "builder=bin/build-release" >> "$BUILD_WIRE"
-SH
-chmod +x "$SRC/bin/build" "$SRC/bin/build-release" "$SRC/bin/install.sh"
+chmod +x "$SRC/bin/build" "$SRC/bin/install.sh"
 (
   cd "$SRC"
   git init -q .
@@ -587,12 +578,10 @@ check "E0 --dry-run still produced the real artifacts" "yes" \
   "$([[ -s "$EOUT/$E_TARBALL" && -s "$EOUT/install.sh" && -s "$EOUT/checksums.txt" ]] && echo yes || echo no)"
 case "$OUT" in *"artifacts verified"*) ok "E0 --dry-run ran the real pre-upload verification" ;;
   *) bad "E0 --dry-run ran the real pre-upload verification (out: $(printf '%s' "$OUT" | tail -c 400))" ;; esac
-check "E0 default publish asked for NO signing" \
-  "ENABLE=unset REQUIRE=unset" "$(sed -n '1p' "$BUILD_WIRE")"
-check "E0 default publish used bin/build, not bin/build-release" \
-  "builder=bin/build" "$(sed -n '2p' "$BUILD_WIRE")"
+check "E0 publish built through the staging worktree's own bin/build" \
+  "builder=bin/build" "$(sed -n '1p' "$BUILD_WIRE")"
 check "E0 the tag reached the build as OC_APP_VERSION" \
-  "OC_APP_VERSION=$E_TAG" "$(sed -n '3p' "$BUILD_WIRE")"
+  "OC_APP_VERSION=$E_TAG" "$(sed -n '2p' "$BUILD_WIRE")"
 
 # E1 — the happy full arc.
 STATION_VERSION_JSON="{\"git_sha\":\"$E_SHORT\"}" STATION_HEALTH_RC=0 e2e
@@ -621,14 +610,11 @@ e2e_stored "targetCommitish=\"$(printf '%040d' 0)\""
 STATION_VERSION_JSON="{\"git_sha\":\"$E_SHORT\"}" e2e
 named_failure "E4 upload OK but the release is bound to another commit" release-target "$RC" "$OUT"
 
-# E5 — --sign is the ONLY way to sign, and it routes through bin/build-release.
-e2e_stored
-STATION_VERSION_JSON="{\"git_sha\":\"$E_SHORT\"}" e2e --sign
-check "E5 --sign exits 0 on a provisioned fixture" "0" "$RC"
-check "E5 --sign routed through bin/build-release" "builder=bin/build-release" \
-  "$(sed -n '4p' "$BUILD_WIRE")"
-check "E5 --sign made the identity MANDATORY (REQUIRE=1)" \
-  "ENABLE=unset REQUIRE=1" "$(sed -n '1p' "$BUILD_WIRE")"
+# E5 — REMOVED with the signing machinery (T-0398). It used to assert that
+# `--sign` was the ONLY way to sign and that it routed through bin/build-release;
+# there is no --sign flag and no bin/build-release any more, so there is nothing
+# left for it to pin. The publish arc's own read-back cases (E0-E4, E6, E7) are
+# untouched.
 
 # E6 — a failed upload must NOT be followed by a read-back that "passes" against
 # a stale/foreign release. It has to stop at the upload.

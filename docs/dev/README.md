@@ -87,7 +87,7 @@ wire（HTTP OpenAPI 面、MCP tool 面）已凍結：**動 wire 一律 spec 先�
 發版只有兩條指令,`bin/release` 全包,**不再有「印一行 `gh release create` 給人貼」的半套形式**(舊的 `bash bin/release <tag>` 已移除,打它會拿到非零退出 + 正確替代指令):
 
 ```
-bin/release publish --beta <tag> --target <sha> [--sign] [--dry-run]
+bin/release publish --beta <tag> --target <sha> [--dry-run]
 bin/release promote <tag>                       [--dry-run]
 ```
 
@@ -112,38 +112,15 @@ isDraft False | isPrerelease True | targetCommitish fb89a69aad8c
 
 **第 8 步的語意:publish 不觸發升級,它只「觀察」升級發生**。站台是靠 owner 帳號上的 **auto_update** 自己去撿新 release 的,而 **prerelease 也算**:2026-07-26 實測,`v0.5.38`(`isPrerelease=true`)建立後約 **2–3 分鐘**站台自動升上去、`/api/version` 的 git_sha 回讀查證。預設等待預算 60 × 5s = 5 分鐘,約為實測延遲的兩倍。所以「發完等站台升上來」是**正確的流程期待,不是設計缺陷**;但若哪天 auto_update 被關掉,這一步就會**合理地**失敗,而失敗訊息會明講「只有這一項沒達成、asset 與 release 本身都對」,以免下一個人跑去查 artifact。
 
-## 發佈簽章(穩定 codesign 身分,T-33d5;**T-588c 起預設不跑**)
+## 發佈簽章 —— 已整個移除(T-0398,owner 2026-07-31)
 
-⚠️ **簽章預設關閉**(owner 裁示 T-588c:「可以保留但是我們預設都不跑」/「以後我們想要拿回來繼續 sign 我們再說吧」)。**理由是作業面的**:簽章**卡測試又卡發佈**,先跳過讓開發順利,機制保留不刪。`bin/build` / `bin/build-bindist` / `bin/ci.sh` / `bin/autodeploy` / `bin/release publish` 的**預設路徑一律不碰 keychain**——`bin/codesign-artifact` 在 `security find-identity` **之前**就 no-op 返回(閘門必須在探測之上:重點不是「沒簽」,而是「不需要那把共用的 login keychain」,所以兩份 CI 才能同時跑)。要簽只有兩種明確方式:`OC_CODESIGN_ENABLE=1`,或 `bin/release publish --sign`(委派 `bin/build-release`,`OC_CODESIGN_REQUIRE=1`,憑證不在就直接擋下、沒有 adhoc 降級)。
+**這個 repo 不做 code signing,而且沒有任何開關可以打開它。** 原本的機制(`bin/codesign-artifact`、`bin/setup-codesign-cert`、`bin/build-release`、`bin/release publish --sign`、`OC_CODESIGN_*` 全套 env knob、`bin/tests/run.sh` 裡的 hermetic 簽章測試、`cli/ocwarden/selfupdate.go` 的 `signatureOf`/`codesignIdentity` 觀測路徑)在 T-0398 **全部刪除**——owner 拍板「全部拿掉,連手動簽章的逃生門一起刪」,所以不是預設關閉、不是留著等召回,是不在了。出貨的 binary 就是 `go build` 的產物(adhoc 簽章,cdhash 每 build 都變),`bin/release publish` 只有一種 builder。
 
-⚠️ **兩句話都禁止寫,兩個方向都是過度宣稱**:不要寫「不簽章的代價是 macOS 會重問 TCC 權限」,也不要寫「已證實 self-signed 對 TCC 完全無用」。現況是:self-signed codesign 對 macOS TCC 授權是否有效,**目前只是高度懷疑無效、沒有 100% 結論**(owner 2026-07-26;依據:**在有簽章的那段期間,他仍碰過不只一次授權詢問**——那是有觀察支持的懷疑,不是證明)。前一句曾被當成既定代價寫進碼裡,而它從來沒被查證過。真的需要答案就在真機上量,拿證據回來。
+**被抽掉之後什麼不再被守**:CI 原本有一道守簽章的檢查(step 0b 的 `bin/tests/run.sh`),它守的是「預設路徑不碰共用 login keychain」「憑證檢查壞掉不可被讀成憑證不在」「`OC_CODESIGN_REQUIRE=1` 下絕不默默降級出 adhoc」。這些現在都不再被守——因為被守的東西整個不存在了,不是漏掉。要重新引入簽章,請當成一張新票、連守衛一起帶回來,不要只補一支腳本。
 
-**唯一權威表述在 `bin/codesign-artifact` 檔頭**;`bin/release`、`bin/build`、`bin/build-bindist`、`bin/build-release`、`bin/setup-codesign-cert`、`cli/CLAUDE.md`、`cli/ocwarden/selfupdate.go` 一律指向它、不自行改寫。同一條規則不留兩份不同表述——本 repo 已有同型事故(兩份複本漂開,註解變得比證據自信)。
+⚠️ **不要把這條跟 TCC 身分錨點搞混**:`dist/officraft/officraft`(launchd 的 responsible process)是**用 bytes 認身分**的,所以它 byte-pinned、`bin/check-officraft-dist` 在 CI step 3 比對雜湊、裝過就永不覆寫。那套機制從來不依賴簽章憑證,**owner 核可保留,與本節無關**。
 
-以下描述的是**保留但預設不執行**的機制。T-33d5 當初的主張是:macOS TCC 以 code-signing 身分記權限、Go 預設 adhoc 簽章每 build cdhash 都變,所以以長效 self-signed 憑證(CN 預設 `OffiCraft Code Signing`)簽署可讓 fleet self-update 後仍延續授權——**該主張未經查證**(見上)。機制本身:
-
-- `bin/build-bindist` → 簽 bindist 的 `ocwarden`(`com.officraft.ocwarden`)與 `ocagent`(`com.officraft.ocagent`)——即 ocserverd 內嵌、經 `/api/{warden,agent}/binary` 發給 fleet self-update 的 binary。
-- `bin/build` → 簽 `.deploy/ocserverd`(`com.officraft.ocserverd`)——autodeploy / `bin/release` 打包(GitHub Release 出貨)的 artifact。
-- 簽署 seam 是 `bin/codesign-artifact`:**T-588c 起預設連 keychain 都不看**(`OC_CODESIGN_ENABLE=1` / `OC_CODESIGN_REQUIRE=1` 才啟動);被要求簽時才是「keychain 有憑證才簽,沒有就警告照舊」,簽完 `codesign --verify --strict`,失敗保留原 binary。`OC_CODESIGN_DISABLE=1` 是硬否決,勝過 ENABLE/REQUIRE。
-- **發版走 `bin/build-release`,憑證不在就直接擋下(T-da4b,owner 裁示 `rc-e43a3aae0912`)**:上面兩個簽署點**都不是發版專用**——`bin/build` 也跑在 autodeploy(prod 主機)、`bin/ocserver install`、和任何 dev Mac 手動 build;`bin/build-bindist` 更是**每次 `bin/ci.sh` 都跑**。所以 `OC_CODESIGN_REQUIRE=1` 沒有「發佈路徑」可以掛——掛進 `bin/build`/`bin/build-bindist` = 連沒憑證的 dev Mac 和 CI 一起擋死(**owner 明確沒選這個**)。`bin/build-release` 就是補上的那個點:**發版者跑它、不跑 `bin/build`**,它 export `OC_CODESIGN_REQUIRE=1` 再委派,三個簽署呼叫(bindist ocwarden/ocagent + `.deploy/ocserverd`)全部繼承 → 憑證不在 = `FAIL-IDENTITY-MISSING` exit 4,**沒有 artifact 可出貨**。`bin/build` 本身**未改、維持預設 off**。
-  - 發版:見上面的〈發版指令〉。`bin/build-release` **只在 `bin/release publish --sign` 時被進入**(T-588c 起預設不簽),它仍是「憑證不在就直接擋下」的那個點。
-  - **代價(owner 已知並接受)**:憑證過期／keychain 沒解鎖／發佈機重灌 → **加了 `--sign` 的發版會停,而且不會自己好**,要人去跑 `bash bin/setup-codesign-cert` 重佈。這正是「要求簽章」的意思:要嘛拿到簽好的,要嘛什麼都拿不到。⚠️ 不要把這條代價改寫成「否則 fleet 會默默掉 TCC 授權」——那個因果**未經查證**(見本節開頭)。
-  - ⚠️ **`--sign` 未對真 keychain 驗過(已知邊界,owner 接受)**:T-588c 為止沒有任何一顆簽章版 release 被真的做出來過。測試證明的是**路由**(`--sign` 確實走到 `bin/build-release` 且 `OC_CODESIGN_REQUIRE=1` 傳達到 `codesign-artifact`,`security`/`codesign` 都是 PATH-shim),**不是**真簽章可用。綠燈不等於這條路走通過。
-  - **T-588c 已補上原本的缺口**:當年這裡是**選用的入口點,不是出貨閘**——`gh release create` 上傳什麼檔案完全不看,所以有人跑 `bin/build` 再拿那顆去發 release 擋不住。現在 `bin/release publish` 全包整條 arc:**上傳前**驗 artifact(arch / tarball member / ocserverd 的 version+commit stamp / checksums)、**上傳後**回讀 GitHub 實際存了什麼 + 站台是否真的跑在那個 commit。(簽章身分本身仍不是出貨閘,因為預設不簽。)
-  - **未決**:`bin/autodeploy`(prod 主機)也會經 `bin/build` → `build-bindist` 產**發給 fleet 的** ocwarden/ocagent,但它**維持不擋**(擋它 = prod deploy 停擺,那不是 owner 被問到的那題)。要不要一併 require,需要 owner 再裁一次。
-- **憑證檢查是「先收集再比對」,不可改回 pipeline(T-da4b)**:`security find-identity | grep -Fq` 會在第一行命中就關 pipe,`security` 吃 SIGPIPE(141),`set -o pipefail` 讓整條 pipeline 取 141 → **憑證明明在,卻被判成不在,默默降級出 adhoc**。務必把輸出整個收進變數再比對。`bin/setup-codesign-cert` 的同款檢查也已一併改掉。
-- **哨兵與陽性訊號(T-da4b)**:憑證確認存在時會印 `identity CONFIRMED present in keychain` —— 只有失敗才叫的哨兵,沒叫時分不出「正常」還是「哨兵自己壞了」,所以好路徑也要留證。**檢查本身壞掉**(`security` 讀不到、輸出沒有 `N valid identities found` trailer)→ `FAIL-CHECK-BROKEN` **exit 3 直接擋下**,絕不當成「憑證不在」降級。**`OC_CODESIGN_REQUIRE=1`** → 憑證不在時 `FAIL-IDENTITY-MISSING` **exit 4 直接擋下**;預設 off,所以沒憑證的 dev/CI 機照常 build。
-- **同類掃描:`pipefail` + 提前關 pipe 的消費者(T-da4b,已掃全 repo,結論=不動)**:全 repo 24 個帶 `set -o pipefail` 的 shell script 都掃過 `| grep -q` / `| head` / `| sed -n Np` 這種「讀夠就關 pipe」的組合。**除了已修的 `codesign-artifact` / `setup-codesign-cert`,其餘一律不改**,因為判準不是「構造在不在」,而是**誤判往哪個方向倒**:
-  - **rc 根本沒被消費** → `| head -1 || true`(`bin/ocserver:103`)。`|| true` 吃掉 141,無害。(原本這裡還列了 `conformance/run.sh` 的 listener 查詢;**T-a3ba 已把它整段刪掉**——那行 `lsof … | head -1 || true` 換成「候選數 ≠ 1 就 FATAL」的 while-read 迴圈,`head -1` 的默默取第一個本來就是這張票要殺的東西,不再是本節的案例。)
-  - **倒向假紅(誤報失敗)** → `e2e_test/a1_zombie_e2e.sh:506/510/512`(`sed`/`head`/`tail | grep -qE`)、`e2e_test/tests_guard/run.sh`(`run_snippet` 的 `grep -q` 斷言)、`e2e_test/setup.sh:121`(`printf '%s' "$RESP" | py -c …`,T-a3ba 後 writer 是 builtin `printf` 而非 `curl`,窗更小)、`e2e_test/setup.sh:186`(登入取 token)。SIGPIPE → 141 → 測試紅／腳本中止。**吵,但不會騙人**,而且這些檔案 `bin/ci.sh` 只跑 tests_guard,其餘沒有活體證據可驗 —— 改了也證不了,是純 churn。
-    > 行號是寫作當下的快照,會漂;以構造(不是行號)為準。上一版這兩行的行號在寫下時就已經對不上了。
-  - **倒向「看得見的 skip」** → `bin/tests/run.sh:427`(`openssl version | grep -q '^OpenSSL 3'` 守著一個 red control)。**這是唯一另一個「檢查可能不執行」的方向**,但 else 分支會**印出 `skip — red control needs OpenSSL 3.x`**,不是默默消失;且 `openssl version` 一口氣寫 ~25 bytes 就退出,窗開不起來。
-  - **`echo "$VAR" | grep -q` 一律低risk**:writer 是 builtin、字串遠小於 64KB pipe buffer,grep 收到 EOF 前 write 早已完成。
-  - **通則(給後面的人):`pipefail` + 早關 pipe 只有在「141 會把某個 `if`/`if !` 翻成『壞事不存在』並讓流程默默往下走」時才是地雷。** `codesign-artifact` 之所以是地雷,是因為它是唯一一個誤判會**默默翻轉「出不出貨」**的點。倒向紅、倒向可見 skip、rc 被 `|| true` 吃掉的,都不是同一種病。
-- **gitignored 本地 prebuilt(`bin/ocwarden` 等)不需要簽章**，維持素 `go build` 產物——CI parity dryrun 與任何 dev 機 build 都不需要 keychain,repo/CI 完全不受影響;簽章只活在發佈 artifact 上。
-- self-update 側**不驗簽**(self-signed 憑證在未信任機器上 verify 必非零,直接擋下會 brick fleet),只在 swap 後 log 新 binary 的簽章身分(`cli/ocwarden/selfupdate.go` 的 signature observability)。
-
-發佈機一次性佈署:`bash bin/setup-codesign-cert`(冪等;產憑證 → 匯入 login keychain → sudo 信任 codeSign policy → 預授權 codesign 用 key → smoke test)。注意:換新憑證 = 新 TCC 身分,fleet 會再被問一輪權限。簽章腳本的 hermetic 測試在 `bin/tests/run.sh`(CI step 0b)。
+⚠️ **兩句話都不要寫**:不要寫「不簽章的代價是 macOS 會重問 TCC 權限」,也不要寫「已證實 self-signed 對 TCC 完全無用」。self-signed codesign 對 macOS TCC 授權是否有效,**只是高度懷疑無效、從未有 100% 結論**(owner 2026-07-26;依據:在有簽章的那段期間他仍碰過不只一次授權詢問)。刪除的理由是**作業面的**:它卡測試又卡發佈。真的需要答案就在真機上量,拿證據回來。
 
 ## 安裝器內部
 

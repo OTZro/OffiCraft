@@ -11,8 +11,9 @@
 # now also runs on every pull request via .github/workflows/ci.yml, which calls
 # bin/ci-cloud.sh; that script is the single definition of the subset, so the
 # cloud check cannot grow a second, drifting list. What stays LOCAL-ONLY:
-# bin/tests/run.sh (16 Linux assertions currently red: BSD/GNU `mktemp -t`
-# semantics, SIGPIPE, and macOS-shaped install.sh fixtures), Playwright CT
+# bin/tests/run.sh (a number of its assertions go red on Linux: BSD/GNU
+# `mktemp -t` semantics and macOS-shaped install.sh fixtures — the count is
+# deliberately not stated here, it was stale within one ticket), Playwright CT
 # (real-browser layout — font/rasterisation差異 makes a runner red for the wrong
 # reason), the content-level gitleaks scan, and real-fleet e2e.
 # The path denylist plus e2e_test's hermetic isolation-guard suite run in cloud.
@@ -87,21 +88,20 @@ else
   exit 1
 fi
 
-# (0b) bin/ script unit tests (T-33d5) — same hermetic PATH-shim pattern as (0):
-# stubs uname/security/codesign/gh/curl, so NO keychain is touched, NOTHING is
-# signed, NO release is created and NO station is contacted. It guards:
-#   * the codesign-artifact seam. Since T-588c signing is OFF BY DEFAULT and the
-#     gate sits ABOVE the `security find-identity` probe, so this step also
-#     asserts — on its own tripwire — that the default path never consults the
-#     shared login keychain at all, which is the property that lets two CI runs
-#     proceed at once. When signing IS requested the older guarantees still hold:
-#     the SIGPIPE red/green (a present identity must NEVER read as absent), a
-#     BROKEN check hard-fails (exit 3), and OC_CODESIGN_REQUIRE=1 turns a missing
-#     identity into a hard error (exit 4) instead of a silent adhoc ship.
+# (0b) bin/ script unit tests — same hermetic PATH-shim pattern as (0): stubs
+# launchctl/gh/curl and friends, so NO release is created and NO station is
+# contacted. bin/tests/run.sh is the DISPATCHER for the bin/ guard suites; the
+# authoritative list of what it runs is that file itself, and the two that decide
+# whether a release can go out wrong are worth naming here:
 #   * bin/release publish/promote (release-guard.sh, T-588c) — the post-upload
 #     READ-BACK. One case per requirement, each violating exactly one, so a
 #     deleted check reddens here instead of shipping a half-populated,
 #     mis-targeted or draft release that nobody looked at.
+#   * bin/tests/ci-success-marker.sh — the guard-of-the-guard on the "[ci] all
+#     green" literal that this script's own authority rests on.
+# ⚠️ NOTHING here guards code signing any more: T-0398 deleted the signing
+# machinery outright (owner 2026-07-31), so there is no signing behaviour left to
+# assert and no keychain any lane could touch.
 echo "[ci] (0b) bin script unit tests (hermetic)"
 if [[ -x "$ROOT/bin/tests/run.sh" ]]; then
   bash "$ROOT/bin/tests/run.sh"
