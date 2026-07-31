@@ -17,6 +17,7 @@ import type {
   MachineView,
   UninstallResultView,
   BootstrapResultView,
+  WardenShape,
 } from "../types";
 import type { OutsourceWorkerView } from "../api/adapter";
 import {
@@ -571,6 +572,12 @@ export function MonitorPage() {
                             ? t.monitor.machine.online
                             : t.monitor.machine.offline}
                         </span>
+                        {/* Which launchd shape this warden REPORTS it is on.
+                         * It rides beside the online badge because it is the
+                         * same kind of fact — an identity of the running
+                         * process, not a measurement — and because the cutover
+                         * is read row by row. */}
+                        <WardenShapeBadge shape={m.wardenShape} />
                       </div>
                     </td>
                     {/* Per-runtime version columns (T-674d), replacing the old
@@ -1152,6 +1159,63 @@ export function MonitorPage() {
         </div>
       </section>
     </div>
+  );
+}
+
+/** The launchd shape a warden reports about ITSELF, as a badge on its row.
+ *
+ * Four states, four faces, always rendered — the whole reason this exists is
+ * that all four were previously the same nothing on screen, which is how a
+ * fleet mid-cutover became unreadable. In particular:
+ *   "unknown"    the new build is on that box and cannot read its own parent
+ *   not reported the new build is not on that box at all
+ * Those two are opposite jobs (debug that machine vs ship it the release), so
+ * they get their own word, their own colour and their own border style — and a
+ * pairwise-distinctness test pins all six pairs, because "two states quietly
+ * collapse into one" is a failure no per-state assertion notices.
+ *
+ * The absent case is keyed as "unreported" rather than falling through a `??`
+ * to some other state's face: every state names itself, so nothing can be
+ * silently borrowed. There is deliberately no `data-shape` attribute — an
+ * attribute that echoes the input would make the distinctness test pass by
+ * construction while the visible badge collapsed. */
+function WardenShapeBadge({ shape }: { shape: WardenShape }) {
+  const { t } = useI18n();
+  const m = t.monitor.machine;
+  const faces: Record<
+    NonNullable<WardenShape> | "unreported",
+    { modifier: string; label: string; hint: string }
+  > = {
+    anchor: {
+      modifier: "anchor",
+      label: m.shapeAnchor,
+      hint: m.shapeAnchorHint,
+    },
+    legacy: {
+      modifier: "legacy",
+      label: m.shapeLegacy,
+      hint: m.shapeLegacyHint,
+    },
+    unknown: {
+      modifier: "unknown",
+      label: m.shapeUnknown,
+      hint: m.shapeUnknownHint,
+    },
+    unreported: {
+      modifier: "unreported",
+      label: m.shapeUnreported,
+      hint: m.shapeUnreportedHint,
+    },
+  };
+  const face = faces[shape ?? "unreported"];
+  return (
+    <span
+      className={`mon-shape mon-shape--${face.modifier}`}
+      data-testid="mon-warden-shape"
+      title={face.hint}
+    >
+      {face.label}
+    </span>
   );
 }
 

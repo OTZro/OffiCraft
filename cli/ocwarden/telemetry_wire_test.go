@@ -310,8 +310,17 @@ func realHeartbeat(t *testing.T) map[string]any {
 	}
 	runtimes := collectRuntimeCapabilities(env, fakeRunner{out: probes}, claude)
 
+	// The shape verdict comes from the REAL collector too. The package-default
+	// cutover seam is blocked inside the test binary, so its `ps` fails and the
+	// honest answer is "unknown" — which is still the producer's own word for it,
+	// not a literal typed here.
+	shape := newShapeReporter("/home/u/.officraft/warden/officraft", 4242)()
+	if shape == "" {
+		t.Fatal("precondition: the shape collector produced nothing to check")
+	}
+
 	heartbeat, err := buildTelemetryPayload("m-1", "lab-1", hardware,
-		map[string]string{"ocwarden": "abc123abc123"}, claude, runtimes)
+		map[string]string{"ocwarden": "abc123abc123"}, claude, shape, runtimes)
 	if err != nil {
 		t.Fatalf("buildTelemetryPayload: %v", err)
 	}
@@ -353,7 +362,8 @@ func TestWardenTelemetryPayloadsMatchFrozenSchema(t *testing.T) {
 	// producer stopped emitting it" is as red as "the producer renamed it".
 	// (Checked AFTER the drift assertion above, so a rename is reported as drift
 	// rather than as a missing key.)
-	for _, key := range []string{"machine", "hardware", "binaries", "claude", "runtimes"} {
+	for _, key := range []string{"machine", "hardware", "binaries", "claude", "runtimes",
+		"warden_shape"} {
 		if _, present := heartbeat[key]; !present {
 			t.Errorf("heartbeat dropped %s; payload = %#v", key, heartbeat)
 		}
@@ -409,7 +419,7 @@ func TestRunLogsRefusedTelemetry(t *testing.T) {
 		}}
 	}
 	var out bytes.Buffer
-	run(context.Background(), cfg, collect, machine, refuse, nil, nil, noSleep, 1, &out)
+	run(context.Background(), cfg, collect, machine, refuse, nil, nil, nil, noSleep, 1, &out)
 	log := out.String()
 	if !strings.Contains(log, "422") || !strings.Contains(log, "unknown field") {
 		t.Errorf("a refused heartbeat must log the status AND the server's reason; got %q", log)
@@ -421,7 +431,7 @@ func TestRunLogsRefusedTelemetry(t *testing.T) {
 	// A server that is merely unreachable must NOT spam the log.
 	down := func(string, map[string]any) (int, map[string]any) { return 0, nil }
 	var quiet bytes.Buffer
-	run(context.Background(), cfg, collect, machine, down, nil, nil, noSleep, 1, &quiet)
+	run(context.Background(), cfg, collect, machine, down, nil, nil, nil, noSleep, 1, &quiet)
 	if quiet.Len() != 0 {
 		t.Errorf("an unreachable server is expected, not a refusal; log = %q", quiet.String())
 	}
@@ -429,7 +439,7 @@ func TestRunLogsRefusedTelemetry(t *testing.T) {
 	// And a stored report says nothing either.
 	okPost := func(string, map[string]any) (int, map[string]any) { return 200, map[string]any{} }
 	var silent bytes.Buffer
-	run(context.Background(), cfg, collect, machine, okPost, nil, nil, noSleep, 1, &silent)
+	run(context.Background(), cfg, collect, machine, okPost, nil, nil, nil, noSleep, 1, &silent)
 	if silent.Len() != 0 {
 		t.Errorf("a stored report must stay quiet; log = %q", silent.String())
 	}

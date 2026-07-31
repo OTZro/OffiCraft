@@ -302,6 +302,52 @@ func (s *apiServer) machineBinStatus(machineID string) *string {
 	return nil // no mismatch but partial coverage → unknown, not "current"
 }
 
+// warden_shape wire vocabulary (AgentTelemetryIngestDTO.warden_shape →
+// machineDTO.warden_shape / MonitoringMachineDTO): which launchd SHAPE a
+// machine's warden reported it is actually running under. Mirrors the producer's
+// own consts (cli/ocwarden/cutover.go) — two Go modules with no import between
+// them, so the vocabulary is checked against these literals on the way in.
+const (
+	wardenShapeAnchor  = "anchor"
+	wardenShapeLegacy  = "legacy"
+	wardenShapeUnknown = "unknown"
+)
+
+// ValidWardenShape gates the ingest handler's closed enum. "unknown" is a
+// REPORTED verdict ("the warden ran and could not read its parent"), not a
+// fallback the server may invent — an absent field means something else entirely
+// ("this warden build predates the anchor-cutover release") and the two are
+// never converted into one another.
+func ValidWardenShape(shape string) bool {
+	return shape == wardenShapeAnchor || shape == wardenShapeLegacy ||
+		shape == wardenShapeUnknown
+}
+
+// machineWardenShape reads back the shape machineID's warden REPORTED, keyed the
+// same way as machineBinStatus (the warden's own member id IS the machine id).
+//
+// 🔴 The contrast with machineBinStatus one screen up is the whole point of this
+// function existing separately: bin_status is COMPUTED here, by comparing what
+// the machine reported against what the server embeds. There is no equivalent
+// second source for the shape — only the reporting process can see its own
+// parent — so this passes the stored value through and derives nothing. An
+// absent value stays absent: nil is "this warden has never reported a shape",
+// which the wire keeps distinct from the reported "unknown".
+func (s *apiServer) machineWardenShape(machineID string) *string {
+	if s.telemetry == nil {
+		return nil
+	}
+	entry := s.telemetry.Get(machineID)
+	if entry == nil {
+		return nil
+	}
+	shape, isStr := entry["warden_shape"].(string)
+	if !isStr || shape == "" {
+		return nil
+	}
+	return &shape
+}
+
 // claude_cred_source wire vocabulary (machineDTO.claude_cred_source /
 // monitoringMachineDTO): where the machine's claude CLI credentials live,
 // synthesized from the warden probe's presence bools.
@@ -464,6 +510,7 @@ func (s *apiServer) HandleListMachinesApiMachinesGet(w http.ResponseWriter, r *h
 			ClaudeCredSource:    claudeCredSource,
 			ClaudeSubReadable:   claudeSubReadable,
 			RuntimeCapabilities: s.machineRuntimeCapabilities(m.ID),
+			WardenShape:         s.machineWardenShape(m.ID),
 		})
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].IsSelf && !rows[j].IsSelf })

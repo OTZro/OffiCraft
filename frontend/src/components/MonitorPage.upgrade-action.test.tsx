@@ -53,6 +53,7 @@ const machine = (
   online: true,
   isSelf: false,
   binStatus: null,
+  wardenShape: null,
   claudeVersion: null,
   claudeCredSource: null,
   claudeSubReadable: null,

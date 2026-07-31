@@ -126,16 +126,25 @@ func TestBinFingerprinter_ReadFaultDropsEntryAndStaleCache(t *testing.T) {
 	}
 }
 
-func TestNewBinFingerprinter_TargetsSelfAndSibling(t *testing.T) {
-	fp := newBinFingerprinter(func() (string, error) { return "/inst/dir/ocwarden", nil })
+func TestNewBinFingerprinter_TargetsSelfSiblingAndAnchor(t *testing.T) {
+	const anchor = "/home/u/.officraft/warden/officraft"
+	fp := newBinFingerprinter(func() (string, error) { return "/inst/dir/ocwarden", nil }, anchor)
 	if fp.paths["ocwarden"] == "" || fp.paths["ocagent"] == "" {
 		t.Fatalf("paths = %v, want both ocwarden and the ocagent sibling", fp.paths)
 	}
 	if fp.paths["ocagent"] != "/inst/dir/ocagent" {
 		t.Fatalf("ocagent path = %q, want the home sibling", fp.paths["ocagent"])
 	}
-	// An unresolvable executable degrades to empty paths (skipped), no error.
-	fp = newBinFingerprinter(func() (string, error) { return "", fmt.Errorf("nope") })
+	// The TCC identity anchor is the one binary self-update never replaces, so
+	// its fingerprint is the only evidence of WHICH anchor a machine runs; it
+	// comes from resolvePaths (the single owner of that derivation), not from
+	// the executable's directory.
+	if fp.paths["officraft"] != anchor {
+		t.Fatalf("officraft path = %q, want the resolved anchor %q", fp.paths["officraft"], anchor)
+	}
+	// An unresolvable executable degrades to empty paths (skipped), no error —
+	// and an unresolvable anchor is skipped the same way rather than guessed at.
+	fp = newBinFingerprinter(func() (string, error) { return "", fmt.Errorf("nope") }, "")
 	if got := fp.collect(); len(got) != 0 {
 		t.Fatalf("collect with no self path = %v, want empty", got)
 	}

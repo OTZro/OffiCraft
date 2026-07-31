@@ -648,6 +648,14 @@ func selfUpdateAgentPath(executable func() (string, error)) string {
 // builds the Bearer-authed GET seam and the real filesystem/exec ops, and returns a
 // ready updater. Mirrors newCommandTransport's construction shape.
 func newSelfUpdater(cfg Config, logf func(string, ...any)) *updater {
+	// The execSelf closure built below calls syscall.Exec, which REPLACES THE
+	// CALLING PROCESS IMAGE. Under `go test` that process is the test binary, so
+	// invoking it would not "start a subprocess" — it would silently become
+	// ocwarden mid-suite, with the harness none the wiser. Nothing calls this
+	// constructor from a test today; this refusal is what keeps that true by
+	// construction rather than by the next author noticing. Production is
+	// unaffected: realMain only reaches here on the real forever-loop path.
+	refuseInTestBinary("newSelfUpdater")
 	selfPath := resolveSelfExe(os.Executable)
 	agentPath := selfUpdateAgentPath(os.Executable)
 

@@ -407,6 +407,51 @@
   color: var(--color-text-muted);
 }
 
+/* warden launchd-shape badge — the anchor cutover, read row by row. Shares the
+   .mon-stale chip geometry (one chip shape in this table) but every one of the
+   four states has to be tellable apart from the other three, so each carries a
+   distinct COLOUR and the two "we have no shape" states additionally differ in
+   BORDER STYLE. That second channel is deliberate: the pair that used to be
+   indistinguishable is exactly `unknown` (the box answered "I can't tell") vs
+   `unreported` (the box has never been asked), and two greys a shade apart
+   would put them straight back together. */
+.mon-shape {
+  margin-left: 0.4em;
+  padding: 0 0.35em;
+  border-radius: 3px;
+  font-size: 0.75em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+/* converted — the same accent green the rest of the cockpit means "good" by */
+.mon-shape--anchor {
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+  border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
+}
+/* still on the old shape: not broken, but the work is not done — amber, the
+   table's existing "look at this" colour. */
+.mon-shape--legacy {
+  color: var(--color-warn-fg);
+  background: var(--color-warn-bg);
+  border-color: var(--color-warn-border);
+}
+/* the new build ran and could not tell — warm grey, solid border: something IS
+   there, it just cannot answer. */
+.mon-shape--unknown {
+  color: var(--color-dep-missing);
+  border-color: color-mix(in srgb, var(--color-dep-missing) 50%, transparent);
+}
+/* nothing has ever answered — cold grey, DASHED border: an outline where a
+   verdict would be, not a verdict of "we don't know". */
+.mon-shape--unreported {
+  color: var(--color-text-muted);
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--color-text-muted) 45%, transparent);
+}
+
 /* neutral ghost button (cancel / close) — shares the .btn silhouette */
 .btn--ghost {
   height: 30px;

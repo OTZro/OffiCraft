@@ -3067,6 +3067,11 @@ export interface components {
             } | null;
             /** Ts */
             ts: number;
+            /**
+             * Warden Shape
+             * @description Echo of the stored warden shape verdict (see ``AgentTelemetryIngestDTO.warden_shape``); null when never reported.
+             */
+            warden_shape?: string | null;
         };
         /**
          * AgentTelemetryIngestDTO
@@ -3223,6 +3228,11 @@ export interface components {
             self_update?: unknown;
             /** Tokens */
             tokens?: unknown;
+            /**
+             * Warden Shape
+             * @description Warden heartbeats only — which SHAPE this warden is actually running under, read from the PARENT process's executable path (the only signal that cannot lie: an anchor file existing on disk does NOT mean launchd is executing it). ``anchor`` = the parent exe is the deployed anchor binary; ``legacy`` = the parent is launchd itself, i.e. launchd execs the swappable ocwarden directly; ``unknown`` = the warden could not read its parent. OMITTED by every warden build older than the anchor-cutover release — absent is NOT a synonym for ``unknown`` and the server must never infer one from the other: absent means 'this machine has not received the new build yet', ``unknown`` means 'the new build ran and could not tell'. Permissive like the other scalars here: a value outside the three states is a flat 400, never a 422.
+             */
+            warden_shape?: unknown;
         };
         /**
          * AgentRuntime
@@ -3954,6 +3964,11 @@ export interface components {
             runtime_capabilities?: {
                 [key: string]: components["schemas"]["RuntimeCapabilityDTO"];
             };
+            /**
+             * Warden Shape
+             * @description Which shape this machine's warden is actually running under, taken verbatim from its heartbeat (``anchor`` | ``legacy`` | ``unknown``; see ``AgentTelemetryIngestDTO.warden_shape``). null = this warden build does not report a shape at all, i.e. it has not received the anchor-cutover release yet — DISTINCT from ``unknown`` (new build ran, could not read its parent). The server never infers one from the other and never derives the verdict itself: unlike ``bin_status`` this is reported, not computed, because only the reporting process can see its own parent.
+             */
+            warden_shape?: string | null;
         };
         /**
          * MachineDeleteResultDTO
@@ -4553,6 +4568,11 @@ export interface components {
              * @description Whether ``runtime_capabilities`` is older than the server's freshness window; null = never reported. The verdict is computed SERVER-side against the same window ``hardware_ts`` uses, so the threshold has exactly one home. Unlike hardware, the values are NOT blanked when stale: 'codex was not logged in as of 3h ago' is the only surface that explains a worker stuck on ``machine_unavailable``, so it is kept and marked rather than deleted — but it must never be shown as current.
              */
             runtime_capabilities_stale?: boolean | null;
+            /**
+             * Warden Shape
+             * @description Same reported warden shape verdict the machine registry row carries (``anchor`` | ``legacy`` | ``unknown``; null = warden too old to report one) — see ``MachineDTO.warden_shape``.
+             */
+            warden_shape?: string | null;
         };
         /**
          * MonitoringSessionDTO

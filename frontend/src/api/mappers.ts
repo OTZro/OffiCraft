@@ -31,6 +31,7 @@ import type {
   MachineView,
   BinStatus,
   ClaudeCredSource,
+  WardenShape,
 } from "../types";
 import type {
   WireMember,
@@ -708,6 +709,9 @@ function toMonMachine(w: WireMonMachine): MonMachineView {
     batteryPct: w.battery_pct ?? null,
     acPower: w.ac_power ?? null,
     binStatus: toBinStatus(w.bin_status),
+    // Same narrowing as the registry row — the monitoring projection of a
+    // machine must not disagree with the machine table about its own shape.
+    wardenShape: toWardenShape(w.warden_shape),
     claudeVersion: w.claude_version ?? null,
     claudeCredSource: toClaudeCredSource(w.claude_cred_source),
     claudeSubReadable: w.claude_sub_readable ?? null,
@@ -974,6 +978,9 @@ export function toMachine(w: WireMachine): MachineView {
     // Absent (older server) and null (unknown verdict) both read as the
     // honest unknown — the UI renders "—", never a guessed freshness.
     binStatus: toBinStatus(w.bin_status),
+    // Reported, not computed: absent means the box has not received the build
+    // that reports a shape — a different fact from the reported "unknown".
+    wardenShape: toWardenShape(w.warden_shape),
     // The claude CLI probe columns (T-97ee): absent (older server) and null
     // (unknown — an older warden that never probed) both read as the honest
     // unknown; the UI shows only claudeVersion (table column, "—" on null).
@@ -997,6 +1004,20 @@ export function toMachine(w: WireMachine): MachineView {
  * absent/unrecognized reads as the honest unknown (null), never a verdict. */
 function toBinStatus(v: string | null | undefined): BinStatus {
   return v === "current" || v === "stale" ? v : null;
+}
+
+/** Narrow the wire `warden_shape` to the closed WardenShape vocabulary.
+ *
+ * Note what "the honest fallback" is here, because this field has FOUR states
+ * and one of them is a word that also sounds like a fallback. `"unknown"` is a
+ * REPORTED value — it means the anchor-cutover build is on that box and could
+ * not read its own parent. It is NOT the landing spot for a string the FE does
+ * not recognise: narrowing garbage to `"unknown"` would assert that build is
+ * running, which we have no evidence for. So, exactly like `toBinStatus`,
+ * absent/null/unrecognised all fall to `null` — "this machine has told us
+ * nothing we understand about its shape". */
+function toWardenShape(v: string | null | undefined): WardenShape {
+  return v === "anchor" || v === "legacy" || v === "unknown" ? v : null;
 }
 
 /** Narrow the wire `claude_cred_source` to the closed vocabulary; anything

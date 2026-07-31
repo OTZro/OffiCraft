@@ -955,6 +955,25 @@ export const en: Dict = {
       hardwareBad: "bad value",
       hardwareBadHint:
         "This machine reported a value of the wrong type, so it cannot be shown — the probe ran, its reading is unusable. Check that machine's warden version.",
+      // ── launchd shape the warden REPORTS about itself (anchor cutover).
+      // Four labels for four facts, and the pair that matters most is the last
+      // two: "shape unknown" is a machine running the new build that cannot
+      // read its own parent; "not reported" is a machine that never got the
+      // new build. Same-looking blank, opposite next step (go debug that box
+      // vs go ship it the release), which is precisely why the cockpit was
+      // flying blind before this row existed.
+      shapeAnchor: "anchor",
+      shapeAnchorHint:
+        "This warden reports it is running under the anchor shape — the cutover took on this machine",
+      shapeLegacy: "legacy",
+      shapeLegacyHint:
+        "This warden reports it is still running under the old shape — either it has not been cut over yet, or it tried and rolled back",
+      shapeUnknown: "shape unknown",
+      shapeUnknownHint:
+        "This warden runs a build that reports its shape, but it could not determine which shape it is running under — the machine itself is unsure, so go look at it",
+      shapeUnreported: "not reported",
+      shapeUnreportedHint:
+        "This warden does not report a shape at all — it has not received the anchor-cutover release yet. NOT the same as “shape unknown”: nothing on this box has tried to answer the question.",
     },
   },
   settings: {

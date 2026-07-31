@@ -52,6 +52,9 @@ package main
 import (
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,7 +123,15 @@ func fakeHostSeam() hostSeam {
 // function. Failing here — before m.Run() — is what "before anything executes"
 // actually means. Do not move these back out into Test* functions.
 func TestMain(m *testing.M) {
-	if violations := scanHostSeamSource(); len(violations) > 0 {
+	// Every structural gate runs here, together, before m.Run(). scanProcessStarters
+	// is the one that does not depend on anybody having remembered to extend it:
+	// it enumerates the process-starting call sites that actually exist and refuses
+	// the ones nobody has sanctioned, so a NEW seam in a NEW file is caught by
+	// construction rather than by the next reviewer's memory.
+	violations := scanHostSeamSource()
+	violations = append(violations, scanProcessStarters()...)
+	violations = append(violations, scanTestsForRealHostCalls()...)
+	if len(violations) > 0 {
 		fmt.Fprintf(os.Stderr, "\nFATAL: cli/ocwarden host-seam structure is broken — REFUSING TO RUN ANY TEST.\n"+
 			"These checks run in TestMain, before m.Run(), because a test binary in which an entry\n"+
 			"point can construct the real seam would act on this machine's LIVE launchd domain the\n"+
@@ -139,6 +150,13 @@ func TestMain(m *testing.M) {
 	// in production must take their runner from this seam. A test that wants to
 	// observe argv still injects its own recording runner locally, exactly as before.
 	newCmdRunner = func(time.Duration) CmdRunner { return blockedRunner{} }
+	// T-ff5d: the anchor-cutover seam is rebound here for the same reason and at
+	// the same moment. Its production binding reads and WRITES real paths — the
+	// live plist, its .prev backup, the lock and failure sentinels — and drives
+	// launchctl bootout/bootstrap on the canonical label. Rebinding it in TestMain
+	// means every test in this package gets the fake without opting in, including
+	// tests written later and tests that neuter the guard under test.
+	newCutoverOps = blockedCutoverOps
 	os.Exit(m.Run())
 }
 
@@ -172,36 +190,60 @@ func (blockedRunner) Run(name string, args ...string) (string, error) {
 //	    body of the two real-seam constructors AND of execRunner.Run, because (1),
 //	    (2) and (4) are source scans and a source scan is exactly what a bad edit
 //	    can defeat.
-//	(4) NO HAND-ASSEMBLED HOST WIRING — `sysOps{` and `execRunner{` composite
-//	    literals may appear in exactly one place each (realSysOps's return, and
-//	    newCmdRunner's initialiser). This is the check whose ABSENCE independent
-//	    review exploited: (1) and (2) pin two IDENTIFIERS, so a mutant that writes
+//	(4) NO HAND-ASSEMBLED HOST WIRING — `sysOps{`, `execRunner{` and `cutoverOps{`
+//	    composite literals may appear in exactly one place each (realSysOps's
+//	    return, newCmdRunner's initialiser, and realCutoverOps's return). This is
+//	    the check whose ABSENCE independent review exploited: (1) and (2) pin two
+//	    IDENTIFIERS, so a mutant that writes
 //	    `sysOps{run: execRunner{…}.Run, rename: os.Rename, …}` inline in teardownCmd
 //	    mentions NEITHER name, keeps every scan above green, and reaches the live
 //	    launchd domain. (1)/(2) guard the front door of a house with no walls; this
 //	    is the wall, and refuseInTestBinary on execRunner.Run (3) is the runtime
 //	    proof that even a wall with a hole in it cannot let a test binary exec.
-func scanHostSeamSource() []string {
+//
+//	    ⚠️ cutoverOps joined this list in T-ff5d, and it was added because the SAME
+//	    mutant worked verbatim on it: cutover.go grew a second seam whose real
+//	    binding drives `launchctl bootout` on the canonical label, overwrites the
+//	    live plist, and spawns a DETACHED machine conversion — and none of the
+//	    scans above had ever heard of it, so
+//	    `cutoverOps{runExit: realRunExit, spawnDetached: spawnDetachedProcess}` in
+//	    a non-test function passed every guard and really started a process from
+//	    inside the test binary. The lesson is structural, not about this one seam:
+//	    a NEW seam is invisible to a scan that enumerates the old ones by name.
+//	    Anything that wires the real host must be added here and to (3).
+func scanHostSeamSource() []string { return scanHostSeamSourceIn(".") }
+
+// scanHostSeamSourceIn is scanHostSeamSource over an ARBITRARY directory of Go
+// sources. The parameter exists so the guard can be pointed at a fixture holding
+// a known-bad file and REQUIRED to reject it — see
+// TestHostSeamGuard_RejectsTheKnownBadWiring. A guard that is only ever run
+// against a tree it already passes cannot distinguish "the structure holds" from
+// "the check does nothing", which is the failure mode this whole file exists to
+// rule out.
+func scanHostSeamSourceIn(dir string) []string {
 	var out []string
-	entries, err := os.ReadDir(".")
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return []string{fmt.Sprintf("cannot read package sources to verify the host seam: %v (fail closed)", err)}
 	}
 	total := 0
 	// (4) counters for the two host-wiring composite literals, keyed by the file
 	// they are allowed to live in.
-	litTotals := map[string]int{"sysOps{": 0, "execRunner{": 0}
-	litHome := map[string]string{"sysOps{": "install.go", "execRunner{": "main.go"}
+	litTotals := map[string]int{"sysOps{": 0, "execRunner{": 0, "cutoverOps{": 0}
+	litHome := map[string]string{
+		"sysOps{": "install.go", "execRunner{": "main.go", "cutoverOps{": "cutover.go",
+	}
 	litWhere := map[string]string{
 		"sysOps{":     "install.go's realSysOps (the ONE place the real OS is wired)",
 		"execRunner{": "main.go's `var newCmdRunner` initialiser (the ONE place the real exec runner is built)",
+		"cutoverOps{": "cutover.go's realCutoverOps (the ONE place the anchor-cutover seam is wired to launchctl, the live plist and a detached converter)",
 	}
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		raw, err := os.ReadFile(name)
+		raw, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			out = append(out, fmt.Sprintf("cannot read %s to verify the host seam: %v (fail closed)", name, err))
 			continue
@@ -251,7 +293,7 @@ func scanHostSeamSource() []string {
 			out = append(out, fmt.Sprintf("%s composite literals appear %d time(s) across the non-test sources, want exactly 1 (%s)", lit, n, litWhere[lit]))
 		}
 	}
-	raw, err := os.ReadFile("install.go")
+	raw, err := os.ReadFile(filepath.Join(dir, "install.go"))
 	if err != nil {
 		return append(out, fmt.Sprintf("cannot read install.go to verify the host seam: %v (fail closed)", err))
 	}
@@ -268,7 +310,7 @@ func scanHostSeamSource() []string {
 	// (3, cont.) …and at the PROCESS choke point, which is the only guard a
 	// hand-assembled sysOps cannot route around: whatever built the struct, the
 	// subprocess still has to be started in execRunner.Run.
-	mainRaw, err := os.ReadFile("main.go")
+	mainRaw, err := os.ReadFile(filepath.Join(dir, "main.go"))
 	if err != nil {
 		return append(out, fmt.Sprintf("cannot read main.go to verify the exec choke point: %v (fail closed)", err))
 	}
@@ -503,4 +545,525 @@ func keysOf(m map[string][]byte) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// (5) THE ZERO-ROWS QUERY — every process-starting call site must be sanctioned
+// ───────────────────────────────────────────────────────────────────────────
+//
+// WHY THE CHECKS ABOVE WERE NOT ENOUGH, STATED AS A PROPERTY OF THEIR SHAPE
+// ------------------------------------------------------------------------
+// Checks (1)-(4) derive their SCOPE from an enumerated list of identifiers and
+// filenames: realSysOps, realHostSeam, `sysOps{`, `execRunner{`, install.go,
+// main.go. A list like that is only as wide as the last person's memory, and —
+// this is the part that makes it dangerous rather than merely incomplete — when
+// it goes out of date it does not fail. It SHRINKS ITS OWN COVERAGE AND STAYS
+// GREEN.
+//
+// That is not a hypothetical. cutover.go arrived with a whole second seam
+// (cutoverOps) whose real binding runs `launchctl bootout` on the canonical
+// label, overwrites the live plist and spawns a DETACHED machine conversion.
+// Every check above passed, unchanged, without ever having heard of it — and a
+// hand-assembled `cutoverOps{runExit: realRunExit, spawnDetached:
+// spawnDetachedProcess}` in a non-test function really started a process from
+// inside the test binary. Adding "cutoverOps{" to check (4) fixes THAT seam and
+// leaves the shape of the defect completely intact for the next one.
+//
+// So this check has a different shape on purpose: a QUERY THAT MUST RETURN ZERO
+// ROWS. It enumerates every call site that can START A PROCESS anywhere in the
+// package's non-test sources — exec.Command, exec.CommandContext, syscall.Exec,
+// syscall.ForkExec/StartProcess, os.StartProcess, and a hand-built exec.Cmd
+// literal — subtracts the sanctioned choke points below, and REQUIRES THE
+// REMAINDER TO BE EMPTY. A new file, a new function, a new seam: all of them
+// appear in the remainder automatically. "Is the coverage still right?" is
+// answered by running it, not by remembering to update a table.
+//
+// AST, not grep, for the reason this repo has now recorded three times: comments
+// and string literals are not expression nodes, so a scan built on go/parser
+// cannot be satisfied by its own documentation. This very file writes
+// `exec.Command` in prose a dozen times.
+type processStarter struct {
+	// why must be a real reason. Enforced at ≥40 chars, mirroring the server's
+	// authz inventory gate: the check cannot stop someone writing a fluent
+	// nothing, but it CAN force the entry to appear in the diff, where a human
+	// reads it. Treat every entry here as a claim to be checked, not a decision
+	// already approved.
+	why string
+	// mustRefuse marks the sites whose production effect lands on THIS machine's
+	// warden — the launchd job, the live plist, or this very process image. Their
+	// bodies must OPEN with refuseInTestBinary, because a source scan is exactly
+	// what a bad edit defeats and these are the sites where being wrong costs a
+	// developer their running warden.
+	mustRefuse bool
+}
+
+var sanctionedProcessStarters = map[string]processStarter{
+	"main.go:(execRunner).Run": {
+		why:        "THE process choke point of the whole binary: every launchctl bootout/bootstrap/kickstart, plutil, tmux and probe that is not already behind a seam ends up here, so it is the last place a caller can be stopped before the host is touched.",
+		mustRefuse: true,
+	},
+	"cutover.go:spawnDetachedProcess": {
+		why:        "Starts the DETACHED anchor converter (setsid + Release), whose production argv runs `ocwarden cutover-anchor` -> `install --force` -> bootout of the live canonical job. Worse than any other site here: the child outlives `go test`, so an escape is not even bounded by the run that caused it.",
+		mustRefuse: true,
+	},
+	"cutover.go:realRunExit": {
+		why:        "Runs the anchor preflight for its EXIT CODE. It calls exec directly rather than through execRunner.Run, so it needs its own refusal — a cutoverOps struct assembled by hand still has to start its subprocess here.",
+		mustRefuse: true,
+	},
+	"cutover.go:runInstallerCombined": {
+		why:        "Runs `ocwarden install --force`, i.e. the machine conversion itself: deploys the anchor, rewrites the plist, boots the launchd job out and back in. The single most destructive argv in this package.",
+		mustRefuse: true,
+	},
+	"selfupdate.go:newSelfUpdater": {
+		why:        "Builds the execSelf closure whose syscall.Exec REPLACES THIS PROCESS IMAGE with the swapped ocwarden. Under `go test` that would replace the test binary itself, so the constructor refuses rather than relying on nobody ever invoking the closure.",
+		mustRefuse: true,
+	},
+	"selfupdate.go:codesignIdentity": {
+		why: "Reads a binary's code-signing identity via `/usr/bin/codesign -dv`. Read-only, mutates nothing, touches no launchd domain, and is reached through the updater's signatureOf seam which every test binds to a stub.",
+	},
+	"install.go:realClaudeProbe": {
+		why: "Runs `<claude> --version` to prove the resolved CLI is executable under a minimal PATH. Read-only, and it is one of the fields of hostSeam, so TestMain's rebinding of newHostSeam already keeps every test off it.",
+	},
+	"interactiveenv.go:captureInteractiveEnv": {
+		why: "Runs the operator's login shell to dump an interactive environment. Read-only with respect to this machine's warden, and interactiveenv_test.go drives it DIRECTLY against stub shells it writes into t.TempDir(), which is the tested behaviour rather than an escape.",
+	},
+	"codex_session.go:runCodexSession": {
+		why: "The `ocwarden codex-session` subcommand: starts the codex app-server and, on demand, an ocagent listener. A foreground operator verb that does not touch launchd, the plist or the anchor; its process tree dies with the command.",
+	},
+}
+
+// processStartAPIs are the calls that can bring a new process into existence.
+// Keyed as package.Symbol because that is what an AST selector expression gives
+// us without type information; a local variable happening to be called `exec` is
+// not a realistic way to hide a process start, whereas a new FILE is exactly how
+// the last one hid.
+var processStartAPIs = map[string]bool{
+	"exec.Command":         true,
+	"exec.CommandContext":  true,
+	"syscall.Exec":         true,
+	"syscall.ForkExec":     true,
+	"syscall.StartProcess": true,
+	"os.StartProcess":      true,
+}
+
+// funcKey names a function the way sanctionedProcessStarters keys it.
+func funcKey(file string, fn *ast.FuncDecl) string {
+	name := fn.Name.Name
+	if fn.Recv != nil && len(fn.Recv.List) > 0 {
+		recv := fn.Recv.List[0].Type
+		if star, isStar := recv.(*ast.StarExpr); isStar {
+			recv = star.X
+		}
+		if id, isIdent := recv.(*ast.Ident); isIdent {
+			name = "(" + id.Name + ")." + name
+		}
+	}
+	return file + ":" + name
+}
+
+// startsAProcess reports whether fn's body contains a call that creates a
+// process, including a hand-built `exec.Cmd{…}` literal (the composite-literal
+// route around the constructor, the same trick that defeated check (1)/(2)).
+func startsAProcess(fn *ast.FuncDecl) bool {
+	found := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.CallExpr:
+			if sel, ok := node.Fun.(*ast.SelectorExpr); ok {
+				if id, ok := sel.X.(*ast.Ident); ok &&
+					processStartAPIs[id.Name+"."+sel.Sel.Name] {
+					found = true
+				}
+			}
+		case *ast.CompositeLit:
+			if sel, ok := node.Type.(*ast.SelectorExpr); ok {
+				if id, ok := sel.X.(*ast.Ident); ok &&
+					id.Name == "exec" && sel.Sel.Name == "Cmd" {
+					found = true
+				}
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// opensWithRefusal reports whether fn's FIRST statement is refuseInTestBinary(…).
+// First statement, not "contains": a refusal that runs after the exec is the
+// after-the-fact detection this whole file exists to stop settling for.
+func opensWithRefusal(fn *ast.FuncDecl) bool {
+	if fn.Body == nil || len(fn.Body.List) == 0 {
+		return false
+	}
+	stmt, ok := fn.Body.List[0].(*ast.ExprStmt)
+	if !ok {
+		return false
+	}
+	call, ok := stmt.X.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	id, ok := call.Fun.(*ast.Ident)
+	return ok && id.Name == "refuseInTestBinary"
+}
+
+// parsePackageFuncs parses dir's Go files (test files iff wantTests) and calls
+// visit for every function declaration with a body.
+func parsePackageFuncs(dir string, wantTests bool, visit func(file string, fn *ast.FuncDecl)) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	fset := token.NewFileSet()
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") {
+			continue
+		}
+		if strings.HasSuffix(name, "_test.go") != wantTests {
+			continue
+		}
+		parsed, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", name, err)
+		}
+		for _, decl := range parsed.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Body != nil {
+				visit(name, fn)
+			}
+		}
+	}
+	return nil
+}
+
+// scanProcessStarters is the zero-rows query described above.
+func scanProcessStarters() []string { return scanProcessStartersIn(".") }
+
+func scanProcessStartersIn(dir string) []string {
+	var out []string
+	seen := map[string]bool{}
+	err := parsePackageFuncs(dir, false, func(file string, fn *ast.FuncDecl) {
+		if !startsAProcess(fn) {
+			return
+		}
+		key := funcKey(file, fn)
+		seen[key] = true
+		sanctioned, listed := sanctionedProcessStarters[key]
+		if !listed {
+			out = append(out, fmt.Sprintf("%s STARTS A PROCESS and is not a sanctioned choke point.\n"+
+				"\t  Every process-starting call site in this package must be listed in sanctionedProcessStarters with a real reason, so that adding one is a visible decision in the diff rather than a silent widening of what a test binary can do to the machine it runs on. If this site can touch this machine's launchd job, plist or process image, it must also open with refuseInTestBinary and be marked mustRefuse.", key))
+			return
+		}
+		if len(sanctioned.why) < 40 {
+			out = append(out, fmt.Sprintf("%s is sanctioned with a %d-character reason; write a real one (>=40 chars) — an entry nobody can evaluate is not a decision", key, len(sanctioned.why)))
+		}
+		if sanctioned.mustRefuse && !opensWithRefusal(fn) {
+			out = append(out, fmt.Sprintf("%s lost its runtime backstop: its body must OPEN with refuseInTestBinary(...).\n"+
+				"\t  This site's production effect lands on this machine's own warden, and every other guard here is a SOURCE SCAN — which is precisely what a bad edit defeats. The refusal on the syscall is the layer a hand-assembled struct cannot route around, because however the struct was built the process still has to be started here.", key))
+		}
+	})
+	if err != nil {
+		return append(out, fmt.Sprintf("cannot enumerate process-starting call sites: %v (fail closed)", err))
+	}
+	// ANTI-VACUITY. A scanner that parsed nothing reports nothing, and "no rows"
+	// would then read exactly like "no unsanctioned sites". The corpus proves
+	// itself non-empty before its verdict means anything.
+	if len(seen) == 0 {
+		out = append(out, "the process-starter scan found NO process-starting call site at all — this package unquestionably has several, so the scanner is broken and its silence must not be read as a pass")
+	}
+	for key := range sanctionedProcessStarters {
+		if !seen[key] {
+			out = append(out, fmt.Sprintf("sanctionedProcessStarters lists %s, which no longer starts a process (or no longer exists). A stale entry is a finding, not housekeeping: it means the inventory and the code have drifted, and the next reader cannot tell which of the two is right", key))
+		}
+	}
+	return out
+}
+
+// realHostFunctions are the functions a TEST must never call directly: the real
+// seam constructors and the process-starting choke points. Production binds
+// them; tests bind a substitute. The measurable criterion is that this list's
+// call count from test files is ZERO — which is a property a scan can check,
+// unlike "tests are careful".
+//
+// captureInteractiveEnv is deliberately NOT here even though it starts a
+// process: interactiveenv_test.go drives it against stub shells it wrote into
+// t.TempDir(), and that IS the behaviour under test. The line this list draws is
+// "can it affect this machine's warden", not "does it fork".
+var realHostFunctions = map[string]string{
+	"realSysOps":           "wires the seam to the real OS",
+	"realHostSeam":         "constructs the real host seam",
+	"realCutoverOps":       "wires the anchor-cutover seam to launchctl, the live plist and a detached converter",
+	"realRunExit":          "execs for an exit code outside execRunner",
+	"spawnDetachedProcess": "starts a setsid'd child that outlives the test run",
+	"runInstallerCombined": "runs the machine conversion",
+	"codesignIdentity":     "shells out to /usr/bin/codesign",
+}
+
+// scanTestsForRealHostCalls returns one row per direct call from a TEST file to
+// one of the functions above. It must return zero rows.
+func scanTestsForRealHostCalls() []string { return scanTestsForRealHostCallsIn(".") }
+
+func scanTestsForRealHostCallsIn(dir string) []string {
+	var out []string
+	err := parsePackageFuncs(dir, true, func(file string, fn *ast.FuncDecl) {
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			id, ok := call.Fun.(*ast.Ident)
+			if !ok || realHostFunctions[id.Name] == "" {
+				return true
+			}
+			out = append(out, fmt.Sprintf("%s:%s calls %s() directly — that function %s, and a test must take its effects from a substitute instead. Bind the seam, do not call the real one",
+				file, fn.Name.Name, id.Name, realHostFunctions[id.Name]))
+			return true
+		})
+	})
+	if err != nil {
+		out = append(out, fmt.Sprintf("cannot scan test files for direct real-host calls: %v (fail closed)", err))
+	}
+	return out
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// POSITIVE CONTROLS — the guards are run against KNOWN-BAD source and must
+// reject it
+// ───────────────────────────────────────────────────────────────────────────
+//
+// ⚠️ READ BEFORE DELETING THESE AS "a second copy of TestHostSeam_StructureIsReported".
+// They are not. That one re-runs the scan over the SAME tree TestMain already
+// passed, so its loop body is provably unreachable — cli/CLAUDE.md says so and
+// says not to add another like it. These run the scan over a DIFFERENT INPUT: a
+// staged copy of the package with a known-bad file added. Their assertions fail
+// whenever the corresponding rule is removed, which is the entire property a
+// guard has to have and the one nobody had checked.
+//
+// The known-bad shapes live HERE, as source the scan is executed against, rather
+// than in prose. A mutant described in a comment protects nothing; independent
+// review demonstrated exactly this one — `cutoverOps{runExit: realRunExit,
+// spawnDetached: spawnDetachedProcess}` in a non-test function — passing every
+// static guard and really starting a process from inside the test binary. Now it
+// is a fixture, and the day someone drops the rule that catches it, this goes red.
+
+// stagePackageSources copies the package's NON-TEST .go files into a fresh temp
+// dir. The copy is the corpus every mutant below is added to, so each case
+// differs from a passing tree by exactly one file.
+func stagePackageSources(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read package sources: %v", err)
+	}
+	copied := 0
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), raw, 0o644); err != nil {
+			t.Fatalf("stage %s: %v", name, err)
+		}
+		copied++
+	}
+	if copied == 0 {
+		t.Fatal("staged no sources at all — every case below would then be judging an empty directory")
+	}
+	return dir
+}
+
+func writeFixture(t *testing.T, dir, name, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+		t.Fatalf("write fixture %s: %v", name, err)
+	}
+}
+
+// mentions reports whether any violation contains every one of want.
+func mentions(violations []string, want ...string) bool {
+	for _, v := range violations {
+		hit := true
+		for _, w := range want {
+			if !strings.Contains(v, w) {
+				hit = false
+				break
+			}
+		}
+		if hit {
+			return true
+		}
+	}
+	return false
+}
+
+// TestHostSeamGuards_StagedCopyOfThisPackageIsClean is the BASELINE every case
+// below depends on. If the staged copy were rejected for some unrelated reason,
+// every mutant case would "pass" without the mutant contributing anything — the
+// vacuous-positive-control failure mode.
+func TestHostSeamGuards_StagedCopyOfThisPackageIsClean(t *testing.T) {
+	dir := stagePackageSources(t)
+	if v := scanHostSeamSourceIn(dir); len(v) > 0 {
+		t.Fatalf("a faithful copy of this package must pass the structure scan; got %v", v)
+	}
+	if v := scanProcessStartersIn(dir); len(v) > 0 {
+		t.Fatalf("a faithful copy of this package must pass the process-starter query; got %v", v)
+	}
+}
+
+// TestHostSeamGuards_RejectHandAssembledSeams replays, as executable fixtures,
+// both hand-assembled seams that have actually defeated a guard in this repo:
+// the T-5047 sysOps mutant, and the cutoverOps mutant independent review built
+// for T-ff5d after cutover.go introduced a second seam the scans knew nothing
+// about.
+func TestHostSeamGuards_RejectHandAssembledSeams(t *testing.T) {
+	for _, tc := range []struct {
+		name, fixture, wantFile, wantLiteral string
+	}{
+		{
+			name:     "the T-5047 sysOps mutant",
+			wantFile: "zz_mutant_sysops.go",
+			fixture: `package main
+
+import "os"
+
+func hijackedTeardown() sysOps {
+	return sysOps{run: newCmdRunner(0).Run, rename: os.Rename, remove: os.Remove}
+}
+`,
+			wantLiteral: "sysOps{",
+		},
+		{
+			name:     "the T-ff5d cutoverOps mutant, verbatim",
+			wantFile: "zz_mutant_cutoverops.go",
+			fixture: `package main
+
+func hijackedCutover() cutoverOps {
+	return cutoverOps{runExit: realRunExit, spawnDetached: spawnDetachedProcess}
+}
+`,
+			wantLiteral: "cutoverOps{",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := stagePackageSources(t)
+			writeFixture(t, dir, tc.wantFile, tc.fixture)
+			violations := scanHostSeamSourceIn(dir)
+			if !mentions(violations, tc.wantFile, tc.wantLiteral) {
+				t.Fatalf("a hand-assembled %s in %s went UNREPORTED (scan said %v).\n"+
+					"This exact shape has reached a live launchd domain from a test binary before. "+
+					"Without this rule the mutant compiles, every identifier scan stays green, and "+
+					"the seam is simply never consulted.", tc.wantLiteral, tc.wantFile, violations)
+			}
+		})
+	}
+}
+
+// TestProcessStarterQuery_RejectsAnUnsanctionedNewSite is the control for the
+// property the enumerated lists did NOT have: a process-starting site in a file
+// the guard has never heard of must be caught WITHOUT anyone extending a table.
+func TestProcessStarterQuery_RejectsAnUnsanctionedNewSite(t *testing.T) {
+	for _, tc := range []struct{ name, file, fixture string }{
+		{
+			name: "exec.Command in a brand-new file",
+			file: "zz_new_seam.go",
+			fixture: `package main
+
+import "os/exec"
+
+func quietlyBootsOutTheLiveWarden() error {
+	return exec.Command("launchctl", "bootout", "gui/501/com.officraft.ocwarden").Run()
+}
+`,
+		},
+		{
+			name: "a hand-built exec.Cmd literal, routing around the constructor",
+			file: "zz_new_literal.go",
+			fixture: `package main
+
+import "os/exec"
+
+func stillStartsAProcess() error {
+	cmd := exec.Cmd{Path: "/bin/launchctl", Args: []string{"launchctl", "bootout"}}
+	return cmd.Run()
+}
+`,
+		},
+		{
+			name: "syscall.Exec replacing the process image",
+			file: "zz_new_execve.go",
+			fixture: `package main
+
+import "syscall"
+
+func replacesTheTestBinary() error {
+	return syscall.Exec("/bin/launchctl", []string{"launchctl"}, nil)
+}
+`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := stagePackageSources(t)
+			writeFixture(t, dir, tc.file, tc.fixture)
+			violations := scanProcessStartersIn(dir)
+			if !mentions(violations, tc.file, "STARTS A PROCESS") {
+				t.Fatalf("an unsanctioned process start in %s went UNREPORTED (query said %v).\n"+
+					"The whole point of this query is that a NEW file cannot widen what a test "+
+					"binary may do to the machine without appearing in the diff.", tc.file, violations)
+			}
+		})
+	}
+}
+
+// TestProcessStarterQuery_RejectsALostRuntimeBackstop covers the other half:
+// the inventory can be perfectly up to date while the refusal that actually
+// prevents the exec has been deleted. Source scans are what a bad edit defeats,
+// so the layer that survives one is checked too.
+func TestProcessStarterQuery_RejectsALostRuntimeBackstop(t *testing.T) {
+	dir := stagePackageSources(t)
+	path := filepath.Join(dir, "cutover.go")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read staged cutover.go: %v", err)
+	}
+	const refusal = "\trefuseInTestBinary(\"spawnDetachedProcess(\" + bin + \")\")\n"
+	if !strings.Contains(string(raw), refusal) {
+		t.Fatalf("precondition: spawnDetachedProcess no longer opens with the expected refusal, so this control is testing nothing")
+	}
+	writeFixture(t, dir, "cutover.go", strings.Replace(string(raw), refusal, "", 1))
+
+	violations := scanProcessStartersIn(dir)
+	if !mentions(violations, "cutover.go:spawnDetachedProcess", "runtime backstop") {
+		t.Fatalf("deleting the refusal from spawnDetachedProcess went UNREPORTED (query said %v).\n"+
+			"That function setsids and releases its child, so an escape outlives the test run "+
+			"that caused it, and its production argv converts the machine for real.", violations)
+	}
+}
+
+// TestRealHostFunctionsAreNeverCalledFromTests states the isolation criterion as
+// a number: direct calls from test files to the real system-operation functions
+// must be ZERO. TestMain enforces it over the real tree; this case proves the
+// check can actually see one.
+func TestRealHostFunctionsAreNeverCalledFromTests(t *testing.T) {
+	if v := scanTestsForRealHostCalls(); len(v) > 0 {
+		t.Fatalf("test files call real host functions directly: %v", v)
+	}
+	dir := t.TempDir()
+	writeFixture(t, dir, "zz_bad_test.go", `package main
+
+import "testing"
+
+func TestSomethingCareless(t *testing.T) {
+	ops := realCutoverOps()
+	_ = ops
+}
+`)
+	violations := scanTestsForRealHostCallsIn(dir)
+	if !mentions(violations, "zz_bad_test.go", "realCutoverOps") {
+		t.Fatalf("a test calling realCutoverOps() directly went UNREPORTED (scan said %v)", violations)
+	}
 }
