@@ -609,6 +609,7 @@ export const en: Dict = {
       zoomControls: "Zoom image",
       zoomIn: "Zoom in",
       zoomOut: "Zoom out",
+      pan: "Drag the image to move it, or scroll with the arrow keys",
     },
     // Corner button on an incoming bubble: reopen this message body in the same
     // full-view overlay (a long answer is hard to read in the thread column).

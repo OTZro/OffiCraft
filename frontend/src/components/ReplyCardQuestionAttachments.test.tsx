@@ -100,7 +100,14 @@ describe("reply-card question attachments", () => {
     expect(modal).toBeTruthy();
     const preview = modal.querySelector<HTMLImageElement>(".md-preview__image")!;
     expect(preview.src).toBe(IMG_DATA_URI);
-    expect(preview.style.transform).toBe("scale(1)");
+    // Opens at 100%, and 100% means the STYLESHEET owns the size: the component
+    // writes an inline width/height only above 1x, and that inline size is also
+    // the box `measureFit` has to strip before it can read a fit box. Asserting
+    // the zoom readout alone would be near-vacuous here — it is
+    // `Math.round(useState(1) * 100)`, true the moment the component mounts.
+    expect(preview.style.width).toBe("");
+    expect(preview.style.maxWidth).toBe("");
+    expect(modal.querySelector(".md-preview__zoom")!.textContent).toContain("100%");
     fireEvent.click(modal.querySelector(".md-preview__close") as HTMLButtonElement);
     expect(container.querySelector(".md-preview")).toBeNull();
   });

@@ -68,6 +68,73 @@ overlay,而**沒有任何東西是紅的**——沒用到的 prop 與到不了�
 守衛:`bin/tests/lightbox-retired-guard.sh`(production 碼零 `<Lightbox`、
 stylesheet 零 `.chat__lightbox` 規則,附正負對照與 corpus 非空檢查)。
 
+**放大必須改變 layout,不能只改 transform(T-7e68)**:owner 回報「可以放大,
+但是無法左右或上下移動」。病因是縮放住在 `<img>` 的 `transform: scale()` 裡——
+**它只把像素畫大、layout box 原地不動**,於是 `.md-preview__image-wrap` 的
+`overflow: auto` 永遠沒有可捲內容,放大後溢出的四邊直接被裁掉、使用者碰不到。
+⚠️ **「CSS 寫著 overflow:auto」不等於「使用者捲得動」**——這正是上一版把屬性當成
+行為、寫進回報裡的錯,別再從屬性推論可達性。
+- 🔴 **先別試 `transform-origin`**:最省事的想法是留著 `transform: scale()`、只加
+  `transform-origin: 0 0`(或再用 padding 把空間撐出來)。**實測不通**——transform
+  畫出來的溢出**不進入祖先捲動容器的 scrollable region**,400% 時
+  `scrollWidth - clientWidth` 仍是 **0**,一樣沒得捲、四角一樣到不了。縮放必須是
+  真的 layout。這是花實驗換到的負面結論,別再推導一次。
+- **正解:縮放 = 圖片自己的 `width`/`height`**(量到的 100% fit box × zoom),
+  **同時把 stylesheet 的百分比上限關掉**(inline `maxWidth/maxHeight: none`)。
+  那兩條 cap 是「包住它的盒子」的百分比,留著就會讓圖再放大一次:1600×400 的圖在
+  「200%」下實際畫成 fit box 的 **4 倍**,readout 直接說謊。**100% 時不下 inline
+  尺寸**——那正是 `measureFit` 讀 fit box 的狀態,釘死等於凍結第一次量測。
+  ⚠️ 這裡的**結構重整不是必要條件**:前一代那個 stage div 的骨架本來就是對的,
+  最小修法其實只有兩行(img 補 `max-width/max-height: none` + 把 cluster 移出捲動
+  容器)。現行形狀少一層間接、比較好推理,但別把它講成「非重構不可」。
+- **resize 要重量 fit box,而且不能只在 100% 量**:兩條 cap 都是 viewport 相對,
+  視窗一變 100% 的box 就變。只在 `zoom === 1` 掛 resize listener 會讓倍率說謊——
+  900×700 下的 300%(2154px)在視窗縮到 500×420 後仍畫 2154px,而當下真正的 fit
+  只剩 ~394px,**實際 5.5 倍、readout 還寫 300%**。舊的 transform 版沒有這個漂移,
+  所以漏掉它是**回歸**、不是遺留。`measureFit` 量之前會**先把 inline 尺寸拔掉**,
+  否則量到的只是 zoom 自己、每次重算都在前一次上複利。
+- **兩條到得了溢出的路,不是一條**:pointer drag 與原生捲動(捲軸/滾輪/焦點在
+  wrap 上的方向鍵),兩者都驅動**同一個** `scrollLeft/scrollTop`,沒有第二份偏移
+  要同步,回到 100% 也就沒有殘留。
+- **縮放控制列不可以住在捲動容器裡**:scroll container 的 `position: absolute`
+  子元素是對它的 **padding box** 定位的,所以會跟著內容跑——400% 捲到角落時實測
+  cluster 在 x ≈ -2031(frame 是 [91, 809]),使用者失去把自己帶到那裡的 −/+。
+  因此多一層 `.md-preview__image-viewport` 當共用定位父層,cluster 掛在它身上。
+- **矮視窗只准有一條捲軸**:frame 的兩條 cap 是 vh,但 frame 拿不到整個 viewport
+  ——overlay 的 32px inset、panel 邊框、header、body 的 18px padding 先扣掉(共
+  160px)。不扣就會在矮視窗超出 body 實際能給的高度,`.md-preview__body` 於是長出
+  **自己那條**捲軸躲在 frame 的後面(900×500 實測 body 溢出 20px)。⚠️ **只放寬
+  `min-height` 不夠**:改成 `min(360px, 50vh)` 仍剩 10px,因為溢出的另一半是
+  `max-height: 70vh`,兩條都要扣。
+- **手勢歸屬:觸控由瀏覽器移動,不是我們的 JS**(owner 2026-07-31 要求手機可拉動;
+  他當時摸的是還沒 land 的 v0.5.53,也就是**完全拖不動**的舊行為)。縮放變成真 layout
+  之後,`.md-preview__image-wrap` 本身就是個可捲容器,**單指原生就能拖**(附帶慣性與
+  回彈,自己實作要重寫一遍),雙指留給 UA 的 pinch-zoom,背後頁面由
+  `overscroll-behavior: contain` 擋住。所以 `onPanPointerDown` 對
+  `pointerType === "touch"` **早退是刻意的**:再跑一次我們的 drag 會把同一段位移**套用
+  兩次**(手指移一格、圖移兩格)。**兩者只能有一個負責移動**——想「補上觸控支援」而把
+  那個早退刪掉,就是把 double-apply 裝回去。實測(真 input-layer 觸控事件):200px 滑動
+  → scrollLeft 0 → 451;把縮放改回 transform 則 0 → 0。
+- **護衛**:`visual-guards/image-zoom-pan.ct.spec.tsx`(真 Chromium,**每一條斷言
+  都量座標**、沒有一條靠屬性/class 就能滿足):四角可拖到、捲軸與方向鍵各自到得了
+  遠角、控制列不隨內容跑掉、寬扁圖的百分比就是真倍率、矮視窗不出雙捲軸、resize 後
+  倍率不漂。故事有**兩種長寬比**——1600×1000(高度受限)與 1600×400(寬度受限),
+  只守前者會整個漏掉倍率說謊那條。
+- ⚠️ **寫這類守衛的三個陷阱**(都真的發生過):(a) **方向要選有東西可失去的那一邊**
+  ——滾輪那條原本在 `scrollY === 0` 往上滾,任何實作都不可能往上動,斷言恆真;
+  (b) **不要用固定按鍵次數校準捲動距離**——方向鍵每次捲多少各引擎不同,「按 16 次」
+  在一個引擎叫「抵達」、在另一個叫「只走了三分之一」;(c) 🔴 **也不要改成「按到
+  offset 不再變為止」**——這是本檔上一版寫的建議,**在 WebKit 上連錯兩次**:Safari
+  **會吃掉聚焦後的第一次方向鍵**(實測 scrollLeft 0 → 0 → 28 → 40),停在第一次沒動
+  就等於在暖身期放棄;而且 WebKit **對鍵盤捲動有動畫**,停在某次沒動也可能停在動畫
+  中間、量到使用者根本沒看到的位置。**正解是直接問最終問題**:「按方向鍵(有上限)
+  直到那個角落進入可視框」——與引擎無關,而且真的不會捲的實作依然過不了。
+- **各引擎差異(實測,Chromium vs WebKit)**:①上面那條鍵盤差異;②**transform 畫出來
+  的溢出在 WebKit 是進入捲動區的、在 Chromium 不是**——所以原始那個 bug 在 Safari 上
+  只是「拖不動、但捲軸和方向鍵到得了」,在 Chrome 上才是四角全部碰不到。修完之後兩者
+  行為一致。**別假設某個引擎的觀察可以外推**:mutant 實測,壞版本在 WebKit 只紅 4 條、
+  在 Chromium 紅 6 條。
+
 **樣式所有權**:`.md-preview*` 已從 office.css 抽成 `md-preview.css`,由
 `MarkdownPreviewOverlay.tsx` **自己 import**。原本它是靠 OfficePage / RepliesPage /
 TasksPage 的 transitive import 搭便車拿到樣式,而這個彈窗還會從任務產物彈窗、任務卡上

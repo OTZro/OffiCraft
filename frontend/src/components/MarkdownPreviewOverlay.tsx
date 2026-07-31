@@ -27,12 +27,33 @@
 //                  there is nothing for a share link to point at and none is
 //                  rendered.
 //
+// T-7e68 — ZOOM MUST AFFECT LAYOUT. A `transform: scale()` on the <img> paints
+// bigger pixels but leaves the layout box the original size, so the wrap's
+// `overflow: auto` never has anything to scroll and every edge the zoom pushed
+// past the frame is clipped and unreachable (owner report: 「可以放大，但無法左
+// 右或上下移動」). The zoom is therefore the image's own width/height — the
+// measured 100% box times the zoom factor, with the stylesheet's percentage
+// caps switched off so they cannot scale it a second time. The wrap then has
+// genuine scrollable content, and TWO ways to reach it, not one: a pointer drag
+// and the native scroll (scrollbar, wheel, arrow keys on the focusable wrap).
+// Both drive the SAME scrollLeft/scrollTop, so there is no second offset to
+// keep in sync and returning to 100% recentres with no residue.
+//
+// 🔴 THE CHEAP FIX DOES NOT WORK, and it is the first thing anyone will try:
+// keeping `transform: scale()` and adding `transform-origin: 0 0` (with or
+// without padding on the parent to "reserve" the space). Transformed overflow
+// does NOT contribute to an ancestor scroll container's scrollable region —
+// measured at 400%, `scrollWidth - clientWidth` stays 0, so there is still
+// nothing to scroll and the corners are still unreachable. The zoom has to be
+// real layout. Do not spend the afternoon re-deriving this.
+//
 // T-f014 — this is now the ONLY full-size image surface in the cockpit. The old
 // Lightbox overlay and its stylesheet block are gone; every image (stored or staged
 // composer preview) opens here and therefore gets the same shell: filename in
 // the header, 下載, close, Esc/backdrop dismissal and the zoom controls.
 
-import { useEffect, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { authedAttachmentUrl } from "../api/http";
 import { copyAttachmentShareLink } from "../lib/shareLink";
@@ -46,6 +67,14 @@ import {
   DownloadIcon,
   FileTextIcon,
 } from "./icons";
+
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 4;
+const ZOOM_STEP = 0.25;
+
+function clampZoom(value: number): number {
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value));
+}
 
 type MarkdownPreviewOverlayProps = {
   /** Display name shown in the header (the blob's filename, or the sender of
@@ -118,6 +147,70 @@ export function MarkdownPreviewOverlay({
   // as the download href by construction — the preview and the download must
   // never be able to point at different bytes.
   const imageBytes = image ? downloadHref : undefined;
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const imageRef = useRef<HTMLImageElement | null>(null);
+  // The image's box at 100% — the size CSS gives it after `max-width: 100%` /
+  // `max-height: 70vh` have had their say. Measured rather than recomputed in
+  // JS so the zoom can never disagree with the stylesheet about what "fits".
+  const [fitBox, setFitBox] = useState<{ w: number; h: number } | null>(null);
+  const [panning, setPanning] = useState(false);
+
+  const measureFit = useCallback(() => {
+    const el = imageRef.current;
+    if (!el) return;
+    // Read the box the STYLESHEET would give this image — which means the
+    // inline size has to come off for the duration of the read. Above 100% the
+    // inline size IS the zoom, so measuring through it would just echo the zoom
+    // back as the new "fit" and every later recompute would compound on it.
+    const inline = {
+      width: el.style.width,
+      height: el.style.height,
+      maxWidth: el.style.maxWidth,
+      maxHeight: el.style.maxHeight,
+    };
+    el.style.width = "";
+    el.style.height = "";
+    el.style.maxWidth = "";
+    el.style.maxHeight = "";
+    const rect = el.getBoundingClientRect();
+    Object.assign(el.style, inline);
+    // jsdom has no layout engine, so every rect is 0×0 there; a zero box is
+    // "not measured yet", never a real size to zoom from.
+    if (rect.width > 0 && rect.height > 0) setFitBox({ w: rect.width, h: rect.height });
+  }, []);
+
+  // THE zoom seam. The zoom is the image's own LAYOUT size, so the frame gets
+  // real scrollable content; a `transform: scale()` paints bigger pixels while
+  // the layout box stays put, leaving `overflow: auto` with nothing to scroll
+  // and every magnified edge clipped away (T-7e68).
+  //
+  // The stylesheet's caps have to be turned off with it. They are percentages
+  // of whatever box contains the image, so leaving them on lets the image grow
+  // a second time on its own — a 1600×400 shot at 200% painted at 4× the fit
+  // box, and the "200%" readout was simply a lie.
+  //
+  // At 100% the size is left to the stylesheet: that is the state `measureFit`
+  // reads the fit box out of, so pinning it there would freeze the first
+  // measurement forever.
+  const zoomedSize =
+    fitBox === null || zoom === 1
+      ? undefined
+      : { width: fitBox.w * zoom, height: fitBox.h * zoom, maxWidth: "none", maxHeight: "none" };
+
+  // Both caps are viewport-relative, so a resize moves the 100% box and the fit
+  // must be re-read — AT ANY ZOOM, not only at 100%. Skipping the re-read while
+  // zoomed made the percentage lie: 300% measured at 900x700 stayed 2154px wide
+  // after the window shrank to 500x420, where the true 100% box is ~394px — a
+  // real 5.5x still announcing itself as 300%. (The transform version had no
+  // such drift, so leaving this out would have been a regression, not a
+  // leftover.) `measureFit` strips the inline size before reading, which is
+  // what makes measuring while zoomed meaningful at all.
+  useLayoutEffect(() => {
+    if (!image) return;
+    measureFit();
+    window.addEventListener("resize", measureFit);
+    return () => window.removeEventListener("resize", measureFit);
+  }, [image, imageBytes, measureFit]);
 
   // Fetch the markdown text once (the authed blob URL — same ?token= gate the
   // download/thumbnail paths use). A non-ok response / network error surfaces
@@ -145,6 +238,72 @@ export function MarkdownPreviewOverlay({
   }, [url, image, unavailable]);
 
   useEffect(() => setZoom(1), [url, imageSrc]);
+
+  // Back at 100% the stage fits the frame again, so any pan offset left over
+  // from the zoomed view has to go with it — otherwise the recentred image
+  // sits behind a stale scroll position.
+  useEffect(() => {
+    if (zoom !== 1) return;
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    wrap.scrollLeft = 0;
+    wrap.scrollTop = 0;
+  }, [zoom]);
+
+  // Wheel-zoom is bound natively and non-passively: React 18 attaches its
+  // listeners at the root as passive, where `e.preventDefault()` in a JSX
+  // `onWheel` is ignored and the page scrolls behind the overlay while the
+  // image zooms.
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap || !image) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      setZoom((current) => clampZoom(current + (e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP)));
+    };
+    wrap.addEventListener("wheel", onWheel, { passive: false });
+    return () => wrap.removeEventListener("wheel", onWheel);
+  }, [image, imageBytes]);
+
+  // Dragging IS scrolling: the pointer delta is applied to the wrap's own
+  // scroll offset, the same offset the scrollbar and the arrow keys move. One
+  // source of truth for "where in the image am I", so the two routes to the
+  // overflow can never drift apart.
+  function onPanPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    const wrap = wrapRef.current;
+    // GESTURE OWNERSHIP — on touch the BROWSER moves the image, not this
+    // handler, and that is a decision rather than an omission (owner asked for
+    // phone dragging on 2026-07-31, against the unfixed build where nothing
+    // moved at all). Now that the zoom is real layout, one finger pans this
+    // scroll container natively, with inertia and rubber-banding we would
+    // otherwise have to reimplement, and two fingers keep the UA's pinch-zoom.
+    // Running the drag below as WELL would apply the same delta twice — a
+    // finger-width of travel would move the image two — so exactly one of the
+    // two may be in charge. Verified with real input-layer touch events:
+    // scrollLeft 0 → 451 for a 200px swipe. Deleting this bail-out to "add
+    // touch support" re-introduces the double-apply.
+    if (!wrap || e.button !== 0 || e.pointerType === "touch") return;
+    if (wrap.scrollWidth <= wrap.clientWidth && wrap.scrollHeight <= wrap.clientHeight) return;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startLeft = wrap.scrollLeft;
+    const startTop = wrap.scrollTop;
+    wrap.setPointerCapture(e.pointerId);
+    setPanning(true);
+    const onMove = (move: PointerEvent) => {
+      wrap.scrollLeft = startLeft - (move.clientX - startX);
+      wrap.scrollTop = startTop - (move.clientY - startY);
+    };
+    const onUp = () => {
+      wrap.removeEventListener("pointermove", onMove);
+      wrap.removeEventListener("pointerup", onUp);
+      wrap.removeEventListener("pointercancel", onUp);
+      setPanning(false);
+    };
+    wrap.addEventListener("pointermove", onMove);
+    wrap.addEventListener("pointerup", onUp);
+    wrap.addEventListener("pointercancel", onUp);
+  }
 
   async function onCopyShareLink() {
     // Only a stored blob has an id to share; the button below is not rendered
@@ -241,20 +400,35 @@ export function MarkdownPreviewOverlay({
         </div>
         <div className="md-preview__body">
           {image && imageBytes !== undefined ? (
-            <div className="md-preview__image-wrap">
-              <img
-                className="md-preview__image"
-                src={imageBytes}
-                /* The filename IS the alt text: it is the only thing known
-                 * about these bytes, and a generic 「圖片」 would tell a screen
-                 * reader nothing that the surrounding dialog did not. */
-                alt={title || t.chat.imageAlt}
-                style={{ transform: `scale(${zoom})` }}
-                onWheel={(e) => {
-                  e.preventDefault();
-                  setZoom((current) => Math.min(4, Math.max(0.5, current + (e.deltaY < 0 ? 0.25 : -0.25))));
-                }}
-              />
+            <div className="md-preview__image-viewport">
+              <div
+                className={
+                  "md-preview__image-wrap" +
+                  (fitBox !== null && zoom > 1 ? " md-preview__image-wrap--pannable" : "") +
+                  (panning ? " md-preview__image-wrap--panning" : "")
+                }
+                ref={wrapRef}
+                /* Focusable and named so the overflow is reachable without a
+                 * pointer at all: arrow keys / PageUp / Home scroll a focused
+                 * overflow container natively. */
+                tabIndex={0}
+                role="group"
+                aria-label={t.chat.mdPreview.pan}
+                onPointerDown={onPanPointerDown}
+              >
+                <img
+                  className="md-preview__image"
+                  ref={imageRef}
+                  src={imageBytes}
+                  /* The filename IS the alt text: it is the only thing known
+                   * about these bytes, and a generic 「圖片」 would tell a screen
+                   * reader nothing that the surrounding dialog did not. */
+                  alt={title || t.chat.imageAlt}
+                  draggable={false}
+                  onLoad={measureFit}
+                  style={zoomedSize}
+                />
+              </div>
               {/* The zoom cluster is a labelled group, and each control names
                * itself: the bare −/+ glyphs announce as "minus"/"plus" with no
                * hint of what they act on, and the hard-coded English label the
@@ -264,7 +438,7 @@ export function MarkdownPreviewOverlay({
                   type="button"
                   aria-label={t.chat.mdPreview.zoomOut}
                   title={t.chat.mdPreview.zoomOut}
-                  onClick={() => setZoom((value) => Math.max(0.5, value - 0.25))}
+                  onClick={() => setZoom((value) => clampZoom(value - ZOOM_STEP))}
                 >
                   −
                 </button>
@@ -273,7 +447,7 @@ export function MarkdownPreviewOverlay({
                   type="button"
                   aria-label={t.chat.mdPreview.zoomIn}
                   title={t.chat.mdPreview.zoomIn}
-                  onClick={() => setZoom((value) => Math.min(4, value + 0.25))}
+                  onClick={() => setZoom((value) => clampZoom(value + ZOOM_STEP))}
                 >
                   +
                 </button>
