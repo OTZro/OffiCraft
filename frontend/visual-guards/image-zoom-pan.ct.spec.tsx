@@ -564,6 +564,25 @@ test.describe("touch", () => {
   });
 });
 
+// The −/+ are the only way to zoom without a gesture, on the one surface whose
+// whole job is to be driven by a thumb. 40px is the floor every mobile
+// hit-target guideline agrees on; they shipped at 28px. Measured at phone width
+// because that is where it matters, and off the RENDERED box rather than the
+// stylesheet so a later padding/media-query change cannot shrink them back
+// while the declaration still reads 40.
+test("the zoom controls are thumb-sized at phone width", async ({ mount, page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const cmp = await mount(<ImageZoomPanStory />);
+  await expect(cmp.locator(".md-preview__image-wrap")).toBeVisible();
+  const buttons = cmp.locator(".md-preview__zoom button");
+  await expect(buttons).toHaveCount(2);
+  for (const name of ["縮小", "放大"]) {
+    const box = (await cmp.getByRole("button", { name }).boundingBox())!;
+    expect(box.width, `the ${name} control must be at least 40px wide`).toBeGreaterThanOrEqual(40);
+    expect(box.height, `the ${name} control must be at least 40px tall`).toBeGreaterThanOrEqual(40);
+  }
+});
+
 test("wheel-zoom over the image does not scroll the page behind the overlay", async ({ mount, page }) => {
   const { cmp, wrap } = await mountStory(mount, page);
   expect(await page.evaluate(() => document.documentElement.scrollHeight > window.innerHeight),

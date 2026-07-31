@@ -195,7 +195,10 @@
  * above 100% the component sets width/height inline and turns them off. */
 .md-preview__image { display: block; max-width: 100%; max-height: min(70vh, calc(100vh - 160px)); object-fit: contain; user-select: none; -webkit-user-drag: none; }
 .md-preview__zoom { position: absolute; left: 50%; transform: translateX(-50%); bottom: 12px; display: inline-flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, var(--color-backdrop) 75%, transparent); color: var(--color-on-backdrop); }
-.md-preview__zoom button { width: 28px; height: 28px; border: 0; border-radius: 6px; cursor: pointer; }
+/* 40px is the touch target, not a taste call: at 28px these were below every
+ * mobile hit-target guideline on the one surface whose whole job is to be
+ * driven by a thumb. */
+.md-preview__zoom button { width: 40px; height: 40px; border: 0; border-radius: 6px; cursor: pointer; font-size: 16px; }
 .md-preview__text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
 /* The rendered body wears the shared `.doc-md` document skin (settings.css) so
  * this overlay reads like every other markdown surface. Only the skin's own
