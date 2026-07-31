@@ -983,13 +983,13 @@ type outsourceWorkerDTO struct {
 	// has ever reported one; they never fall back to the configured value, so
 	// the panel can tell "you changed this, it has not taken effect yet" from
 	// "this is what it is running" (T-7f28).
-	ActualModel   string  `json:"actual_model"`
-	ActualRuntime string  `json:"actual_runtime"`
-	ActualEffort  string  `json:"actual_effort"`
-	Status        string  `json:"status"`
-	TaskID        string  `json:"task_id"`
-	TaskTitle     string  `json:"task_title"`
-	TaskStatus    string  `json:"task_status"`
+	ActualModel   string `json:"actual_model"`
+	ActualRuntime string `json:"actual_runtime"`
+	ActualEffort  string `json:"actual_effort"`
+	Status        string `json:"status"`
+	TaskID        string `json:"task_id"`
+	TaskTitle     string `json:"task_title"`
+	TaskStatus    string `json:"task_status"`
 	// The bound task's display number / created stamp / type — what the office
 	// 外包 row prints and orders by (T-a3e4). They were a CLIENT-side join
 	// against the unfiltered GET /api/tasks (the whole task history pulled on

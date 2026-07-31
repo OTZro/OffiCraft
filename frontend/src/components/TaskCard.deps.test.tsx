@@ -158,9 +158,11 @@ describe("T-a3e4 資料供給: 勾什麼就問什麼 — dep 不再讓它拉整�
   });
 
   it("…and the dep is STILL named, even though its status was never asked for", async () => {
-    // The two halves belong in one assertion set: a page that simply stopped
-    // widening would pass the test above and silently degrade the dep row to a
-    // bare id — the very screenshot T-1d82 was opened for.
+    // Both halves live in THIS test, not one each: naming a closed dep was
+    // already true on e7120c5 (it got there by downloading the archive), so the
+    // naming assertion ALONE has no discriminating power. What is new is naming
+    // it while the fetch stays narrow — so the narrowness is asserted here too.
+    const spy = vi.spyOn(mockApi, "listTasks");
     const blocker = mkTask({
       taskNo: "T-dcdc",
       title: "早就做完的前置",
@@ -174,6 +176,15 @@ describe("T-a3e4 資料供給: 勾什麼就問什麼 — dep 不再讓它拉整�
     expect(dep.getAttribute("data-dep-state")).toBe("closed");
     expect(dep.textContent).toContain("T-dcdc");
     expect(dep.textContent).toContain("早就做完的前置");
+    // …and nothing widened to get that name: every fetch carried a status set,
+    // and none of them asked for the terminal state the blocker is in.
+    expect(spy.mock.calls.length).toBeGreaterThan(0);
+    expect(
+      spy.mock.calls.every(
+        ([opts]) =>
+          (opts?.statuses ?? []).length > 0 && !opts?.statuses?.includes("done")
+      )
+    ).toBe(true);
   });
 
   it("ticking a terminal status asks for THAT status — and unticking gives it back", async () => {
