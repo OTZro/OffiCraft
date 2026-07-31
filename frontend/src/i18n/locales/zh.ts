@@ -415,14 +415,14 @@ export const zh = {
     modelSave: "儲存",
     modelCancel: "取消",
     modelError: "儲存失敗，請稍後重試",
-    modelNextSpawnNote: "工作中立即生效；已指派則下次啟動生效",
+    modelNextSpawnNote: "工作中立即生效；已指派則下次喚醒生效",
     // 改機器（owner-only）：picker 標題／確認、無線上機器提示。
     relocateTitle: "選擇要遷移到的機器",
     relocateConfirm: "遷移到此機器",
     noOnlineMachine: "沒有線上的機器",
     // 最近操作（沿用成員面板語意；P5b 後外包 verb 就是成員的 start／stop）。
     lastOp: "最近操作",
-    lastOpStart: "啟動",
+    lastOpStart: "喚醒",
     lastOpStop: "停止",
     lastOpOk: "成功",
     lastOpFail: "失敗",
@@ -488,7 +488,7 @@ export const zh = {
   // 上有一個醒著的助理本身就是訊號;失敗時它是使用者唯一看得到的「為什麼」。
   onboarding: {
     titleFailed: "自動設定沒有全部完成",
-    intro: "設完密碼之後,系統會自動幫你裝好這台機器、叫醒助理。這次有一步沒過:",
+    intro: "設完密碼之後,系統會自動幫你裝好這台機器、喚醒助理。這次有一步沒過:",
     stepInstallWarden: "安裝這台機器",
     stepWakeAssistant: "喚醒助理",
     detailShow: "顯示詳細記錄",
@@ -709,7 +709,7 @@ export const zh = {
     change: "更改",
     settingsSaveOnly: "只儲存，不喚醒",
     modelReportedTag: "最近一次開機回報",
-    settingsIntentNote: "這裡設定的是「下次啟動要用哪一個」。",
+    settingsIntentNote: "這裡設定的是「下次喚醒要用哪一個」。",
     settingsIntentNoteReported: "上面資訊卡的模型是 agent 最近一次開機時回報的，跟這裡的設定可能不同。",
     wakeManual: "手動喚醒",
     // 點喚醒後、server presence 尚未跟上前的即時回饋
@@ -755,7 +755,7 @@ export const zh = {
     refocusSinceLabel: "上次重新聚焦",
     // fleet remote-ops stage 1 — 最近操作 (last warden op receipt)
     lastOp: "最近操作",
-    lastOpStart: "啟動",
+    lastOpStart: "喚醒",
     lastOpStop: "停止",
     lastOpOk: "成功",
     lastOpFail: "失敗",
@@ -1013,7 +1013,7 @@ export const zh = {
       // ——那是 placement 拒絕這台機器的原因——所以「未安裝」「未登入」是格子裡
       // 的字,不是一個默默消失的版本號。
       runtimeNotInstalled: "未安裝",
-      runtimeNotInstalledHint: "warden 在這台機器上找不到這個 runtime 的執行檔,無法在此啟動",
+      runtimeNotInstalledHint: "warden 在這台機器上找不到這個 runtime 的執行檔,無法在此喚醒",
       runtimeNoVersion: "已安裝",
       runtimeNoVersionHint: "執行檔存在,但版本探測沒有回傳結果",
       runtimeLoggedOut: "未登入",
@@ -1301,7 +1301,7 @@ export const zh = {
     assigneeMachineOffline: "離線",
     assigneeMachineUnset: "未選機器",
     assigneeMachineNote:
-      "這個類型的外包只會在你選的機器上啟動。沒選機器、或該機器離線時，一律不啟動，原因會顯示在該外包上。",
+      "這個類型的外包只會在你選的機器上喚醒。沒選機器、或該機器離線時，一律不喚醒，原因會顯示在該外包上。",
     assigneeCopies: "雇用數量",
     assigneeCopiesDecrease: "減少",
     assigneeCopiesIncrease: "增加",

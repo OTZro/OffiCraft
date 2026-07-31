@@ -161,6 +161,12 @@ describe("MonitorPage per-runtime version columns", () => {
     // us", which is the one thing this cell exists to distinguish.
     expect(codex.textContent).not.toBe("—");
     expect(codex.textContent).toContain("未安裝");
+    // owner 2026-07-31 (rc-b7d1c642f2d2): ONE verb. The hover hint explaining
+    // WHY the runtime is unusable described the same act as 啟動 — a third
+    // word for it. It lives in a title attribute, so textContent misses it.
+    expect(codex.querySelector(".mon-muted")?.getAttribute("title")).toContain(
+      "無法在此喚醒"
+    );
   });
 
   it("says 'installed' when the binary resolved but its version probe did not", async () => {

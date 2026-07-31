@@ -232,6 +232,28 @@ describe("WorkerDetailPanel — honest presence states (A案 P6 member vocabular
     ).toBe(zh.office.presence.waking);
   });
 
+  // owner 2026-07-31 (rc-b7d1c642f2d2): ONE verb for this action on BOTH
+  // panels. The worker receipt said 啟動 while the wake button said 喚醒 — the
+  // member panel had the identical split (see
+  // MemberDetailPanel.lastop-reason.test.tsx), so fixing one alone leaves the
+  // two panels disagreeing again.
+  it("names the start op 喚醒 on the worker receipt too, matching the member panel", async () => {
+    __injectMockTask(mkTask({ id: "t-1" }));
+    __injectMockOutsourceWorker(
+      mkWorker({
+        id: "ow-1",
+        taskId: "t-1",
+        lastOp: "worker_start",
+        lastOpOk: true,
+        lastOpAt: 1_752_400_000,
+      }),
+    );
+    const { container } = renderOfficeAt("#office/worker/ow-1");
+    await waitFor(() => {
+      expect(container.querySelector(".mp-lastop__verb")?.textContent).toBe("喚醒");
+    });
+  });
+
   it("離線: the dot reads 離線 and the structured reason survives the 狀態 cell's removal", async () => {
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockOutsourceWorker(
@@ -798,6 +820,12 @@ describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {
     const input = (await findByTestId("me-model-input")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "claude-opus-4-8" } });
     expect(input.value).toBe("claude-opus-4-8");
+    // owner 2026-07-31 (rc-b7d1c642f2d2): ONE verb. The note under these cells
+    // said 下次啟動生效 while the member panel's identical note said
+    // 下次喚醒生效 — literal, not zh.*, or the assertion moves with the string.
+    expect(
+      (await findByTestId("worker-detail-settings-note")).textContent,
+    ).toContain("下次喚醒生效");
   });
 
   it("喚醒 stores the launch settings and the pin BEFORE it wakes, so the new session boots as described", async () => {

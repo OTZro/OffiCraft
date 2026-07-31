@@ -488,6 +488,14 @@ describe("設定 › 任務手冊 — detail", () => {
     fireEvent.click(
       await findByTestId("manual-assignee-machine-warden-mbp5")
     );
+    // owner 2026-07-31 (rc-b7d1c642f2d2): ONE verb. This note described a
+    // worker being brought online as 啟動, twice — the same act the buttons
+    // call 喚醒. Both halves are asserted: changing only one leaves the
+    // sentence self-inconsistent and nothing would go red.
+    const machineNote =
+      document.querySelector(".manual-assignee-editor__note")?.textContent ?? "";
+    expect(machineNote).toContain("機器上喚醒");
+    expect(machineNote).toContain("一律不喚醒");
     fireEvent.click(getByTestId("manual-assignee-done"));
 
     await waitFor(async () => {
