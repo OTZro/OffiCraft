@@ -214,6 +214,16 @@ const mockBinStatus = new Map<string, "current" | "stale">([
   ["warden-mbp5", "stale"],
 ]);
 
+// ── Fixture: per-machine reported launchd shape (warden_shape). Unlike
+// bin_status this is REPORTED, not computed, so the mock stores what a warden
+// said rather than deriving it: server-self runs the cutover build and reports
+// "anchor"; the seed remote warden is on an old build that says nothing at all
+// (→ absent, which is the "not reported" face — NOT "unknown"). Display-only,
+// nothing mutates it, so no __resetMock entry.
+const mockWardenShape = new Map<string, "anchor" | "legacy" | "unknown">([
+  [MOCK_SERVER_SELF_ID, "anchor"],
+]);
+
 // ── Fixture: per-machine claude CLI probe columns (T-97ee). Mirrors the
 // server synthesizing the warden heartbeat's `claude` probe into the machine
 // registry rows: the seed remote warden last probed a version (→ the claude
@@ -2490,6 +2500,7 @@ export const mockApi: Api = {
           online: m.presence === "online",
           is_self: m.id === MOCK_SERVER_SELF_ID,
           bin_status: mockBinStatus.get(m.id) ?? null,
+          warden_shape: mockWardenShape.get(m.id) ?? null,
           // claude probe columns (T-97ee): same honest-null contract as
           // bin_status — no probe fixture reads as the all-null unknown.
           claude_version: mockClaudeInfo.get(m.id)?.version ?? null,

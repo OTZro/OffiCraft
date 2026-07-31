@@ -41,6 +41,7 @@ const machine = (
   online: true,
   isSelf: false,
   binStatus: null,
+  wardenShape: null,
   ...claude,
 });
 

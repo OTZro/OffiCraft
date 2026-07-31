@@ -1028,6 +1028,20 @@ export const zh = {
       // 回報端本身壞了,要查的東西不同。
       hardwareBad: "值異常",
       hardwareBadHint: "這台回報了型別不對的值,無法呈現——探測有跑,但讀數不可用。請檢查該機 warden 版本。",
+      // warden 自己回報的 launchd shape(anchor 切換)。四個事實四個標籤,最要
+      // 命的是後兩個:「形態不明」是新版跑起來了但讀不到自己的 parent;「未回報」
+      // 是這台根本還沒拿到新版。畫面上原本一樣是空的,但要去做的事相反(去查那台
+      // vs 去把版本推給它)——座艙「盲飛」講的就是這件事。
+      shapeAnchor: "anchor",
+      shapeAnchorHint: "這台 warden 回報自己跑在 anchor 形態上——切換在這台成功了",
+      shapeLegacy: "legacy",
+      shapeLegacyHint: "這台 warden 回報自己還跑在舊形態上——還沒切換,或切換過又退回",
+      shapeUnknown: "形態不明",
+      shapeUnknownHint:
+        "這台跑的是會回報形態的新版,但它判斷不出自己跑在哪個形態上——機器自己也不確定,要去看那台",
+      shapeUnreported: "未回報",
+      shapeUnreportedHint:
+        "這台 warden 根本不回報形態——它還沒拿到 anchor 切換的版本。與「形態不明」不同:這台上面沒有任何東西試圖回答過這個問題。",
     },
   },
   settings: {

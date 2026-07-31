@@ -273,6 +273,12 @@ export interface MachineView {
    */
   binStatus: BinStatus;
   /**
+   * Which launchd shape this machine's warden reports it is actually running
+   * under. Passthrough of the wire `warden_shape` — see `WardenShape` for why
+   * the null case is its own fact and not a synonym for "unknown".
+   */
+  wardenShape: WardenShape;
+  /**
    * The local claude CLI version this machine's warden heartbeat probed
    * (`--version` first token, e.g. "2.1.211"); null = unknown (claude
    * unresolved, probe failed, or an older warden that never probes) — the
@@ -305,6 +311,23 @@ export interface MachineView {
 
 /** The machine binary-freshness verdict vocabulary (`bin_status`). */
 export type BinStatus = "current" | "stale" | null;
+
+/**
+ * The launchd-shape vocabulary a warden REPORTS about itself (`warden_shape`).
+ * Four states, and the fourth is the absence of the other three:
+ *   "anchor"  — converted to the new shape
+ *   "legacy"  — still on the old shape (never converted, or converted and
+ *               rolled back)
+ *   "unknown" — the reporting build ran but could not read its own parent
+ *   null      — this warden does not report a shape AT ALL: it has not received
+ *               the anchor-cutover release yet
+ * `unknown` and `null` are DIFFERENT FACTS and must never be folded together —
+ * one says "the new build is on the box and confused", the other says "the new
+ * build is not on the box". The server deliberately never infers one from the
+ * other (unlike `bin_status`, this is reported, not computed), so neither may
+ * the FE.
+ */
+export type WardenShape = "anchor" | "legacy" | "unknown" | null;
 
 /** The machine claude credential-source vocabulary (`claude_cred_source`). */
 export type ClaudeCredSource = "file" | "keychain" | "both" | "none" | null;
@@ -390,6 +413,8 @@ export interface MonMachineView {
   acPower: boolean | null;
   /** Same verdict as `MachineView.binStatus` (registry row), null = unknown. */
   binStatus: BinStatus;
+  /** Same reported shape as `MachineView.wardenShape` (registry row). */
+  wardenShape: WardenShape;
   /** Same probe columns as the registry row (`MachineView.claude*`). */
   claudeVersion: string | null;
   runtimeCapabilities?: MachineView["runtimeCapabilities"];
