@@ -128,8 +128,12 @@ type telemetryBody struct {
 	// blank is exactly what hid this bug for as long as it lasted.
 	Effort string `json:"effort,omitempty"`
 	// Model is the session's LIVE model id, read from the statusLine payload's
-	// model.id (see modelValue). Twin of Effort in every respect, including the
-	// bug that motivated it: the model was on the status-line string from the
+	// model.id (see modelValue). Same PRODUCER contract as Effort — reported
+	// state, omitted when unmeasured — and it shares the bug that motivated it,
+	// but the two are NOT twins downstream: the server persists model onto the
+	// roster row's actual_model and serves it from there, while effort lives
+	// only in the in-memory telemetry entry (there is no actual_effort column).
+	// The bug: the model was on the status-line string from the
 	// start and in no POST body ever, so the cockpit's 模型 column had to fall
 	// back to the owner's configured launch value to show anything at all — and
 	// for an outsource worker, which has no configured value on that read path,

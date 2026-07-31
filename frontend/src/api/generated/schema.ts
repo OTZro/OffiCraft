@@ -3173,7 +3173,7 @@ export interface components {
             machine?: unknown;
             /**
              * Model
-             * @description The session's LIVE model, reported verbatim by the harness that is actually running it — the Claude Code statusLine payload's ``model.id`` for the claude runtime, the sidecar's launch model for codex. ``model.id`` and NOT ``model.display_name``: the id is what the boot seed already tells a member to report ("填 Claude Code 提供的真實 model id,不要猜值"), and it is the only one of the two that carries the ``[1m]`` 1M-context marker — a distinction the cockpit column shows today and must not lose. It is the twin of ``effort`` and carries the same contract: what the session IS, never the owner-configured launch setting it was started with (a mid-session model switch is visible here and nowhere else). OMITTED when the harness reports no model — an empty string would turn "not measured" into a reported blank, which is exactly the failure mode this field exists to end. Omitted leaves previously stored telemetry untouched.
+             * @description The session's LIVE model, reported verbatim by the harness that is actually running it — the Claude Code statusLine payload's ``model.id`` for the claude runtime, the sidecar's launch model for codex. ``model.id`` and NOT ``model.display_name``: the id is what the boot seed already tells a member to report ("填 Claude Code 提供的真實 model id,不要猜值"), and it is the only one of the two that carries the ``[1m]`` 1M-context marker — a distinction the cockpit column shows today and must not lose. It carries the same INGEST contract as ``effort``: what the session IS, never the owner-configured launch setting it was started with (a mid-session model switch is visible here and nowhere else). The two diverge AFTER ingest — see ``MonitoringSessionDTO.model`` — so the shared contract is about what a producer must send, not about how the server stores it. OMITTED when the harness reports no model — an empty string would turn "not measured" into a reported blank, which is exactly the failure mode this field exists to end. Omitted leaves previously stored telemetry untouched.
              */
             model?: unknown;
             /** Rate Limits */
@@ -4623,7 +4623,9 @@ export interface components {
             machine: string;
             /**
              * Model
-             * @description The model this session REPORTED it is running (the roster row's ``actual_model``), for staff and outsource rows ALIKE — one column, one meaning. Honest-empty until something reports one, exactly like the ``effort`` beside it, and it NEVER falls back to the owner-configured launch model. WAS: staff rows served the configured ``member.model`` while outsource rows served the reported value, so a single column header meant two different things depending on the row.
+             * @description The model this session REPORTED it is running (the roster row's ``actual_model``), for staff and outsource rows ALIKE — one column, one meaning. Honest-empty until something reports one, and it NEVER falls back to the owner-configured launch model. WAS: staff rows served the configured ``member.model`` while outsource rows served the reported value, so a single column header meant two different things depending on the row.
+             *
+             *     ⚠️ NOT symmetric with the ``effort`` beside it, despite both being reported state. ``model`` is read from the DURABLE ``actual_model`` column, so it survives a server restart and outlives the session that reported it; ``effort`` is read from the in-memory telemetry entry and is therefore blanked fleet-wide by any server re-exec. There is no ``actual_effort`` column. Do not describe the two as twins and do not infer one's storage from the other's — pinned by TestGetMonitoring_ReportedModelSurvivesATelemetryWipe, which passes for model and would fail for effort.
              * @default
              */
             model: string;

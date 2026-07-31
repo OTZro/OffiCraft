@@ -94,7 +94,9 @@ badge 全都早就備好了;codex sidecar 一直有送,是這條鏈可用的活�
   退回名冊設定值)。⚠️ 這條路先前**零測試**,所以它從未送過這個欄位時沒有任何東西會紅。
 
 ### session model 同一條路,同一個 bug,晚一批修(`telemetryBody.Model`)
-`model` 與 `effort` 是同一份 statusLine payload 裡的孿生欄位,而且**犯的是同一個錯**:
+`model` 與 `effort` 是同一份 statusLine payload 裡的兩個欄位,**上行契約相同**(回報狀態、量不到就
+省略),而且**犯的是同一個錯**——⚠️ 但**落地之後不對稱**:server 把 model 落進持久欄 `actual_model`、
+effort 只留在 in-memory entry(**沒有 `actual_effort`**),所以別從一個推論另一個的儲存行為。
 `modelEffortSegment` 從第一天就讀它來畫狀態列那個 `◆ Opus 4.5`,**卻從來沒有進過任何 POST body**。
 差別在後果更重——監控台的模型欄因此只能退回 owner 的**設定值**,而**外包 worker 在那條讀取路徑上
 根本沒有設定值可退**,所以每個 worker 的模型欄結構上永遠是空的。

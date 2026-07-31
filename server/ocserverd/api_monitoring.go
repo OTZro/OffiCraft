@@ -621,9 +621,16 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	if effort != nil {
 		entry["effort"] = *effort
 	}
-	if model != nil {
-		entry["model"] = *model
-	}
+	// 🔴 model is deliberately NOT stashed on the telemetry entry the way effort
+	// is. Its home is the DURABLE actual_model column (stampReportedModel,
+	// below); a copy here would have no reader, would not be echoed on the
+	// response DTO, and would sit in the one map a reader naturally treats as
+	// this handler's source of truth. That is not a harmless duplicate — the
+	// next person to touch this column would read the in-memory copy, and the
+	// column would go back to being blanked fleet-wide on every server re-exec,
+	// which is verbatim the bug this change exists to fix. If model ever does
+	// need to ride the entry, echo it on agentTelemetryDTO in the same commit
+	// and pin it, so "stored" and "readable" cannot drift apart again.
 	if selfUpdate != nil {
 		entry["self_update"] = selfUpdate
 		fmt.Fprintf(os.Stderr,

@@ -758,6 +758,110 @@ func TestGetMonitoring_ReportedModelSurvivesATelemetryWipe(t *testing.T) {
 	}
 }
 
+// TestStampReportedModel_BlankReportNeverErasesAStoredModel covers the guard
+// stampReportedModel's comment devotes a paragraph to, and which had no test at
+// all: an explicit blank must be a no-op, not an erasure.
+//
+// Zero coverage was not academic. BOTH producers omit the key when they cannot
+// read a model, so nothing in production reaches this branch today — which means
+// the guard was held up entirely by an upstream convention with no downstream
+// enforcement. That is the same shape as the bug this whole change repairs (a
+// contract everyone believed, that nothing checked), so it gets a test rather
+// than a comment.
+func TestStampReportedModel_BlankReportNeverErasesAStoredModel(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	seedWorker(t, s, "ow-eva", "E1", 0, WorkerStatusActive)
+	if rec := doIngestTelemetry(s, "ow-eva", "m-abc123",
+		`{"runtime":"claude","model":"claude-opus-5"}`); rec.Code != 200 {
+		t.Fatalf("seed ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, blank := range []string{`""`, `"   "`} {
+		if rec := doIngestTelemetry(s, "ow-eva", "m-abc123",
+			`{"runtime":"claude","model":`+blank+`}`); rec.Code != 200 {
+			t.Fatalf("blank ingest %s: %d %s", blank, rec.Code, rec.Body.String())
+		}
+		rows := sessionRows(t, monitoringOf(t,
+			doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"})))
+		if got := rows["ow-eva"]["model"]; got != "claude-opus-5" {
+			t.Errorf("model after an explicit %s report = %v, want claude-opus-5 "+
+				"— a blank means \"not measured\", never \"erase what you knew\"",
+				blank, got)
+		}
+	}
+}
+
+// TestStampReportedModel_TelemetryNeverResurrectsADismissedMember covers the
+// other guard with no test: a telemetry POST must not be able to CREATE or
+// RESURRECT a roster row. putMember is an upsert, so without the roster check
+// this handler would happily write a member row for any authenticated sub —
+// including one the owner has dismissed, which would walk back onto the cockpit
+// carrying a model it "reported" after being let go.
+func TestStampReportedModel_TelemetryNeverResurrectsADismissedMember(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	dismissed := fullMember("mira")
+	dismissed.RosterStatus = RosterStatusRemoved
+	if err := s.dal.PutMember(dismissed); err != nil {
+		t.Fatalf("seed dismissed member: %v", err)
+	}
+	if rec := doIngestTelemetry(s, "mira", "m-abc123",
+		`{"runtime":"claude","model":"claude-opus-5"}`); rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	got, err := s.dal.GetMember("mira")
+	if err != nil || got == nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if got.ActualModel != "" {
+		t.Errorf("dismissed member's actual_model = %q, want \"\" — a telemetry "+
+			"report must never write onto a dismissed roster row", got.ActualModel)
+	}
+	if got.RosterStatus != RosterStatusRemoved {
+		t.Errorf("roster_status = %q, want it to stay removed — telemetry "+
+			"resurrected a dismissed member", got.RosterStatus)
+	}
+	// And it must not appear on the cockpit's session list either.
+	rows := sessionRows(t, monitoringOf(t,
+		doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"})))
+	if _, present := rows["mira"]; present {
+		t.Errorf("dismissed member surfaced on the sessions fold: %v", rows["mira"])
+	}
+}
+
+// TestGetMonitoring_ReportedModelIsNotSymmetricWithEffort records, as an
+// executable fact, the asymmetry the spec text for MonitoringSessionDTO.model
+// now calls out: both columns are reported state, but only model is durable.
+// There is no actual_effort column, so a server re-exec blanks effort fleet-wide
+// while model survives.
+//
+// Pinned because the first version of that spec text asserted the OPPOSITE
+// ("honest-empty until something reports one, exactly like the effort beside
+// it"), which was false the moment this change landed. A prose claim about two
+// fields' storage is exactly the kind of thing that rots silently; this makes
+// the next person's edit fail instead.
+func TestGetMonitoring_ReportedModelIsNotSymmetricWithEffort(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	seedWorker(t, s, "ow-eva", "E1", 0, WorkerStatusActive)
+	if rec := doIngestTelemetry(s, "ow-eva", "m-abc123",
+		`{"runtime":"claude","model":"claude-opus-5","effort":"xhigh"}`); rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	s.telemetry = newMemStore() // what a server re-exec does
+
+	row := sessionRows(t, monitoringOf(t,
+		doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"})))["ow-eva"]
+	if row["model"] != "claude-opus-5" {
+		t.Errorf("model after re-exec = %v, want claude-opus-5 (durable column)", row["model"])
+	}
+	if row["effort"] != "" {
+		t.Errorf("effort after re-exec = %v, want \"\" — if this now survives, an "+
+			"actual_effort column was added and the spec text calling the two "+
+			"asymmetric must be updated in the same commit", row["effort"])
+	}
+}
+
 // sessionRows indexes the sessions fold by row id.
 func sessionRows(t *testing.T, d map[string]any) map[string]map[string]any {
 	t.Helper()

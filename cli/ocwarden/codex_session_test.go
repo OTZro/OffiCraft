@@ -193,6 +193,12 @@ func TestReportTokenUsageUsesLatestTurnForContextGauge(t *testing.T) {
 // the name is genuinely unknown. It must be OMITTED, because sending "" would
 // record that unknown as a reported blank — the exact "measured" vs "never
 // measured" collapse the field exists to end.
+//
+// ⚠️ COVERAGE NOTE, same caveat as the ocagent twin: only the first case could
+// have failed before this change — the sidecar sent no `model` key at all, so
+// both `want: nil` cases were vacuously true. They guard omit-vs-blank within
+// the new design (which the server's stamp guard relies on), not the fact that
+// the field is sent.
 func TestReportTokenUsageSendsSessionModel(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
