@@ -89,14 +89,42 @@ async function cardWithDeps(title: string) {
 
 const NOOP = async () => {};
 
-/** TaskCard rendered directly, so `depsResolvable` can be pinned. */
+
+/** withDepJoin translates the old `depsResolvable` axis onto the mechanism that
+ * replaced it (T-a3e4): the dep facts now ride the task itself as the SERVER's
+ * `dep_tasks` join, not a lookup in the loaded list.
+ *   resolved=true  → the server answered: every dep resolved against allTasks,
+ *                    and a dep it does not know keeps an EMPTY status, which is
+ *                    the 查無此任務 shape.
+ *   resolved=false → no dep_tasks at all — the different, older silence
+ *                    (「還不知道」): the card must not claim non-existence. */
+function withDepJoin(
+  task: TaskView,
+  allTasks: TaskView[],
+  resolved: boolean
+): TaskView {
+  if (!resolved) return { ...task, depTasks: undefined };
+  return {
+    ...task,
+    depTasks: task.deps.map((id) => {
+      const dep = allTasks.find((x) => x.id === id);
+      return {
+        id,
+        taskNo: dep?.taskNo ?? `T-${id.slice(2, 6)}`,
+        title: dep?.title ?? "",
+        status: dep?.status ?? "",
+      };
+    }),
+  };
+}
+
+/** TaskCard rendered directly, so the dep-join shape can be pinned per case. */
 function renderCard(task: TaskView, allTasks: TaskView[], resolvable: boolean) {
   return render(
     <I18nProvider>
       <TaskCard
-        task={task}
+        task={withDepJoin(task, allTasks, resolvable)}
         allTasks={allTasks}
-        depsResolvable={resolvable}
         members={[]}
         workers={[]}
         nowTs={Date.now() / 1000}

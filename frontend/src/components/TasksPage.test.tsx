@@ -1,6 +1,8 @@
 // 任務 page (M3 任務卡). Locked here — the SPEC §2/§3 acceptance behaviors:
-//   1. Empty states ×2: no tasks at all → 目前沒有任務; filters matching
-//      nothing → 沒有符合篩選條件的任務 (+ 清除篩選 restores).
+//   1. Empty states ×2: no tasks at all → 目前沒有任務 (T-a3e4: judged from
+//      GET /api/tasks/count's unfiltered `total`, since the list itself now
+//      answers only the ticked statuses); filters matching nothing →
+//      沒有符合篩選條件的任務 (+ 清除篩選 restores).
 //   2. 未結束 is ONE list ordered 高→中→低→凍結 (凍結永遠最後), createdTs
 //      newest-first within a level — never grouped by status.
 //   3. 已結束 (已完成+終止) is collapsible and COLLAPSED BY DEFAULT; the
@@ -19,11 +21,12 @@
 //   8. The message box posts one ordinary chat message to the executor and is
 //      DISABLED while unassigned.
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, fireEvent, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { TasksPage } from "./TasksPage";
 import {
+  mockApi,
   __resetMock,
   __injectMockTask,
   __injectMockMember,
@@ -125,11 +128,112 @@ beforeEach(() => {
   window.location.hash = "";
 });
 
+// This suite installs spies (api.getTask, and T-a3e4's mockApi.listTasks stub).
+// There is no global restoreMocks in vite.config.ts, so an un-restored spy would
+// leak into every later test in the file — a stubbed listTasks would quietly
+// change the population they render. Restore after each, the same way
+// TaskCard.deps.test.tsx does.
+afterEach(() => vi.restoreAllMocks());
+
 describe("TasksPage", () => {
   it("shows the 目前沒有任務 empty state when there is nothing", async () => {
     const { findByTestId } = renderPage();
     const empty = await findByTestId("tasks-empty");
     expect(empty.textContent).toBe("目前沒有任務");
+  });
+
+  it("does NOT say 目前沒有任務 when the archive is non-empty (T-a3e4)", async () => {
+    // 目前沒有任務 is a claim about the WHOLE workshop, and the list fetch now
+    // only asks for the ticked statuses — so an empty DEFAULT view over a
+    // workshop that has finished tasks must read as the FILTERED empty state.
+    // 🔴 Not true on e7120c5: there the same fixture fetched ?open=true, got
+    // zero rows, and asserted 目前沒有任務 over five archived tasks.
+    for (let i = 0; i < 5; i += 1) {
+      __injectMockTask(
+        mkTask({
+          title: `早就做完的 ${i}`,
+          status: "done",
+          closedTs: Date.now() / 1000 - 100,
+        })
+      );
+    }
+    const { findByTestId } = renderPage();
+    const empty = await findByTestId("tasks-empty-filtered");
+    expect(empty.textContent).toBe("沒有符合篩選條件的任務");
+    expect(document.querySelector('[data-testid="tasks-empty"]')).toBeNull();
+  });
+
+  // ── T-a3e4: a residual 轉派中 lock on a CLOSED task is not an intent ───────
+  // Terminate never clears task.lock, so "reassign then terminate" leaves
+  // status=terminated + lock=reassigning behind for good — and the 狀態 dropdown
+  // ticks 轉派中 by default, so without a terminal guard a default view the owner
+  // never touched surfaces a closed task. The rule has THREE identical copies
+  // (server / this page's matchesStatus / the mock).
+  // 🔴 The two tests below exist because ONE page-level test cannot see either
+  // copy: the mock filters, then matchesStatus filters again, so breaking either
+  // one alone leaves the other covering for it (measured — a single page test
+  // stayed green under both mutants). Each test therefore isolates one copy.
+  it("the MOCK's status set drops a terminated+locked row (server rule mirror)", async () => {
+    const residue = mkTask({
+      title: "反悔終止的",
+      status: "terminated",
+      lock: "reassigning",
+      closedTs: Date.now() / 1000 - 50,
+    });
+    const live = mkTask({
+      title: "真的在轉派",
+      status: "in_progress",
+      lock: "reassigning",
+    });
+    __injectMockTask(residue);
+    __injectMockTask(live);
+    // Straight at the adapter — no page, so matchesStatus cannot cover for it.
+    const rows = await mockApi.listTasks({
+      statuses: [
+        "not_started",
+        "in_progress",
+        "waiting_owner",
+        "waiting_external",
+        "reassigning",
+      ],
+    });
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(live.id);
+    expect(ids).not.toContain(residue.id);
+    // …and asking for 已終止 explicitly still returns it: not unreachable, just
+    // not 轉派中.
+    const closed = await mockApi.listTasks({ statuses: ["terminated"] });
+    expect(closed.map((r) => r.id)).toContain(residue.id);
+  });
+
+  it("matchesStatus drops a terminated+locked row even if the server sends one", async () => {
+    // The page's own copy, isolated by making the fetch return the residue row
+    // regardless — which is also the real transient case: rows from an earlier,
+    // wider ask are still in state while a narrower refetch is in flight.
+    // 🔴 The observable is the 已結束 SECTION HEADER, not a rendered card: that
+    // partition is collapsed by default, so a residue row that wrongly passes
+    // matchesStatus renders no card and an assertion on cards alone cannot see
+    // it (measured — the card-only version stayed green under this mutant).
+    const residue = mkTask({
+      title: "反悔終止的",
+      status: "terminated",
+      lock: "reassigning",
+      closedTs: Date.now() / 1000 - 50,
+    });
+    const live = mkTask({
+      title: "真的在轉派",
+      status: "in_progress",
+      lock: "reassigning",
+    });
+    vi.spyOn(mockApi, "listTasks").mockResolvedValue([residue, live]);
+    const { findAllByTestId, queryByTestId } = renderPage();
+    const cards = await findAllByTestId("task-card");
+    const titles = cards.map((c) => c.textContent ?? "");
+    expect(titles.some((t) => t.includes("真的在轉派"))).toBe(true);
+    expect(titles.some((t) => t.includes("反悔終止的"))).toBe(false);
+    // The residue row must not have survived the filter at all: if it had, it
+    // would form the 已結束 partition and its toggle would exist (「已結束 · 1」).
+    expect(queryByTestId("closed-toggle")).toBeNull();
   });
 
   it("orders 未結束 by priority 高→中→低→凍結 (凍結墊底), createdTs newest-first within a level", async () => {

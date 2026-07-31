@@ -68,6 +68,7 @@ import type {
   TaskReassignInput,
   OutsourceWorkerView,
   TaskTypeView,
+  TaskCountView,
   TaskManualView,
   TaskManualPatch,
   DocSummaryView,
@@ -837,19 +838,25 @@ export const httpApi: Api = {
     return toReplyCard(wire);
   },
 
-  async listTasks(opts?: { open?: boolean }): Promise<TaskView[]> {
+  async listTasks(opts?: {
+    open?: boolean;
+    statuses?: string[];
+  }): Promise<TaskView[]> {
     // GET /api/tasks -> TaskListItemDTO[] (LIGHT: no steps/description/inputs).
     // ?open=true (T-2b9d) drops the terminal rows server-side for the default
-    // 未結束-only view; omitted → the full population (清除篩選 全部, the
-    // outsource-panel join). A card hydrates its heavy detail on expand via
-    // getTask.
-    const wire = unwrap(
-      await client.GET("/api/tasks", {
-        params: {
-          query: opts?.open ? { open: "true" } : {},
-        },
-      }),
-    );
+    // 未結束-only view; omitted → the full population (清除篩選 全部). ?statuses=
+    // (T-a3e4) is the SET the 狀態 dropdown ticked, sent as one repeated param
+    // per state (openapi-fetch's default form/explode serialisation, the shape
+    // the spec declares) — the page asks for the rows it renders instead of
+    // filtering a full download. An EMPTY set is omitted entirely: it means
+    // 所有狀態, and sending nothing is exactly that. A card hydrates its heavy
+    // detail on expand via getTask.
+    const query: { open?: string; statuses?: string[] } = {};
+    if (opts?.open) query.open = "true";
+    if (opts?.statuses && opts.statuses.length > 0) {
+      query.statuses = opts.statuses;
+    }
+    const wire = unwrap(await client.GET("/api/tasks", { params: { query } }));
     return wire.map(toTaskListItem);
   },
 
@@ -865,11 +872,12 @@ export const httpApi: Api = {
     return toTask(wire);
   },
 
-  async getTaskCount(): Promise<number> {
-    // GET /api/tasks/count -> {open}. The tasks nav badge's cheap count path
-    // (refetched on every "task" SSE delta without pulling the list).
+  async getTaskCount(): Promise<TaskCountView> {
+    // GET /api/tasks/count -> {open, total}. The nav badge's cheap count path
+    // (refetched on every "task" SSE delta without pulling the list); `total`
+    // (T-a3e4) is the unfiltered count the 任務頁 words its empty state from.
     const wire = unwrap(await client.GET("/api/tasks/count"));
-    return wire.open;
+    return { open: wire.open, total: wire.total ?? 0 };
   },
 
   async terminateTask(id: string): Promise<TaskView> {

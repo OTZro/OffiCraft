@@ -266,13 +266,26 @@ hold 釋放)。status union 全線(adapter/mappers join)= waiting|answered|expir
 主導航第四頁「任務」(`#tasks`);badge = 非終態任務數(`GET /api/tasks/count`,
 `useTaskCount` 訂 `task` topic,接法同等我回覆 badge)。資料流 = `useTasks`
 (mount fetch + SSE `task`/`outsource_worker`/`task_manual` refetch);
-**清單刻意拉不帶 query 的 `GET /api/tasks` 全量、篩選/分區/排序全在 FE**
-(單一 refetch 路徑;wire 的 exact-match query params 留給其他 consumer)。
+🔴 **清單以「使用者勾的那組狀態」向 server 要(T-a3e4,owner 拍板「不是應該以狀態
+filter 嗎」)**:`useTasks(initialStatuses)` 把 TasksPage 的 `statusFilter` 送成
+重複的 `?statuses=`,**執行者/類型兩軸仍在 FE**(它們不是 payload 病灶)。
+舊寫法是「不帶 query 拉全量、全部在 FE 篩」,T-2b9d 加了 `?open=true` 想救,
+但 T-1d82 又補了一條「只要任何未結案任務帶 dep 就把 includeClosed 打開」——
+實務上恆真,所以**每一則 task SSE 都在重抓整部歷史**(實測 408,482 B vs 17,295 B)。
+現在 dep 顯示資料由 server 附在列上(見下方 dep chips),那條 clause 已整個刪除。
+兩個真的需要全狀態的視圖靠**送空集合**表達:清除篩選、以及 `#tasks/<id>` 跳轉錨點。
+**空狀態文案的判準改讀 `GET /api/tasks/count` 的 `total`**(未篩選總數):
+「目前沒有任務」是對整個工作室的主張,篩選過的清單答不出這件事——而它是一個
+grouped COUNT,不是把清單重新拉寬。
 分區:未結束(非終態一清單,高→中→低→凍結、同級 created 新→舊,不分狀態子組)
 /已結束(可摺疊預設收合,同 RepliesPage answered-toggle)。卡(`TaskCard`)
 無詳情頁、**預設摺疊**(owner 照 mockup 拍板 2026-07-13):卡頭(標題+
 「type · 負責人 · 模型 · 投入度」副標,成員執行者帶「· 成員」)+優先權/狀態
-徽章+kebab+chevron;#T 代號 chip+識別鍵 chip+「等 T-xxxx」dep chips、進度條
+徽章+kebab+chevron;#T 代號 chip+識別鍵 chip+「等 T-xxxx」dep chips(**dep 的編號/標題/狀態讀
+`task.depTasks`(wire `dep_tasks`)——server 對整張 task 表 join 好的,T-a3e4;
+不要改回 `allTasks.find`,那個查找就是上面那條 payload 病灶的來源。三態要分清:
+有 status = 解析到、status 為空 = 查無此任務、整個欄位 undefined = 這個 server
+不解 dep(還不知道,不可宣稱不存在))、進度條
 「步驟 N/M · 已歷時 X」、等待外部紫 banner、訊息框**摺疊時也顯示**;chevron
 展開才給 description+內嵌回覆卡+工作流程(每步名稱+狀態徽章+DoD+右上耗時);
 負責人、建立者與前任負責人的身分 chip 會依 stable member id 顯示個人頭像，
@@ -314,9 +327,13 @@ OutsourceWorkerDTO 新增 optional `unread_count`(server 用與 member roster
 同一個 UnreadCounts watermark 反相計數注入,spec 已凍結入 openapi.json),
 FE 純 passthrough、渲染同 member-card 的紅 pill(>99 顯 99+、count=0 不渲染、
 selected+windowActive 壓掉),mock 以 `unreadCountOf` 同規則 live 計算。
-資料 = `useOutsourceWorkers`:`GET /api/outsource-workers` +
-`GET /api/tasks`(排序 join + taskNo/typeKey join)+ settings,訂
-`outsource_worker`/`task`/`chat`/`chat_read` topic refetch)。**列形(owner
+資料 = `useOutsourceWorkers`:**只有** `GET /api/outsource-workers` + settings,
+訂 `outsource_worker`/`task`/`chat`/`chat_read` topic refetch(四個 topic 同一條
+路徑)。**T-a3e4 之前它還會拉 `GET /api/tasks`(不帶 query = 整部歷史)與
+`/api/task-manuals`,只為了 join 排序鍵與兩個 label**;T-ec2c 那個「chat delta 只
+重抓 workers」的雙路徑就是為了繞過那次下載。現在 `task_no`/`task_created_ts`/
+`task_type_key`/`task_type_name` 由 server 附在 worker DTO 上,join 與雙路徑一起
+拿掉了——**別再把 task list 的 fetch 加回這個 hook**。**列形(owner
 2026-07-14 截圖回報,對齊正職成員卡三行、蓋過 2026-07-13「代號·狀態+識別鍵
 chip」舊裁定)**:第一行 **代號 (O-7 式)**(外包唯一的名字);第二行 **接到的
 task type + presence 點**(外包沒有角色名,綁定任務的 typeKey 就是它的角色行;

@@ -126,64 +126,101 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("T-1d82 資料供給: 只在需要時放棄 未結束-only 快路徑", () => {
-  it("widens to the full population when a LIVE task carries a dep", async () => {
+describe("T-a3e4 資料供給: 勾什麼就問什麼 — dep 不再讓它拉整部歷史", () => {
+  it("a LIVE task carrying a dep does NOT widen the fetch", async () => {
+    // 🔴 This is the exact inverse of what T-1d82 pinned here, and the inversion
+    // is the ticket: T-1d82 widened the fetch whenever any live task had a dep,
+    // because the dep row resolved its title out of the loaded list. With deps
+    // on live tasks being ordinary, the widened fetch became the NORMAL one —
+    // 408,482 B on every task SSE delta versus 17,295 B for the rows on screen.
+    // The dep facts ride the response now (dep_tasks), so the widening is gone.
     const spy = vi.spyOn(mockApi, "listTasks");
     const blocker = mkTask({ taskNo: "T-dddd", title: "前置", status: "done" });
     __injectMockTask(blocker);
-    __injectMockTask(mkTask({ title: "要全母體", deps: [blocker.id] }));
+    __injectMockTask(mkTask({ title: "有 dep 也不放棄篩選", deps: [blocker.id] }));
 
-    renderPage();
-    // The dep cannot be named without the closed rows, so the page must ask
-    // for them — a call with NO open flag is the widened fetch.
-    await waitFor(() => {
-      expect(spy.mock.calls.some(([opts]) => opts?.open !== true)).toBe(true);
-    });
+    const { findAllByTestId } = renderPage();
+    await findAllByTestId("task-card");
+    // Every call carries a status set — none of them is the unconstrained fetch.
+    await waitFor(() => expect(spy.mock.calls.length).toBeGreaterThan(0));
+    expect(
+      spy.mock.calls.every(([opts]) => (opts?.statuses ?? []).length > 0)
+    ).toBe(true);
+    // And the set is the DEFAULT view's, stated as values: five non-terminal
+    // states, terminals excluded. "It sent something" is not the contract.
+    expect([...(spy.mock.calls[0][0]?.statuses ?? [])].sort()).toEqual([
+      "in_progress",
+      "not_started",
+      "reassigning",
+      "waiting_external",
+      "waiting_owner",
+    ]);
   });
 
-  it("RETURNS to the fast path after a widened view, even with archived deps", async () => {
-    // 🔴 The latch this guard exists for, and it only shows on the way BACK.
-    // The widening clause reads the very population it widened: while the view
-    // is narrow, an archived task is not in `tasks` at all, so a naive clause
-    // looks innocent. Tick a terminal status and the archive lands — now that
-    // closed task's dep pins the clause true, and unticking never returns to
-    // ?open=true. Every subsequent task SSE then re-pulls the whole archive:
-    // T-2b9d's optimisation silently switched off, on a page that looks fine.
-    // Nothing is lost by ignoring closed tasks' deps here: whenever a closed
-    // task is visible at all, a filter clause above has already widened.
-    const blocker = mkTask({ taskNo: "T-eeee", title: "前置" });
+  it("…and the dep is STILL named, even though its status was never asked for", async () => {
+    // Both halves live in THIS test, not one each: naming a closed dep was
+    // already true on e7120c5 (it got there by downloading the archive), so the
+    // naming assertion ALONE has no discriminating power. What is new is naming
+    // it while the fetch stays narrow — so the narrowness is asserted here too.
+    const spy = vi.spyOn(mockApi, "listTasks");
+    const blocker = mkTask({
+      taskNo: "T-dcdc",
+      title: "早就做完的前置",
+      status: "done",
+      closedTs: Date.now() / 1000 - 500,
+    });
     __injectMockTask(blocker);
+    __injectMockTask(mkTask({ title: "被結案的擋", deps: [blocker.id] }));
+
+    const [dep] = await depsOf("被結案的擋");
+    expect(dep.getAttribute("data-dep-state")).toBe("closed");
+    expect(dep.textContent).toContain("T-dcdc");
+    expect(dep.textContent).toContain("早就做完的前置");
+    // …and nothing widened to get that name: every fetch carried a status set,
+    // and none of them asked for the terminal state the blocker is in.
+    expect(spy.mock.calls.length).toBeGreaterThan(0);
+    expect(
+      spy.mock.calls.every(
+        ([opts]) =>
+          (opts?.statuses ?? []).length > 0 && !opts?.statuses?.includes("done")
+      )
+    ).toBe(true);
+  });
+
+  it("ticking a terminal status asks for THAT status — and unticking gives it back", async () => {
+    // The T-1d82 latch guard, re-aimed: the failure it caught was a view that
+    // never returned to the cheap ask. Here the ask is the set itself, so the
+    // observable is the set's value before / during / after.
+    __injectMockTask(mkTask({ title: "活著", status: "in_progress" }));
     __injectMockTask(
       mkTask({
-        title: "已結束但有 dep",
+        title: "已結束",
         status: "done",
-        deps: [blocker.id],
         closedTs: Date.now() / 1000 - 100,
       })
     );
-    // A live task with NO deps: the DEFAULT view has nothing needing widening,
-    // so any widened fetch here is the latch, not a legitimate need.
-    __injectMockTask(mkTask({ title: "活著沒 dep" }));
-
-    // Watch the WIRE, not the DOM: the 已結束 partition is collapsed by
-    // default, so the archived card never renders even once it has loaded.
-    // What the page ASKS FOR is the behaviour under test anyway.
-    const spy = vi.spyOn(mockApi, "listTasks");
     const { findAllByTestId } = renderPage();
     await findAllByTestId("task-card");
+    const spy = vi.spyOn(mockApi, "listTasks");
 
-    // Widen: ticking 已完成 pulls the archive in (the T-2b9d clause).
     toggleFilter("filter-status", "done");
     await waitFor(() =>
-      expect(spy.mock.calls.some(([opts]) => opts?.open !== true)).toBe(true)
+      expect(
+        spy.mock.calls.some(([opts]) => opts?.statuses?.includes("done"))
+      ).toBe(true)
     );
 
-    // Now go back to the default view and watch what it asks for NEXT.
     spy.mockClear();
     toggleFilter("filter-status", "done");
     await waitFor(() => expect(spy.mock.calls.length).toBeGreaterThan(0));
-    // Every post-narrowing fetch must be the open-only fast path again.
-    expect(spy.mock.calls.every(([opts]) => opts?.open === true)).toBe(true);
+    // Back to the default ask: done is gone again, and it never degenerates
+    // into "no constraint" (which would be the whole archive).
+    expect(
+      spy.mock.calls.every(
+        ([opts]) =>
+          (opts?.statuses ?? []).length > 0 && !opts?.statuses?.includes("done")
+      )
+    ).toBe(true);
   });
 });
 
@@ -363,18 +400,19 @@ describe("T-1d82 ③ 壞 id: 明說查無, 不可點, 不炸版", () => {
     // The honesty case (review finding): under the open-only fast path an
     // unresolved id may be a perfectly healthy task that merely CLOSED. Saying
     // 查無此任務 then is a confident lie the owner would act on — worse than
-    // the raw id it replaced. TaskCard is rendered directly here with
-    // depsResolvable=false, which is the state TasksPage is in for the frames
-    // between "ask for closed rows" and "closed rows land".
+    // the raw id it replaced. T-a3e4 kept that split but moved it to where the
+    // fact lives: a task with NO dep_tasks at all (a pre-join server, or any
+    // caller that could not resolve deps) is rendered directly here.
     const { TaskCard } = await import("./TaskCard");
     const noop = async () => {};
     const blocked = mkTask({ title: "還沒載到", deps: ["t-not-loaded-yet"] });
     const { container } = render(
       <I18nProvider>
         <TaskCard
-          task={blocked}
+          // No depTasks: the server did not resolve deps. NOT the same as an
+          // empty-status entry, which WOULD mean 查無此任務.
+          task={{ ...blocked, depTasks: undefined }}
           allTasks={[blocked]}
-          depsResolvable={false}
           members={[]}
           workers={[]}
           nowTs={Date.now() / 1000}

@@ -61,6 +61,7 @@ import type {
   WireServerSettings,
   WireTask,
   WireTaskListItem,
+  WireTaskDepRef,
   WireTaskStep,
   WireTaskArtifact,
   WireOutsourceWorker,
@@ -76,6 +77,7 @@ import type {
   ServerSettingsView,
   OnboardingReportView,
   TaskView,
+  TaskDepRefView,
   TaskStepView,
   TaskArtifactView,
   OutsourceWorkerView,
@@ -397,11 +399,26 @@ export function toTaskArtifact(w: WireTaskArtifact): TaskArtifactView {
   };
 }
 
+/** Map one wire dep ref → `TaskDepRefView` (T-a3e4). Honest passthrough: an
+ * entry with an empty `status` is a dep whose task is GONE, and the card says
+ * 查無此任務 for it — this mapper never substitutes a plausible status. */
+export function toTaskDepRef(w: WireTaskDepRef): TaskDepRefView {
+  return {
+    id: w.id,
+    taskNo: w.task_no,
+    title: w.title ?? "",
+    status: w.status ?? "",
+  };
+}
+
 /** Map one wire task → `TaskView`. Pure snake→camel passthrough. Honesty:
  * `progressDone`/`progressTotal` are the SERVER's leaf counts (never recomputed
  * from steps here); `closedTs` stays null while open; steps keep the server's
  * timeline order (order_idx asc — re-asserted here so the UI never depends on
- * response ordering). */
+ * response ordering). NO `depTasks`: the server's dep join (T-a3e4) rides the
+ * LIGHT list item, which is the payload hot path — the card's dep rows
+ * deliberately read the light row, not the hydrated detail, so hydrating a card
+ * cannot blank them. */
 export function toTask(w: WireTask): TaskView {
   return {
     id: w.id,
@@ -462,6 +479,12 @@ export function toTaskListItem(w: WireTaskListItem): TaskView {
     reassignedFromKind: w.reassigned_from_kind ?? "",
     dedupeKey: w.dedupe_key ?? "",
     deps: w.deps ?? [],
+    // dep_tasks (T-a3e4): the server's resolution of each dep, passed through
+    // VERBATIM — absent stays absent. `?? []` would be a lie here: an empty
+    // array says "every dep is unresolvable" (查無此任務), while absence says
+    // "this server does not resolve deps", and the card renders those two
+    // differently on purpose.
+    depTasks: w.dep_tasks?.map(toTaskDepRef),
     waitingReason: w.waiting_reason ?? "",
     duplicateOf: w.duplicate_of ?? "",
     createdTs: w.created_ts ?? 0,
@@ -493,6 +516,14 @@ export function toOutsourceWorker(w: WireOutsourceWorker): OutsourceWorkerView {
     taskId: w.task_id,
     taskTitle: w.task_title ?? "",
     taskStatus: w.task_status ?? "",
+    // The bound task's number / type / created stamp are WIRE fields since
+    // T-a3e4 (they were a client-side join against the whole task list).
+    // Honest "" / 0 when the server could not resolve the task — the panel
+    // then prints 自由代辦 and orders by the worker's own mint stamp.
+    taskNo: w.task_no ?? "",
+    taskTypeKey: w.task_type_key ?? "",
+    taskTypeName: w.task_type_name ?? "",
+    taskCreatedTs: w.task_created_ts ?? 0,
     createdTs: w.created_ts ?? 0,
     unreadCount: w.unread_count ?? 0,
 

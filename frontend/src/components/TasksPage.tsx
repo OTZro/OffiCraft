@@ -1,8 +1,11 @@
 // TasksPage — the 任務 page (M3, SPEC §2): 標題 → 篩選列 → 任務清單.
 //
 //   篩選列  — three dropdowns (執行者 / 類型 / 狀態); any active one surfaces
-//             清除篩選. Filtering is CLIENT-SIDE over the one unfiltered list
-//             (see api.listTasks) — instant, and one SSE refetch path.
+//             清除篩選. 狀態 is asked of the SERVER (T-a3e4: the fetch carries
+//             the ticked set, see setStatuses below) — the page used to
+//             download every task and hide most of them. 執行者 / 類型 stay
+//             client-side: they are cheap to apply over an already
+//             status-narrowed list, and the payload ticket was about status.
 //   未結束  — every NON-terminal task in ONE list (狀態不分組 — the status
 //             badge differentiates), ordered by priority 高→中→低→凍結 (凍結
 //             永遠最後), createdTs newest-first within a level.
@@ -18,6 +21,7 @@ import { useEffect, useState } from "react";
 import { useI18n } from "../i18n";
 import type { TaskView } from "../api/adapter";
 import { useTasks } from "../hooks/useTasks";
+import { useTaskCount } from "../hooks/useTaskCount";
 import { useMembers } from "../hooks/useMembers";
 import { useHashRoute } from "../lib/hashRoute";
 import { TaskCard } from "./TaskCard";
@@ -73,9 +77,16 @@ export function TasksPage() {
     sendMessage,
     getDetail,
     removeArtifact,
-    setIncludeClosed,
-    closedLoaded,
-  } = useTasks();
+    setStatuses,
+    // The hook's FIRST fetch must already carry the page's default set — the
+    // mount fetch precedes any effect, and an unconstrained one would pull the
+    // whole archive once per page open (T-a3e4).
+  } = useTasks(DEFAULT_STATUS);
+
+  // The unfiltered task total — the only honest basis for 目前沒有任務 now that
+  // the list answers a status set (see the empty states below). Same cheap
+  // count endpoint the nav badge rides, refetched on the same `task` deltas.
+  const { total: taskTotal } = useTaskCount();
 
   // Ticking clock (30s) — drives 已歷時 and running-step 耗時 on every card.
   const [nowTs, setNowTs] = useState(() => Date.now() / 1000);
@@ -135,41 +146,34 @@ export function TasksPage() {
     statusFilter.size > 0 ||
     taskIdFilter !== undefined;
 
-  // T-2b9d: the list loads 未結束-only by default (open=true) — the fast path
-  // the default view actually renders. The moment the current filters COULD
-  // surface a terminal (已結束) task, ask useTasks to (re)load the full
-  // population: an empty status set (清除篩選 = 全部), any terminal status
-  // ticked, or a single-task jump anchor (which bypasses the status filter and
-  // may target a closed task). Back in the default view it flips false and the
-  // hot path re-optimises. matches()'s status gate makes the 已結束 partition
-  // empty whenever the filter excludes terminals, so this is exactly the set of
-  // views that need closed data — no more, no less.
-  // T-1d82 adds a FOURTH view that needs closed data, and it is not a filter:
-  // a card carrying deps RENDERS one row per dep resolved out of this very
-  // list (TaskCard looks each depId up in allTasks). Under the open-only fast
-  // path a dep that has already closed is simply absent → the row degraded to
-  // the raw id (owner's 「等 t-35e06c8e63c8」 screenshot) and could show neither
-  // title nor its 已完成 state. So: the moment any loaded task has a dep, we
-  // need the full population to resolve those deps against.
-  // Stability: this reads `tasks`, which the flag itself refetches — but the
-  // widened fetch is a SUPERSET, so a task with deps still has deps after it
-  // lands. The boolean settles on the first pass and cannot oscillate.
-  // 🔴 The NON-TERMINAL guard is what keeps it from LATCHING. Without it the
-  // clause reads the widened population it just caused, and any CLOSED task
-  // carrying a dep (an ordinary thing in an archive) pins the flag true
-  // forever: leaving the 全部 view no longer returns to the open-only fast
-  // path, and every subsequent task SSE refetches the whole archive — T-2b9d's
-  // optimisation silently switched off. A closed task's own dep rows are not
-  // lost by this: whenever a closed task is VISIBLE at all, one of the three
-  // filter clauses above is already true.
-  const needClosed =
-    taskIdFilter !== undefined ||
-    statusFilter.size === 0 ||
-    [...statusFilter].some((s) => TERMINAL.has(s)) ||
-    tasks.some((x) => !TERMINAL.has(x.status) && x.deps.length > 0);
+  // ── 勾什麼就問什麼 (T-a3e4) ────────────────────────────────────────────────
+  // The fetch asks for the statuses the owner has TICKED. Two views genuinely
+  // need every status and say so by sending nothing: 清除篩選 (an empty set =
+  // 所有狀態) and a #tasks/<id> jump anchor, which overrides the filters
+  // entirely and may point at a closed task.
+  //
+  // What this REPLACED, and why the replacement is not just a rename: T-2b9d's
+  // `open=true` fast path was switched off in practice by a fourth clause that
+  // widened the fetch whenever ANY loaded task carried a dep — added by T-1d82
+  // because a dep row had to resolve its title out of this very list, and a
+  // closed dep was absent from the open-only list. With three live tasks
+  // carrying deps that clause was always true, so every 任務 SSE delta
+  // re-downloaded the entire history (measured: 408,482 B vs 17,295 B). The dep
+  // rows now read their titles from the server's dep_tasks join, so the reason
+  // for that clause is gone — deleted, not weakened. See TaskCard's dep block.
+  // A joined key, not the Set: the Set is rebuilt on every render, so an effect
+  // that depended on it would re-ask the server whenever anything else on the
+  // page re-rendered (a 30s clock tick is enough).
+  const statusAsk = [...statusFilter].sort().join(",");
   useEffect(() => {
-    setIncludeClosed(needClosed);
-  }, [needClosed, setIncludeClosed]);
+    setStatuses(
+      taskIdFilter !== undefined
+        ? undefined
+        : statusAsk === ""
+          ? []
+          : statusAsk.split(",")
+    );
+  }, [taskIdFilter, statusAsk, setStatuses]);
 
   function clearFilters() {
     // 清除篩選 = 顯示全部 (T-50bb): every axis to "no constraint" — status
@@ -223,7 +227,17 @@ export function TasksPage() {
     if (statusFilter.has(task.status)) return true;
     // "reassigning" is an orthogonal LOCK, not a status (T-9ca5) — match it off
     // task.lock (a reassigned task still carries its honest derived status too).
-    if (statusFilter.has("reassigning") && task.lock === "reassigning") {
+    // 🔴 …but only while the task is OPEN, byte-for-byte the server's
+    // taskStatusSetMatch rule (T-a3e4): terminate never clears the lock, so a
+    // task terminated mid-handover keeps `lock="reassigning"` forever, and that
+    // residue is not an intent. The three copies of this rule (server, here,
+    // mock) must stay identical — a divergence means the list the server sent
+    // and the list this page shows disagree about the same row.
+    if (
+      statusFilter.has("reassigning") &&
+      task.lock === "reassigning" &&
+      !TERMINAL.has(task.status)
+    ) {
       return true;
     }
     return false;
@@ -316,9 +330,19 @@ export function TasksPage() {
     if (taskIdFilter) setClosedOpen(true);
   }, [taskIdFilter]);
 
-  const nothingAtAll = !loading && !error && tasks.length === 0;
+  // ── empty states, re-derived for the server-side ask (T-a3e4) ─────────────
+  // 目前沒有任務 is a claim about the WHOLE workshop, and the list can no longer
+  // support it: it answers only the ticked statuses, so zero rows equally means
+  // 「什麼都沒有」 or 「這幾個狀態裡沒有」. The claim therefore rests on
+  // `taskTotal` (GET /api/tasks/count's unfiltered total) — a grouped COUNT, NOT
+  // a widened list fetch: wording a screen must never put the archive back on
+  // the wire. Everything else falls to 沒有符合篩選條件的任務, which is true in
+  // both worlds. Judging it from `tasks.length` alone (the pre-T-a3e4 rule) now
+  // says 目前沒有任務 to an owner whose workshop is full of finished tasks.
+  const nothingAtAll =
+    !loading && !error && tasks.length === 0 && taskTotal === 0;
   const nothingMatches =
-    !loading && !error && tasks.length > 0 && filtered.length === 0;
+    !loading && !error && !nothingAtAll && filtered.length === 0;
 
   function renderCard(task: TaskView) {
     return (
@@ -326,9 +350,6 @@ export function TasksPage() {
         key={task.id}
         task={task}
         allTasks={tasks}
-        // Only the closed-inclusive population can tell a deleted dep from one
-        // that merely closed (T-1d82).
-        depsResolvable={closedLoaded}
         members={members}
         workers={workers}
         typeNames={typeNames}

@@ -1711,7 +1711,7 @@
       "name": "peek_resume_summary_size"
     },
     {
-      "description": "List tasks (?executor=&type=&status=; LIGHT list items — id/task_no/title/type_key/status/priority/executor/creator_id/progress/timestamps/deps, WITHOUT steps/description/inputs). Call get_task for a task's full detail (steps, description, inputs).",
+      "description": "List tasks (?executor=&type=&status=, or statuses=[…] for a SET of states — every filter given is ANDed; LIGHT list items — id/task_no/title/type_key/status/priority/executor/creator_id/progress/timestamps/deps + dep_tasks, WITHOUT steps/description/inputs). Ask for the states you actually want (`statuses: [\"not_started\", \"in_progress\"]`) instead of listing everything and filtering yourself — the whole history is a large answer. `statuses` also accepts \"reassigning\", which matches the handover LOCK rather than the status column. `dep_tasks` already carries each blocker's task_no/title/status, so a blocked task needs no follow-up get_task just to name what it is waiting for. Call get_task for a task's full detail (steps, description, inputs).",
       "inputSchema": {
         "properties": {
           "executor": {
@@ -1737,6 +1737,13 @@
             ],
             "default": null,
             "title": "Status"
+          },
+          "statuses": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Statuses",
+            "type": "array"
           },
           "type": {
             "anyOf": [

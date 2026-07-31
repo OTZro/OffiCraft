@@ -699,11 +699,27 @@ func (s *apiServer) resumeTasksFor(actor string) ([]resumeTaskDTO, int, error) {
 // list back, byte-for-byte as before. Any value other than the literal "true"
 // (including absent) leaves the full list untouched — no consumer that omits
 // the param sees a behaviour change.
+//
+// ?statuses= (repeatable, T-a3e4) is the SET form of the same idea and the one
+// the cockpit now uses: open=true buys back the archive but still ships every
+// live task regardless of the 狀態 dropdown, so the page kept downloading rows
+// it had already decided not to render. The set speaks the DROPDOWN's
+// vocabulary — see taskStatusSetMatch for why `reassigning` is in it even
+// though T-9ca5 made it a lock. Every filter present is ANDed; ?status= is
+// untouched, and a caller that sends neither sees the old behaviour verbatim.
 func (s *apiServer) HandleListTasksApiTasksGet(w http.ResponseWriter, r *http.Request, params HandleListTasksApiTasksGetParams) {
 	status := trimmedOrEmpty(params.Status)
 	if status != "" && !ValidTaskStatus(status) {
 		writeError(w, http.StatusBadRequest,
 			"status must be one of not_started, in_progress, waiting_owner, waiting_external, reassigning, done, terminated, duplicated")
+		return
+	}
+	statusSet, badStatus := parseTaskStatusSet(params.Statuses)
+	if badStatus != "" {
+		writeError(w, http.StatusBadRequest,
+			"statuses must each be one of not_started, in_progress, waiting_owner, "+
+				"waiting_external, reassigning, done, terminated, duplicated — got '"+
+				badStatus+"'")
 		return
 	}
 	executor := trimmedOrEmpty(params.Executor)
@@ -713,6 +729,15 @@ func (s *apiServer) HandleListTasksApiTasksGet(w http.ResponseWriter, r *http.Re
 	if err != nil {
 		internalError(w, err)
 		return
+	}
+	// The dep-display join (T-a3e4) reads THIS slice — the whole population the
+	// handler already loaded — so every dep of every returned row resolves for
+	// free, INCLUDING deps the filters below exclude from the response. That is
+	// why the client no longer needs the closed population in hand: one query,
+	// no N+1, and a status-filtered list can still name a finished blocker.
+	byID := make(map[string]Task, len(tasks))
+	for _, t := range tasks {
+		byID[t.ID] = t
 	}
 	// The light list skips the AllTaskSteps full-row scan (steps carry the
 	// heavy dod/name text the collapsed card never shows) — progress is a
@@ -742,6 +767,9 @@ func (s *apiServer) HandleListTasksApiTasksGet(w http.ResponseWriter, r *http.Re
 		if status != "" && t.Status != status {
 			continue
 		}
+		if len(statusSet) > 0 && !taskStatusSetMatch(t, statusSet) {
+			continue
+		}
 		if typeKey != "" && t.TypeKey != typeKey {
 			continue
 		}
@@ -762,12 +790,72 @@ func (s *apiServer) HandleListTasksApiTasksGet(w http.ResponseWriter, r *http.Re
 		}
 		p := progressByTask[t.ID]
 		out = append(out, newTaskListItemDTO(
-			t, depsByTask[t.ID], p.Done, p.Total, artifactCountByTask[t.ID]))
+			t, depsByTask[t.ID], p.Done, p.Total, artifactCountByTask[t.ID], byID))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
-// GET /api/tasks/count — the tasks nav badge: non-terminal tasks only.
+// parseTaskStatusSet folds the repeatable ?statuses= param into a lookup set.
+// Blank entries are skipped, so `?statuses=` alone reads as "no constraint"
+// (the same shape trimmedOrEmpty gives the single ?status=). Returns the first
+// out-of-vocabulary value as badStatus ("" = every entry was accepted) — the
+// caller turns that into a 400 naming the offending value, because a silently
+// dropped status would narrow the answer without telling anyone.
+func parseTaskStatusSet(raw *[]string) (set map[string]bool, badStatus string) {
+	if raw == nil {
+		return nil, ""
+	}
+	set = map[string]bool{}
+	for _, v := range *raw {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		// The vocabulary is ValidTaskStatus PLUS reassigning — see
+		// taskStatusSetMatch for why the lock belongs in a status set.
+		if !ValidTaskStatus(v) && v != TaskStatusReassigning {
+			return nil, v
+		}
+		set[v] = true
+	}
+	return set, ""
+}
+
+// taskStatusSetMatch reports whether one task belongs to a ?statuses= set.
+//
+// 🔴 `reassigning` is deliberately part of the set vocabulary even though
+// T-9ca5 moved it OFF status onto the orthogonal task.lock. The set exists to
+// serve the cockpit's 狀態 dropdown, and that dropdown still lists 轉派中 as a
+// row (its client-side predicate has always keyed off task.lock). Leaving it
+// out would not be conservative — it would be WRONG: the default view ticks it,
+// so the request would silently drop every handover-locked task, or force the
+// page back to downloading the whole archive whenever it is ticked. The single
+// ?status= param is NOT widened this way (it 400s on `reassigning` and matches
+// the literal column only) — that is frozen wire a live client already sends.
+//
+// 🔴 The lock only counts while the task is still OPEN. `closeTask` never clears
+// `t.Lock` and the terminate guard only looks at the STATUS, so "reassign, then
+// change your mind and terminate" leaves `status=terminated, lock=reassigning`
+// behind for good. Without the terminal guard here, the DEFAULT view (which
+// ticks 轉派中) would surface that row — a closed task appearing in a live list
+// the owner never asked to widen, and one the old ?open=true path could not
+// return. A terminated task is not 「轉派中」: the lock is RESIDUE, not intent,
+// and the dropdown row it answers means "handovers in flight".
+// ⚠️ The residue itself (closeTask leaving the lock set) is a PRE-EXISTING bug
+// and deliberately NOT fixed here — that would change what terminate writes.
+// This function only refuses to read the residue as an intent.
+func taskStatusSetMatch(t Task, set map[string]bool) bool {
+	if set[t.Status] {
+		return true
+	}
+	return set[TaskStatusReassigning] && t.Lock == TaskLockReassigning &&
+		!TaskIsTerminal(t.Status)
+}
+
+// GET /api/tasks/count — the tasks nav badge (non-terminal tasks) plus the
+// unfiltered TOTAL (T-a3e4). Both come off the one ListTasks read this handler
+// already does; total is what lets the 任務頁 say 目前沒有任務 truthfully while
+// its list fetch only ever asks for the ticked statuses.
 func (s *apiServer) HandleTaskCountApiTasksCountGet(w http.ResponseWriter, r *http.Request) {
 	tasks, err := s.dal.ListTasks()
 	if err != nil {
@@ -780,7 +868,7 @@ func (s *apiServer) HandleTaskCountApiTasksCountGet(w http.ResponseWriter, r *ht
 			open++
 		}
 	}
-	writeJSON(w, http.StatusOK, taskCountDTO{Open: open})
+	writeJSON(w, http.StatusOK, taskCountDTO{Open: open, Total: len(tasks)})
 }
 
 // GET /api/tasks/{task_id} — one task in full.

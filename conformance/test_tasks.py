@@ -768,6 +768,138 @@ def test_deps_are_markers_with_validation(client, owner_token, executor):
     assert r.status_code == 200 and r.json()["deps"] == []
 
 
+# ── T-a3e4: ask for the statuses you render, and let the server name the deps ─
+
+
+def test_status_set_returns_exactly_those_states(client, owner_token, executor):
+    """?statuses= (repeatable) answers the SET the cockpit ticked. The cockpit
+    used to download every task and hide most of them in the browser (measured
+    408,482 B vs 17,295 B on the live workshop), because ?open=true only removes
+    the archive — it still ships every live task whatever the 狀態 filter says.
+
+    Absolute counts are meaningless in this shared DB, so every assertion is
+    about ids this test created."""
+    live = _create_task(client, executor, title="a3e4 live")["task"]
+    _drive_in_progress(client, executor.token, live["id"])
+    closed = _create_task(client, executor, title="a3e4 closed")["task"]
+    assert client.post(f"/api/tasks/{closed['id']}/terminate",
+                       headers=_auth(owner_token)).status_code == 200
+    fresh = _create_task(client, executor, title="a3e4 fresh")["task"]
+
+    def ids(**params) -> set[str]:
+        r = client.get("/api/tasks", params=params, headers=_auth(owner_token))
+        assert r.status_code == 200, r.text
+        return {t["id"] for t in r.json()}
+
+    got = ids(statuses=["in_progress", "terminated"])
+    assert live["id"] in got and closed["id"] in got
+    # The load-bearing half: a state that was NOT asked for is absent — a filter
+    # that merely returned "fewer" rows would pass a count-only assertion.
+    assert fresh["id"] not in got, "not_started leaked into an in_progress+terminated ask"
+
+    only_fresh = ids(statuses=["not_started"])
+    assert fresh["id"] in only_fresh
+    assert live["id"] not in only_fresh and closed["id"] not in only_fresh
+
+    # An unknown value is a 400 that NAMES it (dropping it silently would narrow
+    # the answer without telling the caller).
+    r = client.get("/api/tasks", params={"statuses": ["done", "nonsense"]},
+                   headers=_auth(owner_token))
+    assert r.status_code == 400, r.text
+    assert "nonsense" in r.text
+
+    # The FROZEN half: ?status= / ?open= / no params behave exactly as before,
+    # including ?status=reassigning still being a 400 (the SET accepts that value,
+    # the single param never did).
+    assert live["id"] in ids(status="in_progress")
+    assert closed["id"] not in ids(status="in_progress")
+    assert client.get("/api/tasks", params={"status": "reassigning"},
+                      headers=_auth(owner_token)).status_code == 400
+    assert closed["id"] not in ids(open="true")
+    assert closed["id"] in ids()
+    # Filters compose (AND), so an impossible intersection is empty rather than
+    # one param silently winning.
+    both = ids(status="in_progress", statuses=["not_started"])
+    assert live["id"] not in both and fresh["id"] not in both
+
+
+def test_dep_tasks_names_a_blocker_the_status_filter_excluded(
+        client, owner_token, executor):
+    """Every light row carries dep_tasks: each dep resolved SERVER-SIDE to the
+    task_no/title/status the 「等 T-xxxx <標題>」 row prints. The point is the
+    combination — the blocker is DONE and the request asked only for in_progress,
+    so the blocker is not in the response, yet it is still named. Before this the
+    client had to pull the whole closed population to name it (and did, on every
+    task SSE delta)."""
+    blocked = _create_task(client, executor, title="a3e4 blocked")["task"]
+    blocker = _create_task(client, executor, title="a3e4 前置作業")["task"]
+    plain = _create_task(client, executor, title="a3e4 沒有 dep")["task"]
+    _drive_in_progress(client, executor.token, blocked["id"])
+    _drive_in_progress(client, executor.token, plain["id"])
+    _drive_done(client, executor.token, blocker["id"])
+    assert client.post(f"/api/tasks/{blocked['id']}/deps",
+                       json={"blocked_by": [blocker["id"]]},
+                       headers=_auth(executor.token)).status_code == 200
+
+    r = client.get("/api/tasks", params={"statuses": ["in_progress"]},
+                   headers=_auth(owner_token))
+    assert r.status_code == 200, r.text
+    rows = r.json()
+    ids = {t["id"] for t in rows}
+    assert blocked["id"] in ids
+    assert blocker["id"] not in ids, "the done blocker must NOT be in the response"
+
+    item = next(t for t in rows if t["id"] == blocked["id"])
+    assert item["deps"] == [blocker["id"]]
+    refs = item["dep_tasks"]
+    assert len(refs) == 1, refs
+    assert refs[0]["id"] == blocker["id"]
+    assert refs[0]["task_no"] == blocker["task_no"]
+    assert refs[0]["title"] == "a3e4 前置作業"
+    assert refs[0]["status"] == "done"
+
+    # A dep-less task serves an empty list, never null.
+    plain_row = next(t for t in rows if t["id"] == plain["id"])
+    assert plain_row["deps"] == [] and plain_row["dep_tasks"] == []
+
+
+def test_task_count_carries_the_unfiltered_total(client, owner_token, executor):
+    """count serves `total` (every task, terminal included) beside `open`. With
+    the list answering a status SET, an empty list no longer distinguishes 「什麼
+    都沒有」 from 「這幾個狀態裡沒有」, and 目前沒有任務 is a claim about the whole
+    workshop — this is the cheap basis for it, instead of a widened list fetch."""
+    task = _create_task(client, executor, title="a3e4 count")["task"]
+    r = client.get("/api/tasks/count", headers=_auth(owner_token))
+    assert r.status_code == 200, r.text
+    before = r.json()
+    assert before["total"] >= before["open"] >= 1
+    assert client.post(f"/api/tasks/{task['id']}/terminate",
+                       headers=_auth(owner_token)).status_code == 200
+    after = client.get("/api/tasks/count", headers=_auth(owner_token)).json()
+    # Closing a task drops `open` but NOT `total` — the two are different numbers
+    # on purpose, so a `total` aliased to `open` reddens here.
+    assert after["open"] == before["open"] - 1
+    assert after["total"] == before["total"]
+
+
+def test_outsource_worker_carries_its_bound_task_facts(client, owner_token):
+    """The 外包 panel's row facts (task_no / task_created_ts / task_type_key /
+    task_type_name) ride the worker DTO. They used to be a CLIENT-side join
+    against the unfiltered task list + the manuals list, re-pulled on every
+    worker/task/chat delta just to order and label a handful of rows."""
+    r = client.get("/api/outsource-workers", headers=_auth(owner_token))
+    assert r.status_code == 200, r.text
+    for w in r.json():
+        # Shape, for whatever workers this run happens to have: the fields are
+        # always present (never null), so a client can rely on them.
+        for k in ("task_no", "task_created_ts", "task_type_key", "task_type_name"):
+            assert k in w, f"worker DTO missing {k!r}: {w}"
+        assert isinstance(w["task_no"], str)
+        assert isinstance(w["task_created_ts"], (int, float))
+        assert isinstance(w["task_type_key"], str)
+        assert isinstance(w["task_type_name"], str)
+
+
 # ── owner's task-card message box ────────────────────────────────────────────
 
 

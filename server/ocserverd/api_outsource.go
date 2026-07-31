@@ -28,11 +28,13 @@ import (
 // warden id to its owner-edited display label; accountDisplay is the shared
 // raw→readable account fold (account_display.go — "" ⇒ the DTO serves null,
 // never the raw credential key). Callers pass the worker's bound task (nil =
-// honest empty).
+// honest empty). typeNames resolves the bound task's type_key to the manual's
+// display label (T-a3e4; a miss leaves task_type_name "" and the client falls
+// back to the raw key).
 func (s *apiServer) projectWorker(
 	worker OutsourceWorker, task *Task, unread int, now float64,
 	tele, gauge map[string]map[string]any, machineNames map[string]string,
-	accountDisplay func(string) string,
+	accountDisplay func(string) string, typeNames map[string]string,
 ) outsourceWorkerDTO {
 	spawnTarget, spawnAt := s.workerSpawnObs(worker.ID)
 	// T-c23a: the spawn observation is IN-MEMORY (P7d fold) — a server re-exec
@@ -65,7 +67,29 @@ func (s *apiServer) projectWorker(
 		},
 		accountDisplay: accountDisplay,
 		delegatedBy:    s.workerDelegatedName(task),
+		typeDisplay:    func(key string) string { return typeNames[key] },
 	})
+}
+
+// taskTypeDisplayNames folds the manuals into type_key → display label, the
+// resolution behind outsourceWorkerDTO.task_type_name (T-a3e4). ONE query for
+// the whole response — the panel used to pull the entire manuals list itself
+// just to translate one key per row. A manual with a blank display_name is
+// omitted, so the client's raw-key fallback still applies (same rule the FE's
+// own typeNames map used). Best-effort: a lookup fault degrades to an empty
+// map — a missing label costs the raw key, never the response.
+func (s *apiServer) taskTypeDisplayNames() map[string]string {
+	out := map[string]string{}
+	manuals, err := s.dal.ListTaskManuals()
+	if err != nil {
+		return out
+	}
+	for _, m := range manuals {
+		if m.DisplayName != "" {
+			out[m.TypeKey] = m.DisplayName
+		}
+	}
+	return out
 }
 
 // workerDelegatedName resolves the MEMBER display name behind a task's creator,
@@ -121,6 +145,7 @@ func (s *apiServer) HandleListOutsourceWorkersApiOutsourceWorkersGet(w http.Resp
 		return
 	}
 	now := nowSecs()
+	typeNames := s.taskTypeDisplayNames()
 	out := []outsourceWorkerDTO{}
 	for _, worker := range workers {
 		if worker.Status == WorkerStatusReleased {
@@ -131,7 +156,7 @@ func (s *apiServer) HandleListOutsourceWorkersApiOutsourceWorkersGet(w http.Resp
 			internalError(w, err)
 			return
 		}
-		out = append(out, s.projectWorker(worker, task, unread[worker.ID], now, tele, gauge, machineNames, accountDisplay))
+		out = append(out, s.projectWorker(worker, task, unread[worker.ID], now, tele, gauge, machineNames, accountDisplay, typeNames))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -180,7 +205,8 @@ func (s *apiServer) HandleGetOutsourceWorkerApiOutsourceWorkersIdGet(w http.Resp
 		return
 	}
 	writeJSON(w, http.StatusOK,
-		s.projectWorker(*worker, task, unread[worker.ID], nowSecs(), tele, gauge, machineNames, accountDisplay))
+		s.projectWorker(*worker, task, unread[worker.ID], nowSecs(), tele, gauge, machineNames, accountDisplay,
+			s.taskTypeDisplayNames()))
 }
 
 // GET /api/outsource-workers/{id}/boot-context — the worker detail panel's
@@ -338,7 +364,8 @@ func (s *apiServer) writeWorkerProjection(w http.ResponseWriter, r *http.Request
 	}
 	writeJSON(w, http.StatusOK, s.projectWorker(
 		worker, task, unread[worker.ID], nowSecs(),
-		tele, s.gauge.Snapshot(), machineNames, accountDisplay))
+		tele, s.gauge.Snapshot(), machineNames, accountDisplay,
+		s.taskTypeDisplayNames()))
 }
 
 // POST /api/outsource-workers/{id}/refocus — the cockpit's 換手 (owner/admin agent since T-6020,

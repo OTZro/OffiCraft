@@ -1,32 +1,27 @@
 // hooks/useOutsourceWorkers.ts — the office 外包 panel's data (SPEC §4): the
-// LIVE outsource-worker roster (codename · 任務狀態 + 任務標題 ride the worker
-// DTO), ordered 依任務建立時間新→舊, plus the global parallel cap
-// (settings.outsource_max_parallel) behind the panel's 「N / 上限」 + 齒輪.
+// LIVE outsource-worker roster (codename · 任務狀態 + 任務標題 + the bound task's
+// T-xxxx / type / created stamp, ALL riding the worker DTO), ordered 依任務建立
+// 時間新→舊, plus the global parallel cap (settings.outsource_max_parallel)
+// behind the panel's 「N / 上限」 + 齒輪.
 //
-// Reconcile-by-refetch (contract B), split by cost (T-ec2c):
-//   * "outsource_worker" (assignment / release) and "task" (the bound task's
-//     status/title echo + the created_ts sort key) re-pull the FULL join —
-//     workers + the unfiltered GET /api/tasks + the light task-type list — the
-//     way the ordering/label join needs. These deltas are infrequent.
-//   * "chat" / "chat_read" only change the row's unread badge (wire
-//     unread_count). They re-pull JUST the small workers list and re-join it
-//     against the CACHED tasks/types — never re-downloading the task list or
-//     the manuals. A company chat line used to re-download the whole tasks +
-//     task-manuals payload here on every message; now it does not.
+// Reconcile-by-refetch (contract B): "outsource_worker" (assignment / release),
+// "task" (the bound task's status/title/type echo + the created_ts sort key) and
+// "chat" / "chat_read" (the row's unread badge) all re-pull the SAME small list
+// — `GET /api/outsource-workers`, nothing else.
 //
-// The ordering join reads the same unfiltered GET /api/tasks the tasks page
-// uses — a worker whose task cannot be resolved falls back to its own mint
-// stamp (honest proxy, never fabricated).
+// 🔴 T-a3e4: it used to also pull `GET /api/tasks` (UNFILTERED — the entire task
+// history) and `GET /api/task-manuals` on every worker/task delta, purely to
+// join a sort key and two labels onto a handful of rows. The server folds those
+// into the worker DTO now (task_no / task_created_ts / task_type_key /
+// task_type_name), so the join is gone and with it the split "full vs chat-only"
+// refetch that existed only to dodge that download (T-ec2c). Do NOT re-add a
+// task-list fetch here: the DTO already carries every field this panel renders.
 //
 // The cap knob has no SSE topic — the PATCH echo is adopted directly (the same
 // server-confirmed-values rule as useServerSettings).
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import type {
-  OutsourceWorkerView,
-  TaskView,
-  TaskTypeView,
-} from "../api/adapter";
+import { useCallback, useEffect, useState } from "react";
+import type { OutsourceWorkerView } from "../api/adapter";
 import { api } from "../api";
 
 interface UseOutsourceWorkers {
@@ -49,35 +44,13 @@ interface UseOutsourceWorkers {
   saveMaxParallel: (n: number) => Promise<void>;
 }
 
-// joinWorkers folds the sort + label join (bound task's created_ts / T-xxxx /
-// 識別鍵 / type) over a worker list against the given task/type snapshots. Pure
-// — the same result whether the tasks/types came from a fresh pull (full
-// refetch) or the cache (chat-only refetch).
-function joinWorkers(
-  workers: OutsourceWorkerView[],
-  tasks: TaskView[],
-  types: TaskTypeView[]
-): OutsourceWorkerView[] {
-  const byId = new Map(tasks.map((t) => [t.id, t]));
-  // type_key → display name (T-fa76): the row shows the manual's human
-  // label; a deleted manual honestly falls back to the raw key in the UI.
-  const typeNames = new Map(types.map((x) => [x.typeKey, x.displayName]));
+// sortWorkers orders the panel rows 依綁定任務建立時間新→舊. The key is the wire
+// `task_created_ts`; a worker whose task cannot be resolved (0) falls back to its
+// own mint stamp — an honest proxy, never fabricated.
+function sortWorkers(workers: OutsourceWorkerView[]): OutsourceWorkerView[] {
   const sortKey = (x: OutsourceWorkerView) =>
-    byId.get(x.taskId)?.createdTs ?? x.createdTs ?? 0;
-  return [...workers]
-    .sort((a, b) => sortKey(b) - sortKey(a))
-    // The panel row shows the bound task's T-xxxx + 識別鍵 chips (owner
-    // ruling 2026-07-13) — joined here from the same task list the sort
-    // already reads; honest "" when the task cannot be resolved.
-    .map((x) => ({
-      ...x,
-      taskNo: byId.get(x.taskId)?.taskNo ?? "",
-      dedupeKey: byId.get(x.taskId)?.dedupeKey ?? "",
-      // The row's second line is the bound task's TYPE (外包沒有角色名,
-      // task type 就是它的「角色」— owner report 2026-07-14); "" = ad-hoc.
-      taskTypeKey: byId.get(x.taskId)?.typeKey ?? "",
-      taskTypeName: typeNames.get(byId.get(x.taskId)?.typeKey ?? "") ?? "",
-    }));
+    x.taskCreatedTs || x.createdTs || 0;
+  return [...workers].sort((a, b) => sortKey(b) - sortKey(a));
 }
 
 export function useOutsourceWorkers(): UseOutsourceWorkers {
@@ -86,31 +59,10 @@ export function useOutsourceWorkers(): UseOutsourceWorkers {
   const [error, setError] = useState(false);
   const [maxParallel, setMaxParallel] = useState<number | null>(null);
 
-  // The last task/type snapshots the label+sort join reads. Held in refs (not
-  // state) so the chat-only refetch can re-join against them WITHOUT re-pulling
-  // them and without re-running the effect. A chat line changes neither.
-  const tasksRef = useRef<TaskView[]>([]);
-  const typesRef = useRef<TaskTypeView[]>([]);
-
-  // FULL refetch: workers + the unfiltered task list + the light type list.
-  // Refreshes the join-data cache. Used on mount and on task/worker deltas.
+  // ONE refetch path: the workers list carries everything the rows render, so
+  // there is nothing left for a delta-specific cheaper variant to skip.
   const refetch = useCallback(async () => {
-    const [w, tasks, types] = await Promise.all([
-      api.listOutsourceWorkers(),
-      api.listTasks(),
-      api.listTaskTypes(),
-    ]);
-    tasksRef.current = tasks;
-    typesRef.current = types;
-    setWorkers(joinWorkers(w, tasks, types));
-    setError(false);
-  }, []);
-
-  // CHAT-only refetch: JUST the small workers list (its unread_count), re-joined
-  // against the cached tasks/types — no task-list / manuals re-download (T-ec2c).
-  const refetchWorkersOnly = useCallback(async () => {
-    const w = await api.listOutsourceWorkers();
-    setWorkers(joinWorkers(w, tasksRef.current, typesRef.current));
+    setWorkers(sortWorkers(await api.listOutsourceWorkers()));
     setError(false);
   }, []);
 
@@ -136,16 +88,14 @@ export function useOutsourceWorkers(): UseOutsourceWorkers {
       );
 
     const unsubscribe = api.subscribeEvents((topic) => {
-      if (topic === "outsource_worker" || topic === "task") {
-        // Assignment/release or a bound-task change → refresh the join data.
+      if (
+        topic === "outsource_worker" ||
+        topic === "task" ||
+        topic === "chat" ||
+        topic === "chat_read"
+      ) {
         refetch().catch((e) =>
           console.warn("useOutsourceWorkers: SSE refetch failed", e)
-        );
-      } else if (topic === "chat" || topic === "chat_read") {
-        // Only the unread badge moves — re-pull the small workers list alone,
-        // re-joining cached tasks/types (T-ec2c: no tasks/manuals redownload).
-        refetchWorkersOnly().catch((e) =>
-          console.warn("useOutsourceWorkers: SSE unread refetch failed", e)
         );
       }
     });
@@ -154,7 +104,7 @@ export function useOutsourceWorkers(): UseOutsourceWorkers {
       alive = false;
       unsubscribe();
     };
-  }, [refetch, refetchWorkersOnly]);
+  }, [refetch]);
 
   const saveMaxParallel = useCallback(async (n: number) => {
     const next = await api.patchServerSettings({ outsourceMaxParallel: n });

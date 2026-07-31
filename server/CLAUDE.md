@@ -316,6 +316,75 @@ warden 端那個 POST 是 best-effort:失敗的回傳值被 start/stop 呼叫端
 - ⇒ **WAL 只買到「讀者不等」**。任何人要回答「備份對這個工作室的成本是多少」,**一定要報寫入那一側的數字**;引用讀者那個 3ms 去講「備份不影響服務」是錯的。
 - 舊的量級參考仍有效:**~0.43s / 340 MB**(WAL 之前量的)。
 - **反恆真**:每個掃描都先自證語料非空(Go 檔數、腳本檔數、**以及看到的動詞數**——動詞數為 0 代表偵測器死了,那時「零發現」什麼都不證明);寫入取樣表有下限;所有「寫成功」都以**讀回來**收尾,不以「回 nil」代替。
+## 任務清單:問狀態集合,並且自己把 dep 組好(T-a3e4,owner 2026-08-01)
+
+owner 原話三句:「tasks 也一次拿太多了 說真的我們在意的只有 filter 過後的那二十幾個」
+「**不是應該以狀態 filter 嗎**」「有相依性的話 **那個相依性為什麼不是後端幫忙處理好組起來**」。
+實測基準(正式站 DB,703 張):`GET /api/tasks` = **408,482 B** vs `?open=true` = **17,295 B**。
+
+- **`?statuses=`(可重複)是新的過濾面,`?status=` 一字未改。** 為什麼開第二個參數而不是把
+  舊的加寬:舊的 `status=` **會對 `reassigning` 回 400**(`ValidTaskStatus` 不含它,T-9ca5 把它
+  搬去 `task.lock` 之後訊息文字沒跟著改,所以那句 400 的內容至今**列了一個它自己會拒絕的值**
+  ——本批刻意沒動那句話,免得改到現役 client 讀得到的字),而且它只比對 status 欄。集合面要的
+  是**座艙下拉選單的詞彙**:那個選單有「轉派中」一列,而且**預設就勾著**,所以 `statuses` 裡的
+  `reassigning` 比對的是 **lock**(`taskStatusSetMatch`)。把這個語意塞進舊參數 = 改掉現役
+  client 已經在依賴的答案;不支援它 = 預設視圖每次請求都默默漏掉所有轉派中任務。
+  空字串/空重複 = 無條件(與省略同義);不認得的值 **400 並點名**(默默丟掉會在沒人知道的情況
+  下縮小答案)。`status` / `statuses` / `open` / `executor` / `type` 全部 **AND**。
+- **`TaskListItemDTO.dep_tasks`:每個 dep 的 `task_no`/`title`/`status`,由 handler 自己
+  已經做的那一次 `ListTasks()` 建 map 解出來——`newTaskDepRefDTOs` 是純函數、**零額外查詢**
+  (這是效能票,別把 payload 修掉換來 N+1)。`byID` 覆蓋**全表**,所以被 filter 排除掉的 dep
+  照樣講得出名字,這正是 client 不再需要載入已結案母體的原因。
+  🔴 **三種狀態不可壓成兩種**:有 status = 解析到;**status 為空**(TaskNo 仍推導得出)= 那張
+  任務不存在了(查無此任務);**整個欄位缺席** = 這個 server 不解 dep(還不知道)。第三種是
+  客戶端 `closedLoaded` 旗標退役後留下的那條誠實線,壓掉它就會把一張健康的已結案任務講成
+  「查無此任務」。**`TaskDTO`(get_task)刻意沒有這個欄位**:輕量清單才是 payload 熱點,而任務卡
+  的 dep 列**讀輕量列**不讀 hydrate 後的 detail,所以展開一張卡不會把 dep 列清空。
+- **`OutsourceWorkerDTO` 多四欄** `task_no` / `task_created_ts` / `task_type_key` /
+  `task_type_name`:外包面板的排序鍵與列標籤。它以前是**前端 join**——每次 worker/task/chat
+  delta 都下載整部 task 歷史 + 整份手冊清單,只為了排五列、翻一個 key。`task_type_name` 由
+  `taskTypeDisplayNames()`(一次 `ListTaskManuals`)解;**display_name 為空就留空**,client 照舊
+  退回原始 key(填進去等於把已刪手冊藏在一個看起來像人寫的 label 後面)。
+- **`TaskCountDTO.total`(未篩選總數)**:清單改成回答狀態集合之後,空清單再也分不出
+  「什麼都沒有」與「這幾個狀態裡沒有」,而「目前沒有任務」是對整個工作室的主張。給一個
+  grouped COUNT,座艙就不必為了寫一句空狀態文案把清單重新拉寬。
+- **`list_tasks` 是 MCP 工具,所以 `spec/mcp-catalog.json` 同批改**(`spec_catalog_conformance_test.go`
+  的三方對質會擋:routes 表 ≡ openapi ≡ 凍結 catalog 的參數集合);`catalog_hash` 只由**工具名**
+  推導(`catalogHashOf` 讀 route 表),所以加一個參數不動 hash。seeds 同批教(§9c)。
+- 哨兵:`api_perf_status_set_test.go`(集合/lock/400 點名/空集合/舊參數逐條不變/dep 解析到被
+  filter 排除的那張/`dep_tasks` 恆為陣列/worker 四欄含 fallback/**worker 綁在已結案任務上四欄
+  照樣有值**(`TestOutsourceWorkerOnAClosedTaskStillCarriesItsLabels`,done 與 terminated 各一、
+  清單面與單筆面各一;mutant:在 `projectWorker` 的 task join 上加 `TaskIsTerminal` 判斷 →
+  整個 package 恰好這 1 條紅)/count 的 open≠total),
+  conformance `test_tasks.py` 的 `test_status_set_*` / `test_dep_tasks_*` / `test_task_count_*` /
+  `test_outsource_worker_carries_*`。
+  ✅ **查詢次數現在有守衛了(`api_perf_query_count_test.go`,本票同批補;此前是缺口)**:
+  `TestTaskListTaskReadsDoNotGrowWithDepCount` 跑兩次 `?statuses=in_progress`(2 個 dep vs
+  25 個 dep),斷言**一次 list 請求打到 `task` 表的讀取次數相等**(實測都是 **1** 次,就是
+  `ListTasks`)。量測面是 **database/sql 的 driver seam**——測試檔自己把真 sqlite driver 包一層
+  註冊成第二個名字、對 statement 文字比對,**production 一個 byte 都沒動**,而且因為是文字比對
+  而不是掛在某個 DAL method 上,`GetTask`／手寫 `SELECT`／任何別的 DAL method 走的都是同一條路。
+  **反恆真三道**:兩跑都先斷言每個 dep 真的被解析出來(有 title/status)且數量不同(語料非空)、
+  計數器自己必須數到 > 0(seam 死掉時 `0 == 0` 會恆真地過)、次數還要 ≤ 2(「同樣地大」不算)。
+  🔴 **但它不是「看得到任何路徑的查詢」——它認的是一份具名的形狀清單,射程外一律漏數,而漏數
+  的方向是誤綠。** pattern 吃 `FROM`/`JOIN` ＋ 可選 schema 限定 ＋ 四種 SQLite identifier 引號
+  (`"task"`/`'task'`/反引號/`[task]`),排除 `task_step`/`task_dep`/`task_artifact`。**射程與
+  兩側邊界由 `TestTaskTableReadPatternKnowsItsOwnBoundary` 逐條對字串斷言**(護欄自己的邊界要被
+  釘住,不能只寫在註解裡)。**仍在射程外**:讀取透過 VIEW／CTE 名字／子查詢別名間接發生、
+  `FROM /*註解*/ task`、本 package 以外的碼。⚠️ **部分漏數比 seam 全死更危險**——合法的
+  `ListTasks` 那一次仍被數到,所以 `> 0` 那道自檢**不會響**。這不是推論:review 實測 M7 用
+  `SELECT title, status FROM "task" WHERE id = ?` 做 N+1,**舊 pattern(只認 `\bFROM\s+task\b`)
+  下計數器停在 1、測試全綠**;pattern 放寬後同一顆 mutant **整個 package 恰好 1 條紅**。
+  🔴 **這個缺口曾經是真的,留著當理由**:review 實測 M6 把 handler 的 join 改寫成**逐 dep
+  `s.dal.GetTask(id)`**,整包 `go test` **一條都沒紅**。所以上面那句「釘住『被排除的 dep 也
+  解得出來』這個性質」**不能當成 N+1 的替代覆蓋**——那條性質守的是「join 被整個拿掉」與
+  「母體被縮小成只有回應那幾列」,**不是查詢次數**;逐 dep 查一樣答得出被排除的 dep,只是慢。
+  同一顆 mutant 重跑(2026-08-01,`go clean -testcache`,還原用自備 `.orig` 不用 `git checkout --`):
+  **整個 package 恰好 1 條紅**,就是這條新測試(few=3 次 / many=26 次),還原後全綠。
+  ✅ 另外一半的靜態保證仍然成立:`newTaskDepRefDTOs` 的簽章裡**既沒有 `*DAL` 也沒有 `*apiServer`**
+  (只收 `[]string` 與 `map[string]Task`),所以**那個函式**在編譯期就不可能查資料庫。
+  ⚠️ 但那個保證只涵蓋它自己——**handler 仍然可以用逐 dep 查詢去餵那張 map**(M6 做的正是這件事),
+  別把函式的保證讀成端點的保證;**端點那一半現在是由上面那條計數測試守的,不是由簽章守的。**
 
 ## 已知邊界(誠實列,別當成熟功能用)
 - **config 預設路徑是 CWD-relative `oc.toml`**(binary 沒有 source-path 可錨 repo root);部署正解走 `$OC_CONFIG`。
