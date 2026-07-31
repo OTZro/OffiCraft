@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useI18n } from "../i18n";
 import { effortText } from "../i18n/compose";
 import { formatCost } from "../lib/cost";
-import { ModelEffortEditor } from "./ModelEffortEditor";
 import { Markdown } from "./Markdown";
 import {
   CheckIcon,
@@ -11,7 +10,6 @@ import {
   ChevronRightIcon,
   CopyIcon,
   FileTextIcon,
-  PencilIcon,
 } from "./icons";
 import "./member-detail.css";
 
@@ -33,6 +31,43 @@ export interface AgentDetailPrompt {
  * resolved + gated by the wrapper (machine display name, readable account or
  * "" — internal identifiers never reach this component); "" / null render the
  * honest dash, never a fabricated value. */
+/** The display name of a runtime — the ONE place the mapping lives, so the
+ * readout and the "changing to" hint beside it cannot disagree. "" (nothing
+ * reported) has no label; callers render the dash. */
+export function runtimeLabel(runtime: "claude" | "codex" | ""): string {
+  return runtime === "codex" ? "Codex" : runtime === "claude" ? "Claude Code" : "";
+}
+
+/** The ONE renderer for a cell's "changed, not applied yet" line.
+ *
+ * 🔴 It renders NOTHING — not an empty div, not a placeholder, not a spacer —
+ * when there is no pending change. That is a requirement, not an optimisation:
+ * the owner asked for the marks on condition the panel not get busier
+ * (2026-07-31), so a panel with nothing pending must be DOM-identical to the
+ * one before this existed. Keeping the emptiness inside one component is what
+ * makes that checkable in one place instead of four.
+ *
+ * Styling is the existing `mp-field__hint` grey the machine cell has always
+ * used for exactly this — the ticket says reuse it, do not invent a second
+ * visual language for the same idea.
+ */
+function PendingHint({
+  p,
+  cell,
+  text,
+}: {
+  p: string;
+  cell: "runtime" | "model" | "effort" | "machine";
+  text?: string;
+}) {
+  if (!text) return null;
+  return (
+    <div className="mp-field__hint" data-testid={`${p}-${cell}-pending`}>
+      {text}
+    </div>
+  );
+}
+
 export interface AgentDetailVM {
   /** data-testid prefix ("mp" for the member page, "worker-detail" for the
    * outsource page) — keeps each page's existing stable test surface. */
@@ -40,35 +75,33 @@ export interface AgentDetailVM {
   /** True while the agent's session is really up — gates the refocus button
    * (the server 409s an offline refocus on both kinds). */
   online: boolean;
+  /** The owner-CONFIGURED runtime. Drives the Claude/Codex ACCOUNT label only
+   * — the readout below is state, and the two must not be conflated. */
   runtime: "claude" | "codex";
   /** STATE readout — what the agent self-reported it is running right now.
    * "" ⇒ the honest dash; never the configured launch value (owner ruling
    * 2026-07-31:「成員面板以及監控台，一定要顯示回報回來的狀態，不能顯示設定值」). */
+  reportedRuntime: "claude" | "codex" | "";
   model: string;
   effort: string;
-  /** LAUNCH INTENT — the owner-configured pair the editor seeds from and writes
-   * back. REQUIRED, and deliberately not defaulted to the readout above: the
-   * readout is telemetry (or ""), and falling back to it would let a save
-   * round-trip a reported value into the owner's setting — or write the blank
-   * that the closed low/medium/high vocabulary rejects. Every caller states its
-   * own configured pair. */
-  configuredModel: string;
-  configuredEffort: string;
-  /** The note under the model/effort editor (member: next-wake semantics;
-   * worker: active-respawn semantics). */
-  modelEffortNote: string;
-  /** Persist a model/effort edit. Undefined ⇒ the cell is read-only. */
-  onSaveModelEffort?: (
-    runtime: "claude" | "codex",
-    model: string,
-    effort: string,
-  ) => Promise<void>;
+  /** The four PENDING hints — one per configurable cell, each a ready-made
+   * line (「→ 要換成 ○○」) or "" for nothing.
+   *
+   * They are strings, not values to compare, because the comparison needs the
+   * domain object and the locale, and both live in the wrappers. The rule they
+   * all obey: a hint appears ONLY when a reported value is KNOWN and differs
+   * from the configured one. Unknown reports render nothing at all — no empty
+   * container, no placeholder, no extra spacing — because a panel with no
+   * pending change must look exactly as it did before this existed. */
+  pending?: {
+    runtime?: string;
+    model?: string;
+    effort?: string;
+    machine?: string;
+  };
   /** Resolved machine display text; "" ⇒ dash. Wrappers apply their own gate
    * (member: awake-only; worker: 尚未分配 fallback text). */
   machineText: string;
-  /** A pending relocation target. This supplements — never replaces — the
-   * observed machine, and disappears once both locations agree. */
-  machineTransition?: string;
   /** True when the 模型 row shows what the agent REPORTED rather than what the
    * owner configured (the member panel; T-927a). The row then carries a tag, or
    * three values sit side by side under one heading with two different meanings
@@ -85,6 +118,11 @@ export interface AgentDetailVM {
   cost: number | null;
   onRefocus?: () => Promise<void>;
   refocusSince: number | null;
+  /** Which operation opened the in-flight wind-down ("" when none), and the
+   * epoch it is collected by at the latest (null when none). Together they turn
+   * the panel's history line into a live "applying your change" line. */
+  refocusOp?: string;
+  refocusDeadline?: number | null;
   refocusSubmittedNote: string;
   refocusSinceLabel: (t: string) => string;
   lastOp: string;
@@ -142,65 +180,28 @@ export function AgentDetailPanel({
   beforeTerminalCards,
   extraExpandCards,
 }: AgentDetailPanelProps) {
-  const { t } = useI18n();
+  const { t, msg } = useI18n();
   const dash = t.mp.dash;
   const p = vm.testIdPrefix;
 
-  // ── model / effort editing (shared quick-pick editor; persistence is the
-  // wrapper's — member PATCHes the member, worker POSTs the model op) ────────
-  const [meEditing, setMeEditing] = useState(false);
-  const [meRuntime, setMeRuntime] = useState<"claude" | "codex">("claude");
-  const [meModel, setMeModel] = useState("");
-  const [meEffort, setMeEffort] = useState("medium");
-  const [meBusy, setMeBusy] = useState(false);
-  const [meError, setMeError] = useState(false);
-  const [meOverride, setMeOverride] = useState<{
-    runtime: "claude" | "codex";
-    model: string;
-    effort: string;
-  } | null>(null);
-  const shownRuntime = meOverride?.runtime ?? vm.runtime;
-  // The readout is the REPORTED state and an editor save must not rewrite it:
-  // storing a launch intent does not change what the session is already running.
+  // ── the four configurable cells: reported state, plus a pending hint ──────
+  //
+  // 🔴 The in-place model/effort EDITOR that used to live here is gone (T-7f28).
+  // It was unreachable: it hung off an optional `onSaveModelEffort` prop that
+  // NEITHER caller has ever passed, so the edit button, the editor, its save
+  // handler and the "configured value" hint beneath the readouts were all dead
+  // — along with the local override state that existed to paper over a save the
+  // parent had not refetched yet. The live editor is the member panel's
+  // settings dialog. `AgentDetailPanel.pending-change.test.tsx` pins the absence.
   const shownModel = vm.model;
   const shownEffort = vm.effort;
-  // The launch intent the editor owns. `meOverride` belongs HERE (a save just
-  // changed the setting, and the parent may not have refetched yet).
-  const configuredModel = meOverride?.model ?? vm.configuredModel;
-  const configuredEffort = meOverride?.effort ?? vm.configuredEffort;
   // Known effort levels render 中文字 + the raw key (the member page's format,
   // now the ONE format); an unknown/custom effort string renders verbatim.
   const effortLevelText =
     shownEffort === "low" || shownEffort === "medium" || shownEffort === "high"
       ? effortText(t, shownEffort)
       : null;
-
-  function startMeEdit() {
-    setMeRuntime(shownRuntime);
-    setMeModel(configuredModel);
-    setMeEffort(configuredEffort || "medium");
-    setMeError(false);
-    setMeEditing(true);
-  }
-
-  async function saveMeEdit() {
-    if (!vm.onSaveModelEffort) return;
-    setMeBusy(true);
-    setMeError(false);
-    try {
-      await vm.onSaveModelEffort(meRuntime, meModel.trim(), meEffort);
-      setMeOverride({
-        runtime: meRuntime,
-        model: meModel.trim(),
-        effort: meEffort,
-      });
-      setMeEditing(false);
-    } catch {
-      setMeError(true);
-    } finally {
-      setMeBusy(false);
-    }
-  }
+  const pending = vm.pending ?? {};
 
   // ── refocus pulse (in-flight → persistent done / transient error) ──────────
   const [refocusState, setRefocusState] = useState<
@@ -243,6 +244,19 @@ export function AgentDetailPanel({
   const refocusSinceText =
     vm.refocusSince != null
       ? new Date(vm.refocusSince * 1000).toLocaleString()
+      : null;
+  // While an OWNER-initiated wind-down is open, say what is happening instead
+  // of when it started. 「上次重新聚焦 <time>」 is a true sentence that reads as
+  // history — the owner who just changed a setting needs to know the window is
+  // the reason it has not taken effect yet, and roughly when it will (T-7f28).
+  // Only the two owner-op causes qualify: a context-pressure handover or a bare
+  // 重新聚焦 is not applying anything of the owner's, so those keep the old line.
+  const windDownNote =
+    (vm.refocusOp === "relocate" || vm.refocusOp === "runtime/model") &&
+    vm.refocusDeadline != null
+      ? msg.agentWindDownForChange(
+          new Date(vm.refocusDeadline * 1000).toLocaleTimeString(),
+        )
       : null;
 
   // ── 最近操作 (last warden receipt) ─────────────────────────────────────────
@@ -351,115 +365,44 @@ export function AgentDetailPanel({
        * runtime account — the member page's mp-info2 layout, now the ONE layout. */}
       <div className="mp-card mp-info2">
         <div className="mp-field" data-testid={`${p}-model-effort-cell`}>
-          {!meEditing ? (
-            <>
-              <div className="mp-field__head">
-                <div className="mp-field__label">{t.mp.agentRuntime}</div>
-                {vm.onSaveModelEffort && (
-                  <button
-                    type="button"
-                    className="doc-btn doc-btn--edit"
-                    data-testid={`${p}-model-effort-edit`}
-                    onClick={startMeEdit}
-                  >
-                    <PencilIcon size={14} />
-                    <span>{t.settings.edit}</span>
-                  </button>
-                )}
-              </div>
-              <div className="mp-field__value">
-                {shownRuntime === "codex" ? "Codex" : "Claude Code"}
-              </div>
-              <div className="mp-field__label mp-field__label--stacked">
-                {t.mp.model}
-              </div>
-              <div
-                className="mp-field__value"
-                data-testid={`${p}-model-value`}
-              >
-                {shownModel || dash}
-                {/* Deliberately NOT the parenthesised form the 投入度 row uses
-                    below: that one restates the raw value, this one states the
-                    value's PROVENANCE. Same styling with the same punctuation
-                    would put two different kinds of thing in the same shape. */}
-                {vm.modelIsReported && shownModel && (
-                  <span className="mp-field__hint">
-                    {" · "}
-                    {t.mp.modelReportedTag}
-                  </span>
-                )}
-              </div>
-              <div className="mp-field__label mp-field__label--stacked">
-                {t.mp.effort}
-              </div>
-              <div
-                className="mp-field__value"
-                data-testid={`${p}-effort-value`}
-              >
-                {effortLevelText != null ? (
-                  <>
-                    {effortLevelText}{" "}
-                    <span className="mp-field__hint">({shownEffort})</span>
-                  </>
-                ) : (
-                  shownEffort || dash
-                )}
-              </div>
-              {/* The owner's SETTING, kept visibly apart from the state rows
-                  above and labelled by what it does (it is the value the next
-                  launch uses). Only where an editor exists — elsewhere the
-                  readout already is the configured value and a second copy
-                  would just be noise. */}
-              {vm.onSaveModelEffort && (
-                <div
-                  className="mp-field__hint"
-                  data-testid={`${p}-model-effort-configured`}
-                >
-                  {t.mp.settingsIntentNote} {configuredModel || dash} ·{" "}
-                  {configuredEffort || dash}
-                </div>
-              )}
-            </>
-          ) : (
-            <div
-              className="mp-info2__editor"
-              data-testid={`${p}-model-effort-editor`}
-            >
-              <ModelEffortEditor
-                runtime={meRuntime}
-                model={meModel}
-                effort={meEffort}
-                onRuntimeChange={setMeRuntime}
-                onModelChange={setMeModel}
-                onEffortChange={setMeEffort}
-              />
-              <div className="mp-field__hint">{vm.modelEffortNote}</div>
-              {meError && (
-                <div className="mp-field__hint mp-info2__error">
-                  {t.mp.modelEffortError}
-                </div>
-              )}
-              <div className="mp-info2__actions">
-                <button
-                  type="button"
-                  className="doc-btn"
-                  disabled={meBusy}
-                  onClick={() => setMeEditing(false)}
-                >
-                  {t.mp.modelEffortCancel}
-                </button>
-                <button
-                  type="button"
-                  className="doc-btn doc-btn--accent"
-                  disabled={meBusy}
-                  onClick={() => void saveMeEdit()}
-                  data-testid={`${p}-model-effort-save`}
-                >
-                  {t.mp.modelEffortSave}
-                </button>
-              </div>
-            </div>
-          )}
+          <div className="mp-field__head">
+            <div className="mp-field__label">{t.mp.agentRuntime}</div>
+          </div>
+          <div className="mp-field__value" data-testid={`${p}-runtime-value`}>
+            {runtimeLabel(vm.reportedRuntime) || dash}
+          </div>
+          <PendingHint p={p} cell="runtime" text={pending.runtime} />
+          <div className="mp-field__label mp-field__label--stacked">
+            {t.mp.model}
+          </div>
+          <div className="mp-field__value" data-testid={`${p}-model-value`}>
+            {shownModel || dash}
+            {/* Deliberately NOT the parenthesised form the 投入度 row uses
+                below: that one restates the raw value, this one states the
+                value's PROVENANCE. Same styling with the same punctuation
+                would put two different kinds of thing in the same shape. */}
+            {vm.modelIsReported && shownModel && (
+              <span className="mp-field__hint">
+                {" · "}
+                {t.mp.modelReportedTag}
+              </span>
+            )}
+          </div>
+          <PendingHint p={p} cell="model" text={pending.model} />
+          <div className="mp-field__label mp-field__label--stacked">
+            {t.mp.effort}
+          </div>
+          <div className="mp-field__value" data-testid={`${p}-effort-value`}>
+            {effortLevelText != null ? (
+              <>
+                {effortLevelText}{" "}
+                <span className="mp-field__hint">({shownEffort})</span>
+              </>
+            ) : (
+              shownEffort || dash
+            )}
+          </div>
+          <PendingHint p={p} cell="effort" text={pending.effort} />
         </div>
         <div className="mp-field mp-field--divider">
           <div className="mp-field__head">
@@ -469,13 +412,13 @@ export function AgentDetailPanel({
           <div className="mp-field__value" data-testid={`${p}-machine`}>
             {vm.machineText || dash}
           </div>
-          {vm.machineTransition && (
-            <div className="mp-field__hint" data-testid={`${p}-machine-transition`}>
-              {vm.machineTransition}
-            </div>
-          )}
+          <PendingHint p={p} cell="machine" text={pending.machine} />
           <div className="mp-field__label mp-field__label--stacked">
-            {shownRuntime === "codex" ? t.mp.codexAccount : t.mp.claudeAccount}
+            {/* The CONFIGURED runtime names the account space, not the
+                reported one: the account shown belongs to the runtime this
+                agent is set up under, and it must stay labelled even before
+                anything has reported (when reportedRuntime is still ""). */}
+            {vm.runtime === "codex" ? t.mp.codexAccount : t.mp.claudeAccount}
           </div>
           <div className="mp-field__value" data-testid={`${p}-account`}>
             {vm.accountText || dash}
@@ -523,8 +466,19 @@ export function AgentDetailPanel({
             {vm.refocusSubmittedNote}
           </div>
         )}
-        {refocusSinceText && (
-          <div className="mp-runtime__note mp-runtime__note--muted">
+        {windDownNote && (
+          <div
+            className="mp-runtime__note mp-runtime__note--muted"
+            data-testid={`${p}-wind-down-note`}
+          >
+            {windDownNote}
+          </div>
+        )}
+        {!windDownNote && refocusSinceText && (
+          <div
+            className="mp-runtime__note mp-runtime__note--muted"
+            data-testid={`${p}-refocus-since`}
+          >
             {vm.refocusSinceLabel(refocusSinceText)}
           </div>
         )}

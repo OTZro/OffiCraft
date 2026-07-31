@@ -146,7 +146,18 @@ describe("MemberDetailPanel · presence-gated machine + account", () => {
       container.querySelector('[data-testid="mp-model-effort-cell"]')?.textContent ?? "";
 
     await waitFor(() => expect(readModel()).toContain("reported-runtime-model"));
-    expect(readModel()).not.toContain("configured-launch-model");
+    // The READOUT is the reported model. The configured one is not absent from
+    // the cell any more (T-7f28 puts it in the 「→ 要換成」 pending line, since
+    // the two differing IS the thing the owner needs to see) — but it must
+    // never be what the value row itself says.
+    expect(
+      container.querySelector('[data-testid="mp-model-value"]')?.textContent ??
+        "",
+    ).not.toContain("configured-launch-model");
+    expect(
+      container.querySelector('[data-testid="mp-model-pending"]')?.textContent ??
+        "",
+    ).toContain("configured-launch-model");
 
     rerender(
       <I18nProvider>

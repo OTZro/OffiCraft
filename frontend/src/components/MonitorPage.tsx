@@ -1325,7 +1325,7 @@ function pctText(v: number | null, dash: string): string {
 
 function contextText(
   pct: number | null,
-  runtime: "claude" | "codex",
+  runtime: "claude" | "codex" | "",
   compactions: number | null,
   dash: string,
   compactionLabel: (n: number) => string
@@ -1606,7 +1606,7 @@ function OutsourceSessionRow({
         />
       </td>
       <td data-label={t.monitor.sessionCol.context}>
-        {contextText(session?.contextPct ?? null, session?.runtime ?? "claude", session?.compactionCount ?? null, dash, t.mp.compactionCount)}
+        {contextText(session?.contextPct ?? null, session?.runtime ?? "", session?.compactionCount ?? null, dash, t.mp.compactionCount)}
       </td>
       <td data-label={t.monitor.sessionCol.estCost}>
         {totalCost != null ? formatCost(totalCost) : dash}

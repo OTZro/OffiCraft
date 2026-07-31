@@ -48,7 +48,13 @@ export interface Member {
    * lifecycle dot + action button group need. Never fabricated.
    */
   lifecycle: MemberLifecycle;
+  /** The owner-CONFIGURED launch runtime — the settings value, not state. */
   runtime?: AgentRuntime;
+  /** Runtime last SELF-REPORTED by the live session (wire `actual_runtime`).
+   * "" = nothing has ever reported one. NEVER substitute `runtime` above: it
+   * is the owner's intent, and serving it here made a runtime change look
+   * applied the instant it was saved (T-7f28). */
+  actualRuntime?: AgentRuntime | "";
   /** Model last reported by a live boot; absent on older API payloads. */
   actualModel?: string;
   /** Effort last SELF-REPORTED by the live session. There is no member wire
@@ -94,6 +100,19 @@ export interface Member {
    * fabricated time — the detail panel hides the "last refocus" line when null.
    */
   refocusSince: number | null;
+
+  /** Which operation opened the in-flight wind-down (wire `refocus_op`):
+   * "relocate" | "runtime/model" | "context_high" | "refocus" |
+   * "restart_self"; "" when none. */
+  refocusOp?: string;
+  /** Epoch by which that wind-down is collected at the latest (wire
+   * `refocus_deadline`), null when none is in flight. A CEILING, not a
+   * prediction — the collect fires as soon as the agent reports stopped. */
+  refocusDeadline?: number | null;
+  /** The DURABLE last-observed machine (wire `actual_machine`). `machine`
+   * above blanks the moment the member stops running; this survives, so a
+   * pending relocation stays legible while it is offline. */
+  actualMachine?: string;
 
   /**
    * Fleet remote-ops stage 1 — the "most recent operation" receipt the warden
@@ -405,7 +424,8 @@ export interface MonSessionView {
   effort: string;
   machine: string;
   account: string;
-  runtime: "claude" | "codex";
+  /** REPORTED runtime; "" until something reports one (T-7f28). */
+  runtime: "claude" | "codex" | "";
   /** presence tri-state mapped 1:1 onto the member status. */
   status: MemberStatus;
   contextPct: number | null;

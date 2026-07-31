@@ -658,6 +658,7 @@ func (s *apiServer) HandleRefocusMemberApiMembersMemberIdRefocusPost(w http.Resp
 		return
 	}
 	m.RefocusSince = nowSecs()
+	m.RefocusOp = refocusOpRefocus
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return
@@ -741,6 +742,7 @@ func (s *apiServer) HandleReportWakingApiSelfWakingPost(w http.ResponseWriter, r
 	}
 	m.WakingSince = nowSecs()
 	m.RefocusSince = 0.0
+	m.RefocusOp = ""
 	m.StoppedSince = 0.0
 	// 🔴 …but NOT the stop trace of a member the owner has already cancelled
 	// (T-7526). Clearing a stale anchor is right for an ORDINARY boot; doing it
@@ -891,6 +893,7 @@ func (s *apiServer) HandleRestartSelfApiSelfRefocusPost(w http.ResponseWriter, r
 		return
 	}
 	m.RefocusSince = now
+	m.RefocusOp = refocusOpRestartSelf
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return

@@ -100,6 +100,18 @@ const (
 	memberOpModel    = "runtime/model" // 換 model / runtime / effort
 )
 
+// The remaining causes that stamp refocus_since WITHOUT going through
+// armMemberOwnerOpHandover. Together with the two above these are the closed
+// set MemberDTO.refocus_op serves: the cockpit needs the cause to say "winding
+// down so your change can take effect" instead of "last refocus", which reads
+// as history. They are stamped and cleared in lockstep with refocus_since —
+// a cause outliving its window would be worse than none.
+const (
+	refocusOpContextHigh = "context_high" // reconcile's context-pressure handover
+	refocusOpRefocus     = "refocus"      // owner pressed 重新聚焦
+	refocusOpRestartSelf = "restart_self" // the agent asked for its own handover
+)
+
 // memberHasStateToFlush answers the one question the rule turns on: is there
 // anything for this member to wind down, or should the owner's verb take
 // effect immediately? See the cell-by-cell mapping above — this is
@@ -161,6 +173,7 @@ func (s *apiServer) armMemberOwnerOpHandover(m *Member, op string) bool {
 		return false
 	}
 	m.RefocusSince = nowSecs()
+	m.RefocusOp = op
 	m.StoppingSince = 0.0
 	m.StoppedSince = 0.0
 	reconcileLog("recycle: %s %s — wind-down opened (collect on stopped-report or +%.0fs)",

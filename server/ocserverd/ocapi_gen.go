@@ -15,16 +15,37 @@ import (
 
 // Defines values for AgentRuntime.
 const (
-	Claude AgentRuntime = "claude"
-	Codex  AgentRuntime = "codex"
+	AgentRuntimeClaude AgentRuntime = "claude"
+	AgentRuntimeCodex  AgentRuntime = "codex"
 )
 
 // Valid indicates whether the value is a known member of the AgentRuntime enum.
 func (e AgentRuntime) Valid() bool {
 	switch e {
-	case Claude:
+	case AgentRuntimeClaude:
 		return true
-	case Codex:
+	case AgentRuntimeCodex:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MonitoringSessionDTORuntime.
+const (
+	MonitoringSessionDTORuntimeClaude MonitoringSessionDTORuntime = "claude"
+	MonitoringSessionDTORuntimeCodex  MonitoringSessionDTORuntime = "codex"
+	MonitoringSessionDTORuntimeEmpty  MonitoringSessionDTORuntime = ""
+)
+
+// Valid indicates whether the value is a known member of the MonitoringSessionDTORuntime enum.
+func (e MonitoringSessionDTORuntime) Valid() bool {
+	switch e {
+	case MonitoringSessionDTORuntimeClaude:
+		return true
+	case MonitoringSessionDTORuntimeCodex:
+		return true
+	case MonitoringSessionDTORuntimeEmpty:
 		return true
 	default:
 		return false
@@ -774,8 +795,17 @@ type MemberDTO struct {
 	// ActivationPending Set true ONLY on the activate response when the decided START could not be delivered to the target warden (no live SSE downstream) — the wake intent is persisted and the reconcile cadence retries, but nothing has been dispatched yet. Absent/null on every other member read. The activate twin of ``relocation_pending``: without it an activate against an unreachable warden returns a clean 200 with zero signal, which is indistinguishable from a wake that actually started (T-ba62 additive-optional).
 	ActivationPending *bool `json:"activation_pending,omitempty"`
 
+	// ActualEffort The effort level the member's session is REPORTED to be running at, from its own live telemetry (``AgentTelemetryIngestDTO.effort``) — durably persisted alongside ``actual_model``, so it survives a server restart and outlives the session that reported it. Empty means nothing has ever reported an effort for this member; it is separate from, and NEVER falls back to, the owner-configured ``effort`` launch setting. WAS: reported effort lived ONLY in the in-memory telemetry store, so a server restart blanked it fleet-wide and no detail panel could tell a configured effort from a running one (T-7f28).
+	ActualEffort *string `json:"actual_effort,omitempty"`
+
+	// ActualMachine The machine this member was LAST OBSERVED running on, durably persisted — the offline-surviving twin of the live ``machine`` projection. Empty means this member has never been observed on any machine. It is separate from, and NEVER falls back to, the owner-configured ``desired_machine_id`` placement: a pending relocation must stay legible as pending even while the member is offline (T-7f28).
+	ActualMachine *string `json:"actual_machine,omitempty"`
+
 	// ActualModel The model the member's session is REPORTED to be running, from its own live telemetry (``AgentTelemetryIngestDTO.model``) — durably persisted, so it survives a server restart and outlives the session that reported it. Empty means nothing has ever reported a model for this member; it is separate from, and NEVER falls back to, the owner-configured `model` launch setting. Applies identically to ``kind=outsource`` rows, whose reports arrive under their own ``ow-`` token sub. WAS: written only by ``report_waking``, which no outsource worker calls (a worker's boot signal is ``get_my_task``), so it was structurally always empty for them.
 	ActualModel *string `json:"actual_model,omitempty"`
+
+	// ActualRuntime The AI CLI runtime the member's session is REPORTED to be running, from its own live telemetry (``AgentTelemetryIngestDTO.runtime``) — durably persisted alongside ``actual_model``. Empty means nothing has ever reported a runtime for this member; it is separate from, and NEVER falls back to, the owner-configured ``runtime`` launch setting. WAS: the reported runtime was ingested and then discarded on every read path — every wire that carried a ``runtime`` re-served the roster's CONFIGURED value, so the detail panel flipped the instant the owner changed the setting and a not-yet-applied change was indistinguishable from a live one (T-7f28).
+	ActualRuntime *string `json:"actual_runtime,omitempty"`
 
 	// AvatarUrl Authenticated URL of this stable member id's personal raster avatar. Empty means no personal image; clients fall back to the active theme's role avatar, then the built-in glyph. Additive-optional for older clients.
 	AvatarUrl        *string  `json:"avatar_url,omitempty"`
@@ -790,13 +820,19 @@ type MemberDTO struct {
 	LastOpOk         *bool    `json:"last_op_ok,omitempty"`
 
 	// LastOpReason Structured one-line cause of the most recent warden op (the warden's ``<code>: <detail>`` refusal/failure summary, e.g. ``session_already_exists: ...``) — distinct from the free-form ``last_op_log`` dump. Empty when the receipt carried no reason (older warden, or a successful op); consumers then fall back to status-only display.
-	LastOpReason *string  `json:"last_op_reason,omitempty"`
-	Machine      *string  `json:"machine,omitempty"`
-	MemberNo     *string  `json:"member_no,omitempty"`
-	Model        *string  `json:"model,omitempty"`
-	Name         string   `json:"name"`
-	OwnerId      *string  `json:"owner_id,omitempty"`
-	Presence     *string  `json:"presence,omitempty"`
+	LastOpReason *string `json:"last_op_reason,omitempty"`
+	Machine      *string `json:"machine,omitempty"`
+	MemberNo     *string `json:"member_no,omitempty"`
+	Model        *string `json:"model,omitempty"`
+	Name         string  `json:"name"`
+	OwnerId      *string `json:"owner_id,omitempty"`
+	Presence     *string `json:"presence,omitempty"`
+
+	// RefocusDeadline Epoch seconds by which the in-flight handover stamped in ``refocus_since`` is force-collected (``refocus_since`` + the reconcile recycle grace), 0 when no handover is in flight. Derived at read time, never stored. It exists so a client can say WHEN a pending launch change takes effect at the latest without hard-coding a server constant; the collection fires the instant the agent answers ``report_stopped``, so this is a CEILING, not a prediction (T-7f28). Additive-optional.
+	RefocusDeadline *float64 `json:"refocus_deadline,omitempty"`
+
+	// RefocusOp Which owner operation opened the in-flight handover stamped in ``refocus_since``, empty when none is in flight. One of ``relocate`` (machine change), ``runtime/model`` (runtime / model / effort change), ``context_high`` (automatic context-pressure handover), ``refocus`` (owner-pressed refocus) or ``restart_self`` (agent-requested). Stamped and cleared in lockstep with ``refocus_since``. WAS: the cause lived only in a server log line, so a client could only say 'last refocus' — which reads as history — where it meant 'winding down right now so your change can take effect' (T-7f28). Additive-optional.
+	RefocusOp    *string  `json:"refocus_op,omitempty"`
 	RefocusSince *float64 `json:"refocus_since,omitempty"`
 
 	// RelocationDeferred Set true on the relocate response when the move was DELIBERATELY deferred: the member is live with uncollected state, so the server opened a graceful wind-down window instead of dispatching now. Nothing has been sent YET BY DESIGN — the move lands when the agent finishes its wrap-up round. This is the companion that disambiguates ``relocation_pending``, which is true for BOTH this case and a genuinely undeliverable move: a consumer must NOT raise a "nothing was dispatched" alert while this field is true. Absent/null on every other member read, and never set on any response other than relocate (T-927a additive-optional).
@@ -963,22 +999,27 @@ type MonitoringSessionDTO struct {
 	CompactionCount *int     `json:"compaction_count,omitempty"`
 	ContextPct      *float64 `json:"context_pct,omitempty"`
 	Cost            *float64 `json:"cost,omitempty"`
-	Effort          *string  `json:"effort,omitempty"`
-	Id              string   `json:"id"`
-	Machine         *string  `json:"machine,omitempty"`
+
+	// Effort The effort level this session REPORTED it is running at (the roster row's ``actual_effort``). Honest-empty until something reports one, and it NEVER falls back to the owner-configured ``effort`` launch setting. Durable since T-7f28 — see ``model`` for the shared contract.
+	Effort  *string `json:"effort,omitempty"`
+	Id      string  `json:"id"`
+	Machine *string `json:"machine,omitempty"`
 
 	// Model The model this session REPORTED it is running (the roster row's ``actual_model``), for staff and outsource rows ALIKE — one column, one meaning. Honest-empty until something reports one, and it NEVER falls back to the owner-configured launch model. WAS: staff rows served the configured ``member.model`` while outsource rows served the reported value, so a single column header meant two different things depending on the row.
 	//
-	// ⚠️ NOT symmetric with the ``effort`` beside it, despite both being reported state. ``model`` is read from the DURABLE ``actual_model`` column, so it survives a server restart and outlives the session that reported it; ``effort`` is read from the in-memory telemetry entry and is therefore blanked fleet-wide by any server re-exec. There is no ``actual_effort`` column. Do not describe the two as twins and do not infer one's storage from the other's — pinned by TestGetMonitoring_ReportedModelSurvivesATelemetryWipe, which passes for model and would fail for effort.
+	// Symmetric with the ``runtime`` and ``effort`` beside it since T-7f28: all three are reported state read from DURABLE columns (``actual_model`` / ``actual_runtime`` / ``actual_effort``), so all three survive a server restart and outlive the session that reported them. WAS asymmetric — ``effort`` and ``runtime`` were read from the in-memory telemetry entry and blanked fleet-wide on every re-exec, and the spec text here said so. Pinned by TestGetMonitoring_ReportedLaunchFactsSurviveAReExec (all three) and TestGetMonitoring_ReportedLaunchFactsNeverFallBackToTheConfiguredValue.
 	Model    *string `json:"model,omitempty"`
 	Name     string  `json:"name"`
 	Presence *string `json:"presence,omitempty"`
 	Role     *string `json:"role,omitempty"`
 
-	// Runtime The session's selected provider runtime.
-	Runtime *AgentRuntime   `json:"runtime,omitempty"`
-	Tokens  *map[string]int `json:"tokens,omitempty"`
+	// Runtime The runtime this session REPORTED it is running (the roster row's ``actual_runtime``). Honest-empty until something reports one, and it NEVER falls back to the owner-configured ``runtime`` launch setting. WAS: this served the CONFIGURED value under a comment claiming it folded through the reported telemetry, so the cell flipped the instant the owner changed the setting and a runtime switch that had not happened yet was indistinguishable from one that had (T-7f28). NOT an ``AgentRuntime`` $ref like the CONFIGURED runtime fields: this one admits "" for "nothing has reported yet", and the closed two-value vocabulary has no member for that. Widening the shared enum instead would have let "unknown" leak into every owner-configured runtime field, where it is not a legal setting.
+	Runtime *MonitoringSessionDTORuntime `json:"runtime,omitempty"`
+	Tokens  *map[string]int              `json:"tokens,omitempty"`
 }
+
+// MonitoringSessionDTORuntime The runtime this session REPORTED it is running (the roster row's “actual_runtime“). Honest-empty until something reports one, and it NEVER falls back to the owner-configured “runtime“ launch setting. WAS: this served the CONFIGURED value under a comment claiming it folded through the reported telemetry, so the cell flipped the instant the owner changed the setting and a runtime switch that had not happened yet was indistinguishable from one that had (T-7f28). NOT an “AgentRuntime“ $ref like the CONFIGURED runtime fields: this one admits "" for "nothing has reported yet", and the closed two-value vocabulary has no member for that. Widening the shared enum instead would have let "unknown" leak into every owner-configured runtime field, where it is not a legal setting.
+type MonitoringSessionDTORuntime string
 
 // MyTaskDTO The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active.
 type MyTaskDTO struct {
@@ -1008,6 +1049,18 @@ type OnboardingStepDTO struct {
 type OutsourceWorkerDTO struct {
 	// Account The Claude account this worker's session runs under (telemetry entry keyed by the worker's actor id — the SAME per-actor telemetry the member roster reads). null when the worker has not reported one (never fabricated). T-f190 additive-optional.
 	Account *string `json:"account,omitempty"`
+
+	// ActualEffort The effort level this worker's session is REPORTED to be running at — the same durably-persisted roster field ``MemberDTO.actual_effort`` serves (an ``ow-`` row IS a member row with ``kind=outsource``). Empty means nothing has ever reported one. Separate from, and NEVER a fallback to, the owner-configured ``effort`` launch setting this DTO round-trips (T-7f28).
+	ActualEffort *string `json:"actual_effort,omitempty"`
+
+	// ActualMachine The machine this worker was LAST OBSERVED running on, durably persisted — the offline-surviving twin of the live ``machine`` projection. Empty means it has never been observed anywhere. Separate from, and NEVER a fallback to, ``desired_machine_id`` (T-7f28).
+	ActualMachine *string `json:"actual_machine,omitempty"`
+
+	// ActualModel The model this worker's session is REPORTED to be running — the same durably-persisted roster field ``MemberDTO.actual_model`` serves. Empty means nothing has ever reported one. WAS: absent from this DTO entirely, so the worker detail panel had to join ``GET /api/monitoring`` to show a reported model at all, and had no reported value to compare the configured ``model`` against (T-7f28).
+	ActualModel *string `json:"actual_model,omitempty"`
+
+	// ActualRuntime The AI CLI runtime this worker's session is REPORTED to be running — the same durably-persisted roster field ``MemberDTO.actual_runtime`` serves. Empty means nothing has ever reported one. Separate from, and NEVER a fallback to, the owner-configured ``runtime`` launch setting this DTO round-trips (T-7f28).
+	ActualRuntime *string `json:"actual_runtime,omitempty"`
 
 	// AvatarUrl Authenticated URL of this stable outsource-worker id's personal raster avatar. Empty means the client uses the outsource theme avatar or built-in glyph. Additive-optional.
 	AvatarUrl *string `json:"avatar_url,omitempty"`
@@ -1058,11 +1111,17 @@ type OutsourceWorkerDTO struct {
 	// Machine The machine the worker's session was ACTUALLY dispatched to (last_spawn_target resolved to its registry display name) — the REAL placement result, NOT the manual's preference. "" when never dispatched (未分配 — the panel renders "尚未分配", never a fabricated machine). T-f190 additive-optional.
 	Machine *string `json:"machine,omitempty"`
 
-	// Model The owner-CONFIGURED launch model this worker was (or will be) started with — the intent the 喚醒／更改 dialog round-trips and saves. Deliberately NOT the reported one: that is ``MemberDTO.actual_model`` / ``MonitoringSessionDTO.model``. The two must never be merged into one cell — this DTO exists to round-trip the setting, and a settings editor that displayed reported state could not save.
+	// Model The owner-CONFIGURED launch model this worker was (or will be) started with — the intent the 喚醒／更改 dialog round-trips and saves. Deliberately NOT the reported one: that is ``actual_model`` on this same DTO since T-7f28 (also ``MemberDTO.actual_model`` / ``MonitoringSessionDTO.model``) — the panel now shows both, side by side, so a change that has not taken effect is legible as pending. The two must never be merged into one cell — this DTO exists to round-trip the setting, and a settings editor that displayed reported state could not save.
 	Model *string `json:"model,omitempty"`
 
 	// Presence REAL-liveness projection on the ONE member presence vocabulary (A案 P6 — deriveLiveness; replaces the retired ``spawn_state`` closed set starting/stuck/online/stopped). Distinct from lifecycle ``status`` so a worker whose session is not actually up is not rendered as a live green row. Uses the same SSE-presence authority (hub.IsOnline) the member roster reads. Closed set: ``online`` (holding a live SSE connection), ``waking`` (not online with a fresh wake in flight — last start dispatch / row birth within the waking TTL), ``offline`` (not online and no fresh wake — a silently-failing spawn or a died-after-claim session; the FSM rescue owns recovery), ``stopping``/``stopped`` (owner-explicit stop: held down, no auto-revival), ``""`` (released; off-panel). Optional-with-default: absent reads as "" for older clients.
 	Presence *string `json:"presence,omitempty"`
+
+	// RefocusDeadline Epoch seconds by which the in-flight handover stamped in ``refocus_since`` is force-collected (``refocus_since`` + the reconcile recycle grace), 0 when none is in flight. Derived at read time, never stored. A CEILING, not a prediction: the collection fires the instant the worker answers ``report_stopped`` (T-7f28). Additive-optional.
+	RefocusDeadline *float64 `json:"refocus_deadline,omitempty"`
+
+	// RefocusOp Which owner operation opened the in-flight handover stamped in ``refocus_since``, empty when none is in flight. Same closed set as ``MemberDTO.refocus_op``. Stamped and cleared in lockstep with ``refocus_since`` (T-7f28). Additive-optional.
+	RefocusOp *string `json:"refocus_op,omitempty"`
 
 	// RefocusSince Epoch seconds of the in-flight context-handover stamp (T-32e1), 0 when none. >0 = a refocus (owner 換手 OR context-high auto-handover) is mid-flight; the FE maps 0→null. Additive-optional.
 	RefocusSince *float64 `json:"refocus_since,omitempty"`

@@ -53,7 +53,7 @@ async function expectNoOverflow(page: Page, width: number) {
       ...Array.from(
         document.querySelectorAll<HTMLElement>(".mp-field"),
       ).filter((el) =>
-        el.querySelector('[data-testid="mp-machine-transition"]'),
+        el.querySelector('[data-testid="mp-machine-pending"]'),
       ),
     ].filter((el): el is HTMLElement => el != null);
     let worstDelta =
@@ -104,7 +104,7 @@ for (const width of WIDTHS) {
     await page.setViewportSize({ width, height: 900 });
     const cmp = await mount(<MemberMachineTransitionStory />);
 
-    const transition = cmp.getByTestId("mp-machine-transition");
+    const transition = cmp.getByTestId("mp-machine-pending");
     await expect(transition).toBeVisible({ timeout: 10_000 });
     // Positive control: the block really is carrying BOTH values, so a layout that
     // passes by rendering nothing cannot pass this guard.
@@ -113,7 +113,7 @@ for (const width of WIDTHS) {
 
     const block = page
       .locator(".mp-field")
-      .filter({ has: page.getByTestId("mp-machine-transition") });
+      .filter({ has: page.getByTestId("mp-machine-pending") });
     await expectRightEdgeInside(block, width, "機器 field block");
     await expectRightEdgeInside(transition, width, "transition label");
     await expectNoOverflow(page, width);

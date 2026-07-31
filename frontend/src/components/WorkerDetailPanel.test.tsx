@@ -1278,3 +1278,105 @@ describe("WorkerDetailPanel — reported state vs configured launch intent (T-e1
     expect(saved.effort).toBe("high");
   });
 });
+
+// T-7f28 — the outsource panel had NO "changed, not applied yet" marks at all,
+// not even for 機器, which the member panel has had all along. These pin the
+// four cells it now carries, plus the no-clutter condition the owner attached
+// to the request (「但又不想要畫面太雜亂」).
+describe("WorkerDetailPanel — pending launch changes (T-7f28)", () => {
+  const CELLS = ["runtime", "model", "effort", "machine"] as const;
+
+  it("marks each cell whose reported value differs from the configured one", async () => {
+    __injectMockTask(mkTask({ id: "t-1" }));
+    __injectMockOutsourceWorker(
+      mkWorker({
+        id: "ow-1",
+        taskId: "t-1",
+        // configured (the settings dialog's round-trip values)…
+        runtime: "codex",
+        model: "Opus 4.6",
+        effort: "high",
+        desiredMachineId: "warden-mbp5",
+        // …versus what the worker's session actually reported. `machine` is the
+        // server-RESOLVED display name; `actualMachine` is a raw id, like the
+        // pin — the panel has to resolve before it compares.
+        actualRuntime: "claude",
+        actualModel: "claude-sonnet-4-5",
+        actualEffort: "low",
+        machine: "",
+        actualMachine: "warden-elsewhere",
+      }),
+    );
+
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+    expect(
+      (await findByTestId("worker-detail-runtime-pending")).textContent,
+    ).toContain("Codex");
+    expect(
+      (await findByTestId("worker-detail-model-pending")).textContent,
+    ).toContain("Opus 4.6");
+    expect(
+      (await findByTestId("worker-detail-effort-pending")).textContent,
+    ).toContain("high");
+    expect(
+      (await findByTestId("worker-detail-machine-pending")).textContent,
+    ).toContain("Warden · mbp5");
+    // The READOUTS stay on the reported side — the whole point is that the two
+    // are legible as different things at the same time.
+    expect((await findByTestId("worker-detail-runtime-value")).textContent).toBe(
+      "Claude Code",
+    );
+  });
+
+  it("adds nothing to the panel when every reported value already agrees", async () => {
+    __injectMockTask(mkTask({ id: "t-2" }));
+    __injectMockOutsourceWorker(
+      mkWorker({
+        id: "ow-1",
+        taskId: "t-2",
+        runtime: "claude",
+        actualRuntime: "claude",
+        model: "Opus 4.6",
+        actualModel: "Opus 4.6",
+        effort: "high",
+        actualEffort: "high",
+        // 🔴 The regression this case exists for: the pin is a raw id and the
+        // OBSERVED machine arrives already resolved to its display name. A
+        // comparison that forgets to resolve marks every correctly placed
+        // worker as mid-relocation.
+        desiredMachineId: "warden-mbp5",
+        machine: "Warden · mbp5",
+        actualMachine: "warden-mbp5",
+      }),
+    );
+
+    const { findByTestId, queryByTestId } = renderOfficeAt(
+      "#office/worker/ow-1",
+    );
+    await findByTestId("worker-detail-task");
+    for (const cell of CELLS) {
+      expect(queryByTestId(`worker-detail-${cell}-pending`)).toBeNull();
+    }
+  });
+
+  it("stays silent when the worker has reported nothing, rather than echoing the settings", async () => {
+    // 🔴 The reason this ticket exists. `mkWorker` leaves every actual_* blank —
+    // an unreported worker. Marking a pending change here would be a guess, and
+    // showing the configured value as the readout (the old behaviour) would be
+    // a claim that it is already running.
+    __injectMockTask(mkTask({ id: "t-3" }));
+    __injectMockOutsourceWorker(
+      mkWorker({ id: "ow-1", taskId: "t-3", runtime: "codex", model: "Opus 4.6" }),
+    );
+
+    const { findByTestId, queryByTestId } = renderOfficeAt(
+      "#office/worker/ow-1",
+    );
+    expect((await findByTestId("worker-detail-runtime-value")).textContent).toBe(
+      "—",
+    );
+    for (const cell of CELLS) {
+      expect(queryByTestId(`worker-detail-${cell}-pending`)).toBeNull();
+    }
+  });
+});

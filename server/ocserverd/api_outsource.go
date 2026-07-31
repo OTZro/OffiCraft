@@ -378,6 +378,7 @@ func (s *apiServer) HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost
 		return
 	}
 	worker.RefocusSince = nowSecs()
+	worker.RefocusOp = refocusOpRefocus
 	worker.StoppingSince = 0.0 // a new handover epoch never inherits a stale latch
 	worker.StoppedSince = 0.0
 	if err := s.dal.PutOutsourceWorker(*worker); err != nil {
@@ -421,6 +422,7 @@ func (s *apiServer) HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost(w htt
 	}
 	worker.DesiredState = DesiredStateOffline // owner-explicit stop intent (member parity)
 	worker.RefocusSince = 0.0                 // an explicit stop supersedes any in-flight handover
+	worker.RefocusOp = ""                     // …and its cause goes with it
 	if err := s.dal.PutOutsourceWorker(*worker); err != nil {
 		s.outsourceMu.Unlock()
 		internalError(w, err)

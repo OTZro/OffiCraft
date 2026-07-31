@@ -1020,6 +1020,7 @@ func (s *apiServer) stampContextHighRecycle(members []Member, now float64) {
 			continue
 		}
 		m.RefocusSince = now
+		m.RefocusOp = refocusOpContextHigh
 		if err := s.putMember(*m, triggerServer); err != nil {
 			reconcileLog("recycle: auto-stamp persist failed for %s: %v", m.ID, err)
 			continue
@@ -1059,6 +1060,7 @@ func (s *apiServer) clearRecycleMarkersOnRespawn(members []Member) {
 			continue // still online = recycle-PENDING (dump in flight), not a respawn
 		}
 		m.RefocusSince = 0.0
+		m.RefocusOp = ""
 		m.StoppedSince = 0.0
 		m.StoppingSince = 0.0
 		if err := s.putMember(*m, triggerServer); err != nil {
