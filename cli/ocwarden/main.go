@@ -468,9 +468,15 @@ func readMachineName(r CmdRunner) string {
 // non-empty. binaries carries the live ocwarden/ocagent content fingerprints
 // (fingerprint.go) the server folds into the machine rows' bin_status verdict
 // (T-5f01); claude carries the local claude CLI probe (claudeprobe.go) the server
-// folds into the machine rows' claude_* columns (T-97ee).
+// folds into the machine rows' claude_* columns (T-97ee). warden_shape carries
+// the launchd SHAPE verdict (cutover.go detectShape) the fleet reads to tell a
+// converted machine from an unconverted one (T-ff5d); it is conditional for the
+// same reason as the others — an always-present key would mean this producer can
+// never send a body that fails the server's "at least one field" check by
+// accident, but it would also mean a warden that cannot answer still asserts
+// something, and absent vs "unknown" are different claims on that wire.
 func buildTelemetryPayload(agentID, machine string, hardware map[string]any,
-	binaries map[string]string, claude map[string]any,
+	binaries map[string]string, claude map[string]any, shape string,
 	runtimes ...map[string]any) (map[string]any, error) {
 	aid := strings.TrimSpace(agentID)
 	if aid == "" {
@@ -488,6 +494,9 @@ func buildTelemetryPayload(agentID, machine string, hardware map[string]any,
 	}
 	if len(claude) > 0 {
 		payload["claude"] = claude
+	}
+	if shape != "" {
+		payload["warden_shape"] = shape
 	}
 	if len(runtimes) > 0 && len(runtimes[0]) > 0 {
 		payload["runtimes"] = runtimes[0]
@@ -567,9 +576,10 @@ func nextBackoff(cur time.Duration) time.Duration {
 // 400). binaries (nil-safe) adds the live binary fingerprints; claude
 // (nil-safe, symmetric) adds the local claude CLI probe (claudeprobe.go). A
 // fingerprints-only or probe-only cycle (e.g. a non-darwin host with no
-// hardware probes) still posts — both are first-class telemetry fields.
+// hardware probes) still posts — both are first-class telemetry fields, and so
+// is shape (nil-safe, same shape as the other two).
 func runOnce(cfg Config, collect func() map[string]any, machine func() string, post Poster,
-	binaries func() map[string]string, claude func() map[string]any,
+	binaries func() map[string]string, claude func() map[string]any, shape func() string,
 	runtimes ...func() map[string]any) ReportResult {
 	if cfg.Token == "" || cfg.ID == "" {
 		return ReportResult{Reason: "no OC_TOKEN/OC_ID"}
@@ -583,14 +593,18 @@ func runOnce(cfg Config, collect func() map[string]any, machine func() string, p
 	if claude != nil {
 		cl = claude()
 	}
+	var shp string
+	if shape != nil {
+		shp = shape()
+	}
 	var runtimeCaps map[string]any
 	if len(runtimes) > 0 && runtimes[0] != nil {
 		runtimeCaps = runtimes[0]()
 	}
-	if len(hardware) == 0 && len(bins) == 0 && len(cl) == 0 && len(runtimeCaps) == 0 {
+	if len(hardware) == 0 && len(bins) == 0 && len(cl) == 0 && shp == "" && len(runtimeCaps) == 0 {
 		return ReportResult{Reason: "no hardware probed (skip POST)"}
 	}
-	payload, err := buildTelemetryPayload(cfg.ID, machine(), hardware, bins, cl, runtimeCaps)
+	payload, err := buildTelemetryPayload(cfg.ID, machine(), hardware, bins, cl, shp, runtimeCaps)
 	if err != nil {
 		return ReportResult{Reason: "build rejected: " + err.Error()}
 	}
@@ -617,7 +631,7 @@ func runOnce(cfg Config, collect func() map[string]any, machine func() string, p
 // ctx the single collect->POST cycle runs and the trailing sleep elapses exactly as
 // before (byte-identical wire behaviour; tests inject an instant sleep seam).
 func run(ctx context.Context, cfg Config, collect func() map[string]any, machine func() string, post Poster,
-	binaries func() map[string]string, claude func() map[string]any,
+	binaries func() map[string]string, claude func() map[string]any, shape func() string,
 	sleep func(context.Context, time.Duration) bool, iterations int, out io.Writer,
 	runtimes ...func() map[string]any) int {
 
@@ -630,7 +644,7 @@ func run(ctx context.Context, cfg Config, collect func() map[string]any, machine
 		if ctx.Err() != nil {
 			return 0 // cancelled between cycles → clean exit
 		}
-		result := runOnce(cfg, collect, machine, post, binaries, claude, runtimes...)
+		result := runOnce(cfg, collect, machine, post, binaries, claude, shape, runtimes...)
 		wait := backoff
 		if result.Posted || result.Status == 0 {
 			backoff = backoffStart
@@ -776,9 +790,28 @@ func realMain(argv []string, env func(string) string, out io.Writer) int {
 	collect := func() map[string]any { return collectHardware(runner, runtime.GOOS) }
 	machine := func() string { return readMachineName(runner) }
 	post := httpPoster(&http.Client{Timeout: httpTimeout}, cfg.Base, cfg.Token)
+	// The install paths this machine's launchd job is (or would be) wired to.
+	// Resolved ONCE here because two heartbeat signals and the one-shot cutover
+	// hook below all need the anchor path, and resolvePaths is the single owner of
+	// that derivation. A resolve fault (no HOME, no OC_TOKEN, malformed namespace)
+	// leaves anchorPath empty, which every consumer reads as "cannot say".
+	var wardenPathsOrNil *wardenPaths
+	anchorPath := ""
+	if exe, err := os.Executable(); err == nil {
+		if p, perr := resolvePaths(renv, exe, os.Getuid()); perr == nil {
+			wardenPathsOrNil = &p
+			anchorPath = p.anchorPath
+		}
+	}
 	// The live-binary fingerprints riding each heartbeat (T-5f01) — cached by
 	// stat identity, so most cycles cost two stats, not two multi-MB hashes.
-	fingerprints := newBinFingerprinter(os.Executable)
+	// Since T-ff5d the never-replaced TCC anchor is fingerprinted alongside them.
+	fingerprints := newBinFingerprinter(os.Executable, anchorPath)
+	// Which launchd SHAPE this warden is actually running under (T-ff5d), read
+	// from the PARENT process every cycle. Without it the fleet cannot tell a
+	// machine that completed the legacy->anchor migration from one that never
+	// started it — the whole point of shipping the migration.
+	wardenShapeOf := newShapeReporter(anchorPath, os.Getppid())
 	// The local claude CLI probe riding the heartbeat (T-97ee) — TTL-cached
 	// (claudeprobe.go), so most cycles cost nothing; the tokfile-wrapped env is
 	// NOT needed here (the probe reads HOME/OC_CLAUDE_BIN, never OC_TOKEN).
@@ -821,12 +854,8 @@ func realMain(argv []string, env func(string) string, out io.Writer) int {
 	// immediately — the conversion does not wait for a launchd restart. Skipped on
 	// --once (a test hook, never a launchd job) and when there is no token to hand
 	// the installer. Best-effort by contract: it never fails the warden.
-	if cfg.Token != "" && iters == 0 {
-		if exe, err := os.Executable(); err == nil {
-			if p, perr := resolvePaths(renv, exe, os.Getuid()); perr == nil {
-				maybeStartAnchorCutover(p, os.Getppid(), logf)
-			}
-		}
+	if cfg.Token != "" && iters == 0 && wardenPathsOrNil != nil {
+		maybeStartAnchorCutover(*wardenPathsOrNil, os.Getppid(), logf)
 	}
 
 	if cfg.Token != "" && cfg.ID != "" && iters == 0 {
@@ -868,7 +897,7 @@ func realMain(argv []string, env func(string) string, out io.Writer) int {
 		return collectRuntimeCapabilities(env, runner, claudeProbe.collect())
 	}
 	rc := run(ctx, cfg, collect, machine, post, fingerprints.collect, claudeProbe.collect,
-		sleepUntil, iters, out, runtimeProbe)
+		wardenShapeOf, sleepUntil, iters, out, runtimeProbe)
 
 	// Graceful shutdown: the root ctx is now cancelled — either a signal fired, or
 	// run() returned on its own (--once, or a mis-wire). Stop relaying signals, then

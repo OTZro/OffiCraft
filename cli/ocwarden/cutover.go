@@ -273,6 +273,39 @@ func detectShape(ops cutoverOps, ppid int, anchorPath string) wardenShape {
 	return shapeUnknown
 }
 
+// newShapeReporter builds the 30s heartbeat's warden-shape collector: the same
+// detectShape verdict the startup hook computes for its own go/no-go decision,
+// re-read once per cycle so the FLEET can tell a converted machine from an
+// unconverted one. Before this the verdict existed only inside one process's
+// startup log line, which is why nothing outside the machine could say whether
+// the migration had landed.
+//
+// It goes through newCutoverOps like every other reader in this file, so the
+// test binary's rebound seam covers it too — a heartbeat test can never reach a
+// real `ps`.
+//
+// Re-read rather than cached ON PURPOSE. The cost is one `ps` per cycle, next to
+// the five probes collectHardware already shells out for, and a cached verdict
+// would have to answer for the case this file exists to create: the conversion
+// boots the job out and launchd restarts it, so the process that reports is
+// never the one that cached.
+//
+// An empty anchorPath means the install paths could not be resolved, and the
+// answer there is `unknown`, NOT an omitted field and NOT a guess. Omission is
+// reserved for builds that predate this release ("this machine has not received
+// it yet"), so a build that HAS it must never look like one that has not. And a
+// guess would be actively dangerous: detectShape compares the parent exe against
+// anchorPath, so an empty one turns every launchd-parented warden — including a
+// correctly converted one — into a `legacy` verdict.
+func newShapeReporter(anchorPath string, ppid int) func() string {
+	return func() string {
+		if anchorPath == "" {
+			return string(shapeUnknown)
+		}
+		return string(detectShape(newCutoverOps(), ppid, anchorPath))
+	}
+}
+
 // anchorPreflight proves the anchor is present, executable and not quarantined,
 // with ZERO side effects: `officraft <any arg>` prints usage and exits 2 (see
 // cli/officraft/main.go realMain) — it forks nothing. Any other outcome (missing

@@ -106,7 +106,7 @@ func TestFullChain_MockShellToHTTPServer(t *testing.T) {
 	claude := func() map[string]any {
 		return map[string]any{"version": "2.1.211", "cred_file": true, "sub_readable": true, "keychain": false}
 	}
-	res := runOnce(cfg, collect, machine, post, binaries, claude)
+	res := runOnce(cfg, collect, machine, post, binaries, claude, nil)
 
 	if !res.Posted || res.Status != 200 {
 		t.Fatalf("runOnce = %+v, want posted 200", res)
@@ -170,7 +170,7 @@ func TestFullChain_MockShellToHTTPServer(t *testing.T) {
 // an old-style heartbeat is byte-identical to before the probe existed.
 func TestBuildTelemetryPayload_ClaudeField(t *testing.T) {
 	probe := map[string]any{"version": "2.1.211", "cred_file": true, "sub_readable": false, "keychain": true}
-	payload, err := buildTelemetryPayload("agent-1", "m", map[string]any{"cpu_pct": 1.0}, nil, probe)
+	payload, err := buildTelemetryPayload("agent-1", "m", map[string]any{"cpu_pct": 1.0}, nil, probe, "")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -179,14 +179,14 @@ func TestBuildTelemetryPayload_ClaudeField(t *testing.T) {
 		t.Fatalf("claude = %v, want the probe map", payload["claude"])
 	}
 
-	payload, err = buildTelemetryPayload("agent-1", "m", map[string]any{"cpu_pct": 1.0}, nil, map[string]any{})
+	payload, err = buildTelemetryPayload("agent-1", "m", map[string]any{"cpu_pct": 1.0}, nil, map[string]any{}, "")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 	if _, present := payload["claude"]; present {
 		t.Fatalf("empty probe must omit the claude field, got %v", payload["claude"])
 	}
-	payload, err = buildTelemetryPayload("agent-1", "m", map[string]any{"cpu_pct": 1.0}, nil, nil)
+	payload, err = buildTelemetryPayload("agent-1", "m", map[string]any{"cpu_pct": 1.0}, nil, nil, "")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -207,13 +207,89 @@ func TestRunOnce_ClaudeOnlyCyclePosts(t *testing.T) {
 		func() map[string]any { return map[string]any{} },
 		func() string { return "m" },
 		post, nil,
-		func() map[string]any { return map[string]any{"cred_file": false, "sub_readable": false} })
+		func() map[string]any { return map[string]any{"cred_file": false, "sub_readable": false} }, nil)
 	if !res.Posted {
 		t.Fatalf("claude-only cycle must post, got %+v", res)
 	}
 	cl, _ := gotBody["claude"].(map[string]any)
 	if cl["cred_file"] != false {
 		t.Fatalf("claude fold = %v, want the probe", gotBody["claude"])
+	}
+}
+
+// TestRunOnce_HeartbeatCarriesTheWardenShape drives the REAL collector
+// (newShapeReporter -> detectShape) over the faked cutover seam and reads the
+// verdict off the payload the poster would put on the wire — the whole point of
+// T-ff5d being that the fleet, not just one machine's startup log, can tell a
+// converted machine from an unconverted one.
+//
+// The expected values are LITERALS, not the shape consts: the consts are the
+// producer's own vocabulary, and a test that compares the producer to itself
+// would stay green if someone renamed the wire value the server validates
+// against. Same for the "warden_shape" key.
+func TestRunOnce_HeartbeatCarriesTheWardenShape(t *testing.T) {
+	p := testPaths()
+	for _, tc := range []struct {
+		name      string
+		parentExe string
+		want      string
+	}{
+		{"launchd runs the anchor", p.anchorPath, "anchor"},
+		{"launchd runs ocwarden directly", "/sbin/launchd", "legacy"},
+		{"parent is neither", "/bin/zsh", "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeCutover()
+			f.files["__ppid_exe__"] = tc.parentExe
+			defer swapCutoverOps(t, f)()
+
+			var gotBody map[string]any
+			res := runOnce(Config{Base: "x", Token: "t", ID: "i"},
+				func() map[string]any { return map[string]any{"cpu_pct": 1.0} },
+				func() string { return "m" },
+				func(_ string, payload map[string]any) (int, map[string]any) {
+					gotBody = payload
+					return 200, nil
+				}, nil, nil, newShapeReporter(p.anchorPath, 4242))
+			if !res.Posted {
+				t.Fatalf("runOnce = %+v, want posted", res)
+			}
+			if got := gotBody["warden_shape"]; got != tc.want {
+				t.Fatalf("warden_shape = %v, want %q; body = %v", got, tc.want, gotBody)
+			}
+		})
+	}
+
+	// A warden that reports no shape at all must OMIT the key. Absent and
+	// "unknown" are different claims on this wire ("this build cannot report a
+	// shape" vs "this build ran and could not tell"), and the server is
+	// forbidden from inferring one from the other — so the producer must never
+	// collapse them either.
+	var gotBody map[string]any
+	runOnce(Config{Base: "x", Token: "t", ID: "i"},
+		func() map[string]any { return map[string]any{"cpu_pct": 1.0} },
+		func() string { return "m" },
+		func(_ string, payload map[string]any) (int, map[string]any) {
+			gotBody = payload
+			return 200, nil
+		}, nil, nil, nil)
+	if _, present := gotBody["warden_shape"]; present {
+		t.Fatalf("no shape collector must omit the key, got %v", gotBody["warden_shape"])
+	}
+}
+
+// TestNewShapeReporter_UnresolvedAnchorReportsUnknownNeverLegacy is the
+// dangerous-default guard. detectShape decides `legacy` from "the parent is
+// launchd AND it is not the anchor", so an empty anchorPath — the paths could
+// not be resolved — would make every launchd-parented warden, INCLUDING a
+// correctly converted one, report `legacy` and invite a second migration.
+func TestNewShapeReporter_UnresolvedAnchorReportsUnknownNeverLegacy(t *testing.T) {
+	f := newFakeCutover()
+	f.files["__ppid_exe__"] = "/sbin/launchd"
+	defer swapCutoverOps(t, f)()
+
+	if got := newShapeReporter("", 1)(); got != "unknown" {
+		t.Fatalf("shape with no anchor path = %q, want %q", got, "unknown")
 	}
 }
 
@@ -508,7 +584,7 @@ func TestRunOnce_SkipsWhenNoToken(t *testing.T) {
 		func(string, map[string]any) (int, map[string]any) {
 			t.Fatal("post must not be called without token")
 			return 0, nil
-		}, nil, nil)
+		}, nil, nil, nil)
 	if res.Posted || res.Status != 0 {
 		t.Fatalf("expected skip, got %+v", res)
 	}
@@ -521,7 +597,7 @@ func TestRunOnce_SkipsEmptyHardware(t *testing.T) {
 		func(string, map[string]any) (int, map[string]any) {
 			t.Fatal("post must not be called with empty hardware")
 			return 0, nil
-		}, nil, nil)
+		}, nil, nil, nil)
 	if res.Reason != "no hardware probed (skip POST)" {
 		t.Fatalf("expected empty-hw skip, got %+v", res)
 	}
@@ -534,7 +610,7 @@ func TestRunLoop_Once(t *testing.T) {
 		func() map[string]any { return map[string]any{"cpu_pct": 5.0} },
 		func() string { return "m" },
 		func(string, map[string]any) (int, map[string]any) { posts++; return 200, nil },
-		nil, nil,
+		nil, nil, nil,
 		func(context.Context, time.Duration) bool { slept++; return true },
 		1, io.Discard)
 	if rc != 0 || posts != 1 || slept != 1 {
@@ -611,7 +687,7 @@ func TestRun_CtxCancelStopsForeverLoop(t *testing.T) {
 			func() map[string]any { return map[string]any{"cpu_pct": 5.0} },
 			func() string { return "m" },
 			func(string, map[string]any) (int, map[string]any) { atomic.AddInt32(&posts, 1); return 200, nil },
-			nil, nil,
+			nil, nil, nil,
 			func(c context.Context, d time.Duration) bool { return sleepUntil(c, d) },
 			0, io.Discard)
 		done <- rc

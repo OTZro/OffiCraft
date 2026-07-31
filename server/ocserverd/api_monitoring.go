@@ -429,10 +429,10 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	if body.RateLimits == nil && body.Tokens == nil && body.Hardware == nil &&
 		body.Binaries == nil && body.Claude == nil && body.Cost == nil &&
 		body.Effort == nil && body.Runtime == nil && body.Runtimes == nil &&
-		body.SelfUpdate == nil && body.CommandResult == nil {
+		body.SelfUpdate == nil && body.CommandResult == nil && body.WardenShape == nil {
 		writeError(w, http.StatusBadRequest,
 			"rate_limits, tokens, hardware, binaries, claude, cost, effort, runtime, runtimes, "+
-				"self_update or command_result is required")
+				"self_update, command_result or warden_shape is required")
 		return
 	}
 	asObject := func(v any, name string) (map[string]any, bool) {
@@ -514,6 +514,22 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 		}
 		runtime = &text
 	}
+	// warden_shape is validated exactly like `runtime` above: a closed vocabulary
+	// checked in the HANDLER, so a value outside it is the flat 400 the spec
+	// promises and never a decoder 422. Refusing it is safe in a way refusing a
+	// nested hardware key would not be — this is a top-level scalar with three
+	// legal values that only our own warden produces, so a rejection names a
+	// producer bug rather than nulling a whole fleet's heartbeat.
+	var wardenShape *string
+	if body.WardenShape != nil {
+		text, isStr := body.WardenShape.(string)
+		if !isStr || !ValidWardenShape(text) {
+			writeError(w, http.StatusBadRequest,
+				"warden_shape must be 'anchor', 'legacy' or 'unknown'")
+			return
+		}
+		wardenShape = &text
+	}
 	var cost *float64
 	if body.Cost != nil {
 		n, isNum := body.Cost.(float64)
@@ -565,6 +581,13 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	}
 	if body.Binaries != nil {
 		entry["binaries"] = binaries
+	}
+	// Partial-merge like every field beside it: a heartbeat that carries no
+	// warden_shape leaves the stored verdict alone. Clearing it would turn every
+	// command_result receipt — which carries no shape — into "this build does not
+	// report a shape", i.e. the absent case, which means something else entirely.
+	if wardenShape != nil {
+		entry["warden_shape"] = *wardenShape
 	}
 	if body.Claude != nil {
 		entry["claude"] = claude
@@ -640,6 +663,7 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 		Effort:        entryStr(entry, "effort"),
 		SelfUpdate:    entryObj(entry, "self_update"),
 		CommandResult: entryObj(entry, "command_result"),
+		WardenShape:   entryStr(entry, "warden_shape"),
 		TS:            entry["ts"].(float64),
 	})
 }
@@ -1234,6 +1258,7 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 			ClaudeCredSource:    claudeCredSource,
 			ClaudeSubReadable:   claudeSubReadable,
 			RuntimeCapabilities: s.machineRuntimeCapabilities(host),
+			WardenShape:         s.machineWardenShape(host),
 			// Honest-empty, never null: the spec types this as a plain array,
 			// and "no key is broken" is a real answer that every row can give
 			// — including one with no sample at all, which has no key that

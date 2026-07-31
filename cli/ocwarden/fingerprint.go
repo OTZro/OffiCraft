@@ -1,8 +1,9 @@
 // fingerprint.go — the heartbeat's binary content fingerprints (T-5f01).
 //
 // Every 30s telemetry cycle rides an extra `binaries` field: the 12-hex
-// sha256 prefixes of the LIVE on-disk ocwarden (our own executable) and its
-// sibling ocagent. The server compares them against the hashes of its own
+// sha256 prefixes of the LIVE on-disk ocwarden (our own executable), its
+// sibling ocagent, and the TCC identity anchor officraft (T-ff5d — the one
+// binary self-update must never replace). The server compares them against the hashes of its own
 // embedded prebuilts (the exact bytes /api/{warden,agent}/binary serves and
 // the self-update swaps in verbatim) to render the machine table's
 // "current"/"stale" verdict. Deliberately CONTENT hashes, never an embedded
@@ -45,11 +46,22 @@ type binFingerprinter struct {
 // current: ocwarden = our own executable (symlinks resolved), ocagent = the
 // home sibling (selfUpdateAgentPath — unconditional, so a not-yet-populated
 // sibling reads as absent until the first self-update tick materializes it).
-func newBinFingerprinter(executable func() (string, error)) *binFingerprinter {
+//
+// officraft is the TCC identity anchor (T-ff5d), and it is here for the opposite
+// reason to the other two: self-update deliberately never replaces it (replacing
+// its bytes voids the machine's TCC grants), so its fingerprint is the only way
+// to see WHICH anchor build a machine is actually running under. anchorPath is
+// passed in rather than re-derived from the executable because resolvePaths
+// already owns that derivation (install.go) — a second copy here would be a
+// hand-mirrored path of exactly the kind this module has been bitten by. An
+// empty anchorPath (paths unresolvable) is skipped by collect like any other
+// blank entry: absent reads as unknown, never as a verdict.
+func newBinFingerprinter(executable func() (string, error), anchorPath string) *binFingerprinter {
 	return &binFingerprinter{
 		paths: map[string]string{
-			"ocwarden": resolveSelfExe(executable),
-			"ocagent":  selfUpdateAgentPath(executable),
+			"ocwarden":  resolveSelfExe(executable),
+			"ocagent":   selfUpdateAgentPath(executable),
+			"officraft": anchorPath,
 		},
 		stat:     os.Stat,
 		readFile: os.ReadFile,

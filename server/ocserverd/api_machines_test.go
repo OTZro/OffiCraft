@@ -542,6 +542,86 @@ func TestMachineBinStatus(t *testing.T) {
 	})
 }
 
+// TestMachineWardenShape is the read-back twin of TestMachineBinStatus above,
+// and the contrast with it is the contract: bin_status is COMPUTED here from two
+// sources (what the machine reported vs what this server embeds), while
+// warden_shape is REPORTED — only the warden's own process can read its parent,
+// so the server has nothing to derive it from and must pass it through.
+//
+// The case that matters most is the last one: absent must stay absent. A missing
+// field means "this warden build predates the anchor-cutover release"; the
+// reported "unknown" means "the new build ran and could not tell". Collapsing
+// either into the other would make the migration's own progress unreadable.
+func TestMachineWardenShape(t *testing.T) {
+	report := func(s *apiServer, id string, entry map[string]any) {
+		s.telemetry.Set(id, entry)
+	}
+	shape := func(v *string) string {
+		if v == nil {
+			return "<nil>"
+		}
+		return *v
+	}
+
+	t.Run("a machine that has never reported one reads nil", func(t *testing.T) {
+		s := newMachinesTestServer(t)
+		if got := s.machineWardenShape("m-box"); got != nil {
+			t.Fatalf("shape = %s, want nil (no telemetry entry)", shape(got))
+		}
+		// An entry with other fields but no shape is the old-warden case, and it
+		// must NOT read as "unknown".
+		report(s, "m-box", map[string]any{"binaries": map[string]any{"ocwarden": "aaa111"}})
+		if got := s.machineWardenShape("m-box"); got != nil {
+			t.Fatalf("shape = %s, want nil (reported no shape)", shape(got))
+		}
+	})
+
+	for _, want := range []string{"anchor", "legacy", "unknown"} {
+		t.Run("a reported "+want+" passes through verbatim", func(t *testing.T) {
+			s := newMachinesTestServer(t)
+			report(s, "m-box", map[string]any{"warden_shape": want})
+			if got := s.machineWardenShape("m-box"); got == nil || *got != want {
+				t.Fatalf("shape = %s, want %q", shape(got), want)
+			}
+		})
+	}
+
+	t.Run("the machine list row carries the reported shape", func(t *testing.T) {
+		s := newMachinesTestServer(t)
+		putTestMember(t, s, Member{
+			ID: "m-box", Name: "box", Kind: KindWarden, Effort: "medium",
+			DesiredState: DesiredStateOffline, RosterStatus: RosterStatusActive,
+		})
+		report(s, "m-box", map[string]any{"warden_shape": "legacy"})
+		rec := httptest.NewRecorder()
+		s.HandleListMachinesApiMachinesGet(rec, httptest.NewRequest("GET", "/api/machines", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list machines: %d %s", rec.Code, rec.Body.String())
+		}
+		var rows []map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		byID := map[string]map[string]any{}
+		for _, row := range rows {
+			byID[row["machine_id"].(string)] = row
+		}
+		if got := byID["m-box"]["warden_shape"]; got != "legacy" {
+			t.Fatalf("m-box warden_shape = %v, want legacy", got)
+		}
+		// The seeded server-self warden has never reported → the key is on the
+		// wire and null, NOT "unknown".
+		row, listed := byID[ServerSelfHost]
+		if !listed {
+			t.Fatalf("server-self row missing from %v", byID)
+		}
+		if got, present := row["warden_shape"]; !present || got != nil {
+			t.Fatalf("server-self warden_shape = %v (present=%v), want an explicit null",
+				got, present)
+		}
+	})
+}
+
 func TestMachineClaudeInfo(t *testing.T) {
 	report := func(s *apiServer, id string, probe map[string]any) {
 		s.telemetry.Set(id, map[string]any{"claude": probe})

@@ -181,6 +181,16 @@ type machineDTO struct {
 	ClaudeCredSource    *string                         `json:"claude_cred_source"`
 	ClaudeSubReadable   *bool                           `json:"claude_sub_readable"`
 	RuntimeCapabilities map[string]RuntimeCapabilityDTO `json:"runtime_capabilities"`
+	// WardenShape is which launchd shape this machine's warden REPORTED it is
+	// running under ("anchor" | "legacy" | "unknown"), passed through verbatim.
+	//
+	// Unlike BinStatus next door, this is NOT computed here and must never be:
+	// only the reporting process can read its own parent, so the server has no
+	// second source to derive or cross-check it from. nil means the machine has
+	// never reported one — a warden build older than the anchor-cutover release —
+	// which is a DIFFERENT fact from the reported "unknown" (that build ran and
+	// could not tell). Neither is ever turned into the other.
+	WardenShape *string `json:"warden_shape"`
 }
 
 type machineOnboardResultDTO struct {
@@ -320,7 +330,10 @@ type agentTelemetryDTO struct {
 	Effort        *string        `json:"effort"`
 	SelfUpdate    map[string]any `json:"self_update"`
 	CommandResult map[string]any `json:"command_result"`
-	TS            float64        `json:"ts"`
+	// WardenShape echoes the stored launchd-shape verdict so the POST response
+	// round-trips what was just merged; nil when this reporter has never sent one.
+	WardenShape *string `json:"warden_shape"`
+	TS          float64 `json:"ts"`
 }
 
 type monitoringSessionDTO struct {
@@ -441,6 +454,10 @@ type monitoringMachineDTO struct {
 	// for "shown as if current" is to mark it, not to delete it.
 	RuntimeCapabilitiesTS    *float64 `json:"runtime_capabilities_ts"`
 	RuntimeCapabilitiesStale *bool    `json:"runtime_capabilities_stale"`
+	// WardenShape mirrors machineDTO.WardenShape (the registry row's reported
+	// launchd shape) — both tables render it, the same reason bin_status and the
+	// claude_* columns are mirrored. Reported, never computed; nil stays nil.
+	WardenShape *string `json:"warden_shape"`
 }
 
 type monitoringAccountDTO struct {

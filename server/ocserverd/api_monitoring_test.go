@@ -183,6 +183,98 @@ func TestHandleIngestTelemetry_ClaudeProbeFoldAndEcho(t *testing.T) {
 	}
 }
 
+// TestHandleIngestTelemetry_WardenShapeFoldsEchoesAndValidates covers the ingest
+// half of the anchor-cutover signal (T-ff5d): the warden's launchd SHAPE verdict
+// is a closed three-state enum, and it is the only way the fleet can tell a
+// converted machine from an unconverted one.
+func TestHandleIngestTelemetry_WardenShapeFoldsEchoesAndValidates(t *testing.T) {
+	// A SHAPE-ONLY heartbeat must be a valid report. The "at least one field"
+	// check is hand-enumerated, so a new field that is not listed there turns the
+	// very heartbeat this ticket adds into a 400.
+	for _, want := range []string{"anchor", "legacy", "unknown"} {
+		t.Run("a "+want+" heartbeat lands and echoes", func(t *testing.T) {
+			api := &apiServer{telemetry: newMemStore(), hub: NewHub()}
+			rec := doIngestTelemetry(api, "m-1", "m-1", `{"warden_shape": "`+want+`"}`)
+			if rec.Code != 200 {
+				t.Fatalf("shape-only ingest: %d %s", rec.Code, rec.Body.String())
+			}
+			if got := api.telemetry.Get("m-1")["warden_shape"]; got != want {
+				t.Fatalf("stored warden_shape = %v, want %q", got, want)
+			}
+			if !strings.Contains(rec.Body.String(), `"warden_shape":"`+want+`"`) {
+				t.Fatalf("echo must round-trip the shape: %s", rec.Body.String())
+			}
+		})
+	}
+
+	// Outside the vocabulary is a FLAT 400 — the handler's own refusal, never the
+	// decoder's 422. The distinction is the one spec/lifecycle.md §3 pins for
+	// every other permissive scalar here, and a conformance suite asserting the
+	// wrong one either goes red on correct behaviour or green on a regression.
+	for _, value := range []string{`"modern"`, `"ANCHOR"`, `""`, `5`, `true`, `["anchor"]`} {
+		api := &apiServer{telemetry: newMemStore(), hub: NewHub()}
+		body := `{"warden_shape": ` + value + `}`
+		rec := doIngestTelemetry(api, "m-1", "m-1", body)
+		if rec.Code != 400 {
+			t.Errorf("%s = %d, want a flat 400", body, rec.Code)
+		}
+		if got := api.telemetry.Get("m-1"); got != nil {
+			t.Errorf("%s stored %v; a refused value must not land", body, got)
+		}
+	}
+
+	// null is not a state. It decodes to an absent field, so a body whose only
+	// key is null is the all-absent 400 — NOT a stored "unknown". The server
+	// never manufactures a verdict out of silence.
+	api := &apiServer{telemetry: newMemStore(), hub: NewHub()}
+	rec := doIngestTelemetry(api, "m-1", "m-1", `{"warden_shape": null}`)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "is required") {
+		t.Errorf(`{"warden_shape": null} = %d %s, want the all-absent 400`,
+			rec.Code, rec.Body.String())
+	}
+
+	// PARTIAL MERGE. Most heartbeats on this endpoint carry no shape at all (a
+	// command_result receipt, an agent's context report), and none of them may
+	// erase the machine's verdict — an erased one reads as "this build does not
+	// report a shape", which is a different and false claim.
+	merge := &apiServer{telemetry: newMemStore(), hub: NewHub()}
+	if rec := doIngestTelemetry(merge, "m-2", "m-2", `{"warden_shape": "anchor"}`); rec.Code != 200 {
+		t.Fatalf("seed ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doIngestTelemetry(merge, "m-2", "m-2", `{"hardware": {"cpu_pct": 1}}`); rec.Code != 200 {
+		t.Fatalf("second ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := merge.telemetry.Get("m-2")["warden_shape"]; got != "anchor" {
+		t.Fatalf("warden_shape = %v after a shape-less heartbeat, want it to survive", got)
+	}
+}
+
+// TestGetMonitoring_WardenShapeIsReportedNeverInvented is the monitoring-fold
+// half of the read-back. The machines table renders this column beside
+// bin_status, and the two are derived in opposite ways: bin_status is the
+// server's own comparison, warden_shape is whatever the machine said. A machine
+// that has said nothing must therefore leave the cell null rather than pick up
+// the "unknown" state, which means something the server cannot know.
+func TestGetMonitoring_WardenShapeIsReportedNeverInvented(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	seedRegisteredMachine(t, s, "m-converted")
+	seedRegisteredMachine(t, s, "m-silent")
+	if rec := doIngestTelemetry(s, "m-converted", "m-converted",
+		`{"warden_shape": "anchor"}`); rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+
+	if got := machineRow(t, s, "m-converted")["warden_shape"]; got != "anchor" {
+		t.Fatalf("m-converted warden_shape = %v, want anchor", got)
+	}
+	row := machineRow(t, s, "m-silent")
+	if got, present := row["warden_shape"]; !present || got != nil {
+		t.Fatalf("m-silent warden_shape = %v (present=%v), want an explicit null — "+
+			"a machine that never reported has not reported \"unknown\"", got, present)
+	}
+}
+
 // TestHandleIngestTelemetry_WrongTypedBlockStatusTable is the executable copy of
 // the refusal-code table in spec/lifecycle.md §3 (and its restatement in
 // conformance/CLAUDE.md). That doc line used to say a wrong-typed telemetry
