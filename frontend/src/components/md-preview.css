@@ -175,7 +175,17 @@
  * 160px is measured, so a header that changes height silently invalidates it —
  * the short-viewport guards in image-zoom-pan.ct.spec.tsx are what turn that
  * drift into a red test instead of a second scrollbar. */
-.md-preview__image-wrap { display: grid; place-items: center; min-height: min(360px, 70vh, calc(100vh - 160px)); max-height: min(70vh, calc(100vh - 160px)); overflow: auto; overscroll-behavior: contain; background: var(--color-backdrop); }
+/* `touch-action: pan-x pan-y` is the pinch half of T-043e, and it is NOT a
+ * synonym for `manipulation` (which still hands pinch-zoom to the UA). Listing
+ * only the two pan values tells the compositor this element takes one-finger
+ * panning but not the pinch — so a two-finger spread stops being page zoom
+ * (which scales the VISUAL viewport and blows up this layout-viewport-fixed
+ * overlay, header and all) and reaches the component's own touch handlers,
+ * which turn it into the app's zoom state.
+ * ⚠️ Do NOT "simplify" this to `manipulation`/`auto`, and do NOT reach for
+ * `user-scalable=no` in index.html instead — that fixes the overlay by taking
+ * page zoom away from the entire app. */
+.md-preview__image-wrap { display: grid; place-items: center; min-height: min(360px, 70vh, calc(100vh - 160px)); max-height: min(70vh, calc(100vh - 160px)); overflow: auto; overscroll-behavior: contain; touch-action: pan-x pan-y; background: var(--color-backdrop); }
 .md-preview__image-wrap:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
 /* Grab only when there is somewhere to go: at 100% the image fits the frame
  * and the cursor must not promise a drag that does nothing. */
