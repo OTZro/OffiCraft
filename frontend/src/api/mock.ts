@@ -19,7 +19,6 @@ import type {
   OnboardResultView,
   DeleteResultView,
   UninstallResultView,
-  UpgradeResultView,
   BootstrapResultView,
   TeardownHereResultView,
   MachineView,
@@ -72,7 +71,6 @@ import type {
   WireLessons,
   WireOnboardResult,
   WireDeleteResult,
-  WireUpgradeResult,
   WireUninstallResult,
   WireMachine,
 } from "./wire";
@@ -89,7 +87,6 @@ import {
   toOnboardResult,
   toDeleteResult,
   toUninstallResult,
-  toUpgradeResult,
   toMachine,
   toServerSettings,
 } from "./mappers";
@@ -207,9 +204,9 @@ const MOCK_WIRE_MEMBERS: WireMember[] = [
 // ── Fixture: per-machine binary-freshness verdicts (bin_status). Mirrors the
 // server comparing warden-heartbeat fingerprints against its embedded
 // prebuilts: the seed remote warden last reported OLD fingerprints before it
-// went offline (→ "stale", the upgrade affordance's demo face); server-self
-// never reported any (→ absent = honest null "—"). upgradeMachine converges a
-// dispatched row to "current", mirroring the real next-heartbeat flip.
+// went offline (→ "stale"); server-self never reported any (→ absent = honest
+// null "—"). Nothing on the client converges this any more: the one-click
+// upgrade affordance is gone, and a machine self-updates on its own.
 const mockBinStatus = new Map<string, "current" | "stale">([
   ["warden-mbp5", "stale"],
 ]);
@@ -223,6 +220,16 @@ const mockBinStatus = new Map<string, "current" | "stale">([
 const mockWardenShape = new Map<string, "anchor" | "legacy" | "unknown">([
   [MOCK_SERVER_SELF_ID, "anchor"],
 ]);
+
+// ── Fixture: per-machine cutover-effect verdict (cutover_effect). Reported like
+// the shape above, and deliberately NOT derived from it — the pair being able to
+// disagree ("anchor" + "not_effective") is the whole reason the second field
+// exists, and it is the state the incident actually had. server-self therefore
+// carries that pair; the seed remote warden reports nothing (→ absent).
+const mockCutoverEffect = new Map<
+  string,
+  "effective" | "not_effective" | "unproven"
+>([[MOCK_SERVER_SELF_ID, "not_effective"]]);
 
 // ── Fixture: per-machine claude CLI probe columns (T-97ee). Mirrors the
 // server synthesizing the warden heartbeat's `claude` probe into the machine
@@ -244,13 +251,6 @@ const mockClaudeInfo = new Map<
   ],
 ]);
 
-// How long a mock one-click upgrade takes to converge (verdict → "current").
-// Mirrors the real gap between the dispatched `update` command and the next
-// heartbeat that reports the swapped fingerprints (~seconds, not instant).
-const MOCK_UPGRADE_CONVERGE_MS = 5000;
-// Pending converge timers, so __resetMock can cancel them — a reset must not
-// let an in-flight fake upgrade mutate the freshly-reseeded fixture later.
-const upgradeConvergeTimers = new Set<ReturnType<typeof setTimeout>>();
 
 // ── Fixture: monitoring telemetry, in WIRE shape (mirrors /api/monitoring).
 // HONEST: one real session (Mira, offline) + one real machine (mbp5, 1 agent);
@@ -2520,6 +2520,7 @@ export const mockApi: Api = {
           is_self: m.id === MOCK_SERVER_SELF_ID,
           bin_status: mockBinStatus.get(m.id) ?? null,
           warden_shape: mockWardenShape.get(m.id) ?? null,
+          cutover_effect: mockCutoverEffect.get(m.id) ?? null,
           // claude probe columns (T-97ee): same honest-null contract as
           // bin_status — no probe fixture reads as the all-null unknown.
           claude_version: mockClaudeInfo.get(m.id)?.version ?? null,
@@ -2636,35 +2637,6 @@ export const mockApi: Api = {
       removed: true,
     };
     return toDeleteResult(wire);
-  },
-
-  async upgradeMachine(memberId: string): Promise<UpgradeResultView> {
-    // Fake one-click upgrade — mirror the real fire-and-forget semantics:
-    // `dispatched` honestly reflects the warden's live online flag (TRUE →
-    // the `update` command would ride its SSE downstream; FALSE → offline,
-    // nothing commanded). Convergence is NOT instant (the real flip arrives
-    // on the warden's NEXT heartbeat after the swap): a dispatched upgrade
-    // turns the verdict "current" after a short delay and then fans a
-    // "machine" topic so useMachines refetches and the row heals — exactly
-    // the reconcile-by-refetch path the real SSE downlink drives. This keeps
-    // the UI's "升級中" latch observable in mock mode instead of collapsing
-    // it into the same tick. Nothing else changes (no roster write).
-    const w = wireMembers.find((m) => m.id === memberId);
-    const dispatched = w?.presence === "online";
-    if (w && dispatched) {
-      const timer = setTimeout(() => {
-        upgradeConvergeTimers.delete(timer);
-        mockBinStatus.set(memberId, "current");
-        emitTopic("machine");
-      }, MOCK_UPGRADE_CONVERGE_MS);
-      upgradeConvergeTimers.add(timer);
-    }
-    const wire: WireUpgradeResult = {
-      member_id: memberId,
-      machine_id: w ? memberId : "",
-      dispatched,
-    };
-    return toUpgradeResult(wire);
   },
 
   async uninstallMachine(memberId: string): Promise<UninstallResultView> {
@@ -3355,8 +3327,6 @@ export const mockApi: Api = {
 export function __resetMock(): void {
   wireMembers = structuredClone(MOCK_WIRE_MEMBERS);
   wireMonitoring = structuredClone(MOCK_WIRE_MONITORING);
-  upgradeConvergeTimers.forEach((t) => clearTimeout(t));
-  upgradeConvergeTimers.clear();
   mockBinStatus.clear();
   mockBinStatus.set("warden-mbp5", "stale");
   globalContextOverlay = null;

@@ -113,11 +113,6 @@ export type WireDeleteResult = components["schemas"]["MachineDeleteResultDTO"];
 export type WireUninstallResult =
   components["schemas"]["MachineUninstallResultDTO"];
 
-/** Mirrors `MachineUpgradeResultDTO` — the one-click upgrade response
- * `POST /api/machines/{member_id}/upgrade` (T-5f01). */
-export type WireUpgradeResult =
-  components["schemas"]["MachineUpgradeResultDTO"];
-
 /** Mirrors `POST /api/machines/{machine_id}/teardown-here`
  * (`MachineTeardownHereResultDTO`) — the symmetric inverse of
  * WireBootstrapResult. */

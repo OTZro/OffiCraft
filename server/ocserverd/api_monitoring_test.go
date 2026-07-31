@@ -275,6 +275,121 @@ func TestGetMonitoring_WardenShapeIsReportedNeverInvented(t *testing.T) {
 	}
 }
 
+// TestHandleIngestTelemetry_CutoverEffectFoldsEchoesAndValidates covers the
+// ingest half of the cutover-EFFECT signal (T-17b4) — the verdict that says
+// whether the anchor cutover actually reached the processes carrying agents,
+// which warden_shape above cannot answer.
+//
+// Same closed-vocabulary contract as the shape, with one difference worth its
+// own case: the two enums are NOT the same three words. "unknown" is a legal
+// shape and an illegal effect, so a handler that validated the effect against
+// the shape's vocabulary would store a verdict the wire does not define and the
+// UI cannot narrow.
+func TestHandleIngestTelemetry_CutoverEffectFoldsEchoesAndValidates(t *testing.T) {
+	// An EFFECT-ONLY heartbeat must be a valid report. The "at least one field"
+	// check is hand-enumerated, so a new field that is not listed there turns the
+	// very heartbeat this ticket adds into a 400.
+	for _, want := range []string{"effective", "not_effective", "unproven"} {
+		t.Run("a "+want+" heartbeat lands and echoes", func(t *testing.T) {
+			api := &apiServer{telemetry: newMemStore(), hub: NewHub()}
+			rec := doIngestTelemetry(api, "m-1", "m-1", `{"cutover_effect": "`+want+`"}`)
+			if rec.Code != 200 {
+				t.Fatalf("effect-only ingest: %d %s", rec.Code, rec.Body.String())
+			}
+			if got := api.telemetry.Get("m-1")["cutover_effect"]; got != want {
+				t.Fatalf("stored cutover_effect = %v, want %q", got, want)
+			}
+			if !strings.Contains(rec.Body.String(), `"cutover_effect":"`+want+`"`) {
+				t.Fatalf("echo must round-trip the verdict: %s", rec.Body.String())
+			}
+		})
+	}
+
+	// Outside the vocabulary is a FLAT 400 — the handler's own refusal, never the
+	// decoder's 422 (spec/lifecycle.md §3). "unknown" and "anchor" are in the
+	// list on purpose: they are the SHAPE's words, and borrowing a neighbouring
+	// enum is the most likely way this validation goes wrong.
+	for _, value := range []string{
+		`"unknown"`, `"anchor"`, `"legacy"`, `"EFFECTIVE"`, `"not-effective"`,
+		`"proven"`, `""`, `5`, `true`, `["effective"]`,
+	} {
+		api := &apiServer{telemetry: newMemStore(), hub: NewHub()}
+		body := `{"cutover_effect": ` + value + `}`
+		rec := doIngestTelemetry(api, "m-1", "m-1", body)
+		if rec.Code != 400 {
+			t.Errorf("%s = %d, want a flat 400", body, rec.Code)
+		}
+		if got := api.telemetry.Get("m-1"); got != nil {
+			t.Errorf("%s stored %v; a refused value must not land", body, got)
+		}
+	}
+
+	// null is not a state. It decodes to an absent field, so a body whose only
+	// key is null is the all-absent 400 — NOT a stored "unproven". The server
+	// never manufactures a verdict out of silence, and "unproven" is the one
+	// word most likely to be reached for as a default.
+	api := &apiServer{telemetry: newMemStore(), hub: NewHub()}
+	rec := doIngestTelemetry(api, "m-1", "m-1", `{"cutover_effect": null}`)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "is required") {
+		t.Errorf(`{"cutover_effect": null} = %d %s, want the all-absent 400`,
+			rec.Code, rec.Body.String())
+	}
+
+	// PARTIAL MERGE. Most heartbeats carry no verdict at all, and none of them
+	// may erase the machine's: an erased one reads as "this build does not report
+	// the verdict", which is a different and false claim.
+	merge := &apiServer{telemetry: newMemStore(), hub: NewHub()}
+	if rec := doIngestTelemetry(merge, "m-2", "m-2", `{"cutover_effect": "not_effective"}`); rec.Code != 200 {
+		t.Fatalf("seed ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doIngestTelemetry(merge, "m-2", "m-2", `{"hardware": {"cpu_pct": 1}}`); rec.Code != 200 {
+		t.Fatalf("second ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := merge.telemetry.Get("m-2")["cutover_effect"]; got != "not_effective" {
+		t.Fatalf("cutover_effect = %v after an effect-less heartbeat, want it to survive", got)
+	}
+
+	// The shape and the effect are STORED INDEPENDENTLY. "anchor" + "not_effective"
+	// is not a contradiction to be reconciled — it is the state the incident had,
+	// and it is the reason the second field exists at all.
+	pair := &apiServer{telemetry: newMemStore(), hub: NewHub()}
+	if rec := doIngestTelemetry(pair, "m-3", "m-3",
+		`{"warden_shape": "anchor", "cutover_effect": "not_effective"}`); rec.Code != 200 {
+		t.Fatalf("paired ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	entry := pair.telemetry.Get("m-3")
+	if entry["warden_shape"] != "anchor" || entry["cutover_effect"] != "not_effective" {
+		t.Fatalf("stored pair = %v/%v, want anchor/not_effective — neither may be "+
+			"derived from or overwritten by the other",
+			entry["warden_shape"], entry["cutover_effect"])
+	}
+}
+
+// TestGetMonitoring_CutoverEffectIsReportedNeverInvented is the read-back half.
+// Only the reporting machine can see its own carrier processes, so the server
+// has no second source to compute the verdict from: a machine that has said
+// nothing must leave the cell null rather than pick up "unproven", which would
+// claim a check ran.
+func TestGetMonitoring_CutoverEffectIsReportedNeverInvented(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	seedRegisteredMachine(t, s, "m-measured")
+	seedRegisteredMachine(t, s, "m-silent")
+	if rec := doIngestTelemetry(s, "m-measured", "m-measured",
+		`{"cutover_effect": "unproven"}`); rec.Code != 200 {
+		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())
+	}
+
+	if got := machineRow(t, s, "m-measured")["cutover_effect"]; got != "unproven" {
+		t.Fatalf("m-measured cutover_effect = %v, want unproven", got)
+	}
+	row := machineRow(t, s, "m-silent")
+	if got, present := row["cutover_effect"]; !present || got != nil {
+		t.Fatalf("m-silent cutover_effect = %v (present=%v), want an explicit null — "+
+			"a machine that never reported has not reported \"unproven\"", got, present)
+	}
+}
+
 // TestHandleIngestTelemetry_WrongTypedBlockStatusTable is the executable copy of
 // the refusal-code table in spec/lifecycle.md §3 (and its restatement in
 // conformance/CLAUDE.md). That doc line used to say a wrong-typed telemetry

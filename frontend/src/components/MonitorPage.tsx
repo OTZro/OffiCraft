@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { useEscapeLayer } from "../lib/useEscapeLayer";
 import { api } from "../api";
@@ -17,7 +17,7 @@ import type {
   MachineView,
   UninstallResultView,
   BootstrapResultView,
-  WardenShape,
+  CutoverEffect,
 } from "../types";
 import type { OutsourceWorkerView } from "../api/adapter";
 import {
@@ -125,29 +125,6 @@ export function MonitorPage() {
   // it does NOT tear the warden off the box (that is uninstall). A destructive
   // action → confirm first; on success the row drops (refetch). The result carries
   // {removed}.
-  // one-click upgrade (T-5f01 rework): per-row busy + "升級中" latch + banner.
-  // upgradeSent holds the pressed row in the disabled "upgrading" face until
-  // the VERDICT ITSELF converges — a later refetch reports binStatus
-  // "current" and the effect below releases the latch (owner: 按下去變成升級中,
-  // 直到該機收斂為最新才恢復). The FE never fabricates the convergence.
-  const [upgradeBusy, setUpgradeBusy] = useState<string | null>(null);
-  const [upgradeSent, setUpgradeSent] = useState<Record<string, boolean>>({});
-  const [upgradeError, setUpgradeError] = useState<string | null>(null);
-
-  // Release the "升級中" latch ONLY when the row's verdict converges to
-  // "current" (or the row left the registry). A still-stale refetch keeps the
-  // latch — the swap simply hasn't landed/heartbeated yet.
-  useEffect(() => {
-    setUpgradeSent((prev) => {
-      const keep = Object.keys(prev).filter((id) => {
-        const m = machines.find((x) => x.machineId === id);
-        return m !== undefined && m.binStatus !== "current";
-      });
-      if (keep.length === Object.keys(prev).length) return prev;
-      return Object.fromEntries(keep.map((id) => [id, true]));
-    });
-  }, [machines]);
-
   const [deleteTarget, setDeleteTarget] = useState<MachineView | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -251,32 +228,6 @@ export function MonitorPage() {
   // monitoring for the fresh label (the PATCH returns a narrow alias, not a row —
   // we never merge it in). On failure (server 422 on blank, etc.) show an honest
   // banner; InlineEdit already blocks empty/unchanged commits client-side.
-  // One-click upgrade (T-5f01): fire-and-forget — POST /upgrade enqueues the
-  // `update` command onto the warden's live SSE downstream. `dispatched=false`
-  // (raced offline) surfaces as the offline hint, never a silent success. On a
-  // dispatched send the button latches into the disabled "升級中" face; the
-  // verdict itself converges via refetch when the next heartbeat's fingerprints
-  // turn current (reconcile-by-refetch — the FE never fabricates the status;
-  // the effect above releases the latch on convergence).
-  const requestUpgrade = async (m: MachineView) => {
-    if (upgradeBusy !== null) return;
-    setUpgradeError(null);
-    setUpgradeBusy(m.machineId);
-    try {
-      const res = await api.upgradeMachine(m.machineId);
-      if (res.dispatched) {
-        setUpgradeSent((prev) => ({ ...prev, [m.machineId]: true }));
-      } else {
-        setUpgradeError(t.monitor.machine.upgradeOfflineHint);
-      }
-      await refetchMachines();
-    } catch {
-      setUpgradeError(t.monitor.machine.upgradeError);
-    } finally {
-      setUpgradeBusy(null);
-    }
-  };
-
   const renameMachine = (id: string, next: string) => {
     setRenameError(null);
     api
@@ -486,7 +437,6 @@ export function MonitorPage() {
         </div>
 
         {onboardError && <div className="mon-error">{onboardError}</div>}
-        {upgradeError && <div className="mon-error">{upgradeError}</div>}
 
         <div className="mon-table-wrap">
           <table className="mon-table">
@@ -572,12 +522,16 @@ export function MonitorPage() {
                             ? t.monitor.machine.online
                             : t.monitor.machine.offline}
                         </span>
-                        {/* Which launchd shape this warden REPORTS it is on.
-                         * It rides beside the online badge because it is the
-                         * same kind of fact — an identity of the running
-                         * process, not a measurement — and because the cutover
-                         * is read row by row. */}
-                        <WardenShapeBadge shape={m.wardenShape} />
+                        {/* Nothing is rendered here for a machine whose
+                         * cutover is PROVEN in effect — and that silence is
+                         * now the point: a blank means "measured, fine", and
+                         * the two states that used to share that blank say so
+                         * for themselves below. The badge that used to live
+                         * here named an internal shape vocabulary nobody
+                         * outside this codebase can read, and its green face
+                         * asserted a cutover had taken effect when it only
+                         * ever observed warden's own parent. */}
+                        <CutoverEffectLine effect={m.cutoverEffect} />
                       </div>
                     </td>
                     {/* Per-runtime version columns (T-674d), replacing the old
@@ -680,40 +634,6 @@ export function MonitorPage() {
                       data-label={t.monitor.machine.actionsCol}
                     >
                       <div className="mon-actions">
-                        {/* upgrade (T-5f01 rework) — lives IN the action group,
-                         * no version column/badge. Shown ONLY for an installed
-                         * machine (warden online = the agent tooling is on the
-                         * box and reachable; an offline warden has no downstream
-                         * to command and self-updates on its next connect).
-                         * Enabled ONLY when the server's fingerprint verdict
-                         * says a newer build exists (stale); current/unknown
-                         * render it disabled with the honest reason as tooltip.
-                         * A dispatched send wears the disabled 升級中 face until
-                         * the verdict converges to current (refetch — see the
-                         * upgradeSent release effect). */}
-                        {m.online && (
-                          <button
-                            type="button"
-                            className="btn btn--accent-ghost"
-                            data-testid="mon-upgrade-btn"
-                            disabled={
-                              m.binStatus !== "stale" ||
-                              upgradeBusy === m.machineId ||
-                              upgradeSent[m.machineId] === true
-                            }
-                            {...(m.binStatus === "current"
-                              ? { title: t.monitor.machine.upgradeCurrentHint }
-                              : m.binStatus === null
-                                ? { title: t.monitor.machine.upgradeUnknownHint }
-                                : {})}
-                            onClick={() => void requestUpgrade(m)}
-                          >
-                            {upgradeBusy === m.machineId ||
-                            upgradeSent[m.machineId] === true
-                              ? t.monitor.machine.upgrading
-                              : t.monitor.machine.upgrade}
-                          </button>
-                        )}
                         <button
                           type="button"
                           className="btn btn--accent-ghost"
@@ -1162,59 +1082,50 @@ export function MonitorPage() {
   );
 }
 
-/** The launchd shape a warden reports about ITSELF, as a badge on its row.
+/** What this row says about the cutover — which for exactly one of the four
+ * states is NOTHING, and that is the contract:
  *
- * Four states, four faces, always rendered — the whole reason this exists is
- * that all four were previously the same nothing on screen, which is how a
- * fleet mid-cutover became unreadable. In particular:
- *   "unknown"    the new build is on that box and cannot read its own parent
- *   not reported the new build is not on that box at all
- * Those two are opposite jobs (debug that machine vs ship it the release), so
- * they get their own word, their own colour and their own border style — and a
- * pairwise-distinctness test pins all six pairs, because "two states quietly
- * collapse into one" is a failure no per-state assertion notices.
+ *   "effective"     proven in effect → silence. A row with no line under it
+ *                   means this machine was measured and passed, and no other
+ *                   state may look like that.
+ *   "not_effective" proven otherwise → the amber sentence. Something is wrong.
+ *   "unproven"      the machine checked and could not settle it → grey.
+ *   null            the machine has never reported → grey, its own sentence.
  *
- * The absent case is keyed as "unreported" rather than falling through a `??`
- * to some other state's face: every state names itself, so nothing can be
- * silently borrowed. There is deliberately no `data-shape` attribute — an
- * attribute that echoes the input would make the distinctness test pass by
- * construction while the visible badge collapsed. */
-function WardenShapeBadge({ shape }: { shape: WardenShape }) {
+ * The last two are grey rather than amber because they are the ABSENCE of an
+ * answer, not a problem: nothing is known to be wrong on those machines, but
+ * nothing is known to be right either, and colouring them like a fault would
+ * train readers to ignore the colour that does mean a fault. They still have to
+ * SAY something, though — the three of them sharing one blank is the defect
+ * being retired, and a green face for the fourth is the defect before that.
+ *
+ * The copy carries NO internal vocabulary. "anchor" and "legacy" are names for
+ * launchd plist shapes that mean nothing to anyone who has not read this
+ * repository, and a warning nobody can act on is not a warning. None of it
+ * tells anyone to restart anything either: this surface makes the state VISIBLE
+ * and stops there — deciding when to act is a person's call, deliberately. */
+function CutoverEffectLine({ effect }: { effect: CutoverEffect }) {
   const { t } = useI18n();
   const m = t.monitor.machine;
-  const faces: Record<
-    NonNullable<WardenShape> | "unreported",
-    { modifier: string; label: string; hint: string }
-  > = {
-    anchor: {
-      modifier: "anchor",
-      label: m.shapeAnchor,
-      hint: m.shapeAnchorHint,
-    },
-    legacy: {
-      modifier: "legacy",
-      label: m.shapeLegacy,
-      hint: m.shapeLegacyHint,
-    },
-    unknown: {
-      modifier: "unknown",
-      label: m.shapeUnknown,
-      hint: m.shapeUnknownHint,
-    },
-    unreported: {
-      modifier: "unreported",
-      label: m.shapeUnreported,
-      hint: m.shapeUnreportedHint,
-    },
-  };
-  const face = faces[shape ?? "unreported"];
+  if (effect === "effective") return null;
+  if (effect === "not_effective") {
+    return (
+      <span
+        className="mon-cutover-warn"
+        data-testid="mon-cutover-warning"
+        role="status"
+      >
+        {m.cutoverNotInEffect}
+      </span>
+    );
+  }
+  // The two quiet states. Keyed by the state's own name rather than falling
+  // through a `??` to a shared default: "the machine could not tell" and "the
+  // machine never said" are opposite next steps (go look at that box vs ship it
+  // the release), and a shared sentence would send a reader to the wrong one.
   return (
-    <span
-      className={`mon-shape mon-shape--${face.modifier}`}
-      data-testid="mon-warden-shape"
-      title={face.hint}
-    >
-      {face.label}
+    <span className="mon-cutover-note" data-testid="mon-cutover-note">
+      {effect === "unproven" ? m.cutoverUnproven : m.cutoverUnreported}
     </span>
   );
 }

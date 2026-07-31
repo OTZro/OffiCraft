@@ -908,15 +908,6 @@ export const en: Dict = {
       deleteConfirm: "Confirm delete",
       deleteBusy: "Deleting…",
       deleteError: "Delete failed",
-      // ── one-click upgrade (T-5f01 rework: lives in the action group) ──
-      upgrade: "Upgrade",
-      upgrading: "Upgrading…",
-      upgradeCurrentHint: "Already up to date",
-      upgradeUnknownHint:
-        "No version fingerprints reported yet — cannot tell whether an update is available",
-      upgradeOfflineHint:
-        "Machine offline — cannot dispatch an upgrade (it self-updates when it reconnects)",
-      upgradeError: "Failed to dispatch the upgrade command — try again",
       // ── runtime readiness (T-90be ⑤ + T-b36a): rendered WITH its age. The
       // server keeps stale capability values on the wire on purpose (they are
       // the only explanation for a worker parked on machine_unavailable), so
@@ -956,25 +947,30 @@ export const en: Dict = {
       hardwareBad: "bad value",
       hardwareBadHint:
         "This machine reported a value of the wrong type, so it cannot be shown — the probe ran, its reading is unusable. Check that machine's warden version.",
-      // ── launchd shape the warden REPORTS about itself (anchor cutover).
-      // Four labels for four facts, and the pair that matters most is the last
-      // two: "shape unknown" is a machine running the new build that cannot
-      // read its own parent; "not reported" is a machine that never got the
-      // new build. Same-looking blank, opposite next step (go debug that box
-      // vs go ship it the release), which is precisely why the cockpit was
-      // flying blind before this row existed.
-      shapeAnchor: "anchor",
-      shapeAnchorHint:
-        "This warden reports it is running under the anchor shape — the cutover took on this machine",
-      shapeLegacy: "legacy",
-      shapeLegacyHint:
-        "This warden reports it is still running under the old shape — either it has not been cut over yet, or it tried and rolled back",
-      shapeUnknown: "shape unknown",
-      shapeUnknownHint:
-        "This warden runs a build that reports its shape, but it could not determine which shape it is running under — the machine itself is unsure, so go look at it",
-      shapeUnreported: "not reported",
-      shapeUnreportedHint:
-        "This warden does not report a shape at all — it has not received the anchor-cutover release yet. NOT the same as “shape unknown”: nothing on this box has tried to answer the question.",
+      // ── the cutover lines. THREE of the four states speak; the fourth —
+      // proven in effect — renders nothing at all, and that silence is the
+      // whole contract: a blank row now means "we measured this machine and it
+      // is fine", and nothing else may look like it.
+      //
+      // Before this, "measured and fine", "measured and could not tell" and
+      // "never measured" were the same blank, which is how a machine whose
+      // cutover had NOT taken effect stayed green for three hours. The first
+      // line below is the proven failure (amber — a real problem); the two
+      // after it are the absence of an answer (grey — nothing is known to be
+      // wrong, but nothing is known to be right either).
+      //
+      // 🔴 The copy carries NO internal vocabulary. "anchor" / "legacy" are
+      // names for launchd plist shapes and mean nothing to the people reading
+      // this screen (owner, verbatim: nobody outside knows what anchor is), so
+      // the sentences say what is true of THEIR machine instead. They also stop
+      // at describing the state — none of them tells anyone to restart
+      // anything, which is the option the owner ruled out explicitly.
+      cutoverNotInEffect:
+        "A recent change to how this machine runs its agents has not reached the agents currently running on it — they were started before the change.",
+      cutoverUnproven:
+        "This machine checked whether a recent change to how it runs its agents reached the agents currently running on it, and could not tell either way.",
+      cutoverUnreported:
+        "This machine has never reported whether a recent change to how it runs its agents reached the agents running on it — the software on it is too old to check.",
     },
   },
   settings: {

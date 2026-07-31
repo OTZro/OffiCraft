@@ -26,6 +26,7 @@ const machine = (id: string, online = true): MachineView => ({
   isSelf: false,
   binStatus: null,
   wardenShape: null,
+  cutoverEffect: null,
   claudeVersion: null,
   claudeCredSource: null,
   claudeSubReadable: null,

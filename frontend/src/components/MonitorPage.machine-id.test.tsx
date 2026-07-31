@@ -34,6 +34,7 @@ const machine = (id: string, displayName: string): MachineView => ({
   isSelf: false,
   binStatus: null,
   wardenShape: null,
+  cutoverEffect: null,
   claudeVersion: null,
   claudeCredSource: null,
   claudeSubReadable: null,

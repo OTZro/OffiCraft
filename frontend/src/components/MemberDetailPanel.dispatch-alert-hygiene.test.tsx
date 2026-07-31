@@ -35,6 +35,7 @@ const ONLINE_MACHINE = {
   isSelf: true,
   binStatus: null,
   wardenShape: null,
+  cutoverEffect: null,
   claudeVersion: null,
   claudeCredSource: null,
   claudeSubReadable: null,

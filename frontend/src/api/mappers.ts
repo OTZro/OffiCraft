@@ -25,13 +25,13 @@ import type {
   OnboardResultView,
   DeleteResultView,
   UninstallResultView,
-  UpgradeResultView,
   TeardownHereResultView,
   BootstrapResultView,
   MachineView,
   BinStatus,
   ClaudeCredSource,
   WardenShape,
+  CutoverEffect,
 } from "../types";
 import type {
   WireMember,
@@ -51,7 +51,6 @@ import type {
   WireOnboardResult,
   WireDeleteResult,
   WireUninstallResult,
-  WireUpgradeResult,
   WireTeardownHereResult,
   WireBootstrapResult,
   WireChatRead,
@@ -712,6 +711,7 @@ function toMonMachine(w: WireMonMachine): MonMachineView {
     // Same narrowing as the registry row — the monitoring projection of a
     // machine must not disagree with the machine table about its own shape.
     wardenShape: toWardenShape(w.warden_shape),
+    cutoverEffect: toCutoverEffect(w.cutover_effect),
     claudeVersion: w.claude_version ?? null,
     claudeCredSource: toClaudeCredSource(w.claude_cred_source),
     claudeSubReadable: w.claude_sub_readable ?? null,
@@ -984,6 +984,9 @@ export function toMachine(w: WireMachine): MachineView {
     // Reported, not computed: absent means the box has not received the build
     // that reports a shape — a different fact from the reported "unknown".
     wardenShape: toWardenShape(w.warden_shape),
+    // Reported, not computed, for the same reason and with the same absent-vs-
+    // reported distinction as the shape above.
+    cutoverEffect: toCutoverEffect(w.cutover_effect),
     // The claude CLI probe columns (T-97ee): absent (older server) and null
     // (unknown — an older warden that never probed) both read as the honest
     // unknown; the UI shows only claudeVersion (table column, "—" on null).
@@ -1023,6 +1026,19 @@ function toWardenShape(v: string | null | undefined): WardenShape {
   return v === "anchor" || v === "legacy" || v === "unknown" ? v : null;
 }
 
+/** Narrow the wire `cutover_effect` to the closed CutoverEffect vocabulary.
+ *
+ * The same trap as `toWardenShape`, one notch sharper: "unproven" sounds like a
+ * fallback and is not one. It is a REPORTED verdict — the machine ran the check
+ * and could not settle it — so narrowing an unrecognised string to it would
+ * assert a check that may never have run. Absent/null/unrecognised all fall to
+ * `null`, and nothing here ever narrows toward "effective". */
+function toCutoverEffect(v: string | null | undefined): CutoverEffect {
+  return v === "effective" || v === "not_effective" || v === "unproven"
+    ? v
+    : null;
+}
+
 /** Narrow the wire `claude_cred_source` to the closed vocabulary; anything
  * absent/unrecognized reads as the honest unknown (null), never a verdict. */
 function toClaudeCredSource(v: string | null | undefined): ClaudeCredSource {
@@ -1055,16 +1071,6 @@ export function toDeleteResult(w: WireDeleteResult): DeleteResultView {
 /** Map the uninstall wire result → the view model (snake→camel). Pure rename;
  * `dispatched` passes through verbatim (whether the uninstall RPC was driven). */
 export function toUninstallResult(w: WireUninstallResult): UninstallResultView {
-  return {
-    memberId: w.member_id,
-    machineId: w.machine_id,
-    dispatched: w.dispatched,
-  };
-}
-
-/** Map the upgrade wire result → the view model (snake→camel). Pure rename;
- * `dispatched` passes through verbatim (whether the update RPC was enqueued). */
-export function toUpgradeResult(w: WireUpgradeResult): UpgradeResultView {
   return {
     memberId: w.member_id,
     machineId: w.machine_id,

@@ -57,18 +57,24 @@ type fakeCutover struct {
 	pidIdx   int
 	locked   map[string]bool
 	modTimes map[string]time.Time
-	spawned  []string
+	// birthTimes answers the inode-creation seam separately from modTimes: the
+	// two are different facts about a file (mtime moves on write and is settable,
+	// birthtime is fixed at creation), and a fake that answered both from one map
+	// would let a test pass while production read the wrong one.
+	birthTimes map[string]time.Time
+	spawned    []string
 }
 
 func newFakeCutover() *fakeCutover {
 	return &fakeCutover{
-		files:     map[string]string{},
-		runErr:    map[string]error{},
-		runOut:    map[string]string{},
-		locked:    map[string]bool{},
-		modTimes:  map[string]time.Time{},
-		exitCodes: map[string]int{},
-		exitErrs:  map[string]error{},
+		files:      map[string]string{},
+		runErr:     map[string]error{},
+		runOut:     map[string]string{},
+		locked:     map[string]bool{},
+		modTimes:   map[string]time.Time{},
+		birthTimes: map[string]time.Time{},
+		exitCodes:  map[string]int{},
+		exitErrs:   map[string]error{},
 	}
 }
 
@@ -174,6 +180,13 @@ func (f *fakeCutover) ops() cutoverOps {
 		},
 		modTime: func(p string) (time.Time, error) {
 			t, ok := f.modTimes[p]
+			if !ok {
+				return time.Time{}, os.ErrNotExist
+			}
+			return t, nil
+		},
+		birthTime: func(p string) (time.Time, error) {
+			t, ok := f.birthTimes[p]
 			if !ok {
 				return time.Time{}, os.ErrNotExist
 			}

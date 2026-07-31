@@ -3033,6 +3033,11 @@ export interface components {
             } | null;
             /** Cost */
             cost?: number | null;
+            /**
+             * Cutover Effect
+             * @description Echo of the stored cutover-effect verdict (see ``AgentTelemetryIngestDTO.cutover_effect``); null when never reported.
+             */
+            cutover_effect?: string | null;
             /** Effort */
             effort?: string | null;
             /** Hardware */
@@ -3139,6 +3144,11 @@ export interface components {
             command_result?: unknown;
             /** Cost */
             cost?: unknown;
+            /**
+             * Cutover Effect
+             * @description Warden heartbeats only — whether the anchor cutover is actually IN EFFECT for the processes that CARRY agents, which ``warden_shape`` cannot answer: that field observes warden's own parent process, while the agents live under a tmux server that keeps its original identity across a warden restart — the two populations diverge at exactly the moment the cutover lands. Deliberately THREE-VALUED and fail-closed: ``effective`` = launchd is running the anchor now AND every process carrying an agent session is younger than the current anchor job leader, so it can only have been forked under the anchor identity; ``not_effective`` = a carrier predates the anchor file itself and therefore cannot hold that identity (the one deterministic negative); ``unproven`` = cannot be shown either way, which is NOT a synonym for ``effective`` and must never be rendered as one — a boolean green light is the exact defect this field exists to retire. OMITTED by every warden build older than this release: absent means 'this machine has not received the new build yet', ``unproven`` means 'the new build ran and could not prove it'. Permissive like the other scalars here: a value outside the three states is a flat 400, never a 422.
+             */
+            cutover_effect?: unknown;
             /** Effort */
             effort?: unknown;
             /**
@@ -3967,6 +3977,11 @@ export interface components {
              */
             claude_version?: string | null;
             /**
+             * Cutover Effect
+             * @description Whether the anchor cutover is actually in effect for the agent-carrying processes on this machine, taken verbatim from its heartbeat (``effective`` | ``not_effective`` | ``unproven``; see ``AgentTelemetryIngestDTO.cutover_effect``). null = this warden build does not report the verdict at all — DISTINCT from ``unproven`` (new build ran, could not prove it). The server never infers one from the other and never derives the verdict itself: only the reporting machine can see its own carrier processes.
+             */
+            cutover_effect?: string | null;
+            /**
              * Display Name
              * @default
              */
@@ -4553,6 +4568,11 @@ export interface components {
             claude_version?: string | null;
             /** Cpu Pct */
             cpu_pct?: number | null;
+            /**
+             * Cutover Effect
+             * @description Same reported cutover-effect verdict the machine registry row carries (``effective`` | ``not_effective`` | ``unproven``; null = warden too old to report one) — see ``MachineDTO.cutover_effect``.
+             */
+            cutover_effect?: string | null;
             /**
              * Display Name
              * @default
