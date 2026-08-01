@@ -244,7 +244,28 @@ inline 卡,訊息帶 `replyCardId` = wire `meta.reply_card_id` 時取代 bubble)
 渲染 **共用的 `ReplyCardBody.tsx`**(選項 chips/你選的/AI 建議 tag/重新決定流程)
 + 共用 `ReplyComposer`(打字/附檔/貼圖)——兩面永不漂移。同步 = reconcile-by-
 refetch:兩側都訂 `reply_card` topic;聊天卡另走 `GET /api/reply-cards/{id}`
-單卡 refetch。**list wire 輕量化(T-3f31)**:`GET /api/reply-cards` 只回輕量摘要
+單卡 refetch。
+
+🔴 **一次 owner 動作只准觸發一輪重抓(T-a3e4 step 8)**:`useReplyCards` 的
+answer / reanswer / expire **不自己 refetch**——`reply_card` delta 是唯一的
+reconcile trigger,而它對 owner 自己的寫入**也會來**(http:server 的
+`publishReplyCard`,在 row commit 之後、response flush 之前;mock:
+`answerReplyCard` 裡同步呼叫的 `emitTopic`)。舊碼兩條路各抓一輪,T-e862 的
+generation guard **只擋 commit、不擋請求**,所以多的那一輪是「整份下載完再丟掉」
+——畫面上完全看不出來,任何「答完卡片會離開清單」的斷言在壞碼上照樣綠。
+真 ocserverd 實測(25 張 waiting 卡):答一張卡 = **48 次逐卡 GET / 100,952 B**
+→ 修後 **24 次 / 51,406 B**;對照組(別人開的卡、座艙沒動作)改動前後都是一輪,
+那正是坐實「第二輪屬於本地動作路徑」的實驗。
+⚠️ **`refresh()` 不在此列、仍無條件重抓**:它的 caller 是 409(卡已被別處處理),
+那是別人的寫入,沒有自己的 delta 會來。
+⚠️ 舊註解說動作路徑的 refetch 是「為了讓 mock 行為一致」——mock 長出 `emitTopic`
+之後那句就不成立了,**過時的理由正是這個重複活下來的原因**。
+護欄:`hooks/useReplyCards.one-round.test.tsx`(數呼叫次數,不看畫面;mutant:
+把動作路徑的 refetch 加回去 → 紅 2 條、把 SSE 那條刪掉 → 紅 3 條)。
+
+⚠️ **逐張 hydrate 的 N+1 還在,而且它不是這一顆修的東西**:上面那「24 次」是
+**一輪**、不是一個請求。正解是 server 一次回夠用的列(atomic list endpoint),
+屬於**凍結 wire 變更**(spec 先行 + owner 過目,root §13),所以不在這裡。**list wire 輕量化(T-3f31)**:`GET /api/reply-cards` 只回輕量摘要
 (summary+決策 digest,無 body/options 全文)——http adapter 的 `listReplyCards`
 逐卡 hydrate(list 拿 id 序 → per-id `GET /api/reply-cards/{id}`)還原完整
 `ReplyCard[]`,adapter 契約與 pane 渲染(chips/body)不變;mock 本就出全卡,
