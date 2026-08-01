@@ -575,6 +575,10 @@ const mockDocs: DocView[] = [
 // in mock mode (the http adapter gets this for free from the server's SSE).
 // Scope: mutations whose mounted hooks reconcile from SSE (reply cards, tasks,
 // outsource workers, and member avatars) emit the matching production topic.
+// The mock deliberately passes NO SseDelta (the second argument stays absent):
+// it has no wire frame to project, and an absent delta is the honest "something
+// in this topic changed, refetch the lot" — the mock's behaviour is unchanged by
+// the one-item refetch the http adapter can now name (T-8115).
 const topicSubscribers = new Set<(topic: string) => void>();
 function emitTopic(topic: string): void {
   for (const cb of [...topicSubscribers]) cb(topic);
@@ -1276,7 +1280,11 @@ export const mockApi: Api = {
     // A removed member reads as 404 (mirror handle_get_member).
     const w = findWire(id);
     if (w.roster_status === "removed") throw new Error(`mock: member removed: ${id}`);
-    return mapWithExtras(w);
+    // unread_count is COMPUTED here exactly as listMembers computes it — the Go
+    // single-member handler runs the same `unreadCountsForRequest` as the list
+    // (T-8115 review). Serving the static fixture value instead would make the
+    // mock DISAGREE with the server, which is what let a badge regression ship.
+    return mapWithExtras({ ...w, unread_count: unreadCountOf(id) });
   },
 
   async updateMemberAvatar(id: string, file: File): Promise<string> {

@@ -1475,6 +1475,15 @@ export function TaskCard({
             // (a pre-join server / a hand-built fixture) is the different, older
             // silence: we cannot name it yet. Both branches below keep saying
             // exactly which silence it is.
+            // 🔴 `task`, NOT `view` — load-bearing, and the opposite of what the
+            // surrounding blocks do (artifacts / steps / description all read
+            // `view`). `view` becomes the HYDRATED detail once this card is
+            // expanded, and `GET /api/tasks/{id}` carries NO `dep_tasks` at all
+            // (the frozen spec puts that join on TaskListItemDTO only — see
+            // api/dtoParity.ts, PER_ITEM_DTO_GAPS.task). Reading `view` here
+            // would therefore blank every dep row the moment the card opens —
+            // the same user-visible regression, one layer down from the hook.
+            // Pinned by TaskCard.dep-after-hydrate.test.tsx.
             const ref = task.depTasks?.find((x) => x.id === depId);
             const dep = ref && ref.status !== "" ? ref : undefined;
             if (!dep) {

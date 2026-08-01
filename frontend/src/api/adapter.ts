@@ -887,6 +887,45 @@ export interface WebhookUpdate {
 }
 
 /**
+ * The IDENTITY-ONLY projection of an SSE delta's `payload` (spec/sse.md §2.2).
+ *
+ * The wire has always carried a payload; spec §2.2 forbids MERGING it, because
+ * it is deliberately partial and lacks every server-derived DTO field. What it
+ * does carry losslessly is WHICH entity the write touched, and that is a
+ * different thing from the entity's values: naming an item lets a subscriber
+ * refetch that one item instead of re-downloading its whole list, with the
+ * server still the only source of the values that get rendered.
+ *
+ * So this type is restricted to the payload's IDENTITY fields by construction —
+ * `last_read_ts`, `status`, `priority`, `codename` and friends are dropped at
+ * the seam and cannot reach a hook, which makes "never merge a payload" a
+ * property of the types rather than a rule to remember. Reading the wire's
+ * existing fields is NOT a wire change: no frame shape, topic, or endpoint
+ * moves (the freeze in root CLAUDE.md §13 stands).
+ */
+export interface SseDeltaNames {
+  /** `member` / `task` / `reply_card` / `outsource_worker` / `chat` (message id). */
+  id?: string;
+  /** `chat`: the message's sender / recipient. */
+  from?: string;
+  to?: string;
+  /** `chat_read`: WHOSE watermark advanced, and in which conversation. */
+  reader?: string;
+  peer?: string;
+}
+
+export interface SseDelta {
+  topic: string;
+  /** The identity fields the payload named — empty for a topic whose payload is
+   * null (spec §2.2) and empty on a resync, which means "you may have missed
+   * anything" and therefore names nothing. */
+  names: SseDeltaNames;
+  /** Every value in `names`, de-duplicated — the cheap "does this delta touch
+   * something I am holding?" test. Empty ⇒ refetch the lot. */
+  ids: string[];
+}
+
+/**
  * The typed api client. Structural type — any object with these methods is an
  * `Api`. Presence contract: `activateMember` writes desired_state=online INTENT only;
  * it never flips the member online (server presence drives that). The UI must
@@ -1525,6 +1564,15 @@ export interface Api {
    * Subscribe to the SSE topic stream. `onTopic` fires with a topic name
    * (e.g. "members" / "presence"); the caller reconciles BY REFETCH (never by
    * merging an event payload). Returns an unsubscribe function.
+   *
+   * The second argument names WHICH item the delta touched (see `SseDelta`) so
+   * a subscriber can refetch that one item instead of its whole list. It is
+   * OPTIONAL on purpose: a resync fans deltas that name nothing, and a
+   * transport (the mock, an older producer) may not supply it at all — an
+   * absent delta MUST be read as "something in this topic changed, refetch the
+   * lot", never as "nothing changed".
    */
-  subscribeEvents(onTopic: (topic: string) => void): () => void;
+  subscribeEvents(
+    onTopic: (topic: string, delta?: SseDelta) => void
+  ): () => void;
 }

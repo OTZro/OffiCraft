@@ -50,6 +50,15 @@ import (
 //
 // 🔴 這個 pattern 的射程就是這條護欄的射程,所以它自己有測試
 // (`TestTaskTableReadPatternKnowsItsOwnBoundary`);射程外的形狀見檔頭。
+//
+// ⚠️ **它只認 `task` 這一張表,而且是寫死在上面那串字面值裡的。** 想拿這個
+// counting driver 去量別的表(`chat_message`、`member`、`reply_card` …),
+// 就得**自己換掉比對字串**——照抄整個 seam 但沿用這個 pattern,計數器會對
+// 那張表恆回 0,而 `> 0` 那道自檢是拿**合法的那一次 `ListTasks`** 滿足的,
+// 所以它**不會響**:你會拿到一份「零次查詢」的漂亮報告。換字串時連
+// `TestTaskTableReadPatternKnowsItsOwnBoundary` 的兩側語料一起換,否則新的
+// pattern 沒有任何東西在釘它的邊界(例:量 `chat_message` 時,`task` 這邊靠
+// `\b` 排除 `task_step` 的那招對 `chat_message` 沒有對應物,得自己想)。
 var taskTableRead = regexp.MustCompile(
 	`(?i)\b(?:from|join)\s+(?:[a-z_][a-z0-9_]*\.)?` +
 		"(?:\"task\"|'task'|`task`|\\[task\\]|task\\b)")

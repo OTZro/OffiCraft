@@ -22,6 +22,7 @@ import type {
   TaskTypeView,
 } from "../api/adapter";
 import { api } from "../api";
+import { createDeltaSink } from "../lib/deltaSink";
 
 interface UseTasks {
   /** The tasks the LAST fetch asked for — every status when no set was given,
@@ -127,17 +128,35 @@ export function useTasks(initialStatuses: string[]): UseTasks {
         if (alive) setLoading(false);
       });
 
-    const unsubscribe = api.subscribeEvents((topic) => {
-      if (topic === "task" || topic === "outsource_worker") {
-        refetch().catch((e) =>
-          console.warn("useTasks: SSE refetch failed", e)
+    // 🔴 NO per-task refetch here, and the reason is a wire fact, not a
+    // preference: `GET /api/tasks/{id}` carries no `dep_tasks`. The frozen spec
+    // puts that server-side dep join on `TaskListItemDTO` ONLY (see
+    // api/dtoParity.ts), and `TaskCard` renders "nobody resolved this dep"
+    // differently from "查無此任務" on purpose — so swapping a list row for a
+    // full task would silently degrade every dep row on that card to a bare
+    // short id (T-a3e4's 「已結案的 dep 仍講得出標題」 lost). Re-pulling the list
+    // is ONE GET either way; only the payload is bigger.
+    //
+    // What T-8115 still buys here is the COALESCING below: a resync fans 12
+    // topics synchronously and three of them land in this hook, which used to be
+    // two identical list re-pulls plus a types re-pull for one reconnect.
+    const full = () =>
+      refetch().catch((e) => console.warn("useTasks: SSE refetch failed", e));
+
+    const unsubscribe = api.subscribeEvents(
+      createDeltaSink((batch) => {
+        if (batch.topics.has("task_manual")) {
+          refetchTypes().catch((e) =>
+            console.warn("useTasks: SSE types refetch failed", e)
+          );
+        }
+        const listTopics = [...batch.topics].filter(
+          (t) => t === "task" || t === "outsource_worker"
         );
-      } else if (topic === "task_manual") {
-        refetchTypes().catch((e) =>
-          console.warn("useTasks: SSE types refetch failed", e)
-        );
-      }
-    });
+        if (listTopics.length === 0) return;
+        void full();
+      })
+    );
 
     return () => {
       alive = false;

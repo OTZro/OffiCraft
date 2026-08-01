@@ -399,6 +399,269 @@ re-run):終態目標 → 自動展開已結束;被篩選藏住 → **只清相�
 `task-card--located` 高亮 flash(2.6s)→ **消費 anchor**(route 退回 `#tasks`,
 one-shot,可重跳);未知/過期 id 誠實自癒(消費 anchor、不高亮)。
 
+## 一則通知 = 一次「只抓它碰到的那一項」(T-8115)
+
+reconcile-by-refetch 的規則沒變(**永遠不 merge payload**),但「refetch 什麼」與
+「一則通知算幾次」重新定義過。三個機制,全在 client,**wire 一個位元都沒動**:
+
+- **`SseDelta`(`api/adapter.ts`)= payload 的 identity-only 投影**。spec/sse.md §2.2
+  的 payload 一直都在,禁止的是**merge**(它欠所有 server-derived DTO 欄位)。但
+  「這則寫入碰到哪一個 entity」是**識別**、不是值,拿它去 `GET /{id}` 重讀一項,值仍然
+  完全由 server 給。⇒ `api/http.ts` 的 `toSseDelta` **只留** `id`/`from`/`to`/`reader`/`peer`
+  五個欄位,`status`/`priority`/`last_read_ts`/`codename` 這些**在 seam 就被丟掉**,
+  下游 hook **拿不到**、因此不可能不小心 merge——「不准 merge」變成型別性質,不是要記得的規矩。
+  護欄:`api/http.sse-delta.test.ts`(每條都斷言那個值**不在**投影裡)。
+- 🔴 **names 為空 = 「什麼都可能漏了」,一律全量重抓**。resync 名不指任何一項(串流沒有
+  replay,漏了什麼本質上不可知),mock 更是連第二個參數都不傳。**空名字絕不可讀成
+  「沒事發生」**,那會把 mock 座艙與每次重連後的自癒一起凍住。
+- **`lib/deltaSink.ts`:一「陣」delta 只做一次決定**。`resyncAll` 把 12 個 topic
+  **同步**扇給每個訂閱者,所以聽 4 個 topic 的 hook 以前一次 resync 跑 4 次同樣的重抓
+  (實測:一次 resync 21 個請求,12 個是重複)。**coalesce 只能發生在「決定要不要重抓」
+  那一層**——傳輸層不知道某個訂閱者對哪些 topic 有反應,也就不知道那 12 次會塌成 1 次。
+  它靠的是「那個扇出是同步的」:累積到下一個 microtask 剛好抓到整陣。⚠️ **這不是 debounce**,
+  跨 tick 不合併(那等於刻意讓畫面慢);`deltaSink.test.ts` 有一條專門釘這件事。
+- **`narrowToHeld` 是三態,而中間那態是關鍵**:`null`=名不指任何一項⇒全量;**非空陣列**=
+  它指到我手上的項⇒逐項重讀;**空陣列**=它指了別人、一個都不是我的。第三態**不等於**
+  第一態:對「不可能改變我這份清單成員資格」的 topic(chat/chat_read 對 roster 與外包 rail)
+  它就是**真的沒事做**;對可能新增列的 topic(task)則必須當全量辦——新的一列只有清單看得到。
+  把兩者合成一個 falsy 判斷,就會丟掉其中一半的修補。
+- 🔴 **逐項重讀只有在「單筆回應是清單列的超集」時才成立,而三個端點只有一個是**
+  (見 `api/dtoParity.ts` — 這是那份表存在的全部理由):
+  - `useOutsourceWorkers` — **可以**逐項:chat/chat_read → `GET /api/outsource-workers/{id}`。
+    server 的單筆 handler 呼叫**同一支** `projectWorker`、帶**同一個真的** `unread[worker.ID]`
+    ⇒ 一個欄位都沒少。排序鍵是**綁定任務的 created_ts**,聊天碰不到 ⇒ 不准重排(否則一則
+    訊息會讓列跳位)。`outsource_worker`(派工/釋放=成員資格)與 `task` 照舊全量。
+  - `useMembers` — **可以**逐項:chat/chat_read 指到手上的成員 → `GET /api/members/{id}`
+    **原位換掉**(roster 由 server 按 name 排序,這兩個 topic 碰不到 name ⇒ 不重排)。
+    🔴 **但這條路一度是錯的,而且錯得很安靜**:那支 handler 原本把 **literal 0** 交給
+    `newMemberDTO`(清單那支才跑 `UnreadCounts`),所以逐項重讀會把 delta 正在宣告的紅點
+    **歸零** —— 方向只有一邊,**badge 只降不升**。修在源頭:兩支 handler 現在都走
+    **同一支** `unreadCountsForRequest`(`server/ocserverd/api_helpers.go`),
+    **沒有動 schema**(`MemberDTO` 一直宣告著 `unread_count`)。server 側護欄
+    `api_members_unread_parity_test.go`(單筆 vs 清單、斷言**回應 body 裡的數值**;
+    把那行改回 `0` 就紅),client 側 `api/dtoParity.test.ts` 斷言兩者**相等**。
+    ⚠️ **「兩支 handler 共用」的範圍就是那兩支,不是「每個回 MemberDTO 的端點」**
+    (2026-08-01 實查):六個 `newMemberDTO` 呼叫點裡只有清單與單筆帶真的數字,
+    `writeMemberDTO`(約 15 個 handler 共用)、`api_members.go:462`/`:565`、
+    `api_roles.go:222` **仍然傳 literal 0**。今天沒有使用者可見後果(座艙不把那些
+    回應塞回 roster),但別把上面那句讀成「到處都是真的」。同理它**不是** repo 尺度的
+    「一支共用計算」——`api_outsource.go` :136/:199/:348 與 `api_chat.go` :873 還有
+    **四份** inline 複製。
+    🔴 **這條行為沒有被 conformance 釘住**:`unread_count` 在 `conformance/` 裡
+    **零命中**(2026-08-01 實查),所以 repo 自己指定的行為契約層對這個欄位新舊行為
+    都沒有任何主張;上面那道是 Go 單元測試,不是同一件事。
+    **指到的不是我手上的人**(外包 / 已釋放的 peer)則**什麼都不做**。
+    `member`/`role_def` 照舊全量。
+    🔴 **逐項只給「恰好指到一個」;指到兩個以上一律重抓清單,而交叉點正好在 2、
+    是推導出來的不是可調旋鈕**(owner 2026-08-01 裁定;數字為實測,server 側用
+    database/sql driver seam 數 `chat_message` 讀取):
+    | k(被指名且在手上的成員數) | 逐項 | 清單 |
+    |---|---|---|
+    | 1 | 1 GET + **1** 次全表掃描 | 1 GET + 1 次 |
+    | 3 | 3 GET + **3** 次 | 1 GET + 1 次 |
+    | 8 | 8 GET + **8** 次 | 1 GET + 1 次 |
+    ⇒ k=1 成本打平、payload 較小 ⇒ 逐項贏;k≥2 逐項線性放大而清單**恆為 1+1** ⇒ 清單贏。
+    因此**任何 k 都不比改動前差**。根因是 `unreadCountsForRequest` **每個請求各跑一次
+    `ListChat()` 全表掃描**,所以逐項的成本是 k 倍、不是 k 個小請求。
+    🔴 **k≥2 不是邊角情況,而且不需要 burst coalescing**:一則 chat delta 帶
+    `{id, from, to}`(`api_chat.go`),`toSseDelta` 五個欄位全收,而 hub 對
+    owner/dashboard 連線(`MemberID==""`)是**全量投遞**(`hub.go`)⇒ 座艙收得到
+    agent↔agent 的訊息,**單一 SSE frame 就同時指名兩個名冊成員**。agent 互相講話
+    在這個產品裡是常態。(反面:分開三個 tick 的三則 delta 是三個 k=1 的 burst,
+    改動前也是 3 次清單 GET ⇒ **那條路沒有回歸**,放大只發生在單一 burst 內。)
+    哨兵 `sseFanout.test.tsx` 的「ONE agent-to-agent line …」——**用真的會發生的形狀當
+    fixture,不是人造的多成員 burst**。
+    ⚠️ **這條哨兵的契約已經被下面那顆推翻過一次**:它原本叫「… names TWO members —
+    that re-pulls the LIST, not two reads」並斷言 `listMembers === 1`;現在那則 delta
+    **一個請求都不該發**,測試改名為「… moves no badge here — so it costs the roster
+    ZERO requests」、斷言 `listMembers === 0`。**舊的 mutant 紀錄(「拿掉 `k>1 →
+    full()` → 整套恰好這 1 條紅」)因此已失效**,新的三顆記在下面那張表。
+
+    🔴 **但上面那句「agent 互相講話在這個產品裡是常態」只講對了一半,而漏掉的那一半
+    會讓下一個人以為這條路已經解完了——它是常態的「浪費」,不是常態的「需求」。**
+    `UnreadCounts`(`server/ocserverd/domain.go:411-425`)只數
+    `m.Recipient == reader` 的訊息(它自己的 doc comment 就寫明「Messages between two
+    other participants never count」),而座艙這份 roster 的 reader 是 **owner**;
+    owner **不是名冊列**(single-owner schema,沒有 owner 的 member row),所以
+    `heldRef` 永遠不含它。把這兩件事接上 `narrowToHeld` 就得到:
+
+    | 真實形狀(`chat`:ids = {msgId, from, to}) | 落在名冊上的 k | 對這份 roster 有事做嗎 |
+    |---|---|---|
+    | member → owner | 1 | **有**(badge +1) |
+    | owner → member | 1 | **沒有**(recipient 是那個成員,不是 owner) |
+    | member ↔ member | **2** | **沒有** |
+    | member ↔ `ow-` worker | 1 | **沒有**(worker 不在名冊上,且 recipient≠owner) |
+
+    | 真實形狀(`chat_read`:ids = {reader, peer}) | k | 有事做嗎 |
+    |---|---|---|
+    | reader = owner | 1 | **有**(badge 清掉) |
+    | reader = member / peer = member | **2** | **沒有** |
+
+    ⇒ **`k ≥ 2` ⟹ 兩端都不是 owner ⟹ 這則 delta 動不了這份 roster 上的任何一個
+    badge ⟹ 語意上是 no-op。** 而且「會動 badge」⟹「有一端是 owner」⟹ `k ≤ 1`,
+    所以**真的有事做的情況恆為 k=1**。
+    ⚠️ **反過來不成立,別把它讀成雙條件**:`k = 1` **不**蘊含「有事做」——上表第 2、4 列
+    都是 k=1 而且什麼都不該做,它們今天照樣各打一次 `GET /api/members/{id}`。
+    (這一點與獨立驗證回報的表略有出入,以本表為準:那份表把「owner ↔ member」整列記成
+    「會動」,但只有 member→owner 那個方向會。)
+
+    🔴 **所以正解是 0 個請求,而它已經做了**(owner 2026-08-02 裁定「順手做掉,但要走
+    完整驗證」)。`useMembers` 的 **`couldMoveAnOwnerBadge`**:整陣 delta 的兩端都不是
+    `owner` ⇒ **直接 return,一個請求都不發**(不是清單、也不是逐項)。判斷所需的資訊
+    本來就在 delta 上(`toSseDelta` 留著 `from`/`to`/`reader`/`peer`),不必問 server。
+    ⚠️ **兩個 topic 的述詞欄位不同**:`chat` 是 `from`/`to`、`chat_read` 是
+    `reader`/`peer`。只檢查一對,會對另一個 topic 的**每一則** delta 都答「沒有 owner」
+    ⇒ 把真的有事做的那些也跳過。**mutant 實測**:拿掉 `reader`/`peer` 兩項 →
+    `sseFanout.test.tsx` **恰好紅 2 條**(都在 read-echo 那組)。
+    ⚠️ 它刻意用**寬鬆**述詞(「owner 在任一端」)而不是最緊的那個(`chat` 只需
+    `to === owner`、`chat_read` 只需 `reader === owner`)。上表第 2、4 列因此仍各花一次
+    沒必要的逐項 GET。**收緊是第二個最佳化,要自己的量測與裁定**;寬鬆版錯在「多抓」,
+    是安全的那一邊。
+
+    **實測(同一份 harness 母體、改前改後當下各量一次;40 列名冊)**:一則 agent↔agent
+    chat delta 對 `useMembers` 的請求 **1 → 0**、位元組 **3,403 → 0**;`chat_read`
+    member↔member 同樣 **1 → 0 / 3,403 → 0**;member↔`ow-` worker(k=1)**1 → 0 /
+    84 → 0**。對照組不動:member→owner **維持 1 次 `getMember`**、`chat_read`
+    reader=owner **維持 1 次**、混合陣 **維持 1 次清單**、resync **維持全量**。
+    ⚠️ **這些位元組是 harness fixture 尺度,不是正式站尺度**(我沒有正式站名冊可引用);
+    改動後那一格是 **0,而且是構造上的 0**——根本不發請求,所以省下的就是那個 GET 的
+    全部大小,與名冊多大成正比。
+    🔴 **「0 請求」的射程是 `useMembers`,不是整個座艙 —— 同一個浪費還有第三與第四個
+    實例,都在別的 hook 裡,本輪未授權處理。** 別把這裡的 0 讀成座艙的 0。
+    - **第三個:`useChatUnread` 的 `getChatUnreadCount`**。同一則 a2a delta 仍讓它打
+      一次(實測 total 2 → **1**,不是 0),而依同一條 `UnreadCounts(reader=owner)`,
+      那個全公司總數同樣**不可能**因 agent↔agent 訊息改變。
+    - **第四個:`useOutsourceWorkers` 的 `getOutsourceWorker`**(獨立驗證實測:
+      `m-other → ow-1` 的 chat ⇒ `{getOutsourceWorker: 1, getChatUnreadCount: 1}`)。
+      `api_outsource.go` 三處都是 `UnreadCounts(messages, receipts, actor)`、reader 一樣
+      是 owner,而且**各自跑一次 `ListChat()` 全表掃描**。
+      ⚠️ **但別把它講太寬**:`ow-1 → owner` 那則的 `getOutsourceWorker` 是**正當的**
+      (Recipient==owner,那個 badge 真的動)。**該 hook 今天分不出這兩者** —— 形狀
+      跟改動前的 `useMembers` 一模一樣,所以修法也會一樣,但那是另一輪的事。
+    ⚠️ **`sseFanout.test.tsx` 裡那兩條 `getChatUnreadCount === 1` / `totalRequests() === 1`
+    是刻意的絆線**:上面任一個被修好時它們會紅,**那是進展不是回歸**,屆時把期望值
+    改成 0 並回頭更新這一段。
+
+    🔴 **`k > 1 → full()` 沒有刪 —— 而且它是混合陣的熱路徑,不是 fail-safe。**
+    ⚠️ **本檔上一版把它寫成「生產上不可達的 fail-safe」,那是錯的,而且錯的方向會害人
+    刪掉活碼。** 那個推理(「還走到那裡的每一陣都有一端是 owner ⇒ k ≤ 1」)**對「一則
+    delta」成立,對「一陣」不成立**:`narrowToHeld` 讀的是 `batch.ids`,**整陣的聯集**
+    (`lib/deltaSink.ts`)。**混合陣**(一則 agent↔agent + 一則給 owner,落在同一個
+    microtask)就指到三張手上的卡 ⇒ **k = 3,就在今天**。
+    **它的守衛是那條混合陣 CONTROL 測試**:刪掉該分支 → 它紅(`expected undefined to
+    be 1`),而那一陣裡真的有一則給 owner 的訊息、roster 卻完全沒重抓。混合陣不是測試
+    產物 —— `deltaSink.ts` 自己的檔頭就寫著它**刻意**合併同一個 tick 的**真** delta。
+    (**沒有量過**的是 wire 實際多常把兩個 chat frame 送進同一個 microtask,別宣稱頻率。)
+    🔴 **這個坑會反覆出現,記住它**:`sseFanout.test.tsx` 在它的 k 測試正上方花了 35 行
+    講的就是**一陣 ≠ 一則**,而我們**隔一顆 commit 就在 `useMembers.ts` 裡踩了進去**。
+    每次推理 k,先問手上拿的是哪一個:**per-delta** 的述詞(`couldMoveAnOwnerBadge`)
+    還是 **per-burst** 的聯集(`touched`)。
+
+    **跳過是整陣判斷、不是逐則過濾**:混合陣仍帶**全部** ids 走下面的分支,所以真的有
+    事做的那一半永遠不會被吃掉;代價是 k 可能被撐大、混合陣走清單而非逐項——**永遠
+    正確,偶爾不是最省**,而那是安全的方向。
+
+    ⚠️ **兩件已知的誠實性瑕疵,刻意不修**:
+    1. **哨兵的 fixture 讓 agent↔agent 之後 badge 變 6 / 2,那是真 server 產不出來的狀態**
+       ——`UnreadCounts(reader=owner)` 對 `m-other → m-third` 這則訊息兩邊都不加。
+       以這個檔案自己的教義(**假 api 不得比真 server 慷慨**,見下一節)來說這是瑕疵。
+       **它現在反而是那條測試值斷言的鑑別力來源**:跳過失效時清單會被拉,那組真 server
+       產不出來的值就會被採用、值斷言跟著紅。但**別把它讀成「badge 應該長這樣」**。
+    2. **那條 `PREMISE` 斷言(`delta.ids ∩ held`)是文件,不是守衛。** 獨立驗證實測它
+       對兩顆 mutant 都零鑑別力;而**結構上的理由比實測更強**:`delta` 是測試裡的區域
+       字面值、`held` 來自 mount,**兩者都不依賴那個 k 分支**,所以不論 hook 怎麼改它
+       都不可能紅。**不要把它算進覆蓋。**
+
+    🔴 **判準是請求數,不是 badge 值** —— 「badge 沒變」在改動前後**都**成立(那則 delta
+    本來就改不了任何值),拿它當判準會寫出一條恆真的斷言。三條測試的判準全部是
+    `h.counts`。**mutant 實測(2026-08-02,每顆還原都用 scratchpad 備份、未用
+    `git checkout --`)**:
+
+    | mutant | `sseFanout.test.tsx`(13 條) |
+    |---|---|
+    | 拿掉 `couldMoveAnOwnerBadge` 跳過 | 🔴 **2 條**(a2a chat、a2a chat_read;皆 `expected 1 to be +0`) |
+    | 述詞只留 `from`/`to`(丟掉 `reader`/`peer`) | 🔴 **2 條**(read-echo 那組) |
+    | 刪掉 `k > 1 → full()`(混合陣的熱路徑) | 🔴 **1 條**(混合陣 CONTROL,`expected undefined to be 1`) |
+  - `useTasks` — **不可以**逐項,走清單。`GET /api/tasks/{id}` **整個 wire 上沒有
+    `dep_tasks`**(凍結 spec 只把那個 server-side dep join 放在 `TaskListItemDTO`;
+    `toTask()` 因此不設 `depTasks`,`toTaskListItem()` 逐字帶過)。而 `TaskCard` 把
+    「沒有人解析這個 dep」與「查無此任務」畫成**兩種不同的東西** ⇒ 用單筆換掉一列會讓那張
+    卡的每一條 dep 退化成裸短編號(T-a3e4 的「已結案的 dep 仍講得出標題」直接消失)。
+    🔴 **同一個回歸在 render 層有第二條路,而且它承重、反直覺**:展開的任務卡手上
+    **同時有兩個 TaskView**(`TaskCard.tsx` 的 `const view = hasDetail ? detail : task`)
+    ——`task` 是清單列(**有** `depTasks`)、`view` hydrate 後是 `GET /api/tasks/{id}`
+    (**沒有**)。dep 那段刻意讀 `task`,而它周圍的欄位(artifacts、steps、description)
+    全讀 `view`。**把那一行改成 `view.depTasks` 就等於把回歸② 從 hook 層搬到 render 層,
+    使用者看到的東西一模一樣**。2026-08-01 實測:改動前整套 1675 條**全綠**——全部
+    dep 測試都傳 `NOOP` 當 `onHydrate`,所以 `hasDetail` 永遠是 false、`view === task`,
+    **一條沒展開卡片的 dep 測試對這類 bug 完全是盲的**。哨兵
+    `TaskCard.dep-after-hydrate.test.tsx`(展開 + 用 `projectSingleItem("task", row)`
+    當 hydrate 回傳值,斷言 dep 仍講得出標題與狀態;同一顆 mutant 現在恰好紅這 2 條)。
+  - `useChatUnread` — 一個總數,沒有「只抓一項」的版本;只吃 coalescing。
+  ⚠️ **剩下的那個缺口補不在 client**:`dep_tasks` 是凍結 wire 沒有的欄位,要它就得
+  **動 spec**(additive-optional;root §12 DTO 條:加欄要先問 owner),**還在等裁定**。
+  在那之前**不要「順手」把 `narrowToHeld` 接回 `useTasks`** —— 那個編譯期 pin
+  (`TaskDTO` 沒有 `dep_tasks`)就是為了讓「以為加好了」立刻變成 tsc 紅。
+  ⚠️ **members 那格的教訓要留著**:單筆端點「有宣告這個欄位」不等於「它會算」。
+  加任何一條逐項路徑之前,先讀 `api/dtoParity.ts`,並且**去看那支 Go handler 真的填了什麼**。
+- 🔴 **自激路徑:讀取本身是一次寫入。** `GET /api/chat?with=`(列表即讀)會推進
+  watermark,server 於是**把 `chat_read` 扇回同一個 client**。所以在**別人的**對話有
+  delta 時去 `load()` 開著的那個 thread,不只是白抓一次——它**無中生有製造第二輪事件**,
+  而且公司裡任何一條聊天訊息都會來一次。⇒ `useChat` 的 `chat` 分支**先看 delta 指的
+  from/to 是不是這個 peer**;`chat_read` 分支**只認 `reader === peer`**(`peerLastReadTs`
+  只可能被 peer 的 watermark 推動,自己那份 echo 永遠不會改到它)。名字空的照舊無條件重抓。
+  ⚠️ 它**本來就會停**(那一輪裡沒有人再打一次列表即讀,而 `PutChatRead` 只在真的前進時才扇
+  ——`dal.go` + `server_test.go`),所以這不是無窮迴圈,是**每則訊息固定多一輪**的放大。
+- **實測(改前 → 改後,六個 hook 同掛的座艙,單一 delta 造成的請求數,不含 mount)**:
+  別的對話一則聊天 **5 → 2**;自己讀取的 echo **4 → 2**;一次 resync **21 → 9**。
+  ⚠️ **這幾個數字量的是「請求次數」,而逐項 vs 清單在次數上是一樣的(都是一個 GET)**
+  ——所以上面那些數字**不因為 members/tasks 改走清單而變**,變的是那一個 GET 的 payload
+  大小(以及 task delta 那格會多一次 `listOutsourceWorkers`,因為 useTasks 的全量路徑
+  順便重抓 worker roster——那是改動前就有的成本)。**別把「請求變少」讀成「payload 變小」。**
+  `/api/settings` 在**改前改後都是 0**
+  ——ad74682 的共享快取之後,任何 delta 都不會再碰它(見下一節),票面上「外包/任務/聊天
+  事件在重拉 626 kB 設定」這句**在 main 上已經不成立**,實測坐實、不是推論。
+- 護欄:`hooks/sseFanout.test.tsx`(六 hook 同掛的成本 + **值**雙斷言)、
+  `lib/deltaSink.test.ts`、`api/http.sse-delta.test.ts`、**`api/dtoParity.test.ts`**。
+  🔴 **每條成本斷言都配一條值斷言**:「請求變少」對一個乾脆不更新的 hook 也成立,
+  所以那份測試同時釘住 delta 真的指到的那一列上、**server 說的那個值**。
+  🔴 **而值斷言只有在假 api 不比真 server 慷慨時才算數**——見下一條。
+- 🔴 **值斷言只有在假 api 不比真 server 慷慨時才算數——這條是這批修補的真正教訓。**
+  第一版的兩個回歸(roster badge 歸零、任務卡 dep 退化成裸編號)**通過了 tsc、1670 條
+  jsdom、CT 與 frame 探針**,因為 `sseFanout.test.tsx` 的手寫假 api 拿**清單列**回答
+  `GET /{id}`:那個 wire 不存在,於是值斷言量的是一台不存在的 server。反過來
+  `api/mock.ts` 一直是對的(它的 `getTask` 早就寫死 `depTasks: undefined` 並註明理由)
+  ——**繞過共用 mock 自己手寫假貨,就是繞過那份已經校準好的知識。**
+  ⇒ 現在單筆端點的落差集中在 `api/dtoParity.ts` **一份表**,`projectSingleItem()` 供
+  測試建假貨用,hook 測試的三個單筆 getter 全部走它。
+  🔴 **但「三個 getter 都走 projectSingleItem ⇒ 構造上不可能比 wire 慷慨」這句話,對
+  member 與 task 兩格目前是空的——別把它當成現行防線**(2026-08-01 實測:把
+  `sseFanout.test.tsx` 那兩個 fake 都改回裸 `return found`,也就是拿清單列回答
+  `GET /{id}`、正是原始回歸的成因形狀,`dtoParity` + `sseFanout` **14 條全綠**)。
+  兩格惰性的理由不同,而且都是結構性的:
+  - **member**:`PER_ITEM_DTO_GAPS.member` 已經清空(server 修好了),所以
+    `projectSingleItem("member", …)` 就是 **identity**,改不改沒有差別。
+  - **task**:`useTasks` **根本不再呼叫 `getTask`**(逐項路徑已拿掉),所以那個 fake
+    再慷慨也**沒有消費者**。
+  ⚠️ **這不等於「這裡沒有守衛」**——守衛在,只是不在 fake 那一層。真正擋得住的是**三道**,
+  每一道都實測過 mutant(還原用備份,未用 `git checkout --`):
+  1. **`server/ocserverd/api_members_unread_parity_test.go`**(Go,斷言 **response body
+     裡的數值**、不是「有沒有呼叫某支函式」)——把單筆 handler 改回 literal `0` 就紅
+     (`served unread_count 0, want 2` + `single-item (0) and list (2) disagree`);
+     把 `unreadCountsForRequest` 的 reader 寫死成 owner,per-caller 那條紅。
+  2. **`api/dtoParity.test.ts` 對 `api/mock.ts` 的 parity**——把 mock 的 `getMember`
+     改回不算 unread(mock 比 server **小氣**,同一類謊話的反方向)就紅;
+     讓 `getTask` 留著 dep join 也紅。
+  3. **`api/dtoParity.test.ts` 的編譯期 pin**(`TaskDTO` 沒有 `dep_tasks`、
+     `TaskListItemDTO` 有)——把它改成「`TaskDTO` 有」**tsc 直接紅**。②(dep join)
+     那半目前**只**靠這一道,所以別把它當可有可無的裝飾。
+  ⇒ **要加任何一條新的逐項路徑,先把對應那格的 `PER_ITEM_DTO_GAPS` 與上面三道一起看**:
+  fake 那層的保護會隨著 gap 清空 / 消費者消失而自動失效,**它不會有人通知你**。
+  ⚠️ **三道都抓不到的方向**:server **自己**改了(例如哪天單筆又不算 unread、或反過來
+  `TaskDTO` 真的長出 `dep_tasks`)。第 1 道是 Go 側,對 server 的**這一個**欄位守得住;
+  但「表上還有哪些 gap 已經過期」整體而言只有跑真 ocserverd 的 conformance 級斷言
+  (單筆 vs 清單對帳)才守得住,**那是還沒做的事,別把這份 guard 當成它。**
+
 ## /api/settings 只讀一份;`onboarding: null` 是終態(T-8115)
 
 `GET /api/settings` 在正式站是 **639,270 bytes**(gzip 後 373 kB;`custom_themes`

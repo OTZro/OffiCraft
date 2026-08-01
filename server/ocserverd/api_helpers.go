@@ -300,6 +300,28 @@ func (s *apiServer) observedHost(m Member) string {
 // newMemberDTO projects one member onto the wire (dto.MemberDTO.from_domain):
 // presence derives from the live SSE online fact; observedMachine/unreadCount
 // are handler-injected where the surface carries them.
+// unreadCountsForRequest is the ONE unread computation every member-facing
+// handler shares: the CALLER's chat_read watermark inverted over the whole chat
+// stream (UnreadCounts). It exists because GET /api/members/{id} used to hand
+// newMemberDTO a literal 0 while GET /api/members computed the real number — the
+// same declared field with two different answers, so the cockpit's roster badge
+// could only ever go DOWN through a one-member refetch (a chat delta re-read that
+// member and zeroed the badge the delta was announcing). The outsource
+// single-item handler was already doing it the right way; this makes members
+// match. NOT a wire change: MemberDTO has always declared unread_count.
+func (s *apiServer) unreadCountsForRequest(r *http.Request) (map[string]int, error) {
+	actor := currentActor(r)
+	messages, err := s.dal.ListChat()
+	if err != nil {
+		return nil, err
+	}
+	receipts, err := s.dal.ListChatReads(actor, "")
+	if err != nil {
+		return nil, err
+	}
+	return UnreadCounts(messages, receipts, actor), nil
+}
+
 func (s *apiServer) newMemberDTO(m Member, roleName, observedMachine string, unreadCount int) memberDTO {
 	return memberDTO{
 		ID:               m.ID,

@@ -18,6 +18,13 @@
 // updating (new messages still render on return) but the unread badge keeps
 // counting. Coming back to the foreground re-runs the marking listChat, so the
 // badge clears exactly when the owner really looks.
+//
+// 🔴 AND BECAUSE IT IS A WRITE, IT COMES BACK AS AN EVENT (T-8115): the server
+// fans a `chat_read` delta for the watermark this client just advanced. Loading
+// this thread for a delta about a DIFFERENT conversation therefore manufactures a
+// second fan-out round out of nothing, once per chat line anywhere in the company.
+// Both SSE branches below are gated on the delta's own participants for that
+// reason — see frontend/CLAUDE.md 「一則通知 = 一次『只抓它碰到的那一項』」.
 
 // SCROLLBACK (T-bf82): the thread starts as the newest page (server default
 // 30) and grows BACKWARDS through loadOlder() — a keyset-cursor page
@@ -31,6 +38,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatMessage, ChatAttachmentInput } from "../api/adapter";
 import { api } from "../api";
+import { createDeltaSink } from "../lib/deltaSink";
 import { isWindowActive } from "./useWindowActive";
 
 // One scrollback page — mirrors the server's default recent window. A page
@@ -189,15 +197,49 @@ export function useChat(withId: string): UseChat {
     load();
     void refetchReads();
 
-    // SSE: reconcile the thread by refetching on the relevant topics. A "chat"
-    // event refetches messages; a "chat_read" event refetches the receipts.
-    const unsubscribe = api.subscribeEvents((topic) => {
-      if (!CHAT_TOPICS.has(topic)) return;
-      if (topic === "chat") load();
-      // Both "chat" (a new message may carry a fresh peer read) and "chat_read"
-      // re-pull the receipts.
-      void refetchReads();
-    });
+    // SSE: reconcile the thread by refetching on the relevant topics — but only
+    // when the delta is about THIS conversation.
+    //
+    // 🔴 THE SELF-DRIVE (T-8115). `load()` takes the marking `GET /api/chat?with=`
+    // whenever the owner is looking, and that read is a DURABLE WRITE: the server
+    // advances the watermark and fans a `chat_read` delta straight back at this
+    // client, which re-runs the roster / office-total / worker fan-out. So a
+    // `load()` fired for a delta about a DIFFERENT conversation does not merely
+    // waste a request — it manufactures a second event round out of nothing, and
+    // one arrives for every chat line anywhere in the company. Deltas name their
+    // participants (spec §2.2 payloads), so the gate is exact rather than
+    // heuristic; a delta that names nobody (a resync, or a transport that carries
+    // no delta) still loads, because then it really might be about us.
+    const touchesThisThread = (names: { from?: string; to?: string }) =>
+      names.from === undefined && names.to === undefined
+        ? true
+        : names.from === withId || names.to === withId;
+
+    const unsubscribe = api.subscribeEvents(
+      createDeltaSink((batch) => {
+        if (![...batch.topics].some((t) => CHAT_TOPICS.has(t))) return;
+        const chats = batch.deltas.filter((d) => d.topic === "chat");
+        const reads = batch.deltas.filter((d) => d.topic === "chat_read");
+        // A resync (unnamed: no delta, or a delta naming nobody) reloads
+        // unconditionally — see above.
+        const ourChat =
+          batch.topics.has("chat") &&
+          (chats.length === 0 || chats.some((d) => touchesThisThread(d.names)));
+        if (ourChat) load();
+        // `peerLastReadTs` is the PEER's watermark and nothing else, so only a
+        // read whose READER is the peer can move it. Our own read echo names US
+        // as the reader — re-pulling the receipts for it is the second half of
+        // the same self-drive, and it can never change the value. A new message
+        // in THIS thread still re-pulls them (it may carry a fresh peer read).
+        const peerRead =
+          batch.topics.has("chat_read") &&
+          (reads.length === 0 ||
+            reads.some(
+              (d) => d.names.reader === undefined || d.names.reader === withId
+            ));
+        if (ourChat || peerRead) void refetchReads();
+      })
+    );
 
     // Coming BACK to the foreground while this thread is open: the owner is now
     // actually looking → run the marking listChat so everything accumulated in
