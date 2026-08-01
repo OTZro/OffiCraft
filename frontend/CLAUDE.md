@@ -483,13 +483,34 @@ reconcile-by-refetch 的規則沒變(**永遠不 merge payload**),但「refetch 
   `api/mock.ts` 一直是對的(它的 `getTask` 早就寫死 `depTasks: undefined` 並註明理由)
   ——**繞過共用 mock 自己手寫假貨,就是繞過那份已經校準好的知識。**
   ⇒ 現在單筆端點的落差集中在 `api/dtoParity.ts` **一份表**,`projectSingleItem()` 供
-  測試建假貨用(hook 測試的三個單筆 getter 全部走它,**構造上不可能比 wire 慷慨**),
-  `api/dtoParity.test.ts` 把那份表釘在 `api/mock.ts` 的實際行為上 + 一條**編譯期**
-  pin(`TaskDTO` 沒有 `dep_tasks`、`TaskListItemDTO` 有)。
-  把 mock 教成會算單筆 unread、或讓 `getTask` 留著 dep join,那份測試就紅。
-  ⚠️ **它抓不到的方向**:server **自己**改了(例如哪天單筆真的開始算 unread)——那時這份
-  表會靜靜過期。只有跑真 ocserverd 的 conformance 級斷言(單筆 vs 清單對帳)才守得住那一邊,
-  **那是還沒做的事,別把這份 guard 當成它。**
+  測試建假貨用,hook 測試的三個單筆 getter 全部走它。
+  🔴 **但「三個 getter 都走 projectSingleItem ⇒ 構造上不可能比 wire 慷慨」這句話,對
+  member 與 task 兩格目前是空的——別把它當成現行防線**(2026-08-01 實測:把
+  `sseFanout.test.tsx` 那兩個 fake 都改回裸 `return found`,也就是拿清單列回答
+  `GET /{id}`、正是原始回歸的成因形狀,`dtoParity` + `sseFanout` **14 條全綠**)。
+  兩格惰性的理由不同,而且都是結構性的:
+  - **member**:`PER_ITEM_DTO_GAPS.member` 已經清空(server 修好了),所以
+    `projectSingleItem("member", …)` 就是 **identity**,改不改沒有差別。
+  - **task**:`useTasks` **根本不再呼叫 `getTask`**(逐項路徑已拿掉),所以那個 fake
+    再慷慨也**沒有消費者**。
+  ⚠️ **這不等於「這裡沒有守衛」**——守衛在,只是不在 fake 那一層。真正擋得住的是**三道**,
+  每一道都實測過 mutant(還原用備份,未用 `git checkout --`):
+  1. **`server/ocserverd/api_members_unread_parity_test.go`**(Go,斷言 **response body
+     裡的數值**、不是「有沒有呼叫某支函式」)——把單筆 handler 改回 literal `0` 就紅
+     (`served unread_count 0, want 2` + `single-item (0) and list (2) disagree`);
+     把 `unreadCountsForRequest` 的 reader 寫死成 owner,per-caller 那條紅。
+  2. **`api/dtoParity.test.ts` 對 `api/mock.ts` 的 parity**——把 mock 的 `getMember`
+     改回不算 unread(mock 比 server **小氣**,同一類謊話的反方向)就紅;
+     讓 `getTask` 留著 dep join 也紅。
+  3. **`api/dtoParity.test.ts` 的編譯期 pin**(`TaskDTO` 沒有 `dep_tasks`、
+     `TaskListItemDTO` 有)——把它改成「`TaskDTO` 有」**tsc 直接紅**。②(dep join)
+     那半目前**只**靠這一道,所以別把它當可有可無的裝飾。
+  ⇒ **要加任何一條新的逐項路徑,先把對應那格的 `PER_ITEM_DTO_GAPS` 與上面三道一起看**:
+  fake 那層的保護會隨著 gap 清空 / 消費者消失而自動失效,**它不會有人通知你**。
+  ⚠️ **三道都抓不到的方向**:server **自己**改了(例如哪天單筆又不算 unread、或反過來
+  `TaskDTO` 真的長出 `dep_tasks`)。第 1 道是 Go 側,對 server 的**這一個**欄位守得住;
+  但「表上還有哪些 gap 已經過期」整體而言只有跑真 ocserverd 的 conformance 級斷言
+  (單筆 vs 清單對帳)才守得住,**那是還沒做的事,別把這份 guard 當成它。**
 
 ## /api/settings 只讀一份;`onboarding: null` 是終態(T-8115)
 

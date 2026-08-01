@@ -37,7 +37,26 @@
 // assertions were measured against a wire that does not exist. `api/mock.ts` had
 // it right all along (its `getTask` explicitly drops `depTasks`). So the gaps
 // live here, ONE place, and `dtoParity.test.ts` pins this table against the mock
-// adapter: make either of them generous again and that test goes red.
+// adapter and against the generated wire types.
+//
+// 🔴 WHAT ACTUALLY HOLDS THE LINE TODAY — routing the fakes through
+// `projectSingleItem` is NOT it any more, for either remaining consumer.
+// Measured 2026-08-01: reverting BOTH fakes in `hooks/sseFanout.test.tsx` to a
+// bare `return found` (a list row answering `GET /{id}` — the original defect
+// shape) leaves all 14 tests GREEN. `member` because its gap list is now empty,
+// so the projection is the identity; `task` because `useTasks` no longer calls
+// `getTask` at all, so the fake has no consumer. That is NOT "unguarded" — the
+// three guards that DO bite, each mutant-tested:
+//   1. `server/ocserverd/api_members_unread_parity_test.go` — asserts the NUMBER
+//      IN THE RESPONSE BODY, single-item vs list. Put the literal `0` back and it
+//      goes red; hardcode the reader as the owner and the per-caller case goes red.
+//   2. this table vs `api/mock.ts` (`dtoParity.test.ts`) — stop computing unread
+//      in the mock's `getMember`, or let its `getTask` keep the dep join, → red.
+//   3. the COMPILE-TIME pin in `dtoParity.test.ts` (`TaskDTO` has no `dep_tasks`).
+//      The dep-join half rests on this ONE guard — do not treat it as decoration.
+// Before adding any new per-item refetch, read the gap for that endpoint AND
+// those three. The fake-side protection lapses silently whenever a gap empties
+// or a consumer goes away; nothing announces it.
 
 /** The fields a single-item GET does NOT carry, per list-bearing endpoint. */
 export const PER_ITEM_DTO_GAPS = {
@@ -63,9 +82,18 @@ export function perItemRefetchIsFaithful(kind: PerItemKind): boolean {
  * Test support, deliberately shipped next to the table it reads: a fake that
  * answers `GET /{id}` out of list data is exactly the mistake this file exists
  * to stop, so the fakes go through here instead of hand-copying the row. The
- * gapped fields are dropped the way the wire drops them — `unreadCount` back to
- * its `default: 0` (MemberDTO declares the field, the handler just never fills
- * it), `depTasks` to `undefined` (the field is absent from TaskDTO).
+ * gapped fields are dropped the way the wire drops them — `depTasks` to
+ * `undefined` (the field is absent from TaskDTO).
+ *
+ * ⚠️ It is currently a no-op for BOTH kinds the hook tests use (`member`'s gap
+ * list is empty, and nothing calls `getTask` any more), so routing a fake
+ * through it buys no protection today — see the header for the three guards
+ * that do. Keep using it anyway: it is what makes a fake correct AGAIN the
+ * moment a gap reappears, and hand-copying the row is how this went wrong once.
+ *
+ * The `unreadCount` branch below is dormant for the same reason — kept because
+ * MemberDTO declares the field with `default: 0`, so 0 (not absence) stays the
+ * honest stand-in if a member-shaped gap is ever added back.
  */
 export function projectSingleItem<T extends Record<string, unknown>>(
   kind: PerItemKind,
