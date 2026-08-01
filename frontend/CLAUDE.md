@@ -526,23 +526,40 @@ reconcile-by-refetch 的規則沒變(**永遠不 merge payload**),但「refetch 
     ⚠️ **這些位元組是 harness fixture 尺度,不是正式站尺度**(我沒有正式站名冊可引用);
     改動後那一格是 **0,而且是構造上的 0**——根本不發請求,所以省下的就是那個 GET 的
     全部大小,與名冊多大成正比。
-    🔴 **「0 請求」的射程是 `useMembers`,不是整個座艙**:同一則 delta 仍讓
-    `useChatUnread` 打一次 `getChatUnreadCount`(實測 total 2 → **1**,不是 0)。
-    而依同一條 `UnreadCounts(reader=owner)`,那個總數同樣**不可能**因 agent↔agent 訊息
-    改變 ⇒ **那是同一個浪費的第三個實例,只是在另一個 hook 裡,本輪未授權處理。**
-    別把這裡的 0 讀成座艙的 0。
+    🔴 **「0 請求」的射程是 `useMembers`,不是整個座艙 —— 同一個浪費還有第三與第四個
+    實例,都在別的 hook 裡,本輪未授權處理。** 別把這裡的 0 讀成座艙的 0。
+    - **第三個:`useChatUnread` 的 `getChatUnreadCount`**。同一則 a2a delta 仍讓它打
+      一次(實測 total 2 → **1**,不是 0),而依同一條 `UnreadCounts(reader=owner)`,
+      那個全公司總數同樣**不可能**因 agent↔agent 訊息改變。
+    - **第四個:`useOutsourceWorkers` 的 `getOutsourceWorker`**(獨立驗證實測:
+      `m-other → ow-1` 的 chat ⇒ `{getOutsourceWorker: 1, getChatUnreadCount: 1}`)。
+      `api_outsource.go` 三處都是 `UnreadCounts(messages, receipts, actor)`、reader 一樣
+      是 owner,而且**各自跑一次 `ListChat()` 全表掃描**。
+      ⚠️ **但別把它講太寬**:`ow-1 → owner` 那則的 `getOutsourceWorker` 是**正當的**
+      (Recipient==owner,那個 badge 真的動)。**該 hook 今天分不出這兩者** —— 形狀
+      跟改動前的 `useMembers` 一模一樣,所以修法也會一樣,但那是另一輪的事。
+    ⚠️ **`sseFanout.test.tsx` 裡那兩條 `getChatUnreadCount === 1` / `totalRequests() === 1`
+    是刻意的絆線**:上面任一個被修好時它們會紅,**那是進展不是回歸**,屆時把期望值
+    改成 0 並回頭更新這一段。
 
-    🔴 **`k > 1 → full()` 沒有刪,而且不准當死碼刪掉**。有了跳過之後,還走到那裡的每一陣
-    都有一端是 owner,而**在今天這份 wire 上**那強制 k ≤ 1 ⇒ 該分支在生產上目前不可達。
-    **但那是現行 wire 的性質、不是構造保證**:`toSseDelta` 多一個身分欄位、delta 開始
-    指名第三方、或 hub 的投遞對象改變,k > 1 就會回來,而那時它就是「1 次清單」與
-    「k 次逐項 × 每次一趟全表掃描」的差別。它現在的定位是 **fail-safe**,理由寫在
-    `useMembers.ts` 該分支上方。**它仍然有守衛**:mutant 把它刪掉 → 混合陣那條 CONTROL
-    **恰好紅 1 條**(混合陣仍帶全部 ids 走下面的分支,k=2)。
+    🔴 **`k > 1 → full()` 沒有刪 —— 而且它是混合陣的熱路徑,不是 fail-safe。**
+    ⚠️ **本檔上一版把它寫成「生產上不可達的 fail-safe」,那是錯的,而且錯的方向會害人
+    刪掉活碼。** 那個推理(「還走到那裡的每一陣都有一端是 owner ⇒ k ≤ 1」)**對「一則
+    delta」成立,對「一陣」不成立**:`narrowToHeld` 讀的是 `batch.ids`,**整陣的聯集**
+    (`lib/deltaSink.ts`)。**混合陣**(一則 agent↔agent + 一則給 owner,落在同一個
+    microtask)就指到三張手上的卡 ⇒ **k = 3,就在今天**。
+    **它的守衛是那條混合陣 CONTROL 測試**:刪掉該分支 → 它紅(`expected undefined to
+    be 1`),而那一陣裡真的有一則給 owner 的訊息、roster 卻完全沒重抓。混合陣不是測試
+    產物 —— `deltaSink.ts` 自己的檔頭就寫著它**刻意**合併同一個 tick 的**真** delta。
+    (**沒有量過**的是 wire 實際多常把兩個 chat frame 送進同一個 microtask,別宣稱頻率。)
+    🔴 **這個坑會反覆出現,記住它**:`sseFanout.test.tsx` 在它的 k 測試正上方花了 35 行
+    講的就是**一陣 ≠ 一則**,而我們**隔一顆 commit 就在 `useMembers.ts` 裡踩了進去**。
+    每次推理 k,先問手上拿的是哪一個:**per-delta** 的述詞(`couldMoveAnOwnerBadge`)
+    還是 **per-burst** 的聯集(`touched`)。
 
-    **跳過是整陣判斷、不是逐則過濾**:混合陣(一則 agent↔agent + 一則給 owner)仍帶
-    **全部** ids 走下面的分支,所以真的有事做的那一半永遠不會被吃掉;代價是 k 可能被
-    撐大、混合陣走清單而非逐項——**永遠正確,偶爾不是最省**,而那是安全的方向。
+    **跳過是整陣判斷、不是逐則過濾**:混合陣仍帶**全部** ids 走下面的分支,所以真的有
+    事做的那一半永遠不會被吃掉;代價是 k 可能被撐大、混合陣走清單而非逐項——**永遠
+    正確,偶爾不是最省**,而那是安全的方向。
 
     ⚠️ **兩件已知的誠實性瑕疵,刻意不修**:
     1. **哨兵的 fixture 讓 agent↔agent 之後 badge 變 6 / 2,那是真 server 產不出來的狀態**
@@ -564,7 +581,7 @@ reconcile-by-refetch 的規則沒變(**永遠不 merge payload**),但「refetch 
     |---|---|
     | 拿掉 `couldMoveAnOwnerBadge` 跳過 | 🔴 **2 條**(a2a chat、a2a chat_read;皆 `expected 1 to be +0`) |
     | 述詞只留 `from`/`to`(丟掉 `reader`/`peer`) | 🔴 **2 條**(read-echo 那組) |
-    | 刪掉 `k > 1 → full()` fail-safe | 🔴 **1 條**(混合陣 CONTROL,`expected undefined to be 1`) |
+    | 刪掉 `k > 1 → full()`(混合陣的熱路徑) | 🔴 **1 條**(混合陣 CONTROL,`expected undefined to be 1`) |
   - `useTasks` — **不可以**逐項,走清單。`GET /api/tasks/{id}` **整個 wire 上沒有
     `dep_tasks`**(凍結 spec 只把那個 server-side dep join 放在 `TaskListItemDTO`;
     `toTask()` 因此不設 `depTasks`,`toTaskListItem()` 逐字帶過)。而 `TaskCard` 把

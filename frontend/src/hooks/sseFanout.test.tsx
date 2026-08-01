@@ -381,8 +381,9 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
     //
     // 🔴 **這顆改動的歷史,別讀成一步到位**:先前那一版把「2 次沒必要的逐項」換成
     // 「1 次沒必要的清單」(嚴格優於更早之前,但仍在抓一份不會變的東西);這一版才
-    // 把它收成 0。下面那條 `k > 1 → full()` 因此**降級成 fail-safe、不再是熱路徑**
-    // ——理由與它為什麼不能刪,寫在 `useMembers.ts` 該分支上方。
+    // 把它收成 0。⚠️ 但下面那條 `k > 1 → full()` **沒有因此變成死碼或 fail-safe**
+    // ——單一 a2a delta 不再走到那裡,**混合陣仍然會**(`narrowToHeld` 吃的是整陣的
+    // ids 聯集,不是一則的)。一陣 ≠ 一則;完整理由寫在 `useMembers.ts` 該分支上方。
     //
     // ⚠️ **本測試 fixture 的一個誠實性瑕疵(已知,刻意不修)**:下面讓 m-other 1→6、
     // m-third 0→2,而**真 server 對這則 agent↔agent 訊息兩邊都不會加**(那正是上面
@@ -440,6 +441,11 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
     // 跳過,所以同一則 delta 仍讓它重抓一次全公司未讀總數 —— 而依同一條
     // `UnreadCounts(reader=owner)` 推論,那個總數同樣**不可能**因 agent↔agent 訊息
     // 改變。這裡把它斷言出來,免得有人把「useMembers 0 請求」讀成「座艙 0 請求」。
+    //
+    // ⚠️ **這兩條是刻意的絆線,不是永久契約**:`useChatUnread` 被修好的那天它們會紅。
+    // **那是進展,不是回歸** —— 屆時把期望值改成 0 / 0(並回頭更新 frontend/CLAUDE.md
+    // 那段射程說明)。**還有第四個實例也在等**:`useOutsourceWorkers` 的
+    // `getOutsourceWorker`(見下方那條 worker 測試),所以「全部收完」不只一處。
     expect(h.counts.getChatUnreadCount).toBe(1);
     expect(view.result.current.unread).toBe(11);
     expect(totalRequests()).toBe(1);
@@ -468,7 +474,8 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
   });
 
   it("🔴 CONTROL: a burst that mixes an agent↔agent line WITH a line to the owner still refetches", async () => {
-    // 反向守衛,而且它現在是 `k > 1 → full()` 那條 fail-safe 分支**唯一**的執行者:
+    // 反向守衛,而且它現在是 `k > 1 → full()` 那條分支**唯一**的執行者(所以那條分支
+    // 是混合陣的熱路徑、不是死碼——一陣 ≠ 一則):
     // 跳過是**整陣**判斷,所以混合陣仍會帶著全部 ids 走下面的分支,k=2 ⇒ 清單。
     // 兩顆 mutant 都會打紅這一條:(a) 把跳過改成 per-delta 過濾而丟掉真的那則、
     // (b) 把 `k > 1 → full()` 刪掉(當成死碼)。

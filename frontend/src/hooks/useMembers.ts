@@ -239,37 +239,40 @@ export function useMembers(opts?: { light?: boolean }): UseMembers {
         // re-introduces a k-times amplification of a full-table scan on a ticket
         // whose whole point was to stop the cockpit re-reading too much.
         //
-        // k>=2 is NOT a corner case: one chat delta names {id, from, to}
-        // (api_chat.go), and the hub delivers EVERY delta to the owner/dashboard
-        // connection — so a single agent-to-agent message names TWO held members
-        // in ONE frame, with no burst coalescing involved at all.
+        // 🔴 WHY THIS BRANCH IS STILL LIVE — and it is NOT what you might guess.
         //
-        // 🔴 **但 k>=2 是常態的「浪費」,不是常態的「需求」——這一段以前只寫了前半,
-        // 讀起來像「這條路已經解完了」。** `UnreadCounts`
-        // (server/ocserverd/domain.go:411-425)只數 `m.Recipient == reader`,
-        // 而這份 roster 的 reader 是 owner,且 owner 不是名冊列 ⇒ heldRef 不含它。
-        //   會動 badge ⟹ 有一端是 owner ⟹ k <= 1
-        //   k >= 2     ⟹ 兩端都不是 owner ⟹ 動不了任何 badge(語意 no-op)
-        // 反過來不成立:k=1 不蘊含「有事做」(`owner → member`、
-        // `member ↔ ow-worker` 都是 k=1 且什麼都不該做,今天照樣各打一次 GET)。
-        // ⇒ 現況是「2 次沒必要的逐項」換成「1 次沒必要的清單」:每個 k 都嚴格優於
-        // 改動前,但**最佳解是 0 個請求**——資訊已在 delta 上,`chat` 判
-        // `from !== "owner" && to !== "owner"`、`chat_read` 判 `reader !== "owner"`
-        // 就能直接 return(兩個 topic 述詞不同,chat_read 沒有 from/to)。
-        // **還沒做,要先取得 owner 核可**(新增一道從不存在的保護,不是順手改)。
-        // 🔴 `k > 1 → full()` IS NOW A FAIL-SAFE, NOT THE HOT PATH — do not
-        // delete it as dead code. With the skip above, every burst that still
-        // reaches here has the owner at one end, and on TODAY'S wire that forces
-        // k ≤ 1 (a chat delta names {id, from, to}; if one end is the owner, at
-        // most one other name can be a roster member). So k > 1 is currently
-        // unreachable in production.
+        // With the skip above, a SINGLE agent↔agent delta never reaches here, so
+        // it is tempting to conclude "every burst that gets here has the owner at
+        // one end ⇒ k ≤ 1 ⇒ this branch is dead". **That is wrong, and it was
+        // written here once.** It confuses ONE DELTA with ONE BURST:
+        // `narrowToHeld` reads `batch.ids`, the UNION over the whole burst
+        // (`lib/deltaSink.ts`), and a MIXED burst — one agent↔agent line plus one
+        // line to the owner, landing in the same microtask — names three held
+        // members. k = 3, right here, today.
         //
-        // But that is a property of the CURRENT wire, not a construction. Add a
-        // sixth identity field to `toSseDelta`, let a delta name a third party,
-        // or change who the hub delivers to, and k > 1 comes back — at which
-        // point this branch is the difference between one list GET and k
-        // per-item GETs, each of which costs a full `ListChat()` scan on the
-        // server (`unreadCountsForRequest`). Keeping it costs one comparison.
+        // ⇒ **This branch is the hot path for mixed bursts, not a fail-safe.**
+        // Its guard is the CONTROL test in `sseFanout.test.tsx` ("a burst that
+        // mixes an agent↔agent line WITH a line to the owner still refetches");
+        // deleting this branch turns that test red with `expected undefined to
+        // be 1` — the roster simply never re-pulls, while that burst really did
+        // carry a message to the owner. Mixed bursts are not a test artefact:
+        // `deltaSink.ts` says in its own header that it DELIBERATELY coalesces
+        // bursts of REAL deltas landing in the same tick.
+        // (What has NOT been measured is how often the wire actually delivers
+        // two chat frames into one microtask — so do not claim a frequency.)
+        //
+        // 🔴 THE TRAP THAT PRODUCED THAT WRONG CLAIM WILL COME BACK. It is the
+        // same one `sseFanout.test.tsx` spends 35 lines on right above its k
+        // test: **一陣 ≠ 一則 — a burst is not a delta.** We documented it and
+        // then walked into it one commit later, in this very file. Anytime you
+        // reason about k, first ask which of the two you are holding: the
+        // per-delta predicate (`couldMoveAnOwnerBadge`, above) or the per-BURST
+        // union (`touched`, here).
+        //
+        // Independently of all that, the cost argument above is why the
+        // threshold is 2 and not a knob: k per-item reads cost k full
+        // `ListChat()` scans server-side (`unreadCountsForRequest`), the list
+        // costs 1 + 1 for any k.
         if (touched.length === 1) void patchOne(touched);
         else if (touched.length > 1) void full();
       })
