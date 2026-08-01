@@ -6,11 +6,14 @@
 // subscribeEvents is a no-op, so refetch is driven by explicit action callbacks
 // (activate/patch/refocus) — but the wiring is identical for the real backend.
 //
-// T-8115: a "chat" / "chat_read" delta moves ONE card's unread badge, so it
+// T-8115: a "chat" / "chat_read" delta that moves EXACTLY ONE card's unread badge
 // re-reads that one member (`GET /api/members/{id}`) instead of the company, and
 // re-reads nothing at all when it names a peer that is not on the roster — a chat
-// line can neither add, remove nor rename a member. Still no payload merging: the
-// delta only says WHICH card changed, the server says what it holds.
+// line can neither add, remove nor rename a member. Naming TWO OR MORE held
+// members re-pulls the list, because per-item costs one full ListChat() scan PER
+// REQUEST server-side while the list costs exactly one however many were named —
+// the crossover is derived, see the note at the call site. Still no payload
+// merging: the delta only says WHICH card changed, the server says what it holds.
 //
 // 🔴 That per-item read is only sound because the single-member endpoint was FIXED
 // to compute `unread_count` the same way the list does (review of the first
@@ -98,11 +101,14 @@ export function useMembers(opts?: { light?: boolean }): UseMembers {
         })
         .catch((e) => console.warn("useMembers: SSE refetch failed", e));
 
-    // Replace exactly the named cards, IN PLACE. The server stays the source of
-    // every value (one GET /api/members/{id} each, unread_count included — see the
-    // header); the position is kept because the roster's order is by name and
-    // these topics cannot change a name. A rejection falls back to the full
-    // re-pull rather than leaving one card stale behind a badge that already moved.
+    // Replace the named card, IN PLACE. The server stays the source of every
+    // value (one GET /api/members/{id}, unread_count included — see the header);
+    // the position is kept because the roster's order is by name and these topics
+    // cannot change a name. A rejection falls back to the full re-pull rather
+    // than leaving one card stale behind a badge that already moved.
+    // NOTE: takes an array but the caller only ever passes ONE id — see the
+    // crossover note at the call site. The array shape is kept so the fan-out
+    // stays visible if that rule is ever revisited with numbers behind it.
     const patchOne = (ids: string[]) =>
       Promise.all(ids.map((id) => api.getMember(id)))
         .then((fresh) => {
@@ -156,7 +162,26 @@ export function useMembers(opts?: { light?: boolean }): UseMembers {
         // rename a member (that is the "member" topic), so a conversation with
         // an outsource worker / a released peer changes nothing this roster
         // renders. Re-pulling the company for it was the old behaviour.
-        if (touched.length > 0) void patchOne(touched);
+        //
+        // 🔴 EXACTLY ONE named card takes the per-item path; TWO OR MORE re-pull
+        // the list. The crossover is at 2 and is DERIVED, not a tunable knob
+        // (measured 2026-08-01, server-side statement counts):
+        //   k=1  — per-item 1 GET + 1 ListChat() full scan; list 1 + 1. A TIE on
+        //          cost, and the per-item payload is smaller ⇒ per-item wins.
+        //   k>=2 — per-item k GETs + k full scans (`unreadCountsForRequest` runs
+        //          ListChat() once PER REQUEST); the list is ALWAYS 1 + 1 ⇒ the
+        //          list wins, and the gap widens linearly with k.
+        // So no k is worse than the pre-T-8115 behaviour: k=1 gains the smaller
+        // payload, k>=2 costs exactly what it always did. Raising this threshold
+        // re-introduces a k-times amplification of a full-table scan on a ticket
+        // whose whole point was to stop the cockpit re-reading too much.
+        //
+        // k>=2 is NOT a corner case: one chat delta names {id, from, to}
+        // (api_chat.go), and the hub delivers EVERY delta to the owner/dashboard
+        // connection — so a single agent-to-agent message names TWO held members
+        // in ONE frame, with no burst coalescing involved at all.
+        if (touched.length === 1) void patchOne(touched);
+        else if (touched.length > 1) void full();
       })
     );
 

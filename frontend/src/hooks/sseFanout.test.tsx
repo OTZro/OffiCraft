@@ -302,6 +302,55 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
     expect(totalRequests()).toBe(2); // getMember + the office total
   });
 
+  it("🔴 ONE agent-to-agent line names TWO members — that re-pulls the LIST, not two reads", async () => {
+    // THE REAL SHAPE, not a synthetic multi-member burst. A chat delta carries
+    // {id, from, to} (api_chat.go), `toSseDelta` keeps all of them, and the hub
+    // delivers EVERY delta to the owner/dashboard connection — so one member
+    // talking to another member names TWO held cards in a SINGLE frame, with no
+    // burst coalescing involved. Agents talking to each other is ordinary here,
+    // so this is a normal path, not a corner case.
+    //
+    // COST is why it must not fan out: `unreadCountsForRequest` runs a full
+    // ListChat() scan PER REQUEST, so k per-item reads cost k GETs + k full
+    // scans, while the list is 1 + 1 for any k (measured 2026-08-01). The
+    // crossover is at 2 — k=1 ties on cost and wins on payload, k>=2 loses.
+    const view = await mountedCockpit();
+    // The server's new truth: both ends of that conversation moved.
+    h.members = [member(OPEN_PEER, 3), member("m-other", 6), member("m-third", 2)];
+    h.unread = 11;
+
+    const delta = {
+      topic: "chat",
+      names: { id: "cm-a2a", from: "m-other", to: "m-third" },
+      ids: ["cm-a2a", "m-other", "m-third"],
+    };
+    // PREMISE: this delta really does name TWO cards this roster holds. Without
+    // this the test would still pass against a fan-out that simply never fired.
+    const held = view.result.current.members.map((m) => m.id);
+    expect(delta.ids.filter((id) => held.includes(id))).toEqual([
+      "m-other",
+      "m-third",
+    ]);
+
+    emit(delta);
+    await settle();
+
+    // COST: ONE list read, and NOT two per-item reads.
+    expect(h.counts.listMembers).toBe(1);
+    expect(h.counts.getMember ?? 0).toBe(0);
+
+    // VALUE: the list is still the source of every badge, so both ends moved.
+    // (A cost assertion alone is satisfied by a hook that stopped updating.)
+    expect(view.result.current.members.map((m) => m.unreadCount)).toEqual([
+      3, 6, 2,
+    ]);
+    expect(view.result.current.members.map((m) => m.id)).toEqual([
+      OPEN_PEER,
+      "m-other",
+      "m-third",
+    ]);
+  });
+
   it("a chat line with an 外包 re-reads that ONE worker row, and leaves the roster alone", async () => {
     const view = await mountedCockpit();
     h.workers = [worker("ow-1", 5), worker("ow-2")];

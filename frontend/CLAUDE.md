@@ -452,6 +452,27 @@ reconcile-by-refetch 的規則沒變(**永遠不 merge payload**),但「refetch 
     都沒有任何主張;上面那道是 Go 單元測試,不是同一件事。
     **指到的不是我手上的人**(外包 / 已釋放的 peer)則**什麼都不做**。
     `member`/`role_def` 照舊全量。
+    🔴 **逐項只給「恰好指到一個」;指到兩個以上一律重抓清單,而交叉點正好在 2、
+    是推導出來的不是可調旋鈕**(owner 2026-08-01 裁定;數字為實測,server 側用
+    database/sql driver seam 數 `chat_message` 讀取):
+    | k(被指名且在手上的成員數) | 逐項 | 清單 |
+    |---|---|---|
+    | 1 | 1 GET + **1** 次全表掃描 | 1 GET + 1 次 |
+    | 3 | 3 GET + **3** 次 | 1 GET + 1 次 |
+    | 8 | 8 GET + **8** 次 | 1 GET + 1 次 |
+    ⇒ k=1 成本打平、payload 較小 ⇒ 逐項贏;k≥2 逐項線性放大而清單**恆為 1+1** ⇒ 清單贏。
+    因此**任何 k 都不比改動前差**。根因是 `unreadCountsForRequest` **每個請求各跑一次
+    `ListChat()` 全表掃描**,所以逐項的成本是 k 倍、不是 k 個小請求。
+    🔴 **k≥2 不是邊角情況,而且不需要 burst coalescing**:一則 chat delta 帶
+    `{id, from, to}`(`api_chat.go`),`toSseDelta` 五個欄位全收,而 hub 對
+    owner/dashboard 連線(`MemberID==""`)是**全量投遞**(`hub.go`)⇒ 座艙收得到
+    agent↔agent 的訊息,**單一 SSE frame 就同時指名兩個名冊成員**。agent 互相講話
+    在這個產品裡是常態。(反面:分開三個 tick 的三則 delta 是三個 k=1 的 burst,
+    改動前也是 3 次清單 GET ⇒ **那條路沒有回歸**,放大只發生在單一 burst 內。)
+    哨兵 `sseFanout.test.tsx` 的「ONE agent-to-agent line names TWO members」——
+    **用真的會發生的形狀當 fixture,不是人造的多成員 burst**,並含一道前提斷言
+    (那則 delta 真的指到兩張手上的卡)。mutant:把 `k>1 → full()` 拿掉 → 整套
+    1678 條**恰好這 1 條紅**(`expected undefined to be 1`,清單根本沒被拉)。
   - `useTasks` — **不可以**逐項,走清單。`GET /api/tasks/{id}` **整個 wire 上沒有
     `dep_tasks`**(凍結 spec 只把那個 server-side dep join 放在 `TaskListItemDTO`;
     `toTask()` 因此不設 `depTasks`,`toTaskListItem()` 逐字帶過)。而 `TaskCard` 把
