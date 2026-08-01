@@ -51,7 +51,10 @@ vi.mock("../api", () => ({
       bump("getMember");
       const found = h.members.find((m) => m.id === id);
       if (!found) throw new Error(`no member ${id}`);
-      return found;
+      // 🔴 NOT the list row: `GET /api/members/{id}` does not compute
+      // unread_count. Answering a single-item GET out of list data is the exact
+      // mistake that let the badge regression ship green — see api/dtoParity.ts.
+      return projectSingleItem("member", found);
     },
     listOutsourceWorkers: async () => {
       bump("listOutsourceWorkers");
@@ -61,17 +64,27 @@ vi.mock("../api", () => ({
       bump("getOutsourceWorker");
       const found = h.workers.find((w) => w.id === id);
       if (!found) throw new Error(`no worker ${id}`);
-      return found;
+      // This one IS a faithful superset of the list row (same projectWorker on
+      // the server), so the projection is a no-op — asserted in dtoParity.test.
+      return projectSingleItem("outsourceWorker", found);
     },
-    listTasks: async () => {
+    listTasks: async (opts?: { statuses?: string[] }) => {
       bump("listTasks");
-      return h.tasks;
+      // The status set is a SERVER-side filter (`?statuses=`), so the fake must
+      // apply it — a fake that returns every row no matter what is asked cannot
+      // show that a task which left the filter leaves the list.
+      const want = opts?.statuses;
+      return want === undefined
+        ? h.tasks
+        : h.tasks.filter((t) => want.includes(t.status as string));
     },
     getTask: async (id: string) => {
       bump("getTask");
       const found = h.tasks.find((t) => t.id === id);
       if (!found) throw new Error(`no task ${id}`);
-      return found;
+      // 🔴 TaskDTO carries no dep_tasks (the join is on the LIGHT list only), so
+      // a per-task read cannot serve the card's dep rows — api/dtoParity.ts.
+      return projectSingleItem("task", found);
     },
     listTaskTypes: async () => {
       bump("listTaskTypes");
@@ -110,6 +123,7 @@ vi.mock("../api", () => ({
   },
 }));
 
+import { projectSingleItem } from "../api/dtoParity";
 import { useMembers } from "./useMembers";
 import { useOutsourceWorkers } from "./useOutsourceWorkers";
 import { useChatUnread } from "./useChatUnread";
@@ -147,6 +161,11 @@ function task(id: string, status = "in_progress", over = {}) {
     priority: "medium",
     executorKind: "member",
     executorId: "m-open",
+    deps: ["t-dep"],
+    // The server-side dep join the LIGHT list carries (T-a3e4). It is what lets
+    // the card say 「等 T-dep <標題>」 instead of a bare short id, and it is
+    // ABSENT from TaskDTO — so it is also the value a per-task refetch loses.
+    depTasks: [{ id: "t-dep", title: "the blocker", status: "done" }],
     ...over,
   };
 }
@@ -231,7 +250,7 @@ function totalRequests(): number {
 }
 
 describe("one delta re-pulls only what it named (T-8115)", () => {
-  it("a chat line in ANOTHER conversation re-reads that ONE member — and the badge really moves", async () => {
+  it("a chat line in ANOTHER conversation moves that card's badge — and it is the LIST that says so", async () => {
     const view = await mountedCockpit();
     // The server's new truth for m-other: the badge went 1 → 6.
     h.members = [member(OPEN_PEER, 3), member("m-other", 6), member("m-third")];
@@ -256,9 +275,12 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
     ]);
     expect(view.result.current.unread).toBe(9);
 
-    // COST: one member read, not the company.
-    expect(h.counts.getMember).toBe(1);
-    expect(h.counts.listMembers ?? 0).toBe(0);
+    // COST: ONE roster GET — and it must be the LIST, never `GET /members/{id}`:
+    // that endpoint returns a literal 0 for unread_count, so a per-item read
+    // here would drive the badge to 0 exactly when it should rise
+    // (api/dtoParity.ts + the VALUE assertion above are the pair that pin this).
+    expect(h.counts.listMembers).toBe(1);
+    expect(h.counts.getMember ?? 0).toBe(0);
     // The open thread belongs to someone else — no reload, and above all no
     // marking read (that read is what fans the echo round).
     expect(h.counts.listChat ?? 0).toBe(0);
@@ -270,7 +292,7 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
     // Nothing about a chat line changes the settings snapshot (T-8115 step 3's
     // shared cache is not re-entered either).
     expect(h.counts.getServerSettings ?? 0).toBe(0);
-    expect(totalRequests()).toBe(2); // getMember + the office total
+    expect(totalRequests()).toBe(2); // the roster list + the office total
   });
 
   it("a chat line with an 外包 re-reads that ONE worker row, and leaves the roster alone", async () => {
@@ -298,7 +320,7 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
     expect(h.counts.getMember ?? 0).toBe(0);
   });
 
-  it("a task delta re-reads that ONE task, and a task that left the filter leaves the list", async () => {
+  it("a task delta re-pulls the list: the row updates, the filter drops it, and the dep join SURVIVES", async () => {
     const view = await mountedCockpit();
     expect(view.result.current.tasks.map((t) => t.id)).toEqual([
       "t-aaa",
@@ -312,13 +334,36 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
     await settle();
 
     expect(view.result.current.tasks.map((t) => t.id)).toEqual(["t-bbb"]);
-    expect(h.counts.getTask).toBe(1);
-    expect(h.counts.listTasks ?? 0).toBe(0);
-    // useTasks did not re-pull the worker roster for it. The 外包 RAIL still
-    // does: a task delta names a TASK id, and the task→worker binding lives on
-    // the server, so the rail has no way to name the row that changed. Honest
-    // remainder, not an oversight — see the report's "not done" list.
-    expect(h.counts.listOutsourceWorkers).toBe(1);
+    expect(h.counts.listTasks).toBe(1);
+    expect(h.counts.getTask ?? 0).toBe(0);
+    // TWO worker-list reads, and this is the honest price of giving the per-task
+    // shortcut back: useTasks' full path re-pulls the worker roster (it resolves
+    // the executor chip) and the 外包 RAIL re-pulls its own, because a task delta
+    // names a TASK id and the task→worker binding lives on the server. That is
+    // exactly the pre-T-8115 cost for this case — the delta's win here is the
+    // COALESCING (one decision per burst), not a narrower fetch.
+    expect(h.counts.listOutsourceWorkers).toBe(2);
+  });
+
+  it("🔴 the NAMED row keeps its server-side dep join — a per-task read would lose it", async () => {
+    // The row the delta names must be READ FROM THE LIST, because
+    // `GET /api/tasks/{id}` carries no dep_tasks at all (api/dtoParity.ts). Patch
+    // this row from the single-item endpoint instead and 「等 T-dep the blocker」
+    // collapses to a bare unresolved short id on the card (T-a3e4 regression).
+    // NOTE: assert on the row the delta NAMED — a row nobody touched keeps its
+    // dep join no matter how the refetch was done, so asserting there proves
+    // nothing (that mistake let this very regression through once already).
+    const view = await mountedCockpit();
+    h.tasks = [task("t-aaa"), task("t-bbb", "in_progress", { title: "renamed" })];
+
+    emit({ topic: "task", names: { id: "t-bbb" }, ids: ["t-bbb"] });
+    await settle();
+
+    const named = view.result.current.tasks.find((t) => t.id === "t-bbb");
+    expect(named?.title).toBe("renamed"); // the write really landed
+    expect(named?.depTasks).toEqual([
+      { id: "t-dep", title: "the blocker", status: "done" },
+    ]);
   });
 
   it("a task delta naming a task NOT on screen still re-pulls the list — a new task must appear", async () => {
@@ -413,8 +458,8 @@ describe("the read echo does not drive another round (T-8115)", () => {
     expect(h.counts.listChat ?? 0).toBe(0);
     expect(h.counts.peekChat ?? 0).toBe(0);
     expect(h.counts.listChatReads ?? 0).toBe(0);
-    expect(h.counts.getMember).toBe(1);
-    expect(h.counts.listMembers ?? 0).toBe(0);
+    expect(h.counts.listMembers).toBe(1);
+    expect(h.counts.getMember ?? 0).toBe(0);
   });
 
   it("the PEER reading our messages DOES re-pull the receipts", async () => {
@@ -467,7 +512,12 @@ describe("the read echo does not drive another round (T-8115)", () => {
     // The thread reloaded exactly ONCE (the message) and the echo did not make
     // it reload again — a second marking read would fan a second echo.
     expect(h.counts.listChat).toBe(1);
-    expect(h.counts.listMembers ?? 0).toBe(0);
+    // TWO roster reads: the message is one burst and the echo is a later one, so
+    // each costs one list GET. That is the pre-T-8115 count for this path too —
+    // what T-8115 still buys is that the echo does NOT re-enter the marking read
+    // (listChat stays 1), which is what used to manufacture a whole extra round.
+    expect(h.counts.listMembers).toBe(2);
+    expect(h.counts.getMember ?? 0).toBe(0);
     expect(view.result.current.members[0].unreadCount).toBe(0);
   });
 });

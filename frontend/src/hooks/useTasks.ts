@@ -13,7 +13,7 @@
 // costs the ~20 rows on screen instead of the whole task history. `interface
 // UseTasks` documents why the boolean had to go rather than be extended.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type {
   TaskView,
   TaskMessageInput,
@@ -22,7 +22,7 @@ import type {
   TaskTypeView,
 } from "../api/adapter";
 import { api } from "../api";
-import { createDeltaSink, narrowToHeld } from "../lib/deltaSink";
+import { createDeltaSink } from "../lib/deltaSink";
 
 interface UseTasks {
   /** The tasks the LAST fetch asked for — every status when no set was given,
@@ -100,15 +100,6 @@ export function useTasks(initialStatuses: string[]): UseTasks {
     );
   }, []);
 
-  // The ids on screen + the status set they were asked for, readable from the
-  // SSE callback without a stale-closure state read.
-  const heldRef = useRef<Set<string>>(new Set());
-  // The worker ids the executor display can currently resolve — a task that
-  // moved to an 外包 outside this set cannot be rendered from a per-task read.
-  const workersRef = useRef<Set<string>>(new Set());
-  const statusKeyRef = useRef<string | undefined>(statusKey);
-  statusKeyRef.current = statusKey;
-
   const refetch = useCallback(async () => {
     const [t, w] = await Promise.all([
       api.listTasks(
@@ -116,8 +107,6 @@ export function useTasks(initialStatuses: string[]): UseTasks {
       ),
       api.listOutsourceWorkers(),
     ]);
-    heldRef.current = new Set(t.map((x) => x.id));
-    workersRef.current = new Set(w.map((x) => x.id));
     setTasks(t);
     setWorkers(w);
     setError(false);
@@ -139,53 +128,21 @@ export function useTasks(initialStatuses: string[]): UseTasks {
         if (alive) setLoading(false);
       });
 
-    // Re-read exactly the named tasks. The full path costs `?statuses=` rows +
-    // the worker roster; a status/priority/plan write on ONE task that is
-    // already on screen costs one GET /api/tasks/{id}.
+    // 🔴 NO per-task refetch here, and the reason is a wire fact, not a
+    // preference: `GET /api/tasks/{id}` carries no `dep_tasks`. The frozen spec
+    // puts that server-side dep join on `TaskListItemDTO` ONLY (see
+    // api/dtoParity.ts), and `TaskCard` renders "nobody resolved this dep"
+    // differently from "查無此任務" on purpose — so swapping a list row for a
+    // full task would silently degrade every dep row on that card to a bare
+    // short id (T-a3e4's 「已結案的 dep 仍講得出標題」 lost). Re-pulling the list
+    // is ONE GET either way; only the payload is bigger.
     //
-    // Two things make that safe rather than a shortcut. (a) The status set is a
-    // SERVER-side filter, so a task whose status left the filter must LEAVE the
-    // list — it is dropped here rather than left rendering under a filter it no
-    // longer matches. (b) The executor display resolves through `workers`, so a
-    // task that moved to an 外包 this hook has never seen falls back to the full
-    // path, which re-pulls the roster too. Anything unnamed, or naming a task not
-    // on screen (a NEW task — list membership, undiscoverable per-item), is a
-    // full re-pull as before.
-    const inFilter = (status: string) => {
-      const key = statusKeyRef.current;
-      return key === undefined || key.split(",").includes(status);
-    };
-    const patchOne = (ids: string[]) =>
-      Promise.all(ids.map((id) => api.getTask(id)))
-        .then((fresh) => {
-          if (!alive) return false;
-          const unknownExecutor = fresh.some(
-            (t) =>
-              t.executorId.startsWith("ow-") &&
-              !workersRef.current.has(t.executorId)
-          );
-          if (unknownExecutor) return false;
-          setTasks((prev) => {
-            const next = prev
-              .map((t) => fresh.find((f) => f.id === t.id) ?? t)
-              .filter((t) => inFilter(t.status));
-            heldRef.current = new Set(next.map((t) => t.id));
-            return next;
-          });
-          setError(false);
-          return true;
-        })
-        .catch((e) => {
-          console.warn("useTasks: task refetch failed", e);
-          return false;
-        });
-
+    // What T-8115 still buys here is the COALESCING below: a resync fans 12
+    // topics synchronously and three of them land in this hook, which used to be
+    // two identical list re-pulls plus a types re-pull for one reconnect.
     const full = () =>
       refetch().catch((e) => console.warn("useTasks: SSE refetch failed", e));
 
-    // ONE decision per burst: a resync fans 12 topics synchronously and three of
-    // them land here, which used to be two identical list re-pulls plus a types
-    // re-pull for one reconnect.
     const unsubscribe = api.subscribeEvents(
       createDeltaSink((batch) => {
         if (batch.topics.has("task_manual")) {
@@ -197,20 +154,7 @@ export function useTasks(initialStatuses: string[]): UseTasks {
           (t) => t === "task" || t === "outsource_worker"
         );
         if (listTopics.length === 0) return;
-        const taskOnly = listTopics.every((t) => t === "task");
-        // An empty narrowing is a full re-pull HERE (unlike the roster): a task
-        // delta naming an id not on screen is most likely a NEW task, and list
-        // membership is only discoverable from the list.
-        const touched = taskOnly
-          ? (narrowToHeld(batch, (id) => heldRef.current.has(id)) ?? [])
-          : [];
-        if (touched.length === 0) {
-          void full();
-          return;
-        }
-        void patchOne(touched).then((ok) => {
-          if (!ok) void full();
-        });
+        void full();
       })
     );
 

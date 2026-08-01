@@ -425,18 +425,27 @@ reconcile-by-refetch 的規則沒變(**永遠不 merge payload**),但「refetch 
   第一態:對「不可能改變我這份清單成員資格」的 topic(chat/chat_read 對 roster 與外包 rail)
   它就是**真的沒事做**;對可能新增列的 topic(task)則必須當全量辦——新的一列只有清單看得到。
   把兩者合成一個 falsy 判斷,就會丟掉其中一半的修補。
-- **各 hook 的分工(改的時候別抄錯)**:
-  - `useMembers` — chat/chat_read 只動**某一張卡**的 `unread_count`,而 roster 是
-    server 按 name 排序的 ⇒ 指到手上的成員就 `GET /api/members/{id}` **原位換掉**,不重排。
-    `member`/`role_def` 照舊全量(成員資格與每列的角色名都可能變)。
-  - `useOutsourceWorkers` — 同上,chat/chat_read → `GET /api/outsource-workers/{id}`。
-    排序鍵是**綁定任務的 created_ts**,聊天碰不到 ⇒ 不准重排(否則一則訊息會讓列跳位)。
-    `outsource_worker`(派工/釋放=成員資格)與 `task` 照舊全量。
-  - `useTasks` — `task` 指到畫面上的任務 → `GET /api/tasks/{id}`。兩個必要的退路:
-    (a) 狀態篩選是 **server 側**的,所以重讀後**狀態掉出篩選的那筆要從清單移除**,不能留在
-    一個它已經不符合的篩選底下;(b) 執行者換成這個 hook 沒見過的 `ow-` ⇒ 落回全量(順便
-    重抓 worker roster),否則那顆 chip 解不出代號。
+- 🔴 **逐項重讀只有在「單筆回應是清單列的超集」時才成立,而三個端點只有一個是**
+  (見 `api/dtoParity.ts` — 這是那份表存在的全部理由):
+  - `useOutsourceWorkers` — **可以**逐項:chat/chat_read → `GET /api/outsource-workers/{id}`。
+    server 的單筆 handler 呼叫**同一支** `projectWorker`、帶**同一個真的** `unread[worker.ID]`
+    ⇒ 一個欄位都沒少。排序鍵是**綁定任務的 created_ts**,聊天碰不到 ⇒ 不准重排(否則一則
+    訊息會讓列跳位)。`outsource_worker`(派工/釋放=成員資格)與 `task` 照舊全量。
+  - `useMembers` — **不可以**逐項,走清單。`GET /api/members/{id}` 的 `unread_count`
+    是**寫死的 0**(`api_members.go:340` 把 literal 0 交給 `newMemberDTO`,清單那支才跑
+    `UnreadCounts`)⇒ 逐項重讀會把 delta 正在宣告的那個紅點**歸零**,而且方向只有一邊:
+    **badge 只降不升**。所以 chat/chat_read 指到手上的成員時**重抓清單**——請求數一樣是
+    一個 GET,只是 payload 大一點。**指到的不是我手上的人**(外包 / 已釋放的 peer)則
+    **什麼都不做**,那才是這條路徑真正省下來的東西。`member`/`role_def` 照舊全量。
+  - `useTasks` — **不可以**逐項,走清單。`GET /api/tasks/{id}` **整個 wire 上沒有
+    `dep_tasks`**(凍結 spec 只把那個 server-side dep join 放在 `TaskListItemDTO`;
+    `toTask()` 因此不設 `depTasks`,`toTaskListItem()` 逐字帶過)。而 `TaskCard` 把
+    「沒有人解析這個 dep」與「查無此任務」畫成**兩種不同的東西** ⇒ 用單筆換掉一列會讓那張
+    卡的每一條 dep 退化成裸短編號(T-a3e4 的「已結案的 dep 仍講得出標題」直接消失)。
   - `useChatUnread` — 一個總數,沒有「只抓一項」的版本;只吃 coalescing。
+  ⚠️ **兩個缺口都補不在 client**:一個是 server 不肯算的值、一個是凍結 wire 沒有的欄位。
+  要真的逐項就得**動 server 回傳 / 動 spec**(root §12 DTO 條:破相容或加欄要先問 owner),
+  那是另一張票;在那之前**不要「順手」把 `narrowToHeld` 接回這兩個 hook**。
 - 🔴 **自激路徑:讀取本身是一次寫入。** `GET /api/chat?with=`(列表即讀)會推進
   watermark,server 於是**把 `chat_read` 扇回同一個 client**。所以在**別人的**對話有
   delta 時去 `load()` 開著的那個 thread,不只是白抓一次——它**無中生有製造第二輪事件**,
@@ -446,14 +455,32 @@ reconcile-by-refetch 的規則沒變(**永遠不 merge payload**),但「refetch 
   ⚠️ 它**本來就會停**(那一輪裡沒有人再打一次列表即讀,而 `PutChatRead` 只在真的前進時才扇
   ——`dal.go` + `server_test.go`),所以這不是無窮迴圈,是**每則訊息固定多一輪**的放大。
 - **實測(改前 → 改後,六個 hook 同掛的座艙,單一 delta 造成的請求數,不含 mount)**:
-  別的對話一則聊天 **5 → 2**;自己讀取的 echo **4 → 2**;一次 resync **21 → 9**;
-  一則進來的訊息含它的 echo 輪 **9 → 6**。`/api/settings` 在**改前改後都是 0**
+  別的對話一則聊天 **5 → 2**;自己讀取的 echo **4 → 2**;一次 resync **21 → 9**。
+  ⚠️ **這幾個數字量的是「請求次數」,而逐項 vs 清單在次數上是一樣的(都是一個 GET)**
+  ——所以上面那些數字**不因為 members/tasks 改走清單而變**,變的是那一個 GET 的 payload
+  大小(以及 task delta 那格會多一次 `listOutsourceWorkers`,因為 useTasks 的全量路徑
+  順便重抓 worker roster——那是改動前就有的成本)。**別把「請求變少」讀成「payload 變小」。**
+  `/api/settings` 在**改前改後都是 0**
   ——ad74682 的共享快取之後,任何 delta 都不會再碰它(見下一節),票面上「外包/任務/聊天
   事件在重拉 626 kB 設定」這句**在 main 上已經不成立**,實測坐實、不是推論。
 - 護欄:`hooks/sseFanout.test.tsx`(六 hook 同掛的成本 + **值**雙斷言)、
-  `lib/deltaSink.test.ts`、`api/http.sse-delta.test.ts`。
+  `lib/deltaSink.test.ts`、`api/http.sse-delta.test.ts`、**`api/dtoParity.test.ts`**。
   🔴 **每條成本斷言都配一條值斷言**:「請求變少」對一個乾脆不更新的 hook 也成立,
   所以那份測試同時釘住 delta 真的指到的那一列上、**server 說的那個值**。
+- 🔴 **值斷言只有在假 api 不比真 server 慷慨時才算數——這條是這批修補的真正教訓。**
+  第一版的兩個回歸(roster badge 歸零、任務卡 dep 退化成裸編號)**通過了 tsc、1670 條
+  jsdom、CT 與 frame 探針**,因為 `sseFanout.test.tsx` 的手寫假 api 拿**清單列**回答
+  `GET /{id}`:那個 wire 不存在,於是值斷言量的是一台不存在的 server。反過來
+  `api/mock.ts` 一直是對的(它的 `getTask` 早就寫死 `depTasks: undefined` 並註明理由)
+  ——**繞過共用 mock 自己手寫假貨,就是繞過那份已經校準好的知識。**
+  ⇒ 現在單筆端點的落差集中在 `api/dtoParity.ts` **一份表**,`projectSingleItem()` 供
+  測試建假貨用(hook 測試的三個單筆 getter 全部走它,**構造上不可能比 wire 慷慨**),
+  `api/dtoParity.test.ts` 把那份表釘在 `api/mock.ts` 的實際行為上 + 一條**編譯期**
+  pin(`TaskDTO` 沒有 `dep_tasks`、`TaskListItemDTO` 有)。
+  把 mock 教成會算單筆 unread、或讓 `getTask` 留著 dep join,那份測試就紅。
+  ⚠️ **它抓不到的方向**:server **自己**改了(例如哪天單筆真的開始算 unread)——那時這份
+  表會靜靜過期。只有跑真 ocserverd 的 conformance 級斷言(單筆 vs 清單對帳)才守得住那一邊,
+  **那是還沒做的事,別把這份 guard 當成它。**
 
 ## /api/settings 只讀一份;`onboarding: null` 是終態(T-8115)
 

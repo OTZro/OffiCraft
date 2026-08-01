@@ -6,11 +6,17 @@
 // subscribeEvents is a no-op, so refetch is driven by explicit action callbacks
 // (activate/patch/refocus) — but the wiring is identical for the real backend.
 //
-// T-8115: a "chat" / "chat_read" delta moves ONE card's unread badge, so it
-// re-reads that one member (`GET /api/members/{id}`) instead of the company, and
-// re-reads nothing at all when it names a peer that is not on the roster. Still
-// no payload merging: the delta only says WHICH card, the server says what it
-// holds. See frontend/CLAUDE.md 「一則通知 = 一次『只抓它碰到的那一項』」.
+// T-8115: a "chat" / "chat_read" delta moves ONE card's unread badge, so when it
+// names a peer that is NOT on the roster this hook re-reads nothing at all — a
+// chat line can neither add, remove nor rename a member.
+//
+// 🔴 But when it DOES name someone we hold, the refetch is still the LIST, not
+// `GET /api/members/{id}`: that endpoint returns a literal 0 for `unread_count`
+// (api_members.go:340 — the list handler computes it, the single-item one does
+// not), so re-reading one member would ZERO the badge the delta was announcing.
+// See api/dtoParity.ts for the table and the two other endpoints. Same request
+// count either way — one GET; only the payload is bigger. Still no payload
+// merging: the delta only says WHICH card changed, the server says what it holds.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Member } from "../types";
@@ -91,25 +97,6 @@ export function useMembers(opts?: { light?: boolean }): UseMembers {
         })
         .catch((e) => console.warn("useMembers: SSE refetch failed", e));
 
-    // Replace exactly the named cards, IN PLACE. The server stays the source of
-    // every value (one GET /api/members/{id} each); the position is kept because
-    // the roster's order is by name and these topics cannot change a name. A
-    // rejection falls back to the full re-pull rather than leaving one card
-    // stale behind a badge that already moved.
-    const patchOne = (ids: string[]) =>
-      Promise.all(ids.map((id) => api.getMember(id)))
-        .then((fresh) => {
-          if (!alive) return;
-          setMembers((prev) =>
-            prev.map((m) => fresh.find((f) => f.id === m.id) ?? m)
-          );
-          setError(false);
-        })
-        .catch((e) => {
-          console.warn("useMembers: member refetch failed", e);
-          return full();
-        });
-
     // Initial load. On rejection surface an honest error flag instead of
     // swallowing it into an empty roster. (Do NOT clearToken here — a 401 is
     // already handled at the http layer, which bounces to login.)
@@ -148,8 +135,10 @@ export function useMembers(opts?: { light?: boolean }): UseMembers {
         // Named somebody, none of them ours: a chat line CANNOT add, remove or
         // rename a member (that is the "member" topic), so a conversation with
         // an outsource worker / a released peer changes nothing this roster
-        // renders. Re-pulling the company for it was the old behaviour.
-        if (touched.length > 0) void patchOne(touched);
+        // renders. Re-pulling the company for it was the old behaviour, and
+        // skipping it is the win that survives — see the header on why the
+        // OTHER branch cannot be `GET /api/members/{id}`.
+        if (touched.length > 0) void full();
       })
     );
 
