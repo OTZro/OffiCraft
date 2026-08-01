@@ -4,10 +4,15 @@
 // 時間新→舊, plus the global parallel cap (settings.outsource_max_parallel)
 // behind the panel's 「N / 上限」 + 齒輪.
 //
-// Reconcile-by-refetch (contract B): "outsource_worker" (assignment / release),
-// "task" (the bound task's status/title/type echo + the created_ts sort key) and
-// "chat" / "chat_read" (the row's unread badge) all re-pull the SAME small list
-// — `GET /api/outsource-workers`, nothing else.
+// Reconcile-by-refetch (contract B): "outsource_worker" (assignment / release)
+// and "task" (the bound task's status/title/type echo + the created_ts sort key)
+// re-pull the SAME small list — `GET /api/outsource-workers`, nothing else.
+//
+// "chat" / "chat_read" affect ONE row's unread badge and nothing else, so since
+// T-8115 they re-read just that row (`GET /api/outsource-workers/{id}`) when the
+// delta names a worker on the rail, and do NOTHING when it names a peer that is
+// not on it — a chat line can neither assign nor release a worker. See
+// frontend/CLAUDE.md 「一則通知 = 一次『只抓它碰到的那一項』」.
 //
 // 🔴 T-a3e4: it used to also pull `GET /api/tasks` (UNFILTERED — the entire task
 // history) and `GET /api/task-manuals` on every worker/task delta, purely to
@@ -20,9 +25,10 @@
 // The cap knob has no SSE topic — the PATCH echo is adopted directly (the same
 // server-confirmed-values rule as useServerSettings).
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { OutsourceWorkerView } from "../api/adapter";
 import { api } from "../api";
+import { createDeltaSink, narrowToHeld } from "../lib/deltaSink";
 import {
   adoptServerSettings,
   loadServerSettings,
@@ -57,16 +63,39 @@ function sortWorkers(workers: OutsourceWorkerView[]): OutsourceWorkerView[] {
   return [...workers].sort((a, b) => sortKey(b) - sortKey(a));
 }
 
+// The topics whose ONLY effect on a row is its unread badge
+// (OutsourceWorkerDTO.unread_count). A chat line cannot assign or release a
+// worker, and cannot move a row: the order is the BOUND TASK's created_ts, which
+// no chat line touches. So a chat delta naming a worker we already hold is one
+// GET /api/outsource-workers/{id}, not the whole list. "outsource_worker" and
+// "task" stay full re-pulls — the first IS list membership (assignment /
+// release), and the second can change the sort key and the row's labels.
+const BADGE_ONLY_TOPICS = new Set(["chat", "chat_read"]);
+
+// The topics this panel reconciles on (four, all through ONE path).
+const WORKER_TOPICS = new Set([
+  "outsource_worker",
+  "task",
+  "chat",
+  "chat_read",
+]);
+
 export function useOutsourceWorkers(): UseOutsourceWorkers {
   const [workers, setWorkers] = useState<OutsourceWorkerView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [maxParallel, setMaxParallel] = useState<number | null>(null);
+  // Which worker ids are on screen, readable from the SSE callback without a
+  // stale-closure state read. Membership only — values come from the server.
+  const heldRef = useRef<Set<string>>(new Set());
 
-  // ONE refetch path: the workers list carries everything the rows render, so
-  // there is nothing left for a delta-specific cheaper variant to skip.
+  // ONE full refetch path: the workers list carries everything the rows render,
+  // so there is nothing left for a delta-specific cheaper variant to skip —
+  // beyond re-reading a SINGLE row, which is what patchOne below does.
   const refetch = useCallback(async () => {
-    setWorkers(sortWorkers(await api.listOutsourceWorkers()));
+    const next = sortWorkers(await api.listOutsourceWorkers());
+    heldRef.current = new Set(next.map((w) => w.id));
+    setWorkers(next);
     setError(false);
   }, []);
 
@@ -90,18 +119,47 @@ export function useOutsourceWorkers(): UseOutsourceWorkers {
         console.warn("useOutsourceWorkers: settings load failed", e)
       );
 
-    const unsubscribe = api.subscribeEvents((topic) => {
-      if (
-        topic === "outsource_worker" ||
-        topic === "task" ||
-        topic === "chat" ||
-        topic === "chat_read"
-      ) {
-        refetch().catch((e) =>
-          console.warn("useOutsourceWorkers: SSE refetch failed", e)
-        );
-      }
-    });
+    // Re-read exactly the named rows, in place. The order is the bound task's
+    // created_ts and these topics cannot change it, so no re-sort is needed —
+    // and must not happen, or a row would jump for a badge change.
+    const patchOne = (ids: string[]) =>
+      Promise.all(ids.map((id) => api.getOutsourceWorker(id)))
+        .then((fresh) => {
+          if (!alive) return;
+          setWorkers((prev) =>
+            prev.map((w) => fresh.find((f) => f.id === w.id) ?? w)
+          );
+          setError(false);
+        })
+        .catch((e) => {
+          console.warn("useOutsourceWorkers: worker refetch failed", e);
+          return refetch().catch(() => {});
+        });
+
+    // ONE decision per burst of deltas: a resync fans 12 topics synchronously
+    // and this hook listens to four of them — that used to be four identical
+    // list re-pulls for one reconnect.
+    const unsubscribe = api.subscribeEvents(
+      createDeltaSink((batch) => {
+        const mine = [...batch.topics].filter((t) => WORKER_TOPICS.has(t));
+        if (mine.length === 0) return;
+        const badgeOnly = mine.every((t) => BADGE_ONLY_TOPICS.has(t));
+        const touched = badgeOnly
+          ? narrowToHeld(batch, (id) => heldRef.current.has(id))
+          : null;
+        if (touched === null) {
+          refetch().catch((e) =>
+            console.warn("useOutsourceWorkers: SSE refetch failed", e)
+          );
+          return;
+        }
+        // Named somebody, none of them a worker on this rail: a chat line cannot
+        // assign or release a worker (that is the "outsource_worker" topic), so
+        // every chat line between the owner and a MEMBER used to re-pull this
+        // whole list for a badge that could not move.
+        if (touched.length > 0) void patchOne(touched);
+      })
+    );
 
     return () => {
       alive = false;

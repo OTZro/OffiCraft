@@ -399,6 +399,62 @@ re-run):終態目標 → 自動展開已結束;被篩選藏住 → **只清相�
 `task-card--located` 高亮 flash(2.6s)→ **消費 anchor**(route 退回 `#tasks`,
 one-shot,可重跳);未知/過期 id 誠實自癒(消費 anchor、不高亮)。
 
+## 一則通知 = 一次「只抓它碰到的那一項」(T-8115)
+
+reconcile-by-refetch 的規則沒變(**永遠不 merge payload**),但「refetch 什麼」與
+「一則通知算幾次」重新定義過。三個機制,全在 client,**wire 一個位元都沒動**:
+
+- **`SseDelta`(`api/adapter.ts`)= payload 的 identity-only 投影**。spec/sse.md §2.2
+  的 payload 一直都在,禁止的是**merge**(它欠所有 server-derived DTO 欄位)。但
+  「這則寫入碰到哪一個 entity」是**識別**、不是值,拿它去 `GET /{id}` 重讀一項,值仍然
+  完全由 server 給。⇒ `api/http.ts` 的 `toSseDelta` **只留** `id`/`from`/`to`/`reader`/`peer`
+  五個欄位,`status`/`priority`/`last_read_ts`/`codename` 這些**在 seam 就被丟掉**,
+  下游 hook **拿不到**、因此不可能不小心 merge——「不准 merge」變成型別性質,不是要記得的規矩。
+  護欄:`api/http.sse-delta.test.ts`(每條都斷言那個值**不在**投影裡)。
+- 🔴 **names 為空 = 「什麼都可能漏了」,一律全量重抓**。resync 名不指任何一項(串流沒有
+  replay,漏了什麼本質上不可知),mock 更是連第二個參數都不傳。**空名字絕不可讀成
+  「沒事發生」**,那會把 mock 座艙與每次重連後的自癒一起凍住。
+- **`lib/deltaSink.ts`:一「陣」delta 只做一次決定**。`resyncAll` 把 12 個 topic
+  **同步**扇給每個訂閱者,所以聽 4 個 topic 的 hook 以前一次 resync 跑 4 次同樣的重抓
+  (實測:一次 resync 21 個請求,12 個是重複)。**coalesce 只能發生在「決定要不要重抓」
+  那一層**——傳輸層不知道某個訂閱者對哪些 topic 有反應,也就不知道那 12 次會塌成 1 次。
+  它靠的是「那個扇出是同步的」:累積到下一個 microtask 剛好抓到整陣。⚠️ **這不是 debounce**,
+  跨 tick 不合併(那等於刻意讓畫面慢);`deltaSink.test.ts` 有一條專門釘這件事。
+- **`narrowToHeld` 是三態,而中間那態是關鍵**:`null`=名不指任何一項⇒全量;**非空陣列**=
+  它指到我手上的項⇒逐項重讀;**空陣列**=它指了別人、一個都不是我的。第三態**不等於**
+  第一態:對「不可能改變我這份清單成員資格」的 topic(chat/chat_read 對 roster 與外包 rail)
+  它就是**真的沒事做**;對可能新增列的 topic(task)則必須當全量辦——新的一列只有清單看得到。
+  把兩者合成一個 falsy 判斷,就會丟掉其中一半的修補。
+- **各 hook 的分工(改的時候別抄錯)**:
+  - `useMembers` — chat/chat_read 只動**某一張卡**的 `unread_count`,而 roster 是
+    server 按 name 排序的 ⇒ 指到手上的成員就 `GET /api/members/{id}` **原位換掉**,不重排。
+    `member`/`role_def` 照舊全量(成員資格與每列的角色名都可能變)。
+  - `useOutsourceWorkers` — 同上,chat/chat_read → `GET /api/outsource-workers/{id}`。
+    排序鍵是**綁定任務的 created_ts**,聊天碰不到 ⇒ 不准重排(否則一則訊息會讓列跳位)。
+    `outsource_worker`(派工/釋放=成員資格)與 `task` 照舊全量。
+  - `useTasks` — `task` 指到畫面上的任務 → `GET /api/tasks/{id}`。兩個必要的退路:
+    (a) 狀態篩選是 **server 側**的,所以重讀後**狀態掉出篩選的那筆要從清單移除**,不能留在
+    一個它已經不符合的篩選底下;(b) 執行者換成這個 hook 沒見過的 `ow-` ⇒ 落回全量(順便
+    重抓 worker roster),否則那顆 chip 解不出代號。
+  - `useChatUnread` — 一個總數,沒有「只抓一項」的版本;只吃 coalescing。
+- 🔴 **自激路徑:讀取本身是一次寫入。** `GET /api/chat?with=`(列表即讀)會推進
+  watermark,server 於是**把 `chat_read` 扇回同一個 client**。所以在**別人的**對話有
+  delta 時去 `load()` 開著的那個 thread,不只是白抓一次——它**無中生有製造第二輪事件**,
+  而且公司裡任何一條聊天訊息都會來一次。⇒ `useChat` 的 `chat` 分支**先看 delta 指的
+  from/to 是不是這個 peer**;`chat_read` 分支**只認 `reader === peer`**(`peerLastReadTs`
+  只可能被 peer 的 watermark 推動,自己那份 echo 永遠不會改到它)。名字空的照舊無條件重抓。
+  ⚠️ 它**本來就會停**(那一輪裡沒有人再打一次列表即讀,而 `PutChatRead` 只在真的前進時才扇
+  ——`dal.go` + `server_test.go`),所以這不是無窮迴圈,是**每則訊息固定多一輪**的放大。
+- **實測(改前 → 改後,六個 hook 同掛的座艙,單一 delta 造成的請求數,不含 mount)**:
+  別的對話一則聊天 **5 → 2**;自己讀取的 echo **4 → 2**;一次 resync **21 → 9**;
+  一則進來的訊息含它的 echo 輪 **9 → 6**。`/api/settings` 在**改前改後都是 0**
+  ——ad74682 的共享快取之後,任何 delta 都不會再碰它(見下一節),票面上「外包/任務/聊天
+  事件在重拉 626 kB 設定」這句**在 main 上已經不成立**,實測坐實、不是推論。
+- 護欄:`hooks/sseFanout.test.tsx`(六 hook 同掛的成本 + **值**雙斷言)、
+  `lib/deltaSink.test.ts`、`api/http.sse-delta.test.ts`。
+  🔴 **每條成本斷言都配一條值斷言**:「請求變少」對一個乾脆不更新的 hook 也成立,
+  所以那份測試同時釘住 delta 真的指到的那一列上、**server 說的那個值**。
+
 ## /api/settings 只讀一份;`onboarding: null` 是終態(T-8115)
 
 `GET /api/settings` 在正式站是 **639,270 bytes**(gzip 後 373 kB;`custom_themes`

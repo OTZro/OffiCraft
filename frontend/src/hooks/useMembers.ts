@@ -5,10 +5,17 @@
 // REFETCH the roster rather than merging any event payload. In M1 the mock's
 // subscribeEvents is a no-op, so refetch is driven by explicit action callbacks
 // (activate/patch/refocus) — but the wiring is identical for the real backend.
+//
+// T-8115: a "chat" / "chat_read" delta moves ONE card's unread badge, so it
+// re-reads that one member (`GET /api/members/{id}`) instead of the company, and
+// re-reads nothing at all when it names a peer that is not on the roster. Still
+// no payload merging: the delta only says WHICH card, the server says what it
+// holds. See frontend/CLAUDE.md 「一則通知 = 一次『只抓它碰到的那一項』」.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Member } from "../types";
 import { api } from "../api";
+import { createDeltaSink, narrowToHeld } from "../lib/deltaSink";
 
 interface UseMembers {
   members: Member[];
@@ -38,20 +45,70 @@ const ROSTER_TOPICS = new Set(["member", "chat", "chat_read", "role_def"]);
 // the company speaks; only a genuine roster or role change refetches.
 const ROSTER_TOPICS_LIGHT = new Set(["member", "role_def"]);
 
+// The topics whose ONLY effect on this view is one card's unread badge
+// (MemberDTO.unread_count). A chat line and an advancing read watermark cannot
+// add, remove, rename or re-order a member — the roster is served ordered by
+// name (dal.go) — so when such a delta NAMES a member we already hold, the
+// honest refetch is that member, not the company. Any other topic ("member",
+// "role_def") can change list membership or every row at once, and stays a full
+// re-pull.
+const BADGE_ONLY_TOPICS = new Set(["chat", "chat_read"]);
+
 export function useMembers(opts?: { light?: boolean }): UseMembers {
   const light = opts?.light ?? false;
   const topics = light ? ROSTER_TOPICS_LIGHT : ROSTER_TOPICS;
   const [members, setMembers] = useState<Member[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  // Which ids the roster currently holds, readable from an SSE callback (a
+  // state read there would be a stale closure). Only membership is mirrored —
+  // the VALUES always come from the server.
+  const heldRef = useRef<Set<string>>(new Set());
+
+  // Adopt a whole roster: state and the id mirror move together, so the mirror
+  // can never disagree with what is rendered.
+  const adopt = useCallback((next: Member[]) => {
+    heldRef.current = new Set(next.map((m) => m.id));
+    setMembers(next);
+  }, []);
 
   const refetch = useCallback(async () => {
     const next = await api.listMembers(light ? { light: true } : undefined);
-    setMembers(next);
-  }, [light]);
+    adopt(next);
+  }, [light, adopt]);
 
   useEffect(() => {
     let alive = true;
+
+    const full = () =>
+      api
+        .listMembers(light ? { light: true } : undefined)
+        .then((next) => {
+          if (alive) {
+            adopt(next);
+            setError(false);
+          }
+        })
+        .catch((e) => console.warn("useMembers: SSE refetch failed", e));
+
+    // Replace exactly the named cards, IN PLACE. The server stays the source of
+    // every value (one GET /api/members/{id} each); the position is kept because
+    // the roster's order is by name and these topics cannot change a name. A
+    // rejection falls back to the full re-pull rather than leaving one card
+    // stale behind a badge that already moved.
+    const patchOne = (ids: string[]) =>
+      Promise.all(ids.map((id) => api.getMember(id)))
+        .then((fresh) => {
+          if (!alive) return;
+          setMembers((prev) =>
+            prev.map((m) => fresh.find((f) => f.id === m.id) ?? m)
+          );
+          setError(false);
+        })
+        .catch((e) => {
+          console.warn("useMembers: member refetch failed", e);
+          return full();
+        });
 
     // Initial load. On rejection surface an honest error flag instead of
     // swallowing it into an empty roster. (Do NOT clearToken here — a 401 is
@@ -60,7 +117,7 @@ export function useMembers(opts?: { light?: boolean }): UseMembers {
       .listMembers(light ? { light: true } : undefined)
       .then((next) => {
         if (alive) {
-          setMembers(next);
+          adopt(next);
           setError(false);
         }
       })
@@ -72,27 +129,35 @@ export function useMembers(opts?: { light?: boolean }): UseMembers {
         if (alive) setLoading(false);
       });
 
-    // SSE: reconcile the roster by refetching on the relevant topics. The light
-    // set omits chat/chat_read (T-cf91) so a chat line never re-pulls here.
-    const unsubscribe = api.subscribeEvents((topic) => {
-      if (topics.has(topic)) {
-        api
-          .listMembers(light ? { light: true } : undefined)
-          .then((next) => {
-            if (alive) {
-              setMembers(next);
-              setError(false);
-            }
-          })
-          .catch((e) => console.warn("useMembers: SSE refetch failed", e));
-      }
-    });
+    // SSE: reconcile the roster on the relevant topics — ONE decision per burst
+    // of deltas (a resync fans 12 topics at once, of which this hook listens to
+    // four). The light set omits chat/chat_read (T-cf91) so a chat line never
+    // re-pulls here at all.
+    const unsubscribe = api.subscribeEvents(
+      createDeltaSink((batch) => {
+        const mine = [...batch.topics].filter((t) => topics.has(t));
+        if (mine.length === 0) return;
+        const badgeOnly = mine.every((t) => BADGE_ONLY_TOPICS.has(t));
+        const touched = badgeOnly
+          ? narrowToHeld(batch, (id) => heldRef.current.has(id))
+          : null;
+        if (touched === null) {
+          void full();
+          return;
+        }
+        // Named somebody, none of them ours: a chat line CANNOT add, remove or
+        // rename a member (that is the "member" topic), so a conversation with
+        // an outsource worker / a released peer changes nothing this roster
+        // renders. Re-pulling the company for it was the old behaviour.
+        if (touched.length > 0) void patchOne(touched);
+      })
+    );
 
     return () => {
       alive = false;
       unsubscribe();
     };
-  }, [light, topics]);
+  }, [light, topics, adopt]);
 
   return { members, loading, error, refetch };
 }

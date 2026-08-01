@@ -8,6 +8,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { createDeltaSink } from "../lib/deltaSink";
 
 // The SSE topics that can change the office total — the SINGLE source of truth
 // for "what makes this badge move". The server total is Σ unread over the LIVE
@@ -45,9 +46,20 @@ export function useChatUnread(): number {
     };
 
     refetch();
-    const unsubscribe = api.subscribeEvents((topic) => {
-      if (OFFICE_TOTAL_TOPICS.has(topic)) refetch();
-    });
+    // This total is ONE number over the whole live set, so there is no "just the
+    // item that changed" variant of it — but there IS a duplicate to remove: a
+    // resync fans all four of these topics at once, which used to be four
+    // identical count requests for one reconnect. One decision per burst.
+    const unsubscribe = api.subscribeEvents(
+      createDeltaSink((batch) => {
+        for (const topic of batch.topics) {
+          if (OFFICE_TOTAL_TOPICS.has(topic)) {
+            refetch();
+            return;
+          }
+        }
+      })
+    );
 
     return () => {
       alive = false;

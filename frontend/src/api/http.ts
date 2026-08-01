@@ -78,6 +78,8 @@ import type {
   RoleCreateResult,
   AliasPatch,
   OnboardOptions,
+  SseDelta,
+  SseDeltaNames,
 } from "./adapter";
 import {
   toMember,
@@ -203,7 +205,7 @@ async function credentialPost(
 // Reconnect: unchanged — the browser's native EventSource auto-retry still
 // applies to the (single) connection; we never tear it down on transient
 // errors, only on last-unsubscribe.
-const sseSubscribers = new Set<(topic: string) => void>();
+const sseSubscribers = new Set<(topic: string, delta?: SseDelta) => void>();
 let sseSource: EventSource | null = null;
 // The document/window foreground listener that drives the foreground-restore
 // resync (installed with the connection, torn down with it). Held module-level
@@ -228,6 +230,32 @@ const SSE_RESYNC_TOPICS = [
   "monitoring",
 ] as const;
 
+// The payload fields that name an ENTITY rather than describe one (spec/sse.md
+// §2.2 lists the per-topic payload shapes). Everything else in the payload —
+// `status`, `priority`, `last_read_ts`, `codename`, `name`, `desired_state` — is
+// a VALUE and is dropped here, so no hook can merge one even by accident: §2.2
+// forbids it because the payload lacks the server-derived DTO fields the UI
+// renders. Naming an item is what makes a one-item refetch possible.
+const SSE_NAME_FIELDS = ["id", "from", "to", "reader", "peer"] as const;
+
+/** Project one frame's payload down to its identity fields. Non-string values
+ * and unknown fields are dropped; a null payload (the topics that carry none)
+ * yields empty names, which every subscriber reads as "refetch the lot". */
+export function toSseDelta(topic: string, payload: unknown): SseDelta {
+  const names: SseDeltaNames = {};
+  const ids: string[] = [];
+  if (payload && typeof payload === "object") {
+    const bag = payload as Record<string, unknown>;
+    for (const field of SSE_NAME_FIELDS) {
+      const v = bag[field];
+      if (typeof v !== "string" || v === "") continue;
+      names[field] = v;
+      if (!ids.includes(v)) ids.push(v);
+    }
+  }
+  return { topic, names, ids };
+}
+
 // Fan one synthetic delta per closed topic to EVERY current subscriber — the
 // missed-gap correction. The stream has NO replay (spec §2.1): a delta emitted
 // while the client wasn't receiving is gone, so the client must full-resync
@@ -239,9 +267,13 @@ const SSE_RESYNC_TOPICS = [
 // callback may (un)subscribe during the fan-out. Each subscriber's refetch has
 // its own .catch (verified per-hook), so a fan into an unstable network fails
 // as "keep the stale value + warn", never an unhandled rejection.
+// A resync NAMES NOTHING on purpose: the stream has no replay, so what was
+// missed is unknowable and every subscriber has to re-pull its whole snapshot.
+// The whole fan is SYNCHRONOUS, which is what lets a subscriber coalesce the 12
+// topics into one refetch (lib/deltaSink.ts) — do not make this loop async.
 function resyncAll(): void {
   for (const topic of SSE_RESYNC_TOPICS) {
-    for (const cb of [...sseSubscribers]) cb(topic);
+    for (const cb of [...sseSubscribers]) cb(topic, toSseDelta(topic, null));
   }
 }
 
@@ -268,10 +300,16 @@ function ensureSseSource(): void {
   };
   es.onmessage = (e: MessageEvent) => {
     try {
-      const evt = JSON.parse(e.data) as { topic?: string };
+      const evt = JSON.parse(e.data) as {
+        topic?: string;
+        data?: { payload?: unknown };
+      };
       if (!evt.topic) return;
+      // Project the frame's payload to the identity fields it names (§2.2 —
+      // never the values) so a subscriber can refetch ONE item.
+      const delta = toSseDelta(evt.topic, evt.data?.payload ?? null);
       // Snapshot the set: a callback may (un)subscribe during fan-out.
-      for (const cb of [...sseSubscribers]) cb(evt.topic);
+      for (const cb of [...sseSubscribers]) cb(evt.topic, delta);
     } catch {
       // Non-JSON keepalive/comment frame — ignore.
     }
@@ -1634,7 +1672,9 @@ export const httpApi: Api = {
     return toLessons(wire);
   },
 
-  subscribeEvents(onTopic: (topic: string) => void): () => void {
+  subscribeEvents(
+    onTopic: (topic: string, delta?: SseDelta) => void
+  ): () => void {
     // GET /api/events (SSE downlink). PERMANENTLY HAND-WRITTEN — an EventSource,
     // not a fetch, so no OpenAPI runtime client can generate it. EventSource
     // cannot set an Authorization header, so the owner JWT rides as a ?token=
@@ -1652,7 +1692,7 @@ export const httpApi: Api = {
     // Wrap the callback so the SAME function subscribed twice (two mounts) is
     // two independent subscriptions, not one Set entry killed by either
     // unsubscribe. The wrapper also makes unsubscribe naturally idempotent.
-    const sub = (topic: string) => onTopic(topic);
+    const sub = (topic: string, delta?: SseDelta) => onTopic(topic, delta);
     sseSubscribers.add(sub);
     ensureSseSource();
     return () => {

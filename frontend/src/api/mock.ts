@@ -575,6 +575,10 @@ const mockDocs: DocView[] = [
 // in mock mode (the http adapter gets this for free from the server's SSE).
 // Scope: mutations whose mounted hooks reconcile from SSE (reply cards, tasks,
 // outsource workers, and member avatars) emit the matching production topic.
+// The mock deliberately passes NO SseDelta (the second argument stays absent):
+// it has no wire frame to project, and an absent delta is the honest "something
+// in this topic changed, refetch the lot" — the mock's behaviour is unchanged by
+// the one-item refetch the http adapter can now name (T-8115).
 const topicSubscribers = new Set<(topic: string) => void>();
 function emitTopic(topic: string): void {
   for (const cb of [...topicSubscribers]) cb(topic);
