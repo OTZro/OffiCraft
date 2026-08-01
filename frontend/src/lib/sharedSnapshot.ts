@@ -61,9 +61,6 @@ export interface SharedSnapshot<T> {
   adopt(value: T): void;
   /** Drop the cached answer and retire every request in flight. */
   invalidate(): void;
-  /** True when a value is cached — for callers that want to render instantly
-   * without awaiting. */
-  peek(): T | undefined;
 }
 
 const registry = new Set<{ reset: () => void }>();
@@ -123,9 +120,6 @@ export function createSharedSnapshot<T>(fetcher: () => Promise<T>): SharedSnapsh
       generation += 1;
       inflight = undefined;
       cached = undefined;
-    },
-    peek() {
-      return cached?.value;
     },
   };
 }

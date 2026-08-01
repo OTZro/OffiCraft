@@ -47,11 +47,6 @@ export function adoptServerSettings(next: ServerSettingsView): void {
   snapshot.adopt(next);
 }
 
-/** The cached snapshot if one has landed — never triggers a request. */
-export function peekServerSettings(): ServerSettingsView | undefined {
-  return snapshot.peek();
-}
-
 // The cached settings belong to ONE session. A login mints a different identity
 // and an auth-expiry ends this one, so neither may inherit the other's copy.
 if (typeof window !== "undefined") {

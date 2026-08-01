@@ -32,66 +32,35 @@ const DISMISS_KEY = "oc.onboarding.dismissed";
 export const ONBOARDING_POLL_MS = 3000;
 export const ONBOARDING_POLL_CEILING_MS = 180000;
 
-/** sessionStorage flag: THIS browser session performed the initial password
- * set, so the automatic first-run onboarding was kicked by our own request and
- * a report for it either exists or is about to. Set by FirstRunPage. */
-const FIRST_RUN_KEY = "oc.onboarding.firstrun";
-
-/** Record that this session just claimed the server (FirstRunPage calls it on a
- * successful set-password). This states a fact about THIS browser session — it
- * writes nothing to the server and invents no history. */
-export function markOnboardingFirstRun(): void {
-  try {
-    sessionStorage.setItem(FIRST_RUN_KEY, "1");
-  } catch {
-    // No storage (private mode / SSR): degrade to the ordinary cockpit-open
-    // reading — one fetch. Never throw over a hint.
-  }
-}
-
-function isFirstRunSession(): boolean {
-  try {
-    return sessionStorage.getItem(FIRST_RUN_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function clearFirstRunSession(): void {
-  try {
-    sessionStorage.removeItem(FIRST_RUN_KEY);
-  } catch {
-    // best-effort
-  }
-}
-
 /** Terminal states: once the report reads one of these it will never change.
  *
- * 🔴 THE TWO KINDS OF `null` (T-8115). `onboarding: null` is the SPEC'd normal
- * value for an install where the run never happened — the DTO says so: "Null on
- * the settings read when onboarding never ran (an install that predates it, or
- * a database that already had a password)". On the production install it is
- * null and always will be. Treating that as "not finished yet" made every
- * cockpit open poll a 639 kB payload 60 times over three minutes waiting for a
- * row that no code path will ever write.
+ * 🔴 `null` IS TERMINAL — and that is HALF OF A PAIRED CONTRACT with the server
+ * (T-8115). Do not change one side without the other.
  *
- * The other null is genuinely transient: the report row is written by
- * `kickFirstRunOnboarding` (server/ocserverd/onboarding.go), reached only from
- * the POST /api/auth/set-password handler. So the discriminator is not in the
- * payload — it is WHETHER ONBOARDING WAS KICKED AT ALL, and the one client that
- * knows is the browser that submitted the password. `isFirstRunSession()` is
- * that fact, and only in that session does a null keep the poll alive.
+ *   THIS SIDE  a settings read whose `onboarding` is null means onboarding never
+ *              ran and never will, so there is nothing to wait for.
+ *   THAT SIDE  server/ocserverd/onboarding.go `kickFirstRunOnboardingWith`
+ *              PERSISTS the `running` report SYNCHRONOUSLY — before it returns,
+ *              therefore before the POST /api/auth/set-password handler returns,
+ *              therefore before that 200 can reach any client. Every one of its
+ *              early returns (no DAL / OC_NO_ONBOARDING=1 / a GetSetting error /
+ *              a failed claim write) means the run does not happen AT ALL, and
+ *              it is never retried: set-password is one-shot. So a null a client
+ *              can observe is always the permanent kind.
+ *              Pinned by TestSetPasswordLeavesNoNullOnboardingWindow and
+ *              TestOnboardingClaimIsPersistedBeforeKickReturns.
  *
- * ⚠️ This is NOT "fetch once". In the first-run session the poll survives in
- * full: the run reports `running` first and only lands `failed` around t≈30s
- * (wardenOnlineWait), which is the single case this banner exists for, and the
- * poll still runs to the 180 s ceiling to catch it. A `running` report is
- * non-terminal for EVERY session, first-run or not. */
-function isTerminal(
-  report: OnboardingReportView | null,
-  firstRunSession: boolean,
-): boolean {
-  if (report === null) return !firstRunSession;
+ * WHY IT MATTERS: the DTO declares null NORMAL ("Null on the settings read when
+ * onboarding never ran (an install that predates it, or a database that already
+ * had a password)") and the production install reads null forever. Treating it
+ * as "not written yet" made every cockpit open poll a 639 kB payload ~61 times
+ * over three minutes for a row nothing will ever write.
+ *
+ * ⚠️ `running` is STILL non-terminal, which is the whole point: the fresh-install
+ * verdict lands ~30 s in (wardenOnlineWait) and the poll must be there for it.
+ * This is not a one-shot fetch. */
+function isTerminal(report: OnboardingReportView | null): boolean {
+  if (report === null) return true;
   return report.state === "ok" || report.state === "failed";
 }
 
@@ -109,8 +78,11 @@ export function OnboardingBanner() {
   // useless in the only situation it exists for). The real timeline is:
   //
   //   t=0     owner submits the password → 200 → cockpit mounts → this fetch
-  //           reads state="running" (or null: the report row may not be written
-  //           yet) → correctly draws nothing
+  //           reads state="running" → correctly draws nothing.
+  //           (It CANNOT read null here: the server claims the report row
+  //           before that 200 is written — see isTerminal above. The comment
+  //           that used to say "or null: the report row may not be written yet"
+  //           was wrong, and T-8115 removed the 60 wasted polls it justified.)
   //   t=0..30 the server installs the warden and waits for its SSE connect
   //   t≈30    the report lands as "failed"
   //
@@ -125,10 +97,6 @@ export function OnboardingBanner() {
     let live = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const started = Date.now();
-    // Captured ONCE: whether this browser session is the one that set the
-    // initial password (see isTerminal — it is the only thing that makes a
-    // null report worth waiting on).
-    const firstRunSession = isFirstRunSession();
     let first = true;
 
     const tick = async () => {
@@ -143,10 +111,7 @@ export function OnboardingBanner() {
           : await refreshServerSettings();
         if (!live) return;
         setReport(settings.onboarding);
-        // A report row exists ⇒ the "was it kicked?" question is answered for
-        // good; the flag has no further job and must not outlive this run.
-        if (settings.onboarding !== null) clearFirstRunSession();
-        if (isTerminal(settings.onboarding, firstRunSession)) return; // stop
+        if (isTerminal(settings.onboarding)) return; // done — stop polling
       } catch {
         // A settings read that fails is NOT evidence about onboarding — stay
         // silent rather than assert anything we do not know, and keep polling:

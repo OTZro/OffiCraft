@@ -2,7 +2,6 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../api";
 import { isHttpStatus } from "../api/errors";
-import { markOnboardingFirstRun } from "./OnboardingBanner";
 import { LogoMark } from "./icons";
 import "./login.css";
 
@@ -66,12 +65,6 @@ export function FirstRunPage({
     setError("");
     try {
       await api.setPassword(password, claimToken.trim());
-      // T-8115: THIS request is what kicks the automatic first-run onboarding
-      // (server/ocserverd/api_settings.go → kickFirstRunOnboarding). Record it
-      // so OnboardingBanner knows a report is coming and keeps polling for the
-      // ~30 s failure verdict — the ONLY case in which an absent report means
-      // "not yet" rather than "never ran".
-      markOnboardingFirstRun();
       onSuccess();
     } catch (err) {
       if (isHttpStatus(err, 409)) setError("taken");

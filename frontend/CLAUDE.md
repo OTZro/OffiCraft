@@ -429,18 +429,25 @@ mount-fetch 消費者的來源,所以那份 payload 一次座艙載入被下載�
   (**不是**從 hooks 那支),因為 setup 檔跑在測試檔自己的 `vi.mock("../api")`
   註冊**之前**,從 hooks 匯入會把 api 層先拉進 registry。
 
-**`onboarding: null` 有兩種,分得出來才准停止輪詢。** DTO 明訂 null 是
+**`onboarding: null` 是終態——而這是與 server 的成對契約(T-8115)。** DTO 明訂 null 是
 「onboarding never ran」的**正常值**(舊安裝、或建庫時就有密碼),正式站正是 null;
-舊碼的 `isTerminal(null) === false` 讓每次開座艙輪滿 3 分鐘 ≈ 61 次 × 373 kB。
-- **判別方式不在 payload 裡**:報告列只由 `POST /api/auth/set-password` →
-  `kickFirstRunOnboarding`(`server/ocserverd/onboarding.go`)寫,所以「到底有沒有
-  被 kick」只有**送出那個密碼的那個瀏覽器 session** 知道。`FirstRunPage` 成功後
-  記一筆 sessionStorage(`markOnboardingFirstRun`),**只有那個 session** 的 null
-  才繼續輪詢。這是關於本瀏覽器 session 的事實,**不是**補寫一筆假的安裝紀錄。
+舊碼的 `isTerminal(null) === false` 讓每次開座艙輪滿 3 分鐘 = **61 次** × 373 kB
+(這個數字是 mutant 讓測試自己印出來的,不是推的)。
+- **憑什麼敢把 null 當終態**:`kickFirstRunOnboardingWith`(`server/ocserverd/onboarding.go`)
+  在**開 goroutine 之前**就把 `running` 報告寫進 DB,所以那一列在
+  `POST /api/auth/set-password` 的 handler **return 之前**就存在,而該回應是 return 才
+  flush ⇒ **拿到那個 200 的 client 之後讀 settings 一定看得到報告**。它其餘四條 early
+  return 代表 onboarding 根本不會跑、而且不重試 ⇒ **client 看得到的 null 只有一種**。
+- 🔴 **這是成對的,改一邊要看另一邊**。server 那半的護欄是
+  `server/ocserverd/onboarding_contract_test.go`(`TestOnboardingClaimIsPersistedBeforeKickReturns`
+  + `TestSetPasswordLeavesNoNullOnboardingWindow`);FE 這半是
+  `OnboardingBanner.null-poll.test.tsx`。把認領搬進 goroutine,server 那條會紅——
+  那正是它存在的理由。
 - 🔴 **不准改成只抓一次**:首次安裝的失敗結果在 t≈30s(`wardenOnlineWait`)才落地,
-  那正是這個橫幅唯一存在的理由。`running` 對**任何** session 都是非終態,輪詢照舊
-  跑到 180 s 天花板。
-- 護欄:`OnboardingBanner.null-poll.test.tsx`(兩半都釘,斷言的是**請求次數**)。
+  那正是這個橫幅唯一存在的理由。首讀讀到的是 `running`(見上),而 `running` 是非終態,
+  輪詢照舊跑到 180 s 天花板。
+- **讀取失敗 ≠ null 報告**:catch 分支必須繼續輪——首啟開機期的短暫失敗正是它想有用的時候。
+  三條測試各釘一件事(一次讀 / running→failed / 讀失敗仍續輪),三個 mutant 各紅一條。
 
 ## 首設密碼 + 伺服器設定(B3)
 - **AuthGate 四態牆**(real mode only):有 token → App;無 token → 打 PUBLIC `GET /api/auth/status` 一次 → 未設密碼 = `FirstRunPage`(啟用碼 + 設密碼,POST set-password 成功即存 token 直接進 App;啟用碼從 `?code=` query 預填——server 首跑自動開的就是這條 URL,預填時 autoFocus 落密碼欄、code 讀到即 history.replaceState 從網址列抹掉)、已設 = `LoginPage`。mock mode 永不出牆(照舊直接進辦公室)。

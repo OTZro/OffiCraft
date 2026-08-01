@@ -8,21 +8,29 @@
 // payload once every 3 s for the full 180 s ceiling: ~61 downloads, ~22 MB, for
 // a row that no code path on that install will ever write.
 //
-// The fix must not buy that back by making the banner fetch once: the ONLY
-// timeline it exists for is the fresh install where the verdict lands ~30 s
-// after the password is set. Both halves are pinned here, and the counts are
-// the assertions — "was called" would pass either way.
+// 🔴 THIS FILE IS ONE HALF OF A PAIRED CONTRACT. Treating null as terminal is
+// only honest because the server persists the `running` report BEFORE the
+// set-password 200 can reach any client (kickFirstRunOnboardingWith claims the
+// slot synchronously, so it is done before the handler returns). The server
+// half is pinned by TestOnboardingClaimIsPersistedBeforeKickReturns and
+// TestSetPasswordLeavesNoNullOnboardingWindow in
+// server/ocserverd/onboarding_contract_test.go. Break one side and the other
+// side's guard is what tells you.
+//
+// The fix must not buy the saving with silence: the ONLY timeline this banner
+// exists for is the fresh install whose verdict lands ~30 s after the password
+// is set, and that arrives as `running` → `failed`, never as null. Both halves
+// are pinned here, and the counts are the assertions — "was called" would pass
+// either way.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import {
   OnboardingBanner,
-  markOnboardingFirstRun,
   ONBOARDING_POLL_MS,
   ONBOARDING_POLL_CEILING_MS,
 } from "./OnboardingBanner";
-import { resetAllSharedSnapshots } from "../lib/sharedSnapshot";
 
 const getServerSettings = vi.fn();
 
@@ -74,7 +82,7 @@ async function runPastCeiling() {
   }
 }
 
-describe("OnboardingBanner — the two kinds of null", () => {
+describe("OnboardingBanner — a null report is terminal", () => {
   beforeEach(() => {
     sessionStorage.clear();
     getServerSettings.mockReset();
@@ -84,9 +92,9 @@ describe("OnboardingBanner — the two kinds of null", () => {
     vi.useRealTimers();
   });
 
-  // ── half 1: an ordinary cockpit open on an install where onboarding never
-  // ran. Exactly ONE read, for the whole three minutes.
-  it("stops after ONE read when onboarding never ran (no first-run session)", async () => {
+  // ── half 1: the production install. Exactly ONE read, for the whole three
+  // minutes the poll used to run.
+  it("stops after ONE read when onboarding never ran", async () => {
     getServerSettings.mockResolvedValue(settingsWith(null));
 
     renderBanner();
@@ -101,64 +109,58 @@ describe("OnboardingBanner — the two kinds of null", () => {
     expect(screen.queryByTestId("onboarding-banner")).toBeNull();
   });
 
-  // ── half 2: THE case the banner exists for. This browser session set the
-  // initial password, so onboarding really was kicked; the report is not
-  // written the instant we ask, and the verdict lands tens of seconds later.
-  // The poll must survive all of that.
-  it("keeps polling through a null in the session that set the password, and shows the ~30s verdict", async () => {
-    markOnboardingFirstRun();
+  // ── half 2: THE case the banner exists for, and the reason this is still not
+  // a one-shot fetch. A real first run reports `running` from the very first
+  // read (the server claims the row before the set-password 200 is written),
+  // and the verdict lands tens of seconds later with nobody reloading.
+  it("keeps polling through `running` and shows the ~30s verdict without a reload", async () => {
     getServerSettings
-      // t=0: kicked, row not visible to us yet — the transient null.
-      .mockResolvedValueOnce(settingsWith(null))
-      // t=3s..~30s: the run is under way.
       .mockResolvedValueOnce(settingsWith(runningReport))
       .mockResolvedValueOnce(settingsWith(runningReport))
       .mockResolvedValueOnce(settingsWith(runningReport))
-      // and then it fails, with nobody reloading the page.
+      .mockResolvedValueOnce(settingsWith(runningReport))
       .mockResolvedValue(settingsWith(failedReport));
 
     renderBanner();
     await act(async () => {});
-    // The transient null did NOT stop the poll…
     expect(getServerSettings).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId("onboarding-banner")).toBeNull();
 
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 5; i++) {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(ONBOARDING_POLL_MS);
       });
     }
 
-    // …and the verdict reached the owner without a reload.
     expect(getServerSettings.mock.calls.length).toBeGreaterThanOrEqual(5);
-    const banner = screen.getByTestId("onboarding-banner");
-    expect(banner.textContent).toContain(
+    expect(screen.getByTestId("onboarding-banner").textContent).toContain(
       "installing this machine's warden failed (exit 1)"
     );
   });
 
-  // The flag is about ONE run, not about the browser forever: once a report
-  // row exists the question "was it kicked?" is settled, so a later cockpit
-  // open in the same tab is back to one read.
-  it("clears the first-run flag once a report exists, so a later mount reads once", async () => {
-    markOnboardingFirstRun();
-    getServerSettings.mockResolvedValue(settingsWith(failedReport));
+  // A read that FAILED is not a null report, and must not be collapsed into
+  // one: a transient blip during first-run boot is exactly when this banner is
+  // trying to be useful. (Without this the "null is terminal" rule is one
+  // careless edit away from swallowing errors too.)
+  it("keeps polling when the settings READ fails — a failure is not a null report", async () => {
+    getServerSettings
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValue(settingsWith(failedReport));
 
-    const first = renderBanner();
-    await act(async () => {});
-    expect(getServerSettings).toHaveBeenCalledTimes(1);
-    first.unmount();
-
-    // Simulate a fresh page load: a new document starts with an empty module
-    // cache, so the shared /api/settings snapshot is gone too.
-    resetAllSharedSnapshots();
-    // Now the install looks like the production one: null report, no flag.
-    getServerSettings.mockReset();
-    getServerSettings.mockResolvedValue(settingsWith(null));
     renderBanner();
     await act(async () => {});
-    await runPastCeiling();
-    // Not 61: the previous run's flag did not survive its own report.
     expect(getServerSettings).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("onboarding-banner")).toBeNull();
+
+    for (let i = 0; i < 3; i++) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ONBOARDING_POLL_MS);
+      });
+    }
+
+    expect(screen.getByTestId("onboarding-banner").textContent).toContain(
+      "installing this machine's warden failed (exit 1)"
+    );
   });
 });
