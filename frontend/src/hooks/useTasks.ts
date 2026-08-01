@@ -12,6 +12,11 @@
 // and the server answers with those rows only, so an SSE-triggered refetch
 // costs the ~20 rows on screen instead of the whole task history. `interface
 // UseTasks` documents why the boolean had to go rather than be extended.
+//
+// A #tasks/<id> link-jump does NOT widen that ask. `anchorTaskId` fetches
+// exactly that one task (GET /api/tasks/{id}) and MERGES it into `tasks` — see
+// the anchor block below for why "just drop the status constraint" was the
+// wrong shape for a one-row need.
 
 import { useCallback, useEffect, useState } from "react";
 import type {
@@ -25,9 +30,11 @@ import { api } from "../api";
 
 interface UseTasks {
   /** The tasks the LAST fetch asked for — every status when no set was given,
-   * otherwise exactly the ticked ones (T-a3e4). Still unordered/unpartitioned:
-   * the page partitions + orders, and applies the executor/type axes, which
-   * stay client-side (they are not what made this payload 400 KB). */
+   * otherwise exactly the ticked ones (T-a3e4) — PLUS the single anchored task
+   * when one was asked for and the status ask did not already contain it. Still
+   * unordered/unpartitioned: the page partitions + orders, and applies the
+   * executor/type axes, which stay client-side (they are not what made this
+   * payload 400 KB). */
   tasks: TaskView[];
   /** LIVE outsource workers — the 外包 executor display resolves through this. */
   workers: OutsourceWorkerView[];
@@ -65,6 +72,15 @@ interface UseTasks {
    * render; and the flag had to be re-derived from the rendered list, which is
    * what made it latch. Asking for what is ticked needs no derivation. */
   setStatuses: (statuses: string[] | undefined) => void;
+  /** True while the anchored task's single fetch is still in flight — i.e. its
+   * absence from `tasks` means 「還沒載到」, not 「不存在」. The page's
+   * self-heal (an unknown #tasks/<id> strips itself back to #tasks) MUST wait
+   * on this, or every jump to a task outside the ticked statuses would heal
+   * itself away in the frames before its fetch lands. Resolves either way: a
+   * REJECTED fetch (404 / 500 / offline) also clears it, so a failed hydrate
+   * falls back to the ordinary list instead of a blank page or a spinner that
+   * never stops. */
+  anchorPending: boolean;
 }
 
 // initialStatuses is the status set the CALLER's filter opens on — the page's
@@ -73,7 +89,14 @@ interface UseTasks {
 // effect can state the filter, so a hook that defaulted to "no constraint" would
 // download the whole archive on every page open and then immediately re-ask for
 // the twenty rows it renders. Pass [] to genuinely open on 所有狀態.
-export function useTasks(initialStatuses: string[]): UseTasks {
+//
+// anchorTaskId is the ONE task a #tasks/<id> link jump has to put on screen even
+// though the status ask would not return it (a 已完成 task under the default
+// filter is the everyday case). It is fetched on its own and merged in.
+export function useTasks(
+  initialStatuses: string[],
+  anchorTaskId?: string
+): UseTasks {
   const [tasks, setTasks] = useState<TaskView[]>([]);
   const [workers, setWorkers] = useState<OutsourceWorkerView[]>([]);
   const [taskTypes, setTaskTypes] = useState<TaskTypeView[]>([]);
@@ -114,6 +137,66 @@ export function useTasks(initialStatuses: string[]): UseTasks {
   const refetchTypes = useCallback(async () => {
     setTaskTypes(await api.listTaskTypes());
   }, []);
+
+  // ── the single-task anchor (#tasks/<id>) ──────────────────────────────────
+  // A link jump needs ONE task on screen. Before this it was expressed as
+  // 「拿掉狀態限制」 — the fetch dropped its `?statuses=` and pulled the entire
+  // history (measured on the live workshop: 432 KB / 706 rows) so that one row
+  // would be somewhere inside it. The size of the ask has nothing to do with the
+  // size of the need: `GET /api/tasks/{id}` already answers exactly this
+  // question, so the anchor rides that and the LIST keeps answering the ticked
+  // statuses like every other view.
+  // 🔴 Deliberately NOT extended to 清除篩選 (an empty status set still fetches
+  // everything): there the owner is asking for the whole population, so the
+  // whole population is the right answer — that is not this defect.
+  // The result is held together with the id it belongs to, so a pending fetch is
+  // `anchor.id !== anchorId` — derivable in the SAME render the id changes in,
+  // which a separate boolean state could not be (an effect-set flag is false for
+  // one commit too many, and the page's self-heal fires in exactly that commit).
+  const anchorId = anchorTaskId ?? "";
+  const [anchor, setAnchor] = useState<{ id: string; task: TaskView | null }>({
+    id: "",
+    task: null,
+  });
+  useEffect(() => {
+    if (anchorId === "") {
+      setAnchor({ id: "", task: null });
+      return;
+    }
+    let alive = true;
+    // Resolve the SAME way on success and failure — with the id, and with the
+    // task set or null. A rejected hydrate (deleted task, 500, offline) must
+    // still land, otherwise the page waits on `anchorPending` forever.
+    const load = () =>
+      api
+        .getTask(anchorId)
+        .then((task) => {
+          if (alive) setAnchor({ id: anchorId, task });
+        })
+        .catch((e) => {
+          console.warn("useTasks: anchor task fetch failed", e);
+          if (alive) setAnchor({ id: anchorId, task: null });
+        });
+    void load();
+    // The anchored row is not in the list fetch, so the list's SSE refetch does
+    // not keep it fresh — it needs its own subscription to the same delta.
+    const unsubscribe = api.subscribeEvents((topic) => {
+      if (topic === "task") void load();
+    });
+    return () => {
+      alive = false;
+      unsubscribe();
+    };
+  }, [anchorId]);
+  const anchorPending = anchorId !== "" && anchor.id !== anchorId;
+  // Merge, never replace: when the ticked statuses DO include the anchored task
+  // the list row is the better one (it carries the server's `dep_tasks` join,
+  // which TaskDTO has no field for), so the fetched copy only fills a gap.
+  const anchorTask = anchor.task;
+  const tasksWithAnchor =
+    anchorTask !== null && !tasks.some((x) => x.id === anchorTask.id)
+      ? [...tasks, anchorTask]
+      : tasks;
 
   useEffect(() => {
     let alive = true;
@@ -195,7 +278,7 @@ export function useTasks(initialStatuses: string[]): UseTasks {
   );
 
   return {
-    tasks,
+    tasks: tasksWithAnchor,
     workers,
     taskTypes,
     loading,
@@ -208,5 +291,6 @@ export function useTasks(initialStatuses: string[]): UseTasks {
     getDetail,
     removeArtifact,
     setStatuses,
+    anchorPending,
   };
 }

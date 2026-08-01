@@ -273,7 +273,25 @@ filter 嗎」)**:`useTasks(initialStatuses)` 把 TasksPage 的 `statusFilter` �
 但 T-1d82 又補了一條「只要任何未結案任務帶 dep 就把 includeClosed 打開」——
 實務上恆真,所以**每一則 task SSE 都在重抓整部歷史**(實測 408,482 B vs 17,295 B)。
 現在 dep 顯示資料由 server 附在列上(見下方 dep chips),那條 clause 已整個刪除。
-兩個真的需要全狀態的視圖靠**送空集合**表達:清除篩選、以及 `#tasks/<id>` 跳轉錨點。
+**只有一個**視圖真的需要全狀態,靠**送空集合**表達:清除篩選——那時使用者要的就是
+全部,下載全部是答案、不是缺陷,別「順手」把它也優化掉。
+🔴 **`#tasks/<id>` 跳轉錨點曾是第二個,而那個是缺陷**(owner 2026-08-01 指名要修):
+錨點可能指向沒被勾的狀態(預設篩選下的已結案任務就是日常),舊碼因此**整個放掉篩選、
+改抓不帶條件的全量**,只為了讓那一張出現在畫面上(實測 432 kB / 706 列)。現在
+`useTasks(initialStatuses, anchorTaskId)` 走 **`GET /api/tasks/{id}` 只補抓那一張**再
+併進 `tasks`,清單那一問一個字都不動。三條配套是一體的,拆掉任何一條就是把病裝回去:
+(a) **anchor id 是參數、不是 effect**——跳轉可能是首次 mount,晚一個 commit 就等於
+mount 那一發又拉了全量;(b) **`anchorPending`**——單張補抓在自己的 request 上,所以
+存在「清單到了、那一張還沒到」的幀,自癒邏輯(未知 id → 退回 `#tasks`)與兩個空狀態
+文案都必須等它,否則連結會在使用者眼前把自己抹掉;它**成功與失敗都會落定**,所以補抓
+失敗(500/離線)是誠實退回一般清單,不是空白也不是轉不停;(c) **合併時清單列優先**
+——`TaskDTO` 沒有 `dep_tasks` 欄(那個 join 只掛在輕量列上,spec 已凍結),讓單張版蓋掉
+清單列會讓被連到的卡片 dep chips 掉回「還不知道」。⚠️ 已知取捨:錨點指向**沒被勾的狀態**
+時,那張卡的 dep chips 就是「還不知道」態(`depTasks === undefined`)——誠實的第三態,
+不是謊,但要修得動凍結 wire,不在本批。
+護欄:`hooks/useTasks.anchor.test.ts`(斷言實際送出的 `statuses` 永不為 undefined)+
+`components/TasksPage.anchor-fetch.test.tsx`(已結案錨點仍顯示、in-flight 不自癒、
+補抓失敗誠實落地)。
 **空狀態文案的判準改讀 `GET /api/tasks/count` 的 `total`**(未篩選總數):
 「目前沒有任務」是對整個工作室的主張,篩選過的清單答不出這件事——而它是一個
 grouped COUNT,不是把清單重新拉寬。
@@ -394,10 +412,12 @@ null-when-absent;view 欄位 OPTIONAL 保測試 fixture,先例 Member.roleName)�
 資訊 row**:類型 badge(typeKey;"" → 自由代辦)+「查看任務詳情」——**不露任務
 編號/識別鍵**(裁定);點 → `#tasks/<taskId>`(hashRoute 新 `taskId` 段)。純聊
 天請示無此 row。TasksPage 端 = **settle loop**(每個 effect pass 修一件事再
-re-run):終態目標 → 自動展開已結束;被篩選藏住 → **只清相關的那個維度**
-(matches 拆成三個 per-dimension predicate);card 進 DOM → scrollIntoView +
-`task-card--located` 高亮 flash(2.6s)→ **消費 anchor**(route 退回 `#tasks`,
-one-shot,可重跳);未知/過期 id 誠實自癒(消費 anchor、不高亮)。
+re-run):終態目標 → 自動展開已結束;**錨點直接壓過三個篩選軸**(`matches` 對
+`taskIdFilter` 短路成 `task.id === taskIdFilter`,不是逐維度去清)、那一張則由
+`useTasks` 的 `anchorTaskId` 單張補抓進來(見上方任務頁節);card 進 DOM →
+scrollIntoView + `task-card--located` 高亮 flash(2.6s)→ **消費 anchor**(route
+退回 `#tasks`,one-shot,可重跳);未知/過期 id 誠實自癒(消費 anchor、不高亮
+——但**必須等 `anchorPending` 落定**,不然「還沒載到」會被當成「不存在」)。
 
 ## 首設密碼 + 伺服器設定(B3)
 - **AuthGate 四態牆**(real mode only):有 token → App;無 token → 打 PUBLIC `GET /api/auth/status` 一次 → 未設密碼 = `FirstRunPage`(啟用碼 + 設密碼,POST set-password 成功即存 token 直接進 App;啟用碼從 `?code=` query 預填——server 首跑自動開的就是這條 URL,預填時 autoFocus 落密碼欄、code 讀到即 history.replaceState 從網址列抹掉)、已設 = `LoginPage`。mock mode 永不出牆(照舊直接進辦公室)。

@@ -64,6 +64,15 @@ const DEFAULT_STATUS = STATUS_OPTIONS.filter((s) => !TERMINAL.has(s));
 export function TasksPage() {
   const { t } = useI18n();
   const { members } = useMembers();
+  // ── 請示 → 任務: a reply card 查看任務詳情 routes to #tasks/<id>. That id
+  // is just another filter dimension — the list narrows to that one task in the
+  // normal layout, cleared by the same 清除篩選 as any other filter.
+  // Read BEFORE useTasks so the anchored id reaches the hook in the SAME render
+  // the hash lands in: routed through an effect instead, the mount fetch and the
+  // page's self-heal would both run a commit before the hook knows there is an
+  // anchor at all.
+  const [route, setRoute] = useHashRoute();
+  const taskIdFilter = route.page === "tasks" ? route.taskId : undefined;
   const {
     tasks,
     workers,
@@ -78,10 +87,14 @@ export function TasksPage() {
     getDetail,
     removeArtifact,
     setStatuses,
+    anchorPending,
     // The hook's FIRST fetch must already carry the page's default set — the
     // mount fetch precedes any effect, and an unconstrained one would pull the
     // whole archive once per page open (T-a3e4).
-  } = useTasks(DEFAULT_STATUS);
+    // The anchored id goes in as an ARGUMENT for the same reason: a jump landing
+    // straight on #tasks/<id> must hydrate that one task from its own endpoint
+    // on the very first pass, not one commit later.
+  } = useTasks(DEFAULT_STATUS, taskIdFilter);
 
   // The unfiltered task total — the only honest basis for 目前沒有任務 now that
   // the list answers a status set (see the empty states below). Same cheap
@@ -113,11 +126,6 @@ export function TasksPage() {
   const [statusFilter, setStatusFilter] = useState<Set<string>>(
     () => new Set(DEFAULT_STATUS)
   );
-  // ── 請示 → 任務: a reply card 查看任務詳情 routes to #tasks/<id>. That id
-  // is just another filter dimension — the list narrows to that one task in the
-  // normal layout, cleared by the same 清除篩選 as any other filter.
-  const [route, setRoute] = useHashRoute();
-  const taskIdFilter = route.page === "tasks" ? route.taskId : undefined;
   // ── 聊天 header 任務圖示 → #tasks/executor/<memberId> (T-dfae). Owner asked
   // for "that member's tasks that aren't done yet", so the seed sets BOTH axes
   // it promises rather than trusting the mount-time defaults: executor = that
@@ -147,10 +155,18 @@ export function TasksPage() {
     taskIdFilter !== undefined;
 
   // ── 勾什麼就問什麼 (T-a3e4) ────────────────────────────────────────────────
-  // The fetch asks for the statuses the owner has TICKED. Two views genuinely
-  // need every status and say so by sending nothing: 清除篩選 (an empty set =
-  // 所有狀態) and a #tasks/<id> jump anchor, which overrides the filters
-  // entirely and may point at a closed task.
+  // The fetch asks for the statuses the owner has TICKED. ONE view genuinely
+  // needs every status and says so by sending nothing: 清除篩選 (an empty set =
+  // 所有狀態) — there the owner asked for the whole population, so downloading
+  // it is the answer, not a defect.
+  //
+  // 🔴 A #tasks/<id> jump anchor USED TO be the second such view, and it was the
+  // defect (owner 2026-08-01): it may point at a task outside the ticked
+  // statuses, so the page dropped the constraint and pulled the whole history —
+  // 432 KB / 706 rows to make ONE card appear. It no longer touches this ask at
+  // all; `useTasks(…, taskIdFilter)` fetches that single task from
+  // `GET /api/tasks/{id}` and merges it in. Sending `undefined` from here again
+  // would restore the download, which is what the anchor test pins.
   //
   // What this REPLACED, and why the replacement is not just a rename: T-2b9d's
   // `open=true` fast path was switched off in practice by a fourth clause that
@@ -166,14 +182,8 @@ export function TasksPage() {
   // page re-rendered (a 30s clock tick is enough).
   const statusAsk = [...statusFilter].sort().join(",");
   useEffect(() => {
-    setStatuses(
-      taskIdFilter !== undefined
-        ? undefined
-        : statusAsk === ""
-          ? []
-          : statusAsk.split(",")
-    );
-  }, [taskIdFilter, statusAsk, setStatuses]);
+    setStatuses(statusAsk === "" ? [] : statusAsk.split(","));
+  }, [statusAsk, setStatuses]);
 
   function clearFilters() {
     // 清除篩選 = 顯示全部 (T-50bb): every axis to "no constraint" — status
@@ -316,16 +326,24 @@ export function TasksPage() {
 
   // A #tasks/<id> filter on an unknown/stale task self-heals to the full list;
   // a closed target auto-expands 已結束 so the one match is actually visible.
+  // 🔴 `anchorPending` is what separates 「還沒載到」 from 「不存在」 now that the
+  // anchored task arrives on its OWN fetch instead of inside a widened list.
+  // Without it every jump outside the ticked statuses would strip its own hash
+  // in the frames before that fetch lands — the target would flash away and the
+  // page would settle on the ordinary filtered list. It is also the failure
+  // path's exit: a REJECTED hydrate clears pending with no task, so this fires
+  // and the owner gets the normal list instead of a stuck 載入中.
   useEffect(() => {
     if (
       taskIdFilter &&
       !loading &&
+      !anchorPending &&
       !tasks.some((x) => x.id === taskIdFilter) &&
       (tasks.length > 0 || !error)
     ) {
       setRoute({ page: "tasks" });
     }
-  }, [taskIdFilter, loading, error, tasks, setRoute]);
+  }, [taskIdFilter, loading, anchorPending, error, tasks, setRoute]);
   useEffect(() => {
     if (taskIdFilter) setClosedOpen(true);
   }, [taskIdFilter]);
@@ -339,10 +357,21 @@ export function TasksPage() {
   // the wire. Everything else falls to 沒有符合篩選條件的任務, which is true in
   // both worlds. Judging it from `tasks.length` alone (the pre-T-a3e4 rule) now
   // says 目前沒有任務 to an owner whose workshop is full of finished tasks.
+  // `anchorPending` gates both: while the anchored task's own fetch is in flight
+  // the filtered list is legitimately empty, and either message would be a claim
+  // about a question that has not been answered yet.
   const nothingAtAll =
-    !loading && !error && tasks.length === 0 && taskTotal === 0;
+    !loading &&
+    !error &&
+    !anchorPending &&
+    tasks.length === 0 &&
+    taskTotal === 0;
   const nothingMatches =
-    !loading && !error && !nothingAtAll && filtered.length === 0;
+    !loading &&
+    !error &&
+    !anchorPending &&
+    !nothingAtAll &&
+    filtered.length === 0;
 
   function renderCard(task: TaskView) {
     return (
