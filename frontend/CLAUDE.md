@@ -39,6 +39,28 @@ wire 那頭是裸 `string`(spec 已凍結),不認得的字 → `undefined`,再�
 ## unread 計數 badge(M2-1 紅點升級;與 presence 各自獨立)
 roster MemberCard 成員列**右側(flex 尾端)的紅色計數 badge**(>99 顯示 99+、count=0 完全不渲染)= server 算好的 `member.unreadCount`(MemberDTO `unread_count`,chat_read watermark 的反相計數;只算成員→owner 訊息,agent↔agent 不計;舊純紅點 boolean 已整顆換掉)——FE 純 passthrough、**不自己算**。清除即既有已讀 choke:進對話的 `listChat` auto-mark / `markChatRead`;`useMembers` 的 ROSTER_TOPICS 含 `chat` / `chat_read` 讓 badge 即時亮/滅;開著的那個對話卡片以 `selected` 壓掉 badge(對話中新訊息永不累積)。badge 在整列(聊天入口)內,點 badge = 點列 = 進聊天,無獨立 handler。mock 以同一規則 live 計算(`unreadCountOf`)、行為與 http 一致;測試用 `__injectMockChat` 注入 inbound 訊息。
 
+**三個顏色槽,外框自 T-d593 起獨立且無下限。** 這顆紅圓圈在座艙有 **7 個 render site
+但只有 3 條 CSS 規則**(`.nav-tab__badge` in chrome.css、`.office__tab-badge` 與
+`.member-card__unread` in office.css;⚠️ 側欄那兩個 site 是**同一段 JSX**——
+`SidebarTab` 只有一個 `className` 字面、被呼叫兩次)。三條規則吃同一組槽:
+底 `--color-danger-badge`、數字 `--color-on-danger`、**外框 `--color-danger-badge-ring`**。
+- 外框那一槽的**預設是 alias `var(--color-bg)`**,不是烘死的 `#191c24`。這不是隨手寫的:
+  外框本來就是借用頁面底色,而**主題可以改 `--color-bg`**;烘實色會讓「改過 `--color-bg`
+  的既有主題」外框停在內建深藍、與它的頁面底分家 = 把舊主題的外觀改掉。alias 也讓
+  `gen-theme-tokens.mjs` 把它收進 `THEME_ALIAS_DEFAULT_TOKENS`(匯出不烘值、編輯器補一列
+  空值 placeholder 顯「跟隨 <頁面底>」)。
+- 🔴 **`outline` 的對比下限已經沒有了**(owner 2026-08-01 `rc-1d57d0adc87d` 選②:
+  「外框完全自由,不留下限(主題調到看不見也算你的選擇)」)。`check-token-roles.mjs` 的
+  `MIN_PILL_VS_PAGE` 隨這顆退場;**主題把外框設成跟填色同色是被支持的選擇,不是缺陷**,
+  別再把那條 checkRatio 加回去。**留下的只有「數字 vs 填色 ≥ 4.5:1」**(owner 沒裁到它)。
+  lint 印出的 ring 比值自此**只是資訊、不是保證**。
+- **護欄兩層,守的不是同一件事**:`visual-guards/badge-ring-token.ct.spec.tsx`(真 Chromium)
+  量 `getComputedStyle().outlineColor` 的**實際顏色** ——jsdom 不算 CSS、解析不出 `var()`,
+  這半在那裡做不到;`src/components/badgeRing.test.ts`(vitest)是來源掃描,盯
+  「7 個 site 都戴那 3 個 class」＋「3 條規則都吃 ring token」＋標籤/產生器三件套。
+  ⚠️ **後者存在的理由是 `test:ct` 不在雲端 gate 裡**(`bin/ci-cloud.sh` 只跑 vitest),
+  只放 CT 等於回歸在 GitHub 上是綠的。
+
 ## 聊天未讀跳轉(M2 批次 19;LINE/FB 式,純 FE)
 ChatArea 兩個行為,皆不動 server:
 - **進房跳第一則未讀**:進對話時 snapshot `member.unreadCount`(**render 同步取**,搶在 listChat「list 即讀」清 watermark 之前——這是 race-free 的關鍵;server 清掉後 roster unreadCount 才歸 0)。第一則未讀 = thread 中 `from===peer && to===owner` 訊息的**最後 count 則之最早者**;其上渲染 `.chat__unread-divider`(「以下是未讀訊息」細線)並 `scrollIntoView({block:"start"})` 頂到視野頂;divider 整個 session 保留(如 LINE)。無未讀照舊落底。ChatArea 換 peer 不 remount → render-time guard 重置 session 追蹤;useChat 於 withId 換時**立即清空 messages**(防舊 thread 殘影 + 防未讀定位錨錯舊訊息)。

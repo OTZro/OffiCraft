@@ -23,6 +23,7 @@ var themeColorTokens = map[string]bool{
 	"--color-card":                true,
 	"--color-danger":              true,
 	"--color-danger-badge":        true,
+	"--color-danger-badge-ring":   true,
 	"--color-danger-soft":         true,
 	"--color-danger-strong":       true,
 	"--color-dep":                 true,

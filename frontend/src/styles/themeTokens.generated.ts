@@ -21,6 +21,7 @@ export const THEME_COLOR_TOKENS: readonly string[] = [
   "--color-card",
   "--color-danger",
   "--color-danger-badge",
+  "--color-danger-badge-ring",
   "--color-danger-soft",
   "--color-danger-strong",
   "--color-dep",
@@ -88,6 +89,7 @@ export const THEME_COLOR_TOKENS: readonly string[] = [
  * deferral would be lost for good. */
 export const THEME_ALIAS_DEFAULT_TOKENS: Readonly<Record<string, string>> = {
   "--color-backdrop": "--color-shadow",
+  "--color-danger-badge-ring": "--color-bg",
   "--color-knob": "--color-overlay",
   "--color-main-bg": "--color-bg",
   "--color-nav-bg": "--color-bg",
