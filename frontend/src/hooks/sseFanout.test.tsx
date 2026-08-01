@@ -201,7 +201,11 @@ beforeEach(() => {
 });
 
 /** Deliver one real delta to every subscriber exactly as http.ts's onmessage
- * does: synchronously, in subscription order. */
+ * does: synchronously, in subscription order.
+ *
+ * ⚠️ 這個 `act()` **不切 burst** —— 一陣的邊界是 `await`,不是 `act()`。連呼
+ * `emit()` 而中間不 await 是**一陣**,不是 N 陣。要量 k 之前先讀 k 上界那條
+ * 測試上方的表(實測數字在那裡),否則量到的 k 不是你以為的 k。 */
 function emit(delta: SseDelta) {
   act(() => {
     for (const cb of [...h.handlers]) cb(delta.topic, delta);
@@ -302,6 +306,43 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
     expect(totalRequests()).toBe(2); // getMember + the office total
   });
 
+  // ────────────────────────────────────────────────────────────────────────
+  // 🔴 讀下面這條測試之前:一「陣」(burst)的邊界是 `await`,不是 `act()`。
+  //
+  // 這件事會讓下一個量 k 的人量出錯誤的數字而毫無察覺,而且**兩個方向的誤解
+  // 都落向「看起來沒事」**,所以兩個都寫在這裡:
+  //
+  //   `emit()` 自帶 `act()`,但那個 `act()` 收的是**同步** callback ⇒ 它不會
+  //   (在 JS 裡也不可能)排空 microtask queue,而 `deltaSink` 正是靠
+  //   `queueMicrotask` 收整陣的(lib/deltaSink.ts)。所以只要中間沒有 `await`,
+  //   連呼 N 次 `emit()` 是**一陣 k=N**,不是 N 陣。
+  //
+  // 實測(2026-08-02,本檔 harness 加三條探針跑出來的,不是推的;三則 chat delta
+  // 各指一個名冊成員,量 useMembers 的兩個 counter):
+  //
+  //   | 寫法                                   | getMember | listMembers |
+  //   |---------------------------------------|-----------|-------------|
+  //   | `emit(); emit(); emit(); await settle()` |     0     |      1      |  ← 一陣 k=3
+  //   | 三則 delta 塞進同一個 `act()`            |     0     |      1      |  ← 一陣 k=3
+  //   | `emit(); await settle();` × 3           |     3     |      0      |  ← 三陣 k=1
+  //
+  //   兩種誤解各自怎麼騙人:
+  //   (a) 想要**三個獨立的 k=1**、寫成連呼三次不 await ⇒ 拿到一陣 k=3,量到
+  //       「1 次 listMembers」,會被讀成「逐項路徑沒被觸發 / 沒事發生」——實際上
+  //       是 k>1 的清單路徑開火了。
+  //   (b) 想要**一陣 k=3**、寫成中間 await ⇒ 拿到三陣 k=1,量到「3 個 GET」,
+  //       會被讀成「k=3 也才 3 次,還好」——實際上那是三個 k=1,而真正的一陣
+  //       k=3 是 1 次清單 GET。放大從來不在這裡發生。
+  //
+  // ⇒ **要構造真正的單一 burst,就把多則 delta 送進同一個 `act()`**(`emitResync`
+  //    就是這個形狀),或連呼 `emit()` 但中間一個 `await` 都不放;**要構造 N 個
+  //    獨立 burst,每次 emit 後面都要 `await settle()`**。
+  //
+  // ⚠️ 但下面這條測試**一則 delta 都不用湊** —— agent↔agent 那條路天生就是 k=2:
+  //    一則 chat delta 的 `ids` 同時含 `from` 與 `to`(見下方 fixture),所以
+  //    **單一 emit 就是 k=2**(實測:getMember 0 / listMembers 1)。要量 k>1
+  //    的成本**不需要**任何 burst 構造技巧,別因為以為構造很貴就放棄量它。
+  // ────────────────────────────────────────────────────────────────────────
   it("🔴 ONE agent-to-agent line names TWO members — that re-pulls the LIST, not two reads", async () => {
     // THE REAL SHAPE, not a synthetic multi-member burst. A chat delta carries
     // {id, from, to} (api_chat.go), `toSseDelta` keeps all of them, and the hub
