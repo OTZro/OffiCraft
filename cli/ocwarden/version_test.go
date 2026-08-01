@@ -29,8 +29,8 @@ func TestVersionSubcommand(t *testing.T) {
 	}
 }
 
-// TestVersionNotInHelp guards the CI parity invariant: the version block must NOT
-// leak into the usage banner (--help / bare invocation), or bin/ci.sh 7d would flap.
+// TestVersionNotInHelp keeps build identity out of the stable usage banner
+// (--help / bare invocation); it belongs to the dedicated version command.
 func TestVersionNotInHelp(t *testing.T) {
 	var out bytes.Buffer
 	// bare invocation prints the usage banner (exit 0).

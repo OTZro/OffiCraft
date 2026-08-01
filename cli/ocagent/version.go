@@ -18,9 +18,8 @@ package main
 //     own bytes) and is the exact value to eyeball-compare a self-updated binary
 //     against the committed bin/ artifact: identical self-hash ⇒ byte-identical build.
 //
-// Kept OUT of `usage()`/--help on purpose: CI's committed-prebuilt parity gate
-// (bin/ci.sh 7d) compares the COMMITTED prebuilt's --help against a fresh build's
-// --help; folding a build-varying hash into --help would make that gate flap.
+// Kept OUT of `usage()`/--help on purpose: build identity belongs in the dedicated
+// version command rather than the stable command synopsis.
 
 import (
 	"crypto/sha256"

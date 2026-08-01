@@ -21,11 +21,9 @@
 // The server's /api/version reports git_sha of the RUNNING server commit, but the
 // hosted binaries carry NO version stamp and no checksum header. We deliberately do
 // NOT embed a git_sha into ocwarden via ldflags to compare against it, for two
-// reasons: (1) a committed prebuilt is built BEFORE the commit that carries it, so
-// its embedded sha would never equal the server's post-commit sha → an infinite
-// "update" loop; (2) an ldflags stamp risks drifting the CI 7d committed-prebuilt
-// parity dryrun (which smoke-compares `--help` of committed vs fresh). Instead the
-// swap decision is made by comparing the RAW BYTES of the live binary against the
+// reason: an embedded sha would never equal the server's post-commit sha → an
+// infinite "update" loop. Instead the swap decision is made by comparing the RAW
+// BYTES of the live binary against the
 // bytes the server serves: identical ⇒ already current (never swap, never restart);
 // different ⇒ a real new artifact ⇒ verify + swap. This is drift-proof and
 // loop-free by construction. /api/version's git_sha is used ONLY as a cheap gate to
@@ -200,9 +198,8 @@ type updaterOps interface {
 	probe(bin string) error
 }
 
-// osUpdaterOps wires the seam to the real OS. The probe runs `<bin> --help` — the
-// same side-effect-free smoke invocation CI's 7d parity dryrun uses (no network, no
-// files, no launchctl) — and requires exit 0 with non-empty output.
+// osUpdaterOps wires the seam to the real OS. The probe runs `<bin> --help` without
+// network, file, or launchctl side effects and requires exit 0 with non-empty output.
 type osUpdaterOps struct{ runner CmdRunner }
 
 func (osUpdaterOps) readFile(p string) ([]byte, error) { return os.ReadFile(p) }

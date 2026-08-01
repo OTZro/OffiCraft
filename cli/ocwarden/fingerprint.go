@@ -8,7 +8,7 @@
 // the self-update swaps in verbatim) to render the machine table's
 // "current"/"stale" verdict. Deliberately CONTENT hashes, never an embedded
 // version stamp — the same swap-oracle reasoning as selfupdate.go's header
-// (a stamped sha would loop and would flap CI's committed-prebuilt parity).
+// (a stamped sha would loop).
 //
 // Hashing a multi-MB binary every 30s is avoidable waste, so results are
 // cached per path and invalidated on (size, mtime) change: a self-update swap
