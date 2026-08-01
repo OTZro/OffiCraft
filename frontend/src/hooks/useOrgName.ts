@@ -13,6 +13,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
+import {
+  adoptServerSettings,
+  loadServerSettings,
+} from "./sharedServerSettings";
 
 interface UseOrgName {
   /** The name to render in the topbar: the stored studio name if the owner has
@@ -32,8 +36,7 @@ export function useOrgName(fallback: string): UseOrgName {
 
   useEffect(() => {
     let alive = true;
-    api
-      .getServerSettings()
+    loadServerSettings()
       .then((s) => {
         if (alive) setStored(s.orgName);
       })
@@ -54,7 +57,13 @@ export function useOrgName(fallback: string): UseOrgName {
       setStored(trimmed); // optimistic
       api
         .patchServerSettings({ orgName: trimmed })
-        .then((s) => setStored(s.orgName))
+        .then((s) => {
+          // The echo is the newest truth this tab has — hand it to the shared
+          // snapshot so the other settings consumers do not keep serving the
+          // pre-save copy (T-8115).
+          adoptServerSettings(s);
+          setStored(s.orgName);
+        })
         .catch((e) => {
           console.warn("useOrgName: save failed", e);
           setStored(prev); // snap back to the last server-confirmed value

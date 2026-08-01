@@ -3,6 +3,10 @@ import { useI18n } from "../i18n";
 import { api } from "../api";
 import { isHttpStatus } from "../api/errors";
 import {
+  adoptServerSettings,
+  loadServerSettings,
+} from "../hooks/sharedServerSettings";
+import {
   ChevronLeftIcon,
   ChevronRightIcon,
   GearIcon,
@@ -116,7 +120,7 @@ export function ProfileDropdown({
     setPushEmailLoaded(false);
     setPushEmailSaving(false);
     try {
-      const settings = await api.getServerSettings();
+      const settings = await loadServerSettings();
       setPushContactEmail(settings.pushContactEmail);
       setSavedPushContactEmail(settings.pushContactEmail);
       setPushEmailLoaded(true);
@@ -141,6 +145,7 @@ export function ProfileDropdown({
     setPushEmailSaving(true);
     try {
       const settings = await api.patchServerSettings({ pushContactEmail });
+      adoptServerSettings(settings); // shared snapshot invalidation point (T-8115)
       setPushContactEmail(settings.pushContactEmail);
       setSavedPushContactEmail(settings.pushContactEmail);
     } catch {

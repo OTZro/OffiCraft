@@ -11,6 +11,10 @@
 
 import { useEffect, useState } from "react";
 import { api, type ServerSettingsView, type ServerSettingsPatch } from "../api";
+import {
+  adoptServerSettings,
+  loadServerSettings,
+} from "./sharedServerSettings";
 
 interface UseServerSettings {
   settings: ServerSettingsView | null;
@@ -32,8 +36,7 @@ export function useServerSettings(): UseServerSettings {
 
   useEffect(() => {
     let alive = true;
-    api
-      .getServerSettings()
+    loadServerSettings()
       .then((next) => {
         if (alive) {
           setSettings(next);
@@ -52,7 +55,9 @@ export function useServerSettings(): UseServerSettings {
   async function save(patch: ServerSettingsPatch): Promise<void> {
     setSaveError(false);
     try {
-      setSettings(await api.patchServerSettings(patch));
+      const echo = await api.patchServerSettings(patch);
+      adoptServerSettings(echo); // shared snapshot invalidation point (T-8115)
+      setSettings(echo);
     } catch (e) {
       console.warn("useServerSettings: save failed", e);
       // Keep the last server-confirmed values; the caller snaps its draft back.

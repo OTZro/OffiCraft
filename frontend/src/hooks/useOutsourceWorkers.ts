@@ -23,6 +23,10 @@
 import { useCallback, useEffect, useState } from "react";
 import type { OutsourceWorkerView } from "../api/adapter";
 import { api } from "../api";
+import {
+  adoptServerSettings,
+  loadServerSettings,
+} from "./sharedServerSettings";
 
 interface UseOutsourceWorkers {
   /** LIVE workers, sorted by the bound task's created_ts DESC (新→舊). */
@@ -78,8 +82,7 @@ export function useOutsourceWorkers(): UseOutsourceWorkers {
         if (alive) setLoading(false);
       });
 
-    api
-      .getServerSettings()
+    loadServerSettings()
       .then((s) => {
         if (alive) setMaxParallel(s.outsourceMaxParallel);
       })
@@ -108,6 +111,7 @@ export function useOutsourceWorkers(): UseOutsourceWorkers {
 
   const saveMaxParallel = useCallback(async (n: number) => {
     const next = await api.patchServerSettings({ outsourceMaxParallel: n });
+    adoptServerSettings(next); // shared snapshot invalidation point (T-8115)
     setMaxParallel(next.outsourceMaxParallel);
   }, []);
 

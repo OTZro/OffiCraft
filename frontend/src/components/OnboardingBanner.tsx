@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n";
-import { api, type OnboardingReportView } from "../api";
+import { type OnboardingReportView } from "../api";
+import {
+  loadServerSettings,
+  refreshServerSettings,
+} from "../hooks/sharedServerSettings";
 import "./onboarding.css";
 
 /**
@@ -28,9 +32,67 @@ const DISMISS_KEY = "oc.onboarding.dismissed";
 export const ONBOARDING_POLL_MS = 3000;
 export const ONBOARDING_POLL_CEILING_MS = 180000;
 
-/** Terminal states: once the report reads one of these it will never change. */
-function isTerminal(report: OnboardingReportView | null): boolean {
-  return report !== null && (report.state === "ok" || report.state === "failed");
+/** sessionStorage flag: THIS browser session performed the initial password
+ * set, so the automatic first-run onboarding was kicked by our own request and
+ * a report for it either exists or is about to. Set by FirstRunPage. */
+const FIRST_RUN_KEY = "oc.onboarding.firstrun";
+
+/** Record that this session just claimed the server (FirstRunPage calls it on a
+ * successful set-password). This states a fact about THIS browser session — it
+ * writes nothing to the server and invents no history. */
+export function markOnboardingFirstRun(): void {
+  try {
+    sessionStorage.setItem(FIRST_RUN_KEY, "1");
+  } catch {
+    // No storage (private mode / SSR): degrade to the ordinary cockpit-open
+    // reading — one fetch. Never throw over a hint.
+  }
+}
+
+function isFirstRunSession(): boolean {
+  try {
+    return sessionStorage.getItem(FIRST_RUN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function clearFirstRunSession(): void {
+  try {
+    sessionStorage.removeItem(FIRST_RUN_KEY);
+  } catch {
+    // best-effort
+  }
+}
+
+/** Terminal states: once the report reads one of these it will never change.
+ *
+ * 🔴 THE TWO KINDS OF `null` (T-8115). `onboarding: null` is the SPEC'd normal
+ * value for an install where the run never happened — the DTO says so: "Null on
+ * the settings read when onboarding never ran (an install that predates it, or
+ * a database that already had a password)". On the production install it is
+ * null and always will be. Treating that as "not finished yet" made every
+ * cockpit open poll a 639 kB payload 60 times over three minutes waiting for a
+ * row that no code path will ever write.
+ *
+ * The other null is genuinely transient: the report row is written by
+ * `kickFirstRunOnboarding` (server/ocserverd/onboarding.go), reached only from
+ * the POST /api/auth/set-password handler. So the discriminator is not in the
+ * payload — it is WHETHER ONBOARDING WAS KICKED AT ALL, and the one client that
+ * knows is the browser that submitted the password. `isFirstRunSession()` is
+ * that fact, and only in that session does a null keep the poll alive.
+ *
+ * ⚠️ This is NOT "fetch once". In the first-run session the poll survives in
+ * full: the run reports `running` first and only lands `failed` around t≈30s
+ * (wardenOnlineWait), which is the single case this banner exists for, and the
+ * poll still runs to the 180 s ceiling to catch it. A `running` report is
+ * non-terminal for EVERY session, first-run or not. */
+function isTerminal(
+  report: OnboardingReportView | null,
+  firstRunSession: boolean,
+): boolean {
+  if (report === null) return !firstRunSession;
+  return report.state === "ok" || report.state === "failed";
 }
 
 export function OnboardingBanner() {
@@ -63,13 +125,28 @@ export function OnboardingBanner() {
     let live = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const started = Date.now();
+    // Captured ONCE: whether this browser session is the one that set the
+    // initial password (see isTerminal — it is the only thing that makes a
+    // null report worth waiting on).
+    const firstRunSession = isFirstRunSession();
+    let first = true;
 
     const tick = async () => {
       try {
-        const settings = await api.getServerSettings();
+        // The FIRST read joins the shared cockpit-load snapshot (one
+        // /api/settings for the whole page); every later poll must be a real
+        // read — a poll answered from a cache would watch its own memory.
+        const wasFirst = first;
+        first = false;
+        const settings = wasFirst
+          ? await loadServerSettings()
+          : await refreshServerSettings();
         if (!live) return;
         setReport(settings.onboarding);
-        if (isTerminal(settings.onboarding)) return; // done — stop polling
+        // A report row exists ⇒ the "was it kicked?" question is answered for
+        // good; the flag has no further job and must not outlive this run.
+        if (settings.onboarding !== null) clearFirstRunSession();
+        if (isTerminal(settings.onboarding, firstRunSession)) return; // stop
       } catch {
         // A settings read that fails is NOT evidence about onboarding — stay
         // silent rather than assert anything we do not know, and keep polling:

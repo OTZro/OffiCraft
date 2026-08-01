@@ -173,7 +173,11 @@ describe("OnboardingBanner", () => {
     first.unmount();
 
     renderBanner();
-    await waitFor(() => expect(getServerSettings).toHaveBeenCalledTimes(2));
+    // ONE read for both mounts (T-8115): the banner's first read joins the
+    // shared /api/settings snapshot, so the remount is answered from it rather
+    // than re-downloading 639 kB. The subject here is the dismissal, and it
+    // holds with the report already in hand.
+    await waitFor(() => expect(getServerSettings).toHaveBeenCalledTimes(1));
     expect(screen.queryByTestId("onboarding-banner")).toBeNull();
   });
 });

@@ -13,6 +13,7 @@ import { formatBuildVersion } from "../lib/versionFormat";
 import { useGlobalContext } from "../hooks/useGlobalContext";
 import { useRoles } from "../hooks/useRoles";
 import { useServerSettings } from "../hooks/useServerSettings";
+import { refreshServerSettings } from "../hooks/sharedServerSettings";
 import { useTaskManuals } from "../hooks/useTaskManuals";
 import { useMembers } from "../hooks/useMembers";
 import {
@@ -972,7 +973,9 @@ function SoftwareUpdate({
     // hook's generic saveError so a rejected write isn't double-reported.
     onClearSaveError();
     try {
-      const echo = await api.getServerSettings();
+      // A REAL read, never the shared cache: proving the server agrees is the
+      // entire point of 存檔測連通 (T-8115).
+      const echo = await refreshServerSettings();
       setVerifyStatus(landed(echo) ? "ok" : "fail");
     } catch {
       setVerifyStatus("fail");

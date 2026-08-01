@@ -13,6 +13,10 @@ import { en } from "./locales/en";
 import { api } from "../api";
 import { hasToken, AUTH_LOGIN_EVENT } from "../api/auth";
 import {
+  adoptServerSettings,
+  loadServerSettings,
+} from "../hooks/sharedServerSettings";
+import {
   isValidDisplayTheme,
   DEFAULT_BACKGROUND_MODE,
   type BackgroundMode,
@@ -337,6 +341,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       if (hasToken()) {
         api
           .patchServerSettings({ displayLanguage: next })
+          .then(adoptServerSettings) // shared snapshot (T-8115)
           .catch((e) => console.warn("setLanguage: server sync failed", e));
       }
     },
@@ -349,6 +354,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       if (hasToken()) {
         api
           .patchServerSettings({ displayTheme: next })
+          .then(adoptServerSettings) // shared snapshot (T-8115)
           .catch((e) => console.warn("setTheme: server sync failed", e));
       }
     },
@@ -361,6 +367,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       if (hasToken()) {
         api
           .patchServerSettings({ displayWide: next })
+          .then(adoptServerSettings) // shared snapshot (T-8115)
           .catch((e) => console.warn("setWide: server sync failed", e));
       }
     },
@@ -384,6 +391,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
         if (nextTheme !== undefined) patch.displayTheme = nextTheme;
         api
           .patchServerSettings(patch)
+          .then(adoptServerSettings) // shared snapshot (T-8115)
           .catch((e) =>
             console.warn("commitCustomThemes: server sync failed", e)
           );
@@ -400,8 +408,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   // value is a React state no-op, so the common (cache == server) case does not
   // repaint — no flash.
   const reconcileFromServer = useCallback(() => {
-    api
-      .getServerSettings()
+    loadServerSettings()
       .then((s) => {
         // The server owns the custom-theme set — adopt it wholesale (so the
         // apply effect can resolve a custom active id to its bundle). Coerce a
