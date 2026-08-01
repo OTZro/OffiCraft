@@ -180,6 +180,20 @@ export function useMembers(opts?: { light?: boolean }): UseMembers {
         // (api_chat.go), and the hub delivers EVERY delta to the owner/dashboard
         // connection — so a single agent-to-agent message names TWO held members
         // in ONE frame, with no burst coalescing involved at all.
+        //
+        // 🔴 **但 k>=2 是常態的「浪費」,不是常態的「需求」——這一段以前只寫了前半,
+        // 讀起來像「這條路已經解完了」。** `UnreadCounts`
+        // (server/ocserverd/domain.go:411-425)只數 `m.Recipient == reader`,
+        // 而這份 roster 的 reader 是 owner,且 owner 不是名冊列 ⇒ heldRef 不含它。
+        //   會動 badge ⟹ 有一端是 owner ⟹ k <= 1
+        //   k >= 2     ⟹ 兩端都不是 owner ⟹ 動不了任何 badge(語意 no-op)
+        // 反過來不成立:k=1 不蘊含「有事做」(`owner → member`、
+        // `member ↔ ow-worker` 都是 k=1 且什麼都不該做,今天照樣各打一次 GET)。
+        // ⇒ 現況是「2 次沒必要的逐項」換成「1 次沒必要的清單」:每個 k 都嚴格優於
+        // 改動前,但**最佳解是 0 個請求**——資訊已在 delta 上,`chat` 判
+        // `from !== "owner" && to !== "owner"`、`chat_read` 判 `reader !== "owner"`
+        // 就能直接 return(兩個 topic 述詞不同,chat_read 沒有 from/to)。
+        // **還沒做,要先取得 owner 核可**(新增一道從不存在的保護,不是順手改)。
         if (touched.length === 1) void patchOne(touched);
         else if (touched.length > 1) void full();
       })

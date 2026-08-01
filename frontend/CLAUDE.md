@@ -473,6 +473,56 @@ reconcile-by-refetch 的規則沒變(**永遠不 merge payload**),但「refetch 
     **用真的會發生的形狀當 fixture,不是人造的多成員 burst**,並含一道前提斷言
     (那則 delta 真的指到兩張手上的卡)。mutant:把 `k>1 → full()` 拿掉 → 整套
     1678 條**恰好這 1 條紅**(`expected undefined to be 1`,清單根本沒被拉)。
+
+    🔴 **但上面那句「agent 互相講話在這個產品裡是常態」只講對了一半,而漏掉的那一半
+    會讓下一個人以為這條路已經解完了——它是常態的「浪費」,不是常態的「需求」。**
+    `UnreadCounts`(`server/ocserverd/domain.go:411-425`)只數
+    `m.Recipient == reader` 的訊息(它自己的 doc comment 就寫明「Messages between two
+    other participants never count」),而座艙這份 roster 的 reader 是 **owner**;
+    owner **不是名冊列**(single-owner schema,沒有 owner 的 member row),所以
+    `heldRef` 永遠不含它。把這兩件事接上 `narrowToHeld` 就得到:
+
+    | 真實形狀(`chat`:ids = {msgId, from, to}) | 落在名冊上的 k | 對這份 roster 有事做嗎 |
+    |---|---|---|
+    | member → owner | 1 | **有**(badge +1) |
+    | owner → member | 1 | **沒有**(recipient 是那個成員,不是 owner) |
+    | member ↔ member | **2** | **沒有** |
+    | member ↔ `ow-` worker | 1 | **沒有**(worker 不在名冊上,且 recipient≠owner) |
+
+    | 真實形狀(`chat_read`:ids = {reader, peer}) | k | 有事做嗎 |
+    |---|---|---|
+    | reader = owner | 1 | **有**(badge 清掉) |
+    | reader = member / peer = member | **2** | **沒有** |
+
+    ⇒ **`k ≥ 2` ⟹ 兩端都不是 owner ⟹ 這則 delta 動不了這份 roster 上的任何一個
+    badge ⟹ 語意上是 no-op。** 而且「會動 badge」⟹「有一端是 owner」⟹ `k ≤ 1`,
+    所以**真的有事做的情況恆為 k=1**。
+    ⚠️ **反過來不成立,別把它讀成雙條件**:`k = 1` **不**蘊含「有事做」——上表第 2、4 列
+    都是 k=1 而且什麼都不該做,它們今天照樣各打一次 `GET /api/members/{id}`。
+    (這一點與獨立驗證回報的表略有出入,以本表為準:那份表把「owner ↔ member」整列記成
+    「會動」,但只有 member→owner 那個方向會。)
+
+    🔴 **所以這顆改動的定位要講清楚**:它把「2 次沒必要的逐項 GET(+2 次全表掃描)」
+    換成「1 次沒必要的清單 GET(+1 次掃描)」。**在每一個 k 上都嚴格優於改動前,但它
+    不是這條路的最佳解。** **誠實的最佳解是 0 個請求**——判斷需要的資訊**已經在 delta
+    上**(`toSseDelta` 留著 `from`/`to`/`reader`/`peer` 五個欄位):`chat` 的
+    `from !== "owner" && to !== "owner"`、`chat_read` 的 `reader !== "owner"`,
+    這兩種情形直接 return、一個請求都不必發。⚠️ **兩個 topic 的述詞不同,別只抄
+    `from`/`to` 那半**——`chat_read` 根本沒有 `from`/`to`。
+    **這件事還沒做,而且要先取得 owner 核可**(那是新增一道從來不存在的保護,不是修
+    缺陷的副作用)。**在拿到裁定之前,不要把上面那句「k≥2 是常態」讀成「這條路已經
+    解完了」——這張票的名字就是「座艙重複打 API」。**
+
+    ⚠️ **兩件已知的誠實性瑕疵,這一輪刻意不修(改值會讓已經驗過的 mutant 證據全部失效)**:
+    1. **哨兵的 fixture 讓 agent↔agent 之後 badge 變 6 / 2,那是真 server 產不出來的狀態**
+       ——`UnreadCounts(reader=owner)` 對 `m-other → m-third` 這則訊息兩邊都不加。
+       以這個檔案自己的教義(**假 api 不得比真 server 慷慨**,見下一節)來說這是瑕疵:
+       它的值斷言量的是一台不會那樣回答的 server。它仍然證得出「清單被拉了、而且值從
+       清單來」,但**別把它當成「badge 真的會這樣動」的證據**。
+    2. **那條 `PREMISE` 斷言(`delta.ids ∩ held`)是文件,不是守衛。** 獨立驗證實測它
+       對兩顆 mutant 都零鑑別力;而**結構上的理由比實測更強**:`delta` 是測試裡的區域
+       字面值、`held` 來自 mount,**兩者都不依賴那個 k 分支**,所以不論 hook 怎麼改它
+       都不可能紅。**不要把它算進覆蓋。**
   - `useTasks` — **不可以**逐項,走清單。`GET /api/tasks/{id}` **整個 wire 上沒有
     `dep_tasks`**(凍結 spec 只把那個 server-side dep join 放在 `TaskListItemDTO`;
     `toTask()` 因此不設 `depTasks`,`toTaskListItem()` 逐字帶過)。而 `TaskCard` 把

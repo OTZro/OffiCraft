@@ -355,6 +355,36 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
     // ListChat() scan PER REQUEST, so k per-item reads cost k GETs + k full
     // scans, while the list is 1 + 1 for any k (measured 2026-08-01). The
     // crossover is at 2 — k=1 ties on cost and wins on payload, k>=2 loses.
+    //
+    // ──────────────────────────────────────────────────────────────────────
+    // 🔴 這條測試釘住的是「k>1 走清單」,**不是**「這則 delta 需要被重抓」。
+    // 這兩件事差很多,而且分不清會讓下一個人以為這條路已經解完了。
+    //
+    // `UnreadCounts`(server/ocserverd/domain.go:411-425)只數
+    // `m.Recipient == reader` 的訊息,而這份 roster 的 reader 是 **owner**,
+    // 且 owner **不是名冊列**(single-owner schema)⇒ `heldRef` 永遠不含它。
+    // 接上 `narrowToHeld` 就得到一條不變量:
+    //
+    //   會動 badge  ⟹ 有一端是 owner ⟹ k ≤ 1
+    //   k ≥ 2       ⟹ 兩端都不是 owner ⟹ 動不了任何 badge(語意上是 no-op)
+    //
+    // ⚠️ 反過來**不成立**:k=1 不蘊含「有事做」。`owner → member`(recipient 是
+    // 那個成員、不是 owner)與 `member ↔ ow-worker` 都是 k=1 而且什麼都不該做,
+    // 今天照樣各打一次 `GET /api/members/{id}`。
+    //
+    // ⇒ **這顆改動把「2 次沒必要的逐項」換成「1 次沒必要的清單」——在每個 k 上都
+    // 嚴格優於改動前,但不是最佳解。誠實的最佳解是 0 個請求**:判斷所需的資訊已經
+    // 在 delta 上(`toSseDelta` 留著 from/to/reader/peer),`chat` 的
+    // `from !== "owner" && to !== "owner"`、`chat_read` 的 `reader !== "owner"`
+    // 直接 return 即可。**還沒做,且要先取得 owner 核可**(那是新增一道從不存在的
+    // 保護)。兩個 topic 的述詞不同,別只抄 from/to 那半。
+    //
+    // ⚠️ **本測試 fixture 的一個誠實性瑕疵(已知,這一輪刻意不修——改值會讓已驗過的
+    // mutant 證據失效)**:下面讓 m-other 1→6、m-third 0→2,而**真 server 對這則
+    // agent↔agent 訊息兩邊都不會加**。以本檔自己的教義(假 api 不得比真 server
+    // 慷慨)這是瑕疵:值斷言量的是一台不會這樣回答的 server。它仍證得出「清單被拉
+    // 了、且值從清單來」,但**別把它當成「badge 真的會這樣動」的證據**。
+    // ──────────────────────────────────────────────────────────────────────
     const view = await mountedCockpit();
     // The server's new truth: both ends of that conversation moved.
     h.members = [member(OPEN_PEER, 3), member("m-other", 6), member("m-third", 2)];
@@ -365,8 +395,11 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
       names: { id: "cm-a2a", from: "m-other", to: "m-third" },
       ids: ["cm-a2a", "m-other", "m-third"],
     };
-    // PREMISE: this delta really does name TWO cards this roster holds. Without
-    // this the test would still pass against a fan-out that simply never fired.
+    // PREMISE: this delta really does name TWO cards this roster holds.
+    // ⚠️ **這條是文件,不是守衛,別把它算進覆蓋。** `delta` 是下面那個區域字面值、
+    // `held` 來自 mount,**兩者都不依賴被測的 k 分支** ⇒ 不論 hook 怎麼改它都不可能
+    // 紅(結構性論證;獨立驗證另外實測過兩顆 mutant,皆零鑑別力)。真正釘住 k>1 的是
+    // 下面那兩條 COST 斷言。
     const held = view.result.current.members.map((m) => m.id);
     expect(delta.ids.filter((id) => held.includes(id))).toEqual([
       "m-other",
