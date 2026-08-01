@@ -469,10 +469,13 @@ reconcile-by-refetch 的規則沒變(**永遠不 merge payload**),但「refetch 
     agent↔agent 的訊息,**單一 SSE frame 就同時指名兩個名冊成員**。agent 互相講話
     在這個產品裡是常態。(反面:分開三個 tick 的三則 delta 是三個 k=1 的 burst,
     改動前也是 3 次清單 GET ⇒ **那條路沒有回歸**,放大只發生在單一 burst 內。)
-    哨兵 `sseFanout.test.tsx` 的「ONE agent-to-agent line names TWO members」——
-    **用真的會發生的形狀當 fixture,不是人造的多成員 burst**,並含一道前提斷言
-    (那則 delta 真的指到兩張手上的卡)。mutant:把 `k>1 → full()` 拿掉 → 整套
-    1678 條**恰好這 1 條紅**(`expected undefined to be 1`,清單根本沒被拉)。
+    哨兵 `sseFanout.test.tsx` 的「ONE agent-to-agent line …」——**用真的會發生的形狀當
+    fixture,不是人造的多成員 burst**。
+    ⚠️ **這條哨兵的契約已經被下面那顆推翻過一次**:它原本叫「… names TWO members —
+    that re-pulls the LIST, not two reads」並斷言 `listMembers === 1`;現在那則 delta
+    **一個請求都不該發**,測試改名為「… moves no badge here — so it costs the roster
+    ZERO requests」、斷言 `listMembers === 0`。**舊的 mutant 紀錄(「拿掉 `k>1 →
+    full()` → 整套恰好這 1 條紅」)因此已失效**,新的三顆記在下面那張表。
 
     🔴 **但上面那句「agent 互相講話在這個產品裡是常態」只講對了一半,而漏掉的那一半
     會讓下一個人以為這條路已經解完了——它是常態的「浪費」,不是常態的「需求」。**
@@ -502,27 +505,66 @@ reconcile-by-refetch 的規則沒變(**永遠不 merge payload**),但「refetch 
     (這一點與獨立驗證回報的表略有出入,以本表為準:那份表把「owner ↔ member」整列記成
     「會動」,但只有 member→owner 那個方向會。)
 
-    🔴 **所以這顆改動的定位要講清楚**:它把「2 次沒必要的逐項 GET(+2 次全表掃描)」
-    換成「1 次沒必要的清單 GET(+1 次掃描)」。**在每一個 k 上都嚴格優於改動前,但它
-    不是這條路的最佳解。** **誠實的最佳解是 0 個請求**——判斷需要的資訊**已經在 delta
-    上**(`toSseDelta` 留著 `from`/`to`/`reader`/`peer` 五個欄位):`chat` 的
-    `from !== "owner" && to !== "owner"`、`chat_read` 的 `reader !== "owner"`,
-    這兩種情形直接 return、一個請求都不必發。⚠️ **兩個 topic 的述詞不同,別只抄
-    `from`/`to` 那半**——`chat_read` 根本沒有 `from`/`to`。
-    **這件事還沒做,而且要先取得 owner 核可**(那是新增一道從來不存在的保護,不是修
-    缺陷的副作用)。**在拿到裁定之前,不要把上面那句「k≥2 是常態」讀成「這條路已經
-    解完了」——這張票的名字就是「座艙重複打 API」。**
+    🔴 **所以正解是 0 個請求,而它已經做了**(owner 2026-08-02 裁定「順手做掉,但要走
+    完整驗證」)。`useMembers` 的 **`couldMoveAnOwnerBadge`**:整陣 delta 的兩端都不是
+    `owner` ⇒ **直接 return,一個請求都不發**(不是清單、也不是逐項)。判斷所需的資訊
+    本來就在 delta 上(`toSseDelta` 留著 `from`/`to`/`reader`/`peer`),不必問 server。
+    ⚠️ **兩個 topic 的述詞欄位不同**:`chat` 是 `from`/`to`、`chat_read` 是
+    `reader`/`peer`。只檢查一對,會對另一個 topic 的**每一則** delta 都答「沒有 owner」
+    ⇒ 把真的有事做的那些也跳過。**mutant 實測**:拿掉 `reader`/`peer` 兩項 →
+    `sseFanout.test.tsx` **恰好紅 2 條**(都在 read-echo 那組)。
+    ⚠️ 它刻意用**寬鬆**述詞(「owner 在任一端」)而不是最緊的那個(`chat` 只需
+    `to === owner`、`chat_read` 只需 `reader === owner`)。上表第 2、4 列因此仍各花一次
+    沒必要的逐項 GET。**收緊是第二個最佳化,要自己的量測與裁定**;寬鬆版錯在「多抓」,
+    是安全的那一邊。
 
-    ⚠️ **兩件已知的誠實性瑕疵,這一輪刻意不修(改值會讓已經驗過的 mutant 證據全部失效)**:
+    **實測(同一份 harness 母體、改前改後當下各量一次;40 列名冊)**:一則 agent↔agent
+    chat delta 對 `useMembers` 的請求 **1 → 0**、位元組 **3,403 → 0**;`chat_read`
+    member↔member 同樣 **1 → 0 / 3,403 → 0**;member↔`ow-` worker(k=1)**1 → 0 /
+    84 → 0**。對照組不動:member→owner **維持 1 次 `getMember`**、`chat_read`
+    reader=owner **維持 1 次**、混合陣 **維持 1 次清單**、resync **維持全量**。
+    ⚠️ **這些位元組是 harness fixture 尺度,不是正式站尺度**(我沒有正式站名冊可引用);
+    改動後那一格是 **0,而且是構造上的 0**——根本不發請求,所以省下的就是那個 GET 的
+    全部大小,與名冊多大成正比。
+    🔴 **「0 請求」的射程是 `useMembers`,不是整個座艙**:同一則 delta 仍讓
+    `useChatUnread` 打一次 `getChatUnreadCount`(實測 total 2 → **1**,不是 0)。
+    而依同一條 `UnreadCounts(reader=owner)`,那個總數同樣**不可能**因 agent↔agent 訊息
+    改變 ⇒ **那是同一個浪費的第三個實例,只是在另一個 hook 裡,本輪未授權處理。**
+    別把這裡的 0 讀成座艙的 0。
+
+    🔴 **`k > 1 → full()` 沒有刪,而且不准當死碼刪掉**。有了跳過之後,還走到那裡的每一陣
+    都有一端是 owner,而**在今天這份 wire 上**那強制 k ≤ 1 ⇒ 該分支在生產上目前不可達。
+    **但那是現行 wire 的性質、不是構造保證**:`toSseDelta` 多一個身分欄位、delta 開始
+    指名第三方、或 hub 的投遞對象改變,k > 1 就會回來,而那時它就是「1 次清單」與
+    「k 次逐項 × 每次一趟全表掃描」的差別。它現在的定位是 **fail-safe**,理由寫在
+    `useMembers.ts` 該分支上方。**它仍然有守衛**:mutant 把它刪掉 → 混合陣那條 CONTROL
+    **恰好紅 1 條**(混合陣仍帶全部 ids 走下面的分支,k=2)。
+
+    **跳過是整陣判斷、不是逐則過濾**:混合陣(一則 agent↔agent + 一則給 owner)仍帶
+    **全部** ids 走下面的分支,所以真的有事做的那一半永遠不會被吃掉;代價是 k 可能被
+    撐大、混合陣走清單而非逐項——**永遠正確,偶爾不是最省**,而那是安全的方向。
+
+    ⚠️ **兩件已知的誠實性瑕疵,刻意不修**:
     1. **哨兵的 fixture 讓 agent↔agent 之後 badge 變 6 / 2,那是真 server 產不出來的狀態**
        ——`UnreadCounts(reader=owner)` 對 `m-other → m-third` 這則訊息兩邊都不加。
-       以這個檔案自己的教義(**假 api 不得比真 server 慷慨**,見下一節)來說這是瑕疵:
-       它的值斷言量的是一台不會那樣回答的 server。它仍然證得出「清單被拉了、而且值從
-       清單來」,但**別把它當成「badge 真的會這樣動」的證據**。
+       以這個檔案自己的教義(**假 api 不得比真 server 慷慨**,見下一節)來說這是瑕疵。
+       **它現在反而是那條測試值斷言的鑑別力來源**:跳過失效時清單會被拉,那組真 server
+       產不出來的值就會被採用、值斷言跟著紅。但**別把它讀成「badge 應該長這樣」**。
     2. **那條 `PREMISE` 斷言(`delta.ids ∩ held`)是文件,不是守衛。** 獨立驗證實測它
        對兩顆 mutant 都零鑑別力;而**結構上的理由比實測更強**:`delta` 是測試裡的區域
        字面值、`held` 來自 mount,**兩者都不依賴那個 k 分支**,所以不論 hook 怎麼改它
        都不可能紅。**不要把它算進覆蓋。**
+
+    🔴 **判準是請求數,不是 badge 值** —— 「badge 沒變」在改動前後**都**成立(那則 delta
+    本來就改不了任何值),拿它當判準會寫出一條恆真的斷言。三條測試的判準全部是
+    `h.counts`。**mutant 實測(2026-08-02,每顆還原都用 scratchpad 備份、未用
+    `git checkout --`)**:
+
+    | mutant | `sseFanout.test.tsx`(13 條) |
+    |---|---|
+    | 拿掉 `couldMoveAnOwnerBadge` 跳過 | 🔴 **2 條**(a2a chat、a2a chat_read;皆 `expected 1 to be +0`) |
+    | 述詞只留 `from`/`to`(丟掉 `reader`/`peer`) | 🔴 **2 條**(read-echo 那組) |
+    | 刪掉 `k > 1 → full()` fail-safe | 🔴 **1 條**(混合陣 CONTROL,`expected undefined to be 1`) |
   - `useTasks` — **不可以**逐項,走清單。`GET /api/tasks/{id}` **整個 wire 上沒有
     `dep_tasks`**(凍結 spec 只把那個 server-side dep join 放在 `TaskListItemDTO`;
     `toTask()` 因此不設 `depTasks`,`toTaskListItem()` 逐字帶過)。而 `TaskCard` 把

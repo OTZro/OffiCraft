@@ -343,7 +343,7 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
   //    **單一 emit 就是 k=2**(實測:getMember 0 / listMembers 1)。要量 k>1
   //    的成本**不需要**任何 burst 構造技巧,別因為以為構造很貴就放棄量它。
   // ────────────────────────────────────────────────────────────────────────
-  it("🔴 ONE agent-to-agent line names TWO members — that re-pulls the LIST, not two reads", async () => {
+  it("🔴 ONE agent-to-agent line moves no badge here — so it costs the roster ZERO requests", async () => {
     // THE REAL SHAPE, not a synthetic multi-member burst. A chat delta carries
     // {id, from, to} (api_chat.go), `toSseDelta` keeps all of them, and the hub
     // delivers EVERY delta to the owner/dashboard connection — so one member
@@ -372,18 +372,23 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
     // 那個成員、不是 owner)與 `member ↔ ow-worker` 都是 k=1 而且什麼都不該做,
     // 今天照樣各打一次 `GET /api/members/{id}`。
     //
-    // ⇒ **這顆改動把「2 次沒必要的逐項」換成「1 次沒必要的清單」——在每個 k 上都
-    // 嚴格優於改動前,但不是最佳解。誠實的最佳解是 0 個請求**:判斷所需的資訊已經
-    // 在 delta 上(`toSseDelta` 留著 from/to/reader/peer),`chat` 的
-    // `from !== "owner" && to !== "owner"`、`chat_read` 的 `reader !== "owner"`
-    // 直接 return 即可。**還沒做,且要先取得 owner 核可**(那是新增一道從不存在的
-    // 保護)。兩個 topic 的述詞不同,別只抄 from/to 那半。
+    // ⇒ **所以這裡的正解是 0 個請求,而那已經做了**(owner 2026-08-02 裁定「順手做
+    // 掉,但要走完整驗證」):`useMembers` 的 `couldMoveAnOwnerBadge` 在整陣 delta
+    // 兩端都不是 owner 時直接 return,一個請求都不發。判斷所需資訊本來就在 delta 上
+    // (`toSseDelta` 留著 from/to/reader/peer),不必問 server。
+    // ⚠️ 兩個 topic 的述詞欄位不同(`chat` = from/to、`chat_read` = reader/peer),
+    // 只抄一半會對另一個 topic 全部答錯 —— 各有一條測試釘住。
     //
-    // ⚠️ **本測試 fixture 的一個誠實性瑕疵(已知,這一輪刻意不修——改值會讓已驗過的
-    // mutant 證據失效)**:下面讓 m-other 1→6、m-third 0→2,而**真 server 對這則
-    // agent↔agent 訊息兩邊都不會加**。以本檔自己的教義(假 api 不得比真 server
-    // 慷慨)這是瑕疵:值斷言量的是一台不會這樣回答的 server。它仍證得出「清單被拉
-    // 了、且值從清單來」,但**別把它當成「badge 真的會這樣動」的證據**。
+    // 🔴 **這顆改動的歷史,別讀成一步到位**:先前那一版把「2 次沒必要的逐項」換成
+    // 「1 次沒必要的清單」(嚴格優於更早之前,但仍在抓一份不會變的東西);這一版才
+    // 把它收成 0。下面那條 `k > 1 → full()` 因此**降級成 fail-safe、不再是熱路徑**
+    // ——理由與它為什麼不能刪,寫在 `useMembers.ts` 該分支上方。
+    //
+    // ⚠️ **本測試 fixture 的一個誠實性瑕疵(已知,刻意不修)**:下面讓 m-other 1→6、
+    // m-third 0→2,而**真 server 對這則 agent↔agent 訊息兩邊都不會加**(那正是上面
+    // 那條不變量)。以本檔自己的教義(假 api 不得比真 server 慷慨)這是瑕疵。
+    // **它現在反而是這條測試的鑑別力來源**:跳過失效時清單會被拉,那組真 server
+    // 產不出來的值就會被採用、值斷言跟著紅。但別把它讀成「badge 應該長這樣」。
     // ──────────────────────────────────────────────────────────────────────
     const view = await mountedCockpit();
     // The server's new truth: both ends of that conversation moved.
@@ -409,19 +414,90 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
     emit(delta);
     await settle();
 
-    // COST: ONE list read, and NOT two per-item reads.
-    expect(h.counts.listMembers).toBe(1);
+    // 🔴 COST — THE JUDGE IS THE REQUEST COUNT, and it must be ZERO on BOTH
+    // paths. Measured on this harness (40-member roster, same population before
+    // and after): listMembers 1 → 0, and the bytes that GET carried 3,403 → 0.
+    // Mutant: delete the `couldMoveAnOwnerBadge` skip in useMembers.ts and this
+    // pair goes red with `listMembers` back at 1.
+    expect(h.counts.listMembers ?? 0).toBe(0);
     expect(h.counts.getMember ?? 0).toBe(0);
 
-    // VALUE: the list is still the source of every badge, so both ends moved.
-    // (A cost assertion alone is satisfied by a hook that stopped updating.)
+    // ⚠️ **值不能當判準,只能當佐證** —— 「badge 沒變」對「這則 delta 本來就改不了
+    // 任何值」的世界恆真,拿它當判準就是寫一條擋不住任何東西的斷言。判準在上面。
+    // 這一條之所以還有鑑別力,純粹是因為 fixture 讓假 server 報了 6/2(見上方瑕疵
+    // (a)):跳過沒生效時清單會被拉、於是那組**真 server 產不出來的**值會被採用。
+    // 所以它證的是「我們沒有去抓」,不是「badge 應該長這樣」。
     expect(view.result.current.members.map((m) => m.unreadCount)).toEqual([
-      3, 6, 2,
+      3, 1, 0,
     ]);
     expect(view.result.current.members.map((m) => m.id)).toEqual([
       OPEN_PEER,
       "m-other",
       "m-third",
+    ]);
+
+    // 🔴 誠實邊界:**座艙整體不是 0**。`useChatUnread` 沒有逐項路徑、也還沒有這道
+    // 跳過,所以同一則 delta 仍讓它重抓一次全公司未讀總數 —— 而依同一條
+    // `UnreadCounts(reader=owner)` 推論,那個總數同樣**不可能**因 agent↔agent 訊息
+    // 改變。這裡把它斷言出來,免得有人把「useMembers 0 請求」讀成「座艙 0 請求」。
+    expect(h.counts.getChatUnreadCount).toBe(1);
+    expect(view.result.current.unread).toBe(11);
+    expect(totalRequests()).toBe(1);
+  });
+
+  it("🔴 a chat_read between two MEMBERS also costs zero — the predicate is reader/peer, not from/to", async () => {
+    // 兩個 topic 的欄位名不同(`chat` 是 from/to、`chat_read` 是 reader/peer)。
+    // 只抄一半的述詞會對另一個 topic 的每一則 delta 都答「沒有 owner」——方向剛好
+    // 相反、會**跳過真的有事做的**那些。這條與下面 CONTROL-READ-OWNER 成對:
+    // mutant(從 `couldMoveAnOwnerBadge` 拿掉 reader/peer 兩項)→ 那條 CONTROL 紅。
+    const view = await mountedCockpit();
+    h.members = [member(OPEN_PEER, 3), member("m-other", 6), member("m-third", 2)];
+
+    emit({
+      topic: "chat_read",
+      names: { reader: "m-other", peer: "m-third" },
+      ids: ["m-other", "m-third"],
+    });
+    await settle();
+
+    expect(h.counts.listMembers ?? 0).toBe(0);
+    expect(h.counts.getMember ?? 0).toBe(0);
+    expect(view.result.current.members.map((m) => m.unreadCount)).toEqual([
+      3, 1, 0,
+    ]);
+  });
+
+  it("🔴 CONTROL: a burst that mixes an agent↔agent line WITH a line to the owner still refetches", async () => {
+    // 反向守衛,而且它現在是 `k > 1 → full()` 那條 fail-safe 分支**唯一**的執行者:
+    // 跳過是**整陣**判斷,所以混合陣仍會帶著全部 ids 走下面的分支,k=2 ⇒ 清單。
+    // 兩顆 mutant 都會打紅這一條:(a) 把跳過改成 per-delta 過濾而丟掉真的那則、
+    // (b) 把 `k > 1 → full()` 刪掉(當成死碼)。
+    const view = await mountedCockpit();
+    h.members = [member(OPEN_PEER, 3), member("m-other", 6), member("m-third", 2)];
+
+    act(() => {
+      for (const d of [
+        {
+          topic: "chat",
+          names: { id: "x1", from: "m-other", to: "m-third" },
+          ids: ["x1", "m-other", "m-third"],
+        },
+        {
+          topic: "chat",
+          names: { id: "x2", from: OPEN_PEER, to: "owner" },
+          ids: ["x2", OPEN_PEER, "owner"],
+        },
+      ] as SseDelta[]) {
+        for (const cb of [...h.handlers]) cb(d.topic, d);
+      }
+    });
+    await settle();
+
+    // 真的有事做的那一半沒有被跳過吃掉。
+    expect(h.counts.listMembers).toBe(1);
+    expect(h.counts.getMember ?? 0).toBe(0);
+    expect(view.result.current.members.map((m) => m.unreadCount)).toEqual([
+      3, 6, 2,
     ]);
   });
 
