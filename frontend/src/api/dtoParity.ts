@@ -5,12 +5,15 @@
 // response is a SUPERSET of the list row for every field the screen renders.
 // Two of the three endpoints it used are NOT:
 //
-//  - `GET /api/members/{id}` — `unread_count` is NOT COMPUTED. The Go handler
-//    passes a literal 0 (`server/ocserverd/api_members.go:340`,
-//    `newMemberDTO(*m, roleName, s.observedHost(*m), 0)`), while
-//    `GET /api/members` runs `UnreadCounts(messages, receipts, actor)`. So
-//    re-reading one member ZEROES the roster badge that the delta was announcing
-//    — the value can only ever go DOWN through this path.
+//  - `GET /api/members/{id}` — FIXED at the source (T-8115 review, team-lead
+//    approved 2026-08-01). It used to hand `newMemberDTO` a literal 0 for
+//    `unread_count` while `GET /api/members` computed the real number, so
+//    re-reading one member ZEROED the roster badge the delta was announcing — the
+//    value could only ever go DOWN through that path. Both handlers now call the
+//    SAME `unreadCountsForRequest` (`server/ocserverd/api_helpers.go`), so the
+//    per-item path is faithful again. No schema change was involved: MemberDTO has
+//    always declared the field. Pinned server-side by
+//    `api_members_unread_parity_test.go` (single vs list, on the response body).
 //  - `GET /api/tasks/{id}` — `dep_tasks` IS NOT ON THE WIRE AT ALL. The frozen
 //    spec declares it on `TaskListItemDTO` only, never on `TaskDTO`
 //    (`spec/openapi.json`; `toTask()` in `api/mappers.ts` therefore sets no
@@ -23,9 +26,9 @@
 //    `unread[worker.ID]` as the list handler
 //    (`server/ocserverd/api_outsource.go`). Nothing is dropped.
 //
-// Neither gap can be closed on the client: one is a value the server declines to
-// compute, the other is a field the frozen wire does not carry. Until they are
-// closed AT THE SOURCE, the two unsafe paths re-pull their list — the request
+// The remaining gap cannot be closed on the client at all: `dep_tasks` is a field
+// the frozen wire does not carry, so closing it is an additive spec change and is
+// waiting on the owner. Until then `useTasks` re-pulls its list — the request
 // count is the same either way (one GET), only the payload is bigger.
 //
 // 🔴 THE POINT OF THIS FILE. The regression shipped green because the hook
@@ -38,8 +41,8 @@
 
 /** The fields a single-item GET does NOT carry, per list-bearing endpoint. */
 export const PER_ITEM_DTO_GAPS = {
-  /** `GET /api/members/{id}`: unread_count is a literal 0, never computed. */
-  member: ["unreadCount"],
+  /** `GET /api/members/{id}`: same computation as the list — nothing dropped. */
+  member: [] as string[],
   /** `GET /api/tasks/{id}`: dep_tasks is not a field of TaskDTO. */
   task: ["depTasks"],
   /** `GET /api/outsource-workers/{id}`: same projection as the list. */

@@ -431,21 +431,29 @@ reconcile-by-refetch 的規則沒變(**永遠不 merge payload**),但「refetch 
     server 的單筆 handler 呼叫**同一支** `projectWorker`、帶**同一個真的** `unread[worker.ID]`
     ⇒ 一個欄位都沒少。排序鍵是**綁定任務的 created_ts**,聊天碰不到 ⇒ 不准重排(否則一則
     訊息會讓列跳位)。`outsource_worker`(派工/釋放=成員資格)與 `task` 照舊全量。
-  - `useMembers` — **不可以**逐項,走清單。`GET /api/members/{id}` 的 `unread_count`
-    是**寫死的 0**(`api_members.go:340` 把 literal 0 交給 `newMemberDTO`,清單那支才跑
-    `UnreadCounts`)⇒ 逐項重讀會把 delta 正在宣告的那個紅點**歸零**,而且方向只有一邊:
-    **badge 只降不升**。所以 chat/chat_read 指到手上的成員時**重抓清單**——請求數一樣是
-    一個 GET,只是 payload 大一點。**指到的不是我手上的人**(外包 / 已釋放的 peer)則
-    **什麼都不做**,那才是這條路徑真正省下來的東西。`member`/`role_def` 照舊全量。
+  - `useMembers` — **可以**逐項:chat/chat_read 指到手上的成員 → `GET /api/members/{id}`
+    **原位換掉**(roster 由 server 按 name 排序,這兩個 topic 碰不到 name ⇒ 不重排)。
+    🔴 **但這條路一度是錯的,而且錯得很安靜**:那支 handler 原本把 **literal 0** 交給
+    `newMemberDTO`(清單那支才跑 `UnreadCounts`),所以逐項重讀會把 delta 正在宣告的紅點
+    **歸零** —— 方向只有一邊,**badge 只降不升**。修在源頭:兩支 handler 現在都走
+    **同一支** `unreadCountsForRequest`(`server/ocserverd/api_helpers.go`),
+    **沒有動 schema**(`MemberDTO` 一直宣告著 `unread_count`)。server 側護欄
+    `api_members_unread_parity_test.go`(單筆 vs 清單、斷言**回應 body 裡的數值**;
+    把那行改回 `0` 就紅),client 側 `api/dtoParity.test.ts` 斷言兩者**相等**。
+    **指到的不是我手上的人**(外包 / 已釋放的 peer)則**什麼都不做**。
+    `member`/`role_def` 照舊全量。
   - `useTasks` — **不可以**逐項,走清單。`GET /api/tasks/{id}` **整個 wire 上沒有
     `dep_tasks`**(凍結 spec 只把那個 server-side dep join 放在 `TaskListItemDTO`;
     `toTask()` 因此不設 `depTasks`,`toTaskListItem()` 逐字帶過)。而 `TaskCard` 把
     「沒有人解析這個 dep」與「查無此任務」畫成**兩種不同的東西** ⇒ 用單筆換掉一列會讓那張
     卡的每一條 dep 退化成裸短編號(T-a3e4 的「已結案的 dep 仍講得出標題」直接消失)。
   - `useChatUnread` — 一個總數,沒有「只抓一項」的版本;只吃 coalescing。
-  ⚠️ **兩個缺口都補不在 client**:一個是 server 不肯算的值、一個是凍結 wire 沒有的欄位。
-  要真的逐項就得**動 server 回傳 / 動 spec**(root §12 DTO 條:破相容或加欄要先問 owner),
-  那是另一張票;在那之前**不要「順手」把 `narrowToHeld` 接回這兩個 hook**。
+  ⚠️ **剩下的那個缺口補不在 client**:`dep_tasks` 是凍結 wire 沒有的欄位,要它就得
+  **動 spec**(additive-optional;root §12 DTO 條:加欄要先問 owner),**還在等裁定**。
+  在那之前**不要「順手」把 `narrowToHeld` 接回 `useTasks`** —— 那個編譯期 pin
+  (`TaskDTO` 沒有 `dep_tasks`)就是為了讓「以為加好了」立刻變成 tsc 紅。
+  ⚠️ **members 那格的教訓要留著**:單筆端點「有宣告這個欄位」不等於「它會算」。
+  加任何一條逐項路徑之前,先讀 `api/dtoParity.ts`,並且**去看那支 Go handler 真的填了什麼**。
 - 🔴 **自激路徑:讀取本身是一次寫入。** `GET /api/chat?with=`(列表即讀)會推進
   watermark,server 於是**把 `chat_read` 扇回同一個 client**。所以在**別人的**對話有
   delta 時去 `load()` 開著的那個 thread,不只是白抓一次——它**無中生有製造第二輪事件**,
@@ -467,6 +475,7 @@ reconcile-by-refetch 的規則沒變(**永遠不 merge payload**),但「refetch 
   `lib/deltaSink.test.ts`、`api/http.sse-delta.test.ts`、**`api/dtoParity.test.ts`**。
   🔴 **每條成本斷言都配一條值斷言**:「請求變少」對一個乾脆不更新的 hook 也成立,
   所以那份測試同時釘住 delta 真的指到的那一列上、**server 說的那個值**。
+  🔴 **而值斷言只有在假 api 不比真 server 慷慨時才算數**——見下一條。
 - 🔴 **值斷言只有在假 api 不比真 server 慷慨時才算數——這條是這批修補的真正教訓。**
   第一版的兩個回歸(roster badge 歸零、任務卡 dep 退化成裸編號)**通過了 tsc、1670 條
   jsdom、CT 與 frame 探針**,因為 `sseFanout.test.tsx` 的手寫假 api 拿**清單列**回答

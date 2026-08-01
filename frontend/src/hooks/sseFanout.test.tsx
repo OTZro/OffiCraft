@@ -250,7 +250,7 @@ function totalRequests(): number {
 }
 
 describe("one delta re-pulls only what it named (T-8115)", () => {
-  it("a chat line in ANOTHER conversation moves that card's badge — and it is the LIST that says so", async () => {
+  it("a chat line in ANOTHER conversation re-reads that ONE member — and the badge really moves", async () => {
     const view = await mountedCockpit();
     // The server's new truth for m-other: the badge went 1 → 6.
     h.members = [member(OPEN_PEER, 3), member("m-other", 6), member("m-third")];
@@ -275,12 +275,12 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
     ]);
     expect(view.result.current.unread).toBe(9);
 
-    // COST: ONE roster GET — and it must be the LIST, never `GET /members/{id}`:
-    // that endpoint returns a literal 0 for unread_count, so a per-item read
-    // here would drive the badge to 0 exactly when it should rise
-    // (api/dtoParity.ts + the VALUE assertion above are the pair that pin this).
-    expect(h.counts.listMembers).toBe(1);
-    expect(h.counts.getMember ?? 0).toBe(0);
+    // COST: one member read, not the company. The VALUE assertion above is what
+    // makes this safe to want: the fake answers `GET /{id}` through
+    // projectSingleItem, so if that endpoint ever stops computing unread_count
+    // this pair goes red instead of quietly zeroing the badge (api/dtoParity.ts).
+    expect(h.counts.getMember).toBe(1);
+    expect(h.counts.listMembers ?? 0).toBe(0);
     // The open thread belongs to someone else — no reload, and above all no
     // marking read (that read is what fans the echo round).
     expect(h.counts.listChat ?? 0).toBe(0);
@@ -292,7 +292,7 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
     // Nothing about a chat line changes the settings snapshot (T-8115 step 3's
     // shared cache is not re-entered either).
     expect(h.counts.getServerSettings ?? 0).toBe(0);
-    expect(totalRequests()).toBe(2); // the roster list + the office total
+    expect(totalRequests()).toBe(2); // getMember + the office total
   });
 
   it("a chat line with an 外包 re-reads that ONE worker row, and leaves the roster alone", async () => {
@@ -458,8 +458,8 @@ describe("the read echo does not drive another round (T-8115)", () => {
     expect(h.counts.listChat ?? 0).toBe(0);
     expect(h.counts.peekChat ?? 0).toBe(0);
     expect(h.counts.listChatReads ?? 0).toBe(0);
-    expect(h.counts.listMembers).toBe(1);
-    expect(h.counts.getMember ?? 0).toBe(0);
+    expect(h.counts.getMember).toBe(1);
+    expect(h.counts.listMembers ?? 0).toBe(0);
   });
 
   it("the PEER reading our messages DOES re-pull the receipts", async () => {
@@ -512,12 +512,10 @@ describe("the read echo does not drive another round (T-8115)", () => {
     // The thread reloaded exactly ONCE (the message) and the echo did not make
     // it reload again — a second marking read would fan a second echo.
     expect(h.counts.listChat).toBe(1);
-    // TWO roster reads: the message is one burst and the echo is a later one, so
-    // each costs one list GET. That is the pre-T-8115 count for this path too —
-    // what T-8115 still buys is that the echo does NOT re-enter the marking read
-    // (listChat stays 1), which is what used to manufacture a whole extra round.
-    expect(h.counts.listMembers).toBe(2);
-    expect(h.counts.getMember ?? 0).toBe(0);
+    // The roster never re-pulls the company for either delta: the message and the
+    // echo each name ONE member, so each costs one member read.
+    expect(h.counts.listMembers ?? 0).toBe(0);
+    expect(h.counts.getMember).toBe(2);
     expect(view.result.current.members[0].unreadCount).toBe(0);
   });
 });

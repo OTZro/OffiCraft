@@ -219,18 +219,14 @@ func (s *apiServer) HandleListMembersApiMembersGet(w http.ResponseWriter, r *htt
 	// projection exists to avoid. Only compute it on the full path.
 	var unread map[string]int
 	if !light {
-		actor := currentActor(r)
-		messages, err := s.dal.ListChat()
+		var err error
+		// The SAME computation the single-member handler runs (api_helpers.go) —
+		// one field, one answer, whichever endpoint you ask.
+		unread, err = s.unreadCountsForRequest(r)
 		if err != nil {
 			internalError(w, err)
 			return
 		}
-		receipts, err := s.dal.ListChatReads(actor, "")
-		if err != nil {
-			internalError(w, err)
-			return
-		}
-		unread = UnreadCounts(messages, receipts, actor)
 	}
 
 	out := []memberDTO{}
@@ -337,7 +333,17 @@ func (s *apiServer) HandleGetMemberApiMembersMemberIdGet(w http.ResponseWriter, 
 		internalError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.newMemberDTO(*m, roleName, s.observedHost(*m), 0))
+	// unread_count is COMPUTED here, exactly as the list computes it. Handing
+	// newMemberDTO a literal 0 (what this line used to do) made the roster badge
+	// a one-way ratchet: the cockpit re-reads one member on a chat delta, so the
+	// badge the delta was announcing was zeroed instead of raised. Pinned by
+	// api_members_unread_parity_test.go.
+	unread, err := s.unreadCountsForRequest(r)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.newMemberDTO(*m, roleName, s.observedHost(*m), unread[m.ID]))
 }
 
 // PATCH /api/members/{member_id} — partial edit (name/runtime/model/effort).

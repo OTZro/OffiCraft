@@ -11,8 +11,10 @@
 // the two things a frontend test CAN hold it to:
 //  1. `api/mock.ts` — the adapter the repo already curates as the client-side twin
 //     of the wire (its `getTask` has always dropped `depTasks`, with a comment
-//     saying why). Teach the mock to compute unread for one member, or let
-//     `getTask` keep the dep join, and these tests go red.
+//     saying why). Stop computing unread for a single member, or let `getTask`
+//     keep the dep join, and these tests go red. NOTE the member case flipped
+//     direction once the server was fixed: it now asserts the two AGREE, so the
+//     drift it catches is "someone made the single-item path lossy again".
 //  2. the GENERATED wire types (`generated/schema.ts`, kept honest by CI's spec
 //     drift gate) — a compile-time pin that `TaskDTO` has no `dep_tasks` while
 //     `TaskListItemDTO` does. Add the field to the spec and the pin fails to
@@ -57,7 +59,7 @@ describe("per-item DTO gaps are what the adapter really does (T-8115 follow-up)"
     __resetMock();
   });
 
-  it("GET /api/members/{id} cannot serve the unread badge; GET /api/members can", async () => {
+  it("GET /api/members/{id} serves the SAME unread badge as GET /api/members", async () => {
     const peer = (await mockApi.listMembers()).find((m) => m.id !== OWNER);
     expect(peer).toBeDefined();
 
@@ -78,15 +80,17 @@ describe("per-item DTO gaps are what the adapter really does (T-8115 follow-up)"
     );
     const single = await mockApi.getMember(peer!.id);
 
-    // The list computes it…
+    // Both endpoints run the same computation (Go: unreadCountsForRequest, shared
+    // by the list and single-member handlers; mock: unreadCountOf). The number has
+    // to be REAL — a shared constant would satisfy equality — so the list value is
+    // asserted non-zero first, and only then compared.
     expect(listRow!.unreadCount).toBeGreaterThan(0);
-    // …and the single-item endpoint does not (api_members.go:340 hands
-    // newMemberDTO a literal 0). If this ever fails because the two now AGREE,
-    // the fix is to update PER_ITEM_DTO_GAPS and let useMembers narrow again —
-    // never to loosen the assertion.
-    expect(single.unreadCount).toBe(0);
-    expect(PER_ITEM_DTO_GAPS.member).toContain("unreadCount");
-    expect(perItemRefetchIsFaithful("member")).toBe(false);
+    expect(single.unreadCount).toBe(listRow!.unreadCount);
+    // ⇒ the per-item refetch in useMembers is faithful. If a future change makes
+    // the single-item endpoint stop computing it, this goes red BEFORE anyone
+    // notices a badge that only ever counts down.
+    expect(PER_ITEM_DTO_GAPS.member).toEqual([]);
+    expect(perItemRefetchIsFaithful("member")).toBe(true);
   });
 
   it("GET /api/tasks/{id} carries no dep join; GET /api/tasks does", async () => {
@@ -163,13 +167,10 @@ describe("per-item DTO gaps are what the adapter really does (T-8115 follow-up)"
   });
 
   it("projectSingleItem drops exactly the gapped fields and nothing else", () => {
+    // member has no gap any more, so its projection is the IDENTITY — a fake
+    // built from it is exactly as generous as the wire, which is the point.
     const m = { id: "m-1", name: "n", unreadCount: 7, presence: "online" };
-    expect(projectSingleItem("member", m)).toEqual({
-      id: "m-1",
-      name: "n",
-      unreadCount: 0, // MemberDTO declares `default: 0` — not absence
-      presence: "online",
-    });
+    expect(projectSingleItem("member", m)).toEqual(m);
     const t = { id: "t-1", status: "in_progress", depTasks: [{ id: "t-0" }] };
     expect(projectSingleItem("task", t).depTasks).toBeUndefined();
     expect(projectSingleItem("task", t).status).toBe("in_progress");
