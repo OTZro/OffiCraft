@@ -13,6 +13,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
+import {
+  adoptServerSettings,
+  loadServerSettings,
+} from "./sharedServerSettings";
 
 interface UseOwnerName {
   /** The name to render in the profile pill: the stored nickname if the owner
@@ -31,8 +35,7 @@ export function useOwnerName(fallback: string): UseOwnerName {
 
   useEffect(() => {
     let alive = true;
-    api
-      .getServerSettings()
+    loadServerSettings()
       .then((s) => {
         if (alive) setStored(s.ownerName);
       })
@@ -53,7 +56,10 @@ export function useOwnerName(fallback: string): UseOwnerName {
       setStored(trimmed); // optimistic
       api
         .patchServerSettings({ ownerName: trimmed })
-        .then((s) => setStored(s.ownerName))
+        .then((s) => {
+          adoptServerSettings(s); // shared snapshot, see useOrgName (T-8115)
+          setStored(s.ownerName);
+        })
         .catch((e) => {
           console.warn("useOwnerName: save failed", e);
           setStored(prev); // snap back to the last server-confirmed value

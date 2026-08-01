@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import {
+  loadServerSettings,
+  refreshServerSettings,
+} from "../hooks/sharedServerSettings";
 import type { PushSubscriptionInput } from "../api/adapter";
 import { useI18n } from "../i18n";
 import { BellIcon, BellOffIcon, CloseIcon } from "./icons";
@@ -47,7 +51,8 @@ export function PushNotifications() {
       void worker.pushManager.getSubscription().then(async (subscription) => {
         if (Notification.permission === "denied") return setState("denied");
         if (Notification.permission !== "granted" || !subscription) return setState("default");
-        const settings = await api.getServerSettings();
+        // Mount path — the shared cockpit-load snapshot (T-8115).
+        const settings = await loadServerSettings();
         // An old browser subscription alone is not a delivery target: without
         // a configured VAPID contact email the server deliberately skips it.
         if (!settings.pushContactEmail) return setState("default");
@@ -75,7 +80,11 @@ export function PushNotifications() {
       // A valid VAPID contact identity is required for iPhone delivery. Check
       // before opening the browser permission prompt so the owner knows what
       // to fix instead of granting a permission that cannot receive anything.
-      const settings = await api.getServerSettings();
+      // Deliberately NOT the cached snapshot: this gate decides whether to
+      // open the browser permission prompt, and the owner may have just typed
+      // the contact address in another surface. One extra read on an explicit
+      // tap is the right trade (T-8115).
+      const settings = await refreshServerSettings();
       if (!settings.pushContactEmail) {
         setErrorMessage(t.notifications.contactRequired);
         setState("error");

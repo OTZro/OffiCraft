@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n";
-import { api, type OnboardingReportView } from "../api";
+import { type OnboardingReportView } from "../api";
+import {
+  loadServerSettings,
+  refreshServerSettings,
+} from "../hooks/sharedServerSettings";
 import "./onboarding.css";
 
 /**
@@ -28,9 +32,36 @@ const DISMISS_KEY = "oc.onboarding.dismissed";
 export const ONBOARDING_POLL_MS = 3000;
 export const ONBOARDING_POLL_CEILING_MS = 180000;
 
-/** Terminal states: once the report reads one of these it will never change. */
+/** Terminal states: once the report reads one of these it will never change.
+ *
+ * 🔴 `null` IS TERMINAL — and that is HALF OF A PAIRED CONTRACT with the server
+ * (T-8115). Do not change one side without the other.
+ *
+ *   THIS SIDE  a settings read whose `onboarding` is null means onboarding never
+ *              ran and never will, so there is nothing to wait for.
+ *   THAT SIDE  server/ocserverd/onboarding.go `kickFirstRunOnboardingWith`
+ *              PERSISTS the `running` report SYNCHRONOUSLY — before it returns,
+ *              therefore before the POST /api/auth/set-password handler returns,
+ *              therefore before that 200 can reach any client. Every one of its
+ *              early returns (no DAL / OC_NO_ONBOARDING=1 / a GetSetting error /
+ *              a failed claim write) means the run does not happen AT ALL, and
+ *              it is never retried: set-password is one-shot. So a null a client
+ *              can observe is always the permanent kind.
+ *              Pinned by TestSetPasswordLeavesNoNullOnboardingWindow and
+ *              TestOnboardingClaimIsPersistedBeforeKickReturns.
+ *
+ * WHY IT MATTERS: the DTO declares null NORMAL ("Null on the settings read when
+ * onboarding never ran (an install that predates it, or a database that already
+ * had a password)") and the production install reads null forever. Treating it
+ * as "not written yet" made every cockpit open poll a 639 kB payload ~61 times
+ * over three minutes for a row nothing will ever write.
+ *
+ * ⚠️ `running` is STILL non-terminal, which is the whole point: the fresh-install
+ * verdict lands ~30 s in (wardenOnlineWait) and the poll must be there for it.
+ * This is not a one-shot fetch. */
 function isTerminal(report: OnboardingReportView | null): boolean {
-  return report !== null && (report.state === "ok" || report.state === "failed");
+  if (report === null) return true;
+  return report.state === "ok" || report.state === "failed";
 }
 
 export function OnboardingBanner() {
@@ -47,8 +78,11 @@ export function OnboardingBanner() {
   // useless in the only situation it exists for). The real timeline is:
   //
   //   t=0     owner submits the password → 200 → cockpit mounts → this fetch
-  //           reads state="running" (or null: the report row may not be written
-  //           yet) → correctly draws nothing
+  //           reads state="running" → correctly draws nothing.
+  //           (It CANNOT read null here: the server claims the report row
+  //           before that 200 is written — see isTerminal above. The comment
+  //           that used to say "or null: the report row may not be written yet"
+  //           was wrong, and T-8115 removed the 60 wasted polls it justified.)
   //   t=0..30 the server installs the warden and waits for its SSE connect
   //   t≈30    the report lands as "failed"
   //
@@ -63,10 +97,18 @@ export function OnboardingBanner() {
     let live = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const started = Date.now();
+    let first = true;
 
     const tick = async () => {
       try {
-        const settings = await api.getServerSettings();
+        // The FIRST read joins the shared cockpit-load snapshot (one
+        // /api/settings for the whole page); every later poll must be a real
+        // read — a poll answered from a cache would watch its own memory.
+        const wasFirst = first;
+        first = false;
+        const settings = wasFirst
+          ? await loadServerSettings()
+          : await refreshServerSettings();
         if (!live) return;
         setReport(settings.onboarding);
         if (isTerminal(settings.onboarding)) return; // done — stop polling

@@ -399,6 +399,56 @@ re-run):終態目標 → 自動展開已結束;被篩選藏住 → **只清相�
 `task-card--located` 高亮 flash(2.6s)→ **消費 anchor**(route 退回 `#tasks`,
 one-shot,可重跳);未知/過期 id 誠實自癒(消費 anchor、不高亮)。
 
+## /api/settings 只讀一份;`onboarding: null` 是終態(T-8115)
+
+`GET /api/settings` 在正式站是 **639,270 bytes**(gzip 後 373 kB;`custom_themes`
+一欄佔 626,721 = 98%,其餘 15 欄合計約 2.5 kB)。它同時是**六個**互不相識的
+mount-fetch 消費者的來源,所以那份 payload 一次座艙載入被下載六遍。
+
+- **唯一入口 `hooks/sharedServerSettings.ts`**(核心在 `lib/sharedSnapshot.ts`):
+  合併(single-flight)+ 快取 + 世代守衛。**mount-fetch 一律走 `loadServerSettings()`,
+  不要在新的地方直接叫 `api.getServerSettings()`** —— 那正是這張票在收的東西。
+  現有六個消費者:`useOrgName` / `useOwnerName` / `useServerSettings`
+  (`SettingsPage`、`MonitorPage`、`DocumentHistoryEntry` 三處 mount)/
+  `useOutsourceWorkers` / `i18n` 的登入 reconcile / `OnboardingBanner` 首讀 /
+  `PushNotifications`、`ProfileDropdown` 的 mount 路徑。
+- 🔴 **快取什麼時候失效,只有三個答案**:(a) **本分頁自己存檔成功** →
+  每個 `patchServerSettings` 的 echo 都要 `adoptServerSettings(echo)`(新增 PATCH
+  呼叫點時**一起加**,漏掉就是畫面停在存檔前的值);(b) **身分改變**(登入 /
+  auth-expired 事件)自動 invalidate;(c) `refreshServerSettings()` —— 給
+  **不准讀記憶**的兩個呼叫點:onboarding 輪詢(它就是要看值變)與 設定 的
+  存檔測連通 read-back(它就是要證明 server 同意)。**沒有 TTL。**
+- ⚠️ **已知且 owner 已知情的邊界**:settings 改變時 server **不發任何即時通知**,
+  所以另一個分頁 / 另一台裝置的存檔在這裡看不到,直到重新載入。**不要假裝解決了**;
+  要真解決得先加 SSE topic(動凍結 wire)。
+- **世代守衛不是裝飾**:存檔前發出、存檔後才回來的那個 GET 會把剛存的值蓋回去。
+  request 記住自己出發時的 generation,`adopt`/`invalidate` 把 generation 推進,
+  過期的回應只回給自己的 caller、不寫快取。
+- **測試面**:`src/test/setup.ts` 在每個 test 之間 `resetAllSharedSnapshots()`
+  ——module-level 快取會把上一條 test 的 fixture 餵給下一條。它從 `lib/` 匯入
+  (**不是**從 hooks 那支),因為 setup 檔跑在測試檔自己的 `vi.mock("../api")`
+  註冊**之前**,從 hooks 匯入會把 api 層先拉進 registry。
+
+**`onboarding: null` 是終態——而這是與 server 的成對契約(T-8115)。** DTO 明訂 null 是
+「onboarding never ran」的**正常值**(舊安裝、或建庫時就有密碼),正式站正是 null;
+舊碼的 `isTerminal(null) === false` 讓每次開座艙輪滿 3 分鐘 = **61 次** × 373 kB
+(這個數字是 mutant 讓測試自己印出來的,不是推的)。
+- **憑什麼敢把 null 當終態**:`kickFirstRunOnboardingWith`(`server/ocserverd/onboarding.go`)
+  在**開 goroutine 之前**就把 `running` 報告寫進 DB,所以那一列在
+  `POST /api/auth/set-password` 的 handler **return 之前**就存在,而該回應是 return 才
+  flush ⇒ **拿到那個 200 的 client 之後讀 settings 一定看得到報告**。它其餘四條 early
+  return 代表 onboarding 根本不會跑、而且不重試 ⇒ **client 看得到的 null 只有一種**。
+- 🔴 **這是成對的,改一邊要看另一邊**。server 那半的護欄是
+  `server/ocserverd/onboarding_contract_test.go`(`TestOnboardingClaimIsPersistedBeforeKickReturns`
+  + `TestSetPasswordLeavesNoNullOnboardingWindow`);FE 這半是
+  `OnboardingBanner.null-poll.test.tsx`。把認領搬進 goroutine,server 那條會紅——
+  那正是它存在的理由。
+- 🔴 **不准改成只抓一次**:首次安裝的失敗結果在 t≈30s(`wardenOnlineWait`)才落地,
+  那正是這個橫幅唯一存在的理由。首讀讀到的是 `running`(見上),而 `running` 是非終態,
+  輪詢照舊跑到 180 s 天花板。
+- **讀取失敗 ≠ null 報告**:catch 分支必須繼續輪——首啟開機期的短暫失敗正是它想有用的時候。
+  三條測試各釘一件事(一次讀 / running→failed / 讀失敗仍續輪),三個 mutant 各紅一條。
+
 ## 首設密碼 + 伺服器設定(B3)
 - **AuthGate 四態牆**(real mode only):有 token → App;無 token → 打 PUBLIC `GET /api/auth/status` 一次 → 未設密碼 = `FirstRunPage`(啟用碼 + 設密碼,POST set-password 成功即存 token 直接進 App;啟用碼從 `?code=` query 預填——server 首跑自動開的就是這條 URL,預填時 autoFocus 落密碼欄、code 讀到即 history.replaceState 從網址列抹掉)、已設 = `LoginPage`。mock mode 永不出牆(照舊直接進辦公室)。
 - **ProfileDropdown 三 view**:main → preferences(主題/語言 + **伺服器設定**:登入有效期下拉 12h/24h/7d/30d、自動換手門檻 40–90%,經 api seam `getServerSettings`/`patchServerSettings` 即時生效)→ password(改密碼)。設定載入失敗 = 誠實不渲染該區塊。

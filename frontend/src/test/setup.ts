@@ -15,6 +15,7 @@
 
 import { afterEach } from "vitest";
 import { resetChatDrafts } from "../lib/chatDraftStore";
+import { resetAllSharedSnapshots } from "../lib/sharedSnapshot";
 
 // T-8aaa: the chat composer draft store is module-level in-memory state (it must
 // outlive a component unmount/remount within the app). That same persistence
@@ -22,6 +23,14 @@ import { resetChatDrafts } from "../lib/chatDraftStore";
 // id, so reset it between tests — mirrors the localStorage.clear() that
 // per-suite beforeEach hooks already do.
 afterEach(() => resetChatDrafts());
+
+// T-8115: hooks/sharedServerSettings caches the /api/settings snapshot at module
+// level (that IS the point — one read per cockpit load). Left alone it would
+// answer the NEXT test from the previous test's fixture, so drop every shared
+// snapshot between tests. Imported from lib/ rather than the hooks module on
+// purpose: this file runs BEFORE a test file's own `vi.mock("../api")` is
+// registered, so it must not pull the api layer into the registry first.
+afterEach(() => resetAllSharedSnapshots());
 
 class MemoryStorage implements Storage {
   #data = new Map<string, string>();
