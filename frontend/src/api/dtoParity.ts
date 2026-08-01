@@ -9,11 +9,22 @@
 //    approved 2026-08-01). It used to hand `newMemberDTO` a literal 0 for
 //    `unread_count` while `GET /api/members` computed the real number, so
 //    re-reading one member ZEROED the roster badge the delta was announcing — the
-//    value could only ever go DOWN through that path. Both handlers now call the
-//    SAME `unreadCountsForRequest` (`server/ocserverd/api_helpers.go`), so the
-//    per-item path is faithful again. No schema change was involved: MemberDTO has
-//    always declared the field. Pinned server-side by
+//    value could only ever go DOWN through that path. THESE TWO handlers — the
+//    roster list and `GET /api/members/{id}` — now call the same
+//    `unreadCountsForRequest` (`server/ocserverd/api_helpers.go`), so the per-item
+//    path is faithful again. No schema change was involved: MemberDTO has always
+//    declared the field. Pinned server-side by
 //    `api_members_unread_parity_test.go` (single vs list, on the response body).
+//    ⚠️ SCOPE — "both handlers", not "every endpoint that returns a MemberDTO".
+//    Verified 2026-08-01: of the six `newMemberDTO` call sites, only those two
+//    pass a computed count; `writeMemberDTO` (shared by ~15 handlers),
+//    `api_members.go:462`, `:565` and `api_roles.go:222` still pass a literal 0.
+//    No user-visible consequence today — the cockpit never feeds those responses
+//    back into the roster — but do not read the sentence above as a promise that
+//    unread_count is real everywhere.
+//    ⚠️ NOR is it "one shared computation" repo-wide: four inline
+//    ListChat→ListChatReads→UnreadCounts copies remain (`api_outsource.go` :136,
+//    :199, :348 and `api_chat.go` :873). The helper unified the MEMBER pair only.
 //  - `GET /api/tasks/{id}` — `dep_tasks` IS NOT ON THE WIRE AT ALL. The frozen
 //    spec declares it on `TaskListItemDTO` only, never on `TaskDTO`
 //    (`spec/openapi.json`; `toTask()` in `api/mappers.ts` therefore sets no
@@ -57,6 +68,12 @@
 // Before adding any new per-item refetch, read the gap for that endpoint AND
 // those three. The fake-side protection lapses silently whenever a gap empties
 // or a consumer goes away; nothing announces it.
+//
+// ⚠️ NOT pinned by conformance. `unread_count` appears NOWHERE in `conformance/`
+// (verified 2026-08-01: zero hits) — so the repo's own behaviour-contract layer,
+// the one that runs against a real ocserverd, says nothing about this field in
+// either its old or its fixed form. Guard 1 is a Go unit test, which is a
+// different thing. Closing that is a follow-up nobody has taken.
 
 /** The fields a single-item GET does NOT carry, per list-bearing endpoint. */
 export const PER_ITEM_DTO_GAPS = {

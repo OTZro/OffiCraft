@@ -2,10 +2,15 @@
 //
 // T-8115 shipped two regressions green because the hook tests' hand-rolled fake
 // answered `GET /{id}` with the LIST row: against that fake a one-item refetch
-// looked lossless, while the real server returns a literal 0 for `unread_count`
-// on `GET /api/members/{id}` and the wire carries no `dep_tasks` on
-// `GET /api/tasks/{id}` at all. Neither tsc nor 1670 unit tests could see it,
+// looked lossless, while AT THE TIME the real server returned a literal 0 for
+// `unread_count` on `GET /api/members/{id}` and the wire carried no `dep_tasks`
+// on `GET /api/tasks/{id}` at all. Neither tsc nor 1670 unit tests could see it,
 // because nothing anywhere stated what those endpoints really return.
+//
+// PAST TENSE ON PURPOSE for the first half: the member endpoint was FIXED at the
+// source (both handlers now share `unreadCountsForRequest`). The `dep_tasks` half
+// is still true today. Do not read this paragraph as a description of the current
+// server — it is the history that explains why this file exists.
 //
 // So `api/dtoParity.ts` states it once, and this file pins that statement against
 // the two things a frontend test CAN hold it to:
@@ -86,9 +91,15 @@ describe("per-item DTO gaps are what the adapter really does (T-8115 follow-up)"
     // asserted non-zero first, and only then compared.
     expect(listRow!.unreadCount).toBeGreaterThan(0);
     expect(single.unreadCount).toBe(listRow!.unreadCount);
-    // ⇒ the per-item refetch in useMembers is faithful. If a future change makes
-    // the single-item endpoint stop computing it, this goes red BEFORE anyone
-    // notices a badge that only ever counts down.
+    // ⇒ the per-item refetch in useMembers is faithful.
+    //
+    // 🔴 WHAT THIS ASSERTION DOES *NOT* CATCH — measured 2026-08-01, do not
+    // re-credit it: if the GO handler goes back to serving a literal 0, this
+    // file stays GREEN (all 14 tests pass). It compares the MOCK against the
+    // MOCK; nothing here can see the server. The guard that actually catches
+    // that regression is `server/ocserverd/api_members_unread_parity_test.go`,
+    // which reads the number out of a real response body. What THIS test
+    // catches is the mock drifting away from the wire it is supposed to twin.
     expect(PER_ITEM_DTO_GAPS.member).toEqual([]);
     expect(perItemRefetchIsFaithful("member")).toBe(true);
   });

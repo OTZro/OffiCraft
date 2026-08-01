@@ -51,9 +51,16 @@ vi.mock("../api", () => ({
       bump("getMember");
       const found = h.members.find((m) => m.id === id);
       if (!found) throw new Error(`no member ${id}`);
-      // 🔴 NOT the list row: `GET /api/members/{id}` does not compute
-      // unread_count. Answering a single-item GET out of list data is the exact
-      // mistake that let the badge regression ship green — see api/dtoParity.ts.
+      // Answered through the gap table, which is what keeps a fake from being
+      // more generous than the wire — the mistake that let the badge regression
+      // ship green (api/dtoParity.ts).
+      // ⚠️ For `member` that projection is TODAY THE IDENTITY: the server was
+      // fixed, so `PER_ITEM_DTO_GAPS.member` is empty and this returns the list
+      // row unchanged. So this line currently buys NO protection (measured
+      // 2026-08-01: replacing it with a bare `return found` leaves all 14 tests
+      // green). Keep it anyway — it is what makes this fake correct again the
+      // moment a member-side gap reappears. The guard that really holds the
+      // member badge is the Go parity test.
       return projectSingleItem("member", found);
     },
     listOutsourceWorkers: async () => {

@@ -440,6 +440,16 @@ reconcile-by-refetch 的規則沒變(**永遠不 merge payload**),但「refetch 
     **沒有動 schema**(`MemberDTO` 一直宣告著 `unread_count`)。server 側護欄
     `api_members_unread_parity_test.go`(單筆 vs 清單、斷言**回應 body 裡的數值**;
     把那行改回 `0` 就紅),client 側 `api/dtoParity.test.ts` 斷言兩者**相等**。
+    ⚠️ **「兩支 handler 共用」的範圍就是那兩支,不是「每個回 MemberDTO 的端點」**
+    (2026-08-01 實查):六個 `newMemberDTO` 呼叫點裡只有清單與單筆帶真的數字,
+    `writeMemberDTO`(約 15 個 handler 共用)、`api_members.go:462`/`:565`、
+    `api_roles.go:222` **仍然傳 literal 0**。今天沒有使用者可見後果(座艙不把那些
+    回應塞回 roster),但別把上面那句讀成「到處都是真的」。同理它**不是** repo 尺度的
+    「一支共用計算」——`api_outsource.go` :136/:199/:348 與 `api_chat.go` :873 還有
+    **四份** inline 複製。
+    🔴 **這條行為沒有被 conformance 釘住**:`unread_count` 在 `conformance/` 裡
+    **零命中**(2026-08-01 實查),所以 repo 自己指定的行為契約層對這個欄位新舊行為
+    都沒有任何主張;上面那道是 Go 單元測試,不是同一件事。
     **指到的不是我手上的人**(外包 / 已釋放的 peer)則**什麼都不做**。
     `member`/`role_def` 照舊全量。
   - `useTasks` — **不可以**逐項,走清單。`GET /api/tasks/{id}` **整個 wire 上沒有
@@ -447,6 +457,16 @@ reconcile-by-refetch 的規則沒變(**永遠不 merge payload**),但「refetch 
     `toTask()` 因此不設 `depTasks`,`toTaskListItem()` 逐字帶過)。而 `TaskCard` 把
     「沒有人解析這個 dep」與「查無此任務」畫成**兩種不同的東西** ⇒ 用單筆換掉一列會讓那張
     卡的每一條 dep 退化成裸短編號(T-a3e4 的「已結案的 dep 仍講得出標題」直接消失)。
+    🔴 **同一個回歸在 render 層有第二條路,而且它承重、反直覺**:展開的任務卡手上
+    **同時有兩個 TaskView**(`TaskCard.tsx` 的 `const view = hasDetail ? detail : task`)
+    ——`task` 是清單列(**有** `depTasks`)、`view` hydrate 後是 `GET /api/tasks/{id}`
+    (**沒有**)。dep 那段刻意讀 `task`,而它周圍的欄位(artifacts、steps、description)
+    全讀 `view`。**把那一行改成 `view.depTasks` 就等於把回歸② 從 hook 層搬到 render 層,
+    使用者看到的東西一模一樣**。2026-08-01 實測:改動前整套 1675 條**全綠**——全部
+    dep 測試都傳 `NOOP` 當 `onHydrate`,所以 `hasDetail` 永遠是 false、`view === task`,
+    **一條沒展開卡片的 dep 測試對這類 bug 完全是盲的**。哨兵
+    `TaskCard.dep-after-hydrate.test.tsx`(展開 + 用 `projectSingleItem("task", row)`
+    當 hydrate 回傳值,斷言 dep 仍講得出標題與狀態;同一顆 mutant 現在恰好紅這 2 條)。
   - `useChatUnread` — 一個總數,沒有「只抓一項」的版本;只吃 coalescing。
   ⚠️ **剩下的那個缺口補不在 client**:`dep_tasks` 是凍結 wire 沒有的欄位,要它就得
   **動 spec**(additive-optional;root §12 DTO 條:加欄要先問 owner),**還在等裁定**。
