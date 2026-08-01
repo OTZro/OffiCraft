@@ -18,12 +18,17 @@ import {
 } from "../hooks/sharedServerSettings";
 import {
   isValidDisplayTheme,
-  DEFAULT_BACKGROUND_MODE,
-  type BackgroundMode,
   type ThemeBundle,
   type AvatarKind,
   type NavIconKey,
 } from "../lib/themeBundle";
+import {
+  LS_THEME,
+  LS_THEME_PAINT,
+  paintRecordFor,
+  applyThemeToRoot,
+  readValidatedPaint,
+} from "../lib/themePaint";
 import { applyWording } from "./wording";
 import { makeMessages, type Messages } from "./compose";
 
@@ -53,7 +58,7 @@ const DICTS: Record<Locale, Dict> = { zh, en };
 // NOTE: neither the studio/org name (T-d693) nor the owner nickname (T-0b41) is
 // here — those are server-only (see hooks/useOrgName + hooks/useOwnerName).
 const LS_LANGUAGE = "oc.language";
-const LS_THEME = "oc.theme";
+
 // The layout-width pref (T-756f) rides the SAME dual-layer contract. It differs
 // from theme/language in one way only: it is a plain bool, so there is no ""
 // third state — false IS the shipped narrow column, and the server's value is
@@ -159,6 +164,8 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<string>(() => readStoredTheme());
   const [wide, setWideState] = useState<boolean>(() => readStoredWide());
   const [customThemes, setCustomThemesState] = useState<ThemeBundle[]>([]);
+  // [T-1500] "the server has spoken". Flipped in reconcile's .then only.
+  const [themesLoaded, setThemesLoaded] = useState(false);
   // Effective copy locale: the user's language toggle. Themes are copy-neutral
   // by default (theme↔locale decoupled, T-16a1 P1) — a visual theme never
   // hijacks the UI language; copy comes from `language`, with a custom theme's
@@ -208,7 +215,8 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
   // The --color-* inline props applied for the current custom theme, remembered
   // so the NEXT apply can remove exactly this set before painting the next one.
-  const appliedTokensRef = useRef<string[]>([]);
+  // [T-1500] seeded from the pre-React applier: ONE ledger, two writers.
+  const appliedTokensRef = useRef<string[]>(window.__ocPaintTokens ?? []);
 
   // Apply the active theme. The office built-in rides <html data-theme> and any
   // leftover inline vars from a previous custom theme are cleared. A custom id
@@ -228,77 +236,20 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     const bundle = customThemes.find((b) => b.id === theme);
     root.dataset.theme = "office";
     if (bundle) {
-      const applied: string[] = [];
-      for (const [tok, val] of Object.entries(bundle.colors)) {
-        root.style.setProperty(tok, val);
-        applied.push(tok);
-      }
-      // The optional font overlay (T-16a1 P4): push each chosen --font-* stack
-      // onto documentElement the SAME way (setProperty — the value is a member
-      // of the closed safe-family allowlist, never concatenated into CSS). A
-      // token the bundle omits keeps theme.css's default (office never
-      // degrades), and the removeProperty pass above clears a previous theme's
-      // font choice before this one paints.
-      for (const [tok, val] of Object.entries(bundle.fonts ?? {})) {
-        root.style.setProperty(tok, val);
-        applied.push(tok);
-      }
-      // The optional outer-canvas background image (T-081b). Unlike avatars /
-      // logo / nav icons — which are <img> elements a component renders — the
-      // canvas is painted by CSS, so this one rides the DOM as a var, applied
-      // the SAME way (setProperty, never concatenated into a stylesheet). The
-      // value has already passed the shared image gate, whose base64 alphabet
-      // admits no quote, paren or backslash, so wrapping it in url("…") cannot
-      // break out of the value. Absent → the theme.css default `none` stands and
-      // the canvas is the plain --color-bg colour.
-      const canvas = bundle.backgrounds?.canvas;
-      if (canvas) {
-        // "sides" (T-081b) lays the SAME url down twice — one copy against each
-        // viewport edge — so a theme whose art is a pair of standing objects
-        // needs no extra DOM layer; "cover" scales one copy over the viewport.
-        // "tile" (and any theme naming no mode) writes the values theme.css
-        // already defaults to, so the pre-existing tiling is byte-identical.
-        const url = `url("${canvas}")`;
-        const mode: BackgroundMode =
-          bundle.backgroundModes?.canvas ?? DEFAULT_BACKGROUND_MODE;
-        // "sides" and "cover" pin to the VIEWPORT, not the document: the canvas
-        // background otherwise scrolls with a long page, and no image is tall
-        // enough to cover a page that keeps growing — the art would reappear
-        // down the page, which is exactly the "why are there repeated trees"
-        // these modes exist to avoid.
-        const lay = {
-          tile: { image: url, repeat: "repeat", position: "0 0", size: "auto", attachment: "scroll" },
-          sides: {
-            image: `${url}, ${url}`,
-            repeat: "no-repeat, no-repeat",
-            position: "left bottom, right bottom",
-            size: "auto, auto",
-            attachment: "fixed, fixed",
-          },
-          cover: {
-            image: url,
-            repeat: "no-repeat",
-            position: "center center",
-            size: "cover",
-            attachment: "fixed",
-          },
-        }[mode];
-        root.style.setProperty("--canvas-bg-image", lay.image);
-        root.style.setProperty("--canvas-bg-repeat", lay.repeat);
-        root.style.setProperty("--canvas-bg-position", lay.position);
-        root.style.setProperty("--canvas-bg-size", lay.size);
-        root.style.setProperty("--canvas-bg-attachment", lay.attachment);
-        applied.push(
-          "--canvas-bg-image",
-          "--canvas-bg-repeat",
-          "--canvas-bg-position",
-          "--canvas-bg-size",
-          "--canvas-bg-attachment"
-        );
-      }
-      appliedTokensRef.current = applied;
+      appliedTokensRef.current = applyThemeToRoot(root, bundle);
+      return;
     }
-  }, [theme, customThemes]);
+    // [T-1500] the bundle is unresolved AND reconcile has not spoken: keep
+    // the cached picture standing (it is already on the DOM when the pre-React
+    // applier ran; re-applying the same values is a visual no-op and covers the
+    // paths where it did not run — dev, CT, a cold main.tsx).
+    if (!themesLoaded) {
+      const cached = readValidatedPaint();
+      if (cached && cached.id === theme) {
+        appliedTokensRef.current = applyThemeToRoot(root, cached);
+      }
+    }
+  }, [theme, customThemes, themesLoaded]);
 
   // Apply the layout width (T-756f). Narrow REMOVES the attribute rather than
   // writing data-layout="narrow": the default DOM then looks exactly as it did
@@ -316,6 +267,16 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   const cacheLanguage = useCallback((next: Language) => {
     setLanguageState(next);
     writeStored(LS_LANGUAGE, next);
+  }, []);
+
+  // [T-1500] M3: the paint write must be driven by the BUNDLE SET, not by
+  // the id — editing a theme's colours does not change its id.
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
+
+  const writePaint = useCallback((id: string, bundles: ThemeBundle[]) => {
+    const b = bundles.find((x) => x.id === id);
+    writeStored(LS_THEME_PAINT, b ? JSON.stringify(paintRecordFor(b)) : null);
   }, []);
 
   const cacheTheme = useCallback((next: string) => {
@@ -351,6 +312,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   const setTheme = useCallback(
     (next: string) => {
       cacheTheme(next);
+      writePaint(next, customThemes);
       if (hasToken()) {
         api
           .patchServerSettings({ displayTheme: next })
@@ -358,7 +320,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
           .catch((e) => console.warn("setTheme: server sync failed", e));
       }
     },
-    [cacheTheme]
+    [cacheTheme, writePaint, customThemes]
   );
 
   const setWide = useCallback(
@@ -384,6 +346,10 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     (next: ThemeBundle[], nextTheme?: string) => {
       setCustomThemesState(next);
       if (nextTheme !== undefined) cacheTheme(nextTheme);
+      // [T-1500] M3: unconditional — a colour edit keeps the same id and so
+      // never reaches the id choke. `theme` is the still-active id when
+      // nextTheme is absent.
+      writePaint(nextTheme ?? theme, next);
       if (hasToken()) {
         const patch: { customThemes: ThemeBundle[]; displayTheme?: string } = {
           customThemes: next,
@@ -397,7 +363,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
           );
       }
     },
-    [cacheTheme]
+    [cacheTheme, writePaint, theme]
   );
 
   // Login reconcile (server = cross-device truth): pull /api/settings and adopt
@@ -431,9 +397,18 @@ export function I18nProvider({ children }: { children: ReactNode }) {
         // server's bool is simply the truth. That is what lets the owner turn
         // wide OFF on one device and have the others follow.
         cacheWide(s.displayWide);
+        // [T-1500] never leave a picture the server no longer recognises.
+        // The active id AFTER this reconcile: the server's when selectable,
+        // else the local one that survived above.
+        const active =
+          s.displayTheme !== "" && isValidDisplayTheme(s.displayTheme, ids)
+            ? s.displayTheme
+            : themeRef.current;
+        writePaint(active, s.customThemes ?? []);
+        setThemesLoaded(true);
       })
       .catch((e) => console.warn("i18n reconcile: load failed", e));
-  }, [cacheTheme, cacheLanguage, cacheWide]);
+  }, [cacheTheme, cacheLanguage, cacheWide, writePaint]);
 
   useEffect(() => {
     // Reconcile now if a token already exists (a returning session / reload
@@ -453,6 +428,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     // choice for every other device).
     cacheLanguage("zh");
     cacheTheme("office");
+    writeStored(LS_THEME_PAINT, null);
     cacheWide(false);
     // The custom set is server-backed — clear only the LOCAL mirror so the next
     // owner's paint is not tinted; the server copy is untouched (re-adopted at

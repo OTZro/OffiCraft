@@ -1,0 +1,31 @@
+// The pre-React paint entry. index.html loads this module BEFORE main.tsx, so
+// the cached theme is on <html> before React exists. It hands the token list to
+// window.__ocPaintTokens; the React apply effect adopts it as its ledger seed,
+// so there is still exactly ONE ledger.
+import { LS_THEME, readValidatedPaint, applyThemeToRoot } from "../lib/themePaint";
+
+declare global {
+  interface Window {
+    __ocPaintTokens?: string[];
+  }
+}
+
+try {
+  let theme: string | null = null;
+  try {
+    theme = localStorage.getItem(LS_THEME);
+  } catch {
+    theme = null;
+  }
+  if (theme && theme !== "office") {
+    const bundle = readValidatedPaint();
+    if (bundle && bundle.id === theme) {
+      document.documentElement.dataset.theme = "office";
+      window.__ocPaintTokens = applyThemeToRoot(document.documentElement, bundle);
+    }
+  }
+} catch {
+  // never let the pre-paint break the app: fall through to today's behaviour.
+}
+
+export {};
