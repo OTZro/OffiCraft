@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "npm run typecheck && vite build",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json && tsc --noEmit -p tsconfig.guards.json",
     "gen:api": "openapi-typescript ../spec/openapi.json -o src/api/generated/schema.ts",
     "gen:tokens": "node scripts/gen-theme-tokens.mjs",
     "gen:fonts": "node scripts/gen-theme-fonts.mjs",
@@ -14,7 +14,9 @@
     "lint:tokens": "node scripts/check-css-tokens.mjs",
     "lint:token-roles": "node scripts/check-token-roles.mjs",
     "test": "vitest run",
-    "test:ct": "playwright test -c playwright-ct.config.ts",
+    "test:ct": "playwright test -c playwright-ct.config.ts && npm run test:paint",
+    "build:paint-guard": "VITE_USE_MOCK=false vite build --logLevel warn",
+    "test:paint": "npm run build:paint-guard && playwright test -c playwright-paint.config.ts",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -31,6 +33,7 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "esbuild": "^0.21.5",
     "jsdom": "^25.0.1",
     "openapi-typescript": "^7.13.0",
     "typescript": "^5.6.3",

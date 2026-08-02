@@ -1301,3 +1301,89 @@ theme.css 裡定義值是裸 `var(--other)` 的 token(分區三槽)是「跟隨�
 - **手機不受影響**(owner 特別交代):視窗 ≤1136px 時 gutter 歸零,三個分區的不透明
   底色蓋滿整幅,圖看不見也不影響版面;background 不參與 layout,所以不可能產生橫向捲動。
   實測 narrow 1440/1040/900/720/480/375 與 wide 1440/1280/1040 皆 h-scroll = 0。
+
+## 主題快取的三道守衛:三個宿主,零個新 CI 關卡(T-1500)
+
+pre-React 上色(`src/paint/prePaint.ts` 由 `vite.config.ts` 的 `inlinePrePaint()`
+編成 IIFE inline 進 `index.html`)有三個**互不重疊**的性質要守。它們刻意**分住三處**
+——設計原本要開一個新的 `4b4` 一次跑完,但那樣「一個關卡被砍掉、三道守衛同時消失」:
+1. **記錄驗證** → `src/lib/themePaint.test.ts`(jsdom,既有 4b)。
+2. **產物形狀** → `src/lib/paintArtifact.test.ts`(jsdom + 一次 `vite build`,既有 4b,
+   **不需要瀏覽器**)。
+3. **真實載入的每一幀** → `paint-guards/*.paint.spec.ts`(真 Chromium,
+   `playwright-paint.config.ts`,由 `npm run test:ct` 串在既有 4c 之後)。
+
+`MALICIOUS_PAINT_CASES` / `VALID_RICH_BUNDLE` 的**權威定義**在 `src/lib/paintFixtures.ts`,
+jsdom 與瀏覽器兩層共用 ⇒ 加一個 payload 兩層同時守得到。
+⚠️ 但**不是「全世界只有一份」**:`src/lib/paintFixtures.theme.json` 是給 stub 伺服器吃的
+twin(它是 JSON、不能 import TS)。那份 twin 由 `themePaint.test.ts` 的
+「matches the JSON copy the stub server serves」做 deep-compare 守著,所以漂了會紅
+——但別把它講成不存在,下一個人會照著「只有一份」的字面去改其中一邊。
+
+🔴 **兩層各擋哪顆 mutant,別記反(獨立覆核實測)**:
+- **挖掉 `readValidatedPaint` 本身** → `themePaint.test.ts` 紅 6 + `paintCache.test.tsx` 紅 4。
+- **驗證器留著,只讓 inline script 繞過它** → **jsdom 三個檔 40/40 全綠、tsc 乾淨**,
+  只有 `payloadInjection.paint.spec.ts` 紅 5(6 個 payload 中的 5 個;第 6 個是 CSSOM
+  擋的、fixture 自己標了不算覆蓋)。
+⇒ **jsdom 那層擋不住 inline 繞過。** 這句話的用途是擋掉「jsdom 已經守住了,4c 可以砍」
+這個推論——那正是想省成本時最容易講出口的一句話。
+
+### 🔴 frame 量測一律在「登入態 + 伺服器認得該主題」下做,而且要**斷言**它成立
+`reconcileFromServer()` 在 `i18n/index.tsx` 是 `if (hasToken())` 閘住的。**沒有 token
+⇒ reconcile 永不執行 ⇒ `themesLoaded` 永遠 false ⇒ 只有「保留快取」那一條分支被跑到。**
+實測同一個 build:沒種 token 讀 `BAD_FRAMES=0`,種了 token 讀 **231/233/249**
+(伺服器不認得該主題 ⇒ `writePaint(active, [])` 把記錄**刪掉**)。
+- ⇒ `zeroFlash.paint.spec.ts` 每條測試都**在頻帶內證明前提**:`/api/settings` 真的回過
+  200、body 真的帶著這個主題、而且**播下去的記錄用的是不同的 `name`,跑完必須變成伺服器
+  那個 name**——只有 reconcile 真的跑完才會成立。前提不成立就以 setup error 紅掉,
+  不准空跑變綠。**meta-mutant 驗過**:把種 token 那行拿掉 ⇒ 紅在
+  「GET /api/settings never answered 200」。
+- ⇒ 量測用的 build 是 **`VITE_USE_MOCK=false`**(`bin/build` 出貨的那個)。預設 build 帶
+  的是 in-memory mock,`custom_themes` 恆為 `[]` 且 0 ms 回話——**節流對它完全無效**,
+  而這張票要修的閃爍窗**就是**等 `/api/settings` 的那段。伺服器由
+  `paint-guards/settingsStub.mjs` 扮,`--delay 400` 不是填充,是那個窗本身。
+- ⚠️ mock **無法**用來測 happy path:`mockServerSettings` 是 module-level、每次重整就重置,
+  所以「重整後伺服器仍記得這個主題」在 mock 下不可能發生。
+
+### 🔴 正向斷言:要驗「該套上的真的套上了」,不是「不含某個值」
+只驗「某個禁字沒出現」的套件,會被**「applier 靜默不再套用 fonts 與 canvas」**整個繞過
+——實測那顆 mutant 通過 tsc、build、產物 A–E、`paintCache.test.tsx` 的決策測試,以及一套 6 case 的
+absence-only 瀏覽器探針,**6/6 全綠**。所以 `VALID_RICH_BUNDLE` 一定帶
+colours **＋ fonts ＋ canvas 圖 ＋ canvas mode**,`EXPECT_APPLIED` / `EXPECT_APPLIED_VALUES`
+逐條斷言它們真的到 DOM。
+- **而且要歸因給 inline script**:`frameCarryingBeforeMount()` 要求那些值出現在
+  **React 還沒 mount** 的幀上。裸的 `frameCarrying` 分不出 inline script 與 React 自己那條
+  `!themesLoaded` fallback(它也呼叫 `readValidatedPaint()`)——實測 inline plugin 整個拿掉,
+  裸版正向控制**照樣綠**。
+- ⚠️ 這條需要**節流**才量得到:未節流時 React 早於 sampler 的第一個 rAF 就掛載完
+  (實測第一筆取樣在 24.4 ms、`mounted` 已是 true),pre-mount 幀數為 **0**、斷言無從成立。
+
+### 🔴 探針必須有 exit code,而且「取樣數」要有下限不是 `> 0`
+- 前一代 frame 探針**只 `console.log` 數字、零個 `process.exit`**:實測 `BAD_FRAMES=1`
+  而 shell exit code **0** ⇒ 接進 `set -e` 的 CI 永遠綠。現在寫成 Playwright spec,
+  exit code 由 runner 保證。
+- `SAMPLES > 0` **擋不住**上一輪真正燒到的那個失效:把逐幀改成「載入後單次讀」,
+  `SAMPLES=1` 仍 `> 0`,而同一顆 mutant H 從 4 紅變 **6/6 假綠**。所以門檻是
+  `MIN_SAMPLES`(80;健康的 3 秒窗是 200–260 幀)。**meta-mutant 驗過**:把 rAF 的
+  re-arm 拿掉 ⇒ 11 條全紅、訊息是「only 1 frames sampled」。
+- `({}).polluted === undefined` 是**恆真**的(applier 只呼叫 `setProperty`,沒有任何以
+  payload 為鍵的賦值 sink;連驗證全拔的 mutant H 六個 case 都是 false)。它留著只為了
+  「哪天這件事不再成立時被看到」,**不計入覆蓋**,註解已寫明。
+
+### 注入案例要跑在「伺服器不認得任何主題」那台(:4319)
+對著 happy-path 那台跑會有三條假紅:那台會回真主題,React 於是**合法**套上
+`--canvas-bg-image` 與 `--color-bg: #010203`(實測 ~2038 ms),而那正是 `svg-canvas-bg` /
+`illegal-canvasMode` / wording 三個 case 的禁字 ⇒ 斷言分不出「pre-paint 洩漏」與
+「伺服器給了真主題」。`custom_themes: []` 那台上,自訂屬性的唯一寫入者就只有 pre-paint,
+每次出現都可歸因。
+
+### 儲存鍵只有一份:斷言在**原始碼**上,不只在產物上
+產物斷言「找模組裡 `LS_THEME` 的值」只抓得到**兩步**漂移(先改回寫死字面量、再改常數值)。
+**單步**——`prePaint.ts` 改回 `localStorage.getItem("oc.theme")`、乾淨移除 import、常數不動
+——實測 tsc / build / 產物斷言**全綠**。所以 `paintArtifact.test.ts` 另外直接掃
+`prePaint.ts` 與 `i18n/index.tsx` 的原始碼,禁止出現 `"oc.theme"` / `"oc.themePaint"`
+字面量,在還來得及 review 的那一步就紅。
+**探針自己也不准寫死鍵**:`frameProbe.ts` 的 `seedSession()` / `readStoredPaint()` 從
+`api/auth` 的 `TOKEN_KEY` 與 `lib/themePaint` 的 `LS_THEME` / `LS_THEME_PAINT` 取值,
+再當參數送進 `page.evaluate`。自帶一份 `"oc.theme"` 的探針在改名後**照樣綠**
+——它只是在種一個沒人讀的鍵,然後斷言它從沒種進去的主題沒有出現。
