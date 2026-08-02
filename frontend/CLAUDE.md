@@ -1165,10 +1165,16 @@ mutant 紀錄:`docs/design/worker-panel-parity-mutants.md` 第五、六批。
 - 🔴 **`lineDiff` 是行結構的唯一權威,`wordDiff` 不准碰到它的產出**:拿掉 `wordDiff`,差異照樣
   畫得出來、列與行號一個都不會變,只是少了字級底色。要加字級規則就改 `wordDiff`,別下沉到 `lineDiff`。
 - 🔴 **摺疊只在呈現層退場,不是在 `lineDiff` 裡拿掉**(owner:「showing entire content」):
-  `DiffView` 固定送 `collapseUnchanged: false` 並且**不再渲染 `@@` 分隔列**;`lineDiff` 的
-  `collapse()` 仍是該模組自己的 API、仍有測試。`DiffView` 的 `options` 因此窄成自有的
-  `DiffViewOptions`(只剩 `maxLines`)——留著 `collapseUnchanged` 這個 knob 等於在介面上廣告
-  一個這個面拒絕擁有的行為。
+  `DiffView` **渲染 `result.rows`(恆為完整 edit script)、從不讀 `result.hunks`**,並且
+  **不再渲染 `@@` 分隔列**;`lineDiff` 的 `collapse()` 仍是該模組自己的 API、仍有測試。
+  `DiffView` 的 `options` 因此窄成自有的 `DiffViewOptions`(只剩 `maxLines`)——留著
+  `collapseUnchanged` 這個 knob 等於在介面上廣告一個這個面拒絕擁有的行為。
+  ⚠️ **「固定送 `collapseUnchanged: false`」不是這條的執行機制,別把它讀成保證**
+  (本檔上一版就是這麼寫的):`collapseUnchanged` 只塑形 `hunks`,而這個面**一個
+  consumer 都沒有** ⇒ 把那個引數翻成 `true`,渲染出來的列一行都不會變。**實測**:翻成
+  `true` → `DiffView.test.tsx` **15 條全綠**;改成渲染 `hunks.flatMap(h => h.rows)`
+  → 「no collapse separator」那條**立刻紅**。要找那條不准動的線,看 render 裡的
+  `result.rows`,不是那個引數。
 - **字級標亮有兩個刻意的「不標」**,兩者都不是缺口:①兩行**毫無共同 token** 時整行不標(整列的顏色
   已經說完「這行被整個換掉」,再逐 token 標會讓它與「只改幾個字」長得一樣);②每側 **400 token 上限**
   (token LCS 是 O(n·m)、每對變更列各跑一次,一行 base64 只能少一層底色、不能讓 tab 卡死)。
