@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { en } from "../i18n/locales/en";
 import { zh } from "../i18n/locales/zh";
@@ -54,59 +54,31 @@ const DICTS_BY_LANG = { zh, en } as const;
 // carries the rest — a pack can skip dozens, and the banner must stay one line.
 const IMPORT_SKIPPED_SAMPLE = 3;
 
-// ── 用詞 list windowing (T-8115) ──
-// The 用詞 panel offers EVERY overridable message code — ~870 of them. It was
-// mounting all of them at once, so opening the theme editor built ~870
-// controlled <input>s.
+// ── 用詞 list: every code stays in the DOM, deliberately (T-8115 reverted) ──
+// The 用詞 panel offers EVERY overridable message code — 866 of them — and it
+// renders all of them at once. That is a decision, not an oversight.
 //
-// WHAT THAT ACTUALLY COST — measured, and the two environments are NOT the
-// same story, so keep them apart:
-//   * jsdom (ThemeSettings.test.tsx): 5.13s → 0.543s, ~9x. This is where the
-//     pain was real enough to fail a build — the file was hitting the 5000ms
-//     per-test timeout. The mechanism is quadratic and specific to jsdom:
-//     dom-testing-library's getByLabelText reads `input.labels` on every
-//     labelable element, and jsdom answers each of those by walking the whole
-//     document for form controls, so N inputs cost N document walks per query
-//     (--cpu-prof top-2 self time: NodeList-impl._update 1145ms +
-//     form-controls.query 551ms; React's own render+commit was only 579ms).
-//   * a real browser (Chromium CT, M5 Mac, 4 runs each): opening the editor
-//     goes ~80ms → ~44ms. Real and in the right direction, but that is about
-//     a frame and a half, not a visibly slow editor. Per-keystroke latency in
-//     a 用詞 input actually got slightly WORSE, 6.5ms → 7.4ms (the measuring
-//     effect below runs on every commit). Scrolling is unchanged, rAF-bound.
-// So: do NOT repeat the ~9x number as if a user feels it — it is a jsdom
-// number. The honest case for this change is (a) it unblocks a test file that
-// was timing out, (b) ~1.8x off the editor's open cost, which matters more on
-// a slower machine than the one those numbers came from, and (c) the DOM it
-// builds is proportional to what is on screen.
+// It used to be a virtualised scroll window (only the visible rows mounted, the
+// rest reserved by two spacer blocks). That bought a real, measured saving:
+// opening the theme editor cost ~7.6ms mounted-window vs ~64ms fully mounted,
+// and ~34ms vs ~165ms on a 4x-throttled CPU (20 rows / 240 inputs vs 866 rows /
+// 1086 inputs). The owner weighed that against what it cost and chose to pay it
+// (2026-08-02): "這設定根本不常進去 只要不是秒等級 根本沒差 而且通常都是直接匯入"
+// — this screen is opened rarely, themes usually arrive by import rather than by
+// hand-editing wording, and nothing here is anywhere near a second.
 //
-// The list is — and always was — a SCROLL WINDOW (theme-settings.css
-// .ts-wording-list: max-height 340px; overflow-y auto). So we render only the
-// rows that window can actually show, plus an overscan margin, and reserve the
-// exact pixel height of the rows above and below with two spacers. Nothing is
-// hidden: the scrollbar still spans all ~870 codes, every code is still one
-// scroll away, and a search still yields every match it ever did.
-//
-// The overscan is not just a repaint smoothness knob — it is what keeps
-// keyboard traversal working. Tab moves focus to the next rendered input; the
-// browser scrolls it into view, our onScroll advances the window, and a fresh
-// overscan row appears below. As long as some rows are always rendered past
-// the viewport edge, Tab walks the whole list exactly as it did before.
-//
-// A row that holds keyboard focus stays mounted even after it scrolls out of
-// the window (see `focusedWordingCode` below) — otherwise unmounting it hands
-// focus back to <body> mid-edit and the caret is simply gone.
-//
-// The two px numbers below are only the fallback for when layout is
-// unavailable (jsdom, or the first paint before we have measured). In a real
-// browser the effect below replaces them with what the stylesheet actually
-// produced, so a font-size change in theme-settings.css cannot desync them.
-// Both are MEASURED values, not derivations — 48 is what Chromium lays a row
-// out at (6+6 row padding + a 36px content box: the two-line meta column is
-// 36px and outgrows the 34px input next to it).
-const WORDING_ROW_PITCH_PX = 48; // .ts-wording-row, measured in Chromium
-const WORDING_VIEWPORT_PX = 340; // .ts-wording-list max-height
-const WORDING_OVERSCAN_ROWS = 6;
+// What the windowing cost, and what came back by dropping it (each measured):
+//   * Tab / screen-reader order. Windowing has to keep the FOCUSED row mounted
+//     (unmounting the element focus lives in hands focus to <body> and the caret
+//     vanishes), and that pinned row broke sequential order: Tab out of it left
+//     the list entirely and landed on 取消, and the reading order ran
+//     …865, 866, 1. With every row mounted there is no pin and no reordering.
+//   * The browser's own find (Cmd+F), whole-page select-all, and print only ever
+//     saw the mounted handful. Selectable text measured 1,736 → 32,189 chars.
+// So: do NOT reintroduce virtualisation, windowing, an overscan window, or any
+// "only render N rows" cap here without a fresh owner ruling. Three separate
+// capabilities ride on every row being in the document, and two of them are
+// browser features we do not implement and cannot re-expose any other way.
 
 // The two font tokens the editor offers a dropdown for (T-16a1 P4). Body =
 // --font-sans (interface text), Title = --font-title (page headings). The
@@ -223,19 +195,9 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
   };
   const [wordingLang, setWordingLang] = useState<"zh" | "en">("zh");
   const [wordingSearch, setWordingSearch] = useState("");
-  // Where the 用詞 scroll window currently sits, and how big it is. See the
-  // WORDING_* constants above for why the list is windowed at all.
+  // Only so a new search result set can be scrolled back to the top; the list
+  // itself is a plain scroll box with every row in it (see the note above).
   const wordingListRef = useRef<HTMLDivElement>(null);
-  const [wordingScrollTop, setWordingScrollTop] = useState(0);
-  // The code whose input currently holds focus, or "" when focus is elsewhere.
-  // Unmounting a focused input drops focus to <body> — the caret vanishes and
-  // typing goes nowhere — so this row is kept mounted no matter where the
-  // window is (see `wordingPinned`).
-  const [focusedWordingCode, setFocusedWordingCode] = useState("");
-  const [wordingMetrics, setWordingMetrics] = useState({
-    pitch: WORDING_ROW_PITCH_PX,
-    viewport: WORDING_VIEWPORT_PX,
-  });
   const [editError, setEditError] = useState("");
 
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -599,65 +561,9 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
     });
   }, [wordingSearch, wordingLang]);
 
-  // Replace the fallback px numbers with what the stylesheet actually laid out.
-  // Runs on every commit because a font/zoom/width change moves both numbers,
-  // and it only writes state when a number really moved. Where there is no
-  // layout at all (jsdom, or before first paint) both measurements read 0 and
-  // the stylesheet's own numbers stand — which is also what a browser produces.
-  useLayoutEffect(() => {
-    const list = wordingListRef.current;
-    if (!list) return;
-    // In-flow rows only: the pinned row is positioned absolutely, so its
-    // offsetTop is an answer to a different question.
-    const rows = list.querySelectorAll<HTMLElement>(
-      ".ts-wording-row:not(.ts-wording-row--pinned)"
-    );
-    // Pitch from two adjacent rows, so any row gap is included by construction.
-    const pitch =
-      rows.length >= 2
-        ? rows[1].offsetTop - rows[0].offsetTop
-        : (rows[0]?.offsetHeight ?? 0);
-    const viewport = list.clientHeight;
-    const next = {
-      pitch: pitch > 0 ? pitch : WORDING_ROW_PITCH_PX,
-      viewport: viewport > 0 ? viewport : WORDING_VIEWPORT_PX,
-    };
-    setWordingMetrics((prev) =>
-      prev.pitch === next.pitch && prev.viewport === next.viewport ? prev : next
-    );
-  });
-
-  // The slice of `wordingRows` that is actually mounted. Everything outside it
-  // is represented by the two spacers, so the scroll range covers all of them.
-  const wordingWindow = useMemo(() => {
-    const { pitch, viewport } = wordingMetrics;
-    const total = wordingRows.length;
-    const visible = Math.ceil(viewport / pitch) + WORDING_OVERSCAN_ROWS * 2;
-    const wanted = Math.floor(wordingScrollTop / pitch) - WORDING_OVERSCAN_ROWS;
-    // Clamp so a scrollTop left over from a longer list cannot empty the window.
-    const first = Math.max(0, Math.min(wanted, total - visible));
-    const last = Math.min(total, first + visible);
-    return { first, last, padTop: first * pitch, padBottom: (total - last) * pitch };
-  }, [wordingMetrics, wordingScrollTop, wordingRows.length]);
-
-  // The focused row when the window has scrolled past it. Rendering it as well
-  // — absolutely positioned at the offset it would have had — is what keeps
-  // the caret alive: React would otherwise unmount the element focus lives in,
-  // and the browser answers that by moving focus to <body>. It is also where
-  // the row genuinely belongs, so scrolling back reveals it in place with no
-  // duplicate (the `< first || >= last` test is what excludes the duplicate).
-  const wordingPinned = useMemo(() => {
-    if (focusedWordingCode === "") return null;
-    const index = wordingRows.indexOf(focusedWordingCode);
-    if (index < 0) return null; // filtered out by a search — nothing to pin
-    if (index >= wordingWindow.first && index < wordingWindow.last) return null;
-    return { code: focusedWordingCode, index };
-  }, [focusedWordingCode, wordingRows, wordingWindow]);
-
-  // A new result set starts at the top — both our window and the real element,
-  // which would otherwise keep a scroll offset that no longer means anything.
+  // A new result set starts at the top: the old scroll offset pointed into a
+  // list that no longer exists.
   function resetWordingScroll() {
-    setWordingScrollTop(0);
     if (wordingListRef.current) wordingListRef.current.scrollTop = 0;
   }
 
@@ -671,23 +577,19 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
     return n;
   }, [editWording]);
 
-  /** One 用詞 row, at its absolute index in `wordingRows`. `pinned` rows are
-   * the same row taken out of flow and placed at the offset the spacer above
-   * is already reserving for them, so a focused row that has scrolled out of
-   * the window stays in the document without displacing anything. */
-  function wordingRow(code: string, index: number, pinned: boolean) {
+  /** One 用詞 row, at its index in `wordingRows`. */
+  function wordingRow(code: string, index: number) {
     const enText = readDictMessage(en, code) ?? "";
     const curText = readDictMessage(DICTS_BY_LANG[wordingLang], code) ?? "";
     const override = editWording[wordingLang]?.[code] ?? "";
     return (
       <div
         key={code}
-        className={`ts-wording-row${pinned ? " ts-wording-row--pinned" : ""}`}
+        className="ts-wording-row"
         role="listitem"
         aria-setsize={wordingRows.length}
         aria-posinset={index + 1}
         data-wording-code={code}
-        style={pinned ? { top: index * wordingMetrics.pitch } : undefined}
       >
         <div className="ts-wording-meta">
           <span className="ts-wording-en">{enText}</span>
@@ -698,10 +600,6 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
           value={override}
           placeholder={curText}
           aria-label={`${enText} — ${t.settings.themeWordingOverride}`}
-          onFocus={() => setFocusedWordingCode(code)}
-          onBlur={() =>
-            setFocusedWordingCode((prev) => (prev === code ? "" : prev))
-          }
           onChange={(e) => setWordingAt(code, e.target.value)}
         />
       </div>
@@ -1186,47 +1084,17 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
               resetWordingScroll();
             }}
           />
-          {/* role/aria-setsize: only the windowed rows are in the a11y tree,
-              so without the set size a screen reader would report the list as
-              ~21 items long instead of ~870. The positions are 1-based and
-              absolute, so "第 431 項,共 866 項" stays true while scrolling. */}
+          {/* Every row is here. `aria-setsize`/`aria-posinset` are still
+              explicit rather than left to the AT to count: they are what make
+              "第 431 項,共 866 項" true, and they keep the announced position
+              tied to the row's index in the CURRENT (possibly searched) set. */}
           <div
             className="ts-wording-list"
             role="list"
             ref={wordingListRef}
             data-wording-total={wordingRows.length}
-            onScroll={(e) => setWordingScrollTop(e.currentTarget.scrollTop)}
           >
-            {wordingWindow.padTop > 0 && (
-              <div
-                className="ts-wording-pad"
-                aria-hidden="true"
-                style={{ height: wordingWindow.padTop }}
-              />
-            )}
-            {/* The pinned row must sit in the SAME keyed array as the windowed
-                rows, not in a slot of its own. React reconciles children slot
-                by slot, so a row that scrolls out of the window and into a
-                separate slot is torn down and rebuilt — which loses exactly
-                the focus the pin exists to keep. Inside one array its key
-                carries it, and React only moves the node it already has. */}
-            {[
-              ...wordingRows
-                .slice(wordingWindow.first, wordingWindow.last)
-                .map((code, i) =>
-                  wordingRow(code, wordingWindow.first + i, false)
-                ),
-              ...(wordingPinned
-                ? [wordingRow(wordingPinned.code, wordingPinned.index, true)]
-                : []),
-            ]}
-            {wordingWindow.padBottom > 0 && (
-              <div
-                className="ts-wording-pad"
-                aria-hidden="true"
-                style={{ height: wordingWindow.padBottom }}
-              />
-            )}
+            {wordingRows.map((code, i) => wordingRow(code, i))}
           </div>
 
           {editError && <div className="set-error">{editError}</div>}

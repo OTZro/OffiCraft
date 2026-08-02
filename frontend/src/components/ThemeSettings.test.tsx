@@ -371,11 +371,18 @@ describe("ThemeSettings · wording overlay", () => {
   });
 });
 
-// The 用詞 list mounts only the rows its 340px scroll window can show (T-8115 —
-// ~870 controlled inputs at once is what made the editor slow to open). These
-// tests pin the part that must NOT change: everything is still reachable. They
-// deliberately assert reachability rather than "row X is absent", so a future
-// implementation that mounts more (or all) of the list still passes.
+// The 用詞 list renders EVERY overridable code — all 866 of them, all in the
+// document at once. It was briefly virtualised (T-8115) and the owner reverted
+// that (2026-08-02): the editor is opened rarely and themes usually arrive by
+// import, so the measured open cost was judged not worth the three capabilities
+// windowing took away (keyboard/AT order, the browser's own find, whole-page
+// select-all and print).
+//
+// These tests assert PRESENCE, not "row X is absent" — the invariant is "not one
+// code may be missing". The one that pins keyboard/AT order lives here too, but
+// note what each layer can and cannot see: jsdom can read DOM order and what is
+// in the document, and it cannot press a real Tab. The browser half is in
+// visual-guards/wording-list-full.ct.spec.tsx.
 describe("ThemeSettings · wording list is browsable in full", () => {
   async function openWordingEditor() {
     setToken("owner-token");
@@ -397,30 +404,13 @@ describe("ThemeSettings · wording list is browsable in full", () => {
       r.getAttribute("data-wording-code")
     );
 
-  // Walk the scroll window from the top of the list to the bottom and union
-  // everything it ever showed — i.e. what an owner with a mouse wheel can see.
-  // 48px is the row pitch the component falls back to where there is no layout
-  // (jsdom). The stride is one row short of however many rows the list is
-  // currently showing, so it never outruns the window no matter how the window
-  // is sized — and it takes as few steps as that allows, because this walk is
-  // the most expensive thing in the file.
+  // The scroll offset the virtualised list used to move its window well past
+  // row 0. It is kept only so the "scrolling changes nothing" test scrolls to a
+  // place that USED to matter; 48px is the row pitch that implementation
+  // measured in Chromium.
   const ROW_PITCH_PX = 48;
-  function scrollThrough(list: HTMLElement) {
-    const total = Number(list.getAttribute("data-wording-total"));
-    const seen = new Set<string | null>();
-    for (let top = 0; top <= total * ROW_PITCH_PX; ) {
-      act(() => {
-        list.scrollTop = top;
-        fireEvent.scroll(list);
-      });
-      const shown = codesIn(list);
-      for (const c of shown) seen.add(c);
-      top += Math.max(1, shown.length - 1) * ROW_PITCH_PX;
-    }
-    return seen;
-  }
 
-  it("reaches every one of the ~870 codes by scrolling, with no search at all", async () => {
+  it("has every one of the 866 codes in the document, with no search at all", async () => {
     const { utils, list } = await openWordingEditor();
 
     // Nothing is filtered out before the owner has typed anything.
@@ -438,10 +428,15 @@ describe("ThemeSettings · wording list is browsable in full", () => {
       String(MESSAGE_KEYS.length)
     );
     expect(firstRow.getAttribute("aria-posinset")).toBe("1");
-    // …and scrolling gets to every single one of them.
-    const seen = scrollThrough(list);
+    // …and every single code is in the document, without scrolling anywhere.
+    // No scroll walk: with nothing unmounted there is no window to advance, and
+    // a walk would only re-measure the same set N times. The invariant is the
+    // same one the walk used to establish — not one code missing — so a cap of
+    // any size (v1's slice(0, 30), a 400-row window, anything) still reds it.
+    const seen = new Set(codesIn(list));
     const missed = MESSAGE_KEYS.filter((c) => !seen.has(c));
     expect(missed).toEqual([]);
+    expect(seen.size).toBe(MESSAGE_KEYS.length);
 
     // The last code is not a read-only tail: it is the same editable input as
     // any other row, and what is typed into it lands on the saved bundle.
@@ -480,8 +475,9 @@ describe("ThemeSettings · wording list is browsable in full", () => {
     const total = Number(list.getAttribute("data-wording-total"));
     expect(total).toBeGreaterThanOrEqual(matchedByCode.length);
 
-    // Every match is reachable — including the ones past the first screenful.
-    const seen = scrollThrough(list);
+    // Every match is in the document — including the ones past the first
+    // screenful, which is exactly where a cap hides the tail.
+    const seen = new Set(codesIn(list));
     expect(matchedByCode.filter((c) => !seen.has(c))).toEqual([]);
     expect(seen.size).toBe(total);
   });
@@ -524,14 +520,18 @@ describe("ThemeSettings · wording list is browsable in full", () => {
     expect(inputOf(target).value).toBe("甲乙");
   });
 
-  it("keeps the caret in the row you are editing when the list scrolls away", async () => {
-    // The failure this guards is specific to windowing and did not exist
-    // before it: unmounting the row focus lives in makes the browser hand
-    // focus back to <body>, so an owner who scrolls down to compare a row
-    // against another one and scrolls back finds their caret gone and their
-    // keystrokes going nowhere. (The VALUE was never at risk — editWording
-    // lives above the window — which is why this needs its own assertion
-    // rather than leaning on the "override survives a scroll" one.)
+  it("keeps the whole set — and its reading order — after the list scrolls away", async () => {
+    // The regression this replaces a test for: while the list was virtualised it
+    // had to keep the FOCUSED row mounted (unmounting the element focus lives in
+    // hands focus to <body> and the caret is gone), and that pinned row was
+    // rendered after the window — so sequential DOM order, which both Tab and a
+    // screen reader's virtual cursor read, ran …865, 866, 1 and Tab out of the
+    // row left the list entirely.
+    //
+    // With nothing unmounted there is no pin and no reordering. This asserts the
+    // two halves jsdom can actually see: the set does not shrink when the list
+    // is scrolled, and DOM order is monotonic. Pressing a real Tab is the
+    // browser half — visual-guards/wording-list-full.ct.spec.tsx.
     const { list } = await openWordingEditor();
 
     const code = codesIn(list)[0]!;
@@ -544,34 +544,33 @@ describe("ThemeSettings · wording list is browsable in full", () => {
     });
     expect(document.activeElement).toBe(input);
 
-    // Scroll far enough that the window cannot possibly still cover row 0.
+    // Scroll far past it — the offset that used to move the window off row 0.
     act(() => {
       list.scrollTop = 300 * ROW_PITCH_PX;
       fireEvent.scroll(list);
     });
-    expect(codesIn(list)).not.toContain(MESSAGE_KEYS[1]);
 
-    // Still the same element, still focused, still holding the edit.
+    // Not one code left the document, and the focused row is the same element
+    // (so the caret cannot have been handed back to <body>).
+    expect(codesIn(list).length).toBe(MESSAGE_KEYS.length);
+    expect(codesIn(list)).toContain(MESSAGE_KEYS[1]);
     expect(document.activeElement).toBe(input);
-    expect(input.value).toBe("我的未存編輯");
     expect(input.isConnected).toBe(true);
+    expect(input.value).toBe("我的未存編輯");
 
-    // …and typing from there still lands on the right code.
-    fireEvent.change(input, { target: { value: "我的未存編輯2" } });
+    // Reading order is the code order, start to end, with no step backwards.
+    const positions = Array.from(
+      list.querySelectorAll("[data-wording-code]")
+    ).map((r) => Number(r.getAttribute("aria-posinset")));
+    expect(positions[0]).toBe(1);
+    expect(positions[positions.length - 1]).toBe(MESSAGE_KEYS.length);
     expect(
-      (
-        within(
-          list.querySelector(`[data-wording-code="${code}"]`) as HTMLElement
-        ).getByRole("textbox") as HTMLInputElement
-      ).value
-    ).toBe("我的未存編輯2");
-
-    // Blurring releases the pin — the row must not linger once focus is gone,
-    // or the window would slowly accumulate every row ever touched.
-    act(() => {
-      input.blur();
-    });
-    expect(codesIn(list)).not.toContain(code);
+      positions.filter((pos, i) => i > 0 && pos < positions[i - 1]),
+      "reading order must not step backwards"
+    ).toEqual([]);
+    // …and no row is taken out of flow to achieve any of it.
+    expect(list.querySelectorAll(".ts-wording-row--pinned").length).toBe(0);
+    expect(list.querySelectorAll(".ts-wording-pad").length).toBe(0);
   });
 });
 
