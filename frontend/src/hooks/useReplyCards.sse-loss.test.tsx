@@ -43,7 +43,31 @@ import { __resetMock, __injectMockReplyCard } from "../api/mock";
 import { api } from "../api";
 import type { ReplyCard } from "../api/adapter";
 
+/** 🔴 開卡時間必須逐張不同,而且同一個 id 每次都拿到同一個戳記。
+ *
+ * 這個 fixture 以前對每張卡算 `Date.now()/1000 - 25*60`,於是三張卡的戳記在
+ * 「同一毫秒內注入完」時**相等** —— 而等待面的顯示順序完全由戳記決定:mock
+ * adapter 依 `createdTs` **升冪**出清單(最久沒回的在前),`RepliesPage` 再依
+ * `createdTs` **降冪**重排。戳記相等 ⇒ 兩次排序都退化成 stable sort 的「維持
+ * 原順序」,順序就變成「`Date.now()` 有沒有在兩次 `mkCard` 之間跳一格」的函式:
+ * 沒跳 → [rc-1, rc-2];跳了 → [rc-2, rc-1](第二張變成比較新的那張)。
+ * 完整 CI 那種負載下毫秒邊界很容易被跨過,於是靠位置點卡的測試會改點到 rc-2,
+ * 剩下的正好是 `[rc-1, rc-3]` —— 那就是實際看到的紅。**這不是產品排序不保證,
+ * 是這個 fixture 沒有把排序講清楚。**
+ *
+ * 因此:BASE 在 module 載入時取一次(同 id 永遠同戳記,重建快照不會重排),
+ * 偏移由 id 的數字尾碼決定 —— rc-1 最舊、rc-3 最新 ⇒ 等待面的顯示順序恆為
+ * [rc-3, rc-2, rc-1]。⚠️ 順序既然是明確的,選卡就更不該靠位置:見
+ * `waitingCardById`。 */
+const FIXTURE_BASE_TS = Date.now() / 1000 - 25 * 60;
+
+function createdTsFor(id: string): number {
+  const m = /^rc-(\d+)$/.exec(id);
+  return FIXTURE_BASE_TS + (m ? Number(m[1]) * 60 : 0);
+}
+
 function mkCard(over: Partial<ReplyCard> = {}): ReplyCard {
+  const id = over.id ?? "rc-1";
   return {
     id: "rc-1",
     from: "mira",
@@ -55,7 +79,7 @@ function mkCard(over: Partial<ReplyCard> = {}): ReplyCard {
     attachments: [],
     task: null,
     expiredTs: null,
-    createdTs: Date.now() / 1000 - 25 * 60,
+    createdTs: createdTsFor(id),
     answeredTs: null,
     chatMessageId: "msg-1",
     answer: null,
@@ -113,6 +137,18 @@ function hangNextRead(pane: "waiting" | "answered" | "expired") {
   };
 }
 
+/** 🔴 要回答哪一張卡,用 id 指名 —— 這些測試**靠 id 斷言結果**,所以也必須靠 id
+ * 選擇輸入,否則「點到哪一張」與「該剩下哪一張」是兩套座標系,排序一動就對不上
+ * (那正是上面那顆紅的形狀)。回傳的是等待面上那一張,`#reply-card-<id>` 在
+ * 已處理面也存在,所以要連 testid 一起限定。 */
+function waitingCardById(id: string): HTMLElement {
+  const el = document.querySelector<HTMLElement>(
+    `[data-testid="waiting-card"]#reply-card-${id}`
+  );
+  if (!el) throw new Error(`no waiting card rendered for ${id}`);
+  return el;
+}
+
 function renderPage() {
   return render(
     <I18nProvider>
@@ -141,10 +177,11 @@ describe("reply-card writes reconcile without any event stream", () => {
     killEventStream();
 
     const { findAllByTestId, queryAllByTestId } = renderPage();
-    const cards = await findAllByTestId("waiting-card");
-    expect(cards).toHaveLength(3);
+    expect(await findAllByTestId("waiting-card")).toHaveLength(3);
 
-    fireEvent.click(cards[0].querySelectorAll(".reply-option")[0]);
+    fireEvent.click(
+      waitingCardById("rc-1").querySelectorAll(".reply-option")[0]
+    );
 
     // The write landed (the mock accepted it and flipped the card to answered).
     // The cockpit must not keep rendering it as waiting — that is what sends the
@@ -162,10 +199,11 @@ describe("reply-card writes reconcile without any event stream", () => {
     killEventStream();
 
     const { findAllByTestId, findByTestId, queryAllByTestId } = renderPage();
-    const cards = await findAllByTestId("waiting-card");
-    expect(cards).toHaveLength(2);
+    expect(await findAllByTestId("waiting-card")).toHaveLength(2);
 
-    fireEvent.click(cards[0].querySelector('[data-testid="expire-card"]')!);
+    fireEvent.click(
+      waitingCardById("rc-1").querySelector('[data-testid="expire-card"]')!
+    );
     const confirm = await findByTestId("expire-confirm-btn");
     fireEvent.click(confirm);
 
@@ -188,8 +226,7 @@ describe("reply-card writes reconcile without any event stream", () => {
 
     const stream = captureEventStream();
     const { findAllByTestId, queryAllByTestId } = renderPage();
-    const cards = await findAllByTestId("waiting-card");
-    expect(cards).toHaveLength(2);
+    expect(await findAllByTestId("waiting-card")).toHaveLength(2);
 
     // A peer's delta kicks a refetch — and that read never comes back before the
     // owner acts (slow response, then the stream drops).
@@ -197,7 +234,9 @@ describe("reply-card writes reconcile without any event stream", () => {
     stream.deliver("reply_card");
     await waitFor(() => expect(read.inFlight()).toBe(true));
 
-    fireEvent.click(cards[0].querySelectorAll(".reply-option")[0]);
+    fireEvent.click(
+      waitingCardById("rc-1").querySelectorAll(".reply-option")[0]
+    );
     await waitFor(() =>
       expect(queryAllByTestId("waiting-card")).toHaveLength(1)
     );
@@ -232,8 +271,9 @@ describe("reply-card writes reconcile without any event stream", () => {
     stream.deliver("reply_card");
     await waitFor(() => expect(read.inFlight()).toBe(true));
 
-    const cards = await findAllByTestId("waiting-card");
-    fireEvent.click(cards[0].querySelectorAll(".reply-option")[0]);
+    fireEvent.click(
+      waitingCardById("rc-1").querySelectorAll(".reply-option")[0]
+    );
     await waitFor(() =>
       expect(queryAllByTestId("waiting-card")).toHaveLength(1)
     );
