@@ -193,6 +193,150 @@ func TestStepNoteSurvivesAReplan(t *testing.T) {
 	}
 }
 
+// TestStepNoteWriteMovesTaskUpdatedTS — the delivery guard.
+//
+// Storing the note is not the deliverable; the owner SEEING it is. A task card
+// he already has open re-reads its step-bearing detail only when updated_ts
+// changes: the SSE task delta carries id/status/priority and the list it
+// refreshes carries no steps at all. An earlier draft of this handler skipped
+// the bump on purpose and shipped a note that was invisible to exactly the
+// person watching a live handover — the one case the ticket exists for. Drop
+// the TouchTaskUpdatedTS call and this reddens.
+func TestStepNoteWriteMovesTaskUpdatedTS(t *testing.T) {
+	api := newTasksTestServer(t)
+	task := createAdHocTask(t, api, "m-exec")
+	view := submitPlan(t, api, task.ID, "m-exec", []map[string]any{{"name": "one", "dod": "d1"}})
+	stepID := view.Steps[0].ID
+
+	before, err := api.dal.GetTask(task.ID)
+	if err != nil || before == nil {
+		t.Fatalf("load task: %v %v", before, err)
+	}
+	if rec := writeStepNote(t, api, task.ID, stepID, "m-exec", "第 4 步跑到 conformance"); rec.Code != http.StatusOK {
+		t.Fatalf("write note: %d %s", rec.Code, rec.Body.String())
+	}
+	after, err := api.dal.GetTask(task.ID)
+	if err != nil || after == nil {
+		t.Fatalf("reload task: %v %v", after, err)
+	}
+	if !(after.UpdatedTS > before.UpdatedTS) {
+		t.Fatalf("updated_ts did not move (%v → %v) — an already-open task card "+
+			"will never re-hydrate, so the note is invisible to the owner",
+			before.UpdatedTS, after.UpdatedTS)
+	}
+	// The bump must not have smeared anything else across the task row.
+	if after.Status != before.Status || after.Priority != before.Priority ||
+		after.ExecutorID != before.ExecutorID {
+		t.Fatalf("note write changed more than updated_ts: %+v → %+v", *before, *after)
+	}
+}
+
+// TestSetTaskStepNoteWritesOnlyTheNoteColumn — a DAL-level guard.
+//
+// 🔴 Read what this does and does NOT cover before trusting it.
+//
+// COVERS: the DAL write itself touches one column. Widen SetTaskStepNote to
+// write any other column and this reddens.
+//
+// DOES NOT COVER: the handler reverting to the load-mutate-save shape every
+// other step writer uses (GetTaskStep → mutate → PutTaskStep). That mutation
+// was run and SURVIVED — no test here catches it, because the danger only
+// appears when a CONCURRENT writer lands between the handler's read and its
+// write, and there is no seam to interleave at. The protection against it is
+// STRUCTURAL, not tested: SetTaskStepNote takes an id and a string, so it
+// cannot carry stale columns even if someone wanted it to. Anyone replacing it
+// with a whole-row upsert reintroduces the hazard silently — that is the honest
+// state of this guard, recorded here rather than implied to be stronger.
+func TestSetTaskStepNoteWritesOnlyTheNoteColumn(t *testing.T) {
+	api := newTasksTestServer(t)
+	task := createAdHocTask(t, api, "m-exec")
+	view := submitPlan(t, api, task.ID, "m-exec", []map[string]any{{"name": "one", "dod": "d1"}})
+	stepID := view.Steps[0].ID
+	if rec := reportStepStatus(t, api, task.ID, stepID, "m-exec", "in_progress", ""); rec.Code != http.StatusOK {
+		t.Fatalf("start step: %d %s", rec.Code, rec.Body.String())
+	}
+	before, err := api.dal.GetTaskStep(stepID)
+	if err != nil || before == nil {
+		t.Fatalf("load step: %v %v", before, err)
+	}
+
+	ok, err := api.dal.SetTaskStepNote(stepID, "written straight through the DAL")
+	if err != nil || !ok {
+		t.Fatalf("SetTaskStepNote: ok=%v err=%v", ok, err)
+	}
+	after, err := api.dal.GetTaskStep(stepID)
+	if err != nil || after == nil {
+		t.Fatalf("reload step: %v %v", after, err)
+	}
+	if after.Note != "written straight through the DAL" {
+		t.Fatalf("note = %q, want it written", after.Note)
+	}
+	// Everything else must be byte-identical: compare the whole struct with the
+	// note field normalised away, so a newly added column is covered too.
+	a, b := *before, *after
+	a.Note, b.Note = "", ""
+	if a != b {
+		t.Fatalf("SetTaskStepNote changed more than the note column:\n before=%+v\n after =%+v", a, b)
+	}
+	// A step that is gone reports false rather than resurrecting itself.
+	if ok, err := api.dal.SetTaskStepNote("ts-does-not-exist", "x"); err != nil || ok {
+		t.Fatalf("write to a missing step: ok=%v err=%v, want ok=false", ok, err)
+	}
+}
+
+// TestStepNoteRefusedOnAClosedTask — the tool description promises writability
+// in every STEP status, and this is the line that promise stops at: once every
+// step is done the task auto-closes, and a closed task's record stops moving
+// (the same rule the artifact set follows). Pinned so the copy and the code
+// cannot drift apart again.
+func TestStepNoteRefusedOnAClosedTask(t *testing.T) {
+	api := newTasksTestServer(t)
+	task := createAdHocTask(t, api, "m-exec")
+	driveTaskDone(t, api, task.ID, "m-exec")
+	view := submitPlanFetch(t, api, task.ID)
+
+	rec := writeStepNote(t, api, task.ID, view[0].ID, "m-exec", "too late")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("write on a closed task: %d %s, want 409", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "already closed") {
+		t.Fatalf("409 body = %s, want it to name the closed task", rec.Body.String())
+	}
+}
+
+// submitPlanFetch reads a task's steps straight from the DAL (the plan view is
+// not available after the task closed).
+func submitPlanFetch(t *testing.T, api *apiServer, taskID string) []TaskStep {
+	t.Helper()
+	steps, err := api.dal.ListTaskSteps(taskID)
+	if err != nil || len(steps) == 0 {
+		t.Fatalf("list steps: %v %v", steps, err)
+	}
+	return steps
+}
+
+// TestStepNoteAcceptsAdminCapability — the guard is executor-OR-admin, and only
+// the executor half was covered. An admin助理 fixing a note on someone else's
+// task must not be refused.
+func TestStepNoteAcceptsAdminCapability(t *testing.T) {
+	api := newTasksTestServer(t)
+	task := createAdHocTask(t, api, "m-exec")
+	view := submitPlan(t, api, task.ID, "m-exec", []map[string]any{{"name": "one", "dod": "d1"}})
+	stepID := view.Steps[0].ID
+
+	rec := httptest.NewRecorder()
+	api.HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost(rec,
+		taskReq(t, "POST", "/api/tasks/"+task.ID+"/steps/"+stepID+"/note",
+			map[string]any{"note": "written by the owner"}, wireOwnerID, "owner"),
+		task.ID, stepID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("owner write: %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	if got := readStepNote(t, api, task.ID, stepID); got != "written by the owner" {
+		t.Fatalf("note = %q, want the admin write to have landed", got)
+	}
+}
+
 // TestStepNoteRefusesTheWrongCaller — the same executor-or-admin gate as every
 // other task-driving write. Dropping callerMayDriveTask from the handler
 // reddens this; the assertion names the REASON, not just the failure, so a

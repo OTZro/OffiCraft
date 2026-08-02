@@ -75,21 +75,40 @@ func (s *apiServer) HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost(w 
 		return
 	}
 	// No step-status check on purpose. Writing a note is legal on a pending step
-	// (what this lane is for), an in_progress one (the common case), a step
-	// parked in waiting_external or holding a reply card, and on a done or
-	// superseded one (correcting the record of what a finished step actually
-	// produced). The status machine governs the WORK; the note only describes
-	// it.
-	step.Note = note
-	if err := s.dal.PutTaskStep(*step); err != nil {
+	// (recording what the lane is for before it starts), an in_progress one (the
+	// common case), a step parked in waiting_external, one holding a reply card,
+	// and a done or superseded one. The status machine governs the WORK; the
+	// note only describes it.
+	//
+	// Note that the TASK-level terminal gate above still applies: once every
+	// step is done the task auto-closes, so a done step is writable while its
+	// task is still open and not after. That is the same line the artifact set
+	// draws — a closed task's record stops moving — and the tool description
+	// says so rather than promising a write that would 409.
+	ok, err := s.dal.SetTaskStepNote(step.ID, note)
+	if err != nil {
 		internalError(w, err)
 		return
 	}
-	// Nudge the cockpit so an open task card re-reads the step list. The task
-	// ROW is deliberately not rewritten: a note changes neither status nor
-	// priority nor progress, and PutTask is a whole-row upsert with no
-	// optimistic lock, so writing it here would add a read-modify-write race
-	// against every other task handler for the sake of a timestamp.
+	if !ok {
+		// The step existed a moment ago and does not now — a concurrent
+		// submit_plan deleted it. Honest 404 beats resurrecting the row.
+		writeError(w, http.StatusNotFound, "step '"+stepId+"' not found")
+		return
+	}
+	step.Note = note
+	// Move updated_ts so the cockpit actually shows this. The SSE task delta
+	// carries only id/status/priority and the list it refreshes carries no
+	// steps, so a card the owner ALREADY has open re-reads its step-bearing
+	// detail only when updated_ts changes. Without this bump the owner watching
+	// a live handover would see nothing until he collapsed and re-expanded the
+	// card — the one case this ticket exists to serve.
+	now := nowSecs()
+	if err := s.dal.TouchTaskUpdatedTS(t.ID, now); err != nil {
+		internalError(w, err)
+		return
+	}
+	t.UpdatedTS = now
 	s.publishTask(*t, requestTrigger(r))
 	writeJSON(w, http.StatusOK, taskStepNoteReceiptDTO{
 		TaskID: t.ID, StepID: step.ID, StepStatus: step.Status, Note: step.Note,
