@@ -9,3 +9,4 @@ dist-ssr
 # tracked — only the generated .cache and results dirs are ignored.
 playwright/.cache
 test-results/
+dist-paint-guard/

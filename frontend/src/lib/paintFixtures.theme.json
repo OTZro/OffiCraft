@@ -1,0 +1,8 @@
+{
+  "id": "midnight",
+  "name": "Midnight",
+  "colors": { "--color-bg": "#010203" },
+  "fonts": { "--font-sans": "system-ui, -apple-system, \"Segoe UI\", Roboto, sans-serif" },
+  "backgrounds": { "canvas": "data:image/png;base64,iVBORw0KGgo=" },
+  "backgroundModes": { "canvas": "cover" }
+}

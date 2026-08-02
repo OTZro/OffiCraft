@@ -1,6 +1,6 @@
 // 座艙 topbar 版本顯示 (T-e9d1 round 3 — owner final: the topbar shows NO build
 // identity at all; the unified v<yymmdd>-<hhmm>-<shortsha> label lives in
-// Settings › 軟體更新 only). Locked here: even a build with a resolved r-N
+// Settings › 系統更新與備份 only). Locked here: even a build with a resolved r-N
 // release tag renders no topbar version chip.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";

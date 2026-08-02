@@ -125,8 +125,8 @@ Model Context Protocol：成員**主動打 server 做事**的管道（`POST /api
 
 ## 更新與部署
 
-### 軟體更新（self-update）
-控制台 **設定 › 軟體更新** 裡有「檢查更新」與一鍵升級：從 **GitHub Releases** 下載、sha256 驗證後**原地抽換重啟**。
+### 系統更新與備份（self-update）
+控制台 **設定 › 系統更新與備份** 裡有「檢查更新」與一鍵升級：從 **GitHub Releases** 下載、sha256 驗證後**原地抽換重啟**。
 打開「自動更新」就在背景自動升級；「接收 Beta」= 也吃 GitHub 的 prerelease。**升級不必重跑安裝腳本。**
 
 ### webhook（回呼端點）

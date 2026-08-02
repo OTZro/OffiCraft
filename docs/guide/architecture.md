@@ -144,7 +144,7 @@ Mac 上跑，那台就裝好自己的 warden、加入同一間工作室。之後
 OffiCraft 用 **GitHub Release + 自我更新（self-update）** 出貨，不需要你重跑安裝腳本：
 
 1. 新版本發佈成一個 **GitHub Release**（beta 走 prerelease）。
-2. 你在控制台 **設定 › 軟體更新** 按「檢查更新」→ 一鍵升級：ocserverd 從 GitHub Releases **下載、sha256 驗證通過後
+2. 你在控制台 **設定 › 系統更新與備份** 按「檢查更新」→ 一鍵升級：ocserverd 從 GitHub Releases **下載、sha256 驗證通過後
    原地抽換重啟**。打開「自動更新」就在背景自動做這件事。
 3. server 升級後，機器上的 **warden 與 ocagent 也會跟著自我更新**（server 把新的 binary 發給它們，swap 掉舊的）。
 

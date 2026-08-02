@@ -40,8 +40,10 @@
 #                          wire-freeze gate on the server's REST surface)
 #   2. conformance lint  — the black-box iron rule (HTTP-only suite)
 #   3. repo hygiene      — path denylist + gitleaks secret scan (hard gate)
-#   4. frontend          — tsc typecheck + vitest (full unit suite) + Playwright
-#                          CT visual guards (real-browser layout, T-187c) + schema.ts
+#   4. frontend          — tsc typecheck + vitest (full unit suite, incl. the
+#                          T-1500 paint validator + build-artifact guards) +
+#                          Playwright CT visual guards (real-browser layout,
+#                          T-187c) + the T-1500 paint guards + schema.ts
 #                          drift vs spec/openapi.json (the M1 wire-freeze gate on
 #                          the FE contract)
 #   5. conformance suite — the full black-box behaviour suite against an isolated
@@ -126,10 +128,13 @@ fi
 # contacted. bin/tests/run.sh is the DISPATCHER for the bin/ guard suites; the
 # authoritative list of what it runs is that file itself, and the two that decide
 # whether a release can go out wrong are worth naming here:
-#   * bin/release publish/promote (release-guard.sh, T-588c) — the post-upload
+#   * bin/release publish/promote (release-guard.sh, T-588c + T-b65e) — the
+#     PRE-BUILD CI gate (publish runs THIS script on the tree it is about to
+#     ship, and refuses to build if it is not green) and the post-upload
 #     READ-BACK. One case per requirement, each violating exactly one, so a
 #     deleted check reddens here instead of shipping a half-populated,
-#     mis-targeted or draft release that nobody looked at.
+#     mis-targeted or draft release — or an unverified one — that nobody
+#     looked at.
 #   * bin/tests/ci-success-marker.sh — the guard-of-the-guard on the "[ci] all
 #     green" literal that this script's own authority rests on.
 # ⚠️ NOTHING here guards code signing any more: T-0398 deleted the signing
@@ -479,7 +484,15 @@ echo "[ci]   vitest run (frontend unit suite)"
 # already cached; the ||true keeps an offline autodeploy from failing on the
 # install probe, but a genuinely absent browser then fails the test run itself
 # (HARD, same discipline as go/gitleaks/npm — never a silent skip).
+# `test:ct` runs TWO Playwright configs (T-1500): the CT visual guards, then the
+# paint guards (playwright-paint.config.ts) — the pre-React theme paint measured
+# per animation frame against the REAL built artifact over HTTP, which CT's
+# component runner cannot host because it never produces a dist/index.html. They
+# share this step deliberately rather than adding a gate: the other two halves of
+# that guard (the record validator and the artifact shape) live in 4b above and
+# need no browser, so dropping any one step cannot take all three with it.
 echo "[ci]   playwright CT visual guards (real-browser layout — T-187c)"
+echo "[ci]   + paint guards (pre-React theme paint, real build + real frames — T-1500)"
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/Library/Caches/ms-playwright}"
 (cd "$FE" && npx --no-install playwright install chromium >/dev/null 2>&1 || true)
 (cd "$FE" && "$NPM" run --silent test:ct)

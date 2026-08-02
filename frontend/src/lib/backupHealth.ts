@@ -1,11 +1,11 @@
 // lib/backupHealth.ts — the ONE derivation from a backup-health answer to what
 // the cockpit says about it (T-da06).
 //
-// Two surfaces read `GET /api/backup-health`: the always-mounted topbar
-// indicator and the monitor page's 備份健康 card. They must never disagree, so
-// the mapping "(verdict, did the fetch fail?) → visual state / wording" lives
-// here exactly once — the same discipline as `presenceVisual` for the presence
-// dot.
+// One surface reads `GET /api/backup-health` today — the 備份健康 block under
+// 設定 › 系統更新與備份 (T-5e71 moved it there off the topbar + monitor page).
+// The mapping "(verdict, did the fetch fail?) → visual state / wording" still
+// lives here exactly once, which is why moving the surface cost no behaviour:
+// the same discipline as `presenceVisual` for the presence dot.
 //
 // 🔴 The floor is `unknown`, and `unknown` is NOT a quieter `healthy`. A load
 // that failed, a load still in flight, and a watchdog that has not evaluated

@@ -43,7 +43,15 @@ def main():
     cmd = sys.argv[2:]
 
     p = subprocess.Popen(cmd, start_new_session=True)
-    pgid = os.getpgid(p.pid)
+    # start_new_session=True makes the child call setsid(), so it IS its own
+    # session and group leader: its pgid is its pid, by definition. Do NOT ask
+    # the kernel for it (T-3e41): os.getpgid(p.pid) races the child — a child
+    # that exits before the call (e.g. `bash -c 'exit 0'`) makes getpgid()
+    # report ESRCH, which raised ProcessLookupError out of main() and killed
+    # run_bounded with rc 1. The caller then read that 1 as the CHILD's exit
+    # code, i.e. this primitive silently lied about the thing it exists to
+    # relay. Deriving the value removes the window instead of handling it.
+    pgid = p.pid
 
     def reap(grace=3.0):
         # TERM the whole group first (lets well-behaved children clean up), then

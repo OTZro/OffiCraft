@@ -16,8 +16,8 @@
 # OC_CODESIGN_*). All of it was deleted with the signing machinery itself
 # (owner ruling 2026-07-31: remove code signing entirely, manual escape hatch
 # included). The dispatch half of the file — including bin/tests/release-guard.sh,
-# which guards the post-upload READ-BACK of a release and has nothing to do with
-# signing — was deliberately kept.
+# which guards the pre-build CI gate and the post-upload READ-BACK of a release,
+# and has nothing to do with signing — was deliberately kept.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -90,19 +90,24 @@ else
   bad "bin/tests/port-default.sh is missing"
 fi
 
-# ── install.sh serve-plist claude stamp (T-ba62) ────────────────────────────
+# ── serve-plist runtime stamps: claude + codex, both installers (T-ba62/T-ff48) ─
 # Own file, own tempdir, same PATH-shim discipline. The stamp is what carries
-# PATH/OC_CLAUDE_BIN from the operator's interactive shell into the serve plist,
-# and from there (via bootstrap-here's env passthrough) into `ocwarden install`.
-# Losing it means every one-click host installs a warden that cannot resolve
-# claude — the silent failure this ticket closed.
+# PATH/OC_CLAUDE_BIN/OC_CODEX_BIN from the operator's interactive shell into the
+# serve plist, and from there (via bootstrap-here's env passthrough) into
+# `ocwarden install`. Losing it means the host installs a warden that cannot
+# resolve that runtime — the silent failure T-ba62 closed for claude on the
+# one-click path, and T-ff48 closed for codex on both paths. The suite covers
+# bin/install.sh hermetically and bin/ocserver through its render-serve-plist
+# seam; its central case asserts BOTH runtimes are rescued in the same host
+# situation, because a codex-only assertion goes green on a change that fixes
+# codex by breaking claude.
 CLAUDESTAMP="$HERE/install-claude-stamp.sh"
 echo
 if [[ -f "$CLAUDESTAMP" ]]; then
   if run_guard "$CLAUDESTAMP"; then
-    ok "install.sh serve-plist claude stamp suite passed"
+    ok "serve-plist runtime stamp suite passed"
   else
-    bad "install.sh serve-plist claude stamp suite FAILED (see output above)"
+    bad "serve-plist runtime stamp suite FAILED (see output above)"
   fi
 else
   bad "bin/tests/install-claude-stamp.sh is missing"
@@ -269,7 +274,7 @@ else
   bad "bin/tests/go-test-nocache-guard.sh is missing"
 fi
 
-# ── bin/release publish/promote read-back (T-588c) ───────────────────────────
+# ── bin/release publish/promote: CI gate + read-back (T-588c, T-b65e) ────────
 # Own file because it needs its own shim set (`gh`, `curl`) and its own fixture
 # git repo, and because what it guards is a different KIND of property: not "does
 # this script decide correctly" but "after the irreversible step, does it check

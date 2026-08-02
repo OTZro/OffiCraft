@@ -9,6 +9,13 @@ import type {
 import { api, type ServerSettingsView, type ServerSettingsPatch } from "../api";
 import { ApiError } from "../api/errors";
 import { useVersion } from "../hooks/useVersion";
+import { useBackupHealth } from "../hooks/useBackupHealth";
+import {
+  backupIndicatorState,
+  backupStatusLabel,
+  backupReasonText,
+} from "../lib/backupHealth";
+import { formatDuration } from "../lib/duration";
 import { formatBuildVersion } from "../lib/versionFormat";
 import { useGlobalContext } from "../hooks/useGlobalContext";
 import { useRoles } from "../hooks/useRoles";
@@ -765,7 +772,7 @@ function ServerParams({
   );
 }
 
-// ── 軟體更新 ────────────────────────────────────────────────────────────────
+// ── 系統更新與備份 ────────────────────────────────────────────────────────────────
 
 /**
  * HONEST software-update card (GitHub Releases, t-dc68). The version headline
@@ -1203,7 +1210,110 @@ function SoftwareUpdate({
           )}
         </div>
       )}
+
+      {/* ── 備份健康 (T-5e71, owner 2026-08-02) ── the backup verdict lives
+          HERE, under 系統更新與備份, and nowhere else: it used to sit on the
+          monitor page plus a topbar light, which the owner did not want. */}
+      <BackupHealthCard />
     </div>
+  );
+}
+
+/**
+ * 備份健康 block inside 系統更新與備份 (T-5e71) — the only surface that says
+ * whether the scheduled backup is still producing retreat points, and the only
+ * place that explains WHY it is not.
+ *
+ * Wording rules carried over from the monitor-page card it replaces:
+ *  - The primary sentence comes from the closed `code` vocabulary via i18n
+ *    (`backupReasonText`), never from the server's `detail`.
+ *  - `detail` IS shown — clearly labelled as the server's own diagnostic. It is
+ *    English engineer-facing text, so it is secondary, never the headline.
+ *  - `unknown` (and a failed load, and a load still in flight) renders muted,
+ *    never green. A retreat point we cannot see must not look like one we have.
+ */
+function BackupHealthCard() {
+  const { t } = useI18n();
+  const { health, loading, error } = useBackupHealth();
+  const d = t.backupHealth;
+  const state = backupIndicatorState(health, error);
+  const reason = backupReasonText(d, health, error);
+
+  // Elapsed since the incident opened, read off the render clock. The incident
+  // outlives a server restart (the server keeps `since_ts`), so a backup broken
+  // for three days still says three days on day three.
+  const nowSecs = Math.floor(Date.now() / 1000);
+  const sinceSecs =
+    health?.sinceTs != null ? Math.max(0, nowSecs - health.sinceTs) : null;
+
+  return (
+    <>
+      <h2 className="settings__title settings__title--doc">{d.title}</h2>
+      <div className="param-card" data-testid="set-backup-health">
+        {loading && !health && !error ? (
+          <div className="sw-backup sw-backup__reason">{d.loading}</div>
+        ) : (
+          <div className="sw-backup">
+            <div
+              className={`sw-backup__status sw-backup__status--${state}`}
+              data-testid="set-backup-status"
+              data-backup-state={state}
+            >
+              {backupStatusLabel(d, state)}
+            </div>
+            {/* Empty only when healthy — a healthy backup has no failure to
+                explain, and filler text there would dilute the red case. */}
+            {reason !== "" && (
+              <div className="sw-backup__reason" data-testid="set-backup-reason">
+                {reason}
+              </div>
+            )}
+            <div className="sw-backup__facts">
+              <div className="sw-backup__row">
+                <span className="sw-backup__label">{d.newestLabel}</span>
+                <span className="sw-backup__value" data-testid="set-backup-newest">
+                  {/* "Never" is a fact, not a missing value — it is precisely
+                      the never_ran alarm, so it gets words rather than a
+                      dash. */}
+                  {health && health.newestBackupAgeSecs != null
+                    ? `${formatDuration(health.newestBackupAgeSecs)} ${d.ago}`
+                    : health
+                      ? d.newestNever
+                      : "—"}
+                </span>
+              </div>
+              {sinceSecs != null && (
+                <div className="sw-backup__row">
+                  <span className="sw-backup__label">{d.sinceLabel}</span>
+                  <span className="sw-backup__value" data-testid="set-backup-since">
+                    {formatDuration(sinceSecs)}
+                  </span>
+                </div>
+              )}
+              {health && (
+                <div className="sw-backup__row">
+                  <span className="sw-backup__label">{d.staleAfterLabel}</span>
+                  <span className="sw-backup__value">
+                    {formatDuration(health.staleAfterSecs)}
+                  </span>
+                </div>
+              )}
+              {health && health.detail !== "" && (
+                <div className="sw-backup__row">
+                  <span className="sw-backup__label">{d.detailLabel}</span>
+                  <span
+                    className="sw-backup__value sw-backup__value--code"
+                    data-testid="set-backup-detail"
+                  >
+                    {health.detail}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 

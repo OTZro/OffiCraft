@@ -741,7 +741,11 @@ func (s *apiServer) HandleClaimMachineTokenApiMachinesClaimPost(w http.ResponseW
 //     `bin/ocserver install` / bin/install.sh stamped there for this hop).
 //   - OC_CLAUDE_BIN / OC_CODEX_BIN — the runtime-binary stamps that must survive
 //     the launchd-minimal env; without them the installed warden refuses every
-//     spawn (claude_bin_unresolved). Stamped into the serve plist for this relay.
+//     spawn of that runtime (claude_bin_unresolved / runtime_bin_unresolved).
+//     BOTH are stamped into the serve plist for this relay, by bin/install.sh and
+//     by bin/ocserver install alike — the codex half of that was missing until
+//     T-ff48, which is why a codex member could not spawn on a version-manager
+//     host whose claude worked. The guard is bin/tests/install-claude-stamp.sh.
 //   - OC_CLAUDE_CRED_CHECK — the advertised escape hatch for the spawn-time
 //     credential gate. A warden is a launchd job, so an operator's shell export
 //     reaches it ONLY through this relay.

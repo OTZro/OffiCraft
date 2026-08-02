@@ -360,6 +360,22 @@ DTO 長新欄位的那天過期)。**語料必須有 body + options + 綁任務�
   **26 請求 / 49,970 B → 1 請求 / 44,183 B** = 少 **25 個 RTT**、位元組只少 **11.6%**。
   慢線路上延遲就是全部成本;**不要把它講成「省流量」**。所以 `http.view-full.test.ts`
   **只數請求、沒有任何位元組斷言**(那會暗示一個幾乎不存在的節省)。
+  ⚠️ **上面那組是 owner 裁定當天、實作開始「之前」量的**(拿當時的 light+逐卡
+  hydrate 對照一個手動組出來的 atomic 回應)。**它不是事後實測,別再引用成事後實測。**
+  **改後實測(2026-08-02,真 ocserverd、隔離 port、fresh DB、母體量測當下重數
+  25 waiting / 15 answered / 10 expired,只換 `api/http.ts` 這一個變因)**:
+  | 情境 | 改前(light + 逐卡) | 改後(`view=full`) |
+  |---|---|---|
+  | 開頁:waiting pane | 26 請求 / 27,537 B | **1 請求 / 21,294 B** |
+  | 展開 handled、一則 delta | 54 請求 / 58,509 B | **3 請求 / 44,195 B** |
+  (請求數只算 `/api/reply-cards*`,`/count` 那一發兩邊都是 1、未計入。)
+  ⇒ 第二列**少 51 個 RTT、位元組只少 24.5%** —— 結論與上面同向:**價值在往返次數**。
+  ⚠️ **位元組不可與那組 49,970 / 44,183 直接相比**:舊 harness 未進 repo、
+  卡片語料無法重建,兩組的母體內容不同 ⇒ 只有**請求數**是可比的。
+  ✅ **「畫面內容不變」有畫面層證人了**:同一台 server、同一份 DB、同一份母體,
+  兩個 arm 各渲染一次 `RepliesPage`(waiting + 展開的 handled),正規化後的 DOM
+  **逐位元組相同**(121,588 B,sha 同);負對照(把 `view` 改成 `light`)DOM 掉到
+  56,528 B ⇒ 這個比較有鑑別力,不是恆真。
 - **①② 是同一個修改點**:waiting pane 與 近期已處理 pane 都走 `listReplyCards`
   (`useReplyCards` 呼叫三次:waiting / answered / expired)⇒ 一處改完,展開的
   等我回覆頁從每 delta 約 51 次往返收成 **3 個請求**。**收合時零成本那個 gate
@@ -1185,28 +1201,39 @@ T-081b 開放的葉子有好幾條是**句子片段**,邊界空白是有意義�
 
 ### 還剩下的、以及被撤回的成本紀錄
 
-- **當初做虛擬捲動的真正動機之一是「`ThemeSettings.test.tsx` 撞到 5000ms 逾時」,那個
-  機制隨全掛載回來了 —— 沒有測試被它打到,但餘裕變薄,所以那些測試現在自己宣告門檻**
-  (`EDIT_VIEW_TIMEOUT_MS = 20_000`,掛在**每一條會打開主題編輯視圖的** `it()` 上,
-  共 12 條;理由寫在該檔頂端)。**單獨跑**整份 22 條只要 **3.62s**、最慢單條 601ms,
-  但**整套並行的完整 CI** 下同一批要 3.4–6.3 秒。
-  🔴 **選 20s 的依據,以及一個必須修正的推論**:CI 上量到的最大值是
-  **6,334ms**(「stores a non-default lay-down mode…」,而且那一跑是**綠的**)。
-  ⚠️ **不可以拿它跟 5000ms 相減說「只剩 2% 餘裕」** —— vitest **report 的 duration 含
-  hooks,而 `testTimeout` 只綁 test body**。實測坐實(一次性探針,不是推論):
-  `beforeEach` 睡 3000 + body 睡 3000 ⇒ 報 **6,005ms 而且過**;body 單獨睡 5500 ⇒
-  **`Test timed out in 5000ms`**。所以 CI 上那些數字是 body 時間的**上界**
-  (RTL 的 auto-cleanup 要卸載 866 列,那是 hook),真正餘裕不明但確實薄。
-  20s ≈ 最大上界的 3 倍,留給更忙的機器;**寬鬆的天花板在這裡零成本**——它不會讓通過的
-  測試變慢,只影響「真的卡住」時多久才報。
-  ⚠️ **這是測試環境成本,不是使用者成本**,別拿這些數字當「拿掉虛擬捲動讓產品變慢」的證據
-  (真瀏覽器同一份 866 列是幾十毫秒等級)。根因面的工作是 **T-e2e9**,不在這裡。
-  機制本身要記住:dom-testing-library 的 `getByLabelText` 對每個 labelable 元素讀
-  `input.labels`,jsdom 每次都重走整份 document ⇒ N 個 input = 每次查詢 N 次全文件走訪
-  (profile 實測 top-2:`NodeList-impl._update` 1145ms + `form-controls.query` 551ms)。
+- 🔴 **那個逾時的根因查完了,修法是「把查詢縮小」,不是「把門檻放大」(T-e2e9,owner
+  裁定 `rc-cf2a2982f31d` 選①)。`EDIT_VIEW_TIMEOUT_MS = 20_000` 已整個刪除**,12 條
+  `it()` 全部回到 vitest 的 5000ms 預設。
+  **成本是查詢,不是 render,而且差三個數量級。同一個 `<select>`、同一次跑、866 列都掛著**:
+  | 取法 | 耗時 |
+  |---|---|
+  | `document.getElementById("ts-canvas-bg-mode")` | **0 ms** |
+  | `container.querySelectorAll("input")`(全部 866 個,走一次) | 119 ms |
+  | `within(<它所在那一列>).getByLabelText(…)` | **189 ms** |
+  | `utils.getByLabelText(…)`(整個 container) | **16,813 ms** |
+  兩次 label 查詢 = 29.5 秒 = 該條測試全程的 **82%**;真正 render 866 個 input 只佔 **9%**。
+  機制:dom-testing-library 的 label 查詢對每個 labelable 元素讀 `input.labels`,
+  jsdom 每次都重走整份 document ⇒ **O(N²)**。
+  🔴 **放大門檻被試過而且不夠**:5s → 20s 之後,在 `333045e` 上單檔跑 5 次仍 **3 次紅在
+  `Test timed out in 20000ms`**(seth-m5,load 81–252)。**別再往上加。**
+  ⚠️ **`it()` 報的 duration 含 hooks,`testTimeout` 只綁 body**(實測:`beforeEach` 睡
+  3000 + body 睡 3000 ⇒ 報 6,005ms 而且過;body 單獨睡 5500 ⇒ 逾時)。所以報出來的數字
+  是 body 的**上界**,別拿它直接減 5000 講餘裕。
+  ⚠️ 另一個會誤導的觀察:**耗時 38.9s / 42.6s 的跑反而通過、24.9s 的跑失敗**——逾時只在
+  `await` 邊界檢查,同步查詢不會被打斷,所以過不過取決於檢查落在哪個 await,與總耗時無關。
+  **這就是它看起來隨機的機制。**
   ⇒ **不要新增「在 866 列都掛著時對整個 container 跑 `getByLabelText` / `getByRole`」的
-  查詢**。現行寫法之所以便宜,是因為它們**先縮到一列**(`within(row).getByRole("textbox")`)
+  查詢**。現行寫法一律**先縮到一個小容器**(`ThemeSettings.test.tsx` 檔頭的 `colourRow` /
+  `canvasBgSlots` / `formActions` 三個 helper,以及 `within(row).getByRole("textbox")`)
   或直接 `querySelector('[data-wording-code=…]')`。照直覺改成整頁查詢就會把逾時招回來。
+  🔴 **縮小 scope,不要改用 id 定位。** `*ByLabelText` 除了找到元素,**本身就在證明
+  input 與它的 label 真的綁在一起**(讀屏軟體念得出欄位名靠的就是這個)。換成
+  `getElementById` 會快到 0 ms,但 label 綁錯或掉了測試照樣全綠——而 owner 撤回虛擬捲動
+  換回來的三個能力裡有兩個就是無障礙。縮 scope 不必付這個代價:每一處仍是 label 查詢。
+  唯一的例外是 `.ts-wording-search`(它的容器就是那 866 列,沒有更小的 scope),那一處
+  改成**斷言** `aria-label`,綁定仍有證人。
+  ⚠️ **這是測試環境成本,不是使用者成本**,別拿這些數字當「拿掉虛擬捲動讓產品變慢」的證據
+  (真瀏覽器同一份 866 列是幾十毫秒等級)。
 - 🔴 **舊文那個「~9 倍(5.13s → 0.543s)」是 jsdom 專屬的數字,永遠不准拿去講使用者體感**
   ——這條規則跟虛擬捲動一起留著,因為它是關於怎麼引用數字,不是關於實作。
 - ⛔ **已作廢、不要再引用的舊記載**:本檔上一版把「釘住的列 Tab 會掉出清單、讀屏序號跳回
@@ -1290,3 +1317,89 @@ theme.css 裡定義值是裸 `var(--other)` 的 token(分區三槽)是「跟隨�
 - **手機不受影響**(owner 特別交代):視窗 ≤1136px 時 gutter 歸零,三個分區的不透明
   底色蓋滿整幅,圖看不見也不影響版面;background 不參與 layout,所以不可能產生橫向捲動。
   實測 narrow 1440/1040/900/720/480/375 與 wide 1440/1280/1040 皆 h-scroll = 0。
+
+## 主題快取的三道守衛:三個宿主,零個新 CI 關卡(T-1500)
+
+pre-React 上色(`src/paint/prePaint.ts` 由 `vite.config.ts` 的 `inlinePrePaint()`
+編成 IIFE inline 進 `index.html`)有三個**互不重疊**的性質要守。它們刻意**分住三處**
+——設計原本要開一個新的 `4b4` 一次跑完,但那樣「一個關卡被砍掉、三道守衛同時消失」:
+1. **記錄驗證** → `src/lib/themePaint.test.ts`(jsdom,既有 4b)。
+2. **產物形狀** → `src/lib/paintArtifact.test.ts`(jsdom + 一次 `vite build`,既有 4b,
+   **不需要瀏覽器**)。
+3. **真實載入的每一幀** → `paint-guards/*.paint.spec.ts`(真 Chromium,
+   `playwright-paint.config.ts`,由 `npm run test:ct` 串在既有 4c 之後)。
+
+`MALICIOUS_PAINT_CASES` / `VALID_RICH_BUNDLE` 的**權威定義**在 `src/lib/paintFixtures.ts`,
+jsdom 與瀏覽器兩層共用 ⇒ 加一個 payload 兩層同時守得到。
+⚠️ 但**不是「全世界只有一份」**:`src/lib/paintFixtures.theme.json` 是給 stub 伺服器吃的
+twin(它是 JSON、不能 import TS)。那份 twin 由 `themePaint.test.ts` 的
+「matches the JSON copy the stub server serves」做 deep-compare 守著,所以漂了會紅
+——但別把它講成不存在,下一個人會照著「只有一份」的字面去改其中一邊。
+
+🔴 **兩層各擋哪顆 mutant,別記反(獨立覆核實測)**:
+- **挖掉 `readValidatedPaint` 本身** → `themePaint.test.ts` 紅 6 + `paintCache.test.tsx` 紅 4。
+- **驗證器留著,只讓 inline script 繞過它** → **jsdom 三個檔 40/40 全綠、tsc 乾淨**,
+  只有 `payloadInjection.paint.spec.ts` 紅 5(6 個 payload 中的 5 個;第 6 個是 CSSOM
+  擋的、fixture 自己標了不算覆蓋)。
+⇒ **jsdom 那層擋不住 inline 繞過。** 這句話的用途是擋掉「jsdom 已經守住了,4c 可以砍」
+這個推論——那正是想省成本時最容易講出口的一句話。
+
+### 🔴 frame 量測一律在「登入態 + 伺服器認得該主題」下做,而且要**斷言**它成立
+`reconcileFromServer()` 在 `i18n/index.tsx` 是 `if (hasToken())` 閘住的。**沒有 token
+⇒ reconcile 永不執行 ⇒ `themesLoaded` 永遠 false ⇒ 只有「保留快取」那一條分支被跑到。**
+實測同一個 build:沒種 token 讀 `BAD_FRAMES=0`,種了 token 讀 **231/233/249**
+(伺服器不認得該主題 ⇒ `writePaint(active, [])` 把記錄**刪掉**)。
+- ⇒ `zeroFlash.paint.spec.ts` 每條測試都**在頻帶內證明前提**:`/api/settings` 真的回過
+  200、body 真的帶著這個主題、而且**播下去的記錄用的是不同的 `name`,跑完必須變成伺服器
+  那個 name**——只有 reconcile 真的跑完才會成立。前提不成立就以 setup error 紅掉,
+  不准空跑變綠。**meta-mutant 驗過**:把種 token 那行拿掉 ⇒ 紅在
+  「GET /api/settings never answered 200」。
+- ⇒ 量測用的 build 是 **`VITE_USE_MOCK=false`**(`bin/build` 出貨的那個)。預設 build 帶
+  的是 in-memory mock,`custom_themes` 恆為 `[]` 且 0 ms 回話——**節流對它完全無效**,
+  而這張票要修的閃爍窗**就是**等 `/api/settings` 的那段。伺服器由
+  `paint-guards/settingsStub.mjs` 扮,`--delay 400` 不是填充,是那個窗本身。
+- ⚠️ mock **無法**用來測 happy path:`mockServerSettings` 是 module-level、每次重整就重置,
+  所以「重整後伺服器仍記得這個主題」在 mock 下不可能發生。
+
+### 🔴 正向斷言:要驗「該套上的真的套上了」,不是「不含某個值」
+只驗「某個禁字沒出現」的套件,會被**「applier 靜默不再套用 fonts 與 canvas」**整個繞過
+——實測那顆 mutant 通過 tsc、build、產物 A–E、`paintCache.test.tsx` 的決策測試,以及一套 6 case 的
+absence-only 瀏覽器探針,**6/6 全綠**。所以 `VALID_RICH_BUNDLE` 一定帶
+colours **＋ fonts ＋ canvas 圖 ＋ canvas mode**,`EXPECT_APPLIED` / `EXPECT_APPLIED_VALUES`
+逐條斷言它們真的到 DOM。
+- **而且要歸因給 inline script**:`frameCarryingBeforeMount()` 要求那些值出現在
+  **React 還沒 mount** 的幀上。裸的 `frameCarrying` 分不出 inline script 與 React 自己那條
+  `!themesLoaded` fallback(它也呼叫 `readValidatedPaint()`)——實測 inline plugin 整個拿掉,
+  裸版正向控制**照樣綠**。
+- ⚠️ 這條需要**節流**才量得到:未節流時 React 早於 sampler 的第一個 rAF 就掛載完
+  (實測第一筆取樣在 24.4 ms、`mounted` 已是 true),pre-mount 幀數為 **0**、斷言無從成立。
+
+### 🔴 探針必須有 exit code,而且「取樣數」要有下限不是 `> 0`
+- 前一代 frame 探針**只 `console.log` 數字、零個 `process.exit`**:實測 `BAD_FRAMES=1`
+  而 shell exit code **0** ⇒ 接進 `set -e` 的 CI 永遠綠。現在寫成 Playwright spec,
+  exit code 由 runner 保證。
+- `SAMPLES > 0` **擋不住**上一輪真正燒到的那個失效:把逐幀改成「載入後單次讀」,
+  `SAMPLES=1` 仍 `> 0`,而同一顆 mutant H 從 4 紅變 **6/6 假綠**。所以門檻是
+  `MIN_SAMPLES`(80;健康的 3 秒窗是 200–260 幀)。**meta-mutant 驗過**:把 rAF 的
+  re-arm 拿掉 ⇒ 11 條全紅、訊息是「only 1 frames sampled」。
+- `({}).polluted === undefined` 是**恆真**的(applier 只呼叫 `setProperty`,沒有任何以
+  payload 為鍵的賦值 sink;連驗證全拔的 mutant H 六個 case 都是 false)。它留著只為了
+  「哪天這件事不再成立時被看到」,**不計入覆蓋**,註解已寫明。
+
+### 注入案例要跑在「伺服器不認得任何主題」那台(:4319)
+對著 happy-path 那台跑會有三條假紅:那台會回真主題,React 於是**合法**套上
+`--canvas-bg-image` 與 `--color-bg: #010203`(實測 ~2038 ms),而那正是 `svg-canvas-bg` /
+`illegal-canvasMode` / wording 三個 case 的禁字 ⇒ 斷言分不出「pre-paint 洩漏」與
+「伺服器給了真主題」。`custom_themes: []` 那台上,自訂屬性的唯一寫入者就只有 pre-paint,
+每次出現都可歸因。
+
+### 儲存鍵只有一份:斷言在**原始碼**上,不只在產物上
+產物斷言「找模組裡 `LS_THEME` 的值」只抓得到**兩步**漂移(先改回寫死字面量、再改常數值)。
+**單步**——`prePaint.ts` 改回 `localStorage.getItem("oc.theme")`、乾淨移除 import、常數不動
+——實測 tsc / build / 產物斷言**全綠**。所以 `paintArtifact.test.ts` 另外直接掃
+`prePaint.ts` 與 `i18n/index.tsx` 的原始碼,禁止出現 `"oc.theme"` / `"oc.themePaint"`
+字面量,在還來得及 review 的那一步就紅。
+**探針自己也不准寫死鍵**:`frameProbe.ts` 的 `seedSession()` / `readStoredPaint()` 從
+`api/auth` 的 `TOKEN_KEY` 與 `lib/themePaint` 的 `LS_THEME` / `LS_THEME_PAINT` 取值,
+再當參數送進 `page.evaluate`。自帶一份 `"oc.theme"` 的探針在改名後**照樣綠**
+——它只是在種一個沒人讀的鍵,然後斷言它從沒種進去的主題沒有出現。

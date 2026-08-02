@@ -1,20 +1,20 @@
-// The always-mounted 備份健康 indicator in the topbar (T-da06).
+// The topbar carries NO 備份健康 indicator (T-5e71, owner 2026-08-02).
 //
-// 🔴 WHY IT IS IN THE TOPBAR AND NOT ONLY ON THE MONITOR PAGE (owner ruling,
-// rc-61414359d85a): the failure this ticket removes is one nobody goes looking
-// for. A backup that quietly stopped is only discovered by someone who already
-// needed the retreat point — by then the discovery is worthless. Putting the
-// verdict on a page you have to visit reproduces the same defect one click
-// further away, so the indicator is mounted app-wide and the monitor card only
-// answers WHY.
+// T-da06 mounted a backup light in the topbar app-wide, on an earlier owner
+// ruling (rc-61414359d85a) that a verdict on a page you have to visit is one
+// nobody reads. The owner then SAW it and reversed himself
+// (rc-5ef6f1319f27, option ①): the verdict moves under 設定 › 系統更新與備份
+// and the topbar icon goes away. The earlier reasoning is not refuted — the
+// discoverability cost is real, and accepting it is his call, not ours.
 //
-// Locked here: it is present on every page, it never shows green unless the
-// server actually said healthy, and clicking it lands on the monitor page.
+// Locked here: no backup control in the topbar, on any tab. This is an absence
+// test, so it asserts the RENDERED topbar, not an import list — put the button
+// back and it goes red.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { I18nProvider } from "./i18n";
-import type { BackupHealthView } from "./types";
+import { zh } from "./i18n/locales/zh";
 
 // Sibling mount-fetch hooks and heavy page bodies are irrelevant to the topbar
 // under test — same seam as App.topbar-version.test.tsx.
@@ -35,30 +35,7 @@ vi.mock("./components/MonitorPage", () => ({
 }));
 vi.mock("./components/SettingsPage", () => ({ SettingsPage: () => null }));
 
-const state = { health: null as BackupHealthView | null, error: false };
-vi.mock("./hooks/useBackupHealth", () => ({
-  useBackupHealth: () => ({
-    health: state.health,
-    loading: false,
-    error: state.error,
-    refresh: () => {},
-  }),
-}));
-
 import App from "./App";
-
-function healthy(): BackupHealthView {
-  return {
-    status: "healthy",
-    code: "",
-    detail: "",
-    newestBackupTs: 1785600000,
-    newestBackupAgeSecs: 3600,
-    staleAfterSecs: 43200,
-    sinceTs: null,
-    checkedTs: 1785603600,
-  };
-}
 
 function renderApp() {
   return render(
@@ -68,60 +45,36 @@ function renderApp() {
   );
 }
 
-describe("topbar · backup health indicator", () => {
+describe("topbar · no backup indicator", () => {
   beforeEach(() => {
     window.location.hash = "";
-    state.health = healthy();
-    state.error = false;
   });
 
-  it("goes red when the server says the backup is failing", async () => {
-    state.health = {
-      ...healthy(),
-      status: "unhealthy",
-      code: "never_ran",
-      detail: "no scheduled backup has ever landed",
-      newestBackupTs: null,
-      newestBackupAgeSecs: null,
-      sinceTs: 1785600000,
-    };
-    renderApp();
-    const btn = await screen.findByTestId("topbar-backup-health");
-    expect(btn.dataset.backupState).toBe("unhealthy");
-    // The accessible name must carry the alarm too: an icon-only red square is
-    // invisible to a screen reader, and this indicator's entire job is to be
-    // noticed.
-    expect(btn.getAttribute("aria-label")?.trim()).not.toBe("");
+  it("renders no backup control in the topbar", () => {
+    const utils = renderApp();
+    expect(screen.queryByTestId("topbar-backup-health")).toBeNull();
+    const actions = utils.container.querySelector(".topbar__actions");
+    expect(actions).toBeTruthy();
+    expect(actions?.querySelector(".backup-indicator")).toBeNull();
+    // Nothing in the topbar spells the verdict out either — the accessible
+    // names of the removed light were exactly these three status strings.
+    expect(screen.queryByLabelText(zh.backupHealth.statusHealthy)).toBeNull();
+    expect(screen.queryByLabelText(zh.backupHealth.statusUnhealthy)).toBeNull();
+    expect(screen.queryByLabelText(zh.backupHealth.statusUnknown)).toBeNull();
   });
 
-  it("is green ONLY when the server said healthy", async () => {
-    renderApp();
-    const btn = await screen.findByTestId("topbar-backup-health");
-    expect(btn.dataset.backupState).toBe("healthy");
-  });
-
-  it("shows 'cannot tell' — not green — when the verdict is unknown or unavailable", async () => {
-    state.health = null;
-    state.error = true;
-    const { unmount } = renderApp();
-    let btn = await screen.findByTestId("topbar-backup-health");
-    expect(btn.dataset.backupState).toBe("unknown");
-    unmount();
-
-    // The server answering "unknown" is the other half of the same rule.
-    state.error = false;
-    state.health = { ...healthy(), status: "unknown" };
-    renderApp();
-    btn = await screen.findByTestId("topbar-backup-health");
-    expect(btn.dataset.backupState).toBe("unknown");
-  });
-
-  it("takes the owner to the monitor page, where the card says why", async () => {
-    state.health = { ...healthy(), status: "unhealthy", code: "stale" };
-    renderApp();
-    fireEvent.click(screen.getByTestId("topbar-backup-health"));
-    await waitFor(() => {
-      expect(screen.getByTestId("monitor-page-body")).toBeTruthy();
-    });
+  it("still renders no backup control after navigating to the monitor tab", async () => {
+    const utils = renderApp();
+    fireEvent.click(screen.getByText(zh.nav.monitor));
+    // Navigation goes through the URL hash, so the new page lands on a later
+    // tick — assert it arrived, otherwise "no indicator" would pass on a page
+    // that never changed.
+    await waitFor(() =>
+      expect(screen.getByTestId("monitor-page-body")).toBeTruthy(),
+    );
+    expect(screen.queryByTestId("topbar-backup-health")).toBeNull();
+    expect(
+      utils.container.querySelector(".topbar__actions .backup-indicator"),
+    ).toBeNull();
   });
 });

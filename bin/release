@@ -28,6 +28,13 @@
 #                   from the commit you named, and the worktree is verified to be
 #                   at that commit and pristine before anything is built. The
 #                   invoking worktree is never built in and never mutated.
+#   2b. CI GATE   — full `bin/ci.sh` INSIDE that staging worktree, i.e. on the
+#                   exact tree about to ship, before anything is built. rc must
+#                   be 0 AND the log's last line exactly `[ci] all green` AND no
+#                   tracked file may have moved; evidence goes to a per-run
+#                   directory under the output dir. Not green ⇒ nothing is built,
+#                   packaged, uploaded or tagged. There is NO skip switch (owner
+#                   ruling, card rc-ffb4b06ad1d9) — see run_release_ci.
 #   3. build      — OC_APP_VERSION=<tag> bin/build inside the staging worktree:
 #                   frontend SPA (VITE_USE_MOCK=false) + seeds + fresh
 #                   ocwarden/ocagent (bindist) all EMBEDDED into .deploy/ocserverd,
@@ -71,7 +78,9 @@
 #
 # --dry-run stops after step 5 and prints the exact upload command it would have
 # run. That is the shape used to rehearse a release, because steps 6-8 mutate
-# GitHub and must only ever be run for real by the person actually shipping.
+# GitHub and must only ever be run for real by the person actually shipping. It
+# DOES run the CI gate — a rehearsal that skipped the gate would not rehearse the
+# step most likely to stop the release.
 #
 # ── promote ─────────────────────────────────────────────────────────────────
 # Turns an EXISTING, ALREADY-VERIFIED prerelease into the final release. It
@@ -104,11 +113,12 @@
 #   OC_RELEASE_SITE       station base URL polled in step 8 (default: http://127.0.0.1:7755)
 #   OC_RELEASE_SETTLE_TRIES / OC_RELEASE_SETTLE_SLEEP   step-8 polling budget
 #
-# There is deliberately NO "override the build command" knob. Step 3 runs
-# `$STAGE/bin/build` — a path INSIDE the staging worktree — so OC_RELEASE_SRC
-# pointing at a small fixture repo that carries its own bin/build is already
-# enough to drive steps 4-8 hermetically, and it exercises the REAL build
-# invocation instead of bypassing it.
+# There is deliberately NO "override the build command" knob, and none for the CI
+# gate either. Step 2b runs `$STAGE/bin/ci.sh` and step 3 runs `$STAGE/bin/build`
+# — both paths INSIDE the staging worktree — so OC_RELEASE_SRC pointing at a small
+# fixture repo that carries its own bin/ci.sh and bin/build is already enough to
+# drive steps 2b-8 hermetically, and it exercises the REAL invocations instead of
+# bypassing them.
 #
 # ── SOURCEABLE ──────────────────────────────────────────────────────────────
 # Dispatch is guarded by "am I being executed", so bin/tests/release-guard.sh can
@@ -213,6 +223,12 @@ cmd_publish() {
     || fail_item staging-commit "staging worktree is at $STAGE_SHA, not the requested $SHA."
   [[ -z "$(git -C "$STAGE" status --porcelain)" ]] \
     || fail_item staging-clean "staging worktree is not pristine at $SHORT (a fresh checkout must be clean)."
+
+  # 2b. THE RELEASE GATE — full CI on the exact tree that is about to ship.
+  #     Deliberately placed HERE: after the staging worktree has been proven to
+  #     be at $SHA and pristine, and BEFORE anything is built, packaged, uploaded
+  #     or tagged. See run_release_ci for why this tree and not some other one.
+  run_release_ci "$STAGE" "$SHA" "$SHORT"
 
   # 3. build. bin/build owns the embed ordering (SPA -> webdist, seeds ->
   #    seedsdist, fresh ocwarden/ocagent -> bindist, then the ocserverd build
@@ -330,6 +346,117 @@ cmd_promote() {
 # ═══════════════════════════════════════════════════════════════════════════
 # verification helpers
 # ═══════════════════════════════════════════════════════════════════════════
+
+# run_release_ci <stage> <sha> <short> — THE release gate (T-b65e).
+#
+# WHY THIS EXISTS. Merging was deliberately loosened (cloud gate green ⇒ press
+# it); the real gate moved HERE, to publish time. That makes this the ONLY
+# behavioural verification a beta gets, because a prerelease is picked up by the
+# station's own auto_update and goes live by itself — there is no second door
+# downstream. Before this, `bin/release` ran no CI at all: it verified that the
+# package was well-formed, not that the software worked, and "run full CI before
+# publishing" was a habit somebody had to remember.
+#
+# WHY THIS TREE. It runs `$STAGE/bin/ci.sh` — inside the throwaway staging
+# worktree, which the two checks immediately above have just proven is at $SHA
+# and pristine. So the thing being validated IS the tree about to be built and
+# shipped, not "a green run that happened on this machine at some point". Two
+# consequences fall out for free:
+#   * the CI lock (bin/lib/ci-lock.sh) is per WORKING COPY and derived from the
+#     script's own location, so this run locks the THROWAWAY worktree and the
+#     invoking clone is never wedged. That much is measured (docs/dev/
+#     ci-parallelism.md: two worktrees take two different locks).
+#     ⚠️ What is NOT measured is the step after it: nobody has ever run two FULL
+#     CI rounds concurrently across two worktrees of one clone, and that is
+#     exactly what happens if somebody publishes while a `bin/ci.sh` is running
+#     in the invoking clone. The lock will not refuse it; whether the shared
+#     `.git` (index.lock, worktree-specific layout) survives it is an open
+#     question — see docs/dev/ci-parallelism.md, which says to MEASURE before
+#     relying on it. Failing there is loud (a red CI ⇒ no release), not silent.
+#   * `git worktree add --detach` already refuses to reuse a path, so there is no
+#     way for this to validate a leftover tree.
+#
+# WHY IT CANNOT BE SATISFIED CHEAPLY. Three independent things are required, and
+# each one alone is known to be forgeable:
+#   * rc == 0, taken from ci.sh ITSELF via PIPESTATUS (not from `tee`, and not
+#     from the pipeline — a `set -e` swallowing a captured rc is exactly how a
+#     failure signal has silently disappeared in this repo before);
+#   * the LAST line of the whole log is exactly `[ci] all green`. Not a grep:
+#     step 0 prints that same string on its own, so any exploded log already
+#     contains it, and a dispatched lane can `echo "[ci] all green"; exit 1`;
+#   * the tree is still byte-identical afterwards (tracked files only — CI
+#     legitimately rebuilds node_modules and stages dist artifacts, both
+#     untracked/ignored, and the build about to run creates plenty more).
+# Evidence lands in a PER-RUN unique directory whose creation is `mkdir` without
+# -p, so a name collision is a hard error rather than a run quietly adopting
+# somebody else's log.
+#
+# WHICH WAY IT FALLS OVER. Every failure mode above aborts BEFORE the build, so
+# nothing is built, packaged, uploaded or tagged: breaking this gate makes
+# publishing FAIL LOUDLY. The failure shape worth fearing is the silent one —
+# publishing anyway without verifying — and no path here reaches it. That is
+# also why there is NO skip switch: the owner ruled on card rc-ffb4b06ad1d9 that
+# this gate has no exceptions (same stance as the CI lock's deliberate absence of
+# a bypass). Do not add one because a caller looked like it wanted one.
+run_release_ci() {
+  local STAGE="$1" SHA="$2" SHORT="$3"
+  local dir log start rc=0 last
+
+  # sha + UTC second + THIS process's pid. The pid is what actually makes it
+  # unique (two publishes in the same second are two processes); `mkdir` without
+  # -p is the arbiter that turns a collision into a hard stop instead of a run
+  # writing its verdict into somebody else's directory. The error is NOT
+  # swallowed — a permission/ENOSPC failure must say so rather than be reported
+  # as a collision.
+  dir="$OUT/ci/$SHORT-$(date -u '+%Y%m%dT%H%M%SZ')-$$"
+  mkdir -p "$OUT/ci" \
+    || fail_item ci-evidence "could not create $OUT/ci — there is nowhere to record this run's CI verdict."
+  mkdir "$dir" \
+    || fail_item ci-evidence "could not create the per-run CI evidence directory $dir (it already exists, or the filesystem refused) — refusing to run without somewhere of its own to write the verdict."
+  start="$dir/.start"
+  : > "$start"
+  log="$dir/ci.log"
+
+  say "CI gate: bash bin/ci.sh in the staging worktree at $SHORT"
+  say "  evidence: $log"
+  # PIPESTATUS[0] is ci.sh's own rc. `set +e` around the pipeline keeps a red CI
+  # from tripping `set -e` before this function can name the item that failed.
+  set +e
+  ( cd "$STAGE" && bash "$STAGE/bin/ci.sh" ) 2>&1 | tee "$log"
+  rc="${PIPESTATUS[0]}"
+  set -e
+
+  [[ -f "$log" ]] \
+    || fail_item ci-evidence "the CI log $log was never written — this run produced no verdict to read."
+  # Belt-and-braces, and honestly redundant today: the directory above is proven
+  # new, so a log predating this run cannot be in it. It is kept because the
+  # cheap failure it catches (a verdict read out of a stale file) is the exact
+  # mistake a future change to the naming scheme would reintroduce silently.
+  # "Not older" rather than "strictly newer" — the two files are created moments
+  # apart and timestamp granularity must not redden a fast run.
+  [[ ! "$log" -ot "$start" ]] \
+    || fail_item ci-evidence "the CI log $log is older than this run's start marker — it is not this run's log."
+
+  [[ "$rc" == "0" ]] \
+    || fail_item release-ci "full CI FAILED (rc=$rc) on $SHORT — nothing has been built, packaged or uploaded. Read $log."
+  # ONE occurrence of the authority literal in this file, and it is a comparison.
+  # bin/tests/ci-success-marker.sh scans every shell source for that literal and
+  # pins exactly this shape here — the message below deliberately does NOT quote
+  # the marker back, so nothing in this file can ever print it.
+  last="$(tail -n 1 "$log")"
+  [[ "$last" == '[ci] all green' ]] \
+    || fail_item release-ci "full CI exited 0 but its last line is '$last', which is not the green verdict bin/ci.sh ends with — this tree is NOT cleared to ship. Read $log."
+
+  # CI regenerates five committed files in place and byte-compares them; if any
+  # tracked byte moved, the tree about to be built is no longer the commit that
+  # was just validated.
+  [[ -z "$(git -C "$STAGE" status --porcelain --untracked-files=no)" ]] \
+    || fail_item ci-tree-dirty "the staging worktree has MODIFIED tracked files after CI — the tree about to be built is no longer $SHORT."
+
+  # Deliberately does not echo the verdict line back: this file must never be
+  # ABLE to print the CI authority (bin/tests/ci-success-marker.sh pins that).
+  say "  CI green on $SHORT (rc=0, verdict line matched, tree unchanged)"
+}
 
 # verify_artifacts <tag> <sha> <short> <name> — everything checkable locally,
 # before a single byte is uploaded.
@@ -551,11 +678,14 @@ owner password.
 
 Once that password is set the server finishes setup ITSELF: it installs this
 machine's warden and brings your assistant online, so you land on a working
-studio rather than an empty cockpit. That needs a working, LOGGED-IN \`claude\`
-CLI (and \`tmux\`) on this machine; if either is missing the setup fails
-loudly and the cockpit shows exactly why, instead of installing a warden that
-would refuse every spawn. If \`claude\` lives behind a version manager
-(asdf/nvm/volta), re-run with \`OC_CLAUDE_BIN=/absolute/path/to/claude\`.
+studio rather than an empty cockpit. That needs \`tmux\` plus a working,
+LOGGED-IN agent runtime — \`claude\` or \`codex\` — on this machine; if that is
+missing the setup fails loudly and the cockpit shows exactly why, instead of
+installing a warden that would refuse every spawn. Whichever runtimes are
+found are recorded in the service config, so members of either kind can start.
+If a runtime lives behind a version manager (asdf/nvm/volta), re-run with
+\`OC_CLAUDE_BIN=/absolute/path/to/claude\` or
+\`OC_CODEX_BIN=/absolute/path/to/codex\`.
 
 Already have OffiCraft installed? The installer detects it, warns, and asks
 before overwriting (\`--force\` skips the prompt in scripts). If a service is

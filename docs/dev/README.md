@@ -139,6 +139,9 @@ bin/release promote <tag>                       [--dry-run]
 ```
 
 - `publish` 從 `<sha>` 切一個**丟棄式 detached staging worktree**(不是「當前 tree 乾淨就好」——bytes 來自你指名的那個 commit),在裡面 build、打包、**上傳前先驗 artifact**(tarball member list、三顆 binary 的 arm64 mach-o、從 `go version -m` 讀 ocserverd 真正被 link 進去的 `appVersion`/`buildSHA`、`shasum -c`),然後**一次** `gh release create --prerelease --target <sha>` 帶齊三個 asset(所以不存在「release 已建立但 asset 只上傳一半」的視窗)。
+- 🔴 **`publish` 在 build 之前會先在那個 staging worktree 裡跑一次完整 `bin/ci.sh`,不綠就不發(T-b65e,owner 2026-08-02 明令)**。驗的是**即將出貨的那一棵樹**,不是「這台機器上碰巧有一份綠的紀錄」:rc 取自 `ci.sh` 自己、log **末行**必須精確等於 `[ci] all green`、跑完 tracked 檔不得有任何變動,證據落在 `dist/release/ci/<short>-<utc>-<pid>/ci.log`(per-run 唯一目錄,`mkdir` 非 `-p`,撞名硬錯)。任何一項不過 ⇒ 以非零退出中止,**不 build、不打包、不上傳、不打 tag**。為什麼要有這道閘:合併端已放寬(雲端門禁過就按),而 beta 會被站台的 auto_update 自己撿去上正式站 ⇒ **這是上線前唯一一道行為驗證**。⚠️ **沒有跳過開關,也不要加**(owner 卡 `rc-ffb4b06ad1d9` 拍板,與 CI 互斥鎖「刻意不留 bypass」同一立場)。`--dry-run` **照跑**這道閘——彩排不跑最可能擋下發版的那一步就不算彩排。
+  - **代價要知道**:staging worktree 是全新 checkout,所以那一輪 CI 沒有 `node_modules` 可重用——完整 `npm ci` + 四個 Go module 的 `-count=1` 測試 + Playwright CT + conformance,**估 10 分鐘以上**,而且需要網路、gitleaks、Playwright 瀏覽器快取。`--dry-run` 彩排現在一樣貴。證據目錄**不會自動清理**(每次 publish/彩排留一份完整 CI log 在 `dist/release/ci/`,gitignored,自己看著清)。
+  - `promote` **刻意不再驗一次**:它不重 build,出貨的 bytes 就是那顆 beta 已經被這道閘驗過的 bytes;再跑一輪只是換一棵樹重驗,不會更真。
 - `promote` 把**既有且已驗過**的 prerelease 翻成正式版,**不重 build**——大家測的 bytes 就是出貨的 bytes。翻完回讀,若 asset 集合在翻的過程中變了(有人偷偷重傳)那是**失敗**,不是警告。
 - `--dry-run`:build + 驗完就停,印出它本來會跑的上傳指令,**什麼都不上傳**。彩排用這個。
 

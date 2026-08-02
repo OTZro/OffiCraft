@@ -2,7 +2,7 @@
 // page (T-9aa5).
 //
 // Bug (owner, desktop, v0.5.22): the 使用說明 list content sat ~48px to the RIGHT
-// of 軟體更新 / 角色 / 參數. Root cause: the v0.5.19/T-23df reading measure block
+// of 系統更新與備份 / 角色 / 參數. Root cause: the v0.5.19/T-23df reading measure block
 // (`.guide-view { padding: 20px }` + `.guide-view .set-entries/.settings__title
 // { max-width: 900px; margin-inline: auto }`) was scoped to `.guide-view`, which
 // the LIST inherits as well as the doc view — so the list menu was centred in a

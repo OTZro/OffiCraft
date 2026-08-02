@@ -1,6 +1,6 @@
 // Story — the product-guide LIST page (使用說明 章節首頁) rendered against the REAL
 // app shell + sheets, ALONGSIDE a bare `.settings` reference surface (the shape
-// every OTHER settings page uses: 軟體更新 / 角色 / 參數 landing), so a CT can
+// every OTHER settings page uses: 系統更新與備份 / 角色 / 參數 landing), so a CT can
 // measure whether the guide list's content left edge is FLUSH with the others.
 //
 // Owner (desktop, v0.5.22 / T-9aa5): the 使用說明 LIST content sat ~48px to the
@@ -53,7 +53,7 @@ export function GuideListFlushLeftStory() {
           </div>
         </div>
 
-        {/* REFERENCE — a bare `.settings` landing, the shape 軟體更新 / 角色 /
+        {/* REFERENCE — a bare `.settings` landing, the shape 系統更新與備份 / 角色 /
             參數 use. This is the pixel target the list must match. */}
         <div className="settings" data-testid="settings-ref">
           <Breadcrumbs items={[{ label: "設定" }]} />

@@ -21,54 +21,93 @@ import { setToken, clearToken } from "../api/auth";
 
 const SENTINEL = "偽造";
 
-// Every test that opens the theme EDIT view mounts the whole 用詞 list — all 866
-// controlled inputs, because the wording list shares one form with the colour and
-// font fields (see ThemeSettings.tsx: the list is deliberately NOT virtualised,
-// owner ruling 2026-08-02). In jsdom that is expensive enough to sit uncomfortably
-// close to vitest's 5000ms DEFAULT, so those tests state a threshold instead of
-// inheriting one that was never chosen for them.
+// ── Why this file never runs a *ByLabelText / *ByRole query against the whole
+// container once the EDIT view is open (T-e2e9; owner ruling rc-cf2a2982f31d) ──
+//
+// Opening the edit view mounts the whole 用詞 list — all 866 controlled inputs,
+// because that list shares one form with the colour and font fields (the list is
+// deliberately NOT virtualised, owner ruling 2026-08-02).
+//
+// dom-testing-library's label lookup walks every labelable element and reads
+// `input.labels`; jsdom answers each of those by re-walking the entire document.
+// N inputs therefore cost N document walks PER QUERY — O(N²). Measured on this
+// very form, same element, same run:
+//
+//     document.getElementById("ts-canvas-bg-mode")           0 ms
+//     container.querySelectorAll("input")  (all 866, once) 119 ms
+//     within(<the row it lives in>).getByLabelText(…)      189 ms
+//     utils.getByLabelText(…)   ← whole container       16,813 ms
+//
+// So the fix is not a bigger ceiling (one was tried: 5s → 20s, and 3 of 5 runs
+// still went red on a busy machine). The fix is to SCOPE the query. Every helper
+// below narrows to a container holding a handful of elements first.
+//
+// 🔴 Scoping deliberately KEEPS the label lookup rather than swapping in an id.
+// `*ByLabelText` does not only find the element — it proves the input is really
+// bound to its label, which is what a screen reader reads out. Reaching for
+// `getElementById` would be faster still (0 ms) but would leave a broken or
+// missing label GREEN, and two of the three capabilities the owner traded the
+// virtualisation back for are accessibility ones. Narrowing the container costs
+// the binding nothing: every query below is still a label query, so each one is
+// still a witness that its own field is labelled.
 //
 // 🔴 THIS IS A TEST-ENVIRONMENT COST, NOT A USER COST. Do not quote these numbers
-// as evidence that dropping virtualisation made the product slow. The blow-up is
-// O(N²) and specific to jsdom: dom-testing-library's queries read `input.labels`
-// per labelable element, and jsdom answers each by re-walking the entire document,
-// so N inputs cost N document walks PER QUERY. A real browser has no such step —
-// the CT guards render the same 866 rows and open the panel in tens of ms.
-// (Root-cause work on that amplification is T-e2e9, not this file's business.)
-//
-// WHY 20s, measured rather than guessed:
-//   * worst REPORTED duration for one of these tests in a full parallel CI run:
-//     6,334ms ("stores a non-default lay-down mode…"), in a run that PASSED.
-//   * that number is an UPPER BOUND on what the timeout actually bounds. Verified
-//     with a throwaway probe, not assumed: a test reported at 6,005ms (3,000ms
-//     beforeEach + 3,000ms body) PASSES under the 5,000ms default, while a bare
-//     5,500ms body fails with "Test timed out in 5000ms" — i.e. the reported figure
-//     includes hooks (React Testing Library's auto-cleanup unmounts 866 rows in
-//     one), and `testTimeout` bounds the body alone.
-//   * so the true body time is somewhere under ~6.3s and the real margin against
-//     5,000ms is unknown but thin. 20s is ~3x the worst reported figure, which
-//     leaves room for a busier machine (parallel CI is getting MORE parallel).
-// A generous ceiling costs nothing here: it does not slow a passing run, it only
-// changes how long a genuinely hung test takes to report.
-//
-// 🔴 RAISED 20s → 60s (T-3b90). The sentence above predicted its own expiry —
-// "parallel CI is getting MORE parallel" — and it has expired. Measured on this
-// box with four agents contending: this test reported 34,842ms and 38,699ms in
-// two consecutive full-CI runs and FAILED both, while the SAME test run alone
-// took 37,566ms and PASSED (the reported figure includes hooks; the body is what
-// is bounded, and off-load there is slack the parallel run does not have). Its
-// neighbours in this file reported 23.8s–32.7s in the same runs.
-//
-// What tipped it was tiny and that is the point: T-3b90 added TWO message codes
-// (866 → 868). Reverting just those two codes, changing nothing else, turned
-// this test green again — verified by execution, not inferred. A guard whose
-// margin two rows can flip is not bounding what it was built to bound, so the
-// honest fix is a ceiling that reflects what a busy box actually costs.
-//
-// This does NOT make the amplification acceptable and must not be read as
-// closing it: the O(N²) root cause is still T-e2e9, and every future +1 row
-// walks this number back toward the edge again.
-const EDIT_VIEW_TIMEOUT_MS = 60_000;
+// as evidence that dropping virtualisation made the product slow — a real browser
+// has no `input.labels` re-walk, and the CT guards open the same 866-row panel in
+// tens of milliseconds.
+
+/** The one row a colour token is edited in — a handful of elements, not 866. */
+function colourRow(
+  utils: ReturnType<typeof render>,
+  label: string
+): HTMLElement {
+  const row = Array.from(
+    utils.container.querySelectorAll(".ts-color-row")
+  ).find((r) => r.querySelector(".ts-color-name")?.textContent === label);
+  if (!row) throw new Error(`no .ts-color-row labelled ${label}`);
+  return row as HTMLElement;
+}
+
+/** The 外框背景 slot group — where the lay-down mode <select> lives. */
+function canvasBgSlots(utils: ReturnType<typeof render>): HTMLElement {
+  // Found by its own heading, NOT by position. "the last .ts-avatar-slots"
+  // reads correctly today, but the moment anyone adds an image group after
+  // this one the NEGATIVE assertion below ("no lay-down mode until there is
+  // an image") starts querying the wrong group and goes silently tautological
+  // — it would pass by looking in a place the field was never going to be.
+  const group = Array.from(
+    utils.container.querySelectorAll(".ts-avatar-slots")
+  ).find(
+    (g) => g.querySelector(".ts-avatar-label")?.textContent === s.themeCanvasBg
+  );
+  if (!group)
+    throw new Error(`no .ts-avatar-slots headed ${s.themeCanvasBg}`);
+  return group as HTMLElement;
+}
+
+/**
+ * The 用詞 search box. This one is fetched structurally rather than by label,
+ * because the only container that holds it IS the 866-row list — there is no
+ * smaller scope to narrow to, so a label query here is exactly the O(N²) case.
+ * Its accessible name is therefore ASSERTED instead of being used to find it:
+ * the binding keeps a witness, at O(1) instead of 16 seconds.
+ */
+function wordingSearch(utils: ReturnType<typeof render>): HTMLElement {
+  const el = utils.container.querySelector(".ts-wording-search");
+  if (!el) throw new Error("no .ts-wording-search in the edit view");
+  expect(el.getAttribute("aria-label")).toBe(s.themeWordingSearch);
+  return el as HTMLElement;
+}
+
+/** 儲存 / 取消 — two buttons, so a role query over them is cheap. */
+function formActions(utils: ReturnType<typeof render>): HTMLElement {
+  const el = utils.container.querySelector(".ts-form-actions");
+  if (!el) throw new Error("no .ts-form-actions in the edit view");
+  return el as HTMLElement;
+}
+
+const clickSave = (utils: ReturnType<typeof render>) =>
+  fireEvent.click(within(formActions(utils)).getByRole("button", { name: p.save }));
 
 const p = zh.profile;
 const s = zh.settings;
@@ -330,7 +369,7 @@ describe("ThemeSettings · colour editing", () => {
     expect(colorSection?.textContent).toBe("主色"); // brand group heading
     expect(utils.getAllByText("主色").length).toBeGreaterThan(0); // group + accent label
     expect(utils.queryByText("--color-accent")).toBeNull();
-  }, EDIT_VIEW_TIMEOUT_MS);
+  });
 
   it("round-trips an edited colour value through save", async () => {
     setToken("owner-token");
@@ -342,15 +381,15 @@ describe("ThemeSettings · colour editing", () => {
     });
     fireEvent.click(await utils.findByLabelText(`${p.themeEdit} 午夜藍`));
     // The value text field carries the friendly label as its accessible name.
-    fireEvent.change(utils.getByLabelText("主色"), {
+    fireEvent.change(within(colourRow(utils, "主色")).getByLabelText("主色"), {
       target: { value: "#ffffff" },
     });
-    fireEvent.click(utils.getByRole("button", { name: p.save }));
+    clickSave(utils);
 
     const srv = await api.getServerSettings();
     const b = srv.customThemes.find((x) => x.id === "midnight");
     expect(b?.colors["--color-accent"]).toBe("#ffffff");
-  }, EDIT_VIEW_TIMEOUT_MS);
+  });
 });
 
 describe("ThemeSettings · wording overlay", () => {
@@ -365,7 +404,7 @@ describe("ThemeSettings · wording overlay", () => {
     fireEvent.click(await utils.findByLabelText(`${p.themeEdit} 午夜藍`));
 
     // Narrow the (large) wording list to exactly one code by searching the code.
-    fireEvent.change(utils.getByLabelText(s.themeWordingSearch), {
+    fireEvent.change(wordingSearch(utils), {
       target: { value: "common.apply" },
     });
     const list = utils.container.querySelector(
@@ -373,12 +412,12 @@ describe("ThemeSettings · wording overlay", () => {
     ) as HTMLElement;
     const input = within(list).getByRole("textbox");
     fireEvent.change(input, { target: { value: "套用替代" } });
-    fireEvent.click(utils.getByRole("button", { name: p.save }));
+    clickSave(utils);
 
     const srv = await api.getServerSettings();
     const b = srv.customThemes.find((x) => x.id === "midnight");
     expect(b?.wording?.zh?.["common.apply"]).toBe("套用替代");
-  }, EDIT_VIEW_TIMEOUT_MS);
+  });
 
   it("keeps the boundary spaces of a sentence-fragment override", async () => {
     // Several codes T-081b made overridable are sentence FRAGMENTS whose
@@ -396,7 +435,7 @@ describe("ThemeSettings · wording overlay", () => {
     });
     fireEvent.click(await utils.findByLabelText(`${p.themeEdit} 午夜藍`));
 
-    fireEvent.change(utils.getByLabelText(s.themeWordingSearch), {
+    fireEvent.change(wordingSearch(utils), {
       target: { value: "uninstallWarnBody2" },
     });
     const list = utils.container.querySelector(
@@ -405,7 +444,7 @@ describe("ThemeSettings · wording overlay", () => {
     fireEvent.change(within(list).getByRole("textbox"), {
       target: { value: "」上頭還有 " },
     });
-    fireEvent.click(utils.getByRole("button", { name: p.save }));
+    clickSave(utils);
 
     const srv = await api.getServerSettings();
     const b = srv.customThemes.find((x) => x.id === "midnight");
@@ -417,7 +456,7 @@ describe("ThemeSettings · wording overlay", () => {
     expect(makeMessages(themed, "zh").machineUninstallWarnBody("Alpha", 3)).toBe(
       "「Alpha」上頭還有 3 位成員在線上。現在解除安裝會在成員仍在這台機器上時把 warden 拆除 —— 建議先將相關成員下線。仍要繼續嗎?"
     );
-  }, EDIT_VIEW_TIMEOUT_MS);
+  });
 });
 
 // The 用詞 list renders EVERY overridable code — all 866 of them, all in the
@@ -496,11 +535,11 @@ describe("ThemeSettings · wording list is browsable in full", () => {
     fireEvent.change(within(row).getByRole("textbox"), {
       target: { value: "末列也能改" },
     });
-    fireEvent.click(utils.getByRole("button", { name: p.save }));
+    clickSave(utils);
     const srv = await api.getServerSettings();
     const b = srv.customThemes.find((x) => x.id === "midnight");
     expect(b?.wording?.zh?.[last]).toBe("末列也能改");
-  }, EDIT_VIEW_TIMEOUT_MS);
+  });
 
   it("shows ALL of a search's matches, not a first-N slice of them", async () => {
     const { list } = await openWordingEditor();
@@ -529,7 +568,7 @@ describe("ThemeSettings · wording list is browsable in full", () => {
     const seen = new Set(codesIn(list));
     expect(matchedByCode.filter((c) => !seen.has(c))).toEqual([]);
     expect(seen.size).toBe(total);
-  }, EDIT_VIEW_TIMEOUT_MS);
+  });
 
   it("does not move a row out from under the cursor when you start typing in it", async () => {
     // Regression guard: an earlier attempt at this panel ordered overridden
@@ -567,7 +606,7 @@ describe("ThemeSettings · wording list is browsable in full", () => {
     expect(codesIn(list)).toEqual(before);
     expect(list.scrollTop).toBe(1200);
     expect(inputOf(target).value).toBe("甲乙");
-  }, EDIT_VIEW_TIMEOUT_MS);
+  });
 
   it("keeps the whole set — and its reading order — after the list scrolls away", async () => {
     // The regression this replaces a test for: while the list was virtualised it
@@ -620,7 +659,7 @@ describe("ThemeSettings · wording list is browsable in full", () => {
     // …and no row is taken out of flow to achieve any of it.
     expect(list.querySelectorAll(".ts-wording-row--pinned").length).toBe(0);
     expect(list.querySelectorAll(".ts-wording-pad").length).toBe(0);
-  }, EDIT_VIEW_TIMEOUT_MS);
+  });
 });
 
 describe("ThemeSettings · alias-default colours", () => {
@@ -636,10 +675,13 @@ describe("ThemeSettings · alias-default colours", () => {
 
     // The content-area background follows --color-bg, so no bundle ever exports
     // it — yet it must be reachable here, or only a hand-edited JSON can set it.
-    const mainBg = utils.getByLabelText(tokenMeta("--color-main-bg", "zh").label);
+    const mainBgLabel = tokenMeta("--color-main-bg", "zh").label;
+    const mainBg = within(colourRow(utils, mainBgLabel)).getByLabelText(
+      mainBgLabel
+    );
     expect((mainBg as HTMLInputElement).value).toBe("");
     fireEvent.change(mainBg, { target: { value: "#12345680" } });
-    fireEvent.click(utils.getByRole("button", { name: p.save }));
+    clickSave(utils);
 
     const b = (await api.getServerSettings()).customThemes.find(
       (x) => x.id === "midnight"
@@ -649,7 +691,7 @@ describe("ThemeSettings · alias-default colours", () => {
     // that is what keeps them following their parent.
     expect("--color-nav-bg" in (b?.colors ?? {})).toBe(false);
     expect("--color-knob" in (b?.colors ?? {})).toBe(false);
-  }, EDIT_VIEW_TIMEOUT_MS);
+  });
 
   it("edits opacity through a slider, not only through hand-typed #RRGGBBAA", async () => {
     setToken("owner-token");
@@ -662,16 +704,18 @@ describe("ThemeSettings · alias-default colours", () => {
     fireEvent.click(await utils.findByLabelText(`${p.themeEdit} 午夜藍`));
 
     const label = tokenMeta("--color-card", "zh").label;
-    const slider = utils.getByLabelText(`${label} ${s.themeColorOpacity}`);
+    const slider = within(colourRow(utils, label)).getByLabelText(
+      `${label} ${s.themeColorOpacity}`
+    );
     expect((slider as HTMLInputElement).value).toBe("100");
     fireEvent.change(slider, { target: { value: "40" } });
-    fireEvent.click(utils.getByRole("button", { name: p.save }));
+    clickSave(utils);
 
     const b = (await api.getServerSettings()).customThemes.find(
       (x) => x.id === "midnight"
     );
     expect(b?.colors["--color-card"]).toBe("#24283266");
-  }, EDIT_VIEW_TIMEOUT_MS);
+  });
 });
 
 describe("ThemeSettings · outer-canvas background", () => {
@@ -692,9 +736,9 @@ describe("ThemeSettings · outer-canvas background", () => {
     });
     fireEvent.click(await utils.findByLabelText(`${p.themeEdit} 午夜藍`));
 
-    const mode = utils.getByLabelText(s.themeCanvasBgMode);
+    const mode = within(canvasBgSlots(utils)).getByLabelText(s.themeCanvasBgMode);
     fireEvent.change(mode, { target: { value: "sides" } });
-    fireEvent.click(utils.getByRole("button", { name: p.save }));
+    clickSave(utils);
 
     let b = (await api.getServerSettings()).customThemes.find(
       (x) => x.id === "midnight"
@@ -704,17 +748,17 @@ describe("ThemeSettings · outer-canvas background", () => {
     // Back to the default and the field disappears entirely — a tiling theme
     // stays byte-identical to one authored before the field existed.
     fireEvent.click(await utils.findByLabelText(`${p.themeEdit} 午夜藍`));
-    fireEvent.change(utils.getByLabelText(s.themeCanvasBgMode), {
+    fireEvent.change(within(canvasBgSlots(utils)).getByLabelText(s.themeCanvasBgMode), {
       target: { value: "tile" },
     });
-    fireEvent.click(utils.getByRole("button", { name: p.save }));
+    clickSave(utils);
 
     b = (await api.getServerSettings()).customThemes.find(
       (x) => x.id === "midnight"
     );
     expect(b?.backgroundModes).toBeUndefined();
     expect(b?.backgrounds).toEqual({ canvas: png });
-  }, EDIT_VIEW_TIMEOUT_MS);
+  });
 
   it("offers no lay-down mode until there is an image to lay down", async () => {
     setToken("owner-token");
@@ -726,8 +770,8 @@ describe("ThemeSettings · outer-canvas background", () => {
     });
     fireEvent.click(await utils.findByLabelText(`${p.themeEdit} 純色`));
 
-    expect(utils.queryByLabelText(s.themeCanvasBgMode)).toBeNull();
-  }, EDIT_VIEW_TIMEOUT_MS);
+    expect(within(canvasBgSlots(utils)).queryByLabelText(s.themeCanvasBgMode)).toBeNull();
+  });
 });
 
 describe("ThemeSettings · delete", () => {

@@ -67,12 +67,38 @@
 //   snapshot is stale from a write it did not make, so there is no delta of its
 //   own on the way.
 //
-// NOTE (follow-up, still NOT in this change): api.listReplyCards is a
-// non-atomic N+1 (a light index then a per-id hydrate) — the 25 GETs above are
-// one round, not one request. A single snapshot can still be an internally
-// skewed slice. The clean fix is an ATOMIC list endpoint (server returns
-// full-enough rows in one shot); it is a frozen-wire change (spec first +
-// owner sign-off, root CLAUDE.md §13), which is why it is not here.
+// T-a3e4 step 8, second half — THE N+1 IS GONE (this note used to say the
+// follow-up was "still NOT in this change"; the very commit that carried step 8
+// to main, PR #76, is the one that did it — owner approved `?view=full` on
+// 2026-08-02, card rc-73a3f49b180e). `api.listReplyCards` no longer walks a
+// light index and hydrates per id: it issues ONE request per pane,
+// `GET /api/reply-cards?status=<s>&view=full`, and the server answers with
+// whole cards — each full row byte-identical to that card's own
+// `GET /api/reply-cards/{card_id}`, pinned by the server test
+// `TestListReplyCardsViewFullRowsEqualTheSingleCardResponse`. The DEFAULT is
+// still the light index (`view` absent or `light` is byte-for-byte the old
+// wire), and `view` is deliberately absent from the agent-facing
+// `list_reply_cards` MCP tool.
+// ⚠️ The per-card GET counts in the paragraph above are therefore HISTORICAL —
+// they describe the pane BEFORE this landed. Do not benchmark against them.
+//
+// 🔴 It is O(1) per pane, NOT "one request for the whole screen". This provider
+// still makes its own fixed count/status reads, and an EXPANDED 近期已處理 pane
+// is three list requests (waiting + answered + expired), not one. Say "a fixed
+// number of requests instead of one per card".
+// 🔴 The win is ROUND TRIPS, not bandwidth. Re-measured AFTER the change against
+// a real ocserverd (isolated port, fresh DB, population re-counted from the
+// server at measurement time: 25 waiting / 15 answered / 10 expired), varying
+// only this adapter: one cockpit load of the waiting pane went 26 reply-card
+// requests / 27,537 B → 1 request / 21,294 B; one delta with the handled pane
+// expanded went 54 / 58,509 B → 3 / 44,195 B. That is 51 fewer round trips for
+// roughly a quarter fewer bytes. Never sell this as saving bandwidth — on a
+// slow link the latency is the whole cost, and a full pane is very nearly the
+// same size either way.
+//
+// A single pane snapshot is also no longer an internally skewed slice: it is
+// one response, not an index plus N later reads. The three panes are still
+// three separate requests, so the skew between PANES is unchanged.
 
 import {
   createContext,
