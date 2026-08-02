@@ -18,9 +18,13 @@
 // adapter, still a real click on a real rendered card.
 //
 // 🔴 AND IT ASSERTS PIXELS, NOT CALL COUNTS, on purpose — the mirror image of
-// `useReplyCards.one-round.test.tsx`. That file's budget ("exactly one round")
-// is satisfied by ZERO rounds too, which is precisely the state this defect
-// leaves the pane in. Cost and correctness need one witness each; neither
+// `useReplyCards.one-round.test.tsx`. Its budget does NOT tolerate zero (the
+// assertion is `=== 1`; deleting the SSE reconcile branch so the action path
+// costs zero rounds reddens 3 of its tests — measured, do not repeat the earlier
+// version of this note, which claimed zero satisfied it). The gap is RANGE: that
+// budget measures how many rounds a write costs WITH THE STREAM UP, and the
+// pre-fix code did cost exactly one there — so it has nothing to say about the
+// stream being down. Cost and correctness need one witness each; neither
 // assertion can stand in for the other.
 //
 // The fix these tests demand costs no extra round trip: the write's OWN response
@@ -62,6 +66,51 @@ function mkCard(over: Partial<ReplyCard> = {}): ReplyCard {
  * before render, so the provider's mount effect gets the no-op too. */
 function killEventStream() {
   return vi.spyOn(api, "subscribeEvents").mockImplementation(() => () => {});
+}
+
+/** A stream that is alive at mount and whose LAST frame we fire by hand — the
+ * shape of an EventSource that dies right after delivering one delta. Returns
+ * the captured handler. */
+function captureEventStream() {
+  let fire: ((topic: string) => void) | null = null;
+  vi.spyOn(api, "subscribeEvents").mockImplementation((onTopic) => {
+    fire = (topic: string) => onTopic(topic);
+    return () => {
+      fire = null;
+    };
+  });
+  return {
+    deliver: (topic: string) => {
+      if (!fire) throw new Error("nobody subscribed");
+      fire(topic);
+    },
+  };
+}
+
+/** Makes the NEXT `listReplyCards("waiting")` hang, and hands back its resolver
+ * so the test decides exactly when that (by then stale) snapshot lands. Every
+ * other call goes to the real mock adapter. */
+function hangNextWaitingRead() {
+  const real = api.listReplyCards.bind(api);
+  let release: ((rows: ReplyCard[]) => void) | null = null;
+  let armed = true;
+  vi.spyOn(api, "listReplyCards").mockImplementation((status) => {
+    if (armed && status === "waiting") {
+      armed = false;
+      return new Promise<ReplyCard[]>((resolve) => {
+        release = resolve;
+      });
+    }
+    return real(status);
+  });
+  return {
+    inFlight: () => release !== null,
+    /** Land the in-flight read with a snapshot of the test's choosing. */
+    landWith: (rows: ReplyCard[]) => {
+      if (!release) throw new Error("no waiting read is in flight");
+      release(rows);
+    },
+  };
 }
 
 function renderPage() {
@@ -123,6 +172,85 @@ describe("reply-card writes reconcile without any event stream", () => {
     await waitFor(() =>
       expect(queryAllByTestId("waiting-card")).toHaveLength(1)
     );
+  });
+
+  it("an in-flight PRE-WRITE snapshot cannot paint the answered card back", async () => {
+    // 🔴 The reason adopting is not enough on its own, and it is NOT an exotic
+    // race: the only precondition is "a delta arrived shortly before the click",
+    // i.e. the stream was alive and then dropped — which is the ordinary shape of
+    // an EventSource dying (the last frame it delivered left a refetch in
+    // flight). The outcome is identical to the original blocker: the card is
+    // waiting again, the badge is wrong again, and with the stream down there is
+    // no newer refetch to correct it. T-e862's generation guard does not help —
+    // it only drops a snapshot once a NEWER one exists.
+    __injectMockReplyCard(mkCard({ id: "rc-1", summary: "第一張" }));
+    __injectMockReplyCard(mkCard({ id: "rc-2", summary: "第二張" }));
+
+    const stream = captureEventStream();
+    const { findAllByTestId, queryAllByTestId } = renderPage();
+    const cards = await findAllByTestId("waiting-card");
+    expect(cards).toHaveLength(2);
+
+    // A peer's delta kicks a refetch — and that read never comes back before the
+    // owner acts (slow response, then the stream drops).
+    const read = hangNextWaitingRead();
+    stream.deliver("reply_card");
+    await waitFor(() => expect(read.inFlight()).toBe(true));
+
+    fireEvent.click(cards[0].querySelectorAll(".reply-option")[0]);
+    await waitFor(() =>
+      expect(queryAllByTestId("waiting-card")).toHaveLength(1)
+    );
+
+    // Now the pre-write snapshot lands: rc-1 still listed as waiting, because it
+    // was read before the answer was accepted.
+    read.landWith([mkCard({ id: "rc-1" }), mkCard({ id: "rc-2" })]);
+
+    await waitFor(() =>
+      expect(queryAllByTestId("waiting-card")).toHaveLength(1)
+    );
+    expect(
+      queryAllByTestId("waiting-card").map((el) => el.id)
+    ).toEqual(["reply-card-rc-2"]);
+  });
+
+  it("...and that same snapshot's NEW card still arrives", async () => {
+    // 🔴 This is the half that rejects the cheap fix. Bumping the generation (or
+    // otherwise DISCARDING the in-flight snapshot) turns the test above green,
+    // and throws away everything else that snapshot carried — including a card a
+    // peer just opened. With the stream down no later refetch brings it back, so
+    // that trade is one silent failure for another: the owner is simply never
+    // told there is a card waiting for them. The hold is therefore per-id.
+    __injectMockReplyCard(mkCard({ id: "rc-1", summary: "第一張" }));
+    __injectMockReplyCard(mkCard({ id: "rc-2", summary: "第二張" }));
+
+    const stream = captureEventStream();
+    const { findAllByTestId, queryAllByTestId } = renderPage();
+    expect(await findAllByTestId("waiting-card")).toHaveLength(2);
+
+    const read = hangNextWaitingRead();
+    stream.deliver("reply_card");
+    await waitFor(() => expect(read.inFlight()).toBe(true));
+
+    const cards = await findAllByTestId("waiting-card");
+    fireEvent.click(cards[0].querySelectorAll(".reply-option")[0]);
+    await waitFor(() =>
+      expect(queryAllByTestId("waiting-card")).toHaveLength(1)
+    );
+
+    // The same stale snapshot ALSO carries a card someone else just opened.
+    read.landWith([
+      mkCard({ id: "rc-1" }),
+      mkCard({ id: "rc-2" }),
+      mkCard({ id: "rc-3", summary: "別人剛開的" }),
+    ]);
+
+    await waitFor(() =>
+      expect(queryAllByTestId("waiting-card")).toHaveLength(2)
+    );
+    expect(
+      queryAllByTestId("waiting-card").map((el) => el.id).sort()
+    ).toEqual(["reply-card-rc-2", "reply-card-rc-3"]);
   });
 
   it("an inline chat card flips to answered in place with the stream DOWN", async () => {

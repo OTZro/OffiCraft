@@ -272,6 +272,18 @@ refetch:兩側都訂 `reply_card` topic;聊天卡另走 `GET /api/reply-cards/{i
 answer / reanswer / expire **不自己 refetch**——但**它們一定要自己對帳**:三個
 寫入端點都回傳那張新鮮的卡,所以動作路徑**採用自己寫入的回應**
 (`adoptWrite`,**零請求**)。
+🔴 **光採用回應還不夠——in-flight 的 PRE-WRITE 快照會把卡片畫回去,所以採用之後那個
+id 要被「按住」(`adoptedTerminalRef`)直到某個 server 快照同意它不見了。** 觸發條件
+只需要「點擊前不久有一則 delta 到過」= **串流剛剛還活著、然後掉了**(EventSource
+掉線的典型形狀:掉線前最後一則事件觸發的 refetch 卡在飛行中),後果與原 blocker
+**完全相同**(卡回到等待中、徽章跟著錯,而串流已斷 ⇒ 沒有更新的 refetch 會來救)。
+T-e862 的 generation guard **救不了這一格**:它只在「有更新的 refetch」時丟掉舊快照,
+串流斷掉時根本沒有更新的那一個。
+⛔ **不准用「把那份 in-flight 快照整個丟掉」(`++waitingGenRef.current`)換綠**:那會
+連同快照裡**別人剛開的新卡**一起丟掉,而串流已斷 ⇒ 那張卡可能一直不出現、**而且沒有
+任何訊號** = 用一個靜默失敗換另一個靜默失敗。按 id 保留才對:快照其餘內容照常採用。
+`handledCount` 因此要把「被按住的張數」加回去(那份 count 與被按住的列來自**同一個**
+pre-write 快照)。**兩個方向各有一條測試**,見下方護欄。
 🔴 **本檔上一版寫「delta 是唯一的 reconcile trigger」,那句對動作路徑是錯的、
 而且是個 production blocker**:它把座艙的正確性押在一個**可有可無的即時事件**上
 ——EventSource 斷線或漏一帧時,server 已經收下答覆,等我回覆頁與導覽列徽章卻還
@@ -306,8 +318,21 @@ generation guard **只擋 commit、不擋請求**,所以多的那一輪是「整
 `refresh()` 仍是 409 的無條件路徑(那是別人的寫入,沒有自己的 delta)。
 護欄兩層、守的不是同一件事:`components/ChatReplyCard.one-round.test.tsx`
 (**數呼叫**、不看畫面)+ `hooks/useReplyCards.sse-loss.test.tsx`(**看畫面**、把
-`subscribeEvents` 換成 no-op)。**「恰好一輪」這個預算被「零輪」同樣滿足**,所以
-成本與正確性必須各有一個證人,任一條都不能代替另一條。
+`subscribeEvents` 換成 no-op)。
+🔴 **理由要寫對(本檔上一版寫錯了、而且已被實測推翻)**:one-round 那條斷言是
+**精確等於 1**,**0 不滿足它**——把 SSE reconcile 分支刪掉讓動作路徑變零輪,
+one-round **紅 3 條**(實測)。真正的原因是**射程**:那個預算量的是「串流暢通時花
+幾輪」,而修補前的碼在串流暢通時**恰好就是 1 輪**⇒ 它對「串流斷線」這個情境
+**無話可說**,所以斷線那半必須另有證人。成本與正確性各一個證人,任一條都不能代替
+另一條。
+🔴 **「寫入回的是整張卡」這個前提現在有 server 側證人**:`adoptWrite` 的正確性完全押在
+「三個寫入端點回的是全卡」,而 client 側的證據只有 jsdom + `api/mock`(它**構造上**就
+回全卡,嫌不了你)。真正的對帳在
+`server/ocserverd/api_replycards_writeecho_test.go`:三個動詞的**回應 body** 與那張卡
+自己的 `GET /api/reply-cards/{id}` **逐位元組相同**(identity 而非欄位清單——清單會在
+DTO 長新欄位的那天過期)。**語料必須有 body + options + 綁任務的卡**,否則兩個投影
+長得一樣、比較等於沒比(實測:`openPlainCard` 的 fixture body 是空的,三條都會被那道
+反恆真檢查擋下)。mutant:讓 `writeReplyCard` 對終態卡回**輕量列** → **3 條全紅**。
 **mutant 實測(兩個方向各自被恰好一條釘住)**:把 `doAnswer` 的 refetch 加回去 →
 「answering …」紅,**量到 2 次**(坐實重複真的存在);把 `doReanswer` 的拿掉 →
 「re-answering STILL refetches」紅,**量到 0 次**(坐實它承重)。
