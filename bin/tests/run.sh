@@ -16,8 +16,8 @@
 # OC_CODESIGN_*). All of it was deleted with the signing machinery itself
 # (owner ruling 2026-07-31: remove code signing entirely, manual escape hatch
 # included). The dispatch half of the file — including bin/tests/release-guard.sh,
-# which guards the post-upload READ-BACK of a release and has nothing to do with
-# signing — was deliberately kept.
+# which guards the pre-build CI gate and the post-upload READ-BACK of a release,
+# and has nothing to do with signing — was deliberately kept.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -274,7 +274,7 @@ else
   bad "bin/tests/go-test-nocache-guard.sh is missing"
 fi
 
-# ── bin/release publish/promote read-back (T-588c) ───────────────────────────
+# ── bin/release publish/promote: CI gate + read-back (T-588c, T-b65e) ────────
 # Own file because it needs its own shim set (`gh`, `curl`) and its own fixture
 # git repo, and because what it guards is a different KIND of property: not "does
 # this script decide correctly" but "after the irreversible step, does it check

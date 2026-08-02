@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# bin/tests/release-guard.sh — HERMETIC unit tests for bin/release (T-588c).
+# bin/tests/release-guard.sh — HERMETIC unit tests for bin/release (T-588c;
+# the pre-build CI gate, section G, added by T-b65e).
 #
 # WHAT IS ACTUALLY UNDER TEST
 # ---------------------------
@@ -35,10 +36,11 @@
 #   * `curl` is a PATH shim serving a canned /api/version + /api/health, so no
 #     station — least of all a live one — is contacted.
 #   * The end-to-end cases run against a THROWAWAY git repo in mktemp that
-#     carries its own bin/build. bin/release cuts its staging worktree from
-#     OC_RELEASE_SRC, so this exercises the real staging + packaging + verify +
-#     upload + read-back + settle arc without this repo, this worktree, or any
-#     npm/go build of the actual product being involved.
+#     carries its own bin/ci.sh and bin/build. bin/release cuts its staging
+#     worktree from OC_RELEASE_SRC and runs both from INSIDE it, so this
+#     exercises the real CI gate + staging + packaging + verify + upload +
+#     read-back + settle arc without this repo, this worktree, any npm/go build
+#     of the actual product, or a 7-minute product CI run being involved.
 #   * Artifacts land in a mktemp OC_RELEASE_OUT, never dist/release/.
 #
 # `go` IS required (a real Mach-O arm64 binary with real linker flags is the only
@@ -513,6 +515,7 @@ set -euo pipefail
 R="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 echo "builder=bin/build" > "$BUILD_WIRE"
 echo "OC_APP_VERSION=${OC_APP_VERSION:-unset}" >> "$BUILD_WIRE"
+echo "build" >> "$ORDER_WIRE"
 SHORT="$(git -C "$R" rev-parse --short HEAD)"
 mkdir -p "$R/.deploy" "$R/server/ocserverd/bindist"
 ( cd "$R/gosrc" && "$GO_BIN" build \
@@ -522,7 +525,39 @@ mkdir -p "$R/.deploy" "$R/server/ocserverd/bindist"
 cp "$R/server/ocserverd/bindist/ocwarden" "$R/server/ocserverd/bindist/ocagent"
 cp "$R/server/ocserverd/bindist/ocwarden" "$R/server/ocserverd/bindist/officraft"
 SH
-chmod +x "$SRC/bin/build" "$SRC/bin/install.sh"
+# The fixture CI. publish runs `$STAGE/bin/ci.sh` — a path inside the staging
+# worktree — so the fixture repo carrying its own is enough to drive the REAL
+# gate without a knob in bin/release and without a 7-minute product CI run.
+# It records WHICH TREE it was run against (its own HEAD, resolved from its own
+# location), which is what pins "CI ran on the tree about to ship" rather than
+# the weaker "CI ran".
+#
+# THE GREEN VERDICT IS NOT WRITTEN OUT HERE, and that is not squeamishness:
+# bin/tests/ci-success-marker.sh enforces that NO shell source but bin/ci.sh may
+# be able to emit the CI authority, because this file is itself a dispatched CI
+# lane and a forged marker in a lane buys a false green just as well as one in
+# ci.sh. So the fixture EXECUTES the real bin/ci.sh's own final line to produce
+# the verdict. Two things fall out: this file stays clean under that scan, and
+# the fixture can never drift from the real marker — if ci.sh's verdict line ever
+# changes, these cases follow it automatically instead of pinning a stale copy.
+# Extracted as TEXT, never executed, and using the same "last NON-EMPTY line"
+# definition ci-success-marker.sh's validate_source uses — `tail -n 1` would
+# disagree with it the moment ci.sh grew a trailing blank line. The sed pattern
+# does not contain the marker, so this file still carries none.
+CI_GREEN="$(awk 'NF { line=$0 } END { print line }' "$HERE/../ci.sh" | sed -E 's/^echo "(.*)"$/\1/')"
+[[ -n "$CI_GREEN" && "$CI_GREEN" != *'echo "'* ]] \
+  || { echo "FATAL: bin/ci.sh's final line is not the expected echo form — cannot derive the CI verdict" >&2; exit 2; }
+cat > "$SRC/bin/ci.sh" <<SH
+#!/usr/bin/env bash
+set -euo pipefail
+R="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)"
+echo "ci \$(git -C "\$R" rev-parse HEAD)" >> "\$ORDER_WIRE"
+echo "[ci] (fixture) some steps"
+if [[ -n "\${FIXTURE_CI_DIRTIES_TREE:-}" ]]; then printf 'mutated by CI\n' >> "\$R/LICENSE"; fi
+echo "\${FIXTURE_CI_LAST_LINE:-$CI_GREEN}"
+exit "\${FIXTURE_CI_RC:-0}"
+SH
+chmod +x "$SRC/bin/build" "$SRC/bin/install.sh" "$SRC/bin/ci.sh"
 (
   cd "$SRC"
   git init -q .
@@ -537,16 +572,23 @@ E_TAG="v9.9.9-e2e"
 E_TARBALL="officraft-$E_TAG-darwin-arm64.tar.gz"
 EOUT="$WORK/e2e-out"
 BUILD_WIRE="$WORK/.build-wire"
+# ORDER_WIRE records the SEQUENCE of the two things publish runs inside the
+# staging worktree: the CI gate appends "ci <sha>", the build appends "build".
+# The gate is only worth anything if it runs BEFORE the build, so the order is
+# asserted, not just the presence of both.
+ORDER_WIRE="$WORK/.order-wire"
 
 e2e() { # e2e [extra publish args...] — env overrides come from the caller
-  : > "$GHWIRE"; : > "$BUILD_WIRE"
-  rm -rf "$EOUT"
+  : > "$GHWIRE"; : > "$BUILD_WIRE"; : > "$ORDER_WIRE"
+  # E2E_KEEP_OUT keeps the previous run's output dir, which is how the CI-evidence
+  # case can observe TWO runs accumulating rather than one run overwriting.
+  [[ -n "${E2E_KEEP_OUT:-}" ]] || rm -rf "$EOUT"
   OUT="$(PATH="$SHIMDIR:$PATH" \
     OC_RELEASE_SRC="$SRC" OC_RELEASE_OUT="$EOUT" \
     OC_RELEASE_GH_REPO="guard/fixture" \
     OC_RELEASE_SITE="http://127.0.0.1:1" \
     OC_RELEASE_SETTLE_TRIES=2 OC_RELEASE_SETTLE_SLEEP=0 \
-    BUILD_WIRE="$BUILD_WIRE" GO_BIN="$GO" \
+    BUILD_WIRE="$BUILD_WIRE" ORDER_WIRE="$ORDER_WIRE" GO_BIN="$GO" \
     bash "$RELEASE" publish --beta "$E_TAG" --target "$E_SHA" "$@" 2>&1)"
   RC=$?
 }
@@ -592,6 +634,78 @@ case "$(grep 'release create' "$GHWIRE")" in
   *"--prerelease"*"--target $E_SHA"*) ok "E1 upload was --prerelease and --target the named sha" ;;
   *) bad "E1 upload was --prerelease and --target the named sha ($(grep 'release create' "$GHWIRE"))" ;;
 esac
+
+# ── G: THE CI GATE (T-b65e) ─────────────────────────────────────────────────
+# Merging was loosened on purpose, so this gate is the ONLY behavioural check a
+# beta gets before the station picks it up by itself. Everything below is aimed
+# at the two ways it could be worthless: not actually running, and running but
+# not being believed.
+#
+# NOTE these cases deliberately do NOT assert that the string "ci.sh" appears in
+# bin/release. That assertion is true even when the call is commented out, and it
+# is true of any implementation that runs CI and then ignores the answer.
+echo "── G: the pre-build CI gate"
+
+# G0 — CI ran, on the RIGHT TREE, BEFORE the build. The sha on the "ci" line is
+# resolved by the fixture ci.sh from its own location, so it is the tree publish
+# actually handed it — i.e. the staging worktree at --target, not whatever tree
+# the operator happened to be standing in.
+STATION_VERSION_JSON="{\"git_sha\":\"$E_SHORT\"}" STATION_HEALTH_RC=0 e2e
+check "G0 a green CI gate lets publish through" "0" "$RC"
+check "G0 CI ran on the TARGET tree, and ran BEFORE the build" \
+  "ci $E_SHA
+build" "$(cat "$ORDER_WIRE")"
+
+# G1 — CI's rc is what decides. The log still ENDS with the green marker, so the
+# only thing that can catch this is the rc check: delete it and this case is the
+# one that reddens.
+STATION_VERSION_JSON="{\"git_sha\":\"$E_SHORT\"}" FIXTURE_CI_RC=1 e2e
+named_failure "G1 CI exits non-zero (with a green-looking last line) → publish aborts" \
+  release-ci "$RC" "$OUT"
+check "G1 …and NOTHING was built" "" "$(cat "$BUILD_WIRE")"
+check "G1 …and gh was never invoked (no tag, no release, no upload)" "" "$(cat "$GHWIRE")"
+check "G1 …and no artifacts were produced" "no" \
+  "$([[ -e "$EOUT/$E_TARBALL" ]] && echo yes || echo no)"
+
+# G2 — the mirror image: rc 0, but the run did not end with the verdict. This is
+# the shape a `set -e` abort mid-CI leaves behind, and the rc check alone lets it
+# through, so this case is the only one that reaches the last-line rule.
+STATION_VERSION_JSON="{\"git_sha\":\"$E_SHORT\"}" \
+  FIXTURE_CI_LAST_LINE="[ci] (4) frontend FAILED" e2e
+named_failure "G2 CI exits 0 but the last line is not the green verdict → publish aborts" \
+  release-ci "$RC" "$OUT"
+check "G2 …and NOTHING was built" "" "$(cat "$BUILD_WIRE")"
+check "G2 …and gh was never invoked" "" "$(cat "$GHWIRE")"
+
+# G3 — the gate is not a dry-run-only nicety: a rehearsal must rehearse the step
+# most likely to stop the release, and must still refuse when it is red.
+STATION_VERSION_JSON="{\"git_sha\":\"$E_SHORT\"}" FIXTURE_CI_RC=1 e2e --dry-run
+named_failure "G3 --dry-run also runs the gate and also refuses a red CI" \
+  release-ci "$RC" "$OUT"
+
+# G5 — CI went green, but it MOVED a tracked byte on the way. The tree about to
+# be built is then no longer the tree that was validated, so the release is not
+# entitled to that green. Without this case the whole check could be deleted and
+# every other case here would stay green.
+STATION_VERSION_JSON="{\"git_sha\":\"$E_SHORT\"}" FIXTURE_CI_DIRTIES_TREE=1 e2e
+named_failure "G5 CI is green but modified a TRACKED file → publish aborts" \
+  ci-tree-dirty "$RC" "$OUT"
+check "G5 …and NOTHING was built" "" "$(cat "$BUILD_WIRE")"
+check "G5 …and gh was never invoked" "" "$(cat "$GHWIRE")"
+
+# G4 — the verdict is written to a per-run directory under the output dir, so two
+# publishes of the same commit in the same second cannot share a log. The
+# directory name carries the pid, so this asserts what actually makes it unique
+# rather than just "a log exists": two runs, two directories, each holding its
+# own verdict.
+STATION_VERSION_JSON="{\"git_sha\":\"$E_SHORT\"}" e2e --dry-run
+check "G4 the CI log lands under a per-run directory in the output dir" "1" \
+  "$(find "$EOUT/ci" -name ci.log 2>/dev/null | wc -l | tr -d '[:space:]')"
+STATION_VERSION_JSON="{\"git_sha\":\"$E_SHORT\"}" E2E_KEEP_OUT=1 e2e --dry-run
+check "G4 a second publish gets its OWN directory (it cannot reuse or overwrite the first)" "2" \
+  "$(find "$EOUT/ci" -name ci.log 2>/dev/null | wc -l | tr -d '[:space:]')"
+check "G4 …and every log holds the verdict of the run that wrote it" "$CI_GREEN" \
+  "$(find "$EOUT/ci" -name ci.log | while IFS= read -r f; do tail -n 1 "$f"; done | sort -u)"
 
 # E2/E3 — THE POINT OF THE TICKET. The upload succeeded; the world is still
 # wrong; the command must fail anyway and say which item. Before T-588c both of
