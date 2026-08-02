@@ -97,7 +97,7 @@ fi
 # `ocwarden install`. Losing it means the host installs a warden that cannot
 # resolve that runtime — the silent failure T-ba62 closed for claude on the
 # one-click path, and T-ff48 closed for codex on both paths. The suite covers
-# bin/install.sh hermetically and bin/ocserver through its render-runtime-env
+# bin/install.sh hermetically and bin/ocserver through its render-serve-plist
 # seam; its central case asserts BOTH runtimes are rescued in the same host
 # situation, because a codex-only assertion goes green on a change that fixes
 # codex by breaking claude.

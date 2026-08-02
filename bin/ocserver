@@ -297,11 +297,17 @@ probe_runtime_bin() {
   local bin="$1" pathval="$2" homeval="$3"
   local budget="${OC_PROBE_BUDGET_SECS:-20}" pid ticks=0 max
   max=$((budget * 5))
+  # Own process group (set -m), so the timeout kill below reaps the shim's whole
+  # subtree. A version-manager shim typically execs or forks a real binary; killing
+  # only the direct child leaves that grandchild orphaned and running — which is
+  # how a bounded probe still ends up burning a core for hours.
+  set -m
   env -i PATH="$pathval" HOME="$homeval" "$bin" --version >/dev/null 2>&1 </dev/null &
   pid=$!
+  set +m
   while kill -0 "$pid" 2>/dev/null; do
     if [[ "$ticks" -ge "$max" ]]; then
-      kill -9 "$pid" 2>/dev/null || true
+      kill -9 -- "-$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
       log "WARN: '$bin --version' did not answer within ${budget}s — treating it as unusable under this PATH"
       return 1
@@ -364,6 +370,10 @@ resolve_runtime_stamp() {
 # CLAUDE_ENV_LINE and CODEX_ENV_LINE for the serve plist render below.
 resolve_runtime_stamps() {
   local home_dir="$1" common_path="$2" claude_bin codex_bin
+  # Once per process: the renderer may be called more than once (lint, then
+  # write) and the probes exec real binaries.
+  [[ "${OC_RUNTIME_STAMPS_DONE:-}" == "1" ]] && return 0
+  OC_RUNTIME_STAMPS_DONE=1
   SERVE_PATH="$common_path"
   resolve_runtime_stamp claude "$home_dir" "$common_path"; claude_bin="$OC_RS_BIN"
   resolve_runtime_stamp codex  "$home_dir" "$common_path"; codex_bin="$OC_RS_BIN"
@@ -388,6 +398,46 @@ resolve_runtime_stamps() {
     CODEX_ENV_LINE="
         <key>OC_CODEX_BIN</key><string>$codex_bin</string>"
   fi
+}
+
+# render_serve_plist — the API job (repo/bin/serve → exec .deploy/ocserverd serve).
+# TOP LEVEL AND SELF-RESOLVING, both on purpose (T-ff48 round 2):
+#   - It RESOLVES THE RUNTIMES ITSELF instead of trusting a caller to have done it.
+#     A second reviewer showed why: with the resolution as its own line in
+#     cmd_install, deleting that one line — the kind of thing a bad merge
+#     resolution does silently — reproduced the whole T-ff48 defect for BOTH
+#     runtimes while the guard suite stayed green. There is now no separate call
+#     to lose: the only writer of the stamps is the only reader of them.
+#   - It is top level so `render-serve-plist` can drive the REAL renderer. Bash
+#     locals are dynamically scoped, so it still sees cmd_install's locals
+#     (SERVE_LABEL / REPO / SERVER_ROOT / OC_TOML / LOG_DIR / HOME_DIR /
+#     COMMON_PATH) when called from there — the install path is unchanged.
+render_serve_plist() {
+  resolve_runtime_stamps "$HOME_DIR" "$COMMON_PATH"
+  cat <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- RENDERED by bin/ocserver install for SERVER_ROOT=$SERVER_ROOT — re-run the installer to change. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>$SERVE_LABEL</string>
+    <key>ProgramArguments</key>
+    <array><string>$REPO/bin/serve</string></array>
+    <key>WorkingDirectory</key><string>$REPO</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key><string>$SERVE_PATH</string>
+        <key>HOME</key><string>$HOME_DIR</string>
+        <key>OC_CONFIG</key><string>$OC_TOML</string>$CLAUDE_ENV_LINE$CODEX_ENV_LINE
+    </dict>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>ThrottleInterval</key><integer>10</integer>
+    <key>StandardOutPath</key><string>$LOG_DIR/serve.out.log</string>
+    <key>StandardErrorPath</key><string>$LOG_DIR/serve.err.log</string>
+</dict>
+</plist>
+PLIST
 }
 
 cmd_install() {
@@ -595,39 +645,6 @@ cmd_install() {
   local LA_DIR
   LA_DIR="$HOME_DIR/Library/LaunchAgents"
   local COMMON_PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-
-  # Resolve BOTH runtimes and build the plist env lines (see the block comment
-  # on resolve_runtime_stamps above). Sets SERVE_PATH / CLAUDE_ENV_LINE /
-  # CODEX_ENV_LINE, which the serve plist render below interpolates.
-  resolve_runtime_stamps "$HOME_DIR" "$COMMON_PATH"
-
-  # render_serve_plist — the API (repo/bin/serve → exec .deploy/ocserverd serve).
-  render_serve_plist() {
-    cat <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- RENDERED by bin/ocserver install for SERVER_ROOT=$SERVER_ROOT — re-run the installer to change. -->
-<plist version="1.0">
-<dict>
-    <key>Label</key><string>$SERVE_LABEL</string>
-    <key>ProgramArguments</key>
-    <array><string>$REPO/bin/serve</string></array>
-    <key>WorkingDirectory</key><string>$REPO</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key><string>$SERVE_PATH</string>
-        <key>HOME</key><string>$HOME_DIR</string>
-        <key>OC_CONFIG</key><string>$OC_TOML</string>$CLAUDE_ENV_LINE$CODEX_ENV_LINE
-    </dict>
-    <key>RunAtLoad</key><true/>
-    <key>KeepAlive</key><true/>
-    <key>ThrottleInterval</key><integer>10</integer>
-    <key>StandardOutPath</key><string>$LOG_DIR/serve.out.log</string>
-    <key>StandardErrorPath</key><string>$LOG_DIR/serve.err.log</string>
-</dict>
-</plist>
-PLIST
-  }
 
   # render_autodeploy_plist — the drift watcher (in-repo repo/bin/autodeploy).
   render_autodeploy_plist() {
@@ -1012,21 +1029,28 @@ main() {
       if [[ $# -eq 5 ]]; then validate_namespace "$4"; fi
       render_oc_toml "$1" "$2" "$3" "${4:-}" "${5:-}" || fail "render-config failed"
       ;;
-    # render-runtime-env — HIDDEN test seam (not in usage): run step 6's runtime
-    # resolution the exact way `install` does and print the serve plist's
-    # EnvironmentVariables fragment, so a harness can assert on the RENDERED
-    # CONTENT (which runtimes got stamped, which PATH) without running the whole
-    # install (build/migrate/launchctl). Args: HOME_DIR.
+    # render-serve-plist — HIDDEN test seam (not in usage): render the serve
+    # plist through the REAL renderer (`render_serve_plist`, the same function
+    # `install` step 6 hands to drop_and_load), so a harness can assert on the
+    # rendered CONTENT — which runtimes got stamped, which PATH — without running
+    # the whole install (build/migrate/launchctl). Args: HOME_DIR. Everything
+    # except the runtime stamps and PATH is a placeholder.
     # WHY IT EXISTS (T-ff48): before it, the only coverage of this file's stamp
     # was greps over its own source — and a grep for a mention goes green on dead
     # code. A reviewer proved exactly that: guarding the codex env line with
     # `if false` kept the whole suite green while OC_CODEX_BIN was never emitted,
     # i.e. the very defect T-ff48 fixes, shipping green on the source-install path.
-    render-runtime-env)
-      [[ $# -eq 1 ]] || fail "render-runtime-env needs: HOME_DIR"
-      resolve_runtime_stamps "$1" "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-      printf '        <key>PATH</key><string>%s</string>%s%s\n' \
-        "$SERVE_PATH" "$CLAUDE_ENV_LINE" "$CODEX_ENV_LINE"
+    render-serve-plist)
+      [[ $# -eq 1 ]] || fail "render-serve-plist needs: HOME_DIR"
+      HOME_DIR="$1"
+      COMMON_PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+      # Placeholders are plain paths so the rendered plist stays plutil-lint
+      # clean — the harness lints it, which is how "the stamp landed" and "the
+      # plist is still valid" get proven by the same artifact.
+      SERVER_ROOT="/render-seam"; SERVE_LABEL="$SERVE_LABEL_BASE"
+      REPO="/render-seam/repo"; OC_TOML="/render-seam/oc.toml"
+      LOG_DIR="/render-seam/log"
+      render_serve_plist
       ;;
     ""|-h|--help) usage; [[ "$sub" == "" ]] && exit 1 || exit 0 ;;
     *)            fail "unknown command: $sub (see: bin/ocserver --help)" ;;

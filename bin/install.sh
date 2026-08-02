@@ -1379,11 +1379,17 @@ oc_probe_runtime() {
   local bin="$1" pathval="$2"
   local budget="${OC_PROBE_BUDGET_SECS:-20}" pid ticks=0 max
   max=$((budget * 5))
+  # Own process group (set -m), so the timeout kill below reaps the shim's whole
+  # subtree. A version-manager shim typically execs or forks a real binary; killing
+  # only the direct child leaves that grandchild orphaned and running — which is
+  # how a bounded probe still ends up burning a core for hours.
+  set -m
   env -i PATH="$pathval" HOME="$HOME" "$bin" --version >/dev/null 2>&1 </dev/null &
   pid=$!
+  set +m
   while kill -0 "$pid" 2>/dev/null; do
     if [[ "$ticks" -ge "$max" ]]; then
-      kill -9 "$pid" 2>/dev/null || true
+      kill -9 -- "-$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
       echo "[install] WARN: '$bin --version' did not answer within ${budget}s — treating it as unusable under this PATH" >&2
       return 1

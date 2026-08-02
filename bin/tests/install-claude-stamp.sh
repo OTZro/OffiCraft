@@ -312,6 +312,23 @@ $PLIST_BODY"
 fi
 rm -f "$EXTRADIR/codex"
 
+# ── 6b. codex ALONE promotes the installer PATH (install.sh) ────────────────
+# Case 6 cannot prove this: both stubs are shims there, so the claude block's
+# promotion already satisfies the PATH assertion. Here claude runs fine under the
+# minimal launchd PATH, so a promoted PATH can only have come from the codex side.
+reset_fixture
+write_claude "$EXTRADIR/claude" ok
+write_codex  "$EXTRADIR/codex"  shim
+run_install 1
+check "codex-only shim: install succeeds" "0" "$RC"
+if plist_has "$EXTRADIR:"; then
+  ok "codex-only shim: the installer PATH is promoted by the codex block alone"
+else
+  bad "codex-only shim: the PATH was not promoted — a host whose codex alone is behind a version manager stamps a codex the warden cannot run:
+$PLIST_BODY"
+fi
+rm -f "$EXTRADIR/codex"
+
 # ── 7. codex-only host → OC_CODEX_BIN is stamped and the PATH is promoted ────
 # The preflight already lets this host install (claude OR codex). Before the fix
 # it installed a plist that named neither runtime.
@@ -383,10 +400,14 @@ fi
 # emitted — the exact T-ff48 defect, shipping green on the source-install path. A
 # grep for a mention cannot tell live code from dead code.
 #
-# So bin/ocserver grew `render-runtime-env`, a hidden seam in the same spirit as
-# the `render-config` seam that bin/tests/port-default.sh drives: it runs step 6's
-# resolution exactly as install does and prints the plist's EnvironmentVariables
-# fragment. These cases assert on what it EMITS.
+# So bin/ocserver grew `render-serve-plist`, a hidden seam in the same spirit as
+# the `render-config` seam that bin/tests/port-default.sh drives. It calls the
+# REAL renderer — `render_serve_plist`, the same function install step 6 hands to
+# drop_and_load — and that function now resolves the runtimes itself. These cases
+# therefore assert on the actual rendered plist, and there is no separate
+# "resolve" call in cmd_install left to lose: a second reviewer showed that when
+# there was one, deleting that single line reproduced the whole defect for BOTH
+# runtimes with the suite still green.
 OCSERVER_SRC="$HERE/../ocserver"
 OCSHOME="$WORK/ocs-home"
 OCSDIR="$WORK/ocs-versionmgr"
@@ -395,7 +416,7 @@ OCSDIR="$WORK/ocs-versionmgr"
 ocs_render() {
   rm -rf "$OCSHOME"; mkdir -p "$OCSHOME"
   OCS_OUT="$(env -i PATH="$OCSDIR:$SHIMDIR:/usr/bin:/bin:/usr/sbin:/sbin" \
-    HOME="$OCSHOME" "$@" bash "$OCSERVER_SRC" render-runtime-env "$OCSHOME" 2>/dev/null)"
+    HOME="$OCSHOME" "$@" bash "$OCSERVER_SRC" render-serve-plist "$OCSHOME" 2>/dev/null)"
 }
 ocs_has() { [[ "$OCS_OUT" == *"$1"* ]]; }
 
@@ -475,7 +496,7 @@ $OCS_OUT"
   write_claude "$OCSHOME/.npm-global/bin/claude" ok
   write_codex  "$OCSHOME/.npm-global/bin/codex"  ok
   OCS_OUT="$(env -i PATH="$SHIMDIR:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$OCSHOME" \
-    bash "$OCSERVER_SRC" render-runtime-env "$OCSHOME" 2>/dev/null)"
+    bash "$OCSERVER_SRC" render-serve-plist "$OCSHOME" 2>/dev/null)"
   if ocs_has "<key>OC_CLAUDE_BIN</key><string>$OCSHOME/.npm-global/bin/claude</string>"; then
     ok "ocserver: claude is found under ~/.npm-global/bin"
   else
@@ -489,15 +510,34 @@ $OCS_OUT"
 $OCS_OUT"
   fi
 
-  # 10f. the plist render really interpolates what the seam prints. The seam and
-  # the plist are two call sites of the same variables; without this, a plist that
-  # stopped interpolating them would leave every case above green.
-  OCS="$(cat "$OCSERVER_SRC")"
-  if [[ "$OCS" == *'$CLAUDE_ENV_LINE$CODEX_ENV_LINE'* ]]; then
-    ok "ocserver: the serve plist interpolates both env lines the seam builds"
+  # 10f. the rendered plist is a VALID plist, not just a string with the right
+  # substrings. plutil is not shimmed in this suite, so this is the real linter —
+  # the same gate drop_and_load applies before it hands the file to launchd.
+  rm -f "$OCSDIR/claude" "$OCSDIR/codex"
+  write_claude "$OCSDIR/claude" ok
+  write_codex  "$OCSDIR/codex"  ok
+  ocs_render
+  if printf '%s\n' "$OCS_OUT" | plutil -lint - >/dev/null 2>&1; then
+    ok "ocserver: the rendered serve plist passes plutil -lint with both stamps"
   else
-    bad "ocserver: the serve plist no longer interpolates CLAUDE_ENV_LINE/CODEX_ENV_LINE — the seam above is testing something the install does not render"
+    bad "ocserver: the rendered serve plist is NOT valid — launchd would refuse it:
+$OCS_OUT"
   fi
+
+  # 10g. the install path still renders through the function these cases drive.
+  # HONEST ABOUT ITS STRENGTH: this one IS a grep, and it is the last unguarded
+  # link — everything else about the stamp is now proven by running the renderer.
+  # It is a much smaller hole than the one it replaced: the resolution no longer
+  # has its own call site to lose (render_serve_plist resolves), so what is left
+  # is "does install still render the serve plist at all", and a host that stopped
+  # doing that has no serve job — a failure nobody could miss.
+  OCS="$(cat "$OCSERVER_SRC")"
+  if [[ "$OCS" == *'drop_and_load "$SERVE_LABEL" render_serve_plist'* ]]; then
+    ok "ocserver: install renders the serve plist through render_serve_plist"
+  else
+    bad "ocserver: install no longer renders through render_serve_plist — the cases above are driving a function the install does not use"
+  fi
+
   rm -rf "$OCSHOME"
 fi
 
@@ -513,7 +553,11 @@ fi
 # regression back into a FAIL (verified: disabling the budget makes this case
 # report the kill, not stall).
 reset_fixture
-printf '#!/usr/bin/env bash\nread -r _ 2>/dev/null\nsleep 600\n' > "$EXTRADIR/claude"
+# `exec` on purpose: without it the stub forks and the probe's kill reaps only
+# the stub, leaving an orphaned `sleep 600` behind on EVERY green run — the repo's
+# own no-orphans invariant (bin/tests/run_bounded.py), broken by the test that
+# proves the timeout works.
+printf '#!/usr/bin/env bash\nread -r _ 2>/dev/null\nexec sleep 600\n' > "$EXTRADIR/claude"
 chmod +x "$EXTRADIR/claude"
 HANG_OUT="$WORK/hang.out"
 : > "$HANG_OUT"
