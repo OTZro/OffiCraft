@@ -23,13 +23,17 @@ owner 用完 T-1f39 提了兩件事，各在一張卡上拍板：
 | 端點 | `GET /api/document-history/{kind}/{key}/seed` |
 | DTO | 新增 `DocumentSeedDTO { kind, key, content }`；`content` 用**與保留版本相同的欄位名**，所以同一個閱讀面／同一個 diff 直接服務它 |
 | 授權 | `Auth: gated`、`Requires: machine` —— **與「列出保留版本」同一個讀取地板**（比較就是讀）。還原那條仍是 `agent` 地板 ＋ 各文件自己的 in-handler 寫入門檻，一個字沒動 |
-| MCP | `MCPExclude: true`（理由寫在 `routes.go` 該列上）。role 的 seed 就是 boot context 注進那個 persona 的同一份文字、全域情境的預設就是空文件 —— 對 agent 零新增資訊；這條端點存在的理由是**座艙**要把 初始版本 放進同一個「先看再決定」的閱讀面 |
+| MCP | **工具 `get_document_seed`**（owner 裁定 `rc-b7d29de0eb9c`：「開放，照你 7/30 那句話一律給」）。⚠️ 這一格**推翻過一次**：本文件原本寫 `MCPExclude: true`，論證是「role 的 seed 就是 boot context 注進那個 persona 的同一份文字、全域情境的預設就是空文件 —— 對 agent 零新增資訊」。owner 依他 **2026-07-30** 那條政策否決了那個論證，而那正是隔壁 restore 那列已經引的同一條裁定（`rc-b5fd1135e2dd`）：**讀的給 agent、寫回去的不給**。切分點是**動詞**，不逐條重新表決「這個讀值不值得」——用「不夠有用」去排除，等於把那場表決又搬回來。**地板一個字沒動**（仍 `machine`，與 `list_document_history` 同級），這條路上也沒有寫入動詞可以被順帶打開 |
 | 404 的位置 | **恰好等於「重置也會 404」的那一組**：自訂角色、任務手冊（兩條序列）、per-role lessons。座艙的 初始版本 那一列本來就只在有 `onReset` 時渲染，所以「比得了」與「還原得了」永遠同進同退 |
 | 有 seed 的兩個文件 | `global_context` → `{text: "", tombstoned: "true"}`（**空文件就是它的預設**，不是「沒有答案」——對 diff 而言缺鍵與空字串是兩份不同的文件）；`role_definition` 的 seed 角色 → 檔案 seed 的 `definition_md` |
 
 **wire-freeze 流程照走**（憲章 §13）：先改 `spec/openapi.json` → `bash bin/gen-ocapi` 重生 `ocapi_gen.go`
 → `npx openapi-typescript` 重生 `frontend/src/api/generated/schema.ts`；`conformance/routes_manifest.json`
-（127 列）、`test_auth_matrix.py`、`test_rest_happy.py` 同批。`spec/mcp-catalog.json` **不動**（沒有新工具）。
+（127 列）、`test_auth_matrix.py`、`test_rest_happy.py` 同批。**`spec/mcp-catalog.json` 也同批**（手維護；
+新工具 `get_document_seed` 的描述子插在 `list_document_history` 之後，89 → 90 個工具），
+`conformance/routes_manifest.json` 的 `mcp_tool` 欄一併從 `null` 改成工具名。
+`catalog_hash` 由 route 表的**工具名集合**推導（`catalogHashOf`），所以這次會變 —— 那就是它的用途，
+agent 的目錄變了就該收到重啟訊號。
 
 ### 座艙側
 
@@ -122,4 +126,9 @@ owner 逐項拍板，實作對應如下（碼在 `frontend/src/components/DiffVi
 
 - `lib/lineDiff.ts` 與 `lib/lineDiff.test.ts`：**一個字未改**，18 條全綠。
 - 還原／重置的授權門檻、確認框的破壞性、over-cap 版本的「看得到按不下去」。
-- `spec/mcp-catalog.json`、`seeds/`：沒有新工具、沒有新的 agent 流程 ⇒ 憲章 §9c 不觸發。
+- `seeds/`：**有新工具，但沒有新的 agent 流程**，所以 §9c 這一次落在「不需要同批改」那邊 —— 判準不是
+  「有沒有加工具」而是「agent 要不要學新做法」。附錄 A 明文叫 agent **別背固定清單、一律以 `tools/list`
+  為權威**，而 seeds 從來沒有列舉過 `list_document_history`（`get_document_seed` 與它同形、同地板、
+  同一種用法），所以沒有任何一句 seed 因為這次改動變成假話。對照組是 `get_chat_attachment_share_link`：
+  那次**必須**改 seeds，因為它教的是一條 agent 原本不會做的新動作（簽連結、自己前綴 origin）。
+  ⚠️ **`spec/mcp-catalog.json` 不在這一節了**，它這次有改（見上）。

@@ -855,7 +855,7 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "get_document_seed",
     "method": "GET",
     "path": "/api/document-history/{kind}/{key}/seed",
     "requires": "machine"
