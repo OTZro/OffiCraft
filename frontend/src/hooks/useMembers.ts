@@ -26,7 +26,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Member } from "../types";
 import { api } from "../api";
 import { createDeltaSink, narrowToHeld } from "../lib/deltaSink";
-import type { SseDelta } from "../api/adapter";
+import { burstMovesNoOwnerUnread } from "../lib/ownerUnread";
 
 interface UseMembers {
   members: Member[];
@@ -65,45 +65,11 @@ const ROSTER_TOPICS_LIGHT = new Set(["member", "role_def"]);
 // re-pull.
 const BADGE_ONLY_TOPICS = new Set(["chat", "chat_read"]);
 
-// The owner's fixed wire id — the `sub` of the owner token. Kept local, the same
-// as ChatArea's / ChatGalleryPanel's / actorLabel's OWNER_ID: the value is the
-// wire's, not a new name to invent.
-const OWNER_ID = "owner";
-
-/**
- * Could this delta move ANY unread badge on THIS roster?
- *
- * The only roster field a badge-only topic can move is `unread_count`, and that
- * count is the inverse of the READER's watermark: `UnreadCounts`
- * (server/ocserverd/domain.go:411-425) counts a message only when
- * `m.Recipient == reader` — its own doc comment says "Messages between two other
- * participants never count". This roster's reader is the owner. So a chat line
- * or a read receipt with NO owner at either end cannot change a single number
- * here, and refetching for it — by EITHER path — buys nothing at all.
- *
- * The identity we need is already on the delta (`toSseDelta` keeps
- * from/to/reader/peer), so this costs no request to decide.
- *
- * ⚠️ The two topics carry DIFFERENT field names — `chat` has from/to, and
- * `chat_read` has reader/peer. Checking only one pair silently answers "no owner
- * here" for every delta of the other topic, which would skip real work.
- *
- * ⚠️ This is deliberately the LOOSE test ("is the owner at either end"), not the
- * tightest one. The tightest would be `to === owner` for chat (a message the
- * owner SENT moves nobody's badge either) and `reader === owner` for chat_read.
- * Both remaining cases are still-wasted k=1 per-item GETs, and narrowing them is
- * a SECOND optimisation that deserves its own measurement — the loose test errs
- * toward fetching, which is the safe direction.
- */
-function couldMoveAnOwnerBadge(d: SseDelta): boolean {
-  const n = d.names;
-  return (
-    n.from === OWNER_ID ||
-    n.to === OWNER_ID ||
-    n.reader === OWNER_ID ||
-    n.peer === OWNER_ID
-  );
-}
+// The predicate ("could this delta move an unread number the OWNER sees?") is
+// shared with useChatUnread and useOutsourceWorkers — one invariant, one home:
+// `lib/ownerUnread.ts`. T-b17f tightened it from "owner at EITHER end" to
+// `to === owner` / `reader === owner`; that file carries the derivation and the
+// warning about the two topics' different field names.
 
 export function useMembers(opts?: { light?: boolean }): UseMembers {
   const light = opts?.light ?? false;
@@ -199,28 +165,25 @@ export function useMembers(opts?: { light?: boolean }): UseMembers {
           void full();
           return;
         }
-        // 🔴 NOTHING in this burst has the owner at either end ⇒ it cannot move
-        // a single badge on this roster ⇒ do not fetch AT ALL (not the list, not
-        // the item). See `couldMoveAnOwnerBadge`. This is the agent↔agent case,
-        // which is ordinary traffic here: before this line it cost one full
-        // `GET /api/members` per message, for a screen that never changed.
+        // 🔴 NOTHING in this burst is addressed to the owner (chat) or read BY
+        // the owner (chat_read) ⇒ it cannot move a single badge on this roster
+        // ⇒ do not fetch AT ALL (not the list, not the item). See
+        // `lib/ownerUnread.ts`. This is the agent↔agent case, which is ordinary
+        // traffic here: before this line it cost one full `GET /api/members` per
+        // message, for a screen that never changed.
+        //
+        // T-b17f tightened the predicate, so this now also swallows two shapes
+        // that used to cost one wasted `GET /api/members/{id}` each:
+        // `owner → member` (the recipient is the member, not the owner) and
+        // `chat_read` with `peer === owner` (a member read OUR messages, which
+        // advances THEIR watermark — watermarks are per-reader).
         //
         // Whole-burst, not per-delta: a mixed burst (one agent↔agent line AND
         // one line to the owner) still goes through the branches below with ALL
         // its ids, so a real change is never dropped. That can widen k and send
         // a mixed burst down the list path instead of the per-item one — always
         // CORRECT, occasionally not the cheapest, and the safe direction.
-        //
-        // The `length > 0` guard is fail-safe, not decoration: an empty `deltas`
-        // would make `.some()` false and skip. Today that is unreachable (a
-        // batch with no delta object is `unnamed`, which returns above), but the
-        // failure mode would be a silent stale roster, so it is spelled out.
-        if (
-          batch.deltas.length > 0 &&
-          !batch.deltas.some(couldMoveAnOwnerBadge)
-        ) {
-          return;
-        }
+        if (burstMovesNoOwnerUnread(batch, mine)) return;
         // Named somebody, none of them ours: a chat line CANNOT add, remove or
         // rename a member (that is the "member" topic), so a conversation with
         // an outsource worker / a released peer changes nothing this roster

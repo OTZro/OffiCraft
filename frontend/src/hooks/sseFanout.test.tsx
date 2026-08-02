@@ -437,18 +437,19 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
       "m-third",
     ]);
 
-    // 🔴 誠實邊界:**座艙整體不是 0**。`useChatUnread` 沒有逐項路徑、也還沒有這道
-    // 跳過,所以同一則 delta 仍讓它重抓一次全公司未讀總數 —— 而依同一條
-    // `UnreadCounts(reader=owner)` 推論,那個總數同樣**不可能**因 agent↔agent 訊息
-    // 改變。這裡把它斷言出來,免得有人把「useMembers 0 請求」讀成「座艙 0 請求」。
+    // 🔴 **座艙整體現在真的是 0(T-b17f)**。這兩條原本是刻意的絆線,寫著 1 / 1 並
+    // 註明「`useChatUnread` 被修好的那天它們會紅,那是進展不是回歸」。那一天到了:
+    // 全公司未讀總數同樣是 `UnreadCounts(reader=owner)` 的和(api_chat.go:873),
+    // agent↔agent 的訊息動不了它一個單位,所以那次 `GET /api/chat/unread-count`
+    // ——它在 server 側是一次 `ListChat()` 全表掃描 + 一次名冊 + 一次 worker 清單——
+    // 是純浪費。**期望值 1 → 0 是這顆改動的成果,不是回歸。**
     //
-    // ⚠️ **這兩條是刻意的絆線,不是永久契約**:`useChatUnread` 被修好的那天它們會紅。
-    // **那是進展,不是回歸** —— 屆時把期望值改成 0 / 0(並回頭更新 frontend/CLAUDE.md
-    // 那段射程說明)。**還有第四個實例也在等**:`useOutsourceWorkers` 的
-    // `getOutsourceWorker`(見下方那條 worker 測試),所以「全部收完」不只一處。
-    expect(h.counts.getChatUnreadCount).toBe(1);
-    expect(view.result.current.unread).toBe(11);
-    expect(totalRequests()).toBe(1);
+    // ⚠️ `view.result.current.unread` 因此停在 mount 時的 4,**不是** fixture 那個 11。
+    // 那正是誠實的:真 server 對這則 a2a 訊息不會把總數改成 11(11 是這個 harness
+    // 的假值,見上方瑕疵 (a)),所以「沒去抓」= 停在真 server 也會給的那個數。
+    expect(h.counts.getChatUnreadCount ?? 0).toBe(0);
+    expect(view.result.current.unread).toBe(4);
+    expect(totalRequests()).toBe(0);
   });
 
   it("🔴 a chat_read between two MEMBERS also costs zero — the predicate is reader/peer, not from/to", async () => {
@@ -470,6 +471,133 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
     expect(h.counts.getMember ?? 0).toBe(0);
     expect(view.result.current.members.map((m) => m.unreadCount)).toEqual([
       3, 1, 0,
+    ]);
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // T-b17f — the three remaining instances of the SAME waste. All three assert
+  // the REQUEST COUNT, because that is the only judge with any discrimination:
+  // 「badge/總數 沒變」holds BEFORE and AFTER the fix (these deltas could never
+  // move those numbers), so a value assertion here would be tautological.
+  //
+  // Each has a CONTROL alongside it that keeps the genuine refetch — without
+  // one, "issue no requests" is satisfied by a hook that stopped working.
+  // ────────────────────────────────────────────────────────────────────────
+
+  it("🔴 T-b17f ① an agent↔agent line costs the NAV TOTAL zero requests", async () => {
+    // The office total is Σ `UnreadCounts(messages, receipts, owner)` over the
+    // live set (api_chat.go:873). A message between two members is not addressed
+    // to the owner, so it contributes 0 both before and after — the server would
+    // hand back the number we already hold, after a full `ListChat()` scan plus
+    // a members and a workers list read.
+    // Mutant: delete the `burstMovesNoOwnerUnread` gate in useChatUnread.ts →
+    // this goes red with getChatUnreadCount back at 1.
+    const view = await mountedCockpit();
+    h.unread = 11; // a value the REAL server could not produce for this delta
+
+    emit({
+      topic: "chat",
+      names: { id: "cm-a2a2", from: "m-other", to: "m-third" },
+      ids: ["cm-a2a2", "m-other", "m-third"],
+    });
+    await settle();
+
+    expect(h.counts.getChatUnreadCount ?? 0).toBe(0);
+    // Corroboration, NOT the judge: the badge holds the mount value, so we did
+    // not adopt the fixture's impossible 11.
+    expect(view.result.current.unread).toBe(4);
+  });
+
+  it("🔴 T-b17f ① CONTROL: a line TO the owner still re-reads the nav total", async () => {
+    const view = await mountedCockpit();
+    h.unread = 11;
+
+    emit({
+      topic: "chat",
+      names: { id: "cm-in", from: "m-other", to: "owner" },
+      ids: ["cm-in", "m-other", "owner"],
+    });
+    await settle();
+
+    expect(h.counts.getChatUnreadCount).toBe(1);
+    expect(view.result.current.unread).toBe(11);
+  });
+
+  it("🔴 T-b17f ② a message the OWNER SENT moves no badge — the predicate is `to`, not either end", async () => {
+    // `UnreadCounts` counts `m.Recipient == reader`, and the reader here is the
+    // owner. On `owner → m-other` the recipient is m-other, so the owner's badge
+    // for that card cannot move. The pre-T-b17f LOOSE predicate ("owner at
+    // EITHER end") fetched anyway: one wasted `GET /api/members/{id}`, and one
+    // wasted `GET /api/chat/unread-count` behind it.
+    // Mutant: widen the predicate back to `from === owner || to === owner` in
+    // lib/ownerUnread.ts → this goes red with getMember at 1.
+    await mountedCockpit();
+    h.members = [member(OPEN_PEER, 3), member("m-other", 6), member("m-third")];
+
+    emit({
+      topic: "chat",
+      names: { id: "cm-out", from: "owner", to: "m-other" },
+      ids: ["cm-out", "owner", "m-other"],
+    });
+    await settle();
+
+    expect(h.counts.getMember ?? 0).toBe(0);
+    expect(h.counts.listMembers ?? 0).toBe(0);
+    expect(h.counts.getChatUnreadCount ?? 0).toBe(0);
+    expect(totalRequests()).toBe(0);
+  });
+
+  it("🔴 T-b17f ② a member reading OUR messages moves no badge — the predicate is `reader`, not either end", async () => {
+    // The mirror on the other topic: `chat_read {reader: m-other, peer: owner}`
+    // advances M-OTHER's watermark. Watermarks are per-reader (`UnreadCounts`
+    // only reads receipts with `ReaderID == reader`), so nothing the owner sees
+    // moves. The loose predicate matched on `peer === owner` and fetched.
+    // Mutant: widen the predicate back to `reader === owner || peer === owner`
+    // → this goes red with getMember at 1.
+    await mountedCockpit();
+    h.members = [member(OPEN_PEER, 3), member("m-other", 6), member("m-third")];
+
+    emit({
+      topic: "chat_read",
+      names: { reader: "m-other", peer: "owner" },
+      ids: ["m-other", "owner"],
+    });
+    await settle();
+
+    expect(h.counts.getMember ?? 0).toBe(0);
+    expect(h.counts.listMembers ?? 0).toBe(0);
+    expect(h.counts.getChatUnreadCount ?? 0).toBe(0);
+    expect(totalRequests()).toBe(0);
+  });
+
+  it("🔴 T-b17f ③ a member talking TO an 外包 costs the rail zero requests", async () => {
+    // `api_outsource.go` :136/:199/:358 all fold `UnreadCounts(…, currentActor)`
+    // — the same owner-reader count — and each pays its own full `ListChat()`
+    // table scan. `m-other → ow-1` names ow-1, so the rail used to re-read that
+    // row; but the recipient is ow-1, not the owner, so its badge cannot move.
+    // Mutant: delete the `burstMovesNoOwnerUnread` gate in
+    // useOutsourceWorkers.ts → this goes red with getOutsourceWorker at 1.
+    //
+    // ⚠️ Its CONTROL is the `ow-1 → owner` test below, which MUST keep its one
+    // read: that badge really does move. Skipping both would also make this
+    // assertion pass, which is exactly why the pair is not optional.
+    const view = await mountedCockpit();
+    h.workers = [worker("ow-1", 5), worker("ow-2")]; // impossible for this delta
+
+    emit({
+      topic: "chat",
+      names: { id: "cm-m2w", from: "m-other", to: "ow-1" },
+      ids: ["cm-m2w", "m-other", "ow-1"],
+    });
+    await settle();
+
+    expect(h.counts.getOutsourceWorker ?? 0).toBe(0);
+    expect(h.counts.listOutsourceWorkers ?? 0).toBe(0);
+    expect(h.counts.getChatUnreadCount ?? 0).toBe(0);
+    expect(totalRequests()).toBe(0);
+    // Corroboration: the rail did not adopt the fixture's impossible 5.
+    expect(view.result.current.workers.map((w) => w.unreadCount)).toEqual([
+      0, 0,
     ]);
   });
 
@@ -531,6 +659,12 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
     // An `ow-` peer is not in the roster, and a chat line cannot add a member.
     expect(h.counts.listMembers ?? 0).toBe(0);
     expect(h.counts.getMember ?? 0).toBe(0);
+    // 🔴 T-b17f CONTROL half: this row's badge REALLY moves (the recipient IS
+    // the owner), so the skip must NOT swallow it — neither the row read above
+    // nor the nav total, which counts live workers too (api_chat.go:873).
+    // A gate that keyed on "a worker was named" instead of on `to` would zero
+    // both of these and silently freeze the 外包 badge.
+    expect(h.counts.getChatUnreadCount).toBe(1);
   });
 
   it("a task delta re-pulls the list: the row updates, the filter drops it, and the dep join SURVIVES", async () => {

@@ -428,6 +428,14 @@ reconcile-by-refetch 的規則沒變(**永遠不 merge payload**),但「refetch 
 - 🔴 **逐項重讀只有在「單筆回應是清單列的超集」時才成立,而三個端點只有一個是**
   (見 `api/dtoParity.ts` — 這是那份表存在的全部理由):
   - `useOutsourceWorkers` — **可以**逐項:chat/chat_read → `GET /api/outsource-workers/{id}`。
+    🔴 **但先過 `burstMovesNoOwnerUnread`(T-b17f)**:`api_outsource.go` :136/:199/:358
+    三處都是 `UnreadCounts(messages, receipts, currentActor(r))`、reader 一樣是 owner,
+    而且**各自跑一次 `ListChat()` 全表掃描**。所以 `m-other → ow-1` 那則雖然**指名了
+    rail 上的 worker**,那一列的 badge 卻**不可能動**(recipient 是 ow-1、不是 owner)
+    ⇒ 0 個請求。⚠️ **`ow-1 → owner` 是完全相反的一格,它的重抓是正當的**——述詞問的是
+    `to`,不是「有沒有指名一個 worker」,所以分得出來;那條的對照測試(`ow-1 → owner`
+    仍 `getOutsourceWorker === 1` 且 `getChatUnreadCount === 1`)是這件事的守衛,把
+    `chat` 那條述詞改成恆 `false` 就會打紅它。
     server 的單筆 handler 呼叫**同一支** `projectWorker`、帶**同一個真的** `unread[worker.ID]`
     ⇒ 一個欄位都沒少。排序鍵是**綁定任務的 created_ts**,聊天碰不到 ⇒ 不准重排(否則一則
     訊息會讓列跳位)。`outsource_worker`(派工/釋放=成員資格)與 `task` 照舊全量。
@@ -501,46 +509,53 @@ reconcile-by-refetch 的規則沒變(**永遠不 merge payload**),但「refetch 
     badge ⟹ 語意上是 no-op。** 而且「會動 badge」⟹「有一端是 owner」⟹ `k ≤ 1`,
     所以**真的有事做的情況恆為 k=1**。
     ⚠️ **反過來不成立,別把它讀成雙條件**:`k = 1` **不**蘊含「有事做」——上表第 2、4 列
-    都是 k=1 而且什麼都不該做,它們今天照樣各打一次 `GET /api/members/{id}`。
+    都是 k=1 而且什麼都不該做。
     (這一點與獨立驗證回報的表略有出入,以本表為準:那份表把「owner ↔ member」整列記成
     「會動」,但只有 member→owner 那個方向會。)
 
-    🔴 **所以正解是 0 個請求,而它已經做了**(owner 2026-08-02 裁定「順手做掉,但要走
-    完整驗證」)。`useMembers` 的 **`couldMoveAnOwnerBadge`**:整陣 delta 的兩端都不是
-    `owner` ⇒ **直接 return,一個請求都不發**(不是清單、也不是逐項)。判斷所需的資訊
-    本來就在 delta 上(`toSseDelta` 留著 `from`/`to`/`reader`/`peer`),不必問 server。
+    🔴 **所以正解是 0 個請求,而四個實例已經全部收完**(owner 2026-08-02 裁「順手做掉」
+    → 補裁「一起做完」;`useMembers` 隨 T-8115 進主幹,其餘三處 T-b17f)。述詞現在只有
+    **一個家**:`lib/ownerUnread.ts` 的 `couldMoveOwnerUnread` / `burstMovesNoOwnerUnread`,
+    由 `useMembers` / `useChatUnread` / `useOutsourceWorkers` **三個 hook 共用**——同一條
+    不變量抄三份必然會各自漂移。整陣 delta 沒有一則能動 owner 的未讀數 ⇒ **直接 return,
+    一個請求都不發**(不是清單、也不是逐項)。判斷所需的資訊本來就在 delta 上
+    (`toSseDelta` 留著 `from`/`to`/`reader`/`peer`),不必問 server。
     ⚠️ **兩個 topic 的述詞欄位不同**:`chat` 是 `from`/`to`、`chat_read` 是
     `reader`/`peer`。只檢查一對,會對另一個 topic 的**每一則** delta 都答「沒有 owner」
-    ⇒ 把真的有事做的那些也跳過。**mutant 實測**:拿掉 `reader`/`peer` 兩項 →
-    `sseFanout.test.tsx` **恰好紅 2 條**(都在 read-echo 那組)。
-    ⚠️ 它刻意用**寬鬆**述詞(「owner 在任一端」)而不是最緊的那個(`chat` 只需
-    `to === owner`、`chat_read` 只需 `reader === owner`)。上表第 2、4 列因此仍各花一次
-    沒必要的逐項 GET。**收緊是第二個最佳化,要自己的量測與裁定**;寬鬆版錯在「多抓」,
-    是安全的那一邊。
+    ⇒ 把真的有事做的那些也跳過。**mutant 實測(2026-08-02)**:把 `chat_read` 那條
+    改成恆 `false` → `sseFanout.test.tsx` **恰好紅 2 條**(都在 read-echo 那組);把
+    `chat` 那條改成恆 `false` → **紅 5 條**(含外包 rail 的 `ow-1 → owner` 對照)。
 
-    **實測(同一份 harness 母體、改前改後當下各量一次;40 列名冊)**:一則 agent↔agent
-    chat delta 對 `useMembers` 的請求 **1 → 0**、位元組 **3,403 → 0**;`chat_read`
-    member↔member 同樣 **1 → 0 / 3,403 → 0**;member↔`ow-` worker(k=1)**1 → 0 /
-    84 → 0**。對照組不動:member→owner **維持 1 次 `getMember`**、`chat_read`
-    reader=owner **維持 1 次**、混合陣 **維持 1 次清單**、resync **維持全量**。
-    ⚠️ **這些位元組是 harness fixture 尺度,不是正式站尺度**(我沒有正式站名冊可引用);
-    改動後那一格是 **0,而且是構造上的 0**——根本不發請求,所以省下的就是那個 GET 的
-    全部大小,與名冊多大成正比。
-    🔴 **「0 請求」的射程是 `useMembers`,不是整個座艙 —— 同一個浪費還有第三與第四個
-    實例,都在別的 hook 裡,本輪未授權處理。** 別把這裡的 0 讀成座艙的 0。
-    - **第三個:`useChatUnread` 的 `getChatUnreadCount`**。同一則 a2a delta 仍讓它打
-      一次(實測 total 2 → **1**,不是 0),而依同一條 `UnreadCounts(reader=owner)`,
-      那個全公司總數同樣**不可能**因 agent↔agent 訊息改變。
-    - **第四個:`useOutsourceWorkers` 的 `getOutsourceWorker`**(獨立驗證實測:
-      `m-other → ow-1` 的 chat ⇒ `{getOutsourceWorker: 1, getChatUnreadCount: 1}`)。
-      `api_outsource.go` 三處都是 `UnreadCounts(messages, receipts, actor)`、reader 一樣
-      是 owner,而且**各自跑一次 `ListChat()` 全表掃描**。
-      ⚠️ **但別把它講太寬**:`ow-1 → owner` 那則的 `getOutsourceWorker` 是**正當的**
-      (Recipient==owner,那個 badge 真的動)。**該 hook 今天分不出這兩者** —— 形狀
-      跟改動前的 `useMembers` 一模一樣,所以修法也會一樣,但那是另一輪的事。
-    ⚠️ **`sseFanout.test.tsx` 裡那兩條 `getChatUnreadCount === 1` / `totalRequests() === 1`
-    是刻意的絆線**:上面任一個被修好時它們會紅,**那是進展不是回歸**,屆時把期望值
-    改成 0 並回頭更新這一段。
+    🔴 **述詞是 T-b17f 收到最緊的那一版:`chat` 只認 `to === owner`、`chat_read` 只認
+    `reader === owner`。** 舊的寬鬆版(「owner 在任一端」)另外浪費兩種 k=1 的逐項 GET,
+    而兩者都不是對稱的雜訊、各有各的理由:
+    - `chat` 的 `from === owner`——**owner 自己送出**的訊息,recipient 是對方,
+      owner 對那張卡的計數不動(`UnreadCounts` 的 doc comment 自己就寫了
+      「neither do the reader's own sends」)。
+    - `chat_read` 的 `peer === owner`——**別人讀了 owner 的訊息**,推進的是**他的**
+      watermark,而 watermark 是 per-reader 的。
+    ⚠️ 上表第 4 列(member ↔ `ow-` worker)**在寬鬆版就已經是 0** 了(兩端都不是 owner),
+    別把它算進收緊的收益——收緊真正省到的是上面那兩種。
+
+    **實測(同一份 harness 母體、改前改後當下各量一次;40 列名冊 + 8 個 worker)**:
+
+    | 形狀 | 改前(請求/位元組) | 改後 | 省在哪個 hook |
+    |---|---|---|---|
+    | a2a `chat`(m→m) | 1 / 1 B | **0 / 0** | ① `useChatUnread` |
+    | a2a `chat_read`(reader/peer 皆 member) | 1 / 1 B | **0 / 0** | ① |
+    | `owner → member` chat | 2 / 202 B | **0 / 0** | ② 收緊 + ① |
+    | `chat_read` reader=member, peer=owner | 2 / 202 B | **0 / 0** | ② 收緊 + ① |
+    | `member → ow-worker` chat | 2 / 145 B | **0 / 0** | ③ `useOutsourceWorkers` + ① |
+
+    對照組**逐位元組不動**:`member → owner` 2 / 202 B、`chat_read` reader=owner
+    2 / 200 B、`ow-1 → owner` 2 / 145 B、混合陣 4 / 8,212 B(含 1 次清單)、
+    resync 9 / 11,083 B。
+    ⚠️ **這些位元組是 harness fixture 尺度,不是正式站尺度**,而且**位元組不是這顆的
+    價值所在**:`getChatUnreadCount` 的回應只有 1 個位元組(一個數字),但它在 server
+    側是一次 `ListChat()` **全表掃描** + 一次名冊 + 一次 worker 清單。**價值在往返次數
+    與 server 端的掃描,不在下載量。**
+    🔴 **這四個實例已經全部收完,但「座艙 0 請求」只對這些形狀成立。** 別把它讀成
+    「任何 delta 都不再打 API」——真的會動 badge 的照舊全打(見上面的對照組)。
 
     🔴 **`k > 1 → full()` 沒有刪 —— 而且它是混合陣的熱路徑,不是 fail-safe。**
     ⚠️ **本檔上一版把它寫成「生產上不可達的 fail-safe」,那是錯的,而且錯的方向會害人
@@ -554,8 +569,9 @@ reconcile-by-refetch 的規則沒變(**永遠不 merge payload**),但「refetch 
     (**沒有量過**的是 wire 實際多常把兩個 chat frame 送進同一個 microtask,別宣稱頻率。)
     🔴 **這個坑會反覆出現,記住它**:`sseFanout.test.tsx` 在它的 k 測試正上方花了 35 行
     講的就是**一陣 ≠ 一則**,而我們**隔一顆 commit 就在 `useMembers.ts` 裡踩了進去**。
-    每次推理 k,先問手上拿的是哪一個:**per-delta** 的述詞(`couldMoveAnOwnerBadge`)
-    還是 **per-burst** 的聯集(`touched`)。
+    每次推理 k,先問手上拿的是哪一個:**per-delta** 的述詞(`couldMoveOwnerUnread`)
+    還是 **per-burst** 的聯集(`touched`)。`lib/ownerUnread.ts` 的檔頭把這一條再寫了
+    一次,因為那支檔案就是最容易被誤用成 per-burst 過濾器的地方。
 
     **跳過是整陣判斷、不是逐則過濾**:混合陣仍帶**全部** ids 走下面的分支,所以真的有
     事做的那一半永遠不會被吃掉;代價是 k 可能被撐大、混合陣走清單而非逐項——**永遠
@@ -573,15 +589,23 @@ reconcile-by-refetch 的規則沒變(**永遠不 merge payload**),但「refetch 
        都不可能紅。**不要把它算進覆蓋。**
 
     🔴 **判準是請求數,不是 badge 值** —— 「badge 沒變」在改動前後**都**成立(那則 delta
-    本來就改不了任何值),拿它當判準會寫出一條恆真的斷言。三條測試的判準全部是
-    `h.counts`。**mutant 實測(2026-08-02,每顆還原都用 scratchpad 備份、未用
-    `git checkout --`)**:
+    本來就改不了任何值),拿它當判準會寫出一條恆真的斷言。所有這些測試的判準都是
+    `h.counts`;值斷言只當佐證,而且只有在 fixture 報出**真 server 產不出來的值**時
+    才有鑑別力。**mutant 實測(2026-08-02,T-b17f 全部重跑過一遍,不是沿用舊紀錄;
+    每顆還原都用 scratchpad 備份 + shasum 對帳、未用 `git checkout --`)**:
 
-    | mutant | `sseFanout.test.tsx`(13 條) |
+    | mutant | `sseFanout.test.tsx`(18 條) |
     |---|---|
-    | 拿掉 `couldMoveAnOwnerBadge` 跳過 | 🔴 **2 條**(a2a chat、a2a chat_read;皆 `expected 1 to be +0`) |
-    | 述詞只留 `from`/`to`(丟掉 `reader`/`peer`) | 🔴 **2 條**(read-echo 那組) |
+    | 拿掉 `useChatUnread` 的 `burstMovesNoOwnerUnread` 跳過 | 🔴 **5 條**(a2a、T-b17f ①②②③;皆 `expected 1 to be +0`) |
+    | 述詞放寬回「owner 在任一端」(`\|\| from` / `\|\| peer`) | 🔴 **2 條**(T-b17f ② 兩條) |
+    | 拿掉 `useOutsourceWorkers` 的跳過 | 🔴 **1 條**(T-b17f ③) |
+    | `chat_read` 那條述詞恆 `false`(過度跳過的方向) | 🔴 **2 條**(read-echo 那組) |
+    | `chat` 那條述詞恆 `false`(過度跳過的方向) | 🔴 **5 條**(含外包 rail 的 `ow-1 → owner` 對照) |
     | 刪掉 `k > 1 → full()`(混合陣的熱路徑) | 🔴 **1 條**(混合陣 CONTROL,`expected undefined to be 1`) |
+
+    ⚠️ 前三顆各自有**一條專屬**的測試(T-b17f ①/②/③),但它們的斷言不是互斥的——
+    ② 與 ③ 那幾條同時斷言 `getChatUnreadCount === 0`,所以①的 mutant 也會打紅它們。
+    **真正一對一的是每顆 mutant 的最小殺傷集**:①→ ① 那條、②→ ② 那兩條、③→ ③ 那條。
   - `useTasks` — **不可以**逐項,走清單。`GET /api/tasks/{id}` **整個 wire 上沒有
     `dep_tasks`**(凍結 spec 只把那個 server-side dep join 放在 `TaskListItemDTO`;
     `toTask()` 因此不設 `depTasks`,`toTaskListItem()` 逐字帶過)。而 `TaskCard` 把
@@ -597,7 +621,12 @@ reconcile-by-refetch 的規則沒變(**永遠不 merge payload**),但「refetch 
     **一條沒展開卡片的 dep 測試對這類 bug 完全是盲的**。哨兵
     `TaskCard.dep-after-hydrate.test.tsx`(展開 + 用 `projectSingleItem("task", row)`
     當 hydrate 回傳值,斷言 dep 仍講得出標題與狀態;同一顆 mutant 現在恰好紅這 2 條)。
-  - `useChatUnread` — 一個總數,沒有「只抓一項」的版本;只吃 coalescing。
+  - `useChatUnread` — 一個總數,沒有「只抓一項」的版本;吃 coalescing **與**
+    `burstMovesNoOwnerUnread`(T-b17f)。它是 Σ `UnreadCounts(…, owner)` over 活著的
+    成員 ∪ 外包(`api_chat.go:873`),所以「不是寄給 owner 的 chat」「reader 不是 owner
+    的 chat_read」動不了它一個單位。**但跳過只在整陣的 topic 全是 chat/chat_read 時才
+    成立**:`member` / `outsource_worker` 改的是**活著的那個集合本身**(移除一個成員會
+    讓他殘留的未讀退出這個和),那兩個 topic 照舊無條件重抓。
   ⚠️ **剩下的那個缺口補不在 client**:`dep_tasks` 是凍結 wire 沒有的欄位,要它就得
   **動 spec**(additive-optional;root §12 DTO 條:加欄要先問 owner),**還在等裁定**。
   在那之前**不要「順手」把 `narrowToHeld` 接回 `useTasks`** —— 那個編譯期 pin
