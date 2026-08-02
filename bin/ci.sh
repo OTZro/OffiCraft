@@ -261,6 +261,23 @@ for gomod in "$ROOT"/cli/*/go.mod "$ROOT"/server/*/go.mod; do
   go_module_gate "${mod_dir#"$ROOT"/}" "$(basename "$mod_dir")"
 done
 
+# Client-payload contract gate (T-9c8d). The module loop above only guarantees
+# that a module's tests RUN, never that the module has any — which is how a commit
+# tightening 30+ schemas killed four live uplinks with this whole script green.
+#
+# The gate enumerates every callsite under cli/** that can put a body on the wire
+# and requires each one to be accounted for in cli/uplinks.json: its OpenAPI route,
+# the requestBody $ref read off the frozen spec, and the wire test that compares a
+# real producer's body against it. It is written as a query that must come back
+# empty, so adding an uplink cannot quietly shrink the covered set — read
+# bin/uplink-guard.py's header before changing its shape.
+echo "[ci]   client uplink contract — every CLI send is declared, spec-checked and wire-tested"
+python3 "$ROOT/bin/uplink-guard.py"
+# ...and the guard's own positive control: one fixture per bypass that was once
+# live, each of which must still be caught. Without it, narrowing the scan is a
+# silent edit — the gate keeps printing all green over a smaller and smaller set.
+python3 "$ROOT/bin/tests/uplink-guard-selftest.py"
+
 # 1g. gen-ocapi drift gate — the wire-freeze gate on the server's REST surface.
 # server/ocserverd/ocapi_gen.go is a COMMITTED generated artifact (bin/gen-ocapi:
 # spec/openapi.json → deterministic 3.1→3.0 downconvert → pinned oapi-codegen).

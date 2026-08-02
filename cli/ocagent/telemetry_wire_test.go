@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -221,6 +222,11 @@ func TestContextReportBodiesMatchFrozenIngestSchemas(t *testing.T) {
 		},
 	}
 
+	// Which uplinks this test actually walked against the frozen schema — not which
+	// ones it meant to. Compared below against the manifest's own count, so a row
+	// added here without an assertion to go with it is short by one and red.
+	walked := map[string]int{}
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, posts := contextServer(t)
@@ -236,6 +242,7 @@ func TestContextReportBodiesMatchFrozenIngestSchemas(t *testing.T) {
 			if tel == nil {
 				t.Fatalf("no telemetry POST; posts=%v", *posts)
 			}
+			walked["/api/monitoring/telemetry"]++
 			if bad := schemaViolations(tel.body, telemetryDeclared); len(bad) > 0 {
 				t.Errorf("telemetry body has keys the frozen schema refuses %v — the whole "+
 					"report (usage AND account) would 400/422; body=%s", bad, tel.body)
@@ -245,12 +252,40 @@ func TestContextReportBodiesMatchFrozenIngestSchemas(t *testing.T) {
 					"report would 400; body=%s", bad, tel.body)
 			}
 			if ctx := findPost(*posts, "/api/agent/context"); ctx != nil {
+				walked["/api/agent/context"]++
 				if bad := schemaViolations(ctx.body, contextDeclared); len(bad) > 0 {
 					t.Errorf("context body has keys the frozen schema refuses %v — the gauge "+
 						"would 400/422; body=%s", bad, ctx.body)
 				}
 			}
 		})
+	}
+
+	// The join: the routes committed to this file, against the routes a real test
+	// server observed the real producer post to. Compared as SETS because the loop
+	// above drives the reporter once per payload shape, so the send counts are a
+	// property of the case table, not of the manifest.
+	//
+	// That makes one thing the set form cannot see, so it is asserted directly: two
+	// rows on the same route would be indistinguishable here. While every route
+	// carries exactly one row, "committed" and "walked" are the same question.
+	want := manifestUplinkPaths(t, "cli/ocagent/telemetry_wire_test.go")
+	for route, rows := range want {
+		if rows != 1 {
+			t.Fatalf("cli/uplinks.json commits %d uplinks to %s through this wire test. "+
+				"This join compares route SETS, so it cannot tell them apart — give the "+
+				"second one its own assertion and count sends, or split the wire test.",
+				rows, route)
+		}
+	}
+	seen := map[string]int{}
+	for route := range walked {
+		seen[route] = 1
+	}
+	if !maps.Equal(seen, want) {
+		t.Errorf("cli/uplinks.json commits %v to this wire test but the producer posted to "+
+			"%v. A committed uplink nobody compared is exactly the gap the shipped clients "+
+			"went dark through.", want, walked)
 	}
 }
 

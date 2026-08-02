@@ -63,7 +63,7 @@ top-level:
 - **`server/`** — Go server daemon:`ocserverd/`(**production server**:REST + SSE + MCP + reconcile,goose migrations,SPA go:embed)。folder = module = binary 同名;`bin/ocserverd` 若存在只是 gitignored 本地 build artifact(勿與 bash installer `bin/ocserver` 混淆)。詳見 `server/CLAUDE.md`。
 - **`cli/`** — Go 自更新 binary:`ocagent/`(Plane A:agent-side SSE listener)· `ocwarden/`(Plane B:per-machine warden executor)。folder = module = binary 同名。詳見 `cli/CLAUDE.md`。
 - **`frontend/`** — React18 + Vite5 + TS5 SPA。seam 分層 wire→mappers→types→adapter→mock→http→hooks→component。詳見 `frontend/CLAUDE.md`。
-- **`conformance/`** — 語言無關黑箱套件(HTTP-only,743 tests):wire 行為的回歸權威。詳見 `conformance/CLAUDE.md`。
+- **`conformance/`** — 語言無關黑箱套件(HTTP-only):wire 行為的回歸權威,**由 `bin/ci.sh` step (5/5) 每次全跑**(隔離 ocserverd)。條數會隨覆蓋成長,所以刻意不寫死在文件裡——這裡與 `conformance/CLAUDE.md` 兩份拷貝都曾停在 `743` 這個過期數字。詳見 `conformance/CLAUDE.md`。
 - **`e2e_test/`** — Playwright 端到端(隔離 port,**絕不碰 prod**)。詳見 `e2e_test/CLAUDE.md`。
 - **其他**:`spec/`(凍結 wire 契約 SSOT)· `seeds/`(語言中立 seed .md 資產,ocserverd runtime 磁碟優先直讀、單檔部署走 go:embed fallback)· `bin/`(`ci.sh` gate + 部署 / 安裝腳本)· `docs/`(架構文件)· `CLAUDE.md`(本檔,repo-wide 憲章 + 約定)· `.githooks/`(pre-commit 鏡像 CI gate)。
 
