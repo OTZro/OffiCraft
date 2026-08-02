@@ -837,6 +837,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "tasks.statusMenuLabel",
   "tasks.stepCardAnswered",
   "tasks.stepCardExpired",
+  "tasks.stepNoteLabel",
   "tasks.stepStatus.done",
   "tasks.stepStatus.in_progress",
   "tasks.stepStatus.pending",

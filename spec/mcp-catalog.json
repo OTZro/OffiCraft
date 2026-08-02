@@ -2201,6 +2201,33 @@
       "name": "update_step_status"
     },
     {
+      "description": "Write this step's working note: what it got to and what comes next. THE field the handover SOP means by \"把還在進行中的工作寫回 task step note\" — before T-cc3e that instruction pointed at nothing, so progress written for the next session had nowhere to land. Writable in ANY step status (pending, in_progress, waiting_owner, waiting_external, done, superseded), which is what makes it the general-purpose one: `waiting_reason` is locked to waiting_external and cleared on the way out, and the handoff fields are read only on the report that closes the task. Wholesale write — `note` replaces whatever was there, and \"\" clears it; it is a current-state note, not an append-only log, so rewrite it as the work moves rather than appending. Division of labour with the task description (which agents can edit separately): the DESCRIPTION says what this task IS (scope, origin, acceptance — stable); the NOTE says where this step is RIGHT NOW (volatile, handover-facing). Same executor/admin gate as every other task-driving write (403 otherwise); 409 once the task is terminal.",
+      "inputSchema": {
+        "properties": {
+          "note": {
+            "default": "",
+            "description": "The note text. Replaces the step's note wholesale; \"\" clears it. Write what the next session needs: where this step got to, what is in flight, what comes next.",
+            "title": "Note",
+            "type": "string"
+          },
+          "step_id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "step_id",
+          "note"
+        ],
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "name": "update_step_note"
+    },
+    {
       "description": "Arm a gate step: opens the reply card the owner must answer. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).",
       "inputSchema": {
         "$defs": {

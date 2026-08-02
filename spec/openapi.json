@@ -5656,6 +5656,12 @@
             "title": "Name",
             "type": "string"
           },
+          "note": {
+            "default": "",
+            "description": "T-cc3e — the step's free-text working note: what this step got to and what comes next. The GENERAL-PURPOSE note the handover SOP has always told agents to write (\"把還在進行中的工作寫回 task step note\") and which, until this field existed, had nowhere to land. Writable in ANY step status via POST /api/tasks/{task_id}/steps/{step_id}/note (MCP ``update_step_note``) — unlike ``waiting_reason``, which is bound to waiting_external and cleared on leaving it, and unlike the handoff fields, which are read only on the report that closes the task. Division of labour with the task-level ``description``: the description says WHAT THIS TASK IS (scope, origin, acceptance — stable); the step note says WHERE THIS STEP IS RIGHT NOW (volatile, rewritten as work moves, read by the next session after a handover). Last write wins, wholesale — it is a current-state note, not an append-only log.",
+            "title": "Note",
+            "type": "string"
+          },
           "order_idx": {
             "title": "Order Idx",
             "type": "integer"
@@ -5702,6 +5708,29 @@
           "status"
         ],
         "title": "TaskStepDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "TaskStepNoteReceiptDTO": {
+        "description": "Bounded receipt returned after writing one step's working note (T-cc3e). Echoes the note as STORED, so the caller can confirm what actually landed without a follow-up GET — the point of the field is that the next session reads it back, so the write must be verifiable at the write. Fetch GET /api/tasks/{task_id} when full task detail is needed.",
+        "properties": {
+          "note": {"title": "Note", "type": "string"},
+          "step_id": {"title": "Step Id", "type": "string"},
+          "step_status": {"title": "Step Status", "type": "string"},
+          "task_id": {"title": "Task Id", "type": "string"}
+        },
+        "required": ["task_id", "step_id", "step_status", "note"],
+        "title": "TaskStepNoteReceiptDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "TaskStepNoteUpdateDTO": {
+        "description": "Write one step's working note (MCP ``update_step_note``, T-cc3e). Accepted in ANY step status — pending, in_progress, waiting_owner, waiting_external, done and superseded alike — because the note records where the work stands, which is orthogonal to the state machine; that generality is the whole point, since the previous two note-shaped fields were each locked to one moment (``waiting_reason`` to waiting_external, the handoff fields to the closing report). Deliberately its OWN endpoint and its OWN tool rather than another parameter on update_step_status (charter §14 intent-per-tool): writing a note is a different intent from reporting a transition, and one field with two write paths is exactly the ambiguity this ticket exists to remove. The write is wholesale — the body's ``note`` replaces whatever was there; sending ``\"\"`` clears it.",
+        "properties": {
+          "note": {"default": "", "title": "Note", "type": "string"}
+        },
+        "required": ["note"],
+        "title": "TaskStepNoteUpdateDTO",
         "additionalProperties": false,
         "type": "object"
       },
@@ -13437,6 +13466,85 @@
           }
         },
         "summary": "Arm a gate step: opens the reply card the owner must answer."
+      }
+    },
+    "/api/tasks/{task_id}/steps/{step_id}/note": {
+      "post": {
+        "description": "Write one step's working note (MCP ``update_step_note``, T-cc3e): what this step got to and what comes next. Accepted in ANY step status — the note records where the work stands, which is orthogonal to the state machine. Same executor/admin gate as every other task-driving write (403 otherwise), 404 for an unknown task or a step that does not belong to it, 409 once the task is terminal (a closed task's timeline is history, consistent with the frozen artifact set). The write is wholesale: the body's ``note`` replaces whatever was there, and ``\"\"`` clears it. Its own endpoint and its own MCP tool by charter §14 (intent-per-tool) — writing a note is a different intent from reporting a transition.",
+        "operationId": "handle_update_task_step_note_api_tasks__task_id__steps__step_id__note_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "step_id",
+            "required": true,
+            "schema": {
+              "title": "Step Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskStepNoteUpdateDTO"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskStepNoteReceiptDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Validation error (unified error envelope)."
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Client error (unified error envelope)."
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Server error (unified error envelope)."
+          }
+        },
+        "summary": "Write a step's working note (any status; wholesale replace)."
       }
     },
     "/api/tasks/{task_id}/steps/{step_id}/status": {

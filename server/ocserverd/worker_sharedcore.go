@@ -257,7 +257,7 @@ var workerSharedCoreRewrites = []sharedCoreRewrite{
 	{
 		Anchor:  "換手／換機（§8b）時，你手上任務的完整狀態",
 		Find:    "接手的新 session **先用 MCP `peek_resume_summary_size` 探快照多大**（只回大小／counts ＋ `estimated_total_chars`、不含任何內容），再決定怎麼接回：小（經驗法則的門檻：小於 20000 字元、約 5k tokens）就直接用 `resume_summary` 拿回、大就派便宜 sub-agent（如 haiku）去 `resume_summary` 拉回並回壓縮摘要——然後**接著跑完**。`resume_summary` 快照是**輕量摘要**（省你的開機 context）：每張任務只有編號／標題／狀態／優先權／當前節點名稱＋進度，**不含 steps／DoD 全文**；`overview` 欄帶大小概要（未結案任務總數、省略掉的計畫文字字數 `detail_chars`、快照 chat 字數 `chat_chars`、你的等回覆卡數，peek 讀的就是這塊）——**先看大小再決定**：細節按需 `get_task` 逐張拉，`detail_chars` 很大就丟給 sub-agent 消化、別整包塞進自己的 context；卡片列表用 `list_reply_cards`（有 `limit` 可限制筆數，列表只給標題＋決策要點，全文 `get_reply_card`）。",
-		Replace: "接手的新你用 MCP `get_my_task` 領回這張任務的全文＋手冊快照，再照 task plan／step note ＋ 你上一代留給自己的交接 baton 接回進度——然後**接著跑完**。細節按需 `get_task` 拉；很大就丟給 sub-agent 消化、別整包塞進自己的 context。",
+		Replace: "接手的新你用 MCP `get_my_task` 領回這張任務的全文＋手冊快照，再照 task plan／步驟備註（`update_step_note` 寫的那個）＋ 你上一代留給自己的交接 baton 接回進度——然後**接著跑完**。細節按需 `get_task` 拉；很大就丟給 sub-agent 消化、別整包塞進自己的 context。",
 		Why: "peek_resume_summary_size / resume_summary 是成員的身分快照路徑，已從 worker 的" +
 			"啟動程序排除；留著這句等於叫 worker 去用一條它沒有的路。",
 	},
@@ -276,7 +276,7 @@ var workerSharedCoreRewrites = []sharedCoreRewrite{
 			"字數上限**（超標而且沒變短就整份不寫，留時間整理）。ad-hoc 任務無手冊，只有角色這一軌。",
 		Replace: "。整併紀律：整理不是往後貼，而且手冊的學習經驗有**一份字數上限**（預設 10,000 字，owner 可調高）" +
 			"（超標而且沒變短就整份不寫，留時間整理）。對你之後做任何事都成立的通則，一樣寫進手冊的" +
-			"學習經驗；ad-hoc 任務沒有手冊，就寫進 step note 的交接說明。",
+			"學習經驗；ad-hoc 任務沒有手冊，就寫進步驟備註的交接說明。",
 		Why: "第二個指向已排除 §9 的 lessons 指標（T-3351 起這句同時指向同樣已排除的 §9a" +
 			"硬上限段）。整行刪掉會連 write_task_learnings 這條（worker 真正該做的事）一起" +
 			"丟掉，所以就地改寫成單軌，並把上限本身留下來——上限對 worker 一樣成立，只是" +
@@ -289,7 +289,8 @@ var workerSharedCoreRewrites = []sharedCoreRewrite{
 // The member boot sequence is built on two tools a worker does not use:
 // report_waking (a worker's online signal is get_my_task) and
 // peek_resume_summary_size/resume_summary (a member identity-snapshot path; a
-// worker re-derives its state from get_my_task + task plan/step notes + the
+// worker re-derives its state from get_my_task + task plan/step notes
+// (update_step_note, T-cc3e) + the
 // handover baton). Shipping those steps to a worker would inject exactly the
 // class of code-contradicting instruction this ticket exists to remove, so
 // they are excluded rather than left to be overridden further down.
@@ -308,7 +309,7 @@ var workerBootSequenceExclusions = []sharedCoreExclusion{
 		Anchor: "2. **接回脈絡",
 		Line:   true,
 		Why: "resume_summary 是成員的身分快照接續路徑；worker 從 get_my_task + task " +
-			"plan/step note + baton 接回。",
+			"plan/步驟備註 + baton 接回。",
 	},
 	{
 		Anchor: "**啟動後任務盤點與排程（僅 member）。**",

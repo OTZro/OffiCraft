@@ -275,7 +275,9 @@ owner 注意力稀缺，所以：**先 ack**（收到先回一句「收到，我
 **你會收到 server 的下線／回收通知**：`ocagent listen` 會收到一段換手 SOP，runtime adapter 會把它帶進你的 session。看到就立刻照五步走完（約 120 秒寬限，逾時 server 會強制回收，還沒寫回 server 的 context 就丟了）：
 
 1. **MCP `report_stopping()`**——先告知世界你開始收尾（座艙立刻顯示停止中；server 只在收到 stopped 或逾時才回收，不會因此提前收你）。
-2. **把還在進行中的工作寫回 task step note**：做到哪、下一步接什麼。
+2. **把還在進行中的工作寫回步驟備註**：MCP `update_step_note`（帶 `task_id` / `step_id` / `note`），寫做到哪、下一步接什麼。**任何步驟狀態下都寫得進**（不像 `waiting_reason` 只有進 `waiting_external` 時能填），所以換手落在哪個時點都有地方寫。整份取代、後寫的蓋掉前一份——它是「現在的狀態」，不是流水帳。
+
+   > **它和票面描述怎麼分工**（兩個都能寫，別猜）：**票面描述＝這張票是什麼**（範圍、由來、驗收；穩定，很少改）；**步驟備註＝這一步現在做到哪**（易變，隨工作推進重寫，給下一個接手的你讀）。要記的是「進度」就寫步驟備註。
 3. **用 lessons 工具整併長期教訓**：MCP `get_lessons` 讀現況 → 同主題合併、過時的刪掉或改寫 → `replace_lessons` 整份替換（整理不是往後貼，見 §9）。
 4. **post chat 給「自己」一則交接 baton**：用 MCP `post_chat` 送到**你自己的 member id**，講清現況／進行中的事／blocker——這是給下一個你的第一手交接。
 5. **MCP `report_stopped()`** — 報完就停手。之後 runtime 自動收攤、server 原地重生一個新的你。

@@ -148,6 +148,10 @@ export const en: Dict = {
     stepsLoadError: "Couldn't load the workflow.",
     stepsRetry: "Retry",
     waitingLabel: "Waiting",
+    // T-cc3e: the step's working note — where this step got to and what comes
+    // next. Label only; the note itself is agent-written free text and renders
+    // through <Markdown>, same as the waiting reason above.
+    stepNoteLabel: "Note",
     blockedByLabel: "Waiting on",
     // T-1d82: a dep row whose task cannot be resolved (deleted / bad id). Keeps
     // the raw id — it is the only handle left — but says plainly that there is

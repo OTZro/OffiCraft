@@ -171,6 +171,9 @@ export const zh = {
     // `等待中 · ${reason}` 那種把內文一起吃進模板的形狀,否則前綴會被送進
     // markdown parser。分隔號 · 在 JSX 裡當字面量(同 tasks.progress 那行)。
     waitingLabel: "等待中",
+    // T-cc3e:步驟備註 —— 這一步做到哪、下一步接什麼。同 waitingLabel,這裡
+    // 只是標籤;備註本身是 agent 寫的自由文字(常帶 markdown),走 <Markdown>。
+    stepNoteLabel: "備註",
     // deps:「等 T-xxxx」chip 可多筆(mockup 樣式,owner 2026-07-13)
     blockedByLabel: "等",
     // T-1d82:dep 指向的任務查不到(已刪 / 壞 id)。保留原始 id(那是僅剩的線索),

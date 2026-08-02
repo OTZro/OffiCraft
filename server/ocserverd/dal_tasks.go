@@ -417,19 +417,25 @@ type TaskStep struct {
 	IsGate        bool
 	ReplyCardID   string // the CURRENTLY armed card; '' = none
 	WaitingReason string // non-empty only while waiting_external (T-9ca5; task-level moved here)
-	StartedTS     float64
-	FinishedTS    float64
+	// Note is the step's free-text working note: what this step got to and what
+	// comes next (T-cc3e). Unlike WaitingReason it is bound to NO status — it is
+	// writable in every one of them, because a handover lands at an arbitrary
+	// moment and the note is what the next session reads to pick the work back
+	// up. Wholesale write, last one wins: current state, not an append-only log.
+	Note       string
+	StartedTS  float64
+	FinishedTS float64
 }
 
 const taskStepColumns = `id, task_id, order_idx, name, dod, status,
-	parallel_group, is_gate, reply_card_id, waiting_reason, started_ts, finished_ts`
+	parallel_group, is_gate, reply_card_id, waiting_reason, note, started_ts, finished_ts`
 
 func scanTaskStep(row interface{ Scan(...any) error }) (TaskStep, error) {
 	var st TaskStep
 	var isGate int
 	err := row.Scan(
 		&st.ID, &st.TaskID, &st.OrderIdx, &st.Name, &st.DoD, &st.Status,
-		&st.ParallelGroup, &isGate, &st.ReplyCardID, &st.WaitingReason,
+		&st.ParallelGroup, &isGate, &st.ReplyCardID, &st.WaitingReason, &st.Note,
 		&st.StartedTS, &st.FinishedTS,
 	)
 	if err != nil {
@@ -537,7 +543,7 @@ func (d *DAL) PutTaskStep(st TaskStep) error {
 	}
 	_, err := d.wdb.Exec(`
 		INSERT INTO task_step (`+taskStepColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			task_id = excluded.task_id, order_idx = excluded.order_idx,
 			name = excluded.name, dod = excluded.dod,
@@ -546,10 +552,11 @@ func (d *DAL) PutTaskStep(st TaskStep) error {
 			is_gate = excluded.is_gate,
 			reply_card_id = excluded.reply_card_id,
 			waiting_reason = excluded.waiting_reason,
+			note = excluded.note,
 			started_ts = excluded.started_ts,
 			finished_ts = excluded.finished_ts`,
 		st.ID, st.TaskID, st.OrderIdx, st.Name, st.DoD, st.Status,
-		st.ParallelGroup, isGate, st.ReplyCardID, st.WaitingReason,
+		st.ParallelGroup, isGate, st.ReplyCardID, st.WaitingReason, st.Note,
 		st.StartedTS, st.FinishedTS,
 	)
 	return err
@@ -633,9 +640,9 @@ func (d *DAL) ReplaceTaskPlan(taskID string, retain, freeze []string,
 		}
 		if _, err := tx.Exec(`
 			INSERT INTO task_step (`+taskStepColumns+`)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			st.ID, st.TaskID, st.OrderIdx, st.Name, st.DoD, st.Status,
-			st.ParallelGroup, isGate, st.ReplyCardID, st.WaitingReason,
+			st.ParallelGroup, isGate, st.ReplyCardID, st.WaitingReason, st.Note,
 			st.StartedTS, st.FinishedTS); err != nil {
 			return nil, err
 		}

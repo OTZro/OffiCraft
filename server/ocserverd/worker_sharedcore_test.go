@@ -350,7 +350,9 @@ func TestWorkerHandoverSOPIsSelfConsistent(t *testing.T) {
 	// The surviving steps must be numbered 1..4 with no gap.
 	for _, want := range []string{
 		"1. **MCP `report_stopping()`**",
-		"2. **把還在進行中的工作寫回 task step note**",
+		// T-cc3e: the step note stopped being a phantom — the wording now names
+		// the tool that writes it (update_step_note), so this pin tracks that.
+		"2. **把還在進行中的工作寫回步驟備註**",
 		"3. **post chat 給「自己」一則交接 baton**",
 		"4. **MCP `report_stopped()`**",
 	} {
@@ -360,6 +362,39 @@ func TestWorkerHandoverSOPIsSelfConsistent(t *testing.T) {
 	}
 	if strings.Contains(ctx, "5. **MCP `report_stopped()`**") {
 		t.Error("handover step 5 was not renumbered — orphan numbering left behind")
+	}
+}
+
+// TestHandoverSOPNamesTheToolThatWritesTheStepNote — T-cc3e.
+//
+// The SOP told agents for months to "把還在進行中的工作寫回 task step note" while
+// no such field existed; one worker noticed and said so, which is how the
+// ticket got opened. Now that the field is real, the instruction has to name
+// the tool that writes it, and the context has to answer the question the owner
+// knowingly created when he chose a step-level note over the editable task
+// description: with two places to write, which goes where? An agent that has to
+// guess is back where it started, so the division of labour ships in the seed
+// text itself — this pins that it survives into the context a worker is
+// actually handed, not merely that it exists in the repo.
+func TestHandoverSOPNamesTheToolThatWritesTheStepNote(t *testing.T) {
+	ctx := workerCtx(t)
+
+	if !strings.Contains(ctx, "update_step_note") {
+		t.Error("handover SOP does not name update_step_note — the instruction " +
+			"points at a field without saying how to write it")
+	}
+	// The division of labour: description = what the task IS, step note = where
+	// this step is NOW. Both halves must be present, or the guidance is
+	// half an answer.
+	for _, want := range []string{"票面描述", "步驟備註"} {
+		if !strings.Contains(ctx, want) {
+			t.Errorf("division-of-labour guidance missing %q from the worker context", want)
+		}
+	}
+	// And the generality that is the point of the field.
+	if !strings.Contains(ctx, "任何步驟狀態下都寫得進") {
+		t.Error("the SOP does not say the note is writable in any step status — " +
+			"an agent mid-handover will assume it is status-bound like waiting_reason")
 	}
 }
 
