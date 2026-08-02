@@ -58,9 +58,6 @@
 #     stated on purpose: the old "16" went stale the first time the suite changed.)
 #   * e2e_test — real-machine end-to-end; it drives launchd/tmux on a real fleet
 #     host. Local, pre-release, by design.
-#   * the committed-prebuilt parity dryrun — it only applies when a local
-#     gitignored prebuilt exists, which is never true on a fresh runner.
-#
 # -count=1 is load-bearing, exactly as in ci.sh (T-bedc): a cached PASS
 # certifies a run that never happened and structurally hides flakes.
 #

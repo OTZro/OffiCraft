@@ -6,8 +6,7 @@
 // goose migration base over modernc.org/sqlite (cgo-free).
 //
 // Naming (root CLAUDE.md §10): folder server/ocserverd/ = module ocserverd =
-// binary ocserverd. The committed prebuilt lives at bin/ocserverd (CI step 1
-// keeps it in parity with this source). Distinct from bin/ocserver, the bash
+// binary ocserverd. Distinct from bin/ocserver, the bash
 // server INSTALLER — the "d" is the daemon itself.
 package main
 

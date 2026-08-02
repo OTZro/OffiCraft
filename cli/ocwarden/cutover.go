@@ -83,7 +83,7 @@ const (
 const (
 	// cutoverSubcmd is the detached grandchild's hidden subcommand. Deliberately
 	// absent from the usage banner: it is an internal step of the migration, not
-	// an operator verb, and CI's committed-prebuilt parity dryrun diffs --help.
+	// an operator verb.
 	cutoverSubcmd = "cutover-anchor"
 
 	// cutoverLockName is an O_EXCL lockfile under the warden dir. Its ONLY job is

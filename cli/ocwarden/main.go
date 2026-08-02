@@ -746,8 +746,7 @@ func realMain(argv []string, env func(string) string, out io.Writer) int {
 		case cutoverSubcmd:
 			// Internal step of the automatic legacy->anchor shape migration
 			// (T-ff5d), spawned detached by a legacy-shape `run`. Deliberately
-			// absent from the usage banner below: it is not an operator verb, and
-			// CI's committed-prebuilt parity dryrun diffs --help.
+			// absent from the usage banner below: it is not an operator verb.
 			return cutoverCmd(env, out)
 		case "codex-session":
 			return runCodexSession(argv[1:], env, out)
@@ -755,8 +754,7 @@ func realMain(argv []string, env func(string) string, out io.Writer) int {
 			// Print WHICH build this is (git sha/time/dirty when stamped + always a
 			// content self-hash) so a human can tell an eva self-updated binary apart
 			// from the committed bin/ artifact. Deliberately NOT part of the usage
-			// banner so CI's committed-prebuilt parity dryrun (bin/ci.sh 7d, which
-			// diffs --help) is unaffected.
+			// banner because build identity is reported through the dedicated version command.
 			return cmdVersion(out)
 		}
 	}

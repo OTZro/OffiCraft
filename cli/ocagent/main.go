@@ -167,8 +167,8 @@ func realMain(argv []string, env func(string) string, in io.Reader, out io.Write
 	case "version", "--version", "-v":
 		// Print WHICH build this is (git sha/time/dirty when stamped + always a
 		// content self-hash) so a human can tell an eva self-updated binary apart from
-		// the committed bin/ artifact. Deliberately NOT part of usage()/--help so CI's
-		// committed-prebuilt parity dryrun (bin/ci.sh 7d, which diffs --help) is unaffected.
+		// the committed bin/ artifact. Deliberately NOT part of usage()/--help because
+		// build identity is reported through the dedicated version command.
 		return cmdVersion(out)
 
 	case "-h", "--help", "help":

@@ -20,8 +20,8 @@
 # The cloud check is a cross-check on a clean Linux box, NOT land
 # authority. Runs, in order, failing
 # fast on the first non-zero step:
-#   1. golang            — gofmt + go vet + go build + committed-prebuilt
-#                          parity dryrun + go test -count=1 (cache-defeat: a
+#   1. golang            — gofmt + go vet + go build + go test -count=1
+#                          (cache-defeat: a
 #                          cached PASS certifies a run that never happened, and
 #                          hides flakes — T-bedc) over EVERY module under
 #                          cli/ and server/ (cli/ocwarden ⇒ bin/ocwarden,
@@ -110,7 +110,7 @@ else
   exit 1
 fi
 
-echo "[ci] (1/5) golang — gofmt + go vet + go build + committed-prebuilt parity + go test (cli/* + server/*)"
+echo "[ci] (1/5) golang — gofmt + go vet + go build + go test (cli/* + server/*)"
 # ---------------------------------------------------------------------------
 # NOTHING else in the deploy pipeline compiles the Go modules on its own:
 # bin/build builds only the frontend + the deploy binary. Without this gate a
@@ -153,8 +153,8 @@ PATH="$(dirname "$GO"):$PATH" bash "$ROOT/bin/build-seedsdist"
 PATH="$(dirname "$GO"):$PATH" bash "$ROOT/bin/build-docsdist"
 PATH="$(dirname "$GO"):$PATH" bash "$ROOT/bin/build-bindist"
 # go_module_gate <dir> <binary> — run the gofmt/vet/build trio over one module in
-# a subshell (1a gofmt / 1b vet / 1c build / 1d committed-prebuilt parity /
-# 1e go test), the same contract for every golang module in the repo. A non-zero
+# a subshell (gofmt / vet / build / test), the same contract for every golang
+# module in the repo. A non-zero
 # exit fails CI (set -e in the caller).
 go_module_gate() {
   local dir="$1" binary="$2"
@@ -189,37 +189,7 @@ go_module_gate() {
     "$GO" vet ./...
     # 1c. go build — compile the module and DROP the fresh binary (gitignored).
     "$GO" build -o "$binary" ./...
-    # 1d. committed-prebuilt parity dryrun — verify the COMMITTED bin/<binary> is
-    # functionally in lock-step with the source just compiled in 1c. Every module
-    # ships a committed, stripped prebuilt (bin/ocwarden, bin/ocagent,
-    # bin/ocserverd) as the go-forward deploy artifact, so CI must PROVE that
-    # artifact still tracks the landed source — otherwise a "改了 golang 卻沒重編
-    # committed binary" event lands a stale blob that autodeploy would ship. A
-    # byte compare is the WRONG test: `go build` is byte-nondeterministic
-    # (build-id / path stamping) and 1c omits the committed binary's
-    # `-ldflags "-s -w"`, so the bytes legitimately differ. Instead run BOTH the
-    # committed prebuilt and the fresh 1c byproduct through a side-effect-free
-    # smoke invocation (`--help` → usage text + exit 0; no network, no files,
-    # no launchctl) and require identical stdout+stderr+exit. Drift in the CLI
-    # surface ⇒ the committed prebuilt is stale ⇒ fail CI.
-    # OffiCraft policy: ZERO committed binaries — the repo ships no prebuilt
-    # bin/<binary> blobs, so the parity dryrun only applies when a local
-    # (gitignored) prebuilt happens to exist; absence is the normal state.
-    committed="$ROOT/bin/$binary"
-    if [[ ! -x "$committed" ]]; then
-      echo "[ci]   (1d) parity dryrun skipped — no prebuilt bin/$binary (zero-committed-binary policy)"
-    else
-      set +e
-      fresh_help="$("$ROOT/$dir/$binary" --help 2>&1)"; fresh_rc=$?
-      committed_help="$("$committed" --help 2>&1)"; committed_rc=$?
-      set -e
-      if [[ "$fresh_help" != "$committed_help" || "$fresh_rc" != "$committed_rc" ]]; then
-        echo "[ci] FAIL — local prebuilt bin/$binary is STALE vs source (functional parity dryrun)"
-        echo "[ci] rebuild it: (cd $dir && $GO build -ldflags=\"-s -w\" -o \"$committed\" ./...)"
-        exit 1
-      fi
-    fi
-    # 1e. go test — RUN the module's unit tests. 1b `go vet` only TYPE-CHECKS
+    # 1d. go test — RUN the module's unit tests. 1b `go vet` only TYPE-CHECKS
     # *_test.go (compilation), it never executes the assertions; without this
     # gate a broken runtime path would compile clean and ship. A module with no
     # *_test.go reports "no test files" and passes.

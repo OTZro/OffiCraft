@@ -74,7 +74,7 @@ CI 跑在本地、`bin/ci.sh` 是 land 權威，從第一個非零步驟就 fail
 
 **Go 測試一律 `-count=1`（T-bedc）**：CI step 1e 是 `go test -count=1 ./...`，`-count=1` 是「不吃 go 的測試結果快取」，**不可省**。省掉的後果是實測過的——log 裡出現 `ok  ocwarden  (cached)`，那格綠燈認證的是一次**根本沒執行**的跑。兩個獨立理由：(a) 快取 key 只涵蓋 package 的**輸入**，不涵蓋測試真正碰的世界（port、時鐘、launchd、host fleet、staged embed assets 的**效果**），所以今天會紅的 package 照樣報 ok；(b) 它**結構性地藏 flake**——一個 suite 只在「第一個改到它輸入的 commit」上跑過一次，間歇性失敗於是被攤平到近乎零觀測機率，`[ci] all green` 變成在講快取而不是在講碼。可執行形式是 `bin/tests/go-test-nocache-guard.sh`（CI step 0b 派出）：它以**命令位置解析**（不是 substring grep——那會匹配到 ci.sh 與守衛自己的說明文字）掃全 repo 的 shell 腳本，任何 `go test` 呼叫點少了 `-count=1` 就紅。注意 `go build` / `go vet` 的快取**刻意不管**：那是對編譯本身做 content-addressed，命中等價於未命中；只有**測試結果**快取會宣稱「行為被觀察過」而其實沒有。
 
-改 Go 後只需 fresh build 驗證；`bin/ocagent`、`bin/ocwarden`、`bin/ocserverd` 若出現都是 gitignored build artifact，**永不 commit**。CI 一律編譯 source；只有本機恰有 prebuilt 時才做 parity dryrun。部署 binary 由 `bin/release` / GitHub Release fresh build 產出。
+改 Go 後只需 fresh build 驗證；`bin/ocagent`、`bin/ocwarden`、`bin/ocserverd` 若出現都是 gitignored build artifact，**永不 commit**。CI 一律編譯 source。部署 binary 由 `bin/release` / GitHub Release fresh build 產出。
 
 **唯一的例外是 TCC 身分錨點 `dist/officraft/officraft`（owner 明確核可，T-5831）**：它是 launchd 的 responsible process，而 TCC 用 bytes 認身分，所以那份 bytes 本身就是要被審的東西。`.gitignore` 只放行 `dist/officraft/` 底下四個路徑，其餘 `dist/` 照舊全擋。它附兩份紀錄（`source.sha256` 與 `binary.sha256`），由 `bin/check-officraft-dist` 在 CI step 3 比對；重建方式與**為什麼 build 一定要帶 `-trimpath -buildvcs=false`** 寫在 `dist/officraft/BUILD.md`。
 
