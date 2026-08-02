@@ -97,6 +97,12 @@ const EXPECTED: [Lang, string, (string | number | string[])[], string][] = [
     ["en", "chatOfflineQueueHint", ["Mira"], "You can still leave a message — Mira will read it once back online."],
     ["en", "chatWakeQueueHint", ["Mira"], "Mira is offline — your message will queue, or wake them now"],
     ["en", "chatComposerOffline", ["Mira"], "Mira is currently offline"],
+    // T-3b90 — the usage snapshot's age, printed beside the number on the
+    // account card. zh runs the characters together around the duration and
+    // puts 前 after it; en needs a space on both sides.
+    ["zh", "monitorMeasuredAgo", ["3d"], "量於 3d 前"],
+    ["zh", "monitorMeasuredAgo", ["2h 15m"], "量於 2h 15m 前"],
+    ["en", "monitorMeasuredAgo", ["3d"], "measured 3d ago"],
     ["en", "chatInterAgentExpand", [0], "0 messages between agents · expand"],
     ["en", "chatInterAgentExpand", [1], "1 message between agents · expand"],
     ["en", "chatInterAgentExpand", [2], "2 messages between agents · expand"],

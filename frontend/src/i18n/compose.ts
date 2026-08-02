@@ -74,6 +74,8 @@ export interface Messages {
   agentWindDownForChange: (by: string) => string;
   // ── machine picker ──
   machineOfflineOption: (name: string) => string;
+  // ── monitor › accounts ──
+  monitorMeasuredAgo: (age: string) => string;
   // ── monitor › machines ──
   machineBootstrapErrorDetail: (detail: string) => string;
   machineBootstrapFailed: (exitCode: number) => string;
@@ -104,6 +106,7 @@ export function makeMessages(t: Dict, language: Lang): Messages {
   const replies = t.replies;
   const chat = t.chat;
   const mp = t.mp;
+  const mon = t.monitor;
   const mach = t.monitor.machine;
   const set = t.settings;
   const prof = t.profile;
@@ -111,6 +114,11 @@ export function makeMessages(t: Dict, language: Lang): Messages {
   // The list separator between two codes: a join, not vocabulary.
   const listSep = language === "zh" ? "、" : ", ";
   return {
+    // 「量於 3d 前」/「measured 3d ago」— the age rides beside the usage number
+    // so a frozen snapshot can never read as a live one (T-3b90). LEAD/TAIL:
+    // zh puts 前 after the duration with no spaces, en needs both spaces.
+    monitorMeasuredAgo: (age) =>
+      `${mon.measuredAgoLead}${sp || " "}${age}${sp || " "}${mon.measuredAgoTail}`,
     taskProgress: (done, total) =>
       `${tasks.progressLabel} ${done}/${total}`,
     // 「步驟 N/M · 已歷時 X」 is ONE visible string. Leaving elapsed as a template

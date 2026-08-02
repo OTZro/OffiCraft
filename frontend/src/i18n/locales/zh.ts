@@ -920,6 +920,12 @@ export const zh = {
     usage: "用量",
     time: "時間",
     overheated: "過熱",
+    // T-3b90:用量百分比是「上次回報時的快照」,時間百分比卻是即時算的。
+    // 沒有這一句,兩者看起來像同時量的,一個三天前的數字會被當成現在。
+    // lead/tail 兩片:中文的「前」在數字之後,英文的 ago 也在後面但要一個空格,
+    // 兩語各自填、不強求對齊(compose.ts 的 LEAD/TAIL 形狀)。
+    measuredAgoLead: "量於",
+    measuredAgoTail: "前",
     // 帳號詳情 modal(T-a9a7):該 claude 帳號背後的真實識別。email/org 來自
     // owner-only 的 account_label;任何缺值一律誠實顯示 "—",絕不猜。
     detail: {

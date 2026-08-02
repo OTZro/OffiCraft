@@ -811,7 +811,15 @@ function toMonMachine(w: WireMonMachine): MonMachineView {
  * absent). Window dicts come from the backend `shape_window`
  * (domain/token_pacing.py) which emits `used_pct`/`elapsed_pct`/`pace` — the
  * card's usage bar reads used_pct, the pace marker reads elapsed_pct, and the
- * 7-day window is "overheated" when pace === "hot". */
+ * 7-day window is "overheated" when pace === "hot".
+ *
+ * `measured_at` (T-3b90) is when used_pct was last reported. Mapped straight
+ * through with no freshness arithmetic here on purpose: the BE owns the one
+ * staleness threshold (an unrefreshed snapshot simply arrives with pace null,
+ * so `overheated` goes false by itself), and the card states the age it is
+ * given rather than deciding for itself what counts as old. Two clients each
+ * re-deriving "stale" from their own wall clock is how the threshold ends up
+ * with two homes. */
 function toMonAccount(w: WireMonAccount): MonAccountView {
   return {
     account: w.account,
@@ -823,12 +831,14 @@ function toMonAccount(w: WireMonAccount): MonAccountView {
       ? {
           usagePct: numOrNull(w.five_hour.used_pct),
           timePct: numOrNull(w.five_hour.elapsed_pct),
+          measuredAt: numOrNull(w.five_hour.measured_at),
         }
       : null,
     sevenDay: w.seven_day
       ? {
           usagePct: numOrNull(w.seven_day.used_pct),
           timePct: numOrNull(w.seven_day.elapsed_pct),
+          measuredAt: numOrNull(w.seven_day.measured_at),
           overheated: w.seven_day.pace === "hot",
         }
       : null,

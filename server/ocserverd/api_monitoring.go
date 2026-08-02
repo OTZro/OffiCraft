@@ -1570,7 +1570,13 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	sort.Strings(sortedAccounts)
 	accounts := []monitoringAccountDTO{}
 	for _, account := range sortedAccounts {
-		windows := ShapeWindows(anyOrNil(freshRL[account]), now)
+		// rlTS carries, per window, the rate_limits_ts of the report that WON
+		// the selection above — i.e. exactly when the used% being served was
+		// measured. Handing it to the shaper is what lets the wire (and the
+		// cockpit) state the number's age instead of implying it is current,
+		// and what lets a snapshot older than telemetryFreshSecs decline to
+		// render a present-tense pace verdict (T-3b90).
+		windows := ShapeWindows(anyOrNil(freshRL[account]), now, rlTS[account], telemetryFreshSecs)
 		hostLabels := []string{}
 		for host := range acctHosts[account] {
 			hostLabels = append(hostLabels, resolveDisplay(machineNames, host))

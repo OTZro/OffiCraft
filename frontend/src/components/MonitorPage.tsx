@@ -29,6 +29,7 @@ import {
 import { useHashRoute } from "../lib/hashRoute";
 import { Avatar } from "./Avatar";
 import { avatarKindForMember } from "../lib/avatarKind";
+import { formatDuration } from "../lib/duration";
 import { InlineEdit } from "./InlineEdit";
 import { MemberDetailPanel } from "./MemberDetailPanel";
 import { PresenceBadge } from "./PresenceBadge";
@@ -1640,7 +1641,7 @@ function AccountCard({
   onRename: (next: string) => void;
   onDetail: () => void;
 }) {
-  const { t } = useI18n();
+  const { t, msg } = useI18n();
   const dash = t.monitor.dash;
   const overheated = account.sevenDay?.overheated === true;
 
@@ -1688,21 +1689,25 @@ function AccountCard({
         label={t.monitor.fiveHour}
         usagePct={account.fiveHour?.usagePct ?? null}
         timePct={account.fiveHour?.timePct ?? null}
+        measuredAt={account.fiveHour?.measuredAt ?? null}
         overheated={false}
         dash={dash}
         usageLabel={t.monitor.usage}
         timeLabel={t.monitor.time}
         overheatedLabel={t.monitor.overheated}
+        measuredAgo={msg.monitorMeasuredAgo}
       />
       <UsageBar
         label={t.monitor.sevenDay}
         usagePct={account.sevenDay?.usagePct ?? null}
         timePct={account.sevenDay?.timePct ?? null}
+        measuredAt={account.sevenDay?.measuredAt ?? null}
         overheated={overheated}
         dash={dash}
         usageLabel={t.monitor.usage}
         timeLabel={t.monitor.time}
         overheatedLabel={t.monitor.overheated}
+        measuredAgo={msg.monitorMeasuredAgo}
       />
     </div>
   );
@@ -1836,23 +1841,38 @@ function UsageBar({
   label,
   usagePct,
   timePct,
+  measuredAt,
   overheated,
   dash,
   usageLabel,
   timeLabel,
   overheatedLabel,
+  measuredAgo,
 }: {
   label: string;
   usagePct: number | null;
   timePct: number | null;
+  measuredAt: number | null;
   overheated: boolean;
   dash: string;
   usageLabel: string;
   timeLabel: string;
   overheatedLabel: string;
+  measuredAgo: (age: string) => string;
 }) {
   const usageText = usagePct != null ? `${usagePct}%` : dash;
   const timeText = timePct != null ? `${timePct}%` : dash;
+  // The age rides ALONGSIDE the usage number, always, whenever the BE supplied
+  // one — not only past some staleness threshold (T-3b90). A label that only
+  // appears once a number has gone stale is itself only correct at the moment
+  // you happen to look: the owner who closed this tab on day one and reopens
+  // it on day three must be able to read the number's age off the card the
+  // same way, and a threshold this side of the wire would be a second home for
+  // a rule the BE already owns. No stamp → say nothing rather than imply "now".
+  const ageText =
+    usagePct != null && measuredAt != null
+      ? measuredAgo(formatDuration(Math.max(0, Date.now() / 1000 - measuredAt)))
+      : null;
   const fillW = usagePct != null ? Math.min(100, Math.max(0, usagePct)) : 0;
   const markerL = timePct != null ? Math.min(100, Math.max(0, timePct)) : null;
 
@@ -1861,7 +1881,14 @@ function UsageBar({
       <div className="mon-usage__label">
         <span className="mon-usage__window">{label}</span>
         <span className="mon-usage__stats">
-          · {usageLabel} {usageText} · {timeLabel} {timeText}
+          · {usageLabel} {usageText}
+          {ageText && (
+            <span className="mon-usage__age" data-testid="mon-usage-age">
+              {" "}
+              ({ageText})
+            </span>
+          )}{" "}
+          · {timeLabel} {timeText}
           {overheated && (
             <span className="mon-usage__hot"> · {overheatedLabel}</span>
           )}
