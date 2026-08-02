@@ -16,21 +16,37 @@
 // MUTANT for this file: put the virtualisation back (render
 // `wordingRows.slice(window.first, window.last)` plus the focused-row pin).
 // Measured by restoring the pre-revert implementation from a backup — and read
-// the third line carefully, because one of these four is NOT a guard against it:
+// the third line carefully, because one of these four does NOT reliably catch it:
 //   * "every code is in the document"  → 🔴 20 rows of 866.
 //   * "Tab off a scrolled-away row"    → 🔴 focus lands on the 取消 BUTTON, twice,
 //                                        and the posinset series ends …865, 866, 1
 //                                        with only 21 entries.
-//   * "Tab walks from row to row"      → 🟢 GREEN. The windowed implementation
-//                                        carried an overscan margin precisely so
-//                                        that a sequential walk kept working:
-//                                        each focus scrolled the next row into
-//                                        view, which advanced the window. So this
-//                                        test has ZERO discriminating power
-//                                        against windowing. It is kept because it
-//                                        does catch a hard cap (v1's
-//                                        `slice(0, 30)`) — but do not count it
-//                                        towards "windowing cannot come back".
+//   * "Tab walks from row to row"      → 🔶 AN UNRELIABLE, LOAD-DEPENDENT
+//                                        DETECTOR. Run on its own it usually goes
+//                                        green; under parallel load it fails for
+//                                        real ("Tab #37 left the 用詞 list…",
+//                                        Received "BUTTON"). Independent review
+//                                        measured 1 red in 5 solo runs — treat
+//                                        that as "intermittent", NOT as a 20%
+//                                        rate; n=5 cannot support a number.
+//                                        Mechanism: the windowed implementation
+//                                        carried an overscan margin so a
+//                                        sequential walk kept working (each focus
+//                                        scrolled the next row into view, which
+//                                        advanced the window) — but on a busy
+//                                        machine the window does not keep up with
+//                                        the focus-driven scroll.
+//                                        ⚠️ On HEAD it is deterministically green
+//                                        (5 solo runs + 3 whole-spec runs), so a
+//                                        red here is the mutant, not a flake this
+//                                        branch introduced.
+//                                        Still do NOT count it towards
+//                                        "windowing cannot come back" — the other
+//                                        three are the reliable ones. It is kept
+//                                        because it DOES deterministically catch
+//                                        a hard cap: independent review built the
+//                                        v1 `slice(0, 30)` mutant and it failed at
+//                                        Tab #30, 3 runs of 3.
 //   * "find / select-all / print"      → 🔴 the browser's find returns false for
 //                                        a deep row's English original.
 // These guard against one specific regression returning, so they do hold for any
