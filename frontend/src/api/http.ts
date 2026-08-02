@@ -29,6 +29,7 @@ import type {
   MonitoringView,
   VersionView,
   ReleaseCheckView,
+  BackupHealthView,
   GlobalContextView,
   DocumentKind,
   DocumentHistoryView,
@@ -90,6 +91,7 @@ import {
   toMonitoring,
   toVersion,
   toReleaseCheck,
+  toBackupHealth,
   toGlobalContext,
   toDocumentHistory,
   toRoleDef,
@@ -1372,6 +1374,14 @@ export const httpApi: Api = {
     // transport/gate failures reject.
     const wire = unwrap(await client.GET("/api/release/check"));
     return toReleaseCheck(wire);
+  },
+
+  async getBackupHealth(): Promise<BackupHealthView> {
+    // GET /api/backup-health -> BackupHealthDTO (T-da06). Its own endpoint,
+    // not a field on the monitoring fold: the topbar indicator is mounted
+    // app-wide, and monitoring re-fetches on every telemetry event.
+    const wire = unwrap(await client.GET("/api/backup-health"));
+    return toBackupHealth(wire);
   },
 
   async getAuthStatus(): Promise<boolean> {

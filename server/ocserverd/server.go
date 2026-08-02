@@ -587,7 +587,14 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 	// has to be armed is a backup nobody has — and until T-ada9 this studio had
 	// none at all. The tick only wakes; runDatabaseBackup decides whether one
 	// is actually due.
-	startBackupCadence(db, dbPath, backupCadence)
+	// T-da06: the cockpit-visible half. Armed SYNCHRONOUSLY (the first pass and
+	// the durable baseline are written before serve continues, which is what
+	// makes the wiring provable), then its own watchdog goroutine — deliberately
+	// NOT hung off the backup cadence, because the failure it exists to catch is
+	// "the cadence never ran at all".
+	api.backupHealth = armBackupHealth(dal, dbPath, time.Now())
+	startBackupHealthWatchdog(api.backupHealth, backupWatchdogCadence)
+	startBackupCadence(db, dbPath, backupCadence, api.backupHealth)
 	// The bind host is hardwired loopback (B2): expose via a tunnel, never a
 	// direct non-loopback bind.
 	addr := fmt.Sprintf("%s:%d", defaultHost, cfg.Server.Port)

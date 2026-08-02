@@ -1065,6 +1065,34 @@ export const zh = {
         "這台機器從來沒回報過「最近改變的執行 agent 方式」有沒有套用到正在跑的 agent——它上面的軟體太舊,還不會做這項檢查。",
     },
   },
+  // ── 備份健康(T-da06)——排程備份還有沒有在產生還原點 ──
+  // 兩個面共用這一組字:topbar 常駐指示燈與監控頁的備份卡。**主要句子一律由
+  // `code` 推導**(下面的 reason*),伺服器的 `detail` 只當次要診斷字串顯示——
+  // 它是英文、給工程師看的,不是使用者面的那句話。
+  backupHealth: {
+    title: "備份健康",
+    // 三個 status 的短標。unknown 不是比較安靜的 healthy:它是「判斷不出來」,
+    // 而這整顆票的重點就是「沒有還原點」不可以長得像「有還原點」。
+    statusHealthy: "備份正常",
+    statusUnhealthy: "備份異常",
+    statusUnknown: "無法判斷",
+    // 為什麼是紅的 —— 由 code 推導的那一句(不是 server 的 detail)。
+    reasonNeverRan: "排程備份從來沒有成功產生過還原點。",
+    reasonStale: "最新的排程備份已經超過保鮮期，備份可能已經停掉了。",
+    reasonFailed: "最近一次排程備份失敗或被略過，沒有產生新的還原點。",
+    // unknown 的兩種來源分開講:伺服器說它還沒評估 vs 座艙根本問不到伺服器。
+    reasonUnknown: "監看器還沒評估過，或讀不到自己的狀態，所以現在無法判斷有沒有還原點。",
+    reasonUnavailable: "讀不到備份狀態（問不到伺服器），所以現在無法判斷有沒有還原點。",
+    // 事實列
+    newestLabel: "最新排程備份",
+    newestNever: "從來沒有",
+    sinceLabel: "異常已持續",
+    staleAfterLabel: "保鮮期",
+    detailLabel: "伺服器診斷",
+    // 時間後綴(接在 3d 4h 這種長度後面)
+    ago: "前",
+    loading: "讀取中…",
+  },
   settings: {
     title: "設定",
     // landing entries

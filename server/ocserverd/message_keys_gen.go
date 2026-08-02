@@ -8,6 +8,22 @@ package main
 // wording overlay may re-value (wording_bundle.go validation). Extracted from
 // frontend/src/i18n/locales/en.ts — the single message-code contract.
 var messageKeys = map[string]bool{
+	"backupHealth.ago":                         true,
+	"backupHealth.detailLabel":                 true,
+	"backupHealth.loading":                     true,
+	"backupHealth.newestLabel":                 true,
+	"backupHealth.newestNever":                 true,
+	"backupHealth.reasonFailed":                true,
+	"backupHealth.reasonNeverRan":              true,
+	"backupHealth.reasonStale":                 true,
+	"backupHealth.reasonUnavailable":           true,
+	"backupHealth.reasonUnknown":               true,
+	"backupHealth.sinceLabel":                  true,
+	"backupHealth.staleAfterLabel":             true,
+	"backupHealth.statusHealthy":               true,
+	"backupHealth.statusUnhealthy":             true,
+	"backupHealth.statusUnknown":               true,
+	"backupHealth.title":                       true,
 	"chat.attachLabel":                         true,
 	"chat.composerOfflineSuffix":               true,
 	"chat.copyShareLink":                       true,

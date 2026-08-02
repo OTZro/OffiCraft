@@ -604,6 +604,85 @@
         "additionalProperties": false,
         "type": "object"
       },
+      "BackupHealthDTO": {
+        "description": "Whether the SCHEDULED database backup is still producing retreat points\n(`GET /api/backup-health`). This is the cockpit-visible half of the backup\nengine: before it existed every failure signal was a `log.Printf` line in a\nfile with no reader, so a backup that quietly stopped looked exactly like a\nhealthy one (T-da06).\n\n`status` is a CLOSED vocabulary of three values and it is deliberately NARROW —\nit says nothing about the health of anything else:\n  - `healthy`   — a scheduled backup landed inside the freshness window.\n  - `unhealthy` — one of the `code` conditions below holds.\n  - `unknown`   — the watchdog has not evaluated yet, or its own durable state\n                  could not be read. NEVER reported as healthy (fail-closed:\n                  \"we cannot tell\" must not look like \"you have a retreat\").\n\n`code` is \"\" while healthy, and otherwise names WHICH failure this is:\n  - `never_ran`  — no scheduled backup has EVER landed and the grace window\n                   since the watchdog first armed has passed. A schedule that\n                   never started and one that silently died are the same fact\n                   to the reader, so both must alarm.\n  - `stale`      — a previous backup exists but is older than `stale_after_secs`.\n  - `failed`     — the most recent scheduled attempt returned an error or was\n                   skipped, so no new retreat point was created.\n\n`newest_backup_ts` / `newest_backup_age_secs` describe the newest SCHEDULED\nbackup only. A manual or pre-migration snapshot must NEVER be able to make a\ndead schedule look alive, so they are not counted here even though they sit in\nthe same directory.\n\n`stale_after_secs` is derived (`backupStaleFactor * backupInterval`), never a\nsecond hand-written duration; the cockpit displays the server's number rather\nthan recomputing one.\n\n`since_ts` is when the CURRENT incident started (null while healthy) — it\noutlives a server restart, so a backup that has been broken for three days\nstill reads red on day three. `checked_ts` is when the watchdog last evaluated\n(null = never, which is exactly the `unknown` case).",
+        "properties": {
+          "checked_ts": {
+            "anyOf": [
+              {
+                "type": "number",
+                "format": "double"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked Ts"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "newest_backup_age_secs": {
+            "anyOf": [
+              {
+                "type": "number",
+                "format": "double"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Newest Backup Age Secs"
+          },
+          "newest_backup_ts": {
+            "anyOf": [
+              {
+                "type": "number",
+                "format": "double"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Newest Backup Ts"
+          },
+          "since_ts": {
+            "anyOf": [
+              {
+                "type": "number",
+                "format": "double"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since Ts"
+          },
+          "stale_after_secs": {
+            "title": "Stale After Secs",
+            "type": "number",
+            "format": "double"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "code",
+          "detail",
+          "stale_after_secs"
+        ],
+        "title": "BackupHealthDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
       "BootCommandResultDTO": {
         "description": "A machine's boot command, re-fetchable anytime\n(``GET /api/machines/{machine_id}/boot-command``).\n\nThe onboard result is shown once; this lets an owner retrieve the copy-paste\ninstaller for an EXISTING machine again later without re-onboarding.\n``machine_id`` is the warden member id; ``boot_command`` is the same\ncurl-download-then-install one-liner onboard builds (it embeds ``machine_id``\nas OC_ID); ``token`` is a FRESHLY re-minted exec-token (``scope=\"agent\"``,\n``sub=machine_id``) and ``expires_in`` is its lifetime in seconds.\n\n``claim_code`` is a fresh short-lived (``claim_expires_in`` = 600 s), single-use code\nthe ``boot_command`` embeds (``install.sh?code=``) instead of the exec-token; the served\nscript redeems it via ``POST /api/machines/claim`` for the real token.",
         "properties": {
@@ -6447,6 +6526,55 @@
           }
         },
         "summary": "First-run probe: has the owner password been set?"
+      }
+    },
+    "/api/backup-health": {
+      "get": {
+        "description": "Is the scheduled database backup still producing retreat points? (T-da06)\n\nThe backup engine already reported every outcome — but only to the server\nlog, a file with no reader, so \"the schedule died three days ago\" and \"all\ngood\" looked identical from the cockpit. This is the read side that makes the\ndifference visible: the cockpit shows a small green/red backup-health\nindicator that links to the monitor page's backup card, and both read THIS\nendpoint so they can never disagree.\n\nDeliberately its own small endpoint rather than a field on `GET /api/monitoring`:\nthe indicator is mounted app-wide and monitoring is a large fold that\nre-fetches on every telemetry event, so hanging a permanently-visible widget\non it would move a big payload for a three-value answer.\n\nHonest by construction: a watchdog that has not evaluated yet reports\n`unknown`, never `healthy`.",
+        "operationId": "handle_get_backup_health_api_backup_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupHealthDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Validation error (unified error envelope)."
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Client error (unified error envelope)."
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Server error (unified error envelope)."
+          }
+        },
+        "summary": "Backup health: is the scheduled backup still producing retreat points?"
       }
     },
     "/api/bootstrap": {

@@ -10,6 +10,7 @@ import type {
   MonitoringView,
   VersionView,
   ReleaseCheckView,
+  BackupHealthView,
   GlobalContextView,
   DocumentKind,
   DocumentHistoryView,
@@ -65,6 +66,7 @@ import type {
   WireMonitoring,
   WireMonSession,
   WireVersion,
+  WireBackupHealth,
   WireGlobalContext,
   WireDocumentHistory,
   WireRoleDef,
@@ -80,6 +82,7 @@ import {
   toMonitoring,
   toVersion,
   toReleaseCheck,
+  toBackupHealth,
   toGlobalContext,
   toDocumentHistory,
   toRoleDef,
@@ -347,6 +350,22 @@ const MOCK_WIRE_VERSION: WireVersion = {
   catalog_hash: "mock",
   update_available: false,
   latest_version: null,
+};
+
+// ── Fixture: backup health, in WIRE shape (T-da06). The mock world's scheduled
+// backup is HEALTHY and recent — the cockpit's default demo state is a studio
+// that HAS a retreat point. Deliberately a wire-shaped literal run through the
+// same `toBackupHealth` mapper as http: mock and http can then never disagree
+// about how a wire value is read.
+const MOCK_WIRE_BACKUP_HEALTH: WireBackupHealth = {
+  status: "healthy",
+  code: "",
+  detail: "newest scheduled backup is 12m old (stale after 24h0m)",
+  newest_backup_ts: 0,
+  newest_backup_age_secs: 720,
+  stale_after_secs: 86400,
+  since_ts: null,
+  checked_ts: 0,
 };
 
 // ── Fixture: role-journal seeds, in WIRE shape (mirrors the folded GETs).
@@ -2884,6 +2903,18 @@ export const mockApi: Api = {
   async getVersion(): Promise<VersionView> {
     // Honest build identity — the same seam (wire→mapper) as everything else.
     return toVersion(structuredClone(MOCK_WIRE_VERSION));
+  },
+
+  async getBackupHealth(): Promise<BackupHealthView> {
+    // Same seam (wire fixture → shared mapper) as everything else. The two
+    // timestamps are anchored to the CALLING clock so the card's "landed N
+    // ago" reads sanely in a long-lived mock session instead of counting up
+    // from the epoch.
+    const now = Math.floor(Date.now() / 1000);
+    const wire = structuredClone(MOCK_WIRE_BACKUP_HEALTH);
+    wire.newest_backup_ts = now - (wire.newest_backup_age_secs ?? 0);
+    wire.checked_ts = now;
+    return toBackupHealth(wire);
   },
 
   async getAuthStatus(): Promise<boolean> {

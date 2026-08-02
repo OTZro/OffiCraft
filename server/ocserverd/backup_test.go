@@ -269,13 +269,13 @@ func TestBackupTick_OnlyActsWhenOneIsDue(t *testing.T) {
 	db, dbPath := seedBackupFixture(t, 10)
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 
-	if !backupTick(db, dbPath, now) {
+	if !backupTick(db, dbPath, now, nil) {
 		t.Fatal("first tick took no backup — an empty directory always means one is due")
 	}
-	if backupTick(db, dbPath, now.Add(backupInterval-time.Minute)) {
+	if backupTick(db, dbPath, now.Add(backupInterval-time.Minute), nil) {
 		t.Error("tick backed up again before the interval elapsed")
 	}
-	if !backupTick(db, dbPath, now.Add(backupInterval+time.Minute)) {
+	if !backupTick(db, dbPath, now.Add(backupInterval+time.Minute), nil) {
 		t.Error("tick did not back up after the interval elapsed")
 	}
 	files, err := backupFilesIn(backupDirFor(dbPath))

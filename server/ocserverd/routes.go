@@ -681,6 +681,21 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Requires: principalMachine,
 			Summary:  "Monitoring telemetry (roster + context + warden push; honest — else).",
 		},
+		{
+			Method:   "GET",
+			Path:     "/api/backup-health",
+			Handler:  w.HandleGetBackupHealthApiBackupHealthGet,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Backup health: is the scheduled backup still producing retreat points?",
+			// T-da06: deliberately NOT an MCP tool. The consumer is the cockpit's
+			// permanently mounted indicator (and its monitor card), i.e. a UI
+			// seam; the backup engine's own outcomes already reach the server log
+			// for anyone reading a machine. Publishing it as a tool is a separate
+			// owner decision — the point of this ticket was to reach the HUMAN,
+			// who does not read tool output either.
+			MCPExclude: true,
+		},
 		// ── Display-name overlays ────────────────────────────────────────────
 		{
 			Method:   "PATCH",

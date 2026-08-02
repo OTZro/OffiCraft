@@ -163,6 +163,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/backup-health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Backup health: is the scheduled backup still producing retreat points?
+         * @description Is the scheduled database backup still producing retreat points? (T-da06)
+         *
+         *     The backup engine already reported every outcome — but only to the server
+         *     log, a file with no reader, so "the schedule died three days ago" and "all
+         *     good" looked identical from the cockpit. This is the read side that makes the
+         *     difference visible: the cockpit shows a small green/red backup-health
+         *     indicator that links to the monitor page's backup card, and both read THIS
+         *     endpoint so they can never disagree.
+         *
+         *     Deliberately its own small endpoint rather than a field on `GET /api/monitoring`:
+         *     the indicator is mounted app-wide and monitoring is a large fold that
+         *     re-fetches on every telemetry event, so hanging a permanently-visible widget
+         *     on it would move a big payload for a three-value answer.
+         *
+         *     Honest by construction: a watchdog that has not evaluated yet reports
+         *     `unknown`, never `healthy`.
+         */
+        get: operations["handle_get_backup_health_api_backup_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/bootstrap": {
         parameters: {
             query?: never;
@@ -3320,6 +3355,66 @@ export interface components {
         AuthStatusDTO: {
             /** Password Set */
             password_set: boolean;
+        };
+        /**
+         * BackupHealthDTO
+         * @description Whether the SCHEDULED database backup is still producing retreat points
+         *     (`GET /api/backup-health`). This is the cockpit-visible half of the backup
+         *     engine: before it existed every failure signal was a `log.Printf` line in a
+         *     file with no reader, so a backup that quietly stopped looked exactly like a
+         *     healthy one (T-da06).
+         *
+         *     `status` is a CLOSED vocabulary of three values and it is deliberately NARROW —
+         *     it says nothing about the health of anything else:
+         *       - `healthy`   — a scheduled backup landed inside the freshness window.
+         *       - `unhealthy` — one of the `code` conditions below holds.
+         *       - `unknown`   — the watchdog has not evaluated yet, or its own durable state
+         *                       could not be read. NEVER reported as healthy (fail-closed:
+         *                       "we cannot tell" must not look like "you have a retreat").
+         *
+         *     `code` is "" while healthy, and otherwise names WHICH failure this is:
+         *       - `never_ran`  — no scheduled backup has EVER landed and the grace window
+         *                        since the watchdog first armed has passed. A schedule that
+         *                        never started and one that silently died are the same fact
+         *                        to the reader, so both must alarm.
+         *       - `stale`      — a previous backup exists but is older than `stale_after_secs`.
+         *       - `failed`     — the most recent scheduled attempt returned an error or was
+         *                        skipped, so no new retreat point was created.
+         *
+         *     `newest_backup_ts` / `newest_backup_age_secs` describe the newest SCHEDULED
+         *     backup only. A manual or pre-migration snapshot must NEVER be able to make a
+         *     dead schedule look alive, so they are not counted here even though they sit in
+         *     the same directory.
+         *
+         *     `stale_after_secs` is derived (`backupStaleFactor * backupInterval`), never a
+         *     second hand-written duration; the cockpit displays the server's number rather
+         *     than recomputing one.
+         *
+         *     `since_ts` is when the CURRENT incident started (null while healthy) — it
+         *     outlives a server restart, so a backup that has been broken for three days
+         *     still reads red on day three. `checked_ts` is when the watchdog last evaluated
+         *     (null = never, which is exactly the `unknown` case).
+         */
+        BackupHealthDTO: {
+            /** Checked Ts */
+            checked_ts?: number | null;
+            /** Code */
+            code: string;
+            /** Detail */
+            detail: string;
+            /** Newest Backup Age Secs */
+            newest_backup_age_secs?: number | null;
+            /** Newest Backup Ts */
+            newest_backup_ts?: number | null;
+            /** Since Ts */
+            since_ts?: number | null;
+            /**
+             * Stale After Secs
+             * Format: double
+             */
+            stale_after_secs: number;
+            /** Status */
+            status: string;
         };
         /**
          * BootCommandResultDTO
@@ -7186,6 +7281,53 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuthStatusDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_get_backup_health_api_backup_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupHealthDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */

@@ -837,6 +837,15 @@ HAPPY: dict[str, Happy] = {
         identity="agent", body={"rate_limits": {"primary_used_pct": 1}}
     ),
     "GET /api/monitoring": Happy(),
+    # T-da06. A server that has never evaluated answers `unknown` — an honest
+    # state, never `healthy`, so the happy row pins the SHAPE plus that floor.
+    "GET /api/backup-health": Happy(
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: d["status"] in {"healthy", "unhealthy", "unknown"}
+            and isinstance(d["stale_after_secs"], (int, float)),
+        ),
+    ),
     # ── display-name overlays ────────────────────────────────────────────────
     "PATCH /api/accounts/{account_id}": Happy(
         path="/api/accounts/conf-happy-account",

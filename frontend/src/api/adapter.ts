@@ -16,6 +16,7 @@ import type {
   MonitoringView,
   VersionView,
   ReleaseCheckView,
+  BackupHealthView,
   GlobalContextView,
   DocumentKind,
   DocumentHistoryView,
@@ -1438,6 +1439,15 @@ export interface Api {
    * the server side).
    */
   checkRelease(): Promise<ReleaseCheckView>;
+  /**
+   * Backup health (`GET /api/backup-health`, T-da06): is the SCHEDULED database
+   * backup still producing retreat points? Its own small endpoint on purpose —
+   * the topbar indicator is mounted app-wide, so hanging it on the large
+   * monitoring fold would move a big payload for a three-value answer. Honest by
+   * construction: a watchdog that has not evaluated yet answers `unknown`, never
+   * `healthy`.
+   */
+  getBackupHealth(): Promise<BackupHealthView>;
   /** The folded global-context doc (owner overlay ⊕ file seed). */
   getGlobalContext(): Promise<GlobalContextView>;
   /** Whole-doc replace of the global context → returns the folded doc

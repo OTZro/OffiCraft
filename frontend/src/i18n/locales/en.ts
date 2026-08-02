@@ -990,6 +990,36 @@ export const en: Dict = {
         "This machine has never reported whether a recent change to how it runs its agents reached the agents running on it — the software on it is too old to check.",
     },
   },
+  // ── Backup health (T-da06) — is the scheduled backup still producing
+  // retreat points? Shared by BOTH surfaces: the always-mounted topbar
+  // indicator and the monitor page's card. The PRIMARY sentence is always
+  // derived from `code` (the reason* keys below); the server's `detail` is
+  // shown only as secondary diagnostic text.
+  backupHealth: {
+    title: "Backup health",
+    // `unknown` is not a quieter `healthy` — it means "we cannot tell", and
+    // the point of this ticket is that a missing retreat point must never look
+    // like a present one.
+    statusHealthy: "Backups are healthy",
+    statusUnhealthy: "Backups are failing",
+    statusUnknown: "Cannot tell",
+    reasonNeverRan: "No scheduled backup has ever produced a retreat point.",
+    reasonStale:
+      "The newest scheduled backup is past its freshness window \u2014 the schedule may have stopped.",
+    reasonFailed:
+      "The most recent scheduled backup failed or was skipped, so no new retreat point was created.",
+    reasonUnknown:
+      "The watchdog has not evaluated yet, or could not read its own state, so whether you have a retreat point is unknown.",
+    reasonUnavailable:
+      "The backup status could not be loaded from the server, so whether you have a retreat point is unknown.",
+    newestLabel: "Newest scheduled backup",
+    newestNever: "never",
+    sinceLabel: "Failing for",
+    staleAfterLabel: "Freshness window",
+    detailLabel: "Server diagnostic",
+    ago: "ago",
+    loading: "Loading\u2026",
+  },
   settings: {
     title: "Settings",
     software: "Software update",
