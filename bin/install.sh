@@ -691,7 +691,12 @@ oc_preflight() {
     [[ -z "$x" && -x "$p/codex" ]] && x="$p/codex"
   done
   [[ -n "$c$x" ]] || miss+=("an agent runtime: claude (npm install -g @anthropic-ai/claude-code) or codex")
-  [[ ${#miss[@]} -eq 0 ]] && { OC_PF_CLAUDE="$c"; return 0; }
+  # BOTH resolutions are carried out (T-ff48). Exporting only the claude one made
+  # the plist stamp below structurally claude-only: a host whose codex lives under
+  # a version manager passed this preflight, installed, went online, and then
+  # refused every codex spawn with runtime_bin_unresolved — while a claude member
+  # on the SAME machine was rescued by the stamp.
+  [[ ${#miss[@]} -eq 0 ]] && { OC_PF_CLAUDE="$c"; OC_PF_CODEX="$x"; return 0; }
   echo "[install] FATAL: a member is claude or codex inside tmux — without these one" >&2
   echo "[install]        never leaves 「waking」. NOTHING was installed; install and re-run:" >&2
   printf '[install]          %s\n' "${miss[@]}" >&2
@@ -1359,6 +1364,42 @@ mkdir -p "$LA_DIR" "$LOG_DIR"
 #
 # The stamping mirrors bin/ocserver's block deliberately (same XML hygiene, same
 # two-probe shim detection) — keep them in step. The path comes from oc_preflight.
+# oc_probe_runtime BIN PATHVAL — bounded, non-interactive `--version` probe.
+# Both bounds are load-bearing and were both missing before T-ff48:
+#   - `</dev/null` — a shim that prompts would otherwise wait on a terminal that,
+#     for a `curl | bash` or cockpit-driven install, has nobody in front of it.
+#     Go's exec.Cmd gets this for free from a nil Stdin.
+#   - a TIME budget — a shim that re-shims on first call or waits on the network
+#     hangs the whole installer with no output since the previous step, which for
+#     a headless operator is indistinguishable from slow. The Go reference bounds
+#     the same probe (claudeProbeBudget, cli/ocwarden/install.go).
+# OC_PROBE_BUDGET_SECS exists so the guard suite can prove the bound with a stub
+# that hangs on purpose, without a 20s test.
+oc_probe_runtime() {
+  local bin="$1" pathval="$2"
+  local budget="${OC_PROBE_BUDGET_SECS:-20}" pid ticks=0 max
+  max=$((budget * 5))
+  # Own process group (set -m), so the timeout kill below reaps the shim's whole
+  # subtree. A version-manager shim typically execs or forks a real binary; killing
+  # only the direct child leaves that grandchild orphaned and running — which is
+  # how a bounded probe still ends up burning a core for hours.
+  set -m
+  env -i PATH="$pathval" HOME="$HOME" "$bin" --version >/dev/null 2>&1 </dev/null &
+  pid=$!
+  set +m
+  while kill -0 "$pid" 2>/dev/null; do
+    if [[ "$ticks" -ge "$max" ]]; then
+      kill -9 -- "-$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      echo "[install] WARN: '$bin --version' did not answer within ${budget}s — treating it as unusable under this PATH" >&2
+      return 1
+    fi
+    sleep 0.2
+    ticks=$((ticks + 1))
+  done
+  wait "$pid"
+}
+
 COMMON_PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 CLAUDE_BIN="${OC_PF_CLAUDE:-}"   # resolved once, in oc_preflight
 SERVE_PATH="$COMMON_PATH"
@@ -1366,11 +1407,11 @@ if [[ -n "$CLAUDE_BIN" ]]; then
   if [[ "$CLAUDE_BIN" != /* || "$CLAUDE_BIN" == *[\ \	\"\'\<\>\&]* ]]; then
     echo "[install] WARN: resolved claude path '$CLAUDE_BIN' is not stampable (must be absolute, no whitespace/XML-special chars) — not stamping OC_CLAUDE_BIN" >&2
     CLAUDE_BIN=""
-  elif env -i PATH="$COMMON_PATH" HOME="$HOME" "$CLAUDE_BIN" --version >/dev/null 2>&1; then
+  elif oc_probe_runtime "$CLAUDE_BIN" "$COMMON_PATH"; then
     echo "[install] claude resolved: $CLAUDE_BIN (runs under the minimal launchd PATH; stamping OC_CLAUDE_BIN)"
-  elif env -i PATH="$PATH" HOME="$HOME" "$CLAUDE_BIN" --version >/dev/null 2>&1; then
+  elif oc_probe_runtime "$CLAUDE_BIN" "$PATH"; then
     if [[ "$PATH" == *[\"\'\<\>\&]* ]]; then
-      echo "[install] WARN: installer PATH contains XML-special chars — cannot stamp it into the serve plist; stamping OC_CLAUDE_BIN only (the shim may fail under the minimal PATH)" >&2
+      echo "[install] WARN: installer PATH contains XML-special chars — cannot stamp it into the serve plist; stamping OC_CLAUDE_BIN only (the claude shim may fail under the minimal PATH)" >&2
     else
       SERVE_PATH="$PATH"
       echo "[install] claude resolved: $CLAUDE_BIN (version-manager shim — stamping OC_CLAUDE_BIN AND the full installer PATH)"
@@ -1388,6 +1429,48 @@ else
   if [[ -n "${OC_PF_CLAUDE:-}" ]]; then
     echo "[install] WARNING: no stampable claude path — a claude member here may hit" >&2
     echo "[install]          claude_bin_unresolved. Fix: re-run with OC_CLAUDE_BIN=/abs/path/claude" >&2
+  fi
+fi
+
+# ── codex resolution for the fleet spawn chain (T-ff48) ─────────────────────
+# The block below is the DELIBERATE MIRROR of the claude one above: same XML/exec
+# hygiene, same two-probe shim detection, same best-effort fallback — keep the two
+# in step. It exists because a member is claude OR codex and the preflight has
+# always accepted a codex-only host, but only claude was ever stamped. On a host
+# whose codex sits under asdf/nvm/volta that asymmetry is the whole bug: the
+# cockpit's 「安裝」 hands the serve env to `ocwarden install`, which then cannot
+# resolve codex under launchd's minimal PATH and refuses every codex spawn with
+# runtime_bin_unresolved — while claude on the same machine works.
+#
+# The reference implementation is cli/ocwarden/install.go's resolveCodex seam,
+# which stamps OC_CODEX_BIN and promotes the installer PATH the same way.
+CODEX_BIN="${OC_PF_CODEX:-}"   # resolved once, in oc_preflight
+if [[ -n "$CODEX_BIN" ]]; then
+  if [[ "$CODEX_BIN" != /* || "$CODEX_BIN" == *[\ \	\"\'\<\>\&]* ]]; then
+    echo "[install] WARN: resolved codex path '$CODEX_BIN' is not stampable (must be absolute, no whitespace/XML-special chars) — not stamping OC_CODEX_BIN" >&2
+    CODEX_BIN=""
+  elif oc_probe_runtime "$CODEX_BIN" "$COMMON_PATH"; then
+    echo "[install] codex resolved: $CODEX_BIN (runs under the minimal launchd PATH; stamping OC_CODEX_BIN)"
+  elif oc_probe_runtime "$CODEX_BIN" "$PATH"; then
+    if [[ "$PATH" == *[\"\'\<\>\&]* ]]; then
+      echo "[install] WARN: installer PATH contains XML-special chars — cannot stamp it into the serve plist; stamping OC_CODEX_BIN only (the codex shim may fail under the minimal PATH)" >&2
+    else
+      SERVE_PATH="$PATH"
+      echo "[install] codex resolved: $CODEX_BIN (version-manager shim — stamping OC_CODEX_BIN AND the full installer PATH)"
+    fi
+  else
+    echo "[install] WARN: codex at $CODEX_BIN failed --version under both the minimal and the installer PATH — stamping OC_CODEX_BIN best-effort" >&2
+  fi
+fi
+codex_entry=""
+if [[ -n "$CODEX_BIN" ]]; then
+  codex_entry="    <key>OC_CODEX_BIN</key><string>$CODEX_BIN</string>
+"
+else
+  # Empty = codex absent (claude-only host: do NOT nag) or unstampable (WARN above).
+  if [[ -n "${OC_PF_CODEX:-}" ]]; then
+    echo "[install] WARNING: no stampable codex path — a codex member here may hit" >&2
+    echo "[install]          runtime_bin_unresolved. Fix: re-run with OC_CODEX_BIN=/abs/path/codex" >&2
   fi
 fi
 
@@ -1419,7 +1502,7 @@ if ! cat 2>/dev/null > "$PLIST.new" <<PLIST_EOF
   <dict>
     <key>PATH</key><string>$SERVE_PATH</string>
     <key>HOME</key><string>$HOME</string>
-$claude_entry$cfg_entry    <key>OC_NO_OPEN_BROWSER</key><string>1</string>
+$claude_entry$codex_entry$cfg_entry    <key>OC_NO_OPEN_BROWSER</key><string>1</string>
   </dict>
   <key>WorkingDirectory</key><string>$ROOT_DIR</string>
   <key>RunAtLoad</key><true/>
