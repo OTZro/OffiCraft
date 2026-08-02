@@ -224,6 +224,8 @@ var messageKeys = map[string]bool{
 	"monitor.machineCol.ram":                   true,
 	"monitor.machineCol.status":                true,
 	"monitor.machinesTitle":                    true,
+	"monitor.measuredAgoLead":                  true,
+	"monitor.measuredAgoTail":                  true,
 	"monitor.overheated":                       true,
 	"monitor.renameAccount":                    true,
 	"monitor.renameError":                      true,

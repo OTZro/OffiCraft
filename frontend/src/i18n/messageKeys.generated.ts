@@ -223,6 +223,8 @@ export const MESSAGE_KEYS: readonly string[] = [
   "monitor.machineCol.ram",
   "monitor.machineCol.status",
   "monitor.machinesTitle",
+  "monitor.measuredAgoLead",
+  "monitor.measuredAgoTail",
   "monitor.overheated",
   "monitor.renameAccount",
   "monitor.renameError",
