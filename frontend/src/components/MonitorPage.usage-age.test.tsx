@@ -36,6 +36,21 @@ vi.mock("../api", () => ({
     listTasks: () => Promise.resolve([]),
     listTaskTypes: () => Promise.resolve([]),
     getServerSettings: () => Promise.resolve({ outsourceMaxParallel: 0 }),
+    // Rendering MonitorPage now also mounts BackupHealthSection (arrived with
+    // PR #79 while this branch was in flight). It is nothing to do with the
+    // account card, but an unstubbed api method throws during commit and takes
+    // the whole page down — so stub it to a healthy, uninteresting value.
+    getBackupHealth: () =>
+      Promise.resolve({
+        status: "healthy",
+        code: "",
+        detail: "",
+        newestBackupTs: 1785600000,
+        newestBackupAgeSecs: 3600,
+        staleAfterSecs: 43200,
+        sinceTs: null,
+        checkedTs: 1785603600,
+      }),
     subscribeEvents: () => () => {},
   },
 }));
@@ -104,10 +119,18 @@ describe("MonitorPage account usage age (T-3b90)", () => {
     renderMonitor();
 
     await screen.findAllByTestId("mon-usage-age");
-    // Matched loosely on purpose: the badge renders as "· 過熱", so an exact
-    // string query would find nothing whether or not the fix is in — a
-    // negative assertion that can never fail. The positive control below is
-    // what proved that, and it is why both queries use the same matcher.
+    // ⚠️ NOT COVERAGE OF THIS CHANGE — read before trusting it. `overheated`
+    // is handed in as a prop here, so this passes with the fix fully removed;
+    // it only tests that the card obeys the flag it is given. Its red under
+    // the ageText mutant comes entirely from the findAllByTestId precondition
+    // above, not from this line. The BE half of "no verdict → no badge" is
+    // pinned where it actually happens: paceVerdict (Go) and the wire→view
+    // seam (api/mappers.mon-account.test.ts). Kept as a regression guard
+    // against the card ever re-deriving heat from the two percentages itself.
+    //
+    // Matched loosely because the badge renders as "· 過熱" — an exact-string
+    // query returns null either way. That was found by the positive control
+    // below, which is the only reason this line is not doubly vacuous.
     expect(screen.queryByText(/過熱/)).toBeNull();
   });
 
@@ -129,6 +152,10 @@ describe("MonitorPage account usage age (T-3b90)", () => {
   it("says nothing about age when nothing stamped the snapshot", async () => {
     // Honest-null: an unstamped number must NOT be dressed up as "measured 1m
     // ago". Silence here is the truthful output.
+    //
+    // ⚠️ Also passes with the fix removed (no stamp → no label, trivially), so
+    // this is a FORWARD guard against someone later back-filling `measuredAt`
+    // with the serving time — not evidence that this change works.
     getMonitoring.mockResolvedValue({
       accounts: [
         {

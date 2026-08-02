@@ -115,10 +115,16 @@ export function makeMessages(t: Dict, language: Lang): Messages {
   const listSep = language === "zh" ? "、" : ", ";
   return {
     // 「量於 3d 前」/「measured 3d ago」— the age rides beside the usage number
-    // so a frozen snapshot can never read as a live one (T-3b90). LEAD/TAIL:
-    // zh puts 前 after the duration with no spaces, en needs both spaces.
+    // so a frozen snapshot can never read as a live one (T-3b90).
+    //
+    // BOTH languages put a space on either side of the duration, so this is the
+    // LABEL shape twice over and the separator is a plain literal. It is NOT
+    // written with `sp`: that variable is `"" | " "`, so `sp || " "` collapses
+    // to a constant `" "` while READING as if zh were spaceless — a comment and
+    // an expression that quietly disagree with the pinned zh expectation
+    // (「量於 3d 前」, with spaces). Caught in independent review.
     monitorMeasuredAgo: (age) =>
-      `${mon.measuredAgoLead}${sp || " "}${age}${sp || " "}${mon.measuredAgoTail}`,
+      `${mon.measuredAgoLead} ${age} ${mon.measuredAgoTail}`,
     taskProgress: (done, total) =>
       `${tasks.progressLabel} ${done}/${total}`,
     // 「步驟 N/M · 已歷時 X」 is ONE visible string. Leaving elapsed as a template

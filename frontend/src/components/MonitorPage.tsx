@@ -29,7 +29,6 @@ import {
 import { useHashRoute } from "../lib/hashRoute";
 import { Avatar } from "./Avatar";
 import { avatarKindForMember } from "../lib/avatarKind";
-import { formatDuration } from "../lib/duration";
 import { InlineEdit } from "./InlineEdit";
 import { MemberDetailPanel } from "./MemberDetailPanel";
 import { PresenceBadge } from "./PresenceBadge";
