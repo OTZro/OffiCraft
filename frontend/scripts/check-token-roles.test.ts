@@ -62,10 +62,13 @@ describe("check-token-roles", () => {
     const { code, out } = run();
     expect(out, out).toContain("[token-roles] ok");
     expect(code).toBe(0);
-    // The line must say WHICH background each ratio was measured against — the
+    // The line must say WHICH token each ratio was measured against — the
     // old wording claimed "3.76:1 on page" while the pill sits on --color-indigo.
+    // T-d593 moved the ring off --color-bg onto its own slot, so the name the
+    // second ratio is reported against changed with it; a line still saying
+    // --color-bg would be describing a measurement the script no longer makes.
     expect(out).toContain("--color-on-danger");
-    expect(out).toContain("--color-bg");
+    expect(out).toContain("--color-danger-badge-ring");
   });
 
   it("fails when a badge's text colour stops using the measured token", () => {
@@ -103,11 +106,25 @@ describe("check-token-roles", () => {
     expect(code).toBe(1);
   });
 
-  it("fails when a badge loses its page-colour ring", () => {
-    // The ring is what makes the 3:1-vs-page number true: without it the pill
-    // sits on --color-indigo (2.74:1) on an active nav tab.
+  it("fails when a badge loses its ring entirely", () => {
+    // The shorthand must EXIST, not merely carry the right token: with no
+    // outline at all the pill sits directly on --color-indigo (2.74:1) on an
+    // active nav tab, and there is no declaration left for the token check to
+    // have an opinion about.
+    //
+    // 🔴 The fixture string is the ring line AS IT IS ON THE TREE TODAY. This
+    // test was silently toothless for one commit because it still deleted
+    // `outline: 1px solid var(--color-bg);` — the pre-T-d593 text, which no
+    // longer occurs, so `css.replace` was a no-op, the guard was handed an
+    // UNMODIFIED tree and correctly printed ok. If you re-token the ring, this
+    // literal moves with it; a `replace` that matches nothing does not fail, it
+    // just stops testing.
     const { code, out } = run((edit) =>
-      edit(CHROME, (css) => css.replace("  outline: 1px solid var(--color-bg);\n", ""))
+      edit(CHROME, (css) => {
+        const RING_LINE = "  outline: 1px solid var(--color-danger-badge-ring);\n";
+        if (!css.includes(RING_LINE)) throw new Error(`fixture is stale: ${CHROME} has no ${RING_LINE.trim()}`);
+        return css.replace(RING_LINE, "");
+      })
     );
     expect(out, out).toMatch(/\.nav-tab__badge has no outline declaration/);
     expect(code).toBe(1);
@@ -215,13 +232,13 @@ describe("check-token-roles", () => {
   });
 
   it("fails when the outline-color longhand removes the badge's ring", () => {
-    // The shorthand is still there and still uses --color-bg; the longhand after
-    // it is what the browser paints, and the ring is gone.
+    // The shorthand is still there and still uses the ring slot; the longhand
+    // after it is what the browser paints, and the ring is gone.
     const { code, out } = run((edit) =>
       edit(CHROME, (css) => `${css}\n.nav-tab__badge { outline-color: transparent; }\n`)
     );
     expect(out, out).toMatch(
-      /\.nav-tab__badge's outline-color does not use --color-bg/
+      /\.nav-tab__badge's outline-color does not use --color-danger-badge-ring/
     );
     expect(code).toBe(1);
   });
