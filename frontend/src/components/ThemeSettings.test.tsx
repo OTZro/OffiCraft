@@ -70,10 +70,19 @@ function colourRow(
 
 /** The 外框背景 slot group — where the lay-down mode <select> lives. */
 function canvasBgSlots(utils: ReturnType<typeof render>): HTMLElement {
-  const groups = utils.container.querySelectorAll(".ts-avatar-slots");
-  const last = groups[groups.length - 1];
-  if (!last) throw new Error("no .ts-avatar-slots in the edit view");
-  return last as HTMLElement;
+  // Found by its own heading, NOT by position. "the last .ts-avatar-slots"
+  // reads correctly today, but the moment anyone adds an image group after
+  // this one the NEGATIVE assertion below ("no lay-down mode until there is
+  // an image") starts querying the wrong group and goes silently tautological
+  // — it would pass by looking in a place the field was never going to be.
+  const group = Array.from(
+    utils.container.querySelectorAll(".ts-avatar-slots")
+  ).find(
+    (g) => g.querySelector(".ts-avatar-label")?.textContent === s.themeCanvasBg
+  );
+  if (!group)
+    throw new Error(`no .ts-avatar-slots headed ${s.themeCanvasBg}`);
+  return group as HTMLElement;
 }
 
 /**
