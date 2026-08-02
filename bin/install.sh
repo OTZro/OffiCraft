@@ -691,7 +691,12 @@ oc_preflight() {
     [[ -z "$x" && -x "$p/codex" ]] && x="$p/codex"
   done
   [[ -n "$c$x" ]] || miss+=("an agent runtime: claude (npm install -g @anthropic-ai/claude-code) or codex")
-  [[ ${#miss[@]} -eq 0 ]] && { OC_PF_CLAUDE="$c"; return 0; }
+  # BOTH resolutions are carried out (T-ff48). Exporting only the claude one made
+  # the plist stamp below structurally claude-only: a host whose codex lives under
+  # a version manager passed this preflight, installed, went online, and then
+  # refused every codex spawn with runtime_bin_unresolved — while a claude member
+  # on the SAME machine was rescued by the stamp.
+  [[ ${#miss[@]} -eq 0 ]] && { OC_PF_CLAUDE="$c"; OC_PF_CODEX="$x"; return 0; }
   echo "[install] FATAL: a member is claude or codex inside tmux — without these one" >&2
   echo "[install]        never leaves 「waking」. NOTHING was installed; install and re-run:" >&2
   printf '[install]          %s\n' "${miss[@]}" >&2
@@ -1391,6 +1396,48 @@ else
   fi
 fi
 
+# ── codex resolution for the fleet spawn chain (T-ff48) ─────────────────────
+# The block below is the DELIBERATE MIRROR of the claude one above: same XML/exec
+# hygiene, same two-probe shim detection, same best-effort fallback — keep the two
+# in step. It exists because a member is claude OR codex and the preflight has
+# always accepted a codex-only host, but only claude was ever stamped. On a host
+# whose codex sits under asdf/nvm/volta that asymmetry is the whole bug: the
+# cockpit's 「安裝」 hands the serve env to `ocwarden install`, which then cannot
+# resolve codex under launchd's minimal PATH and refuses every codex spawn with
+# runtime_bin_unresolved — while claude on the same machine works.
+#
+# The reference implementation is cli/ocwarden/install.go's resolveCodex seam,
+# which stamps OC_CODEX_BIN and promotes the installer PATH the same way.
+CODEX_BIN="${OC_PF_CODEX:-}"   # resolved once, in oc_preflight
+if [[ -n "$CODEX_BIN" ]]; then
+  if [[ "$CODEX_BIN" != /* || "$CODEX_BIN" == *[\ \	\"\'\<\>\&]* ]]; then
+    echo "[install] WARN: resolved codex path '$CODEX_BIN' is not stampable (must be absolute, no whitespace/XML-special chars) — not stamping OC_CODEX_BIN" >&2
+    CODEX_BIN=""
+  elif env -i PATH="$COMMON_PATH" HOME="$HOME" "$CODEX_BIN" --version >/dev/null 2>&1; then
+    echo "[install] codex resolved: $CODEX_BIN (runs under the minimal launchd PATH; stamping OC_CODEX_BIN)"
+  elif env -i PATH="$PATH" HOME="$HOME" "$CODEX_BIN" --version >/dev/null 2>&1; then
+    if [[ "$PATH" == *[\"\'\<\>\&]* ]]; then
+      echo "[install] WARN: installer PATH contains XML-special chars — cannot stamp it into the serve plist; stamping OC_CODEX_BIN only (the shim may fail under the minimal PATH)" >&2
+    else
+      SERVE_PATH="$PATH"
+      echo "[install] codex resolved: $CODEX_BIN (version-manager shim — stamping OC_CODEX_BIN AND the full installer PATH)"
+    fi
+  else
+    echo "[install] WARN: codex at $CODEX_BIN failed --version under both the minimal and the installer PATH — stamping OC_CODEX_BIN best-effort" >&2
+  fi
+fi
+codex_entry=""
+if [[ -n "$CODEX_BIN" ]]; then
+  codex_entry="    <key>OC_CODEX_BIN</key><string>$CODEX_BIN</string>
+"
+else
+  # Empty = codex absent (claude-only host: do NOT nag) or unstampable (WARN above).
+  if [[ -n "${OC_PF_CODEX:-}" ]]; then
+    echo "[install] WARNING: no stampable codex path — a codex member here may hit" >&2
+    echo "[install]          runtime_bin_unresolved. Fix: re-run with OC_CODEX_BIN=/abs/path/codex" >&2
+  fi
+fi
+
 # OC_CONFIG is emitted ONLY when a config file actually backed the port probe:
 # pointing the daemon at a nonexistent path is worse than the default.
 cfg_entry=""
@@ -1419,7 +1466,7 @@ if ! cat 2>/dev/null > "$PLIST.new" <<PLIST_EOF
   <dict>
     <key>PATH</key><string>$SERVE_PATH</string>
     <key>HOME</key><string>$HOME</string>
-$claude_entry$cfg_entry    <key>OC_NO_OPEN_BROWSER</key><string>1</string>
+$claude_entry$codex_entry$cfg_entry    <key>OC_NO_OPEN_BROWSER</key><string>1</string>
   </dict>
   <key>WorkingDirectory</key><string>$ROOT_DIR</string>
   <key>RunAtLoad</key><true/>

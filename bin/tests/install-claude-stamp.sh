@@ -113,6 +113,19 @@ write_claude() {
 }
 write_claude "$EXTRADIR/claude" ok
 
+# write_codex <path> <mode> — the codex under test. Same three modes and the same
+# reason for baking the mode in as a literal (see write_claude): the installer
+# probes with `env -i`, which would wipe an env-driven switch.
+write_codex() {
+  local path="$1" mode="$2" dir; dir="$(cd "$(dirname "$path")" && pwd)"
+  case "$mode" in
+    ok)     printf '#!/usr/bin/env bash\necho "codex-cli 1.2.3"\nexit 0\n' > "$path" ;;
+    shim)   printf '#!/usr/bin/env bash\ncase ":$PATH:" in *":%s:"*) echo "codex-cli 1.2.3"; exit 0;; esac\nexit 127\n' "$dir" > "$path" ;;
+    *)      printf '#!/usr/bin/env bash\nexit 1\n' > "$path" ;;
+  esac
+  chmod +x "$path"
+}
+
 PLIST_REL="Library/LaunchAgents/com.officraft.serve.plist"
 
 reset_fixture() {
@@ -259,6 +272,152 @@ case "$OUT" in
   *) bad "unstampable path: does not name claude_bin_unresolved:
 $OUT" ;;
 esac
+
+# ── 6. ASYMMETRY SENTINEL: same version-manager dir, BOTH runtimes stamped ───
+# WHY THIS CASE IS THE POINT OF THE SUITE (T-ff48). A member is claude OR codex,
+# and the installer's preflight has always accepted a codex-only host — but the
+# serve plist only ever carried OC_CLAUDE_BIN. On an asdf/nvm/volta host that
+# means the cockpit's 「安裝」 resolves claude and refuses every codex spawn with
+# runtime_bin_unresolved, while a claude member on the SAME machine works. The
+# defect is not "codex is unsupported", it is that the two runtimes are treated
+# differently at the one link that can see the shim.
+#
+# Both are asserted in ONE case on purpose: a codex-only assertion would go green
+# on a change that fixed codex by breaking claude, which is the same bug pointed
+# the other way.
+reset_fixture
+write_claude "$EXTRADIR/claude" shim
+write_codex  "$EXTRADIR/codex"  shim
+run_install 1
+check "claude+codex shim: install succeeds" "0" "$RC"
+if plist_has "<key>OC_CLAUDE_BIN</key><string>$EXTRADIR/claude</string>"; then
+  ok "claude+codex shim: serve plist carries OC_CLAUDE_BIN"
+else
+  bad "claude+codex shim: serve plist is MISSING OC_CLAUDE_BIN:
+$PLIST_BODY"
+fi
+if plist_has "<key>OC_CODEX_BIN</key><string>$EXTRADIR/codex</string>"; then
+  ok "claude+codex shim: serve plist carries OC_CODEX_BIN (symmetric with claude)"
+else
+  bad "claude+codex shim: ASYMMETRY — claude is stamped but OC_CODEX_BIN is not; a codex member on this host would hit runtime_bin_unresolved:
+$PLIST_BODY"
+fi
+if plist_has "$EXTRADIR:"; then
+  ok "claude+codex shim: the installer PATH (incl. the shim dir) is promoted into the plist"
+else
+  bad "claude+codex shim: the shim dir is NOT on the plist PATH:
+$PLIST_BODY"
+fi
+rm -f "$EXTRADIR/codex"
+
+# ── 7. codex-only host → OC_CODEX_BIN is stamped and the PATH is promoted ────
+# The preflight already lets this host install (claude OR codex). Before the fix
+# it installed a plist that named neither runtime.
+reset_fixture
+rm -f "$EXTRADIR/claude"
+write_codex "$EXTRADIR/codex" shim
+run_install 1
+check "codex-only: install succeeds" "0" "$RC"
+if plist_has "<key>OC_CODEX_BIN</key><string>$EXTRADIR/codex</string>"; then
+  ok "codex-only: serve plist carries OC_CODEX_BIN"
+else
+  bad "codex-only: serve plist is MISSING OC_CODEX_BIN:
+$PLIST_BODY"
+fi
+if plist_has "$EXTRADIR:"; then
+  ok "codex-only: the installer PATH is promoted for the codex shim"
+else
+  bad "codex-only: the shim dir is NOT on the plist PATH — the warden could never run codex:
+$PLIST_BODY"
+fi
+rm -f "$EXTRADIR/codex"
+write_claude "$EXTRADIR/claude" ok
+
+# ── 8. OC_CODEX_BIN override wins over PATH discovery ───────────────────────
+reset_fixture
+mkdir -p "$WORK/explicit-codex"
+write_codex "$WORK/explicit-codex/codex" ok
+write_codex "$EXTRADIR/codex" ok
+run_install 1 OC_CODEX_BIN="$WORK/explicit-codex/codex"
+check "explicit OC_CODEX_BIN: install succeeds" "0" "$RC"
+if plist_has "<key>OC_CODEX_BIN</key><string>$WORK/explicit-codex/codex</string>"; then
+  ok "explicit OC_CODEX_BIN: the operator's path wins over PATH discovery"
+else
+  bad "explicit OC_CODEX_BIN: was not honoured:
+$PLIST_BODY"
+fi
+rm -f "$EXTRADIR/codex"
+
+# ── 9. an unstampable codex path is dropped, not rendered ───────────────────
+# Same XML/exec hygiene the claude side gets (case 5). The control that this
+# grep discriminates is case 6, where OC_CODEX_BIN IS present.
+reset_fixture
+mkdir -p "$WORK/bad codex dir"
+write_codex "$WORK/bad codex dir/codex" ok
+run_install 1 OC_CODEX_BIN="$WORK/bad codex dir/codex"
+check "unstampable codex path: the install itself still succeeds" "0" "$RC"
+if plist_has "OC_CODEX_BIN"; then
+  bad "unstampable codex path: must NOT be rendered into the plist:
+$PLIST_BODY"
+else
+  ok "unstampable codex path: dropped (no OC_CODEX_BIN rendered)"
+fi
+
+# ── 10. bin/ocserver (the SOURCE install path) must not drift out of symmetry ─
+# HONEST ABOUT ITS STRENGTH: this is a STRUCTURAL check, not a hermetic run. The
+# source installer's plist renderer is a function local to `ocserver install`,
+# which also builds binaries and talks to launchctl, so there is no seam to drive
+# it the way `render-config` is driven in port-default.sh. What is checkable, and
+# what actually broke, is symmetry: bin/ocserver carried the claude stamp for
+# years and never grew the codex one. Every assertion below is paired — the
+# claude half is the control that proves the codex grep is discriminating.
+OCSERVER_SRC="$HERE/../ocserver"
+if [[ ! -f "$OCSERVER_SRC" ]]; then
+  bad "bin/ocserver not found at $OCSERVER_SRC"
+else
+  OCS="$(cat "$OCSERVER_SRC")"
+  # a) the rendered serve plist interpolates BOTH env lines
+  if [[ "$OCS" == *'$CLAUDE_ENV_LINE'* ]]; then
+    ok "ocserver: the serve plist renders CLAUDE_ENV_LINE (control)"
+  else
+    bad "ocserver: the serve plist no longer renders CLAUDE_ENV_LINE — this control has rotted"
+  fi
+  if [[ "$OCS" == *'$CODEX_ENV_LINE'* ]]; then
+    ok "ocserver: the serve plist renders CODEX_ENV_LINE (symmetric with claude)"
+  else
+    bad "ocserver: ASYMMETRY — the serve plist renders the claude stamp but never CODEX_ENV_LINE; codex members on a source-installed host hit runtime_bin_unresolved"
+  fi
+  # b) both env lines carry the real key
+  if [[ "$OCS" == *'<key>OC_CODEX_BIN</key>'* ]]; then
+    ok "ocserver: OC_CODEX_BIN is the key actually written"
+  else
+    bad "ocserver: no <key>OC_CODEX_BIN</key> anywhere — the relay allowlist in api_machines.go has nothing to relay"
+  fi
+  # c) codex is RESOLVED, not merely referenced: env override + PATH lookup
+  if [[ "$OCS" == *'command -v codex'* ]]; then
+    ok "ocserver: codex is resolved from the installer's interactive PATH"
+  else
+    bad "ocserver: codex is never resolved via 'command -v codex' — a version-manager codex can never be found"
+  fi
+  if [[ "$OCS" == *'CODEX_BIN="${OC_CODEX_BIN:-}"'* ]]; then
+    ok "ocserver: the OC_CODEX_BIN operator override is honoured"
+  else
+    bad "ocserver: the OC_CODEX_BIN override is not read — the documented escape hatch does nothing"
+  fi
+  # d) the shim case promotes the installer PATH for codex too. Scoped to the
+  #    codex block so the claude block's promotion cannot satisfy this.
+  CODEX_BLOCK="$(awk '/codex resolution for the fleet spawn chain/,/CODEX_ENV_LINE=""/' "$OCSERVER_SRC")"
+  if [[ "$CODEX_BLOCK" == *'SERVE_PATH="$PATH"'* ]]; then
+    ok "ocserver: a version-manager codex promotes the installer PATH into the plist"
+  else
+    bad "ocserver: the codex block never promotes the installer PATH — an asdf/nvm/volta codex would be stamped but unrunnable under launchd"
+  fi
+  if [[ "$CODEX_BLOCK" == *'not stampable'* ]]; then
+    ok "ocserver: the codex path gets the same XML/exec hygiene check as claude"
+  else
+    bad "ocserver: the codex block skips the stampability check — an XML-special path would corrupt the plist"
+  fi
+fi
 
 echo "install.sh claude stamp: $PASS ok, $FAIL failed"
 [[ "$FAIL" == "0" ]] || exit 1

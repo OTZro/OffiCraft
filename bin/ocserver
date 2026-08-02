@@ -507,14 +507,64 @@ cmd_install() {
       log "WARN: claude at $CLAUDE_BIN failed --version under both minimal and installer PATH — stamping OC_CLAUDE_BIN best-effort (spawns via bootstrap-here may fail)"
     fi
   fi
-  if [[ -z "$CLAUDE_BIN" ]]; then
-    log "WARNING: claude CLI not found — wardens installed via the cockpit's bootstrap-here on THIS host will refuse every spawn (claude_bin_unresolved)."
-    log "WARNING: fix: install claude, or export OC_CLAUDE_BIN=/absolute/path/to/claude and re-run 'ocserver install' (safe — idempotent)."
-  fi
+  # NOTE (T-ff48): the "claude not found" nag moved BELOW the codex block — on a
+  # codex-only host it was telling the operator that every spawn would fail, which
+  # stopped being true the moment OC_CODEX_BIN started being stamped.
   local CLAUDE_ENV_LINE=""
   if [[ -n "$CLAUDE_BIN" ]]; then
     CLAUDE_ENV_LINE="
         <key>OC_CLAUDE_BIN</key><string>$CLAUDE_BIN</string>"
+  fi
+
+  # ---- codex resolution for the fleet spawn chain (OC_CODEX_BIN stamp, T-ff48) ----
+  # DELIBERATE MIRROR of the claude block above — same resolution order, same XML
+  # hygiene, same two-probe shim detection; keep the two in step. WHY IT EXISTS: a
+  # member is claude OR codex, but only claude was ever stamped here, so on a host
+  # whose codex lives under asdf/nvm/volta the chain broke exactly where claude's
+  # worked — bootstrap-here handed the serve env to `ocwarden install`, which could
+  # not re-discover codex under the minimal launchd PATH and then refused every
+  # codex spawn (runtime_bin_unresolved) while claude members ran fine. Reference
+  # implementation: cli/ocwarden/install.go's resolveCodex seam.
+  local CODEX_BIN
+  CODEX_BIN="${OC_CODEX_BIN:-}"
+  if [[ -z "$CODEX_BIN" ]]; then
+    CODEX_BIN="$(command -v codex 2>/dev/null || true)"
+  fi
+  if [[ -z "$CODEX_BIN" ]]; then
+    local xcand
+    for xcand in "$HOME_DIR/.local/bin/codex" "$HOME_DIR/.npm-global/bin/codex" /opt/homebrew/bin/codex /usr/local/bin/codex; do
+      [[ -x "$xcand" ]] && { CODEX_BIN="$xcand"; break; }
+    done
+  fi
+  if [[ -n "$CODEX_BIN" ]]; then
+    if [[ "$CODEX_BIN" != /* || "$CODEX_BIN" == *[\ \	\"\'\<\>\&]* ]]; then
+      log "WARN: resolved codex path '$CODEX_BIN' is not stampable (must be absolute, no whitespace/XML-special chars) — not stamping OC_CODEX_BIN"
+      CODEX_BIN=""
+    elif env -i PATH="$COMMON_PATH" HOME="$HOME_DIR" "$CODEX_BIN" --version >/dev/null 2>&1; then
+      log "codex resolved: $CODEX_BIN (runs under the minimal launchd PATH; stamping OC_CODEX_BIN into the serve plist)"
+    elif env -i PATH="$PATH" HOME="$HOME_DIR" "$CODEX_BIN" --version >/dev/null 2>&1; then
+      if [[ "$PATH" == *[\"\'\<\>\&]* ]]; then
+        log "WARN: installer PATH contains XML-special chars — cannot stamp it into the serve plist; stamping OC_CODEX_BIN only (the shim may fail under the minimal PATH)"
+      else
+        SERVE_PATH="$PATH"
+        log "codex resolved: $CODEX_BIN (version-manager shim — needs the installer PATH; stamping OC_CODEX_BIN AND the full installer PATH into the serve plist)"
+      fi
+    else
+      log "WARN: codex at $CODEX_BIN failed --version under both minimal and installer PATH — stamping OC_CODEX_BIN best-effort (spawns via bootstrap-here may fail)"
+    fi
+  fi
+  if [[ -z "$CLAUDE_BIN" && -z "$CODEX_BIN" ]]; then
+    log "WARNING: no agent runtime resolved (neither claude nor codex) — wardens installed via the cockpit's bootstrap-here on THIS host will refuse every spawn (runtime_bin_unresolved)."
+    log "WARNING: fix: install one, or export OC_CLAUDE_BIN=/absolute/path/to/claude or OC_CODEX_BIN=/absolute/path/to/codex and re-run 'ocserver install' (safe — idempotent)."
+  elif [[ -z "$CLAUDE_BIN" ]]; then
+    log "NOTE: claude not resolved here — codex members work, claude members on this host would hit claude_bin_unresolved (export OC_CLAUDE_BIN=/absolute/path/to/claude and re-run to fix)."
+  elif [[ -z "$CODEX_BIN" ]]; then
+    log "NOTE: codex not resolved here — claude members work, codex members on this host would hit runtime_bin_unresolved (export OC_CODEX_BIN=/absolute/path/to/codex and re-run to fix)."
+  fi
+  local CODEX_ENV_LINE=""
+  if [[ -n "$CODEX_BIN" ]]; then
+    CODEX_ENV_LINE="
+        <key>OC_CODEX_BIN</key><string>$CODEX_BIN</string>"
   fi
 
   # render_serve_plist — the API (repo/bin/serve → exec .deploy/ocserverd serve).
@@ -533,7 +583,7 @@ cmd_install() {
     <dict>
         <key>PATH</key><string>$SERVE_PATH</string>
         <key>HOME</key><string>$HOME_DIR</string>
-        <key>OC_CONFIG</key><string>$OC_TOML</string>$CLAUDE_ENV_LINE
+        <key>OC_CONFIG</key><string>$OC_TOML</string>$CLAUDE_ENV_LINE$CODEX_ENV_LINE
     </dict>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
