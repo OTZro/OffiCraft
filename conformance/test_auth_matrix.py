@@ -890,6 +890,18 @@ MATRIX: dict[str, Route] = {
             *_matrix_task_step(ctx)),
         body={"status": "in_progress"},
     ),
+    "POST /api/tasks/{task_id}/steps/{step_id}/note": Route(
+        # T-cc3e. Same executor-or-admin gate as every other task-driving write,
+        # so the matrix face is identical to the status route's: at-floor agent
+        # passes on its OWN task, another agent's token is a 403. The note needs
+        # no in_progress step — it is writable in any step status, which is the
+        # ticket's whole point, so the default (pending) scratch step is fine.
+        requires="agent",
+        overrides={"agent_other": 403},
+        path=lambda ctx, _i: "/api/tasks/{}/steps/{}/note".format(
+            *_matrix_task_step(ctx)),
+        body={"note": "conf matrix note"},
+    ),
     "POST /api/tasks/{task_id}/steps/{step_id}/gate": Route(
         requires="agent",
         overrides={"agent_other": 403},

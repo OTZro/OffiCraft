@@ -254,6 +254,13 @@ export interface TaskStepView {
    * waiting step's reason. OPTIONAL so hand-built fixtures stay valid (the
    * replyCardStatus precedent); the mapper always sets it. */
   waitingReason?: string;
+  /** The step's free-text working note — what it got to and what comes next
+   * (T-cc3e). The field the handover SOP means by "把還在進行中的工作寫回 task
+   * step note"; unlike `waitingReason` it is bound to no status, so it carries
+   * progress at whatever moment a handover lands. OPTIONAL so hand-built
+   * fixtures stay valid (the replyCardStatus precedent); the mapper always
+   * sets it. */
+  note?: string;
   /** Non-empty ⇒ this leaf runs inside a parallel stage (同時進行 · N 項並行);
    * consecutive steps sharing the group render as one parallel block. */
   parallelGroup: string;

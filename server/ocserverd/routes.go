@@ -1117,6 +1117,15 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 		},
 		{
 			Method:   "POST",
+			Path:     "/api/tasks/{task_id}/steps/{step_id}/note",
+			Handler:  w.HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost,
+			Auth:     authGated,
+			Requires: principalAgent,
+			Summary:  "Write a step's working note (any status; wholesale replace).",
+			MCPTool:  "update_step_note",
+		},
+		{
+			Method:   "POST",
 			Path:     "/api/tasks/{task_id}/steps/{step_id}/gate",
 			Handler:  w.HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePost,
 			Auth:     authGated,

@@ -417,19 +417,25 @@ type TaskStep struct {
 	IsGate        bool
 	ReplyCardID   string // the CURRENTLY armed card; '' = none
 	WaitingReason string // non-empty only while waiting_external (T-9ca5; task-level moved here)
-	StartedTS     float64
-	FinishedTS    float64
+	// Note is the step's free-text working note: what this step got to and what
+	// comes next (T-cc3e). Unlike WaitingReason it is bound to NO status — it is
+	// writable in every one of them, because a handover lands at an arbitrary
+	// moment and the note is what the next session reads to pick the work back
+	// up. Wholesale write, last one wins: current state, not an append-only log.
+	Note       string
+	StartedTS  float64
+	FinishedTS float64
 }
 
 const taskStepColumns = `id, task_id, order_idx, name, dod, status,
-	parallel_group, is_gate, reply_card_id, waiting_reason, started_ts, finished_ts`
+	parallel_group, is_gate, reply_card_id, waiting_reason, note, started_ts, finished_ts`
 
 func scanTaskStep(row interface{ Scan(...any) error }) (TaskStep, error) {
 	var st TaskStep
 	var isGate int
 	err := row.Scan(
 		&st.ID, &st.TaskID, &st.OrderIdx, &st.Name, &st.DoD, &st.Status,
-		&st.ParallelGroup, &isGate, &st.ReplyCardID, &st.WaitingReason,
+		&st.ParallelGroup, &isGate, &st.ReplyCardID, &st.WaitingReason, &st.Note,
 		&st.StartedTS, &st.FinishedTS,
 	)
 	if err != nil {
@@ -529,6 +535,52 @@ func (d *DAL) GetTaskStep(id string) (*TaskStep, error) {
 	return &st, nil
 }
 
+// SetTaskStepNote writes ONE column of ONE step row (T-cc3e). It reports
+// whether a row was actually there: false means the step is gone, and the
+// caller turns that into a 404 rather than silently succeeding.
+//
+// Deliberately NOT PutTaskStep. Every other step writer does load-mutate-save
+// through that whole-row upsert, which replays every column the caller read
+// moments earlier — fine when the caller owns the transition, wrong here. A
+// note write carries no opinion about status, reply_card_id or order_idx, but
+// a whole-row upsert would assert stale values for all of them: answer a reply
+// card in the window between the read and the write and the upsert drags the
+// step back to waiting_owner pointing at a card that is already answered; let
+// submit_plan delete the step in that window and the upsert RESURRECTS it,
+// because an upsert on a deleted row inserts. A single-column UPDATE cannot do
+// either — it touches nothing it was not asked to touch, and it affects zero
+// rows when the step is gone.
+func (d *DAL) SetTaskStepNote(id, note string) (bool, error) {
+	res, err := d.wdb.Exec(`UPDATE task_step SET note = ? WHERE id = ?`, note, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// TouchTaskUpdatedTS bumps ONE task's updated_ts and nothing else (T-cc3e).
+//
+// The cockpit's task card re-reads its (heavy, step-carrying) detail when
+// updated_ts changes — the SSE task delta itself only carries id/status/
+// priority and the list it refreshes carries no steps at all. So a write that
+// changes only a step, and leaves updated_ts alone, is invisible to a card the
+// owner already has open: it renders the detail it hydrated on expand, forever.
+// That is the whole deliverable of this ticket ("第 4 步做到哪"), so the note
+// write has to move this field.
+//
+// Single-column UPDATE for the same reason as SetTaskStepNote above: PutTask is
+// a whole-row upsert with no optimistic lock, so bumping a timestamp through it
+// would replay every other task column — status, priority, executor — as the
+// caller last read them, and race whoever is changing one of those.
+func (d *DAL) TouchTaskUpdatedTS(id string, ts float64) error {
+	_, err := d.wdb.Exec(`UPDATE task SET updated_ts = ? WHERE id = ?`, ts, id)
+	return err
+}
+
 // PutTaskStep upserts one step row.
 func (d *DAL) PutTaskStep(st TaskStep) error {
 	isGate := 0
@@ -537,7 +589,7 @@ func (d *DAL) PutTaskStep(st TaskStep) error {
 	}
 	_, err := d.wdb.Exec(`
 		INSERT INTO task_step (`+taskStepColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			task_id = excluded.task_id, order_idx = excluded.order_idx,
 			name = excluded.name, dod = excluded.dod,
@@ -546,10 +598,11 @@ func (d *DAL) PutTaskStep(st TaskStep) error {
 			is_gate = excluded.is_gate,
 			reply_card_id = excluded.reply_card_id,
 			waiting_reason = excluded.waiting_reason,
+			note = excluded.note,
 			started_ts = excluded.started_ts,
 			finished_ts = excluded.finished_ts`,
 		st.ID, st.TaskID, st.OrderIdx, st.Name, st.DoD, st.Status,
-		st.ParallelGroup, isGate, st.ReplyCardID, st.WaitingReason,
+		st.ParallelGroup, isGate, st.ReplyCardID, st.WaitingReason, st.Note,
 		st.StartedTS, st.FinishedTS,
 	)
 	return err
@@ -633,9 +686,9 @@ func (d *DAL) ReplaceTaskPlan(taskID string, retain, freeze []string,
 		}
 		if _, err := tx.Exec(`
 			INSERT INTO task_step (`+taskStepColumns+`)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			st.ID, st.TaskID, st.OrderIdx, st.Name, st.DoD, st.Status,
-			st.ParallelGroup, isGate, st.ReplyCardID, st.WaitingReason,
+			st.ParallelGroup, isGate, st.ReplyCardID, st.WaitingReason, st.Note,
 			st.StartedTS, st.FinishedTS); err != nil {
 			return nil, err
 		}

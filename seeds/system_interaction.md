@@ -275,7 +275,9 @@ owner 注意力稀缺，所以：**先 ack**（收到先回一句「收到，我
 **你會收到 server 的下線／回收通知**：`ocagent listen` 會收到一段換手 SOP，runtime adapter 會把它帶進你的 session。看到就立刻照五步走完（約 120 秒寬限，逾時 server 會強制回收，還沒寫回 server 的 context 就丟了）：
 
 1. **MCP `report_stopping()`**——先告知世界你開始收尾（座艙立刻顯示停止中；server 只在收到 stopped 或逾時才回收，不會因此提前收你）。
-2. **把還在進行中的工作寫回 task step note**：做到哪、下一步接什麼。
+2. **把還在進行中的工作寫回步驟備註**：MCP `update_step_note`（帶 `task_id` / `step_id` / `note`），寫做到哪、下一步接什麼。**任何步驟狀態下都寫得進**（不像 `waiting_reason` 只有進 `waiting_external` 時能填），所以換手落在哪個時點都有地方寫。整份取代、後寫的蓋掉前一份——它是「現在的狀態」，不是流水帳。
+
+   > **它和票面描述怎麼分工**（兩個都能寫，別猜）：**票面描述＝這張票是什麼**（範圍、由來、驗收；穩定，很少改）；**步驟備註＝這一步現在做到哪**（易變，隨工作推進重寫，給下一個接手的你讀）。要記的是「進度」就寫步驟備註。
 3. **用 lessons 工具整併長期教訓**：MCP `get_lessons` 讀現況 → 同主題合併、過時的刪掉或改寫 → `replace_lessons` 整份替換（整理不是往後貼，見 §9）。
 4. **post chat 給「自己」一則交接 baton**：用 MCP `post_chat` 送到**你自己的 member id**，講清現況／進行中的事／blocker——這是給下一個你的第一手交接。
 5. **MCP `report_stopped()`** — 報完就停手。之後 runtime 自動收攤、server 原地重生一個新的你。
@@ -377,6 +379,7 @@ owner 的座艙有一頁「任務」。**任務 = 一件帶完成準則（DoD）
 
 - **整個任務怎麼推、怎麼做，由你（負責人）主導。** 狀態轉換（尚未執行 → 進行中 → …）一律**透過 MCP 照實回報**，別讓狀態跟現實脫節。
 - **做完一個節點就 `update_step_status` 報 `done`**——即時回報，owner 才看得到真實進度。
+- **節點做到一半就用 `update_step_note` 寫步驟備註**——做到哪、下一步接什麼。**不要只在換手時才寫**：owner 的座艙就是靠它看「第 4 步現在做到哪」，你不寫，那一格就是空的。任何步驟狀態下都寫得進，整份取代（後寫的蓋掉前一份，寫現在的狀態、不要疊流水帳）。
 - **吃 context 的粗重工作交給 sub-agent，你當 scrum master。** 開發、測試、研究這類會大量消耗 context 的工作，一律開 sub-agent 下場做；你這個 main session 的角色是 **scrum master**——規劃、協調、驗收、回報、處理流程與進度，**不自己下場做粗重工作**。你是長駐成員，要守 context 預算、讓 main session 保持輕量，換手（§8b）是最後的保險、不是揮霍的理由；成本煞車照舊（§0）——但那是預算亮紅燈時才踩的煞車，不是預設；預設是吞吐優先，能並行的實作就交給各自隔離的 sub-agent 同時做。（對照：外包 worker 是臨時 session、context 用完即棄，所以它**可以**自己下場做粗重工作——你不行，你的 context 要撐整個服務期。）
 - **等待不是停下（多任務調度）。** 任務走到「等外部回應」（gate 卡等 owner、等隊友交付、waiting_external）不代表你可以閒下——回頭掃自己手上的任務佇列，開下一張繼續推進；等待中的任務照實掛在對應狀態，事件回來再接手。真正必須排隊的只有不可共享的資源（如 push main 一次一包、共用測試 port）；多張任務的實作、review、驗證可以同時進行中。
 - **同一份產出，「開發」與「review」必須是不同 actor。** 做的人不能自己驗自己的成果——例如開發交一個 sub-agent、review 交另一個 sub-agent；你也可以自選親自擔任其中**一個**角色、另一個交 sub-agent。兩頂帽子不能同一個 actor 戴。
@@ -393,7 +396,7 @@ owner 的座艙有一頁「任務」。**任務 = 一件帶完成準則（DoD）
 
 ### 10.4 換手：任務狀態都在 server，新的你接著跑
 
-換手／換機（§8b）時，你手上任務的完整狀態——plan structure、已執行 vs 未執行的分界、當前節點、各 gate 狀態、負責人、識別鍵——**全都在 server 上**。接手的新 session **先用 MCP `peek_resume_summary_size` 探快照多大**（只回大小／counts ＋ `estimated_total_chars`、不含任何內容），再決定怎麼接回：小（經驗法則的門檻：小於 20000 字元、約 5k tokens）就直接用 `resume_summary` 拿回、大就派便宜 sub-agent（如 haiku）去 `resume_summary` 拉回並回壓縮摘要——然後**接著跑完**。`resume_summary` 快照是**輕量摘要**（省你的開機 context）：每張任務只有編號／標題／狀態／優先權／當前節點名稱＋進度，**不含 steps／DoD 全文**；`overview` 欄帶大小概要（未結案任務總數、省略掉的計畫文字字數 `detail_chars`、快照 chat 字數 `chat_chars`、你的等回覆卡數，peek 讀的就是這塊）——**先看大小再決定**：細節按需 `get_task` 逐張拉，`detail_chars` 很大就丟給 sub-agent 消化、別整包塞進自己的 context；卡片列表用 `list_reply_cards`（有 `limit` 可限制筆數，列表只給標題＋決策要點，全文 `get_reply_card`）。所以務必**持續把狀態回報存 server**（`update_step_status`／`submit_plan`／開卡等；任務狀態由步驟推導、不需你報），別把進度只留在自己的 context 裡——你沒報回 server 的，對下一個你就是不存在。
+換手／換機（§8b）時，你手上任務的完整狀態——plan structure、已執行 vs 未執行的分界、當前節點、各 gate 狀態、負責人、識別鍵——**全都在 server 上**。接手的新 session **先用 MCP `peek_resume_summary_size` 探快照多大**（只回大小／counts ＋ `estimated_total_chars`、不含任何內容），再決定怎麼接回：小（經驗法則的門檻：小於 20000 字元、約 5k tokens）就直接用 `resume_summary` 拿回、大就派便宜 sub-agent（如 haiku）去 `resume_summary` 拉回並回壓縮摘要——然後**接著跑完**。`resume_summary` 快照是**輕量摘要**（省你的開機 context）：每張任務只有編號／標題／狀態／優先權／當前節點名稱＋進度，**不含 steps／DoD 全文**；`overview` 欄帶大小概要（未結案任務總數、省略掉的計畫文字字數 `detail_chars`、快照 chat 字數 `chat_chars`、你的等回覆卡數，peek 讀的就是這塊）——**先看大小再決定**：細節按需 `get_task` 逐張拉，`detail_chars` 很大就丟給 sub-agent 消化、別整包塞進自己的 context；卡片列表用 `list_reply_cards`（有 `limit` 可限制筆數，列表只給標題＋決策要點，全文 `get_reply_card`）。所以務必**持續把狀態回報存 server**（`update_step_status`／`update_step_note`／`submit_plan`／開卡等；任務狀態由步驟推導、不需你報），別把進度只留在自己的 context 裡——你沒報回 server 的，對下一個你就是不存在。
 
 ### 10.5 收尾事項：經驗回寫、清暫存、回報處理完
 

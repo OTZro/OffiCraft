@@ -1967,14 +1967,17 @@ type TaskRefDTO struct {
 
 // TaskStepDTO One workflow node on the task timeline. Every row is one progress leaf (parallel items are separate rows sharing “parallel_group“). A parallel stage is CONSECUTIVE rows sharing a non-empty “parallel_group“ — submit_plan refuses (400) split groups, one-lane groups and gates inside a group, so stored plans always fold cleanly. “status“ is the closed set “pending“ | “in_progress“ | “waiting_owner“ | “done“ | “superseded“. “done“ and “superseded“ are the step's terminal states: “superseded“ (T-1aea) is stamped by submit_plan alone — a replan freezes a step whose latest bound reply card was already answered/expired as kept history (original order, ahead of the fresh plan) unless the fresh plan re-lists the node by name; a superseded row counts toward neither “progress_done“ nor “progress_total“, is never the current node, is not agent-reportable and cannot be re-armed; its “finished_ts“ is the freeze moment. Gate projection: “is_gate“ with an empty “reply_card_id“ is the ANNOUNCED (dashed) gate; a non-empty “reply_card_id“ is a step carrying a live reply card — an ARMED gate, or a plain step a “create_reply_card“ ask auto-bound to. “reply_card_id“ always points at the LATEST bound card and persists after the step finishes (the permanent approval mark).
 type TaskStepDTO struct {
-	Dod           *string  `json:"dod,omitempty"`
-	FinishedTs    *float64 `json:"finished_ts,omitempty"`
-	Id            string   `json:"id"`
-	IsGate        *bool    `json:"is_gate,omitempty"`
-	Name          *string  `json:"name,omitempty"`
-	OrderIdx      int      `json:"order_idx"`
-	ParallelGroup *string  `json:"parallel_group,omitempty"`
-	ReplyCardId   *string  `json:"reply_card_id,omitempty"`
+	Dod        *string  `json:"dod,omitempty"`
+	FinishedTs *float64 `json:"finished_ts,omitempty"`
+	Id         string   `json:"id"`
+	IsGate     *bool    `json:"is_gate,omitempty"`
+	Name       *string  `json:"name,omitempty"`
+
+	// Note T-cc3e — the step's free-text working note: what this step got to and what comes next. The GENERAL-PURPOSE note the handover SOP has always told agents to write ("把還在進行中的工作寫回 task step note") and which, until this field existed, had nowhere to land. Writable in ANY step status via POST /api/tasks/{task_id}/steps/{step_id}/note (MCP ``update_step_note``) — unlike ``waiting_reason``, which is bound to waiting_external and cleared on leaving it, and unlike the handoff fields, which are read only on the report that closes the task. Division of labour with the task-level ``description``: the description says WHAT THIS TASK IS (scope, origin, acceptance — stable); the step note says WHERE THIS STEP IS RIGHT NOW (volatile, rewritten as work moves, read by the next session after a handover). Last write wins, wholesale — it is a current-state note, not an append-only log.
+	Note          *string `json:"note,omitempty"`
+	OrderIdx      int     `json:"order_idx"`
+	ParallelGroup *string `json:"parallel_group,omitempty"`
+	ReplyCardId   *string `json:"reply_card_id,omitempty"`
 
 	// ReplyCardStatus Read-time join: the CURRENT status (``waiting`` | ``answered``) of the reply card bound to this step (``reply_card_id``); ``""`` when the step carries no card. Lets the task-embedded card (TaskReplyCard) decide AT MOUNT whether to load eagerly (waiting — the live ask / the H4 answered-awaiting-pickup transitional) or lazily (answered — collapsed one-line summary, fetch on expand) WITHOUT a per-card GET, and lets the board derive the H4 badge without the child round-trip. NOT stored — computed each read from the card's live status.
 	ReplyCardStatus *string  `json:"reply_card_status,omitempty"`
@@ -1982,6 +1985,19 @@ type TaskStepDTO struct {
 	Status          string   `json:"status"`
 	TaskId          string   `json:"task_id"`
 	WaitingReason   *string  `json:"waiting_reason,omitempty"`
+}
+
+// TaskStepNoteReceiptDTO Bounded receipt returned after writing one step's working note (T-cc3e). Echoes the note as STORED, so the caller can confirm what actually landed without a follow-up GET — the point of the field is that the next session reads it back, so the write must be verifiable at the write. Fetch GET /api/tasks/{task_id} when full task detail is needed.
+type TaskStepNoteReceiptDTO struct {
+	Note       string `json:"note"`
+	StepId     string `json:"step_id"`
+	StepStatus string `json:"step_status"`
+	TaskId     string `json:"task_id"`
+}
+
+// TaskStepNoteUpdateDTO Write one step's working note (MCP “update_step_note“, T-cc3e). Accepted in ANY STEP status — pending, in_progress, waiting_owner, waiting_external, done and superseded alike, for as long as the TASK itself is open — because the note records where the work stands, which is orthogonal to the state machine; that generality is the whole point, since the previous two note-shaped fields were each locked to one moment (“waiting_reason“ to waiting_external, the handoff fields to the closing report). Deliberately its OWN endpoint and its OWN tool rather than another parameter on update_step_status (charter §14 intent-per-tool): writing a note is a different intent from reporting a transition, and one field with two write paths is exactly the ambiguity this ticket exists to remove. The write is wholesale — the body's “note“ replaces whatever was there; sending “""“ clears it.
+type TaskStepNoteUpdateDTO struct {
+	Note string `json:"note"`
 }
 
 // TaskStepStatusReceiptDTO Bounded receipt returned after updating one task step. Fetch GET /api/tasks/{task_id} when full task detail is needed.
@@ -2381,6 +2397,9 @@ type HandleReassignTaskApiTasksTaskIdReassignPostJSONRequestBody = TaskReassignD
 
 // HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePostJSONRequestBody defines body for HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePost for application/json ContentType.
 type HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePostJSONRequestBody = ReplyCardCreateDTO
+
+// HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePostJSONRequestBody defines body for HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost for application/json ContentType.
+type HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePostJSONRequestBody = TaskStepNoteUpdateDTO
 
 // HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPostJSONRequestBody defines body for HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPost for application/json ContentType.
 type HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPostJSONRequestBody = TaskStepStatusUpdateDTO
@@ -2806,6 +2825,9 @@ type ServerInterface interface {
 	// Arm a gate step: opens the reply card the owner must answer.
 	// (POST /api/tasks/{task_id}/steps/{step_id}/gate)
 	HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePost(w http.ResponseWriter, r *http.Request, taskId string, stepId string)
+	// Write a step's working note (any status; wholesale replace).
+	// (POST /api/tasks/{task_id}/steps/{step_id}/note)
+	HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost(w http.ResponseWriter, r *http.Request, taskId string, stepId string)
 	// Report a step status (pending/in_progress/done).
 	// (POST /api/tasks/{task_id}/steps/{step_id}/status)
 	HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPost(w http.ResponseWriter, r *http.Request, taskId string, stepId string)
@@ -5726,6 +5748,41 @@ func (siw *ServerInterfaceWrapper) HandleOpenTaskGateApiTasksTaskIdStepsStepIdGa
 	handler.ServeHTTP(w, r)
 }
 
+// HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost operation middleware
+func (siw *ServerInterfaceWrapper) HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "task_id" -------------
+	var taskId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "task_id", r.PathValue("task_id"), &taskId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "task_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "step_id" -------------
+	var stepId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "step_id", r.PathValue("step_id"), &stepId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "step_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost(w, r, taskId, stepId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPost operation middleware
 func (siw *ServerInterfaceWrapper) HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPost(w http.ResponseWriter, r *http.Request) {
 
@@ -6175,6 +6232,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/priority", wrapper.HandleSetTaskPriorityApiTasksTaskIdPriorityPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/reassign", wrapper.HandleReassignTaskApiTasksTaskIdReassignPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/steps/{step_id}/gate", wrapper.HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/steps/{step_id}/note", wrapper.HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/steps/{step_id}/status", wrapper.HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/terminate", wrapper.HandleTerminateTaskApiTasksTaskIdTerminatePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/update/upgrade", wrapper.HandleUpgradeApiUpdateUpgradePost)
