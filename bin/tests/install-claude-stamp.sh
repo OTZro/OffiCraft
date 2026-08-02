@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# bin/tests/install-claude-stamp.sh — HERMETIC unit tests for bin/install.sh's
-# serve-plist claude stamp (T-ba62).
+# bin/tests/install-claude-stamp.sh — HERMETIC unit tests for the serve-plist
+# RUNTIME stamps (claude AND codex) written by bin/install.sh (T-ba62) and by
+# bin/ocserver install (T-ff48). The filename is historical; the suite covers
+# both installers and both runtimes.
 #
 # THE DEFECT UNDER TEST
 # ---------------------
@@ -152,7 +154,7 @@ run_install() {
 
 plist_has() { [[ "$PLIST_BODY" == *"$1"* ]]; }
 
-echo "install.sh serve-plist claude stamp — hermetic tests"
+echo "serve-plist runtime stamps (claude + codex, both installers) — hermetic tests"
 
 # ── 1. claude present and runnable → OC_CLAUDE_BIN + a PATH land in the plist ─
 reset_fixture
@@ -313,6 +315,14 @@ rm -f "$EXTRADIR/codex"
 # ── 7. codex-only host → OC_CODEX_BIN is stamped and the PATH is promoted ────
 # The preflight already lets this host install (claude OR codex). Before the fix
 # it installed a plist that named neither runtime.
+# Skip-guard, same reason as case 2: the preflight also looks at ABSOLUTE paths
+# no PATH shim can hide, so on a host carrying /opt/homebrew/bin/claude the run is
+# not codex-only and the case would pass for a weaker reason than it advertises
+# (and would exec the operator's real claude inside a suite that calls itself
+# hermetic).
+if [[ -x /opt/homebrew/bin/claude || -x /usr/local/bin/claude ]]; then
+  echo "  skip — an absolute claude exists on this host; a codex-only host is not constructible"
+else
 reset_fixture
 rm -f "$EXTRADIR/claude"
 write_codex "$EXTRADIR/codex" shim
@@ -329,6 +339,7 @@ if plist_has "$EXTRADIR:"; then
 else
   bad "codex-only: the shim dir is NOT on the plist PATH — the warden could never run codex:
 $PLIST_BODY"
+fi
 fi
 rm -f "$EXTRADIR/codex"
 write_claude "$EXTRADIR/claude" ok
@@ -363,62 +374,184 @@ else
   ok "unstampable codex path: dropped (no OC_CODEX_BIN rendered)"
 fi
 
-# ── 10. bin/ocserver (the SOURCE install path) must not drift out of symmetry ─
-# HONEST ABOUT ITS STRENGTH: this is a STRUCTURAL check, not a hermetic run. The
-# source installer's plist renderer is a function local to `ocserver install`,
-# which also builds binaries and talks to launchctl, so there is no seam to drive
-# it the way `render-config` is driven in port-default.sh. What is checkable, and
-# what actually broke, is symmetry: bin/ocserver carried the claude stamp for
-# years and never grew the codex one. Every assertion below is paired — the
-# claude half is the control that proves the codex grep is discriminating.
+# ── 10. bin/ocserver (the SOURCE install path) — driven, not grepped ─────────
+# WHY THIS IS A REAL RUN AND NOT A GREP. The first version of this case asserted
+# on bin/ocserver's SOURCE TEXT, because its plist renderer is a function local to
+# `ocserver install` (which also builds binaries and talks to launchctl). An
+# independent reviewer then proved the obvious hole: guarding the codex env line
+# with `if false` left every one of those greps green while OC_CODEX_BIN was never
+# emitted — the exact T-ff48 defect, shipping green on the source-install path. A
+# grep for a mention cannot tell live code from dead code.
+#
+# So bin/ocserver grew `render-runtime-env`, a hidden seam in the same spirit as
+# the `render-config` seam that bin/tests/port-default.sh drives: it runs step 6's
+# resolution exactly as install does and prints the plist's EnvironmentVariables
+# fragment. These cases assert on what it EMITS.
 OCSERVER_SRC="$HERE/../ocserver"
+OCSHOME="$WORK/ocs-home"
+OCSDIR="$WORK/ocs-versionmgr"
+
+# ocs_render [env-overrides…] — drive the seam under a hermetic PATH/HOME.
+ocs_render() {
+  rm -rf "$OCSHOME"; mkdir -p "$OCSHOME"
+  OCS_OUT="$(env -i PATH="$OCSDIR:$SHIMDIR:/usr/bin:/bin:/usr/sbin:/sbin" \
+    HOME="$OCSHOME" "$@" bash "$OCSERVER_SRC" render-runtime-env "$OCSHOME" 2>/dev/null)"
+}
+ocs_has() { [[ "$OCS_OUT" == *"$1"* ]]; }
+
 if [[ ! -f "$OCSERVER_SRC" ]]; then
   bad "bin/ocserver not found at $OCSERVER_SRC"
 else
+  mkdir -p "$OCSDIR"
+  # 10a. THE ASYMMETRY SENTINEL for the source path: both runtimes behind the same
+  # version manager, both must be stamped, and the shim dir must reach the plist.
+  rm -f "$OCSDIR/claude" "$OCSDIR/codex"
+  write_claude "$OCSDIR/claude" shim
+  write_codex  "$OCSDIR/codex"  shim
+  ocs_render
+  if ocs_has "<key>OC_CLAUDE_BIN</key><string>$OCSDIR/claude</string>"; then
+    ok "ocserver: claude is stamped into the serve plist env"
+  else
+    bad "ocserver: claude is NOT stamped — this control has rotted:
+$OCS_OUT"
+  fi
+  if ocs_has "<key>OC_CODEX_BIN</key><string>$OCSDIR/codex</string>"; then
+    ok "ocserver: codex is stamped too (symmetric with claude)"
+  else
+    bad "ocserver: ASYMMETRY — claude is stamped but OC_CODEX_BIN is not; a codex member on a source-installed host would hit runtime_bin_unresolved:
+$OCS_OUT"
+  fi
+  if ocs_has "$OCSDIR:"; then
+    ok "ocserver: the installer PATH (incl. the shim dir) is promoted"
+  else
+    bad "ocserver: the shim dir is NOT on the plist PATH — neither runtime could be run by the warden:
+$OCS_OUT"
+  fi
+
+  # 10b. codex ALONE promotes the PATH. Case 10a cannot prove this: claude is a
+  # shim there too, so its own promotion satisfies the assertion. Here claude runs
+  # fine under the minimal PATH, so a promoted PATH can only have come from codex.
+  rm -f "$OCSDIR/claude" "$OCSDIR/codex"
+  write_claude "$OCSDIR/claude" ok
+  write_codex  "$OCSDIR/codex"  shim
+  ocs_render
+  if ocs_has "$OCSDIR:"; then
+    ok "ocserver: a codex shim promotes the installer PATH on its own"
+  else
+    bad "ocserver: only claude can promote the PATH — a host whose codex alone is behind a version manager stamps a codex the warden cannot run:
+$OCS_OUT"
+  fi
+
+  # 10c. the OC_CODEX_BIN override is honoured (the documented escape hatch).
+  rm -f "$OCSDIR/codex"
+  mkdir -p "$WORK/ocs-explicit"
+  write_codex "$WORK/ocs-explicit/codex" ok
+  write_codex "$OCSDIR/codex" ok
+  ocs_render OC_CODEX_BIN="$WORK/ocs-explicit/codex"
+  if ocs_has "<key>OC_CODEX_BIN</key><string>$WORK/ocs-explicit/codex</string>"; then
+    ok "ocserver: the OC_CODEX_BIN override wins over PATH discovery"
+  else
+    bad "ocserver: OC_CODEX_BIN was not honoured — the documented escape hatch does nothing:
+$OCS_OUT"
+  fi
+
+  # 10d. an unstampable codex path is dropped, not interpolated.
+  rm -f "$OCSDIR/codex"
+  mkdir -p "$WORK/ocs bad dir"
+  write_codex "$WORK/ocs bad dir/codex" ok
+  ocs_render OC_CODEX_BIN="$WORK/ocs bad dir/codex"
+  if ocs_has "OC_CODEX_BIN"; then
+    bad "ocserver: an unstampable codex path was rendered into the plist:
+$OCS_OUT"
+  else
+    ok "ocserver: an unstampable codex path is dropped (case 10a is the positive control)"
+  fi
+
+  # 10e. the .npm-global fallback — the standard non-root `npm install -g` prefix.
+  # Asserted for BOTH runtimes: this list was claude-only-missing it, which is how
+  # a "deliberate mirror" comment ends up describing two different resolvers.
+  rm -f "$OCSDIR/claude" "$OCSDIR/codex"
+  rm -rf "$OCSHOME"; mkdir -p "$OCSHOME/.npm-global/bin"
+  write_claude "$OCSHOME/.npm-global/bin/claude" ok
+  write_codex  "$OCSHOME/.npm-global/bin/codex"  ok
+  OCS_OUT="$(env -i PATH="$SHIMDIR:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$OCSHOME" \
+    bash "$OCSERVER_SRC" render-runtime-env "$OCSHOME" 2>/dev/null)"
+  if ocs_has "<key>OC_CLAUDE_BIN</key><string>$OCSHOME/.npm-global/bin/claude</string>"; then
+    ok "ocserver: claude is found under ~/.npm-global/bin"
+  else
+    bad "ocserver: claude is NOT found under ~/.npm-global/bin, the standard non-root npm prefix:
+$OCS_OUT"
+  fi
+  if ocs_has "<key>OC_CODEX_BIN</key><string>$OCSHOME/.npm-global/bin/codex</string>"; then
+    ok "ocserver: codex is found under ~/.npm-global/bin"
+  else
+    bad "ocserver: codex is NOT found under ~/.npm-global/bin:
+$OCS_OUT"
+  fi
+
+  # 10f. the plist render really interpolates what the seam prints. The seam and
+  # the plist are two call sites of the same variables; without this, a plist that
+  # stopped interpolating them would leave every case above green.
   OCS="$(cat "$OCSERVER_SRC")"
-  # a) the rendered serve plist interpolates BOTH env lines
-  if [[ "$OCS" == *'$CLAUDE_ENV_LINE'* ]]; then
-    ok "ocserver: the serve plist renders CLAUDE_ENV_LINE (control)"
+  if [[ "$OCS" == *'$CLAUDE_ENV_LINE$CODEX_ENV_LINE'* ]]; then
+    ok "ocserver: the serve plist interpolates both env lines the seam builds"
   else
-    bad "ocserver: the serve plist no longer renders CLAUDE_ENV_LINE — this control has rotted"
+    bad "ocserver: the serve plist no longer interpolates CLAUDE_ENV_LINE/CODEX_ENV_LINE — the seam above is testing something the install does not render"
   fi
-  if [[ "$OCS" == *'$CODEX_ENV_LINE'* ]]; then
-    ok "ocserver: the serve plist renders CODEX_ENV_LINE (symmetric with claude)"
-  else
-    bad "ocserver: ASYMMETRY — the serve plist renders the claude stamp but never CODEX_ENV_LINE; codex members on a source-installed host hit runtime_bin_unresolved"
-  fi
-  # b) both env lines carry the real key
-  if [[ "$OCS" == *'<key>OC_CODEX_BIN</key>'* ]]; then
-    ok "ocserver: OC_CODEX_BIN is the key actually written"
-  else
-    bad "ocserver: no <key>OC_CODEX_BIN</key> anywhere — the relay allowlist in api_machines.go has nothing to relay"
-  fi
-  # c) codex is RESOLVED, not merely referenced: env override + PATH lookup
-  if [[ "$OCS" == *'command -v codex'* ]]; then
-    ok "ocserver: codex is resolved from the installer's interactive PATH"
-  else
-    bad "ocserver: codex is never resolved via 'command -v codex' — a version-manager codex can never be found"
-  fi
-  if [[ "$OCS" == *'CODEX_BIN="${OC_CODEX_BIN:-}"'* ]]; then
-    ok "ocserver: the OC_CODEX_BIN operator override is honoured"
-  else
-    bad "ocserver: the OC_CODEX_BIN override is not read — the documented escape hatch does nothing"
-  fi
-  # d) the shim case promotes the installer PATH for codex too. Scoped to the
-  #    codex block so the claude block's promotion cannot satisfy this.
-  CODEX_BLOCK="$(awk '/codex resolution for the fleet spawn chain/,/CODEX_ENV_LINE=""/' "$OCSERVER_SRC")"
-  if [[ "$CODEX_BLOCK" == *'SERVE_PATH="$PATH"'* ]]; then
-    ok "ocserver: a version-manager codex promotes the installer PATH into the plist"
-  else
-    bad "ocserver: the codex block never promotes the installer PATH — an asdf/nvm/volta codex would be stamped but unrunnable under launchd"
-  fi
-  if [[ "$CODEX_BLOCK" == *'not stampable'* ]]; then
-    ok "ocserver: the codex path gets the same XML/exec hygiene check as claude"
-  else
-    bad "ocserver: the codex block skips the stampability check — an XML-special path would corrupt the plist"
-  fi
+  rm -rf "$OCSHOME"
 fi
 
-echo "install.sh claude stamp: $PASS ok, $FAIL failed"
+# ── 11. the runtime probe is bounded — a hanging shim must not hang the install ─
+# WHY: the probe runs `<runtime> --version` from the operator's PATH. A shim that
+# re-shims on first call, waits on the network, or reads stdin used to hang the
+# installer forever with no output since the previous step — and for a `curl |
+# bash` or cockpit-driven install there is nobody in front of that terminal.
+#
+# THIS CASE CARRIES ITS OWN WATCHDOG. Without one, a regression here does not fail
+# the suite, it HANGS it — and a CI job stuck at 100% looks nothing like a red
+# test, so nobody reads it as this contract breaking. The watchdog turns the
+# regression back into a FAIL (verified: disabling the budget makes this case
+# report the kill, not stall).
+reset_fixture
+printf '#!/usr/bin/env bash\nread -r _ 2>/dev/null\nsleep 600\n' > "$EXTRADIR/claude"
+chmod +x "$EXTRADIR/claude"
+HANG_OUT="$WORK/hang.out"
+: > "$HANG_OUT"
+(
+  cd "$WORK" && env -i \
+    PATH="$EXTRADIR:$SHIMDIR:/usr/bin:/bin:/usr/sbin:/sbin" \
+    HOME="$FAKEHOME" SHIM_TRIPWIRE="$WORK/.tripwire" SHIM_STATE="$WORK" \
+    OC_PROBE_BUDGET_SECS=1 \
+    bash "$PKG/install.sh" </dev/null >"$HANG_OUT" 2>&1
+) &
+HANG_PID=$!
+HANG_WAITED=0; HANG_KILLED=0
+while kill -0 "$HANG_PID" 2>/dev/null; do
+  if [[ "$HANG_WAITED" -ge 60 ]]; then
+    HANG_KILLED=1
+    kill -9 "$HANG_PID" 2>/dev/null || true
+    # The stub itself is the thing actually sleeping; without this the leftover
+    # `sleep 600` outlives the suite.
+    pkill -9 -f "$EXTRADIR/claude" 2>/dev/null || true
+    break
+  fi
+  sleep 1
+  HANG_WAITED=$((HANG_WAITED + 1))
+done
+wait "$HANG_PID" 2>/dev/null || true
+HANG_TEXT="$(cat "$HANG_OUT" 2>/dev/null || true)"
+if [[ "$HANG_KILLED" == 0 ]]; then
+  ok "hanging runtime: the install finished (${HANG_WAITED}s) instead of hanging on the probe"
+else
+  bad "hanging runtime: the install was still running after ${HANG_WAITED}s and had to be killed — the probe budget is not bounding it"
+fi
+case "$HANG_TEXT" in
+  *"did not answer within"*) ok "hanging runtime: the installer says which binary stopped answering" ;;
+  *) bad "hanging runtime: nothing in the output explains the stalled probe:
+$HANG_TEXT" ;;
+esac
+write_claude "$EXTRADIR/claude" ok
+
+echo "serve-plist runtime stamps: $PASS ok, $FAIL failed"
 [[ "$FAIL" == "0" ]] || exit 1
 exit 0

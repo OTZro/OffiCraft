@@ -90,19 +90,24 @@ else
   bad "bin/tests/port-default.sh is missing"
 fi
 
-# ── install.sh serve-plist claude stamp (T-ba62) ────────────────────────────
+# ── serve-plist runtime stamps: claude + codex, both installers (T-ba62/T-ff48) ─
 # Own file, own tempdir, same PATH-shim discipline. The stamp is what carries
-# PATH/OC_CLAUDE_BIN from the operator's interactive shell into the serve plist,
-# and from there (via bootstrap-here's env passthrough) into `ocwarden install`.
-# Losing it means every one-click host installs a warden that cannot resolve
-# claude — the silent failure this ticket closed.
+# PATH/OC_CLAUDE_BIN/OC_CODEX_BIN from the operator's interactive shell into the
+# serve plist, and from there (via bootstrap-here's env passthrough) into
+# `ocwarden install`. Losing it means the host installs a warden that cannot
+# resolve that runtime — the silent failure T-ba62 closed for claude on the
+# one-click path, and T-ff48 closed for codex on both paths. The suite covers
+# bin/install.sh hermetically and bin/ocserver through its render-runtime-env
+# seam; its central case asserts BOTH runtimes are rescued in the same host
+# situation, because a codex-only assertion goes green on a change that fixes
+# codex by breaking claude.
 CLAUDESTAMP="$HERE/install-claude-stamp.sh"
 echo
 if [[ -f "$CLAUDESTAMP" ]]; then
   if run_guard "$CLAUDESTAMP"; then
-    ok "install.sh serve-plist claude stamp suite passed"
+    ok "serve-plist runtime stamp suite passed"
   else
-    bad "install.sh serve-plist claude stamp suite FAILED (see output above)"
+    bad "serve-plist runtime stamp suite FAILED (see output above)"
   fi
 else
   bad "bin/tests/install-claude-stamp.sh is missing"

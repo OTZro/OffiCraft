@@ -551,11 +551,14 @@ owner password.
 
 Once that password is set the server finishes setup ITSELF: it installs this
 machine's warden and brings your assistant online, so you land on a working
-studio rather than an empty cockpit. That needs a working, LOGGED-IN \`claude\`
-CLI (and \`tmux\`) on this machine; if either is missing the setup fails
-loudly and the cockpit shows exactly why, instead of installing a warden that
-would refuse every spawn. If \`claude\` lives behind a version manager
-(asdf/nvm/volta), re-run with \`OC_CLAUDE_BIN=/absolute/path/to/claude\`.
+studio rather than an empty cockpit. That needs \`tmux\` plus a working,
+LOGGED-IN agent runtime — \`claude\` or \`codex\` — on this machine; if that is
+missing the setup fails loudly and the cockpit shows exactly why, instead of
+installing a warden that would refuse every spawn. Whichever runtimes are
+found are recorded in the service config, so members of either kind can start.
+If a runtime lives behind a version manager (asdf/nvm/volta), re-run with
+\`OC_CLAUDE_BIN=/absolute/path/to/claude\` or
+\`OC_CODEX_BIN=/absolute/path/to/codex\`.
 
 Already have OffiCraft installed? The installer detects it, warns, and asks
 before overwriting (\`--force\` skips the prompt in scripts). If a service is

@@ -1364,6 +1364,36 @@ mkdir -p "$LA_DIR" "$LOG_DIR"
 #
 # The stamping mirrors bin/ocserver's block deliberately (same XML hygiene, same
 # two-probe shim detection) — keep them in step. The path comes from oc_preflight.
+# oc_probe_runtime BIN PATHVAL — bounded, non-interactive `--version` probe.
+# Both bounds are load-bearing and were both missing before T-ff48:
+#   - `</dev/null` — a shim that prompts would otherwise wait on a terminal that,
+#     for a `curl | bash` or cockpit-driven install, has nobody in front of it.
+#     Go's exec.Cmd gets this for free from a nil Stdin.
+#   - a TIME budget — a shim that re-shims on first call or waits on the network
+#     hangs the whole installer with no output since the previous step, which for
+#     a headless operator is indistinguishable from slow. The Go reference bounds
+#     the same probe (claudeProbeBudget, cli/ocwarden/install.go).
+# OC_PROBE_BUDGET_SECS exists so the guard suite can prove the bound with a stub
+# that hangs on purpose, without a 20s test.
+oc_probe_runtime() {
+  local bin="$1" pathval="$2"
+  local budget="${OC_PROBE_BUDGET_SECS:-20}" pid ticks=0 max
+  max=$((budget * 5))
+  env -i PATH="$pathval" HOME="$HOME" "$bin" --version >/dev/null 2>&1 </dev/null &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [[ "$ticks" -ge "$max" ]]; then
+      kill -9 "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      echo "[install] WARN: '$bin --version' did not answer within ${budget}s — treating it as unusable under this PATH" >&2
+      return 1
+    fi
+    sleep 0.2
+    ticks=$((ticks + 1))
+  done
+  wait "$pid"
+}
+
 COMMON_PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 CLAUDE_BIN="${OC_PF_CLAUDE:-}"   # resolved once, in oc_preflight
 SERVE_PATH="$COMMON_PATH"
@@ -1371,11 +1401,11 @@ if [[ -n "$CLAUDE_BIN" ]]; then
   if [[ "$CLAUDE_BIN" != /* || "$CLAUDE_BIN" == *[\ \	\"\'\<\>\&]* ]]; then
     echo "[install] WARN: resolved claude path '$CLAUDE_BIN' is not stampable (must be absolute, no whitespace/XML-special chars) — not stamping OC_CLAUDE_BIN" >&2
     CLAUDE_BIN=""
-  elif env -i PATH="$COMMON_PATH" HOME="$HOME" "$CLAUDE_BIN" --version >/dev/null 2>&1; then
+  elif oc_probe_runtime "$CLAUDE_BIN" "$COMMON_PATH"; then
     echo "[install] claude resolved: $CLAUDE_BIN (runs under the minimal launchd PATH; stamping OC_CLAUDE_BIN)"
-  elif env -i PATH="$PATH" HOME="$HOME" "$CLAUDE_BIN" --version >/dev/null 2>&1; then
+  elif oc_probe_runtime "$CLAUDE_BIN" "$PATH"; then
     if [[ "$PATH" == *[\"\'\<\>\&]* ]]; then
-      echo "[install] WARN: installer PATH contains XML-special chars — cannot stamp it into the serve plist; stamping OC_CLAUDE_BIN only (the shim may fail under the minimal PATH)" >&2
+      echo "[install] WARN: installer PATH contains XML-special chars — cannot stamp it into the serve plist; stamping OC_CLAUDE_BIN only (the claude shim may fail under the minimal PATH)" >&2
     else
       SERVE_PATH="$PATH"
       echo "[install] claude resolved: $CLAUDE_BIN (version-manager shim — stamping OC_CLAUDE_BIN AND the full installer PATH)"
@@ -1413,11 +1443,11 @@ if [[ -n "$CODEX_BIN" ]]; then
   if [[ "$CODEX_BIN" != /* || "$CODEX_BIN" == *[\ \	\"\'\<\>\&]* ]]; then
     echo "[install] WARN: resolved codex path '$CODEX_BIN' is not stampable (must be absolute, no whitespace/XML-special chars) — not stamping OC_CODEX_BIN" >&2
     CODEX_BIN=""
-  elif env -i PATH="$COMMON_PATH" HOME="$HOME" "$CODEX_BIN" --version >/dev/null 2>&1; then
+  elif oc_probe_runtime "$CODEX_BIN" "$COMMON_PATH"; then
     echo "[install] codex resolved: $CODEX_BIN (runs under the minimal launchd PATH; stamping OC_CODEX_BIN)"
-  elif env -i PATH="$PATH" HOME="$HOME" "$CODEX_BIN" --version >/dev/null 2>&1; then
+  elif oc_probe_runtime "$CODEX_BIN" "$PATH"; then
     if [[ "$PATH" == *[\"\'\<\>\&]* ]]; then
-      echo "[install] WARN: installer PATH contains XML-special chars — cannot stamp it into the serve plist; stamping OC_CODEX_BIN only (the shim may fail under the minimal PATH)" >&2
+      echo "[install] WARN: installer PATH contains XML-special chars — cannot stamp it into the serve plist; stamping OC_CODEX_BIN only (the codex shim may fail under the minimal PATH)" >&2
     else
       SERVE_PATH="$PATH"
       echo "[install] codex resolved: $CODEX_BIN (version-manager shim — stamping OC_CODEX_BIN AND the full installer PATH)"

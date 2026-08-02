@@ -253,6 +253,143 @@ EOF
 # ===========================================================================
 # install subcommand
 # ===========================================================================
+# ── runtime resolution for the fleet spawn chain (OC_CLAUDE_BIN / OC_CODEX_BIN) ─
+# WHY HERE: `ocserver install` is the ONE link of the launchd chain that runs in
+# the operator's interactive shell (rich PATH — asdf/nvm/volta shims included).
+# The serve daemon itself runs under launchd with $COMMON_PATH, so when the
+# cockpit's bootstrap-here makes the SERVER run `ocwarden install --force`, that
+# install inherits the serve env and could never re-discover a version-manager
+# runtime on its own. Resolving NOW and stamping the path into the serve plist
+# closes the chain: serve env carries it → bootstrap-here's env passthrough hands
+# it to `ocwarden install` → its resolve*Bin priority ① hits → it stamps the same
+# path into the WARDEN plist → the launchd warden can spawn. Resolution order per
+# runtime: OC_*_BIN env override → command -v (interactive PATH) → common install
+# dirs. A runtime that only runs under the interactive PATH (shim / env-shebang)
+# additionally promotes the full installer PATH into the serve plist so the shim
+# keeps working downstream. A missing runtime is a loud WARNING, not fatal: the
+# server itself is fully functional without either.
+#
+# BOTH RUNTIMES GO THROUGH THE SAME CODE (T-ff48). They used to be one block for
+# claude and nothing for codex, so on a host whose codex lived under a version
+# manager the chain broke exactly where claude's worked — every codex spawn was
+# refused with runtime_bin_unresolved while claude members on the SAME machine
+# ran fine. One parameterised resolver instead of two mirrored blocks is
+# deliberate: a mirror drifts silently (bin/install.sh and this file had already
+# drifted on the fallback dir list), a shared one cannot. Reference
+# implementation: cli/ocwarden/install.go's resolveClaude / resolveCodex seams.
+#
+# Threat note: this executes `claude --version` and `codex --version` from the
+# operator's own PATH. Same trust domain as the spawn that follows — but it IS a
+# second binary compared with before T-ff48, so anyone who can drop a `codex`
+# onto the operator's PATH gets execution at install time.
+
+# probe_runtime_bin BIN PATHVAL HOMEVAL — bounded, non-interactive `--version`.
+# Both bounds are load-bearing and were both missing before T-ff48:
+#   - `</dev/null`  — a shim that prompts would otherwise wait on a terminal that,
+#     for a cockpit-driven or scripted install, has nobody in front of it.
+#     Go's exec.Cmd gets this for free from a nil Stdin.
+#   - a TIME budget — a shim that re-shims on first call or waits on the network
+#     hangs the whole installer with no output since the previous step. The Go
+#     reference bounds the same probe (claudeProbeBudget, cli/ocwarden/install.go).
+# OC_PROBE_BUDGET_SECS exists so the guard suite can prove the bound with a stub
+# that hangs on purpose, without a 20s test.
+probe_runtime_bin() {
+  local bin="$1" pathval="$2" homeval="$3"
+  local budget="${OC_PROBE_BUDGET_SECS:-20}" pid ticks=0 max
+  max=$((budget * 5))
+  env -i PATH="$pathval" HOME="$homeval" "$bin" --version >/dev/null 2>&1 </dev/null &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [[ "$ticks" -ge "$max" ]]; then
+      kill -9 "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      log "WARN: '$bin --version' did not answer within ${budget}s — treating it as unusable under this PATH"
+      return 1
+    fi
+    sleep 0.2
+    ticks=$((ticks + 1))
+  done
+  wait "$pid"
+}
+
+# resolve_runtime_stamp NAME HOME_DIR COMMON_PATH — resolves one runtime and
+# reports it in OC_RS_BIN (empty = nothing stampable). Promotes SERVE_PATH (a
+# caller variable) to the full installer PATH when the binary only runs there.
+resolve_runtime_stamp() {
+  local name="$1" home_dir="$2" common_path="$3"
+  local upper bin cand
+  case "$name" in
+    claude) upper="CLAUDE" ;;
+    codex)  upper="CODEX" ;;
+    *) fail "resolve_runtime_stamp: unknown runtime '$name'" ;;
+  esac
+  eval "bin=\"\${OC_${upper}_BIN:-}\""
+  if [[ -z "$bin" ]]; then
+    bin="$(command -v "$name" 2>/dev/null || true)"
+  fi
+  if [[ -z "$bin" ]]; then
+    # Same four dirs as bin/install.sh's preflight and the Go resolvers. Keeping
+    # .npm-global here matters: it is the standard non-root `npm install -g`
+    # prefix, and this list used to omit it for claude only.
+    for cand in "$home_dir/.local/bin/$name" "$home_dir/.npm-global/bin/$name" \
+                "/opt/homebrew/bin/$name" "/usr/local/bin/$name"; do
+      [[ -x "$cand" ]] && { bin="$cand"; break; }
+    done
+  fi
+  if [[ -n "$bin" ]]; then
+    # XML/exec hygiene (same class as the ocwarden-side stampableClaude check).
+    if [[ "$bin" != /* || "$bin" == *[\ \	\"\'\<\>\&]* ]]; then
+      log "WARN: resolved $name path '$bin' is not stampable (must be absolute, no whitespace/XML-special chars) — not stamping OC_${upper}_BIN"
+      bin=""
+    elif probe_runtime_bin "$bin" "$common_path" "$home_dir"; then
+      log "$name resolved: $bin (runs under the minimal launchd PATH; stamping OC_${upper}_BIN into the serve plist)"
+    elif probe_runtime_bin "$bin" "$PATH" "$home_dir"; then
+      # XML hygiene on the PATH promotion too: a PATH carrying XML-special chars
+      # would corrupt the rendered plist (plutil -lint would fail the install with
+      # an opaque message) — keep the minimal PATH and say why instead.
+      if [[ "$PATH" == *[\"\'\<\>\&]* ]]; then
+        log "WARN: installer PATH contains XML-special chars — cannot stamp it into the serve plist; stamping OC_${upper}_BIN only (the $name shim may fail under the minimal PATH)"
+      else
+        SERVE_PATH="$PATH"
+        log "$name resolved: $bin (version-manager shim — needs the installer PATH; stamping OC_${upper}_BIN AND the full installer PATH into the serve plist)"
+      fi
+    else
+      log "WARN: $name at $bin failed --version under both minimal and installer PATH — stamping OC_${upper}_BIN best-effort (spawns via bootstrap-here may fail)"
+    fi
+  fi
+  OC_RS_BIN="$bin"
+}
+
+# resolve_runtime_stamps HOME_DIR COMMON_PATH — the whole step. Sets SERVE_PATH,
+# CLAUDE_ENV_LINE and CODEX_ENV_LINE for the serve plist render below.
+resolve_runtime_stamps() {
+  local home_dir="$1" common_path="$2" claude_bin codex_bin
+  SERVE_PATH="$common_path"
+  resolve_runtime_stamp claude "$home_dir" "$common_path"; claude_bin="$OC_RS_BIN"
+  resolve_runtime_stamp codex  "$home_dir" "$common_path"; codex_bin="$OC_RS_BIN"
+  # The nags come AFTER both resolutions: "claude not found" used to announce
+  # that every spawn would fail, which stopped being true for a codex-only host
+  # the moment OC_CODEX_BIN started being stamped.
+  if [[ -z "$claude_bin" && -z "$codex_bin" ]]; then
+    log "WARNING: no agent runtime resolved (neither claude nor codex) — wardens installed via the cockpit's bootstrap-here on THIS host will refuse every spawn (runtime_bin_unresolved)."
+    log "WARNING: fix: install one, or export OC_CLAUDE_BIN=/absolute/path/to/claude or OC_CODEX_BIN=/absolute/path/to/codex and re-run 'ocserver install' (safe — idempotent)."
+  elif [[ -z "$claude_bin" ]]; then
+    log "NOTE: claude not resolved here — codex members work, claude members on this host would hit claude_bin_unresolved (export OC_CLAUDE_BIN=/absolute/path/to/claude and re-run to fix)."
+  elif [[ -z "$codex_bin" ]]; then
+    log "NOTE: codex not resolved here — claude members work, codex members on this host would hit runtime_bin_unresolved (export OC_CODEX_BIN=/absolute/path/to/codex and re-run to fix)."
+  fi
+  CLAUDE_ENV_LINE=""
+  if [[ -n "$claude_bin" ]]; then
+    CLAUDE_ENV_LINE="
+        <key>OC_CLAUDE_BIN</key><string>$claude_bin</string>"
+  fi
+  CODEX_ENV_LINE=""
+  if [[ -n "$codex_bin" ]]; then
+    CODEX_ENV_LINE="
+        <key>OC_CODEX_BIN</key><string>$codex_bin</string>"
+  fi
+}
+
 cmd_install() {
   local force=0 dryrun=0 NS="" PORT_FLAG=""
   while [[ $# -gt 0 ]]; do
@@ -459,113 +596,10 @@ cmd_install() {
   LA_DIR="$HOME_DIR/Library/LaunchAgents"
   local COMMON_PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-  # ---- claude resolution for the fleet spawn chain (OC_CLAUDE_BIN stamp) ----
-  # WHY HERE: `ocserver install` is the ONE link of the launchd chain that runs in
-  # the operator's interactive shell (rich PATH — asdf/nvm/volta shims included).
-  # The serve daemon itself runs under launchd with $COMMON_PATH, so when the
-  # cockpit's bootstrap-here makes the SERVER run `ocwarden install --force`, that
-  # install inherits the serve env and could never re-discover a version-manager
-  # claude on its own. Resolving claude NOW and stamping OC_CLAUDE_BIN into the
-  # serve plist closes the chain: serve env carries it → bootstrap-here's env
-  # passthrough hands it to `ocwarden install` → its resolveClaudeBin priority ①
-  # hits → it stamps the same path into the WARDEN plist → the launchd warden can
-  # spawn. Resolution: OC_CLAUDE_BIN env override → command -v (interactive PATH)
-  # → common install dirs. A claude that only runs under the interactive PATH
-  # (shim / env-shebang) additionally promotes the full installer PATH into the
-  # serve plist so the shim keeps working downstream. Missing claude is a loud
-  # WARNING, not fatal: the server itself is fully functional without it.
-  local CLAUDE_BIN SERVE_PATH
-  CLAUDE_BIN="${OC_CLAUDE_BIN:-}"
-  if [[ -z "$CLAUDE_BIN" ]]; then
-    CLAUDE_BIN="$(command -v claude 2>/dev/null || true)"
-  fi
-  if [[ -z "$CLAUDE_BIN" ]]; then
-    local cand
-    for cand in "$HOME_DIR/.local/bin/claude" /opt/homebrew/bin/claude /usr/local/bin/claude; do
-      [[ -x "$cand" ]] && { CLAUDE_BIN="$cand"; break; }
-    done
-  fi
-  SERVE_PATH="$COMMON_PATH"
-  if [[ -n "$CLAUDE_BIN" ]]; then
-    # XML/exec hygiene (same class as the ocwarden-side stampableClaude check).
-    if [[ "$CLAUDE_BIN" != /* || "$CLAUDE_BIN" == *[\ \	\"\'\<\>\&]* ]]; then
-      log "WARN: resolved claude path '$CLAUDE_BIN' is not stampable (must be absolute, no whitespace/XML-special chars) — not stamping OC_CLAUDE_BIN"
-      CLAUDE_BIN=""
-    elif env -i PATH="$COMMON_PATH" HOME="$HOME_DIR" "$CLAUDE_BIN" --version >/dev/null 2>&1; then
-      log "claude resolved: $CLAUDE_BIN (runs under the minimal launchd PATH; stamping OC_CLAUDE_BIN into the serve plist)"
-    elif env -i PATH="$PATH" HOME="$HOME_DIR" "$CLAUDE_BIN" --version >/dev/null 2>&1; then
-      # XML hygiene on the PATH promotion too: a PATH carrying XML-special chars
-      # would corrupt the rendered plist (plutil -lint would fail the install with
-      # an opaque message) — keep the minimal PATH and say why instead.
-      if [[ "$PATH" == *[\"\'\<\>\&]* ]]; then
-        log "WARN: installer PATH contains XML-special chars — cannot stamp it into the serve plist; stamping OC_CLAUDE_BIN only (the shim may fail under the minimal PATH)"
-      else
-        SERVE_PATH="$PATH"
-        log "claude resolved: $CLAUDE_BIN (version-manager shim — needs the installer PATH; stamping OC_CLAUDE_BIN AND the full installer PATH into the serve plist)"
-      fi
-    else
-      log "WARN: claude at $CLAUDE_BIN failed --version under both minimal and installer PATH — stamping OC_CLAUDE_BIN best-effort (spawns via bootstrap-here may fail)"
-    fi
-  fi
-  # NOTE (T-ff48): the "claude not found" nag moved BELOW the codex block — on a
-  # codex-only host it was telling the operator that every spawn would fail, which
-  # stopped being true the moment OC_CODEX_BIN started being stamped.
-  local CLAUDE_ENV_LINE=""
-  if [[ -n "$CLAUDE_BIN" ]]; then
-    CLAUDE_ENV_LINE="
-        <key>OC_CLAUDE_BIN</key><string>$CLAUDE_BIN</string>"
-  fi
-
-  # ---- codex resolution for the fleet spawn chain (OC_CODEX_BIN stamp, T-ff48) ----
-  # DELIBERATE MIRROR of the claude block above — same resolution order, same XML
-  # hygiene, same two-probe shim detection; keep the two in step. WHY IT EXISTS: a
-  # member is claude OR codex, but only claude was ever stamped here, so on a host
-  # whose codex lives under asdf/nvm/volta the chain broke exactly where claude's
-  # worked — bootstrap-here handed the serve env to `ocwarden install`, which could
-  # not re-discover codex under the minimal launchd PATH and then refused every
-  # codex spawn (runtime_bin_unresolved) while claude members ran fine. Reference
-  # implementation: cli/ocwarden/install.go's resolveCodex seam.
-  local CODEX_BIN
-  CODEX_BIN="${OC_CODEX_BIN:-}"
-  if [[ -z "$CODEX_BIN" ]]; then
-    CODEX_BIN="$(command -v codex 2>/dev/null || true)"
-  fi
-  if [[ -z "$CODEX_BIN" ]]; then
-    local xcand
-    for xcand in "$HOME_DIR/.local/bin/codex" "$HOME_DIR/.npm-global/bin/codex" /opt/homebrew/bin/codex /usr/local/bin/codex; do
-      [[ -x "$xcand" ]] && { CODEX_BIN="$xcand"; break; }
-    done
-  fi
-  if [[ -n "$CODEX_BIN" ]]; then
-    if [[ "$CODEX_BIN" != /* || "$CODEX_BIN" == *[\ \	\"\'\<\>\&]* ]]; then
-      log "WARN: resolved codex path '$CODEX_BIN' is not stampable (must be absolute, no whitespace/XML-special chars) — not stamping OC_CODEX_BIN"
-      CODEX_BIN=""
-    elif env -i PATH="$COMMON_PATH" HOME="$HOME_DIR" "$CODEX_BIN" --version >/dev/null 2>&1; then
-      log "codex resolved: $CODEX_BIN (runs under the minimal launchd PATH; stamping OC_CODEX_BIN into the serve plist)"
-    elif env -i PATH="$PATH" HOME="$HOME_DIR" "$CODEX_BIN" --version >/dev/null 2>&1; then
-      if [[ "$PATH" == *[\"\'\<\>\&]* ]]; then
-        log "WARN: installer PATH contains XML-special chars — cannot stamp it into the serve plist; stamping OC_CODEX_BIN only (the shim may fail under the minimal PATH)"
-      else
-        SERVE_PATH="$PATH"
-        log "codex resolved: $CODEX_BIN (version-manager shim — needs the installer PATH; stamping OC_CODEX_BIN AND the full installer PATH into the serve plist)"
-      fi
-    else
-      log "WARN: codex at $CODEX_BIN failed --version under both minimal and installer PATH — stamping OC_CODEX_BIN best-effort (spawns via bootstrap-here may fail)"
-    fi
-  fi
-  if [[ -z "$CLAUDE_BIN" && -z "$CODEX_BIN" ]]; then
-    log "WARNING: no agent runtime resolved (neither claude nor codex) — wardens installed via the cockpit's bootstrap-here on THIS host will refuse every spawn (runtime_bin_unresolved)."
-    log "WARNING: fix: install one, or export OC_CLAUDE_BIN=/absolute/path/to/claude or OC_CODEX_BIN=/absolute/path/to/codex and re-run 'ocserver install' (safe — idempotent)."
-  elif [[ -z "$CLAUDE_BIN" ]]; then
-    log "NOTE: claude not resolved here — codex members work, claude members on this host would hit claude_bin_unresolved (export OC_CLAUDE_BIN=/absolute/path/to/claude and re-run to fix)."
-  elif [[ -z "$CODEX_BIN" ]]; then
-    log "NOTE: codex not resolved here — claude members work, codex members on this host would hit runtime_bin_unresolved (export OC_CODEX_BIN=/absolute/path/to/codex and re-run to fix)."
-  fi
-  local CODEX_ENV_LINE=""
-  if [[ -n "$CODEX_BIN" ]]; then
-    CODEX_ENV_LINE="
-        <key>OC_CODEX_BIN</key><string>$CODEX_BIN</string>"
-  fi
+  # Resolve BOTH runtimes and build the plist env lines (see the block comment
+  # on resolve_runtime_stamps above). Sets SERVE_PATH / CLAUDE_ENV_LINE /
+  # CODEX_ENV_LINE, which the serve plist render below interpolates.
+  resolve_runtime_stamps "$HOME_DIR" "$COMMON_PATH"
 
   # render_serve_plist — the API (repo/bin/serve → exec .deploy/ocserverd serve).
   render_serve_plist() {
@@ -977,6 +1011,22 @@ main() {
       [[ $# -eq 3 || $# -eq 5 ]] || fail "render-config needs: EXAMPLE OUT DSN [NS PORT]"
       if [[ $# -eq 5 ]]; then validate_namespace "$4"; fi
       render_oc_toml "$1" "$2" "$3" "${4:-}" "${5:-}" || fail "render-config failed"
+      ;;
+    # render-runtime-env — HIDDEN test seam (not in usage): run step 6's runtime
+    # resolution the exact way `install` does and print the serve plist's
+    # EnvironmentVariables fragment, so a harness can assert on the RENDERED
+    # CONTENT (which runtimes got stamped, which PATH) without running the whole
+    # install (build/migrate/launchctl). Args: HOME_DIR.
+    # WHY IT EXISTS (T-ff48): before it, the only coverage of this file's stamp
+    # was greps over its own source — and a grep for a mention goes green on dead
+    # code. A reviewer proved exactly that: guarding the codex env line with
+    # `if false` kept the whole suite green while OC_CODEX_BIN was never emitted,
+    # i.e. the very defect T-ff48 fixes, shipping green on the source-install path.
+    render-runtime-env)
+      [[ $# -eq 1 ]] || fail "render-runtime-env needs: HOME_DIR"
+      resolve_runtime_stamps "$1" "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+      printf '        <key>PATH</key><string>%s</string>%s%s\n' \
+        "$SERVE_PATH" "$CLAUDE_ENV_LINE" "$CODEX_ENV_LINE"
       ;;
     ""|-h|--help) usage; [[ "$sub" == "" ]] && exit 1 || exit 0 ;;
     *)            fail "unknown command: $sub (see: bin/ocserver --help)" ;;
