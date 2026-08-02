@@ -549,7 +549,11 @@ describe("ThemeSettings · wording list is browsable in full", () => {
       list.scrollTop = 300 * ROW_PITCH_PX;
       fireEvent.scroll(list);
     });
-    expect(codesIn(list)).not.toContain(MESSAGE_KEYS[1]);
+    // MESSAGE_KEYS[3], not [1]: the focused row's immediate neighbours are kept
+    // mounted on purpose — they are where Tab and Shift+Tab go — so [1] is
+    // mounted by design and would make this premise assert the opposite of
+    // what it means.
+    expect(codesIn(list)).not.toContain(MESSAGE_KEYS[3]);
 
     // Still the same element, still focused, still holding the edit.
     expect(document.activeElement).toBe(input);
@@ -572,6 +576,75 @@ describe("ThemeSettings · wording list is browsable in full", () => {
       input.blur();
     });
     expect(codesIn(list)).not.toContain(code);
+  });
+
+  it("keeps the scrolled-away focused row IN sequential order, with a row either side of it", async () => {
+    // The pin above kept the caret alive but cost the owner the keyboard: it
+    // rendered the focused row AFTER the window, and sequential DOM order is
+    // exactly what Tab and a screen reader's virtual cursor read. Tab therefore
+    // left the list entirely, and the reading order ran …865, 866, 1.
+    //
+    // Two things make it work, and this asserts both, because the browser
+    // behaviour they produce is what the CT guard measures and CT does NOT run
+    // in the cloud gate (bin/ci-cloud.sh runs vitest only) — without this the
+    // regression is green on GitHub:
+    //   * order: positions never step backwards;
+    //   * reachability: a row either side of the focused one is mounted, since
+    //     Tab and Shift+Tab can only reach a mounted input.
+    const { list } = await openWordingEditor();
+
+    const code = codesIn(list)[0]!;
+    const input = within(
+      list.querySelector(`[data-wording-code="${code}"]`) as HTMLElement
+    ).getByRole("textbox") as HTMLInputElement;
+    act(() => {
+      input.focus();
+    });
+    act(() => {
+      list.scrollTop = 300 * ROW_PITCH_PX;
+      fireEvent.scroll(list);
+    });
+    // Premise: the row really is pinned — the window has left it behind.
+    expect(
+      (
+        list.querySelector(`[data-wording-code="${code}"]`) as HTMLElement
+      ).className
+    ).toContain("ts-wording-row--pinned");
+
+    const positions = Array.from(
+      list.querySelectorAll("[data-wording-code]")
+    ).map((r) => Number(r.getAttribute("aria-posinset")));
+    expect(
+      positions.filter((p2, i) => i > 0 && p2 < positions[i - 1]),
+      "reading order must not step backwards"
+    ).toEqual([]);
+
+    const shown = codesIn(list);
+    const at = MESSAGE_KEYS.indexOf(code);
+    expect(shown, "Tab needs the next row mounted to reach it").toContain(
+      MESSAGE_KEYS[at + 1]
+    );
+    // Row 0 has no predecessor, so pick a row that does for the other
+    // direction — back at the top of the list, where that row is mounted.
+    act(() => {
+      list.scrollTop = 0;
+      fireEvent.scroll(list);
+    });
+    const midCode = MESSAGE_KEYS[5];
+    const midInput = within(
+      list.querySelector(`[data-wording-code="${midCode}"]`) as HTMLElement
+    ).getByRole("textbox") as HTMLInputElement;
+    act(() => {
+      midInput.focus();
+    });
+    act(() => {
+      list.scrollTop = 300 * ROW_PITCH_PX;
+      fireEvent.scroll(list);
+    });
+    expect(
+      codesIn(list),
+      "Shift+Tab needs the previous row mounted to reach it"
+    ).toContain(MESSAGE_KEYS[4]);
   });
 });
 

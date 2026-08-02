@@ -640,18 +640,52 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
     return { first, last, padTop: first * pitch, padBottom: (total - last) * pitch };
   }, [wordingMetrics, wordingScrollTop, wordingRows.length]);
 
-  // The focused row when the window has scrolled past it. Rendering it as well
-  // — absolutely positioned at the offset it would have had — is what keeps
-  // the caret alive: React would otherwise unmount the element focus lives in,
-  // and the browser answers that by moving focus to <body>. It is also where
-  // the row genuinely belongs, so scrolling back reveals it in place with no
-  // duplicate (the `< first || >= last` test is what excludes the duplicate).
-  const wordingPinned = useMemo(() => {
-    if (focusedWordingCode === "") return null;
-    const index = wordingRows.indexOf(focusedWordingCode);
-    if (index < 0) return null; // filtered out by a search — nothing to pin
-    if (index >= wordingWindow.first && index < wordingWindow.last) return null;
-    return { code: focusedWordingCode, index };
+  // Every row that is mounted right now, in ascending index order: the scroll
+  // window, plus the focused row and its two keyboard neighbours when the window
+  // has scrolled past them ("pinned" rows, absolutely positioned at the offset
+  // the spacer above is already reserving for them).
+  //
+  // The focused row has to stay mounted at all: React would otherwise unmount
+  // the element focus lives in, and the browser answers that by moving focus to
+  // <body>. Its NEIGHBOURS have to stay mounted because Tab and Shift+Tab only
+  // reach a mounted input — with the focused row alone the next Tab left the
+  // list altogether and landed on 取消. One row either side is enough to restart
+  // the ordinary walk: focusing it makes the browser scroll it into view, which
+  // advances the window and mounts the rest underneath.
+  //
+  // ASCENDING ORDER IS THE CONTRACT, not a tidiness preference. Tab order and a
+  // screen reader's virtual cursor both read sequential DOM order, so appending
+  // the pinned rows after the window put row 1 behind row 866 — Tab fell out of
+  // the list and the reading order jumped from the tail back to the top.
+  const wordingMounted = useMemo(() => {
+    const { first, last } = wordingWindow;
+    const inWindow = (i: number) => i >= first && i < last;
+    const pins: number[] = [];
+    if (focusedWordingCode !== "") {
+      const index = wordingRows.indexOf(focusedWordingCode);
+      // index < 0: filtered out by a search — nothing to pin.
+      if (index >= 0 && !inWindow(index)) {
+        for (let i = index - 1; i <= index + 1; i++) {
+          if (i >= 0 && i < wordingRows.length && !inWindow(i)) pins.push(i);
+        }
+      }
+    }
+    const rows: { code: string; index: number; pinned: boolean }[] = [];
+    // Merge two already-sorted runs. The pinned run sits wholly on one side of
+    // the window (the focused row is outside it, and its neighbours are one step
+    // away), so this is a plain merge, not a general sort.
+    let p = 0;
+    for (let i = first; i < last; i++) {
+      while (p < pins.length && pins[p] < i) {
+        rows.push({ code: wordingRows[pins[p]], index: pins[p], pinned: true });
+        p++;
+      }
+      rows.push({ code: wordingRows[i], index: i, pinned: false });
+    }
+    for (; p < pins.length; p++) {
+      rows.push({ code: wordingRows[pins[p]], index: pins[p], pinned: true });
+    }
+    return rows;
   }, [focusedWordingCode, wordingRows, wordingWindow]);
 
   // A new result set starts at the top — both our window and the real element,
@@ -699,9 +733,18 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
           placeholder={curText}
           aria-label={`${enText} — ${t.settings.themeWordingOverride}`}
           onFocus={() => setFocusedWordingCode(code)}
-          onBlur={() =>
-            setFocusedWordingCode((prev) => (prev === code ? "" : prev))
-          }
+          onBlur={(e) => {
+            // Focus moving to ANOTHER row of this list is a hand-off, not a
+            // departure: leave the pin standing and let that row's own onFocus
+            // take it over. Clearing it here would be a use-after-free — React
+            // flushes this state update while the browser is still mid-Tab, so
+            // the row Tab is moving TO gets unmounted before it ever receives
+            // focus and the caret lands on <body> instead. (Measured: focusout
+            // on the pinned row, then no focusin at all.)
+            const next = e.relatedTarget as HTMLElement | null;
+            if (next?.closest?.(".ts-wording-list")) return;
+            setFocusedWordingCode((prev) => (prev === code ? "" : prev));
+          }}
           onChange={(e) => setWordingAt(code, e.target.value)}
         />
       </div>
@@ -1204,22 +1247,15 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
                 style={{ height: wordingWindow.padTop }}
               />
             )}
-            {/* The pinned row must sit in the SAME keyed array as the windowed
-                rows, not in a slot of its own. React reconciles children slot
+            {/* Pinned rows must sit in the SAME keyed array as the windowed
+                rows, not in a slot of their own. React reconciles children slot
                 by slot, so a row that scrolls out of the window and into a
                 separate slot is torn down and rebuilt — which loses exactly
                 the focus the pin exists to keep. Inside one array its key
-                carries it, and React only moves the node it already has. */}
-            {[
-              ...wordingRows
-                .slice(wordingWindow.first, wordingWindow.last)
-                .map((code, i) =>
-                  wordingRow(code, wordingWindow.first + i, false)
-                ),
-              ...(wordingPinned
-                ? [wordingRow(wordingPinned.code, wordingPinned.index, true)]
-                : []),
-            ]}
+                carries it, and React only moves the node it already has —
+                and at its own index (see `wordingMounted`) even that move
+                does not happen. */}
+            {wordingMounted.map((r) => wordingRow(r.code, r.index, r.pinned))}
             {wordingWindow.padBottom > 0 && (
               <div
                 className="ts-wording-pad"

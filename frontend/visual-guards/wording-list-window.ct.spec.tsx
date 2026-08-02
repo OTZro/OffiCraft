@@ -28,8 +28,23 @@
 //     and scroll-range assertions go red.
 //   * drop the two spacers → the scroll range collapses to the mounted rows,
 //     and the Tab walk goes red at #26 with a null code.
-//   * make `wordingPinned` always null (drop the focus pin) → only the last
-//     test goes red, with `document.activeElement` measured as BODY.
+//   * make the pin never happen (drop the focus pin) → the caret test goes red
+//     with `document.activeElement` measured as BODY, and so do both keyboard
+//     tests (there is no pinned row to Tab off).
+//
+// MUTANTS for the two keyboard tests (T-wording-tab; each measured, not
+// reasoned — the three halves of the fix are separable and each is load-bearing
+// for a different assertion):
+//   * append the pinned rows AFTER the window again (the original shape) →
+//     ONLY the reading-order half goes red (`[865, 866, 1]`). Tab still works,
+//     because the neighbour is mounted right next to the focused row wherever
+//     the pair sits. This is why the posinset assertion is not decoration.
+//   * pin the focused row ALONE, no neighbours → Tab lands on the first row of
+//     the window (`workerDetail.modelNextSpawnNote`, i.e. code #847) and
+//     Shift+Tab lands on the search box; the reading order stays clean.
+//   * drop the `relatedTarget` guard in the row's onBlur → Tab and Shift+Tab
+//     both measure BODY. The row Tab is moving TO is unmounted by the blur's
+//     own state update before it ever receives focus.
 import { test, expect } from "@playwright/experimental-ct-react";
 import type { Locator } from "@playwright/test";
 import { ThemeSettingsAddStory } from "./stories/ThemeSettingsAddStory";
@@ -256,7 +271,10 @@ test("keeps the caret in the row being edited when the list scrolls past it", as
     el.scrollTop = el.scrollHeight;
   });
   // The window really did move on (a neighbour that is NOT pinned is gone).
-  await expect(list.locator(`[data-wording-code="${MESSAGE_KEYS[1]}"]`)).toHaveCount(0);
+  // MESSAGE_KEYS[3], not [1]: the focused row's immediate neighbours are pinned
+  // on purpose — they are where Tab and Shift+Tab go — so [1] is mounted by
+  // design and would make this premise say the opposite of what it means.
+  await expect(list.locator(`[data-wording-code="${MESSAGE_KEYS[3]}"]`)).toHaveCount(0);
 
   expect(
     await focusedCode(),
@@ -290,4 +308,132 @@ test("keeps the caret in the row being edited when the list scrolls past it", as
   expect(geom.firstTop - geom.listTop, "the pinned row is back in flow position").toBeCloseTo(0, 0);
   expect(geom.secondTop - geom.firstTop, "and the row after it is one pitch below").toBeGreaterThan(0);
   expect(geom.firstW, "and it is the same width as every other row").toBeCloseTo(geom.secondW, 0);
+});
+
+test("Tab off the pinned row goes to the NEXT code, and the reading order never runs backwards", async ({
+  mount,
+  page,
+}) => {
+  // The gesture the two tests above straddle without ever performing: the caret
+  // is in a row, the list has scrolled that row out of sight (so it is the
+  // PINNED copy that holds focus), and NOW the owner presses Tab.
+  //
+  // Nothing above covers it. The Tab walk keeps its focused row inside the
+  // moving window by construction — focusing a row scrolls it into view — so it
+  // never has a pinned row under the caret. The pinned-row test scrolls away and
+  // asserts the caret survives, then types, then scrolls back; it never presses
+  // Tab. So the one combination is untested, and it is the one that breaks:
+  // renders the pinned row into a slot AFTER the windowed rows, and sequential
+  // DOM order is exactly what both Tab and a screen reader's virtual cursor
+  // read, so Tab leaves the list entirely and the reading order jumps from the
+  // list's tail back to item 1.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const cmp = await mount(<ThemeSettingsAddStory />);
+  const list = await openWordingList(cmp);
+
+  await list.locator(ROW).first().locator("input").focus();
+  await list.evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  // Premise: the caret really is on a row the window has left behind — the pin
+  // is load-bearing here, not incidental. Without this the assertion below
+  // could be satisfied by an ordinary in-window Tab.
+  await expect(
+    list.locator(`[data-wording-code="${MESSAGE_KEYS[0]}"].ts-wording-row--pinned`)
+  ).toHaveCount(1);
+  expect(
+    await page.evaluate(
+      () =>
+        document.activeElement?.closest("[data-wording-code]")?.className ?? null
+    ),
+    "the focused row must be the pinned copy for this to be the real gesture"
+  ).toContain("ts-wording-row--pinned");
+
+  // Sequential DOM order — what a screen reader's virtual cursor walks — must
+  // never step backwards. With the pinned row appended after the window the
+  // series ends `…, 866, 1`.
+  const positions = await list.evaluate((el) =>
+    Array.from(el.querySelectorAll<HTMLElement>("[data-wording-code]")).map((r) =>
+      Number(r.getAttribute("aria-posinset"))
+    )
+  );
+  const backwards = positions.findIndex((p, i) => i > 0 && p < positions[i - 1]);
+
+  await page.keyboard.press("Tab");
+  const code = await page.evaluate(
+    () =>
+      document.activeElement
+        ?.closest("[data-wording-code]")
+        ?.getAttribute("data-wording-code") ??
+      document.activeElement?.tagName ??
+      null
+  );
+
+  // Both halves are soft, because they are two independent losses from the same
+  // root cause and a hard first assertion would stop the second from ever being
+  // measured — the run has to report which of the two a change actually fixed.
+  expect
+    .soft(code, "Tab from a pinned row must move to the next code, not out of the list")
+    .toBe(MESSAGE_KEYS[1]);
+  expect
+    .soft(
+      backwards === -1
+        ? null
+        : positions.slice(Math.max(0, backwards - 2), backwards + 1),
+      "reading order must not jump back to the top of the list"
+    )
+    .toBeNull();
+
+  // …and it is not a one-row dead end. Landing on the next row makes the browser
+  // scroll it into view, which advances the window and mounts the rest, so the
+  // ordinary walk restarts from there.
+  await page.keyboard.press("Tab");
+  expect(
+    await page.evaluate(
+      () =>
+        document.activeElement
+          ?.closest("[data-wording-code]")
+          ?.getAttribute("data-wording-code") ??
+        document.activeElement?.tagName ??
+        null
+    ),
+    "the ordinary Tab walk must resume from the row Tab landed on"
+  ).toBe(MESSAGE_KEYS[2]);
+});
+
+test("Shift+Tab off the pinned row goes to the PREVIOUS code", async ({
+  mount,
+  page,
+}) => {
+  // The same loss in the other direction, and the reason the row BEFORE the
+  // focused one is kept mounted too: backwards out of a pinned row used to land
+  // on the search box above the list instead of the previous code.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const cmp = await mount(<ThemeSettingsAddStory />);
+  const list = await openWordingList(cmp);
+
+  // Not the first row — it has no predecessor, so it could not fail.
+  const target = list.locator(ROW).nth(5);
+  const code = (await target.getAttribute("data-wording-code"))!;
+  const previous = MESSAGE_KEYS[MESSAGE_KEYS.indexOf(code) - 1];
+  await target.locator("input").focus();
+  await list.evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  await expect(
+    list.locator(`[data-wording-code="${code}"].ts-wording-row--pinned`)
+  ).toHaveCount(1);
+
+  await page.keyboard.press("Shift+Tab");
+  expect(
+    await page.evaluate(
+      () =>
+        document.activeElement
+          ?.closest("[data-wording-code]")
+          ?.getAttribute("data-wording-code") ??
+        document.activeElement?.tagName ??
+        null
+    ),
+    "Shift+Tab from a pinned row must move to the previous code, not out of the list"
+  ).toBe(previous);
 });
