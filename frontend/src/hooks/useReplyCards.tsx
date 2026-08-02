@@ -42,8 +42,17 @@
 //   (someone else opening a card) produced exactly ONE round, so the second
 //   round belonged to the local action path, not to a doubled stream.
 //
-//   ⇒ The actions no longer refetch. The delta is the single reconcile trigger,
-//   and it is sufficient in BOTH adapters — this is the load-bearing fact, so
+//   ⇒ The actions no longer refetch. 🔴 But they DO reconcile: each action
+//   ADOPTS the card its own write returned (`adoptWrite` below), which costs
+//   zero requests. The earlier version of this note said the delta was "the
+//   single reconcile trigger" for the action path too — that made the pane's
+//   correctness depend on an OPTIONAL live event, and with the EventSource down
+//   or one frame missed the server had accepted the answer while the pane (and
+//   therefore the nav badge) still showed the card as waiting, sending the owner
+//   back into it for a 409. Do NOT re-derive that as "the accepted trade": the
+//   trade step 8 actually bought was one fewer ROUND, not a lost fallback.
+//   The delta remains the reconcile trigger for every write this cockpit did NOT
+//   make, and it is sufficient in BOTH adapters — this is the load-bearing fact, so
 //   check it before touching either: the http adapter gets the delta from the
 //   server (`publishReplyCard` runs AFTER the row is committed and BEFORE the
 //   response is flushed, so a delta-triggered read can never precede the
@@ -110,8 +119,9 @@ interface UseReplyCards {
    * so it must stop rendering as if it still waits). */
   refresh: () => Promise<void>;
   /** Answer a WAITING card (the positive close). Resolving means the WRITE
-   * landed — NOT that the panes have re-read yet; the card leaves the pane on
-   * the `reply_card` delta this write fans back (T-a3e4 step 8). */
+   * landed AND its own response has been adopted — the card has left the waiting
+   * pane by then, with or without the `reply_card` delta (see `adoptWrite`). The
+   * other panes' full re-read still rides that delta (T-a3e4 step 8). */
   answer: (id: string, input: ReplyCardAnswerInput) => Promise<void>;
   /** Revise an ANSWERED card's answer (重新決定). Same resolve semantics as
    * `answer`. */
@@ -154,6 +164,11 @@ function useReplyCardsState(): UseReplyCards {
   // dropped — this is what kills the last-write-wins that dropped cards.
   const waitingGenRef = useRef(0);
   const handledGenRef = useRef(0);
+  // Live mirror of `waiting`, so adoptWrite below can compute the next array
+  // WITHOUT taking `waiting` as a dependency (the action callbacks it feeds are
+  // handed to the cards as props; a new identity on every snapshot is churn we
+  // do not need). Written wherever `setWaiting` is.
+  const waitingRef = useRef<ReplyCard[]>([]);
 
   // The always-live cheap fetch: the waiting list + the counts. Runs on mount
   // and on every reply_card delta.
@@ -168,6 +183,7 @@ function useReplyCardsState(): UseReplyCards {
       // (possibly stale) snapshot rather than clobber the fresher one.
       if (gen !== waitingGenRef.current) return;
       setWaiting(w);
+      waitingRef.current = w;
       setHandledCount(counts.answered + counts.expired);
       setError(false);
     } catch (e) {
@@ -236,25 +252,74 @@ function useReplyCardsState(): UseReplyCards {
   // The UNCONDITIONAL re-read, for a caller that learned its snapshot is stale
   // from a write it did not make (the 409 path). NOT used by the actions below
   // — see T-a3e4 step 8 in the header for why they must not re-read.
+  // ADOPT-FROM-RESPONSE: the action path's own reconciliation, so correctness
+  // never depends on an optional live event (T-a3e4 step 8 follow-up). Step 8
+  // was right that the action must not spend a SECOND refetch round; it was
+  // wrong to leave the `reply_card` delta as the ONLY reconciler. With the
+  // EventSource down or one frame missed, the server had ACCEPTED the answer
+  // while the pane kept rendering the card as waiting — the owner clicks it
+  // again and eats a 409, and the nav badge (this array's length) stays wrong
+  // until reconnect / foreground resync / reload.
+  //
+  // The write already answers with the fresh card (`answerReplyCard` /
+  // `reanswerReplyCard` / `expireReplyCard` all return `ReplyCard`), so this
+  // costs ZERO extra requests — step 8's one-round budget is untouched, and the
+  // delta still drives the pane for everyone ELSE's writes.
+  // ⚠️ This is an adoption of the SERVER's own response for ONE identified card,
+  // not a merge of an SSE payload (contract B still holds: deltas refetch, never
+  // merge). It deliberately does not re-order or add rows — a card it does not
+  // already hold is left to the delta / next refetch.
+  const adoptWrite = useCallback((card: ReplyCard) => {
+    const terminal = card.status !== "waiting";
+    const prev = waitingRef.current;
+    if (prev.some((c) => c.id === card.id)) {
+      const next = terminal
+        ? prev.filter((c) => c.id !== card.id)
+        : prev.map((c) => (c.id === card.id ? card : c));
+      waitingRef.current = next;
+      setWaiting(next);
+      // It left the waiting pane, so the 近期已處理 header's count gained it.
+      // (Only when it really WAS waiting — a 重新決定 revises an already-handled
+      // card and must not re-count it.)
+      if (terminal) setHandledCount((n) => n + 1);
+    }
+    // Keep the handled lists coherent too, but only while they are actually
+    // loaded — a collapsed, never-expanded pane stays unfetched (the same gate
+    // the SSE path respects).
+    if (terminal && handledLoadedRef.current) {
+      setHandled((prevHandled) =>
+        [...prevHandled.filter((c) => c.id !== card.id), card].sort(
+          (a, b) => handledTs(b) - handledTs(a)
+        )
+      );
+    }
+  }, []);
+
   const refresh = useCallback(async () => {
     await refetchWaiting();
     if (handledLoadedRef.current) await refetchHandled();
   }, [refetchWaiting, refetchHandled]);
 
-  const answer = useCallback(async (id: string, input: ReplyCardAnswerInput) => {
-    await api.answerReplyCard(id, input);
-  }, []);
+  const answer = useCallback(
+    async (id: string, input: ReplyCardAnswerInput) => {
+      adoptWrite(await api.answerReplyCard(id, input));
+    },
+    [adoptWrite]
+  );
 
   const reanswer = useCallback(
     async (id: string, input: ReplyCardAnswerInput) => {
-      await api.reanswerReplyCard(id, input);
+      adoptWrite(await api.reanswerReplyCard(id, input));
     },
-    []
+    [adoptWrite]
   );
 
-  const expire = useCallback(async (id: string) => {
-    await api.expireReplyCard(id);
-  }, []);
+  const expire = useCallback(
+    async (id: string) => {
+      adoptWrite(await api.expireReplyCard(id));
+    },
+    [adoptWrite]
+  );
 
   return {
     waiting,

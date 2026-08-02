@@ -269,8 +269,15 @@ refetch:兩側都訂 `reply_card` topic;聊天卡另走 `GET /api/reply-cards/{i
 單卡 refetch。
 
 🔴 **一次 owner 動作只准觸發一輪重抓(T-a3e4 step 8)**:`useReplyCards` 的
-answer / reanswer / expire **不自己 refetch**——`reply_card` delta 是唯一的
-reconcile trigger,而它對 owner 自己的寫入**也會來**(http:server 的
+answer / reanswer / expire **不自己 refetch**——但**它們一定要自己對帳**:三個
+寫入端點都回傳那張新鮮的卡,所以動作路徑**採用自己寫入的回應**
+(`adoptWrite`,**零請求**)。
+🔴 **本檔上一版寫「delta 是唯一的 reconcile trigger」,那句對動作路徑是錯的、
+而且是個 production blocker**:它把座艙的正確性押在一個**可有可無的即時事件**上
+——EventSource 斷線或漏一帧時,server 已經收下答覆,等我回覆頁與導覽列徽章卻還
+把那張卡畫成等待中,owner 再點一次就吃 409。**「SSE 斷線時卡片不再就地翻面」不是
+已接受的交換,別再引用它**:step 8 換到的是**少一輪往返**,不是少一條 fallback。
+delta 仍然是**別人**的寫入的 reconcile trigger,而它對 owner 自己的寫入**也會來**(http:server 的
 `publishReplyCard`,在 row commit 之後、response flush 之前;mock:
 `answerReplyCard` 裡同步呼叫的 `emitTopic`)。舊碼兩條路各抓一輪,T-e862 的
 generation guard **只擋 commit、不擋請求**,所以多的那一輪是「整份下載完再丟掉」
@@ -294,9 +301,13 @@ generation guard **只擋 commit、不擋請求**,所以多的那一輪是「整
 把終態卡的 delta 丟掉(那正是「70+ 張歷史卡不會每張都重抓」的來源),所以 SSE 路徑
 **不會**觸發,動作路徑是那張卡唯一的更新來源。拿掉它 = `ReplyCardAnsweredBody` 在
 `onReanswer` resolve 當下就關掉編輯模式,owner 被留在**舊答案**的畫面上。
-**代價誠實寫下**:SSE 斷線時,答完的卡不再就地翻面(與前半對 `useReplyCards` 已接受
-的同一個交換;`refresh()` 仍是 409 的無條件路徑——那是別人的寫入,沒有自己的 delta)。
-護欄:`components/ChatReplyCard.one-round.test.tsx`(數呼叫、不看畫面)。
+`doAnswer` 現在**採用 `answerReplyCard` 的回應**(zero request),所以 SSE 斷線時
+那張卡照樣就地翻面——舊註解裡「斷線時不再就地翻面是接受的代價」那句**已作廢**。
+`refresh()` 仍是 409 的無條件路徑(那是別人的寫入,沒有自己的 delta)。
+護欄兩層、守的不是同一件事:`components/ChatReplyCard.one-round.test.tsx`
+(**數呼叫**、不看畫面)+ `hooks/useReplyCards.sse-loss.test.tsx`(**看畫面**、把
+`subscribeEvents` 換成 no-op)。**「恰好一輪」這個預算被「零輪」同樣滿足**,所以
+成本與正確性必須各有一個證人,任一條都不能代替另一條。
 **mutant 實測(兩個方向各自被恰好一條釘住)**:把 `doAnswer` 的 refetch 加回去 →
 「answering …」紅,**量到 2 次**(坐實重複真的存在);把 `doReanswer` 的拿掉 →
 「re-answering STILL refetches」紅,**量到 0 次**(坐實它承重)。

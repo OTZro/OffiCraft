@@ -120,7 +120,9 @@ export function ChatReplyCard({
   //             synchronously inside answerReplyCard). So the delta refetches
   //             this card on its own — an action-path refetch here would be a
   //             SECOND full GET whose result is downloaded and thrown away, and
-  //             NOTHING on screen would show it.
+  //             NOTHING on screen would show it. It ADOPTS the write's own
+  //             response instead (zero requests), so the flip does not depend on
+  //             that delta arriving.
   //   reanswer— this card is already ANSWERED, and the guard deliberately drops
   //             the delta for terminal cards (that is what stops 70+ historical
   //             cards each refetching on one unrelated answer). So the SSE path
@@ -130,15 +132,22 @@ export function ChatReplyCard({
   //             resolves, so the stale value is what the owner is left looking
   //             at. It stays.
   //
-  // ⚠️ The cost of dropping the answer-path refetch: with the SSE stream down,
-  // the card no longer flips in place. That is the same trade this ticket's
-  // first half already accepted for useReplyCards, for the same reason (the
-  // delta is the single reconcile trigger); refresh() remains the unconditional
-  // path for a 409, where somebody ELSE's write means no delta of ours is
-  // coming.
+  // ⚠️ The old cost of dropping the answer-path refetch — "with the SSE stream
+  // down the card no longer flips in place" — is NO LONGER TRUE and must not be
+  // quoted again: doAnswer adopts the write's own response, so the flip is a
+  // property of the write, not of the stream. What stayed dropped is the second
+  // GET, which is all step 8 was ever about. refresh() remains the unconditional
+  // path for a 409, where somebody ELSE's write means no delta of ours is coming.
   async function doAnswer(input: ReplyCardAnswerInput) {
     try {
-      await api.answerReplyCard(replyCardId, input);
+      // ADOPT-FROM-RESPONSE, not a second GET: the write already answers with
+      // the fresh card, so this card flips in place even with the stream down —
+      // and it still costs ZERO extra requests, so the one-round budget above is
+      // untouched (the delta's refetch remains the only round).
+      const fresh = await api.answerReplyCard(replyCardId, input);
+      statusRef.current = fresh.status;
+      setCard(fresh);
+      setLoadError(false);
       setActionError(null);
     } catch (e) {
       console.warn("ChatReplyCard: answer failed", e);
