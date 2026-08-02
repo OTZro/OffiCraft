@@ -309,9 +309,21 @@ func TestDisarmedStationRefusesToCommand(t *testing.T) {
 	s := &apiServer{hub: NewHub()}
 	s.updaterAutoUpdate = true
 
+	// 🔴 The warden must be genuinely REACHABLE, or this test proves nothing:
+	// enqueueToWarden already refuses an offline warden, so an offline fixture
+	// makes the assertion below pass whether the disarm check is there or not.
+	// (Found by mutant-verifying it: with the disarm check deleted the first
+	// version of this test stayed green.)
+	if _, err := s.hub.Connect("m-warden", "m-warden"); err != nil {
+		t.Fatalf("connect the fixture warden: %v", err)
+	}
+
 	s.commandDisarmed = false
 	if s.autoUpdateEnabled() != true {
 		t.Fatal("an armed station with auto-update on must report it enabled — otherwise the disarmed assertion below proves nothing")
+	}
+	if !s.enqueueToWarden("m-someone", "m-warden", []byte(`{"verb":"stop"}`)) {
+		t.Fatal("an ARMED station must dispatch to a reachable warden — otherwise the disarmed assertion below proves nothing")
 	}
 
 	s.commandDisarmed = true
