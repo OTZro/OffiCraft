@@ -853,6 +853,38 @@ func (s *apiServer) HandlePeekResumeSummarySizeApiResumeSummarySizeGet(w http.Re
 	})
 }
 
+// GET /api/members/{member_id}/resume-summary — the SAME bounded wake
+// snapshot as /api/resume-summary, for a TARGET member instead of the
+// caller (T-8b0d; control-others — routes.go requires=principalAdminAgent,
+// so only an owner-scoped token OR an admin-role (assistant) member may
+// pull another member's resume snapshot). Assembled by the identical,
+// unmodified resumeSnapshotParts(actor) the self-scoped route uses, called
+// with actor=member_id — no near-copy of the assembly, so this payload can
+// never drift from what resume_summary itself would carry for that member.
+// 404 if member_id does not resolve to a live roster member (resolveMember
+// — the same floor every other /api/members/{member_id}/... verb uses).
+// The original /api/resume-summary route and its identity lock (actor :=
+// currentActor(r), caller = target, always) are untouched by this addition.
+func (s *apiServer) HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryGet(w http.ResponseWriter, r *http.Request, memberId string) {
+	m, err := s.resolveMember(memberId)
+	if err != nil {
+		writeResolveError(w, err, "member", memberId)
+		return
+	}
+	chat, tasks, overview, err := s.resumeSnapshotParts(m.ID)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resumeSummaryDTO{
+		Identity: &m.ID,
+		Chat:     chat,
+		Tasks:    tasks,
+		Overview: overview,
+		Note:     resumeNote,
+	})
+}
+
 // GET /api/chat/unread-count — the 辦公室 nav red-dot signal: the caller's
 // unread across the owner's LIVE conversations — active members + not-yet-
 // released outsource workers (removed / released senders are excluded, matching

@@ -1565,6 +1565,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/members/{member_id}/resume-summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Bounded LIGHT wake snapshot for a TARGET member (admin_agent+; same shape as resume_summary).
+         * @description The SAME bounded wake snapshot as ``resume_summary``, for a TARGET member
+         *     instead of the caller (control-others; ``member_id`` is a target param, never
+         *     the caller's own identity — see the caller-identity convention). Assembled by
+         *     the identical, unmodified ``resumeSnapshotParts(actor)`` used by
+         *     ``GET /api/resume-summary``, called with ``actor = member_id`` — same
+         *     identity/chat/tasks/overview/note shape, no near-copy. 404 if ``member_id``
+         *     does not resolve to a live roster member.
+         *
+         *     RBAC (control-others): route-table ``requires="admin_agent"`` — only an
+         *     owner-scoped token OR an admin-role (assistant) member may pull another
+         *     member's resume snapshot; an ordinary agent → 403. The original
+         *     ``GET /api/resume-summary`` route and its identity lock are unchanged by
+         *     this addition.
+         */
+        get: operations["handle_get_member_resume_summary_api_members__member_id__resume_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/mint": {
         parameters: {
             query?: never;
@@ -9890,6 +9922,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WebhookRequestLogDTO"][];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_get_member_resume_summary_api_members__member_id__resume_summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResumeSummaryDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */

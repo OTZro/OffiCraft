@@ -33,6 +33,7 @@
 - **外包 worker**：`get_outsource_worker_boot_context` 看它開機讀到什麼、`refocus_outsource_worker` 換手、`stop_outsource_worker` 停、`restart_outsource_worker` 重啟（T-7526 起判準是「還活著嗎」不是「有沒有人按過停止」——session 自己死掉的 worker `desired_state` 還是 online，照樣叫得起來；只有真的在線上才 409）、`set_outsource_worker_model` 換 model／effort。
 - **任務手冊治理面**：`create_task_manual`／`update_task_manual` 可以帶 `assignee`（誰執行這個類型）、`delete_task_manual` 可以刪類型。
 - **除錯**：`list_webhook_requests` 看某個 webhook 端點最近 5 筆原始請求。
+- **查看其他成員的喚醒快照**：`get_member_resume_summary`（帶 `member_id`）拿到與那位成員自己呼叫 `resume_summary` 一模一樣的快照（同一個 `resumeSnapshotParts` 組裝、非近似值）——用來在 owner 問起某人現況時幫忙查、不必請 owner 自己去看。一般 agent 呼叫會被擋（403）；`resume_summary` 本身仍只回呼叫者自己的快照，不受影響。
 
 另外一件——**出處跟上面那 19 條不一樣，不是 owner 授權的「第 20 項」**：這個能力沒有經過一次獨立的 owner 授權，它是 T-5336 修補的副產品（2026-07-27）。那次修補把 lessons 寫入的判準從 token scope 換成 principal 階梯，admin 這一階因此**連帶**取得跨 role 的寫入權限。owner 當天（`rc-46599297a1c4`）拍板的是「程式現況是對的、文件去對齊」，不是「再授權你一項能力」。
 

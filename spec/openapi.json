@@ -9824,6 +9824,66 @@
         "summary": "Last 5 raw /in requests of one webhook endpoint (debug)."
       }
     },
+    "/api/members/{member_id}/resume-summary": {
+      "get": {
+        "description": "The SAME bounded wake snapshot as ``resume_summary``, for a TARGET member\ninstead of the caller (control-others; ``member_id`` is a target param, never\nthe caller's own identity — see the caller-identity convention). Assembled by\nthe identical, unmodified ``resumeSnapshotParts(actor)`` used by\n``GET /api/resume-summary``, called with ``actor = member_id`` — same\nidentity/chat/tasks/overview/note shape, no near-copy. 404 if ``member_id``\ndoes not resolve to a live roster member.\n\nRBAC (control-others): route-table ``requires=\"admin_agent\"`` — only an\nowner-scoped token OR an admin-role (assistant) member may pull another\nmember's resume snapshot; an ordinary agent → 403. The original\n``GET /api/resume-summary`` route and its identity lock are unchanged by\nthis addition.",
+        "operationId": "handle_get_member_resume_summary_api_members__member_id__resume_summary_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "member_id",
+            "required": true,
+            "schema": {
+              "title": "Member Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResumeSummaryDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Validation error (unified error envelope)."
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Client error (unified error envelope)."
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Server error (unified error envelope)."
+          }
+        },
+        "summary": "Bounded LIGHT wake snapshot for a TARGET member (admin_agent+; same shape as resume_summary)."
+      }
+    },
     "/api/mint": {
       "post": {
         "description": "Owner-gated mint of a long-lived AGENT token for an existing member.\n\nOwner-only via the route table (``requires=\"owner\"`` — the single\n``authz.require_principal_class`` choke): any non-owner principal is a flat\n403 before we mint. ``member_id`` must\nresolve to a live roster member (else 404, via ``_resolve_member``). The owner\npicks ``ttl_days``; the minted lifetime is capped at ``MAX_AGENT_TTL_SECS``\n(400 days) so no token outlives the ceiling. The token is ``scope=\"agent\"``\n(NOT owner) with ``sub = member.id`` and ``exp = iat + ttl`` — additive to and\nindependent of the login / bootstrap mints, whose semantics are unchanged.",

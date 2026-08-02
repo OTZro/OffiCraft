@@ -81,6 +81,7 @@ import type {
   OnboardOptions,
   SseDelta,
   SseDeltaNames,
+  MemberResumeSummaryView,
 } from "./adapter";
 import {
   toMember,
@@ -111,6 +112,7 @@ import {
   toTaskManual,
   toWebhookEndpoint,
   toWebhookRequestLog,
+  toMemberResumeSummary,
   fromTaskManualPatch,
   fromTaskReassignInput,
 } from "./mappers";
@@ -641,6 +643,20 @@ export const httpApi: Api = {
       ),
     );
     return wire.map(toWebhookRequestLog);
+  },
+
+  async getMemberResumeSummary(
+    memberId: string,
+  ): Promise<MemberResumeSummaryView> {
+    // GET /api/members/{id}/resume-summary -> ResumeSummaryDTO (owner /
+    // admin-agent only — an ordinary agent token gets 403). Called ONLY when
+    // the panel's RESUME SUMMARY section is expanded (never on panel mount).
+    const wire = unwrap(
+      await client.GET("/api/members/{member_id}/resume-summary", {
+        params: { path: { member_id: memberId } },
+      }),
+    );
+    return toMemberResumeSummary(wire);
   },
 
   async listChat(

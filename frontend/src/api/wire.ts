@@ -262,3 +262,21 @@ export type WireLessons = components["schemas"]["LessonsDTO"];
  * `code` names WHICH failure ("" while healthy). Both arrive as bare wire
  * strings; the mapper is where they are narrowed. */
 export type WireBackupHealth = components["schemas"]["BackupHealthDTO"];
+
+// ── Resume summary (RESUME SUMMARY panel section, T-8b0d) ─────────────────────
+
+/** Mirrors `ResumeOverviewDTO`: the size/概要 block of a resume snapshot — the
+ * peek-then-decide counts/sizes (chat_count/chat_chars/tasks_returned/
+ * tasks_open_total/tasks_detail_chars/cards_waiting/cards_answered_recent). */
+export type WireResumeOverview = components["schemas"]["ResumeOverviewDTO"];
+
+/** Mirrors `ResumeTaskDTO`: one LIGHT open-task row inside a resume snapshot
+ * (task_no/title/type_key/status/priority/current node/progress; NO steps,
+ * NO DoD text — `get_task` pulls the detail). */
+export type WireResumeTask = components["schemas"]["ResumeTaskDTO"];
+
+/** Mirrors `ResumeSummaryDTO` (`GET /api/members/{member_id}/resume-summary`):
+ * the SAME bounded wake snapshot `GET /api/resume-summary` returns for the
+ * caller, assembled by the identical `resumeSnapshotParts(actor)`, here for a
+ * TARGET member (owner / admin-agent only). */
+export type WireResumeSummary = components["schemas"]["ResumeSummaryDTO"];

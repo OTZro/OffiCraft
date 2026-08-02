@@ -60,6 +60,8 @@ import type {
   TaskManualPatch,
   DocSummaryView,
   DocView,
+  MemberResumeSummaryView,
+  ResumeTaskView,
 } from "./adapter";
 import type {
   WireMember,
@@ -1573,6 +1575,89 @@ export const mockApi: Api = {
     // without simulated traffic honestly read empty.
     const rows = mockWebhookRequests.get(`${memberId} ${endpointId}`) ?? [];
     return rows.map((r) => ({ ...r }));
+  },
+
+  async getMemberResumeSummary(
+    memberId: string
+  ): Promise<MemberResumeSummaryView> {
+    findWire(memberId); // 404 parity: an unknown member throws
+
+    // Mirrors the server's resumeSnapshotParts(actor=memberId): a BOUNDED
+    // recent-chat window involving the member, the member's NON-TERMINAL
+    // executed tasks (LIGHT rows, most recently updated first), and an
+    // overview computed FROM those two lists — never a separately-fabricated
+    // count, so it cannot drift from what the lists actually carry (same
+    // honesty contract the real endpoint's shared assembly gives). READ-ONLY:
+    // unlike listChat, this never advances a read watermark.
+    const RESUME_CHAT_N = 5;
+    const RESUME_TASKS_N = 5;
+
+    const chatAll = chatLog
+      .filter((m) => m.from === memberId || m.to === memberId)
+      .sort((a, b) => a.ts - b.ts);
+    const chat = chatAll.slice(-RESUME_CHAT_N).map((m) => ({ ...m }));
+
+    const openTasksAll = tasks.filter(
+      (t) =>
+        t.executorKind === "member" &&
+        t.executorId === memberId &&
+        !TERMINAL_TASK_STATUSES.has(t.status)
+    );
+    const openTasksSorted = [...openTasksAll].sort(
+      (a, b) => b.updatedTs - a.updatedTs
+    );
+    const tasksOut: ResumeTaskView[] = openTasksSorted
+      .slice(0, RESUME_TASKS_N)
+      .map((t) => {
+        // First non-terminal step (superseded skipped like done — same rule
+        // the workflow timeline uses); "" when the plan is empty/complete.
+        const step = t.steps.find((s) => !TERMINAL_STEP_STATUSES.has(s.status));
+        const detailChars = t.steps.reduce(
+          (sum, s) => sum + s.name.length + s.dod.length,
+          0
+        );
+        return {
+          id: t.id,
+          taskNo: t.taskNo,
+          title: t.title,
+          typeKey: t.typeKey,
+          status: t.status,
+          priority: t.priority,
+          waitingReason: t.waitingReason,
+          currentStepId: step?.id ?? "",
+          currentStepName: step?.name ?? "",
+          progressDone: t.progressDone,
+          progressTotal: t.progressTotal,
+          updatedTs: t.updatedTs,
+          detailChars,
+        };
+      });
+
+    const cardsForMember = replyCards.filter((c) => c.from === memberId);
+    const dayAgoTs = Date.now() / 1000 - 86400;
+    const cardsWaiting = cardsForMember.filter(
+      (c) => c.status === "waiting"
+    ).length;
+    const cardsAnsweredRecent = cardsForMember.filter(
+      (c) => c.status === "answered" && (c.answeredTs ?? 0) >= dayAgoTs
+    ).length;
+
+    return {
+      identity: memberId,
+      chat,
+      tasks: tasksOut,
+      overview: {
+        chatCount: chat.length,
+        chatChars: chat.reduce((sum, m) => sum + m.body.length, 0),
+        tasksReturned: tasksOut.length,
+        tasksOpenTotal: openTasksAll.length,
+        tasksDetailChars: tasksOut.reduce((sum, t) => sum + t.detailChars, 0),
+        cardsWaiting,
+        cardsAnsweredRecent,
+      },
+      note:
+        "BOUNDED snapshot — recent chat + open tasks only; page the rest with list_chat / list_tasks / get_task.",
+    };
   },
 
   async listChat(

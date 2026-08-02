@@ -878,6 +878,55 @@ export interface WebhookCreateInput {
   signingSecret?: string;
 }
 
+// ── Resume summary (RESUME SUMMARY panel section, T-8b0d) ─────────────────────
+
+/** The size/概要 block of a resume snapshot (view model of
+ * `ResumeOverviewDTO`) — the peek-then-decide counts/sizes: `chatCount`/
+ * `chatChars` describe what THIS snapshot carries, `tasksOpenTotal` is ALL the
+ * target's open tasks (may exceed the bounded `tasks` rows), `tasksDetailChars`
+ * sums every returned row's `detailChars` (the plan text a full task pull would
+ * load), `cardsWaiting`/`cardsAnsweredRecent` count the target's reply cards. */
+export interface ResumeOverviewView {
+  chatCount: number;
+  chatChars: number;
+  tasksReturned: number;
+  tasksOpenTotal: number;
+  tasksDetailChars: number;
+  cardsWaiting: number;
+  cardsAnsweredRecent: number;
+}
+
+/** One LIGHT open-task row inside a resume snapshot (view model of
+ * `ResumeTaskDTO`) — NO steps/DoD text; `currentStepId`/`currentStepName` are
+ * the first non-terminal step (both "" when the plan is empty or complete),
+ * `detailChars` is the size of the plan text this row omits. */
+export interface ResumeTaskView {
+  id: string;
+  taskNo: string;
+  title: string;
+  typeKey: string;
+  status: string;
+  priority: string;
+  waitingReason: string;
+  currentStepId: string;
+  currentStepName: string;
+  progressDone: number;
+  progressTotal: number;
+  updatedTs: number;
+  detailChars: number;
+}
+
+/** The RESUME SUMMARY panel section's snapshot for a TARGET member — the SAME
+ * bounded wake snapshot `resume_summary` returns for the caller (view model of
+ * `ResumeSummaryDTO`, `GET /api/members/{member_id}/resume-summary`). */
+export interface MemberResumeSummaryView {
+  identity: string | null;
+  chat: ChatMessage[];
+  tasks: ResumeTaskView[];
+  overview: ResumeOverviewView;
+  note: string;
+}
+
 /** Partial edit of a webhook endpoint (status toggle, purpose, and/or a
  * signing-secret rotation). `platform` is immutable and cannot be changed here;
  * `signingSecret` (write-only) sets/rotates the secret. */
@@ -1039,6 +1088,13 @@ export interface Api {
     memberId: string,
     endpointId: string,
   ): Promise<WebhookRequestLog[]>;
+  /** The target member's bounded wake snapshot (RESUME SUMMARY panel section,
+   * T-8b0d) — the SAME `resumeSnapshotParts` assembly `resume_summary` uses for
+   * the caller, here for `memberId`
+   * (`GET /api/members/{member_id}/resume-summary`, owner/admin-agent only —
+   * an ordinary agent token → 403). LAZY by contract: the panel calls this
+   * only when its RESUME SUMMARY section is expanded, never on panel mount. */
+  getMemberResumeSummary(memberId: string): Promise<MemberResumeSummaryView>;
   /** List the conversation with `withId`, oldest→newest. `limit` mirrors the
    * server's `?limit=` param: omitted → the server's recent window (default
    * 30); `-1` → the WHOLE history (the M2-3 gallery's full-history path — the

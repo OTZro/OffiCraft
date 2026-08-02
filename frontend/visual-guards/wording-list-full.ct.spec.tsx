@@ -253,7 +253,22 @@ test("the browser's own find, whole-page select-all and print can see the whole 
   // row would make the needle disappear together with the row under a windowing
   // mutant, and this test would then red on its own setup instead of on the
   // capability it is about (measured: `needle` came back null).
-  const deep = MESSAGE_KEYS[Math.floor(MESSAGE_KEYS.length * 0.7)];
+  // Scan FORWARD from the 70% mark for the first code whose English original is
+  // long enough to be a real search, instead of demanding that the code sitting
+  // at exactly that index happens to have one. The dictionary legitimately holds
+  // one-character leaves (`settings.historyVersionLabelTail` is `")"`), so which
+  // code lands on the 70% index — and therefore whether this probe has a usable
+  // needle at all — moves every time a key is added anywhere in the dictionary.
+  // That is arithmetic luck, not a property of the list: adding 17 unrelated keys
+  // slid the index onto that `")"` and red-ed this test on its own setup rather
+  // than on the capability it is about. Scanning forward keeps the row deep (it
+  // starts at the same 70% mark and only ever moves further down) while making
+  // the needle's existence independent of the dictionary's exact length.
+  const startIdx = Math.floor(MESSAGE_KEYS.length * 0.7);
+  const deep =
+    MESSAGE_KEYS.slice(startIdx).find(
+      (code) => (readDictMessage(en, code) ?? "").length > 3,
+    ) ?? MESSAGE_KEYS[startIdx];
   const needle = readDictMessage(en, deep) ?? "";
   expect(needle, "the probe needs a real English original to search for").toBeTruthy();
   expect(needle.length, "…and one long enough to be a real search").toBeGreaterThan(3);

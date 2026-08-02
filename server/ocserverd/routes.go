@@ -479,6 +479,25 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Summary:  "Last 5 raw /in requests of one webhook endpoint (debug).",
 			MCPTool:  "list_webhook_requests",
 		},
+		// T-8b0d (owner 2026-08-02): the SAME bounded wake snapshot as
+		// /api/resume-summary, for a TARGET member instead of the caller
+		// (control-others; member_id is a target param, never the caller's
+		// own identity -- Sec14). Assembled by the identical, unmodified
+		// resumeSnapshotParts(actor) called with actor=member_id -- no
+		// near-copy of the assembly. requires=admin_agent: only an
+		// owner-scoped token OR an admin-role (assistant) member may pull
+		// another member's resume snapshot; a plain agent -> 403.
+		// /api/resume-summary and its identity lock are unchanged by this
+		// addition.
+		{
+			Method:   "GET",
+			Path:     "/api/members/{member_id}/resume-summary",
+			Handler:  w.HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryGet,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Bounded LIGHT wake snapshot for a TARGET member (admin_agent+; same shape as resume_summary).",
+			MCPTool:  "get_member_resume_summary",
+		},
 		// ── Webhook inlet — PUBLIC (M4 §2) ─────────────────────────────────────
 		// Token-only identity (?t=); the path carries nothing else. Silent 200
 		// for every case (accepted OR ignored) so it never leaks existence.
