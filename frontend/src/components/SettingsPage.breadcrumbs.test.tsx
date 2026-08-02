@@ -2,7 +2,7 @@
 // (「設定 › 子頁 › …」, each parent segment clickable back up the tree) with
 // the page title directly below, and the old ‹ 返回 back row is GONE.
 //
-//   1. Per-page header assertions: landing / 軟體更新 / 角色誌 / 角色詳情 /
+//   1. Per-page header assertions: landing / 系統更新與備份 / 角色誌 / 角色詳情 /
 //      系統互動·使用者自訂·啟動程序 / 任務手冊 (list + hub) / 參數調整 all
 //      render the breadcrumb and NO back button.
 //   2. Crumb jumps: a parent segment click lands on that page; jumps that have
@@ -61,7 +61,7 @@ describe("SettingsPage · unified breadcrumb header (T-8f6e)", () => {
     expect(utils.queryByRole("button", { name: s.title })).toBeNull();
   });
 
-  it("軟體更新: 設定 › 軟體更新 + title, no back button", async () => {
+  it("系統更新與備份: 設定 › 系統更新與備份 + title, no back button", async () => {
     const utils = renderSettings();
     fireEvent.click(utils.getByText(s.software));
     expectHeader(utils, [s.title, s.software]);

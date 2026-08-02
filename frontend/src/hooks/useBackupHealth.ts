@@ -2,11 +2,12 @@
 // retreat points? (T-da06)
 //
 // Read-only, mount-fetch + explicit refresh — the SAME seam as useVersion, and
-// deliberately NOT a poller: the indicator that consumes this is mounted
-// app-wide, and a backup schedule is measured in hours, so a per-second (or
-// per-SSE-event) re-fetch would be a storm for an answer that cannot have
-// changed. The topbar refresh button is a full page reload, which re-mounts
-// this hook; the monitor card calls `refresh()`.
+// deliberately NOT a poller: a backup schedule is measured in hours, so a
+// per-second (or per-SSE-event) re-fetch would be a storm for an answer that
+// cannot have changed. Since T-5e71 the only consumer is the 備份健康 block in
+// 設定 › 系統更新與備份, which mounts when the owner opens that page — so the
+// mount fetch IS the refresh. `refresh()` currently has NO caller; it is kept
+// as part of the useVersion-shaped seam, not because something uses it.
 //
 // 🔴 A FAILED fetch is NOT healthy and NOT unhealthy — `health` stays null and
 // `error` goes true, and every consumer must render that as the muted

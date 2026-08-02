@@ -177,7 +177,7 @@
   border: 1px solid color-mix(in srgb, var(--color-text-muted) 30%, transparent);
 }
 
-/* ── 軟體更新 card ── */
+/* ── 系統更新與備份 card ── */
 .sw-card {
   display: flex;
   align-items: center;
@@ -651,7 +651,7 @@
  * The guide borrows the .settings shell. Its two views want DIFFERENT layouts:
  *
  *   • The LIST (章節首頁: title + entry cards) stays a bare .settings surface —
- *     flush-left, full-width, IDENTICAL to every other settings page (軟體更新 /
+ *     flush-left, full-width, IDENTICAL to every other settings page (系統更新與備份 /
  *     角色 / 參數). owner T-9aa5: the list used to inherit the doc measure below,
  *     which centred it inside a 900px band and pushed its left edge ~48px to the
  *     right of the other pages (the 20px surface gutter + the centring margin).
@@ -847,7 +847,7 @@
   color: var(--color-text-muted);
 }
 
-/* updater-server config fields (軟體更新): URL / invite code are real text
+/* updater-server config fields (系統更新與備份): URL / invite code are real text
  * inputs — override the numeric fields' narrow 88px default. */
 .param-input--wide {
   width: 260px;
@@ -1335,7 +1335,7 @@
   transform: translateX(18px);
 }
 
-/* ── verified-save read-back (T-1c2e; lives in the 軟體更新 card after the
+/* ── verified-save read-back (T-1c2e; lives in the 系統更新與備份 card after the
  * rework: the invite-code set/unset badge + the auto-update commit's
  * read-back verdict line) ──────────────────────────────────────────────────
  * secret badge: the ON (已設定) state borrows the ok green — the value itself
@@ -1518,4 +1518,58 @@
   line-height: 1.6;
   color: var(--color-callout-warning);
   overflow-wrap: anywhere;
+}
+
+/* ── 備份健康 block inside 系統更新與備份 (T-5e71) ── moved here from the
+ * monitor page. Colours come only from the semantic tokens; `unknown` is
+ * muted, NEVER the accent green — "we cannot tell" must not look like "you
+ * have a retreat point", which is the entire reason this block exists. */
+.sw-backup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 18px;
+}
+.sw-backup__status {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.sw-backup__status--healthy {
+  color: var(--color-accent);
+}
+.sw-backup__status--unhealthy {
+  color: var(--color-danger);
+}
+.sw-backup__status--unknown {
+  color: var(--color-text-muted);
+}
+.sw-backup__reason {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--color-text);
+}
+.sw-backup__facts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sw-backup__row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12.5px;
+}
+.sw-backup__label {
+  min-width: 120px;
+  color: var(--color-text-muted);
+}
+.sw-backup__value {
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+.sw-backup__value--code {
+  font-size: 11.5px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-overlay) 6%, transparent);
 }

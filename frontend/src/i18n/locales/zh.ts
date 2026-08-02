@@ -1121,7 +1121,7 @@ export const zh = {
   settings: {
     title: "設定",
     // landing entries
-    software: "軟體更新",
+    software: "系統更新與備份",
     roles: "角色誌",
     params: "參數調整",
     // ── 主題管理 (T-16a1 P3b): moved here from the profile dropdown ──
@@ -1180,7 +1180,7 @@ export const zh = {
       "滿版只有在這個主題同時把頂列／頁籤列／內容區設成半透明色(#RRGGBBAA 或 rgba)時才看得到。那三層底下坐著文字,圖與文字的對比要由主題自己負責。",
     themeDeleteConfirmLead: "刪除主題「",
     themeDeleteConfirmTail: "」?此動作無法復原。",
-    // ── 軟體更新 (honest build-identity card) ──
+    // ── 系統更新與備份 (honest build-identity card) ──
     currentVersion: "目前版本",
     upToDate: "已是最新版",
     // 檢查更新(GET /api/release/check,直接問 GitHub Releases)
@@ -1190,7 +1190,7 @@ export const zh = {
     checkFailed: "檢查更新失敗,請重試",
     viewRelease: "查看 release",
     updateSettings: "更新設定",
-    // ── 軟體更新 toggle(receive_beta / auto_update,皆預設關閉)──
+    // ── 系統更新與備份 toggle(receive_beta / auto_update,皆預設關閉)──
     receiveBeta: "接收 Beta 版本",
     receiveBetaSub: "更新檢查也納入 GitHub 預發佈(prerelease)· 關閉 = 只看正式 release",
     autoUpdate: "自動更新",
@@ -1331,7 +1331,7 @@ export const zh = {
     docCapSub:
       "學習經驗、任務手冊的學習經驗與 SOP，每一份各自的字數上限（10000–100000）。下限就是出廠預設，所以只能調高——調低會讓現在合法的文件變成只能越寫越短。",
     chars: "字",
-    // ── 存檔回讀對帳（T-1c2e，rework 後住在軟體更新區：secret 只顯示
+    // ── 存檔回讀對帳（T-1c2e，rework 後住在系統更新與備份區：secret 只顯示
     // 已設定/未設定,絕不露明文;自動更新開關存檔後回讀對帳（寫入 → 重新
     // GET → 比對）,回饋誠實反映伺服器實際存了什麼）──
     configSecretSet: "已設定",
