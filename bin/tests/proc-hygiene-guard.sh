@@ -67,8 +67,29 @@ else
 fi
 
 # ── 3. the child's exit code is passed through untouched ────────────────────
-python3 "$RB" 10 bash -c 'exit 0' >/dev/null 2>&1; check "exit 0 is passed through" "0" "$?"
-python3 "$RB" 10 bash -c 'exit 7' >/dev/null 2>&1; check "a non-zero exit (7) is passed through" "7" "$?"
+# run_bounded's OWN stderr is the only witness when it dies instead of relaying
+# the child's code. These two lines used to be `2>/dev/null`, so when run_bounded
+# crashed (T-3e41) the screen showed nothing but "want '7' got '1'" — the
+# traceback naming the faulty line was thrown away at exactly the moment it was
+# needed, and the red became indistinguishable from a real failure. Keep it and
+# print it on failure.
+RBERR="$WORK/rb.err"
+show_rb_stderr() {
+  if [[ -s "$RBERR" ]]; then
+    printf '         run_bounded said on its own stderr:\n'
+    sed 's/^/         | /' "$RBERR"
+  else
+    printf '         (run_bounded printed nothing on stderr)\n'
+  fi
+}
+passthrough() { # <want-code> <label>
+  local want="$1" label="$2" got
+  python3 "$RB" 10 bash -c "exit $want" >/dev/null 2>"$RBERR"; got=$?
+  check "$label" "$want" "$got"
+  [[ "$want" == "$got" ]] || show_rb_stderr
+}
+passthrough 0 "exit 0 is passed through"
+passthrough 7 "a non-zero exit (7) is passed through"
 
 # ── 4. on SIGTERM the subtree still dies — how the framework reaps mid-run ───
 # bin/tests/run.sh's EXIT/INT/TERM trap sends SIGTERM to the in-flight
@@ -88,6 +109,41 @@ if alive "$gpid"; then
 else
   ok "SIGTERM to run_bounded reaps the subtree (a framework interrupt leaves no orphan)"
 fi
+
+# ── 5. the pgid is DERIVED, not looked up — a getpgid() that always fails
+#      cannot corrupt the passthrough (T-3e41) ────────────────────────────────
+# Section 3 above only catches this bug when the race happens to be lost, which
+# was roughly 1 run in 5–17 — a test that is red by luck is also green by luck.
+# This one is deterministic: it replaces os.getpgid with a version that ALWAYS
+# raises the same ProcessLookupError the kernel reports for a child that already
+# exited. Code that asks the kernel for the pgid dies with rc 1 on EVERY run;
+# code that derives it (pgid == pid, guaranteed by start_new_session) never calls
+# it at all and still relays the child's 7. Put the old line back and this goes
+# red immediately, not eventually.
+mkdir -p "$WORK/hostile"
+cat > "$WORK/hostile/sitecustomize.py" <<'HOSTILE'
+import os
+
+
+def _always_esrch(pid):
+    raise ProcessLookupError(3, "No such process")
+
+
+os.getpgid = _always_esrch
+HOSTILE
+mutant_live="$(PYTHONPATH="$WORK/hostile" python3 -c '
+import os
+try:
+    os.getpgid(os.getpid())
+except ProcessLookupError:
+    print(1)
+else:
+    print(0)
+' 2>/dev/null)"
+check "the always-failing getpgid mutant is actually in effect (positive control)" "1" "$mutant_live"
+PYTHONPATH="$WORK/hostile" python3 "$RB" 10 bash -c 'exit 7' >/dev/null 2>"$RBERR"; rc=$?
+check "the exit code survives a getpgid() that always fails (pgid is derived, not looked up)" "7" "$rc"
+[[ "$rc" == "7" ]] || show_rb_stderr
 
 echo
 echo "proc hygiene guard: $PASS ok, $FAIL failed"
