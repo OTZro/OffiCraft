@@ -118,6 +118,18 @@
    * 同時釘住外框與比值)。 */
   --color-danger-badge: #ba5953;
   --color-on-danger: var(--color-overlay);             /* T-081b 自 --color-overlay 拆出:壓在 --color-danger-badge 徽章底上的未讀數字 */
+  /* T-d593 自 --color-bg 拆出:徽章那圈 1px 外框自己的槽。owner 2026-08-01
+   * (rc-1d57d0adc87d 選②)裁定「**外框完全自由,不留下限**(主題調到看不見也算
+   * 你的選擇)」,所以上面那段講的 3:1 下限已經**不再由 CI 強制**——
+   * check-token-roles.mjs 的 MIN_PILL_VS_PAGE 隨這顆一起退場。留下的只有
+   * 「數字 vs 徽章底 >= 4.5:1」那一條(owner 沒有裁到它,不動)。
+   * ⚠️ 預設值刻意寫成 alias `var(--color-bg)` 而**不是** #191c24 那個實色:
+   * 外框本來就是逐字借用頁面底色,而**主題可以改 --color-bg**。寫實色會讓
+   * 「改過 --color-bg 的既有主題」外框停在內建深藍、跟它的頁面底分家——
+   * 那就是把舊主題的外觀改掉了。alias 讓它繼續跟隨,而 gen-theme-tokens.mjs
+   * 會把它收進 THEME_ALIAS_DEFAULT_TOKENS(定義是純 var(--other) 者),
+   * 於是匯出不烘值、主題編輯器補一列空值 placeholder 顯示「跟隨 <頁面底>」。 */
+  --color-danger-badge-ring: var(--color-bg);
   /* T-081b 自 --color-overlay 拆出:壓在 --color-indigo 實色底上的徽章數字/送出鈕文字。
    * ⚠️ 這個預設值 #fff 假設的是「--color-indigo 是深色底」(內建深色主題如此)。
    * 淺色主題若把 --color-indigo 設成淺底(active 頁籤、送出鈕常見的做法),

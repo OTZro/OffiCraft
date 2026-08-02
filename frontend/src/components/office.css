@@ -276,9 +276,11 @@
   font-size: 11px;
   font-weight: 700;
   line-height: 1;
-  /* 1px page-colour ring — same reason as .nav-tab__badge in chrome.css: it is
-   * what makes the pill read as a pill on --color-card, not just on --color-bg. */
-  outline: 1px solid var(--color-bg);
+  /* 1px ring in its own slot --color-danger-badge-ring (T-d593) — same reason and
+   * same default (var(--color-bg)) as .nav-tab__badge in chrome.css, which carries
+   * the full note. It is what makes the pill read as a pill on --color-card, not
+   * just on the page colour; a theme may now repaint or hide it. */
+  outline: 1px solid var(--color-danger-badge-ring);
 }
 /* line 2 — the small count sub-line (正職「N 人」/ 外包「N 人 · 上限 M」). */
 .office__tab-sub {
@@ -384,9 +386,11 @@
   font-size: 11px;
   font-weight: 700;
   line-height: 1;
-  /* 1px page-colour ring — same reason as .nav-tab__badge in chrome.css: it is
-   * what makes the pill read as a pill on --color-card, not just on --color-bg. */
-  outline: 1px solid var(--color-bg);
+  /* 1px ring in its own slot --color-danger-badge-ring (T-d593) — same reason and
+   * same default (var(--color-bg)) as .nav-tab__badge in chrome.css, which carries
+   * the full note. It is what makes the pill read as a pill on --color-card, not
+   * just on the page colour; a theme may now repaint or hide it. */
+  outline: 1px solid var(--color-danger-badge-ring);
 }
 /* Roster presence line — hosts the SHARED PresenceBadge (single presence truth,
  * same component as the monitor session row + detail panel). Replaces the old

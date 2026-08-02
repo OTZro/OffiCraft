@@ -205,6 +205,10 @@ const TOKEN_META: Record<string, TokenMeta> = {
     group: "status",
     label: { zh: "未讀徽章底", en: "Unread badge fill" },
   },
+  "--color-danger-badge-ring": {
+    group: "status",
+    label: { zh: "未讀徽章外框", en: "Unread badge ring" },
+  },
   "--color-danger-soft": {
     group: "status",
     label: { zh: "危險(淡)", en: "Danger (soft)" },

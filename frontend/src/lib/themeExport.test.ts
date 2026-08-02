@@ -285,6 +285,52 @@ describe("parseImportedBundle", () => {
     expect("bundle" in res && res.bundle.colors["--color-bg"]).toBe("#0b1020");
   });
 
+  it("round-trips the badge ring slot, and keeps a still-unset one deferred (T-d593)", () => {
+    // DoD 3. The ring got its own slot in T-d593, and the whole point of that
+    // slot is that a theme author can carry it to another install. Until this
+    // test the ring rode on the GENERIC alias/whitelist machinery only: the
+    // alias test above loops over THEME_ALIAS_DEFAULT_TOKENS, so dropping the
+    // ring OUT of that map makes the loop simply not visit it and stays green.
+    // Both halves below are therefore named explicitly.
+    const RING = "--color-danger-badge-ring";
+
+    // (a) the token is exportable at all — outside THEME_COLOR_TOKENS the
+    //     export never packs it and an import naming it is REJECTED, so a
+    //     hand-written pack setting the ring would fail to load.
+    expect(THEME_COLOR_TOKENS).toContain(RING);
+
+    // (b) still following the page background ⇒ omitted, so importing this
+    //     bundle elsewhere leaves the ring free to follow THAT install's
+    //     --color-bg. Baking the resolved value here is the documented
+    //     regression: a theme whose --color-bg was edited would get a ring
+    //     pinned to the built-in dark blue. jsdom does not resolve var(), so
+    //     "still following" is spelled the way the browser reports it — the
+    //     follower holding exactly its target's value (same trick as the
+    //     alias-default test above).
+    expect(Object.keys(THEME_ALIAS_DEFAULT_TOKENS)).toContain(RING);
+    expect(THEME_ALIAS_DEFAULT_TOKENS[RING]).toBe("--color-bg");
+    const unset = freshRoot();
+    unset.style.setProperty("--color-bg", "#0b1020");
+    unset.style.setProperty(RING, "#0b1020");
+    expect(exportComputedTheme("t1", "T1", unset).colors).not.toHaveProperty(RING);
+
+    // (c) a ring the author actually CHOSE survives export → serialize →
+    //     import byte-identically, and is not confused with the page colour it
+    //     used to borrow: --color-bg keeps its own, different value.
+    const chosen = freshRoot();
+    chosen.style.setProperty("--color-bg", "#0b1020");
+    chosen.style.setProperty(RING, "#ff00aa");
+
+    const bundle = exportComputedTheme("t2", "T2", chosen);
+    expect(bundle.colors[RING]).toBe("#ff00aa");
+
+    const json = serializeBundle(bundle);
+    expect(json).toContain(RING);
+    const res = parseImportedBundle(json);
+    expect("bundle" in res && res.bundle.colors[RING]).toBe("#ff00aa");
+    expect("bundle" in res && res.bundle.colors["--color-bg"]).toBe("#0b1020");
+  });
+
   it("imports a pack overriding a de-whitelisted code, without that code", () => {
     // The real-world 精靈村 pack: T-081b removed profile.themeOffice from the
     // whitelist, and the pack must still import (owner ruling 2026-07-27) —

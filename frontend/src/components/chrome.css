@@ -280,14 +280,18 @@
   font-size: 11px;
   font-weight: 700;
   line-height: 1;
-  /* 1px ring in the PAGE colour (T-081b review round 3, SHOULD-4). The pill's
-   * 3:1 "reads as a pill" margin was measured against --color-bg, but the pill
-   * does not sit on --color-bg: on an ACTIVE nav tab it sits on --color-indigo
-   * (2.74:1) and on a SELECTED member card on --color-card (3.26:1). No colour
-   * exists that clears 4.5:1 against white AND 3:1 against all three, so the
-   * ring separates the pill from whatever is behind it instead — the measured
-   * background becomes the ring, which is --color-bg everywhere. */
-  outline: 1px solid var(--color-bg);
+  /* 1px ring in its OWN slot (T-d593). Why the ring exists at all (T-081b review
+   * round 3, SHOULD-4): the pill does not sit on the page colour — on an ACTIVE
+   * nav tab it sits on --color-indigo (2.74:1 against the fill) and on a SELECTED
+   * member card on --color-card (3.26:1). No fill clears 4.5:1 against the count
+   * AND 3:1 against all of those, so the ring is what separates the pill from
+   * whatever is behind it.
+   * The slot DEFAULTS to var(--color-bg), which is exactly what this line used to
+   * hardcode — so nothing changes on screen until a theme sets it. owner
+   * 2026-08-01 (rc-1d57d0adc87d 選②): "外框完全自由,不留下限(主題調到看不見也算
+   * 你的選擇)" ⇒ there is no longer a CI floor on ring-vs-fill contrast; a theme
+   * MAY make the ring vanish, and that is a supported choice, not a defect. */
+  outline: 1px solid var(--color-danger-badge-ring);
 }
 
 .app__main {

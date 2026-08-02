@@ -427,19 +427,26 @@ for (const [token, parent] of Object.entries(SPLIT_FROM)) {
 // re-value of either slot that drops below AA fails CI instead of shipping.
 const BADGE_FILL = "--color-danger-badge";
 const BADGE_TEXT = "--color-on-danger";
-// The pill's 1px ring, painted in the PAGE colour so the pill is separated from
-// whatever it actually sits on. It has to be, because the pill's background is
-// NOT the page: on an active nav tab it is --color-indigo (2.74:1 against the
-// fill) and on a selected member card --color-card (3.26:1), and no fill colour
-// exists that clears 4.5:1 against the text AND 3:1 against all of those. So the
-// ring is what MAKES the measured background true, and the ring is checked here
-// alongside the ratio it justifies (T-081b review round 3, SHOULD-4).
-const BADGE_RING = "--color-bg";
+// The pill's 1px ring. It exists because the pill's background is NOT the page:
+// on an active nav tab it is --color-indigo (2.74:1 against the fill) and on a
+// selected member card --color-card (3.26:1), and no fill colour clears 4.5:1
+// against the text AND 3:1 against all of those. So the ring is what separates
+// the pill from whatever is behind it (T-081b review round 3, SHOULD-4).
+//
+// T-d593: the ring now has its OWN theme slot instead of borrowing --color-bg,
+// and owner 2026-08-01 (rc-1d57d0adc87d 選②) ruled it "外框完全自由,不留下限
+// (主題調到看不見也算你的選擇)". So what is pinned here changed shape:
+//   * STILL PINNED — every pill actually declares the ring token (below). That is
+//     a WIRING check: it is what keeps all seven render sites on one slot, so a
+//     theme author who repaints the ring repaints all of them.
+//   * GONE — the ring-vs-fill CONTRAST FLOOR (the old MIN_PILL_VS_PAGE = 3).
+//     A theme may now set the ring to the fill colour, or to transparent, and the
+//     pill may stop reading as a pill. That is the owner's explicit trade.
+// The count-vs-fill AA floor below is UNTOUCHED — the owner did not rule on it,
+// and it is a separate checkRatio() call, so dropping one did not disturb it.
+const BADGE_RING = "--color-danger-badge-ring";
 const BADGE_SELECTORS = [".nav-tab__badge", ".office__tab-badge", ".member-card__unread"];
 const AA_CONTRAST = 4.5;
-// A fill so dark it melts into the page trades one defect for another: the pill
-// still has to read AS a pill against the colour of its ring.
-const MIN_PILL_VS_PAGE = 3;
 
 /** Whether a selector PRELUDE targets a given element selector.
  *
@@ -635,14 +642,11 @@ checkRatio(
     `colour the pill's own text is painted with (every ${BADGE_SELECTORS.length} pill ` +
     `selectors are checked below for actually using it).`
 );
-checkRatio(
-  BADGE_RING,
-  MIN_PILL_VS_PAGE,
-  `the pill stops reading as a pill. Measured against ${BADGE_RING} — the colour of ` +
-    `the pill's 1px ring, NOT of whatever is behind the pill: it sits on ` +
-    `--color-indigo on an active nav tab and on --color-card on a selected member ` +
-    `card, and the ring is what separates it from both.`
-);
+// NOTE (T-d593): there used to be a second checkRatio() here asserting
+// BADGE_FILL vs BADGE_RING >= 3:1 ("the pill still reads as a pill"). The owner
+// removed that floor deliberately — see the BADGE_RING comment above. Do not add
+// it back without a new ruling: a theme setting the ring to the fill colour is a
+// SUPPORTED choice now, so this check would fail legitimate themes.
 
 for (const selector of BADGE_SELECTORS) {
   // EVERY rule that TARGETS the selector, not the first one and not only the
@@ -670,7 +674,7 @@ for (const selector of BADGE_SELECTORS) {
   const required = [
     [["background", "background-color"], BADGE_FILL, `white on --color-danger is 2.85:1 and fails WCAG AA`],
     [["color"], BADGE_TEXT, `the pill's own count colour is what the AA ratio is measured on`],
-    [["outline", "outline-color"], BADGE_RING, `without the page-colour ring the pill is measured against the wrong background (--color-indigo on an active tab is 2.74:1)`],
+    [["outline", "outline-color"], BADGE_RING, `every pill's ring must come from the ONE ring slot, or a theme author repainting it moves some pills and not others (there are 7 render sites behind these 3 selectors)`],
   ];
   for (const [props, token, why] of required) {
     const [primary] = props;
@@ -713,6 +717,9 @@ console.log(
     `${contrastRatio(concreteValue(BADGE_FILL), concreteValue(BADGE_TEXT)).toFixed(2)}:1 vs ` +
     `${BADGE_TEXT} / ` +
     `${contrastRatio(concreteValue(BADGE_FILL), concreteValue(BADGE_RING)).toFixed(2)}:1 vs ` +
-    `${BADGE_RING} (its 1px ring), both pinned at the ${BADGE_SELECTORS.length} pill call sites. ` +
+    `${BADGE_RING} (its 1px ring). ONLY THE FIRST RATIO IS PINNED — the ring's is ` +
+    `printed for information since T-d593 (owner: 外框完全自由,不留下限), so a theme ` +
+    `may drive it to 1:1. Both tokens are still pinned as the ring/text SLOTS at the ` +
+    `${BADGE_SELECTORS.length} pill call sites. ` +
     `A theme pack may re-value ${BADGE_FILL}, so these numbers describe the built-in theme only.`
 );
