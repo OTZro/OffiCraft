@@ -14,6 +14,13 @@
 // not on it — a chat line can neither assign nor release a worker. See
 // frontend/CLAUDE.md 「一則通知 = 一次『只抓它碰到的那一項』」.
 //
+// 🔴 T-b17f narrowed that further: naming a worker on the rail is NOT enough.
+// The badge is `UnreadCounts(…, owner)`, so only a line addressed TO THE OWNER
+// can move it — `m-other → ow-1` names ow-1 and still costs zero, while
+// `ow-1 → owner` keeps its one read. The predicate lives in `lib/ownerUnread.ts`
+// and is shared with useMembers / useChatUnread; the rail must not grow a second
+// copy of that invariant.
+//
 // 🔴 T-a3e4: it used to also pull `GET /api/tasks` (UNFILTERED — the entire task
 // history) and `GET /api/task-manuals` on every worker/task delta, purely to
 // join a sort key and two labels onto a handful of rows. The server folds those
@@ -29,6 +36,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { OutsourceWorkerView } from "../api/adapter";
 import { api } from "../api";
 import { createDeltaSink, narrowToHeld } from "../lib/deltaSink";
+import { burstMovesNoOwnerUnread } from "../lib/ownerUnread";
 import {
   adoptServerSettings,
   loadServerSettings,
@@ -153,6 +161,19 @@ export function useOutsourceWorkers(): UseOutsourceWorkers {
           );
           return;
         }
+        // 🔴 T-b17f: the rail's badge is the SAME `UnreadCounts(…, owner)` fold
+        // (`api_outsource.go` :136/:199/:358 all pass `currentActor(r)`), so a
+        // chat line NOT addressed to the owner cannot move it — and each of
+        // those handlers pays a full `ListChat()` table scan to answer. This
+        // rail sees plenty of such traffic: a member talking to a worker names
+        // that worker, and used to cost one `GET /api/outsource-workers/{id}`
+        // for a row whose number could not have changed.
+        //
+        // ⚠️ It really is only that half. `ow-1 → owner` is a GENUINE refetch —
+        // the recipient IS the owner, so that row's badge really moves — and the
+        // predicate keeps it, because it asks about `to`, not about whether a
+        // worker was named. There is a control test for exactly that shape.
+        if (burstMovesNoOwnerUnread(batch, mine)) return;
         // Named somebody, none of them a worker on this rail: a chat line cannot
         // assign or release a worker (that is the "outsource_worker" topic), so
         // every chat line between the owner and a MEMBER used to re-pull this

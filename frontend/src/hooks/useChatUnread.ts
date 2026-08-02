@@ -9,6 +9,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { createDeltaSink } from "../lib/deltaSink";
+import { burstMovesNoOwnerUnread } from "../lib/ownerUnread";
 
 // The SSE topics that can change the office total — the SINGLE source of truth
 // for "what makes this badge move". The server total is Σ unread over the LIVE
@@ -47,17 +48,34 @@ export function useChatUnread(): number {
 
     refetch();
     // This total is ONE number over the whole live set, so there is no "just the
-    // item that changed" variant of it — but there IS a duplicate to remove: a
-    // resync fans all four of these topics at once, which used to be four
-    // identical count requests for one reconnect. One decision per burst.
+    // item that changed" variant of it — but there ARE two things to remove.
+    //
+    // (a) DUPLICATES: a resync fans all four of these topics at once, which used
+    //     to be four identical count requests for one reconnect. One decision
+    //     per burst.
+    //
+    // (b) 🔴 REQUESTS THAT CANNOT CHANGE THE ANSWER (T-b17f). This total is
+    //     Σ `UnreadCounts(…, owner)` over the live set (api_chat.go:873), so a
+    //     `chat` line NOT addressed to the owner, or a `chat_read` receipt whose
+    //     READER is not the owner, cannot move it by a single unit — the server
+    //     would hand back the number we already hold. Agent↔agent traffic is
+    //     ordinary here, and before this line every such message cost one
+    //     `GET /api/chat/unread-count`, which runs a full `ListChat()` table
+    //     scan plus a members and a workers list read. See `lib/ownerUnread.ts`
+    //     for why the predicate is exactly `to` / `reader`.
+    //
+    // The gate is deliberately narrow: it fires only when EVERY topic of ours in
+    // this burst is chat/chat_read. `member` / `outsource_worker` change the
+    // LIVE SET itself (a removed member drops their leftovers out of the sum),
+    // so a burst carrying either still refetches whatever else it also carried.
     const unsubscribe = api.subscribeEvents(
       createDeltaSink((batch) => {
-        for (const topic of batch.topics) {
-          if (OFFICE_TOTAL_TOPICS.has(topic)) {
-            refetch();
-            return;
-          }
-        }
+        const mine = [...batch.topics].filter((t) =>
+          OFFICE_TOTAL_TOPICS.has(t)
+        );
+        if (mine.length === 0) return;
+        if (burstMovesNoOwnerUnread(batch, mine)) return;
+        refetch();
       })
     );
 
