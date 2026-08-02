@@ -25,8 +25,9 @@ import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { useEscapeLayer } from "../lib/useEscapeLayer";
 import type { Member } from "../types";
-import type { GalleryAttachment } from "../api/adapter";
+import type { GalleryAttachment, SseDelta } from "../api/adapter";
 import { api } from "../api";
+import { createDeltaSink } from "../lib/deltaSink";
 import { authedAttachmentUrl } from "../api/http";
 import { CloseIcon, FileTextIcon } from "./icons";
 import { MarkdownPreviewOverlay } from "./MarkdownPreviewOverlay";
@@ -45,6 +46,44 @@ export function isPreviewableMime(mime: string): boolean {
     mime.startsWith("text/") ||
     mime === "application/pdf"
   );
+}
+
+/**
+ * Could THIS ONE chat delta change what the gallery renders?
+ *
+ * 🔴 THE INVARIANT IT ENCODES. The gallery query
+ * (`HandleListChatAttachmentsApiChatAttachmentsGet`, `server/ocserverd/api_chat.go`)
+ * keeps a message when — and only when — `m.Sender == with || m.Recipient == with`,
+ * where `with` is the member id this panel was opened on. Every row it returns is
+ * an attachment of one of those messages. ⇒ a CHAT DELTA naming this member at
+ * NEITHER end cannot add, remove or re-order a single row here, and refetching
+ * for it buys not a smaller answer but the SAME answer. That is the ordinary
+ * case in this product: every agent↔agent line in the whole company used to cost
+ * this open panel one `GET /api/chat/attachments`.
+ *
+ * ⚠️ THIS IS NOT THE OWNER PREDICATE — do not reach for `lib/ownerUnread.ts`.
+ * That one asks `to === "owner"` because `UnreadCounts` counts only
+ * `m.Recipient == reader` and the cockpit's reader is always the owner. This
+ * endpoint is a DIFFERENT fold: BOTH ends count, and the end that matters is
+ * THIS MEMBER, not the owner. An agent↔agent line moves no owner unread number
+ * yet absolutely does change this gallery when one of those agents IS this
+ * member — applying the owner predicate here would SKIP REAL WORK and leave the
+ * panel stale.
+ *
+ * ⚠️ Attachment-awareness would be tighter still ("a message with no files
+ * changes nothing here"), but `SseDelta` carries identity only — there is no
+ * way to tell, so we do not guess.
+ *
+ * ⚠️ SCOPE OF THE CLAIM: this is about CHAT deltas only. The handler also
+ * resolves each sender's display name from `ListMembers()`, so a RENAME changes
+ * what it answers — and that arrives on the `member` topic, which this panel
+ * subscribes to neither before nor after this change. Unchanged behaviour, not
+ * something this predicate covers; do not read the paragraph above as "nothing
+ * else can ever change this view".
+ */
+export function chatDeltaTouchesMember(d: SseDelta, memberId: string): boolean {
+  if (d.topic !== "chat") return false;
+  return d.names.from === memberId || d.names.to === memberId;
 }
 
 /** The two gallery tabs: images vs every other file kind. */
@@ -110,10 +149,30 @@ export function ChatGalleryPanel({
         .catch((e) => console.warn("ChatGalleryPanel: load failed", e));
     };
     refetch();
-    // Keep the open panel live: a new message may carry new attachments.
-    const unsubscribe = api.subscribeEvents((topic) => {
-      if (topic === "chat") refetch();
-    });
+    // Keep the open panel live: a new message may carry new attachments — but
+    // ONLY a CHAT DELTA naming this member can change what the server answers
+    // for it (a rename does too, but that is the `member` topic — see the SCOPE
+    // note there, and note this panel subscribes to neither before nor after).
+    // See
+    // `chatDeltaTouchesMember` above.
+    const unsubscribe = api.subscribeEvents(
+      createDeltaSink((batch) => {
+        if (!batch.topics.has("chat")) return;
+        // Named NOTHING (a resync, a null payload, or a transport that supplies
+        // no delta at all) is the honest "you may have missed anything" — never
+        // reason about names there, just re-pull.
+        if (batch.unnamed) {
+          refetch();
+          return;
+        }
+        // Whole-burst, not per-delta: one refetch answers "what is the gallery
+        // now", so a mixed burst (one unrelated line AND one of ours, same
+        // microtask) still refetches exactly once.
+        if (batch.deltas.some((d) => chatDeltaTouchesMember(d, member.id))) {
+          refetch();
+        }
+      }),
+    );
     return () => {
       alive = false;
       unsubscribe();
