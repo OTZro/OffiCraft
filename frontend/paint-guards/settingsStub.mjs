@@ -76,6 +76,13 @@ function settingsDTO() {
     display_language: "zh",
     display_wide: false,
     custom_themes: known ? [SERVER_THEME] : [],
+    // The real settingsDTO carries no `omitempty`, so this key is ALWAYS on the
+    // wire — null once onboarding has finished, which is every installation the
+    // owner reloads. Absent and null map to the same `null` in the FE mapper, so
+    // this changes no behaviour; it makes the stub's key set byte-equal to the
+    // server's, which is what stops "the stub drifted" from being a live theory
+    // every time this guard goes red.
+    onboarding: null,
   };
 }
 
