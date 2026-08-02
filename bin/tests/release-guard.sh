@@ -540,8 +540,13 @@ SH
 # the verdict. Two things fall out: this file stays clean under that scan, and
 # the fixture can never drift from the real marker — if ci.sh's verdict line ever
 # changes, these cases follow it automatically instead of pinning a stale copy.
-CI_GREEN="$(bash -c "$(tail -n 1 "$HERE/../ci.sh")")"
-[[ -n "$CI_GREEN" ]] || { echo "FATAL: could not derive the CI verdict line from bin/ci.sh" >&2; exit 2; }
+# Extracted as TEXT, never executed, and using the same "last NON-EMPTY line"
+# definition ci-success-marker.sh's validate_source uses — `tail -n 1` would
+# disagree with it the moment ci.sh grew a trailing blank line. The sed pattern
+# does not contain the marker, so this file still carries none.
+CI_GREEN="$(awk 'NF { line=$0 } END { print line }' "$HERE/../ci.sh" | sed -E 's/^echo "(.*)"$/\1/')"
+[[ -n "$CI_GREEN" && "$CI_GREEN" != *'echo "'* ]] \
+  || { echo "FATAL: bin/ci.sh's final line is not the expected echo form — cannot derive the CI verdict" >&2; exit 2; }
 cat > "$SRC/bin/ci.sh" <<SH
 #!/usr/bin/env bash
 set -euo pipefail

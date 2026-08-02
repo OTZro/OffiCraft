@@ -38,6 +38,11 @@
 #  6. DOUBLE MUTATION. This guard and bin/tests/run.sh guard each other's
 #     enforcement line, so removing EITHER alone reddens — removing BOTH in one
 #     change does not.
+#  8. THE CONSUMER EXCLUSION IS SELF-GUARDED ONLY BY ITSELF (T-b65e). bin/release
+#     is skipped by the lane scan and held to the stricter shape rule below
+#     instead. Delete that rule AND leave the exclusion in place, and nothing
+#     reddens — same double-mutation shape as 6. The rule is cheap to re-derive
+#     from this note, which is why it is recorded rather than guarded again.
 #  7. THE CONSUMER. Nothing mechanically forces a human or an agent reading a CI
 #     log to apply the rule. accepts_run() below is the rule's executable
 #     definition; a consumer who still runs a loose grep is simply wrong, and no
@@ -271,10 +276,21 @@ if [[ "$REL_OCC" == "1" ]]; then
 else
   bad "bin/release carries the CI authority $REL_OCC times (expected exactly 1: the gate's comparison)"
 fi
+#
+# The shape test binds the MARKER to the comparison, and rejects emission
+# constructs outright. An earlier version only asked whether a `[[ … == … ]]`
+# appeared somewhere on the line, which two emissions walk straight through:
+#   [[ 1 == 1 ]] && echo '<marker>'      and      echo '<marker>'; [[ 1 == 1 ]]
+# Both were measured passing it. An exclusion is only as legitimate as the rule
+# that replaces it, so the replacement has to actually be stricter than the scan.
 REL_LINE="$({ grep -vE '^[[:space:]]*#' "$ROOT/bin/release" || true; } | { grep -F '[ci] all green' || true; })"
 case "$REL_LINE" in
-  *'[['*'=='*']]'*) ok "bin/release's occurrence is a COMPARISON, not an emission" ;;
-  *) bad "bin/release's occurrence is a COMPARISON, not an emission (line: ${REL_LINE:-<none>})" ;;
+  *echo*|*printf*|*'>'*)
+    bad "bin/release's occurrence must be a COMPARISON, not an emission (line: $REL_LINE)" ;;
+  *'=='*'[ci] all green'*)
+    ok "bin/release's occurrence is a COMPARISON, not an emission" ;;
+  *)
+    bad "bin/release's occurrence is not a comparison against the marker (line: ${REL_LINE:-<none>})" ;;
 esac
 
 # A scan is only worth what it actually looks at: pin that the real dispatched

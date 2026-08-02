@@ -126,10 +126,13 @@ fi
 # contacted. bin/tests/run.sh is the DISPATCHER for the bin/ guard suites; the
 # authoritative list of what it runs is that file itself, and the two that decide
 # whether a release can go out wrong are worth naming here:
-#   * bin/release publish/promote (release-guard.sh, T-588c) — the post-upload
+#   * bin/release publish/promote (release-guard.sh, T-588c + T-b65e) — the
+#     PRE-BUILD CI gate (publish runs THIS script on the tree it is about to
+#     ship, and refuses to build if it is not green) and the post-upload
 #     READ-BACK. One case per requirement, each violating exactly one, so a
 #     deleted check reddens here instead of shipping a half-populated,
-#     mis-targeted or draft release that nobody looked at.
+#     mis-targeted or draft release — or an unverified one — that nobody
+#     looked at.
 #   * bin/tests/ci-success-marker.sh — the guard-of-the-guard on the "[ci] all
 #     green" literal that this script's own authority rests on.
 # ⚠️ NOTHING here guards code signing any more: T-0398 deleted the signing
