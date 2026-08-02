@@ -4655,6 +4655,10 @@ export interface components {
          *     desired placement. A claude account can be used by several agents on different
          *     boxes, so when it spans >1 machine the distinct hosts are comma-joined
          *     (single-machine → just that host; honest-empty "" when no agent reports one).
+         *
+         *     Each shaped window additionally carries ``measured_at`` — the epoch second the winning report's ``used_percentage`` was taken. It is not decoration: ``used_pct`` is a SNAPSHOT that freezes the moment the last agent on that account goes away, while ``elapsed_pct`` is recomputed from the request's ``now`` every single time, so without the stamp a days-old figure and a live one render byte-identically. The stamp is PER WINDOW because the two windows are selected independently — a fresh 5h window must never vouch for a frozen 7d one. Honest-null when nothing stamped the sample; NEVER back-filled with the serving time.
+         *
+         *     For the same reason ``pace`` is withheld (null) once a snapshot has gone unrefreshed past the telemetry freshness window, or is of unknown age: the verdict compares a frozen number against a moving clock, so it would appear and clear itself purely as time passes, with no new data and nothing the owner could do about it. The NUMBER is still served — only the present-tense judgement is withheld.
          */
         MonitoringAccountDTO: {
             /** Account */

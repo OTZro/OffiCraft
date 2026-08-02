@@ -845,6 +845,29 @@ func entryNum(entry map[string]any, key string) *float64 {
 // measured this box lately" are different facts, and the second is the one these
 // numbers depend on. A machine can be online with a wedged collector, and it can
 // be briefly offline with a 5-second-old sample that is still perfectly true.
+//
+// THIRD CONSUMER, SECOND PRODUCER (T-3b90 — the paragraph above used to name
+// only the warden, and that was no longer the whole story). The account
+// rate-limit windows now gate their PACE VERDICT on this same window: a used%
+// snapshot nobody has refreshed inside it gets no present-tense judgement (see
+// paceVerdict). The arithmetic still holds, but for a different reason worth
+// writing down rather than rediscovering — rate_limits does NOT ride the warden
+// heartbeat for claude. It comes from cli/ocagent's contextreport, whose own
+// reportThrottleSecs is INDEPENDENTLY declared as 30.0; codex rides the warden
+// (cli/ocwarden/codex_session.go). So "three cadences" is true of both
+// producers, but it rests on two 30s constants in different Go modules with
+// nothing linking them: raising cli/ocagent's throttle to 120s would silently
+// withhold every pace verdict fleet-wide with the whole suite green. If you
+// touch either throttle, come back here.
+//
+// Two false-negative windows follow, both fail-closed and both intended, but
+// stated so nobody has to find them the hard way: (a) the ocagent reporter
+// backs off up to reportBackoffCapSecs (300s) while the server is refusing, so
+// a genuinely hot account loses its badge for up to five minutes during a
+// server hiccup; (b) a live-but-idle claude session whose statusLine is not
+// re-rendering stops being judgeable after 90s. Both err toward saying nothing
+// rather than toward asserting something about a number nobody is refreshing,
+// which is the direction this ticket asked for.
 const telemetryFreshSecs = 90.0
 
 // runtimeCapabilitiesStampOf reads WHEN the entry's capability probe was taken.
@@ -1570,7 +1593,13 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	sort.Strings(sortedAccounts)
 	accounts := []monitoringAccountDTO{}
 	for _, account := range sortedAccounts {
-		windows := ShapeWindows(anyOrNil(freshRL[account]), now)
+		// rlTS carries, per window, the rate_limits_ts of the report that WON
+		// the selection above — i.e. exactly when the used% being served was
+		// measured. Handing it to the shaper is what lets the wire (and the
+		// cockpit) state the number's age instead of implying it is current,
+		// and what lets a snapshot older than telemetryFreshSecs decline to
+		// render a present-tense pace verdict (T-3b90).
+		windows := ShapeWindows(anyOrNil(freshRL[account]), now, rlTS[account], telemetryFreshSecs)
 		hostLabels := []string{}
 		for host := range acctHosts[account] {
 			hostLabels = append(hostLabels, resolveDisplay(machineNames, host))

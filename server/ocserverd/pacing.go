@@ -39,11 +39,21 @@ const (
 // PaceWindow is one shaped rate-limit window. Nil fields are honest nulls
 // (unmeasured); ResetsAt echoes the raw value AS GIVEN (epoch number or ISO
 // string; nil when absent).
+//
+// MeasuredAt is the AGE of UsedPct — the epoch second at which the agent last
+// reported this snapshot. It exists because the two percentages in this struct
+// are measured against DIFFERENT clocks: UsedPct is a frozen snapshot that
+// stops moving the moment the last agent on that account goes away, while
+// ElapsedPct is recomputed from `now` on every request. Without MeasuredAt a
+// reader cannot tell a live 43% from one taken three days ago — they render
+// byte-identically (T-3b90: the owner reported exactly that, and was right).
+// Honest-null: nil means "nobody stamped when this was taken", NOT "just now".
 type PaceWindow struct {
 	UsedPct    *float64 `json:"used_pct"`
 	ElapsedPct *float64 `json:"elapsed_pct"`
 	Pace       *string  `json:"pace"`
 	ResetsAt   any      `json:"resets_at"`
+	MeasuredAt *float64 `json:"measured_at"`
 }
 
 // round2 mirrors Python round(x, 2) (banker's rounding).
@@ -123,8 +133,24 @@ func elapsedPct(resetsAt any, windowSec, now float64) *float64 {
 
 // paceVerdict: "hot" when used% runs MORE than PaceMarginPct ahead of
 // elapsed% (strict >), else "ok"; either input missing → nil (can't judge).
-func paceVerdict(usedPct, elapsedPct *float64) *string {
+//
+// STALENESS IS A THIRD WAY TO BE UNABLE TO JUDGE (T-3b90). The verdict compares
+// a frozen used% against an elapsed% that keeps advancing with the wall clock,
+// so once the snapshot stops being refreshed the comparison stops describing
+// anything that is happening: the two operands drift apart on their own, and
+// "hot" appears and disappears purely as a function of TIME PASSING. The owner
+// hit the far end of that — an account with no agent running for days still
+// showed a red "過熱" badge, which the clock alone would have cleared two days
+// later. A judgement nobody's behaviour can change is not a warning; it is a
+// clock read out in alarm colours. So: snapshot older than freshSecs (or of
+// unknown age) → nil, "can't judge". The NUMBER is still served — it may well
+// still be true, and withholding it would cost the owner this week's usage.
+// Only the present-tense verdict is withheld.
+func paceVerdict(usedPct, elapsedPct, measuredAt *float64, now, freshSecs float64) *string {
 	if usedPct == nil || elapsedPct == nil {
+		return nil
+	}
+	if measuredAt == nil || now-*measuredAt > freshSecs {
 		return nil
 	}
 	verdict := PaceOK
@@ -137,7 +163,11 @@ func paceVerdict(usedPct, elapsedPct *float64) *string {
 // ShapeWindow shapes one raw rate-limit window. A non-object raw → nil;
 // individually unmeasurable fields stay nil but the window object is still
 // returned (partial is allowed, so the panel can show what it has).
-func ShapeWindow(raw any, windowSec, now float64) *PaceWindow {
+//
+// measuredAt is when the caller last received this snapshot (nil = unknown);
+// freshSecs is how long a snapshot may go unrefreshed and still support a
+// present-tense pace verdict. Both flow straight through to paceVerdict.
+func ShapeWindow(raw any, windowSec, now float64, measuredAt *float64, freshSecs float64) *PaceWindow {
 	obj, ok := raw.(map[string]any)
 	if !ok {
 		return nil
@@ -148,22 +178,33 @@ func ShapeWindow(raw any, windowSec, now float64) *PaceWindow {
 	return &PaceWindow{
 		UsedPct:    used,
 		ElapsedPct: elapsed,
-		Pace:       paceVerdict(used, elapsed),
+		Pace:       paceVerdict(used, elapsed, measuredAt, now, freshSecs),
 		ResetsAt:   resetsAt,
+		MeasuredAt: measuredAt,
 	}
 }
 
 // ShapeWindows shapes the 5h + 7d windows from a raw rate_limits value.
 // rate_limits missing / not an object → both windows nil (未量到). Never
 // panics.
-func ShapeWindows(rateLimits any, now float64) map[string]*PaceWindow {
+//
+// measuredAt is PER WINDOW, not per account: the fold picks each window
+// independently (later resets_at wins), so the 5h and 7d numbers on one card
+// can come from different reports at different times. Collapsing them to one
+// account-wide stamp would let a fresh 5h window vouch for a frozen 7d one —
+// which is the exact confusion T-3b90 was filed about.
+func ShapeWindows(rateLimits any, now float64, measuredAt map[string]float64, freshSecs float64) map[string]*PaceWindow {
 	out := map[string]*PaceWindow{"five_hour": nil, "seven_day": nil}
 	obj, ok := rateLimits.(map[string]any)
 	if !ok {
 		return out
 	}
 	for key, windowSec := range WindowSeconds {
-		out[key] = ShapeWindow(obj[key], windowSec, now)
+		var stamp *float64
+		if ts, ok := measuredAt[key]; ok && ts > 0 {
+			stamp = &ts
+		}
+		out[key] = ShapeWindow(obj[key], windowSec, now, stamp, freshSecs)
 	}
 	return out
 }

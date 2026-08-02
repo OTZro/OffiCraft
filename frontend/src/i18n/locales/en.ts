@@ -825,6 +825,10 @@ export const en: Dict = {
     usage: "usage",
     time: "time",
     overheated: "overheated",
+    // T-3b90: usage% is a snapshot from the last report; time% is recomputed
+    // now. Without this the two read as if taken together.
+    measuredAgoLead: "measured",
+    measuredAgoTail: "ago",
     detail: {
       open: "Account details",
       title: "Account details",

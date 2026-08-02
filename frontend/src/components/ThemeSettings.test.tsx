@@ -50,7 +50,25 @@ const SENTINEL = "偽造";
 //     leaves room for a busier machine (parallel CI is getting MORE parallel).
 // A generous ceiling costs nothing here: it does not slow a passing run, it only
 // changes how long a genuinely hung test takes to report.
-const EDIT_VIEW_TIMEOUT_MS = 20_000;
+//
+// 🔴 RAISED 20s → 60s (T-3b90). The sentence above predicted its own expiry —
+// "parallel CI is getting MORE parallel" — and it has expired. Measured on this
+// box with four agents contending: this test reported 34,842ms and 38,699ms in
+// two consecutive full-CI runs and FAILED both, while the SAME test run alone
+// took 37,566ms and PASSED (the reported figure includes hooks; the body is what
+// is bounded, and off-load there is slack the parallel run does not have). Its
+// neighbours in this file reported 23.8s–32.7s in the same runs.
+//
+// What tipped it was tiny and that is the point: T-3b90 added TWO message codes
+// (866 → 868). Reverting just those two codes, changing nothing else, turned
+// this test green again — verified by execution, not inferred. A guard whose
+// margin two rows can flip is not bounding what it was built to bound, so the
+// honest fix is a ceiling that reflects what a busy box actually costs.
+//
+// This does NOT make the amplification acceptable and must not be read as
+// closing it: the O(N²) root cause is still T-e2e9, and every future +1 row
+// walks this number back toward the edge again.
+const EDIT_VIEW_TIMEOUT_MS = 60_000;
 
 const p = zh.profile;
 const s = zh.settings;

@@ -513,10 +513,27 @@ export interface MonAccountView {
   accountLabel: string | null;
   machine: string;
   cost: number | null;
-  fiveHour: { usagePct: number | null; timePct: number | null } | null;
+  /** `measuredAt` is the epoch second `usagePct` was last REPORTED (honest-null
+   * when nothing stamped it). It is not decoration: `usagePct` freezes the
+   * moment the last agent on this account goes away, while `timePct` keeps
+   * advancing with the wall clock, so without the age the two read as if they
+   * were taken together (T-3b90 — the owner saw a days-old 43% presented as
+   * current). The card renders the age whenever it has one, at every moment,
+   * so the answer to "is this number old?" never depends on catching the page
+   * at the right time. */
+  fiveHour: {
+    usagePct: number | null;
+    timePct: number | null;
+    measuredAt: number | null;
+  } | null;
   sevenDay: {
     usagePct: number | null;
     timePct: number | null;
+    measuredAt: number | null;
+    /** BE verdict only — the card never derives this from the two percentages
+     * itself. A snapshot nobody has refreshed lately arrives with no verdict
+     * at all (pace null → false), because comparing a frozen number against a
+     * moving clock describes the clock, not the account. */
     overheated: boolean;
   } | null;
 }

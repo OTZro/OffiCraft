@@ -96,6 +96,14 @@
   color: var(--color-hot);
   font-weight: 600;
 }
+/* The snapshot's age, printed beside the usage number (T-3b90). Deliberately
+ * quiet — it is context for a number, not a warning about one: the usage
+ * figure may well still be perfectly true. It reads as muted secondary text,
+ * NOT in the hot colour, so it can never be mistaken for the 過熱 badge it
+ * replaced on stale accounts. */
+.mon-usage__age {
+  color: var(--color-text-muted);
+}
 .mon-usage__track {
   position: relative;
   height: 8px;
