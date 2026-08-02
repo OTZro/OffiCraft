@@ -169,6 +169,11 @@ function useReplyCardsState(): UseReplyCards {
   // handed to the cards as props; a new identity on every snapshot is churn we
   // do not need). Written wherever `setWaiting` is.
   const waitingRef = useRef<ReplyCard[]>([]);
+  // ③ Cards THIS cockpit closed with its own write, held until a server snapshot
+  // agrees they are gone. See `adoptWrite` — without this, a refetch that was
+  // already in flight when the owner clicked resolves with a PRE-WRITE snapshot
+  // and paints the answered card back into the waiting pane.
+  const adoptedTerminalRef = useRef<Set<string>>(new Set());
 
   // The always-live cheap fetch: the waiting list + the counts. Runs on mount
   // and on every reply_card delta.
@@ -182,9 +187,30 @@ function useReplyCardsState(): UseReplyCards {
       // Superseded by a newer refetch while we were in flight → drop this
       // (possibly stale) snapshot rather than clobber the fresher one.
       if (gen !== waitingGenRef.current) return;
-      setWaiting(w);
-      waitingRef.current = w;
-      setHandledCount(counts.answered + counts.expired);
+      // ③ Filter out cards we have already closed ourselves but this snapshot
+      // still lists — it was read BEFORE our write landed. Everything ELSE in
+      // it is adopted as usual (a card a peer just opened arrives normally),
+      // which is the whole reason this is a per-id hold and not "drop the
+      // snapshot": dropping it would trade a resurrected card for a new card
+      // that never shows up, and with the stream down nothing would correct
+      // either.
+      const adopted = adoptedTerminalRef.current;
+      const heldBack = adopted.size ? w.filter((c) => adopted.has(c.id)) : [];
+      // A snapshot that no longer lists one of our closed cards IS the server
+      // confirming it — stop holding that id, so nothing is suppressed forever
+      // (and a future card reusing the id could never be hidden).
+      if (adopted.size) {
+        for (const id of [...adopted]) {
+          if (!w.some((c) => c.id === id)) adopted.delete(id);
+        }
+      }
+      const next = heldBack.length ? w.filter((c) => !adopted.has(c.id)) : w;
+      setWaiting(next);
+      waitingRef.current = next;
+      // The counts came from the SAME (pre-write) snapshot as the rows we just
+      // held back, so add them: otherwise the 近期已處理 header would drop by
+      // one for as long as the hold lasts.
+      setHandledCount(counts.answered + counts.expired + heldBack.length);
       setError(false);
     } catch (e) {
       // Only the latest attempt owns the error surface — a stale rejection must
@@ -267,11 +293,25 @@ function useReplyCardsState(): UseReplyCards {
   // delta still drives the pane for everyone ELSE's writes.
   // ⚠️ This is an adoption of the SERVER's own response for ONE identified card,
   // not a merge of an SSE payload (contract B still holds: deltas refetch, never
-  // merge). It deliberately does not re-order or add rows — a card it does not
-  // already hold is left to the delta / next refetch.
+  // merge). It never re-orders the WAITING pane and never adds a row to it — a
+  // card it does not already hold there is left to the delta / next refetch. (It
+  // DOES append to the HANDLED list when that pane is loaded, including a card
+  // that was not in it before: a 重新決定 on a card whose 24h window had lapsed
+  // re-enters that window, and the sort below puts it where its stamp says.)
+  //
+  // ③ THE IN-FLIGHT SNAPSHOT. Adopting is not enough on its own: a refetch that
+  // was already in flight when the owner clicked (a peer's delta a moment before
+  // the stream died is exactly how that happens) resolves with a snapshot read
+  // BEFORE the write and paints the card back into the pane — same wrong screen
+  // as the original defect, and with the stream down nothing comes to correct
+  // it. T-e862's generation guard does not cover this: it only drops a snapshot
+  // once a NEWER refetch exists, and when the stream is down there is no newer
+  // one. So the id is HELD (`adoptedTerminalRef`) until a snapshot agrees it is
+  // gone; see refetchWaiting for why the rest of that snapshot is still adopted.
   const adoptWrite = useCallback((card: ReplyCard) => {
     const terminal = card.status !== "waiting";
     const prev = waitingRef.current;
+    if (terminal) adoptedTerminalRef.current.add(card.id);
     if (prev.some((c) => c.id === card.id)) {
       const next = terminal
         ? prev.filter((c) => c.id !== card.id)
