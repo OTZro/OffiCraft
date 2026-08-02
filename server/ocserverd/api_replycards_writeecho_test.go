@@ -19,10 +19,23 @@ import (
 // one, and the client's own tests could not tell: they run against api/mock,
 // which returns whole cards by construction.
 //
-// So the client's premise is pinned HERE, on the real handlers over a real DAL,
-// and it is pinned as an IDENTITY against the single-card GET rather than as a
-// field checklist — a checklist goes stale the moment the DTO grows a field,
-// while identity keeps holding.
+// So the client's premise is pinned HERE, on the real handlers over a real DAL.
+//
+// 🔴 THE TWO HALVES CATCH DIFFERENT THINGS, AND THE EARLIER VERSION OF THIS NOTE
+// GOT THE CREDIT BACKWARDS. It said the identity compare was the point and the
+// corpus check was mere hygiene. Measured, it is the other way round for the
+// obvious mutant:
+//   • `HandleGetReplyCard…` ends in the SAME `s.writeReplyCard` tail, so anything
+//     that changes that tail moves the echo AND the GET together and `got != want`
+//     can never fire. Making the tail serve the LIGHT row reddens these tests
+//     only through the anti-tautology check below (verified: delete those three
+//     field assertions and that mutant goes completely green).
+//   • The identity compare earns its place on the OTHER failure shape — the write
+//     path drifting ALONE. Swapping just the write verbs to the bare
+//     newReplyCardDTO (GET untouched) reddens `got != want` on answer and
+//     re-answer. That is the realistic regression: someone "optimises" one verb.
+// Both are needed; neither is decoration. The identity form is also what keeps
+// this from going stale as the DTO grows fields, which a checklist would not.
 //
 // This is the same promise `?view=full` already had to make for the list wire
 // (api_replycards_viewfull_test.go); it now covers the three write verbs too.

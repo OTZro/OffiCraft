@@ -66,8 +66,38 @@ export function ChatReplyCard({
     lazyTerminal ? initialStatus : null
   );
 
+  // 🔴 READ GENERATION. Every read of this card takes a ticket and only commits
+  // if the ticket is still current; adopting a write takes one too (`adopt`
+  // below). Without it, a read that was ALREADY IN FLIGHT when the owner
+  // answered — a peer's `reply_card` delta a moment before the stream died is
+  // exactly how one gets there, and this card fetches on every such delta while
+  // it is still waiting — resolves with a PRE-WRITE card and puts the option
+  // chips back. Trigger and consequence are identical to the blocker this file
+  // already fixed once: the server has the answer, the card says otherwise, and
+  // with the stream down nothing comes to correct it.
+  //
+  // ⚠️ Dropping a superseded read is the WHOLE fix here, and that is a property
+  // of this surface, not a general licence: this read carries ONE card — the very
+  // card the newer commit already describes — so nothing else is lost with it.
+  // The 等我回覆 pane cannot do this (its snapshot carries OTHER cards, including
+  // ones a peer just opened), which is why useReplyCards holds ids instead.
+  const readGenRef = useRef(0);
+
+  /** Take the newest known truth for this card: a fresh read, or the card a
+   * write of ours just returned. Both invalidate every read still in flight. */
+  const commitCard = useCallback((fresh: ReplyCard) => {
+    ++readGenRef.current;
+    statusRef.current = fresh.status;
+    setCard(fresh);
+    setLoadError(false);
+  }, []);
+
   const refetch = useCallback(async () => {
+    const gen = ++readGenRef.current;
     const fresh = await api.getReplyCard(replyCardId);
+    // Superseded while we were in flight (a newer read, or our own write's
+    // adopted response) → drop this now-stale card rather than un-answer it.
+    if (gen !== readGenRef.current) return;
     statusRef.current = fresh.status;
     setCard(fresh);
     setLoadError(false);
@@ -133,21 +163,27 @@ export function ChatReplyCard({
   //             at. It stays.
   //
   // ⚠️ The old cost of dropping the answer-path refetch — "with the SSE stream
-  // down the card no longer flips in place" — is NO LONGER TRUE and must not be
-  // quoted again: doAnswer adopts the write's own response, so the flip is a
-  // property of the write, not of the stream. What stayed dropped is the second
+  // down the card no longer flips in place" — no longer applies: doAnswer adopts
+  // the write's own response (via commitCard). What stayed dropped is the second
   // GET, which is all step 8 was ever about. refresh() remains the unconditional
   // path for a 409, where somebody ELSE's write means no delta of ours is coming.
+  //
+  // 🔴 STATE THE CONDITION, DO NOT GENERALISE. The previous version of this note
+  // said the flip is "a property of the write, not of the stream" — full stop —
+  // and that was FALSE while `refetch` had no generation guard: a read left in
+  // flight by the stream's last frame landed afterwards and put these chips back.
+  // The flip holds because of TWO things together: (a) doAnswer adopts the write's
+  // response, and (b) that adoption invalidates every read still in flight
+  // (readGenRef). Remove either and the claim is false again — and it is only a
+  // claim about THIS card in THIS component; the 等我回覆 panes need their own
+  // mechanism (useReplyCards' per-id holds), which is why they have one.
   async function doAnswer(input: ReplyCardAnswerInput) {
     try {
       // ADOPT-FROM-RESPONSE, not a second GET: the write already answers with
       // the fresh card, so this card flips in place even with the stream down —
       // and it still costs ZERO extra requests, so the one-round budget above is
       // untouched (the delta's refetch remains the only round).
-      const fresh = await api.answerReplyCard(replyCardId, input);
-      statusRef.current = fresh.status;
-      setCard(fresh);
-      setLoadError(false);
+      commitCard(await api.answerReplyCard(replyCardId, input));
       setActionError(null);
     } catch (e) {
       console.warn("ChatReplyCard: answer failed", e);
@@ -158,7 +194,10 @@ export function ChatReplyCard({
 
   async function doReanswer(input: ReplyCardAnswerInput) {
     try {
-      await api.reanswerReplyCard(replyCardId, input);
+      // Adopt first (so a read in flight can no longer un-revise this card),
+      // then still refetch — see the asymmetry note above: the SSE path does not
+      // fire for a terminal card, and the one-round budget is spent HERE.
+      commitCard(await api.reanswerReplyCard(replyCardId, input));
       setActionError(null);
       await refetch();
     } catch (e) {
