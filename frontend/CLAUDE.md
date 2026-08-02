@@ -1185,28 +1185,39 @@ T-081b 開放的葉子有好幾條是**句子片段**,邊界空白是有意義�
 
 ### 還剩下的、以及被撤回的成本紀錄
 
-- **當初做虛擬捲動的真正動機之一是「`ThemeSettings.test.tsx` 撞到 5000ms 逾時」,那個
-  機制隨全掛載回來了 —— 沒有測試被它打到,但餘裕變薄,所以那些測試現在自己宣告門檻**
-  (`EDIT_VIEW_TIMEOUT_MS = 20_000`,掛在**每一條會打開主題編輯視圖的** `it()` 上,
-  共 12 條;理由寫在該檔頂端)。**單獨跑**整份 22 條只要 **3.62s**、最慢單條 601ms,
-  但**整套並行的完整 CI** 下同一批要 3.4–6.3 秒。
-  🔴 **選 20s 的依據,以及一個必須修正的推論**:CI 上量到的最大值是
-  **6,334ms**(「stores a non-default lay-down mode…」,而且那一跑是**綠的**)。
-  ⚠️ **不可以拿它跟 5000ms 相減說「只剩 2% 餘裕」** —— vitest **report 的 duration 含
-  hooks,而 `testTimeout` 只綁 test body**。實測坐實(一次性探針,不是推論):
-  `beforeEach` 睡 3000 + body 睡 3000 ⇒ 報 **6,005ms 而且過**;body 單獨睡 5500 ⇒
-  **`Test timed out in 5000ms`**。所以 CI 上那些數字是 body 時間的**上界**
-  (RTL 的 auto-cleanup 要卸載 866 列,那是 hook),真正餘裕不明但確實薄。
-  20s ≈ 最大上界的 3 倍,留給更忙的機器;**寬鬆的天花板在這裡零成本**——它不會讓通過的
-  測試變慢,只影響「真的卡住」時多久才報。
-  ⚠️ **這是測試環境成本,不是使用者成本**,別拿這些數字當「拿掉虛擬捲動讓產品變慢」的證據
-  (真瀏覽器同一份 866 列是幾十毫秒等級)。根因面的工作是 **T-e2e9**,不在這裡。
-  機制本身要記住:dom-testing-library 的 `getByLabelText` 對每個 labelable 元素讀
-  `input.labels`,jsdom 每次都重走整份 document ⇒ N 個 input = 每次查詢 N 次全文件走訪
-  (profile 實測 top-2:`NodeList-impl._update` 1145ms + `form-controls.query` 551ms)。
+- 🔴 **那個逾時的根因查完了,修法是「把查詢縮小」,不是「把門檻放大」(T-e2e9,owner
+  裁定 `rc-cf2a2982f31d` 選①)。`EDIT_VIEW_TIMEOUT_MS = 20_000` 已整個刪除**,12 條
+  `it()` 全部回到 vitest 的 5000ms 預設。
+  **成本是查詢,不是 render,而且差三個數量級。同一個 `<select>`、同一次跑、866 列都掛著**:
+  | 取法 | 耗時 |
+  |---|---|
+  | `document.getElementById("ts-canvas-bg-mode")` | **0 ms** |
+  | `container.querySelectorAll("input")`(全部 866 個,走一次) | 119 ms |
+  | `within(<它所在那一列>).getByLabelText(…)` | **189 ms** |
+  | `utils.getByLabelText(…)`(整個 container) | **16,813 ms** |
+  兩次 label 查詢 = 29.5 秒 = 該條測試全程的 **82%**;真正 render 866 個 input 只佔 **9%**。
+  機制:dom-testing-library 的 label 查詢對每個 labelable 元素讀 `input.labels`,
+  jsdom 每次都重走整份 document ⇒ **O(N²)**。
+  🔴 **放大門檻被試過而且不夠**:5s → 20s 之後,在 `333045e` 上單檔跑 5 次仍 **3 次紅在
+  `Test timed out in 20000ms`**(seth-m5,load 81–252)。**別再往上加。**
+  ⚠️ **`it()` 報的 duration 含 hooks,`testTimeout` 只綁 body**(實測:`beforeEach` 睡
+  3000 + body 睡 3000 ⇒ 報 6,005ms 而且過;body 單獨睡 5500 ⇒ 逾時)。所以報出來的數字
+  是 body 的**上界**,別拿它直接減 5000 講餘裕。
+  ⚠️ 另一個會誤導的觀察:**耗時 38.9s / 42.6s 的跑反而通過、24.9s 的跑失敗**——逾時只在
+  `await` 邊界檢查,同步查詢不會被打斷,所以過不過取決於檢查落在哪個 await,與總耗時無關。
+  **這就是它看起來隨機的機制。**
   ⇒ **不要新增「在 866 列都掛著時對整個 container 跑 `getByLabelText` / `getByRole`」的
-  查詢**。現行寫法之所以便宜,是因為它們**先縮到一列**(`within(row).getByRole("textbox")`)
+  查詢**。現行寫法一律**先縮到一個小容器**(`ThemeSettings.test.tsx` 檔頭的 `colourRow` /
+  `canvasBgSlots` / `formActions` 三個 helper,以及 `within(row).getByRole("textbox")`)
   或直接 `querySelector('[data-wording-code=…]')`。照直覺改成整頁查詢就會把逾時招回來。
+  🔴 **縮小 scope,不要改用 id 定位。** `*ByLabelText` 除了找到元素,**本身就在證明
+  input 與它的 label 真的綁在一起**(讀屏軟體念得出欄位名靠的就是這個)。換成
+  `getElementById` 會快到 0 ms,但 label 綁錯或掉了測試照樣全綠——而 owner 撤回虛擬捲動
+  換回來的三個能力裡有兩個就是無障礙。縮 scope 不必付這個代價:每一處仍是 label 查詢。
+  唯一的例外是 `.ts-wording-search`(它的容器就是那 866 列,沒有更小的 scope),那一處
+  改成**斷言** `aria-label`,綁定仍有證人。
+  ⚠️ **這是測試環境成本,不是使用者成本**,別拿這些數字當「拿掉虛擬捲動讓產品變慢」的證據
+  (真瀏覽器同一份 866 列是幾十毫秒等級)。
 - 🔴 **舊文那個「~9 倍(5.13s → 0.543s)」是 jsdom 專屬的數字,永遠不准拿去講使用者體感**
   ——這條規則跟虛擬捲動一起留著,因為它是關於怎麼引用數字,不是關於實作。
 - ⛔ **已作廢、不要再引用的舊記載**:本檔上一版把「釘住的列 Tab 會掉出清單、讀屏序號跳回
