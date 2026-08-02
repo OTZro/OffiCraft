@@ -37,6 +37,7 @@ import { render, fireEvent, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { RepliesPage } from "../components/RepliesPage";
 import { ChatReplyCard } from "../components/ChatReplyCard";
+import { TaskReplyCard } from "../components/TaskReplyCard";
 import { ReplyCardsProvider } from "./useReplyCards";
 import { __resetMock, __injectMockReplyCard } from "../api/mock";
 import { api } from "../api";
@@ -87,15 +88,15 @@ function captureEventStream() {
   };
 }
 
-/** Makes the NEXT `listReplyCards("waiting")` hang, and hands back its resolver
+/** Makes the NEXT `listReplyCards(<pane>)` hang, and hands back its resolver
  * so the test decides exactly when that (by then stale) snapshot lands. Every
  * other call goes to the real mock adapter. */
-function hangNextWaitingRead() {
+function hangNextRead(pane: "waiting" | "answered" | "expired") {
   const real = api.listReplyCards.bind(api);
   let release: ((rows: ReplyCard[]) => void) | null = null;
   let armed = true;
   vi.spyOn(api, "listReplyCards").mockImplementation((status) => {
-    if (armed && status === "waiting") {
+    if (armed && status === pane) {
       armed = false;
       return new Promise<ReplyCard[]>((resolve) => {
         release = resolve;
@@ -105,9 +106,8 @@ function hangNextWaitingRead() {
   });
   return {
     inFlight: () => release !== null,
-    /** Land the in-flight read with a snapshot of the test's choosing. */
     landWith: (rows: ReplyCard[]) => {
-      if (!release) throw new Error("no waiting read is in flight");
+      if (!release) throw new Error(`no ${pane} read is in flight`);
       release(rows);
     },
   };
@@ -193,7 +193,7 @@ describe("reply-card writes reconcile without any event stream", () => {
 
     // A peer's delta kicks a refetch — and that read never comes back before the
     // owner acts (slow response, then the stream drops).
-    const read = hangNextWaitingRead();
+    const read = hangNextRead("waiting");
     stream.deliver("reply_card");
     await waitFor(() => expect(read.inFlight()).toBe(true));
 
@@ -228,7 +228,7 @@ describe("reply-card writes reconcile without any event stream", () => {
     const { findAllByTestId, queryAllByTestId } = renderPage();
     expect(await findAllByTestId("waiting-card")).toHaveLength(2);
 
-    const read = hangNextWaitingRead();
+    const read = hangNextRead("waiting");
     stream.deliver("reply_card");
     await waitFor(() => expect(read.inFlight()).toBe(true));
 
@@ -251,6 +251,179 @@ describe("reply-card writes reconcile without any event stream", () => {
     expect(
       queryAllByTestId("waiting-card").map((el) => el.id).sort()
     ).toEqual(["reply-card-rc-2", "reply-card-rc-3"]);
+  });
+
+  it("an in-flight PRE-WRITE read cannot put the inline card's options back", async () => {
+    // 🔴 The THIRD site of the same class, and the one the two tests above are
+    // blind to: they kill the stream from the start (`killEventStream`), so no
+    // read is ever in flight. ChatReplyCard fetches on EVERY reply_card delta
+    // while its card is still waiting, so the ordinary "stream was alive, then
+    // dropped" shape leaves exactly such a read in flight — and it lands after
+    // the answer, re-seeding statusRef to "waiting" and re-rendering the chips.
+    __injectMockReplyCard(mkCard({ id: "rc-inline", summary: "要寄出嗎?" }));
+
+    const stream = captureEventStream();
+    const realGet = api.getReplyCard.bind(api);
+    let release: ((c: ReplyCard) => void) | null = null;
+    let armed = false;
+    vi.spyOn(api, "getReplyCard").mockImplementation((id) => {
+      if (armed) {
+        armed = false;
+        return new Promise<ReplyCard>((resolve) => {
+          release = resolve;
+        });
+      }
+      return realGet(id);
+    });
+
+    const { container } = render(
+      <I18nProvider>
+        <ChatReplyCard
+          replyCardId="rc-inline"
+          fallbackSummary="要寄出嗎?"
+          initialStatus={null}
+        />
+      </I18nProvider>
+    );
+    await waitFor(() =>
+      expect(container.querySelector(".reply-option")).toBeTruthy()
+    );
+
+    // A peer's delta kicks this card's own refetch; it hangs, then the stream dies.
+    armed = true;
+    stream.deliver("reply_card");
+    await waitFor(() => expect(release).not.toBeNull());
+
+    fireEvent.click(container.querySelectorAll(".reply-option")[0]);
+    await waitFor(() =>
+      expect(container.querySelector(".reply-card__answer-text")).toBeTruthy()
+    );
+
+    // The pre-write card lands last. It must not un-answer the card.
+    release!(mkCard({ id: "rc-inline", summary: "要寄出嗎?" }));
+
+    await waitFor(() =>
+      expect(container.querySelector(".reply-card__answer-text")).toBeTruthy()
+    );
+    expect(container.querySelectorAll(".reply-option")).toHaveLength(0);
+  });
+
+  it("an in-flight PRE-WRITE read cannot put the TASK card's options back", async () => {
+    // The FIFTH site, found by sweeping rather than reported: TaskReplyCard (the
+    // gate card embedded in a task) fetches on every delta the same way.
+    // ⚠️ Its exposure is narrower — `doAnswer` there DOES refetch, so it never
+    // depended on the stream — but ORDERING between that post-write read and an
+    // older in-flight one was missing all the same.
+    __injectMockReplyCard(mkCard({ id: "rc-gate", summary: "要放行嗎?" }));
+
+    const stream = captureEventStream();
+    const realGet = api.getReplyCard.bind(api);
+    let release: ((c: ReplyCard) => void) | null = null;
+    let armed = false;
+    vi.spyOn(api, "getReplyCard").mockImplementation((id) => {
+      if (armed) {
+        armed = false;
+        return new Promise<ReplyCard>((resolve) => {
+          release = resolve;
+        });
+      }
+      return realGet(id);
+    });
+
+    const { container } = render(
+      <I18nProvider>
+        <TaskReplyCard replyCardId="rc-gate" initialStatus={null} />
+      </I18nProvider>
+    );
+    await waitFor(() =>
+      expect(container.querySelector(".reply-option")).toBeTruthy()
+    );
+
+    armed = true;
+    stream.deliver("reply_card");
+    await waitFor(() => expect(release).not.toBeNull());
+
+    fireEvent.click(container.querySelectorAll(".reply-option")[0]);
+    await waitFor(() =>
+      expect(container.querySelector(".reply-card__answer-text")).toBeTruthy()
+    );
+
+    release!(mkCard({ id: "rc-gate", summary: "要放行嗎?" }));
+
+    await waitFor(() =>
+      expect(container.querySelector(".reply-card__answer-text")).toBeTruthy()
+    );
+    expect(container.querySelectorAll(".reply-option")).toHaveLength(0);
+  });
+
+  it("an in-flight PRE-WRITE handled snapshot cannot drop the card just answered", async () => {
+    // 🔴 The FOURTH site. "The pane is collapsed by default" does NOT make this
+    // unreachable: expanding it once sets handledLoaded for the rest of the visit,
+    // and from then on every delta refetches the handled lists — so the same
+    // in-flight snapshot lands on 近期已處理 and takes the card the owner just
+    // answered back out of it. (Expanding once is the entire point of that pane.)
+    __injectMockReplyCard(mkCard({ id: "rc-1", summary: "第一張" }));
+    __injectMockReplyCard(
+      mkCard({
+        id: "rc-old",
+        summary: "早先答過的",
+        status: "answered",
+        answeredTs: Date.now() / 1000 - 3600,
+        answer: { optionIdx: 0, text: "", attachments: [] },
+      })
+    );
+
+    const stream = captureEventStream();
+    const { findAllByTestId, findByTestId, queryAllByTestId } = renderPage();
+    expect(await findAllByTestId("waiting-card")).toHaveLength(1);
+
+    // Expand 近期已處理 once — that is what arms the per-delta handled refetch.
+    fireEvent.click(await findByTestId("answered-toggle"));
+    await waitFor(() =>
+      expect(queryAllByTestId("answered-card")).toHaveLength(1)
+    );
+
+    const read = hangNextRead("answered");
+    stream.deliver("reply_card");
+    await waitFor(() => expect(read.inFlight()).toBe(true));
+
+    const cards = await findAllByTestId("waiting-card");
+    fireEvent.click(cards[0].querySelectorAll(".reply-option")[0]);
+    await waitFor(() =>
+      expect(queryAllByTestId("answered-card")).toHaveLength(2)
+    );
+
+    // The pre-write answered snapshot lands. It knows nothing about the card the
+    // owner just answered — but it DOES carry one a peer answered, and that is
+    // what makes this test discriminating: waiting for the peer's card proves the
+    // stale snapshot was really committed.
+    // 🔴 Without it the assertion below is satisfied by the state adoption
+    // already left behind and the test passes on broken code — measured: the
+    // first version of this test was GREEN against a mutant with the whole
+    // handled merge deleted.
+    read.landWith([
+      mkCard({
+        id: "rc-old",
+        status: "answered",
+        answeredTs: Date.now() / 1000 - 3600,
+        answer: { optionIdx: 0, text: "", attachments: [] },
+      }),
+      mkCard({
+        id: "rc-peer",
+        summary: "別人答的",
+        status: "answered",
+        answeredTs: Date.now() / 1000 - 120,
+        answer: { optionIdx: 0, text: "", attachments: [] },
+      }),
+    ]);
+
+    // The snapshot committed (rc-peer is on screen) AND the card the owner just
+    // answered is still in 近期已處理 — three, not two.
+    await waitFor(() =>
+      expect(
+        queryAllByTestId("answered-card").map((el) => el.id).sort()
+      ).toEqual(["reply-card-rc-1", "reply-card-rc-old", "reply-card-rc-peer"])
+    );
   });
 
   it("an inline chat card flips to answered in place with the stream DOWN", async () => {

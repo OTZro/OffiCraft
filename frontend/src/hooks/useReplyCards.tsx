@@ -170,10 +170,16 @@ function useReplyCardsState(): UseReplyCards {
   // do not need). Written wherever `setWaiting` is.
   const waitingRef = useRef<ReplyCard[]>([]);
   // ③ Cards THIS cockpit closed with its own write, held until a server snapshot
-  // agrees they are gone. See `adoptWrite` — without this, a refetch that was
-  // already in flight when the owner clicked resolves with a PRE-WRITE snapshot
-  // and paints the answered card back into the waiting pane.
-  const adoptedTerminalRef = useRef<Set<string>>(new Set());
+  // agrees. See `adoptWrite` — without this, a refetch that was already in flight
+  // when the owner clicked resolves with a PRE-WRITE snapshot and undoes the
+  // adoption. TWO holds, because the two panes are confirmed by OPPOSITE
+  // evidence and one release rule cannot serve both:
+  //  • waiting — confirmed when a snapshot NO LONGER lists the id.
+  //  • handled — confirmed when a snapshot DOES list it with a handled stamp at
+  //    least as new as ours (a 重新決定 re-stamps, so mere presence is not
+  //    confirmation: a pre-write snapshot lists that card with its OLD stamp).
+  const heldFromWaitingRef = useRef<Set<string>>(new Set());
+  const adoptedHandledRef = useRef<Map<string, ReplyCard>>(new Map());
 
   // The always-live cheap fetch: the waiting list + the counts. Runs on mount
   // and on every reply_card delta.
@@ -194,7 +200,7 @@ function useReplyCardsState(): UseReplyCards {
       // snapshot": dropping it would trade a resurrected card for a new card
       // that never shows up, and with the stream down nothing would correct
       // either.
-      const adopted = adoptedTerminalRef.current;
+      const adopted = heldFromWaitingRef.current;
       const heldBack = adopted.size ? w.filter((c) => adopted.has(c.id)) : [];
       // A snapshot that no longer lists one of our closed cards IS the server
       // confirming it — stop holding that id, so nothing is suppressed forever
@@ -230,9 +236,33 @@ function useReplyCardsState(): UseReplyCards {
     ]);
     // Same generation guard as the waiting list — drop a superseded snapshot.
     if (gen !== handledGenRef.current) return;
-    setHandled(
-      [...answered, ...expired].sort((a, b) => handledTs(b) - handledTs(a))
-    );
+    const merged = [...answered, ...expired];
+    // ③ The handled half of the same hazard. Once the owner has expanded this
+    // pane, EVERY delta refetches it for the rest of the visit
+    // (`handledLoadedRef` is not reset on collapse, and the deep-link path calls
+    // loadHandled() without a click at all) — so a read can be in flight when
+    // the owner answers, and a pre-write snapshot would take the card they just
+    // handled back OUT of 近期已處理.
+    //
+    // ⚠️ Confirmation here is the OPPOSITE evidence to the waiting pane's, and
+    // mere presence is not enough: a 重新決定 re-stamps answeredTs, so a
+    // pre-write snapshot lists that same card with its OLD stamp. Take the
+    // snapshot's row only once its stamp is at least as new as the one we
+    // adopted; until then substitute (or insert) ours.
+    const adoptedH = adoptedHandledRef.current;
+    if (adoptedH.size) {
+      for (const [id, mine] of [...adoptedH]) {
+        const i = merged.findIndex((c) => c.id === id);
+        if (i < 0) {
+          merged.push(mine); // snapshot predates the write entirely
+        } else if (handledTs(merged[i]) >= handledTs(mine)) {
+          adoptedH.delete(id); // the server has caught up — stop overriding
+        } else {
+          merged[i] = mine; // same card, older stamp: ours is the newer truth
+        }
+      }
+    }
+    setHandled(merged.sort((a, b) => handledTs(b) - handledTs(a)));
     setHandledLoaded(true);
     handledLoadedRef.current = true;
   }, []);
@@ -306,27 +336,41 @@ function useReplyCardsState(): UseReplyCards {
   // as the original defect, and with the stream down nothing comes to correct
   // it. T-e862's generation guard does not cover this: it only drops a snapshot
   // once a NEWER refetch exists, and when the stream is down there is no newer
-  // one. So the id is HELD (`adoptedTerminalRef`) until a snapshot agrees it is
-  // gone; see refetchWaiting for why the rest of that snapshot is still adopted.
+  // one. So the id is HELD until a snapshot agrees — one hold per pane, because
+  // the two panes are confirmed by opposite evidence (see the two refs above and
+  // each refetch's release rule).
+  //
+  // ⚠️ WHY THE HOLD CANNOT LEAK A CARD FOREVER — the honest reason, not the one
+  // this comment used to give. It is NOT "a future card reusing this id could
+  // never be hidden": the waiting hold releases only on an id the snapshot has
+  // stopped listing, so an id that keeps appearing as waiting would keep being
+  // filtered (measured). What makes that harmless is two facts OUTSIDE this
+  // function: card ids are `rc-` + 12 hex from crypto/rand (server
+  // api_replycards.go) so they are not reused, and the card state machine has no
+  // answered/expired → waiting edge, so the card we just closed cannot come back
+  // as waiting. Both are server properties: if either changes, this hold needs a
+  // TTL or a stamp comparison like the handled side's.
   const adoptWrite = useCallback((card: ReplyCard) => {
-    const terminal = card.status !== "waiting";
+    // Every one of the three writes settles the card (answer/re-answer → answered,
+    // expire → expired), so `card.status !== "waiting"` always holds here. There
+    // is deliberately no "still waiting" branch: the one that used to sit here was
+    // unreachable, and an unreachable branch reads like a supported case.
     const prev = waitingRef.current;
-    if (terminal) adoptedTerminalRef.current.add(card.id);
+    heldFromWaitingRef.current.add(card.id);
     if (prev.some((c) => c.id === card.id)) {
-      const next = terminal
-        ? prev.filter((c) => c.id !== card.id)
-        : prev.map((c) => (c.id === card.id ? card : c));
+      const next = prev.filter((c) => c.id !== card.id);
       waitingRef.current = next;
       setWaiting(next);
       // It left the waiting pane, so the 近期已處理 header's count gained it.
       // (Only when it really WAS waiting — a 重新決定 revises an already-handled
       // card and must not re-count it.)
-      if (terminal) setHandledCount((n) => n + 1);
+      setHandledCount((n) => n + 1);
     }
     // Keep the handled lists coherent too, but only while they are actually
     // loaded — a collapsed, never-expanded pane stays unfetched (the same gate
-    // the SSE path respects).
-    if (terminal && handledLoadedRef.current) {
+    // the SSE path respects), and a later expand reads POST-write anyway.
+    if (handledLoadedRef.current) {
+      adoptedHandledRef.current.set(card.id, card);
       setHandled((prevHandled) =>
         [...prevHandled.filter((c) => c.id !== card.id), card].sort(
           (a, b) => handledTs(b) - handledTs(a)

@@ -77,8 +77,23 @@ export function TaskReplyCard({
     lazyTerminal ? initialStatus : null
   );
 
+  // 🔴 READ GENERATION — the same hazard as ChatReplyCard (see the long note
+  // there), found by sweeping for it rather than by a report. This card ALSO
+  // fetches on every `reply_card` delta while it is still waiting, so a read can
+  // be in flight when the owner answers; without a ticket, that pre-write card
+  // resolves last and puts the option chips back.
+  //
+  // ⚠️ The exposure here is NARROWER than ChatReplyCard's was, and the reason
+  // matters: this card's `doAnswer` DOES refetch (T-a3e4 step 8 never touched
+  // this surface), so it never depended on the stream in the first place. What it
+  // lacked was ORDERING between that post-write read and an older one — the
+  // guard supplies exactly that, and nothing else here changes.
+  const readGenRef = useRef(0);
+
   const refetch = useCallback(async () => {
+    const gen = ++readGenRef.current;
     const fresh = await api.getReplyCard(replyCardId);
+    if (gen !== readGenRef.current) return;
     statusRef.current = fresh.status;
     setCard(fresh);
     setLoadError(false);

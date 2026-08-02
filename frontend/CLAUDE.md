@@ -273,7 +273,10 @@ answer / reanswer / expire **不自己 refetch**——但**它們一定要自己
 寫入端點都回傳那張新鮮的卡,所以動作路徑**採用自己寫入的回應**
 (`adoptWrite`,**零請求**)。
 🔴 **光採用回應還不夠——in-flight 的 PRE-WRITE 快照會把卡片畫回去,所以採用之後那個
-id 要被「按住」(`adoptedTerminalRef`)直到某個 server 快照同意它不見了。** 觸發條件
+id 要被「按住」直到某個 server 快照同意。兩個 pane 各有一份保留、release 規則相反**:
+waiting(`heldFromWaitingRef`)= 快照**不再列出**該 id 才放行;handled
+(`adoptedHandledRef`)= 快照列出它**且 handled 戳記不比我們的舊**才放行(重新決定會
+重新蓋戳,所以「有出現」不等於確認)。**一條 release 規則服務不了兩個 pane。** 觸發條件
 只需要「點擊前不久有一則 delta 到過」= **串流剛剛還活著、然後掉了**(EventSource
 掉線的典型形狀:掉線前最後一則事件觸發的 refetch 卡在飛行中),後果與原 blocker
 **完全相同**(卡回到等待中、徽章跟著錯,而串流已斷 ⇒ 沒有更新的 refetch 會來救)。
@@ -313,8 +316,19 @@ generation guard **只擋 commit、不擋請求**,所以多的那一輪是「整
 把終態卡的 delta 丟掉(那正是「70+ 張歷史卡不會每張都重抓」的來源),所以 SSE 路徑
 **不會**觸發,動作路徑是那張卡唯一的更新來源。拿掉它 = `ReplyCardAnsweredBody` 在
 `onReanswer` resolve 當下就關掉編輯模式,owner 被留在**舊答案**的畫面上。
-`doAnswer` 現在**採用 `answerReplyCard` 的回應**(zero request),所以 SSE 斷線時
-那張卡照樣就地翻面——舊註解裡「斷線時不再就地翻面是接受的代價」那句**已作廢**。
+`doAnswer` 現在**採用 `answerReplyCard` 的回應**(zero request),舊註解裡「斷線時不再
+就地翻面是接受的代價」那句**已作廢**。
+🔴 **但這件事是有條件的,別再寫成無條件定論(本檔上一版寫成「所以 SSE 斷線時那張卡
+照樣就地翻面」,那句在只有採用、沒有讀取世代守衛的當下是**假的**——in-flight 的
+pre-write `getReplyCard` 落地會把選項 chips 放回去,實測構造出來過)**。它成立要
+**兩件事同時在**:(a) `doAnswer` 採用寫入回應,(b) 那次採用會讓**所有還在飛的讀取失效**
+(`readGenRef`,`commitCard` 推進世代)。缺一即假。而且這句只講**這個元件的這張卡**,
+等我回覆頁那兩個 pane 要靠自己的機制(`useReplyCards` 的按 id 保留)。
+🔴 **同一個類別在回覆卡一共五個站點,三輪才收完,順序是:**`useReplyCards.answer/
+expire`(pane+徽章)→ 採用之後的 in-flight waiting 快照 → **inline `ChatReplyCard`**、
+**`TaskReplyCard`**(兩者都是單卡 `getReplyCard` 沒有世代守衛)、**handled pane**
+(展開過一次之後每則 delta 都重抓)。**判準只有一句:某個 async 讀完之後寫回本地狀態,
+而那次寫入可能比某個本地已採用的真相舊 ⇒ 它需要世代守衛或按 id 保留。**
 `refresh()` 仍是 409 的無條件路徑(那是別人的寫入,沒有自己的 delta)。
 護欄兩層、守的不是同一件事:`components/ChatReplyCard.one-round.test.tsx`
 (**數呼叫**、不看畫面)+ `hooks/useReplyCards.sse-loss.test.tsx`(**看畫面**、把
