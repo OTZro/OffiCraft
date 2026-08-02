@@ -31,6 +31,17 @@ vi.mock("../api", () => ({
     listTasks: () => Promise.resolve([]),
     listTaskTypes: () => Promise.resolve([]),
     getServerSettings: () => Promise.resolve({ outsourceMaxParallel: 0 }),
+    getBackupHealth: () =>
+      Promise.resolve({
+        status: "healthy",
+        code: "",
+        detail: "",
+        newestBackupTs: 1785600000,
+        newestBackupAgeSecs: 3600,
+        staleAfterSecs: 43200,
+        sinceTs: null,
+        checkedTs: 1785603600,
+      }),
     subscribeEvents: () => () => {},
     uninstallMachine: (id: string) => uninstallMachine(id),
   },

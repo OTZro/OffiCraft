@@ -442,3 +442,30 @@ export function SendIcon({ size = 16, className }: IconProps) {
     </svg>
   );
 }
+
+/** Database-cylinder glyph (lucide "database") — the backup-health indicator's
+ * HEALTHY / UNKNOWN face (T-da06). The colour, not the shape, carries the
+ * verdict; the shape says "this control is about the database backup". */
+export function DatabaseIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className}>
+      <ellipse cx="12" cy="5" rx="9" ry="3" />
+      <path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5" />
+      <path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3" />
+    </svg>
+  );
+}
+
+/** Triangle-exclamation glyph (lucide "alert-triangle") — the backup-health
+ * indicator's UNHEALTHY face (T-da06). A DIFFERENT SHAPE, not merely a
+ * different colour: colour alone is not a signal a colour-blind reader can
+ * take, and this is the one indicator whose whole job is to be noticed. */
+export function AlertTriangleIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className}>
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+      <path d="M12 9v4" />
+      <path d="M12 17h.01" />
+    </svg>
+  );
+}

@@ -624,3 +624,45 @@ export interface RoleDefView {
    * this flag only drives the UI affordance). */
   isSeed: boolean;
 }
+
+/**
+ * Whether the SCHEDULED database backup is still producing retreat points
+ * (`GET /api/backup-health`, T-da06). Read by BOTH the permanently-visible
+ * topbar indicator and the monitor page's 備份健康 card, so the two surfaces
+ * can never disagree.
+ *
+ * `status` is a CLOSED three-value set and `unknown` is NOT a soft healthy:
+ * it means "the watchdog has not evaluated / its state could not be read", and
+ * the whole point of the ticket is that a missing retreat point must never
+ * look like a present one. Anything the mapper does not recognise lands on
+ * `unknown` — never on `healthy`.
+ *
+ * `code` names WHICH failure this is ("" while healthy). The USER-FACING
+ * sentence is derived from `code` via i18n; `detail` is the server's English
+ * diagnostic string and is only ever shown as SECONDARY text.
+ */
+export interface BackupHealthView {
+  status: BackupHealthStatus;
+  code: BackupHealthCode;
+  /** Server-authored English diagnostic. Secondary text only — never the
+   * primary user-facing sentence (that comes from `code` via i18n). */
+  detail: string;
+  /** Newest SCHEDULED backup (epoch seconds); null = none has ever landed. */
+  newestBackupTs: number | null;
+  /** Age of that newest scheduled backup in seconds; null when there is none. */
+  newestBackupAgeSecs: number | null;
+  /** The server's derived freshness window in seconds (never recomputed here). */
+  staleAfterSecs: number;
+  /** When the CURRENT incident started (epoch seconds); null while healthy. */
+  sinceTs: number | null;
+  /** When the watchdog last evaluated; null = never (that IS the unknown case). */
+  checkedTs: number | null;
+}
+
+/** The closed backup-health verdict. `unknown` is "we cannot tell", never a
+ * quieter `healthy`. */
+export type BackupHealthStatus = "healthy" | "unhealthy" | "unknown";
+
+/** Which backup failure this is; "" while healthy (or while unknown — an
+ * unevaluated watchdog names no failure). */
+export type BackupHealthCode = "" | "never_ran" | "stale" | "failed";

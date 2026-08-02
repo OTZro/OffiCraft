@@ -130,6 +130,10 @@ type apiServer struct {
 	// heartbeat reports to compute the machine rows' bin_status (T-5f01).
 	// Empty entries (pristine .gitkeep-only bindist in tests) read as unknown.
 	binHashes map[string]string
+	// backupHealth is the durable backup-health verdict (backup_health.go),
+	// armed by cmdServe. nil in dependency-free tables and route-shape probes —
+	// the endpoint then answers an honest `unknown`, never a green light.
+	backupHealth *backupHealthMonitor
 	// binCacheDir is where an embed-fallback ocwarden is materialized as an
 	// executable file (assets.go materializeBinary): the per-instance dir
 	// beside the SQLite data file, stamped by cmdServe. "" (tests /

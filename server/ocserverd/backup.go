@@ -438,11 +438,13 @@ func logBackupOutcome(res backupResult, err error) {
 // cadence next to it is: this engine needs the database handle and the file
 // path, and nothing at all from the server struct. Hanging it off apiServer
 // would suggest it reads server state that it does not.
-func startBackupCadence(db *sql.DB, dbPath string, tick time.Duration) {
+// health may be nil (tests, dependency-free assemblies): the cadence then
+// behaves exactly as it did before the cockpit half existed.
+func startBackupCadence(db *sql.DB, dbPath string, tick time.Duration, health *backupHealthMonitor) {
 	go func() {
 		for {
 			time.Sleep(tick)
-			backupTick(db, dbPath, time.Now())
+			backupTick(db, dbPath, time.Now(), health)
 		}
 	}()
 }
@@ -450,13 +452,19 @@ func startBackupCadence(db *sql.DB, dbPath string, tick time.Duration) {
 // backupTick is ONE evaluation, split out so the decision can be tested without
 // waiting on a clock. taken=false means a backup was not DUE — which is the
 // normal answer and is deliberately silent, unlike a failure or a skip.
-func backupTick(db *sql.DB, dbPath string, now time.Time) (taken bool) {
+func backupTick(db *sql.DB, dbPath string, now time.Time, health *backupHealthMonitor) (taken bool) {
 	dir := backupDirFor(dbPath)
 	if newest, ok := newestBackupTime(dir); ok && now.Sub(newest) < backupInterval {
 		return false
 	}
 	res, err := runDatabaseBackup(db, dbPath, backupReasonScheduled, now)
 	logBackupOutcome(res, err)
+	// T-da06: the log line above has no reader on this machine. This is the
+	// same outcome, told to something the cockpit can see. It reports the
+	// failure IMMEDIATELY — the watchdog alone would only notice one stale
+	// window (12h) later, by which time the owner has believed in a retreat
+	// point for half a day.
+	health.noteScheduledOutcome(res, err, now)
 	return err == nil && res.Skipped == ""
 }
 

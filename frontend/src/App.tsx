@@ -10,6 +10,8 @@ import {
   TasksIcon,
   MonitorIcon,
   FileTextIcon,
+  DatabaseIcon,
+  AlertTriangleIcon,
 } from "./components/icons";
 import { Avatar } from "./components/Avatar";
 import { BrandLogo } from "./components/BrandLogo";
@@ -29,6 +31,11 @@ import { useOwnerName } from "./hooks/useOwnerName";
 import { useReplyCardCount } from "./hooks/useReplyCardCount";
 import { useChatUnread } from "./hooks/useChatUnread";
 import { useTaskCount } from "./hooks/useTaskCount";
+import { useBackupHealth } from "./hooks/useBackupHealth";
+import {
+  backupIndicatorState,
+  backupStatusLabel,
+} from "./lib/backupHealth";
 import "./components/chrome.css";
 
 type Tab = "office" | "replies" | "tasks" | "monitor" | "guide";
@@ -41,6 +48,16 @@ export default function App({ onLogout }: { onLogout?: () => void } = {}) {
   // The owner nickname is server-backed too (T-0b41), so the topbar pill syncs
   // across devices; t.user is the fallback until the fetch lands / when unset.
   const { ownerName: userName, setOwnerName } = useOwnerName(t.user);
+  // 備份健康 indicator (T-da06). Mounted here — permanently, on every page —
+  // because that is the whole point: the backup engine already reported every
+  // failure, but only to a log file with no reader, so a schedule that died
+  // three days ago looked exactly like a healthy one. One mount-time fetch, no
+  // polling: a backup window is measured in hours.
+  const { health: backupHealth, error: backupError } = useBackupHealth();
+  // Still loading, failed to load, and "the watchdog cannot tell" all land on
+  // `unknown` — never on the green state.
+  const backupState = backupIndicatorState(backupHealth, backupError);
+  const backupLabel = backupStatusLabel(t.backupHealth, backupState);
   // The browser-tab title tracks the studio name so it matches the org name the
   // owner sets in the topbar (owner ask: "Can title align with our org name").
   // orgName already resolves to t.orgName when the server value is empty/unloaded
@@ -133,6 +150,29 @@ export default function App({ onLogout }: { onLogout?: () => void } = {}) {
         </div>
 
         <div className="topbar__actions">
+          {/* 備份健康 — green cylinder / red exclamation / muted cylinder.
+              Clicking it goes to the monitor page, where the 備份健康 card
+              says WHY. Both surfaces read the same endpoint, so they cannot
+              disagree. The ALARM changes shape, not merely colour (triangle
+              vs cylinder), so a red state survives a reader who cannot take
+              the colour; healthy and unknown share the cylinder and are told
+              apart by colour AND by the accessible name, which always spells
+              the verdict out. */}
+          <button
+            className={`icon-btn backup-indicator backup-indicator--${backupState}`}
+            type="button"
+            aria-label={backupLabel}
+            title={backupLabel}
+            data-testid="topbar-backup-health"
+            data-backup-state={backupState}
+            onClick={() => setRoute({ page: "monitor" })}
+          >
+            {backupState === "unhealthy" ? (
+              <AlertTriangleIcon size={16} />
+            ) : (
+              <DatabaseIcon size={16} />
+            )}
+          </button>
           <button
             className="icon-btn"
             type="button"

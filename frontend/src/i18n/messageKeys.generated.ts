@@ -7,6 +7,22 @@
  * functions are not overridable). The single source of truth for both the
  * client wording validator (lib/themeBundle.ts) and the mock API. */
 export const MESSAGE_KEYS: readonly string[] = [
+  "backupHealth.ago",
+  "backupHealth.detailLabel",
+  "backupHealth.loading",
+  "backupHealth.newestLabel",
+  "backupHealth.newestNever",
+  "backupHealth.reasonFailed",
+  "backupHealth.reasonNeverRan",
+  "backupHealth.reasonStale",
+  "backupHealth.reasonUnavailable",
+  "backupHealth.reasonUnknown",
+  "backupHealth.sinceLabel",
+  "backupHealth.staleAfterLabel",
+  "backupHealth.statusHealthy",
+  "backupHealth.statusUnhealthy",
+  "backupHealth.statusUnknown",
+  "backupHealth.title",
   "chat.attachLabel",
   "chat.composerOfflineSuffix",
   "chat.copyShareLink",

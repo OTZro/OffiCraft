@@ -17,6 +17,9 @@ import type {
   MonitoringView,
   VersionView,
   ReleaseCheckView,
+  BackupHealthView,
+  BackupHealthStatus,
+  BackupHealthCode,
   GlobalContextView,
   DocumentHistoryView,
   RoleDefView,
@@ -43,6 +46,7 @@ import type {
   WireMonitoring,
   WireVersion,
   WireReleaseCheck,
+  WireBackupHealth,
   WireGlobalContext,
   WireDocumentHistory,
   WireRoleDef,
@@ -962,6 +966,40 @@ export function toReleaseCheck(w: WireReleaseCheck): ReleaseCheckView {
     currentVersion: w.current_version,
     latestTag: w.latest_tag ?? null,
     releaseUrl: w.release_url ?? null,
+  };
+}
+
+/**
+ * WireBackupHealth → BackupHealthView (T-da06). Snake→camel passthrough EXCEPT
+ * the two closed-vocabulary strings, which are narrowed HERE — the wire types
+ * them as bare `string`, and an unrecognised value that reached the components
+ * as-is would fall out of every switch silently.
+ *
+ * 🔴 The floor for an unrecognised `status` is `unknown`, never `healthy`: this
+ * whole endpoint exists because "we cannot tell" used to look exactly like
+ * "you have a retreat point". An unrecognised `code` collapses to "" (no named
+ * failure) — the status still carries the alarm, and `detail` still carries the
+ * server's own words, so nothing is invented and nothing is hidden.
+ *
+ * The nullable numbers coalesce to null (a defaulted-away wire field arrives as
+ * `undefined`); nothing here manufactures a timestamp or an age.
+ */
+export function toBackupHealth(w: WireBackupHealth): BackupHealthView {
+  const status: BackupHealthStatus =
+    w.status === "healthy" || w.status === "unhealthy" ? w.status : "unknown";
+  const code: BackupHealthCode =
+    w.code === "never_ran" || w.code === "stale" || w.code === "failed"
+      ? w.code
+      : "";
+  return {
+    status,
+    code,
+    detail: w.detail,
+    newestBackupTs: w.newest_backup_ts ?? null,
+    newestBackupAgeSecs: w.newest_backup_age_secs ?? null,
+    staleAfterSecs: w.stale_after_secs,
+    sinceTs: w.since_ts ?? null,
+    checkedTs: w.checked_ts ?? null,
   };
 }
 

@@ -255,3 +255,10 @@ export type WireBootstrap = components["schemas"]["BootstrapDTO"];
 /** Mirrors `service/dto.py :: LessonsDTO`. The folded PER-ROLE lessons doc for
  * one `role_key` + `task_type`. `is_default` = seed vs owner-edited. */
 export type WireLessons = components["schemas"]["LessonsDTO"];
+
+/** Mirrors `BackupHealthDTO` (`GET /api/backup-health`) — whether the
+ * SCHEDULED database backup is still producing retreat points (T-da06).
+ * `status` is a three-value closed set (healthy / unhealthy / unknown) and
+ * `code` names WHICH failure ("" while healthy). Both arrive as bare wire
+ * strings; the mapper is where they are narrowed. */
+export type WireBackupHealth = components["schemas"]["BackupHealthDTO"];

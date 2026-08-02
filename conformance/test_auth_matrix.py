@@ -648,6 +648,10 @@ MATRIX: dict[str, Route] = {
         requires="machine", body={"rate_limits": {}}
     ),
     "GET /api/monitoring": Route(requires="machine"),
+    # T-da06: the cockpit's backup-health read. admin_agent floor — it is an
+    # operational verdict about the studio's own retreat points, not something
+    # an ordinary worker agent needs.
+    "GET /api/backup-health": Route(requires="admin_agent"),
     # ── display-name overlays ────────────────────────────────────────────────
     "PATCH /api/accounts/{account_id}": Route(
         requires="machine",

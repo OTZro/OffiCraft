@@ -234,6 +234,53 @@ type AuthStatusDTO struct {
 	PasswordSet bool `json:"password_set"`
 }
 
+// BackupHealthDTO Whether the SCHEDULED database backup is still producing retreat points
+// (`GET /api/backup-health`). This is the cockpit-visible half of the backup
+// engine: before it existed every failure signal was a `log.Printf` line in a
+// file with no reader, so a backup that quietly stopped looked exactly like a
+// healthy one (T-da06).
+//
+// `status` is a CLOSED vocabulary of three values and it is deliberately NARROW —
+// it says nothing about the health of anything else:
+//   - `healthy`   — a scheduled backup landed inside the freshness window.
+//   - `unhealthy` — one of the `code` conditions below holds.
+//   - `unknown`   — the watchdog has not evaluated yet, or its own durable state
+//     could not be read. NEVER reported as healthy (fail-closed:
+//     "we cannot tell" must not look like "you have a retreat").
+//
+// `code` is "" while healthy, and otherwise names WHICH failure this is:
+//   - `never_ran`  — no scheduled backup has EVER landed and the grace window
+//     since the watchdog first armed has passed. A schedule that
+//     never started and one that silently died are the same fact
+//     to the reader, so both must alarm.
+//   - `stale`      — a previous backup exists but is older than `stale_after_secs`.
+//   - `failed`     — the most recent scheduled attempt returned an error or was
+//     skipped, so no new retreat point was created.
+//
+// `newest_backup_ts` / `newest_backup_age_secs` describe the newest SCHEDULED
+// backup only. A manual or pre-migration snapshot must NEVER be able to make a
+// dead schedule look alive, so they are not counted here even though they sit in
+// the same directory.
+//
+// `stale_after_secs` is derived (`backupStaleFactor * backupInterval`), never a
+// second hand-written duration; the cockpit displays the server's number rather
+// than recomputing one.
+//
+// `since_ts` is when the CURRENT incident started (null while healthy) — it
+// outlives a server restart, so a backup that has been broken for three days
+// still reads red on day three. `checked_ts` is when the watchdog last evaluated
+// (null = never, which is exactly the `unknown` case).
+type BackupHealthDTO struct {
+	CheckedTs           *float64 `json:"checked_ts,omitempty"`
+	Code                string   `json:"code"`
+	Detail              string   `json:"detail"`
+	NewestBackupAgeSecs *float64 `json:"newest_backup_age_secs,omitempty"`
+	NewestBackupTs      *float64 `json:"newest_backup_ts,omitempty"`
+	SinceTs             *float64 `json:"since_ts,omitempty"`
+	StaleAfterSecs      float64  `json:"stale_after_secs"`
+	Status              string   `json:"status"`
+}
+
 // BootCommandResultDTO A machine's boot command, re-fetchable anytime
 // (“GET /api/machines/{machine_id}/boot-command“).
 //
@@ -2416,6 +2463,9 @@ type ServerInterface interface {
 	// First-run probe: has the owner password been set?
 	// (GET /api/auth/status)
 	HandleAuthStatusApiAuthStatusGet(w http.ResponseWriter, r *http.Request)
+	// Backup health: is the scheduled backup still producing retreat points?
+	// (GET /api/backup-health)
+	HandleGetBackupHealthApiBackupHealthGet(w http.ResponseWriter, r *http.Request)
 	// Assemble an agent boot context + mint the member JWT (spawn seam).
 	// (POST /api/bootstrap)
 	HandleBootstrapApiBootstrapPost(w http.ResponseWriter, r *http.Request)
@@ -2874,6 +2924,20 @@ func (siw *ServerInterfaceWrapper) HandleAuthStatusApiAuthStatusGet(w http.Respo
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.HandleAuthStatusApiAuthStatusGet(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleGetBackupHealthApiBackupHealthGet operation middleware
+func (siw *ServerInterfaceWrapper) HandleGetBackupHealthApiBackupHealthGet(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleGetBackupHealthApiBackupHealthGet(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -5965,6 +6029,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/auth/change-password", wrapper.HandleChangePasswordApiAuthChangePasswordPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/auth/set-password", wrapper.HandleSetPasswordApiAuthSetPasswordPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/auth/status", wrapper.HandleAuthStatusApiAuthStatusGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/backup-health", wrapper.HandleGetBackupHealthApiBackupHealthGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/bootstrap", wrapper.HandleBootstrapApiBootstrapPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/chat", wrapper.HandleListChatApiChatGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/chat", wrapper.HandlePostChatApiChatPost)

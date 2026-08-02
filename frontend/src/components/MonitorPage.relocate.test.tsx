@@ -108,6 +108,17 @@ vi.mock("../api", () => ({
     forceStopMember: vi.fn(),
     refocusMember: vi.fn(),
     patchMember: vi.fn(),
+    getBackupHealth: () =>
+      Promise.resolve({
+        status: "healthy",
+        code: "",
+        detail: "",
+        newestBackupTs: 1785600000,
+        newestBackupAgeSecs: 3600,
+        staleAfterSecs: 43200,
+        sinceTs: null,
+        checkedTs: 1785603600,
+      }),
     subscribeEvents: () => () => {},
   },
 }));

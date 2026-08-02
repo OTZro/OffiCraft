@@ -414,6 +414,13 @@
   },
   {
     "auth": "gated",
+    "mcp_tool": null,
+    "method": "GET",
+    "path": "/api/backup-health",
+    "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
     "mcp_tool": "update_account",
     "method": "PATCH",
     "path": "/api/accounts/{account_id}",

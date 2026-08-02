@@ -120,6 +120,38 @@
   border-color: color-mix(in srgb, var(--color-overlay) 8%, transparent);
 }
 
+/* 備份健康 indicator (T-da06) — the permanently-mounted topbar control that
+ * says whether the scheduled backup is still producing retreat points.
+ *
+ * Colour comes ONLY from the semantic tokens, so a custom theme re-values it
+ * along with everything else; the icon SHAPE changes with the verdict too
+ * (cylinder vs exclamation triangle) for the ALARM, so a red verdict survives a reader who
+ * cannot take the colour.
+ *
+ * The hover rules are not decoration: the shared `.icon-btn:hover` sets
+ * `color`, and it out-specifies a single modifier class — without these the
+ * red would turn plain grey the moment the pointer touched it, which is
+ * exactly the state that must never be quiet. */
+.backup-indicator--healthy,
+.backup-indicator--healthy:hover {
+  color: var(--color-accent);
+}
+
+.backup-indicator--unhealthy,
+.backup-indicator--unhealthy:hover {
+  color: var(--color-danger);
+}
+
+/* "We cannot tell" is deliberately the muted/neutral look — never the green
+ * one. A missing retreat point must not look like a present one. */
+.backup-indicator--unknown {
+  color: var(--color-text-muted);
+}
+
+.backup-indicator--unknown:hover {
+  color: var(--color-text);
+}
+
 /* Compact inline warning for the notification bell.  It stays anchored to the
  * control, but uses the shared semantic tokens so built-in and custom themes
  * keep their own colours, shadow and typeface. */
