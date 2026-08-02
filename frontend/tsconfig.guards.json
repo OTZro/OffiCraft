@@ -1,0 +1,11 @@
+// [T-1500] The paint guards live OUTSIDE src, so tsconfig.json's
+// `include: ["src"]` never saw them: a type error in the three files that hold
+// the zero-flash / injection guards could only ever surface as a runtime red,
+// and only if the guard happened to run. This config puts them under tsc so a
+// broken guard fails the typecheck like any other code.
+{
+  "extends": "./tsconfig.json",
+  // src/vite-env.d.ts comes along because the guards reach into src (auth.ts
+  // uses import.meta.env); without it tsc has no vite/client types.
+  "include": ["paint-guards", "src/vite-env.d.ts"]
+}

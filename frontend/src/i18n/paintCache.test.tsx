@@ -171,6 +171,37 @@ describe("D2 paint cache", () => {
     expect(rec?.bundle?.colors?.["--color-bg"]).toBe("#aabbcc");
   });
 
+  // [T-1500] step-5 ③ CROSS-DEVICE: device A edited this theme's COLOURS — the
+  // id did not change, so B's cached record still resolves and still paints. B
+  // is allowed to show the old colours for a moment (that is the whole point of
+  // painting from cache), but it must not STOP there: reconcile has to land the
+  // new colours on the DOM *and* rewrite the record, or B stays wrong until the
+  // next edit. The deleted-theme guard (iv) does not cover this — there the id
+  // stops resolving; here it keeps resolving with different content.
+  it("(v-b) cross-device: colours edited elsewhere must not stay stale after reconcile", async () => {
+    localStorage.setItem("oc.theme", "midnight");
+    localStorage.setItem(TOKEN_KEY, "live-owner-token");
+    seedPaint(MIDNIGHT); // B's cache: the colours as of B's last visit
+    // A's edit already landed on the server: same id, new colours.
+    await mockApi.patchServerSettings({
+      customThemes: [{ ...MIDNIGHT, colors: { "--color-bg": "#ff0000" } }],
+      displayTheme: "midnight",
+    });
+    render(
+      <I18nProvider>
+        <Probe />
+      </I18nProvider>
+    );
+    // the cached picture is up first — allowed, and asserted so a regression
+    // that simply stops painting cannot pass this test by accident.
+    expect(bg()).toBe("#010203");
+    // and it must converge on the server's truth, not sit on the stale one.
+    await waitFor(() => expect(bg()).toBe("#ff0000"));
+    // the record is rewritten too, or the NEXT reload repaints the stale colours.
+    const rec = JSON.parse(localStorage.getItem("oc.themePaint") ?? "null");
+    expect(rec?.bundle?.colors?.["--color-bg"]).toBe("#ff0000");
+  });
+
   it("(vi) logout clears the picture", async () => {
     localStorage.setItem("oc.theme", "midnight");
     seedPaint(MIDNIGHT);
