@@ -21,6 +21,37 @@ import { setToken, clearToken } from "../api/auth";
 
 const SENTINEL = "偽造";
 
+// Every test that opens the theme EDIT view mounts the whole 用詞 list — all 866
+// controlled inputs, because the wording list shares one form with the colour and
+// font fields (see ThemeSettings.tsx: the list is deliberately NOT virtualised,
+// owner ruling 2026-08-02). In jsdom that is expensive enough to sit uncomfortably
+// close to vitest's 5000ms DEFAULT, so those tests state a threshold instead of
+// inheriting one that was never chosen for them.
+//
+// 🔴 THIS IS A TEST-ENVIRONMENT COST, NOT A USER COST. Do not quote these numbers
+// as evidence that dropping virtualisation made the product slow. The blow-up is
+// O(N²) and specific to jsdom: dom-testing-library's queries read `input.labels`
+// per labelable element, and jsdom answers each by re-walking the entire document,
+// so N inputs cost N document walks PER QUERY. A real browser has no such step —
+// the CT guards render the same 866 rows and open the panel in tens of ms.
+// (Root-cause work on that amplification is T-e2e9, not this file's business.)
+//
+// WHY 20s, measured rather than guessed:
+//   * worst REPORTED duration for one of these tests in a full parallel CI run:
+//     6,334ms ("stores a non-default lay-down mode…"), in a run that PASSED.
+//   * that number is an UPPER BOUND on what the timeout actually bounds. Verified
+//     with a throwaway probe, not assumed: a test reported at 6,005ms (3,000ms
+//     beforeEach + 3,000ms body) PASSES under the 5,000ms default, while a bare
+//     5,500ms body fails with "Test timed out in 5000ms" — i.e. the reported figure
+//     includes hooks (React Testing Library's auto-cleanup unmounts 866 rows in
+//     one), and `testTimeout` bounds the body alone.
+//   * so the true body time is somewhere under ~6.3s and the real margin against
+//     5,000ms is unknown but thin. 20s is ~3x the worst reported figure, which
+//     leaves room for a busier machine (parallel CI is getting MORE parallel).
+// A generous ceiling costs nothing here: it does not slow a passing run, it only
+// changes how long a genuinely hung test takes to report.
+const EDIT_VIEW_TIMEOUT_MS = 20_000;
+
 const p = zh.profile;
 const s = zh.settings;
 
@@ -281,7 +312,7 @@ describe("ThemeSettings · colour editing", () => {
     expect(colorSection?.textContent).toBe("主色"); // brand group heading
     expect(utils.getAllByText("主色").length).toBeGreaterThan(0); // group + accent label
     expect(utils.queryByText("--color-accent")).toBeNull();
-  });
+  }, EDIT_VIEW_TIMEOUT_MS);
 
   it("round-trips an edited colour value through save", async () => {
     setToken("owner-token");
@@ -301,7 +332,7 @@ describe("ThemeSettings · colour editing", () => {
     const srv = await api.getServerSettings();
     const b = srv.customThemes.find((x) => x.id === "midnight");
     expect(b?.colors["--color-accent"]).toBe("#ffffff");
-  });
+  }, EDIT_VIEW_TIMEOUT_MS);
 });
 
 describe("ThemeSettings · wording overlay", () => {
@@ -329,7 +360,7 @@ describe("ThemeSettings · wording overlay", () => {
     const srv = await api.getServerSettings();
     const b = srv.customThemes.find((x) => x.id === "midnight");
     expect(b?.wording?.zh?.["common.apply"]).toBe("套用替代");
-  });
+  }, EDIT_VIEW_TIMEOUT_MS);
 
   it("keeps the boundary spaces of a sentence-fragment override", async () => {
     // Several codes T-081b made overridable are sentence FRAGMENTS whose
@@ -368,7 +399,7 @@ describe("ThemeSettings · wording overlay", () => {
     expect(makeMessages(themed, "zh").machineUninstallWarnBody("Alpha", 3)).toBe(
       "「Alpha」上頭還有 3 位成員在線上。現在解除安裝會在成員仍在這台機器上時把 warden 拆除 —— 建議先將相關成員下線。仍要繼續嗎?"
     );
-  });
+  }, EDIT_VIEW_TIMEOUT_MS);
 });
 
 // The 用詞 list renders EVERY overridable code — all 866 of them, all in the
@@ -451,7 +482,7 @@ describe("ThemeSettings · wording list is browsable in full", () => {
     const srv = await api.getServerSettings();
     const b = srv.customThemes.find((x) => x.id === "midnight");
     expect(b?.wording?.zh?.[last]).toBe("末列也能改");
-  });
+  }, EDIT_VIEW_TIMEOUT_MS);
 
   it("shows ALL of a search's matches, not a first-N slice of them", async () => {
     const { list } = await openWordingEditor();
@@ -480,7 +511,7 @@ describe("ThemeSettings · wording list is browsable in full", () => {
     const seen = new Set(codesIn(list));
     expect(matchedByCode.filter((c) => !seen.has(c))).toEqual([]);
     expect(seen.size).toBe(total);
-  });
+  }, EDIT_VIEW_TIMEOUT_MS);
 
   it("does not move a row out from under the cursor when you start typing in it", async () => {
     // Regression guard: an earlier attempt at this panel ordered overridden
@@ -518,7 +549,7 @@ describe("ThemeSettings · wording list is browsable in full", () => {
     expect(codesIn(list)).toEqual(before);
     expect(list.scrollTop).toBe(1200);
     expect(inputOf(target).value).toBe("甲乙");
-  });
+  }, EDIT_VIEW_TIMEOUT_MS);
 
   it("keeps the whole set — and its reading order — after the list scrolls away", async () => {
     // The regression this replaces a test for: while the list was virtualised it
@@ -571,7 +602,7 @@ describe("ThemeSettings · wording list is browsable in full", () => {
     // …and no row is taken out of flow to achieve any of it.
     expect(list.querySelectorAll(".ts-wording-row--pinned").length).toBe(0);
     expect(list.querySelectorAll(".ts-wording-pad").length).toBe(0);
-  });
+  }, EDIT_VIEW_TIMEOUT_MS);
 });
 
 describe("ThemeSettings · alias-default colours", () => {
@@ -600,7 +631,7 @@ describe("ThemeSettings · alias-default colours", () => {
     // that is what keeps them following their parent.
     expect("--color-nav-bg" in (b?.colors ?? {})).toBe(false);
     expect("--color-knob" in (b?.colors ?? {})).toBe(false);
-  });
+  }, EDIT_VIEW_TIMEOUT_MS);
 
   it("edits opacity through a slider, not only through hand-typed #RRGGBBAA", async () => {
     setToken("owner-token");
@@ -622,7 +653,7 @@ describe("ThemeSettings · alias-default colours", () => {
       (x) => x.id === "midnight"
     );
     expect(b?.colors["--color-card"]).toBe("#24283266");
-  });
+  }, EDIT_VIEW_TIMEOUT_MS);
 });
 
 describe("ThemeSettings · outer-canvas background", () => {
@@ -665,7 +696,7 @@ describe("ThemeSettings · outer-canvas background", () => {
     );
     expect(b?.backgroundModes).toBeUndefined();
     expect(b?.backgrounds).toEqual({ canvas: png });
-  });
+  }, EDIT_VIEW_TIMEOUT_MS);
 
   it("offers no lay-down mode until there is an image to lay down", async () => {
     setToken("owner-token");
@@ -678,7 +709,7 @@ describe("ThemeSettings · outer-canvas background", () => {
     fireEvent.click(await utils.findByLabelText(`${p.themeEdit} 純色`));
 
     expect(utils.queryByLabelText(s.themeCanvasBgMode)).toBeNull();
-  });
+  }, EDIT_VIEW_TIMEOUT_MS);
 });
 
 describe("ThemeSettings · delete", () => {
