@@ -8,7 +8,7 @@ function batch(deltas: SseDelta[], unnamed = false) {
 
 describe("burstMovesNoOwnerUnread fail-open boundary", () => {
   it.each(["member", "outsource_worker"])(
-    "a named %s lifecycle delta still requires a refetch",
+    "a %s in the relevant topics is not unread-only, so a refetch is required",
     (topic) => {
       expect(
         burstMovesNoOwnerUnread(
@@ -33,6 +33,22 @@ describe("burstMovesNoOwnerUnread fail-open boundary", () => {
         ["chat"]
       )
     ).toBe(true);
+  });
+
+  it("one non-unread-only relevant topic defeats a proven unread no-op", () => {
+    expect(
+      burstMovesNoOwnerUnread(
+        batch([
+          {
+            topic: "chat",
+            names: { from: "m-1", to: "m-2" },
+            ids: ["m-1", "m-2"],
+          },
+          { topic: "member", names: { id: "m-1" }, ids: ["m-1"] },
+        ]),
+        ["chat", "member"]
+      )
+    ).toBe(false);
   });
 
   it.each(["chat", "chat_read"])(
