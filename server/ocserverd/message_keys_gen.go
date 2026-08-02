@@ -838,6 +838,7 @@ var messageKeys = map[string]bool{
 	"tasks.statusMenuLabel":                    true,
 	"tasks.stepCardAnswered":                   true,
 	"tasks.stepCardExpired":                    true,
+	"tasks.stepNoteLabel":                      true,
 	"tasks.stepStatus.done":                    true,
 	"tasks.stepStatus.in_progress":             true,
 	"tasks.stepStatus.pending":                 true,

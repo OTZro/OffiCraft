@@ -701,6 +701,13 @@
   },
   {
     "auth": "gated",
+    "mcp_tool": "update_step_note",
+    "method": "POST",
+    "path": "/api/tasks/{task_id}/steps/{step_id}/note",
+    "requires": "agent"
+  },
+  {
+    "auth": "gated",
     "mcp_tool": "open_gate",
     "method": "POST",
     "path": "/api/tasks/{task_id}/steps/{step_id}/gate",

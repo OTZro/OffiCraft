@@ -1,0 +1,36 @@
+-- +goose Up
+-- T-cc3e 步驟備註欄. One additive column, no data move.
+--
+-- task_step.note — the step's free-text working note: what this step got to and
+-- what comes next. Every agent's handover SOP has told them, verbatim, to "把還
+-- 在進行中的工作寫回 task step note" — and until now that sentence pointed at a
+-- field that did not exist. An outsource worker running out of context said so
+-- honestly rather than pretending it had written somewhere; the owner then ruled
+-- (rc-15cf8df7cb7f, option 2) that the step layer gets its own note field rather
+-- than folding this into the editable task description.
+--
+-- Why it can't be either of the two note-shaped columns already here:
+--   * waiting_reason (00028) is bound to ONE status — it may only be set when a
+--     step enters waiting_external, and the handler clears it on the way out.
+--   * the handoff_* fields (00031) live on the TASK and are read only on the
+--     report that closes it.
+-- Both are moment-locked; a handover happens at an arbitrary moment, so the
+-- note has to be writable in ANY step status. That generality is the field's
+-- whole reason to exist, and the guard test in api_tasks_note_test.go pins it.
+--
+-- Division of labour with task.description (editable under T-e271): the
+-- DESCRIPTION says what the task IS (scope, origin, acceptance — stable); the
+-- NOTE says where this step is RIGHT NOW (volatile, handover-facing). That split
+-- is documented in seeds/ where agents actually read it, because the owner chose
+-- this option knowing the cost he named: two similar-looking places to write.
+--
+-- Constant DEFAULT '' — a cheap metadata op, not a table rebuild; existing rows
+-- read '' (no note), which is exactly right: they never had one.
+ALTER TABLE task_step ADD COLUMN note TEXT NOT NULL DEFAULT '';
+
+-- +goose Down
+-- Drop the column. Nothing to restore: Up moved no data and touched no other
+-- column, so an older binary sees precisely the world it left behind. Notes
+-- written while the column existed are lost with it — they are current-state
+-- working notes, not a durable record, and there is nowhere older to put them.
+ALTER TABLE task_step DROP COLUMN note;

@@ -50,7 +50,7 @@
 上面 §8b 的換手機制**對你適用**（同一組門檻、同樣的四步 SOP、同樣約 120 秒寬限），差別只有：
 
 - 第 3 步的交接 baton 用 `post_chat` 發給**你自己的 worker id**——新的你讀得回。
-- 換手後是**同一個 worker 身分原地重生**，接續同一張任務；新的你重新 `get_my_task` 領回，照 task plan／step note ＋ baton 續做。
+- 換手後是**同一個 worker 身分原地重生**，接續同一張任務；新的你重新 `get_my_task` 領回，照 task plan／步驟備註（`update_step_note` 寫的那個）＋ baton 續做。
 - ✅ **你確實有 `restart_self`**（server 對外包有專屬分支，工具目錄裡也看得到它）。主動要求換手的判準照上面 §8b。
 - 你的上下線／存活狀態**由 server 管理**（與正職共用同一套 reconcile FSM）；`report_stopping` / `report_stopped` **只在收到換手 SOP 通知時用**，平時別呼叫。
 

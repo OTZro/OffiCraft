@@ -370,6 +370,9 @@ export function toTaskStep(w: WireTaskStep): TaskStepView {
     // One-line reason while the step sits in waiting_external; "" otherwise
     // (T-9ca5). Honest passthrough.
     waitingReason: w.waiting_reason ?? "",
+    // The step's working note (T-cc3e) — bound to no status, unlike
+    // waitingReason above. Honest passthrough.
+    note: w.note ?? "",
     // Read-time join the server computes (`reply_card_status`): the bound card's
     // live status for the card-bearing step, "" otherwise. Closed set only, else
     // honest null.

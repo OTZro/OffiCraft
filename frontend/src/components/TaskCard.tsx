@@ -855,6 +855,21 @@ export function TaskCard({
             <Markdown source={step.dod} className="doc-md" />
           </div>
         )}
+        {/* 步驟備註 (T-cc3e): where THIS step got to and what comes next —
+            the field every agent's handover SOP has always told them to write
+            and which, until this ticket, did not exist. Rendered right below
+            the DoD so the pair reads as "what counts as done" → "where it
+            actually is": that granularity ("第 4 步做到哪") is exactly why the
+            owner chose a step-level note over folding it into the task
+            description. Absent note ⇒ nothing rendered, no empty shell. Agent
+            free text → <Markdown>, same treatment as the DoD and the waiting
+            reason. */}
+        {step.note && (
+          <div className="task-step__note" data-testid="step-note">
+            <span className="task-step__note-label">{t.tasks.stepNoteLabel}</span>
+            <Markdown source={step.note} className="task-step__note-md doc-md" />
+          </div>
+        )}
         {/* 等待外部 reason (T-9ca5): the step's own one-line reason. Since
             T-c514 this is the ONLY place the reason is rendered — the task-card
             copy it used to mirror up to was removed as duplicate. Agent free

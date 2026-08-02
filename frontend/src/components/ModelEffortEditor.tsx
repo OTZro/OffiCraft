@@ -24,7 +24,11 @@ import "./model-effort-editor.css";
 /** Quick-pick model chips (safe defaults — the input stays free-form). */
 export const MODEL_QUICK_PICKS = ["fable", "opus", "sonnet", "haiku"] as const;
 /** Suggested Codex App Server model identifiers (the input remains free-form). */
-export const CODEX_MODEL_OPTIONS = ["gpt-5.6-terra", "gpt-5.6-sol"] as const;
+export const CODEX_MODEL_OPTIONS = [
+  "gpt-5.6-terra",
+  "gpt-5.6-sol",
+  "gpt-5.6-luna",
+] as const;
 /** The closed effort vocabulary (server 422s anything else). */
 export const EFFORTS: readonly Effort[] = ["low", "medium", "high"] as const;
 

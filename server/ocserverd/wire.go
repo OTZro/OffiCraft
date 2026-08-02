@@ -740,6 +740,17 @@ type taskStepStatusReceiptDTO struct {
 	ProgressTotal int      `json:"progress_total"`
 }
 
+// taskStepNoteReceiptDTO is the bounded receipt for a step-note write (T-cc3e).
+// It echoes the note as STORED rather than as sent: the whole point of the
+// field is that a later session reads it back, so the write is verifiable at
+// the write instead of needing a follow-up GET.
+type taskStepNoteReceiptDTO struct {
+	TaskID     string `json:"task_id"`
+	StepID     string `json:"step_id"`
+	StepStatus string `json:"step_status"`
+	Note       string `json:"note"`
+}
+
 type bootstrapDTO struct {
 	Role     string  `json:"role"`
 	Name     string  `json:"name"`
@@ -776,9 +787,15 @@ type taskStepDTO struct {
 	ReplyCardStatus string `json:"reply_card_status"`
 	// WaitingReason: non-empty only while the step is waiting_external (T-9ca5 —
 	// the task-level waiting_reason moved down to the step here).
-	WaitingReason string  `json:"waiting_reason"`
-	StartedTS     float64 `json:"started_ts"`
-	FinishedTS    float64 `json:"finished_ts"`
+	WaitingReason string `json:"waiting_reason"`
+	// Note: the step's free-text working note — what this step got to and what
+	// comes next (T-cc3e). Bound to no status: writable in every one of them,
+	// unlike WaitingReason. This is the field the handover SOP has always meant
+	// by "把還在進行中的工作寫回 task step note"; before T-cc3e that instruction
+	// named nothing that existed. See TaskStepDTO in the spec.
+	Note       string  `json:"note"`
+	StartedTS  float64 `json:"started_ts"`
+	FinishedTS float64 `json:"finished_ts"`
 }
 
 // taskArtifactDTO is one pinned deliverable on a task's artifact set (T-3dc5).
@@ -1141,6 +1158,7 @@ func newTaskStepDTO(st TaskStep, cardStatus map[string]string) taskStepDTO {
 		ReplyCardID:     st.ReplyCardID,
 		ReplyCardStatus: cardStatus[st.ReplyCardID],
 		WaitingReason:   st.WaitingReason,
+		Note:            st.Note,
 		StartedTS:       st.StartedTS,
 		FinishedTS:      st.FinishedTS,
 	}

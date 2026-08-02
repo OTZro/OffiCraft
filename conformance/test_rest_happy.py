@@ -1119,6 +1119,24 @@ HAPPY: dict[str, Happy] = {
             and d["progress_done"] == 0 and d["progress_total"] == 1
         ),
     ),
+    "POST /api/tasks/{task_id}/steps/{step_id}/note": Happy(
+        # T-cc3e. Written against a PENDING step on purpose: _happy_task_step
+        # leaves the step pending unless gate=True, and the note being writable
+        # with no status report first is the ticket's whole claim (waiting_reason
+        # is the one bound to a status; this one is not). The check reads the
+        # receipt's echoed note, so a handler that 200s without storing anything
+        # cannot pass.
+        identity="agent",
+        path=lambda ctx: "/api/tasks/{}/steps/{}/note".format(
+            *_happy_task_step(ctx)),
+        body={"note": "conf happy note — 做到哪、下一步接什麼"},
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: d["note"] == "conf happy note — 做到哪、下一步接什麼"
+            and d["step_status"] == "pending"
+            and bool(d["task_id"]) and bool(d["step_id"]),
+        ),
+    ),
     "POST /api/tasks/{task_id}/steps/{step_id}/gate": Happy(
         identity="agent",
         path=lambda ctx: "/api/tasks/{}/steps/{}/gate".format(
