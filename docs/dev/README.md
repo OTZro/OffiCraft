@@ -52,6 +52,53 @@ cd e2e_test && bash run_all.sh
 bin/ci.sh          # 綠的判準是「rc == 0 且整份輸出的最後一行精確為 [ci] all green」，兩個條件都要
 ```
 
+### 一份副本只准跑一輪 — 多輪＝多份副本（T-70c9）
+
+`bin/ci.sh` 對**它自己那份工作副本**上鎖。同一份 clone 裡起第二輪，會拿到一則明確的
+拒絕訊息並以**非零 rc** 結束：
+
+```
+[ci] REFUSED — this working copy is already running CI.
+[ci]   working copy : /path/to/this/clone
+[ci]   held by pid  : 12345  (started 2026-08-02T12:00:00Z UTC)
+```
+
+**為什麼不是「小心一點就好」**：ci.sh 全程在**原地**寫這份副本——`npm ci` 會把
+`frontend/node_modules` 整個刪掉重建、三個 `build-*dist` staging 到固定路徑、而 4b1/4b2/4b3
+這三道會把**五個 committed 生成檔就地重生、再跟自己幾秒前拷的備份逐位元組比對**。兩輪交錯，
+那幾道比的就是 A 的備份對上 B 的重生。**失效方向不固定**：可能紅（假紅），也可能**綠**——
+綠在一棵這一輪根本沒驗過的樹上。`[ci] all green` 是這個 repo 的 land 權威，所以要殺的是後者。
+
+**要同時多跑幾輪，就多開幾份副本**：
+
+```bash
+git clone <repo> /path/to/another-copy
+cd /path/to/another-copy && bash bin/ci.sh   # 與別份副本並跑是支援的做法
+```
+
+鎖是**綁副本、不綁機器**（鎖檔就在 clone 內：`<clone>/.ci-lock`，已 gitignore），所以跨 clone
+並跑照樣可行——那是唯一支援的並行方式。**沒有略過開關**：沒有環境變數、沒有旗標，也不要加。
+
+**明確不做**：讓同一份 clone 真的能並跑（worktree-safe）。owner 明確排除。這個鎖只讓碰撞
+**變大聲**，不讓碰撞**變得可以活下來**。
+
+**當掉之後怎麼救**：ctrl-C / `kill -9` / 當機留下的鎖**會自動接管**——鎖裡記了持有者的
+`(pid, 行程起始時間)`，pid 不見了、或那個 pid 已經被回收給別的行程（起始時間對不上），
+下一輪就直接接手。真的要人工介入時，救援方式是刪掉那個目錄：`rm -rf <clone>/.ci-lock`。
+（這句刻意只寫在這裡、**不寫進拒絕訊息**——一則附上自家解法的拒絕訊息就變成建議，不是守衛。）
+
+⚠️ **殘留**：起始時間只有秒級解析度，所以「pid 被回收、而且新行程剛好在同一個時鐘秒啟動」
+會被判成仍持有。那是**卡住一份副本**（安全方向），不是放第二輪進來；上面那行 `rm -rf` 就是解。
+
+**同時能跑幾輪、受什麼限制**（含實測數字、跨副本天花板、git worktree 那一格的期望行為，
+以及一條把「conformance 同副本 4 輪並行全綠」推翻掉的實測）：見
+[`docs/dev/ci-parallelism.md`](ci-parallelism.md)。
+
+可執行形式是 `bin/lib/ci-lock.sh`，守衛是 `bin/tests/ci-lock-guard.sh`（CI step 0b 派出）。
+守衛**不會**真的並跑兩輪完整 CI：驗一個 mutant 必然要讓鎖失效，那時真並跑會把開發者的樹弄爛——
+一條「在它正在測的守衛失效時會造成真實破壞」的測試是定時炸彈。它改用拋棄式目錄 + 輕量替身
+行程去驅動 ci.sh 用的**同一份 lib**。
+
 判準為什麼是 **AND**（T-d3e3）：兩半各自都不夠。
 
 - **寬鬆 grep 完全無效**：step 0 的 `e2e_test/tests_guard` 第一步就印自己的 `all green`，所以**任何**中途爆掉的 log 裡都已經含有那個子字串。

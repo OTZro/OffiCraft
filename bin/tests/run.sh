@@ -227,6 +227,28 @@ else
   bad "bin/tests/proc-hygiene-guard.sh is missing"
 fi
 
+# ── per-working-copy CI mutex (T-70c9) ──────────────────────────────────────
+# Owner ruling (card rc-bbf6a418fc23): one CI run per working copy; a second run
+# in the SAME copy is refused loudly with a non-zero exit; more rounds means more
+# copies. Two runs in one clone interleave over node_modules, the staged dist
+# assets and the five regenerate-and-byte-compare gates, and the verdict is not
+# reliably red — it can come out GREEN on a tree that was never validated, which
+# is a forged `[ci] all green`. The guard drives bin/lib/ci-lock.sh directly
+# against throwaway directories: it never races two real CI runs, because
+# verifying a mutant means disabling the lock and a test that then corrupts the
+# developer's tree is a bomb, not a test.
+echo
+CILOCK="$HERE/ci-lock-guard.sh"
+if [[ -f "$CILOCK" ]]; then
+  if run_guard "$CILOCK"; then
+    ok "per-working-copy CI lock suite passed"
+  else
+    bad "per-working-copy CI lock suite FAILED (see output above)"
+  fi
+else
+  bad "bin/tests/ci-lock-guard.sh is missing"
+fi
+
 # ── go test cache-defeat (T-bedc) ───────────────────────────────────────────
 # bin/ci.sh's step 1e used to run a bare `go test ./...`, so go served green from
 # its TEST RESULT CACHE — a real CI log contained `ok  ocwarden  (cached)`, i.e. a

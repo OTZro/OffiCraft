@@ -18,7 +18,16 @@
 # reason), the content-level gitleaks scan, and real-fleet e2e.
 # The path denylist plus e2e_test's hermetic isolation-guard suite run in cloud.
 # The cloud check is a cross-check on a clean Linux box, NOT land
-# authority. Runs, in order, failing
+# authority.
+#
+# ONE RUN PER WORKING COPY (T-70c9). This script LOCKS the clone it lives in; a
+# second run in the SAME clone is refused with a non-zero exit. MORE ROUNDS AT
+# ONCE MEANS MORE COPIES — clone again and run there. The lock is per copy, not
+# per machine, so concurrent runs in SEPARATE clones stay supported. Full
+# rationale, crash recovery and the deliberate absence of a bypass switch:
+# bin/lib/ci-lock.sh and docs/dev/README.md.
+#
+# Runs, in order, failing
 # fast on the first non-zero step:
 #   1. golang            — gofmt + go vet + go build + go test -count=1
 #                          (cache-defeat: a
@@ -57,6 +66,30 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 source "$ROOT/bin/lib/tracked-path-denylist.sh"
+
+# ---------------------------------------------------------------------------
+# ONE RUN PER WORKING COPY (T-70c9). Everything below writes IN PLACE inside this
+# clone — npm ci rebuilds frontend/node_modules, the build-*dist steps stage into
+# fixed paths, and steps 4b1/4b2/4b3 regenerate five COMMITTED files and then
+# byte-compare them against a backup they took moments earlier. A second run in
+# the SAME clone interleaves with all of that, and the resulting verdict is not
+# reliably red: it can just as easily come out GREEN on a tree this run never
+# actually validated. `[ci] all green` is the land authority, so that false green
+# is the outcome worth refusing outright.
+#
+# The lock is bound to THIS WORKING COPY ($ROOT/.ci-lock), not to the machine, so
+# concurrent runs in SEPARATE clones stay possible — that is the supported way to
+# get more rounds at once, and the only one. Rationale, stale-lock recovery and
+# the deliberate absence of a bypass switch all live in bin/lib/ci-lock.sh.
+#
+# Traps are armed BEFORE acquiring: ci_lock_release is ownership-guarded (it only
+# removes a lock this shell's own mkdir won), so arming early costs nothing and
+# closes the window where a signal between acquire and trap would leak the lock.
+source "$ROOT/bin/lib/ci-lock.sh"
+trap 'ci_lock_release' EXIT
+trap 'ci_lock_release; exit 130' INT
+trap 'ci_lock_release; exit 143' TERM
+ci_lock_acquire "$ROOT"
 
 # ---------------------------------------------------------------------------
 # Provenance stamp (T-da4b). "[ci] all green" is the land authority, but a green
