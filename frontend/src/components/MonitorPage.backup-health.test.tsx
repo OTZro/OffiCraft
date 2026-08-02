@@ -26,6 +26,22 @@ vi.mock("../api", () => ({
     listTasks: () => Promise.resolve([]),
     listTaskTypes: () => Promise.resolve([]),
     getServerSettings: () => Promise.resolve({ outsourceMaxParallel: 0 }),
+    // Deliberately still stubbed even though the page no longer calls it: the
+    // mutation that matters here is "someone put the card back", and if the
+    // mock omitted this the restored card would blow up on an undefined
+    // function — the test would go red by CRASH instead of by assertion, which
+    // proves nothing about position or wording.
+    getBackupHealth: () =>
+      Promise.resolve({
+        status: "healthy",
+        code: "",
+        detail: "",
+        newestBackupTs: 1785600000,
+        newestBackupAgeSecs: 3600,
+        staleAfterSecs: 43200,
+        sinceTs: null,
+        checkedTs: 1785603600,
+      }),
     subscribeEvents: () => () => {},
   },
 }));

@@ -644,9 +644,8 @@ export interface RoleDefView {
 
 /**
  * Whether the SCHEDULED database backup is still producing retreat points
- * (`GET /api/backup-health`, T-da06). Read by BOTH the permanently-visible
- * topbar indicator and the monitor page's 備份健康 card, so the two surfaces
- * can never disagree.
+ * (`GET /api/backup-health`, T-da06). Read by the 備份健康 block under
+ * 設定 › 系統更新與備份 (T-5e71 moved it off the topbar and the monitor page).
  *
  * `status` is a CLOSED three-value set and `unknown` is NOT a soft healthy:
  * it means "the watchdog has not evaluated / its state could not be read", and

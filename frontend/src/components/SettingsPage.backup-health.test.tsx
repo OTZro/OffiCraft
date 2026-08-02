@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent, screen, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
+import { en } from "../i18n/locales/en";
 import type { BackupHealthView } from "../types";
 import { __resetMock } from "../api/mock";
 
@@ -80,6 +81,20 @@ describe("設定 landing · 區塊名稱", () => {
     expect(utils.getByText("系統更新與備份")).toBeTruthy();
     // And the old name is gone from the landing list entirely.
     expect(utils.container.textContent).not.toContain("軟體更新");
+  });
+
+  it("renames the English copy too — a half-renamed section is a wrong string with legs", () => {
+    // The language toggle persists to localStorage and the provider reads it on
+    // mount, so this renders the REAL English dict rather than asserting a key.
+    window.localStorage.setItem("oc.language", "en");
+    try {
+      const utils = renderSettings();
+      expect(utils.getByText(en.settings.software)).toBeTruthy();
+      expect(en.settings.software).toBe("System update & backup");
+      expect(utils.container.textContent).not.toContain("Software update");
+    } finally {
+      window.localStorage.removeItem("oc.language");
+    }
   });
 
   it("titles the section page 系統更新與備份 too", async () => {
