@@ -151,7 +151,7 @@ curl -fsSL https://github.com/pkyosx/OffiCraft/releases/latest/download/install.
 
 ### 升級
 
-**之後的升級不必重跑 install.sh。** 設定 › 軟體更新 有「檢查更新」與一鍵升級
+**之後的升級不必重跑 install.sh。** 設定 › 系統更新與備份 有「檢查更新」與一鍵升級
 （從 GitHub Releases 下載、sha256 驗證後原地抽換重啟）；打開「自動更新」則在背景自動升級。
 「接收 Beta」= 也吃 GitHub prerelease。
 

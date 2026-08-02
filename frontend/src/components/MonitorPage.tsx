@@ -6,7 +6,6 @@ import { ApiError } from "../api/errors";
 import { formatCost } from "../lib/cost";
 import { useMembers } from "../hooks/useMembers";
 import { useMonitoring } from "../hooks/useMonitoring";
-import { useBackupHealth } from "../hooks/useBackupHealth";
 import { useMachines } from "../hooks/useMachines";
 import { useOutsourceWorkers } from "../hooks/useOutsourceWorkers";
 import { useServerSettings } from "../hooks/useServerSettings";
@@ -33,12 +32,6 @@ import { InlineEdit } from "./InlineEdit";
 import { MemberDetailPanel } from "./MemberDetailPanel";
 import { PresenceBadge } from "./PresenceBadge";
 import { CopyIcon, CheckIcon, CloseIcon } from "./icons";
-import {
-  backupIndicatorState,
-  backupStatusLabel,
-  backupReasonText,
-} from "../lib/backupHealth";
-import { formatDuration } from "../lib/duration";
 import "./monitor.css";
 
 export function MonitorPage() {
@@ -412,12 +405,9 @@ export function MonitorPage() {
   return (
     <div className="monitor">
       {renameError && <div className="mon-error">{renameError}</div>}
-      {/* ── §0 備份健康 (Backup health, T-da06) ── the card the topbar
-          indicator links to. It exists because the backup engine reported
-          every outcome to the server log and nowhere else, so a schedule that
-          silently died read exactly like a healthy one. */}
-      <BackupHealthSection />
-
+      {/* No 備份健康 card here (T-5e71, owner 2026-08-02): the backup verdict
+          moved to 設定 › 系統更新與備份, next to the software update it belongs
+          with. */}
       {/* ── §1 帳號資訊 (Accounts) ── */}
       <section className="mon-section">
         <div className="mon-section__title">{t.monitor.accountsTitle}</div>
@@ -1903,109 +1893,5 @@ function UsageBar({
         )}
       </div>
     </div>
-  );
-}
-
-/**
- * 備份健康 card (T-da06) — the surface the topbar indicator links to, and the
- * only place the cockpit explains WHY the indicator is red.
- *
- * Reads the same `GET /api/backup-health` the indicator does (one small
- * endpoint, deliberately not a field on the monitoring fold), so the two can
- * never disagree.
- *
- * Wording rules held here:
- *  - The primary sentence comes from the closed `code` vocabulary via i18n
- *    (`backupReasonText`), never from the server's `detail`.
- *  - `detail` IS shown — clearly labelled as the server's own diagnostic. It is
- *    English engineer-facing text, so it is secondary, never the headline.
- *  - `unknown` (and a failed load, and a load still in flight) renders muted,
- *    never green. A retreat point we cannot see must not look like one we have.
- */
-function BackupHealthSection() {
-  const { t } = useI18n();
-  const { health, loading, error } = useBackupHealth();
-  const d = t.backupHealth;
-  const state = backupIndicatorState(health, error);
-  const reason = backupReasonText(d, health, error);
-
-  // Elapsed since the incident opened, read off the render clock. The incident
-  // outlives a server restart (the server keeps `since_ts`), so a backup broken
-  // for three days still says three days on day three.
-  const nowSecs = Math.floor(Date.now() / 1000);
-  const sinceSecs =
-    health?.sinceTs != null ? Math.max(0, nowSecs - health.sinceTs) : null;
-
-  return (
-    <section className="mon-section" data-testid="mon-backup-health">
-      <div className="mon-section__title">{d.title}</div>
-      {loading && !health && !error ? (
-        <div className="mon-empty">{d.loading}</div>
-      ) : (
-        <div className="mon-backup">
-          <div
-            className={`mon-backup__status mon-backup__status--${state}`}
-            data-testid="mon-backup-status"
-            data-backup-state={state}
-          >
-            {backupStatusLabel(d, state)}
-          </div>
-          {/* Empty only when healthy — a healthy backup has no failure to
-              explain, and filler text there would dilute the red case. */}
-          {reason !== "" && (
-            <div className="mon-backup__reason" data-testid="mon-backup-reason">
-              {reason}
-            </div>
-          )}
-          <div className="mon-backup__facts">
-            <div className="mon-detailrow">
-              <span className="mon-detaillabel">{d.newestLabel}</span>
-              <span
-                className="mon-detailvalue"
-                data-testid="mon-backup-newest"
-              >
-                {/* "Never" is a fact, not a missing value — it is precisely the
-                    never_ran alarm, so it gets words rather than a dash. */}
-                {health && health.newestBackupAgeSecs != null
-                  ? `${formatDuration(health.newestBackupAgeSecs)} ${d.ago}`
-                  : health
-                    ? d.newestNever
-                    : t.monitor.dash}
-              </span>
-            </div>
-            {sinceSecs != null && (
-              <div className="mon-detailrow">
-                <span className="mon-detaillabel">{d.sinceLabel}</span>
-                <span
-                  className="mon-detailvalue"
-                  data-testid="mon-backup-since"
-                >
-                  {formatDuration(sinceSecs)}
-                </span>
-              </div>
-            )}
-            {health && (
-              <div className="mon-detailrow">
-                <span className="mon-detaillabel">{d.staleAfterLabel}</span>
-                <span className="mon-detailvalue">
-                  {formatDuration(health.staleAfterSecs)}
-                </span>
-              </div>
-            )}
-            {health && health.detail !== "" && (
-              <div className="mon-detailrow">
-                <span className="mon-detaillabel">{d.detailLabel}</span>
-                <span
-                  className="mon-detailvalue mon-detailvalue--code"
-                  data-testid="mon-backup-detail"
-                >
-                  {health.detail}
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </section>
   );
 }

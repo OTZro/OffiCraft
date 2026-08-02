@@ -1,4 +1,4 @@
-// 設定 › 軟體更新 — the T-1c2e honesty behaviors, post updater-server teardown
+// 設定 › 系統更新與備份 — the T-1c2e honesty behaviors, post updater-server teardown
 // (t-dc68: updates come from GitHub Releases; the URL/invite-code form is
 // gone). Pinned here:
 //   - the 自動更新 switch verifies a save by reading the settings BACK and
@@ -18,7 +18,7 @@ import { api } from "../api";
 
 const s = zh.settings;
 
-/** Render Settings and open 軟體更新 (async settings load). */
+/** Render Settings and open 系統更新與備份 (async settings load). */
 async function openSoftware() {
   const utils = render(
     <I18nProvider>
@@ -38,7 +38,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("SettingsPage · 軟體更新 · 檢查更新 (explicit fresh verdict)", () => {
+describe("SettingsPage · 系統更新與備份 · 檢查更新 (explicit fresh verdict)", () => {
   it("clicking 檢查更新 shows the honest up-to-date verdict", async () => {
     const utils = await openSoftware();
     fireEvent.click(utils.getByTestId("settings-check-release"));
@@ -161,7 +161,7 @@ describe("SettingsPage · 軟體更新 · 檢查更新 (explicit fresh verdict)"
   });
 });
 
-describe("SettingsPage · 軟體更新 · 自動更新存檔回讀 (存檔測連通)", () => {
+describe("SettingsPage · 系統更新與備份 · 自動更新存檔回讀 (存檔測連通)", () => {
   it("toggling 自動更新 writes, reads back, and reports the reconciled success", async () => {
     const utils = await openSoftware();
     const toggle = utils.getByTestId("settings-auto-update");

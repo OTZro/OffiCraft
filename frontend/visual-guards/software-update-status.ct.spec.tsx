@@ -1,4 +1,4 @@
-// HOTSPOT — 設定 › 軟體更新: the refresh icon's anchor row + the 查看 release
+// HOTSPOT — 設定 › 系統更新與備份: the refresh icon's anchor row + the 查看 release
 // link's contrast (owner round-2 acceptance, T-dc68).
 //
 // Bug ① (owner, phone screenshot): the 檢查更新 refresh icon was anchored to the
@@ -74,10 +74,10 @@ const VERDICTS: SwVerdict[] = [
   "update_available_long_tag",
 ];
 
-/** Navigate into 軟體更新 and run one explicit check, leaving the card in the
+/** Navigate into 系統更新與備份 and run one explicit check, leaving the card in the
  * story's forced verdict. */
 async function openAndCheck(page: Page) {
-  await page.getByText("軟體更新", { exact: true }).first().click();
+  await page.getByText("系統更新與備份", { exact: true }).first().click();
   const refresh = page.getByTestId("settings-check-release");
   await expect(refresh).toBeVisible();
   await refresh.click();

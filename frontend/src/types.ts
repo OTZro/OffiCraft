@@ -548,7 +548,7 @@ export interface MonitoringView {
 // ── Settings view models (camelCase; mapped from the Wire* settings shapes) ───
 
 /**
- * Build identity (Settings › 軟體更新). `version` is the single human-facing
+ * Build identity (Settings › 系統更新與備份). `version` is the single human-facing
  * version identity: an OFFICIAL package (bin/release) carries its GitHub
  * Release tag; a self-build keeps the honest "0.0.0" → only then does the UI
  * fall back to the composed build label v<yymmdd>-<hhmm>-<shortsha> from

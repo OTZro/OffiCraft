@@ -812,34 +812,3 @@
   background: color-mix(in srgb, var(--color-overlay) 6%, transparent);
 }
 
-/* ── 備份健康 card (T-da06) ── the monitor-page half of the backup indicator.
- * Colours come only from the semantic tokens; `unknown` is muted, NEVER the
- * accent green — "we cannot tell" must not look like "you have a retreat
- * point", which is the entire reason this card exists. */
-.mon-backup {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.mon-backup__status {
-  font-size: 13.5px;
-  font-weight: 600;
-}
-.mon-backup__status--healthy {
-  color: var(--color-accent);
-}
-.mon-backup__status--unhealthy {
-  color: var(--color-danger);
-}
-.mon-backup__status--unknown {
-  color: var(--color-text-muted);
-}
-.mon-backup__reason {
-  font-size: 12.5px;
-  color: var(--color-text);
-  line-height: 1.5;
-}
-.mon-backup__facts {
-  display: flex;
-  flex-direction: column;
-}

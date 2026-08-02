@@ -1,4 +1,4 @@
-// CT story: the REAL 設定 › 軟體更新 card, in a real browser, against the real
+// CT story: the REAL 設定 › 系統更新與備份 card, in a real browser, against the real
 // settings.css.
 //
 // Unlike the skeleton stories in this folder, this one mounts the ACTUAL

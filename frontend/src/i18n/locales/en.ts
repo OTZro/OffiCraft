@@ -1045,7 +1045,7 @@ export const en: Dict = {
   },
   settings: {
     title: "Settings",
-    software: "Software update",
+    software: "System update & backup",
     roles: "Role journal",
     params: "Parameters",
     // ── theme management (T-16a1 P3b): moved here from the profile dropdown ──
