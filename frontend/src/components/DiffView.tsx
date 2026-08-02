@@ -23,10 +23,18 @@
 //      — and it carries an accessible name, so the fact the colour conveys is
 //      also available to a reader who gets no colour at all.
 //   ⑥ NO COLLAPSE, NO EXPAND — 「showing entire content」. Every unchanged line
-//      is rendered. `collapseUnchanged: false` is therefore NOT a caller option
-//      here: it is this surface's contract, so `DiffViewOptions` exposes only
-//      the refusal ceiling. lib/lineDiff keeps its collapse machinery (it is
-//      that module's own, tested, API) — this surface simply never asks for it.
+//      is rendered, so `collapseUnchanged` is NOT a caller option here and
+//      `DiffViewOptions` exposes only the refusal ceiling. lib/lineDiff keeps
+//      its collapse machinery (it is that module's own, tested, API).
+//      🔴 What ENFORCES ⑥ is that this surface renders `result.rows` — always
+//      the full edit script — and never `result.hunks`. The
+//      `collapseUnchanged: false` argument below is BELT, NOT BRACES: collapsing
+//      only ever shaped `hunks`, which nothing here reads, so flipping that
+//      argument to `true` changes not one rendered row. Measured, not reasoned:
+//      flipping it leaves all 15 tests in DiffView.test.tsx green; rendering
+//      `hunks.flatMap(h => h.rows)` instead reddens the no-collapse test at
+//      once. Do not read the argument as the guarantee — if you are looking for
+//      the line that must not move, it is `result.rows` in the render.
 //
 // A "too-large" diff and an all-context diff are DIFFERENT screens: the first
 // says the comparison was refused, the second says the two versions match.
@@ -138,7 +146,9 @@ export function DiffView({
   const [mode, setMode] = useState<DiffMode>("unified");
   const { maxLines } = options ?? {};
   const result = useMemo(
-    // collapseUnchanged: false is the CONTRACT, not a default — owner ⑥.
+    // owner ⑥. Says what this surface wants and skips building hunks nobody
+    // reads — but it is NOT what holds the contract; rendering `rows` below is
+    // (see ⑥ in the header: flipping this flag reddens nothing).
     () => diffLines(before, after, { collapseUnchanged: false, maxLines }),
     [before, after, maxLines]
   );
