@@ -426,6 +426,73 @@ describe("reply-card writes reconcile without any event stream", () => {
     );
   });
 
+  it("a PRE-WRITE handled snapshot with an OLDER stamp cannot revert a 重新決定", async () => {
+    // 🔴 THE STAMP COMPARISON'S OWN WITNESS. The handled hold releases on
+    // "listed AND its stamp is at least as new as ours" — the `>=` in
+    // refetchHandled — precisely because a 重新決定 RE-STAMPS answeredTs, so a
+    // pre-write snapshot lists the very same card with the OLD stamp and the OLD
+    // answer. Presence alone must not count as confirmation.
+    //
+    // ⚠️ The test above cannot see that arm at all: a first answer takes the
+    // `i < 0` (push) path, so the whole comparison is skipped. Measured:
+    // replacing the comparison with `true` (the degenerate "presence confirms"
+    // version this file argues against) left all 8 of those tests green.
+    const now = Date.now() / 1000;
+    const answeredFixture = (over: Partial<ReplyCard> = {}): ReplyCard =>
+      mkCard({
+        id: "rc-A",
+        options: ["OPT-ZERO", "OPT-ONE"],
+        status: "answered",
+        createdTs: now - 3600,
+        answeredTs: now - 600,
+        answer: { optionIdx: 0, text: "", attachments: [] },
+        ...over,
+      });
+    __injectMockReplyCard(answeredFixture());
+
+    const stream = captureEventStream();
+    const { findByTestId, findAllByTestId } = renderPage();
+    fireEvent.click(await findByTestId("answered-toggle"));
+    const cards = await findAllByTestId("answered-card");
+    expect(cards).toHaveLength(1);
+    const answerOf = (el: HTMLElement) =>
+      el.querySelector(".reply-card__answer-option")?.textContent ?? "";
+    expect(answerOf(cards[0])).toBe("OPT-ZERO");
+
+    // A peer's delta kicks the handled refetch; it hangs, holding a snapshot
+    // taken BEFORE the revision below.
+    const read = hangNextRead("answered");
+    stream.deliver("reply_card");
+    await waitFor(() => expect(read.inFlight()).toBe(true));
+
+    // 重新決定 → OPT-ONE.
+    fireEvent.click(cards[0].querySelector(".reply-card__toggle")!);
+    fireEvent.click(cards[0].querySelector(".reply-card__redecide")!);
+    fireEvent.click(cards[0].querySelectorAll(".reply-option")[1]);
+    await waitFor(async () =>
+      expect(answerOf((await findAllByTestId("answered-card"))[0])).toBe(
+        "OPT-ONE"
+      )
+    );
+
+    // The stale snapshot lands: SAME card, OLDER stamp, OLD answer. Taking it
+    // would show the owner the answer they just replaced.
+    read.landWith([answeredFixture()]);
+
+    await waitFor(async () => {
+      const rows = await findAllByTestId("answered-card");
+      expect(rows).toHaveLength(1);
+      expect(answerOf(rows[0])).toBe("OPT-ONE");
+    });
+    // Settle any commit the stale snapshot may still be queueing, then re-assert
+    // — without this the check above can pass on state that is about to be
+    // overwritten (the trap the handled test above fell into on its first draft).
+    await new Promise((r) => setTimeout(r, 40));
+    const rows = await findAllByTestId("answered-card");
+    expect(rows).toHaveLength(1);
+    expect(answerOf(rows[0])).toBe("OPT-ONE");
+  });
+
   it("an inline chat card flips to answered in place with the stream DOWN", async () => {
     // The third site (ChatReplyCard.doAnswer). Same write, same missing delta:
     // the card the owner just answered keeps showing its option chips.

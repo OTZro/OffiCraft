@@ -249,6 +249,18 @@ function useReplyCardsState(): UseReplyCards {
     // pre-write snapshot lists that same card with its OLD stamp. Take the
     // snapshot's row only once its stamp is at least as new as the one we
     // adopted; until then substitute (or insert) ours.
+    //
+    // 🔴 THE TWO SIDES ARE NOT SYMMETRIC — do not "tidy" them into one rule.
+    // On the waiting side ABSENCE is the confirmation; here absence means the
+    // snapshot predates the write, so the row is pushed back and the hold STAYS.
+    // ⚠️ Known consequence, measured: once a card ages out of the server's 24h
+    // handled window every later snapshot omits it, so its entry in
+    // adoptedHandledRef is NEVER released and `handled` keeps one ghost row per
+    // such card for the rest of the visit. It is invisible on screen (RepliesPage
+    // filters by the same 24h window), so this is memory hygiene, not a
+    // correctness bug — but it is why the `delete` below is hygiene ONLY:
+    // `merged[i] = mine` fires only when OUR stamp is strictly newer, so
+    // correctness never depends on the delete having run.
     const adoptedH = adoptedHandledRef.current;
     if (adoptedH.size) {
       for (const [id, mine] of [...adoptedH]) {
