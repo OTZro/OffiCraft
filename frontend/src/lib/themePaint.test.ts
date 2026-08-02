@@ -3,16 +3,26 @@
 //
 // Why this file exists at all: the pre-React inline script's only protection
 // against an attacker-writable localStorage record reaching
-// element.style.setProperty is that it calls readValidatedPaint(). Replacing
-// that one call with a bare JSON.parse kept tsc green, the build green, the
-// build-artifact assertions green and the 11 decision tests green — the CSS
-// injection hole was wide open with a fully green suite. These are the
-// assertions that go red for it, and they run in the EXISTING vitest gate, so
-// they survive the browser-level guard being dropped for cost.
+// element.style.setProperty is that it calls readValidatedPaint(). With that
+// protection removed the CSS injection hole is wide open — and BOTH ways of
+// removing it kept tsc green, so a reviewer reading types alone sees nothing.
 //
-// The browser twin (paint-guards/payloadInjection.paint.spec.ts) proves the
-// inline script actually CALLS this validator on a real page load. Neither
-// replaces the other.
+// 🔴 THE TWO WAYS ARE CAUGHT BY DIFFERENT FILES. An independent review measured
+// this, and the earlier version of this comment had it backwards — it claimed
+// the assertions below go red for the inline-bypass mutant. They do not:
+//
+//   M1  gut readValidatedPaint ITSELF (bare JSON.parse in this module)
+//       → THIS file goes red (6) + paintCache.test.tsx goes red (4).
+//   M2  leave the validator intact, have the INLINE SCRIPT bypass it
+//       (prePaint.ts reads localStorage and JSON.parses it directly)
+//       → this file 19/19 GREEN, all three jsdom files 40/40 GREEN, tsc clean.
+//       Only paint-guards/payloadInjection.paint.spec.ts goes red (5 of 6
+//       payloads; the sixth is CSSOM-stopped and declares itself uncovered).
+//
+// Getting this backwards is not a cosmetic slip: it reads as "the jsdom layer
+// already covers the inline bypass", which is exactly the argument someone
+// reaches for when they want to drop the browser gate for cost. It does not.
+// The two layers are complements, and neither replaces the other.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -95,7 +105,13 @@ describe("readValidatedPaint — rejects the whole record, never throws", () => 
   it("a record whose bundle is not an object is rejected", () => {
     for (const bad of ["", "null", "[]", "42", '"str"', "{}", "not json at all"]) {
       seed(bad === "" ? "" : `{"v":1,"bundle":${bad === "not json at all" ? '"x"' : bad}}`);
+      // Both halves, and the second is the one with teeth. `not.toThrow()`
+      // alone lets a validator that ACCEPTS `{}` pass this test while its title
+      // says "rejected" — measured: with readValidatedPaint gutted to a bare
+      // JSON.parse, `{"v":1,"bundle":{}}` came back non-null and this test
+      // stayed green. The title now has to be earned.
       expect(() => readValidatedPaint()).not.toThrow();
+      expect(readValidatedPaint()).toBeNull();
     }
     seed("this is not json");
     expect(readValidatedPaint()).toBeNull();

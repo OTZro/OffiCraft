@@ -15,8 +15,12 @@
 // absence-only suite (only "this forbidden string never appears") stays green
 // when the applier silently STOPS applying fonts/backgrounds altogether — that
 // exact mutant (delete the fonts loop + the canvas branch from applyThemeToRoot)
-// passed tsc, the build, the artifact assertions, the 11 decision tests and a
-// 6-case absence-only browser probe. `EXPECT_APPLIED` is what closes it.
+// passed tsc, the build, the artifact assertions, the decision tests in
+// paintCache.test.tsx and a 6-case absence-only browser probe. `EXPECT_APPLIED`
+// is what closes it. An independent review re-measured the narrow half of that
+// mutant: deleting ONLY the fonts loop still passes tsc and leaves 1756 of 1757
+// tests green — the single red is the positive assertion below. The fonts half
+// really was at zero coverage; this fixture is the only thing holding it.
 
 import type { ThemeBundle } from "./themeBundleCore";
 

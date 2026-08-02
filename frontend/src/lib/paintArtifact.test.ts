@@ -117,10 +117,16 @@ describe("dist/index.html — the inline script stays cheap", () => {
   });
 
   it("is under the agreed per-load budget", () => {
-    // Measured at land: 11,014 B raw / 3,897 B gzip. This is paid on EVERY load
-    // and is not cacheable, so the ceiling sits deliberately close to the
-    // measured value — it should force a conversation, not quietly absorb a
-    // regression.
+    // Measured at land: 11,042 B raw / 3,896 B gzip, paid on EVERY load and not
+    // cacheable.
+    //
+    // ⚠️ The ceiling is NOT tight, and the comment here used to claim it was.
+    // 6,000 against a measured 3,896 is +54% of headroom: this catches a
+    // doubling, not a creep. It is a blast-radius cap, not a budget — do not
+    // cite it as evidence that the payload has not grown. If you want the
+    // conversation-forcing version, the number has to come down to roughly
+    // 4,200, and then it has to be re-baselined whenever the token whitelist
+    // legitimately grows.
     const gz = gzipSync(Buffer.from(html, "latin1")).length;
     expect(gz).toBeLessThan(6_000);
   });

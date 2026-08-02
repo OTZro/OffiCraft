@@ -7,5 +7,13 @@
   "extends": "./tsconfig.json",
   // src/vite-env.d.ts comes along because the guards reach into src (auth.ts
   // uses import.meta.env); without it tsc has no vite/client types.
-  "include": ["paint-guards", "src/vite-env.d.ts"]
+  "include": [
+    "paint-guards",
+    // The Playwright configs themselves were in no tsconfig either
+    // (tsconfig.node.json only includes vite.config.ts), so a type error in the
+    // config that HOSTS the guards was as invisible as one inside them.
+    "playwright-paint.config.ts",
+    "playwright-ct.config.ts",
+    "src/vite-env.d.ts"
+  ]
 }

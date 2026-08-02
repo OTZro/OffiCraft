@@ -1302,8 +1302,20 @@ pre-React 上色(`src/paint/prePaint.ts` 由 `vite.config.ts` 的 `inlinePrePain
 3. **真實載入的每一幀** → `paint-guards/*.paint.spec.ts`(真 Chromium,
    `playwright-paint.config.ts`,由 `npm run test:ct` 串在既有 4c 之後)。
 
-`MALICIOUS_PAINT_CASES` / `VALID_RICH_BUNDLE` 只有一份(`src/lib/paintFixtures.ts`),
+`MALICIOUS_PAINT_CASES` / `VALID_RICH_BUNDLE` 的**權威定義**在 `src/lib/paintFixtures.ts`,
 jsdom 與瀏覽器兩層共用 ⇒ 加一個 payload 兩層同時守得到。
+⚠️ 但**不是「全世界只有一份」**:`src/lib/paintFixtures.theme.json` 是給 stub 伺服器吃的
+twin(它是 JSON、不能 import TS)。那份 twin 由 `themePaint.test.ts` 的
+「matches the JSON copy the stub server serves」做 deep-compare 守著,所以漂了會紅
+——但別把它講成不存在,下一個人會照著「只有一份」的字面去改其中一邊。
+
+🔴 **兩層各擋哪顆 mutant,別記反(獨立覆核實測)**:
+- **挖掉 `readValidatedPaint` 本身** → `themePaint.test.ts` 紅 6 + `paintCache.test.tsx` 紅 4。
+- **驗證器留著,只讓 inline script 繞過它** → **jsdom 三個檔 40/40 全綠、tsc 乾淨**,
+  只有 `payloadInjection.paint.spec.ts` 紅 5(6 個 payload 中的 5 個;第 6 個是 CSSOM
+  擋的、fixture 自己標了不算覆蓋)。
+⇒ **jsdom 那層擋不住 inline 繞過。** 這句話的用途是擋掉「jsdom 已經守住了,4c 可以砍」
+這個推論——那正是想省成本時最容易講出口的一句話。
 
 ### 🔴 frame 量測一律在「登入態 + 伺服器認得該主題」下做,而且要**斷言**它成立
 `reconcileFromServer()` 在 `i18n/index.tsx` 是 `if (hasToken())` 閘住的。**沒有 token
@@ -1324,7 +1336,7 @@ jsdom 與瀏覽器兩層共用 ⇒ 加一個 payload 兩層同時守得到。
 
 ### 🔴 正向斷言:要驗「該套上的真的套上了」,不是「不含某個值」
 只驗「某個禁字沒出現」的套件,會被**「applier 靜默不再套用 fonts 與 canvas」**整個繞過
-——實測那顆 mutant 通過 tsc、build、產物 A–E、11 條決策測試,以及一套 6 case 的
+——實測那顆 mutant 通過 tsc、build、產物 A–E、`paintCache.test.tsx` 的決策測試,以及一套 6 case 的
 absence-only 瀏覽器探針,**6/6 全綠**。所以 `VALID_RICH_BUNDLE` 一定帶
 colours **＋ fonts ＋ canvas 圖 ＋ canvas mode**,`EXPECT_APPLIED` / `EXPECT_APPLIED_VALUES`
 逐條斷言它們真的到 DOM。
