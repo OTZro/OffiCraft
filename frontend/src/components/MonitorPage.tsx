@@ -4,6 +4,7 @@ import { useEscapeLayer } from "../lib/useEscapeLayer";
 import { api } from "../api";
 import { ApiError } from "../api/errors";
 import { formatCost } from "../lib/cost";
+import { formatDuration } from "../lib/duration";
 import { useMembers } from "../hooks/useMembers";
 import { useMonitoring } from "../hooks/useMonitoring";
 import { useMachines } from "../hooks/useMachines";

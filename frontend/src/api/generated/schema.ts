@@ -177,14 +177,15 @@ export interface paths {
          *     The backup engine already reported every outcome — but only to the server
          *     log, a file with no reader, so "the schedule died three days ago" and "all
          *     good" looked identical from the cockpit. This is the read side that makes the
-         *     difference visible: the cockpit shows a small green/red backup-health
-         *     indicator that links to the monitor page's backup card, and both read THIS
-         *     endpoint so they can never disagree.
+         *     difference visible: the cockpit renders the verdict under
+         *     Settings › 系統更新與備份 (T-5e71, owner 2026-08-02 — it used to be a topbar
+         *     indicator plus a monitor-page card, and he ruled both out).
          *
          *     Deliberately its own small endpoint rather than a field on `GET /api/monitoring`:
-         *     the indicator is mounted app-wide and monitoring is a large fold that
-         *     re-fetches on every telemetry event, so hanging a permanently-visible widget
-         *     on it would move a big payload for a three-value answer.
+         *     monitoring is a large fold that re-fetches on every telemetry event, and this
+         *     is a three-value answer read by a page that has nothing else to do with the
+         *     monitoring fold — hanging it there would move a big payload for no reason.
+         *     That separation is what makes it cheap to move the surface again.
          *
          *     Honest by construction: a watchdog that has not evaluated yet reports
          *     `unknown`, never `healthy`.
