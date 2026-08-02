@@ -99,15 +99,25 @@ validate_source() {
 lane_clean() { [[ "$(marker_occurrences "$1")" == "0" ]]; }
 
 # The scan set: tracked shell scripts (by extension or by sh/bash shebang) minus
-# the two files that legitimately carry the literal — bin/ci.sh (the authority
-# itself) and THIS guard (its fixtures are made of the literal).
+# the THREE files that legitimately carry the literal — bin/ci.sh (the authority
+# itself), THIS guard (its fixtures are made of the literal), and bin/release
+# (T-b65e: its pre-build CI gate has to know what the verdict looks like in order
+# to refuse anything else).
+#
+# bin/release is NOT waved through: skipping it here only moves it to a TIGHTER
+# rule below (see "the consumer's shape"), which requires its single occurrence
+# to be a comparison and nothing else. The distinction that matters to a false
+# green is emit vs compare, and a file that only compares cannot forge anything.
+# Note also that bin/release is not a dispatched lane — its stdout never becomes
+# a CI log — so even a forged marker there could not be mistaken for a verdict;
+# the rule below exists so that stays true by construction rather than by luck.
 shell_sources() {
   local f shebang
   ( cd "$ROOT" && git ls-files 2>/dev/null || find . -type f | sed 's|^\./||' ) \
   | while IFS= read -r f; do
       [[ -f "$ROOT/$f" ]] || continue
       case "$f" in
-        bin/ci.sh|bin/tests/ci-success-marker.sh) continue ;;
+        bin/ci.sh|bin/tests/ci-success-marker.sh|bin/release) continue ;;
         *.sh) printf '%s\n' "$f"; continue ;;
       esac
       IFS= read -r shebang < "$ROOT/$f" 2>/dev/null || true
@@ -249,6 +259,24 @@ if [[ -z "$lane_offenders" ]]; then
 else
   bad "shell scripts other than bin/ci.sh can emit the CI authority: $(printf '%s ' $lane_offenders)"
 fi
+# ── the consumer's shape (T-b65e) ───────────────────────────────────────────
+# bin/release is excluded from the scan above because its CI gate must state the
+# verdict it requires. An exclusion with no replacement rule is just a hole, so
+# the replacement is stricter than the scan: EXACTLY ONE occurrence, and it must
+# sit in a comparison. An `echo`/`printf` of the marker appearing in there — or a
+# second occurrence quietly accumulating — reddens here.
+REL_OCC="$(marker_occurrences "$ROOT/bin/release")"
+if [[ "$REL_OCC" == "1" ]]; then
+  ok "bin/release carries the CI authority exactly once"
+else
+  bad "bin/release carries the CI authority $REL_OCC times (expected exactly 1: the gate's comparison)"
+fi
+REL_LINE="$({ grep -vE '^[[:space:]]*#' "$ROOT/bin/release" || true; } | { grep -F '[ci] all green' || true; })"
+case "$REL_LINE" in
+  *'[['*'=='*']]'*) ok "bin/release's occurrence is a COMPARISON, not an emission" ;;
+  *) bad "bin/release's occurrence is a COMPARISON, not an emission (line: ${REL_LINE:-<none>})" ;;
+esac
+
 # A scan is only worth what it actually looks at: pin that the real dispatched
 # lanes are inside the set (a silently-empty enumeration would otherwise pass
 # the assertion above forever).

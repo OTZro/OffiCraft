@@ -363,9 +363,16 @@ cmd_promote() {
 # shipped, not "a green run that happened on this machine at some point". Two
 # consequences fall out for free:
 #   * the CI lock (bin/lib/ci-lock.sh) is per WORKING COPY and derived from the
-#     script's own location, so this run locks the throwaway worktree. It neither
-#     wedges the invoking clone nor collides with a CI round already running
-#     there.
+#     script's own location, so this run locks the THROWAWAY worktree and the
+#     invoking clone is never wedged. That much is measured (docs/dev/
+#     ci-parallelism.md: two worktrees take two different locks).
+#     ⚠️ What is NOT measured is the step after it: nobody has ever run two FULL
+#     CI rounds concurrently across two worktrees of one clone, and that is
+#     exactly what happens if somebody publishes while a `bin/ci.sh` is running
+#     in the invoking clone. The lock will not refuse it; whether the shared
+#     `.git` (index.lock, worktree-specific layout) survives it is an open
+#     question — see docs/dev/ci-parallelism.md, which says to MEASURE before
+#     relying on it. Failing there is loud (a red CI ⇒ no release), not silent.
 #   * `git worktree add --detach` already refuses to reuse a path, so there is no
 #     way for this to validate a leftover tree.
 #
@@ -395,10 +402,17 @@ run_release_ci() {
   local STAGE="$1" SHA="$2" SHORT="$3"
   local dir log start rc=0 last
 
+  # sha + UTC second + THIS process's pid. The pid is what actually makes it
+  # unique (two publishes in the same second are two processes); `mkdir` without
+  # -p is the arbiter that turns a collision into a hard stop instead of a run
+  # writing its verdict into somebody else's directory. The error is NOT
+  # swallowed — a permission/ENOSPC failure must say so rather than be reported
+  # as a collision.
   dir="$OUT/ci/$SHORT-$(date -u '+%Y%m%dT%H%M%SZ')-$$"
-  mkdir -p "$OUT/ci"
-  mkdir "$dir" 2>/dev/null \
-    || fail_item ci-evidence "the per-run CI evidence directory $dir already exists — refusing to write this run's verdict into somebody else's."
+  mkdir -p "$OUT/ci" \
+    || fail_item ci-evidence "could not create $OUT/ci — there is nowhere to record this run's CI verdict."
+  mkdir "$dir" \
+    || fail_item ci-evidence "could not create the per-run CI evidence directory $dir (it already exists, or the filesystem refused) — refusing to run without somewhere of its own to write the verdict."
   start="$dir/.start"
   : > "$start"
   log="$dir/ci.log"
@@ -414,19 +428,24 @@ run_release_ci() {
 
   [[ -f "$log" ]] \
     || fail_item ci-evidence "the CI log $log was never written — this run produced no verdict to read."
-  # "not older than the start marker", not "strictly newer": both files are
-  # created seconds apart inside a directory this run just made, and filesystem
-  # timestamp granularity would otherwise make a fast run fail for no reason.
-  # What this is actually guarding against is a STALE log — one predating this
-  # run — and that direction is caught exactly.
+  # Belt-and-braces, and honestly redundant today: the directory above is proven
+  # new, so a log predating this run cannot be in it. It is kept because the
+  # cheap failure it catches (a verdict read out of a stale file) is the exact
+  # mistake a future change to the naming scheme would reintroduce silently.
+  # "Not older" rather than "strictly newer" — the two files are created moments
+  # apart and timestamp granularity must not redden a fast run.
   [[ ! "$log" -ot "$start" ]] \
     || fail_item ci-evidence "the CI log $log is older than this run's start marker — it is not this run's log."
 
   [[ "$rc" == "0" ]] \
     || fail_item release-ci "full CI FAILED (rc=$rc) on $SHORT — nothing has been built, packaged or uploaded. Read $log."
+  # ONE occurrence of the authority literal in this file, and it is a comparison.
+  # bin/tests/ci-success-marker.sh scans every shell source for that literal and
+  # pins exactly this shape here — the message below deliberately does NOT quote
+  # the marker back, so nothing in this file can ever print it.
   last="$(tail -n 1 "$log")"
   [[ "$last" == '[ci] all green' ]] \
-    || fail_item release-ci "full CI exited 0 but its last line is '$last', not '[ci] all green' — the green verdict is not there, so this tree is NOT cleared to ship. Read $log."
+    || fail_item release-ci "full CI exited 0 but its last line is '$last', which is not the green verdict bin/ci.sh ends with — this tree is NOT cleared to ship. Read $log."
 
   # CI regenerates five committed files in place and byte-compares them; if any
   # tracked byte moved, the tree about to be built is no longer the commit that
@@ -434,7 +453,9 @@ run_release_ci() {
   [[ -z "$(git -C "$STAGE" status --porcelain --untracked-files=no)" ]] \
     || fail_item ci-tree-dirty "the staging worktree has MODIFIED tracked files after CI — the tree about to be built is no longer $SHORT."
 
-  say "  CI green on $SHORT (rc=0, last line '[ci] all green', tree unchanged)"
+  # Deliberately does not echo the verdict line back: this file must never be
+  # ABLE to print the CI authority (bin/tests/ci-success-marker.sh pins that).
+  say "  CI green on $SHORT (rc=0, verdict line matched, tree unchanged)"
 }
 
 # verify_artifacts <tag> <sha> <short> <name> — everything checkable locally,

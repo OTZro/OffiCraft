@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# bin/tests/release-guard.sh — HERMETIC unit tests for bin/release (T-588c).
+# bin/tests/release-guard.sh — HERMETIC unit tests for bin/release (T-588c;
+# the pre-build CI gate, section G, added by T-b65e).
 #
 # WHAT IS ACTUALLY UNDER TEST
 # ---------------------------
@@ -35,10 +36,11 @@
 #   * `curl` is a PATH shim serving a canned /api/version + /api/health, so no
 #     station — least of all a live one — is contacted.
 #   * The end-to-end cases run against a THROWAWAY git repo in mktemp that
-#     carries its own bin/build. bin/release cuts its staging worktree from
-#     OC_RELEASE_SRC, so this exercises the real staging + packaging + verify +
-#     upload + read-back + settle arc without this repo, this worktree, or any
-#     npm/go build of the actual product being involved.
+#     carries its own bin/ci.sh and bin/build. bin/release cuts its staging
+#     worktree from OC_RELEASE_SRC and runs both from INSIDE it, so this
+#     exercises the real CI gate + staging + packaging + verify + upload +
+#     read-back + settle arc without this repo, this worktree, any npm/go build
+#     of the actual product, or a 7-minute product CI run being involved.
 #   * Artifacts land in a mktemp OC_RELEASE_OUT, never dist/release/.
 #
 # `go` IS required (a real Mach-O arm64 binary with real linker flags is the only
@@ -529,14 +531,26 @@ SH
 # It records WHICH TREE it was run against (its own HEAD, resolved from its own
 # location), which is what pins "CI ran on the tree about to ship" rather than
 # the weaker "CI ran".
-cat > "$SRC/bin/ci.sh" <<'SH'
+#
+# THE GREEN VERDICT IS NOT WRITTEN OUT HERE, and that is not squeamishness:
+# bin/tests/ci-success-marker.sh enforces that NO shell source but bin/ci.sh may
+# be able to emit the CI authority, because this file is itself a dispatched CI
+# lane and a forged marker in a lane buys a false green just as well as one in
+# ci.sh. So the fixture EXECUTES the real bin/ci.sh's own final line to produce
+# the verdict. Two things fall out: this file stays clean under that scan, and
+# the fixture can never drift from the real marker — if ci.sh's verdict line ever
+# changes, these cases follow it automatically instead of pinning a stale copy.
+CI_GREEN="$(bash -c "$(tail -n 1 "$HERE/../ci.sh")")"
+[[ -n "$CI_GREEN" ]] || { echo "FATAL: could not derive the CI verdict line from bin/ci.sh" >&2; exit 2; }
+cat > "$SRC/bin/ci.sh" <<SH
 #!/usr/bin/env bash
 set -euo pipefail
-R="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-echo "ci $(git -C "$R" rev-parse HEAD)" >> "$ORDER_WIRE"
+R="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)"
+echo "ci \$(git -C "\$R" rev-parse HEAD)" >> "\$ORDER_WIRE"
 echo "[ci] (fixture) some steps"
-echo "${FIXTURE_CI_LAST_LINE:-[ci] all green}"
-exit "${FIXTURE_CI_RC:-0}"
+if [[ -n "\${FIXTURE_CI_DIRTIES_TREE:-}" ]]; then printf 'mutated by CI\n' >> "\$R/LICENSE"; fi
+echo "\${FIXTURE_CI_LAST_LINE:-$CI_GREEN}"
+exit "\${FIXTURE_CI_RC:-0}"
 SH
 chmod +x "$SRC/bin/build" "$SRC/bin/install.sh" "$SRC/bin/ci.sh"
 (
@@ -561,7 +575,9 @@ ORDER_WIRE="$WORK/.order-wire"
 
 e2e() { # e2e [extra publish args...] — env overrides come from the caller
   : > "$GHWIRE"; : > "$BUILD_WIRE"; : > "$ORDER_WIRE"
-  rm -rf "$EOUT"
+  # E2E_KEEP_OUT keeps the previous run's output dir, which is how the CI-evidence
+  # case can observe TWO runs accumulating rather than one run overwriting.
+  [[ -n "${E2E_KEEP_OUT:-}" ]] || rm -rf "$EOUT"
   OUT="$(PATH="$SHIMDIR:$PATH" \
     OC_RELEASE_SRC="$SRC" OC_RELEASE_OUT="$EOUT" \
     OC_RELEASE_GH_REPO="guard/fixture" \
@@ -662,14 +678,29 @@ STATION_VERSION_JSON="{\"git_sha\":\"$E_SHORT\"}" FIXTURE_CI_RC=1 e2e --dry-run
 named_failure "G3 --dry-run also runs the gate and also refuses a red CI" \
   release-ci "$RC" "$OUT"
 
-# G4 — the verdict is written to a per-run directory under the output dir (not a
-# fixed filename), so a run can never adopt another run's green log, and the log
-# that IS there is the one this run produced.
+# G5 — CI went green, but it MOVED a tracked byte on the way. The tree about to
+# be built is then no longer the tree that was validated, so the release is not
+# entitled to that green. Without this case the whole check could be deleted and
+# every other case here would stay green.
+STATION_VERSION_JSON="{\"git_sha\":\"$E_SHORT\"}" FIXTURE_CI_DIRTIES_TREE=1 e2e
+named_failure "G5 CI is green but modified a TRACKED file → publish aborts" \
+  ci-tree-dirty "$RC" "$OUT"
+check "G5 …and NOTHING was built" "" "$(cat "$BUILD_WIRE")"
+check "G5 …and gh was never invoked" "" "$(cat "$GHWIRE")"
+
+# G4 — the verdict is written to a per-run directory under the output dir, so two
+# publishes of the same commit in the same second cannot share a log. The
+# directory name carries the pid, so this asserts what actually makes it unique
+# rather than just "a log exists": two runs, two directories, each holding its
+# own verdict.
 STATION_VERSION_JSON="{\"git_sha\":\"$E_SHORT\"}" e2e --dry-run
 check "G4 the CI log lands under a per-run directory in the output dir" "1" \
   "$(find "$EOUT/ci" -name ci.log 2>/dev/null | wc -l | tr -d '[:space:]')"
-check "G4 …and it holds THIS run's output" "[ci] all green" \
-  "$(tail -n 1 "$(find "$EOUT/ci" -name ci.log | head -1)")"
+STATION_VERSION_JSON="{\"git_sha\":\"$E_SHORT\"}" E2E_KEEP_OUT=1 e2e --dry-run
+check "G4 a second publish gets its OWN directory (it cannot reuse or overwrite the first)" "2" \
+  "$(find "$EOUT/ci" -name ci.log 2>/dev/null | wc -l | tr -d '[:space:]')"
+check "G4 …and every log holds the verdict of the run that wrote it" "$CI_GREEN" \
+  "$(find "$EOUT/ci" -name ci.log | while IFS= read -r f; do tail -n 1 "$f"; done | sort -u)"
 
 # E2/E3 — THE POINT OF THE TICKET. The upload succeeded; the world is still
 # wrong; the command must fail anyway and say which item. Before T-588c both of
