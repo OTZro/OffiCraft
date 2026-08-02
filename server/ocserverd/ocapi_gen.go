@@ -2607,6 +2607,9 @@ type ServerInterface interface {
 	// Relocate a member to a machine (placement only; never touches desired_state). Also accepts an outsource-worker id: the same move-one-agent verb relocates the worker.
 	// (POST /api/members/{member_id}/relocate)
 	HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.ResponseWriter, r *http.Request, memberId string)
+	// Bounded LIGHT wake snapshot for a TARGET member (admin_agent+; same shape as resume_summary).
+	// (GET /api/members/{member_id}/resume-summary)
+	HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryGet(w http.ResponseWriter, r *http.Request, memberId string)
 	// List a member's webhook endpoints (WebhookEndpointDTO[]).
 	// (GET /api/members/{member_id}/webhooks)
 	HandleListWebhooksApiMembersMemberIdWebhooksGet(w http.ResponseWriter, r *http.Request, memberId string)
@@ -4164,6 +4167,32 @@ func (siw *ServerInterfaceWrapper) HandleRelocateMemberApiMembersMemberIdRelocat
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.HandleRelocateMemberApiMembersMemberIdRelocatePost(w, r, memberId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryGet operation middleware
+func (siw *ServerInterfaceWrapper) HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "member_id" -------------
+	var memberId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "member_id", r.PathValue("member_id"), &memberId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "member_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryGet(w, r, memberId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -6077,6 +6106,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/members/{member_id}/force-stop", wrapper.HandleForceStopMemberApiMembersMemberIdForceStopPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/members/{member_id}/refocus", wrapper.HandleRefocusMemberApiMembersMemberIdRefocusPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/members/{member_id}/relocate", wrapper.HandleRelocateMemberApiMembersMemberIdRelocatePost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/members/{member_id}/resume-summary", wrapper.HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/members/{member_id}/webhooks", wrapper.HandleListWebhooksApiMembersMemberIdWebhooksGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/members/{member_id}/webhooks", wrapper.HandleCreateWebhookApiMembersMemberIdWebhooksPost)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/members/{member_id}/webhooks/{endpoint_id}", wrapper.HandleDeleteWebhookApiMembersMemberIdWebhooksEndpointIdDelete)

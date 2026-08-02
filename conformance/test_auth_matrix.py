@@ -531,6 +531,14 @@ MATRIX: dict[str, Route] = {
         requires="admin_agent",
         path=lambda ctx, _i: _matrix_webhook_requests_path(ctx),
     ),
+    # T-8b0d: the SAME bounded wake snapshot as /api/resume-summary, for a
+    # TARGET member instead of the caller (control-others; member_id is a
+    # target param). requires=admin_agent — a plain agent is a flat 403; the
+    # original /api/resume-summary row and its identity lock are untouched.
+    "GET /api/members/{member_id}/resume-summary": Route(
+        requires="admin_agent",
+        path=_member_path("/api/members/{member_id}/resume-summary"),
+    ),
     # ── self-report presence (identity from token, no target param) ─────────
     "POST /api/self/waking": Route(
         # owner: sub="owner" has no roster row → 404 (self-report is agent-only

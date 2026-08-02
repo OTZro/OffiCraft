@@ -72,6 +72,9 @@ import type {
   WireTaskManual,
   WireTaskManualUpdate,
   WireTaskReassign,
+  WireResumeOverview,
+  WireResumeTask,
+  WireResumeSummary,
 } from "./wire";
 import type {
   ChatMessage,
@@ -92,6 +95,9 @@ import type {
   ManualAssigneeView,
   WebhookEndpoint,
   WebhookRequestLog,
+  ResumeOverviewView,
+  ResumeTaskView,
+  MemberResumeSummaryView,
 } from "./adapter";
 
 /** The five real presence words, as a runtime set — the type union's twin. */
@@ -1232,5 +1238,67 @@ export function toWebhookRequestLog(
     headers: w.headers,
     body: w.body,
     truncated: w.truncated,
+  };
+}
+
+// ── Resume summary (RESUME SUMMARY panel section, T-8b0d) ─────────────────────
+
+const EMPTY_RESUME_OVERVIEW: ResumeOverviewView = {
+  chatCount: 0,
+  chatChars: 0,
+  tasksReturned: 0,
+  tasksOpenTotal: 0,
+  tasksDetailChars: 0,
+  cardsWaiting: 0,
+  cardsAnsweredRecent: 0,
+};
+
+/** Map one wire resume-snapshot overview block → the view model (pure
+ * passthrough — every field is server-computed). */
+export function toResumeOverview(w: WireResumeOverview): ResumeOverviewView {
+  return {
+    chatCount: w.chat_count,
+    chatChars: w.chat_chars,
+    tasksReturned: w.tasks_returned,
+    tasksOpenTotal: w.tasks_open_total,
+    tasksDetailChars: w.tasks_detail_chars,
+    cardsWaiting: w.cards_waiting,
+    cardsAnsweredRecent: w.cards_answered_recent,
+  };
+}
+
+/** Map one wire resume-snapshot LIGHT task row → the view model. */
+export function toResumeTask(w: WireResumeTask): ResumeTaskView {
+  return {
+    id: w.id,
+    taskNo: w.task_no,
+    title: w.title ?? "",
+    typeKey: w.type_key ?? "",
+    status: w.status,
+    priority: w.priority,
+    waitingReason: w.waiting_reason ?? "",
+    currentStepId: w.current_step_id ?? "",
+    currentStepName: w.current_step_name ?? "",
+    progressDone: w.progress_done,
+    progressTotal: w.progress_total,
+    updatedTs: w.updated_ts ?? 0,
+    detailChars: w.detail_chars,
+  };
+}
+
+/** Map a target member's wire resume snapshot → the view model (RESUME
+ * SUMMARY panel section). `identity`/`overview` are optional on the wire only
+ * to keep old hand-built fixtures valid — a real snapshot always sets them;
+ * `overview` falls back to all-zero counts rather than `undefined` so the
+ * panel never has to null-check the size figures it renders. */
+export function toMemberResumeSummary(
+  w: WireResumeSummary,
+): MemberResumeSummaryView {
+  return {
+    identity: w.identity ?? null,
+    chat: (w.chat ?? []).map(toChatMessage),
+    tasks: (w.tasks ?? []).map(toResumeTask),
+    overview: w.overview ? toResumeOverview(w.overview) : EMPTY_RESUME_OVERVIEW,
+    note: w.note ?? "",
   };
 }

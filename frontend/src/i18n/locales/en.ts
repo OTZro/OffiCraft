@@ -775,6 +775,25 @@ export const en: Dict = {
       requestBodyEmpty: "(empty)",
       requestTruncated: "truncated",
     },
+    // ── RESUME SUMMARY (T-8b0d — the same wake snapshot resume_summary
+    // returns, here for the owner to view) ──
+    resumeSummary: {
+      title: "RESUME SUMMARY",
+      loading: "Loading…",
+      error: "Failed to load the wake snapshot",
+      retry: "Retry",
+      chatCount: "Recent messages",
+      chatChars: "Message chars",
+      tasksReturned: "Tasks returned",
+      tasksOpenTotal: "Open tasks total",
+      tasksDetailChars: "Task detail chars",
+      cardsWaiting: "Waiting reply cards",
+      cardsAnsweredRecent: "Recently answered cards",
+      chatSection: "Recent chat",
+      chatEmpty: "No chat messages",
+      tasksSection: "Open tasks",
+      tasksEmpty: "No open tasks",
+    },
     dash: "—",
   },
   machine: {

@@ -650,6 +650,22 @@
       "name": "list_webhook_requests"
     },
     {
+      "description": "The SAME bounded wake snapshot as resume_summary, for a TARGET member (member_id) instead of the caller — control-others, admin_agent+ only (owner-scope or role=assistant); an ordinary agent gets 403. Same identity/chat/light-task-rows/overview/note shape, assembled by the identical resumeSnapshotParts function; resume_summary itself is unchanged and still identity-locked to the caller.",
+      "inputSchema": {
+        "properties": {
+          "member_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "member_id"
+        ],
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "name": "get_member_resume_summary"
+    },
+    {
       "description": "Post a chat message (sender = verified JWT sub; auto SSE fan-out). ``to`` must name the owner or an active AI member; unknown, removed, and machine ids are rejected. Presence is not a gate: an offline member keeps its durable mailbox.",
       "inputSchema": {
         "$defs": {

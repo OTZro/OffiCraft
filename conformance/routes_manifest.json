@@ -273,6 +273,13 @@
     "requires": "admin_agent"
   },
   {
+    "auth": "gated",
+    "mcp_tool": "get_member_resume_summary",
+    "method": "GET",
+    "path": "/api/members/{member_id}/resume-summary",
+    "requires": "admin_agent"
+  },
+  {
     "auth": "public",
     "mcp_tool": null,
     "method": "POST",

@@ -710,6 +710,20 @@ HAPPY: dict[str, Happy] = {
             and d[0]["truncated"] is False,
         ),
     ),
+    # T-8b0d: the SAME bounded wake snapshot as /api/resume-summary, for a
+    # TARGET member (this file's own scratch agent) instead of the caller.
+    # The check pins the control-others contract: identity in the body is
+    # the TARGET's id, never the owner caller's — that is the whole point of
+    # this row over the caller-locked "GET /api/resume-summary" one above.
+    "GET /api/members/{member_id}/resume-summary": Happy(
+        path=lambda ctx: f"/api/members/{ctx.agent.member_id}/resume-summary",
+        check=lambda ctx, r: _expect(
+            r,
+            lambda d: d["identity"] == ctx.agent.member_id
+            and isinstance(d.get("tasks"), list)
+            and isinstance(d.get("overview"), dict),
+        ),
+    ),
     # ── webhook inlet (M4 §2) — PUBLIC, token-only (?t=); silent 200 for every
     # case so it never leaks endpoint existence. The anonymous face (no token)
     # is the lowest-friction happy probe; the accept/ignore delivery semantics

@@ -160,6 +160,10 @@ interface AgentDetailPanelProps {
   /** Pluggable expand cards after the terminal card, BEFORE the initial-prompt
    * card (member: 回呼端點 webhook). */
   extraExpandCards?: ReactNode;
+  /** Pluggable cards AFTER the initial-prompt card — the LAST slot the panel
+   * offers (member: RESUME SUMMARY, T-8b0d). Undefined ⇒ renders nothing, so
+   * a caller that never passes it (the worker page today) is unaffected. */
+  afterPromptCards?: ReactNode;
 }
 
 /**
@@ -179,6 +183,7 @@ export function AgentDetailPanel({
   afterInfoCards,
   beforeTerminalCards,
   extraExpandCards,
+  afterPromptCards,
 }: AgentDetailPanelProps) {
   const { t, msg } = useI18n();
   const dash = t.mp.dash;
@@ -625,6 +630,8 @@ export function AgentDetailPanel({
           )}
         </div>
       )}
+
+      {afterPromptCards}
     </div>
   );
 }
