@@ -109,11 +109,37 @@ export function ChatReplyCard({
     return unsubscribe;
   }, [refetch]);
 
+  // 🔴 One owner action = one round of refetching (T-a3e4 step 8), and the two
+  // actions are NOT symmetric. Do not "tidy" them into the same shape — the
+  // asymmetry is forced by the T-cdf4 guard in the SSE effect above:
+  //
+  //   answer  — this card is still WAITING, so the guard lets the reply_card
+  //             delta through, and that delta ALSO arrives for the owner's own
+  //             write (http: publishReplyCard fires after the row commits and
+  //             before the response flushes; mock: emitTopic is called
+  //             synchronously inside answerReplyCard). So the delta refetches
+  //             this card on its own — an action-path refetch here would be a
+  //             SECOND full GET whose result is downloaded and thrown away, and
+  //             NOTHING on screen would show it.
+  //   reanswer— this card is already ANSWERED, and the guard deliberately drops
+  //             the delta for terminal cards (that is what stops 70+ historical
+  //             cards each refetching on one unrelated answer). So the SSE path
+  //             will NOT fire, and this refetch is the ONLY thing that updates
+  //             the card. Removing it leaves 重新決定 showing the OLD answer:
+  //             ReplyCardAnsweredBody closes edit mode as soon as onReanswer
+  //             resolves, so the stale value is what the owner is left looking
+  //             at. It stays.
+  //
+  // ⚠️ The cost of dropping the answer-path refetch: with the SSE stream down,
+  // the card no longer flips in place. That is the same trade this ticket's
+  // first half already accepted for useReplyCards, for the same reason (the
+  // delta is the single reconcile trigger); refresh() remains the unconditional
+  // path for a 409, where somebody ELSE's write means no delta of ours is
+  // coming.
   async function doAnswer(input: ReplyCardAnswerInput) {
     try {
       await api.answerReplyCard(replyCardId, input);
       setActionError(null);
-      await refetch();
     } catch (e) {
       console.warn("ChatReplyCard: answer failed", e);
       setActionError(t.replies.answerError);

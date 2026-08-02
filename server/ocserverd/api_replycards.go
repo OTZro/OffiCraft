@@ -499,13 +499,39 @@ func (s *apiServer) replyCardListItemOf(c ReplyCard) (replyCardListItemDTO, erro
 	return dto, nil
 }
 
-// GET /api/reply-cards — the three panes as LIGHT rows (T-3f31):
+// The ?view projection (T-a3e4, owner-approved 2026-08-02). LIGHT is the
+// default and is the ONLY thing the list_reply_cards MCP tool can ask for —
+// `view` is deliberately absent from the frozen catalog (see the
+// deliberatelyOffMCP entry in spec_catalog_conformance_test.go): the light row
+// IS the agent-facing contract (T-3f31 owner ruling 卡只需要 title+決策), and a
+// lever that pulls whole panes of full cards into an agent's context would undo
+// exactly what that ticket shrank.
+const (
+	replyCardViewLight = "light"
+	replyCardViewFull  = "full"
+)
+
+// GET /api/reply-cards — the three panes (T-3f31 LIGHT rows by default):
 // ?status=waiting (default; longest-waiting first) | ?status=answered (last
 // 24h, newest answer first) | ?status=expired (last 24h keyed expired_ts,
 // newest first — the ocagent drain's offline-expiry catch-up pane). ?limit=N
 // (N > 0) caps the rows AFTER the pane's ordering — the pane's first N
-// survive; absent / non-positive = the whole pane. Full card via
-// GET /api/reply-cards/{card_id}.
+// survive; absent / non-positive = the whole pane.
+//
+// ?view=full (T-a3e4) serves the SAME pane, same rows, same order, as FULL
+// cards — built by the SAME replyCardDTOOf that GET /api/reply-cards/{card_id}
+// uses, so a full row is byte-identical to that card's own response. It exists
+// because a renderer that draws the whole card (the cockpit's panes and its
+// inline chat cards do) otherwise has to follow the light list with one GET per
+// row: opening one pane costs one ROUND TRIP PER WAITING CARD. The win is the
+// round trips, not the bytes — a full pane is very nearly the same size either
+// way, so do not sell this as saving bandwidth.
+//
+// Absent / "light" is the historical response, unchanged to the byte. Any other
+// value is a 400 naming both: silently falling back to light would restore the
+// per-row fan-out with no signal, which is the cost this parameter removes.
+// (This is the one place T-a3e4 departs from the ?view=list / ?fields=light
+// precedents, which do fall back silently — owner was told and did not object.)
 func (s *apiServer) HandleListReplyCardsApiReplyCardsGet(w http.ResponseWriter, r *http.Request, params HandleListReplyCardsApiReplyCardsGetParams) {
 	status := trimmedOrEmpty(params.Status)
 	if status == "" {
@@ -515,6 +541,15 @@ func (s *apiServer) HandleListReplyCardsApiReplyCardsGet(w http.ResponseWriter, 
 		status != replyCardStatusExpired {
 		writeError(w, http.StatusBadRequest,
 			"status must be 'waiting', 'answered' or 'expired'")
+		return
+	}
+	view := trimmedOrEmpty(params.View)
+	if view == "" {
+		view = replyCardViewLight
+	}
+	if view != replyCardViewLight && view != replyCardViewFull {
+		writeError(w, http.StatusBadRequest,
+			"view must be 'light' or 'full'")
 		return
 	}
 	cards, err := s.dal.ListReplyCards()
@@ -533,6 +568,19 @@ func (s *apiServer) HandleListReplyCardsApiReplyCardsGet(w http.ResponseWriter, 
 	}
 	if params.Limit != nil && *params.Limit > 0 && *params.Limit < len(pane) {
 		pane = pane[:*params.Limit]
+	}
+	if view == replyCardViewFull {
+		full := []replyCardDTO{}
+		for _, c := range pane {
+			dto, err := s.replyCardDTOOf(c)
+			if err != nil {
+				internalError(w, err)
+				return
+			}
+			full = append(full, dto)
+		}
+		writeJSON(w, http.StatusOK, full)
+		return
 	}
 	out := []replyCardListItemDTO{}
 	for _, c := range pane {

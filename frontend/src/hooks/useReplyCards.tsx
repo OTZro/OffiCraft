@@ -8,8 +8,8 @@
 // owner expands the pane (loadHandled). Reconcile-by-refetch (contract B): a
 // delta REFETCHES — the waiting list + counts always, and the handled lists
 // only when currently loaded (expanded) — never merges an event payload. The
-// answer/re-answer/expire actions also refetch directly so the mock (whose
-// subscribeEvents is a no-op) behaves identically.
+// answer/re-answer/expire actions do NOT refetch directly — see T-a3e4 step 8
+// below.
 //
 // T-e862 (狀態競態修復):
 //  ① REQUEST SEQUENCING. refetchWaiting/refetchHandled are fired concurrently
@@ -29,13 +29,41 @@
 //     page title 「待回覆 · N」 reads the same length. One source, one
 //     subscription — they cannot disagree.
 //
-// NOTE (follow-up, intentionally NOT in this change): api.listReplyCards is a
-// non-atomic N+1 (a light index then a per-id hydrate). Sequencing makes a
-// stale snapshot harmless, but a single snapshot can still be an internally
-// skewed slice, and hoisting the list app-wide for the badge means that N+1
-// now runs app-wide on every delta. The clean fix is an ATOMIC list endpoint
-// (server returns full-enough rows in one shot); left as a follow-up because
-// it is a server + shared agent-tool-contract change, out of this FE scope.
+// T-a3e4 step 8 (一次動作只重抓一輪):
+//   ONE owner action used to cost TWO complete refetch rounds. The action path
+//   (answer/reanswer/expire → refetchAfterAction) and the SSE handler each
+//   fired their own refetch for the SAME write, because the server publishes
+//   its `reply_card` delta for the owner's own write too. ①'s generation guard
+//   dedupes the COMMIT, not the REQUEST — the loser's response was downloaded
+//   in full and then thrown away. Measured against a real ocserverd over a
+//   25-card waiting pane: one answered card = 48 per-card GETs (24 cards × 2)
+//   and 100,952 B, against 25 GETs / 51,599 B for the same pane on mount.
+//   An isolation control pinned the cause: a delta the cockpit did NOT cause
+//   (someone else opening a card) produced exactly ONE round, so the second
+//   round belonged to the local action path, not to a doubled stream.
+//
+//   ⇒ The actions no longer refetch. The delta is the single reconcile trigger,
+//   and it is sufficient in BOTH adapters — this is the load-bearing fact, so
+//   check it before touching either: the http adapter gets the delta from the
+//   server (`publishReplyCard` runs AFTER the row is committed and BEFORE the
+//   response is flushed, so a delta-triggered read can never precede the
+//   write), and the mock fans its OWN `reply_card` topic from inside
+//   answer/reanswer/expire (`emitTopic`, called synchronously after it mutates
+//   the in-memory card). The old comment here claimed the direct refetch
+//   existed "so the mock behaves identically" — that stopped being true when
+//   the mock grew emitTopic, and the stale justification is what kept the
+//   duplicate alive.
+//   ⚠️ `refresh()` is NOT part of this and still refetches unconditionally: its
+//   caller (a 409 answer — the card was already handled elsewhere) learned its
+//   snapshot is stale from a write it did not make, so there is no delta of its
+//   own on the way.
+//
+// NOTE (follow-up, still NOT in this change): api.listReplyCards is a
+// non-atomic N+1 (a light index then a per-id hydrate) — the 25 GETs above are
+// one round, not one request. A single snapshot can still be an internally
+// skewed slice. The clean fix is an ATOMIC list endpoint (server returns
+// full-enough rows in one shot); it is a frozen-wire change (spec first +
+// owner sign-off, root CLAUDE.md §13), which is why it is not here.
 
 import {
   createContext,
@@ -81,12 +109,15 @@ interface UseReplyCards {
    * stale (T-4166: a 409 answer means the card is already handled or orphaned,
    * so it must stop rendering as if it still waits). */
   refresh: () => Promise<void>;
-  /** Answer a WAITING card (the positive close), then refetch. */
+  /** Answer a WAITING card (the positive close). Resolving means the WRITE
+   * landed — NOT that the panes have re-read yet; the card leaves the pane on
+   * the `reply_card` delta this write fans back (T-a3e4 step 8). */
   answer: (id: string, input: ReplyCardAnswerInput) => Promise<void>;
-  /** Revise an ANSWERED card's answer (重新決定), then refetch. */
+  /** Revise an ANSWERED card's answer (重新決定). Same resolve semantics as
+   * `answer`. */
   reanswer: (id: string, input: ReplyCardAnswerInput) => Promise<void>;
-  /** Mark a WAITING card expired (標為過期 — terminal, not an answer), then
-   * refetch. */
+  /** Mark a WAITING card expired (標為過期 — terminal, not an answer). Same
+   * resolve semantics as `answer`. */
   expire: (id: string) => Promise<void>;
 }
 
@@ -202,39 +233,33 @@ function useReplyCardsState(): UseReplyCards {
     };
   }, [refetchWaiting, refetchHandled]);
 
-  const refetchAfterAction = useCallback(async () => {
+  // The UNCONDITIONAL re-read, for a caller that learned its snapshot is stale
+  // from a write it did not make (the 409 path). NOT used by the actions below
+  // — see T-a3e4 step 8 in the header for why they must not re-read.
+  const refresh = useCallback(async () => {
     await refetchWaiting();
     if (handledLoadedRef.current) await refetchHandled();
   }, [refetchWaiting, refetchHandled]);
 
-  const answer = useCallback(
-    async (id: string, input: ReplyCardAnswerInput) => {
-      await api.answerReplyCard(id, input);
-      await refetchAfterAction();
-    },
-    [refetchAfterAction]
-  );
+  const answer = useCallback(async (id: string, input: ReplyCardAnswerInput) => {
+    await api.answerReplyCard(id, input);
+  }, []);
 
   const reanswer = useCallback(
     async (id: string, input: ReplyCardAnswerInput) => {
       await api.reanswerReplyCard(id, input);
-      await refetchAfterAction();
     },
-    [refetchAfterAction]
+    []
   );
 
-  const expire = useCallback(
-    async (id: string) => {
-      await api.expireReplyCard(id);
-      await refetchAfterAction();
-    },
-    [refetchAfterAction]
-  );
+  const expire = useCallback(async (id: string) => {
+    await api.expireReplyCard(id);
+  }, []);
 
   return {
     waiting,
     handled,
-    refresh: refetchAfterAction,
+    refresh,
     handledCount,
     handledLoaded,
     loading,

@@ -1872,6 +1872,25 @@ export interface paths {
          *     card in full with ``get_reply_card``. ``?limit=N`` (N > 0) caps the rows AFTER
          *     the pane's ordering (the pane's first N survive); absent / non-positive = the
          *     whole pane.
+         *
+         *     ``?view=full`` (OPTIONAL) returns the SAME pane, the same rows, in the same
+         *     order, as FULL ``ReplyCardDTO`` objects — body, the full ``options`` text, the
+         *     untruncated answer, attachment refs, the chat anchor — i.e. byte-for-byte what
+         *     that pane's rows would have yielded as one ``get_reply_card`` EACH. It exists
+         *     for one reason: a renderer that draws the whole card (the cockpit's panes and
+         *     its inline chat cards do) had to follow the light list with one
+         *     ``GET /api/reply-cards/{card_id}`` PER ROW, so opening one pane costs one
+         *     round trip per waiting card. The win is the ROUND TRIPS, not the bytes — a
+         *     full pane is very nearly the same number of bytes either way.
+         *     ``?view=light``, or the parameter absent, is the LIGHT default: the response
+         *     this route has always returned, unchanged to the byte. Any OTHER value is a
+         *     400 naming both — falling back to light on a typo would restore the per-row
+         *     fan-out silently, which is the exact cost this parameter removes.
+         *     ``view`` is DELIBERATELY absent from the ``list_reply_cards`` MCP tool: the
+         *     light row IS the agent-facing contract (owner ruling above), and a lever that
+         *     pulls whole panes of full cards into an agent's context would undo precisely
+         *     what T-3f31 shrank. The agent path to a full card is still ``get_reply_card``,
+         *     one card at a time, chosen deliberately.
          */
         get: operations["handle_list_reply_cards_api_reply_cards_get"];
         put?: never;
@@ -10477,6 +10496,7 @@ export interface operations {
             query?: {
                 status?: string | null;
                 limit?: number | null;
+                view?: string | null;
             };
             header?: never;
             path?: never;
@@ -10490,7 +10510,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ReplyCardListItemDTO"][];
+                    "application/json": components["schemas"]["ReplyCardListItemDTO"][] | components["schemas"]["ReplyCardDTO"][];
                 };
             };
             /** @description Validation error (unified error envelope). */

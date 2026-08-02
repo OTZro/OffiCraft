@@ -112,6 +112,10 @@ import {
   fromTaskManualPatch,
   fromTaskReassignInput,
 } from "./mappers";
+// The one wire type this seam names directly: GET /api/reply-cards serves a
+// UNION (light rows | full cards) and `?view=full` is what picks the second
+// arm, so listReplyCards has to narrow to it. See that function.
+import type { WireReplyCard } from "./wire";
 import { ownerToken, setToken } from "./auth";
 import { ApiError } from "./errors";
 import { client } from "./client";
@@ -772,31 +776,42 @@ export const httpApi: Api = {
   async listReplyCards(
     status: "waiting" | "answered" | "expired",
   ): Promise<ReplyCard[]> {
-    // GET /api/reply-cards?status= -> ReplyCardListItemDTO[] (T-3f31: the list
-    // wire went LIGHT — summary + decision digest only, no body/options; the
-    // agent-facing list_reply_cards tool shares this route and must stay
-    // small). The cockpit panes render the FULL card (option chips, body,
-    // attachment refs), so hydrate each row via GET /api/reply-cards/{id},
-    // preserving the server's pane order (waiting = longest-waiting first,
-    // answered = last-24h newest answer first). RepliesPage re-sorts the
-    // waiting pane newest-first for DISPLAY only (T-b07f) — the adapter still
-    // hands over server order.
+    // GET /api/reply-cards?status=&view=full -> ReplyCardDTO[] (T-a3e4).
+    //
+    // T-3f31 took the body / full options text OUT of the list wire, because
+    // the AGENT-facing list_reply_cards tool shares this route and must stay
+    // small (owner ruling: 卡只需要 title+決策). But the cockpit panes render
+    // the FULL card (option chips, body, attachment refs), so this adapter used
+    // to follow the light list with one GET /api/reply-cards/{id} PER ROW —
+    // opening one waiting pane cost one ROUND TRIP PER WAITING CARD. `view=full`
+    // serves the same pane, in the same order, as whole cards in ONE request.
+    //
+    // 🔴 The win is the ROUND TRIPS, not the bytes. Measured on a real
+    // ocserverd waiting pane: 26 requests / 49,970 B → 1 request / 44,183 B —
+    // 25 fewer round trips, but only 11.6% fewer bytes. Do not sell this as
+    // saving bandwidth: on a slow link the latency is the whole cost, and a
+    // full pane is very nearly the same size either way.
+    //
+    // The server order is preserved (waiting = longest-waiting first, answered =
+    // last-24h newest answer first). RepliesPage re-sorts the waiting pane
+    // newest-first for DISPLAY only (T-b07f) — the adapter still hands over
+    // server order.
+    //
+    // ⚠️ `view` lives ONLY here, in the http seam: it is not an adapter concept
+    // (mock has always returned whole cards, so parity is unchanged) and it is
+    // deliberately absent from the list_reply_cards MCP tool, so agents cannot
+    // ask for it. Do not lift it into the adapter signature.
     const rows = unwrap(
       await client.GET("/api/reply-cards", {
-        params: { query: { status } },
+        params: { query: { status, view: "full" } },
       }),
     );
-    return Promise.all(
-      rows.map(async (row) =>
-        toReplyCard(
-          unwrap(
-            await client.GET("/api/reply-cards/{card_id}", {
-              params: { path: { card_id: row.id } },
-            }),
-          ),
-        ),
-      ),
-    );
+    // The response schema is a union (light rows | full cards) because ONE route
+    // serves both projections; `view=full` is what selects the second arm, so
+    // narrow to it here. Asserted on the wire, not just typed: the server test
+    // TestListReplyCardsViewFullRowsEqualTheSingleCardResponse pins each row as
+    // byte-identical to that card's own GET /api/reply-cards/{card_id}.
+    return (rows as WireReplyCard[]).map(toReplyCard);
   },
 
   async getReplyCard(id: string): Promise<ReplyCard> {

@@ -266,11 +266,74 @@ inline 卡,訊息帶 `replyCardId` = wire `meta.reply_card_id` 時取代 bubble)
 渲染 **共用的 `ReplyCardBody.tsx`**(選項 chips/你選的/AI 建議 tag/重新決定流程)
 + 共用 `ReplyComposer`(打字/附檔/貼圖)——兩面永不漂移。同步 = reconcile-by-
 refetch:兩側都訂 `reply_card` topic;聊天卡另走 `GET /api/reply-cards/{id}`
-單卡 refetch。**list wire 輕量化(T-3f31)**:`GET /api/reply-cards` 只回輕量摘要
-(summary+決策 digest,無 body/options 全文)——http adapter 的 `listReplyCards`
-逐卡 hydrate(list 拿 id 序 → per-id `GET /api/reply-cards/{id}`)還原完整
-`ReplyCard[]`,adapter 契約與 pane 渲染(chips/body)不變;mock 本就出全卡,
-parity 在 adapter 層。跳到原訊息 = `#office/chat/<id>/msg/<msgId>`(hashRoute `msgId`)
+單卡 refetch。
+
+🔴 **一次 owner 動作只准觸發一輪重抓(T-a3e4 step 8)**:`useReplyCards` 的
+answer / reanswer / expire **不自己 refetch**——`reply_card` delta 是唯一的
+reconcile trigger,而它對 owner 自己的寫入**也會來**(http:server 的
+`publishReplyCard`,在 row commit 之後、response flush 之前;mock:
+`answerReplyCard` 裡同步呼叫的 `emitTopic`)。舊碼兩條路各抓一輪,T-e862 的
+generation guard **只擋 commit、不擋請求**,所以多的那一輪是「整份下載完再丟掉」
+——畫面上完全看不出來,任何「答完卡片會離開清單」的斷言在壞碼上照樣綠。
+真 ocserverd 實測(25 張 waiting 卡):答一張卡 = **48 次逐卡 GET / 100,952 B**
+→ 修後 **24 次 / 51,406 B**;對照組(別人開的卡、座艙沒動作)改動前後都是一輪,
+那正是坐實「第二輪屬於本地動作路徑」的實驗。
+⚠️ **`refresh()` 不在此列、仍無條件重抓**:它的 caller 是 409(卡已被別處處理),
+那是別人的寫入,沒有自己的 delta 會來。
+⚠️ 舊註解說動作路徑的 refetch 是「為了讓 mock 行為一致」——mock 長出 `emitTopic`
+之後那句就不成立了,**過時的理由正是這個重複活下來的原因**。
+護欄:`hooks/useReplyCards.one-round.test.tsx`(數呼叫次數,不看畫面;mutant:
+把動作路徑的 refetch 加回去 → 紅 2 條、把 SSE 那條刪掉 → 紅 3 條)。
+
+🔴 **同一條規則的第三個站點:`ChatReplyCard` 的單卡重複(T-a3e4 節點 8 後半)。**
+`doAnswer` 原本在 `await api.answerReplyCard()` 之後**又自己** `refetch()`,而那張卡
+還是 `waiting` ⇒ SSE effect 的 T-cdf4 guard 放行 ⇒ 同一次寫入抓兩遍。現已拿掉動作
+路徑那一次。
+⚠️ **但 `doReanswer` 的 refetch 保留,而且不准「順手對齊」成同一個形狀** —— 這個
+不對稱是 T-cdf4 guard 逼出來的:重新決定作用在**已回覆**卡上,而那道 guard **刻意**
+把終態卡的 delta 丟掉(那正是「70+ 張歷史卡不會每張都重抓」的來源),所以 SSE 路徑
+**不會**觸發,動作路徑是那張卡唯一的更新來源。拿掉它 = `ReplyCardAnsweredBody` 在
+`onReanswer` resolve 當下就關掉編輯模式,owner 被留在**舊答案**的畫面上。
+**代價誠實寫下**:SSE 斷線時,答完的卡不再就地翻面(與前半對 `useReplyCards` 已接受
+的同一個交換;`refresh()` 仍是 409 的無條件路徑——那是別人的寫入,沒有自己的 delta)。
+護欄:`components/ChatReplyCard.one-round.test.tsx`(數呼叫、不看畫面)。
+**mutant 實測(兩個方向各自被恰好一條釘住)**:把 `doAnswer` 的 refetch 加回去 →
+「answering …」紅,**量到 2 次**(坐實重複真的存在);把 `doReanswer` 的拿掉 →
+「re-answering STILL refetches」紅,**量到 0 次**(坐實它承重)。
+
+✅ **逐張 hydrate 的 N+1 已經沒了(T-a3e4 節點 8 後半;owner 2026-08-02 核准
+`?view=full`)**——上面那句「N+1 還在、不是這一顆修的東西」已經是**假的**,別再引用。
+`GET /api/reply-cards?view=full` 一個請求回**整個 pane 的全卡**(逐位元組等於每張卡
+自己的 `GET /api/reply-cards/{id}`,由 server 端測試釘住),http adapter 的
+`listReplyCards` 因此只發**一個**請求。
+- 🔴 **價值在往返次數,不在流量,別講錯**:真 ocserverd 實測 waiting pane
+  **26 請求 / 49,970 B → 1 請求 / 44,183 B** = 少 **25 個 RTT**、位元組只少 **11.6%**。
+  慢線路上延遲就是全部成本;**不要把它講成「省流量」**。所以 `http.view-full.test.ts`
+  **只數請求、沒有任何位元組斷言**(那會暗示一個幾乎不存在的節省)。
+- **①② 是同一個修改點**:waiting pane 與 近期已處理 pane 都走 `listReplyCards`
+  (`useReplyCards` 呼叫三次:waiting / answered / expired)⇒ 一處改完,展開的
+  等我回覆頁從每 delta 約 51 次往返收成 **3 個請求**。**收合時零成本那個 gate
+  (`handledLoaded`)沒有被碰**,別動它。
+- ⚠️ **`view` 只活在 http seam,不是 adapter 概念**:mock 本來就出全卡,所以 parity
+  在 adapter 層不變、mock 一行沒改。**別把 `view` 提到 adapter 簽章上。**
+- 🔴 **agent 面一個位元組沒變**:`view` **刻意不在** `list_reply_cards` 的 MCP
+  inputSchema 裡(登記在 `server/ocserverd/spec_catalog_conformance_test.go` 的
+  `deliberatelyOffMCP`,不是 `knownCatalogDrift`——那份是「該補的債」,填錯欄會招來
+  下一個人「把它廣告出去」)。理由:輕量列就是 owner 裁定的 agent 契約(T-3f31),
+  給 agent 一個一次拉整個 pane 全卡的把手,等於把 T-3f31 縮掉的還回去。seeds 因此
+  **不需要同批改**(它教的「列表只給標題＋決策要點、全文 `get_reply_card`」對 agent
+  仍然逐字為真)。conformance `test_view_is_not_advertised_to_agents` 對**線上**
+  tools/list 釘這條(不是對凍結檔)。
+- **回應 schema 是聯集**(light 列 | 全卡),因為同一條路由服務兩種投影;`?view=full`
+  就是選第二臂的東西,所以 adapter 在那裡窄化。代價:`ocapi_gen.go` 多 88 行**沒有
+  任何 caller** 的 union wrapper(該檔第一個 union 構造)——owner 在知情下選了
+  「規格誠實」這一邊,對照選項是照 `?view=list` 的先例**完全不宣告**輕量形狀。
+
+**list wire 輕量化(T-3f31)**:`GET /api/reply-cards` 的**預設**仍只回輕量摘要
+(summary+決策 digest,無 body/options 全文),`?view=light` 與不帶參數逐位元組相同;
+不認得的 `view` 值回 **400 並點名兩個合法值**(默默落回 light 會讓一個打錯的字**無聲**
+恢復逐列 fan-out——那正是這顆在修的成本;這是刻意偏離 `?view=list` / `?fields=light`
+兩個先例的靜默落回,owner 知情未反對)。跳到原訊息 = `#office/chat/<id>/msg/<msgId>`(hashRoute `msgId`)
 → ChatArea `jumpToMsgId` 定位(center scroll)+ `chat__msg--located` 高亮
 flash;one-shot、消費掉 entry positioning(不與未讀 divider 打架);目標超出
 載入窗(recent 30)誠實 fallback 落底。徽章(待回覆數)與聊天未讀紅點是兩個
