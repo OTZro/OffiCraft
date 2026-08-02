@@ -130,8 +130,24 @@ var openapiOverweight = map[string][]string{
 // to its read and confirmed MISSING (debt to be repaid), and that list is
 // checked for rot precisely so it shrinks. Recording an intentional omission as
 // debt would invite the next person to "repay" it by advertising this field.
+// list_reply_cards.view: T-a3e4, owner-approved 2026-08-02. Unlike the two
+// telemetry fields above — which an agent could only ever INVENT — an agent
+// could honestly send `view=full`. It is withheld for the opposite reason: the
+// LIGHT row is the agent-facing contract by owner ruling (T-3f31, 卡只需要
+// title+決策), and `view=full` returns every card's body, full option list and
+// untruncated answer. Advertising it in tools/list would hand every agent a
+// one-call way to pull whole panes of full cards into its context — undoing
+// exactly what T-3f31 shrank, and the agent path to a full card is meant to be
+// get_reply_card, one card at a time, chosen deliberately. The cockpit is the
+// only intended caller (it renders the whole card, so the light list forced it
+// into one GET per row).
+//
+// NOT knownCatalogDrift: that map is debt to be repaid, and every entry there
+// was traced to its read and confirmed MISSING. Filing this there would invite
+// the next person to "repay" it by advertising the lever.
 var deliberatelyOffMCP = map[string][]string{
 	"ingest_telemetry": {"warden_shape", "cutover_effect"},
+	"list_reply_cards": {"view"},
 }
 
 type openapiSpec struct {
