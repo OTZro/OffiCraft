@@ -402,6 +402,8 @@ owner 原話三句:「tasks 也一次拿太多了 說真的我們在意的只有
 - **接線本身有測試**:`armBackupHealth` 是 cmdServe **同步**呼叫(baseline 那一列在 serve 走到那裡就已經落庫),所以 `TestServeArmsTheBackupWatchdog` 用「佔住 port 讓 serve exit 1」那套(同 journal-mode 呼叫點測試)證明呼叫點還在——goroutine 只能用競態去斷言,同步寫入不用。
 - **mutant 實測(2026-08-02,每顆前 `go clean -testcache`,整個 package 計數)**:失敗不記錄 → **2 條紅**;`never_ran` 分支拿掉 → **4 條紅**;`stale` 分支拿掉 → **1 條紅**(`TestDecideBackupHealth_TheWholeTable`);cmdServe 不掛 watchdog → **1 條紅**(`TestServeArmsTheBackupWatchdog`);manual/premigration 也算證據 → **2 條紅**;`unknown` 落回 `healthy` → **1 條紅**。前端三顆:unknown 落回 healthy → **3 條紅**(跨 lib/App/MonitorPage 三檔)、三種原因收斂成一句 → **1 條紅**、「從來沒跑過」渲染成 dash → **1 條紅**。
 - ⚠️ **誠實的觀測底線**:watchdog 自己沒起來或 panic 時,沒有更高層的東西會叫。這是有意識接受的邊界,不是漏掉。
+- ⚠️ **裁決列讀不出來時是「重新推導」,不是「保留」**(`evaluate` 明寫):檔案系統對 stale / never ran 是地面真相,下一輪就會重新算對;唯一會掉的是當下那個 `failed` 標記,而且掉了也有界——一直失敗的排程會在 `backupStaleAfter()` 內轉 stale 再叫一次。反過來保留讀不出來的列更糟:沒有任何東西能清掉它,一次壞寫入就把燈永久凍住。
+- ⚠️ **獨立審查(2026-08-02)抓到的四件,已全部修掉並補測**:(a) 連續失敗的 `since_ts` 錨點**零覆蓋**——刪掉它整包照樣綠,而那正是生產常態(每 6 小時重試一次),沒有它「壞了三天」會每次重新計時(`TestRepeatedFailuresKeepTheFirstOnesStartTime`,mutant 實測 1 條紅);(b) 測試替身的 `failGet`/`failPut` 從沒被任何測試設過,而註解宣稱它們讓 fail-closed 路徑可達——**不可達的安全路徑不是安全路徑**(`TestAnUnusableSettingsStoreIsNeverGreen`);(c) `load()` 的註解把 `report()` 的性質講成整個模組的性質(見上一條);(d) conformance happy row 的斷言是**恆真**的(對封閉詞彙做成員檢查),已改成斷言「沒有退路的站不得讀成 healthy」。另修:baseline 改用 `strconv.ParseFloat` 嚴格解析(`fmt.Sscanf` 會接受數字**前綴**,`1785600000junk` 也算數,而 baseline 正是「從來沒跑過」的計時起點)、`report()` 拿掉一個永遠不可能獨立決定任何事的 `err != nil ||`。
 
 ## 已知邊界(誠實列,別當成熟功能用)
 - **config 預設路徑是 CWD-relative `oc.toml`**(binary 沒有 source-path 可錨 repo root);部署正解走 `$OC_CONFIG`。

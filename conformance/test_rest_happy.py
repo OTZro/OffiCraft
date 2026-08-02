@@ -837,13 +837,16 @@ HAPPY: dict[str, Happy] = {
         identity="agent", body={"rate_limits": {"primary_used_pct": 1}}
     ),
     "GET /api/monitoring": Happy(),
-    # T-da06. A server that has never evaluated answers `unknown` — an honest
-    # state, never `healthy`, so the happy row pins the SHAPE plus that floor.
+    # T-da06. The conformance server is a fresh workdir: no SCHEDULED backup has
+    # landed, so the honest answer is `unknown`. Asserting membership of the
+    # closed vocabulary would be tautological (the server can emit nothing else)
+    # — the assertion that carries weight is that a studio with no retreat point
+    # does NOT read healthy, which is the entire defect this ticket removed.
     "GET /api/backup-health": Happy(
         check=lambda _c, r: _expect(
             r,
-            lambda d: d["status"] in {"healthy", "unhealthy", "unknown"}
-            and isinstance(d["stale_after_secs"], (int, float)),
+            lambda d: d["status"] == "unknown"
+            and d["stale_after_secs"] == 43200,
         ),
     ),
     # ── display-name overlays ────────────────────────────────────────────────

@@ -125,7 +125,7 @@
  *
  * Colour comes ONLY from the semantic tokens, so a custom theme re-values it
  * along with everything else; the icon SHAPE changes with the verdict too
- * (cylinder vs exclamation triangle), so the signal survives a reader who
+ * (cylinder vs exclamation triangle) for the ALARM, so a red verdict survives a reader who
  * cannot take the colour.
  *
  * The hover rules are not decoration: the shared `.icon-btn:hover` sets

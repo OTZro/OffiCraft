@@ -578,3 +578,121 @@ func TestServeArmsTheBackupWatchdog(t *testing.T) {
 		t.Fatalf("the recorded verdict has no evaluation time: %+v", st)
 	}
 }
+
+// ── review round 1: the branches nothing was executing ───────────────────────
+
+// TestRepeatedFailuresKeepTheFirstOnesStartTime is the guard an independent
+// review found MISSING: the anchor in noteScheduledOutcome had no test at all,
+// so it could be deleted and the whole suite stayed green.
+//
+// 🔴 WHY IT MATTERS MORE THAN IT LOOKS. The ordinary production shape of a
+// broken backup is not one failure — it is the cadence failing again every six
+// hours. Without this anchor every retry re-stamps the incident, so the card
+// says "failing for a few seconds" forever and the owner can never tell a
+// three-day outage from a blip. The user guide promises the opposite in so many
+// words.
+func TestRepeatedFailuresKeepTheFirstOnesStartTime(t *testing.T) {
+	dbPath := tempDBPath(t)
+	m := newBackupHealthMonitor(newFakeSettingStore(), dbPath)
+	broke := time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC)
+	fail := backupResult{Reason: backupReasonScheduled, Skipped: "only 1 MB free"}
+
+	m.noteScheduledOutcome(fail, nil, broke)
+	first := m.report()
+	if first.SinceTs == nil {
+		t.Fatal("the first failure recorded no start time")
+	}
+
+	// Three days of the cadence retrying and failing.
+	for i := 1; i <= 12; i++ {
+		m.noteScheduledOutcome(fail, nil, broke.Add(time.Duration(i)*6*time.Hour))
+	}
+	later := m.report()
+	if later.SinceTs == nil {
+		t.Fatal("the incident lost its start time")
+	}
+	if *later.SinceTs != *first.SinceTs {
+		t.Fatalf("each retry re-stamped the incident (%v → %v): a three-day outage would read as brand new every six hours", *first.SinceTs, *later.SinceTs)
+	}
+	// And a watchdog pass in between must not move it either.
+	if _, err := m.evaluate(broke.Add(80 * time.Hour)); err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if got := m.report(); got.SinceTs == nil || *got.SinceTs != *first.SinceTs {
+		t.Fatalf("a watchdog pass re-stamped the incident: %v", got.SinceTs)
+	}
+}
+
+// TestAnUnusableSettingsStoreIsNeverGreen exercises the store-failure paths.
+// The fake's failGet/failPut existed but nothing ever set them, so the comment
+// claiming they made the fail-closed paths reachable was false — and an
+// unreachable safety path is not a safety path.
+func TestAnUnusableSettingsStoreIsNeverGreen(t *testing.T) {
+	t.Run("cannot read the verdict", func(t *testing.T) {
+		store := newFakeSettingStore()
+		store.failGet = true
+		m := newBackupHealthMonitor(store, tempDBPath(t))
+		if got := m.report(); got.Status != backupHealthUnknown {
+			t.Fatalf("status = %q with an unreadable store, want %q", got.Status, backupHealthUnknown)
+		}
+	})
+
+	t.Run("cannot write the verdict", func(t *testing.T) {
+		store := newFakeSettingStore()
+		store.failPut = true
+		// Arming must not take the server down over it — same trade as the
+		// pre-migration backup hook — and it must not claim health either.
+		m := armBackupHealth(store, tempDBPath(t), time.Now())
+		if got := m.report(); got.Status == backupHealthHealthy {
+			t.Fatal("a server that could not record any verdict reported healthy")
+		}
+	})
+}
+
+// TestACorruptBaselineIsReArmedRatherThanHalfRead pins the parse. fmt.Sscanf
+// accepted a numeric PREFIX, so a truncated or appended-to row would parse and
+// be believed — and the baseline is the clock "never ran" is measured against.
+func TestACorruptBaselineIsReArmedRatherThanHalfRead(t *testing.T) {
+	for _, raw := range []string{"", "junk", "1785600000junk", "-1", "0"} {
+		store := newFakeSettingStore()
+		store.rows[settingBackupWatchdogBaseline] = raw
+		m := newBackupHealthMonitor(store, tempDBPath(t))
+		now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+		got, err := m.baselineAt(now)
+		if err != nil {
+			t.Fatalf("baselineAt(%q): %v", raw, err)
+		}
+		if !got.Equal(now) {
+			t.Fatalf("baseline %q was half-read as %v instead of being re-armed at %v", raw, got, now)
+		}
+	}
+}
+
+// TestACorruptVerdictRecoversRatherThanFreezing pins the honest boundary
+// documented in evaluate(): a verdict row we cannot read is replaced by one
+// derived from the filesystem, which is the ground truth for staleness. Pinning
+// it matters because the behaviour is a CHOICE — preserving the unreadable row
+// would freeze the light forever, since nothing could then clear it.
+func TestACorruptVerdictRecoversRatherThanFreezing(t *testing.T) {
+	dbPath := tempDBPath(t)
+	store := newFakeSettingStore()
+	store.rows[settingBackupHealth] = "{not json"
+	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+
+	m := newBackupHealthMonitor(store, dbPath)
+	if got := m.report(); got.Status != backupHealthUnknown {
+		t.Fatalf("an unreadable verdict must read unknown, got %q", got.Status)
+	}
+
+	// Ground truth says the schedule is dead: no scheduled backup at all, well
+	// past the grace window. The next pass must therefore ALARM, not go green.
+	if _, err := m.evaluate(now.Add(-backupStaleAfter() - time.Hour)); err != nil {
+		t.Fatalf("arm: %v", err)
+	}
+	if _, err := m.evaluate(now); err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if got := m.report(); got.Status != backupHealthUnhealthy || got.Code != backupHealthCodeNeverRan {
+		t.Fatalf("recovery from a corrupt verdict lost the alarm: status=%q code=%q", got.Status, got.Code)
+	}
+}

@@ -360,12 +360,16 @@ const MOCK_WIRE_VERSION: WireVersion = {
 const MOCK_WIRE_BACKUP_HEALTH: WireBackupHealth = {
   status: "healthy",
   code: "",
-  detail: "newest scheduled backup is 12m old (stale after 24h0m)",
-  newest_backup_ts: 0,
+  // A healthy server sends an EMPTY detail (it has no failure to explain) and
+  // a window of backupStaleFactor(2) x backupInterval(6h) = 43200s. Inventing
+  // other numbers here would make the mock world teach a shape production
+  // cannot produce — the mock exists to be indistinguishable, not decorative.
+  detail: "",
+  newest_backup_ts: 1785600000,
   newest_backup_age_secs: 720,
-  stale_after_secs: 86400,
+  stale_after_secs: 43200,
   since_ts: null,
-  checked_ts: 0,
+  checked_ts: 1785600720,
 };
 
 // ── Fixture: role-journal seeds, in WIRE shape (mirrors the folded GETs).

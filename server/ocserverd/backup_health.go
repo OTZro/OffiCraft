@@ -42,6 +42,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -125,8 +127,11 @@ func (m *backupHealthMonitor) baselineAt(now time.Time) (time.Time, error) {
 		return time.Time{}, err
 	}
 	if raw != nil {
-		var ts float64
-		if _, err := fmt.Sscanf(*raw, "%f", &ts); err == nil && ts > 0 {
+		// strconv, NOT fmt.Sscanf: Sscanf accepts a numeric PREFIX, so a
+		// corrupted "1785600000junk" would parse and be trusted. A baseline is
+		// what "never ran" is measured against — half-reading one is worse than
+		// re-arming.
+		if ts, err := strconv.ParseFloat(strings.TrimSpace(*raw), 64); err == nil && ts > 0 {
 			return time.Unix(0, int64(ts*float64(time.Second))), nil
 		}
 		// A corrupt baseline is re-armed rather than trusted: an unparseable
@@ -147,8 +152,8 @@ func (m *backupHealthMonitor) load() (*backupHealthState, error) {
 	}
 	var st backupHealthState
 	if err := json.Unmarshal([]byte(*raw), &st); err != nil {
-		// Unreadable state is reported as unknown by the caller, never as
-		// healthy: "we cannot tell" must not look like "you have a retreat".
+		// report() renders this as unknown — never healthy. evaluate() does
+		// NOT preserve it: see the honest boundary noted there.
 		return nil, err
 	}
 	return &st, nil
@@ -231,7 +236,15 @@ func (m *backupHealthMonitor) evaluate(now time.Time) (backupHealthState, error)
 	if err != nil {
 		return backupHealthState{}, err
 	}
-	prev, _ := m.load() // an unreadable prior verdict is replaced, not trusted
+	// 🔴 HONEST BOUNDARY: an unreadable prior verdict is REPLACED, not
+	// preserved. The filesystem is the ground truth for "stale" and "never
+	// ran", so those two re-derive correctly on the very next pass; the only
+	// thing a corrupt row can lose is the immediate `failed` marker, and that
+	// loss is bounded — a cadence that keeps failing goes stale within
+	// backupStaleAfter() and alarms again on its own. Preserving the
+	// unreadable row instead would be worse: nothing would ever clear it, so a
+	// single bad write would freeze the light forever.
+	prev, _ := m.load()
 
 	var failTS float64
 	var failDetail string
@@ -319,9 +332,12 @@ func (m *backupHealthMonitor) report() BackupHealthDTO {
 		return dto
 	}
 	m.mu.Lock()
-	st, err := m.load()
+	// load() returns a nil state on EVERY error path, so nil is the single
+	// question worth asking here — an `err != nil ||` in front of it would be a
+	// condition that can never independently decide anything.
+	st, _ := m.load()
 	m.mu.Unlock()
-	if err != nil || st == nil {
+	if st == nil {
 		dto.Detail = "the backup watchdog has not reported yet"
 		return dto
 	}

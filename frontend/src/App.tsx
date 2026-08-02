@@ -153,8 +153,11 @@ export default function App({ onLogout }: { onLogout?: () => void } = {}) {
           {/* 備份健康 — green cylinder / red exclamation / muted cylinder.
               Clicking it goes to the monitor page, where the 備份健康 card
               says WHY. Both surfaces read the same endpoint, so they cannot
-              disagree. The shape changes with the verdict, not only the
-              colour: this is the one indicator whose job is to be noticed. */}
+              disagree. The ALARM changes shape, not merely colour (triangle
+              vs cylinder), so a red state survives a reader who cannot take
+              the colour; healthy and unknown share the cylinder and are told
+              apart by colour AND by the accessible name, which always spells
+              the verdict out. */}
           <button
             className={`icon-btn backup-indicator backup-indicator--${backupState}`}
             type="button"
