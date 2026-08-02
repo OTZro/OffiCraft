@@ -18,6 +18,11 @@ oc.lock
 *_token*
 *.bak
 
+# bin/ci.sh's per-working-copy mutex (T-70c9). Lives inside the clone ON PURPOSE
+# — that is what makes it a per-copy lock rather than a machine-global one — so
+# it must be ignored, or every CI run would stamp its own provenance line DIRTY.
+.ci-lock/
+
 # Agent scratch/debug dir — never commit
 scratchpad/
 # Agent quarantine dir for removed files (deletes go here, never `rm`)

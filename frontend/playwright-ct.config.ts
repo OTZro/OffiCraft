@@ -23,9 +23,24 @@ export default defineConfig({
   retries: 0,
   reporter: [["list"]],
   use: {
-    // --strictPort equivalent: pin the CT dev server to a fixed, uncommon port
-    // so a co-located agent's dev server (5173/5230+) never collides, and fail
-    // loudly rather than silently hopping ports.
+    // A PREFERRED port, not a pinned one. 5241 is uncommon enough that a
+    // co-located agent's dev server (5173/5230+) does not normally collide —
+    // but when something IS already on it, Vite quietly moves to the next free
+    // port and the run continues.
+    //
+    // ⚠️ This comment used to claim the opposite ("--strictPort equivalent …
+    // fail loudly rather than silently hopping ports"). It was false in both
+    // halves: there is no `strictPort` here, and the observed behaviour is the
+    // hop. MEASURED (T-70c9): with 127.0.0.1:5241 held by another listener,
+    // `npx playwright test -c playwright-ct.config.ts` ran 14 tests, all passed,
+    // rc 0.
+    //
+    // The hop is LOAD-BEARING, so do not "make the old comment true" by adding
+    // `strictPort: true`. It is what lets CI runs in SEPARATE clones overlap —
+    // the one form of parallelism this repo supports now that bin/ci.sh refuses
+    // a second run in the same working copy (T-70c9, bin/lib/ci-lock.sh).
+    // Pinning the port would make the second clone's run die on a port clash and
+    // take that capability away.
     ctPort: 5241,
     trace: "off",
   },
