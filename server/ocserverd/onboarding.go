@@ -235,6 +235,13 @@ func (s *apiServer) kickFirstRunOnboardingWith(run onboardingRunner) {
 		onboardingLog("OC_NO_ONBOARDING=1 — skipping automatic first-run onboarding")
 		return
 	}
+	// 🔴 T-a90f: onboarding INSTALLS a warden and wakes a member, so it is an
+	// outbound command by any reading. A station restored from a backup taken
+	// before onboarding ran would otherwise install one on the way up.
+	if s.commandingDisarmed() {
+		onboardingLog("outbound commanding is disarmed (station restored from a backup) — skipping automatic first-run onboarding")
+		return
+	}
 	existing, err := s.dal.GetSetting(settingOnboardingReport)
 	if err != nil || existing != nil {
 		return

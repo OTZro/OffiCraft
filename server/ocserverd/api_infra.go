@@ -134,8 +134,19 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 	// Warden-command eligibility (spec/sse.md §7): the connection drains the
 	// command FIFO iff its agent-scope token sub resolves to a member of
 	// kind == "warden" — the unforgeable addressing key.
+	//
+	// 🔴 T-a90f — the STRUCTURAL half of "a restored station must not command
+	// the live world". While commanding is disarmed this connection is never
+	// granted a wardenID, so the FIFO is never drained and the warden is never
+	// IsOnline. That matters more than the explicit refusals in the dispatch
+	// paths: those have to be enumerated (and this codebase already has
+	// dispatch paths that bypass --no-reconcile/--no-outsource), whereas an
+	// undrained FIFO makes EVERY path fail closed through the reachability
+	// gate it already has, including the ones nobody thought of. The stream
+	// itself is not refused — a disarmed station still talks to its agents;
+	// it just cannot order machines around.
 	wardenID := ""
-	if memberID != "" {
+	if memberID != "" && !s.commandingDisarmed() {
 		if m, err := s.dal.GetMember(memberID); err == nil && m != nil && m.Kind == KindWarden {
 			wardenID = memberID
 		}

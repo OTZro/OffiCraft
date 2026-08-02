@@ -70,6 +70,12 @@ type apiServer struct {
 	// (DB updater.* settings).
 	updaterReceiveBeta bool
 	updaterAutoUpdate  bool
+	// commandDisarmed is the station-wide "do not command anything out there"
+	// state (DB command.disarmed; T-a90f). Set TRUE by the restore boot path,
+	// cleared only by the owner. Read through commandingDisarmed() — never
+	// directly — so every choke point pays the same lock and a re-arm takes
+	// effect without a restart.
+	commandDisarmed bool
 	// orgName is the studio display name shown in the cockpit topbar (DB
 	// org.name; T-d693). "" = never set — the frontend falls back to the
 	// localized default. Owner-writable via PATCH /api/settings; every agent

@@ -36,7 +36,12 @@ const autoUpdateCadence = time.Minute
 func (s *apiServer) autoUpdateEnabled() bool {
 	s.settingsMu.RLock()
 	defer s.settingsMu.RUnlock()
-	return s.updaterAutoUpdate
+	// 🔴 T-a90f: a station restored from a backup does not upgrade itself. The
+	// point of the disarmed state is that the owner inspects a restored
+	// station before it acts on its own; swapping its own binary and
+	// re-execing is exactly the kind of unattended act being held back — and
+	// the restored row could easily be from a period when auto-update was on.
+	return s.updaterAutoUpdate && !s.commandDisarmed
 }
 
 // startAutoUpdateCadence mounts the background loop (sleep-then-tick, like

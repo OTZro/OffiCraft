@@ -454,6 +454,15 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 		fmt.Fprintf(out, "[ocserverd] FATAL: serve supports sqlite DSNs only for now (got %q)\n", dsn)
 		return 1
 	}
+	// 🔴 Restore, if one was ordered, happens HERE and can happen nowhere else
+	// (restore.go): this is the last moment at which no process holds the
+	// database file, so replacing it is a rename instead of an impossibility.
+	// A restore that cannot be applied correctly is reported and skipped —
+	// booting on the untouched database beats booting on a half-swapped one.
+	restored, restoreErr := applyPendingRestore(dbPath, time.Now())
+	if restoreErr != nil {
+		fmt.Fprintf(out, "[ocserverd] WARN: %v\n", restoreErr)
+	}
 	db, err := openSQLite(dbPath)
 	if err != nil {
 		fmt.Fprintf(out, "[ocserverd] FATAL: open %s: %v\n", dbPath, err)
@@ -491,6 +500,30 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 	}
 	defer rdb.Close()
 	dal := NewDALPools(db, rdb)
+	// 🔴 A restored station comes up DISARMED, and the write happens here —
+	// into the RESTORED database, before loadAuthSettings reads it, before
+	// newAPIServer rehydrates anything, before a single route is mounted.
+	//
+	// Writing it here (rather than trusting the restored file's own copy of
+	// the row) is the whole construction: the backup was taken by an ARMED
+	// station, so its copy of this row says "armed". The station must not be
+	// able to come up commanding a world it has an out-of-date picture of just
+	// because the row it restored says it may — see settingCommandDisarmed.
+	//
+	// The queued warden commands are dropped for the same reason: they were
+	// addressed to the world as it stood when the backup was taken, and the
+	// hub rehydrates them from the store during newAPIServer. Delivering them
+	// later — the moment the owner re-arms — would be the stale-roster problem
+	// arriving late instead of not at all.
+	if restored != nil {
+		dropped, err := disarmAfterRestore(dal, time.Now())
+		if err != nil {
+			fmt.Fprintf(out, "[ocserverd] FATAL: restored from %s but %v\n", restored.Source, err)
+			return 1
+		}
+		fmt.Fprintf(out, "[ocserverd] restore: applied %s, outbound commanding DISARMED, dropped %d queued machine command(s)\n",
+			restored.Source, dropped)
+	}
 	if err := seedOutOfBox(dal); err != nil {
 		fmt.Fprintf(out, "[ocserverd] FATAL: seed: %v\n", err)
 		return 1
@@ -512,6 +545,10 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 	api.docCapChars = auth.docCapChars
 	api.updaterReceiveBeta = auth.updaterReceiveBeta
 	api.updaterAutoUpdate = auth.updaterAutoUpdate
+	api.commandDisarmed = auth.commandDisarmed
+	if api.commandDisarmed {
+		fmt.Fprintf(out, "[ocserverd] outbound commanding is DISARMED (this station was restored from a backup) — no agent or machine will be commanded until the owner re-arms it\n")
+	}
 	// $OC_RELEASE_API_BASE is a HARNESS seam (conformance/e2e): it re-points
 	// the GitHub Releases API base so a black-box run never reaches the real
 	// api.github.com (hermeticity + the anonymous rate limit). "" = the real

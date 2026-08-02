@@ -615,6 +615,18 @@ func (s *apiServer) memberKillTargetWarden(memberID string) string {
 // — warden id == machine id alone can't tell you the stuck member on relocate).
 // Returns accepted.
 func (s *apiServer) enqueueToWarden(memberID, warden string, frame []byte) bool {
+	// 🔴 T-a90f — the shared refusal for a disarmed station. Every production
+	// frame (reconcile start/stop/uninstall, worker spawn/stop, warden
+	// upgrade, identity sweep, robust stop) comes through here, so this is the
+	// one place that covers them all. It reuses the EXISTING "not dispatched"
+	// return: every caller already treats false as "retry when reachable", so
+	// a disarmed station stalls dispatch rather than inventing a new failure
+	// mode nobody handles.
+	if s.commandingDisarmed() {
+		reconcileLog("%s: outbound commanding is disarmed (station restored from a backup) — "+
+			"not dispatching to warden %q; the owner must re-arm first", memberID, warden)
+		return false
+	}
 	if warden == "" || !s.hub.IsOnline(warden) {
 		reconcileLog("%s: target warden %q NOT reachable (no live SSE downstream) — "+
 			"fail-closed, not dispatching, will retry when the warden connects",

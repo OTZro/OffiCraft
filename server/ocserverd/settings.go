@@ -84,6 +84,29 @@ const (
 	// endpoint and re-execs itself — unattended. Default OFF: upgrading
 	// stays an explicit owner action unless the owner opts in.
 	settingUpdaterAutoUpdate = "updater.auto_update"
+	// settingCommandDisarmed (bool, default false) is the station-wide "do not
+	// command anything out there" state (T-a90f). The restore flow writes it
+	// TRUE into the freshly restored database at boot, before anything is
+	// served.
+	//
+	// 🔴 WHY it exists at all: a restored station is a station whose roster is
+	// as old as the backup, and it holds the SAME signing secret (the secret
+	// lives in the database, so a backup copies it). Every warden token in the
+	// field therefore still verifies, and the reconcile tick would start
+	// issuing START/STOP/UNINSTALL for agents that are actually alive, from a
+	// roster that predates them. Nothing in the server can notice this by
+	// itself — there is no instance identity in the data.
+	//
+	// 🔴 WHY a durable row and not the --no-reconcile / --no-outsource flags:
+	// those are process argv, so they are gone at the next restart, and their
+	// coverage is narrower than their names suggest (every owner-triggered
+	// outsource verb bypasses --no-outsource, and the persisted warden command
+	// queue is rehydrated before either flag is even assigned). A state that
+	// has to survive a restart cannot live in argv.
+	//
+	// Cleared by the owner (and only the owner) once the world has been
+	// reconciled by hand.
+	settingCommandDisarmed = "command.disarmed"
 	// settingOrgName (T-d693) is the studio display name shown in the cockpit
 	// topbar ("AI 工作室"). NOT secret — the owner sets it (PATCH /api/settings),
 	// and every agent reads it back through get_global_context so a member knows
@@ -158,6 +181,7 @@ type authSettings struct {
 	docCapChars              int              // doc.cap_chars (default contextDocMaxCharsDefault)
 	updaterReceiveBeta       bool             // updater.receive_beta (default false = official releases only)
 	updaterAutoUpdate        bool             // updater.auto_update (default false = manual upgrades only)
+	commandDisarmed          bool             // command.disarmed (default false; TRUE after a restore until the owner re-arms)
 	orgName                  string           // org.name ("" = never set → localized default in the topbar)
 	ownerName                string           // owner.name ("" = never set → localized default in the profile pill)
 	pushContactEmail         string           // push.contact_email ("" = never set → Web Push delivery is refused)
@@ -340,6 +364,9 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 		return out, err
 	}
 	if err := getBool(settingUpdaterAutoUpdate, &out.updaterAutoUpdate); err != nil {
+		return out, err
+	}
+	if err := getBool(settingCommandDisarmed, &out.commandDisarmed); err != nil {
 		return out, err
 	}
 	if err := getBool(settingDisplayWide, &out.displayWide); err != nil {

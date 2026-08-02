@@ -13,6 +13,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
@@ -891,6 +892,14 @@ func (s *apiServer) HandleBootstrapHereApiMachinesMachineIdBootstrapHerePost(w h
 // returns the result DTO (a non-zero exit is a RESULT, not an error) and an
 // error only for a genuine server fault (token mint).
 func (s *apiServer) runWardenInstallHere(machine Member, binPath, baseURL string) (bootstrapResultDTO, error) {
+	// 🔴 T-a90f: installing a warden on the server's own host is commanding
+	// the world by exec rather than by frame, so the disarmed state has to
+	// reach it too — the SSE/FIFO construction cannot see a local child
+	// process.
+	if s.commandingDisarmed() {
+		return bootstrapResultDTO{}, fmt.Errorf(
+			"outbound commanding is disarmed (this station was restored from a backup) — re-arm it before installing a warden here")
+	}
 	ttl := machineTTL(defaultMachineTTLDays)
 	token, err := s.mintMemberToken(machine, ttl)
 	if err != nil {
@@ -938,6 +947,13 @@ func (s *apiServer) runWardenInstallHere(machine Member, binPath, baseURL string
 // A main-instance server that merely inherited a stray OC_NAMESPACE used to tear
 // down a DIFFERENT instance's live warden.
 func (s *apiServer) runWardenTeardownHere(binPath string) (int, string, bool) {
+	// 🔴 T-a90f: teardown is the destructive twin of install-here and reaches
+	// the host the same way (exec, not frame), so it obeys the same disarmed
+	// state. -1 is the same shape the timeout path returns, so callers already
+	// treat it as "did not run".
+	if s.commandingDisarmed() {
+		return -1, "outbound commanding is disarmed (this station was restored from a backup) — re-arm it before tearing a warden down here", false
+	}
 	env := ocwardenChildEnv(os.Environ())
 	args := []string{"teardown"}
 	if s.namespace != "" {

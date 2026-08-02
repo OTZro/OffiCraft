@@ -117,6 +117,12 @@ const (
 	backupReasonManual       backupReason = "manual"
 	backupReasonScheduled    backupReason = "scheduled"
 	backupReasonPreMigration backupReason = "premigration"
+
+	// backupReasonPreRestore is the snapshot the restore flow takes of the
+	// CURRENT database before it is replaced (T-a90f). The owner's ruling on
+	// the restore button was "還原前自動先備一份現況" — i.e. the restore itself
+	// has to be restorable, because the button has no undo.
+	backupReasonPreRestore backupReason = "prerestore"
 )
 
 // backupPool is the set of files that compete for one quota of backupRetain.
@@ -145,6 +151,19 @@ const (
 	// It still HAS a quota (see rotateBackups): a directory that only grows is
 	// how this machine ran out of disk before.
 	backupPoolPreMigration backupPool = "premigration"
+
+	// backupPoolPreRestore exists for the SAME reason backupPoolPreMigration
+	// does, and the argument transfers without weakening (T-a90f).
+	//
+	// 🔴 A pre-restore snapshot is the only way back from a restore that turned
+	// out to be the wrong choice — and, exactly like the pre-migration case, it
+	// is reached for AFTER something already went wrong. Sharing the routine
+	// quota would make its eviction trigger "five backups from any source":
+	// somebody restoring twice while working out which point they actually
+	// wanted would destroy the record of where they started, in the very
+	// situation it exists for. It still HAS a quota, so the directory stays
+	// bounded at keep × pools.
+	backupPoolPreRestore backupPool = "prerestore"
 )
 
 // backupPoolOf decides which quota a file counts against, reading the reason
@@ -152,8 +171,11 @@ const (
 // routine pool: the alternative — inventing a pool per unknown label — would let
 // a future typo create an unbounded directory that nothing ever rotates.
 func backupPoolOf(name string) backupPool {
-	if backupReasonIn(name) == backupReasonPreMigration {
+	switch backupReasonIn(name) {
+	case backupReasonPreMigration:
 		return backupPoolPreMigration
+	case backupReasonPreRestore:
+		return backupPoolPreRestore
 	}
 	return backupPoolRoutine
 }
