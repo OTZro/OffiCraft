@@ -228,6 +228,13 @@ def test_all_nine_topics_emit(client, owner_token, agent_a, fresh_member, owner_
         ("lessons", lambda: client.post(
             "/api/lessons/assistant/general", json={"text": f"topic probe {tag}"},
             headers=_auth(owner_token))),
+        # insight — the ORDINARY write face (replace_insight), not the restore
+        # path. Pinned here because a doc write that reaches the DB but never
+        # publishes is invisible from HTTP alone (200 + row changed + cockpit
+        # stuck on the old value), exactly the shape lessons is pinned against.
+        ("insight", lambda: client.post(
+            "/api/insight/assistant", json={"text": f"topic probe {tag}"},
+            headers=_auth(owner_token))),
         ("context", lambda: client.post(
             "/api/agent/context", json={"context_pct": 7},
             headers=_auth(agent_a.token))),
@@ -240,6 +247,7 @@ def test_all_nine_topics_emit(client, owner_token, agent_a, fresh_member, owner_
         "member": "patch", "chat": "patch", "chat_read": "patch",
         "reply_card": "patch",
         "global_context": "patch", "role_def": "patch", "lessons": "patch",
+        "insight": "patch",
         "context": "signal", "monitoring": "signal",
     }
     for topic, fire in triggers:
