@@ -34,16 +34,20 @@ const (
 	// 1000 is the owner's number (2026-08-03, verbatim: 「1000字 多的截斷」),
 	// and it is deliberately the SAME number as the cap he set for a duty
 	// document itself — 「After separation of insight duty should not exceed
-	// 1000」. The two are consistent by design: once insight and the
-	// operating-manual material are separated out of the role definitions,
-	// a duty is expected to fit well under 1000, so this cap is a SAFETY NET
-	// that normally does not fire, not a summarizer.
+	// 1000」. Once insight and the operating-manual material are separated out
+	// of the role definitions, a duty is expected to fit well under 1000 and
+	// this cap will rarely bind.
 	//
-	// ⚠️ Until that separation lands, duties still carry their manual
-	// material (measured 2026-08-03: 35–4,594 chars, nine of them totalling
-	// ~7–8k), so this block is correspondingly large TODAY and shrinks as
-	// the duties are cleaned up. That trade was put to the owner with the
-	// numbers before it was implemented.
+	// ⚠️ Do NOT read that as "a safety net that normally does not fire" — an
+	// earlier version of this comment said exactly that and it was false:
+	// TODAY the cap binds for almost every role. Duties still carry their
+	// manual material (measured 2026-08-03: 35–4,594 chars, the longest 9,112
+	// — nine times this cap, with nine roles totalling ~7–8k). The code runs
+	// permanently in the regime the old comment called the exception.
+	//
+	// That cost was put to the owner WITH the numbers in rc-d88c445397a3 (an
+	// independent review argued for 150–200 until the separation lands), and
+	// he ruled ②: keep 1000. It is his number — do not lower it here.
 	//
 	// Task titles measured ~99 chars average, 147 max — five untruncated
 	// contractor titles alone outweigh the whole machine block, so that one

@@ -1781,7 +1781,7 @@
       "name": "patch_lessons"
     },
     {
-      "description": "Bounded LIGHT wake snapshot for the caller (identity-locked; recent chat + light open-task rows + size overview — peek sizes first, pull detail via get_task). Also carries the STUDIO FLOOR you wake up onto: roster (every member and contractor, each with online/offline status, the machine it runs on, and its duty capped at 1000 chars with `…` marking a cut — who to ask for help; no insight/learning by owner ruling) and machines (the machine list plus you_are_on, your server-recorded machine binding — never derive it from a hostname).",
+      "description": "Bounded LIGHT wake snapshot for the caller (identity-locked; recent chat + light open-task rows + size overview — peek sizes first, pull detail via get_task). Also carries the STUDIO FLOOR you wake up onto: roster (every member and contractor, each with online/offline status, the machine it runs on, and its duty capped at 1000 chars with `…` marking a cut, the cap applied after the doc's own leading title line is removed — who to ask for help; no insight/learning by owner ruling) and machines (the machine list plus you_are_on, your server-recorded machine binding — never derive it from a hostname).",
       "inputSchema": {
         "properties": {},
         "type": "object"
