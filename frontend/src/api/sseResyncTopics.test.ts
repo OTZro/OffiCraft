@@ -159,11 +159,18 @@ describe("SSE_RESYNC_TOPICS vs spec/sse.md §3.1", () => {
   // this same round asserts `<delimiter> not in <mutated>` and this edge did
   // not. A comment cannot fail; the assertion below can. Note also that JS
   // `String.replace(string, …)` replaces only the FIRST occurrence (Python's
-  // str.replace replaces all), so `replaceAll` is used deliberately: with plain
-  // `replace`, a second `### 3.1` anywhere in the spec would leave the heading
-  // present and turn these into FALSE REDS (the parser would not throw).
+  // str.replace replaces all), so replace-ALL semantics are used deliberately:
+  // with plain `replace`, a second `### 3.1` anywhere in the spec would leave
+  // the heading present and turn these into FALSE REDS (the parser would not
+  // throw). ⚠️ Spelled `split(…).join(…)` and NOT `String.replaceAll`: this
+  // project's tsconfig targets `lib: ES2020`, where `replaceAll` does not exist
+  // on `string` — vitest passes (Node has it at run time) but `npm run
+  // typecheck` fails with TS2550, which is how it reached CI. Do not "tidy"
+  // this back to replaceAll, and do not bump the lib target for one test. A
+  // global RegExp would work too but needs the delimiter escaped (`.` is a
+  // metacharacter) — split/join needs no escaping at all.
   it("throws when the §3.1 heading is gone (not: passes with zero topics)", () => {
-    const moved = readFileSync(SPEC_PATH, "utf8").replaceAll("### 3.1", "### 9.1");
+    const moved = readFileSync(SPEC_PATH, "utf8").split("### 3.1").join("### 9.1");
     expect(moved, "the mutation must really remove the delimiter, else this test is vacuous").not.toContain(
       "### 3.1",
     );
@@ -171,7 +178,7 @@ describe("SSE_RESYNC_TOPICS vs spec/sse.md §3.1", () => {
   });
 
   it("throws when the section's end boundary is gone", () => {
-    const unbounded = readFileSync(SPEC_PATH, "utf8").replaceAll("### 3.2", "### 9.2");
+    const unbounded = readFileSync(SPEC_PATH, "utf8").split("### 3.2").join("### 9.2");
     expect(unbounded, "the mutation must really remove the delimiter, else this test is vacuous").not.toContain(
       "### 3.2",
     );
