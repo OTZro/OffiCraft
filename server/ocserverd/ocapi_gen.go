@@ -1518,7 +1518,8 @@ type ResumeSummaryDTO struct {
 // “overview“ counts/sizes a full “resume_summary“ would report (assembled
 // through the shared server path, so they cannot drift) plus
 // “estimated_total_chars“ — a derived single number (the snapshot's chat body
-// chars plus the plan text its task rows omit) the boot threshold gates on — and
+// chars, the plan text its task rows omit, and the roster + machine blocks it
+// carries) the boot threshold gates on — and
 // a fixed guidance “note“. It carries NO chat bodies and NO task rows: peeking
 // it costs a few hundred bytes, so a waking agent can size “resume_summary“
 // BEFORE deciding whether to pull it into its own context or hand the pull to a

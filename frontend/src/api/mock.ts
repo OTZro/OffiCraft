@@ -1672,13 +1672,20 @@ export const mockApi: Api = {
   ): Promise<MemberResumeSummaryView> {
     findWire(memberId); // 404 parity: an unknown member throws
 
-    // Mirrors the server's resumeSnapshotParts(actor=memberId): a BOUNDED
-    // recent-chat window involving the member, the member's NON-TERMINAL
-    // executed tasks (LIGHT rows, most recently updated first), and an
-    // overview computed FROM those two lists — never a separately-fabricated
-    // count, so it cannot drift from what the lists actually carry (same
-    // honesty contract the real endpoint's shared assembly gives). READ-ONLY:
-    // unlike listChat, this never advances a read watermark.
+    // Mirrors the CHAT/TASKS/OVERVIEW SUBSET of the server's
+    // resumeSnapshotParts(actor=memberId): a BOUNDED recent-chat window
+    // involving the member, the member's NON-TERMINAL executed tasks (LIGHT
+    // rows, most recently updated first), and an overview computed FROM those
+    // two lists — never a separately-fabricated count, so it cannot drift from
+    // what the lists actually carry (same honesty contract the real endpoint's
+    // shared assembly gives). READ-ONLY: unlike listChat, this never advances a
+    // read watermark.
+    //
+    // NOT mocked: the T-1b09 studio-floor blocks (roster / machines) and their
+    // roster_chars / machines_chars sizes. Said explicitly because "mirrors the
+    // server" is exactly the kind of claim a reader trusts without checking —
+    // a mock that silently covers less than it says it does is worse than one
+    // that admits the gap.
     const RESUME_CHAT_N = 5;
     const RESUME_TASKS_N = 5;
 

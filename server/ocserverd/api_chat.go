@@ -1067,8 +1067,21 @@ func (s *apiServer) HandlePeekResumeSummarySizeApiResumeSummarySizeGet(w http.Re
 		// AND then expanding every task via get_task: the chat bodies the
 		// snapshot carries plus the plan text those rows omit. The single
 		// number the boot threshold gates on (see the note / boot_sequence).
-		EstimatedTotalChars: overview.ChatChars + overview.TasksDetailChars,
-		Note:                peekNote,
+		//
+		// T-1b09: the roster and machine blocks are ADDED here because they are
+		// part of what pulling the snapshot costs. Leaving them out would have
+		// made the boot threshold understate the real payload by the size of
+		// the whole studio floor (measured 7–8k chars while role definitions
+		// still carry their operating-manual material) — an agent would decide
+		// "small enough to read directly" against a number that no longer
+		// describes what it is about to read. They are still reported
+		// SEPARATELY in overview as roster_chars / machines_chars, so a caller
+		// can tell the two kinds of cost apart; what is deliberately NOT folded
+		// in anywhere is tasks_detail_chars' relationship to them — that one
+		// counts text this payload does NOT carry.
+		EstimatedTotalChars: overview.ChatChars + overview.TasksDetailChars +
+			overview.RosterChars + overview.MachinesChars,
+		Note: peekNote,
 	})
 }
 
