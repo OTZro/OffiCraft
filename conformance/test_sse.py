@@ -18,9 +18,11 @@ Coverage, MUST by MUST:
   * §2.1 seq strictly monotonic within a connection (== per-connection publish
         order, §4);
   * §2.2 partial payload convenience shapes (chat {id,from,to}; signals null);
-  * §3  the CLOSED 9-topic vocabulary — every topic explicitly triggered and
-        observed, incl. ``monitoring`` (spec froze the wire over SSE_TOPICS)
-        and the M2 ``reply_card`` addition; op vocabulary patch/remove/signal;
+  * §3  the CLOSED topic vocabulary — EVERY topic of the closed set is
+        explicitly triggered and observed, and the trigger table is confronted
+        with the product's own wire contract (spec/sse.md §3.1) at run time, so
+        a topic added there without a trigger here reddens instead of silently
+        losing its write-face coverage; op vocabulary patch/remove/signal;
   * §4  per-recipient routing (T-30d7): an AGENT connection receives a delta
         iff addressed (chat→from/to, member→self); an unrelated agent's stream
         stays quiet; the owner/dashboard connection is全量;
@@ -49,6 +51,8 @@ target is single-tenant; no second owner exists to receive/miss a frame).
 from __future__ import annotations
 
 import json
+import pathlib
+import re
 import time
 import uuid
 from typing import Any
@@ -61,6 +65,30 @@ from sse_client import SSEConnection
 
 def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+HERE = pathlib.Path(__file__).resolve().parent
+
+# The §3.1 topic table row: ``| `<topic>` | <trigger> | <op> |``.
+_SPEC_TOPIC_ROW = re.compile(r"^\|\s*`([a-z_]+)`\s*\|", re.M)
+
+
+def _closed_topic_set() -> set[str]:
+    """The closed topic vocabulary, READ FROM THE PRODUCT'S OWN WIRE CONTRACT at
+    run time — ``spec/sse.md`` §3.1, the very table ``hub.go``'s ``sseTopics``
+    cites as its source and that a topic addition MUST go through (spec-first,
+    root CLAUDE.md §13).
+
+    Deliberately NOT a list restated in this file: a hand-copied set would make
+    the confrontation below vacuous (it would only ever confront one hand-copy
+    with another, and the next person to add a topic would forget both). Same
+    posture as ``test_rest_happy``/``test_auth_matrix``, which pin the live
+    surface against the frozen ``spec/openapi.json`` + ``routes_manifest.json``
+    rather than against a list typed here.
+    """
+    spec = (HERE.parent / "spec" / "sse.md").read_text(encoding="utf-8")
+    section = spec.split("### 3.1", 1)[-1].split("### 3.2", 1)[0]
+    return set(_SPEC_TOPIC_ROW.findall(section))
 
 
 def _fresh_agent(client, owner_token, tag: str) -> AgentIdentity:
@@ -194,15 +222,27 @@ def test_member_remove_frame(client, owner_token, fresh_member, owner_sse) -> No
     assert inner["deleted"] is True and inner["payload"] is None, inner
 
 
-# ── §3 the closed topic/op vocabulary — all 9 topics observed ─────────────────
+# ── §3 the closed topic/op vocabulary — EVERY topic of the set observed ───────
 
 
-def test_all_nine_topics_emit(client, owner_token, agent_a, fresh_member, owner_sse) -> None:
+def test_every_closed_topic_emits(client, owner_token, agent_a, fresh_member, owner_sse) -> None:
     """Trigger every topic of the closed set (spec §3.1 — the M1 freeze was 8
     topics, monitoring included despite the 7-topic SSE_TOPICS constant;
-    reply_card joined in M2) and pin its op + payload semantics."""
+    reply_card joined in M2, the task batch added three more) and pin its op +
+    payload semantics.
+
+    The trigger table below is CONFRONTED with the closed set read from
+    ``spec/sse.md`` §3.1 at run time (``_closed_topic_set``): covering fewer
+    topics than the wire contract declares means the missing topics' publish
+    seam could be deleted wholesale with this suite still green, which is
+    exactly what happened while this table was a hand-written list of 9.
+    """
     tag = uuid.uuid4().hex[:8]
     member = fresh_member()
+    # A kind='outsource' roster row IS an outsource worker (the P7d fold — the
+    # worker table lives in `member`), so the ordinary worker write face below
+    # has a subject without needing the scheduler's spawn seam.
+    worker = hire_member(client, owner_token, f"conf-topic-worker-{tag}", kind="outsource")
     triggers: list[tuple[str, Any]] = [
         ("member", lambda: client.patch(
             f"/api/members/{member}", json={"name": f"conf-topic-{tag}"},
@@ -219,6 +259,21 @@ def test_all_nine_topics_emit(client, owner_token, agent_a, fresh_member, owner_
             json={"kind": "decision", "summary": f"topic probe {tag}",
                   "options": ["AI pick", "other"]},
             headers=_auth(agent_a.token))),
+        # The three M3 task-batch topics, each through an ORDINARY write face
+        # (task creation / a worker field edit / manual creation) — not a
+        # side-door: these are the same seams the cockpit and the MCP tools use.
+        ("task", lambda: client.post(
+            "/api/tasks",
+            json={"title": f"topic probe {tag}",
+                  "executor_member_id": agent_a.member_id},
+            headers=_auth(agent_a.token))),
+        ("outsource_worker", lambda: client.post(
+            f"/api/outsource-workers/{worker}/model",
+            json={"effort": "high"},
+            headers=_auth(owner_token))),
+        ("task_manual", lambda: client.post(
+            "/api/task-manuals", json={"type_key": f"conf-topic-{tag}"},
+            headers=_auth(owner_token))),
         ("global_context", lambda: client.post(
             "/api/global-context", json={"text": f"topic probe {tag}"},
             headers=_auth(owner_token))),
@@ -246,10 +301,28 @@ def test_all_nine_topics_emit(client, owner_token, agent_a, fresh_member, owner_
     expected_op = {
         "member": "patch", "chat": "patch", "chat_read": "patch",
         "reply_card": "patch",
+        "task": "patch", "outsource_worker": "patch", "task_manual": "patch",
         "global_context": "patch", "role_def": "patch", "lessons": "patch",
         "insight": "patch",
         "context": "signal", "monitoring": "signal",
     }
+    # ── the self-confrontation: this table IS the closed set, not a subset ────
+    closed = _closed_topic_set()
+    covered = {topic for topic, _ in triggers}
+    missing, extra = sorted(closed - covered), sorted(covered - closed)
+    assert not missing and not extra, (
+        "the trigger table MUST equal the closed topic set declared by the "
+        "product's wire contract (spec/sse.md §3.1).\n"
+        f"  never triggered here (their publish seam could be deleted and this "
+        f"suite would stay green): {missing}\n"
+        f"  triggered here but NOT in the closed set (a phantom topic, or the "
+        f"contract lost one): {extra}"
+    )
+    assert sorted(expected_op) == sorted(covered), (
+        "every triggered topic needs its expected frame kind pinned; "
+        f"missing: {sorted(covered - set(expected_op))}, "
+        f"stale: {sorted(set(expected_op) - covered)}"
+    )
     for topic, fire in triggers:
         r = fire()
         assert r.status_code == 200, f"{topic} trigger failed: {r.status_code} {r.text[:200]}"
@@ -821,7 +894,7 @@ def test_warden_command_band_start_frame(
 # The 請示 nav badge (useReplyCardCount) refetches on every reply_card delta;
 # owner reported the badge staying blank for an open_gate gate card until a
 # manual reload. conformance historically triggered reply_card ONLY via the
-# standalone POST /api/reply-cards path (test_all_nine_topics_emit). This pins
+# standalone POST /api/reply-cards path (test_every_closed_topic_emits). This pins
 # the OTHER open path — open_gate arming — actually fans a reply_card delta to
 # the owner connection, byte-for-byte the same live-update signal the badge
 # rides. If the badge bug is a missing frame, this goes red.
