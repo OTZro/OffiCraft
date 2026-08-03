@@ -80,6 +80,39 @@ reap_recorded() {
   return 2
 }
 
+# backstop_collect PID → collect a process THIS RUN SPAWNED, without using any
+# of the machinery under test, and print how it went: identified (the command
+# line proved it), still-alive (nothing worked), nothing-to-do (already gone).
+#
+# Why a second path exists at all: section 7 deliberately spawns a busy-loop
+# that only the identity machinery can collect — so when that machinery is
+# wrong, which is the case section 7 exists for, the guard used to leave a core
+# burning (observed with a mutant). A test must not depend on the thing it tests
+# to stay safe. This path shares nothing with same_proc: the pid comes from a
+# different reader, and the identity is this run's private mktemp path appearing
+# in the process's own command line.
+#
+# The LAST RESORT at the end is unconditional, and that is not the refuse-to-
+# guess policy weakening. That policy governs records inherited from an earlier
+# phase, where the guard holds nothing but a number. Here the guard spawned the
+# process itself, seconds ago, in this same function — and the ps read that
+# everything else depends on is the one dependency this repo has already been
+# burned by, so a backstop that dies with it is not a backstop.
+backstop_collect() {
+  local pid="${1:-}" verdict=nothing-to-do
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null || { printf '%s' "$verdict"; return 0; }
+  verdict=not-identified
+  case "$(ps -p "$pid" -o command= 2>/dev/null)" in
+    *"$WORK"*) kill -KILL "$pid" 2>/dev/null; sleep 0.3
+               kill -0 "$pid" 2>/dev/null || verdict=identified ;;
+  esac
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$pid" 2>/dev/null; sleep 0.3
+    kill -0 "$pid" 2>/dev/null && verdict=still-alive
+  fi
+  printf '%s' "$verdict"
+}
+
 _cleanup() {
   local f p s unprovable=0
   for f in "$WORK"/gpid.*; do
@@ -129,6 +162,27 @@ bash -c '
 ' "$pidfile" "$libsh" &
 sleep "$blockfor"
 LEAKY
+
+# ── trap self-test hook (T-3e41) ────────────────────────────────────────────
+# Section 8 drives _cleanup as a FUNCTION. That cannot see whether the function
+# is still wired to EXIT, nor whether it acts on the REAL $WORK: rewire the trap
+# to a no-op, or make _cleanup return early for anything but a fixture path, and
+# all assertions stay green while two 100%-CPU orphans outlive the guard
+# (observed, not theorised). Testing the wiring needs a real process to really
+# exit — so on request this script sets up ONE record in its own real $WORK,
+# prints the pid it is leaving behind, and exits immediately, letting whatever
+# is actually installed on EXIT do whatever it actually does. Section 9 runs
+# this and judges it from outside.
+#
+# The record is PREPARED BY THE CALLER and names a process the CALLER owns.
+# That is deliberate: a process this mode backgrounded for itself would die with
+# this shell on some hosts (measured here), and then "the trap collected it"
+# would be true for the wrong reason — the strongest assertion in the file
+# passing vacuously.
+if [[ -n "${OC_PH_TRAP_SELFTEST:-}" ]]; then
+  cp "$OC_PH_TRAP_SELFTEST" "$WORK/gpid.selftest" 2>/dev/null || exit 3
+  exit 0
+fi
 
 echo "run_bounded process-hygiene tests"
 
@@ -369,16 +423,31 @@ check "and the reaping path actually kills it (the deliberate leak is gone, by i
 # section spawned two seconds ago inside this same function; the refuse-to-guess
 # policy governs records inherited from earlier phases, not this one.
 backstop_pid="$(cut -f1 "$WORK/gpid.7" 2>/dev/null | tr -dc '0-9')"
-backstop=cleared
-if [[ -n "$backstop_pid" ]] && kill -0 "$backstop_pid" 2>/dev/null; then
-  case "$(ps -p "$backstop_pid" -o command= 2>/dev/null)" in
-    *"$WORK"*) kill -KILL "$backstop_pid" 2>/dev/null; sleep 0.3
-               kill -0 "$backstop_pid" 2>/dev/null && backstop=still-alive ;;
-    *)         backstop=not-ours ;;
-  esac
-fi
-check "section 7 leaves no busy-loop behind even when its own assertions fail (independent backstop)" \
-      "cleared" "$backstop"
+backstop="$(backstop_collect "$backstop_pid")"
+if kill -0 "$backstop_pid" 2>/dev/null; then leftover=yes; else leftover=no; fi
+check "section 7 leaves no busy-loop behind, whatever its own assertions did" "no" "$leftover"
+
+# On a healthy run the backstop has nothing to do — reap_recorded got there
+# first — so the assertion above cannot tell a working backstop from a deleted
+# one. Give it its own subject: a busy-loop that is never offered to the
+# identity path at all, so the backstop is the only thing that can collect it,
+# and require it to do so by IDENTITY rather than by the last resort.
+: > "$WORK/rec-backstop"
+bash -c '
+  . "$1" || exit 1
+  printf "%s\t%s\n" "$$" "$(_ci_lock_ps "$$" lstart=)" > "$0"
+  while :; do :; done
+' "$WORK/rec-backstop" "$CI_LOCK_LIB" &
+bsfix=$!
+disown "$bsfix" 2>/dev/null || true
+for _ in $(seq 1 50); do [[ -s "$WORK/rec-backstop" ]] && break; sleep 0.1; done
+check "the backstop fixture busy-loop is running (positive control)" \
+      "1" "$(kill -0 "$bsfix" 2>/dev/null && echo 1 || echo 0)"
+bsfix_pid="$(cut -f1 "$WORK/rec-backstop" 2>/dev/null | tr -dc '0-9')"
+bsverdict="$(backstop_collect "$bsfix_pid")"
+check "the backstop identifies a busy-loop by this run's own WORK path and collects it" \
+      "identified" "$bsverdict"
+kill -KILL "$bsfix" 2>/dev/null   # unconditional: our own pid from $!
 
 # ── 8. the EXIT trap's decision itself, driven from a test ───────────────────
 # Section 7 covers reap_recorded. The trap around it — which records it walks,
@@ -393,6 +462,7 @@ sleep 20 & standin=$!
 disown "$standin" 2>/dev/null || true
 # A record naming a process that is alive but demonstrably NOT the one recorded.
 printf '%s\t%s\n' "$standin" "$FAKE_START" > "$FIXA/gpid.fixture"
+cp "$FIXA/gpid.fixture" "$WORK/gpid.shadow-a"   # so the LIVE trap can collect it if we are killed here
 ( WORK="$FIXA"; _cleanup ) >/dev/null 2>&1; crc=$?
 check "an alive-but-unprovable survivor makes the exit trap fail the run (rc 1)" "1" "$crc"
 if kill -0 "$standin" 2>/dev/null; then verdict=alive; else verdict=killed; fi
@@ -410,6 +480,7 @@ bash -c '
 fixpid=$!
 disown "$fixpid" 2>/dev/null || true
 for _ in $(seq 1 50); do [[ -s "$FIXB/gpid.fixture" ]] && break; sleep 0.1; done
+cp "$FIXB/gpid.fixture" "$WORK/gpid.shadow-b"   # same reason: the trap's glob is not recursive
 check "the fixture busy-loop recorded its identity (positive control)" \
       "1" "$([[ -n "$(rec_start "$FIXB/gpid.fixture")" ]] && echo 1 || echo 0)"
 ( WORK="$FIXB"; _cleanup ) >/dev/null 2>&1; crc=$?
@@ -418,6 +489,50 @@ if kill -0 "$fixpid" 2>/dev/null; then verdict=alive; else verdict=killed; fi
 check "the exit trap collects a survivor it CAN identify" "killed" "$verdict"
 check "and says nothing is wrong when it could collect everything (rc 0)" "0" "$crc"
 kill -KILL "$fixpid" 2>/dev/null   # backstop: our own pid from $!, no identity code involved
+rm -f "$WORK"/gpid.shadow-*        # the shadow records below are no longer needed
+
+# ── 9. the trap is actually WIRED, and acts on the real $WORK ────────────────
+# Section 8 proves what _cleanup decides. It cannot prove that _cleanup still
+# runs on exit, or that it runs on this run's own $WORK — rewire the trap to a
+# no-op, point it at INT instead of EXIT, or make _cleanup return early unless
+# $WORK looks like a fixture, and every assertion above stays green while real
+# orphans outlive the guard. Only a real exit can show that. This runs the
+# script again in a mode that leaves ONE record behind and exits immediately,
+# then judges what its EXIT trap did from out here.
+# (a) a record the child CAN identify: its exit must collect the process.
+: > "$WORK/rec-wire-ours"
+bash -c '
+  . "$1" || exit 1
+  printf "%s\t%s\n" "$$" "$(_ci_lock_ps "$$" lstart=)" > "$0"
+  while :; do :; done
+' "$WORK/rec-wire-ours" "$CI_LOCK_LIB" &
+wirepid=$!
+disown "$wirepid" 2>/dev/null || true
+for _ in $(seq 1 50); do [[ -s "$WORK/rec-wire-ours" ]] && break; sleep 0.1; done
+check "the wiring fixture busy-loop is running and recorded its identity (positive control)" \
+      "1" "$([[ -n "$(rec_start "$WORK/rec-wire-ours")" ]] && kill -0 "$wirepid" 2>/dev/null && echo 1 || echo 0)"
+OC_PH_TRAP_SELFTEST="$WORK/rec-wire-ours" bash "$0" >/dev/null 2>&1; strc=$?
+sleep 0.5
+if kill -0 "$wirepid" 2>/dev/null; then verdict=alive; else verdict=collected; fi
+check "the EXIT trap is really installed and really runs on the run's own WORK dir (a child's exit collects it)" \
+      "collected" "$verdict"
+check "and that child exited 0, having had nothing it could not collect" "0" "$strc"
+kill -KILL "$wirepid" 2>/dev/null   # unconditional: our own pid from $!, no identity code
+
+# (b) a record the child CANNOT identify: its exit must refuse to kill, and go red.
+# NOTE the file name — deliberately not gpid.*, so this run's own trap does not
+# adopt the stand-in and redden this run at exit. We collect it ourselves below.
+sleep 20 &
+wirestandin=$!
+disown "$wirestandin" 2>/dev/null || true
+printf '%s\t%s\n' "$wirestandin" "$FAKE_START" > "$WORK/rec-wire-unprovable"
+check "the stand-in for the unidentifiable record is running (positive control)" \
+      "1" "$(kill -0 "$wirestandin" 2>/dev/null && echo 1 || echo 0)"
+OC_PH_TRAP_SELFTEST="$WORK/rec-wire-unprovable" bash "$0" >/dev/null 2>&1; strc2=$?
+check "a child that cannot identify its survivor exits NON-ZERO through the trap" "1" "$strc2"
+if kill -0 "$wirestandin" 2>/dev/null; then verdict=alive; else verdict=killed; fi
+check "and it did not kill the stand-in on a guess" "alive" "$verdict"
+kill -KILL "$wirestandin" 2>/dev/null
 
 echo
 echo "proc hygiene guard: $PASS ok, $FAIL failed"
