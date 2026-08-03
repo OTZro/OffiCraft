@@ -124,7 +124,15 @@ rbin="$SHIM_REMOTE_BIN"
 # assertion would stay green while the real prefix was wrong.
 [[ "$cmd" == *"/opt/homebrew/bin"* ]] || { echo "TRIPWIRE ssh shim: the probe command no longer contains the /opt/homebrew/bin literal this shim rewrites — OC_REMOTE_PATH_PREFIX changed: $cmd" >> "$SHIM_TRIPWIRE"; exit 3; }
 cmd="${cmd//\/opt\/homebrew\/bin/$rbin}"
-HOME="$rhome" PATH="$rbin:/usr/bin:/bin" /bin/sh -c "$cmd"
+# PATH IS THE FIXTURE. Borrowing this host's /usr/bin here made "the tool is
+# absent" an accident of the RUNNER rather than something the fixture builds:
+# macOS has no /usr/bin/tmux, ubuntu-latest does, so the notmux case leaked the
+# runner's real tmux, the probe answered live_agents=0, the guard passed, and
+# the suite sailed into the teardown it plants on purpose — green on one OS,
+# red on the other, testing nothing on either. $SHIM_REMOTE_BASE carries ONLY
+# the generic tools the probe genuinely needs (awk/grep/id); every tool whose
+# presence the test is ASSERTING ON lives in $rbin, under the fixture's control.
+HOME="$rhome" PATH="$rbin:$SHIM_REMOTE_BASE" /bin/sh -c "$cmd"
 SH
 
 # The second machine's own tools, resolved on the far side of the ssh shim. They
@@ -168,6 +176,36 @@ chmod +x "$SHIMDIR"/remote-bin/ioreg "$SHIMDIR"/remote-bin/launchctl "$SHIMDIR"/
 mkdir -p "$SHIMDIR/remote-bin-notmux"
 cp "$SHIMDIR"/remote-bin/ioreg "$SHIMDIR"/remote-bin/launchctl "$SHIMDIR/remote-bin-notmux/"
 export SHIM_REMOTE_BIN="$SHIMDIR/remote-bin"
+# The generic half of the fake remote's PATH: the tools the probe legitimately
+# needs that are NOT part of any assertion (awk, grep, id). Resolved through
+# `command -v` so this works on both macOS and Linux, and kept deliberately
+# small — anything not listed here is, from the probe's point of view, absent,
+# which is what lets the fixture DECIDE that a tool cannot be found.
+mkdir -p "$SHIMDIR/remote-base"
+# `bash` is in that list although nothing in the probe calls it: every stub in
+# $rbin carries a `/usr/bin/env bash` shebang, and `env` resolves its argument
+# through PATH — a base dir without bash makes the fixture's own stubs
+# unrunnable while leaving them perfectly present, which reads downstream as
+# "the far side answered nothing" and takes out every remote case at once.
+for _t in awk grep id bash; do
+  _p="$(command -v "$_t" 2>/dev/null || true)"
+  [[ -n "$_p" ]] || { echo "tests_guard: cannot build the fake remote PATH — '$_t' not found on this machine" >&2; exit 2; }
+  ln -sf "$_p" "$SHIMDIR/remote-base/$_t"
+done
+unset _t _p
+# TRIPWIRE, checked before any case runs. If a tool the fixture withholds ever
+# becomes reachable through this base dir again, say so loudly HERE — the
+# alternative is what actually happened: the affected cases keep passing on the
+# OS that happens to lack the tool, and on the OS that has it they fail as an
+# unrelated-looking guard bug.
+for _t in tmux launchctl ioreg ssh; do
+  if PATH="$SHIMDIR/remote-base" command -v "$_t" >/dev/null 2>&1; then
+    echo "tests_guard: the fake remote base dir resolves '$_t' — the fixture no longer controls whether that tool exists on the far side" >&2
+    exit 2
+  fi
+done
+unset _t
+export SHIM_REMOTE_BASE="$SHIMDIR/remote-base"
 
 chmod +x "$SHIMDIR"/launchctl "$SHIMDIR"/lsof "$SHIMDIR"/tmux "$SHIMDIR"/ioreg "$SHIMDIR"/ssh
 
@@ -1161,6 +1199,16 @@ grep -q 'prod-host guard OK (remote)' "$GLOG" \
 # as "nothing running": fail-OPEN, on the default second machine.
 E1DD_REMOTE_TOOLS=notmux E1DD_REMOTE_AGENTS=1 \
   e1dd_gate "a SECOND_MACHINE where the probe's tools are not on PATH" "$H_CLEAN" "did not come back with exactly one answer"
+# …and pin WHICH question went unanswered. Without this the case passes for any
+# reason the probe fails to parse, so a fixture that stopped withholding tmux
+# (see the base-dir tripwire above) could keep it green while testing nothing.
+E1DD_REMOTE_TOOLS=notmux E1DD_REMOTE_AGENTS=1 \
+  e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight' >/dev/null
+if grep -q 'live_agents: 0' "$GLOG"; then
+  ok "the notmux refusal is the LIVENESS question going unanswered, not some other marker"
+else
+  bad "the notmux case refused for the wrong reason — tmux was answerable after all (got: $(tr '\n' '|' < "$GLOG" | tail -c 300))"
+fi
 
 # BRANCH ORDER, second half. Only the liveness message names a remedy, so it must
 # come LAST — a host with BOTH a server tree and a running warden is more
