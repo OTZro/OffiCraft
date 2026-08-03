@@ -18,8 +18,11 @@ package main
 //       2. mime ∈ {image/png, image/jpeg, image/webp} — a RASTER whitelist.
 //          SVG is REJECTED (it can carry <script>/onload → XSS);
 //       3. the base64 must decode cleanly;
-//       4. the DECODED byte size ≤ maxAvatarBytes (64 KiB), and the raw string
-//          length ≤ maxAvatarValueLen (a cheap pre-filter);
+//       4. the DECODED byte size and the raw data-URI string length are both
+//          capped — by a PER-PURPOSE pair, not one global pair (T-72da):
+//          avatars / logo / navIcons use maxAvatarBytes (64 KiB) +
+//          maxAvatarValueLen, backgrounds use maxBackgroundBytes (512 KiB) +
+//          maxBackgroundValueLen. See the const block for why they differ;
 //       5. the leading MAGIC BYTES must match the declared mime (PNG 89 50 4E
 //          47, JPEG FF D8 FF, WEBP `RIFF....WEBP`) — so a value that declares
 //          image/png but carries an SVG/script/other payload is rejected.
@@ -47,17 +50,48 @@ import (
 // whitespace) so the server rejects the identical byte the client rejects.
 var strictBase64Re = regexp.MustCompile(`^[A-Za-z0-9+/]+={0,2}$`)
 
+// The image caps come in PAIRS — (decoded byte cap, raw data-URI string cap) —
+// and there are TWO pairs, one per purpose (T-72da). They are deliberately NOT
+// one number, and must not be "tidied up" back into one:
+//
+//   - an AVATAR / logo / nav-icon is a 30–40 px glyph rendered in a roster row,
+//     the top bar or a tab. 64 KiB is already generous for a crisp raster icon
+//     at that size, and nothing legitimate needs more;
+//   - a canvas BACKGROUND is stretched or tiled across the WHOLE viewport. At
+//     that size 64 KiB is visibly mushy — the owner hit that ceiling with a real
+//     background and reported it three times (owner ruling 2026-08-03, which
+//     overturned the T-081b decision that backgrounds must share the avatar cap;
+//     that decision's premise was that both went through ONE gate, which is
+//     exactly what this split removes).
+//
+// The two are held apart so relaxing the wallpaper does NOT relax the glyph:
+// avatars stay at 64 KiB. Both pairs are twinned by MAX_AVATAR_BYTES /
+// MAX_AVATAR_VALUE_LEN / MAX_BACKGROUND_BYTES / MAX_BACKGROUND_VALUE_LEN on the
+// client, and that twinning is enforced — not merely asserted in prose — by
+// bin/tests/fixtures/image-cap-cases.tsv and its two mirror tests.
 const (
-	// maxAvatarBytes caps the DECODED image size. An avatar is a small
-	// roster/chat glyph, not a photo — 64 KiB is generous for a crisp raster
-	// icon, and the real guard against bloating the single custom_themes JSON
-	// row. The twin of MAX_AVATAR_BYTES on the client.
+	// maxAvatarBytes caps the DECODED image size of an avatar / logo / nav
+	// icon. A small roster/chat glyph, not a photo, and the real guard against
+	// bloating the single custom_themes JSON row. The twin of MAX_AVATAR_BYTES
+	// on the client.
 	maxAvatarBytes = 64 * 1024
-	// maxAvatarValueLen caps the raw data-URI string length (bytes). base64
-	// inflates ~4/3, so 64 KiB decoded ≈ 87.4 KiB encoded; this cap sits above
-	// that with margin and is a cheap pre-filter BEFORE we decode, so a
-	// pathologically long string is rejected without allocating its decode.
+	// maxAvatarValueLen caps the raw data-URI string length (bytes) for those
+	// same three. base64 inflates ~4/3, so 64 KiB decoded ≈ 87.4 KiB encoded;
+	// this cap sits above that with margin and is a cheap pre-filter BEFORE we
+	// decode, so a pathologically long string is rejected without allocating
+	// its decode.
 	maxAvatarValueLen = 96 * 1024
+	// maxBackgroundBytes caps the DECODED size of a `backgrounds` image, which
+	// covers the whole viewport rather than a 30–40 px glyph — see the block
+	// comment above for why this is 8× the avatar cap. The twin of
+	// MAX_BACKGROUND_BYTES on the client.
+	maxBackgroundBytes = 512 * 1024
+	// maxBackgroundValueLen is the string-length pre-filter that MUST move with
+	// maxBackgroundBytes: it runs BEFORE the decode, so leaving it at the avatar
+	// value cap would reject every large background with "data URI is too long"
+	// and the 512 KiB decoded cap below would never be reached. 512 KiB decoded
+	// ≈ 682.7 KiB encoded (×4/3); 704 KiB sits above that with margin.
+	maxBackgroundValueLen = 704 * 1024
 )
 
 // avatarKindAllowed is the closed set of member-type keys an avatars overlay
@@ -91,16 +125,20 @@ var avatarMimeMagic = map[string]func([]byte) bool{
 	},
 }
 
-// validAvatarValue reports whether v is an admissible embedded avatar image:
-// a `data:image/<whitelisted mime>;base64,<base64>` URI that decodes within the
-// byte cap and whose magic bytes match the declared mime. Returns a specific
-// reason on failure so the 422 body is actionable.
-func validAvatarValue(v string) error {
+// validImageValue reports whether v is an admissible embedded image: a
+// `data:image/<whitelisted mime>;base64,<base64>` URI that decodes within
+// maxDecoded bytes, whose raw string is at most maxValueLen bytes, and whose
+// magic bytes match the declared mime. Returns a specific reason on failure so
+// the 422 body is actionable. Everything EXCEPT the two size caps is identical
+// for every purpose — the mime allowlist, the SVG refusal, the strict base64
+// alphabet and the magic-byte check are the security boundary and are shared;
+// only "how big" is per-purpose (T-72da).
+func validImageValue(v string, maxDecoded, maxValueLen int) error {
 	if v == "" {
 		return fmt.Errorf("must not be empty")
 	}
-	if len(v) > maxAvatarValueLen {
-		return fmt.Errorf("data URI is too long (max %d bytes)", maxAvatarValueLen)
+	if len(v) > maxValueLen {
+		return fmt.Errorf("data URI is too long (max %d bytes)", maxValueLen)
 	}
 	const prefix = "data:"
 	if !strings.HasPrefix(v, prefix) {
@@ -143,14 +181,28 @@ func validAvatarValue(v string) error {
 	if len(raw) == 0 {
 		return fmt.Errorf("decoded image is empty")
 	}
-	if len(raw) > maxAvatarBytes {
-		return fmt.Errorf("decoded image is too large (max %d bytes)", maxAvatarBytes)
+	if len(raw) > maxDecoded {
+		return fmt.Errorf("decoded image is too large (max %d bytes)", maxDecoded)
 	}
 	if !magic(raw) {
 		return fmt.Errorf(
 			"image bytes do not match declared mime %q (magic-byte check failed)", mime)
 	}
 	return nil
+}
+
+// validAvatarValue is the image gate at the AVATAR caps (64 KiB) — the gate for
+// avatars, logo and navIcons, i.e. the small glyphs. Backgrounds use
+// validBackgroundValue instead.
+func validAvatarValue(v string) error {
+	return validImageValue(v, maxAvatarBytes, maxAvatarValueLen)
+}
+
+// validBackgroundValue is the same image gate at the BACKGROUND caps (512 KiB).
+// Only `backgrounds` values come through here; see the const block for why a
+// full-viewport image is allowed more room than a 30–40 px glyph.
+func validBackgroundValue(v string) error {
+	return validImageValue(v, maxBackgroundBytes, maxBackgroundValueLen)
 }
 
 // validateAvatars validates one bundle's optional avatars overlay. `where` is
@@ -181,7 +233,8 @@ var navIconKeyAllowed = map[string]bool{
 // validateLogo validates a bundle's optional single studio-logo image (T-ea81).
 // nil is admissible (logo is optional); a present logo passes the SAME strict
 // image gate as an avatar value (validAvatarValue — data-URI / raster-mime /
-// size / magic-byte), so the one gate stays the only image validator.
+// 64 KiB size / magic-byte). A logo is a top-bar glyph, so it keeps the avatar
+// caps; only `backgrounds` was relaxed in T-72da.
 func validateLogo(logo *string, where string) error {
 	if logo == nil {
 		return nil
@@ -201,10 +254,18 @@ var backgroundKeyAllowed = map[string]bool{"canvas": true}
 
 // validateBackgrounds validates a bundle's optional outer-canvas background
 // overlay (T-081b). A nil overlay is admissible. Each key must be an allowed
-// zone; each value passes the SAME strict image gate as an avatar value
-// (validAvatarValue — data-URI / raster-mime / 64 KiB size / magic-byte), so the
-// one gate stays the only image validator and the cap is NOT relaxed: a tileable
-// texture fits easily, a wallpaper is exactly what the cap must stop.
+// zone; each value passes the same strict image gate as an avatar value for
+// everything that is a SECURITY property — data-URI shape, raster-mime
+// allowlist, SVG refusal, magic-byte check — but at the BACKGROUND size caps
+// (validBackgroundValue: 512 KiB decoded, not the avatar's 64 KiB).
+//
+// T-081b ruled the opposite ("the cap is NOT relaxed: a tileable texture fits
+// easily, a wallpaper is exactly what the cap must stop"). The owner overturned
+// that on 2026-08-03: a canvas background is stretched across the whole
+// viewport, and at 64 KiB his real background read as visibly blurry. That
+// ruling's premise — one gate for all four image fields, so relaxing one
+// relaxed the avatars too — no longer holds: validImageValue now takes the caps
+// as parameters, and avatars / logo / navIcons keep 64 KiB.
 func validateBackgrounds(backgrounds *map[string]string, where string) error {
 	if backgrounds == nil {
 		return nil
@@ -214,7 +275,7 @@ func validateBackgrounds(backgrounds *map[string]string, where string) error {
 			return fmt.Errorf(
 				"%s: background zone %q is not allowed (only canvas)", where, key)
 		}
-		if err := validAvatarValue(value); err != nil {
+		if err := validBackgroundValue(value); err != nil {
 			return fmt.Errorf("%s: backgrounds[%s] %v", where, key, err)
 		}
 	}
@@ -266,8 +327,8 @@ func validateBackgroundModes(
 // validateNavIcons validates a bundle's optional per-tab nav-icon overlay
 // (T-ea81). A nil overlay is admissible. Each key must be one of the five nav
 // tabs (navIconKeyAllowed); each value passes the SAME strict image gate as an
-// avatar value (validAvatarValue), so the one gate stays the only image
-// validator.
+// avatar value (validAvatarValue) at the avatar caps — a nav icon is a tab
+// glyph, so it keeps 64 KiB; only `backgrounds` was relaxed in T-72da.
 func validateNavIcons(navIcons *map[string]string, where string) error {
 	if navIcons == nil {
 		return nil

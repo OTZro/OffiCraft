@@ -19,6 +19,7 @@ import {
   validateFonts,
   isValidDisplayTheme,
   MAX_AVATAR_BYTES,
+  MAX_BACKGROUND_BYTES,
   MAX_WORDING_ENTRIES_PER_LANG,
 } from "./themeBundle";
 import { THEME_COLOR_TOKENS } from "../styles/themeTokens.generated";
@@ -284,7 +285,14 @@ describe("validateFonts", () => {
 
 // ── avatar images (T-16a1 P5) — the security boundary is the image VALUE ──
 function b64(bytes: number[]): string {
-  return btoa(String.fromCharCode(...bytes));
+  // Chunked: `String.fromCharCode(...bytes)` blows the argument limit
+  // ("Maximum call stack size exceeded") once the background-cap cases push
+  // half a megabyte through here.
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 8192) {
+    s += String.fromCharCode(...bytes.slice(i, i + 8192));
+  }
+  return btoa(s);
 }
 function avatarURI(mime: string, bytes: number[]): string {
   return `data:${mime};base64,${b64(bytes)}`;
@@ -436,10 +444,11 @@ describe("validateBackgrounds", () => {
     }
   });
 
-  it("runs the same image gate as an avatar — SVG, bad magic and oversize", () => {
+  it("runs the same SAFETY gate as an avatar — SVG, bad magic — but its own size cap", () => {
+    // Over the BACKGROUND cap, not the avatar one (T-72da).
     const oversize = avatarURI(
       "image/png",
-      PNG_MAGIC.concat(new Array(MAX_AVATAR_BYTES).fill(0))
+      PNG_MAGIC.concat(new Array(MAX_BACKGROUND_BYTES).fill(0))
     );
     for (const v of [
       avatarURI("image/svg+xml", [0x3c, 0x73, 0x76, 0x67]),
@@ -448,6 +457,31 @@ describe("validateBackgrounds", () => {
     ]) {
       expect(validateBackgrounds({ canvas: v })).toMatch(/not a valid image/);
     }
+  });
+
+  it("accepts a background past the avatar cap, up to its own (T-72da)", () => {
+    // The owner overturned T-081b's "the cap is NOT raised for backgrounds" on
+    // 2026-08-03. Without these two the relaxation has no witness here — the
+    // reject cases above still pass with the cap left at 64 KiB.
+    const pastAvatarCap = avatarURI(
+      "image/png",
+      PNG_MAGIC.concat(new Array(MAX_AVATAR_BYTES).fill(0))
+    );
+    expect(validateBackgrounds({ canvas: pastAvatarCap })).toBeNull();
+    // And an avatar of that same size is STILL refused — the relaxation did not
+    // leak across, which is the whole point of splitting the caps.
+    expect(validateAvatars({ member: pastAvatarCap })).toMatch(
+      /not a valid image/
+    );
+
+    // Exactly at the background cap. This also proves the raw string-length
+    // pre-filter moved: 512 KiB decoded is ~683 KiB encoded, so a stale
+    // MAX_BACKGROUND_VALUE_LEN would reject it before the decoded cap is read.
+    const atCap = avatarURI(
+      "image/png",
+      PNG_MAGIC.concat(new Array(MAX_BACKGROUND_BYTES - PNG_MAGIC.length).fill(0))
+    );
+    expect(validateBackgrounds({ canvas: atCap })).toBeNull();
   });
 
   it("flows through validateThemeBundle", () => {
