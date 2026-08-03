@@ -82,7 +82,19 @@ cat > "$SHIMDIR/ioreg" <<'SH'
 printf '    "IOPlatformUUID" = "%s"\n' "${SHIM_HW_UUID:-00000000-0000-0000-0000-FEEDFACE0000}"
 SH
 
-chmod +x "$SHIMDIR"/launchctl "$SHIMDIR"/lsof "$SHIMDIR"/tmux "$SHIMDIR"/ioreg
+cat > "$SHIMDIR/ssh" <<'SH'
+#!/usr/bin/env bash
+# Stands in for the ONE read-only probe the remote prod-host guard makes. It
+# answers the two facts that guard asks for; SHIM_SSH_FAIL simulates an
+# unreachable second machine, which must be fail-CLOSED (a host whose identity
+# cannot be established must not be wiped).
+[[ "${SHIM_SSH_FAIL:-0}" == "1" ]] && exit 255
+printf 'hw=%s\n' "${SHIM_REMOTE_HW:-}"
+printf 'server_tree=%s\n' "${SHIM_REMOTE_SERVER_TREE:-0}"
+exit 0
+SH
+
+chmod +x "$SHIMDIR"/launchctl "$SHIMDIR"/lsof "$SHIMDIR"/tmux "$SHIMDIR"/ioreg "$SHIMDIR"/ssh
 
 # These stubs are enabled ONLY by the hermetic teardown regression below.  They
 # record every mutating surface instead of touching the host, which lets the
@@ -877,8 +889,11 @@ e1dd_pre() {
   : > "$E1DD_LOG"
   TEST_HOME="$home" OC_CROSS_MACHINE_YES="${E1DD_YES:-1}" \
   REQUIRE_ISOLATION_CONFIRMED="${E1DD_ISO:-1}" SHIM_HW_UUID="${E1DD_UUID:-$DISPOSABLE_UUID}" \
+  SHIM_REMOTE_HW="${E1DD_REMOTE_HW:-$DISPOSABLE_UUID}" \
+  SHIM_REMOTE_SERVER_TREE="${E1DD_REMOTE_TREE:-0}" SHIM_SSH_FAIL="${E1DD_SSH_FAIL:-0}" \
   SHIM_WARDEN=0 SHIM_LISTEN_PORTS="" SHIM_SESSIONS="" \
   OC_CLAUDE_BIN="$home/bin/ocserver" run_snippet '
+    SECOND_MACHINE="a-disposable-relocate-target"
     HOME_DIR="$HOME"; GUI="gui/501"; BACKUP_DIR="$HOME/backups"
     OC_ROOT="$HOME/.officraft"; SERVER_ROOT="${OC_SERVER_ROOT:-$OC_ROOT/server}"
     DB_PATH="$SERVER_ROOT/data/officraft.db"; OCSERVER="$HOME/bin/ocserver"
@@ -950,13 +965,13 @@ rc="$(E1DD_UUID="$PROD_UUID" e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight')"
 #   • the IDENTITY refusal must NEVER name a way to clear the obstacle. Its
 #     reader is standing on a production station; "delete this and retry" IS the
 #     disaster this whole ticket is about.
-rc="$(e1dd_pre "$H_RESIDUE" 'oc_cross_machine_preflight')" >/dev/null
+e1dd_pre "$H_RESIDUE" 'oc_cross_machine_preflight' >/dev/null
 if grep -Eq 'PROD-HOST GUARD \(residue\).*(rebuild|delete)' "$GLOG"; then
   ok "the residue refusal tells the operator how to proceed"
 else
   bad "the residue refusal gives no way forward — it will read as a broken tool (got: $(tr '\n' '|' < "$GLOG" | tail -c 300))"
 fi
-rc="$(E1DD_UUID="$PROD_UUID" e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight')" >/dev/null
+E1DD_UUID="$PROD_UUID" e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight' >/dev/null
 # The pattern hunts for an INSTRUCTION TO THE READER, not for the word "delete":
 # the message is allowed — required, even — to say what the suite deletes. What it
 # must never do is tell the person standing on that station what to remove or
@@ -967,17 +982,59 @@ else
   ok "the identity refusal offers no way to clear it — only 'run somewhere else'"
 fi
 
+# 19b'') THE SECOND MACHINE gets the same two questions. STAGE 5b deletes its
+# ENTIRE ~/.officraft — more than this suite deletes locally — so guarding only
+# the local host leaves the cheaper mistake available: from a genuinely clean
+# throwaway VM, naming a production station as SECOND_MACHINE passes every local
+# gate. The refusal must also happen HERE, in the preflight, not at STAGE 5b,
+# which is after the local host has been torn down and reinstalled.
+E1DD_REMOTE_HW="$PROD_UUID" e1dd_gate "a production SECOND_MACHINE" "$H_CLEAN" "PROD-HOST GUARD (remote)"
+E1DD_REMOTE_TREE=1 e1dd_gate "a SECOND_MACHINE carrying a server tree" "$H_CLEAN" "PROD-HOST GUARD (remote)"
+
+# Unreachable second machine → fail CLOSED. A host whose identity cannot be
+# established is not thereby safe to wipe; "ssh failed, carry on" would be the
+# same shape as the bug this ticket fixes.
+E1DD_SSH_FAIL=1 e1dd_gate "an unreachable SECOND_MACHINE" "$H_CLEAN" "could not reach"
+
 # 19c) SENTINEL — a genuinely disposable host must still be able to run. A guard
 # that refuses everything passes every refusal test above and is useless.
 rc="$(e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight')"
 check "a disposable host with both acks PASSES the preflight" "0" "$rc"
 
+# 19c') THE ORDERING IS A PROPERTY OF cross_machine.sh, and nothing above pins it
+# there. Every assertion so far runs a preflight→teardown chain THIS FILE builds,
+# so moving the preflight call BELOW the teardown call in cross_machine.sh would
+# leave the whole section green — reinstating exactly this ticket's bug. Line
+# numbers are weak evidence in general, but this is straight-line top-level script
+# code, where source order IS execution order.
+CM="$HERE/../cross_machine.sh"
+_pre_ln="$(grep -n '^oc_cross_machine_preflight$' "$CM" | head -1 | cut -d: -f1)"
+_td_ln="$(grep -n '^oc_teardown_bounded ' "$CM" | head -1 | cut -d: -f1)"
+if [[ -z "$_pre_ln" || -z "$_td_ln" ]]; then
+  bad "cross_machine.sh no longer has a top-level oc_cross_machine_preflight and/or oc_teardown_bounded call (pre=${_pre_ln:-none} td=${_td_ln:-none}) — this ordering pin has gone blind"
+elif [[ "$_pre_ln" -lt "$_td_ln" ]]; then
+  ok "cross_machine.sh calls the preflight (line $_pre_ln) BEFORE the teardown (line $_td_ln)"
+else
+  bad "cross_machine.sh calls the teardown (line $_td_ln) before the preflight (line $_pre_ln) — this is the T-e1dd bug"
+fi
+# …and no destructive top-level statement may sit ahead of the preflight call.
+_early="$(awk -v stop="$_pre_ln" 'NR<stop && $0 !~ /^[[:space:]]*#/ && /(^|[^-[:alnum:]_])(rm -rf|rm -f|launchctl bootout|kill-session)/' "$CM" | wc -l | tr -d ' ')"
+check "no destructive statement in cross_machine.sh runs before the preflight" "0" "${_early:-0}"
+
 # 19d) MUTANTS — one edit each. Without them every assertion above could be
 # vacuously true. The mutant lib needs a tree whose ../../server resolves, because
 # the lib derives the canonical port from server/ocserverd/config.go and FATALs if
 # it cannot (same construction as the MUT-D control above).
-e1dd_mutant() { # e1dd_mutant NAME SED_EXPR HOME UUID
-  local name="$1" expr="$2" home="$3" uuid="$4"
+# e1dd_mutant NAME SED_EXPR HOME UUID [ISO_ACK]
+#
+# The ack defaults are passed EXPLICITLY, not inherited from ambient state. An
+# earlier version relied on a `E1DD_ISO=0` prefix on the CALL reaching e1dd_pre
+# through the function body — it does not, so the ack mutant ran fully acked and
+# asserted rc==0 for a configuration that already returns rc==0 unmutated. It was
+# green, and it would have stayed green with the ack check deleted outright: a
+# mutant that proves nothing is worse than no mutant, because it reads as proof.
+e1dd_mutant() {
+  local name="$1" expr="$2" home="$3" uuid="$4" iso="${5:-1}" remote_hw="${6:-$DISPOSABLE_UUID}"
   local root="$SHIMDIR/mut-$name-tree" lib="$SHIMDIR/mut-$name-tree/e2e_test/lib/oc_lifecycle.sh"
   mkdir -p "$root/e2e_test/lib"; ln -sfn "$HERE/../../server" "$root/server"
   sed "$expr" "$LIB" > "$lib"
@@ -985,9 +1042,17 @@ e1dd_mutant() { # e1dd_mutant NAME SED_EXPR HOME UUID
     bad "MUT-$name did not change the lib — the mutation anchor moved; a vacuous mutant proves nothing"
     return
   fi
-  local rc; rc="$(SNIPPET_LIB="$lib" E1DD_UUID="$uuid" e1dd_pre "$home" 'oc_cross_machine_preflight')"
+  # CONTROL: the same configuration against the UNMUTATED lib must REFUSE. Without
+  # this, "the mutant proceeds" is not evidence — it is also what a configuration
+  # that was always going to proceed looks like.
+  local ctl; ctl="$(E1DD_ISO="$iso" E1DD_UUID="$uuid" E1DD_REMOTE_HW="$remote_hw" e1dd_pre "$home" 'oc_cross_machine_preflight')"
+  if [[ "$ctl" == "0" ]]; then
+    bad "MUT-$name control: the UNMUTATED lib already accepted this configuration — the mutant below proves nothing about that check"
+    return
+  fi
+  local rc; rc="$(SNIPPET_LIB="$lib" E1DD_ISO="$iso" E1DD_UUID="$uuid" E1DD_REMOTE_HW="$remote_hw" e1dd_pre "$home" 'oc_cross_machine_preflight')"
   [[ "$rc" == "0" ]] \
-    && ok "MUT-$name: with that check removed the run PROCEEDS — the live case is pinned to it" \
+    && ok "MUT-$name: unmutated refuses (rc=$ctl), with that check removed the run PROCEEDS — the live case is pinned to it" \
     || bad "MUT-$name: still refused (rc=$rc) — the live assertion is NOT pinned to this check (glog: $(tr '\n' '|' < "$GLOG" | tail -c 200))"
 }
 # 1. identity: drop the hardware-UUID comparison → the production-station case must go green-lit.
@@ -997,8 +1062,11 @@ e1dd_mutant() { # e1dd_mutant NAME SED_EXPR HOME UUID
 e1dd_mutant identity 's/.*identity: this machine.*/      : ;/' "$H_CLEAN" "$PROD_UUID"
 # 2. residue: drop the server-tree check → the residue case must go green-lit.
 e1dd_mutant residue 's|^  \[\[ -d "$server_root" \]\] .*$|  : ;|' "$H_RESIDUE" "$DISPOSABLE_UUID"
-# 3. ordering: drop the isolation ack → an unacked run must reach the teardown.
-e1dd_mutant ack '/^  \[\[ "${REQUIRE_ISOLATION_CONFIRMED:-0}" == "1" \]\] || die \\$/,+1d' "$H_CLEAN" "$DISPOSABLE_UUID"
+# 3. the isolation ack — run UNACKED (iso=0), so the control refuses and the
+#    mutant proceeds. This is the check whose ORDER is the whole ticket.
+e1dd_mutant ack '/^  \[\[ "${REQUIRE_ISOLATION_CONFIRMED:-0}" == "1" \]\] || die \\$/,+1d' "$H_CLEAN" "$DISPOSABLE_UUID" 0
+# 4. the remote prod-host guard — a production SECOND_MACHINE must be refused.
+e1dd_mutant remote 's/^  oc_prod_host_remote_guard .*$/  : ;/' "$H_CLEAN" "$DISPOSABLE_UUID" 1 "$PROD_UUID"
 
 # 19e) This test file must not be able to destroy anything itself — the ticket's
 # hardest constraint, because the mutants above deliberately disable the guard

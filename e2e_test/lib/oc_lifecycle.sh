@@ -713,10 +713,76 @@ oc_detect_prod_host() {
     for u in ${OC_PROD_HOST_HW_UUIDS[@]+"${OC_PROD_HOST_HW_UUIDS[@]}"}; do
       [[ "$hw" == "$u" ]] && reasons+=("identity: this machine's hardware UUID $hw is a known production station")
     done
+  else
+    # Say so. Silence here is the identity check going dark while the "guard OK"
+    # line below still prints — a guard that stopped working must not look like a
+    # guard that passed.
+    warn "prod-host guard: could not read a hardware UUID from this host — the IDENTITY check is INACTIVE, only the residue check applies"
   fi
   [[ -d "$server_root" ]] && reasons+=("residue: an officraft server tree exists on this host: $server_root")
   local r
   for r in ${reasons[@]+"${reasons[@]}"}; do printf '%s\n' "$r"; done
+}
+
+# oc_detect_prod_host_remote SSH_TARGET — the SAME two questions, asked about the
+# SECOND machine. Read-only; prints one reason line per hit.
+#
+# This is not symmetry for its own sake. cross_machine.sh's STAGE 5b deletes MORE
+# on the remote host than the local teardown does locally: `rm -rf "$HOME/.officraft"`
+# — the whole instance root, not just the server tree — after booting out the
+# remote warden. Guarding only the local host leaves the easier attack: from a
+# genuinely clean throwaway VM, `SECOND_MACHINE=<a production station>` passes
+# every local gate and wipes that station's entire officraft tree. The local bug
+# this ticket fixed at least required standing on production; this one needs only
+# its name typed.
+#
+# Residue signal differs by role, deliberately: the second machine is EXPECTED to
+# carry ~/.officraft (that is what being onboarded means, and STAGE 5b clearing it
+# is the point), so only a SERVER tree — ~/.officraft/server, the DB-bearing part
+# a warden node never has — counts as "this is a station, not a test node".
+# NOTE — this function must NEVER call `die`. It is invoked inside a command
+# substitution, where `exit` ends only the subshell: the caller would print the
+# fatal message and then carry straight on into the teardown. That is not a
+# hypothetical — it is how the first version of this guard behaved, and the
+# unreachable-host case recorded 11 mutations after "refusing". Detectors report;
+# only oc_prod_host_remote_guard decides.
+oc_detect_prod_host_remote() {
+  local target="$1" reasons=() hw u probe
+  # One round trip: both facts, or a clear failure. `ioreg` may be absent (non-mac).
+  if ! probe="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$target" \
+    'printf "hw=%s\n" "$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | awk -F\" "/IOPlatformUUID/{print \$4}")"; [ -d "$HOME/.officraft/server" ] && printf "server_tree=1\n" || printf "server_tree=0\n"' 2>/dev/null)"; then
+    # Unreachable is a REFUSAL, not a warning. A host whose identity cannot be
+    # established is not thereby safe to wipe.
+    printf '%s\n' "unreachable: could not reach '$target' over ssh to establish what machine it is"
+    return 0
+  fi
+  hw="$(printf '%s\n' "$probe" | sed -n 's/^hw=//p')"
+  if [[ -n "$hw" ]]; then
+    for u in ${OC_PROD_HOST_HW_UUIDS[@]+"${OC_PROD_HOST_HW_UUIDS[@]}"}; do
+      [[ "$hw" == "$u" ]] && reasons+=("identity: the second machine '$target' has hardware UUID $hw, a known production station")
+    done
+  else
+    warn "prod-host guard: could not read a hardware UUID from '$target' — the remote IDENTITY check is INACTIVE, only the remote residue check applies"
+  fi
+  [[ "$(printf '%s\n' "$probe" | sed -n 's/^server_tree=//p')" == "1" ]] \
+    && reasons+=("residue: the second machine '$target' carries an officraft SERVER tree (~/.officraft/server) — a relocate target never has one")
+  local r
+  for r in ${reasons[@]+"${reasons[@]}"}; do printf '%s\n' "$r"; done
+}
+
+# oc_prod_host_remote_guard SSH_TARGET — refuse a second machine that is, or looks
+# like, a production station. Same no-override rule as the local guard.
+oc_prod_host_remote_guard() {
+  local target="$1" reasons; reasons="$(oc_detect_prod_host_remote "$target")"
+  if [[ -z "$reasons" ]]; then
+    log "prod-host guard OK (remote): '$target' is not a known production station and carries no server tree"
+    return 0
+  fi
+  printf '%s\n' "$reasons" | sed 's/^/[oc-lifecycle] prod-host(remote)| /' >&2
+  if printf '%s\n' "$reasons" | grep -q '^unreachable:'; then
+    die "PROD-HOST GUARD (remote): could not reach the second machine '$target' to establish what machine it is. This run boots out its warden and deletes its entire ~/.officraft, so it must not start while that host's identity is unknown. Fix ssh access to it, or point SECOND_MACHINE at the host you actually mean."
+  fi
+  die "PROD-HOST GUARD (remote): the second machine '$target' is, or looks like, a production officraft station (see prod-host(remote)| lines). STAGE 5b boots out its warden and deletes its ENTIRE ~/.officraft — more than this suite deletes locally. Point SECOND_MACHINE at a disposable relocate target instead."
 }
 
 # oc_prod_host_guard — refuse a host that is, or looks like, a production station.
@@ -765,8 +831,8 @@ oc_prod_host_guard() {
 #     would refuse every run after the first. The prod-host guard above covers the
 #     danger 0b was aimed at, addressed from $HOME instead of the overridable root.
 #   reads: OC_CROSS_MACHINE_YES, REQUIRE_ISOLATION_CONFIRMED, OC_ROOT, SERVER_ROOT,
-#          HOME_DIR, OCSERVER, OC_CLAUDE_BIN(env).
-#   mutates env: unsets ambient OC_ID/OC_TOKEN/OC_BASE/OC_SESSION; sets CLAUDE_BIN.
+#          SECOND_MACHINE, HOME_DIR, OCSERVER, OC_CLAUDE_BIN(env).
+#   mutates env: unsets ambient OC_ID/OC_TOKEN/OC_BASE/OC_SESSION.
 oc_cross_machine_preflight() {
   # (a) DESTRUCTIVENESS ack.
   [[ "${OC_CROSS_MACHINE_YES:-}" == "1" ]] || die \
@@ -789,11 +855,18 @@ oc_cross_machine_preflight() {
   # (d) LIVE-FLEET GUARD — is a fleet RUNNING here?
   oc_live_fleet_guard
 
-  # (e) PROD-HOST GUARD — is a server INSTALLED here? (the stopped-prod case (d)
-  #     cannot see; see oc_detect_prod_host).
+  # (e) PROD-HOST GUARD — is THIS machine a production station? (the stopped-prod
+  #     case (d) structurally cannot see; see oc_detect_prod_host).
   oc_prod_host_guard
 
-  # (f) SERVER_ROOT CONTAINMENT — transplanted verbatim from oc_preflight_guards
+  # (f) …and the same question about the SECOND machine, asked HERE rather than at
+  #     STAGE 5b where the remote wipe happens. A refusal at this point costs
+  #     nothing; a refusal at STAGE 5b would arrive after the local host has
+  #     already been torn down and reinstalled — the same "destroy first, refuse
+  #     second" shape this whole change exists to remove, just one host over.
+  oc_prod_host_remote_guard "${SECOND_MACHINE:?SECOND_MACHINE must be set}"
+
+  # (g) SERVER_ROOT CONTAINMENT — transplanted verbatim from oc_preflight_guards
   #     0b'. OC_SERVER_ROOT is an overridable env and the teardown rm -rf's it; if
   #     it is pointed outside the instance root, the deletion escapes every guard
   #     that reasons about that root.
@@ -806,7 +879,7 @@ oc_cross_machine_preflight() {
   esac
   log "server-root containment OK: $SERVER_ROOT under $OC_ROOT"
 
-  # (g) AMBIENT OC_* STRIP — transplanted from 0d. Never let an ambient token or
+  # (h) AMBIENT OC_* STRIP — transplanted from 0d. Never let an ambient token or
   #     base URL point this run's API calls at the fleet/prod server.
   if [[ -n "${OC_ID:-}${OC_TOKEN:-}${OC_BASE:-}${OC_SESSION:-}" ]]; then
     warn "ambient OC_* detected (OC_ID/OC_TOKEN/OC_BASE/OC_SESSION) — stripping so we never hit the fleet server"
@@ -814,12 +887,15 @@ oc_cross_machine_preflight() {
   unset OC_ID OC_TOKEN OC_BASE OC_SESSION 2>/dev/null || true
   log "ambient OC_* stripped (this process)"
 
-  # (h) CLAUDE RESOLVABILITY — transplanted from 0e. STAGE 4 spawns a real agent;
-  #     failing here beats failing four stages in.
-  CLAUDE_BIN="${OC_CLAUDE_BIN:-$(command -v claude 2>/dev/null || true)}"
-  [[ -n "$CLAUDE_BIN" && -x "$CLAUDE_BIN" ]] \
+  # (i) CLAUDE RESOLVABILITY — transplanted from 0e. STAGE 4 spawns a real agent,
+  #     so an unresolvable claude fails this run either way; failing here costs a
+  #     second instead of four stages. Deliberately NOT exported as CLAUDE_BIN:
+  #     nothing downstream in this suite reads such a variable, and leaving one
+  #     around would imply a plumbing that does not exist.
+  local claude_bin="${OC_CLAUDE_BIN:-$(command -v claude 2>/dev/null || true)}"
+  [[ -n "$claude_bin" && -x "$claude_bin" ]] \
     || die "claude not resolvable (set OC_CLAUDE_BIN or put claude on PATH) — the install-time OC_CLAUDE_BIN stamp AND the STAGE 4 agent spawn would both fail."
-  log "claude resolvable [src=$CLAUDE_BIN]"
+  log "claude resolvable [src=$claude_bin]"
 }
 
 # oc_assert_teardown_instance — fail closed unless every resource axis agrees

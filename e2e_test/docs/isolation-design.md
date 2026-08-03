@@ -143,6 +143,19 @@ ran this suite once looks exactly like a production host to it and must be
 rebuilt. That is the accepted price, and the trade is not close — residue failing
 costs one rebuilt VM, identity failing alone costs a production database.
 
+**Both questions are also asked about the SECOND machine**
+(`oc_prod_host_remote_guard`), in the preflight rather than at STAGE 5b where the
+remote wipe happens. This is not symmetry for its own sake: STAGE 5b deletes the
+remote host's *entire* `~/.officraft`, more than the local teardown deletes here.
+Guarding only the local host leaves the cheaper mistake available — from a
+genuinely clean throwaway VM, naming a production station as `SECOND_MACHINE`
+passes every local gate. The local bug at least required standing on production;
+that one needs only its name typed. The remote residue signal is
+`~/.officraft/server` rather than `~/.officraft`, because a relocate target is
+*expected* to carry the latter — that is what being onboarded means — and never
+the former. An unreachable second machine is a refusal, not a warning: a host
+whose identity cannot be established is not thereby safe to wipe.
+
 Both derive their paths from `$HOME`, never from `$SERVER_ROOT`/`$OC_ROOT`:
 those are env-overridable, and deriving from them would let `OC_SERVER_ROOT` aim
 the guard at an empty directory while the deletion still landed on the real tree.

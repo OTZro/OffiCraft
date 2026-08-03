@@ -31,13 +31,21 @@
 # ##    (b) a production officraft host holds the real server database. Whether
 # ##        that server is RUNNING at the moment is irrelevant to what the
 # ##        deletion costs — and a stopped server is exactly when someone reaches
-# ##        for a reset script. This is enforced, not merely warned about: the
-# ##        preflight refuses any host with a server DB on disk or an installed
-# ##        launchd job pointing at ~/.officraft/server (oc_prod_host_guard).
+# ##        for a reset script. This is enforced, not merely warned about:
+# ##        oc_prod_host_guard refuses this host if its hardware UUID is a known
+# ##        production station, or if it carries a ~/.officraft/server tree at
+# ##        all — and oc_prod_host_remote_guard asks the same two questions about
+# ##        SECOND_MACHINE, because STAGE 5b deletes that host's ENTIRE
+# ##        ~/.officraft, which is MORE than this suite deletes locally.
 # ##
 # ##  REQUIRE_ISOLATION_CONFIRMED=1 is how you STATE that (a) is resolved for
 # ##  this host. It creates no isolation and it does not, and cannot, override
-# ##  the prod-host refusal in (b).
+# ##  either prod-host refusal in (b).
+# ##
+# ##  ⚠️ ONE RUN PER HOST. STAGE 2 installs a server, so from the second run on,
+# ##  this host carries a ~/.officraft/server tree and the residue check refuses
+# ##  it — deliberately, because from the outside that state is indistinguishable
+# ##  from a production box. Rebuild the throwaway VM to run again.
 # ############################################################################
 #
 #   It ends with a PASS/FAIL summary (per-stage ✓/✗) and exits 0 only if every
@@ -109,7 +117,14 @@
 #
 # PARAMS (env, all overridable — defaults in the block below):
 #   PUBLIC_HOST      public server host (install.sh host-derived base + remote reach)
-#   SECOND_MACHINE   ssh target for the second machine
+#   SECOND_MACHINE   ssh target for the second machine. Checked by the preflight
+#                    with the SAME prod-host rules as this host, and it must be
+#                    reachable BEFORE anything is destroyed — STAGE 5b deletes its
+#                    entire ~/.officraft, so a run may not start while that host's
+#                    identity is unknown.
+#   OC_CLAUDE_BIN    path to the claude binary if it is not on PATH. The preflight
+#                    refuses without a resolvable claude — STAGE 4 spawns a real
+#                    agent, so an unresolvable one fails the run either way.
 #   OWNER_PASSWORD   deterministic owner password to seed (default: random uuid)
 #   TEST_AGENT       seeded agent member id to spawn/relocate (default mira)
 #   LOCAL_BASE       loopback base for local health/API (default
@@ -161,7 +176,9 @@ PUBLIC_BASE="https://${PUBLIC_HOST}"
 OWNER_PASSWORD="${OWNER_PASSWORD:-$(uuidgen | tr '[:upper:]' '[:lower:]')}"
 
 # Isolation ack for the warden naming-collision blocker (see the big ⚠️ header).
-# 0 = not confirmed → the script HARD-STOPS before STAGE 3 (first warden boot).
+# 0 = not confirmed → the preflight refuses before STAGE 1, i.e. before anything
+# is destroyed. (It used to hard-stop before STAGE 3, which is the bug T-e1dd
+# fixed: STAGE 1 had already deleted the server root by then.)
 REQUIRE_ISOLATION_CONFIRMED="${REQUIRE_ISOLATION_CONFIRMED:-0}"
 
 # Presence poll budget (hub projection can lag warden SSE connect a few seconds).
