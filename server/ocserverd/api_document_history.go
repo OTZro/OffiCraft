@@ -330,9 +330,14 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 		})
 	case docKindTaskDescription:
 		// T-e271. No doc cap: the description has never had a length ceiling on
-		// the create side either, so a cap applied only here would make an
-		// already-long description permanently uneditable — the failure this
-		// route exists to remove, reintroduced at the restore door.
+		// the create side either, so a cap applied only here would mean an
+		// already-long description can only ever be restored to a SHORTER
+		// version — DocCapBlocked refuses over-cap writes that are not shorter
+		// than what is stored, and restoring an earlier, longer wording is
+		// exactly such a write. Reasoning in full at the edit door
+		// (api_tasks_description.go); it is stated there once, including the
+		// correction of an earlier draft that overclaimed this as "permanently
+		// uneditable".
 		t, err := s.resolveTask(key)
 		if err != nil {
 			return err

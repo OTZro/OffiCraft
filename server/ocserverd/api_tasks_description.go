@@ -136,16 +136,30 @@ func (s *apiServer) writeTaskDescription(t *Task, actor, description string) (bo
 //
 // NO LENGTH CAP, deliberately — this is a decision, not an omission, and it is
 // written down because an absent guard and a forgotten guard look identical to
-// whoever reads this next. create_task has never capped the description, so a
-// ceiling applied HERE and nowhere else would make every already-long
-// description permanently uneditable: the caller could neither shorten it (the
-// request carrying the shorter text is itself judged by its own new value, but
-// the 400 lands before anything is compared) nor correct a typo in it — the
-// exact "the text cannot be fixed" failure this route exists to remove,
-// reintroduced one door further in. Adding the first-ever cap on this field is
-// also a NEW protection over an existing wire, which is the owner's call to
-// make, not this ticket's. If a cap is ever wanted it belongs on BOTH doors at
-// once (create and edit), sized so no stored description is already over it.
+// whoever reads this next.
+//
+//	CORRECTION (T-e271 review round 5). An earlier draft of this comment argued
+//	the cap would make every already-long description "permanently uneditable".
+//	That reason was FALSE and is recorded here rather than deleted, because a
+//	decision record that quietly swaps its reasoning teaches the next reader
+//	nothing. DocCapBlocked (domain.go) refuses only when the new text is over
+//	the cap AND is not shorter than what is stored — shrinking is an explicit,
+//	advertised escape hatch, so an over-cap description could always still be
+//	edited downward.
+//
+//	The reason that does survive is narrower: a ceiling applied HERE and nowhere
+//	else would mean an already-long description can only ever be made shorter.
+//	A correction that does not shrink it — fixing a wrong date, adding the one
+//	clause that makes the scope unambiguous — would be refused at the edit door,
+//	while the very same words entered freely through create_task, which has
+//	never capped this field. That is this route's own failure mode (the text
+//	cannot be fixed) reintroduced one door further in, just in a smaller form
+//	than the earlier draft claimed.
+//
+// Adding the first-ever cap on this field is also a NEW protection over an
+// existing wire, which is the owner's call to make, not this ticket's. If a cap
+// is ever wanted it belongs on BOTH doors at once (create and edit), sized so no
+// stored description is already over it.
 //
 // Guard order: 404 unknown task → 403 not the executor → write. There is no
 // 409 anywhere on this route.
