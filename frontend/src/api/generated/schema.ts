@@ -5797,7 +5797,8 @@ export interface components {
          *         decide what to pull and whether to digest via a sub-agent.
          *       - ``roster``: WHO ELSE is in the studio — every member AND every contractor,
          *         each with its online/offline status, the machine it runs on, and its duty
-         *         capped at 1000 chars (owner ruling rc-4e98c0481852, 2026-08-03). The
+         *         capped at 1000 chars — the cap applied AFTER the role doc's own leading
+         *         title line is removed (owner ruling rc-4e98c0481852, 2026-08-03). The
          *         point is knowing who to ask for help on waking, so it carries NO insight and
          *         NO learning — see ``ResumeRosterMemberDTO``, whose absence of those two is a
          *         deliberate ruling, not a missing feature.

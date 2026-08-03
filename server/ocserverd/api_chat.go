@@ -1043,11 +1043,23 @@ func dutyText(md string) string {
 //
 // A title-only document comes back whole: an empty duty reads as "this member
 // has no role", a different fact from "this member's role doc is only a title".
+//
+// Two known limits, both deliberate:
+//   - SETEXT headings (a line underlined with === or ---) are NOT stripped.
+//     Only ATX is. Conservative: it costs a line of budget, never content.
+//   - A role doc with no h1 that opens straight into 「## 章節」 loses that
+//     first section heading — it is syntactically a title line. The content
+//     under it survives, but reads as an unlabelled lead-in. Not worth a
+//     content-aware rule: deciding "is this heading a title or a section?"
+//     is exactly the judgement the flat-cap rule exists to avoid.
 func stripLeadingTitle(md string) string {
 	trimmed := strings.TrimRight(md, " \t\r\n")
 	// Skip leading blank lines WITHOUT collapsing the first content line's
 	// indentation — four spaces of indent make it an indented code block, not
-	// a title, and isATXHeading needs to see that.
+	// a title, and isATXHeading needs to see that. (The indent is preserved
+	// only for that decision: the TrimSpace on the way out does flatten the
+	// first surviving line, so a code block right under a title renders as a
+	// paragraph. Cosmetic, and no content is lost.)
 	rest := trimmed
 	for rest != "" {
 		line, tail, found := strings.Cut(rest, "\n")
