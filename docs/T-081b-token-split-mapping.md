@@ -292,7 +292,7 @@ owner 於回覆卡 `rc-1599a0026a80` 選項二拍板改為**寬容**：驗證遇
 它們底下坐著文字,文字壓在花紋上沒有可讀性保證。
 
 ```jsonc
-"backgrounds":     { "canvas": "data:image/png;base64,…" },      // 圖(沿用頭像那道圖片閘)
+"backgrounds":     { "canvas": "data:image/png;base64,…" },      // 圖(格式檢查同頭像,大小上限自己一份 — 見下方 T-72da 註)
 "backgroundModes": { "canvas": "tile" | "sides" | "cover" }      // 鋪法,預設 tile
 ```
 
