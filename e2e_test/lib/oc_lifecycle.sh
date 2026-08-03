@@ -748,24 +748,58 @@ oc_detect_prod_host() {
 # only oc_prod_host_remote_guard decides.
 oc_detect_prod_host_remote() {
   local target="$1" reasons=() hw u probe
-  # One round trip: both facts, or a clear failure. `ioreg` may be absent (non-mac).
-  if ! probe="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$target" \
-    'printf "hw=%s\n" "$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | awk -F\" "/IOPlatformUUID/{print \$4}")"; [ -d "$HOME/.officraft/server" ] && printf "server_tree=1\n" || printf "server_tree=0\n"' 2>/dev/null)"; then
+  # One round trip, three facts. `ioreg` may be absent (non-mac) — that is handled
+  # below, not here. ServerAlive* bounds a session that stalls AFTER connecting;
+  # ConnectTimeout alone only bounds the TCP connect.
+  #
+  # stderr is folded into stdout rather than spilled to a temp file: this runs
+  # BEFORE the guard has decided anything, and the whole point of the ordering
+  # assertions is that nothing — not even a scratch file the detector creates and
+  # cleans up — is written before a possible refusal. On failure the merged text
+  # IS ssh's diagnosis; on success, anything ssh printed to stderr breaks the
+  # exactly-one-marker parse below, which fails closed.
+  if ! probe="$(ssh -o BatchMode=yes -o ConnectTimeout=10 \
+      -o ServerAliveInterval=5 -o ServerAliveCountMax=3 "$target" \
+    'printf "hw=%s\n" "$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | awk -F\" "/IOPlatformUUID/{print \$4}")"; [ -d "$HOME/.officraft/server" ] && printf "server_tree=1\n" || printf "server_tree=0\n"; launchctl print "gui/$(id -u)/com.officraft.ocwarden" >/dev/null 2>&1 && printf "live_warden=1\n" || printf "live_warden=0\n"' 2>&1)"; then
     # Unreachable is a REFUSAL, not a warning. A host whose identity cannot be
-    # established is not thereby safe to wipe.
-    printf '%s\n' "unreachable: could not reach '$target' over ssh to establish what machine it is"
+    # established is not thereby safe to wipe. Carry ssh's own diagnosis: "fix ssh
+    # access" is useless next to "Permission denied (publickey)".
+    printf '%s\n' "unreachable: could not reach '$target' over ssh to establish what machine it is — ssh said: $(printf '%s' "$probe" | tr '\n' ' ' | sed 's/  */ /g;s/ *$//')"
     return 0
   fi
-  hw="$(printf '%s\n' "$probe" | sed -n 's/^hw=//p')"
+
+  # PARSE FAIL-CLOSED. An ssh that exits 0 with no usable output is not a clean
+  # host — it is a probe that did not run (ForceCommand, a restricted shell, an rc
+  # file that returns early). Reading that as "nothing found" would reproduce, in
+  # the new guard, exactly what this ticket is about: a guard that stopped working
+  # looking identical to a guard that passed. Each marker is matched WHOLE-LINE and
+  # must appear exactly once, so a stray `server_tree=0` echoed by a remote rc file
+  # cannot dilute the real answer either.
+  local n_tree n_live
+  n_tree="$(printf '%s\n' "$probe" | grep -cx 'server_tree=[01]' || true)"
+  n_live="$(printf '%s\n' "$probe" | grep -cx 'live_warden=[01]' || true)"
+  if [[ "$n_tree" != "1" || "$n_live" != "1" ]]; then
+    printf '%s\n' "unparseable: the probe of '$target' did not come back with exactly one answer per question (server_tree markers: $n_tree, live_warden markers: $n_live) — cannot establish what that host is or carries"
+    return 0
+  fi
+
+  hw="$(printf '%s\n' "$probe" | sed -n 's/^hw=//p' | head -1)"
   if [[ -n "$hw" ]]; then
     for u in ${OC_PROD_HOST_HW_UUIDS[@]+"${OC_PROD_HOST_HW_UUIDS[@]}"}; do
       [[ "$hw" == "$u" ]] && reasons+=("identity: the second machine '$target' has hardware UUID $hw, a known production station")
     done
   else
-    warn "prod-host guard: could not read a hardware UUID from '$target' — the remote IDENTITY check is INACTIVE, only the remote residue check applies"
+    warn "prod-host guard: could not read a hardware UUID from '$target' — the remote IDENTITY check is INACTIVE, only the remote residue and liveness checks apply"
   fi
-  [[ "$(printf '%s\n' "$probe" | sed -n 's/^server_tree=//p')" == "1" ]] \
+  printf '%s\n' "$probe" | grep -qx 'server_tree=1' \
     && reasons+=("residue: the second machine '$target' carries an officraft SERVER tree (~/.officraft/server) — a relocate target never has one")
+  # The liveness half the local host gets from oc_live_fleet_guard. Without it a
+  # live fleet NODE — someone's laptop with a registered warden, live agents and
+  # their tokens, but no server tree — passes both questions above and STAGE 5b
+  # deletes its entire ~/.officraft. Same blast radius the local live-fleet guard
+  # exists to prevent, one host over.
+  printf '%s\n' "$probe" | grep -qx 'live_warden=1' \
+    && reasons+=("liveness: the second machine '$target' has a REGISTERED officraft warden — it is a live fleet node, not a disposable relocate target")
   local r
   for r in ${reasons[@]+"${reasons[@]}"}; do printf '%s\n' "$r"; done
 }
@@ -779,8 +813,11 @@ oc_prod_host_remote_guard() {
     return 0
   fi
   printf '%s\n' "$reasons" | sed 's/^/[oc-lifecycle] prod-host(remote)| /' >&2
-  if printf '%s\n' "$reasons" | grep -q '^unreachable:'; then
-    die "PROD-HOST GUARD (remote): could not reach the second machine '$target' to establish what machine it is. This run boots out its warden and deletes its entire ~/.officraft, so it must not start while that host's identity is unknown. Fix ssh access to it, or point SECOND_MACHINE at the host you actually mean."
+  if printf '%s\n' "$reasons" | grep -qE '^(unreachable|unparseable):'; then
+    die "PROD-HOST GUARD (remote): could not establish what machine '$target' is (see prod-host(remote)| lines for what ssh reported). This run boots out its warden and deletes its entire ~/.officraft, so it must not start while that host's identity is unknown — a probe that did not run is not the same answer as a host that came back clean. Fix ssh access to it, or point SECOND_MACHINE at the host you actually mean."
+  fi
+  if printf '%s\n' "$reasons" | grep -q '^liveness:'; then
+    die "PROD-HOST GUARD (remote): the second machine '$target' is running an officraft warden right now, so it is a live fleet node — STAGE 5b would boot out that warden and delete its entire ~/.officraft, taking its live agents and their credentials with it. Point SECOND_MACHINE at a disposable relocate target. If this host IS the disposable target and the warden is left over from your own previous run, retire that install on that host first — the same one-run-per-host rule that applies here applies there."
   fi
   die "PROD-HOST GUARD (remote): the second machine '$target' is, or looks like, a production officraft station (see prod-host(remote)| lines). STAGE 5b boots out its warden and deletes its ENTIRE ~/.officraft — more than this suite deletes locally. Point SECOND_MACHINE at a disposable relocate target instead."
 }
