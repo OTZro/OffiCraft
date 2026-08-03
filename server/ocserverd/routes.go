@@ -217,6 +217,22 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			MCPTool:  "check_release",
 		},
 		{
+			// T-29c7: the cockpit's theme import box takes a LINK. Floor is
+			// admin_agent because that is exactly the floor of the PATCH
+			// /api/settings write that stores the imported theme — a caller who
+			// could fetch but not store would only ever get a dead end.
+			// MCPExclude: this is the cockpit's paste-a-link seam, not an agent
+			// tool (an agent that HAS a theme bundle already holds the JSON; it
+			// has no reason to ask the server to go read one back).
+			Method:     "POST",
+			Path:       "/api/theme/fetch",
+			Handler:    w.HandleFetchThemeApiThemeFetchPost,
+			Auth:       authGated,
+			Requires:   principalAdminAgent,
+			Summary:    "Fetch a theme bundle from a link (owner/admin agent).",
+			MCPExclude: true,
+		},
+		{
 			// T-6020: opened to admin_agent (owner 2026-07-26) — the admin 助理
 			// runs software upgrades; a PLAIN agent still cannot self-upgrade
 			// the server (the admin_agent choke keeps rank<2 out).

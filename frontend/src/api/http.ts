@@ -1548,6 +1548,20 @@ export const httpApi: Api = {
     return toServerSettings(wire);
   },
 
+  async fetchThemeFromLink(url: string): Promise<string> {
+    // POST /api/theme/fetch {url} -> {content} (T-29c7). `content` is the RAW
+    // text the link served; it goes straight to the caller so the shared
+    // parseImportedBundle does the parsing. Parsing here would put a second
+    // theme parser on the import path.
+    //
+    // No pre-flight url check on this side, deliberately: the server's format
+    // rule is the only one, and a stricter client rule would refuse links the
+    // server accepts. 422 (bad url / too large / not a theme) and 502
+    // (unreachable link) both throw via the client middleware.
+    const wire = unwrap(await client.POST("/api/theme/fetch", { body: { url } }));
+    return wire.content;
+  },
+
   async getPushPublicKey(): Promise<string> {
     const wire = unwrap(await client.GET("/api/push/public-key"));
     return wire.public_key;

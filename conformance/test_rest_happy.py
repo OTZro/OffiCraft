@@ -1387,6 +1387,16 @@ SKIPPED_HAPPY: dict[str, str] = {
         "tests (api_machines_teardown_target_t42a0_test.go); the authz faces are "
         "fully asserted in the matrix."
     ),
+    "POST /api/theme/fetch": (
+        "the positive face needs an EXTERNAL http origin serving a valid theme "
+        "bundle — the black-box harness is deliberately hermetic (same reason "
+        "$OC_RELEASE_API_BASE is pinned unroutable), and standing a second "
+        "server up for one row would trade that away. The format 422 is pinned "
+        "in the auth matrix; the fetch-and-import path end to end, the timeout "
+        "and size ceilings, and the theme-shape validation are pinned in the "
+        "server unit tests (api_theme_fetch_t29c7_test.go) against a real "
+        "httptest origin."
+    ),
     "POST /api/update/upgrade": (
         "the positive face needs a reachable GitHub Releases repo holding a "
         "newer published release — the harness pins $OC_RELEASE_API_BASE "

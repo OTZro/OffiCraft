@@ -122,6 +122,14 @@ type onboardingReportDTO struct {
 	Steps      []onboardingStepDTO `json:"steps"`
 }
 
+// themeFetchResultDTO carries a link-fetched theme bundle back to the cockpit
+// as the RAW response text (T-29c7). Verbatim on purpose — the cockpit feeds it
+// into the same parseImportedBundle a pasted bundle goes through, so there is
+// exactly one place a theme is parsed, not two that can drift apart.
+type themeFetchResultDTO struct {
+	Content string `json:"content"`
+}
+
 type tokenDTO struct {
 	Token     string `json:"token"`
 	TokenType string `json:"token_type"`

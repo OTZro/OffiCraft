@@ -533,6 +533,13 @@ export const en: Dict = {
     themeImportPlaceholder: "Paste theme JSON here…",
     themeChooseFile: "Choose .json file",
     themeConfirmImport: "Import",
+    themeImportLinkLabel: "…or import from a link",
+    themeImportLinkPlaceholder: "https://…/theme.json",
+    themeImportFromLink: "Fetch and import",
+    themeImportLinkWorking: "Fetching…",
+    themeImportLinkFailed: "Could not fetch that link",
+    themeImportLinkShareNote:
+      "A share link carries no identity, never expires and cannot be revoked — anyone who can reach this studio and has the link can read the theme, including any private images inside it.",
     themeImportDup: "A custom theme with that id already exists",
     themeImportReadFailed: "Could not read that file",
     themeLimitReached: "You've reached the custom-theme limit",

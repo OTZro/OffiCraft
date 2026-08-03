@@ -3235,6 +3235,46 @@ export const mockApi: Api = {
     mockPassword = newPassword;
   },
 
+  async fetchThemeFromLink(url: string): Promise<string> {
+    // Mirrors HandleFetchThemeApiThemeFetchPost (T-29c7) on the only half a
+    // mock CAN mirror: the FORMAT refusal. There is no network here, so a
+    // well-formed link answers with a canned bundle — a mock that failed every
+    // link would make the import box untestable offline, and one that accepted
+    // a malformed link would let a component pass here and 422 in production.
+    //
+    // Like the server, this checks format ONLY and says nothing about where
+    // the link points (owner ruling 2026-08-03). The trimmed-and-parsed shape
+    // is the same rule: absolute, http/https.
+    let parsed: URL;
+    try {
+      parsed = new URL(url.trim());
+    } catch {
+      throw new ApiError(
+        "http 422 for POST /api/theme/fetch",
+        422,
+        "validation_error",
+        "url must be an absolute http:// or https:// link"
+      );
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new ApiError(
+        "http 422 for POST /api/theme/fetch",
+        422,
+        "validation_error",
+        "url must be an absolute http:// or https:// link"
+      );
+    }
+    return JSON.stringify(
+      {
+        id: "custom-linked",
+        name: "連結匯入的主題",
+        colors: { "--color-bg": "#101018", "--color-accent": "#785af0" },
+      },
+      null,
+      2
+    );
+  },
+
   async getServerSettings(): Promise<ServerSettingsView> {
     return toServerSettings(structuredClone(mockServerSettings));
   },
