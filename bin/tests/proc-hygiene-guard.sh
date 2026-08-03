@@ -170,7 +170,7 @@ blockfor="${3:-30}"   # a parameter, NOT a sed-rewrite by the caller: a caller
 bash -c '
   . "$1" || exit 1
   printf "%s\t%s\n" "$$" "$(_ci_lock_ps "$$" lstart=)" > "$0"
-  if [ "$2" = "burn" ]; then while :; do :; done; else sleep 600; fi
+  if [ "$2" = "burn" ]; then while true; do continue; done; else sleep 600; fi
 ' "$pidfile" "$libsh" "$loopcmd" &
 sleep "$blockfor"
 LEAKY
@@ -440,6 +440,21 @@ check "the leaked busy-loop recorded its identity (positive control)" \
 # fact the fixture never leaked. Section 5 pins its mutant the same way. This
 # was not theoretical: one nested run in ten reported "missed" with no way to
 # tell the two causes apart, which is this ticket's own defect in miniature.
+# The recorded process is a shell; its `sleep` is a FORKED CHILD with a
+# different pid. Everything that collects "the recorded pid" therefore leaves
+# that child orphaned at PPID 1 — measured at one leak per guard run, in the
+# guard whose entire subject is not leaking processes. Enumerate the children
+# now, while their parent is alive and the relationship is still readable; after
+# the parent dies they are reparented and `pgrep -P` can no longer find them.
+# Read the pid for this the way the BACKSTOP does — straight out of the record,
+# not through rec_pid — because rec_pid is part of what section 7 is testing.
+# Measured: with the field-swap mutant in place, enumerating from rec_pid found
+# no children and the fixture's `sleep` leaked, while every assertion that was
+# supposed to notice was busy failing for the mutation itself. A cleanup that
+# depends on the machinery under test stops working exactly when it is needed —
+# the same lesson as the backstop, one level down.
+IFS=$'\t' read -r _fx_pid _ < "$WORK/gpid.7" 2>/dev/null || _fx_pid=""
+fixture_kids="$(pgrep -P "$_fx_pid" 2>/dev/null | tr '\n' ' ')"
 nokill_live="$(PYTHONPATH="$WORK/nokill" python3 -c '
 import os
 print(1 if os.killpg(0, 0) is None else 0)
@@ -488,6 +503,17 @@ check "the backstop read a pid out of the record (positive control: an empty rea
 backstop="$(backstop_collect "$backstop_pid")"
 if kill -0 "$backstop_pid" 2>/dev/null; then leftover=yes; else leftover=no; fi
 check "section 7 leaves no busy-loop behind, whatever its own assertions did" "no" "$leftover"
+
+# The recorded pid is not the whole subtree. These are collected by EXPLICIT pid,
+# captured by parentage while the parent lived — not by a command-line pattern,
+# which is how an external sweep took out this guard's fixtures earlier today.
+for _k in $fixture_kids; do kill -KILL "$_k" 2>/dev/null; done
+sleep 0.3
+kids_left=0
+for _k in $fixture_kids; do kill -0 "$_k" 2>/dev/null && kids_left=$((kids_left+1)); done
+check "the fixture's own child processes were spawned (positive control for the check below)" \
+      "1" "$([[ -n "${fixture_kids// /}" ]] && echo 1 || echo 0)"
+check "and section 7 collects them too — a recorded pid is not the whole subtree" "0" "$kids_left"
 
 # On a healthy run the backstop has nothing to do — reap_recorded got there
 # first — so the assertion above cannot tell a working backstop from a deleted
@@ -636,16 +662,26 @@ kill -KILL "$wirestandin" 2>/dev/null
 # assertion still passes while real orphans outlive the guard. No runtime probe
 # can catch that — a script cannot observe its own exit — but the installed trap
 # is readable as data right up to the last line.
-# ⚠️ KNOWN GAP, stated rather than papered over. A guard cannot detect its own
-# silent early exit: if some future edit lets an inherited environment variable
-# enter the self-test mode again, this file exits 0 with no assertions and
-# bin/tests/run.sh prints "ok" for a suite that ran nothing. Argv keying is what
-# prevents that today. A source-text taboo on the old variable name was tried
-# here and removed: it forbade one spelling (any other name walked straight
-# through) while reddening the guard for a comment that merely MENTIONED the old
-# name — a check that lies about its own subject. The property belongs one level
-# up, in run_guard, which can require this suite's summary line before calling it
-# ok; that is outside this ticket's one-file scope and is with the ticket owner.
+# ⚠️ KNOWN GAP — scope, not impossibility. The durable fix exists and is simply
+# not in this ticket: run_guard, one level up, can require this suite's summary
+# line before calling it ok, which closes EVERY silent early exit regardless of
+# what triggered it. The ticket owner ruled that out of scope for a one-file
+# ticket on 2026-08-03; the full write-up (correct location, why the check that
+# used to sit here was wrong, and who gets hurt if it is never done) is pinned
+# as an artifact on task T-3e41. It is only secondarily true that a guard cannot
+# detect its own silent early exit — that is why the fix belongs upstairs, not a
+# reason nothing can be done.
+#
+# WHAT THE GAP LOOKS LIKE IF IT FIRES: this suite's summary line
+# ("proc hygiene guard: N ok, M failed") is ABSENT from the CI log while the run
+# is reported green. That is the only visible symptom; nothing else changes.
+#
+# THE INVARIANT A REVIEWER MUST ENFORCE, since nothing else does: the early-exit
+# branch stays reachable from ARGV ONLY. Argv keying is the only thing
+# preventing a forged green today, and no test enforces it — a source-text taboo
+# on one variable name was tried here and removed (it forbade one spelling while
+# any other name walked through, and it reddened the guard for a comment that
+# merely mentioned the old name).
 trap_now="$(trap -p EXIT 2>/dev/null)"
 # NOT inside a command substitution: bash 3.2 (stock /bin/bash on macOS, which
 # this repo supports) ends $( … ) at the first unbalanced ")" — the one closing
