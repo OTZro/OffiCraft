@@ -125,15 +125,34 @@ listener and no live session, so the guard passes and the teardown deletes the
 real server root. A stopped server is also precisely when someone reaches for a
 reset script.
 
-`oc_prod_host_guard` asks the other question — "is a server **installed**
-here?" — from on-disk evidence: a non-empty `~/.officraft/server/data/officraft.db`,
-or a `com.officraft.{serve,autodeploy,tunnel}` launchd plist installed and
-pointing at `~/.officraft/server`. Both are derived from `$HOME`, never from
-`$SERVER_ROOT`/`$OC_ROOT`, because those are env-overridable and deriving from
-them would let `OC_SERVER_ROOT` aim the guard somewhere harmless while the run
-still deleted the real tree. There is **no ack flag** for it: an unset flag is
-indistinguishable from a guard that was never there, which is the failure mode
-this whole document is about.
+`oc_prod_host_guard` asks the other question — **"is this machine one of the
+production stations?"** — and answers it twice, on purpose:
+
+- **identity**: the immutable hardware UUID (`ioreg IOPlatformUUID`) against
+  `OC_PROD_HOST_HW_UUIDS`. A *blacklist*, unlike the seth-m1 whitelist in
+  `oc_preflight_guards` 0a — this suite is specified to run on a throwaway VM, so
+  it cannot demand one specific machine, and 0a's third anchor requires a
+  vibe-clicking fleet to be *present*, the opposite of this suite's precondition.
+- **residue**: `~/.officraft/server` exists at all. Deliberately coarse.
+
+**Both are kept, and the redundancy is the design — do not remove one as
+duplicated.** The blacklist's known weakness is that a production host nobody
+added to the list is not covered; that weakness is *accepted* only because
+residue backs it up. Residue in turn over-refuses: a throwaway VM that already
+ran this suite once looks exactly like a production host to it and must be
+rebuilt. That is the accepted price, and the trade is not close — residue failing
+costs one rebuilt VM, identity failing alone costs a production database.
+
+Both derive their paths from `$HOME`, never from `$SERVER_ROOT`/`$OC_ROOT`:
+those are env-overridable, and deriving from them would let `OC_SERVER_ROOT` aim
+the guard at an empty directory while the deletion still landed on the real tree.
+There is **no ack flag** for either: an unset flag is indistinguishable from a
+guard that was never there, which is the failure mode this whole document is
+about. The two refusals deliberately read differently — the residue message must
+say how to proceed (its likely reader is re-running on their own VM, and a
+refusal that only says "no" gets worked around), while the identity message must
+never name a way to clear the obstacle, because its reader is standing on a
+production station and "delete this and retry" *is* the disaster.
 
 Both guards, both acks, the containment check and the ambient-env strip now run
 inside a single sourceable `oc_cross_machine_preflight` **before the first
