@@ -185,6 +185,13 @@ DB_PATH="$SERVER_ROOT/data/officraft.db"
 # below, which upgrades the old operator assert into a hard, self-checking gate.
 OC_NS=""                              # canonical → live-fleet guard runs in DIE mode
 OC_ROOT="$HOME_DIR/.officraft"     # canonical instance root
+# TMUX_SOCKET_LOCAL — the teardown axis oc_assert_teardown_instance checks. It is
+# the SAME socket as TMUX_SOCKET above for a canonical run; it exists as its own
+# name because a namespaced run derives `officraft-<ns>` for it. Declaring it here
+# is load-bearing: oc_teardown_bounded (the shared teardown path this script now
+# uses instead of its own hand-rolled copy) fails CLOSED on a missing axis rather
+# than silently falling back to the canonical socket.
+TMUX_SOCKET_LOCAL="$OC_CANONICAL_TMUX_SOCKET"
 
 # This script lives in e2e_test/; the checkout root is one level up.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -235,75 +242,28 @@ oc_live_fleet_guard
 # ===========================================================================
 stage "1. teardown old server (backup → EXACT-label bootout → warden teardown → rm dirs)"
 
-# 1a. .dump backup BEFORE any destruction (gotcha #6). Best-effort if DB absent.
-if [[ -f "$DB_PATH" ]]; then
-  if sqlite3 "$DB_PATH" ".dump" > "$BACKUP_DIR/officraft.dump.sql" 2>/dev/null; then
-    log "backed up DB → $BACKUP_DIR/officraft.dump.sql ($(wc -l < "$BACKUP_DIR/officraft.dump.sql") lines)"
-  else
-    warn "sqlite3 .dump failed (DB may be locked/corrupt) — continuing (backup best-effort)"
-  fi
-else
-  log "no existing DB at $DB_PATH — nothing to back up (first-ever install?)"
-fi
-
-# 1b. bootout the server + warden jobs by EXACT label ONLY (gotcha #5).
-#     NEVER pkill/killall — com.vibeclicking.* etc. share this box.
-for label in "$SERVE_LABEL" "$AUTODEPLOY_LABEL" "$TUNNEL_LABEL" "$WARDEN_LABEL"; do
-  log "launchctl bootout $GUI/$label (EXACT label; tolerate not-loaded)"
-  launchctl bootout "$GUI/$label" 2>/dev/null || true
-done
-
-# 1c. best-effort ocwarden teardown (removes its plist/tokfile cleanly if present).
-if [[ -x "$OCWARDEN" ]]; then
-  log "bin/ocwarden teardown (best-effort clean warden removal)"
-  env OC_NAMESPACE="" "$OCWARDEN" teardown --canonical 2>&1 | sed 's/^/[cross-machine] warden-td| /' >&2 || \
-    warn "ocwarden teardown returned non-zero (may be already-gone) — continuing"
-fi
-
-# 1d. remove the server run dir + the local ~/.officraft server layout.
-#     We only remove the officraft server tree — never ~/.vibe-clicking (gotcha #7).
-log "rm -rf $SERVER_ROOT (server checkout/db/config/logs — backed up above)"
-rm -rf "$SERVER_ROOT"
-# Also clear a stale local exec-warden tokfile so the fresh warden re-mints cleanly.
-rm -f "$HOME_DIR/.officraft/exec-warden.tok" 2>/dev/null || true
-
-# 1e. retire STALE AGENT RUNTIMES + workdirs from the previous install. A surviving
-#     member-<id> session holds a token signed by the WIPED server (permanently
-#     deauthed) AND squats the tmux session name, so the fresh warden's
-#     clobber-guard correctly refuses the new spawn ("already-running") and the
-#     agent can never reach presence=online — a full reset must reset agents too.
-#     EXACT targeting only: officraft agents live on the dedicated tmux socket
-#     `officraft` as `member-<id>`; the vibe-clicking fleet lives on OTHER
-#     sockets and is never touched (gotcha #5/#7).
-if tmux -L officraft ls >/dev/null 2>&1; then
-  while IFS= read -r sess; do
-    [[ "$sess" == member-* ]] || continue
-    log "tmux -L officraft kill-session -t =$sess (EXACT stale agent session from previous install)"
-    tmux -L officraft kill-session -t "=$sess" 2>/dev/null || true
-  done < <(tmux -L officraft ls -F '#S' 2>/dev/null)
-fi
-if [[ -d "$HOME_DIR/.officraft/agents" ]]; then
-  tar -czf "$BACKUP_DIR/agents-workdirs.tgz" -C "$HOME_DIR/.officraft" agents 2>/dev/null \
-    || warn "agents/ backup tar failed — continuing (workdirs are disposable caches)"
-  log "rm -rf $HOME_DIR/.officraft/agents (stale agent workdirs/creds — backed up)"
-  rm -rf "$HOME_DIR/.officraft/agents"
-fi
-
-# verify the labels are truly gone. bootout is asynchronous — the job can stay
-# registered for a few seconds while its process exits, so poll-until-gone
-# (bounded) instead of a single immediate check (a real re-registration, e.g.
-# KeepAlive re-bootstrap, will still be caught after the deadline).
-for label in "$SERVE_LABEL" "$WARDEN_LABEL"; do
-  gone=0
-  for _ in $(seq 1 20); do
-    if ! launchctl print "$GUI/$label" >/dev/null 2>&1; then gone=1; break; fi
-    sleep 1
-  done
-  if [[ "$gone" != 1 ]]; then
-    fail_stage "$label still registered 20s after bootout — refusing to proceed on a dirty box"
-  fi
-done
-[[ -d "$SERVER_ROOT" ]] && fail_stage "server root still present after rm: $SERVER_ROOT"
+# THE ONLY LOCAL TEARDOWN PATH (T-e1dd). This stage used to be a hand-rolled copy
+# of oc_teardown_bounded: same four EXACT labels, same backup-first ordering, same
+# poll-until-gone — but written as TOP-LEVEL script code, with two consequences
+# that mattered more than the duplication:
+#
+#   • NO TARGET GUARD. The shared path calls oc_assert_teardown_instance BEFORE
+#     it backs up, boots out, or deletes anything — it refuses a mixed set of
+#     canonical/namespaced axes instead of guessing which instance the caller
+#     meant. The copy asserted nothing and simply deleted $SERVER_ROOT.
+#   • UNREACHABLE BY TESTS. Destructive top-level code cannot be exercised
+#     without running this whole destructive script, so no guard test could ever
+#     cover it. Routing through the lib function puts this script's teardown
+#     under the tests_guard cases that already assert "refuse BEFORE any
+#     mutation" (18d/18e) — the same regression net single_machine_e2e.sh has.
+#
+# Behavioral deltas vs the removed copy, all deliberate: it also removes
+# $OC_ROOT/warden (bootstrap-here's install tree — leaving it made the next run's
+# state whitelist refuse), $OC_ROOT/workers (no-op here, this suite spawns no
+# workers), and the EXACT serve/autodeploy/tunnel plist FILES (STAGE 2's
+# `ocserver install --force` regenerates them). It also kills worker-* sessions
+# alongside member-* (no-op here). Nothing it did before is dropped.
+oc_teardown_bounded "pre-install"
 pass_stage
 
 # ===========================================================================
