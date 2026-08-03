@@ -209,7 +209,15 @@ unset _t _p
 # protection silently did not extend to anything new — and a guard that covers
 # only what someone remembered to list is the shape this suite exists to catch.
 # `ssh` is appended because the fake remote must never reach a real one.
-for _t in $(cd "$SHIMDIR/remote-bin" && printf '%s\n' *) ssh; do
+# Array glob, not `$(… printf '%s\n' *)`. Unquoted command substitution word-splits
+# and RE-GLOBS: with remote-bin/ empty the `*` survives literally and expands
+# against the caller's cwd, so the loop iterates repo files, matches nothing, and
+# the tripwire passes — checking nothing, silently. Whitespace or a glob character
+# in a stub name skips that stub the same quiet way. That is the very failure this
+# tripwire exists to catch, one level down, so the empty case is made loud too.
+_stubs=("$SHIMDIR"/remote-bin/*)
+[[ -e "${_stubs[0]}" ]] || { echo "tests_guard: remote-bin/ is empty — the base-dir tripwire would be checking nothing" >&2; exit 2; }
+for _t in "${_stubs[@]##*/}" ssh; do
   if PATH="$_rbase" command -v "$_t" >/dev/null 2>&1; then
     echo "tests_guard: the fake remote base dir resolves '$_t' — the fixture no longer controls whether that tool exists on the far side" >&2
     exit 2
@@ -217,6 +225,7 @@ for _t in $(cd "$SHIMDIR/remote-bin" && printf '%s\n' *) ssh; do
 done
 unset _t
 export SHIM_REMOTE_BASE="$_rbase"
+unset _rbase _stubs
 
 chmod +x "$SHIMDIR"/launchctl "$SHIMDIR"/lsof "$SHIMDIR"/tmux "$SHIMDIR"/ioreg "$SHIMDIR"/ssh
 
@@ -1222,7 +1231,7 @@ E1DD_REMOTE_TOOLS=notmux E1DD_REMOTE_AGENTS=1 \
 if grep -q 'hw: 1, server_tree: 1, live_warden: 1, live_agents: 0' "$GLOG"; then
   ok "the notmux refusal is the LIVENESS question going unanswered, with the other three answered"
 else
-  bad "the notmux case refused for the wrong reason — either tmux was answerable after all, or the probe answered nothing at all (got: $(tr '\n' '|' < "$GLOG" | tail -c 300))"
+  bad "the notmux case refused for the wrong reason — either tmux was answerable after all, or the probe answered nothing at all (expected 'hw: 1, server_tree: 1, live_warden: 1, live_agents: 0'; got: $(tr '\n' '|' < "$GLOG" | tail -c 300))"
 fi
 
 # BRANCH ORDER, second half. Only the liveness message names a remedy, so it must
