@@ -215,7 +215,9 @@ function emit(delta: SseDelta) {
   });
 }
 
-/** The 12 closed topics resyncAll replays, naming NOTHING (a resync means "you
+/** The closed topics resyncAll replays (count deliberately NOT written here —
+ * that number goes stale the first time a topic is added; it was 12, it is 13
+ * since T-3809), naming NOTHING (a resync means "you
  * may have missed anything"), fanned synchronously topic-major.
  *
  * This used to be a SECOND hand-copy of the list next to http.ts's own, and it
