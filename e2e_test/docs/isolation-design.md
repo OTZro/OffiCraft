@@ -19,7 +19,10 @@ design** — bootout the live `com.officraft.ocwarden`, wipe `~/.officraft`,
 and kill live agents (agent suicide / machine offline). `cross_machine.sh` was
 worse: its STAGE 1 destructive teardown ran with **only** `OC_CROSS_MACHINE_YES=1`
 acked — its isolation gate (`REQUIRE_ISOLATION_CONFIRMED`) sat *after* the
-teardown, at STAGE 3.
+teardown, at STAGE 3. (**Fixed in T-e1dd** — see "Layer 3" below. The ordering
+outlived T-8aa1 because the live-fleet guard added then sits before the teardown
+and reads as the protection, while the ack it was supposed to reinforce stayed
+where it was.)
 
 This host (eva's Mac) is a live fleet host: `com.officraft.ocwarden` registered,
 the canonical serve port (`:7755`) held, a live `member-*` session on socket
@@ -107,10 +110,38 @@ serve-only (no tunnel), so a namespaced local instance cannot drive the remote
 leg. `cross_machine.sh` therefore stays canonical (`OC_NS=""`), and its
 construction-enforced protection is the **live-fleet guard** placed before STAGE
 1: it now `die`s on any host with a live fleet, so the suite can only run on a
-clean host — exactly condition (b) in its own header, upgraded from an operator
-*assert* (`REQUIRE_ISOLATION_CONFIRMED`) to a hard, self-checking gate. Full
-namespace isolation of the cross-machine relocate is out of scope (architecturally
-tied to the public tunnel).
+clean host — exactly condition (b) in its own header, backed by a hard,
+self-checking gate instead of resting on the operator *assert*
+(`REQUIRE_ISOLATION_CONFIRMED`) alone. Full namespace isolation of the
+cross-machine relocate is out of scope (architecturally tied to the public
+tunnel).
+
+### Layer 3 — prod-host guard + one preflight, before anything (T-e1dd)
+
+The live-fleet guard answers "is a fleet **running** here?". That leaves a hole
+it cannot close by construction: a **production host whose server is stopped**
+(mid-deploy, just booted out, crashed) presents no registered warden, no port
+listener and no live session, so the guard passes and the teardown deletes the
+real server root. A stopped server is also precisely when someone reaches for a
+reset script.
+
+`oc_prod_host_guard` asks the other question — "is a server **installed**
+here?" — from on-disk evidence: a non-empty `~/.officraft/server/data/officraft.db`,
+or a `com.officraft.{serve,autodeploy,tunnel}` launchd plist installed and
+pointing at `~/.officraft/server`. Both are derived from `$HOME`, never from
+`$SERVER_ROOT`/`$OC_ROOT`, because those are env-overridable and deriving from
+them would let `OC_SERVER_ROOT` aim the guard somewhere harmless while the run
+still deleted the real tree. There is **no ack flag** for it: an unset flag is
+indistinguishable from a guard that was never there, which is the failure mode
+this whole document is about.
+
+Both guards, both acks, the containment check and the ambient-env strip now run
+inside a single sourceable `oc_cross_machine_preflight` **before the first
+destructive action**, and `cross_machine.sh`'s hand-rolled STAGE 1 teardown was
+replaced by `oc_teardown_bounded` — so this suite's teardown is finally covered
+by the same `tests_guard` cases (18/18c/18d/18e) as the others, which is what
+made the ordering bug invisible for so long: destructive top-level code cannot
+be tested without running it.
 
 ## Test strategy
 

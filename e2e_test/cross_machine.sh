@@ -11,29 +11,33 @@
 #     agent never "self-repaired" (booted clean) before AND after relocate.
 #
 # ############################################################################
-# ## ⚠️⚠️⚠️  KNOWN BLOCKER — WARDEN NAMING COLLISION — READ BEFORE A REAL RUN ##
+# ## ⚠️⚠️⚠️  WHERE THIS MAY RUN — A DEDICATED THROWAWAY HOST, NOTHING ELSE  ##
 # ############################################################################
-# ##  officraft's warden uses launchd label `com.officraft.ocwarden` and
-# ##  root `~/.officraft/warden`. On THIS box a *vibe-clicking* fleet warden
-# ##  is ALSO resident and is SUSPECTED to collide on the same label/root
-# ##  namespace. If they share a label or a launchd domain slot, this script's
-# ##  STAGE 1 `launchctl bootout com.officraft.ocwarden` + STAGE 3 fresh
-# ##  bootstrap could MURDER or CORRUPT the live vibe-clicking warden — the
-# ##  exact cross-fleet blast-radius the EXACT-label rule (gotcha #5) exists to
-# ##  prevent, but which an OVERLAPPING label cannot save us from.
+# ##  This script performs a FULL RESET of the CANONICAL officraft instance on
+# ##  whatever machine it runs on: it boots out `com.officraft.{serve,autodeploy,
+# ##  tunnel,ocwarden}`, deletes ~/.officraft/server (database included) and the
+# ##  agent workdirs under ~/.officraft/agents, then installs a server from zero.
+# ##  It also wipes ~/.officraft on the SECOND machine (STAGE 5b).
 # ##
-# ##  THIS SCRIPT DOES NOT RESOLVE THE COLLISION. Before a real run, kyle/Seth
-# ##  MUST first establish isolation, EITHER by:
-# ##    (a) giving officraft its own warden label + root (e.g. relabel to
-# ##        `com.officraft.e2e.ocwarden` and root `~/.officraft/warden`
-# ##        that provably does NOT overlap the vibe-clicking fleet), OR
-# ##    (b) running this whole script inside a dedicated throwaway VM/host that
-# ##        carries NO vibe-clicking fleet at all.
-# ##  …then set REQUIRE_ISOLATION_CONFIRMED=1 to acknowledge isolation is done.
-# ##  Until then this script HARD-STOPS *before* STAGE 3 (the first warden
-# ##  bootstrap) — STAGES 1–2 already wiped the OC *server*, but no warden
-# ##  daemon has been booted/torn beyond the EXACT-label OC ones yet at that
-# ##  point, so the vibe-clicking fleet is untouched by the guard's exit.
+# ##  So it may only run on a DEDICATED THROWAWAY VM/HOST that carries no
+# ##  officraft install of its own and no vibe-clicking fleet. Two separate
+# ##  reasons, and the second one is the one people miss:
+# ##
+# ##    (a) the officraft warden shares launchd label `com.officraft.ocwarden`
+# ##        and root ~/.officraft/warden with a resident vibe-clicking fleet
+# ##        warden on some boxes; on such a host STAGE 1's bootout and STAGE 3's
+# ##        bootstrap can murder or corrupt the live fleet warden. EXACT-label
+# ##        targeting (gotcha #5) cannot save you from an OVERLAPPING label.
+# ##    (b) a production officraft host holds the real server database. Whether
+# ##        that server is RUNNING at the moment is irrelevant to what the
+# ##        deletion costs — and a stopped server is exactly when someone reaches
+# ##        for a reset script. This is enforced, not merely warned about: the
+# ##        preflight refuses any host with a server DB on disk or an installed
+# ##        launchd job pointing at ~/.officraft/server (oc_prod_host_guard).
+# ##
+# ##  REQUIRE_ISOLATION_CONFIRMED=1 is how you STATE that (a) is resolved for
+# ##  this host. It creates no isolation and it does not, and cannot, override
+# ##  the prod-host refusal in (b).
 # ############################################################################
 #
 #   It ends with a PASS/FAIL summary (per-stage ✓/✗) and exits 0 only if every
@@ -92,8 +96,16 @@
 #      set no claim code is ever minted). See seed_owner_password().
 #
 # ----------------------------------------------------------------------------
-# USAGE:
-#   OC_CROSS_MACHINE_YES=1 bash e2e_test/cross_machine.sh
+# USAGE (on a dedicated throwaway host — see the banner above):
+#   OC_CROSS_MACHINE_YES=1 REQUIRE_ISOLATION_CONFIRMED=1 \
+#     bash e2e_test/cross_machine.sh
+#
+#   BOTH acks are required BEFORE anything is destroyed, so this line is the
+#   whole invocation: pasting it runs the preflight, and the preflight either
+#   proceeds on a host that qualifies or refuses one that does not — it never
+#   half-runs. It used to list OC_CROSS_MACHINE_YES alone, which passed the one
+#   gate that stood before STAGE 1 and got refused at STAGE 3, AFTER the server
+#   root had already been deleted (T-e1dd).
 #
 # PARAMS (env, all overridable — defaults in the block below):
 #   PUBLIC_HOST      public server host (install.sh host-derived base + remote reach)
@@ -105,10 +117,13 @@
 #                    serve port read from server/ocserverd/config.go, NOT a
 #                    literal that goes stale)
 #   OC_CROSS_MACHINE_YES=1   REQUIRED — acknowledges this run is destructive.
-#   REQUIRE_ISOLATION_CONFIRMED=1  REQUIRED before STAGE 3 — acknowledges the
-#                    warden naming-collision blocker above has been resolved
-#                    (isolated label/root OR isolated VM). Default 0 → hard-stop
-#                    before the first warden bootstrap.
+#   REQUIRE_ISOLATION_CONFIRMED=1  REQUIRED — acknowledges the warden naming-
+#                    collision blocker above has been resolved for this host
+#                    (isolated label/root OR a throwaway VM). Default 0 → the
+#                    preflight refuses BEFORE any teardown. Neither ack can
+#                    override the prod-host refusal: an installed server is a
+#                    property of the machine, not something an operator can ack
+#                    away.
 # ============================================================================
 set -uo pipefail   # NOT -e: we drive control flow via explicit stage() gating.
 
@@ -214,28 +229,26 @@ remote() {
   ssh "$SECOND_MACHINE" "$REMOTE_PATH_PREFIX $*"
 }
 
-# ---------------------------------------------------------------------------
-# preflight — refuse to run unless the operator acknowledged destruction.
-# ---------------------------------------------------------------------------
-[[ "${OC_CROSS_MACHINE_YES:-}" == "1" ]] || die \
-  "refusing: this is a DESTRUCTIVE full-reset E2E (wipes the local server + agent, needs a real second machine). Re-run with OC_CROSS_MACHINE_YES=1 to acknowledge."
-
-for tool in curl ssh sqlite3 uuidgen launchctl; do
-  command -v "$tool" >/dev/null 2>&1 || die "required tool missing on PATH: $tool"
-done
-[[ -x "$OCSERVER" ]] || die "bin/ocserver not found/executable at $OCSERVER"
-
 log "params: PUBLIC_HOST=$PUBLIC_HOST SECOND_MACHINE=$SECOND_MACHINE TEST_AGENT=$TEST_AGENT LOCAL_BASE=$LOCAL_BASE"
 log "layout: SERVER_ROOT=$SERVER_ROOT DB=$DB_PATH  backups→$BACKUP_DIR"
 
-# ── LIVE-FLEET GUARD (T-8aa1) — construction-enforced, BEFORE any teardown ────
-# STAGE 1 below boots out the EXACT canonical labels (incl. com.officraft.
-# ocwarden) and rm -rf's the server root with ONLY OC_CROSS_MACHINE_YES=1 acked —
-# on a host with a LIVE fleet that would murder the real warden/agents. This
-# read-only guard detects a live canonical fleet and DIES HERE (before STAGE 1),
-# so cross_machine can only proceed on a host with no live fleet — exactly
-# condition (b) in this script's header, now ENFORCED, not merely asserted.
-oc_live_fleet_guard
+# ── PREFLIGHT — the SINGLE gate, and it is BEFORE every destructive action ────
+# Both acks, the tooling check, the live-fleet guard, the prod-host guard, the
+# SERVER_ROOT containment check and the ambient-env strip all live in one
+# sourceable function in lib/oc_lifecycle.sh (oc_cross_machine_preflight). It is
+# a function so tests_guard can run it against shimmed evidence and assert a
+# refusal leaves ZERO mutations behind; as top-level code the only way to test it
+# was to run this destructive script for real, which is why the ordering bug
+# below survived unnoticed.
+#
+# T-e1dd — what was wrong here: the isolation ack sat 141 lines BELOW the
+# `rm -rf "$SERVER_ROOT"` in STAGE 1, guarding the STAGE 3 warden bootstrap. So
+# the USAGE line in this very header — which acked only OC_CROSS_MACHINE_YES —
+# described a run that deleted the server root FIRST and was refused AFTERWARDS.
+# The ack now runs before anything is destroyed, and the prod-host guard closes
+# the case the live-fleet guard structurally cannot see: a production machine
+# whose server is merely STOPPED.
+oc_cross_machine_preflight
 
 # ===========================================================================
 # STAGE 1 — TEARDOWN OLD SERVER (destructive, but backup FIRST)
@@ -359,25 +372,15 @@ pass_stage
 # ===========================================================================
 stage "3. bootstrap server-self warden (local) + verify launchd loaded + SSE connected"
 
-# ── ISOLATION GATE — the warden naming-collision blocker (see big ⚠️ header) ──
-# STAGE 3 is the FIRST place we BOOT a warden under label $WARDEN_LABEL. If the
-# officraft warden label/root is NOT isolated from the vibe-clicking fleet, a
-# real run here risks murdering/corrupting the live fleet warden. HARD-STOP unless
-# the operator has established isolation and set REQUIRE_ISOLATION_CONFIRMED=1.
-if [[ "$REQUIRE_ISOLATION_CONFIRMED" != "1" ]]; then
-  log "──────────────────────────────────────────────────────────────"
-  warn "HARD-STOP before STAGE 3 warden bootstrap: warden naming-collision UNCONFIRMED."
-  warn "officraft warden label='$WARDEN_LABEL' root='$HOME_DIR/.officraft/warden'"
-  warn "is SUSPECTED to collide with a resident vibe-clicking fleet warden on this box."
-  warn "Booting/tearing a warden now could take out the live fleet warden (cross-fleet"
-  warn "blast radius). RESOLVE isolation first — EITHER:"
-  warn "  (a) give officraft its own non-overlapping warden label + root, OR"
-  warn "  (b) run this whole script in a throwaway VM/host with NO vibe-clicking fleet."
-  warn "Then re-run with REQUIRE_ISOLATION_CONFIRMED=1 to acknowledge."
-  warn "STAGES 1–2 wiped the OC *server* only; no non-OC warden was touched by this stop."
-  fail_stage "REQUIRE_ISOLATION_CONFIRMED=1 not set — refusing to bootstrap a warden on a box with an unresolved fleet-warden collision"
-fi
-log "isolation confirmed (REQUIRE_ISOLATION_CONFIRMED=1) — proceeding to warden bootstrap"
+# ── ISOLATION GATE — now enforced in preflight, NOT here (T-e1dd) ────────────
+# This is where the isolation ack used to be checked: STAGE 3 is the first place
+# a warden is BOOTED under $WARDEN_LABEL, and the ack was written to guard that
+# specific collision. But STAGE 1 had already booted out the canonical labels and
+# deleted the server root by the time execution reached this line — the ack was
+# protecting the second-worst thing that happens on an unisolated host, 141 lines
+# after the worst one. It now runs in oc_cross_machine_preflight before any of it,
+# so by here it is guaranteed set and re-checking it would be dead code.
+log "isolation ack confirmed in preflight — proceeding to warden bootstrap"
 
 # The server-self warden member ('m-server-self') is auto-seeded by the DB. We
 # install a real local warden bound to it via the REAL PRODUCT FLOW:

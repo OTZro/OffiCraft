@@ -665,6 +665,140 @@ oc_preflight_guards() {
   fi
 }
 
+# ── IS THIS A PRODUCTION HOST? (T-e1dd) ─────────────────────────────────────
+# oc_detect_prod_host — read-only. Prints one line per piece of ON-DISK evidence
+# that a REAL officraft server is INSTALLED on this host; empty output = none.
+#
+# This answers a DIFFERENT question from oc_detect_live_canonical_fleet, and the
+# difference is the whole point. That one asks "is prod RUNNING right now?" — it
+# probes launchd registration, a port listener, and live tmux sessions, so a
+# production box whose server happens to be STOPPED (mid-deploy, just booted out,
+# crashed) reports nothing and the caller proceeds to wipe it. And a stopped
+# server is exactly when someone reaches for a repair/reset script.
+#
+# ADDRESSING (load-bearing): every path below is derived from $HOME, NOT from
+# $SERVER_ROOT / $OC_ROOT. Those two are env-overridable ($OC_SERVER_ROOT), so
+# deriving from them would let the very override this guard exists to catch point
+# the guard somewhere harmless while the run still deletes the real thing. The
+# canonical install location is a property of the machine, not of this run.
+oc_detect_prod_host() {
+  local home="${HOME:?HOME must be set}" reasons=() canon_root db plist lbl
+  canon_root="$home/.officraft/server"
+  db="$canon_root/data/officraft.db"
+  # (1) a real server database on disk — the irreplaceable part.
+  if [[ -s "$db" ]]; then
+    reasons+=("a non-empty officraft server database exists on disk: $db")
+  fi
+  # (2) a launchd plist INSTALLED and pointing at that canonical server root.
+  #     EXACT filenames only — never a com.officraft.* glob.
+  for lbl in com.officraft.serve com.officraft.autodeploy com.officraft.tunnel; do
+    plist="$home/Library/LaunchAgents/$lbl.plist"
+    [[ -f "$plist" ]] || continue
+    if grep -qF "$canon_root" "$plist" 2>/dev/null; then
+      reasons+=("launchd job $lbl is installed on this host and points at $canon_root ($plist)")
+    fi
+  done
+  local r
+  for r in ${reasons[@]+"${reasons[@]}"}; do printf '%s\n' "$r"; done
+}
+
+# oc_prod_host_guard — die if this host carries an installed production server.
+# There is deliberately NO env override: an ack flag would recreate the exact
+# failure this guard exists to prevent (a flag nobody set correctly is a guard
+# that was never there). The way past it is to run somewhere that is genuinely a
+# throwaway host — which is what this script's header has always required.
+oc_prod_host_guard() {
+  local reasons; reasons="$(oc_detect_prod_host)"
+  if [[ -z "$reasons" ]]; then
+    log "prod-host guard OK: no installed officraft server found on this host (no server DB, no launchd job pointing at ~/.officraft/server)"
+    return 0
+  fi
+  printf '%s\n' "$reasons" | sed 's/^/[oc-lifecycle] prod-host| /' >&2
+  die "PROD-HOST GUARD: this machine carries an INSTALLED officraft server (see prod-host| lines) — refusing. This suite is a full reset: it deletes the server root, its database and the agent workdirs on whatever host it runs on, and an installed server means those belong to that host, not to this run. It is specified to run on a dedicated throwaway VM/host that carries no officraft install and no vibe-clicking fleet. Being stopped does not make a production box disposable."
+}
+
+# oc_cross_machine_preflight — the SINGLE gate cross_machine.sh passes before ANY
+# destructive action. It exists as a function (rather than top-level script code)
+# so tests_guard can execute it against shimmed evidence and assert that a refusal
+# happens with ZERO mutations — top-level code could only ever be tested by running
+# the destructive script itself.
+#
+# Ordering is the substance of T-e1dd, not a detail: the isolation ack used to sit
+# 141 lines AFTER the `rm -rf "$SERVER_ROOT"` it reads as protection, and it was
+# never about that deletion at all (it guards the STAGE 3 warden naming collision).
+# The documented invocation acked only the destructiveness flag, so the documented
+# way to run this script wiped the server root and was refused afterwards.
+#
+# Deliberately NOT reused: oc_preflight_guards(). Three of its clauses transplant
+# cleanly and are inlined below; two cannot and are excluded on purpose —
+#   • 0a TRIPLE MACHINE WHITELIST pins the run to seth-m1 via hardware UUID. This
+#     suite is specified to run on a throwaway VM, and the whitelist's third
+#     anchor requires a vibe-clicking fleet to be PRESENT — the exact opposite of
+#     this script's stated precondition. (The pinned variables are also undefined
+#     here, so under `set -u` it would abort with `unbound variable` rather than a
+#     guard message.)
+#   • 0b EXISTING-STATE WHITELIST demands ~/.officraft be absent or empty. This
+#     suite's STAGE 3 necessarily creates ~/.officraft/warden, so importing 0b
+#     would refuse every run after the first. The prod-host guard above covers the
+#     danger 0b was aimed at, addressed from $HOME instead of the overridable root.
+#   reads: OC_CROSS_MACHINE_YES, REQUIRE_ISOLATION_CONFIRMED, OC_ROOT, SERVER_ROOT,
+#          HOME_DIR, OCSERVER, OC_CLAUDE_BIN(env).
+#   mutates env: unsets ambient OC_ID/OC_TOKEN/OC_BASE/OC_SESSION; sets CLAUDE_BIN.
+oc_cross_machine_preflight() {
+  # (a) DESTRUCTIVENESS ack.
+  [[ "${OC_CROSS_MACHINE_YES:-}" == "1" ]] || die \
+    "refusing: this is a DESTRUCTIVE full-reset E2E (wipes the local server + agent, needs a real second machine). Re-run with OC_CROSS_MACHINE_YES=1 to acknowledge."
+
+  # (b) ISOLATION ack — MOVED HERE (T-e1dd). It reads as "the operator has
+  #     established isolation", and every destructive action below depends on
+  #     that being true, so it has to be answered before the first one, not
+  #     before STAGE 3's warden bootstrap.
+  [[ "${REQUIRE_ISOLATION_CONFIRMED:-0}" == "1" ]] || die \
+    "refusing: REQUIRE_ISOLATION_CONFIRMED is not set. This run tears down and reinstalls the CANONICAL officraft instance on this host — the same launchd labels, the same ~/.officraft root and the same tmux socket a real fleet would use — so it is only safe on a host isolated for it. Set REQUIRE_ISOLATION_CONFIRMED=1 only to state that the isolation is real (dedicated throwaway VM/host); it does not create any."
+
+  # (c) required tooling.
+  local tool
+  for tool in curl ssh sqlite3 uuidgen launchctl; do
+    command -v "$tool" >/dev/null 2>&1 || die "required tool missing on PATH: $tool"
+  done
+  [[ -x "${OCSERVER:?OCSERVER must be set}" ]] || die "bin/ocserver not found/executable at $OCSERVER"
+
+  # (d) LIVE-FLEET GUARD — is a fleet RUNNING here?
+  oc_live_fleet_guard
+
+  # (e) PROD-HOST GUARD — is a server INSTALLED here? (the stopped-prod case (d)
+  #     cannot see; see oc_detect_prod_host).
+  oc_prod_host_guard
+
+  # (f) SERVER_ROOT CONTAINMENT — transplanted verbatim from oc_preflight_guards
+  #     0b'. OC_SERVER_ROOT is an overridable env and the teardown rm -rf's it; if
+  #     it is pointed outside the instance root, the deletion escapes every guard
+  #     that reasons about that root.
+  case "$SERVER_ROOT" in
+    *..*) die "SERVER_ROOT CONTAINMENT FAIL: '$SERVER_ROOT' contains '..' — refusing (traversal could escape $OC_ROOT)." ;;
+  esac
+  case "$SERVER_ROOT/" in
+    "$OC_ROOT"/*) ;;
+    *) die "SERVER_ROOT CONTAINMENT FAIL: '$SERVER_ROOT' is not under $OC_ROOT (OC_SERVER_ROOT override escapes the guarded root) — refusing to rm -rf outside it." ;;
+  esac
+  log "server-root containment OK: $SERVER_ROOT under $OC_ROOT"
+
+  # (g) AMBIENT OC_* STRIP — transplanted from 0d. Never let an ambient token or
+  #     base URL point this run's API calls at the fleet/prod server.
+  if [[ -n "${OC_ID:-}${OC_TOKEN:-}${OC_BASE:-}${OC_SESSION:-}" ]]; then
+    warn "ambient OC_* detected (OC_ID/OC_TOKEN/OC_BASE/OC_SESSION) — stripping so we never hit the fleet server"
+  fi
+  unset OC_ID OC_TOKEN OC_BASE OC_SESSION 2>/dev/null || true
+  log "ambient OC_* stripped (this process)"
+
+  # (h) CLAUDE RESOLVABILITY — transplanted from 0e. STAGE 4 spawns a real agent;
+  #     failing here beats failing four stages in.
+  CLAUDE_BIN="${OC_CLAUDE_BIN:-$(command -v claude 2>/dev/null || true)}"
+  [[ -n "$CLAUDE_BIN" && -x "$CLAUDE_BIN" ]] \
+    || die "claude not resolvable (set OC_CLAUDE_BIN or put claude on PATH) — the install-time OC_CLAUDE_BIN stamp AND the STAGE 4 agent spawn would both fail."
+  log "claude resolvable [src=$CLAUDE_BIN]"
+}
+
 # oc_assert_teardown_instance — fail closed unless every resource axis agrees
 # with the selected instance.  This is deliberately checked BEFORE the first
 # teardown mutation: a namespaced E2E must never silently fall back to the
