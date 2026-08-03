@@ -195,9 +195,31 @@ OC_CROSS_MACHINE_YES=1 REQUIRE_ISOLATION_CONFIRMED=1 bash e2e_test/cross_machine
 ```
 
 Both env acks are REQUIRED (destructive ack + warden-isolation ack — read the
-script header before the first run on a new box). It is intentionally NOT wired
-into `run_all.sh`. Params (PUBLIC_HOST / SECOND_MACHINE / TEST_AGENT / …) are
-documented in the script header.
+script header before the first run on a new box), and both are checked BEFORE
+anything is destroyed. That ordering is the fix from T-e1dd: the isolation ack
+used to be checked at STAGE 3, 141 lines after STAGE 1 had already deleted the
+server root, so the invocation printed here would wipe the server and be refused
+afterwards.
+
+⚠️ **One run per host — both hosts.** The preflight (`oc_prod_host_guard` /
+`oc_prod_host_remote_guard`) refuses BOTH this host and `SECOND_MACHINE` if
+either is a known production station (hardware UUID) or carries a
+`~/.officraft/server` tree; `SECOND_MACHINE` is additionally refused if anything
+officraft is **running** there (a registered warden, or live `member-*`/`worker-*`
+sessions on tmux socket `officraft`) — STAGE 5b boots out that warden and kills
+those sessions, so a live fleet node must not be named as the relocate target.
+That means the second machine has to be *quiet*, not merely server-free. Since STAGE 2 installs a server here, the
+**second run on the same host is refused** — rebuild the throwaway VM, or delete
+`~/.officraft/server` yourself if you are certain it is your own leftover. That
+over-refusal is deliberate: from the outside, "a VM that ran this once" and "a
+production box" look identical, and only one of those two mistakes is
+recoverable. There is no flag to skip either check. `SECOND_MACHINE` must also be
+reachable over ssh before the run starts — STAGE 5b deletes its entire
+`~/.officraft`, so the run may not begin while that host's identity is unknown.
+
+It is intentionally NOT wired into `run_all.sh`. Params (PUBLIC_HOST /
+SECOND_MACHINE / TEST_AGENT / OC_CLAUDE_BIN / …) are documented in the script
+header.
 
 ## Adding a scenario
 

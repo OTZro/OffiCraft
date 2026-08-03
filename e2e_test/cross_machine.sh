@@ -11,29 +11,46 @@
 #     agent never "self-repaired" (booted clean) before AND after relocate.
 #
 # ############################################################################
-# ## ⚠️⚠️⚠️  KNOWN BLOCKER — WARDEN NAMING COLLISION — READ BEFORE A REAL RUN ##
+# ## ⚠️⚠️⚠️  WHERE THIS MAY RUN — A DEDICATED THROWAWAY HOST, NOTHING ELSE  ##
 # ############################################################################
-# ##  officraft's warden uses launchd label `com.officraft.ocwarden` and
-# ##  root `~/.officraft/warden`. On THIS box a *vibe-clicking* fleet warden
-# ##  is ALSO resident and is SUSPECTED to collide on the same label/root
-# ##  namespace. If they share a label or a launchd domain slot, this script's
-# ##  STAGE 1 `launchctl bootout com.officraft.ocwarden` + STAGE 3 fresh
-# ##  bootstrap could MURDER or CORRUPT the live vibe-clicking warden — the
-# ##  exact cross-fleet blast-radius the EXACT-label rule (gotcha #5) exists to
-# ##  prevent, but which an OVERLAPPING label cannot save us from.
+# ##  This script performs a FULL RESET of the CANONICAL officraft instance on
+# ##  whatever machine it runs on: it boots out `com.officraft.{serve,autodeploy,
+# ##  tunnel,ocwarden}`, deletes ~/.officraft/server (database included) and the
+# ##  agent workdirs under ~/.officraft/agents, then installs a server from zero.
+# ##  It also wipes ~/.officraft on the SECOND machine (STAGE 5b).
 # ##
-# ##  THIS SCRIPT DOES NOT RESOLVE THE COLLISION. Before a real run, kyle/Seth
-# ##  MUST first establish isolation, EITHER by:
-# ##    (a) giving officraft its own warden label + root (e.g. relabel to
-# ##        `com.officraft.e2e.ocwarden` and root `~/.officraft/warden`
-# ##        that provably does NOT overlap the vibe-clicking fleet), OR
-# ##    (b) running this whole script inside a dedicated throwaway VM/host that
-# ##        carries NO vibe-clicking fleet at all.
-# ##  …then set REQUIRE_ISOLATION_CONFIRMED=1 to acknowledge isolation is done.
-# ##  Until then this script HARD-STOPS *before* STAGE 3 (the first warden
-# ##  bootstrap) — STAGES 1–2 already wiped the OC *server*, but no warden
-# ##  daemon has been booted/torn beyond the EXACT-label OC ones yet at that
-# ##  point, so the vibe-clicking fleet is untouched by the guard's exit.
+# ##  So it may only run on a DEDICATED THROWAWAY VM/HOST that carries no
+# ##  officraft install of its own and no vibe-clicking fleet. Two separate
+# ##  reasons, and the second one is the one people miss:
+# ##
+# ##    (a) the officraft warden shares launchd label `com.officraft.ocwarden`
+# ##        and root ~/.officraft/warden with a resident vibe-clicking fleet
+# ##        warden on some boxes; on such a host STAGE 1's bootout and STAGE 3's
+# ##        bootstrap can murder or corrupt the live fleet warden. EXACT-label
+# ##        targeting (gotcha #5) cannot save you from an OVERLAPPING label.
+# ##    (b) a production officraft host holds the real server database. Whether
+# ##        that server is RUNNING at the moment is irrelevant to what the
+# ##        deletion costs — and a stopped server is exactly when someone reaches
+# ##        for a reset script. This is enforced, not merely warned about:
+# ##        oc_prod_host_guard refuses this host if its hardware UUID is a known
+# ##        production station, or if it carries a ~/.officraft/server tree at
+# ##        all — and oc_prod_host_remote_guard asks THREE questions about
+# ##        SECOND_MACHINE: those two, plus whether anything officraft is RUNNING
+# ##        there (a registered warden, or live member-*/worker-* sessions).
+# ##        STAGE 5b boots out that warden, kills those sessions and deletes that
+# ##        host's ENTIRE ~/.officraft — MORE than this suite deletes locally, so
+# ##        the second machine must be QUIET, not merely server-free.
+# ##
+# ##  REQUIRE_ISOLATION_CONFIRMED=1 is how you STATE that (a) is resolved for
+# ##  this host. It creates no isolation and it does not, and cannot, override
+# ##  either prod-host refusal in (b).
+# ##
+# ##  ⚠️ ONE RUN PER HOST — BOTH HOSTS. STAGE 2 installs a server here, so from
+# ##  the second run on, this host carries a ~/.officraft/server tree and the
+# ##  residue check refuses it — deliberately, because from the outside that state
+# ##  is indistinguishable from a production box. The second machine is refused
+# ##  the same way once it is running a warden or agents left by a previous run.
+# ##  Rebuild the throwaway hosts to run again.
 # ############################################################################
 #
 #   It ends with a PASS/FAIL summary (per-stage ✓/✗) and exits 0 only if every
@@ -92,12 +109,30 @@
 #      set no claim code is ever minted). See seed_owner_password().
 #
 # ----------------------------------------------------------------------------
-# USAGE:
-#   OC_CROSS_MACHINE_YES=1 bash e2e_test/cross_machine.sh
+# USAGE (on a dedicated throwaway host — see the banner above):
+#   OC_CROSS_MACHINE_YES=1 REQUIRE_ISOLATION_CONFIRMED=1 \
+#     bash e2e_test/cross_machine.sh
+#
+#   BOTH acks are required BEFORE anything is destroyed, so this line is the
+#   whole invocation: pasting it runs the preflight, and the preflight either
+#   proceeds on a host that qualifies or refuses one that does not — it never
+#   half-runs. It used to list OC_CROSS_MACHINE_YES alone, which passed the one
+#   gate that stood before STAGE 1 and got refused at STAGE 3, AFTER the server
+#   root had already been deleted (T-e1dd).
 #
 # PARAMS (env, all overridable — defaults in the block below):
 #   PUBLIC_HOST      public server host (install.sh host-derived base + remote reach)
-#   SECOND_MACHINE   ssh target for the second machine
+#   SECOND_MACHINE   ssh target for the second machine. Checked by the preflight
+#                    with the prod-host rules that apply here, PLUS a liveness
+#                    check this host does not need from it: it must carry no
+#                    registered warden and no live member-*/worker-* sessions, so
+#                    it has to be QUIET rather than merely server-free. It must
+#                    also be reachable BEFORE anything is destroyed — STAGE 5b
+#                    deletes its entire ~/.officraft, so a run may not start while
+#                    that host's identity is unknown.
+#   OC_CLAUDE_BIN    path to the claude binary if it is not on PATH. The preflight
+#                    refuses without a resolvable claude — STAGE 4 spawns a real
+#                    agent, so an unresolvable one fails the run either way.
 #   OWNER_PASSWORD   deterministic owner password to seed (default: random uuid)
 #   TEST_AGENT       seeded agent member id to spawn/relocate (default mira)
 #   LOCAL_BASE       loopback base for local health/API (default
@@ -105,10 +140,13 @@
 #                    serve port read from server/ocserverd/config.go, NOT a
 #                    literal that goes stale)
 #   OC_CROSS_MACHINE_YES=1   REQUIRED — acknowledges this run is destructive.
-#   REQUIRE_ISOLATION_CONFIRMED=1  REQUIRED before STAGE 3 — acknowledges the
-#                    warden naming-collision blocker above has been resolved
-#                    (isolated label/root OR isolated VM). Default 0 → hard-stop
-#                    before the first warden bootstrap.
+#   REQUIRE_ISOLATION_CONFIRMED=1  REQUIRED — acknowledges the warden naming-
+#                    collision blocker above has been resolved for this host
+#                    (isolated label/root OR a throwaway VM). Default 0 → the
+#                    preflight refuses BEFORE any teardown. Neither ack can
+#                    override the prod-host refusal: an installed server is a
+#                    property of the machine, not something an operator can ack
+#                    away.
 # ============================================================================
 set -uo pipefail   # NOT -e: we drive control flow via explicit stage() gating.
 
@@ -146,7 +184,9 @@ PUBLIC_BASE="https://${PUBLIC_HOST}"
 OWNER_PASSWORD="${OWNER_PASSWORD:-$(uuidgen | tr '[:upper:]' '[:lower:]')}"
 
 # Isolation ack for the warden naming-collision blocker (see the big ⚠️ header).
-# 0 = not confirmed → the script HARD-STOPS before STAGE 3 (first warden boot).
+# 0 = not confirmed → the preflight refuses before STAGE 1, i.e. before anything
+# is destroyed. (It used to hard-stop before STAGE 3, which is the bug T-e1dd
+# fixed: STAGE 1 had already deleted the server root by then.)
 REQUIRE_ISOLATION_CONFIRMED="${REQUIRE_ISOLATION_CONFIRMED:-0}"
 
 # Presence poll budget (hub projection can lag warden SSE connect a few seconds).
@@ -185,6 +225,13 @@ DB_PATH="$SERVER_ROOT/data/officraft.db"
 # below, which upgrades the old operator assert into a hard, self-checking gate.
 OC_NS=""                              # canonical → live-fleet guard runs in DIE mode
 OC_ROOT="$HOME_DIR/.officraft"     # canonical instance root
+# TMUX_SOCKET_LOCAL — the teardown axis oc_assert_teardown_instance checks. It is
+# the SAME socket as TMUX_SOCKET above for a canonical run; it exists as its own
+# name because a namespaced run derives `officraft-<ns>` for it. Declaring it here
+# is load-bearing: oc_teardown_bounded (the shared teardown path this script now
+# uses instead of its own hand-rolled copy) fails CLOSED on a missing axis rather
+# than silently falling back to the canonical socket.
+TMUX_SOCKET_LOCAL="$OC_CANONICAL_TMUX_SOCKET"
 
 # This script lives in e2e_test/; the checkout root is one level up.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -199,111 +246,65 @@ TS="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="/tmp/oc-cross-machine-e2e-$TS"
 mkdir -p "$BACKUP_DIR"
 
-# Remote command prefix — ALWAYS export homebrew PATH (gotcha #2).
-REMOTE_PATH_PREFIX='export PATH=/opt/homebrew/bin:$PATH;'
+# Remote command prefix — ALWAYS export homebrew PATH (gotcha #2). Defined in the
+# lib so the preflight's own remote probe uses the identical prefix; a second copy
+# here would be free to drift, and the probe silently answering "nothing found"
+# because a tool was not on PATH is fail-OPEN for the liveness checks.
+REMOTE_PATH_PREFIX="$OC_REMOTE_PATH_PREFIX"
 
 # remote SSH... — run a command on the second machine with homebrew PATH exported.
 remote() {
   ssh "$SECOND_MACHINE" "$REMOTE_PATH_PREFIX $*"
 }
 
-# ---------------------------------------------------------------------------
-# preflight — refuse to run unless the operator acknowledged destruction.
-# ---------------------------------------------------------------------------
-[[ "${OC_CROSS_MACHINE_YES:-}" == "1" ]] || die \
-  "refusing: this is a DESTRUCTIVE full-reset E2E (wipes the local server + agent, needs a real second machine). Re-run with OC_CROSS_MACHINE_YES=1 to acknowledge."
-
-for tool in curl ssh sqlite3 uuidgen launchctl; do
-  command -v "$tool" >/dev/null 2>&1 || die "required tool missing on PATH: $tool"
-done
-[[ -x "$OCSERVER" ]] || die "bin/ocserver not found/executable at $OCSERVER"
-
 log "params: PUBLIC_HOST=$PUBLIC_HOST SECOND_MACHINE=$SECOND_MACHINE TEST_AGENT=$TEST_AGENT LOCAL_BASE=$LOCAL_BASE"
 log "layout: SERVER_ROOT=$SERVER_ROOT DB=$DB_PATH  backups→$BACKUP_DIR"
 
-# ── LIVE-FLEET GUARD (T-8aa1) — construction-enforced, BEFORE any teardown ────
-# STAGE 1 below boots out the EXACT canonical labels (incl. com.officraft.
-# ocwarden) and rm -rf's the server root with ONLY OC_CROSS_MACHINE_YES=1 acked —
-# on a host with a LIVE fleet that would murder the real warden/agents. This
-# read-only guard detects a live canonical fleet and DIES HERE (before STAGE 1),
-# so cross_machine can only proceed on a host with no live fleet — exactly
-# condition (b) in this script's header, now ENFORCED, not merely asserted.
-oc_live_fleet_guard
+# ── PREFLIGHT — the SINGLE gate, and it is BEFORE every destructive action ────
+# Both acks, the tooling check, the live-fleet guard, the prod-host guard, the
+# SERVER_ROOT containment check and the ambient-env strip all live in one
+# sourceable function in lib/oc_lifecycle.sh (oc_cross_machine_preflight). It is
+# a function so tests_guard can run it against shimmed evidence and assert a
+# refusal leaves ZERO mutations behind; as top-level code the only way to test it
+# was to run this destructive script for real, which is why the ordering bug
+# below survived unnoticed.
+#
+# T-e1dd — what was wrong here: the isolation ack sat 141 lines BELOW the
+# `rm -rf "$SERVER_ROOT"` in STAGE 1, guarding the STAGE 3 warden bootstrap. So
+# the USAGE line in this very header — which acked only OC_CROSS_MACHINE_YES —
+# described a run that deleted the server root FIRST and was refused AFTERWARDS.
+# The ack now runs before anything is destroyed, and the prod-host guard closes
+# the case the live-fleet guard structurally cannot see: a production machine
+# whose server is merely STOPPED.
+oc_cross_machine_preflight
 
 # ===========================================================================
 # STAGE 1 — TEARDOWN OLD SERVER (destructive, but backup FIRST)
 # ===========================================================================
 stage "1. teardown old server (backup → EXACT-label bootout → warden teardown → rm dirs)"
 
-# 1a. .dump backup BEFORE any destruction (gotcha #6). Best-effort if DB absent.
-if [[ -f "$DB_PATH" ]]; then
-  if sqlite3 "$DB_PATH" ".dump" > "$BACKUP_DIR/officraft.dump.sql" 2>/dev/null; then
-    log "backed up DB → $BACKUP_DIR/officraft.dump.sql ($(wc -l < "$BACKUP_DIR/officraft.dump.sql") lines)"
-  else
-    warn "sqlite3 .dump failed (DB may be locked/corrupt) — continuing (backup best-effort)"
-  fi
-else
-  log "no existing DB at $DB_PATH — nothing to back up (first-ever install?)"
-fi
-
-# 1b. bootout the server + warden jobs by EXACT label ONLY (gotcha #5).
-#     NEVER pkill/killall — com.vibeclicking.* etc. share this box.
-for label in "$SERVE_LABEL" "$AUTODEPLOY_LABEL" "$TUNNEL_LABEL" "$WARDEN_LABEL"; do
-  log "launchctl bootout $GUI/$label (EXACT label; tolerate not-loaded)"
-  launchctl bootout "$GUI/$label" 2>/dev/null || true
-done
-
-# 1c. best-effort ocwarden teardown (removes its plist/tokfile cleanly if present).
-if [[ -x "$OCWARDEN" ]]; then
-  log "bin/ocwarden teardown (best-effort clean warden removal)"
-  env OC_NAMESPACE="" "$OCWARDEN" teardown --canonical 2>&1 | sed 's/^/[cross-machine] warden-td| /' >&2 || \
-    warn "ocwarden teardown returned non-zero (may be already-gone) — continuing"
-fi
-
-# 1d. remove the server run dir + the local ~/.officraft server layout.
-#     We only remove the officraft server tree — never ~/.vibe-clicking (gotcha #7).
-log "rm -rf $SERVER_ROOT (server checkout/db/config/logs — backed up above)"
-rm -rf "$SERVER_ROOT"
-# Also clear a stale local exec-warden tokfile so the fresh warden re-mints cleanly.
-rm -f "$HOME_DIR/.officraft/exec-warden.tok" 2>/dev/null || true
-
-# 1e. retire STALE AGENT RUNTIMES + workdirs from the previous install. A surviving
-#     member-<id> session holds a token signed by the WIPED server (permanently
-#     deauthed) AND squats the tmux session name, so the fresh warden's
-#     clobber-guard correctly refuses the new spawn ("already-running") and the
-#     agent can never reach presence=online — a full reset must reset agents too.
-#     EXACT targeting only: officraft agents live on the dedicated tmux socket
-#     `officraft` as `member-<id>`; the vibe-clicking fleet lives on OTHER
-#     sockets and is never touched (gotcha #5/#7).
-if tmux -L officraft ls >/dev/null 2>&1; then
-  while IFS= read -r sess; do
-    [[ "$sess" == member-* ]] || continue
-    log "tmux -L officraft kill-session -t =$sess (EXACT stale agent session from previous install)"
-    tmux -L officraft kill-session -t "=$sess" 2>/dev/null || true
-  done < <(tmux -L officraft ls -F '#S' 2>/dev/null)
-fi
-if [[ -d "$HOME_DIR/.officraft/agents" ]]; then
-  tar -czf "$BACKUP_DIR/agents-workdirs.tgz" -C "$HOME_DIR/.officraft" agents 2>/dev/null \
-    || warn "agents/ backup tar failed — continuing (workdirs are disposable caches)"
-  log "rm -rf $HOME_DIR/.officraft/agents (stale agent workdirs/creds — backed up)"
-  rm -rf "$HOME_DIR/.officraft/agents"
-fi
-
-# verify the labels are truly gone. bootout is asynchronous — the job can stay
-# registered for a few seconds while its process exits, so poll-until-gone
-# (bounded) instead of a single immediate check (a real re-registration, e.g.
-# KeepAlive re-bootstrap, will still be caught after the deadline).
-for label in "$SERVE_LABEL" "$WARDEN_LABEL"; do
-  gone=0
-  for _ in $(seq 1 20); do
-    if ! launchctl print "$GUI/$label" >/dev/null 2>&1; then gone=1; break; fi
-    sleep 1
-  done
-  if [[ "$gone" != 1 ]]; then
-    fail_stage "$label still registered 20s after bootout — refusing to proceed on a dirty box"
-  fi
-done
-[[ -d "$SERVER_ROOT" ]] && fail_stage "server root still present after rm: $SERVER_ROOT"
+# THE ONLY LOCAL TEARDOWN PATH (T-e1dd). This stage used to be a hand-rolled copy
+# of oc_teardown_bounded: same four EXACT labels, same backup-first ordering, same
+# poll-until-gone — but written as TOP-LEVEL script code, with two consequences
+# that mattered more than the duplication:
+#
+#   • NO TARGET GUARD. The shared path calls oc_assert_teardown_instance BEFORE
+#     it backs up, boots out, or deletes anything — it refuses a mixed set of
+#     canonical/namespaced axes instead of guessing which instance the caller
+#     meant. The copy asserted nothing and simply deleted $SERVER_ROOT.
+#   • UNREACHABLE BY TESTS. Destructive top-level code cannot be exercised
+#     without running this whole destructive script, so no guard test could ever
+#     cover it. Routing through the lib function puts this script's teardown
+#     under the tests_guard cases that already assert "refuse BEFORE any
+#     mutation" (18d/18e) — the same regression net single_machine_e2e.sh has.
+#
+# Behavioral deltas vs the removed copy, all deliberate: it also removes
+# $OC_ROOT/warden (bootstrap-here's install tree — leaving it made the next run's
+# state whitelist refuse), $OC_ROOT/workers (no-op here, this suite spawns no
+# workers), and the EXACT serve/autodeploy/tunnel plist FILES (STAGE 2's
+# `ocserver install --force` regenerates them). It also kills worker-* sessions
+# alongside member-* (no-op here). Nothing it did before is dropped.
+oc_teardown_bounded "pre-install"
 pass_stage
 
 # ===========================================================================
@@ -399,25 +400,15 @@ pass_stage
 # ===========================================================================
 stage "3. bootstrap server-self warden (local) + verify launchd loaded + SSE connected"
 
-# ── ISOLATION GATE — the warden naming-collision blocker (see big ⚠️ header) ──
-# STAGE 3 is the FIRST place we BOOT a warden under label $WARDEN_LABEL. If the
-# officraft warden label/root is NOT isolated from the vibe-clicking fleet, a
-# real run here risks murdering/corrupting the live fleet warden. HARD-STOP unless
-# the operator has established isolation and set REQUIRE_ISOLATION_CONFIRMED=1.
-if [[ "$REQUIRE_ISOLATION_CONFIRMED" != "1" ]]; then
-  log "──────────────────────────────────────────────────────────────"
-  warn "HARD-STOP before STAGE 3 warden bootstrap: warden naming-collision UNCONFIRMED."
-  warn "officraft warden label='$WARDEN_LABEL' root='$HOME_DIR/.officraft/warden'"
-  warn "is SUSPECTED to collide with a resident vibe-clicking fleet warden on this box."
-  warn "Booting/tearing a warden now could take out the live fleet warden (cross-fleet"
-  warn "blast radius). RESOLVE isolation first — EITHER:"
-  warn "  (a) give officraft its own non-overlapping warden label + root, OR"
-  warn "  (b) run this whole script in a throwaway VM/host with NO vibe-clicking fleet."
-  warn "Then re-run with REQUIRE_ISOLATION_CONFIRMED=1 to acknowledge."
-  warn "STAGES 1–2 wiped the OC *server* only; no non-OC warden was touched by this stop."
-  fail_stage "REQUIRE_ISOLATION_CONFIRMED=1 not set — refusing to bootstrap a warden on a box with an unresolved fleet-warden collision"
-fi
-log "isolation confirmed (REQUIRE_ISOLATION_CONFIRMED=1) — proceeding to warden bootstrap"
+# ── ISOLATION GATE — now enforced in preflight, NOT here (T-e1dd) ────────────
+# This is where the isolation ack used to be checked: STAGE 3 is the first place
+# a warden is BOOTED under $WARDEN_LABEL, and the ack was written to guard that
+# specific collision. But STAGE 1 had already booted out the canonical labels and
+# deleted the server root by the time execution reached this line — the ack was
+# protecting the second-worst thing that happens on an unisolated host, 141 lines
+# after the worst one. It now runs in oc_cross_machine_preflight before any of it,
+# so by here it is guaranteed set and re-checking it would be dead code.
+log "isolation ack confirmed in preflight — proceeding to warden bootstrap"
 
 # The server-self warden member ('m-server-self') is auto-seeded by the DB. We
 # install a real local warden bound to it via the REAL PRODUCT FLOW:

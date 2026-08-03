@@ -19,7 +19,10 @@ design** — bootout the live `com.officraft.ocwarden`, wipe `~/.officraft`,
 and kill live agents (agent suicide / machine offline). `cross_machine.sh` was
 worse: its STAGE 1 destructive teardown ran with **only** `OC_CROSS_MACHINE_YES=1`
 acked — its isolation gate (`REQUIRE_ISOLATION_CONFIRMED`) sat *after* the
-teardown, at STAGE 3.
+teardown, at STAGE 3. (**Fixed in T-e1dd** — see "Layer 3" below. The ordering
+outlived T-8aa1 because the live-fleet guard added then sits before the teardown
+and reads as the protection, while the ack it was supposed to reinforce stayed
+where it was.)
 
 This host (eva's Mac) is a live fleet host: `com.officraft.ocwarden` registered,
 the canonical serve port (`:7755`) held, a live `member-*` session on socket
@@ -107,10 +110,76 @@ serve-only (no tunnel), so a namespaced local instance cannot drive the remote
 leg. `cross_machine.sh` therefore stays canonical (`OC_NS=""`), and its
 construction-enforced protection is the **live-fleet guard** placed before STAGE
 1: it now `die`s on any host with a live fleet, so the suite can only run on a
-clean host — exactly condition (b) in its own header, upgraded from an operator
-*assert* (`REQUIRE_ISOLATION_CONFIRMED`) to a hard, self-checking gate. Full
-namespace isolation of the cross-machine relocate is out of scope (architecturally
-tied to the public tunnel).
+clean host — exactly condition (b) in its own header, backed by a hard,
+self-checking gate instead of resting on the operator *assert*
+(`REQUIRE_ISOLATION_CONFIRMED`) alone. Full namespace isolation of the
+cross-machine relocate is out of scope (architecturally tied to the public
+tunnel).
+
+### Layer 3 — prod-host guard + one preflight, before anything (T-e1dd)
+
+The live-fleet guard answers "is a fleet **running** here?". That leaves a hole
+it cannot close by construction: a **production host whose server is stopped**
+(mid-deploy, just booted out, crashed) presents no registered warden, no port
+listener and no live session, so the guard passes and the teardown deletes the
+real server root. A stopped server is also precisely when someone reaches for a
+reset script.
+
+`oc_prod_host_guard` asks the other question — **"is this machine one of the
+production stations?"** — and answers it twice, on purpose:
+
+- **identity**: the immutable hardware UUID (`ioreg IOPlatformUUID`) against
+  `OC_PROD_HOST_HW_UUIDS`. A *blacklist*, unlike the seth-m1 whitelist in
+  `oc_preflight_guards` 0a — this suite is specified to run on a throwaway VM, so
+  it cannot demand one specific machine, and 0a's third anchor requires a
+  vibe-clicking fleet to be *present*, the opposite of this suite's precondition.
+- **residue**: `~/.officraft/server` exists at all. Deliberately coarse.
+
+**Both are kept, and the redundancy is the design — do not remove one as
+duplicated.** The blacklist's known weakness is that a production host nobody
+added to the list is not covered; that weakness is *accepted* only because
+residue backs it up. Residue in turn over-refuses: a throwaway VM that already
+ran this suite once looks exactly like a production host to it and must be
+rebuilt. That is the accepted price, and the trade is not close — residue failing
+costs one rebuilt VM, identity failing alone costs a production database.
+
+**Both questions are also asked about the SECOND machine — plus a third**
+(`oc_prod_host_remote_guard`), in the preflight rather than at STAGE 5b where the
+remote wipe happens. The third is liveness, which the local host gets from
+`oc_live_fleet_guard` and the remote host would otherwise not get at all: a
+registered warden, or live `member-*`/`worker-*` sessions. Sessions are checked
+separately from the warden because agents outlive it — booted out for
+maintenance, crashed, launchd gave up — and STAGE 5b kill-sessions them
+explicitly. The cost is that the second machine must be *quiet*, not merely
+server-free; the same one-run-per-host rule therefore applies to both hosts. This is not symmetry for its own sake: STAGE 5b deletes the
+remote host's *entire* `~/.officraft`, more than the local teardown deletes here.
+Guarding only the local host leaves the cheaper mistake available — from a
+genuinely clean throwaway VM, naming a production station as `SECOND_MACHINE`
+passes every local gate. The local bug at least required standing on production;
+that one needs only its name typed. The remote residue signal is
+`~/.officraft/server` rather than `~/.officraft`, because a relocate target is
+*expected* to carry the latter — that is what being onboarded means — and never
+the former. An unreachable second machine is a refusal, not a warning: a host
+whose identity cannot be established is not thereby safe to wipe.
+
+Both derive their paths from `$HOME`, never from `$SERVER_ROOT`/`$OC_ROOT`:
+those are env-overridable, and deriving from them would let `OC_SERVER_ROOT` aim
+the guard at an empty directory while the deletion still landed on the real tree.
+There is **no ack flag** for either: an unset flag is indistinguishable from a
+guard that was never there, which is the failure mode this whole document is
+about. The two refusals deliberately read differently — the residue message must
+say how to proceed (its likely reader is re-running on their own VM, and a
+refusal that only says "no" gets worked around), while the identity message must
+never name a way to clear the obstacle, because its reader is standing on a
+production station and "delete this and retry" *is* the disaster.
+
+Both guards, both acks, the containment check and the ambient-env strip now run
+inside a single sourceable `oc_cross_machine_preflight` **before the first
+destructive action**, and `cross_machine.sh`'s hand-rolled STAGE 1 teardown was
+replaced by `oc_teardown_bounded` — so this suite's teardown is finally covered
+by the same `tests_guard` cases (18/18c/18d/18e) as the others, which is what
+made the ordering bug invisible for so long: destructive top-level code cannot
+be tested without running it.
 
 ## Test strategy
 

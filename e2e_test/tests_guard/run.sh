@@ -73,7 +73,161 @@ fi
 exit 0
 SH
 
-chmod +x "$SHIMDIR"/launchctl "$SHIMDIR"/lsof "$SHIMDIR"/tmux
+cat > "$SHIMDIR/ioreg" <<'SH'
+#!/usr/bin/env bash
+# The hardware-identity anchor (T-e1dd). Emits the one line the guard's awk reads.
+# SHIM_HW_UUID drives it; empty = the "cannot read a UUID" case. This is a PATH
+# stub on purpose and NOT an env override in the guard itself: production must
+# have no way to be told what machine it is on.
+printf '    "IOPlatformUUID" = "%s"\n' "${SHIM_HW_UUID-00000000-0000-0000-0000-FEEDFACE0000}"
+SH
+
+cat > "$SHIMDIR/ssh" <<'SH'
+#!/usr/bin/env bash
+# Stands in for the second machine. It EXECUTES the probe command the guard sent,
+# in a real shell, against a fake remote $HOME — rather than printing canned
+# answers. That difference matters: the probe nests `awk -F\"` and `\$4` inside a
+# double-quoted command substitution inside a single-quoted remote command, and a
+# canned-answer shim would keep every assertion green while a broken escaping
+# silently returned an empty UUID from every real host — which is fail-OPEN.
+#
+# SHIM_SSH_FAIL   → unreachable host (must be fail-closed)
+# SHIM_SSH_SILENT → an ssh that exits 0 having run nothing (ForceCommand, a
+#                   restricted shell, an rc file that returns early). Also
+#                   fail-closed: a probe that did not run is not a clean host.
+[[ "${SHIM_SSH_FAIL:-0}" == "1" ]] && { echo "ssh: connect to host ${*: -2:1} port 22: Operation timed out" >&2; exit 255; }
+[[ "${SHIM_SSH_SILENT:-0}" == "1" ]] && exit 0
+# SHIM_SSH_NOISE → a line the remote emits before the probe's own output. Two
+# flavours matter: ordinary stderr chatter (the ubiquitous known-hosts warning),
+# which must be TOLERATED, and marker-shaped output, which must REFUSE.
+[[ -n "${SHIM_SSH_NOISE:-}" ]] && printf '%s\n' "$SHIM_SSH_NOISE" >&2
+cmd="${!#}"   # last arg = the remote command
+[[ "$cmd" == *IOPlatformUUID* ]] || { echo "TRIPWIRE ssh shim got an unexpected remote command: $cmd" >> "$SHIM_TRIPWIRE"; exit 3; }
+# A real remote HOME, so `[ -d "$HOME/.officraft/server" ]` is answered by the
+# filesystem rather than by a canned string.
+rhome="$SHIM_REMOTE_HOME"
+mkdir -p "$rhome"
+[[ "${SHIM_REMOTE_SERVER_TREE:-0}" == "1" ]] && mkdir -p "$rhome/.officraft/server"
+# SHIM_REMOTE_TOOLS=none reproduces the real thing an ssh non-login shell does:
+# Homebrew's bin dir is absent, so `tmux` is simply not found. Without this the
+# harness guarantees every remote tool resolves and can never catch a probe that
+# asks a question the far side cannot answer.
+# The probe exports the remote Homebrew bin dir itself (gotcha #2). Rewrite that
+# literal to OUR stub dir, or the command resolves the REAL tmux/launchctl of
+# whatever machine this suite runs on — which both defeats the fake remote host
+# and makes the result depend on the test machine's own fleet state.
+rbin="$SHIM_REMOTE_BIN"
+[[ "${SHIM_REMOTE_TOOLS:-all}" == "notmux" ]] && rbin="${SHIM_REMOTE_BIN}-notmux"
+# Tripwire on the literal, same reason as the IOPlatformUUID one above: if
+# OC_REMOTE_PATH_PREFIX ever names a different path this rewrite silently stops
+# matching — and since the shim also puts $rbin on PATH unconditionally, every
+# assertion would stay green while the real prefix was wrong.
+[[ "$cmd" == *"/opt/homebrew/bin"* ]] || { echo "TRIPWIRE ssh shim: the probe command no longer contains the /opt/homebrew/bin literal this shim rewrites — OC_REMOTE_PATH_PREFIX changed: $cmd" >> "$SHIM_TRIPWIRE"; exit 3; }
+cmd="${cmd//\/opt\/homebrew\/bin/$rbin}"
+# PATH IS THE FIXTURE. Borrowing this host's /usr/bin here made "the tool is
+# absent" an accident of the RUNNER rather than something the fixture builds:
+# macOS has no /usr/bin/tmux, ubuntu-latest does, so the notmux case leaked the
+# runner's real tmux, the probe answered live_agents=0, the guard passed, and
+# the suite sailed into the teardown it plants on purpose — green on one OS,
+# red on the other, testing nothing on either. $SHIM_REMOTE_BASE carries ONLY
+# the generic tools the probe genuinely needs (awk/grep/id); every tool whose
+# presence the test is ASSERTING ON lives in $rbin, under the fixture's control.
+HOME="$rhome" PATH="$rbin:$SHIM_REMOTE_BASE" /bin/sh -c "$cmd"
+SH
+
+# The second machine's own tools, resolved on the far side of the ssh shim. They
+# are SEPARATE from the local stubs on purpose: the guard must read the REMOTE
+# host's identity, and a shim that answered with the local UUID would hide a guard
+# that looks at the wrong machine — the exact bug this remote check exists to fix.
+mkdir -p "$SHIMDIR/remote-bin"
+cat > "$SHIMDIR/remote-bin/ioreg" <<'SH'
+#!/usr/bin/env bash
+printf '    "IOPlatformUUID" = "%s"\n' "${SHIM_REMOTE_HW-00000000-0000-0000-0000-FEEDFACE0001}"
+SH
+cat > "$SHIMDIR/remote-bin/launchctl" <<'SH'
+#!/usr/bin/env bash
+# Only `print` is reachable from the read-only probe. A bootout here would mean
+# the guard is mutating the remote host, which it must never do.
+if [[ "$1" == "print" ]]; then
+  case "$2" in
+    */com.officraft.ocwarden) [[ "${SHIM_REMOTE_WARDEN:-0}" == "1" ]] && exit 0 || exit 1 ;;
+    *) exit 1 ;;
+  esac
+fi
+echo "TRIPWIRE remote launchctl called with a non-print verb: $*" >> "$SHIM_TRIPWIRE"
+exit 0
+SH
+cat > "$SHIMDIR/remote-bin/tmux" <<'SH'
+#!/usr/bin/env bash
+# The relocate target's agent sessions. Separate from the local tmux stub so a
+# guard reading the LOCAL session list instead of the remote one is visible.
+if [[ "${3:-}" == "ls" ]]; then
+  [[ "${SHIM_REMOTE_AGENTS:-0}" == "1" ]] || exit 1
+  [[ "${4:-}" == "-F" ]] && printf 'member-m-remote1\n'
+  exit 0
+fi
+exit 0
+SH
+chmod +x "$SHIMDIR"/remote-bin/ioreg "$SHIMDIR"/remote-bin/launchctl "$SHIMDIR"/remote-bin/tmux
+# The same stubs MINUS tmux. That is the real shape of gotcha #2: `ioreg`
+# (/usr/sbin) and `launchctl` (/bin) are on an ssh non-login PATH, `tmux` is in
+# Homebrew and is not — which is why a missing PATH export takes out exactly the
+# liveness question and nothing else.
+mkdir -p "$SHIMDIR/remote-bin-notmux"
+cp "$SHIMDIR"/remote-bin/ioreg "$SHIMDIR"/remote-bin/launchctl "$SHIMDIR/remote-bin-notmux/"
+export SHIM_REMOTE_BIN="$SHIMDIR/remote-bin"
+# The generic half of the fake remote's PATH: the tools the probe legitimately
+# needs that are NOT part of any assertion (awk, grep, id). Resolved through
+# `command -v` so this works on both macOS and Linux, and kept deliberately
+# small — anything not listed here is, from the probe's point of view, absent,
+# which is what lets the fixture DECIDE that a tool cannot be found.
+_rbase="$SHIMDIR/remote-base"
+mkdir -p "$_rbase"
+# `bash` is in that list although nothing in the probe calls it: every stub in
+# $rbin carries a `/usr/bin/env bash` shebang, and `env` resolves its argument
+# through PATH — a base dir without bash makes the fixture's own stubs
+# unrunnable while leaving them perfectly present, which reads downstream as
+# "the far side answered nothing" and takes out every remote case at once.
+for _t in awk grep id bash; do
+  _p="$(command -v "$_t" 2>/dev/null || true)"
+  # An ABSOLUTE path, not merely a non-empty answer. `command -v` reports an
+  # exported shell function as the bare word, and `ln -sf awk .../remote-base/awk`
+  # then makes a symlink pointing at itself: ELOOP, which the far side cannot tell
+  # apart from "that tool is not installed" — the exact disguise this whole commit
+  # is about, rebuilt one level down in the thing meant to prevent it.
+  [[ "$_p" == /* ]] || { echo "tests_guard: cannot build the fake remote PATH — '$_t' did not resolve to an absolute path on this machine (got: '${_p:-<nothing>}')" >&2; exit 2; }
+  ln -sf "$_p" "$_rbase/$_t"
+done
+unset _t _p
+# TRIPWIRE, checked before any case runs. If a tool the fixture withholds ever
+# becomes reachable through this base dir again, say so loudly HERE — the
+# alternative is what actually happened: the affected cases keep passing on the
+# OS that happens to lack the tool, and on the OS that has it they fail as an
+# unrelated-looking guard bug.
+# The list is DERIVED from the stubs rather than written out, so a tool added to
+# remote-bin/ later is protected the day it is added. Spelling it out meant the
+# protection silently did not extend to anything new — and a guard that covers
+# only what someone remembered to list is the shape this suite exists to catch.
+# `ssh` is appended because the fake remote must never reach a real one.
+# Array glob, not `$(… printf '%s\n' *)`. Unquoted command substitution word-splits
+# and RE-GLOBS: with remote-bin/ empty the `*` survives literally and expands
+# against the caller's cwd, so the loop iterates repo files, matches nothing, and
+# the tripwire passes — checking nothing, silently. Whitespace or a glob character
+# in a stub name skips that stub the same quiet way. That is the very failure this
+# tripwire exists to catch, one level down, so the empty case is made loud too.
+_stubs=("$SHIMDIR"/remote-bin/*)
+[[ -e "${_stubs[0]}" ]] || { echo "tests_guard: remote-bin/ is empty — the base-dir tripwire would be checking nothing" >&2; exit 2; }
+for _t in "${_stubs[@]##*/}" ssh; do
+  if PATH="$_rbase" command -v "$_t" >/dev/null 2>&1; then
+    echo "tests_guard: the fake remote base dir resolves '$_t' — the fixture no longer controls whether that tool exists on the far side" >&2
+    exit 2
+  fi
+done
+unset _t
+export SHIM_REMOTE_BASE="$_rbase"
+unset _rbase _stubs
+
+chmod +x "$SHIMDIR"/launchctl "$SHIMDIR"/lsof "$SHIMDIR"/tmux "$SHIMDIR"/ioreg "$SHIMDIR"/ssh
 
 # These stubs are enabled ONLY by the hermetic teardown regression below.  They
 # record every mutating surface instead of touching the host, which lets the
@@ -825,6 +979,371 @@ for _entry in 'oc_teardown_bounded "mixed-axes"' 'oc_teardown_warden'; do
   fi
 done
 unset SHIM_ALLOW_TEARDOWN SHIM_TEARDOWN_LOG TEST_HOME
+
+# ── 19) T-e1dd: cross_machine's preflight — prod-host guard + gate ORDERING ───
+#
+# cross_machine.sh acked destructiveness before STAGE 1 and isolation before
+# STAGE 3, with `rm -rf "$SERVER_ROOT"` in between — so the invocation printed in
+# its own header deleted the server root and was refused 141 lines later. Nothing
+# could catch it: the gates and the deletion were top-level code in a destructive
+# script, so the only way to exercise them was to run it for real.
+#
+# Everything below runs against oc_cross_machine_preflight as a FUNCTION, on a
+# throwaway $HOME (TEST_HOME) whose contents this file creates, with the recording
+# shims installed. This file makes ZERO direct calls to rm/launchctl/tmux against
+# any real resource — that is a stated requirement of the ticket, because the
+# mutants below deliberately disable the guard being tested and a test that leaned
+# on that guard for its own safety would destroy the host at exactly that moment.
+E1DD_LOG="$SHIMDIR/.teardown-log-e1dd"
+export SHIM_ALLOW_TEARDOWN=1 SHIM_TEARDOWN_LOG="$E1DD_LOG"
+
+# The known production hardware UUID, read from the lib rather than duplicated —
+# a second copy of this constant would be a drift site of exactly the kind the
+# port literal already taught us about (T-b76b).
+PROD_UUID="$(run_snippet 'printf "UUID=%s\n" "${OC_PROD_HOST_HW_UUIDS[0]}"' >/dev/null; grep '^UUID=' "$GLOG" | cut -d= -f2)"
+[[ -n "$PROD_UUID" ]] || bad "could not read OC_PROD_HOST_HW_UUIDS from the lib — the prod-host identity guard has no pinned station"
+DISPOSABLE_UUID="11111111-2222-3333-4444-555555555555"
+
+# e1dd_home KIND — build a throwaway $HOME. KIND: clean | residue
+e1dd_home() {
+  local kind="$1" h="$SHIMDIR/e1dd-home-$1"
+  rm -rf "$h" 2>/dev/null || true          # shim rm: recorded, never touches the host
+  mkdir -p "$h/Library/LaunchAgents" "$h/backups" "$h/bin"
+  printf '#!/bin/sh\nexit 0\n' > "$h/bin/ocserver"; chmod +x "$h/bin/ocserver"
+  [[ "$kind" == "residue" ]] && mkdir -p "$h/.officraft/server/data"
+  printf '%s' "$h"
+}
+
+# e1dd_pre HOME BODY — run BODY with the preflight's required globals wired to a
+# throwaway home. Both acks and a disposable machine identity default ON, so each
+# case turns exactly ONE thing off.
+e1dd_pre() {
+  local home="$1" body="$2"
+  : > "$E1DD_LOG"
+  # `-` not `:-` on the UUID vars: an EMPTY value is a case in its own right (the
+  # "cannot read a hardware UUID, identity check has gone dark" path), and `:-`
+  # would silently substitute the default and make that case inexpressible.
+  TEST_HOME="$home" OC_CROSS_MACHINE_YES="${E1DD_YES:-1}" \
+  REQUIRE_ISOLATION_CONFIRMED="${E1DD_ISO:-1}" SHIM_HW_UUID="${E1DD_UUID-$DISPOSABLE_UUID}" \
+  SHIM_REMOTE_HW="${E1DD_REMOTE_HW-$DISPOSABLE_UUID}" \
+  SHIM_REMOTE_SERVER_TREE="${E1DD_REMOTE_TREE:-0}" SHIM_SSH_FAIL="${E1DD_SSH_FAIL:-0}" \
+  SHIM_SSH_SILENT="${E1DD_SSH_SILENT:-0}" SHIM_REMOTE_WARDEN="${E1DD_REMOTE_WARDEN:-0}" \
+  SHIM_REMOTE_AGENTS="${E1DD_REMOTE_AGENTS:-0}" SHIM_SSH_NOISE="${E1DD_SSH_NOISE:-}" \
+  SHIM_REMOTE_TOOLS="${E1DD_REMOTE_TOOLS:-all}" \
+  SHIM_REMOTE_HOME="$SHIMDIR/remote-home-$$-${E1DD_REMOTE_TREE:-0}" \
+  SHIM_WARDEN=0 SHIM_LISTEN_PORTS="" SHIM_SESSIONS="" \
+  OC_CLAUDE_BIN="$home/bin/ocserver" run_snippet '
+    SECOND_MACHINE="a-disposable-relocate-target"
+    HOME_DIR="$HOME"; GUI="gui/501"; BACKUP_DIR="$HOME/backups"
+    OC_ROOT="$HOME/.officraft"; SERVER_ROOT="${OC_SERVER_ROOT:-$OC_ROOT/server}"
+    DB_PATH="$SERVER_ROOT/data/officraft.db"; OCSERVER="$HOME/bin/ocserver"
+    OCWARDEN="$(command -v ocwarden)"; TMUX_SOCKET_LOCAL="$OC_CANONICAL_TMUX_SOCKET"
+    SERVE_LABEL="com.officraft.serve"; AUTODEPLOY_LABEL="com.officraft.autodeploy"
+    TUNNEL_LABEL="com.officraft.tunnel"; WARDEN_LABEL="com.officraft.ocwarden"
+    '"$body"
+}
+
+H_CLEAN="$(e1dd_home clean)"; H_RESIDUE="$(e1dd_home residue)"
+
+# 19a) DETECTION — the two questions, asked separately.
+rc="$(TEST_HOME="$H_CLEAN" SHIM_HW_UUID="$PROD_UUID" \
+      run_snippet 'oc_detect_prod_host | grep -q "^identity:"')"
+check "identity guard fires on a known production hardware UUID (even with a clean disk)" "0" "$rc"
+rc="$(TEST_HOME="$H_RESIDUE" SHIM_HW_UUID="$DISPOSABLE_UUID" \
+      run_snippet 'oc_detect_prod_host | grep -q "^residue:"')"
+check "residue guard fires on an existing server tree (even on an unknown machine)" "0" "$rc"
+rc="$(TEST_HOME="$H_CLEAN" SHIM_HW_UUID="$DISPOSABLE_UUID" \
+      run_snippet 'out="$(oc_detect_prod_host)"; [[ -z "$out" ]]')"
+check "detection is EMPTY on a disposable machine with no server tree" "0" "$rc"
+
+# The case the pre-T-e1dd shape could not see, and the reason the identity guard
+# exists at all: a production station whose server is STOPPED and whose disk is
+# still bare (freshly provisioned) — every liveness signal silent.
+rc="$(TEST_HOME="$H_CLEAN" SHIM_HW_UUID="$PROD_UUID" SHIM_WARDEN=0 SHIM_LISTEN_PORTS="" SHIM_SESSIONS="" \
+      run_snippet 'OC_NS=""; oc_live_fleet_guard && oc_detect_prod_host | grep -q "^identity:"')"
+check "a production station with NOTHING running is still recognised as production" "0" "$rc"
+
+# 19a') ADDRESSING — the guard must not be steerable by OC_SERVER_ROOT. That env
+# is what the teardown deletes; if the detector derived its paths from it, the
+# override would aim the guard at an empty directory while the deletion still
+# landed on the real tree. This is the difference between a guard and a flag.
+rc="$(TEST_HOME="$H_RESIDUE" OC_SERVER_ROOT="$SHIMDIR/decoy" SHIM_HW_UUID="$DISPOSABLE_UUID" \
+      run_snippet 'SERVER_ROOT="$OC_SERVER_ROOT"; oc_detect_prod_host | grep -q "^residue:"')"
+check "OC_SERVER_ROOT cannot steer the prod-host guard away from the real tree" "0" "$rc"
+
+# 19b) THE GATE — refusals happen, and they happen BEFORE any mutation. Each case
+#      runs the REAL preflight → teardown chain; the recorder proves how far
+#      execution actually got.
+e1dd_gate() { # e1dd_gate DESC HOME MARKER
+  local desc="$1" home="$2" marker="$3"
+  local rc; rc="$(e1dd_pre "$home" 'oc_cross_machine_preflight
+    oc_teardown_bounded "e1dd-should-not-reach"')"
+  [[ "$rc" != "0" ]] && ok "$desc → refuses (rc=$rc)" || bad "$desc → should refuse, returned 0"
+  grep -q "$marker" "$GLOG" && ok "$desc → refusal names $marker" \
+    || bad "$desc → refusal lacks $marker (got: $(tr '\n' '|' < "$GLOG" | tail -c 300))"
+  local mut; mut="$(grep -cE 'launchctl bootout|^rm <' "$E1DD_LOG" 2>/dev/null || true)"
+  [[ "${mut:-0}" == "0" ]] && ok "$desc → nothing was booted out or deleted first" \
+    || bad "$desc → mutated ${mut} resource(s) BEFORE refusing (log: $(tr '\n' '|' < "$E1DD_LOG"))"
+}
+
+E1DD_ISO=0 e1dd_gate "missing isolation ack" "$H_CLEAN" "REQUIRE_ISOLATION_CONFIRMED"
+E1DD_YES=0 e1dd_gate "missing destructiveness ack" "$H_CLEAN" "DESTRUCTIVE"
+E1DD_UUID="$PROD_UUID" e1dd_gate "a known production station" "$H_CLEAN" "PROD-HOST GUARD (identity)"
+e1dd_gate "a host carrying a server tree" "$H_RESIDUE" "PROD-HOST GUARD (residue)"
+
+# Both acks set is the maximum an operator can assert. It must not be enough on a
+# production station — otherwise the guard is advisory and this ticket's failure
+# mode is one env var away from coming back.
+rc="$(E1DD_UUID="$PROD_UUID" e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight')"
+[[ "$rc" != "0" ]] && ok "both acks set still cannot run on a known production station (rc=$rc)" \
+  || bad "both acks set BYPASSED the identity guard — the guard is only advisory"
+
+# 19b') WHAT EACH REFUSAL MAY SAY. These two are opposites on purpose:
+#   • the RESIDUE refusal MUST offer a way forward — its most likely reader is
+#     someone re-running on their own throwaway VM, and a refusal that only says
+#     "no" reads as a broken tool, which is how workarounds get invented.
+#   • the IDENTITY refusal must NEVER name a way to clear the obstacle. Its
+#     reader is standing on a production station; "delete this and retry" IS the
+#     disaster this whole ticket is about.
+e1dd_pre "$H_RESIDUE" 'oc_cross_machine_preflight' >/dev/null
+if grep -Eq 'PROD-HOST GUARD \(residue\).*(rebuild|delete)' "$GLOG"; then
+  ok "the residue refusal tells the operator how to proceed"
+else
+  bad "the residue refusal gives no way forward — it will read as a broken tool (got: $(tr '\n' '|' < "$GLOG" | tail -c 300))"
+fi
+E1DD_UUID="$PROD_UUID" e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight' >/dev/null
+# The pattern hunts for an INSTRUCTION TO THE READER, not for the word "delete":
+# the message is allowed — required, even — to say what the suite deletes. What it
+# must never do is tell the person standing on that station what to remove or
+# which flag to set in order to continue.
+if grep -Eqi 'PROD-HOST GUARD \(identity\).*(rm -rf|delete (\$?HOME|~|the tree|it) |set [A-Z_]+=1|bypass|--force|override this|skip this)' "$GLOG"; then
+  bad "the identity refusal tells someone standing on a production station how to clear the obstacle: $(grep -i 'identity' "$GLOG" | tail -c 300)"
+else
+  ok "the identity refusal offers no way to clear it — only 'run somewhere else'"
+fi
+# The REMOTE guard has its own three messages and the same rule applies, per
+# branch. This case is deliberately the ambiguous one — a known station that is
+# ALSO running its warden — because the danger is branch ORDER: if liveness were
+# checked first, a machine known by hardware UUID to be production would be handed
+# the liveness message's "retire it yourself" remedy.
+E1DD_REMOTE_HW="$PROD_UUID" E1DD_REMOTE_WARDEN=1 \
+  e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight' >/dev/null
+if grep -q 'PROD-HOST GUARD (remote): the second machine .* is a known production' "$GLOG"; then
+  ok "a production SECOND_MACHINE that is also live gets the IDENTITY refusal, not the liveness one"
+else
+  bad "the liveness branch preempted identity on a known production station — that message tells its reader how to clear the obstacle (got: $(tr '\n' '|' < "$GLOG" | tail -c 300))"
+fi
+if grep -Eqi 'is a known production officraft station.*(retire it yourself|launchctl bootout|clear ~/\.officraft)' "$GLOG"; then
+  bad "the remote identity refusal names a way to clear the obstacle on a production station"
+else
+  ok "the remote identity refusal offers no way to clear it either"
+fi
+
+# 19b'') THE SECOND MACHINE gets three questions of its own. STAGE 5b deletes its
+# ENTIRE ~/.officraft — more than this suite deletes locally — so guarding only
+# the local host leaves the cheaper mistake available: from a genuinely clean
+# throwaway VM, naming a production station as SECOND_MACHINE passes every local
+# gate. The refusal must also happen HERE, in the preflight, not at STAGE 5b,
+# which is after the local host has been torn down and reinstalled.
+E1DD_REMOTE_HW="$PROD_UUID" e1dd_gate "a production SECOND_MACHINE" "$H_CLEAN" "PROD-HOST GUARD (remote)"
+E1DD_REMOTE_TREE=1 e1dd_gate "a SECOND_MACHINE carrying a server tree" "$H_CLEAN" "PROD-HOST GUARD (remote)"
+
+E1DD_REMOTE_WARDEN=1 e1dd_gate "a SECOND_MACHINE running a warden" "$H_CLEAN" "live fleet node"
+# Agents outlive their warden (booted out for maintenance, crashed, launchd gave
+# up, started by hand). STAGE 5b kill-sessions them explicitly, so warden
+# registration alone is a guard that looks complete and is not.
+E1DD_REMOTE_AGENTS=1 e1dd_gate "a SECOND_MACHINE with live agent sessions but no warden" "$H_CLEAN" "agents are running there right now"
+
+# MARKER DILUTION. A remote rc file that prints a marker-shaped line lands BEFORE
+# the probe's own output, so "take the first/any match" would read the wrong
+# answer. Every marker is counted, and more than one answer to a question means
+# the probe cannot be trusted — including for `hw=`, where a wrong-but-non-empty
+# value would ALSO suppress the go-dark warning.
+E1DD_REMOTE_HW="$PROD_UUID" E1DD_SSH_NOISE="hw=not-a-real-uuid" \
+  e1dd_gate "a probe diluted by a stray hw= line" "$H_CLEAN" "did not come back with exactly one answer"
+E1DD_REMOTE_TREE=1 E1DD_SSH_NOISE="server_tree=0" \
+  e1dd_gate "a probe diluted by a stray server_tree= line" "$H_CLEAN" "did not come back with exactly one answer"
+
+# …but ordinary ssh chatter is NOT marker-shaped and must be tolerated. A guard
+# that refused every host emitting a known-hosts warning would be turned off
+# within a day, which is a slower way of having no guard.
+E1DD_SSH_NOISE="Warning: Permanently added 'tgt' (ED25519) to the list of known hosts." \
+  e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight' >/dev/null
+grep -q 'prod-host guard OK (remote)' "$GLOG" \
+  && ok "ordinary ssh chatter does not trip the marker parse" \
+  || bad "a known-hosts warning made the remote probe unparseable — every real host emits that (got: $(tr '\n' '|' < "$GLOG" | tail -c 200))"
+
+# Unreachable second machine → fail CLOSED. A host whose identity cannot be
+# established is not thereby safe to wipe; "ssh failed, carry on" would be the
+# same shape as the bug this ticket fixes.
+E1DD_SSH_FAIL=1 e1dd_gate "an unreachable SECOND_MACHINE" "$H_CLEAN" "could not establish what machine"
+
+# …and the quieter version of the same thing: ssh exits 0 having run nothing
+# (ForceCommand, restricted shell, an rc file that returns early). An empty probe
+# is NOT a clean host. This is the failure mode the first version of this guard
+# got wrong, and it is the one that looks exactly like success.
+E1DD_SSH_SILENT=1 e1dd_gate "a SECOND_MACHINE whose probe returned nothing" "$H_CLEAN" "could not establish what machine"
+
+# The ssh failure message must carry ssh's own diagnosis — "fix ssh access" is
+# useless standing next to "Permission denied (publickey)".
+E1DD_SSH_FAIL=1 e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight' >/dev/null
+grep -q 'ssh said:.*Operation timed out' "$GLOG" \
+  && ok "the unreachable-host refusal repeats what ssh actually said" \
+  || bad "the unreachable-host refusal swallowed ssh's diagnosis (got: $(tr '\n' '|' < "$GLOG" | tail -c 200))"
+
+# GO-DARK WARNINGS. A check that cannot run must SAY so; the danger is the "guard
+# OK" line continuing to claim "not a known production station" when the identity
+# question was never actually asked.
+E1DD_UUID="" e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight' >/dev/null
+grep -q 'IDENTITY check is INACTIVE' "$GLOG" \
+  && ok "an unreadable local hardware UUID is announced, not silently skipped" \
+  || bad "the local identity check went dark silently (got: $(tr '\n' '|' < "$GLOG" | tail -c 200))"
+E1DD_REMOTE_HW="" e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight' >/dev/null
+grep -q 'remote IDENTITY check is INACTIVE' "$GLOG" \
+  && ok "an unreadable remote hardware UUID is announced, not silently skipped" \
+  || bad "the remote identity check went dark silently (got: $(tr '\n' '|' < "$GLOG" | tail -c 200))"
+
+# The probe must read the REMOTE machine's identity, not this one's. A guard that
+# looked at the local UUID would pass every case above and still be looking at the
+# wrong machine — which is the entire bug this remote check was added for.
+E1DD_UUID="$PROD_UUID" E1DD_REMOTE_HW="$DISPOSABLE_UUID" \
+  e1dd_pre "$H_CLEAN" 'oc_prod_host_remote_guard "$SECOND_MACHINE"' >/dev/null
+grep -q 'prod-host guard OK (remote)' "$GLOG" \
+  && ok "the remote guard reads the REMOTE uuid (a production LOCAL uuid does not trip it)" \
+  || bad "the remote guard tripped on the LOCAL machine's identity — it is probing the wrong host"
+
+# A QUESTION THE FAR SIDE CANNOT ANSWER IS NOT A "NO". An ssh non-login shell has
+# no Homebrew bin dir, so `tmux` is not found there — this script's own gotcha #2,
+# and the reason every other remote command goes through the PATH-exporting
+# wrapper. A not-found tool produces no output, which for a liveness check reads
+# as "nothing running": fail-OPEN, on the default second machine.
+E1DD_REMOTE_TOOLS=notmux E1DD_REMOTE_AGENTS=1 \
+  e1dd_gate "a SECOND_MACHINE where the probe's tools are not on PATH" "$H_CLEAN" "did not come back with exactly one answer"
+# …and pin WHICH question went unanswered — ALL FOUR COUNTS, not just the one
+# that is meant to be zero. Matching `live_agents: 0` alone still passed when the
+# probe answered NOTHING AT ALL (0,0,0,0): a shim that fell silent took the whole
+# case with it and every assertion stayed green, because "refused" and "refused
+# for the intended reason" are not the same claim. Requiring the other three to
+# be 1 says the far side was alive and answering, and exactly one question could
+# not be answered — which is the only state this case is about.
+E1DD_REMOTE_TOOLS=notmux E1DD_REMOTE_AGENTS=1 \
+  e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight' >/dev/null
+if grep -q 'hw: 1, server_tree: 1, live_warden: 1, live_agents: 0' "$GLOG"; then
+  ok "the notmux refusal is the LIVENESS question going unanswered, with the other three answered"
+else
+  bad "the notmux case refused for the wrong reason — either tmux was answerable after all, or the probe answered nothing at all (expected 'hw: 1, server_tree: 1, live_warden: 1, live_agents: 0'; got: $(tr '\n' '|' < "$GLOG" | tail -c 300))"
+fi
+
+# BRANCH ORDER, second half. Only the liveness message names a remedy, so it must
+# come LAST — a host with BOTH a server tree and a running warden is more
+# incriminating than one with either alone, and must not be handed the more
+# permissive message. This is the shape of an UNLISTED production server, which is
+# exactly the case residue exists to catch.
+E1DD_REMOTE_TREE=1 E1DD_REMOTE_WARDEN=1 \
+  e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight' >/dev/null
+if grep -q 'PROD-HOST GUARD (remote): the second machine .* carries an officraft server tree' "$GLOG"; then
+  ok "a SECOND_MACHINE with BOTH a server tree and a live warden gets the residue refusal, not the remedy-bearing one"
+else
+  bad "the liveness branch preempted residue — the more incriminating host got the more permissive message (got: $(tr '\n' '|' < "$GLOG" | tail -c 300))"
+fi
+
+# 19c) SENTINEL — a genuinely disposable host must still be able to run. A guard
+# that refuses everything passes every refusal test above and is useless.
+rc="$(e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight')"
+check "a disposable host with both acks PASSES the preflight" "0" "$rc"
+
+# 19c') THE ORDERING IS A PROPERTY OF cross_machine.sh, and nothing above pins it
+# there. Every assertion so far runs a preflight→teardown chain THIS FILE builds,
+# so moving the preflight call BELOW the teardown call in cross_machine.sh would
+# leave the whole section green — reinstating exactly this ticket's bug. Line
+# numbers are weak evidence in general, but this is straight-line top-level script
+# code, where source order IS execution order.
+CM="$HERE/../cross_machine.sh"
+_pre_ln="$(grep -n '^oc_cross_machine_preflight$' "$CM" | head -1 | cut -d: -f1)"
+_td_ln="$(grep -n '^oc_teardown_bounded ' "$CM" | head -1 | cut -d: -f1)"
+if [[ -z "$_pre_ln" || -z "$_td_ln" ]]; then
+  bad "cross_machine.sh no longer has a top-level oc_cross_machine_preflight and/or oc_teardown_bounded call (pre=${_pre_ln:-none} td=${_td_ln:-none}) — this ordering pin has gone blind"
+elif [[ "$_pre_ln" -lt "$_td_ln" ]]; then
+  ok "cross_machine.sh calls the preflight (line $_pre_ln) BEFORE the teardown (line $_td_ln)"
+else
+  bad "cross_machine.sh calls the teardown (line $_td_ln) before the preflight (line $_pre_ln) — this is the T-e1dd bug"
+fi
+# …and no destructive top-level statement may sit ahead of the preflight call.
+_e1dd_early_scan() { # _e1dd_early_scan FILE STOP_LINE
+  awk -v stop="$2" 'NR<stop && $0 !~ /^[[:space:]]*#/ && /(^|[^-[:alnum:]_])(rm -rf|rm -f|launchctl bootout|kill-session|kill-server|pkill|killall|oc_teardown_)/' "$1" \
+    | wc -l | tr -d ' '
+}
+_early="$(_e1dd_early_scan "$CM" "$_pre_ln")"
+check "no destructive statement in cross_machine.sh runs before the preflight" "0" "${_early:-0}"
+# CONTROL for the scan above. It is a grep-for-absence: a pattern broken by a
+# future edit produces 0 hits forever and the assertion is permanently, silently
+# green — indistinguishable from a clean file. Run the SAME function over a
+# fixture that is deliberately dirty.
+_fixture="$SHIMDIR/early-scan-fixture.sh"
+{ printf '# rm -rf /commented-out — must not count\n'
+  printf 'rm -rf /x\n'
+  printf 'launchctl bootout gui/501/com.officraft.serve\n'
+  printf 'oc_teardown_bounded "hoisted"\n'
+  printf 'oc_cross_machine_preflight\n'; } > "$_fixture"
+check "early-scan control: the scan reddens on a fixture with 3 destructive statements (and skips the comment)" \
+  "3" "$(_e1dd_early_scan "$_fixture" 5)"
+
+# 19d) MUTANTS — one edit each. Without them every assertion above could be
+# vacuously true. The mutant lib needs a tree whose ../../server resolves, because
+# the lib derives the canonical port from server/ocserverd/config.go and FATALs if
+# it cannot (same construction as the MUT-D control above).
+# e1dd_mutant NAME SED_EXPR HOME UUID [ISO_ACK]
+#
+# The ack defaults are passed EXPLICITLY, not inherited from ambient state. An
+# earlier version relied on a `E1DD_ISO=0` prefix on the CALL reaching e1dd_pre
+# through the function body — it does not, so the ack mutant ran fully acked and
+# asserted rc==0 for a configuration that already returns rc==0 unmutated. It was
+# green, and it would have stayed green with the ack check deleted outright: a
+# mutant that proves nothing is worse than no mutant, because it reads as proof.
+e1dd_mutant() {
+  local name="$1" expr="$2" home="$3" uuid="$4" iso="${5:-1}" remote_hw="${6:-$DISPOSABLE_UUID}"
+  local root="$SHIMDIR/mut-$name-tree" lib="$SHIMDIR/mut-$name-tree/e2e_test/lib/oc_lifecycle.sh"
+  mkdir -p "$root/e2e_test/lib"; ln -sfn "$HERE/../../server" "$root/server"
+  sed "$expr" "$LIB" > "$lib"
+  if cmp -s "$lib" "$LIB"; then
+    bad "MUT-$name did not change the lib — the mutation anchor moved; a vacuous mutant proves nothing"
+    return
+  fi
+  # CONTROL: the same configuration against the UNMUTATED lib must REFUSE. Without
+  # this, "the mutant proceeds" is not evidence — it is also what a configuration
+  # that was always going to proceed looks like.
+  local ctl; ctl="$(E1DD_ISO="$iso" E1DD_UUID="$uuid" E1DD_REMOTE_HW="$remote_hw" e1dd_pre "$home" 'oc_cross_machine_preflight')"
+  if [[ "$ctl" == "0" ]]; then
+    bad "MUT-$name control: the UNMUTATED lib already accepted this configuration — the mutant below proves nothing about that check"
+    return
+  fi
+  local rc; rc="$(SNIPPET_LIB="$lib" E1DD_ISO="$iso" E1DD_UUID="$uuid" E1DD_REMOTE_HW="$remote_hw" e1dd_pre "$home" 'oc_cross_machine_preflight')"
+  [[ "$rc" == "0" ]] \
+    && ok "MUT-$name: unmutated refuses (rc=$ctl), with that check removed the run PROCEEDS — the live case is pinned to it" \
+    || bad "MUT-$name: still refused (rc=$rc) — the live assertion is NOT pinned to this check (glog: $(tr '\n' '|' < "$GLOG" | tail -c 200))"
+}
+# 1. identity: drop the hardware-UUID comparison → the production-station case must go green-lit.
+# Replaced with a no-op rather than deleted: that line is the entire body of the
+# `for u in ...` loop, and deleting it leaves an empty loop body — a syntax error,
+# which makes the lib fail to load and the mutant "refuse" for the wrong reason.
+e1dd_mutant identity 's/.*identity: this machine.*/      : ;/' "$H_CLEAN" "$PROD_UUID"
+# 2. residue: drop the server-tree check → the residue case must go green-lit.
+e1dd_mutant residue 's|^  \[\[ -d "$server_root" \]\] .*$|  : ;|' "$H_RESIDUE" "$DISPOSABLE_UUID"
+# 3. the isolation ack — run UNACKED (iso=0), so the control refuses and the
+#    mutant proceeds. This is the check whose ORDER is the whole ticket.
+e1dd_mutant ack '/^  \[\[ "${REQUIRE_ISOLATION_CONFIRMED:-0}" == "1" \]\] || die \\$/,+1d' "$H_CLEAN" "$DISPOSABLE_UUID" 0
+# 4. the remote prod-host guard — a production SECOND_MACHINE must be refused.
+e1dd_mutant remote 's/^  oc_prod_host_remote_guard .*$/  : ;/' "$H_CLEAN" "$DISPOSABLE_UUID" 1 "$PROD_UUID"
+
+# 19e) This test file must not be able to destroy anything itself — the ticket's
+# hardest constraint, because the mutants above deliberately disable the guard
+# under test. Counted, not eyeballed: an absolute path or a kill-by-name dodges
+# the PATH shim and would reach the real host. Matches in THIS block's own
+# assertion strings are excluded by anchoring on a command position.
+_e1dd_direct="$(grep -cE '^[[:space:]]*(/bin/rm|/usr/bin/killall|killall|pkill)[[:space:]]' "$HERE/run.sh" || true)"
+check "this test file makes no direct call to a real destructive command" "0" "${_e1dd_direct:-0}"
+
+unset SHIM_ALLOW_TEARDOWN SHIM_TEARDOWN_LOG TEST_HOME E1DD_ISO E1DD_YES
 
 echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1
