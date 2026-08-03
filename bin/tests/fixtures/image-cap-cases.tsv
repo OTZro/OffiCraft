@@ -1,0 +1,111 @@
+# image-cap-cases.tsv — THE truth table for the theme-bundle image size caps,
+# and the only copy of those four numbers.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# The image gate is implemented TWICE, in two languages, with no compiler
+# between them:
+#
+#   server/ocserverd/avatar_bundle.go    validImageValue    — the AUTHORITY. It
+#                                        is what actually refuses a write (422).
+#   frontend/src/lib/themeBundleCore.ts  isValidImageValue  — the cockpit's copy,
+#                                        so a picked file is refused at the file
+#                                        picker instead of after a round trip.
+#
+# Before T-72da there was ONE pair of caps and the only thing tying the two
+# implementations together was two hand-written comments saying "the twin of"
+# each other. A comment is not a gate. T-72da then split the caps per purpose,
+# which doubled the number of loose numbers from two to four — so the twinning
+# is now checked rather than asserted in prose.
+#
+# A drift produces no error anywhere. It produces one of two silent lies:
+#   - cockpit cap LOWER than the server's  → the owner picks a perfectly good
+#     background and the cockpit says "invalid image"; the server would have
+#     taken it. The failure is invisible from the server side.
+#   - cockpit cap HIGHER than the server's → the cockpit accepts the file, puts
+#     it in the bundle, and the save 422s later with a message about a file the
+#     owner already believed was fine.
+#
+# So both sides are checked against THIS table rather than against each other.
+# A mock of one side inside the other's test proves only that the mock agrees
+# with itself; the table is the shared truth, and a drift NAMES THE SIDE that
+# drifted. This is the same shape as bin/tests/fixtures/doc-cap-cases.tsv.
+#
+#   server/ocserverd/image_cap_mirror_test.go   the Go half
+#   frontend/src/lib/imageCap.test.ts           the TS half
+#
+# THE RULE
+# --------
+# Two caps per purpose: the DECODED byte size, and the raw data-URI string
+# length (a cheap pre-filter that runs BEFORE the base64 decode). base64
+# inflates ~4/3, so each value-len cap sits above its decoded cap × 4/3 with
+# margin.
+#
+# The two purposes have DELIBERATELY DIFFERENT numbers and must not be tidied
+# back into one:
+#
+#   avatar   64 KiB — avatars / logo / navIcons are 30-40px glyphs in a roster
+#                     row, the top bar, or a tab. Nothing legitimate needs more,
+#                     and this is the real guard against bloating the single
+#                     custom_themes JSON row.
+#   background 512 KiB — backgrounds.canvas is stretched or tiled across the
+#                     WHOLE viewport. At 64 KiB the owner's real background read
+#                     as visibly blurry; he reported it three times. Owner ruling
+#                     2026-08-03, which overturned the T-081b decision that a
+#                     background must share the avatar cap. That decision's
+#                     premise was that both went through ONE gate, so relaxing
+#                     the background would have relaxed the avatar too — which
+#                     is exactly what the per-purpose split removes.
+#
+# The caps are read from the four `# <name><TAB><n>` lines below, so neither
+# implementation's constant is a third copy of itself.
+#
+# 🔴 THE VALUE-LEN CAPS ARE NOT INDEPENDENTLY OBSERVABLE FROM THE OUTSIDE, and
+# that is why they are on the table as declared numbers rather than as rows. A
+# data URI long enough to trip the value-len cap while carrying a VALID image
+# would decode to more than the decoded cap, so the decoded cap would refuse it
+# anyway; the pre-filter only ever changes WHICH error you get, never whether
+# you get one. It is defence in depth (refuse a pathological string before
+# allocating its decode), not a separate behaviour. What the rows below DO prove
+# about it is the direction that actually broke things: the `background-at-cap`
+# row can only pass if the background value-len cap moved with the decoded cap —
+# 512 KiB decoded is ~683 KiB encoded, so a value-len left at the avatar's
+# 96 KiB rejects it as "too long" and the decoded cap is never reached.
+#
+# cap declarations, read by both halves:
+# avatar_bytes	65536
+# avatar_value_len	98304
+# background_bytes	524288
+# background_value_len	720896
+#
+# COLUMNS  case<TAB>purpose<TAB>decoded_bytes<TAB>accepted
+#
+#   case           row name, used in failure messages
+#   purpose        avatar | logo | navicon | background — selects WHICH bundle
+#                  field the value is fed through. Both halves drive the real
+#                  validate* entry point for that field, not the bare gate, so a
+#                  cap that is raised but wired to the wrong call site still
+#                  fails here.
+#   decoded_bytes  size of the decoded PNG (a real 8-byte PNG signature followed
+#                  by zero padding — the magic-byte check is orthogonal to size
+#                  and must keep passing, or a row would go red for the wrong
+#                  reason)
+#   accepted       expected verdict: true = the field admits this value
+#
+case	purpose	decoded_bytes	accepted
+avatar-small	avatar	1024	true
+avatar-at-cap	avatar	65536	true
+avatar-one-past-cap	avatar	65537	false
+logo-at-cap	logo	65536	true
+logo-one-past-cap	logo	65537	false
+navicon-at-cap	navicon	65536	true
+navicon-one-past-cap	navicon	65537	false
+background-small	background	1024	true
+background-at-avatar-cap	background	65536	true
+background-one-past-avatar-cap	background	65537	true
+background-well-past-avatar-cap	background	262144	true
+background-at-cap	background	524288	true
+background-one-past-cap	background	524289	false
+avatar-at-background-cap	avatar	524288	false
+logo-at-background-cap	logo	524288	false
+navicon-at-background-cap	navicon	524288	false
