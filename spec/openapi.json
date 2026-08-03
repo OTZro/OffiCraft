@@ -3874,9 +3874,7 @@
           "tasks_open_total",
           "tasks_detail_chars",
           "cards_waiting",
-          "cards_answered_recent",
-          "roster_chars",
-          "machines_chars"
+          "cards_answered_recent"
         ],
         "title": "ResumeOverviewDTO",
         "additionalProperties": false,
@@ -11681,7 +11679,7 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Bounded LIGHT wake snapshot for the caller (recent chat + light task rows + size overview)."
+        "summary": "Bounded LIGHT wake snapshot for the caller (what it carries is enumerated in the description, not here)."
       }
     },
     "/api/resume-summary-size": {

@@ -740,9 +740,11 @@ type resumeRosterMemberDTO struct {
 	// "who is this" and "how long will they exist" are the same question.
 	Kind     string `json:"kind"`
 	RoleName string `json:"role_name"`
-	// Duty is the role's own definition text, HARD-TRUNCATED to one short
-	// line (resumeDutyPreview). Members carry it; contractors have no role
-	// and leave it "".
+	// Duty is the role's own definition text, HARD-TRUNCATED at
+	// resumeDutyPreview RUNES — a flat cap on the whole markdown, headings
+	// and newlines included. It is NOT one line and NOT a summary: see
+	// dutyText, which deliberately makes no choice about WHICH content to
+	// show. Members carry it; contractors have no role and leave it "".
 	Duty string `json:"duty"`
 	// CurrentTask is the TITLE of the one task a contractor is bound to,
 	// HARD-TRUNCATED (resumeTaskTitlePreview) — owner ruling rc-a02d8bc7fe23:

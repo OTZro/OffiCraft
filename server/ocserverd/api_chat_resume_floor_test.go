@@ -235,9 +235,10 @@ func TestResumeDutyIsCappedAndMarked(t *testing.T) {
 // "members must not be given a task title by a lookup that can find one". It
 // does NOT guard against someone switching to the executor-based lookup for
 // contractors only — that variant keeps every assertion here green while
-// quietly introducing a full task-table scan (task.executor_id has no index)
-// on the boot path. That risk is held by the comment on contractorTaskTitle
-// and by review, not by this test.
+// quietly MULTIPLYING the full task-table scans (task.executor_id has no
+// index) on the boot path by the contractor count; the path already runs two
+// of them for the caller's own tasks. That risk is held by the comment on
+// contractorTaskTitle and by review, not by this test.
 func TestResumeContractorCarriesTaskTitleAndMemberDoesNot(t *testing.T) {
 	s := floorTestServer(t)
 	longTitle := strings.Repeat("務", resumeTaskTitlePreview+60)
@@ -250,12 +251,17 @@ func TestResumeContractorCarriesTaskTitleAndMemberDoesNot(t *testing.T) {
 	}
 	taskID := "t-floor-1"
 	putFloorMember(t, s, Member{ID: "ow-charlie", Name: "O-77", Kind: KindOutsource, LinkedTaskID: &taskID})
-	// ⚠️ The member below deliberately carries a task binding too. Without it
-	// this test has NO discriminating power for the member half: a member has
-	// no outsource row, so "current_task is empty" comes out true even when the
-	// code wrongly asks for one. Verified by mutant — hoisting the
-	// contractorTaskTitle call out of the contractor branch left every test
-	// green until this binding was added, and now turns this one red.
+	// ⚠️ The member below deliberately carries a task binding too — but be
+	// precise about what it buys, because the obvious claim is FALSE and was
+	// caught by review re-running the mutant by hand: hoisting the
+	// contractorTaskTitle call out of the contractor branch stays GREEN with or
+	// without this binding, because that lookup goes through GetOutsourceWorker
+	// (`WHERE id = ? AND kind = 'outsource'`), which a member row never matches.
+	// What this binding DOES buy is discriminating power against the realistic
+	// degradation named in the header: resolving the title by executor
+	// (ListOpenTasksByExecutor) AND filling it for everyone. Without a member
+	// task row sitting on the executor side, that variant would also come out
+	// empty here and stay green.
 	memberTaskID := "t-floor-2"
 	if err := s.dal.PutTask(Task{
 		ID: memberTaskID, TypeKey: "tm-x", Title: "成員自己的任務標題", Status: TaskStatusInProgress,

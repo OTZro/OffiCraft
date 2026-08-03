@@ -877,7 +877,11 @@ func (s *apiServer) resumeSnapshotParts(actor string) ([]chatMessageDTO, []resum
 //   - ONE role lookup per DISTINCT role, deduped below — not per member
 //   - contractors only: GetOutsourceWorker + GetTask, both POINT queries.
 //     Deliberately not ListOpenTasksByExecutor: task.executor_id carries no
-//     index, so that path is a full task-table scan per contractor.
+//     index, so that path is a full task-table scan per contractor. State the
+//     cost accurately: the boot path ALREADY runs two such scans for the
+//     caller's own tasks (resumeTasksFor), so the rejected variant would not
+//     introduce the scan — it would MULTIPLY an existing one by the contractor
+//     count, which is why it is still worth refusing.
 func (s *apiServer) resumeFloorParts(actor string) ([]resumeRosterMemberDTO, resumeMachinesDTO, int, int, error) {
 	members, err := s.dal.ListMembersIncludingOutsource()
 	if err != nil {
@@ -922,7 +926,17 @@ func (s *apiServer) resumeFloorParts(actor string) ([]resumeRosterMemberDTO, res
 	staff := []resumeRosterMemberDTO{}
 	contractors := []resumeRosterMemberDTO{}
 	machines := []resumeMachineDTO{}
+	// "Where am I" is answered from the row this loop already holds, not by a
+	// second point query for the caller. Captured BEFORE the roster-status and
+	// warden filters below, deliberately: this route admits warden tokens
+	// (Requires: principalMachine) and a just-deactivated caller, and both must
+	// keep getting a real answer for their own machine — filtering first would
+	// silently return "" for exactly those callers.
+	callerHost := ""
 	for _, m := range members {
+		if m.ID == actor {
+			callerHost = s.observedHost(m)
+		}
 		if m.RosterStatus != RosterStatusActive {
 			continue
 		}
@@ -964,7 +978,7 @@ func (s *apiServer) resumeFloorParts(actor string) ([]resumeRosterMemberDTO, res
 		// disagree inside one snapshot. Never a hostname: our hosts report
 		// the same name as each other, so a hostname-derived answer picks
 		// the wrong box silently.
-		YouAreOn: s.callerMachine(actor),
+		YouAreOn: callerHost,
 	}
 	return roster, machinesBlock, rosterChars(roster), machinesChars(machinesBlock), nil
 }
@@ -984,19 +998,6 @@ func (s *apiServer) contractorTaskTitle(workerID string) string {
 		return ""
 	}
 	return truncateRunes(t.Title, resumeTaskTitlePreview)
-}
-
-// callerMachine resolves which machine the caller is standing on, using the
-// same observed binding the roster rows carry.
-func (s *apiServer) callerMachine(actor string) string {
-	if actor == "" {
-		return ""
-	}
-	m, err := s.dal.GetMember(actor)
-	if err != nil || m == nil {
-		return ""
-	}
-	return s.observedHost(*m)
 }
 
 // dutyText is the role's own definition text, capped at resumeDutyPreview

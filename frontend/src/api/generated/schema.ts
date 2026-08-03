@@ -2143,7 +2143,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Bounded LIGHT wake snapshot for the caller (recent chat + light task rows + size overview).
+         * Bounded LIGHT wake snapshot for the caller (what it carries is enumerated in the description, not here).
          * @description A BOUNDED, deterministic wake snapshot for the caller (``resume_summary`` MCP
          *     tool, zero params; ``GET /api/resume-summary``).
          *
@@ -5738,9 +5738,9 @@ export interface components {
             /** Chat Count */
             chat_count: number;
             /** Machines Chars */
-            machines_chars: number;
+            machines_chars?: number;
             /** Roster Chars */
-            roster_chars: number;
+            roster_chars?: number;
             /** Tasks Detail Chars */
             tasks_detail_chars: number;
             /** Tasks Open Total */
@@ -5836,7 +5836,8 @@ export interface components {
          *     ``overview`` counts/sizes a full ``resume_summary`` would report (assembled
          *     through the shared server path, so they cannot drift) plus
          *     ``estimated_total_chars`` — a derived single number (the snapshot's chat body
-         *     chars plus the plan text its task rows omit) the boot threshold gates on — and
+         *     chars, the plan text its task rows omit, and the roster + machine blocks it
+         *     carries) the boot threshold gates on — and
          *     a fixed guidance ``note``. It carries NO chat bodies and NO task rows: peeking
          *     it costs a few hundred bytes, so a waking agent can size ``resume_summary``
          *     BEFORE deciding whether to pull it into its own context or hand the pull to a
