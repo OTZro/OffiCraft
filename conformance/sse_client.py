@@ -190,9 +190,12 @@ class SSEConnection:
         protects will not be caught here, and the row it poisons will go GREEN —
         the vacuous kind of green. Do not "test" that case and read the green as
         reassurance; it carries no information. The guard for that direction is
-        binding each observed frame to the IDENTITY of the subject the row just
-        triggered (see the ``member`` row of test_every_closed_topic_emits),
-        because a stale frame cannot carry the value that write just set.
+        binding each observed frame to the VALUE the row's own write just set
+        (see the ``member`` row of test_every_closed_topic_emits), because the
+        payload is an eager snapshot taken inside hub.Publish and a frame
+        published earlier cannot carry a value written later. NOT the subject:
+        the polluting frame is usually about the SAME entity, so binding to the
+        subject id proves nothing (measured — see that row's own note).
 
         ⚠️ KNOWN FALSE-RED WAVEFORM (measured with a fake queue, no server —
         review round 2). The budget is deliberate, not a bug, but know where to

@@ -84,13 +84,36 @@ _SPEC_TOPIC_ROW = re.compile(r"^\|\s*`([a-z_]+)`\s*\|", re.M)
 
 # The §3.1 section delimiters. Located with str.find + an EXPLICIT not-found
 # check, never with str.split: ``"x".split("nope", 1)`` returns ``["x"]``, so
-# ``spec.split("### 3.1", 1)[-1].split("### 3.2", 1)[0]`` degrades to THE WHOLE
-# DOCUMENT the moment either heading is renamed or moved — and this document
+# ``spec.split("### 3.1", 1)[-1].split("### 3.2", 1)[0]`` silently degrades to a
+# DIFFERENT SLICE the moment either heading is renamed or moved — and the
+# degraded slice still parses out a set that looks perfectly healthy, so the
+# confrontation below guards nothing and nothing goes red.
+#
+# 🔴 WHY it stays "healthy" — the real mechanism, because the explanation that
+# used to sit here was wrong and wrong explanations get quoted. It said,
+# verbatim: the parse "degrades to THE WHOLE DOCUMENT" and "this document
 # happens to contain exactly the same 12 topic rows elsewhere (§4.1's audience
-# table), so the degraded parse returns a set that looks perfectly healthy and
-# the confrontation below silently guards nothing. Fail-loud is the whole point:
-# a parser for a machine-read contract must never have a "quietly parsed
-# something else" branch.
+# table)". **Both halves are false** (re-measured independently, pure-function,
+# no server):
+#   * losing "### 3.1" yields start-of-file → §3.2 — a ~9.9k-char SLICE, not the
+#     34207-char document; losing "### 3.2" yields §3.1 → EOF. Neither is
+#     "the whole document".
+#   * §4.1 is irrelevant: it begins at char 11089, i.e. PAST the end of that
+#     ~9.9k-char slice, so the degraded parse never reads it. It also lists only
+#     7 topics, which cannot produce the full set. Deleting §4.1 outright leaves
+#     the degraded answer BYTE-IDENTICAL.
+# The actual mechanism is more general, and worse: **the end delimiter sits
+# AFTER the target table, so when the start delimiter goes missing the degraded
+# slice STILL FULLY CONTAINS the very table it was supposed to bound.** The
+# answer is right because the table is still inside the slice — not because a
+# second copy of it exists somewhere else. Generalise it: ANY split-style parser
+# that bounds its target with a heading located AFTER that target will silently
+# return the correct answer when its START delimiter disappears.
+# (This matters operationally: anyone who believed the §4.1 story would try to
+# reduce the risk by cleaning up §4.1. Measured — that changes nothing.)
+#
+# Fail-loud is the whole point: a parser for a machine-read contract must never
+# have a "quietly parsed something else" branch.
 _SPEC_TOPIC_SECTION_START = "### 3.1"
 _SPEC_TOPIC_SECTION_END = "### 3.2"
 
@@ -112,9 +135,10 @@ def _parse_closed_topics(spec: str, source: str = "<spec/sse.md>") -> set[str]:
         raise SpecTopicParseError(
             f"{source}: heading {_SPEC_TOPIC_SECTION_START!r} not found — the "
             "closed topic set is READ from that section at run time, so a "
-            "renamed/moved heading must fail here, not fall back to parsing "
-            "the whole document (which yields a plausible-looking set and "
-            "makes every topic guard vacuous)."
+            "renamed/moved heading must fail here, not fall back to slicing "
+            "from the start of the file (that slice still CONTAINS the §3.1 "
+            "table, so it yields the right-looking set for the wrong reason "
+            "and makes every topic guard vacuous)."
         )
     end = spec.find(_SPEC_TOPIC_SECTION_END, start + len(_SPEC_TOPIC_SECTION_START))
     if end == -1:
@@ -167,14 +191,28 @@ def test_spec_topic_parser_fails_loud() -> None:
     the section it reads is not where it expects it.
 
     This is the anti-vacuity guard for the guard: the previous ``str.split``
-    form returned the whole document on a missing heading, and because §4.1's
-    audience table lists the same 12 topics, the degraded parse produced the
-    RIGHT ANSWER FOR THE WRONG REASON. Every case below is asserted to be a
-    genuine mutation (the mutated text no longer contains the delimiter it is
-    supposed to have lost — a `### 3.1` → `### 3.1bis` rename would still
-    CONTAIN `### 3.1` and make these cases pass without testing anything).
+    form produced the RIGHT ANSWER FOR THE WRONG REASON on a missing heading.
+
+    🔴 The reason stated here before was wrong, and is quoted so it is not
+    re-used: it claimed the split "returned the whole document on a missing
+    heading, and because §4.1's audience table lists the same 12 topics, the
+    degraded parse produced the right answer". Re-measured: the degraded slice
+    is ~9.9k chars (the file is 34207), §4.1 starts at char 11089 and is never
+    reached, §4.1 lists only 7 topics, and deleting §4.1 leaves the degraded
+    answer identical. See the note on the delimiters above for the real
+    mechanism — the end delimiter sits AFTER the table, so a slice that loses
+    its start delimiter still contains the whole table.
+
+    Every case below is asserted to be a genuine mutation (the mutated text no
+    longer contains the delimiter it is supposed to have lost — a `### 3.1` →
+    `### 3.1bis` rename would still CONTAIN `### 3.1` and make these cases pass
+    without testing anything).
     """
     real = (HERE.parent / "spec" / "sse.md").read_text(encoding="utf-8")
+    # Deliberately a floor, not the exact count: the closed set grows (it was 12
+    # when this was written, 13 today), and a hard-coded size here would be one
+    # more stale number to chase — the EQUALITY that pins the set lives in
+    # test_every_closed_topic_emits, this is only a positive control.
     assert len(_parse_closed_topics(real)) >= 12, "positive control: the real spec parses"
 
     no_start = real.replace(_SPEC_TOPIC_SECTION_START, "### 3.9 (heading moved)")
