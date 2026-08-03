@@ -1310,7 +1310,7 @@
         "type": "object"
       },
       "InsightDTO": {
-        "description": "The per-role INSIGHT doc (T-3809): the judgement calls and trade-offs this role\nkeeps reaching for. Third block of the role journal, alongside Duty (the role\ndefinition) and Learning (the lessons doc) — the owner asked for it because\ninsight and learning had been sharing one document.\n\n``role_key`` scopes the doc to a role; there is NO ``task_type`` axis (that is\nthe lessons key, and it is deliberately absent here). Unlike lessons there is\nalso NO file seed, so ``text`` is genuinely EMPTY until the role writes — and\n``is_default`` therefore answers \"this role has not moved anything over yet\".\n\nInsight is SEPARATE, not private. READ is unrestricted: any authenticated\nidentity may read ANY role's insight — the same floor Duty and Learning sit on.",
+        "description": "The per-role INSIGHT doc (T-3809): the judgement calls and trade-offs this role\nkeeps reaching for. Third block of the role journal, alongside Duty (the role\ndefinition) and Learning (the lessons doc) — the owner asked for it because\ninsight and learning had been sharing one document.\n\n``role_key`` scopes the doc to a role; there is NO ``task_type`` axis (that is\nthe lessons key, and it is deliberately absent here). Since T-e1e3 a role MAY\nhave a factory seed, and unlike lessons that seed is PER-ROLE\n(``seeds/insight_<role_key>.md``) rather than one shared file — the assistant's\njudgement calls would be wrong for any other role. A role with no seed file\nstill reads genuinely EMPTY until it writes.\n\nInsight is SEPARATE, not private. READ is unrestricted: any authenticated\nidentity may read ANY role's insight — the same floor Duty and Learning sit on.",
         "properties": {
           "cap_chars": {
             "default": 0,
@@ -1326,7 +1326,7 @@
           },
           "is_default": {
             "default": true,
-            "description": "True while this role has never written its insight doc (or reset it). There is no seed to fall back to, so is_default and an empty `text` mean the same thing here — that equivalence is what makes \"has this role moved anything over?\" answerable at all.",
+            "description": "True while this role has never written its own insight doc (or reset it). It does NOT imply an empty `text`: a role that ships with a factory seed (`seeds/insight_<role_key>.md`) reads that seed with is_default=true, while a role without one reads \"\". Read this field — not the emptiness of `text` — to tell factory wording apart from something a person wrote.",
             "title": "Is Default",
             "type": "boolean"
           },
@@ -8177,7 +8177,7 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Read a per-role insight doc (per role_key; no seed)."
+        "summary": "Read a per-role insight doc (per role_key; may have a PER-ROLE factory seed)."
       },
       "post": {
         "description": "Whole-doc replace of a PER-ROLE insight doc (T-3809).\n\nPer-role WRITE authz (load-bearing, and the ONLY thing this release narrows): a\ncaller BELOW admin capability may write ONLY its OWN member's ``role_key`` — the\nserver reads that role_key from the member row keyed by the VERIFIED token\n``sub``, NEVER from a client field; a mismatch (or a member with no role, which\nincludes every outsource worker) is a flat 403 whose message names ``insight``.\nA caller at or above the ``admin_agent`` principal class (the owner's\n``scope=\"owner\"`` token, and an admin agent) may write ANY role's insight.\n\n``allow_shrink`` (default false) must be set explicitly to replace existing\ncontent with an empty doc. The ``doc.cap_chars.insight`` cap is checked\nUNCONDITIONALLY — ``allow_shrink`` governs the opposite direction and is not a\nbypass for it.\n\nWrites the overlay (``is_default`` → false) and fans an ``insight`` delta.",

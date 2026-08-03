@@ -105,6 +105,7 @@ import {
   SEED_SYSTEM_INTERACTION_MD,
   SEED_ROLE_ASSISTANT_MD,
   SEED_LESSONS_MD,
+  SEED_INSIGHT_ASSISTANT_MD,
   SEED_BOOT_SEQUENCE_MD,
 } from "./seeds";
 import { ApiError } from "./errors";
@@ -513,10 +514,19 @@ const lessonsKey = (roleKey: string, taskType: string) =>
 
 // Insight OVERLAY (T-3809), keyed by the BARE `role_key`. ⚠️ NOT the lessons
 // composite: insight has no task_type axis, so there is no "::" in this key and
-// nothing may derive one key format from the other. There is also NO SEED — an
-// absent entry folds to text "" with is_default=true, which is the whole point:
-// "has this role moved anything over yet?" has to stay answerable.
+// nothing may derive one key format from the other. An absent entry folds
+// against INSIGHT_SEEDS below (T-e1e3).
 const insightOverlays = new Map<string, WireInsight>();
+
+// The PER-ROLE insight file seeds (T-e1e3) — the mock's mirror of the server's
+// `seeds/insight_<roleKey>.md` lookup. 🔴 A MAP, not a single constant: the
+// lessons seed is one shared file every role reads, and doing that to insight
+// would ship the assistant's judgement calls to every role out of the box.
+// A role absent from this map has NO seed and folds to "" — that is the
+// intended reading for every role but `assistant` today.
+const INSIGHT_SEEDS: Record<string, string> = {
+  assistant: SEED_INSIGHT_ASSISTANT_MD,
+};
 
 // In-memory chat log. HONEST HARD LINE: this stores ONLY messages the owner
 // actually sends (postChat). The mock NEVER fabricates a reply from Mira (or any
@@ -3777,13 +3787,20 @@ export const mockApi: Api = {
   },
 
   async getInsight(roleKey: string): Promise<InsightView> {
-    // The folded PER-ROLE insight doc (T-3809). NO SEED: an absent overlay is a
-    // genuinely empty document, not seed text — is_default and text "" say the
-    // same thing here, and the card renders that as "nothing moved over yet".
+    // The folded PER-ROLE insight doc: overlay ⊕ this role's OWN file seed
+    // (T-e1e3). 🔴 PER-ROLE, mirroring seedInsightMD on the server — `assistant`
+    // folds against seeds/insight_assistant.md, EVERY OTHER ROLE STILL READS "".
+    // Copying the lessons shape (one shared seed for all roles) here would hide
+    // the exact defect the server test is guarding against, because the cockpit
+    // would then look correct against a mock that is wrong in the same way.
+    //
+    // is_default stays "this role has never written" in both branches; it is no
+    // longer the same statement as text === "".
+    const seed = INSIGHT_SEEDS[roleKey];
     const wire: WireInsight = insightOverlays.get(roleKey) ?? {
-      ...docSizeFields("", "insight"),
+      ...docSizeFields(seed ?? "", "insight"),
       role_key: roleKey,
-      text: "",
+      text: seed ?? "",
       owner_id: MOCK_OWNER_ID,
       schema_version: 3,
       is_default: true,

@@ -596,10 +596,15 @@ type lessonsDTO struct {
 // of the role journal, beside Duty (role_def) and Learning (lessons).
 //
 // Deliberately NOT lessonsDTO minus a field: there is no task_type (that axis
-// belongs to lessons alone) and no seed to fold against, so IsDefault here means
-// "this role has never written", not "still reading the shared seed". That
-// distinction is the ticket's only observable — with a seed, Text=="" would be
-// unreachable and 「這個角色還沒搬」 would stop being answerable.
+// belongs to lessons alone), and the seed — added by T-e1e3 — is PER-ROLE
+// (`seeds/insight_<roleKey>.md`), never lessons' one-shared-file.
+//
+// IsDefault means "this role has never written its own insight". 🔴 It no
+// longer implies Text=="": a role WITH a seed reads the factory wording with
+// IsDefault=true, and a role WITHOUT one reads "" with IsDefault=true. Anything
+// that treated the two as the same statement (T-3809 did, and said so here) is
+// now wrong — the cockpit must read this field, or it renders factory wording
+// as if a person had written it.
 type insightDTO struct {
 	// SizeChars / CapChars let a caller size its NEXT edit before making it,
 	// for the same reason lessonsDTO carries them: the settings surface that

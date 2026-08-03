@@ -92,8 +92,14 @@ describe("SettingsPage · InsightCard (T-3809)", () => {
     expect(insightCard(utils)).toBeTruthy();
   });
 
-  it("an untouched doc reads as EMPTY — not as loading, not as an error", async () => {
-    const utils = await openRolePage(zh.office.role.assistant);
+  it("an untouched doc with NO seed reads as EMPTY — not as loading, not as an error", async () => {
+    // ⚠️ CONTRACT CHANGE (T-e1e3): this used to use `assistant`. It cannot any
+    // more — the assistant now ships with a FACTORY insight seed, so its
+    // untouched doc is deliberately non-empty. The property being pinned is
+    // unchanged and still real: a role with no seed of its own reads empty, and
+    // that empty must be its own reading rather than the load or error state.
+    const { role } = await mockApi.createRole({ name: "無 seed 的角色" });
+    const utils = await openRolePage(role.name);
     const card = insightCard(utils)!;
 
     expect(within(card).getByText(mp.insightEmpty)).toBeTruthy();
@@ -101,6 +107,46 @@ describe("SettingsPage · InsightCard (T-3809)", () => {
     // be reachable by rendering either of the other two.
     expect(within(card).queryByText(mp.insightLoading)).toBeNull();
     expect(within(card).queryByText(mp.insightError)).toBeNull();
+    // And an absence is never labelled 「預設」 — that badge names FACTORY
+    // wording, not the lack of anything.
+    expect(within(card).queryByTestId("insight-default-badge")).toBeNull();
+  });
+
+  it("the assistant's untouched doc serves the FACTORY seed, badged 「預設」", async () => {
+    // 🔴 ACCEPTANCE #4 — "the cockpit must not show factory content as if a
+    // person wrote it". Before T-e1e3 this card never read `isDefault` at all,
+    // so shipped wording would have rendered exactly like an authored document
+    // with nothing anywhere to say otherwise.
+    const utils = await openRolePage(zh.office.role.assistant);
+    const card = insightCard(utils)!;
+
+    // The seed is really being served (anti-tautology for the badge assertion:
+    // a badge on an empty card would prove nothing).
+    expect(within(card).queryByText(mp.insightEmpty)).toBeNull();
+    const badge = within(card).getByTestId("insight-default-badge");
+    expect(badge.textContent).toBe(s.defaultBadge);
+  });
+
+  it("the badge disappears once the role writes its own", async () => {
+    // The VALUE half: a badge that is always rendered would satisfy the
+    // assertion above while telling the owner nothing.
+    await mockApi.saveInsight("assistant", "# 我自己寫的判準\n");
+    const utils = await openRolePage(zh.office.role.assistant);
+    const card = insightCard(utils)!;
+    expect(within(card).queryByTestId("insight-default-badge")).toBeNull();
+  });
+
+  it("a seed is PER-ROLE — a custom role never inherits the assistant's", async () => {
+    // 🔴 The shape this ticket is most likely to be got wrong, mirrored on the
+    // client: `api/mock.ts` must fold a MAP keyed by role, not one shared
+    // constant. A mock that copied the lessons shape would make the cockpit
+    // look correct against a server that is wrong in the same way.
+    const { role } = await mockApi.createRole({ name: "測試員" });
+    const mine = await mockApi.getInsight(role.key);
+    const assistant = await mockApi.getInsight("assistant");
+    expect(assistant.text.trim()).not.toBe("");
+    expect(mine.text).toBe("");
+    expect(mine.isDefault).toBe(true);
   });
 
   it("shows content once the role has moved something over", async () => {
@@ -115,10 +161,13 @@ describe("SettingsPage · InsightCard (T-3809)", () => {
   });
 
   it("the header carries size_chars / cap_chars — including at zero", async () => {
-    const utils = await openRolePage(zh.office.role.assistant);
+    // ⚠️ Moved off `assistant` for the same reason as the empty-state test: its
+    // untouched doc is no longer zero-length. Zero is exactly when someone is
+    // about to write the first thing into the doc, so it is the worst moment to
+    // hide the limit — a role with no seed is where that state now lives.
+    const { role } = await mockApi.createRole({ name: "零字角色" });
+    const utils = await openRolePage(role.name);
     const size = insightCard(utils)!.querySelector(".mp-insight__size");
-    // Zero is exactly when someone is about to write the first thing into the
-    // doc, so it is the worst moment to hide the limit.
     expect(size?.textContent?.replace(/\s+/g, " ").trim()).toBe(
       `0 / ${DOC_CAP_CHARS_DEFAULTS.insight}`
     );

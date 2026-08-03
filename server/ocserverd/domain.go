@@ -493,28 +493,38 @@ func FoldLessons(overlay *Lessons, seedText string) (text string, isDefault bool
 	return overlay.Text, false
 }
 
-// ── insight: per-role overlay, NO seed (T-3809) ──────────────────────────────
+// ── insight: per-role overlay ⊕ PER-ROLE file seed (T-3809 → T-e1e3) ─────────
 
-// FoldInsight resolves a per-role insight doc. Unlike FoldLessons there is no
-// file seed to fold against: an absent (or tombstoned) row reads as the EMPTY
-// document, and that emptiness is load-bearing.
+// FoldInsight resolves a per-role insight doc: owner/agent overlay ⊕ this
+// role's OWN file seed. Three states, and they are not two:
 //
-// 🔴 WHY NO SEED — this is a decision, not an omission. lessons folds overlay ⊕
-// a shared seed, so every role reads non-empty from day one. Give insight a
-// seed and text=="" becomes unreachable, which makes 「這個角色還沒把 Insight
-// 搬過來」 undecidable — and under the owner's zero-automatic-split ruling
-// (rc-87e850241ef4 ②) that question is the ONLY observable this ticket ships.
-// The cost is stated rather than hidden: a role that never writes sees an empty
-// card, and nothing in the system compels it to write (owner deleted the
-// forcing mechanism deliberately; see the 誠實清單 on the ticket).
+//	never written + this role HAS a seed → (seed text, isDefault=true)
+//	never written + this role has NO seed → ("",        isDefault=true)
+//	written                               → (overlay,   isDefault=false)
 //
-// isDefault reports "never written by this role" — the same contract
-// FoldLessons' isDefault carries, minus the seed.
-func FoldInsight(overlay *Insight) (text string, isDefault bool) {
-	if overlay == nil || overlay.Tombstoned {
-		return "", true
+// 🔴 THE SEED IS PER-ROLE, NOT SHARED (T-e1e3, and this is the whole point).
+// FoldLessons folds against ONE shared file every role reads, so every role
+// inherits the same lessons out of the box. Insight must NEVER work that way:
+// a role's insight is how THAT role weighs a call, and the assistant's calls
+// are wrong for a tester. The caller (assets.go seedInsightMD) resolves
+// `insight_<roleKey>.md`; a role with no such file keeps the genuinely-empty
+// reading. Today exactly one file ships — insight_assistant.md.
+//
+// 🔴 WHAT is_default STILL MEANS, AND WHAT IT NO LONGER IMPLIES. It has always
+// reported "this role has never written its own insight", and that is unchanged.
+// What T-e1e3 breaks is the EQUIVALENCE T-3809 relied on: `is_default == true`
+// used to be the same statement as `text == ""`. It now is so only for roles
+// with no seed. Everything that read emptiness as "has this role moved anything
+// over yet?" must read is_default instead — above all the cockpit, which
+// otherwise renders factory wording as if a person had written it.
+func FoldInsight(overlay *Insight, seedText string, hasSeed bool) (text string, isDefault bool) {
+	if overlay != nil && !overlay.Tombstoned {
+		return overlay.Text, false
 	}
-	return overlay.Text, false
+	if hasSeed {
+		return seedText, true
+	}
+	return "", true
 }
 
 // ── lessons: anchor-addressed patch (MCP patch_lessons, T-8327) ──────────────
@@ -663,14 +673,17 @@ const contextDocMaxCharsDefault = 15000
 // dutyCapCharsDefault is the shipped default of the DUTY (role definition) cap
 // — the one segment that does not share contextDocMaxCharsDefault.
 //
-// 🔴 KNOWN EXCEPTION, deliberately not fixed here (T-ae38 scope line): the
-// shipped seed `seeds/role_def_assistant.md` is itself 4,594 runes, i.e. over
-// this cap out of the box — and `reset_role` writes a TOMBSTONE and folds back
-// to that seed, so no cap check sits on the path that installs it. No cap can
-// catch shipped content by construction. Shrinking the seed is T-e1e3's job,
-// not this ticket's; the practical meaning of "Duty ≤ 1000" today is
-// "hand-written Duty ≤ 1000, with the factory seed as the one exception".
-// This is recorded so the next reader does not read it as an oversight.
+// 🔴 THE STRUCTURAL EXCEPTION STANDS; ITS ONE INSTANCE IS GONE (T-e1e3).
+// `reset_role` writes a TOMBSTONE and folds back to the FILE seed, so no cap
+// check sits on the path that installs shipped content — no cap can catch a
+// seed by construction, and that is still true. The practical meaning of
+// "Duty ≤ 1000" is therefore "hand-written Duty ≤ 1000, with the factory seed
+// structurally exempt".
+// ⚠️ What has CHANGED: this comment used to say the shipped seed was 4,594
+// runes and therefore over the cap out of the box. T-e1e3 replaced it with the
+// finalized factory Duty (931 runes), so today NOTHING actually exercises the
+// exemption. Do not reason from the old number, and do not go looking for an
+// oversized seed to "fix".
 const dutyCapCharsDefault = 1000
 
 // min*CapChars / maxDocCapChars bound the adjustable caps. Each floor is THAT

@@ -22,12 +22,14 @@ package main
 // (utf8.RuneCountInString); an ASCII fixture cannot tell a rune cap from a byte
 // cap, and this file would go green on a server that had silently switched.
 //
-// 🔴 KNOWN EXCEPTION, deliberately untested-for-refusal: seeds/role_def_assistant.md
-// is 4,594 runes and therefore over the 1,000 default out of the box. reset_role
-// writes a tombstone and folds back to the FILE seed — a path with no cap check
-// on it — so no cap can catch shipped content by construction. Shrinking that
-// seed is T-e1e3's job. The tests below always write their own Duty text first
-// so they never depend on the seed's size.
+// 🔴 STRUCTURAL EXEMPTION, deliberately untested-for-refusal: reset_role writes
+// a tombstone and folds back to the FILE seed — a path with no cap check on it
+// — so no cap can catch shipped content by construction.
+// ⚠️ This block used to add "and seeds/role_def_assistant.md is 4,594 runes,
+// i.e. over the 1,000 default out of the box". T-e1e3 replaced that seed with
+// the finalized factory Duty (931 runes), so the exemption now has NO instance.
+// Either way the tests below always write their own Duty text first, so they
+// never depend on the seed's size — that is why neither number is asserted here.
 
 import (
 	"net/http"

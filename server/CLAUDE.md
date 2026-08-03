@@ -203,7 +203,7 @@ owner 2026-07-27 兩句話 + 一個數字:「更新的時候不能塞超過這�
 - **四個 accessor,沒有 `docCap(segment)`**:`dutyCap()` / `insightCap()` / `learningCap()` / `manualCap()`。段別是**寫入 seam 的性質、不是 runtime 參數**,做成參數就會讓某個呼叫點傳錯一個而照樣編譯得過;現在 reviewer 只需要看名字。
 - 🔴 **Duty 的上限要補兩處,不是一處**:`api_roles.go` 的 `HandleUpdateRoleApiRolesRolePost`,**以及 `api_document_history.go` 的 `case "role_definition"`**。只補編輯門等於形同虛設——**編到 999 再還原一個 4,000 字的舊版就繞過去了**。lessons 與 insight 在同一個 switch 裡本來就有檢查,**只有 role_definition 沒有**,那正是這張票要補的洞。
 - **`RoleDefDTO` 補 `size_chars` / `cap_chars`**。一手證據:Mira 整理完自己的 Duty **根本不知道自己剩幾字,得回頭請別人用尺量一次**。少了這兩欄,每個 agent 收斂 Duty 都得找一個「有尺的人」,而通常沒有那個人。
-- 🔴 **出廠 seed 是已知例外,不是漏做**:`seeds/role_def_assistant.md` 本身就是 **4,594 runes**,對 1,000 的預設而言一出廠就超標;而 `reset_role` 寫的是 tombstone、fold 回檔案 seed,**那條路上沒有任何 cap 檢查,構造上攔不到出廠內容**。所以「Duty ≤ 1000」的實際語意是「**手寫的 ≤ 1000,出廠 seed 是唯一例外**」。壓縮那份 seed 是 **T-e1e3** 的事,不是本票。**看到它超標不要當成缺陷去修。**
+- 🔴 **出廠 seed 是已知例外,不是漏做**:`seeds/role_def_assistant.md` 本身就是 **4,594 runes**,對 1,000 的預設而言一出廠就超標;而 `reset_role` 寫的是 tombstone、fold 回檔案 seed,**那條路上沒有任何 cap 檢查,構造上攔不到出廠內容**。所以「Duty ≤ 1000」的實際語意是「**手寫的 ≤ 1000,出廠 seed 是唯一例外**」——這句在構造上仍然對(那條路上還是沒有 cap 檢查)。⚠️ **但 T-e1e3 之後已經沒有實際超標的 seed 了**:出廠 Duty 換成銀月的定稿(**931 runes**),在 1,000 以內,所以「已知例外」這件事**當下沒有實例**。**不要照著舊的 4,594 這個數字去推論或去修任何東西。**
 - **界線**:`global_context` **今天仍然完全沒有上限**(`task.description` 是刻意沒有),本票一個字都沒動它;`docs/guide/settings.md` 那句對 owner 承諾「全域情境與角色定義沒有上限」已在同一批改成「角色定義現在有上限、全域情境仍然沒有」。手冊那兩份長文的**行為**一個字沒動,只換了它們吃哪一個鍵——它們的鍵是 `type_key`,是任務**類型**的資產、不是角色誌,所以歸 `.manual`。
 - `contextDocMaxChars` 這個常數**已經不存在**,取而代之的是 `contextDocMaxCharsDefault`(只是預設值)。`DocCapBlocked` 與 `docCapRefusal` 現在**第一個參數就是 cap**——刻意不做成 package 變數或 `*apiServer` 方法:參數化之後,**漏改一個呼叫點是編譯錯誤**,而那正是這種「同一個值散在 9 個地方」的改動唯一可靠的守衛。
 - 每個呼叫點在 **request time** 讀 `s.docCap()`(RLock),所以 PATCH 完下一次寫入就生效、免重啟;不快取、沒有第二份會漂的副本。`update_task_manual` 那個 handler **一次讀、兩個欄位共用**——兩次讀可能跨過一次並行 PATCH,讓 sop_md 與 learnings 被兩個不同的上限審判。
@@ -248,7 +248,14 @@ owner 2026-07-28 逐字：「其他人不需要知道 Insight，但是 **Insight
 ### 與 lessons 逐項不同的地方（每一項不同都是「共用就會說錯話」的地方）
 
 - **key 只有一個**。lessons 的 key 是 `(role_key, task_type)`，insight 沒有 task_type 軸，`document_history` 的 key 就是**裸 `role_key`**。🔴 **這在 cascade 上是會咬人的**：lessons 的串刪用 `"<role>::"` **前綴**比對（那裡安全，`::` 這個終結符讓 `r-abc::` 不可能打中 `r-abcdef::general`），而單鍵文件**沒有終結符** ⇒ `DeleteInsightForRole` 一律用**精確相等**（`document_key = ?`，跟 `DeleteRoleDef` 同姿勢）。**在這裡用前綴會把 `r-abcdef` 的歷史跟著 `r-abc` 一起刪掉。** 刪角色的串接在 `api_roles.go` 的 delete_role 路徑上。
-- **沒有 seed 檔，刻意的**。lessons 折的是 overlay ⊕ 一份共用檔案 seed，所以沒寫過的角色也讀得到非空內容。insight 給了 seed 之後 `text == ""` 就永遠不成立，「**這個角色還沒搬**」這個問題就再也答不出來——而那正是本票唯一交付得出來的可觀測狀態（`FoldInsight` 的 `isDefault` 即由此而來）。
+- 🔴 **seed 有了，而且是 PER-ROLE（T-e1e3 推翻 T-3809 的「沒有 seed 檔」）**。owner 要「所有裝 OffiCraft 的人」的助理一出廠就懂怎麼幫人管 context，而那套知識全部屬於 Insight。所以 `foldInsightDTO` 現在折的是 overlay ⊕ `seeds/insight_<roleKey>.md`（`assets.go seedInsightMD`），**今天只出貨 `insight_assistant.md` 一份**。
+  - 🔴 **絕對不可以做成 lessons 那種「全站共用一份」**。lessons 對任何 roleKey 都讀同一個 `lessons.md`；照抄那個形狀會讓**每個角色出廠都拿到助理的判準**，而銀月的判準對測試員、對工程師是錯的。per-role 由**檔名內插 roleKey** 保證，而 `seedRoleName(roleKey) == ""` 那道前置閘（與 `seedRoleDefinitionMD` 同型）順帶由構造排除路徑穿越。
+  - **`fs.ErrNotExist` 不是錯誤**：有 Duty seed 但沒有 Insight seed 的 seed 角色，仍然「沒寫過就是真的空的」；其餘 IO 錯誤照樣往上拋（fail-closed）。
+  - 🔴 **`is_default` 的語意沒變，蘊含變了**。它一直是「這個角色還沒寫過自己的 Insight」；T-3809 額外倚賴的等價 `is_default == true ⟺ text == ""` **現在只對沒有 seed 的角色成立**。任何拿「空」當「還沒搬」的消費者都要改讀 `is_default`——**座艙首當其衝**：`InsightCard` 從前完全沒讀這個欄位，所以出廠文案會原樣渲染成一份看起來是人寫的文件。現在它掛「預設」徽章（`data-testid="insight-default-badge"`，且 **gated on 非空 text**——沒有 seed 的角色也是 `is_default=true`，把它的空卡標成「預設」等於把「沒有東西」講成「出廠文件」）。
+  - **「這個角色還沒搬」仍然答得出來**，只是答案改由 `is_default` 承載，不再由空字串承載。
+  - **`api/mock.ts` 同批鏡像**：`INSIGHT_SEEDS` 是一個 **Map**（`{assistant: SEED_INSIGHT_ASSISTANT_MD}`），不是單一常數——mock 若照抄 lessons 形狀，座艙會對著一台「錯得一模一樣」的假 server 變綠。`frontend/src/api/seeds.ts` 以 `?raw` 直讀 `seeds/insight_assistant.md`，零第二份。
+  - **`api_document_history.go` 的 restore（`case "insight"`）沒動，但行為隨之改**：cap 檢查的 `before` 現在含 seed，所以 assistant 從沒寫過時，還原一個比 seed 短的超標舊版會放行——**與 `role_definition` 今天的行為一致**，不是新的不對稱。
+  - 哨兵 `api_insight_seed_te1e3_test.go`（檔頭寫明**鑑別力由 mutant 承擔**：本票在改動前根本沒有這條路徑，任何「讀得到出廠內容」的斷言只能以編譯失敗這種退化紅成立）。三顆 mutant：per-role 判斷改成共用一份 → 「其他角色仍為空」紅；seed fold 拿掉 → 「全新 DB 讀得到出廠內容」紅；寫過之後仍回 seed → overlay 語意紅。
 - **guard 姿態與 lessons 對齊**：整份替換走 `WholeDocWipeBlocked`，patch 走 `LessonsShrinkBlocked`（`allow_shrink` 可放行），兩條都**無條件**再過 `DocCapBlocked(s.insightCap(), before, after)`——cap 取自 `doc.cap_chars.insight` 設定(T-ae38 之前是共用的 `doc.cap_chars`)、request time 讀，與上一節同一把尺；Insight 拿的是**自己一份預算**，不跟 Learning 共用。回條同樣報 `size_chars` / `cap_chars`。
 - **歷史快照在交易內重讀**：`insightSnapshotIn` 跟它的 lessons 雙胞胎一樣，**不信 handler 早先折出來的值**——保留的那一版必須是這次寫入所取代的狀態，否則兩個寫者相撞會保留同一個祖先，中間那一版永久救不回來。
 - **SSE 是第 13 個 topic**：`hub.go` 的 `sseTopics` 多一格 `"insight"`；三個寫入面（replace／patch／history restore）都發 `topic="insight"`、key 為 `wireOwnerID+"::"+roleKey`。
