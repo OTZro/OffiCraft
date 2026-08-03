@@ -1095,6 +1095,23 @@ HAPPY: dict[str, Happy] = {
         path=lambda ctx: f"/api/tasks/{_happy_reassigning_task(ctx)}/claim",
         check=lambda _c, r: _expect(r, lambda d: d["lock"] == ""),
     ),
+    "POST /api/tasks/{task_id}/description": Happy(
+        # T-e271: the executor corrects its own task's wording. Aimed at a
+        # CLOSED (done) task deliberately — owner ruling 2 says a terminal task
+        # stays correctable, and the response echoing the new text on a task
+        # whose artifact set is frozen is the wire statement of that. The check
+        # reads the description back rather than only asserting 200: a route
+        # that accepted the body and wrote nothing would pass a status check.
+        identity="agent",
+        path=lambda ctx: f"/api/tasks/{_happy_closed_task(ctx)}/description",
+        body={"description": "corrected wording"},
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: d["description"] == "corrected wording"
+            and d["status"] == "done"
+            and d["closed_ts"] is not None,
+        ),
+    ),
     "POST /api/tasks/{task_id}/duplicate": Happy(
         # T-02c9: mark a fresh task a duplicate of a fresh original — the
         # subject is executed by the happy agent, so the executor guard passes.

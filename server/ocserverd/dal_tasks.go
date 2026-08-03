@@ -562,6 +562,53 @@ func (d *DAL) SetTaskStepNote(id, note string) (bool, error) {
 	return n > 0, nil
 }
 
+// SetTaskDescriptionOn writes ONE task's description (plus the updated_ts that
+// makes an already-open cockpit card re-read it) and nothing else, through the
+// caller's executer — so the description edit and the document_history revision
+// it replaces land in the SAME transaction (T-e271, api_tasks_description.go).
+// Reports whether a row was actually updated; false means the task is gone,
+// which the caller turns into a 404 rather than silently succeeding.
+//
+// Deliberately NOT PutTask, for the same reason SetTaskStepNote is not
+// PutTaskStep: PutTask is a whole-row upsert with no optimistic lock, so
+// writing a description through it replays every other column — status,
+// priority, executor, the outsource spec — as the caller read them a moment
+// earlier, and races whoever is changing one of those. Correcting the ticket's
+// text carries no opinion about any of them. It would also RESURRECT a task
+// deleted in that window, because an upsert on a missing row inserts.
+func SetTaskDescriptionOn(ex sqlExecer, id, description string, updatedTS float64) (bool, error) {
+	res, err := ex.Exec(
+		`UPDATE task SET description = ?, updated_ts = ? WHERE id = ?`,
+		description, updatedTS, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// taskDescriptionOn reads ONE task's description from inside the caller's
+// transaction — the document-history snapshot reader (T-e271). It re-reads
+// rather than trusting a value the handler folded earlier, for the reason
+// SaveWithDocumentHistory documents: the retained revision must be the state
+// this write actually replaced, otherwise two writers racing on one task both
+// retain the same ancestor and the revision written between them becomes
+// unrecoverable.
+func taskDescriptionOn(q sqlQuerier, id string) (string, bool, error) {
+	var description string
+	err := q.QueryRow(`SELECT description FROM task WHERE id = ?`, id).Scan(&description)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return description, true, nil
+}
+
 // TouchTaskUpdatedTS bumps ONE task's updated_ts and nothing else (T-cc3e).
 //
 // The cockpit's task card re-reads its (heavy, step-carrying) detail when

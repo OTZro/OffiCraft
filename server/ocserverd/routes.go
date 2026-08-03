@@ -1097,6 +1097,22 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Summary:  "Submit/replace the workflow plan (done steps are kept).",
 			MCPTool:  "submit_plan",
 		},
+		// T-e271: the ticket's own TEXT is correctable after the fact. Until
+		// this row existed the tool catalogue had NO way to edit an existing
+		// task's description — create_task takes one only at birth, submit_plan
+		// writes steps, update_task_manual writes the TYPE's manual — so a
+		// ruling to reword a card had nowhere to land. Executor-guarded like
+		// every other task-driving write (callerMayDriveTask §14); the CREATOR
+		// gets no standing from having created it (owner ruling).
+		{
+			Method:   "POST",
+			Path:     "/api/tasks/{task_id}/description",
+			Handler:  w.HandleUpdateTaskDescriptionApiTasksTaskIdDescriptionPost,
+			Auth:     authGated,
+			Requires: principalAgent,
+			Summary:  "Correct a task's description (executor/admin; closed tasks included).",
+			MCPTool:  "update_task_description",
+		},
 		{
 			Method:   "POST",
 			Path:     "/api/tasks/{task_id}/duplicate",

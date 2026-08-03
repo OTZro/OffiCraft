@@ -177,6 +177,17 @@ func (s *apiServer) documentHistoryAllowed(w http.ResponseWriter, r *http.Reques
 			return false
 		}
 	case docKindTaskManualSop, docKindTaskManualLearnings:
+	case docKindTaskDescription:
+		// T-e271. The only kind whose restore gate is per-DOCUMENT rather than
+		// per-class: a task description is writable by that task's executor (or
+		// an admin), which is a fact about THIS key, so the ladder alone cannot
+		// decide it. Reuses callerMayDriveTask — the same predicate the edit
+		// route uses — so a restore can never put back text the caller was not
+		// allowed to write in the first place. Reading stays open like the
+		// manual series: the task itself is already readable at this floor.
+		if write && !s.taskDescriptionRestoreAuthz(w, r, primary) {
+			return false
+		}
 	case docKindTaskManual:
 		// The legacy four-field bundle. Its rows were deleted by migration 00045
 		// (owner ruling, T-1f39), so the kind names nothing at all — an empty
@@ -259,7 +270,28 @@ func (s *apiServer) publishDocumentHistoryRestore(r *http.Request, kind, key str
 		s.hub.Publish("lessons", "patch", "lessons", wireOwnerID+"::"+key, nil, audienceOwnerOnly(), requestTrigger(r))
 	case docKindTaskManualSop, docKindTaskManualLearnings:
 		s.publishTaskManual(key, requestTrigger(r))
+	case docKindTaskDescription:
+		if t, err := s.resolveTask(key); err == nil {
+			s.publishTask(*t, requestTrigger(r))
+		}
 	}
+}
+
+// taskDescriptionRestoreAuthz answers whether this caller may put an earlier
+// description back, and writes the refusal when not (T-e271). Same ladder as the
+// edit route by construction — it calls the same function — so the two faces of
+// "who may change this text" cannot drift apart.
+func (s *apiServer) taskDescriptionRestoreAuthz(w http.ResponseWriter, r *http.Request, taskID string) bool {
+	t, err := s.resolveTask(taskID)
+	if err != nil {
+		writeResolveError(w, err, "task", taskID)
+		return false
+	}
+	if !s.callerMayDriveTask(r, *t) {
+		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+		return false
+	}
+	return true
 }
 
 func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, content map[string]string) error {
@@ -296,6 +328,23 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 		return s.dal.SaveWithDocumentHistory(kind, key, actor, lessonsSnapshotIn(roleKey, taskType), func(ex sqlExecer) error {
 			return putLessonsOn(ex, Lessons{RoleKey: roleKey, TaskType: taskType, Text: content["text"], Tombstoned: historyTombstoned(content)})
 		})
+	case docKindTaskDescription:
+		// T-e271. No doc cap: the description has never had a length ceiling on
+		// the create side either, so a cap applied only here would make an
+		// already-long description permanently uneditable — the failure this
+		// route exists to remove, reintroduced at the restore door.
+		t, err := s.resolveTask(key)
+		if err != nil {
+			return err
+		}
+		ok, err := s.writeTaskDescription(t, actor, content["description"])
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errNotFound
+		}
+		return nil
 	case docKindTaskManualSop:
 		return s.restoreTaskManualField(key, taskManualHistoryStreams(key, actor, true, false),
 			func(m *TaskManual) error {

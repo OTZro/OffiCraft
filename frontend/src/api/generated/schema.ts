@@ -2692,6 +2692,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/description": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Correct a task's description (executor/admin; closed tasks included).
+         * @description Correct one task's description in place (MCP ``update_task_description``, T-e271). Admitted for the task's EXECUTOR or an admin/owner — the same ``callerMayDriveTask`` gate every other task-driving write uses, 403 otherwise; the CREATOR has no standing here unless it is also the executor (owner ruling, T-e271). Partial update in ``update_task_manual``'s shape: only the field you name changes, so a body that omits ``description`` is a legal no-op that versions nothing, and unknown keys are refused rather than dropped. DELIBERATELY accepted while the task is CLOSED (completed / terminated / duplicated), which is where this route parts company with the artifact set: a closed task's DELIVERABLES are its outcome and are frozen in both directions so the outcome cannot be restated, whereas the description is the ticket's own TEXT — a ticket worded wrongly stays wrong forever if it can only be corrected while open, and correcting it changes nothing about what was produced. Every write that actually changes the text retains the previous one in the SHARED document-history series (kind ``task_description``, key = the task id) that global context / role definitions / task manuals already use — one mechanism, not a second audit trail — so the newest three revisions stay listable and restorable. 404 for an unknown task.
+         */
+        post: operations["handle_update_task_description_api_tasks__task_id__description_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/duplicate": {
         parameters: {
             query?: never;
@@ -6244,6 +6264,14 @@ export interface components {
         TaskDepsDTO: {
             /** Blocked By */
             blocked_by: string[];
+        };
+        /**
+         * TaskDescriptionDTO
+         * @description Correct one task's description in place (MCP ``update_task_description``, T-e271). PARTIAL update, shaped exactly like ``update_task_manual``: the ONLY field is ``description``, and omitting it is a legal no-op rather than a clear — an omitted field never changes anything, while an explicit ``""`` DOES clear the description. That distinction is why the field is nullable-with-no-default instead of ``default: ""``: a defaulted body could silently erase a description the caller never mentioned. Unknown keys are refused (``additionalProperties: false``), so a caller who reaches for ``text`` or ``desc`` is told rather than ignored. The write is wholesale within that one field — the value replaces whatever was there; there is no append form, because a description states what the task IS, not what has happened to it.
+         */
+        TaskDescriptionDTO: {
+            /** Description */
+            description?: string | null;
         };
         /**
          * TaskLearningsPatchDTO
@@ -12627,6 +12655,59 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["TaskDepsDTO"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_update_task_description_api_tasks__task_id__description_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskDescriptionDTO"];
             };
         };
         responses: {
