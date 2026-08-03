@@ -121,19 +121,60 @@ describe("SSE_RESYNC_TOPICS vs spec/sse.md §3.1", () => {
     ).toEqual({ missing: [], extra: [] });
   });
 
+  // The array's own SHAPE — the one thing no comparison against the spec can
+  // check. The confrontation above compares SETS, and a Set de-duplicates by
+  // definition; the two deep-equality guards (api/http.sse-pool.test.ts,
+  // hooks/sseFanout.test.tsx) now build their expectation FROM this array, so a
+  // duplicate lands on both sides of the equality and cancels. Measured by
+  // review round 2: duplicating "chat" in SSE_RESYNC_TOPICS left all 218 files
+  // / 1820 tests green, while the hand-copy those guards replaced had caught it
+  // (5 failed). That is the one axis the fold lost, and this is where it comes
+  // back — a duplicate costs every subscriber of that topic an extra refetch on
+  // every reconnect, silently and with no red anywhere.
+  it("declares each topic exactly once (a duplicate is invisible to set/self comparisons)", async () => {
+    const { SSE_RESYNC_TOPICS } = await import("./http");
+    const seen = new Map<string, number>();
+    for (const t of SSE_RESYNC_TOPICS) seen.set(t, (seen.get(t) ?? 0) + 1);
+    const duplicated = [...seen.entries()].filter(([, n]) => n > 1).map(([t, n]) => `${t}×${n}`);
+    expect(
+      duplicated,
+      "SSE_RESYNC_TOPICS must list each topic exactly once: resyncAll fans one " +
+        "synthetic delta per ELEMENT, so a repeated element makes every hook " +
+        "subscribed to it refetch again on every reconnect. Nothing else in the " +
+        "suite can see this — the spec comparison above is set-based, and the " +
+        "fan-out guards compare the fan against this same array.",
+    ).toEqual([]);
+    expect(new Set(SSE_RESYNC_TOPICS).size).toBe(SSE_RESYNC_TOPICS.length);
+  });
+
   // ——— fail-closed: every way the parser can stop seeing the table must be
   // LOUD. Constructed inputs, so these hold regardless of what the real
   // spec file currently looks like.
   // NOTE the renumbering (3.x → 9.x) rather than a suffix: "### 3.1bis" still
   // CONTAINS "### 3.1", so a suffix does not actually remove the heading and
   // these two tests passed vacuously when first written (measured).
+  //
+  // ⚠️ And the note alone is not enough — it was already written here, and the
+  // self-check was STILL missing (review round 2, MAJOR-3): the Python edge of
+  // this same round asserts `<delimiter> not in <mutated>` and this edge did
+  // not. A comment cannot fail; the assertion below can. Note also that JS
+  // `String.replace(string, …)` replaces only the FIRST occurrence (Python's
+  // str.replace replaces all), so `replaceAll` is used deliberately: with plain
+  // `replace`, a second `### 3.1` anywhere in the spec would leave the heading
+  // present and turn these into FALSE REDS (the parser would not throw).
   it("throws when the §3.1 heading is gone (not: passes with zero topics)", () => {
-    const moved = readFileSync(SPEC_PATH, "utf8").replace("### 3.1", "### 9.1");
+    const moved = readFileSync(SPEC_PATH, "utf8").replaceAll("### 3.1", "### 9.1");
+    expect(moved, "the mutation must really remove the delimiter, else this test is vacuous").not.toContain(
+      "### 3.1",
+    );
     expect(() => parseSpecTopics(moved)).toThrow(/'### 3\.1' not found/);
   });
 
   it("throws when the section's end boundary is gone", () => {
-    const unbounded = readFileSync(SPEC_PATH, "utf8").replace("### 3.2", "### 9.2");
+    const unbounded = readFileSync(SPEC_PATH, "utf8").replaceAll("### 3.2", "### 9.2");
+    expect(unbounded, "the mutation must really remove the delimiter, else this test is vacuous").not.toContain(
+      "### 3.2",
+    );
     expect(() => parseSpecTopics(unbounded)).toThrow(/'### 3\.2' not found/);
   });
 

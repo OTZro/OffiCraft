@@ -46,13 +46,36 @@ class FakeEventSource {
 // array leaves all 11 tests in THIS file green. That power is not lost, it
 // MOVED — api/sseResyncTopics.test.ts catches the same mutant (measured, and it
 // NAMES the topic), and additionally catches drift on the spec side, which a
-// code-to-code copy never could. One copy checked against the contract strictly
-// dominates two copies checked against each other.
+// code-to-code copy never could.
 //
-// What these assertions still pin on their own: `resyncAll` fans topic-major in
-// array order, so deep-equality against the array pins that EVERY topic is
-// fanned, EXACTLY ONCE, IN ORDER — a resyncAll that skipped, duplicated or
-// reordered still reddens here. Never re-transcribe the list.
+// 🔴 CORRECTION (independent review round 2, MEASURED). This comment used to
+// end that paragraph with, verbatim:
+//     "One copy checked against the contract strictly dominates two copies
+//      checked against each other."
+// and described the assertions below as pinning, verbatim:
+//     "EVERY topic is fanned, EXACTLY ONCE, IN ORDER"
+// **Both claims are false, and they are left quoted here on purpose**: they
+// were stated as measured, so the next person had no reason to re-measure.
+// The fold DOMINATES ON ONE AXIS AND LOSES ON ANOTHER:
+//   * topic MISSING from the production array — power kept, and strengthened
+//     (sseResyncTopics.test.ts names it, and also catches spec-side drift);
+//   * topic DUPLICATED inside the production array — power LOST. Measured:
+//     duplicating "chat" in SSE_RESYNC_TOPICS left 218 files / 1820 tests
+//     green, where the deleted hand-copy caught it (5 failed).
+// The reason is structural, not accidental: `CLOSED_TOPICS = SSE_RESYNC_TOPICS`
+// and `seen` is built by iterating that SAME array, so a duplicate appears on
+// BOTH sides of the deep-equality and cancels — "EXACTLY ONCE" only ever meant
+// "exactly as many times as the array itself says", never "once". The Set-based
+// spec confrontation cannot see it either (a Set de-duplicates by definition).
+// That hole is now closed by an explicit no-duplicates assertion in
+// api/sseResyncTopics.test.ts ("declares each topic exactly once"), which is
+// where the array's own shape is guarded.
+//
+// So what these assertions still pin ON THEIR OWN, stated honestly: `resyncAll`
+// fans topic-major in ARRAY ORDER and fans each element of the array exactly
+// once — i.e. it is a faithful traversal OF THE ARRAY (skip / reorder / extra
+// fan still redden here). They say nothing about whether the array itself is
+// well-formed. Never re-transcribe the list.
 const CLOSED_TOPICS = SSE_RESYNC_TOPICS;
 
 beforeEach(() => {
