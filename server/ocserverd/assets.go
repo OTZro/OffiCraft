@@ -197,6 +197,8 @@ func (s *apiServer) foldRoleDefDTO(roleKey string) (*roleDefDTO, error) {
 		return nil, nil
 	}
 	return &roleDefDTO{
+		SizeChars:     utf8.RuneCountInString(folded.DefinitionMD),
+		CapChars:      s.dutyCap(),
 		Key:           folded.Key,
 		Name:          folded.Name,
 		DefinitionMD:  folded.DefinitionMD,
@@ -221,7 +223,7 @@ func (s *apiServer) foldLessonsDTO(roleKey, taskType string) (*lessonsDTO, error
 	text, isDefault := FoldLessons(overlay, seedText)
 	return &lessonsDTO{
 		SizeChars:     utf8.RuneCountInString(text),
-		CapChars:      s.docCap(),
+		CapChars:      s.learningCap(),
 		RoleKey:       roleKey,
 		TaskType:      taskType,
 		Text:          text,

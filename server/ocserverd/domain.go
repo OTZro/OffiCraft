@@ -631,28 +631,56 @@ func LessonsShrinkBlocked(before, after string) bool {
 // but its next update may only make it smaller".
 //
 // RUNES, not bytes, deliberately — the same unit as chatBodyMaxChars
-// (utf8.RuneCountInString). The distribution the owner picked 10,000 from was
-// measured with SQLite length(), which counts CHARACTERS; these docs are
-// largely Chinese prose at ~2.2–3 bytes per character, so capping len() at
-// 10,000 would have been a ~4,000-character cap — more than twice as strict as
-// the number the owner actually signed off on.
+// (utf8.RuneCountInString). The distribution the owner picked the original
+// number from was measured with SQLite length(), which counts CHARACTERS; these
+// docs are largely Chinese prose at ~2.2–3 bytes per character, so capping
+// len() at the same number would be a cap more than twice as strict as the one
+// the owner actually signed off on — whatever that number happens to be today.
 //
 // T-3aeb (owner 2026-07-31): the number is no longer a constant the code owns
-// — it is the `doc.cap_chars` setting, adjustable at runtime, and this is only
+// — it is a `doc.cap_chars.*` setting, adjustable at runtime, and this is only
 // its default. The EFFECTIVE cap always arrives as a parameter, so there is no
 // second copy for a caller to read by accident. The floor of the adjustable
-// range equals this default, so the cap can only ever be RAISED: lowering it
+// range equals its default, so a cap can only ever be RAISED: lowering it
 // would turn documents that are legal today into shrink-only ones.
+//
+// T-ae38 (owner 2026-08-03): ONE cap became FOUR. This constant is the default
+// SHARED by Insight, Learning and the task manual; Duty got its own, much
+// smaller one below (dutyCapCharsDefault). The owner's words: 「我預期 duty
+// 1000 / insight 10000 / learning 10000 但是三者都可以調整」 — quoted as the
+// record of the ruling, NOT as a statement of the current numbers. He revised
+// them the same day, and every one of them is a runtime setting on top of that,
+// so no prose anywhere should restate a cap: read the two constants below.
+// The reason the segments cannot share a number is that their deletion costs
+// differ by an order of magnitude: a Duty is a standing definition that should
+// stay readable in one screen, while a Learning doc is append-only environment
+// Q&A.
 //
 // The patch receipts' `size` field speaks THIS unit too, since T-3aeb — it
 // counted bytes until the owner ruled that one subject may not have two units.
-const contextDocMaxCharsDefault = 10000
+const contextDocMaxCharsDefault = 15000
 
-// minDocCapChars / maxDocCapChars bound the adjustable cap. The floor is the
-// default by design (see above), not a coincidence to be "tidied up".
+// dutyCapCharsDefault is the shipped default of the DUTY (role definition) cap
+// — the one segment that does not share contextDocMaxCharsDefault.
+//
+// 🔴 KNOWN EXCEPTION, deliberately not fixed here (T-ae38 scope line): the
+// shipped seed `seeds/role_def_assistant.md` is itself 4,594 runes, i.e. over
+// this cap out of the box — and `reset_role` writes a TOMBSTONE and folds back
+// to that seed, so no cap check sits on the path that installs it. No cap can
+// catch shipped content by construction. Shrinking the seed is T-e1e3's job,
+// not this ticket's; the practical meaning of "Duty ≤ 1000" today is
+// "hand-written Duty ≤ 1000, with the factory seed as the one exception".
+// This is recorded so the next reader does not read it as an oversight.
+const dutyCapCharsDefault = 1000
+
+// min*CapChars / maxDocCapChars bound the adjustable caps. Each floor is THAT
+// segment's own default by design (see above), not a coincidence to be "tidied
+// up" into one shared number — putting the other segments' floor on Duty would
+// make dutyCapCharsDefault unreachable from the settings surface.
 const (
-	minDocCapChars = contextDocMaxCharsDefault
-	maxDocCapChars = 100000
+	minDocCapChars  = contextDocMaxCharsDefault
+	minDutyCapChars = dutyCapCharsDefault
+	maxDocCapChars  = 100000
 )
 
 // DocCapBlocked reports whether replacing before with after must be refused by

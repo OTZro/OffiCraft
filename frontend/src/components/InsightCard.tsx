@@ -10,7 +10,7 @@
 //     key is the BARE role_key — not the "<role_key>::<task_type>" composite.
 //     Passing the composite here would address a document that does not exist.
 //  2. The header carries {size_chars} / {cap_chars}. 🔴 This is the ONLY place
-//     in the cockpit an owner can see the live doc.cap_chars value without
+//     in the cockpit an owner can see the live doc.cap_chars.insight value without
 //     being admin — the settings surface that otherwise shows it is admin-only,
 //     and the alternative way to learn the limit is to be refused by it.
 //  3. The empty state is a FIRST-CLASS reading, not a fallback. This doc has no

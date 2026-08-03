@@ -5,6 +5,7 @@
 // backend only has to return the frozen wire shape — the UI never changes.
 
 import type { ThemeBundle } from "../lib/themeBundle";
+import { DOC_CAP_CHARS_DEFAULTS } from "./docCap";
 import type {
   Member,
   MemberStatus,
@@ -877,9 +878,15 @@ export function toServerSettings(w: WireServerSettings): ServerSettingsView {
     codexCompactionThreshold: w.codex_compaction_threshold ?? 3,
     monitoringRefreshSeconds: w.monitoring_refresh_seconds ?? 5,
     outsourceMaxParallel: w.outsource_max_parallel ?? 0,
-    // ?? the shipped default, not 0: a server too old to send the field still
-    // caps at 10000, and a 0 here would read as "no cap" to every caller.
-    docCapChars: w.doc_cap_chars ?? 10000,
+    // ?? that segment's shipped default, not 0: a server too old to send the
+    // field still caps at it, and a 0 here would read as "no cap" to every
+    // caller. Duty has its own, smaller default; the other three share one
+    // (T-ae38) — the numbers live in DOC_CAP_CHARS_DEFAULTS, not here.
+    docCapCharsDuty: w.doc_cap_chars_duty ?? DOC_CAP_CHARS_DEFAULTS.duty,
+    docCapCharsInsight: w.doc_cap_chars_insight ?? DOC_CAP_CHARS_DEFAULTS.insight,
+    docCapCharsLearning:
+      w.doc_cap_chars_learning ?? DOC_CAP_CHARS_DEFAULTS.learning,
+    docCapCharsManual: w.doc_cap_chars_manual ?? DOC_CAP_CHARS_DEFAULTS.manual,
     // The two software-update toggles (schema-optional for DTO-compat; the
     // Go wire always emits both — `?? false` only fires against an older
     // server, where OFF is exactly the honest reading).
@@ -1048,9 +1055,18 @@ export function toDocumentHistory(
   };
 }
 
-/** Map one wire role-def doc → the view model (snake→camel). */
+/** Map one wire role-def doc → the view model (snake→camel).
+ *
+ * KEEPS `size_chars` / `cap_chars` (T-ae38) for the same reason `toInsight`
+ * does: the cap is a live setting and the settings surface is admin-only, so
+ * the role-definition editor's header is where a reader learns the limit. The
+ * wire marks both optional for DTO-compat; a server too old to send them
+ * reports 0, which the editor renders as an honest "not known" rather than as
+ * a doc of length zero. */
 export function toRoleDef(w: WireRoleDef): RoleDefView {
   return {
+    sizeChars: w.size_chars ?? 0,
+    capChars: w.cap_chars ?? 0,
     key: w.key,
     name: w.name,
     definitionMd: w.definition_md,
@@ -1217,6 +1233,12 @@ export function toTeardownHereResult(
  * stays empty so the UI can show an honest empty state. */
 export function toLessons(w: WireLessons): LessonsView {
   return {
+    // T-ae38: KEPT, not dropped. The wire has carried these since T-3aeb and
+    // this mapper threw them away, so the Learning card was the one journal
+    // block whose usage an agent could not see — it learned its limit by being
+    // refused. Same fields, same reason, as toInsight.
+    sizeChars: w.size_chars ?? 0,
+    capChars: w.cap_chars ?? 0,
     roleKey: w.role_key,
     taskType: w.task_type,
     text: w.text,
@@ -1226,7 +1248,7 @@ export function toLessons(w: WireLessons): LessonsView {
 
 /** Map the folded PER-ROLE insight doc (T-3809) → the view model. Unlike
  * `toLessons` this KEEPS `size_chars` / `cap_chars`: the cap is the live
- * `doc.cap_chars` setting and the settings surface is admin-only, so the card
+ * `doc.cap_chars.insight` setting and the settings surface is admin-only, so the card
  * header is where the owner reads it. Dropping them here would make the card's
  * one honest number un-renderable. */
 export function toInsight(w: WireInsight): InsightView {

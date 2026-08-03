@@ -95,7 +95,7 @@
             "description": "Codex context-compaction threshold, 1 through 10.",
             "title": "Codex Compaction Threshold"
           },
-          "doc_cap_chars": {
+          "doc_cap_chars_duty": {
             "anyOf": [
               {
                 "type": "integer"
@@ -104,8 +104,44 @@
                 "type": "null"
               }
             ],
-            "description": "The size cap on the accumulating context documents (lessons, task-manual learnings and sop_md), in CHARACTERS (Unicode code points). Must be 10000 through 100000.",
-            "title": "Doc Cap Chars"
+            "description": "The size cap on a role's DUTY doc (the role definition), in CHARACTERS (Unicode code points). Must be at least this segment's own shipped default — which is deliberately much smaller than the other three segments' — and at most 100000. Read the current values from get_settings rather than assuming a number.",
+            "title": "Doc Cap Chars Duty"
+          },
+          "doc_cap_chars_insight": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The size cap on a role's INSIGHT doc, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default and at most 100000. Read the current values from get_settings rather than assuming a number.",
+            "title": "Doc Cap Chars Insight"
+          },
+          "doc_cap_chars_learning": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The size cap on a role's LEARNING doc (the lessons doc), in CHARACTERS (Unicode code points). Must be at least this segment's shipped default and at most 100000. Read the current values from get_settings rather than assuming a number.",
+            "title": "Doc Cap Chars Learning"
+          },
+          "doc_cap_chars_manual": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The size cap on a TASK MANUAL's sop_md and learnings, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default and at most 100000. Read the current values from get_settings rather than assuming a number.",
+            "title": "Doc Cap Chars Manual"
           },
           "custom_themes": {
             "anyOf": [

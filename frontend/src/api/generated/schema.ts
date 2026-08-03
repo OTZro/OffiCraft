@@ -762,7 +762,7 @@ export interface paths {
          *     ``scope="owner"`` token, and an admin agent) may write ANY role's insight.
          *
          *     ``allow_shrink`` (default false) must be set explicitly to replace existing
-         *     content with an empty doc. The ``doc_cap_chars`` cap is checked
+         *     content with an empty doc. The ``doc.cap_chars.insight`` cap is checked
          *     UNCONDITIONALLY — ``allow_shrink`` governs the opposite direction and is not a
          *     bypass for it.
          *
@@ -4040,7 +4040,7 @@ export interface components {
         InsightDTO: {
             /**
              * Cap Chars
-             * @description The document size cap now in force, in CHARACTERS (the doc_cap_chars setting). Served on the READ face so an agent can size an edit BEFORE writing it — the alternative is discovering the limit by being refused, and the settings surface is admin-only.
+             * @description The document size cap now in force, in CHARACTERS (the doc.cap_chars.insight setting). Served on the READ face so an agent can size an edit BEFORE writing it — the alternative is discovering the limit by being refused, and the settings surface is admin-only.
              * @default 0
              */
             cap_chars: number;
@@ -4108,7 +4108,7 @@ export interface components {
         };
         /**
          * InsightPatchResultDTO
-         * @description Receipt of an insight PATCH. ``size_chars`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc_cap_chars`` cap the write is judged against) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING doc text, so the caller can confirm the write landed without re-reading the full doc. ``applied_edits`` counts the edits that ACTUALLY CHANGED the doc, so a batch of no-ops reports 0 rather than looking like a success.
+         * @description Receipt of an insight PATCH. ``size_chars`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc.cap_chars.insight`` cap the write is judged against) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING doc text, so the caller can confirm the write landed without re-reading the full doc. ``applied_edits`` counts the edits that ACTUALLY CHANGED the doc, so a batch of no-ops reports 0 rather than looking like a success.
          */
         InsightPatchResultDTO: {
             /**
@@ -4118,7 +4118,7 @@ export interface components {
             applied_edits: number;
             /**
              * Cap Chars
-             * @description The document size cap now in force, in CHARACTERS (the doc_cap_chars setting) — the number this write was judged against.
+             * @description The document size cap now in force, in CHARACTERS (the doc.cap_chars.insight setting) — the number this write was judged against.
              * @default 0
              */
             cap_chars: number;
@@ -4179,7 +4179,7 @@ export interface components {
         LessonsDTO: {
             /**
              * Cap Chars
-             * @description The document size cap now in force, in CHARACTERS (the doc_cap_chars setting). Served on the READ face so an agent can size an edit BEFORE writing it — the alternative is discovering the limit by being refused, and the settings surface is admin-only.
+             * @description The document size cap now in force, in CHARACTERS (the doc.cap_chars.learning setting). Served on the READ face so an agent can size an edit BEFORE writing it — the alternative is discovering the limit by being refused, and the settings surface is admin-only.
              * @default 0
              */
             cap_chars: number;
@@ -4251,7 +4251,7 @@ export interface components {
         };
         /**
          * LessonsPatchResultDTO
-         * @description Receipt of a lessons PATCH (§3.4 #28b). ``size`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc_cap_chars`` cap the write is judged against) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING doc text, so the caller can confirm the write landed without re-reading the full doc. ``size`` counted UTF-8 BYTES until 2026-07-31, when the owner ruled the receipt must speak the cap's unit.
+         * @description Receipt of a lessons PATCH (§3.4 #28b). ``size`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc.cap_chars.learning`` cap the write is judged against) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING doc text, so the caller can confirm the write landed without re-reading the full doc. ``size`` counted UTF-8 BYTES until 2026-07-31, when the owner ruled the receipt must speak the cap's unit.
          */
         LessonsPatchResultDTO: {
             /**
@@ -4286,7 +4286,7 @@ export interface components {
             sha256: string;
             /**
              * Cap Chars
-             * @description The document size cap in force when this write was judged, in CHARACTERS (the doc_cap_chars setting). Returned so a caller can see its remaining budget without a second request — the cap is adjustable and agents cannot read the settings surface.
+             * @description The document size cap in force when this write was judged, in CHARACTERS (the doc.cap_chars.learning setting). Returned so a caller can see its remaining budget without a second request — the cap is adjustable and agents cannot read the settings surface.
              * @default 0
              */
             cap_chars: number;
@@ -5971,8 +5971,26 @@ export interface components {
          *     file seed), FALSE for an owner-created CUSTOM role (deletable, no file seed
          *     to reset to). The FE keys the delete affordance off this, but the server-side
          *     delete handler re-enforces it (never UI-only).
+         *
+         *     ``size_chars`` / ``cap_chars`` (T-ae38) are the Duty doc's own budget, the same
+         *     pair Lessons and Insight have carried since T-3aeb. Duty had NEITHER field on
+         *     the wire and NO cap at all until T-ae38, which is why an agent tidying its own
+         *     role definition could not tell how much room was left without asking someone
+         *     else to measure it.
          */
         RoleDefDTO: {
+            /**
+             * Cap Chars
+             * @description The Duty (role definition) size cap now in force, in CHARACTERS (the doc.cap_chars.duty setting). Served on the READ face so an agent can size an edit BEFORE writing it — the alternative is discovering the limit by being refused, and the settings surface is admin-only.
+             * @default 0
+             */
+            cap_chars: number;
+            /**
+             * Size Chars
+             * @description Size of `definition_md` in CHARACTERS (Unicode code points) — the same unit as cap_chars.
+             * @default 0
+             */
+            size_chars: number;
             /**
              * Definition Md
              * @default
@@ -6084,9 +6102,17 @@ export interface components {
          *     `owner_name` — the owner's display nickname ("" = unset). `display_theme` /
          *     `display_language` — the owner's cockpit visual prefs ("" = unset).
          *     `display_wide` — whether the cockpit uses the wide layout (default false =
-         *     the narrow centred column). `doc_cap_chars` — the size cap on the
-         *     accumulating context documents (a role's lessons doc; a task manual's
-         *     learnings and sop_md), in CHARACTERS (Unicode code points), default 10000.
+         *     the narrow centred column). `doc_cap_chars_duty` / `doc_cap_chars_insight` /
+         *     `doc_cap_chars_learning` / `doc_cap_chars_manual` (T-ae38) — the FOUR
+         *     independent size caps on the accumulating documents, in CHARACTERS (Unicode
+         *     code points): a role's Duty (role definition), Insight and Learning (lessons),
+         *     plus a task manual's sop_md and learnings. Each knob's shipped default is the
+         *     `default` on its own field below — Duty's is deliberately much smaller than the
+         *     other three's, and every one of them is owner-adjustable, so no prose here
+         *     restates a number. EVERY key carries a suffix on purpose: `get_settings`
+         *     shows an agent key NAMES and no descriptions, so an unsuffixed `doc.cap_chars`
+         *     sitting beside three suffixed ones reads as a global default and would be
+         *     adjusted by someone believing they had moved all four.
          */
         SettingsDTO: {
             /**
@@ -6120,11 +6146,29 @@ export interface components {
              */
             custom_themes: components["schemas"]["ThemeBundleDTO"][];
             /**
-             * Doc Cap Chars
-             * @description The size cap on the accumulating context documents (a role's lessons doc; a task manual's learnings and sop_md), in CHARACTERS (Unicode code points — Chinese prose counts one per character), 10000 through 100000. An update may not push a doc past it; whatever is already over it is never truncated, but its next update may only come out shorter.
-             * @default 10000
+             * Doc Cap Chars Duty
+             * @description The size cap on a role's DUTY doc (the role definition), in CHARACTERS (Unicode code points — Chinese prose counts one per character). The floor of the adjustable range is this segment's OWN shipped default (the `default` field above), which is smaller than the other three segments'; the ceiling is 100000. Duty had no cap at all before T-ae38.
+             * @default 1000
              */
-            doc_cap_chars: number;
+            doc_cap_chars_duty: number;
+            /**
+             * Doc Cap Chars Insight
+             * @description The size cap on a role's INSIGHT doc, in CHARACTERS (Unicode code points). The floor of the adjustable range is this segment's shipped default (the `default` field above), the ceiling is 100000.
+             * @default 15000
+             */
+            doc_cap_chars_insight: number;
+            /**
+             * Doc Cap Chars Learning
+             * @description The size cap on a role's LEARNING doc (the lessons doc), in CHARACTERS (Unicode code points). The floor of the adjustable range is this segment's shipped default (the `default` field above), the ceiling is 100000.
+             * @default 15000
+             */
+            doc_cap_chars_learning: number;
+            /**
+             * Doc Cap Chars Manual
+             * @description The size cap on a TASK MANUAL's two long documents (sop_md and learnings), in CHARACTERS (Unicode code points). The floor of the adjustable range is this segment's shipped default (the `default` field above), the ceiling is 100000. These are keyed by type_key — assets of a task TYPE, not of a role journal — which is why they answer to their own knob rather than to any of the three role-journal segments. This is the key the single doc.cap_chars setting was RENAMED to in T-ae38; its stored value carried over unchanged.
+             * @default 15000
+             */
+            doc_cap_chars_manual: number;
             /** Handover Pct */
             handover_pct: number;
             /**
@@ -6182,10 +6226,12 @@ export interface components {
          *     `updater_receive_beta` toggles whether the GitHub-release update check also
          *     admits prereleases; `updater_auto_update` toggles unattended background
          *     self-upgrade to the newest admissible release (both booleans, default false;
-         *     the manual upgrade endpoint is unaffected). `doc_cap_chars` MUST be
-         *     10000..100000 — the floor equals the shipped default, so the context-document
-         *     cap can only ever be RAISED (owner ruling 2026-07-31): lowering it would turn
-         *     documents that are legal today into shrink-only ones.
+         *     the manual upgrade endpoint is unaffected). The four document caps (T-ae38)
+         *     are independent knobs. Each one MUST be between THAT segment's shipped default
+         *     (the `default` on the matching `SettingsDTO` field — Duty's is its own, much
+         *     smaller number) and 100000. The floor equalling the shipped default is the
+         *     point: a cap can only ever be RAISED (owner ruling 2026-07-31), because
+         *     lowering one would turn documents that are legal today into shrink-only ones.
          */
         SettingsUpdateDTO: {
             /**
@@ -6194,10 +6240,25 @@ export interface components {
              */
             codex_compaction_threshold?: number | null;
             /**
-             * Doc Cap Chars
-             * @description The size cap on the accumulating context documents (lessons, task-manual learnings and sop_md), in CHARACTERS (Unicode code points). Must be 10000 through 100000.
+             * Doc Cap Chars Duty
+             * @description The size cap on a role's DUTY doc (the role definition), in CHARACTERS (Unicode code points). Must be at least this segment's own shipped default (see `SettingsDTO.doc_cap_chars_duty`, whose `default` is that floor) and at most 100000.
              */
-            doc_cap_chars?: number | null;
+            doc_cap_chars_duty?: number | null;
+            /**
+             * Doc Cap Chars Insight
+             * @description The size cap on a role's INSIGHT doc, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default (see `SettingsDTO.doc_cap_chars_insight`, whose `default` is that floor) and at most 100000.
+             */
+            doc_cap_chars_insight?: number | null;
+            /**
+             * Doc Cap Chars Learning
+             * @description The size cap on a role's LEARNING doc (the lessons doc), in CHARACTERS (Unicode code points). Must be at least this segment's shipped default (see `SettingsDTO.doc_cap_chars_learning`, whose `default` is that floor) and at most 100000.
+             */
+            doc_cap_chars_learning?: number | null;
+            /**
+             * Doc Cap Chars Manual
+             * @description The size cap on a TASK MANUAL's sop_md and learnings, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default (see `SettingsDTO.doc_cap_chars_manual`, whose `default` is that floor) and at most 100000.
+             */
+            doc_cap_chars_manual?: number | null;
             /**
              * Display Language
              * @description The owner's cockpit language (T-0b41-p2) — trimmed; "" clears it back to unset. Must be one of zh, en (or ""); anything else is a 422.
@@ -6577,7 +6638,7 @@ export interface components {
         };
         /**
          * TaskLearningsPatchResultDTO
-         * @description Receipt of a task-learnings PATCH (MCP ``patch_task_learnings``). ``size`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc_cap_chars`` cap the write is judged against; it counted UTF-8 BYTES until 2026-07-31, when the owner ruled the receipt must speak the cap's unit) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING learnings text, so the caller can confirm the write landed without re-reading the full doc. ``applied_edits`` is the number of edits that ACTUALLY changed the doc (a no-op append/replace does not count), so "0 applied" is expressible and a silent no-op cannot masquerade as success.
+         * @description Receipt of a task-learnings PATCH (MCP ``patch_task_learnings``). ``size`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc.cap_chars.manual`` cap the write is judged against; it counted UTF-8 BYTES until 2026-07-31, when the owner ruled the receipt must speak the cap's unit) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING learnings text, so the caller can confirm the write landed without re-reading the full doc. ``applied_edits`` is the number of edits that ACTUALLY changed the doc (a no-op append/replace does not count), so "0 applied" is expressible and a silent no-op cannot masquerade as success.
          */
         TaskLearningsPatchResultDTO: {
             /**
@@ -6592,7 +6653,7 @@ export interface components {
             sha256: string;
             /**
              * Cap Chars
-             * @description The document size cap in force when this write was judged, in CHARACTERS (the doc_cap_chars setting). Returned so a caller can see its remaining budget without a second request — the cap is adjustable and agents cannot read the settings surface.
+             * @description The document size cap in force when this write was judged, in CHARACTERS (the doc.cap_chars.manual setting). Returned so a caller can see its remaining budget without a second request — the cap is adjustable and agents cannot read the settings surface.
              * @default 0
              */
             cap_chars: number;
@@ -6770,7 +6831,7 @@ export interface components {
         TaskManualDTO: {
             /**
              * Cap Chars
-             * @description The document size cap now in force, in CHARACTERS (the doc_cap_chars setting). Served on the READ face so an agent can size an edit BEFORE writing it.
+             * @description The document size cap now in force, in CHARACTERS (the doc.cap_chars.manual setting). Served on the READ face so an agent can size an edit BEFORE writing it.
              * @default 0
              */
             cap_chars: number;

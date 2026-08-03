@@ -1491,7 +1491,10 @@ export const httpApi: Api = {
       codex_compaction_threshold?: number;
       monitoring_refresh_seconds?: number;
       outsource_max_parallel?: number;
-      doc_cap_chars?: number;
+      doc_cap_chars_duty?: number;
+      doc_cap_chars_insight?: number;
+      doc_cap_chars_learning?: number;
+      doc_cap_chars_manual?: number;
       updater_receive_beta?: boolean;
       updater_auto_update?: boolean;
       org_name?: string;
@@ -1512,8 +1515,17 @@ export const httpApi: Api = {
     if (patch.outsourceMaxParallel !== undefined) {
       body.outsource_max_parallel = patch.outsourceMaxParallel;
     }
-    if (patch.docCapChars !== undefined) {
-      body.doc_cap_chars = patch.docCapChars;
+    if (patch.docCapCharsDuty !== undefined) {
+      body.doc_cap_chars_duty = patch.docCapCharsDuty;
+    }
+    if (patch.docCapCharsInsight !== undefined) {
+      body.doc_cap_chars_insight = patch.docCapCharsInsight;
+    }
+    if (patch.docCapCharsLearning !== undefined) {
+      body.doc_cap_chars_learning = patch.docCapCharsLearning;
+    }
+    if (patch.docCapCharsManual !== undefined) {
+      body.doc_cap_chars_manual = patch.docCapCharsManual;
     }
     if (patch.updaterReceiveBeta !== undefined) {
       body.updater_receive_beta = patch.updaterReceiveBeta;
@@ -1773,7 +1785,7 @@ export const httpApi: Api = {
         // allow_shrink: identical reasoning to saveLessons — the server's wipe
         // guard targets BLIND agent write-backs, and here a human is looking at
         // the editor they just cleared, so the intent is already explicit. The
-        // doc_cap_chars cap is checked UNCONDITIONALLY and this does not bypass
+        // doc.cap_chars.insight cap is checked UNCONDITIONALLY and this does not bypass
         // it; allow_shrink governs the opposite direction.
         body: { text, allow_shrink: true },
       }),

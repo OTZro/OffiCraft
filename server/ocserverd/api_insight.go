@@ -29,7 +29,7 @@ func (s *apiServer) foldInsightDTO(roleKey string) (*insightDTO, error) {
 	text, isDefault := FoldInsight(overlay)
 	return &insightDTO{
 		SizeChars:     utf8.RuneCountInString(text),
-		CapChars:      s.docCap(),
+		CapChars:      s.insightCap(),
 		RoleKey:       roleKey,
 		Text:          text,
 		OwnerID:       wireOwnerID,
@@ -153,7 +153,7 @@ func (s *apiServer) HandleReplaceInsightApiInsightRoleKeyPost(w http.ResponseWri
 	// direction and is not a bypass. One read, reused by the response below, so
 	// the number the caller is told is provably the one its write was judged
 	// against.
-	cap := s.docCap()
+	cap := s.insightCap()
 	if DocCapBlocked(cap, current.Text, text) {
 		writeError(w, http.StatusBadRequest, docCapRefusal(cap, "insight doc", current.Text, text))
 		return
@@ -232,7 +232,7 @@ func (s *apiServer) HandlePatchInsightApiInsightRoleKeyPatchPost(w http.Response
 	}
 	// Cap judged on the RESULT of the patch, not the patch's own size: a small
 	// patch onto a huge doc is exactly what grows it. Unconditional.
-	cap := s.docCap()
+	cap := s.insightCap()
 	if DocCapBlocked(cap, current.Text, next) {
 		writeError(w, http.StatusBadRequest, docCapRefusal(cap, "insight doc", current.Text, next))
 		return

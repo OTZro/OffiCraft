@@ -60,10 +60,15 @@ type apiServer struct {
 	// workers (DB task.outsource_max_parallel; M3 owner ruling ③) — read by
 	// the Phase 2 assignment scheduler.
 	outsourceMaxParallel int
-	// docCapChars is the live size cap on the accumulating context documents
-	// (DB doc.cap_chars; T-3aeb owner ruling 2026-07-31) — read by every
-	// DocCapBlocked call site through docCap().
-	docCapChars int
+	// docCapChars* are the live size caps on the accumulating context
+	// documents (DB doc.cap_chars.{duty,insight,learning,manual}; T-3aeb owner
+	// ruling 2026-07-31, split four ways by T-ae38 owner ruling 2026-08-03) —
+	// read by every DocCapBlocked call site through the matching accessor
+	// (dutyCap / insightCap / learningCap / manualCap).
+	docCapCharsDuty     int
+	docCapCharsInsight  int
+	docCapCharsLearning int
+	docCapCharsManual   int
 	// updaterReceiveBeta picks which GitHub releases the update check follows
 	// (false = official only, true = prereleases too); updaterAutoUpdate arms
 	// the background self-upgrade cadence (auto_update.go). Both default OFF
@@ -344,14 +349,38 @@ func (s *apiServer) outsourceParallelCap() int {
 	return s.outsourceMaxParallel
 }
 
-// docCap returns the live cap, in runes, on the accumulating context documents
-// (T-3aeb). Every DocCapBlocked / docCapRefusal call site reads it HERE, at
-// request time, rather than caching it: a PATCH to the setting takes effect on
+// dutyCap / insightCap / learningCap / manualCap return the live cap, in runes,
+// on each accumulating context document (T-3aeb; split four ways in T-ae38).
+// Every DocCapBlocked / docCapRefusal call site reads its OWN one HERE, at
+// request time, rather than caching it: a PATCH to a setting takes effect on
 // the next write with no restart, and there is no second copy to drift.
-func (s *apiServer) docCap() int {
+//
+// FOUR accessors and no generic docCap(caller-picks-a-segment) on purpose: the
+// segment a write belongs to is a property of the write seam, not a runtime
+// argument, so making it a parameter would let a call site pass the wrong one
+// and compile. The names are the only thing a reviewer has to check.
+func (s *apiServer) dutyCap() int {
 	s.settingsMu.RLock()
 	defer s.settingsMu.RUnlock()
-	return s.docCapChars
+	return s.docCapCharsDuty
+}
+
+func (s *apiServer) insightCap() int {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.docCapCharsInsight
+}
+
+func (s *apiServer) learningCap() int {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.docCapCharsLearning
+}
+
+func (s *apiServer) manualCap() int {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.docCapCharsManual
 }
 
 // orgNameSnapshot returns the live studio display name (org.name; T-d693).

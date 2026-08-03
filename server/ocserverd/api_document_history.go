@@ -327,6 +327,15 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 		if folded == nil {
 			return errNotFound
 		}
+		// The cap applies to a restore too (T-ae38), exactly as it already did
+		// for lessons and insight below — and this branch is the reason the
+		// edit-door check alone would not be a cap at all: edit the definition
+		// down to 999 chars and then restore a 4,000-char earlier revision, and
+		// nothing would ever have looked. Duty was the ONLY kind in this switch
+		// with no check; lessons and insight are the shape to copy.
+		if DocCapBlocked(s.dutyCap(), folded.DefinitionMD, content["definition_md"]) {
+			return errDocumentHistoryCap
+		}
 		// The CURRENT name stands: it is not versioned, so a revision has no
 		// name to put back (older rows may still carry one — it is ignored on
 		// purpose rather than resurrected).
@@ -340,7 +349,7 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 		if err != nil {
 			return err
 		}
-		if DocCapBlocked(s.docCap(), current.Text, content["text"]) {
+		if DocCapBlocked(s.learningCap(), current.Text, content["text"]) {
 			return errDocumentHistoryCap
 		}
 		return s.dal.SaveWithDocumentHistory(kind, key, actor, lessonsSnapshotIn(roleKey, taskType), func(ex sqlExecer) error {
@@ -378,7 +387,7 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 		// The cap applies to a restore too: an older, larger revision is still
 		// a write, and letting history walk a doc back over the limit would
 		// make the cap a suggestion.
-		if DocCapBlocked(s.docCap(), current.Text, content["text"]) {
+		if DocCapBlocked(s.insightCap(), current.Text, content["text"]) {
 			return errDocumentHistoryCap
 		}
 		return s.dal.SaveWithDocumentHistory(kind, key, actor, insightSnapshotIn(key), func(ex sqlExecer) error {
@@ -387,7 +396,7 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 	case docKindTaskManualSop:
 		return s.restoreTaskManualField(key, taskManualHistoryStreams(key, actor, true, false),
 			func(m *TaskManual) error {
-				if DocCapBlocked(s.docCap(), m.SopMD, content["sop_md"]) {
+				if DocCapBlocked(s.manualCap(), m.SopMD, content["sop_md"]) {
 					return errDocumentHistoryCap
 				}
 				m.SopMD = content["sop_md"]
@@ -396,7 +405,7 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 	case docKindTaskManualLearnings:
 		return s.restoreTaskManualField(key, taskManualHistoryStreams(key, actor, false, true),
 			func(m *TaskManual) error {
-				if DocCapBlocked(s.docCap(), m.Learnings, content["learnings"]) {
+				if DocCapBlocked(s.manualCap(), m.Learnings, content["learnings"]) {
 					return errDocumentHistoryCap
 				}
 				m.Learnings = content["learnings"]

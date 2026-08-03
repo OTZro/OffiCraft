@@ -20,7 +20,7 @@
 //     this release lets the owner ask stops being answerable — with no error
 //     anywhere.
 //  3. size_chars / cap_chars ARE ON THE HEADER. cap_chars is the live
-//     doc.cap_chars setting, and the settings surface that otherwise shows it is
+//     doc.cap_chars.insight setting, and the settings surface that otherwise shows it is
 //     admin-only; this header is the only place it is readable without being
 //     refused by it first. It is also the field most likely to be dropped as
 //     "bookkeeping noise" while mapping the wire — LessonsView drops exactly
@@ -36,6 +36,7 @@ import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
 import { SettingsPage } from "./SettingsPage";
 import { __resetMock, mockApi } from "../api/mock";
+import { DOC_CAP_CHARS_DEFAULTS } from "../api/docCap";
 
 const s = zh.settings;
 const mp = zh.mp;
@@ -118,18 +119,23 @@ describe("SettingsPage · InsightCard (T-3809)", () => {
     const size = insightCard(utils)!.querySelector(".mp-insight__size");
     // Zero is exactly when someone is about to write the first thing into the
     // doc, so it is the worst moment to hide the limit.
-    expect(size?.textContent?.replace(/\s+/g, " ").trim()).toBe("0 / 10000");
+    expect(size?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      `0 / ${DOC_CAP_CHARS_DEFAULTS.insight}`
+    );
   });
 
   it("the header's numbers are the SERVED ones, not recomputed locally", async () => {
     // A card that counted `text.length` itself would pass a fixed-string test
     // and then disagree with the server on every multi-byte doc and on any cap
     // the owner has raised. Both numbers must come off the wire.
-    await mockApi.patchServerSettings({ docCapChars: 12345 });
+    // A cap the owner RAISED — derived from the shipped default so it stays
+    // above the floor (the knob only ever goes up) whatever that default is.
+    const raised = DOC_CAP_CHARS_DEFAULTS.insight + 2345;
+    await mockApi.patchServerSettings({ docCapCharsInsight: raised });
     await mockApi.saveInsight("assistant", "判準");
     const utils = await openRolePage(zh.office.role.assistant);
     const size = insightCard(utils)!.querySelector(".mp-insight__size");
-    expect(size?.textContent?.replace(/\s+/g, " ").trim()).toBe("2 / 12345");
+    expect(size?.textContent?.replace(/\s+/g, " ").trim()).toBe(`2 / ${raised}`);
   });
 
   it("says out loud that Insight is separate, NOT private", async () => {

@@ -668,10 +668,18 @@ export interface ServerSettingsView {
    * **-1 ⇒ 無限 (unlimited — no global cap)**; 0 ⇒ outsource assignment is
    * PAUSED — the panel annotates it). */
   outsourceMaxParallel: number;
-  /** T-3aeb: the size cap on the accumulating context documents (lessons,
-   * task-manual learnings + sop_md), in CHARACTERS (runes). Default 10000;
-   * adjustable 10000..100000 — the floor is the default, so it only goes up. */
-  docCapChars: number;
+  /** T-3aeb / T-ae38: the FOUR independent size caps on the accumulating
+   * documents, in CHARACTERS (runes) — a role's Duty (role definition),
+   * Insight, Learning (the lessons doc) and Manual (a task manual's sop_md +
+   * learnings). The shipped defaults live in `DOC_CAP_CHARS_DEFAULTS`
+   * (docCap.ts, mirroring server/ocserverd/domain.go); Duty's is deliberately
+   * much smaller than the other three's. Each floor IS that segment's own
+   * default and the ceiling is 100000, so a cap only ever goes UP. Numbers are
+   * not restated here — they are owner-adjustable settings. */
+  docCapCharsDuty: number;
+  docCapCharsInsight: number;
+  docCapCharsLearning: number;
+  docCapCharsManual: number;
   /** Whether the GitHub-release update check also admits prereleases
    * (false = official releases only, the default). */
   updaterReceiveBeta: boolean;
@@ -739,8 +747,12 @@ export interface ServerSettingsPatch {
   codexCompactionThreshold?: number;
   monitoringRefreshSeconds?: number;
   outsourceMaxParallel?: number;
-  /** T-3aeb document size cap, in characters. Must be 10000..100000. */
-  docCapChars?: number;
+  /** T-ae38 document size caps, in characters. Each must be between THAT
+   * segment's shipped default (`DOC_CAP_CHARS_DEFAULTS`) and 100000. */
+  docCapCharsDuty?: number;
+  docCapCharsInsight?: number;
+  docCapCharsLearning?: number;
+  docCapCharsManual?: number;
   /** Also admit GitHub prereleases in update checks (default false). */
   updaterReceiveBeta?: boolean;
   /** Arm unattended background self-upgrade (default false = manual-only). */

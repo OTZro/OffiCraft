@@ -28,7 +28,8 @@ import { useMembers } from "../hooks/useMembers";
 import { useServerSettings } from "../hooks/useServerSettings";
 import { OWNER_ACTOR_ID, actorDisplayName } from "../lib/actorLabel";
 import { ApiError } from "../api/errors";
-import { docCapBlockedFields } from "../api/docCap";
+import { capForKind, docCapBlockedFields } from "../api/docCap";
+import type { DocCaps } from "../api/docCap";
 import { documentFields } from "../lib/docHistoryFields";
 import { formatAbsolute } from "../lib/dateFormat";
 import { useEscapeLayer } from "../lib/useEscapeLayer";
@@ -112,7 +113,18 @@ export function DocumentHistoryEntry({
   // the LIVE value: judging by the shipped default would grey out revisions the
   // server accepts the moment the owner raises it. `undefined` until it loads,
   // which makes the marking abstain (api/docCap.ts).
-  const docCapChars = useServerSettings().settings?.docCapChars;
+  //
+  // T-ae38: FOUR values, and which one judges this list is a property of
+  // `kind`. Handing one number down would have judged a Duty revision by the
+  // Learning cap — a 4,000-char role definition would read as restorable while
+  // the server refuses it at 1,000.
+  const settings = useServerSettings().settings;
+  const docCaps: DocCaps | undefined = settings ? {
+    duty: settings.docCapCharsDuty,
+    insight: settings.docCapCharsInsight,
+    learning: settings.docCapCharsLearning,
+    manual: settings.docCapCharsManual,
+  } : undefined;
 
   const listRef = useRef<HTMLDivElement>(null);
   useEscapeLayer(() => setOpen(false), listRef, open && reading === null);
@@ -233,7 +245,7 @@ export function DocumentHistoryEntry({
                       kind,
                       v.content,
                       currentContent,
-                      docCapChars
+                      docCaps
                     );
                     const blocked = blockedFields.length > 0;
                     return (
@@ -290,7 +302,7 @@ export function DocumentHistoryEntry({
                             >
                               {msg.docHistoryBlockedReason(
                                 blockedFields.map(fieldLabel),
-                                docCapChars ?? 0
+                                (docCaps && capForKind(kind, docCaps)) ?? 0
                               )}
                             </div>
                           )}
@@ -393,7 +405,7 @@ export function DocumentHistoryEntry({
           version={reading}
           actorLine={actorLine(reading.actorId)}
           currentContent={currentContent}
-          docCapChars={docCapChars}
+          docCaps={docCaps}
           // Reading one version is a step INTO the list, so there is a step
           // back out of it — closing is what leaves the history altogether.
           onBack={() => setReading(null)}
