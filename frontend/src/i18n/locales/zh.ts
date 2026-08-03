@@ -607,6 +607,13 @@ export const zh = {
     themeImportPlaceholder: "在此貼上主題 JSON…",
     themeChooseFile: "選擇 .json 檔",
     themeConfirmImport: "匯入",
+    themeImportLinkLabel: "…或貼一條連結匯入",
+    themeImportLinkPlaceholder: "https://…/theme.json",
+    themeImportFromLink: "抓取並匯入",
+    themeImportLinkWorking: "抓取中…",
+    themeImportLinkFailed: "抓不到那條連結",
+    themeImportLinkShareNote:
+      "分享連結沒有身分、永久有效、撤不回來——連得到這台站又拿到連結的人都讀得到這套主題,包含裡面的私人圖片。",
     themeImportDup: "已有相同 id 的自訂主題",
     themeImportReadFailed: "讀取檔案失敗",
     themeLimitReached: "自訂主題數量已達上限",

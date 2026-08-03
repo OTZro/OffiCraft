@@ -2970,6 +2970,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/theme/fetch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fetch a theme bundle from a link (owner/admin agent).
+         * @description Pull a theme bundle from a LINK so the cockpit's import box can take a URL instead of only pasted text / a picked file (T-29c7). It exists because a theme carrying a background image runs to hundreds of thousands of characters while a chat message is hard-capped at 4000 — without this there is no channel at all through which an agent can hand the owner a finished theme.
+         *
+         *     The server GETs the url and answers `{content}` — the RAW response text — which the cockpit then feeds through the same parse/validate path a pasted bundle takes. Before answering it proves the body is JSON and passes the shared theme-bundle validator (the same `validateThemeBundles` that guards `PATCH /api/settings`), so a link pointing at something that is not a theme is a 422 naming what is wrong, not a mystery further down the UI.
+         *
+         *     🔴 The link's ORIGIN is deliberately NOT constrained — no host allowlist, no private/loopback address refusal, no per-hop redirect re-validation. That is an explicit owner ruling (2026-08-03), taken AFTER the timing of the risk was spelled out to him (the fetch happens before any content is seen, so "check the format" cannot cover it). It is recorded here so the next reader knows it is a decision, not an oversight; do not "fix" it without a new ruling.
+         *
+         *     What IS bounded, for availability rather than safety, is the CALL: an 8-second timeout and a hard response-size ceiling, so one unresponsive or endless URL cannot pin a request. Transport failure / timeout / non-200 upstream → 502; an oversized, non-JSON or non-theme body → 422. Gated at admin_agent, the same floor as the `PATCH /api/settings` write that stores the imported theme.
+         */
+        post: operations["handle_fetch_theme_api_theme_fetch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/update/upgrade": {
         parameters: {
             query?: never;
@@ -7208,6 +7234,22 @@ export interface components {
             backgroundModes?: {
                 [key: string]: string;
             };
+        };
+        /**
+         * ThemeFetchDTO
+         * @description One link to pull a theme bundle from (T-29c7). ``url`` must be an absolute ``http``/``https`` URL — that FORMAT check is the only thing asked of the address. The link's ORIGIN is deliberately unconstrained (owner ruling 2026-08-03: "不要限制 link 是哪邊來的", "不用驗證"): there is no host allowlist, no private-address refusal and no per-hop redirect re-check. What IS checked is the ANSWER — see ThemeFetchResultDTO.
+         */
+        ThemeFetchDTO: {
+            /** Url */
+            url: string;
+        };
+        /**
+         * ThemeFetchResultDTO
+         * @description The fetched theme bundle, handed back as the RAW response text in ``content`` (T-29c7). It is verbatim on purpose: the cockpit feeds it into the very same ``parseImportedBundle`` that a pasted / file-picked bundle goes through, so a link-imported theme and a hand-pasted one cannot diverge. The server has already proved the body parses as JSON and passes the shared theme-bundle validator, so ``content`` is never arbitrary bytes.
+         */
+        ThemeFetchResultDTO: {
+            /** Content */
+            content: string;
         };
         /**
          * TokenDTO
@@ -13636,6 +13678,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_fetch_theme_api_theme_fetch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ThemeFetchDTO"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThemeFetchResultDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */

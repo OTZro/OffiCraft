@@ -1670,6 +1670,26 @@ export interface Api {
    * context report). Returns the settings after the change.
    */
   patchServerSettings(patch: ServerSettingsPatch): Promise<ServerSettingsView>;
+  /**
+   * Fetch a theme bundle from a LINK (`POST /api/theme/fetch`) — T-29c7.
+   * Returns the RAW bundle text, which the caller feeds to
+   * `parseImportedBundle`, the same validator a pasted or file-picked bundle
+   * goes through. Doing the parse here would create a second import path that
+   * could accept different things from the paste box.
+   *
+   * The server checks the ADDRESS for format only (absolute http/https) and
+   * checks the ANSWER properly (JSON + the shared theme-bundle validator).
+   * 🔴 It deliberately does NOT constrain where the link points — no host
+   * allowlist, no private-address refusal — per an explicit owner ruling
+   * (2026-08-03) made after the risk was spelled out. Do not "align" this by
+   * adding a client-side origin check: the cockpit would refuse links the
+   * server accepts, and the owner would meet a rule nobody decided.
+   *
+   * Rejects (all throw ApiError, message surfaced inline): 422 for a malformed
+   * url, an over-size body, or content that is not a valid theme; 502 when the
+   * link itself cannot be reached or answers non-200.
+   */
+  fetchThemeFromLink(url: string): Promise<string>;
   /** Read the VAPID public key used by PushManager.subscribe. */
   getPushPublicKey(): Promise<string>;
   /** Save or refresh this browser's Web Push subscription. */

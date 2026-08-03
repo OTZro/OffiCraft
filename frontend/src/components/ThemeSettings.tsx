@@ -36,6 +36,8 @@ import {
   withAlphaPercent,
   type TokenGroup,
 } from "../lib/themeTokenMeta";
+import { api } from "../api";
+import { ApiError } from "../api/errors";
 import { Breadcrumbs, type Crumb } from "./Breadcrumbs";
 import {
   ChevronLeftIcon,
@@ -142,6 +144,12 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
   // visible instead of silent, and it is shown on the list the import lands on.
   const [importSkipped, setImportSkipped] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // ── link import (T-29c7) ──
+  // A theme with a background image runs to hundreds of thousands of
+  // characters while a chat message is capped at 4000, so a link is the only
+  // channel through which a finished theme can be handed over at all.
+  const [importUrl, setImportUrl] = useState("");
+  const [importUrlBusy, setImportUrlBusy] = useState(false);
 
   // ── edit state ──
   const [editId, setEditId] = useState<string | null>(null);
@@ -236,6 +244,8 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
   // ── import ──
   function openImport() {
     setImportText("");
+    setImportUrl("");
+    setImportUrlBusy(false);
     setImportError("");
     setImportSkipped([]);
     setAddError("");
@@ -251,8 +261,12 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
     return null;
   }
 
-  function handleConfirmImport() {
-    const res = parseImportedBundle(importText);
+  // The ONE import path. Pasted text, a picked file and a fetched link all end
+  // up here (T-29c7): a link-imported theme is validated by exactly the same
+  // parseImportedBundle as a pasted one, so the two can never start accepting
+  // different things.
+  function importBundleText(text: string) {
+    const res = parseImportedBundle(text);
     if ("error" in res) {
       setImportError(res.error);
       return;
@@ -264,6 +278,36 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
     }
     setImportSkipped(res.skippedWording);
     setView("list");
+  }
+
+  function handleConfirmImport() {
+    importBundleText(importText);
+  }
+
+  // Paste a link → the server reads it back → the bundle goes through the same
+  // import path, in ONE click. Stopping at "the JSON is now in the box" would
+  // leave the owner a second button to press for no reason.
+  async function handleImportFromLink() {
+    const url = importUrl.trim();
+    if (!url || importUrlBusy) return;
+    setImportUrlBusy(true);
+    setImportError("");
+    try {
+      const content = await api.fetchThemeFromLink(url);
+      // Show what came back BEFORE importing: if the bundle is then rejected
+      // (duplicate id, theme limit) the owner can see and edit the thing that
+      // was rejected instead of an empty box and a message about nothing.
+      setImportText(content);
+      importBundleText(content);
+    } catch (e) {
+      setImportError(
+        e instanceof ApiError && e.serverMessage
+          ? e.serverMessage
+          : t.profile.themeImportLinkFailed
+      );
+    } finally {
+      setImportUrlBusy(false);
+    }
   }
 
   async function handleFilePicked(e: React.ChangeEvent<HTMLInputElement>) {
@@ -668,6 +712,40 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
               {t.profile.themeConfirmImport}
             </button>
           </div>
+          {/* ── import from a link (T-29c7) ── */}
+          <label className="ts-link-label" htmlFor="ts-import-url">
+            {t.profile.themeImportLinkLabel}
+          </label>
+          <div className="ts-form-actions">
+            <input
+              id="ts-import-url"
+              type="url"
+              className="ts-link-input"
+              placeholder={t.profile.themeImportLinkPlaceholder}
+              aria-label={t.profile.themeImportLinkLabel}
+              value={importUrl}
+              onChange={(e) => {
+                setImportUrl(e.target.value);
+                setImportError("");
+              }}
+            />
+            <button
+              type="button"
+              className="doc-btn"
+              disabled={!importUrl.trim() || importUrlBusy}
+              onClick={handleImportFromLink}
+            >
+              {importUrlBusy
+                ? t.profile.themeImportLinkWorking
+                : t.profile.themeImportFromLink}
+            </button>
+          </div>
+          {/* The share links this box is meant to eat are identity-less,
+              永久有效 and cannot be revoked. Whoever pastes one here is also
+              the person who can decide whether the theme should be readable
+              by anyone holding the URL — so the warning belongs on this
+              screen, not only in the docs. */}
+          <div className="ts-link-note">{t.profile.themeImportLinkShareNote}</div>
           {importError && <div className="set-error">{importError}</div>}
         </div>
       </div>

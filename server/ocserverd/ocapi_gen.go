@@ -2164,6 +2164,16 @@ type ThemeBundleDTO struct {
 	Wording *map[string]map[string]string `json:"wording,omitempty"`
 }
 
+// ThemeFetchDTO One link to pull a theme bundle from (T-29c7). “url“ must be an absolute “http“/“https“ URL — that FORMAT check is the only thing asked of the address. The link's ORIGIN is deliberately unconstrained (owner ruling 2026-08-03: "不要限制 link 是哪邊來的", "不用驗證"): there is no host allowlist, no private-address refusal and no per-hop redirect re-check. What IS checked is the ANSWER — see ThemeFetchResultDTO.
+type ThemeFetchDTO struct {
+	Url string `json:"url"`
+}
+
+// ThemeFetchResultDTO The fetched theme bundle, handed back as the RAW response text in “content“ (T-29c7). It is verbatim on purpose: the cockpit feeds it into the very same “parseImportedBundle“ that a pasted / file-picked bundle goes through, so a link-imported theme and a hand-pasted one cannot diverge. The server has already proved the body parses as JSON and passes the shared theme-bundle validator, so “content“ is never arbitrary bytes.
+type ThemeFetchResultDTO struct {
+	Content string `json:"content"`
+}
+
 // TokenDTO Owner-scoped JWT issued by `/api/login` (the one token for REST/MCP/SSE).
 //
 // `expires_in` is the token lifetime in seconds (the client relogins before it
@@ -2523,6 +2533,9 @@ type HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePostJSONRequestBody = 
 
 // HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPostJSONRequestBody defines body for HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPost for application/json ContentType.
 type HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPostJSONRequestBody = TaskStepStatusUpdateDTO
+
+// HandleFetchThemeApiThemeFetchPostJSONRequestBody defines body for HandleFetchThemeApiThemeFetchPost for application/json ContentType.
+type HandleFetchThemeApiThemeFetchPostJSONRequestBody = ThemeFetchDTO
 
 // AsHandleListReplyCardsApiReplyCardsGet200JSONResponseBody0 returns the union data inside the HandleListReplyCardsApiReplyCardsGet200JSONResponseBody as a HandleListReplyCardsApiReplyCardsGet200JSONResponseBody0
 func (t HandleListReplyCardsApiReplyCardsGet200JSONResponseBody) AsHandleListReplyCardsApiReplyCardsGet200JSONResponseBody0() (HandleListReplyCardsApiReplyCardsGet200JSONResponseBody0, error) {
@@ -2966,6 +2979,9 @@ type ServerInterface interface {
 	// Terminate a task (owner/admin agent; the only non-executor status change).
 	// (POST /api/tasks/{task_id}/terminate)
 	HandleTerminateTaskApiTasksTaskIdTerminatePost(w http.ResponseWriter, r *http.Request, taskId string)
+	// Fetch a theme bundle from a link (owner/admin agent).
+	// (POST /api/theme/fetch)
+	HandleFetchThemeApiThemeFetchPost(w http.ResponseWriter, r *http.Request)
 	// Trigger a software upgrade to the latest GitHub release.
 	// (POST /api/update/upgrade)
 	HandleUpgradeApiUpdateUpgradePost(w http.ResponseWriter, r *http.Request)
@@ -6080,6 +6096,20 @@ func (siw *ServerInterfaceWrapper) HandleTerminateTaskApiTasksTaskIdTerminatePos
 	handler.ServeHTTP(w, r)
 }
 
+// HandleFetchThemeApiThemeFetchPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleFetchThemeApiThemeFetchPost(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleFetchThemeApiThemeFetchPost(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // HandleUpgradeApiUpdateUpgradePost operation middleware
 func (siw *ServerInterfaceWrapper) HandleUpgradeApiUpdateUpgradePost(w http.ResponseWriter, r *http.Request) {
 
@@ -6475,6 +6505,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/steps/{step_id}/note", wrapper.HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/steps/{step_id}/status", wrapper.HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/terminate", wrapper.HandleTerminateTaskApiTasksTaskIdTerminatePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/theme/fetch", wrapper.HandleFetchThemeApiThemeFetchPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/update/upgrade", wrapper.HandleUpgradeApiUpdateUpgradePost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/version", wrapper.HandleVersionApiVersionGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/warden/binary", wrapper.HandleWardenBinaryApiWardenBinaryGet)
