@@ -160,6 +160,9 @@ cat > "$WORK/leaky.sh" <<'LEAKY'
 #!/usr/bin/env bash
 pidfile="$1"
 libsh="$2"
+loopcmd="${4:-burn}"  # burn = busy-loop (sections 2/4: the orphan shape this
+                      # file is about); sleep = a quiet stand-in (section 7,
+                      # which asserts detection, not CPU cost)
 blockfor="${3:-30}"   # a parameter, NOT a sed-rewrite by the caller: a caller
                       # that rewrites this text gets a silent no-op the day the
                       # line drifts, and then leaks the child it thought it had
@@ -167,8 +170,8 @@ blockfor="${3:-30}"   # a parameter, NOT a sed-rewrite by the caller: a caller
 bash -c '
   . "$1" || exit 1
   printf "%s\t%s\n" "$$" "$(_ci_lock_ps "$$" lstart=)" > "$0"
-  while :; do :; done
-' "$pidfile" "$libsh" &
+  if [ "$2" = "burn" ]; then while :; do :; done; else sleep 600; fi
+' "$pidfile" "$libsh" "$loopcmd" &
 sleep "$blockfor"
 LEAKY
 
@@ -411,17 +414,49 @@ def _noop(pgid, sig):
 os.killpg = _noop
 NOKILL
 # Same leaky child, but its blocking parent exits on its own in 2s, so the only
-# thing this section can leave behind is the busy-loop it is about — which it
+# thing this section can leave behind is the process it is about — which it
 # kills below, by identity, before moving on.
+#
+# ⚠️ The leaked subject here SLEEPS; it does not burn a core like sections 2 and
+# 4. Two reasons, both learned the hard way on this shared machine. (1) If it
+# ever does escape, a sleeping process costs nothing while a busy-loop costs a
+# core until someone notices — and "someone notices 46h later" is the incident
+# this whole file exists for. (2) A busy-loop is what everyone else's cleanup
+# greps for: one nested run in ten had this process collected by something
+# outside this guard, with the neutering control still passing, which reads as
+# "the detector missed a leak" when nothing of the sort happened. A test that
+# any other process on the box can redden is exactly the indistinguishable red
+# this ticket is about. What this section asserts is DETECTION, and a sleeping
+# process is detected the same way.
 : > "$WORK/gpid.7"
-PYTHONPATH="$WORK/nokill" python3 "$RB" 1 bash "$WORK/leaky.sh" "$WORK/gpid.7" "$CI_LOCK_LIB" 2 >/dev/null 2>&1
+PYTHONPATH="$WORK/nokill" python3 "$RB" 1 bash "$WORK/leaky.sh" "$WORK/gpid.7" "$CI_LOCK_LIB" 2 sleep >/dev/null 2>&1
 gpid="$(rec_pid "$WORK/gpid.7")"; gstart="$(rec_start "$WORK/gpid.7")"
 check "the leaked busy-loop recorded its identity (positive control)" \
       "1" "$([[ -n "$gpid" && -n "$gstart" ]] && echo 1 || echo 0)"
+# Positive control for the NEGATIVE control: if the neutering silently failed to
+# take effect, run_bounded would collect the subtree correctly and the assertion
+# below would report "missed" — a red that says the detector is broken when in
+# fact the fixture never leaked. Section 5 pins its mutant the same way. This
+# was not theoretical: one nested run in ten reported "missed" with no way to
+# tell the two causes apart, which is this ticket's own defect in miniature.
+nokill_live="$(PYTHONPATH="$WORK/nokill" python3 -c '
+import os
+print(1 if os.killpg(0, 0) is None else 0)
+' 2>/dev/null)"
+check "the killpg-neutering mutant is actually in effect (positive control for the leak fixture)" \
+      "1" "$nokill_live"
 sleep 0.3
 if same_proc "$gpid" "$gstart"; then verdict=reported; else verdict=missed; fi
 check "a busy-loop that really DID survive is reported as still ours (negative control: the ORPHAN checks can still see one)" \
       "reported" "$verdict"
+if [[ "$verdict" != "reported" ]]; then
+  # Do not make the next reader guess which of the two happened, the way this
+  # ticket's original red made everyone guess.
+  printf '         recorded: pid [%s] start [%s]\n' "$gpid" "$gstart" >&2
+  printf '         that pid now: %s\n' \
+         "$(kill -0 "$gpid" 2>/dev/null && printf 'ALIVE, ps says [%s], start [%s]' \
+            "$(_ci_lock_ps "$gpid" command=)" "$(_ci_lock_ps "$gpid" lstart=)" || printf 'GONE (so the fixture did not leak — the neutering, not the detector)')" >&2
+fi
 # Cleaned up through the SAME code path the EXIT trap uses, so this also pins
 # that the reaping decision still kills: delete the kill from reap_recorded and
 # this assertion is the one that notices, instead of a core burning unnoticed
