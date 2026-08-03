@@ -145,6 +145,111 @@ class SSEConnection:
         ev = self.wait_for(_match, timeout=timeout)
         return {"event": ev, "frame": json.loads(ev["data"])}
 
+    def drain_backlog(
+        self, quiet_for: float = 1.0, timeout: float = 5.0, label: str = ""
+    ) -> int:
+        """BARRIER: SWALLOW every delta already on this connection and WAIT
+        UNTIL the stream has been silent for ``quiet_for`` seconds, so that no
+        frame produced before this point is still reachable by a later
+        ``wait_for*`` call. Returns how many data events were swallowed.
+
+        Why this exists (do not replace it with "just move the setup writes"):
+        ``wait_for``/``wait_for_frame`` drain FROM THE FRONT of the queue and
+        discard non-matching events, so they happily return a frame that was
+        already sitting on the connection BEFORE the caller triggered anything.
+        A test that opens its connection first and then does any roster/entity
+        write during setup therefore hands its first ``wait_for_frame(topic)``
+        a STALE frame, and that assertion becomes vacuously true — the publish
+        seam it means to guard can be deleted outright and the row stays green
+        (observed and reproduced: test_every_closed_topic_emits' ``member``
+        row).
+
+        ⚠️ THE LESSON THE FIRST VERSION PAID FOR — read this before "tightening"
+        anything here. v1 drained once and then ASSERTED the stream was silent
+        for ``quiet_for``; it turned the untouched baseline RED. The frames from
+        the setup writes had not arrived yet at drain time (the fan rides a
+        0.25 s poll, the drain ran a few ms after the write), so the sweep saw
+        an EMPTY queue and the frames landed inside the assertion window.
+        **A legitimate setup write's frame is SUPPOSED to arrive late; arriving
+        late is not the error — not being swallowed is the error.** v1 confused
+        "ASSERT it is quiet now" with "WAIT UNTIL it is quiet", and so it
+        classified the normal case as a failure. Hence the loop below: every
+        delta seen RESETS the quiet window instead of failing it. Only the outer
+        ``timeout`` — meaning "this stream never went quiet at all", i.e.
+        something is publishing continuously — is a red.
+
+        The barrier is COUNT-INDEPENDENT by construction, which is the whole
+        point: it swallows however many frames appear (0, 2 or 20) and returns
+        only after a full silent window, so a future setup write added above it
+        cannot silently re-poison the waits below. That is a property, not the
+        convention "remember to keep setup to two writes".
+
+        ⚠️ WHAT THIS CANNOT DO (do not design an experiment around it): ANY
+        absorbing barrier is necessarily blind to writes that happen AFTER it
+        returns. A setup write inserted BELOW this call and above the waits it
+        protects will not be caught here, and the row it poisons will go GREEN —
+        the vacuous kind of green. Do not "test" that case and read the green as
+        reassurance; it carries no information. The guard for that direction is
+        binding each observed frame to the VALUE the row's own write just set
+        (see the ``member`` row of test_every_closed_topic_emits), because the
+        payload is an eager snapshot taken inside hub.Publish and a frame
+        published earlier cannot carry a value written later. NOT the subject:
+        the polluting frame is usually about the SAME entity, so binding to the
+        subject id proves nothing (measured — see that row's own note).
+
+        ⚠️ KNOWN FALSE-RED WAVEFORM (measured with a fake queue, no server —
+        review round 2). The budget is deliberate, not a bug, but know where to
+        look when a red appears here on a loaded machine:
+
+            silent stream                                  -> returns  ~1.13 s
+            a delta every 0.5 s, forever                   -> RAISES   ~5.06 s
+            noisy until t=4.6 s, then completely silent    -> RAISES   ~5.01 s
+
+        The third one is the trap: the stream HAD settled, but not early enough
+        to fit a full 1 s quiet window inside the 5 s budget, so this raises even
+        though nothing is wrong except timing. Baseline lands at ~1.13 s, i.e.
+        about 4 s of headroom, so this is a slow-CI / heavily-loaded-box failure
+        mode. If you see it, look at what is delaying the fan poll — do NOT just
+        widen the budget, which is how a real "something publishes forever" bug
+        would get hidden.
+        """
+        import time as _time
+
+        hard_deadline = _time.monotonic() + timeout
+        swallowed = 0
+        while True:
+            now = _time.monotonic()
+            window_end = now + quiet_for
+            clamped = window_end > hard_deadline
+            if clamped:
+                window_end = hard_deadline
+            saw_delta = False
+            while True:
+                remaining = window_end - _time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    ev = self.events.get(timeout=remaining)
+                except queue.Empty:
+                    break
+                if ev.get("data") is None:
+                    continue  # heartbeat / comment: not a delta
+                swallowed += 1
+                saw_delta = True
+                break  # a delta RESETS the quiet window (late is fine)
+            if not saw_delta and not clamped:
+                return swallowed  # a FULL quiet window elapsed: the stream settled
+            if _time.monotonic() >= hard_deadline:
+                raise AssertionError(
+                    f"SSE barrier{' ' + label if label else ''} never settled: "
+                    f"the stream did not stay quiet for {quiet_for}s within a "
+                    f"{timeout}s budget ({swallowed} deltas swallowed). Deltas "
+                    f"are arriving continuously, so a wait after this point "
+                    f"could still consume a frame it did not trigger. Something "
+                    f"is publishing on this connection without the test asking "
+                    f"— find it; do NOT just widen the budget."
+                )
+
     def wait_closed(self, timeout: float = 5.0) -> bool:
         """True once the stream ENDED server-side (the pump thread finished —
         EOF / terminal chunk / read error). The §5.1 takeover observation

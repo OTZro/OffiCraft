@@ -27,6 +27,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor, act } from "@testing-library/react";
 import type { SseDelta } from "../api/adapter";
+// The ONE closed topic list (spec/sse.md §3.1), imported from the production
+// module rather than copied — see emitResync below.
+import { SSE_RESYNC_TOPICS } from "../api/http";
 
 const h = vi.hoisted(() => ({
   counts: {} as Record<string, number>,
@@ -212,27 +215,19 @@ function emit(delta: SseDelta) {
   });
 }
 
-/** The 13 closed topics resyncAll replays, naming NOTHING (a resync means "you
- * may have missed anything"), fanned synchronously topic-major. */
-const RESYNC_TOPICS = [
-  "member",
-  "chat",
-  "chat_read",
-  "reply_card",
-  "task",
-  "outsource_worker",
-  "task_manual",
-  "global_context",
-  "role_def",
-  "lessons",
-  "insight",
-  "context",
-  "monitoring",
-];
-
+/** The closed topics resyncAll replays (count deliberately NOT written here —
+ * that number goes stale the first time a topic is added; it was 12, it is 13
+ * since T-3809), naming NOTHING (a resync means "you
+ * may have missed anything"), fanned synchronously topic-major.
+ *
+ * This used to be a SECOND hand-copy of the list next to http.ts's own, and it
+ * had no discriminating power over that copy: deleting a topic from it left all
+ * 218 files / 1823 tests green, so it never caught a drift. It now replays the
+ * PRODUCTION array itself (T-05db node 4), and that array is pinned to
+ * spec/sse.md §3.1 by api/sseResyncTopics.test.ts. Never re-transcribe it here. */
 function emitResync() {
   act(() => {
-    for (const topic of RESYNC_TOPICS) {
+    for (const topic of SSE_RESYNC_TOPICS) {
       for (const cb of [...h.handlers]) cb(topic, { topic, names: {}, ids: [] });
     }
   });

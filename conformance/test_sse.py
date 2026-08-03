@@ -18,9 +18,11 @@ Coverage, MUST by MUST:
   * §2.1 seq strictly monotonic within a connection (== per-connection publish
         order, §4);
   * §2.2 partial payload convenience shapes (chat {id,from,to}; signals null);
-  * §3  the CLOSED 9-topic vocabulary — every topic explicitly triggered and
-        observed, incl. ``monitoring`` (spec froze the wire over SSE_TOPICS)
-        and the M2 ``reply_card`` addition; op vocabulary patch/remove/signal;
+  * §3  the CLOSED topic vocabulary — EVERY topic of the closed set is
+        explicitly triggered and observed, and the trigger table is confronted
+        with the product's own wire contract (spec/sse.md §3.1) at run time, so
+        a topic added there without a trigger here reddens instead of silently
+        losing its write-face coverage; op vocabulary patch/remove/signal;
   * §4  per-recipient routing (T-30d7): an AGENT connection receives a delta
         iff addressed (chat→from/to, member→self); an unrelated agent's stream
         stays quiet; the owner/dashboard connection is全量;
@@ -49,6 +51,8 @@ target is single-tenant; no second owner exists to receive/miss a frame).
 from __future__ import annotations
 
 import json
+import pathlib
+import re
 import time
 import uuid
 from typing import Any
@@ -61,6 +65,172 @@ from sse_client import SSEConnection
 
 def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+HERE = pathlib.Path(__file__).resolve().parent
+
+# The §3.1 topic table row: ``| `<topic>` | <trigger> | <op> |``.
+#
+# ⚠️ DUPLICATED PARSER (knowingly, this round): server/ocserverd's
+# TestSSETopicsMatchSpec parses the SAME table to bind hub.go's `sseTopics` to
+# it — the other edge of this guard (that test is what makes spec/sse.md a
+# TRUSTWORTHY authority here; without it a topic added to hub.go alone would
+# leave both guards green). Two parsers of one markdown table is a smell; the
+# proper fix is a MACHINE-READABLE spec asset (a spec/sse-topics.json next to
+# spec/openapi.json, consumed by both sides and by the frontend's
+# SSE_RESYNC_TOPICS), which adds a frozen wire asset ⇒ owner's call under the
+# wire freeze, not a tidy-up to do in passing.
+_SPEC_TOPIC_ROW = re.compile(r"^\|\s*`([a-z_]+)`\s*\|", re.M)
+
+# The §3.1 section delimiters. Located with str.find + an EXPLICIT not-found
+# check, never with str.split: ``"x".split("nope", 1)`` returns ``["x"]``, so
+# ``spec.split("### 3.1", 1)[-1].split("### 3.2", 1)[0]`` silently degrades to a
+# DIFFERENT SLICE the moment either heading is renamed or moved — and the
+# degraded slice still parses out a set that looks perfectly healthy, so the
+# confrontation below guards nothing and nothing goes red.
+#
+# 🔴 WHY it stays "healthy" — the real mechanism, because the explanation that
+# used to sit here was wrong and wrong explanations get quoted. It said,
+# verbatim: the parse "degrades to THE WHOLE DOCUMENT" and "this document
+# happens to contain exactly the same 12 topic rows elsewhere (§4.1's audience
+# table)". **Both halves are false** (re-measured independently, pure-function,
+# no server):
+#   * losing "### 3.1" yields start-of-file → §3.2 — a ~9.9k-char SLICE, not the
+#     34207-char document; losing "### 3.2" yields §3.1 → EOF. Neither is
+#     "the whole document".
+#   * §4.1 is irrelevant: it begins at char 11089, i.e. PAST the end of that
+#     ~9.9k-char slice, so the degraded parse never reads it. It also lists only
+#     7 topics, which cannot produce the full set. Deleting §4.1 outright leaves
+#     the degraded answer BYTE-IDENTICAL.
+# The actual mechanism is more general, and worse: **the end delimiter sits
+# AFTER the target table, so when the start delimiter goes missing the degraded
+# slice STILL FULLY CONTAINS the very table it was supposed to bound.** The
+# answer is right because the table is still inside the slice — not because a
+# second copy of it exists somewhere else. Generalise it: ANY split-style parser
+# that bounds its target with a heading located AFTER that target will silently
+# return the correct answer when its START delimiter disappears.
+# (This matters operationally: anyone who believed the §4.1 story would try to
+# reduce the risk by cleaning up §4.1. Measured — that changes nothing.)
+#
+# Fail-loud is the whole point: a parser for a machine-read contract must never
+# have a "quietly parsed something else" branch.
+_SPEC_TOPIC_SECTION_START = "### 3.1"
+_SPEC_TOPIC_SECTION_END = "### 3.2"
+
+
+class SpecTopicParseError(AssertionError):
+    """spec/sse.md §3.1 could not be located/parsed — never a silent fallback."""
+
+
+def _parse_closed_topics(spec: str, source: str = "<spec/sse.md>") -> set[str]:
+    """Extract the §3.1 topic set from the spec text, or RAISE.
+
+    Split out from ``_closed_topic_set`` so the fail-loud behaviour itself is
+    testable on constructed inputs (``test_spec_topic_parser_fails_loud``)
+    without a server: a guard whose degradation mode is untested is a guard
+    that has only ever been eyeballed.
+    """
+    start = spec.find(_SPEC_TOPIC_SECTION_START)
+    if start == -1:
+        raise SpecTopicParseError(
+            f"{source}: heading {_SPEC_TOPIC_SECTION_START!r} not found — the "
+            "closed topic set is READ from that section at run time, so a "
+            "renamed/moved heading must fail here, not fall back to slicing "
+            "from the start of the file (that slice still CONTAINS the §3.1 "
+            "table, so it yields the right-looking set for the wrong reason "
+            "and makes every topic guard vacuous)."
+        )
+    end = spec.find(_SPEC_TOPIC_SECTION_END, start + len(_SPEC_TOPIC_SECTION_START))
+    if end == -1:
+        raise SpecTopicParseError(
+            f"{source}: heading {_SPEC_TOPIC_SECTION_END!r} not found after "
+            f"{_SPEC_TOPIC_SECTION_START!r} — the section has no end delimiter, "
+            "so the topic table can no longer be bounded. Fix the spec headings "
+            "or this parser; do not let it swallow the rest of the document."
+        )
+    topics = set(_SPEC_TOPIC_ROW.findall(spec[start:end]))
+    if not topics:
+        raise SpecTopicParseError(
+            f"{source}: §3.1 was located but ZERO topic rows parsed out of it — "
+            "the table shape changed (or moved). An empty closed set would make "
+            "the confrontation in test_every_closed_topic_emits pass trivially "
+            "(nothing missing, nothing extra), so it is an error, not a result."
+        )
+    return topics
+
+
+def _closed_topic_set() -> set[str]:
+    """The closed topic vocabulary, READ FROM THE PRODUCT'S OWN WIRE CONTRACT at
+    run time — ``spec/sse.md`` §3.1, the very table ``hub.go``'s ``sseTopics``
+    cites as its source and that a topic addition MUST go through (spec-first,
+    root CLAUDE.md §13).
+
+    Deliberately NOT a list restated in this file: a hand-copied set would make
+    the confrontation below vacuous (it would only ever confront one hand-copy
+    with another, and the next person to add a topic would forget both). Same
+    posture as ``test_rest_happy``/``test_auth_matrix``, which pin the live
+    surface against the frozen ``spec/openapi.json`` + ``routes_manifest.json``
+    rather than against a list typed here.
+
+    ⚠️ SCOPE of this guard (and of ocserverd's TestSSETopicsMatchSpec, the other
+    edge): it covers the ENTITY-DELTA topics only — the ones that ride
+    ``hub.Publish``. The three DIRECTED bands (``context-high`` §6,
+    ``warden-command`` §7, ``task-close`` §8) go out through ``PushDirected``,
+    bypass ``Publish`` entirely, and are a separate envelope family by design
+    (§3.1's own note: "a separate envelope family, not entity-delta topics").
+    Their ABSENCE from this set is deliberate, not an oversight — do NOT "fix"
+    it by adding them here or to ``sseTopics``; they are pinned by their own
+    tests (``test_context_high_*``, ``test_warden_command_band_start_frame``).
+    """
+    path = HERE.parent / "spec" / "sse.md"
+    return _parse_closed_topics(path.read_text(encoding="utf-8"), source=str(path))
+
+
+def test_spec_topic_parser_fails_loud() -> None:
+    """The §3.1 reader must ERROR — never return a healthy-looking set — when
+    the section it reads is not where it expects it.
+
+    This is the anti-vacuity guard for the guard: the previous ``str.split``
+    form produced the RIGHT ANSWER FOR THE WRONG REASON on a missing heading.
+
+    🔴 The reason stated here before was wrong, and is quoted so it is not
+    re-used: it claimed the split "returned the whole document on a missing
+    heading, and because §4.1's audience table lists the same 12 topics, the
+    degraded parse produced the right answer". Re-measured: the degraded slice
+    is ~9.9k chars (the file is 34207), §4.1 starts at char 11089 and is never
+    reached, §4.1 lists only 7 topics, and deleting §4.1 leaves the degraded
+    answer identical. See the note on the delimiters above for the real
+    mechanism — the end delimiter sits AFTER the table, so a slice that loses
+    its start delimiter still contains the whole table.
+
+    Every case below is asserted to be a genuine mutation (the mutated text no
+    longer contains the delimiter it is supposed to have lost — a `### 3.1` →
+    `### 3.1bis` rename would still CONTAIN `### 3.1` and make these cases pass
+    without testing anything).
+    """
+    real = (HERE.parent / "spec" / "sse.md").read_text(encoding="utf-8")
+    # Deliberately a floor, not the exact count: the closed set grows (it was 12
+    # when this was written, 13 today), and a hard-coded size here would be one
+    # more stale number to chase — the EQUALITY that pins the set lives in
+    # test_every_closed_topic_emits, this is only a positive control.
+    assert len(_parse_closed_topics(real)) >= 12, "positive control: the real spec parses"
+
+    no_start = real.replace(_SPEC_TOPIC_SECTION_START, "### 3.9 (heading moved)")
+    assert _SPEC_TOPIC_SECTION_START not in no_start, "mutation must really remove it"
+    with pytest.raises(SpecTopicParseError):
+        _parse_closed_topics(no_start)
+
+    no_end = real.replace(_SPEC_TOPIC_SECTION_END, "### 3.8 (heading moved)")
+    assert _SPEC_TOPIC_SECTION_END not in no_end, "mutation must really remove it"
+    with pytest.raises(SpecTopicParseError):
+        _parse_closed_topics(no_end)
+
+    empty_section = (
+        f"{_SPEC_TOPIC_SECTION_START} Topics\n\nthe table moved elsewhere\n\n"
+        f"{_SPEC_TOPIC_SECTION_END} Ops\n\n| `member` | x |\n"
+    )
+    with pytest.raises(SpecTopicParseError):
+        _parse_closed_topics(empty_section)
 
 
 def _fresh_agent(client, owner_token, tag: str) -> AgentIdentity:
@@ -194,18 +364,36 @@ def test_member_remove_frame(client, owner_token, fresh_member, owner_sse) -> No
     assert inner["deleted"] is True and inner["payload"] is None, inner
 
 
-# ── §3 the closed topic/op vocabulary — all 9 topics observed ─────────────────
+# ── §3 the closed topic/op vocabulary — EVERY topic of the set observed ───────
 
 
-def test_all_nine_topics_emit(client, owner_token, agent_a, fresh_member, owner_sse) -> None:
+def test_every_closed_topic_emits(client, owner_token, agent_a, fresh_member, owner_sse) -> None:
     """Trigger every topic of the closed set (spec §3.1 — the M1 freeze was 8
     topics, monitoring included despite the 7-topic SSE_TOPICS constant;
-    reply_card joined in M2) and pin its op + payload semantics."""
+    reply_card joined in M2, the task batch added three more) and pin its op +
+    payload semantics.
+
+    The trigger table below is CONFRONTED with the closed set read from
+    ``spec/sse.md`` §3.1 at run time (``_closed_topic_set``): covering fewer
+    topics than the wire contract declares means the missing topics' publish
+    seam could be deleted wholesale with this suite still green, which is
+    exactly what happened while this table was a hand-written list of 9.
+    """
     tag = uuid.uuid4().hex[:8]
     member = fresh_member()
+    # A kind='outsource' roster row IS an outsource worker (the P7d fold — the
+    # worker table lives in `member`), so the ordinary worker write face below
+    # has a subject without needing the scheduler's spawn seam.
+    worker = hire_member(client, owner_token, f"conf-topic-worker-{tag}", kind="outsource")
+    # The member row's PATCH body is a NAMED VALUE, not an inline literal, so
+    # the assertion below can bind to the very field this write sets instead of
+    # to a value re-typed next to it. See the identity check in the loop: if
+    # this body ever stops writing `name`, that check FAILS LOUDLY instead of
+    # silently degrading into something a stale frame satisfies.
+    member_patch_body: dict[str, Any] = {"name": f"conf-topic-{tag}"}
     triggers: list[tuple[str, Any]] = [
         ("member", lambda: client.patch(
-            f"/api/members/{member}", json={"name": f"conf-topic-{tag}"},
+            f"/api/members/{member}", json=member_patch_body,
             headers=_auth(owner_token))),
         ("chat", lambda: client.post(
             "/api/chat", json={"to": agent_a.member_id, "body": "topic probe"},
@@ -219,6 +407,21 @@ def test_all_nine_topics_emit(client, owner_token, agent_a, fresh_member, owner_
             json={"kind": "decision", "summary": f"topic probe {tag}",
                   "options": ["AI pick", "other"]},
             headers=_auth(agent_a.token))),
+        # The three M3 task-batch topics, each through an ORDINARY write face
+        # (task creation / a worker field edit / manual creation) — not a
+        # side-door: these are the same seams the cockpit and the MCP tools use.
+        ("task", lambda: client.post(
+            "/api/tasks",
+            json={"title": f"topic probe {tag}",
+                  "executor_member_id": agent_a.member_id},
+            headers=_auth(agent_a.token))),
+        ("outsource_worker", lambda: client.post(
+            f"/api/outsource-workers/{worker}/model",
+            json={"effort": "high"},
+            headers=_auth(owner_token))),
+        ("task_manual", lambda: client.post(
+            "/api/task-manuals", json={"type_key": f"conf-topic-{tag}"},
+            headers=_auth(owner_token))),
         ("global_context", lambda: client.post(
             "/api/global-context", json={"text": f"topic probe {tag}"},
             headers=_auth(owner_token))),
@@ -246,16 +449,149 @@ def test_all_nine_topics_emit(client, owner_token, agent_a, fresh_member, owner_
     expected_op = {
         "member": "patch", "chat": "patch", "chat_read": "patch",
         "reply_card": "patch",
+        "task": "patch", "outsource_worker": "patch", "task_manual": "patch",
         "global_context": "patch", "role_def": "patch", "lessons": "patch",
         "insight": "patch",
         "context": "signal", "monitoring": "signal",
     }
+    # ── the self-confrontation: this table IS the closed set, not a subset ────
+    closed = _closed_topic_set()
+    covered = {topic for topic, _ in triggers}
+    missing, extra = sorted(closed - covered), sorted(covered - closed)
+    assert not missing and not extra, (
+        "the trigger table MUST equal the closed topic set declared by the "
+        "product's wire contract (spec/sse.md §3.1).\n"
+        f"  never triggered here (their publish seam could be deleted and this "
+        f"suite would stay green): {missing}\n"
+        f"  triggered here but NOT in the closed set (a phantom topic, or the "
+        f"contract lost one): {extra}"
+    )
+    assert sorted(expected_op) == sorted(covered), (
+        "every triggered topic needs its expected frame kind pinned; "
+        f"missing: {sorted(covered - set(expected_op))}, "
+        f"stale: {sorted(set(expected_op) - covered)}"
+    )
+    # ── BARRIER: the loop below may only ever see frames IT triggered ─────────
+    #
+    # ``wait_for_frame`` drains from the FRONT of the connection's queue, so it
+    # will happily hand back a delta that was already sitting there before the
+    # trigger ran. This test's setup writes to the roster (``fresh_member()``,
+    # ``hire_member(...)``) while ``owner_sse`` is ALREADY OPEN, so without this
+    # barrier the first row (``member``) consumed one of those setup frames and
+    # its assertion was VACUOUSLY TRUE: deleting putMember's publish seam
+    # outright (write straight to the store, HTTP still 200, wire silent)
+    # left this row — and the whole suite — green. Reviewed and reproduced;
+    # that is the exact failure this test exists to catch.
+    #
+    # This must NOT be "downgraded" to moving those two setup writes above the
+    # connection. That fixes today's two writes and nothing else: the next
+    # person to add a third setup write re-poisons every row here SILENTLY,
+    # because a stale frame produces a PASS, and nothing in the suite would
+    # object. The barrier swallows whatever backlog exists (any count) and
+    # returns only once the stream has gone quiet, so the property is
+    # count-independent instead of resting on "setup only writes twice".
+    #
+    # ⚠️ The barrier is the SECONDARY guard. It is blind, by construction, to
+    # any write that happens AFTER it returns (see sse_client.drain_backlog's
+    # note — that is true of every absorbing barrier, so a "setup write inserted
+    # below the barrier" experiment can only ever produce an uninformative
+    # green). The PRIMARY guard is the value binding on the `member` row below.
+    #
+    # 🔴 WHAT IS *NOT* PROVEN HERE — read this before trusting the other rows.
+    # Only the `member` row binds the frame to the write that triggered it. The
+    # other ELEVEN rows still assert no more than "a frame with this topic
+    # arrived", so their non-vacuity is BORROWED from this barrier having
+    # emptied the backlog — it is not proven. Two measured facts make that a
+    # live risk rather than a theoretical one:
+    #   * a single trigger in this table can fan MORE THAN ONE topic. Measured
+    #     (review round 2, full-frame trace): creating a reply_card also fans
+    #     `chat`; creating a role also fans `member`.
+    #   * today no row is poisoned by that cross-talk ONLY because the
+    #     cross-talking topics happen to sit EARLIER in this table, so their
+    #     frames are already consumed by the time the later row waits.
+    # That is an ORDERING ACCIDENT, not a property: REORDERING THIS TABLE CAN
+    # SILENTLY MAKE A ROW VACUOUS AGAIN, and nothing here would object. If you
+    # reorder, or add a trigger with cross-talk, bind that row to its own write
+    # the way the `member` row does — do not assume the barrier covers you.
+    owner_sse.drain_backlog(quiet_for=1.0, timeout=5.0, label="before the closed-topic loop")
+
     for topic, fire in triggers:
         r = fire()
         assert r.status_code == 200, f"{topic} trigger failed: {r.status_code} {r.text[:200]}"
-        frame = owner_sse.wait_for_frame(topic)["frame"]
+        # NAME THE TOPIC on the miss: the bare TimeoutError from wait_for_frame
+        # says only "no matching SSE event", so a red CI run left the reader to
+        # infer WHICH topic from this table's order. That inference is exactly
+        # the hand-reasoning this test exists to abolish — the whole point of
+        # the confrontation above is that the failure names names.
+        try:
+            frame = owner_sse.wait_for_frame(topic)["frame"]
+        except TimeoutError as exc:
+            raise AssertionError(
+                f"topic {topic!r} was triggered (HTTP 200) but NO delta arrived "
+                f"within 5s — its publish seam is missing (the write happened, "
+                f"the wire stayed silent)"
+            ) from exc
         assert frame["op"] == expected_op[topic], (topic, frame)
         assert frame["op"] in {"patch", "remove", "signal"}, frame
+        if topic == "member":
+            # VALUE BINDING — the row's real guard, and the reason this row does
+            # not need a mutant to prove it is not vacuous.
+            #
+            # "a member frame arrived" was satisfiable by ANY member frame,
+            # including one this test's own setup produced seconds earlier; that
+            # is how the row stayed green with putMember's publish seam bypassed
+            # entirely.
+            #
+            # 🔴 CORRECTION (independent review round 2, MEASURED — the previous
+            # version of this comment claimed, verbatim:
+            #     "a stale frame is inherently about a DIFFERENT member (a
+            #      scratch hire, some other test's roster write), so it can
+            #      never satisfy this"
+            # and that the check "holds no matter WHERE a future stray write is
+            # added". **The first claim is false and is quoted here so nobody
+            # trusts it again.** The polluting frame comes from `fresh_member()`
+            # — and `member` IS that member, so `payload["id"] == member` is
+            # TRUE for the stale frame (measured: `'m-ca96…' == 'm-ca96…'`).
+            # The SUBJECT does not discriminate at all.
+            #
+            # What actually discriminates is the VALUE this PATCH just wrote:
+            # the payload is an eager snapshot taken inside hub.Publish, so a
+            # frame published BEFORE this write cannot carry the name this write
+            # sets. The id check below is kept only as a sanity check (right
+            # entity), NOT as the guard — do not lean on it.
+            #
+            # ⚠️ DEGRADATION CONDITION, stated so it cannot be re-discovered the
+            # hard way: this guard is only as strong as "the row PATCHes a field
+            # whose value the frame echoes back". If the row is ever changed to
+            # PATCH something else (desired_state, role, …), value binding is
+            # gone and the row falls back to "some member delta arrived" — the
+            # vacuous state this whole ticket exists to remove. That is why the
+            # body is a named dict and why the first assertion below is about
+            # the TEST ITSELF: change the body without re-binding this check and
+            # the row goes RED with instructions, instead of going quietly
+            # green.
+            assert "name" in member_patch_body, (
+                "the member row no longer PATCHes `name`, so the value binding "
+                "below has nothing to bind to. Do NOT delete the binding: pick "
+                "a field this write actually sets AND that the member payload "
+                "echoes back, and assert that instead. Dropping it silently "
+                "returns this row to 'any member frame will do', which a stale "
+                f"setup frame satisfies. Current body: {member_patch_body}"
+            )
+            payload = frame["data"]["payload"]
+            assert payload["id"] == member, (
+                f"member row: delta for the wrong entity (expected {member!r}). "
+                f"Got payload: {payload}"
+            )
+            assert payload["name"] == member_patch_body["name"], (
+                f"the member row observed a delta that does NOT carry the value "
+                f"the PATCH it just issued wrote (expected name "
+                f"{member_patch_body['name']!r}) — this is the stale-frame "
+                f"failure mode: without this check the row passes while the "
+                f"write's publish seam is missing. Note the subject alone would "
+                f"NOT have caught it: the polluting frame is about this very "
+                f"member. Got payload: {payload}"
+            )
         if frame["op"] == "signal":
             # §3.2: volatile in-memory store change — payload always null.
             assert frame["data"]["payload"] is None, (topic, frame)
@@ -821,7 +1157,7 @@ def test_warden_command_band_start_frame(
 # The 請示 nav badge (useReplyCardCount) refetches on every reply_card delta;
 # owner reported the badge staying blank for an open_gate gate card until a
 # manual reload. conformance historically triggered reply_card ONLY via the
-# standalone POST /api/reply-cards path (test_all_nine_topics_emit). This pins
+# standalone POST /api/reply-cards path (test_every_closed_topic_emits). This pins
 # the OTHER open path — open_gate arming — actually fans a reply_card delta to
 # the owner connection, byte-for-byte the same live-update signal the badge
 # rides. If the badge bug is a missing frame, this goes red.
