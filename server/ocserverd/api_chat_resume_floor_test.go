@@ -221,8 +221,23 @@ func TestResumeDutyIsCappedAndMarked(t *testing.T) {
 // rc-a02d8bc7fe23: 正職給職責、外包給任務標題. A contractor id is minted per task,
 // so its task title IS its duty.
 //
-// MUTANT: fill current_task for members too — the member assertion goes red.
 // MUTANT: drop the title cap — the length assertion goes red.
+//
+// MUTANT (member half), and the honest limit of it: hoisting the
+// contractorTaskTitle call out of the contractor branch so members get one too
+// does NOT turn this red on its own — the lookup goes through the outsource
+// binding, which a member does not have, so it returns "" anyway. What DOES
+// turn it red is the realistic degradation: resolving the title by executor
+// (ListOpenTasksByExecutor) AND filling it for everyone — verified, this test
+// then reports the member carrying "成員自己的任務標題".
+//
+// ⚠️ So state the coverage precisely rather than claiming more: this guards
+// "members must not be given a task title by a lookup that can find one". It
+// does NOT guard against someone switching to the executor-based lookup for
+// contractors only — that variant keeps every assertion here green while
+// quietly introducing a full task-table scan (task.executor_id has no index)
+// on the boot path. That risk is held by the comment on contractorTaskTitle
+// and by review, not by this test.
 func TestResumeContractorCarriesTaskTitleAndMemberDoesNot(t *testing.T) {
 	s := floorTestServer(t)
 	longTitle := strings.Repeat("務", resumeTaskTitlePreview+60)
@@ -235,7 +250,22 @@ func TestResumeContractorCarriesTaskTitleAndMemberDoesNot(t *testing.T) {
 	}
 	taskID := "t-floor-1"
 	putFloorMember(t, s, Member{ID: "ow-charlie", Name: "O-77", Kind: KindOutsource, LinkedTaskID: &taskID})
-	putFloorMember(t, s, Member{ID: "m-alpha", Name: "Alpha", Kind: KindAssistant, RoleKey: "assistant"})
+	// ⚠️ The member below deliberately carries a task binding too. Without it
+	// this test has NO discriminating power for the member half: a member has
+	// no outsource row, so "current_task is empty" comes out true even when the
+	// code wrongly asks for one. Verified by mutant — hoisting the
+	// contractorTaskTitle call out of the contractor branch left every test
+	// green until this binding was added, and now turns this one red.
+	memberTaskID := "t-floor-2"
+	if err := s.dal.PutTask(Task{
+		ID: memberTaskID, TypeKey: "tm-x", Title: "成員自己的任務標題", Status: TaskStatusInProgress,
+		Priority: TaskPriorityMid, ExecutorKind: TaskExecutorMember, ExecutorID: "m-alpha",
+		CreatedTS: 1000, UpdatedTS: 1000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	putFloorMember(t, s, Member{ID: "m-alpha", Name: "Alpha", Kind: KindAssistant,
+		RoleKey: "assistant", LinkedTaskID: &memberTaskID})
 
 	got := resumeFor(t, s, "m-alpha")
 	contractor := rosterRow(t, got.Roster, "ow-charlie")
