@@ -1290,6 +1290,27 @@ export interface Api {
    */
   setTaskPriority(id: string, priority: string): Promise<TaskView>;
   /**
+   * Correct one task's description (`POST /api/tasks/{id}/description`, T-e271)
+   * — the ticket's own text: what the task IS (scope, origin, acceptance), as
+   * opposed to a step note's "where this step is right now".
+   *
+   * 🔴 A CLOSED task is NOT a 409 here, unlike every other task write on this
+   * interface (priority, artifacts, reassign, steps all refuse a terminal
+   * task). That is the server's deliberate asymmetry, not an oversight on this
+   * seam: a ticket worded wrongly is usually found to be wrong AFTER it closed,
+   * and freezing the text would keep a known falsehood in the permanent record,
+   * while the artifact set stays frozen because it records what the task
+   * PRODUCED. Do not "align" this by refusing terminal tasks in the UI — the
+   * server accepts them and the cockpit would be lying about what it can do.
+   *
+   * The write is wholesale within that one field: `description` replaces
+   * whatever was there and `""` clears it. Every change that actually alters
+   * the text retains the previous one as a `task_description` revision keyed on
+   * the task id, readable through listDocumentHistory. Returns the task after
+   * the change; the SSE `task` delta also fans.
+   */
+  updateTaskDescription(id: string, description: string): Promise<TaskView>;
+  /**
    * Reassign a task (`POST /api/tasks/{id}/reassign`) — owner + 特助 only
    * (the server gates it; a member/worker caller is a 403). The server expires
    * the task's waiting cards, rewinds non-terminal steps to pending, dismisses

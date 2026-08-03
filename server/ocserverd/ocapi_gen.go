@@ -1800,6 +1800,11 @@ type TaskDepsDTO struct {
 	BlockedBy []string `json:"blocked_by"`
 }
 
+// TaskDescriptionDTO Correct one task's description in place (MCP “update_task_description“, T-e271). PARTIAL update, shaped exactly like “update_task_manual“: the ONLY field is “description“, and omitting it is a legal no-op rather than a clear — an omitted field never changes anything, while an explicit “""“ DOES clear the description. That distinction is why the field is nullable-with-no-default instead of “default: ""“: a defaulted body could silently erase a description the caller never mentioned. Unknown keys are refused (“additionalProperties: false“), so a caller who reaches for “text“ or “desc“ is told rather than ignored. The write is wholesale within that one field — the value replaces whatever was there; there is no append form, because a description states what the task IS, not what has happened to it.
+type TaskDescriptionDTO struct {
+	Description *string `json:"description,omitempty"`
+}
+
 // TaskLearningsPatchDTO Anchor-addressed PATCH of a type's learnings (MCP “patch_task_learnings“ — the learnings twin of “patch_lessons“): “{edits: [{old, new}], allow_shrink?}“. The write cost scales with the CHANGE, not the doc — a whole-doc “write_task_learnings“ stops fitting in one model output as the learnings grow (30k chars observed), so this is the primary write seam and whole-doc replace stays the last resort. ATOMIC — edits apply sequentially to an in-memory copy and any failing anchor (absent or ambiguous “old“) rejects the ENTIRE batch with a flat 400 and ZERO writes. “allow_shrink“ (default false) must be set explicitly for a patch that empties the doc or shrinks it to under a tenth of its size — the r-76 wipe-guard posture.
 type TaskLearningsPatchDTO struct {
 	AllowShrink *bool            `json:"allow_shrink,omitempty"`
@@ -2380,6 +2385,9 @@ type HandleAddTaskArtifactApiTasksTaskIdArtifactPostJSONRequestBody = TaskArtifa
 // HandleSetTaskDepsApiTasksTaskIdDepsPostJSONRequestBody defines body for HandleSetTaskDepsApiTasksTaskIdDepsPost for application/json ContentType.
 type HandleSetTaskDepsApiTasksTaskIdDepsPostJSONRequestBody = TaskDepsDTO
 
+// HandleUpdateTaskDescriptionApiTasksTaskIdDescriptionPostJSONRequestBody defines body for HandleUpdateTaskDescriptionApiTasksTaskIdDescriptionPost for application/json ContentType.
+type HandleUpdateTaskDescriptionApiTasksTaskIdDescriptionPostJSONRequestBody = TaskDescriptionDTO
+
 // HandleMarkTaskDuplicateApiTasksTaskIdDuplicatePostJSONRequestBody defines body for HandleMarkTaskDuplicateApiTasksTaskIdDuplicatePost for application/json ContentType.
 type HandleMarkTaskDuplicateApiTasksTaskIdDuplicatePostJSONRequestBody = TaskMarkDuplicateDTO
 
@@ -2807,6 +2815,9 @@ type ServerInterface interface {
 	// Replace the blocking-deps list wholesale.
 	// (POST /api/tasks/{task_id}/deps)
 	HandleSetTaskDepsApiTasksTaskIdDepsPost(w http.ResponseWriter, r *http.Request, taskId string)
+	// Correct a task's description (executor/admin; closed tasks included).
+	// (POST /api/tasks/{task_id}/description)
+	HandleUpdateTaskDescriptionApiTasksTaskIdDescriptionPost(w http.ResponseWriter, r *http.Request, taskId string)
 	// Mark a task duplicated, pointing at the original (executor/owner; terminal).
 	// (POST /api/tasks/{task_id}/duplicate)
 	HandleMarkTaskDuplicateApiTasksTaskIdDuplicatePost(w http.ResponseWriter, r *http.Request, taskId string)
@@ -5583,6 +5594,32 @@ func (siw *ServerInterfaceWrapper) HandleSetTaskDepsApiTasksTaskIdDepsPost(w htt
 	handler.ServeHTTP(w, r)
 }
 
+// HandleUpdateTaskDescriptionApiTasksTaskIdDescriptionPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleUpdateTaskDescriptionApiTasksTaskIdDescriptionPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "task_id" -------------
+	var taskId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "task_id", r.PathValue("task_id"), &taskId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "task_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleUpdateTaskDescriptionApiTasksTaskIdDescriptionPost(w, r, taskId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // HandleMarkTaskDuplicateApiTasksTaskIdDuplicatePost operation middleware
 func (siw *ServerInterfaceWrapper) HandleMarkTaskDuplicateApiTasksTaskIdDuplicatePost(w http.ResponseWriter, r *http.Request) {
 
@@ -6226,6 +6263,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/claim", wrapper.HandleClaimTaskApiTasksTaskIdClaimPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/closeout", wrapper.HandleReportTaskCloseoutApiTasksTaskIdCloseoutPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/deps", wrapper.HandleSetTaskDepsApiTasksTaskIdDepsPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/description", wrapper.HandleUpdateTaskDescriptionApiTasksTaskIdDescriptionPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/duplicate", wrapper.HandleMarkTaskDuplicateApiTasksTaskIdDuplicatePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/message", wrapper.HandlePostTaskMessageApiTasksTaskIdMessagePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/plan", wrapper.HandleSubmitTaskPlanApiTasksTaskIdPlanPost)

@@ -4881,6 +4881,25 @@
         "additionalProperties": false,
         "type": "object"
       },
+      "TaskDescriptionDTO": {
+        "description": "Correct one task's description in place (MCP ``update_task_description``, T-e271). PARTIAL update, shaped exactly like ``update_task_manual``: the ONLY field is ``description``, and omitting it is a legal no-op rather than a clear — an omitted field never changes anything, while an explicit ``\"\"`` DOES clear the description. That distinction is why the field is nullable-with-no-default instead of ``default: \"\"``: a defaulted body could silently erase a description the caller never mentioned. Unknown keys are refused (``additionalProperties: false``), so a caller who reaches for ``text`` or ``desc`` is told rather than ignored. The write is wholesale within that one field — the value replaces whatever was there; there is no append form, because a description states what the task IS, not what has happened to it.",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          }
+        },
+        "title": "TaskDescriptionDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
       "TaskLearningsPatchDTO": {
         "description": "Anchor-addressed PATCH of a type's learnings (MCP ``patch_task_learnings`` — the learnings twin of ``patch_lessons``): ``{edits: [{old, new}], allow_shrink?}``. The write cost scales with the CHANGE, not the doc — a whole-doc ``write_task_learnings`` stops fitting in one model output as the learnings grow (30k chars observed), so this is the primary write seam and whole-doc replace stays the last resort. ATOMIC — edits apply sequentially to an in-memory copy and any failing anchor (absent or ambiguous ``old``) rejects the ENTIRE batch with a flat 400 and ZERO writes. ``allow_shrink`` (default false) must be set explicitly for a patch that empties the doc or shrinks it to under a tenth of its size — the r-76 wipe-guard posture.",
         "properties": {
@@ -13037,6 +13056,76 @@
           }
         },
         "summary": "Replace the blocking-deps list wholesale."
+      }
+    },
+    "/api/tasks/{task_id}/description": {
+      "post": {
+        "description": "Correct one task's description in place (MCP ``update_task_description``, T-e271). Admitted for the task's EXECUTOR or an admin/owner — the same ``callerMayDriveTask`` gate every other task-driving write uses, 403 otherwise; the CREATOR has no standing here unless it is also the executor (owner ruling, T-e271). Partial update in ``update_task_manual``'s shape: only the field you name changes, so a body that omits ``description`` is a legal no-op that versions nothing, and unknown keys are refused rather than dropped. DELIBERATELY accepted while the task is CLOSED (completed / terminated / duplicated), which is where this route parts company with the artifact set: a closed task's DELIVERABLES are its outcome and are frozen in both directions so the outcome cannot be restated, whereas the description is the ticket's own TEXT — a ticket worded wrongly stays wrong forever if it can only be corrected while open, and correcting it changes nothing about what was produced. Every write that actually changes the text retains the previous one in the SHARED document-history series (kind ``task_description``, key = the task id) that global context / role definitions / task manuals already use — one mechanism, not a second audit trail — so the newest three revisions stay listable and restorable. 404 for an unknown task.",
+        "operationId": "handle_update_task_description_api_tasks__task_id__description_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskDescriptionDTO"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Validation error (unified error envelope)."
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Client error (unified error envelope)."
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Server error (unified error envelope)."
+          }
+        },
+        "summary": "Correct a task's description (executor/admin; closed tasks included)."
       }
     },
     "/api/tasks/{task_id}/duplicate": {

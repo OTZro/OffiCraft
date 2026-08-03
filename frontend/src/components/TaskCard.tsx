@@ -81,6 +81,7 @@ import {
 } from "../hooks/useAttachmentStaging";
 import { ComposerAttachmentPreview } from "./ComposerAttachmentPreview";
 import { ConfirmModal } from "./ConfirmModal";
+import { DocumentHistoryEntry } from "./DocumentHistoryEntry";
 import { Markdown } from "./Markdown";
 import { TaskArtifactsBadge } from "./TaskArtifactsPopover";
 import { TaskReassignDialog } from "./TaskReassignDialog";
@@ -147,6 +148,7 @@ export function TaskCard({
   onTerminate,
   onMarkDuplicate,
   onSetPriority,
+  onUpdateDescription,
   onReassign,
   onSendMessage,
   onHydrate,
@@ -174,6 +176,10 @@ export function TaskCard({
    * the depth-1 graph + non-terminal guard; a rejection surfaces inline. */
   onMarkDuplicate: (id: string, duplicateOf: string) => Promise<void>;
   onSetPriority: (id: string, priority: string) => Promise<void>;
+  /** Correct the task's description in place (T-e271). Absent ⇒ the block stays
+   * read-only (no edit affordance), which is what every non-cockpit render of
+   * this card gets. */
+  onUpdateDescription?: (id: string, description: string) => Promise<void>;
   /** 轉派 (T-160e): hand the task to a member / a freshly minted 外包. The whole
    * handover is the server's; the dialog only names the target. */
   onReassign: (id: string, input: TaskReassignInput) => Promise<void>;
@@ -587,6 +593,19 @@ export function TaskCard({
   // saved on pick, no card expand. Closed on pick / outside click.
   const [prioOpen, setPrioOpen] = useState(false);
   const prioRef = useRef<HTMLDivElement>(null);
+  // In-place description editing (T-e271), shaped after the priority chip
+  // above: local open state, closed by an outside click, its error cleared on
+  // the next successful write. What is deliberately NOT shared with that chip
+  // is the terminal rule — the priority chip renders a closed task's value as a
+  // frozen plain span, while the description stays editable after the task
+  // closes (owner ruling; a ticket worded wrongly is usually found to be wrong
+  // after it closed). Copying the chip's `closed ? span : button` shape here
+  // would quietly re-impose the freeze the server dropped.
+  const [descOpen, setDescOpen] = useState(false);
+  const [descDraft, setDescDraft] = useState("");
+  const [descBusy, setDescBusy] = useState(false);
+  const [descError, setDescError] = useState<string | null>(null);
+  const descRef = useRef<HTMLDivElement>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -612,6 +631,25 @@ export function TaskCard({
   }, [prioOpen]);
 
   useEffect(() => {
+    if (!descOpen) return;
+    function onDown(e: MouseEvent) {
+      if (descRef.current?.contains(e.target as Node)) return;
+      // 🔴 An outside click closes this editor ONLY when nothing would be lost.
+      // The priority chip is a MENU — clicking away discards a decision the
+      // owner had not made yet. This is a textarea holding text they typed, and
+      // silently dropping a half-written correction is the same class of
+      // failure the whole ticket exists to remove (a write the owner believes
+      // happened, that did not). A dirty draft therefore stays open; 取消 is
+      // the explicit discard.
+      if (descDraft !== (view.description ?? "")) return;
+      setDescOpen(false);
+      setDescError(null);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [descOpen, descDraft, view.description]);
+
+  useEffect(() => {
     if (!statusOpen) return;
     function onDown(e: MouseEvent) {
       if (!statusRef.current?.contains(e.target as Node)) setStatusOpen(false);
@@ -629,6 +667,30 @@ export function TaskCard({
     } catch (e) {
       console.warn("TaskCard: priority change failed", e);
       setActionError(t.tasks.actionError);
+    }
+  }
+
+  function openDescEditor() {
+    setDescDraft(view.description ?? "");
+    setDescError(null);
+    setDescOpen(true);
+  }
+
+  async function doSaveDescription() {
+    if (!onUpdateDescription) return;
+    setDescBusy(true);
+    try {
+      await onUpdateDescription(task.id, descDraft);
+      setDescError(null);
+      setDescOpen(false);
+    } catch (e) {
+      // Stay OPEN and keep the draft: the text the owner typed is the only
+      // copy of it, and a failed save that also closed the editor would
+      // destroy exactly what it failed to store.
+      console.warn("TaskCard: description save failed", e);
+      setDescError(t.tasks.descError);
+    } finally {
+      setDescBusy(false);
     }
   }
 
@@ -1769,11 +1831,111 @@ export function TaskCard({
            the card's tail. Still EXPANDED-ONLY — the collapsed card stays
            compact — and still hydrated from the full task, so it appears once
            detail lands. ── */}
-      {expanded && view.description && (
-        <Markdown
-          source={view.description}
-          className="task-card__desc doc-md"
-        />
+      {expanded && (hasDetail || view.description) && (
+        <div className="task-card__desc-block" ref={descRef}>
+          {descOpen ? (
+            <div className="task-card__desc-edit" data-testid="task-desc-editor">
+              <div className="task-card__desc-hint">{t.tasks.descEditHint}</div>
+              {/* The closed-task note is rendered ONLY on a terminal card, and
+                  it is not decoration: without it the owner has no way to tell
+                  "editing a closed ticket is supported" from "this screen
+                  forgot to stop me". */}
+              {closed && (
+                <div
+                  className="task-card__desc-hint task-card__desc-hint--closed"
+                  data-testid="task-desc-closed-note"
+                >
+                  {t.tasks.descClosedNote}
+                </div>
+              )}
+              <textarea
+                className="task-card__desc-input"
+                data-testid="task-desc-input"
+                aria-label={t.tasks.descLabel}
+                placeholder={t.tasks.descPlaceholder}
+                value={descDraft}
+                disabled={descBusy}
+                onChange={(e) => setDescDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  // Esc cancels THIS editor and must not also close whatever
+                  // layer the card sits in — the escapeLayers rule: an
+                  // element-level Esc handler preventDefaults so the dispatcher
+                  // leaves it alone.
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setDescOpen(false);
+                    setDescError(null);
+                  }
+                }}
+              />
+              <div className="task-card__desc-actions">
+                <button
+                  type="button"
+                  className="task-card__desc-save"
+                  data-testid="task-desc-save"
+                  disabled={descBusy}
+                  onClick={() => void doSaveDescription()}
+                >
+                  {t.tasks.descSave}
+                </button>
+                <button
+                  type="button"
+                  className="task-card__desc-cancel"
+                  data-testid="task-desc-cancel"
+                  disabled={descBusy}
+                  onClick={() => {
+                    setDescOpen(false);
+                    setDescError(null);
+                  }}
+                >
+                  {t.tasks.descCancel}
+                </button>
+                {/* 版本紀錄 — the SHARED entry (T-1f39), not a second history
+                    surface. It stands in the editor exactly as it does in every
+                    other editable document in the cockpit, so which document's
+                    history this is stays a fact of the layout. */}
+                <DocumentHistoryEntry
+                  kind="task_description"
+                  docKey={task.id}
+                  title={t.tasks.descHistoryTitle}
+                  currentContent={
+                    hasDetail
+                      ? { description: view.description ?? "" }
+                      : undefined
+                  }
+                  onRestored={() => onHydrate(task.id)}
+                  disabled={descBusy}
+                />
+              </div>
+              {descError && (
+                <div className="task-card__error" data-testid="task-desc-error">
+                  {descError}
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              {view.description ? (
+                <Markdown
+                  source={view.description}
+                  className="task-card__desc doc-md"
+                />
+              ) : (
+                <div className="task-card__desc-empty">{t.tasks.descEmpty}</div>
+              )}
+              {onUpdateDescription && hasDetail && (
+                <button
+                  type="button"
+                  className="task-card__desc-editbtn"
+                  data-testid="task-desc-edit"
+                  onClick={openDescEditor}
+                >
+                  {t.tasks.descEdit}
+                </button>
+              )}
+            </>
+          )}
+        </div>
       )}
 
       {/* ── workflow timeline / transitional states (expanded only) ──
