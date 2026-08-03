@@ -39,14 +39,22 @@ check(){ if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1 (want '$2' got '$3')"
 # unambiguously the process in question; recording the start time from out here,
 # after the fact, would be asking the same racy question again.
 #
-# Stricter than ci-lock's use in one deliberate way: ci_lock_holder_alive errs
-# toward "still held" when ps cannot answer, because for a mutex a false
-# "held" only costs a refusal. Here the answer authorises a SIGKILL, so no
-# recorded start time means NOT identified, full stop.
-same_proc() { # PID EXPECTED_START → 0 if that pid is still the process we recorded
-  local pid="${1:-}" expected="${2:-}"
-  [[ -n "$pid" && -n "$expected" ]] || return 1
-  _ci_lock_holder_alive "$pid" "$expected"
+# Stricter than ci-lock's own use of it, deliberately, and NOT by delegating:
+# _ci_lock_holder_alive answers "still held" when the start time is missing or
+# `ps` cannot read it, because for a mutex a false "held" only costs a refusal.
+# Here the same answer authorises a SIGKILL and decides whether an orphan is
+# reported, so every unreadable case must come back NOT IDENTIFIED. Delegating
+# and merely pre-checking the recorded value would leave the ps-failure branch
+# in force — a live pid whose `ps` read fails would be declared ours and killed,
+# which is the very defect this section removes.
+same_proc() { # PID EXPECTED_START → 0 only if that pid is PROVABLY the process we recorded
+  local pid="${1:-}" expected="${2:-}" live
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  [[ -n "$expected" ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  live="$(_ci_lock_ps "$pid" lstart=)"   # the repo's ps reader: normalised, capped
+  [[ -n "$live" ]] || return 1
+  [[ "$live" == "$expected" ]]
 }
 rec_pid()   { awk -F'\t' 'NR==1{print $1}' "$1" 2>/dev/null; }
 rec_start() { awk -F'\t' 'NR==1{print $2}' "$1" 2>/dev/null; }
@@ -54,22 +62,50 @@ rec_start() { awk -F'\t' 'NR==1{print $2}' "$1" 2>/dev/null; }
 WORK="$(mktemp -d -t oc-proc-hygiene-guard.XXXXXX)"
 # Belt to the suspenders: if any assertion below leaves a recorded busy-loop
 # alive (a red test), collect it here so the guard itself never leaks a core.
+# reap_recorded FILE → SIGKILL the process that record names, but only if it is
+# provably still the one we recorded. Split out of the EXIT trap on purpose: a
+# trap cannot be called from a test, so while this decision lived inside
+# _cleanup, deleting the kill left every assertion green and a busy-loop burning
+# a core (observed, not theorised). Section 7 calls this directly.
+# Returns 2 when the recorded pid is alive but unprovable — the caller decides
+# how loud that is.
+reap_recorded() {
+  local f="$1" p s
+  p="$(rec_pid "$f")"; s="$(rec_start "$f")"
+  if same_proc "$p" "$s"; then
+    kill -KILL "$p" 2>/dev/null || true
+    return 0
+  fi
+  [[ -n "$p" ]] && kill -0 "$p" 2>/dev/null || return 0
+  return 2
+}
+
 _cleanup() {
-  local f p s
+  local f p s unprovable=0
   for f in "$WORK"/gpid.*; do
     [[ -f "$f" ]] || continue
     p="$(rec_pid "$f")"; s="$(rec_start "$f")"
-    if same_proc "$p" "$s"; then
-      kill -KILL "$p" 2>/dev/null || true
-    elif [[ -n "$p" && -z "$s" ]] && kill -0 "$p" 2>/dev/null; then
-      # A pid with no recorded identity. It may be our busy-loop, or it may be
-      # whatever inherited that number afterwards — and there is no way left to
-      # tell. Killing on the guess is how an unrelated process dies; say it
-      # loudly instead, with the number a human needs to look it up.
-      printf '  WARN — recorded pid %s has no start time; NOT killing (identity unprovable)\n' "$p" >&2
+    if ! reap_recorded "$f"; then
+      # That number is alive but we cannot prove it is still OUR busy-loop —
+      # the start time was never recorded, or no longer matches, or ps will not
+      # answer. Both available moves are bad: SIGKILL on a guess is how an
+      # unrelated process dies (the defect this section removes), and staying
+      # quiet is how a core burns for two days (the incident this file exists
+      # for). So do neither quietly: refuse the guess AND make the run RED, with
+      # the ps line a human needs. A leak that turns the guard red gets acted
+      # on; a leak reported to stderr under a green run does not.
+      unprovable=1
+      printf '  FAIL — recorded pid %s is alive but NOT provably ours; refusing to kill on a guess\n' "$p" >&2
+      printf '         ps says: %s\n' "$(_ci_lock_ps "$p" command= 2>/dev/null)" >&2
+      printf '         recorded start: [%s]  live start: [%s]\n' \
+             "$s" "$(_ci_lock_ps "$p" lstart= 2>/dev/null)" >&2
     fi
   done
   rm -rf "$WORK"
+  # An EXIT trap's own `exit` overrides the status the script was leaving with —
+  # that is what makes this reachable at all, since cleanup runs after the
+  # summary line has already been printed.
+  [[ "$unprovable" == "0" ]] || exit 1
 }
 trap '_cleanup' EXIT
 
@@ -150,6 +186,10 @@ kill -TERM "$rbpid" 2>/dev/null
 wait "$rbpid" 2>/dev/null
 gpid="$(rec_pid "$WORK/gpid.4")"; gstart="$(rec_start "$WORK/gpid.4")"
 check "the grandchild was spawned before the interrupt (positive control)" "1" "$([[ -n "$gpid" ]] && echo 1 || echo 0)"
+# Without this, an empty start time would make same_proc below answer "not ours"
+# for a busy-loop that is very much alive, and the ORPHAN check would pass by
+# knowing nothing. Section 2 has the same control for the same reason.
+check "and it recorded its own identity before the interrupt (positive control)" "1" "$([[ -n "$gstart" ]] && echo 1 || echo 0)"
 sleep 0.3
 if same_proc "$gpid" "$gstart"; then
   bad "SIGTERM to run_bounded reaps the subtree (pid $gpid still alive — ORPHAN)"
@@ -201,24 +241,42 @@ check "the exit code survives a getpgid() that always fails (pgid is derived, no
 #
 # This is the deterministic form of that situation — no race to win or lose. It
 # asks the discriminator about a pid that certainly EXISTS (this very shell)
-# while claiming a start time that certainly is not this shell's, which is
-# exactly what a recycled pid looks like from the outside. The claimed value is
-# a REAL, well-formed `ps` reading (pid 1, started at boot), so a pass cannot
-# come from the expected string being unparseable junk.
+# while claiming start times that certainly are not this shell's, which is
+# exactly what a recycled pid looks like from the outside.
 #
-# Put a bare-pid check back in same_proc and the load-bearing assertion below is
-# red on EVERY run, not on the unlucky ones.
+# The claimed values are FABRICATED, the way bin/tests/ci-lock-guard.sh already
+# fabricates one for the same question. Reading a real one off another process
+# (pid 1 was tried) makes the test depend on the host: inside a PID namespace
+# the shell running this guard IS pid 1, so the comparison becomes a value
+# against itself and the guard reddens for a reason that has nothing to do with
+# run_bounded — the exact anti-pattern this ticket is about.
+#
+# Put a bare-pid check back in same_proc and the load-bearing assertions below
+# are red on EVERY run, not on the unlucky ones.
+FAKE_START="Thu Jan  1 00:00:00 2026"
 self_start="$(_ci_lock_ps "$$" lstart=)"
-boot_start="$(_ci_lock_ps 1 lstart=)"
-check "this shell's own start time is readable (positive control)" \
+# Also the host-capability check this guard now depends on: no `ps -o lstart=`,
+# no discriminator. Better to say so here than to let every assertion below
+# quietly answer "not ours".
+check "this shell's own start time is readable (ps -o lstart= is supported here)" \
       "1" "$([[ -n "$self_start" ]] && echo 1 || echo 0)"
-# Without this the discriminating assertion below could pass vacuously — two
-# equal start times would make it a comparison of a value against itself.
-check "the other process's start time is readable AND differs (positive control)" \
-      "1" "$([[ -n "$boot_start" && "$boot_start" != "$self_start" ]] && echo 1 || echo 0)"
+check "the fabricated start time is not this shell's (positive control against a vacuous compare)" \
+      "1" "$([[ "$FAKE_START" != "$self_start" ]] && echo 1 || echo 0)"
 
-if same_proc "$$" "$boot_start"; then verdict=same; else verdict=different; fi
+if same_proc "$$" "$FAKE_START"; then verdict=same; else verdict=different; fi
 check "a LIVE pid whose start time is not the recorded one is NOT the recorded process (the recycled-pid case)" \
+      "different" "$verdict"
+
+# Resolution matters, not just "some difference". A comparison truncated to the
+# minute or the day still passes the assertion above while treating two
+# processes that started seconds apart as the same one — and seconds is exactly
+# the window a recycled pid arrives in. This feeds it a value that differs from
+# the real one ONLY in the seconds field.
+sec_shifted="$(printf '%s' "$self_start" | awk '{ if (match($0, /[0-9][0-9]:[0-9][0-9]:[0-9][0-9]/)) { t=substr($0,RSTART,RLENGTH); s=substr(t,7,2)+0; s=(s+30)%60; nt=substr(t,1,6) sprintf("%02d", s); print substr($0,1,RSTART-1) nt substr($0,RSTART+RLENGTH) } else print "" }')"
+check "a seconds-only variant of this shell's start time could be built (positive control)" \
+      "1" "$([[ -n "$sec_shifted" && "$sec_shifted" != "$self_start" ]] && echo 1 || echo 0)"
+if same_proc "$$" "$sec_shifted"; then verdict=same; else verdict=different; fi
+check "a start time differing ONLY in the seconds is judged NOT the recorded process (the comparison keeps its resolution)" \
       "different" "$verdict"
 
 if same_proc "$$" "$self_start"; then verdict=same; else verdict=different; fi
@@ -228,6 +286,62 @@ check "the same pid with its own start time still matches (the check has not jus
 if same_proc "$$" ""; then verdict=same; else verdict=different; fi
 check "a pid recorded without a start time is never claimed as identified (nothing is killed on a guess)" \
       "different" "$verdict"
+
+# And the failure mode this guard must not inherit from the lock library it
+# borrows from: there, a `ps` that cannot answer means "assume still held",
+# because a mutex pays for that with a refusal. Here the same answer authorises
+# a SIGKILL. Deterministic: put a `ps` that always fails at the front of PATH.
+mkdir -p "$WORK/psfail"
+printf '#!/bin/sh\nexit 1\n' > "$WORK/psfail/ps"
+chmod +x "$WORK/psfail/ps"
+_saved_path="$PATH"
+PATH="$WORK/psfail:$PATH"
+if [[ -n "$(_ci_lock_ps "$$" lstart=)" ]]; then psfail_live=0; else psfail_live=1; fi
+if same_proc "$$" "$self_start"; then verdict=same; else verdict=different; fi
+PATH="$_saved_path"
+check "the always-failing ps shim is actually in effect (positive control)" "1" "$psfail_live"
+check "a pid whose start time cannot be READ is not claimed as identified either (no SIGKILL on an unreadable process)" \
+      "different" "$verdict"
+
+# ── 7. the ORPHAN checks are not vacuous — a real leak IS reported ───────────
+# Sections 2 and 4 only ever assert the ABSENCE of an orphan, and an absence is
+# what a broken detector reports too. Reviewers demonstrated this: swap the two
+# fields this guard reads back from the record and all assertions stay green
+# while two busy-loops burn a core each. So: deliberately break the reaping,
+# and require the detector to SEE the leak it is supposed to see.
+mkdir -p "$WORK/nokill"
+cat > "$WORK/nokill/sitecustomize.py" <<'NOKILL'
+import os
+
+
+def _noop(pgid, sig):
+    return None
+
+
+os.killpg = _noop
+NOKILL
+# Same leaky child, but its blocking parent exits on its own in 2s, so the only
+# thing this section can leave behind is the busy-loop it is about — which it
+# kills below, by identity, before moving on.
+sed 's/^sleep 30$/sleep 2/' "$WORK/leaky.sh" > "$WORK/leaky-short.sh"
+: > "$WORK/gpid.7"
+PYTHONPATH="$WORK/nokill" python3 "$RB" 1 bash "$WORK/leaky-short.sh" "$WORK/gpid.7" "$CI_LOCK_LIB" >/dev/null 2>&1
+gpid="$(rec_pid "$WORK/gpid.7")"; gstart="$(rec_start "$WORK/gpid.7")"
+check "the leaked busy-loop recorded its identity (positive control)" \
+      "1" "$([[ -n "$gpid" && -n "$gstart" ]] && echo 1 || echo 0)"
+sleep 0.3
+if same_proc "$gpid" "$gstart"; then verdict=reported; else verdict=missed; fi
+check "a busy-loop that really DID survive is reported as still ours (negative control: the ORPHAN checks can still see one)" \
+      "reported" "$verdict"
+# Cleaned up through the SAME code path the EXIT trap uses, so this also pins
+# that the reaping decision still kills: delete the kill from reap_recorded and
+# this assertion is the one that notices, instead of a core burning unnoticed
+# under a green run (which is exactly what happened while the kill lived inside
+# the trap where no test could reach it).
+reap_recorded "$WORK/gpid.7" || true
+sleep 0.3
+if same_proc "$gpid" "$gstart"; then verdict=alive; else verdict=gone; fi
+check "and the reaping path actually kills it (the deliberate leak is gone, by identity)" "gone" "$verdict"
 
 echo
 echo "proc hygiene guard: $PASS ok, $FAIL failed"
