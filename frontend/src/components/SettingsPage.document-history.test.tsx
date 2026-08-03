@@ -717,7 +717,7 @@ describe("SettingsPage · 版本紀錄", () => {
     // it un-restorable would be the cockpit lying — and it is the direction
     // that matters, because the cap can only ever be raised.
     const overDefault = "字".repeat(DOC_CAP_CHARS_DEFAULT + 100);
-    await mockApi.patchServerSettings({ docCapChars: 50000 });
+    await mockApi.patchServerSettings({ docCapCharsLearning: 50000 });
     await mockApi.saveLessons("assistant", "general", "原始經驗");
     await mockApi.saveLessons("assistant", "general", overDefault);
     await mockApi.saveLessons("assistant", "general", "短");

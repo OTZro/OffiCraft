@@ -638,21 +638,45 @@ func LessonsShrinkBlocked(before, after string) bool {
 // the number the owner actually signed off on.
 //
 // T-3aeb (owner 2026-07-31): the number is no longer a constant the code owns
-// — it is the `doc.cap_chars` setting, adjustable at runtime, and this is only
+// — it is a `doc.cap_chars.*` setting, adjustable at runtime, and this is only
 // its default. The EFFECTIVE cap always arrives as a parameter, so there is no
 // second copy for a caller to read by accident. The floor of the adjustable
-// range equals this default, so the cap can only ever be RAISED: lowering it
+// range equals its default, so a cap can only ever be RAISED: lowering it
 // would turn documents that are legal today into shrink-only ones.
+//
+// T-ae38 (owner 2026-08-03): ONE cap became FOUR. This constant is the default
+// of the three that kept 10000 — Insight, Learning and the task manual — and
+// Duty got its own, much smaller one below. The owner's words: 「我預期 duty
+// 1000 / insight 10000 / learning 10000 但是三者都可以調整」. The reason the
+// segments cannot share a number is that their deletion costs differ tenfold: a
+// Duty is a standing definition that should stay readable in one screen, while
+// a Learning doc is append-only environment Q&A.
 //
 // The patch receipts' `size` field speaks THIS unit too, since T-3aeb — it
 // counted bytes until the owner ruled that one subject may not have two units.
 const contextDocMaxCharsDefault = 10000
 
-// minDocCapChars / maxDocCapChars bound the adjustable cap. The floor is the
-// default by design (see above), not a coincidence to be "tidied up".
+// dutyCapCharsDefault is the shipped default of the DUTY (role definition) cap
+// — the one segment whose number is not 10000.
+//
+// 🔴 KNOWN EXCEPTION, deliberately not fixed here (T-ae38 scope line): the
+// shipped seed `seeds/role_def_assistant.md` is itself 4,594 runes, i.e. over
+// this cap out of the box — and `reset_role` writes a TOMBSTONE and folds back
+// to that seed, so no cap check sits on the path that installs it. No cap can
+// catch shipped content by construction. Shrinking the seed is T-e1e3's job,
+// not this ticket's; the practical meaning of "Duty ≤ 1000" today is
+// "hand-written Duty ≤ 1000, with the factory seed as the one exception".
+// This is recorded so the next reader does not read it as an oversight.
+const dutyCapCharsDefault = 1000
+
+// min*CapChars / maxDocCapChars bound the adjustable caps. Each floor is THAT
+// segment's own default by design (see above), not a coincidence to be "tidied
+// up" into one shared number — a 10000 floor on Duty would make its 1000
+// default unreachable from the settings surface.
 const (
-	minDocCapChars = contextDocMaxCharsDefault
-	maxDocCapChars = 100000
+	minDocCapChars  = contextDocMaxCharsDefault
+	minDutyCapChars = dutyCapCharsDefault
+	maxDocCapChars  = 100000
 )
 
 // DocCapBlocked reports whether replacing before with after must be refused by

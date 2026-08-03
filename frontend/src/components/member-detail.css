@@ -581,7 +581,8 @@
  * a different document, and a parallel class tree would only drift. The one
  * addition is the size/cap readout in the header: {size_chars} / {cap_chars},
  * shown at every size INCLUDING zero, because the settings surface that
- * otherwise carries doc.cap_chars is admin-only. Muted and tabular so a number
+ * otherwise carries the doc.cap_chars.* settings is admin-only. Muted and
+ * tabular so a number
  * changing under an edit does not shift the title beside it. */
 .mp-insight__size {
   font-size: 12px;

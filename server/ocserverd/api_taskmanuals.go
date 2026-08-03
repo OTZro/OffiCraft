@@ -79,7 +79,7 @@ func manualDisplayLabel(displayName, typeKey string) string {
 
 // writeTaskManual is the common single-manual response tail.
 func (s *apiServer) writeTaskManual(w http.ResponseWriter, m TaskManual) {
-	dto, err := newTaskManualDTO(m, s.docCap())
+	dto, err := newTaskManualDTO(m, s.manualCap())
 	if err != nil {
 		internalError(w, err)
 		return
@@ -197,7 +197,7 @@ func (s *apiServer) HandleListTaskManualsApiTaskManualsGet(w http.ResponseWriter
 	out := []taskManualDTO{}
 	// Read the cap ONCE for the whole listing: per-row reads could straddle a
 	// PATCH and hand back one list quoting two different caps.
-	capChars := s.docCap()
+	capChars := s.manualCap()
 	for _, m := range manuals {
 		if list {
 			out = append(out, newTaskManualListItemDTO(m, capChars))
@@ -366,7 +366,7 @@ func (s *apiServer) HandleUpdateTaskManualApiTaskManualsTypeKeyPost(w http.Respo
 	// Both fields are judged against ONE read of the live cap (T-3aeb): two
 	// reads could straddle a concurrent PATCH and judge one doc by a cap the
 	// other never saw.
-	docCap := s.docCap()
+	docCap := s.manualCap()
 	if body.SopMd != nil && DocCapBlocked(docCap, m.SopMD, *body.SopMd) {
 		writeError(w, http.StatusBadRequest, docCapRefusal(docCap, "sop_md doc", m.SopMD, *body.SopMd))
 		return
@@ -485,7 +485,7 @@ func (s *apiServer) HandleWriteTaskLearningsApiTaskManualsTypeKeyLearningsPost(w
 	}
 	// T-3351 hard cap. Unconditional — allow_shrink governs the opposite
 	// direction (shrinking too far) and is not a bypass for this one.
-	if cap := s.docCap(); DocCapBlocked(cap, m.Learnings, body.Text) {
+	if cap := s.manualCap(); DocCapBlocked(cap, m.Learnings, body.Text) {
 		writeError(w, http.StatusBadRequest, docCapRefusal(cap, "learnings doc", m.Learnings, body.Text))
 		return
 	}
@@ -570,7 +570,7 @@ func (s *apiServer) HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchP
 	// T-3351 hard cap, judged on the RESULT of the patch (not the patch's own
 	// size). Unconditional: allow_shrink is not a bypass.
 	// One read, reused by the receipt below (see api_roles.go).
-	cap := s.docCap()
+	cap := s.manualCap()
 	if DocCapBlocked(cap, m.Learnings, next) {
 		writeError(w, http.StatusBadRequest, docCapRefusal(cap, "learnings doc", m.Learnings, next))
 		return

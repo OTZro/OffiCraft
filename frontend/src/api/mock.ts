@@ -99,6 +99,7 @@ import {
   toMachine,
   toServerSettings,
 } from "./mappers";
+import { DOC_CAP_CHARS_DEFAULTS } from "./docCap";
 import {
   MOCK_OWNER_ID,
   SEED_SYSTEM_INTERACTION_MD,
@@ -405,6 +406,17 @@ const MOCK_WIRE_ROLES_SEED: WireRoleDef[] = [
     // surfaces the real doc name.)
     name: "Assistant",
     definition_md: SEED_ROLE_ASSISTANT_MD,
+    // T-ae38 Duty budget. Spelled out rather than via docSizeFields because
+    // this literal is evaluated at MODULE LOAD, before `mockServerSettings`
+    // exists — and `foldRole` re-derives both numbers from the live setting on
+    // every read anyway, so these two are only here to satisfy the wire type.
+    //
+    // The shipped seed is deliberately OVER the 1000-char default: it is a
+    // factory doc no cap can catch (reset_role folds back to the file seed, a
+    // path with no cap check on it), so the mock shows the same over-budget
+    // reading a fresh install shows.
+    size_chars: [...SEED_ROLE_ASSISTANT_MD].length,
+    cap_chars: DOC_CAP_CHARS_DEFAULTS.duty,
     owner_id: MOCK_OWNER_ID,
     schema_version: 2,
     is_default: true,
@@ -831,9 +843,14 @@ function roleSeed(key: string): WireRoleDef {
  * state). A custom role IS its stored doc; an edit rides roleOverlays like a
  * seed edit does. */
 function foldRole(key: string): WireRoleDef {
-  return structuredClone(
+  const folded = structuredClone(
     roleOverlays.get(key) ?? customRoles.get(key) ?? roleSeed(key)
   );
+  // T-ae38: size/cap are DERIVED from the folded text and the live setting, the
+  // way the server derives them in foldRoleDefDTO — never carried along on the
+  // stored overlay. An overlay written before the owner raised the Duty cap
+  // would otherwise keep reporting the old ceiling forever.
+  return { ...folded, ...docSizeFields(folded.definition_md ?? "", "duty") };
 }
 
 // ── retained document revisions (T-7d33) ───────────────────────────────────
@@ -1098,7 +1115,7 @@ function applyDocumentHistory(
         lessonsOverlays.delete(key);
       } else {
         lessonsOverlays.set(key, {
-          ...docSizeFields(content.text ?? ""),
+          ...docSizeFields(content.text ?? "", "learning"),
           role_key: roleKey,
           task_type: taskType,
           text: content.text ?? "",
@@ -1116,7 +1133,7 @@ function applyDocumentHistory(
         insightOverlays.delete(key);
       } else {
         insightOverlays.set(key, {
-          ...docSizeFields(content.text ?? ""),
+          ...docSizeFields(content.text ?? "", "insight"),
           role_key: key,
           text: content.text ?? "",
           owner_id: MOCK_OWNER_ID,
@@ -1201,8 +1218,12 @@ const DEFAULT_MOCK_SETTINGS = {
   monitoring_refresh_seconds: 5,
   // M3 global outsource cap — mirrors the server's code-side default (3).
   outsource_max_parallel: 3,
-  // T-3aeb document size cap — mirrors the server default (10000 characters).
-  doc_cap_chars: 10000,
+  // T-ae38 document size caps — mirror the server defaults (Duty 1000, the
+  // other three 10000 characters).
+  doc_cap_chars_duty: 1000,
+  doc_cap_chars_insight: 10000,
+  doc_cap_chars_learning: 10000,
+  doc_cap_chars_manual: 10000,
   // The two software-update toggles — both OFF out of the box, mirroring the
   // server (updates come from GitHub Releases; there is no updater server to
   // configure any more).
@@ -1235,11 +1256,24 @@ const DEFAULT_MOCK_SETTINGS = {
 };
 
 /** Mirror of the server's per-document size/cap reporting (T-3aeb). Runes, not
- * UTF-16 units — same reason docCap.ts spells it [...s].length. */
-function docSizeFields(text: string) {
+ * UTF-16 units — same reason docCap.ts spells it [...s].length.
+ *
+ * T-ae38: the cap is now per SEGMENT, so the caller names which of the four it
+ * is judged by. Passing the wrong one here would make the mock disagree with
+ * the server about a doc's remaining budget — the one thing this helper exists
+ * to keep honest. */
+function docSizeFields(
+  text: string,
+  cap: "duty" | "insight" | "learning" | "manual"
+) {
   return {
     size_chars: [...text].length,
-    cap_chars: mockServerSettings.doc_cap_chars,
+    cap_chars: {
+      duty: mockServerSettings.doc_cap_chars_duty,
+      insight: mockServerSettings.doc_cap_chars_insight,
+      learning: mockServerSettings.doc_cap_chars_learning,
+      manual: mockServerSettings.doc_cap_chars_manual,
+    }[cap],
   };
 }
 let mockServerSettings = { ...DEFAULT_MOCK_SETTINGS };
@@ -3228,18 +3262,24 @@ export const mockApi: Api = {
         "outsource_max_parallel must be between -1 and 20 (-1 = unlimited)"
       );
     }
-    if (
-      patch.docCapChars !== undefined &&
-      (patch.docCapChars < 10000 || patch.docCapChars > 100000)
-    ) {
-      // Server parity (T-3aeb): the floor IS the shipped default, so the
-      // document cap can only ever be raised.
-      throw new ApiError(
-        "http 422 for PATCH /api/settings",
-        422,
-        "validation_error",
-        "doc_cap_chars must be between 10000 and 100000 characters — the floor is the shipped default, so the document cap can only be raised, never lowered"
-      );
+    // Server parity (T-3aeb / T-ae38): each floor IS that segment's shipped
+    // default, so a document cap can only ever be raised. Duty's floor is its
+    // own 1000, not the other three's 10000 — sharing one number here would
+    // make the owner's stated Duty default unreachable through this surface.
+    for (const [field, wire, min] of [
+      [patch.docCapCharsDuty, "doc_cap_chars_duty", 1000],
+      [patch.docCapCharsInsight, "doc_cap_chars_insight", 10000],
+      [patch.docCapCharsLearning, "doc_cap_chars_learning", 10000],
+      [patch.docCapCharsManual, "doc_cap_chars_manual", 10000],
+    ] as const) {
+      if (field !== undefined && (field < min || field > 100000)) {
+        throw new ApiError(
+          "http 422 for PATCH /api/settings",
+          422,
+          "validation_error",
+          `${wire} must be between ${min} and 100000 characters — the floor is the shipped default, so the document cap can only be raised, never lowered`
+        );
+      }
     }
     if (
       patch.orgName !== undefined &&
@@ -3322,8 +3362,17 @@ export const mockApi: Api = {
     if (patch.outsourceMaxParallel !== undefined) {
       mockServerSettings.outsource_max_parallel = patch.outsourceMaxParallel;
     }
-    if (patch.docCapChars !== undefined) {
-      mockServerSettings.doc_cap_chars = patch.docCapChars;
+    if (patch.docCapCharsDuty !== undefined) {
+      mockServerSettings.doc_cap_chars_duty = patch.docCapCharsDuty;
+    }
+    if (patch.docCapCharsInsight !== undefined) {
+      mockServerSettings.doc_cap_chars_insight = patch.docCapCharsInsight;
+    }
+    if (patch.docCapCharsLearning !== undefined) {
+      mockServerSettings.doc_cap_chars_learning = patch.docCapCharsLearning;
+    }
+    if (patch.docCapCharsManual !== undefined) {
+      mockServerSettings.doc_cap_chars_manual = patch.docCapCharsManual;
     }
     if (patch.updaterReceiveBeta !== undefined) {
       mockServerSettings.updater_receive_beta = patch.updaterReceiveBeta;
@@ -3537,6 +3586,7 @@ export const mockApi: Api = {
       key: roleKey,
       name,
       definition_md: CUSTOM_ROLE_TEMPLATE_MD,
+      ...docSizeFields(CUSTOM_ROLE_TEMPLATE_MD, "duty"),
       owner_id: MOCK_OWNER_ID,
       schema_version: 3,
       is_default: false,
@@ -3672,7 +3722,7 @@ export const mockApi: Api = {
     // diverges (each role_key gets its own overlay slot).
     const overlay = lessonsOverlays.get(lessonsKey(roleKey, taskType));
     const wire: WireLessons = overlay ?? {
-      ...docSizeFields(SEED_LESSONS_MD),
+      ...docSizeFields(SEED_LESSONS_MD, "learning"),
       role_key: roleKey,
       task_type: taskType,
       text: SEED_LESSONS_MD,
@@ -3692,7 +3742,7 @@ export const mockApi: Api = {
     // owner-edited for THIS role_key only (a sibling role's doc is untouched).
     recordDocumentHistory("lessons", lessonsKey(roleKey, taskType));
     const wire: WireLessons = {
-      ...docSizeFields(text),
+      ...docSizeFields(text, "learning"),
       role_key: roleKey,
       task_type: taskType,
       text,
@@ -3710,7 +3760,7 @@ export const mockApi: Api = {
     // genuinely empty document, not seed text — is_default and text "" say the
     // same thing here, and the card renders that as "nothing moved over yet".
     const wire: WireInsight = insightOverlays.get(roleKey) ?? {
-      ...docSizeFields(""),
+      ...docSizeFields("", "insight"),
       role_key: roleKey,
       text: "",
       owner_id: MOCK_OWNER_ID,
@@ -3725,7 +3775,7 @@ export const mockApi: Api = {
     // role_key; a sibling role's insight is untouched.
     recordDocumentHistory("insight", roleKey);
     const wire: WireInsight = {
-      ...docSizeFields(text),
+      ...docSizeFields(text, "insight"),
       role_key: roleKey,
       text,
       owner_id: MOCK_OWNER_ID,

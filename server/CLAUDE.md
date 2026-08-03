@@ -195,10 +195,19 @@ T-98f4 只做了外包 worker。正職這邊三個動詞各走各的,實測(2026
 
 owner 2026-07-27 兩句話 + 一個數字:「更新的時候不能塞超過這個大小」「已經超出的我們不 truncate 但是下次更新他只能縮小」,上限 **10,000**。
 
-🔴 **T-3aeb(owner 2026-07-31):那個數字不再是常數,是設定 `doc.cap_chars`(預設 10,000,範圍 10,000..100,000)。** 三行語意一個字沒動,動的只有「上限從哪裡來」:
+🔴 **T-3aeb(owner 2026-07-31):那個數字不再是常數,是設定(預設 10,000,範圍 10,000..100,000)。** 三行語意一個字沒動,動的只有「上限從哪裡來」:
+
+🔴 **T-ae38(owner 2026-08-03):一個設定變成四個,而且舊鍵被改名。** owner 原話:「我預期 duty 1000 / insight 10000 / learning 10000 但是三者都可以調整」。三行語意**仍然一個字沒動**,動的還是只有「上限從哪裡來」:
+- **四個鍵,每個都有後綴**:`doc.cap_chars.duty`(預設 **1000**,範圍 1000..100000)/ `.insight` / `.learning` / `.manual`(三者預設 10000、範圍 10000..100000)。舊的 `doc.cap_chars` **被 migration `00048` 改名成 `.manual`**(值原樣搬過去),**DB 裡不會同時有兩個**。
+- 🔴 **為什麼改名而不是把舊鍵留給手冊**:agent 在 `get_settings` 的回應裡**只看得到鍵名、看不到 description**。`doc.cap_chars` 擺在三個有後綴的鍵旁邊,讀起來就是「全域預設」——想調手冊上限的人會去動它、**以為自己調到了全部,而不會有任何東西叫**。「留原名可以零遷移成本」這個理由不成立:值本來就得搬到 per-segment 語意,migration 一定要寫。
+- **四個 accessor,沒有 `docCap(segment)`**:`dutyCap()` / `insightCap()` / `learningCap()` / `manualCap()`。段別是**寫入 seam 的性質、不是 runtime 參數**,做成參數就會讓某個呼叫點傳錯一個而照樣編譯得過;現在 reviewer 只需要看名字。
+- 🔴 **Duty 的上限要補兩處,不是一處**:`api_roles.go` 的 `HandleUpdateRoleApiRolesRolePost`,**以及 `api_document_history.go` 的 `case "role_definition"`**。只補編輯門等於形同虛設——**編到 999 再還原一個 4,000 字的舊版就繞過去了**。lessons 與 insight 在同一個 switch 裡本來就有檢查,**只有 role_definition 沒有**,那正是這張票要補的洞。
+- **`RoleDefDTO` 補 `size_chars` / `cap_chars`**。一手證據:Mira 整理完自己的 Duty **根本不知道自己剩幾字,得回頭請別人用尺量一次**。少了這兩欄,每個 agent 收斂 Duty 都得找一個「有尺的人」,而通常沒有那個人。
+- 🔴 **出廠 seed 是已知例外,不是漏做**:`seeds/role_def_assistant.md` 本身就是 **4,594 runes**,對 1,000 的預設而言一出廠就超標;而 `reset_role` 寫的是 tombstone、fold 回檔案 seed,**那條路上沒有任何 cap 檢查,構造上攔不到出廠內容**。所以「Duty ≤ 1000」的實際語意是「**手寫的 ≤ 1000,出廠 seed 是唯一例外**」。壓縮那份 seed 是 **T-e1e3** 的事,不是本票。**看到它超標不要當成缺陷去修。**
+- **界線**:`global_context` **今天仍然完全沒有上限**(`task.description` 是刻意沒有),本票一個字都沒動它;`docs/guide/settings.md` 那句對 owner 承諾「全域情境與角色定義沒有上限」已在同一批改成「角色定義現在有上限、全域情境仍然沒有」。手冊那兩份長文的**行為**一個字沒動,只換了它們吃哪一個鍵——它們的鍵是 `type_key`,是任務**類型**的資產、不是角色誌,所以歸 `.manual`。
 - `contextDocMaxChars` 這個常數**已經不存在**,取而代之的是 `contextDocMaxCharsDefault`(只是預設值)。`DocCapBlocked` 與 `docCapRefusal` 現在**第一個參數就是 cap**——刻意不做成 package 變數或 `*apiServer` 方法:參數化之後,**漏改一個呼叫點是編譯錯誤**,而那正是這種「同一個值散在 9 個地方」的改動唯一可靠的守衛。
 - 每個呼叫點在 **request time** 讀 `s.docCap()`(RLock),所以 PATCH 完下一次寫入就生效、免重啟;不快取、沒有第二份會漂的副本。`update_task_manual` 那個 handler **一次讀、兩個欄位共用**——兩次讀可能跨過一次並行 PATCH,讓 sop_md 與 learnings 被兩個不同的上限審判。
-- 🔴 **範圍的下限等於預設值,這是設計不是巧合**:owner 明示這個旋鈕只能**調高**。調低會讓今天合法的文件立刻變成 shrink-only(立案時實測:9 份手冊裡 2 份已超過一萬字、3 份在 8.6k~10k),所以 `minDocCapChars = contextDocMaxCharsDefault`,別「順手整理」成一個更小的數字。
+- 🔴 **範圍的下限等於預設值,這是設計不是巧合**:owner 明示這個旋鈕只能**調高**。調低會讓今天合法的文件立刻變成 shrink-only(立案時實測:9 份手冊裡 2 份已超過一萬字、3 份在 8.6k~10k),所以 `minDocCapChars = contextDocMaxCharsDefault`,別「順手整理」成一個更小的數字。⚠️ **T-ae38 之後這是 per-segment 的**:`minDutyCapChars = dutyCapCharsDefault`(1000),**不要把它「統一」成 10000** ——那會讓 owner 拍板的 Duty 預設值從設定面**構造上不可達**。
 - **回應同時報「現在多少字／上限多少」(owner 2026-07-31 第二次裁定,卡 `rc-3800e090f5e1`)**:`size` 這個不帶單位的名字**已移除**,改名 `size_chars`,並在兩個讀取面與兩張回條都加上 `cap_chars`。理由是 owner 要「寫之前就知道自己多長」——設定面是 admin-only,**一般 agent 讀不到上限**,所以上限必須跟著文件本身送出去,否則唯一的學習途徑就是被拒絕。
   - **手冊報兩個尺寸(`learnings_chars` / `sop_md_chars`)不是一個總和**:cap 是逐份套用的,一個合計數兩個問題都答不了。
   - 🔴 **`?view=list` 這條輕量投影量的是「資料列」不是「被清空的 wire 欄位」**:它刻意不送 sop_md/learnings 的內文,若順手拿被清空的欄位去數就會回 0——**一個看起來像量測結果的 0,比誠實省略更糟**,而「哪一份手冊快到上限」正是列表視圖會問的問題。哨兵 `TestListViewOmitsTheTextButNotItsSize`(mutant:把兩個尺寸寫死 0 → 紅)。
@@ -240,11 +249,11 @@ owner 2026-07-28 逐字：「其他人不需要知道 Insight，但是 **Insight
 
 - **key 只有一個**。lessons 的 key 是 `(role_key, task_type)`，insight 沒有 task_type 軸，`document_history` 的 key 就是**裸 `role_key`**。🔴 **這在 cascade 上是會咬人的**：lessons 的串刪用 `"<role>::"` **前綴**比對（那裡安全，`::` 這個終結符讓 `r-abc::` 不可能打中 `r-abcdef::general`），而單鍵文件**沒有終結符** ⇒ `DeleteInsightForRole` 一律用**精確相等**（`document_key = ?`，跟 `DeleteRoleDef` 同姿勢）。**在這裡用前綴會把 `r-abcdef` 的歷史跟著 `r-abc` 一起刪掉。** 刪角色的串接在 `api_roles.go` 的 delete_role 路徑上。
 - **沒有 seed 檔，刻意的**。lessons 折的是 overlay ⊕ 一份共用檔案 seed，所以沒寫過的角色也讀得到非空內容。insight 給了 seed 之後 `text == ""` 就永遠不成立，「**這個角色還沒搬**」這個問題就再也答不出來——而那正是本票唯一交付得出來的可觀測狀態（`FoldInsight` 的 `isDefault` 即由此而來）。
-- **guard 姿態與 lessons 對齊**：整份替換走 `WholeDocWipeBlocked`，patch 走 `LessonsShrinkBlocked`（`allow_shrink` 可放行），兩條都**無條件**再過 `DocCapBlocked(s.docCap(), before, after)`——cap 取自 `doc.cap_chars` 設定、request time 讀，與上一節同一把尺；Insight 拿的是**自己一份預算**，不跟 Learning 共用。回條同樣報 `size_chars` / `cap_chars`。
+- **guard 姿態與 lessons 對齊**：整份替換走 `WholeDocWipeBlocked`，patch 走 `LessonsShrinkBlocked`（`allow_shrink` 可放行），兩條都**無條件**再過 `DocCapBlocked(s.insightCap(), before, after)`——cap 取自 `doc.cap_chars.insight` 設定(T-ae38 之前是共用的 `doc.cap_chars`)、request time 讀，與上一節同一把尺；Insight 拿的是**自己一份預算**，不跟 Learning 共用。回條同樣報 `size_chars` / `cap_chars`。
 - **歷史快照在交易內重讀**：`insightSnapshotIn` 跟它的 lessons 雙胞胎一樣，**不信 handler 早先折出來的值**——保留的那一版必須是這次寫入所取代的狀態，否則兩個寫者相撞會保留同一個祖先，中間那一版永久救不回來。
 - **SSE 是第 13 個 topic**：`hub.go` 的 `sseTopics` 多一格 `"insight"`；三個寫入面（replace／patch／history restore）都發 `topic="insight"`、key 為 `wireOwnerID+"::"+roleKey`。
 - 🔴 **`api_document_history.go` 的三個 switch 一個都不能漏**（`documentHistoryAllowed`／`publishDocumentHistoryRestore`／`restoreDocumentHistory`）。**`publishDocumentHistoryRestore` 是本票唯一的靜默面**：它沒有 `default` 分支，漏掉 `case "insight"` 的後果是 **HTTP 200、DB 已改、零錯誤、零紅**，只是沒有任何人的畫面會更新。守它的是 `api_document_history_insight_publish_test.go`（含 lessons 陽性對照——沒有對照的話「沒收到 frame」可能只是夾具沒接好，負斷言會空綠）。
-- **隔離證明**：`api_insight_isolation_test.go` 把某角色的 Insight 寫到 `doc.cap_chars` 上限，斷言 Duty 與 Learning 逐位元組不變、且各自都還寫得動。**陽性對照是那支測試的命脈**——先證明「再多一個字元會被 `DocCapBlocked` 擋」，否則「寫到上限」可能根本沒踩到 cap，三條斷言會一起空綠。cap 一律取自產品讀 cap 的同一條路，不准用測試自己編的數字。
+- **隔離證明**：`api_insight_isolation_test.go` 把某角色的 Insight 寫到 `doc.cap_chars.insight` 上限，斷言 Duty 與 Learning 逐位元組不變、且各自都還寫得動。**陽性對照是那支測試的命脈**——先證明「再多一個字元會被 `DocCapBlocked` 擋」，否則「寫到上限」可能根本沒踩到 cap，三條斷言會一起空綠。cap 一律取自產品讀 cap 的同一條路，不准用測試自己編的數字。
 - **agent 面**：`seeds/system_interaction.md` 的 **level-2 `## 9b.`** 是唯一會被每一代 agent 開機讀到的招牌（`## 9.` 的**兄弟節**，不是子節——寫成 `### 9b.` 等於在開機分類表裡把 Insight 歸回 Learning，而且**沒有任何東西會紅**）。⚠️ 該節同時被 `worker_sharedcore.go` 的 `workerSharedCoreExclusions` 排除（`Anchor: "## 9b. "`），理由與 §9 那條相同：本文通篇對「有角色的你」說話，送給沒有角色的 worker 只會製造 T-108b 要消滅的那種殘留。**代價寫在這裡不藏**：worker 讀得到別人的 Insight，卻永遠不會被告知它讀得到——與 §9（Learning）今天的狀態一致，不是本票新造的。日後若要讓 worker 知道，正解是**在 worker overlay 加一句 worker 語境的說明**，不是把 exclusion 拿掉。
 
 ## 每位成員的個人圖片頭像(T-c826)

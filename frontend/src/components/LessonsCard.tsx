@@ -71,6 +71,21 @@ export function LessonsCard({ roleKey, taskType = "general" }: LessonsCardProps)
         <span className="mp-lessons__title">
           <LayersIcon size={15} className="mp-lessons__icon" />
           <span>{t.mp.lessons}</span>
+          {/* T-ae38: the same size/cap readout the Insight card has carried
+            * since T-3809, on the same class so the two headers cannot drift
+            * apart visually. The wire has served both numbers since T-3aeb —
+            * the mapper was throwing them away, so Learning was the one journal
+            * block whose remaining budget an agent could only discover by being
+            * refused, which happens in the last minutes before a handover.
+            *
+            * Rendered as soon as the doc loads, INCLUDING at 0 chars: hiding it
+            * while empty removes the cap exactly when someone is about to write
+            * the first thing into the document. */}
+          {lessons && (
+            <span className="mp-insight__size">
+              {lessons.sizeChars} / {lessons.capChars}
+            </span>
+          )}
         </span>
         {editing ? (
           <div className="mp-lessons__actions">

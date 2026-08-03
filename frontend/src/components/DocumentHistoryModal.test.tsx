@@ -18,7 +18,7 @@ import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
 import { DocumentHistoryModal } from "./DocumentHistoryModal";
 import { ApiError } from "../api/errors";
-import { DOC_CAP_CHARS_DEFAULT } from "../api/docCap";
+import { DOC_CAP_CHARS_DEFAULT, DOC_CAP_CHARS_DEFAULTS } from "../api/docCap";
 import type { DocumentHistoryView, DocumentKind } from "../types";
 
 const s = zh.settings;
@@ -60,7 +60,7 @@ function open(opts: {
         version={version(content)}
         actorLine="Mira（owner-1）"
         currentContent={currentContent}
-        docCapChars={DOC_CAP_CHARS_DEFAULT}
+        docCaps={DOC_CAP_CHARS_DEFAULTS}
         onBack={onBack}
         onRestore={onRestore}
         onClose={onClose}

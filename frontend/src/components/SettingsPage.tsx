@@ -44,6 +44,38 @@ import {
   type DocumentHistoryEntryProps,
 } from "./DocumentHistoryEntry";
 import { navigateHash } from "../lib/hashRoute";
+
+/** The four adjustable document caps (T-ae38), in the order the parameters card
+ * lists them: the three role-journal segments in journal order (Duty → Insight
+ * → Learning), then the task manual's pair. The key IS the ServerSettingsView /
+ * ServerSettingsPatch field, so the row cannot read one setting and write
+ * another.
+ *
+ * `min` is per row and is NOT decoration: Duty's floor is its own shipped 1000.
+ * A shared 10000 here would make the local guard reject the value the server
+ * ships with — the field would refuse its own current contents. */
+type DocCapField =
+  | "docCapCharsDuty"
+  | "docCapCharsInsight"
+  | "docCapCharsLearning"
+  | "docCapCharsManual";
+
+const DOC_CAP_FIELDS: Record<
+  DocCapField,
+  { min: number; inputId: string; labelKey: "docCapDuty" | "docCapInsight" | "docCapLearning" | "docCapManual"; subKey: "docCapDutySub" | "docCapInsightSub" | "docCapLearningSub" | "docCapManualSub" }
+> = {
+  docCapCharsDuty: { min: 1000, inputId: "param-doc-cap-duty", labelKey: "docCapDuty", subKey: "docCapDutySub" },
+  docCapCharsInsight: { min: 10000, inputId: "param-doc-cap-insight", labelKey: "docCapInsight", subKey: "docCapInsightSub" },
+  docCapCharsLearning: { min: 10000, inputId: "param-doc-cap-learning", labelKey: "docCapLearning", subKey: "docCapLearningSub" },
+  docCapCharsManual: { min: 10000, inputId: "param-doc-cap-manual", labelKey: "docCapManual", subKey: "docCapManualSub" },
+};
+
+const DOC_CAP_ORDER: DocCapField[] = [
+  "docCapCharsDuty",
+  "docCapCharsInsight",
+  "docCapCharsLearning",
+  "docCapCharsManual",
+];
 import { Breadcrumbs, type Crumb } from "./Breadcrumbs";
 import {
   ChevronRightIcon,
@@ -441,6 +473,10 @@ export function SettingsPage({
             : null
         }
         crumbs={[crumbRoot, crumbRoles, { label: roleTitle }]}
+        // The Duty doc has had a cap since T-ae38, and this is the only place
+        // an owner or an agent sees how close it is to it. Omitted while the
+        // role has not loaded — an invented 0/0 would read as a real budget.
+        usage={role ? { size: role.sizeChars, cap: role.capChars } : undefined}
         onSave={(text) => rolesH.save(view.key, { definitionMd: text })}
         // 重置 = "restore the FILE SEED" — only a seed role has one. A custom
         // role's doc IS its only truth (the server 404s its reset — verified
@@ -601,7 +637,11 @@ function ServerParams({
   const [handoverDraft, setHandoverDraft] = useState<string | null>(null);
   const [codexHandoverDraft, setCodexHandoverDraft] = useState<string | null>(null);
   const [monitoringRefreshDraft, setMonitoringRefreshDraft] = useState<string | null>(null);
-  const [docCapDraft, setDocCapDraft] = useState<string | null>(null);
+  // T-ae38: four independent caps, so four independent drafts. A shared draft
+  // would make typing in one field snap the other three back.
+  const [docCapDrafts, setDocCapDrafts] = useState<
+    Partial<Record<DocCapField, string>>
+  >({});
   const [rangeError, setRangeError] = useState(false);
 
   const ttlLabel: Record<number, string> = {
@@ -644,14 +684,27 @@ function ServerParams({
     if (n !== settings.monitoringRefreshSeconds) void onSave({ monitoringRefreshSeconds: n });
   }
 
-  // The floor is the shipped default, so this knob only raises the cap (owner
-  // 2026-07-31) — the local guard mirrors the server's 422 range exactly.
-  function commitDocCap() {
-    if (!settings || docCapDraft === null) return;
-    const n = Number(docCapDraft);
-    if (!Number.isInteger(n) || n < 10000 || n > 100000) { setRangeError(true); setDocCapDraft(null); return; }
-    setDocCapDraft(null);
-    if (n !== settings.docCapChars) void onSave({ docCapChars: n });
+  // Each floor is THAT segment's shipped default, so a knob only raises its own
+  // cap (owner 2026-07-31; four of them since T-ae38) — the local guard mirrors
+  // the server's 422 range exactly, INCLUDING Duty's floor of 1000. Reusing
+  // 10000 here would locally reject the shipped Duty default.
+  function commitDocCap(field: DocCapField) {
+    const draft = docCapDrafts[field];
+    if (!settings || draft === undefined) return;
+    const n = Number(draft);
+    const clear = () =>
+      setDocCapDrafts((d) => {
+        const next = { ...d };
+        delete next[field];
+        return next;
+      });
+    if (!Number.isInteger(n) || n < DOC_CAP_FIELDS[field].min || n > 100000) {
+      setRangeError(true);
+      clear();
+      return;
+    }
+    clear();
+    if (n !== settings[field]) void onSave({ [field]: n });
   }
 
   return (
@@ -758,20 +811,26 @@ function ServerParams({
             </div>
           </div>
 
-          <div className="param-row">
-            <div className="param-row__body">
-              <div className="param-row__name">{t.settings.docCap}</div>
-              <div className="param-row__sub">{t.settings.docCapSub}</div>
-            </div>
-            <div className="param-pct">
-              <input id="param-doc-cap" className="param-input" type="number" min={10000} max={100000}
-                aria-label={t.settings.docCap}
-                value={docCapDraft ?? String(settings.docCapChars)}
-                onChange={(e) => { setRangeError(false); onClearSaveError(); setDocCapDraft(e.target.value); }}
-                onBlur={commitDocCap} onKeyDown={(e) => { if (e.key === "Enter") commitDocCap(); }} />
-              <span className="param-pct__sign">{t.settings.chars}</span>
-            </div>
-          </div>
+          {DOC_CAP_ORDER.map((field) => {
+            const spec = DOC_CAP_FIELDS[field];
+            const label = t.settings[spec.labelKey];
+            return (
+              <div className="param-row" key={field}>
+                <div className="param-row__body">
+                  <div className="param-row__name">{label}</div>
+                  <div className="param-row__sub">{t.settings[spec.subKey]}</div>
+                </div>
+                <div className="param-pct">
+                  <input id={spec.inputId} className="param-input" type="number" min={spec.min} max={100000}
+                    aria-label={label}
+                    value={docCapDrafts[field] ?? String(settings[field])}
+                    onChange={(e) => { setRangeError(false); onClearSaveError(); setDocCapDrafts((d) => ({ ...d, [field]: e.target.value })); }}
+                    onBlur={() => commitDocCap(field)} onKeyDown={(e) => { if (e.key === "Enter") commitDocCap(field); }} />
+                  <span className="param-pct__sign">{t.settings.chars}</span>
+                </div>
+              </div>
+            );
+          })}
 
           {(saveError || rangeError) && (
             <div className="set-error param-error">
@@ -1679,6 +1738,7 @@ function DocDetail({
   extra,
   readOnly = false,
   badge,
+  usage,
 }: {
   title: string;
   /** Rename the doc's TITLE (custom roles only — the 角色名 is owner-editable
@@ -1705,6 +1765,15 @@ function DocDetail({
   readOnly?: boolean;
   /** Overrides the "Default" is_default badge (e.g. "Studio SOP" for boot). */
   badge?: string;
+  /** This document's size budget, `{size, cap}` in CHARACTERS (T-ae38).
+   *
+   * Passed only by documents that HAVE a cap — the role definition today. The
+   * global-context views omit it because they genuinely have none, and showing
+   * a "0 / 0" there would invent a limit the server does not enforce. The two
+   * role-journal cards below (Insight, Learning) carry their own readouts; this
+   * one is the Duty doc's, and it exists because an agent condensing its own
+   * role definition had no way to see how much room was left. */
+  usage?: { size: number; cap: number };
 }) {
   const { t } = useI18n();
   const [editing, setEditing] = useState(false);
@@ -1776,6 +1845,19 @@ function DocDetail({
               isDefault && (
                 <span className="set-badge">{t.settings.defaultBadge}</span>
               )
+            )}
+            {/* Always rendered when this document has a cap — including while
+              * editing, which is precisely when the number is wanted, and
+              * including at 0 chars, since that is when someone is about to
+              * write the first thing into it. */}
+            {usage && (
+              <span
+                className="doc-card__usage"
+                data-testid="doc-card-usage"
+                title={t.settings.docUsage}
+              >
+                {usage.size} / {usage.cap}
+              </span>
             )}
           </span>
           {readOnly ? null : editing ? (

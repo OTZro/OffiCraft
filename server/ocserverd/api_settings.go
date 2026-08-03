@@ -260,16 +260,29 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 			"outsource_max_parallel must be between -1 and 20 (-1 = unlimited)")
 		return
 	}
-	// The floor is the shipped default, so this knob only ever RAISES the cap
-	// (owner 2026-07-31). Lowering it would strand every document that is legal
-	// today in shrink-only mode — the refusal says so rather than making the
-	// caller infer it from a bare range.
-	if body.DocCapChars != nil &&
-		(*body.DocCapChars < minDocCapChars || *body.DocCapChars > maxDocCapChars) {
-		writeError(w, http.StatusUnprocessableEntity,
-			fmt.Sprintf("doc_cap_chars must be between %d and %d characters — the floor is the shipped default, so the document cap can only be raised, never lowered",
-				minDocCapChars, maxDocCapChars))
-		return
+	// Each floor is THAT segment's shipped default, so a knob only ever RAISES
+	// its cap (owner 2026-07-31). Lowering one would strand every document that
+	// is legal today in shrink-only mode — the refusal says so rather than
+	// making the caller infer it from a bare range. Four independent knobs
+	// since T-ae38; Duty's floor is its own 1000, not the other three's 10000,
+	// or the owner's stated default would be unreachable from this surface.
+	capRange := []struct {
+		field *int
+		name  string
+		min   int
+	}{
+		{body.DocCapCharsDuty, "doc_cap_chars_duty", minDutyCapChars},
+		{body.DocCapCharsInsight, "doc_cap_chars_insight", minDocCapChars},
+		{body.DocCapCharsLearning, "doc_cap_chars_learning", minDocCapChars},
+		{body.DocCapCharsManual, "doc_cap_chars_manual", minDocCapChars},
+	}
+	for _, c := range capRange {
+		if c.field != nil && (*c.field < c.min || *c.field > maxDocCapChars) {
+			writeError(w, http.StatusUnprocessableEntity,
+				fmt.Sprintf("%s must be between %d and %d characters — the floor is the shipped default, so the document cap can only be raised, never lowered",
+					c.name, c.min, maxDocCapChars))
+			return
+		}
 	}
 	var orgName string
 	if body.OrgName != nil {
@@ -377,14 +390,26 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		}
 		s.outsourceMaxParallel = *body.OutsourceMaxParallel
 	}
-	if body.DocCapChars != nil {
-		if err := s.dal.PutSetting(settingDocCapChars,
-			strconv.Itoa(*body.DocCapChars)); err != nil {
+	capWrite := []struct {
+		field *int
+		key   string
+		dst   *int
+	}{
+		{body.DocCapCharsDuty, settingDocCapCharsDuty, &s.docCapCharsDuty},
+		{body.DocCapCharsInsight, settingDocCapCharsInsight, &s.docCapCharsInsight},
+		{body.DocCapCharsLearning, settingDocCapCharsLearning, &s.docCapCharsLearning},
+		{body.DocCapCharsManual, settingDocCapCharsManual, &s.docCapCharsManual},
+	}
+	for _, c := range capWrite {
+		if c.field == nil {
+			continue
+		}
+		if err := s.dal.PutSetting(c.key, strconv.Itoa(*c.field)); err != nil {
 			s.settingsMu.Unlock()
 			internalError(w, err)
 			return
 		}
-		s.docCapChars = *body.DocCapChars
+		*c.dst = *c.field
 	}
 	// A channel flip changes WHO "latest" is (official-only vs prereleases
 	// too) — it re-kicks the GitHub check so the software-update card follows
@@ -513,7 +538,10 @@ func (s *apiServer) settingsView() settingsDTO {
 		CodexCompactionThreshold: s.codexCompactionThreshold,
 		MonitoringRefreshSeconds: s.monitoringRefreshSeconds,
 		OutsourceMaxParallel:     s.outsourceMaxParallel,
-		DocCapChars:              s.docCapChars,
+		DocCapCharsDuty:          s.docCapCharsDuty,
+		DocCapCharsInsight:       s.docCapCharsInsight,
+		DocCapCharsLearning:      s.docCapCharsLearning,
+		DocCapCharsManual:        s.docCapCharsManual,
 		UpdaterReceiveBeta:       s.updaterReceiveBeta,
 		UpdaterAutoUpdate:        s.updaterAutoUpdate,
 		OrgName:                  s.orgName,

@@ -1,8 +1,15 @@
 package main
 
 // api_context_cap_t3aeb_test.go — T-3aeb: the document size cap became a
-// SETTING (doc.cap_chars), and the patch receipt's `size` started speaking the
-// cap's unit instead of bytes.
+// SETTING, and the patch receipt's `size` started speaking the cap's unit
+// instead of bytes.
+//
+// ⚠️ T-ae38 (2026-08-03) split that one setting into FOUR
+// (`doc.cap_chars.duty` / `.insight` / `.learning` / `.manual`; the old
+// `doc.cap_chars` was RENAMED to `.manual` by migration 00048). This file is
+// the LESSONS half of the story and now names `doc.cap_chars.learning`
+// throughout — the rulings below are unchanged, they just apply per segment.
+// The per-segment independence itself is pinned in api_doc_caps_tae38_test.go.
 //
 // Owner rulings (2026-07-31, cards rc-286b34b60388 / rc-33b88ed80212):
 //   - default 10,000, adjustable 10,000..100,000 — the FLOOR IS THE DEFAULT, so
@@ -81,7 +88,7 @@ func TestDocCap_FollowsTheLiveSetting(t *testing.T) {
 	}
 
 	// The owner raises the cap.
-	if status, data := patchSettings(t, srv.URL, tok, `{"doc_cap_chars":20000}`); status != http.StatusOK {
+	if status, data := patchSettings(t, srv.URL, tok, `{"doc_cap_chars_learning":20000}`); status != http.StatusOK {
 		t.Fatalf("phase 2: raising the cap must be accepted, got %d: %v", status, data)
 	}
 
@@ -114,7 +121,7 @@ func TestDocCap_RefusalQuotesTheLiveCapNotTheDefault(t *testing.T) {
 	srv, dal, tok := capLessonsServer(t)
 	seedLessonsOverlay(t, dal, "assistant", "general", capDoc(t, 30000))
 
-	if status, data := patchSettings(t, srv.URL, tok, `{"doc_cap_chars":25000}`); status != http.StatusOK {
+	if status, data := patchSettings(t, srv.URL, tok, `{"doc_cap_chars_learning":25000}`); status != http.StatusOK {
 		t.Fatalf("raise the cap: %d %v", status, data)
 	}
 
@@ -221,7 +228,7 @@ func TestReplaceLessonsReceiptReportsSizeAndCap(t *testing.T) {
 	}
 
 	// And it FOLLOWS the setting instead of quoting the shipped default.
-	if status, data := patchSettings(t, srv.URL, tok, `{"doc_cap_chars":41000}`); status != http.StatusOK {
+	if status, data := patchSettings(t, srv.URL, tok, `{"doc_cap_chars_learning":41000}`); status != http.StatusOK {
 		t.Fatalf("raise the cap: %d %v", status, data)
 	}
 	_, data = replaceLessons(t, srv, tok, doc+cjkDoc(t, 10), false)
@@ -245,41 +252,41 @@ func TestUpdateSettingsDocCapCharsRange(t *testing.T) {
 
 	// The default is served, so a cockpit that never PATCHes still sees a cap.
 	if status, data := doJSON(t, "GET", srv.URL+"/api/settings", owner, ""); status != 200 ||
-		data["doc_cap_chars"] != float64(contextDocMaxCharsDefault) {
+		data["doc_cap_chars_learning"] != float64(contextDocMaxCharsDefault) {
 		t.Fatalf("GET must serve the default cap: %d %v", status, data)
 	}
 
 	// Below the floor is refused — including the value one under the default,
 	// which is the shape a "let me lower it a little" attempt actually takes.
 	for _, body := range []string{
-		`{"doc_cap_chars":9999}`,
-		`{"doc_cap_chars":0}`,
-		`{"doc_cap_chars":-1}`,
-		`{"doc_cap_chars":100001}`,
-		`{"handover_pct":60,"doc_cap_chars":9999}`, // one bad field poisons the patch
+		`{"doc_cap_chars_learning":9999}`,
+		`{"doc_cap_chars_learning":0}`,
+		`{"doc_cap_chars_learning":-1}`,
+		`{"doc_cap_chars_learning":100001}`,
+		`{"handover_pct":60,"doc_cap_chars_learning":9999}`, // one bad field poisons the patch
 	} {
 		if status, _ := patchSettings(t, srv.URL, owner, body); status != 422 {
 			t.Fatalf("PATCH %s: want 422, got %d", body, status)
 		}
 	}
-	if v, err := d.GetSetting(settingDocCapChars); err != nil || v != nil {
+	if v, err := d.GetSetting(settingDocCapCharsLearning); err != nil || v != nil {
 		t.Fatalf("a rejected patch must write nothing: %v %v", v, err)
 	}
-	if got := api.docCap(); got != contextDocMaxCharsDefault {
+	if got := api.learningCap(); got != contextDocMaxCharsDefault {
 		t.Fatalf("a rejected patch must not move the live cap: %d", got)
 	}
 
 	// Both ends of the range are accepted, durable, and live.
 	for _, n := range []string{"10000", "100000", "42000"} {
-		status, data := patchSettings(t, srv.URL, owner, `{"doc_cap_chars":`+n+`}`)
+		status, data := patchSettings(t, srv.URL, owner, `{"doc_cap_chars_learning":`+n+`}`)
 		if status != 200 {
-			t.Fatalf("PATCH doc_cap_chars=%s: want 200, got %d: %v", n, status, data)
+			t.Fatalf("PATCH doc_cap_chars_learning=%s: want 200, got %d: %v", n, status, data)
 		}
-		if v, err := d.GetSetting(settingDocCapChars); err != nil || v == nil || *v != n {
-			t.Fatalf("doc_cap_chars=%s must be durable: %v %v", n, v, err)
+		if v, err := d.GetSetting(settingDocCapCharsLearning); err != nil || v == nil || *v != n {
+			t.Fatalf("doc_cap_chars_learning=%s must be durable: %v %v", n, v, err)
 		}
-		if got := api.docCap(); got != atoiOrFail(t, n) {
-			t.Fatalf("doc_cap_chars=%s must be live immediately, got %d", n, got)
+		if got := api.learningCap(); got != atoiOrFail(t, n) {
+			t.Fatalf("doc_cap_chars_learning=%s must be live immediately, got %d", n, got)
 		}
 	}
 }
@@ -303,7 +310,7 @@ func atoiOrFail(t *testing.T, s string) int {
 func TestLoadAuthSettingsRejectsAnOutOfRangeDocCap(t *testing.T) {
 	for _, bad := range []string{"9999", "100001", "0", "-5", "lots"} {
 		d := newTestDAL(t)
-		if err := d.PutSetting(settingDocCapChars, bad); err != nil {
+		if err := d.PutSetting(settingDocCapCharsLearning, bad); err != nil {
 			t.Fatalf("PutSetting: %v", err)
 		}
 		// loadAuthSettings directly, NOT loadForTest: that helper t.Fatal's on a
@@ -340,7 +347,7 @@ func TestLessonsReadReportsSizeAndCap(t *testing.T) {
 	}
 
 	// And it FOLLOWS the setting, like every other reader of the cap.
-	if status, data := patchSettings(t, srv.URL, tok, `{"doc_cap_chars":33000}`); status != 200 {
+	if status, data := patchSettings(t, srv.URL, tok, `{"doc_cap_chars_learning":33000}`); status != 200 {
 		t.Fatalf("raise the cap: %d %v", status, data)
 	}
 	_, data = doJSON(t, "GET", srv.URL+"/api/lessons/assistant/general", tok, "")
@@ -395,7 +402,7 @@ func TestTaskManualReadReportsPerDocumentSizes(t *testing.T) {
 // than the omission it describes: the list is exactly where "which manual is
 // close to the cap" gets asked.
 func TestListViewOmitsTheTextButNotItsSize(t *testing.T) {
-	s := &apiServer{dal: newTestDAL(t), hub: NewHub(), docCapChars: contextDocMaxCharsDefault}
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(), docCapCharsManual: contextDocMaxCharsDefault}
 	learnings := cjkDoc(t, 260)
 	sop := cjkDoc(t, 90)
 	if err := s.dal.PutTaskManual(TaskManual{
@@ -476,7 +483,7 @@ func TestRestoreFollowsTheLiveCap(t *testing.T) {
 
 	// Raise the cap above the revision's size; the same restore now lands.
 	api.settingsMu.Lock()
-	api.docCapChars = contextDocMaxCharsDefault + 1000
+	api.docCapCharsLearning = contextDocMaxCharsDefault + 1000
 	api.settingsMu.Unlock()
 
 	if code := restore(); code != http.StatusOK {

@@ -668,10 +668,16 @@ export interface ServerSettingsView {
    * **-1 ⇒ 無限 (unlimited — no global cap)**; 0 ⇒ outsource assignment is
    * PAUSED — the panel annotates it). */
   outsourceMaxParallel: number;
-  /** T-3aeb: the size cap on the accumulating context documents (lessons,
-   * task-manual learnings + sop_md), in CHARACTERS (runes). Default 10000;
-   * adjustable 10000..100000 — the floor is the default, so it only goes up. */
-  docCapChars: number;
+  /** T-3aeb / T-ae38: the FOUR independent size caps on the accumulating
+   * documents, in CHARACTERS (runes). Duty (a role definition) defaults to
+   * 1000 and is adjustable 1000..100000; Insight, Learning (the lessons doc)
+   * and Manual (a task manual's sop_md + learnings) default to 10000 and are
+   * adjustable 10000..100000. Each floor is that segment's own default, so a
+   * cap only ever goes UP. */
+  docCapCharsDuty: number;
+  docCapCharsInsight: number;
+  docCapCharsLearning: number;
+  docCapCharsManual: number;
   /** Whether the GitHub-release update check also admits prereleases
    * (false = official releases only, the default). */
   updaterReceiveBeta: boolean;
@@ -739,8 +745,12 @@ export interface ServerSettingsPatch {
   codexCompactionThreshold?: number;
   monitoringRefreshSeconds?: number;
   outsourceMaxParallel?: number;
-  /** T-3aeb document size cap, in characters. Must be 10000..100000. */
-  docCapChars?: number;
+  /** T-ae38 document size caps, in characters. Duty must be 1000..100000; the
+   * other three must be 10000..100000. */
+  docCapCharsDuty?: number;
+  docCapCharsInsight?: number;
+  docCapCharsLearning?: number;
+  docCapCharsManual?: number;
   /** Also admit GitHub prereleases in update checks (default false). */
   updaterReceiveBeta?: boolean;
   /** Arm unattended background self-upgrade (default false = manual-only). */

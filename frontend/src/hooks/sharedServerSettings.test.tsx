@@ -47,7 +47,10 @@ const SETTINGS = {
   orgName: "貨運工作室",
   ownerName: "伊娃",
   outsourceMaxParallel: 4,
-  docCapChars: 20000,
+  docCapCharsDuty: 1000,
+  docCapCharsInsight: 20000,
+  docCapCharsLearning: 20000,
+  docCapCharsManual: 20000,
   tokenTTL: 86400,
   handoverPct: 70,
   displayTheme: "",
@@ -71,7 +74,7 @@ function Cockpit() {
       <span data-testid="org">{orgName}</span>
       <span data-testid="owner">{ownerName}</span>
       <span data-testid="cap">{String(maxParallel)}</span>
-      <span data-testid="cap-chars">{String(settings?.docCapChars)}</span>
+      <span data-testid="cap-chars">{String(settings?.docCapCharsLearning)}</span>
       <OnboardingBanner />
     </div>
   );

@@ -20,7 +20,7 @@
 //     this release lets the owner ask stops being answerable — with no error
 //     anywhere.
 //  3. size_chars / cap_chars ARE ON THE HEADER. cap_chars is the live
-//     doc.cap_chars setting, and the settings surface that otherwise shows it is
+//     doc.cap_chars.insight setting, and the settings surface that otherwise shows it is
 //     admin-only; this header is the only place it is readable without being
 //     refused by it first. It is also the field most likely to be dropped as
 //     "bookkeeping noise" while mapping the wire — LessonsView drops exactly
@@ -125,7 +125,7 @@ describe("SettingsPage · InsightCard (T-3809)", () => {
     // A card that counted `text.length` itself would pass a fixed-string test
     // and then disagree with the server on every multi-byte doc and on any cap
     // the owner has raised. Both numbers must come off the wire.
-    await mockApi.patchServerSettings({ docCapChars: 12345 });
+    await mockApi.patchServerSettings({ docCapCharsInsight: 12345 });
     await mockApi.saveInsight("assistant", "判準");
     const utils = await openRolePage(zh.office.role.assistant);
     const size = insightCard(utils)!.querySelector(".mp-insight__size");
