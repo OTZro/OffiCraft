@@ -32,6 +32,10 @@ type listener struct {
 	jitter          func() float64
 	out             io.Writer
 
+	// stamp decides which clock the next transcript line reports; dispatch
+	// parks the current frame's server ts on it (T-7fb2, listen_stamp.go).
+	stamp *eventStamper
+
 	probe func() probeVerdict // session-alive probe; nil ⇒ self-exit disabled
 	miss  int                 // consecutive session-GONE probes (shared debounce)
 
@@ -168,6 +172,11 @@ func (l *listener) resetRefusals() {
 // must still land.
 func (l *listener) dispatch(payload []byte) {
 	frame, _ := safeJSON(string(payload)).(map[string]any)
+	// Every line printed below belongs to THIS frame, so it reports the
+	// server's own ts rather than the moment this session got round to it
+	// (T-7fb2). Cleared on the way out so connection-level lines fall back to
+	// the local clock and say so.
+	defer l.stamp.enter(frame)()
 	topic, _ := frame["topic"].(string)
 	trigger := frameTrigger(frame)
 	if isSelfEcho(trigger, l.cfg.ID) && topic != memberTopic {
@@ -380,12 +389,20 @@ func sleepCtx(ctx context.Context, sleep func(time.Duration), d time.Duration) b
 // signal-cancellable context so SIGINT/SIGTERM stops the stream cleanly. `once` is the
 // single-connect flag (mirrors argparse --once). Always returns 0.
 func cmdListen(cfg Config, env func(string) string, once bool, out io.Writer) int {
+	// Wrap BEFORE the first print: the mis-wire notice below is a transcript
+	// line like any other and must carry a time too (T-7fb2). Everything the
+	// listener and its hooks print goes through this one writer, so a stamp can
+	// never be forgotten at an individual call site.
+	stamper := &eventStamper{clock: time.Now}
+	out = &stampWriter{inner: out, stamp: stamper.suffix}
+
 	if cfg.ID == "" || cfg.Token == "" {
 		fmt.Fprint(out, "[ocagent] listen: no OC_ID/OC_TOKEN — nothing to do; exiting.\n")
 		return 0
 	}
 	api := defaultHTTPClient()
 	l := &listener{
+		stamp:            stamper,
 		cfg:              cfg,
 		api:              api,
 		streamClient:     newSSEStreamClient(),
