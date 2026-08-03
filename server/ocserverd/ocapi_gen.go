@@ -1424,15 +1424,42 @@ type RestartSelfDTO struct {
 	Reason *string `json:"reason,omitempty"`
 }
 
-// ResumeOverviewDTO The size/概要 block of the wake snapshot — the peek-then-decide signals (look at the SIZES first, then decide what to pull and whether to hand the digest to a sub-agent instead of loading it into your own context). “chat_count“ / “tasks_returned“ count what THIS snapshot carries; “tasks_open_total“ is ALL the caller's open tasks (may exceed the bounded rows — page with “list_tasks“); “tasks_detail_chars“ sums every returned row's “detail_chars“ (the plan text a full “get_task“ pull would load); “cards_waiting“ / “cards_answered_recent“ count the CALLER'S reply cards still waiting on the owner / answered within the last 24h (pull with “list_reply_cards“, cap with its “limit“).
+// ResumeMachineDTO One machine in the wake snapshot's machine block — the fleet a waking agent can reason about. “machine_id“ is the STABLE id: address a machine by id, never by the name a host reports for itself (our hosts report the SAME name as each other, so a hostname-derived answer silently picks the wrong box and every path/dispatch downstream is wrong without erroring). “display_name“ is the human label; “online“ is whether that machine's warden is connected right now.
+type ResumeMachineDTO struct {
+	DisplayName string `json:"display_name"`
+	MachineId   string `json:"machine_id"`
+	Online      bool   `json:"online"`
+}
+
+// ResumeMachinesDTO The machine block of the wake snapshot (owner ruling rc-09476f535b59, 2026-08-03: the machine LIST plus which one you are standing on — the roster block already carries which machine each member is on, so this block deliberately does NOT repeat that as a per-machine grouping). “you_are_on“ is the caller's SERVER-RECORDED machine binding, not a hostname the box reports for itself; it is “”“ when the caller has no binding yet (unauthenticated, or not yet landed on a machine) — never an error.
+type ResumeMachinesDTO struct {
+	List     []ResumeMachineDTO `json:"list"`
+	YouAreOn string             `json:"you_are_on"`
+}
+
+// ResumeOverviewDTO The size/概要 block of the wake snapshot — the peek-then-decide signals (look at the SIZES first, then decide what to pull and whether to hand the digest to a sub-agent instead of loading it into your own context). “chat_count“ / “tasks_returned“ count what THIS snapshot carries; “tasks_open_total“ is ALL the caller's open tasks (may exceed the bounded rows — page with “list_tasks“); “tasks_detail_chars“ sums every returned row's “detail_chars“ (the plan text a full “get_task“ pull would load); “cards_waiting“ / “cards_answered_recent“ count the CALLER'S reply cards still waiting on the owner / answered within the last 24h (pull with “list_reply_cards“, cap with its “limit“). “roster_chars“ / “machines_chars“ (T-1b09) size the two studio-floor blocks THIS snapshot carries — reported separately, and deliberately NOT folded into “tasks_detail_chars“: that one counts text the snapshot does NOT carry (the plan text a later “get_task“ would load), so mixing the two kinds of number is what made “estimated_total_chars“ ambiguous in the first place.
 type ResumeOverviewDTO struct {
 	CardsAnsweredRecent int `json:"cards_answered_recent"`
 	CardsWaiting        int `json:"cards_waiting"`
 	ChatChars           int `json:"chat_chars"`
 	ChatCount           int `json:"chat_count"`
+	MachinesChars       int `json:"machines_chars"`
+	RosterChars         int `json:"roster_chars"`
 	TasksDetailChars    int `json:"tasks_detail_chars"`
 	TasksOpenTotal      int `json:"tasks_open_total"`
 	TasksReturned       int `json:"tasks_returned"`
+}
+
+// ResumeRosterMemberDTO One roster entry in the wake snapshot — who else is in the studio and how to reach them (owner ruling rc-4e98c0481852, 2026-08-03, verbatim: "All members and contractors and their online / offline status"). “id“ is what you address a message to — names are editable and roles repeat, so NEVER address by name. “kind“ separates permanent members from disposable contractors (a contractor's id is retired with its one task). “duty“ is the role's own definition text, capped at 1000 characters with “…“ marking a cut (owner 2026-08-03: 「1000字 多的截斷」). It is NOT summarized and NOT reduced to a chosen line — a heuristic that picks WHICH line to show would silently change what a role appears responsible for whenever its author reorders their own doc, whereas a flat cap can only cut the tail and says so. The cap is the SAME number the owner set for a duty document itself (「After separation of insight duty should not exceed 1000」), so once insight and operating-manual material are separated out of the role definitions this cap is a safety net that normally does not fire. ⚠️ Until that separation lands the duties still carry that material (measured 2026-08-03: 35–4,594 chars), so this block is correspondingly larger today and shrinks as they are cleaned up. NO insight and NO learning ride here — both are readable by ANY authenticated identity, so their absence is a deliberate owner ruling (2026-08-02 「之後應該給 duty 就好，不要給 insight / learning」) and NOT a gap left by lack of access; do not helpfully fill it in later. “machine“ is the live binding (which machine that member runs on); “presence“ is the online/offline status the ruling asks for. Contractors carry no role, so their “role_name“ and “duty“ are “”“ — instead they carry “current_task“, the TITLE of the one task that contractor is bound to, HARD-TRUNCATED (owner ruling rc-a02d8bc7fe23, 2026-08-03: 正職給職責、外包給任務標題): a contractor id is minted per task, so its task title IS its duty. The truncation is not cosmetic — measured task titles average ~99 chars and reach 147, so five untruncated contractor titles alone outweigh the whole machine block. Members carry “duty“ and leave “current_task“ “”“: duty is stable and answers "is this the right person to ask", whereas a member's task changes daily and would churn every agent's boot for less signal.
+type ResumeRosterMemberDTO struct {
+	CurrentTask string `json:"current_task"`
+	Duty        string `json:"duty"`
+	Id          string `json:"id"`
+	Kind        string `json:"kind"`
+	Machine     string `json:"machine"`
+	Name        string `json:"name"`
+	Presence    string `json:"presence"`
+	RoleName    string `json:"role_name"`
 }
 
 // ResumeSummaryDTO A BOUNDED, deterministic wake snapshot for the CALLER (the “resume_summary“
@@ -1458,17 +1485,29 @@ type ResumeOverviewDTO struct {
 //   - “overview“: the size/概要 block (counts + character sizes; the caller's
 //     waiting / recently-answered reply-card counts included) — peek it FIRST to
 //     decide what to pull and whether to digest via a sub-agent.
+//   - “roster“: WHO ELSE is in the studio — every member AND every contractor,
+//     each with its online/offline status, the machine it runs on, and its duty
+//     capped at 1000 chars (owner ruling rc-4e98c0481852, 2026-08-03). The
+//     point is knowing who to ask for help on waking, so it carries NO insight and
+//     NO learning — see “ResumeRosterMemberDTO“, whose absence of those two is a
+//     deliberate ruling, not a missing feature.
+//   - “machines“: the machine LIST plus “you_are_on“, the caller's
+//     server-recorded machine binding (owner ruling rc-09476f535b59, 2026-08-03).
+//     Never derive "which machine am I on" from a hostname — our hosts report the
+//     same name as each other.
 //   - “note“: a fixed reminder that this is a BOUNDED snapshot.
 //
 // DETERMINISTIC (same server state → same output; no LLM) and read-only.
 type ResumeSummaryDTO struct {
-	Chat     *[]ChatMessageDTO `json:"chat,omitempty"`
-	Identity *string           `json:"identity,omitempty"`
-	Note     *string           `json:"note,omitempty"`
+	Chat     *[]ChatMessageDTO  `json:"chat,omitempty"`
+	Identity *string            `json:"identity,omitempty"`
+	Machines *ResumeMachinesDTO `json:"machines,omitempty"`
+	Note     *string            `json:"note,omitempty"`
 
-	// Overview The size/概要 block of the wake snapshot — the peek-then-decide signals (look at the SIZES first, then decide what to pull and whether to hand the digest to a sub-agent instead of loading it into your own context). ``chat_count`` / ``tasks_returned`` count what THIS snapshot carries; ``tasks_open_total`` is ALL the caller's open tasks (may exceed the bounded rows — page with ``list_tasks``); ``tasks_detail_chars`` sums every returned row's ``detail_chars`` (the plan text a full ``get_task`` pull would load); ``cards_waiting`` / ``cards_answered_recent`` count the CALLER'S reply cards still waiting on the owner / answered within the last 24h (pull with ``list_reply_cards``, cap with its ``limit``).
-	Overview *ResumeOverviewDTO `json:"overview,omitempty"`
-	Tasks    *[]ResumeTaskDTO   `json:"tasks,omitempty"`
+	// Overview The size/概要 block of the wake snapshot — the peek-then-decide signals (look at the SIZES first, then decide what to pull and whether to hand the digest to a sub-agent instead of loading it into your own context). ``chat_count`` / ``tasks_returned`` count what THIS snapshot carries; ``tasks_open_total`` is ALL the caller's open tasks (may exceed the bounded rows — page with ``list_tasks``); ``tasks_detail_chars`` sums every returned row's ``detail_chars`` (the plan text a full ``get_task`` pull would load); ``cards_waiting`` / ``cards_answered_recent`` count the CALLER'S reply cards still waiting on the owner / answered within the last 24h (pull with ``list_reply_cards``, cap with its ``limit``). ``roster_chars`` / ``machines_chars`` (T-1b09) size the two studio-floor blocks THIS snapshot carries — reported separately, and deliberately NOT folded into ``tasks_detail_chars``: that one counts text the snapshot does NOT carry (the plan text a later ``get_task`` would load), so mixing the two kinds of number is what made ``estimated_total_chars`` ambiguous in the first place.
+	Overview *ResumeOverviewDTO       `json:"overview,omitempty"`
+	Roster   *[]ResumeRosterMemberDTO `json:"roster,omitempty"`
+	Tasks    *[]ResumeTaskDTO         `json:"tasks,omitempty"`
 }
 
 // ResumeSummarySizeDTO The size-only PEEK of the wake snapshot (“peek_resume_summary_size“ MCP
@@ -1490,7 +1529,7 @@ type ResumeSummarySizeDTO struct {
 	Identity            *string `json:"identity,omitempty"`
 	Note                *string `json:"note,omitempty"`
 
-	// Overview The size/概要 block of the wake snapshot — the peek-then-decide signals (look at the SIZES first, then decide what to pull and whether to hand the digest to a sub-agent instead of loading it into your own context). ``chat_count`` / ``tasks_returned`` count what THIS snapshot carries; ``tasks_open_total`` is ALL the caller's open tasks (may exceed the bounded rows — page with ``list_tasks``); ``tasks_detail_chars`` sums every returned row's ``detail_chars`` (the plan text a full ``get_task`` pull would load); ``cards_waiting`` / ``cards_answered_recent`` count the CALLER'S reply cards still waiting on the owner / answered within the last 24h (pull with ``list_reply_cards``, cap with its ``limit``).
+	// Overview The size/概要 block of the wake snapshot — the peek-then-decide signals (look at the SIZES first, then decide what to pull and whether to hand the digest to a sub-agent instead of loading it into your own context). ``chat_count`` / ``tasks_returned`` count what THIS snapshot carries; ``tasks_open_total`` is ALL the caller's open tasks (may exceed the bounded rows — page with ``list_tasks``); ``tasks_detail_chars`` sums every returned row's ``detail_chars`` (the plan text a full ``get_task`` pull would load); ``cards_waiting`` / ``cards_answered_recent`` count the CALLER'S reply cards still waiting on the owner / answered within the last 24h (pull with ``list_reply_cards``, cap with its ``limit``). ``roster_chars`` / ``machines_chars`` (T-1b09) size the two studio-floor blocks THIS snapshot carries — reported separately, and deliberately NOT folded into ``tasks_detail_chars``: that one counts text the snapshot does NOT carry (the plan text a later ``get_task`` would load), so mixing the two kinds of number is what made ``estimated_total_chars`` ambiguous in the first place.
 	Overview ResumeOverviewDTO `json:"overview"`
 }
 

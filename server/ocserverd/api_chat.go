@@ -26,7 +26,31 @@ const (
 	chatAttachmentsMaxCount     = 10
 	resumeChatN                 = 30
 	resumeChatBodyPreview       = 500
-	resumeNote                  = "This is a BOUNDED wake snapshot (recent chat involving you, bodies truncated; your open tasks as LIGHT rows — no plan detail). Peek `overview` first (sizes/counts), then pull only what you need: get_task per task (hand a big detail_chars pull to a sub-agent), list_reply_cards (use `limit`) for your cards, list_chat / list_tasks for more."
+	// resumeDutyPreview caps a roster row's duty and resumeTaskTitlePreview
+	// caps a contractor's task title (T-1b09). Both exist because this
+	// payload is read by EVERY member on EVERY wake, so an unbounded field
+	// here is paid fleet-wide, forever.
+	//
+	// 1000 is the owner's number (2026-08-03, verbatim: 「1000字 多的截斷」),
+	// and it is deliberately the SAME number as the cap he set for a duty
+	// document itself — 「After separation of insight duty should not exceed
+	// 1000」. The two are consistent by design: once insight and the
+	// operating-manual material are separated out of the role definitions,
+	// a duty is expected to fit well under 1000, so this cap is a SAFETY NET
+	// that normally does not fire, not a summarizer.
+	//
+	// ⚠️ Until that separation lands, duties still carry their manual
+	// material (measured 2026-08-03: 35–4,594 chars, nine of them totalling
+	// ~7–8k), so this block is correspondingly large TODAY and shrinks as
+	// the duties are cleaned up. That trade was put to the owner with the
+	// numbers before it was implemented.
+	//
+	// Task titles measured ~99 chars average, 147 max — five untruncated
+	// contractor titles alone outweigh the whole machine block, so that one
+	// stays tight.
+	resumeDutyPreview      = 1000
+	resumeTaskTitlePreview = 40
+	resumeNote             = "This is a BOUNDED wake snapshot (recent chat involving you, bodies truncated; your open tasks as LIGHT rows — no plan detail; `roster` = everyone in the studio with their status, machine and their duty (capped, `…` marks a cut); `machines` = the machine list plus which one you are on). Peek `overview` first (sizes/counts), then pull only what you need: get_task per task (hand a big detail_chars pull to a sub-agent), list_reply_cards (use `limit`) for your cards, list_chat / list_tasks for more."
 	// peekNote guides the two-step boot (T-7974): peek_resume_summary_size is
 	// size-only (no content); the agent reads estimated_total_chars and, when
 	// it is small, calls resume_summary directly in its own context, else has
@@ -742,7 +766,7 @@ func (s *apiServer) HandleListChatReadsApiChatReadsGet(w http.ResponseWriter, r 
 // note.
 func (s *apiServer) HandleResumeSummaryApiResumeSummaryGet(w http.ResponseWriter, r *http.Request) {
 	actor := currentActor(r)
-	chat, tasks, overview, err := s.resumeSnapshotParts(actor)
+	chat, tasks, roster, machines, overview, err := s.resumeSnapshotParts(actor)
 	if err != nil {
 		internalError(w, err)
 		return
@@ -751,6 +775,8 @@ func (s *apiServer) HandleResumeSummaryApiResumeSummaryGet(w http.ResponseWriter
 		Identity: &actor,
 		Chat:     chat,
 		Tasks:    tasks,
+		Roster:   roster,
+		Machines: &machines,
 		Overview: overview,
 		Note:     resumeNote,
 	})
@@ -764,10 +790,10 @@ func (s *apiServer) HandleResumeSummaryApiResumeSummaryGet(w http.ResponseWriter
 // can never drift from what a full resume_summary would carry (T-7974: the
 // two-step boot lets an agent size the snapshot before deciding whether to
 // pull it into its own context or hand it to a cheap sub-agent).
-func (s *apiServer) resumeSnapshotParts(actor string) ([]chatMessageDTO, []resumeTaskDTO, resumeOverviewDTO, error) {
+func (s *apiServer) resumeSnapshotParts(actor string) ([]chatMessageDTO, []resumeTaskDTO, []resumeRosterMemberDTO, resumeMachinesDTO, resumeOverviewDTO, error) {
 	msgs, err := s.dal.ListChatInvolving(actor, resumeChatN)
 	if err != nil {
-		return nil, nil, resumeOverviewDTO{}, err
+		return nil, nil, nil, resumeMachinesDTO{}, resumeOverviewDTO{}, err
 	}
 	chat := []chatMessageDTO{}
 	chatChars := 0
@@ -785,7 +811,11 @@ func (s *apiServer) resumeSnapshotParts(actor string) ([]chatMessageDTO, []resum
 	}
 	tasks, tasksOpenTotal, err := s.resumeTasksFor(actor)
 	if err != nil {
-		return nil, nil, resumeOverviewDTO{}, err
+		return nil, nil, nil, resumeMachinesDTO{}, resumeOverviewDTO{}, err
+	}
+	roster, machines, rosterChars, machinesChars, err := s.resumeFloorParts(actor)
+	if err != nil {
+		return nil, nil, nil, resumeMachinesDTO{}, resumeOverviewDTO{}, err
 	}
 	// The caller's own reply-card counts (peek signals for list_reply_cards):
 	// cards it INITIATED, waiting vs answered-within-24h (the same window the
@@ -794,7 +824,7 @@ func (s *apiServer) resumeSnapshotParts(actor string) ([]chatMessageDTO, []resum
 	if actor != "" {
 		cards, err := s.dal.ListReplyCards()
 		if err != nil {
-			return nil, nil, resumeOverviewDTO{}, err
+			return nil, nil, nil, resumeMachinesDTO{}, resumeOverviewDTO{}, err
 		}
 		now := nowSecs()
 		for _, c := range cards {
@@ -822,8 +852,197 @@ func (s *apiServer) resumeSnapshotParts(actor string) ([]chatMessageDTO, []resum
 		TasksDetailChars:    detailChars,
 		CardsWaiting:        cardsWaiting,
 		CardsAnsweredRecent: cardsAnsweredRecent,
+		RosterChars:         rosterChars,
+		MachinesChars:       machinesChars,
 	}
-	return chat, tasks, overview, nil
+	return chat, tasks, roster, machines, overview, nil
+}
+
+// resumeFloorParts assembles the studio floor a waking agent lands on: the
+// roster (T-1b09, owner ruling rc-4e98c0481852 — "All members and contractors
+// and their online / offline status") and the machine block (rc-09476f535b59 —
+// the machine list plus which one you are on). It also returns the character
+// size of each block so the peek can report what the payload actually carries.
+//
+// 🔴 COST DISCIPLINE — read this before adding anything here. resume_summary is
+// called by EVERY agent on EVERY wake, so a query in this function is paid
+// fleet-wide, forever. In particular this deliberately does NOT reuse the
+// GET /api/members path: that one computes unread counts through a full
+// ListChat() table scan (api_helpers.go unreadCountsForRequest), and hanging
+// the most expensive query in the system off the boot path would multiply it by
+// fleet size. Everything below is one bounded query or in-memory:
+//   - ONE ListMembersIncludingOutsource (single SELECT over the member table)
+//   - ONE hub.OnlineMembers map (in-memory; NOT one IsOnline call per member)
+//   - observedHost / PresenceState (pure + in-memory)
+//   - ONE role lookup per DISTINCT role, deduped below — not per member
+//   - contractors only: GetOutsourceWorker + GetTask, both POINT queries.
+//     Deliberately not ListOpenTasksByExecutor: task.executor_id carries no
+//     index, so that path is a full task-table scan per contractor.
+func (s *apiServer) resumeFloorParts(actor string) ([]resumeRosterMemberDTO, resumeMachinesDTO, int, int, error) {
+	members, err := s.dal.ListMembersIncludingOutsource()
+	if err != nil {
+		return nil, resumeMachinesDTO{}, 0, 0, err
+	}
+	displayNames, err := s.dal.MachineDisplayNames()
+	if err != nil {
+		return nil, resumeMachinesDTO{}, 0, 0, err
+	}
+	online := s.hub.OnlineMembers()
+	now := nowSecs()
+
+	// One role fold per DISTINCT role_key. Roles repeat across members (four
+	// members can share one role), so folding per member would pay the same
+	// lookup several times on a path every agent runs.
+	dutyByRole := map[string]string{}
+	roleNameByRole := map[string]string{}
+	resolveRole := func(roleKey string) (string, string) {
+		if roleKey == "" {
+			return "", ""
+		}
+		if name, ok := roleNameByRole[roleKey]; ok {
+			return name, dutyByRole[roleKey]
+		}
+		def, err := s.foldRoleDefDTO(roleKey)
+		if err != nil || def == nil {
+			// A member pointing at a role that no longer resolves still
+			// belongs on the floor — it is reachable and its presence is
+			// real. Degrade to empty role text, never drop the row.
+			roleNameByRole[roleKey], dutyByRole[roleKey] = "", ""
+			return "", ""
+		}
+		roleNameByRole[roleKey] = def.Name
+		dutyByRole[roleKey] = dutyText(def.DefinitionMD)
+		return roleNameByRole[roleKey], dutyByRole[roleKey]
+	}
+
+	// Members first, contractors after (each already name-ordered by the
+	// DAL). Contractor codenames are opaque and short-lived; interleaving
+	// them with the people who hold standing roles makes the block harder to
+	// scan for its ONE purpose — finding someone to ask.
+	staff := []resumeRosterMemberDTO{}
+	contractors := []resumeRosterMemberDTO{}
+	machines := []resumeMachineDTO{}
+	for _, m := range members {
+		if m.RosterStatus != RosterStatusActive {
+			continue
+		}
+		if m.Kind == machineKind {
+			// A warden row IS a machine, not a colleague — it belongs in the
+			// machine block, never in the roster.
+			name := m.Name
+			if alias := displayNames[m.ID]; alias != "" {
+				name = alias
+			}
+			machines = append(machines, resumeMachineDTO{
+				MachineID:   m.ID,
+				DisplayName: name,
+				Online:      online[m.ID],
+			})
+			continue
+		}
+		row := resumeRosterMemberDTO{
+			ID:       m.ID,
+			Name:     m.Name,
+			Kind:     m.Kind,
+			Machine:  s.observedHost(m),
+			Presence: PresenceState(m, now, online[m.ID]),
+		}
+		if m.Kind == KindOutsource {
+			row.CurrentTask = s.contractorTaskTitle(m.ID)
+			contractors = append(contractors, row)
+			continue
+		}
+		row.RoleName, row.Duty = resolveRole(m.RoleKey)
+		staff = append(staff, row)
+	}
+	roster := append(staff, contractors...)
+
+	machinesBlock := resumeMachinesDTO{
+		List: machines,
+		// The caller's OWN machine goes through the same observedHost the
+		// roster rows use, so "where am I" and "where is he" can never
+		// disagree inside one snapshot. Never a hostname: our hosts report
+		// the same name as each other, so a hostname-derived answer picks
+		// the wrong box silently.
+		YouAreOn: s.callerMachine(actor),
+	}
+	return roster, machinesBlock, rosterChars(roster), machinesChars(machinesBlock), nil
+}
+
+// contractorTaskTitle returns the TRUNCATED title of the one task a contractor
+// is bound to (owner ruling rc-a02d8bc7fe23: 正職給職責、外包給任務標題 — a
+// contractor id is minted per task, so its task title IS its duty). Any lookup
+// miss degrades to "": a contractor whose task cannot be read is still on the
+// floor and still reachable, which is what this block is for.
+func (s *apiServer) contractorTaskTitle(workerID string) string {
+	w, err := s.dal.GetOutsourceWorker(workerID)
+	if err != nil || w == nil || w.TaskID == "" {
+		return ""
+	}
+	t, err := s.dal.GetTask(w.TaskID)
+	if err != nil || t == nil {
+		return ""
+	}
+	return truncateRunes(t.Title, resumeTaskTitlePreview)
+}
+
+// callerMachine resolves which machine the caller is standing on, using the
+// same observed binding the roster rows carry.
+func (s *apiServer) callerMachine(actor string) string {
+	if actor == "" {
+		return ""
+	}
+	m, err := s.dal.GetMember(actor)
+	if err != nil || m == nil {
+		return ""
+	}
+	return s.observedHost(*m)
+}
+
+// dutyText is the role's own definition text, capped at resumeDutyPreview
+// (owner 2026-08-03: 「1000字 多的截斷」).
+//
+// It deliberately does NOT summarize, reformat, or pick a "best line" out of
+// the definition. An earlier draft took the first non-heading line, and the
+// owner replaced that with a flat cap — which is the better rule for a reason
+// worth keeping: a heuristic that chooses WHICH line to show silently changes
+// what a role appears to be responsible for whenever someone reorders their own
+// role doc. A flat cap can only ever cut the tail, and the ellipsis says so.
+func dutyText(md string) string {
+	return truncateRunes(strings.TrimSpace(md), resumeDutyPreview)
+}
+
+// truncateRunes caps s at max RUNES (not bytes — one CJK character is one
+// rune, three bytes) and marks the cut with an ellipsis so a reader can tell a
+// short duty from a truncated one.
+func truncateRunes(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
+}
+
+// rosterChars / machinesChars size the two blocks the way the peek reports
+// them: the TEXT this payload actually carries. Ids and machine bindings count
+// too — they are part of what the caller must read.
+func rosterChars(rows []resumeRosterMemberDTO) int {
+	n := 0
+	for _, r := range rows {
+		n += utf8.RuneCountInString(r.ID) + utf8.RuneCountInString(r.Name) +
+			utf8.RuneCountInString(r.Kind) + utf8.RuneCountInString(r.RoleName) +
+			utf8.RuneCountInString(r.Duty) + utf8.RuneCountInString(r.CurrentTask) +
+			utf8.RuneCountInString(r.Machine) + utf8.RuneCountInString(r.Presence)
+	}
+	return n
+}
+
+func machinesChars(m resumeMachinesDTO) int {
+	n := utf8.RuneCountInString(m.YouAreOn)
+	for _, x := range m.List {
+		n += utf8.RuneCountInString(x.MachineID) + utf8.RuneCountInString(x.DisplayName)
+	}
+	return n
 }
 
 // GET /api/resume-summary-size — the size-only PEEK of the wake snapshot
@@ -836,7 +1055,7 @@ func (s *apiServer) resumeSnapshotParts(actor string) ([]chatMessageDTO, []resum
 // code resume_summary runs, so they are consistent by construction.
 func (s *apiServer) HandlePeekResumeSummarySizeApiResumeSummarySizeGet(w http.ResponseWriter, r *http.Request) {
 	actor := currentActor(r)
-	_, _, overview, err := s.resumeSnapshotParts(actor)
+	_, _, _, _, overview, err := s.resumeSnapshotParts(actor)
 	if err != nil {
 		internalError(w, err)
 		return
@@ -871,7 +1090,7 @@ func (s *apiServer) HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryG
 		writeResolveError(w, err, "member", memberId)
 		return
 	}
-	chat, tasks, overview, err := s.resumeSnapshotParts(m.ID)
+	chat, tasks, roster, machines, overview, err := s.resumeSnapshotParts(m.ID)
 	if err != nil {
 		internalError(w, err)
 		return
@@ -880,6 +1099,11 @@ func (s *apiServer) HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryG
 		Identity: &m.ID,
 		Chat:     chat,
 		Tasks:    tasks,
+		Roster:   roster,
+		// machines.you_are_on resolves for the TARGET member, not for the
+		// admin doing the lookup — this route answers "what does THAT agent
+		// wake up to", so every field must be from that agent's vantage.
+		Machines: &machines,
 		Overview: overview,
 		Note:     resumeNote,
 	})

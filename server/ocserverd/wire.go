@@ -707,11 +707,84 @@ type chatUnreadCountDTO struct {
 }
 
 type resumeSummaryDTO struct {
-	Identity *string           `json:"identity"`
-	Chat     []chatMessageDTO  `json:"chat"`
-	Tasks    []resumeTaskDTO   `json:"tasks"`
-	Overview resumeOverviewDTO `json:"overview"`
-	Note     string            `json:"note"`
+	Identity *string                 `json:"identity"`
+	Chat     []chatMessageDTO        `json:"chat"`
+	Tasks    []resumeTaskDTO         `json:"tasks"`
+	Roster   []resumeRosterMemberDTO `json:"roster"`
+	Machines *resumeMachinesDTO      `json:"machines"`
+	Overview resumeOverviewDTO       `json:"overview"`
+	Note     string                  `json:"note"`
+}
+
+// resumeRosterMemberDTO is one entry of the studio floor a waking agent lands
+// on (T-1b09; owner ruling rc-4e98c0481852, verbatim: "All members and
+// contractors and their online / offline status"). The purpose is knowing WHO
+// TO ASK — owner: 「目的是讓大家知道彼此在做什麼 可以去哪裡尋求協助 不是要塞爆
+// 大家的 context」 — so every text field here is BOUNDED, and the block carries
+// only what answers "is this the right person, and can I reach them now".
+//
+// 🔴 Insight and Learning are DELIBERATELY absent, and the reason matters more
+// than the fact: they are NOT withheld for lack of access — role insight is
+// readable by ANY authenticated identity (the same floor Duty sits on), so
+// nothing technical stops this struct from carrying them. They are absent
+// because the owner ruled them out on 2026-08-02 (「之後應該給 duty 就好，不要給
+// insight / learning」). Anyone who later notices "we can read insight here"
+// and helpfully adds it is reversing an owner decision, not filling a gap.
+type resumeRosterMemberDTO struct {
+	// ID is the ADDRESS. Names are editable and role names repeat, so a
+	// message is only ever addressed by id — that is why it leads the row.
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Kind separates a permanent member from a disposable contractor; a
+	// contractor id is retired with the single task it was minted for, so
+	// "who is this" and "how long will they exist" are the same question.
+	Kind     string `json:"kind"`
+	RoleName string `json:"role_name"`
+	// Duty is the role's own definition text, HARD-TRUNCATED to one short
+	// line (resumeDutyPreview). Members carry it; contractors have no role
+	// and leave it "".
+	Duty string `json:"duty"`
+	// CurrentTask is the TITLE of the one task a contractor is bound to,
+	// HARD-TRUNCATED (resumeTaskTitlePreview) — owner ruling rc-a02d8bc7fe23:
+	// 正職給職責、外包給任務標題. A contractor id is minted per task, so its task
+	// title IS its duty. Members leave it "": duty is stable and answers "is
+	// this the right person to ask", while a member's task changes daily and
+	// would churn every agent's boot for less signal.
+	//
+	// The truncation is not cosmetic. Measured on 2026-08-03: task titles
+	// average ~99 chars and reach 147 — five untruncated contractor titles
+	// alone outweigh the entire machine block.
+	CurrentTask string `json:"current_task"`
+	// Machine is the LIVE binding (which machine this member runs on right
+	// now) — not LastMachineID (where it last landed) and not
+	// DesiredMachineID (where the owner wants it). The three are routinely
+	// different and are not interchangeable.
+	Machine  string `json:"machine"`
+	Presence string `json:"presence"`
+}
+
+// resumeMachineDTO is one machine in the wake snapshot's machine block.
+type resumeMachineDTO struct {
+	// MachineID is the STABLE id and the only safe way to name a machine:
+	// our hosts report the SAME name as each other, so anything derived from
+	// a hostname silently picks the wrong box and every path and dispatch
+	// downstream is wrong WITHOUT erroring.
+	MachineID   string `json:"machine_id"`
+	DisplayName string `json:"display_name"`
+	Online      bool   `json:"online"`
+}
+
+// resumeMachinesDTO is the machine block (T-1b09; owner ruling
+// rc-09476f535b59: the machine LIST plus which one you are standing on). It
+// deliberately does NOT group members per machine — the roster block above
+// already carries each member's machine, and repeating it as a grouping would
+// pay twice for one fact in a payload every agent reads on every wake.
+type resumeMachinesDTO struct {
+	List []resumeMachineDTO `json:"list"`
+	// YouAreOn is the caller's SERVER-RECORDED machine binding; "" when the
+	// caller has no binding yet (unauthenticated, or not yet landed) — never
+	// an error. Never derive this from a hostname (see resumeMachineDTO).
+	YouAreOn string `json:"you_are_on"`
 }
 
 // resumeOverviewDTO is the size/概要 block of the wake snapshot (T-3f31 owner
@@ -727,6 +800,14 @@ type resumeOverviewDTO struct {
 	TasksDetailChars    int `json:"tasks_detail_chars"`    // Σ detail_chars over the rows
 	CardsWaiting        int `json:"cards_waiting"`         // the caller's waiting cards
 	CardsAnsweredRecent int `json:"cards_answered_recent"` // answered in the last 24h
+	// RosterChars / MachinesChars size the two studio-floor blocks THIS
+	// snapshot carries (T-1b09). They are reported SEPARATELY and are
+	// deliberately not folded into TasksDetailChars: that field counts text
+	// the snapshot does NOT carry (the plan text a later get_task would
+	// load). Mixing "what you are holding" with "what you would have to go
+	// fetch" is exactly what makes a single size number un-actionable.
+	RosterChars   int `json:"roster_chars"`
+	MachinesChars int `json:"machines_chars"`
 }
 
 // resumeSummarySizeDTO is the size-only PEEK of the wake snapshot (T-7974
