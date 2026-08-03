@@ -200,3 +200,70 @@ def test_duty_and_learning_untouched_by_insight_write(client, agent_b, subject):
     r = client.get(path, headers=_auth(agent_b.token))
     _log("read-learning-after", "GET", path, "agent_other", r)
     assert r.status_code == 200 and subject["learning"] in r.json()["text"]
+
+
+# ── 4. the THIRD write face: RESTORE from a retained revision ────────────────
+#
+# The two 403 cases above cover replace and patch. There is a third way to put
+# text into a role's insight doc, and it lives in a DIFFERENT file behind a
+# DIFFERENT switch: POST /api/document-history/insight/{role}/{id}/restore ends
+# up in putInsightOn just as surely as replace_insight does. Its guard is one
+# `write && !insightWriteAuthz(...)` cell in documentHistoryAllowed, and a
+# post-land review measured what happens when that cell is deleted: the whole go
+# suite and the whole conformance suite stayed GREEN while another role's agent
+# rewrote the victim's Insight from V2 back to V1 (403 → 200). Nothing in the
+# build spoke for it. This is that missing voice.
+#
+# The refusal alone would not be worth much — an endpoint that 403s at everyone
+# satisfies it. The positive control (the role's OWN agent restores the same
+# revision, by the same id, and the text really moves) is what makes the refusal
+# mean "this caller was refused" rather than "this path is broken".
+
+
+def test_other_role_agent_cannot_restore_victim_insight(client, agent_b, subject):
+    doc = f"/api/insight/{subject['role_key']}"
+    history = f"/api/document-history/insight/{subject['role_key']}"
+    own = _auth(subject["own_token"])
+    v1 = "INSIGHT V1: retired judgement — the version an attacker would put back."
+    v2 = "INSIGHT V2: current judgement."
+
+    for text in (v1, v2):
+        r = client.post(doc, json={"text": text}, headers=own)
+        _log("write-insight-own-role", "POST", doc, "agent_self", r)
+        assert r.status_code == 200, r.text
+
+    # Reading the retained versions is open to every authenticated identity
+    # (ruling rc-dc171587220c — `write &&` short-circuits the guard), so the
+    # attacker gets the revision id for free. That is not the hole; the hole
+    # would be being allowed to USE it.
+    r = client.get(history, headers=_auth(agent_b.token))
+    _log("list-insight-history", "GET", history, "agent_other", r)
+    assert r.status_code == 200, r.text
+    v1_ids = [v["id"] for v in r.json() if v["content"].get("text") == v1]
+    assert v1_ids, f"no retained revision holding V1 — nothing to try to restore: {r.text}"
+    version_id = v1_ids[0]
+
+    restore = f"{history}/{version_id}/restore"
+    r = client.post(restore, headers=_auth(agent_b.token))
+    _log("restore-insight-cross-role", "POST", restore, "agent_other", r)
+    assert r.status_code == 403, (
+        f"cross-role restore was NOT refused: {r.status_code} {r.text} — another "
+        "role's agent just rewrote this role's Insight through the history face"
+    )
+    assert r.json()["error"]["message"] == FORBIDDEN_MSG
+
+    # A 403 that nevertheless wrote would satisfy the status assertion above.
+    r = client.get(doc, headers=_auth(agent_b.token))
+    _log("read-insight-after-refused-restore", "GET", doc, "agent_other", r)
+    assert r.status_code == 200, r.text
+    assert r.json()["text"] == v2
+
+    # Positive control: same revision, same URL, the role's OWN agent — 200, and
+    # the document really moves. Without this the refusal above could be a broken
+    # route rather than an enforced boundary.
+    r = client.post(restore, headers=own)
+    _log("restore-insight-own-role", "POST", restore, "agent_self", r)
+    assert r.status_code == 200, r.text
+    r = client.get(doc, headers=own)
+    assert r.status_code == 200, r.text
+    assert r.json()["text"] == v1
