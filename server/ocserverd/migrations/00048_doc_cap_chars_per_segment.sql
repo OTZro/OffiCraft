@@ -14,10 +14,14 @@
 -- migration was always going to be written.
 --
 -- WHY THE MANUAL INHERITS THE VALUE AND THE OTHER THREE DO NOT: the stored value
--- is whatever the owner last raised the SHARED cap to (15000 on this install),
--- and the manual's two long documents are the ones that were actually sized
--- against it. Insight and Learning start at the owner's stated 10000 (T-ae38,
--- verbatim: 「我預期 duty 1000 / insight 10000 / learning 10000」). Docs already
+-- is whatever the owner last raised the SHARED cap to, and the manual's two long
+-- documents are the ones that were actually sized against it. The other three
+-- keys are left ABSENT so each reads its code-side shipped default
+-- (domain.go: dutyCapCharsDefault / contextDocMaxCharsDefault) — this file
+-- deliberately does not restate those numbers, because they are settings and a
+-- restated number is a sentence that goes stale. Owner's T-ae38 ruling, quoted
+-- as the record and not as today's values: 「我預期 duty 1000 / insight 10000 /
+-- learning 10000」. Docs already
 -- over the new number are NOT truncated — the standing rule (DocCapBlocked) lets
 -- an over-cap doc keep converging downward and only refuses a write that is not
 -- shorter, and that rule now applies identically to all three segments.

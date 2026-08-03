@@ -669,11 +669,13 @@ export interface ServerSettingsView {
    * PAUSED — the panel annotates it). */
   outsourceMaxParallel: number;
   /** T-3aeb / T-ae38: the FOUR independent size caps on the accumulating
-   * documents, in CHARACTERS (runes). Duty (a role definition) defaults to
-   * 1000 and is adjustable 1000..100000; Insight, Learning (the lessons doc)
-   * and Manual (a task manual's sop_md + learnings) default to 10000 and are
-   * adjustable 10000..100000. Each floor is that segment's own default, so a
-   * cap only ever goes UP. */
+   * documents, in CHARACTERS (runes) — a role's Duty (role definition),
+   * Insight, Learning (the lessons doc) and Manual (a task manual's sop_md +
+   * learnings). The shipped defaults live in `DOC_CAP_CHARS_DEFAULTS`
+   * (docCap.ts, mirroring server/ocserverd/domain.go); Duty's is deliberately
+   * much smaller than the other three's. Each floor IS that segment's own
+   * default and the ceiling is 100000, so a cap only ever goes UP. Numbers are
+   * not restated here — they are owner-adjustable settings. */
   docCapCharsDuty: number;
   docCapCharsInsight: number;
   docCapCharsLearning: number;
@@ -745,8 +747,8 @@ export interface ServerSettingsPatch {
   codexCompactionThreshold?: number;
   monitoringRefreshSeconds?: number;
   outsourceMaxParallel?: number;
-  /** T-ae38 document size caps, in characters. Duty must be 1000..100000; the
-   * other three must be 10000..100000. */
+  /** T-ae38 document size caps, in characters. Each must be between THAT
+   * segment's shipped default (`DOC_CAP_CHARS_DEFAULTS`) and 100000. */
   docCapCharsDuty?: number;
   docCapCharsInsight?: number;
   docCapCharsLearning?: number;

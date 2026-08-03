@@ -86,7 +86,8 @@ const { rows, cap } = loadCases();
 
 describe("docCapBlocked · the shared cap table", () => {
   it("caps at the size the shared table names", () => {
-    // The threshold is ON the table, so 10000 is not a third copy of itself.
+    // The threshold is ON the table, so the number is not a third copy of
+    // itself — the table moves when the shipped default moves.
     expect(DOC_CAP_CHARS_DEFAULT).toBe(cap);
   });
 

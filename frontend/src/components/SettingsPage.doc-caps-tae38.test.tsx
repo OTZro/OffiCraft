@@ -13,9 +13,10 @@
 //     the wire before this ticket, so an agent that had just condensed its own
 //     role definition had to ask someone else to measure the doc.
 //  3. EACH SETTINGS ROW WRITES ITS OWN KEY, and Duty's local floor is its own
-//     1000. A row that reads one setting and PATCHes another is invisible until
-//     someone notices the wrong number moved; a shared 10000 floor would make
-//     the field locally reject the value the server ships with.
+//     smaller default. A row that reads one setting and PATCHes another is
+//     invisible until someone notices the wrong number moved; sharing the other
+//     three's floor would make the field locally reject the value the server
+//     ships with.
 //
 // 🔴 THE THREE CAPS ARE SET TO THREE DIFFERENT NUMBERS throughout. Before
 // T-ae38 there was ONE setting, so every "the cap shown is N" assertion was
@@ -34,11 +35,13 @@ const s = zh.settings;
 const mp = zh.mp;
 
 // Deliberately far apart, and none of them equal to another (see the header).
-// Insight/Learning stay >= 10000 because each floor is that segment's own
-// shipped default — the server (and the mock) 422s anything lower.
-const DUTY_CAP = 1500;
-const INSIGHT_CAP = 12000;
-const LEARNING_CAP = 30000;
+// Insight/Learning stay at or above their shipped defaults because each floor
+// IS that segment's own default — the server (and the mock) 422s anything
+// lower. They are written relative to DOC_CAP_CHARS_DEFAULTS so that raising a
+// default cannot silently push a fixture below its own floor.
+const DUTY_CAP = DOC_CAP_CHARS_DEFAULTS.duty + 500;
+const INSIGHT_CAP = DOC_CAP_CHARS_DEFAULTS.insight + 2000;
+const LEARNING_CAP = DOC_CAP_CHARS_DEFAULTS.learning * 2;
 
 beforeEach(() => {
   __resetMock();
@@ -183,10 +186,11 @@ describe("T-ae38 — four knobs, each writing its own key", () => {
     expect(after.docCapCharsManual).toBe(DOC_CAP_CHARS_DEFAULTS.manual);
   });
 
-  it("the Duty row's local floor is 1000, NOT the other three's 10000", async () => {
-    // 🔴 A shared 10000 floor would make this field locally reject every value
-    // between the shipped Duty default and 10000 — including the value it is
-    // sitting on. 1200 is a legal Duty cap; the row must accept it.
+  it("the Duty row's local floor is its own, NOT the other three's", async () => {
+    // 🔴 Sharing the other three's floor would make this field locally reject
+    // every value between the shipped Duty default and that floor — including
+    // the value it is sitting on. 1200 is a legal Duty cap; the row must
+    // accept it.
     const utils = await openParamsPage();
     const input = utils.getByLabelText(s.docCapDuty);
     fireEvent.change(input, { target: { value: "1200" } });
@@ -200,7 +204,7 @@ describe("T-ae38 — four knobs, each writing its own key", () => {
     expect((await mockApi.getServerSettings()).docCapCharsDuty).toBe(1200);
   });
 
-  it("the Learning row still refuses 1200 — its floor is its own 10000", async () => {
+  it("the Learning row still refuses 1200 — its floor is its own default", async () => {
     // The other side of the same coin: per-row floors, not one relaxed number.
     const utils = await openParamsPage();
     const input = utils.getByLabelText(s.docCapLearning);

@@ -880,7 +880,8 @@ export function toServerSettings(w: WireServerSettings): ServerSettingsView {
     outsourceMaxParallel: w.outsource_max_parallel ?? 0,
     // ?? that segment's shipped default, not 0: a server too old to send the
     // field still caps at it, and a 0 here would read as "no cap" to every
-    // caller. Duty's default is 1000, the other three 10000 (T-ae38).
+    // caller. Duty has its own, smaller default; the other three share one
+    // (T-ae38) — the numbers live in DOC_CAP_CHARS_DEFAULTS, not here.
     docCapCharsDuty: w.doc_cap_chars_duty ?? DOC_CAP_CHARS_DEFAULTS.duty,
     docCapCharsInsight: w.doc_cap_chars_insight ?? DOC_CAP_CHARS_DEFAULTS.insight,
     docCapCharsLearning:

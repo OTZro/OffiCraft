@@ -44,6 +44,7 @@ import {
   type DocumentHistoryEntryProps,
 } from "./DocumentHistoryEntry";
 import { navigateHash } from "../lib/hashRoute";
+import { DOC_CAP_CHARS_DEFAULTS } from "../api/docCap";
 
 /** The four adjustable document caps (T-ae38), in the order the parameters card
  * lists them: the three role-journal segments in journal order (Duty → Insight
@@ -51,9 +52,12 @@ import { navigateHash } from "../lib/hashRoute";
  * ServerSettingsPatch field, so the row cannot read one setting and write
  * another.
  *
- * `min` is per row and is NOT decoration: Duty's floor is its own shipped 1000.
- * A shared 10000 here would make the local guard reject the value the server
- * ships with — the field would refuse its own current contents. */
+ * `min` is per row and is NOT decoration: Duty's floor is its OWN shipped
+ * default. Sharing the other three's floor here would make the local guard
+ * reject the value the server ships with — the field would refuse its own
+ * current contents. The numbers come from DOC_CAP_CHARS_DEFAULTS (docCap.ts,
+ * mirroring server/ocserverd/domain.go) and are never restated: they are
+ * owner-adjustable settings, so a literal here is a guard that goes stale. */
 type DocCapField =
   | "docCapCharsDuty"
   | "docCapCharsInsight"
@@ -64,10 +68,10 @@ const DOC_CAP_FIELDS: Record<
   DocCapField,
   { min: number; inputId: string; labelKey: "docCapDuty" | "docCapInsight" | "docCapLearning" | "docCapManual"; subKey: "docCapDutySub" | "docCapInsightSub" | "docCapLearningSub" | "docCapManualSub" }
 > = {
-  docCapCharsDuty: { min: 1000, inputId: "param-doc-cap-duty", labelKey: "docCapDuty", subKey: "docCapDutySub" },
-  docCapCharsInsight: { min: 10000, inputId: "param-doc-cap-insight", labelKey: "docCapInsight", subKey: "docCapInsightSub" },
-  docCapCharsLearning: { min: 10000, inputId: "param-doc-cap-learning", labelKey: "docCapLearning", subKey: "docCapLearningSub" },
-  docCapCharsManual: { min: 10000, inputId: "param-doc-cap-manual", labelKey: "docCapManual", subKey: "docCapManualSub" },
+  docCapCharsDuty: { min: DOC_CAP_CHARS_DEFAULTS.duty, inputId: "param-doc-cap-duty", labelKey: "docCapDuty", subKey: "docCapDutySub" },
+  docCapCharsInsight: { min: DOC_CAP_CHARS_DEFAULTS.insight, inputId: "param-doc-cap-insight", labelKey: "docCapInsight", subKey: "docCapInsightSub" },
+  docCapCharsLearning: { min: DOC_CAP_CHARS_DEFAULTS.learning, inputId: "param-doc-cap-learning", labelKey: "docCapLearning", subKey: "docCapLearningSub" },
+  docCapCharsManual: { min: DOC_CAP_CHARS_DEFAULTS.manual, inputId: "param-doc-cap-manual", labelKey: "docCapManual", subKey: "docCapManualSub" },
 };
 
 const DOC_CAP_ORDER: DocCapField[] = [
@@ -686,8 +690,8 @@ function ServerParams({
 
   // Each floor is THAT segment's shipped default, so a knob only raises its own
   // cap (owner 2026-07-31; four of them since T-ae38) — the local guard mirrors
-  // the server's 422 range exactly, INCLUDING Duty's floor of 1000. Reusing
-  // 10000 here would locally reject the shipped Duty default.
+  // the server's 422 range exactly, INCLUDING Duty's own smaller floor. Reusing
+  // the other three's floor here would locally reject the shipped Duty default.
   function commitDocCap(field: DocCapField) {
     const draft = docCapDrafts[field];
     if (!settings || draft === undefined) return;

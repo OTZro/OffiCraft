@@ -1218,12 +1218,13 @@ const DEFAULT_MOCK_SETTINGS = {
   monitoring_refresh_seconds: 5,
   // M3 global outsource cap — mirrors the server's code-side default (3).
   outsource_max_parallel: 3,
-  // T-ae38 document size caps — mirror the server defaults (Duty 1000, the
-  // other three 10000 characters).
-  doc_cap_chars_duty: 1000,
-  doc_cap_chars_insight: 10000,
-  doc_cap_chars_learning: 10000,
-  doc_cap_chars_manual: 10000,
+  // T-ae38 document size caps — mirror the server's shipped defaults, which
+  // this module already imports rather than restating (Duty has its own,
+  // smaller one; the other three share).
+  doc_cap_chars_duty: DOC_CAP_CHARS_DEFAULTS.duty,
+  doc_cap_chars_insight: DOC_CAP_CHARS_DEFAULTS.insight,
+  doc_cap_chars_learning: DOC_CAP_CHARS_DEFAULTS.learning,
+  doc_cap_chars_manual: DOC_CAP_CHARS_DEFAULTS.manual,
   // The two software-update toggles — both OFF out of the box, mirroring the
   // server (updates come from GitHub Releases; there is no updater server to
   // configure any more).
@@ -3264,13 +3265,26 @@ export const mockApi: Api = {
     }
     // Server parity (T-3aeb / T-ae38): each floor IS that segment's shipped
     // default, so a document cap can only ever be raised. Duty's floor is its
-    // own 1000, not the other three's 10000 — sharing one number here would
-    // make the owner's stated Duty default unreachable through this surface.
+    // OWN default, not the other three's — sharing one number here would make
+    // the owner's Duty default unreachable through this surface. The numbers
+    // are read from DOC_CAP_CHARS_DEFAULTS, never restated.
     for (const [field, wire, min] of [
-      [patch.docCapCharsDuty, "doc_cap_chars_duty", 1000],
-      [patch.docCapCharsInsight, "doc_cap_chars_insight", 10000],
-      [patch.docCapCharsLearning, "doc_cap_chars_learning", 10000],
-      [patch.docCapCharsManual, "doc_cap_chars_manual", 10000],
+      [patch.docCapCharsDuty, "doc_cap_chars_duty", DOC_CAP_CHARS_DEFAULTS.duty],
+      [
+        patch.docCapCharsInsight,
+        "doc_cap_chars_insight",
+        DOC_CAP_CHARS_DEFAULTS.insight,
+      ],
+      [
+        patch.docCapCharsLearning,
+        "doc_cap_chars_learning",
+        DOC_CAP_CHARS_DEFAULTS.learning,
+      ],
+      [
+        patch.docCapCharsManual,
+        "doc_cap_chars_manual",
+        DOC_CAP_CHARS_DEFAULTS.manual,
+      ],
     ] as const) {
       if (field !== undefined && (field < min || field > 100000)) {
         throw new ApiError(

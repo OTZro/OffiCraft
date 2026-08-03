@@ -264,8 +264,9 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 	// its cap (owner 2026-07-31). Lowering one would strand every document that
 	// is legal today in shrink-only mode — the refusal says so rather than
 	// making the caller infer it from a bare range. Four independent knobs
-	// since T-ae38; Duty's floor is its own 1000, not the other three's 10000,
-	// or the owner's stated default would be unreachable from this surface.
+	// since T-ae38; Duty's floor is minDutyCapChars, NOT the other three's
+	// minDocCapChars, or its own shipped default would be unreachable from this
+	// surface. The numbers live in domain.go — do not restate them here.
 	capRange := []struct {
 		field *int
 		name  string

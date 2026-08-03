@@ -1282,16 +1282,16 @@ export const en: Dict = {
     // one ruler.
     docCapDuty: "Duty size cap",
     docCapDutySub:
-      "Per-role limit on the role definition (1000–100000). The floor is the shipped default, so this can only be raised — lowering it would leave documents that are legal today able to shrink only.",
+      "Per-role limit on the role definition. The floor is this segment's own shipped default (smaller than the other three) and the ceiling is 100000, so this can only be raised — lowering it would leave documents that are legal today able to shrink only.",
     docCapInsight: "Insight size cap",
     docCapInsightSub:
-      "Per-role limit on the insight doc (10000–100000). The floor is the shipped default, so this can only be raised.",
+      "Per-role limit on the insight doc. The floor is the shipped default and the ceiling is 100000, so this can only be raised.",
     docCapLearning: "Learning size cap",
     docCapLearningSub:
-      "Per-role limit on the lessons doc (10000–100000). The floor is the shipped default, so this can only be raised.",
+      "Per-role limit on the lessons doc. The floor is the shipped default and the ceiling is 100000, so this can only be raised.",
     docCapManual: "Task manual size cap",
     docCapManualSub:
-      "Per-document limit on a task manual's SOP and learnings (10000–100000). The floor is the shipped default, so this can only be raised.",
+      "Per-document limit on a task manual's SOP and learnings. The floor is the shipped default and the ceiling is 100000, so this can only be raised.",
     docUsage: "Used",
     chars: "characters",
     // ── Verified-save read-back (T-1c2e; lives in the software-update view

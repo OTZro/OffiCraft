@@ -5,7 +5,8 @@ package main
 // sop_md).
 //
 // Owner ruling, two sentences and one number: an update may not push the doc
-// past 10,000 characters, and whatever is ALREADY over that is not truncated —
+// past the cap (a setting since T-3aeb; see contextDocMaxCharsDefault for the
+// shipped default), and whatever is ALREADY over that is not truncated —
 // its next update may only make it smaller.
 //
 // This is a FAIL-CLOSED gate on the seam an agent uses to hand its experience
@@ -296,17 +297,21 @@ func TestContextDocCap_LegalWritesAreNotRefused(t *testing.T) {
 	})
 }
 
-// (c) 🔴 The escape hatch. Six documents are ALREADY over the cap in
-// production (lessons 43,029 and 12,132; manual learnings 19,336 / 14,691 /
-// 11,031 / 10,557). Existing content is never truncated, so if a still-over-cap
+// (c) 🔴 The escape hatch. Six documents were ALREADY over the cap when this
+// was written (lessons 43,029 and 12,132 runes; manual learnings 19,336 /
+// 14,691 / 11,031 / 10,557). The cap is a SETTING and its shipped default has
+// moved since, so the fixtures below are written as contextDocMaxCharsDefault +
+// <the same offsets those six sat at>: the property under test is "already over
+// the cap", not any particular size.
+// Existing content is never truncated, so if a still-over-cap
 // result were refused, those six could never be edited again — not even to get
 // smaller. This is the single most expensive property in the file to lose.
 func TestContextDocCap_OverCapDocMayStillShrink(t *testing.T) {
 	t.Run("replace_lessons", func(t *testing.T) {
 		srv, dal, tok := capLessonsServer(t)
-		seedLessonsOverlay(t, dal, "assistant", "general", capDoc(t, 43029))
+		seedLessonsOverlay(t, dal, "assistant", "general", capDoc(t, contextDocMaxCharsDefault+33029))
 
-		want := capDoc(t, 40000) // still far over the cap, but SHORTER
+		want := capDoc(t, contextDocMaxCharsDefault+30000) // still far over the cap, but SHORTER
 		status, data := replaceLessons(t, srv, tok, want, false)
 		if status != http.StatusOK {
 			t.Fatalf("an over-cap doc must still be allowed to shrink, got %d: %v", status, data)
@@ -318,7 +323,7 @@ func TestContextDocCap_OverCapDocMayStillShrink(t *testing.T) {
 
 	t.Run("patch_lessons", func(t *testing.T) {
 		srv, dal, tok := capLessonsServer(t)
-		before := capDoc(t, 43029)
+		before := capDoc(t, contextDocMaxCharsDefault+33029)
 		seedLessonsOverlay(t, dal, "assistant", "general", before)
 
 		status, data := patchLessons(t, srv.URL, tok, "assistant", "general",
@@ -337,9 +342,9 @@ func TestContextDocCap_OverCapDocMayStillShrink(t *testing.T) {
 
 	t.Run("write_task_learnings", func(t *testing.T) {
 		api := newTasksTestServer(t)
-		key := seedManualWithLearnings(t, api, capDoc(t, 19336))
+		key := seedManualWithLearnings(t, api, capDoc(t, contextDocMaxCharsDefault+9336))
 
-		want := capDoc(t, 19000)
+		want := capDoc(t, contextDocMaxCharsDefault+9000)
 		if rec := writeLearnings(t, api, key, map[string]any{"text": want}); rec.Code != http.StatusOK {
 			t.Fatalf("over-cap learnings must still be allowed to shrink, got %d: %s",
 				rec.Code, rec.Body.String())
@@ -351,7 +356,7 @@ func TestContextDocCap_OverCapDocMayStillShrink(t *testing.T) {
 
 	t.Run("patch_task_learnings", func(t *testing.T) {
 		api := newTasksTestServer(t)
-		before := capDoc(t, 19336)
+		before := capDoc(t, contextDocMaxCharsDefault+9336)
 		key := seedManualWithLearnings(t, api, before)
 
 		status, data := patchLearnings(t, api, key, map[string]any{
@@ -371,10 +376,10 @@ func TestContextDocCap_OverCapDocMayStillShrink(t *testing.T) {
 
 	t.Run("update_task_manual", func(t *testing.T) {
 		api := newTasksTestServer(t)
-		key := seedManualWithLearnings(t, api, capDoc(t, 19336))
-		setManualSopMD(t, api, key, capDoc(t, 14691))
+		key := seedManualWithLearnings(t, api, capDoc(t, contextDocMaxCharsDefault+9336))
+		setManualSopMD(t, api, key, capDoc(t, contextDocMaxCharsDefault+4691))
 
-		wantSop, wantLearn := capDoc(t, 14000), capDoc(t, 19000)
+		wantSop, wantLearn := capDoc(t, contextDocMaxCharsDefault+4000), capDoc(t, contextDocMaxCharsDefault+9000)
 		rec := capUpdateManual(t, api, key, map[string]any{
 			"sop_md": wantSop, "learnings": wantLearn,
 		})
@@ -394,7 +399,7 @@ func TestContextDocCap_OverCapDocMayStillShrink(t *testing.T) {
 func TestContextDocCap_EqualLengthOverCapIsRefused(t *testing.T) {
 	t.Run("replace_lessons", func(t *testing.T) {
 		srv, dal, tok := capLessonsServer(t)
-		before := capDoc(t, 12132)
+		before := capDoc(t, contextDocMaxCharsDefault+2132)
 		seedLessonsOverlay(t, dal, "assistant", "general", before)
 
 		// Same rune count, different content — a wholesale rewrite that makes
@@ -411,7 +416,7 @@ func TestContextDocCap_EqualLengthOverCapIsRefused(t *testing.T) {
 
 	t.Run("patch_lessons", func(t *testing.T) {
 		srv, dal, tok := capLessonsServer(t)
-		before := capDoc(t, 12132)
+		before := capDoc(t, contextDocMaxCharsDefault+2132)
 		seedLessonsOverlay(t, dal, "assistant", "general", before)
 
 		// The two anchors have the same rune length by construction.
@@ -427,7 +432,7 @@ func TestContextDocCap_EqualLengthOverCapIsRefused(t *testing.T) {
 
 	t.Run("write_task_learnings", func(t *testing.T) {
 		api := newTasksTestServer(t)
-		before := capDoc(t, 10557)
+		before := capDoc(t, contextDocMaxCharsDefault+557)
 		key := seedManualWithLearnings(t, api, before)
 
 		same := strings.Repeat("q", utf8.RuneCountInString(before))
@@ -442,7 +447,7 @@ func TestContextDocCap_EqualLengthOverCapIsRefused(t *testing.T) {
 
 	t.Run("patch_task_learnings", func(t *testing.T) {
 		api := newTasksTestServer(t)
-		before := capDoc(t, 10557)
+		before := capDoc(t, contextDocMaxCharsDefault+557)
 		key := seedManualWithLearnings(t, api, before)
 
 		status, data := patchLearnings(t, api, key, map[string]any{
@@ -459,7 +464,7 @@ func TestContextDocCap_EqualLengthOverCapIsRefused(t *testing.T) {
 	t.Run("update_task_manual_sop_md", func(t *testing.T) {
 		api := newTasksTestServer(t)
 		key := seedManualWithLearnings(t, api, "")
-		before := capDoc(t, 11031)
+		before := capDoc(t, contextDocMaxCharsDefault+1031)
 		setManualSopMD(t, api, key, before)
 
 		same := strings.Repeat("q", utf8.RuneCountInString(before))
@@ -534,7 +539,7 @@ func TestContextDocCap_AllowShrinkIsNotABypass(t *testing.T) {
 // only ever converge in small steps.
 func TestContextDocCap_ShrinkGuardAndCapCompose(t *testing.T) {
 	srv, dal, tok := capLessonsServer(t)
-	seedLessonsOverlay(t, dal, "assistant", "general", capDoc(t, 43029))
+	seedLessonsOverlay(t, dal, "assistant", "general", capDoc(t, contextDocMaxCharsDefault+33029))
 
 	small := capDoc(t, 4000) // under the cap, but under a tenth of the doc
 	if status, data := replaceLessons(t, srv, tok, small, false); status != http.StatusOK {
@@ -547,7 +552,7 @@ func TestContextDocCap_ShrinkGuardAndCapCompose(t *testing.T) {
 	// bypass — is the answer. capDoc's head filler is 9/10 of the doc, so
 	// deleting all of it leaves under a tenth behind: exactly the >90% shrink
 	// LessonsShrinkBlocked exists to catch.
-	before := capDoc(t, 43029)
+	before := capDoc(t, contextDocMaxCharsDefault+33029)
 	seedLessonsOverlay(t, dal, "assistant", "general", before)
 	head := strings.Repeat("a", strings.Index(before, capDropAnchor))
 	deepShrink := `{"edits":[{"old":"` + capDropAnchor + `","new":""},{"old":"` + head + `","new":""}]}`

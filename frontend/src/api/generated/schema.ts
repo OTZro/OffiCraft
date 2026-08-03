@@ -6042,9 +6042,11 @@ export interface components {
          *     the narrow centred column). `doc_cap_chars_duty` / `doc_cap_chars_insight` /
          *     `doc_cap_chars_learning` / `doc_cap_chars_manual` (T-ae38) — the FOUR
          *     independent size caps on the accumulating documents, in CHARACTERS (Unicode
-         *     code points): a role's Duty (role definition, default 1000), Insight (default
-         *     10000) and Learning (lessons, default 10000), plus a task manual's sop_md and
-         *     learnings (default 10000). EVERY key carries a suffix on purpose: `get_settings`
+         *     code points): a role's Duty (role definition), Insight and Learning (lessons),
+         *     plus a task manual's sop_md and learnings. Each knob's shipped default is the
+         *     `default` on its own field below — Duty's is deliberately much smaller than the
+         *     other three's, and every one of them is owner-adjustable, so no prose here
+         *     restates a number. EVERY key carries a suffix on purpose: `get_settings`
          *     shows an agent key NAMES and no descriptions, so an unsuffixed `doc.cap_chars`
          *     sitting beside three suffixed ones reads as a global default and would be
          *     adjusted by someone believing they had moved all four.
@@ -6082,26 +6084,26 @@ export interface components {
             custom_themes: components["schemas"]["ThemeBundleDTO"][];
             /**
              * Doc Cap Chars Duty
-             * @description The size cap on a role's DUTY doc (the role definition), in CHARACTERS (Unicode code points — Chinese prose counts one per character), 1000 through 100000. Duty had no cap at all before T-ae38.
+             * @description The size cap on a role's DUTY doc (the role definition), in CHARACTERS (Unicode code points — Chinese prose counts one per character). The floor of the adjustable range is this segment's OWN shipped default (the `default` field above), which is smaller than the other three segments'; the ceiling is 100000. Duty had no cap at all before T-ae38.
              * @default 1000
              */
             doc_cap_chars_duty: number;
             /**
              * Doc Cap Chars Insight
-             * @description The size cap on a role's INSIGHT doc, in CHARACTERS (Unicode code points), 10000 through 100000.
-             * @default 10000
+             * @description The size cap on a role's INSIGHT doc, in CHARACTERS (Unicode code points). The floor of the adjustable range is this segment's shipped default (the `default` field above), the ceiling is 100000.
+             * @default 15000
              */
             doc_cap_chars_insight: number;
             /**
              * Doc Cap Chars Learning
-             * @description The size cap on a role's LEARNING doc (the lessons doc), in CHARACTERS (Unicode code points), 10000 through 100000.
-             * @default 10000
+             * @description The size cap on a role's LEARNING doc (the lessons doc), in CHARACTERS (Unicode code points). The floor of the adjustable range is this segment's shipped default (the `default` field above), the ceiling is 100000.
+             * @default 15000
              */
             doc_cap_chars_learning: number;
             /**
              * Doc Cap Chars Manual
-             * @description The size cap on a TASK MANUAL's two long documents (sop_md and learnings), in CHARACTERS (Unicode code points), 10000 through 100000. These are keyed by type_key — assets of a task TYPE, not of a role journal — which is why they answer to their own knob rather than to any of the three role-journal segments. This is the key the single doc.cap_chars setting was RENAMED to in T-ae38; its stored value carried over unchanged.
-             * @default 10000
+             * @description The size cap on a TASK MANUAL's two long documents (sop_md and learnings), in CHARACTERS (Unicode code points). The floor of the adjustable range is this segment's shipped default (the `default` field above), the ceiling is 100000. These are keyed by type_key — assets of a task TYPE, not of a role journal — which is why they answer to their own knob rather than to any of the three role-journal segments. This is the key the single doc.cap_chars setting was RENAMED to in T-ae38; its stored value carried over unchanged.
+             * @default 15000
              */
             doc_cap_chars_manual: number;
             /** Handover Pct */
@@ -6162,11 +6164,11 @@ export interface components {
          *     admits prereleases; `updater_auto_update` toggles unattended background
          *     self-upgrade to the newest admissible release (both booleans, default false;
          *     the manual upgrade endpoint is unaffected). The four document caps (T-ae38)
-         *     are independent knobs: `doc_cap_chars_duty` MUST be 1000..100000 and
-         *     `doc_cap_chars_insight` / `doc_cap_chars_learning` / `doc_cap_chars_manual`
-         *     MUST each be 10000..100000 — every floor equals THAT segment's shipped
-         *     default, so a cap can only ever be RAISED (owner ruling 2026-07-31): lowering
-         *     one would turn documents that are legal today into shrink-only ones.
+         *     are independent knobs. Each one MUST be between THAT segment's shipped default
+         *     (the `default` on the matching `SettingsDTO` field — Duty's is its own, much
+         *     smaller number) and 100000. The floor equalling the shipped default is the
+         *     point: a cap can only ever be RAISED (owner ruling 2026-07-31), because
+         *     lowering one would turn documents that are legal today into shrink-only ones.
          */
         SettingsUpdateDTO: {
             /**
@@ -6176,22 +6178,22 @@ export interface components {
             codex_compaction_threshold?: number | null;
             /**
              * Doc Cap Chars Duty
-             * @description The size cap on a role's DUTY doc (the role definition), in CHARACTERS (Unicode code points). Must be 1000 through 100000.
+             * @description The size cap on a role's DUTY doc (the role definition), in CHARACTERS (Unicode code points). Must be at least this segment's own shipped default (see `SettingsDTO.doc_cap_chars_duty`, whose `default` is that floor) and at most 100000.
              */
             doc_cap_chars_duty?: number | null;
             /**
              * Doc Cap Chars Insight
-             * @description The size cap on a role's INSIGHT doc, in CHARACTERS (Unicode code points). Must be 10000 through 100000.
+             * @description The size cap on a role's INSIGHT doc, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default (see `SettingsDTO.doc_cap_chars_insight`, whose `default` is that floor) and at most 100000.
              */
             doc_cap_chars_insight?: number | null;
             /**
              * Doc Cap Chars Learning
-             * @description The size cap on a role's LEARNING doc (the lessons doc), in CHARACTERS (Unicode code points). Must be 10000 through 100000.
+             * @description The size cap on a role's LEARNING doc (the lessons doc), in CHARACTERS (Unicode code points). Must be at least this segment's shipped default (see `SettingsDTO.doc_cap_chars_learning`, whose `default` is that floor) and at most 100000.
              */
             doc_cap_chars_learning?: number | null;
             /**
              * Doc Cap Chars Manual
-             * @description The size cap on a TASK MANUAL's sop_md and learnings, in CHARACTERS (Unicode code points). Must be 10000 through 100000.
+             * @description The size cap on a TASK MANUAL's sop_md and learnings, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default (see `SettingsDTO.doc_cap_chars_manual`, whose `default` is that floor) and at most 100000.
              */
             doc_cap_chars_manual?: number | null;
             /**

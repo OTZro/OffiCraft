@@ -103,7 +103,8 @@ func loadDocCapCases(t *testing.T) ([]docCapRow, int) {
 func TestDocCapBlocked_MatchesTheSharedTable(t *testing.T) {
 	rows, cap := loadDocCapCases(t)
 
-	// The threshold itself is on the table, so 10000 is not a third copy.
+	// The threshold itself is on the table, so the number is not a third copy
+	// — the table moves when the shipped default moves.
 	if contextDocMaxCharsDefault != cap {
 		t.Errorf("contextDocMaxCharsDefault = %d, shared table says %d — the two implementations are now capping at different sizes", contextDocMaxCharsDefault, cap)
 	}

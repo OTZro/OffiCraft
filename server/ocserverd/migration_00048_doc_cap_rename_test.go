@@ -2,12 +2,20 @@ package main
 
 // migration_00048_doc_cap_rename_test.go — the compatibility half of T-ae38.
 //
-// The live install had `doc.cap_chars` = 15000. Migration 00048 RENAMES that row
-// to `doc.cap_chars.manual`, and the three role-journal keys stay ABSENT so they
-// read their code-side defaults. Every failure mode here is silent:
+// The live install had RAISED `doc.cap_chars` above its shipped default.
+// Migration 00048 RENAMES that row to `doc.cap_chars.manual`, and the three
+// role-journal keys stay ABSENT so they read their code-side defaults.
 //
-//   - the UPDATE never runs        → the manual cap silently drops 15000 → 10000,
-//     and four already-over-10000 manuals become shrink-only overnight;
+// 🔴 The seeded value below is written as contextDocMaxCharsDefault + delta, NOT
+// as a literal: the shipped default is a number the owner moves (he already has
+// once), and a fixture that happens to EQUAL the default makes the carry-over
+// assertion pass on a migration that carried nothing. Distinct from the default
+// is the whole point of the fixture.
+//
+// Every failure mode here is silent:
+//
+//   - the UPDATE never runs        → the manual cap silently falls back to the
+//     shipped default, and any manual already over that becomes shrink-only;
 //   - the old row is left BEHIND   → the DB holds both keys, `get_settings` shows
 //     an unsuffixed one again, and the whole reason for renaming is undone;
 //   - the value is not carried     → same as the first, with a value nobody chose.
@@ -17,6 +25,7 @@ package main
 
 import (
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/pressly/goose/v3"
@@ -35,8 +44,10 @@ func TestMigration00048RenamesTheSharedDocCapToManual(t *testing.T) {
 	if err := goose.DownTo(db, "migrations", 47); err != nil {
 		t.Fatalf("down to 47: %v", err)
 	}
+	raised := strconv.Itoa(contextDocMaxCharsDefault + 5000)
 	if _, err := db.Exec(
-		`INSERT INTO setting (key, value, updated_at) VALUES ('doc.cap_chars', '15000', 1)`); err != nil {
+		`INSERT INTO setting (key, value, updated_at) VALUES ('doc.cap_chars', ?, 1)`,
+		raised); err != nil {
 		t.Fatalf("seed the pre-00048 shared key: %v", err)
 	}
 
@@ -54,9 +65,9 @@ func TestMigration00048RenamesTheSharedDocCapToManual(t *testing.T) {
 		}
 	}
 
-	if got := value(settingDocCapCharsManual); got == nil || *got != "15000" {
-		t.Fatalf("the owner's raised cap must arrive at %s intact, got %v",
-			settingDocCapCharsManual, got)
+	if got := value(settingDocCapCharsManual); got == nil || *got != raised {
+		t.Fatalf("the owner's raised cap (%s) must arrive at %s intact, got %v",
+			raised, settingDocCapCharsManual, got)
 	}
 	// The old key must be GONE, not merely shadowed. A row left behind is the
 	// unsuffixed key this ticket exists to remove — and settings.go would never
@@ -65,8 +76,9 @@ func TestMigration00048RenamesTheSharedDocCapToManual(t *testing.T) {
 		t.Fatalf("the legacy doc.cap_chars row must be renamed away, still holds %q", *got)
 	}
 	// The three journal keys stay ABSENT so they read their code defaults. A
-	// migration that helpfully seeded them with 15000 would hand Insight and
-	// Learning a number the owner never chose for them, and Duty a 15× one.
+	// migration that helpfully seeded them with the manual's carried-over value
+	// would hand Insight and Learning a number the owner never chose for them,
+	// and Duty one many times its own.
 	for _, key := range []string{
 		settingDocCapCharsDuty, settingDocCapCharsInsight, settingDocCapCharsLearning,
 	} {
@@ -80,8 +92,8 @@ func TestMigration00048RenamesTheSharedDocCapToManual(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadAuthSettings: %v", err)
 	}
-	if got.docCapCharsManual != 15000 {
-		t.Fatalf("manual cap = %d, want the carried-over 15000", got.docCapCharsManual)
+	if got.docCapCharsManual != contextDocMaxCharsDefault+5000 {
+		t.Fatalf("manual cap = %d, want the carried-over %s", got.docCapCharsManual, raised)
 	}
 	if got.docCapCharsDuty != dutyCapCharsDefault {
 		t.Fatalf("duty cap = %d, want the shipped %d", got.docCapCharsDuty, dutyCapCharsDefault)

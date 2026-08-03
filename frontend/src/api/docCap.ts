@@ -50,9 +50,9 @@ export interface DocCaps {
 
 export const DOC_CAP_CHARS_DEFAULTS: DocCaps = {
   duty: 1000,
-  insight: 10000,
-  learning: 10000,
-  manual: 10000,
+  insight: 15000,
+  learning: 15000,
+  manual: 15000,
 };
 
 /** The single number the shared fixture (bin/tests/fixtures/doc-cap-cases.tsv)
@@ -63,8 +63,9 @@ export const DOC_CAP_CHARS_DEFAULT = DOC_CAP_CHARS_DEFAULTS.learning;
 /** Length in UNICODE CODE POINTS — the unit the server measures in
  * (utf8.RuneCountInString). `String.length` is UTF-16 units and would count an
  * astral character (emoji) TWICE; a byte count would count CJK prose 3× and
- * turn the owner's 10,000-character cap into a ~4,000-character one. Both are
- * the exact mistakes the fixture's multi-byte rows exist to catch. */
+ * would shrink the owner's cap to roughly a third of the number he signed off
+ * on. Both are the exact mistakes the fixture's multi-byte rows exist to
+ * catch. */
 export function runeLength(s: string): number {
   return [...s].length;
 }

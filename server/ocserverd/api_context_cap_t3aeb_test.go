@@ -12,7 +12,8 @@ package main
 // The per-segment independence itself is pinned in api_doc_caps_tae38_test.go.
 //
 // Owner rulings (2026-07-31, cards rc-286b34b60388 / rc-33b88ed80212):
-//   - default 10,000, adjustable 10,000..100,000 — the FLOOR IS THE DEFAULT, so
+//   - shipped default = contextDocMaxCharsDefault, adjustable up to
+//     maxDocCapChars — the FLOOR IS THE DEFAULT, so
 //     the cap can only ever be raised. Lowering it would turn documents that are
 //     legal today into shrink-only ones;
 //   - the receipt's `size` counts CHARACTERS, reversing the earlier "frozen wire
@@ -83,8 +84,9 @@ func TestDocCap_FollowsTheLiveSetting(t *testing.T) {
 	if status != http.StatusBadRequest {
 		t.Fatalf("phase 1: a write over the default cap must be refused, got %d: %v", status, data)
 	}
-	if msg := capErrMessage(data); !strings.Contains(msg, "10000") {
-		t.Fatalf("phase 1: the refusal must name the cap in force (10000), got %q", msg)
+	defaultCap := strconv.Itoa(contextDocMaxCharsDefault)
+	if msg := capErrMessage(data); !strings.Contains(msg, defaultCap) {
+		t.Fatalf("phase 1: the refusal must name the cap in force (%s), got %q", defaultCap, msg)
 	}
 
 	// The owner raises the cap.
@@ -115,8 +117,8 @@ func TestDocCap_FollowsTheLiveSetting(t *testing.T) {
 // TestDocCap_RefusalQuotesTheLiveCapNotTheDefault pins the message itself. The
 // refusal is the ONLY way an agent learns the cap — get_settings is admin-only,
 // so a worker that hits the gate cannot look the number up. A message still
-// quoting 10000 after the owner raised it would send every agent shrinking
-// toward a limit that no longer exists.
+// still quoting the SHIPPED DEFAULT after the owner raised it would send every
+// agent shrinking toward a limit that no longer exists.
 func TestDocCap_RefusalQuotesTheLiveCapNotTheDefault(t *testing.T) {
 	srv, dal, tok := capLessonsServer(t)
 	seedLessonsOverlay(t, dal, "assistant", "general", capDoc(t, 30000))
@@ -131,7 +133,7 @@ func TestDocCap_RefusalQuotesTheLiveCapNotTheDefault(t *testing.T) {
 	if !strings.Contains(msg, "25000") {
 		t.Fatalf("the refusal must quote the live cap 25000, got %q", msg)
 	}
-	if strings.Contains(msg, "10000-char") {
+	if strings.Contains(msg, strconv.Itoa(contextDocMaxCharsDefault)+"-char") {
 		t.Fatalf("the refusal still quotes the shipped default, not the live cap: %q", msg)
 	}
 }
@@ -259,11 +261,11 @@ func TestUpdateSettingsDocCapCharsRange(t *testing.T) {
 	// Below the floor is refused — including the value one under the default,
 	// which is the shape a "let me lower it a little" attempt actually takes.
 	for _, body := range []string{
-		`{"doc_cap_chars_learning":9999}`,
+		`{"doc_cap_chars_learning":` + strconv.Itoa(contextDocMaxCharsDefault-1) + `}`,
 		`{"doc_cap_chars_learning":0}`,
 		`{"doc_cap_chars_learning":-1}`,
 		`{"doc_cap_chars_learning":100001}`,
-		`{"handover_pct":60,"doc_cap_chars_learning":9999}`, // one bad field poisons the patch
+		`{"handover_pct":60,"doc_cap_chars_learning":` + strconv.Itoa(contextDocMaxCharsDefault-1) + `}`, // one bad field poisons the patch
 	} {
 		if status, _ := patchSettings(t, srv.URL, owner, body); status != 422 {
 			t.Fatalf("PATCH %s: want 422, got %d", body, status)
@@ -277,7 +279,7 @@ func TestUpdateSettingsDocCapCharsRange(t *testing.T) {
 	}
 
 	// Both ends of the range are accepted, durable, and live.
-	for _, n := range []string{"10000", "100000", "42000"} {
+	for _, n := range []string{strconv.Itoa(contextDocMaxCharsDefault), "100000", "42000"} {
 		status, data := patchSettings(t, srv.URL, owner, `{"doc_cap_chars_learning":`+n+`}`)
 		if status != 200 {
 			t.Fatalf("PATCH doc_cap_chars_learning=%s: want 200, got %d: %v", n, status, data)
@@ -308,7 +310,7 @@ func atoiOrFail(t *testing.T, s string) int {
 // beats a server quietly running a cap nobody chose (the posture
 // TestLoadAuthSettingsFailsLoudOnCorruptValues already pins for its neighbours).
 func TestLoadAuthSettingsRejectsAnOutOfRangeDocCap(t *testing.T) {
-	for _, bad := range []string{"9999", "100001", "0", "-5", "lots"} {
+	for _, bad := range []string{strconv.Itoa(contextDocMaxCharsDefault - 1), "100001", "0", "-5", "lots"} {
 		d := newTestDAL(t)
 		if err := d.PutSetting(settingDocCapCharsLearning, bad); err != nil {
 			t.Fatalf("PutSetting: %v", err)
