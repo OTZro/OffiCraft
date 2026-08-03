@@ -145,6 +145,64 @@ class SSEConnection:
         ev = self.wait_for(_match, timeout=timeout)
         return {"event": ev, "frame": json.loads(ev["data"])}
 
+    def drain_backlog(self, quiet_for: float = 1.0, label: str = "") -> int:
+        """BARRIER: discard everything already queued, then PROVE the stream is
+        silent for ``quiet_for`` seconds — i.e. establish, as an ASSERTED state,
+        that no delta produced before this point is still reachable by a later
+        ``wait_for*`` call. Returns how many data events were discarded.
+
+        Why this exists (do not replace it with "just move the setup writes"):
+        ``wait_for``/``wait_for_frame`` drain FROM THE FRONT of the queue and
+        discard non-matching events, so they happily return a frame that was
+        already sitting on the connection BEFORE the caller triggered anything.
+        A test that opens its connection first and then does any roster/entity
+        write during setup therefore hands its first ``wait_for_frame(topic)``
+        a STALE frame, and that assertion becomes vacuously true — the publish
+        seam it means to guard can be deleted outright and the row stays green
+        (observed: test_every_closed_topic_emits' ``member`` row).
+
+        The barrier is deliberately COUNT-INDEPENDENT rather than a fix for the
+        setup writes that happen to exist today: it discards however many frames
+        are queued (0, 2, or 20), and the trailing silence window catches a
+        still-in-flight one. So a future setup write added above the barrier is
+        either swallowed here (harmless — it can never be mistaken for a frame
+        the loop below triggered) or lands inside the quiet window and turns
+        this into a LOUD red. There is no third outcome in which it silently
+        re-poisons the waits, which is exactly the property "remember to keep
+        setup to two writes" cannot give.
+        """
+        import time as _time
+
+        discarded = 0
+        while True:
+            try:
+                ev = self.events.get_nowait()
+            except queue.Empty:
+                break
+            if ev.get("data") is not None:
+                discarded += 1
+        deadline = _time.monotonic() + quiet_for
+        while True:
+            remaining = deadline - _time.monotonic()
+            if remaining <= 0:
+                return discarded
+            try:
+                ev = self.events.get(timeout=remaining)
+            except queue.Empty:
+                return discarded
+            if ev.get("data") is None:
+                continue  # heartbeat/comment: not a delta
+            raise AssertionError(
+                f"SSE barrier{' ' + label if label else ''} did not hold: a "
+                f"delta arrived {quiet_for}s AFTER the backlog was drained "
+                f"({discarded} discarded) and BEFORE the barrier returned, so "
+                f"the waits after this point could still consume a frame they "
+                f"did not trigger. Something in this test's setup writes to the "
+                f"server while its SSE connection is already open — move that "
+                f"write above the connection, or drain again after it. Leaked "
+                f"event: {ev}"
+            )
+
     def wait_closed(self, timeout: float = 5.0) -> bool:
         """True once the stream ENDED server-side (the pump thread finished —
         EOF / terminal chunk / read error). The §5.1 takeover observation

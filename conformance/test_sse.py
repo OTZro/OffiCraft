@@ -82,6 +82,58 @@ HERE = pathlib.Path(__file__).resolve().parent
 # wire freeze, not a tidy-up to do in passing.
 _SPEC_TOPIC_ROW = re.compile(r"^\|\s*`([a-z_]+)`\s*\|", re.M)
 
+# The §3.1 section delimiters. Located with str.find + an EXPLICIT not-found
+# check, never with str.split: ``"x".split("nope", 1)`` returns ``["x"]``, so
+# ``spec.split("### 3.1", 1)[-1].split("### 3.2", 1)[0]`` degrades to THE WHOLE
+# DOCUMENT the moment either heading is renamed or moved — and this document
+# happens to contain exactly the same 12 topic rows elsewhere (§4.1's audience
+# table), so the degraded parse returns a set that looks perfectly healthy and
+# the confrontation below silently guards nothing. Fail-loud is the whole point:
+# a parser for a machine-read contract must never have a "quietly parsed
+# something else" branch.
+_SPEC_TOPIC_SECTION_START = "### 3.1"
+_SPEC_TOPIC_SECTION_END = "### 3.2"
+
+
+class SpecTopicParseError(AssertionError):
+    """spec/sse.md §3.1 could not be located/parsed — never a silent fallback."""
+
+
+def _parse_closed_topics(spec: str, source: str = "<spec/sse.md>") -> set[str]:
+    """Extract the §3.1 topic set from the spec text, or RAISE.
+
+    Split out from ``_closed_topic_set`` so the fail-loud behaviour itself is
+    testable on constructed inputs (``test_spec_topic_parser_fails_loud``)
+    without a server: a guard whose degradation mode is untested is a guard
+    that has only ever been eyeballed.
+    """
+    start = spec.find(_SPEC_TOPIC_SECTION_START)
+    if start == -1:
+        raise SpecTopicParseError(
+            f"{source}: heading {_SPEC_TOPIC_SECTION_START!r} not found — the "
+            "closed topic set is READ from that section at run time, so a "
+            "renamed/moved heading must fail here, not fall back to parsing "
+            "the whole document (which yields a plausible-looking set and "
+            "makes every topic guard vacuous)."
+        )
+    end = spec.find(_SPEC_TOPIC_SECTION_END, start + len(_SPEC_TOPIC_SECTION_START))
+    if end == -1:
+        raise SpecTopicParseError(
+            f"{source}: heading {_SPEC_TOPIC_SECTION_END!r} not found after "
+            f"{_SPEC_TOPIC_SECTION_START!r} — the section has no end delimiter, "
+            "so the topic table can no longer be bounded. Fix the spec headings "
+            "or this parser; do not let it swallow the rest of the document."
+        )
+    topics = set(_SPEC_TOPIC_ROW.findall(spec[start:end]))
+    if not topics:
+        raise SpecTopicParseError(
+            f"{source}: §3.1 was located but ZERO topic rows parsed out of it — "
+            "the table shape changed (or moved). An empty closed set would make "
+            "the confrontation in test_every_closed_topic_emits pass trivially "
+            "(nothing missing, nothing extra), so it is an error, not a result."
+        )
+    return topics
+
 
 def _closed_topic_set() -> set[str]:
     """The closed topic vocabulary, READ FROM THE PRODUCT'S OWN WIRE CONTRACT at
@@ -95,10 +147,52 @@ def _closed_topic_set() -> set[str]:
     posture as ``test_rest_happy``/``test_auth_matrix``, which pin the live
     surface against the frozen ``spec/openapi.json`` + ``routes_manifest.json``
     rather than against a list typed here.
+
+    ⚠️ SCOPE of this guard (and of ocserverd's TestSSETopicsMatchSpec, the other
+    edge): it covers the ENTITY-DELTA topics only — the ones that ride
+    ``hub.Publish``. The three DIRECTED bands (``context-high`` §6,
+    ``warden-command`` §7, ``task-close`` §8) go out through ``PushDirected``,
+    bypass ``Publish`` entirely, and are a separate envelope family by design
+    (§3.1's own note: "a separate envelope family, not entity-delta topics").
+    Their ABSENCE from this set is deliberate, not an oversight — do NOT "fix"
+    it by adding them here or to ``sseTopics``; they are pinned by their own
+    tests (``test_context_high_*``, ``test_warden_command_band_start_frame``).
     """
-    spec = (HERE.parent / "spec" / "sse.md").read_text(encoding="utf-8")
-    section = spec.split("### 3.1", 1)[-1].split("### 3.2", 1)[0]
-    return set(_SPEC_TOPIC_ROW.findall(section))
+    path = HERE.parent / "spec" / "sse.md"
+    return _parse_closed_topics(path.read_text(encoding="utf-8"), source=str(path))
+
+
+def test_spec_topic_parser_fails_loud() -> None:
+    """The §3.1 reader must ERROR — never return a healthy-looking set — when
+    the section it reads is not where it expects it.
+
+    This is the anti-vacuity guard for the guard: the previous ``str.split``
+    form returned the whole document on a missing heading, and because §4.1's
+    audience table lists the same 12 topics, the degraded parse produced the
+    RIGHT ANSWER FOR THE WRONG REASON. Every case below is asserted to be a
+    genuine mutation (the mutated text no longer contains the delimiter it is
+    supposed to have lost — a `### 3.1` → `### 3.1bis` rename would still
+    CONTAIN `### 3.1` and make these cases pass without testing anything).
+    """
+    real = (HERE.parent / "spec" / "sse.md").read_text(encoding="utf-8")
+    assert len(_parse_closed_topics(real)) >= 12, "positive control: the real spec parses"
+
+    no_start = real.replace(_SPEC_TOPIC_SECTION_START, "### 3.9 (heading moved)")
+    assert _SPEC_TOPIC_SECTION_START not in no_start, "mutation must really remove it"
+    with pytest.raises(SpecTopicParseError):
+        _parse_closed_topics(no_start)
+
+    no_end = real.replace(_SPEC_TOPIC_SECTION_END, "### 3.8 (heading moved)")
+    assert _SPEC_TOPIC_SECTION_END not in no_end, "mutation must really remove it"
+    with pytest.raises(SpecTopicParseError):
+        _parse_closed_topics(no_end)
+
+    empty_section = (
+        f"{_SPEC_TOPIC_SECTION_START} Topics\n\nthe table moved elsewhere\n\n"
+        f"{_SPEC_TOPIC_SECTION_END} Ops\n\n| `member` | x |\n"
+    )
+    with pytest.raises(SpecTopicParseError):
+        _parse_closed_topics(empty_section)
 
 
 def _fresh_agent(client, owner_token, tag: str) -> AgentIdentity:
@@ -333,6 +427,30 @@ def test_every_closed_topic_emits(client, owner_token, agent_a, fresh_member, ow
         f"missing: {sorted(covered - set(expected_op))}, "
         f"stale: {sorted(set(expected_op) - covered)}"
     )
+    # ── BARRIER: the loop below may only ever see frames IT triggered ─────────
+    #
+    # ``wait_for_frame`` drains from the FRONT of the connection's queue, so it
+    # will happily hand back a delta that was already sitting there before the
+    # trigger ran. This test's setup writes to the roster (``fresh_member()``,
+    # ``hire_member(...)``) while ``owner_sse`` is ALREADY OPEN, so without this
+    # barrier the first row (``member``) consumed one of those setup frames and
+    # its assertion was VACUOUSLY TRUE: deleting putMember's publish seam
+    # outright (write straight to the store, HTTP still 200, wire silent)
+    # left this row — and the whole suite — green. Reviewed and reproduced;
+    # that is the exact failure this test exists to catch.
+    #
+    # This must NOT be "downgraded" to moving those two setup writes above the
+    # connection. That fixes today's two writes and nothing else: the next
+    # person to add a third setup write re-poisons every row here SILENTLY,
+    # because a stale frame produces a PASS, and nothing in the suite would
+    # object. The barrier is a state assertion instead of a convention — it
+    # drains whatever backlog exists (any count) and then PROVES the stream is
+    # silent, so a future setup write is either swallowed harmlessly or lands in
+    # the quiet window and turns this red with a message naming the cause.
+    # Do not remove it because "setup only writes twice"; that premise is
+    # exactly what is not allowed to be load-bearing here.
+    owner_sse.drain_backlog(quiet_for=1.0, label="before the closed-topic loop")
+
     for topic, fire in triggers:
         r = fire()
         assert r.status_code == 200, f"{topic} trigger failed: {r.status_code} {r.text[:200]}"
