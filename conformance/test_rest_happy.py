@@ -1033,8 +1033,10 @@ HAPPY: dict[str, Happy] = {
         check=lambda _c, r: _expect(
             r,
             lambda d: d["text"] == "conformance happy insight doc"
-            # The write flips is_default off, and with no seed to fall back to
-            # that flip is the whole record of "someone has been here".
+            # The write flips is_default off. Since T-e1e3 a role MAY have a
+            # factory seed behind it, so this flip is what distinguishes
+            # authored text from shipped text — it is no longer interchangeable
+            # with "the doc is non-empty".
             and d["is_default"] is False
             and d["size_chars"] == len("conformance happy insight doc")
             and d["cap_chars"] >= d["size_chars"],

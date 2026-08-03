@@ -559,9 +559,11 @@ type HealthDTO struct {
 // insight and learning had been sharing one document.
 //
 // “role_key“ scopes the doc to a role; there is NO “task_type“ axis (that is
-// the lessons key, and it is deliberately absent here). Unlike lessons there is
-// also NO file seed, so “text“ is genuinely EMPTY until the role writes — and
-// “is_default“ therefore answers "this role has not moved anything over yet".
+// the lessons key, and it is deliberately absent here). Since T-e1e3 a role MAY
+// have a factory seed, and unlike lessons that seed is PER-ROLE
+// (“seeds/insight_<role_key>.md“) rather than one shared file — the assistant's
+// judgement calls would be wrong for any other role. A role with no seed file
+// still reads genuinely EMPTY until it writes.
 //
 // Insight is SEPARATE, not private. READ is unrestricted: any authenticated
 // identity may read ANY role's insight — the same floor Duty and Learning sit on.
@@ -569,7 +571,7 @@ type InsightDTO struct {
 	// CapChars The document size cap now in force, in CHARACTERS (the doc.cap_chars.insight setting). Served on the READ face so an agent can size an edit BEFORE writing it — the alternative is discovering the limit by being refused, and the settings surface is admin-only.
 	CapChars *int `json:"cap_chars,omitempty"`
 
-	// IsDefault True while this role has never written its insight doc (or reset it). There is no seed to fall back to, so is_default and an empty `text` mean the same thing here — that equivalence is what makes "has this role moved anything over?" answerable at all.
+	// IsDefault True while this role has never written its own insight doc (or reset it). It does NOT imply an empty `text`: a role that ships with a factory seed (`seeds/insight_<role_key>.md`) reads that seed with is_default=true, while a role without one reads "". Read this field — not the emptiness of `text` — to tell factory wording apart from something a person wrote.
 	IsDefault     *bool   `json:"is_default,omitempty"`
 	OwnerId       *string `json:"owner_id,omitempty"`
 	RoleKey       *string `json:"role_key,omitempty"`
@@ -2669,7 +2671,7 @@ type ServerInterface interface {
 	// Liveness probe — 200 {"status":"ok"}.
 	// (GET /api/health)
 	HandleHealthApiHealthGet(w http.ResponseWriter, r *http.Request)
-	// Read a per-role insight doc (per role_key; no seed).
+	// Read a per-role insight doc (per role_key; may have a PER-ROLE factory seed).
 	// (GET /api/insight/{role_key})
 	HandleGetInsightApiInsightRoleKeyGet(w http.ResponseWriter, r *http.Request, roleKey string)
 	// Whole-doc replace of a per-role insight doc ({text}).

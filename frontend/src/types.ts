@@ -236,10 +236,13 @@ export interface LessonsView {
  * against without being refused first. Dropping these two fields the way
  * `LessonsView` drops `owner_id` would quietly delete that.
  *
- * There is NO file seed for this doc, so `isDefault` and an empty `text` mean
- * the same thing: this role has not moved anything over yet. That equivalence is
- * the only observable this ticket ships, so the card must render it as an honest
- * empty rather than as a failed load.
+ * `isDefault` means "this role has never written its own insight". 🔴 Since
+ * T-e1e3 that no longer implies an empty `text`: insight folds against a
+ * PER-ROLE file seed (`seeds/insight_<roleKey>.md`, today only `assistant`), so
+ * an untouched role either reads its FACTORY wording (seed) or "" (no seed) —
+ * `isDefault` is true in both. The card must read this field, not the emptiness
+ * of `text`, or it renders shipped wording as if a person had written it; and a
+ * genuinely empty doc must still render as an honest empty, never a failed load.
  */
 export interface InsightView {
   roleKey: string;

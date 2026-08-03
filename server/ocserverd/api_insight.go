@@ -19,14 +19,29 @@ import (
 // anchor-miss wording — both name a document, and naming the wrong one sends
 // the reader somewhere with confidence. The duplication is the cheaper error.
 
-// foldInsightDTO resolves the per-role insight doc. There is no file seed to
-// fold against (see FoldInsight): an unwritten doc is genuinely empty.
+// foldInsightDTO resolves the per-role insight doc: overlay ⊕ this role's OWN
+// file seed (T-e1e3 — `seeds/insight_<roleKey>.md`, PER-ROLE, never one shared
+// file). A role with no seed file still reads genuinely empty; a role with one
+// reads the factory wording with is_default=true.
+//
+// 🔴 T-3809 shipped the opposite stance and this comment used to state it
+// verbatim ("There is no file seed to fold against … an unwritten doc is
+// genuinely empty"). T-e1e3 OVERTURNS it on the owner's ruling: every studio
+// that installs OffiCraft must get an assistant that already knows how to
+// manage context, and that knowledge belongs to Insight by his own division
+// (Duty = what she does, Insight = how). The old sentence is deleted rather
+// than left standing, because a comment describing a design the code no longer
+// has is worse than no comment.
 func (s *apiServer) foldInsightDTO(roleKey string) (*insightDTO, error) {
 	overlay, err := s.dal.GetInsight(roleKey)
 	if err != nil {
 		return nil, err
 	}
-	text, isDefault := FoldInsight(overlay)
+	seedMD, hasSeed, err := s.root.seedInsightMD(roleKey)
+	if err != nil {
+		return nil, err
+	}
+	text, isDefault := FoldInsight(overlay, seedMD, hasSeed)
 	return &insightDTO{
 		SizeChars:     utf8.RuneCountInString(text),
 		CapChars:      s.insightCap(),

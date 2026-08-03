@@ -258,8 +258,9 @@ export type WireLessons = components["schemas"]["LessonsDTO"];
 
 /** Mirrors `service/dto.py :: InsightDTO` (T-3809). The folded PER-ROLE
  * insight doc for one `role_key` — the role journal's third block. No
- * `task_type` axis and NO file seed, so `is_default` and an empty `text`
- * carry the same meaning: this role has not moved anything over yet. */
+ * `task_type` axis. The seed (T-e1e3) is PER-ROLE — `seeds/insight_<role_key>.md`,
+ * never lessons' one shared file — so `is_default` ("never written by this role")
+ * no longer implies an empty `text`: a seeded role reads factory wording. */
 export type WireInsight = components["schemas"]["InsightDTO"];
 
 /** Mirrors `BackupHealthDTO` (`GET /api/backup-health`) — whether the

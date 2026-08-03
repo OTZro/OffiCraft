@@ -13,10 +13,15 @@
 //     in the cockpit an owner can see the live doc.cap_chars.insight value without
 //     being admin — the settings surface that otherwise shows it is admin-only,
 //     and the alternative way to learn the limit is to be refused by it.
-//  3. The empty state is a FIRST-CLASS reading, not a fallback. This doc has no
-//     seed, so "empty" is the honest answer to "has this role moved anything
-//     over yet?" — the one observable this ticket ships. It must never be
-//     confused with a failed load, which is why `error` renders separately.
+//  3. The empty state is a FIRST-CLASS reading, not a fallback — for a role
+//     with NO file seed, "empty" is the honest answer to "has this role moved
+//     anything over yet?". It must never be confused with a failed load, which
+//     is why `error` renders separately.
+//     🔴 Since T-e1e3 that is no longer the ONLY reading: insight folds against
+//     a PER-ROLE seed (`seeds/insight_<roleKey>.md`, today only `assistant`), so
+//     a non-empty doc may be FACTORY wording rather than something the role
+//     wrote. `isDefault` is the only thing that tells them apart, and the badge
+//     below is where this card says so.
 //
 // The card is NOT a privacy boundary and says so on its face: READ is
 // unrestricted by owner ruling (rc-dc171587220c). Insight is SEPARATE, not
@@ -84,6 +89,21 @@ export function InsightCard({ roleKey }: InsightCardProps) {
         <span className="mp-lessons__title">
           <LayersIcon size={15} className="mp-lessons__icon" />
           <span>{t.mp.insight}</span>
+          {/* 🔴 THE FACTORY BADGE (T-e1e3). Insight now folds against a PER-ROLE
+            * file seed, so `text` being non-empty no longer proves a person
+            * wrote it: an untouched `assistant` reads the factory wording.
+            * Without this badge the cockpit renders shipped wording exactly like
+            * something the role authored — the ticket's acceptance #4, and the
+            * whole reason is_default had to be surfaced here at all.
+            *
+            * Gated on non-empty text as well as isDefault: a role with NO seed
+            * is also is_default=true, and calling its blank card 「預設」 would
+            * label an absence as a factory document. */}
+          {insight?.isDefault && insight.text.trim() !== "" && (
+            <span className="set-badge" data-testid="insight-default-badge">
+              {t.settings.defaultBadge}
+            </span>
+          )}
           {/* Always rendered once the doc has loaded — including at 0 chars.
             * Hiding it while empty would remove the cap exactly when someone is
             * about to write the first thing into the document. */}
@@ -96,8 +116,10 @@ export function InsightCard({ roleKey }: InsightCardProps) {
         {editing ? (
           <div className="mp-lessons__actions">
             {/* 版本紀錄 (T-1f39). docKey is the BARE role_key — insight has no
-              * task_type axis, so there is no composite to build. This doc has
-              * no file seed either, so its list carries no 初始版本 row.
+              * task_type axis, so there is no composite to build. The list
+              * carries no 初始版本 row because no `onReset` is wired — there is
+              * no reset_insight route at all (T-e1e3 gave the doc a seed, NOT a
+              * way to fall back to it), so the row would be a dead affordance.
               *
               * 🔴 onRestored refetches LOCALLY, which is why the person who
               * clicked always sees the new value. Every OTHER open surface

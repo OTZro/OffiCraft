@@ -943,7 +943,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			// private — say it in every surface a reader can reach, because
 			// the word "insight" implies confidentiality that nobody promised.
 			Requires: principalMachine,
-			Summary:  "Read a per-role insight doc (per role_key; no seed).",
+			Summary:  "Read a per-role insight doc (per role_key; may have a PER-ROLE factory seed).",
 			MCPTool:  "get_insight",
 		},
 		{
