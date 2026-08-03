@@ -181,7 +181,8 @@ export SHIM_REMOTE_BIN="$SHIMDIR/remote-bin"
 # `command -v` so this works on both macOS and Linux, and kept deliberately
 # small — anything not listed here is, from the probe's point of view, absent,
 # which is what lets the fixture DECIDE that a tool cannot be found.
-mkdir -p "$SHIMDIR/remote-base"
+_rbase="$SHIMDIR/remote-base"
+mkdir -p "$_rbase"
 # `bash` is in that list although nothing in the probe calls it: every stub in
 # $rbin carries a `/usr/bin/env bash` shebang, and `env` resolves its argument
 # through PATH — a base dir without bash makes the fixture's own stubs
@@ -189,8 +190,13 @@ mkdir -p "$SHIMDIR/remote-base"
 # "the far side answered nothing" and takes out every remote case at once.
 for _t in awk grep id bash; do
   _p="$(command -v "$_t" 2>/dev/null || true)"
-  [[ -n "$_p" ]] || { echo "tests_guard: cannot build the fake remote PATH — '$_t' not found on this machine" >&2; exit 2; }
-  ln -sf "$_p" "$SHIMDIR/remote-base/$_t"
+  # An ABSOLUTE path, not merely a non-empty answer. `command -v` reports an
+  # exported shell function as the bare word, and `ln -sf awk .../remote-base/awk`
+  # then makes a symlink pointing at itself: ELOOP, which the far side cannot tell
+  # apart from "that tool is not installed" — the exact disguise this whole commit
+  # is about, rebuilt one level down in the thing meant to prevent it.
+  [[ "$_p" == /* ]] || { echo "tests_guard: cannot build the fake remote PATH — '$_t' did not resolve to an absolute path on this machine (got: '${_p:-<nothing>}')" >&2; exit 2; }
+  ln -sf "$_p" "$_rbase/$_t"
 done
 unset _t _p
 # TRIPWIRE, checked before any case runs. If a tool the fixture withholds ever
@@ -198,14 +204,19 @@ unset _t _p
 # alternative is what actually happened: the affected cases keep passing on the
 # OS that happens to lack the tool, and on the OS that has it they fail as an
 # unrelated-looking guard bug.
-for _t in tmux launchctl ioreg ssh; do
-  if PATH="$SHIMDIR/remote-base" command -v "$_t" >/dev/null 2>&1; then
+# The list is DERIVED from the stubs rather than written out, so a tool added to
+# remote-bin/ later is protected the day it is added. Spelling it out meant the
+# protection silently did not extend to anything new — and a guard that covers
+# only what someone remembered to list is the shape this suite exists to catch.
+# `ssh` is appended because the fake remote must never reach a real one.
+for _t in $(cd "$SHIMDIR/remote-bin" && printf '%s\n' *) ssh; do
+  if PATH="$_rbase" command -v "$_t" >/dev/null 2>&1; then
     echo "tests_guard: the fake remote base dir resolves '$_t' — the fixture no longer controls whether that tool exists on the far side" >&2
     exit 2
   fi
 done
 unset _t
-export SHIM_REMOTE_BASE="$SHIMDIR/remote-base"
+export SHIM_REMOTE_BASE="$_rbase"
 
 chmod +x "$SHIMDIR"/launchctl "$SHIMDIR"/lsof "$SHIMDIR"/tmux "$SHIMDIR"/ioreg "$SHIMDIR"/ssh
 
@@ -1199,15 +1210,19 @@ grep -q 'prod-host guard OK (remote)' "$GLOG" \
 # as "nothing running": fail-OPEN, on the default second machine.
 E1DD_REMOTE_TOOLS=notmux E1DD_REMOTE_AGENTS=1 \
   e1dd_gate "a SECOND_MACHINE where the probe's tools are not on PATH" "$H_CLEAN" "did not come back with exactly one answer"
-# …and pin WHICH question went unanswered. Without this the case passes for any
-# reason the probe fails to parse, so a fixture that stopped withholding tmux
-# (see the base-dir tripwire above) could keep it green while testing nothing.
+# …and pin WHICH question went unanswered — ALL FOUR COUNTS, not just the one
+# that is meant to be zero. Matching `live_agents: 0` alone still passed when the
+# probe answered NOTHING AT ALL (0,0,0,0): a shim that fell silent took the whole
+# case with it and every assertion stayed green, because "refused" and "refused
+# for the intended reason" are not the same claim. Requiring the other three to
+# be 1 says the far side was alive and answering, and exactly one question could
+# not be answered — which is the only state this case is about.
 E1DD_REMOTE_TOOLS=notmux E1DD_REMOTE_AGENTS=1 \
   e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight' >/dev/null
-if grep -q 'live_agents: 0' "$GLOG"; then
-  ok "the notmux refusal is the LIVENESS question going unanswered, not some other marker"
+if grep -q 'hw: 1, server_tree: 1, live_warden: 1, live_agents: 0' "$GLOG"; then
+  ok "the notmux refusal is the LIVENESS question going unanswered, with the other three answered"
 else
-  bad "the notmux case refused for the wrong reason — tmux was answerable after all (got: $(tr '\n' '|' < "$GLOG" | tail -c 300))"
+  bad "the notmux case refused for the wrong reason — either tmux was answerable after all, or the probe answered nothing at all (got: $(tr '\n' '|' < "$GLOG" | tail -c 300))"
 fi
 
 # BRANCH ORDER, second half. Only the liveness message names a remedy, so it must
