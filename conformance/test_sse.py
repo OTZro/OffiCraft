@@ -336,7 +336,19 @@ def test_every_closed_topic_emits(client, owner_token, agent_a, fresh_member, ow
     for topic, fire in triggers:
         r = fire()
         assert r.status_code == 200, f"{topic} trigger failed: {r.status_code} {r.text[:200]}"
-        frame = owner_sse.wait_for_frame(topic)["frame"]
+        # NAME THE TOPIC on the miss: the bare TimeoutError from wait_for_frame
+        # says only "no matching SSE event", so a red CI run left the reader to
+        # infer WHICH topic from this table's order. That inference is exactly
+        # the hand-reasoning this test exists to abolish — the whole point of
+        # the confrontation above is that the failure names names.
+        try:
+            frame = owner_sse.wait_for_frame(topic)["frame"]
+        except TimeoutError as exc:
+            raise AssertionError(
+                f"topic {topic!r} was triggered (HTTP 200) but NO delta arrived "
+                f"within 5s — its publish seam is missing (the write happened, "
+                f"the wire stayed silent)"
+            ) from exc
         assert frame["op"] == expected_op[topic], (topic, frame)
         assert frame["op"] in {"patch", "remove", "signal"}, frame
         if frame["op"] == "signal":
