@@ -100,7 +100,7 @@ cat > "$SHIMDIR/ssh" <<'SH'
 # SHIM_SSH_NOISE → a line the remote emits before the probe's own output. Two
 # flavours matter: ordinary stderr chatter (the ubiquitous known-hosts warning),
 # which must be TOLERATED, and marker-shaped output, which must REFUSE.
-[[ -n "${SHIM_SSH_NOISE:-}" ]] && printf '%s\n' "$SHIM_SSH_NOISE"
+[[ -n "${SHIM_SSH_NOISE:-}" ]] && printf '%s\n' "$SHIM_SSH_NOISE" >&2
 cmd="${!#}"   # last arg = the remote command
 [[ "$cmd" == *IOPlatformUUID* ]] || { echo "TRIPWIRE ssh shim got an unexpected remote command: $cmd" >> "$SHIM_TRIPWIRE"; exit 3; }
 # A real remote HOME, so `[ -d "$HOME/.officraft/server" ]` is answered by the
@@ -108,7 +108,18 @@ cmd="${!#}"   # last arg = the remote command
 rhome="$SHIM_REMOTE_HOME"
 mkdir -p "$rhome"
 [[ "${SHIM_REMOTE_SERVER_TREE:-0}" == "1" ]] && mkdir -p "$rhome/.officraft/server"
-HOME="$rhome" PATH="$SHIM_REMOTE_BIN:$PATH" /bin/sh -c "$cmd"
+# SHIM_REMOTE_TOOLS=none reproduces the real thing an ssh non-login shell does:
+# Homebrew's bin dir is absent, so `tmux` is simply not found. Without this the
+# harness guarantees every remote tool resolves and can never catch a probe that
+# asks a question the far side cannot answer.
+# The probe exports the remote Homebrew bin dir itself (gotcha #2). Rewrite that
+# literal to OUR stub dir, or the command resolves the REAL tmux/launchctl of
+# whatever machine this suite runs on — which both defeats the fake remote host
+# and makes the result depend on the test machine's own fleet state.
+rbin="$SHIM_REMOTE_BIN"
+[[ "${SHIM_REMOTE_TOOLS:-all}" == "notmux" ]] && rbin="${SHIM_REMOTE_BIN}-notmux"
+cmd="${cmd//\/opt\/homebrew\/bin/$rbin}"
+HOME="$rhome" PATH="$rbin:/usr/bin:/bin" /bin/sh -c "$cmd"
 SH
 
 # The second machine's own tools, resolved on the far side of the ssh shim. They
@@ -145,6 +156,12 @@ fi
 exit 0
 SH
 chmod +x "$SHIMDIR"/remote-bin/ioreg "$SHIMDIR"/remote-bin/launchctl "$SHIMDIR"/remote-bin/tmux
+# The same stubs MINUS tmux. That is the real shape of gotcha #2: `ioreg`
+# (/usr/sbin) and `launchctl` (/bin) are on an ssh non-login PATH, `tmux` is in
+# Homebrew and is not — which is why a missing PATH export takes out exactly the
+# liveness question and nothing else.
+mkdir -p "$SHIMDIR/remote-bin-notmux"
+cp "$SHIMDIR"/remote-bin/ioreg "$SHIMDIR"/remote-bin/launchctl "$SHIMDIR/remote-bin-notmux/"
 export SHIM_REMOTE_BIN="$SHIMDIR/remote-bin"
 
 chmod +x "$SHIMDIR"/launchctl "$SHIMDIR"/lsof "$SHIMDIR"/tmux "$SHIMDIR"/ioreg "$SHIMDIR"/ssh
@@ -949,6 +966,7 @@ e1dd_pre() {
   SHIM_REMOTE_SERVER_TREE="${E1DD_REMOTE_TREE:-0}" SHIM_SSH_FAIL="${E1DD_SSH_FAIL:-0}" \
   SHIM_SSH_SILENT="${E1DD_SSH_SILENT:-0}" SHIM_REMOTE_WARDEN="${E1DD_REMOTE_WARDEN:-0}" \
   SHIM_REMOTE_AGENTS="${E1DD_REMOTE_AGENTS:-0}" SHIM_SSH_NOISE="${E1DD_SSH_NOISE:-}" \
+  SHIM_REMOTE_TOOLS="${E1DD_REMOTE_TOOLS:-all}" \
   SHIM_REMOTE_HOME="$SHIMDIR/remote-home-$$-${E1DD_REMOTE_TREE:-0}" \
   SHIM_WARDEN=0 SHIM_LISTEN_PORTS="" SHIM_SESSIONS="" \
   OC_CLAUDE_BIN="$home/bin/ocserver" run_snippet '
@@ -1087,8 +1105,7 @@ E1DD_REMOTE_TREE=1 E1DD_SSH_NOISE="server_tree=0" \
 # that refused every host emitting a known-hosts warning would be turned off
 # within a day, which is a slower way of having no guard.
 E1DD_SSH_NOISE="Warning: Permanently added 'tgt' (ED25519) to the list of known hosts." \
-  e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight'
-rc=$?
+  e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight' >/dev/null
 grep -q 'prod-host guard OK (remote)' "$GLOG" \
   && ok "ordinary ssh chatter does not trip the marker parse" \
   || bad "a known-hosts warning made the remote probe unparseable — every real host emits that (got: $(tr '\n' '|' < "$GLOG" | tail -c 200))"
@@ -1131,6 +1148,27 @@ E1DD_UUID="$PROD_UUID" E1DD_REMOTE_HW="$DISPOSABLE_UUID" \
 grep -q 'prod-host guard OK (remote)' "$GLOG" \
   && ok "the remote guard reads the REMOTE uuid (a production LOCAL uuid does not trip it)" \
   || bad "the remote guard tripped on the LOCAL machine's identity — it is probing the wrong host"
+
+# A QUESTION THE FAR SIDE CANNOT ANSWER IS NOT A "NO". An ssh non-login shell has
+# no Homebrew bin dir, so `tmux` is not found there — this script's own gotcha #2,
+# and the reason every other remote command goes through the PATH-exporting
+# wrapper. A not-found tool produces no output, which for a liveness check reads
+# as "nothing running": fail-OPEN, on the default second machine.
+E1DD_REMOTE_TOOLS=notmux E1DD_REMOTE_AGENTS=1 \
+  e1dd_gate "a SECOND_MACHINE where the probe's tools are not on PATH" "$H_CLEAN" "did not come back with exactly one answer"
+
+# BRANCH ORDER, second half. Only the liveness message names a remedy, so it must
+# come LAST — a host with BOTH a server tree and a running warden is more
+# incriminating than one with either alone, and must not be handed the more
+# permissive message. This is the shape of an UNLISTED production server, which is
+# exactly the case residue exists to catch.
+E1DD_REMOTE_TREE=1 E1DD_REMOTE_WARDEN=1 \
+  e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight' >/dev/null
+if grep -q 'PROD-HOST GUARD (remote): the second machine .* carries an officraft server tree' "$GLOG"; then
+  ok "a SECOND_MACHINE with BOTH a server tree and a live warden gets the residue refusal, not the remedy-bearing one"
+else
+  bad "the liveness branch preempted residue — the more incriminating host got the more permissive message (got: $(tr '\n' '|' < "$GLOG" | tail -c 300))"
+fi
 
 # 19c) SENTINEL — a genuinely disposable host must still be able to run. A guard
 # that refuses everything passes every refusal test above and is useless.

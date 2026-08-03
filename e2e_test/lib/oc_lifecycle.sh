@@ -703,6 +703,15 @@ OC_PROD_HOST_HW_UUIDS=(
   "8523F496-3E4E-5CD3-B94D-54D1EB6BD137"   # seth-m5 — officraft.hardcoretech.link
 )
 
+# An ssh non-login shell does not get Homebrew's bin dir, so `tmux` (and `curl`)
+# are simply NOT FOUND on an Apple-Silicon Mac unless PATH is exported first —
+# cross_machine.sh's own gotcha #2. Every remote command in that script goes
+# through its `remote()` wrapper for exactly this reason; the guard's probe must
+# not be the one exception, because a tool that cannot be found answers "nothing
+# here", which is fail-OPEN for a liveness check. Single source of truth: the
+# script's REMOTE_PATH_PREFIX is derived from this.
+OC_REMOTE_PATH_PREFIX='export PATH=/opt/homebrew/bin:$PATH;'
+
 # oc_detect_prod_host — read-only. One line per piece of evidence, prefixed with
 # which guard found it; empty output = this host looks disposable.
 oc_detect_prod_host() {
@@ -763,7 +772,7 @@ oc_detect_prod_host_remote() {
   # disturbs it into refusing.
   if ! probe="$(ssh -o BatchMode=yes -o ConnectTimeout=10 \
       -o ServerAliveInterval=5 -o ServerAliveCountMax=3 "$target" \
-    'printf "hw=%s\n" "$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | awk -F\" "/IOPlatformUUID/{print \$4}")"; [ -d "$HOME/.officraft/server" ] && printf "server_tree=1\n" || printf "server_tree=0\n"; if ! command -v launchctl >/dev/null 2>&1; then printf "live_warden=err\n"; elif launchctl print "gui/$(id -u)/com.officraft.ocwarden" >/dev/null 2>&1; then printf "live_warden=1\n"; else printf "live_warden=0\n"; fi; tmux -L officraft ls -F "#S" 2>/dev/null | grep -qE "^(member|worker)-" && printf "live_agents=1\n" || printf "live_agents=0\n"' 2>&1)"; then
+    "$OC_REMOTE_PATH_PREFIX"' printf "hw=%s\n" "$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | awk -F\" "/IOPlatformUUID/{print \$4}")"; [ -d "$HOME/.officraft/server" ] && printf "server_tree=1\n" || printf "server_tree=0\n"; if ! command -v launchctl >/dev/null 2>&1; then printf "live_warden=err\n"; elif launchctl print "gui/$(id -u)/com.officraft.ocwarden" >/dev/null 2>&1; then printf "live_warden=1\n"; else printf "live_warden=0\n"; fi; if ! command -v tmux >/dev/null 2>&1; then printf "live_agents=err\n"; elif tmux -L officraft ls -F "#S" 2>/dev/null | grep -qE "^(member|worker)-"; then printf "live_agents=1\n"; else printf "live_agents=0\n"; fi' 2>&1)"; then
     # Unreachable is a REFUSAL, not a warning. A host whose identity cannot be
     # established is not thereby safe to wipe. Carry ssh's own diagnosis: "fix ssh
     # access" is useless next to "Permission denied (publickey)".
@@ -826,7 +835,7 @@ oc_detect_prod_host_remote() {
 oc_prod_host_remote_guard() {
   local target="$1" reasons; reasons="$(oc_detect_prod_host_remote "$target")"
   if [[ -z "$reasons" ]]; then
-    log "prod-host guard OK (remote): '$target' is not a known production station and carries no server tree"
+    log "prod-host guard OK (remote): '$target' answered all four questions — not a known production station, no server tree, no registered warden, no live agent sessions"
     return 0
   fi
   printf '%s\n' "$reasons" | sed 's/^/[oc-lifecycle] prod-host(remote)| /' >&2
@@ -841,13 +850,23 @@ oc_prod_host_remote_guard() {
   if printf '%s\n' "$reasons" | grep -q '^identity:'; then
     die "PROD-HOST GUARD (remote): the second machine '$target' is a known production officraft station (see prod-host(remote)| lines). STAGE 5b boots out its warden and deletes its ENTIRE ~/.officraft — more than this suite deletes locally. Point SECOND_MACHINE at a disposable relocate target instead."
   fi
+  if printf '%s\n' "$reasons" | grep -q '^residue:'; then
+    die "PROD-HOST GUARD (remote): the second machine '$target' carries an officraft server tree (see prod-host(remote)| lines) — a relocate target never has one, so this host is, or looks like, a station. STAGE 5b boots out its warden and deletes its ENTIRE ~/.officraft. Point SECOND_MACHINE at a disposable relocate target instead."
+  fi
   if printf '%s\n' "$reasons" | grep -q '^liveness:'; then
-    # Reachable only after identity and residue both came back clean, so this
-    # reader is not standing on a known station and a concrete remedy is safe to
-    # give — with the same hedge the local residue message carries.
+    # LAST on purpose. It is the only remote branch that names a remedy, so it may
+    # only be reached once identity AND residue have both come back clean —
+    # otherwise the more incriminating evidence set would get the more permissive
+    # message. That matters most for the case residue exists to catch: an UNLISTED
+    # production server has a server tree and a running warden essentially by
+    # definition, and it is precisely where the blacklist's known weakness leaves
+    # residue as the last line.
     die "PROD-HOST GUARD (remote): the second machine '$target' is running officraft right now (a registered warden and/or live agent sessions), so it is a live fleet node — STAGE 5b would boot out that warden, kill those sessions and delete its entire ~/.officraft, taking live agents and their credentials with it. Point SECOND_MACHINE at a quiet, disposable relocate target. ONLY IF YOU ARE CERTAIN this is leftover from your own previous run and nothing else is using that host: ssh there and retire it yourself — \`launchctl bootout gui/\$(id -u)/com.officraft.ocwarden\`, end any member-*/worker-* sessions on tmux socket 'officraft', then clear ~/.officraft. If you are not certain, you are pointing at the wrong host."
   fi
-  die "PROD-HOST GUARD (remote): the second machine '$target' carries an officraft server tree (see prod-host(remote)| lines) — a relocate target never has one, so this host is, or looks like, a station. STAGE 5b boots out its warden and deletes its ENTIRE ~/.officraft. Point SECOND_MACHINE at a disposable relocate target instead."
+  # Unreachable in practice — the detector emits only the five kinds branched on
+  # above and `reasons` is non-empty here by construction — but a new reason kind
+  # must refuse rather than fall out of the function having printed nothing.
+  die "PROD-HOST GUARD (remote): '$target' was refused for a reason this guard does not have a specific message for (see prod-host(remote)| lines)."
 }
 
 # oc_prod_host_guard — refuse a host that is, or looks like, a production station.

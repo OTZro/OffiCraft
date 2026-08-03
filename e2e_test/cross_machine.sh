@@ -42,10 +42,12 @@
 # ##  this host. It creates no isolation and it does not, and cannot, override
 # ##  either prod-host refusal in (b).
 # ##
-# ##  ⚠️ ONE RUN PER HOST. STAGE 2 installs a server, so from the second run on,
-# ##  this host carries a ~/.officraft/server tree and the residue check refuses
-# ##  it — deliberately, because from the outside that state is indistinguishable
-# ##  from a production box. Rebuild the throwaway VM to run again.
+# ##  ⚠️ ONE RUN PER HOST — BOTH HOSTS. STAGE 2 installs a server here, so from
+# ##  the second run on, this host carries a ~/.officraft/server tree and the
+# ##  residue check refuses it — deliberately, because from the outside that state
+# ##  is indistinguishable from a production box. The second machine is refused
+# ##  the same way once it is running a warden or agents left by a previous run.
+# ##  Rebuild the throwaway hosts to run again.
 # ############################################################################
 #
 #   It ends with a PASS/FAIL summary (per-stage ✓/✗) and exits 0 only if every
@@ -118,10 +120,13 @@
 # PARAMS (env, all overridable — defaults in the block below):
 #   PUBLIC_HOST      public server host (install.sh host-derived base + remote reach)
 #   SECOND_MACHINE   ssh target for the second machine. Checked by the preflight
-#                    with the SAME prod-host rules as this host, and it must be
-#                    reachable BEFORE anything is destroyed — STAGE 5b deletes its
-#                    entire ~/.officraft, so a run may not start while that host's
-#                    identity is unknown.
+#                    with the prod-host rules that apply here, PLUS a liveness
+#                    check this host does not need from it: it must carry no
+#                    registered warden and no live member-*/worker-* sessions, so
+#                    it has to be QUIET rather than merely server-free. It must
+#                    also be reachable BEFORE anything is destroyed — STAGE 5b
+#                    deletes its entire ~/.officraft, so a run may not start while
+#                    that host's identity is unknown.
 #   OC_CLAUDE_BIN    path to the claude binary if it is not on PATH. The preflight
 #                    refuses without a resolvable claude — STAGE 4 spawns a real
 #                    agent, so an unresolvable one fails the run either way.
@@ -238,8 +243,11 @@ TS="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="/tmp/oc-cross-machine-e2e-$TS"
 mkdir -p "$BACKUP_DIR"
 
-# Remote command prefix — ALWAYS export homebrew PATH (gotcha #2).
-REMOTE_PATH_PREFIX='export PATH=/opt/homebrew/bin:$PATH;'
+# Remote command prefix — ALWAYS export homebrew PATH (gotcha #2). Defined in the
+# lib so the preflight's own remote probe uses the identical prefix; a second copy
+# here would be free to drift, and the probe silently answering "nothing found"
+# because a tool was not on PATH is fail-OPEN for the liveness checks.
+REMOTE_PATH_PREFIX="$OC_REMOTE_PATH_PREFIX"
 
 # remote SSH... — run a command on the second machine with homebrew PATH exported.
 remote() {
