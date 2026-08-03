@@ -249,6 +249,36 @@ func (d *DAL) CountTasksDuplicatingOriginal(originalID string) (int, error) {
 }
 
 // PutTask upserts a task row (the SSE delta is the handler's job).
+//
+// 🔴 `description` IS DELIBERATELY ABSENT FROM THE ON CONFLICT UPDATE LIST
+// (T-e271 node 3). Do not "restore" it — that line is the lost update, and it
+// was measured, not theorised.
+//
+// The hazard is structural, not exotic: this is a whole-row upsert with no
+// optimistic lock, and every task-writing handler is a load-mutate-save
+// (resolveTask on the READ pool → mutate one field → PutTask on the write
+// pool). Nothing links the read to the write, so the upsert asserts EVERY
+// column as that handler read them. With the description in the conflict list,
+// an admin changing a task's priority replays the description it happened to
+// read a moment earlier — silently destroying a correction the description
+// endpoint had already answered 200 to. Measured before the fix: a
+// deterministic interleave lost it every time, and two goroutines driving the
+// two real endpoints lost it by round 17 of 60. "Rare" was not true.
+//
+// The fix is an OWNERSHIP BOUNDARY rather than a lock or a retry: the column is
+// written ONLY by SetTaskDescriptionOn (which versions it in the same
+// transaction) and by the INSERT half of this very statement, which is how
+// create_task and the handoff follow-up set it — both mint a fresh id, so
+// neither ever reaches the conflict clause. Single-writer columns cannot be
+// clobbered by a stale whole-row copy, because no stale whole-row copy of them
+// exists. Guarded by TestTaskDescriptionRaceGuardHasTeeth.
+//
+// ⚠️ SCOPE, stated so nobody reads more safety into this than is here: this
+// removes the hazard for ONE column. Every OTHER column of this row remains a
+// shared-write, last-writer-wins field, and two handlers racing on two
+// different columns still lose one of them. That is pre-existing and untouched
+// (T-e271 node 3 explicitly did not widen into it) — see the note on
+// PutTaskStep's `note` column for the same shape one table over.
 func (d *DAL) PutTask(t Task) error {
 	inputs := t.Inputs
 	if inputs == nil {
@@ -268,7 +298,7 @@ func (d *DAL) PutTask(t Task) error {
 		ON CONFLICT (id) DO UPDATE SET
 			type_key = excluded.type_key, title = excluded.title,
 			dedupe_key = excluded.dedupe_key, inputs = excluded.inputs,
-			description = excluded.description, status = excluded.status,
+			status = excluded.status,
 			lock = excluded.lock,
 			priority = excluded.priority,
 			executor_kind = excluded.executor_kind,

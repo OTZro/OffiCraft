@@ -246,13 +246,21 @@ func TestGetWorkerBootContext(t *testing.T) {
 
 	// The preview reads the CURRENT rows: an edited task description shows up
 	// (honest 「目前版本」 semantics — NOT a verbatim spawn-time record).
+	//
+	// The edit goes through writeTaskDescription — the production write path
+	// (T-e271) — and NOT through PutTask. That is not cosmetic: PutTask no
+	// longer writes the description column at all, because a whole-row upsert
+	// replaying a stale copy of it is precisely the lost update T-e271 node 3
+	// fixed (see PutTask's own note). Editing through PutTask here would have
+	// tested a mechanism no caller uses, so the assertion below would have
+	// stopped meaning anything the moment the real path diverged. What is being
+	// pinned is unchanged: the preview re-assembles from the CURRENT row.
 	task, err := api.dal.GetTask(w.TaskID)
 	if err != nil || task == nil {
 		t.Fatalf("get task: %v", err)
 	}
-	task.Description = "事後補充的描述"
-	if err := api.dal.PutTask(*task); err != nil {
-		t.Fatalf("put task: %v", err)
+	if ok, err := api.writeTaskDescription(task, wireOwnerID, "事後補充的描述"); err != nil || !ok {
+		t.Fatalf("edit task description: ok=%v err=%v", ok, err)
 	}
 	rec = httptest.NewRecorder()
 	api.HandleGetWorkerBootContextApiOutsourceWorkersIdBootContextGet(rec,

@@ -134,6 +134,19 @@ func (s *apiServer) writeTaskDescription(t *Task, actor, description string) (bo
 //	move either way: the same executor-or-admin gate applies whether the task is
 //	open or closed, which is ruling 2 verbatim.
 //
+// NO LENGTH CAP, deliberately — this is a decision, not an omission, and it is
+// written down because an absent guard and a forgotten guard look identical to
+// whoever reads this next. create_task has never capped the description, so a
+// ceiling applied HERE and nowhere else would make every already-long
+// description permanently uneditable: the caller could neither shorten it (the
+// request carrying the shorter text is itself judged by its own new value, but
+// the 400 lands before anything is compared) nor correct a typo in it — the
+// exact "the text cannot be fixed" failure this route exists to remove,
+// reintroduced one door further in. Adding the first-ever cap on this field is
+// also a NEW protection over an existing wire, which is the owner's call to
+// make, not this ticket's. If a cap is ever wanted it belongs on BOTH doors at
+// once (create and edit), sized so no stored description is already over it.
+//
 // Guard order: 404 unknown task → 403 not the executor → write. There is no
 // 409 anywhere on this route.
 func (s *apiServer) HandleUpdateTaskDescriptionApiTasksTaskIdDescriptionPost(w http.ResponseWriter, r *http.Request, taskId string) {
