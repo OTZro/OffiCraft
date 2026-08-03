@@ -11,7 +11,7 @@
 // e2e_test/tests/13_reply_cards.spec.js (雙卡同房 leg).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { httpApi } from "./http";
+import { httpApi, SSE_RESYNC_TOPICS } from "./http";
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
@@ -36,22 +36,24 @@ class FakeEventSource {
   }
 }
 
-// The closed SSE topic vocabulary the reconnect resync replays (spec §3.1/§4.1).
-const CLOSED_TOPICS = [
-  "member",
-  "chat",
-  "chat_read",
-  "reply_card",
-  "task",
-  "outsource_worker",
-  "task_manual",
-  "global_context",
-  "role_def",
-  "lessons",
-  "insight",
-  "context",
-  "monitoring",
-];
+// The closed SSE topic vocabulary the reconnect resync replays (spec §3.1/§4.1)
+// — the PRODUCTION array itself, not a transcription of it. This was the THIRD
+// hand-copy of the same list in the frontend (T-05db node 4).
+//
+// ⚠️ Be honest about what that trade cost: this copy was NOT power-free. It did
+// catch a topic dropped from SSE_RESYNC_TOPICS (`seen` would be 11, the copy
+// 12). Measured: with the fold in place, deleting a topic from the production
+// array leaves all 11 tests in THIS file green. That power is not lost, it
+// MOVED — api/sseResyncTopics.test.ts catches the same mutant (measured, and it
+// NAMES the topic), and additionally catches drift on the spec side, which a
+// code-to-code copy never could. One copy checked against the contract strictly
+// dominates two copies checked against each other.
+//
+// What these assertions still pin on their own: `resyncAll` fans topic-major in
+// array order, so deep-equality against the array pins that EVERY topic is
+// fanned, EXACTLY ONCE, IN ORDER — a resyncAll that skipped, duplicated or
+// reordered still reddens here. Never re-transcribe the list.
+const CLOSED_TOPICS = SSE_RESYNC_TOPICS;
 
 beforeEach(() => {
   FakeEventSource.instances = [];

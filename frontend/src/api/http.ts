@@ -225,7 +225,19 @@ let sseVisibilityHandler: (() => void) | null = null;
 // The CLOSED SSE topic vocabulary (spec/sse.md §3.1 / §4.1). Replayed one
 // synthetic delta per topic to every subscriber on a full resync so each hook
 // refetches its snapshot — see resyncAll below. New topics MUST be added here.
-const SSE_RESYNC_TOPICS = [
+//
+// EXPORTED so there is exactly ONE copy of the closed set in the frontend
+// (T-05db node 4). There were THREE hand-copies: this one, plus transcriptions
+// in hooks/sseFanout.test.tsx and api/http.sse-pool.test.ts — both now import
+// THIS array. Its own correctness is no longer taken on trust either:
+// api/sseResyncTopics.test.ts asserts it EQUALS the spec/sse.md §3.1 table,
+// parsed from the repo file at run time rather than transcribed.
+//
+// Why this matters more than it looks: a topic MISSING here fails silently —
+// after a reconnect that topic never refetches, so the data is right, the
+// screen is stale, and nothing errors. Do not transcribe the list anywhere
+// else; a second copy is the defect relocated, not fixed.
+export const SSE_RESYNC_TOPICS = [
   "member",
   "chat",
   "chat_read",
