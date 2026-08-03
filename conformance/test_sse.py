@@ -70,6 +70,16 @@ def _auth(token: str) -> dict[str, str]:
 HERE = pathlib.Path(__file__).resolve().parent
 
 # The §3.1 topic table row: ``| `<topic>` | <trigger> | <op> |``.
+#
+# ⚠️ DUPLICATED PARSER (knowingly, this round): server/ocserverd's
+# TestSSETopicsMatchSpec parses the SAME table to bind hub.go's `sseTopics` to
+# it — the other edge of this guard (that test is what makes spec/sse.md a
+# TRUSTWORTHY authority here; without it a topic added to hub.go alone would
+# leave both guards green). Two parsers of one markdown table is a smell; the
+# proper fix is a MACHINE-READABLE spec asset (a spec/sse-topics.json next to
+# spec/openapi.json, consumed by both sides and by the frontend's
+# SSE_RESYNC_TOPICS), which adds a frozen wire asset ⇒ owner's call under the
+# wire freeze, not a tidy-up to do in passing.
 _SPEC_TOPIC_ROW = re.compile(r"^\|\s*`([a-z_]+)`\s*\|", re.M)
 
 
