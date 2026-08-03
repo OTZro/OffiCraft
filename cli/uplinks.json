@@ -1,0 +1,368 @@
+{
+  "_comment": [
+    "Every callsite under cli/** that can put a body on the wire, enumerated by bin/uplink-guard.py.",
+    "This is not a list of the uplinks somebody remembered: the guard lexes the code, finds every",
+    "body-capable callsite, and requires each one to be claimed by EXACTLY ONE row here — so an",
+    "undeclared send reddens CI, a row whose callsite is gone reddens it, and a row pointed at some",
+    "harmless line reddens it too. `callsite` is the code text of the line the row accounts for and",
+    "must be unique within its file. kind=json is an uplink (route + OpenAPI $ref + the wire test that",
+    "compares ITS body); kind=seam is a shared send implementation uplinks travel through; kind=skip is",
+    "reachable but out of scope, with the reason committed rather than left as a silent pass.",
+    "NOTE on codex-context / codex-tokens: one producer call (reportTokenUsage) emits both, so they",
+    "share a subtest. Their wire_needle values differ because each names a distinct line of that",
+    "subtest — both bodies ARE compared, the loop walks every captured request."
+  ],
+  "uplinks": [
+    {
+      "id": "ocagent-context",
+      "source": "cli/ocagent/contextreport.go",
+      "callsite": "reportPost(client, cfg, \"/api/agent/context\"",
+      "kind": "json",
+      "method": "post",
+      "path": "/api/agent/context",
+      "request_schema": "#/components/schemas/AgentContextIngestDTO",
+      "wire_test": "cli/ocagent/telemetry_wire_test.go",
+      "wire_needle": "if bad := schemaViolations(ctx.body, contextDeclared); len(bad) > 0 {"
+    },
+    {
+      "id": "ocagent-telemetry",
+      "source": "cli/ocagent/contextreport.go",
+      "callsite": "reportPost(client, cfg, \"/api/monitoring/telemetry\"",
+      "kind": "json",
+      "method": "post",
+      "path": "/api/monitoring/telemetry",
+      "request_schema": "#/components/schemas/AgentTelemetryIngestDTO",
+      "wire_test": "cli/ocagent/telemetry_wire_test.go",
+      "wire_needle": "if bad := schemaViolations(tel.body, telemetryDeclared); len(bad) > 0 {"
+    },
+    {
+      "id": "ocagent-presence",
+      "source": "cli/ocagent/listen_hooks.go",
+      "callsite": "postJSON(client, cfg, membersPath+cfg.ID+\"/presence\"",
+      "kind": "json",
+      "method": "post",
+      "path": "/api/members/{self}/presence",
+      "allow_missing_spec": "The route this reports to does not exist on the server, so there is no requestBody to compare against — it 404s on every stop. Retiring the uplink touches the shutdown path and needs its own owner-approved task; until then this row is what keeps it visible instead of forgotten. It carries no request_schema and no wire_test ON PURPOSE: there is nothing to compare it to, and the earlier version of this row filled both fields in with an unrelated DTO and an unrelated test just to satisfy the guard — paperwork that could only be filled in with something untrue."
+    },
+    {
+      "id": "ocagent-request-seam",
+      "source": "cli/ocagent/http.go",
+      "callsite": "req, err := http.NewRequest(method, url, body)",
+      "kind": "seam",
+      "seam_reason": "ocagent's shared request builder: postJSON and every GET go through it. The method arrives as a variable, which is why the enumeration cannot key on a literal http.MethodPost."
+    },
+    {
+      "id": "ocagent-request-seam-do",
+      "source": "cli/ocagent/http.go",
+      "callsite": "resp, err := client.Do(req)",
+      "kind": "seam",
+      "seam_reason": "The send half of the same shared builder above."
+    },
+    {
+      "id": "ocagent-attachment-upload",
+      "source": "cli/ocagent/upload.go",
+      "callsite": "req, err := http.NewRequest(http.MethodPost, reqURL, f)",
+      "kind": "skip",
+      "skip_reason": "Streams raw file bytes, not JSON — there is no request schema for a wire test to compare a body against."
+    },
+    {
+      "id": "ocagent-attachment-upload-do",
+      "source": "cli/ocagent/upload.go",
+      "callsite": "resp, err := client.Do(req)",
+      "kind": "skip",
+      "skip_reason": "The send half of the raw-bytes upload above."
+    },
+    {
+      "id": "ocagent-attachment-download",
+      "source": "cli/ocagent/download.go",
+      "callsite": "req, err := http.NewRequest(http.MethodGet, reqURL, nil)",
+      "kind": "skip",
+      "skip_reason": "GET with a nil body — nothing goes out."
+    },
+    {
+      "id": "ocagent-attachment-download-do",
+      "source": "cli/ocagent/download.go",
+      "callsite": "resp, err := client.Do(req)",
+      "kind": "skip",
+      "skip_reason": "The send half of the download above."
+    },
+    {
+      "id": "ocagent-events-stream",
+      "source": "cli/ocagent/listen_run.go",
+      "callsite": "req, err := http.NewRequestWithContext(connCtx, http.MethodGet, l.cfg.Base+eventsPath, nil)",
+      "kind": "skip",
+      "skip_reason": "The SSE downlink: a GET that streams events in. No body goes out."
+    },
+    {
+      "id": "ocagent-events-stream-do",
+      "source": "cli/ocagent/listen_run.go",
+      "callsite": "resp, err := l.streamClient.Do(req)",
+      "kind": "skip",
+      "skip_reason": "The send half of the SSE downlink above."
+    },
+    {
+      "id": "warden-poster-seam",
+      "source": "cli/ocwarden/main.go",
+      "callsite": "req, err := http.NewRequest(http.MethodPost, base+path, bytes.NewReader(body))",
+      "kind": "seam",
+      "seam_reason": "The warden's shared poster closure. Heartbeat, command results and self-update reports all send through it, so it is the implementation rather than an uplink of its own."
+    },
+    {
+      "id": "warden-poster-seam-do",
+      "source": "cli/ocwarden/main.go",
+      "callsite": "resp, err := client.Do(req)",
+      "kind": "seam",
+      "seam_reason": "The send half of the shared poster above."
+    },
+    {
+      "id": "warden-heartbeat",
+      "source": "cli/ocwarden/main.go",
+      "callsite": "status, body := post(telemetryPath, payload)",
+      "kind": "json",
+      "method": "post",
+      "path": "/api/monitoring/telemetry",
+      "request_schema": "#/components/schemas/AgentTelemetryIngestDTO",
+      "wire_test": "cli/ocwarden/telemetry_wire_test.go",
+      "wire_needle": "\"heartbeat\": heartbeat,",
+      "wire_case": "heartbeat"
+    },
+    {
+      "id": "warden-command-result",
+      "source": "cli/ocwarden/transport.go",
+      "callsite": "status, _ := post(commandResultPath, payload)",
+      "kind": "json",
+      "method": "post",
+      "path": "/api/monitoring/telemetry",
+      "request_schema": "#/components/schemas/AgentTelemetryIngestDTO",
+      "wire_test": "cli/ocwarden/telemetry_wire_test.go",
+      "wire_needle": "\"command_result\": {\"command_result\": map[string]any{",
+      "wire_case": "command_result"
+    },
+    {
+      "id": "warden-command-stream",
+      "source": "cli/ocwarden/transport.go",
+      "callsite": "req, err := http.NewRequestWithContext(connCtx, http.MethodGet, t.base+eventsPath, nil)",
+      "kind": "skip",
+      "skip_reason": "The warden's SSE command band: a GET that streams commands in. No body goes out."
+    },
+    {
+      "id": "warden-command-stream-do",
+      "source": "cli/ocwarden/transport.go",
+      "callsite": "resp, err := t.client.Do(req)",
+      "kind": "skip",
+      "skip_reason": "The send half of the command band above."
+    },
+    {
+      "id": "warden-self-update",
+      "source": "cli/ocwarden/selfupdate.go",
+      "callsite": "status, _ := u.post(selfUpdateReportPath, payload)",
+      "kind": "json",
+      "method": "post",
+      "path": "/api/monitoring/telemetry",
+      "request_schema": "#/components/schemas/AgentTelemetryIngestDTO",
+      "wire_test": "cli/ocwarden/telemetry_wire_test.go",
+      "wire_needle": "\"self_update\": {\"self_update\": map[string]any{",
+      "wire_case": "self_update"
+    },
+    {
+      "id": "warden-release-check",
+      "source": "cli/ocwarden/selfupdate.go",
+      "callsite": "req, err := http.NewRequest(http.MethodGet, base+path, nil)",
+      "kind": "skip",
+      "skip_reason": "GET with a nil body — asks the server which release is current."
+    },
+    {
+      "id": "warden-release-check-do",
+      "source": "cli/ocwarden/selfupdate.go",
+      "callsite": "resp, err := client.Do(req)",
+      "kind": "skip",
+      "skip_reason": "The send half of the release check above."
+    },
+    {
+      "id": "codex-post-seam",
+      "source": "cli/ocwarden/codex_session.go",
+      "callsite": "req, err := http.NewRequest(http.MethodPost, strings.TrimRight(s.base, \"/\")+path,",
+      "kind": "seam",
+      "seam_reason": "codexSession.post: the sidecar's shared JSON send. Its four telemetry/context uplinks go through it, and the http client is built inline here, which is why they are driven through httptest rather than an injected transport."
+    },
+    {
+      "id": "codex-reply-card-send",
+      "source": "cli/ocwarden/codex_session.go",
+      "callsite": "resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)",
+      "kind": "seam",
+      "seam_reason": "The send half of openReplyCard's request, built inline above it. The client is constructed at the callsite rather than injected, which is why the reply-card uplink is driven through httptest."
+    },
+    {
+      "id": "codex-post-seam-send",
+      "source": "cli/ocwarden/codex_session.go",
+      "callsite": "resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)",
+      "kind": "seam",
+      "seam_reason": "The send half of codexSession.post. Its four uplinks all leave through here."
+    },
+    {
+      "id": "codex-identity",
+      "source": "cli/ocwarden/codex_session.go",
+      "callsite": "s.post(\"/api/monitoring/telemetry\", map[string]any{\n\t\t\"runtime\": \"codex\", \"account\": s.account, \"account_label\": \"ChatGPT\",\n\t})",
+      "kind": "json",
+      "method": "post",
+      "path": "/api/monitoring/telemetry",
+      "request_schema": "#/components/schemas/AgentTelemetryIngestDTO",
+      "wire_test": "cli/ocwarden/codex_uplink_wire_test.go",
+      "wire_needle": "drive(\"identity\", session.reportIdentity)",
+      "wire_case": "identity"
+    },
+    {
+      "id": "codex-context",
+      "source": "cli/ocwarden/codex_session.go",
+      "callsite": "s.post(\"/api/agent/context\", map[string]any{",
+      "kind": "json",
+      "method": "post",
+      "path": "/api/agent/context",
+      "request_schema": "#/components/schemas/AgentContextIngestDTO",
+      "wire_test": "cli/ocwarden/codex_uplink_wire_test.go",
+      "wire_needle": "drive(\"context-and-tokens\", func() {",
+      "wire_case": "context-and-tokens"
+    },
+    {
+      "id": "codex-tokens",
+      "source": "cli/ocwarden/codex_session.go",
+      "callsite": "s.post(\"/api/monitoring/telemetry\", body)",
+      "kind": "json",
+      "method": "post",
+      "path": "/api/monitoring/telemetry",
+      "request_schema": "#/components/schemas/AgentTelemetryIngestDTO",
+      "wire_test": "cli/ocwarden/codex_uplink_wire_test.go",
+      "wire_needle": "\"modelContextWindow\": float64(100),",
+      "wire_case": "context-and-tokens"
+    },
+    {
+      "id": "codex-rate-limits",
+      "source": "cli/ocwarden/codex_session.go",
+      "callsite": "s.post(\"/api/monitoring/telemetry\", map[string]any{\n\t\t\"runtime\": \"codex\", \"account\": s.account, \"account_label\": \"ChatGPT\", \"rate_limits\": windows,",
+      "kind": "json",
+      "method": "post",
+      "path": "/api/monitoring/telemetry",
+      "request_schema": "#/components/schemas/AgentTelemetryIngestDTO",
+      "wire_test": "cli/ocwarden/codex_uplink_wire_test.go",
+      "wire_needle": "drive(\"rate-limits\", func() {",
+      "wire_case": "rate-limits"
+    },
+    {
+      "id": "codex-reply-card",
+      "source": "cli/ocwarden/codex_session.go",
+      "callsite": "req, err := http.NewRequest(http.MethodPost, strings.TrimRight(s.base, \"/\")+\n\t\t\"/api/reply-cards\", bytes.NewReader(raw))",
+      "kind": "json",
+      "method": "post",
+      "path": "/api/reply-cards",
+      "request_schema": "#/components/schemas/ReplyCardCreateDTO",
+      "wire_test": "cli/ocwarden/codex_uplink_wire_test.go",
+      "wire_needle": "drive(\"reply-card\", func() {",
+      "wire_case": "reply-card"
+    },
+    {
+      "id": "warden-poster-passed-to-runonce",
+      "source": "cli/ocwarden/main.go",
+      "callsite": "result := runOnce(cfg, collect, machine, post, binaries, claude, shape, effect, runtimes...)",
+      "kind": "seam",
+      "seam_reason": "The shared poster seam handed to the report loop. The send it eventually performs is warden-heartbeat, which is compared there; passing the value along adds no new route."
+    },
+    {
+      "id": "warden-poster-built",
+      "source": "cli/ocwarden/main.go",
+      "callsite": "post := httpPoster(&http.Client{Timeout: httpTimeout}, cfg.Base, cfg.Token)",
+      "kind": "seam",
+      "seam_reason": "Construction of the shared poster seam itself (warden-poster-seam). Nothing is on the wire at this line."
+    },
+    {
+      "id": "warden-poster-passed-to-run",
+      "source": "cli/ocwarden/main.go",
+      "callsite": "rc := run(ctx, cfg, collect, machine, post, fingerprints.collect, claudeProbe.collect,",
+      "kind": "seam",
+      "seam_reason": "The shared poster seam handed to the loop from main. See warden-poster-passed-to-runonce."
+    },
+    {
+      "id": "warden-selfupdate-poster-built",
+      "source": "cli/ocwarden/selfupdate.go",
+      "callsite": "post:    httpPoster(reportClient, cfg.Base, cfg.Token),",
+      "kind": "seam",
+      "seam_reason": "Construction of the poster seam for the self-update reporter. Nothing is on the wire at this line."
+    },
+    {
+      "id": "warden-command-poster-built",
+      "source": "cli/ocwarden/transport.go",
+      "callsite": "post := httpPoster(&http.Client{Timeout: commandReportTimeout}, cfg.Base, cfg.Token)",
+      "kind": "seam",
+      "seam_reason": "Construction of the poster seam for command receipts. The send through it is warden-command-result, compared there."
+    },
+    {
+      "id": "ocagent-reportpost-seam",
+      "source": "cli/ocagent/contextreport.go",
+      "callsite": "status, detail := httpRequest(client, http.MethodPost, cfg.Base+path, cfg.Token, body)",
+      "kind": "seam",
+      "seam_reason": "reportPost's own send: the context/telemetry uplinks travel through it and are compared as ocagent-context and ocagent-telemetry. Listed because httpRequest is a DERIVED sink (its body reaches net/http), not because its name is on any list — an uplink was smuggled through exactly this helper while the scan only knew hard-coded names."
+    },
+    {
+      "id": "ocagent-getjson-seam",
+      "source": "cli/ocagent/http.go",
+      "callsite": "status, text := httpRequest(client, http.MethodGet, cfg.Base+path, token, nil)",
+      "kind": "skip",
+      "skip_reason": "getJSON: a GET with a nil body. Nothing goes out."
+    },
+    {
+      "id": "ocagent-postjson-seam",
+      "source": "cli/ocagent/http.go",
+      "callsite": "status, text := httpRequest(client, http.MethodPost, cfg.Base+path, cfg.Token, payload)",
+      "kind": "seam",
+      "seam_reason": "postJSON's own send — the shared JSON POST seam every ocagent uplink that is not context-report travels through."
+    },
+    {
+      "id": "ocagent-connectonce",
+      "source": "cli/ocagent/listen_run.go",
+      "callsite": "opened, activity, selfExit, err := l.connectOnce(ctx)",
+      "kind": "skip",
+      "skip_reason": "The SSE downlink loop calling its own connect: a GET that streams events in."
+    },
+    {
+      "id": "ocagent-cmd-download",
+      "source": "cli/ocagent/main.go",
+      "callsite": "return cmdDownload(newStreamingClient(), cfg, args[0], *outDir, out, os.Stderr)",
+      "kind": "skip",
+      "skip_reason": "Dispatch to the attachment download command — a GET, no body out."
+    },
+    {
+      "id": "ocagent-cmd-upload",
+      "source": "cli/ocagent/main.go",
+      "callsite": "return cmdUpload(newStreamingClient(), cfg, args[0], *mimeType, out, os.Stderr)",
+      "kind": "skip",
+      "skip_reason": "Dispatch to the attachment upload command, which streams raw file bytes rather than JSON: there is no request schema to compare a body against."
+    },
+    {
+      "id": "codex-reply-card-call",
+      "source": "cli/ocwarden/codex_session.go",
+      "callsite": "cardID := s.openReplyCard(question, bind)",
+      "kind": "seam",
+      "seam_reason": "The sidecar calling its own reply-card producer. The body it builds is compared as codex-reply-card; this is the call into it."
+    },
+    {
+      "id": "warden-install-getter",
+      "source": "cli/ocwarden/install.go",
+      "callsite": "return httpGetter(&http.Client{Timeout: selfUpdateHTTPTimeout}, base, token)",
+      "kind": "skip",
+      "skip_reason": "Constructs the release-check GETTER. GETs only, no body out."
+    },
+    {
+      "id": "warden-selfupdate-getter",
+      "source": "cli/ocwarden/selfupdate.go",
+      "callsite": "get:          httpGetter(client, cfg.Base, cfg.Token),",
+      "kind": "skip",
+      "skip_reason": "The same GET-only getter, wired into the self-updater."
+    },
+    {
+      "id": "warden-transport-connectonce",
+      "source": "cli/ocwarden/transport.go",
+      "callsite": "opened, err := t.connectOnce(ctx)",
+      "kind": "skip",
+      "skip_reason": "The warden's SSE command band calling its own connect: a GET that streams commands in."
+    }
+  ]
+}

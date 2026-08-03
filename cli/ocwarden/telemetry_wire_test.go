@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -95,6 +96,7 @@ type schemaNode struct {
 	Properties           map[string]*schemaNode `json:"properties"`
 	AdditionalProperties json.RawMessage        `json:"additionalProperties"`
 	Type                 string                 `json:"type"`
+	Required             []string               `json:"required"`
 	AnyOf                []*schemaNode          `json:"anyOf"`
 }
 
@@ -200,7 +202,16 @@ func (n *schemaNode) closed() bool {
 	return strings.TrimSpace(string(n.AdditionalProperties)) == "false"
 }
 
-func frozenTelemetrySchema(t *testing.T) *schemaNode {
+// frozenRequestSchema resolves the request schema for one ROUTE, following the
+// spec's own requestBody $ref to get there.
+//
+// Going via the route rather than naming the schema is the point. A test that
+// spells out "AgentTelemetryIngestDTO" keeps comparing against that DTO after the
+// operation has been repointed at a different one — the client would then be
+// checked against a schema the server no longer uses for this route, and every
+// assertion would stay green. The route is what the producer actually sends to, so
+// the route is what the schema has to be looked up by.
+func frozenRequestSchema(t *testing.T, method, route string) *schemaNode {
 	t.Helper()
 	specPath := filepath.Join("..", "..", "spec", "openapi.json")
 	raw, err := os.ReadFile(specPath)
@@ -208,6 +219,15 @@ func frozenTelemetrySchema(t *testing.T) *schemaNode {
 		t.Fatalf("read frozen spec %s: %v", specPath, err)
 	}
 	var spec struct {
+		Paths map[string]map[string]struct {
+			RequestBody struct {
+				Content map[string]struct {
+					Schema struct {
+						Ref string `json:"$ref"`
+					} `json:"schema"`
+				} `json:"content"`
+			} `json:"requestBody"`
+		} `json:"paths"`
 		Components struct {
 			Schemas map[string]*schemaNode `json:"schemas"`
 		} `json:"components"`
@@ -215,14 +235,32 @@ func frozenTelemetrySchema(t *testing.T) *schemaNode {
 	if err := json.Unmarshal(raw, &spec); err != nil {
 		t.Fatalf("parse frozen spec: %v", err)
 	}
-	schema, ok := spec.Components.Schemas["AgentTelemetryIngestDTO"]
+	operation, ok := spec.Paths[route][method]
+	if !ok {
+		t.Fatalf("the frozen spec has no %s %s — this guard has no schema to compare against",
+			strings.ToUpper(method), route)
+	}
+	ref := operation.RequestBody.Content["application/json"].Schema.Ref
+	const prefix = "#/components/schemas/"
+	if !strings.HasPrefix(ref, prefix) {
+		t.Fatalf("%s %s declares no application/json requestBody $ref (got %q) — there is "+
+			"nothing for a body to be compared against", strings.ToUpper(method), route, ref)
+	}
+	name := strings.TrimPrefix(ref, prefix)
+	schema, ok := spec.Components.Schemas[name]
 	if !ok || schema == nil {
-		t.Fatal("AgentTelemetryIngestDTO not in the frozen spec")
+		t.Fatalf("%s is referenced by %s %s but not defined in the frozen spec",
+			name, strings.ToUpper(method), route)
 	}
 	if !schema.closed() {
-		t.Fatal("AgentTelemetryIngestDTO is not a closed schema — this guard would be vacuous")
+		t.Fatalf("%s is not a closed schema — this guard would be vacuous", name)
 	}
 	return schema
+}
+
+func frozenTelemetrySchema(t *testing.T) *schemaNode {
+	t.Helper()
+	return frozenRequestSchema(t, "post", "/api/monitoring/telemetry")
 }
 
 // undeclaredPayloadKeys walks payload against the schema and returns the
@@ -251,6 +289,66 @@ func undeclaredPayloadKeys(payload map[string]any, node *schemaNode) []string {
 	walk(payload, node, "")
 	sort.Strings(extra)
 	return extra
+}
+
+// declaredNestedBlockPaths returns every dotted path whose schema node declares
+// child properties — exactly the paths the two walkers above are able to descend
+// into. It is DERIVED from the frozen spec on every run, and that is the point:
+// the depth grading (which keys are checked below their own level and which are
+// structurally out of reach) is something the spec says, not something this file
+// remembers. A hand-written grading is a snapshot, and this one went stale inside
+// a day — `model` and `warden_shape` were declared after the list was written, so
+// a listed grading silently stopped describing the DTO while every test stayed
+// green.
+func declaredNestedBlockPaths(root *schemaNode) []string {
+	var paths []string
+	var walk func(*schemaNode, string)
+	walk = func(at *schemaNode, prefix string) {
+		for key, child := range at.Properties {
+			if child == nil || len(child.Properties) == 0 {
+				continue
+			}
+			paths = append(paths, prefix+key)
+			walk(child, prefix+key+".")
+		}
+	}
+	walk(root, "")
+	sort.Strings(paths)
+	return paths
+}
+
+// missingRequiredKeys walks payload against the schema and returns the dotted
+// paths the spec REQUIRES but the producer did not send.
+//
+// The other two walkers both ask "is what we send acceptable?". This one asks the
+// opposite question, and it is the half that was missing: tightening a schema has
+// two shapes on the wire, and they are symmetric. "Stop accepting a key the client
+// sends" is caught by the key walker. "Start requiring a key the client does not
+// send" was caught by nothing — the body simply starts coming back 422 in
+// production while every test here stays green, which is precisely the incident
+// this file exists to prevent, in its other direction.
+func missingRequiredKeys(payload map[string]any, node *schemaNode) []string {
+	var missing []string
+	var walk func(map[string]any, *schemaNode, string)
+	walk = func(obj map[string]any, at *schemaNode, prefix string) {
+		for _, key := range at.Required {
+			if _, present := obj[key]; !present {
+				missing = append(missing, prefix+key)
+			}
+		}
+		for key, value := range obj {
+			child, declared := at.Properties[key]
+			if !declared || child == nil || len(child.Properties) == 0 {
+				continue
+			}
+			if nested, isObj := value.(map[string]any); isObj {
+				walk(nested, child, prefix+key+".")
+			}
+		}
+	}
+	walk(payload, node, "")
+	sort.Strings(missing)
+	return missing
 }
 
 // nodeAt resolves a dotted path of declared properties, failing the test when
@@ -366,7 +464,32 @@ func TestWardenTelemetryPayloadsMatchFrozenSchema(t *testing.T) {
 			"binary": "ocwarden", "old_hash": "a", "new_hash": "b",
 		}},
 	}
+	walked := map[string]int{}
 	for name, payload := range cases {
+		walked[name+" \u2192 "+telemetryPath]++
+		// An EMPTY payload satisfies both walkers below — they only look at keys that
+		// are present — so without this, the evidence for a fourth uplink could be the
+		// literal `{}`, and the join above would count it. Review demonstrated exactly
+		// that: a new warden uplink carrying a key that 422s the whole heartbeat, with
+		// a one-line `"extra": {}` as its committed proof. The marginal cost of a new
+		// uplink has to be a real payload, not a pair of braces.
+		if len(payload) == 0 {
+			t.Errorf("%s has an empty payload, so every comparison below it is vacuous — "+
+				"the walkers only inspect keys that are present. Give this uplink the body "+
+				"its producer actually builds.", name)
+			continue
+		}
+		if declaredHere := undeclaredPayloadKeys(payload, declared); len(declaredHere) == len(payload) {
+			t.Errorf("%s carries no key the frozen schema declares (%v), so it cannot be "+
+				"evidence that this uplink matches the contract.", name, declaredHere)
+		}
+		if missing := missingRequiredKeys(payload, declared); len(missing) > 0 {
+			t.Errorf("%s omits key(s) the frozen spec REQUIRES: %v.\n"+
+				"Tightening a schema has two shapes and they are symmetric: refusing a key "+
+				"we send (caught below) and requiring one we do not (this). Both 422 the "+
+				"whole report in production; only the first used to redden a build.\n"+
+				"payload = %#v", name, missing, payload)
+		}
 		if extra := undeclaredPayloadKeys(payload, declared); len(extra) > 0 {
 			t.Errorf("%s payload carries keys the frozen spec does not declare %v.\n"+
 				"A TOP-LEVEL undeclared key 422s the whole report. A NESTED one is worse: "+
@@ -376,6 +499,21 @@ func TestWardenTelemetryPayloadsMatchFrozenSchema(t *testing.T) {
 				"payload = %#v", name, extra, payload)
 		}
 	}
+	// The join, per (producer run → route) against the committed manifest — the same
+	// key the codex wire test uses. A per-route total alone is interchangeable between
+	// rows on one route, and all three of these post to the same one.
+	//
+	// Be precise about what it does NOT prove: two of the three payloads are still
+	// hand-written literals rather than producer output, so this catches a row
+	// committed with nothing to walk, but it does not prove a producer emitted these
+	// bodies. The stronger form (routes observed by a real test server) is in
+	// codex_uplink_wire_test.go.
+	if want := manifestUplinkPaths(t, "cli/ocwarden/telemetry_wire_test.go"); !maps.Equal(walked, want) {
+		t.Errorf("cli/uplinks.json commits %v to this wire test but %v was walked against "+
+			"the frozen schema. A row nobody compared is coverage on paper only — that is "+
+			"how the shipped clients broke under a green build.", want, walked)
+	}
+
 	// COVERAGE. A payload that passed the schema by being empty would be
 	// worthless, and so would one whose nested blocks are empty: the walker only
 	// checks keys that are actually present, so an absent key is invisible to it.
@@ -711,10 +849,18 @@ func TestWardenTelemetryValueGuardIgnoresUndeclaredKeys(t *testing.T) {
 // are not symmetric: a rename caught only by CI costs one red build, while a
 // closed nested schema costs the fleet's telemetry the moment any warden version
 // differs from the spec in either direction.
+// The paths come from the spec, not from a list here: the sentinel has to cover
+// whatever nested shape the DTO declares TODAY, including the next block someone
+// declares. A listed set would keep passing while a newly declared block was
+// closed — and closing one is exactly the fleet-wide outage described above.
 func TestFrozenTelemetryNestedBlocksStayOpen(t *testing.T) {
 	declared := frozenTelemetrySchema(t)
-	for _, path := range []string{"hardware", "claude", "runtimes",
-		"runtimes.claude", "runtimes.codex"} {
+	nested := declaredNestedBlockPaths(declared)
+	if len(nested) == 0 {
+		t.Fatal("the frozen DTO declares no nested shape at all — this sentinel would " +
+			"be vacuous, and the key walker would have nothing to descend into")
+	}
+	for _, path := range nested {
 		if nodeAt(t, declared, path).closed() {
 			t.Errorf("%s has additionalProperties:false. Declaring the shape is for CI; "+
 				"closing it makes the SERVER 422 the entire heartbeat over one nested "+
@@ -727,5 +873,62 @@ func TestFrozenTelemetryNestedBlocksStayOpen(t *testing.T) {
 	// every producer in this module is checked against that list above.
 	if !declared.closed() {
 		t.Error("the top-level DTO must stay closed")
+	}
+}
+
+// TestEveryDeclaredNestedBlockIsActuallyWalked is the meta-assertion that keeps the
+// depth grading from becoming decoration.
+//
+// The grading itself is honest and load-bearing: a key the spec declares with no
+// shape below it (`tokens`, `command_result`, `rate_limits`, …) carries free-form
+// content by DESIGN — the server holds it in an untyped field — so nothing here can
+// judge what is inside, and claiming otherwise would be a lie. The danger is the
+// other half: once "this key is unchecked below its own level" is an accepted answer,
+// it becomes the quietest possible place for a real gap to sit. If a block that DOES
+// declare a shape is never actually descended into, its payload reads exactly like a
+// free-form one — green, with nothing inside ever compared.
+//
+// So this asks the question as a query that must come back empty: for every path the
+// spec declares a shape at, plant an undeclared key there and require the walker to
+// name it. Nothing is listed, so a block declared tomorrow is covered tomorrow. It
+// reddens if a walker stops short of a declared depth, and it reddens if someone
+// grades a shaped block as free-form.
+func TestEveryDeclaredNestedBlockIsActuallyWalked(t *testing.T) {
+	declared := frozenTelemetrySchema(t)
+	nested := declaredNestedBlockPaths(declared)
+	if len(nested) == 0 {
+		t.Fatal("the frozen DTO declares no nested shape at all — there is no depth " +
+			"for this assertion to be about")
+	}
+
+	const probe = "oc_undeclared_probe_key"
+	var unwalked []string
+	for _, path := range nested {
+		payload := map[string]any{}
+		at := payload
+		for _, step := range strings.Split(path, ".") {
+			next := map[string]any{}
+			at[step] = next
+			at = next
+		}
+		at[probe] = true
+
+		want := path + "." + probe
+		found := false
+		for _, reported := range undeclaredPayloadKeys(payload, declared) {
+			if reported == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			unwalked = append(unwalked, path)
+		}
+	}
+	if len(unwalked) > 0 {
+		t.Errorf("the frozen spec declares a nested shape at %v, but the key walker does "+
+			"not descend there — a rename inside those blocks would go unread, which is "+
+			"the a7fa594 shape. Whether a key is checked below its own level has to be "+
+			"read off the spec, not remembered here.", unwalked)
 	}
 }

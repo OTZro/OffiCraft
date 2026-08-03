@@ -26,6 +26,14 @@ import (
 	"time"
 )
 
+// reportRejectedCodexPost makes a refused best-effort report visible to the
+// sidecar operator without changing its deliberately non-blocking flow.
+func (s *codexSession) reportRejectedCodexPost(path string, status int) {
+	if status >= http.StatusBadRequest {
+		s.activity("Codex POST %s rejected with HTTP %d", path, status)
+	}
+}
+
 func buildCodexLaunchCommand(wardenBin, codexBin, workdir, personaFile, tokenFile,
 	agentID, base, session, socket, model, effort string, extraEnv [][2]string,
 	envRendered string) string {
@@ -436,6 +444,7 @@ func (s *codexSession) openReplyCard(question map[string]any, bind string) strin
 		return ""
 	}
 	defer resp.Body.Close()
+	s.reportRejectedCodexPost("/api/reply-cards", resp.StatusCode)
 	var result map[string]any
 	_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result)
 	id, _ := result["id"].(string)
@@ -458,6 +467,7 @@ func (s *codexSession) post(path string, payload map[string]any) {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	if err == nil {
+		s.reportRejectedCodexPost(path, resp.StatusCode)
 		_ = resp.Body.Close()
 	}
 }
