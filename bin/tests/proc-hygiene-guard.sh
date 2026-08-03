@@ -537,15 +537,24 @@ check "and section 7 collects them too — a recorded pid is not the whole subtr
 # by EXPLICIT pid — the wrapper's own, read straight out of the record, and the
 # children captured by parentage above — never by a command-line pattern.
 #
-# What the assertion below does and does not pin, measured rather than assumed:
-# deleting EITHER line alone leaves it green, because the wrapper is blocked on
-# the very sleep the second line collects — take that away and the wrapper falls
-# off the end of its script on its own. The two lines are redundant by
-# construction, so no single-line mutant can kill this assertion. Deleting the
-# PAIR does redden it (49 ok, 1 failed, "want '0' got '2'"), which is the level
-# the assertion actually holds. Both lines stay: the day the fixture stops
-# blocking on a child process, the explicit wrapper kill is the one still
-# standing.
+# What the assertion below pins, per line, each direction measured on its own:
+#   - Delete the FORK collection and it goes RED (49 ok, 1 failed, "want '0'
+#     got '1'"): killing the wrapper does NOT take its sleep with it — that
+#     child is reparented to init and runs out its full block. This line
+#     carries the assertion on its own.
+#   - Delete the explicit WRAPPER kill and it stays green: the wrapper is
+#     blocked on the very sleep the other line collects, so once that child is
+#     gone the wrapper falls off the end of its script by itself.
+#   - Delete the PAIR and it goes red with both left behind ("got '2'").
+# Both lines stay. The wrapper kill is the one that is absorbed today, and it is
+# also the one still standing the day this fixture stops blocking on a child.
+#
+# An earlier version of this comment claimed "deleting EITHER line alone leaves
+# it green … no single-line mutant can kill this assertion", in the voice of a
+# measurement. Only one of the two directions had actually been run. It is
+# recorded here rather than quietly corrected because a wrong claim wearing the
+# word "measured" is worse than no claim: the next reader has no reason to
+# re-run it. Run both directions before writing a sentence that covers both.
 kill -KILL "$_wrap_pid" 2>/dev/null
 for _k in $wrapper_kids; do kill -KILL "$_k" 2>/dev/null; done
 sleep 0.3
