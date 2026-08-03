@@ -650,7 +650,7 @@
       "name": "list_webhook_requests"
     },
     {
-      "description": "The SAME bounded wake snapshot as resume_summary, for a TARGET member (member_id) instead of the caller — control-others, admin_agent+ only (owner-scope or role=assistant); an ordinary agent gets 403. Same identity/chat/light-task-rows/overview/note shape, assembled by the identical resumeSnapshotParts function; resume_summary itself is unchanged and still identity-locked to the caller.",
+      "description": "The SAME bounded wake snapshot as resume_summary, for a TARGET member (member_id) instead of the caller — control-others, admin_agent+ only (owner-scope or role=assistant); an ordinary agent gets 403. Same identity/chat/light-task-rows/roster/machines/overview/note shape, assembled by the identical resumeSnapshotParts function (so the roster and machine blocks cannot drift from what that member would get on waking; note that machines.you_are_on resolves for the TARGET member, not for you); resume_summary itself is unchanged and still identity-locked to the caller.",
       "inputSchema": {
         "properties": {
           "member_id": {
@@ -1781,7 +1781,7 @@
       "name": "patch_lessons"
     },
     {
-      "description": "Bounded LIGHT wake snapshot for the caller (identity-locked; recent chat + light open-task rows + size overview — peek sizes first, pull detail via get_task).",
+      "description": "Bounded LIGHT wake snapshot for the caller (identity-locked; recent chat + light open-task rows + size overview — peek sizes first, pull detail via get_task). Also carries the STUDIO FLOOR you wake up onto: roster (every member and contractor, each with online/offline status, the machine it runs on, and its duty capped at 1000 chars with `…` marking a cut, the cap applied after the doc's own leading title line is removed — who to ask for help; no insight/learning by owner ruling) and machines (the machine list plus you_are_on, your server-recorded machine binding — never derive it from a hostname).",
       "inputSchema": {
         "properties": {},
         "type": "object"

@@ -1034,7 +1034,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleResumeSummaryApiResumeSummaryGet,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "Bounded LIGHT wake snapshot for the caller (identity-locked; recent chat + light task rows + size overview).",
+			Summary:  "Bounded LIGHT wake snapshot for the caller (identity-locked; what it carries is enumerated in the description, not here).",
 			MCPTool:  "resume_summary",
 		},
 		{

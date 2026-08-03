@@ -273,7 +273,8 @@ export type WireBackupHealth = components["schemas"]["BackupHealthDTO"];
 
 /** Mirrors `ResumeOverviewDTO`: the size/概要 block of a resume snapshot — the
  * peek-then-decide counts/sizes (chat_count/chat_chars/tasks_returned/
- * tasks_open_total/tasks_detail_chars/cards_waiting/cards_answered_recent). */
+ * tasks_open_total/tasks_detail_chars/cards_waiting/cards_answered_recent, plus
+ * roster_chars/machines_chars for the studio-floor blocks — T-1b09). */
 export type WireResumeOverview = components["schemas"]["ResumeOverviewDTO"];
 
 /** Mirrors `ResumeTaskDTO`: one LIGHT open-task row inside a resume snapshot
