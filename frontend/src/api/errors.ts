@@ -25,6 +25,24 @@ export class ApiError extends Error {
   }
 }
 
+/** The server's human-readable REASON for a rejection, or `""` when there is
+ * none to show (a plain Error thrown outside the adapters, a body that did not
+ * carry the envelope).
+ *
+ * 🔴 Callers must treat `""` as "fall back to your own i18n copy", NEVER as the
+ * message: an empty error line is worse than a generic one. The reason this
+ * exists at all is that the doc-cap refusals carry real INSTRUCTIONS (how far
+ * over the limit you are, what the cap is, that what is already stored is not
+ * truncated, delete stale content first) — every word of which used to die at
+ * the seam because the cards stored a boolean. Do not narrow this back to a
+ * flag; the flag is what the user could already see.
+ *
+ * `message` is deliberately NOT used as a second fallback: it is the
+ * `http <status> for <METHOD> <path>` log format, which is not readable copy. */
+export function serverMessageOf(e: unknown): string {
+  return e instanceof ApiError ? e.serverMessage : "";
+}
+
 /** True when `e` is an API rejection with HTTP status `status` — the one way
  * callers branch on an error's status (deleteRole's 409 有成員在線上 case).
  * Falls back to the historical `http <status>` message regex for a plain

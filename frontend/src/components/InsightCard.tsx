@@ -30,6 +30,7 @@
 
 import { useState } from "react";
 import { useI18n } from "../i18n";
+import { serverMessageOf } from "../api/errors";
 import { useInsight } from "../hooks/useInsight";
 import { Markdown } from "./Markdown";
 import { DocumentHistoryEntry } from "./DocumentHistoryEntry";
@@ -54,30 +55,37 @@ export function InsightCard({ roleKey }: InsightCardProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
-  const [saveError, setSaveError] = useState(false);
+  // 🔴 The server's REASON, not a flag (owner ruling 2026-08-03). `null` = no
+  // failure; a string = failed, and that string is what the server said. The
+  // doc-cap refusal carries instructions the person needs (how far over, what
+  // the cap is, that stored text is NOT truncated, delete stale lines first) —
+  // as a boolean, none of it could reach the screen. `""` is a real state: the
+  // call failed with nothing quotable, and the render falls back to the i18n
+  // copy rather than showing an empty error line.
+  const [saveError, setSaveError] = useState<string | null>(null);
   const text = insight?.text ?? "";
 
   function startEdit() {
     setDraft(text);
-    setSaveError(false);
+    setSaveError(null);
     setEditing(true);
   }
 
   function cancelEdit() {
     setEditing(false);
     setDraft("");
-    setSaveError(false);
+    setSaveError(null);
   }
 
   async function commit() {
     setBusy(true);
-    setSaveError(false);
+    setSaveError(null);
     try {
       await saveInsight(draft);
       setEditing(false);
       setDraft("");
-    } catch {
-      setSaveError(true);
+    } catch (e) {
+      setSaveError(serverMessageOf(e));
     } finally {
       setBusy(false);
     }
@@ -182,8 +190,10 @@ export function InsightCard({ roleKey }: InsightCardProps) {
               placeholder={t.settings.editorPlaceholder}
               onChange={(e) => setDraft(e.target.value)}
             />
-            {saveError && (
-              <div className="mp-lessons__error">{t.mp.insightSaveError}</div>
+            {saveError !== null && (
+              <div className="mp-lessons__error">
+                {saveError || t.mp.insightSaveError}
+              </div>
             )}
           </>
         ) : loading ? (
