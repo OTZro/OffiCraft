@@ -1010,7 +1010,39 @@ func (s *apiServer) contractorTaskTitle(workerID string) string {
 // what a role appears to be responsible for whenever someone reorders their own
 // role doc. A flat cap can only ever cut the tail, and the ellipsis says so.
 func dutyText(md string) string {
-	return truncateRunes(strings.TrimSpace(md), resumeDutyPreview)
+	return truncateRunes(stripLeadingHeadings(md), resumeDutyPreview)
+}
+
+// stripLeadingHeadings drops the markdown heading lines that LEAD a definition
+// (with any blank lines between them) before the cap is applied. Role docs open
+// with their own title — 「# 助理 — Mira」 — so without this the first line of
+// every duty spends the budget restating the role name the row already carries
+// in RoleName.
+//
+// It is NOT the line-selection heuristic the owner overruled, and the
+// difference is the whole point: this makes no judgement about which content
+// matters. It only removes a fixed, syntactically identified prefix, so
+// reordering the body of a role doc cannot change what shows up — the failure
+// mode that got "pick the best line" rejected.
+//
+// A document that is nothing BUT headings comes back unchanged: an empty duty
+// reads as "this member has no role", which is a different fact from "this
+// member's role doc is only a title".
+func stripLeadingHeadings(md string) string {
+	full := strings.TrimSpace(md)
+	rest := full
+	for rest != "" {
+		line, tail, _ := strings.Cut(rest, "\n")
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			break
+		}
+		rest = tail
+	}
+	if rest = strings.TrimSpace(rest); rest == "" {
+		return full
+	}
+	return rest
 }
 
 // truncateRunes caps s at max RUNES (not bytes — one CJK character is one

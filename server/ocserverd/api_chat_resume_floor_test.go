@@ -217,6 +217,49 @@ func TestResumeDutyIsCappedAndMarked(t *testing.T) {
 	}
 }
 
+// TestResumeDutyDropsLeadingHeadingsOnly — role docs open with their own title
+// (「# 助理 — Mira」), which would otherwise spend the duty budget restating the
+// role name the row already carries.
+//
+// MUTANT: make dutyText cap the raw text again (skip stripLeadingHeadings) —
+// the first assertion goes red on the leading title. The third assertion is the
+// sentinel that keeps this from degenerating into "strip every heading": a
+// heading in the MIDDLE must survive, because dropping those would be content
+// selection, which the owner overruled.
+func TestResumeDutyDropsLeadingHeadingsOnly(t *testing.T) {
+	s := floorTestServer(t)
+	if err := s.dal.PutRoleDef(RoleDef{RoleKey: "r-titled", Name: "Titled Role",
+		DefinitionMD: "# 標題甲\n\n## 副標乙\n\n負責丙\n\n### 段中丁\n\n負責戊"}); err != nil {
+		t.Fatal(err)
+	}
+	// A doc that is nothing but a title: it must NOT come back empty, because
+	// an empty duty means "no role at all", a different fact.
+	if err := s.dal.PutRoleDef(RoleDef{RoleKey: "r-onlytitle", Name: "Only Title",
+		DefinitionMD: "# 只有標題己"}); err != nil {
+		t.Fatal(err)
+	}
+	putFloorMember(t, s, Member{ID: "m-alpha", Name: "Alpha", Kind: KindAssistant, RoleKey: "r-titled"})
+	putFloorMember(t, s, Member{ID: "m-charlie", Name: "Charlie", Kind: KindAssistant, RoleKey: "r-onlytitle"})
+
+	got := resumeFor(t, s, "m-alpha")
+	titled := rosterRow(t, got.Roster, "m-alpha").Duty
+	// Exact prefix, not "contains": the leading headings must be GONE, and the
+	// first surviving line must be the first non-heading line.
+	if !strings.HasPrefix(titled, "負責丙") {
+		t.Fatalf("leading headings must be stripped before the cap, got %q", titled)
+	}
+	if strings.Contains(titled, "標題甲") || strings.Contains(titled, "副標乙") {
+		t.Fatalf("no leading heading text may survive, got %q", titled)
+	}
+	if !strings.Contains(titled, "段中丁") {
+		t.Fatalf("a heading in the MIDDLE is body text and must survive, got %q", titled)
+	}
+	onlyTitle := rosterRow(t, got.Roster, "m-charlie").Duty
+	if onlyTitle != "# 只有標題己" {
+		t.Fatalf("a headings-only doc must come back whole, not empty, got %q", onlyTitle)
+	}
+}
+
 // TestResumeContractorCarriesTaskTitleAndMemberDoesNot — owner ruling
 // rc-a02d8bc7fe23: 正職給職責、外包給任務標題. A contractor id is minted per task,
 // so its task title IS its duty.
