@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { render, fireEvent, within, act } from "@testing-library/react";
+import { render, fireEvent, within, act, waitFor } from "@testing-library/react";
 import { THEME_COLOR_TOKENS } from "../styles/themeTokens.generated";
 import { MESSAGE_KEYS } from "../i18n/messageKeys.generated";
 import { I18nProvider } from "../i18n";
@@ -15,6 +15,7 @@ import { zh } from "../i18n/locales/zh";
 import { makeMessages } from "../i18n/compose";
 import { ThemeSettings } from "./ThemeSettings";
 import { tokenMeta } from "../lib/themeTokenMeta";
+import { MAX_AVATAR_BYTES } from "../lib/themeBundleCore";
 import { __resetMock } from "../api/mock";
 import { api } from "../api";
 import { setToken, clearToken } from "../api/auth";
@@ -66,6 +67,19 @@ function colourRow(
   ).find((r) => r.querySelector(".ts-color-name")?.textContent === label);
   if (!row) throw new Error(`no .ts-color-row labelled ${label}`);
   return row as HTMLElement;
+}
+
+/** The image slot group headed by `label` — found by its own heading, NOT by
+ * position, for the reason spelled out in canvasBgSlots below. */
+function imageSlots(
+  utils: ReturnType<typeof render>,
+  label: string
+): HTMLElement {
+  const group = Array.from(
+    utils.container.querySelectorAll(".ts-avatar-slots")
+  ).find((g) => g.querySelector(".ts-avatar-label")?.textContent === label);
+  if (!group) throw new Error(`no .ts-avatar-slots headed ${label}`);
+  return group as HTMLElement;
 }
 
 /** The 外框背景 slot group — where the lay-down mode <select> lives. */
@@ -771,6 +785,69 @@ describe("ThemeSettings · outer-canvas background", () => {
     fireEvent.click(await utils.findByLabelText(`${p.themeEdit} 純色`));
 
     expect(within(canvasBgSlots(utils)).queryByLabelText(s.themeCanvasBgMode)).toBeNull();
+  });
+
+  // T-72da. readValidatedImage is shared by FOUR file pickers, and before this
+  // it hard-coded the avatar gate. Relaxing only the server would have produced
+  // the worst possible shape: the server accepts the owner's background, and the
+  // cockpit still refuses it at the picker with "invalid image" — so the owner
+  // never gets far enough to find out the server changed its mind.
+  //
+  // The two assertions are ONE test on purpose: "the background is accepted"
+  // alone would also pass if the gate had been removed altogether, and "the
+  // avatar is refused" alone was already true before T-72da. Only the PAIR shows
+  // the split.
+  it("takes a background the avatar gate would refuse — and still refuses it as an avatar", async () => {
+    setToken("owner-token");
+    const utils = await renderManage();
+    await importBundle(utils, {
+      id: "midnight",
+      name: "午夜藍",
+      colors: { "--color-accent": "#0b1020" },
+    });
+    fireEvent.click(await utils.findByLabelText(`${p.themeEdit} 午夜藍`));
+
+    // A real PNG signature + padding: past the 64 KiB avatar cap, inside the
+    // 512 KiB background cap. Only the SIZE distinguishes these two outcomes —
+    // the mime and magic bytes are valid either way, so neither assertion can
+    // pass for some unrelated reason.
+    const bytes = new Uint8Array(MAX_AVATAR_BYTES + 1);
+    bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const bigPng = new File([bytes], "wallpaper.png", { type: "image/png" });
+
+    const bgInput = canvasBgSlots(utils).querySelector(".ts-file")!;
+    fireEvent.change(bgInput, { target: { files: [bigPng] } });
+    // FileReader.onload is a MACROtask in jsdom, so awaiting microtasks (a bare
+    // act) is not enough — wait for the preview the accepted image produces.
+    await waitFor(() =>
+      expect(canvasBgSlots(utils).querySelector("img.avatar__img")).not.toBeNull()
+    );
+    // Accepted: no error, and the picked image is now the canvas background.
+    expect(
+      canvasBgSlots(utils).parentElement?.querySelector(".set-error")
+    ).toBeNull();
+    clickSave(utils);
+    const saved = (await api.getServerSettings()).customThemes.find(
+      (x) => x.id === "midnight"
+    );
+    expect(saved?.backgrounds?.canvas?.startsWith("data:image/png;base64,")).toBe(
+      true
+    );
+
+    // The SAME file as an avatar is still refused — the relaxation did not leak
+    // across, which is the whole point of splitting the caps.
+    fireEvent.click(await utils.findByLabelText(`${p.themeEdit} 午夜藍`));
+    const avatarInput = imageSlots(utils, s.themeAvatarMember).querySelector(
+      ".ts-file"
+    )!;
+    fireEvent.change(avatarInput, { target: { files: [bigPng] } });
+    await waitFor(() =>
+      expect(
+        imageSlots(utils, s.themeAvatarMember).parentElement?.querySelector(
+          ".set-error"
+        )?.textContent
+      ).toBe(s.themeAvatarInvalid)
+    );
   });
 });
 
