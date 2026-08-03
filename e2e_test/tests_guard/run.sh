@@ -97,6 +97,10 @@ cat > "$SHIMDIR/ssh" <<'SH'
 #                   fail-closed: a probe that did not run is not a clean host.
 [[ "${SHIM_SSH_FAIL:-0}" == "1" ]] && { echo "ssh: connect to host ${*: -2:1} port 22: Operation timed out" >&2; exit 255; }
 [[ "${SHIM_SSH_SILENT:-0}" == "1" ]] && exit 0
+# SHIM_SSH_NOISE → a line the remote emits before the probe's own output. Two
+# flavours matter: ordinary stderr chatter (the ubiquitous known-hosts warning),
+# which must be TOLERATED, and marker-shaped output, which must REFUSE.
+[[ -n "${SHIM_SSH_NOISE:-}" ]] && printf '%s\n' "$SHIM_SSH_NOISE"
 cmd="${!#}"   # last arg = the remote command
 [[ "$cmd" == *IOPlatformUUID* ]] || { echo "TRIPWIRE ssh shim got an unexpected remote command: $cmd" >> "$SHIM_TRIPWIRE"; exit 3; }
 # A real remote HOME, so `[ -d "$HOME/.officraft/server" ]` is answered by the
@@ -129,7 +133,18 @@ fi
 echo "TRIPWIRE remote launchctl called with a non-print verb: $*" >> "$SHIM_TRIPWIRE"
 exit 0
 SH
-chmod +x "$SHIMDIR"/remote-bin/ioreg "$SHIMDIR"/remote-bin/launchctl
+cat > "$SHIMDIR/remote-bin/tmux" <<'SH'
+#!/usr/bin/env bash
+# The relocate target's agent sessions. Separate from the local tmux stub so a
+# guard reading the LOCAL session list instead of the remote one is visible.
+if [[ "${3:-}" == "ls" ]]; then
+  [[ "${SHIM_REMOTE_AGENTS:-0}" == "1" ]] || exit 1
+  [[ "${4:-}" == "-F" ]] && printf 'member-m-remote1\n'
+  exit 0
+fi
+exit 0
+SH
+chmod +x "$SHIMDIR"/remote-bin/ioreg "$SHIMDIR"/remote-bin/launchctl "$SHIMDIR"/remote-bin/tmux
 export SHIM_REMOTE_BIN="$SHIMDIR/remote-bin"
 
 chmod +x "$SHIMDIR"/launchctl "$SHIMDIR"/lsof "$SHIMDIR"/tmux "$SHIMDIR"/ioreg "$SHIMDIR"/ssh
@@ -933,6 +948,7 @@ e1dd_pre() {
   SHIM_REMOTE_HW="${E1DD_REMOTE_HW-$DISPOSABLE_UUID}" \
   SHIM_REMOTE_SERVER_TREE="${E1DD_REMOTE_TREE:-0}" SHIM_SSH_FAIL="${E1DD_SSH_FAIL:-0}" \
   SHIM_SSH_SILENT="${E1DD_SSH_SILENT:-0}" SHIM_REMOTE_WARDEN="${E1DD_REMOTE_WARDEN:-0}" \
+  SHIM_REMOTE_AGENTS="${E1DD_REMOTE_AGENTS:-0}" SHIM_SSH_NOISE="${E1DD_SSH_NOISE:-}" \
   SHIM_REMOTE_HOME="$SHIMDIR/remote-home-$$-${E1DD_REMOTE_TREE:-0}" \
   SHIM_WARDEN=0 SHIM_LISTEN_PORTS="" SHIM_SESSIONS="" \
   OC_CLAUDE_BIN="$home/bin/ocserver" run_snippet '
@@ -1024,6 +1040,23 @@ if grep -Eqi 'PROD-HOST GUARD \(identity\).*(rm -rf|delete (\$?HOME|~|the tree|i
 else
   ok "the identity refusal offers no way to clear it — only 'run somewhere else'"
 fi
+# The REMOTE guard has its own three messages and the same rule applies, per
+# branch. This case is deliberately the ambiguous one — a known station that is
+# ALSO running its warden — because the danger is branch ORDER: if liveness were
+# checked first, a machine known by hardware UUID to be production would be handed
+# the liveness message's "retire it yourself" remedy.
+E1DD_REMOTE_HW="$PROD_UUID" E1DD_REMOTE_WARDEN=1 \
+  e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight' >/dev/null
+if grep -q 'PROD-HOST GUARD (remote): the second machine .* is a known production' "$GLOG"; then
+  ok "a production SECOND_MACHINE that is also live gets the IDENTITY refusal, not the liveness one"
+else
+  bad "the liveness branch preempted identity on a known production station — that message tells its reader how to clear the obstacle (got: $(tr '\n' '|' < "$GLOG" | tail -c 300))"
+fi
+if grep -Eqi 'is a known production officraft station.*(retire it yourself|launchctl bootout|clear ~/\.officraft)' "$GLOG"; then
+  bad "the remote identity refusal names a way to clear the obstacle on a production station"
+else
+  ok "the remote identity refusal offers no way to clear it either"
+fi
 
 # 19b'') THE SECOND MACHINE gets the same two questions. STAGE 5b deletes its
 # ENTIRE ~/.officraft — more than this suite deletes locally — so guarding only
@@ -1035,6 +1068,30 @@ E1DD_REMOTE_HW="$PROD_UUID" e1dd_gate "a production SECOND_MACHINE" "$H_CLEAN" "
 E1DD_REMOTE_TREE=1 e1dd_gate "a SECOND_MACHINE carrying a server tree" "$H_CLEAN" "PROD-HOST GUARD (remote)"
 
 E1DD_REMOTE_WARDEN=1 e1dd_gate "a SECOND_MACHINE running a warden" "$H_CLEAN" "live fleet node"
+# Agents outlive their warden (booted out for maintenance, crashed, launchd gave
+# up, started by hand). STAGE 5b kill-sessions them explicitly, so warden
+# registration alone is a guard that looks complete and is not.
+E1DD_REMOTE_AGENTS=1 e1dd_gate "a SECOND_MACHINE with live agent sessions but no warden" "$H_CLEAN" "agents are running there right now"
+
+# MARKER DILUTION. A remote rc file that prints a marker-shaped line lands BEFORE
+# the probe's own output, so "take the first/any match" would read the wrong
+# answer. Every marker is counted, and more than one answer to a question means
+# the probe cannot be trusted — including for `hw=`, where a wrong-but-non-empty
+# value would ALSO suppress the go-dark warning.
+E1DD_REMOTE_HW="$PROD_UUID" E1DD_SSH_NOISE="hw=not-a-real-uuid" \
+  e1dd_gate "a probe diluted by a stray hw= line" "$H_CLEAN" "did not come back with exactly one answer"
+E1DD_REMOTE_TREE=1 E1DD_SSH_NOISE="server_tree=0" \
+  e1dd_gate "a probe diluted by a stray server_tree= line" "$H_CLEAN" "did not come back with exactly one answer"
+
+# …but ordinary ssh chatter is NOT marker-shaped and must be tolerated. A guard
+# that refused every host emitting a known-hosts warning would be turned off
+# within a day, which is a slower way of having no guard.
+E1DD_SSH_NOISE="Warning: Permanently added 'tgt' (ED25519) to the list of known hosts." \
+  e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight'
+rc=$?
+grep -q 'prod-host guard OK (remote)' "$GLOG" \
+  && ok "ordinary ssh chatter does not trip the marker parse" \
+  || bad "a known-hosts warning made the remote probe unparseable — every real host emits that (got: $(tr '\n' '|' < "$GLOG" | tail -c 200))"
 
 # Unreachable second machine → fail CLOSED. A host whose identity cannot be
 # established is not thereby safe to wipe; "ssh failed, carry on" would be the

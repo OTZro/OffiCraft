@@ -201,10 +201,14 @@ used to be checked at STAGE 3, 141 lines after STAGE 1 had already deleted the
 server root, so the invocation printed here would wipe the server and be refused
 afterwards.
 
-⚠️ **One run per host, and the second machine is checked too.** The preflight
-(`oc_prod_host_guard` / `oc_prod_host_remote_guard`) refuses BOTH this host and
-`SECOND_MACHINE` if either is a known production station (hardware UUID) or
-carries a `~/.officraft/server` tree. Since STAGE 2 installs a server here, the
+⚠️ **One run per host — both hosts.** The preflight (`oc_prod_host_guard` /
+`oc_prod_host_remote_guard`) refuses BOTH this host and `SECOND_MACHINE` if
+either is a known production station (hardware UUID) or carries a
+`~/.officraft/server` tree; `SECOND_MACHINE` is additionally refused if anything
+officraft is **running** there (a registered warden, or live `member-*`/`worker-*`
+sessions on tmux socket `officraft`) — STAGE 5b boots out that warden and kills
+those sessions, so a live fleet node must not be named as the relocate target.
+That means the second machine has to be *quiet*, not merely server-free. Since STAGE 2 installs a server here, the
 **second run on the same host is refused** — rebuild the throwaway VM, or delete
 `~/.officraft/server` yourself if you are certain it is your own leftover. That
 over-refusal is deliberate: from the outside, "a VM that ran this once" and "a

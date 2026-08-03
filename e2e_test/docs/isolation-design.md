@@ -143,9 +143,15 @@ ran this suite once looks exactly like a production host to it and must be
 rebuilt. That is the accepted price, and the trade is not close — residue failing
 costs one rebuilt VM, identity failing alone costs a production database.
 
-**Both questions are also asked about the SECOND machine**
+**Both questions are also asked about the SECOND machine — plus a third**
 (`oc_prod_host_remote_guard`), in the preflight rather than at STAGE 5b where the
-remote wipe happens. This is not symmetry for its own sake: STAGE 5b deletes the
+remote wipe happens. The third is liveness, which the local host gets from
+`oc_live_fleet_guard` and the remote host would otherwise not get at all: a
+registered warden, or live `member-*`/`worker-*` sessions. Sessions are checked
+separately from the warden because agents outlive it — booted out for
+maintenance, crashed, launchd gave up — and STAGE 5b kill-sessions them
+explicitly. The cost is that the second machine must be *quiet*, not merely
+server-free; the same one-run-per-host rule therefore applies to both hosts. This is not symmetry for its own sake: STAGE 5b deletes the
 remote host's *entire* `~/.officraft`, more than the local teardown deletes here.
 Guarding only the local host leaves the cheaper mistake available — from a
 genuinely clean throwaway VM, naming a production station as `SECOND_MACHINE`

@@ -756,11 +756,14 @@ oc_detect_prod_host_remote() {
   # BEFORE the guard has decided anything, and the whole point of the ordering
   # assertions is that nothing — not even a scratch file the detector creates and
   # cleans up — is written before a possible refusal. On failure the merged text
-  # IS ssh's diagnosis; on success, anything ssh printed to stderr breaks the
-  # exactly-one-marker parse below, which fails closed.
+  # IS ssh's diagnosis. On success, ordinary stderr noise (the very common
+  # "Warning: Permanently added … to the list of known hosts") is simply tolerated:
+  # it matches no marker, so the exactly-once counts below are unaffected. Only
+  # MARKER-SHAPED output — from either stream — can disturb the parse, and that
+  # disturbs it into refusing.
   if ! probe="$(ssh -o BatchMode=yes -o ConnectTimeout=10 \
       -o ServerAliveInterval=5 -o ServerAliveCountMax=3 "$target" \
-    'printf "hw=%s\n" "$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | awk -F\" "/IOPlatformUUID/{print \$4}")"; [ -d "$HOME/.officraft/server" ] && printf "server_tree=1\n" || printf "server_tree=0\n"; launchctl print "gui/$(id -u)/com.officraft.ocwarden" >/dev/null 2>&1 && printf "live_warden=1\n" || printf "live_warden=0\n"' 2>&1)"; then
+    'printf "hw=%s\n" "$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | awk -F\" "/IOPlatformUUID/{print \$4}")"; [ -d "$HOME/.officraft/server" ] && printf "server_tree=1\n" || printf "server_tree=0\n"; if ! command -v launchctl >/dev/null 2>&1; then printf "live_warden=err\n"; elif launchctl print "gui/$(id -u)/com.officraft.ocwarden" >/dev/null 2>&1; then printf "live_warden=1\n"; else printf "live_warden=0\n"; fi; tmux -L officraft ls -F "#S" 2>/dev/null | grep -qE "^(member|worker)-" && printf "live_agents=1\n" || printf "live_agents=0\n"' 2>&1)"; then
     # Unreachable is a REFUSAL, not a warning. A host whose identity cannot be
     # established is not thereby safe to wipe. Carry ssh's own diagnosis: "fix ssh
     # access" is useless next to "Permission denied (publickey)".
@@ -775,15 +778,22 @@ oc_detect_prod_host_remote() {
   # looking identical to a guard that passed. Each marker is matched WHOLE-LINE and
   # must appear exactly once, so a stray `server_tree=0` echoed by a remote rc file
   # cannot dilute the real answer either.
-  local n_tree n_live
+  # EVERY marker, including hw=. Counting two out of three left the third one
+  # dilutable: a stray `hw=` line from a remote rc file arrives BEFORE the probe's
+  # own output, so `head -1` would take the wrong value — non-empty, matching no
+  # blacklist entry, and suppressing the "identity check has gone dark" warning
+  # because the value was not empty. One rule, all three markers.
+  local n_hw n_tree n_live n_agents
+  n_hw="$(printf '%s\n' "$probe" | grep -cE '^hw=' || true)"
   n_tree="$(printf '%s\n' "$probe" | grep -cx 'server_tree=[01]' || true)"
   n_live="$(printf '%s\n' "$probe" | grep -cx 'live_warden=[01]' || true)"
-  if [[ "$n_tree" != "1" || "$n_live" != "1" ]]; then
-    printf '%s\n' "unparseable: the probe of '$target' did not come back with exactly one answer per question (server_tree markers: $n_tree, live_warden markers: $n_live) — cannot establish what that host is or carries"
+  n_agents="$(printf '%s\n' "$probe" | grep -cx 'live_agents=[01]' || true)"
+  if [[ "$n_hw" != "1" || "$n_tree" != "1" || "$n_live" != "1" || "$n_agents" != "1" ]]; then
+    printf '%s\n' "unparseable: the probe of '$target' did not come back with exactly one answer per question (hw: $n_hw, server_tree: $n_tree, live_warden: $n_live, live_agents: $n_agents) — cannot establish what that host is or carries"
     return 0
   fi
 
-  hw="$(printf '%s\n' "$probe" | sed -n 's/^hw=//p' | head -1)"
+  hw="$(printf '%s\n' "$probe" | sed -n 's/^hw=//p')"
   if [[ -n "$hw" ]]; then
     for u in ${OC_PROD_HOST_HW_UUIDS[@]+"${OC_PROD_HOST_HW_UUIDS[@]}"}; do
       [[ "$hw" == "$u" ]] && reasons+=("identity: the second machine '$target' has hardware UUID $hw, a known production station")
@@ -800,6 +810,13 @@ oc_detect_prod_host_remote() {
   # exists to prevent, one host over.
   printf '%s\n' "$probe" | grep -qx 'live_warden=1' \
     && reasons+=("liveness: the second machine '$target' has a REGISTERED officraft warden — it is a live fleet node, not a disposable relocate target")
+  # Agents can outlive their warden: booted out for maintenance, crashed, launchd
+  # gave up after repeated failures, or started by hand. STAGE 5b sweeps and
+  # kill-sessions remote member-*/worker-* sessions explicitly, so a host with live
+  # agents and no registered warden would have those agents killed by a guard that
+  # looked complete.
+  printf '%s\n' "$probe" | grep -qx 'live_agents=1' \
+    && reasons+=("liveness: the second machine '$target' has live member-*/worker-* sessions on tmux socket 'officraft' — agents are running there right now")
   local r
   for r in ${reasons[@]+"${reasons[@]}"}; do printf '%s\n' "$r"; done
 }
@@ -813,13 +830,24 @@ oc_prod_host_remote_guard() {
     return 0
   fi
   printf '%s\n' "$reasons" | sed 's/^/[oc-lifecycle] prod-host(remote)| /' >&2
+  # BRANCH ORDER IS THE MESSAGE'S SAFETY. Same rule as the local guard: identity
+  # wins, because only the identity branch may not name a way forward. Ordered the
+  # other way round, a machine we know by hardware UUID to be a production station
+  # would be handed "retire that install and retry" merely because it also happens
+  # to be running its warden — the instruction that IS the disaster.
   if printf '%s\n' "$reasons" | grep -qE '^(unreachable|unparseable):'; then
     die "PROD-HOST GUARD (remote): could not establish what machine '$target' is (see prod-host(remote)| lines for what ssh reported). This run boots out its warden and deletes its entire ~/.officraft, so it must not start while that host's identity is unknown — a probe that did not run is not the same answer as a host that came back clean. Fix ssh access to it, or point SECOND_MACHINE at the host you actually mean."
   fi
-  if printf '%s\n' "$reasons" | grep -q '^liveness:'; then
-    die "PROD-HOST GUARD (remote): the second machine '$target' is running an officraft warden right now, so it is a live fleet node — STAGE 5b would boot out that warden and delete its entire ~/.officraft, taking its live agents and their credentials with it. Point SECOND_MACHINE at a disposable relocate target. If this host IS the disposable target and the warden is left over from your own previous run, retire that install on that host first — the same one-run-per-host rule that applies here applies there."
+  if printf '%s\n' "$reasons" | grep -q '^identity:'; then
+    die "PROD-HOST GUARD (remote): the second machine '$target' is a known production officraft station (see prod-host(remote)| lines). STAGE 5b boots out its warden and deletes its ENTIRE ~/.officraft — more than this suite deletes locally. Point SECOND_MACHINE at a disposable relocate target instead."
   fi
-  die "PROD-HOST GUARD (remote): the second machine '$target' is, or looks like, a production officraft station (see prod-host(remote)| lines). STAGE 5b boots out its warden and deletes its ENTIRE ~/.officraft — more than this suite deletes locally. Point SECOND_MACHINE at a disposable relocate target instead."
+  if printf '%s\n' "$reasons" | grep -q '^liveness:'; then
+    # Reachable only after identity and residue both came back clean, so this
+    # reader is not standing on a known station and a concrete remedy is safe to
+    # give — with the same hedge the local residue message carries.
+    die "PROD-HOST GUARD (remote): the second machine '$target' is running officraft right now (a registered warden and/or live agent sessions), so it is a live fleet node — STAGE 5b would boot out that warden, kill those sessions and delete its entire ~/.officraft, taking live agents and their credentials with it. Point SECOND_MACHINE at a quiet, disposable relocate target. ONLY IF YOU ARE CERTAIN this is leftover from your own previous run and nothing else is using that host: ssh there and retire it yourself — \`launchctl bootout gui/\$(id -u)/com.officraft.ocwarden\`, end any member-*/worker-* sessions on tmux socket 'officraft', then clear ~/.officraft. If you are not certain, you are pointing at the wrong host."
+  fi
+  die "PROD-HOST GUARD (remote): the second machine '$target' carries an officraft server tree (see prod-host(remote)| lines) — a relocate target never has one, so this host is, or looks like, a station. STAGE 5b boots out its warden and deletes its ENTIRE ~/.officraft. Point SECOND_MACHINE at a disposable relocate target instead."
 }
 
 # oc_prod_host_guard — refuse a host that is, or looks like, a production station.
