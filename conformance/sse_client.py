@@ -145,11 +145,13 @@ class SSEConnection:
         ev = self.wait_for(_match, timeout=timeout)
         return {"event": ev, "frame": json.loads(ev["data"])}
 
-    def drain_backlog(self, quiet_for: float = 1.0, label: str = "") -> int:
-        """BARRIER: discard everything already queued, then PROVE the stream is
-        silent for ``quiet_for`` seconds — i.e. establish, as an ASSERTED state,
-        that no delta produced before this point is still reachable by a later
-        ``wait_for*`` call. Returns how many data events were discarded.
+    def drain_backlog(
+        self, quiet_for: float = 1.0, timeout: float = 5.0, label: str = ""
+    ) -> int:
+        """BARRIER: SWALLOW every delta already on this connection and WAIT
+        UNTIL the stream has been silent for ``quiet_for`` seconds, so that no
+        frame produced before this point is still reachable by a later
+        ``wait_for*`` call. Returns how many data events were swallowed.
 
         Why this exists (do not replace it with "just move the setup writes"):
         ``wait_for``/``wait_for_frame`` drain FROM THE FRONT of the queue and
@@ -159,49 +161,75 @@ class SSEConnection:
         write during setup therefore hands its first ``wait_for_frame(topic)``
         a STALE frame, and that assertion becomes vacuously true — the publish
         seam it means to guard can be deleted outright and the row stays green
-        (observed: test_every_closed_topic_emits' ``member`` row).
+        (observed and reproduced: test_every_closed_topic_emits' ``member``
+        row).
 
-        The barrier is deliberately COUNT-INDEPENDENT rather than a fix for the
-        setup writes that happen to exist today: it discards however many frames
-        are queued (0, 2, or 20), and the trailing silence window catches a
-        still-in-flight one. So a future setup write added above the barrier is
-        either swallowed here (harmless — it can never be mistaken for a frame
-        the loop below triggered) or lands inside the quiet window and turns
-        this into a LOUD red. There is no third outcome in which it silently
-        re-poisons the waits, which is exactly the property "remember to keep
-        setup to two writes" cannot give.
+        ⚠️ THE LESSON THE FIRST VERSION PAID FOR — read this before "tightening"
+        anything here. v1 drained once and then ASSERTED the stream was silent
+        for ``quiet_for``; it turned the untouched baseline RED. The frames from
+        the setup writes had not arrived yet at drain time (the fan rides a
+        0.25 s poll, the drain ran a few ms after the write), so the sweep saw
+        an EMPTY queue and the frames landed inside the assertion window.
+        **A legitimate setup write's frame is SUPPOSED to arrive late; arriving
+        late is not the error — not being swallowed is the error.** v1 confused
+        "ASSERT it is quiet now" with "WAIT UNTIL it is quiet", and so it
+        classified the normal case as a failure. Hence the loop below: every
+        delta seen RESETS the quiet window instead of failing it. Only the outer
+        ``timeout`` — meaning "this stream never went quiet at all", i.e.
+        something is publishing continuously — is a red.
+
+        The barrier is COUNT-INDEPENDENT by construction, which is the whole
+        point: it swallows however many frames appear (0, 2 or 20) and returns
+        only after a full silent window, so a future setup write added above it
+        cannot silently re-poison the waits below. That is a property, not the
+        convention "remember to keep setup to two writes".
+
+        ⚠️ WHAT THIS CANNOT DO (do not design an experiment around it): ANY
+        absorbing barrier is necessarily blind to writes that happen AFTER it
+        returns. A setup write inserted BELOW this call and above the waits it
+        protects will not be caught here, and the row it poisons will go GREEN —
+        the vacuous kind of green. Do not "test" that case and read the green as
+        reassurance; it carries no information. The guard for that direction is
+        binding each observed frame to the IDENTITY of the subject the row just
+        triggered (see the ``member`` row of test_every_closed_topic_emits),
+        because a stale frame's subject is inherently not the one you just made.
         """
         import time as _time
 
-        discarded = 0
+        hard_deadline = _time.monotonic() + timeout
+        swallowed = 0
         while True:
-            try:
-                ev = self.events.get_nowait()
-            except queue.Empty:
-                break
-            if ev.get("data") is not None:
-                discarded += 1
-        deadline = _time.monotonic() + quiet_for
-        while True:
-            remaining = deadline - _time.monotonic()
-            if remaining <= 0:
-                return discarded
-            try:
-                ev = self.events.get(timeout=remaining)
-            except queue.Empty:
-                return discarded
-            if ev.get("data") is None:
-                continue  # heartbeat/comment: not a delta
-            raise AssertionError(
-                f"SSE barrier{' ' + label if label else ''} did not hold: a "
-                f"delta arrived {quiet_for}s AFTER the backlog was drained "
-                f"({discarded} discarded) and BEFORE the barrier returned, so "
-                f"the waits after this point could still consume a frame they "
-                f"did not trigger. Something in this test's setup writes to the "
-                f"server while its SSE connection is already open — move that "
-                f"write above the connection, or drain again after it. Leaked "
-                f"event: {ev}"
-            )
+            now = _time.monotonic()
+            window_end = now + quiet_for
+            clamped = window_end > hard_deadline
+            if clamped:
+                window_end = hard_deadline
+            saw_delta = False
+            while True:
+                remaining = window_end - _time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    ev = self.events.get(timeout=remaining)
+                except queue.Empty:
+                    break
+                if ev.get("data") is None:
+                    continue  # heartbeat / comment: not a delta
+                swallowed += 1
+                saw_delta = True
+                break  # a delta RESETS the quiet window (late is fine)
+            if not saw_delta and not clamped:
+                return swallowed  # a FULL quiet window elapsed: the stream settled
+            if _time.monotonic() >= hard_deadline:
+                raise AssertionError(
+                    f"SSE barrier{' ' + label if label else ''} never settled: "
+                    f"the stream did not stay quiet for {quiet_for}s within a "
+                    f"{timeout}s budget ({swallowed} deltas swallowed). Deltas "
+                    f"are arriving continuously, so a wait after this point "
+                    f"could still consume a frame it did not trigger. Something "
+                    f"is publishing on this connection without the test asking "
+                    f"— find it; do NOT just widen the budget."
+                )
 
     def wait_closed(self, timeout: float = 5.0) -> bool:
         """True once the stream ENDED server-side (the pump thread finished —

@@ -443,13 +443,16 @@ def test_every_closed_topic_emits(client, owner_token, agent_a, fresh_member, ow
     # connection. That fixes today's two writes and nothing else: the next
     # person to add a third setup write re-poisons every row here SILENTLY,
     # because a stale frame produces a PASS, and nothing in the suite would
-    # object. The barrier is a state assertion instead of a convention — it
-    # drains whatever backlog exists (any count) and then PROVES the stream is
-    # silent, so a future setup write is either swallowed harmlessly or lands in
-    # the quiet window and turns this red with a message naming the cause.
-    # Do not remove it because "setup only writes twice"; that premise is
-    # exactly what is not allowed to be load-bearing here.
-    owner_sse.drain_backlog(quiet_for=1.0, label="before the closed-topic loop")
+    # object. The barrier swallows whatever backlog exists (any count) and
+    # returns only once the stream has gone quiet, so the property is
+    # count-independent instead of resting on "setup only writes twice".
+    #
+    # ⚠️ The barrier is the SECONDARY guard. It is blind, by construction, to
+    # any write that happens AFTER it returns (see sse_client.drain_backlog's
+    # note — that is true of every absorbing barrier, so a "setup write inserted
+    # below the barrier" experiment can only ever produce an uninformative
+    # green). The PRIMARY guard is the identity assertion in the loop below.
+    owner_sse.drain_backlog(quiet_for=1.0, timeout=5.0, label="before the closed-topic loop")
 
     for topic, fire in triggers:
         r = fire()
@@ -469,6 +472,30 @@ def test_every_closed_topic_emits(client, owner_token, agent_a, fresh_member, ow
             ) from exc
         assert frame["op"] == expected_op[topic], (topic, frame)
         assert frame["op"] in {"patch", "remove", "signal"}, frame
+        if topic == "member":
+            # IDENTITY BINDING — the row's real guard, and the reason this row
+            # no longer needs a mutant to prove it is not vacuous.
+            #
+            # "a member frame arrived" was satisfiable by ANY member frame,
+            # including one this test's own setup produced seconds earlier; that
+            # is how the row stayed green with putMember's publish seam bypassed
+            # entirely. Pinning the SUBJECT closes it at the source: a stale
+            # frame is inherently about a different member (a scratch hire, some
+            # other test's roster write), so it can never satisfy this. The row
+            # now says what it always meant — "the delta for the write I just
+            # made arrived" — instead of "some member delta exists".
+            #
+            # This is also why it beats the barrier as the primary guard: it
+            # holds no matter WHERE a future stray write is added, above or
+            # below the barrier, because it never asks about queue state at all.
+            payload = frame["data"]["payload"]
+            assert payload["id"] == member and payload["name"] == f"conf-topic-{tag}", (
+                f"the member row observed a delta for a DIFFERENT subject than "
+                f"the PATCH it just issued (member={member!r}, expected name "
+                f"'conf-topic-{tag}') — this is the stale-frame failure mode: "
+                f"the row would pass while the write's publish seam is missing. "
+                f"Got payload: {payload}"
+            )
         if frame["op"] == "signal":
             # §3.2: volatile in-memory store change — payload always null.
             assert frame["data"]["payload"] is None, (topic, frame)
