@@ -247,6 +247,24 @@ func (s *apiServer) HandleUpdateRoleApiRolesRolePost(w http.ResponseWriter, r *h
 	if body.DefinitionMd != nil {
 		definitionMD = *body.DefinitionMd
 	}
+	// T-ae38 hard cap on DUTY. Duty is the one role-journal segment that had no
+	// cap at all until this ticket, and it is checked HERE and at the
+	// document-history restore door (api_document_history.go, case
+	// "role_definition") — BOTH, because either alone is decorative: edit down
+	// to 999 and then restore a 4,000-char earlier revision and the cap is gone.
+	// One read, reused by the response below, so the size the caller is told is
+	// provably the number its write was judged against.
+	//
+	// Same three-line rule as every other capped doc (DocCapBlocked): an
+	// already-over-cap Duty is never truncated, but its next write must come
+	// out SHORTER. That matters on day one — the shipped assistant seed is
+	// 4,594 runes against a 1,000 default (see dutyCapCharsDefault).
+	cap := s.dutyCap()
+	if DocCapBlocked(cap, current.DefinitionMD, definitionMD) {
+		writeError(w, http.StatusBadRequest,
+			docCapRefusal(cap, "role definition doc", current.DefinitionMD, definitionMD))
+		return
+	}
 	// The NAME is not versioned (owner ruling, T-1f39), so a write that only
 	// renames the role retains nothing — otherwise a rename would push a real
 	// revision of the TEXT out of the three retained slots without changing a
@@ -265,6 +283,8 @@ func (s *apiServer) HandleUpdateRoleApiRolesRolePost(w http.ResponseWriter, r *h
 	}
 	s.hub.Publish("role_def", "patch", "role_def", wireOwnerID+"::"+role, nil, audienceOwnerOnly(), requestTrigger(r))
 	writeJSON(w, http.StatusOK, roleDefDTO{
+		SizeChars:     utf8.RuneCountInString(definitionMD),
+		CapChars:      cap,
 		Key:           role,
 		Name:          name,
 		DefinitionMD:  definitionMD,
@@ -564,7 +584,7 @@ func (s *apiServer) HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(w http.Res
 	// T-3351 hard cap. Checked UNCONDITIONALLY — allow_shrink governs the
 	// opposite direction (shrinking too far) and is not a bypass for this one.
 	// One read, reused by the response below.
-	cap := s.docCap()
+	cap := s.learningCap()
 	if DocCapBlocked(cap, current.Text, text) {
 		writeError(w, http.StatusBadRequest, docCapRefusal(cap, "lessons doc", current.Text, text))
 		return
@@ -655,7 +675,7 @@ func (s *apiServer) HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost(w http.
 	// grows it. Unconditional: allow_shrink is not a bypass.
 	// One read, reused by the receipt below: the number the caller is told is
 	// then provably the number its write was judged against.
-	cap := s.docCap()
+	cap := s.learningCap()
 	if DocCapBlocked(cap, current.Text, next) {
 		writeError(w, http.StatusBadRequest, docCapRefusal(cap, "lessons doc", current.Text, next))
 		return

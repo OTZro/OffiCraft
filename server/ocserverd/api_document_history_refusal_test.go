@@ -4,7 +4,7 @@ package main
 // be reachable with no test at all, and three of them (corrupt row, foreign
 // revision id, over-cap restore) fail in a direction that LOOKS like success:
 // an empty list, a restore of the wrong document, or a document written past
-// the character cap (10,000 by default; a setting since T-3aeb) the write faces refuse to cross.
+// the character cap (a setting since T-3aeb; shipped default in domain.go) the write faces refuse to cross.
 
 import (
 	"encoding/json"

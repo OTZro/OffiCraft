@@ -419,6 +419,18 @@ MATRIX: dict[str, Route] = {
         requires="admin_agent",
         overrides={"owner": 409, "admin_agent": 409},
     ),
+    "POST /api/theme/fetch": Route(
+        # T-29c7. The positive faces send a syntactically INVALID url, so both
+        # deterministically answer the format 422 and NOTHING leaves the host —
+        # the black-box harness must stay hermetic, and a link the harness could
+        # actually serve would be a second server to stand up for one row. The
+        # format check, the fetch, the size ceiling and the theme-shape
+        # validation all live in the server unit tests
+        # (api_theme_fetch_t29c7_test.go), which drive a real httptest origin.
+        requires="admin_agent",
+        overrides={"owner": 422, "admin_agent": 422},
+        body={"url": "not-a-url"},
+    ),
     "PATCH /api/settings": Route(
         requires="admin_agent",
         body={},  # empty patch = validated no-op read (mutating nothing)

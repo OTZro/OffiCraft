@@ -10,6 +10,7 @@
 
 import { useState } from "react";
 import { useI18n } from "../i18n";
+import { serverMessageOf } from "../api/errors";
 import { useLessons } from "../hooks/useLessons";
 import { Markdown } from "./Markdown";
 import { DocumentHistoryEntry } from "./DocumentHistoryEntry";
@@ -36,30 +37,37 @@ export function LessonsCard({ roleKey, taskType = "general" }: LessonsCardProps)
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
-  const [saveError, setSaveError] = useState(false);
+  // 🔴 The server's REASON, not a flag (owner ruling 2026-08-03). `null` = no
+  // failure; a string = failed, and that string is what the server said. The
+  // doc-cap refusal carries instructions the person needs (how far over, what
+  // the cap is, that stored text is NOT truncated, delete stale lines first) —
+  // as a boolean, none of it could reach the screen. `""` is a real state: the
+  // call failed with nothing quotable, and the render falls back to the i18n
+  // copy rather than showing an empty error line.
+  const [saveError, setSaveError] = useState<string | null>(null);
   const text = lessons?.text ?? "";
 
   function startEdit() {
     setDraft(text);
-    setSaveError(false);
+    setSaveError(null);
     setEditing(true);
   }
 
   function cancelEdit() {
     setEditing(false);
     setDraft("");
-    setSaveError(false);
+    setSaveError(null);
   }
 
   async function commit() {
     setBusy(true);
-    setSaveError(false);
+    setSaveError(null);
     try {
       await saveLessons(draft);
       setEditing(false);
       setDraft("");
-    } catch {
-      setSaveError(true);
+    } catch (e) {
+      setSaveError(serverMessageOf(e));
     } finally {
       setBusy(false);
     }
@@ -71,6 +79,21 @@ export function LessonsCard({ roleKey, taskType = "general" }: LessonsCardProps)
         <span className="mp-lessons__title">
           <LayersIcon size={15} className="mp-lessons__icon" />
           <span>{t.mp.lessons}</span>
+          {/* T-ae38: the same size/cap readout the Insight card has carried
+            * since T-3809, on the same class so the two headers cannot drift
+            * apart visually. The wire has served both numbers since T-3aeb —
+            * the mapper was throwing them away, so Learning was the one journal
+            * block whose remaining budget an agent could only discover by being
+            * refused, which happens in the last minutes before a handover.
+            *
+            * Rendered as soon as the doc loads, INCLUDING at 0 chars: hiding it
+            * while empty removes the cap exactly when someone is about to write
+            * the first thing into the document. */}
+          {lessons && (
+            <span className="mp-insight__size">
+              {lessons.sizeChars} / {lessons.capChars}
+            </span>
+          )}
         </span>
         {editing ? (
           <div className="mp-lessons__actions">
@@ -132,8 +155,10 @@ export function LessonsCard({ roleKey, taskType = "general" }: LessonsCardProps)
               placeholder={t.settings.editorPlaceholder}
               onChange={(e) => setDraft(e.target.value)}
             />
-            {saveError && (
-              <div className="mp-lessons__error">{t.mp.lessonsSaveError}</div>
+            {saveError !== null && (
+              <div className="mp-lessons__error">
+                {saveError || t.mp.lessonsSaveError}
+              </div>
             )}
           </>
         ) : loading ? (

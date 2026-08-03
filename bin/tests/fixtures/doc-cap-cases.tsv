@@ -40,7 +40,7 @@
 # swapping the unit passes silently — which is the whole reason those rows exist.
 #
 # cap<TAB><n> below is read by both tests, so the threshold is not a third copy.
-# cap	10000
+# cap	15000
 #
 # COLUMNS  case<TAB>before_runes<TAB>after_runes<TAB>blocked<TAB>fill
 #
@@ -56,16 +56,16 @@
 case	before_runes	after_runes	blocked	fill
 empty-both	0	0	false	a
 first-write-small	0	1	false	a
-under-cap	0	9999	false	a
-at-cap-exactly	0	10000	false	a
-first-write-over-cap	0	10001	true	a
-over-cap-growing	9000	10001	true	a
-over-cap-equal	10001	10001	true	a
-over-cap-one-more	10001	10002	true	a
-over-cap-shrinking	12000	10001	false	a
-over-cap-shrinking-to-cap	12000	10000	false	a
-cjk-under-cap-in-runes-over-in-bytes	0	6000	false	情
-cjk-over-cap	0	10001	true	情
-astral-under-cap-in-runes-over-in-utf16	0	6000	false	🙂
-astral-over-cap	0	10001	true	🙂
+under-cap	0	14999	false	a
+at-cap-exactly	0	15000	false	a
+first-write-over-cap	0	15001	true	a
+over-cap-growing	14000	15001	true	a
+over-cap-equal	15001	15001	true	a
+over-cap-one-more	15001	15002	true	a
+over-cap-shrinking	17000	15001	false	a
+over-cap-shrinking-to-cap	17000	15000	false	a
+cjk-under-cap-in-runes-over-in-bytes	0	9000	false	情
+cjk-over-cap	0	15001	true	情
+astral-under-cap-in-runes-over-in-utf16	0	9000	false	🙂
+astral-over-cap	0	15001	true	🙂
 astral-over-cap-shrinking	12000	10001	false	🙂

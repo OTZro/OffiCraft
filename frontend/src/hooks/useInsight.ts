@@ -9,7 +9,7 @@
 //  2. The view it returns KEEPS size_chars / cap_chars. useLessons drops the
 //     wire's bookkeeping fields as noise; here the cap is the number the card
 //     header shows, and it is the only place an owner can read the live
-//     doc.cap_chars setting without being admin.
+//     doc.cap_chars.insight setting without being admin.
 //
 // Reconcile-by-refetch on the "insight" SSE topic, same posture as useLessons on
 // "lessons". 🔴 That subscription is the ONLY thing that makes a restore

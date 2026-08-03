@@ -1033,8 +1033,10 @@ HAPPY: dict[str, Happy] = {
         check=lambda _c, r: _expect(
             r,
             lambda d: d["text"] == "conformance happy insight doc"
-            # The write flips is_default off, and with no seed to fall back to
-            # that flip is the whole record of "someone has been here".
+            # The write flips is_default off. Since T-e1e3 a role MAY have a
+            # factory seed behind it, so this flip is what distinguishes
+            # authored text from shipped text — it is no longer interchangeable
+            # with "the doc is non-empty".
             and d["is_default"] is False
             and d["size_chars"] == len("conformance happy insight doc")
             and d["cap_chars"] >= d["size_chars"],
@@ -1384,6 +1386,16 @@ SKIPPED_HAPPY: dict[str, str] = {
         "(unknown id still resolves to 404 first) are pinned in the server unit "
         "tests (api_machines_teardown_target_t42a0_test.go); the authz faces are "
         "fully asserted in the matrix."
+    ),
+    "POST /api/theme/fetch": (
+        "the positive face needs an EXTERNAL http origin serving a valid theme "
+        "bundle — the black-box harness is deliberately hermetic (same reason "
+        "$OC_RELEASE_API_BASE is pinned unroutable), and standing a second "
+        "server up for one row would trade that away. The format 422 is pinned "
+        "in the auth matrix; the fetch-and-import path end to end, the timeout "
+        "and size ceilings, and the theme-shape validation are pinned in the "
+        "server unit tests (api_theme_fetch_t29c7_test.go) against a real "
+        "httptest origin."
     ),
     "POST /api/update/upgrade": (
         "the positive face needs a reachable GitHub Releases repo holding a "

@@ -37,6 +37,7 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -163,6 +164,82 @@ func (root assetRoot) seedRoleDefinitionMD(roleKey string) (string, bool, error)
 	return text, true, nil
 }
 
+// seedInsightMD returns the file-backed INSIGHT markdown for a SEED roleKey
+// ("" + false when the role has no insight seed).
+//
+// 🔴 PER-ROLE BY CONSTRUCTION — `insight_<roleKey>.md`, deliberately NOT the
+// ONE-SHARED-FILE shape lessons uses (`readSeedFile("lessons.md")`, same bytes
+// for every role). Copying that shape here would ship the ASSISTANT's judgement
+// calls to every role out of the box — how to ghost-write someone else's memory,
+// when to stop and ask the owner, how to move context — and those are WRONG for
+// a tester or an engineer. One role's insight is not another role's insight.
+//
+// 🔴 THE PRESENCE OF THE FILE IS THE ROSTER — and that is a corrected design,
+// not the obvious one. The first version gated on `seedRoleName(roleKey) != ""`
+// (copying seedRoleDefinitionMD) and only then interpolated the name. That gate
+// returns early for every role but `assistant`, so the interpolation was never
+// load-bearing: replacing it with a single shared filename was UNOBSERVABLE —
+// mutation-tested, 0 tests went red. The per-role guarantee rested entirely on
+// a roster with one entry in it, and would have turned false, silently, the day
+// anyone added a second role to seedRoleKeys(). Deriving the answer from the
+// filename alone makes "each role reads its own file, or none" the only thing
+// the code can express, and makes the shared-seed mutation red.
+//
+// TRAVERSAL: roleKey arrives from a URL path segment, so it is validated
+// EXPLICITLY (safeSeedRoleKey) instead of being laundered through a roster.
+// Anything outside [A-Za-z0-9_-]+ resolves to "no seed" — it can never reach
+// the filename.
+//
+// A MISSING file is not an error: fs.ErrNotExist means this role simply has no
+// insight seed, and its doc stays genuinely empty. Any other IO error
+// propagates (fail-closed) — a read that fails for a real reason must never be
+// laundered into "there is no seed".
+func (root assetRoot) seedInsightMD(roleKey string) (string, bool, error) {
+	return root.seedInsightMDFrom(roleKey, seedsdistFS())
+}
+
+// seedInsightMDFrom is seedInsightMD over an injectable embedded FS, so a test
+// can present a world with MORE THAN ONE seeded role — the only world in which
+// "per-role" is an observable property at all.
+func (root assetRoot) seedInsightMDFrom(roleKey string, embedded fs.FS) (string, bool, error) {
+	if !safeSeedRoleKey(roleKey) {
+		return "", false, nil
+	}
+	text, err := root.readSeedFileFrom(insightSeedFilename(roleKey), embedded)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return text, true, nil
+}
+
+// insightSeedFilename names the PER-ROLE insight seed. The role key is in the
+// filename; that is the whole mechanism.
+func insightSeedFilename(roleKey string) string {
+	return "insight_" + roleKey + ".md"
+}
+
+// safeSeedRoleKey reports whether roleKey may be interpolated into a seed
+// filename. Deliberately an ALLOWLIST of characters rather than a denylist of
+// traversal sequences: "..", "/", NUL and every encoding trick anyone thinks of
+// later are all excluded by not being in the set, and a key that fails simply
+// has no seed (never an error — an odd role key is not a server fault).
+func safeSeedRoleKey(roleKey string) bool {
+	if roleKey == "" {
+		return false
+	}
+	for _, r := range roleKey {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // ── boot-context fold (spec/lifecycle.md §2 is normative) ────────────────────
 
 // defaultBootRole is the fallback when neither an explicit role nor a member
@@ -197,6 +274,8 @@ func (s *apiServer) foldRoleDefDTO(roleKey string) (*roleDefDTO, error) {
 		return nil, nil
 	}
 	return &roleDefDTO{
+		SizeChars:     utf8.RuneCountInString(folded.DefinitionMD),
+		CapChars:      s.dutyCap(),
 		Key:           folded.Key,
 		Name:          folded.Name,
 		DefinitionMD:  folded.DefinitionMD,
@@ -221,7 +300,7 @@ func (s *apiServer) foldLessonsDTO(roleKey, taskType string) (*lessonsDTO, error
 	text, isDefault := FoldLessons(overlay, seedText)
 	return &lessonsDTO{
 		SizeChars:     utf8.RuneCountInString(text),
-		CapChars:      s.docCap(),
+		CapChars:      s.learningCap(),
 		RoleKey:       roleKey,
 		TaskType:      taskType,
 		Text:          text,

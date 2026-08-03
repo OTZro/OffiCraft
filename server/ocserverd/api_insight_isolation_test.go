@@ -1,7 +1,11 @@
 package main
 
 // Node 4's DoD, verbatim: "把 Insight 寫到 doc.cap_chars 上限，Duty 與 Learning
-// 的內容與可寫性完全不受影響".
+// 的內容與可寫性完全不受影響"。
+//
+// ⚠️ T-ae38 之後那個鍵叫 `doc.cap_chars.insight`，而且三段各有自己的一份預算，
+// 所以這條隔離斷言比當初更強：以前三份文件共用一個數字，「填滿 Insight」在額度上
+// 本來就碰不到另外兩份；現在它連數字都不共用。
 //
 // This is the test that says the three blocks are actually separate. Before
 // T-3809 there were two documents; the ticket's whole claim is that filling one
@@ -14,7 +18,7 @@ package main
 // holds" produce identical output, so the control has to prove the cap was
 // really pressed against before the other assertions mean anything.
 //
-// The cap comes from s.docCap(), the same read the product uses. A number this
+// The cap comes from s.insightCap(), the same read the product uses. A number this
 // test invents would test the number, not the product.
 
 import (
@@ -72,9 +76,9 @@ func TestFillingInsightToTheCapLeavesDutyAndLearningUntouched(t *testing.T) {
 	learningBefore := learning.Text
 
 	// ── fill insight exactly to the cap the product enforces ──────────────
-	cap := api.docCap()
+	cap := api.insightCap()
 	if cap <= 0 {
-		t.Fatalf("docCap() = %d — a non-positive cap makes this test meaningless", cap)
+		t.Fatalf("insightCap() = %d — a non-positive cap makes this test meaningless", cap)
 	}
 	atCap := strings.Repeat("界", cap) // multi-byte on purpose: the cap counts RUNES
 	if utf8.RuneCountInString(atCap) != cap {

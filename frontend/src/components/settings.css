@@ -367,6 +367,19 @@
   gap: 8px;
   min-width: 0;
 }
+/* T-ae38: the Duty doc's size budget, in the card head beside the 預設 badge.
+ * Deliberately its OWN class in THIS sheet rather than reusing the role-journal
+ * cards' `.mp-insight__size` — that block belongs to member-detail.css, and
+ * borrowing it here would make SettingsPage a consumer of a stylesheet it does
+ * not import (the exact free-riding styleOwnership.test.ts exists to catch).
+ * The declarations match `.mp-insight__size` so the three journal readouts on
+ * this page look like one family. */
+.doc-card__usage {
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+}
 .doc-card__actions {
   display: flex;
   align-items: center;

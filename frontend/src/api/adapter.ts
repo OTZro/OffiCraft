@@ -668,10 +668,18 @@ export interface ServerSettingsView {
    * **-1 ⇒ 無限 (unlimited — no global cap)**; 0 ⇒ outsource assignment is
    * PAUSED — the panel annotates it). */
   outsourceMaxParallel: number;
-  /** T-3aeb: the size cap on the accumulating context documents (lessons,
-   * task-manual learnings + sop_md), in CHARACTERS (runes). Default 10000;
-   * adjustable 10000..100000 — the floor is the default, so it only goes up. */
-  docCapChars: number;
+  /** T-3aeb / T-ae38: the FOUR independent size caps on the accumulating
+   * documents, in CHARACTERS (runes) — a role's Duty (role definition),
+   * Insight, Learning (the lessons doc) and Manual (a task manual's sop_md +
+   * learnings). The shipped defaults live in `DOC_CAP_CHARS_DEFAULTS`
+   * (docCap.ts, mirroring server/ocserverd/domain.go); Duty's is deliberately
+   * much smaller than the other three's. Each floor IS that segment's own
+   * default and the ceiling is 100000, so a cap only ever goes UP. Numbers are
+   * not restated here — they are owner-adjustable settings. */
+  docCapCharsDuty: number;
+  docCapCharsInsight: number;
+  docCapCharsLearning: number;
+  docCapCharsManual: number;
   /** Whether the GitHub-release update check also admits prereleases
    * (false = official releases only, the default). */
   updaterReceiveBeta: boolean;
@@ -739,8 +747,12 @@ export interface ServerSettingsPatch {
   codexCompactionThreshold?: number;
   monitoringRefreshSeconds?: number;
   outsourceMaxParallel?: number;
-  /** T-3aeb document size cap, in characters. Must be 10000..100000. */
-  docCapChars?: number;
+  /** T-ae38 document size caps, in characters. Each must be between THAT
+   * segment's shipped default (`DOC_CAP_CHARS_DEFAULTS`) and 100000. */
+  docCapCharsDuty?: number;
+  docCapCharsInsight?: number;
+  docCapCharsLearning?: number;
+  docCapCharsManual?: number;
   /** Also admit GitHub prereleases in update checks (default false). */
   updaterReceiveBeta?: boolean;
   /** Arm unattended background self-upgrade (default false = manual-only). */
@@ -1658,6 +1670,26 @@ export interface Api {
    * context report). Returns the settings after the change.
    */
   patchServerSettings(patch: ServerSettingsPatch): Promise<ServerSettingsView>;
+  /**
+   * Fetch a theme bundle from a LINK (`POST /api/theme/fetch`) — T-29c7.
+   * Returns the RAW bundle text, which the caller feeds to
+   * `parseImportedBundle`, the same validator a pasted or file-picked bundle
+   * goes through. Doing the parse here would create a second import path that
+   * could accept different things from the paste box.
+   *
+   * The server checks the ADDRESS for format only (absolute http/https) and
+   * checks the ANSWER properly (JSON + the shared theme-bundle validator).
+   * 🔴 It deliberately does NOT constrain where the link points — no host
+   * allowlist, no private-address refusal — per an explicit owner ruling
+   * (2026-08-03) made after the risk was spelled out. Do not "align" this by
+   * adding a client-side origin check: the cockpit would refuse links the
+   * server accepts, and the owner would meet a rule nobody decided.
+   *
+   * Rejects (all throw ApiError, message surfaced inline): 422 for a malformed
+   * url, an over-size body, or content that is not a valid theme; 502 when the
+   * link itself cannot be reached or answers non-200.
+   */
+  fetchThemeFromLink(url: string): Promise<string>;
   /** Read the VAPID public key used by PushManager.subscribe. */
   getPushPublicKey(): Promise<string>;
   /** Save or refresh this browser's Web Push subscription. */

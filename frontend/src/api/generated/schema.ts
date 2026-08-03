@@ -731,7 +731,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Read a per-role insight doc (per role_key; no seed).
+         * Read a per-role insight doc (per role_key; may have a PER-ROLE factory seed).
          * @description Read the per-role INSIGHT doc (T-3809) — the judgement calls and trade-offs this
          *     role keeps reaching for. Third block of the role journal alongside Duty (the
          *     role definition) and Learning (the lessons doc).
@@ -762,7 +762,7 @@ export interface paths {
          *     ``scope="owner"`` token, and an admin agent) may write ANY role's insight.
          *
          *     ``allow_shrink`` (default false) must be set explicitly to replace existing
-         *     content with an empty doc. The ``doc_cap_chars`` cap is checked
+         *     content with an empty doc. The ``doc.cap_chars.insight`` cap is checked
          *     UNCONDITIONALLY — ``allow_shrink`` governs the opposite direction and is not a
          *     bypass for it.
          *
@@ -2970,6 +2970,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/theme/fetch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fetch a theme bundle from a link (owner/admin agent).
+         * @description Pull a theme bundle from a LINK so the cockpit's import box can take a URL instead of only pasted text / a picked file (T-29c7). It exists because a theme carrying a background image runs to hundreds of thousands of characters while a chat message is hard-capped at 4000 — without this there is no channel at all through which an agent can hand the owner a finished theme.
+         *
+         *     The server GETs the url and answers `{content}` — the RAW response text — which the cockpit then feeds through the same parse/validate path a pasted bundle takes. Before answering it proves the body is JSON and passes the shared theme-bundle validator (the same `validateThemeBundles` that guards `PATCH /api/settings`), so a link pointing at something that is not a theme is a 422 naming what is wrong, not a mystery further down the UI.
+         *
+         *     🔴 The link's ORIGIN is deliberately NOT constrained — no host allowlist, no private/loopback address refusal, no per-hop redirect re-validation. That is an explicit owner ruling (2026-08-03), taken AFTER the timing of the risk was spelled out to him (the fetch happens before any content is seen, so "check the format" cannot cover it). It is recorded here so the next reader knows it is a decision, not an oversight; do not "fix" it without a new ruling.
+         *
+         *     What IS bounded, for availability rather than safety, is the CALL: an 8-second timeout and a hard response-size ceiling, so one unresponsive or endless URL cannot pin a request. Transport failure / timeout / non-200 upstream → 502; an oversized, non-JSON or non-theme body → 422. Gated at admin_agent, the same floor as the `PATCH /api/settings` write that stores the imported theme.
+         */
+        post: operations["handle_fetch_theme_api_theme_fetch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/update/upgrade": {
         parameters: {
             query?: never;
@@ -4030,9 +4056,11 @@ export interface components {
          *     insight and learning had been sharing one document.
          *
          *     ``role_key`` scopes the doc to a role; there is NO ``task_type`` axis (that is
-         *     the lessons key, and it is deliberately absent here). Unlike lessons there is
-         *     also NO file seed, so ``text`` is genuinely EMPTY until the role writes — and
-         *     ``is_default`` therefore answers "this role has not moved anything over yet".
+         *     the lessons key, and it is deliberately absent here). Since T-e1e3 a role MAY
+         *     have a factory seed, and unlike lessons that seed is PER-ROLE
+         *     (``seeds/insight_<role_key>.md``) rather than one shared file — the assistant's
+         *     judgement calls would be wrong for any other role. A role with no seed file
+         *     still reads genuinely EMPTY until it writes.
          *
          *     Insight is SEPARATE, not private. READ is unrestricted: any authenticated
          *     identity may read ANY role's insight — the same floor Duty and Learning sit on.
@@ -4040,7 +4068,7 @@ export interface components {
         InsightDTO: {
             /**
              * Cap Chars
-             * @description The document size cap now in force, in CHARACTERS (the doc_cap_chars setting). Served on the READ face so an agent can size an edit BEFORE writing it — the alternative is discovering the limit by being refused, and the settings surface is admin-only.
+             * @description The document size cap now in force, in CHARACTERS (the doc.cap_chars.insight setting). Served on the READ face so an agent can size an edit BEFORE writing it — the alternative is discovering the limit by being refused, and the settings surface is admin-only.
              * @default 0
              */
             cap_chars: number;
@@ -4052,7 +4080,7 @@ export interface components {
             size_chars: number;
             /**
              * Is Default
-             * @description True while this role has never written its insight doc (or reset it). There is no seed to fall back to, so is_default and an empty `text` mean the same thing here — that equivalence is what makes "has this role moved anything over?" answerable at all.
+             * @description True while this role has never written its own insight doc (or reset it). It does NOT imply an empty `text`: a role that ships with a factory seed (`seeds/insight_<role_key>.md`) reads that seed with is_default=true, while a role without one reads "". Read this field — not the emptiness of `text` — to tell factory wording apart from something a person wrote.
              * @default true
              */
             is_default: boolean;
@@ -4108,7 +4136,7 @@ export interface components {
         };
         /**
          * InsightPatchResultDTO
-         * @description Receipt of an insight PATCH. ``size_chars`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc_cap_chars`` cap the write is judged against) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING doc text, so the caller can confirm the write landed without re-reading the full doc. ``applied_edits`` counts the edits that ACTUALLY CHANGED the doc, so a batch of no-ops reports 0 rather than looking like a success.
+         * @description Receipt of an insight PATCH. ``size_chars`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc.cap_chars.insight`` cap the write is judged against) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING doc text, so the caller can confirm the write landed without re-reading the full doc. ``applied_edits`` counts the edits that ACTUALLY CHANGED the doc, so a batch of no-ops reports 0 rather than looking like a success.
          */
         InsightPatchResultDTO: {
             /**
@@ -4118,7 +4146,7 @@ export interface components {
             applied_edits: number;
             /**
              * Cap Chars
-             * @description The document size cap now in force, in CHARACTERS (the doc_cap_chars setting) — the number this write was judged against.
+             * @description The document size cap now in force, in CHARACTERS (the doc.cap_chars.insight setting) — the number this write was judged against.
              * @default 0
              */
             cap_chars: number;
@@ -4179,7 +4207,7 @@ export interface components {
         LessonsDTO: {
             /**
              * Cap Chars
-             * @description The document size cap now in force, in CHARACTERS (the doc_cap_chars setting). Served on the READ face so an agent can size an edit BEFORE writing it — the alternative is discovering the limit by being refused, and the settings surface is admin-only.
+             * @description The document size cap now in force, in CHARACTERS (the doc.cap_chars.learning setting). Served on the READ face so an agent can size an edit BEFORE writing it — the alternative is discovering the limit by being refused, and the settings surface is admin-only.
              * @default 0
              */
             cap_chars: number;
@@ -4251,7 +4279,7 @@ export interface components {
         };
         /**
          * LessonsPatchResultDTO
-         * @description Receipt of a lessons PATCH (§3.4 #28b). ``size`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc_cap_chars`` cap the write is judged against) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING doc text, so the caller can confirm the write landed without re-reading the full doc. ``size`` counted UTF-8 BYTES until 2026-07-31, when the owner ruled the receipt must speak the cap's unit.
+         * @description Receipt of a lessons PATCH (§3.4 #28b). ``size`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc.cap_chars.learning`` cap the write is judged against) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING doc text, so the caller can confirm the write landed without re-reading the full doc. ``size`` counted UTF-8 BYTES until 2026-07-31, when the owner ruled the receipt must speak the cap's unit.
          */
         LessonsPatchResultDTO: {
             /**
@@ -4286,7 +4314,7 @@ export interface components {
             sha256: string;
             /**
              * Cap Chars
-             * @description The document size cap in force when this write was judged, in CHARACTERS (the doc_cap_chars setting). Returned so a caller can see its remaining budget without a second request — the cap is adjustable and agents cannot read the settings surface.
+             * @description The document size cap in force when this write was judged, in CHARACTERS (the doc.cap_chars.learning setting). Returned so a caller can see its remaining budget without a second request — the cap is adjustable and agents cannot read the settings surface.
              * @default 0
              */
             cap_chars: number;
@@ -5971,8 +5999,26 @@ export interface components {
          *     file seed), FALSE for an owner-created CUSTOM role (deletable, no file seed
          *     to reset to). The FE keys the delete affordance off this, but the server-side
          *     delete handler re-enforces it (never UI-only).
+         *
+         *     ``size_chars`` / ``cap_chars`` (T-ae38) are the Duty doc's own budget, the same
+         *     pair Lessons and Insight have carried since T-3aeb. Duty had NEITHER field on
+         *     the wire and NO cap at all until T-ae38, which is why an agent tidying its own
+         *     role definition could not tell how much room was left without asking someone
+         *     else to measure it.
          */
         RoleDefDTO: {
+            /**
+             * Cap Chars
+             * @description The Duty (role definition) size cap now in force, in CHARACTERS (the doc.cap_chars.duty setting). Served on the READ face so an agent can size an edit BEFORE writing it — the alternative is discovering the limit by being refused, and the settings surface is admin-only.
+             * @default 0
+             */
+            cap_chars: number;
+            /**
+             * Size Chars
+             * @description Size of `definition_md` in CHARACTERS (Unicode code points) — the same unit as cap_chars.
+             * @default 0
+             */
+            size_chars: number;
             /**
              * Definition Md
              * @default
@@ -6084,9 +6130,17 @@ export interface components {
          *     `owner_name` — the owner's display nickname ("" = unset). `display_theme` /
          *     `display_language` — the owner's cockpit visual prefs ("" = unset).
          *     `display_wide` — whether the cockpit uses the wide layout (default false =
-         *     the narrow centred column). `doc_cap_chars` — the size cap on the
-         *     accumulating context documents (a role's lessons doc; a task manual's
-         *     learnings and sop_md), in CHARACTERS (Unicode code points), default 10000.
+         *     the narrow centred column). `doc_cap_chars_duty` / `doc_cap_chars_insight` /
+         *     `doc_cap_chars_learning` / `doc_cap_chars_manual` (T-ae38) — the FOUR
+         *     independent size caps on the accumulating documents, in CHARACTERS (Unicode
+         *     code points): a role's Duty (role definition), Insight and Learning (lessons),
+         *     plus a task manual's sop_md and learnings. Each knob's shipped default is the
+         *     `default` on its own field below — Duty's is deliberately much smaller than the
+         *     other three's, and every one of them is owner-adjustable, so no prose here
+         *     restates a number. EVERY key carries a suffix on purpose: `get_settings`
+         *     shows an agent key NAMES and no descriptions, so an unsuffixed `doc.cap_chars`
+         *     sitting beside three suffixed ones reads as a global default and would be
+         *     adjusted by someone believing they had moved all four.
          */
         SettingsDTO: {
             /**
@@ -6120,11 +6174,29 @@ export interface components {
              */
             custom_themes: components["schemas"]["ThemeBundleDTO"][];
             /**
-             * Doc Cap Chars
-             * @description The size cap on the accumulating context documents (a role's lessons doc; a task manual's learnings and sop_md), in CHARACTERS (Unicode code points — Chinese prose counts one per character), 10000 through 100000. An update may not push a doc past it; whatever is already over it is never truncated, but its next update may only come out shorter.
-             * @default 10000
+             * Doc Cap Chars Duty
+             * @description The size cap on a role's DUTY doc (the role definition), in CHARACTERS (Unicode code points — Chinese prose counts one per character). The floor of the adjustable range is this segment's OWN shipped default (the `default` field above), which is smaller than the other three segments'; the ceiling is 100000. Duty had no cap at all before T-ae38.
+             * @default 1000
              */
-            doc_cap_chars: number;
+            doc_cap_chars_duty: number;
+            /**
+             * Doc Cap Chars Insight
+             * @description The size cap on a role's INSIGHT doc, in CHARACTERS (Unicode code points). The floor of the adjustable range is this segment's shipped default (the `default` field above), the ceiling is 100000.
+             * @default 15000
+             */
+            doc_cap_chars_insight: number;
+            /**
+             * Doc Cap Chars Learning
+             * @description The size cap on a role's LEARNING doc (the lessons doc), in CHARACTERS (Unicode code points). The floor of the adjustable range is this segment's shipped default (the `default` field above), the ceiling is 100000.
+             * @default 15000
+             */
+            doc_cap_chars_learning: number;
+            /**
+             * Doc Cap Chars Manual
+             * @description The size cap on a TASK MANUAL's two long documents (sop_md and learnings), in CHARACTERS (Unicode code points). The floor of the adjustable range is this segment's shipped default (the `default` field above), the ceiling is 100000. These are keyed by type_key — assets of a task TYPE, not of a role journal — which is why they answer to their own knob rather than to any of the three role-journal segments. This is the key the single doc.cap_chars setting was RENAMED to in T-ae38; its stored value carried over unchanged.
+             * @default 15000
+             */
+            doc_cap_chars_manual: number;
             /** Handover Pct */
             handover_pct: number;
             /**
@@ -6182,10 +6254,12 @@ export interface components {
          *     `updater_receive_beta` toggles whether the GitHub-release update check also
          *     admits prereleases; `updater_auto_update` toggles unattended background
          *     self-upgrade to the newest admissible release (both booleans, default false;
-         *     the manual upgrade endpoint is unaffected). `doc_cap_chars` MUST be
-         *     10000..100000 — the floor equals the shipped default, so the context-document
-         *     cap can only ever be RAISED (owner ruling 2026-07-31): lowering it would turn
-         *     documents that are legal today into shrink-only ones.
+         *     the manual upgrade endpoint is unaffected). The four document caps (T-ae38)
+         *     are independent knobs. Each one MUST be between THAT segment's shipped default
+         *     (the `default` on the matching `SettingsDTO` field — Duty's is its own, much
+         *     smaller number) and 100000. The floor equalling the shipped default is the
+         *     point: a cap can only ever be RAISED (owner ruling 2026-07-31), because
+         *     lowering one would turn documents that are legal today into shrink-only ones.
          */
         SettingsUpdateDTO: {
             /**
@@ -6194,10 +6268,25 @@ export interface components {
              */
             codex_compaction_threshold?: number | null;
             /**
-             * Doc Cap Chars
-             * @description The size cap on the accumulating context documents (lessons, task-manual learnings and sop_md), in CHARACTERS (Unicode code points). Must be 10000 through 100000.
+             * Doc Cap Chars Duty
+             * @description The size cap on a role's DUTY doc (the role definition), in CHARACTERS (Unicode code points). Must be at least this segment's own shipped default (see `SettingsDTO.doc_cap_chars_duty`, whose `default` is that floor) and at most 100000.
              */
-            doc_cap_chars?: number | null;
+            doc_cap_chars_duty?: number | null;
+            /**
+             * Doc Cap Chars Insight
+             * @description The size cap on a role's INSIGHT doc, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default (see `SettingsDTO.doc_cap_chars_insight`, whose `default` is that floor) and at most 100000.
+             */
+            doc_cap_chars_insight?: number | null;
+            /**
+             * Doc Cap Chars Learning
+             * @description The size cap on a role's LEARNING doc (the lessons doc), in CHARACTERS (Unicode code points). Must be at least this segment's shipped default (see `SettingsDTO.doc_cap_chars_learning`, whose `default` is that floor) and at most 100000.
+             */
+            doc_cap_chars_learning?: number | null;
+            /**
+             * Doc Cap Chars Manual
+             * @description The size cap on a TASK MANUAL's sop_md and learnings, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default (see `SettingsDTO.doc_cap_chars_manual`, whose `default` is that floor) and at most 100000.
+             */
+            doc_cap_chars_manual?: number | null;
             /**
              * Display Language
              * @description The owner's cockpit language (T-0b41-p2) — trimmed; "" clears it back to unset. Must be one of zh, en (or ""); anything else is a 422.
@@ -6577,7 +6666,7 @@ export interface components {
         };
         /**
          * TaskLearningsPatchResultDTO
-         * @description Receipt of a task-learnings PATCH (MCP ``patch_task_learnings``). ``size`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc_cap_chars`` cap the write is judged against; it counted UTF-8 BYTES until 2026-07-31, when the owner ruled the receipt must speak the cap's unit) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING learnings text, so the caller can confirm the write landed without re-reading the full doc. ``applied_edits`` is the number of edits that ACTUALLY changed the doc (a no-op append/replace does not count), so "0 applied" is expressible and a silent no-op cannot masquerade as success.
+         * @description Receipt of a task-learnings PATCH (MCP ``patch_task_learnings``). ``size`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc.cap_chars.manual`` cap the write is judged against; it counted UTF-8 BYTES until 2026-07-31, when the owner ruled the receipt must speak the cap's unit) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING learnings text, so the caller can confirm the write landed without re-reading the full doc. ``applied_edits`` is the number of edits that ACTUALLY changed the doc (a no-op append/replace does not count), so "0 applied" is expressible and a silent no-op cannot masquerade as success.
          */
         TaskLearningsPatchResultDTO: {
             /**
@@ -6592,7 +6681,7 @@ export interface components {
             sha256: string;
             /**
              * Cap Chars
-             * @description The document size cap in force when this write was judged, in CHARACTERS (the doc_cap_chars setting). Returned so a caller can see its remaining budget without a second request — the cap is adjustable and agents cannot read the settings surface.
+             * @description The document size cap in force when this write was judged, in CHARACTERS (the doc.cap_chars.manual setting). Returned so a caller can see its remaining budget without a second request — the cap is adjustable and agents cannot read the settings surface.
              * @default 0
              */
             cap_chars: number;
@@ -6770,7 +6859,7 @@ export interface components {
         TaskManualDTO: {
             /**
              * Cap Chars
-             * @description The document size cap now in force, in CHARACTERS (the doc_cap_chars setting). Served on the READ face so an agent can size an edit BEFORE writing it.
+             * @description The document size cap now in force, in CHARACTERS (the doc.cap_chars.manual setting). Served on the READ face so an agent can size an edit BEFORE writing it.
              * @default 0
              */
             cap_chars: number;
@@ -7210,6 +7299,22 @@ export interface components {
             backgroundModes?: {
                 [key: string]: string;
             };
+        };
+        /**
+         * ThemeFetchDTO
+         * @description One link to pull a theme bundle from (T-29c7). ``url`` must be an absolute ``http``/``https`` URL — that FORMAT check is the only thing asked of the address. The link's ORIGIN is deliberately unconstrained (owner ruling 2026-08-03: "不要限制 link 是哪邊來的", "不用驗證"): there is no host allowlist, no private-address refusal and no per-hop redirect re-check. What IS checked is the ANSWER — see ThemeFetchResultDTO.
+         */
+        ThemeFetchDTO: {
+            /** Url */
+            url: string;
+        };
+        /**
+         * ThemeFetchResultDTO
+         * @description The fetched theme bundle, handed back as the RAW response text in ``content`` (T-29c7). It is verbatim on purpose: the cockpit feeds it into the very same ``parseImportedBundle`` that a pasted / file-picked bundle goes through, so a link-imported theme and a hand-pasted one cannot diverge. The server has already proved the body parses as JSON and passes the shared theme-bundle validator, so ``content`` is never arbitrary bytes.
+         */
+        ThemeFetchResultDTO: {
+            /** Content */
+            content: string;
         };
         /**
          * TokenDTO
@@ -13638,6 +13743,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_fetch_theme_api_theme_fetch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ThemeFetchDTO"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThemeFetchResultDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */

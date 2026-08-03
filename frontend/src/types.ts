@@ -212,6 +212,15 @@ export interface LessonsView {
   taskType: string;
   text: string;
   isDefault: boolean;
+  /** Size of `text` in CHARACTERS (Unicode code points) — cap_chars' unit. */
+  sizeChars: number;
+  /** The `doc.cap_chars.learning` setting now in force, in the same unit.
+   *
+   * T-ae38: these two were on the wire since T-3aeb and the mapper threw them
+   * away, so the Learning card was the only journal block that showed no usage
+   * — an agent found out it was full by being refused, which happens in the
+   * last minutes before a handover, taking the round's learnings with it. */
+  capChars: number;
 }
 
 /**
@@ -220,16 +229,20 @@ export interface LessonsView {
  * lessons doc). No `task_type` axis: that belongs to lessons.
  *
  * ⚠️ UNLIKE `LessonsView` this DOES carry `sizeChars` / `capChars`, and that is
- * load-bearing rather than tidy. `capChars` is the live `doc.cap_chars` setting,
+ * load-bearing rather than tidy. `capChars` is the live `doc.cap_chars.insight`
+ * setting (its OWN one since T-ae38 — it no longer shares a number with Learning),
  * and the settings surface that otherwise shows it is admin-only — the insight
  * card's header is the one place an owner sees the number a write will be judged
  * against without being refused first. Dropping these two fields the way
  * `LessonsView` drops `owner_id` would quietly delete that.
  *
- * There is NO file seed for this doc, so `isDefault` and an empty `text` mean
- * the same thing: this role has not moved anything over yet. That equivalence is
- * the only observable this ticket ships, so the card must render it as an honest
- * empty rather than as a failed load.
+ * `isDefault` means "this role has never written its own insight". 🔴 Since
+ * T-e1e3 that no longer implies an empty `text`: insight folds against a
+ * PER-ROLE file seed (`seeds/insight_<roleKey>.md`, today only `assistant`), so
+ * an untouched role either reads its FACTORY wording (seed) or "" (no seed) —
+ * `isDefault` is true in both. The card must read this field, not the emptiness
+ * of `text`, or it renders shipped wording as if a person had written it; and a
+ * genuinely empty doc must still render as an honest empty, never a failed load.
  */
 export interface InsightView {
   roleKey: string;
@@ -237,7 +250,7 @@ export interface InsightView {
   isDefault: boolean;
   /** Size of `text` in CHARACTERS (Unicode code points) — cap_chars' unit. */
   sizeChars: number;
-  /** The `doc.cap_chars` setting now in force, in the same unit. */
+  /** The `doc.cap_chars.insight` setting now in force, in the same unit. */
   capChars: number;
 }
 
@@ -668,6 +681,16 @@ export interface DocumentHistoryView {
  * never the mockup's illustrative Chinese desc). `isDefault` true → seed ("預設").
  */
 export interface RoleDefView {
+  /** Size of `definitionMd` in CHARACTERS (Unicode code points) — capChars'
+   * unit. */
+  sizeChars: number;
+  /** The `doc.cap_chars.duty` setting now in force, in the same unit (T-ae38).
+   *
+   * Duty had no cap AND neither of these fields until T-ae38: an agent that had
+   * just condensed its own role definition had no way to tell how much room was
+   * left, and had to ask someone else to measure the doc. There is usually no
+   * such someone. `0` = a server too old to report them. */
+  capChars: number;
   key: string;
   name: string;
   definitionMd: string;

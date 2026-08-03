@@ -10,13 +10,18 @@
 //     key is the BARE role_key — not the "<role_key>::<task_type>" composite.
 //     Passing the composite here would address a document that does not exist.
 //  2. The header carries {size_chars} / {cap_chars}. 🔴 This is the ONLY place
-//     in the cockpit an owner can see the live doc.cap_chars value without
+//     in the cockpit an owner can see the live doc.cap_chars.insight value without
 //     being admin — the settings surface that otherwise shows it is admin-only,
 //     and the alternative way to learn the limit is to be refused by it.
-//  3. The empty state is a FIRST-CLASS reading, not a fallback. This doc has no
-//     seed, so "empty" is the honest answer to "has this role moved anything
-//     over yet?" — the one observable this ticket ships. It must never be
-//     confused with a failed load, which is why `error` renders separately.
+//  3. The empty state is a FIRST-CLASS reading, not a fallback — for a role
+//     with NO file seed, "empty" is the honest answer to "has this role moved
+//     anything over yet?". It must never be confused with a failed load, which
+//     is why `error` renders separately.
+//     🔴 Since T-e1e3 that is no longer the ONLY reading: insight folds against
+//     a PER-ROLE seed (`seeds/insight_<roleKey>.md`, today only `assistant`), so
+//     a non-empty doc may be FACTORY wording rather than something the role
+//     wrote. `isDefault` is the only thing that tells them apart, and the badge
+//     below is where this card says so.
 //
 // The card is NOT a privacy boundary and says so on its face: READ is
 // unrestricted by owner ruling (rc-dc171587220c). Insight is SEPARATE, not
@@ -25,6 +30,7 @@
 
 import { useState } from "react";
 import { useI18n } from "../i18n";
+import { serverMessageOf } from "../api/errors";
 import { useInsight } from "../hooks/useInsight";
 import { Markdown } from "./Markdown";
 import { DocumentHistoryEntry } from "./DocumentHistoryEntry";
@@ -49,30 +55,37 @@ export function InsightCard({ roleKey }: InsightCardProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
-  const [saveError, setSaveError] = useState(false);
+  // 🔴 The server's REASON, not a flag (owner ruling 2026-08-03). `null` = no
+  // failure; a string = failed, and that string is what the server said. The
+  // doc-cap refusal carries instructions the person needs (how far over, what
+  // the cap is, that stored text is NOT truncated, delete stale lines first) —
+  // as a boolean, none of it could reach the screen. `""` is a real state: the
+  // call failed with nothing quotable, and the render falls back to the i18n
+  // copy rather than showing an empty error line.
+  const [saveError, setSaveError] = useState<string | null>(null);
   const text = insight?.text ?? "";
 
   function startEdit() {
     setDraft(text);
-    setSaveError(false);
+    setSaveError(null);
     setEditing(true);
   }
 
   function cancelEdit() {
     setEditing(false);
     setDraft("");
-    setSaveError(false);
+    setSaveError(null);
   }
 
   async function commit() {
     setBusy(true);
-    setSaveError(false);
+    setSaveError(null);
     try {
       await saveInsight(draft);
       setEditing(false);
       setDraft("");
-    } catch {
-      setSaveError(true);
+    } catch (e) {
+      setSaveError(serverMessageOf(e));
     } finally {
       setBusy(false);
     }
@@ -84,6 +97,21 @@ export function InsightCard({ roleKey }: InsightCardProps) {
         <span className="mp-lessons__title">
           <LayersIcon size={15} className="mp-lessons__icon" />
           <span>{t.mp.insight}</span>
+          {/* 🔴 THE FACTORY BADGE (T-e1e3). Insight now folds against a PER-ROLE
+            * file seed, so `text` being non-empty no longer proves a person
+            * wrote it: an untouched `assistant` reads the factory wording.
+            * Without this badge the cockpit renders shipped wording exactly like
+            * something the role authored — the ticket's acceptance #4, and the
+            * whole reason is_default had to be surfaced here at all.
+            *
+            * Gated on non-empty text as well as isDefault: a role with NO seed
+            * is also is_default=true, and calling its blank card 「預設」 would
+            * label an absence as a factory document. */}
+          {insight?.isDefault && insight.text.trim() !== "" && (
+            <span className="set-badge" data-testid="insight-default-badge">
+              {t.settings.defaultBadge}
+            </span>
+          )}
           {/* Always rendered once the doc has loaded — including at 0 chars.
             * Hiding it while empty would remove the cap exactly when someone is
             * about to write the first thing into the document. */}
@@ -96,8 +124,10 @@ export function InsightCard({ roleKey }: InsightCardProps) {
         {editing ? (
           <div className="mp-lessons__actions">
             {/* 版本紀錄 (T-1f39). docKey is the BARE role_key — insight has no
-              * task_type axis, so there is no composite to build. This doc has
-              * no file seed either, so its list carries no 初始版本 row.
+              * task_type axis, so there is no composite to build. The list
+              * carries no 初始版本 row because no `onReset` is wired — there is
+              * no reset_insight route at all (T-e1e3 gave the doc a seed, NOT a
+              * way to fall back to it), so the row would be a dead affordance.
               *
               * 🔴 onRestored refetches LOCALLY, which is why the person who
               * clicked always sees the new value. Every OTHER open surface
@@ -160,8 +190,10 @@ export function InsightCard({ roleKey }: InsightCardProps) {
               placeholder={t.settings.editorPlaceholder}
               onChange={(e) => setDraft(e.target.value)}
             />
-            {saveError && (
-              <div className="mp-lessons__error">{t.mp.insightSaveError}</div>
+            {saveError !== null && (
+              <div className="mp-lessons__error">
+                {saveError || t.mp.insightSaveError}
+              </div>
             )}
           </>
         ) : loading ? (

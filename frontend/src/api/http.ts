@@ -1491,7 +1491,10 @@ export const httpApi: Api = {
       codex_compaction_threshold?: number;
       monitoring_refresh_seconds?: number;
       outsource_max_parallel?: number;
-      doc_cap_chars?: number;
+      doc_cap_chars_duty?: number;
+      doc_cap_chars_insight?: number;
+      doc_cap_chars_learning?: number;
+      doc_cap_chars_manual?: number;
       updater_receive_beta?: boolean;
       updater_auto_update?: boolean;
       org_name?: string;
@@ -1512,8 +1515,17 @@ export const httpApi: Api = {
     if (patch.outsourceMaxParallel !== undefined) {
       body.outsource_max_parallel = patch.outsourceMaxParallel;
     }
-    if (patch.docCapChars !== undefined) {
-      body.doc_cap_chars = patch.docCapChars;
+    if (patch.docCapCharsDuty !== undefined) {
+      body.doc_cap_chars_duty = patch.docCapCharsDuty;
+    }
+    if (patch.docCapCharsInsight !== undefined) {
+      body.doc_cap_chars_insight = patch.docCapCharsInsight;
+    }
+    if (patch.docCapCharsLearning !== undefined) {
+      body.doc_cap_chars_learning = patch.docCapCharsLearning;
+    }
+    if (patch.docCapCharsManual !== undefined) {
+      body.doc_cap_chars_manual = patch.docCapCharsManual;
     }
     if (patch.updaterReceiveBeta !== undefined) {
       body.updater_receive_beta = patch.updaterReceiveBeta;
@@ -1534,6 +1546,20 @@ export const httpApi: Api = {
     if (patch.customThemes !== undefined) body.custom_themes = patch.customThemes;
     const wire = unwrap(await client.PATCH("/api/settings", { body }));
     return toServerSettings(wire);
+  },
+
+  async fetchThemeFromLink(url: string): Promise<string> {
+    // POST /api/theme/fetch {url} -> {content} (T-29c7). `content` is the RAW
+    // text the link served; it goes straight to the caller so the shared
+    // parseImportedBundle does the parsing. Parsing here would put a second
+    // theme parser on the import path.
+    //
+    // No pre-flight url check on this side, deliberately: the server's format
+    // rule is the only one, and a stricter client rule would refuse links the
+    // server accepts. 422 (bad url / too large / not a theme) and 502
+    // (unreachable link) both throw via the client middleware.
+    const wire = unwrap(await client.POST("/api/theme/fetch", { body: { url } }));
+    return wire.content;
   },
 
   async getPushPublicKey(): Promise<string> {
@@ -1752,8 +1778,11 @@ export const httpApi: Api = {
 
   async getInsight(roleKey: string): Promise<InsightView> {
     // GET /api/insight/{role_key} -> InsightDTO (T-3809). PER-ROLE doc keyed on
-    // the BARE role_key: no task_type axis (that belongs to lessons) and no file
-    // seed, so an untouched doc comes back with text "" and is_default true.
+    // the BARE role_key: no task_type axis (that belongs to lessons), but there
+    // IS a PER-ROLE file seed (T-e1e3). An untouched doc for a role that ships
+    // one — today only `assistant`, from seeds/insight_assistant.md — comes
+    // back with the FACTORY text and is_default true; only a role with no seed
+    // file reads text "" with is_default true.
     // READ is unrestricted by owner ruling — insight is SEPARATE, not private.
     const wire = unwrap(
       await client.GET("/api/insight/{role_key}", {
@@ -1773,7 +1802,7 @@ export const httpApi: Api = {
         // allow_shrink: identical reasoning to saveLessons — the server's wipe
         // guard targets BLIND agent write-backs, and here a human is looking at
         // the editor they just cleared, so the intent is already explicit. The
-        // doc_cap_chars cap is checked UNCONDITIONALLY and this does not bypass
+        // doc.cap_chars.insight cap is checked UNCONDITIONALLY and this does not bypass
         // it; allow_shrink governs the opposite direction.
         body: { text, allow_shrink: true },
       }),

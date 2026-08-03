@@ -193,6 +193,36 @@
   display: none;
 }
 
+/* ── import from a link (T-29c7) ── */
+.ts-link-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-strong);
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+.ts-link-input {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 13px;
+}
+.ts-link-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+.ts-link-note {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
 /* ── colour groups ── */
 .ts-color-group {
   display: flex;

@@ -53,10 +53,17 @@ type settingsDTO struct {
 	CodexCompactionThreshold int   `json:"codex_compaction_threshold"`
 	MonitoringRefreshSeconds int   `json:"monitoring_refresh_seconds"`
 	OutsourceMaxParallel     int   `json:"outsource_max_parallel"`
-	// DocCapChars is the live size cap on the accumulating context documents,
-	// in CHARACTERS (runes) — the same unit the patch receipts and the refusal
-	// message speak (T-3aeb).
-	DocCapChars int `json:"doc_cap_chars"`
+	// DocCapChars* are the live size caps on the accumulating context
+	// documents, in CHARACTERS (runes) — the same unit the patch receipts and
+	// the refusal message speak (T-3aeb). FOUR independent knobs since T-ae38:
+	// a role's Duty / Insight / Learning, plus the task manual's two long docs
+	// (keyed by type_key, so an asset of a task TYPE rather than of a journal).
+	// Every wire name carries its suffix for the same reason the DB keys do —
+	// an unsuffixed one beside three suffixed ones reads as a global default.
+	DocCapCharsDuty     int `json:"doc_cap_chars_duty"`
+	DocCapCharsInsight  int `json:"doc_cap_chars_insight"`
+	DocCapCharsLearning int `json:"doc_cap_chars_learning"`
+	DocCapCharsManual   int `json:"doc_cap_chars_manual"`
 	// UpdaterReceiveBeta / UpdaterAutoUpdate are the two software-update
 	// toggles (default false): follow GitHub prereleases too / self-upgrade
 	// in the background when a newer release exists.
@@ -113,6 +120,14 @@ type onboardingReportDTO struct {
 	StartedAt  float64             `json:"started_at"`
 	FinishedAt float64             `json:"finished_at"`
 	Steps      []onboardingStepDTO `json:"steps"`
+}
+
+// themeFetchResultDTO carries a link-fetched theme bundle back to the cockpit
+// as the RAW response text (T-29c7). Verbatim on purpose — the cockpit feeds it
+// into the same parseImportedBundle a pasted bundle goes through, so there is
+// exactly one place a theme is parsed, not two that can drift apart.
+type themeFetchResultDTO struct {
+	Content string `json:"content"`
 }
 
 type tokenDTO struct {
@@ -527,6 +542,17 @@ type globalContextDTO struct {
 }
 
 type roleDefDTO struct {
+	// SizeChars / CapChars are the Duty doc's own budget (T-ae38) — the same
+	// pair lessonsDTO and insightDTO have carried since T-3aeb, and for the
+	// same reason: the settings surface holding the cap is admin-only, so
+	// without them the only way to learn the limit is to be refused by it.
+	//
+	// Duty had NEITHER field until T-ae38, and the cost was concrete: an agent
+	// that had just finished condensing its own role definition could not tell
+	// how much room was left and had to ask someone else to measure the doc.
+	// There is usually no such someone.
+	SizeChars     int    `json:"size_chars"`
+	CapChars      int    `json:"cap_chars"`
 	Key           string `json:"key"`
 	Name          string `json:"name"`
 	DefinitionMD  string `json:"definition_md"`
@@ -571,17 +597,22 @@ type lessonsDTO struct {
 // full doc.
 //
 // size counted BYTES until T-3aeb (owner 2026-07-31). It now speaks the same
-// unit as the doc.cap_chars cap the write was just judged against, so a caller
+// unit as the doc.cap_chars.learning cap the write was just judged against, so a caller
 // can compare the two directly — which is the whole point of a receipt on a
 // capped write. Two units for one subject was the defect, not the field.
 // insightDTO is the per-role INSIGHT doc on the wire (T-3809) — the third block
 // of the role journal, beside Duty (role_def) and Learning (lessons).
 //
 // Deliberately NOT lessonsDTO minus a field: there is no task_type (that axis
-// belongs to lessons alone) and no seed to fold against, so IsDefault here means
-// "this role has never written", not "still reading the shared seed". That
-// distinction is the ticket's only observable — with a seed, Text=="" would be
-// unreachable and 「這個角色還沒搬」 would stop being answerable.
+// belongs to lessons alone), and the seed — added by T-e1e3 — is PER-ROLE
+// (`seeds/insight_<roleKey>.md`), never lessons' one-shared-file.
+//
+// IsDefault means "this role has never written its own insight". 🔴 It no
+// longer implies Text=="": a role WITH a seed reads the factory wording with
+// IsDefault=true, and a role WITHOUT one reads "" with IsDefault=true. Anything
+// that treated the two as the same statement (T-3809 did, and said so here) is
+// now wrong — the cockpit must read this field, or it renders factory wording
+// as if a person had written it.
 type insightDTO struct {
 	// SizeChars / CapChars let a caller size its NEXT edit before making it,
 	// for the same reason lessonsDTO carries them: the settings surface that

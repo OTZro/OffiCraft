@@ -106,6 +106,13 @@
   },
   {
     "auth": "gated",
+    "mcp_tool": null,
+    "method": "POST",
+    "path": "/api/theme/fetch",
+    "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
     "mcp_tool": "upgrade_station",
     "method": "POST",
     "path": "/api/update/upgrade",

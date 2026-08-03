@@ -533,6 +533,13 @@ export const en: Dict = {
     themeImportPlaceholder: "Paste theme JSON here…",
     themeChooseFile: "Choose .json file",
     themeConfirmImport: "Import",
+    themeImportLinkLabel: "…or import from a link",
+    themeImportLinkPlaceholder: "https://…/theme.json",
+    themeImportFromLink: "Fetch and import",
+    themeImportLinkWorking: "Fetching…",
+    themeImportLinkFailed: "Could not fetch that link",
+    themeImportLinkShareNote:
+      "A share link carries no identity, never expires and cannot be revoked — anyone who can reach this studio and has the link can read the theme, including any private images inside it.",
     themeImportDup: "A custom theme with that id already exists",
     themeImportReadFailed: "Could not read that file",
     themeLimitReached: "You've reached the custom-theme limit",
@@ -1276,9 +1283,23 @@ export const en: Dict = {
     monitoringRefresh: "Monitoring refresh interval",
     monitoringRefreshSub: "Minimum seconds between monitoring refreshes (1–60)",
     seconds: "seconds",
-    docCap: "Document size cap",
-    docCapSub:
-      "Per-document limit on lessons and task-manual learnings/SOP (10000–100000). The floor is the shipped default, so this can only be raised — lowering it would leave documents that are legal today able to shrink only.",
+    // T-ae38: one cap became four. Deleting from these four documents costs
+    // wildly different amounts — a role definition is a standing description,
+    // a lessons doc is append-only environment Q&A — so they no longer share
+    // one ruler.
+    docCapDuty: "Duty size cap",
+    docCapDutySub:
+      "Per-role limit on the role definition. The floor is this segment's own shipped default (smaller than the other three) and the ceiling is 100000, so this can only be raised — lowering it would leave documents that are legal today able to shrink only.",
+    docCapInsight: "Insight size cap",
+    docCapInsightSub:
+      "Per-role limit on the insight doc. The floor is the shipped default and the ceiling is 100000, so this can only be raised.",
+    docCapLearning: "Learning size cap",
+    docCapLearningSub:
+      "Per-role limit on the lessons doc. The floor is the shipped default and the ceiling is 100000, so this can only be raised.",
+    docCapManual: "Task manual size cap",
+    docCapManualSub:
+      "Per-document limit on a task manual's SOP and learnings. The floor is the shipped default and the ceiling is 100000, so this can only be raised.",
+    docUsage: "Used",
     chars: "characters",
     // ── Verified-save read-back (T-1c2e; lives in the software-update view
     // after the rework: secrets show only set/unset, never the plaintext, and

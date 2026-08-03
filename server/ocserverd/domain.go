@@ -493,28 +493,38 @@ func FoldLessons(overlay *Lessons, seedText string) (text string, isDefault bool
 	return overlay.Text, false
 }
 
-// ── insight: per-role overlay, NO seed (T-3809) ──────────────────────────────
+// ── insight: per-role overlay ⊕ PER-ROLE file seed (T-3809 → T-e1e3) ─────────
 
-// FoldInsight resolves a per-role insight doc. Unlike FoldLessons there is no
-// file seed to fold against: an absent (or tombstoned) row reads as the EMPTY
-// document, and that emptiness is load-bearing.
+// FoldInsight resolves a per-role insight doc: owner/agent overlay ⊕ this
+// role's OWN file seed. Three states, and they are not two:
 //
-// 🔴 WHY NO SEED — this is a decision, not an omission. lessons folds overlay ⊕
-// a shared seed, so every role reads non-empty from day one. Give insight a
-// seed and text=="" becomes unreachable, which makes 「這個角色還沒把 Insight
-// 搬過來」 undecidable — and under the owner's zero-automatic-split ruling
-// (rc-87e850241ef4 ②) that question is the ONLY observable this ticket ships.
-// The cost is stated rather than hidden: a role that never writes sees an empty
-// card, and nothing in the system compels it to write (owner deleted the
-// forcing mechanism deliberately; see the 誠實清單 on the ticket).
+//	never written + this role HAS a seed → (seed text, isDefault=true)
+//	never written + this role has NO seed → ("",        isDefault=true)
+//	written                               → (overlay,   isDefault=false)
 //
-// isDefault reports "never written by this role" — the same contract
-// FoldLessons' isDefault carries, minus the seed.
-func FoldInsight(overlay *Insight) (text string, isDefault bool) {
-	if overlay == nil || overlay.Tombstoned {
-		return "", true
+// 🔴 THE SEED IS PER-ROLE, NOT SHARED (T-e1e3, and this is the whole point).
+// FoldLessons folds against ONE shared file every role reads, so every role
+// inherits the same lessons out of the box. Insight must NEVER work that way:
+// a role's insight is how THAT role weighs a call, and the assistant's calls
+// are wrong for a tester. The caller (assets.go seedInsightMD) resolves
+// `insight_<roleKey>.md`; a role with no such file keeps the genuinely-empty
+// reading. Today exactly one file ships — insight_assistant.md.
+//
+// 🔴 WHAT is_default STILL MEANS, AND WHAT IT NO LONGER IMPLIES. It has always
+// reported "this role has never written its own insight", and that is unchanged.
+// What T-e1e3 breaks is the EQUIVALENCE T-3809 relied on: `is_default == true`
+// used to be the same statement as `text == ""`. It now is so only for roles
+// with no seed. Everything that read emptiness as "has this role moved anything
+// over yet?" must read is_default instead — above all the cockpit, which
+// otherwise renders factory wording as if a person had written it.
+func FoldInsight(overlay *Insight, seedText string, hasSeed bool) (text string, isDefault bool) {
+	if overlay != nil && !overlay.Tombstoned {
+		return overlay.Text, false
 	}
-	return overlay.Text, false
+	if hasSeed {
+		return seedText, true
+	}
+	return "", true
 }
 
 // ── lessons: anchor-addressed patch (MCP patch_lessons, T-8327) ──────────────
@@ -631,28 +641,59 @@ func LessonsShrinkBlocked(before, after string) bool {
 // but its next update may only make it smaller".
 //
 // RUNES, not bytes, deliberately — the same unit as chatBodyMaxChars
-// (utf8.RuneCountInString). The distribution the owner picked 10,000 from was
-// measured with SQLite length(), which counts CHARACTERS; these docs are
-// largely Chinese prose at ~2.2–3 bytes per character, so capping len() at
-// 10,000 would have been a ~4,000-character cap — more than twice as strict as
-// the number the owner actually signed off on.
+// (utf8.RuneCountInString). The distribution the owner picked the original
+// number from was measured with SQLite length(), which counts CHARACTERS; these
+// docs are largely Chinese prose at ~2.2–3 bytes per character, so capping
+// len() at the same number would be a cap more than twice as strict as the one
+// the owner actually signed off on — whatever that number happens to be today.
 //
 // T-3aeb (owner 2026-07-31): the number is no longer a constant the code owns
-// — it is the `doc.cap_chars` setting, adjustable at runtime, and this is only
+// — it is a `doc.cap_chars.*` setting, adjustable at runtime, and this is only
 // its default. The EFFECTIVE cap always arrives as a parameter, so there is no
 // second copy for a caller to read by accident. The floor of the adjustable
-// range equals this default, so the cap can only ever be RAISED: lowering it
+// range equals its default, so a cap can only ever be RAISED: lowering it
 // would turn documents that are legal today into shrink-only ones.
+//
+// T-ae38 (owner 2026-08-03): ONE cap became FOUR. This constant is the default
+// SHARED by Insight, Learning and the task manual; Duty got its own, much
+// smaller one below (dutyCapCharsDefault). The owner's words: 「我預期 duty
+// 1000 / insight 10000 / learning 10000 但是三者都可以調整」 — quoted as the
+// record of the ruling, NOT as a statement of the current numbers. He revised
+// them the same day, and every one of them is a runtime setting on top of that,
+// so no prose anywhere should restate a cap: read the two constants below.
+// The reason the segments cannot share a number is that their deletion costs
+// differ by an order of magnitude: a Duty is a standing definition that should
+// stay readable in one screen, while a Learning doc is append-only environment
+// Q&A.
 //
 // The patch receipts' `size` field speaks THIS unit too, since T-3aeb — it
 // counted bytes until the owner ruled that one subject may not have two units.
-const contextDocMaxCharsDefault = 10000
+const contextDocMaxCharsDefault = 15000
 
-// minDocCapChars / maxDocCapChars bound the adjustable cap. The floor is the
-// default by design (see above), not a coincidence to be "tidied up".
+// dutyCapCharsDefault is the shipped default of the DUTY (role definition) cap
+// — the one segment that does not share contextDocMaxCharsDefault.
+//
+// 🔴 THE STRUCTURAL EXCEPTION STANDS; ITS ONE INSTANCE IS GONE (T-e1e3).
+// `reset_role` writes a TOMBSTONE and folds back to the FILE seed, so no cap
+// check sits on the path that installs shipped content — no cap can catch a
+// seed by construction, and that is still true. The practical meaning of
+// "Duty ≤ 1000" is therefore "hand-written Duty ≤ 1000, with the factory seed
+// structurally exempt".
+// ⚠️ What has CHANGED: this comment used to say the shipped seed was 4,594
+// runes and therefore over the cap out of the box. T-e1e3 replaced it with the
+// finalized factory Duty (931 runes), so today NOTHING actually exercises the
+// exemption. Do not reason from the old number, and do not go looking for an
+// oversized seed to "fix".
+const dutyCapCharsDefault = 1000
+
+// min*CapChars / maxDocCapChars bound the adjustable caps. Each floor is THAT
+// segment's own default by design (see above), not a coincidence to be "tidied
+// up" into one shared number — putting the other segments' floor on Duty would
+// make dutyCapCharsDefault unreachable from the settings surface.
 const (
-	minDocCapChars = contextDocMaxCharsDefault
-	maxDocCapChars = 100000
+	minDocCapChars  = contextDocMaxCharsDefault
+	minDutyCapChars = dutyCapCharsDefault
+	maxDocCapChars  = 100000
 )
 
 // DocCapBlocked reports whether replacing before with after must be refused by

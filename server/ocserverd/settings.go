@@ -60,11 +60,28 @@ const (
 	// concurrently live (assigned + active) outsource workers — the Phase 2
 	// assignment scheduler's admission knob; member tasks never count (H7).
 	settingOutsourceMaxParallel = "task.outsource_max_parallel"
-	// settingDocCapChars (T-3aeb, owner 2026-07-31) is the size cap on the
-	// accumulating context documents — see contextDocMaxCharsDefault in
-	// domain.go for the rule it feeds. Adjustable so the owner can raise it
-	// without a release; the floor equals the default, so it only ever goes UP.
-	settingDocCapChars = "doc.cap_chars"
+	// settingDocCapChars* (T-3aeb, owner 2026-07-31; split four ways in T-ae38,
+	// owner 2026-08-03) are the size caps on the accumulating context documents
+	// — see contextDocMaxCharsDefault in domain.go for the rule they feed.
+	// Adjustable so the owner can raise one without a release; each floor
+	// equals that segment's default, so a cap only ever goes UP.
+	//
+	// 🔴 EVERY key carries a suffix, including the one that inherited the old
+	// key's value. There is no `doc.cap_chars` any more, and that is the point:
+	// an agent reading `get_settings` sees key NAMES with no descriptions
+	// attached, so an unsuffixed key sitting beside three suffixed ones reads
+	// as "the global default". Someone wanting to raise the manual cap would
+	// edit it and believe they had moved all four, and nothing would say
+	// otherwise. The rename costs one migration, which had to be written
+	// regardless — the value has to move to `.manual` either way.
+	//
+	// The task manual's `sop_md` / `learnings` answer to `.manual`, NOT to any
+	// of the three role-journal segments: they are keyed by `type_key`, so they
+	// are assets of a task TYPE, not entries in a role's journal.
+	settingDocCapCharsDuty     = "doc.cap_chars.duty"
+	settingDocCapCharsInsight  = "doc.cap_chars.insight"
+	settingDocCapCharsLearning = "doc.cap_chars.learning"
+	settingDocCapCharsManual   = "doc.cap_chars.manual"
 	// The retired updater.url / updater.invite_code keys belonged to the
 	// removed ocupdaterd updater-server chain (updates now ship as GitHub
 	// Releases on pkyosx/OffiCraft — update_check.go). They are no longer
@@ -155,7 +172,10 @@ type authSettings struct {
 	codexCompactionThreshold int
 	monitoringRefreshSeconds int
 	outsourceMaxParallel     int              // task.outsource_max_parallel (default 3)
-	docCapChars              int              // doc.cap_chars (default contextDocMaxCharsDefault)
+	docCapCharsDuty          int              // doc.cap_chars.duty (default dutyCapCharsDefault)
+	docCapCharsInsight       int              // doc.cap_chars.insight (default contextDocMaxCharsDefault)
+	docCapCharsLearning      int              // doc.cap_chars.learning (default contextDocMaxCharsDefault)
+	docCapCharsManual        int              // doc.cap_chars.manual (default contextDocMaxCharsDefault)
 	updaterReceiveBeta       bool             // updater.receive_beta (default false = official releases only)
 	updaterAutoUpdate        bool             // updater.auto_update (default false = manual upgrades only)
 	orgName                  string           // org.name ("" = never set → localized default in the topbar)
@@ -307,21 +327,41 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 		out.outsourceMaxParallel = n
 	}
 
-	// doc.cap_chars — range-checked at load like the other bounded integers, so
-	// a hand-edited DB row can never install a cap that the PATCH face would
-	// have refused. The floor is the default (owner 2026-07-31: the cap only
-	// ever goes up), so a stored value below it is corruption, not a downgrade.
-	out.docCapChars = contextDocMaxCharsDefault
-	if v, err := d.GetSetting(settingDocCapChars); err != nil {
-		return out, err
-	} else if v != nil {
-		n, err := strconv.Atoi(*v)
-		if err != nil || n < minDocCapChars || n > maxDocCapChars {
-			return out, fmt.Errorf(
-				"settings %s: must be %d..%d: %q",
-				settingDocCapChars, minDocCapChars, maxDocCapChars, *v)
+	// doc.cap_chars.* — range-checked at load like the other bounded integers,
+	// so a hand-edited DB row can never install a cap that the PATCH face would
+	// have refused. Each floor is that segment's own default (owner 2026-07-31:
+	// a cap only ever goes up), so a stored value below it is corruption, not a
+	// downgrade. The legacy single `doc.cap_chars` row was RENAMED to
+	// `doc.cap_chars.manual` by migration 00048 — the DB never holds both.
+	loadCap := func(key string, min int, dst *int, def int) error {
+		*dst = def
+		v, err := d.GetSetting(key)
+		if err != nil || v == nil {
+			return err
 		}
-		out.docCapChars = n
+		n, err := strconv.Atoi(*v)
+		if err != nil || n < min || n > maxDocCapChars {
+			return fmt.Errorf("settings %s: must be %d..%d: %q",
+				key, min, maxDocCapChars, *v)
+		}
+		*dst = n
+		return nil
+	}
+	if err := loadCap(settingDocCapCharsDuty, minDutyCapChars,
+		&out.docCapCharsDuty, dutyCapCharsDefault); err != nil {
+		return out, err
+	}
+	if err := loadCap(settingDocCapCharsInsight, minDocCapChars,
+		&out.docCapCharsInsight, contextDocMaxCharsDefault); err != nil {
+		return out, err
+	}
+	if err := loadCap(settingDocCapCharsLearning, minDocCapChars,
+		&out.docCapCharsLearning, contextDocMaxCharsDefault); err != nil {
+		return out, err
+	}
+	if err := loadCap(settingDocCapCharsManual, minDocCapChars,
+		&out.docCapCharsManual, contextDocMaxCharsDefault); err != nil {
+		return out, err
 	}
 
 	getBool := func(key string, dst *bool) error {

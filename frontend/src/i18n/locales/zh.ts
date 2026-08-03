@@ -607,6 +607,13 @@ export const zh = {
     themeImportPlaceholder: "在此貼上主題 JSON…",
     themeChooseFile: "選擇 .json 檔",
     themeConfirmImport: "匯入",
+    themeImportLinkLabel: "…或貼一條連結匯入",
+    themeImportLinkPlaceholder: "https://…/theme.json",
+    themeImportFromLink: "抓取並匯入",
+    themeImportLinkWorking: "抓取中…",
+    themeImportLinkFailed: "抓不到那條連結",
+    themeImportLinkShareNote:
+      "分享連結沒有身分、永久有效、撤不回來——連得到這台站又拿到連結的人都讀得到這套主題,包含裡面的私人圖片。",
     themeImportDup: "已有相同 id 的自訂主題",
     themeImportReadFailed: "讀取檔案失敗",
     themeLimitReached: "自訂主題數量已達上限",
@@ -1359,9 +1366,21 @@ export const zh = {
     monitoringRefresh: "監控刷新間隔",
     monitoringRefreshSub: "收到連續事件時，最多每隔幾秒刷新一次（1–60）",
     seconds: "秒",
-    docCap: "文件字數上限",
-    docCapSub:
-      "學習經驗、任務手冊的學習經驗與 SOP，每一份各自的字數上限（10000–100000）。下限就是出廠預設，所以只能調高——調低會讓現在合法的文件變成只能越寫越短。",
+    // T-ae38: 一個上限拆成四個。四種文件被刪掉的成本差很多——角色定義是常設
+    // 說明、學習經驗是逐次累積的環境問答——所以不再共用同一把尺。
+    docCapDuty: "角色定義字數上限",
+    docCapDutySub:
+      "一個角色的角色定義的字數上限。下限就是這一段自己的出廠預設（比其餘三段小），上限 100000，所以只能調高——調低會讓現在合法的文件變成只能越寫越短。",
+    docCapInsight: "Insight 字數上限",
+    docCapInsightSub:
+      "一個角色的 Insight 的字數上限。下限就是出廠預設，上限 100000，所以只能調高。",
+    docCapLearning: "學習經驗字數上限",
+    docCapLearningSub:
+      "一個角色的學習經驗的字數上限。下限就是出廠預設，上限 100000，所以只能調高。",
+    docCapManual: "任務手冊字數上限",
+    docCapManualSub:
+      "任務手冊的 SOP 與學習經驗，每一份各自的字數上限。下限就是出廠預設，上限 100000，所以只能調高。",
+    docUsage: "已用字數",
     chars: "字",
     // ── 存檔回讀對帳（T-1c2e，rework 後住在系統更新與備份區：secret 只顯示
     // 已設定/未設定,絕不露明文;自動更新開關存檔後回讀對帳（寫入 → 重新
