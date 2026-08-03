@@ -92,23 +92,32 @@ reap_recorded() {
 # different reader, and the identity is this run's private mktemp path appearing
 # in the process's own command line.
 #
-# The LAST RESORT at the end is unconditional, and that is not the refuse-to-
-# guess policy weakening. That policy governs records inherited from an earlier
-# phase, where the guard holds nothing but a number. Here the guard spawned the
-# process itself, seconds ago, in this same function — and the ps read that
-# everything else depends on is the one dependency this repo has already been
-# burned by, so a backstop that dies with it is not a backstop.
+# The LAST RESORT at the end fires only when ps could not ANSWER — never when it
+# answered and named someone else's process. That distinction is the whole
+# licence: a backstop that dies with ps is not a backstop (this repo has already
+# been burned by a ps field that does not exist everywhere), but killing a pid
+# that ps has positively identified as foreign would be a bare-pid kill, which
+# is what this file exists to argue against. Blind, yes; against the evidence,
+# no. And it is scoped to a process this run spawned seconds ago in this same
+# function, not to a record inherited from an earlier phase.
 backstop_collect() {
   local pid="${1:-}" verdict=nothing-to-do
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null || { printf '%s' "$verdict"; return 0; }
+  local live_cmd
+  live_cmd="$(ps -p "$pid" -o command= 2>/dev/null)"
   verdict=not-identified
-  case "$(ps -p "$pid" -o command= 2>/dev/null)" in
+  case "$live_cmd" in
     *"$WORK"*) kill -KILL "$pid" 2>/dev/null; sleep 0.3
                kill -0 "$pid" 2>/dev/null || verdict=identified ;;
   esac
-  if kill -0 "$pid" 2>/dev/null; then
+  # LAST RESORT — only when ps could not ANSWER, never when it answered and
+  # positively named someone else's process. Blind is the case this exists for
+  # (a host whose ps cannot serve the field, which is the dependency this repo
+  # has already been burned by); discarding a positive identification would make
+  # this a bare-pid kill, the exact thing the file argues against.
+  if [[ -z "$live_cmd" ]] && kill -0 "$pid" 2>/dev/null; then
     kill -KILL "$pid" 2>/dev/null; sleep 0.3
-    kill -0 "$pid" 2>/dev/null && verdict=still-alive
+    if kill -0 "$pid" 2>/dev/null; then verdict=still-alive; else verdict=collected-blind; fi
   fi
   printf '%s' "$verdict"
 }
@@ -175,12 +184,24 @@ LEAKY
 # this and judges it from outside.
 #
 # The record is PREPARED BY THE CALLER and names a process the CALLER owns.
-# That is deliberate: a process this mode backgrounded for itself would die with
-# this shell on some hosts (measured here), and then "the trap collected it"
-# would be true for the wrong reason — the strongest assertion in the file
-# passing vacuously.
-if [[ -n "${OC_PH_TRAP_SELFTEST:-}" ]]; then
-  cp "$OC_PH_TRAP_SELFTEST" "$WORK/gpid.selftest" 2>/dev/null || exit 3
+# A process this mode backgrounded for itself would be no good in either
+# direction, and the reason is worth writing down because the obvious guess is
+# wrong: a background job inherits the write end of a `$(…)` pipe, so a caller
+# reading the child's output BLOCKS until that job exits (measured: a 5s sleep
+# made the substitution take 5.19s, and `disown` changes nothing — it is a
+# file-descriptor property, not a job-table one). Without the substitution the
+# job simply outlives the child instead. So: hang, or leak. Either way the
+# record must name a process the caller owns and can collect.
+#
+# Keyed on ARGV, never on the environment. An inherited variable would let a
+# normal CI run enter this mode by accident — zero assertions, no output, exit
+# 0, and bin/tests/run.sh printing "ok" — a bypass switch on a land gate, which
+# bin/lib/ci-lock.sh's own header says must never exist. argv cannot be
+# inherited. It is also the recursion's base case: §9 runs `bash "$0" --flag`,
+# and a child that did not see the flag would run the whole suite again.
+if [[ "${1:-}" == "--trap-selftest" ]]; then
+  [[ -n "${2:-}" ]] || { echo "FATAL: --trap-selftest needs a record file" >&2; exit 2; }
+  cp "$2" "$WORK/gpid.selftest" 2>/dev/null || exit 3
   exit 0
 fi
 
@@ -422,7 +443,12 @@ check "and the reaping path actually kills it (the deliberate leak is gone, by i
 # process's own command line. That is proof enough to kill a process this
 # section spawned two seconds ago inside this same function; the refuse-to-guess
 # policy governs records inherited from earlier phases, not this one.
-backstop_pid="$(cut -f1 "$WORK/gpid.7" 2>/dev/null | tr -dc '0-9')"
+IFS=$'\t' read -r backstop_pid _ < "$WORK/gpid.7" 2>/dev/null || backstop_pid=""
+check "the backstop read a pid out of the record (positive control: an empty read collects nothing, silently)" \
+      "1" "$([[ "$backstop_pid" =~ ^[0-9]+$ ]] && echo 1 || echo 0)"
+                                    # pure bash: a broken `cut` used to make this
+                                    # empty, and then the deliberate leak below
+                                    # was never collected
 backstop="$(backstop_collect "$backstop_pid")"
 if kill -0 "$backstop_pid" 2>/dev/null; then leftover=yes; else leftover=no; fi
 check "section 7 leaves no busy-loop behind, whatever its own assertions did" "no" "$leftover"
@@ -443,11 +469,41 @@ disown "$bsfix" 2>/dev/null || true
 for _ in $(seq 1 50); do [[ -s "$WORK/rec-backstop" ]] && break; sleep 0.1; done
 check "the backstop fixture busy-loop is running (positive control)" \
       "1" "$(kill -0 "$bsfix" 2>/dev/null && echo 1 || echo 0)"
-bsfix_pid="$(cut -f1 "$WORK/rec-backstop" 2>/dev/null | tr -dc '0-9')"
+IFS=$'\t' read -r bsfix_pid _ < "$WORK/rec-backstop" 2>/dev/null || bsfix_pid=""
 bsverdict="$(backstop_collect "$bsfix_pid")"
 check "the backstop identifies a busy-loop by this run's own WORK path and collects it" \
       "identified" "$bsverdict"
 kill -KILL "$bsfix" 2>/dev/null   # unconditional: our own pid from $!
+
+# The last resort has its own state, and nothing above reaches it: on a healthy
+# host `ps` answers, so the identity branch always gets there first. Reproduce
+# the host this exists for — `ps` present but unable to answer — and require the
+# process to be collected anyway. Without this, deleting the last resort (or
+# emptying the pid reader) leaves every assertion green while the ps-broken host
+# leaks a core, which is exactly the round-3 finding this was written to close.
+: > "$WORK/rec-blind"
+bash -c '
+  . "$1" || exit 1
+  printf "%s\t%s\n" "$$" "$(_ci_lock_ps "$$" lstart=)" > "$0"
+  while :; do :; done
+' "$WORK/rec-blind" "$CI_LOCK_LIB" &
+blindfix=$!
+disown "$blindfix" 2>/dev/null || true
+for _ in $(seq 1 50); do [[ -s "$WORK/rec-blind" ]] && break; sleep 0.1; done
+cp "$WORK/rec-blind" "$WORK/gpid.shadow-d" 2>/dev/null || true
+check "the blind-collect fixture busy-loop is running (positive control)" \
+      "1" "$(kill -0 "$blindfix" 2>/dev/null && echo 1 || echo 0)"
+IFS=$'\t' read -r blind_pid _ < "$WORK/rec-blind" 2>/dev/null || blind_pid=""
+_saved_path="$PATH"
+PATH="$WORK/psfail:$PATH"          # the same always-failing ps shim section 6 uses
+blindverdict="$(backstop_collect "$blind_pid")"
+PATH="$_saved_path"
+check "with a ps that cannot answer, the backstop still collects what this run spawned" \
+      "collected-blind" "$blindverdict"
+if kill -0 "$blindfix" 2>/dev/null; then verdict=alive; else verdict=gone; fi
+check "and that busy-loop is really gone (not merely reported as collected)" "gone" "$verdict"
+kill -KILL "$blindfix" 2>/dev/null
+rm -f "$WORK/gpid.shadow-d"
 
 # ── 8. the EXIT trap's decision itself, driven from a test ───────────────────
 # Section 7 covers reap_recorded. The trap around it — which records it walks,
@@ -509,9 +565,13 @@ bash -c '
 wirepid=$!
 disown "$wirepid" 2>/dev/null || true
 for _ in $(seq 1 50); do [[ -s "$WORK/rec-wire-ours" ]] && break; sleep 0.1; done
+cp "$WORK/rec-wire-ours" "$WORK/gpid.shadow-c" 2>/dev/null || true   # the live trap's
+                                    # glob is not recursive and rec-wire-* is
+                                    # deliberately not gpid.*; without this, a
+                                    # signal landing here leaks this busy-loop
 check "the wiring fixture busy-loop is running and recorded its identity (positive control)" \
       "1" "$([[ -n "$(rec_start "$WORK/rec-wire-ours")" ]] && kill -0 "$wirepid" 2>/dev/null && echo 1 || echo 0)"
-OC_PH_TRAP_SELFTEST="$WORK/rec-wire-ours" bash "$0" >/dev/null 2>&1; strc=$?
+bash "$0" --trap-selftest "$WORK/rec-wire-ours" >/dev/null 2>&1; strc=$?
 sleep 0.5
 if kill -0 "$wirepid" 2>/dev/null; then verdict=alive; else verdict=collected; fi
 check "the EXIT trap is really installed and really runs on the run's own WORK dir (a child's exit collects it)" \
@@ -528,11 +588,34 @@ disown "$wirestandin" 2>/dev/null || true
 printf '%s\t%s\n' "$wirestandin" "$FAKE_START" > "$WORK/rec-wire-unprovable"
 check "the stand-in for the unidentifiable record is running (positive control)" \
       "1" "$(kill -0 "$wirestandin" 2>/dev/null && echo 1 || echo 0)"
-OC_PH_TRAP_SELFTEST="$WORK/rec-wire-unprovable" bash "$0" >/dev/null 2>&1; strc2=$?
+bash "$0" --trap-selftest "$WORK/rec-wire-unprovable" >/dev/null 2>&1; strc2=$?
 check "a child that cannot identify its survivor exits NON-ZERO through the trap" "1" "$strc2"
 if kill -0 "$wirestandin" 2>/dev/null; then verdict=alive; else verdict=killed; fi
 check "and it did not kill the stand-in on a guess" "alive" "$verdict"
 kill -KILL "$wirestandin" 2>/dev/null
+
+# ── 10. the trap is still wired HERE, at the end ────────────────────────────
+# Section 9 can only see the trap as it was when the self-test child exited,
+# hundreds of lines above. Re-arm it to a no-op after that point and every
+# assertion still passes while real orphans outlive the guard. No runtime probe
+# can catch that — a script cannot observe its own exit — but the installed trap
+# is readable as data right up to the last line.
+# The self-test mode is entered from ARGV only. If an ENVIRONMENT variable
+# could do it, a normal CI run that happened to inherit it would take the early
+# exit: zero assertions, no output, exit 0 — and bin/tests/run.sh would print
+# "ok" for a suite that ran nothing. That is a bypass switch on a land gate, the
+# thing bin/lib/ci-lock.sh's header says must never exist. Checked as source
+# text because the failure is the ABSENCE of a run: there is no output to
+# inspect, and a runtime probe would have to re-run the whole suite to see it.
+# The needle is assembled at runtime so this line is not itself a hit — the
+# first version of this check failed against its own grep pattern.
+env_needle="$(printf 'OC_%s' 'PH')"
+check "the self-test mode is keyed on argv, never on an environment variable" \
+      "0" "$(grep -c "$env_needle" "$0" || true)"
+
+trap_now="$(trap -p EXIT 2>/dev/null)"
+check "the EXIT trap still names _cleanup at the end of the run (nothing disarmed it later)" \
+      "1" "$(case "$trap_now" in *_cleanup*) echo 1 ;; *) echo 0 ;; esac)"
 
 echo
 echo "proc hygiene guard: $PASS ok, $FAIL failed"
