@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +24,49 @@ func writeTaskDescription(t *testing.T, api *apiServer, taskID, caller, scope st
 		taskReq(t, "POST", "/api/tasks/"+taskID+"/description", body, caller, scope),
 		taskID)
 	return rec
+}
+
+// assertErrorEnvelope pins WHY a request was refused, not merely that it was.
+//
+// The DoD for this ticket asks for the reason explicitly, and the reason is the
+// part that rots: a 403 is emitted by the authz gate, but a 403 could equally
+// arrive from a future guard added above it, and a status-only assertion would
+// keep passing while the test silently stopped covering the rule it names. The
+// code comes from the unified envelope (server.go writeError) and the message
+// is matched as a substring so wording may change around the claim.
+func assertErrorEnvelope(t *testing.T, rec *httptest.ResponseRecorder, code, contains string) {
+	t.Helper()
+	var body struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("refusal is not the unified error envelope (%d %s): %v",
+			rec.Code, rec.Body.String(), err)
+	}
+	if body.Error.Code != code {
+		t.Fatalf("error code = %q, want %q (body %s)", body.Error.Code, code,
+			rec.Body.String())
+	}
+	if !strings.Contains(body.Error.Message, contains) {
+		t.Fatalf("error message = %q, want it to contain %q",
+			body.Error.Message, contains)
+	}
+}
+
+// readTask re-reads the whole task through get_task — used to ASSERT a fixture
+// really is what a test claims it is.
+func readTask(t *testing.T, api *apiServer, taskID string) taskDTO {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	api.HandleGetTaskApiTasksTaskIdGet(rec,
+		taskReq(t, "GET", "/api/tasks/"+taskID, nil, "owner", "owner"), taskID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get task: %d %s", rec.Code, rec.Body.String())
+	}
+	return decodeBody[taskDTO](t, rec)
 }
 
 // readTaskDescription re-reads the description through get_task — the path the
@@ -82,48 +127,84 @@ func TestTaskDescriptionRoundTripsThroughTheTaskView(t *testing.T) {
 	}
 }
 
-// Ruling 1: the EXECUTOR may edit; the creator earns no standing from having
-// created the task. The counterfactual matters here — m-creator is the verified
-// creator of this very task, so a handler that admitted creators would pass a
-// test written against an unrelated stranger.
+// Ruling 1: the EXECUTOR may edit; the CREATOR earns no standing from having
+// created the task. Owner explicitly excluded the creator, so the negative case
+// has to be a REAL creator — not merely some member who is not the executor.
+//
+// ⚠️ This test previously did NOT do that. It created the task under an OWNER
+// token and then had an unrelated member try to edit, which makes the caller a
+// bystander whose 403 says nothing about creators at all: it would have passed
+// just as happily against a handler that admitted creators. The name promised
+// more than the fixture delivered. The fixture below builds the real thing and
+// then ASSERTS it, so it cannot quietly decay back into a bystander test.
+//
+// How a creator stops being the executor, using only real routes: m-creator
+// creates an ad-hoc task for ITSELF (a plain 正職 may not name another member),
+// then reassigns it away. CreatorID stays m-creator; ExecutorID becomes m-exec.
 func TestTaskDescriptionCreatorIsNotTheEditor(t *testing.T) {
 	api := newTasksTestServer(t)
-	putMemberRow(t, api, "m-creator", KindAssistant, "")
-	putMemberRow(t, api, "m-exec", KindAssistant, "")
+	api.noOutsource = true
+	putActiveMember(t, api, "m-creator", "Creator", KindAssistant)
+	putActiveMember(t, api, "m-exec", "Executor", KindAssistant)
 
-	rec := httptest.NewRecorder()
-	api.HandleCreateTaskApiTasksPost(rec, taskReq(t, "POST", "/api/tasks",
-		map[string]any{"title": "unit task", "executor_member_id": "m-exec"},
-		"owner", "owner"))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("create task: %d %s", rec.Code, rec.Body.String())
+	task := createAdHocTask(t, api, "m-creator")
+	// The OWNER performs the handover: a plain 正職 may not reassign to another
+	// member (that is its own 403, unrelated to this ticket). Who moved the task
+	// is immaterial here — what matters is the resulting row, asserted below.
+	if rec := reassign(t, api, task.ID, memberTarget("m-exec"),
+		"owner", "owner"); rec.Code != http.StatusOK {
+		t.Fatalf("reassign: %d %s", rec.Code, rec.Body.String())
 	}
-	task := decodeBody[taskCreateResultDTO](t, rec).Task
 
-	// Hand the task to m-creator's twin: reassign is not needed — creating it
-	// under an owner token and then having a plain member try to edit is the
-	// same shape. Use a plain member who is neither executor nor admin.
-	if got := writeTaskDescription(t, api, task.ID, "m-creator", "agent",
-		map[string]any{"description": "outsider rewrite"}).Code; got != http.StatusForbidden {
-		t.Fatalf("non-executor status = %d, want 403", got)
+	// The fixture IS the premise — assert it rather than assume it. Without
+	// this the test silently reverts to "some other member" the moment the
+	// create or reassign semantics move.
+	after := readTask(t, api, task.ID)
+	if after.CreatorID != "m-creator" {
+		t.Fatalf("fixture broken: creator = %q, want m-creator", after.CreatorID)
 	}
+	if after.ExecutorID != "m-exec" {
+		t.Fatalf("fixture broken: executor = %q, want m-exec", after.ExecutorID)
+	}
+
+	// THE case owner ruled on: the creator, who is no longer the executor, is
+	// refused — and refused for the RIGHT REASON, not merely "some 4xx".
+	rec := writeTaskDescription(t, api, task.ID, "m-creator", "agent",
+		map[string]any{"description": "creator rewrite"})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("creator status = %d, want 403: %s", rec.Code, rec.Body.String())
+	}
+	assertErrorEnvelope(t, rec, "forbidden", "caller is not the task's executor")
 	if got := readTaskDescription(t, api, task.ID); got != "" {
 		t.Fatalf("refused write still landed: %q", got)
 	}
-	// Positive control: the executor itself passes, so the 403 above is about
-	// WHO asked and not about the route being broken for everyone.
+
+	// A member who is NEITHER creator nor executor is refused the same way —
+	// so the 403 above is not an artefact of some creator-specific branch.
+	putActiveMember(t, api, "m-stranger", "Stranger", KindAssistant)
+	rec = writeTaskDescription(t, api, task.ID, "m-stranger", "agent",
+		map[string]any{"description": "stranger rewrite"})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("stranger status = %d, want 403", rec.Code)
+	}
+	assertErrorEnvelope(t, rec, "forbidden", "caller is not the task's executor")
+
+	// Positive controls: the route is not simply broken for everyone.
 	if got := writeTaskDescription(t, api, task.ID, "m-exec", "agent",
 		map[string]any{"description": "executor rewrite"}).Code; got != http.StatusOK {
 		t.Fatalf("executor status = %d, want 200", got)
 	}
-	// And admin capability drives any task (§14).
 	putMemberRow(t, api, "m-mira", KindAssistant, adminRoleKey)
 	if got := writeTaskDescription(t, api, task.ID, "m-mira", "agent",
 		map[string]any{"description": "admin rewrite"}).Code; got != http.StatusOK {
 		t.Fatalf("admin status = %d, want 200", got)
 	}
-	if got := readTaskDescription(t, api, task.ID); got != "admin rewrite" {
-		t.Fatalf("description read back = %q, want admin rewrite", got)
+	if got := writeTaskDescription(t, api, task.ID, "owner", "owner",
+		map[string]any{"description": "owner rewrite"}).Code; got != http.StatusOK {
+		t.Fatalf("owner status = %d, want 200", got)
+	}
+	if got := readTaskDescription(t, api, task.ID); got != "owner rewrite" {
+		t.Fatalf("description read back = %q, want owner rewrite", got)
 	}
 }
 
