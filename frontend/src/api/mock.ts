@@ -879,9 +879,15 @@ const MANUAL_KINDS: readonly DocumentKind[] = [
 ];
 
 function hasDocumentRow(kind: DocumentKind, key: string): boolean {
-  return MANUAL_KINDS.includes(kind)
-    ? taskManuals.some((m) => m.typeKey === key)
-    : documentRows.has(historySlot(kind, key));
+  if (MANUAL_KINDS.includes(kind)) {
+    return taskManuals.some((m) => m.typeKey === key);
+  }
+  // T-e271: a task description's "row" is the TASK row — it exists from the
+  // moment the task is created, so the very first correction already replaces
+  // something. Whether that something is worth keeping is snapshotDocument's
+  // call (an empty description retains nothing), exactly as on the server.
+  if (kind === "task_description") return tasks.some((t) => t.id === key);
+  return documentRows.has(historySlot(kind, key));
 }
 
 /** Drop one document's retained revisions along with the document itself — the
@@ -972,6 +978,16 @@ function snapshotDocument(
       const manual = taskManuals.find((m) => m.typeKey === key);
       if (!manual || manual.learnings === "") return null;
       return { learnings: manual.learnings };
+    }
+    // T-e271. Same "empty is nothing worth retaining" rule as the two split
+    // manual series above, and for the same reason — most tasks are created
+    // with no description at all, so the first correction would otherwise spend
+    // one of the three kept slots recording emptiness. Server twin:
+    // taskDescriptionHistorySnapshot answers "{}" for "".
+    case "task_description": {
+      const task = tasks.find((t) => t.id === key);
+      if (!task || task.description === "") return null;
+      return { description: task.description };
     }
   }
 }
@@ -1082,6 +1098,17 @@ function applyDocumentHistory(
       else manual.learnings = content.learnings ?? "";
       manual.updatedTs = Date.now() / 1000;
       emitTopic("task_manual");
+      return;
+    }
+    // T-e271: the restore writes back the ONE field this series versions and
+    // touches nothing else on the task — restoring a description must not drag
+    // back the status or priority the task had when it was written.
+    case "task_description": {
+      const task = tasks.find((t) => t.id === key);
+      if (!task) return;
+      task.description = content.description ?? "";
+      task.updatedTs = Date.now() / 1000;
+      emitTopic("task");
       return;
     }
   }
@@ -2150,6 +2177,35 @@ export const mockApi: Api = {
     emitTopic("task");
     emitTopic("outsource_worker");
     return structuredClone(t);
+  },
+
+  async updateTaskDescription(
+    id: string,
+    description: string
+  ): Promise<TaskView> {
+    // Mirrors HandleUpdateTaskDescription... (T-e271) rule for rule, because a
+    // mock that is more permissive than the server lets a component pass here
+    // and fail in production — and one that is stricter invents a refusal the
+    // owner will never actually meet:
+    //
+    //   * unknown task -> 404 (findTask);
+    //   * NO terminal check, deliberately. A closed task is editable and this
+    //     is the one place the asymmetry with the artifact set is easy to
+    //     "tidy up" by accident. Adding a 409 here would make the cockpit's
+    //     tests agree with each other and disagree with the server.
+    //   * an unchanged text is a no-op: nothing versioned, no `task` delta.
+    //     The server compares before writing for the same reason.
+    //
+    // The absent-vs-empty distinction lives one layer up (the wire's optional
+    // `description`); this seam's argument is always a concrete string, so ""
+    // means clear, exactly as the http twin sends it.
+    const t = findTask(id);
+    if (t.description === description) return t;
+    recordDocumentHistory("task_description", id);
+    t.description = description;
+    t.updatedTs = Date.now() / 1000;
+    emitTopic("task");
+    return t;
   },
 
   async setTaskPriority(id: string, priority: string): Promise<TaskView> {

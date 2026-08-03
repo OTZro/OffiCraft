@@ -873,6 +873,19 @@ MATRIX: dict[str, Route] = {
         path=lambda ctx, _i: f"/api/tasks/{_matrix_task(ctx)}/plan",
         body={"steps": [{"name": "conf", "dod": "asserted"}]},
     ),
+    "POST /api/tasks/{task_id}/description": Route(
+        # T-e271. Same executor-or-admin gate as every other task-driving write
+        # (agent B on agent A's task → 403), so the authz face is the status
+        # route's. What is NOT the same is the subject: a CLOSED task, on
+        # purpose. Owner ruling 2 says a terminal task's description stays
+        # editable, and a 200 here is the only place the matrix can say so on
+        # the wire — pointed at an open task the row would pass whether or not
+        # the terminal gate existed, and would assert nothing about the ruling.
+        requires="agent",
+        overrides={"agent_other": 403},
+        path=lambda ctx, _i: f"/api/tasks/{_matrix_closed_task(ctx)}/description",
+        body={"description": "conf matrix corrected description"},
+    ),
     "POST /api/tasks/{task_id}/duplicate": Route(
         # T-02c9: executor-guarded like every agent report row (agent B on
         # agent A's task → 403); admin capability (owner/admin_agent) passes.

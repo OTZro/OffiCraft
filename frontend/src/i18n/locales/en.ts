@@ -164,6 +164,24 @@ export const en: Dict = {
     messageError: "Failed to send the message. Please try again.",
     statusMenuLabel: "Status actions",
     priorityLabel: "Priority",
+    // In-place description editing (T-e271). descEditHint states the division
+    // of labour with the step note — the description says what the task IS,
+    // the note says where a step is right now.
+    descLabel: "Description",
+    descEdit: "Edit description",
+    descEditHint:
+      "The description says what this task IS (scope, origin, acceptance). Put progress in the step note.",
+    descPlaceholder:
+      "What this task is for, why it exists, and what counts as done\u2026",
+    descSave: "Save",
+    descCancel: "Cancel",
+    descEmpty: "No description yet",
+    descError: "Failed to save the description. Please try again.",
+    descHistoryTitle: "Task description",
+    // Shown only on a closed card's editor, so the absence of a terminal guard
+    // reads as the decision it is.
+    descClosedNote:
+      "A closed task's description can still be corrected (its artifacts are frozen).",
     // Click-to-copy task-no chip (owner 2026-07-19).
     copyTaskNoLabel: "Copy task number",
     taskNoCopied: "Copied",

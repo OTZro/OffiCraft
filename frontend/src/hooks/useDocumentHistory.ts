@@ -38,6 +38,10 @@ const TOPIC_OF: Record<DocumentKind, string> = {
   task_manual: "task_manual",
   task_manual_sop: "task_manual",
   task_manual_learnings: "task_manual",
+  // T-e271: a description belongs to a TASK, so its writes and its restores
+  // both fan the `task` topic (publishDocumentHistoryRestore's own branch calls
+  // publishTask) — the same topic useTasks reconciles on.
+  task_description: "task",
 };
 
 interface UseDocumentHistory {

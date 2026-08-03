@@ -133,10 +133,17 @@ describe("spec ③ 詳細敘述排在訊息輸入框之後", () => {
     const card = await findByTestId("task-card");
     const kids = [...card.children];
     const desc = container.querySelector(".task-card__desc")!;
+    const descBlock = container.querySelector(".task-card__desc-block")!;
     const composer = container.querySelector(".task-card__composer")!;
-    // Both are direct children of the card article — the desc did not get
-    // buried inside the composer (or anywhere else) by the move.
-    const descIdx = kids.indexOf(desc);
+    // T-e271 made the description block a WRAPPER (it now also carries the
+    // 編輯敘述 affordance and, while editing, the editor), so the card's own
+    // top-level child is that wrapper rather than the rendered markdown. The
+    // property under test is unchanged and still measured, in two halves:
+    // the block is a DIRECT child of the card article (below), and the
+    // rendered description lives inside THAT block — so it still cannot have
+    // been buried inside the composer or anywhere else.
+    expect(desc.closest(".task-card__desc-block")).toBe(descBlock);
+    const descIdx = kids.indexOf(descBlock);
     const composerIdx = kids.indexOf(composer);
     expect(descIdx).toBeGreaterThan(-1);
     expect(composerIdx).toBeGreaterThan(-1);

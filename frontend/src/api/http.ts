@@ -990,6 +990,28 @@ export const httpApi: Api = {
     return toTask(wire);
   },
 
+  async updateTaskDescription(
+    id: string,
+    description: string,
+  ): Promise<TaskView> {
+    // POST /api/tasks/{task_id}/description {description} -> TaskDTO (T-e271).
+    // The field is ALWAYS sent, even when empty: the wire treats an absent
+    // `description` as "change nothing" and an explicit "" as "clear it", so
+    // omitting it on a clear would silently turn the write into a no-op that
+    // still answers 200 with the old text.
+    //
+    // No 409 branch to document here — a closed task is accepted on purpose
+    // (see the adapter's note); the faces that do throw are 404 (unknown task)
+    // and 403 (a caller who is neither the executor nor admin-capable).
+    const wire = unwrap(
+      await client.POST("/api/tasks/{task_id}/description", {
+        params: { path: { task_id: id } },
+        body: { description },
+      }),
+    );
+    return toTask(wire);
+  },
+
   async reassignTask(id: string, input: TaskReassignInput): Promise<TaskView> {
     // POST /api/tasks/{task_id}/reassign {target, note?} -> TaskDTO. The whole
     // handover is the server's (card expiry / step rewind / old-worker dismiss
