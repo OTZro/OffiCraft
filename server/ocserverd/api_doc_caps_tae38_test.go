@@ -187,11 +187,33 @@ func TestDutyCapRefusesAnOverCapRestore(t *testing.T) {
 		return rec
 	}
 
-	// THE ASSERTION THIS FILE EXISTS FOR.
-	if rec := restore(); rec.Code != http.StatusBadRequest {
-		t.Fatalf("restoring an over-cap Duty revision must be refused, got %d: %s "+
+	// THE ASSERTION THIS FILE EXISTS FOR — and it has to name WHY the write was
+	// refused, not just that it was.
+	//
+	// 🔴 A bare `!= 400` here is only discriminating by ACCIDENT of the current
+	// code shape: restoreDocumentHistory's role_definition branch has exactly ONE
+	// error that the handler turns into a 400 (errDocumentHistoryCap); everything
+	// else falls through to internalError, a 500. So today "it was 400" happens to
+	// imply "the cap stopped it" — a guarantee that lives in the PRODUCTION code,
+	// not in this test. The day someone adds a second 400-answering branch to that
+	// case (a bad revision payload, a tombstone rule, an authz refusal moved
+	// inward), this test keeps passing while asserting nothing about the cap, and
+	// nothing anywhere would say so. The edit-door test above already judges its
+	// refusal by content (it quotes the Duty cap and rules out the other two
+	// segments' numbers); the restore door is judged the same way here.
+	//
+	// The named error is the thing to match: errDocumentHistoryCap is what the
+	// cap check returns and what the handler renders into the body, so this binds
+	// to the cap branch specifically rather than to a message someone might
+	// reword. Status and reason are checked TOGETHER on purpose — split in two,
+	// deleting the cap check makes the restore land with a 200 and only the
+	// status half would report it.
+	if rec := restore(); rec.Code != http.StatusBadRequest ||
+		!strings.Contains(rec.Body.String(), errDocumentHistoryCap.Error()) {
+		t.Fatalf("restoring an over-cap Duty revision must be refused BY THE CAP: "+
+			"want %d saying %q, got %d: %s "+
 			"(edit-door-only means: edit to 999, restore 4000, cap gone)",
-			rec.Code, rec.Body.String())
+			http.StatusBadRequest, errDocumentHistoryCap.Error(), rec.Code, rec.Body.String())
 	}
 	live, err := api.foldRoleDefDTO(role)
 	if err != nil || live == nil {
