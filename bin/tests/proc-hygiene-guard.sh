@@ -163,13 +163,17 @@ libsh="$2"
 loopcmd="${4:-burn}"  # burn = busy-loop (sections 2/4: the orphan shape this
                       # file is about); sleep = a quiet stand-in (section 7,
                       # which asserts detection, not CPU cost)
+# The record is three fields: pid, start time, and the WRAPPER's pid ($PPID of
+# the recording process). The third exists because the wrapper outlives
+# run_bounded whenever the group kill is neutered, and no reader downstream can
+# work out which process it was after the fact.
 blockfor="${3:-30}"   # a parameter, NOT a sed-rewrite by the caller: a caller
                       # that rewrites this text gets a silent no-op the day the
                       # line drifts, and then leaks the child it thought it had
                       # shortened.
 bash -c '
   . "$1" || exit 1
-  printf "%s\t%s\n" "$$" "$(_ci_lock_ps "$$" lstart=)" > "$0"
+  printf "%s\t%s\t%s\n" "$$" "$(_ci_lock_ps "$$" lstart=)" "$PPID" > "$0"
   if [ "$2" = "burn" ]; then while true; do continue; done; else sleep 600; fi
 ' "$pidfile" "$libsh" "$loopcmd" &
 sleep "$blockfor"
@@ -430,7 +434,12 @@ NOKILL
 # this ticket is about. What this section asserts is DETECTION, and a sleeping
 # process is detected the same way.
 : > "$WORK/gpid.7"
-PYTHONPATH="$WORK/nokill" python3 "$RB" 1 bash "$WORK/leaky.sh" "$WORK/gpid.7" "$CI_LOCK_LIB" 2 sleep >/dev/null 2>&1
+# blockfor is 30, not a couple of seconds: with killpg neutered the fixture's own
+# WRAPPER outlives run_bounded, and a short block would let it exit on its own
+# before the checks below run. That would make the wrapper assertions pass on a
+# timing coincidence rather than on the collection they are there to pin —
+# exactly the "green because nobody was looking" shape this ticket is about.
+PYTHONPATH="$WORK/nokill" python3 "$RB" 1 bash "$WORK/leaky.sh" "$WORK/gpid.7" "$CI_LOCK_LIB" 30 sleep >/dev/null 2>&1
 gpid="$(rec_pid "$WORK/gpid.7")"; gstart="$(rec_start "$WORK/gpid.7")"
 check "the leaked busy-loop recorded its identity (positive control)" \
       "1" "$([[ -n "$gpid" && -n "$gstart" ]] && echo 1 || echo 0)"
@@ -453,8 +462,17 @@ check "the leaked busy-loop recorded its identity (positive control)" \
 # supposed to notice was busy failing for the mutation itself. A cleanup that
 # depends on the machinery under test stops working exactly when it is needed —
 # the same lesson as the backstop, one level down.
-IFS=$'\t' read -r _fx_pid _ < "$WORK/gpid.7" 2>/dev/null || _fx_pid=""
+IFS=$'\t' read -r _fx_pid _ _wrap_pid < "$WORK/gpid.7" 2>/dev/null || { _fx_pid=""; _wrap_pid=""; }
 fixture_kids="$(pgrep -P "$_fx_pid" 2>/dev/null | tr '\n' ' ')"
+# The wrapper (leaky.sh itself) is a THIRD process, and nothing below reaches it:
+# the identity path and the backstop both act on the RECORDED pid, and the only
+# thing that ever collected the wrapper was run_bounded's group kill — which this
+# section deliberately neuters. Its own `sleep` is a further fork, so enumerate
+# the wrapper's children here too, while it is alive and parentage is readable.
+# Measured before this existed: changing nothing but the wrapper's block length
+# produced "48 ok, 0 failed" alongside an orphan at PPID 1 — a guard whose whole
+# subject is leaked processes, leaking one where no assertion could see it.
+wrapper_kids="$(pgrep -P "$_wrap_pid" 2>/dev/null | tr '\n' ' ')"
 nokill_live="$(PYTHONPATH="$WORK/nokill" python3 -c '
 import os
 print(1 if os.killpg(0, 0) is None else 0)
@@ -514,6 +532,29 @@ for _k in $fixture_kids; do kill -0 "$_k" 2>/dev/null && kids_left=$((kids_left+
 check "the fixture's own child processes were spawned (positive control for the check below)" \
       "1" "$([[ -n "${fixture_kids// /}" ]] && echo 1 || echo 0)"
 check "and section 7 collects them too — a recorded pid is not the whole subtree" "0" "$kids_left"
+
+# Same lesson one level UP: the wrapper is not the recorded pid either. Collected
+# by EXPLICIT pid — the wrapper's own, read straight out of the record, and the
+# children captured by parentage above — never by a command-line pattern.
+#
+# What the assertion below does and does not pin, measured rather than assumed:
+# deleting EITHER line alone leaves it green, because the wrapper is blocked on
+# the very sleep the second line collects — take that away and the wrapper falls
+# off the end of its script on its own. The two lines are redundant by
+# construction, so no single-line mutant can kill this assertion. Deleting the
+# PAIR does redden it (49 ok, 1 failed, "want '0' got '2'"), which is the level
+# the assertion actually holds. Both lines stay: the day the fixture stops
+# blocking on a child process, the explicit wrapper kill is the one still
+# standing.
+kill -KILL "$_wrap_pid" 2>/dev/null
+for _k in $wrapper_kids; do kill -KILL "$_k" 2>/dev/null; done
+sleep 0.3
+wrap_left=0
+kill -0 "$_wrap_pid" 2>/dev/null && wrap_left=$((wrap_left+1))
+for _k in $wrapper_kids; do kill -0 "$_k" 2>/dev/null && wrap_left=$((wrap_left+1)); done
+check "the fixture's wrapper recorded its own pid (positive control for the check below)" \
+      "1" "$([[ "$_wrap_pid" =~ ^[0-9]+$ ]] && echo 1 || echo 0)"
+check "and section 7 collects the wrapper and its forks — nothing else ever reaches them" "0" "$wrap_left"
 
 # On a healthy run the backstop has nothing to do — reap_recorded got there
 # first — so the assertion above cannot tell a working backstop from a deleted
