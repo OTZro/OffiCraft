@@ -1764,8 +1764,11 @@ export const httpApi: Api = {
 
   async getInsight(roleKey: string): Promise<InsightView> {
     // GET /api/insight/{role_key} -> InsightDTO (T-3809). PER-ROLE doc keyed on
-    // the BARE role_key: no task_type axis (that belongs to lessons) and no file
-    // seed, so an untouched doc comes back with text "" and is_default true.
+    // the BARE role_key: no task_type axis (that belongs to lessons), but there
+    // IS a PER-ROLE file seed (T-e1e3). An untouched doc for a role that ships
+    // one — today only `assistant`, from seeds/insight_assistant.md — comes
+    // back with the FACTORY text and is_default true; only a role with no seed
+    // file reads text "" with is_default true.
     // READ is unrestricted by owner ruling — insight is SEPARATE, not private.
     const wire = unwrap(
       await client.GET("/api/insight/{role_key}", {

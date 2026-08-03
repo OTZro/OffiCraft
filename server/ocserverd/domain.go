@@ -521,9 +521,8 @@ func FoldInsight(overlay *Insight, seedText string, hasSeed bool) (text string, 
 	if overlay != nil && !overlay.Tombstoned {
 		return overlay.Text, false
 	}
-	_ = seedText
-	if hasSeed { // MUTANT 2: seed fold removed
-		return "", true
+	if hasSeed {
+		return seedText, true
 	}
 	return "", true
 }
