@@ -1009,40 +1009,81 @@ func (s *apiServer) contractorTaskTitle(workerID string) string {
 // worth keeping: a heuristic that chooses WHICH line to show silently changes
 // what a role appears to be responsible for whenever someone reorders their own
 // role doc. A flat cap can only ever cut the tail, and the ellipsis says so.
+//
+// The ONE thing removed before the cap is the doc's own title line
+// (stripLeadingTitle) — a syntactic prefix, not a choice about content. Say
+// this accurately anywhere it is described: the cap is applied to the
+// definition MINUS its title, not to the raw markdown.
 func dutyText(md string) string {
-	return truncateRunes(stripLeadingHeadings(md), resumeDutyPreview)
+	// Strip BEFORE the cap, never after: capping first and stripping second
+	// would spend the budget on the title and then delete it, which is the
+	// exact case this exists for (the longest role doc is 4,594 runes and
+	// opens with its own title). Pinned by TestResumeDutyStripsBeforeCapping.
+	return truncateRunes(stripLeadingTitle(md), resumeDutyPreview)
 }
 
-// stripLeadingHeadings drops the markdown heading lines that LEAD a definition
-// (with any blank lines between them) before the cap is applied. Role docs open
-// with their own title — 「# 助理 — Mira」 — so without this the first line of
-// every duty spends the budget restating the role name the row already carries
-// in RoleName.
+// stripLeadingTitle drops the ONE markdown title line a role doc opens with —
+// 「# 助理 — Mira」 — before the cap is applied, so the budget is not spent
+// restating the role name the row already carries in RoleName.
 //
-// It is NOT the line-selection heuristic the owner overruled, and the
-// difference is the whole point: this makes no judgement about which content
-// matters. It only removes a fixed, syntactically identified prefix, so
-// reordering the body of a role doc cannot change what shows up — the failure
-// mode that got "pick the best line" rejected.
+// It removes the FIRST heading line only, deliberately, and not every leading
+// heading: a terse role doc can be written as an outline whose 「## 負責…」
+// lines ARE the duty, and eating the whole leading run would delete exactly
+// that content. One title line is what the owner was told this would remove.
 //
-// A document that is nothing BUT headings comes back unchanged: an empty duty
-// reads as "this member has no role", which is a different fact from "this
-// member's role doc is only a title".
-func stripLeadingHeadings(md string) string {
-	full := strings.TrimSpace(md)
-	rest := full
+// It is not the line-selection heuristic he overruled — it ranks nothing and
+// reads no content, only a fixed syntactic prefix. The honest limit of that
+// claim: moving a paragraph ABOVE the title changes the output (the first line
+// is then not a heading, so nothing is stripped). What it cannot do is change
+// WHICH line is shown based on what the lines say.
+//
+// A title-only document comes back whole: an empty duty reads as "this member
+// has no role", a different fact from "this member's role doc is only a title".
+func stripLeadingTitle(md string) string {
+	trimmed := strings.TrimRight(md, " \t\r\n")
+	// Skip leading blank lines WITHOUT collapsing the first content line's
+	// indentation — four spaces of indent make it an indented code block, not
+	// a title, and isATXHeading needs to see that.
+	rest := trimmed
 	for rest != "" {
-		line, tail, _ := strings.Cut(rest, "\n")
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+		line, tail, found := strings.Cut(rest, "\n")
+		if strings.TrimSpace(line) != "" {
+			break
+		}
+		if !found {
+			rest = ""
 			break
 		}
 		rest = tail
 	}
-	if rest = strings.TrimSpace(rest); rest == "" {
-		return full
+	line, tail, _ := strings.Cut(rest, "\n")
+	if !isATXHeading(line) {
+		return strings.TrimSpace(trimmed)
 	}
-	return rest
+	body := strings.TrimSpace(tail)
+	if body == "" {
+		return strings.TrimSpace(trimmed)
+	}
+	return body
+}
+
+// isATXHeading reports whether line is a markdown ATX heading, by the syntax
+// rule rather than by "starts with #": 0–3 spaces of indent, then 1–6 '#',
+// then a space or end of line. A bare HasPrefix("#") is not the same test and
+// silently eats real content — 「#1 順位：先看 X」 and 「#hashtag」 are body
+// text, and a line indented four spaces is a code block.
+func isATXHeading(line string) bool {
+	line = strings.TrimRight(line, " \t\r")
+	if indent := len(line) - len(strings.TrimLeft(line, " ")); indent > 3 {
+		return false
+	}
+	line = strings.TrimLeft(line, " ")
+	hashes := len(line) - len(strings.TrimLeft(line, "#"))
+	if hashes < 1 || hashes > 6 {
+		return false
+	}
+	rest := line[hashes:]
+	return rest == "" || strings.HasPrefix(rest, " ") || strings.HasPrefix(rest, "\t")
 }
 
 // truncateRunes caps s at max RUNES (not bytes — one CJK character is one

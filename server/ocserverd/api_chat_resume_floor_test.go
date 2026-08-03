@@ -217,16 +217,19 @@ func TestResumeDutyIsCappedAndMarked(t *testing.T) {
 	}
 }
 
-// TestResumeDutyDropsLeadingHeadingsOnly — role docs open with their own title
+// TestResumeDutyDropsItsOwnTitleOnly — role docs open with their own title
 // (「# 助理 — Mira」), which would otherwise spend the duty budget restating the
 // role name the row already carries.
 //
-// MUTANT: make dutyText cap the raw text again (skip stripLeadingHeadings) —
-// the first assertion goes red on the leading title. The third assertion is the
-// sentinel that keeps this from degenerating into "strip every heading": a
-// heading in the MIDDLE must survive, because dropping those would be content
-// selection, which the owner overruled.
-func TestResumeDutyDropsLeadingHeadingsOnly(t *testing.T) {
+// MUTANT: make dutyText cap the raw text again (skip stripLeadingTitle) — the
+// first assertion goes red on the leading title.
+//
+// The other three assertions are the sentinels that keep this from degenerating
+// into "strip every leading heading", which was the first implementation and
+// which review showed eats real content: a role doc written as an OUTLINE has
+// its 「## 負責…」 lines as the duty itself, so a sub-heading right after the
+// title must survive, and so must a heading in the middle.
+func TestResumeDutyDropsItsOwnTitleOnly(t *testing.T) {
 	s := floorTestServer(t)
 	if err := s.dal.PutRoleDef(RoleDef{RoleKey: "r-titled", Name: "Titled Role",
 		DefinitionMD: "# 標題甲\n\n## 副標乙\n\n負責丙\n\n### 段中丁\n\n負責戊"}); err != nil {
@@ -238,25 +241,65 @@ func TestResumeDutyDropsLeadingHeadingsOnly(t *testing.T) {
 		DefinitionMD: "# 只有標題己"}); err != nil {
 		t.Fatal(err)
 	}
+	// 「#1 順位」 is BODY text, not a heading: ATX syntax needs a space after
+	// the hashes. A HasPrefix("#") test deletes this line silently.
+	if err := s.dal.PutRoleDef(RoleDef{RoleKey: "r-hash", Name: "Hash Role",
+		DefinitionMD: "#1 順位庚\n\n然後辛"}); err != nil {
+		t.Fatal(err)
+	}
 	putFloorMember(t, s, Member{ID: "m-alpha", Name: "Alpha", Kind: KindAssistant, RoleKey: "r-titled"})
 	putFloorMember(t, s, Member{ID: "m-charlie", Name: "Charlie", Kind: KindAssistant, RoleKey: "r-onlytitle"})
+	putFloorMember(t, s, Member{ID: "m-delta", Name: "Delta", Kind: KindAssistant, RoleKey: "r-hash"})
 
 	got := resumeFor(t, s, "m-alpha")
 	titled := rosterRow(t, got.Roster, "m-alpha").Duty
-	// Exact prefix, not "contains": the leading headings must be GONE, and the
-	// first surviving line must be the first non-heading line.
-	if !strings.HasPrefix(titled, "負責丙") {
-		t.Fatalf("leading headings must be stripped before the cap, got %q", titled)
+	// Exact prefix, not "contains": the title must be GONE and the sub-heading
+	// under it must be the first thing left.
+	if !strings.HasPrefix(titled, "## 副標乙") {
+		t.Fatalf("the doc's own title must be stripped and nothing else, got %q", titled)
 	}
-	if strings.Contains(titled, "標題甲") || strings.Contains(titled, "副標乙") {
-		t.Fatalf("no leading heading text may survive, got %q", titled)
+	if strings.Contains(titled, "標題甲") {
+		t.Fatalf("no title text may survive, got %q", titled)
 	}
 	if !strings.Contains(titled, "段中丁") {
 		t.Fatalf("a heading in the MIDDLE is body text and must survive, got %q", titled)
 	}
 	onlyTitle := rosterRow(t, got.Roster, "m-charlie").Duty
 	if onlyTitle != "# 只有標題己" {
-		t.Fatalf("a headings-only doc must come back whole, not empty, got %q", onlyTitle)
+		t.Fatalf("a title-only doc must come back whole, not empty, got %q", onlyTitle)
+	}
+	hashed := rosterRow(t, got.Roster, "m-delta").Duty
+	if !strings.HasPrefix(hashed, "#1 順位庚") {
+		t.Fatalf("#1 is body text (no space after the hash) and must survive, got %q", hashed)
+	}
+}
+
+// TestResumeDutyStripsBeforeCapping pins the ORDER, which nothing else does.
+//
+// MUTANT: swap dutyText to stripLeadingTitle(truncateRunes(...)) — cap first,
+// strip second. Every other test stays green, because their fixtures are short:
+// the regression only shows on a doc LONGER than the cap that opens with a
+// title, which is precisely the shipped case (the longest role doc is ~4,594
+// runes and starts with its own title). Cap-then-strip spends the whole budget
+// including the title, then deletes the title, returning a short duty.
+func TestResumeDutyStripsBeforeCapping(t *testing.T) {
+	s := floorTestServer(t)
+	body := strings.Repeat("職", resumeDutyPreview+250)
+	if err := s.dal.PutRoleDef(RoleDef{RoleKey: "r-longtitled", Name: "Long Titled",
+		DefinitionMD: "# 標題壬\n\n" + body}); err != nil {
+		t.Fatal(err)
+	}
+	putFloorMember(t, s, Member{ID: "m-alpha", Name: "Alpha", Kind: KindAssistant, RoleKey: "r-longtitled"})
+
+	duty := rosterRow(t, resumeFor(t, s, "m-alpha").Roster, "m-alpha").Duty
+	// The full budget must be spent on BODY: cap + the ellipsis, with no title
+	// text in it. Cap-then-strip yields cap+1 minus the title's runes instead.
+	if n := len([]rune(duty)); n != resumeDutyPreview+1 {
+		t.Fatalf("duty must fill the cap with body text: want %d runes (cap + ellipsis), got %d",
+			resumeDutyPreview+1, n)
+	}
+	if strings.Contains(duty, "標題壬") {
+		t.Fatalf("the title must not reach the output at all, got prefix %q", string([]rune(duty)[:12]))
 	}
 }
 
@@ -333,6 +376,38 @@ func TestResumeContractorCarriesTaskTitleAndMemberDoesNot(t *testing.T) {
 	}
 	if contractor.Duty != "" {
 		t.Fatalf("a contractor has no role, so no duty; got %q", contractor.Duty)
+	}
+}
+
+// TestResumeYouAreOnSurvivesTheRosterFilters pins the capture ORDER inside
+// resumeFloorParts: "where am I" is read off the caller's row BEFORE the
+// roster-status and warden filters, not after.
+//
+// It matters because this route admits callers the ROSTER deliberately drops:
+// a warden token (Requires: principalMachine) and a member that was just
+// deactivated. Both must still be told which machine they are standing on —
+// that answer is not derivable client-side, since our hosts report the same
+// name as each other.
+//
+// MUTANT: move the `m.ID == actor` capture below either filter — one of these
+// two assertions goes red with an empty you_are_on. Before this test the
+// invariant was held by a comment only: review moved the capture down and the
+// whole suite stayed green.
+func TestResumeYouAreOnSurvivesTheRosterFilters(t *testing.T) {
+	s := floorTestServer(t)
+	putFloorMember(t, s, Member{
+		ID: "m-bravo", Name: "Bravo", Kind: KindAssistant, RoleKey: "assistant",
+		RosterStatus: RosterStatusRemoved, LastMachineID: "m-host-two",
+	})
+	s.telemetry.Set("m-bravo", map[string]any{"machine": "m-host-two"})
+
+	// A warden IS a machine, so its own id is its answer.
+	if got := resumeFor(t, s, "m-host-one"); got.Machines == nil || got.Machines.YouAreOn != "m-host-one" {
+		t.Fatalf("a warden caller must still learn its machine, got %+v", got.Machines)
+	}
+	// A deactivated member is off the roster but still gets a real answer.
+	if got := resumeFor(t, s, "m-bravo"); got.Machines == nil || got.Machines.YouAreOn != "m-host-two" {
+		t.Fatalf("a deactivated caller must still learn its machine, got %+v", got.Machines)
 	}
 }
 
