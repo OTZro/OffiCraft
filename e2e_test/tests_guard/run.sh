@@ -73,7 +73,16 @@ fi
 exit 0
 SH
 
-chmod +x "$SHIMDIR"/launchctl "$SHIMDIR"/lsof "$SHIMDIR"/tmux
+cat > "$SHIMDIR/ioreg" <<'SH'
+#!/usr/bin/env bash
+# The hardware-identity anchor (T-e1dd). Emits the one line the guard's awk reads.
+# SHIM_HW_UUID drives it; empty = the "cannot read a UUID" case. This is a PATH
+# stub on purpose and NOT an env override in the guard itself: production must
+# have no way to be told what machine it is on.
+printf '    "IOPlatformUUID" = "%s"\n' "${SHIM_HW_UUID:-00000000-0000-0000-0000-FEEDFACE0000}"
+SH
+
+chmod +x "$SHIMDIR"/launchctl "$SHIMDIR"/lsof "$SHIMDIR"/tmux "$SHIMDIR"/ioreg
 
 # These stubs are enabled ONLY by the hermetic teardown regression below.  They
 # record every mutating surface instead of touching the host, which lets the
@@ -825,6 +834,181 @@ for _entry in 'oc_teardown_bounded "mixed-axes"' 'oc_teardown_warden'; do
   fi
 done
 unset SHIM_ALLOW_TEARDOWN SHIM_TEARDOWN_LOG TEST_HOME
+
+# ── 19) T-e1dd: cross_machine's preflight — prod-host guard + gate ORDERING ───
+#
+# cross_machine.sh acked destructiveness before STAGE 1 and isolation before
+# STAGE 3, with `rm -rf "$SERVER_ROOT"` in between — so the invocation printed in
+# its own header deleted the server root and was refused 141 lines later. Nothing
+# could catch it: the gates and the deletion were top-level code in a destructive
+# script, so the only way to exercise them was to run it for real.
+#
+# Everything below runs against oc_cross_machine_preflight as a FUNCTION, on a
+# throwaway $HOME (TEST_HOME) whose contents this file creates, with the recording
+# shims installed. This file makes ZERO direct calls to rm/launchctl/tmux against
+# any real resource — that is a stated requirement of the ticket, because the
+# mutants below deliberately disable the guard being tested and a test that leaned
+# on that guard for its own safety would destroy the host at exactly that moment.
+E1DD_LOG="$SHIMDIR/.teardown-log-e1dd"
+export SHIM_ALLOW_TEARDOWN=1 SHIM_TEARDOWN_LOG="$E1DD_LOG"
+
+# The known production hardware UUID, read from the lib rather than duplicated —
+# a second copy of this constant would be a drift site of exactly the kind the
+# port literal already taught us about (T-b76b).
+PROD_UUID="$(run_snippet 'printf "UUID=%s\n" "${OC_PROD_HOST_HW_UUIDS[0]}"' >/dev/null; grep '^UUID=' "$GLOG" | cut -d= -f2)"
+[[ -n "$PROD_UUID" ]] || bad "could not read OC_PROD_HOST_HW_UUIDS from the lib — the prod-host identity guard has no pinned station"
+DISPOSABLE_UUID="11111111-2222-3333-4444-555555555555"
+
+# e1dd_home KIND — build a throwaway $HOME. KIND: clean | residue
+e1dd_home() {
+  local kind="$1" h="$SHIMDIR/e1dd-home-$1"
+  rm -rf "$h" 2>/dev/null || true          # shim rm: recorded, never touches the host
+  mkdir -p "$h/Library/LaunchAgents" "$h/backups" "$h/bin"
+  printf '#!/bin/sh\nexit 0\n' > "$h/bin/ocserver"; chmod +x "$h/bin/ocserver"
+  [[ "$kind" == "residue" ]] && mkdir -p "$h/.officraft/server/data"
+  printf '%s' "$h"
+}
+
+# e1dd_pre HOME BODY — run BODY with the preflight's required globals wired to a
+# throwaway home. Both acks and a disposable machine identity default ON, so each
+# case turns exactly ONE thing off.
+e1dd_pre() {
+  local home="$1" body="$2"
+  : > "$E1DD_LOG"
+  TEST_HOME="$home" OC_CROSS_MACHINE_YES="${E1DD_YES:-1}" \
+  REQUIRE_ISOLATION_CONFIRMED="${E1DD_ISO:-1}" SHIM_HW_UUID="${E1DD_UUID:-$DISPOSABLE_UUID}" \
+  SHIM_WARDEN=0 SHIM_LISTEN_PORTS="" SHIM_SESSIONS="" \
+  OC_CLAUDE_BIN="$home/bin/ocserver" run_snippet '
+    HOME_DIR="$HOME"; GUI="gui/501"; BACKUP_DIR="$HOME/backups"
+    OC_ROOT="$HOME/.officraft"; SERVER_ROOT="${OC_SERVER_ROOT:-$OC_ROOT/server}"
+    DB_PATH="$SERVER_ROOT/data/officraft.db"; OCSERVER="$HOME/bin/ocserver"
+    OCWARDEN="$(command -v ocwarden)"; TMUX_SOCKET_LOCAL="$OC_CANONICAL_TMUX_SOCKET"
+    SERVE_LABEL="com.officraft.serve"; AUTODEPLOY_LABEL="com.officraft.autodeploy"
+    TUNNEL_LABEL="com.officraft.tunnel"; WARDEN_LABEL="com.officraft.ocwarden"
+    '"$body"
+}
+
+H_CLEAN="$(e1dd_home clean)"; H_RESIDUE="$(e1dd_home residue)"
+
+# 19a) DETECTION — the two questions, asked separately.
+rc="$(TEST_HOME="$H_CLEAN" SHIM_HW_UUID="$PROD_UUID" \
+      run_snippet 'oc_detect_prod_host | grep -q "^identity:"')"
+check "identity guard fires on a known production hardware UUID (even with a clean disk)" "0" "$rc"
+rc="$(TEST_HOME="$H_RESIDUE" SHIM_HW_UUID="$DISPOSABLE_UUID" \
+      run_snippet 'oc_detect_prod_host | grep -q "^residue:"')"
+check "residue guard fires on an existing server tree (even on an unknown machine)" "0" "$rc"
+rc="$(TEST_HOME="$H_CLEAN" SHIM_HW_UUID="$DISPOSABLE_UUID" \
+      run_snippet 'out="$(oc_detect_prod_host)"; [[ -z "$out" ]]')"
+check "detection is EMPTY on a disposable machine with no server tree" "0" "$rc"
+
+# The case the pre-T-e1dd shape could not see, and the reason the identity guard
+# exists at all: a production station whose server is STOPPED and whose disk is
+# still bare (freshly provisioned) — every liveness signal silent.
+rc="$(TEST_HOME="$H_CLEAN" SHIM_HW_UUID="$PROD_UUID" SHIM_WARDEN=0 SHIM_LISTEN_PORTS="" SHIM_SESSIONS="" \
+      run_snippet 'OC_NS=""; oc_live_fleet_guard && oc_detect_prod_host | grep -q "^identity:"')"
+check "a production station with NOTHING running is still recognised as production" "0" "$rc"
+
+# 19a') ADDRESSING — the guard must not be steerable by OC_SERVER_ROOT. That env
+# is what the teardown deletes; if the detector derived its paths from it, the
+# override would aim the guard at an empty directory while the deletion still
+# landed on the real tree. This is the difference between a guard and a flag.
+rc="$(TEST_HOME="$H_RESIDUE" OC_SERVER_ROOT="$SHIMDIR/decoy" SHIM_HW_UUID="$DISPOSABLE_UUID" \
+      run_snippet 'SERVER_ROOT="$OC_SERVER_ROOT"; oc_detect_prod_host | grep -q "^residue:"')"
+check "OC_SERVER_ROOT cannot steer the prod-host guard away from the real tree" "0" "$rc"
+
+# 19b) THE GATE — refusals happen, and they happen BEFORE any mutation. Each case
+#      runs the REAL preflight → teardown chain; the recorder proves how far
+#      execution actually got.
+e1dd_gate() { # e1dd_gate DESC HOME MARKER
+  local desc="$1" home="$2" marker="$3"
+  local rc; rc="$(e1dd_pre "$home" 'oc_cross_machine_preflight
+    oc_teardown_bounded "e1dd-should-not-reach"')"
+  [[ "$rc" != "0" ]] && ok "$desc → refuses (rc=$rc)" || bad "$desc → should refuse, returned 0"
+  grep -q "$marker" "$GLOG" && ok "$desc → refusal names $marker" \
+    || bad "$desc → refusal lacks $marker (got: $(tr '\n' '|' < "$GLOG" | tail -c 300))"
+  local mut; mut="$(grep -cE 'launchctl bootout|^rm <' "$E1DD_LOG" 2>/dev/null || true)"
+  [[ "${mut:-0}" == "0" ]] && ok "$desc → nothing was booted out or deleted first" \
+    || bad "$desc → mutated ${mut} resource(s) BEFORE refusing (log: $(tr '\n' '|' < "$E1DD_LOG"))"
+}
+
+E1DD_ISO=0 e1dd_gate "missing isolation ack" "$H_CLEAN" "REQUIRE_ISOLATION_CONFIRMED"
+E1DD_YES=0 e1dd_gate "missing destructiveness ack" "$H_CLEAN" "DESTRUCTIVE"
+E1DD_UUID="$PROD_UUID" e1dd_gate "a known production station" "$H_CLEAN" "PROD-HOST GUARD (identity)"
+e1dd_gate "a host carrying a server tree" "$H_RESIDUE" "PROD-HOST GUARD (residue)"
+
+# Both acks set is the maximum an operator can assert. It must not be enough on a
+# production station — otherwise the guard is advisory and this ticket's failure
+# mode is one env var away from coming back.
+rc="$(E1DD_UUID="$PROD_UUID" e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight')"
+[[ "$rc" != "0" ]] && ok "both acks set still cannot run on a known production station (rc=$rc)" \
+  || bad "both acks set BYPASSED the identity guard — the guard is only advisory"
+
+# 19b') WHAT EACH REFUSAL MAY SAY. These two are opposites on purpose:
+#   • the RESIDUE refusal MUST offer a way forward — its most likely reader is
+#     someone re-running on their own throwaway VM, and a refusal that only says
+#     "no" reads as a broken tool, which is how workarounds get invented.
+#   • the IDENTITY refusal must NEVER name a way to clear the obstacle. Its
+#     reader is standing on a production station; "delete this and retry" IS the
+#     disaster this whole ticket is about.
+rc="$(e1dd_pre "$H_RESIDUE" 'oc_cross_machine_preflight')" >/dev/null
+if grep -Eq 'PROD-HOST GUARD \(residue\).*(rebuild|delete)' "$GLOG"; then
+  ok "the residue refusal tells the operator how to proceed"
+else
+  bad "the residue refusal gives no way forward — it will read as a broken tool (got: $(tr '\n' '|' < "$GLOG" | tail -c 300))"
+fi
+rc="$(E1DD_UUID="$PROD_UUID" e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight')" >/dev/null
+# The pattern hunts for an INSTRUCTION TO THE READER, not for the word "delete":
+# the message is allowed — required, even — to say what the suite deletes. What it
+# must never do is tell the person standing on that station what to remove or
+# which flag to set in order to continue.
+if grep -Eqi 'PROD-HOST GUARD \(identity\).*(rm -rf|delete (\$?HOME|~|the tree|it) |set [A-Z_]+=1|bypass|--force|override this|skip this)' "$GLOG"; then
+  bad "the identity refusal tells someone standing on a production station how to clear the obstacle: $(grep -i 'identity' "$GLOG" | tail -c 300)"
+else
+  ok "the identity refusal offers no way to clear it — only 'run somewhere else'"
+fi
+
+# 19c) SENTINEL — a genuinely disposable host must still be able to run. A guard
+# that refuses everything passes every refusal test above and is useless.
+rc="$(e1dd_pre "$H_CLEAN" 'oc_cross_machine_preflight')"
+check "a disposable host with both acks PASSES the preflight" "0" "$rc"
+
+# 19d) MUTANTS — one edit each. Without them every assertion above could be
+# vacuously true. The mutant lib needs a tree whose ../../server resolves, because
+# the lib derives the canonical port from server/ocserverd/config.go and FATALs if
+# it cannot (same construction as the MUT-D control above).
+e1dd_mutant() { # e1dd_mutant NAME SED_EXPR HOME UUID
+  local name="$1" expr="$2" home="$3" uuid="$4"
+  local root="$SHIMDIR/mut-$name-tree" lib="$SHIMDIR/mut-$name-tree/e2e_test/lib/oc_lifecycle.sh"
+  mkdir -p "$root/e2e_test/lib"; ln -sfn "$HERE/../../server" "$root/server"
+  sed "$expr" "$LIB" > "$lib"
+  if cmp -s "$lib" "$LIB"; then
+    bad "MUT-$name did not change the lib — the mutation anchor moved; a vacuous mutant proves nothing"
+    return
+  fi
+  local rc; rc="$(SNIPPET_LIB="$lib" E1DD_UUID="$uuid" e1dd_pre "$home" 'oc_cross_machine_preflight')"
+  [[ "$rc" == "0" ]] \
+    && ok "MUT-$name: with that check removed the run PROCEEDS — the live case is pinned to it" \
+    || bad "MUT-$name: still refused (rc=$rc) — the live assertion is NOT pinned to this check (glog: $(tr '\n' '|' < "$GLOG" | tail -c 200))"
+}
+# 1. identity: drop the hardware-UUID comparison → the production-station case must go green-lit.
+# Replaced with a no-op rather than deleted: that line is the entire body of the
+# `for u in ...` loop, and deleting it leaves an empty loop body — a syntax error,
+# which makes the lib fail to load and the mutant "refuse" for the wrong reason.
+e1dd_mutant identity 's/.*identity: this machine.*/      : ;/' "$H_CLEAN" "$PROD_UUID"
+# 2. residue: drop the server-tree check → the residue case must go green-lit.
+e1dd_mutant residue 's|^  \[\[ -d "$server_root" \]\] .*$|  : ;|' "$H_RESIDUE" "$DISPOSABLE_UUID"
+# 3. ordering: drop the isolation ack → an unacked run must reach the teardown.
+e1dd_mutant ack '/^  \[\[ "${REQUIRE_ISOLATION_CONFIRMED:-0}" == "1" \]\] || die \\$/,+1d' "$H_CLEAN" "$DISPOSABLE_UUID"
+
+# 19e) This test file must not be able to destroy anything itself — the ticket's
+# hardest constraint, because the mutants above deliberately disable the guard
+# under test. Counted, not eyeballed: an absolute path or a kill-by-name dodges
+# the PATH shim and would reach the real host. Matches in THIS block's own
+# assertion strings are excluded by anchoring on a command position.
+_e1dd_direct="$(grep -cE '^[[:space:]]*(/bin/rm|/usr/bin/killall|killall|pkill)[[:space:]]' "$HERE/run.sh" || true)"
+check "this test file makes no direct call to a real destructive command" "0" "${_e1dd_direct:-0}"
+
+unset SHIM_ALLOW_TEARDOWN SHIM_TEARDOWN_LOG TEST_HOME E1DD_ISO E1DD_YES
 
 echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1

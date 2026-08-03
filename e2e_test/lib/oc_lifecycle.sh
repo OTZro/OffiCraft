@@ -666,55 +666,78 @@ oc_preflight_guards() {
 }
 
 # ── IS THIS A PRODUCTION HOST? (T-e1dd) ─────────────────────────────────────
-# oc_detect_prod_host — read-only. Prints one line per piece of ON-DISK evidence
-# that a REAL officraft server is INSTALLED on this host; empty output = none.
+# The question oc_detect_live_canonical_fleet CANNOT answer. That one asks "is a
+# fleet RUNNING right now?" — launchd registration, a port listener, live tmux
+# sessions. A production machine whose server happens to be STOPPED (mid-deploy,
+# just booted out, crashed) answers "nothing here" to all three, and the caller
+# proceeds to delete its server root. A stopped server is also precisely when
+# someone reaches for a reset script.
 #
-# This answers a DIFFERENT question from oc_detect_live_canonical_fleet, and the
-# difference is the whole point. That one asks "is prod RUNNING right now?" — it
-# probes launchd registration, a port listener, and live tmux sessions, so a
-# production box whose server happens to be STOPPED (mid-deploy, just booted out,
-# crashed) reports nothing and the caller proceeds to wipe it. And a stopped
-# server is exactly when someone reaches for a repair/reset script.
+# TWO guards, deliberately overlapping. Keep both — their failure costs are not
+# symmetric, which is the whole argument for the redundancy:
 #
-# ADDRESSING (load-bearing): every path below is derived from $HOME, NOT from
-# $SERVER_ROOT / $OC_ROOT. Those two are env-overridable ($OC_SERVER_ROOT), so
-# deriving from them would let the very override this guard exists to catch point
-# the guard somewhere harmless while the run still deletes the real thing. The
-# canonical install location is a property of the machine, not of this run.
+#   • IDENTITY (below): "is this machine one of the known production boxes?"
+#     Anchored on the immutable hardware UUID. A BLACKLIST, unlike the seth-m1
+#     whitelist in oc_preflight_guards 0a — this suite is specified to run on a
+#     throwaway VM, so it cannot demand one specific machine. Known weakness of
+#     any blacklist: a production host nobody added to the list is NOT covered.
+#     That weakness is ACCEPTED, and it is accepted only because the residue
+#     guard backs it up. Do not remove either one as "redundant".
+#   • RESIDUE: "does this host carry an officraft server tree at all?" Deliberately
+#     coarse — the mere existence of ~/.officraft/server is enough. It over-refuses
+#     (a throwaway VM that already ran this suite once is refused until rebuilt)
+#     and that is the accepted trade: the cost of this guard failing is one rebuilt
+#     VM, the cost of the identity guard failing alone is a wiped production
+#     database.
+#
+# ADDRESSING (load-bearing): paths derive from $HOME, never from $SERVER_ROOT /
+# $OC_ROOT. Those are env-overridable ($OC_SERVER_ROOT), so deriving from them
+# would let the very override this guard exists to catch aim the guard at an empty
+# directory while the deletion still lands on the real tree.
+
+# Hardware UUIDs of the machines that RUN A PRODUCTION OFFICRAFT STATION. Same
+# anchor the existing suites pin on (ioreg IOPlatformUUID — immutable, survives
+# renames, reinstalls and hostname changes; a name or a path prefix is not an
+# identity). Append here when a station moves or a new one is stood up.
+OC_PROD_HOST_HW_UUIDS=(
+  "8523F496-3E4E-5CD3-B94D-54D1EB6BD137"   # seth-m5 — officraft.hardcoretech.link
+)
+
+# oc_detect_prod_host — read-only. One line per piece of evidence, prefixed with
+# which guard found it; empty output = this host looks disposable.
 oc_detect_prod_host() {
-  local home="${HOME:?HOME must be set}" reasons=() canon_root db plist lbl
-  canon_root="$home/.officraft/server"
-  db="$canon_root/data/officraft.db"
-  # (1) a real server database on disk — the irreplaceable part.
-  if [[ -s "$db" ]]; then
-    reasons+=("a non-empty officraft server database exists on disk: $db")
+  local home="${HOME:?HOME must be set}" reasons=() hw u server_root
+  server_root="$home/.officraft/server"
+  hw="$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | awk -F'"' '/IOPlatformUUID/{print $4}')"
+  if [[ -n "$hw" ]]; then
+    for u in ${OC_PROD_HOST_HW_UUIDS[@]+"${OC_PROD_HOST_HW_UUIDS[@]}"}; do
+      [[ "$hw" == "$u" ]] && reasons+=("identity: this machine's hardware UUID $hw is a known production station")
+    done
   fi
-  # (2) a launchd plist INSTALLED and pointing at that canonical server root.
-  #     EXACT filenames only — never a com.officraft.* glob.
-  for lbl in com.officraft.serve com.officraft.autodeploy com.officraft.tunnel; do
-    plist="$home/Library/LaunchAgents/$lbl.plist"
-    [[ -f "$plist" ]] || continue
-    if grep -qF "$canon_root" "$plist" 2>/dev/null; then
-      reasons+=("launchd job $lbl is installed on this host and points at $canon_root ($plist)")
-    fi
-  done
+  [[ -d "$server_root" ]] && reasons+=("residue: an officraft server tree exists on this host: $server_root")
   local r
   for r in ${reasons[@]+"${reasons[@]}"}; do printf '%s\n' "$r"; done
 }
 
-# oc_prod_host_guard — die if this host carries an installed production server.
-# There is deliberately NO env override: an ack flag would recreate the exact
-# failure this guard exists to prevent (a flag nobody set correctly is a guard
-# that was never there). The way past it is to run somewhere that is genuinely a
-# throwaway host — which is what this script's header has always required.
+# oc_prod_host_guard — refuse a host that is, or looks like, a production station.
+# There is deliberately NO env override on either check: a flag nobody sets
+# correctly is indistinguishable from a guard that was never there, which is the
+# failure this whole guard exists to prevent. The two refusals carry DIFFERENT
+# ways forward, and that is why they are separate messages — the residue case has
+# a legitimate next step (clear the tree, or rebuild the VM), and the identity
+# case must never suggest one, because on a production station that instruction
+# IS the disaster.
 oc_prod_host_guard() {
   local reasons; reasons="$(oc_detect_prod_host)"
   if [[ -z "$reasons" ]]; then
-    log "prod-host guard OK: no installed officraft server found on this host (no server DB, no launchd job pointing at ~/.officraft/server)"
+    log "prod-host guard OK: not a known production station, and no officraft server tree on this host"
     return 0
   fi
   printf '%s\n' "$reasons" | sed 's/^/[oc-lifecycle] prod-host| /' >&2
-  die "PROD-HOST GUARD: this machine carries an INSTALLED officraft server (see prod-host| lines) — refusing. This suite is a full reset: it deletes the server root, its database and the agent workdirs on whatever host it runs on, and an installed server means those belong to that host, not to this run. It is specified to run on a dedicated throwaway VM/host that carries no officraft install and no vibe-clicking fleet. Being stopped does not make a production box disposable."
+  if printf '%s\n' "$reasons" | grep -q '^identity:'; then
+    die "PROD-HOST GUARD (identity): this machine is a known production officraft station (see prod-host| lines). This suite deletes the server root, its database and the agent workdirs of whatever host it runs on. Run it on a dedicated throwaway VM instead. Whether the server is currently running makes no difference to what the deletion costs."
+  fi
+  die "PROD-HOST GUARD (residue): this host already carries an officraft server tree (see prod-host| lines), so it is not a clean throwaway host. THIS IS EXPECTED IF YOU ALREADY RAN THIS SUITE HERE: the run installs a server, and from then on the host looks indistinguishable from a production one to this guard — which is intended, because telling those two apart from the outside is exactly what this guard cannot do safely. To run again: rebuild the throwaway VM, or, ONLY IF YOU ARE CERTAIN this tree is leftover from your own previous run and nothing else, delete \$HOME/.officraft/server yourself first. If you are not certain, you are on the wrong host."
 }
 
 # oc_cross_machine_preflight — the SINGLE gate cross_machine.sh passes before ANY
