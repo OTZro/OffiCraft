@@ -182,6 +182,28 @@ func TestReportTokenUsageUsesLatestTurnForContextGauge(t *testing.T) {
 	}
 }
 
+func TestCodexPostsRecordRejectedResponsesWithoutChangingControlFlow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+	}))
+	defer server.Close()
+
+	var activity bytes.Buffer
+	session := &codexSession{base: server.URL, token: "member-token", out: &activity}
+	session.post("/api/monitoring/telemetry", map[string]any{"runtime": "codex"})
+	if got := session.openReplyCard(map[string]any{"kind": "decision", "header": "test"}, ""); got != "" {
+		t.Fatalf("rejected card id = %q, want empty", got)
+	}
+	for _, want := range []string{
+		"Codex POST /api/monitoring/telemetry rejected with HTTP 422",
+		"Codex POST /api/reply-cards rejected with HTTP 422",
+	} {
+		if !strings.Contains(activity.String(), want) {
+			t.Fatalf("missing rejection activity %q in %q", want, activity.String())
+		}
+	}
+}
+
 // TestReportTokenUsageSendsSessionModel pins the codex half of the reported-model
 // telemetry. This sidecar is the only thing on the codex path that knows which
 // model the session is running, so without it the cockpit's 模型 column has no

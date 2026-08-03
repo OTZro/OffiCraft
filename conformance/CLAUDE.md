@@ -11,14 +11,15 @@
 | 套件 | 性質 | 角色 |
 |---|---|---|
 | `e2e_test/`(Playwright) | FE 驅動煙霧、造真素材 | 測前後端整合 |
-| `conformance/`(本套件) | 語言無關黑箱、HTTP-only | wire 行為的回歸權威(743 tests) |
+| `conformance/`(本套件) | 語言無關黑箱、HTTP-only | wire 行為的回歸權威(條數看 `run.sh` 實跑輸出) |
 
 ## 黑箱鐵律(機械 enforce)
 
 **conformance 測試碼絕不 import 任何 server 實作模組**(禁字面沿用退役 Python 的 package 名:`service` / `dal` / `domain` / `plumbing` / `backend`——規則不因實作退役而鬆)。一旦 import,它就不再是語言無關的行為定義。這條由兩道機械 gate 守著:
 
 1. `run.sh` 開跑前的 grep gate(黑箱 lint);
-2. `bin/ci.sh` 的 conformance blackbox-lint 段(只 lint、不起 server——完整跑法走本目錄的 `run.sh` 入口,太重不掛進 ci.sh)。
+2. `bin/ci.sh` 的 conformance blackbox-lint 段(靜態、快)；**完整套件也在同一支 `ci.sh` 裡跑**——step (5/5) 起一個隔離的 ocserverd(核心配埠)再跑 `run.sh --target go`,所以行為面每次 CI 都被驗過。
+   ⚠️ 這裡原本寫「完整跑法走本目錄的 `run.sh` 入口,太重不掛進 ci.sh」,與 `ci.sh` 現況相反(owner 於 `rc-0e00082a5052` 裁定以 CI 腳本為準)。**別再引用那句作為「B 面平常不跑」的理由**:凡是落在 conformance 的檢查,都是每次 CI 都會執行的檢查。**條數也不要寫死在文件裡**——本檔與 root `CLAUDE.md` 兩份拷貝都曾停在 743 這個過期數字,而兩處都綠。
 
 route 表(`routes_manifest.json`)是**凍結的 committed 快照**(當年由退役 Python 實作的 ROUTE_SPECS 機械抽出——tag `py-final`),與 `spec/*.json` 同屬 wire-freeze 資產:要改一律 spec-first、過 owner。它沒有再生成器;守漂移的是套件本身——`test_openapi_covers_manifest` 釘 manifest ≡ spec operations,auth 矩陣逐列釘 requires 對 live 行為,manifest 漂了 run 直接紅。
 
