@@ -670,8 +670,15 @@ describe("SettingsPage · 版本紀錄", () => {
     );
     fireEvent.click(utils.getByText(s.roles));
     fireEvent.click(await utils.findByText(zh.office.role.assistant));
-    // The LESSONS card is the page's second editor.
-    fireEvent.click((await utils.findAllByText(s.edit))[1]);
+    // The LESSONS card, addressed by its own class rather than by position:
+    // the role page's card order is owner-ruled and has moved once already
+    // (2026-08-03), and an index silently lands on the wrong card when it does.
+    await utils.findAllByText(s.edit);
+    fireEvent.click(
+      within(
+        utils.container.querySelector(".mp-lessons:not(.mp-insight)")!
+      ).getByText(s.edit)
+    );
     fireEvent.click(utils.getByTestId("doc-history-entry-lessons"));
 
     const [target] = await mockApi.listDocumentHistory(
@@ -722,7 +729,13 @@ describe("SettingsPage · 版本紀錄", () => {
     );
     fireEvent.click(utils.getByText(s.roles));
     fireEvent.click(await utils.findByText(zh.office.role.assistant));
-    fireEvent.click((await utils.findAllByText(s.edit))[1]);
+    // The LESSONS card, addressed by class — see the note above.
+    await utils.findAllByText(s.edit);
+    fireEvent.click(
+      within(
+        utils.container.querySelector(".mp-lessons:not(.mp-insight)")!
+      ).getByText(s.edit)
+    );
     fireEvent.click(utils.getByTestId("doc-history-entry-lessons"));
 
     const [target] = await mockApi.listDocumentHistory(
@@ -758,7 +771,13 @@ describe("SettingsPage · 版本紀錄", () => {
     );
     fireEvent.click(utils.getByText(s.roles));
     fireEvent.click(await utils.findByText(zh.office.role.assistant));
-    fireEvent.click((await utils.findAllByText(s.edit))[1]);
+    // The LESSONS card, addressed by class — see the note above.
+    await utils.findAllByText(s.edit);
+    fireEvent.click(
+      within(
+        utils.container.querySelector(".mp-lessons:not(.mp-insight)")!
+      ).getByText(s.edit)
+    );
     fireEvent.click(utils.getByTestId("doc-history-entry-lessons"));
 
     const [target] = await mockApi.listDocumentHistory(

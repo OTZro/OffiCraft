@@ -466,14 +466,16 @@ export function SettingsPage({
           docDeletable: role ? !role.isSeed : false,
           onRestored: rolesH.refetch,
         }}
-        // Duty (the role_def card above) → Learning → Insight: the three
-        // blocks of the role journal, oldest surface to newest, matching the
-        // order seeds/system_interaction.md introduces them in. `extra` is a
+        // Duty (the role_def card above) → Insight → Learning: the three
+        // blocks of the role journal, in the order the owner ruled on
+        // 2026-08-03 — Insight is what the role decided it believes, so it sits
+        // directly under the duty it interprets, and Learning (the longest,
+        // most append-only of the three) closes the page. `extra` is a
         // ReactNode, so a fragment needs no prop or type change here.
         extra={
           <>
-            <LessonsCard roleKey={view.key} />
             <InsightCard roleKey={view.key} />
+            <LessonsCard roleKey={view.key} />
           </>
         }
       />

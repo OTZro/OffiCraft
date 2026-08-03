@@ -74,10 +74,11 @@ describe("SettingsPage · InsightCard (T-3809)", () => {
       ".mp-lessons:not(.mp-insight)"
     );
     expect(lessons).toBeTruthy();
-    // Insight goes AFTER Learning (Duty → Learning → Insight).
+    // Insight goes BEFORE Learning (Duty → Insight → Learning, owner ruling
+    // 2026-08-03).
     expect(
       lessons!.compareDocumentPosition(card!) &
-        Node.DOCUMENT_POSITION_FOLLOWING
+        Node.DOCUMENT_POSITION_PRECEDING
     ).toBeTruthy();
   });
 
