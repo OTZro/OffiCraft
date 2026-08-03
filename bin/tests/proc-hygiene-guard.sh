@@ -118,12 +118,16 @@ cat > "$WORK/leaky.sh" <<'LEAKY'
 #!/usr/bin/env bash
 pidfile="$1"
 libsh="$2"
+blockfor="${3:-30}"   # a parameter, NOT a sed-rewrite by the caller: a caller
+                      # that rewrites this text gets a silent no-op the day the
+                      # line drifts, and then leaks the child it thought it had
+                      # shortened.
 bash -c '
   . "$1" || exit 1
   printf "%s\t%s\n" "$$" "$(_ci_lock_ps "$$" lstart=)" > "$0"
   while :; do :; done
 ' "$pidfile" "$libsh" &
-sleep 30
+sleep "$blockfor"
 LEAKY
 
 echo "run_bounded process-hygiene tests"
@@ -138,7 +142,7 @@ check "and it returns at the ceiling (~2s), not after the child's 30s" "1" "$wit
 
 # ── 2. the WHOLE subtree is reaped on timeout, not just the direct child ─────
 : > "$WORK/gpid.2"
-python3 "$RB" 2 bash "$WORK/leaky.sh" "$WORK/gpid.2" "$CI_LOCK_LIB" >/dev/null 2>&1; rc=$?
+python3 "$RB" 2 bash "$WORK/leaky.sh" "$WORK/gpid.2" "$CI_LOCK_LIB" 30 >/dev/null 2>&1; rc=$?
 gpid="$(rec_pid "$WORK/gpid.2")"; gstart="$(rec_start "$WORK/gpid.2")"
 check "the grandchild busy-loop was actually spawned (positive control)" "1" "$([[ -n "$gpid" ]] && echo 1 || echo 0)"
 check "and it recorded its own identity, not just a pid (positive control)" "1" "$([[ -n "$gstart" ]] && echo 1 || echo 0)"
@@ -179,7 +183,7 @@ passthrough 7 "a non-zero exit (7) is passed through"
 # run_bounded; run_bounded must group-kill its subtree before dying. Same leaky
 # child, but interrupted instead of timed out.
 : > "$WORK/gpid.4"
-python3 "$RB" 30 bash "$WORK/leaky.sh" "$WORK/gpid.4" "$CI_LOCK_LIB" >/dev/null 2>&1 &
+python3 "$RB" 30 bash "$WORK/leaky.sh" "$WORK/gpid.4" "$CI_LOCK_LIB" 30 >/dev/null 2>&1 &
 rbpid=$!
 for _ in $(seq 1 50); do [[ -s "$WORK/gpid.4" ]] && break; sleep 0.1; done
 kill -TERM "$rbpid" 2>/dev/null
@@ -279,6 +283,17 @@ if same_proc "$$" "$sec_shifted"; then verdict=same; else verdict=different; fi
 check "a start time differing ONLY in the seconds is judged NOT the recorded process (the comparison keeps its resolution)" \
       "different" "$verdict"
 
+# The same weakening can hide in the DATE half instead of the time half — a
+# comparison of only the clock time reads two processes started an exact day
+# apart as one, and "normalise away a BSD/GNU date-format difference" is a
+# plausible edit that would do it.
+day_shifted="$(printf '%s' "$self_start" | awk '{ if (match($0, /[0-9]{4}$/)) print substr($0,1,RSTART-1) (substr($0,RSTART)+1); else print "" }')"
+check "a date-only variant of this shell's start time could be built (positive control)" \
+      "1" "$([[ -n "$day_shifted" && "$day_shifted" != "$self_start" ]] && echo 1 || echo 0)"
+if same_proc "$$" "$day_shifted"; then verdict=same; else verdict=different; fi
+check "a start time differing ONLY in the date is judged NOT the recorded process (the comparison keeps the date too)" \
+      "different" "$verdict"
+
 if same_proc "$$" "$self_start"; then verdict=same; else verdict=different; fi
 check "the same pid with its own start time still matches (the check has not just become 'always no')" \
       "same" "$verdict"
@@ -323,9 +338,8 @@ NOKILL
 # Same leaky child, but its blocking parent exits on its own in 2s, so the only
 # thing this section can leave behind is the busy-loop it is about — which it
 # kills below, by identity, before moving on.
-sed 's/^sleep 30$/sleep 2/' "$WORK/leaky.sh" > "$WORK/leaky-short.sh"
 : > "$WORK/gpid.7"
-PYTHONPATH="$WORK/nokill" python3 "$RB" 1 bash "$WORK/leaky-short.sh" "$WORK/gpid.7" "$CI_LOCK_LIB" >/dev/null 2>&1
+PYTHONPATH="$WORK/nokill" python3 "$RB" 1 bash "$WORK/leaky.sh" "$WORK/gpid.7" "$CI_LOCK_LIB" 2 >/dev/null 2>&1
 gpid="$(rec_pid "$WORK/gpid.7")"; gstart="$(rec_start "$WORK/gpid.7")"
 check "the leaked busy-loop recorded its identity (positive control)" \
       "1" "$([[ -n "$gpid" && -n "$gstart" ]] && echo 1 || echo 0)"
@@ -342,6 +356,68 @@ reap_recorded "$WORK/gpid.7" || true
 sleep 0.3
 if same_proc "$gpid" "$gstart"; then verdict=alive; else verdict=gone; fi
 check "and the reaping path actually kills it (the deliberate leak is gone, by identity)" "gone" "$verdict"
+
+# BACKSTOP — this section must not depend on the machinery it is testing to
+# clean up after itself. When the identity code is wrong (the case this section
+# exists for) the assertion above goes red AND the busy-loop it deliberately
+# spawned survives, burning a core; observed with the field-swap mutant, where
+# the trap could not collect it either. So collect it here through a path that
+# shares nothing with what is under test: the pid read straight out of the file
+# with a different reader, and an identity check that is not same_proc — this
+# run's private $WORK path, which mktemp made unique and which appears in the
+# process's own command line. That is proof enough to kill a process this
+# section spawned two seconds ago inside this same function; the refuse-to-guess
+# policy governs records inherited from earlier phases, not this one.
+backstop_pid="$(cut -f1 "$WORK/gpid.7" 2>/dev/null | tr -dc '0-9')"
+backstop=cleared
+if [[ -n "$backstop_pid" ]] && kill -0 "$backstop_pid" 2>/dev/null; then
+  case "$(ps -p "$backstop_pid" -o command= 2>/dev/null)" in
+    *"$WORK"*) kill -KILL "$backstop_pid" 2>/dev/null; sleep 0.3
+               kill -0 "$backstop_pid" 2>/dev/null && backstop=still-alive ;;
+    *)         backstop=not-ours ;;
+  esac
+fi
+check "section 7 leaves no busy-loop behind even when its own assertions fail (independent backstop)" \
+      "cleared" "$backstop"
+
+# ── 8. the EXIT trap's decision itself, driven from a test ───────────────────
+# Section 7 covers reap_recorded. The trap around it — which records it walks,
+# whether it inverts the answer, and the `exit 1` that turns an uncollectable
+# survivor into a red run — was covered by nothing: deleting any of those left
+# 24 green assertions and, in one case, two 100%-CPU orphans outliving the
+# guard. A trap cannot be called, but the function it runs can: drive _cleanup
+# in a SUBSHELL over a fixture directory, so its `exit 1` becomes an observable
+# status and its `rm -rf` only removes the fixture.
+FIXA="$WORK/fixture-unprovable"; mkdir -p "$FIXA"
+sleep 20 & standin=$!
+disown "$standin" 2>/dev/null || true
+# A record naming a process that is alive but demonstrably NOT the one recorded.
+printf '%s\t%s\n' "$standin" "$FAKE_START" > "$FIXA/gpid.fixture"
+( WORK="$FIXA"; _cleanup ) >/dev/null 2>&1; crc=$?
+check "an alive-but-unprovable survivor makes the exit trap fail the run (rc 1)" "1" "$crc"
+if kill -0 "$standin" 2>/dev/null; then verdict=alive; else verdict=killed; fi
+check "and the trap did NOT kill it on the guess (positive control: it was still there to check)" "alive" "$verdict"
+kill -KILL "$standin" 2>/dev/null
+
+FIXB="$WORK/fixture-ours"; mkdir -p "$FIXB"
+: > "$FIXB/gpid.fixture"
+# A real busy-loop of ours, recorded the same way the leaky child records itself.
+bash -c '
+  . "$1" || exit 1
+  printf "%s\t%s\n" "$$" "$(_ci_lock_ps "$$" lstart=)" > "$0"
+  while :; do :; done
+' "$FIXB/gpid.fixture" "$CI_LOCK_LIB" &
+fixpid=$!
+disown "$fixpid" 2>/dev/null || true
+for _ in $(seq 1 50); do [[ -s "$FIXB/gpid.fixture" ]] && break; sleep 0.1; done
+check "the fixture busy-loop recorded its identity (positive control)" \
+      "1" "$([[ -n "$(rec_start "$FIXB/gpid.fixture")" ]] && echo 1 || echo 0)"
+( WORK="$FIXB"; _cleanup ) >/dev/null 2>&1; crc=$?
+sleep 0.3
+if kill -0 "$fixpid" 2>/dev/null; then verdict=alive; else verdict=killed; fi
+check "the exit trap collects a survivor it CAN identify" "killed" "$verdict"
+check "and says nothing is wrong when it could collect everything (rc 0)" "0" "$crc"
+kill -KILL "$fixpid" 2>/dev/null   # backstop: our own pid from $!, no identity code involved
 
 echo
 echo "proc hygiene guard: $PASS ok, $FAIL failed"
