@@ -118,6 +118,11 @@ mkdir -p "$rhome"
 # and makes the result depend on the test machine's own fleet state.
 rbin="$SHIM_REMOTE_BIN"
 [[ "${SHIM_REMOTE_TOOLS:-all}" == "notmux" ]] && rbin="${SHIM_REMOTE_BIN}-notmux"
+# Tripwire on the literal, same reason as the IOPlatformUUID one above: if
+# OC_REMOTE_PATH_PREFIX ever names a different path this rewrite silently stops
+# matching — and since the shim also puts $rbin on PATH unconditionally, every
+# assertion would stay green while the real prefix was wrong.
+[[ "$cmd" == *"/opt/homebrew/bin"* ]] || { echo "TRIPWIRE ssh shim: the probe command no longer contains the /opt/homebrew/bin literal this shim rewrites — OC_REMOTE_PATH_PREFIX changed: $cmd" >> "$SHIM_TRIPWIRE"; exit 3; }
 cmd="${cmd//\/opt\/homebrew\/bin/$rbin}"
 HOME="$rhome" PATH="$rbin:/usr/bin:/bin" /bin/sh -c "$cmd"
 SH
@@ -1076,7 +1081,7 @@ else
   ok "the remote identity refusal offers no way to clear it either"
 fi
 
-# 19b'') THE SECOND MACHINE gets the same two questions. STAGE 5b deletes its
+# 19b'') THE SECOND MACHINE gets three questions of its own. STAGE 5b deletes its
 # ENTIRE ~/.officraft — more than this suite deletes locally — so guarding only
 # the local host leaves the cheaper mistake available: from a genuinely clean
 # throwaway VM, naming a production station as SECOND_MACHINE passes every local

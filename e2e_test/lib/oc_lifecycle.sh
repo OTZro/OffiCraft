@@ -733,8 +733,10 @@ oc_detect_prod_host() {
   for r in ${reasons[@]+"${reasons[@]}"}; do printf '%s\n' "$r"; done
 }
 
-# oc_detect_prod_host_remote SSH_TARGET — the SAME two questions, asked about the
-# SECOND machine. Read-only; prints one reason line per hit.
+# oc_detect_prod_host_remote SSH_TARGET — THREE questions about the SECOND
+# machine: the two asked locally (identity, residue) plus LIVENESS, which the
+# local host gets from oc_live_fleet_guard and this one would otherwise never be
+# asked at all. Read-only; prints one reason line per hit.
 #
 # This is not symmetry for its own sake. cross_machine.sh's STAGE 5b deletes MORE
 # on the remote host than the local teardown does locally: `rm -rf "$HOME/.officraft"`

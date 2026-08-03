@@ -34,9 +34,12 @@
 # ##        for a reset script. This is enforced, not merely warned about:
 # ##        oc_prod_host_guard refuses this host if its hardware UUID is a known
 # ##        production station, or if it carries a ~/.officraft/server tree at
-# ##        all — and oc_prod_host_remote_guard asks the same two questions about
-# ##        SECOND_MACHINE, because STAGE 5b deletes that host's ENTIRE
-# ##        ~/.officraft, which is MORE than this suite deletes locally.
+# ##        all — and oc_prod_host_remote_guard asks THREE questions about
+# ##        SECOND_MACHINE: those two, plus whether anything officraft is RUNNING
+# ##        there (a registered warden, or live member-*/worker-* sessions).
+# ##        STAGE 5b boots out that warden, kills those sessions and deletes that
+# ##        host's ENTIRE ~/.officraft — MORE than this suite deletes locally, so
+# ##        the second machine must be QUIET, not merely server-free.
 # ##
 # ##  REQUIRE_ISOLATION_CONFIRMED=1 is how you STATE that (a) is resolved for
 # ##  this host. It creates no isolation and it does not, and cannot, override
