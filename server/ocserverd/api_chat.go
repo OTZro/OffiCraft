@@ -1064,8 +1064,9 @@ func stripLeadingTitle(md string) string {
 	// which changes that line's indent RELATIVE to the ones after it, so the
 	// block's markdown parse can change: an indented code block under a title
 	// splits into a paragraph plus a code block, and a line that was literal
-	// text INSIDE a code block can become a real heading. Rendering only, and
-	// every character survives — but not merely cosmetic.)
+	// text INSIDE a code block can become a real heading. Rendering only — duty
+	// is carried as a plain string and nothing parses it — but not merely
+	// cosmetic.)
 	rest := trimmed
 	for rest != "" {
 		line, tail, found := strings.Cut(rest, "\n")
