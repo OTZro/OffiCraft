@@ -347,9 +347,15 @@ def test_every_closed_topic_emits(client, owner_token, agent_a, fresh_member, ow
     # worker table lives in `member`), so the ordinary worker write face below
     # has a subject without needing the scheduler's spawn seam.
     worker = hire_member(client, owner_token, f"conf-topic-worker-{tag}", kind="outsource")
+    # The member row's PATCH body is a NAMED VALUE, not an inline literal, so
+    # the assertion below can bind to the very field this write sets instead of
+    # to a value re-typed next to it. See the identity check in the loop: if
+    # this body ever stops writing `name`, that check FAILS LOUDLY instead of
+    # silently degrading into something a stale frame satisfies.
+    member_patch_body: dict[str, Any] = {"name": f"conf-topic-{tag}"}
     triggers: list[tuple[str, Any]] = [
         ("member", lambda: client.patch(
-            f"/api/members/{member}", json={"name": f"conf-topic-{tag}"},
+            f"/api/members/{member}", json=member_patch_body,
             headers=_auth(owner_token))),
         ("chat", lambda: client.post(
             "/api/chat", json={"to": agent_a.member_id, "body": "topic probe"},
@@ -451,7 +457,24 @@ def test_every_closed_topic_emits(client, owner_token, agent_a, fresh_member, ow
     # any write that happens AFTER it returns (see sse_client.drain_backlog's
     # note — that is true of every absorbing barrier, so a "setup write inserted
     # below the barrier" experiment can only ever produce an uninformative
-    # green). The PRIMARY guard is the identity assertion in the loop below.
+    # green). The PRIMARY guard is the value binding on the `member` row below.
+    #
+    # 🔴 WHAT IS *NOT* PROVEN HERE — read this before trusting the other rows.
+    # Only the `member` row binds the frame to the write that triggered it. The
+    # other ELEVEN rows still assert no more than "a frame with this topic
+    # arrived", so their non-vacuity is BORROWED from this barrier having
+    # emptied the backlog — it is not proven. Two measured facts make that a
+    # live risk rather than a theoretical one:
+    #   * a single trigger in this table can fan MORE THAN ONE topic. Measured
+    #     (review round 2, full-frame trace): creating a reply_card also fans
+    #     `chat`; creating a role also fans `member`.
+    #   * today no row is poisoned by that cross-talk ONLY because the
+    #     cross-talking topics happen to sit EARLIER in this table, so their
+    #     frames are already consumed by the time the later row waits.
+    # That is an ORDERING ACCIDENT, not a property: REORDERING THIS TABLE CAN
+    # SILENTLY MAKE A ROW VACUOUS AGAIN, and nothing here would object. If you
+    # reorder, or add a trigger with cross-talk, bind that row to its own write
+    # the way the `member` row does — do not assume the barrier covers you.
     owner_sse.drain_backlog(quiet_for=1.0, timeout=5.0, label="before the closed-topic loop")
 
     for topic, fire in triggers:
@@ -473,28 +496,63 @@ def test_every_closed_topic_emits(client, owner_token, agent_a, fresh_member, ow
         assert frame["op"] == expected_op[topic], (topic, frame)
         assert frame["op"] in {"patch", "remove", "signal"}, frame
         if topic == "member":
-            # IDENTITY BINDING — the row's real guard, and the reason this row
-            # no longer needs a mutant to prove it is not vacuous.
+            # VALUE BINDING — the row's real guard, and the reason this row does
+            # not need a mutant to prove it is not vacuous.
             #
             # "a member frame arrived" was satisfiable by ANY member frame,
             # including one this test's own setup produced seconds earlier; that
             # is how the row stayed green with putMember's publish seam bypassed
-            # entirely. Pinning the SUBJECT closes it at the source: a stale
-            # frame is inherently about a different member (a scratch hire, some
-            # other test's roster write), so it can never satisfy this. The row
-            # now says what it always meant — "the delta for the write I just
-            # made arrived" — instead of "some member delta exists".
+            # entirely.
             #
-            # This is also why it beats the barrier as the primary guard: it
-            # holds no matter WHERE a future stray write is added, above or
-            # below the barrier, because it never asks about queue state at all.
+            # 🔴 CORRECTION (independent review round 2, MEASURED — the previous
+            # version of this comment claimed, verbatim:
+            #     "a stale frame is inherently about a DIFFERENT member (a
+            #      scratch hire, some other test's roster write), so it can
+            #      never satisfy this"
+            # and that the check "holds no matter WHERE a future stray write is
+            # added". **The first claim is false and is quoted here so nobody
+            # trusts it again.** The polluting frame comes from `fresh_member()`
+            # — and `member` IS that member, so `payload["id"] == member` is
+            # TRUE for the stale frame (measured: `'m-ca96…' == 'm-ca96…'`).
+            # The SUBJECT does not discriminate at all.
+            #
+            # What actually discriminates is the VALUE this PATCH just wrote:
+            # the payload is an eager snapshot taken inside hub.Publish, so a
+            # frame published BEFORE this write cannot carry the name this write
+            # sets. The id check below is kept only as a sanity check (right
+            # entity), NOT as the guard — do not lean on it.
+            #
+            # ⚠️ DEGRADATION CONDITION, stated so it cannot be re-discovered the
+            # hard way: this guard is only as strong as "the row PATCHes a field
+            # whose value the frame echoes back". If the row is ever changed to
+            # PATCH something else (desired_state, role, …), value binding is
+            # gone and the row falls back to "some member delta arrived" — the
+            # vacuous state this whole ticket exists to remove. That is why the
+            # body is a named dict and why the first assertion below is about
+            # the TEST ITSELF: change the body without re-binding this check and
+            # the row goes RED with instructions, instead of going quietly
+            # green.
+            assert "name" in member_patch_body, (
+                "the member row no longer PATCHes `name`, so the value binding "
+                "below has nothing to bind to. Do NOT delete the binding: pick "
+                "a field this write actually sets AND that the member payload "
+                "echoes back, and assert that instead. Dropping it silently "
+                "returns this row to 'any member frame will do', which a stale "
+                f"setup frame satisfies. Current body: {member_patch_body}"
+            )
             payload = frame["data"]["payload"]
-            assert payload["id"] == member and payload["name"] == f"conf-topic-{tag}", (
-                f"the member row observed a delta for a DIFFERENT subject than "
-                f"the PATCH it just issued (member={member!r}, expected name "
-                f"'conf-topic-{tag}') — this is the stale-frame failure mode: "
-                f"the row would pass while the write's publish seam is missing. "
+            assert payload["id"] == member, (
+                f"member row: delta for the wrong entity (expected {member!r}). "
                 f"Got payload: {payload}"
+            )
+            assert payload["name"] == member_patch_body["name"], (
+                f"the member row observed a delta that does NOT carry the value "
+                f"the PATCH it just issued wrote (expected name "
+                f"{member_patch_body['name']!r}) — this is the stale-frame "
+                f"failure mode: without this check the row passes while the "
+                f"write's publish seam is missing. Note the subject alone would "
+                f"NOT have caught it: the polluting frame is about this very "
+                f"member. Got payload: {payload}"
             )
         if frame["op"] == "signal":
             # §3.2: volatile in-memory store change — payload always null.

@@ -23,6 +23,16 @@ import (
 // (this one code↔spec, the Python one spec↔conformance coverage).
 var specTopicRow = regexp.MustCompile("(?m)^\\|\\s*`([a-z_]+)`\\s*\\|")
 
+// ⚠️ ALREADY-INVESTIGATED, ALREADY-GUARDED — do not re-run this hunt. Go's test
+// cache does NOT track ../../spec/sse.md, so editing only the spec and re-running
+// `go test` locally can hand back a CACHED ok while this equality would in fact
+// fail (measured in review round 2: a `budget` row added to §3.1 kept printing
+// `ok ocserverd (cached)`; the same mutant with -count=1 fails as intended).
+// That is not a hole in CI: bin/tests/go-test-nocache-guard.sh parses every
+// `go test` invocation in CI and requires -count=1, precisely so no CI green is
+// a cache replay. The only rule this leaves for humans: pass -count=1 when you
+// run this by hand after touching the spec.
+//
 // specSSETopics reads the CLOSED topic set from the product's own wire
 // contract, spec/sse.md §3.1 — the table hub.go's sseTopics cites as its
 // source. Same precedent as the openapi/mcp-catalog readers in this package

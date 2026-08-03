@@ -192,7 +192,23 @@ class SSEConnection:
         reassurance; it carries no information. The guard for that direction is
         binding each observed frame to the IDENTITY of the subject the row just
         triggered (see the ``member`` row of test_every_closed_topic_emits),
-        because a stale frame's subject is inherently not the one you just made.
+        because a stale frame cannot carry the value that write just set.
+
+        ⚠️ KNOWN FALSE-RED WAVEFORM (measured with a fake queue, no server —
+        review round 2). The budget is deliberate, not a bug, but know where to
+        look when a red appears here on a loaded machine:
+
+            silent stream                                  -> returns  ~1.13 s
+            a delta every 0.5 s, forever                   -> RAISES   ~5.06 s
+            noisy until t=4.6 s, then completely silent    -> RAISES   ~5.01 s
+
+        The third one is the trap: the stream HAD settled, but not early enough
+        to fit a full 1 s quiet window inside the 5 s budget, so this raises even
+        though nothing is wrong except timing. Baseline lands at ~1.13 s, i.e.
+        about 4 s of headroom, so this is a slow-CI / heavily-loaded-box failure
+        mode. If you see it, look at what is delaying the fan poll — do NOT just
+        widen the budget, which is how a real "something publishes forever" bug
+        would get hidden.
         """
         import time as _time
 
