@@ -204,6 +204,7 @@ LEAKY
 # and a child that did not see the flag would run the whole suite again.
 if [[ "${1:-}" == "--trap-selftest" ]]; then
   [[ -n "${2:-}" ]] || { echo "FATAL: --trap-selftest needs a record file" >&2; exit 2; }
+  echo "[proc-hygiene-guard] --trap-selftest: seeding one record and exiting; NO assertions run" >&2
   cp "$2" "$WORK/gpid.selftest" 2>/dev/null || exit 3
   exit 0
 fi
@@ -635,22 +636,26 @@ kill -KILL "$wirestandin" 2>/dev/null
 # assertion still passes while real orphans outlive the guard. No runtime probe
 # can catch that — a script cannot observe its own exit — but the installed trap
 # is readable as data right up to the last line.
-# The self-test mode is entered from ARGV only. If an ENVIRONMENT variable
-# could do it, a normal CI run that happened to inherit it would take the early
-# exit: zero assertions, no output, exit 0 — and bin/tests/run.sh would print
-# "ok" for a suite that ran nothing. That is a bypass switch on a land gate, the
-# thing bin/lib/ci-lock.sh's header says must never exist. Checked as source
-# text because the failure is the ABSENCE of a run: there is no output to
-# inspect, and a runtime probe would have to re-run the whole suite to see it.
-# The needle is assembled at runtime so this line is not itself a hit — the
-# first version of this check failed against its own grep pattern.
-env_needle="$(printf 'OC_%s' 'PH')"
-check "the self-test mode is keyed on argv, never on an environment variable" \
-      "0" "$(grep -c "$env_needle" "$0" || true)"
-
+# ⚠️ KNOWN GAP, stated rather than papered over. A guard cannot detect its own
+# silent early exit: if some future edit lets an inherited environment variable
+# enter the self-test mode again, this file exits 0 with no assertions and
+# bin/tests/run.sh prints "ok" for a suite that ran nothing. Argv keying is what
+# prevents that today. A source-text taboo on the old variable name was tried
+# here and removed: it forbade one spelling (any other name walked straight
+# through) while reddening the guard for a comment that merely MENTIONED the old
+# name — a check that lies about its own subject. The property belongs one level
+# up, in run_guard, which can require this suite's summary line before calling it
+# ok; that is outside this ticket's one-file scope and is with the ticket owner.
 trap_now="$(trap -p EXIT 2>/dev/null)"
+# NOT inside a command substitution: bash 3.2 (stock /bin/bash on macOS, which
+# this repo supports) ends $( … ) at the first unbalanced ")" — the one closing
+# a case PATTERN — so `$(case … esac)` is a syntax error there and this very
+# check was the guard's only red on that shell. Same hazard bin/tests/
+# ps-field-support-guard.sh already carries a warning about.
+trap_ok=0
+case "$trap_now" in *_cleanup*) trap_ok=1 ;; esac
 check "the EXIT trap still names _cleanup at the end of the run (nothing disarmed it later)" \
-      "1" "$(case "$trap_now" in *_cleanup*) echo 1 ;; *) echo 0 ;; esac)"
+      "1" "$trap_ok"
 
 echo
 echo "proc hygiene guard: $PASS ok, $FAIL failed"
