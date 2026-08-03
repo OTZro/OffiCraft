@@ -25,7 +25,9 @@
 import type { ThemeBundle } from "./themeBundleCore";
 
 /** A real 8-byte PNG signature as a base64 data URI — the smallest value that
- * clears the image gate (mime allowlist + magic bytes + 64 KiB cap). */
+ * clears the image gate (mime allowlist + magic bytes + the size cap — 64 KiB for
+ * avatars / logo / navIcons, 512 KiB for backgrounds since T-72da; 8 bytes
+ * clears either). */
 export const TINY_PNG = "data:image/png;base64,iVBORw0KGgo=";
 
 /** An SVG data URI carrying a <script> — must never reach the DOM. SVG is NOT

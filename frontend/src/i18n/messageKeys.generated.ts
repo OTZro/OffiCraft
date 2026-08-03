@@ -703,6 +703,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "settings.themeAvatarsSection",
   "settings.themeCanvasBg",
   "settings.themeCanvasBgHint",
+  "settings.themeCanvasBgInvalid",
   "settings.themeCanvasBgMode",
   "settings.themeCanvasBgModeCover",
   "settings.themeCanvasBgModeCoverHint",

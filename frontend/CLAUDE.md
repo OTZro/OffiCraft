@@ -1320,10 +1320,31 @@ theme.css 裡定義值是裸 `var(--other)` 的 token(分區三槽)是「跟隨�
   這條規則寫進結構——`backgrounds.topbar` 會被具名擋下(422 / `only canvas`),不是
   靠註解約定。頂列/頁籤列/內容區底下都坐著文字,**文字壓在花紋上沒有可讀性保證**,
   所以不開放,不要「順手」加進 key set。
-- **圖片驗證原封不動重用頭像那道閘**:TS `isValidAvatarValue` / Go `validAvatarValue`
-  ——同一份 mime 白名單(PNG/JPEG/WEBP,SVG 永遠拒)、同一組 magic byte、同一個
-  **64 KiB 解碼上限**。256×256 的可平鋪紋理綽綽有餘;想塞 4K 桌布正是這個 cap 要擋的。
-  **不准為背景另開一套規則、不准調高 cap**;TS/Go 兩側是 twin,任一側加規則就得同步。
+- **圖片驗證的「安全」那半原封不動重用頭像那道閘**:同一份 mime 白名單
+  (PNG/JPEG/WEBP,SVG 永遠拒)、同一組 magic byte、同一套嚴格 base64 字母集。
+  **這半永遠不准為背景放寬**,它跟大小完全正交。
+- 🔴 **但「多大」那半已經分家了(T-72da,owner 2026-08-03)。本檔上一版寫著
+  「不准為背景另開一套規則、不准調高 cap」——那條裁定已經被 owner 自己推翻,
+  不要照著它把兩個數字統一回去。**
+  當時那句的前提是**背景與頭像共用同一道 gate**,所以「調高背景」必然等於「調高頭像」。
+  這個前提已經不成立:閘的兩個 size cap 現在是**參數**
+  (Go `validImageValue(v, maxDecoded, maxValueLen)` / TS `isValidImageValue`),
+  兩個 purpose 各有一組 thin wrapper。
+  - **頭像 / logo / 導覽圖示 = 64 KiB**(`maxAvatarBytes` / `MAX_AVATAR_BYTES`),
+    字串長度 96 KiB。**一個字都沒動**,30–40px 的小圓圖不需要更多。
+  - **背景圖 = 512 KiB**(`maxBackgroundBytes` / `MAX_BACKGROUND_BYTES`),
+    字串長度 704 KiB。理由:它是**鋪滿整個視窗**的圖,owner 的實際背景貼在 64 KiB
+    上限、他連講三次「太糊」。
+  - 🔴 **字串長度那一層一定要跟著動**:它跑在 base64 解碼**之前**,留在 96 KiB 的話
+    512 KiB 的圖會在那裡就被 `data URI is too long` 擋掉,解碼那層永遠執行不到。
+    **只放寬解碼那層 = 完全沒有效果**,這是這件事最容易做半套的地方。
+  - **TS/Go 兩側仍是 twin,而且不再只靠註解**:`bin/tests/fixtures/image-cap-cases.tsv`
+    是唯一的真相表,兩側各自對它斷言
+    (`server/ocserverd/image_cap_mirror_test.go` / `frontend/src/lib/imageCap.test.ts`),
+    任一側漂掉都會紅**而且訊息點得出是哪一側**。照 `doc-cap-cases.tsv` 的先例做。
+  - **座艙那道 UI 閘也要跟著分流**:`ThemeSettings.tsx` 的 `readValidatedImage`
+    是四個 picker 共用的,背景那個 picker 要傳 `isValidBackgroundValue`,
+    否則會出現「後端說可以、座艙說圖片無效」。
 - **色與圖並存**:`global.css` 的 body 改成 `background-color: var(--color-bg)` +
   `background-image: var(--canvas-bg-image, none)` + `background-repeat: repeat`。
   沒有圖 = 完全等同從前的純色;舊主題包(沒有這個欄位)一個像素都不會變。

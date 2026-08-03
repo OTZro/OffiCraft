@@ -704,6 +704,7 @@ var messageKeys = map[string]bool{
 	"settings.themeAvatarsSection":             true,
 	"settings.themeCanvasBg":                   true,
 	"settings.themeCanvasBgHint":               true,
+	"settings.themeCanvasBgInvalid":            true,
 	"settings.themeCanvasBgMode":               true,
 	"settings.themeCanvasBgModeCover":          true,
 	"settings.themeCanvasBgModeCoverHint":      true,

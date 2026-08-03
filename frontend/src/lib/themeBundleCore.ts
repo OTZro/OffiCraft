@@ -108,13 +108,31 @@ export const MAX_WORDING_ENTRIES_PER_LANG = 1000;
 // cap is a cheap pre-filter mirrored on the server.
 export const MAX_FONT_VALUE_LEN = 128;
 
-// Avatar image bounds (T-16a1 P5) — the twins of the Go constants in
-// server/ocserverd/avatar_bundle.go. An avatar is a small roster/chat glyph, so
-// the DECODED image is capped at 64 KiB (the real guard against bloating the
-// single custom_themes JSON row); the raw data-URI string is capped above the
-// base64-inflated 64 KiB (a cheap pre-filter applied BEFORE decoding).
+// Image bounds (T-16a1 P5; split per purpose in T-72da) — the twins of the Go
+// constants in server/ocserverd/avatar_bundle.go. Each purpose gets a PAIR: the
+// DECODED byte cap, and a raw data-URI string cap that sits above the
+// base64-inflated (~4/3) decoded cap and is applied BEFORE decoding as a cheap
+// pre-filter.
+//
+// The two pairs are deliberately different and must not be tidied back into
+// one: an avatar / logo / nav icon is a 30–40 px glyph, where 64 KiB is already
+// generous; a canvas background is stretched or tiled across the WHOLE viewport,
+// where 64 KiB reads as visibly blurry (owner ruling 2026-08-03, overturning the
+// T-081b decision that backgrounds must share the avatar cap — that decision's
+// premise was that both went through ONE gate, which this split removes).
+// Relaxing the wallpaper must NOT relax the glyph, so avatars stay at 64 KiB.
+//
+// Drift against the Go side is caught by bin/tests/fixtures/image-cap-cases.tsv
+// (read by imageCap.test.ts here and image_cap_mirror_test.go there), not by
+// this comment.
 export const MAX_AVATAR_BYTES = 64 * 1024;
 export const MAX_AVATAR_VALUE_LEN = 96 * 1024;
+export const MAX_BACKGROUND_BYTES = 512 * 1024;
+// 512 KiB decoded ≈ 682.7 KiB encoded; 704 KiB sits above that with margin. It
+// MUST move with MAX_BACKGROUND_BYTES: it is checked before the decode, so
+// leaving it at MAX_AVATAR_VALUE_LEN would reject every large background and
+// the decoded cap would never be reached.
+export const MAX_BACKGROUND_VALUE_LEN = 704 * 1024;
 
 /** The closed RASTER mime whitelist an avatar image may declare. SVG
  * (image/svg+xml) is DELIBERATELY absent — it can carry <script>/onload (XSS). */
@@ -252,13 +270,19 @@ function decodeBase64(s: string): Uint8Array | null {
   }
 }
 
-/** Whether v is an admissible embedded avatar image: a
- * `data:image/<whitelisted mime>;base64,<base64>` URI that decodes within the
- * byte cap and whose magic bytes match the declared mime. The twin of
- * validAvatarValue in avatar_bundle.go (the security boundary — this is a new
- * attack surface, an image the browser renders). */
-export function isValidAvatarValue(v: string): boolean {
-  if (v === "" || v.length > MAX_AVATAR_VALUE_LEN) return false;
+/** Whether v is an admissible embedded image at the given size caps: a
+ * `data:image/<whitelisted mime>;base64,<base64>` URI that decodes within
+ * maxDecoded bytes, whose raw string is at most maxValueLen bytes, and whose
+ * magic bytes match the declared mime. The twin of validImageValue in
+ * avatar_bundle.go (the security boundary — this is a new attack surface, an
+ * image the browser renders). Everything but the two caps is shared by every
+ * purpose; only "how big" is per-purpose (T-72da). */
+export function isValidImageValue(
+  v: string,
+  maxDecoded: number,
+  maxValueLen: number
+): boolean {
+  if (v === "" || v.length > maxValueLen) return false;
   if (!v.startsWith("data:")) return false;
   const comma = v.indexOf(",");
   if (comma < 0) return false;
@@ -268,10 +292,24 @@ export function isValidAvatarValue(v: string): boolean {
   const mime = meta.slice(0, -";base64".length);
   if (!AVATAR_MIME_SET.has(mime)) return false;
   const bytes = decodeBase64(payload);
-  if (bytes === null || bytes.length === 0 || bytes.length > MAX_AVATAR_BYTES) {
+  if (bytes === null || bytes.length === 0 || bytes.length > maxDecoded) {
     return false;
   }
   return AVATAR_MIME_MAGIC[mime]?.(bytes) ?? false;
+}
+
+/** The image gate at the AVATAR caps (64 KiB) — for avatars, logo and navIcons,
+ * i.e. the small glyphs. The twin of validAvatarValue in avatar_bundle.go. */
+export function isValidAvatarValue(v: string): boolean {
+  return isValidImageValue(v, MAX_AVATAR_BYTES, MAX_AVATAR_VALUE_LEN);
+}
+
+/** The same image gate at the BACKGROUND caps (512 KiB) — only `backgrounds`
+ * values come through here. The twin of validBackgroundValue in
+ * avatar_bundle.go. See the const block for why a full-viewport image is
+ * allowed more room than a 30–40 px glyph. */
+export function isValidBackgroundValue(v: string): boolean {
+  return isValidImageValue(v, MAX_BACKGROUND_BYTES, MAX_BACKGROUND_VALUE_LEN);
 }
 
 /** Validate a bundle's optional `avatars` overlay (T-16a1 P5; T-ea81) — the
@@ -328,11 +366,18 @@ export function validateNavIcons(navIcons: unknown, where = "theme"): string | n
 
 /** Validate a bundle's optional `backgrounds` overlay (T-081b) — the twin of the
  * Go validateBackgrounds. Key ∈ {canvas}, value ∈ {whitelisted-raster base64
- * data URI, via the SAME gate as avatars — isValidAvatarValue: same mime
- * allowlist, same magic-byte check, same 64 KiB decoded cap}. The cap is NOT
- * raised for backgrounds: a tileable texture fits easily, and a 4K wallpaper is
- * exactly what it must stop. Returns an error message, or null when admissible
- * (an absent overlay is admissible). */
+ * data URI via isValidBackgroundValue: the same mime allowlist, SVG refusal and
+ * magic-byte check as an avatar — those are the security boundary and are shared
+ * — but at the 512 KiB decoded cap rather than the avatar's 64 KiB.
+ *
+ * T-081b ruled the opposite ("the cap is NOT raised for backgrounds"). The owner
+ * overturned that on 2026-08-03: a canvas background covers the whole viewport
+ * and at 64 KiB his real background read as blurry. That ruling's premise — one
+ * shared gate, so relaxing backgrounds would relax avatars too — no longer
+ * holds: the caps are parameters now, and avatars / logo / navIcons keep 64 KiB.
+ *
+ * Returns an error message, or null when admissible (an absent overlay is
+ * admissible). */
 export function validateBackgrounds(backgrounds: unknown, where = "theme"): string | null {
   if (backgrounds === undefined || backgrounds === null) return null;
   if (typeof backgrounds !== "object" || Array.isArray(backgrounds)) {
@@ -342,8 +387,8 @@ export function validateBackgrounds(backgrounds: unknown, where = "theme"): stri
     if (!BACKGROUND_KEY_SET.has(key)) {
       return `${where}: background zone "${key}" is not allowed (only canvas)`;
     }
-    if (typeof value !== "string" || !isValidAvatarValue(value)) {
-      return `${where}: backgrounds[${key}] is not a valid image — only a base64 data: URI of a PNG / JPEG / WEBP (≤ 64 KiB) is accepted`;
+    if (typeof value !== "string" || !isValidBackgroundValue(value)) {
+      return `${where}: backgrounds[${key}] is not a valid image — only a base64 data: URI of a PNG / JPEG / WEBP (≤ 512 KiB) is accepted`;
     }
   }
   return null;

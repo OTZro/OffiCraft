@@ -263,9 +263,31 @@ func TestValidateBackgrounds(t *testing.T) {
 		}
 	}
 
-	// A value under the legal zone still runs the SAME image gate as an avatar:
-	// same mime allowlist, same magic bytes, same 64 KiB cap (never relaxed).
-	big := make([]byte, maxAvatarBytes+1)
+	// A background image that is one byte OVER the avatar cap is now ADMISSIBLE
+	// (T-72da): the owner overturned T-081b's "the cap is never relaxed" on
+	// 2026-08-03. Without this positive case the relaxation itself has no
+	// witness — the reject cases below would still pass at 64 KiB.
+	overAvatarCap := make([]byte, maxAvatarBytes+1)
+	copy(overAvatarCap, pngBytes)
+	pastAvatar := map[string]string{"canvas": dataURI("image/png", overAvatarCap)}
+	if err := validateBackgrounds(&pastAvatar, "t"); err != nil {
+		t.Fatalf("a background one byte past the AVATAR cap must now pass: %v", err)
+	}
+	// Exactly at the background cap is admissible; this also proves the raw
+	// string-length pre-filter moved with it — 512 KiB decoded is ~683 KiB
+	// encoded, so a stale maxBackgroundValueLen would reject this as "too long"
+	// long before the decoded cap is ever consulted.
+	atCap := make([]byte, maxBackgroundBytes)
+	copy(atCap, pngBytes)
+	exact := map[string]string{"canvas": dataURI("image/png", atCap)}
+	if err := validateBackgrounds(&exact, "t"); err != nil {
+		t.Fatalf("a background of exactly maxBackgroundBytes must pass: %v", err)
+	}
+
+	// A value under the legal zone still runs the same image gate as an avatar
+	// for every SECURITY property — mime allowlist, magic bytes — and is capped,
+	// just at the background cap rather than the avatar one.
+	big := make([]byte, maxBackgroundBytes+1)
 	copy(big, pngBytes)
 	for _, tc := range []struct {
 		name   string

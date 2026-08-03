@@ -9,6 +9,7 @@ import {
   AVATAR_KINDS,
   NAV_ICON_KEYS,
   isValidAvatarValue,
+  isValidBackgroundValue,
   validateThemeBundle,
   BACKGROUND_MODES,
   DEFAULT_BACKGROUND_MODE,
@@ -324,11 +325,19 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
 
   // Read one picked file as a base64 data URI and VALIDATE it through the shared
   // client validator (mime whitelist + size + magic bytes — the same gate the
-  // server enforces, the same one avatars / logo / nav-icons all reuse; the
-  // image safety gate is NOT relaxed for any of them). Returns the validated
-  // data URI, or null when the file is unreadable or fails validation (never a
-  // silent bad value in the bundle).
-  async function readValidatedImage(file: File): Promise<string | null> {
+  // server enforces). `validate` selects WHICH size caps apply and defaults to
+  // the avatar caps (64 KiB), which is what avatars / logo / nav-icons want; the
+  // canvas background passes isValidBackgroundValue instead (512 KiB, T-72da).
+  // The SAFETY half of the gate — raster mime allowlist, SVG refusal, magic
+  // bytes — is identical either way and is never relaxed. If a caller forgets to
+  // pass its validator the cockpit would reject an image the server accepts, and
+  // the owner would see "invalid image" for a perfectly good file.
+  // Returns the validated data URI, or null when the file is unreadable or fails
+  // validation (never a silent bad value in the bundle).
+  async function readValidatedImage(
+    file: File,
+    validate: (v: string) => boolean = isValidAvatarValue
+  ): Promise<string | null> {
     let dataUri: string;
     try {
       dataUri = await new Promise<string>((resolve, reject) => {
@@ -340,7 +349,7 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
     } catch {
       return null;
     }
-    return isValidAvatarValue(dataUri) ? dataUri : null;
+    return validate(dataUri) ? dataUri : null;
   }
 
   async function handleAvatarPicked(
@@ -389,9 +398,10 @@ export function ThemeSettings({ crumbs }: { crumbs: Crumb[] }) {
     e.target.value = "";
     if (!file) return;
     setBrandError("");
-    const dataUri = await readValidatedImage(file);
+    // The canvas background is the ONE picker on the background caps.
+    const dataUri = await readValidatedImage(file, isValidBackgroundValue);
     if (dataUri === null) {
-      setBrandError(t.settings.themeAvatarInvalid);
+      setBrandError(t.settings.themeCanvasBgInvalid);
       return;
     }
     setEditCanvasBg(dataUri);
