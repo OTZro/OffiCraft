@@ -1046,7 +1046,9 @@ func dutyText(md string) string {
 //
 // Two known limits, both deliberate:
 //   - SETEXT headings (a line underlined with === or ---) are NOT stripped.
-//     Only ATX is. Conservative: it costs a line of budget, never content.
+//     Only ATX is. Conservative: it costs TWO lines of budget (the text line
+//     AND the underline — a setext heading is two lines by construction),
+//     never content.
 //   - A role doc with no h1 that opens straight into 「## 章節」 loses that
 //     first section heading — it is syntactically a title line. The content
 //     under it survives, but reads as an unlabelled lead-in. Not worth a
@@ -1056,10 +1058,14 @@ func stripLeadingTitle(md string) string {
 	trimmed := strings.TrimRight(md, " \t\r\n")
 	// Skip leading blank lines WITHOUT collapsing the first content line's
 	// indentation — four spaces of indent make it an indented code block, not
-	// a title, and isATXHeading needs to see that. (The indent is preserved
-	// only for that decision: the TrimSpace on the way out does flatten the
-	// first surviving line, so a code block right under a title renders as a
-	// paragraph. Cosmetic, and no content is lost.)
+	// a title, and isATXHeading needs to see that. (That care ends at the
+	// heading decision. The TrimSpace on the way out strips whitespace only —
+	// no content is ever dropped — but it DE-INDENTS the first surviving line,
+	// which changes that line's indent RELATIVE to the ones after it, so the
+	// block's markdown parse can change: an indented code block under a title
+	// splits into a paragraph plus a code block, and a line that was literal
+	// text INSIDE a code block can become a real heading. Rendering only, and
+	// every character survives — but not merely cosmetic.)
 	rest := trimmed
 	for rest != "" {
 		line, tail, found := strings.Cut(rest, "\n")
