@@ -228,3 +228,44 @@ describe("httpApi · deleteRole 409 error contract (unified envelope)", () => {
     expect((err as ApiError).message).toBe("http 409 for DELETE /api/roles/qa");
   });
 });
+
+// ── T-e271 描述更正的 wire 形狀 ─────────────────────────────────────────────
+describe("httpApi · updateTaskDescription wire shape", () => {
+  const WIRE_TASK = {
+    id: "t-1",
+    task_no: "T-0001",
+    status: "in_progress",
+    priority: "high",
+    executor_kind: "member",
+    closed_ts: null,
+    deps: [],
+    steps: [],
+    progress_done: 0,
+    progress_total: 0,
+    description: "corrected",
+  };
+
+  it("POSTs the task's description route with the text in the body", async () => {
+    fetchMock.mockImplementation(async () => jsonResponse(WIRE_TASK));
+    await httpApi.updateTaskDescription("t-1", "corrected");
+    const { url, method, body } = await lastRequest();
+    expect(url).toBe("/api/tasks/t-1/description");
+    expect(method).toBe("POST");
+    expect(JSON.parse(String(body))).toEqual({ description: "corrected" });
+  });
+
+  it("sends an EXPLICIT empty string when clearing — never an absent field", async () => {
+    // The wire reads an ABSENT `description` as "change nothing" and an
+    // explicit "" as "clear it". If this seam ever dropped the empty value
+    // (the shape patchMember deliberately uses for its optional fields), a
+    // clear would answer 200 and leave the old text standing — a write the
+    // owner is told succeeded and did not happen.
+    fetchMock.mockImplementation(async () =>
+      jsonResponse({ ...WIRE_TASK, description: "" })
+    );
+    await httpApi.updateTaskDescription("t-1", "");
+    const { body } = await lastRequest();
+    expect(JSON.parse(String(body))).toEqual({ description: "" });
+    expect(Object.keys(JSON.parse(String(body)))).toContain("description");
+  });
+});

@@ -26,6 +26,9 @@ export const DOC_FIELD_ORDER: Record<DocumentKind, readonly string[]> = {
   task_manual: ["purpose", "fields", "sop_md", "learnings"],
   task_manual_sop: ["sop_md"],
   task_manual_learnings: ["learnings"],
+  // T-e271. One field, because a task's description IS one field — there is no
+  // second thing a revision of it could carry.
+  task_description: ["description"],
 };
 
 /** Keys a revision may CARRY but that are not content of the document.

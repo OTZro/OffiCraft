@@ -960,6 +960,85 @@ button.task-card__status-chip:hover {
   margin-bottom: 0;
 }
 
+/* ── description in-place editing (T-e271) ──────────────────────────────────
+   Colours come only from theme tokens — no literals, per the tokens gate. */
+.task-card__desc-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+.task-card__desc-empty {
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+}
+.task-card__desc-editbtn {
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-muted);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.task-card__desc-editbtn:hover {
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-text) 8%, transparent);
+}
+.task-card__desc-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.task-card__desc-hint {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  /* Free text with no markdown rendering, so it does not inherit `.doc-md`'s
+     long-token rule (T-d451) and has to declare it here. */
+  overflow-wrap: anywhere;
+}
+.task-card__desc-input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 96px;
+  resize: vertical;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.task-card__desc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.task-card__desc-save,
+.task-card__desc-cancel {
+  border-radius: 6px;
+  padding: 3px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text);
+}
+.task-card__desc-save {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+.task-card__desc-save:disabled,
+.task-card__desc-cancel:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* ── progress + elapsed ── */
 .task-card__progress {
   display: flex;

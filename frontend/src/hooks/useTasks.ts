@@ -51,6 +51,10 @@ interface UseTasks {
   markDuplicate: (id: string, duplicateOf: string) => Promise<void>;
   /** Priority change incl. freeze/unfreeze, then refetch. */
   setPriority: (id: string, priority: string) => Promise<void>;
+  /** Correct the task's description (T-e271), then refetch. Accepted on a
+   * CLOSED task too — see the adapter's note on why this one write does not
+   * refuse a terminal task. */
+  updateDescription: (id: string, description: string) => Promise<void>;
   /** 轉派 (T-160e): re-point the task at a member / a freshly minted 外包, then
    * refetch — the move lands the task in `reassigning` and (on an outsource
    * target) changes the worker roster too. */
@@ -271,6 +275,14 @@ export function useTasks(
     [refetch]
   );
 
+  const updateDescription = useCallback(
+    async (id: string, description: string) => {
+      await api.updateTaskDescription(id, description);
+      await refetch();
+    },
+    [refetch]
+  );
+
   const reassign = useCallback(
     async (id: string, input: TaskReassignInput) => {
       await api.reassignTask(id, input);
@@ -305,6 +317,7 @@ export function useTasks(
     terminate,
     markDuplicate,
     setPriority,
+    updateDescription,
     reassign,
     sendMessage,
     getDetail,

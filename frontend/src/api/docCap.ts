@@ -76,6 +76,12 @@ export const CAPPED_FIELDS: Record<DocumentKind, readonly string[]> = {
   task_manual: ["learnings", "sop_md"],
   task_manual_sop: ["sop_md"],
   task_manual_learnings: ["learnings"],
+  // EMPTY on purpose (T-e271): the description has never had a length cap on
+  // the create side either, so the server runs no cap on this restore. A cap
+  // listed here would mark revisions as unrestorable that the server would
+  // happily accept — the cockpit inventing a refusal is worse than not having
+  // one, because there is no way for the owner to tell it is imaginary.
+  task_description: [],
 };
 
 /**

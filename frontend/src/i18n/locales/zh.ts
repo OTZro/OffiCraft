@@ -190,6 +190,21 @@ export const zh = {
     // ⋮ 本身隨後由 owner 裁示刪除);優先權改卡面 chip 就地編輯(v2)
     statusMenuLabel: "狀態操作",
     priorityLabel: "優先權",
+    // 描述就地編輯(T-e271)。descEditHint 講的是這個編輯面與步驟備註的分工——
+    // 描述說「這張票是什麼」,備註說「這一步現在做到哪」;沒有它,兩個都能打字的
+    // 欄位長得一樣,進度就會被寫進描述裡。
+    descLabel: "詳細敘述",
+    descEdit: "編輯敘述",
+    descEditHint: "描述說明這張任務「是什麼」(範圍、緣由、驗收);進度請寫在步驟備註。",
+    descPlaceholder: "這張任務要做什麼、為什麼要做、做到什麼程度算完成…",
+    descSave: "儲存",
+    descCancel: "取消",
+    descEmpty: "尚未填寫敘述",
+    descError: "敘述儲存失敗,請稍後重試",
+    descHistoryTitle: "任務敘述",
+    // 結案任務照樣改得動(裁定②)。這句只在終態卡的編輯面出現,講清楚它不是漏擋:
+    // 票寫錯常常是結案後才發現的,而產出物清單相反、結案即凍結。
+    descClosedNote: "已結案的任務仍可更正敘述(產出物則已凍結)。",
     // 任務編號 chip 點擊複製(owner 2026-07-19 圈截圖):點 chip 把顯示的任務
     // 編號寫進剪貼簿,給一個短暫「已複製」回饋。copyTaskNo 是 chip 的 aria-label
     // (帶顯示號),taskNoCopied 是複製成功後的短暫提示文字。
