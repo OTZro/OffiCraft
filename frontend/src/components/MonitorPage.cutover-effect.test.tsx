@@ -1,28 +1,34 @@
-// The cutover-effect line on a machine row — Monitor §2.
+// The cutover-effect mark on a machine row — Monitor §2.
 //
-// FOUR states, and the whole ticket is about which of them is allowed to be
-// SILENT:
+// FOUR states, and the whole file is about which of them is allowed to SPEAK.
+// 🔴 The rule CHANGED on 2026-08-04 (owner, rc-aaa0e7967f8a). It is now:
 //
-//   "effective"     proven: the agents running on that box were started under
-//                   the new identity → nothing is shown, and nothing may be
-//   "not_effective" proven otherwise → the amber sentence
-//   "unproven"      the machine checked and could not tell → a grey line
-//   null            the machine has never reported → a grey line of its own
+//   "not_effective" proven otherwise → the short amber mark — the ONLY state
+//                   that renders anything at all
+//   "effective"     proven in effect → nothing rendered
+//   "unproven"      the machine checked and could not tell → nothing rendered
+//   null            the machine has never reported → nothing rendered
 //
-// Before this row, the last three were all the same nothing on screen: a
-// machine that had never been measured looked exactly like one that had been
-// measured and passed. That is the defect, and "no news" reading as "good news"
-// is precisely how a machine whose cutover had NOT taken effect stayed green
-// for three hours.
+// ⚠️ The previous rule was the opposite for the last two: they each had their
+// own grey sentence, and this file asserted that the three non-effective states
+// could NOT share one blank. That assertion was guarding a real incident — four
+// states sharing one blank is how a machine whose cutover had NOT taken effect
+// looked healthy for three hours — so it was not wrong to have it. The owner
+// deliberately narrowed what that guard protects: the incident's distinction
+// (measured-and-FAILED vs everything else) still stands and is asserted below;
+// what was given up is telling apart the two states that are the ABSENCE of an
+// answer, because a reader who finishes either sentence can do nothing with it.
 //
-// So the assertions here are not four "renders X" checks — those stay green
-// when two states quietly converge. They are:
-//   (1) the healthy state's cell must be EXACTLY what it was with no line at
-//       all, character for character (⛔ not one word more);
-//   (2) every other state must ADD text to that same cell;
-//   (3) the three that speak must be pairwise distinguishable;
-//   (4) none of the copy may carry internal vocabulary or tell anyone to
-//       restart something.
+// ⛔ So the assertions here were REWRITTEN, not relaxed. Nothing is commented
+// out, nothing was widened to "some text or none". What is pinned now:
+//   (1) "not_effective" renders the mark, and that mark is its own dictionary
+//       string (not some other state's text);
+//   (2) "unproven" and null render NO cutover element at all — asserted as the
+//       element being ABSENT, never as "its text is empty", because an empty
+//       element still costs a row and still hides the mark's meaning;
+//   (3) "effective" renders no cutover element either — the cell is character
+//       for character what it is with no mark;
+//   (4) the copy carries no internal vocabulary and tells nobody to restart.
 
 import { readFile } from "node:fs/promises";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -74,15 +80,16 @@ const machine = (cutoverEffect: CutoverEffect): MachineView => ({
   claudeSubReadable: null,
 });
 
-/** Every state the field has, named for the failure messages below. null is a
- * peer entry, not a default — "this warden never reported" is a fact about the
- * machine, not a gap in the fixture. */
-const STATES: ReadonlyArray<readonly [name: string, effect: CutoverEffect]> = [
-  ["proven effective", "effective"],
-  ["proven not effective", "not_effective"],
-  ["checked, could not prove", "unproven"],
-  ["never reported (null)", null],
-];
+/** The three states that render NOTHING, named for the failure messages below.
+ * null is a peer entry, not a default — "this warden never reported" is a fact
+ * about the machine, not a gap in the fixture. "not_effective" is deliberately
+ * absent: it is the one state with a face, and it is asserted on its own. */
+const SILENT_STATES: ReadonlyArray<readonly [name: string, effect: CutoverEffect]> =
+  [
+    ["proven effective", "effective"],
+    ["checked, could not prove", "unproven"],
+    ["never reported (null)", null],
+  ];
 
 /** Render ONE machine in the given state and return the whole text of the cell
  * the line lives in. The cell, not the line: a test that reads only the line's
@@ -109,72 +116,104 @@ describe("MonitorPage cutover-effect line", () => {
     listMembers.mockResolvedValue([]);
   });
 
-  it("says nothing at all on a machine that is proven effective", async () => {
-    const healthy = await cellTextFor("effective");
-    // Every other state's cell is this string PLUS its own sentence, so the
-    // healthy one is the common prefix and can be pinned as "the cell with
-    // nothing added" without hard-coding what the other cells contain.
-    for (const [name, effect] of STATES) {
-      if (effect === "effective") continue;
-      const speaking = await cellTextFor(effect);
-      expect(
-        speaking.startsWith(healthy),
-        `"${name}" changed the healthy part of the cell rather than adding to it`
-      ).toBe(true);
-      expect(
-        speaking.length,
-        `"${name}" added nothing — it is indistinguishable from a healthy machine`
-      ).toBeGreaterThan(healthy.length);
-    }
+  it("adds the mark to the cell on a proven failure, and only there", async () => {
+    // The proven failure's cell is the silent cell PLUS the mark, so the silent
+    // cell is the common prefix and can be pinned as "the cell with nothing
+    // added" without hard-coding what the mark contains.
+    const silent = await cellTextFor("effective");
+    const failing = await cellTextFor("not_effective");
+    expect(
+      failing.startsWith(silent),
+      `"proven not effective" changed the rest of the cell rather than adding to it`
+    ).toBe(true);
+    expect(
+      failing.length,
+      `"proven not effective" added nothing — it is indistinguishable from a machine with no problem`
+    ).toBeGreaterThan(silent.length);
   });
 
-  it("gives the three non-effective states three different sentences", async () => {
-    const seen: Array<{ name: string; text: string }> = [];
-    for (const [name, effect] of STATES) {
-      if (effect === "effective") continue;
-      seen.push({ name, text: await cellTextFor(effect) });
+  it("gives the three states with no answer to give the SAME blank cell", async () => {
+    // ⚠️ This is the inverse of what this test used to assert, and it is the
+    // owner's decision, not a slip: "measured and fine", "measured and could not
+    // tell" and "never measured" are all states the reader can do nothing with,
+    // so they now read identically. The distinction the incident was about —
+    // measured and FAILED vs everything else — is the test above, and it stands.
+    const texts = new Map<string, string>();
+    for (const [name, effect] of SILENT_STATES) {
+      texts.set(name, await cellTextFor(effect));
     }
-    for (let i = 0; i < seen.length; i++) {
-      for (let j = i + 1; j < seen.length; j++) {
-        expect(
-          seen[i].text,
-          `"${seen[i].name}" and "${seen[j].name}" read identically — a reader ` +
-            `cannot tell "we measured and it failed" from "we never measured"`
-        ).not.toBe(seen[j].text);
-      }
-    }
-  });
-
-  it("binds each state to ITS OWN sentence, not merely to a different one", async () => {
-    // Pairwise inequality above proves the three sentences differ. It does NOT
-    // prove each state gets the RIGHT one: swapping "could not tell" with
-    // "never reported" keeps all three distinct and passes every other test in
-    // this file. Those two imply opposite next steps — go look at that machine
-    // vs go ship it the release — so the binding is the substance, and it has
-    // to be asserted against the actual copy.
-    //
-    // I18nProvider defaults to zh (i18n/index.tsx), so zh is what renders here.
-    const m = zh.monitor.machine;
-    for (const [effect, mine, theirs] of [
-      ["not_effective", m.cutoverNotInEffect, m.cutoverUnproven],
-      ["unproven", m.cutoverUnproven, m.cutoverUnreported],
-      [null, m.cutoverUnreported, m.cutoverUnproven],
-    ] as ReadonlyArray<readonly [CutoverEffect, string, string]>) {
-      const text = await cellTextFor(effect);
-      expect(text, `${effect ?? "null"} did not render its own sentence`).toContain(
-        mine
-      );
+    const [[firstName, firstText], ...rest] = [...texts];
+    for (const [name, text] of rest) {
       expect(
         text,
-        `${effect ?? "null"} rendered another state's sentence`
-      ).not.toContain(theirs);
+        `"${name}" says something "${firstName}" does not — the three states ` +
+          `with no answer are meant to be one and the same blank`
+      ).toBe(firstText);
     }
   });
 
-  it("keeps the proven failure visually apart from the two grey ones", async () => {
-    // Colour is the second channel, and it carries the only distinction that
-    // matters at a glance: one machine has a problem, the other two merely have
-    // no answer. Sharing a class would put them back together.
+  it("binds the mark to the failure state's OWN dictionary string", async () => {
+    // Rendering "some text" is not the requirement: the mark has to be the
+    // string that means "not in effect". Asserted against the actual copy so
+    // that wiring the row to any other key fails here.
+    //
+    // I18nProvider defaults to zh (i18n/index.tsx), so zh is what renders here.
+    const text = await cellTextFor("not_effective");
+    expect(text, "the proven failure did not render its own mark").toContain(
+      zh.monitor.machine.cutoverNotInEffect
+    );
+  });
+
+  it("paints the failure amber, and keeps no rule for the retired grey line", async () => {
+    // jsdom does not apply the imported CSS, so the stylesheet is the only place
+    // this distinction exists. Two directional claims: the one state with a face
+    // keeps the alarm colour (and takes it from the theme token, never a literal
+    // — the cockpit has user-authored themes), and the grey ".mon-cutover-note"
+    // rule is GONE. A rule with no caller left behind is the next person's trap:
+    // they will trust it and wire something to it.
+    // Read from the repo path rather than through `import.meta.url`: vitest
+    // does not hand test modules a file: URL, so resolving against it throws.
+    const css = await readFile("src/components/monitor.css", "utf8");
+    const ruleFor = (cls: string) => {
+      const m = css.match(new RegExp(`\\.${cls}\\s*\\{([^}]*)\\}`));
+      return m === null ? null : m[1];
+    };
+    const warn = ruleFor("mon-cutover-warn");
+    if (warn === null) throw new Error("no .mon-cutover-warn rule in monitor.css");
+    expect(warn).toContain("var(--color-warn-fg)");
+    expect(
+      ruleFor("mon-cutover-note"),
+      "the grey cutover line has no caller any more — its rule must not survive it"
+    ).toBeNull();
+  });
+
+  it("renders no cutover element whatsoever on the three silent states", async () => {
+    // ⛔ Absence of the ELEMENT, not emptiness of its text: a zero-width or
+    // empty-text placeholder would still hold a row of space and would still
+    // satisfy a "renders no text" assertion.
+    for (const [name, effect] of SILENT_STATES) {
+      listMachines.mockResolvedValue([machine(effect)]);
+      render(
+        <I18nProvider>
+          <MonitorPage />
+        </I18nProvider>
+      );
+      await screen.findByTestId("mon-machine-id");
+      expect(
+        screen.queryByTestId("mon-cutover-warning"),
+        `"${name}" rendered a cutover element; it must render none at all`
+      ).toBeNull();
+      expect(
+        screen.queryByTestId("mon-cutover-note"),
+        `"${name}" rendered the retired grey line`
+      ).toBeNull();
+      cleanup();
+    }
+  });
+
+  it("still renders the element on the one state that speaks", async () => {
+    // The control for the test above: "no element anywhere, ever" would pass it
+    // while silently deleting the only face the incident left us.
     listMachines.mockResolvedValue([machine("not_effective")]);
     render(
       <I18nProvider>
@@ -182,69 +221,16 @@ describe("MonitorPage cutover-effect line", () => {
       </I18nProvider>
     );
     const warn = await screen.findByTestId("mon-cutover-warning");
-    const warnClass = warn.className;
-    cleanup();
-
-    for (const quiet of ["unproven", null] as const) {
-      listMachines.mockResolvedValue([machine(quiet)]);
-      render(
-        <I18nProvider>
-          <MonitorPage />
-        </I18nProvider>
-      );
-      const note = await screen.findByTestId("mon-cutover-note");
-      expect(
-        note.className,
-        `the ${quiet ?? "never reported"} line is styled like the proven failure`
-      ).not.toBe(warnClass);
-      cleanup();
-    }
+    expect(warn.className).toContain("mon-cutover-warn");
+    expect(warn.textContent).toBe(zh.monitor.machine.cutoverNotInEffect);
   });
-
-  it("paints the two quiet states grey and the failure amber, in the stylesheet", async () => {
-    // The class-name check above only proves the two are DIFFERENT. The ticket's
-    // requirement is stronger and directional: the states with no answer get
-    // muted grey, and the alarm colour stays reserved for the machine that
-    // actually has a problem. Reading the stylesheet is the only place that
-    // distinction exists — jsdom does not apply the imported CSS.
-    // Read from the repo path rather than through `import.meta.url`: vitest
-    // does not hand test modules a file: URL, so resolving against it throws.
-    const css = await readFile("src/components/monitor.css", "utf8");
-    const ruleFor = (cls: string) => {
-      const m = css.match(new RegExp(`\\.${cls}\\s*\\{([^}]*)\\}`));
-      if (m === null) throw new Error(`no .${cls} rule in monitor.css`);
-      return m[1];
-    };
-    expect(ruleFor("mon-cutover-note")).toContain("var(--color-text-muted)");
-    expect(ruleFor("mon-cutover-note")).not.toContain("var(--color-warn-fg)");
-    expect(ruleFor("mon-cutover-warn")).toContain("var(--color-warn-fg)");
-  });
-
-  it("renders no cutover element whatsoever on a proven-effective machine", async () => {
-    // The cell-text check above would still pass if a zero-width placeholder
-    // held the space. Nothing may be there at all.
-    listMachines.mockResolvedValue([machine("effective")]);
-    render(
-      <I18nProvider>
-        <MonitorPage />
-      </I18nProvider>
-    );
-    await screen.findByTestId("mon-machine-id");
-    expect(screen.queryByTestId("mon-cutover-warning")).toBeNull();
-    expect(screen.queryByTestId("mon-cutover-note")).toBeNull();
-  });
-
 });
 
 describe("cutover-effect copy", () => {
   // Checked against the DICTIONARIES rather than the rendered page, because the
   // page renders one locale and the rule applies to every one of them — a zh
   // string that leaks the vocabulary would sail past a render-only check.
-  const strings = [en, zh].flatMap((dict) => [
-    dict.monitor.machine.cutoverNotInEffect,
-    dict.monitor.machine.cutoverUnproven,
-    dict.monitor.machine.cutoverUnreported,
-  ]);
+  const strings = [en, zh].map((dict) => dict.monitor.machine.cutoverNotInEffect);
 
   it("carries no internal vocabulary", () => {
     // Owner, verbatim: nobody outside this codebase knows what "anchor" is. A
@@ -270,14 +256,23 @@ describe("cutover-effect copy", () => {
     }
   });
 
-  it("says something different in each state, in each locale", () => {
-    // The same check as the rendered one above, one layer down: two dictionary
-    // entries that happen to be equal would render as two identical lines.
-    for (const dict of [en, zh]) {
-      const m = dict.monitor.machine;
-      const trio = [m.cutoverNotInEffect, m.cutoverUnproven, m.cutoverUnreported];
-      expect(new Set(trio).size).toBe(trio.length);
-      for (const text of trio) expect(text.trim()).not.toBe("");
+  it("stays a MARK in every locale — non-empty, and short", () => {
+    // ⚠️ This replaces "says something different in each state": there is only
+    // one state that says anything now, so that rule has nothing left to range
+    // over. What took its place is the property the owner actually bought — the
+    // reason the three sentences were dropped is that they were long enough to
+    // eat the machine's row. A regression back to prose would slip past every
+    // other test in this file, so the length is pinned here.
+    //
+    // The cap is generous on purpose (it is a smell test, not a design token):
+    // "Not in effect" is 13 and 未生效 is 3, while the sentences it replaced ran
+    // 120+. Anything that trips this is a paragraph, not a mark.
+    for (const text of strings) {
+      expect(text.trim(), "the mark must not be empty").not.toBe("");
+      expect(
+        text.length,
+        `"${text}" is a sentence again, not a mark`
+      ).toBeLessThanOrEqual(24);
     }
   });
 });

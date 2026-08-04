@@ -1028,30 +1028,36 @@ export const en: Dict = {
       hardwareBad: "bad value",
       hardwareBadHint:
         "This machine reported a value of the wrong type, so it cannot be shown — the probe ran, its reading is unusable. Check that machine's warden version.",
-      // ── the cutover lines. THREE of the four states speak; the fourth —
-      // proven in effect — renders nothing at all, and that silence is the
-      // whole contract: a blank row now means "we measured this machine and it
-      // is fine", and nothing else may look like it.
+      // ── the cutover mark. Of the four states only ONE speaks — the proven
+      // failure; the other three (measured and confirmed in effect / measured
+      // but undecidable / never measured) render nothing at all.
       //
-      // Before this, "measured and fine", "measured and could not tell" and
-      // "never measured" were the same blank, which is how a machine whose
-      // cutover had NOT taken effect stayed green for three hours. The first
-      // line below is the proven failure (amber — a real problem); the two
-      // after it are the absence of an answer (grey — nothing is known to be
-      // wrong, but nothing is known to be right either).
+      // 🔴 owner 2026-08-04 picked ① on rc-aaa0e7967f8a: drop all three long
+      // sentences, keep one very short mark on the proven failure. Verbatim:
+      // "these three are all too long, and can the people who see them do
+      // anything? do they even understand what happened?" All three complaints
+      // hold:
+      //   1. Too long — each was a full line of prose eating the machine's row.
+      //   2. Not actionable — the old comment itself wrote "a warning nobody
+      //      can act on is not a warning" and then, three lines later, "none of
+      //      them tells anyone to restart anything". **It contradicted itself**,
+      //      and not one of the three told the reader what to do.
+      //   3. Not understandable — the old copy already avoided anchor / legacy,
+      //      but "a change to how it runs its agents" is itself an internal
+      //      concept: the reader does not know what that is or how bad it is.
       //
-      // 🔴 The copy carries NO internal vocabulary. "anchor" / "legacy" are
-      // names for launchd plist shapes and mean nothing to the people reading
-      // this screen (owner, verbatim: nobody outside knows what anchor is), so
-      // the sentences say what is true of THEIR machine instead. They also stop
-      // at describing the state — none of them tells anyone to restart
-      // anything, which is the option the owner ruled out explicitly.
-      cutoverNotInEffect:
-        "A recent change to how this machine runs its agents has not reached the agents currently running on it — they were started before the change.",
-      cutoverUnproven:
-        "This machine checked whether a recent change to how it runs its agents reached the agents currently running on it, and could not tell either way.",
-      cutoverUnreported:
-        "This machine has never reported whether a recent change to how it runs its agents reached the agents running on it — the software on it is too old to check.",
+      // ⇒ **The short mark does not pretend to explain; it only says "something
+      // is off here".** Not spelling out what is off is a deliberate trade: the
+      // person who sees it has to come and ask, and that beats a sentence whose
+      // every word is legible but whose point is unusable.
+      //
+      // ⚠️ The three sentences were added to fix a real incident: before them,
+      // three states shared one blank, so a machine whose cutover had NOT taken
+      // effect looked healthy for three hours. **That incident is still fenced
+      // off** — the proven failure still has a face, it is just a short one.
+      // Only the two "no answer" states fall back to silence, and they never
+      // had anything to say (reading them leads to no action).
+      cutoverNotInEffect: "Not in effect",
     },
   },
   // ── Backup health (T-da06) — is the scheduled backup still producing
