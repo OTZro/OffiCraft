@@ -412,10 +412,17 @@ const MOCK_WIRE_ROLES_SEED: WireRoleDef[] = [
     // exists — and `foldRole` re-derives both numbers from the live setting on
     // every read anyway, so these two are only here to satisfy the wire type.
     //
-    // The shipped seed is deliberately OVER the 1000-char default: it is a
-    // factory doc no cap can catch (reset_role folds back to the file seed, a
-    // path with no cap check on it), so the mock shows the same over-budget
-    // reading a fresh install shows.
+    // The structural exemption stands, but it has NO instance today: a factory
+    // doc is something no cap can catch (reset_role folds back to the file
+    // seed, a path with no cap check on it), yet the shipped Duty seed sits far
+    // BELOW the default cap, so the mock shows the same within-budget reading a
+    // fresh install shows.
+    // ⚠️ This block used to say the seed was deliberately OVER the 1000-char
+    // default. That was retired with the oversized seed (T-e1e3, then T-795e
+    // replaced it again) and this copy was missed — the server-side copies of
+    // the same paragraph (domain.go, api_doc_caps_tae38_test.go, server
+    // CLAUDE.md) were all corrected then. Deliberately no rune count here: read
+    // seeds/role_def_assistant.md if you need its size.
     size_chars: [...SEED_ROLE_ASSISTANT_MD].length,
     cap_chars: DOC_CAP_CHARS_DEFAULTS.duty,
     owner_id: MOCK_OWNER_ID,
