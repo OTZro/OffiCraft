@@ -617,6 +617,13 @@
   },
   {
     "auth": "gated",
+    "mcp_tool": "reset_insight",
+    "method": "POST",
+    "path": "/api/insight/{role_key}/reset",
+    "requires": "agent"
+  },
+  {
+    "auth": "gated",
     "mcp_tool": "get_lessons",
     "method": "GET",
     "path": "/api/lessons/{role_key}/{task_type}",

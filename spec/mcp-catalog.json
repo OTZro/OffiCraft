@@ -1720,6 +1720,21 @@
       "name": "patch_insight"
     },
     {
+      "description": "Reset a per-role insight doc back to its factory seed (idempotent tombstone of the overlay) - the counterpart of reset_role on the Duty block. A role with NO seed file (seeds/insight_<role_key>.md) returns 404: there must be a factory version to reset TO. No length cap is applied on this path, matching reset_role - the factory text is part of the product. The overlay you are discarding is retained as a document-history revision, so the reset is recoverable. Only the role's own agents (and admin) may do it.",
+      "inputSchema": {
+        "properties": {
+          "role_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "role_key"
+        ],
+        "type": "object"
+      },
+      "name": "reset_insight"
+    },
+    {
       "description": "Read a per-role lessons doc (per role_key; overlay \u2295 seed).",
       "inputSchema": {
         "properties": {

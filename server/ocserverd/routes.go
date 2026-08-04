@@ -988,6 +988,22 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			MCPTool:  "patch_insight",
 		},
 		{
+			Method:  "POST",
+			Path:    "/api/insight/{role_key}/reset",
+			Handler: w.HandleResetInsightApiInsightRoleKeyResetPost,
+			Auth:    authGated,
+			// T-6501. Same floor as the other two insight WRITE rows, for the
+			// same reason: per-ROLE authz cannot be expressed by the ladder, so
+			// it lives in the handler (insightWriteAuthz) and this row must not
+			// declare a floor lower than the gate it actually has. Deliberately
+			// NOT reset_role's admin_agent floor — reset_role has no per-role
+			// gate to fall back on, insight does, and a role's own agent may
+			// already replace this document wholesale.
+			Requires: principalAgent,
+			Summary:  "Reset a per-role insight doc to its factory seed (idempotent tombstone overlay).",
+			MCPTool:  "reset_insight",
+		},
+		{
 			Method:   "GET",
 			Path:     "/api/lessons/{role_key}/{task_type}",
 			Handler:  w.HandleGetLessonsApiLessonsRoleKeyTaskTypeGet,

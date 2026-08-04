@@ -135,6 +135,70 @@ func (s *apiServer) HandleGetInsightApiInsightRoleKeyGet(w http.ResponseWriter, 
 	writeJSON(w, http.StatusOK, dto)
 }
 
+// POST /api/insight/{role_key}/reset — tombstone the overlay back to this
+// role's own factory seed (T-6501). The exact counterpart of reset_role on the
+// Duty block, and it exists because until now there was NO path at all back to
+// `seeds/insight_<role_key>.md`: the seed shipped, and once a role had written
+// its own insight nothing could call the factory wording back.
+//
+// A role with no seed file → 404, the same rule reset_role applies (there must
+// be a factory version to reset TO). Idempotent: resetting an already-default
+// doc writes a tombstone over a tombstone and answers the same DTO.
+//
+// 🔴 THE SEED CHECK IS ON THE FILE, NOT ON IsSeed. `RoleDefDTO.IsSeed` means
+// "this role HAS a factory version available"; it does NOT mean "what you are
+// reading right now IS the factory version" — that is IsDefault. On 2026-08-04
+// that distinction misled two people in a row on this very document, so it is
+// written down here rather than left to be re-derived. Insight has its own
+// per-role seed roster anyway (the presence of the file IS the roster, see
+// assets.go seedInsightMD), so the answer must come from there.
+//
+// 🔴 NO DOC CAP IS CHECKED ON THIS PATH, deliberately, matching reset_role.
+// Both handlers must behave the same way here or the office grows a state
+// nobody predicts: a Duty resets fine while the very same gesture on Insight is
+// refused by a cap the OWNER set afterwards — i.e. a user setting blocking the
+// way back to factory content. The factory text is part of the product, not a
+// document the caller authored, so a ceiling on what people WRITE has no
+// business judging it. (The restore door in api_document_history.go is the
+// opposite case and does check the cap: there the caller is putting back text a
+// person wrote.)
+func (s *apiServer) HandleResetInsightApiInsightRoleKeyResetPost(w http.ResponseWriter, r *http.Request, roleKey string) {
+	// Authz BEFORE the 404, matching replace_insight / patch_insight rather
+	// than reset_role: those two answer the write gate first, and a caller with
+	// no business writing this role's insight should not learn from the status
+	// code which roles ship a seed.
+	if !s.insightWriteAuthz(w, r, roleKey) {
+		return
+	}
+	_, hasSeed, err := s.root.seedInsightMD(roleKey)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	if !hasSeed {
+		writeError(w, http.StatusNotFound,
+			"role '"+roleKey+"' has no factory insight to reset to")
+		return
+	}
+	// SaveWithDocumentHistory, NOT a bare putInsightOn: the overlay this reset
+	// discards is retained as a revision, so a reset is recoverable from the
+	// version history exactly like every other write to this document. Dropping
+	// it would make reset the one destructive write with no way back.
+	if err := s.dal.SaveWithDocumentHistory("insight", roleKey, currentActor(r), insightSnapshotIn(roleKey), func(ex sqlExecer) error {
+		return putInsightOn(ex, Insight{RoleKey: roleKey, Tombstoned: true})
+	}); err != nil {
+		internalError(w, err)
+		return
+	}
+	s.hub.Publish("insight", "patch", "insight", wireOwnerID+"::"+roleKey, nil, audienceOwnerOnly(), requestTrigger(r))
+	dto, err := s.foldInsightDTO(roleKey)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, dto)
+}
+
 // POST /api/insight/{role_key} — whole-doc replace. Per-role WRITE authz
 // (insightWriteAuthz): admin capability writes any role, everyone else only its
 // own member's role_key.

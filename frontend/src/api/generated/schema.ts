@@ -801,6 +801,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/insight/{role_key}/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset a per-role insight doc to its factory seed (idempotent tombstone overlay).
+         * @description Reset a per-role INSIGHT doc back to its factory seed (T-6501): an idempotent tombstone of the overlay, the exact counterpart of ``reset_role`` on the Duty block.
+         *
+         *     Until this operation existed there was NO way to reach the shipped ``seeds/insight_<role_key>.md`` again once a role had written its own insight — the seed shipped, and nothing could call it back.
+         *
+         *     A role with NO seed file → 404, the same rule ``reset_role`` applies to a role with no seed definition: there must be a factory version to reset TO. The check is on the SEED FILE, not on ``is_seed`` — that field means "this role has a factory version available", never "you are currently reading it" (that is ``is_default``).
+         *
+         *     NO length cap is applied on this path, matching ``reset_role``: the factory text is part of the product, so a cap the owner set afterwards must not be able to block the way back to it.
+         *
+         *     Per-role WRITE authz — identical to ``replace_insight`` / ``patch_insight``. Retains the pre-reset overlay as a document-history revision (kind ``insight``), so the reset is recoverable. Answers the folded doc (``is_default`` → true) and fans an ``insight`` delta.
+         */
+        post: operations["handle_reset_insight_api_insight__role_key__reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/lessons/{role_key}/{task_type}": {
         parameters: {
             query?: never;
@@ -8929,6 +8957,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InsightPatchResultDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_reset_insight_api_insight__role_key__reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                role_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InsightDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */

@@ -2734,6 +2734,9 @@ type ServerInterface interface {
 	// Patch a per-role insight doc by unique anchors ({edits:[{old,new}]}).
 	// (POST /api/insight/{role_key}/patch)
 	HandlePatchInsightApiInsightRoleKeyPatchPost(w http.ResponseWriter, r *http.Request, roleKey string)
+	// Reset a per-role insight doc to its factory seed (idempotent tombstone overlay).
+	// (POST /api/insight/{role_key}/reset)
+	HandleResetInsightApiInsightRoleKeyResetPost(w http.ResponseWriter, r *http.Request, roleKey string)
 	// Read a per-role lessons doc (per role_key; overlay ⊕ seed).
 	// (GET /api/lessons/{role_key}/{task_type})
 	HandleGetLessonsApiLessonsRoleKeyTaskTypeGet(w http.ResponseWriter, r *http.Request, roleKey string, taskType string)
@@ -3769,6 +3772,32 @@ func (siw *ServerInterfaceWrapper) HandlePatchInsightApiInsightRoleKeyPatchPost(
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.HandlePatchInsightApiInsightRoleKeyPatchPost(w, r, roleKey)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleResetInsightApiInsightRoleKeyResetPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleResetInsightApiInsightRoleKeyResetPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "role_key" -------------
+	var roleKey string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "role_key", r.PathValue("role_key"), &roleKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "role_key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleResetInsightApiInsightRoleKeyResetPost(w, r, roleKey)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -6452,6 +6481,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/insight/{role_key}", wrapper.HandleGetInsightApiInsightRoleKeyGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/insight/{role_key}", wrapper.HandleReplaceInsightApiInsightRoleKeyPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/insight/{role_key}/patch", wrapper.HandlePatchInsightApiInsightRoleKeyPatchPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/insight/{role_key}/reset", wrapper.HandleResetInsightApiInsightRoleKeyResetPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/lessons/{role_key}/{task_type}", wrapper.HandleGetLessonsApiLessonsRoleKeyTaskTypeGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/lessons/{role_key}/{task_type}", wrapper.HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/lessons/{role_key}/{task_type}/patch", wrapper.HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost)
