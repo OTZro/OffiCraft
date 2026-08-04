@@ -161,17 +161,32 @@ func TestStepNoteSurvivesConcurrentStatusReports(t *testing.T) {
 // asserted.
 //
 // THE GUARD: dal_tasks.go PutTaskStep's ON CONFLICT DO UPDATE list does NOT
-// contain `note = excluded.note`. The column is therefore SINGLE-WRITER — only
-// SetTaskStepNote (and the INSERT half of this very statement, which is how
-// submit_plan mints fresh step rows) ever writes it — so no whole-row upsert
-// can replay a stale copy of it. That is the whole protection: not a lock, not
-// a retry, an ownership boundary.
+// contain `note = excluded.note`. The column is therefore written by exactly
+// one statement that can ever target an EXISTING row — SetTaskStepNote, a
+// single-column UPDATE — so no whole-row upsert can replay a stale copy of it.
+// That is the whole protection: not a lock, not a retry, an ownership boundary.
 //
-// COUNTERFACTUAL (run by hand, see the evidence log): adding
-// `note = excluded.note` back to that ON CONFLICT list turns both tests above
-// red — the deterministic one on its first assertion and the concurrent one
-// within the first rounds. Without that, the two tests above would be
-// indistinguishable from tests that pass because nothing was ever concurrent.
+// Do not read the surviving INSERT half of PutTaskStep as a second writer of an
+// existing row: no production caller reaches it deliberately (all four load a
+// row first), and submit_plan mints its rows through ReplaceTaskPlan's own bare
+// INSERT — a different statement, with no conflict clause at all. See
+// PutTaskStep's godoc for the full argument.
+//
+// COUNTERFACTUAL (run by hand, then re-measured by an independent reviewer):
+// adding `note = excluded.note` back to that ON CONFLICT list turns all three
+// tests red. ⚠️ They are NOT equally strong, and the difference matters to
+// anyone diagnosing a future failure:
+//
+//   - the deterministic one is RELIABLE — 5 of 5 runs red, always on its first
+//     assertion. It is what actually carries the discriminating power here.
+//   - the concurrent one is PROBABILISTIC — 12 of 15 runs red (~80%), and the
+//     round it lands on ranges from 0 to 54 out of 60. Three runs went the full
+//     60 rounds without ever hitting the window. Do NOT expect it within the
+//     first few rounds, and do NOT read a single green run of it as evidence
+//     that the hazard is gone.
+//
+// Without this counterfactual the two tests above would be indistinguishable
+// from tests that pass because nothing was ever concurrent.
 //
 // This test itself asserts the boundary structurally, so the guard cannot be
 // removed quietly even by someone who never runs the counterfactual:
@@ -197,10 +212,11 @@ func TestTaskStepNoteRaceGuardHasTeeth(t *testing.T) {
 	if strings.Contains(body, "note = excluded.note") {
 		t.Fatal("PutTaskStep's ON CONFLICT list writes the note column again. " +
 			"That makes note a shared-write column, and every load-mutate-save " +
-			"step writer (update_step_status, armStepWithCard, the reassign " +
-			"step reset) will replay a stale copy of it over a concurrent " +
-			"handover note (T-e271 node 6). The note is written ONLY by " +
-			"SetTaskStepNote and by the INSERT half of this statement.")
+			"step writer will replay a stale copy of it over a concurrent " +
+			"handover note (T-e271 node 6). All four of them do it: " +
+			"update_step_status, armStepWithCard, the reply-card release path, " +
+			"and the reassign step reset. The only statement that may write " +
+			"note to an EXISTING row is SetTaskStepNote.")
 	}
 	// A live positive control on the reader itself: a column that IS in the
 	// conflict list must be found. Without this, a broken anchor/slice would
