@@ -680,10 +680,14 @@ const contextDocMaxCharsDefault = 15000
 // "Duty ≤ 1000" is therefore "hand-written Duty ≤ 1000, with the factory seed
 // structurally exempt".
 // ⚠️ What has CHANGED: this comment used to say the shipped seed was 4,594
-// runes and therefore over the cap out of the box. T-e1e3 replaced it with the
-// finalized factory Duty (931 runes), so today NOTHING actually exercises the
-// exemption. Do not reason from the old number, and do not go looking for an
-// oversized seed to "fix".
+// runes and therefore over the cap out of the box. T-e1e3 retired that
+// oversized seed, and T-795e replaced it again with the current factory Duty;
+// the shipped Duty now sits far below this default cap, so NOTHING actually
+// exercises the exemption today. Deliberately no rune count here: the seed is
+// edited far more often than this comment, and a number written down here is a
+// false sentence waiting to happen — read the file if you need its size. Do not
+// reason from the old number, and do not go looking for an oversized seed to
+// "fix".
 const dutyCapCharsDefault = 1000
 
 // min*CapChars / maxDocCapChars bound the adjustable caps. Each floor is THAT

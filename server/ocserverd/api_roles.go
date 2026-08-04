@@ -257,8 +257,9 @@ func (s *apiServer) HandleUpdateRoleApiRolesRolePost(w http.ResponseWriter, r *h
 	//
 	// Same three-line rule as every other capped doc (DocCapBlocked): an
 	// already-over-cap Duty is never truncated, but its next write must come
-	// out SHORTER. That matters on day one — the shipped assistant seed is
-	// 4,594 runes against a 1,000 default (see dutyCapCharsDefault).
+	// out SHORTER. The shipped assistant seed now sits well UNDER the default
+	// (see dutyCapCharsDefault), so on day one that rule binds nothing that
+	// ships — it exists for hand-written Duties that grow past the cap.
 	cap := s.dutyCap()
 	if DocCapBlocked(cap, current.DefinitionMD, definitionMD) {
 		writeError(w, http.StatusBadRequest,
