@@ -3865,6 +3865,30 @@ export const mockApi: Api = {
     return toInsight(wire);
   },
 
+  async resetInsight(roleKey: string): Promise<InsightView> {
+    // Reset restores the PER-ROLE FILE SEED — only a role that ships one has
+    // anything to reset TO, so a role with no seed 404s, mirroring
+    // HandleResetInsightApiInsightRoleKeyResetPost. 🔴 The membership test is
+    // INSIGHT_SEEDS, not the seed-role roster: on the server the presence of
+    // `seeds/insight_<role_key>.md` IS the roster, and a role can have a Duty
+    // seed without an Insight one.
+    if (!(roleKey in INSIGHT_SEEDS)) {
+      throw new ApiError(
+        `http 404 for POST /api/insight/${roleKey}/reset`,
+        404,
+        "not_found",
+        `role '${roleKey}' has no factory insight to reset to`
+      );
+    }
+    // The discarded overlay is retained as a revision BEFORE it is dropped —
+    // the server does the same inside the write transaction, and a reset that
+    // kept no history would be the one destructive write with no way back.
+    recordDocumentHistory("insight", roleKey);
+    insightOverlays.delete(roleKey);
+    emitTopic("insight");
+    return await mockApi.getInsight(roleKey);
+  },
+
   async listDocumentHistory(
     kind: DocumentKind,
     key: string

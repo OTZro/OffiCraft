@@ -32,6 +32,10 @@ interface UseInsight {
   error: boolean;
   refetch: () => Promise<void>;
   save: (text: string) => Promise<void>;
+  /** Back to the per-role factory seed (T-6501). Adopts the response, so the
+   * person who clicked always sees the restored doc even if the `insight` SSE
+   * frame is dropped. */
+  reset: () => Promise<void>;
 }
 
 export function useInsight(roleKey: string): UseInsight {
@@ -49,6 +53,10 @@ export function useInsight(roleKey: string): UseInsight {
     },
     [roleKey]
   );
+
+  const reset = useCallback(async () => {
+    setInsight(await api.resetInsight(roleKey));
+  }, [roleKey]);
 
   useEffect(() => {
     let alive = true;
@@ -89,5 +97,5 @@ export function useInsight(roleKey: string): UseInsight {
     };
   }, [roleKey]);
 
-  return { insight, loading, error, refetch, save };
+  return { insight, loading, error, refetch, save, reset };
 }

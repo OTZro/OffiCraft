@@ -1624,6 +1624,17 @@ export interface Api {
    */
   saveInsight(roleKey: string, text: string): Promise<InsightView>;
   /**
+   * Reset the PER-ROLE insight doc back to its factory seed (T-6501) —
+   * idempotent tombstone → the folded read is `seeds/insight_<role_key>.md`
+   * again and `isDefault` flips true. The counterpart of `resetRole` on Duty.
+   *
+   * A role with NO seed file 404s (throws): there must be a factory version to
+   * reset TO. The cockpit only offers this where a seed exists, so the guard is
+   * about keeping every implementation of this port honest, not about a path
+   * the UI walks.
+   */
+  resetInsight(roleKey: string): Promise<InsightView>;
+  /**
    * The retained revisions of ONE editable long-form document, newest first
    * (`GET /api/document-history/{kind}/{key}`). At most 3 are kept — the
    * server prunes, the cockpit never has to.

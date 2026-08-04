@@ -1810,6 +1810,18 @@ export const httpApi: Api = {
     return toInsight(wire);
   },
 
+  async resetInsight(roleKey: string): Promise<InsightView> {
+    // POST /api/insight/{role_key}/reset -> InsightDTO (idempotent tombstone →
+    // the folded read is the per-role file seed again, isDefault true). Same
+    // POST-reset shape as resetRole; a role with no seed file 404s.
+    const wire = unwrap(
+      await client.POST("/api/insight/{role_key}/reset", {
+        params: { path: { role_key: roleKey } },
+      }),
+    );
+    return toInsight(wire);
+  },
+
   subscribeEvents(
     onTopic: (topic: string, delta?: SseDelta) => void
   ): () => void {
