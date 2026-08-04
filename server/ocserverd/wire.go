@@ -625,6 +625,28 @@ type insightDTO struct {
 	OwnerID       string `json:"owner_id"`
 	SchemaVersion int    `json:"schema_version"`
 	IsDefault     bool   `json:"is_default"`
+	// HasSeed answers ONE question: does a factory version of THIS role's
+	// insight exist to fall back to (T-6501)? It is the precondition for
+	// reset_insight — that route 404s when it is false — so any surface
+	// offering the reset has to gate on this and nothing else.
+	//
+	// 🔴 IT IS NOT IsDefault AND IT IS NOT RoleDefDTO.IsSeed, and both
+	// confusions are load-bearing rather than pedantic:
+	//   * IsDefault asks what has been WRITTEN; HasSeed asks what exists to
+	//     fall back TO. They are independent — a seeded role that has since
+	//     written its own reads HasSeed=true, IsDefault=false, which is exactly
+	//     the state in which the reset is most worth offering.
+	//   * RoleDefDTO.IsSeed is a fact about the role's DUTY, and it is derived
+	//     from a DIFFERENT construction: seedRoleDefinitionMD gates on the
+	//     factory ROLE ROSTER (seedRoleName), while seedInsightMD asks only
+	//     whether the FILE exists — the insight roster is the set of files, on
+	//     purpose and decoupled from the role roster (see assets.go). So a role
+	//     can carry a Duty seed and no Insight seed; borrowing IsSeed here
+	//     would be wrong by construction, not merely imprecise.
+	// On 2026-08-04 IsSeed was read as "you are currently reading the factory
+	// version" twice in a row. This field exists partly so that nobody has to
+	// re-derive the distinction from the two that already misled people.
+	HasSeed bool `json:"has_seed"`
 }
 
 // insightPatchResultDTO is the patch_insight receipt — the insight twin of

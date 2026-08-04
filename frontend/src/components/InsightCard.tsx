@@ -50,6 +50,7 @@ export function InsightCard({ roleKey }: InsightCardProps) {
     error,
     refetch,
     save: saveInsight,
+    reset: resetInsight,
   } = useInsight(roleKey);
 
   const [editing, setEditing] = useState(false);
@@ -126,28 +127,27 @@ export function InsightCard({ roleKey }: InsightCardProps) {
             {/* 版本紀錄 (T-1f39). docKey is the BARE role_key — insight has no
               * task_type axis, so there is no composite to build.
               *
-              * 🔴 THE 初始版本 ROW IS STILL NOT WIRED, AND THE REASON CHANGED.
-              * The old comment here said "there is no reset_insight route at
-              * all"; T-6501 built that route, so that sentence is now FALSE and
-              * is deleted rather than left standing. What blocks the row is a
-              * different, narrower fact: `DocumentHistoryEntry` may only grow
-              * the row where a seed PROVABLY exists (its own rule — a row that
-              * 404s is a dead affordance), and InsightDTO does not carry that.
-              * `is_default` answers "has this role written yet", which is not
-              * the same question: a custom role that HAS written reads
-              * is_default=false whether or not a seed exists behind it, so the
-              * row would appear on roles the server 404s. The Duty side has
-              * `RoleDefDTO.is_seed` for exactly this and Insight has no
-              * counterpart — and Insight's seed roster is the SET OF FILES
-              * (seeds/insight_<role_key>.md), not the seed-ROLE roster, so
-              * borrowing is_seed would be wrong by construction and is the very
-              * conflation this ticket exists to kill.
+              * 🔴 THE 初始版本 ROW IS GATED ON hasSeed, NEVER ON isDefault
+              * (T-6501). DocumentHistoryEntry's own rule is that the row may
+              * only appear where a seed PROVABLY exists — a row that 404s is a
+              * dead affordance. `isDefault` answers a DIFFERENT question ("has
+              * this role written yet"), and the state where the two disagree is
+              * the one that matters: a seeded role that has since written its
+              * own reads hasSeed=true / isDefault=false, which is precisely
+              * when the reset is worth offering. Gating on isDefault would hide
+              * the row exactly there, and show it on every custom role the
+              * server 404s.
               *
-              * ⇒ Closing this needs one more wire fact on InsightDTO, which is
-              * an owner call (T-6501 was scoped to the route + tool, and this
-              * repo's DTO rule says an added field is optional-and-asked-for,
-              * not invented). `api.resetInsight` / `useInsight().reset` are
-              * already in place, so the wiring here is one prop when it lands.
+              * Also NOT RoleDefDTO.is_seed: that is a fact about the role's
+              * DUTY and is derived from the factory ROLE ROSTER, while
+              * Insight's roster is the SET OF FILES (seeds/insight_<role>.md),
+              * decoupled on purpose. A role can carry a Duty seed and no
+              * Insight seed. That conflation misled two people on 2026-08-04
+              * and is the reason this field is named hasSeed.
+              *
+              * The confirm step is NOT wired here on purpose — it lives inside
+              * DocumentHistoryEntry, so the Duty and Insight rows share ONE
+              * implementation that cannot drift into two.
               *
               * 🔴 onRestored refetches LOCALLY, which is why the person who
               * clicked always sees the new value. Every OTHER open surface
@@ -165,6 +165,14 @@ export function InsightCard({ roleKey }: InsightCardProps) {
                 await refetch();
                 cancelEdit();
               }}
+              onReset={
+                insight?.hasSeed
+                  ? async () => {
+                      await resetInsight();
+                      cancelEdit();
+                    }
+                  : undefined
+              }
               disabled={busy}
             />
             <button

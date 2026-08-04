@@ -215,4 +215,67 @@ describe("SettingsPage · InsightCard (T-3809)", () => {
       list.querySelectorAll(".doc-hist__item:not(.doc-hist__item--seed)").length
     ).toBeGreaterThan(0);
   });
+
+  // T-6501: the 初始版本 row is the ONLY way back to the factory insight, and
+  // DocumentHistoryEntry only grows it where `onReset` is wired.
+  //
+  // 🔴 BOTH DIRECTIONS ARE ASSERTED, and the negative one is what makes this
+  // worth having: an implementation that wires `onReset` UNCONDITIONALLY passes
+  // the positive test perfectly, and the only symptom is that every custom role
+  // is offered a reset the server 404s. One assertion here would ship that.
+  it("offers 初始版本 on a role that HAS a factory insight", async () => {
+    // Written first, so this also pins that the row survives the role having
+    // its own doc — hasSeed answers what exists to fall back TO, not what is
+    // being read, and that is exactly when a reset is worth offering.
+    await mockApi.saveInsight("assistant", "這一份是角色自己寫的");
+    const utils = await openRolePage(zh.office.role.assistant);
+    const card = insightCard(utils)!;
+
+    fireEvent.click(within(card).getByText(s.edit));
+    fireEvent.click(within(card).getByTestId("doc-history-entry-insight"));
+
+    const list = await utils.findByTestId("doc-history-list");
+    expect(within(list).getByTestId("doc-history-seed")).toBeTruthy();
+  });
+
+  it("offers NO 初始版本 on a role with no factory insight", async () => {
+    const { role } = await mockApi.createRole({ name: "沒有出廠判準的角色" });
+    const utils = await openRolePage(role.name);
+    const card = insightCard(utils)!;
+
+    fireEvent.click(within(card).getByText(s.edit));
+    fireEvent.click(within(card).getByTestId("doc-history-entry-insight"));
+
+    const list = await utils.findByTestId("doc-history-list");
+    expect(within(list).queryByTestId("doc-history-seed")).toBeNull();
+  });
+
+  it("the 初始版本 row restores the factory insight, behind the shared confirm", async () => {
+    const seed = (await mockApi.getInsight("assistant")).text;
+    const written = "這一份是角色自己寫的，不是出廠版。";
+    expect(written).not.toBe(seed); // anti-tautology: the reset must MOVE something
+    await mockApi.saveInsight("assistant", written);
+
+    const utils = await openRolePage(zh.office.role.assistant);
+    const card = insightCard(utils)!;
+    expect(within(card).getByText(written)).toBeTruthy();
+
+    fireEvent.click(within(card).getByText(s.edit));
+    fireEvent.click(within(card).getByTestId("doc-history-entry-insight"));
+    fireEvent.click(await utils.findByTestId("doc-history-seed-open"));
+    // The confirm lives INSIDE DocumentHistoryEntry, shared with the Duty row —
+    // there is no second implementation to keep in step.
+    expect(utils.getByTestId("doc-history-seed-confirm")).toBeTruthy();
+    fireEvent.click(utils.getByTestId("doc-history-seed-confirm-btn"));
+
+    expect((await mockApi.getInsight("assistant")).text).toBe(seed);
+    // And the card followed: the written doc is gone and the 「預設」 badge is
+    // back (is_default flipped). Asserting the seed's own prose instead would
+    // be brittle — the renderer splits markdown across nodes — and would say
+    // less: the badge IS the "this is factory wording" claim.
+    expect(
+      await utils.findByTestId("insight-default-badge")
+    ).toBeTruthy();
+    expect(within(insightCard(utils)!).queryByText(written)).toBeNull();
+  });
 });

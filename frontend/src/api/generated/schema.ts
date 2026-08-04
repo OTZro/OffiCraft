@@ -4107,8 +4107,14 @@ export interface components {
              */
             size_chars: number;
             /**
+             * Has Seed
+             * @description True when a FACTORY VERSION of this role's insight exists to fall back to — i.e. `seeds/insight_<role_key>.md` ships. It answers ONLY that: it says nothing about whether the doc you are holding IS that factory version (`is_default` answers that), and the two are independent — a role with a seed that has since written its own reads has_seed=true, is_default=false. Added by T-6501 as the precondition for `reset_insight`: a role with has_seed=false gets a 404 from that route, so a surface offering the reset must gate on THIS field. Deliberately NOT named after `RoleDefDTO.is_seed`, which is a fact about the role's DUTY and was misread twice on 2026-08-04 as "you are reading the factory version".
+             * @default false
+             */
+            has_seed: boolean;
+            /**
              * Is Default
-             * @description True while this role has never written its own insight doc (or reset it). It does NOT imply an empty `text`: a role that ships with a factory seed (`seeds/insight_<role_key>.md`) reads that seed with is_default=true, while a role without one reads "". Read this field — not the emptiness of `text` — to tell factory wording apart from something a person wrote.
+             * @description True while this role has never written its own insight doc (or reset it). It does NOT imply an empty `text`: a role that ships with a factory seed (`seeds/insight_<role_key>.md`) reads that seed with is_default=true, while a role without one reads "". Read this field — not the emptiness of `text` — to tell factory wording apart from something a person wrote. It is NOT the same question as `has_seed`: this one is about what has been WRITTEN, that one about what exists to fall back TO.
              * @default true
              */
             is_default: boolean;

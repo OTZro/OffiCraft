@@ -558,6 +558,9 @@ def _check_reset_insight(ctx: HCtx, r: httpx.Response) -> None:
     assert d["size_chars"] == len(d["text"]), d
     assert d["cap_chars"] >= d["size_chars"], d
     assert d["role_key"] == "assistant", d
+    # The precondition for this very route, still true after it ran (T-6501):
+    # has_seed is about what SHIPS, so a reset can never consume it.
+    assert d["has_seed"] is True, d
     # The READ face agrees — the response is not a one-off projection.
     g = ctx.client.get(
         "/api/insight/assistant",
@@ -1073,7 +1076,13 @@ HAPPY: dict[str, Happy] = {
             lambda d: isinstance(d["text"], str)
             and d["size_chars"] == len(d["text"])
             and d["cap_chars"] >= d["size_chars"]
-            and d["role_key"] == "assistant",
+            and d["role_key"] == "assistant"
+            # T-6501. has_seed is order-independent in a way `text` is not: it
+            # asks whether seeds/insight_assistant.md SHIPS, which no write in
+            # this suite can change. It is also the field the cockpit gates the
+            # reset row on, so a server that never set it (false) would silently
+            # remove the only path back to the factory doc.
+            and d["has_seed"] is True,
         ),
     ),
     "POST /api/insight/{role_key}": Happy(

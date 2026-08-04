@@ -252,6 +252,14 @@ export interface InsightView {
   sizeChars: number;
   /** The `doc.cap_chars.insight` setting now in force, in the same unit. */
   capChars: number;
+  /**
+   * True when a FACTORY version of this role's insight exists to fall back to
+   * (`seeds/insight_<role_key>.md` ships). Gate the 初始版本 reset row on THIS,
+   * never on `isDefault`: that one says whether the role has written yet, and a
+   * seeded role that HAS written reads hasSeed=true / isDefault=false — exactly
+   * when the reset is worth offering. `resetInsight` 404s when it is false.
+   */
+  hasSeed: boolean;
 }
 
 // ── Machine lifecycle view models (onboard / teardown) ────────────────────────

@@ -143,6 +143,63 @@ func TestResetInsight_RetainsTheOverlayItDiscarded(t *testing.T) {
 	}
 }
 
+// has_seed is the cockpit's ONLY way to know whether to offer the reset at all
+// (T-6501): DocumentHistoryEntry may not grow a 初始版本 row where the server
+// would 404. So the field has to be true for the one role that ships a seed and
+// FALSE for roles that do not — 🔴 and the false case is what makes this test
+// worth having. Asserting only the assistant would pass just as happily against
+// a server that hard-coded `true`, and the resulting cockpit would offer every
+// custom role a reset that 404s.
+func TestInsightHasSeed_TrueOnlyWhereAFactoryVersionExists(t *testing.T) {
+	s := newTasksTestServer(t)
+
+	if got := getInsightDTO(t, s, seedRoleAssistant); !got.HasSeed {
+		t.Fatal("assistant must report has_seed=true — seeds/insight_assistant.md ships, so the reset is available")
+	}
+	for _, roleKey := range []string{"r-tester", "r-engineer", "reviewer"} {
+		if got := getInsightDTO(t, s, roleKey); got.HasSeed {
+			t.Fatalf("role %q reports has_seed=true but has no seed file — the cockpit would offer a reset the server 404s", roleKey)
+		}
+	}
+}
+
+// 🔴 has_seed and is_default answer DIFFERENT questions, and the state where
+// they disagree is the one that matters: a seeded role that has written its own
+// insight reads has_seed=true, is_default=false — precisely when the reset is
+// most worth offering. A field derived from is_default (or from "the doc is
+// factory text") would report false here and hide the affordance.
+func TestInsightHasSeed_SurvivesTheRoleWritingItsOwn(t *testing.T) {
+	s := newTasksTestServer(t)
+	seed := readShippedAssistantInsightSeed(t, s)
+	writeInsightOverlay(t, s, seedRoleAssistant, overlayUnlikeTheSeed, seed)
+
+	got := getInsightDTO(t, s, seedRoleAssistant)
+	if got.IsDefault {
+		t.Fatal("precondition: the role has written, is_default must be false")
+	}
+	if !got.HasSeed {
+		t.Fatal("has_seed flipped false because the role wrote its own doc — it answers what exists to fall back TO, not what is being read")
+	}
+
+	// The WRITE response itself must say the same thing: the cockpit adopts it
+	// directly after a save, so a false here removes the row until a refetch.
+	rec := httptest.NewRecorder()
+	s.HandleReplaceInsightApiInsightRoleKeyPost(rec, taskReq(t, http.MethodPost,
+		"/api/insight/"+seedRoleAssistant, map[string]any{"text": overlayUnlikeTheSeed + "\nmore"},
+		"owner", "owner"), seedRoleAssistant)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("replace: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var wrote insightDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &wrote); err != nil {
+		t.Fatal(err)
+	}
+	if !wrote.HasSeed || wrote.IsDefault {
+		t.Fatalf("replace answered has_seed=%v is_default=%v; want true/false",
+			wrote.HasSeed, wrote.IsDefault)
+	}
+}
+
 // Acceptance #3: a role with no factory insight has nothing to reset TO, the
 // same rule reset_role applies to a role with no seed definition.
 func TestResetInsight_RoleWithNoSeedIs404(t *testing.T) {

@@ -50,6 +50,11 @@ func (s *apiServer) foldInsightDTO(roleKey string) (*insightDTO, error) {
 		OwnerID:       wireOwnerID,
 		SchemaVersion: wireSchemaVersion,
 		IsDefault:     isDefault,
+		// Straight from the seed-FILE probe above (T-6501) — the same value the
+		// reset route's 404 is decided by, so a caller can never be offered a
+		// reset this server would refuse. Deliberately not derived from
+		// isDefault: those answer different questions (see wire.go).
+		HasSeed: hasSeed,
 	}, nil
 }
 
@@ -248,6 +253,16 @@ func (s *apiServer) HandleReplaceInsightApiInsightRoleKeyPost(w http.ResponseWri
 		return
 	}
 	s.hub.Publish("insight", "patch", "insight", wireOwnerID+"::"+roleKey, nil, audienceOwnerOnly(), requestTrigger(r))
+	// has_seed answers "is there a factory version to fall back to", which a
+	// WRITE does not change — so it must be re-probed rather than assumed
+	// false. Hard-coding false here would tell the cockpit "no reset available"
+	// the instant a seeded role saved an edit, i.e. exactly when the reset
+	// starts being worth offering.
+	_, hasSeed, err := s.root.seedInsightMD(roleKey)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, insightDTO{
 		SizeChars:     utf8.RuneCountInString(text),
 		CapChars:      cap,
@@ -256,6 +271,7 @@ func (s *apiServer) HandleReplaceInsightApiInsightRoleKeyPost(w http.ResponseWri
 		OwnerID:       wireOwnerID,
 		SchemaVersion: wireSchemaVersion,
 		IsDefault:     false,
+		HasSeed:       hasSeed,
 	})
 }
 

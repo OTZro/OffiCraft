@@ -1146,6 +1146,7 @@ function applyDocumentHistory(
           ...docSizeFields(content.text ?? "", "insight"),
           role_key: key,
           text: content.text ?? "",
+          has_seed: key in INSIGHT_SEEDS,
           owner_id: MOCK_OWNER_ID,
           schema_version: 3,
           is_default: false,
@@ -3841,10 +3842,15 @@ export const mockApi: Api = {
       ...docSizeFields(seed ?? "", "insight"),
       role_key: roleKey,
       text: seed ?? "",
+      has_seed: roleKey in INSIGHT_SEEDS,
       owner_id: MOCK_OWNER_ID,
       schema_version: 3,
       is_default: true,
     };
+    // 🔴 has_seed is a fact about the SEED ROSTER, not about the stored
+    // overlay, so BOTH branches above carry it — a written overlay must still
+    // report true (T-6501). Baking it into only the default branch would make
+    // the cockpit hide the reset row the moment a role saved an edit.
     return toInsight(wire);
   },
 
@@ -3856,6 +3862,7 @@ export const mockApi: Api = {
       ...docSizeFields(text, "insight"),
       role_key: roleKey,
       text,
+      has_seed: roleKey in INSIGHT_SEEDS,
       owner_id: MOCK_OWNER_ID,
       schema_version: 3,
       is_default: false,
