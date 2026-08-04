@@ -240,13 +240,17 @@ func TestStepNoteWriteMovesTaskUpdatedTS(t *testing.T) {
 //
 // DOES NOT COVER: the handler reverting to the load-mutate-save shape every
 // other step writer uses (GetTaskStep → mutate → PutTaskStep). That mutation
-// was run and SURVIVED — no test here catches it, because the danger only
-// appears when a CONCURRENT writer lands between the handler's read and its
-// write, and there is no seam to interleave at. The protection against it is
-// STRUCTURAL, not tested: SetTaskStepNote takes an id and a string, so it
-// cannot carry stale columns even if someone wanted it to. Anyone replacing it
-// with a whole-row upsert reintroduces the hazard silently — that is the honest
-// state of this guard, recorded here rather than implied to be stronger.
+// was run and SURVIVED this test — the danger only appears when a CONCURRENT
+// writer lands between some OTHER handler's read and its write, and there is no
+// seam here to interleave at.
+//
+// ⚠️ That gap is no longer untested. api_tasks_note_race_test.go constructs it
+// (T-e271 node 6): a deterministic interleave replaying update_step_status's
+// own read-mutate-write order, and two goroutines driving the two real
+// endpoints for 60 rounds. Both were measured RED before the fix. The fix is an
+// ownership boundary — `note` is out of PutTaskStep's ON CONFLICT list, pinned
+// by TestTaskStepNoteRaceGuardHasTeeth — so this DAL-level guard now sits
+// alongside real behavioural coverage rather than standing in for it.
 func TestSetTaskStepNoteWritesOnlyTheNoteColumn(t *testing.T) {
 	api := newTasksTestServer(t)
 	task := createAdHocTask(t, api, "m-exec")

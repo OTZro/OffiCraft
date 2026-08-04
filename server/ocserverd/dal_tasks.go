@@ -277,8 +277,9 @@ func (d *DAL) CountTasksDuplicatingOriginal(originalID string) (int, error) {
 // removes the hazard for ONE column. Every OTHER column of this row remains a
 // shared-write, last-writer-wins field, and two handlers racing on two
 // different columns still lose one of them. That is pre-existing and untouched
-// (T-e271 node 3 explicitly did not widen into it) — see the note on
-// PutTaskStep's `note` column for the same shape one table over.
+// (T-e271 node 3 explicitly did not widen into it) — PutTaskStep carries the
+// same carve-out for its `note` column one table over (T-e271 node 6), and its
+// remaining columns are still shared-write for exactly this reason.
 func (d *DAL) PutTask(t Task) error {
 	inputs := t.Inputs
 	if inputs == nil {
@@ -659,6 +660,57 @@ func (d *DAL) TouchTaskUpdatedTS(id string, ts float64) error {
 }
 
 // PutTaskStep upserts one step row.
+//
+// 🔴 `note` IS DELIBERATELY ABSENT FROM THE ON CONFLICT UPDATE LIST (T-e271
+// node 6). Do not "restore" it — that line is the lost update, and it was
+// measured, not theorised.
+//
+// The hazard is structural, not exotic: this is a whole-row upsert with no
+// optimistic lock, and every OTHER step writer is a load-mutate-save
+// (dal.GetTaskStep → mutate one field → dal.PutTaskStep) — update_step_status,
+// armStepWithCard (open_gate / create_reply_card auto-bind), the reply-card
+// release path, and the reassign step reset. Nothing links those reads to those
+// writes, so the upsert asserts EVERY column as that handler read them. With
+// the note in the conflict list, an agent reporting a step's status replays the
+// note it happened to read a moment earlier — silently destroying a handover
+// note the note endpoint had already answered 200 to, which the successor
+// session then never sees. "Rare" was not true: measured before the fix, a
+// deterministic interleave lost it EVERY time, and two goroutines driving the
+// two real endpoints lost it in 12 of 15 sixty-round runs, landing anywhere from
+// round 0 to round 54. ⚠️ Those two numbers are not interchangeable — the
+// deterministic one is the reliable signal; the concurrent one misses roughly
+// one run in five, so a single green run of it proves nothing.
+//
+// The fix is an OWNERSHIP BOUNDARY rather than a lock or a retry: for a row that
+// ALREADY EXISTS, the column is written by exactly one statement —
+// SetTaskStepNote, a single-column UPDATE. Single-writer columns cannot be
+// clobbered by a stale whole-row copy, because no stale whole-row copy of them
+// exists. Guarded by TestTaskStepNoteRaceGuardHasTeeth.
+//
+// ⚠️ Do not read the surviving INSERT half as a second writer. NO production
+// caller reaches it deliberately: all four load an existing row first
+// (update_step_status, armStepWithCard, the reply-card release path, the
+// reassign step reset), and submit_plan mints its rows through
+// ReplaceTaskPlan's own bare INSERT — which is a different statement, not this
+// one, and which never carries a conflict clause at all. The INSERT half here
+// fires only when a step is deleted between some caller's read and its write,
+// and that is the pre-existing RESURRECTION hazard SetTaskStepNote's own godoc
+// names — untouched by this change, and the reason that endpoint answers 404
+// instead of upserting the row back into existence.
+//
+// ⚠️ SCOPE, stated so nobody reads more safety into this than is here: this
+// removes the hazard for ONE column. EVERY column still named in the ON CONFLICT
+// clause below remains a shared-write, last-writer-wins field, and two handlers
+// racing on two different ones still lose one of them. That is pre-existing and
+// untouched (T-e271 node 6 explicitly did not widen into it) — the same shape
+// PutTask documents one table over.
+//
+// Deliberately phrased as "every column still in that clause" rather than as a
+// list of them: an enumeration here would be a second copy of the clause, and
+// the copy is what goes stale — the first version of this very paragraph
+// already listed six columns while the clause named eleven. The clause below is
+// the one source that cannot drift from itself; read it, do not trust a prose
+// echo of it.
 func (d *DAL) PutTaskStep(st TaskStep) error {
 	isGate := 0
 	if st.IsGate {
@@ -675,7 +727,6 @@ func (d *DAL) PutTaskStep(st TaskStep) error {
 			is_gate = excluded.is_gate,
 			reply_card_id = excluded.reply_card_id,
 			waiting_reason = excluded.waiting_reason,
-			note = excluded.note,
 			started_ts = excluded.started_ts,
 			finished_ts = excluded.finished_ts`,
 		st.ID, st.TaskID, st.OrderIdx, st.Name, st.DoD, st.Status,
