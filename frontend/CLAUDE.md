@@ -1019,6 +1019,45 @@ owner/agent 自由文字會帶**不可斷的長 token**(長 URL、40-hex sha、�
 - ⚠️ 重驗 mutant 時當心**斷言互相掩護**:整頁那條先炸會中止測試,底下 per-surface
   斷言根本沒跑。要證明後者,先暫時放寬整頁斷言再跑 mutant。
 
+## 固定高 ＋ 可壓縮 ＋ CJK 標籤 = 必須宣告 `white-space: nowrap`(T-5e79)
+
+owner 截圖回報:判準卡的「預設」徽章,兩個中文字被折成上下兩行、**撐破**那顆膠囊;
+同一張圖右側的「編輯」按鈕一樣。三個條件同時成立就會發生,**缺一不會**:
+
+1. 元素有**固定高**(`.set-badge` 是 `height: 19px`、`.doc-btn` 是 `30px`),
+2. 它是**可收縮的 flex item**(預設 `min-width: auto`,但沒有東西阻止斷行),
+3. 標籤是 **CJK**。
+
+機制在第 3 點:**中文沒有 `white-space` 宣告時,min-content 只有一個字的寬度**
+——盒子可以被壓到比標籤還窄,文字於是折行,而固定高跟不上,就溢出。拉丁字的
+min-content 是整個單字,所以**同一段 CSS 對 en 幾乎沒有作用**(見下)。
+
+- **修法是宣告 `white-space: nowrap`,不是 `flex: none`。** 兩者在這裡各自都足夠
+  (mutant 實測:只拿掉任一個,護欄都還是綠),所以同時加就是一條**沒有任何東西守得住
+  的冗餘宣告**。留 `nowrap`:語意最直接,而且在非 flex 宿主也成立。
+- ⚠️ **`.doc-btn` 只加 `white-space`、刻意不加 `flex: none`** —— 它有約 40 個 call site,
+  收縮能力在別處是有用的。
+- 🔴 **這類缺陷的護欄一定要真瀏覽器,jsdom 構造上零鑑別力** —— 它不套版面,
+  `insight-default-badge` 在不在 DOM 兩種情況一模一樣。
+- 🔴 **斷言要落在使用者看得到的幾何,不要斷言 CSS 屬性字串**:`getComputedStyle` 讀回
+  `nowrap` 會被「屬性設了但被 out-cascade」與「不折行了但仍撐破盒子」兩種情況滿足。
+  現行護欄用 `Range.getClientRects()` **數 line box**(必須剛好 1)、要求每個 line box
+  留在元素自己的 border box 內,再加三層容器的橫向溢出 ≤1px(擋「用溢出換不折行」)。
+- **護欄**:`visual-guards/set-badge-nowrap.ct.spec.tsx`(四個寬度 320/375/390/1040;
+  1040 是控制組,對每顆 mutant 都綠、**不計入覆蓋**)。**mutant 與「斷言互相掩護」的
+  完整紀錄寫在該檔檔頭**,不在這裡——它是那份量測的家。
+- ⚠️ **`.mp-lessons__head` 的 `@media (max-width:359px){flex-wrap:wrap}` 是上面兩條
+  nowrap 造成的新溢出的洩壓閥**,不是原缺陷的一部分:不再可壓縮之後,zh 在 320px
+  會溢出 23px。斷點**刻意不用站上的 720px**——開了 wrap 之後標題會以 max-content
+  參與斷行,375/390 那些**本來排得下**的一列會被推成兩行(列高 42→61px 實測),
+  而 owner 就是在那些寬度看座艙。
+- 🔴 **已知缺口:上面每一個數字都是 zh 量的,en 不一樣。** 英文在 **360–380px 仍會
+  溢出**(實測 headOver 22 @360、7 @375、0 @390),因為 `nowrap` 對拉丁 min-content
+  沒有作用。**那是既有缺陷、不是這包造成的**——pre-fix 樹量到**逐位元組相同**的 en
+  數字,而 <360 那段本包反而把 en 修好了(320: headOver 62→0)。把閥門放寬到涵蓋 en
+  會把 wrap 推進 360–390,正是那個斷點存在的理由要避開的範圍 ⇒ **是取捨,不是遺漏。**
+  理由與量測寫在 `member-detail.css` 那段 KNOWN GAP。
+
 ## 浮層寬度不可用 `vw` 夾(T-49fb)
 `100vw` 從**視窗左緣**起算。一個 `position: absolute` 的浮層若不是從視窗左緣長出來
 (幾乎都不是——它從卡片內緣起算),`width: min(Xpx, calc(100vw - g))` 就是**錯的座標
