@@ -58,8 +58,10 @@ func (s *apiServer) foldInsightDTO(roleKey string) (*insightDTO, error) {
 	}, nil
 }
 
-// insightWriteAuthz enforces the per-role insight WRITE authz shared by
-// replace_insight and patch_insight: a caller at or above principalAdminAgent
+// insightWriteAuthz enforces the per-role insight WRITE authz shared by EVERY
+// face that writes this document — replace_insight, patch_insight,
+// reset_insight (T-6501), and api_document_history.go's restore of kind
+// "insight": a caller at or above principalAdminAgent
 // (owner, and the admin agent) writes ANY role's insight; everyone else writes
 // ONLY its own member's role_key (read from the roster by the verified sub,
 // never a client field). Answers the error itself and reports whether the

@@ -134,7 +134,7 @@ topic that names a different document; everything else is the M1 freeze):
 | `global_context` | user-context overlay write/reset | patch |
 | `role_def` | role overlay write/reset/delete | patch |
 | `lessons` | lessons overlay write/cascade delete | patch |
-| `insight` | insight overlay write (replace / patch) / restore / cascade delete | patch |
+| `insight` | insight overlay write (replace / patch / reset) / restore / cascade delete | patch |
 | `context` | agent context-gauge ingest (`POST /api/agent/context`) | signal |
 | `monitoring` | warden telemetry ingest (`POST /api/monitoring/telemetry`) | signal |
 
