@@ -640,6 +640,14 @@ type LessonsEdit struct {
 // edits; rereadTool is the name of the tool the caller should re-read that
 // document with when an anchor does not resolve.
 //
+// 🔴 applied == 0 IS ALSO THE WRITE GATE, not just a number on the receipt.
+// Every edit either changes the doc or increments nothing, so applied == 0 with
+// a nil error means the returned text is byte-identical to the input: there is
+// no write to make. The three handlers built on this engine therefore skip BOTH
+// the persist and the document-history retention in that case — see the
+// `if applied > 0` gates in api_roles.go, api_insight.go and api_taskmanuals.go
+// and the reason spelled out there.
+//
 // 🔴 WHY THE TOOL NAME IS A PARAMETER AND NOT A CONSTANT. The anchor-miss
 // message tells the caller what to do next, and "re-read (get_lessons)" is
 // FALSE advice for an agent patching its insight doc: re-reading lessons will
