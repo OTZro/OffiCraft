@@ -679,11 +679,20 @@ func (d *DAL) TouchTaskUpdatedTS(id string, ts float64) error {
 // by round 2 / 7 / 7 / 14 / 54 across five 60-round runs. "Rare" was not true.
 //
 // The fix is an OWNERSHIP BOUNDARY rather than a lock or a retry: the column is
-// written ONLY by SetTaskStepNote (a single-column UPDATE) and by the INSERT
-// half of this very statement, which is how submit_plan mints fresh step rows —
-// those mint a fresh id, so they never reach the conflict clause. Single-writer
-// columns cannot be clobbered by a stale whole-row copy, because no stale
-// whole-row copy of them exists. Guarded by TestTaskStepNoteRaceGuardHasTeeth.
+// written ONLY by SetTaskStepNote, a single-column UPDATE. Single-writer columns
+// cannot be clobbered by a stale whole-row copy, because no stale whole-row copy
+// of them exists. Guarded by TestTaskStepNoteRaceGuardHasTeeth.
+//
+// ⚠️ Do not read the surviving INSERT half as a second writer. NO production
+// caller reaches it deliberately: all four load an existing row first
+// (update_step_status, armStepWithCard, the reply-card release path, the
+// reassign step reset), and submit_plan mints its rows through
+// ReplaceTaskPlan's own bare INSERT — which is a different statement, not this
+// one, and which never carries a conflict clause at all. The INSERT half here
+// fires only when a step is deleted between some caller's read and its write,
+// and that is the pre-existing RESURRECTION hazard SetTaskStepNote's own godoc
+// names — untouched by this change, and the reason that endpoint answers 404
+// instead of upserting the row back into existence.
 //
 // ⚠️ SCOPE, stated so nobody reads more safety into this than is here: this
 // removes the hazard for ONE column. Every OTHER column of this row — status,
