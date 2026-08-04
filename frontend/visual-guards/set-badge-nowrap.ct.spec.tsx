@@ -25,10 +25,31 @@
 // saw it; the wide one is the control that says the fix did not simply move the
 // breakage somewhere else.
 //
-// MUTANT (documented, and re-run for this ticket): delete `white-space: nowrap`
-// from `.set-badge` in settings.css → assertion (1) for the badge reddens at
-// 375/390 with `expected 1, received 2`. Same for `.doc-btn` → the 編輯
-// assertions redden at the same widths. See the ticket report for the run output.
+// MUTANT (re-measured by an independent reviewer, superseding this comment's
+// first version — it said 375/390 and that undercounted):
+//   · delete `white-space: nowrap` from `.set-badge` → assertion (1) for the
+//     badge reddens at 320 AND 375 AND 390 (3 widths, `expected 1, received 2`).
+//   · delete it from `.doc-btn` → the 編輯 assertions redden at 375/390 only.
+//     320 stays green there, because the <360px wrap valve puts the button on a
+//     line of its own where it has room — the valve MASKS that one width.
+//   · delete the wrap valve → the header-overflow assertion reddens at 320 with
+//     `received 23`.
+//
+// ⚠️ THREE ASSERTIONS HERE CAN NEVER RUN WHILE THE DEFECT IS PRESENT, and that
+// is worth knowing before you trust them: the spill checks and the 編輯
+// label-height check all sit AFTER the `lines` assertion for the same element,
+// so when the bug is live the `lines` check throws first and they are never
+// reached. They are not vacuous — the reviewer proved they discriminate by
+// re-running the pre-fix mutant with the `lines` assertions temporarily relaxed
+// (spill measured 6px above the pill, matching the reported defect). But their
+// mutation coverage is contributed by the `lines` assertions, not by themselves.
+// This is the "assertions shielding each other" trap the repo already records
+// for the long-token guards; the technique for re-testing them is the same.
+//
+// The 1040 sub-test is green under EVERY mutant above. That is honest and
+// intended — it is the control that answers "did the fix move the breakage to
+// desktop widths", a different question — but it contributes ZERO mutation
+// detection and must not be counted as coverage.
 import { test, expect } from "@playwright/experimental-ct-react";
 import type { Locator } from "@playwright/test";
 import { InsightBadgeNarrowStory } from "./stories/InsightBadgeNarrowStory";
