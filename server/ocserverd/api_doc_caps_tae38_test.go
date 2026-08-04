@@ -26,8 +26,10 @@ package main
 // a tombstone and folds back to the FILE seed — a path with no cap check on it
 // — so no cap can catch shipped content by construction.
 // ⚠️ This block used to add "and seeds/role_def_assistant.md is 4,594 runes,
-// i.e. over the 1,000 default out of the box". T-e1e3 replaced that seed with
-// the finalized factory Duty (931 runes), so the exemption now has NO instance.
+// i.e. over the 1,000 default out of the box". T-e1e3 retired that oversized
+// seed and T-795e replaced it again; the shipped Duty now sits far below the
+// 1,000 default, so the exemption has NO instance today. No rune count is
+// written here on purpose — the seed changes far more often than this comment.
 // Either way the tests below always write their own Duty text first, so they
 // never depend on the seed's size — that is why neither number is asserted here.
 

@@ -32,20 +32,49 @@ const (
 	// here is paid fleet-wide, forever.
 	//
 	// 1000 is the owner's number (2026-08-03, verbatim: 「1000字 多的截斷」),
-	// and it is deliberately the SAME number as the cap he set for a duty
+	// and it happens to be the SAME number he set for the cap on a duty
 	// document itself — 「After separation of insight duty should not exceed
-	// 1000」. Once insight and the operating-manual material are separated out
-	// of the role definitions, a duty is expected to fit well under 1000 and
-	// this cap will rarely bind.
+	// 1000」. ⚠️ Same origin, TWO INDEPENDENT VALUES: this one is a compiled
+	// constant, that one is a SETTING (dutyCapCharsDefault is only its shipped
+	// default, and the owner can raise it from the settings page). Raising the
+	// setting does not — and should not — drag this constant along with it.
 	//
-	// ⚠️ Do NOT read that as "a safety net that normally does not fire" — an
-	// earlier version of this comment said exactly that and it was false:
-	// TODAY the cap binds for almost every role. Duties still carry their
-	// manual material (measured 2026-08-03: 35–4,594 chars, the longest 9,112
-	// — nine times this cap, with nine roles totalling ~7–8k). The code runs
-	// permanently in the regime the old comment called the exception.
+	// 🔴 "DOES THIS CAP EVER BIND" HAS BEEN ANSWERED BOTH WAYS HERE, AND
+	// NEITHER ANSWER IS A PROPERTY OF THIS CONSTANT — read this before you
+	// rely on either. An earlier version of this comment called this cap "a
+	// safety net that normally does not fire", and 61291d3 (2026-08-03)
+	// deleted that reading as FALSE — false at the time it was written, not
+	// merely overtaken later. Each of the two readings below describes only
+	// the role definitions of one period; neither is a standing fact:
+	//   - 2026-08-03, BEFORE the insight/operating-manual separation landed:
+	//     duties still carried their manual material and the cap bound for
+	//     almost every role. "Rarely fires" was a LIE on the day it was
+	//     written, and the code ran permanently in the regime that phrase
+	//     called exceptional.
+	//     The char counts that reading was argued with are deliberately NOT
+	//     restated here. The set inherited from that era contradicts itself:
+	//     a longest role of 9,112 cannot fit inside "nine roles totalling
+	//     ~7–8k", and neither figure agrees with the 35–4,594 range quoted
+	//     alongside them. When numbers from one source disagree among
+	//     themselves, the whole set goes — there is no way to tell which half
+	//     happens to be true, and the most plausible-looking figure is the
+	//     most dangerous one to keep. That measurement is in the past and
+	//     cannot be retaken from this repo, so the counts are simply not
+	//     stated; the qualitative fact above is the part this argument rests
+	//     on and the part that survives.
+	//   - 2026-08-04, AFTER the separation landed: a runtime `list_roles`
+	//     reading of ONE instance saw 8 roles, longest 455 chars, none over
+	//     the cap. So "rarely binds" was true as of that 2026-08-04
+	//     measurement — a reading taken on a date, not a property of this
+	//     constant, and nothing in this repo re-checks it or can re-derive it.
+	// The ONLY thing that moved it between the two is that the separation
+	// landed. If you are about to depend on "it rarely binds", MEASURE IT
+	// AGAIN: both of the readings above were at some point written into this
+	// file as if they were standing properties of the cap, and both had to be
+	// corrected afterwards.
 	//
-	// That cost was put to the owner WITH the numbers in rc-d88c445397a3 (an
+	// 🔴 Do not take "it rarely fires now" as licence to lower it. That cost
+	// was put to the owner WITH the numbers in rc-d88c445397a3 (an
 	// independent review argued for 150–200 until the separation lands), and
 	// he ruled ②: keep 1000. It is his number — do not lower it here.
 	//
@@ -1020,9 +1049,12 @@ func (s *apiServer) contractorTaskTitle(workerID string) string {
 // definition MINUS its title, not to the raw markdown.
 func dutyText(md string) string {
 	// Strip BEFORE the cap, never after: capping first and stripping second
-	// would spend the budget on the title and then delete it, which is the
-	// exact case this exists for (the longest role doc is 4,594 runes and
-	// opens with its own title). Pinned by TestResumeDutyStripsBeforeCapping.
+	// would spend the budget on the title and then delete it. The shape this
+	// guards is ANY Duty longer than the cap that opens with its own title —
+	// not a claim about what ships today (as of the 2026-08-04 measurement the
+	// longest role doc was 455 runes, far under the cap, so the set observed
+	// then no longer demonstrated the case; that reading is dated and may not
+	// hold now). Pinned by TestResumeDutyStripsBeforeCapping.
 	return truncateRunes(stripLeadingTitle(md), resumeDutyPreview)
 }
 

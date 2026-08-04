@@ -279,9 +279,11 @@ func TestResumeDutyDropsItsOwnTitleOnly(t *testing.T) {
 // MUTANT: swap dutyText to stripLeadingTitle(truncateRunes(...)) — cap first,
 // strip second. Every other test stays green, because their fixtures are short:
 // the regression only shows on a doc LONGER than the cap that opens with a
-// title, which is precisely the shipped case (the longest role doc is ~4,594
-// runes and starts with its own title). Cap-then-strip spends the whole budget
-// including the title, then deletes the title, returning a short duty.
+// title — which is why this test builds that shape itself with strings.Repeat
+// rather than leaning on a seed: the role docs this repo SHIPS are far shorter
+// than the cap, so shipped reality cannot furnish an example of this shape at
+// all. Cap-then-strip spends the whole budget including the title, then deletes
+// the title, returning a short duty.
 func TestResumeDutyStripsBeforeCapping(t *testing.T) {
 	s := floorTestServer(t)
 	body := strings.Repeat("職", resumeDutyPreview+250)
