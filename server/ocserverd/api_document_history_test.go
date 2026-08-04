@@ -336,6 +336,14 @@ func TestEveryDocumentWriteFaceRetainsTheVersionItReplaced(t *testing.T) {
 		t.Helper()
 		replaceLessonsThrough(t, api, role, taskType, text)
 	}
+	writeInsight := func(t *testing.T, api *apiServer, roleKey, text string) {
+		t.Helper()
+		call(t, "replace_insight", func(rec *httptest.ResponseRecorder) {
+			api.HandleReplaceInsightApiInsightRoleKeyPost(rec,
+				ownerReq(t, http.MethodPost, "/api/insight/"+roleKey,
+					map[string]any{"text": text}), roleKey)
+		})
+	}
 	newManual := func(t *testing.T, api *apiServer) string {
 		t.Helper()
 		rec := httptest.NewRecorder()
@@ -409,6 +417,48 @@ func TestEveryDocumentWriteFaceRetainsTheVersionItReplaced(t *testing.T) {
 						ownerReq(t, http.MethodPost, "/api/roles/"+role+"/reset", nil), role)
 				})
 				return "role_definition", role, "definition_md", "second"
+			},
+		},
+		// T-6501 added the three insight faces. They were MISSING from this
+		// table, not deliberately left out: replace_insight and patch_insight
+		// have retained versions since T-3809 and nothing here confronted them,
+		// so a seam wired back to the historyless putInsightOn would have
+		// answered the same 200 with the same body and gone unnoticed.
+		{
+			name: "replace_insight",
+			run: func(t *testing.T, api *apiServer) (string, string, string, string) {
+				writeInsight(t, api, role, "insight one")
+				writeInsight(t, api, role, "insight two")
+				return "insight", role, "text", "insight one"
+			},
+		},
+		{
+			name: "patch_insight",
+			run: func(t *testing.T, api *apiServer) (string, string, string, string) {
+				writeInsight(t, api, role, "insight one")
+				writeInsight(t, api, role, "insight two")
+				call(t, "patch_insight", func(rec *httptest.ResponseRecorder) {
+					api.HandlePatchInsightApiInsightRoleKeyPatchPost(rec,
+						ownerReq(t, http.MethodPost, "/api/insight/"+role+"/patch",
+							map[string]any{"edits": []map[string]any{{"old": "insight two", "new": "insight three"}}}),
+						role)
+				})
+				return "insight", role, "text", "insight two"
+			},
+		},
+		{
+			// The counterpart of the reset_role face above. `want` is the
+			// PRE-RESET overlay — deliberately NOT the seed the reset restores,
+			// which is what a retain-the-wrong-thing bug would leave here.
+			name: "reset_insight",
+			run: func(t *testing.T, api *apiServer) (string, string, string, string) {
+				writeInsight(t, api, role, "insight one")
+				writeInsight(t, api, role, "insight two")
+				call(t, "reset_insight", func(rec *httptest.ResponseRecorder) {
+					api.HandleResetInsightApiInsightRoleKeyResetPost(rec,
+						ownerReq(t, http.MethodPost, "/api/insight/"+role+"/reset", nil), role)
+				})
+				return "insight", role, "text", "insight two"
 			},
 		},
 		{
