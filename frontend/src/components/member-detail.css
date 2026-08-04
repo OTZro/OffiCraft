@@ -544,6 +544,30 @@
   justify-content: space-between;
   gap: 10px;
 }
+/* T-5e79 — RELIEF VALVE for the two no-shrink rules the same ticket added in
+ * settings.css (`.set-badge` / `.doc-btn`). Before them this row always
+ * "fitted", but only by squeezing the 預設 pill and the 編輯 button until their
+ * CJK labels broke onto two lines and spilled out of their own boxes — that IS
+ * the defect. Once neither is compressible the row's min-content can exceed the
+ * card, and MEASURED on the fixed sheet that happens ONLY at the very bottom of
+ * the range: 23px of head overflow at 320px, and exactly 0 from 360px up
+ * (320/360/375/390/414/480/600/720/900/1040/1440 all probed).
+ *
+ * 🔴 The breakpoint is deliberately 359px and NOT the site's 720px mobile
+ * breakpoint. `flex-wrap` here is not free: with wrapping ON the title span is
+ * laid out at its MAX-content before the line is broken, so at 375/390 — where
+ * the row fits perfectly well by letting the title shrink — the 編輯 button
+ * gets pushed onto a second line and the header grows ~19px taller (MEASURED:
+ * headH 61 vs 42). Owner reads the cockpit at those widths, so the valve must
+ * not reach them. The row stops overflowing somewhere between 341px (MEASURED:
+ * 2px over) and 360px (0), so the cut sits at 359 — above every width that
+ * actually overflows, below every phone width the repo's other guards use
+ * (360/375/390/414). */
+@media (max-width: 359px) {
+  .mp-lessons__head {
+    flex-wrap: wrap;
+  }
+}
 .mp-lessons__title {
   display: flex;
   align-items: center;

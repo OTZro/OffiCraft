@@ -165,9 +165,29 @@
 }
 
 /* "預設" (seed) status pill */
+/* T-5e79 — owner screenshot 2026-08-04: at ≤390px the pill's two CJK glyphs were
+ * broken onto TWO lines and spilled 6px above / 4.5px below the 19px capsule
+ * (measured pre-fix at 320/360/375/390; fine from 414px up).
+ *
+ * The pill is a shrinkable flex ITEM in every host it has (`.mp-lessons__title`,
+ * `.doc-card__file`, `.set-entry__name`, the doc-history rows) while its own
+ * `height` is FIXED. Without a `white-space` declaration the min-content width
+ * of CJK text is ONE GLYPH, so the flex algorithm is free to squeeze the box
+ * narrower than its label; the capsule cannot grow to match, and the spill is
+ * what the owner saw. `nowrap` raises min-content to the whole label, and a
+ * flex item's default `min-width: auto` then floors the box there — which is
+ * why this one declaration is the whole fix and no `flex: none` is needed.
+ * (MEASURED: `flex: none` alone ALSO holds the guard green, so the two were
+ * redundant; the single semantic one is kept, and it is the one that also works
+ * in a non-flex host.)
+ *
+ * Fixed on the badge rather than at the one call site the screenshot came from:
+ * the pill ships in five components today, all of them with the same fixed
+ * height and the same exposure. */
 .set-badge {
   display: inline-flex;
   align-items: center;
+  white-space: nowrap;
   height: 19px;
   padding: 0 9px;
   border-radius: var(--radius-pill);
@@ -387,10 +407,25 @@
   flex: none;
 }
 
+/* T-5e79 — the SAME defect as `.set-badge`, in the same screenshot: the
+ * 「編輯」 button sits opposite the badge in `.mp-lessons__head` (a
+ * space-between flex row), is likewise shrinkable with a FIXED 30px height, and
+ * at ≤390px its two glyphs wrapped to a 32px-tall stack inside the 30px box.
+ * Different class, same cause, so it is fixed the same way and here — every
+ * `.doc-btn` (取消 / 完成 / 版本紀錄 / 編輯) is a short command label that must
+ * never wrap.
+ *
+ * ⚠️ `white-space` ONLY, deliberately no `flex: none` — same reasoning as the
+ * badge above, plus one that is specific to this class: `.doc-btn` has ~40 call
+ * sites (the model/effort chips, the theme editor's rows, the manual pages),
+ * several of them in flex rows that size their buttons themselves, and a
+ * blanket `flex: none` here would silently out-cascade any of them declared in
+ * an earlier sheet. */
 .doc-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
   height: 30px;
   padding: 0 12px;
   border-radius: 8px;
