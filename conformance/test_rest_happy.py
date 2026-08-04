@@ -519,6 +519,55 @@ def _happy_restorable_revision(ctx: HCtx) -> str:
     return f"/api/document-history/global_context/global/{versions[0]['id']}/restore"
 
 
+_RESET_INSIGHT_OVERLAY = "conformance happy insight overlay to be discarded"
+
+
+def _reset_insight_path(ctx: HCtx) -> str:
+    """Make the reset row SELF-SUFFICIENT: write a distinctive overlay first, so
+    the assertions afterwards measure a MOVE rather than a no-op.
+
+    Without this the row would silently depend on whether an earlier row had
+    left `assistant` non-default — and a reset that did nothing at all would
+    still answer 200 with a spec-shaped body. Same posture as
+    _document_history_restore_path above, which seeds its own precondition
+    instead of trusting row order.
+    """
+    h = {"Authorization": f"Bearer {ctx.owner_token}"}
+    r = ctx.client.post(
+        "/api/insight/assistant", json={"text": _RESET_INSIGHT_OVERLAY}, headers=h
+    )
+    assert r.status_code == 200, f"reset seed write failed: {r.status_code} {r.text}"
+    assert r.json()["is_default"] is False, "seed write did not leave a custom doc"
+    return "/api/insight/assistant/reset"
+
+
+def _check_reset_insight(ctx: HCtx, r: httpx.Response) -> None:
+    """The factory seed is back, and the custom doc is provably gone.
+
+    🔴 Deliberately does NOT compare against the seed's TEXT. The suite is
+    black-box and must not read seeds/insight_assistant.md; what it can state
+    order-independently is that the response is no longer the overlay
+    _reset_insight_path just wrote, that is_default flipped back to True, and
+    that the doc is non-empty — the assistant is the one role that ships a seed,
+    so an empty answer here would mean the fold stopped finding it.
+    """
+    d = r.json()
+    assert d["is_default"] is True, f"reset did not flip is_default: {d}"
+    assert d["text"] != _RESET_INSIGHT_OVERLAY, "reset left the custom doc in place"
+    assert d["text"].strip(), "reset served an EMPTY doc — the factory seed was not restored"
+    assert d["size_chars"] == len(d["text"]), d
+    assert d["cap_chars"] >= d["size_chars"], d
+    assert d["role_key"] == "assistant", d
+    # The READ face agrees — the response is not a one-off projection.
+    g = ctx.client.get(
+        "/api/insight/assistant",
+        headers={"Authorization": f"Bearer {ctx.owner_token}"},
+    )
+    assert g.status_code == 200, f"{g.status_code} {g.text}"
+    assert g.json()["text"] == d["text"], "GET after reset disagrees with the reset response"
+    assert g.json()["is_default"] is True, g.text
+
+
 HAPPY: dict[str, Happy] = {
     # ── public ───────────────────────────────────────────────────────────────
     "GET /api/health": Happy(identity="none"),
@@ -1059,6 +1108,15 @@ HAPPY: dict[str, Happy] = {
             and len(d["sha256"]) == 64
             and d["is_default"] is False,
         ),
+    ),
+    "POST /api/insight/{role_key}/reset": Happy(
+        # T-6501. The way back to the PER-ROLE factory seed — reset_role's
+        # counterpart on the Insight block. The path callable writes its own
+        # precondition (see _reset_insight_path): a reset that restored nothing
+        # would answer 200 with a spec-shaped body, so the row has to know what
+        # the document looked like BEFORE it ran.
+        path=_reset_insight_path,
+        check=_check_reset_insight,
     ),
     "GET /api/resume-summary": Happy(
         check=lambda _c, r: _expect(

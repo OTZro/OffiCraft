@@ -881,6 +881,37 @@ MATRIX: dict[str, Route] = {
         ),
         body={"edits": [{"old": "", "new": "conformance insight patch probe"}]},
     ),
+    "POST /api/insight/{role_key}/reset": Route(
+        # T-6501. Back to the PER-ROLE factory seed. Same declared floor and the
+        # same handler-level per-role guard as the two write rows above — and
+        # the guard runs BEFORE the seed lookup, which is what makes every cell
+        # below deterministic rather than dependent on which roles ship a file.
+        #
+        # 🔴 THE PATHS DIFFER BY IDENTITY FOR A REASON THAT IS NOT AUTHZ. Only
+        # `assistant` ships an insight seed (the presence of
+        # seeds/insight_<role_key>.md IS the roster), so it is the ONLY role on
+        # which this route can answer 2xx at all. The conformance agents carry
+        # throwaway role keys (conf-role-a/b), which is why:
+        #   * owner / admin_agent aim at `assistant` → 200. admin_agent is the
+        #     interesting one: its role IS assistant, so this cell would still
+        #     pass if the cross-role admin write were lost — the cross-role
+        #     admin statement is carried by the two rows above, not here.
+        #   * agent_self aims at its OWN role → the per-role guard PASSES and
+        #     the route then 404s for want of a seed. That is the whole point of
+        #     spending a cell on it: a 403 here would mean the guard had started
+        #     refusing an agent its own document.
+        #   * agent_other aims at `assistant` → 403, the cross-role refusal.
+        #   * warden is below the agent floor → derived 403, never written.
+        # The 404 face is recorded in DEGRADED (it is a positive face that
+        # cannot reach 200), not because anything about it is unasserted.
+        requires="agent",
+        overrides={"agent_self": 404, "agent_other": 403},
+        path=lambda ctx, i: (
+            f"/api/insight/{ctx.agent_a.role_key}/reset"
+            if i == "agent_self"
+            else "/api/insight/assistant/reset"
+        ),
+    ),
     "GET /api/resume-summary": Route(requires="machine"),
     "GET /api/resume-summary-size": Route(requires="machine"),
     "POST /api/bootstrap": Route(
@@ -1198,6 +1229,17 @@ SKIPPED: dict[str, str] = {}
 # Honest degradations: covered in the matrix, but with a weaker probe than the
 # route's full semantics. Reported here so nothing is silently soft.
 DEGRADED: dict[str, str] = {
+    "POST /api/insight/{role_key}/reset": (
+        "the agent_self face is pinned at 404, not 200: it aims at the agent's "
+        "OWN role (so the per-role write guard is genuinely exercised and PASSES) "
+        "and that role ships no seeds/insight_<role_key>.md, which is the "
+        "route's documented 404. Only `assistant` ships an insight seed, and a "
+        "plain conformance agent cannot be given that role without making it an "
+        "admin. The owner/admin_agent faces are full 200s; the reset's own "
+        "semantics (seed restored, is_default flipped, the discarded overlay "
+        "retained as a revision) are pinned in test_rest_happy.py and in the "
+        "server unit tests (api_insight_reset_t6501_test.go)."
+    ),
     "POST /api/machines/{machine_id}/bootstrap-here": (
         "owner face uses an UNKNOWN machine id (expects 404): a real target would "
         "run `ocwarden install` on the host under test — a host side effect the "
