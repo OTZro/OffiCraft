@@ -415,32 +415,23 @@
   color: var(--color-text-muted);
 }
 
-/* "the change has not reached this machine's agents" — the ONLY cutover state
-   with a face. There is deliberately no sibling rule for the good case: the
-   badge these replaced had a green face, and a green face is what let a machine
-   whose cutover had not taken effect read as healthy. Amber is the table's
-   existing "look at this" colour; it is a sentence, not a chip, because the
-   point is that a reader who has never seen this codebase can act on it. */
+/* "not in effect" — the ONLY cutover state with a face, and since 2026-08-04 a
+   very short one (the long sentence became a terse mark; see CutoverEffectLine).
+   There is deliberately no sibling rule for the other three states: they render
+   nothing at all, so there is nothing to style. The badge these replaced had a
+   green face, and a green face is what let a machine whose cutover had not taken
+   effect read as healthy. Amber is the table's existing "look at this" colour.
+   🔴 Kept as `display: block` — a own-line sentence shape, NOT a fixed-height
+   badge/chip. That is not laziness: a fixed height + shrinkable flex item + a
+   CJK label is exactly the combination that folds 未生效 into two stacked lines
+   and bursts the box (frontend/CLAUDE.md, T-5e79; the 390–414px band). This
+   shape has no fixed height, so the defect cannot occur here. */
 .mon-cutover-warn {
   display: block;
   margin-top: 0.25em;
   font-size: 0.8em;
   line-height: 1.35;
   color: var(--color-warn-fg);
-}
-/* "we have no answer for this machine" — the two states that are the ABSENCE
-   of a verdict (the box checked and could not tell; the box has never checked).
-   Same sentence geometry as the warning above so the row reads the same way,
-   and a deliberately different COLOUR: muted grey, because nothing is known to
-   be wrong here. Amber is reserved for the machine that has a real problem —
-   painting "no data" like a fault teaches readers to ignore the fault colour,
-   and the good case still has no face at all. */
-.mon-cutover-note {
-  display: block;
-  margin-top: 0.25em;
-  font-size: 0.8em;
-  line-height: 1.35;
-  color: var(--color-text-muted);
 }
 
 /* neutral ghost button (cancel / close) — shares the .btn silhouette */

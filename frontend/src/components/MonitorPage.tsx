@@ -1086,50 +1086,44 @@ export function MonitorPage() {
   );
 }
 
-/** What this row says about the cutover — which for exactly one of the four
- * states is NOTHING, and that is the contract:
+/** What this row says about the cutover — which for THREE of the four states is
+ * NOTHING, and that is the contract:
  *
- *   "effective"     proven in effect → silence. A row with no line under it
- *                   means this machine was measured and passed, and no other
- *                   state may look like that.
- *   "not_effective" proven otherwise → the amber sentence. Something is wrong.
- *   "unproven"      the machine checked and could not settle it → grey.
- *   null            the machine has never reported → grey, its own sentence.
+ *   "not_effective" proven otherwise → the short amber mark. The only state
+ *                   with a face, and the face is deliberately terse.
+ *   "effective"     proven in effect → silence.
+ *   "unproven"      the machine checked and could not settle it → silence.
+ *   null            the machine has never reported → silence.
  *
- * The last two are grey rather than amber because they are the ABSENCE of an
- * answer, not a problem: nothing is known to be wrong on those machines, but
- * nothing is known to be right either, and colouring them like a fault would
- * train readers to ignore the colour that does mean a fault. They still have to
- * SAY something, though — the three of them sharing one blank is the defect
- * being retired, and a green face for the fourth is the defect before that.
+ * ⚠️ This used to be three full sentences, and they were added to fix a real
+ * incident: before them all four states shared one blank, so a machine whose
+ * cutover had NOT taken effect looked healthy for three hours. **That incident
+ * is still fenced off** — the proven failure still has a face, it is just very
+ * short now (owner 2026-08-04, rc-aaa0e7967f8a: the three sentences were too
+ * long, told nobody what to do, and named a concept the reader does not have).
  *
- * The copy carries NO internal vocabulary. "anchor" and "legacy" are names for
- * launchd plist shapes that mean nothing to anyone who has not read this
- * repository, and a warning nobody can act on is not a warning. None of it
- * tells anyone to restart anything either: this surface makes the state VISIBLE
- * and stops there — deciding when to act is a person's call, deliberately. */
+ * What DID fall back to silence are the two "no answer" states, and that is the
+ * point rather than a regression: "the box checked and could not tell" and "the
+ * box has never checked" are both the ABSENCE of a verdict, and a reader who
+ * finishes either sentence cannot do anything with it. A line that costs a row
+ * of screen and buys no action is worse than no line. The distinction that the
+ * incident was about — measured-and-failed vs everything else — is exactly the
+ * one that survives.
+ *
+ * The mark carries NO internal vocabulary and tells nobody to restart anything:
+ * this surface makes the state VISIBLE and stops there. It does not pretend to
+ * explain what is wrong either — whoever sees it is meant to come and ask. */
 function CutoverEffectLine({ effect }: { effect: CutoverEffect }) {
   const { t } = useI18n();
   const m = t.monitor.machine;
-  if (effect === "effective") return null;
-  if (effect === "not_effective") {
-    return (
-      <span
-        className="mon-cutover-warn"
-        data-testid="mon-cutover-warning"
-        role="status"
-      >
-        {m.cutoverNotInEffect}
-      </span>
-    );
-  }
-  // The two quiet states. Keyed by the state's own name rather than falling
-  // through a `??` to a shared default: "the machine could not tell" and "the
-  // machine never said" are opposite next steps (go look at that box vs ship it
-  // the release), and a shared sentence would send a reader to the wrong one.
+  if (effect !== "not_effective") return null;
   return (
-    <span className="mon-cutover-note" data-testid="mon-cutover-note">
-      {effect === "unproven" ? m.cutoverUnproven : m.cutoverUnreported}
+    <span
+      className="mon-cutover-warn"
+      data-testid="mon-cutover-warning"
+      role="status"
+    >
+      {m.cutoverNotInEffect}
     </span>
   );
 }
