@@ -277,8 +277,9 @@ func (d *DAL) CountTasksDuplicatingOriginal(originalID string) (int, error) {
 // removes the hazard for ONE column. Every OTHER column of this row remains a
 // shared-write, last-writer-wins field, and two handlers racing on two
 // different columns still lose one of them. That is pre-existing and untouched
-// (T-e271 node 3 explicitly did not widen into it) — see the note on
-// PutTaskStep's `note` column for the same shape one table over.
+// (T-e271 node 3 explicitly did not widen into it) — PutTaskStep carries the
+// same carve-out for its `note` column one table over (T-e271 node 6), and its
+// remaining columns are still shared-write for exactly this reason.
 func (d *DAL) PutTask(t Task) error {
 	inputs := t.Inputs
 	if inputs == nil {
@@ -659,6 +660,38 @@ func (d *DAL) TouchTaskUpdatedTS(id string, ts float64) error {
 }
 
 // PutTaskStep upserts one step row.
+//
+// 🔴 `note` IS DELIBERATELY ABSENT FROM THE ON CONFLICT UPDATE LIST (T-e271
+// node 6). Do not "restore" it — that line is the lost update, and it was
+// measured, not theorised.
+//
+// The hazard is structural, not exotic: this is a whole-row upsert with no
+// optimistic lock, and every OTHER step writer is a load-mutate-save
+// (dal.GetTaskStep → mutate one field → dal.PutTaskStep) — update_step_status,
+// armStepWithCard (open_gate / create_reply_card auto-bind), the reply-card
+// release path, and the reassign step reset. Nothing links those reads to those
+// writes, so the upsert asserts EVERY column as that handler read them. With
+// the note in the conflict list, an agent reporting a step's status replays the
+// note it happened to read a moment earlier — silently destroying a handover
+// note the note endpoint had already answered 200 to, which the successor
+// session then never sees. Measured before the fix: a deterministic interleave
+// lost it every time, and two goroutines driving the two real endpoints lost it
+// by round 2 / 7 / 7 / 14 / 54 across five 60-round runs. "Rare" was not true.
+//
+// The fix is an OWNERSHIP BOUNDARY rather than a lock or a retry: the column is
+// written ONLY by SetTaskStepNote (a single-column UPDATE) and by the INSERT
+// half of this very statement, which is how submit_plan mints fresh step rows —
+// those mint a fresh id, so they never reach the conflict clause. Single-writer
+// columns cannot be clobbered by a stale whole-row copy, because no stale
+// whole-row copy of them exists. Guarded by TestTaskStepNoteRaceGuardHasTeeth.
+//
+// ⚠️ SCOPE, stated so nobody reads more safety into this than is here: this
+// removes the hazard for ONE column. Every OTHER column of this row — status,
+// waiting_reason, reply_card_id, order_idx, started_ts, finished_ts — remains a
+// shared-write, last-writer-wins field, and two handlers racing on two
+// different columns still lose one of them. That is pre-existing and untouched
+// (T-e271 node 6 explicitly did not widen into it) — the same shape PutTask
+// documents one table over.
 func (d *DAL) PutTaskStep(st TaskStep) error {
 	isGate := 0
 	if st.IsGate {
@@ -675,7 +708,6 @@ func (d *DAL) PutTaskStep(st TaskStep) error {
 			is_gate = excluded.is_gate,
 			reply_card_id = excluded.reply_card_id,
 			waiting_reason = excluded.waiting_reason,
-			note = excluded.note,
 			started_ts = excluded.started_ts,
 			finished_ts = excluded.finished_ts`,
 		st.ID, st.TaskID, st.OrderIdx, st.Name, st.DoD, st.Status,
