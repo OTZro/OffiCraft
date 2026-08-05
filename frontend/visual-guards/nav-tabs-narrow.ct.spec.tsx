@@ -30,11 +30,41 @@
 //      anywhere else — measured twice, in two independent font environments,
 //      and BOTH times these were the only two failures out of 207 CT tests:
 //        * hosted macOS runner (T-ab2a node 2): visibleLabel 35 < 36 @390,
-//          visibleTab 90 ≠ 95 @414 — 205 passed.
+//          visibleTab 90 ≠ 95 @414 — 205 passed. Re-checkable: that run's raw
+//          log is GitHub Actions run 31003590775 (workflow tab2a-measure.yml,
+//          branch measure/tab2a-macos-probe), block 2.
 //        * dev Mac with Noto Sans TC pinned into the CT harness (T-0fef
 //          experiment): visibleLabel 34 < 36, visibleTab 89 ≠ 95 — 205 passed.
+//          ⚠️ That run's log was NOT committed here; it lives on the T-0fef
+//          ticket as an artifact. If you need to re-derive it rather than trust
+//          this comment, pin a 1em CJK face into playwright/index.html and run
+//          `npm run test:ct` — the point is reproducible, the log is not in-tree.
 //      That second measurement is also why `npm run test:ct` is now a cloud
-//      gate: this group was the whole of its font dependence.
+//      gate: with this group gone, both environments ran 204 green.
+//
+// 🔴 READ THIS BEFORE REUSING REASON 3. Reason 3 is true but it is NOT the
+// reason this group had to go — and an earlier draft of this header let it read
+// that way. Two corrections, both from an independent review of the removal:
+//
+//   a. `frontend/playwright/index.html` (the CT harness page) loads NO webfonts,
+//      while `frontend/index.html` (what ships) pulls Schibsted Grotesk + Noto
+//      Sans TC from Google Fonts. theme.css declares them either way, so the
+//      harness falls through to `system-ui`. ⇒ EVERY CT layout guard has always
+//      measured the runner's system font, never the font a user sees. This group
+//      was not the only one with a font dependence — it was the one with the
+//      least headroom.
+//   b. Therefore the "dev Mac with Noto Sans TC pinned in" run was not a switch
+//      to some exotic face: it was the harness finally matching PRODUCTION. And
+//      under production's own font these assertions FAIL (visibleLabel 34 < 36).
+//      Read plainly: the user really does see fewer legible pixels than this
+//      guard demanded. It was a TRUE positive, not a false one.
+//
+// ⇒ The load-bearing reason for removal is REASON 2 — the product defines the
+// clipping as normal and the strip scrolls, so the guard was asserting against a
+// documented product decision. When a guard and the product disagree about what
+// "broken" means, the guard is what gives way. Do not cite reason 3 alone; it
+// invites the conclusion that the CT font environment is now sound, and it
+// is not. Aligning the harness with production is unfinished work.
 import { test, expect } from "@playwright/experimental-ct-react";
 import { NavTabsNarrowStory } from "./stories/NavTabsNarrowStory";
 

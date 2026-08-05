@@ -33,8 +33,27 @@
 # is the ~4% outlier, which was the whole of that group's headroom.
 # The owner ruled that group out of existence rather than making it portable
 # (docs/guide/mobile.md already documents the clipping as normal, and the strip
-# scrolls). With it gone, the suite's font dependence measured to zero across two
-# font environments — so the gate moves here instead of living on one laptop.
+# scrolls). With it gone, two separate font environments both ran the remaining
+# 204 specs green — so the gate moves here instead of living on one laptop.
+#
+# ⚠️ DO NOT read that as "the suite has no font dependence". An earlier draft of
+# this comment said exactly that, and it was overclaiming. What was actually
+# measured is ONE axis:
+#   * CJK  — measured twice (hosted macOS runner; dev Mac with Noto Sans TC
+#            pinned into the harness). Both green at 204.
+#   * Latin — NEVER measured. Latin advances differ far more between faces than
+#            Han ones do (Han is 1em almost everywhere; Latin is not), and the
+#            overflow guards named `*-longtoken-wrap` are full of Latin strings.
+#
+# 🔴 And the deeper fact behind all of it: `frontend/playwright/index.html` (the
+# CT harness page) loads NO webfonts, while `frontend/index.html` (what ships)
+# pulls Schibsted Grotesk + Noto Sans TC from Google Fonts. theme.css declares
+# them either way, so the harness falls through to `system-ui`. ⇒ every CT layout
+# guard has always measured the RUNNER's system font, never the font a user sees.
+# That is a pre-existing gap, not something this ticket introduced or fixed; it is
+# also why "the CT font environment is trustworthy" is not a claim anyone should
+# make yet. Aligning the harness with production is its own piece of work.
+#
 # Still NOT ubuntu: `bin/ci-cloud.sh` explains why a Linux font stack is a
 # different question, and that one has never been measured. Do not infer it.
 #
