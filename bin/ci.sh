@@ -8,9 +8,12 @@
 # regenerate-and-byte-compare steps whose authority we do not want to move.)
 # A SUBSET — the Linux-portable guards, consistency / wire-freeze drift gates,
 # and the black-box conformance suite —
-# now also runs on every pull request via .github/workflows/ci.yml, which calls
+# now also runs on every pull request AND on every push to main (T-ab2a) via
+# .github/workflows/ci.yml, which calls
 # bin/ci-cloud.sh; that script is the single definition of the subset, so the
-# cloud check cannot grow a second, drifting list. What stays LOCAL-ONLY:
+# cloud check cannot grow a second, drifting list. The post-merge round shares
+# that same definition on purpose — a main-only job would be a second list, and
+# it is the unwatched list that drifts. What stays LOCAL-ONLY:
 # bin/tests/run.sh (a number of its assertions go red on Linux: BSD/GNU
 # `mktemp -t` semantics and macOS-shaped install.sh fixtures — the count is
 # deliberately not stated here, it was stale within one ticket), Playwright CT

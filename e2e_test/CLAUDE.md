@@ -7,7 +7,8 @@ Go(ocserverd)是唯一 target(py leg 已隨 Python backend 退役;歷史回滾 =
 
 ## 誰會自動跑這套(T-ff8a)
 `bin/ci.sh` **不**跑 `run_all.sh`(只跑 `tests_guard/run.sh` 那套 hermetic 守衛)。自動關卡在
-**`.github/workflows/ci.yml` 的 `macos-e2e` job**:macOS runner、`pull_request` 觸發,
+**`.github/workflows/ci.yml` 的 `macos-e2e` job**:macOS runner、`pull_request` **與 push-to-`main`**
+兩個觸發都跑(T-ab2a 補上後者;`main` 上不 cancel-in-progress,見那個檔的註解),
 `OC_E2E_EXCLUDE_REAL_FLEET=1` ⇒ 跑瀏覽器情境、排掉 `05_machine_onboarding_spawn`
 (要 `claude` 在 PATH、spawn 真 warden、燒真 API 額度)。
 兩個前提由 repo 裡的具名腳本負責,**不靠人記得**:
