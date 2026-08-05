@@ -111,7 +111,7 @@ CI 跑在本地、`bin/ci.sh` 是 land 權威，從第一個非零步驟就 fail
 
 （舊文寫「不付 GitHub Actions」——repo 轉 PUBLIC 後那個理由已不成立，公開 repo 用標準 runner 是免費的。真正的理由是這份 gate 裡有大量 host-shaped 與「重生後逐位元組比對」的步驟，我們不想把那些的權威搬到雲上。）
 
-**PR 上的雲端 check（`.github/workflows/ci.yml`）**：`pull_request` 觸發，跑「雲端跑得動的全部」——**單元測試**（`e2e_test` 的 hermetic isolation-guard、Go 各模組的格式／靜態／編譯／測試、FE typecheck/vitest）、**hygiene**（tracked-file path denylist）、**一致性檢查**（gen-ocapi / FE schema.ts / 主題色票 / 訊息鍵 / 字型白名單的 regenerate-and-diff 漂移閘 + 兩個 token lint）、**黑箱行為**（完整 conformance 套件，起真 ocserverd 綁隔離 port）。它是在乾淨 Linux 機器上的 cross-check，**不是 land 權威**——`bin/ci.sh` 才是。
+**雲端 check（`.github/workflows/ci.yml`）**：`pull_request` **與 push-to-`main`** 兩個觸發（後者由 T-ab2a 補上：在那之前，合併之後沒有任何東西會跑，所以兩個各自綠的 PR 併起來讓主幹變紅時，要等到下一個開 PR 的人繼承那片紅才會有人發現）。兩個觸發跑的是**同一組 job、同一份定義**——刻意不為 `main` 另列一份清單。`main` 上另外**關掉 cancel-in-progress**：被取消的 run 回的是 `cancelled` 而不是紅，那會讓真正弄壞主幹的那顆 commit 完全沒有判決，在 commit 列表上跟「通過了」長得一樣。內容是「雲端跑得動的全部」——**單元測試**（`e2e_test` 的 hermetic isolation-guard、Go 各模組的格式／靜態／編譯／測試、FE typecheck/vitest）、**hygiene**（tracked-file path denylist）、**一致性檢查**（gen-ocapi / FE schema.ts / 主題色票 / 訊息鍵 / 字型白名單的 regenerate-and-diff 漂移閘 + 兩個 token lint）、**黑箱行為**（完整 conformance 套件，起真 ocserverd 綁隔離 port）。它是在乾淨 Linux 機器上的 cross-check，**不是 land 權威**——`bin/ci.sh` 才是。
 
 ⚠️ 子集的定義只有一份、寫在 `bin/ci-cloud.sh`（repo 內的 bash）；workflow YAML 只負責裝釘好版本的 toolchain 然後呼叫它，**裡面沒有、也不准有第二份模組清單或閘門清單**——要加請加進 `bin/ci-cloud.sh`。
 

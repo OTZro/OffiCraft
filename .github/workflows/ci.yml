@@ -19,8 +19,17 @@
 # cannot drift. If you find yourself about to add a test invocation here, add it
 # to bin/ci-cloud.sh instead.
 #
-# Trigger is pull_request ONLY. Pushes to a working branch are the local gate's
-# job; re-running the same suites on every push would just be noise.
+# Triggers are pull_request AND push-to-main. Pushes to a WORKING branch are the
+# local gate's job; re-running the same suites on every working-branch push would
+# just be noise. main is different: until T-ab2a nothing ran after a merge, so a
+# pair of individually-green PRs could combine into a red trunk and no one would
+# find out until the next PR author inherited it. The post-merge round exists to
+# name that moment, and to name it on the commit that caused it.
+#
+# Both triggers run the SAME jobs — there is deliberately no second list of what
+# to run for main. A separate main-only job would be a second definition, and two
+# definitions of "the checks" drift; the one that drifts silently is always the
+# one nobody watches.
 #
 # No secrets are used anywhere in this workflow, by design — so a fork PR runs
 # the identical, complete check.
@@ -28,12 +37,21 @@ name: ci
 
 on:
   pull_request:
+  push:
+    branches: [main]
 
 # A new push to the same PR makes the in-flight run obsolete — cancel it rather
 # than pay for (and wait on) a result nobody will read.
+#
+# main is exempt, and that asymmetry is the point: a cancelled run reports
+# conclusion=cancelled, which is NOT a red. Two merges landing close together
+# would cancel the first one's round, and the trunk commit that actually broke
+# main would end up carrying no verdict at all — indistinguishable, on the
+# commit list, from a commit that passed. Every commit on main gets its own
+# answer, even when that costs a duplicate round.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
