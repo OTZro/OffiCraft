@@ -13,20 +13,27 @@
 # bin/ci-cloud.sh; that script is the single definition of the subset, so the
 # cloud check cannot grow a second, drifting list. The post-merge round shares
 # that same definition on purpose — a main-only job would be a second list, and
-# it is the unwatched list that drifts. What stays LOCAL-ONLY:
-# bin/tests/run.sh (a number of its assertions go red on Linux: BSD/GNU
-# `mktemp -t` semantics and macOS-shaped install.sh fixtures — the count is
-# deliberately not stated here, it was stale within one ticket), Playwright CT
-# (real-browser layout — font/rasterisation差異 makes a runner red for the wrong
-# reason), the content-level gitleaks scan, and the real-fleet spec inside
-# e2e_test (machine onboarding: it needs `claude` on PATH, spawns a real warden
-# and burns real API quota).
+# it is the unwatched list that drifts.
+#
+# T-ab2a: bin/tests/run.sh and the content-level gitleaks scan are NO LONGER
+# local-only either. They were MEASURED on a hosted macOS runner (green, 244s and
+# 10s) and moved to a third job, macos-host-gates, which calls
+# bin/ci-macos-host.sh — together with bin/check-officraft-dist. This script still
+# runs all of them; that job makes them apply to everyone else's pull request too.
+#
+# What stays LOCAL-ONLY: Playwright CT (real-browser layout — font/rasterisation
+# differences make a runner red for the wrong reason; MEASURED red on a runner,
+# failing a text-width threshold by ONE pixel on an identical frontend tree, so
+# the honest fix is a reproducible font environment, not a looser threshold), and
+# the real-fleet spec inside e2e_test (machine onboarding: it needs `claude` on
+# PATH, spawns a real warden and burns real API quota).
 # The path denylist plus e2e_test's hermetic isolation-guard suite run in cloud.
-# T-ff8a: e2e_test's BROWSER specs are no longer local-only either — ci.yml grew a
-# second job, macos-e2e, which runs e2e_test/run_all.sh on a macOS runner with the
-# real-fleet spec excluded. Neither job is land authority; this script still is.
-# The cloud check is a cross-check on a clean Linux box, NOT land
-# authority.
+# T-ff8a: e2e_test's BROWSER specs are no longer local-only either — ci.yml has a
+# macos-e2e job which runs e2e_test/run_all.sh on a macOS runner with the
+# real-fleet spec excluded. NONE of the cloud jobs is land authority; this script
+# still is. They are cross-checks — one on a clean Linux box (which is the one
+# thing this Mac cannot prove), two on a macOS runner (which is what makes the
+# host-shaped gates apply to everyone's pull request and not just this laptop).
 #
 # ONE RUN PER WORKING COPY (T-70c9). This script LOCKS the clone it lives in; a
 # second run in the SAME clone is refused with a non-zero exit. MORE ROUNDS AT
