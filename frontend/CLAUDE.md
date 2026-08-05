@@ -1347,7 +1347,7 @@ T-081b 開放的葉子有好幾條是**句子片段**,邊界空白是有意義�
   GitHub 上是綠的。查證過的源頭(2026-08-02,不是沿用舊文):`.github/workflows/ci.yml` 的
   `cloud-gates` job 跑 `bash bin/ci-cloud.sh`;那支腳本裡 **`test:ct` 命中 0 次**、只有
   `vitest run`,而 `test:ct` 只出現在 `bin/ci.sh`。
-  ⚠️ **ci.yml 現在有三個 job**(T-ff8a 加了 macOS 上的 `macos-e2e`,T-ab2a 又加了 `macos-host-gates`),但那兩個 macOS job 跑的是
+  ⚠️ **ci.yml 現在有三個 job**(T-ff8a 加了 macOS 上的 `macos-e2e`,T-ab2a 又加了 `macos-host-gates`),但**沒有一個**跑 CT:`macos-host-gates` 跑的是 host 形狀的那三塊閘(`bin/tests/run.sh`、內容層 gitleaks、TCC 身分錨點),跟 Playwright 無關;`macos-e2e` 跑的是
   `e2e_test` 的 Playwright **端到端**情境,**不是** `frontend` 的 CT ⇒ 上面那句「CT 不在雲端
   gate 裡」**仍然成立**,別因為看到「雲端有 macOS runner 了」就以為 CT 被涵蓋了。
 

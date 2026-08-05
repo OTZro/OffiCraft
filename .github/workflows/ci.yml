@@ -119,7 +119,9 @@ jobs:
   # rather than every developer's laptop.
   # It does NOT replace cloud-gates above: that job runs on ubuntu precisely to
   # catch macOS-only assumptions, so swapping it for a Mac would disarm the one
-  # check no Mac can perform. Two jobs, different purposes.
+  # check no Mac can perform. Different purposes, deliberately separate jobs —
+  # this pairing is about cloud-gates vs macos-e2e specifically; a third job
+  # (macos-host-gates, T-ab2a) now sits below and is a different concern again.
   macos-e2e:
     # Pinned, not macos-latest: `latest` moves between OS majors on GitHub's
     # schedule, and this suite asserts host-shaped behaviour. A version bump here

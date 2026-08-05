@@ -56,11 +56,16 @@ cd "$ROOT" || fail "cannot cd to repo root $ROOT"
 # NOT set -e, on purpose: every gate below is explicitly `|| fail` so that each
 # failure names WHICH gate died and how to reproduce it, which `set -e` cannot do.
 # The cost of that choice is that an uncaught command would pass silently, so
-# there must be no uncaught command — including this cd. An unchecked cd here
-# would leave `gitleaks dir .` scanning whatever directory we happened to be in;
-# the absolute-path checks below would still pass, so the run would come back
-# GREEN having scanned the wrong tree. That is the precise failure this file's
-# header warns about, one line above where it warns about it.
+# there must be no uncaught command — hence `|| fail` on the cd too.
+#
+# Honesty about what that cd check does and does not buy, because the first
+# version of this comment overstated it: I claimed an unchecked cd would come
+# back GREEN having scanned the wrong tree. An independent reviewer disproved
+# that from gitleaks' own source — a --config it cannot read is a fatal error,
+# not an empty clean scan, so `|| fail` on the gitleaks line was already catching
+# it. And in the Actions invocation the step's cwd is already $ROOT before this
+# line runs. So the cd check is defense-in-depth against a caller invoking this
+# script from somewhere unexpected, NOT the plugging of a live false-green hole.
 
 # A Linux runner would silently behave differently in every gate below, so the
 # script refuses rather than reporting a green that means nothing.
