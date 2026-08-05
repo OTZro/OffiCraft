@@ -20,9 +20,24 @@
 // Colours are never hardcoded here: the assertions are channel DISTANCE and
 // ALPHA, so a theme is free to repaint both sides and this guard still holds.
 //
-// MUTANTS (each RUN and verified red — see the task report for the messages):
-//   delete the four `.diff-view__row--split[data-*-kind=...]` background rules
-//     → "the two columns must not be the same fill" red (distance 0)
+// MUTANTS (each RUN and verified red; restored from a scratchpad backup with a
+// shasum reconcile, never `git checkout --`):
+//   ① delete all four `.diff-view__row--split[data-*-kind=…]` background rules
+//      → red 2/3. "must not be the same fill" reports distance 0 with BOTH
+//        halves at `{"r":0,"g":0,"b":0,"a":0}`, and the two gutters collapse to
+//        one colour. The bare-context test stays green — correct, it is the
+//        positive control and context rows are legitimately bare either way.
+//   ② delete only the two `nth-child(1)` / `nth-child(4)` 32% gutter rules
+//      → red 1/3, and ONLY the gutter test: `removed gutter {…"a":0.18} must be
+//        stronger than its text cell {…"a":0.18}`. The distance test stays green
+//        (the 18% side fills survive), which is what makes ② prove that the
+//        gutter assertion carries its own weight rather than riding on ①.
+// ⇒ each of the two colour tests has a mutant that kills it ALONE.
+//
+// NOT defended, deliberately noted: under ① the gutters still resolve to the
+// `.diff-view__ln` sunken fill (that rule is untouched), so "gutter stronger
+// than its text cell" passes there on 0.22 > 0 — the collapse assertion is what
+// catches ① in that test. This guard pins the split TINTS, not `.diff-view__ln`.
 import { test, expect } from "@playwright/experimental-ct-react";
 import { DiffViewStory } from "./stories/DiffViewStory";
 

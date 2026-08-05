@@ -387,7 +387,7 @@ describe("DocumentHistoryModal", () => {
             seedUnavailable={opts.seedUnavailable}
             actorLine=""
             currentContent={opts.currentContent ?? { text: "owner's block" }}
-            docCapChars={DOC_CAP_CHARS_DEFAULT}
+            docCaps={DOC_CAP_CHARS_DEFAULTS}
             onRestore={opts.onRestore ?? (async () => {})}
             onClose={() => {}}
           />

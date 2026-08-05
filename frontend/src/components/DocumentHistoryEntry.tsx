@@ -37,7 +37,6 @@ import { useDocumentSeed } from "../hooks/useDocumentSeed";
 import { useMembers } from "../hooks/useMembers";
 import { useServerSettings } from "../hooks/useServerSettings";
 import { OWNER_ACTOR_ID, actorDisplayName } from "../lib/actorLabel";
-import { ApiError } from "../api/errors";
 import { capForKind, docCapBlockedFields } from "../api/docCap";
 import type { DocCaps } from "../api/docCap";
 import { documentFields } from "../lib/docHistoryFields";
