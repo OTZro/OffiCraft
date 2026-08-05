@@ -8,10 +8,13 @@
 //     `npm run lint:token-roles` checks the three SELECTORS, never which
 //     elements wear them, so an eighth badge with its own class, or one site
 //     quietly switched to another class, passes every existing gate.
-//   * 🔴 And `npm run test:ct` is NOT in the cloud gate — bin/ci-cloud.sh runs
-//     vitest only, `test:ct` is bin/ci.sh's local land gate (frontend/CLAUDE.md
-//     records this for the wording-list guards). Leaving this ONLY in CT means a
-//     regression is green on GitHub. This file is the half that runs everywhere.
+//   * 🔴 And `npm run test:ct` does not run on EVERY cloud gate. Since T-0fef it
+//     runs on the macOS runner (macos-host-gates → bin/ci-macos-host.sh block 4),
+//     but bin/ci-cloud.sh (ubuntu) still runs vitest only. So a CT-only guard is
+//     still invisible on that lane. This file is the half that runs everywhere.
+//     ⚠️ The older wording here said test:ct was in NO cloud gate at all; that
+//     stopped being true at T-0fef. The reason this file exists did not change —
+//     only the size of the gap it covers.
 //
 // Same shape as styleOwnership.test.ts: read the shipped source, assert a
 // structural invariant no runtime test can see.
