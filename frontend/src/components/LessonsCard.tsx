@@ -98,9 +98,23 @@ export function LessonsCard({ roleKey, taskType = "general" }: LessonsCardProps)
         {editing ? (
           <div className="mp-lessons__actions">
             {/* 版本紀錄 (T-1f39) — in the edit toolbar, like every other
-              * long-form document. This doc has NO file seed, so its list
-              * carries no 初始版本 row. The doc's own key is the composite
-              * "<role_key>::<task_type>" the wire uses. */}
+              * long-form document. No `onReset` is passed, so this list carries
+              * no 初始版本 row: that row is grown by `onReset` alone
+              * (DocumentHistoryEntry), and lessons has no reset route to hand it
+              * — there is no `POST /api/lessons/.../reset` the way there is for
+              * global-context, role and insight.
+              *
+              * 🔴 NOT "this doc has no file seed" (what this comment used to
+              * say, and it was false): `seeds/lessons.md` is right there,
+              * assets.go reads it on every fold and foldLessonsDTO folds
+              * overlay ⊕ seed exactly like the others. The absence is the ROUTE,
+              * not the file — and getting that backwards is what the next person
+              * taking this inventory would decide by. (`documentSeedContent`'s
+              * switch omits `lessons` too, so the /seed endpoint 404s here for
+              * the same reason: no reset, nothing to preview.)
+              *
+              * The doc's own key is the composite "<role_key>::<task_type>" the
+              * wire uses. */}
             <DocumentHistoryEntry
               kind="lessons"
               docKey={`${roleKey}::${taskType}`}

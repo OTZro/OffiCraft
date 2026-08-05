@@ -1059,7 +1059,7 @@ func dutyText(md string) string {
 }
 
 // stripLeadingTitle drops the ONE markdown title line a role doc opens with —
-// 「# 助理 — Mira」 — before the cap is applied, so the budget is not spent
+// 「# 助理」 — before the cap is applied, so the budget is not spent
 // restating the role name the row already carries in RoleName.
 //
 // It removes the FIRST heading line only, deliberately, and not every leading
