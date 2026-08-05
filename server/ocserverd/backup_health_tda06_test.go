@@ -222,7 +222,7 @@ func TestManualAndPreMigrationBackupsCannotHideADeadSchedule(t *testing.T) {
 	writeBackupFile(t, dbPath, now.Add(-time.Minute), backupReasonManual)
 	writeBackupFile(t, dbPath, now.Add(-2*time.Minute), backupReasonPreMigration)
 
-	if _, ok := newestScheduledBackup(dbPath); ok {
+	if _, ok := newestScheduledBackup(dbPath, now); ok {
 		t.Fatal("a manual and a pre-migration snapshot were counted as evidence the schedule is alive")
 	}
 

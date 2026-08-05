@@ -333,3 +333,177 @@ func TestLogBackupOutcome_TheStaleLineClaimsNothingAboutTheSchedule(t *testing.T
 			"backupHealthMonitor's claim to make, not this line's.", warning)
 	}
 }
+
+// ─── a backup stamped in the future ──────────────────────────────────────────
+//
+// 🔴 THE DEFECT THIS HALF EXISTS FOR. Every reader of this directory answers
+// "how old is the newest backup?" by subtracting a filename from a clock, and
+// `now.Sub(future)` is NEGATIVE. Negative passes BOTH thresholds in the quiet
+// direction: `age < backupInterval` (the cadence's "already covered") is true
+// for every negative value, and `age > backupStaleAfter()` (the alarm) is false
+// for every negative value. So ONE file stamped in the future makes backupTick
+// stop taking backups AND makes the monitor stay green — a total, silent backup
+// outage with a healthy cockpit. That is an UNDER-report, strictly worse than
+// the over-report the rest of this file is about, because nothing calls out at
+// all. An NTP correction, a restored VM snapshot, or a dead RTC all produce it.
+//
+// 🔴 BOTH SIDES ARE TESTED, THROUGH ONE IMPLEMENTATION. This ticket's thesis is
+// that "when did the schedule last run?" must not have two approximate answers,
+// so the repair is a single filter inside newestScheduledBackup rather than a
+// future-check bolted onto each consumer. Coverage is still per-side: the two
+// tests below drive backupTick and the monitor SEPARATELY, so removing the
+// filter turns both red and neither one alone is the whole guard.
+
+// TestBackupTick_AFutureStampedBackupDoesNotStarveTheCadence is the cadence
+// side: a backup must still be taken.
+func TestBackupTick_AFutureStampedBackupDoesNotStarveTheCadence(t *testing.T) {
+	db, dbPath := seedBackupFixture(t, 8)
+	now := time.Date(2026, 8, 5, 9, 0, 0, 0, time.UTC)
+
+	// The clock stepped back five hours: the last scheduled backup carries a
+	// stamp the machine has not reached yet. Nothing else is in the directory,
+	// so the cadence is starving if it counts this file.
+	future := now.Add(5 * time.Hour)
+	writeBackupFile(t, dbPath, future, backupReasonScheduled)
+
+	if !backupTick(db, dbPath, now, nil) {
+		t.Fatalf("the cadence took no backup: a scheduled file stamped %s in the future was "+
+			"counted as %s of coverage, because now.Sub(future) is negative and every "+
+			"\"< interval\" test passes for negative values. Backups stop and nothing says so.",
+			future.Sub(now), now.Sub(future))
+	}
+	if want := backupFileName(now, backupReasonScheduled); !hasBackup(backupNamesIn(t, dbPath), want) {
+		t.Errorf("tick reported it acted but %s is not on disk; directory holds %v",
+			want, backupNamesIn(t, dbPath))
+	}
+
+	// ── the OTHER failure mode: it must not now back up every single tick ────
+	// 🔴 This is why the repair SKIPS a future stamp instead of treating it as
+	// infinitely old. "Infinitely old" would back up here too — and then again
+	// at the next tick, and the next, for as long as the clock is behind, because
+	// the bogus file is still the newest one. That fills the disk and rotates the
+	// real history out of the routine pool inside one interval. Skipping
+	// converges: the snapshot just written is stamped `now`, is not in the
+	// future, and is the answer from here on. Cost of the whole incident: ONE
+	// extra snapshot.
+	if backupTick(db, dbPath, now.Add(15*time.Minute), nil) {
+		t.Errorf("the cadence backed up AGAIN 15 minutes later; the future-stamped file is still "+
+			"the newest name in the directory, so a repair that calls it \"very old\" loops "+
+			"every tick until the clock catches up. Directory now holds %v", backupNamesIn(t, dbPath))
+	}
+}
+
+// TestBackupHealth_AFutureStampedBackupIsNeverEvidenceOfALiveSchedule is the
+// alarm side: the cockpit must not be green.
+func TestBackupHealth_AFutureStampedBackupIsNeverEvidenceOfALiveSchedule(t *testing.T) {
+	dbPath := tempDBPath(t)
+	now := time.Date(2026, 8, 5, 9, 0, 0, 0, time.UTC)
+
+	// The real schedule died 30 hours ago; a clock step left one file stamped
+	// ahead of now. Counting it reports a cadence that is not running.
+	writeBackupFile(t, dbPath, now.Add(-30*time.Hour), backupReasonScheduled)
+	writeBackupFile(t, dbPath, now.Add(5*time.Hour), backupReasonScheduled)
+
+	monitor := newBackupHealthMonitor(newFakeSettingStore(), dbPath)
+	if _, err := monitor.evaluate(now); err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if got := monitor.report(); got.Status != backupHealthUnhealthy || got.Code != backupHealthCodeStale {
+		t.Fatalf("a schedule silent for 30h reported status=%q code=%q (detail %q); want %q/%q — "+
+			"the only fresher-looking file is stamped in the FUTURE, and `age > staleAfter` is "+
+			"false for every negative age, so counting it makes a dead cadence look green",
+			got.Status, got.Code, got.Detail, backupHealthUnhealthy, backupHealthCodeStale)
+	}
+
+	// ── positive control ────────────────────────────────────────────────────
+	// The same shape with a real recent backup must be green, or the assertion
+	// above is satisfied by a monitor that alarms unconditionally.
+	livePath := tempDBPath(t)
+	writeBackupFile(t, livePath, now.Add(-30*time.Hour), backupReasonScheduled)
+	writeBackupFile(t, livePath, now.Add(-time.Hour), backupReasonScheduled)
+	live := newBackupHealthMonitor(newFakeSettingStore(), livePath)
+	if _, err := live.evaluate(now); err != nil {
+		t.Fatalf("evaluate (control): %v", err)
+	}
+	if lg := live.report(); lg.Status != backupHealthHealthy || lg.Code != "" {
+		t.Fatalf("a live schedule reported status=%q code=%q (detail %q), want %q with no code",
+			lg.Status, lg.Code, lg.Detail, backupHealthHealthy)
+	}
+}
+
+// TestBackupHealth_ABaselineFromTheFutureStillReachesNeverRan is the FOURTH
+// subtraction — the one that is NOT a filename.
+//
+// `never ran` is `now.Sub(baseline) > backupStaleAfter()`, and baseline is a
+// durable row (backup.watchdog_baseline_ts) written once when the watchdog first
+// armed. If the clock steps back AFTER that row is written, the subtraction goes
+// negative and the never-ran alarm can never fire again on this installation —
+// on a machine that, by construction of this branch, has no backup at all.
+func TestBackupHealth_ABaselineFromTheFutureStillReachesNeverRan(t *testing.T) {
+	dbPath := tempDBPath(t) // no backups at all: this is the never-ran branch
+	now := time.Date(2026, 8, 5, 9, 0, 0, 0, time.UTC)
+
+	monitor := newBackupHealthMonitor(newFakeSettingStore(), dbPath)
+	// Arm the baseline while the clock is 40 hours ahead...
+	if _, err := monitor.evaluate(now.Add(40 * time.Hour)); err != nil {
+		t.Fatalf("arm baseline: %v", err)
+	}
+	// ...then the correction lands and the clock steps back to `now`.
+	if _, err := monitor.evaluate(now); err != nil {
+		t.Fatalf("evaluate after the step back: %v", err)
+	}
+	// Nothing can alarm yet — the re-armed grace window has just started. That
+	// is the honest answer, and it is `unknown`, never green.
+	if got := monitor.report(); got.Status == backupHealthHealthy {
+		t.Fatalf("a studio with no backup at all reported %q", got.Status)
+	}
+
+	// 🔴 `later` is chosen to separate the two worlds: it is past the window
+	// measured from the RE-ARMED baseline (20h > 12h), and still BEFORE the
+	// window measured from the bogus future one (now+40h), so a baseline left in
+	// the future is stuck saying nothing.
+	later := now.Add(20 * time.Hour)
+	if later.Sub(now) <= backupStaleAfter() || later.After(now.Add(40*time.Hour)) {
+		t.Fatalf("fixture no longer separates the two baselines (window %s)", backupStaleAfter())
+	}
+	if _, err := monitor.evaluate(later); err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if got := monitor.report(); got.Code != backupHealthCodeNeverRan {
+		t.Fatalf("no backup has ever landed and the watch window is over, but the verdict is "+
+			"status=%q code=%q (detail %q); want %q. A baseline left in the future makes "+
+			"now.Sub(baseline) negative forever, and `> staleAfter` is false for every "+
+			"negative value — so this alarm could never fire again.",
+			got.Status, got.Code, got.Detail, backupHealthCodeNeverRan)
+	}
+}
+
+// TestRunDatabaseBackup_AFutureStampIsNotARecentRetreatPoint is the THIRD call
+// site. Its population is deliberately untouched (newestBackupTime, every
+// reason), but the same negative age fools it: it would report "there was a
+// recent retreat point" about a directory whose newest name is fiction. This
+// field gates nothing — it feeds one log line — so it fails quietly rather than
+// starving anything, which is exactly why it needed asserting.
+func TestRunDatabaseBackup_AFutureStampIsNotARecentRetreatPoint(t *testing.T) {
+	db, dbPath := seedBackupFixture(t, 8)
+	now := time.Date(2026, 8, 5, 9, 0, 0, 0, time.UTC)
+
+	writeBackupFile(t, dbPath, now.Add(5*time.Hour), backupReasonPreMigration)
+
+	res, err := runDatabaseBackup(db, dbPath, backupReasonScheduled, now)
+	if err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	if !res.Stale {
+		t.Errorf("a directory whose newest file is stamped 5h in the FUTURE was reported as "+
+			"holding a recent retreat point (Stale=%v, StaleAge %q); `age > window` is false "+
+			"for every negative age, and this field's entire content is recency",
+			res.Stale, res.StaleAge)
+	}
+	// It is a distinct fact, so it gets a distinct reason: there IS a file (so
+	// not "no previous backup") and its age is not a duration.
+	if res.StaleAge == "no previous backup" {
+		t.Errorf("a future-stamped file was reported as %q; a file that exists and may well "+
+			"restore is not an empty directory", res.StaleAge)
+	}
+}

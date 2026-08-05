@@ -291,8 +291,26 @@ func runDatabaseBackup(db *sql.DB, dbPath string, reason backupReason, now time.
 	// below. The schedule-liveness claim now has a durable, cockpit-visible
 	// owner (backupHealthMonitor), so this line stops making it — see
 	// logBackupOutcome.
+	//
+	// 🔴 The NEGATIVE branch is a guard, not a rounding detail. `age >
+	// staleFactor*interval` is FALSE for every negative value, so a file stamped
+	// in the future would make this report "there was a recent retreat point"
+	// about a directory whose newest name is pure fiction. This field's entire
+	// content IS recency, so it cannot stay quiet about that. It is reported as
+	// stale with its OWN reason string: a future stamp is not "no previous
+	// backup" (there IS a file, and it may well restore) and it is not an age
+	// either — it is "I could not establish that a recent retreat point exists",
+	// which is what stale means here.
+	//
+	// The population above is deliberately left alone (newestBackupTime, every
+	// reason). Refusing to trust a nonsensical timestamp is not the same change
+	// as narrowing WHICH backups count, and only the latter is forbidden here.
 	if newest, ok := newestBackupTime(dir); ok {
-		if age := now.Sub(newest); age > backupStaleFactor*backupInterval {
+		age := now.Sub(newest)
+		switch {
+		case age < 0:
+			res.Stale, res.StaleAge = true, "newest backup is stamped in the future"
+		case age > backupStaleFactor*backupInterval:
 			res.Stale, res.StaleAge = true, age.Round(time.Minute).String()
 		}
 	} else {
@@ -504,7 +522,12 @@ func startBackupCadence(db *sql.DB, dbPath string, tick time.Duration, health *b
 // the tick. They share the routine quota, rotation MOVES rather than deletes,
 // and the pre-migration pool is untouchable by it.
 func backupTick(db *sql.DB, dbPath string, now time.Time, health *backupHealthMonitor) (taken bool) {
-	if newest, ok := newestScheduledBackup(dbPath); ok && now.Sub(newest) < backupInterval {
+	// newestScheduledBackup is asked AS OF `now`, so it can never hand back a
+	// stamp from the future — which matters here more than anywhere: this
+	// comparison is `< backupInterval`, and that is TRUE for every negative
+	// value, so a single future-stamped file would make this tick answer "just
+	// backed up" forever and stop backups outright. See newestScheduledBackup.
+	if newest, ok := newestScheduledBackup(dbPath, now); ok && now.Sub(newest) < backupInterval {
 		return false
 	}
 	res, err := runDatabaseBackup(db, dbPath, backupReasonScheduled, now)
