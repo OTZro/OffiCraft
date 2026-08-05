@@ -308,9 +308,19 @@ export function DocumentHistoryEntry({
                             * beside the identity line is a revision that CANNOT
                             * be restored, which has to say so before the click,
                             * not after. */}
+                          {/* Two reasons a row previews nothing, and they are
+                            * NOT the same statement (T-40f0 node 11). A
+                            * tombstoned revision's text column is empty because
+                            * the text lives in the seed file — restoring it
+                            * puts the document back ON that default, so
+                            * 「（當時是空白內容）」 is false there. That line is
+                            * kept for the version that really did store an
+                            * empty string. */}
                           {fields.length === 0 && (
                             <div className="doc-hist__empty">
-                              {t.settings.historyNoContent}
+                              {v.content.tombstoned === "true"
+                                ? t.settings.historyDefaultContent
+                                : t.settings.historyNoContent}
                             </div>
                           )}
                         </div>
@@ -397,6 +407,12 @@ export function DocumentHistoryEntry({
           seedUnavailable={
             reading.kind === "seed" && seedDoc.content === undefined
           }
+          // The shipped default is ALSO what a TOMBSTONED retained revision
+          // restores to (T-40f0 node 11) — the reader and the diff use it as
+          // that revision's effective content, so the diff describes the state
+          // the restore actually leaves behind instead of announcing that the
+          // whole document would be deleted.
+          seedContent={seedDoc.content}
           actorLine={
             reading.kind === "version" ? actorLine(reading.version.actorId) : ""
           }
