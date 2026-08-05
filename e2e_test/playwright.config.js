@@ -13,20 +13,39 @@ const { defineConfig } = require('@playwright/test');
 // test gets switched off within a week. One worker, always.
 const WORKERS = 1;
 
-// The real-fleet spec (05, "machine onboarding") is the one spec that is not a
-// browser test: it needs `claude` on PATH, spawns a real warden and burns real
-// API quota. That makes it unrunnable on a hosted runner, so an automated caller
-// sets OC_E2E_EXCLUDE_REAL_FLEET=1 and gets the browser specs only. Excluded by
-// FILE rather than by a title regex on purpose: a regex silently widens the day
-// someone reuses those words, and what is being excluded here is a file-level
-// prerequisite, not a phrase. e2e_test/assert-specs-ran.sh asserts AFTERWARDS
-// that it really stayed out — an exclusion nobody checks is an exclusion that
-// quietly stops excluding.
-const EXCLUDE_REAL_FLEET = process.env.OC_E2E_EXCLUDE_REAL_FLEET === '1';
+// Some specs are not browser tests: they need a LIVE agent process — `claude` on
+// PATH, a real warden spawned — and they BURN REAL
+// API QUOTA — running it costs money, every time.
+//
+// 🔴 THE DEFAULT IS "DO NOT RUN", AND OPTING IN COSTS MONEY.
+// Specs that need a LIVE agent process declare themselves by FILENAME
+// (`*.live-agent.spec.js`) and are ignored unless the caller explicitly asks for
+// them with OC_E2E_LIVE_AGENT=1. Nobody has to remember to add a guard, because
+// there is no guard to add — there is only an explicit request to spend.
+//
+// Why this shape (T-c329, owner ruled at rc-d51e755d3207 / rc-4e3ae0ec146d):
+//   * DEFAULT-OFF, not opt-out. The previous flag was an EXCLUSION set only in
+//     .github/workflows/ci.yml, so the cloud was protected and every laptop was
+//     not: one local `run_all.sh` silently spawned a real agent and billed for
+//     it. A protection that exists only on one path is a protection that the
+//     other path never had.
+//   * MEMBERSHIP BY FILENAME, no list in this file. A hardcoded list means every
+//     future live-agent spec must remember to register itself, and the one that
+//     forgets runs — and charges — by default. The predicate must be something a
+//     new spec cannot omit while still being in the class.
+//   * Still a FILE-level predicate, not a title regex: a regex silently widens
+//     the day someone reuses those words, and what gates these specs is a
+//     file-level prerequisite (a live agent), not a phrase.
+//   * STRICT `=== '1'`: a typo (`true`, `yes`, `TRUE`) falls to "did not run,
+//     spent nothing". Misconfiguration must fail toward not-spending.
+// e2e_test/assert-specs-ran.sh asserts AFTERWARDS that the class really stayed
+// out when it was not asked for — an exclusion nobody checks is an exclusion
+// that quietly stops excluding.
+const LIVE_AGENT = process.env.OC_E2E_LIVE_AGENT === '1';
 
 module.exports = defineConfig({
   testDir: './tests',
-  ...(EXCLUDE_REAL_FLEET ? { testIgnore: ['**/05_machine_onboarding_spawn.spec.js'] } : {}),
+  ...(LIVE_AGENT ? {} : { testIgnore: ['**/*.live-agent.spec.js'] }),
   fullyParallel: false,
   workers: WORKERS,
   forbidOnly: !!process.env.CI,

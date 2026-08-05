@@ -25,12 +25,14 @@
 # differences make a runner red for the wrong reason; MEASURED red on a runner,
 # failing a text-width threshold by ONE pixel on an identical frontend tree, so
 # the honest fix is a reproducible font environment, not a looser threshold), and
-# the real-fleet spec inside e2e_test (machine onboarding: it needs `claude` on
-# PATH, spawns a real warden and burns real API quota).
+# the live-agent class inside e2e_test (currently machine onboarding: it needs
+# `claude` on PATH, spawns a real warden and burns real API quota).
 # The path denylist plus e2e_test's hermetic isolation-guard suite run in cloud.
 # T-ff8a: e2e_test's BROWSER specs are no longer local-only either — ci.yml has a
-# macos-e2e job which runs e2e_test/run_all.sh on a macOS runner with the
-# real-fleet spec excluded. NONE of the cloud jobs is land authority; this script
+# macos-e2e job which runs e2e_test/run_all.sh on a macOS runner. T-c329: that
+# job now sets NOTHING — the live-agent class is default-OFF and declares itself
+# by filename (*.live-agent.spec.js), so a runner opts out of nothing; do not go
+# looking for an exclusion flag in ci.yml, there isn't one any more. NONE of the cloud jobs is land authority; this script
 # still is. They are cross-checks — one on a clean Linux box (which is the one
 # thing this Mac cannot prove), two on a macOS runner (which is what makes the
 # host-shaped gates apply to everyone's pull request and not just this laptop).

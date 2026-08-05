@@ -9,13 +9,23 @@ Go(ocserverd)是唯一 target(py leg 已隨 Python backend 退役;歷史回滾 =
 `bin/ci.sh` **不**跑 `run_all.sh`(只跑 `tests_guard/run.sh` 那套 hermetic 守衛)。自動關卡在
 **`.github/workflows/ci.yml` 的 `macos-e2e` job**:macOS runner、`pull_request` **與 push-to-`main`**
 兩個觸發都跑(T-ab2a 補上後者;`main` 上不 cancel-in-progress,見那個檔的註解),
-`OC_E2E_EXCLUDE_REAL_FLEET=1` ⇒ 跑瀏覽器情境、排掉 `05_machine_onboarding_spawn`
-(要 `claude` 在 PATH、spawn 真 warden、燒真 API 額度)。
+**那個 job 什麼旗標都不用設**(T-c329):要**活的 agent** 的 spec 是**預設不跑**的,所以雲端不必
+「記得排除」——它只是從來沒有要求花錢。🔴 **要跑那一類得自己帶 `OC_E2E_LIVE_AGENT=1`,而那會
+spawn 真 agent、燒真 API 額度(真的花錢)。** 成員資格由 spec **自己用檔名宣告**
+(`*.live-agent.spec.js`),`playwright.config.js` 裡**沒有檔名清單**——清單會讓下一支忘記登記的
+spec 預設偷偷跑、偷偷花錢。判定是嚴格 `=== '1'`,所以 `true`/`yes` 這種打錯字一律落到
+「沒跑、沒花錢」。
+⚠️ **舊做法反過來、而且是這張票要修的 bug**:以前是 `OC_E2E_EXCLUDE_REAL_FLEET=1` 這個**排除**旗標、
+且**只設在 `ci.yml`** ⇒ 雲端有防護、每台筆電都沒有,本機跑一輪就靜靜 spawn 真 agent 並付錢
+(2026-08-05 實際發生過)。**防護只存在於某一條路徑上,等於另一條路徑從來沒有防護。**
 兩個前提由 repo 裡的具名腳本負責,**不靠人記得**:
 - `gen-oc-toml.sh` 生 gitignored 的 `oc.toml`(port 8791 ＋ repo-local DSN,也就是 setup.sh
   兩道 prod guard 要的東西);**已存在就拒絕覆蓋**——那可能是開發者指向正式 DB 的真設定。
 - `assert-specs-ran.sh` 在 job 綠之後再問一次「到底有沒有跑」:沒有 `N passed` 統計、低於下限、
-  或那支 real-fleet spec 竟然跑了,都判紅。**rc == 0 只回答「沒有東西失敗」,不回答「有東西跑過」。**
+  或**那一類 live-agent spec 在沒被要求的情況下竟然跑了**,都判紅。**rc == 0 只回答「沒有東西失敗」,
+  不回答「有東西跑過」。** 它比對的是**檔名後綴**(不是某一支的標題——標題會被改寫,守衛就會盯著一個
+  沒人再寫的字串而什麼都不報);而**帶了 `OC_E2E_LIVE_AGENT=1` 的人它會放行**,不然主動選擇花錢的人
+  會撞到一道對他報 FATAL、還引用一個他從沒設過的旗標的守衛。
 `workers` 已釘死 **1**(見 `playwright.config.js` 註解:整套共用一台 server／一顆 SQLite,
 並行 7 → 7 紅、序列 → 4 紅,假紅會讓一個新閘一週內被關掉)。
 
