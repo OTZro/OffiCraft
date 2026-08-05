@@ -36,18 +36,24 @@ test.describe('B2/B3 · monitoring session — machine/account friendly names', 
     const { token } = await login.json();
     const auth = { Authorization: `Bearer ${token}` };
 
-    // Use the seeded assistant (mira). Its machine id is the OBSERVED SSE-claim
-    // machine when live, else the DESIRED desired_machine_id (which seeds to
-    // SERVER_SELF_HOST) — the SAME precedence the monitoring row resolves its raw
-    // machine from (SSE claim → telemetry.machine → desired_machine_id). `member.host`
-    // was removed at 948c7d1 (observed position is not a durable field).
+    // Use the seeded assistant (mira). `observedHost` (api_helpers.go) resolves a
+    // member's raw machine from OBSERVATION ONLY: SSE machine claim →
+    // telemetry.machine → "". 🔴 There is NO desired_machine_id fallback — 67a762e
+    // (T-7f28) removed it on purpose, so an unobserved member reads honest-empty
+    // rather than borrowing the owner's intent. `member.host` was removed at
+    // 948c7d1 (observed position is not a durable field).
+    //
+    // mira is NOT online here, so nothing claims a machine over SSE. This spec
+    // therefore has to supply the OBSERVATION itself — see the telemetry POST
+    // below, which carries `machine` so observedHost's second arm resolves.
+    // `desired_machine_id` is read only to KNOW which host id to label.
     const members = await (
       await request.get(`${BASE}/api/members`, { headers: auth })
     ).json();
     const member = members.find((m) => m.kind === 'assistant' && m.roster_status !== 'removed');
     expect(member, 'a seed assistant must exist to own a session row').toBeTruthy();
     const host = member.machine || member.desired_machine_id;
-    expect(host, 'the seed assistant must resolve to a machine id (observed or desired_state)').toBeTruthy();
+    expect(host, 'the seed assistant must name a machine id (observed, else its pin)').toBeTruthy();
 
     // Report telemetry so a session row exists for this member carrying an account
     // tag. caller-identity convention (948c7d1, docs/design/caller-identity-
@@ -63,9 +69,29 @@ test.describe('B2/B3 · monitoring session — machine/account friendly names', 
     });
     expect(mint.status(), "mint mira's agent token must succeed").toBe(200);
     const { token: miraToken } = await mint.json();
+    // `machine` rides the body on purpose: api_monitoring.go attributes the entry
+    // from the token's machine_id claim FIRST and only falls back to the payload
+    // for claim-less tokens — and /api/mint tokens are exactly that (no machine_id
+    // claim), so this arm is the one that fires. Without it the entry carries no
+    // machine, observedHost returns "" for this offline member, and the session
+    // row's machine cell is honestly blank.
+    //
+    // `runtime` is equally load-bearing, and for a different reason: account
+    // identity is runtime-specific, so applyAccountReport (account_display.go)
+    // stores the key ONLY together with a provenance stamp, and telemetryAccount
+    // serves it back only when that stamp matches the actor's own runtime. An
+    // account reported WITHOUT a runtime is unprovable and fail-closed dropped
+    // (rule 2) — which reads back as an empty account cell, not an error. Every
+    // shipped reporter sends the pair; this spec must too. It reports the
+    // member's OWN runtime so the stamp matches what the read path compares to.
     const tele = await request.post(`${BASE}/api/monitoring/telemetry`, {
       headers: { Authorization: `Bearer ${miraToken}` },
-      data: { account: RAW_ACCOUNT, cost: 1.0 },
+      data: {
+        account: RAW_ACCOUNT,
+        cost: 1.0,
+        machine: host,
+        runtime: member.runtime || 'claude',
+      },
     });
     expect(tele.status(), 'telemetry ingest (as mira) must succeed').toBe(200);
 

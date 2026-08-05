@@ -1344,9 +1344,12 @@ T-081b 開放的葉子有好幾條是**句子片段**,邊界空白是有意義�
   它守的是 **jsdom 做不到的那半**:jsdom 按不出真的 Tab(焦點不會自己動)、也**完全沒有
   「查找」**。所以「焦點實際落在哪個元素」與「瀏覽器找不找得到」只有這一層答得出來。
 - ⚠️ **CT 不在雲端 gate 裡**,所以上面那條 (d) **刻意**放在 jsdom——只放 CT 等於這個回歸在
-  GitHub 上是綠的。查證過的源頭(2026-08-02,不是沿用舊文):`.github/workflows/ci.yml:86`
-  的唯一 job 跑 `bash bin/ci-cloud.sh`;那支腳本裡 **`test:ct` 命中 0 次**、只有
-  `vitest run`,而 `test:ct` 只出現在 `bin/ci.sh:452`。
+  GitHub 上是綠的。查證過的源頭(2026-08-02,不是沿用舊文):`.github/workflows/ci.yml` 的
+  `cloud-gates` job 跑 `bash bin/ci-cloud.sh`;那支腳本裡 **`test:ct` 命中 0 次**、只有
+  `vitest run`,而 `test:ct` 只出現在 `bin/ci.sh`。
+  ⚠️ **T-ff8a 之後 ci.yml 有兩個 job**(多了 macOS 上的 `macos-e2e`),但那個 job 跑的是
+  `e2e_test` 的 Playwright **端到端**情境,**不是** `frontend` 的 CT ⇒ 上面那句「CT 不在雲端
+  gate 裡」**仍然成立**,別因為看到「雲端有 macOS runner 了」就以為 CT 被涵蓋了。
 
 **mutant 實測(把虛擬捲動整份放回去;還原用 scratchpad 備份 + shasum 對帳,未用
 `git checkout --`,還原前先把 CT build cache 移走)**:

@@ -1,6 +1,7 @@
 // e2e_test/tests/06_chat_attachments.spec.js
 // B7 · chat attachments — full round-trip: POST base64 attachments → thread
-// renders image thumbnail + download chip → the gated blob really loads via
+// renders image thumbnail + a filename chip whose click opens the shared
+// preview overlay carrying the download link → the gated blob really loads via
 // the `?token=` URL → a MEMBER (agent-scope) token is authorized to GET the
 // blob (the ocagent download contract, previously pinned only by unit tests) →
 // the preview/download Content-Disposition split holds.
@@ -127,11 +128,27 @@ test.describe('B7 · chat attachments — send/receive round-trip', () => {
       })
       .toBeGreaterThan(0);
 
+    // The chip is a BUTTON, not an <a> (437dbb1): every attachment — .md and
+    // opaque binary alike — opens the shared MarkdownPreviewOverlay, and the
+    // download moved INTO that overlay. So the download contract is asserted
+    // where it now lives: the overlay's `a.md-preview__download` (the class is
+    // shared with the share BUTTON next to it, hence the `a.` qualifier).
     const chip = page.locator('.chat__msg-file', { hasText: ZIP_FILENAME });
-    await expect(chip, 'the zip must render as a download chip with its filename').toBeVisible();
-    const href = await chip.getAttribute('href');
-    expect(href, 'the chip href must hit the gated blob route').toContain(`/api/chat/attachment/${zip.id}`);
-    expect(href, 'the chip href must ride the ?token= auth').toContain('token=');
+    await expect(chip, 'the zip must render as a chip carrying its filename').toBeVisible();
+    await chip.click();
+    const dl = page.locator('a.md-preview__download');
+    await expect(dl, 'the overlay must offer the download link').toBeVisible();
+    const href = await dl.getAttribute('href');
+    expect(href, 'the download href must hit the gated blob route').toContain(
+      `/api/chat/attachment/${zip.id}`,
+    );
+    expect(href, 'the download href must ride the ?token= auth').toContain('token=');
+    expect(
+      await dl.getAttribute('download'),
+      'the download must save under the stored filename',
+    ).toBe(ZIP_FILENAME);
+    await page.locator('.md-preview__close').click();
+    await expect(dl, 'closing the overlay must retire the download link').toHaveCount(0);
 
     // Text + attachments share ONE bubble (owner feedback: a text+attachment
     // message reads as a single message, not two blocks).

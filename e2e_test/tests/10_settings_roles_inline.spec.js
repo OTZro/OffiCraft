@@ -6,11 +6,14 @@
 //     (name only); the server names the founding member itself and mints both
 //     ids; Esc collapses without creating.
 //   • CUSTOM role detail: the 角色名 gets the pencil InlineEdit (rename rides
-//     the role PATCH choke and the roster follows); NO 重置 button (the server
-//     404s a custom reset — the affordance is honestly omitted); NO internal
-//     `role-….md` filename chip.
-//   • SEED role detail: name LOCKED (no pencil), 重置 offered (a file seed
-//     exists to restore).
+//     the role PATCH choke and the roster follows); the 版本紀錄 list carries NO
+//     初始版本 row (the server 404s a custom reset — the affordance is honestly
+//     omitted); NO internal `role-….md` filename chip.
+//   • SEED role detail: name LOCKED (no pencil), the 版本紀錄 list DOES carry
+//     初始版本 (a file seed exists to restore).
+//
+// The reset affordance moved at d0c2ea3 (T-1f39): the doc card's standalone
+// 重置 became 版本紀錄, and the reset is that list's last row.
 //   • 監控「新增機器 / 上線」: the same inline pattern — the machine row is
 //     created under the typed name (no real warden needed; the onboard row
 //     surfaces immediately), Esc collapses without creating.
@@ -97,10 +100,22 @@ test.describe('B10 · settings roles + monitor — inline create rows & gating',
     // per-role LessonsCard below, which has its own edit affordance.
     const roleDocCard = page.locator('.doc-card').first();
     await roleDocCard.locator('.doc-btn--edit').click();
+    // d0c2ea3 (T-1f39) removed the standalone 重置 button from the doc card and
+    // put 版本紀錄 in its place; the reset became the version list's LAST row,
+    // 初始版本 (`doc-history-seed`), rendered only where `onReset` is wired.
+    // ⚠ So asserting a MISSING 重置 button here is now vacuously green — that
+    // node no longer exists for ANY document. The seed-only gating is asserted
+    // where it actually lives: open the list and demand the 初始版本 row be
+    // absent for a custom role (SettingsPage passes onReset only when isSeed).
+    await roleDocCard.getByTestId('doc-history-entry-role_definition').click();
+    const customHistory = roleDocCard.getByTestId('doc-history-list');
+    await expect(customHistory, 'the 版本紀錄 list must open').toBeVisible();
     await expect(
-      roleDocCard.locator('.doc-card__actions .doc-btn', { hasText: '重置' }),
-      'a custom role has no seed to restore — 重置 must be absent',
+      customHistory.getByTestId('doc-history-seed'),
+      'a custom role has no file seed to restore — the 初始版本 row must be absent',
     ).toHaveCount(0);
+    await customHistory.getByTestId('doc-history-list-close').click();
+    await expect(customHistory).toHaveCount(0);
     await roleDocCard.locator('.doc-card__actions .doc-btn', { hasText: '取消' }).click();
     // rename via the title pencil InlineEdit
     await title.locator('.inline-edit__iconbtn').click();
@@ -136,9 +151,12 @@ test.describe('B10 · settings roles + monitor — inline create rows & gating',
     ).toHaveCount(0);
     const seedDocCard = page.locator('.doc-card').first();
     await seedDocCard.locator('.doc-btn--edit').click();
+    await seedDocCard.getByTestId('doc-history-entry-role_definition').click();
+    const seedHistory = seedDocCard.getByTestId('doc-history-list');
+    await expect(seedHistory, 'the 版本紀錄 list must open').toBeVisible();
     await expect(
-      seedDocCard.locator('.doc-card__actions .doc-btn', { hasText: '重置' }),
-      'a seed role has a file seed to restore — 重置 must be offered',
+      seedHistory.getByTestId('doc-history-seed'),
+      'a seed role has a file seed to restore — the 初始版本 row must be offered',
     ).toBeVisible();
   });
 
