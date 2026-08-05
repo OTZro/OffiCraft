@@ -86,6 +86,85 @@ oc_env() { env -u OC_ID -u OC_TOKEN -u OC_BASE OC_RELEASE_API_BASE="http://127.0
 # python3 as a text tool only (tomllib/json parsing) — not a server dependency.
 py() { python3 "$@"; }
 
+# ── T-ff8a: teardown ARMING + a replaceable deletion interface ───────────────
+#
+# THE PATH THIS EXISTS FOR. run_all.sh armed `trap cleanup EXIT` BEFORE it ran
+# setup.sh, and cleanup ran teardown.sh unconditionally. setup.sh's prod guards
+# (oc.toml port, [storage].dsn, the leftover-listener check) all `exit 2` BEFORE
+# setup has created anything — and every one of those refusals then went out
+# through the EXIT trap into `rm -rf "$REPO_ROOT/var/data"`. The guards stopped
+# the START and had no say over the FINISH: a refusal to touch a DB was followed,
+# one trap later, by deleting it. Note the shape — the more suspicious the
+# configuration, the more certain the deletion, because refusing is what fires
+# the trap.
+#
+# The fix is not a second copy of setup's gates in front of the rm (two spellings
+# of one gate, with the trap still running unasked). It is that CLEANUP KNOWS
+# WHETHER SETUP GOT ANYWHERE: setup ARMS the teardown at the moment it starts
+# creating things, and the trap tears down only what an armed run means it owns.
+# Un-armed, there is nothing of ours on disk, so there is nothing to clean up —
+# which is a fact about the run, not a policy about paths.
+#
+# The arm file lives in $STATE_DIR (gitignored, per-checkout). It is EXPLICITLY
+# disarmed by run_all.sh before setup and by teardown.sh at the end: a leftover
+# arm file from an earlier run is not consent from this one.
+OC_E2E_ARM_FILE="${OC_E2E_ARM_FILE:-$STATE_DIR/teardown.armed}"
+
+# Where oc_e2e_destroy writes what it was asked to delete. Overridable so a test
+# can point it at a throwaway file and assert on it; see tests_guard case (20).
+OC_E2E_DESTROY_RECORD="${OC_E2E_DESTROY_RECORD:-$STATE_DIR/destroyed.log}"
+
+oc_e2e_arm_teardown() {
+  mkdir -p "$(dirname "$OC_E2E_ARM_FILE")" 2>/dev/null || true
+  printf 'armed by pid %s\n' "$$" > "$OC_E2E_ARM_FILE" || {
+    echo "[e2e] FATAL: cannot write the teardown arm file ($OC_E2E_ARM_FILE) — refusing to create anything we could not later be trusted to clean up." >&2
+    return 1
+  }
+}
+
+# THE GATE, as one sourceable function. It is deliberately a question about
+# state, not a re-derivation of setup's refusal logic: whatever setup refused
+# for, an un-armed run created nothing.
+oc_e2e_teardown_armed() { [ -f "$OC_E2E_ARM_FILE" ]; }
+
+oc_e2e_disarm_teardown() { rm -f "$OC_E2E_ARM_FILE" 2>/dev/null || true; }
+
+# What run_all.sh's EXIT trap calls. The trap itself stays UNCONDITIONAL — a
+# failure anywhere after arming must still be cleaned up; what became conditional
+# is what the trap DOES.
+oc_e2e_teardown_on_exit() { # $1 = the e2e_test dir holding teardown.sh
+  local here="$1"
+  if ! oc_e2e_teardown_armed; then
+    echo
+    echo "[run_all] === TEARDOWN SKIPPED === setup never armed it (it refused/aborted before creating anything), so this run owns nothing on disk. Nothing deleted. Run 'bash teardown.sh' by hand if you believe an EARLIER run left something behind."
+    return 0
+  fi
+  echo
+  echo "[run_all] === TEARDOWN ==="
+  bash "$here/teardown.sh" || true
+}
+
+# The deletion seam. EVERY delete on the teardown path goes through here, so
+# "what did this run delete" is an artifact that can be asserted on rather than
+# something only a destroyed filesystem could answer. The record is written
+# BEFORE dispatch — it records what was ASKED for, which is the question the
+# tests need ("did teardown try to delete anything at all?").
+#
+# OC_E2E_DESTROY_IMPL is the replaceable half: production leaves it unset and
+# gets the real rm; a test sets it to oc_e2e_destroy_record_only and gets a run
+# that is identical except that nothing is removed. That is what lets the tests
+# exercise the REAL teardown while the guard under test is deliberately broken.
+oc_e2e_destroy() {
+  local target
+  mkdir -p "$(dirname "$OC_E2E_DESTROY_RECORD")" 2>/dev/null || true
+  for target in "$@"; do
+    printf '%s\n' "$target" >> "$OC_E2E_DESTROY_RECORD"
+    "${OC_E2E_DESTROY_IMPL:-oc_e2e_destroy_real}" "$target"
+  done
+}
+oc_e2e_destroy_real()        { rm -rf "$1"; }
+oc_e2e_destroy_record_only() { :; }
+
 # Resolve a dev tool (npm/npx/…) to a real executable path, portably. nvm/volta
 # install these as lazy-load SHELL FUNCTIONS that shadow the real binary, which
 # is why callers historically bypassed PATH with a hardcoded /opt/homebrew/bin
@@ -120,6 +199,16 @@ oc_resolve_bin() {
 oc_restore_webdist_pristine() {
   local webdist="$1" find_rc leftover
   [ -d "$webdist" ] || { echo "[teardown] webdist absent ($webdist) — nothing to restore"; return 0; }
+  # T-ff8a: this is a DELETE on the teardown path, so it lands on the same ledger
+  # as oc_e2e_destroy — otherwise "this run deleted nothing" would be a claim with
+  # a hole in it — and it honours the same replaceable impl, so a test can run the
+  # real teardown end to end without removing anything.
+  mkdir -p "$(dirname "$OC_E2E_DESTROY_RECORD")" 2>/dev/null || true
+  printf '%s\n' "$webdist/ (restore-to-pristine)" >> "$OC_E2E_DESTROY_RECORD"
+  if [ -n "${OC_E2E_DESTROY_IMPL:-}" ] && [ "${OC_E2E_DESTROY_IMPL}" != "oc_e2e_destroy_real" ]; then
+    echo "[teardown] webdist restore RECORDED, not executed (OC_E2E_DESTROY_IMPL=$OC_E2E_DESTROY_IMPL)"
+    return 0
+  fi
   find "$webdist" -mindepth 1 -not -name '.gitkeep' -delete
   find_rc=$?
   leftover=$(find "$webdist" -mindepth 1 -not -name '.gitkeep' | wc -l | tr -d ' ')
