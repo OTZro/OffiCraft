@@ -48,10 +48,19 @@
 # discovered as a no-op.
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
-
 fail() { echo "[ci-macos-host] FAIL — $*" >&2; exit 1; }
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT" || fail "cannot cd to repo root $ROOT"
+
+# NOT set -e, on purpose: every gate below is explicitly `|| fail` so that each
+# failure names WHICH gate died and how to reproduce it, which `set -e` cannot do.
+# The cost of that choice is that an uncaught command would pass silently, so
+# there must be no uncaught command — including this cd. An unchecked cd here
+# would leave `gitleaks dir .` scanning whatever directory we happened to be in;
+# the absolute-path checks below would still pass, so the run would come back
+# GREEN having scanned the wrong tree. That is the precise failure this file's
+# header warns about, one line above where it warns about it.
 
 # A Linux runner would silently behave differently in every gate below, so the
 # script refuses rather than reporting a green that means nothing.
