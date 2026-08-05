@@ -1477,6 +1477,27 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			MCPTool:  "list_document_history",
 		},
 		{
+			Method:   "GET",
+			Path:     "/api/document-history/{kind}/{key}/seed",
+			Handler:  w.HandleGetDocumentSeedApiDocumentHistoryKindKeySeedGet,
+			Auth:     authGated,
+			Requires: principalMachine,
+			Summary:  "Read the shipped default of an editable document.",
+			// A TOOL, by owner ruling rc-b7d29de0eb9c ("開放,照你 7/30 那句話
+			// 一律給"). This row first landed MCPExclude, argued from "an agent
+			// gains nothing here" — a role definition's seed is the very text
+			// boot injects into that role's persona. The owner overruled that
+			// against the SAME 2026-07-30 policy the restore row below cites
+			// (rc-b5fd1135e2dd): reading is an agent tool, writing one back is
+			// not. The split is the VERB, and the policy deliberately does not
+			// re-litigate per route how much each read is worth — an exclusion
+			// argued from "not useful enough" would put that vote back.
+			// Nothing about the FLOOR moves: reading stays at the sibling
+			// list_document_history's level (machine), and this row has no
+			// write verb to open — restore and reset keep their own gates.
+			MCPTool: "get_document_seed",
+		},
+		{
 			Method:   "POST",
 			Path:     "/api/document-history/{kind}/{key}/{id}/restore",
 			Handler:  w.HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdRestorePost,

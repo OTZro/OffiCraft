@@ -1,10 +1,20 @@
-/* DiffView — git-style unified diff. Self-contained so any host (the pending
- * doc-history modal, a future review surface) can drop it in.
+/* DiffView — GitHub "Files changed" shaped diff (T-40f0, owner 2026-07-31).
+ * Self-contained so any host (the doc-history modal, a future review surface)
+ * can drop it in.
  *
- * Added/removed are NEVER colour-only: the +/- gutter column carries the same
- * fact, so the rows stay readable in a monochrome theme or to a colour-blind
- * reader. The tints are token-derived (--color-success / --color-danger-soft),
- * so a re-valued theme moves them with everything else.
+ * WHOLE-ROW COLOUR is the recognition channel the owner chose: a removed row is
+ * red across its entire width (numbers and gutter included), an added row green.
+ * The `-`/`+` gutter stays as a SECOND, non-colour cue — it is not the primary
+ * one any more, but removing it would leave a monochrome theme or a colour-blind
+ * reader with nothing, so it keeps its glyph and its accessible name.
+ *
+ * The number columns need their own, STRONGER tint: they carry the sunken
+ * background every diff row has, and inheriting that on a tinted row would punch
+ * two grey holes in the colour that is supposed to run edge to edge.
+ *
+ * Character-level tint (`.diff-view__word`) sits on top of the row tint, so the
+ * two must not be the same value — the point is to see WHICH characters moved
+ * within a row that is already coloured.
  *
  * The table scrolls INSIDE .diff-view__scroll: a 400-char line must never widen
  * the page (the long-token rule). */
@@ -24,7 +34,9 @@
 }
 .diff-view__head {
   display: flex;
-  gap: 18px;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
   padding: 8px 12px;
   border-bottom: 1px solid var(--color-border);
   background: color-mix(in srgb, var(--color-surface-sunken) 18%, transparent);
@@ -43,6 +55,49 @@
 }
 .diff-view__label--after {
   color: var(--color-success);
+}
+.diff-view__stats {
+  display: inline-flex;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.diff-view__stat--added {
+  color: var(--color-success);
+}
+.diff-view__stat--removed {
+  color: var(--color-danger-soft);
+}
+/* Says, on the surface, that nothing is folded away. */
+.diff-view__whole {
+  color: var(--color-text-muted);
+  font-weight: 400;
+}
+/* 單欄 / 兩欄對照 — the switch stays in the head so it never scrolls out of
+ * reach with the diff body. `margin-left: auto` puts it at the trailing edge on
+ * a wide head and lets it wrap on a narrow one. */
+.diff-view__modes {
+  display: inline-flex;
+  margin-left: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.diff-view__mode {
+  font: inherit;
+  font-size: 11.5px;
+  padding: 3px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.diff-view__mode + .diff-view__mode {
+  border-left: 1px solid var(--color-border);
+}
+.diff-view__mode--on {
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+  color: var(--color-text);
+  font-weight: 600;
 }
 .diff-view__scroll {
   max-width: 100%;
@@ -74,6 +129,16 @@
   color: var(--color-text-muted);
   background: color-mix(in srgb, var(--color-surface-sunken) 22%, transparent);
 }
+/* …but on a tinted row the number gutter follows the ROW's colour (stronger,
+ * like GitHub's) instead of leaving a grey notch in it. */
+.diff-view__row--added .diff-view__ln {
+  background: color-mix(in srgb, var(--color-success) 32%, transparent);
+  color: var(--color-text);
+}
+.diff-view__row--removed .diff-view__ln {
+  background: color-mix(in srgb, var(--color-danger-soft) 32%, transparent);
+  color: var(--color-text);
+}
 .diff-view__marker {
   width: 1%;
   padding: 0 6px;
@@ -99,16 +164,36 @@
   white-space: pre;
   color: var(--color-text);
 }
-.diff-view__skip-cell {
-  padding: 3px 12px;
-  border-top: 1px solid var(--color-border);
-  border-bottom: 1px solid var(--color-border);
-  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
-  color: var(--color-text-muted);
-  font-size: 11.5px;
-  white-space: nowrap;
+/* ── character-level tint (owner ④) ─────────────────────────────────────────
+ * Sits ON a row that is already coloured, so it has to be clearly stronger
+ * than the row fill — otherwise "a few characters changed" and "this whole
+ * line changed" look the same, which is the distinction the feature exists
+ * for. */
+.diff-view__word {
+  border-radius: 2px;
 }
-.diff-view__skip-range {
-  margin-right: 10px;
-  color: var(--color-accent);
+.diff-view__word--added {
+  background: color-mix(in srgb, var(--color-success) 55%, transparent);
+}
+.diff-view__word--removed {
+  background: color-mix(in srgb, var(--color-danger-soft) 55%, transparent);
+}
+/* ── 兩欄對照 (owner ①, the switchable second view) ─────────────────────────
+ * The tint is per SIDE here: one visual row can hold a removed half and the
+ * added half that replaced it, so the colour cannot live on the <tr>. Cells
+ * 1-3 are the old version, 4-6 the current one. */
+.diff-view__row--split > td:nth-child(3) {
+  border-right: 1px solid var(--color-border);
+}
+.diff-view__row--split[data-left-kind="removed"] > td:nth-child(-n + 3) {
+  background: color-mix(in srgb, var(--color-danger-soft) 18%, transparent);
+}
+.diff-view__row--split[data-left-kind="removed"] > td:nth-child(1) {
+  background: color-mix(in srgb, var(--color-danger-soft) 32%, transparent);
+}
+.diff-view__row--split[data-right-kind="added"] > td:nth-child(n + 4) {
+  background: color-mix(in srgb, var(--color-success) 18%, transparent);
+}
+.diff-view__row--split[data-right-kind="added"] > td:nth-child(4) {
+  background: color-mix(in srgb, var(--color-success) 32%, transparent);
 }

@@ -413,11 +413,53 @@ describe("SettingsPage · 版本紀錄", () => {
     restore.mockRestore();
   });
 
-  // ── 初始版本 (owner 2026-07-31) ────────────────────────────────────────────
+  // ── 初始版本 (owner 2026-07-31, reshaped by T-40f0 rc-28885813e065 ①) ─────
   // 重置 lost its button; the seed became the list's last row. Two halves have
   // to hold at once, and a test that only checked one would let the other rot:
   // the row must BE there where a seed exists, and must NOT be there where the
   // server would 404 the reset.
+  //
+  // T-40f0 changed WHAT the row opens, not where it is: it used to jump straight
+  // to the reset confirmation (the only row in the list that did), because the
+  // seed's content was never sent to the cockpit at all. It now opens the same
+  // reader every other row opens, so the owner can SEE what going back would
+  // change before deciding.
+
+  // 🔴 RED LINE. Looking is not restoring. Opening the row, reading its content
+  // and comparing it against the live document must not write anything — a
+  // reset replaces every word the owner has ever written into that block.
+  it("opens 初始版本 for READING, and looking at it restores nothing", async () => {
+    await mockApi.saveGlobalContext("寫壞的內容");
+    const reset = vi.spyOn(mockApi, "resetGlobalContext");
+
+    const utils = await openUserCustomDoc();
+    await utils.findByText("寫壞的內容");
+    await openHistory(utils, "global_context");
+    fireEvent.click(await utils.findByTestId("doc-history-seed-open"));
+
+    // The SAME reader every other version opens, named 初始版本 rather than
+    // given a fabricated timestamp and 修改者.
+    const modal = await utils.findByTestId("doc-history-modal");
+    expect(within(modal).getByText(s.historySeedTitle)).toBeTruthy();
+    expect(modal.textContent).not.toContain(s.historyByLabel);
+
+    // And the comparison the owner asked for. Side convention is the SAME as
+    // every other row's — `-` is the version being looked at, `+` is what the
+    // server stores now — so with an EMPTY default the owner's whole block shows
+    // up as `+`: everything restoring would take away.
+    fireEvent.click(utils.getByTestId("doc-history-pane-diff"));
+    const diffRow = await utils.findByTestId("diff-view-row");
+    expect(diffRow.getAttribute("data-kind")).toBe("added");
+    expect(diffRow.textContent).toContain("寫壞的內容");
+
+    // Nothing was written by any of the above: no reset call, and the document
+    // is still the owner's text rather than the default.
+    expect(reset).not.toHaveBeenCalled();
+    const live = await mockApi.getGlobalContext();
+    expect(live.text).toBe("寫壞的內容");
+    expect(live.isDefault).toBe(false);
+    reset.mockRestore();
+  });
 
   it("resets through the 初始版本 row, and only after the same confirmation", async () => {
     await mockApi.saveGlobalContext("寫壞的內容");
@@ -432,20 +474,26 @@ describe("SettingsPage · 版本紀錄", () => {
 
     fireEvent.click(utils.getByTestId("doc-history-entry-global_context"));
     fireEvent.click(await utils.findByTestId("doc-history-seed-open"));
+    // Inside the reader the restore is labelled for what it does to THIS entry.
+    const restore = await utils.findByTestId("doc-history-modal-restore");
+    expect(restore.textContent).toBe(s.historySeedRestore);
+    fireEvent.click(restore);
 
     // Destructive, so it is confirmed exactly like a restore — the reset used
     // to be a single click, and moving it must not have made it cheaper.
     expect(reset).not.toHaveBeenCalled();
-    const confirm = utils.getByTestId("doc-history-seed-confirm");
+    const confirm = utils.getByTestId("doc-history-restore-confirm");
     expect(within(confirm).getByText(s.historyRestoreConfirmAction)).toBeTruthy();
+    expect(confirm.textContent).toContain(s.historySeedConfirm);
 
-    fireEvent.click(utils.getByTestId("doc-history-seed-confirm-btn"));
+    fireEvent.click(utils.getByTestId("doc-history-restore-confirm-btn"));
     await waitFor(() => expect(reset).toHaveBeenCalledTimes(1));
     // The whole history surface closes with it, and the editor is gone: the
     // document on screen is the seed again, not the draft that preceded it.
     await waitFor(() =>
-      expect(utils.queryByTestId("doc-history-list")).toBeNull()
+      expect(utils.queryByTestId("doc-history-modal")).toBeNull()
     );
+    expect(utils.queryByTestId("doc-history-list")).toBeNull();
     expect((await mockApi.getGlobalContext()).isDefault).toBe(true);
     reset.mockRestore();
   });
@@ -469,10 +517,40 @@ describe("SettingsPage · 版本紀錄", () => {
     await utils.findByText(s.historyError);
 
     fireEvent.click(await utils.findByTestId("doc-history-seed-open"));
-    fireEvent.click(utils.getByTestId("doc-history-seed-confirm-btn"));
+    fireEvent.click(await utils.findByTestId("doc-history-modal-restore"));
+    fireEvent.click(utils.getByTestId("doc-history-restore-confirm-btn"));
     await waitFor(() => expect(reset).toHaveBeenCalledTimes(1));
     expect((await mockApi.getGlobalContext()).isDefault).toBe(true);
     list.mockRestore();
+    reset.mockRestore();
+  });
+
+  // The SECOND hostage risk T-40f0 introduces: the seed now has a GET of its
+  // own. If that request fails, the reader must say so — never claim the
+  // default is empty — and the restore must STILL be reachable, because putting
+  // the document back on its default needs nothing from this client.
+  it("keeps 初始版本 restorable when its own content cannot be read", async () => {
+    await mockApi.saveGlobalContext("寫壞的內容");
+    const seed = vi
+      .spyOn(mockApi, "getDocumentSeed")
+      .mockRejectedValue(new Error("boom"));
+    const reset = vi.spyOn(mockApi, "resetGlobalContext");
+
+    const utils = await openUserCustomDoc();
+    await openHistory(utils, "global_context");
+    fireEvent.click(await utils.findByTestId("doc-history-seed-open"));
+
+    // The honest sentence, NOT 「這個版本沒有內容」 — that is a different and
+    // false claim about the document.
+    const notice = await utils.findByTestId("doc-history-seed-unavailable");
+    expect(notice.textContent).toBe(s.historySeedUnavailable);
+    expect(utils.queryByText(s.historyModalEmpty)).toBeNull();
+
+    fireEvent.click(utils.getByTestId("doc-history-modal-restore"));
+    fireEvent.click(utils.getByTestId("doc-history-restore-confirm-btn"));
+    await waitFor(() => expect(reset).toHaveBeenCalledTimes(1));
+    expect((await mockApi.getGlobalContext()).isDefault).toBe(true);
+    seed.mockRestore();
     reset.mockRestore();
   });
 
@@ -483,14 +561,17 @@ describe("SettingsPage · 版本紀錄", () => {
     const utils = await openUserCustomDoc();
     await openHistory(utils, "global_context");
     fireEvent.click(await utils.findByTestId("doc-history-seed-open"));
+    fireEvent.click(await utils.findByTestId("doc-history-modal-restore"));
     fireEvent.click(
-      within(utils.getByTestId("doc-history-seed-confirm")).getByText(s.cancel)
+      within(utils.getByTestId("doc-history-restore-confirm")).getByText(s.cancel)
     );
 
     expect(reset).not.toHaveBeenCalled();
-    expect(utils.queryByTestId("doc-history-seed-confirm")).toBeNull();
-    // Back to the list, not out of the history altogether.
-    expect(utils.getByTestId("doc-history-list")).toBeTruthy();
+    expect(utils.queryByTestId("doc-history-restore-confirm")).toBeNull();
+    // Back to the reader, not out of the history altogether — and the step back
+    // into the list is still there.
+    expect(utils.getByTestId("doc-history-modal")).toBeTruthy();
+    expect(utils.getByTestId("doc-history-modal-back")).toBeTruthy();
     expect((await mockApi.getGlobalContext()).text).toBe("寫壞的內容");
     reset.mockRestore();
   });

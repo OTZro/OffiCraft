@@ -231,6 +231,68 @@ func (s *apiServer) HandleListDocumentHistoryApiDocumentHistoryKindKeyGet(w http
 	writeJSON(w, http.StatusOK, result)
 }
 
+// documentSeedContent answers "what would a reset of this document write back",
+// in the SAME field names a retained revision carries — which is what lets the
+// cockpit hand it to the very same reader/diff the retained versions use.
+//
+// The second return is "this document HAS a shipped default". It is true for
+// exactly the two documents that own a reset route (`POST
+// /api/global-context/reset`, `POST /api/roles/{role}/reset` on a SEED role) and
+// false everywhere else, so the 404 here lands in exactly the places the reset
+// itself 404s. That symmetry is the point: the cockpit renders its 初始版本 row
+// from the presence of a reset, and a row whose "compare" 404s while its
+// "restore" works (or the reverse) would be worse than no row.
+//
+// `tombstoned` rides along because that IS how both resets are written (an
+// overlay tombstone means "follow the seed"), and because the surfaces render
+// it as the 「當時為預設內容」 badge — the seed row is the one entry for which
+// that badge is unconditionally true.
+func (s *apiServer) documentSeedContent(kind, key string) (map[string]string, bool, error) {
+	switch kind {
+	case "global_context":
+		// The user-custom block has no file seed: its default IS the empty
+		// document (reset = tombstone → `text=""`, `is_default=true`). Empty is
+		// a real answer, not a missing one — the diff against it is exactly
+		// "everything you wrote would go away", which is what the owner needs
+		// to see before pressing 還原.
+		return map[string]string{"text": "", "tombstoned": "true"}, true, nil
+	case "role_definition":
+		seedMD, hasSeed, err := s.root.seedRoleDefinitionMD(key)
+		if err != nil {
+			return nil, false, err
+		}
+		if !hasSeed {
+			return nil, false, nil
+		}
+		return map[string]string{"definition_md": seedMD, "tombstoned": "true"}, true, nil
+	}
+	return nil, false, nil
+}
+
+// GET /api/document-history/{kind}/{key}/seed — the document's shipped default.
+//
+// READ-ONLY on purpose, and that is the whole reason it exists: before it, the
+// seed text only ever reached a client as the RESPONSE TO A RESET, so the one
+// entry in the version list whose restore is least reversible was also the only
+// one nobody could look at first. Same floor as reading the retained versions
+// (`documentHistoryAllowed(..., write=false)`) — comparing is reading.
+func (s *apiServer) HandleGetDocumentSeedApiDocumentHistoryKindKeySeedGet(w http.ResponseWriter, r *http.Request, kind string, key string) {
+	if !s.documentHistoryAllowed(w, r, kind, key, false) {
+		return
+	}
+	content, hasSeed, err := s.documentSeedContent(kind, key)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	if !hasSeed {
+		writeError(w, http.StatusNotFound,
+			"document '"+kind+"/"+key+"' has no shipped default to compare against")
+		return
+	}
+	writeJSON(w, http.StatusOK, DocumentSeedDTO{Kind: kind, Key: key, Content: content})
+}
+
 func (s *apiServer) HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdRestorePost(w http.ResponseWriter, r *http.Request, kind string, key string, id int64) {
 	if !s.documentHistoryAllowed(w, r, kind, key, true) {
 		return

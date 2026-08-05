@@ -982,6 +982,19 @@ HAPPY: dict[str, Happy] = {
     "GET /api/document-history/{kind}/{key}": Happy(
         path="/api/document-history/global_context/global",
     ),
+    "GET /api/document-history/{kind}/{key}/seed": Happy(
+        path="/api/document-history/global_context/global/seed",
+        # The user-custom block's default IS the empty document, and the reader
+        # that compares against it needs the field NAME present (an absent key
+        # and an empty string are different documents to a diff).
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: d["kind"] == "global_context"
+            and d["key"] == "global"
+            and d["content"]["text"] == ""
+            and d["content"]["tombstoned"] == "true",
+        ),
+    ),
     "POST /api/document-history/{kind}/{key}/{id}/restore": Happy(
         path=_happy_restorable_revision,
         check=lambda _c, r: _expect(r, lambda d: d["id"] and d["content"]),

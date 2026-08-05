@@ -33,6 +33,7 @@ import type {
   GlobalContextView,
   DocumentKind,
   DocumentHistoryView,
+  DocumentSeedView,
   RoleDefView,
   BootstrapView,
   LessonsView,
@@ -96,6 +97,7 @@ import {
   toBackupHealth,
   toGlobalContext,
   toDocumentHistory,
+  toDocumentSeed,
   toRoleDef,
   toBootstrap,
   toLessons,
@@ -1637,6 +1639,23 @@ export const httpApi: Api = {
       }),
     );
     return wire.map(toDocumentHistory);
+  },
+
+  async getDocumentSeed(
+    kind: DocumentKind,
+    key: string,
+  ): Promise<DocumentSeedView> {
+    // GET /api/document-history/{kind}/{key}/seed -> DocumentSeedDTO. Reading
+    // only — it is what lets 初始版本 be compared before it is restored. A
+    // document with no shipped default rejects with a 404 ApiError; the caller
+    // treats that as "there is nothing to compare", never as "the default is
+    // empty" (for the global block, empty IS the default and comes back 200).
+    const wire = unwrap(
+      await client.GET("/api/document-history/{kind}/{key}/seed", {
+        params: { path: { kind, key } },
+      }),
+    );
+    return toDocumentSeed(wire);
   },
 
   async restoreDocumentHistory(

@@ -918,6 +918,13 @@
   },
   {
     "auth": "gated",
+    "mcp_tool": "get_document_seed",
+    "method": "GET",
+    "path": "/api/document-history/{kind}/{key}/seed",
+    "requires": "machine"
+  },
+  {
+    "auth": "gated",
     "mcp_tool": null,
     "method": "POST",
     "path": "/api/document-history/{kind}/{key}/{id}/restore",

@@ -23,6 +23,8 @@ import type {
   BackupHealthCode,
   GlobalContextView,
   DocumentHistoryView,
+  DocumentSeedView,
+  DocumentKind,
   RoleDefView,
   BootstrapView,
   LessonsView,
@@ -51,6 +53,7 @@ import type {
   WireBackupHealth,
   WireGlobalContext,
   WireDocumentHistory,
+  WireDocumentSeed,
   WireRoleDef,
   WireBootstrap,
   WireLessons,
@@ -1052,6 +1055,17 @@ export function toDocumentHistory(
     content: { ...w.content },
     createdTs: w.created_ts,
     actorId: w.actor_id,
+  };
+}
+
+/** Map one wire shipped default → the view model. `kind` is narrowed to the
+ * closed union rather than trusted as a bare string: the caller ASKED for a
+ * kind, so the echo is a consistency check, not a new vocabulary. */
+export function toDocumentSeed(w: WireDocumentSeed): DocumentSeedView {
+  return {
+    kind: w.kind as DocumentKind,
+    key: w.key,
+    content: { ...w.content },
   };
 }
 

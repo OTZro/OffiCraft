@@ -250,6 +250,17 @@ describe("SettingsPage · InsightCard (T-3809)", () => {
     expect(within(list).queryByTestId("doc-history-seed")).toBeNull();
   });
 
+  // ⚠️ CONTRACT CHANGE (T-40f0, owner rc-28885813e065 ①): the 初始版本 row no
+  // longer jumps straight to a reset confirmation of its own. It opens the same
+  // reader every other row opens, and the reset now rides the ONE destructive
+  // confirm that lives in DocumentHistoryModal (`doc-history-restore-confirm`),
+  // shared with every restore. The capability pinned here is UNCHANGED and is
+  // the InsightCard-specific half of it, which no other file covers:
+  // SettingsPage.document-history.test.tsx walks this flow on 全域情境 and on a
+  // role DEFINITION, and neither of those touches `resetInsight`, `hasSeed`, or
+  // the Insight card's own re-read. What this test owns is the HOST WIRING —
+  // that InsightCard's `onReset` reaches the insight reset for THIS role, and
+  // that the card on screen follows it.
   it("the 初始版本 row restores the factory insight, behind the shared confirm", async () => {
     const seed = (await mockApi.getInsight("assistant")).text;
     const written = "這一份是角色自己寫的，不是出廠版。";
@@ -263,10 +274,21 @@ describe("SettingsPage · InsightCard (T-3809)", () => {
     fireEvent.click(within(card).getByText(s.edit));
     fireEvent.click(within(card).getByTestId("doc-history-entry-insight"));
     fireEvent.click(await utils.findByTestId("doc-history-seed-open"));
-    // The confirm lives INSIDE DocumentHistoryEntry, shared with the Duty row —
-    // there is no second implementation to keep in step.
-    expect(utils.getByTestId("doc-history-seed-confirm")).toBeTruthy();
-    fireEvent.click(utils.getByTestId("doc-history-seed-confirm-btn"));
+
+    // Reading is not restoring. Opening the seed row wires straight into
+    // InsightCard's `onReset`, so a host that fired it on open — or a modal
+    // whose restore button skipped the confirm — would wipe the role's own
+    // judgement with no one asked. The document must still be the owner's.
+    const restore = await utils.findByTestId("doc-history-modal-restore");
+    expect((await mockApi.getInsight("assistant")).text).toBe(written);
+
+    fireEvent.click(restore);
+    // The confirm is the ONE shared destructive dialog in DocumentHistoryModal
+    // — the Duty row, every ordinary restore and this reset go through the same
+    // implementation, so there is no second one to keep in step.
+    expect(utils.getByTestId("doc-history-restore-confirm")).toBeTruthy();
+    expect((await mockApi.getInsight("assistant")).text).toBe(written);
+    fireEvent.click(utils.getByTestId("doc-history-restore-confirm-btn"));
 
     expect((await mockApi.getInsight("assistant")).text).toBe(seed);
     // And the card followed: the written doc is gone and the 「預設」 badge is

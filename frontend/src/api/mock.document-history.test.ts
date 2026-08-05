@@ -317,4 +317,63 @@ describe("mockApi · document history", () => {
       await mockApi.listDocumentHistory("task_manual_sop", manual.typeKey)
     ).toHaveLength(1);
   });
+
+  // ── 初始版本 (T-40f0) ─────────────────────────────────────────────────────
+  // The mock has to mirror WHICH documents ship a default, or the offline
+  // cockpit renders a 初始版本 row that compares fine here and 404s in
+  // production (or the reverse).
+  it("serves the shipped default of the two documents that have one", async () => {
+    // The global block's default IS the empty document — and the field NAME has
+    // to be there: to a diff, an absent key and an empty string are different
+    // documents.
+    expect(await mockApi.getDocumentSeed("global_context", "global")).toEqual({
+      kind: "global_context",
+      key: "global",
+      content: { text: "", tombstoned: "true" },
+    });
+
+    // A seed role's default is its FILE seed, not whatever it says now.
+    await mockApi.saveRole("assistant", { definitionMd: "owner's rewrite" });
+    const seedRole = await mockApi.getDocumentSeed(
+      "role_definition",
+      "assistant"
+    );
+    expect(seedRole.content.definition_md).not.toBe("owner's rewrite");
+    expect(seedRole.content.definition_md.length).toBeGreaterThan(0);
+    expect(seedRole.content.tombstoned).toBe("true");
+    // …and the live document was NOT put back by reading it (the whole safety
+    // claim of this route).
+    expect((await mockApi.getRole("assistant")).definitionMd).toBe(
+      "owner's rewrite"
+    );
+  });
+
+  it("404s for every document that ships no default — the same set a reset refuses", async () => {
+    const { role: custom } = await mockApi.createRole({ name: "臨時角色" });
+    const manual = await mockApi.createTaskManual("週報");
+
+    for (const probe of [
+      ["role_definition", custom.key],
+      ["task_manual_sop", manual.typeKey],
+      ["task_manual_learnings", manual.typeKey],
+      ["lessons", `${custom.key}::general`],
+    ] as const) {
+      await expect(
+        mockApi.getDocumentSeed(probe[0], probe[1])
+      ).rejects.toSatisfy((e) => isHttpStatus(e, 404));
+      // The equivalence itself: the reset of that same document also refuses.
+      // (Only role_definition HAS a reset route; the other three have none at
+      // all, which is the stronger form of the same fact.)
+    }
+    await expect(mockApi.resetRole(custom.key)).rejects.toSatisfy((e) =>
+      isHttpStatus(e, 404)
+    );
+
+    // Positive control: the seed role's default is served, so this is an
+    // equivalence and not a blanket 404.
+    expect(
+      (await mockApi.getDocumentSeed("role_definition", "assistant")).content
+        .definition_md.length
+    ).toBeGreaterThan(0);
+  });
 });
