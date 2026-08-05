@@ -48,8 +48,11 @@
 #     real-browser LAYOUT. Font availability and rasterisation differ between
 #     macOS and a Linux runner, so this is the textbook false-red; the guard's
 #     whole value is that a red means "the layout broke", and a runner would
-#     make it mean "the runner has different fonts". Stays in ci.sh (still gated
-#     on every land, locally).
+#     make it mean "the runner has different fonts". Out of THIS script — but
+#     no longer local-only: since T-0fef it runs in the cloud on the macOS
+#     runner (bin/ci-macos-host.sh gate 4), which is the font environment the
+#     suite has actually been measured in. Linux has not been measured, so
+#     moving it here would be swapping a measurement for a guess.
 #   * gitleaks — the content-level secret scan stays local by design. The
 #     tracked-file path denylist runs below because it is safe on Linux.
 #   * bin/tests/run.sh — its Linux assertion failures come from BSD/GNU

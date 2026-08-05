@@ -202,13 +202,15 @@ jobs:
   # macOS-only assumptions, and swapping a Mac in would disarm the single check
   # no Mac can perform.
   #
-  # WHICH GATES, AND WHY NOT test:ct
+  # WHICH GATES, AND WHY test:ct IS NOW ONE OF THEM
   # The set was MEASURED on a hosted macOS runner (T-ab2a node 2), not assumed.
-  # frontend `test:ct` came back red — and that red was environmental, not real:
-  # identical frontend tree, green on the dev Mac, failing a text-width threshold
-  # by one pixel. It is deliberately NOT here. Relaxing that threshold to please a
-  # runner would trade a false red for a false green, so real-browser layout stays
-  # guarded by one machine until the font environment itself is reproducible.
+  # frontend `test:ct` came back red then, and that red was environmental rather
+  # than real — but "environmental" was not the end of it: the red was exactly 2
+  # tests out of 207, both in one guard group that pinned macOS font metrics.
+  # T-0fef removed that group on the owner's ruling, so real-browser layout is no
+  # longer guarded by one laptop. See bin/ci-macos-host.sh for the measurements.
+  # It is NOT on cloud-gates: ubuntu is a different font stack and that question
+  # has never been measured — see bin/ci-cloud.sh's "WHAT IS DELIBERATELY OUT".
   #
   # The list of what runs is NOT here — it is bin/ci-macos-host.sh, next to
   # ci.sh, for the same reason cloud-gates calls bin/ci-cloud.sh: a YAML file

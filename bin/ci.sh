@@ -21,12 +21,23 @@
 # bin/ci-macos-host.sh — together with bin/check-officraft-dist. This script still
 # runs all of them; that job makes them apply to everyone else's pull request too.
 #
-# What stays LOCAL-ONLY: Playwright CT (real-browser layout — font/rasterisation
-# differences make a runner red for the wrong reason; MEASURED red on a runner,
-# failing a text-width threshold by ONE pixel on an identical frontend tree, so
-# the honest fix is a reproducible font environment, not a looser threshold), and
-# the live-agent class inside e2e_test (currently machine onboarding: it needs
-# `claude` on PATH, spawns a real warden and burns real API quota).
+# T-0fef: Playwright CT is NO LONGER local-only either — it runs in the cloud on
+# the macOS runner (macos-host-gates → bin/ci-macos-host.sh block 4). What used to
+# stand here was "font/rasterisation differences make a runner red for the wrong
+# reason; MEASURED red on a runner, failing a text-width threshold by ONE pixel".
+# That measurement was real, but the diagnosis was not: the ONE pixel came from a
+# single guard group (nav-tabs-narrow's `nav strip geometry`) whose threshold was
+# calibrated against macOS system-ui, which draws Han glyphs ~4% NARROWER than
+# every other CJK face (they are all exactly 1em). So the dev Mac was the outlier
+# and that group could never hold anywhere else. It was removed by owner ruling;
+# with it gone the remaining 204 CT specs passed on a hosted macOS runner.
+# ⚠️ Still NOT in cloud-gates (ubuntu): that platform's font availability and
+# rasterisation have never been measured here, and a gate you cannot verify
+# before merging is a trap for whoever opens the next PR.
+#
+# What stays LOCAL-ONLY: the live-agent class inside e2e_test (currently machine
+# onboarding: it needs `claude` on PATH, spawns a real warden and burns real API
+# quota).
 # The path denylist plus e2e_test's hermetic isolation-guard suite run in cloud.
 # T-ff8a: e2e_test's BROWSER specs are no longer local-only either — ci.yml has a
 # macos-e2e job which runs e2e_test/run_all.sh on a macOS runner. T-c329: that
