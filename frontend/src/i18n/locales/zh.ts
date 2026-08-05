@@ -1281,7 +1281,11 @@ export const zh = {
     historyLoading: "載入版本紀錄中…",
     historyError: "載入版本紀錄失敗，請稍後重試",
     historyEmpty: "還沒有保留任何版本",
+    // 「真的寫了空字串」與「當時跟著出廠預設走」是兩件事，混成一句會讓後者看起來
+    // 像一份被清空的文件——而還原它其實是把文件放回預設內容，不是清空（T-40f0
+    // 節點 11，owner 2026-08-05 截圖）。
     historyNoContent: "（當時是空白內容）",
+    historyDefaultContent: "（當時採用出廠預設內容）",
     historyByLabel: "修改者",
     historyDefaultBadge: "當時為預設內容",
     historyRestore: "還原這個版本",
@@ -1323,6 +1327,14 @@ export const zh = {
     historyActorTail: "）",
     historyCurrentLabel: "目前存檔內容",
     historyModalEmpty: "這個版本沒有任何內容。",
+    // 這一句只有在「出廠預設本身就是空的」時才會出現（全域情境的預設就是空文件）；
+    // 預設有內容的文件會直接把那份內容畫出來。
+    historyModalDefaultContent: "這個版本當時採用出廠預設內容。",
+    // 上面那一句的「讀不到」版本,而且**不共用** historySeedUnavailable —— 那句
+    // 逐字講的是「初始版本」,印在一個有代號、有時間、有作者的留存版本上就是講錯
+    // 版本身分,而它就站在還原鈕旁邊。
+    historyDefaultUnreadable:
+      "這個版本當時採用出廠預設內容,但預設內容目前讀不到,暫時無法顯示或比較;還原這個版本仍然可以執行。",
     historyClose: "關閉",
     // 一頁上同時放著兩份可編輯長文時（角色誌＝角色定義＋學習經驗），標題只寫
     // 「版本紀錄」看不出管的是哪一份——卡片得自己講清楚。owner 2026-07-31 實際

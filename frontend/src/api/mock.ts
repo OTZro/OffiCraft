@@ -1012,16 +1012,28 @@ function snapshotDocument(
       }
       const seed = MOCK_WIRE_ROLES_SEED.find((r) => r.key === key);
       if (!seed) return null;
-      return {
-        name: seed.name,
-        definition_md: seed.definition_md,
-        tombstoned: "true",
-      };
+      // 🔴 EMPTY, not the seed text (T-40f0 node 11). A tombstone means "this
+      // document is following its shipped default"; the server's reset writes
+      // `RoleDef{RoleKey: role, Tombstoned: true}` (api_roles.go), so the
+      // retained snapshot's text column holds the ZERO VALUE. Filling in the
+      // seed here made the mock more generous than the server, and the cost was
+      // not academic: the display-layer defect this node fixes was structurally
+      // ABSENT from every mock-built fixture, so anyone writing a test off the
+      // mock would have written a permanently-green assertion. The name goes
+      // `name` is OMITTED rather than blanked: roleDefHistorySnapshot leaves it
+      // out entirely, and `applyDocumentHistory`'s `content.name ?? current.name`
+      // then leaves the live name standing — which is the server's own rule
+      // (a restore puts the TEXT back, it does not rename the role).
+      return { definition_md: "", tombstoned: "true" };
     }
     case "lessons": {
       const overlay = lessonsOverlays.get(key);
+      // Same server parity as role_definition above: a tombstoned row stores
+      // "" and the seed text is what the FOLD supplies, not what the revision
+      // holds. (No route can produce a tombstoned lessons row today — there is
+      // no reset_lessons — so this arm is parity for its own sake.)
       return {
-        text: overlay?.text ?? SEED_LESSONS_MD,
+        text: overlay?.text ?? "",
         tombstoned: String(overlay === undefined),
       };
     }
@@ -3925,16 +3937,31 @@ export const mockApi: Api = {
     refuseRetiredDocumentKind(kind, route);
     // Mirrors api_document_history.go's documentSeedContent, INCLUDING which
     // documents have no default at all: the global block's default is the empty
-    // document, a seed role's is its file seed, and everything else 404s —
-    // exactly where resetGlobalContext / resetRole would also refuse. Reading
+    // document, a seed role's is its file seed, a role with an INSIGHT seed
+    // file gets that, and everything else 404s — exactly where
+    // resetGlobalContext / resetRole / resetInsight would also refuse. Reading
     // writes nothing here either: no recordDocumentHistory, no overlay touched.
+    //
+    // 🔴 THE `insight` BRANCH WAS MISSING and it mattered (T-40f0 node 11). The
+    // server has had `case "insight"` since T-6501 and `POST
+    // /api/insight/{role_key}/reset` sits right there in the route table, so
+    // 404ing here was the mock being STINGIER than the server — the direction
+    // frontend/CLAUDE.md warns about, just less famous than the generous one.
+    // Its cost was concrete: the InsightCard's 初始版本 row could not be read
+    // offline, and a tombstoned insight revision could only ever swap one wrong
+    // screen for a differently wrong one. 🔴 The roster is INSIGHT_SEEDS (the
+    // set of seeds/insight_<role_key>.md files), never the seed-ROLE roster —
+    // a role can carry a Duty seed and no Insight one, which is the same
+    // distinction resetInsight above is careful about.
     const content: Record<string, string> | null =
       kind === "global_context"
         ? { text: "", tombstoned: "true" }
         : kind === "role_definition" &&
             MOCK_WIRE_ROLES_SEED.some((r) => r.key === key)
           ? { definition_md: roleSeed(key).definition_md, tombstoned: "true" }
-          : null;
+          : kind === "insight" && key in INSIGHT_SEEDS
+            ? { text: INSIGHT_SEEDS[key], tombstoned: "true" }
+            : null;
     if (content === null) {
       throw new ApiError(`http 404 for ${route}`, 404, "not_found", `document '${kind}/${key}' has no shipped default to compare against`);
     }

@@ -28,6 +28,46 @@
 // very same panes, and restores through the very same confirmation — the row
 // itself did not move, so the entry is no harder to find than it was.
 //
+// A TOMBSTONED REVISION IS NOT AN EMPTY ONE (T-40f0 node 11, owner screenshot).
+// `tombstoned="true"` is the overlay's way of saying "follow the shipped
+// default" — the row's text column is EMPTY in the database because the text
+// lives in the seed file, not because anybody ever wrote an empty document.
+// Reading that empty column as literal content made all three panes lie, and
+// the worst of them was the diff: a 285-line document rendered as "every line
+// goes away", i.e. 「還原＝清空」, next to a destructive button. What restoring
+// such a revision ACTUALLY does is write a tombstone back
+// (`restoreDocumentHistory` → `Tombstoned: true`), which folds to the shipped
+// default. So the effective content of a tombstoned revision IS the seed, and
+// this file uses it for BOTH panes.
+//
+// 🔴 THE ONE CRITERION: what the diff says must equal the state a restore
+// leaves behind. That is why the substitution happens here rather than in
+// `documentFields`/`comparedFieldNames` — those are shape functions with no
+// notion of a document's default — and why it is here rather than in each host
+// card: every kind whose snapshot carries a `tombstoned` flag goes through this
+// one reader.
+//
+// WHAT THAT REACH ACTUALLY IS, stated honestly rather than as a slogan:
+//   * `role_definition` and `global_context` — verified end to end (a retained
+//     tombstone opened through DocumentHistoryEntry against the shared mock).
+//   * `insight` — verified end to end since `api/mock.ts` learned to serve its
+//     seed; before that the mock 404'd where the server answers, so the cockpit
+//     could only ever trade one wrong screen for a differently wrong one.
+//   * `lessons` — NOT reachable today, and saying "one fix covers lessons too"
+//     was a blank cheque. `Lessons.Tombstoned` has exactly one writer that can
+//     set it true (`restoreDocumentHistory`), and both ordinary write doors
+//     (api_roles.go's replace and patch) hard-code `false`. There is no
+//     `reset_lessons` route and no reset tool, so the state cannot bootstrap
+//     itself. If anyone ever adds one, a tombstoned lessons revision lands
+//     straight in the "the default cannot be read" branch below — `lessons` has
+//     no `onReset`, so its host never fetches a seed to substitute.
+//
+// 🔴 The CAP verdict deliberately still judges `version.content`, NOT the
+// effective content: the server's restore checks `content["text"]` too (it
+// writes the tombstone, not the seed text), so judging the seed here would grey
+// out revisions the server accepts — the exact direction api/docCap.ts refuses
+// to be wrong in.
+//
 // RESTORE MOVED IN HERE and is reachable nowhere else. Everything the row-level
 // button carried came with it, unchanged: it is DESTRUCTIVE so it still goes
 // through ConfirmModal; a failure surfaces the SERVER's own message and leaves
@@ -68,6 +108,7 @@ export function DocumentHistoryModal({
   onRestore,
   seed,
   seedUnavailable,
+  seedContent,
 }: {
   kind: DocumentKind;
   version: DocumentHistoryView;
@@ -113,6 +154,15 @@ export function DocumentHistoryModal({
    * back on its default needs nothing from this client.
    */
   seedUnavailable?: boolean;
+  /**
+   * The document's SHIPPED DEFAULT under the revision field names — what a
+   * tombstoned revision actually restores to. `undefined` while the seed GET is
+   * in flight, when it failed, or where this document ships no default at all
+   * (the host only fetches it where a reset exists). A tombstoned revision then
+   * says its content cannot be read rather than claiming it is empty, which is
+   * the same honesty `seedUnavailable` buys the 初始版本 row.
+   */
+  seedContent?: Record<string, string>;
 }) {
   const { t, msg } = useI18n();
   const [pane, setPane] = useState<Pane>("content");
@@ -144,6 +194,33 @@ export function DocumentHistoryModal({
   const fieldLabel = (name: string) =>
     (t.settings.historyField as Record<string, string>)[name] ?? name;
 
+  // See the header note: the tombstone is a POINTER at the shipped default, so
+  // the content this version would restore to is the seed, not the empty text
+  // column the wire carries. `seed` is excluded because the 初始版本
+  // pseudo-version's `content` ALREADY IS the default — substituting there would
+  // make that row depend on a second copy of what it is holding, and it has its
+  // own `seedUnavailable` for the case where that copy is missing.
+  const tombstoned = version.content.tombstoned === "true";
+  const effectiveContent = tombstoned && !seed ? seedContent : version.content;
+  // Neither pane may call a tombstoned revision empty when the default could
+  // not be read — that is a different, and false, statement. This branch is
+  // LOAD-BEARING, not a formality: without it a tombstoned retained revision
+  // whose seed GET failed falls straight back to the empty text column and the
+  // diff paints the whole live document as an addition — the exact lie this
+  // file exists to stop, resurrected under a green suite.
+  const contentUnreadable = seedUnavailable || effectiveContent === undefined;
+  /** …and it must say so in ITS OWN words. `historySeedUnavailable` names 初始
+   * 版本 twice; printed on a revision that HAS an id, a timestamp and an author
+   * it misidentifies the version standing next to a destructive button, which
+   * is the same family of defect as the one above. */
+  const unreadableNotice = seedUnavailable
+    ? t.settings.historySeedUnavailable
+    : t.settings.historyDefaultUnreadable;
+  const unreadableTestId = seedUnavailable
+    ? "doc-history-seed-unavailable"
+    : "doc-history-default-unreadable";
+  const content = effectiveContent ?? {};
+
   const blockedFields = docCapBlockedFields(
     kind,
     version.content,
@@ -151,10 +228,17 @@ export function DocumentHistoryModal({
     docCaps
   );
   const blocked = blockedFields.length > 0;
-  const fields = documentFields(kind, version.content);
+  const fields = documentFields(kind, content);
   const compared = currentContent
-    ? comparedFieldNames(kind, version.content, currentContent)
+    ? comparedFieldNames(kind, content, currentContent)
     : [];
+  /** What an EMPTY pane means: a document that really was blank, or one that
+   * was sitting on a shipped default which is itself empty (the global block —
+   * its default IS the empty document). Collapsing the two would put 「這個版本
+   * 沒有任何內容」 back on a version that has content, just not its own. */
+  const emptyNotice = tombstoned
+    ? t.settings.historyModalDefaultContent
+    : t.settings.historyModalEmpty;
 
   async function commitRestore() {
     setBusy(true);
@@ -208,7 +292,7 @@ export function DocumentHistoryModal({
                 {t.settings.historyByLabel} {actorLine}
               </span>
             )}
-            {version.content.tombstoned === "true" && (
+            {tombstoned && (
               <span className="set-badge">{t.settings.historyDefaultBadge}</span>
             )}
             {blocked && (
@@ -254,18 +338,13 @@ export function DocumentHistoryModal({
           {/* The default's content did not load. Saying 「這個版本沒有內容」 here
             * would be a different — and false — claim, so both panes say what
             * actually happened and the footer's restore stays live. */}
-          {seedUnavailable ? (
-            <p
-              className="doc-hist-modal__notice"
-              data-testid="doc-history-seed-unavailable"
-            >
-              {t.settings.historySeedUnavailable}
+          {contentUnreadable ? (
+            <p className="doc-hist-modal__notice" data-testid={unreadableTestId}>
+              {unreadableNotice}
             </p>
           ) : pane === "content" ? (
             fields.length === 0 ? (
-              <p className="doc-hist-modal__notice">
-                {t.settings.historyModalEmpty}
-              </p>
+              <p className="doc-hist-modal__notice">{emptyNotice}</p>
             ) : (
               fields.map(([name, value]) => (
                 <section className="doc-hist-modal__field" key={name}>
@@ -297,9 +376,7 @@ export function DocumentHistoryModal({
                 {t.settings.historyDiffNote}
               </p>
               {compared.length === 0 ? (
-                <p className="doc-hist-modal__notice">
-                  {t.settings.historyModalEmpty}
-                </p>
+                <p className="doc-hist-modal__notice">{emptyNotice}</p>
               ) : (
                 compared.map((name) => (
                   <section className="doc-hist-modal__field" key={name}>
@@ -309,7 +386,7 @@ export function DocumentHistoryModal({
                       </h3>
                     )}
                     <DiffView
-                      before={version.content[name] ?? ""}
+                      before={content[name] ?? ""}
                       after={currentContent[name] ?? ""}
                       beforeLabel={versionLabel}
                       afterLabel={t.settings.historyCurrentLabel}

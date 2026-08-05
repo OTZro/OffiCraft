@@ -1208,6 +1208,7 @@ export const en: Dict = {
     historyError: "Failed to load version history. Please try again.",
     historyEmpty: "No revisions retained yet",
     historyNoContent: "(was empty)",
+    historyDefaultContent: "(was on the shipped default)",
     historyByLabel: "Edited by",
     historyDefaultBadge: "Was the default content",
     historyRestore: "Restore this version",
@@ -1243,6 +1244,10 @@ export const en: Dict = {
     historyActorTail: ")",
     historyCurrentLabel: "Current saved content",
     historyModalEmpty: "This version has no content.",
+    historyModalDefaultContent:
+      "This version was on the content this document shipped with.",
+    historyDefaultUnreadable:
+      "This version was on the content this document shipped with, but that default cannot be read right now, so it cannot be shown or compared. Restoring this version still works.",
     historyClose: "Close",
     historyRoleDefTitle: "Role definition · version history",
     historyLessonsTitle: "Lessons · version history",
