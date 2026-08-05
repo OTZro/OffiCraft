@@ -161,3 +161,52 @@ func TestMaterializeBinary(t *testing.T) {
 		}
 	})
 }
+
+// 🔴 THE SHIPPED ROLE DEFINITION MUST NOT HARDCODE A DISPLAY NAME.
+//
+// `seeds/role_def_assistant.md` opened with 「# 助理 — Mira」. Mira is the
+// out-of-box display name of the seed MEMBER row (dbseed.go) — a label the
+// owner may change at any moment through PATCH /api/members/{id}. The seed is
+// baked into the binary and does not change with it, so the day the owner
+// renames her, the FACTORY VERSION of the role definition — the very text the
+// 初始版本 row offers to restore — describes a person who does not exist.
+//
+// A role definition says what the role DOES; who currently holds it is a fact
+// about the roster, not about the duty.
+//
+// The name is read back from the seeded member row rather than written as a
+// literal here, so the assertion tracks whatever dbseed actually ships instead
+// of pinning a string that could drift out from under it.
+func TestSeedRoleDefinitionDoesNotHardcodeTheMembersDisplayName(t *testing.T) {
+	api := newTasksTestServer(t)
+	// The out-of-box roster is what ships alongside the seed files; boot it here
+	// so the name under test is the one production really starts with.
+	if err := seedOutOfBox(api.dal); err != nil {
+		t.Fatal(err)
+	}
+	seeded, err := api.dal.GetMember(seedMiraID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seeded == nil || seeded.Name == "" {
+		t.Fatal("fixture: no seeded assistant member — this test would be vacuous")
+	}
+
+	for _, roleKey := range seedRoleKeys() {
+		seedMD, hasSeed, err := api.root.seedRoleDefinitionMD(roleKey)
+		if err != nil || !hasSeed {
+			t.Fatalf("%s: seed role definition unreadable (hasSeed=%v err=%v)", roleKey, hasSeed, err)
+		}
+		// Positive control for the Contains probe below: the seed really is the
+		// duty text, and this assertion really can see inside it.
+		if !strings.Contains(seedMD, "助理") {
+			t.Fatalf("%s: fixture — the seed does not read like a role definition:\n%s", roleKey, seedMD)
+		}
+		if strings.Contains(seedMD, seeded.Name) {
+			t.Fatalf("%s: the shipped role definition hardcodes the member display name %q. "+
+				"Rename the member and this factory text starts describing nobody. "+
+				"Describe the FUNCTION instead.\nfirst line: %q",
+				roleKey, seeded.Name, strings.SplitN(seedMD, "\n", 2)[0])
+		}
+	}
+}
