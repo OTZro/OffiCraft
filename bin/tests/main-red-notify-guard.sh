@@ -50,6 +50,19 @@
 #   One line that the loose pass sees and the strict pass cannot read is a FAIL,
 #   not a shrug. The guard is allowed to not understand a line; it is not
 #   allowed to not understand it QUIETLY and still claim coverage.
+#
+# 🔴 THIS FILE MUST PARSE UNDER APPLE'S BASH 3.2, NOT JUST YOURS.
+# bin/tests/run.sh dispatches guards with `bash <file>`, which on a developer's
+# Mac is usually a homebrew bash 5.x on PATH — but on the macos-host-gates runner
+# it is /bin/bash 3.2.57. That difference is invisible to a local green run.
+# It has already bitten this file once: an awk program embedded as $(cat <<'AWK'
+# ...) contained a literal apostrophe inside a character class, and bash 3.2's
+# parser — which mishandles quotes inside a heredoc nested in a command
+# substitution — died with "unexpected EOF while looking for matching ')'".
+# Locally: rc=0. On the runner: the whole guard aborted and macos-host-gates went
+# red. Apostrophes in the awk source are therefore written \047, and any change
+# here must be re-run with an EXPLICIT `/bin/bash bin/tests/main-red-notify-guard.sh`
+# before it is believed. Do not use bash-4-only syntax (${var,,}, declare -A, &>>).
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -120,10 +133,10 @@ function strip(s) { sub(/[[:space:]]+#.*$/, "", s); sub(/^[[:space:]]*#.*$/, "",
 /^  [^ \t#]/ {
   line = strip($0)
   if (line ~ /^[[:space:]]*$/) next
-  if (line ~ /^  ["']?[_a-zA-Z][a-zA-Z0-9_-]*["']?:/) {
+  if (line ~ /^  ["\047]?[_a-zA-Z][a-zA-Z0-9_-]*["\047]?:/) {
     id = line
-    sub(/^  ["']?/, "", id)
-    sub(/["']?:.*$/, "", id)
+    sub(/^  ["\047]?/, "", id)
+    sub(/["\047]?:.*$/, "", id)
     print "JOB\t" id
   } else {
     print "UNPARSED\t" $0
@@ -193,7 +206,7 @@ fi
 # as covering b and c, and the guard reports a count it invented.
 NEEDS_AWK="$(cat <<'AWK'
 function strip(s) { sub(/[[:space:]]+#.*$/, "", s); sub(/^[[:space:]]*#.*$/, "", s); return s }
-function emit(s) { gsub(/^["']|["']$/, "", s); if (s != "") print s }
+function emit(s) { gsub(/^["\047]|["\047]$/, "", s); if (s != "") print s }
 /^    needs:/ {
   line = strip($0)
   sub(/^    needs:[[:space:]]*/, "", line)
