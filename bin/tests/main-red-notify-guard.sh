@@ -11,11 +11,16 @@
 # A comment asking people to remember is not a mechanism. This is.
 #
 # WHAT IT ASSERTS
-#   0. the workflow file PARSES as YAML. Not a formality: this ticket shipped a
-#      ci.yml whose `run:` block scalar was ended early by a continuation line
-#      at column 1. Every local gate and every guard here passed it, because
-#      nothing local had ever parsed the file; GitHub answered with a startup
-#      failure in which zero jobs ran and the pull request carried zero checks.
+#   0. the workflow file PARSES as YAML, under ONE named parser. Not a
+#      formality: this ticket shipped a ci.yml whose `run:` block scalar was
+#      ended early by a continuation line at column 1. Every local gate and
+#      every guard here passed it, because nothing local had ever parsed the
+#      file; GitHub answered with a startup failure in which zero jobs ran and
+#      the pull request carried zero checks.
+#      ⚠️ WHAT THIS PROVES, EXACTLY: that one YAML parser can read the file.
+#      GitHub's workflow parser is neither psych nor PyYAML, so a pass here is
+#      NECESSARY, NOT SUFFICIENT — it catches the class of breakage that
+#      shipped; it does not promise GitHub will accept the file.
 #   1. the notify job exists, exactly once
 #   2. its gate is `failure() && github.ref == 'refs/heads/main'`
 #      — widened to always() it would message every pull request; widened by
@@ -50,6 +55,9 @@
 #   One line that the loose pass sees and the strict pass cannot read is a FAIL,
 #   not a shrug. The guard is allowed to not understand a line; it is not
 #   allowed to not understand it QUIETLY and still claim coverage.
+#   ⚠️ That pass says NO LINE WAS SKIPPED IN SILENCE. It does NOT say every line
+#   it read is a real job — a two-space key is only a job id because the region
+#   is bounded to the `jobs:` block (below), not because the scan can tell.
 #
 # 🔴 THIS FILE MUST PARSE UNDER APPLE'S BASH 3.2, NOT JUST YOURS.
 # bin/tests/run.sh dispatches guards with `bash <file>`, which on a developer's
@@ -85,38 +93,77 @@ if [[ ! -f "$WF" ]]; then
 fi
 
 # ── 0. the file parses as YAML ──────────────────────────────────────────────
-# A parser that is ABSENT must not look like a file that is CLEAN, so a missing
-# parser is a FAIL with instructions, never a skip. Two independent parsers are
-# tried because either alone can be missing on a given runner.
-YAML_VIA=""
-if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; then
-  YAML_VIA="python3+PyYAML"
-elif command -v ruby >/dev/null 2>&1 && ruby -ryaml -e '' >/dev/null 2>&1; then
-  YAML_VIA="ruby+psych"
-fi
+# ONE parser, named, with NO fallback. An earlier cut tried python3+PyYAML and
+# fell back to ruby+psych, and the two DISAGREE on real files: an unknown tag
+# (`runs-on: !Weird ubuntu-latest`) is a hard error to PyYAML and a clean parse
+# to psych; a `%YAML 1.2` directive is the reverse. Same file, same guard,
+# rc flipped between 1 and 0 depending on which interpreter the host happened to
+# have. A second parser is a second opinion, and a gate whose verdict depends on
+# what is installed is not a gate.
+#
+# ruby is the one that is always there. This guard's ONLY execution surface is
+# macOS — bin/tests/run.sh is reached through bin/ci.sh locally and through
+# macos-host-gates in the cloud; the ubuntu cloud-gates lane does not run
+# bin/tests at all. macOS ships ruby; the macOS runner ships ruby and does NOT
+# have PyYAML. Missing ruby is a FAIL with instructions, never a skip and never
+# a quiet downgrade to some other parser: "no parser" must not look like "file
+# is fine", and neither must "a different parser".
+#
+# unsafe_load is deliberate: safe_load rejects aliases and anchors, which are
+# legal in a workflow file. The method is CHOSEN by respond_to? rather than by
+# rescuing NoMethodError (Ruby 2.6's psych has no unsafe_load_file) — a rescue
+# would attach that NoMethodError to any later syntax error as its `cause`, and
+# print a backtrace that reads like a broken guard instead of a broken workflow.
+#
+# Exactly ONE document is required. psych reads a multi-document file by
+# silently taking the first one, which would let a second `---` document below
+# carry jobs that parse clean here and are invisible to everything downstream —
+# and GitHub reads a workflow as a single document in any case.
+#
+# ⚠️ The ruby source below is ASCII-only ON PURPOSE. `ruby -e` takes its source
+# as US-ASCII on the system ruby (2.6), so one em dash in a message here is not
+# a typo, it is `invalid multibyte char` — the guard then reports the WORKFLOW
+# as unparseable when the workflow is fine. Keep messages plain ASCII.
+YAML_VIA="ruby+psych"
+RUBY_YAML_PROG='
+  n = Psych.parse_stream(File.read(ARGV[0])).children.size
+  abort("file contains #{n} YAML documents, not 1: GitHub reads a workflow as a single document") if n != 1
+  m = YAML.respond_to?(:unsafe_load_file) ? :unsafe_load_file : :load_file
+  YAML.public_send(m, ARGV[0])
+'
 
-yaml_parse() {
-  case "$YAML_VIA" in
-    python3+PyYAML) python3 -c 'import sys, yaml; yaml.safe_load(open(sys.argv[1]))' "$WF" 2>&1 ;;
-    ruby+psych)     ruby -ryaml -e 'begin; YAML.unsafe_load_file(ARGV[0]); rescue NoMethodError; YAML.load_file(ARGV[0]); end' "$WF" 2>&1 ;;
-  esac
-}
-
-if [[ -z "$YAML_VIA" ]]; then
-  bad "no YAML parser available, so this guard cannot tell a valid workflow from an invalid one — and 'no parser' must never look like 'file is fine'. Install one: \`python3 -m pip install pyyaml\`, or make \`ruby -ryaml\` importable. A ci.yml that does not parse is a GitHub startup failure: zero jobs run, zero checks appear, and nothing notifies."
-elif YAML_ERR="$(yaml_parse)"; then
-  ok "workflow file parses as YAML ($YAML_VIA)"
+if ! command -v ruby >/dev/null 2>&1 || ! ruby -ryaml -e '' >/dev/null 2>&1; then
+  bad "no \`ruby -ryaml\` on this host, so this guard cannot tell a valid workflow from an invalid one — and a missing parser must never look like 'file is fine'. This guard only runs on macOS, where ruby is part of the system; if it is gone here, put it back (\`xcode-select --install\`, or any ruby on PATH with psych). It is deliberately NOT allowed to fall back to another parser: two parsers disagree, and the disagreement would decide the verdict. A ci.yml that does not parse is a GitHub startup failure: zero jobs run, zero checks appear, and nothing notifies."
+elif YAML_ERR="$(ruby -ryaml -e "$RUBY_YAML_PROG" "$WF" 2>&1)"; then
+  ok "workflow file parses as YAML ($YAML_VIA) — one parser can read it; GitHub's own parser is a different one, so this is necessary, not sufficient"
 else
   bad "workflow file is NOT valid YAML ($YAML_VIA) — GitHub answers this with a startup failure: zero jobs scheduled, zero checks on the PR, and no notification. Parser said: $(printf '%s' "$YAML_ERR" | tr '\n' ' ' | tail -c 300)"
 fi
 
 # ── the jobs region ─────────────────────────────────────────────────────────
-# Everything from the top-level `jobs:` key onwards. Restricting to this region
-# is what makes the two-space rule mean "job name": `on:` and `concurrency:`
-# above it also carry two-space keys (pull_request:, push:, group:).
-REGION="$(sed -n '/^jobs:$/,$p' "$WF")"
+# The top-level `jobs:` key up to THE NEXT TOP-LEVEL KEY (a column-0 line that
+# is not a comment), not to end of file. Restricting to this region is what
+# makes the two-space rule mean "job name": `on:` and `concurrency:` above it
+# also carry two-space keys (pull_request:, push:, group:) — and so would a
+# `defaults:` / `env:` / `run-name:` block written AFTER `jobs:`, all of which
+# are legal there. Reading to EOF made `defaults:`'s own `  run:` key look like
+# a job named `run`, which the guard then demanded appear in `needs:` — a red
+# whose only "fix" is a workflow GitHub would reject. `jobs:` happening to be
+# the last top-level key was an unwritten assumption; this removes it rather
+# than documenting it.
+REGION="$(awk '/^jobs:$/ { inj = 1; next } inj && /^[^ \t#]/ { exit } inj { print }' "$WF")"
 if [[ -z "$REGION" ]]; then
   bad "no top-level 'jobs:' key found — the scanner is looking at the wrong shape, so nothing below proves anything"
+  echo "[main-red-notify-guard] $PASS ok, $FAIL failed"
+  exit 1
+fi
+# Bounding the region at the next top-level key is what makes a SECOND `jobs:`
+# block worth checking for: psych accepts a duplicate top-level key (last one
+# wins) and the scan now stops before it, so jobs declared there would be
+# covered by nothing at all.
+JOBS_KEYS="$(grep -c '^jobs:$' "$WF" || true)"
+if [[ "$JOBS_KEYS" != "1" ]]; then
+  bad "the file has $JOBS_KEYS top-level 'jobs:' keys (want exactly 1) — the parser takes one of them and this scan reads the other, so jobs in the loser would be covered by nothing"
   echo "[main-red-notify-guard] $PASS ok, $FAIL failed"
   exit 1
 fi
@@ -152,7 +199,7 @@ JOB_COUNT="$(printf '%s\n' "$JOBS" | grep -c . || true)"
 if [[ -n "$UNPARSED" ]]; then
   bad "the job-name scan cannot read these lines in the jobs region, so it does NOT claim to cover the jobs they declare:$(printf '%s\n' "$UNPARSED" | sed 's/^/ | /' | tr '\n' ' ')"
 else
-  ok "every two-space key in the jobs region is readable as a job id (nothing silently uncovered)"
+  ok "every two-space line in the jobs region is one this scan can read (no line skipped in silence — it does not claim every line it read is a real job)"
 fi
 
 # Positive control for the scan itself. A file with a notify job and nothing to

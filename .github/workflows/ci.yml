@@ -360,12 +360,25 @@ jobs:
           # (jq selects result != "success") and calling a skip red is a lie.
           body="$(printf '主幹紅了：%s@%s\n非 success 的檢查：%s\n執行紀錄：%s' "$REPO" "${COMMIT_SHA:0:12}" "${red:-unknown}" "$RUN_URL")"
           # --fail-with-body: without it curl exits 0 on 404/502/400 and this
-          # step stays green while nobody was told. --retry-all-errors is what
-          # makes --retry cover HTTP errors rather than connection errors only.
+          # step stays green while nobody was told. That flag is what turns an
+          # HTTP error into a red here; --retry does not.
+          #
+          # --retry 2 ALREADY covers the errors worth retrying: 429, 5xx, and
+          # (with --retry-connrefused) a refused connection. There is
+          # deliberately NO --retry-all-errors. Its only added effect over the
+          # above is retrying PERMANENT 4xx, where a second and third attempt
+          # cannot succeed — a moved inlet (404), a revoked token (403) or a
+          # mistyped URL (400) answers the same way every time. The cost is not
+          # zero: if the inlet ACCEPTS the message and then answers non-2xx (a
+          # proxy in front of it returning 502 after the enqueue, say), the flag
+          # turns one "main is red" into THREE in the maintainer's inbox. A
+          # duplicate notification is a real failure mode, and buying it back
+          # with retries of the unretryable is a bad trade.
+          #
           # The response body is discarded rather than logged: an error page
           # from the wrong host can quote the request URL back, and that URL is
           # the credential. The exit code is the signal.
           printf '%s' "$body" | curl -sS --fail-with-body --max-time 20 \
-            --retry 2 --retry-all-errors --retry-connrefused \
+            --retry 2 --retry-connrefused \
             -X POST -H 'Content-Type: text/plain; charset=utf-8' \
             --data-binary @- "$MAIN_RED_WEBHOOK_URL" >/dev/null
