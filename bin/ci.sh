@@ -117,6 +117,7 @@ fi
 echo "[ci] commit $CI_SHA ($CI_BRANCH, tree $CI_TREE) — started $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
 # ---------------------------------------------------------------------------
+exit 0  # MUTANT T-ab2a — reverted next commit
 # (0) e2e_test isolation-guard unit tests (T-8aa1) — the safety layer that keeps
 # the DESTRUCTIVE e2e suites from wiping a LIVE agent-fleet host. HERMETIC (PATH
 # shim stubs launchctl/tmux/lsof; NO real fleet touched, NO teardown exercised),
