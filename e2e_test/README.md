@@ -54,7 +54,9 @@ either — set `OC_E2E_SKIP_BUILD=1` to skip the SPA build when running only tho
 
 ```bash
 cd e2e_test
-bash run_all.sh          # setup → all specs → teardown, in one shot
+bash run_all.sh          # setup → every default-ON spec → teardown, in one shot
+                         # (the *.live-agent.spec.js class is default-OFF: it spawns a
+                         #  real agent and burns API quota — see docs/dev/README.md)
 ```
 
 ### Target

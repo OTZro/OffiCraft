@@ -60,7 +60,9 @@ OC_E2E_LIVE_AGENT=1 bash run_all.sh          # 明確要求：會 spawn 真 agen
   清單**——清單要靠每一支新測試記得回去登記，忘記的那支就預設偷偷跑、偷偷付錢。
 - 判定是**嚴格** `=== '1'`，所以 `true` / `yes` / `TRUE` 這類打錯字**一律落到「沒跑、沒花錢」**。
 - 帶了旗標時，`assert-specs-ran.sh` 那道守衛會**放行**（不會把你的主動選擇報成失敗）。
-- 沒帶旗標時它**不會**為那一類 build cli binary，所以機器上沒有 `go` 也跑得完瀏覽器情境。
+- 沒帶旗標時它**不會**為那一類多做那兩支重複的 cli build（省下的是 `cli/{ocagent,ocwarden}` 的 in-tree
+  副本）。⚠️ **這不代表沒有 `go` 也跑得完**：`setup.sh` 仍**無條件**需要 Go toolchain（`build-bindist`
+  的三支 ＋ `ocserverd` 一支），而它跑在這個條件之前。
 
 ⚠️ **兩件仍然成立、這張票沒有解決的事**：
 

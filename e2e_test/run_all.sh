@@ -54,10 +54,12 @@ echo "[run_all] === E2E (playwright) ==="
 # claude self-rescues in time — the presence-timeout flake). In-tree builds restore
 # the dev layout the resolver is written for. Both artifacts are gitignored.
 #
-# Why it is conditional (T-c329): it was unconditional, which cost every caller a
-# Go toolchain and two builds for a class that, by default, does not run — and a
-# machine without `go` was killed here by `exit 1` before reaching a single
-# browser spec. OC_E2E_OCWARDEN is consumed by that class alone (verified: the
+# Why it is conditional (T-c329): it was unconditional, which cost every caller
+# two builds for a class that, by default, does not run. It does NOT make the
+# suite runnable without a Go toolchain — setup.sh (line 29, well before this)
+# unconditionally needs one: build-bindist builds three CLIs and ocserverd is
+# built from source. The saving here is the duplicate in-tree pair, nothing more.
+# OC_E2E_OCWARDEN is consumed by that class alone (verified: the
 # only readers in the whole repo are this line and the live-agent spec itself), so
 # skipping it changes nothing for the specs that do run.
 if [ "${OC_E2E_LIVE_AGENT:-}" = "1" ]; then
