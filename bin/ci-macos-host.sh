@@ -19,15 +19,29 @@
 #                                              neither problem)
 #   IN  gitleaks content scan     rc=0,  10s
 #   IN  bin/check-officraft-dist  rc=0,   0s
-#   OUT frontend `test:ct`        rc=1,  62s  — and that red was proven to be
-#       ENVIRONMENTAL, not a real break: identical frontend tree sha, green on
-#       the dev Mac, red on the runner, failing on a text-width threshold by ONE
-#       pixel (expected >= 36, received 35). The fix for that is a reproducible
-#       font environment, NOT a looser threshold: this guard exists to catch a
-#       label squeezed down to its icon, so the 1px sensitivity is the feature.
-#       Relaxing an assertion to please a runner trades a false red for a false
-#       green. It stays out, and the cost is stated in the ticket: real-browser
-#       layout is still guarded by one machine only.
+#   IN  frontend `test:ct`        rc=1,  62s AT THE TIME — see below. It is IN now.
+#
+# `test:ct` WAS the one measured red, and this header used to end with "it stays
+# out, real-browser layout is still guarded by one machine only". That is no
+# longer true, and the reason it changed is worth stating precisely (T-0fef).
+# The runner red was 2 failures out of 207 tests, and BOTH were the same group:
+# nav-tabs-narrow.ct.spec.tsx's `nav strip geometry`, asserting how many pixels
+# of the 使用說明 label survive clipping (expected >= 36, received 35; expected
+# 95, received 90). 205 passed. Independently, pinning a non-macOS CJK webfont
+# into the CT harness on the dev Mac reddened exactly the same two and nothing
+# else — a Han glyph advances 1em in nearly every CJK font and macOS `system-ui`
+# is the ~4% outlier, which was the whole of that group's headroom.
+# The owner ruled that group out of existence rather than making it portable
+# (docs/guide/mobile.md already documents the clipping as normal, and the strip
+# scrolls). With it gone, the suite's font dependence measured to zero across two
+# font environments — so the gate moves here instead of living on one laptop.
+# Still NOT ubuntu: `bin/ci-cloud.sh` explains why a Linux font stack is a
+# different question, and that one has never been measured. Do not infer it.
+#
+# ⚠️ The old resolution stands for everything else: if a CT guard ever reddens
+# HERE and green on a dev Mac, the fix is the font environment, never a looser
+# threshold. Relaxing an assertion to please a runner trades a false red for a
+# false green.
 #
 # ONE DEFINITION, NOT TWO: the workflow (.github/workflows/ci.yml) installs a
 # pinned toolchain and calls this script and nothing else. A YAML file listing
@@ -71,9 +85,22 @@ cd "$ROOT" || fail "cannot cd to repo root $ROOT"
 # script refuses rather than reporting a green that means nothing.
 [[ "$(uname -s)" == "Darwin" ]] || fail "this subset is macOS-shaped; refusing to pretend on $(uname -s)"
 
+# npm is resolved by absolute-path fallback for the same reason ci.sh does it: a
+# minimal-PATH caller must not turn gate 4 into a silent skip. Resolved up here
+# rather than next to its use so the script refuses BEFORE spending 4 minutes on
+# gate 1 only to discover it cannot run the last one.
+NPM="$(command -v npm 2>/dev/null || true)"
+if [[ -z "$NPM" ]]; then
+  for cand in "$HOME/.asdf/shims/npm" /opt/homebrew/bin/npm /usr/local/bin/npm; do
+    [[ -x "$cand" ]] && { NPM="$cand"; break; }
+  done
+fi
+[[ -n "$NPM" && -x "$NPM" ]] || fail "npm not found. It is a HARD dependency of the test:ct gate, never a skip."
+FE="$ROOT/frontend"
+
 # ── 1. the bin/ guard suites ────────────────────────────────────────────────
 # Dispatcher for the bin/ suites, including macOS-shaped install.sh fixtures.
-echo "[ci-macos-host] (1/3) bin/ guard suites — bin/tests/run.sh"
+echo "[ci-macos-host] (1/4) bin/ guard suites — bin/tests/run.sh"
 [[ -x "$ROOT/bin/tests/run.sh" ]] || fail "bin/tests/run.sh missing or not executable (renamed? then this gate stopped running)"
 bash "$ROOT/bin/tests/run.sh" || fail "bin/tests/run.sh went red. Reproduce: bash bin/tests/run.sh"
 
@@ -83,7 +110,7 @@ bash "$ROOT/bin/tests/run.sh" || fail "bin/tests/run.sh went red. Reproduce: bas
 # ci.sh does it: a minimal PATH turns the call into exit 127, and a
 # command-not-found that is treated as "clean" is the worst possible outcome for
 # a secret scanner.
-echo "[ci-macos-host] (2/3) gitleaks content scan"
+echo "[ci-macos-host] (2/4) gitleaks content scan"
 GITLEAKS="$(command -v gitleaks 2>/dev/null || echo /opt/homebrew/bin/gitleaks)"
 [[ -x "$GITLEAKS" ]] || fail "gitleaks not found (install: brew install gitleaks). NOT skipped — an unrun scanner and a clean scan look identical."
 [[ -f "$ROOT/.gitleaks.toml" ]] || fail ".gitleaks.toml missing — refusing to scan with default rules and call it a pass"
@@ -93,8 +120,31 @@ GITLEAKS="$(command -v gitleaks 2>/dev/null || echo /opt/homebrew/bin/gitleaks)"
 # The one owner-approved committed binary. Its manifest binds a reviewable
 # source snapshot to the checked-in executable, so this fails closed whenever
 # the source moves without an explicit binary refresh.
-echo "[ci-macos-host] (3/3) TCC identity anchor — bin/check-officraft-dist"
+echo "[ci-macos-host] (3/4) TCC identity anchor — bin/check-officraft-dist"
 [[ -x "$ROOT/bin/check-officraft-dist" ]] || fail "bin/check-officraft-dist missing or not executable (renamed? then this gate stopped running)"
 "$ROOT/bin/check-officraft-dist" || fail "the committed TCC anchor no longer matches its source manifest. See dist/officraft/BUILD.md"
+
+# ── 4. real-browser layout + paint guards ───────────────────────────────────
+# `npm run test:ct` is TWO Playwright configs (see bin/ci.sh step 4c): the CT
+# visual guards against a dev server, then the paint guards against a REAL
+# `vite build` output served over HTTP. The build is part of the gate, not
+# setup — the paint guards measure the shipped artifact's first frames, and
+# nothing else in this repo type-checks or exercises the pre-React inline
+# script against a real dist/.
+#
+# Deliberately LAST: it is the newest gate here, and a failing gate aborts the
+# ones after it, so the three that were already load-bearing keep reporting for
+# themselves.
+#
+# Browser resolution mirrors ci.sh: `playwright install chromium` is a no-op when
+# the pinned revision is cached, and the `|| true` keeps an offline probe from
+# failing the run — a genuinely absent browser then fails the test run itself
+# (HARD, same discipline as npm/gitleaks: never a silent skip).
+echo "[ci-macos-host] (4/4) frontend test:ct — real-browser CT layout guards + paint guards"
+[[ -f "$FE/package.json" ]] || fail "frontend/package.json missing — this gate cannot have run"
+(cd "$FE" && "$NPM" ci --silent) || fail "npm ci (frontend) failed. Reproduce: (cd frontend && npm ci)"
+export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/Library/Caches/ms-playwright}"
+(cd "$FE" && npx --no-install playwright install chromium >/dev/null 2>&1 || true)
+(cd "$FE" && "$NPM" run --silent test:ct) || fail "frontend test:ct went red. Reproduce: (cd frontend && npm run test:ct). If it is green on a dev Mac and red only here, the answer is the font environment — NOT a looser threshold."
 
 echo "[ci-macos-host] all macos-host-shaped gates green"

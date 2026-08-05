@@ -58,8 +58,10 @@ roster MemberCard 成員列**右側(flex 尾端)的紅色計數 badge**(>99 顯�
   量 `getComputedStyle().outlineColor` 的**實際顏色** ——jsdom 不算 CSS、解析不出 `var()`,
   這半在那裡做不到;`src/components/badgeRing.test.ts`(vitest)是來源掃描,盯
   「7 個 site 都戴那 3 個 class」＋「3 條規則都吃 ring token」＋標籤/產生器三件套。
-  ⚠️ **後者存在的理由是 `test:ct` 不在雲端 gate 裡**(`bin/ci-cloud.sh` 只跑 vitest),
-  只放 CT 等於回歸在 GitHub 上是綠的。
+  ⚠️ **後者當初存在的理由是「`test:ct` 不在雲端 gate 裡,只放 CT 等於回歸在 GitHub 上是綠的」
+  —— 那個前提自 T-0fef 起已經不成立**(CT 現在跑在 `macos-host-gates` 的
+  `bin/ci-macos-host.sh` 第 4 塊)。**但那不是拿掉 vitest 那半的理由**:兩層守的本來就
+  不是同一件事(真顏色 vs 來源掃描),理由過期不等於守衛過期。
 
 ## 聊天未讀跳轉(M2 批次 19;LINE/FB 式,純 FE)
 ChatArea 兩個行為,皆不動 server:
@@ -1343,13 +1345,14 @@ T-081b 開放的葉子有好幾條是**句子片段**,邊界空白是有意義�
   ——⚠️ 檔名從 `wording-list-window.ct.spec.tsx` 改過來了,因為已經沒有 window。
   它守的是 **jsdom 做不到的那半**:jsdom 按不出真的 Tab(焦點不會自己動)、也**完全沒有
   「查找」**。所以「焦點實際落在哪個元素」與「瀏覽器找不找得到」只有這一層答得出來。
-- ⚠️ **CT 不在雲端 gate 裡**,所以上面那條 (d) **刻意**放在 jsdom——只放 CT 等於這個回歸在
-  GitHub 上是綠的。查證過的源頭(2026-08-02,不是沿用舊文):`.github/workflows/ci.yml` 的
-  `cloud-gates` job 跑 `bash bin/ci-cloud.sh`;那支腳本裡 **`test:ct` 命中 0 次**、只有
-  `vitest run`,而 `test:ct` 只出現在 `bin/ci.sh`。
-  ⚠️ **ci.yml 現在有三個 job**(T-ff8a 加了 macOS 上的 `macos-e2e`,T-ab2a 又加了 `macos-host-gates`),但**沒有一個**跑 CT:`macos-host-gates` 跑的是 host 形狀的那三塊閘(`bin/tests/run.sh`、內容層 gitleaks、TCC 身分錨點),跟 Playwright 無關;`macos-e2e` 跑的是
-  `e2e_test` 的 Playwright **端到端**情境,**不是** `frontend` 的 CT ⇒ 上面那句「CT 不在雲端
-  gate 裡」**仍然成立**,別因為看到「雲端有 macOS runner 了」就以為 CT 被涵蓋了。
+- 上面那條 (d) **刻意**放在 jsdom。當初的理由是「CT 不在雲端 gate 裡,只放 CT 等於這個回歸
+  在 GitHub 上是綠的」——⚠️ **那個理由自 T-0fef 起已經作廢**:`test:ct` 現在跑在
+  `macos-host-gates`(`bin/ci-macos-host.sh` 第 4 塊,macOS runner)。**但 (d) 不要搬走**:
+  jsdom 那條問的是「文件裡有沒有」,CT 那條問的是「焦點與瀏覽器查找」,兩層答的不是同一題。
+  ⚠️ **CT 仍然不在 `cloud-gates`(ubuntu)**:`bin/ci-cloud.sh` 裡 `test:ct` 命中仍是 0,
+  理由寫在該檔的 "WHAT IS DELIBERATELY OUT" —— Linux 字型堆疊從來沒被量過。
+  ⚠️ **不要數 job 數量**(這句話已經在 T-ff8a / T-ab2a 各過期一次);判準是「哪一個 job
+  真的呼叫到 `test:ct`」,去讀 `bin/ci-*.sh`,別從 job 名字推。
 
 **mutant 實測(把虛擬捲動整份放回去;還原用 scratchpad 備份 + shasum 對帳,未用
 `git checkout --`,還原前先把 CT build cache 移走)**:
