@@ -119,7 +119,9 @@ jobs:
   # rather than every developer's laptop.
   # It does NOT replace cloud-gates above: that job runs on ubuntu precisely to
   # catch macOS-only assumptions, so swapping it for a Mac would disarm the one
-  # check no Mac can perform. Two jobs, different purposes.
+  # check no Mac can perform. Different purposes, deliberately separate jobs —
+  # this pairing is about cloud-gates vs macos-e2e specifically; a third job
+  # (macos-host-gates, T-ab2a) now sits below and is a different concern again.
   macos-e2e:
     # Pinned, not macos-latest: `latest` moves between OS majors on GitHub's
     # schedule, and this suite asserts host-shaped behaviour. A version bump here
@@ -177,4 +179,92 @@ jobs:
           path: |
             ${{ runner.temp }}/e2e.log
             e2e_test/playwright-report
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # The macOS-HOST-SHAPED gates (T-ab2a). Until now these ran on exactly one
+  # developer's Mac, so nobody else's pull request was guarded by them: a
+  # contributor could redden the bin/ guard suites, commit a secret that only the
+  # content scan catches, or move the TCC anchor's source away from its committed
+  # binary, and the cloud would stay green.
+  #
+  # WHY A THIRD JOB RATHER THAN MORE STEPS IN macos-e2e
+  # Different purposes, and more importantly different failure reporting: folded
+  # into the e2e job, a red here would be hidden behind an e2e red (and vice
+  # versa) because a failing step stops the ones after it. Separate jobs mean
+  # "which kind of thing broke" is answered by the job name.
+  # It does NOT replace cloud-gates: that one runs on ubuntu precisely to catch
+  # macOS-only assumptions, and swapping a Mac in would disarm the single check
+  # no Mac can perform.
+  #
+  # WHICH GATES, AND WHY NOT test:ct
+  # The set was MEASURED on a hosted macOS runner (T-ab2a node 2), not assumed.
+  # frontend `test:ct` came back red — and that red was environmental, not real:
+  # identical frontend tree, green on the dev Mac, failing a text-width threshold
+  # by one pixel. It is deliberately NOT here. Relaxing that threshold to please a
+  # runner would trade a false red for a false green, so real-browser layout stays
+  # guarded by one machine until the font environment itself is reproducible.
+  #
+  # The list of what runs is NOT here — it is bin/ci-macos-host.sh, next to
+  # ci.sh, for the same reason cloud-gates calls bin/ci-cloud.sh: a YAML file
+  # enumerating gates becomes a second list, and the second list drifts silently.
+  macos-host-gates:
+    # Pinned for the same reason as macos-e2e: these assert host-shaped
+    # behaviour, so an OS major bump should be a commit somebody chose.
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.4'
+          check-latest: false
+          cache-dependency-path: server/ocserverd/go.sum
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22.10.0'
+          check-latest: false
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # A clean checkout has no embedded assets, and without them the suites go
+      # red for a reason that has nothing to do with the change under test.
+      # bin/ci.sh stages these before anything else; matching that order is what
+      # makes a red here mean the same thing a local red means.
+      - name: stage embedded assets (same order bin/ci.sh uses)
+        run: |
+          bash bin/build-seedsdist
+          bash bin/build-docsdist
+          bash bin/build-bindist
+
+      # gitleaks is a HARD dependency of the subset, not an optional extra: an
+      # unrun secret scanner and a clean scan are indistinguishable. Installing it
+      # here (rather than letting the script skip) is why the script can afford to
+      # treat "not found" as a failure.
+      - name: install gitleaks
+        run: brew install gitleaks
+
+      # The whole subset, one call. See the script for what runs and why.
+      - name: macOS-host-shaped gates
+        run: |
+          set -o pipefail
+          bash bin/ci-macos-host.sh 2>&1 | tee "$RUNNER_TEMP/macos-host.log"
+
+      # A zero exit says "nothing failed", not "the gates ran". This asserts the
+      # subset reached its own end-marker, which is the one line that cannot be
+      # printed by an early return or a script that no-oped. Deliberately NOT
+      # `if: always()` — it exists to catch a GREEN run that guarded nothing.
+      - name: guard — the subset must have actually reached its end
+        run: |
+          grep -qFx '[ci-macos-host] all macos-host-shaped gates green' "$RUNNER_TEMP/macos-host.log" \
+            || { echo "the subset exited 0 without reaching its end-marker — it guarded nothing" >&2; exit 1; }
+
+      - name: upload subset log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-host-gates-log
+          path: ${{ runner.temp }}/macos-host.log
           if-no-files-found: warn
