@@ -84,3 +84,79 @@ jobs:
 
       - name: cloud gates (unit + consistency + conformance)
         run: bash bin/ci-cloud.sh
+
+  # ---------------------------------------------------------------------------
+  # The real-browser end-to-end suite (e2e_test/run_all.sh), which until now ran
+  # on nobody's schedule: bin/ci.sh does not call it and neither did this file, so
+  # its browser scenarios were unguarded — break one and nothing anywhere turns
+  # red. owner approved wiring it in (rc-1f2f7a002363) and then chose the shape
+  # and the order: put the job up FIRST so the reds it finds are visible in the
+  # cloud, then fix them in the same PR (rc-d37ec87bb65b).
+  #
+  # WHY macOS AND WHY IT IS AN ADDITIONAL JOB
+  # This suite is written against macOS userland (lsof -nP -tiTCP, uuidgen,
+  # ps -o command=, BSD find -delete) and drives a real launchd/tmux-shaped
+  # station. GitHub's standard runners — macOS included — are free and unmetered
+  # on public repositories, so the honest place to run it is a macOS runner
+  # rather than every developer's laptop.
+  # It does NOT replace cloud-gates above: that job runs on ubuntu precisely to
+  # catch macOS-only assumptions, so swapping it for a Mac would disarm the one
+  # check no Mac can perform. Two jobs, different purposes.
+  macos-e2e:
+    # Pinned, not macos-latest: `latest` moves between OS majors on GitHub's
+    # schedule, and this suite asserts host-shaped behaviour. A version bump here
+    # should be a commit somebody chose, not a Tuesday.
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      # Same pins, same reason as cloud-gates: the suite builds ocserverd and
+      # both cli binaries from source before it can bring a station up.
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.4'
+          check-latest: false
+          cache-dependency-path: server/ocserverd/go.sum
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22.10.0'
+          check-latest: false
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # setup.sh refuses to run without an oc.toml that binds the non-prod port
+      # and names a repo-local DSN — those refusals ARE the prod guards, so a
+      # runner has to satisfy them rather than skip them. One named generator
+      # produces the file; see its header for why it never overwrites.
+      - name: generate the isolated station's oc.toml
+        run: bash e2e_test/gen-oc-toml.sh
+
+      # run_all.sh is setup -> playwright -> teardown, and its exit code is the
+      # payload. Its own prerequisite failures (npm/npx missing, chromium install
+      # failing) exit non-zero and say "NOT a spec failure", so a broken runner
+      # reddens the job instead of quietly testing nothing.
+      - name: real-browser e2e (isolated station on :8791)
+        env:
+          OC_E2E_EXCLUDE_REAL_FLEET: '1'
+        run: |
+          set -o pipefail
+          bash e2e_test/run_all.sh 2>&1 | tee "$RUNNER_TEMP/e2e.log"
+
+      # A zero exit says "nothing failed", not "something ran". This asserts the
+      # suite actually reported, above a floor, and that the excluded real-fleet
+      # spec stayed excluded. Deliberately NOT `if: always()` — it exists to catch
+      # a GREEN run that guarded nothing.
+      - name: guard — the suite must have actually executed specs
+        run: bash e2e_test/assert-specs-ran.sh "$RUNNER_TEMP/e2e.log"
+
+      - name: upload e2e log and playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-e2e-report
+          path: |
+            ${{ runner.temp }}/e2e.log
+            e2e_test/playwright-report
+          if-no-files-found: warn

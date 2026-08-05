@@ -15,8 +15,13 @@
 # `mktemp -t` semantics and macOS-shaped install.sh fixtures — the count is
 # deliberately not stated here, it was stale within one ticket), Playwright CT
 # (real-browser layout — font/rasterisation差異 makes a runner red for the wrong
-# reason), the content-level gitleaks scan, and real-fleet e2e.
+# reason), the content-level gitleaks scan, and the real-fleet spec inside
+# e2e_test (machine onboarding: it needs `claude` on PATH, spawns a real warden
+# and burns real API quota).
 # The path denylist plus e2e_test's hermetic isolation-guard suite run in cloud.
+# T-ff8a: e2e_test's BROWSER specs are no longer local-only either — ci.yml grew a
+# second job, macos-e2e, which runs e2e_test/run_all.sh on a macOS runner with the
+# real-fleet spec excluded. Neither job is land authority; this script still is.
 # The cloud check is a cross-check on a clean Linux box, NOT land
 # authority.
 #
