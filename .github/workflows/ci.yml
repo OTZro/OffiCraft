@@ -316,10 +316,13 @@ jobs:
       # THE URL IS THE CREDENTIAL. The receiving inlet authenticates on a token
       # carried in the URL itself and answers an identical silent 200 to
       # everything (unknown token included), so (a) a leaked URL lets anyone
-      # forge "main is red" at the maintainer, and (b) nothing on this side can
-      # tell delivery from a silent drop. Hence: secret only, never a literal in
-      # this file, never echoed, and the check that it arrived lives at the
-      # receiving end rather than in this step's exit code.
+      # forge "main is red" at the maintainer, and (b) a 200 here does not prove
+      # the TOKEN was good — the inlet answers 200 to an unknown token too, so
+      # token validity is only observable at the receiving end. What this side
+      # CAN see is the HTTP status: an inlet that moved (404), is down (502) or
+      # a mistyped URL (400) are all distinguishable, and --fail-with-body below
+      # is what turns them into a red instead of a silent exit 0.
+      # Hence: secret only, never a literal in this file, never echoed.
       - name: tell the maintainer that main is red
         env:
           MAIN_RED_WEBHOOK_URL: ${{ secrets.OC_MAIN_RED_WEBHOOK_URL }}
@@ -343,11 +346,26 @@ jobs:
                         | map("\(.key)=\(.value.result)")
                         | join(" ")' <<<"$NEEDS_JSON")"
           # The body is delivered VERBATIM as a chat message into a human-facing
-          # inbox, so it stays one short line plus a link. A log dump here would
-          # charge the reader by the byte for every red round.
-          body="主幹紅了：${REPO}@${COMMIT_SHA:0:12}
-紅的檢查：${red:-unknown}
-執行紀錄：${RUN_URL}"
-          printf '%s' "$body" | curl -sS --max-time 20 --retry 2 --retry-connrefused \
+          # inbox, so it stays three short lines plus a link. A log dump here
+          # would charge the reader by the byte for every red round.
+          #
+          # Built with printf, NOT a multi-line shell string. A continuation
+          # line of such a string starts at column 1, which is less indented
+          # than this block scalar — YAML ends the scalar there and the whole
+          # workflow file stops parsing. That is not hypothetical: it shipped
+          # that way once and GitHub answered with a startup failure in which
+          # ZERO jobs ran, this one included.
+          #
+          # "非 success" and not "紅", because a skipped job also lands in `red`
+          # (jq selects result != "success") and calling a skip red is a lie.
+          body="$(printf '主幹紅了：%s@%s\n非 success 的檢查：%s\n執行紀錄：%s' "$REPO" "${COMMIT_SHA:0:12}" "${red:-unknown}" "$RUN_URL")"
+          # --fail-with-body: without it curl exits 0 on 404/502/400 and this
+          # step stays green while nobody was told. --retry-all-errors is what
+          # makes --retry cover HTTP errors rather than connection errors only.
+          # The response body is discarded rather than logged: an error page
+          # from the wrong host can quote the request URL back, and that URL is
+          # the credential. The exit code is the signal.
+          printf '%s' "$body" | curl -sS --fail-with-body --max-time 20 \
+            --retry 2 --retry-all-errors --retry-connrefused \
             -X POST -H 'Content-Type: text/plain; charset=utf-8' \
             --data-binary @- "$MAIN_RED_WEBHOOK_URL" >/dev/null

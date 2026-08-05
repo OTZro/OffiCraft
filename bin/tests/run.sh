@@ -369,16 +369,6 @@ else
   bad "bin/tests/ps-field-support-guard.sh is missing"
 fi
 
-# ── guard-of-the-guard (T-d3e3 rework) ──────────────────────────────────────
-# The ci success-marker guard is dispatched at the very BOTTOM of this file,
-# AFTER the `[[ "$FAIL" == "0" ]] || exit 1` enforcement below, so its exit code
-# is carried by nothing but its own `|| exit 1`. That `|| exit 1` is exactly the
-# regression that caused this ticket's rework: without it the guard prints
-# "8 ok, 3 failed" and run.sh still exits 0, i.e. the guard is decorative and CI
-# step 0b stays green on a forged marker. Nothing reddened when it was removed.
-# It does now: this assertion is accounted through bad(), so it is enforced by
-# the FAIL count below — and the marker guard, symmetrically, asserts that THIS
-# enforcement line still exists. Neither can be deleted alone without a red.
 # ── main-red notify job in .github/workflows/ci.yml (T-5d3b) ────────────────
 # Static, hermetic: it reads the workflow file and sends nothing. Folded in here
 # because the thing it guards is an ENUMERATION — the notify job's `needs:` list
@@ -396,6 +386,17 @@ if [[ -f "$NOTIFY_GUARD" ]]; then
 else
   bad "bin/tests/main-red-notify-guard.sh is missing"
 fi
+
+# ── guard-of-the-guard (T-d3e3 rework) ──────────────────────────────────────
+# The ci success-marker guard is dispatched at the very BOTTOM of this file,
+# AFTER the `[[ "$FAIL" == "0" ]] || exit 1` enforcement below, so its exit code
+# is carried by nothing but its own `|| exit 1`. That `|| exit 1` is exactly the
+# regression that caused this ticket's rework: without it the guard prints
+# "8 ok, 3 failed" and run.sh still exits 0, i.e. the guard is decorative and CI
+# step 0b stays green on a forged marker. Nothing reddened when it was removed.
+# It does now: this assertion is accounted through bad(), so it is enforced by
+# the FAIL count below — and the marker guard, symmetrically, asserts that THIS
+# enforcement line still exists. Neither can be deleted alone without a red.
 
 echo
 SELF="$HERE/run.sh"

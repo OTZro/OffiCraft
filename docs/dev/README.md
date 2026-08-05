@@ -148,6 +148,13 @@ CI 跑在本地、`bin/ci.sh` 是 land 權威，從第一個非零步驟就 fail
 2. **通知到的是維護者、不是 owner**。要不要往上報由他判斷。
 3. **沒有做「不依賴那個人存活」的那半**（自動開 issue 被 owner 明確排除）。他剛好被換掉、或那台機器掛了，紀錄就仍然只在那顆 commit 上。
 
+⚠️ **另外四種「main 紅了，而這個機制安靜什麼都不做」的狀態**——上面三條講的是「不會叫醒人」，這四條講的是**根本不會送**：
+
+4. **workflow 檔自己語法壞掉** ⇒ GitHub 以 startup failure 收場、**一個 job 都不會被排程**，包含 `notify-main-red` ⇒ 一發都不送，而 Actions 頁面上該輪與「還沒開始跑」長得一樣。**這不是假想**：本包（T-5d3b）自己就發生過一次——`run:` 的 block scalar 被一行頂到第 1 欄的續行提早結束，整份 ci.yml 不是合法 YAML，那顆 commit 的 run 是 `jobs=0 / conclusion=failure`，PR 上零個 check，而本機完整 CI 與全套守衛**全綠**（本機當時沒有任何一關解析過 workflow YAML）。現在 `bin/tests/main-red-notify-guard.sh` 第一條就是「這個檔解析得了」，**拿不到 YAML 解析器時它會紅、不會 skip**。
+5. **通知 job 自己失敗時沒有第二條路**。secret 沒設它就 `::error::` + `exit 1`；curl 用光重試、DNS 掛掉、endpoint 回 4xx/5xx（現在有 `--fail-with-body`，這些會紅而不是靜默 exit 0）——**唯一的表現都是在一個本來就已經紅的 run 上多紅一格**。要有人看到那一格，得先有人去看那個 run，而「有人會去看」正是這整個功能假設不存在的東西。
+6. **secret 的存在性只在「需要它的那一刻」才第一次被驗證**。這條路徑只在 `failure()` 為真時執行，所以 secret 從沒設成功、被輪替或被誤刪，可以維持任意久而沒有任何跡象。**目前沒有**任何「每次 push-to-main（含綠的）就確認 secret 還在」的探測，也沒有低頻存活探測——要不要加是新功能，由 owner 決定。
+7. **run 卡在 queued**（macOS runner 排不到）⇒ 這一輪永遠不會有 conclusion ⇒ 永遠不通知。
+
 另外兩件形狀上的事：**被取消的 run 不會通知**（`failure()` 對 cancelled 為假，與上面「cancelled 不是紅」的立場一致）；**pull request 不會通知**（那是送 PR 的人自己的分支，紅就在他眼前）。`needs:` 那份 job 名字清單由 `bin/tests/main-red-notify-guard.sh` 守著——**新增第四個 job 卻忘了加進去會紅**，而不是安靜地少通知一項。
 
 ⚠️ 子集的定義只有一份、寫在 `bin/ci-cloud.sh`（repo 內的 bash）；workflow YAML 只負責裝釘好版本的 toolchain 然後呼叫它，**裡面沒有、也不准有第二份模組清單或閘門清單**——要加請加進 `bin/ci-cloud.sh`。
