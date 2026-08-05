@@ -244,11 +244,8 @@ jobs:
       - name: install gitleaks
         run: brew install gitleaks
 
-      # The whole subset, one call. See the script for what runs and why.
-      - name: macOS-host-shaped gates
-        run: |
-          set -o pipefail
-          bash bin/ci-macos-host.sh 2>&1 | tee "$RUNNER_TEMP/macos-host.log"
+      # MUTANT m4: gates step deliberately REMOVED — the end-marker guard must catch
+      # the hollow green that results.
 
       # A zero exit says "nothing failed", not "the gates ran". This asserts the
       # subset reached its own end-marker, which is the one line that cannot be
