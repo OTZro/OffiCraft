@@ -21,7 +21,7 @@ for f in serve.pid serve.launch.pid; do
     if [ -n "${PID:-}" ] && ps -p "$PID" >/dev/null 2>&1; then
       kill "$PID" && echo "[teardown] stopped $f pid=$PID"
     fi
-    rm -f "$STATE_DIR/$f"
+    oc_e2e_destroy "$STATE_DIR/$f"
   fi
 done
 
@@ -58,8 +58,16 @@ fi
 #    skeleton installs no warden, so there is nothing to bootout yet.
 
 # 4. drop isolated DB + run state (self-created only).
-rm -rf "$REPO_ROOT/var/data"
-rm -f "$STATE_DIR/owner.tok" "$STATE_DIR/env" "$STATE_DIR/serve.log" "$STATE_DIR/ocserverd"
+# T-ff8a: every delete here goes through oc_e2e_destroy (lib/common.sh) — it
+# writes each target to $OC_E2E_DESTROY_RECORD before dispatching to a
+# REPLACEABLE impl. Two reasons, both structural: (a) "what did this run delete"
+# becomes an artifact a test can assert on instead of a question only a destroyed
+# filesystem can answer, and (b) the T-ff8a regression test can run this REAL
+# script with the recording impl, which it must, because that test deliberately
+# breaks the guard it is testing and a test that leaned on that guard for its own
+# safety would delete a real DB at exactly that moment.
+oc_e2e_destroy "$REPO_ROOT/var/data"
+oc_e2e_destroy "$STATE_DIR/owner.tok" "$STATE_DIR/env" "$STATE_DIR/serve.log" "$STATE_DIR/ocserverd"
 echo "[teardown] dropped isolated DB + state"
 
 # 4b. restore server/ocserverd/webdist/ to pristine (.gitkeep only). The go leg
@@ -85,4 +93,11 @@ oc_restore_webdist_pristine "$WEBDIST" || true
 # (added to, not swapped for, the current one).
 # Guarded by e2e_test/tests_guard/run.sh case (17).
 echo "[teardown] prod ports — NOT managed by this harness (untouched): current officraft :$PROD_OFFICRAFT_PORT (server/ocserverd/config.go defaultPort); full refusal set: ${PROD_PORTS[*]}"
+# T-ff8a: this run's resources are gone, so the arming that authorised deleting
+# them is spent. Leaving it set would hand the NEXT run's EXIT trap an
+# authorisation it never earned — the same "the trap runs anyway" shape, one run
+# later. Last, not first: an arm file that outlives a half-failed teardown is the
+# safe direction to be wrong in.
+oc_e2e_disarm_teardown
+
 echo "[teardown] ✅ clean"

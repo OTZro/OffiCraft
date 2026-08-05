@@ -9,7 +9,20 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # unbound-variable error on $STATE_DIR further down.
 source "$HERE/lib/common.sh" || { echo "[run_all] FATAL: cannot source $HERE/lib/common.sh" >&2; exit 1; }
 
-cleanup() { echo; echo "[run_all] === TEARDOWN ==="; bash "$HERE/teardown.sh" || true; }
+# T-ff8a. A stale arm file from an EARLIER run is not consent from this one —
+# disarm before anything else, so what the trap below sees was written by THIS
+# run's setup.
+oc_e2e_disarm_teardown
+
+# The trap is registered UNCONDITIONALLY and before setup, on purpose: setup can
+# fail half-way through creating things, and that is precisely when a teardown is
+# needed. What is conditional is what the trap DOES — oc_e2e_teardown_on_exit
+# (lib/common.sh) runs teardown.sh only if setup ARMED it, i.e. only if this run
+# actually created something. Before T-ff8a this line ran teardown unconditionally,
+# so setup.sh's three prod guards — which `exit 2` BEFORE creating anything —
+# each ended in `rm -rf "$REPO_ROOT/var/data"` on the very DB they had just
+# refused to touch. Guarded by e2e_test/tests_guard/run.sh case (20).
+cleanup() { oc_e2e_teardown_on_exit "$HERE"; }
 trap cleanup EXIT
 
 echo "[run_all] === SETUP ==="

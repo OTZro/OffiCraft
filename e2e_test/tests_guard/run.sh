@@ -1345,6 +1345,184 @@ check "this test file makes no direct call to a real destructive command" "0" "$
 
 unset SHIM_ALLOW_TEARDOWN SHIM_TEARDOWN_LOG TEST_HOME E1DD_ISO E1DD_YES
 
+# ── 20) T-ff8a: a setup that REFUSED must not be torn down ────────────────────
+#
+# run_all.sh armed `trap cleanup EXIT` BEFORE running setup.sh, and cleanup ran
+# teardown.sh unconditionally — while teardown.sh's step 4 is
+# `rm -rf "$REPO_ROOT/var/data"`. setup.sh's three prod guards (oc.toml port,
+# [storage].dsn, the leftover-listener check) all `exit 2` BEFORE setup has
+# created anything, and each of those refusals then went out through the EXIT
+# trap into that rm. The guards could stop the START and had no say over the
+# FINISH: refusing to touch a DB was followed, one trap later, by deleting it —
+# and the more suspicious the configuration, the more certain the deletion,
+# because refusing is what fires the trap.
+#
+# Everything below drives the REAL run_all.sh → setup.sh → teardown.sh chain
+# inside a THROWAWAY repo tree built by this file, with the deletion seam
+# (oc_e2e_destroy) pointed at a recording impl. Nothing real is removed even when
+# the guard is deliberately broken — which it is, twice, below. That is a
+# requirement and not a nicety: a test whose own safety depends on the guard it
+# is testing destroys the host at precisely the moment the guard regresses.
+FF8A_ROOT="$SHIMDIR/ff8a-repo"
+FF8A_E2E="$FF8A_ROOT/e2e_test"
+FF8A_REC="$SHIMDIR/.ff8a-destroy-record"
+FF8A_SENTINEL="$FF8A_ROOT/var/data/officraft.db"
+mkdir -p "$FF8A_E2E/lib" "$FF8A_ROOT/server/ocserverd" "$FF8A_ROOT/var/data"
+# common.sh derives the prod-port refusal set from config.go and FATALs if it
+# cannot parse it, so the throwaway tree carries a copy (same construction as the
+# mutant trees in 19d). A COPY, not a symlink: the mutants below rewrite it.
+cp "$HERE/../../server/ocserverd/config.go" "$FF8A_ROOT/server/ocserverd/config.go"
+cp "$HERE/../lib/common.sh" "$FF8A_E2E/lib/common.sh"
+cp "$HERE/../setup.sh" "$HERE/../teardown.sh" "$HERE/../run_all.sh" "$FF8A_E2E/"
+# An oc.toml on the WRONG port — the first of setup's three prod guards, chosen
+# because it fires earliest and needs no ports, no npm and no go toolchain.
+printf '[server]\nport = 19999\n\n[storage]\ndsn = "sqlite:///var/data/e2e.db"\n' > "$FF8A_ROOT/oc.toml"
+printf 'PRETEND-THIS-IS-A-REAL-DB\n' > "$FF8A_SENTINEL"
+
+ff8a_run() { # ff8a_run SCRIPT [LIB_OVERRIDE] — echoes "<rc>", output → $SHIMDIR/.ff8a-out
+  local script="$1" lib="${2:-}"
+  [[ -n "$lib" ]] && cp "$lib" "$FF8A_E2E/lib/common.sh"
+  : > "$FF8A_REC"
+  ( OC_E2E_DESTROY_RECORD="$FF8A_REC" OC_E2E_DESTROY_IMPL=oc_e2e_destroy_record_only \
+    bash "$FF8A_E2E/$script" ) > "$SHIMDIR/.ff8a-out" 2>&1
+  echo $?
+}
+# Line count, NOT `grep -c . || echo 0`: grep exits 1 on an empty file, so the
+# `||` fired and the function echoed "0" TWICE — every numeric comparison then
+# saw "0\n0", which is neither zero nor a number. The record is always truncated
+# before a run, so a plain wc is both simpler and total.
+ff8a_recorded() { wc -l < "$FF8A_REC" | tr -d ' '; }
+
+# 20a) POSITIVE CONTROL FIRST. Every headline assertion below is an assertion of
+# ABSENCE ("the deletion record is empty"), which is exactly the shape that
+# passes when the recorder is broken, the script never ran, or the path moved.
+# So: prove the recorder records, by running the REAL teardown.sh on purpose.
+rc="$(ff8a_run teardown.sh)"
+FF8A_POS="$(ff8a_recorded)"
+[[ "$FF8A_POS" -gt 0 ]] \
+  && ok "positive control: the real teardown.sh records $FF8A_POS deletion target(s) — the record can be non-empty"
+[[ "$FF8A_POS" -gt 0 ]] \
+  || bad "positive control FAILED: the real teardown.sh recorded NOTHING (rc=$rc). Every 'record is empty' assertion below would be vacuously green (out: $(tail -c 300 "$SHIMDIR/.ff8a-out"))"
+grep -Fq "$FF8A_ROOT/var/data" "$FF8A_REC" \
+  && ok "positive control: the recorded target set includes \$REPO_ROOT/var/data (the destructive one)" \
+  || bad "positive control: teardown recorded deletions but NOT \$REPO_ROOT/var/data — the record is not watching the dangerous path (got: $(tr '\n' '|' < "$FF8A_REC"))"
+
+# 20b) THE HEADLINE. setup refuses (prod guard, exit 2) → the EXIT trap must
+# delete NOTHING.
+rc="$(ff8a_run run_all.sh)"
+[[ "$rc" != "0" ]] \
+  && ok "run_all with a prod-guard-refusing setup exits non-zero (rc=$rc)" \
+  || bad "run_all returned 0 despite setup refusing — the fixture is not reproducing the case"
+grep -q 'oc.toml port' "$SHIMDIR/.ff8a-out" \
+  && ok "…and it refused for the intended reason (setup's oc.toml port prod guard)" \
+  || bad "run_all failed for some OTHER reason than the prod guard — this case is testing the wrong path (out: $(tail -c 400 "$SHIMDIR/.ff8a-out"))"
+FF8A_N="$(ff8a_recorded)"
+check "SETUP REFUSED → the teardown deletion record is EMPTY" "0" "$FF8A_N"
+[[ "$FF8A_N" == "0" ]] || bad "  …recorded targets were: $(tr '\n' '|' < "$FF8A_REC")"
+# Belt and braces on the filesystem itself: with a recording impl the sentinel
+# survives either way, so this is NOT the headline — it is the check that the
+# fixture never handed a real path to a real rm.
+[[ -f "$FF8A_SENTINEL" ]] \
+  && ok "the throwaway var/data sentinel is untouched (this test file deletes nothing real)" \
+  || bad "the throwaway var/data sentinel was DELETED — the recording impl is not in force and this test is destructive"
+
+# 20c) SENTINEL — an ARMED run must still be torn down. A gate that never lets
+# the teardown run passes 20b and leaks a serve + a DB on every real run.
+: > "$FF8A_REC"
+FF8A_ARMED_OUT="$( ( OC_E2E_DESTROY_RECORD="$FF8A_REC" OC_E2E_DESTROY_IMPL=oc_e2e_destroy_record_only \
+    bash -c 'source "$1/lib/common.sh" >/dev/null 2>&1
+             oc_e2e_arm_teardown
+             oc_e2e_teardown_on_exit "$1"' _ "$FF8A_E2E" ) 2>&1 )"
+FF8A_ARMED_N="$(ff8a_recorded)"
+[[ "$FF8A_ARMED_N" -gt 0 ]] \
+  && ok "sentinel: an ARMED run DOES tear down ($FF8A_ARMED_N target(s) recorded) — the gate is not a permanent 'no'" \
+  || bad "sentinel: an armed run tore down NOTHING — the gate refuses everything, which leaks a serve and a DB on every real run (out: $(tail -c 300 <<<"$FF8A_ARMED_OUT"))"
+
+# 20d) THE ORDERING IN setup.sh. The arming must sit AFTER the last refusal gate
+# and BEFORE the first mutation; nothing above can see that, because 20b drives
+# the chain through whatever order the file happens to have. Straight-line
+# top-level script code, so source order IS execution order.
+FF8A_SETUP="$HERE/../setup.sh"
+_arm_ln="$(grep -n '^oc_e2e_arm_teardown$' "$FF8A_SETUP" | head -1 | cut -d: -f1)"
+if [[ -z "$_arm_ln" ]]; then
+  bad "setup.sh has no top-level 'oc_e2e_arm_teardown' call — the teardown can never be armed, or the anchor moved"
+else
+  # the first mutation must be BELOW the arming…
+  _early_mut="$(awk -v arm="$_arm_ln" 'NR<arm && $0 !~ /^[[:space:]]*#/ && /(^|[^-[:alnum:]_])(rm -rf|rm -f|nohup|go build)/' "$FF8A_SETUP" | wc -l | tr -d ' ')"
+  check "no mutation in setup.sh happens before the arming" "0" "${_early_mut:-0}"
+  _mut_ln="$(grep -nE '^[[:space:]]*(rm -rf|rm -f|nohup|go build)' "$FF8A_SETUP" | head -1 | cut -d: -f1)"
+  # …and the PRE-CREATION prod guards must be above it. NOT "every exit 2 is
+  # above the arming": setup's 2e TOCTOU re-check also exits 2 and it runs AFTER
+  # the builds, when the run genuinely owns things and MUST be torn down. The
+  # property is narrower and exact — the arming sits in the gap between the last
+  # guard that precedes any mutation and the first mutation itself, so no refusal
+  # is stranded on the armed side of a run that created nothing.
+  _guards_above="$(awk -v arm="$_arm_ln" 'NR<arm && $0 !~ /^[[:space:]]*#/ && /exit 2/' "$FF8A_SETUP" | wc -l | tr -d ' ')"
+  [[ "${_guards_above:-0}" -ge 3 ]] \
+    && ok "setup.sh's ${_guards_above} pre-creation prod-guard refusals all sit ABOVE the arming (≥3: oc.toml port, storage.dsn, leftover listener)" \
+    || bad "only ${_guards_above:-0} 'exit 2' refusals precede the arming — a prod guard has moved below it and its refusal would arm a teardown for a run that created nothing"
+  _stranded="$(awk -v arm="$_arm_ln" -v mut="${_mut_ln:-0}" 'NR>arm && NR<mut && $0 !~ /^[[:space:]]*#/ && /exit 2/' "$FF8A_SETUP" | wc -l | tr -d ' ')"
+  check "no refusal sits between the arming and the first mutation" "0" "${_stranded:-0}"
+fi
+# CONTROL for both scans above — they are greps for absence, so a pattern broken
+# by a later edit yields 0 forever and both assertions go permanently, silently
+# green. Run the SAME scans over a deliberately dirty fixture.
+_ff8a_fix="$SHIMDIR/ff8a-order-fixture.sh"
+{ printf '# exit 2 — a comment, must not count\n'
+  printf 'rm -rf "$REPO_ROOT/var/data"\n'
+  printf 'oc_e2e_arm_teardown\n'
+  printf 'exit 2\n'
+  printf 'nohup serve &\n'; } > "$_ff8a_fix"
+check "ordering-scan control: the early-mutation scan reddens on a fixture whose rm is above the arming (and skips the comment)" \
+  "1" "$(awk -v arm=3 'NR<arm && $0 !~ /^[[:space:]]*#/ && /(^|[^-[:alnum:]_])(rm -rf|rm -f|nohup|go build)/' "$_ff8a_fix" | wc -l | tr -d ' ')"
+check "ordering-scan control: the stranded-refusal scan reddens on a fixture whose 'exit 2' sits between the arming and the mutation" \
+  "1" "$(awk -v arm=3 -v mut=5 'NR>arm && NR<mut && $0 !~ /^[[:space:]]*#/ && /exit 2/' "$_ff8a_fix" | wc -l | tr -d ' ')"
+check "ordering-scan control: the guards-above scan counts 0 on a fixture with no refusal above the arming" \
+  "0" "$(awk -v arm=3 'NR<arm && $0 !~ /^[[:space:]]*#/ && /exit 2/' "$_ff8a_fix" | wc -l | tr -d ' ')"
+
+# 20e) THE SEAM MUST BE THE ONLY WAY OUT of teardown.sh. A raw `rm` reintroduced
+# there is invisible to every assertion above: the record stays empty and the
+# deletion happens anyway — the exact "the record says nothing was deleted"
+# false green this whole case is built on.
+FF8A_TEARDOWN="$HERE/../teardown.sh"
+_raw_rm="$(grep -cE '^[[:space:]]*rm[[:space:]]+-' "$FF8A_TEARDOWN" || true)"
+check "teardown.sh has NO raw rm — every delete goes through the recorded seam" "0" "${_raw_rm:-0}"
+check "raw-rm scan control: the same scan finds the 2 raw rms in a dirty fixture" "2" \
+  "$(printf '# rm -rf /commented\nrm -rf /x\n  rm -f /y\noc_e2e_destroy /z\n' > "$_ff8a_fix"; grep -cE '^[[:space:]]*rm[[:space:]]+-' "$_ff8a_fix" || true)"
+# …and run_all.sh's trap must reach teardown through the GATE, not directly.
+FF8A_RUNALL="$HERE/../run_all.sh"
+grep -Fq 'oc_e2e_teardown_on_exit' "$FF8A_RUNALL" \
+  && ok "run_all.sh's EXIT trap goes through oc_e2e_teardown_on_exit (the gate)" \
+  || bad "run_all.sh no longer calls oc_e2e_teardown_on_exit — the trap has gone back to being ungated (T-ff8a regression)"
+_direct_td="$(grep -cE 'bash "\$HERE/teardown\.sh"' "$FF8A_RUNALL" || true)"
+check "run_all.sh does not invoke teardown.sh directly (bypassing the gate)" "0" "${_direct_td:-0}"
+
+# 20f) MUTANTS — without them 20b is satisfied by a chain that was never going to
+# delete anything. One edit each, against the THROWAWAY tree's copy of the lib.
+ff8a_mutant() { # ff8a_mutant NAME SED_EXPR
+  local name="$1" expr="$2" mut="$SHIMDIR/ff8a-mut-$1.sh"
+  sed "$expr" "$HERE/../lib/common.sh" > "$mut"
+  if cmp -s "$mut" "$HERE/../lib/common.sh"; then
+    bad "MUT-$name did not change lib/common.sh — the mutation anchor moved; a vacuous mutant proves nothing"
+    return
+  fi
+  local rc; rc="$(ff8a_run run_all.sh "$mut")"
+  local n; n="$(ff8a_recorded)"
+  [[ "$n" -gt 0 ]] \
+    && ok "MUT-$name: with that check removed, a REFUSED setup deletes $n target(s) — 20b is pinned to it" \
+    || bad "MUT-$name: a refused setup still deleted nothing (rc=$rc) — 20b is NOT pinned to this check, it would pass without it"
+  cp "$HERE/../lib/common.sh" "$FF8A_E2E/lib/common.sh"
+}
+# 1. the gate itself: make the armed-check answer yes unconditionally — this is
+#    literally the pre-T-ff8a behaviour ("the trap runs regardless").
+ff8a_mutant gate 's|^oc_e2e_teardown_armed() .*$|oc_e2e_teardown_armed() { return 0; }|'
+# 2. the gate's USE: have the trap helper run teardown without consulting it. The
+#    check can survive as a function and still be wired to nothing.
+ff8a_mutant use 's|^  if ! oc_e2e_teardown_armed; then$|  if false; then|'
+[[ -f "$FF8A_SENTINEL" ]] \
+  && ok "after both mutants, the throwaway sentinel is STILL there — breaking the guard cannot make this test destructive" \
+  || bad "a mutant DELETED the throwaway sentinel — this test file relies on the guard it is testing for its own safety"
+
 echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1
 echo "[tests_guard] all green"

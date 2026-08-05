@@ -39,6 +39,16 @@ if lsof -nP -iTCP:"$OC_E2E_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   exit 2
 fi
 
+# 1b. ARM THE TEARDOWN (T-ff8a). This line is the boundary of the script:
+#     everything above it is a REFUSAL gate that has created nothing, everything
+#     below it creates or destroys. run_all.sh's EXIT trap tears down only an
+#     ARMED run, so a refusal above (each of which `exit 2`s) now leaves the trap
+#     with nothing to do — instead of, as before, ending in the very
+#     `rm -rf "$REPO_ROOT/var/data"` the guard had just refused to allow.
+#     It is armed BEFORE the first mutation, not after setup succeeds: a setup
+#     that dies half-way through HAS created things and must still be cleaned up.
+oc_e2e_arm_teardown
+
 # 2. fresh DB (migrate runs in 2c, after the build steps).
 rm -rf "$REPO_ROOT/var/data"
 
