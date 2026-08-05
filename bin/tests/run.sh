@@ -379,6 +379,24 @@ fi
 # It does now: this assertion is accounted through bad(), so it is enforced by
 # the FAIL count below — and the marker guard, symmetrically, asserts that THIS
 # enforcement line still exists. Neither can be deleted alone without a red.
+# ── main-red notify job in .github/workflows/ci.yml (T-5d3b) ────────────────
+# Static, hermetic: it reads the workflow file and sends nothing. Folded in here
+# because the thing it guards is an ENUMERATION — the notify job's `needs:` list
+# — and a job added without touching that line does not fail anything, it just
+# stops being reported. That is the exact failure shape the notify job exists to
+# remove, so it cannot be left to whoever remembers.
+NOTIFY_GUARD="$HERE/main-red-notify-guard.sh"
+echo
+if [[ -f "$NOTIFY_GUARD" ]]; then
+  if run_guard "$NOTIFY_GUARD"; then
+    ok "main-red notify guard passed"
+  else
+    bad "main-red notify guard FAILED (see output above)"
+  fi
+else
+  bad "bin/tests/main-red-notify-guard.sh is missing"
+fi
+
 echo
 SELF="$HERE/run.sh"
 # Anchored, because this file greps ITSELF: an unanchored -F pattern matches the

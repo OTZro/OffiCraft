@@ -140,11 +140,21 @@ CI 跑在本地、`bin/ci.sh` 是 land 權威，從第一個非零步驟就 fail
 
 **雲端 check（`.github/workflows/ci.yml`）**：`pull_request` **與 push-to-`main`** 兩個觸發（後者由 T-ab2a 補上：在那之前，合併之後沒有任何東西會跑，所以兩個各自綠的 PR 併起來讓主幹變紅時，要等到下一個開 PR 的人繼承那片紅才會有人發現）。兩個觸發跑的是**同一組 job、同一份定義**——刻意不為 `main` 另列一份清單。`main` 上另外**關掉 cancel-in-progress**：被取消的 run 回的是 `cancelled` 而不是紅，那會讓真正弄壞主幹的那顆 commit 完全沒有判決，在 commit 列表上跟「通過了」長得一樣。內容是「雲端跑得動的全部」——**單元測試**（`e2e_test` 的 hermetic isolation-guard、Go 各模組的格式／靜態／編譯／測試、FE typecheck/vitest）、**hygiene**（tracked-file path denylist）、**一致性檢查**（gen-ocapi / FE schema.ts / 主題色票 / 訊息鍵 / 字型白名單的 regenerate-and-diff 漂移閘 + 兩個 token lint）、**黑箱行為**（完整 conformance 套件，起真 ocserverd 綁隔離 port）。它是在乾淨 Linux 機器上的 cross-check，**不是 land 權威**——`bin/ci.sh` 才是。
 
+**主幹紅了誰會知道（T-5d3b）**：上面那句「要等到下一個開 PR 的人繼承那片紅才會有人發現」原本只被修掉一半——判決確實掛在那顆 commit 上了，但「有人收到通知」這半沒有任何機制（GitHub 的預設失敗通知是每個帳號自己的設定，從 repo 這邊讀不到）。現在 workflow 多一個 `notify-main-red` job：**只在 push-to-`main` 且有 job 失敗時**，打一發回呼到維護者（Kyle）的收件匣，內容是一行「哪顆 commit、哪些 job 紅、執行紀錄連結」。owner 裁定（`rc-c2edbfdc36a1`）**只做回呼、不自動開 issue**。
+
+⚠️ **它保證的比你想的少，三條都要知道**：
+
+1. **回呼不會把人叫醒**。收件人離線（換手中）時訊息進佇列，等他上線才讀到 ⇒ 買到的是「**一定會被讀到**」，不是「立刻有人在處理」。
+2. **通知到的是維護者、不是 owner**。要不要往上報由他判斷。
+3. **沒有做「不依賴那個人存活」的那半**（自動開 issue 被 owner 明確排除）。他剛好被換掉、或那台機器掛了，紀錄就仍然只在那顆 commit 上。
+
+另外兩件形狀上的事：**被取消的 run 不會通知**（`failure()` 對 cancelled 為假，與上面「cancelled 不是紅」的立場一致）；**pull request 不會通知**（那是送 PR 的人自己的分支，紅就在他眼前）。`needs:` 那份 job 名字清單由 `bin/tests/main-red-notify-guard.sh` 守著——**新增第四個 job 卻忘了加進去會紅**，而不是安靜地少通知一項。
+
 ⚠️ 子集的定義只有一份、寫在 `bin/ci-cloud.sh`（repo 內的 bash）；workflow YAML 只負責裝釘好版本的 toolchain 然後呼叫它，**裡面沒有、也不准有第二份模組清單或閘門清單**——要加請加進 `bin/ci-cloud.sh`。
 
 ⚠️ **workflow 裡的 go / node 版本釘選是承重的、不是衛生習慣**：一致性檢查斷言的是「重生的位元組與 committed 完全相同」，runner 的 toolchain 一旦浮動超前開發機，這一類就會在「碼完全沒問題」的情況下變紅。
 
-**不在 ubuntu `cloud-gates` 裡的**：`bin/tests/run.sh`（Linux 上目前有 16 條 assertion 失敗；根因是 BSD/GNU `mktemp -t` 語意、SIGPIPE 與 macOS 形狀的 `install.sh` fixture，尚未移植）、Playwright CT（真瀏覽器版面守衛；macOS↔Linux 的字型與光柵化差異會讓紅燈的意思從「版面壞了」變成「runner 字型不同」，而 Linux 那一側**從來沒被量過**）、gitleaks（內容級機密掃描）、`e2e_test` 的真機端到端測試（要真的 fleet host）。⚠️ **「不在 cloud-gates」不等於「只跑在本機」**：這四項現在都有 macOS runner 上的 job——前三項在 `macos-host-gates`（`bin/ci-macos-host.sh`；CT 由 T-0fef 接上，在那之前它確實只跑在一台開發機上），`e2e_test` 在 `macos-e2e`（T-ff8a）。tracked-file path denylist 與 `e2e_test` 的 hermetic isolation-guard 已在雲端流程執行。整條雲端流程不用任何 secret，所以 fork PR 也能跑完整。
+**不在 ubuntu `cloud-gates` 裡的**：`bin/tests/run.sh`（Linux 上目前有 16 條 assertion 失敗；根因是 BSD/GNU `mktemp -t` 語意、SIGPIPE 與 macOS 形狀的 `install.sh` fixture，尚未移植）、Playwright CT（真瀏覽器版面守衛；macOS↔Linux 的字型與光柵化差異會讓紅燈的意思從「版面壞了」變成「runner 字型不同」，而 Linux 那一側**從來沒被量過**）、gitleaks（內容級機密掃描）、`e2e_test` 的真機端到端測試（要真的 fleet host）。⚠️ **「不在 cloud-gates」不等於「只跑在本機」**：這四項現在都有 macOS runner 上的 job——前三項在 `macos-host-gates`（`bin/ci-macos-host.sh`；CT 由 T-0fef 接上，在那之前它確實只跑在一台開發機上），`e2e_test` 在 `macos-e2e`（T-ff8a）。tracked-file path denylist 與 `e2e_test` 的 hermetic isolation-guard 已在雲端流程執行。**雲端流程的每一道閘都不用任何 secret，所以 fork PR 也能跑完整**——T-5d3b 之後 workflow 裡確實有一個 secret（`notify-main-red` 用的回呼網址），但它**不是閘**、只在 push-to-`main` 那條路徑上跑，而 fork PR 本來就拿不到 repo 的 secret ⇒ 對 pull request 而言上面那句性質一字未變。⚠️ 把 secret 加進**任何一道閘**就會改掉它（fork PR 會變成跑一份比我們小的檢查）。
 
 **Go 測試一律 `-count=1`（T-bedc）**：CI step 1e 是 `go test -count=1 ./...`，`-count=1` 是「不吃 go 的測試結果快取」，**不可省**。省掉的後果是實測過的——log 裡出現 `ok  ocwarden  (cached)`，那格綠燈認證的是一次**根本沒執行**的跑。兩個獨立理由：(a) 快取 key 只涵蓋 package 的**輸入**，不涵蓋測試真正碰的世界（port、時鐘、launchd、host fleet、staged embed assets 的**效果**），所以今天會紅的 package 照樣報 ok；(b) 它**結構性地藏 flake**——一個 suite 只在「第一個改到它輸入的 commit」上跑過一次，間歇性失敗於是被攤平到近乎零觀測機率，`[ci] all green` 變成在講快取而不是在講碼。可執行形式是 `bin/tests/go-test-nocache-guard.sh`（CI step 0b 派出）：它以**命令位置解析**（不是 substring grep——那會匹配到 ci.sh 與守衛自己的說明文字）掃全 repo 的 shell 腳本，任何 `go test` 呼叫點少了 `-count=1` 就紅。注意 `go build` / `go vet` 的快取**刻意不管**：那是對編譯本身做 content-addressed，命中等價於未命中；只有**測試結果**快取會宣稱「行為被觀察過」而其實沒有。
 
