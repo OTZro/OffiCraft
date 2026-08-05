@@ -275,8 +275,22 @@ func runDatabaseBackup(db *sql.DB, dbPath string, reason backupReason, now time.
 		return res, fmt.Errorf("create backup dir: %w", err)
 	}
 
-	// Report on the state we are walking into BEFORE writing, so "the cadence
-	// had stopped and nobody noticed" is visible in the run that resumes it.
+	// Report on the state we are walking into BEFORE writing, so "there was no
+	// recent retreat point and nobody noticed" is visible in the run that
+	// creates one.
+	//
+	// 🔴 This one deliberately keeps newestBackupTime — it is NOT the same
+	// question backupTick and backup_health.go ask, and aligning it would be a
+	// change of meaning dressed up as consistency. Those two ask "is the
+	// SCHEDULE alive?", for which only a scheduled backup is evidence. This asks
+	// "was there ANY restorable snapshot here when I arrived?", and a
+	// pre-migration file from an hour ago genuinely IS one — it restores exactly
+	// as well as a scheduled one. Narrowing it would make `ocserverd backup` on
+	// a machine that has never run `serve` announce a dead schedule that does
+	// not exist, and this field gates nothing: its only consumer is the log line
+	// below. The schedule-liveness claim now has a durable, cockpit-visible
+	// owner (backupHealthMonitor), so this line stops making it — see
+	// logBackupOutcome.
 	if newest, ok := newestBackupTime(dir); ok {
 		if age := now.Sub(newest); age > backupStaleFactor*backupInterval {
 			res.Stale, res.StaleAge = true, age.Round(time.Minute).String()
@@ -414,9 +428,17 @@ func rotateBackups(dbPath string, keep int) ([]string, error) {
 // through it so a reader of the log never has to know which one fired.
 func logBackupOutcome(res backupResult, err error) {
 	if res.Stale && res.StaleAge != "" {
-		// Deliberately its own line: "the schedule had stopped" and "this run
-		// worked" are different facts and a reader must be able to see both.
-		log.Printf("[backup] WARNING newest existing backup was stale (%s) — the schedule may have stopped running", res.StaleAge)
+		// Deliberately its own line: "there was no recent retreat point" and
+		// "this run worked" are different facts and a reader must be able to see
+		// both.
+		//
+		// 🔴 It no longer says "the schedule may have stopped running". Stale
+		// here counts backups of EVERY reason (see runDatabaseBackup), so it
+		// cannot support a claim about the schedule specifically — a directory
+		// full of pre-migration snapshots satisfies it while the cadence is
+		// dead. That claim belongs to backupHealthMonitor, which measures
+		// scheduled backups only and is durable and visible in the cockpit.
+		log.Printf("[backup] WARNING newest existing backup was stale (%s) — this studio had no recent retreat point", res.StaleAge)
 	}
 	switch {
 	case err != nil:
@@ -452,9 +474,37 @@ func startBackupCadence(db *sql.DB, dbPath string, tick time.Duration, health *b
 // backupTick is ONE evaluation, split out so the decision can be tested without
 // waiting on a clock. taken=false means a backup was not DUE — which is the
 // normal answer and is deliberately silent, unlike a failure or a skip.
+//
+// 🔴 It asks newestScheduledBackup — the SAME question, through the SAME
+// function, that the staleness alarm asks (backup_health.go). It used to ask
+// newestBackupTime, which counts every file in the directory regardless of
+// reason, and that one-word difference was a real defect on this machine:
+//
+//	officraft-20260804-123056-premigration.db  +6h = 183056
+//	officraft-20260804-183057-scheduled.db     ← the next scheduled one, 1s later
+//
+// The scheduled backup before it was at 042534, so the SCHEDULE had a 14h05m
+// hole while the directory looked busy. It happened three times in three days
+// (0802-103012→0803-004908, 0803-075043→0803-222534, 0804-042534→0804-183057),
+// each time one second after a pre-migration snapshot aged out of the interval.
+// One `ocserverd` upgrade deferred the cadence by a full backupInterval; a
+// stretch of upgrades deferred it past the 12h alarm window, so the alarm was
+// telling the truth and the cadence was the thing that was wrong.
+//
+// 🔴 The contradiction was INSIDE this file. backupPoolOf gives pre-migration
+// snapshots their own quota precisely because they are NOT interchangeable with
+// routine coverage (see backupPoolPreMigration) — while this tick was treating
+// one as a substitute for the routine backup it displaced. Widening the alarm
+// instead would have been the wrong repair: with 18 pre-migration snapshots on
+// this machine in five days, a cadence that had stopped completely would have
+// stayed green.
+//
+// The cost is accepted and small: a snapshot taken by hand no longer defers the
+// schedule either, so a manual backup may be followed by a scheduled one within
+// the tick. They share the routine quota, rotation MOVES rather than deletes,
+// and the pre-migration pool is untouchable by it.
 func backupTick(db *sql.DB, dbPath string, now time.Time, health *backupHealthMonitor) (taken bool) {
-	dir := backupDirFor(dbPath)
-	if newest, ok := newestBackupTime(dir); ok && now.Sub(newest) < backupInterval {
+	if newest, ok := newestScheduledBackup(dbPath); ok && now.Sub(newest) < backupInterval {
 		return false
 	}
 	res, err := runDatabaseBackup(db, dbPath, backupReasonScheduled, now)
