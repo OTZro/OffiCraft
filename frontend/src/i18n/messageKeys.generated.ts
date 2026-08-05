@@ -619,6 +619,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "settings.historyCurrentLabel",
   "settings.historyDefaultBadge",
   "settings.historyDefaultContent",
+  "settings.historyDefaultUnreadable",
   "settings.historyDeleteNote",
   "settings.historyDiffNote",
   "settings.historyDiffPending",

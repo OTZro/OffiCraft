@@ -620,6 +620,7 @@ var messageKeys = map[string]bool{
 	"settings.historyCurrentLabel":             true,
 	"settings.historyDefaultBadge":             true,
 	"settings.historyDefaultContent":           true,
+	"settings.historyDefaultUnreadable":        true,
 	"settings.historyDeleteNote":               true,
 	"settings.historyDiffNote":                 true,
 	"settings.historyDiffPending":              true,

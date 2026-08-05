@@ -112,6 +112,15 @@ describe("mockApi · document history", () => {
       "assistant"
     );
     expect(seedVersion.content.tombstoned).toBe("true");
+    // 🔴 TWO STATEMENTS, deliberately not one (T-40f0 node 11). This used to
+    // assert `role.definitionMd === seedVersion.content.definition_md` after
+    // the restore — one sentence that quietly claimed "what a tombstoned
+    // revision STORES equals what the document folds to". On the real server
+    // that is FALSE: the stored column is empty and the seed is supplied by the
+    // fold. Writing it as one equality made the display-layer defect (the diff
+    // announcing that restoring would wipe the document) unrepresentable in
+    // any mock-built fixture.
+    expect(seedVersion.content.definition_md).toBe("");
 
     await mockApi.restoreDocumentHistory(
       "role_definition",
@@ -120,7 +129,14 @@ describe("mockApi · document history", () => {
     );
     const role = await mockApi.getRole("assistant");
     expect(role.isDefault).toBe(true);
-    expect(role.definitionMd).toBe(seedVersion.content.definition_md);
+    // …and the FOLD is where the seed text comes back — non-empty, and not the
+    // rewrite it replaced.
+    expect(role.definitionMd.length).toBeGreaterThan(0);
+    expect(role.definitionMd).not.toBe("second rewrite");
+    expect(role.definitionMd).toBe(
+      (await mockApi.getDocumentSeed("role_definition", "assistant")).content
+        .definition_md
+    );
   });
 
   // T-1f39 split the manual's one four-field bundle into TWO independent

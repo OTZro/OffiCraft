@@ -51,8 +51,16 @@ async function openReader(opts: {
   /** A document that ships a default — the reset's presence is what grows the
    * 初始版本 row AND what makes the host fetch the seed at all. */
   hasSeed?: boolean;
+  /** Make the seed GET REJECT — the real degraded state (a flaky server, or a
+   * kind whose /seed route 404s). */
+  seedFails?: boolean;
 }) {
   vi.spyOn(mockApi, "listDocumentHistory").mockResolvedValue([opts.revision]);
+  if (opts.seedFails) {
+    vi.spyOn(mockApi, "getDocumentSeed").mockRejectedValue(
+      new Error("seed GET failed")
+    );
+  }
   const utils = render(
     <I18nProvider>
       <DocumentHistoryEntry
@@ -234,6 +242,111 @@ describe("DocumentHistoryEntry · a tombstoned revision is the shipped default",
     expect(rows[0]?.querySelectorAll("td")[3]?.textContent).toBe(
       "owner 寫的區塊"
     );
+
+    // …and the CONTENT pane names the reason that pane is empty. For this one
+    // kind the shipped default really is the empty document, so the pane has
+    // nothing to render — but 「這個版本沒有任何內容」 would still be the wrong
+    // sentence, because the reason is the tombstone, not emptiness.
+    fireEvent.click(utils.getByTestId("doc-history-pane-content"));
+    const modal = utils.getByTestId("doc-history-modal");
+    expect(modal.textContent).toContain(s.historyModalDefaultContent);
+    expect(modal.textContent).not.toContain(s.historyModalEmpty);
+  });
+
+  // ── the seed could not be read ────────────────────────────────────────────
+  // The substitution has an input, and that input can be missing: the seed GET
+  // fails, or the kind ships no /seed route at all. Falling back to the empty
+  // text column there resurrects the original lie under a green suite — this is
+  // the branch that stops it.
+  it("refuses to paint a wipe when the default cannot be READ", async () => {
+    const utils = await openReader({
+      kind: "role_definition",
+      docKey: "assistant",
+      revision: retained({ definition_md: "", tombstoned: "true" }),
+      currentContent: { definition_md: ["第一行", "第二行", "第三行"].join("\n") },
+      seedFails: true,
+    });
+
+    fireEvent.click(utils.getByTestId("doc-history-open-42"));
+    fireEvent.click(await utils.findByTestId("doc-history-pane-diff"));
+
+    // 🔴 THE WIPE ASSERTION COMES FIRST, on purpose. If the notice were checked
+    // first, a regression here would report "the notice is missing" — true, but
+    // it buries the thing that actually matters, which is that the pane went
+    // back to drawing the whole live document as an addition on top of nothing.
+    // Assertion order is what decides which sentence the next person reads.
+    await waitFor(() => expect(utils.getByTestId("doc-history-modal")).toBeTruthy());
+    expect(markers(utils.container)).toHaveLength(0);
+    expect(utils.container.querySelector(".diff-view")).toBeNull();
+    // …and instead of a diff, the pane says why it has none.
+    expect(utils.getByTestId("doc-history-default-unreadable")).toBeTruthy();
+
+    // …the same story in the other pane, and restore stays live: putting the
+    // document back on its default needs nothing from this client.
+    fireEvent.click(utils.getByTestId("doc-history-pane-content"));
+    expect(utils.getByTestId("doc-history-default-unreadable")).toBeTruthy();
+    expect(
+      (utils.getByTestId("doc-history-modal-restore") as HTMLButtonElement)
+        .disabled
+    ).toBe(false);
+  });
+
+  it("names the RIGHT version when it says the default cannot be read", async () => {
+    // 「初始版本的內容目前讀不到…還原成初始版本仍然可以執行」 was written for the
+    // 初始版本 ROW. Printed on a revision that has an id, a timestamp and an
+    // author, it misidentifies the version standing next to a destructive
+    // button — the same family of defect as the diff this file exists to fix.
+    const utils = await openReader({
+      kind: "role_definition",
+      docKey: "assistant",
+      revision: retained({ definition_md: "", tombstoned: "true" }),
+      currentContent: { definition_md: "owner 的版本" },
+      seedFails: true,
+    });
+
+    fireEvent.click(utils.getByTestId("doc-history-open-42"));
+    const notice = await utils.findByTestId("doc-history-default-unreadable");
+    expect(notice.textContent).toBe(s.historyDefaultUnreadable);
+    // The 初始版本 row's own sentence must NOT be what a retained revision says.
+    expect(notice.textContent).not.toBe(s.historySeedUnavailable);
+    expect(
+      utils.queryByTestId("doc-history-seed-unavailable")
+    ).toBeNull();
+  });
+
+  // ── insight: the third kind, now with a witness ───────────────────────────
+  // `api/mock.ts` used to 404 this document's /seed while the server has served
+  // it since T-6501, so until now this kind's only observable change was one
+  // wrong screen swapped for another. Same shape as the role_definition case
+  // above, on the kind the owner's screenshot actually came from.
+  it("diffs a tombstoned INSIGHT revision as its per-role seed", async () => {
+    const seed = (await mockApi.getDocumentSeed("insight", "assistant")).content
+      .text;
+    const seedLines = seed.split("\n");
+    expect(seedLines.length).toBeGreaterThan(2);
+
+    const utils = await openReader({
+      kind: "insight",
+      docKey: "assistant",
+      // api_insight.go:195 — `Insight{RoleKey: roleKey, Tombstoned: true}`, so
+      // the text column is the zero value here too.
+      revision: retained({ text: "", tombstoned: "true" }),
+      currentContent: {
+        text: ["owner 改寫的第一行", ...seedLines.slice(1)].join("\n"),
+      },
+    });
+
+    fireEvent.click(utils.getByTestId("doc-history-open-42"));
+    fireEvent.click(await utils.findByTestId("doc-history-pane-diff"));
+    const drawn = await waitFor(() => {
+      const found = markers(utils.container);
+      expect(found.length).toBeGreaterThan(0);
+      return found;
+    });
+
+    expect(drawn.filter((m) => m === "+")).toHaveLength(1);
+    expect(drawn.filter((m) => m === "-")).toHaveLength(1);
+    expect(drawn.filter((m) => m !== "+" && m !== "-").length).toBeGreaterThan(0);
   });
 });
 

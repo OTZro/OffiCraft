@@ -44,8 +44,23 @@
 // leaves behind. That is why the substitution happens here rather than in
 // `documentFields`/`comparedFieldNames` — those are shape functions with no
 // notion of a document's default — and why it is here rather than in each host
-// card: `insight`, `role_definition` and `lessons` share this snapshot shape,
-// so one fix covers all three surfaces.
+// card: every kind whose snapshot carries a `tombstoned` flag goes through this
+// one reader.
+//
+// WHAT THAT REACH ACTUALLY IS, stated honestly rather than as a slogan:
+//   * `role_definition` and `global_context` — verified end to end (a retained
+//     tombstone opened through DocumentHistoryEntry against the shared mock).
+//   * `insight` — verified end to end since `api/mock.ts` learned to serve its
+//     seed; before that the mock 404'd where the server answers, so the cockpit
+//     could only ever trade one wrong screen for a differently wrong one.
+//   * `lessons` — NOT reachable today, and saying "one fix covers lessons too"
+//     was a blank cheque. `Lessons.Tombstoned` has exactly one writer that can
+//     set it true (`restoreDocumentHistory`), and both ordinary write doors
+//     (api_roles.go's replace and patch) hard-code `false`. There is no
+//     `reset_lessons` route and no reset tool, so the state cannot bootstrap
+//     itself. If anyone ever adds one, a tombstoned lessons revision lands
+//     straight in the "the default cannot be read" branch below — `lessons` has
+//     no `onReset`, so its host never fetches a seed to substitute.
 //
 // 🔴 The CAP verdict deliberately still judges `version.content`, NOT the
 // effective content: the server's restore checks `content["text"]` too (it
@@ -188,8 +203,22 @@ export function DocumentHistoryModal({
   const tombstoned = version.content.tombstoned === "true";
   const effectiveContent = tombstoned && !seed ? seedContent : version.content;
   // Neither pane may call a tombstoned revision empty when the default could
-  // not be read — that is a different, and false, statement.
+  // not be read — that is a different, and false, statement. This branch is
+  // LOAD-BEARING, not a formality: without it a tombstoned retained revision
+  // whose seed GET failed falls straight back to the empty text column and the
+  // diff paints the whole live document as an addition — the exact lie this
+  // file exists to stop, resurrected under a green suite.
   const contentUnreadable = seedUnavailable || effectiveContent === undefined;
+  /** …and it must say so in ITS OWN words. `historySeedUnavailable` names 初始
+   * 版本 twice; printed on a revision that HAS an id, a timestamp and an author
+   * it misidentifies the version standing next to a destructive button, which
+   * is the same family of defect as the one above. */
+  const unreadableNotice = seedUnavailable
+    ? t.settings.historySeedUnavailable
+    : t.settings.historyDefaultUnreadable;
+  const unreadableTestId = seedUnavailable
+    ? "doc-history-seed-unavailable"
+    : "doc-history-default-unreadable";
   const content = effectiveContent ?? {};
 
   const blockedFields = docCapBlockedFields(
@@ -310,11 +339,8 @@ export function DocumentHistoryModal({
             * would be a different — and false — claim, so both panes say what
             * actually happened and the footer's restore stays live. */}
           {contentUnreadable ? (
-            <p
-              className="doc-hist-modal__notice"
-              data-testid="doc-history-seed-unavailable"
-            >
-              {t.settings.historySeedUnavailable}
+            <p className="doc-hist-modal__notice" data-testid={unreadableTestId}>
+              {unreadableNotice}
             </p>
           ) : pane === "content" ? (
             fields.length === 0 ? (
