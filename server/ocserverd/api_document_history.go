@@ -236,8 +236,9 @@ func (s *apiServer) HandleListDocumentHistoryApiDocumentHistoryKindKeyGet(w http
 // cockpit hand it to the very same reader/diff the retained versions use.
 //
 // The second return is "this document HAS a shipped default". It is true for
-// exactly the two documents that own a reset route (`POST
-// /api/global-context/reset`, `POST /api/roles/{role}/reset` on a SEED role) and
+// exactly the THREE documents that own a reset route (`POST
+// /api/global-context/reset`, `POST /api/roles/{role}/reset` on a SEED role,
+// `POST /api/insight/{role_key}/reset` on a role with an insight seed) and
 // false everywhere else, so the 404 here lands in exactly the places the reset
 // itself 404s. That symmetry is the point: the cockpit renders its 初始版本 row
 // from the presence of a reset, and a row whose "compare" 404s while its
@@ -265,6 +266,26 @@ func (s *apiServer) documentSeedContent(kind, key string) (map[string]string, bo
 			return nil, false, nil
 		}
 		return map[string]string{"definition_md": seedMD, "tombstoned": "true"}, true, nil
+	case "insight":
+		// 🔴 `text`, NOT `definition_md` — that is the field name
+		// insightHistorySnapshot writes into a retained insight revision, and
+		// the cockpit diffs the two maps key-by-key. Naming it after the role
+		// definition's field would not error anywhere: the modal would simply
+		// render 「沒有差異」 against every retained version, which is the worst
+		// possible way to be wrong about a destructive restore.
+		//
+		// The roster is the SET OF FILES (seeds/insight_<role_key>.md), not
+		// seedRoleKeys() — see seedInsightMD. So this is per-role by
+		// construction and 404s for a role with no insight seed, which is
+		// exactly where `POST /api/insight/{role_key}/reset` 404s too.
+		seedMD, hasSeed, err := s.root.seedInsightMD(key)
+		if err != nil {
+			return nil, false, err
+		}
+		if !hasSeed {
+			return nil, false, nil
+		}
+		return map[string]string{"text": seedMD, "tombstoned": "true"}, true, nil
 	}
 	return nil, false, nil
 }
