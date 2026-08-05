@@ -230,3 +230,73 @@ func TestGetDocumentSeed_RefusesTheRetiredManualKindByName(t *testing.T) {
 		t.Fatalf("retired-kind refusal must name the replacements: %s", got.Body.String())
 	}
 }
+
+// The seeded role's INSIGHT default is the per-role file seed, under the same
+// `text` field name a retained insight revision carries
+// (insightHistorySnapshot).
+//
+// 🔴 THIS IS THE THIRD RESET ROUTE, and it was missing from documentSeedContent
+// while `InsightDTO.has_seed` already said the default exists. That pair is the
+// bug: the cockpit gates the 初始版本 row on has_seed=true, so the row rendered
+// and opened, and then the modal could not read what the row was for. The 404
+// set must equal the RESET-404 set, and `POST /api/insight/{role_key}/reset`
+// does not 404 here.
+func TestGetDocumentSeed_SeedRoleInsightReturnsTheFileSeedUnderTheRevisionFieldName(t *testing.T) {
+	api := newTasksTestServer(t)
+	// Overwrite the doc first: the seed must come from the FILE, never from
+	// whatever the live document happens to say now.
+	rec := httptest.NewRecorder()
+	api.HandleReplaceInsightApiInsightRoleKeyPost(rec, taskReq(t, http.MethodPost,
+		"/api/insight/assistant", map[string]any{"text": "owner's rewrite"}, "owner", "owner"), "assistant")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("insight write: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	dto := decodeDocumentSeed(t, getDocumentSeed(t, api, "insight", "assistant", "owner", "owner"))
+	if dto.Kind != "insight" || dto.Key != "assistant" {
+		t.Fatalf("seed echo = %q/%q, want insight/assistant", dto.Kind, dto.Key)
+	}
+	wantMD, hasSeed, err := api.root.seedInsightMD("assistant")
+	if err != nil || !hasSeed {
+		t.Fatalf("fixture: seed insight unreadable (hasSeed=%v err=%v)", hasSeed, err)
+	}
+	if wantMD == "" {
+		t.Fatal("fixture: the seed insight is empty — this test would be vacuous")
+	}
+	// 🔴 `text`, not `definition_md`: the diff in DocumentHistoryModal compares
+	// this map against a retained revision's map key-by-key, so the wrong field
+	// name shows up as "no differences" rather than as an error.
+	if dto.Content["text"] != wantMD {
+		t.Fatalf("seed text = %q, want the file seed %q", dto.Content["text"], wantMD)
+	}
+	if dto.Content["text"] == "owner's rewrite" {
+		t.Fatal("the seed read handed back the LIVE document, not the shipped default")
+	}
+	if dto.Content["tombstoned"] != "true" {
+		t.Fatalf("seed content = %+v, want tombstoned=true (a reset writes the tombstone)", dto.Content)
+	}
+}
+
+// The 200/404 split for insight is per-ROLE, because the insight seed roster is
+// the SET OF FILES (seeds/insight_<role>.md) — not the role roster. A custom
+// role has no insight seed, its reset 404s, and so must this read.
+func TestGetDocumentSeed_InsightIsPerRoleNotBlanket(t *testing.T) {
+	api := newTasksTestServer(t)
+	rec := httptest.NewRecorder()
+	api.HandleCreateRoleApiRolesPost(rec, taskReq(t, http.MethodPost, "/api/roles",
+		map[string]any{"name": "Seedless Role"}, "owner", "owner"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create role: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var created roleCreateResultDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if got := getDocumentSeed(t, api, "insight", created.Role.Key, "owner", "owner"); got.Code != http.StatusNotFound {
+		t.Fatalf("custom role insight: status=%d body=%s, want 404", got.Code, got.Body.String())
+	}
+	// Positive control: the seeded role in the same test answers 200.
+	if got := getDocumentSeed(t, api, "insight", "assistant", "owner", "owner"); got.Code != http.StatusOK {
+		t.Fatalf("seed role insight: status=%d body=%s, want 200", got.Code, got.Body.String())
+	}
+}

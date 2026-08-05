@@ -132,7 +132,21 @@ func (m *backupHealthMonitor) baselineAt(now time.Time) (time.Time, error) {
 		// what "never ran" is measured against — half-reading one is worse than
 		// re-arming.
 		if ts, err := strconv.ParseFloat(strings.TrimSpace(*raw), 64); err == nil && ts > 0 {
-			return time.Unix(0, int64(ts*float64(time.Second))), nil
+			baseline := time.Unix(0, int64(ts*float64(time.Second)))
+			// 🔴 A baseline in the FUTURE is the same class of unusable value as
+			// a corrupt one, and it fails in the silent direction: "never ran"
+			// is `now.Sub(baseline) > backupStaleAfter()`, which is FALSE for
+			// every negative value, so a clock that stepped backwards after this
+			// row was written means the never-ran alarm can NEVER fire again on
+			// this installation. Re-arm it (write-once is about restarts pushing
+			// the deadline out, not about honouring a measuring stick that
+			// points the wrong way): the cost is bounded at one more grace
+			// window, and it HEALS the durable row instead of re-deciding every
+			// pass. Clamping in decideBackupHealth would leave the bogus value
+			// in the database forever.
+			if !baseline.After(now) {
+				return baseline, nil
+			}
 		}
 		// A corrupt baseline is re-armed rather than trusted: an unparseable
 		// value must not silently become "epoch", which would read as "this
@@ -167,11 +181,46 @@ func (m *backupHealthMonitor) save(st backupHealthState) error {
 	return m.store.PutSetting(settingBackupHealth, string(blob))
 }
 
-// newestScheduledBackup reports the newest SCHEDULED backup in the directory.
+// newestScheduledBackup reports the newest SCHEDULED backup that had ALREADY
+// HAPPENED as of `now`.
+//
 // Manual and pre-migration snapshots are deliberately invisible here — see the
 // file header: counting them would let a human taking a snapshot, or an
 // upgrade, hide a dead cadence.
-func newestScheduledBackup(dbPath string) (time.Time, bool) {
+//
+// 🔴 A STAMP IN THE FUTURE IS NOT EVIDENCE OF ANYTHING, and skipping it here is
+// the whole repair for a silent, total backup outage. Every caller of this
+// function subtracts the answer from a clock, and `now.Sub(future) < interval`
+// is TRUE for every negative value, so one future-stamped file made
+// backupTick answer "just backed up" (⇒ never backs up again) and
+// decideBackupHealth answer "very fresh" (⇒ green). Backups stop and the
+// cockpit stays green — an under-report, strictly worse than the over-report
+// this ticket was opened for, because nothing ever calls out. An NTP
+// correction, a restored VM snapshot or a dead RTC all produce it.
+//
+// 🔴 WHY THE FILTER LIVES HERE AND NOWHERE ELSE. This ticket exists because
+// "when did the schedule last run?" had TWO approximate implementations. Adding
+// a second future-check inside decideBackupHealth (or in backupTick) would
+// recreate exactly that. There are four production callers — backupTick and
+// three in this file — and fixing the shared question fixes all four at once
+// and keeps them unable to disagree. The two sides are held by SEPARATE tests
+// driving SEPARATE entry points (see backup_cadence_t18c3_test.go), so coverage
+// is per-side even though the implementation is single.
+//
+// 🔴 WHY SKIP RATHER THAN "TREAT AS INFINITELY OLD". Calling a future stamp
+// ancient sounds conservative and is a trap: the tick would back up, but the
+// bogus file is STILL the newest one, so the next tick 15 minutes later would
+// back up again, and again, for as long as the clock is behind — filling the
+// disk and rotating the real history out of the routine pool within one
+// interval. Skipping converges instead: the snapshot this tick writes is
+// stamped `now`, is therefore not in the future, and immediately becomes the
+// answer. Cost of the whole incident: ONE extra snapshot.
+//
+// There is deliberately no skew grace. A grace re-opens the starvation window
+// by exactly its own width, and its width is a number nobody can calibrate;
+// meanwhile the cost of having none is bounded at that same one extra snapshot,
+// which is the direction this module always errs in.
+func newestScheduledBackup(dbPath string, now time.Time) (time.Time, bool) {
 	files, err := backupFilesIn(backupDirFor(dbPath))
 	if err != nil {
 		return time.Time{}, false
@@ -180,9 +229,11 @@ func newestScheduledBackup(dbPath string) (time.Time, bool) {
 		if backupReasonIn(f.Name()) != backupReasonScheduled {
 			continue
 		}
-		if ts, ok := parseBackupStamp(f.Name()); ok {
-			return ts, true
+		ts, ok := parseBackupStamp(f.Name())
+		if !ok || ts.After(now) {
+			continue
 		}
+		return ts, true
 	}
 	return time.Time{}, false
 }
@@ -251,7 +302,7 @@ func (m *backupHealthMonitor) evaluate(now time.Time) (backupHealthState, error)
 	if prev != nil && prev.Code == backupHealthCodeFailed {
 		failTS, failDetail = prev.SinceTS, prev.Detail
 	}
-	newest, hasNewest := newestScheduledBackup(m.dbPath)
+	newest, hasNewest := newestScheduledBackup(m.dbPath, now)
 	next := decideBackupHealth(now, baseline, newest, hasNewest, failTS, failDetail)
 
 	if next.Code != "" {
@@ -288,7 +339,7 @@ func (m *backupHealthMonitor) noteScheduledOutcome(res backupResult, runErr erro
 	failed := runErr != nil || res.Skipped != ""
 	if !failed {
 		// A scheduled backup landed. That — and only that — clears an incident.
-		newest, hasNewest := newestScheduledBackup(m.dbPath)
+		newest, hasNewest := newestScheduledBackup(m.dbPath, now)
 		st := backupHealthState{CheckedTS: epochOf(now)}
 		if hasNewest {
 			st.NewestBackupTS = epochOf(newest)
@@ -310,7 +361,7 @@ func (m *backupHealthMonitor) noteScheduledOutcome(res backupResult, runErr erro
 		SinceTS:   epochOf(now),
 		CheckedTS: epochOf(now),
 	}
-	if newest, ok := newestScheduledBackup(m.dbPath); ok {
+	if newest, ok := newestScheduledBackup(m.dbPath, now); ok {
 		st.NewestBackupTS = epochOf(newest)
 	}
 	if prev != nil && prev.Code == backupHealthCodeFailed && prev.SinceTS > 0 {
