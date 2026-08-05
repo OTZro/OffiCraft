@@ -1491,11 +1491,26 @@ check "raw-rm scan control: the same scan finds the 2 raw rms in a dirty fixture
   "$(printf '# rm -rf /commented\nrm -rf /x\n  rm -f /y\noc_e2e_destroy /z\n' > "$_ff8a_fix"; grep -cE '^[[:space:]]*rm[[:space:]]+-' "$_ff8a_fix" || true)"
 # …and run_all.sh's trap must reach teardown through the GATE, not directly.
 FF8A_RUNALL="$HERE/../run_all.sh"
-grep -Fq 'oc_e2e_teardown_on_exit' "$FF8A_RUNALL" \
-  && ok "run_all.sh's EXIT trap goes through oc_e2e_teardown_on_exit (the gate)" \
-  || bad "run_all.sh no longer calls oc_e2e_teardown_on_exit — the trap has gone back to being ungated (T-ff8a regression)"
-_direct_td="$(grep -cE 'bash "\$HERE/teardown\.sh"' "$FF8A_RUNALL" || true)"
+# NON-COMMENT lines only, on both scans. A plain `grep -F oc_e2e_teardown_on_exit`
+# matched the COMMENT above the trap — so restoring the old ungated cleanup body
+# left this assertion green while the name it was looking for survived only as
+# prose. Verified against the real mutant: the loose form stayed green, this one
+# does not. The comment is where the name is MOST likely to linger, which makes
+# it the worst possible thing to accept as evidence.
+_gated="$(grep -cE '^[^#]*oc_e2e_teardown_on_exit' "$FF8A_RUNALL" || true)"
+[[ "${_gated:-0}" -gt 0 ]] \
+  && ok "run_all.sh's EXIT trap goes through oc_e2e_teardown_on_exit (the gate), in CODE not a comment" \
+  || bad "run_all.sh no longer calls oc_e2e_teardown_on_exit outside a comment — the trap has gone back to being ungated (T-ff8a regression)"
+_direct_td="$(grep -cE '^[^#]*bash "\$HERE/teardown\.sh"' "$FF8A_RUNALL" || true)"
 check "run_all.sh does not invoke teardown.sh directly (bypassing the gate)" "0" "${_direct_td:-0}"
+# CONTROL for both: the SAME two scans over a fixture carrying the pre-T-ff8a
+# cleanup body, with the gate's name present only as prose.
+{ printf '# oc_e2e_teardown_on_exit — named in a comment only\n'
+  printf 'cleanup() { bash "$HERE/teardown.sh" || true; }\n'; } > "$_ff8a_fix"
+check "trap-scan control: the gate scan counts 0 when the name appears only in a comment" \
+  "0" "$(grep -cE '^[^#]*oc_e2e_teardown_on_exit' "$_ff8a_fix" || true)"
+check "trap-scan control: the direct-call scan counts 1 on the pre-T-ff8a cleanup body" \
+  "1" "$(grep -cE '^[^#]*bash "\$HERE/teardown\.sh"' "$_ff8a_fix" || true)"
 
 # 20f) MUTANTS — without them 20b is satisfied by a chain that was never going to
 # delete anything. One edit each, against the THROWAWAY tree's copy of the lib.
