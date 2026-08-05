@@ -85,6 +85,3 @@ func exitStatusFromWait(status syscall.WaitStatus) int {
 	}
 	return status.ExitStatus()
 }
-
-// MUTANT 3/4 for T-ab2a — reverted next commit. Proves the TCC anchor check reddens
-// when this module source moves without an explicit binary refresh.
