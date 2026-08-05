@@ -41,8 +41,11 @@ package main
 // very guard under test still cannot touch production backups or trash.
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -229,4 +232,104 @@ func TestBackupCadence_AStoppedScheduleStillAlarms(t *testing.T) {
 				got.Status, got.Code, got.Detail, backupHealthUnhealthy, backupHealthCodeFailed)
 		}
 	})
+}
+
+// TestRunDatabaseBackup_AnyRestorableSnapshotIsARetreatPoint is the THIRD
+// newestBackupTime call site — the one this ticket deliberately did NOT align —
+// asserted ON PURPOSE instead of by accident.
+//
+// 🔴 WHY THIS EXISTS SEPARATELY. Until now the only thing holding that site in
+// place was TestRunDatabaseBackup_ReportsStaleness, and only by coincidence:
+// every backup in that test happens to be `manual`, so narrowing this site to
+// scheduled-only would have turned it red. But that test's stated purpose is
+// the "never ran" alarm, so nobody reading it knows it is also carrying this
+// second job — swap its fixture to `scheduled` and the guard disappears with no
+// signal whatsoever.
+//
+// What is asserted here is the sentence runDatabaseBackup's own comment makes:
+// "was there ANY restorable snapshot here when I arrived?" A pre-migration file
+// from an hour ago IS one — it restores exactly as well as a scheduled one — so
+// the run that walks in on it must NOT report a missing retreat point.
+func TestRunDatabaseBackup_AnyRestorableSnapshotIsARetreatPoint(t *testing.T) {
+	db, dbPath := seedBackupFixture(t, 8)
+	now := time.Date(2026, 8, 5, 9, 0, 0, 0, time.UTC)
+
+	// A pre-migration snapshot one hour ago and NOTHING scheduled — exactly the
+	// shape the other two call sites (backupTick, backupHealthMonitor) must call
+	// stale, and that this one must not.
+	writeBackupFile(t, dbPath, now.Add(-time.Hour), backupReasonPreMigration)
+
+	res, err := runDatabaseBackup(db, dbPath, backupReasonScheduled, now)
+	if err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	if res.Stale {
+		t.Errorf("a pre-migration snapshot one hour old was reported as no retreat point (StaleAge %q); "+
+			"it restores exactly as well as a scheduled one, and this field answers "+
+			"\"was there ANY restorable snapshot here\", not \"is the schedule alive\"", res.StaleAge)
+	}
+
+	// ── positive control ────────────────────────────────────────────────────
+	// Without this, Stale==false is equally satisfied by a call that never looked
+	// at the directory at all. The SAME reason, aged past the window, has to flip
+	// it — so what was measured above really was that file.
+	oldDB, oldPath := seedBackupFixture(t, 8)
+	writeBackupFile(t, oldPath, now.Add(-backupStaleFactor*backupInterval-time.Hour), backupReasonPreMigration)
+
+	stale, err := runDatabaseBackup(oldDB, oldPath, backupReasonScheduled, now)
+	if err != nil {
+		t.Fatalf("backup (control): %v", err)
+	}
+	if !stale.Stale {
+		t.Error("a directory whose newest snapshot is older than the whole alarm window reported a fresh retreat point")
+	}
+}
+
+// TestLogBackupOutcome_TheStaleLineClaimsNothingAboutTheSchedule pins the
+// wording this ticket deliberately changed.
+//
+// 🔴 WHY AN ASSERTION AND NOT JUST A NAMED CONSTANT. A constant only makes an
+// edit visible in the diff; it does not make a wrong edit red, and its value is
+// rewritten exactly as easily as the literal was. The property that actually
+// matters is checkable: this line's Stale flag counts backups of EVERY reason
+// (see runDatabaseBackup), so it cannot support a claim about the SCHEDULE
+// specifically — a directory full of pre-migration snapshots satisfies it while
+// the cadence is dead. That claim belongs to backupHealthMonitor. So this
+// asserts the CLAIM, not the spelling: the line must be emitted, and it must
+// not say "schedule".
+func TestLogBackupOutcome_TheStaleLineClaimsNothingAboutTheSchedule(t *testing.T) {
+	var buf bytes.Buffer
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(prevOut); log.SetFlags(prevFlags) })
+
+	logBackupOutcome(backupResult{
+		Reason:   backupReasonScheduled,
+		Stale:    true,
+		StaleAge: "30h0m0s",
+		Skipped:  "only 1 MB free, want 200 MB (db is 100 MB)",
+	}, nil)
+
+	// Isolate the warning line. The other lines legitimately name the reason
+	// ("scheduled"), which contains the very word under test — asserting over the
+	// whole buffer would fail for a reason that has nothing to do with the claim.
+	var warning string
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if strings.Contains(line, "was stale (30h0m0s)") {
+			warning = line
+			break
+		}
+	}
+	// Positive control FIRST: "says nothing about the schedule" is trivially
+	// satisfied by a line that was never printed at all.
+	if warning == "" {
+		t.Fatalf("the stale warning was not emitted, so nothing below is under test; log was:\n%s", buf.String())
+	}
+	if strings.Contains(strings.ToLower(warning), "schedule") {
+		t.Errorf("the stale warning makes a claim about the schedule:\n%s\n"+
+			"Stale here counts backups of EVERY reason, so a directory full of pre-migration "+
+			"snapshots satisfies it while the cadence is dead. Schedule liveness is "+
+			"backupHealthMonitor's claim to make, not this line's.", warning)
+	}
 }
