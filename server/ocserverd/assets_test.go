@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -162,22 +163,50 @@ func TestMaterializeBinary(t *testing.T) {
 	})
 }
 
-// 🔴 THE SHIPPED ROLE DEFINITION MUST NOT HARDCODE A DISPLAY NAME.
+// seedExcerpt renders a seed for a failure message WITHOUT dumping it.
+//
+// 🔴 Seeds in this corpus reach ~22 KB (system_interaction.md). Pasting one into
+// `go test` output buries the one line that matters and makes the failure hard
+// to read in CI logs, so a failure names the first line and the size instead.
+func seedExcerpt(name, text string) string {
+	first := strings.SplitN(text, "\n", 2)[0]
+	if len([]rune(first)) > 120 {
+		first = string([]rune(first)[:120]) + "…"
+	}
+	return fmt.Sprintf("%s (%d runes) first line: %q", name, len([]rune(text)), first)
+}
+
+// 🔴 NO SHIPPED SEED MAY HARDCODE A MEMBER'S DISPLAY NAME.
 //
 // `seeds/role_def_assistant.md` opened with 「# 助理 — Mira」. Mira is the
 // out-of-box display name of the seed MEMBER row (dbseed.go) — a label the
-// owner may change at any moment through PATCH /api/members/{id}. The seed is
-// baked into the binary and does not change with it, so the day the owner
-// renames her, the FACTORY VERSION of the role definition — the very text the
-// 初始版本 row offers to restore — describes a person who does not exist.
+// owner may change at any moment through PATCH /api/members/{id}. Seeds are
+// baked into the binary and do not change with it, so the day the owner renames
+// her, the FACTORY VERSION of that document — the very text the 初始版本 row
+// offers to restore — describes a person who does not exist.
 //
 // A role definition says what the role DOES; who currently holds it is a fact
 // about the roster, not about the duty.
 //
+// 🔴 SCOPE IS EVERY STAGED `*.md`, NOT JUST THE ROLE DEFINITION. This started as
+// a role-definition-only loop, which left `seeds/insight_<key>.md` — embedded in
+// the same binary, restored by the same 初始版本 row, stale for the same reason —
+// out of range. The reason ("a shipped file cannot track a mutable roster
+// label") holds verbatim for every file in the corpus, so the corpus IS the
+// scope: a seed added tomorrow is covered without anyone remembering to add it
+// to a list. Every file is clean today, so widening cost nothing.
+//
+// ⚠️ IT READS THE STAGED EMBED, NOT `seeds/`. The corpus is `seedsdistFS()` —
+// what `bin/build-seedsdist` copied into `seedsdist/`. Editing `seeds/*.md` and
+// running `go test` straight away tests the PREVIOUS staged copy and goes green
+// on a seed you just broke. Run `bash bin/build-seedsdist` first. (CI is safe:
+// bin/ci.sh stages before it tests. The exposed party is a developer at a
+// terminal — and the reviewer of this ticket hit exactly that false green.)
+//
 // The name is read back from the seeded member row rather than written as a
 // literal here, so the assertion tracks whatever dbseed actually ships instead
 // of pinning a string that could drift out from under it.
-func TestSeedRoleDefinitionDoesNotHardcodeTheMembersDisplayName(t *testing.T) {
+func TestNoShippedSeedHardcodesTheMembersDisplayName(t *testing.T) {
 	api := newTasksTestServer(t)
 	// The out-of-box roster is what ships alongside the seed files; boot it here
 	// so the name under test is the one production really starts with.
@@ -192,21 +221,41 @@ func TestSeedRoleDefinitionDoesNotHardcodeTheMembersDisplayName(t *testing.T) {
 		t.Fatal("fixture: no seeded assistant member — this test would be vacuous")
 	}
 
-	for _, roleKey := range seedRoleKeys() {
-		seedMD, hasSeed, err := api.root.seedRoleDefinitionMD(roleKey)
-		if err != nil || !hasSeed {
-			t.Fatalf("%s: seed role definition unreadable (hasSeed=%v err=%v)", roleKey, hasSeed, err)
+	names, err := fs.Glob(seedsdistFS(), "*.md")
+	if err != nil {
+		t.Fatalf("list staged seeds: %v", err)
+	}
+	// ── anti-vacuity ────────────────────────────────────────────────────────
+	// A broken glob, or an unstaged seedsdist/, yields an empty corpus and every
+	// assertion below passes by never running. The two files this ticket is
+	// actually about must be present by name.
+	seen := map[string]string{}
+	for _, name := range names {
+		text, err := api.root.readSeedFile(name)
+		if err != nil {
+			t.Fatalf("%s: staged seed unreadable: %v", name, err)
 		}
-		// Positive control for the Contains probe below: the seed really is the
-		// duty text, and this assertion really can see inside it.
-		if !strings.Contains(seedMD, "助理") {
-			t.Fatalf("%s: fixture — the seed does not read like a role definition:\n%s", roleKey, seedMD)
+		seen[name] = text
+	}
+	for _, must := range []string{"role_def_assistant.md", "insight_assistant.md"} {
+		if _, ok := seen[must]; !ok {
+			t.Fatalf("staged seed corpus is missing %s (it holds %v) — run `bash bin/build-seedsdist`; "+
+				"without it this test asserts nothing", must, names)
 		}
-		if strings.Contains(seedMD, seeded.Name) {
-			t.Fatalf("%s: the shipped role definition hardcodes the member display name %q. "+
+	}
+	// Positive control for the Contains probe below: this assertion really can
+	// see inside a staged seed's bytes.
+	if !strings.Contains(seen["role_def_assistant.md"], "助理") {
+		t.Fatalf("fixture — the staged role definition does not read like a duty document: %s",
+			seedExcerpt("role_def_assistant.md", seen["role_def_assistant.md"]))
+	}
+
+	for _, name := range names {
+		if strings.Contains(seen[name], seeded.Name) {
+			t.Errorf("the shipped seed %s hardcodes the member display name %q. "+
 				"Rename the member and this factory text starts describing nobody. "+
-				"Describe the FUNCTION instead.\nfirst line: %q",
-				roleKey, seeded.Name, strings.SplitN(seedMD, "\n", 2)[0])
+				"Describe the FUNCTION instead.\n%s",
+				name, seeded.Name, seedExcerpt(name, seen[name]))
 		}
 	}
 }
