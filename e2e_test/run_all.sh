@@ -42,18 +42,32 @@ OC_E2E_PASSWORD=$(cat "$STATE_DIR/owner.password") || { echo "[run_all] FATAL: c
 export OC_E2E_PASSWORD
 
 echo "[run_all] === E2E (playwright) ==="
-# Warden spec (05) prerequisite: build BOTH cli binaries IN-TREE so the warden's
-# spawn shim can resolve ocagent. resolveOcAgentBin walks three parents up from
-# the ocwarden executable to find <repoRoot>/cli/ocagent/ocagent — the spec's
-# default ocwarden path (REPO_ROOT/../ocwarden) walks to /Users and symlinks a
-# BROKEN ocagent into the spawned agent's workdir (a deaf agent that only comes
-# online if claude self-rescues in time — the presence-timeout flake). In-tree
-# builds restore the dev layout the resolver is written for. Both artifacts are
-# gitignored.
-echo "[run_all] building in-tree cli binaries (ocagent + ocwarden) for spec 05…"
-(cd "$REPO_ROOT/cli/ocagent" && go build -o ocagent .) || { echo "[run_all] FATAL: go build cli/ocagent failed — spec 05 would flake on a stale/absent binary." >&2; exit 1; }
-(cd "$REPO_ROOT/cli/ocwarden" && go build -o ocwarden .) || { echo "[run_all] FATAL: go build cli/ocwarden failed." >&2; exit 1; }
-export OC_E2E_OCWARDEN="$REPO_ROOT/cli/ocwarden/ocwarden"
+# Live-agent prerequisite, and ONLY built when a live agent was actually asked
+# for (OC_E2E_LIVE_AGENT=1 — the same predicate playwright.config.js uses, so the
+# two can never disagree about whether that class is running).
+#
+# What it does when it runs: build BOTH cli binaries IN-TREE so the warden's spawn
+# shim can resolve ocagent. resolveOcAgentBin walks three parents up from the
+# ocwarden executable to find <repoRoot>/cli/ocagent/ocagent — the spec's default
+# ocwarden path (REPO_ROOT/../ocwarden) walks to /Users and symlinks a BROKEN
+# ocagent into the spawned agent's workdir (a deaf agent that only comes online if
+# claude self-rescues in time — the presence-timeout flake). In-tree builds restore
+# the dev layout the resolver is written for. Both artifacts are gitignored.
+#
+# Why it is conditional (T-c329): it was unconditional, which cost every caller a
+# Go toolchain and two builds for a class that, by default, does not run — and a
+# machine without `go` was killed here by `exit 1` before reaching a single
+# browser spec. OC_E2E_OCWARDEN is consumed by that class alone (verified: the
+# only readers in the whole repo are this line and the live-agent spec itself), so
+# skipping it changes nothing for the specs that do run.
+if [ "${OC_E2E_LIVE_AGENT:-}" = "1" ]; then
+  echo "[run_all] OC_E2E_LIVE_AGENT=1 — building in-tree cli binaries (ocagent + ocwarden) for the live-agent class…"
+  (cd "$REPO_ROOT/cli/ocagent" && go build -o ocagent .) || { echo "[run_all] FATAL: go build cli/ocagent failed — the live-agent class would flake on a stale/absent binary." >&2; exit 1; }
+  (cd "$REPO_ROOT/cli/ocwarden" && go build -o ocwarden .) || { echo "[run_all] FATAL: go build cli/ocwarden failed." >&2; exit 1; }
+  export OC_E2E_OCWARDEN="$REPO_ROOT/cli/ocwarden/ocwarden"
+else
+  echo "[run_all] live-agent class NOT requested (OC_E2E_LIVE_AGENT unset/≠1) — skipping its cli builds; no agent will be spawned and no API quota spent."
+fi
 cd "$HERE" || { echo "[run_all] FATAL: cannot cd to $HERE — playwright would run from the wrong dir and miss its config." >&2; exit 1; }
 # nvm/volta lazy-load defines npm/npx as shell FUNCTIONS that shadow the real
 # binary; oc_resolve_bin (lib/common.sh) drops the shadow, prefers PATH, then

@@ -157,9 +157,13 @@ jobs:
       # payload. Its own prerequisite failures (npm/npx missing, chromium install
       # failing) exit non-zero and say "NOT a spec failure", so a broken runner
       # reddens the job instead of quietly testing nothing.
+      # Deliberately sets NOTHING (T-c329): the specs that need a live agent and
+      # burn API quota are default-off and declare themselves by filename, so a
+      # runner opts OUT of nothing — it simply never asks to spend. The previous
+      # `OC_E2E_EXCLUDE_REAL_FLEET: '1'` here was the whole bug: it made this the
+      # only path that was protected, while every laptop running the same script
+      # silently paid.
       - name: real-browser e2e (isolated station on :8791)
-        env:
-          OC_E2E_EXCLUDE_REAL_FLEET: '1'
         run: |
           set -o pipefail
           bash e2e_test/run_all.sh 2>&1 | tee "$RUNNER_TEMP/e2e.log"

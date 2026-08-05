@@ -11,19 +11,27 @@
 # the classic way a new gate dies without anybody noticing.
 #
 # So the gate asserts a FLOOR on the number of specs that actually reported, and
-# separately asserts that the one spec we deliberately exclude did not sneak in.
+# separately asserts that the default-OFF live-agent class did not sneak in.
 #
 # The floor is a floor, not the exact count, on purpose: an exact number goes
 # stale the first time someone adds a spec, and a stale exact number teaches the
 # next person that this file lies. What the floor has to catch is "0 ran" and
 # "a handful ran because a filter swallowed the rest" — it does not need to know
-# today's total. (Measured 2026-08-05: 24 specs collected, 23 after excluding the
-# real-fleet one. The floor sits well under that so growth never reddens it.)
+# today's total. (Measured 2026-08-05 with `playwright test --list`: 23 collected
+# by default, 24 once the live-agent class is requested. The floor sits well under
+# that so growth never reddens it.)
 set -euo pipefail
 
 LOG="${1:?usage: assert-specs-ran.sh <run_all.log>}"
 FLOOR=15
-EXCLUDED_SPEC_MARKER='machine onboarding'
+# Matches the CLASS by the filename suffix that puts a spec in it, not the title
+# of the one spec that happens to exist today (T-c329). A title is prose: it gets
+# reworded, and the guard then watches for a string nobody writes any more while
+# reporting nothing wrong. The suffix is the same predicate playwright.config.js
+# ignores on, so the guard and the config can never disagree about who is in the
+# class. Verified against a real list-reporter log: every reported spec line
+# carries its filename, so this substring really does appear when such a spec runs.
+LIVE_AGENT_MARKER='.live-agent.spec.js'
 
 if [ ! -s "$LOG" ]; then
   echo "[assert-specs-ran] FATAL: '$LOG' is missing or empty — the e2e step produced no output at all." >&2
@@ -45,13 +53,25 @@ if [ "$PASSED" -lt "$FLOOR" ]; then
   exit 1
 fi
 
-# The real-fleet spec must stay out: it needs `claude` on PATH, spawns a real
-# warden and burns real API quota. If it ran here, the exclusion mechanism broke
+# The live-agent class must stay out UNLESS this run explicitly asked for it.
+# Those specs need `claude` on PATH, spawn a real agent and burn real API quota —
 # and the bill is the symptom nobody sees in a log.
-if grep -qF "$EXCLUDED_SPEC_MARKER" "$LOG"; then
-  echo "[assert-specs-ran] FATAL: the real-fleet spec ('$EXCLUDED_SPEC_MARKER') executed." >&2
-  echo "[assert-specs-ran] OC_E2E_EXCLUDE_REAL_FLEET was supposed to keep it out of this run." >&2
+#
+# The condition matters as much as the check (T-c329): the caller who DELIBERATELY
+# opted in with OC_E2E_LIVE_AGENT=1 must not be met by a guard calling their own
+# choice a failure. A guard that reddens on the one path it was never meant to
+# police is a guard people learn to ignore — and one that cites a flag the caller
+# never set is simply lying to them.
+if [ "${OC_E2E_LIVE_AGENT:-}" = "1" ]; then
+  echo "[assert-specs-ran] ok — $PASSED specs passed (floor $FLOOR); the live-agent class was explicitly requested, so its specs belong in this log"
+  exit 0
+fi
+
+if grep -qF "$LIVE_AGENT_MARKER" "$LOG"; then
+  echo "[assert-specs-ran] FATAL: a spec of the live-agent class ('*$LIVE_AGENT_MARKER') executed without being asked for." >&2
+  echo "[assert-specs-ran] That class is default-OFF and only runs with OC_E2E_LIVE_AGENT=1, which this run did not set." >&2
+  echo "[assert-specs-ran] It spawns a real agent and spends real API quota, so treat this as a broken default, not a flake." >&2
   exit 1
 fi
 
-echo "[assert-specs-ran] ok — $PASSED specs passed (floor $FLOOR), real-fleet spec excluded"
+echo "[assert-specs-ran] ok — $PASSED specs passed (floor $FLOOR), live-agent class stayed out"
