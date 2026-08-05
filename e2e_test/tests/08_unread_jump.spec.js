@@ -133,21 +133,25 @@ test.describe('B9 · unread — badge, entry divider anchor, list-即讀, floati
       metrics.scrollHeight - (metrics.scrollTop + metrics.clientHeight),
       'entry must land at the divider, not the bottom',
     ).toBeGreaterThan(4);
-    // …and not glued to the viewport top either: at least one already-read
-    // message above the divider stays visible as context (batch 19, LINE ref).
-    const contextVisible = await divider.evaluate((el) => {
+    // …and the DIVIDER ITSELF is what sits flush with the top of the thread
+    // viewport. ChatArea does `divider?.scrollIntoView({ block: "start" })` on
+    // purpose: leaving read context above it can push the first unread row out
+    // of a compact viewport, which is the opposite of what entry positioning is
+    // for. The earlier shape of this spec demanded a visible already-read
+    // message above the divider (batch 19, LINE ref); owner ruled on 2026-08-05
+    // at rc-8687b78cdbbb, option ①: the current screen is the contract — the
+    // divider pins to the top — so the assertion is inverted here rather than
+    // the product being changed back.
+    const dividerOffset = await divider.evaluate((el) => {
       const box = el.closest('.chat__messages');
-      const prev = el.previousElementSibling;
-      if (!box || !prev) return false;
-      const boxTop = box.getBoundingClientRect().top;
-      const prevRect = prev.getBoundingClientRect();
-      // the read message right above the divider intersects the viewport
-      return prevRect.bottom > boxTop + 1;
+      if (!box) return null;
+      return el.getBoundingClientRect().top - box.getBoundingClientRect().top;
     });
+    expect(dividerOffset, 'the divider must be measurable inside the thread box').not.toBeNull();
     expect(
-      contextVisible,
-      'at least one already-read message must remain visible above the divider',
-    ).toBe(true);
+      Math.abs(dividerOffset),
+      `the divider's top must sit flush with the thread's top, got ${dividerOffset}px off`,
+    ).toBeLessThanOrEqual(2);
 
     // ── read convergence: entering the room IS reading (list 即讀) ──
     await expect
