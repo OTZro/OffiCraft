@@ -13,8 +13,13 @@
 # .github/workflows/ci.yml, which calls
 # bin/ci-cloud.sh; that script is the single definition of the subset, so the
 # cloud check cannot grow a second, drifting list. The post-merge round shares
-# that same definition on purpose — a main-only job would be a second list, and
-# it is the unwatched list that drifts.
+# that same definition on purpose — a second, main-only definition of THE CHECKS
+# would be a second list, and it is the unwatched list that drifts.
+# ⚠️ Main-only JOBS do exist, and this line used to read as if none could: T-5d3b's
+# notify-main-red and T-9fe3's auto-beta both run on push-to-main only. Neither
+# CHECKS anything, which is why the rule above is intact — main still runs no check
+# a pull request does not. That is enforced, not promised: auto-beta's `needs` must
+# equal the declared gate set in both directions (bin/tests/auto-beta-guard.sh).
 #
 # T-ab2a: bin/tests/run.sh and the content-level gitleaks scan are NO LONGER
 # local-only either. They were MEASURED on a hosted macOS runner (green, 244s and
@@ -45,9 +50,14 @@
 # job now sets NOTHING — the live-agent class is default-OFF and declares itself
 # by filename (*.live-agent.spec.js), so a runner opts out of nothing; do not go
 # looking for an exclusion flag in ci.yml, there isn't one any more. NONE of the cloud jobs is land authority; this script
-# still is. They are cross-checks — one on a clean Linux box (which is the one
-# thing this Mac cannot prove), two on a macOS runner (which is what makes the
-# host-shaped gates apply to everyone's pull request and not just this laptop).
+# still is. The GATE jobs are cross-checks — one on a clean Linux box (which is the
+# one thing this Mac cannot prove), the rest on a macOS runner (which is what makes
+# the host-shaped gates apply to everyone's pull request and not just this laptop).
+# ⚠️ "the cloud jobs ARE cross-checks, one Linux and two macOS" is what stood here,
+# and T-9fe3 made both halves wrong. auto-beta is a job in ci.yml that cross-checks
+# NOTHING — it PUBLISHES a beta prerelease off a green push to main — and the count
+# has now gone stale three times (T-ff8a, T-ab2a, T-9fe3). Do not count jobs here;
+# read ci.yml, whose per-job `# oc-job-role:` marker says which kind each one is.
 #
 # ONE RUN PER WORKING COPY (T-70c9). This script LOCKS the clone it lives in; a
 # second run in the SAME clone is refused with a non-zero exit. MORE ROUNDS AT
