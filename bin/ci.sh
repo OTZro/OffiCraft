@@ -6,7 +6,8 @@
 # went PUBLIC: standard-runner minutes are free for public repos. The real
 # reason this stays local is that the gate below includes host-shaped and
 # regenerate-and-byte-compare steps whose authority we do not want to move.)
-# A SUBSET — the Linux-portable guards, consistency / wire-freeze drift gates,
+# A SUBSET — the Linux-portable guards, the client uplink contract gate (with its
+# own positive-control selftest), the consistency / wire-freeze drift gates,
 # and the black-box conformance suite —
 # now also runs on every pull request AND on every push to main (T-ab2a) via
 # .github/workflows/ci.yml, which calls

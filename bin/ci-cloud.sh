@@ -29,11 +29,20 @@
 #       list to keep in sync) + frontend typecheck + vitest.
 #   (2) HYGIENE — the tracked-file path denylist. The content-level gitleaks
 #       scan deliberately stays local.
-#   (3) CONSISTENCY — the regenerate-and-byte-compare drift gates: gen-ocapi
-#       (server wire), FE schema.ts (client wire), theme tokens, message keys,
-#       font whitelist, plus the two CSS token lints. These are the M1
+#   (3) CONSISTENCY — the contract + regenerate-and-byte-compare drift gates: the
+#       client uplink contract guard AND its own positive-control selftest,
+#       gen-ocapi (server wire), FE schema.ts (client wire), theme tokens, message
+#       keys, font whitelist, plus the two CSS token lints. These are the M1
 #       wire-freeze gates.
-#       ⚠️ THIS CLASS IS THE TOOLCHAIN-SENSITIVE ONE. Every one of them asserts
+#       The uplink pair moved here from local-only (T-9c8d shipped it in ci.sh
+#       alone) because it is stdlib python3 over tracked files: no service, no
+#       credential, nothing macOS-shaped. Both halves moved, never just the
+#       scanner — the selftest is what proves the scanner still bites, and a
+#       scanner nobody verified is a green with a hole in it. ci.sh keeps running
+#       both: it is the full set and the land authority, this is its subset.
+#       ⚠️ THIS CLASS IS THE TOOLCHAIN-SENSITIVE ONE — meaning the DRIFT GATES
+#       specifically, not the uplink pair above it (that one reads tracked files
+#       and never regenerates anything). Every drift gate asserts
 #       "regenerating produces byte-identical output", so a generator that
 #       behaves differently on a different Node/Go build reddens CI while the
 #       CODE IS FINE. That is precisely why the workflow pins go + node to the
@@ -170,6 +179,21 @@ fi
 # Several regenerate IN PLACE, so those snapshot the committed bytes first and
 # restore them on failure — a red must not leave a mutated worktree behind.
 echo "[ci-cloud] (3/4) consistency — wire freeze + generated-artifact drift gates"
+
+# 2z. Client-payload contract gate (T-9c8d), kept ahead of gen-ocapi exactly as in
+# ci.sh. It belongs to this class because it is a contract check: every callsite
+# under cli/** that can put a body on the wire must be accounted for in
+# cli/uplinks.json, with its OpenAPI route, the requestBody $ref read off the frozen
+# spec, and the wire test that pins a real producer's body to it.
+# Pure stdlib python3 over tracked files — no service, no credential, no toolchain
+# and nothing macOS-shaped, which is why it can run here at all. python3 is already
+# a hard dependency of this script (the conformance venv at 4/4), so this adds none.
+echo "[ci-cloud]   client uplink contract — every CLI send is declared, spec-checked and wire-tested"
+python3 "$ROOT/bin/uplink-guard.py"
+# ...and the guard's own positive control: one fixture per bypass that was once live,
+# each of which must still be caught. Shipping the scanner here WITHOUT this would be
+# strictly worse than not shipping it: an unverified scanner still prints all green.
+python3 "$ROOT/bin/tests/uplink-guard-selftest.py"
 
 # 2a. gen-ocapi drift — the wire-freeze gate on the SERVER's REST surface.
 # server/ocserverd/ocapi_gen.go is generated from the frozen spec/openapi.json.
