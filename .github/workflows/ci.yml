@@ -26,10 +26,45 @@
 # find out until the next PR author inherited it. The post-merge round exists to
 # name that moment, and to name it on the commit that caused it.
 #
-# Both triggers run the SAME jobs — there is deliberately no second list of what
-# to run for main. A separate main-only job would be a second definition, and two
-# definitions of "the checks" drift; the one that drifts silently is always the
-# one nobody watches.
+# Both triggers run the SAME CHECKS — there is deliberately no second list of what
+# to run for main. A separate main-only definition of "the checks" would be a
+# second list, and two definitions drift; the one that drifts silently is always
+# the one nobody watches.
+#
+# ⚠️ "the same JOBS" is no longer literally true, and this paragraph used to say
+# exactly that. TWO jobs at the bottom are main-only: notify-main-red (T-5d3b),
+# which speaks only when a round failed, and auto-beta (T-9fe3), which publishes a
+# prerelease when one is green. Neither of them CHECKS anything, and that is the
+# whole of what this rule was protecting: main runs no CHECK a pull request does
+# not.
+#
+# THE GATE / NOT-A-GATE SPLIT IS DECLARED, NOT GUESSED
+# That distinction now decides something (below), so it is written down per job
+# rather than inferred: every job's body opens with a marker comment naming which
+# it is, and bin/tests/auto-beta-guard.sh reads them. A job with no marker, with
+# two, or with one it cannot read is a FAILURE that names the lines — a job it
+# cannot classify is never sorted into whichever bucket happens to be convenient.
+# The marker is not free either: a not-a-gate must pin itself to refs/heads/main,
+# and a gate must NOT, so a real gate cannot be excused from the set by
+# relabelling it, and hanging an `if` on a gate so it skips on pull requests
+# reddens rather than passing.
+# ⚠️ AND THE NON-GATES ARE A CLOSED ROLL-CALL: exactly these two, no more. A THIRD
+# job declaring itself not-a-gate reddens even when it is labelled honestly and
+# pinned correctly, because leaving auto-beta's required set is a decision with an
+# owner ruling behind it (CLAUDE.md's land criteria: the exemption list is
+# hardcoded, and a third member needs its OWN ruling — the analogy to these two is
+# explicitly not enough). Adding one means editing the guard, which is the point.
+#
+# WHAT THE SPLIT BUYS: auto-beta's `needs` must equal the GATE set exactly, in
+# both directions, so a gate added for pull requests cannot quietly become
+# optional on main.
+# ⚠️ auto-beta deliberately does NOT need notify-main-red, and that is not an
+# oversight to be tidied up: notify only runs when something already failed, so an
+# edge to it would mean auto-beta never runs at all. The edge that DOES exist runs
+# the other way — notify-main-red needs auto-beta, because a publish that fails on
+# main is precisely "merged" and "reachable" drifting apart in silence, which is
+# the thing auto-beta exists to stop. Wiring both directions would be a `needs`
+# cycle, which GitHub rejects as a whole-file startup failure: zero jobs.
 #
 # NO GATE IN THIS WORKFLOW USES A SECRET, by design — so a fork PR runs the
 # identical, complete check. Exactly one secret exists here and it is not a
@@ -38,6 +73,15 @@
 # any case — so the property above is unchanged for every pull request.
 # ⚠️ Adding a secret to any of the gate jobs WOULD change it, and would make a
 # fork PR run a different, smaller check than ours.
+#
+# The workflow is no longer permission-FREE, though, and that is a different claim
+# from the secret one (T-9fe3). The gate jobs use no token at all. auto-beta
+# publishes a prerelease after a green push to main, which needs write access to
+# this repo's releases: it alone holds `permissions: contents: write`, using the
+# built-in GITHUB_TOKEN. No PAT and no repository secret is introduced, and the
+# workflow default above stays read-only. On a fork PR that job's `if` is false,
+# so it never runs and never asks for the token; what a fork loses is one job it
+# could not have run anyway, not a check.
 name: ci
 
 on:
@@ -63,6 +107,7 @@ permissions:
 
 jobs:
   cloud-gates:
+    # oc-job-role: gate
     # ubuntu-latest on purpose: the point is to catch macOS-only assumptions.
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -128,6 +173,7 @@ jobs:
   # this pairing is about cloud-gates vs macos-e2e specifically; a third job
   # (macos-host-gates, T-ab2a) now sits below and is a different concern again.
   macos-e2e:
+    # oc-job-role: gate
     # Pinned, not macos-latest: `latest` moves between OS majors on GitHub's
     # schedule, and this suite asserts host-shaped behaviour. A version bump here
     # should be a commit somebody chose, not a Tuesday.
@@ -221,6 +267,7 @@ jobs:
   # ci.sh, for the same reason cloud-gates calls bin/ci-cloud.sh: a YAML file
   # enumerating gates becomes a second list, and the second list drifts silently.
   macos-host-gates:
+    # oc-job-role: gate
     # Pinned for the same reason as macos-e2e: these assert host-shaped
     # behaviour, so an OS major bump should be a commit somebody chose.
     runs-on: macos-15
@@ -293,11 +340,20 @@ jobs:
   # WHY ONE AGGREGATING JOB AND NOT A STEP INSIDE EACH JOB
   # A step per job is the same curl copied three times (it will drift), and a
   # round that reddens two jobs then sends two messages for one event. The price
-  # of `needs:` is that it re-enumerates the job names, so a FOURTH job added
+  # of `needs:` is that it re-enumerates the job names, so ANOTHER job added
   # without touching this line would silently stop being covered. That
   # enumeration is therefore not left to discipline:
   # bin/tests/main-red-notify-guard.sh asserts that every other job in this file
   # appears in the `needs:` below, and reddens when one does not.
+  #
+  # EVERY other job, auto-beta included (T-9fe3). auto-beta is not a check, so it
+  # is tempting to leave it out of a red-trunk alarm — but the thing it does is
+  # publish the release the station actually runs, and a publish that fails on
+  # main IS "merged" and "reachable" drifting apart, which is the exact hole
+  # auto-beta was added to close. Staying quiet about it would dig a second hole
+  # beside the first. (The edge only goes this way: auto-beta must NOT need this
+  # job — see the header. Both directions would be a `needs` cycle and GitHub
+  # would schedule zero jobs.)
   #
   # THIS IS NOT A SECOND TEST LIST. The one-source-of-truth rule at the top of
   # this file is about WHAT RUNS; this job runs no gate and names no suite.
@@ -308,7 +364,8 @@ jobs:
   # failure() is false for cancelled — the same position the concurrency block
   # above takes, that cancelled is not a red.
   notify-main-red:
-    needs: [cloud-gates, macos-e2e, macos-host-gates]
+    # oc-job-role: not-a-gate
+    needs: [cloud-gates, macos-e2e, macos-host-gates, auto-beta]
     if: failure() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -382,3 +439,215 @@ jobs:
             --retry 2 --retry-connrefused \
             -X POST -H 'Content-Type: text/plain; charset=utf-8' \
             --data-binary @- "$MAIN_RED_WEBHOOK_URL" >/dev/null
+
+  # ---------------------------------------------------------------------------
+  # AUTOMATIC BETA ON A GREEN TRUNK (T-9fe3). Landing on main did not put
+  # anything anywhere: the station runs a GitHub RELEASE and autodeploy follows
+  # the newest one, never main. So every merged change waited for a human to
+  # remember to cut a beta, and "merged" and "reachable" drifted apart silently.
+  # This job closes that gap: a push to main whose whole check set is green
+  # publishes a prerelease of exactly that commit.
+  #
+  # WHAT IT DELIBERATELY DOES NOT DO
+  # It publishes a PRERELEASE and nothing else. Turning a beta into the final
+  # release — the flip that moves the Latest pointer — stays a human command run
+  # by hand: `bin/release`'s other subcommand, deliberately never named in any
+  # workflow file. bin/tests/auto-beta-guard.sh reddens on two things — that
+  # subcommand's name (W4), and the `gh release edit` flags that move the Latest
+  # pointer or publish a draft (W4b). Those flags are NOT spelled out here on
+  # purpose: W4b scans this file as text, comments included, so naming them would
+  # redden it. Read the guard for the exact list.
+  # ⚠️ That is TWO SPECIFIC SHAPES, not a proof that GA cannot be automated. An
+  # earlier version of this comment claimed "no future edit here can automate GA by
+  # accident", and a reviewer disproved it with one `gh release edit` line that
+  # never typed the subcommand's name — the name-only rule waved it straight
+  # through. A workflow could still reach GA via a script it calls, `gh api`, or a
+  # curl to the REST API. What the guard buys is that the two routes anyone would
+  # actually reach for both fail loudly.
+  #
+  # ONE UNSTATED DEPENDENCY, named here so nobody removes it by accident: the
+  # version rule ("greatest existing + patch") is only collision-free because main
+  # is EXEMPT from cancel-in-progress in the concurrency block above. That exemption
+  # serialises main's rounds, so a second merge's checkout already sees the tag the
+  # first one created. Turn main into cancel-in-progress to save runner minutes and
+  # two merges start racing for the same tag. That block is T-ab2a's and this job
+  # did not change it — it just depends on it now.
+  # ⚠️ And the honest cost of that same serialisation: GitHub keeps only ONE
+  # pending run per concurrency group, so with three merges in quick succession the
+  # middle one's run is cancelled — it gets no verdict AND no beta. Its code ships
+  # inside the third one's beta, so nothing is lost, but the claim above that
+  # "every commit on main gets its own answer" does not hold in that case.
+  #
+  # WHO ACTUALLY MOVES WHEN THIS FIRES — do not read it wider than this. What is
+  # published is a PRERELEASE, and a station only picks one up when BOTH
+  # updater.receive_beta (server/ocserverd/settings.go, default false) and
+  # updater.auto_update (server/ocserverd/auto_update.go, default OFF) are on. For
+  # a default-configured station, nothing here changes which version it runs.
+  # The owner's own machine has both on, and he accepted that consequence
+  # explicitly (ruling 2, 2026-08-05): it will pick up every beta this produces
+  # and there is no button to go back. So there is deliberately NO throttle, no
+  # approval environment and no confirmation gate here — adding one would be
+  # reversing a decision that was already made.
+  #
+  # WHY macos-15: bin/release publish refuses to run anywhere but darwin/arm64
+  # (the asset IS darwin-arm64), it runs the FULL bin/ci.sh inside a staging
+  # worktree at the target commit before it builds, and then it builds the real
+  # product. None of that is portable to a Linux runner.
+  #
+  # WHY needs LISTS EVERY GATE JOB: "the trunk is green" has to mean all of the
+  # checks, not the cheap ones. A `needs` that falls behind a newly-added gate
+  # would publish on a partially-checked commit, so the guard computes the set
+  # difference both ways rather than comparing against a hardcoded list.
+  # ⚠️ EVERY GATE, and deliberately NOTHING ELSE — an earlier cut of this said
+  # "every other job", which was true while the gates were the only other jobs and
+  # became a contradiction the moment notify-main-red landed: notify runs only on
+  # failure, so needing it would mean this job never runs, and needing each other
+  # would be a `needs` cycle GitHub answers with zero scheduled jobs. The guard
+  # therefore differences against the jobs DECLARED as gates (see the marker
+  # comments and the header), and refuses to guess for a job that declares nothing.
+  auto-beta:
+    # oc-job-role: not-a-gate
+    needs: [cloud-gates, macos-e2e, macos-host-gates]
+    # Both halves are required, and they exclude different things. The ref test is
+    # what holds the line TODAY: without it every push to a working branch would
+    # try to publish. The event test excludes any OTHER trigger that also reports
+    # refs/heads/main — and to be honest about what it is worth right now, the
+    # `on:` block above has only pull_request and push, and a pull_request's ref is
+    # refs/pull/N/merge, never refs/heads/main, so nothing currently reaches it.
+    # It is there for the edit that adds a workflow_dispatch or a schedule, which
+    # would otherwise become a publish-on-demand button nobody reviewed as one.
+    # bin/tests/auto-beta-guard.sh requires both, so neither can quietly go.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    # A budget, not a measurement: full bin/ci.sh on a hosted macOS runner plus a
+    # real product build plus the upload. Nothing here has been timed on this
+    # runner class yet — if a run ever comes close, replace this with the measured
+    # number rather than doubling it on a hunch.
+    timeout-minutes: 90
+    # The ONLY elevated permission in this workflow, and it lives on this job
+    # alone — the workflow default stays read-only, so the three gate jobs cannot
+    # write anything even by mistake. Built-in GITHUB_TOKEN only: no PAT, no
+    # repository secret.
+    permissions:
+      contents: write
+    steps:
+      # BOTH inputs are load-bearing, and fetch-tags is spelled out rather than
+      # inferred. fetch-depth: 0 is needed twice over — bin/release cuts a staging
+      # worktree with `git worktree add --detach <sha>`, which needs the commit's
+      # real history; and bin/next-beta-tag compares against every existing git
+      # tag. fetch-depth: 0 is *believed* to bring tags along, but that is a
+      # reading of actions/checkout's refspec, not something anyone here measured,
+      # so it is stated explicitly instead of relied on: a tagless checkout leaves
+      # `git tag --list` at rc=0 with zero output, which is the exact shape
+      # bin/next-beta-tag now refuses rather than silently computing a version off
+      # GitHub releases alone.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.4'
+          check-latest: false
+          cache-dependency-path: server/ocserverd/go.sum
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22.10.0'
+          check-latest: false
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # bin/release runs the full bin/ci.sh, whose hygiene gate treats a missing
+      # gitleaks as a FAILURE rather than a skip (an unrun scanner and a clean
+      # scan are indistinguishable). Same reason macos-host-gates installs it.
+      - name: install gitleaks
+        run: brew install gitleaks
+
+      # ── IS THIS COMMIT STILL main's HEAD? ─────────────────────────────────
+      # Nothing stops anyone re-running an OLD main run, and the version rule is
+      # "greatest existing + patch", so an older tree would be handed a HIGHER tag
+      # than the current one. The station's update check admits by SEMVER ORDER,
+      # not by publication date (server/ocserverd/update_check.go), so that older
+      # tree would WIN: behaviour rolls backwards while the version number moves
+      # forwards. The owner's ruling 2 accepted taking every beta — it did not
+      # accept taking a beta whose code is older than what is already live.
+      #
+      # A stale run SKIPS, loudly, and does not fail: the run is not broken and its
+      # gate jobs are still a real verdict on that commit. A red here would be a
+      # false alarm, and a silent no-op would leave someone wondering why no beta
+      # appeared. So it says so, in the log and in the run summary.
+      - name: is this commit still main's head (a re-run of an old run must not publish)
+        id: freshness
+        env:
+          OC_TRIGGER_SHA: ${{ github.sha }}
+        run: |
+          set -o pipefail
+          git fetch --quiet origin main
+          HEAD_SHA="$(git rev-parse FETCH_HEAD)"
+          if [[ "$HEAD_SHA" == "$OC_TRIGGER_SHA" ]]; then
+            echo "fresh=yes" >> "$GITHUB_OUTPUT"
+            echo "this run's commit IS main's head ($HEAD_SHA) — proceeding"
+          else
+            echo "fresh=no" >> "$GITHUB_OUTPUT"
+            echo "::notice title=auto-beta skipped::this run's commit ($OC_TRIGGER_SHA) is no longer main's head ($HEAD_SHA), so publishing it would give OLDER code a HIGHER version than what is already out. Nothing was published."
+            echo "SKIPPING the beta: triggering commit $OC_TRIGGER_SHA is not main's head $HEAD_SHA."
+          fi
+
+      # The version number is computed by a script in the repo, not by inline
+      # shell here — see bin/next-beta-tag's header, and ONE SOURCE OF TRUTH at
+      # the top of this file. It is read-only and creates nothing.
+      - name: compute the next beta tag
+        id: tag
+        if: steps.freshness.outputs.fresh == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          TAG="$(bash bin/next-beta-tag)"
+          [[ -n "$TAG" ]] || { echo "bin/next-beta-tag printed nothing" >&2; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "next beta tag: $TAG"
+
+      # --target is the commit this run was triggered by, NOT whatever main points
+      # at when the job finally starts: two merges landing close together would
+      # otherwise both publish the later tree. --no-settle is the owner's ruling 1
+      # — see bin/release's header. This command still runs the full CI gate inside
+      # the staging worktree and still reads back what GitHub stored; neither is
+      # skippable.
+      #
+      # ⚠️ THE RELEASE IS CREATED BEFORE IT IS VERIFIED, AND NOTHING ROLLS IT BACK.
+      # bin/release uploads (step 6) and only then reads back what GitHub stored
+      # (step 7); there is no `gh release delete` anywhere in it. So a RED job does
+      # not imply "no beta exists" — a failure after the upload leaves a published
+      # prerelease that never passed the read-back. A draft-shaped failure is
+      # invisible to stations, but an incomplete asset set is not: admission only
+      # looks at draft/prerelease. Cleaning that up is a human action; see
+      # docs/dev/README.md.
+      #
+      # Values reach the shell through `env:`, never interpolated into the script
+      # body. Neither value can currently contain anything hostile (the tag is
+      # built by integer formatting; github.sha is 40 hex), so this is closing the
+      # seam rather than fixing a live hole — but "the values happen to be safe
+      # today" is not a property anything enforces, and `env:` needs no such luck.
+      - name: publish the beta (prerelease) for this commit
+        if: steps.freshness.outputs.fresh == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OC_TAG: ${{ steps.tag.outputs.tag }}
+          OC_TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -o pipefail
+          bash bin/release publish \
+            --beta "$OC_TAG" \
+            --target "$OC_TARGET_SHA" \
+            --no-settle 2>&1 | tee "$RUNNER_TEMP/publish.log"
+
+      - name: upload the publish log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto-beta-publish-log
+          path: ${{ runner.temp }}/publish.log
+          if-no-files-found: warn

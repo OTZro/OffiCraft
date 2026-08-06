@@ -720,6 +720,46 @@ e2e_stored
 STATION_VERSION_JSON='{"git_sha":"aaaaaaa"}' e2e
 named_failure "E3 upload+read-back OK but the STATION never moved" station-settle "$RC" "$OUT"
 
+# ── E3b/E3c/E3d: --no-settle (T-9fe3) ───────────────────────────────────────
+# The owner ruled that a self-hosted station's upgrade is not a success condition
+# for a release, and an unattended runner cannot reach one at all. E3 immediately
+# above is this block's NEGATIVE CONTROL and it is the same fake station: on
+# ANOTHER commit ('aaaaaaa'), no flag, fails station-settle. The cases below use
+# that identical station state, so what changes the verdict is provably the flag
+# and not the fixture.
+e2e_stored
+STATION_VERSION_JSON='{"git_sha":"aaaaaaa"}' e2e --no-settle
+check "E3b the SAME station state that fails E3 exits 0 with --no-settle" "0" "$RC"
+case "$OUT" in
+  *"DELIBERATELY NOT CHECKED"*"self-hosted"*)
+    ok "E3b …and says WHY the station was not verified" ;;
+  *) bad "E3b …and says WHY the station was not verified (out: $(printf '%s' "$OUT" | tail -c 400))" ;;
+esac
+# The final line must not be readable as "the station is on this commit". A run
+# that skipped the check has to be distinguishable from one that made it, or the
+# log tells the next reader something nobody verified.
+E3B_LAST="$(printf '%s\n' "$OUT" | grep -v '^$' | tail -n 1)"
+case "$E3B_LAST" in
+  *"NO station was checked"*) ok "E3b …and the final line does not claim the station moved" ;;
+  *) bad "E3b …and the final line does not claim the station moved (last line: $E3B_LAST)" ;;
+esac
+check "E3b …and it still uploaded exactly once (the flag skips step 8, not the release)" "1" \
+  "$(grep -c 'release create' "$GHWIRE" || true)"
+
+# --no-settle must not soften step 7. A read-back violation is still fatal, and
+# the item named is still the read-back's — otherwise the flag would be a way to
+# publish something GitHub never actually stored correctly.
+e2e_stored 'isDraft=true'
+STATION_VERSION_JSON='{"git_sha":"aaaaaaa"}' e2e --no-settle
+named_failure "E3c --no-settle does NOT skip the read-back (a stored DRAFT still fails)" \
+  release-draft "$RC" "$OUT"
+
+# …nor the CI gate.
+e2e_stored
+STATION_VERSION_JSON='{"git_sha":"aaaaaaa"}' FIXTURE_CI_RC=1 e2e --no-settle
+named_failure "E3d --no-settle does NOT skip the pre-build CI gate" release-ci "$RC" "$OUT"
+check "E3d …and NOTHING was built" "" "$(cat "$BUILD_WIRE")"
+
 e2e_stored "targetCommitish=\"$(printf '%040d' 0)\""
 STATION_VERSION_JSON="{\"git_sha\":\"$E_SHORT\"}" e2e
 named_failure "E4 upload OK but the release is bound to another commit" release-target "$RC" "$OUT"

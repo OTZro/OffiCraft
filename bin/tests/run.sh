@@ -294,6 +294,28 @@ else
   bad "bin/tests/release-guard.sh is missing"
 fi
 
+# ── the automatic beta path: workflow shape + version rule (T-9fe3) ──────────
+# Own file because it is the ONLY thing in this repo that parses
+# .github/workflows/*.yml, and it needs a YAML parser (ruby+psych — the hosted
+# macOS runner has no PyYAML) that nothing else here wants. That parse is the
+# point: a workflow change has already gone green through every local gate and
+# then produced a GitHub startup failure — zero jobs, no checks, and a commit that
+# looks exactly like one nobody pushed. The rest of the suite guards the shape of
+# a job that publishes a release without a human present: needs covering every
+# gate, an `if` that cannot fire off main, contents:write scoped to that one job,
+# and no workflow file being able to automate the beta→final flip.
+AUTOBETA="$HERE/auto-beta-guard.sh"
+echo
+if [[ -f "$AUTOBETA" ]]; then
+  if run_guard "$AUTOBETA"; then
+    ok "auto-beta workflow + version-rule suite passed"
+  else
+    bad "auto-beta workflow + version-rule suite FAILED (see output above)"
+  fi
+else
+  bad "bin/tests/auto-beta-guard.sh is missing"
+fi
+
 # ── retired image overlay stays retired (T-f014) ────────────────────────────
 # The cockpit used to carry two full-size overlays for the same click: the
 # shared preview shell (filename, share link, download, close) and a bare

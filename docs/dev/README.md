@@ -138,7 +138,7 @@ CI 跑在本地、`bin/ci.sh` 是 land 權威，從第一個非零步驟就 fail
 
 （舊文寫「不付 GitHub Actions」——repo 轉 PUBLIC 後那個理由已不成立，公開 repo 用標準 runner 是免費的。真正的理由是這份 gate 裡有大量 host-shaped 與「重生後逐位元組比對」的步驟，我們不想把那些的權威搬到雲上。）
 
-**雲端 check（`.github/workflows/ci.yml`）**：`pull_request` **與 push-to-`main`** 兩個觸發（後者由 T-ab2a 補上：在那之前，合併之後沒有任何東西會跑，所以兩個各自綠的 PR 併起來讓主幹變紅時，要等到下一個開 PR 的人繼承那片紅才會有人發現）。兩個觸發跑的是**同一組 job、同一份定義**——刻意不為 `main` 另列一份清單。`main` 上另外**關掉 cancel-in-progress**：被取消的 run 回的是 `cancelled` 而不是紅，那會讓真正弄壞主幹的那顆 commit 完全沒有判決，在 commit 列表上跟「通過了」長得一樣。內容是「雲端跑得動的全部」——**單元測試**（`e2e_test` 的 hermetic isolation-guard、Go 各模組的格式／靜態／編譯／測試、FE typecheck/vitest）、**hygiene**（tracked-file path denylist）、**一致性檢查**（gen-ocapi / FE schema.ts / 主題色票 / 訊息鍵 / 字型白名單的 regenerate-and-diff 漂移閘 + 兩個 token lint）、**黑箱行為**（完整 conformance 套件，起真 ocserverd 綁隔離 port）。它是在乾淨 Linux 機器上的 cross-check，**不是 land 權威**——`bin/ci.sh` 才是。
+**雲端 check（`.github/workflows/ci.yml`）**：`pull_request` **與 push-to-`main`** 兩個觸發（後者由 T-ab2a 補上：在那之前，合併之後沒有任何東西會跑，所以兩個各自綠的 PR 併起來讓主幹變紅時，要等到下一個開 PR 的人繼承那片紅才會有人發現）。兩個觸發跑的是**同一組檢查、同一份定義**——刻意不為 `main` 另列一份清單。⚠️ **「同一組 job」已經不字面為真**:`notify-main-red`(T-5d3b)與 `auto-beta`(T-9fe3)都是 main-only,PR 上不會跑。字面成立的是**檢查**這一層——那兩個 job 都不檢查任何東西,`main` 不會跑任何 PR 跑不到的檢查——而這一層由 `bin/tests/auto-beta-guard.sh` 用差集擋住(見〈自動發 beta〉)。`main` 上另外**關掉 cancel-in-progress**：被取消的 run 回的是 `cancelled` 而不是紅，那會讓真正弄壞主幹的那顆 commit 完全沒有判決，在 commit 列表上跟「通過了」長得一樣。內容是「雲端跑得動的全部」——**單元測試**（`e2e_test` 的 hermetic isolation-guard、Go 各模組的格式／靜態／編譯／測試、FE typecheck/vitest）、**hygiene**（tracked-file path denylist）、**一致性檢查**（gen-ocapi / FE schema.ts / 主題色票 / 訊息鍵 / 字型白名單的 regenerate-and-diff 漂移閘 + 兩個 token lint）、**黑箱行為**（完整 conformance 套件，起真 ocserverd 綁隔離 port）。它是在乾淨 Linux 機器上的 cross-check，**不是 land 權威**——`bin/ci.sh` 才是。
 
 **主幹紅了誰會知道（T-5d3b）**：上面那句「要等到下一個開 PR 的人繼承那片紅才會有人發現」原本只被修掉一半——判決確實掛在那顆 commit 上了，但「有人收到通知」這半沒有任何機制（GitHub 的預設失敗通知是每個帳號自己的設定，從 repo 這邊讀不到）。現在 workflow 多一個 `notify-main-red` job：**只在 push-to-`main` 且有 job 失敗時**，打一發回呼到維護者（Kyle）的收件匣，內容是一行「哪顆 commit、哪些 job 紅、執行紀錄連結」。owner 裁定（`rc-c2edbfdc36a1`）**只做回呼、不自動開 issue**。
 
@@ -155,7 +155,7 @@ CI 跑在本地、`bin/ci.sh` 是 land 權威，從第一個非零步驟就 fail
 6. **secret 的存在性只在「需要它的那一刻」才第一次被驗證**。這條路徑只在 `failure()` 為真時執行，所以 secret 從沒設成功、被輪替或被誤刪，可以維持任意久而沒有任何跡象。**目前沒有**任何「每次 push-to-main（含綠的）就確認 secret 還在」的探測，也沒有低頻存活探測——要不要加是新功能，由 owner 決定。
 7. **run 卡在 queued**（macOS runner 排不到）⇒ 這一輪永遠不會有 conclusion ⇒ 永遠不通知。
 
-另外兩件形狀上的事：**被取消的 run 不會通知**（`failure()` 對 cancelled 為假，與上面「cancelled 不是紅」的立場一致）；**pull request 不會通知**（那是送 PR 的人自己的分支，紅就在他眼前）。`needs:` 那份 job 名字清單由 `bin/tests/main-red-notify-guard.sh` 守著——**新增第四個 job 卻忘了加進去會紅**，而不是安靜地少通知一項。
+另外兩件形狀上的事：**被取消的 run 不會通知**（`failure()` 對 cancelled 為假，與上面「cancelled 不是紅」的立場一致）；**pull request 不會通知**（那是送 PR 的人自己的分支，紅就在他眼前）。`needs:` 那份 job 名字清單由 `bin/tests/main-red-notify-guard.sh` 守著——**新增任何一個 job 卻忘了加進去會紅**，而不是安靜地少通知一項。⚠️ **「每一個其他 job」包含 `auto-beta`（T-9fe3）**：它不是閘，但它做的事是發出站台實際會跑的那顆 release，而**發版在 `main` 上失敗，本身就是「已合併」與「使用者拿得到」默默漂開**——那正是 `auto-beta` 存在要堵的洞，不通知等於在旁邊再挖一個。邊只有這一個方向：`auto-beta` **不**能 needs `notify-main-red`（notify 只在失敗時跑，等它會讓 `auto-beta` 永遠不跑；兩邊互等就是 `needs` 循環，GitHub 會整份拒絕、零個 job 被排程）。
 
 ⚠️ 子集的定義只有一份、寫在 `bin/ci-cloud.sh`（repo 內的 bash）；workflow YAML 只負責裝釘好版本的 toolchain 然後呼叫它，**裡面沒有、也不准有第二份模組清單或閘門清單**——要加請加進 `bin/ci-cloud.sh`。
 
@@ -178,7 +178,7 @@ wire（HTTP OpenAPI 面、MCP tool 面）已凍結：**動 wire 一律 spec 先�
 發版只有兩條指令,`bin/release` 全包,**不再有「印一行 `gh release create` 給人貼」的半套形式**(舊的 `bash bin/release <tag>` 已移除,打它會拿到非零退出 + 正確替代指令):
 
 ```
-bin/release publish --beta <tag> --target <sha> [--dry-run]
+bin/release publish --beta <tag> --target <sha> [--dry-run] [--no-settle]
 bin/release promote <tag>                       [--dry-run]
 ```
 
@@ -188,6 +188,7 @@ bin/release promote <tag>                       [--dry-run]
   - `promote` **刻意不再驗一次**:它不重 build,出貨的 bytes 就是那顆 beta 已經被這道閘驗過的 bytes;再跑一輪只是換一棵樹重驗,不會更真。
 - `promote` 把**既有且已驗過**的 prerelease 翻成正式版,**不重 build**——大家測的 bytes 就是出貨的 bytes。翻完回讀,若 asset 集合在翻的過程中變了(有人偷偷重傳)那是**失敗**,不是警告。
 - `--dry-run`:build + 驗完就停,印出它本來會跑的上傳指令,**什麼都不上傳**。彩排用這個。
+- `--no-settle`:**不等站台升上來**(跳過第 8 步)。理由是 owner 2026-08-05 裁定一:OffiCraft 是大家自架的服務、不是這個 repo 在營運的 SaaS,所以「某台站有沒有升上去」不是發版的成功條件;而無人值守的 runner 根本連不到私人站台,不給旗標的話每一輪自動發版都會死在一個跟 artifact 無關的理由上。**只是明示的 per-invocation opt-out**:預設一個字都沒變(人工發版照樣等站台、等不到照樣紅),第 7 步的回讀與 build 前的 CI 閘都**不受影響**,而且開了旗標那一輪會印一行講明為什麼不驗、結尾成功訊息也**不會**宣稱站台已在那顆 commit 上。守衛在 `bin/tests/release-guard.sh`(E3/E3b/E3c/E3d):E3 是它的**陽性對照**——同一組假站台狀態(站在別的 commit),不帶旗標仍以 `station-settle` 失敗,帶了才回 0。
 
 ### 回讀查證(publish 的第 7、8 步)
 
@@ -204,7 +205,41 @@ isDraft False | isPrerelease True | targetCommitish fb89a69aad8c
 
 也就是 asset 子欄位 `name`/`state`/`size` 確實存在、`state` 就是字串 `"uploaded"`、`size` 是非零整數——正好是回讀真正依賴的三件事。**為什麼要特別量**:同一張票裡,`verify_artifacts` 的架構檢查就是因為「猜 `file -b` 的輸出順序」而寫成永不可能命中的 pattern(`file` 實際輸出 `Mach-O 64-bit executable arm64`,架構在最後),導致每次 publish 都死在 `[artifact-arch]`。假設外部工具的輸出格式是同一類 bug,所以這裡改成量。要改形狀前**先重量一次**。
 
-**第 8 步的語意:publish 不觸發升級,它只「觀察」升級發生**。站台是靠 owner 帳號上的 **auto_update** 自己去撿新 release 的,而 **prerelease 也算**:2026-07-26 實測,`v0.5.38`(`isPrerelease=true`)建立後約 **2–3 分鐘**站台自動升上去、`/api/version` 的 git_sha 回讀查證。預設等待預算 60 × 5s = 5 分鐘,約為實測延遲的兩倍。所以「發完等站台升上來」是**正確的流程期待,不是設計缺陷**;但若哪天 auto_update 被關掉,這一步就會**合理地**失敗,而失敗訊息會明講「只有這一項沒達成、asset 與 release 本身都對」,以免下一個人跑去查 artifact。
+**第 8 步的語意:publish 不觸發升級,它只「觀察」升級發生**(⚠️ 這一步可以用 `--no-settle` 明示地不做——見上面那條;第 7 步不行、沒有旗標關得掉)。站台是靠 owner 帳號上的 **auto_update** 自己去撿新 release 的,而 **prerelease 也算**:2026-07-26 實測,`v0.5.38`(`isPrerelease=true`)建立後約 **2–3 分鐘**站台自動升上去、`/api/version` 的 git_sha 回讀查證。預設等待預算 60 × 5s = 5 分鐘,約為實測延遲的兩倍。所以「發完等站台升上來」是**正確的流程期待,不是設計缺陷**;但若哪天 auto_update 被關掉,這一步就會**合理地**失敗,而失敗訊息會明講「只有這一項沒達成、asset 與 release 本身都對」,以免下一個人跑去查 artifact。
+
+## 主幹綠自動發 beta(T-9fe3)
+
+**push 到 `main` 那一輪 check 全綠 ⇒ 自動發一顆 beta prerelease。** 沒有人要記得發版了。owner 2026-08-05 兩條裁定:
+
+1. **站台有沒有升上去不是成功條件**(自架服務,不是這個 repo 營運的 SaaS)⇒ 自動路徑帶 `--no-settle`。
+2. **GA 維持人工**:自動路徑**不碰** beta→final 的翻版子命令、不動 Latest 指向。owner 已知情接受「**他那台**會自動吃進每個 beta、而且沒有退版按鈕」⇒ **刻意不加任何保護、節流或確認閘**,要加就是在推翻一個已經做過的決定。
+
+⚠️ **不要把這件事讀成「合併就等於上線」。** 自動發出來的是 **prerelease**,而一個站要真的換過去,`updater.receive_beta`(只收正式版)與 `updater.auto_update` **兩個都得開**。兩者的常數、struct 欄位與 `getBool` 讀取全在 `server/ocserverd/settings.go`,DB 沒有那一列時不寫 dst ⇒ 維持 bool 零值 **`false`**(`auto_update.go` 是跑迴圈的地方,不是預設值所在)。預設狀態的站兩個都是關的 ⇒ 對它來說「land ≠ 上站」完全沒變。owner 那台兩個都開著,所以會;別人的站要不要跟,是那個站主自己的設定。
+
+實作分三塊,`.github/workflows/ci.yml` 裡只有呼叫、沒有邏輯(照該檔檔頭「WHAT runs 一律住在 repo 的腳本裡」):
+
+- **`bin/next-beta-tag`** —— 唯讀算版號,`v<major>.<minor>.<patch+1>-beta.1`,基底是**現存最大 semver**。「現存」= **git tag ∪ GitHub release 的 tag** 兩者聯集(release 被刪掉會留下 git tag、手推的 tag 從來沒有 release,只讀一邊算出來的名字會撞);比較是 **semver 語意**不是字串排序(`beta.10` > `beta.9`,`v0.5.78` > `v0.5.9`);候選集合是空的就**硬失敗**,不會退回 `v0.0.1-beta.1`(空集合的現實原因是查詢壞了,而那個「貼心的」退路會在一個有上百個 release 的 repo 上重發史前版號)。任一邊查詢失敗一律致命。
+- **`ci.yml` 的 `auto-beta` job** —— `needs` 是**全部** gate job(「主幹綠」必須是指全部檢查),`if` 同時限制 `event_name == 'push'` 與 `ref == 'refs/heads/main'`,`runs-on: macos-15`(`bin/release publish` 只跑 darwin/arm64,而且它會在 staging worktree 裡跑完整 `bin/ci.sh` 再 build),`permissions: contents: write` **只掛在這一個 job**、workflow 層維持 `read`、用內建 `GITHUB_TOKEN`(無 PAT、無 repo secret)。`--target ${{ github.sha }}` 釘的是觸發那一顆 commit,不是 job 開跑時 `main` 指到哪。
+- **`bin/tests/auto-beta-guard.sh`** —— 由 `bin/tests/run.sh` 派出(即 CI step 0b / `bin/ci-macos-host.sh`)。⚠️ **這是全 repo 唯一會解析 `.github/workflows/*.yml` 的東西**:曾經有一次改動本機全綠、GitHub 直接 startup failure(零 job、什麼都沒跑,而畫面上跟「沒紅」一樣),所以第一條斷言就是「它 parse 得動」,而且**拿不到 parser 是 FAIL 不是 skip**。parser 用 **ruby + 內建 psych**——hosted macOS runner **沒有 PyYAML**,ruby 兩邊都有;另有一組**陽性對照**先確認那個 parser 是真的(餵一份確定無效的 YAML 必須被拒、餵一份最小合法 workflow 必須被接受),因為「解析器有解析到」是其餘每條斷言的前提,而審查者實測用一個假 `ruby` 讓一份壞掉的 ci.yml 拿到滿分。其餘擋:`needs` 與**已宣告的 gate job 集合**的**差集兩個方向都必須為空**(判準是計算式不是列舉表:少一個 gate 會叫,把非 gate 的 job 塞進 `needs` 也會叫)。⚠️ **差集的對象是 gate 集合、不是「全部 job 扣掉自己」**——T-5d3b 的 `notify-main-red` 只在失敗時跑,`auto-beta` 等它就永遠不會跑,而 `notify-main-red` 又必須 needs `auto-beta`,兩條加起來會是 `needs` 循環、GitHub 整份拒絕零個 job。**哪個 job 是 gate 由 job 自己在 `ci.yml` 裡用 `# oc-job-role:` 標記宣告,並且由守衛強制**:沒標記、標兩個、值讀不懂、或文字掃描與 YAML parser 對「有哪些 job」看法不一致,一律 **FAIL 並點名那幾行**(分類不出來絕不默默歸邊);標記還要被佐證——宣告非 gate 的 job 必須把 `if` 釘在 `refs/heads/main`,宣告 gate 的不准釘,所以「給一道真的閘加 `if` 讓它在 PR 上跳過」不能拿來把它移出必等集合。⚠️ **另有 W1x:宣告 not-a-gate 的 job 集合必須恰好是 `{notify-main-red, auto-beta}`**——老實標、`if` 也釘對的**第三個**非閘 job 一樣會紅並被點名行號。理由是「離開 auto-beta 的必等集合」是一個有 owner 裁定在背後的決定(見 `CLAUDE.md` §13 的豁免名單),這一格把那句散文變成會紅的機制:要加成員只能改這道守衛本身,而那就是裁定要求的有意識動作。其餘擋:`if` 兩個條件都在、`contents: write` 只在這個 job、`.github/workflows/` 內**不得出現** beta→final 那個子命令的名字、**也不得出現會搬動 Latest 指向或發佈 draft 的那組 `gh release edit` 旗標**、publish 呼叫必須帶 `--no-settle` 且 `--target`／`--beta` 的值**在語意上**綁到觸發 commit 的 SHA 與算出來的 tag(走 `env:` 或直接插值都算,守衛不寫死其中一種形狀)、publish step 必須被 staleness 那一關 gate 住、checkout 必須 `fetch-depth: 0` **且** `fetch-tags: true`、`.github/workflows/` 底下**只能有 `ci.yml`**。版號規則本身用假 tag 清單直接餵函式測(`beta.9` vs `beta.10`、只有正式版、清單為空、撞名拒絕),**候選集怎麼湊出來的另有一組(S 段)直接驅動 `nbt_collect_candidate_tags`**:兩源聯集真的是聯集、任一源非零退出致命、任一源 rc=0 但回空**也**致命。
+  - ⚠️ **兩個宣稱要讀窄**:①「GA 不可被自動化」實際保證的是「那個子命令的名字 + 那組旗標」這兩個形狀,workflow 仍可經由它呼叫的腳本、`gh api` 或 REST 繞過;②「主幹綠 = 全部檢查」實際作用域是 **ci.yml 這一個檔案內的 job**(GitHub 沒有跨檔 `needs`),所以守衛改成硬性要求「只有 ci.yml」——多一個 workflow 檔就紅,逼人當場決定,而不是靜靜放寬「綠」的含意。
+
+**這條路徑上仍然沒有任何跳過開關**:`publish` 在 build 前跑完整 `bin/ci.sh` 那道閘照跑,第 7 步回讀照跑。
+
+### ⚠️ job 紅 ≠ 沒有 release(要人工清理的那一格)
+
+`bin/release` 第 6 步 `gh release create` 在第 7 步回讀**之前**,而**全檔沒有任何 rollback**(沒有 `gh release delete`)。所以:
+
+- **gate job 紅** ⇒ `auto-beta` 根本不跑 ⇒ 確實沒有 beta。
+- **`auto-beta` 自己在 upload 之後失敗**(回讀某一項不符、runner 中途死、asset 只上傳一半——`gh release create` 那句 die 訊息本身就寫著「check GitHub for a partially created release」)⇒ **留下一顆沒通過回讀的 prerelease,沒有人回收它**。
+
+嚴重度分兩種:存成 **draft** 的無害(`update_check.go` 的 admission 會把 draft 濾掉,站台看不到);**asset 缺失或不全**的**站台看得見**(admission 只看 draft/prerelease,不檢查 asset),它會是 semver 最大的那顆,`auto_update` 開著的站會挑上它然後下載失敗,直到下一次 merge 發出更大的 tag 才被蓋過去。
+
+**人工清理**:確認 job 紅的原因在 upload 之後,然後
+```
+gh release view <tag> --repo pkyosx/OffiCraft --json assets,isDraft,isPrerelease
+gh release delete <tag> --repo pkyosx/OffiCraft --cleanup-tag --yes
+```
+(`--cleanup-tag` 連 git tag 一起收,否則那個 tag 會留下來繼續參與版號計算與撞名。)確認清乾淨再重新 merge 或手動發版。
 
 ## 發佈簽章 —— 已整個移除(T-0398,owner 2026-07-31)
 
