@@ -415,7 +415,14 @@ jobs:
           #
           # "非 success" and not "紅", because a skipped job also lands in `red`
           # (jq selects result != "success") and calling a skip red is a lie.
-          body="$(printf '主幹紅了：%s@%s\n非 success 的檢查：%s\n執行紀錄：%s' "$REPO" "${COMMIT_SHA:0:12}" "${red:-unknown}" "$RUN_URL")"
+          #
+          # "項目" and not "檢查": `needs` includes `auto-beta`, which is NOT a
+          # gate (it checks nothing — it publishes). When a gate goes red,
+          # auto-beta is skipped and lands in this list; calling it a failed
+          # CHECK sends the reader hunting for a broken test that does not
+          # exist. The set this line reports is "jobs this run depended on",
+          # and only some of them are checks.
+          body="$(printf '主幹紅了：%s@%s\n非 success 的項目：%s\n執行紀錄：%s' "$REPO" "${COMMIT_SHA:0:12}" "${red:-unknown}" "$RUN_URL")"
           # --fail-with-body: without it curl exits 0 on 404/502/400 and this
           # step stays green while nobody was told. That flag is what turns an
           # HTTP error into a red here; --retry does not.
