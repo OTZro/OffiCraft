@@ -42,7 +42,26 @@ for (const width of [390, 1280]) {
     expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1);
   });
 
-  test(`width ${width}: the .md chip is keyboard-reachable (Tab) and Enter/Space both activate it`, async ({
+  // STOPPED (owner 2026-08-06, reply card rc-ebba69d22977, option 4 "把這兩條停掉").
+  //
+  // This assertion flaked twice within one hour on CI, both times on the very
+  // first line: `Tab` then toBeFocused(). The proof it is the test and not the
+  // product: on commit 1777030b the SAME suite ran in two jobs of the SAME
+  // round — macos-host-gates went green while auto-beta's internal CI went red
+  // on it. Identical code cannot be both.
+  //
+  // What is NO LONGER GUARDED, stated plainly because a skip is easy to read as
+  // "there was never anything here": that this button is reachable by keyboard
+  // at all, and that Enter/Space fire its native activation (jsdom does not
+  // implement that default action, so the cheaper test layer cannot cover it).
+  // The MOUSE path is still guarded by the sibling test above, which has never
+  // flaked.
+  //
+  // The maintainer recommended narrowing the assertion instead (keep Enter/Space,
+  // drop the "first Tab lands here" positional assumption); the owner ruled to
+  // stop it. Re-enabling is a fresh decision, not a revert.
+  // eslint-disable-next-line playwright/no-skipped-test
+  test.skip(`width ${width}: the .md chip is keyboard-reachable (Tab) and Enter/Space both activate it`, async ({
     mount,
     page,
   }) => {
