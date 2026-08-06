@@ -31,8 +31,13 @@
 # definitions of "the checks" drift; the one that drifts silently is always the
 # one nobody watches.
 #
-# No secrets are used anywhere in this workflow, by design — so a fork PR runs
-# the identical, complete check.
+# NO GATE IN THIS WORKFLOW USES A SECRET, by design — so a fork PR runs the
+# identical, complete check. Exactly one secret exists here and it is not a
+# gate: notify-main-red (T-5d3b) reads a webhook URL to say "main is red", it
+# runs ONLY on push-to-main, and a fork PR cannot reach repository secrets in
+# any case — so the property above is unchanged for every pull request.
+# ⚠️ Adding a secret to any of the gate jobs WOULD change it, and would make a
+# fork PR run a different, smaller check than ours.
 name: ci
 
 on:
@@ -275,3 +280,105 @@ jobs:
           name: macos-host-gates-log
           path: ${{ runner.temp }}/macos-host.log
           if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # WHO FINDS OUT THAT main WENT RED (T-5d3b). The jobs above hang a verdict on
+  # the commit that caused it — that half is a mechanism. The other half,
+  # "somebody learns about it", had none: GitHub's default failure routing is a
+  # per-account notification setting that cannot be read from here, so a red
+  # trunk was found only by whoever happened to look, and the next author
+  # inherited it believing the red was theirs. owner ruling (rc-c2edbfdc36a1):
+  # post a webhook at the maintainer, and deliberately NOT open an issue.
+  #
+  # WHY ONE AGGREGATING JOB AND NOT A STEP INSIDE EACH JOB
+  # A step per job is the same curl copied three times (it will drift), and a
+  # round that reddens two jobs then sends two messages for one event. The price
+  # of `needs:` is that it re-enumerates the job names, so a FOURTH job added
+  # without touching this line would silently stop being covered. That
+  # enumeration is therefore not left to discipline:
+  # bin/tests/main-red-notify-guard.sh asserts that every other job in this file
+  # appears in the `needs:` below, and reddens when one does not.
+  #
+  # THIS IS NOT A SECOND TEST LIST. The one-source-of-truth rule at the top of
+  # this file is about WHAT RUNS; this job runs no gate and names no suite.
+  #
+  # SCOPE, AND WHAT DELIBERATELY DOES NOT NOTIFY
+  # push-to-main only: a pull request is somebody's own branch and its red is
+  # already in front of them. A CANCELLED round does not notify either, because
+  # failure() is false for cancelled — the same position the concurrency block
+  # above takes, that cancelled is not a red.
+  notify-main-red:
+    needs: [cloud-gates, macos-e2e, macos-host-gates]
+    if: failure() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # THE URL IS THE CREDENTIAL. The receiving inlet authenticates on a token
+      # carried in the URL itself and answers an identical silent 200 to
+      # everything (unknown token included), so (a) a leaked URL lets anyone
+      # forge "main is red" at the maintainer, and (b) a 200 here does not prove
+      # the TOKEN was good — the inlet answers 200 to an unknown token too, so
+      # token validity is only observable at the receiving end. What this side
+      # CAN see is the HTTP status: an inlet that moved (404), is down (502) or
+      # a mistyped URL (400) are all distinguishable, and --fail-with-body below
+      # is what turns them into a red instead of a silent exit 0.
+      # Hence: secret only, never a literal in this file, never echoed.
+      - name: tell the maintainer that main is red
+        env:
+          MAIN_RED_WEBHOOK_URL: ${{ secrets.OC_MAIN_RED_WEBHOOK_URL }}
+          # Everything below is passed through the environment rather than
+          # interpolated into the script body — a ${{ }} expansion inside `run:`
+          # is a shell-injection seam, and none of these values is worth one.
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$MAIN_RED_WEBHOOK_URL" ]]; then
+            echo "::error::main is red and nobody was told: repository secret OC_MAIN_RED_WEBHOOK_URL is not set." >&2
+            exit 1
+          fi
+          # Which jobs are red is DERIVED from `needs`, so this step carries no
+          # second list of job names to keep in step with the one above.
+          red="$(jq -r 'to_entries
+                        | map(select(.value.result != "success"))
+                        | map("\(.key)=\(.value.result)")
+                        | join(" ")' <<<"$NEEDS_JSON")"
+          # The body is delivered VERBATIM as a chat message into a human-facing
+          # inbox, so it stays three short lines plus a link. A log dump here
+          # would charge the reader by the byte for every red round.
+          #
+          # Built with printf, NOT a multi-line shell string. A continuation
+          # line of such a string starts at column 1, which is less indented
+          # than this block scalar — YAML ends the scalar there and the whole
+          # workflow file stops parsing. That is not hypothetical: it shipped
+          # that way once and GitHub answered with a startup failure in which
+          # ZERO jobs ran, this one included.
+          #
+          # "非 success" and not "紅", because a skipped job also lands in `red`
+          # (jq selects result != "success") and calling a skip red is a lie.
+          body="$(printf '主幹紅了：%s@%s\n非 success 的檢查：%s\n執行紀錄：%s' "$REPO" "${COMMIT_SHA:0:12}" "${red:-unknown}" "$RUN_URL")"
+          # --fail-with-body: without it curl exits 0 on 404/502/400 and this
+          # step stays green while nobody was told. That flag is what turns an
+          # HTTP error into a red here; --retry does not.
+          #
+          # --retry 2 ALREADY covers the errors worth retrying: 429, 5xx, and
+          # (with --retry-connrefused) a refused connection. There is
+          # deliberately NO --retry-all-errors. Its only added effect over the
+          # above is retrying PERMANENT 4xx, where a second and third attempt
+          # cannot succeed — a moved inlet (404), a revoked token (403) or a
+          # mistyped URL (400) answers the same way every time. The cost is not
+          # zero: if the inlet ACCEPTS the message and then answers non-2xx (a
+          # proxy in front of it returning 502 after the enqueue, say), the flag
+          # turns one "main is red" into THREE in the maintainer's inbox. A
+          # duplicate notification is a real failure mode, and buying it back
+          # with retries of the unretryable is a bad trade.
+          #
+          # The response body is discarded rather than logged: an error page
+          # from the wrong host can quote the request URL back, and that URL is
+          # the credential. The exit code is the signal.
+          printf '%s' "$body" | curl -sS --fail-with-body --max-time 20 \
+            --retry 2 --retry-connrefused \
+            -X POST -H 'Content-Type: text/plain; charset=utf-8' \
+            --data-binary @- "$MAIN_RED_WEBHOOK_URL" >/dev/null
