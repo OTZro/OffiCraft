@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# officraft — compute the NEXT beta tag. Read-only: it never tags, pushes or
+# publishes anything. It prints one line on stdout and nothing else.
+#
+# WHY THIS IS A SCRIPT AND NOT INLINE SHELL IN ci.yml (T-9fe3)
+# .github/workflows/ci.yml's header states the rule: everything about WHAT runs
+# lives in a script in the repo, never in the workflow file, so the cloud check
+# and a local run are the same bytes. There is a second reason specific to this
+# logic: a version calculation buried in a workflow's `run:` block cannot be unit
+# tested, so its interesting cases (a numeric prerelease that string-sorts wrong,
+# a repo with no prerelease at all, an empty candidate set) would only ever be
+# exercised by a real publish on main. bin/tests/auto-beta-guard.sh drives the
+# functions below directly with fabricated tag lists instead.
+#
+# THE RULE, decided in T-9fe3 and deliberately narrow:
+#   next = v<major>.<minor>.<patch+1>-beta.1   where the base is the GREATEST
+#   EXISTING semver tag, compared by SEMVER PRECEDENCE, not by string order.
+#
+# Two properties follow, and both are the point:
+#   * it is strictly greater than everything that exists. `-beta.1` sorts BELOW
+#     the same X.Y.Z release under semver, so bumping the patch first is what
+#     keeps the result above the base even when the base is itself a release.
+#   * it matches what this repo already does by hand — every existing prerelease
+#     is vX.Y.Z-beta.1 (the newest at the time of writing: v0.5.78-beta.1).
+#
+# WHY THE CANDIDATE SET IS THE UNION OF TWO SOURCES
+# `gh release create <tag>` fails if the tag is taken, and a tag can be taken by
+# EITHER a GitHub release or a bare git tag — a release deleted from the Releases
+# page leaves its git tag behind, and a locally-pushed tag never had a release.
+# Reading only one source therefore computes a name that collides. Both are read,
+# and EITHER source failing OR answering empty is fatal — see the long note on
+# nbt_collect_candidate_tags for why "answered nothing" has to be fatal too, and
+# why falling back to the source that did answer is the bug rather than the fix.
+#
+# knobs (env) — all defaulted; they exist so the guard can drive the real code:
+#   OC_RELEASE_SRC      git repo whose tags are read (default: this repo)
+#   OC_RELEASE_GH_REPO  GitHub repo asked for release tags (default: pkyosx/OffiCraft)
+#
+# ── SOURCEABLE ──────────────────────────────────────────────────────────────
+# Dispatch is guarded by "am I being executed", so bin/tests/auto-beta-guard.sh
+# can `source` this file and test nbt_compute / nbt_assert_tag_absent DIRECTLY
+# rather than re-implementing the version rule in the test (a second copy of the
+# rule passes forever while the real one rots).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SRC="${OC_RELEASE_SRC:-$ROOT}"
+GH_REPO="${OC_RELEASE_GH_REPO:-pkyosx/OffiCraft}"
+
+# nbt_die <message> [exit-code] — same shape as bin/release's die(): the code is
+# an ARGUMENT, so the message must be $1 and never $*, or every call that names a
+# code prints it as part of the sentence.
+nbt_die() { echo "[next-beta-tag] FATAL: $1" >&2; exit "${2:-1}"; }
+
+# nbt_compute — candidate tags on STDIN, one per line.
+# Prints TWO lines on stdout: the base it chose, then the next tag.
+#
+# Tags that are not plain semver `vX.Y.Z[-prerelease]` are IGNORED rather than
+# rejected: this repo carries non-version tags (py-final, the permanent rollback
+# anchor) and they are not candidates for "the greatest version". Build metadata
+# (`+meta`) is also out of scope — nothing here has ever produced one, and
+# guessing at semantics nobody uses is how an unused branch rots.
+#
+# An empty candidate set is a HARD FAILURE, not "start at v0.0.1-beta.1". The
+# only realistic way this repo has zero semver tags is that the query that was
+# supposed to list them broke, and the helpful-looking fallback would then
+# republish a version number from the beginning of history.
+nbt_compute() {
+  python3 -c '
+import re, sys
+
+RX = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z.-]+))?$")
+
+def precedence(m):
+    """Semver precedence key. A release outranks any prerelease of the same
+    X.Y.Z (hence the 1 vs 0), and prerelease identifiers compare per spec:
+    numeric ones numerically, alphanumeric ones lexically, numeric < alphanumeric,
+    and a shorter identifier list loses to a longer one that shares its prefix."""
+    major, minor, patch, pre = int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4)
+    if pre is None:
+        return (major, minor, patch, 1, ())
+    ids = []
+    for part in pre.split("."):
+        if part.isdigit():
+            ids.append((0, int(part), ""))
+        else:
+            ids.append((1, 0, part))
+    return (major, minor, patch, 0, tuple(ids))
+
+best = None
+best_key = None
+for line in sys.stdin:
+    tag = line.strip()
+    m = RX.match(tag)
+    if not m:
+        continue
+    key = precedence(m)
+    if best_key is None or key > best_key:
+        best, best_key = tag, key
+
+if best is None:
+    sys.stderr.write(
+        "[next-beta-tag] FATAL: no semver tag (vX.Y.Z) among the candidates - "
+        "refusing to guess a base. A repo that really has none needs its first "
+        "tag created by hand; more likely the query that lists them failed.\n")
+    raise SystemExit(3)
+
+major, minor, patch = best_key[0], best_key[1], best_key[2]
+print(best)
+print("v%d.%d.%d-beta.1" % (major, minor, patch + 1))
+'
+}
+
+# nbt_assert_tag_absent <tag> — candidate tags on STDIN. Refuses to hand back a
+# name that is already taken.
+#
+# HONEST NOTE ON REACHABILITY. Given the rule above, the computed tag is strictly
+# greater than the greatest candidate, so it CANNOT be one of them — this check
+# does not fire on any input nbt_compute can produce, and no case in the guard
+# reaches it through nbt_compute. It is kept, and unit-tested directly, for the
+# reason the ticket asked for it: the moment the version rule changes (a
+# `-beta.N+1` bump on the same patch, say, which is the obvious next request) the
+# computation stops being monotonic and this becomes the difference between a red
+# run and overwriting a published tag. It never retries and never increments —
+# a collision is somebody else's decision to make, loudly.
+nbt_assert_tag_absent() {
+  local tag="$1" line
+  while IFS= read -r line; do
+    [[ "$(printf '%s' "$line" | tr -d '[:space:]')" == "$tag" ]] || continue
+    nbt_die "the computed tag $tag ALREADY EXISTS (as a git tag or a release). Not retrying and not overwriting: gh release create would collide, and picking a different number is a decision for a human." 4
+  done
+  return 0
+}
+
+# nbt_collect_candidate_tags — every name that could collide, from BOTH sources.
+#
+# EACH SOURCE MUST ANSWER, AND ANSWER NON-EMPTY. A source that fails is fatal, and
+# so is a source that succeeds with nothing to say. That second half is the one
+# worth spelling out, because it is not defensive padding — it closes a SILENT
+# degradation that was measured on this script:
+#
+#   a source returning rc=0 and zero lines makes this function quietly hand back a
+#   SINGLE-SOURCE candidate set. The base is then computed from half the world,
+#   AND nbt_assert_tag_absent reads that same truncated set — so both defences go
+#   blind at once, with rc=0 and not one word in the log.
+#
+# The concrete way that happens: `actions/checkout` fetching without tags. Then
+# `git tag --list` is rc=0 and empty on a runner, this whole script keeps working,
+# and it silently computes the next version off GitHub releases alone. Refusing
+# turns that into a loud, obvious red instead of a wrong number nobody questions.
+# ⚠️ So do NOT "improve" this by falling back to whichever source did answer.
+# Falling back is exactly the bug. Both sources, or stop.
+#
+# Neither emptiness case is reachable in this repo's normal state (it has ~90
+# releases and ~100 git tags), which is precisely why it has to be asserted rather
+# than trusted: an impossible-looking condition that nothing checks is how a
+# broken assumption gets to be wrong for free.
+nbt_collect_candidate_tags() {
+  local git_tags gh_tags
+  git_tags="$(git -C "$SRC" tag --list)" \
+    || nbt_die "could not list git tags in $SRC (git exited non-zero) — the candidate set would be incomplete, and an incomplete set silently computes a colliding version." 5
+  [[ -n "${git_tags//[[:space:]]/}" ]] \
+    || nbt_die "git tag --list in $SRC returned rc=0 but ZERO tags. Refusing to compute a version from GitHub releases alone. The usual cause is a checkout that did not fetch tags (actions/checkout needs fetch-depth: 0 and fetch-tags: true) — NOT a repo that has no tags." 5
+
+  gh_tags="$(gh release list --repo "$GH_REPO" --limit 1000 --json tagName --jq '.[].tagName')" \
+    || nbt_die "gh release list failed for $GH_REPO (gh exited non-zero) — the candidate set would be incomplete, and an incomplete set silently computes a colliding version." 5
+  [[ -n "${gh_tags//[[:space:]]/}" ]] \
+    || nbt_die "gh release list for $GH_REPO returned rc=0 but ZERO releases. Refusing to compute a version from git tags alone: a release whose git tag was deleted would then be invisible, and gh release create would collide with it." 5
+
+  printf '%s\n%s\n' "$git_tags" "$gh_tags"
+}
+
+# nbt_next_beta_tag — candidates on STDIN. The next tag on STDOUT, the base it
+# was derived from on STDERR (so a log says WHY that number, and so the guard can
+# assert the comparison picked the right base — the tag alone cannot distinguish
+# semver ordering from string ordering).
+nbt_next_beta_tag() {
+  local computed base next
+  computed="$(nbt_compute)" || exit $?
+  base="$(printf '%s\n' "$computed" | sed -n '1p')"
+  next="$(printf '%s\n' "$computed" | sed -n '2p')"
+  [[ -n "$base" && -n "$next" ]] \
+    || nbt_die "the version computation returned nothing usable (base='$base' next='$next')."
+  echo "[next-beta-tag] base: $base (greatest existing semver tag)" >&2
+  printf '%s\n' "$next"
+}
+
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+  return 0
+fi
+
+case "${1:-}" in
+  "") ;;
+  -h|--help|help)
+    cat >&2 <<'USAGE'
+usage: bin/next-beta-tag
+
+  Prints the next beta tag — v<major>.<minor>.<patch+1>-beta.1 off the greatest
+  existing semver tag, where "existing" means git tags AND GitHub release tags.
+  Read-only: it creates nothing. The base it chose goes to stderr.
+USAGE
+    exit 2 ;;
+  *) nbt_die "unexpected argument '$1' — this command takes none." 2 ;;
+esac
+
+CANDIDATES="$(nbt_collect_candidate_tags)"
+NEXT="$(printf '%s\n' "$CANDIDATES" | nbt_next_beta_tag)"
+printf '%s\n' "$CANDIDATES" | nbt_assert_tag_absent "$NEXT"
+printf '%s\n' "$NEXT"

@@ -5,10 +5,17 @@
 #
 # WHY THIS EXISTS (T-5d3b)
 # The workflow's notify job depends on `needs: [<every other job>]`. GitHub has
-# no wildcard for "all jobs", so adding a FOURTH job and forgetting this line
+# no wildcard for "all jobs", so adding ANOTHER job and forgetting this line
 # does not fail anything: the new job's red simply stops being reported, and the
 # workflow stays green-looking in exactly the way this feature exists to prevent.
 # A comment asking people to remember is not a mechanism. This is.
+#
+# EVERY other job means every one, including a job that is not a gate: T-9fe3's
+# auto-beta publishes the release the station actually runs, so a failure there is
+# "merged" and "reachable" drifting apart — the very silence auto-beta was added
+# to end. The edge only goes this way; auto-beta must NOT need this job, or the
+# two would form a `needs` cycle and GitHub would schedule zero jobs. That half is
+# bin/tests/auto-beta-guard.sh's to enforce, not this file's.
 #
 # WHAT IT ASSERTS
 #   0. the workflow file PARSES as YAML, under ONE named parser. Not a
