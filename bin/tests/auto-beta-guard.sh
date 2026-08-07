@@ -68,10 +68,12 @@
 #       own owner ruling — and this is what makes that sentence a mechanism rather
 #       than prose. The enumeration is the point here, not a smell: it cannot go
 #       stale in silence, because the only way past it is to edit it.
-#       ⚠️ Corroboration on the GATE side is the SHAPE, not a ref spelling: a gate
-#       may carry no job-level `if` at all. Matching one literal spelling was a
-#       hole — `github.ref_name == 'main'` and `startsWith(github.ref, …)` both
-#       took a real gate off pull requests while this stayed green.
+#       ⚠️ Corroboration on the GATE side is an ALLOWLIST, not a ref spelling: a
+#       gate may carry no job-level `if`, or one that is exactly on a roll-call in
+#       this file. Matching one literal spelling was a hole — `github.ref_name ==
+#       'main'` and `startsWith(github.ref, …)` both took a real gate off pull
+#       requests while this stayed green — and the first fix for that (ban every
+#       job-level `if`) reddened `draft != true` too, which is not a bypass.
 #       It also refuses `continue-on-error` on ANY job: that field makes a failing
 #       job report success outward, which satisfies auto-beta's `needs` AND makes
 #       notify-main-red's `failure()` false. Nothing here used to read it.
@@ -86,14 +88,20 @@
 #       ruling), so nothing under `.github/` may even NAME that subcommand — the
 #       scope is the whole directory, not just `workflows/`, because a composite
 #       action under `.github/actions/` is not a workflow file and slipped past.
-#       W4d then refuses local actions outright, and W4pc proves both greps match
-#       a planted example rather than reporting an empty result for free.
+#       W4d then refuses the REFERENCE rather than a location (no `uses: ./…`
+#       anywhere under `.github/`), because a composite action kept OUTSIDE
+#       `.github/` walked past both the grep scope and the earlier directory ban.
+#       W4pc and W4dpc prove those greps match a planted example rather than
+#       reporting an empty result for free.
 #   W5  the publish call losing --no-settle (every unattended run would then fail
 #       on a station it cannot reach) or losing --target (it would publish
 #       whatever main points at when the runner starts, not the commit that was
 #       checked).
 #   W6  a shallow checkout: `git worktree add --detach <sha>` and the tag
 #       comparison both need real history.
+#   W7  the `on:` block, which NOTHING here used to read: a filter there
+#       (`paths-ignore: ['**']`) makes every gate skip on every pull request
+#       without touching a job, and every assertion above stays green.
 #   N*  the version rule itself, driven hermetically with fabricated tag lists.
 #
 # HERMETICITY: nothing here runs a workflow, contacts GitHub, or invokes gh/git
@@ -229,6 +237,47 @@ def norm(s):
     # split over several lines compares as the one command it is.
     return re.sub(r"\s+", " ", str(s).replace("\\\n", " ")).strip()
 
+def norm_quotes(cond):
+    """Rewrite double-quoted string literals in an expression as single-quoted.
+
+    An exact comparison of a whole `if:` is the right shape — it is the only one
+    that can see a `|| …` bolted on beside the canonical condition. But exact ON
+    THE RAW TEXT also reddens for a rewrite that changed NOTHING: writing
+    `github.event_name == "push"` instead of `'push'` is the same condition, and a
+    reviewer measured that false red (36 ok, 1 failed). A guard that reddens for a
+    no-op edit teaches people to edit the guard to make it quiet, which is the one
+    habit this file cannot afford. So quotes are canonicalised first and the
+    STRUCTURE is still compared verbatim.
+
+    ⚠️ This normalises quoting ONLY. Nothing else about the condition is
+    forgiven: an added clause, a different operator, a negation, a renamed
+    context all still redden, because everything outside a string literal is
+    compared byte for byte.
+    """
+    out, i = [], 0
+    while i < len(cond):
+        c = cond[i]
+        if c != '"':
+            out.append(c); i += 1; continue
+        j, buf = i + 1, []
+        while j < len(cond) and cond[j] != '"':
+            if cond[j] == "\\" and j + 1 < len(cond):
+                buf.append(cond[j + 1]); j += 2; continue
+            buf.append(cond[j]); j += 1
+        if j >= len(cond):
+            # Unterminated quote: not something to guess at. Hand the original
+            # back so the comparison reddens on the real text.
+            return cond
+        # GitHub escapes a quote inside a single-quoted literal by doubling it.
+        out.append("'" + "".join(buf).replace("'", "''") + "'")
+        i = j + 1
+    return "".join(out)
+
+def unwrap(cond):
+    """Strip the optional outer `${{ }}` — both spellings are legal and equal."""
+    m = re.fullmatch(r"\$\{\{\s*(.*?)\s*\}\}", cond)
+    return m.group(1) if m else cond
+
 def publish_steps():
     return [s for s in (me.get("steps") or [])
             if "bin/release publish" in str(s.get("run", ""))]
@@ -274,9 +323,10 @@ if what == "job-present":
     print("yes" if job in jobs else "no")
 
 elif what == "if-raw":
-    # THE WHOLE CONDITION, normalised only for whitespace and for the optional
-    # outer `${{ }}` wrapper (both spellings are legal GitHub and mean the same
-    # thing). Compared VERBATIM by the caller.
+    # THE WHOLE CONDITION, normalised only for whitespace, for the optional
+    # outer `${{ }}` wrapper, and for the QUOTING of string literals (all three
+    # are legal GitHub spellings that mean the same thing — see norm_quotes for
+    # the false red the third one produced). Compared VERBATIM by the caller.
     #
     # ⚠️ IT USED TO ASK "are these two substrings present?" AND THAT WAS A HOLE.
     # A reviewer turned the condition into
@@ -289,11 +339,38 @@ elif what == "if-raw":
     # for a third clause, and for a negation. If you need auto-beta to run on
     # another trigger, change WANT_IF in this guard IN THE SAME COMMIT — that edit
     # is the deliberate act this assertion exists to force.
-    cond = norm(me.get("if", ""))
-    m = re.fullmatch(r"\$\{\{\s*(.*?)\s*\}\}", cond)
-    if m:
-        cond = m.group(1)
-    print(cond or "-")
+    print(norm_quotes(unwrap(norm(me.get("if", "")))) or "-")
+
+elif what == "on-raw":
+    # ── THE TRIGGERS THEMSELVES, which NOTHING in this file used to read ───────
+    # Every gate assertion above is downstream of one unexamined belief: that the
+    # gate jobs run on a pull request at all. They are filtered by the `on:`
+    # block, not by anything inside a job, so a reviewer put
+    # `paths-ignore: ['**']` under `on.pull_request` and every gate stopped
+    # producing a verdict on every pull request while this guard reported
+    # 37 ok, 0 failed. That is the same silence as a skipped gate — a check-runs
+    # list with no entry looks exactly like a check that did not go red — and it
+    # is reached without touching a single job.
+    #
+    # Compared as the WHOLE mapping, canonicalised, for the same reason W2 is:
+    # asking "is there a pull_request key?" cannot see a filter bolted on beside
+    # it, and enumerating the filter keys that can suppress a run (paths,
+    # paths-ignore, branches, branches-ignore, types, tags…) is the losing game
+    # the gate-`if` rule already lost once.
+    # ⚠️ THE HONEST COST: adding a legitimate trigger (workflow_dispatch, a
+    # schedule) reddens here and has to be changed in this guard in the SAME
+    # commit. That edit is the deliberate act this assertion exists to force —
+    # a publish-on-demand button nobody reviewed as one is exactly what
+    # auto-beta's `github.event_name == 'push'` half is guarding against.
+    #
+    # psych is YAML 1.1, so an unquoted `on:` key comes back as the boolean true;
+    # a quoted `"on":` stays the string. Both are read, and BOTH PRESENT is a
+    # failure rather than a pick — the loser's triggers would go unexamined.
+    found = [k for k in ("true", "on") if k in doc]
+    if len(found) != 1:
+        print("on-keys=%s (want exactly one)" % (",".join(found) or "none"))
+    else:
+        print(json.dumps(doc[found[0]], sort_keys=True, separators=(",", ":")))
 
 elif what == "write-holders":
     # Every job whose own permissions grant contents: write, plus the workflow
@@ -499,11 +576,52 @@ for job in sorted(parsed):
 # — two mutants a reviewer actually ran, both 35 ok / 0 failed — took a real gate
 # off every pull request while this guard reported the marker as corroborated.
 # Enumerating ref spellings is a losing game (there is also github.head_ref,
-# github.event_name, contains(), a matrix expression, an env lookup). So the gate
-# rule is now the SHAPE, not the spelling: A GATE MAY NOT CARRY A JOB-LEVEL `if`
-# AT ALL. A gate's whole job is to produce a verdict on every pull request; any
-# condition on that is either a no-op or the bypass. Step-level `if:` is
-# untouched — several gates use it and it cannot skip the job.
+# github.event_name, contains(), a matrix expression, an env lookup).
+#
+# THE FIRST ANSWER TO THAT WAS "A GATE MAY CARRY NO JOB-LEVEL `if` AT ALL", AND
+# THAT WAS TOO STRONG. It is fail-closed, which is right, but it also reddens for
+# conditions that are not bypasses at all — `github.event.pull_request.draft
+# != true` is the obvious one, and a rule that forbids a legitimate change
+# outright gets edited away by whoever needs it next, which costs more than it
+# buys. Measured: that condition scored 35 ok / 2 failed.
+#
+# So the rule is an ALLOWLIST, not a ban and not a spelling denylist: a gate may
+# carry NO job-level `if`, or one that is EXACTLY a member of the roll-call
+# below — compared whole, after normalising whitespace, the `${{ }}` wrapper and
+# quoting, so no spelling gets in that a reviewer did not read. This is the same
+# device as RULED_EXEMPT and WANT_IF, for the same reason: an unlisted condition
+# — bypass or not — cannot pass without an edit to THIS LINE, and that edit is
+# the deliberate, reviewable act. Fail-closed either way; what changes is that
+# the legitimate case now has a door instead of a wall.
+# ⚠️ AND WHAT THIS DOES NOT BUY, because the roll-call is only as good as the
+# reading: a condition somebody ADDS here is trusted completely. `draft != true`
+# does stop a gate running on draft pull requests, and if the land criteria ever
+# accept a draft PR as merge-ready that entry is the hole. The mechanism forces
+# the conversation; it does not have the conversation.
+# Step-level `if:` is untouched — several gates use it and it cannot skip the job.
+ALLOWED_GATE_IF = (
+)
+def canon(expr):
+    """Whitespace, `${{ }}` and quoting normalised; everything else verbatim."""
+    e = re.sub(r"\s+", " ", str(expr)).strip()
+    m = re.fullmatch(r"\$\{\{\s*(.*?)\s*\}\}", e)
+    if m:
+        e = m.group(1)
+    out, i = [], 0
+    while i < len(e):
+        if e[i] != '"':
+            out.append(e[i]); i += 1; continue
+        j, buf = i + 1, []
+        while j < len(e) and e[j] != '"':
+            if e[j] == "\\" and j + 1 < len(e):
+                buf.append(e[j + 1]); j += 2; continue
+            buf.append(e[j]); j += 1
+        if j >= len(e):
+            return e
+        out.append("'" + "".join(buf).replace("'", "''") + "'")
+        i = j + 1
+    return "".join(out)
+
 PIN = re.compile(r"github\.ref\s*==\s*['\"]refs/heads/main['\"]")
 for job, role in sorted(roles.items()):
     cond = str(((doc.get("jobs") or {}).get(job) or {}).get("if", ""))
@@ -514,15 +632,22 @@ for job, role in sorted(roles.items()):
                 "a pull request produces a verdict there, and this label would "
                 "quietly take it out of the set auto-beta must wait for"
                 % (job, NOTGATE, cond.strip() or "(no if:)"))
-    if role == GATE and cond.strip():
-        problem("job '%s' declares itself a %s, but it carries a job-level `if` "
-                "(found: %s) — a gate must produce a verdict on EVERY pull request, "
-                "so ANY condition on whether it runs is the bypass this rule exists "
-                "to stop, whatever it is spelled with (github.ref, ref_name, "
-                "startsWith(), event_name, head_ref, …). A gate that skips on pull "
-                "requests is still a gate. If this job genuinely is not a check, "
-                "mark it %s — and then W1x will ask for the owner ruling that costs."
-                % (job, GATE, cond.strip(), NOTGATE))
+    if role == GATE and cond.strip() and canon(cond) not in ALLOWED_GATE_IF:
+        problem("job '%s' declares itself a %s and carries a job-level `if` that is "
+                "not on the reviewed roll-call (found: %s; the roll-call holds: %s). "
+                "A gate must produce a verdict on every pull request, so a condition "
+                "on whether it runs is where the bypass lives, whatever it is spelled "
+                "with (github.ref, ref_name, startsWith(), event_name, head_ref, an "
+                "env lookup, …) — which is why this is an allowlist and not a list of "
+                "bad spellings. A gate that skips on pull requests is still a gate. "
+                "If the condition is genuinely not a bypass (skipping DRAFT pull "
+                "requests is the case this door was opened for), add it verbatim to "
+                "ALLOWED_GATE_IF in this guard in the SAME commit — that edit is the "
+                "review. If this job is genuinely not a check, mark it %s — and then "
+                "W1x will ask for the owner ruling that costs."
+                % (job, GATE, cond.strip(),
+                   ", ".join("`%s`" % c for c in ALLOWED_GATE_IF) or "(nothing yet)",
+                   NOTGATE))
 
 # ── no job may excuse itself from failing (continue-on-error) ────────────────
 # ⚠️ NOTHING IN THIS FILE READ THIS FIELD, and one line walked through the gap:
@@ -604,7 +729,7 @@ if [[ "$ROLES_RC" != "0" ]]; then
 elif [[ -n "$ROLE_PROBLEMS" ]]; then
   bad "W1r every job must DECLARE whether it is a gate, readably — these could not be classified, and are NOT being defaulted into a bucket:$(printf '%s\n' "$ROLE_PROBLEMS" | sed 's/^/ | /' | tr '\n' ' ')"
 else
-  ok "W1r every job carries exactly one readable $ROLE_MARKER marker, the parser and the text scan agree on the job set, every marker is corroborated (a not-a-gate pins refs/heads/main; a gate carries NO job-level if at all), and no job excuses itself with continue-on-error ($(printf '%s\n' "$ROLES_OUT" | sed -n 's/^GATES:/gates: /p'))"
+  ok "W1r every job carries exactly one readable $ROLE_MARKER marker, the parser and the text scan agree on the job set, every marker is corroborated (a not-a-gate pins refs/heads/main; a gate carries either no job-level if or one on the reviewed roll-call), and no job excuses itself with continue-on-error ($(printf '%s\n' "$ROLES_OUT" | sed -n 's/^GATES:/gates: /p'))"
 fi
 
 # ── W1x: the not-a-gate set is exactly the two jobs that were ruled exempt ──
@@ -636,6 +761,16 @@ fi
 WANT_IF="github.event_name == 'push' && github.ref == 'refs/heads/main'"
 check "W2 $JOB's if is EXACTLY \`$WANT_IF\` (a bolted-on \`|| …\` would publish from a pull request)" \
   "$WANT_IF" "$(q if-raw)"
+
+# ── W7: the workflow's TRIGGERS are exactly the canonical ones ──────────────
+# The one assertion that reads `on:`. Everything else in this file reasons about
+# what the jobs DO once they are scheduled; this is what decides whether they are
+# scheduled at all. A filter here (`paths-ignore: ['**']` is the cheap one) makes
+# every gate skip on every pull request with no job touched and no assertion
+# above reddening — see the `on-raw` query for the measurement.
+WANT_ON='{"pull_request":null,"push":{"branches":["main"]}}'
+check "W7 the workflow's \`on:\` is EXACTLY $WANT_ON (a path/branch filter here makes every gate skip, and no other assertion reads it)" \
+  "$WANT_ON" "$(q on-raw)"
 
 # ── W3: the elevated permission is scoped to this job ──────────────────────
 check "W3 contents:write is held by $JOB ALONE and the workflow default stays read" \
@@ -694,23 +829,55 @@ GA_PC_B="$(grep -rlE -- "$GA_FLAG_RX" "$WORK/ga-pc" 2>/dev/null | grep -c . || t
 check "W4pc the W4/W4b scans find a planted GA automation in a nested dir (so an empty result over .github/ means something)" \
   "subcommand=1 flags=1" "subcommand=$GA_PC_A flags=$GA_PC_B"
 
-# ── W4d: there are no local actions for those scans to have to chase ─────────
-# The composite-action bypass above works because a local action is a SECOND place
-# steps can live, with its own file, its own `run:` bodies, and — being referenced
-# by `uses:` — no obligation to look like anything this guard recognises. W4 and
-# W4b now read it, but "we grep it too" is a weaker promise than "it does not
-# exist": the next shape in there (a `gh api` PATCH, a node action, a script it
-# shells out to) is invisible again. This is the same move as W4c — pin the
-# precondition rather than pretend to cover the general case. A local action is a
-# reasonable thing to want; adding one has to redden here and be decided, not
-# arrive as a refactor.
-GA_ACTIONS_DIR="$ROOT/.github/actions"
-if [[ -e "$GA_ACTIONS_DIR" ]]; then
-  ACTION_FILES="$(cd "$GA_ACTIONS_DIR" && find . -type f 2>/dev/null | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
-  bad "W4d .github/actions/ exists — a local (composite) action is a second home for steps that runs inside auto-beta's \`contents: write\` job, and W4/W4b can only see the shapes they know how to grep. Found: ${ACTION_FILES:-(empty dir)}. If a local action is genuinely wanted, that is a decision to make deliberately (and this guard has to be reworked to read it) — not a refactor that silently widens what auto-beta may run."
+# ── W4d: nothing under .github/ REFERENCES a local action or workflow ────────
+# The composite-action bypass works because a local action is a SECOND home for
+# steps: its own file, its own `run:` bodies, and — being reached through `uses:`
+# — no obligation to look like anything this guard recognises. W4 and W4b now
+# grep it, but "we grep it too" is a weaker promise than "it cannot be reached",
+# because the next shape in such a file (a `gh api` PATCH, a node action, a
+# script it shells out to) is invisible to a grep again.
+#
+# ⚠️ THIS USED TO BAN THE DIRECTORY `.github/actions/`, AND THAT WAS THE WRONG
+# TARGET — it paid the whole price and bought almost nothing. A local action does
+# not have to live under `.github/`: `action.yml` at the repo root referenced as
+# `uses: ./`, or `tools/finalise/action.yml` as `uses: ./tools/finalise`, is an
+# ordinary composite action that GitHub runs happily, that W4/W4b (scoped to
+# `.github/`) never read, and that the directory ban never saw. Measured: that
+# exact shape scored 37 ok / 0 failed while a step running `bin/release promote`
+# sat inside auto-beta's `contents: write` job.
+#
+# So what is pinned is the REFERENCE, not a location: no file under `.github/`
+# may point a `uses:` at a path inside this repo (`./…`, `../…`). That is the one
+# thing every local action, composite or not, wherever it is kept, has to do to
+# be reached — and it is also how a local REUSABLE WORKFLOW is called, which is a
+# second way to add jobs W1's set difference cannot see. Adding one is a
+# reasonable thing to want; it has to redden here and be decided, not arrive as a
+# refactor.
+# ⚠️ WHAT THIS STILL DOES NOT CLOSE, stated so nobody reads it wider: a `run:`
+# step in ci.yml can call any script in the repo, and that script can do anything
+# — GA included. W4/W4b/W4d cover the shapes that add a NEW HOME FOR STEPS; they
+# are not a proof that no workflow can reach GA.
+USES_LOCAL_RX='uses:[[:space:]]*["'"'"']?\.\.?/'
+USES_LOCAL_HITS="$(grep -rnE -- "$USES_LOCAL_RX" "$GA_SCAN_DIR" 2>/dev/null || true)"
+if [[ -z "$USES_LOCAL_HITS" ]]; then
+  ok "W4d nothing under .github/ references a local action or reusable workflow (\`uses: ./…\`) — steps live only in the files W1/W2/W3 actually read, wherever a local action might be kept"
 else
-  ok "W4d no .github/actions/ — steps live only in ci.yml, which is the file W1/W2/W3 actually read"
+  bad "W4d a file under .github/ references a local action or reusable workflow with \`uses: ./…\` — that is a second home for steps, running inside auto-beta's \`contents: write\` job, whose contents W4/W4b can only see if it happens to sit under .github/ AND happens to use a shape they grep for. Adding one is a decision to make deliberately (and this guard has to be reworked to read the target) — not a refactor that silently widens what auto-beta may run: $(printf '%s\n' "$USES_LOCAL_HITS" | tr '\n' ' ')"
 fi
+
+# ── W4dpc: and W4d's grep is ALIVE ──────────────────────────────────────────
+# W4d reports "clean" as an EMPTY result, exactly like W4/W4b — and exactly like a
+# pattern that stopped matching. Same treatment: point the SAME invocation at a
+# fixture that definitely carries the shape, in a nested directory, and require it
+# to find both spellings a local reference actually takes.
+USES_PC_DIR="$WORK/uses-pc/nested"
+mkdir -p "$USES_PC_DIR"
+printf '%s\n' '      - uses: ./tools/finalise' > "$USES_PC_DIR/wf.yml"
+printf '%s\n' "      - uses: './.github/actions/finalise'" \
+              '      - uses: ./.github/workflows/reusable.yml' > "$USES_PC_DIR/wf2.yml"
+USES_PC_N="$(grep -rlE -- "$USES_LOCAL_RX" "$WORK/uses-pc" 2>/dev/null | grep -c . || true)"
+check "W4dpc the W4d scan finds planted local \`uses: ./…\` references in a nested dir (so an empty result over .github/ means something)" \
+  "2" "$USES_PC_N"
 
 # ── W4c: the job universe this guard reasons about is really the whole one ───
 # W1's difference is computed over the jobs in ci.yml, so "the trunk is green"

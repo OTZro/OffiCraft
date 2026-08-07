@@ -84,6 +84,12 @@
 # could not have run anyway, not a check.
 name: ci
 
+# ⚠️ THIS BLOCK IS PINNED WHOLE by bin/tests/auto-beta-guard.sh (W7), and it is
+# the ONE place a filter can silence every gate at once without touching a job: a
+# `paths-ignore` or a `branches` list under pull_request makes all three gates
+# skip on a pull request, and a skipped check looks exactly like a check that did
+# not go red. So changing anything here — including adding a legitimate trigger —
+# reddens that guard and has to be changed there in the SAME commit.
 on:
   pull_request:
   push:
