@@ -882,16 +882,37 @@ func printReplyCardAnswered(out io.Writer, id string, card map[string]any, trigg
 //
 // The body deliberately does NOT name a presser. It said "EXPIRED by owner"
 // until T-1b88 (owner 2026-08-07, card rc-3ff94b116970) widened the verb to the
-// card's own AUTHOR as well as the owner / an admin agent — and this same line
-// already ends with byTrigger(trigger) ("· by <who>"), so an author retiring
-// its own card printed "EXPIRED by owner … · by ow-xxxx" and contradicted
-// itself. WHO pressed it belongs to that suffix alone; the body only reports
-// that no answer is coming.
+// card's own AUTHOR as well as the owner / an admin agent, so that wording
+// would report the WRONG presser for every card its own author retires. WHO
+// pressed it belongs to the byTrigger(trigger) suffix alone; the body only
+// reports that no answer is coming.
+//
+// ⚠️ FOLLOW THE PATH BEFORE REASONING ABOUT WHAT AN AUTHOR SEES — an earlier
+// version of this comment claimed the author would read "EXPIRED by owner … ·
+// by <its own id>" and contradict itself, and BOTH halves of that are wrong:
+//   - the LIVE delta never reaches this function for the author. dispatch()
+//     drops self-triggered frames for every topic except member, and
+//     replyCardTopic is not that exception, so handleReplyCard is not called.
+//   - the BOOT/RECONNECT drain is therefore the only path that shows an author
+//     its own expiry — and drainReplyCards passes trigger "", so byTrigger
+//     renders nothing. There is no "· by <who>" suffix to contradict.
+//
+// The correction stands on the first bullet alone: on the one path that does
+// reach the author, the old body would silently credit the owner with a button
+// the author itself pressed, and nothing on that line would say otherwise.
+//
+// The guidance half was reworded for the same reason: "the question may be
+// stale" was written for a card SOMEONE ELSE retired for you.
+//
+// ⚠️ Whether being woken by your own withdrawal causes anything worse than a
+// mis-attributed line is NOT settled and was deliberately left out of T-1b88.
+// Note the suppression above makes the wake itself doubtful, so the first step
+// is to establish whether that path exists at all rather than to fix it.
 func printReplyCardExpired(out io.Writer, id string, card map[string]any, trigger string) {
 	fmt.Fprintf(out, "[ocagent] reply-card %s EXPIRED (no answer) | asked: %s — "+
-		"the question may be stale: if it still matters, open a FRESH card with "+
-		"current context; if not, proceed / close out. Any held step/task was "+
-		"already restored to in_progress%s\n",
+		"settled without an answer: if the question still matters, open a FRESH "+
+		"card with current context; if not, proceed / close out. Any held "+
+		"step/task was already restored to in_progress%s\n",
 		id, renderMessageBody(strOrEmpty(card["summary"]), replyCardBodyAuthority), byTrigger(trigger))
 }
 

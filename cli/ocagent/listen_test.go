@@ -663,9 +663,9 @@ func TestHandleReplyCard_ExpiredPrintsGuidanceLine(t *testing.T) {
 	var out bytes.Buffer
 	handleReplyCard(srv.Client(), cfg, replyCardFrame("rc-x1", "kyle"), testReplySeen(t), "owner", &out)
 	want := "[ocagent] reply-card rc-x1 EXPIRED (no answer) | asked: 還要等這個嗎? — " +
-		"the question may be stale: if it still matters, open a FRESH card with " +
-		"current context; if not, proceed / close out. Any held step/task was " +
-		"already restored to in_progress · by owner\n"
+		"settled without an answer: if the question still matters, open a FRESH " +
+		"card with current context; if not, proceed / close out. Any held " +
+		"step/task was already restored to in_progress · by owner\n"
 	if got := out.String(); got != want {
 		t.Fatalf("expired out = %q want %q", got, want)
 	}
