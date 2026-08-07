@@ -51,8 +51,15 @@ var t6020Opened = map[[2]string]string{
 // t6020Revised holds the rows a LATER owner ruling moved off the admin floor.
 // The 2026-07-26 ruling opened 19; this table is the difference between that
 // history and today, so nothing the owner decided is ever deleted from the
-// record — `len(t6020Opened) + len(t6020Revised)` must stay 19 (asserted below),
-// which is what makes "someone quietly dropped a row" impossible.
+// record — `len(t6020Opened) + len(t6020Revised)` must stay 19 (asserted below).
+// ⚠️ That count locks the CARDINALITY, not the IDENTITY of the rows: DELETING a
+// row is caught (18 != 19), but SWAPPING one — dropping row A and adding some
+// other row B that already sits at the admin floor — keeps the count at 19 and
+// every per-row assertion still holds for B, so A silently leaves the
+// admin-floor assertion behind. NOT a guard of the authorization boundary — do
+// not build on it as one. What actually stops a swap today is a human reading
+// the diff. (The frozen manifest and the conformance auth matrix may or may not
+// catch it as well; that has NOT been verified, so it is not claimed here.)
 //
 // 🔴 ADDING A SECOND ROW HERE REQUIRES ITS OWN OWNER RULING, AND YOU MUST EDIT
 // THE `len(t6020Revised) == 1` GUARD BELOW IN THE SAME COMMIT. That guard is a

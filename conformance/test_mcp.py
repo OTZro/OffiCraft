@@ -443,8 +443,15 @@ T6020_OPENED_TOOLS = {
 # row by row). They stay requires=owner AND mcp_exclude.
 # T6020_REVISED_TOOLS: rows a LATER owner ruling moved OFF the admin floor. The
 # 2026-07-26 ruling opened 19; this table is the difference between that history
-# and today, so `len(OPENED) + len(REVISED)` must stay 19 and no row is ever
-# deleted from the record. The Go twin is `t6020Revised` in
+# and today, so `len(OPENED) + len(REVISED)` must stay 19. That count locks the
+# CARDINALITY, not the IDENTITY of the rows: dropping a row is caught (18 != 19),
+# but SWAPPING one out for another admin-floor row keeps the count at 19 and
+# every per-row assertion still holds for the newcomer, so the row that left is
+# no longer under the admin-floor assertion. NOT a guard of the authorization
+# boundary. What actually stops a swap today is a human reading the diff. (The
+# frozen manifest and the auth matrix may or may not catch it as well; that has
+# NOT been verified, so it is not claimed here.) The Go
+# twin is `t6020Revised` in
 # server/ocserverd/routes_t6020_governance_test.go.
 #
 # ADDING A SECOND ROW NEEDS ITS OWN OWNER RULING, AND THE len(...) == 1 GUARD
