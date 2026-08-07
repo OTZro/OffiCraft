@@ -760,25 +760,98 @@ def canon(expr):
 DQUOTE_WHY = (
     "a DOUBLE-QUOTED literal (%s). Double quotes are not valid in a GitHub Actions "
     "expression: they do not change what the condition means, they stop the WHOLE "
-    "WORKFLOW from starting. Measured on GitHub with two minimal workflows differing "
-    "only in the quotes — the double-quoted one was a startup failure with `jobs: []`, "
-    "zero jobs scheduled, and the run named after the file path because `name:` was "
-    "never parsed. On a pull request that is not a red check, it is NO checks, which "
-    "looks exactly like nothing being wrong. Rewrite the literal with SINGLE quotes. "
-    "(This guard used to normalise the two spellings together as if they were "
-    "equivalent, which quietly allowed the shape that schedules nothing.)"
+    "WORKFLOW from starting. Measured on GitHub — the double-quoted form was a startup "
+    "failure with ZERO jobs and the run named after the file path because `name:` was "
+    "never parsed, while the single-quoted control ran one job to success. On a pull "
+    "request that is not a red check, it is NO checks, which looks exactly like nothing "
+    "being wrong. Rewrite the literal with SINGLE quotes. (This guard used to normalise "
+    "the two spellings together as if they were equivalent, which quietly allowed the "
+    "shape that schedules nothing.)"
 )
+
+# ── double quotes in an EXPRESSION, at any position in the file ───────────────
+# 🔴 THE SCOPE OF THIS RULE IS DRAWN BY THE CONSEQUENCE, NOT BY THE LAYER, and the
+# first version drew it by the layer. It checked job-level `if` only, on the
+# inherited reasoning that step-level `if` "cannot skip a whole job so it is not a
+# bypass". True of skipping — and irrelevant here, because a double quote does not
+# skip anything: it stops the WHOLE FILE from being scheduled. Measured on GitHub,
+# three minimal workflows:
+#   step-level `if: github.event_name == "push"`              → startup failure, 0 jobs
+#   `env: WHO: ${{ github.event_name == "push" }}`            → startup failure, 0 jobs
+#   the same two written with single quotes (control)         → success, 1 job, success
+# The control having a job that ran is what makes the other two findings rather than
+# a broken probe. So both positions are refused, and the rule reads: a double quote
+# inside an expression, wherever the expression lives.
+#
+# ⚠️ WHAT MUST STAY GREEN, because refusing it would be the same disease this whole
+# round is treating — a guard that reddens for a legal edit:
+#   • shell double quotes in `run:` (`run: echo "hi"`) are ordinary shell;
+#   • ordinary YAML string values (`env: FOO: "bar"`, `with: args: "x"`) are legal
+#     YAML — and note the parser makes this one free: quoting is consumed by the
+#     YAML parse, so a plain quoted scalar arrives here with no `"` in it at all.
+#     What survives into a VALUE is what this reads.
+# Positive controls for both directions are asserted in W1rq; they are not a
+# comment's promise.
+#
+# ⚠️ THREE POSITIONS ARE MEASURED (job `if`, step `if`, `${{ }}` interpolation).
+# Other expression positions exist in the Actions grammar and are NOT measured; the
+# scan below covers every `${{ }}` in the parsed document, which reaches them by
+# construction, but the CLAIM about what GitHub does with them stops at those three.
+DQ_EXPR = re.compile(r"\$\{\{(.*?)\}\}", re.S)
+
+def outside_exprs(s):
+    return DQ_EXPR.sub("", str(s))
+
+def dq_flag(where, text):
+    problem(("%s carries " + DQUOTE_WHY) % (where, str(text).strip()))
+
+def scan_dquote_exprs():
+    """Every `if:` (any layer) and every `${{ }}` body in the whole document."""
+    jobs = doc.get("jobs") or {}
+    hit = set()
+    for job in sorted(jobs):
+        spec = jobs[job] if isinstance(jobs[job], dict) else {}
+        cond = str(spec.get("if", ""))
+        # An `if:` is an expression in its ENTIRETY, `${{ }}` or not — so a quote
+        # anywhere outside an interpolation counts here, and one inside is caught
+        # by the document walk below (checked separately so neither is reported twice).
+        if '"' in outside_exprs(cond):
+            dq_flag("job '%s' job-level `if`" % job, cond)
+            hit.add(job)
+        steps = spec.get("steps") or []
+        for n, step in enumerate(steps, 1):
+            if not isinstance(step, dict):
+                continue
+            scond = str(step.get("if", ""))
+            if '"' in outside_exprs(scond):
+                dq_flag("job '%s' step %d (%s) step-level `if`"
+                        % (job, n, str(step.get("name") or step.get("uses") or "unnamed")[:48]),
+                        scond)
+    def walk(node, path):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                walk(v, "%s.%s" % (path, k))
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, "%s[%d]" % (path, i))
+        elif isinstance(node, str):
+            for body in DQ_EXPR.findall(node):
+                if '"' in body:
+                    dq_flag("the `${{ … }}` expression at %s" % (path.lstrip(".") or "(root)"),
+                            "${{%s}}" % body)
+    walk(doc, "")
+    return hit
+
+DQ_JOBS = scan_dquote_exprs()
 
 PIN = re.compile(r"github\.ref\s*==\s*['\"]refs/heads/main['\"]")
 for job, role in sorted(roles.items()):
     cond = str(((doc.get("jobs") or {}).get(job) or {}).get("if", ""))
-    if '"' in cond:
-        # Refused for EVERY declared role, gate or not, and before the role checks
-        # below: `PIN` accepts either quote, so a not-a-gate pinned with
-        # `github.ref == "refs/heads/main"` used to read as correctly pinned while
-        # scheduling nothing at all.
-        problem(("job '%s' has a job-level `if` carrying " + DQUOTE_WHY)
-                % (job, cond.strip()))
+    if job in DQ_JOBS:
+        # Already refused above by name. Skipped here so the role checks do not pile
+        # a second, misleading message on top: `PIN` accepts either quote, so a
+        # not-a-gate pinned with `github.ref == "refs/heads/main"` would otherwise
+        # read as correctly pinned while scheduling nothing at all.
         continue
     pinned = bool(PIN.search(cond))
     if role == NOTGATE and not pinned:
@@ -886,6 +959,69 @@ elif [[ -n "$ROLE_PROBLEMS" ]]; then
 else
   ok "W1r every job carries exactly one readable $ROLE_MARKER marker, the parser and the text scan agree on the job set, every marker is corroborated (a not-a-gate pins refs/heads/main; a gate carries either no job-level if or one on the reviewed roll-call), and no job excuses itself with continue-on-error ($(printf '%s\n' "$ROLES_OUT" | sed -n 's/^GATES:/gates: /p'))"
 fi
+
+# ── W1rq: the double-quote rule is ALIVE, and it does not overreach ──────────
+# Two fixtures through the SAME scanner, because "no double quotes were reported"
+# and "the scanner stopped looking" print identically — the same reason W4dpc
+# exists. And the second fixture is not decoration: the failure mode this rule is
+# one step away from is REFUSING A LEGAL EDIT, which is the disease the whole round
+# is treating. So one fixture must be caught in all three measured positions, and
+# one fixture full of perfectly legal double quotes must come back clean.
+DQ_DIR="$WORK/dq"; mkdir -p "$DQ_DIR"
+cat > "$DQ_DIR/red.yml" <<'YML'
+name: dq-red
+on:
+  pull_request:
+jobs:
+  a:
+    # oc-job-role: gate
+    if: github.event_name == "pull_request"
+    runs-on: ubuntu-latest
+    steps:
+      - name: step level
+        if: github.event_name == "push"
+        run: echo hi
+      - name: inside an interpolation
+        env:
+          WHO: ${{ github.event_name == "push" }}
+        run: echo hi
+YML
+cat > "$DQ_DIR/green.yml" <<'YML'
+name: dq-green
+on:
+  pull_request:
+jobs:
+  a:
+    # oc-job-role: gate
+    runs-on: ubuntu-latest
+    env:
+      PLAIN: "a double-quoted YAML scalar is legal"
+    steps:
+      - name: shell quotes are shell
+        run: |
+          echo "hello world"
+          test "$PLAIN" = "$PLAIN" && echo "ok"
+      - name: single-quoted expression, and a bare interpolation
+        if: github.event_name == 'pull_request'
+        env:
+          SHA: ${{ github.sha }}
+          COND: ${{ github.event_name == 'push' }}
+        with_note: "not a real key, just another quoted scalar"
+        run: echo "$SHA"
+YML
+DQ_MARK="Double quotes are not valid in a GitHub Actions expression"
+dq_problems() { # dq_problems <fixture.yml> — count of double-quote refusals
+  parse_yaml "$1" "$DQ_DIR/f.json" 2>/dev/null || { echo PARSEFAIL; return; }
+  python3 "$WORK/roles.py" "$1" "$DQ_DIR/f.json" 2>&1 \
+    | sed -n 's/^PROBLEM://p' | grep -c "$DQ_MARK" || true
+}
+DQ_RED_N="$(dq_problems "$DQ_DIR/red.yml")"
+DQ_RED_WHERE="$(parse_yaml "$DQ_DIR/red.yml" "$DQ_DIR/f.json" 2>/dev/null; python3 "$WORK/roles.py" "$DQ_DIR/red.yml" "$DQ_DIR/f.json" 2>&1 | sed -n 's/^PROBLEM://p' | grep -o "job-level \`if\`\|step-level \`if\`\|\`\${{ … }}\` expression" | sort -u | tr '\n' ' ')"
+check "W1rq the double-quote rule catches all THREE measured positions in a planted fixture (job-level if, step-level if, inside a \${{ }} interpolation) — found: ${DQ_RED_WHERE:-none}" \
+  "3" "$DQ_RED_N"
+DQ_GREEN_N="$(dq_problems "$DQ_DIR/green.yml")"
+check "W1rq-neg and it refuses NONE of the legal double quotes (shell quotes in \`run:\`, plain quoted YAML scalars in \`env:\`/other keys, single-quoted expressions) — a rule that reddens for a legal edit is the defect this round is treating" \
+  "0" "$DQ_GREEN_N"
 
 # ── W1x: the not-a-gate set is exactly the two jobs that were ruled exempt ──
 # Deliberately a roll-call. See the note beside RULED_EXEMPT above for why this one
