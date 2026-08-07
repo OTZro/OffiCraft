@@ -24,7 +24,7 @@ CREATE TABLE reply_card_rebuild (
     status             TEXT NOT NULL DEFAULT 'waiting',
     created_ts         REAL NOT NULL DEFAULT 0.0,
     answered_ts        REAL NOT NULL DEFAULT 0.0,
-    -- epoch seconds of the owner's expire action; 0.0 unless status='expired'.
+    -- epoch seconds of the expire action; 0.0 unless status='expired'.
     expired_ts         REAL NOT NULL DEFAULT 0.0,
     chat_message_id    TEXT NOT NULL DEFAULT '',
     answer_option_idx  INTEGER,

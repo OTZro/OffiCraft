@@ -9,7 +9,8 @@
 //   ReplyCardWaitingBody  — the quick-reply chips (options[0] tagged AI 建議)
 //                           + the typed ReplyComposer. Answering is the only
 //                           POSITIVE way out (no close/skip control exists —
-//                           spec; the owner/admin-agent 標為過期 lives in the card
+//                           spec; 標為過期 (owner/admin agent, and since T-1b88
+//                           the card's own author) lives in the card
 //                           HEAD, outside this shared interior).
 //   ReplyCardAnsweredBody — the final answer tagged 你選的 (+ AI 建議 when it
 //                           IS the AI pick), 查看當初選項 expand, and 重新決定

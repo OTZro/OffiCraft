@@ -148,7 +148,7 @@ reply-card mechanism instead of waiting for an unattended TUI:
    and instructs the active Codex turn to yield. It MUST NOT leave the JSON-RPC request
    pending, because that request belongs to one App Server client connection and would be
    fragile across reconnects.
-5. The owner's answer or expiry arrives through the existing directed `reply_card` SSE
+5. The answer or expiry arrives through the existing directed `reply_card` SSE
    delta. The durable wake starts the next idle Codex turn, which reads the authoritative
    card(s) with `get_reply_card` and continues once the required answers are settled, or
    replans after expiry.

@@ -246,6 +246,25 @@ def _matrix_card(ctx: Ctx) -> str:
     return r.json()["id"]
 
 
+def _matrix_card_opened_by_agent_a(ctx: Ctx) -> str:
+    """A fresh WAITING card whose AUTHOR is agent A.
+
+    T-1b88: expire is the one card verb where the initiator matters, so this row
+    cannot use the owner-opened scratch card for the agent faces — agent_self
+    must be hitting a card it actually opened (200, the author exception) and
+    agent_other must be hitting someone ELSE's card (403). One card per
+    invocation because expiring is one-shot terminal.
+    """
+    r = ctx.client.post(
+        "/api/reply-cards",
+        json={"kind": "decision", "summary": "conf matrix agent-A card",
+              "options": ["AI pick", "other"]},
+        headers={"Authorization": f"Bearer {ctx.agent_a.token}"},
+    )
+    assert r.status_code == 200, f"agent-A card failed: {r.status_code} {r.text}"
+    return r.json()["id"]
+
+
 def _matrix_answered_card(ctx: Ctx) -> str:
     """A fresh ANSWERED reply card (the PUT re-answer positive face's target)."""
     card_id = _matrix_card(ctx)
@@ -652,14 +671,21 @@ MATRIX: dict[str, Route] = {
         body={"text": "conf matrix revised answer"},
     ),
     "POST /api/reply-cards/{card_id}/expire": Route(
-        # expiring is a GOVERNANCE act too (requires=admin_agent since
-        # T-6020) and one-shot terminal, so each positive face burns a FRESH
-        # waiting card per invocation; below-floor identities are choked 403
-        # before target resolution (a missing id never leaks a 404 oracle).
-        requires="admin_agent",
+        # T-1b88 (owner 2026-08-07, card rc-3ff94b116970) revised T-6020 for THIS
+        # row: retiring an ask nobody answered is no longer governance when it is
+        # your OWN ask, so the floor is `agent` and the caller check is
+        # in-handler. This row is therefore the only place on the LIVE wire where
+        # the two agent faces must differ: agent_self expires a card it opened
+        # (200), agent_other aims at agent A's card and is refused (403). warden
+        # stays below the floor and is choked before target resolution.
+        # One-shot terminal, so every face burns a FRESH waiting card.
+        requires="agent",
+        overrides={"agent_other": 403},
         path=lambda ctx, i: (
-            f"/api/reply-cards/"
-            f"{_matrix_card(ctx) if i in _ADMIN_FACES else 'rc-conf-missing'}/expire"
+            "/api/reply-cards/"
+            + (_matrix_card(ctx) if i in _ADMIN_FACES
+               else _matrix_card_opened_by_agent_a(ctx))
+            + "/expire"
         ),
     ),
     # ── telemetry / monitoring ───────────────────────────────────────────────

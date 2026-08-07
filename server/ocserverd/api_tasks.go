@@ -311,7 +311,7 @@ func (s *apiServer) replyCardStatusesForSteps(steps []TaskStep) map[string]strin
 
 // stepCardSettled reports whether the step's LATEST bound reply card (the
 // reply_card_id pointer — historical cards deliberately out of scope) exists
-// and has left waiting through the owner side (answered / expired): the
+// and has left waiting through a settling action (answered / expired): the
 // submit_plan preservation test of T-1aea. A card-less step, a still-waiting
 // card, or a dangling pointer all read false — replaced as before.
 func (s *apiServer) stepCardSettled(st TaskStep) (bool, error) {
@@ -1243,7 +1243,7 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 	oldKind, oldExecutor := t.ExecutorKind, t.ExecutorID
 
 	// 1. Expire every waiting card bound to the task — the exact semantics of
-	// the owner's expire route (status flip + releaseCardHold + delta), run
+	// the expire route (status flip + releaseCardHold + delta), run
 	// server-side: the question was addressed to the OLD executor, so its
 	// eventual answer is no longer reliable; the new executor opens a fresh
 	// card if the question still matters. The loop that used to live inline here

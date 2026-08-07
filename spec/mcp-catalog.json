@@ -1204,7 +1204,7 @@
       "name": "reanswer_reply_card"
     },
     {
-      "description": "Mark a waiting card expired (\u6a19\u70ba\u904e\u671f): terminal, not an answer.",
+      "description": "Mark a waiting card expired (\u6a19\u70ba\u904e\u671f): its author, owner, or admin agent; terminal, not an answer.",
       "inputSchema": {
         "properties": {
           "card_id": {

@@ -403,7 +403,7 @@
     "mcp_tool": "expire_reply_card",
     "method": "POST",
     "path": "/api/reply-cards/{card_id}/expire",
-    "requires": "admin_agent"
+    "requires": "agent"
   },
   {
     "auth": "gated",

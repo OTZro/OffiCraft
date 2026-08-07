@@ -258,7 +258,7 @@ export const en: Dict = {
     waitingTitle: "Ask",
     handledTitle: "Recently handled",
     handledHint:
-      "Items you've answered or expired · answers changeable within a day",
+      "Items answered or expired · answers can still be changed",
     empty: "✓ No pending asks",
     loadError: "Failed to load your asks. Please try again.",
     waitedLabel: "Waiting",
@@ -267,8 +267,16 @@ export const en: Dict = {
     openedAtLabel: "Opened",
     answeredAtLabel: "Answered",
     expiredAtLabel: "Expired",
-    // Mark expired (owner/admin-agent terminal since T-6020; not an answer; no
-    // undo) — the button opens a double-confirm.
+    // Mark expired (terminal; not an answer; no undo) — the button opens a
+    // double-confirm. The "owner/admin-agent since T-6020" framing is still
+    // true as history, but T-1b88 (owner 2026-08-07, card rc-3ff94b116970)
+    // widened the API to the card's own AUTHOR as well: an agent may retire the
+    // unanswered card IT opened. This cockpit button is still the owner's
+    // entry point and its behaviour did not change. NOTE the STRINGS did: the
+    // expired-card note and the 'recently handled' subtitle used to say "you"
+    // marked it expired, and an author-withdrawn card lands in the same pane —
+    // a card carries no presser field, so the cockpit cannot tell them apart
+    // and the wording no longer claims who pressed it.
     expire: "Mark expired",
     expireConfirm: "Confirm mark expired",
     expireConfirmBodyLead: 'Mark "',
@@ -277,7 +285,7 @@ export const en: Dict = {
     expireError: "Marking expired failed. Please try again.",
     expiredTag: "Expired",
     expiredNote:
-      "You marked this expired without answering; the member will re-ask if it still matters",
+      "Expired without an answer; the member will re-ask if it still matters",
     aiPick: "AI pick",
     yourPick: "Your choice",
     jumpToChat: "View in chat",

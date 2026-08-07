@@ -1484,7 +1484,7 @@ type ReplyCard struct {
 	Status            string // "waiting" | "answered" | "expired" (closed set in code; migrations/00013 dropped the CHECK)
 	CreatedTS         float64
 	AnsweredTS        float64 // 0.0 while waiting; latest answer time after
-	ExpiredTS         float64 // 0.0 unless expired; the owner's expire stamp
+	ExpiredTS         float64 // 0.0 unless expired; when the expire action ran
 	ChatMessageID     string
 	AnswerOptionIdx   *int // nil = free-text-only answer (or not answered yet)
 	AnswerText        string

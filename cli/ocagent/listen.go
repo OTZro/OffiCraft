@@ -790,9 +790,11 @@ func drainChat(client httpClient, cfg Config, seen map[string]bool, out io.Write
 // ---------------------------------------------------------------------------
 
 // handleReplyCard wakes the session when a reply card THIS agent opened got its
-// answer — or was marked EXPIRED by the owner (標為過期: not an answer; the
-// owner is saying the ask went stale, and this agent decides itself whether to
-// reopen a fresh card or move on). The delta payload ({id, from, status}) is
+// answer — or was marked EXPIRED (標為過期: not an answer; whoever pressed it —
+// the owner, an admin agent, or since T-1b88 the card's own author, possibly
+// this very agent — is saying the ask went stale, and this agent decides itself
+// whether to reopen a fresh card or move on). The delta payload ({id, from,
+// status}) is
 // used ONLY as a routing hint:
 // `id` points the refetch, `from` pre-filters the owner-wide fan-out so an
 // answer to some OTHER member's card never triggers a refetch (nor a print) —
@@ -873,15 +875,47 @@ func printReplyCardAnswered(out io.Writer, id string, card map[string]any, trigg
 
 // printReplyCardExpired is the ONE expiry line both the live delta path and
 // the boot/reconnect drain emit — self-carrying guidance so an agent whose
-// seeds predate the expired state still knows what to do: the owner declined
-// to answer (NOT a decision); reopen a FRESH card with current context if the
-// question still matters, otherwise close out / proceed. The task/step hold
-// (if any) has already been released server-side.
+// seeds predate the expired state still knows what to do: nobody answered (NOT
+// a decision); reopen a FRESH card with current context if the question still
+// matters, otherwise close out / proceed. The task/step hold (if any) has
+// already been released server-side.
+//
+// The body deliberately does NOT name a presser. It said "EXPIRED by owner"
+// until T-1b88 (owner 2026-08-07, card rc-3ff94b116970) widened the verb to the
+// card's own AUTHOR as well as the owner / an admin agent, so that wording
+// would report the WRONG presser for every card its own author retires. WHO
+// pressed it belongs to the byTrigger(trigger) suffix alone; the body only
+// reports that no answer is coming.
+//
+// ⚠️ FOLLOW THE PATH BEFORE REASONING ABOUT WHAT AN AUTHOR SEES — an earlier
+// version of this comment claimed the author would read "EXPIRED by owner … ·
+// by <its own id>" and contradict itself, and BOTH halves of that are wrong:
+//   - the LIVE delta never reaches this function for the author. dispatch()
+//     drops self-triggered frames for every topic except member, and
+//     replyCardTopic is not that exception, so handleReplyCard is not called.
+//   - the BOOT/RECONNECT drain is therefore the only path that shows an author
+//     its own expiry — and drainReplyCards passes trigger "", so byTrigger
+//     renders nothing. There is no "· by <who>" suffix to contradict.
+//
+// PREMISE: both bullets rest on the client-side self-echo suppression, which no
+// test currently guards — if that suppression changes, this comment is false.
+//
+// The correction stands on the first bullet alone: on the one path that does
+// reach the author, the old body would silently credit the owner with a button
+// the author itself pressed, and nothing on that line would say otherwise.
+//
+// The guidance half was reworded for the same reason: "the question may be
+// stale" was written for a card SOMEONE ELSE retired for you.
+//
+// ⚠️ Whether being woken by your own withdrawal causes anything worse than a
+// mis-attributed line is NOT settled and was deliberately left out of T-1b88.
+// Note the suppression above makes the wake itself doubtful, so the first step
+// is to establish whether that path exists at all rather than to fix it.
 func printReplyCardExpired(out io.Writer, id string, card map[string]any, trigger string) {
-	fmt.Fprintf(out, "[ocagent] reply-card %s EXPIRED by owner (no answer) | asked: %s — "+
-		"the question may be stale: if it still matters, open a FRESH card with "+
-		"current context; if not, proceed / close out. Any held step/task was "+
-		"already restored to in_progress%s\n",
+	fmt.Fprintf(out, "[ocagent] reply-card %s EXPIRED (no answer) | asked: %s — "+
+		"settled without an answer: if the question still matters, open a FRESH "+
+		"card with current context; if not, proceed / close out. Any held "+
+		"step/task was already restored to in_progress%s\n",
 		id, renderMessageBody(strOrEmpty(card["summary"]), replyCardBodyAuthority), byTrigger(trigger))
 }
 

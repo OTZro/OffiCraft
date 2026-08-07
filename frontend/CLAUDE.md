@@ -406,8 +406,13 @@ DTO 長新欄位的那天過期)。**語料必須有 body + options + 綁任務�
 flash;one-shot、消費掉 entry positioning(不與未讀 divider 打架);目標超出
 載入窗(recent 30)誠實 fallback 落底。徽章(待回覆數)與聊天未讀紅點是兩個
 獨立訊號:回卡不清紅點,紅點只有進對話才清。**已過期終態(T-1aa4)**:waiting
-卡 head 有 owner 專用「標為過期」次要鈕(`ConfirmModal` 二次確認——終態、不可
-復原、不算回答);`ReplyCardBody` 第三個內裡 `ReplyCardExpiredBody`(灰 tag +
+卡 head 有「標為過期」次要鈕(`ConfirmModal` 二次確認——終態、不可
+復原、不算回答)。⚠️ **座艙這顆鈕是 owner 面的入口**(歸屬與行為都沒變),但
+**「owner 專用」這個字面已經不成立**:T-6020(owner 2026-07-26)起 admin 助理也按得動,
+而 owner 2026-08-07 於卡 `rc-3ff94b116970`(T-1b88)又把**該卡的作者本人**加進 API 層
+(`POST /api/reply-cards/{card_id}/expire` 的 floor 降到 `agent`,handler 的
+`callerMayExpireCard` 認 owner／admin 助理／`ReplyCard.FromMember` 本人)——所以一般 agent
+現在能自己撤回**它開的、還沒被回答的**卡;別人的卡 403、已被回答的卡 409(包含 owner)。`ReplyCardBody` 第三個內裡 `ReplyCardExpiredBody`(灰 tag +
 選項靜態 review,無 chips 可點、無重新決定),三個渲染面(RepliesPage/
 ChatReplyCard/TaskReplyCard)共用,collapsed stub 的 tag 分「已回覆/已過期」。
 等我回覆頁第二 pane 改**「近期已處理」**(answered+expired 併列、各自 24h 窗、

@@ -874,8 +874,15 @@ func TestBoundCardStillAnswersAndReleasesTheHold(t *testing.T) {
 	}
 }
 
-// ── the expired terminal (T-1aa4): expire (owner/admin agent since T-6020),
-// hold release, orphans ──
+// ── the expired terminal (T-1aa4): expire — the owner / an admin agent since
+// T-6020, and the card's OWN AUTHOR since T-1b88 (owner 2026-08-07, card
+// rc-3ff94b116970) — hold release, orphans ──
+//
+// ⚠️ Everything in this block drives the handler FUNCTION directly, so it never
+// passes through requirePrincipalClass. It therefore proves nothing about the
+// route's principal floor: that half lives in
+// routes_t6020_governance_test.go (table) and conformance/test_auth_matrix.py
+// (live). Do not cite a green here as evidence that the floor moved.
 
 // expireCardReq drives POST /api/reply-cards/{id}/expire as the given actor.
 func expireCardReq(t *testing.T, api *apiServer, cardID, sub, scope string) *httptest.ResponseRecorder {
@@ -935,6 +942,140 @@ func TestExpireOnAnsweredOrMissingCardIsRefused(t *testing.T) {
 	}
 	if rec := expireCardReq(t, api, "rc-missing", "owner", "owner"); rec.Code != http.StatusNotFound {
 		t.Fatalf("expire on a missing card must 404, got %d", rec.Code)
+	}
+}
+
+// ── T-1b88: the author exception, one test per rung ──
+//
+// The rungs are 404 → 403 (not your card) → 409 (yours, already settled), and
+// they are deliberately SEPARATE tests: a single table would let one mutant
+// redden four rows at once, and then "the guard reddened" would not say which
+// guard. Each test below also asserts the card's stored state after the refusal —
+// a half-applied refusal is worse than none.
+
+func TestExpireByTheCardsOwnAuthorIsAllowed(t *testing.T) {
+	// The point of the whole ticket: the agent that opened the ask retires it
+	// itself, with no owner in the loop. Scope is a plain "agent" — NOT owner.
+	api := newTasksTestServer(t)
+	card := openPlainCard(t, api, "m-a")
+
+	rec := expireCardReq(t, api, card.ID, "m-a", "agent")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the author must be able to expire its own card: %d %s", rec.Code, rec.Body.String())
+	}
+	dto := decodeBody[replyCardDTO](t, rec)
+	if dto.Status != replyCardStatusExpired {
+		t.Fatalf("status: got %q want expired", dto.Status)
+	}
+	// Withdrawn, NOT answered — that distinction is what the cockpit renders.
+	if dto.ExpiredTS == nil || *dto.ExpiredTS <= 0 {
+		t.Fatalf("expired_ts must stamp: %+v", dto.ExpiredTS)
+	}
+	if dto.Answer != nil || dto.AnsweredTS != nil {
+		t.Fatalf("a withdrawal is NOT an answer: %+v", dto)
+	}
+}
+
+func TestExpireByAnotherAgentIsRefusedAsNotItsCard(t *testing.T) {
+	api := newTasksTestServer(t)
+	card := openPlainCard(t, api, "m-a")
+
+	rec := expireCardReq(t, api, card.ID, "m-b", "agent")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("a stranger must be refused 403, got %d %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Body.String(); !strings.Contains(got, expireNotYourCardMsg) {
+		t.Fatalf("the refusal must name the boundary, got %s", got)
+	}
+	stored, _ := api.dal.GetReplyCard(card.ID)
+	if stored.Status != replyCardStatusWaiting || stored.ExpiredTS != 0 {
+		t.Fatalf("a refused expire must leave the card untouched: %+v", stored)
+	}
+}
+
+func TestExpireByTheAuthorOnAnAnsweredCardIsRefusedAsSettled(t *testing.T) {
+	// The author may retire an ask nobody answered. Once the owner HAS answered,
+	// that answer is a decision and no one — author included — erases it.
+	api := newTasksTestServer(t)
+	card := openPlainCard(t, api, "m-a")
+	if rec := answerCard(t, api, card.ID, map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec := expireCardReq(t, api, card.ID, "m-a", "agent")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("an answered card must refuse with 409, got %d %s", rec.Code, rec.Body.String())
+	}
+	stored, _ := api.dal.GetReplyCard(card.ID)
+	if stored.Status != replyCardStatusAnswered || stored.ExpiredTS != 0 {
+		t.Fatalf("the owner's answer must survive: %+v", stored)
+	}
+}
+
+func TestExpireByTheAuthorOnAnAlreadyExpiredCardIsRefusedAsTerminal(t *testing.T) {
+	api := newTasksTestServer(t)
+	card := openPlainCard(t, api, "m-a")
+	if rec := expireCardReq(t, api, card.ID, "m-a", "agent"); rec.Code != http.StatusOK {
+		t.Fatalf("first expire: %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec := expireCardReq(t, api, card.ID, "m-a", "agent")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("a terminal card must refuse with 409, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestExpireRefusesAStrangerBeforeItLooksAtTheStatus(t *testing.T) {
+	// Rung ORDER, not just the set of rungs: a stranger asking about a settled
+	// card gets 403, never 409, so a refusal names the caller's ACTUAL problem
+	// ("not your card") instead of the first one it trips over. ⚠️ NOT a
+	// confidentiality boundary — do not read the assertion below as one: reading
+	// a card is a separate, unrestricted surface (GET /api/reply-cards/{card_id}
+	// and the list route sit at the machine floor with NO ownership check), so
+	// the order hides nothing that is not already readable by any agent. The
+	// status string is asserted absent purely because it is the OBSERVABLE that
+	// distinguishes the two rungs: swap the checks and the refusal starts
+	// talking about the card's state instead of the caller's standing.
+	api := newTasksTestServer(t)
+	card := openPlainCard(t, api, "m-a")
+	if rec := answerCard(t, api, card.ID, map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec := expireCardReq(t, api, card.ID, "m-b", "agent")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("authorship is checked before status: got %d %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Body.String(); strings.Contains(got, replyCardStatusAnswered) {
+		t.Fatalf("the refusal names the card's status, so the status check ran first, got %s", got)
+	}
+}
+
+func TestExpiringAGateCardAsItsAuthorResumesTheTaskAndStep(t *testing.T) {
+	// Acceptance 3 on the NEW path: the existing owner-driven twin
+	// (TestExpiringAGateCardResumesTheTaskAndStep) proves the hold release still
+	// works when the owner presses it; this one proves the author's own
+	// withdrawal goes through the very same releaseCardHold seam, so the step and
+	// the task fall back to in_progress and the agent can carry on by itself.
+	api := newTasksTestServer(t)
+	task := createAdHocTask(t, api, "m-exec")
+	view := submitPlan(t, api, task.ID, "m-exec", []map[string]any{
+		{"name": "approve", "dod": "go", "is_gate": true},
+	})
+	gateStep := view.Steps[0]
+	startFirstStep(t, api, task.ID, "m-exec")
+	card := openGateCard(t, api, task.ID, "m-exec", gateStep.ID, "go?")
+
+	if rec := expireCardReq(t, api, card.ID, "m-exec", "agent"); rec.Code != http.StatusOK {
+		t.Fatalf("the author withdraws its own gate card: %d %s", rec.Code, rec.Body.String())
+	}
+	step, _ := api.dal.GetTaskStep(gateStep.ID)
+	if step.Status != StepStatusInProgress {
+		t.Fatalf("a withdrawn card must restore the step to in_progress, got %s", step.Status)
+	}
+	got, _ := api.dal.GetTask(task.ID)
+	if got.Status != TaskStatusInProgress {
+		t.Fatalf("a withdrawn card must restore the task to in_progress, got %s", got.Status)
 	}
 }
 

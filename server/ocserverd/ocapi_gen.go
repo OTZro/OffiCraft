@@ -1380,7 +1380,7 @@ type ReplyCardCreateDTO struct {
 	Summary string   `json:"summary"`
 }
 
-// ReplyCardDTO One reply card (等我回覆卡). “from“ is the initiating member (the verified JWT sub at create time). “status“ is the closed set “waiting“ | “answered“ | “expired“ — the only transitions are waiting→answered via an answer (the owner's positive close) and waiting→expired via the expire action (owner/admin agent — T-6020) (標為過期 — NOT an answer: the ask went stale and the owner declined it; terminal, no reopen); a revised answer (PUT) keeps “answered“. “chat_message_id“ links the chat message the card rides in (the jump-to-origin anchor); “answered_ts“/“answer“ are null unless answered; “expired_ts“ is null unless expired. “attachments“ are the QUESTION-side attachments the initiator opened the card with (served refs incl. download url; always an array, “[]“ when none).
+// ReplyCardDTO One reply card (等我回覆卡). “from“ is the initiating member (the verified JWT sub at create time). “status“ is the closed set “waiting“ | “answered“ | “expired“ — the only transitions are waiting→answered via an answer (the owner's positive close) and waiting→expired via the expire action (the card's own author, the owner, or an admin agent — T-6020 opened it to the admin floor, T-1b88 widened it to the author) (標為過期 — NOT an answer: the ask went stale and the owner declined it; terminal, no reopen); a revised answer (PUT) keeps “answered“. “chat_message_id“ links the chat message the card rides in (the jump-to-origin anchor); “answered_ts“/“answer“ are null unless answered; “expired_ts“ is null unless expired. “attachments“ are the QUESTION-side attachments the initiator opened the card with (served refs incl. download url; always an array, “[]“ when none).
 type ReplyCardDTO struct {
 	Answer        *ReplyCardAnswerDTO  `json:"answer"`
 	AnsweredTs    *float64             `json:"answered_ts"`
@@ -2912,7 +2912,7 @@ type ServerInterface interface {
 	// Revise an answered card's answer (重新決定): stays answered.
 	// (PUT /api/reply-cards/{card_id}/answer)
 	HandleReanswerReplyCardApiReplyCardsCardIdAnswerPut(w http.ResponseWriter, r *http.Request, cardId string)
-	// Mark a waiting card expired (owner/admin agent; not an answer; terminal).
+	// Mark a waiting card expired (its author, the owner, or an admin agent; not an answer; terminal).
 	// (POST /api/reply-cards/{card_id}/expire)
 	HandleExpireReplyCardApiReplyCardsCardIdExpirePost(w http.ResponseWriter, r *http.Request, cardId string)
 	// Bounded LIGHT wake snapshot for the caller (what it carries is enumerated in the description, not here).

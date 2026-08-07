@@ -662,10 +662,10 @@ func TestHandleReplyCard_ExpiredPrintsGuidanceLine(t *testing.T) {
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
 	handleReplyCard(srv.Client(), cfg, replyCardFrame("rc-x1", "kyle"), testReplySeen(t), "owner", &out)
-	want := "[ocagent] reply-card rc-x1 EXPIRED by owner (no answer) | asked: 還要等這個嗎? — " +
-		"the question may be stale: if it still matters, open a FRESH card with " +
-		"current context; if not, proceed / close out. Any held step/task was " +
-		"already restored to in_progress · by owner\n"
+	want := "[ocagent] reply-card rc-x1 EXPIRED (no answer) | asked: 還要等這個嗎? — " +
+		"settled without an answer: if the question still matters, open a FRESH " +
+		"card with current context; if not, proceed / close out. Any held " +
+		"step/task was already restored to in_progress · by owner\n"
 	if got := out.String(); got != want {
 		t.Fatalf("expired out = %q want %q", got, want)
 	}
@@ -910,7 +910,7 @@ func TestDrainReplyCards_ExpiredPaneCatchesUpOnceThenStaysQuiet(t *testing.T) {
 		t.Fatalf("drain printed %d, want 2: %q", n, out.String())
 	}
 	if !strings.Contains(out.String(), "rc-ans answered") ||
-		!strings.Contains(out.String(), "rc-exp EXPIRED by owner (no answer) | asked: stale?") {
+		!strings.Contains(out.String(), "rc-exp EXPIRED (no answer) | asked: stale?") {
 		t.Fatalf("drain must surface both panes: %q", out.String())
 	}
 	out.Reset()

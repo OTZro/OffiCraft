@@ -6,12 +6,23 @@ package main
 // deliberately closed:
 //
 //   waiting --(POST answer: the only POSITIVE close)--> answered
-//   waiting --(POST expire: owner/admin-agent 標為過期, NOT an answer)--> expired
+//   waiting --(POST expire: 標為過期 by its AUTHOR, the owner, or an admin
+//             agent — NOT an answer)--> expired
 //   waiting --(the SERVER sweep: expireWaitingCards)--> expired
 //   answered --(PUT answer: 重新決定, replace the answer)--> answered
 //
-// No AGENT exit exists — an agent still has no way to close its own card. The
-// two owner exits are answer and 標為過期. The third is the SERVER's, and it is
+// T-6020 (owner 2026-07-26) put expire at the admin floor, so until 2026-08-07
+// an agent had NO exit at all: its own stale ask could only be retired by asking
+// the owner to press the button. T-1b88 (owner 2026-08-07, card
+// rc-3ff94b116970) revised that for expire alone — the AUTHOR may now retire
+// its own still-unanswered card (callerMayExpireCard). What did NOT change:
+// ANSWERING is still governance (owner / admin only), and an already-answered
+// card can no longer be EXPIRED by anyone, the owner included — a decision must
+// not be overwritten by an answerless terminal. ⚠️ That is scoped to THIS verb:
+// the owner may still REPLACE the answer via PUT (重新決定, line 12 above), which
+// keeps the card answered. An earlier draft of this comment said "immutable for
+// everyone", which the PUT route four lines up already falsifies. The third exit
+// is the SERVER's, and it is
 // not an owner action: when the thing a card waits on goes away (its task is
 // reassigned to someone else, or lands terminal, or its asker is dismissed) the
 // server retires the card itself (T-4166; reassign grew this first, closeTask
@@ -796,7 +807,7 @@ func (s *apiServer) releaseCardHold(card ReplyCard, trigger string) error {
 }
 
 // expireWaitingCards is the SERVER-SIDE card sweep: it applies the exact
-// semantics of the owner's expire route (status flip + expired_ts +
+// semantics of the expire route (status flip + expired_ts +
 // releaseCardHold + delta) to every waiting card the predicate selects. It is
 // the ONE implementation the three lifecycle seams share (T-4166) — the reassign
 // pass that first grew it, the terminal-task close (closeTask), and member
@@ -805,7 +816,7 @@ func (s *apiServer) releaseCardHold(card ReplyCard, trigger string) error {
 //
 // On a task that is ALREADY terminal, releaseCardHold deliberately no-ops (it
 // will not resume or re-stamp a closed task), so the sweep flips the card and
-// leaves the closed task alone — exactly what the owner's manual expire does to
+// leaves the closed task alone — exactly what a manual expire does to
 // an orphan today.
 func (s *apiServer) expireWaitingCards(pick func(ReplyCard) bool, now float64, trigger string) (int, error) {
 	cards, err := s.dal.ListReplyCards()
@@ -967,12 +978,34 @@ func (s *apiServer) HandleReanswerReplyCardApiReplyCardsCardIdAnswerPut(w http.R
 	s.applyReplyCardAnswer(w, r, *card)
 }
 
+// expireNotYourCardMsg is the ONE refusal text for "this card is not yours".
+// It names the boundary (author, owner, admin) so a refused agent does not go
+// looking for a flag: there is no bypass, and closing someone else's ask is
+// still governance.
+const expireNotYourCardMsg = "only the card's own author (or the owner / an admin agent) may mark it expired"
+
+// callerMayExpireCard is the in-handler half of the T-1b88 authorization (owner
+// 2026-08-07, card rc-3ff94b116970): admin capability may expire any card, and
+// an ordinary agent may expire exactly the cards IT opened. The author fact is
+// per-card (ReplyCard.FromMember, stamped at create time and never rewritten),
+// so the route table — which can only name a principal class — cannot express
+// it; the floor there is principalAgent and this is what keeps a stranger out.
+// Identity comes from the verified token sub (root CLAUDE.md §14: never a
+// request field), so an agent cannot claim someone else's authorship.
+func (s *apiServer) callerMayExpireCard(r *http.Request, card ReplyCard) bool {
+	if principalAtLeast(s.principalOfRequest(r), principalAdminAgent) {
+		return true
+	}
+	return currentActor(r) == card.FromMember
+}
+
 // POST /api/reply-cards/{card_id}/expire — mark a WAITING card EXPIRED
-// (標為過期): the owner/admin-agent terminal exit that is NOT an answer. The owner is
-// saying the ask went stale (懸太久、答案已不可靠) — or its task already closed
-// — and declines to answer; the initiating agent decides itself whether the
-// question still matters (open a FRESH card with current context) or not
-// (close out / proceed). No body, no undo, no reopen. The waiting_owner hold
+// (標為過期): the terminal exit that is NOT an answer, open to the card's own
+// AUTHOR as well as to the owner / an admin agent (T-1b88). Whoever presses it
+// is saying the ask went stale (懸太久、答案已不可靠) — or its task already
+// closed — and that no answer is coming; the initiating agent decides itself
+// whether the question still matters (open a FRESH card with current context) or
+// not (close out / proceed). No body, no undo, no reopen. The waiting_owner hold
 // releases exactly like a first answer (releaseCardHold); a card orphaned on a
 // terminal task (whose answer is 409 — T-f571) finds its ONLY exit here, the
 // closed task untouched. answered/expired → 409.
@@ -984,6 +1017,20 @@ func (s *apiServer) HandleExpireReplyCardApiReplyCardsCardIdExpirePost(w http.Re
 	}
 	if card == nil {
 		writeError(w, http.StatusNotFound, "reply card '"+cardId+"' not found")
+		return
+	}
+	// T-1b88: the author exception. Order matters and each rung is isolated so a
+	// test can tell WHICH one refused: 404 (no such card, above) → 403 (a card
+	// that is not yours) → 409 (yours, but already settled), and so a refusal
+	// names the caller's ACTUAL problem instead of the first one it trips over.
+	// ⚠️ NOT a confidentiality boundary — do not build on it as one: reading a
+	// card is a separate, unrestricted surface (GET /api/reply-cards/{card_id}
+	// and the list route are at the machine floor with NO ownership check), so
+	// this order hides nothing that is not already readable by any agent.
+	// PREMISE: that the read surface carries no ownership check — add one and
+	// this sentence, and every copy of it, becomes false at the same moment.
+	if !s.callerMayExpireCard(r, *card) {
+		writeError(w, http.StatusForbidden, expireNotYourCardMsg)
 		return
 	}
 	if card.Status != replyCardStatusWaiting {
