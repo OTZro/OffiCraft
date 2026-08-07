@@ -897,6 +897,9 @@ func printReplyCardAnswered(out io.Writer, id string, card map[string]any, trigg
 //     its own expiry — and drainReplyCards passes trigger "", so byTrigger
 //     renders nothing. There is no "· by <who>" suffix to contradict.
 //
+// PREMISE: both bullets rest on the client-side self-echo suppression, which no
+// test currently guards — if that suppression changes, this comment is false.
+//
 // The correction stands on the first bullet alone: on the one path that does
 // reach the author, the old body would silently credit the owner with a button
 // the author itself pressed, and nothing on that line would say otherwise.

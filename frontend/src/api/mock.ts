@@ -2115,7 +2115,13 @@ export const mockApi: Api = {
   async expireReplyCard(id: string): Promise<ReplyCard> {
     // 標為過期 (mirrors handle_expire_reply_card): only a WAITING card can
     // expire — answered/expired → 409; terminal, NOT an answer (the answer
-    // stays null). Releasing the task/step hold mirrors the server's
+    // stays null). ⚠️ The server has one rung this mock does not: since T-1b88
+    // it refuses a caller who is not the card's author with 403 BEFORE it looks
+    // at the status. It is not mirrored because the rung is unreachable from
+    // here — the cockpit is always the owner, and this mock has no caller
+    // identity to refuse. Adding an identity concept to express it would be
+    // inventing behaviour the cockpit does not have; the 403 is pinned
+    // server-side instead. Releasing the task/step hold mirrors the server's
     // releaseCardHold: the bound step returns to in_progress, and the task
     // follows unless another waiting card still holds it; a terminal task is
     // left untouched (the orphan exit).

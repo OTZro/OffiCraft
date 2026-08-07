@@ -807,7 +807,7 @@ func (s *apiServer) releaseCardHold(card ReplyCard, trigger string) error {
 }
 
 // expireWaitingCards is the SERVER-SIDE card sweep: it applies the exact
-// semantics of the owner's expire route (status flip + expired_ts +
+// semantics of the expire route (status flip + expired_ts +
 // releaseCardHold + delta) to every waiting card the predicate selects. It is
 // the ONE implementation the three lifecycle seams share (T-4166) — the reassign
 // pass that first grew it, the terminal-task close (closeTask), and member
@@ -816,7 +816,7 @@ func (s *apiServer) releaseCardHold(card ReplyCard, trigger string) error {
 //
 // On a task that is ALREADY terminal, releaseCardHold deliberately no-ops (it
 // will not resume or re-stamp a closed task), so the sweep flips the card and
-// leaves the closed task alone — exactly what the owner's manual expire does to
+// leaves the closed task alone — exactly what a manual expire does to
 // an orphan today.
 func (s *apiServer) expireWaitingCards(pick func(ReplyCard) bool, now float64, trigger string) (int, error) {
 	cards, err := s.dal.ListReplyCards()
@@ -1027,6 +1027,8 @@ func (s *apiServer) HandleExpireReplyCardApiReplyCardsCardIdExpirePost(w http.Re
 	// card is a separate, unrestricted surface (GET /api/reply-cards/{card_id}
 	// and the list route are at the machine floor with NO ownership check), so
 	// this order hides nothing that is not already readable by any agent.
+	// PREMISE: that the read surface carries no ownership check — add one and
+	// this sentence, and every copy of it, becomes false at the same moment.
 	if !s.callerMayExpireCard(r, *card) {
 		writeError(w, http.StatusForbidden, expireNotYourCardMsg)
 		return
