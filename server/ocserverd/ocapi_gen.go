@@ -2912,7 +2912,7 @@ type ServerInterface interface {
 	// Revise an answered card's answer (重新決定): stays answered.
 	// (PUT /api/reply-cards/{card_id}/answer)
 	HandleReanswerReplyCardApiReplyCardsCardIdAnswerPut(w http.ResponseWriter, r *http.Request, cardId string)
-	// Mark a waiting card expired (owner/admin agent; not an answer; terminal).
+	// Mark a waiting card expired (its author, the owner, or an admin agent; not an answer; terminal).
 	// (POST /api/reply-cards/{card_id}/expire)
 	HandleExpireReplyCardApiReplyCardsCardIdExpirePost(w http.ResponseWriter, r *http.Request, cardId string)
 	// Bounded LIGHT wake snapshot for the caller (what it carries is enumerated in the description, not here).

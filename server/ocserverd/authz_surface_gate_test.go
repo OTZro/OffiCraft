@@ -470,6 +470,17 @@ var authzOutsideRouteTable = map[string]string{
 		"caller-vs-resource comparison, not expressible as a route floor.",
 	"api_tasks.go :: callerMayDriveTask :: currentActor(r) == t.ExecutorID": "" +
 		"the self half of the same rule: the executor drives its own task.",
+	"api_replycards.go :: callerMayExpireCard :: principalAtLeast(s.principalOfRequest(r), principalAdminAgent)": "" +
+		"T-1b88 (owner 2026-08-07, card rc-3ff94b116970) revised T-6020 for the expire " +
+		"row: admin+ may retire ANY reply card, and below that only the card's own " +
+		"author may. The admin half is the part the route floor used to carry alone — " +
+		"it stays here because the floor is now principalAgent, so this function is the " +
+		"only thing distinguishing the two callers.",
+	"api_replycards.go :: callerMayExpireCard :: currentActor(r) == card.FromMember": "" +
+		"the author half of the same rule: an agent retires the ask IT opened. " +
+		"Caller-vs-resource — 'is this MY card' is a per-card fact (FromMember, stamped " +
+		"at create time), so no principal class can express it and the route table " +
+		"cannot hold this guard. Answering is untouched and still governance.",
 	"api_taskmanuals.go :: callerMaySetAssignee :: principalAtLeast(s.principalOfRequest(r), principalAdminAgent)": "" +
 		"assigning a manual to someone else is an admin act; assigning to yourself is " +
 		"not. Caller-vs-target again.",

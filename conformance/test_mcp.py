@@ -426,7 +426,6 @@ T6020_OPENED_TOOLS = {
         "GET /api/members/{member_id}/webhooks/{endpoint_id}/requests",
     "answer_reply_card": "POST /api/reply-cards/{card_id}/answer",
     "reanswer_reply_card": "PUT /api/reply-cards/{card_id}/answer",
-    "expire_reply_card": "POST /api/reply-cards/{card_id}/expire",
     "install_warden_on_server_host": "POST /api/machines/{machine_id}/bootstrap-here",
     "uninstall_warden_on_server_host": "POST /api/machines/{machine_id}/teardown-here",
     "upgrade_warden": "POST /api/machines/{member_id}/upgrade",
@@ -442,6 +441,26 @@ T6020_OPENED_TOOLS = {
 
 # The five the owner explicitly declined to open (routes.go carries the reasons
 # row by row). They stay requires=owner AND mcp_exclude.
+# T6020_REVISED_TOOLS: rows a LATER owner ruling moved OFF the admin floor. The
+# 2026-07-26 ruling opened 19; this table is the difference between that history
+# and today, so `len(OPENED) + len(REVISED)` must stay 19 and no row is ever
+# deleted from the record. The Go twin is `t6020Revised` in
+# server/ocserverd/routes_t6020_governance_test.go.
+#
+# ADDING A SECOND ROW NEEDS ITS OWN OWNER RULING, AND THE len(...) == 1 GUARD
+# BELOW MUST BE EDITED IN THE SAME COMMIT: this table exempts a row from the
+# admin-floor assertion, so growing it has to be a deliberate, visible act rather
+# than a side effect of some other change.
+T6020_REVISED_TOOLS = {
+    # owner 2026-08-07, card rc-3ff94b116970 (T-1b88): the same verb, two kinds of
+    # caller — the owner (or an admin agent), or the card's own author. The floor
+    # dropped to `agent` and the author check moved in-handler, because "is this
+    # MY card" is a per-card fact no principal class can express. The two ANSWER
+    # rows were NOT revised: closing someone else's ask with an answer is still
+    # governance.
+    "expire_reply_card": ("POST /api/reply-cards/{card_id}/expire", "agent"),
+}
+
 T6020_WITHHELD_ROUTES = (
     ("POST", "/api/mint"),
     ("POST", "/api/auth/change-password"),
@@ -459,7 +478,13 @@ def test_t6020_opened_routes_are_admin_floor_tools(client, owner_token) -> None:
     unreachability, not a cosmetic gap)."""
     listed = {t["name"] for t in _result(_rpc(client, owner_token, "tools/list"))["tools"]}
     by_op = {f"{r['method']} {r['path']}": r for r in MANIFEST}
-    assert len(T6020_OPENED_TOOLS) == 19, "the ruling opened exactly 19 routes"
+    # 18 still at the admin floor + 1 later revised = the 19 the ruling opened.
+    # Split so a revision MOVES a row (visible in the diff) instead of deleting one.
+    assert len(T6020_OPENED_TOOLS) + len(T6020_REVISED_TOOLS) == 19, (
+        "the 2026-07-26 ruling opened 19 routes; these tables account for "
+        f"{len(T6020_OPENED_TOOLS)} + {len(T6020_REVISED_TOOLS)} — a row was "
+        "dropped rather than moved"
+    )
     for tool, op in T6020_OPENED_TOOLS.items():
         row = by_op.get(op)
         assert row is not None, f"{op} vanished from the route manifest"
@@ -475,6 +500,35 @@ def test_t6020_opened_routes_are_admin_floor_tools(client, owner_token) -> None:
             f"{tool} is on the route table but absent from a live tools/list — "
             "an AI caller cannot discover, and the client cannot resolve, a tool "
             "that tools/list does not carry"
+        )
+
+
+def test_t6020_revised_routes_sit_at_their_revised_floor(client, owner_token) -> None:
+    """Half one, revised half: a row a later owner ruling moved off the admin
+    floor must declare its NEW floor on the live manifest and still be a listed
+    tool. This is the only place in this file that proves the floor actually
+    moved — the handler-level Go tests drive the handler function directly and
+    never pass through the RBAC choke, so their green says nothing about it."""
+    assert len(T6020_REVISED_TOOLS) == 1, (
+        f"T6020_REVISED_TOOLS lists {len(T6020_REVISED_TOOLS)} rows, expected 1 — a "
+        "second revision needs its OWN owner ruling, and this guard must be edited "
+        "in the same commit"
+    )
+    listed = {t["name"] for t in _result(_rpc(client, owner_token, "tools/list"))["tools"]}
+    by_op = {f"{r['method']} {r['path']}": r for r in MANIFEST}
+    for tool, (op, want_floor) in T6020_REVISED_TOOLS.items():
+        row = by_op.get(op)
+        assert row is not None, f"{op} vanished from the route manifest"
+        assert row["requires"] == want_floor, (
+            f"{op} declares requires={row['requires']!r} — the revising owner ruling "
+            f"put it at {want_floor!r}; a higher floor re-locks out the very caller "
+            "the revision was for, a lower one hands it to warden/machine tokens"
+        )
+        assert row["mcp_tool"] == tool, (
+            f"{op} exposes tool {row['mcp_tool']!r}, expected {tool!r}"
+        )
+        assert tool in listed, (
+            f"{tool} is on the route table but absent from a live tools/list"
         )
 
 
