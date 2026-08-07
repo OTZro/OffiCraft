@@ -283,9 +283,14 @@ func TestT6020WithheldRoutesStayOwnerOnlyAndOffTheMCPSurface(t *testing.T) {
 // future row quietly parked at requires=owner gets noticed instead of
 // inheriting the ruling's silence.
 func TestT6020OpenedAndWithheldAreDisjointAndComplete(t *testing.T) {
+	// The UNION, not just t6020Opened: a withheld row laundered into t6020Revised
+	// would otherwise pass this check. (The sum guard would still catch it, but a
+	// check whose stated job is disjointness must not have a hole in it — that is
+	// how a second reader concludes the pair was verified when it was not.)
+	opened := t6020AllOpenedRows()
 	for _, key := range t6020Withheld {
-		if tool, both := t6020Opened[key]; both {
-			t.Fatalf("%s %s is listed as BOTH opened (%s) and withheld", key[0], key[1], tool)
+		if tool, both := opened[key]; both {
+			t.Fatalf("%s %s is listed as BOTH opened/revised (%s) and withheld", key[0], key[1], tool)
 		}
 	}
 	withheld := map[[2]string]bool{}

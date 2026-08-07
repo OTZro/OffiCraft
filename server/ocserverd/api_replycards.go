@@ -17,8 +17,12 @@ package main
 // rc-3ff94b116970) revised that for expire alone — the AUTHOR may now retire
 // its own still-unanswered card (callerMayExpireCard). What did NOT change:
 // ANSWERING is still governance (owner / admin only), and an already-answered
-// card is immutable for everyone including the owner — that answer is a decision
-// and no one gets to erase it. The third exit is the SERVER's, and it is
+// card can no longer be EXPIRED by anyone, the owner included — a decision must
+// not be overwritten by an answerless terminal. ⚠️ That is scoped to THIS verb:
+// the owner may still REPLACE the answer via PUT (重新決定, line 12 above), which
+// keeps the card answered. An earlier draft of this comment said "immutable for
+// everyone", which the PUT route four lines up already falsifies. The third exit
+// is the SERVER's, and it is
 // not an owner action: when the thing a card waits on goes away (its task is
 // reassigned to someone else, or lands terminal, or its asker is dismissed) the
 // server retires the card itself (T-4166; reassign grew this first, closeTask
@@ -1017,8 +1021,12 @@ func (s *apiServer) HandleExpireReplyCardApiReplyCardsCardIdExpirePost(w http.Re
 	}
 	// T-1b88: the author exception. Order matters and each rung is isolated so a
 	// test can tell WHICH one refused: 404 (no such card, above) → 403 (a card
-	// that is not yours) → 409 (yours, but already settled). Answering BEFORE the
-	// authorship check would leak a stranger's card status through the 409.
+	// that is not yours) → 409 (yours, but already settled), and so a refusal
+	// names the caller's ACTUAL problem instead of the first one it trips over.
+	// ⚠️ NOT a confidentiality boundary — do not build on it as one: reading a
+	// card is a separate, unrestricted surface (GET /api/reply-cards/{card_id}
+	// and the list route are at the machine floor with NO ownership check), so
+	// this order hides nothing that is not already readable by any agent.
 	if !s.callerMayExpireCard(r, *card) {
 		writeError(w, http.StatusForbidden, expireNotYourCardMsg)
 		return

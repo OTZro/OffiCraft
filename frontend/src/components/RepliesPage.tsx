@@ -6,7 +6,9 @@
 //              T-b07f); every card wears the SAME style — no longest-waiting
 //              highlight (owner ruled it out, T-9ea9).
 //              Each card: initiator (avatar + name + role),
-//              jump-to-origin, 標為過期 (owner/admin-agent terminal, double-confirm —
+//              jump-to-origin, 標為過期 (terminal, double-confirm; this cockpit
+//              button is the owner's entry — the API also admits an admin agent
+//              and, since T-1b88, the card's own author —
 //              T-1aa4), 已等你 {t} (ticking, computed from createdTs), the
 //              question, then the SHARED ReplyCardWaitingBody (quick-reply
 //              chips + typed composer).
@@ -21,7 +23,8 @@
 //
 // The card interiors live in ReplyCardBody.tsx, SHARED with B3's inline chat
 // card (ChatReplyCard) so the two surfaces can never drift. Answering is the
-// only POSITIVE way a card leaves 待回覆; the owner/admin-agent 標為過期 is the sole
+// only POSITIVE way a card leaves 待回覆; 標為過期 (the owner or an admin agent here,
+// and since T-1b88 the card's own author via the API) is the sole
 // other exit (terminal, NOT an answer — the agent reopens a fresh card if the
 // question still matters). The nav badge (waiting count) and the chat unread
 // red dot are independent signals: answering here never touches the red dot.

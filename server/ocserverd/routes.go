@@ -708,8 +708,10 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 		// admin_agent, or the card's OWN author (ReplyCard.FromMember ==
 		// current actor), and 403s every other agent. The two answer rows above
 		// are untouched — closing someone else's ask with an ANSWER is still
-		// governance, and an already-answered card stays immutable for everyone
-		// (the owner's decision may not be erased). Because the floor no longer
+		// governance, and an already-answered card can no longer be EXPIRED by
+		// anyone, the owner included (a decision must not be overwritten by an
+		// answerless terminal — but the owner may still REPLACE the answer via
+		// the PUT row above). Because the floor no longer
 		// says who may call this, routes_t6020_governance_test.go keeps this row
 		// in a SEPARATE named table (t6020Revised) rather than dropping it: the
 		// 2026-07-26 ruling and its 2026-08-07 revision both stay on the record.
