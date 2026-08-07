@@ -1,6 +1,14 @@
 {
   "tools": [
     {
+      "description": "The station's own build identity: which version and git sha it is RUNNING right now. Settle \"has my change shipped?\" against git_sha (an ancestry test), never the version string - a self-build honestly reports 0.0.0. Distinct from check_release, which asks GitHub whether a NEWER release exists.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "get_version"
+    },
+    {
       "description": "Read the org-adjustable settings (owner/admin agent).",
       "inputSchema": {
         "properties": {},
