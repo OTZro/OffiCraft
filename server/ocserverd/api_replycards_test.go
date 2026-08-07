@@ -1027,9 +1027,15 @@ func TestExpireByTheAuthorOnAnAlreadyExpiredCardIsRefusedAsTerminal(t *testing.T
 
 func TestExpireRefusesAStrangerBeforeItLooksAtTheStatus(t *testing.T) {
 	// Rung ORDER, not just the set of rungs: a stranger asking about a settled
-	// card gets 403, never 409. The 409 text names the card's status, so
-	// answering it first would tell a caller who may not touch this card whether
-	// the owner has replied to it.
+	// card gets 403, never 409, so a refusal names the caller's ACTUAL problem
+	// ("not your card") instead of the first one it trips over. ⚠️ NOT a
+	// confidentiality boundary — do not read the assertion below as one: reading
+	// a card is a separate, unrestricted surface (GET /api/reply-cards/{card_id}
+	// and the list route sit at the machine floor with NO ownership check), so
+	// the order hides nothing that is not already readable by any agent. The
+	// status string is asserted absent purely because it is the OBSERVABLE that
+	// distinguishes the two rungs: swap the checks and the refusal starts
+	// talking about the card's state instead of the caller's standing.
 	api := newTasksTestServer(t)
 	card := openPlainCard(t, api, "m-a")
 	if rec := answerCard(t, api, card.ID, map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
@@ -1041,7 +1047,7 @@ func TestExpireRefusesAStrangerBeforeItLooksAtTheStatus(t *testing.T) {
 		t.Fatalf("authorship is checked before status: got %d %s", rec.Code, rec.Body.String())
 	}
 	if got := rec.Body.String(); strings.Contains(got, replyCardStatusAnswered) {
-		t.Fatalf("a refused stranger must not learn the card's status, got %s", got)
+		t.Fatalf("the refusal names the card's status, so the status check ran first, got %s", got)
 	}
 }
 
