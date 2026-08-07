@@ -68,12 +68,26 @@
 #       own owner ruling — and this is what makes that sentence a mechanism rather
 #       than prose. The enumeration is the point here, not a smell: it cannot go
 #       stale in silence, because the only way past it is to edit it.
-#   W2  an `if` missing either half — publishing off a working branch, or off a
-#       pull_request event whose ref happens to look like main.
+#       ⚠️ Corroboration on the GATE side is the SHAPE, not a ref spelling: a gate
+#       may carry no job-level `if` at all. Matching one literal spelling was a
+#       hole — `github.ref_name == 'main'` and `startsWith(github.ref, …)` both
+#       took a real gate off pull requests while this stayed green.
+#       It also refuses `continue-on-error` on ANY job: that field makes a failing
+#       job report success outward, which satisfies auto-beta's `needs` AND makes
+#       notify-main-red's `failure()` false. Nothing here used to read it.
+#   W2  the `if` compared EXACTLY against the canonical condition. Asking whether
+#       both halves appear was a hole: `(<canonical>) || github.event_name ==
+#       'pull_request'` contains both substrings and puts the only job holding
+#       `contents: write` on pull requests, publishing unmerged code as a real
+#       prerelease.
 #   W3  `contents: write` leaking to another job or to the workflow default: the
 #       three gate jobs run untrusted fork code and must not be able to write.
 #   W4  GA becoming automatic. The beta→final flip is a human decision (owner
-#       ruling), so no workflow file may even NAME that subcommand.
+#       ruling), so nothing under `.github/` may even NAME that subcommand — the
+#       scope is the whole directory, not just `workflows/`, because a composite
+#       action under `.github/actions/` is not a workflow file and slipped past.
+#       W4d then refuses local actions outright, and W4pc proves both greps match
+#       a planted example rather than reporting an empty result for free.
 #   W5  the publish call losing --no-settle (every unattended run would then fail
 #       on a station it cannot reach) or losing --target (it would publish
 #       whatever main points at when the runner starts, not the commit that was
@@ -259,14 +273,27 @@ def flag_value(cmd, flag):
 if what == "job-present":
     print("yes" if job in jobs else "no")
 
-elif what == "if-conditions":
+elif what == "if-raw":
+    # THE WHOLE CONDITION, normalised only for whitespace and for the optional
+    # outer `${{ }}` wrapper (both spellings are legal GitHub and mean the same
+    # thing). Compared VERBATIM by the caller.
+    #
+    # ⚠️ IT USED TO ASK "are these two substrings present?" AND THAT WAS A HOLE.
+    # A reviewer turned the condition into
+    #   (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'pull_request'
+    # and the guard stayed 35 ok / 0 failed: both substrings were still there, and
+    # nothing looked at the BOOLEAN STRUCTURE around them. That mutant makes the
+    # one job holding `contents: write` run on pull requests, so an unmerged branch
+    # publishes a real prerelease. Substring presence cannot see a disjunction
+    # bolted on beside it; an exact comparison can, and it also reddens for `||`,
+    # for a third clause, and for a negation. If you need auto-beta to run on
+    # another trigger, change WANT_IF in this guard IN THE SAME COMMIT — that edit
+    # is the deliberate act this assertion exists to force.
     cond = norm(me.get("if", ""))
-    have = []
-    if re.search(r"github\.event_name\s*==\s*['\"]push['\"]", cond):
-        have.append("event")
-    if re.search(r"github\.ref\s*==\s*['\"]refs/heads/main['\"]", cond):
-        have.append("ref")
-    print(",".join(have) or "-")
+    m = re.fullmatch(r"\$\{\{\s*(.*?)\s*\}\}", cond)
+    if m:
+        cond = m.group(1)
+    print(cond or "-")
 
 elif what == "write-holders":
     # Every job whose own permissions grant contents: write, plus the workflow
@@ -372,10 +399,16 @@ for i in range(starts[0] + 1, len(lines)):
 
 JOB_KEY = re.compile(r'^  (["\']?)([_A-Za-z][A-Za-z0-9_-]*)\1:\s*(#.*)?$')
 MARKER_LINE = re.compile(r'^    #\s*' + MARKER + r':\s*(\S+)\s*$')
+# Job-level `continue-on-error` is a four-space key inside a job body. Scanned as
+# text ONLY to name the line in a red; whether it is THERE is answered by the
+# parser below, so an indentation this pattern misses cannot hide it.
+COE = "continue-on-error"
+COE_LINE = re.compile(r'^    ' + COE + r':\s*(.*?)\s*(?:#.*)?$')
 
 scanned = []          # job ids in file order
 declared_at = {}      # job -> the line its key is on, so a red can name it
 markers = {}          # job -> list of (lineno, value)
+coe_at = {}           # job -> list of (lineno, raw value) for continue-on-error
 current = None
 for lineno, text in region:
     if text.strip() == "" or re.match(r'^\s*#', text):
@@ -395,7 +428,11 @@ for lineno, text in region:
         scanned.append(current)
         declared_at.setdefault(current, lineno)
         markers.setdefault(current, [])
+        coe_at.setdefault(current, [])
         continue
+    mc = COE_LINE.match(text)
+    if mc and current is not None:
+        coe_at.setdefault(current, []).append((lineno, mc.group(1)))
     if MARKER in text:
         m = MARKER_LINE.match(text)
         if current is None:
@@ -455,6 +492,18 @@ for job in sorted(parsed):
 # ⚠️ This is corroboration, NOT the definition. A main-pinned job is not thereby a
 # non-gate; the marker is what says so, and a human review of that marker is what
 # CLAUDE.md's exemption rule is about.
+#
+# ⚠️ THE GATE SIDE USED TO BE SPELLING-DEPENDENT, AND THAT WAS A HOLE. It asked
+# only whether the ONE literal `github.ref == 'refs/heads/main'` appeared, so
+# `if: github.ref_name == 'main'` and `if: startsWith(github.ref, 'refs/heads/main')`
+# — two mutants a reviewer actually ran, both 35 ok / 0 failed — took a real gate
+# off every pull request while this guard reported the marker as corroborated.
+# Enumerating ref spellings is a losing game (there is also github.head_ref,
+# github.event_name, contains(), a matrix expression, an env lookup). So the gate
+# rule is now the SHAPE, not the spelling: A GATE MAY NOT CARRY A JOB-LEVEL `if`
+# AT ALL. A gate's whole job is to produce a verdict on every pull request; any
+# condition on that is either a no-op or the bypass. Step-level `if:` is
+# untouched — several gates use it and it cannot skip the job.
 PIN = re.compile(r"github\.ref\s*==\s*['\"]refs/heads/main['\"]")
 for job, role in sorted(roles.items()):
     cond = str(((doc.get("jobs") or {}).get(job) or {}).get("if", ""))
@@ -465,11 +514,46 @@ for job, role in sorted(roles.items()):
                 "a pull request produces a verdict there, and this label would "
                 "quietly take it out of the set auto-beta must wait for"
                 % (job, NOTGATE, cond.strip() or "(no if:)"))
-    if role == GATE and pinned:
-        problem("job '%s' declares itself a %s, but its `if` pins it to "
-                "github.ref == 'refs/heads/main' (found: %s) — a gate that skips on "
-                "pull requests is still a gate; hanging an `if` on one is not how it "
-                "stops being a check" % (job, GATE, cond.strip()))
+    if role == GATE and cond.strip():
+        problem("job '%s' declares itself a %s, but it carries a job-level `if` "
+                "(found: %s) — a gate must produce a verdict on EVERY pull request, "
+                "so ANY condition on whether it runs is the bypass this rule exists "
+                "to stop, whatever it is spelled with (github.ref, ref_name, "
+                "startsWith(), event_name, head_ref, …). A gate that skips on pull "
+                "requests is still a gate. If this job genuinely is not a check, "
+                "mark it %s — and then W1x will ask for the owner ruling that costs."
+                % (job, GATE, cond.strip(), NOTGATE))
+
+# ── no job may excuse itself from failing (continue-on-error) ────────────────
+# ⚠️ NOTHING IN THIS FILE READ THIS FIELD, and one line walked through the gap:
+# a reviewer added `continue-on-error: true` to a gate and scored 35 ok / 0 failed.
+# GitHub's own description of the job-level field is "prevents a workflow run from
+# failing when a job fails", so the job reports success outward — which satisfies
+# auto-beta's `needs` (it publishes off a red trunk) AND makes notify-main-red's
+# `failure()` false (nobody is told). Both defences fail at once, silently, from
+# one line that reads like a kindness to a flaky test.
+# It is banned on EVERY job, not only gates: auto-beta's own failure is the
+# "merged and reachable drifting apart" silence notify-main-red exists to break,
+# and notify's failure is the notification not arriving.
+# The PARSER answers whether it is there (an indentation the text scan misses
+# cannot hide it); the text scan only supplies the line number.
+# An explicit `continue-on-error: false` is allowed — it is the default, stated.
+for job in sorted(parsed):
+    spec = (doc.get("jobs") or {}).get(job) or {}
+    if COE not in spec:
+        continue
+    val = spec[COE]
+    if val is False:
+        continue
+    where = ", ".join(str(n) for n, _ in coe_at.get(job, [])) or "?"
+    problem("job '%s' carries a job-level `%s: %s` (line %s) — that makes the job "
+            "report SUCCESS outward when it fails, which (a) satisfies auto-beta's "
+            "`needs` so a red trunk still publishes a real prerelease, and (b) makes "
+            "notify-main-red's failure() false so nobody is told. Both defences go "
+            "down together and neither of them reddens. Remove it; if a specific "
+            "step is allowed to fail, put the field on THAT step (step-level "
+            "continue-on-error cannot make the job lie about its own conclusion)."
+            % (job, COE, val, where))
 
 # ── the exemption list is a DELIBERATE enumeration, and that IS the point ────
 # Everything above stops a job from being MISclassified. It does not stop a job
@@ -520,7 +604,7 @@ if [[ "$ROLES_RC" != "0" ]]; then
 elif [[ -n "$ROLE_PROBLEMS" ]]; then
   bad "W1r every job must DECLARE whether it is a gate, readably — these could not be classified, and are NOT being defaulted into a bucket:$(printf '%s\n' "$ROLE_PROBLEMS" | sed 's/^/ | /' | tr '\n' ' ')"
 else
-  ok "W1r every job carries exactly one readable $ROLE_MARKER marker, the parser and the text scan agree on the job set, and every marker is corroborated by the job's own ref pinning ($(printf '%s\n' "$ROLES_OUT" | sed -n 's/^GATES:/gates: /p'))"
+  ok "W1r every job carries exactly one readable $ROLE_MARKER marker, the parser and the text scan agree on the job set, every marker is corroborated (a not-a-gate pins refs/heads/main; a gate carries NO job-level if at all), and no job excuses itself with continue-on-error ($(printf '%s\n' "$ROLES_OUT" | sed -n 's/^GATES:/gates: /p'))"
 fi
 
 # ── W1x: the not-a-gate set is exactly the two jobs that were ruled exempt ──
@@ -544,9 +628,14 @@ else
     "missing=- extra=-" "$(printf '%s\n' "$ROLES_OUT" | sed -n 's/^NEEDSDIFF://p')"
 fi
 
-# ── W2: the trigger is pinned on both axes ─────────────────────────────────
-check "W2 $JOB's if pins BOTH event_name==push AND ref==refs/heads/main" \
-  "event,ref" "$(q if-conditions)"
+# ── W2: the trigger condition is EXACTLY the canonical one ─────────────────
+# Not "both halves are mentioned somewhere in it" — see the note in the `if-raw`
+# query for the mutant that walked through that. One authority, exact comparison,
+# which is this repo's existing style for a condition that must not drift
+# (bin/tests/main-red-notify-guard.sh's WANT_IF does the same for notify).
+WANT_IF="github.event_name == 'push' && github.ref == 'refs/heads/main'"
+check "W2 $JOB's if is EXACTLY \`$WANT_IF\` (a bolted-on \`|| …\` would publish from a pull request)" \
+  "$WANT_IF" "$(q if-raw)"
 
 # ── W3: the elevated permission is scoped to this job ──────────────────────
 check "W3 contents:write is held by $JOB ALONE and the workflow default stays read" \
@@ -564,20 +653,63 @@ check "W3 contents:write is held by $JOB ALONE and the workflow default stays re
 # protected. Neither rule is a claim that no workflow can ever reach GA by some
 # other route (a script the workflow calls, `gh api`, a curl to the REST API);
 # what they buy is that the two shapes anyone would actually reach for both redden.
-GA_HITS="$(grep -rilE 'promote' "$WF_DIR" 2>/dev/null || true)"
+#
+# ⚠️ THE SCOPE USED TO BE `.github/workflows` AND THAT WAS A HOLE — a third shape
+# nobody had listed. A reviewer added `.github/actions/finalise/action.yml` whose
+# composite step runs `bin/release promote "$OC_TAG"`, referenced it from auto-beta
+# as `uses: ./.github/actions/finalise`, and scored 35 ok / 0 failed: a composite
+# action is not a workflow file, so all three rules below looked straight past it —
+# while the step ran inside the one job holding `contents: write`. The scope is
+# therefore the WHOLE of `.github/`, and W4d below refuses local actions outright.
+GA_SCAN_DIR="$ROOT/.github"
+GA_HITS="$(grep -rilE 'promote' "$GA_SCAN_DIR" 2>/dev/null || true)"
 if [[ -z "$GA_HITS" ]]; then
-  ok "W4 no workflow file names the beta→final flip subcommand"
+  ok "W4 nothing under .github/ names the beta→final flip subcommand (workflows AND any composite action)"
 else
-  bad "W4 a workflow file names the beta→final flip subcommand — GA must never be automated: $(printf '%s ' $GA_HITS)"
+  bad "W4 a file under .github/ names the beta→final flip subcommand — GA must never be automated: $(printf '%s ' $GA_HITS)"
 fi
 # `gh release edit` is legitimate for nothing this workflow needs to do, so the
 # flags are matched rather than the command: --prerelease=false and --latest each
 # promote a beta to GA on their own, and --draft=false publishes a hidden one.
-GA_FLAG_HITS="$(grep -rlE -- '--prerelease=false|--latest([[:space:]]|$)|--draft=false' "$WF_DIR" 2>/dev/null || true)"
+GA_FLAG_RX='--prerelease=false|--latest([[:space:]]|$)|--draft=false'
+GA_FLAG_HITS="$(grep -rlE -- "$GA_FLAG_RX" "$GA_SCAN_DIR" 2>/dev/null || true)"
 if [[ -z "$GA_FLAG_HITS" ]]; then
-  ok "W4b no workflow file carries a flag that moves the Latest pointer (--prerelease=false / --latest / --draft=false)"
+  ok "W4b nothing under .github/ carries a flag that moves the Latest pointer (--prerelease=false / --latest / --draft=false)"
 else
-  bad "W4b a workflow file carries a GA-promoting flag (--prerelease=false / --latest / --draft=false) — that flips a beta to GA without ever naming the subcommand: $(printf '%s ' $GA_FLAG_HITS)"
+  bad "W4b a file under .github/ carries a GA-promoting flag (--prerelease=false / --latest / --draft=false) — that flips a beta to GA without ever naming the subcommand: $(printf '%s ' $GA_FLAG_HITS)"
+fi
+
+# ── W4pc: the two greps above are ALIVE ─────────────────────────────────────
+# W4 and W4b both report "clean" as an EMPTY result, and an empty result is what a
+# grep that matches nothing looks like — a mistyped pattern, a directory that moved,
+# a `-r` that stopped recursing. So the same two invocations are pointed at a
+# fixture that definitely contains both shapes, and are required to FIND them.
+# Without this, "no hits under .github/" is a claim with no evidence behind it.
+GA_PC_DIR="$WORK/ga-pc/nested"
+mkdir -p "$GA_PC_DIR"
+printf '%s\n' 'run: bash bin/release promote "$OC_TAG"' > "$GA_PC_DIR/action.yml"
+printf '%s\n' 'run: gh release edit "$T" --prerelease=false --latest' > "$GA_PC_DIR/other.yml"
+GA_PC_A="$(grep -rilE 'promote' "$WORK/ga-pc" 2>/dev/null | grep -c . || true)"
+GA_PC_B="$(grep -rlE -- "$GA_FLAG_RX" "$WORK/ga-pc" 2>/dev/null | grep -c . || true)"
+check "W4pc the W4/W4b scans find a planted GA automation in a nested dir (so an empty result over .github/ means something)" \
+  "subcommand=1 flags=1" "subcommand=$GA_PC_A flags=$GA_PC_B"
+
+# ── W4d: there are no local actions for those scans to have to chase ─────────
+# The composite-action bypass above works because a local action is a SECOND place
+# steps can live, with its own file, its own `run:` bodies, and — being referenced
+# by `uses:` — no obligation to look like anything this guard recognises. W4 and
+# W4b now read it, but "we grep it too" is a weaker promise than "it does not
+# exist": the next shape in there (a `gh api` PATCH, a node action, a script it
+# shells out to) is invisible again. This is the same move as W4c — pin the
+# precondition rather than pretend to cover the general case. A local action is a
+# reasonable thing to want; adding one has to redden here and be decided, not
+# arrive as a refactor.
+GA_ACTIONS_DIR="$ROOT/.github/actions"
+if [[ -e "$GA_ACTIONS_DIR" ]]; then
+  ACTION_FILES="$(cd "$GA_ACTIONS_DIR" && find . -type f 2>/dev/null | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
+  bad "W4d .github/actions/ exists — a local (composite) action is a second home for steps that runs inside auto-beta's \`contents: write\` job, and W4/W4b can only see the shapes they know how to grep. Found: ${ACTION_FILES:-(empty dir)}. If a local action is genuinely wanted, that is a decision to make deliberately (and this guard has to be reworked to read it) — not a refactor that silently widens what auto-beta may run."
+else
+  ok "W4d no .github/actions/ — steps live only in ci.yml, which is the file W1/W2/W3 actually read"
 fi
 
 # ── W4c: the job universe this guard reasons about is really the whole one ───
