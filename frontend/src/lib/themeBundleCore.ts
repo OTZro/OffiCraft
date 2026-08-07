@@ -464,7 +464,9 @@ export function hasControlChar(s: string): boolean {
  * Mn). They are zero-width, but they are also how a legitimate emoji name is
  * spelled (「Heart ❤️」), and Mn holds every combining accent besides — banning
  * the category would reject ordinary Vietnamese, Hebrew-with-points and
- * Devanagari names. The accepted cost is documented in round4-fix-report.md.
+ * Devanagari names. Letting them through is a deliberately accepted cost, and
+ * the reason IS the sentence above — a zero-width rune is not hostile when the
+ * same category is how legitimate names in three writing systems are spelled.
  *
  * The `u` flag + property escapes make this the SAME table the engine ships,
  * not a third hand-kept list; the Go twin (hasInvisibleNameRune in

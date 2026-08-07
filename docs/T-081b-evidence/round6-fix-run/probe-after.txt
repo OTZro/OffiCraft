@@ -1,4 +1,0 @@
-{"probe":"topbar-input","theme":"內建(深)","zone":"#191c24","fill":"#191c24","fillVsZone":1,"border":"#6fd6b0","borderWidth":"1px","borderStyle":"solid","borderVsZone":9.67,"borderVsFill":9.67}
-{"probe":"topbar-input","theme":"精靈村(淺)","zone":"#b6ca88","fill":"#c2d492","fillVsZone":1.11,"border":"#2b450b","borderWidth":"1px","borderStyle":"solid","borderVsZone":6.04,"borderVsFill":6.7}
-{"probe":"login-hint","theme":"內建(深)","card":"#242832","fg":"#9aa0ad","contrast":5.62}
-{"probe":"login-hint","theme":"精靈村(淺)","card":"#fdfbf1","fg":"#403d2c","contrast":10.53}
