@@ -84,12 +84,25 @@
 # could not have run anyway, not a check.
 name: ci
 
-# ⚠️ THIS BLOCK IS PINNED WHOLE by bin/tests/auto-beta-guard.sh (W7), and it is
-# the ONE place a filter can silence every gate at once without touching a job: a
+# ⚠️ THIS BLOCK IS READ by bin/tests/auto-beta-guard.sh (W7), and it is the ONE
+# place a filter can silence every gate at once without touching a job: a
 # `paths-ignore` or a `branches` list under pull_request makes all three gates
 # skip on a pull request, and a skipped check looks exactly like a check that did
-# not go red. So changing anything here — including adding a legitimate trigger —
-# reddens that guard and has to be changed there in the SAME commit.
+# not go red.
+#
+# What W7 pins, precisely — it is NOT "this block is frozen", which is what this
+# comment said when W7 compared the whole mapping byte for byte:
+#   • The VALUE of each trigger below is pinned verbatim. Adding or changing a
+#     filter under `pull_request` or `push` reddens W7.
+#   • A trigger KEY on W7's allowlist may be ADDED here without touching the
+#     guard. `workflow_dispatch` is on that list today; a separate trigger cannot
+#     filter an existing one, so adding it cannot make a gate skip on a pull
+#     request, and auto-beta's `github.event_name == 'push'` half independently
+#     stops a dispatched run from publishing.
+#   • Any other trigger (`schedule`, `pull_request_target`, …) is refused until
+#     it is added to the allowlist in that guard, in the SAME commit — and that
+#     edit is the review. `pull_request_target` is the one this matters most for:
+#     it runs with a write token against fork code.
 on:
   pull_request:
   push:
