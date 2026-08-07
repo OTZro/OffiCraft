@@ -1,5 +1,0 @@
-opaque zones : gutter #ff00ff main #191c24 topbar #191c24 nav #191c24 — IMAGE HIDDEN (only the gutter shows it)
-translucent  : gutter #ff00ff main #af0ab3 topbar #af0ab3 nav #af0ab3 — IMAGE SHOWS THROUGH ALL THREE ZONES
-long page    : doc 5084px scrolled 2000 gutter #ff00ff h-overflow 0 — STILL COVERED, NO OVERFLOW
-phone 375px  : content #af0ab3 — VISIBLE ON PHONES TOO
-ALL OK

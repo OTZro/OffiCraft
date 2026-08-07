@@ -10,10 +10,11 @@
 //   ② the 登入 / 首啟 hint line (.login__hint) on the login card.
 //
 // A theme is applied the way the product applies one: --color-* custom
-// properties set on documentElement. `light` seeds the smurf-village palette
-// (docs/T-081b-evidence/shots-pack/smurf-village.theme.json) — a REAL pack, and
-// the one the audit measured — so the guard reports a shipped-theme fact, not a
-// synthetic worst case.
+// properties set on documentElement. `light` seeds LIGHT_PACK below, which is
+// the palette of a REAL shipped theme pack — the one the T-081b round 6 audit
+// measured — copied here verbatim, so the guard reports a shipped-theme fact,
+// not a synthetic worst case. Do not "tidy" these values: the moment they are
+// hand-tuned, the guard stops measuring anything a user can actually ship.
 import { InlineEdit } from "../../src/components/InlineEdit";
 import { I18nProvider } from "../../src/i18n";
 import "../../src/components/login.css";

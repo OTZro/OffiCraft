@@ -1,8 +1,0 @@
-
-> officraft-frontend@0.0.0 gen:tokens
-> node scripts/gen-theme-tokens.mjs
-
-[gen-theme-tokens] --color-marker-builtin — theme.css defines a --color-marker-* token that NON_OVERRIDABLE_TOKENS in this file does not list, so it would be dropped from the pack-settable whitelist WITHOUT anyone being told.
-  * if it really is a structural marker colour, add it to NON_OVERRIDABLE_TOKENS here (a pack must not be able to re-value it);
-  * if it is an ordinary theme colour, rename it — the --color-marker- prefix is reserved for the marker family.
-exit=1

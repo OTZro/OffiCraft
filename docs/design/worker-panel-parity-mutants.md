@@ -133,13 +133,11 @@ stylesheet、而唯一會 render machine picker 的 CT guard 在同一張票裡�
 ## 覆蓋面的證明（四條必須回 0 行的 grep）
 
 「改了 A 要掃過所有引用 A 的 B」不能靠列清單自證 —— 清單漏一項就看不出來。以下四條在 repo 根目錄
-執行，**每一條都必須輸出 0 行**。`docs/T-081b-evidence/` 與 `docs/T-081b-token-split-mapping.md`
-是**凍結的歷史審查快照**（某個過去狀態的存證，刻意不隨碼改寫），本檔與 `worker-panel-parity.md`
-本身在講的就是這些退場的東西，四者一律排除。
+執行，**每一條都必須輸出 0 行**。本檔與 `worker-panel-parity.md` 本身在講的就是這些退場的
+東西，兩者一律排除。
 
 ```sh
-EXCL=":!docs/T-081b-evidence :!docs/T-081b-token-split-mapping.md \
-      :!docs/design/worker-panel-parity.md :!docs/design/worker-panel-parity-mutants.md"
+EXCL=":!docs/design/worker-panel-parity.md :!docs/design/worker-panel-parity-mutants.md"
 
 # G1 退場的識別字在 PRODUCTION 碼裡一個都不剩（解釋退場的註解不算，所以只比對「使用位置」
 #    ——testid 字面、t.<key> 取值、prop 名——而不是裸字串出現）
@@ -215,9 +213,8 @@ git grep -nE '\*\*重新啟動\*\*|「重新啟動」|翻成\*\*重新啟動|res
 
 ```sh
 # ⚠️ 陣列,不是字串 —— 見上面的 zsh 陷阱
-EXCL=(':!docs/T-081b-evidence' ':!docs/T-081b-token-split-mapping.md'
-      ':!docs/design/worker-panel-parity.md' ':!docs/design/worker-panel-parity-mutants.md'
-      ':!frontend/CLAUDE.md')   # 後三個檔的工作就是點名那個被退場的 key
+EXCL=(':!docs/design/worker-panel-parity.md' ':!docs/design/worker-panel-parity-mutants.md'
+      ':!frontend/CLAUDE.md')   # 這三個檔的工作就是點名那個被退場的 key
 
 # G5 聊天室專用的舊 key 名沒有任何存活的引用
 git grep -nE 'releasedChatSub|releasedChatTitle' -- . "${EXCL[@]}"
@@ -243,5 +240,6 @@ grep -n 'releasedChat' frontend/src/i18n/messageKeys.generated.ts server/ocserve
 所以把 `releasedChatSub` 改名成 `releasedSub` **不會讓既有主題包無法匯入**,
 但**那個包對這句話的覆寫會默默失效**（匯入 UI 會在 `skipped` 裡說）。
 第二輪退場的 `workerDetail.status` / `restart` / `statusOf.*` 等等同理。
-`docs/T-081b-evidence/shots-pack/smurf-village.theme.json` 就是一份會受影響的範例包
-（它覆寫了 `office.outsource.releasedChatTitle`/`ChatSub`）——**那是凍結的存證,刻意不改**。
+T-081b 當時的證據堆裡就存過一份會受影響的範例主題包（它覆寫了
+`office.outsource.releasedChatTitle`/`ChatSub`）——**任何覆寫舊 key 的既有主題包都是這個形狀：
+包還是匯得進來,那一句的覆寫默默失效**。
