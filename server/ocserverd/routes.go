@@ -77,7 +77,13 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			// member needs to read this, while the boot context forbids
 			// hand-rolling curl at the server's own API. The row is
 			// requiresPublic, so being on the surface admits any authenticated
-			// caller — that IS the capability being granted. Deliberately NOT
+			// caller — that IS the capability being granted. Note the direction
+			// of that grant, because "same gate as the REST route" understates
+			// it (T-6535 independent review): this row is authPublic, so the
+			// REST face applies NEITHER gate, while /api/mcp itself is
+			// authGated — so the tool face is a PROPER SUBSET of who could
+			// already read this, and listing it CONVERGES reach rather than
+			// widening it. Deliberately NOT
 			// merged with check_release (requires=admin_agent): that one asks
 			// GitHub whether a NEWER release exists, a different question with a
 			// different data source; one field answering both would be

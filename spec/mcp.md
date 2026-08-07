@@ -148,6 +148,17 @@ Served in `GET /api/version` (`catalog_hash`) and `GET /version`.
 Two independent implementations MUST compute the **identical** value, or agents will
 falsely detect a catalog change and restart.
 
+> ⚠️ **The name promises a consumer that does not exist today.** Nothing under `cli/`
+> reads this field — verified 2026-08-07 (T-77b4): `catalog_hash|CatalogHash` matches
+> **0** lines under `cli/`, against **23** under `server/` as a positive control, so the
+> zero is the search working rather than the search being broken. So "agents will
+> falsely detect a catalog change and restart" describes an intended contract, **not an
+> observable behaviour of the shipped agents** — no agent restarts on this value.
+> This matters when sizing the blast radius of a catalog change: T-77b4 moved this value
+> (it added `get_version` to the surface) and, on the evidence above, nothing restarted.
+> Left as an intent statement rather than deleted, because the two-implementation
+> equality requirement above IS still enforced (`conformance/test_mcp.py` recomputes it).
+
 Normative algorithm:
 
 1. Enumerate the route table and keep every route NOT flagged `mcp_exclude` — exactly the
