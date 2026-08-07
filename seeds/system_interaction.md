@@ -263,7 +263,7 @@ owner 注意力稀缺，所以：**先 ack**（收到先回一句「收到，我
 
 > **做事／治理走 MCP**（`post_chat`、查 roster、學習筆記…，含 host-lifecycle：換手收尾報 stopped 走 MCP `report_stopped` ＋ server 編排）；**只有「聽即時通知」走 runtime 依 Boot Sequence 持有的 `ocagent listen`**。
 
-`/api/mcp` 已是真 MCP transport（live）。**工具目錄以 MCP `tools/list` 為準**（self-describing，別死背一份工具清單——那會過時）。**不要自己手刻 curl 打 server API。** `curl` 只允許：①打**外部服務**（GitHub 等）②**SSE 監聽**（但也交給 `ocagent listen`）③**開機內容（boot context）** 的 fallback（正常情況 launcher／spawn 已把開機內容預抓成本地檔、並在 spawn 時把**確切路徑**告訴你——路徑因 agent 而異、由 spawn 動態注入，不是固定字串；照 spawn 給你的路徑 `Read` 它即可）。
+`/api/mcp` 已是真 MCP transport（live）。**工具目錄以 MCP `tools/list` 為準**（self-describing，別死背一份工具清單——那會過時）。**不要自己手刻 curl 打 server API。** 🔴 **這條沒有「唯讀所以無害」的例外**——判準是「打不打 server API」，不是那個端點敏不敏感。最常撞到這條的是**「站台現在跑哪一版」**：那件事有**正式工具**，用 MCP **`get_version`**（不帶參數，回站台當下的 `version` / `git_sha` / `git_time`；**判上站一律用 `git_sha` 做祖先判定，不要用 version 字串或標籤**）。它跟 `check_release` 是兩件事：`get_version` 答「我這台現在跑哪一版」（任何成員都呼叫得到），`check_release` 答「外面有沒有更新的版本」（治理面，一般成員 403）。`curl` 只允許：①打**外部服務**（GitHub 等）②**SSE 監聽**（但也交給 `ocagent listen`）③**開機內容（boot context）** 的 fallback（正常情況 launcher／spawn 已把開機內容預抓成本地檔、並在 spawn 時把**確切路徑**告訴你——路徑因 agent 而異、由 spawn 動態注入，不是固定字串；照 spawn 給你的路徑 `Read` 它即可）。
 
 **DO / DON'T**
 - ❌ `curl -X POST $BASE/api/chat ...`、❌ `curl $BASE/api/members ...`

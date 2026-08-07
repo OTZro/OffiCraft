@@ -68,13 +68,26 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			MCPExclude: true, // an ops liveness probe, not an agent tool
 		},
 		{
-			Method:     "GET",
-			Path:       "/api/version",
-			Handler:    w.HandleVersionApiVersionGet,
-			Auth:       authPublic,
-			Requires:   requiresPublic,
-			Summary:    "Build identity: version + git sha + MCP catalog hash.",
-			MCPExclude: true, // a build-identity probe, not an agent tool
+			// T-77b4: on the MCP surface as `get_version` (owner 2026-08-07,
+			// rc-2089ff8e34bf option ①). It used to carry MCPExclude with the
+			// reason "a build-identity probe, not an agent tool" — and that
+			// reason was answering a different question than the one agents
+			// actually have. The dev SOP settles "has my change shipped?" by an
+			// ancestry test against the station's running git_sha, so EVERY
+			// member needs to read this, while the boot context forbids
+			// hand-rolling curl at the server's own API. The row is
+			// requiresPublic, so being on the surface admits any authenticated
+			// caller — that IS the capability being granted. Deliberately NOT
+			// merged with check_release (requires=admin_agent): that one asks
+			// GitHub whether a NEWER release exists, a different question with a
+			// different data source; one field answering both would be
+			// ambiguous.
+			Method:   "GET",
+			Path:     "/api/version",
+			Handler:  w.HandleVersionApiVersionGet,
+			Auth:     authPublic,
+			Requires: requiresPublic,
+			Summary:  "Build identity: version + git sha + MCP catalog hash.",
 		},
 		{
 			Method:     "GET",

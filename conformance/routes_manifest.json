@@ -8,7 +8,7 @@
   },
   {
     "auth": "public",
-    "mcp_tool": null,
+    "mcp_tool": "get_version",
     "method": "GET",
     "path": "/api/version",
     "requires": "public"
