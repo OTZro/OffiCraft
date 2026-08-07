@@ -288,41 +288,34 @@ def norm(s):
     # split over several lines compares as the one command it is.
     return re.sub(r"\s+", " ", str(s).replace("\\\n", " ")).strip()
 
-def norm_quotes(cond):
-    """Rewrite double-quoted string literals in an expression as single-quoted.
+DQUOTE_MARK = "DOUBLE-QUOTED-LITERAL!"
 
-    An exact comparison of a whole `if:` is the right shape — it is the only one
-    that can see a `|| …` bolted on beside the canonical condition. But exact ON
-    THE RAW TEXT also reddens for a rewrite that changed NOTHING: writing
-    `github.event_name == "push"` instead of `'push'` is the same condition, and a
-    reviewer measured that false red (36 ok, 1 failed). A guard that reddens for a
-    no-op edit teaches people to edit the guard to make it quiet, which is the one
-    habit this file cannot afford. So quotes are canonicalised first and the
-    STRUCTURE is still compared verbatim.
+def flag_dquotes(cond):
+    """Prefix a marker when the condition contains a double-quoted literal.
 
-    ⚠️ This normalises quoting ONLY. Nothing else about the condition is
-    forgiven: an added clause, a different operator, a negation, a renamed
-    context all still redden, because everything outside a string literal is
-    compared byte for byte.
+    🔴 THIS USED TO REWRITE `"push"` INTO `'push'` AND COMPARE THEM AS EQUAL. That
+    was wrong, and it was wrong in the expensive direction. The belief was that the
+    two spellings are the same condition and that reddening for a no-op rewrite
+    teaches people to edit the guard until it is quiet (a real hazard, measured
+    once at 36 ok / 1 failed). Then it was measured ON GITHUB, two minimal
+    workflows differing only in the quotes:
+      `if: github.event_name == 'push'`  → the run happened, `name:` resolved.
+      `if: github.event_name == "push"`  → STARTUP FAILURE, `jobs: []`, zero jobs,
+                                           run named after the file path because
+                                           `name:` was never read.
+    So the double-quoted form is not a rewrite of the condition; it is a workflow
+    that never starts, and on a pull request that shows up as NO checks — not a red
+    one, which is strictly worse to notice. Refusing it was RIGHT; the "false red"
+    was a true red. What the guard owes that case is not tolerance but an
+    explanation, which is why this returns a marker the caller turns into a message
+    naming the startup failure.
+
+    ⚠️ Whitespace and the outer `${{ }}` are still normalised (those really are
+    the same condition either way). Nothing else is forgiven: an added clause, a
+    different operator, a negation, a renamed context all still redden, because
+    everything else is compared byte for byte.
     """
-    out, i = [], 0
-    while i < len(cond):
-        c = cond[i]
-        if c != '"':
-            out.append(c); i += 1; continue
-        j, buf = i + 1, []
-        while j < len(cond) and cond[j] != '"':
-            if cond[j] == "\\" and j + 1 < len(cond):
-                buf.append(cond[j + 1]); j += 2; continue
-            buf.append(cond[j]); j += 1
-        if j >= len(cond):
-            # Unterminated quote: not something to guess at. Hand the original
-            # back so the comparison reddens on the real text.
-            return cond
-        # GitHub escapes a quote inside a single-quoted literal by doubling it.
-        out.append("'" + "".join(buf).replace("'", "''") + "'")
-        i = j + 1
-    return "".join(out)
+    return (DQUOTE_MARK + cond) if '"' in cond else cond
 
 def unwrap(cond):
     """Strip the optional outer `${{ }}` — both spellings are legal and equal."""
@@ -374,10 +367,11 @@ if what == "job-present":
     print("yes" if job in jobs else "no")
 
 elif what == "if-raw":
-    # THE WHOLE CONDITION, normalised only for whitespace, for the optional
-    # outer `${{ }}` wrapper, and for the QUOTING of string literals (all three
-    # are legal GitHub spellings that mean the same thing — see norm_quotes for
-    # the false red the third one produced). Compared VERBATIM by the caller.
+    # THE WHOLE CONDITION, normalised only for whitespace and for the optional
+    # outer `${{ }}` wrapper (both really are the same condition either way).
+    # Compared VERBATIM by the caller. A double-quoted literal is NOT normalised
+    # into the single-quoted spelling — it comes back marked, so the caller can
+    # say why it is refused; see flag_dquotes for what was measured on GitHub.
     #
     # ⚠️ IT USED TO ASK "are these two substrings present?" AND THAT WAS A HOLE.
     # A reviewer turned the condition into
@@ -390,7 +384,7 @@ elif what == "if-raw":
     # for a third clause, and for a negation. If you need auto-beta to run on
     # another trigger, change WANT_IF in this guard IN THE SAME COMMIT — that edit
     # is the deliberate act this assertion exists to force.
-    print(norm_quotes(unwrap(norm(me.get("if", "")))) or "-")
+    print(flag_dquotes(unwrap(norm(me.get("if", "")))) or "-")
 
 elif what == "on-shape":
     # ── THE TRIGGERS THEMSELVES, which NOTHING in this file used to read ───────
@@ -697,8 +691,11 @@ for job in sorted(parsed):
 #
 # So the rule is an ALLOWLIST, not a ban and not a spelling denylist: a gate may
 # carry NO job-level `if`, or one that is EXACTLY a member of the roll-call
-# below — compared whole, after normalising whitespace, the `${{ }}` wrapper and
-# quoting, so no spelling gets in that a reviewer did not read. This is the same
+# below — compared whole, after normalising whitespace and the `${{ }}` wrapper
+# (quoting is NOT normalised: a double-quoted literal is refused by name, because
+# it does not mean the same thing, it stops the workflow from starting — see
+# canon() and DQUOTE_WHY), so no spelling gets in that a reviewer did not read.
+# This is the same
 # device as RULED_EXEMPT and WANT_IF, for the same reason: an unlisted condition
 # — bypass or not — cannot pass without an edit to THIS LINE, and that edit is
 # the deliberate, reviewable act. Fail-closed either way; what changes is that
@@ -739,29 +736,50 @@ if not isinstance(ALLOWED_GATE_IF, frozenset) or any(
             % (ALLOWED_GATE_IF,))
 
 def canon(expr):
-    """Whitespace, `${{ }}` and quoting normalised; everything else verbatim."""
+    """Whitespace and the `${{ }}` wrapper normalised; everything else verbatim.
+
+    ⚠️ QUOTING IS NO LONGER NORMALISED HERE, and the reason is a measurement, not
+    a preference. This used to rewrite double-quoted literals as single-quoted on
+    the belief that `== "push"` and `== 'push'` are the same condition. THEY ARE
+    NOT. Measured on GitHub with two minimal workflows differing only in the
+    quotes: the single-quoted one ran and its `name:` resolved; the double-quoted
+    one produced a STARTUP FAILURE with `jobs: []` — zero jobs, and the run named
+    after the file path because `name:` was never read. A double quote in an
+    Actions expression does not change what the condition means; it stops the
+    whole workflow from being scheduled, which on a pull request looks like NO
+    checks rather than a red one. Folding the two spellings together was therefore
+    a WIDENING dressed as a no-op rewrite. Double quotes are now refused by name
+    in the loop below, before anything is compared.
+    """
     e = re.sub(r"\s+", " ", str(expr)).strip()
     m = re.fullmatch(r"\$\{\{\s*(.*?)\s*\}\}", e)
     if m:
         e = m.group(1)
-    out, i = [], 0
-    while i < len(e):
-        if e[i] != '"':
-            out.append(e[i]); i += 1; continue
-        j, buf = i + 1, []
-        while j < len(e) and e[j] != '"':
-            if e[j] == "\\" and j + 1 < len(e):
-                buf.append(e[j + 1]); j += 2; continue
-            buf.append(e[j]); j += 1
-        if j >= len(e):
-            return e
-        out.append("'" + "".join(buf).replace("'", "''") + "'")
-        i = j + 1
-    return "".join(out)
+    return e
+
+DQUOTE_WHY = (
+    "a DOUBLE-QUOTED literal (%s). Double quotes are not valid in a GitHub Actions "
+    "expression: they do not change what the condition means, they stop the WHOLE "
+    "WORKFLOW from starting. Measured on GitHub with two minimal workflows differing "
+    "only in the quotes — the double-quoted one was a startup failure with `jobs: []`, "
+    "zero jobs scheduled, and the run named after the file path because `name:` was "
+    "never parsed. On a pull request that is not a red check, it is NO checks, which "
+    "looks exactly like nothing being wrong. Rewrite the literal with SINGLE quotes. "
+    "(This guard used to normalise the two spellings together as if they were "
+    "equivalent, which quietly allowed the shape that schedules nothing.)"
+)
 
 PIN = re.compile(r"github\.ref\s*==\s*['\"]refs/heads/main['\"]")
 for job, role in sorted(roles.items()):
     cond = str(((doc.get("jobs") or {}).get(job) or {}).get("if", ""))
+    if '"' in cond:
+        # Refused for EVERY declared role, gate or not, and before the role checks
+        # below: `PIN` accepts either quote, so a not-a-gate pinned with
+        # `github.ref == "refs/heads/main"` used to read as correctly pinned while
+        # scheduling nothing at all.
+        problem(("job '%s' has a job-level `if` carrying " + DQUOTE_WHY)
+                % (job, cond.strip()))
+        continue
     pinned = bool(PIN.search(cond))
     if role == NOTGATE and not pinned:
         problem("job '%s' declares itself %s, but its `if` does not pin "
@@ -896,8 +914,16 @@ fi
 # which is this repo's existing style for a condition that must not drift
 # (bin/tests/main-red-notify-guard.sh's WANT_IF does the same for notify).
 WANT_IF="github.event_name == 'push' && github.ref == 'refs/heads/main'"
-check "W2 $JOB's if is EXACTLY \`$WANT_IF\` (a bolted-on \`|| …\` would publish from a pull request)" \
-  "$WANT_IF" "$(q if-raw)"
+IF_RAW="$(q if-raw)"
+if [[ "$IF_RAW" == DOUBLE-QUOTED-LITERAL!* ]]; then
+  # Its own branch rather than a want/got, because the reason matters more than the
+  # diff: this spelling does not run the job differently, it stops the workflow
+  # from starting at all.
+  bad "W2 $JOB's \`if\` uses a DOUBLE-QUOTED literal: \`${IF_RAW#DOUBLE-QUOTED-LITERAL!}\`. That is not valid in a GitHub Actions expression — the WHOLE WORKFLOW fails to start. Measured on GitHub with two minimal workflows differing only in the quotes: the double-quoted one gave a startup failure with \`jobs: []\`, zero jobs scheduled, and a run named after the file path because \`name:\` was never parsed. On a pull request that is NO checks, not a red check, which is harder to notice than a failure. Rewrite it with single quotes: \`$WANT_IF\`"
+else
+  check "W2 $JOB's if is EXACTLY \`$WANT_IF\` (a bolted-on \`|| …\` would publish from a pull request)" \
+    "$WANT_IF" "$IF_RAW"
+fi
 
 # ── W7: the workflow's TRIGGERS ─────────────────────────────────────────────
 # The one assertion that reads `on:`. A filter here (`paths-ignore: ['**']` is the
