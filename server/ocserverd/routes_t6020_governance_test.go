@@ -35,7 +35,6 @@ var t6020Opened = map[[2]string]string{
 	{"GET", "/api/members/{member_id}/webhooks/{endpoint_id}/requests"}: "list_webhook_requests",
 	{"POST", "/api/reply-cards/{card_id}/answer"}:                       "answer_reply_card",
 	{"PUT", "/api/reply-cards/{card_id}/answer"}:                        "reanswer_reply_card",
-	{"POST", "/api/reply-cards/{card_id}/expire"}:                       "expire_reply_card",
 	{"POST", "/api/machines/{machine_id}/bootstrap-here"}:               "install_warden_on_server_host",
 	{"POST", "/api/machines/{machine_id}/teardown-here"}:                "uninstall_warden_on_server_host",
 	{"POST", "/api/machines/{member_id}/upgrade"}:                       "upgrade_warden",
@@ -47,6 +46,54 @@ var t6020Opened = map[[2]string]string{
 	{"POST", "/api/outsource-workers/{id}/restart"}:                     "restart_outsource_worker",
 	{"POST", "/api/outsource-workers/{id}/model"}:                       "set_outsource_worker_model",
 	{"DELETE", "/api/task-manuals/{type_key}"}:                          "delete_task_manual",
+}
+
+// t6020Revised holds the rows a LATER owner ruling moved off the admin floor.
+// The 2026-07-26 ruling opened 19; this table is the difference between that
+// history and today, so nothing the owner decided is ever deleted from the
+// record — `len(t6020Opened) + len(t6020Revised)` must stay 19 (asserted below),
+// which is what makes "someone quietly dropped a row" impossible.
+//
+// 🔴 ADDING A SECOND ROW HERE REQUIRES ITS OWN OWNER RULING, AND YOU MUST EDIT
+// THE `len(t6020Revised) == 1` GUARD BELOW IN THE SAME COMMIT. That guard is a
+// hard-coded count on purpose, exactly like the release-exemption roster in root
+// CLAUDE.md §13: without it this table is a back door — moving any row into it
+// would exempt that row from the admin-floor assertion, and the diff would look
+// like housekeeping. A count that can only be changed by editing itself forces
+// the deliberate act.
+var t6020Revised = map[[2]string]string{
+	// owner 2026-08-07, card rc-3ff94b116970 (T-1b88): 「應該是owner(我)，或是開卡
+	// 的人，都可以標為過期？」 — the same verb, two kinds of caller. The floor
+	// dropped to agent and the author check moved in-handler
+	// (callerMayExpireCard), because "is this MY card" is a per-card fact no
+	// principal class can express. The two ANSWER rows were not revised: closing
+	// someone else's ask with an answer is still governance.
+	{"POST", "/api/reply-cards/{card_id}/expire"}: "expire_reply_card",
+}
+
+// t6020RevisedFloor is the floor each revised row must now declare. Pinned as a
+// map rather than assumed, so a second revision cannot silently inherit this
+// one's answer.
+var t6020RevisedFloor = map[[2]string]string{
+	{"POST", "/api/reply-cards/{card_id}/expire"}: principalAgent,
+}
+
+// t6020AllOpenedRows is every row the 2026-07-26 ruling opened — those still at
+// the admin floor PLUS those a later ruling revised. Coverage that is about
+// "this tool exists and is fully described" must iterate THIS, not t6020Opened:
+// a revised row is still one of the 19 the owner opened, and moving it out of
+// the floor table must not quietly drop it out of the catalog and parameter-set
+// teeth as well. (Only the FLOOR assertion is per-table, because that is the one
+// fact the revision changed.)
+func t6020AllOpenedRows() map[[2]string]string {
+	all := make(map[[2]string]string, len(t6020Opened)+len(t6020Revised))
+	for key, tool := range t6020Opened {
+		all[key] = tool
+	}
+	for key, tool := range t6020Revised {
+		all[key] = tool
+	}
+	return all
 }
 
 // t6020Withheld is the exact set the owner declined to open. The reason lives
@@ -78,8 +125,14 @@ func t6020RouteIndex(t *testing.T) map[[2]string]RouteSpec {
 }
 
 func TestT6020OpenedRoutesSitAtTheAdminAgentFloor(t *testing.T) {
-	if len(t6020Opened) != 19 {
-		t.Fatalf("the ruling opened 19 routes, this table lists %d", len(t6020Opened))
+	// 18 still at the admin floor + 1 later revised = the 19 the ruling opened.
+	// Split this way so a revision has to MOVE a row (visible in the diff) rather
+	// than delete one; the sum keeps the historical count honest.
+	if len(t6020Opened)+len(t6020Revised) != 19 {
+		t.Fatalf("the 2026-07-26 ruling opened 19 routes; these tables account for %d "+
+			"(%d still at the admin floor + %d revised by a later ruling) — a row was "+
+			"dropped rather than moved",
+			len(t6020Opened)+len(t6020Revised), len(t6020Opened), len(t6020Revised))
 	}
 	index := t6020RouteIndex(t)
 	tools := mcpToolIndex(defaultRouteSpecs())
@@ -111,6 +164,53 @@ func TestT6020OpenedRoutesSitAtTheAdminAgentFloor(t *testing.T) {
 	}
 }
 
+func TestT6020RevisedRoutesSitAtTheirRevisedFloor(t *testing.T) {
+	// 🔴 THE COUNT LOCK. One row has been revised. A second one needs its own
+	// owner ruling, and whoever adds it must edit this line in the same commit —
+	// that is the point: this table exempts a row from the admin-floor assertion
+	// above, so growing it must be a deliberate, visible act, never a side effect.
+	if len(t6020Revised) != 1 {
+		t.Fatalf("t6020Revised lists %d rows, expected 1 — a second revision needs its "+
+			"OWN owner ruling, and this guard must be edited in the same commit",
+			len(t6020Revised))
+	}
+	index := t6020RouteIndex(t)
+	tools := mcpToolIndex(defaultRouteSpecs())
+	for key, wantTool := range t6020Revised {
+		wantFloor, pinned := t6020RevisedFloor[key]
+		if !pinned {
+			t.Errorf("%s %s is in t6020Revised with no floor pinned in t6020RevisedFloor — "+
+				"a revision without a stated floor asserts nothing", key[0], key[1])
+			continue
+		}
+		spec, ok := index[key]
+		if !ok {
+			t.Errorf("%s %s is not in the route table at all", key[0], key[1])
+			continue
+		}
+		// This is the ONLY route-layer assertion that the floor actually moved.
+		// The handler tests in api_replycards_test.go drive the handler function
+		// directly and never pass through requirePrincipalClass, so their green
+		// says nothing about this. Put the floor back to admin_agent and THIS is
+		// what must redden.
+		if spec.Requires != wantFloor {
+			t.Errorf("%s %s declares Requires=%q; the revising owner ruling put it at %q "+
+				"(a higher floor would re-lock out the very caller the revision was for; "+
+				"a lower one would hand it to warden/machine tokens)",
+				key[0], key[1], spec.Requires, wantFloor)
+		}
+		if spec.MCPExclude {
+			t.Errorf("%s %s is MCPExclude — a revised row is still an agent tool", key[0], key[1])
+		}
+		if got := spec.toolName(); got != wantTool {
+			t.Errorf("%s %s exposes tool %q, want %q", key[0], key[1], got, wantTool)
+		}
+		if _, callable := tools[wantTool]; !callable {
+			t.Errorf("tool %q does not resolve through mcpToolIndex", wantTool)
+		}
+	}
+}
+
 func TestT6020OpenedToolsAreInTheFrozenCatalog(t *testing.T) {
 	raw, err := os.ReadFile("../../spec/mcp-catalog.json")
 	if err != nil {
@@ -129,7 +229,7 @@ func TestT6020OpenedToolsAreInTheFrozenCatalog(t *testing.T) {
 	for _, tool := range catalog.Tools {
 		listed[tool.Name] = true
 	}
-	for key, tool := range t6020Opened {
+	for key, tool := range t6020AllOpenedRows() {
 		if !listed[tool] {
 			t.Errorf("%s %s is a live tool named %q but the frozen catalog does "+
 				"not carry it — tools/list serves the catalog verbatim, so the "+
@@ -236,7 +336,7 @@ func TestT6020OpenedToolsCarryTheirWholeParameterSet(t *testing.T) {
 		t.Fatalf("knownCatalogDrift is empty — the check below would be vacuous; " +
 			"if the T-c362 debt really was paid, delete this guard's premise too")
 	}
-	for key, tool := range t6020Opened {
+	for key, tool := range t6020AllOpenedRows() {
 		if params, baselined := knownCatalogDrift[tool]; baselined {
 			t.Errorf("tool %q (%s %s) has a knownCatalogDrift baseline %v — these 19 "+
 				"descriptors were hand-written for T-6020, so a baseline on one of "+

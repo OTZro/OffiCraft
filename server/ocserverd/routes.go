@@ -699,13 +699,27 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Summary:  "Revise an answered card's answer (重新決定): stays answered.",
 			MCPTool:  "reanswer_reply_card",
 		},
+		// T-1b88 (owner 2026-08-07, card rc-3ff94b116970) REVISES the T-6020
+		// ruling for THIS row only: 「應該是owner(我)，或是開卡的人，都可以標為過期？」
+		// — the same verb, two kinds of caller. The floor therefore drops to
+		// principalAgent and the caller check moves IN-HANDLER (the author
+		// exception is a per-card fact the route table cannot express):
+		// HandleExpireReplyCardApiReplyCardsCardIdExpirePost admits owner /
+		// admin_agent, or the card's OWN author (ReplyCard.FromMember ==
+		// current actor), and 403s every other agent. The two answer rows above
+		// are untouched — closing someone else's ask with an ANSWER is still
+		// governance, and an already-answered card stays immutable for everyone
+		// (the owner's decision may not be erased). Because the floor no longer
+		// says who may call this, routes_t6020_governance_test.go keeps this row
+		// in a SEPARATE named table (t6020Revised) rather than dropping it: the
+		// 2026-07-26 ruling and its 2026-08-07 revision both stay on the record.
 		{
 			Method:   "POST",
 			Path:     "/api/reply-cards/{card_id}/expire",
 			Handler:  w.HandleExpireReplyCardApiReplyCardsCardIdExpirePost,
 			Auth:     authGated,
-			Requires: principalAdminAgent,
-			Summary:  "Mark a waiting card expired (標為過期): terminal, not an answer.",
+			Requires: principalAgent,
+			Summary:  "Mark a waiting card expired (標為過期): its author, owner, or admin agent; terminal, not an answer.",
 			MCPTool:  "expire_reply_card",
 		},
 		// ── Agent context gauge + monitoring ─────────────────────────────────
