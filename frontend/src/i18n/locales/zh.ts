@@ -288,7 +288,7 @@ export const zh = {
   replies: {
     waitingTitle: "請示",
     handledTitle: "近期已處理",
-    handledHint: "已回覆或已標為過期的事項 · 已回覆的一天內可重新決定",
+    handledHint: "已回覆或已標為過期的事項 · 已回覆的可重新決定",
     // 全部處理完的空狀態
     empty: "✓ 目前沒有待處理的請示",
     loadError: "載入請示失敗，請稍後重試",

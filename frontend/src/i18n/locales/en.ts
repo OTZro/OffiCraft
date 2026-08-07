@@ -258,7 +258,7 @@ export const en: Dict = {
     waitingTitle: "Ask",
     handledTitle: "Recently handled",
     handledHint:
-      "Items answered or expired · answers changeable within a day",
+      "Items answered or expired · answers can still be changed",
     empty: "✓ No pending asks",
     loadError: "Failed to load your asks. Please try again.",
     waitedLabel: "Waiting",
