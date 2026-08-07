@@ -114,6 +114,25 @@
 #       verbatim, while a short allowlist of trigger KEYS may be added without
 #       editing this guard. Pinning the whole mapping instead reddened for
 #       `workflow_dispatch`, which is a legitimate edit.
+#       ⚠️ AN EARLIER VERSION OF THIS COMMENT SAID `on:` IS WHAT DECIDES WHETHER A
+#       GATE IS SCHEDULED, "not any field inside a job". That is false, and it is
+#       measurable in this very file: grep it for `concurrency` → 0 hits,
+#       `strategy` → 0 hits (`needs` → 21, the positive control that says the
+#       query works). WHAT THIS FILE READS is exactly: `on:` (W7), job-level `if`
+#       (W1/W1r/W2), `needs` (W1), `permissions` (W3), job-level
+#       `continue-on-error`, and the `# oc-job-role:` markers. THREE WAYS A GATE
+#       CAN END UP WITH NO VERDICT THAT NOTHING HERE WATCHES, listed because the
+#       list being written down is the only thing standing in for a check:
+#         • a gate whose `needs` points at a job that is skipped on pull requests
+#           — the dependent skips with it;
+#         • `strategy.matrix` with an `exclude` that reduces a gate to zero jobs;
+#         • `concurrency` — ci.yml pins `group: ci-${{ github.ref }}` with
+#           `cancel-in-progress: false` on main, and the pending slot holds ONE
+#           run, so a displaced trunk commit gets conclusion=cancelled: no
+#           verdict, and no beta.
+#       None of the three is tested on GitHub by anyone; the first two are not
+#       tested at all, and the third is read off ci.yml's own comment. Whether
+#       this guard should grow to cover them is a decision outside this pack.
 #   N*  the version rule itself, driven hermetically with fabricated tag lists.
 #
 # HERMETICITY: nothing here runs a workflow, contacts GitHub, or invokes gh/git
@@ -130,13 +149,33 @@ NBT="$ROOT/bin/next-beta-tag"
 JOB="auto-beta"
 ROLE_MARKER="oc-job-role"
 
-PASS=0; FAIL=0
+PASS=0; FAIL=0; UNCORROB=0
 ok()   { PASS=$((PASS+1)); printf '  ok   — %s\n' "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf '  FAIL — %s\n' "$1"; }
 check(){ # check DESC EXPECTED ACTUAL
   if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1 (want '$2' got '$3')"; fi
 }
-fatal() { printf '  FAIL — %s\n' "$1"; echo "auto-beta guard: $PASS ok, $((FAIL+1)) failed"; exit 1; }
+# A THIRD outcome, and the reason it exists is narrow enough to state exactly:
+# one assertion here (W4ds) corroborates a hardcoded constant against evidence
+# that a legitimate checkout may simply not carry. "Could not run" is neither a
+# pass nor a violation, and the two previous shapes were both wrong for it: ok()
+# prints a check that never happened as a check that passed, and bad() refuses a
+# working copy that has done nothing wrong (it refused the SUPPORTED concurrent-CI
+# flow — see W4ds). So it gets its own line, its own counter, and a summary that
+# names it; what it does NOT get is a contribution to the exit status.
+# ⚠️ USE THIS FOR "the evidence is absent", NEVER for "the evidence disagrees".
+# An assertion whose evidence is present and says no is a bad(). If you find
+# yourself reaching for this to quiet a red, that red is the finding.
+uncorrob(){ UNCORROB=$((UNCORROB+1)); printf '  ⚠️ NOT CORROBORATED — %s\n' "$1"; }
+summary() { # summary EXTRA_FAILS
+  local f=$((FAIL + ${1:-0}))
+  if [[ "$UNCORROB" == "0" ]]; then
+    echo "auto-beta guard: $PASS ok, $f failed"
+  else
+    echo "auto-beta guard: $PASS ok, $f failed, $UNCORROB not corroborated (NOT passes — read the ⚠️ line(s) above)"
+  fi
+}
+fatal() { printf '  FAIL — %s\n' "$1"; summary 1; exit 1; }
 
 [[ -f "$WF" ]] || fatal "$WF is missing — the automatic beta path cannot exist without it"
 [[ -f "$NBT" ]] || fatal "$NBT is missing — the auto-beta job calls it to compute the tag"
@@ -383,11 +422,21 @@ elif what == "on-shape":
     #     silent on every pull request. Enumerating the suppressor keys instead
     #     would be the losing game the gate-`if` rule already lost once.
     #   • A key in ALLOWED_ON_KEYS may be ADDED without touching this guard. What
-    #     makes that safe is not that the key looks harmless: it is that a
-    #     SEPARATE trigger cannot filter an existing one. Adding
-    #     workflow_dispatch cannot stop a pull request scheduling the gates; it
-    #     can only add runs. auto-beta's own `github.event_name == 'push'` half
-    #     independently stops a dispatched run from publishing.
+    #     makes that safe is not that the key looks harmless, and it is NOT the
+    #     blanket "a separate trigger cannot filter an existing one" this comment
+    #     used to assert — that sentence is false in the direction it did not
+    #     consider. The claim, at the width it actually holds: adding
+    #     workflow_dispatch cannot stop the gates from being scheduled ON A PULL
+    #     REQUEST, because a PR run has a different `github.ref` and therefore a
+    #     different concurrency group from anything a dispatch can occupy
+    #     (reasoned from ci.yml's `group: ci-${{ github.ref }}`, NOT tested on
+    #     GitHub). And auto-beta's `github.event_name == 'push'` half separately
+    #     stops a dispatched run from publishing.
+    #     ⚠️ ON MAIN IT DOES NOT HOLD: main runs with cancel-in-progress: false
+    #     queue in one shared group with a single pending slot, so a manually
+    #     dispatched run against main can displace a queued trunk commit, whose
+    #     conclusion is then `cancelled` — not red, no verdict, no beta. Read off
+    #     ci.yml's own concurrency comment; also not tested on GitHub.
     #   • Anything else — pull_request_target above all, which runs with a write
     #     token against fork code — is refused. Fail-closed: an unlisted trigger
     #     cannot arrive without an edit to THIS LINE, and that edit is the review.
@@ -851,11 +900,15 @@ check "W2 $JOB's if is EXACTLY \`$WANT_IF\` (a bolted-on \`|| …\` would publis
   "$WANT_IF" "$(q if-raw)"
 
 # ── W7: the workflow's TRIGGERS ─────────────────────────────────────────────
-# The one assertion that reads `on:`. Everything else in this file reasons about
-# what the jobs DO once they are scheduled; this is what decides whether they are
-# scheduled at all. A filter here (`paths-ignore: ['**']` is the cheap one) makes
-# every gate skip on every pull request with no job touched and no assertion
-# above reddening.
+# The one assertion that reads `on:`. A filter here (`paths-ignore: ['**']` is the
+# cheap one) makes every gate skip on every pull request with no job touched and
+# no assertion above reddening — measured at 37 ok / 0 failed before W7 existed.
+# ⚠️ `on:` IS ONE OF THE THINGS THAT DECIDE WHETHER A GATE IS SCHEDULED, NOT THE
+# ONLY ONE — an earlier version of this comment said otherwise. `needs` pointing
+# at a job that skips, a `strategy.matrix` `exclude` that empties a gate, and
+# `concurrency` displacing a queued run on main all end in the same place, and
+# this file does not read the last two at all. The roll-call at the top of the
+# file lists them by name and says what has and has not been tested.
 #
 # Shaped like the gate-`if` roll-call, not like a whole-mapping pin: the VALUE of
 # each canonical trigger is pinned verbatim (that is what refuses a filter), and
@@ -971,9 +1024,12 @@ check "W4pc the W4/W4b scans find a planted GA automation in a nested dir (so an
 #   (b) a THIRD-PARTY action (`someone-else/act@v1`), or this repo referenced
 #       under a DIFFERENT slug (a fork, or after a rename that this file's
 #       OC_REPO_SLUG was not updated for), is not refused here. The slug is
-#       corroborated against `git remote` below when git is available, so a
-#       rename reddens on a dev machine — but a checkout with no git metadata
-#       gets no corroboration, only the hardcoded constant.
+#       corroborated against `git remote` below, so a rename reddens in a tree
+#       whose `origin` is a GitHub URL — but a tree whose origin cannot yield
+#       {owner}/{repo} (no git metadata at all, or a LOCAL clone, whose origin is
+#       a filesystem path) gets no corroboration, only the hardcoded constant.
+#       That case prints a ⚠️ NOT CORROBORATED line and is counted separately; it
+#       does not fail. W4ds spells out why that direction was chosen.
 #   (c) a file under `.github/` that this scan cannot PARSE is reported as a
 #       failure, not skipped — but a `uses:` written in a file the walk does not
 #       REACH is only covered by the line-grep net in W4dt, which has N-1's blind
@@ -1044,22 +1100,50 @@ fi
 # git is the source, when there is one; a tree without git metadata gets an
 # honest "not corroborated" rather than a free pass dressed as a check.
 #
-# ⚠️ KNOWN FALSE RED, AND IT IS A DELIBERATE TRADE — read this before "fixing" it.
-# A tree extracted with `git archive <sha> | tar -x` has NO git metadata, so this
-# reddens there: a clean checkout scores one less ok and one failed. That is a
-# common way to review this repo in isolation, so the message below says so
-# outright rather than letting a reviewer read it as "the pack is broken". It is
-# still a bad() and not an ok(), because every path that actually runs this file
-# (bin/tests/run.sh from bin/ci-macos-host.sh, bin/ci.sh's staging clone, the
-# pre-commit hook, actions/checkout on the runner) has git — so a real run that
-# cannot find it has something wrong with it, and "could not check" printed as
-# "nothing to report" is the one habit this file's header argues against
-# throughout.
+# THREE OUTCOMES, AND THE MIDDLE ONE IS THE WHOLE POINT OF THIS BLOCK.
+# The evidence this assertion needs is a `{owner}/{repo}` pair, and there are two
+# distinct ways a perfectly legitimate working copy fails to carry one:
+#   (i)  no git metadata at all — `git archive <sha> | tar -x`, a common way to
+#        review this repo in isolation;
+#   (ii) git is there, but `origin` is not a GitHub remote — and this is not a
+#        corner case, it is THE SUPPORTED CONCURRENCY FLOW. bin/lib/ci-lock.sh
+#        tells the user verbatim to `git clone <this repo> /path/to/another-copy
+#        && bash bin/ci.sh`, and calls separate clones "the supported way". A
+#        local clone's origin is a FILESYSTEM PATH, which does not parse to
+#        {owner}/{repo}, so the equality below has nothing to compare against.
+# Both are the SAME condition — "the corroboration could not run" — and they now
+# get the same treatment and the same message. ⚠️ THEY DID NOT BEFORE, and that
+# is what this rewrite is for: (i) was explained at length while (ii) fell into
+# the MISMATCH branch and printed a bare want/got, so the supported flow read as
+# "this pack names the wrong repo". Worse, both were bad(), which made
+# `bin/tests/run.sh` fail and `bin/ci.sh` UNABLE TO REACH `[ci] all green` in any
+# local clone — a guard blocking the flow its own repo documents.
+#
+# 🔴 THE CHOICE MADE HERE, STATED SO IT CAN BE ARGUED WITH: not-corroborated is
+# reported LOUDLY but does NOT fail. The alternative (fail-loud, what the previous
+# version did) was tried and its measured cost was the paragraph above. What it
+# costs instead: a rename, or this file copied into another repo, does NOT redden
+# in a tree whose origin is not a GitHub URL — the constant stands uncorroborated
+# and W4d's self-reference half may then be naming a repo this is not. That
+# residual is listed under (b) beside W4d. It is NOT a silent pass: the line is
+# printed with a ⚠️, it is counted separately, and the summary line carries the
+# count. On the paths where a rename actually needs catching — a clone from
+# GitHub, and actions/checkout on the runner — origin IS a GitHub URL and the
+# equality below does run (mutant-tested: see the commit message).
 SLUG_REMOTE="$(git -C "$ROOT" config --get remote.origin.url 2>/dev/null || true)"
-if [[ -z "$SLUG_REMOTE" ]]; then
-  bad "W4ds could not read remote.origin.url, so W4d's hardcoded OC_REPO_SLUG ($OC_REPO_SLUG) is UNCORROBORATED — the {owner}/{repo} half of W4d may be naming a repo this is not. This is not a pass; it is a check that could not run. ⚠️ IF YOU ARE RUNNING THIS FROM A \`git archive\` EXTRACTION (no .git), THIS IS EXPECTED AND IS THE ONLY RED YOU SHOULD SEE — re-run it in a real checkout before concluding anything about the other assertions."
+# A GitHub-shaped remote, or nothing. A local path is not "a slug that differs";
+# it is an absence of the evidence, and conflating the two is the bug above.
+SLUG_SEEN=""
+case "$SLUG_REMOTE" in
+  https://*|http://*|ssh://*|git://*|*@*:*)
+    SLUG_SEEN="$(printf '%s' "$SLUG_REMOTE" \
+      | sed -E 's#^[a-z]+://([^@/]+@)?[^/]+/##; s#^[^@/]+@[^:/]+:##; s#/+$##; s#\.git$##')"
+    ;;
+esac
+[[ "$SLUG_SEEN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || SLUG_SEEN=""
+if [[ -z "$SLUG_SEEN" ]]; then
+  uncorrob "W4ds could not corroborate W4d's hardcoded OC_REPO_SLUG ($OC_REPO_SLUG): remote.origin.url is $(if [[ -z "$SLUG_REMOTE" ]]; then printf 'absent (no git metadata)'; else printf "'%s', which does not parse to {owner}/{repo}" "$SLUG_REMOTE"; fi). The {owner}/{repo} half of W4d may be naming a repo this is not — this is a check that COULD NOT RUN, not a pass. ⚠️ BOTH OF THESE ARE EXPECTED AND ARE NOT A DEFECT IN THIS PACK: (1) a \`git archive\` extraction has no .git; (2) a LOCAL clone (\`git clone <this repo> /path/to/another-copy\`, which bin/lib/ci-lock.sh names as the supported way to run CI twice at once) has a filesystem path for an origin. Re-run in a checkout cloned from GitHub if you need this one corroborated; every OTHER assertion in this file is unaffected either way."
 else
-  SLUG_SEEN="$(printf '%s' "$SLUG_REMOTE" | sed -E 's#^(https?://[^/]+/|git@[^:]+:|ssh://git@[^/]+/)##; s#\.git$##')"
   check "W4ds OC_REPO_SLUG matches remote.origin.url (W4d's self-reference half names THIS repo)" \
     "$(printf '%s' "$OC_REPO_SLUG" | tr 'A-Z' 'a-z')" "$(printf '%s' "$SLUG_SEEN" | tr 'A-Z' 'a-z')"
 fi
@@ -1396,6 +1480,6 @@ else
   esac
 fi
 
-echo "auto-beta guard: $PASS ok, $FAIL failed"
+summary
 [[ "$FAIL" == "0" ]] || exit 1
 exit 0
