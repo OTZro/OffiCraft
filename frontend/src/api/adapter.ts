@@ -156,8 +156,9 @@ export interface ReplyCardAnswer {
  * One reply card (等我回覆卡) in view-model form. `status` is the closed set
  * `waiting` | `answered` | `expired` — the only transitions are
  * waiting→answered via an answer (the owner's positive close; no generic
- * close/skip surface anywhere) and waiting→expired via the owner/admin-agent expire
- * action (標為過期 — NOT an answer; terminal, no reopen); a revised answer
+ * close/skip surface anywhere) and waiting→expired via the expire action, open to
+ * the card's own author as well as the owner / an admin agent (標為過期 — NOT an
+ * answer; terminal, no reopen; T-1b88 widened T-6020's admin floor); a revised answer
  * (重新決定) keeps `answered`. `options[0]` is ALWAYS the AI's own
  * recommendation. `chatMessageId` links the chat message the card rides in —
  * the jump-to-origin anchor (B3 uses it to locate + highlight the message in
@@ -181,7 +182,8 @@ export interface ReplyCard {
   attachments: ChatAttachmentView[];
   createdTs: number;
   answeredTs: number | null;
-  /** Epoch seconds of the owner's expire action; null unless expired.
+  /** Epoch seconds of the expire action (whoever pressed it — the card's author,
+   * the owner, or an admin agent); null unless expired.
    * OPTIONAL so hand-built test fixtures stay valid (same precedent as
    * `task`); the mapper always sets it. */
   expiredTs?: number | null;
@@ -1181,8 +1183,8 @@ export interface Api {
    * List reply cards (`GET /api/reply-cards?status=`). `waiting` returns every
    * card still waiting for the owner, LONGEST-WAITING FIRST (created_ts
    * ascending — the 待回覆 pane order); `answered` returns cards answered
-   * within the last 24 hours, newest answer first; `expired` returns cards the
-   * owner marked expired within the last 24 hours, newest first (older
+   * within the last 24 hours, newest answer first; `expired` returns cards that
+   * were marked expired within the last 24 hours, newest first (older
    * answered/expired cards drop off these lists but live forever in chat
    * history).
    */
@@ -1231,7 +1233,8 @@ export interface Api {
   ): Promise<ReplyCard>;
   /**
    * Mark a WAITING card expired (`POST /api/reply-cards/{id}/expire` — 標為過期,
-   * the owner/admin-agent terminal exit that is NOT an answer). No body, no undo, no
+   * the terminal exit that is NOT an answer; its author, the owner, or an admin
+   * agent may press it — T-1b88). No body, no undo, no
    * reopen; answered/expired → 409, unknown id → 404 (thrown as ApiError). The
    * server releases any bound task/step hold exactly like a first answer — an
    * orphaned card on a closed task is still expirable (its only exit). Returns

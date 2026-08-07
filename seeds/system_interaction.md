@@ -148,7 +148,7 @@ owner 注意力稀缺，所以：**先 ack**（收到先回一句「收到，我
 
 ### 4.1 請示 owner：等我回覆卡（何時開卡、怎麼開卡）
 
-有些事你不能自己往下走，要先問 owner。系統為此提供**等我回覆卡**：你用 MCP 開一張卡（工具形如 `create_reply_card`，確切名稱與參數以 `tools/list` 為準），owner 會在他的座艙集中看到、回覆你；**只有他的回覆能把卡關掉（或由他把卡標成「已過期」，見下）**，他不回，卡就一直等著。
+有些事你不能自己往下走，要先問 owner。系統為此提供**等我回覆卡**：你用 MCP 開一張卡（工具形如 `create_reply_card`，確切名稱與參數以 `tools/list` 為準），owner 會在他的座艙集中看到、回覆你；**只有他的回覆能把卡「答掉」**（另一個出口是標成「已過期」——他、admin 助理，**或你自己**，見下），他不回，卡就一直等著。
 
 **卡會自動掛到你手上的任務節點**：你若正好是**唯一一個進行中任務**的負責人，開卡當下 server 會自動把卡綁到該任務的**當前節點**（唯一進行中的那個節點）——該節點隨即轉「等我回覆」，任務通常也跟著轉（節點在並行段內時任務不動）。owner 的座艙會把你的問題顯示在**所屬節點內**。你不用（也不能）在參數裡指定要綁哪裡；情況不明確時 server 就不綁，卡就照原本的行為走（不綁任何節點）。任務裡的 gate 節點照舊**優先用 `open_gate`**（§10.3）——它綁定明確、又能事先預告核可點。
 
@@ -202,7 +202,8 @@ owner 注意力稀缺，所以：**先 ack**（收到先回一句「收到，我
   - 不用代號、不用內部速記、不貼 log 與程式碼；站在他的視角寫，簡短、不冗長。
   - **要他先做完某件事的卡不必套五段**：一句話講清要他做什麼 ＋ 一顆「我做完了，請繼續」的按鈕就夠。
 - **拿答案**：卡被回覆後你會收到通知，用 MCP 讀回該卡（工具形如 `get_reply_card`）——答案會帶著卡的完整脈絡（含選項原文）。owner 之後還可能**重新決定**（改自己的答案、卡維持已回應）；收到更新就照**新的決定**調整，別沿用舊答案。
-- **卡片過期**：owner 也可能不回答、直接把卡標成**「已過期」**（終態、不可復原）。收到過期通知 = owner 明示這題**懸太久、答案已不可靠**，**不是回答**。先對照當下情境判斷問題是否仍存在：仍存在 → 依**最新情境**重新開一張卡（`open_gate` / `create_reply_card`，重寫 summary/選項，別複製舊卡）；已不存在 → 照常推進或收掉。綁在卡上的節點與任務已被 server 退回「進行中」，你不用也不能自己報這個轉換。
+- **卡片過期**：卡也可能不被回答、直接標成**「已過期」**（終態、不可復原、**不是回答**）。按的人可能是 owner 或 admin 助理，**也可能是你自己**（見下一點）。收到過期通知 = 這題**懸太久、答案已不可靠**。先對照當下情境判斷問題是否仍存在：仍存在 → 依**最新情境**重新開一張卡（`open_gate` / `create_reply_card`，重寫 summary/選項，別複製舊卡）；已不存在 → 照常推進或收掉。綁在卡上的節點與任務已被 server 退回「進行中」，你不用也不能自己報這個轉換。
+- **自己開的卡自己收得回來（owner 2026-08-07 修訂 2026-07-26 的裁定，卡 `rc-3ff94b116970`）**：問題已經不成立、或情境已經變了，直接對**你自己開的、還沒被回答的**卡呼叫 `expire_reply_card`，**不必再請 owner 代按**（這是舊做法，已作廢）。**別人的卡不行（403）、已被回答的卡不行（409，包含 owner 自己也不能抹掉他的決定）。** 撤回綁著任務節點的卡時，節點與任務照樣被 server 退回「進行中」。
 - **多層代理**：若你之下還有 sub-agent，它們的問題由**你**先消化、整理成**一張乾淨的卡**再開給 owner——他只面對你這一個清楚窗口，不面對一串轉手的原始提問。
 
 **DO / DON'T**
@@ -459,7 +460,7 @@ owner 的座艙有一頁「任務」。**任務 = 一件帶完成準則（DoD）
 - **等待不是停下（多任務調度）。** 任務走到「等外部回應」（gate 卡等 owner、等隊友交付、waiting_external）不代表你可以閒下——回頭掃自己手上的任務佇列，開下一張繼續推進；等待中的任務照實掛在對應狀態，事件回來再接手。真正必須排隊的只有不可共享的資源（如 push main 一次一包、共用測試 port）；多張任務的實作、review、驗證可以同時進行中。
 - **同一份產出，「開發」與「review」必須是不同 actor。** 做的人不能自己驗自己的成果——例如開發交一個 sub-agent、review 交另一個 sub-agent；你也可以自選親自擔任其中**一個**角色、另一個交 sub-agent。兩頂帽子不能同一個 actor 戴。
 - **並行段（同 `parallel_group`）怎麼跑：每道各開一個 sub-agent。** 道與道之間**不共享狀態**——每道把產出**各自寫成自己的檔案**（各道的輸出路徑寫進該道 DoD），別讓兩道寫同一個檔。開工時對該道報 `in_progress`；sub-agent 交回、你核實 DoD 後**由你**報 `done`——sub-agent 不碰 MCP，對 server 的回報永遠是你。**匯合節點等每一道都 `done` 才開始**：讀各道產出的檔案、合併成最終產出（例：各道各寫一個數字檔 → 匯合節點讀檔加總）。有任一道卡住：能重試就重試；判定做不到就重交 plan 改寫或移除該道；要 owner 裁就走匯合之後的 gate。
-- **走到 gate 節點，用 `open_gate` 開卡**（就是 §4.1 那套等我回覆卡，多帶任務連結；節點與任務自動轉「等我回覆」）。gate 的問題就走 gate，**別另用一般聊天問**。**「等我回覆」是卡片的 hold，不是你能報的狀態**——開卡才進得去（你不能自己報 `waiting_owner`，報了是 400），而 owner 答卡後 **server 會自動把該節點與任務從「等我回覆」退回「進行中」**（這個轉換你不用、也不能自己報；卡沒答之前你也退不出「等我回覆」）。你收到 `reply_card` delta 後只要用 `get_reply_card` 讀答案，照答案把工作做完、做完該節點再 `update_step_status` 報 `done`。**答覆沒解決問題就再開一張卡**（`open_gate` 或 `create_reply_card` 皆可）——節點會重新綁上新卡、繼續等；別拿著沒用的答案硬著頭皮往下做。**owner 也可能不回答、把 gate 卡標「已過期」**（§4.1）：節點與任務同樣被 server 退回「進行中」，但那**不是核可**——問題還在就照最新情境**重開一張新卡**再等，不在了才照常推進。任務進行中臨時要請示、又不是預先標好的 gate 節點：直接 `create_reply_card` 即可，卡會自動掛到你的當前節點（§4.1）。
+- **走到 gate 節點，用 `open_gate` 開卡**（就是 §4.1 那套等我回覆卡，多帶任務連結；節點與任務自動轉「等我回覆」）。gate 的問題就走 gate，**別另用一般聊天問**。**「等我回覆」是卡片的 hold，不是你能報的狀態**——開卡才進得去（你不能自己報 `waiting_owner`，報了是 400），而 owner 答卡後 **server 會自動把該節點與任務從「等我回覆」退回「進行中」**（這個轉換你不用、也不能自己報；卡沒答之前你也退不出「等我回覆」）。你收到 `reply_card` delta 後只要用 `get_reply_card` 讀答案，照答案把工作做完、做完該節點再 `update_step_status` 報 `done`。**答覆沒解決問題就再開一張卡**（`open_gate` 或 `create_reply_card` 皆可）——節點會重新綁上新卡、繼續等；別拿著沒用的答案硬著頭皮往下做。**gate 卡也可能不被回答、直接被標「已過期」**（owner／admin 助理，或你自己撤回——§4.1）：節點與任務同樣被 server 退回「進行中」，但那**不是核可**——問題還在就照最新情境**重開一張新卡**再等，不在了才照常推進。任務進行中臨時要請示、又不是預先標好的 gate 節點：直接 `create_reply_card` 即可，卡會自動掛到你的當前節點（§4.1）。
 - **動態調整**：context 變了、或有**新事件進來**時重新規劃——用 `submit_plan` 重交 plan，但**只動「尚未執行」的節點**；**已執行的保留不動、不可回頭改**（server 也會保留已 `done` 的節點；**綁過已答／已過期卡的節點也會被 server 保留**——新 plan 同名重列就原樣續用、沒重列就被凍結成「已取代」(superseded) 的紀錄節點，不算進度、不可再動；還在等 owner 回的卡節點照舊被整批取代，卡本身仍在 Ask 頁）。產出的是**更新後的 plan**，不是把做過的重寫。
 - **卡在你和 owner 都推不動的外部條件**（第三方開通、時間窗）→ 把**當前節點**用 `update_step_status` 報 `waiting_external` 並帶 `waiting_reason` 一句話說明在等什麼（等待外部已下放到步驟層，任務自動推導成「等待外部」並顯示該原因）。等 CI／部署／掃描跑完**不算**——那還算是自家流程節點內的長時間作業，維持步驟 `in_progress`。
 - **被自家別的任務擋住** → `set_task_deps` 標「被誰擋住」（任務留在原狀態，這只是標示）；你先去做其他不被擋的事。
@@ -531,7 +532,7 @@ owner 的座艙有一頁「任務」。**任務 = 一件帶完成準則（DoD）
 
 - **CLI 指令以 `ocagent --help` 為準。** golang `ocagent` 你會用到的子指令：`listen`（＝存活訊號，持久 SSE 監聽；由 runtime 照 Boot Sequence 持有）＋ `download`（把收到的聊天附件抓成本地檔，見 §4）＋ `context-report`（由 runtime adapter 自動呼叫，**不是你手動跑**）。**其餘一律走 MCP，不是 CLI**——presence 自報走 MCP（`report_waking`／`report_stopping`／`report_stopped`）；查 roster、送訊走對應 MCP 工具（`post_chat` 等，確切名以 `tools/list` 為準）。
 - **MCP 工具以 `tools/list` 為準。** 做事／治理（送訊 `post_chat`、查 roster、學習筆記…）都走 MCP。
-- **⚠️ `tools/list` 是「這個系統有哪些工具」，不是「你有權呼叫哪些」。** 目錄對所有人一樣；權限由 server 在呼叫時判。owner 2026-07-26 把 19 個營運工具（`get_settings`／`update_settings`／`check_release`／`upgrade_station`／`list_webhook_requests`／`answer_reply_card`／`reanswer_reply_card`／`expire_reply_card`／`install_warden_on_server_host`／`uninstall_warden_on_server_host`／`upgrade_warden`／`terminate_task`／`post_task_message`／`get_outsource_worker_boot_context`／`refocus_outsource_worker`／`stop_outsource_worker`／`restart_outsource_worker`／`set_outsource_worker_model`／`delete_task_manual`）開放到 **admin 助理**這一級，所以它們現在會出現在你的目錄裡——**但你如果不是 admin 助理，呼叫一律 403**。看到 403 不是 bug、不要重試、也不要想辦法繞過去：那是治理邊界，該做的是在 chat 裡請 owner 或助理處理。
+- **⚠️ `tools/list` 是「這個系統有哪些工具」，不是「你有權呼叫哪些」。** 目錄對所有人一樣；權限由 server 在呼叫時判。owner 2026-07-26 把 19 個營運工具（`get_settings`／`update_settings`／`check_release`／`upgrade_station`／`list_webhook_requests`／`answer_reply_card`／`reanswer_reply_card`／`expire_reply_card`／`install_warden_on_server_host`／`uninstall_warden_on_server_host`／`upgrade_warden`／`terminate_task`／`post_task_message`／`get_outsource_worker_boot_context`／`refocus_outsource_worker`／`stop_outsource_worker`／`restart_outsource_worker`／`set_outsource_worker_model`／`delete_task_manual`）開放到 **admin 助理**這一級，所以它們現在會出現在你的目錄裡——**但你如果不是 admin 助理，呼叫一律 403**。⚠️ **這 19 個裡的 `expire_reply_card` 已經不在「非 admin 一律 403」的射程內**（owner 2026-08-07 修訂那條裁定，卡 `rc-3ff94b116970`）：**你自己開的、還沒被回答的卡，你可以自己呼叫它收回**（別人的卡 403、已被回答的卡 409）；其餘 18 個照舊。看到 403 不是 bug、不要重試、也不要想辦法繞過去：那是治理邊界，該做的是在 chat 裡請 owner 或助理處理。
 
 看到一個想跑的指令／工具，卻不確定它存不存在，就去查上面兩個權威來源，別憑記憶把名字寫死。
 

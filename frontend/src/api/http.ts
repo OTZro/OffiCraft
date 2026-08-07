@@ -916,8 +916,11 @@ export const httpApi: Api = {
 
   async expireReplyCard(id: string): Promise<ReplyCard> {
     // POST /api/reply-cards/{card_id}/expire -> ReplyCardDTO (標為過期 — the
-    // owner/admin-agent terminal exit that is NOT an answer; no body). answered /
-    // already-expired → 409, unknown id → 404 (ApiError via middleware).
+    // terminal exit that is NOT an answer; no body). Callers: the card's own
+    // AUTHOR (T-1b88, owner 2026-08-07 card rc-3ff94b116970 — revising T-6020,
+    // which held this at the admin floor), the owner, or an admin agent. Someone
+    // else's card → 403, answered / already-expired → 409, unknown id → 404
+    // (ApiError via middleware). The cockpit only ever calls this as the owner.
     const wire = unwrap(
       await client.POST("/api/reply-cards/{card_id}/expire", {
         params: { path: { card_id: id } },

@@ -297,7 +297,11 @@ export const zh = {
     openedAtLabel: "開卡",
     answeredAtLabel: "已回覆",
     expiredAtLabel: "已過期",
-    // 標為過期(owner 專用終態、不是回答、不可復原)——按鈕開二次確認
+    // 標為過期(終態、不是回答、不可復原)——按鈕開二次確認。
+    // ⚠️「owner 專用」這句在本包之前就已經是假話,不是本包造成的:T-6020(owner
+    // 2026-07-26)起 admin 助理也按得動;owner 2026-08-07 於卡 rc-3ff94b116970
+    // (T-1b88)又把「該卡的作者本人」加進 API 層(自己開的、還沒被回答的卡自己撤得回)。
+    // 座艙這顆鈕仍然是 owner 面的入口,行為與這些字串都沒變。
     expire: "標為過期",
     expireConfirm: "確認標為過期",
     expireConfirmBodyLead: "要把「",

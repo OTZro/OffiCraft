@@ -267,8 +267,12 @@ export const en: Dict = {
     openedAtLabel: "Opened",
     answeredAtLabel: "Answered",
     expiredAtLabel: "Expired",
-    // Mark expired (owner/admin-agent terminal since T-6020; not an answer; no
-    // undo) — the button opens a double-confirm.
+    // Mark expired (terminal; not an answer; no undo) — the button opens a
+    // double-confirm. The "owner/admin-agent since T-6020" framing is still
+    // true as history, but T-1b88 (owner 2026-08-07, card rc-3ff94b116970)
+    // widened the API to the card's own AUTHOR as well: an agent may retire the
+    // unanswered card IT opened. This cockpit button is still the owner's
+    // entry point and neither its behaviour nor these strings changed.
     expire: "Mark expired",
     expireConfirm: "Confirm mark expired",
     expireConfirmBodyLead: 'Mark "',

@@ -10,9 +10,15 @@ promises:
   * an ANSWER is the only POSITIVE close: option pick, free text (a
     counter-question included), or an attachment all flip waiting→answered;
     there is NO close/skip surface (probed: no such routes exist). The
-    EXPIRE (T-1aa4; owner or admin agent since T-6020) is the sole other exit
-    — waiting→expired,
-    terminal, NOT an answer (its own test section below);
+    EXPIRE is the sole other exit — waiting→expired, terminal, NOT an answer
+    (its own test section below). WHO may press it moved twice and the auth
+    matrix owns that question: owner-only at T-1aa4, owner/admin agent from
+    T-6020, and from T-1b88 (owner 2026-08-07, card rc-3ff94b116970) also the
+    card's OWN AUTHOR — a route floor of `agent` plus an in-handler authorship
+    check, so an agent may retire the unanswered card IT opened while a
+    stranger's card is 403. The cases below drive it as the owner, which is
+    still permitted; answering (answer/reanswer) stayed governance-only, and an
+    ALREADY-ANSWERED card is 409 for everyone including the owner;
   * one-shot: a second POST answer is 409 (the agent asks again with a NEW
     card, never a reopen);
   * 重新決定 (PUT re-answer): only on an ANSWERED card (waiting → 409),
@@ -611,7 +617,11 @@ def test_answer_reaches_the_agent_with_card_context(
         assert blob.content == base64.b64decode(_PNG_B64)
 
 
-# ── expired (T-1aa4): the governance terminal that is NOT an answer ────────
+# ── expired (T-1aa4): the terminal exit that is NOT an answer ──────────────
+# Not a governance-only verb any more: T-1b88 (owner 2026-08-07, card
+# rc-3ff94b116970) opened it to the card's own author as well. These cases press
+# it as the owner (still allowed); the per-caller matrix lives in
+# test_auth_matrix.py.
 
 
 def _expire(client, owner_token, card_id: str):
