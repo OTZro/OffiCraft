@@ -147,9 +147,13 @@ fi
 # it are the point of this file, so the filter drops refutation markers.
 #
 # TWO SCOPE EXCLUSIONS, both stated rather than quietly applied:
-#   - docs/*-evidence/ holds captured CI logs from past runs. Those are immutable
-#     records of what was printed at the time, not claims this tree makes, and
-#     editing them would be falsifying evidence.
+#   - docs/*-evidence/ would hold captured CI logs from past runs: immutable
+#     records of what was printed at the time, not claims this tree makes, so
+#     editing them would be falsifying evidence. NOTE (T-bf93): no such
+#     directory exists in this tree any more — the one that did
+#     (docs/T-081b-evidence/) was deleted as a one-off evidence pile. The
+#     exclusion is kept deliberately, for the next time one appears; it
+#     currently excludes nothing, and that is not a claim that it does.
 #   - THIS FILE, which necessarily contains the banned phrases as its own pattern
 #     list — the first run of this check flagged itself. A rule cannot be written
 #     without naming what it forbids.

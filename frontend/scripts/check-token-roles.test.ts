@@ -131,8 +131,8 @@ describe("check-token-roles", () => {
   });
 
   // ── round 4, SHOULD-B: five ways the guard could be walked past. Every one
-  // was measured as exit=0 BEFORE this fix (round4-review/guard-bypass-probe.md)
-  // and every one really renders — two of them were created by the round-3 fix
+  // was measured as exit=0 BEFORE this fix, and every one really renders — two
+  // of them were created by the round-3 fix
   // itself, which narrowed the measurement to the literal selector ":root" in
   // the literal file theme.css and so stopped seeing values that DO apply.
   // ── round 4 recheck, SHOULD-1 / SHOULD-2. The guard no longer decides WHICH
