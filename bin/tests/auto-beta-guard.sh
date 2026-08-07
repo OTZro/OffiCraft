@@ -940,8 +940,9 @@ fi
 # each canonical trigger is pinned verbatim (that is what refuses a filter), and
 # a short allowlist of trigger KEYS may be added without editing this guard (that
 # is what stops a legitimate `workflow_dispatch` from reddening it). See the
-# `on-shape` query for both lists and for why a separate trigger cannot filter an
-# existing one.
+# `on-shape` query for both lists, and for how far the "an added trigger cannot
+# suppress an existing one" reason actually reaches — it holds for pull requests
+# and NOT for main, and this line used to state it without that limit.
 check "W7 the workflow's pinned \`on:\` triggers are unchanged and no unlisted trigger was added (a path/branch filter here makes every gate skip, and no other assertion reads it)" \
   "ok" "$(q on-shape)"
 

@@ -95,10 +95,21 @@ name: ci
 #   • The VALUE of each trigger below is pinned verbatim. Adding or changing a
 #     filter under `pull_request` or `push` reddens W7.
 #   • A trigger KEY on W7's allowlist may be ADDED here without touching the
-#     guard. `workflow_dispatch` is on that list today; a separate trigger cannot
-#     filter an existing one, so adding it cannot make a gate skip on a pull
-#     request, and auto-beta's `github.event_name == 'push'` half independently
-#     stops a dispatched run from publishing.
+#     guard. `workflow_dispatch` is on that list today. ⚠️ THE REASON THIS COMMENT
+#     USED TO GIVE — "a separate trigger cannot filter an existing one" — IS FALSE
+#     IN THE DIRECTION IT DID NOT CONSIDER, and the same sentence was corrected in
+#     CLAUDE.md; this is its twin. The claim at the width it actually holds: adding
+#     workflow_dispatch cannot stop the gates being scheduled ON A PULL REQUEST,
+#     because a PR run has a different `github.ref` and therefore a different
+#     concurrency group from anything a dispatch can occupy — reasoned from the
+#     `group:` expression below, NOT tested on GitHub. And auto-beta's
+#     `github.event_name == 'push'` half separately stops a dispatched run from
+#     publishing.
+#     ⚠️ ON MAIN IT DOES NOT HOLD: main runs share one group with
+#     cancel-in-progress: false and a single pending slot, so a dispatched run
+#     against main can displace a QUEUED trunk commit, whose conclusion is then
+#     `cancelled` — not red, no verdict, no beta. Read off the concurrency comment
+#     below; also not tested on GitHub.
 #   • Any other trigger (`schedule`, `pull_request_target`, …) is refused until
 #     it is added to the allowlist in that guard, in the SAME commit — and that
 #     edit is the review. `pull_request_target` is the one this matters most for:
