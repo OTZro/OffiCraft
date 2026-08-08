@@ -94,10 +94,14 @@ TEXT_SUFFIXES = {".go", ".ts", ".tsx", ".js", ".mjs", ".py", ".sh", ".md", ".jso
 # dragged in, which is exactly what this marker keeps out.
 EFFORT_MARKER = re.compile(r"effort|思考強度|投入", re.I)
 
-# Chinese renderings of the levels. Committed here on purpose: the zh labels
-# have no mechanical link to the English keys, so without this table a new
-# level would silently keep three Chinese labels.
-ZH_LABEL = {"低": "low", "中": "medium", "高": "high"}
+# Chinese renderings of the levels. Committed here on purpose: the zh labels have
+# no mechanical link to the English keys, so without this table a new level would
+# silently keep the old Chinese labels in the docs. Adding a level means adding
+# its rendering here too — that edit is the point, not an obstacle.
+# Matched longest-first so a multi-character label wins over a substring of it
+# (最高 must not be read as 高).
+ZH_LABEL = {"低": "low", "中": "medium", "高": "high", "最高": "max"}
+ZH_TOKEN = "(?:" + "|".join(sorted(ZH_LABEL, key=len, reverse=True)) + ")"
 
 
 def fail(message: str) -> NoReturn:
@@ -293,8 +297,8 @@ def scan(truth: Set[str]) -> Tuple[List[Finding], Dict[str, int]]:
                 if len(known) < 2:
                     continue
                 record("prose", start + m.start(), set(tokens[known[0]: known[-1] + 1]))
-            for m in re.finditer(r"[低中高](?:\s*[/／、]\s*[低中高])+", line):
-                listed = {ZH_LABEL[ch] for ch in m.group(0) if ch in ZH_LABEL}
+            for m in re.finditer(rf"{ZH_TOKEN}(?:\s*[/／、]\s*{ZH_TOKEN})+", line):
+                listed = {ZH_LABEL[tok] for tok in re.findall(ZH_TOKEN, m.group(0))}
                 if listed:
                     record("prose", start + m.start(), listed)
 

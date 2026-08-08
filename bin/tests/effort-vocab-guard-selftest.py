@@ -203,25 +203,29 @@ def _(root: Path) -> None:
 def _(root: Path) -> None:
     """Grow the vocabulary in the REAL gate and change nothing else. The copy
     that must be named is the REAL codex launcher, because that is the one whose
-    staleness is invisible from the cockpit: it coerces the unknown level to
-    medium and the session launches at the wrong effort with nothing going red."""
+    staleness is invisible from the cockpit: it swallows the unknown level into
+    its catch-all and the session launches at the wrong effort with nothing going
+    red. The added level is FICTIONAL on purpose — using a real one would make
+    this case pass or fail depending on what the vocabulary happens to be today,
+    and it would stop biting the moment that level got added for real."""
     edit(
         root,
         SSOT_REL,
-        'effort == "high"',
-        'effort == "high" || effort == "max"',
+        "func validEffort(effort string) bool {",
+        'func validEffort(effort string) bool {\n\tif effort == "selftestonly" {\n\t\treturn true\n\t}',
     )
 
 
 @case("ssot-grows-names-every-stale-copy", "frontend/src/types.ts:1")
 def _(root: Path) -> None:
     """Same growth, seen from the other end: EVERY stale copy must be listed,
-    not just the first one the scanner happens to reach."""
+    not just the first one the scanner happens to reach. Fictional level for the
+    same reason as above."""
     edit(
         root,
         SSOT_REL,
-        'effort == "high"',
-        'effort == "high" || effort == "max"',
+        "func validEffort(effort string) bool {",
+        'func validEffort(effort string) bool {\n\tif effort == "selftestonly" {\n\t\treturn true\n\t}',
     )
 
 
