@@ -68,18 +68,71 @@
 #       own owner ruling — and this is what makes that sentence a mechanism rather
 #       than prose. The enumeration is the point here, not a smell: it cannot go
 #       stale in silence, because the only way past it is to edit it.
-#   W2  an `if` missing either half — publishing off a working branch, or off a
-#       pull_request event whose ref happens to look like main.
+#       ⚠️ Corroboration on the GATE side is an ALLOWLIST, not a ref spelling: a
+#       gate may carry no job-level `if`, or one that is exactly on a roll-call in
+#       this file. Matching one literal spelling was a hole — `github.ref_name ==
+#       'main'` and `startsWith(github.ref, …)` both took a real gate off pull
+#       requests while this stayed green — and the first fix for that (ban every
+#       job-level `if`) reddened `draft != true` too, which is not a bypass.
+#       It also refuses `continue-on-error` on ANY job: that field makes a failing
+#       job report success outward, which satisfies auto-beta's `needs` AND makes
+#       notify-main-red's `failure()` false. Nothing here used to read it.
+#   W2  the `if` compared EXACTLY against the canonical condition. Asking whether
+#       both halves appear was a hole: `(<canonical>) || github.event_name ==
+#       'pull_request'` contains both substrings and puts the only job holding
+#       `contents: write` on pull requests, publishing unmerged code as a real
+#       prerelease.
 #   W3  `contents: write` leaking to another job or to the workflow default: the
 #       three gate jobs run untrusted fork code and must not be able to write.
 #   W4  GA becoming automatic. The beta→final flip is a human decision (owner
-#       ruling), so no workflow file may even NAME that subcommand.
+#       ruling), so nothing under `.github/` may even NAME that subcommand — the
+#       scope is the whole directory, not just `workflows/`, because a composite
+#       action under `.github/actions/` is not a workflow file and slipped past.
+#       W4d then refuses the REFERENCE rather than a location, because a
+#       composite action kept OUTSIDE `.github/` walked past both the grep scope
+#       and the earlier directory ban. It refuses a `uses:` pointing at this
+#       repo's own code either by relative path (`./…`, `../…`) or by naming this
+#       repo in the `{owner}/{repo}/{path}@{ref}` form, and it reads the PARSED
+#       document rather than lines — a value written on the following line is
+#       legal YAML and no line-oriented grep can ever see it. Both of those
+#       spellings were live bypasses against the previous version.
+#       W4pc / W4dpc / W4dpf / W4dtpc prove those scans match planted examples
+#       (and leave real third-party actions alone) rather than reporting an empty
+#       result for free.
+#       ⚠️ W4d is NOT a proof that a local action cannot be reached. What it does
+#       not cover is listed beside the assertion itself.
 #   W5  the publish call losing --no-settle (every unattended run would then fail
 #       on a station it cannot reach) or losing --target (it would publish
 #       whatever main points at when the runner starts, not the commit that was
 #       checked).
 #   W6  a shallow checkout: `git worktree add --detach <sha>` and the tag
 #       comparison both need real history.
+#   W7  the `on:` block, which NOTHING here used to read: a filter there
+#       (`paths-ignore: ['**']`) makes every gate skip on every pull request
+#       without touching a job, and every assertion above stays green. Same shape
+#       as the gate-`if` roll-call: the VALUE of each canonical trigger is pinned
+#       verbatim, while a short allowlist of trigger KEYS may be added without
+#       editing this guard. Pinning the whole mapping instead reddened for
+#       `workflow_dispatch`, which is a legitimate edit.
+#       ⚠️ AN EARLIER VERSION OF THIS COMMENT SAID `on:` IS WHAT DECIDES WHETHER A
+#       GATE IS SCHEDULED, "not any field inside a job". That is false, and it is
+#       measurable in this very file: grep it for `concurrency` → 0 hits,
+#       `strategy` → 0 hits (`needs` → 21, the positive control that says the
+#       query works). WHAT THIS FILE READS is exactly: `on:` (W7), job-level `if`
+#       (W1/W1r/W2), `needs` (W1), `permissions` (W3), job-level
+#       `continue-on-error`, and the `# oc-job-role:` markers. THREE WAYS A GATE
+#       CAN END UP WITH NO VERDICT THAT NOTHING HERE WATCHES, listed because the
+#       list being written down is the only thing standing in for a check:
+#         • a gate whose `needs` points at a job that is skipped on pull requests
+#           — the dependent skips with it;
+#         • `strategy.matrix` with an `exclude` that reduces a gate to zero jobs;
+#         • `concurrency` — ci.yml pins `group: ci-${{ github.ref }}` with
+#           `cancel-in-progress: false` on main, and the pending slot holds ONE
+#           run, so a displaced trunk commit gets conclusion=cancelled: no
+#           verdict, and no beta.
+#       None of the three is tested on GitHub by anyone; the first two are not
+#       tested at all, and the third is read off ci.yml's own comment. Whether
+#       this guard should grow to cover them is a decision outside this pack.
 #   N*  the version rule itself, driven hermetically with fabricated tag lists.
 #
 # HERMETICITY: nothing here runs a workflow, contacts GitHub, or invokes gh/git
@@ -96,13 +149,33 @@ NBT="$ROOT/bin/next-beta-tag"
 JOB="auto-beta"
 ROLE_MARKER="oc-job-role"
 
-PASS=0; FAIL=0
+PASS=0; FAIL=0; UNCORROB=0
 ok()   { PASS=$((PASS+1)); printf '  ok   — %s\n' "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf '  FAIL — %s\n' "$1"; }
 check(){ # check DESC EXPECTED ACTUAL
   if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1 (want '$2' got '$3')"; fi
 }
-fatal() { printf '  FAIL — %s\n' "$1"; echo "auto-beta guard: $PASS ok, $((FAIL+1)) failed"; exit 1; }
+# A THIRD outcome, and the reason it exists is narrow enough to state exactly:
+# one assertion here (W4ds) corroborates a hardcoded constant against evidence
+# that a legitimate checkout may simply not carry. "Could not run" is neither a
+# pass nor a violation, and the two previous shapes were both wrong for it: ok()
+# prints a check that never happened as a check that passed, and bad() refuses a
+# working copy that has done nothing wrong (it refused the SUPPORTED concurrent-CI
+# flow — see W4ds). So it gets its own line, its own counter, and a summary that
+# names it; what it does NOT get is a contribution to the exit status.
+# ⚠️ USE THIS FOR "the evidence is absent", NEVER for "the evidence disagrees".
+# An assertion whose evidence is present and says no is a bad(). If you find
+# yourself reaching for this to quiet a red, that red is the finding.
+uncorrob(){ UNCORROB=$((UNCORROB+1)); printf '  ⚠️ NOT CORROBORATED — %s\n' "$1"; }
+summary() { # summary EXTRA_FAILS
+  local f=$((FAIL + ${1:-0}))
+  if [[ "$UNCORROB" == "0" ]]; then
+    echo "auto-beta guard: $PASS ok, $f failed"
+  else
+    echo "auto-beta guard: $PASS ok, $f failed, $UNCORROB not corroborated (NOT passes — read the ⚠️ line(s) above)"
+  fi
+}
+fatal() { printf '  FAIL — %s\n' "$1"; summary 1; exit 1; }
 
 [[ -f "$WF" ]] || fatal "$WF is missing — the automatic beta path cannot exist without it"
 [[ -f "$NBT" ]] || fatal "$NBT is missing — the auto-beta job calls it to compute the tag"
@@ -155,6 +228,14 @@ JSON="$WORK/ci.json"
 # real parse and the positive control below. psych is YAML 1.1, so the `on:` key
 # comes back as the boolean true; nothing here needs it and the JSON dump just
 # carries it as the string "true".
+# ⚠️ ONE PROPERTY OF `safe_load` WORTH KNOWING BEFORE IT SURPRISES SOMEBODY: Psych's
+# `safe_load` defaults to `aliases: false`, so a YAML anchor/alias (`&x` / `*x`)
+# anywhere in the file makes the whole parse RAISE — which lands as W0 "does not
+# parse" and fails. That is the fail-CLOSED direction (an aliased workflow cannot
+# slip past unexamined), and it is worth stating because a legitimate edit using an
+# anchor would be refused here with a message about invalid YAML rather than about
+# aliases. ⚠️ READ OFF THE PSYCH DOCUMENTATION, NOT VERIFIED WITH A FIXTURE HERE —
+# nobody has fed this guard an anchored workflow to watch what it says.
 parse_yaml() {
   "$RUBY" -ryaml -rjson -e '
     doc = YAML.safe_load(File.read(ARGV[0]))
@@ -215,6 +296,101 @@ def norm(s):
     # split over several lines compares as the one command it is.
     return re.sub(r"\s+", " ", str(s).replace("\\\n", " ")).strip()
 
+DQUOTE_MARK = "DOUBLE-QUOTED-LITERAL!"
+
+def dq_as_delimiter(expr):
+    """Is there a double quote WHERE A STRING DELIMITER GOES, i.e. outside every
+    single-quoted literal?
+
+    🔴 THE FIRST VERSION ASKED `'"' in expr` AND THAT WAS A FALSE RED WE SHIPPED.
+    An independent review found it: in an Actions expression a single-quoted literal
+    may contain arbitrary characters, so
+
+        if: contains(github.event.head_commit.message, '"skip-ci"')
+
+    is a legal condition — the double quotes are ordinary characters inside the
+    literal, not delimiters — and the character test refused it (measured at
+    43 ok / 2 failed). That is the exact failure this whole round is treating: a
+    guard that reddens for a legal edit teaches people to route around the guard.
+    So the question is not "is there a double quote" but "is there one in delimiter
+    position".
+
+    ⚠️ WHAT IS AND IS NOT MEASURED HERE. That the DELIMITER form kills the whole
+    workflow is measured on GitHub (see flag_dquotes). That the INSIDE-A-LITERAL
+    form is fine is NOT measured on GitHub: it is read off the expression grammar,
+    and what the review actually measured was that this guard refused it — not what
+    GitHub does with it. Stated that way on purpose; this ticket has a history of
+    claims outrunning their evidence.
+
+    A single quote inside a single-quoted literal is written by doubling it (''),
+    which is why the inner loop consumes pairs rather than closing on them.
+    """
+    s = str(expr)
+    i, n = 0, len(s)
+    while i < n:
+        c = s[i]
+        if c == "'":
+            i += 1
+            closed = False
+            while i < n:
+                if s[i] == "'":
+                    if i + 1 < n and s[i + 1] == "'":
+                        i += 2
+                        continue
+                    i += 1
+                    closed = True
+                    break
+                i += 1
+            if not closed:
+                # UNTERMINATED literal: we cannot say where it would have ended, so
+                # we cannot say which quotes are delimiters. Fall back to the
+                # conservative answer for the remainder rather than treating an
+                # unclosed literal as swallowing everything after it — otherwise
+                # `'oops && x == "push"` would hide a real delimiter quote.
+                return '"' in s[i:] or '"' in s
+            continue
+        if c == '"':
+            return True
+        i += 1
+    return False
+
+def flag_dquotes(cond):
+    """Prefix a marker when the condition uses a double quote as a delimiter.
+
+    🔴 THIS USED TO REWRITE `"push"` INTO `'push'` AND COMPARE THEM AS EQUAL. That
+    was wrong, and it was wrong in the expensive direction. The belief was that the
+    two spellings are the same condition and that reddening for a no-op rewrite
+    teaches people to edit the guard until it is quiet (a real hazard, measured
+    once at 36 ok / 1 failed). Then it was measured ON GITHUB, two minimal
+    workflows differing only in the quotes:
+      `if: github.event_name == 'push'`  → the run happened, `name:` resolved.
+      `if: github.event_name == "push"`  → STARTUP FAILURE, `jobs: []`, zero jobs,
+                                           run named after the file path because
+                                           `name:` was never read.
+    So the double-quoted form is not a rewrite of the condition; it is a workflow
+    that never starts, and on a pull request that shows up as NO checks — not a red
+    one, which is strictly worse to notice. Refusing it was RIGHT; the "false red"
+    was a true red. What the guard owes that case is not tolerance but an
+    explanation, which is why this returns a marker the caller turns into a message
+    naming the startup failure.
+
+    ⚠️ Whitespace and the outer `${{ }}` are still normalised (those really are
+    the same condition either way). Nothing else is forgiven: an added clause, a
+    different operator, a negation, a renamed context all still redden, because
+    everything else is compared byte for byte.
+
+    ⚠️ DELIMITER POSITION ONLY — see dq_as_delimiter. A double quote INSIDE a
+    single-quoted literal (`contains(msg, '"skip-ci"')`) is an ordinary character
+    and is not flagged; an earlier version flagged it and that was a false red of
+    our own making.
+    """
+    return (DQUOTE_MARK + cond) if dq_as_delimiter(cond) else cond
+
+def unwrap(cond):
+    """Strip the optional outer `${{ }}` — both spellings are legal and equal."""
+    m = re.fullmatch(r"\$\{\{\s*(.*?)\s*\}\}", cond)
+    return m.group(1) if m else cond
+
 def publish_steps():
     return [s for s in (me.get("steps") or [])
             if "bin/release publish" in str(s.get("run", ""))]
@@ -259,14 +435,115 @@ def flag_value(cmd, flag):
 if what == "job-present":
     print("yes" if job in jobs else "no")
 
-elif what == "if-conditions":
-    cond = norm(me.get("if", ""))
-    have = []
-    if re.search(r"github\.event_name\s*==\s*['\"]push['\"]", cond):
-        have.append("event")
-    if re.search(r"github\.ref\s*==\s*['\"]refs/heads/main['\"]", cond):
-        have.append("ref")
-    print(",".join(have) or "-")
+elif what == "if-raw":
+    # THE WHOLE CONDITION, normalised only for whitespace and for the optional
+    # outer `${{ }}` wrapper (both really are the same condition either way).
+    # Compared VERBATIM by the caller. A double-quoted literal is NOT normalised
+    # into the single-quoted spelling — it comes back marked, so the caller can
+    # say why it is refused; see flag_dquotes for what was measured on GitHub.
+    #
+    # ⚠️ IT USED TO ASK "are these two substrings present?" AND THAT WAS A HOLE.
+    # A reviewer turned the condition into
+    #   (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'pull_request'
+    # and the guard stayed 35 ok / 0 failed: both substrings were still there, and
+    # nothing looked at the BOOLEAN STRUCTURE around them. That mutant makes the
+    # one job holding `contents: write` run on pull requests, so an unmerged branch
+    # publishes a real prerelease. Substring presence cannot see a disjunction
+    # bolted on beside it; an exact comparison can, and it also reddens for `||`,
+    # for a third clause, and for a negation. If you need auto-beta to run on
+    # another trigger, change WANT_IF in this guard IN THE SAME COMMIT — that edit
+    # is the deliberate act this assertion exists to force.
+    print(flag_dquotes(unwrap(norm(me.get("if", "")))) or "-")
+
+elif what == "on-shape":
+    # ── THE TRIGGERS THEMSELVES, which NOTHING in this file used to read ───────
+    # Every gate assertion above is downstream of one unexamined belief: that the
+    # gate jobs run on a pull request at all. They are filtered by the `on:`
+    # block, not by anything inside a job, so a reviewer put
+    # `paths-ignore: ['**']` under `on.pull_request` and every gate stopped
+    # producing a verdict on every pull request while this guard reported
+    # 37 ok, 0 failed. That is the same silence as a skipped gate — a check-runs
+    # list with no entry looks exactly like a check that did not go red — and it
+    # is reached without touching a single job.
+    #
+    # ── KEY ALLOWLIST, VALUES PINNED VERBATIM — the same shape as the gate-`if`
+    # roll-call, and deliberately so. The first version of this pinned the WHOLE
+    # `on:` mapping byte for byte, and a reviewer showed what that costs: adding
+    # `workflow_dispatch:` — a legitimate edit that ci.yml's own comments say is
+    # expected — reddened at 38 ok / 1 failed. That is the identical mistake the
+    # gate-`if` rule had already made and already backed out of ("a rule that
+    # forbids a legitimate change outright gets edited away by whoever needs it
+    # next"), and having a door on one side of the same file and a wall on the
+    # other had no reason behind it beyond which one was written first.
+    #
+    # So the test is not "how many legal variants are there" but "is this edit
+    # legitimate", and the two halves separate cleanly:
+    #   • A key in PINNED_ON is pinned WHOLE, value included. Every suppressor
+    #     lives INSIDE the trigger it applies to — paths, paths-ignore, branches,
+    #     branches-ignore, types, tags — so pinning the value is what stops
+    #     `paths-ignore: ['**']` and `branches: [release]` from making every gate
+    #     silent on every pull request. Enumerating the suppressor keys instead
+    #     would be the losing game the gate-`if` rule already lost once.
+    #   • A key in ALLOWED_ON_KEYS may be ADDED without touching this guard. What
+    #     makes that safe is not that the key looks harmless, and it is NOT the
+    #     blanket "a separate trigger cannot filter an existing one" this comment
+    #     used to assert — that sentence is false in the direction it did not
+    #     consider. The claim, at the width it actually holds: adding
+    #     workflow_dispatch cannot stop the gates from being scheduled ON A PULL
+    #     REQUEST, because a PR run has a different `github.ref` and therefore a
+    #     different concurrency group from anything a dispatch can occupy
+    #     (reasoned from ci.yml's `group: ci-${{ github.ref }}`, NOT tested on
+    #     GitHub). And auto-beta's `github.event_name == 'push'` half separately
+    #     stops a dispatched run from publishing.
+    #     ⚠️ ON MAIN IT DOES NOT HOLD: main runs with cancel-in-progress: false
+    #     queue in one shared group with a single pending slot, so a manually
+    #     dispatched run against main can displace a queued trunk commit, whose
+    #     conclusion is then `cancelled` — not red, no verdict, no beta. Read off
+    #     ci.yml's own concurrency comment; also not tested on GitHub.
+    #   • Anything else — pull_request_target above all, which runs with a write
+    #     token against fork code — is refused. Fail-closed: an unlisted trigger
+    #     cannot arrive without an edit to THIS LINE, and that edit is the review.
+    # ⚠️ WHAT THE DOOR DOES NOT BUY, same caveat as the gate-`if` roll-call: a key
+    # somebody ADDS to ALLOWED_ON_KEYS is trusted completely, and its value is not
+    # read at all. The mechanism forces the conversation; it does not have it.
+    PINNED_ON = {"pull_request": None, "push": {"branches": ["main"]}}
+    ALLOWED_ON_KEYS = frozenset(("workflow_dispatch",))
+    # Same trap as ALLOWED_GATE_IF, same guard: `frozenset(("x"))` without the
+    # trailing comma is a set of single characters, and `("x")` is a string whose
+    # `in` is substring containment. Fail loudly rather than silently widen.
+    if not isinstance(ALLOWED_ON_KEYS, frozenset) or any(
+            not isinstance(k, str) or len(k) < 2 for k in ALLOWED_ON_KEYS):
+        print("ALLOWED_ON_KEYS is not a frozenset of whole key names (%r) — "
+              "almost always a missing trailing comma" % (ALLOWED_ON_KEYS,))
+        sys.exit(0)
+
+    # psych is YAML 1.1, so an unquoted `on:` key comes back as the boolean true;
+    # a quoted `"on":` stays the string. Both are read, and BOTH PRESENT is a
+    # failure rather than a pick — the loser's triggers would go unexamined.
+    found = [k for k in ("true", "on") if k in doc]
+    if len(found) != 1:
+        print("on-keys=%s (want exactly one)" % (",".join(found) or "none"))
+        sys.exit(0)
+    got = doc[found[0]]
+    if not isinstance(got, dict):
+        # `on: [push, pull_request]` is legal and drops push.branches, so main's
+        # post-merge round would fire on every branch. Not a mapping, not ok.
+        print("on-is-not-a-mapping=%s" % json.dumps(got, sort_keys=True,
+                                                    separators=(",", ":")))
+        sys.exit(0)
+    def j(v):
+        return json.dumps(v, sort_keys=True, separators=(",", ":"))
+    missing = sorted(k for k in PINNED_ON if k not in got)
+    changed = sorted("%s:%s" % (k, j(got[k])) for k in PINNED_ON
+                     if k in got and got[k] != PINNED_ON[k])
+    unexpected = sorted(k for k in got if k not in PINNED_ON
+                        and k not in ALLOWED_ON_KEYS)
+    if missing or changed or unexpected:
+        print("missing=%s changed=%s unexpected=%s" % (
+            ",".join(missing) or "-", ",".join(changed) or "-",
+            ",".join(unexpected) or "-"))
+    else:
+        print("ok")
 
 elif what == "write-holders":
     # Every job whose own permissions grant contents: write, plus the workflow
@@ -372,10 +649,16 @@ for i in range(starts[0] + 1, len(lines)):
 
 JOB_KEY = re.compile(r'^  (["\']?)([_A-Za-z][A-Za-z0-9_-]*)\1:\s*(#.*)?$')
 MARKER_LINE = re.compile(r'^    #\s*' + MARKER + r':\s*(\S+)\s*$')
+# Job-level `continue-on-error` is a four-space key inside a job body. Scanned as
+# text ONLY to name the line in a red; whether it is THERE is answered by the
+# parser below, so an indentation this pattern misses cannot hide it.
+COE = "continue-on-error"
+COE_LINE = re.compile(r'^    ' + COE + r':\s*(.*?)\s*(?:#.*)?$')
 
 scanned = []          # job ids in file order
 declared_at = {}      # job -> the line its key is on, so a red can name it
 markers = {}          # job -> list of (lineno, value)
+coe_at = {}           # job -> list of (lineno, raw value) for continue-on-error
 current = None
 for lineno, text in region:
     if text.strip() == "" or re.match(r'^\s*#', text):
@@ -395,7 +678,11 @@ for lineno, text in region:
         scanned.append(current)
         declared_at.setdefault(current, lineno)
         markers.setdefault(current, [])
+        coe_at.setdefault(current, [])
         continue
+    mc = COE_LINE.match(text)
+    if mc and current is not None:
+        coe_at.setdefault(current, []).append((lineno, mc.group(1)))
     if MARKER in text:
         m = MARKER_LINE.match(text)
         if current is None:
@@ -455,9 +742,236 @@ for job in sorted(parsed):
 # ⚠️ This is corroboration, NOT the definition. A main-pinned job is not thereby a
 # non-gate; the marker is what says so, and a human review of that marker is what
 # CLAUDE.md's exemption rule is about.
+#
+# ⚠️ THE GATE SIDE USED TO BE SPELLING-DEPENDENT, AND THAT WAS A HOLE. It asked
+# only whether the ONE literal `github.ref == 'refs/heads/main'` appeared, so
+# `if: github.ref_name == 'main'` and `if: startsWith(github.ref, 'refs/heads/main')`
+# — two mutants a reviewer actually ran, both 35 ok / 0 failed — took a real gate
+# off every pull request while this guard reported the marker as corroborated.
+# Enumerating ref spellings is a losing game (there is also github.head_ref,
+# github.event_name, contains(), a matrix expression, an env lookup).
+#
+# THE FIRST ANSWER TO THAT WAS "A GATE MAY CARRY NO JOB-LEVEL `if` AT ALL", AND
+# THAT WAS TOO STRONG. It is fail-closed, which is right, but it also reddens for
+# conditions that are not bypasses at all — `github.event.pull_request.draft
+# != true` is the obvious one, and a rule that forbids a legitimate change
+# outright gets edited away by whoever needs it next, which costs more than it
+# buys. Measured: that condition scored 35 ok / 2 failed.
+#
+# So the rule is an ALLOWLIST, not a ban and not a spelling denylist: a gate may
+# carry NO job-level `if`, or one that is EXACTLY a member of the roll-call
+# below — compared whole, after normalising whitespace and the `${{ }}` wrapper
+# (quoting is NOT normalised: a double-quoted literal is refused by name, because
+# it does not mean the same thing, it stops the workflow from starting — see
+# canon() and DQUOTE_WHY), so no spelling gets in that a reviewer did not read.
+# This is the same
+# device as RULED_EXEMPT and WANT_IF, for the same reason: an unlisted condition
+# — bypass or not — cannot pass without an edit to THIS LINE, and that edit is
+# the deliberate, reviewable act. Fail-closed either way; what changes is that
+# the legitimate case now has a door instead of a wall.
+# ⚠️ AND WHAT THIS DOES NOT BUY, because the roll-call is only as good as the
+# reading: a condition somebody ADDS here is trusted completely. `draft != true`
+# does stop a gate running on draft pull requests, and if the land criteria ever
+# accept a draft PR as merge-ready that entry is the hole. The mechanism forces
+# the conversation; it does not have the conversation.
+# Step-level `if:` is untouched — several gates use it and it cannot skip the job.
+#
+# 🔴 THE CONTAINER TYPE IS PART OF THE ASSERTION, NOT A STYLE CHOICE. This was
+# written as a parenthesised tuple and the roll-call was EMPTY, so the door had
+# never once been executed — and the first person to open it would most likely
+# open it wrong. A one-entry tuple needs a trailing comma; without it
+# `("…")` is a plain STRING, and `x in "some string"` is SUBSTRING containment,
+# not equality. A reviewer measured the consequence: with
+#   ALLOWED_GATE_IF = ("github.event_name == 'pull_request' || github.ref == 'refs/heads/main'")
+# a gate carrying `if: github.ref == 'refs/heads/main'` — the exact bypass this
+# whole ticket started from, a real gate taken off every pull request — passed at
+# 39 ok / 0 failed, because the bypass is a substring of the listed entry.
+# frozenset() cannot degrade that way: a missing comma yields
+# `frozenset("…")`, a set of single CHARACTERS, and a whole condition can never
+# be a member of that — it fails CLOSED instead of open. The explicit shape check
+# below then turns that closed failure into a message that says what happened,
+# rather than a red that reads as if the workflow were at fault.
+ALLOWED_GATE_IF = frozenset((
+))
+if not isinstance(ALLOWED_GATE_IF, frozenset) or any(
+        not isinstance(c, str) or len(c) < 2 for c in ALLOWED_GATE_IF):
+    problem("ALLOWED_GATE_IF is not a frozenset of whole conditions (it is %r). "
+            "That is almost always a missing trailing comma: `frozenset((\"x\"))` "
+            "iterates the string and gives a set of single characters, and "
+            "`(\"x\")` is not a container at all but a string, which turns the "
+            "membership test into SUBSTRING containment and lets a condition that "
+            "merely APPEARS INSIDE a listed entry through. Write each entry as its "
+            "own element with a trailing comma: frozenset((\"a\", \"b\",))"
+            % (ALLOWED_GATE_IF,))
+
+def canon(expr):
+    """Whitespace and the `${{ }}` wrapper normalised; everything else verbatim.
+
+    ⚠️ QUOTING IS NO LONGER NORMALISED HERE, and the reason is a measurement, not
+    a preference. This used to rewrite double-quoted literals as single-quoted on
+    the belief that `== "push"` and `== 'push'` are the same condition. THEY ARE
+    NOT. Measured on GitHub with two minimal workflows differing only in the
+    quotes: the single-quoted one ran and its `name:` resolved; the double-quoted
+    one produced a STARTUP FAILURE with `jobs: []` — zero jobs, and the run named
+    after the file path because `name:` was never read. A double quote in an
+    Actions expression does not change what the condition means; it stops the
+    whole workflow from being scheduled, which on a pull request looks like NO
+    checks rather than a red one. Folding the two spellings together was therefore
+    a WIDENING dressed as a no-op rewrite. Double quotes are now refused by name
+    in the loop below, before anything is compared.
+    """
+    e = re.sub(r"\s+", " ", str(expr)).strip()
+    m = re.fullmatch(r"\$\{\{\s*(.*?)\s*\}\}", e)
+    if m:
+        e = m.group(1)
+    return e
+
+DQUOTE_WHY = (
+    "a double quote used as a STRING DELIMITER (%s). A GitHub Actions expression "
+    "delimits string literals with SINGLE quotes; a double quote in that position does "
+    "not change what the condition means, it stops the WHOLE WORKFLOW from starting. "
+    "Measured on GitHub — the double-quoted form was a startup failure with ZERO jobs "
+    "and the run named after the file path because `name:` was never parsed, while the "
+    "single-quoted control ran one job to success. On a pull request that is not a red "
+    "check, it is NO checks, which looks exactly like nothing being wrong. Rewrite the "
+    "literal with SINGLE quotes. ⚠️ THIS IS ABOUT DELIMITER POSITION, NOT ABOUT THE "
+    "CHARACTER: a double quote INSIDE a single-quoted literal — contains(msg, "
+    "'\"skip-ci\"') — is an ordinary character and is NOT refused. An earlier version "
+    "of this guard said \"double quotes are not valid in an expression\" and refused "
+    "that too, which was a false red of our own making."
+)
+
+# ── double quotes in an EXPRESSION, at any position in the file ───────────────
+# 🔴 THE SCOPE OF THIS RULE IS DRAWN BY THE CONSEQUENCE, NOT BY THE LAYER, and the
+# first version drew it by the layer. It checked job-level `if` only, on the
+# inherited reasoning that step-level `if` "cannot skip a whole job so it is not a
+# bypass". True of skipping — and irrelevant here, because a double quote does not
+# skip anything: it stops the WHOLE FILE from being scheduled. Measured on GitHub,
+# three minimal workflows:
+#   step-level `if: github.event_name == "push"`              → startup failure, 0 jobs
+#   `env: WHO: ${{ github.event_name == "push" }}`            → startup failure, 0 jobs
+#   the same two written with single quotes (control)         → success, 1 job, success
+# The control having a job that ran is what makes the other two findings rather than
+# a broken probe. So both positions are refused, and the rule reads: a double quote
+# inside an expression, wherever the expression lives.
+#
+# ⚠️ WHAT MUST STAY GREEN, because refusing it would be the same disease this whole
+# round is treating — a guard that reddens for a legal edit:
+#   • shell double quotes in `run:` (`run: echo "hi"`) are ordinary shell;
+#   • ordinary YAML string values (`env: FOO: "bar"`, `with: args: "x"`) are legal
+#     YAML — and note the parser makes this one free: quoting is consumed by the
+#     YAML parse, so a plain quoted scalar arrives here with no `"` in it at all.
+#     What survives into a VALUE is what this reads.
+# Positive controls for both directions are asserted in W1rq; they are not a
+# comment's promise.
+#
+# ⚠️ THREE POSITIONS ARE MEASURED (job `if`, step `if`, `${{ }}` interpolation).
+# Other expression positions exist in the Actions grammar and are NOT measured; the
+# scan below covers every `${{ }}` in the parsed document, which reaches them by
+# construction, but the CLAIM about what GitHub does with them stops at those three.
+DQ_EXPR = re.compile(r"\$\{\{(.*?)\}\}", re.S)
+
+def outside_exprs(s):
+    return DQ_EXPR.sub("", str(s))
+
+def dq_as_delimiter(expr):
+    """Is there a double quote WHERE A STRING DELIMITER GOES — outside every
+    single-quoted literal?
+
+    🔴 THE FIRST VERSION ASKED `'"' in …` AND THAT WAS A FALSE RED WE SHIPPED. An
+    Actions expression delimits strings with single quotes, and a single-quoted
+    literal may contain arbitrary characters, so
+        if: contains(github.event.head_commit.message, '"skip-ci"')
+    is legal — those double quotes are ordinary characters — and the character test
+    refused it (an independent review measured 43 ok / 2 failed). A guard that
+    reddens for a legal edit is the disease this whole round is treating, so the
+    question is delimiter POSITION, not the presence of the character.
+
+    ⚠️ EVIDENCE, SPLIT HONESTLY: that the delimiter form kills the whole workflow is
+    measured on GitHub. That the inside-a-literal form is fine is NOT — it is read
+    off the expression grammar, and what the review measured was that THIS GUARD
+    refused it, not what GitHub does with it.
+
+    A single quote inside a single-quoted literal is written by doubling it ('').
+    """
+    s = str(expr)
+    i, n = 0, len(s)
+    while i < n:
+        c = s[i]
+        if c == "'":
+            i += 1
+            closed = False
+            while i < n:
+                if s[i] == "'":
+                    if i + 1 < n and s[i + 1] == "'":
+                        i += 2
+                        continue
+                    i += 1
+                    closed = True
+                    break
+                i += 1
+            if not closed:
+                # Unterminated literal: there is no telling where it would have
+                # ended, so answer conservatively rather than let an unclosed quote
+                # swallow a real delimiter later in the string.
+                return '"' in s[i:] or '"' in s
+            continue
+        if c == '"':
+            return True
+        i += 1
+    return False
+
+def dq_flag(where, text):
+    problem(("%s carries " + DQUOTE_WHY) % (where, str(text).strip()))
+
+def scan_dquote_exprs():
+    """Every `if:` (any layer) and every `${{ }}` body in the whole document."""
+    jobs = doc.get("jobs") or {}
+    hit = set()
+    for job in sorted(jobs):
+        spec = jobs[job] if isinstance(jobs[job], dict) else {}
+        cond = str(spec.get("if", ""))
+        # An `if:` is an expression in its ENTIRETY, `${{ }}` or not — so a quote
+        # anywhere outside an interpolation counts here, and one inside is caught
+        # by the document walk below (checked separately so neither is reported twice).
+        if dq_as_delimiter(outside_exprs(cond)):
+            dq_flag("job '%s' job-level `if`" % job, cond)
+            hit.add(job)
+        steps = spec.get("steps") or []
+        for n, step in enumerate(steps, 1):
+            if not isinstance(step, dict):
+                continue
+            scond = str(step.get("if", ""))
+            if dq_as_delimiter(outside_exprs(scond)):
+                dq_flag("job '%s' step %d (%s) step-level `if`"
+                        % (job, n, str(step.get("name") or step.get("uses") or "unnamed")[:48]),
+                        scond)
+    def walk(node, path):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                walk(v, "%s.%s" % (path, k))
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, "%s[%d]" % (path, i))
+        elif isinstance(node, str):
+            for body in DQ_EXPR.findall(node):
+                if dq_as_delimiter(body):
+                    dq_flag("the `${{ … }}` expression at %s" % (path.lstrip(".") or "(root)"),
+                            "${{%s}}" % body)
+    walk(doc, "")
+    return hit
+
+DQ_JOBS = scan_dquote_exprs()
+
 PIN = re.compile(r"github\.ref\s*==\s*['\"]refs/heads/main['\"]")
 for job, role in sorted(roles.items()):
     cond = str(((doc.get("jobs") or {}).get(job) or {}).get("if", ""))
+    if job in DQ_JOBS:
+        # Already refused above by name. Skipped here so the role checks do not pile
+        # a second, misleading message on top: `PIN` accepts either quote, so a
+        # not-a-gate pinned with `github.ref == "refs/heads/main"` would otherwise
+        # read as correctly pinned while scheduling nothing at all.
+        continue
     pinned = bool(PIN.search(cond))
     if role == NOTGATE and not pinned:
         problem("job '%s' declares itself %s, but its `if` does not pin "
@@ -465,11 +979,53 @@ for job, role in sorted(roles.items()):
                 "a pull request produces a verdict there, and this label would "
                 "quietly take it out of the set auto-beta must wait for"
                 % (job, NOTGATE, cond.strip() or "(no if:)"))
-    if role == GATE and pinned:
-        problem("job '%s' declares itself a %s, but its `if` pins it to "
-                "github.ref == 'refs/heads/main' (found: %s) — a gate that skips on "
-                "pull requests is still a gate; hanging an `if` on one is not how it "
-                "stops being a check" % (job, GATE, cond.strip()))
+    if role == GATE and cond.strip() and canon(cond) not in ALLOWED_GATE_IF:
+        problem("job '%s' declares itself a %s and carries a job-level `if` that is "
+                "not on the reviewed roll-call (found: %s; the roll-call holds: %s). "
+                "A gate must produce a verdict on every pull request, so a condition "
+                "on whether it runs is where the bypass lives, whatever it is spelled "
+                "with (github.ref, ref_name, startsWith(), event_name, head_ref, an "
+                "env lookup, …) — which is why this is an allowlist and not a list of "
+                "bad spellings. A gate that skips on pull requests is still a gate. "
+                "If the condition is genuinely not a bypass (skipping DRAFT pull "
+                "requests is the case this door was opened for), add it verbatim to "
+                "ALLOWED_GATE_IF in this guard in the SAME commit — that edit is the "
+                "review. If this job is genuinely not a check, mark it %s — and then "
+                "W1x will ask for the owner ruling that costs."
+                % (job, GATE, cond.strip(),
+                   ", ".join("`%s`" % c for c in ALLOWED_GATE_IF) or "(nothing yet)",
+                   NOTGATE))
+
+# ── no job may excuse itself from failing (continue-on-error) ────────────────
+# ⚠️ NOTHING IN THIS FILE READ THIS FIELD, and one line walked through the gap:
+# a reviewer added `continue-on-error: true` to a gate and scored 35 ok / 0 failed.
+# GitHub's own description of the job-level field is "prevents a workflow run from
+# failing when a job fails", so the job reports success outward — which satisfies
+# auto-beta's `needs` (it publishes off a red trunk) AND makes notify-main-red's
+# `failure()` false (nobody is told). Both defences fail at once, silently, from
+# one line that reads like a kindness to a flaky test.
+# It is banned on EVERY job, not only gates: auto-beta's own failure is the
+# "merged and reachable drifting apart" silence notify-main-red exists to break,
+# and notify's failure is the notification not arriving.
+# The PARSER answers whether it is there (an indentation the text scan misses
+# cannot hide it); the text scan only supplies the line number.
+# An explicit `continue-on-error: false` is allowed — it is the default, stated.
+for job in sorted(parsed):
+    spec = (doc.get("jobs") or {}).get(job) or {}
+    if COE not in spec:
+        continue
+    val = spec[COE]
+    if val is False:
+        continue
+    where = ", ".join(str(n) for n, _ in coe_at.get(job, [])) or "?"
+    problem("job '%s' carries a job-level `%s: %s` (line %s) — that makes the job "
+            "report SUCCESS outward when it fails, which (a) satisfies auto-beta's "
+            "`needs` so a red trunk still publishes a real prerelease, and (b) makes "
+            "notify-main-red's failure() false so nobody is told. Both defences go "
+            "down together and neither of them reddens. Remove it; if a specific "
+            "step is allowed to fail, put the field on THAT step (step-level "
+            "continue-on-error cannot make the job lie about its own conclusion)."
+            % (job, COE, val, where))
 
 # ── the exemption list is a DELIBERATE enumeration, and that IS the point ────
 # Everything above stops a job from being MISclassified. It does not stop a job
@@ -520,8 +1076,85 @@ if [[ "$ROLES_RC" != "0" ]]; then
 elif [[ -n "$ROLE_PROBLEMS" ]]; then
   bad "W1r every job must DECLARE whether it is a gate, readably — these could not be classified, and are NOT being defaulted into a bucket:$(printf '%s\n' "$ROLE_PROBLEMS" | sed 's/^/ | /' | tr '\n' ' ')"
 else
-  ok "W1r every job carries exactly one readable $ROLE_MARKER marker, the parser and the text scan agree on the job set, and every marker is corroborated by the job's own ref pinning ($(printf '%s\n' "$ROLES_OUT" | sed -n 's/^GATES:/gates: /p'))"
+  ok "W1r every job carries exactly one readable $ROLE_MARKER marker, the parser and the text scan agree on the job set, every marker is corroborated (a not-a-gate pins refs/heads/main; a gate carries either no job-level if or one on the reviewed roll-call), and no job excuses itself with continue-on-error ($(printf '%s\n' "$ROLES_OUT" | sed -n 's/^GATES:/gates: /p'))"
 fi
+
+# ── W1rq: the double-quote rule is ALIVE, and it does not overreach ──────────
+# Two fixtures through the SAME scanner, because "no double quotes were reported"
+# and "the scanner stopped looking" print identically — the same reason W4dpc
+# exists. And the second fixture is not decoration: the failure mode this rule is
+# one step away from is REFUSING A LEGAL EDIT, which is the disease the whole round
+# is treating. So one fixture must be caught in all three measured positions, and
+# one fixture full of perfectly legal double quotes must come back clean.
+DQ_DIR="$WORK/dq"; mkdir -p "$DQ_DIR"
+cat > "$DQ_DIR/red.yml" <<'YML'
+name: dq-red
+on:
+  pull_request:
+jobs:
+  a:
+    # oc-job-role: gate
+    if: github.event_name == "pull_request"
+    runs-on: ubuntu-latest
+    steps:
+      - name: step level
+        if: github.event_name == "push"
+        run: echo hi
+      - name: inside an interpolation
+        env:
+          WHO: ${{ github.event_name == "push" }}
+        run: echo hi
+YML
+cat > "$DQ_DIR/green.yml" <<'YML'
+name: dq-green
+on:
+  pull_request:
+jobs:
+  a:
+    # oc-job-role: gate
+    runs-on: ubuntu-latest
+    env:
+      PLAIN: "a double-quoted YAML scalar is legal"
+    steps:
+      - name: shell quotes are shell
+        run: |
+          echo "hello world"
+          test "$PLAIN" = "$PLAIN" && echo "ok"
+      - name: double quotes INSIDE a single-quoted literal are ordinary characters
+        if: contains(github.event.head_commit.message, '"skip-ci"')
+        run: echo skipped
+      - name: same, inside an interpolation, and with a doubled '' escape
+        env:
+          A: ${{ contains(github.event.head_commit.message, '"skip-ci"') }}
+          B: ${{ contains(github.event.head_commit.message, 'it''s "quoted"') }}
+        run: echo hi
+      - name: single-quoted expression, and a bare interpolation
+        if: github.event_name == 'pull_request'
+        env:
+          SHA: ${{ github.sha }}
+          COND: ${{ github.event_name == 'push' }}
+        with_note: "not a real key, just another quoted scalar"
+        run: echo "$SHA"
+YML
+# The phrase these controls count. It has to appear in DQUOTE_WHY verbatim, and it
+# is deliberately the SHORTEST stable fragment of it: when the message was reworded
+# this line did not follow, both counts came back 0, and W1rq reddened saying the
+# rule catches nothing. That red was correct in form (a control that stops matching
+# must not read as a pass) but it pointed at the matcher, not at the rule — so if
+# you reword DQUOTE_WHY, reword this in the same edit.
+DQ_MARK="used as a STRING DELIMITER"
+dq_problems() { # dq_problems <fixture.yml> — count of double-quote refusals
+  parse_yaml "$1" "$DQ_DIR/f.json" 2>/dev/null || { echo PARSEFAIL; return; }
+  python3 "$WORK/roles.py" "$1" "$DQ_DIR/f.json" 2>&1 \
+    | sed -n 's/^PROBLEM://p' | grep -c "$DQ_MARK" || true
+}
+DQ_RED_N="$(dq_problems "$DQ_DIR/red.yml")"
+DQ_RED_WHERE="$(parse_yaml "$DQ_DIR/red.yml" "$DQ_DIR/f.json" 2>/dev/null; python3 "$WORK/roles.py" "$DQ_DIR/red.yml" "$DQ_DIR/f.json" 2>&1 | sed -n 's/^PROBLEM://p' | grep -o "job-level \`if\`\|step-level \`if\`\|\`\${{ … }}\` expression" | sort -u | tr '\n' ' ')"
+check "W1rq the double-quote rule catches all THREE measured positions in a planted fixture (job-level if, step-level if, inside a \${{ }} interpolation) — found: ${DQ_RED_WHERE:-none}" \
+  "3" "$DQ_RED_N"
+DQ_GREEN_N="$(dq_problems "$DQ_DIR/green.yml")"
+check "W1rq-neg and it refuses NONE of the legal double quotes — shell quotes in \`run:\`, plain quoted YAML scalars, single-quoted expressions, AND a double quote INSIDE a single-quoted literal (\`contains(msg, '\"skip-ci\"')\`, in an \`if:\` and in a \${{ }}, one with a doubled '' escape). That last one is a false red this guard SHIPPED; a rule that reddens for a legal edit is the defect this round is treating" \
+  "0" "$DQ_GREEN_N"
 
 # ── W1x: the not-a-gate set is exactly the two jobs that were ruled exempt ──
 # Deliberately a roll-call. See the note beside RULED_EXEMPT above for why this one
@@ -544,9 +1177,43 @@ else
     "missing=- extra=-" "$(printf '%s\n' "$ROLES_OUT" | sed -n 's/^NEEDSDIFF://p')"
 fi
 
-# ── W2: the trigger is pinned on both axes ─────────────────────────────────
-check "W2 $JOB's if pins BOTH event_name==push AND ref==refs/heads/main" \
-  "event,ref" "$(q if-conditions)"
+# ── W2: the trigger condition is EXACTLY the canonical one ─────────────────
+# Not "both halves are mentioned somewhere in it" — see the note in the `if-raw`
+# query for the mutant that walked through that. One authority, exact comparison,
+# which is this repo's existing style for a condition that must not drift
+# (bin/tests/main-red-notify-guard.sh's WANT_IF does the same for notify).
+WANT_IF="github.event_name == 'push' && github.ref == 'refs/heads/main'"
+IF_RAW="$(q if-raw)"
+if [[ "$IF_RAW" == DOUBLE-QUOTED-LITERAL!* ]]; then
+  # Its own branch rather than a want/got, because the reason matters more than the
+  # diff: this spelling does not run the job differently, it stops the workflow
+  # from starting at all.
+  bad "W2 $JOB's \`if\` uses a double quote as a STRING DELIMITER: \`${IF_RAW#DOUBLE-QUOTED-LITERAL!}\`. An Actions expression delimits strings with SINGLE quotes; a double quote in that position makes the WHOLE WORKFLOW fail to start. Measured on GitHub with two minimal workflows differing only in the quotes: the double-quoted one gave a startup failure with \`jobs: []\`, zero jobs scheduled, and a run named after the file path because \`name:\` was never parsed. On a pull request that is NO checks, not a red check, which is harder to notice than a failure. Rewrite it with single quotes: \`$WANT_IF\`. (⚠️ Delimiter position only — a double quote INSIDE a single-quoted literal, \`contains(msg, '\"skip-ci\"')\`, is an ordinary character and is not refused.)"
+else
+  check "W2 $JOB's if is EXACTLY \`$WANT_IF\` (a bolted-on \`|| …\` would publish from a pull request)" \
+    "$WANT_IF" "$IF_RAW"
+fi
+
+# ── W7: the workflow's TRIGGERS ─────────────────────────────────────────────
+# The one assertion that reads `on:`. A filter here (`paths-ignore: ['**']` is the
+# cheap one) makes every gate skip on every pull request with no job touched and
+# no assertion above reddening — measured at 37 ok / 0 failed before W7 existed.
+# ⚠️ `on:` IS ONE OF THE THINGS THAT DECIDE WHETHER A GATE IS SCHEDULED, NOT THE
+# ONLY ONE — an earlier version of this comment said otherwise. `needs` pointing
+# at a job that skips, a `strategy.matrix` `exclude` that empties a gate, and
+# `concurrency` displacing a queued run on main all end in the same place, and
+# this file does not read the last two at all. The roll-call at the top of the
+# file lists them by name and says what has and has not been tested.
+#
+# Shaped like the gate-`if` roll-call, not like a whole-mapping pin: the VALUE of
+# each canonical trigger is pinned verbatim (that is what refuses a filter), and
+# a short allowlist of trigger KEYS may be added without editing this guard (that
+# is what stops a legitimate `workflow_dispatch` from reddening it). See the
+# `on-shape` query for both lists, and for how far the "an added trigger cannot
+# suppress an existing one" reason actually reaches — it holds for pull requests
+# and NOT for main, and this line used to state it without that limit.
+check "W7 the workflow's pinned \`on:\` triggers are unchanged and no unlisted trigger was added (a path/branch filter here makes every gate skip, and no other assertion reads it)" \
+  "ok" "$(q on-shape)"
 
 # ── W3: the elevated permission is scoped to this job ──────────────────────
 check "W3 contents:write is held by $JOB ALONE and the workflow default stays read" \
@@ -564,21 +1231,285 @@ check "W3 contents:write is held by $JOB ALONE and the workflow default stays re
 # protected. Neither rule is a claim that no workflow can ever reach GA by some
 # other route (a script the workflow calls, `gh api`, a curl to the REST API);
 # what they buy is that the two shapes anyone would actually reach for both redden.
-GA_HITS="$(grep -rilE 'promote' "$WF_DIR" 2>/dev/null || true)"
+#
+# ⚠️ THE SCOPE USED TO BE `.github/workflows` AND THAT WAS A HOLE — a third shape
+# nobody had listed. A reviewer added `.github/actions/finalise/action.yml` whose
+# composite step runs `bin/release promote "$OC_TAG"`, referenced it from auto-beta
+# as `uses: ./.github/actions/finalise`, and scored 35 ok / 0 failed: a composite
+# action is not a workflow file, so all three rules below looked straight past it —
+# while the step ran inside the one job holding `contents: write`. The scope is
+# therefore the WHOLE of `.github/`, and W4d below refuses local actions outright.
+GA_SCAN_DIR="$ROOT/.github"
+GA_HITS="$(grep -rilE 'promote' "$GA_SCAN_DIR" 2>/dev/null || true)"
 if [[ -z "$GA_HITS" ]]; then
-  ok "W4 no workflow file names the beta→final flip subcommand"
+  ok "W4 nothing under .github/ names the beta→final flip subcommand (workflows AND any composite action)"
 else
-  bad "W4 a workflow file names the beta→final flip subcommand — GA must never be automated: $(printf '%s ' $GA_HITS)"
+  bad "W4 a file under .github/ names the beta→final flip subcommand — GA must never be automated: $(printf '%s ' $GA_HITS)"
 fi
 # `gh release edit` is legitimate for nothing this workflow needs to do, so the
 # flags are matched rather than the command: --prerelease=false and --latest each
 # promote a beta to GA on their own, and --draft=false publishes a hidden one.
-GA_FLAG_HITS="$(grep -rlE -- '--prerelease=false|--latest([[:space:]]|$)|--draft=false' "$WF_DIR" 2>/dev/null || true)"
+GA_FLAG_RX='--prerelease=false|--latest([[:space:]]|$)|--draft=false'
+GA_FLAG_HITS="$(grep -rlE -- "$GA_FLAG_RX" "$GA_SCAN_DIR" 2>/dev/null || true)"
 if [[ -z "$GA_FLAG_HITS" ]]; then
-  ok "W4b no workflow file carries a flag that moves the Latest pointer (--prerelease=false / --latest / --draft=false)"
+  ok "W4b nothing under .github/ carries a flag that moves the Latest pointer (--prerelease=false / --latest / --draft=false)"
 else
-  bad "W4b a workflow file carries a GA-promoting flag (--prerelease=false / --latest / --draft=false) — that flips a beta to GA without ever naming the subcommand: $(printf '%s ' $GA_FLAG_HITS)"
+  bad "W4b a file under .github/ carries a GA-promoting flag (--prerelease=false / --latest / --draft=false) — that flips a beta to GA without ever naming the subcommand: $(printf '%s ' $GA_FLAG_HITS)"
 fi
+
+# ── W4pc: the two greps above are ALIVE ─────────────────────────────────────
+# W4 and W4b both report "clean" as an EMPTY result, and an empty result is what a
+# grep that matches nothing looks like — a mistyped pattern, a directory that moved,
+# a `-r` that stopped recursing. So the same two invocations are pointed at a
+# fixture that definitely contains both shapes, and are required to FIND them.
+# Without this, "no hits under .github/" is a claim with no evidence behind it.
+GA_PC_DIR="$WORK/ga-pc/nested"
+mkdir -p "$GA_PC_DIR"
+printf '%s\n' 'run: bash bin/release promote "$OC_TAG"' > "$GA_PC_DIR/action.yml"
+printf '%s\n' 'run: gh release edit "$T" --prerelease=false --latest' > "$GA_PC_DIR/other.yml"
+GA_PC_A="$(grep -rilE 'promote' "$WORK/ga-pc" 2>/dev/null | grep -c . || true)"
+GA_PC_B="$(grep -rlE -- "$GA_FLAG_RX" "$WORK/ga-pc" 2>/dev/null | grep -c . || true)"
+check "W4pc the W4/W4b scans find a planted GA automation in a nested dir (so an empty result over .github/ means something)" \
+  "subcommand=1 flags=1" "subcommand=$GA_PC_A flags=$GA_PC_B"
+
+# ── W4d: nothing under .github/ REFERENCES a local action or workflow ────────
+# The composite-action bypass works because a local action is a SECOND home for
+# steps: its own file, its own `run:` bodies, and — being reached through `uses:`
+# — no obligation to look like anything this guard recognises. W4 and W4b now
+# grep it, but "we grep it too" is a weaker promise than "it cannot be reached",
+# because the next shape in such a file (a `gh api` PATCH, a node action, a
+# script it shells out to) is invisible to a grep again.
+#
+# ⚠️ THIS USED TO BAN THE DIRECTORY `.github/actions/`, AND THAT WAS THE WRONG
+# TARGET — it paid the whole price and bought almost nothing. A local action does
+# not have to live under `.github/`: `action.yml` at the repo root referenced as
+# `uses: ./`, or `tools/finalise/action.yml` as `uses: ./tools/finalise`, is an
+# ordinary composite action that GitHub runs happily, that W4/W4b (scoped to
+# `.github/`) never read, and that the directory ban never saw. Measured: that
+# exact shape scored 37 ok / 0 failed while a step running `bin/release promote`
+# sat inside auto-beta's `contents: write` job.
+#
+# So what is pinned is the REFERENCE, not a location: no file under `.github/`
+# may point a `uses:` at this repo's own code — neither by relative path
+# (`./…`, `../…`) nor by naming this repo in the `{owner}/{repo}/{path}@{ref}`
+# form. Reaching a local action requires one of those, and so does calling a
+# local REUSABLE WORKFLOW, which is a second way to add jobs W1's set difference
+# cannot see. Adding one is a reasonable thing to want; it has to redden here and
+# be decided, not arrive as a refactor.
+#
+# 🔴 THE PREVIOUS VERSION OF THIS BLOCK CLAIMED `uses: ./…` WAS "THE ONLY ENTRY
+# POINT", AND A REVIEWER WALKED PAST IT TWICE — the claim was wider than the
+# grep, which is the exact failure this whole pack was sent back to fix. Both
+# bypasses put a `bin/release promote` step inside auto-beta's `contents: write`
+# job and both scored 39 ok / 0 failed:
+#   N-1  the VALUE ON THE NEXT LINE, which is an ordinary YAML plain scalar:
+#            - uses:
+#                ./tools/finalise
+#        A LINE-ORIENTED grep cannot see this and never could: YAML's structure
+#        is not a property of any single line. That is why the authority below is
+#        the PARSER and not a regex — the fix is not a better pattern.
+#   N-2  `uses: pkyosx/OffiCraft/tools/finalise@main` — a repo may reference
+#        ITSELF through the {owner}/{repo}/{path}@{ref} form, which is the same
+#        second home for steps wearing a third-party spelling.
+#
+# ⚠️ WHAT THIS STILL DOES NOT CLOSE, stated narrowly so nobody reads it wider —
+# these are measured or reasoned gaps, not a rhetorical disclaimer:
+#   (a) a `run:` step in ci.yml can call any script in this repo, and that script
+#       can do anything, GA included. W4/W4b/W4d cover shapes that add a NEW HOME
+#       FOR STEPS; they are not a proof that no workflow can reach GA.
+#   (b) a THIRD-PARTY action (`someone-else/act@v1`), or this repo referenced
+#       under a DIFFERENT slug (a fork, or after a rename that this file's
+#       OC_REPO_SLUG was not updated for), is not refused here. The slug is
+#       corroborated against `git remote` below, so a rename reddens in a tree
+#       whose `origin` is a GitHub URL — but a tree whose origin cannot yield
+#       {owner}/{repo} (no git metadata at all, or a LOCAL clone, whose origin is
+#       a filesystem path) gets no corroboration, only the hardcoded constant.
+#       That case prints a ⚠️ NOT CORROBORATED line and is counted separately; it
+#       does not fail. W4ds spells out why that direction was chosen.
+#   (c) a file under `.github/` that this scan cannot PARSE is reported as a
+#       failure, not skipped — but a `uses:` written in a file the walk does not
+#       REACH is only covered by the line-grep net in W4dt, which has N-1's blind
+#       spot by construction. Two ways not to be reached: an extension other than
+#       *.yml/*.yaml, and a SYMLINKED directory (Ruby's `**` does not traverse
+#       one). Neither is measured here.
+#   (d) an expression-valued `uses:` (`uses: ${{ env.X }}`) is classified by its
+#       literal text, so a reference assembled at run time is not resolved here.
+#
+# The repo's own slug, as a hardcoded roll-call for the same reason RULED_EXEMPT
+# is one: the only way past it is to edit it, and that edit is the review.
+OC_REPO_SLUG="pkyosx/OffiCraft"
+cat > "$WORK/uses.rb" <<'RB'
+# Collect and classify every `uses:` in every YAML file under a directory tree.
+# The PARSER is the authority: a `uses:` whose value sits on the following line
+# is the same reference as one written inline, and only a parse can say so.
+require "yaml"
+root, slug = ARGV[0], ARGV[1].downcase
+
+def each_uses(node, &blk)
+  case node
+  when Hash
+    node.each do |k, v|
+      blk.call(v) if k.to_s == "uses" && v.is_a?(String)
+      each_uses(v, &blk)
+    end
+  when Array
+    node.each { |v| each_uses(v, &blk) }
+  end
+end
+
+def classify(value, slug)
+  v = value.strip
+  return "local-path" if v =~ %r{\A\.\.?(/|\z)}
+  segs = v.split("@", 2)[0].split("/")
+  return "self-repo-ref" if segs.length >= 2 && "#{segs[0]}/#{segs[1]}".downcase == slug
+  nil
+end
+
+Dir.glob(File.join(root, "**", "*.{yml,yaml}")).sort.each do |path|
+  rel = path.sub(/\A#{Regexp.escape(root)}\/?/, "")
+  begin
+    doc = YAML.safe_load(File.read(path))
+  rescue => e
+    # Unreadable is NOT clean. A file this scan cannot parse is a file whose
+    # `uses:` references went unexamined, and that has to be loud.
+    puts "PARSEFAIL\t#{rel}\t#{e.message.gsub(/\s+/, ' ')}"
+    next
+  end
+  each_uses(doc) do |value|
+    why = classify(value, slug)
+    puts "#{why ? "SELF" : "OTHER"}\t#{rel}\t#{value.strip}\t#{why || '-'}"
+  end
+end
+RB
+USES_OUT="$("$RUBY" "$WORK/uses.rb" "$GA_SCAN_DIR" "$OC_REPO_SLUG" 2>&1)"
+USES_BAD="$(printf '%s\n' "$USES_OUT" | grep -E '^(SELF|PARSEFAIL)' || true)"
+if [[ -z "$USES_BAD" ]]; then
+  ok "W4d no PARSED \`uses:\` under .github/ points at this repo's own code — not by relative path (\`./…\`, \`../…\`) and not by naming $OC_REPO_SLUG in the {owner}/{repo}/{path}@{ref} form — and every YAML file under .github/ parsed"
+else
+  bad "W4d a \`uses:\` under .github/ points at this repo's own code (or a file there could not be parsed, which is the same unexamined). That is a second home for steps, running inside auto-beta's \`contents: write\` job, whose contents W4/W4b can only see if it happens to sit under .github/ AND happens to use a shape they grep for. Adding one is a decision to make deliberately (and this guard has to be reworked to read the target) — not a refactor that silently widens what auto-beta may run: $(printf '%s\n' "$USES_BAD" | tr '\n\t' '  ')"
+fi
+
+# ── W4ds: the hardcoded slug is still this repo's slug ───────────────────────
+# W4d's second half is only as true as OC_REPO_SLUG. A rename (or a copy of this
+# file into another repo) would leave the constant naming somebody else, and the
+# self-reference half would then match nothing while still reporting "clean".
+# git is the source, when there is one; a tree without git metadata gets an
+# honest "not corroborated" rather than a free pass dressed as a check.
+#
+# THREE OUTCOMES, AND THE MIDDLE ONE IS THE WHOLE POINT OF THIS BLOCK.
+# The evidence this assertion needs is a `{owner}/{repo}` pair, and there are two
+# distinct ways a perfectly legitimate working copy fails to carry one:
+#   (i)  no git metadata at all — `git archive <sha> | tar -x`, a common way to
+#        review this repo in isolation;
+#   (ii) git is there, but `origin` is not a GitHub remote — and this is not a
+#        corner case, it is THE SUPPORTED CONCURRENCY FLOW. bin/lib/ci-lock.sh
+#        tells the user verbatim to `git clone <this repo> /path/to/another-copy
+#        && bash bin/ci.sh`, and calls separate clones "the supported way". A
+#        local clone's origin is a FILESYSTEM PATH, which does not parse to
+#        {owner}/{repo}, so the equality below has nothing to compare against.
+# Both are the SAME condition — "the corroboration could not run" — and they now
+# get the same treatment and the same message. ⚠️ THEY DID NOT BEFORE, and that
+# is what this rewrite is for: (i) was explained at length while (ii) fell into
+# the MISMATCH branch and printed a bare want/got, so the supported flow read as
+# "this pack names the wrong repo". Worse, both were bad(), which made
+# `bin/tests/run.sh` fail and `bin/ci.sh` UNABLE TO REACH `[ci] all green` in any
+# local clone — a guard blocking the flow its own repo documents.
+#
+# 🔴 THE CHOICE MADE HERE, STATED SO IT CAN BE ARGUED WITH: not-corroborated is
+# reported LOUDLY but does NOT fail. The alternative (fail-loud, what the previous
+# version did) was tried and its measured cost was the paragraph above. What it
+# costs instead: a rename, or this file copied into another repo, does NOT redden
+# in a tree whose origin is not a GitHub URL — the constant stands uncorroborated
+# and W4d's self-reference half may then be naming a repo this is not. That
+# residual is listed under (b) beside W4d. It is NOT a silent pass: the line is
+# printed with a ⚠️, it is counted separately, and the summary line carries the
+# count.
+#
+# ⚠️ HOW NARROW THE EXPOSURE ACTUALLY IS, because "it does not fail" invites a wider
+# reading than the truth: the not-corroborated branch is reachable only where origin
+# yields no {owner}/{repo} — a LOCAL run in a filesystem-origin clone, or a tree with
+# no git metadata at all. In CI it is not that branch: `actions/checkout` leaves an
+# https://github.com/… origin, so a runner takes the equality path, where a wrong slug
+# is a plain red (mutant-tested). So the uncorroborated case is a local-execution
+# posture, not a hole in the cloud rounds — and the residual it leaves is exactly one
+# thing: a rename or a copy of this file into another repo goes unnoticed WHEN NOBODY
+# RUNS IT ANYWHERE THAT HAS A GITHUB ORIGIN.
+SLUG_REMOTE="$(git -C "$ROOT" config --get remote.origin.url 2>/dev/null || true)"
+# A GitHub-shaped remote, or nothing. A local path is not "a slug that differs";
+# it is an absence of the evidence, and conflating the two is the bug above.
+SLUG_SEEN=""
+case "$SLUG_REMOTE" in
+  https://*|http://*|ssh://*|git://*|*@*:*)
+    SLUG_SEEN="$(printf '%s' "$SLUG_REMOTE" \
+      | sed -E 's#^[a-z]+://([^@/]+@)?[^/]+/##; s#^[^@/]+@[^:/]+:##; s#/+$##; s#\.git$##')"
+    ;;
+esac
+[[ "$SLUG_SEEN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || SLUG_SEEN=""
+if [[ -z "$SLUG_SEEN" ]]; then
+  uncorrob "W4ds could not corroborate W4d's hardcoded OC_REPO_SLUG ($OC_REPO_SLUG): remote.origin.url is $(if [[ -z "$SLUG_REMOTE" ]]; then printf 'absent (no git metadata)'; else printf "'%s', which does not parse to {owner}/{repo}" "$SLUG_REMOTE"; fi). The {owner}/{repo} half of W4d may be naming a repo this is not — this is a check that COULD NOT RUN, not a pass. ⚠️ BOTH OF THESE ARE EXPECTED AND ARE NOT A DEFECT IN THIS PACK: (1) a \`git archive\` extraction has no .git; (2) a LOCAL clone (\`git clone <this repo> /path/to/another-copy\`, which bin/lib/ci-lock.sh names as the supported way to run CI twice at once) has a filesystem path for an origin. Re-run in a checkout cloned from GitHub if you need this one corroborated; every OTHER assertion in this file is unaffected either way."
+else
+  check "W4ds OC_REPO_SLUG matches remote.origin.url (W4d's self-reference half names THIS repo)" \
+    "$(printf '%s' "$OC_REPO_SLUG" | tr 'A-Z' 'a-z')" "$(printf '%s' "$SLUG_SEEN" | tr 'A-Z' 'a-z')"
+fi
+
+# ── W4dpc: and W4d's scan is ALIVE, on every shape it claims to cover ────────
+# W4d reports "clean" as an EMPTY result, exactly like W4/W4b — and exactly like a
+# scan that stopped matching. Same treatment: point the SAME script at a fixture
+# that definitely carries the shapes, in a nested directory, and require it to
+# find every one of them. The two bypasses that got past the previous version are
+# planted here BY NAME, so a regression to a line-oriented or `./`-only check
+# cannot go quiet: it has to redden right here.
+USES_PC_DIR="$WORK/uses-pc/nested"
+mkdir -p "$USES_PC_DIR"
+printf '%s\n' 'steps:' '  - uses: ./tools/finalise' > "$USES_PC_DIR/wf.yml"
+printf '%s\n' 'steps:' "  - uses: './.github/actions/finalise'" \
+              '  - uses: ../shared/action.yml' > "$USES_PC_DIR/wf2.yml"
+# N-1: the value is a plain scalar on the NEXT line. Legal YAML, same reference,
+# invisible to any line-oriented grep.
+printf '%s\n' 'steps:' '  - uses:' '      ./tools/finalise' > "$USES_PC_DIR/wf3.yaml"
+# N-2: this repo referencing itself the third-party way.
+printf '%s\n' 'steps:' "  - uses: $OC_REPO_SLUG/tools/finalise@main" \
+              "  - uses: $OC_REPO_SLUG@main" > "$USES_PC_DIR/wf4.yml"
+# …and the other half of the control: a genuine third-party action must NOT be
+# flagged, or "it finds everything" would pass this while making W4d useless.
+printf '%s\n' 'steps:' '  - uses: actions/checkout@v5' \
+              '  - uses: actions/setup-go@v6' > "$USES_PC_DIR/wf5.yml"
+USES_PC_OUT="$("$RUBY" "$WORK/uses.rb" "$WORK/uses-pc" "$OC_REPO_SLUG" 2>&1)"
+USES_PC_SELF="$(printf '%s\n' "$USES_PC_OUT" | grep -c '^SELF' || true)"
+USES_PC_OTHER="$(printf '%s\n' "$USES_PC_OUT" | grep -c '^OTHER' || true)"
+USES_PC_NL="$(printf '%s\n' "$USES_PC_OUT" | grep -c '^SELF.*wf3\.yaml' || true)"
+USES_PC_SLUG="$(printf '%s\n' "$USES_PC_OUT" | grep -c '^SELF.*self-repo-ref' || true)"
+check "W4dpc the W4d scan finds all 6 planted self-references (including N-1's next-line value and N-2's {owner}/{repo} self-reference) and flags NEITHER of the 2 real third-party actions" \
+  "self=6 other=2 nextline=1 slugform=2" \
+  "self=$USES_PC_SELF other=$USES_PC_OTHER nextline=$USES_PC_NL slugform=$USES_PC_SLUG"
+
+# ── W4dpf: an unparseable file is REPORTED, not skipped ──────────────────────
+# The one way this scan could report "clean" while reading nothing: a file it
+# cannot parse. That must arrive as a PARSEFAIL line (which W4d treats as a
+# failure), never as an absent result.
+USES_PF_DIR="$WORK/uses-pf"
+mkdir -p "$USES_PF_DIR"
+printf '%s\n' 'this: is: not: valid: yaml: [' '  "unterminated' > "$USES_PF_DIR/broken.yml"
+USES_PF_N="$("$RUBY" "$WORK/uses.rb" "$USES_PF_DIR" "$OC_REPO_SLUG" 2>&1 | grep -c '^PARSEFAIL' || true)"
+check "W4dpf a YAML file the W4d scan cannot parse is REPORTED as unexamined (an unreadable file is not a clean one)" \
+  "1" "$USES_PF_N"
+
+# ── W4dt: the line-oriented text net, kept as a SECOND layer only ────────────
+# This was the whole of W4d and it is now the lesser half: it reads files the
+# YAML walk does not (anything under .github/ that is not *.yml/*.yaml) and it
+# reads comments, but it is LINE-ORIENTED and therefore blind to N-1 by
+# construction. It is kept because it costs nothing and covers a different set of
+# files — NOT because it is a second opinion on the same question.
+USES_LOCAL_RX='uses:[[:space:]]*["'"'"']?\.\.?/'
+USES_LOCAL_HITS="$(grep -rnE -- "$USES_LOCAL_RX" "$GA_SCAN_DIR" 2>/dev/null || true)"
+if [[ -z "$USES_LOCAL_HITS" ]]; then
+  ok "W4dt no LINE under .github/ (any file type, comments included) spells a local \`uses: ./…\` — a text net beside W4d's parse, blind to a next-line value by construction"
+else
+  bad "W4dt a line under .github/ spells a local \`uses: ./…\`: $(printf '%s\n' "$USES_LOCAL_HITS" | tr '\n' ' ')"
+fi
+USES_PC_TXT="$(grep -rlE -- "$USES_LOCAL_RX" "$WORK/uses-pc" 2>/dev/null | grep -c . || true)"
+check "W4dtpc the W4dt grep is alive (it finds the planted single-line local references)" \
+  "2" "$USES_PC_TXT"
 
 # ── W4c: the job universe this guard reasons about is really the whole one ───
 # W1's difference is computed over the jobs in ci.yml, so "the trunk is green"
@@ -853,6 +1784,6 @@ else
   esac
 fi
 
-echo "auto-beta guard: $PASS ok, $FAIL failed"
+summary
 [[ "$FAIL" == "0" ]] || exit 1
 exit 0
