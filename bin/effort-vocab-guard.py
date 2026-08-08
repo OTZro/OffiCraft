@@ -45,24 +45,34 @@ TWO PROPERTIES ARE LOAD-BEARING and a future edit must not lose them:
      force.
 
 WHAT THIS GUARD DELIBERATELY DOES NOT COVER — say it out loud rather than let a
-green imply it. An independent review of T-dbd4 constructed each of these and
-confirmed the guard stays green:
+green imply it. Each bullet below was constructed and its behaviour OBSERVED
+during T-dbd4's review rounds — they are measurements, not predictions:
 
   * A listing SPLIT ACROSS TWO LINES. Every sweep here is per-line, so a marker
-    on one line and its list on the next is invisible. (Live example found:
-    frontend/CLAUDE.md said "投入程度 =" then "低/中/高" on the following line.)
+    on one line and its list on the next is invisible. (Found live during T-dbd4:
+    frontend/CLAUDE.md said "投入程度 =" then "低/中/高" on the following line. It
+    was reflowed onto one line when it was fixed, so it is inside the sweep now —
+    the shape stays a hole even though that instance is gone.)
   * A copy on a line that never says "effort" (or 思考強度 / 投入). This gates
     the prose sweep AND the array-literal shape — an earlier version of this
     paragraph claimed the structural checks were marker-free, and that was
     simply false. The gate is load-bearing rather than lazy: task PRIORITY is
     high/mid/low/frozen, which overlaps this vocabulary by two words and would
     redden on every run, and an alarm that cries wolf is one everybody learns to
-    ignore. (Live example found: a test whose NAME described the old vocabulary.)
+    ignore. (Found live during T-dbd4: a test whose NAME still described the old
+    vocabulary. Renaming it to say "effort" pulled it INTO the sweep, which is the
+    cheapest way to opt a line in.)
   * A COUNT instead of a list — "the 3-item picker", "three levels". There is no
     listing to compare, so nothing here can see it.
   * A switch whose function is not named normalize*Effort*, a TS union under a
-    type name other than Effort, a value assembled by concatenation, or a file
-    whose suffix is not in TEXT_SUFFIXES.
+    type name other than Effort, or a file whose suffix is not in TEXT_SUFFIXES.
+
+NOT a bypass, and listed here because an earlier version of this paragraph said it
+was: a list ASSEMBLED AT RUNTIME (string concatenation, strings.Join) reddens
+rather than escaping — the scan can only read literals, so it sees an empty list
+and says so. That errs in the safe direction but it cannot be SATISFIED by writing
+the message correctly, so the failure message for that case says what to do
+instead of repeating "your copy is wrong".
 
 The residue is real and it is mostly documentation phrasing; the job of catching
 it belongs to the doc-truth step of a change, not to a green here.
@@ -243,7 +253,21 @@ def scan(truth: Set[str]) -> Tuple[List[Finding], Dict[str, int]]:
         # The region ends at the first ';' so the "; got '<value>'" tail does
         # not leak the word "got" into the listed set.
         for m in re.finditer(r"effort must be one of([^\";]*)", text, re.I):
-            record("must-be-one-of", m.start(), words(m.group(1)))
+            listed = words(m.group(1))
+            if not listed:
+                # The message is assembled at runtime, so there is no literal list
+                # to compare. Failing closed is right, but "lists {}" reads like the
+                # copy is wrong when the real answer is that this scan cannot read
+                # it — say that instead.
+                fail(
+                    f"{rel}:{line_of(text, m.start())} builds its 'effort must be "
+                    f"one of' message at runtime, so this guard cannot read the list "
+                    f"it will print. Either write the levels as a literal here, or "
+                    f"add this file to SKIP_FILES with a committed reason. Do not "
+                    f"leave it unreadable: a message this guard cannot check is one "
+                    f"that can drift from {SSOT_FILE}:{SSOT_FUNC} forever."
+                )
+            record("must-be-one-of", m.start(), listed)
 
         # ── shape 2: the codex launcher's own re-enumeration ─────────────────
         # `case "low", "high": … default: return "medium"` — the ACCEPTED set is
