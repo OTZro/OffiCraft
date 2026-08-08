@@ -184,7 +184,12 @@ be tested without running it.
 ## Test strategy
 
 - **Function-level + mock** — `e2e_test/tests_guard/run.sh` (hermetic; a PATH shim
-  stubs `launchctl`/`tmux`/`lsof`; no real fleet touched, no teardown exercised).
+  stubs `launchctl`/`tmux`/`lsof`; no real fleet touched). ⚠️ This used to add
+  "no teardown exercised", and that is no longer true — cases 20b/20e/20f drive
+  the real setup.sh → run_all.sh → teardown.sh chain. What holds is the narrower
+  property that file PINS: teardown reaches the disk only through the record-only
+  seam, against a throwaway tree (20e pins the seam as teardown.sh's only way
+  out; 19c/20c/20f keep a sentinel there and fail if anything deletes it).
   Covers: live-warden→die (canonical), no-fleet→pass, live-warden→coexist
   (namespace), each detection signal, empty detection on a clean host, all five
   namespace axes non-canonical, the canonical escape hatch, `agent_workdir`

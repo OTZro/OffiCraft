@@ -408,10 +408,17 @@ RUN_ALL="$HERE/../run_all.sh"
 if [[ ! -f "$RUN_ALL" ]]; then
   bad "run_all.sh not found at $RUN_ALL"
 else
+  # Every one of these four locates a STATEMENT, so every pattern is anchored at
+  # column 0 and shaped like the statement. An unanchored `-F` on the literal
+  # would also match a COMMENT that merely mentions it, and then the fixture
+  # below is reconstructed out of a comment: it echoes nothing and this case
+  # fails naming lib/common.sh's `set -e`, which had nothing to do with it.
+  # (Measured before this was anchored: one ordinary comment added to run_all.sh
+  # mentioning the report line took tests_guard to PASS=152 FAIL=1 rc=1.)
   D41A_SET="$(grep -m1 -E '^set +-' "$RUN_ALL" || true)"
-  D41A_SRC="$(grep -m1 -F 'source "$HERE/lib/common.sh"' "$RUN_ALL" || true)"
+  D41A_SRC="$(grep -m1 -E '^source "\$HERE/lib/common\.sh"' "$RUN_ALL" || true)"
   D41A_RC="$(grep -m1 -E '^RC=\$\?' "$RUN_ALL" || true)"
-  D41A_ECHO="$(grep -m1 -F '[run_all] specs exit=' "$RUN_ALL" || true)"
+  D41A_ECHO="$(grep -m1 -E '^echo "\[run_all\] specs exit=' "$RUN_ALL" || true)"
   if [[ -z "$D41A_SET" || -z "$D41A_SRC" || -z "$D41A_RC" || -z "$D41A_ECHO" ]]; then
     bad "run_all.sh no longer has the expected set/source/RC/echo shape — update guard (11)"
   else
@@ -1590,11 +1597,19 @@ echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 #   * floor raised to an unreachable 9999            → PASS=153 FAIL=0, rc=1, named.
 #   * the whole 19x/20x half of the file deleted     → PASS=66  FAIL=0, rc=1, named.
 #   * ONE case block (19a, five assertions) deleted  → PASS=148 FAIL=0, rc=0 — GREEN.
+#
+# THE SUCCESS MARKER IS PRINTED FROM INSIDE THIS BLOCK, from the floor's passing
+# branch and nowhere else — that is the only reason bin/ci.sh's `tail -n 1`
+# check says anything about the floor. It used to sit on its own line after the
+# `fi`, and then deleting this whole block while leaving that last line behind
+# printed the marker with no floor evaluated at all: MEASURED, floor block
+# deleted and the trailing echo kept → PASS=153 FAIL=0 rc=0, last line
+# `[tests_guard] all green`, `bin/ci.sh` all green. Keep it in the branch.
 PASS_FLOOR=100
 if [[ "$PASS" -lt "$PASS_FLOOR" ]]; then
   echo "[tests_guard] FATAL: only $PASS assertion(s) ran, floor is $PASS_FLOOR." >&2
   echo "[tests_guard] FAIL=0 with a collapsed PASS count means cases went missing, not that they passed." >&2
   exit 1
+else
+  echo "[tests_guard] all green"
 fi
-
-echo "[tests_guard] all green"

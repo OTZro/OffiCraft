@@ -33,9 +33,13 @@
 #
 # WHO EXERCISES A CHANGE TO THIS FILE
 # Nothing local. `bin/ci.sh` never reaches this script — its only caller anywhere
-# is the `macos-e2e` job in .github/workflows/ci.yml (checked: no reference to
-# this filename exists under bin/ or e2e_test/tests_guard/, while run_all.sh is
-# referenced in both). So for an edit HERE the land authority going green really
+# is the `macos-e2e` job in .github/workflows/ci.yml. Do not take that on this
+# file's word; the callers are a query, and the answer moves:
+#   git grep -nF assert-specs-ran.sh
+# What matters is which hits are INVOCATIONS rather than prose — a mention in a
+# comment is not a caller. (This sentence used to assert a hit count under bin/
+# and tests_guard/ instead, and a comment added in the very same commit falsified
+# it on the spot.) So for an edit HERE the land authority going green really
 # is no evidence — that run never executed this file. Acceptance is the
 # `macos-e2e` job on the PR and its log.
 #

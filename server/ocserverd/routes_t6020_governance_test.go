@@ -324,7 +324,7 @@ func TestT6020OpenedAndWithheldAreDisjointAndComplete(t *testing.T) {
 
 // TestT6020OpenedToolsCarryTheirWholeParameterSet is the field-level tooth for
 // the 19 new descriptors. spec/mcp-catalog.json is HAND-MAINTAINED (spec/mcp.md
-// §5 names a bin/dump-mcp-catalog that does not exist in this tree), so a
+// §5 says so outright: there is no generator in this tree), so a
 // descriptor missing a parameter is the DEFAULT outcome of adding one by hand,
 // not an exotic failure: the tool would list, resolve, and answer — and Mira
 // would simply have no way to send the argument.

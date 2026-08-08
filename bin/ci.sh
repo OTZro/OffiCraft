@@ -161,11 +161,36 @@ echo "[ci] commit $CI_SHA ($CI_BRANCH, tree $CI_TREE) — started $(date -u '+%Y
 # own verdict (see the marker rule at the bottom): that suite has no per-file
 # discovery, so truncating it — deleting its tail, including the PASS floor that
 # is supposed to notice truncation — leaves a script that exits 0 having asserted
-# almost nothing. Requiring its LAST LINE to be exactly its own success marker is
-# what makes the floor's existence load-bearing rather than optional. Same shape
-# this file demands of itself: rc == 0 AND `tail -n 1` equals the marker.
+# almost nothing. So rc == 0 AND `tail -n 1` equals the marker, the same shape
+# this file demands of itself.
+#
+# WHAT MAKES THE FLOOR'S EXISTENCE LOAD-BEARING is not the marker check on its
+# own — that only catches the shape where the marker went WITH the tail. Two
+# things carry it, and the second exists because the first alone was measured to
+# be bypassable by an ordinary edit:
+#   1. in that suite, the marker is echoed from INSIDE the floor's passing
+#      branch, so a floor that is not evaluated cannot print it; and
+#   2. the static assertion below, because (1) lives in the same file as the
+#      floor and an edit that deletes the floor is free to leave a bare
+#      `echo` behind. MEASURED on b8c3805 (floor block deleted, trailing echo
+#      kept): tests_guard PASS=153 FAIL=0 rc=0, last line the marker, and this
+#      whole script green. rc and the marker both saw NOTHING.
+# The assertion is here rather than in the guard for the obvious reason: a check
+# that a file must contain X is worthless if it lives in that file.
 echo "[ci] (0) e2e_test isolation-guard unit tests (hermetic)"
 if [[ -x "$ROOT/e2e_test/tests_guard/run.sh" ]]; then
+  TG_SH="$ROOT/e2e_test/tests_guard/run.sh"
+  if ! grep -qE '^PASS_FLOOR=[0-9]+$' "$TG_SH" || ! grep -qF '"$PASS" -lt "$PASS_FLOOR"' "$TG_SH"; then
+    echo "[ci] FAIL — e2e_test/tests_guard/run.sh has no PASS floor any more."
+    echo "[ci] That suite has no per-file discovery: delete a case block and it still"
+    echo "[ci] exits 0 with a smaller PASS count. The floor is the only thing that"
+    echo "[ci] notices, and the success marker is echoed from its passing branch — so"
+    echo "[ci] removing the floor while leaving a bare marker echo behind would go"
+    echo "[ci] green on rc and on the marker alike. Expected an anchored 'PASS_FLOOR=<n>'"
+    echo "[ci] assignment and a '\"\$PASS\" -lt \"\$PASS_FLOOR\"' comparison; found neither"
+    echo "[ci] or only one. Restore the floor, do not delete this assertion."
+    exit 1
+  fi
   TG_LOG="$(mktemp -t oc-ci-tests-guard.XXXXXX)"
   # pipefail + set -e: a non-zero guard aborts right here, so the marker check
   # below is only ever reached on rc == 0.

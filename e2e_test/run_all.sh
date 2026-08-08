@@ -14,12 +14,13 @@
 # to FAIL=2 rc=1; pointing the trap straight at teardown.sh takes it to
 # FAIL=4 rc=1.
 #
-# ⚠️ Do NOT quote the report line's literal text in a comment in this file.
-# tests_guard case (11) locates it with an UNANCHORED `grep -m1 -F`, so a
-# comment mentioning it earlier in the file wins the match, the reconstructed
-# fixture then echoes nothing, and case (11) fails for a reason that has nothing
-# to do with the property it guards. (Measured: it did, while this header was
-# being written.)
+# Prose in this file is free to quote the statements that case (11) lifts (the
+# `set -` line, the source line, the rc capture, the report echo): that case
+# anchors each pattern at column 0 and to the statement's shape, so a comment
+# cannot win the match. It did not always: with an unanchored `grep -m1 -F`, a
+# comment here mentioning the report line was picked up instead of the echo, the
+# reconstructed fixture printed nothing, and case (11) failed pointing at
+# lib/common.sh's `set -e` — measured PASS=152 FAIL=1 rc=1, for a comment.
 #
 # So a local `[ci] all green` DOES cover those wiring properties — but it says
 # nothing about any spec having run, because none did. Spec-level acceptance for

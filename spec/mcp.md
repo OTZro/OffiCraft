@@ -133,14 +133,19 @@ from the route table is strongly recommended to prevent a second drifting list).
 
 ## 5. `spec/mcp-catalog.json` — the frozen snapshot
 
-- `bin/dump-mcp-catalog` emits `{"tools":[...]}` — exactly the `tools/list` payload —
-  deterministically (sorted keys, 2-space indent, trailing newline; no DB, no server).
-- The committed `spec/mcp-catalog.json` is the frozen wire truth. CI (bin/ci.sh step 10)
-  MUST fail when a fresh dump differs; changing the tool surface is spec-first: edit the
-  snapshot (owner walkthrough) → then the code.
-- A live `tools/list` result MUST equal the snapshot's `tools` array (element-wise; JSON key
-  order within an object is not significant on the live wire, but the dump normalizes with
-  sorted keys for byte-diffs).
+- ⚠️ **THERE IS NO GENERATOR IN THIS TREE.** This section used to name a
+  `bin/dump-mcp-catalog` that emits the payload and a CI step that diffs a fresh dump
+  against the committed file; neither exists (`ls bin/dump-mcp-catalog`, and `bin/ci.sh`
+  prints no such step — `grep -n '^echo "\[ci\] ('  bin/ci.sh`). The committed
+  `spec/mcp-catalog.json` is hand-maintained and is the frozen wire truth.
+- What actually pins it today is the other direction: ocserverd serves `tools/list`
+  straight out of the committed snapshot (`server/ocserverd/assets.go` + `mcp.go`), so the
+  descriptor surface cannot drift from the file by construction, and
+  `conformance/test_mcp.py` asserts a LIVE `tools/list` equals the snapshot's `tools`
+  array element-wise. Changing the tool surface stays spec-first: edit the snapshot
+  (owner walkthrough) → then the code.
+- JSON key order within an object is not significant on the live wire; the committed file
+  is kept sorted-key/2-space/trailing-newline so it byte-diffs cleanly by hand.
 
 ## 6. `catalog_hash` — the agent-restart signal
 

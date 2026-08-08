@@ -120,18 +120,20 @@ kill.**
 
 | gate | how it decides | bound? |
 |---|---|---|
-| `bin/ocserver install` post-install health gate | 200 **and** launchd job pid **and** socket holder must all agree | ✅ **bound** (strongest of the five; predates T-a3ba) |
+| `bin/ocserver install` post-install health gate | 200 **and** launchd job pid **and** socket holder must all agree | ✅ **bound** (the strongest of these rows; predates T-a3ba) |
 | `conformance/run.sh` serve health gate | responder's `git_sha` == this checkout's HEAD, **and** listener's argv == the throwaway binary this run built | ✅ bound (T-a3ba) |
 | `e2e_test/setup.sh` serve health gate | same two checks, against `$STATE_DIR/ocserverd` | ✅ bound (T-a3ba) |
 | `e2e_test/lib/oc_lifecycle.sh` → `oc_fresh_install` steps 2c/2d + stability window | `/health` == 200; `git_sha` merely non-empty and != `unknown`, **never compared to anything** | ❌ **UNBOUND** (3 probes) |
 | `e2e_test/cross_machine.sh` steps 2c/2d + stability window | identical code to the row above | ❌ **UNBOUND** (3 probes) |
 
-**Count, stated plainly because two earlier attempts miscounted it:** 5 gates —
-**3 bound, 2 unbound** — or, at individual-probe granularity inside the two
-shell harnesses, **8 probes: 2 bound, 6 unbound**. Do not reuse the numbers
-"4 decision points, 1 bound" or "four … the other three"; both were wrong (the
-first enumerated only `e2e_test/`, the second omitted `conformance/run.sh` from
-its own table).
+**Do not restate the count as a separate number.** An earlier revision did
+("5 gates — 3 bound, 2 unbound / 8 probes"), and before that two others
+("4 decision points, 1 bound", "four … the other three") which were simply
+wrong — the first enumerated only `e2e_test/`, the second omitted
+`conformance/run.sh` from its own table. The count is whatever the table above
+has rows for, and **nothing asserts either of them**: the table is a reading of
+the tree on the day it was written, not a pinned property. Re-derive both from
+the query below before citing anything.
 
 **How to re-locate these without trusting any line number** — one command,
 re-runnable from the repo root:
