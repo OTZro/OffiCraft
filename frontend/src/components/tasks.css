@@ -1959,8 +1959,10 @@ button.task-card__waiting--dep:focus-visible {
 }
 /* 模型 picker only: 4 chips as a fixed 2x2 so haiku never wraps alone into a
    full-width, centered row (owner review: that read as "broken"). A grid keeps
-   the four chips on an even 2x2 at 390px; the 3-item 投入程度 and 2-item
-   轉給/轉外包 toggles keep the flex row. */
+   the four chips on an even 2x2 at 390px. 投入程度 also has four cells since
+   T-dbd4 added max, and 轉給/轉外包 has two; both keep the flex row. Chip COUNT
+   is therefore not what selects the grid — only 模型 opts in, because only its
+   chips are wide enough to strand one on a row of its own. */
 .task-reassign__seg--grid2 {
   display: grid;
   grid-template-columns: 1fr 1fr;

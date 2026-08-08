@@ -24,10 +24,12 @@ must not lose either:
 Most fixtures are synthetic: the guard is a scanner over text shapes, so a
 purpose-written file exercises a shape more precisely than a copy of production
 code that happens to contain it, and it does not go stale when that code moves.
-The exception is `ssot-grows-real-tree`, which stages the REAL gate and the REAL
-codex launcher and grows the vocabulary without touching anything else — that is
-the T-dbd4 scenario in the flesh, and it is the one case that proves the guard
-bites on production code rather than only on fixtures.
+The exceptions are the two `ssot-grows-*` cases, which stage PRODUCTION bytes
+only (REAL_ONLY below) and grow the vocabulary without touching anything else —
+that is the T-dbd4 scenario in the flesh, and they are what prove the guard bites
+on production code rather than only on fixtures. They get their own green-first
+check for the reason spelled out at REAL_ONLY: a case that starts red passes
+whether or not its mutation does anything.
 
 Run: python3 bin/tests/effort-vocab-guard-selftest.py
 """
@@ -131,6 +133,23 @@ def stage_clean(tmp: Path) -> Path:
     return stage(tmp, CLEAN_TREE)
 
 
+# Production files staged verbatim for the real-tree cases. Nothing synthetic is
+# mixed in: an earlier version copied two real files ON TOP of the fixture tree,
+# and once the real vocabulary grew past the fixtures' hardcoded three values that
+# hybrid was ALREADY red before any mutation — which makes a case pass whether or
+# not its mutation does anything. A case that starts red proves nothing, so this
+# tree is checked green first, exactly like the fixture tree.
+REAL_ONLY = (SSOT_REL, CODEX_REL, "frontend/src/types.ts")
+
+
+def stage_real(tmp: Path) -> Path:
+    root = tmp / "tree"
+    for rel in REAL_ONLY:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / rel, root / rel)
+    return root
+
+
 def run_guard(root: Path) -> Tuple[int, str]:
     out = subprocess.run(
         [sys.executable, str(GUARD)],
@@ -216,7 +235,7 @@ def _(root: Path) -> None:
     )
 
 
-@case("ssot-grows-names-every-stale-copy", "frontend/src/types.ts:1")
+@case("ssot-grows-names-every-stale-copy", "frontend/src/types.ts")
 def _(root: Path) -> None:
     """Same growth, seen from the other end: EVERY stale copy must be listed,
     not just the first one the scanner happens to reach. Fictional level for the
@@ -265,7 +284,7 @@ EXPECTED_CASES = frozenset(
         ("label-map-drops-a-level", "frontend/src/i18n/locales/en.ts:2"),
         ("chinese-doc-prose-drops-a-level", "docs/guide/members.md:1"),
         ("ssot-grows-real-tree", CODEX_REL),
-        ("ssot-grows-names-every-stale-copy", "frontend/src/types.ts:1"),
+        ("ssot-grows-names-every-stale-copy", "frontend/src/types.ts"),
         ("reported-effort-passthrough-is-not-a-copy", None),
         ("task-priority-vocabulary-is-not-this-vocabulary", None),
     }
@@ -300,11 +319,16 @@ def main() -> None:
 
     for name, plant, expect in CASES:
         with tempfile.TemporaryDirectory() as tmp:
-            root = stage_clean(Path(tmp))
-            if name.endswith("real-tree") or name == "ssot-grows-names-every-stale-copy":
-                # These two need production bytes, not fixtures.
-                for rel in (SSOT_REL, CODEX_REL):
-                    shutil.copy(ROOT / rel, root / rel)
+            real_tree = name.startswith("ssot-grows")
+            root = stage_real(Path(tmp)) if real_tree else stage_clean(Path(tmp))
+            if real_tree:
+                rc, output = run_guard(root)
+                if rc != 0:
+                    failures.append(
+                        f"{name}: the unmutated PRODUCTION copies are already red, so "
+                        f"this case would pass for the wrong reason:\n{output}"
+                    )
+                    continue
             try:
                 plant(root)
             except AssertionError as exc:

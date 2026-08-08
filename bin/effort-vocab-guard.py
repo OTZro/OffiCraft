@@ -45,11 +45,27 @@ TWO PROPERTIES ARE LOAD-BEARING and a future edit must not lose them:
      force.
 
 WHAT THIS GUARD DELIBERATELY DOES NOT COVER — say it out loud rather than let a
-green imply it: a copy that lists the levels in prose WITHOUT the word "effort"
-(or 思考強度 / 投入) on the same line is invisible to the prose sweep. The
-structural checks do not depend on that marker, so the executable copies are
-covered either way; the residue is documentation phrasing. It is a real hole,
-not a covered case.
+green imply it. An independent review of T-dbd4 constructed each of these and
+confirmed the guard stays green:
+
+  * A listing SPLIT ACROSS TWO LINES. Every sweep here is per-line, so a marker
+    on one line and its list on the next is invisible. (Live example found:
+    frontend/CLAUDE.md said "投入程度 =" then "低/中/高" on the following line.)
+  * A copy on a line that never says "effort" (or 思考強度 / 投入). This gates
+    the prose sweep AND the array-literal shape — an earlier version of this
+    paragraph claimed the structural checks were marker-free, and that was
+    simply false. The gate is load-bearing rather than lazy: task PRIORITY is
+    high/mid/low/frozen, which overlaps this vocabulary by two words and would
+    redden on every run, and an alarm that cries wolf is one everybody learns to
+    ignore. (Live example found: a test whose NAME described the old vocabulary.)
+  * A COUNT instead of a list — "the 3-item picker", "three levels". There is no
+    listing to compare, so nothing here can see it.
+  * A switch whose function is not named normalize*Effort*, a TS union under a
+    type name other than Effort, a value assembled by concatenation, or a file
+    whose suffix is not in TEXT_SUFFIXES.
+
+The residue is real and it is mostly documentation phrasing; the job of catching
+it belongs to the doc-truth step of a change, not to a green here.
 
 REPORTED effort is a different thing and is NOT in scope. `actual_effort` /
 `effortLabel` render whatever the harness reports, verbatim and unvalidated, by
@@ -251,7 +267,12 @@ def scan(truth: Set[str]) -> Tuple[List[Finding], Dict[str, int]]:
         # constant must not retire the check. The effort marker on the same line
         # is what keeps task PRIORITY out: ["high","mid","low","frozen"] overlaps
         # this vocabulary by two words and is a different closed set entirely.
-        for m in re.finditer(r"\[\s*((?:['\"][a-z]{2,12}['\"]\s*,?\s*){2,})\]", text):
+        # Both bracket styles: a TS/Python/JSON array and a Go composite literal
+        # (`[]string{"low", …}`), which is the same copy wearing different
+        # punctuation and was a confirmed bypass until this line covered it.
+        for m in re.finditer(
+            r"[\[{]\s*((?:['\"][a-z]{2,12}['\"]\s*,?\s*){2,})[\]}]", text
+        ):
             listed = words(m.group(1))
             if listed & truth and EFFORT_MARKER.search(excerpt_at(text, m.start())):
                 record("array-literal", m.start(), listed)

@@ -70,7 +70,7 @@ describe("mock createRole — effort 422 parity", () => {
     );
   });
 
-  it("accepts the closed low/medium/high vocabulary", async () => {
+  it("accepts the closed low/medium/high/max effort vocabulary", async () => {
     for (const effort of ["low", "medium", "high", "max"] as const) {
       const r = await mockApi.createRole({ name: `Role ${effort}`, effort });
       expect(r.member.effort).toBe(effort);
