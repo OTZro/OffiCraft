@@ -1485,7 +1485,7 @@ def test_admin_choke_denies_before_resolve(ctx: Ctx) -> None:
     assert "principal not permitted" in r.text
 
 
-# ── public surface (the 11 auth="public" rows) ───────────────────────────────
+# ── public surface (every auth="public" row) ─────────────────────────────────
 
 PUBLIC_EXPECT: dict[str, tuple[str, int]] = {
     # route key → (concrete path, expected status with NO credentials)
