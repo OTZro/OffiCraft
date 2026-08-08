@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # e2e_test/run_all.sh — one-shot: setup -> playwright specs -> teardown.
 # teardown ALWAYS runs (EXIT trap), even if a spec fails or setup aborts.
+#
+# WHO EXERCISES A CHANGE TO THIS FILE
+# `bin/ci.sh` does NOT run this script (see e2e_test/CLAUDE.md) — it only runs
+# the hermetic tests_guard suite. So the land authority going green is not weak
+# evidence about an edit here, it is NO evidence: by construction that run never
+# executed this file. The acceptance for a change to this script is the
+# `macos-e2e` job on the PR, and reading its log. If you edited this file and
+# your only evidence is a local `[ci] all green`, you have not tested it.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # `||` does NOT swallow common.sh's own hard guards: an `exit 2` inside a sourced

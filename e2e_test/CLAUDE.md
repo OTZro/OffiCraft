@@ -6,7 +6,10 @@
 Go(ocserverd)是唯一 target(py leg 已隨 Python backend 退役;歷史回滾 = git tag `py-final`):`bash run_all.sh`(`OC_E2E_TARGET=go` 仍可顯式指定;其他值 fail loud)。:8791 / repo-root oc.toml / fresh-DB 生命週期 / EXACT-PID teardown;流程 = stage SPA→webdist + docs→docsdist + seeds→seedsdist + binaries/MCP catalog→bindist → go build 進 `.state/` → goose migrate → serve。四種 embed asset 一律先 stage；漏 seedsdist 會讓真 agent boot persona 缺檔，漏 bindist 會讓 MCP `tools/list` 回 catalog unavailable 且 warden binary route 503。
 
 ## 誰會自動跑這套(T-ff8a)
-`bin/ci.sh` **不**跑 `run_all.sh`(只跑 `tests_guard/run.sh` 那套 hermetic 守衛)。自動關卡在
+`bin/ci.sh` **不**跑 `run_all.sh`(只跑 `tests_guard/run.sh` 那套 hermetic 守衛)。**推論**:你改了
+`run_all.sh` / `assert-specs-ran.sh` / specs,land 權威(本機 `bin/ci.sh`)**構造上給不出任何證據**——
+不是「證據比較弱」,是那一輪從來沒有執行過你改的東西。**真正的驗收是 PR 上 `macos-e2e` 那一輪、
+以及讀它的 log**;拿 `[ci] all green` 當這類改動的驗證,等於沒驗。自動關卡在
 **`.github/workflows/ci.yml` 的 `macos-e2e` job**:macOS runner、`pull_request` **與 push-to-`main`**
 兩個觸發都跑(T-ab2a 補上後者;`main` 上不 cancel-in-progress,見那個檔的註解),
 **那個 job 什麼旗標都不用設**(T-c329):要**活的 agent** 的 spec 是**預設不跑**的,所以雲端不必
@@ -15,6 +18,9 @@ spawn 真 agent、燒真 API 額度(真的花錢)。** 成員資格由 spec **�
 (`*.live-agent.spec.js`),`playwright.config.js` 裡**沒有檔名清單**——清單會讓下一支忘記登記的
 spec 預設偷偷跑、偷偷花錢。判定是嚴格 `=== '1'`,所以 `true`/`yes` 這種打錯字一律落到
 「沒跑、沒花錢」。
+⚠️ **所以這一類 e2e 沒有任何自動守衛在跑它——而那是 owner 看過選項後刻意否決的決定,不是待補的缺口**
+(卡 `rc-d51e755d3207`)。要「補上」它就是在推翻一個已經做過的裁定,不是補一個洞。**這句話刻意不提
+這一類今天有幾支 spec**——成員資格由上面那個檔名後綴自己宣告,所以它不隨數量變。
 ⚠️ **舊做法反過來、而且是這張票要修的 bug**:以前是 `OC_E2E_EXCLUDE_REAL_FLEET=1` 這個**排除**旗標、
 且**只設在 `ci.yml`** ⇒ 雲端有防護、每台筆電都沒有,本機跑一輪就靜靜 spawn 真 agent 並付錢
 (2026-08-05 實際發生過)。**防護只存在於某一條路徑上,等於另一條路徑從來沒有防護。**

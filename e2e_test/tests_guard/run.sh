@@ -10,6 +10,17 @@
 # stubs return controlled output; NOTHING real is mutated and NO teardown path is
 # ever exercised (we only ever call the read-only detector / the guard / the pure
 # allocator).
+#
+# SCOPE — what decides which cases run
+# NOTHING discovers anything here. This file IS the suite: every case is a
+# literal block in this one script, run top to bottom, and there is no per-file
+# collection step that would notice a block that stopped existing. So deleting or
+# short-circuiting a case block does not fail — it silently runs less, and
+# PASS/FAIL only ever count what was actually reached. `FAIL -eq 0` answers "did
+# anything fail?", not "did anything run?", exactly like the rc of a test runner.
+# That is why there is a PASS FLOOR at the bottom of this file. Read its comment
+# for what it does and does NOT catch — it is a floor, so it catches the suite
+# being gutted, not one case going missing.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -1540,4 +1551,35 @@ ff8a_mutant use 's|^  if ! oc_e2e_teardown_armed; then$|  if false; then|'
 
 echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1
+
+# ── PASS FLOOR ──────────────────────────────────────────────────────────────
+# See SCOPE at the top: there is no discovery here, so a case block that stops
+# existing takes its assertions with it and everything still reports green. This
+# floor is what makes that loud ONCE ENOUGH OF IT IS GONE — see the measured
+# cells below for where that threshold actually sits.
+#
+# A FLOOR, not the exact count, on purpose — the same reasoning that
+# e2e_test/assert-specs-ran.sh writes out for the spec tally: an exact number
+# goes stale the first time someone adds a case, and a stale exact number teaches
+# the next person that this file lies, which is worse than not asserting at all.
+# What the floor has to catch is "the suite got gutted", not "today's total
+# changed". It sits well under the current count so growth never reddens it, and
+# it does NOT need updating when cases are added.
+#
+# WHAT IT CATCHES, MEASURED — do not read it as more than this. Three mutants run
+# here, each restored from a scratchpad copy with the sha256 re-checked:
+#   * floor raised to an unreachable 9999            → PASS=153 FAIL=0, rc=1, named.
+#   * the whole 19x/20x half of the file deleted     → PASS=66  FAIL=0, rc=1, named.
+#   * ONE case block (19a, five assertions) deleted  → PASS=148 FAIL=0, rc=0 — GREEN.
+# That last cell is the honest limit and it is inherent, not a bug: a floor buys
+# "the suite is gone", it does NOT buy "one case went missing". Nothing here
+# watches for a single deleted assertion, and an exact count that would is
+# refused above for a reason that costs more than it saves.
+PASS_FLOOR=100
+if [[ "$PASS" -lt "$PASS_FLOOR" ]]; then
+  echo "[tests_guard] FATAL: only $PASS assertion(s) ran, floor is $PASS_FLOOR." >&2
+  echo "[tests_guard] FAIL=0 with a collapsed PASS count means cases went missing, not that they passed." >&2
+  exit 1
+fi
+
 echo "[tests_guard] all green"

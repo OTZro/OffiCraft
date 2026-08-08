@@ -134,7 +134,7 @@ cd /path/to/another-copy && bash bin/ci.sh   # 與別份副本並跑是支援的
 
 `bin/tests/ci-success-marker.sh` 是這條規則的可執行形式：它同時掃描 **ci.sh 以及每一個被 dispatch 的 lane 腳本**，要求除了 ci.sh 之外沒有任何 shell 腳本「有能力」印出這個權威字串。
 
-CI 跑在本地、`bin/ci.sh` 是 land 權威，從第一個非零步驟就 fail-fast；push 前請自己跑到綠。gate 內容：go gate / 黑箱 lint / gitleaks / FE typecheck+drift。
+CI 跑在本地、`bin/ci.sh` 是 land 權威，從第一個非零步驟就 fail-fast；push 前請自己跑到綠。**gate 內容以 `bin/ci.sh` 自己的步驟標頭為準**（`(0)` … `(5/5)`）——⚠️ **這裡刻意不複製一份清單**：舊文那份（「go gate / 黑箱 lint / gitleaks / FE typecheck+drift」）漏掉的比列到的多，而它從變假的那天到被發現為止，沒有任何東西會叫它。複製品沒有東西釘著它；那支腳本有。
 
 （舊文寫「不付 GitHub Actions」——repo 轉 PUBLIC 後那個理由已不成立，公開 repo 用標準 runner 是免費的。真正的理由是這份 gate 裡有大量 host-shaped 與「重生後逐位元組比對」的步驟，我們不想把那些的權威搬到雲上。）
 
@@ -163,7 +163,7 @@ CI 跑在本地、`bin/ci.sh` 是 land 權威，從第一個非零步驟就 fail
 
 **不在 ubuntu `cloud-gates` 裡的**：`bin/tests/run.sh`（Linux 上會紅；根因是 BSD/GNU `mktemp -t` 語意、SIGPIPE 與 macOS 形狀的 `install.sh` fixture，尚未移植。⚠️ **這裡刻意不寫失敗條數**：舊文寫死「16 條」，而那個數字只在量它的那一天為真——`bin/ci-cloud.sh` 的檔頭早就記著它「在套件第一次改動時就過期了」。T-9fe3 又往這個套件加了一整組 `auto-beta-guard.sh`，所以那個數字現在更沒有理由成立，而**我們也沒有 Linux 機器可以重量**——正解是不要斷言一個沒人在維護的數字）、Playwright CT（真瀏覽器版面守衛；macOS↔Linux 的字型與光柵化差異會讓紅燈的意思從「版面壞了」變成「runner 字型不同」，而 Linux 那一側**從來沒被量過**）、gitleaks（內容級機密掃描）、`e2e_test` 的真機端到端測試（要真的 fleet host）。⚠️ **「不在 cloud-gates」不等於「只跑在本機」**：這四項現在都有 macOS runner 上的 job——前三項在 `macos-host-gates`（`bin/ci-macos-host.sh`；CT 由 T-0fef 接上，在那之前它確實只跑在一台開發機上），`e2e_test` 在 `macos-e2e`（T-ff8a）。tracked-file path denylist 與 `e2e_test` 的 hermetic isolation-guard 已在雲端流程執行。**雲端流程的每一道閘都不用任何 secret，所以 fork PR 也能跑完整**——T-5d3b 之後 workflow 裡確實有一個 secret（`notify-main-red` 用的回呼網址），但它**不是閘**、只在 push-to-`main` 那條路徑上跑，而 fork PR 本來就拿不到 repo 的 secret ⇒ 對 pull request 而言上面那句性質一字未變。⚠️ 把 secret 加進**任何一道閘**就會改掉它（fork PR 會變成跑一份比我們小的檢查）。
 
-**Go 測試一律 `-count=1`（T-bedc）**：CI step 1e 是 `go test -count=1 ./...`，`-count=1` 是「不吃 go 的測試結果快取」，**不可省**。省掉的後果是實測過的——log 裡出現 `ok  ocwarden  (cached)`，那格綠燈認證的是一次**根本沒執行**的跑。兩個獨立理由：(a) 快取 key 只涵蓋 package 的**輸入**，不涵蓋測試真正碰的世界（port、時鐘、launchd、host fleet、staged embed assets 的**效果**），所以今天會紅的 package 照樣報 ok；(b) 它**結構性地藏 flake**——一個 suite 只在「第一個改到它輸入的 commit」上跑過一次，間歇性失敗於是被攤平到近乎零觀測機率，`[ci] all green` 變成在講快取而不是在講碼。可執行形式是 `bin/tests/go-test-nocache-guard.sh`（CI step 0b 派出）：它以**命令位置解析**（不是 substring grep——那會匹配到 ci.sh 與守衛自己的說明文字）掃全 repo 的 shell 腳本，任何 `go test` 呼叫點少了 `-count=1` 就紅。注意 `go build` / `go vet` 的快取**刻意不管**：那是對編譯本身做 content-addressed，命中等價於未命中；只有**測試結果**快取會宣稱「行為被觀察過」而其實沒有。
+**Go 測試一律 `-count=1`（T-bedc）**：`bin/ci.sh` 裡跑 `go test` 的那一步一律帶 `-count=1`（⚠️ 舊文寫「CI step 1e」，而那個子標籤根本不存在——子標籤本身就是會漂的東西，指它不如指下面那道守衛）。`-count=1` 是「不吃 go 的測試結果快取」，**不可省**。省掉的後果是實測過的——log 裡出現 `ok  ocwarden  (cached)`，那格綠燈認證的是一次**根本沒執行**的跑。兩個獨立理由：(a) 快取 key 只涵蓋 package 的**輸入**，不涵蓋測試真正碰的世界（port、時鐘、launchd、host fleet、staged embed assets 的**效果**），所以今天會紅的 package 照樣報 ok；(b) 它**結構性地藏 flake**——一個 suite 只在「第一個改到它輸入的 commit」上跑過一次，間歇性失敗於是被攤平到近乎零觀測機率，`[ci] all green` 變成在講快取而不是在講碼。可執行形式是 `bin/tests/go-test-nocache-guard.sh`（CI step 0b 派出）：它以**命令位置解析**（不是 substring grep——那會匹配到 ci.sh 與守衛自己的說明文字）掃全 repo 的 shell 腳本，任何 `go test` 呼叫點少了 `-count=1` 就紅。注意 `go build` / `go vet` 的快取**刻意不管**：那是對編譯本身做 content-addressed，命中等價於未命中；只有**測試結果**快取會宣稱「行為被觀察過」而其實沒有。
 
 改 Go 後只需 fresh build 驗證；`bin/ocagent`、`bin/ocwarden`、`bin/ocserverd` 若出現都是 gitignored build artifact，**永不 commit**。CI 一律編譯 source。部署 binary 由 `bin/release` / GitHub Release fresh build 產出。
 
@@ -205,7 +205,7 @@ isDraft False | isPrerelease True | targetCommitish fb89a69aad8c
 
 也就是 asset 子欄位 `name`/`state`/`size` 確實存在、`state` 就是字串 `"uploaded"`、`size` 是非零整數——正好是回讀真正依賴的三件事。**為什麼要特別量**:同一張票裡,`verify_artifacts` 的架構檢查就是因為「猜 `file -b` 的輸出順序」而寫成永不可能命中的 pattern(`file` 實際輸出 `Mach-O 64-bit executable arm64`,架構在最後),導致每次 publish 都死在 `[artifact-arch]`。假設外部工具的輸出格式是同一類 bug,所以這裡改成量。要改形狀前**先重量一次**。
 
-**第 8 步的語意:publish 不觸發升級,它只「觀察」升級發生**(⚠️ 這一步可以用 `--no-settle` 明示地不做——見上面那條;第 7 步不行、沒有旗標關得掉)。站台是靠 owner 帳號上的 **auto_update** 自己去撿新 release 的,而 **prerelease 也算**:2026-07-26 實測,`v0.5.38`(`isPrerelease=true`)建立後約 **2–3 分鐘**站台自動升上去、`/api/version` 的 git_sha 回讀查證。預設等待預算 60 × 5s = 5 分鐘,約為實測延遲的兩倍。所以「發完等站台升上來」是**正確的流程期待,不是設計缺陷**;但若哪天 auto_update 被關掉,這一步就會**合理地**失敗,而失敗訊息會明講「只有這一項沒達成、asset 與 release 本身都對」,以免下一個人跑去查 artifact。
+**第 8 步的語意:publish 不觸發升級,它只「觀察」升級發生**(⚠️ 這一步可以用 `--no-settle` 明示地不做——見上面那條;第 7 步不行、沒有旗標關得掉)。站台是靠 owner 帳號上的 **auto_update** 自己去撿新 release 的,而 **prerelease 也算**:2026-07-26 實測,`v0.5.38`(`isPrerelease=true`)建立後約 **2–3 分鐘**站台自動升上去、`/api/version` 的 git_sha 回讀查證。預設等待預算 60 × 5s = 5 分鐘,約為實測延遲的兩倍。所以「發完等站台升上來」是**正確的流程期待,不是設計缺陷**;但若哪天 auto_update 被關掉,這一步就會**合理地**失敗,而失敗訊息會明講「只有這一項沒達成、asset 與 release 本身都對」,以免下一個人跑去查 artifact。⚠️ **這一步能成立的前提是那台站把兩個開關都打開了,不是 auto_update 的普遍行為**:`updater.receive_beta`(關著就只收正式 release)與 `updater.auto_update` **預設皆為 OFF**(見下方〈主幹綠自動發 beta〉與 `server/CLAUDE.md`)。所以上面那個「若哪天 auto_update 被關掉」不是假想:對一個預設狀態的站來說,那才是常態。
 
 ## 主幹綠自動發 beta(T-9fe3)
 

@@ -41,7 +41,7 @@ conformance/run.sh --target go    # 起隔離 ocserverd(核心自動配埠、臨
 
 `test_auth_matrix.py`:表驅動,每條 gated 路由 × {無 token、owner、admin_agent、warden、agent 本人、agent 他人} 斷言 status。期望值**照 manifest `requires` 語意機械推導**(RBAC 的行為定義):`requires` 是路由宣告的最低 principal class,階梯 machine/warden(0) < agent(1) < admin_agent(2) < owner(3);低於門檻的 cell 一律推導為 403(表裡**禁止手寫** below-floor cell,`Route.expect` derive),達標 cell 才寫路由語意 status(預設 200)。manifest 帶 `requires` 欄,`test_matrix_requires_match_manifest` 把矩陣每列的 requires 釘死到 manifest 宣告——server 改 requires,矩陣先紅。hire 提權洞回歸(agent/warden 帶 kind/role_key → 403;admin 可)與 deny-first(admin 路由打不存在 target,agent 拿 403 非 404,訊息 "principal not permitted")各有專測。
 
-覆蓋有 teeth:`test_manifest_fully_covered` 斷言 manifest 的 84 條 gated 路由 = 矩陣覆蓋 ∪ 明示 SKIP 表(附理由),新路由進 route 表而沒進矩陣 → run.sh 直接紅。降級測法(如 bootstrap-here 只打不存在的 machine_id,避免真的在 host 上裝 warden)在 `DEGRADED` 表誠實列明,不 silent skip。
+覆蓋有 teeth:`test_manifest_fully_covered` 斷言 **manifest 裡的每一條 gated 路由**(`auth != "public"`)= 矩陣覆蓋 ∪ 明示 SKIP 表(附理由),新路由進 route 表而沒進矩陣 → run.sh 直接紅。⚠️ **這裡刻意不寫條數**(舊文寫死「84 條」,而那個數字早就過期了):斷言本體是**集合相等**,碼裡根本沒有任何數字,寫一個進文件只會多出一個沒有東西在維護、也沒有東西會叫它的副本——正是本檔上面第 22 行自己立的那條規矩。要知道今天有幾條就去數 `routes_manifest.json`。降級測法(如 bootstrap-here 只打不存在的 machine_id,避免真的在 host 上裝 warden)在 `DEGRADED` 表誠實列明,不 silent skip。
 
 ## REST happy-path 面(第二批)
 

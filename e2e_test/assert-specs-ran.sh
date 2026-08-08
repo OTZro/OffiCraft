@@ -20,6 +20,23 @@
 # today's total. (Measured 2026-08-05 with `playwright test --list`: 23 collected
 # by default, 24 once the live-agent class is requested. The floor sits well under
 # that so growth never reddens it.)
+#
+# WHAT IT DOES NOT ASSERT — the scope of the claim
+# This is TEXT MATCHING over a log. What it asserts is that "the reporter SAID N
+# specs passed", NOT that N specs really ran. Anything that emits a line shaped
+# like a reporter tally satisfies it: a hand-written file, a log replayed from an
+# earlier run, output from a different tree. Its credibility is exactly the
+# credibility of the log it is handed and no higher — so it closes the "the gate
+# was wired to nothing" hole above, and closes nothing about a log that lies.
+# When its output is quoted as land evidence, quote it at that width: "the
+# reporter reported this", plus wherever the log came from.
+#
+# WHO EXERCISES A CHANGE TO THIS FILE
+# `bin/ci.sh` does NOT run `run_all.sh` or this script (see e2e_test/CLAUDE.md).
+# So the land authority going green is not weak evidence about an edit here, it
+# is NO evidence: by construction that run never executed this file. The
+# acceptance for a change to this script is the `macos-e2e` job on the PR, and
+# reading its log.
 set -euo pipefail
 
 LOG="${1:?usage: assert-specs-ran.sh <run_all.log>}"
