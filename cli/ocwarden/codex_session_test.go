@@ -59,7 +59,7 @@ func TestNormalizeCodexEffort(t *testing.T) {
 		// max is the level T-dbd4 added. It has to survive VERBATIM: this func
 		// is an allowlist, not a ladder, so a level missing from it does not get
 		// nudged down a notch — it lands in the same catch-all as a typo.
-		"max": "max",
+		"max":     "max",
 		"extreme": "medium",
 	} {
 		if got := normalizeCodexEffort(input); got != want {
