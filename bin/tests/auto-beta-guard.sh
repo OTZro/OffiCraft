@@ -228,6 +228,14 @@ JSON="$WORK/ci.json"
 # real parse and the positive control below. psych is YAML 1.1, so the `on:` key
 # comes back as the boolean true; nothing here needs it and the JSON dump just
 # carries it as the string "true".
+# ⚠️ ONE PROPERTY OF `safe_load` WORTH KNOWING BEFORE IT SURPRISES SOMEBODY: Psych's
+# `safe_load` defaults to `aliases: false`, so a YAML anchor/alias (`&x` / `*x`)
+# anywhere in the file makes the whole parse RAISE — which lands as W0 "does not
+# parse" and fails. That is the fail-CLOSED direction (an aliased workflow cannot
+# slip past unexamined), and it is worth stating because a legitimate edit using an
+# anchor would be refused here with a message about invalid YAML rather than about
+# aliases. ⚠️ READ OFF THE PSYCH DOCUMENTATION, NOT VERIFIED WITH A FIXTURE HERE —
+# nobody has fed this guard an anchored workflow to watch what it says.
 parse_yaml() {
   "$RUBY" -ryaml -rjson -e '
     doc = YAML.safe_load(File.read(ARGV[0]))
@@ -290,8 +298,64 @@ def norm(s):
 
 DQUOTE_MARK = "DOUBLE-QUOTED-LITERAL!"
 
+def dq_as_delimiter(expr):
+    """Is there a double quote WHERE A STRING DELIMITER GOES, i.e. outside every
+    single-quoted literal?
+
+    🔴 THE FIRST VERSION ASKED `'"' in expr` AND THAT WAS A FALSE RED WE SHIPPED.
+    An independent review found it: in an Actions expression a single-quoted literal
+    may contain arbitrary characters, so
+
+        if: contains(github.event.head_commit.message, '"skip-ci"')
+
+    is a legal condition — the double quotes are ordinary characters inside the
+    literal, not delimiters — and the character test refused it (measured at
+    43 ok / 2 failed). That is the exact failure this whole round is treating: a
+    guard that reddens for a legal edit teaches people to route around the guard.
+    So the question is not "is there a double quote" but "is there one in delimiter
+    position".
+
+    ⚠️ WHAT IS AND IS NOT MEASURED HERE. That the DELIMITER form kills the whole
+    workflow is measured on GitHub (see flag_dquotes). That the INSIDE-A-LITERAL
+    form is fine is NOT measured on GitHub: it is read off the expression grammar,
+    and what the review actually measured was that this guard refused it — not what
+    GitHub does with it. Stated that way on purpose; this ticket has a history of
+    claims outrunning their evidence.
+
+    A single quote inside a single-quoted literal is written by doubling it (''),
+    which is why the inner loop consumes pairs rather than closing on them.
+    """
+    s = str(expr)
+    i, n = 0, len(s)
+    while i < n:
+        c = s[i]
+        if c == "'":
+            i += 1
+            closed = False
+            while i < n:
+                if s[i] == "'":
+                    if i + 1 < n and s[i + 1] == "'":
+                        i += 2
+                        continue
+                    i += 1
+                    closed = True
+                    break
+                i += 1
+            if not closed:
+                # UNTERMINATED literal: we cannot say where it would have ended, so
+                # we cannot say which quotes are delimiters. Fall back to the
+                # conservative answer for the remainder rather than treating an
+                # unclosed literal as swallowing everything after it — otherwise
+                # `'oops && x == "push"` would hide a real delimiter quote.
+                return '"' in s[i:] or '"' in s
+            continue
+        if c == '"':
+            return True
+        i += 1
+    return False
+
 def flag_dquotes(cond):
-    """Prefix a marker when the condition contains a double-quoted literal.
+    """Prefix a marker when the condition uses a double quote as a delimiter.
 
     🔴 THIS USED TO REWRITE `"push"` INTO `'push'` AND COMPARE THEM AS EQUAL. That
     was wrong, and it was wrong in the expensive direction. The belief was that the
@@ -314,8 +378,13 @@ def flag_dquotes(cond):
     the same condition either way). Nothing else is forgiven: an added clause, a
     different operator, a negation, a renamed context all still redden, because
     everything else is compared byte for byte.
+
+    ⚠️ DELIMITER POSITION ONLY — see dq_as_delimiter. A double quote INSIDE a
+    single-quoted literal (`contains(msg, '"skip-ci"')`) is an ordinary character
+    and is not flagged; an earlier version flagged it and that was a false red of
+    our own making.
     """
-    return (DQUOTE_MARK + cond) if '"' in cond else cond
+    return (DQUOTE_MARK + cond) if dq_as_delimiter(cond) else cond
 
 def unwrap(cond):
     """Strip the optional outer `${{ }}` — both spellings are legal and equal."""
@@ -758,15 +827,18 @@ def canon(expr):
     return e
 
 DQUOTE_WHY = (
-    "a DOUBLE-QUOTED literal (%s). Double quotes are not valid in a GitHub Actions "
-    "expression: they do not change what the condition means, they stop the WHOLE "
-    "WORKFLOW from starting. Measured on GitHub — the double-quoted form was a startup "
-    "failure with ZERO jobs and the run named after the file path because `name:` was "
-    "never parsed, while the single-quoted control ran one job to success. On a pull "
-    "request that is not a red check, it is NO checks, which looks exactly like nothing "
-    "being wrong. Rewrite the literal with SINGLE quotes. (This guard used to normalise "
-    "the two spellings together as if they were equivalent, which quietly allowed the "
-    "shape that schedules nothing.)"
+    "a double quote used as a STRING DELIMITER (%s). A GitHub Actions expression "
+    "delimits string literals with SINGLE quotes; a double quote in that position does "
+    "not change what the condition means, it stops the WHOLE WORKFLOW from starting. "
+    "Measured on GitHub — the double-quoted form was a startup failure with ZERO jobs "
+    "and the run named after the file path because `name:` was never parsed, while the "
+    "single-quoted control ran one job to success. On a pull request that is not a red "
+    "check, it is NO checks, which looks exactly like nothing being wrong. Rewrite the "
+    "literal with SINGLE quotes. ⚠️ THIS IS ABOUT DELIMITER POSITION, NOT ABOUT THE "
+    "CHARACTER: a double quote INSIDE a single-quoted literal — contains(msg, "
+    "'\"skip-ci\"') — is an ordinary character and is NOT refused. An earlier version "
+    "of this guard said \"double quotes are not valid in an expression\" and refused "
+    "that too, which was a false red of our own making."
 )
 
 # ── double quotes in an EXPRESSION, at any position in the file ───────────────
@@ -802,6 +874,53 @@ DQ_EXPR = re.compile(r"\$\{\{(.*?)\}\}", re.S)
 def outside_exprs(s):
     return DQ_EXPR.sub("", str(s))
 
+def dq_as_delimiter(expr):
+    """Is there a double quote WHERE A STRING DELIMITER GOES — outside every
+    single-quoted literal?
+
+    🔴 THE FIRST VERSION ASKED `'"' in …` AND THAT WAS A FALSE RED WE SHIPPED. An
+    Actions expression delimits strings with single quotes, and a single-quoted
+    literal may contain arbitrary characters, so
+        if: contains(github.event.head_commit.message, '"skip-ci"')
+    is legal — those double quotes are ordinary characters — and the character test
+    refused it (an independent review measured 43 ok / 2 failed). A guard that
+    reddens for a legal edit is the disease this whole round is treating, so the
+    question is delimiter POSITION, not the presence of the character.
+
+    ⚠️ EVIDENCE, SPLIT HONESTLY: that the delimiter form kills the whole workflow is
+    measured on GitHub. That the inside-a-literal form is fine is NOT — it is read
+    off the expression grammar, and what the review measured was that THIS GUARD
+    refused it, not what GitHub does with it.
+
+    A single quote inside a single-quoted literal is written by doubling it ('').
+    """
+    s = str(expr)
+    i, n = 0, len(s)
+    while i < n:
+        c = s[i]
+        if c == "'":
+            i += 1
+            closed = False
+            while i < n:
+                if s[i] == "'":
+                    if i + 1 < n and s[i + 1] == "'":
+                        i += 2
+                        continue
+                    i += 1
+                    closed = True
+                    break
+                i += 1
+            if not closed:
+                # Unterminated literal: there is no telling where it would have
+                # ended, so answer conservatively rather than let an unclosed quote
+                # swallow a real delimiter later in the string.
+                return '"' in s[i:] or '"' in s
+            continue
+        if c == '"':
+            return True
+        i += 1
+    return False
+
 def dq_flag(where, text):
     problem(("%s carries " + DQUOTE_WHY) % (where, str(text).strip()))
 
@@ -815,7 +934,7 @@ def scan_dquote_exprs():
         # An `if:` is an expression in its ENTIRETY, `${{ }}` or not — so a quote
         # anywhere outside an interpolation counts here, and one inside is caught
         # by the document walk below (checked separately so neither is reported twice).
-        if '"' in outside_exprs(cond):
+        if dq_as_delimiter(outside_exprs(cond)):
             dq_flag("job '%s' job-level `if`" % job, cond)
             hit.add(job)
         steps = spec.get("steps") or []
@@ -823,7 +942,7 @@ def scan_dquote_exprs():
             if not isinstance(step, dict):
                 continue
             scond = str(step.get("if", ""))
-            if '"' in outside_exprs(scond):
+            if dq_as_delimiter(outside_exprs(scond)):
                 dq_flag("job '%s' step %d (%s) step-level `if`"
                         % (job, n, str(step.get("name") or step.get("uses") or "unnamed")[:48]),
                         scond)
@@ -836,7 +955,7 @@ def scan_dquote_exprs():
                 walk(v, "%s[%d]" % (path, i))
         elif isinstance(node, str):
             for body in DQ_EXPR.findall(node):
-                if '"' in body:
+                if dq_as_delimiter(body):
                     dq_flag("the `${{ … }}` expression at %s" % (path.lstrip(".") or "(root)"),
                             "${{%s}}" % body)
     walk(doc, "")
@@ -1001,6 +1120,14 @@ jobs:
         run: |
           echo "hello world"
           test "$PLAIN" = "$PLAIN" && echo "ok"
+      - name: double quotes INSIDE a single-quoted literal are ordinary characters
+        if: contains(github.event.head_commit.message, '"skip-ci"')
+        run: echo skipped
+      - name: same, inside an interpolation, and with a doubled '' escape
+        env:
+          A: ${{ contains(github.event.head_commit.message, '"skip-ci"') }}
+          B: ${{ contains(github.event.head_commit.message, 'it''s "quoted"') }}
+        run: echo hi
       - name: single-quoted expression, and a bare interpolation
         if: github.event_name == 'pull_request'
         env:
@@ -1009,7 +1136,13 @@ jobs:
         with_note: "not a real key, just another quoted scalar"
         run: echo "$SHA"
 YML
-DQ_MARK="Double quotes are not valid in a GitHub Actions expression"
+# The phrase these controls count. It has to appear in DQUOTE_WHY verbatim, and it
+# is deliberately the SHORTEST stable fragment of it: when the message was reworded
+# this line did not follow, both counts came back 0, and W1rq reddened saying the
+# rule catches nothing. That red was correct in form (a control that stops matching
+# must not read as a pass) but it pointed at the matcher, not at the rule — so if
+# you reword DQUOTE_WHY, reword this in the same edit.
+DQ_MARK="used as a STRING DELIMITER"
 dq_problems() { # dq_problems <fixture.yml> — count of double-quote refusals
   parse_yaml "$1" "$DQ_DIR/f.json" 2>/dev/null || { echo PARSEFAIL; return; }
   python3 "$WORK/roles.py" "$1" "$DQ_DIR/f.json" 2>&1 \
@@ -1020,7 +1153,7 @@ DQ_RED_WHERE="$(parse_yaml "$DQ_DIR/red.yml" "$DQ_DIR/f.json" 2>/dev/null; pytho
 check "W1rq the double-quote rule catches all THREE measured positions in a planted fixture (job-level if, step-level if, inside a \${{ }} interpolation) — found: ${DQ_RED_WHERE:-none}" \
   "3" "$DQ_RED_N"
 DQ_GREEN_N="$(dq_problems "$DQ_DIR/green.yml")"
-check "W1rq-neg and it refuses NONE of the legal double quotes (shell quotes in \`run:\`, plain quoted YAML scalars in \`env:\`/other keys, single-quoted expressions) — a rule that reddens for a legal edit is the defect this round is treating" \
+check "W1rq-neg and it refuses NONE of the legal double quotes — shell quotes in \`run:\`, plain quoted YAML scalars, single-quoted expressions, AND a double quote INSIDE a single-quoted literal (\`contains(msg, '\"skip-ci\"')\`, in an \`if:\` and in a \${{ }}, one with a doubled '' escape). That last one is a false red this guard SHIPPED; a rule that reddens for a legal edit is the defect this round is treating" \
   "0" "$DQ_GREEN_N"
 
 # ── W1x: the not-a-gate set is exactly the two jobs that were ruled exempt ──
@@ -1055,7 +1188,7 @@ if [[ "$IF_RAW" == DOUBLE-QUOTED-LITERAL!* ]]; then
   # Its own branch rather than a want/got, because the reason matters more than the
   # diff: this spelling does not run the job differently, it stops the workflow
   # from starting at all.
-  bad "W2 $JOB's \`if\` uses a DOUBLE-QUOTED literal: \`${IF_RAW#DOUBLE-QUOTED-LITERAL!}\`. That is not valid in a GitHub Actions expression — the WHOLE WORKFLOW fails to start. Measured on GitHub with two minimal workflows differing only in the quotes: the double-quoted one gave a startup failure with \`jobs: []\`, zero jobs scheduled, and a run named after the file path because \`name:\` was never parsed. On a pull request that is NO checks, not a red check, which is harder to notice than a failure. Rewrite it with single quotes: \`$WANT_IF\`"
+  bad "W2 $JOB's \`if\` uses a double quote as a STRING DELIMITER: \`${IF_RAW#DOUBLE-QUOTED-LITERAL!}\`. An Actions expression delimits strings with SINGLE quotes; a double quote in that position makes the WHOLE WORKFLOW fail to start. Measured on GitHub with two minimal workflows differing only in the quotes: the double-quoted one gave a startup failure with \`jobs: []\`, zero jobs scheduled, and a run named after the file path because \`name:\` was never parsed. On a pull request that is NO checks, not a red check, which is harder to notice than a failure. Rewrite it with single quotes: \`$WANT_IF\`. (⚠️ Delimiter position only — a double quote INSIDE a single-quoted literal, \`contains(msg, '\"skip-ci\"')\`, is an ordinary character and is not refused.)"
 else
   check "W2 $JOB's if is EXACTLY \`$WANT_IF\` (a bolted-on \`|| …\` would publish from a pull request)" \
     "$WANT_IF" "$IF_RAW"
@@ -1290,9 +1423,17 @@ fi
 # and W4d's self-reference half may then be naming a repo this is not. That
 # residual is listed under (b) beside W4d. It is NOT a silent pass: the line is
 # printed with a ⚠️, it is counted separately, and the summary line carries the
-# count. On the paths where a rename actually needs catching — a clone from
-# GitHub, and actions/checkout on the runner — origin IS a GitHub URL and the
-# equality below does run (mutant-tested: see the commit message).
+# count.
+#
+# ⚠️ HOW NARROW THE EXPOSURE ACTUALLY IS, because "it does not fail" invites a wider
+# reading than the truth: the not-corroborated branch is reachable only where origin
+# yields no {owner}/{repo} — a LOCAL run in a filesystem-origin clone, or a tree with
+# no git metadata at all. In CI it is not that branch: `actions/checkout` leaves an
+# https://github.com/… origin, so a runner takes the equality path, where a wrong slug
+# is a plain red (mutant-tested). So the uncorroborated case is a local-execution
+# posture, not a hole in the cloud rounds — and the residual it leaves is exactly one
+# thing: a rename or a copy of this file into another repo goes unnoticed WHEN NOBODY
+# RUNS IT ANYWHERE THAT HAS A GITHUB ORIGIN.
 SLUG_REMOTE="$(git -C "$ROOT" config --get remote.origin.url 2>/dev/null || true)"
 # A GitHub-shaped remote, or nothing. A local path is not "a slug that differs";
 # it is an absence of the evidence, and conflating the two is the bug above.
