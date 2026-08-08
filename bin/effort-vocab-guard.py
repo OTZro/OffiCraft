@@ -213,8 +213,9 @@ def excerpt_at(text: str, index: int) -> str:
     return text[start: end if end != -1 else len(text)]
 
 
-def scan(truth: Set[str]) -> Tuple[List[Finding], Dict[str, int]]:
+def scan(truth: Set[str]) -> Tuple[List[Finding], List[str], Dict[str, int]]:
     findings: List[Finding] = []
+    unreadable: List[str] = []
     counts = {
         "must-be-one-of": 0,
         "codex-normalize": 0,
@@ -223,6 +224,7 @@ def scan(truth: Set[str]) -> Tuple[List[Finding], Dict[str, int]]:
         "equality-chain": 0,
         "label-map": 0,
         "prose": 0,
+        "unreadable-message": 0,
     }
 
     for rel in tracked_files():
@@ -255,18 +257,19 @@ def scan(truth: Set[str]) -> Tuple[List[Finding], Dict[str, int]]:
         for m in re.finditer(r"effort must be one of([^\";]*)", text, re.I):
             listed = words(m.group(1))
             if not listed:
-                # The message is assembled at runtime, so there is no literal list
-                # to compare. Failing closed is right, but "lists {}" reads like the
-                # copy is wrong when the real answer is that this scan cannot read
-                # it — say that instead.
-                fail(
-                    f"{rel}:{line_of(text, m.start())} builds its 'effort must be "
-                    f"one of' message at runtime, so this guard cannot read the list "
-                    f"it will print. Either write the levels as a literal here, or "
-                    f"add this file to SKIP_FILES with a committed reason. Do not "
-                    f"leave it unreadable: a message this guard cannot check is one "
-                    f"that can drift from {SSOT_FILE}:{SSOT_FUNC} forever."
+                # OBSERVED: the phrase is here and no list follows it on this line.
+                # WHY is not observable from here — it could be a message assembled
+                # at runtime, a test asserting only the prefix, or prose naming the
+                # message — so this says what it saw and lets the reader pick the
+                # remedy. An earlier version diagnosed "built at runtime", which the
+                # scan never established and which was wrong for two of the three.
+                counts["unreadable-message"] += 1
+                unreadable.append(
+                    f"{rel}:{line_of(text, m.start())} names 'effort must be one "
+                    f"of' with no list after it on this line\n"
+                    f"      {excerpt_at(text, m.start()).strip()[:120]}"
                 )
+                continue
             record("must-be-one-of", m.start(), listed)
 
         # ── shape 2: the codex launcher's own re-enumeration ─────────────────
@@ -347,12 +350,12 @@ def scan(truth: Set[str]) -> Tuple[List[Finding], Dict[str, int]]:
                 if listed:
                     record("prose", start + m.start(), listed)
 
-    return findings, counts
+    return findings, unreadable, counts
 
 
 def main() -> None:
     truth = ssot()
-    findings, counts = scan(truth)
+    findings, unreadable, counts = scan(truth)
     if findings:
         listing = "\n  ".join(f.render(truth) for f in sorted(findings, key=lambda f: (f.rel, f.line)))
         fail(
@@ -363,6 +366,22 @@ def main() -> None:
             "while a narrowed scan silently covers less and nothing here goes red for it. "
             "If a level really is not meant to reach one of these places, that is a "
             "coercion the cockpit cannot see — say so in code, do not hide it here."
+        )
+    if unreadable:
+        rows = "\n  ".join(unreadable)
+        fail(
+            "these lines name the validation message but carry no list this scan "
+            f"can read, so nothing here compares them to {SSOT_FILE}:{SSOT_FUNC}:\n  "
+            f"{rows}\n\n"
+            "  Pick the one that is true and act on it — this guard cannot tell them "
+            "apart:\n"
+            "    * the message is assembled at runtime ⇒ write the levels as a "
+            "literal, or the printed list can drift forever with nothing to catch it;\n"
+            "    * this only NAMES the message (a test matching the prefix, prose "
+            "about it) and the list lives elsewhere ⇒ that elsewhere is what this "
+            "guard should be reading, so add this file to SKIP_FILES with a committed "
+            "reason;\n"
+            "    * the list was meant to be here and got lost ⇒ put it back."
         )
     total = sum(counts.values())
     breakdown = ", ".join(f"{n} {shape}" for shape, n in sorted(counts.items()) if n)
