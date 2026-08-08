@@ -1,6 +1,30 @@
 #!/usr/bin/env bash
 # e2e_test/run_all.sh — one-shot: setup -> playwright specs -> teardown.
 # teardown ALWAYS runs (EXIT trap), even if a spec fails or setup aborts.
+#
+# WHO EXERCISES A CHANGE TO THIS FILE — and how far that reaches
+# `bin/ci.sh` does NOT run the playwright specs. What it DOES run, via step (0)
+# `e2e_test/tests_guard/run.sh`, is this script's WIRING SHAPE: tests_guard
+# copies this file into a throwaway tree and executes it against stubs (the
+# record-only teardown seam), and separately pins the shape statically: the rc
+# capture must sit immediately after the playwright invocation and the
+# spec-exit report line immediately after that, and the EXIT trap must reach
+# teardown through `oc_e2e_teardown_on_exit` rather than calling teardown.sh
+# directly. Measured: inserting one line before the rc capture takes tests_guard
+# to FAIL=2 rc=1; pointing the trap straight at teardown.sh takes it to
+# FAIL=4 rc=1.
+#
+# Prose in this file is free to quote the statements that case (11) lifts (the
+# `set -` line, the source line, the rc capture, the report echo): that case
+# anchors each pattern at column 0 and to the statement's shape, so a comment
+# cannot win the match. It did not always: with an unanchored `grep -m1 -F`, a
+# comment here mentioning the report line was picked up instead of the echo, the
+# reconstructed fixture printed nothing, and case (11) failed pointing at
+# lib/common.sh's `set -e` — measured PASS=152 FAIL=1 rc=1, for a comment.
+#
+# So a local `[ci] all green` DOES cover those wiring properties — but it says
+# nothing about any spec having run, because none did. Spec-level acceptance for
+# a change here is the `macos-e2e` job on the PR and its log.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # `||` does NOT swallow common.sh's own hard guards: an `exit 2` inside a sourced

@@ -7,9 +7,27 @@
 # free runner (assert helpers + a PATH shim that stubs EVERY external command the
 # guard/allocator touches) so it can run inside bin/ci.sh on ANY host — including
 # a LIVE fleet host — WITHOUT touching the real launchctl/tmux/lsof/fleet. The
-# stubs return controlled output; NOTHING real is mutated and NO teardown path is
-# ever exercised (we only ever call the read-only detector / the guard / the pure
-# allocator).
+# stubs return controlled output and NOTHING real is mutated.
+# ⚠️ It used to say "NO teardown path is ever exercised", and that is no longer
+# true: cases 20b/20e/20f drive the real setup.sh → run_all.sh → teardown.sh
+# chain. The narrower property that does hold — and, more to the point, the one
+# this file PINS rather than merely asserts — is that teardown reaches the disk
+# only through the record-only seam, against a throwaway tree: case 20e pins the
+# seam as teardown.sh's only way out, and 19c/20c/20f keep a sentinel in that
+# tree and fail if anything deletes it. So it records what it would have removed
+# instead of removing it. That is what makes this safe on a live fleet host;
+# "no teardown code runs at all" is not, and has not been for a while.
+#
+# SCOPE — what decides which cases run
+# NOTHING discovers anything here. This file IS the suite: every case is a
+# literal block in this one script, run top to bottom, and there is no per-file
+# collection step that would notice a block that stopped existing. So deleting or
+# short-circuiting a case block does not fail — it silently runs less, and
+# PASS/FAIL only ever count what was actually reached. `FAIL -eq 0` answers "did
+# anything fail?", not "did anything run?", exactly like the rc of a test runner.
+# That is why there is a PASS FLOOR at the bottom of this file. Read its comment
+# for what it does and does NOT catch — it is a floor, so it catches the suite
+# being gutted, not one case going missing.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -390,10 +408,17 @@ RUN_ALL="$HERE/../run_all.sh"
 if [[ ! -f "$RUN_ALL" ]]; then
   bad "run_all.sh not found at $RUN_ALL"
 else
+  # Every one of these four locates a STATEMENT, so every pattern is anchored at
+  # column 0 and shaped like the statement. An unanchored `-F` on the literal
+  # would also match a COMMENT that merely mentions it, and then the fixture
+  # below is reconstructed out of a comment: it echoes nothing and this case
+  # fails naming lib/common.sh's `set -e`, which had nothing to do with it.
+  # (Measured before this was anchored: one ordinary comment added to run_all.sh
+  # mentioning the report line took tests_guard to PASS=152 FAIL=1 rc=1.)
   D41A_SET="$(grep -m1 -E '^set +-' "$RUN_ALL" || true)"
-  D41A_SRC="$(grep -m1 -F 'source "$HERE/lib/common.sh"' "$RUN_ALL" || true)"
+  D41A_SRC="$(grep -m1 -E '^source "\$HERE/lib/common\.sh"' "$RUN_ALL" || true)"
   D41A_RC="$(grep -m1 -E '^RC=\$\?' "$RUN_ALL" || true)"
-  D41A_ECHO="$(grep -m1 -F '[run_all] specs exit=' "$RUN_ALL" || true)"
+  D41A_ECHO="$(grep -m1 -E '^echo "\[run_all\] specs exit=' "$RUN_ALL" || true)"
   if [[ -z "$D41A_SET" || -z "$D41A_SRC" || -z "$D41A_RC" || -z "$D41A_ECHO" ]]; then
     bad "run_all.sh no longer has the expected set/source/RC/echo shape — update guard (11)"
   else
@@ -1540,4 +1565,51 @@ ff8a_mutant use 's|^  if ! oc_e2e_teardown_armed; then$|  if false; then|'
 
 echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1
-echo "[tests_guard] all green"
+
+# ── PASS FLOOR ──────────────────────────────────────────────────────────────
+# See SCOPE at the top: there is no discovery here, so a case block that stops
+# existing takes its assertions with it and everything still reports green. This
+# floor is what makes that loud ONCE ENOUGH OF IT IS GONE — see the measured
+# cells below for where that threshold actually sits.
+#
+# A FLOOR, not the exact count, on purpose — the same reasoning that
+# e2e_test/assert-specs-ran.sh writes out for the spec tally: an exact number
+# goes stale the first time someone adds a case, and a stale exact number teaches
+# the next person that this file lies, which is worse than not asserting at all.
+# What the floor has to catch is "the suite got gutted", not "today's total
+# changed". It sits well under the current count so growth never reddens it, and
+# it does NOT need updating when cases are added.
+#
+# WHAT IT CATCHES — state the size of the hole, not just that one exists.
+# Measured 2026-08-08: PASS=153 against a floor of 100. So roughly A THIRD of the
+# assertions — 53 of them — can evaporate silently and this still goes green.
+# (That figure moves as cases are added; it is recorded as a measurement on a
+# day, not as the current state. Recompute it, do not trust it.)
+#
+# And it is VOLUME-SHAPED, not importance-shaped: it counts assertions and does
+# not care WHICH ones went. The highest-value blocks are among the smallest —
+# case 11 (the rc-propagation shape of run_all.sh) and 20e (teardown's only way
+# out) — so deleting either one on its own sits comfortably inside the tolerance
+# and this file will tell you everything is fine. Nothing here watches at
+# case-name or block granularity; an exact count that would is refused above for
+# a reason that costs more than it saves.
+# Mutants, each restored from a scratchpad copy with the sha256 re-checked:
+#   * floor raised to an unreachable 9999            → PASS=153 FAIL=0, rc=1, named.
+#   * the whole 19x/20x half of the file deleted     → PASS=66  FAIL=0, rc=1, named.
+#   * ONE case block (19a, five assertions) deleted  → PASS=148 FAIL=0, rc=0 — GREEN.
+#
+# THE SUCCESS MARKER IS PRINTED FROM INSIDE THIS BLOCK, from the floor's passing
+# branch and nowhere else — that is the only reason bin/ci.sh's `tail -n 1`
+# check says anything about the floor. It used to sit on its own line after the
+# `fi`, and then deleting this whole block while leaving that last line behind
+# printed the marker with no floor evaluated at all: MEASURED, floor block
+# deleted and the trailing echo kept → PASS=153 FAIL=0 rc=0, last line
+# `[tests_guard] all green`, `bin/ci.sh` all green. Keep it in the branch.
+PASS_FLOOR=100
+if [[ "$PASS" -lt "$PASS_FLOOR" ]]; then
+  echo "[tests_guard] FATAL: only $PASS assertion(s) ran, floor is $PASS_FLOOR." >&2
+  echo "[tests_guard] FAIL=0 with a collapsed PASS count means cases went missing, not that they passed." >&2
+  exit 1
+else
+  echo "[tests_guard] all green"
+fi

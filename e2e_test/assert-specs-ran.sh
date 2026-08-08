@@ -20,6 +20,32 @@
 # today's total. (Measured 2026-08-05 with `playwright test --list`: 23 collected
 # by default, 24 once the live-agent class is requested. The floor sits well under
 # that so growth never reddens it.)
+#
+# WHAT IT DOES NOT ASSERT — the scope of the claim
+# This is TEXT MATCHING over a log. What it asserts is that "the reporter SAID N
+# specs passed", NOT that N specs really ran. Anything that emits a line shaped
+# like a reporter tally satisfies it: a hand-written file, a log replayed from an
+# earlier run, output from a different tree. Its credibility is exactly the
+# credibility of the log it is handed and no higher — so it closes the "the gate
+# was wired to nothing" hole above, and closes nothing about a log that lies.
+# When its output is quoted as land evidence, quote it at that width: "the
+# reporter reported this", plus wherever the log came from.
+#
+# WHO EXERCISES A CHANGE TO THIS FILE
+# Nothing local. `bin/ci.sh` never reaches this script — its only caller anywhere
+# is the `macos-e2e` job in .github/workflows/ci.yml. Do not take that on this
+# file's word; the callers are a query, and the answer moves:
+#   git grep -nF assert-specs-ran.sh
+# What matters is which hits are INVOCATIONS rather than prose — a mention in a
+# comment is not a caller. (This sentence used to assert a hit count under bin/
+# and tests_guard/ instead, and a comment added in the very same commit falsified
+# it on the spot.) So for an edit HERE the land authority going green really
+# is no evidence — that run never executed this file. Acceptance is the
+# `macos-e2e` job on the PR and its log.
+#
+# NOTE the asymmetry, it is not the same for its neighbour: a change to
+# `run_all.sh` IS partly covered locally, because tests_guard executes that file
+# in a throwaway tree and pins its wiring shape. See that file's own header.
 set -euo pipefail
 
 LOG="${1:?usage: assert-specs-ran.sh <run_all.log>}"
@@ -63,7 +89,7 @@ fi
 # police is a guard people learn to ignore — and one that cites a flag the caller
 # never set is simply lying to them.
 if [ "${OC_E2E_LIVE_AGENT:-}" = "1" ]; then
-  echo "[assert-specs-ran] ok — $PASSED specs passed (floor $FLOOR); the live-agent class was explicitly requested, so its specs belong in this log"
+  echo "[assert-specs-ran] ok — $PASSED specs passed (floor $FLOOR) as REPORTED by the playwright reporter (text matching over $LOG, not proof they ran); the live-agent class was explicitly requested, so its specs belong in this log"
   exit 0
 fi
 
@@ -74,4 +100,4 @@ if grep -qF "$LIVE_AGENT_MARKER" "$LOG"; then
   exit 1
 fi
 
-echo "[assert-specs-ran] ok — $PASSED specs passed (floor $FLOOR), live-agent class stayed out"
+echo "[assert-specs-ran] ok — $PASSED specs passed (floor $FLOOR) as REPORTED by the playwright reporter (text matching over $LOG, not proof they ran), live-agent class stayed out"

@@ -150,13 +150,61 @@ echo "[ci] commit $CI_SHA ($CI_BRANCH, tree $CI_TREE) — started $(date -u '+%Y
 # ---------------------------------------------------------------------------
 # (0) e2e_test isolation-guard unit tests (T-8aa1) — the safety layer that keeps
 # the DESTRUCTIVE e2e suites from wiping a LIVE agent-fleet host. HERMETIC (PATH
-# shim stubs launchctl/tmux/lsof; NO real fleet touched, NO teardown exercised),
-# toolchain-free, and fast — so it runs FIRST and reddens CI the instant the
-# live-fleet guard or the namespace allocator regresses. A non-zero exit trips
-# set -e before "[ci] all green".
+# shim stubs launchctl/tmux/lsof; NO real fleet touched — teardown code DOES run,
+# but only against a throwaway tree and only through the record-only seam, so it
+# records what it would have deleted; see that file's own header), toolchain-free,
+# and fast — so it runs FIRST and reddens CI the instant the live-fleet guard or
+# the namespace allocator regresses. A non-zero exit trips set -e before
+# "[ci] all green".
+#
+# rc IS NOT ENOUGH here, for the same reason it is not enough for this script's
+# own verdict (see the marker rule at the bottom): that suite has no per-file
+# discovery, so truncating it — deleting its tail, including the PASS floor that
+# is supposed to notice truncation — leaves a script that exits 0 having asserted
+# almost nothing. So rc == 0 AND `tail -n 1` equals the marker, the same shape
+# this file demands of itself.
+#
+# WHAT MAKES THE FLOOR'S EXISTENCE LOAD-BEARING is not the marker check on its
+# own — that only catches the shape where the marker went WITH the tail. Two
+# things carry it, and the second exists because the first alone was measured to
+# be bypassable by an ordinary edit:
+#   1. in that suite, the marker is echoed from INSIDE the floor's passing
+#      branch, so a floor that is not evaluated cannot print it; and
+#   2. the static assertion below, because (1) lives in the same file as the
+#      floor and an edit that deletes the floor is free to leave a bare
+#      `echo` behind. MEASURED on b8c3805 (floor block deleted, trailing echo
+#      kept): tests_guard PASS=153 FAIL=0 rc=0, last line the marker, and this
+#      whole script green. rc and the marker both saw NOTHING.
+# The assertion is here rather than in the guard for the obvious reason: a check
+# that a file must contain X is worthless if it lives in that file.
 echo "[ci] (0) e2e_test isolation-guard unit tests (hermetic)"
 if [[ -x "$ROOT/e2e_test/tests_guard/run.sh" ]]; then
-  bash "$ROOT/e2e_test/tests_guard/run.sh"
+  TG_SH="$ROOT/e2e_test/tests_guard/run.sh"
+  if ! grep -qE '^PASS_FLOOR=[0-9]+$' "$TG_SH" || ! grep -qF '"$PASS" -lt "$PASS_FLOOR"' "$TG_SH"; then
+    echo "[ci] FAIL — e2e_test/tests_guard/run.sh has no PASS floor any more."
+    echo "[ci] That suite has no per-file discovery: delete a case block and it still"
+    echo "[ci] exits 0 with a smaller PASS count. The floor is the only thing that"
+    echo "[ci] notices, and the success marker is echoed from its passing branch — so"
+    echo "[ci] removing the floor while leaving a bare marker echo behind would go"
+    echo "[ci] green on rc and on the marker alike. Expected an anchored 'PASS_FLOOR=<n>'"
+    echo "[ci] assignment and a '\"\$PASS\" -lt \"\$PASS_FLOOR\"' comparison; found neither"
+    echo "[ci] or only one. Restore the floor, do not delete this assertion."
+    exit 1
+  fi
+  TG_LOG="$(mktemp -t oc-ci-tests-guard.XXXXXX)"
+  # pipefail + set -e: a non-zero guard aborts right here, so the marker check
+  # below is only ever reached on rc == 0.
+  bash "$ROOT/e2e_test/tests_guard/run.sh" 2>&1 | tee "$TG_LOG"
+  if ! tail -n 1 "$TG_LOG" | grep -qFx '[tests_guard] all green'; then
+    echo "[ci] FAIL — tests_guard exited 0 but its last line is not '[tests_guard] all green'."
+    echo "[ci] A green rc with the marker missing means the suite was truncated (its"
+    echo "[ci] tail, and the PASS floor living there, can be deleted without an rc change)."
+    echo "[ci] last 3 lines were:"
+    tail -n 3 "$TG_LOG"
+    rm -f "$TG_LOG"
+    exit 1
+  fi
+  rm -f "$TG_LOG"
 else
   echo "[ci] FAIL — e2e_test/tests_guard/run.sh missing/not executable"
   exit 1

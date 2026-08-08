@@ -2,9 +2,10 @@
 # Proves every `go test` CI runs is an ACTUAL execution, never a cache replay.
 #
 # ── the bug this guard exists to stop from coming back (T-bedc) ───────────────
-# `bin/ci.sh` step 1e ran a bare `"$GO" test ./...`. go caches successful test
-# results keyed on the package's inputs, so on any run whose inputs hash the same
-# as a previous PASS it prints, verbatim from a real CI log:
+# The step in `bin/ci.sh` that runs go test ran a bare `"$GO" test ./...`. go
+# caches successful test results keyed on the package's inputs, so on any run
+# whose inputs hash the same as a previous PASS it prints, verbatim from a real
+# CI log:
 #
 #     ok  	ocwarden	(cached)
 #
@@ -24,8 +25,8 @@
 #     extension or sh/bash shebang). A `go test` launched from python, node, a
 #     Makefile, or a Go program is invisible to it. As of T-bedc there is no such
 #     dispatcher in the CI tree (the only go test call site anywhere is
-#     bin/ci.sh's step 1e) — the "call sites found" tally below is printed so a
-#     newly-added one is at least visible in the log.
+#     bin/ci.sh's go test step) — the "call sites found" tally below is printed
+#     so a newly-added one is at least visible in the log.
 #  2. UNTRACKED SCRIPTS. The set comes from `git ls-files`, so a dispatched but
 #     untracked script is not scanned.
 #  3. FRAGMENT ASSEMBLY / INDIRECTION. `SUB=test; go $SUB ./...`, or a wrapper
@@ -194,12 +195,12 @@ else
   bad "scan found NO go test call site across $SCANNED shell script(s) — the offender check below would be vacuously green"
 fi
 
-# …and specifically it must contain the one that matters: ci.sh's step 1e. A
+# …and specifically it must contain the one that matters: ci.sh's go test step. A
 # rename/refactor that moves the gate elsewhere breaks this and demands a look.
 if printf '%s\n' "$ALL_SITES" | grep -q '^bin/ci\.sh	'; then
-  ok "scan covers bin/ci.sh (the CI go-test gate, step 1e)"
+  ok "scan covers bin/ci.sh (the CI go-test gate)"
 else
-  bad "scan covers bin/ci.sh (the CI go-test gate, step 1e) — sites seen: $(printf '%s\n' "$ALL_SITES" | cut -f1 | sort -u | tr '\n' ' ')"
+  bad "scan covers bin/ci.sh (the CI go-test gate) — sites seen: $(printf '%s\n' "$ALL_SITES" | cut -f1 | sort -u | tr '\n' ' ')"
 fi
 
 OFFENDERS="$(printf '%s\n' "$ALL_SITES" | awk -F'\t' 'NF && $3 == 0 { printf "%s:%s ", $1, $2 }')"
