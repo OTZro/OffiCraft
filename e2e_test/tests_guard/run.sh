@@ -7,9 +7,16 @@
 # free runner (assert helpers + a PATH shim that stubs EVERY external command the
 # guard/allocator touches) so it can run inside bin/ci.sh on ANY host — including
 # a LIVE fleet host — WITHOUT touching the real launchctl/tmux/lsof/fleet. The
-# stubs return controlled output; NOTHING real is mutated and NO teardown path is
-# ever exercised (we only ever call the read-only detector / the guard / the pure
-# allocator).
+# stubs return controlled output and NOTHING real is mutated.
+# ⚠️ It used to say "NO teardown path is ever exercised", and that is no longer
+# true: cases 20b/20e/20f drive the real setup.sh → run_all.sh → teardown.sh
+# chain. The narrower property that does hold — and, more to the point, the one
+# this file PINS rather than merely asserts — is that teardown reaches the disk
+# only through the record-only seam, against a throwaway tree: case 20e pins the
+# seam as teardown.sh's only way out, and 19c/20c/20f keep a sentinel in that
+# tree and fail if anything deletes it. So it records what it would have removed
+# instead of removing it. That is what makes this safe on a live fleet host;
+# "no teardown code runs at all" is not, and has not been for a while.
 #
 # SCOPE — what decides which cases run
 # NOTHING discovers anything here. This file IS the suite: every case is a
@@ -1566,15 +1573,23 @@ echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 # changed". It sits well under the current count so growth never reddens it, and
 # it does NOT need updating when cases are added.
 #
-# WHAT IT CATCHES, MEASURED — do not read it as more than this. Three mutants run
-# here, each restored from a scratchpad copy with the sha256 re-checked:
+# WHAT IT CATCHES — state the size of the hole, not just that one exists.
+# Measured 2026-08-08: PASS=153 against a floor of 100. So roughly A THIRD of the
+# assertions — 53 of them — can evaporate silently and this still goes green.
+# (That figure moves as cases are added; it is recorded as a measurement on a
+# day, not as the current state. Recompute it, do not trust it.)
+#
+# And it is VOLUME-SHAPED, not importance-shaped: it counts assertions and does
+# not care WHICH ones went. The highest-value blocks are among the smallest —
+# case 11 (the rc-propagation shape of run_all.sh) and 20e (teardown's only way
+# out) — so deleting either one on its own sits comfortably inside the tolerance
+# and this file will tell you everything is fine. Nothing here watches at
+# case-name or block granularity; an exact count that would is refused above for
+# a reason that costs more than it saves.
+# Mutants, each restored from a scratchpad copy with the sha256 re-checked:
 #   * floor raised to an unreachable 9999            → PASS=153 FAIL=0, rc=1, named.
 #   * the whole 19x/20x half of the file deleted     → PASS=66  FAIL=0, rc=1, named.
 #   * ONE case block (19a, five assertions) deleted  → PASS=148 FAIL=0, rc=0 — GREEN.
-# That last cell is the honest limit and it is inherent, not a bug: a floor buys
-# "the suite is gone", it does NOT buy "one case went missing". Nothing here
-# watches for a single deleted assertion, and an exact count that would is
-# refused above for a reason that costs more than it saves.
 PASS_FLOOR=100
 if [[ "$PASS" -lt "$PASS_FLOOR" ]]; then
   echo "[tests_guard] FATAL: only $PASS assertion(s) ran, floor is $PASS_FLOOR." >&2

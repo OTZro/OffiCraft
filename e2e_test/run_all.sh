@@ -2,13 +2,28 @@
 # e2e_test/run_all.sh — one-shot: setup -> playwright specs -> teardown.
 # teardown ALWAYS runs (EXIT trap), even if a spec fails or setup aborts.
 #
-# WHO EXERCISES A CHANGE TO THIS FILE
-# `bin/ci.sh` does NOT run this script (see e2e_test/CLAUDE.md) — it only runs
-# the hermetic tests_guard suite. So the land authority going green is not weak
-# evidence about an edit here, it is NO evidence: by construction that run never
-# executed this file. The acceptance for a change to this script is the
-# `macos-e2e` job on the PR, and reading its log. If you edited this file and
-# your only evidence is a local `[ci] all green`, you have not tested it.
+# WHO EXERCISES A CHANGE TO THIS FILE — and how far that reaches
+# `bin/ci.sh` does NOT run the playwright specs. What it DOES run, via step (0)
+# `e2e_test/tests_guard/run.sh`, is this script's WIRING SHAPE: tests_guard
+# copies this file into a throwaway tree and executes it against stubs (the
+# record-only teardown seam), and separately pins the shape statically: the rc
+# capture must sit immediately after the playwright invocation and the
+# spec-exit report line immediately after that, and the EXIT trap must reach
+# teardown through `oc_e2e_teardown_on_exit` rather than calling teardown.sh
+# directly. Measured: inserting one line before the rc capture takes tests_guard
+# to FAIL=2 rc=1; pointing the trap straight at teardown.sh takes it to
+# FAIL=4 rc=1.
+#
+# ⚠️ Do NOT quote the report line's literal text in a comment in this file.
+# tests_guard case (11) locates it with an UNANCHORED `grep -m1 -F`, so a
+# comment mentioning it earlier in the file wins the match, the reconstructed
+# fixture then echoes nothing, and case (11) fails for a reason that has nothing
+# to do with the property it guards. (Measured: it did, while this header was
+# being written.)
+#
+# So a local `[ci] all green` DOES cover those wiring properties — but it says
+# nothing about any spec having run, because none did. Spec-level acceptance for
+# a change here is the `macos-e2e` job on the PR and its log.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # `||` does NOT swallow common.sh's own hard guards: an `exit 2` inside a sourced

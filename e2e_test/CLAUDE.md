@@ -6,10 +6,15 @@
 Go(ocserverd)是唯一 target(py leg 已隨 Python backend 退役;歷史回滾 = git tag `py-final`):`bash run_all.sh`(`OC_E2E_TARGET=go` 仍可顯式指定;其他值 fail loud)。:8791 / repo-root oc.toml / fresh-DB 生命週期 / EXACT-PID teardown;流程 = stage SPA→webdist + docs→docsdist + seeds→seedsdist + binaries/MCP catalog→bindist → go build 進 `.state/` → goose migrate → serve。四種 embed asset 一律先 stage；漏 seedsdist 會讓真 agent boot persona 缺檔，漏 bindist 會讓 MCP `tools/list` 回 catalog unavailable 且 warden binary route 503。
 
 ## 誰會自動跑這套(T-ff8a)
-`bin/ci.sh` **不**跑 `run_all.sh`(只跑 `tests_guard/run.sh` 那套 hermetic 守衛)。**推論**:你改了
-`run_all.sh` / `assert-specs-ran.sh` / specs,land 權威(本機 `bin/ci.sh`)**構造上給不出任何證據**——
-不是「證據比較弱」,是那一輪從來沒有執行過你改的東西。**真正的驗收是 PR 上 `macos-e2e` 那一輪、
-以及讀它的 log**;拿 `[ci] all green` 當這類改動的驗證,等於沒驗。自動關卡在
+`bin/ci.sh` **不跑 playwright spec**(只跑 `tests_guard/run.sh` 那套 hermetic 守衛)。⚠️ **但別把這句
+讀成「本機那一輪跟 `run_all.sh` 無關」**:`tests_guard` 會把 `run_all.sh` **複製進拋棄式樹實際執行**
+(走 record-only seam),並靜態釘住它的 **wiring shape**——`RC=$?` 必須緊接在 `playwright test` 那行、
+`[run_all] specs exit=$RC` 又緊接其後,以及 EXIT trap 必須經 `oc_e2e_teardown_on_exit` 這道閘而不是直接
+叫 `teardown.sh`。**實測**:在 `playwright test` 與 `RC=$?` 中間插一行 ⇒ FAIL=2 rc=1;把 trap 改成直接叫
+`teardown.sh` ⇒ FAIL=4 rc=1。<br>
+⇒ **本機綠證明的是那幾條 wiring,不證明任何一支 spec 跑過**(那一輪一支都沒跑)。**spec 面的驗收是 PR 上
+`macos-e2e` 那一輪與它的 log。** 至於 `assert-specs-ran.sh`,本機**完全碰不到**(唯一呼叫者是 `ci.yml`),
+改它就真的只有雲端那一輪能驗。自動關卡在
 **`.github/workflows/ci.yml` 的 `macos-e2e` job**:macOS runner、`pull_request` **與 push-to-`main`**
 兩個觸發都跑(T-ab2a 補上後者;`main` 上不 cancel-in-progress,見那個檔的註解),
 **那個 job 什麼旗標都不用設**(T-c329):要**活的 agent** 的 spec 是**預設不跑**的,所以雲端不必

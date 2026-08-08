@@ -150,13 +150,36 @@ echo "[ci] commit $CI_SHA ($CI_BRANCH, tree $CI_TREE) — started $(date -u '+%Y
 # ---------------------------------------------------------------------------
 # (0) e2e_test isolation-guard unit tests (T-8aa1) — the safety layer that keeps
 # the DESTRUCTIVE e2e suites from wiping a LIVE agent-fleet host. HERMETIC (PATH
-# shim stubs launchctl/tmux/lsof; NO real fleet touched, NO teardown exercised),
-# toolchain-free, and fast — so it runs FIRST and reddens CI the instant the
-# live-fleet guard or the namespace allocator regresses. A non-zero exit trips
-# set -e before "[ci] all green".
+# shim stubs launchctl/tmux/lsof; NO real fleet touched — teardown code DOES run,
+# but only against a throwaway tree and only through the record-only seam, so it
+# records what it would have deleted; see that file's own header), toolchain-free,
+# and fast — so it runs FIRST and reddens CI the instant the live-fleet guard or
+# the namespace allocator regresses. A non-zero exit trips set -e before
+# "[ci] all green".
+#
+# rc IS NOT ENOUGH here, for the same reason it is not enough for this script's
+# own verdict (see the marker rule at the bottom): that suite has no per-file
+# discovery, so truncating it — deleting its tail, including the PASS floor that
+# is supposed to notice truncation — leaves a script that exits 0 having asserted
+# almost nothing. Requiring its LAST LINE to be exactly its own success marker is
+# what makes the floor's existence load-bearing rather than optional. Same shape
+# this file demands of itself: rc == 0 AND `tail -n 1` equals the marker.
 echo "[ci] (0) e2e_test isolation-guard unit tests (hermetic)"
 if [[ -x "$ROOT/e2e_test/tests_guard/run.sh" ]]; then
-  bash "$ROOT/e2e_test/tests_guard/run.sh"
+  TG_LOG="$(mktemp -t oc-ci-tests-guard.XXXXXX)"
+  # pipefail + set -e: a non-zero guard aborts right here, so the marker check
+  # below is only ever reached on rc == 0.
+  bash "$ROOT/e2e_test/tests_guard/run.sh" 2>&1 | tee "$TG_LOG"
+  if ! tail -n 1 "$TG_LOG" | grep -qFx '[tests_guard] all green'; then
+    echo "[ci] FAIL — tests_guard exited 0 but its last line is not '[tests_guard] all green'."
+    echo "[ci] A green rc with the marker missing means the suite was truncated (its"
+    echo "[ci] tail, and the PASS floor living there, can be deleted without an rc change)."
+    echo "[ci] last 3 lines were:"
+    tail -n 3 "$TG_LOG"
+    rm -f "$TG_LOG"
+    exit 1
+  fi
+  rm -f "$TG_LOG"
 else
   echo "[ci] FAIL — e2e_test/tests_guard/run.sh missing/not executable"
   exit 1

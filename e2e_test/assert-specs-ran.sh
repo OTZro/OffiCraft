@@ -32,11 +32,16 @@
 # reporter reported this", plus wherever the log came from.
 #
 # WHO EXERCISES A CHANGE TO THIS FILE
-# `bin/ci.sh` does NOT run `run_all.sh` or this script (see e2e_test/CLAUDE.md).
-# So the land authority going green is not weak evidence about an edit here, it
-# is NO evidence: by construction that run never executed this file. The
-# acceptance for a change to this script is the `macos-e2e` job on the PR, and
-# reading its log.
+# Nothing local. `bin/ci.sh` never reaches this script — its only caller anywhere
+# is the `macos-e2e` job in .github/workflows/ci.yml (checked: no reference to
+# this filename exists under bin/ or e2e_test/tests_guard/, while run_all.sh is
+# referenced in both). So for an edit HERE the land authority going green really
+# is no evidence — that run never executed this file. Acceptance is the
+# `macos-e2e` job on the PR and its log.
+#
+# NOTE the asymmetry, it is not the same for its neighbour: a change to
+# `run_all.sh` IS partly covered locally, because tests_guard executes that file
+# in a throwaway tree and pins its wiring shape. See that file's own header.
 set -euo pipefail
 
 LOG="${1:?usage: assert-specs-ran.sh <run_all.log>}"
@@ -80,7 +85,7 @@ fi
 # police is a guard people learn to ignore — and one that cites a flag the caller
 # never set is simply lying to them.
 if [ "${OC_E2E_LIVE_AGENT:-}" = "1" ]; then
-  echo "[assert-specs-ran] ok — $PASSED specs passed (floor $FLOOR); the live-agent class was explicitly requested, so its specs belong in this log"
+  echo "[assert-specs-ran] ok — $PASSED specs passed (floor $FLOOR) as REPORTED by the playwright reporter (text matching over $LOG, not proof they ran); the live-agent class was explicitly requested, so its specs belong in this log"
   exit 0
 fi
 
@@ -91,4 +96,4 @@ if grep -qF "$LIVE_AGENT_MARKER" "$LOG"; then
   exit 1
 fi
 
-echo "[assert-specs-ran] ok — $PASSED specs passed (floor $FLOOR), live-agent class stayed out"
+echo "[assert-specs-ran] ok — $PASSED specs passed (floor $FLOOR) as REPORTED by the playwright reporter (text matching over $LOG, not proof they ran), live-agent class stayed out"

@@ -3,9 +3,9 @@
 #
 # ── the bug this guard exists to stop from coming back (T-bedc) ───────────────
 # The step in `bin/ci.sh` that runs go test ran a bare `"$GO" test ./...`. go
-# caches successful test
-# results keyed on the package's inputs, so on any run whose inputs hash the same
-# as a previous PASS it prints, verbatim from a real CI log:
+# caches successful test results keyed on the package's inputs, so on any run
+# whose inputs hash the same as a previous PASS it prints, verbatim from a real
+# CI log:
 #
 #     ok  	ocwarden	(cached)
 #
@@ -26,8 +26,7 @@
 #     Makefile, or a Go program is invisible to it. As of T-bedc there is no such
 #     dispatcher in the CI tree (the only go test call site anywhere is
 #     bin/ci.sh's go test step) — the "call sites found" tally below is printed
-#     so a
-#     newly-added one is at least visible in the log.
+#     so a newly-added one is at least visible in the log.
 #  2. UNTRACKED SCRIPTS. The set comes from `git ls-files`, so a dispatched but
 #     untracked script is not scanned.
 #  3. FRAGMENT ASSEMBLY / INDIRECTION. `SUB=test; go $SUB ./...`, or a wrapper

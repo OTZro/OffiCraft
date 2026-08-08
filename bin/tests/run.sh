@@ -256,8 +256,7 @@ fi
 
 # ── go test cache-defeat (T-bedc) ───────────────────────────────────────────
 # bin/ci.sh's go test step used to run a bare `go test ./...`, so go served green
-# from
-# its TEST RESULT CACHE — a real CI log contained `ok  ocwarden  (cached)`, i.e. a
+# from its TEST RESULT CACHE — a real CI log contained `ok  ocwarden  (cached)`, i.e. a
 # grid cell that certified a run which never executed (and, worse, structurally
 # hid flakes: a suite only runs on the first commit that changes its inputs).
 # `-count=1` defeats that cache; this guard pins the flag on every go test call
