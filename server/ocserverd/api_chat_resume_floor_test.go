@@ -167,6 +167,8 @@ func TestResumeRosterOmitsInsightAndOperationalFields(t *testing.T) {
 	want := map[string]bool{
 		"id": true, "name": true, "kind": true, "role_name": true,
 		"duty": true, "current_task": true, "machine": true, "presence": true,
+		"task_status": true, "waiting_reason": true,
+		"progress_done": true, "progress_total": true,
 	}
 	for key := range raw.Roster[0] {
 		if !want[key] {
@@ -331,13 +333,19 @@ func TestResumeContractorCarriesTaskTitleAndMemberDoesNot(t *testing.T) {
 	s := floorTestServer(t)
 	longTitle := strings.Repeat("務", resumeTaskTitlePreview+60)
 	if err := s.dal.PutTask(Task{
-		ID: "t-floor-1", TypeKey: "tm-x", Title: longTitle, Status: TaskStatusInProgress,
+		ID: "t-floor-1", TypeKey: "tm-x", Title: longTitle, Status: TaskStatusWaitingExternal,
 		Priority: TaskPriorityMid, ExecutorKind: TaskExecutorOutsource, ExecutorID: "ow-charlie",
-		CreatedTS: 1000, UpdatedTS: 1000,
+		WaitingReason: "等對方回覆", CreatedTS: 1000, UpdatedTS: 1000,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	taskID := "t-floor-1"
+	if err := s.dal.PutTaskStep(TaskStep{ID: "st-floor-1", TaskID: taskID, OrderIdx: 0, Name: "step one", Status: StepStatusDone}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.dal.PutTaskStep(TaskStep{ID: "st-floor-2", TaskID: taskID, OrderIdx: 1, Name: "step two", Status: StepStatusWaitingExternal, WaitingReason: "等對方回覆"}); err != nil {
+		t.Fatal(err)
+	}
 	putFloorMember(t, s, Member{ID: "ow-charlie", Name: "O-77", Kind: KindOutsource, LinkedTaskID: &taskID})
 	// ⚠️ The member below deliberately carries a task binding too — but be
 	// precise about what it buys, because the obvious claim is FALSE and was
@@ -378,6 +386,23 @@ func TestResumeContractorCarriesTaskTitleAndMemberDoesNot(t *testing.T) {
 	}
 	if contractor.Duty != "" {
 		t.Fatalf("a contractor has no role, so no duty; got %q", contractor.Duty)
+	}
+	// T-925f: the contractor's bound task's status/waiting_reason/progress ride
+	// for free off the same GetTask row that built CurrentTask, and progress
+	// comes from the roster-wide AllTaskStepProgress call.
+	if contractor.TaskStatus != TaskStatusWaitingExternal {
+		t.Fatalf("contractor task_status: want %q, got %q", TaskStatusWaitingExternal, contractor.TaskStatus)
+	}
+	if contractor.WaitingReason != "等對方回覆" {
+		t.Fatalf("contractor waiting_reason: want %q, got %q", "等對方回覆", contractor.WaitingReason)
+	}
+	if contractor.ProgressDone != 1 || contractor.ProgressTotal != 2 {
+		t.Fatalf("contractor progress: want 1/2, got %d/%d", contractor.ProgressDone, contractor.ProgressTotal)
+	}
+	// The member side stays bare (owner ruling rc-a02d8bc7fe23 / rc-6935feeb293a
+	// 選①): no task binding, so all four progress fields stay zero.
+	if member.TaskStatus != "" || member.WaitingReason != "" || member.ProgressDone != 0 || member.ProgressTotal != 0 {
+		t.Fatalf("a member must not carry task progress fields, got %+v", member)
 	}
 }
 

@@ -915,12 +915,21 @@ func (s *apiServer) resumeSnapshotParts(actor string) ([]chatMessageDTO, []resum
 //     caller's own tasks (resumeTasksFor), so the rejected variant would not
 //     introduce the scan — it would MULTIPLY an existing one by the contractor
 //     count, which is why it is still worth refusing.
+//   - ONE AllTaskStepProgress (T-925f — a contractor's progress_done/total):
+//     the same single grouped-COUNT query list_tasks already pays, called
+//     ONCE for the whole roster and read from the resulting map per
+//     contractor — never a per-contractor ListTaskSteps, which would drag
+//     back every step's Name/DoD text onto a path every agent boots through.
 func (s *apiServer) resumeFloorParts(actor string) ([]resumeRosterMemberDTO, resumeMachinesDTO, int, int, error) {
 	members, err := s.dal.ListMembersIncludingOutsource()
 	if err != nil {
 		return nil, resumeMachinesDTO{}, 0, 0, err
 	}
 	displayNames, err := s.dal.MachineDisplayNames()
+	if err != nil {
+		return nil, resumeMachinesDTO{}, 0, 0, err
+	}
+	stepProgress, err := s.dal.AllTaskStepProgress()
 	if err != nil {
 		return nil, resumeMachinesDTO{}, 0, 0, err
 	}
@@ -995,7 +1004,8 @@ func (s *apiServer) resumeFloorParts(actor string) ([]resumeRosterMemberDTO, res
 			Presence: PresenceState(m, now, online[m.ID]),
 		}
 		if m.Kind == KindOutsource {
-			row.CurrentTask = s.contractorTaskTitle(m.ID)
+			row.CurrentTask, row.TaskStatus, row.WaitingReason,
+				row.ProgressDone, row.ProgressTotal = s.contractorTaskFields(m.ID, stepProgress)
 			contractors = append(contractors, row)
 			continue
 		}
@@ -1016,21 +1026,33 @@ func (s *apiServer) resumeFloorParts(actor string) ([]resumeRosterMemberDTO, res
 	return roster, machinesBlock, rosterChars(roster), machinesChars(machinesBlock), nil
 }
 
-// contractorTaskTitle returns the TRUNCATED title of the one task a contractor
-// is bound to (owner ruling rc-a02d8bc7fe23: 正職給職責、外包給任務標題 — a
-// contractor id is minted per task, so its task title IS its duty). Any lookup
-// miss degrades to "": a contractor whose task cannot be read is still on the
-// floor and still reachable, which is what this block is for.
-func (s *apiServer) contractorTaskTitle(workerID string) string {
+// contractorTaskFields returns the TRUNCATED title of the one task a
+// contractor is bound to (owner ruling rc-a02d8bc7fe23: 正職給職責、外包給任務
+// 標題 — a contractor id is minted per task, so its task title IS its duty),
+// plus that task's status, waiting_reason, and step progress (T-925f, owner
+// ruling rc-6935feeb293a 選①). status/waiting_reason ride the SAME GetTask
+// row contractorTaskFields already loaded for the title — no extra query.
+// progress comes from stepProgress, the roster-wide map resumeFloorParts
+// built with ONE AllTaskStepProgress call; a task with no steps is simply
+// absent from that map and progress stays 0/0. Any lookup miss degrades to
+// the zero values across the board: a contractor whose task cannot be read is
+// still on the floor and still reachable, which is what this block is for.
+func (s *apiServer) contractorTaskFields(workerID string, stepProgress map[string]TaskStepProgress) (title, status, waitingReason string, progressDone, progressTotal int) {
 	w, err := s.dal.GetOutsourceWorker(workerID)
 	if err != nil || w == nil || w.TaskID == "" {
-		return ""
+		return "", "", "", 0, 0
 	}
 	t, err := s.dal.GetTask(w.TaskID)
 	if err != nil || t == nil {
-		return ""
+		return "", "", "", 0, 0
 	}
-	return truncateRunes(t.Title, resumeTaskTitlePreview)
+	title = truncateRunes(t.Title, resumeTaskTitlePreview)
+	status = t.Status
+	waitingReason = t.WaitingReason
+	if p, ok := stepProgress[t.ID]; ok {
+		progressDone, progressTotal = p.Done, p.Total
+	}
+	return title, status, waitingReason, progressDone, progressTotal
 }
 
 // dutyText is the role's own definition text, capped at resumeDutyPreview
@@ -1161,7 +1183,9 @@ func rosterChars(rows []resumeRosterMemberDTO) int {
 		n += utf8.RuneCountInString(r.ID) + utf8.RuneCountInString(r.Name) +
 			utf8.RuneCountInString(r.Kind) + utf8.RuneCountInString(r.RoleName) +
 			utf8.RuneCountInString(r.Duty) + utf8.RuneCountInString(r.CurrentTask) +
-			utf8.RuneCountInString(r.Machine) + utf8.RuneCountInString(r.Presence)
+			utf8.RuneCountInString(r.Machine) + utf8.RuneCountInString(r.Presence) +
+			utf8.RuneCountInString(r.TaskStatus) + utf8.RuneCountInString(r.WaitingReason) +
+			len(strconv.Itoa(r.ProgressDone)) + len(strconv.Itoa(r.ProgressTotal))
 	}
 	return n
 }

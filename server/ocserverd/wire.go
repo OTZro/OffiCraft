@@ -813,6 +813,18 @@ type resumeRosterMemberDTO struct {
 	// average ~99 chars and reach 147 — five untruncated contractor titles
 	// alone outweigh the entire machine block.
 	CurrentTask string `json:"current_task"`
+	// TaskStatus / WaitingReason / ProgressDone / ProgressTotal are the bound
+	// task's progress (T-925f, owner ruling rc-6935feeb293a 選①: 只補外包這一
+	// 側，正職維持現狀不帶進度— see rc-a02d8bc7fe23 above for why members stay
+	// bare). Both status and waiting_reason ride for FREE: contractorTaskFields
+	// already loads the full Task row to build CurrentTask, so no extra query
+	// buys them. progress_done/total costs exactly ONE extra query for the
+	// WHOLE roster (AllTaskStepProgress, a single grouped COUNT), never one
+	// per contractor. Members leave all four at their zero value.
+	TaskStatus    string `json:"task_status"`
+	WaitingReason string `json:"waiting_reason"`
+	ProgressDone  int    `json:"progress_done"`
+	ProgressTotal int    `json:"progress_total"`
 	// Machine is the LIVE binding (which machine this member runs on right
 	// now) — not LastMachineID (where it last landed) and not
 	// DesiredMachineID (where the owner wants it). The three are routinely
