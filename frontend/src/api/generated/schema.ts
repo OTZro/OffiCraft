@@ -2733,7 +2733,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Register a deliverable onto the task's artifact set (MCP ``add_task_artifact``; requires the executing agent — caller must be the task's executor, admin capability excepted). Append-only and repeatable: each call pins one more artifact. FILE/IMAGE artifacts reference a chat_attachment blob already uploaded via ``POST /api/chat/attachments`` (``kind=file|image`` + ``attachment_id``); LINK artifacts carry a bare URL (``kind=link`` + ``url``), no upload needed. Returns the full updated task (its ``artifacts`` folded in). Guards: 404 unknown task; 409 terminal task (a closed task's deliverables are frozen); 400 an invalid kind, a missing/blank ``attachment_id`` for file/image, a missing/blank ``url`` for link, or an ``attachment_id`` that resolves to no stored blob. */
+        /** @description Register a deliverable onto the task's artifact set (MCP ``add_task_artifact``; requires the executing agent — caller must be the task's executor, admin capability excepted). Append-only and repeatable: each call pins one more artifact. FILE/IMAGE artifacts reference a chat_attachment blob already uploaded via ``POST /api/chat/attachments`` (``kind=file|image`` + ``attachment_id``); LINK artifacts carry a bare URL (``kind=link`` + ``url``), no upload needed. Returns a BOUNDED receipt (``TaskArtifactReceiptDTO``: the new artifact's id plus the resulting count) — not the task, which used to ride back whole on a one-line pin; pull GET /api/tasks/{task_id} for the artifact list. Guards: 404 unknown task; 409 terminal task (a closed task's deliverables are frozen); 400 an invalid kind, a missing/blank ``attachment_id`` for file/image, a missing/blank ``url`` for link, or an ``attachment_id`` that resolves to no stored blob. */
         post: operations["handle_add_task_artifact_api_tasks__task_id__artifact_post"];
         delete?: never;
         options?: never;
@@ -2751,7 +2751,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** @description Un-pin one artifact from a task's set (MCP ``remove_task_artifact``). SAME permission model as add (owner ruling 2026-07-18 — the executing agent removes its OWN task's deliverables): requires the executing agent — caller must be the task's executor, admin capability (owner/admin agent) excepted. Returns the full updated task on success. The referenced chat_attachment blob is left intact (it may be shared with a chat message). SYMMETRIC with add (owner ruling 2026-07-25): a closed task's deliverable set is frozen in BOTH directions — an add-only freeze made un-pin an unrecoverable loss, since the deliverable could be taken off a closed card and never put back. Like add's, the freeze sits AFTER the permission check, so admin/owner are not exempt. Guards: 404 unknown task → 403 not the executor → 409 terminal task (a closed task's deliverables are frozen) → 404 unknown artifact → 400 the artifact belongs to a different task. */
+        /** @description Un-pin one artifact from a task's set (MCP ``remove_task_artifact``). SAME permission model as add (owner ruling 2026-07-18 — the executing agent removes its OWN task's deliverables): requires the executing agent — caller must be the task's executor, admin capability (owner/admin agent) excepted. Returns a BOUNDED receipt (``TaskArtifactReceiptDTO``: the removed artifact's id plus the resulting count) — not the task; pull GET /api/tasks/{task_id} for the artifact list. The referenced chat_attachment blob is left intact (it may be shared with a chat message). SYMMETRIC with add (owner ruling 2026-07-25): a closed task's deliverable set is frozen in BOTH directions — an add-only freeze made un-pin an unrecoverable loss, since the deliverable could be taken off a closed card and never put back. Like add's, the freeze sits AFTER the permission check, so admin/owner are not exempt. Guards: 404 unknown task → 403 not the executor → 409 terminal task (a closed task's deliverables are frozen) → 404 unknown artifact → 400 the artifact belongs to a different task. */
         delete: operations["handle_remove_task_artifact_api_tasks__task_id__artifact__artifact_id__delete"];
         options?: never;
         head?: never;
@@ -2889,7 +2889,7 @@ export interface paths {
         put?: never;
         /**
          * Submit/replace the workflow plan (done and answered-card steps are kept).
-         * @description Submit/replace the workflow plan (MCP ``submit_plan``): replaces every non-preserved step wholesale. Kept ahead of the fresh plan, in original order: done steps, already-superseded history, and steps whose latest bound reply card is answered/expired — those freeze into the ``superseded`` terminal state (T-1aea) unless the fresh plan re-lists them by name (then the live row continues — no copy). Steps holding a still-waiting card are replaced like any other. New steps open ``pending``. Closed tasks are a 409; the caller must be the task's executor (admin/owner capability excepted) — 403 otherwise.
+         * @description Submit/replace the workflow plan (MCP ``submit_plan``): replaces every non-preserved step wholesale. Kept ahead of the fresh plan, in original order: done steps, already-superseded history, and steps whose latest bound reply card is answered/expired — those freeze into the ``superseded`` terminal state (T-1aea) unless the fresh plan re-lists them by name (then the live row continues — no copy). Steps holding a still-waiting card are replaced like any other. New steps open ``pending``. Returns a BOUNDED receipt (``TaskPlanReceiptDTO``: stored step count plus leaf progress) — not the task, and not an echo of the plan the caller just sent; pull GET /api/tasks/{task_id} for the step rows. Closed tasks are a 409; the caller must be the task's executor (admin/owner capability excepted) — 403 otherwise.
          */
         post: operations["handle_submit_task_plan_api_tasks__task_id__plan_post"];
         delete?: never;
@@ -2909,7 +2909,7 @@ export interface paths {
         put?: never;
         /**
          * Set a task's priority (owner/admin agent any value; the executor any value on their own task — frozen included, T-6020).
-         * @description Priority change: ``high`` | ``mid`` | ``low`` | ``frozen`` (freeze/unfreeze ride the same knob — SPEC §3.3). The owner and an admin agent may set any value on any task; the task's own executor may set any value on their task — including ``frozen`` and the clear of a frozen task, symmetrically (T-6020, owner ruling 2026-07-26). Anyone else is a flat 403. Whoever sets ``frozen`` is recorded on the task as ``frozen_by`` and the field is cleared when the task leaves frozen. Closed tasks are a 409.
+         * @description Priority change: ``high`` | ``mid`` | ``low`` | ``frozen`` (freeze/unfreeze ride the same knob — SPEC §3.3). The owner and an admin agent may set any value on any task; the task's own executor may set any value on their task — including ``frozen`` and the clear of a frozen task, symmetrically (T-6020, owner ruling 2026-07-26). Anyone else is a flat 403. Whoever sets ``frozen`` is recorded on the task as ``frozen_by`` and the field is cleared when the task leaves frozen. Returns a BOUNDED receipt (``TaskPriorityReceiptDTO``: task id, the stored priority and ``frozen_by``) — not the task; pull GET /api/tasks/{task_id} for full detail. Closed tasks are a 409.
          */
         post: operations["handle_set_task_priority_api_tasks__task_id__priority_post"];
         delete?: never;
@@ -6454,6 +6454,44 @@ export interface components {
              * @default
              */
             url: string;
+        };
+        /**
+         * TaskArtifactReceiptDTO
+         * @description Bounded receipt returned after pinning or un-pinning ONE deliverable (T-a98d). It names the artifact the write touched and the resulting size of the set — the whole task used to ride back on a one-line pin, which no agent client could read. Fetch GET /api/tasks/{task_id} when full task detail (the artifact list included) is needed.
+         */
+        TaskArtifactReceiptDTO: {
+            /** Artifact Count */
+            artifact_count: number;
+            /** Artifact Id */
+            artifact_id: string;
+            /** Task Id */
+            task_id: string;
+        };
+        /**
+         * TaskPlanReceiptDTO
+         * @description Bounded receipt returned after submit_plan (T-a98d). The caller just sent the plan, so echoing it back was the least useful payload on the wire; these counters are what it could not know — how many steps the STORED timeline holds (kept done/superseded history included) and where the leaf progress landed. Fetch GET /api/tasks/{task_id} for the step rows themselves.
+         */
+        TaskPlanReceiptDTO: {
+            /** Progress Done */
+            progress_done: number;
+            /** Progress Total */
+            progress_total: number;
+            /** Steps Total */
+            steps_total: number;
+            /** Task Id */
+            task_id: string;
+        };
+        /**
+         * TaskPriorityReceiptDTO
+         * @description Bounded receipt returned after set_task_priority (T-a98d). ``frozen_by`` rides along because the write DERIVES it (stamped on the way into frozen, cleared on the way out), so it is the part the caller cannot predict. Fetch GET /api/tasks/{task_id} when full task detail is needed.
+         */
+        TaskPriorityReceiptDTO: {
+            /** Frozen By */
+            frozen_by: string;
+            /** Priority */
+            priority: string;
+            /** Task Id */
+            task_id: string;
         };
         /**
          * TaskArtifactInputDTO
@@ -13151,7 +13189,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskDTO"];
+                    "application/json": components["schemas"]["TaskArtifactReceiptDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */
@@ -13201,7 +13239,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskDTO"];
+                    "application/json": components["schemas"]["TaskArtifactReceiptDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */
@@ -13564,7 +13602,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskDTO"];
+                    "application/json": components["schemas"]["TaskPlanReceiptDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */
@@ -13617,7 +13655,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskDTO"];
+                    "application/json": components["schemas"]["TaskPriorityReceiptDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */

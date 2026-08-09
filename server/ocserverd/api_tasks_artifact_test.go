@@ -97,11 +97,19 @@ func TestAddLinkArtifact(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("add link: %d %s", rec.Code, rec.Body.String())
 	}
-	view := decodeBody[taskDTO](t, rec)
+	// The write answers with a bounded receipt (T-a98d), not the whole task.
+	receipt := decodeBody[taskArtifactReceiptDTO](t, rec)
+	if receipt.TaskID != task.ID || receipt.ArtifactID == "" || receipt.ArtifactCount != 1 {
+		t.Fatalf("add receipt wrong shape: %+v", receipt)
+	}
+	view := getTaskView(t, api, task.ID)
 	if len(view.Artifacts) != 1 {
 		t.Fatalf("expected 1 artifact, got %+v", view.Artifacts)
 	}
 	a := view.Artifacts[0]
+	if a.ID != receipt.ArtifactID {
+		t.Fatalf("receipt must name the artifact it pinned: %q vs %q", receipt.ArtifactID, a.ID)
+	}
 	if a.Kind != "link" || a.URL != "https://github.com/x/y/pull/123" ||
 		a.Label != "PR #123" || a.AttachmentID != "" || a.IsImage {
 		t.Fatalf("link artifact wrong shape: %+v", a)
@@ -220,13 +228,13 @@ func TestRemoveArtifactOnTerminalTaskIs409(t *testing.T) {
 	link := map[string]any{"kind": "link", "url": "https://x/pr/1"}
 
 	// Positive control: while the task is still open, un-pin works as before.
-	openArt := decodeBody[taskDTO](t, addArtifact(t, api, task.ID, link, "m-exec", "agent")).Artifacts[0].ID
+	openArt := decodeBody[taskArtifactReceiptDTO](t, addArtifact(t, api, task.ID, link, "m-exec", "agent")).ArtifactID
 	if rec := removeArtifact(t, api, task.ID, openArt, "m-exec", "agent"); rec.Code != http.StatusOK {
 		t.Fatalf("open task remove must stay 200, got %d %s", rec.Code, rec.Body.String())
 	}
 
 	// Pin one more, then close the task.
-	artID := decodeBody[taskDTO](t, addArtifact(t, api, task.ID, link, "m-exec", "agent")).Artifacts[0].ID
+	artID := decodeBody[taskArtifactReceiptDTO](t, addArtifact(t, api, task.ID, link, "m-exec", "agent")).ArtifactID
 	rec := httptest.NewRecorder()
 	api.HandleTerminateTaskApiTasksTaskIdTerminatePost(rec,
 		taskReq(t, "POST", "/x", nil, "owner", "owner"), task.ID)
@@ -254,7 +262,7 @@ func TestRemoveArtifact(t *testing.T) {
 	task := createAdHocTask(t, api, "m-exec")
 	rec := addArtifact(t, api, task.ID,
 		map[string]any{"kind": "link", "url": "https://x/pr/1"}, "m-exec", "agent")
-	artID := decodeBody[taskDTO](t, rec).Artifacts[0].ID
+	artID := decodeBody[taskArtifactReceiptDTO](t, rec).ArtifactID
 
 	// Unknown artifact → 404; wrong-task ownership → 400.
 	if rec := removeArtifact(t, api, task.ID, "ta-nope", "owner", "owner"); rec.Code != http.StatusNotFound {
@@ -264,9 +272,14 @@ func TestRemoveArtifact(t *testing.T) {
 	if rec := removeArtifact(t, api, other.ID, artID, "owner", "owner"); rec.Code != http.StatusBadRequest {
 		t.Fatalf("wrong-task remove must 400, got %d %s", rec.Code, rec.Body.String())
 	}
-	// The real un-pin removes the row.
-	if rec := removeArtifact(t, api, task.ID, artID, "owner", "owner"); rec.Code != http.StatusOK {
-		t.Fatalf("remove: %d %s", rec.Code, rec.Body.String())
+	// The real un-pin removes the row and answers with a bounded receipt.
+	rmRec := removeArtifact(t, api, task.ID, artID, "owner", "owner")
+	if rmRec.Code != http.StatusOK {
+		t.Fatalf("remove: %d %s", rmRec.Code, rmRec.Body.String())
+	}
+	receipt := decodeBody[taskArtifactReceiptDTO](t, rmRec)
+	if receipt.TaskID != task.ID || receipt.ArtifactID != artID || receipt.ArtifactCount != 0 {
+		t.Fatalf("remove receipt wrong shape: %+v", receipt)
 	}
 	if got := getTaskView(t, api, task.ID); len(got.Artifacts) != 0 {
 		t.Fatalf("artifact must be gone, got %+v", got.Artifacts)
@@ -286,7 +299,7 @@ func TestRemoveArtifactExecutorGuard(t *testing.T) {
 
 	// A different agent (not the executor, no admin capability) is a flat 403 —
 	// and the artifact must survive the rejected attempt.
-	artID := decodeBody[taskDTO](t, addArtifact(t, api, task.ID, link, "m-exec", "agent")).Artifacts[0].ID
+	artID := decodeBody[taskArtifactReceiptDTO](t, addArtifact(t, api, task.ID, link, "m-exec", "agent")).ArtifactID
 	if rec := removeArtifact(t, api, task.ID, artID, "m-other", "agent"); rec.Code != http.StatusForbidden {
 		t.Fatalf("non-executor agent must 403, got %d %s", rec.Code, rec.Body.String())
 	}
@@ -298,7 +311,7 @@ func TestRemoveArtifactExecutorGuard(t *testing.T) {
 		t.Fatalf("executor agent must remove, got %d %s", rec.Code, rec.Body.String())
 	}
 	// The owner (admin capability) removes on any task.
-	artID2 := decodeBody[taskDTO](t, addArtifact(t, api, task.ID, link, "m-exec", "agent")).Artifacts[0].ID
+	artID2 := decodeBody[taskArtifactReceiptDTO](t, addArtifact(t, api, task.ID, link, "m-exec", "agent")).ArtifactID
 	if rec := removeArtifact(t, api, task.ID, artID2, "owner", "owner"); rec.Code != http.StatusOK {
 		t.Fatalf("owner must remove, got %d %s", rec.Code, rec.Body.String())
 	}

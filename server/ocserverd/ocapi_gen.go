@@ -1853,6 +1853,13 @@ type TaskArtifactInputDTO struct {
 	Url          *string `json:"url,omitempty"`
 }
 
+// TaskArtifactReceiptDTO Bounded receipt returned after pinning or un-pinning ONE deliverable (T-a98d). It names the artifact the write touched and the resulting size of the set — the whole task used to ride back on a one-line pin, which no agent client could read. Fetch GET /api/tasks/{task_id} when full task detail (the artifact list included) is needed.
+type TaskArtifactReceiptDTO struct {
+	ArtifactCount int    `json:"artifact_count"`
+	ArtifactId    string `json:"artifact_id"`
+	TaskId        string `json:"task_id"`
+}
+
 // TaskCountDTO Open (non-terminal) task count — the tasks nav badge. “total“ (T-a3e4) is the count of ALL tasks, terminal ones included: once the list endpoint answers a status SET (“?statuses=“), an empty list no longer tells a client whether the workshop is empty or merely has nothing in those states, and 目前沒有任務 is a claim about the workshop. One grouped count, so a client never widens a list fetch just to word an empty screen.
 type TaskCountDTO struct {
 	Open int `json:"open"`
@@ -2092,12 +2099,27 @@ type TaskPlanDTO struct {
 	Steps []TaskPlanStepDTO `json:"steps"`
 }
 
+// TaskPlanReceiptDTO Bounded receipt returned after submit_plan (T-a98d). The caller just sent the plan, so echoing it back was the least useful payload on the wire; these counters are what it could not know — how many steps the STORED timeline holds (kept done/superseded history included) and where the leaf progress landed. Fetch GET /api/tasks/{task_id} for the step rows themselves.
+type TaskPlanReceiptDTO struct {
+	ProgressDone  int    `json:"progress_done"`
+	ProgressTotal int    `json:"progress_total"`
+	StepsTotal    int    `json:"steps_total"`
+	TaskId        string `json:"task_id"`
+}
+
 // TaskPlanStepDTO One planned workflow node of a submit_plan body. Parallel (fork-join) shape is validated at the write seam (400 otherwise): steps sharing a non-empty “parallel_group“ must sit consecutively and number at least two, and a gate step must not carry a “parallel_group“ (put the gate after the group's join step). Contiguity is checked over the resulting timeline, i.e. including the kept done prefix.
 type TaskPlanStepDTO struct {
 	Dod           string  `json:"dod"`
 	IsGate        *bool   `json:"is_gate,omitempty"`
 	Name          string  `json:"name"`
 	ParallelGroup *string `json:"parallel_group,omitempty"`
+}
+
+// TaskPriorityReceiptDTO Bounded receipt returned after set_task_priority (T-a98d). “frozen_by“ rides along because the write DERIVES it (stamped on the way into frozen, cleared on the way out), so it is the part the caller cannot predict. Fetch GET /api/tasks/{task_id} when full task detail is needed.
+type TaskPriorityReceiptDTO struct {
+	FrozenBy string `json:"frozen_by"`
+	Priority string `json:"priority"`
+	TaskId   string `json:"task_id"`
 }
 
 // TaskPriorityUpdateDTO Priority change: “high“ | “mid“ | “low“ | “frozen“ (freeze/unfreeze ride the same knob — SPEC §3.3). The owner and an admin agent may set any value on any task; the task's own executor may set any value on their task — frozen INCLUDED, and the clear of a frozen task is admitted for exactly the same set (T-6020: whoever may freeze may unfreeze). A caller who is none of the three is a flat 403.

@@ -914,6 +914,38 @@ type taskStepStatusReceiptDTO struct {
 	ProgressTotal int      `json:"progress_total"`
 }
 
+// taskArtifactReceiptDTO is the bounded confirmation returned after pinning or
+// un-pinning ONE deliverable (T-a98d). Same posture as taskStepStatusReceiptDTO:
+// the write answers with what the write did — the artifact it touched and the
+// resulting set size — not with the whole task. Full task detail, artifact list
+// included, remains available through get_task.
+type taskArtifactReceiptDTO struct {
+	TaskID        string `json:"task_id"`
+	ArtifactID    string `json:"artifact_id"`
+	ArtifactCount int    `json:"artifact_count"`
+}
+
+// taskPlanReceiptDTO is the bounded confirmation returned after submit_plan.
+// The caller just SENT the plan, so echoing it back is the least useful payload
+// on the wire; what it cannot know is where the stored plan landed, which is
+// what these counters say. Full task detail remains available through get_task.
+type taskPlanReceiptDTO struct {
+	TaskID        string `json:"task_id"`
+	StepsTotal    int    `json:"steps_total"`
+	ProgressDone  int    `json:"progress_done"`
+	ProgressTotal int    `json:"progress_total"`
+}
+
+// taskPriorityReceiptDTO is the bounded confirmation returned after
+// set_task_priority. frozen_by rides along because it is DERIVED by the write
+// (stamped entering frozen, cleared leaving it), so it is exactly the part the
+// caller cannot predict. Full task detail remains available through get_task.
+type taskPriorityReceiptDTO struct {
+	TaskID   string `json:"task_id"`
+	Priority string `json:"priority"`
+	FrozenBy string `json:"frozen_by"`
+}
+
 // taskStepNoteReceiptDTO is the bounded receipt for a step-note write (T-cc3e).
 // It echoes the note as STORED rather than as sent: the whole point of the
 // field is that a later session reads it back, so the write is verifiable at

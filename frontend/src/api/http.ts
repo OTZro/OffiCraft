@@ -997,17 +997,18 @@ export const httpApi: Api = {
     return toTask(wire);
   },
 
-  async setTaskPriority(id: string, priority: string): Promise<TaskView> {
-    // POST /api/tasks/{task_id}/priority {priority} -> TaskDTO. high|mid|low|
-    // frozen — freeze/unfreeze ride the same knob (spec §3.3); a closed task
-    // is a 409, an out-of-vocabulary value a 422 (both throw).
-    const wire = unwrap(
+  async setTaskPriority(id: string, priority: string): Promise<void> {
+    // POST /api/tasks/{task_id}/priority {priority} -> TaskPriorityReceiptDTO.
+    // high|mid|low|frozen — freeze/unfreeze ride the same knob (spec §3.3); a
+    // closed task is a 409, an out-of-vocabulary value a 422 (both throw).
+    // The write answers with a bounded receipt (T-a98d), not the task; the
+    // cockpit refetches, exactly as it already did.
+    unwrap(
       await client.POST("/api/tasks/{task_id}/priority", {
         params: { path: { task_id: id } },
         body: { priority },
       }),
     );
-    return toTask(wire);
   },
 
   async updateTaskDescription(
@@ -1048,17 +1049,17 @@ export const httpApi: Api = {
     return toTask(wire);
   },
 
-  async removeTaskArtifact(taskId: string, artifactId: string): Promise<TaskView> {
-    // DELETE /api/tasks/{task_id}/artifact/{artifact_id} -> TaskDTO. The owner/
-    // admin un-pin (T-3dc5); unknown task/artifact → 404, wrong-task → 400 (both
-    // throw via the client middleware). Returns the task with artifacts folded
-    // fresh; the blob itself is left intact.
-    const wire = unwrap(
+  async removeTaskArtifact(taskId: string, artifactId: string): Promise<void> {
+    // DELETE /api/tasks/{task_id}/artifact/{artifact_id} ->
+    // TaskArtifactReceiptDTO. The owner/admin un-pin (T-3dc5); unknown
+    // task/artifact → 404, wrong-task → 400 (both throw via the client
+    // middleware). The write answers with a bounded receipt (T-a98d), not the
+    // task; the caller refetches. The blob itself is left intact.
+    unwrap(
       await client.DELETE("/api/tasks/{task_id}/artifact/{artifact_id}", {
         params: { path: { task_id: taskId, artifact_id: artifactId } },
       }),
     );
-    return toTask(wire);
   },
 
   async postTaskMessage(id: string, msg: TaskMessageInput): Promise<void> {

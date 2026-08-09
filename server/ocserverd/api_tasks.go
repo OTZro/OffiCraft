@@ -336,6 +336,20 @@ func (s *apiServer) writeTask(w http.ResponseWriter, t Task) {
 	writeJSON(w, http.StatusOK, dto)
 }
 
+// writeTaskArtifactReceipt is the common tail of the two artifact writes: the
+// artifact just touched plus the resulting set size (T-a98d — these used to
+// answer with the whole task, ~80k characters for a one-line pin).
+func (s *apiServer) writeTaskArtifactReceipt(w http.ResponseWriter, t Task, artifactID string) {
+	arts, err := s.dal.ListTaskArtifacts(t.ID)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, taskArtifactReceiptDTO{
+		TaskID: t.ID, ArtifactID: artifactID, ArtifactCount: len(arts),
+	})
+}
+
 func (s *apiServer) writeTaskStepStatusReceipt(w http.ResponseWriter, t Task, step TaskStep) {
 	steps, err := s.dal.ListTaskSteps(t.ID)
 	if err != nil {
@@ -963,7 +977,9 @@ func (s *apiServer) HandleSetTaskPriorityApiTasksTaskIdPriorityPost(w http.Respo
 		return
 	}
 	s.publishTask(*t, requestTrigger(r))
-	s.writeTask(w, *t)
+	writeJSON(w, http.StatusOK, taskPriorityReceiptDTO{
+		TaskID: t.ID, Priority: t.Priority, FrozenBy: t.FrozenBy,
+	})
 }
 
 // POST /api/tasks/{task_id}/message — the task-card message box (owner ruling
@@ -2045,12 +2061,11 @@ func (s *apiServer) HandleSubmitTaskPlanApiTasksTaskIdPlanPost(w http.ResponseWr
 		internalError(w, err)
 		return
 	}
-	deps, err := s.dal.ListTaskDeps(t.ID)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, newTaskDTO(*t, steps, deps, s.replyCardStatusesForSteps(steps)))
+	done, total := TaskProgress(steps)
+	writeJSON(w, http.StatusOK, taskPlanReceiptDTO{
+		TaskID: t.ID, StepsTotal: len(steps),
+		ProgressDone: done, ProgressTotal: total,
+	})
 }
 
 // POST /api/tasks/{task_id}/duplicate — mark a task duplicated, pointing at the
@@ -2580,7 +2595,7 @@ func (s *apiServer) HandleAddTaskArtifactApiTasksTaskIdArtifactPost(w http.Respo
 	// the card's count + popover. The task row itself is unchanged (artifacts
 	// are their own rows), so updated_ts is deliberately NOT bumped.
 	s.publishTask(*t, requestTrigger(r))
-	s.writeTask(w, *t)
+	s.writeTaskArtifactReceipt(w, *t, art.ID)
 }
 
 // DELETE /api/tasks/{task_id}/artifact/{artifact_id} — un-pin one artifact (MCP
@@ -2630,7 +2645,7 @@ func (s *apiServer) HandleRemoveTaskArtifactApiTasksTaskIdArtifactArtifactIdDele
 		return
 	}
 	s.publishTask(*t, requestTrigger(r))
-	s.writeTask(w, *t)
+	s.writeTaskArtifactReceipt(w, *t, artifactId)
 }
 
 // GET /api/self/task — the outsource worker's claim (identity-locked, the

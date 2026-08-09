@@ -2352,7 +2352,7 @@ export const mockApi: Api = {
     return t;
   },
 
-  async setTaskPriority(id: string, priority: string): Promise<TaskView> {
+  async setTaskPriority(id: string, priority: string): Promise<void> {
     // Mirrors handle_set_task_priority: closed → 409; the closed high|mid|
     // low|frozen vocabulary → 422 otherwise (freeze/unfreeze ride this knob).
     // T-0786: the server also enforces executor/frozen authz rules for
@@ -2378,7 +2378,6 @@ export const mockApi: Api = {
     t.priority = priority;
     t.updatedTs = Date.now() / 1000;
     emitTopic("task");
-    return structuredClone(t);
   },
 
   async reassignTask(id: string, input: TaskReassignInput): Promise<TaskView> {
@@ -2571,7 +2570,7 @@ export const mockApi: Api = {
     return structuredClone(t);
   },
 
-  async removeTaskArtifact(taskId: string, artifactId: string): Promise<TaskView> {
+  async removeTaskArtifact(taskId: string, artifactId: string): Promise<void> {
     // Mirrors handle_remove_task_artifact (T-3dc5): the owner/admin un-pin.
     // Closed task → 409 (T-2654: the deliverable set is frozen in BOTH
     // directions, so un-pin is refused exactly like add). Unknown artifact →
@@ -2601,7 +2600,6 @@ export const mockApi: Api = {
     t.artifacts = arts.filter((a) => a.id !== artifactId);
     t.artifactCount = t.artifacts.length;
     emitTopic("task");
-    return structuredClone(t);
   },
 
   async postTaskMessage(id: string, msg: TaskMessageInput): Promise<void> {

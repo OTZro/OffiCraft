@@ -374,7 +374,8 @@ def _happy_task_step(ctx: HCtx, gate: bool = False) -> tuple[str, str]:
         headers=h,
     )
     assert r.status_code == 200, f"happy plan failed: {r.status_code} {r.text}"
-    step_id = r.json()["steps"][0]["id"]
+    # submit_plan answers with a bounded receipt (T-a98d); read the rows back.
+    step_id = ctx.client.get(f"/api/tasks/{task_id}", headers=h).json()["steps"][0]["id"]
     if gate:
         r = ctx.client.post(
             f"/api/tasks/{task_id}/steps/{step_id}/status",
@@ -396,7 +397,8 @@ def _happy_closed_task(ctx: HCtx) -> str:
         headers=h,
     )
     assert r.status_code == 200, f"happy plan failed: {r.status_code} {r.text}"
-    step_id = r.json()["steps"][0]["id"]
+    # submit_plan answers with a bounded receipt (T-a98d); read the rows back.
+    step_id = ctx.client.get(f"/api/tasks/{task_id}", headers=h).json()["steps"][0]["id"]
     for status in ("in_progress", "done"):
         r = ctx.client.post(
             f"/api/tasks/{task_id}/steps/{step_id}/status",
@@ -439,7 +441,7 @@ def _happy_task_artifact(ctx: HCtx) -> tuple[str, str]:
         headers=_auth(ctx.agent.token),
     )
     assert r.status_code == 200, f"happy artifact failed: {r.status_code} {r.text}"
-    return task_id, r.json()["artifacts"][0]["id"]
+    return task_id, r.json()["artifact_id"]
 
 
 def _happy_manual(ctx: HCtx) -> str:
@@ -1189,7 +1191,9 @@ HAPPY: dict[str, Happy] = {
     "POST /api/tasks/{task_id}/priority": Happy(
         path=lambda ctx: f"/api/tasks/{_happy_task(ctx)}/priority",
         body={"priority": "frozen"},
-        check=lambda _c, r: _expect(r, lambda d: d["priority"] == "frozen"),
+        check=lambda _c, r: _expect(
+            r, lambda d: d["priority"] == "frozen" and d["frozen_by"] == "owner"
+        ),
     ),
     "POST /api/tasks/{task_id}/message": Happy(
         path=lambda ctx: f"/api/tasks/{_happy_task(ctx)}/message",
@@ -1225,10 +1229,9 @@ HAPPY: dict[str, Happy] = {
                         {"name": "two", "dod": "d2", "is_gate": True}]},
         check=lambda _c, r: _expect(
             r,
-            lambda d: len(d["steps"]) == 2
+            lambda d: d["steps_total"] == 2
             and d["progress_total"] == 2
-            and d["steps"][1]["is_gate"] is True
-            and d["steps"][1]["reply_card_id"] == "",
+            and d["progress_done"] == 0,
         ),
     ),
     "POST /api/tasks/{task_id}/claim": Happy(
@@ -1326,26 +1329,24 @@ HAPPY: dict[str, Happy] = {
     ),
     "POST /api/tasks/{task_id}/artifact": Happy(
         # T-3dc5: the executing agent pins a deliverable. A link artifact needs
-        # no upload, so it is the lowest-friction happy body; the response folds
-        # it into the task's artifact set.
+        # no upload, so it is the lowest-friction happy body; the response is a
+        # bounded receipt naming the pinned artifact and the resulting count.
         identity="agent",
         path=lambda ctx: f"/api/tasks/{_happy_task(ctx)}/artifact",
         body={"kind": "link", "url": "https://example.com/pr/1", "label": "conf PR"},
         check=lambda _c, r: _expect(
-            r,
-            lambda d: len(d["artifacts"]) == 1
-            and d["artifacts"][0]["kind"] == "link"
-            and d["artifacts"][0]["url"] == "https://example.com/pr/1",
+            r, lambda d: d["artifact_id"] != "" and d["artifact_count"] == 1
         ),
     ),
     "DELETE /api/tasks/{task_id}/artifact/{artifact_id}": Happy(
         # T-3dc5 (owner ruling 2026-07-18): the executing agent un-pins its own
         # task's artifact — the lowest-friction identity now that remove shares
-        # add's agent+executor model. The response is the task, artifact removed.
+        # add's agent+executor model. The response is a bounded receipt naming
+        # the artifact that went and the count that is left.
         identity="agent",
         path=lambda ctx: "/api/tasks/{}/artifact/{}".format(
             *_happy_task_artifact(ctx)),
-        check=lambda _c, r: _expect(r, lambda d: d["artifacts"] == []),
+        check=lambda _c, r: _expect(r, lambda d: d["artifact_count"] == 0),
     ),
     # ── outsource panel (M3) ─────────────────────────────────────────────────
     "GET /api/outsource-workers": Happy(
