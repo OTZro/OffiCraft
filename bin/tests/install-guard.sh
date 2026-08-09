@@ -743,6 +743,193 @@ case "$OUT" in
   *) bad "macOS-15 plutil / --uninstall: expected 'program:  <unreadable>' in the refusal ($OUT)" ;;
 esac
 
+# ═══════════════════════════════════════════════════════════════════════════
+# THE sha256 GATE ON THE STANDALONE (curl | bash) PATH
+# ═══════════════════════════════════════════════════════════════════════════
+# WHAT WAS UNGUARDED. bin/install.sh's bootstrap half downloads a release tarball
+# and checksums.txt and has TWO abort branches: no entry for the asset, and a
+# digest that does not match. Nothing in bin/tests/ drove either of them —
+# release-guard.sh is about whether the RELEASE SIDE writes a correct
+# checksums.txt, which is a different claim from whether the INSTALL SIDE stops
+# when the comparison fails. A supply-chain check nobody exercises is a check
+# whose failure path has never once been observed to abort.
+#
+# WHY THESE ASSERTIONS LIVE HERE AND NOT IN bin/install.sh. A self-check written
+# inside the script it guards is satisfied by whoever deletes the gate and leaves
+# a gate-shaped line behind; this repo has already been bitten by a marker living
+# in the file it was supposed to protect. And a script cannot testify that it
+# aborts — only a caller that watches it abort can. So the oracle is out here.
+#
+# 🔴 WHAT IS PINNED, AND HOW — stated per case, because the previous version of
+# this comment claimed "no branch is matched as text, keep refusing and you pass,
+# stop refusing and you redden" and that was false in every direction.
+#   · The SPINE of each case is behavioural: the exit status, and whether the
+#     packaged installer was reached. Those hold whatever the wording is.
+#   · The MESSAGE is also pinned, deliberately. On a `curl … | bash` install the
+#     refusal text is the entire user interface of this gate — "it aborted" with
+#     an unreadable reason is a support ticket, not a protection. Consequence,
+#     stated plainly so nobody is surprised by it: REWORDING A REFUSAL REDDENS
+#     HERE EVEN THOUGH THE BEHAVIOUR IS INTACT (verified: changing only the
+#     no-entry wording gave 96 ok / 1 failed while the installer still exited 1).
+#     That is a chosen cost, and the fix is to update this file in the same edit.
+#   · NOT COVERED, known: an escape hatch keyed on an environment variable this
+#     harness does not set (`[[ -n "$OC_SKIP_SHA256" ]] && …`) is invisible here —
+#     these runs use `env -i` with a fixed list, so an invented name is simply
+#     never present. Conditionalising the gate on properties of the DOWNLOADED
+#     FILES is covered, because the cases below choose those bytes.
+#
+# HERMETIC. curl is replaced by a file-copying stub, so no network is touched and
+# the suite chooses byte-for-byte what "the release" contains. The delegated
+# packaged installer is a TRIPWIRE: if it is ever reached, the run left the
+# verification behind and started installing, which is the outcome both branches
+# exist to prevent.
+echo
+echo "install.sh sha256 gate on the standalone (curl|bash) path — hermetic"
+
+SHA_ROOT="$WORK/sha256"
+SHA_SERVE="$SHA_ROOT/serve"       # what the fake release "publishes"
+SHA_BIN="$SHA_ROOT/bin"           # curl + preflight tools, ahead of SHIMDIR
+SHA_HOME="$SHA_ROOT/home"
+SHA_ALONE="$SHA_ROOT/standalone"  # install.sh with NO siblings ⇒ IN_PACKAGE=0
+mkdir -p "$SHA_SERVE" "$SHA_BIN" "$SHA_ALONE"
+cp "$SCRIPT" "$SHA_ALONE/install.sh"
+
+# curl: serves $SHA_SERVE by basename and logs every request. Unknown asset ⇒ 22,
+# the same rc a real `curl -f` gives on a 404, so a missing file cannot be
+# mistaken for a served one.
+cat > "$SHA_BIN/curl" <<'SH'
+#!/usr/bin/env bash
+echo "curl $*" >> "$SHA_CURL_LOG"
+url=""; out=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    -*) shift ;;
+    *)  url="$1"; shift ;;
+  esac
+done
+src="$SHA_SERVE/${url##*/}"
+[[ -f "$src" ]] || exit 22
+if [[ -n "$out" ]]; then cp "$src" "$out"; else cat "$src"; fi
+exit 0
+SH
+printf '#!/usr/bin/env bash\nexit 0\n'                       > "$SHA_BIN/tmux"
+printf '#!/usr/bin/env bash\necho "9.9.9 (Claude Code)"\n'   > "$SHA_BIN/claude"
+chmod +x "$SHA_BIN/curl" "$SHA_BIN/tmux" "$SHA_BIN/claude"
+
+SHA_TAG="v9.9.9"
+SHA_ASSET="officraft-$SHA_TAG-darwin-arm64.tar.gz"
+
+# The tarball. Its packaged install.sh is the tripwire — reaching it means the
+# run got PAST verification and began installing.
+SHA_PKGSRC="$SHA_ROOT/pkgsrc/officraft-$SHA_TAG-darwin-arm64"
+mkdir -p "$SHA_PKGSRC"
+cat > "$SHA_PKGSRC/install.sh" <<'SH'
+#!/usr/bin/env bash
+echo "DELEGATED" >> "$SHA_DELEGATED"
+echo "[packaged-installer-stub] reached"
+exit 0
+SH
+(cd "$SHA_ROOT/pkgsrc" && tar -czf "$SHA_SERVE/$SHA_ASSET" "officraft-$SHA_TAG-darwin-arm64")
+SHA_GOOD="$(shasum -a 256 "$SHA_SERVE/$SHA_ASSET" | cut -d' ' -f1)"
+
+# sha_run <checksums.txt body> — drives the real bootstrap path end to end. The
+# literal ABSENT publishes no checksums.txt at all, so curl 404s on it.
+# Sets SHA_RC, SHA_OUT, SHA_DELEGATED_HITS, SHA_CURL_CALLS.
+sha_run() {
+  if [[ "$1" == "ABSENT" ]]; then
+    rm -f "$SHA_SERVE/checksums.txt"
+  else
+    printf '%s' "$1" > "$SHA_SERVE/checksums.txt"
+  fi
+  rm -rf "$SHA_HOME"; mkdir -p "$SHA_HOME/Library/LaunchAgents"
+  : > "$SHA_ROOT/.curl.log"; : > "$SHA_ROOT/.delegated"
+  SHA_OUT="$(cd "$SHA_ROOT" && env -i \
+    PATH="$SHA_BIN:$SHIMDIR:/usr/bin:/bin:/usr/sbin:/sbin" \
+    HOME="$SHA_HOME" SHIM_JOB=absent SHIM_TRIPWIRE="$SHA_ROOT/.tripwire" \
+    SHIM_STATE="$SHA_ROOT" SHIM_EXPECT_TARGET="$EXPECT_TARGET" \
+    SHA_SERVE="$SHA_SERVE" SHA_CURL_LOG="$SHA_ROOT/.curl.log" \
+    SHA_DELEGATED="$SHA_ROOT/.delegated" \
+    OC_INSTALL_TAG="$SHA_TAG" OC_INSTALL_BASE_URL="https://example.invalid/rel" \
+    bash "$SHA_ALONE/install.sh" </dev/null 2>&1)"
+  SHA_RC=$?
+  SHA_DELEGATED_HITS="$(grep -c . "$SHA_ROOT/.delegated" || true)"
+  SHA_CURL_CALLS="$(grep -c . "$SHA_ROOT/.curl.log" || true)"
+}
+
+# ── SENTINEL FIRST. Without it "everything aborts" scores a perfect run, and a
+# gate that refuses every download is not a gate, it is an outage. This is also
+# the control that proves the harness can actually get a run all the way through
+# verification: the two refusals below mean nothing if nothing ever passes.
+sha_run "$SHA_GOOD  $SHA_ASSET"
+check "sha256 sentinel: a matching digest is accepted and the run proceeds" "0" "$SHA_RC"
+case "$SHA_OUT" in
+  *"sha256 verified OK"*) ok "sha256 sentinel: verification reported OK" ;;
+  *) bad "sha256 sentinel: no 'sha256 verified OK' — the harness never reached the gate:
+$SHA_OUT" ;;
+esac
+check "sha256 sentinel: the packaged installer WAS reached (the tripwire can fire at all)" \
+  "1" "$SHA_DELEGATED_HITS"
+
+# ── BRANCH 1: checksums.txt carries no entry for this asset.
+# The digest of a DIFFERENT file, so the file is not empty and a `grep` that
+# stopped filtering by name would find something to compare against.
+sha_run "$SHA_GOOD  some-other-file.tar.gz"
+check "sha256 no-entry: an asset absent from checksums.txt ABORTS" "1" "$SHA_RC"
+case "$SHA_OUT" in
+  *"no entry for $SHA_ASSET"*) ok "sha256 no-entry: the refusal names the asset it could not find" ;;
+  *) bad "sha256 no-entry: the refusal did not name the missing asset:
+$SHA_OUT" ;;
+esac
+check "sha256 no-entry: NOTHING was installed — the packaged installer was never reached" \
+  "0" "$SHA_DELEGATED_HITS"
+
+# ── BRANCH 2: an entry exists and does not match. This is the tampered /
+# corrupted download, and it is the branch a "verify then ignore the result"
+# rewrite silently deletes while leaving branch 1 intact.
+sha_run "0000000000000000000000000000000000000000000000000000000000000000  $SHA_ASSET"
+check "sha256 mismatch: a digest that does not match ABORTS" "1" "$SHA_RC"
+case "$SHA_OUT" in
+  *"verification FAILED"*) ok "sha256 mismatch: the refusal says verification FAILED" ;;
+  *) bad "sha256 mismatch: no 'verification FAILED' in the output:
+$SHA_OUT" ;;
+esac
+case "$SHA_OUT" in
+  *"NOTHING was installed"*) ok "sha256 mismatch: the refusal states nothing was installed" ;;
+  *) bad "sha256 mismatch: the refusal does not tell the user nothing was installed:
+$SHA_OUT" ;;
+esac
+check "sha256 mismatch: NOTHING was installed — the packaged installer was never reached" \
+  "0" "$SHA_DELEGATED_HITS"
+# Positive control on the harness: a refusal reached by never downloading at all
+# (a broken stub, a wrong URL) would satisfy every assertion above for the wrong
+# reason. Both files must really have been fetched.
+check "sha256pc the mismatch run really downloaded the asset AND checksums.txt (2 curl calls)" \
+  "2" "$SHA_CURL_CALLS"
+
+# ── BRANCH 3: checksums.txt is EMPTY. Behaviourally this is the same refusal as
+# branch 1, so on its own it looks redundant — it is not. The three cases above
+# all hand the gate a NON-EMPTY list, so wrapping the whole verification in
+# `if [[ -s "$TMP/checksums.txt" ]]; then … fi` leaves every one of them passing
+# while an empty list installs unverified (measured: 97 ok / 0 failed, rc=0).
+# Whoever publishes an empty checksums.txt by accident is precisely the case a
+# release-side bug produces, and it is the one an attacker can also produce by
+# truncating a response. Emptiness must not be a way past the gate.
+sha_run ""
+check "sha256 empty list: an EMPTY checksums.txt ABORTS — an unverifiable download is not an approved one" \
+  "1" "$SHA_RC"
+check "sha256 empty list: NOTHING was installed — the packaged installer was never reached" \
+  "0" "$SHA_DELEGATED_HITS"
+
+# ── BRANCH 4: checksums.txt is not published at all. Same reasoning one step
+# earlier: skipping verification when the list cannot be FETCHED is the other
+# half of "no list means no gate", and a 404 is what a half-finished release
+# actually looks like.
+sha_run "ABSENT"
+check "sha256 absent list: a checksums.txt that 404s ABORTS" "1" "$SHA_RC"
+check "sha256 absent list: NOTHING was installed — the packaged installer was never reached" \
+  "0" "$SHA_DELEGATED_HITS"
+
 echo "install-guard tests: $PASS ok, $FAIL failed"
 [[ "$FAIL" == "0" ]] || exit 1
 exit 0
