@@ -46,14 +46,14 @@ import {
 import { navigateHash } from "../lib/hashRoute";
 import { DOC_CAP_CHARS_DEFAULTS } from "../api/docCap";
 
-/** The four adjustable document caps (T-ae38), in the order the parameters card
- * lists them: the three role-journal segments in journal order (Duty → Insight
- * → Learning), then the task manual's pair. The key IS the ServerSettingsView /
+/** The adjustable document caps (T-ae38, widened by T-30f1), in the order the
+ * parameters card lists them: the three role-journal segments in journal order
+ * (Duty → Insight → Learning), then the task manual's pair. The key IS the ServerSettingsView /
  * ServerSettingsPatch field, so the row cannot read one setting and write
  * another.
  *
  * `min` is per row and is NOT decoration: Duty's floor is its OWN shipped
- * default. Sharing the other three's floor here would make the local guard
+ * default. Sharing the other segments' floor here would make the local guard
  * reject the value the server ships with — the field would refuse its own
  * current contents. The numbers come from DOC_CAP_CHARS_DEFAULTS (docCap.ts,
  * mirroring server/ocserverd/domain.go) and are never restated: they are

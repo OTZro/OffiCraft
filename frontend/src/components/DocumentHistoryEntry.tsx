@@ -124,7 +124,7 @@ export function DocumentHistoryEntry({
   // server accepts the moment the owner raises it. `undefined` until it loads,
   // which makes the marking abstain (api/docCap.ts).
   //
-  // T-ae38: FOUR values, and which one judges this list is a property of
+  // T-ae38 (widened by T-30f1): one value PER SEGMENT, and which one judges this list is a property of
   // `kind`. Handing one number down would have judged a Duty revision by the
   // Learning cap — a 4,000-char role definition would read as restorable while
   // the server refuses it at 1,000.

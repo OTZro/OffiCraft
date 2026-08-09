@@ -155,7 +155,7 @@ export function docCapBlockedFields(
   );
 }
 
-/** WHICH of the four caps judges this kind — transcribed from the same switch
+/** WHICH cap judges this kind — transcribed from the same switch
  * in restoreDocumentHistory as CAPPED_FIELDS. `undefined` for the kinds that
  * are never refused on size, so a caller cannot accidentally judge them by
  * whichever number happened to be nearest.

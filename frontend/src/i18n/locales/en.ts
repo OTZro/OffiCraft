@@ -1313,7 +1313,7 @@ export const en: Dict = {
     // one ruler.
     docCapDuty: "Duty size cap",
     docCapDutySub:
-      "Per-role limit on the role definition. The floor is this segment's own shipped default (smaller than the other three) and the ceiling is 100000, so this can only be raised — lowering it would leave documents that are legal today able to shrink only.",
+      "Per-role limit on the role definition. The floor is this segment's own shipped default (smaller than every other segment's) and the ceiling is 100000, so this can only be raised — lowering it would leave documents that are legal today able to shrink only.",
     docCapInsight: "Insight size cap",
     docCapInsightSub:
       "Per-role limit on the insight doc. The floor is the shipped default and the ceiling is 100000, so this can only be raised.",
