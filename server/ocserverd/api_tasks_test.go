@@ -13,9 +13,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -242,6 +244,33 @@ func taskReq(t *testing.T, method, path string, body any, sub, scope string) *ht
 		context.WithValue(req.Context(), claimsContextKey, claims))
 }
 
+// assertReceiptKeys pins a bounded receipt by its EXACT top-level key set.
+//
+// It exists because decodeBody alone cannot tell a receipt from the whole task:
+// json.Unmarshal ignores unknown keys, and taskDTO happens to carry `priority`
+// and `frozen_by` at its own top level — so a handler that went back to
+// answering with the full task would fill in every field the receipt test reads
+// and the assertion would pass while the bug it guards is live. Comparing the
+// key set is the assertion that cannot be satisfied by a fatter body.
+func assertReceiptKeys(t *testing.T, rec *httptest.ResponseRecorder, want ...string) {
+	t.Helper()
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode receipt (%d %s): %v", rec.Code, rec.Body.String(), err)
+	}
+	got := make([]string, 0, len(body))
+	for k := range body {
+		got = append(got, k)
+	}
+	sort.Strings(got)
+	sorted := append([]string(nil), want...)
+	sort.Strings(sorted)
+	if strings.Join(got, ",") != strings.Join(sorted, ",") {
+		t.Fatalf("receipt must carry exactly %v, got %v (body: %s)",
+			sorted, got, rec.Body.String())
+	}
+}
+
 func decodeBody[T any](t *testing.T, rec *httptest.ResponseRecorder) T {
 	t.Helper()
 	var out T
@@ -264,7 +293,9 @@ func createAdHocTask(t *testing.T, api *apiServer, executor string) taskDTO {
 	return decodeBody[taskCreateResultDTO](t, rec).Task
 }
 
-// submitPlan replaces the plan as the executor and returns the task view.
+// submitPlan replaces the plan as the executor and returns the task view. The
+// write itself answers with a bounded receipt (T-a98d), so the steps the callers
+// below read come from get_task — the same path an agent now takes.
 func submitPlan(t *testing.T, api *apiServer, taskID, executor string, steps []map[string]any) taskDTO {
 	t.Helper()
 	rec := httptest.NewRecorder()
@@ -275,7 +306,7 @@ func submitPlan(t *testing.T, api *apiServer, taskID, executor string, steps []m
 	if rec.Code != http.StatusOK {
 		t.Fatalf("submit plan: %d %s", rec.Code, rec.Body.String())
 	}
-	return decodeBody[taskDTO](t, rec)
+	return getTaskView(t, api, taskID)
 }
 
 // reportStepStatus posts one step status report as the executor and returns the
@@ -1318,11 +1349,26 @@ func TestSubmitPlanReplacesOnlyTheNotDoneSteps(t *testing.T) {
 		}
 	}
 	// Re-plan: the done step survives (ahead), "two" is gone, fresh steps follow.
-	v2 := submitPlan(t, api, task.ID, "m-exec", []map[string]any{
-		{"name": "three", "dod": "d3"},
-		{"name": "four", "dod": "d4", "parallel_group": "g1"},
-		{"name": "five", "dod": "d5", "parallel_group": "g1"},
-	})
+	planRec := httptest.NewRecorder()
+	api.HandleSubmitTaskPlanApiTasksTaskIdPlanPost(planRec,
+		taskReq(t, "POST", "/api/tasks/"+task.ID+"/plan", map[string]any{
+			"steps": []map[string]any{
+				{"name": "three", "dod": "d3"},
+				{"name": "four", "dod": "d4", "parallel_group": "g1"},
+				{"name": "five", "dod": "d5", "parallel_group": "g1"},
+			}}, "m-exec", "agent"),
+		task.ID)
+	if planRec.Code != http.StatusOK {
+		t.Fatalf("replan: %d %s", planRec.Code, planRec.Body.String())
+	}
+	// The write answers with a bounded receipt (T-a98d) describing the STORED
+	// timeline — kept history included — not an echo of the three steps sent.
+	receipt := decodeBody[taskPlanReceiptDTO](t, planRec)
+	if receipt.TaskID != task.ID || receipt.StepsTotal != 4 ||
+		receipt.ProgressDone != 1 || receipt.ProgressTotal != 4 {
+		t.Fatalf("plan receipt wrong shape: %+v", receipt)
+	}
+	v2 := getTaskView(t, api, task.ID)
 	if len(v2.Steps) != 4 {
 		t.Fatalf("want 4 steps (1 kept + 3 fresh), got %d", len(v2.Steps))
 	}
@@ -1462,7 +1508,7 @@ func TestSubmitPlanParallelShapeGuards(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("legal fork-join: %d %s", rec.Code, rec.Body.String())
 	}
-	view := decodeBody[taskDTO](t, rec)
+	view := getTaskView(t, api, task.ID)
 	got := make([]string, 0, len(view.Steps))
 	for _, st := range view.Steps {
 		got = append(got, st.ParallelGroup)
@@ -1527,7 +1573,7 @@ func TestSubmitPlanParallelReplanValidatesTheCombinedTimeline(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("contiguous replan: %d %s", rec.Code, rec.Body.String())
 	}
-	view := decodeBody[taskDTO](t, rec)
+	view := getTaskView(t, api, task.ID)
 	if len(view.Steps) != 3 || view.Steps[0].Status != StepStatusDone ||
 		view.Steps[1].ParallelGroup != "pg" || view.Steps[2].ParallelGroup != "" {
 		t.Fatalf("replanned timeline wrong: %+v", view.Steps)
@@ -1851,6 +1897,21 @@ func TestGetMyTaskClaimsAndActivates(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed worker: %v", err)
 	}
+	plan := submitPlan(t, api, created.Task.ID, "m-exec", []map[string]any{
+		{"name": "gather", "dod": "DODONE"},
+		{"name": "build", "dod": "DODTWO", "is_gate": true},
+	})
+	for _, st := range plan.Steps {
+		if rec := writeStepNote(t, api, created.Task.ID, st.ID, "m-exec",
+			"NOTE-"+st.Name); rec.Code != http.StatusOK {
+			t.Fatalf("seed note: %d %s", rec.Code, rec.Body.String())
+		}
+	}
+	if rec := reportStepStatus(t, api, created.Task.ID, plan.Steps[0].ID,
+		"m-exec", StepStatusInProgress, ""); rec.Code != http.StatusOK {
+		t.Fatalf("start step: %d %s", rec.Code, rec.Body.String())
+	}
+
 	rec := httptest.NewRecorder()
 	api.HandleGetMyTaskApiSelfTaskGet(rec,
 		taskReq(t, "GET", "/api/self/task", nil, "ow-claimer", "agent"))
@@ -1868,6 +1929,32 @@ func TestGetMyTaskClaimsAndActivates(t *testing.T) {
 	if w.Status != WorkerStatusActive {
 		t.Fatalf("first claim must flip assigned -> active: %+v", w)
 	}
+	// The claim serves the CURRENT step whole and the rest as bare rows, with
+	// the dropped prose reported as a count (T-a98d).
+	if len(got.Task.Steps) != 2 {
+		t.Fatalf("claim must still list every step: %+v", got.Task.Steps)
+	}
+	cur, other := got.Task.Steps[0], got.Task.Steps[1]
+	if cur.DoD != "DODONE" || cur.Note != "NOTE-gather" {
+		t.Fatalf("current step must keep its full content: %+v", cur)
+	}
+	if other.DoD != "" || other.Note != "" {
+		t.Fatalf("non-current step must serve dod/note empty: %+v", other)
+	}
+	if other.ID == "" || other.Name != "build" ||
+		other.Status != StepStatusPending || other.OrderIdx != 1 {
+		t.Fatalf("non-current step must keep id/name/status/order_idx: %+v", other)
+	}
+	if !other.IsGate {
+		t.Fatalf("a gate further down the plan must stay visible: %+v", other)
+	}
+	if want := len("DODTWO") + len("NOTE-build"); got.StepsOmittedChars != want {
+		t.Fatalf("steps_omitted_chars = %d, want %d", got.StepsOmittedChars, want)
+	}
+	// get_task is deliberately NOT slimmed — the whole plan stays one pull away.
+	if full := getTaskView(t, api, created.Task.ID); full.Steps[1].DoD != "DODTWO" {
+		t.Fatalf("get_task must stay unslimmed: %+v", full.Steps[1])
+	}
 	// A caller with no worker row is a 404.
 	rec = httptest.NewRecorder()
 	api.HandleGetMyTaskApiSelfTaskGet(rec,
@@ -1875,6 +1962,80 @@ func TestGetMyTaskClaimsAndActivates(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("memberless claim must 404, got %d", rec.Code)
 	}
+}
+
+// TestSlimMyTaskSteps pins WHICH steps the get_my_task projection calls current.
+// The handler test above covers the wiring; these are the selection rules that a
+// single seeded task cannot show at once.
+func TestSlimMyTaskSteps(t *testing.T) {
+	step := func(idx int, status, dod, note string) taskStepDTO {
+		return taskStepDTO{
+			ID: "s" + status + string(rune('0'+idx)), TaskID: "t-1",
+			OrderIdx: idx, Name: "n", Status: status, DoD: dod, Note: note,
+			ParallelGroup: "g", IsGate: true, WaitingReason: "w",
+			StartedTS: 1, FinishedTS: 2,
+		}
+	}
+	fullIdx := func(steps []taskStepDTO) []int {
+		var out []int
+		for i, st := range steps {
+			if st.DoD != "" || st.Note != "" {
+				out = append(out, i)
+			}
+		}
+		return out
+	}
+	eq := func(t *testing.T, got, want []int) {
+		t.Helper()
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Fatalf("full steps = %v, want %v", got, want)
+		}
+	}
+
+	t.Run("every live step is current", func(t *testing.T) {
+		steps := []taskStepDTO{
+			step(0, StepStatusDone, "d", "n"),
+			step(1, StepStatusInProgress, "d", "n"),
+			step(2, StepStatusWaitingExternal, "d", "n"),
+			step(3, StepStatusWaitingOwner, "d", "n"),
+			step(4, StepStatusPending, "d", "n"),
+		}
+		if omitted := slimMyTaskSteps(steps); omitted != 4 {
+			t.Fatalf("omitted = %d, want 4 (the done + pending rows)", omitted)
+		}
+		eq(t, fullIdx(steps), []int{1, 2, 3})
+	})
+
+	t.Run("no live step falls back to the lowest-order pending", func(t *testing.T) {
+		steps := []taskStepDTO{
+			step(7, StepStatusPending, "d", "n"),
+			step(3, StepStatusPending, "d", "n"),
+			step(1, StepStatusDone, "d", "n"),
+		}
+		slimMyTaskSteps(steps)
+		eq(t, fullIdx(steps), []int{1})
+	})
+
+	t.Run("an all-done plan keeps nothing and counts runes", func(t *testing.T) {
+		steps := []taskStepDTO{step(0, StepStatusDone, "驗收完成", "筆記")}
+		if omitted := slimMyTaskSteps(steps); omitted != 6 {
+			t.Fatalf("omitted = %d, want 6 runes (CJK counts 1)", omitted)
+		}
+		eq(t, fullIdx(steps), nil)
+		bare := steps[0]
+		if bare.TaskID != "" || bare.StartedTS != 0 || bare.FinishedTS != 0 {
+			t.Fatalf("a slimmed row drops what the reader already has: %+v", bare)
+		}
+		if bare.ID == "" || bare.Name != "n" || bare.Status != StepStatusDone {
+			t.Fatalf("a slimmed row must keep its identity: %+v", bare)
+		}
+		// The bounded structural scalars SURVIVE the trim: the worker is told to
+		// fan out a sub-agent per parallel lane and to see an approval gate
+		// coming, and it can do neither if the projection hides the shape.
+		if bare.ParallelGroup != "g" || !bare.IsGate || bare.WaitingReason != "w" {
+			t.Fatalf("a slimmed row must keep parallel_group/is_gate/waiting_reason: %+v", bare)
+		}
+	})
 }
 
 // ── waiting_external requires a reason ───────────────────────────────────────
@@ -2507,8 +2668,12 @@ func TestSetTaskPriorityOwnerSetsEveryValueAndFansTheDelta(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("owner %s: %d %s", p, rec.Code, rec.Body.String())
 		}
-		if got := decodeBody[taskDTO](t, rec); got.Priority != p {
-			t.Fatalf("priority: want %q, got %q", p, got.Priority)
+		// The key set, not just the values: taskDTO carries priority/frozen_by
+		// too, so reading fields alone would still pass on a full-task answer.
+		assertReceiptKeys(t, rec, "task_id", "priority", "frozen_by")
+		if got := decodeBody[taskPriorityReceiptDTO](t, rec); got.Priority != p ||
+			got.TaskID != task.ID {
+			t.Fatalf("priority receipt: want %q on %s, got %+v", p, task.ID, got)
 		}
 		found := false
 		for {
@@ -2542,7 +2707,7 @@ func TestSetTaskPriorityExecutorMaySetHighMidLow(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("executor %s: %d %s", p, rec.Code, rec.Body.String())
 		}
-		if got := decodeBody[taskDTO](t, rec); got.Priority != p {
+		if got := decodeBody[taskPriorityReceiptDTO](t, rec); got.Priority != p {
 			t.Fatalf("priority: want %q, got %q", p, got.Priority)
 		}
 	}
@@ -2561,7 +2726,7 @@ func TestSetTaskPriorityExecutorFreezesAndUnfreezesSymmetrically(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("executor freeze: want 200, got %d %s", rec.Code, rec.Body.String())
 	}
-	if got := decodeBody[taskDTO](t, rec); got.Priority != TaskPriorityFrozen {
+	if got := decodeBody[taskPriorityReceiptDTO](t, rec); got.Priority != TaskPriorityFrozen {
 		t.Fatalf("priority after executor freeze: %q", got.Priority)
 	}
 	// … and back out again, by the same hand.
@@ -2569,7 +2734,7 @@ func TestSetTaskPriorityExecutorFreezesAndUnfreezesSymmetrically(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("executor unfreeze: want 200, got %d %s", rec.Code, rec.Body.String())
 	}
-	if got := decodeBody[taskDTO](t, rec); got.Priority != "high" {
+	if got := decodeBody[taskPriorityReceiptDTO](t, rec); got.Priority != "high" {
 		t.Fatalf("priority after executor unfreeze: %q", got.Priority)
 	}
 	// The owner may still cross a freeze the executor placed, and vice versa —
@@ -2604,7 +2769,7 @@ func TestSetTaskPriorityFrozenByNamesWhoFroze(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s freeze: %d %s", tc.sub, rec.Code, rec.Body.String())
 		}
-		if got := decodeBody[taskDTO](t, rec).FrozenBy; got != tc.want {
+		if got := decodeBody[taskPriorityReceiptDTO](t, rec).FrozenBy; got != tc.want {
 			t.Fatalf("%s froze it but frozen_by=%q (want %q) — the owner cannot "+
 				"tell their own 喊停 from an agent's", tc.sub, got, tc.want)
 		}
@@ -2621,7 +2786,7 @@ func TestSetTaskPriorityFrozenByNamesWhoFroze(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s unfreeze: %d %s", tc.sub, rec.Code, rec.Body.String())
 		}
-		if got := decodeBody[taskDTO](t, rec).FrozenBy; got != "" {
+		if got := decodeBody[taskPriorityReceiptDTO](t, rec).FrozenBy; got != "" {
 			t.Fatalf("%s: frozen_by=%q on a task that is no longer frozen", tc.sub, got)
 		}
 	}

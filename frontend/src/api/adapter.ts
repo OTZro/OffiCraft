@@ -1303,9 +1303,10 @@ export interface Api {
   /**
    * Owner priority change (`POST /api/tasks/{id}/priority`): `high` | `mid` |
    * `low` | `frozen` — freeze/unfreeze ride the same knob (spec §3.3). Closed
-   * tasks are a 409 (throws). Returns the task after the change.
+   * tasks are a 409 (throws). The write answers with a bounded receipt
+   * (T-a98d), so nothing is returned here — refetch, or take the SSE delta.
    */
-  setTaskPriority(id: string, priority: string): Promise<TaskView>;
+  setTaskPriority(id: string, priority: string): Promise<void>;
   /**
    * Correct one task's description (`POST /api/tasks/{id}/description`, T-e271)
    * — the ticket's own text: what the task IS (scope, origin, acceptance), as
@@ -1341,11 +1342,12 @@ export interface Api {
   /**
    * Un-pin one artifact from a task's set (`DELETE /api/tasks/{id}/artifact/
    * {artifactId}`) — the owner/admin cockpit action (T-3dc5; the executing
-   * agent PINS via MCP but does not remove). Returns the task after the
-   * removal (its `artifacts` folded fresh). Unknown task/artifact → 404,
-   * wrong-task → 400 (both throw ApiError). The referenced blob is left intact.
+   * agent PINS via MCP but does not remove). The write answers with a bounded
+   * receipt (T-a98d), so nothing is returned here — refetch, or take the SSE
+   * delta. Unknown task/artifact → 404, wrong-task → 400 (both throw
+   * ApiError). The referenced blob is left intact.
    */
-  removeTaskArtifact(taskId: string, artifactId: string): Promise<TaskView>;
+  removeTaskArtifact(taskId: string, artifactId: string): Promise<void>;
   /**
    * The task-card message box (`POST /api/tasks/{id}/message`): the server
    * posts ONE ordinary chat message owner → the task's executor with the task

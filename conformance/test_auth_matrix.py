@@ -303,7 +303,9 @@ def _matrix_task_step(ctx: Ctx, gate: bool = False) -> tuple[str, str]:
         headers=h,
     )
     assert r.status_code == 200, f"scratch plan failed: {r.status_code} {r.text}"
-    step_id = r.json()["steps"][0]["id"]
+    # submit_plan answers with a bounded receipt (T-a98d) — the rows come from
+    # the read face.
+    step_id = ctx.client.get(f"/api/tasks/{task_id}", headers=h).json()["steps"][0]["id"]
     if gate:
         # A gate can arm only on an in_progress task — report the step
         # in_progress (owner drives it via admin capability) so the task derives
@@ -353,7 +355,7 @@ def _matrix_task_artifact(ctx: Ctx) -> tuple[str, str]:
         headers={"Authorization": f"Bearer {ctx.owner_token}"},
     )
     assert r.status_code == 200, f"scratch artifact failed: {r.status_code} {r.text}"
-    return task_id, r.json()["artifacts"][0]["id"]
+    return task_id, r.json()["artifact_id"]
 
 
 def _matrix_reassigning_task(ctx: Ctx) -> str:

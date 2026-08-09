@@ -703,7 +703,8 @@ def test_expiring_a_gate_card_resumes_the_task_and_step(
         headers=h_agent,
     )
     assert r.status_code == 200, r.text
-    step_id = r.json()["steps"][0]["id"]
+    # submit_plan answers with a bounded receipt (T-a98d); read the rows back.
+    step_id = client.get(f"/api/tasks/{task_id}", headers=h_agent).json()["steps"][0]["id"]
     # Task status is DERIVED (T-9ca5): report the step in_progress so the task
     # derives in_progress — a gate can only arm on an in_progress task.
     assert client.post(
@@ -747,7 +748,8 @@ def test_closing_a_task_retires_its_waiting_card(client, owner_token, asker):
         headers=h_agent,
     )
     assert r.status_code == 200, r.text
-    step_id = r.json()["steps"][0]["id"]
+    # submit_plan answers with a bounded receipt (T-a98d); read the rows back.
+    step_id = client.get(f"/api/tasks/{task_id}", headers=h_agent).json()["steps"][0]["id"]
     # Task status is DERIVED (T-9ca5): lift the task to in_progress via the step
     # report so the gate can arm.
     assert client.post(

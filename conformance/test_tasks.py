@@ -90,9 +90,8 @@ def _step_status(client, token, task_id, step_id, status, reason=None):
 def _drive_in_progress(client, token, task_id, name="conf drive"):
     """Task status is DERIVED from steps (T-9ca5): plan one step and report it
     in_progress so the task derives to in_progress. Returns the step id."""
-    r = _plan(client, token, task_id, [{"name": name, "dod": "asserted"}])
-    assert r.status_code == 200, f"drive plan failed: {r.status_code} {r.text}"
-    step_id = r.json()["steps"][0]["id"]
+    planned = _plan_view(client, token, task_id, [{"name": name, "dod": "asserted"}])
+    step_id = planned["steps"][0]["id"]
     assert _step_status(client, token, task_id, step_id,
                         "in_progress").status_code == 200
     return step_id
@@ -109,6 +108,16 @@ def _get_task(client, token, task_id) -> dict:
     r = client.get(f"/api/tasks/{task_id}", headers=_auth(token))
     assert r.status_code == 200, r.text
     return r.json()
+
+
+def _plan_view(client, token, task_id, steps) -> dict:
+    """Submit a plan and return the STORED task view. submit_plan answers with a
+    BOUNDED receipt (T-a98d), not the plan, so the step rows come back through
+    get_task — the same path an agent takes. The receipt itself is pinned by
+    test_submit_plan_answers_with_a_bounded_receipt."""
+    r = _plan(client, token, task_id, steps)
+    assert r.status_code == 200, f"plan failed: {r.status_code} {r.text}"
+    return _get_task(client, token, task_id)
 
 
 def _open_count(client, owner_token) -> int:
@@ -145,13 +154,11 @@ def test_full_task_loop(client, owner_token, executor):
 
     # Plan: a plain step, a gate, a closing step. The task status is DERIVED —
     # it lifts off not_started when the first step is reported in_progress below.
-    r = _plan(client, executor.token, task["id"], [
+    view = _plan_view(client, executor.token, task["id"], [
         {"name": "prep", "dod": "branch green"},
         {"name": "owner approves", "dod": "explicit go", "is_gate": True},
         {"name": "ship", "dod": "deployed"},
     ])
-    assert r.status_code == 200, r.text
-    view = r.json()
     assert view["progress_total"] == 3 and view["progress_done"] == 0
     prep, gate, ship = view["steps"]
     # The announced (dashed) gate: is_gate with NO card yet.
@@ -239,10 +246,9 @@ def test_open_gate_arms_a_plain_non_gate_step(client, owner_token, executor):
     請示 — the explicit twin of create_reply_card's auto-bind. It arms the step
     (waiting_owner + bound card, task follows) WITHOUT flipping is_gate."""
     task = _create_task(client, executor, title="ad-hoc ask")["task"]
-    r = _plan(client, executor.token, task["id"],
-              [{"name": "build", "dod": "compiles"}])
-    assert r.status_code == 200, r.text
-    step = r.json()["steps"][0]
+    planned = _plan_view(client, executor.token, task["id"],
+                         [{"name": "build", "dod": "compiles"}])
+    step = planned["steps"][0]
     assert step["is_gate"] is False
     # Report the step in_progress so the task derives in_progress — a gate can
     # only arm on an in_progress (or waiting_owner) task.
@@ -341,14 +347,12 @@ def test_parallel_plan_roundtrip_and_flat_progress(client, owner_token, executor
     lanes may run in_progress AT THE SAME TIME (the server never guards step
     order), and progress counts every lane as one flattened leaf."""
     task = _create_task(client, executor, title="parallel roundtrip")["task"]
-    r = _plan(client, executor.token, task["id"], [
+    view = _plan_view(client, executor.token, task["id"], [
         {"name": "寫規格", "dod": "spec.md 落檔"},
         {"name": "寫數字 A", "dod": "a.txt 落檔", "parallel_group": "pg-1"},
         {"name": "寫數字 B", "dod": "b.txt 落檔", "parallel_group": "pg-1"},
         {"name": "加總（匯合）", "dod": "sum.txt = A+B"},
     ])
-    assert r.status_code == 200, r.text
-    view = r.json()
     assert [s["parallel_group"] for s in view["steps"]] == \
         ["", "pg-1", "pg-1", ""]
     assert view["progress_total"] == 4  # flattened: every lane is one leaf
@@ -419,12 +423,11 @@ def test_parallel_replan_checks_the_combined_timeline(
     still-pending lane right after the kept done lane is legal; re-using the
     group key further down (a split stage in the stored timeline) is 400."""
     task = _create_task(client, executor, title="parallel replan")["task"]
-    r = _plan(client, executor.token, task["id"], [
+    planned = _plan_view(client, executor.token, task["id"], [
         {"name": "lane a", "dod": "d", "parallel_group": "pg"},
         {"name": "lane b", "dod": "d", "parallel_group": "pg"},
     ])
-    assert r.status_code == 200, r.text
-    lane_a = r.json()["steps"][0]
+    lane_a = planned["steps"][0]
     assert _step_status(client, executor.token, task["id"], lane_a["id"],
                         "in_progress").status_code == 200
     assert _step_status(client, executor.token, task["id"], lane_a["id"],
@@ -439,12 +442,11 @@ def test_parallel_replan_checks_the_combined_timeline(
     assert r.status_code == 400, f"{r.status_code} {r.text}"
 
     # Legal: the rewritten lane butts against the kept done lane.
-    r = _plan(client, executor.token, task["id"], [
+    planned = _plan_view(client, executor.token, task["id"], [
         {"name": "lane b2", "dod": "d", "parallel_group": "pg"},
         {"name": "join", "dod": "d"},
     ])
-    assert r.status_code == 200, r.text
-    steps = r.json()["steps"]
+    steps = planned["steps"]
     assert [s["parallel_group"] for s in steps] == ["pg", "pg", ""]
     assert steps[0]["status"] == "done"
 
@@ -454,30 +456,28 @@ def test_replan_relisting_done_steps_keeps_them_once(client, owner_token, execut
     replan does NOT duplicate it (the 5→9 bug). The done node is preserved from
     the kept prefix; a fresh entry with the same name is that node, not a twin."""
     task = _create_task(client, executor, title="replan no-dup")["task"]
-    r = _plan(client, executor.token, task["id"], [
+    planned = _plan_view(client, executor.token, task["id"], [
         {"name": "one", "dod": "d1"},
         {"name": "two", "dod": "d2"},
     ])
-    assert r.status_code == 200, r.text
-    one = r.json()["steps"][0]
+    one = planned["steps"][0]
     assert _step_status(client, executor.token, task["id"], one["id"],
                         "in_progress").status_code == 200
     assert _step_status(client, executor.token, task["id"], one["id"],
                         "done").status_code == 200
 
     # Re-submit the WHOLE plan back — done "one" re-listed — plus a new step.
-    r = _plan(client, executor.token, task["id"], [
+    planned = _plan_view(client, executor.token, task["id"], [
         {"name": "one", "dod": "d1"},
         {"name": "two", "dod": "d2"},
         {"name": "three", "dod": "d3"},
     ])
-    assert r.status_code == 200, r.text
-    steps = r.json()["steps"]
+    steps = planned["steps"]
     names = [s["name"] for s in steps]
     assert names == ["one", "two", "three"], names
     assert names.count("one") == 1
     assert steps[0]["id"] == one["id"] and steps[0]["status"] == "done"
-    assert r.json()["progress_done"] == 1 and r.json()["progress_total"] == 3
+    assert planned["progress_done"] == 1 and planned["progress_total"] == 3
 
 
 def test_replan_keeps_answered_card_step_as_superseded(
@@ -489,12 +489,11 @@ def test_replan_keeps_answered_card_step_as_superseded(
     step whose card still WAITS is replaced as before. Superseded counts
     toward neither progress side; re-arming it is a 409."""
     task = _create_task(client, executor, title="replan keeps answered")["task"]
-    r = _plan(client, executor.token, task["id"], [
+    planned = _plan_view(client, executor.token, task["id"], [
         {"name": "ask direction", "dod": "owner answered"},
         {"name": "pending ask", "dod": "owner answered"},
     ])
-    assert r.status_code == 200, r.text
-    answered_step, waiting_step = r.json()["steps"]
+    answered_step, waiting_step = planned["steps"]
     # Lift the task to in_progress (derived) so the gates below can arm.
     assert _step_status(client, executor.token, task["id"],
                         answered_step["id"], "in_progress").status_code == 200
@@ -517,11 +516,9 @@ def test_replan_keeps_answered_card_step_as_superseded(
     assert r.status_code == 200, r.text
 
     # Replan with entirely fresh names.
-    r = _plan(client, executor.token, task["id"], [
+    body = _plan_view(client, executor.token, task["id"], [
         {"name": "build", "dod": "d"},
     ])
-    assert r.status_code == 200, r.text
-    body = r.json()
     steps = body["steps"]
     assert [s["name"] for s in steps] == ["ask direction", "build"], steps
     frozen = steps[0]
@@ -592,10 +589,9 @@ def test_create_dedupes_open_tasks_and_reopens_after_terminal(
 
 def test_terminated_task_refuses_every_agent_push(client, owner_token, executor):
     task = _create_task(client, executor)["task"]
-    r = _plan(client, executor.token, task["id"],
-              [{"name": "g", "dod": "d", "is_gate": True}])
-    assert r.status_code == 200
-    gate_id = r.json()["steps"][0]["id"]
+    planned = _plan_view(client, executor.token, task["id"],
+                         [{"name": "g", "dod": "d", "is_gate": True}])
+    gate_id = planned["steps"][0]["id"]
 
     r = client.post(f"/api/tasks/{task['id']}/terminate",
                     headers=_auth(owner_token))
@@ -658,12 +654,11 @@ def test_waiting_owner_is_a_card_lifecycle_hold(client, owner_token, executor):
     in_progress) — and with two cards on one task, the task resumes only once
     the LAST is answered (SPEC §3.2)."""
     task = _create_task(client, executor, title="hold")["task"]
-    r = _plan(client, executor.token, task["id"], [
+    planned = _plan_view(client, executor.token, task["id"], [
         {"name": "q1", "dod": "d1"},
         {"name": "q2", "dod": "d2"},
     ])
-    assert r.status_code == 200, r.text
-    s1, s2 = r.json()["steps"]
+    s1, s2 = planned["steps"]
 
     # A manual STEP report of waiting_owner is a 400, not the machine's 409.
     assert _step_status(client, executor.token, task["id"], s1["id"],
@@ -711,7 +706,7 @@ def test_reask_after_answer_re_enters_waiting(client, owner_token):
     me = AgentIdentity(member_id=member_id, token=token, role_key="")
 
     task = _create_task(client, me, title="conf reask")["task"]
-    view = _plan(client, token, task["id"], [{"name": "build", "dod": "built"}]).json()
+    view = _plan_view(client, token, task["id"], [{"name": "build", "dod": "built"}])
     step = view["steps"][0]
     assert _step_status(client, token, task["id"], step["id"],
                         "in_progress").status_code == 200
@@ -1436,9 +1431,8 @@ def test_resume_summary_carries_the_callers_open_tasks_as_light_rows(
         {"name": "approve", "dod": "owner said go", "is_gate": True},
         {"name": "ship", "dod": "deployed", "is_gate": True},
     ]
-    r = _plan(client, resumer, task["id"], plan)
-    assert r.status_code == 200, f"{r.status_code} {r.text}"
-    steps = r.json()["steps"]
+    planned = _plan_view(client, resumer, task["id"], plan)
+    steps = planned["steps"]
     assert _step_status(client, resumer, task["id"], steps[0]["id"],
                         "in_progress").status_code == 200
     assert _step_status(client, resumer, task["id"], steps[0]["id"],
@@ -1529,10 +1523,10 @@ def test_plain_card_auto_binds_the_current_step(client, owner_token):
     me = AgentIdentity(member_id=member_id, token=token, role_key="")
 
     task = _create_task(client, me, title="conf autobind")["task"]
-    view = _plan(client, token, task["id"], [
+    view = _plan_view(client, token, task["id"], [
         {"name": "recon", "dod": "understood"},
         {"name": "build", "dod": "built"},
-    ]).json()
+    ])
     build = view["steps"][1]
     assert _step_status(client, token, task["id"], build["id"],
                         "in_progress").status_code == 200
@@ -1618,11 +1612,11 @@ def test_parallel_lanes_bind_the_lowest_lane_not_a_409(client, owner_token):
     me = AgentIdentity(member_id=member_id, token=token, role_key="")
 
     task = _create_task(client, me, title="conf lanes")["task"]
-    view = _plan(client, token, task["id"], [
+    view = _plan_view(client, token, task["id"], [
         {"name": "lane-a", "dod": "a", "parallel_group": "pg"},
         {"name": "lane-b", "dod": "b", "parallel_group": "pg"},
         {"name": "lane-c", "dod": "c", "parallel_group": "pg"},
-    ]).json()
+    ])
     for st in view["steps"]:
         assert _step_status(client, token, task["id"], st["id"],
                             "in_progress").status_code == 200
@@ -1663,10 +1657,10 @@ def test_bind_none_opens_a_plain_card_whatever_the_task_state(client, owner_toke
     me = AgentIdentity(member_id=member_id, token=token, role_key="")
 
     task = _create_task(client, me, title="conf bind none")["task"]
-    view = _plan(client, token, task["id"], [
+    view = _plan_view(client, token, task["id"], [
         {"name": "early", "dod": "d1"},
         {"name": "later", "dod": "d2"},
-    ]).json()
+    ])
     early = view["steps"][0]
     for status in ("in_progress", "done"):
         assert _step_status(client, token, task["id"], early["id"],
@@ -1731,6 +1725,30 @@ def test_submit_plan_rejects_empty_dod_and_empty_plan(client, owner_token, execu
         {"name": "b", "dod": "d2"},
     ])
     assert r.status_code == 200, r.text
+
+
+def test_submit_plan_answers_with_a_bounded_receipt(client, owner_token, executor):
+    """T-a98d: submit_plan no longer echoes the whole task (~80k characters for
+    a plan the caller just wrote). It answers with the counters the caller could
+    NOT know — how many rows the STORED timeline holds (kept history included)
+    and where leaf progress landed — and nothing else."""
+    task = _create_task(client, executor, title="plan receipt")["task"]
+    view = _plan_view(client, executor.token, task["id"], [
+        {"name": "one", "dod": "d1"},
+        {"name": "two", "dod": "d2"},
+    ])
+    assert _step_status(client, executor.token, task["id"],
+                        view["steps"][0]["id"], "in_progress").status_code == 200
+    assert _step_status(client, executor.token, task["id"],
+                        view["steps"][0]["id"], "done").status_code == 200
+
+    # The replan keeps the done step ahead of the fresh one, so the receipt
+    # counts 2 rows for a one-step body — it describes the store, not the send.
+    r = _plan(client, executor.token, task["id"], [{"name": "three", "dod": "d3"}])
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body == {"task_id": task["id"], "steps_total": 2,
+                    "progress_done": 1, "progress_total": 2}, r.text
 
 
 def test_create_task_dedupes_across_field_name_case(client, owner_token, executor):
@@ -1889,11 +1907,11 @@ def test_reassign_hands_over_to_a_member_and_only_they_take_over(
     new_token = mint_member_token(client, owner_token, new_id, ttl_days=1)
 
     task = _create_task(client, executor, title="handover me")["task"]
-    plan = _plan(client, executor.token, task["id"], [
+    plan = _plan_view(client, executor.token, task["id"], [
         {"name": "finished", "dod": "d"},
         {"name": "unfinished", "dod": "d"},
         {"name": "ask owner", "dod": "d", "is_gate": True},
-    ]).json()
+    ])
     steps = plan["steps"]
     assert _step_status(client, executor.token, task["id"], steps[0]["id"], "in_progress").status_code == 200
     assert _step_status(client, executor.token, task["id"], steps[0]["id"], "done").status_code == 200

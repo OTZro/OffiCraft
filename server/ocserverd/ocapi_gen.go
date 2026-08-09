@@ -1146,9 +1146,12 @@ type MonitoringSessionDTO struct {
 // MonitoringSessionDTORuntime The runtime this session REPORTED it is running (the roster row's “actual_runtime“). Honest-empty until something reports one, and it NEVER falls back to the owner-configured “runtime“ launch setting. WAS: this served the CONFIGURED value under a comment claiming it folded through the reported telemetry, so the cell flipped the instant the owner changed the setting and a runtime switch that had not happened yet was indistinguishable from one that had (T-7f28). NOT an “AgentRuntime“ $ref like the CONFIGURED runtime fields: this one admits "" for "nothing has reported yet", and the closed two-value vocabulary has no member for that. Widening the shared enum instead would have let "unknown" leak into every owner-configured runtime field, where it is not a legal setting.
 type MonitoringSessionDTORuntime string
 
-// MyTaskDTO The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active.
+// MyTaskDTO The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active. “task.steps“ is SLIM here and here only: the CURRENT step(s) — every step in “in_progress“ / “waiting_owner“ / “waiting_external“, or, when none is live, the lowest-“order_idx“ “pending“ one — carry their full content, while every other step serves “dod“ and “note“ EMPTY and keeps the rest: “id“ / “name“ / “status“ / “order_idx“ plus the bounded structural scalars “parallel_group“ / “is_gate“ / “waiting_reason“, so the shape of the plan — which stage runs in parallel, which gate is coming, why another step is parked — survives the trim. “steps_omitted_chars“ reports how much text that dropped (the “ResumeTaskDTO.detail_chars“ move: peek the number, then pull get_task, which is unslimmed).
 type MyTaskDTO struct {
 	Manual *TaskManualDTO `json:"manual"`
+
+	// StepsOmittedChars Total runes of ``dod`` + ``note`` blanked out of the non-current steps (CJK counts 1 per character). 0 = nothing was dropped.
+	StepsOmittedChars int `json:"steps_omitted_chars"`
 
 	// Task One task (M3 任務卡): a workflow with a Definition of Done, executed by a roster member or an anonymous outsource worker. ``task_no`` is the display number derived from the id (never a lookup key). ``status`` is DERIVED from the steps (not agent-reported): the work states not_started/in_progress/waiting_owner/waiting_external plus the terminals done/terminated/duplicated. ``reassigning`` is NO LONGER a status — it is the orthogonal ``lock`` field (the owner/admin handover hold, cleared by the claim action; see ``POST /api/tasks/{task_id}/reassign``); ``priority`` includes ``frozen`` (pause-pushing — a priority, not a status). ``executor_kind='outsource'`` with an empty ``executor_id`` is the transient unassigned state. ``closed_ts`` is null while open. ``deps`` are the blocking task ids (display markers, never a status change); ``progress_done``/``progress_total`` count step leaves (``superseded`` replan history counts toward neither side). ``closeout_reported`` flips true once the executor reports the close-out follow-ups done (``report_task_closeout``; terminal tasks only). ``creator_id`` is the verified token sub of the task's creator (a member id, an outsource worker id, or the literal "owner"); "" on rows created before the column existed. ``duplicate_of`` is the id of the ORIGINAL task this one duplicates — non-empty ONLY while ``status='duplicated'`` (MCP ``mark_duplicate``); the graph is depth-1 by construction so the cockpit link always resolves in one hop.
 	Task TaskDTO `json:"task"`
@@ -1850,6 +1853,13 @@ type TaskArtifactInputDTO struct {
 	Url          *string `json:"url,omitempty"`
 }
 
+// TaskArtifactReceiptDTO Bounded receipt returned after pinning or un-pinning ONE deliverable (T-a98d). It names the artifact the write touched and the resulting size of the set — the whole task used to ride back on a one-line pin, which no agent client could read. Fetch GET /api/tasks/{task_id} when full task detail (the artifact list included) is needed.
+type TaskArtifactReceiptDTO struct {
+	ArtifactCount int    `json:"artifact_count"`
+	ArtifactId    string `json:"artifact_id"`
+	TaskId        string `json:"task_id"`
+}
+
 // TaskCountDTO Open (non-terminal) task count — the tasks nav badge. “total“ (T-a3e4) is the count of ALL tasks, terminal ones included: once the list endpoint answers a status SET (“?statuses=“), an empty list no longer tells a client whether the workshop is empty or merely has nothing in those states, and 目前沒有任務 is a claim about the workshop. One grouped count, so a client never widens a list fetch just to word an empty screen.
 type TaskCountDTO struct {
 	Open int `json:"open"`
@@ -2089,12 +2099,27 @@ type TaskPlanDTO struct {
 	Steps []TaskPlanStepDTO `json:"steps"`
 }
 
+// TaskPlanReceiptDTO Bounded receipt returned after submit_plan (T-a98d). The caller just sent the plan, so echoing it back was the least useful payload on the wire; these counters are what it could not know — how many steps the STORED timeline holds (kept done/superseded history included) and where the leaf progress landed. Fetch GET /api/tasks/{task_id} for the step rows themselves.
+type TaskPlanReceiptDTO struct {
+	ProgressDone  int    `json:"progress_done"`
+	ProgressTotal int    `json:"progress_total"`
+	StepsTotal    int    `json:"steps_total"`
+	TaskId        string `json:"task_id"`
+}
+
 // TaskPlanStepDTO One planned workflow node of a submit_plan body. Parallel (fork-join) shape is validated at the write seam (400 otherwise): steps sharing a non-empty “parallel_group“ must sit consecutively and number at least two, and a gate step must not carry a “parallel_group“ (put the gate after the group's join step). Contiguity is checked over the resulting timeline, i.e. including the kept done prefix.
 type TaskPlanStepDTO struct {
 	Dod           string  `json:"dod"`
 	IsGate        *bool   `json:"is_gate,omitempty"`
 	Name          string  `json:"name"`
 	ParallelGroup *string `json:"parallel_group,omitempty"`
+}
+
+// TaskPriorityReceiptDTO Bounded receipt returned after set_task_priority (T-a98d). “frozen_by“ rides along because the write DERIVES it (stamped on the way into frozen, cleared on the way out), so it is the part the caller cannot predict. Fetch GET /api/tasks/{task_id} when full task detail is needed.
+type TaskPriorityReceiptDTO struct {
+	FrozenBy string `json:"frozen_by"`
+	Priority string `json:"priority"`
+	TaskId   string `json:"task_id"`
 }
 
 // TaskPriorityUpdateDTO Priority change: “high“ | “mid“ | “low“ | “frozen“ (freeze/unfreeze ride the same knob — SPEC §3.3). The owner and an admin agent may set any value on any task; the task's own executor may set any value on their task — frozen INCLUDED, and the clear of a frozen task is admitted for exactly the same set (T-6020: whoever may freeze may unfreeze). A caller who is none of the three is a flat 403.
@@ -2406,6 +2431,7 @@ type HandleListReplyCardsApiReplyCardsGet200JSONResponseBody struct {
 
 // HandleListTaskManualsApiTaskManualsGetParams defines parameters for HandleListTaskManualsApiTaskManualsGet.
 type HandleListTaskManualsApiTaskManualsGetParams struct {
+	// View ``list`` = the LIGHT row: type_key / display_name / purpose / updated_ts plus the SIZES of the omitted text (``sop_md_chars``, ``learnings_chars``, ``cap_chars``), with sop_md and learnings served empty and fields/assignee empty. Any other value, or omitting it, keeps the DEFAULT: the full manual of every type, SOP and learnings included. Reach for ``list`` whenever you are matching or choosing a type rather than executing one — the two answers differ by orders of magnitude in size, and the light row still carries the sizes, so you can see what you skipped and fetch just that type with get_task_manual.
 	View *string `form:"view,omitempty" json:"view,omitempty"`
 }
 

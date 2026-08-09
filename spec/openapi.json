@@ -2875,7 +2875,7 @@
         "type": "object"
       },
       "MyTaskDTO": {
-        "description": "The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active.",
+        "description": "The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active. ``task.steps`` is SLIM here and here only: the CURRENT step(s) — every step in ``in_progress`` / ``waiting_owner`` / ``waiting_external``, or, when none is live, the lowest-``order_idx`` ``pending`` one — carry their full content, while every other step serves ``dod`` and ``note`` EMPTY and keeps the rest: ``id`` / ``name`` / ``status`` / ``order_idx`` plus the bounded structural scalars ``parallel_group`` / ``is_gate`` / ``waiting_reason``, so the shape of the plan — which stage runs in parallel, which gate is coming, why another step is parked — survives the trim. ``steps_omitted_chars`` reports how much text that dropped (the ``ResumeTaskDTO.detail_chars`` move: peek the number, then pull get_task, which is unslimmed).",
         "properties": {
           "manual": {
             "anyOf": [
@@ -2888,13 +2888,19 @@
             ],
             "title": "Manual"
           },
+          "steps_omitted_chars": {
+            "description": "Total runes of ``dod`` + ``note`` blanked out of the non-current steps (CJK counts 1 per character). 0 = nothing was dropped.",
+            "title": "Steps Omitted Chars",
+            "type": "integer"
+          },
           "task": {
             "$ref": "#/components/schemas/TaskDTO"
           }
         },
         "required": [
           "task",
-          "manual"
+          "manual",
+          "steps_omitted_chars"
         ],
         "title": "MyTaskDTO",
         "additionalProperties": false,
@@ -4761,6 +4767,43 @@
           "kind"
         ],
         "title": "TaskArtifactDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "TaskArtifactReceiptDTO": {
+        "description": "Bounded receipt returned after pinning or un-pinning ONE deliverable (T-a98d). It names the artifact the write touched and the resulting size of the set — the whole task used to ride back on a one-line pin, which no agent client could read. Fetch GET /api/tasks/{task_id} when full task detail (the artifact list included) is needed.",
+        "properties": {
+          "artifact_count": {"title": "Artifact Count", "type": "integer"},
+          "artifact_id": {"title": "Artifact Id", "type": "string"},
+          "task_id": {"title": "Task Id", "type": "string"}
+        },
+        "required": ["task_id", "artifact_id", "artifact_count"],
+        "title": "TaskArtifactReceiptDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "TaskPlanReceiptDTO": {
+        "description": "Bounded receipt returned after submit_plan (T-a98d). The caller just sent the plan, so echoing it back was the least useful payload on the wire; these counters are what it could not know — how many steps the STORED timeline holds (kept done/superseded history included) and where the leaf progress landed. Fetch GET /api/tasks/{task_id} for the step rows themselves.",
+        "properties": {
+          "progress_done": {"title": "Progress Done", "type": "integer"},
+          "progress_total": {"title": "Progress Total", "type": "integer"},
+          "steps_total": {"title": "Steps Total", "type": "integer"},
+          "task_id": {"title": "Task Id", "type": "string"}
+        },
+        "required": ["task_id", "steps_total", "progress_done", "progress_total"],
+        "title": "TaskPlanReceiptDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "TaskPriorityReceiptDTO": {
+        "description": "Bounded receipt returned after set_task_priority (T-a98d). ``frozen_by`` rides along because the write DERIVES it (stamped on the way into frozen, cleared on the way out), so it is the part the caller cannot predict. Fetch GET /api/tasks/{task_id} when full task detail is needed.",
+        "properties": {
+          "frozen_by": {"title": "Frozen By", "type": "string"},
+          "priority": {"title": "Priority", "type": "string"},
+          "task_id": {"title": "Task Id", "type": "string"}
+        },
+        "required": ["task_id", "priority", "frozen_by"],
+        "title": "TaskPriorityReceiptDTO",
         "additionalProperties": false,
         "type": "object"
       },
@@ -12418,7 +12461,7 @@
     },
     "/api/self/task": {
       "get": {
-        "description": "The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active. A caller with no bound worker row (any roster member included) is a 404.",
+        "description": "The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active. A caller with no bound worker row (any roster member included) is a 404. ``task.steps`` is SLIM here and here only: the CURRENT step(s) — every step in ``in_progress`` / ``waiting_owner`` / ``waiting_external``, or, when none is live, the lowest-``order_idx`` ``pending`` one — carry their full content, while every other step serves ``dod`` and ``note`` EMPTY and keeps the rest: ``id`` / ``name`` / ``status`` / ``order_idx`` plus the bounded structural scalars ``parallel_group`` / ``is_gate`` / ``waiting_reason``, so the shape of the plan — which stage runs in parallel, which gate is coming, why another step is parked — survives the trim. ``steps_omitted_chars`` reports how much text that dropped (the ``ResumeTaskDTO.detail_chars`` move: peek the number, then pull get_task, which is unslimmed).",
         "operationId": "handle_get_my_task_api_self_task_get",
         "responses": {
           "200": {
@@ -12632,10 +12675,11 @@
     },
     "/api/task-manuals": {
       "get": {
-        "description": "List task manuals (the 設定 › 任務手冊 cards).",
+        "description": "List task manuals (the 設定 › 任務手冊 cards). Answers with the FULL manual of every type by default — every ``sop_md`` and every ``learnings`` blob in one response, which is measured in six figures of characters once a few types are authored. Pass ``view=list`` for the light row instead (T-ec2c) and pull the one manual you need with get_task_manual.",
         "operationId": "handle_list_task_manuals_api_task_manuals_get",
         "parameters": [
           {
+            "description": "``list`` = the LIGHT row: type_key / display_name / purpose / updated_ts plus the SIZES of the omitted text (``sop_md_chars``, ``learnings_chars``, ``cap_chars``), with sop_md and learnings served empty and fields/assignee empty. Any other value, or omitting it, keeps the DEFAULT: the full manual of every type, SOP and learnings included. Reach for ``list`` whenever you are matching or choosing a type rather than executing one — the two answers differ by orders of magnitude in size, and the light row still carries the sizes, so you can see what you skipped and fetch just that type with get_task_manual.",
             "in": "query",
             "name": "view",
             "required": false,
@@ -13384,7 +13428,7 @@
     },
     "/api/tasks/{task_id}/artifact": {
       "post": {
-        "description": "Register a deliverable onto the task's artifact set (MCP ``add_task_artifact``; requires the executing agent — caller must be the task's executor, admin capability excepted). Append-only and repeatable: each call pins one more artifact. FILE/IMAGE artifacts reference a chat_attachment blob already uploaded via ``POST /api/chat/attachments`` (``kind=file|image`` + ``attachment_id``); LINK artifacts carry a bare URL (``kind=link`` + ``url``), no upload needed. Returns the full updated task (its ``artifacts`` folded in). Guards: 404 unknown task; 409 terminal task (a closed task's deliverables are frozen); 400 an invalid kind, a missing/blank ``attachment_id`` for file/image, a missing/blank ``url`` for link, or an ``attachment_id`` that resolves to no stored blob.",
+        "description": "Register a deliverable onto the task's artifact set (MCP ``add_task_artifact``; requires the executing agent — caller must be the task's executor, admin capability excepted). Append-only and repeatable: each call pins one more artifact. FILE/IMAGE artifacts reference a chat_attachment blob already uploaded via ``POST /api/chat/attachments`` (``kind=file|image`` + ``attachment_id``); LINK artifacts carry a bare URL (``kind=link`` + ``url``), no upload needed. Returns a BOUNDED receipt (``TaskArtifactReceiptDTO``: the new artifact's id plus the resulting count) — not the task, which used to ride back whole on a one-line pin; pull GET /api/tasks/{task_id} for the artifact list. Guards: 404 unknown task; 409 terminal task (a closed task's deliverables are frozen); 400 an invalid kind, a missing/blank ``attachment_id`` for file/image, a missing/blank ``url`` for link, or an ``attachment_id`` that resolves to no stored blob.",
         "operationId": "handle_add_task_artifact_api_tasks__task_id__artifact_post",
         "parameters": [
           {
@@ -13412,7 +13456,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TaskDTO"
+                  "$ref": "#/components/schemas/TaskArtifactReceiptDTO"
                 }
               }
             },
@@ -13453,7 +13497,7 @@
     },
     "/api/tasks/{task_id}/artifact/{artifact_id}": {
       "delete": {
-        "description": "Un-pin one artifact from a task's set (MCP ``remove_task_artifact``). SAME permission model as add (owner ruling 2026-07-18 — the executing agent removes its OWN task's deliverables): requires the executing agent — caller must be the task's executor, admin capability (owner/admin agent) excepted. Returns the full updated task on success. The referenced chat_attachment blob is left intact (it may be shared with a chat message). SYMMETRIC with add (owner ruling 2026-07-25): a closed task's deliverable set is frozen in BOTH directions — an add-only freeze made un-pin an unrecoverable loss, since the deliverable could be taken off a closed card and never put back. Like add's, the freeze sits AFTER the permission check, so admin/owner are not exempt. Guards: 404 unknown task → 403 not the executor → 409 terminal task (a closed task's deliverables are frozen) → 404 unknown artifact → 400 the artifact belongs to a different task.",
+        "description": "Un-pin one artifact from a task's set (MCP ``remove_task_artifact``). SAME permission model as add (owner ruling 2026-07-18 — the executing agent removes its OWN task's deliverables): requires the executing agent — caller must be the task's executor, admin capability (owner/admin agent) excepted. Returns a BOUNDED receipt (``TaskArtifactReceiptDTO``: the removed artifact's id plus the resulting count) — not the task; pull GET /api/tasks/{task_id} for the artifact list. The referenced chat_attachment blob is left intact (it may be shared with a chat message). SYMMETRIC with add (owner ruling 2026-07-25): a closed task's deliverable set is frozen in BOTH directions — an add-only freeze made un-pin an unrecoverable loss, since the deliverable could be taken off a closed card and never put back. Like add's, the freeze sits AFTER the permission check, so admin/owner are not exempt. Guards: 404 unknown task → 403 not the executor → 409 terminal task (a closed task's deliverables are frozen) → 404 unknown artifact → 400 the artifact belongs to a different task.",
         "operationId": "handle_remove_task_artifact_api_tasks__task_id__artifact__artifact_id__delete",
         "parameters": [
           {
@@ -13480,7 +13524,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TaskDTO"
+                  "$ref": "#/components/schemas/TaskArtifactReceiptDTO"
                 }
               }
             },
@@ -13921,7 +13965,7 @@
     },
     "/api/tasks/{task_id}/plan": {
       "post": {
-        "description": "Submit/replace the workflow plan (MCP ``submit_plan``): replaces every non-preserved step wholesale. Kept ahead of the fresh plan, in original order: done steps, already-superseded history, and steps whose latest bound reply card is answered/expired — those freeze into the ``superseded`` terminal state (T-1aea) unless the fresh plan re-lists them by name (then the live row continues — no copy). Steps holding a still-waiting card are replaced like any other. New steps open ``pending``. Closed tasks are a 409; the caller must be the task's executor (admin/owner capability excepted) — 403 otherwise.",
+        "description": "Submit/replace the workflow plan (MCP ``submit_plan``): replaces every non-preserved step wholesale. Kept ahead of the fresh plan, in original order: done steps, already-superseded history, and steps whose latest bound reply card is answered/expired — those freeze into the ``superseded`` terminal state (T-1aea) unless the fresh plan re-lists them by name (then the live row continues — no copy). Steps holding a still-waiting card are replaced like any other. New steps open ``pending``. Returns a BOUNDED receipt (``TaskPlanReceiptDTO``: stored step count plus leaf progress) — not the task, and not an echo of the plan the caller just sent; pull GET /api/tasks/{task_id} for the step rows. Closed tasks are a 409; the caller must be the task's executor (admin/owner capability excepted) — 403 otherwise.",
         "operationId": "handle_submit_task_plan_api_tasks__task_id__plan_post",
         "parameters": [
           {
@@ -13949,7 +13993,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TaskDTO"
+                  "$ref": "#/components/schemas/TaskPlanReceiptDTO"
                 }
               }
             },
@@ -13991,7 +14035,7 @@
     },
     "/api/tasks/{task_id}/priority": {
       "post": {
-        "description": "Priority change: ``high`` | ``mid`` | ``low`` | ``frozen`` (freeze/unfreeze ride the same knob — SPEC §3.3). The owner and an admin agent may set any value on any task; the task's own executor may set any value on their task — including ``frozen`` and the clear of a frozen task, symmetrically (T-6020, owner ruling 2026-07-26). Anyone else is a flat 403. Whoever sets ``frozen`` is recorded on the task as ``frozen_by`` and the field is cleared when the task leaves frozen. Closed tasks are a 409.",
+        "description": "Priority change: ``high`` | ``mid`` | ``low`` | ``frozen`` (freeze/unfreeze ride the same knob — SPEC §3.3). The owner and an admin agent may set any value on any task; the task's own executor may set any value on their task — including ``frozen`` and the clear of a frozen task, symmetrically (T-6020, owner ruling 2026-07-26). Anyone else is a flat 403. Whoever sets ``frozen`` is recorded on the task as ``frozen_by`` and the field is cleared when the task leaves frozen. Returns a BOUNDED receipt (``TaskPriorityReceiptDTO``: task id, the stored priority and ``frozen_by``) — not the task; pull GET /api/tasks/{task_id} for full detail. Closed tasks are a 409.",
         "operationId": "handle_set_task_priority_api_tasks__task_id__priority_post",
         "parameters": [
           {
@@ -14019,7 +14063,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TaskDTO"
+                  "$ref": "#/components/schemas/TaskPriorityReceiptDTO"
                 }
               }
             },

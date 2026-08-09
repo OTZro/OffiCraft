@@ -914,6 +914,38 @@ type taskStepStatusReceiptDTO struct {
 	ProgressTotal int      `json:"progress_total"`
 }
 
+// taskArtifactReceiptDTO is the bounded confirmation returned after pinning or
+// un-pinning ONE deliverable (T-a98d). Same posture as taskStepStatusReceiptDTO:
+// the write answers with what the write did — the artifact it touched and the
+// resulting set size — not with the whole task. Full task detail, artifact list
+// included, remains available through get_task.
+type taskArtifactReceiptDTO struct {
+	TaskID        string `json:"task_id"`
+	ArtifactID    string `json:"artifact_id"`
+	ArtifactCount int    `json:"artifact_count"`
+}
+
+// taskPlanReceiptDTO is the bounded confirmation returned after submit_plan.
+// The caller just SENT the plan, so echoing it back is the least useful payload
+// on the wire; what it cannot know is where the stored plan landed, which is
+// what these counters say. Full task detail remains available through get_task.
+type taskPlanReceiptDTO struct {
+	TaskID        string `json:"task_id"`
+	StepsTotal    int    `json:"steps_total"`
+	ProgressDone  int    `json:"progress_done"`
+	ProgressTotal int    `json:"progress_total"`
+}
+
+// taskPriorityReceiptDTO is the bounded confirmation returned after
+// set_task_priority. frozen_by rides along because it is DERIVED by the write
+// (stamped entering frozen, cleared leaving it), so it is exactly the part the
+// caller cannot predict. Full task detail remains available through get_task.
+type taskPriorityReceiptDTO struct {
+	TaskID   string `json:"task_id"`
+	Priority string `json:"priority"`
+	FrozenBy string `json:"frozen_by"`
+}
+
 // taskStepNoteReceiptDTO is the bounded receipt for a step-note write (T-cc3e).
 // It echoes the note as STORED rather than as sent: the whole point of the
 // field is that a later session reads it back, so the write is verifiable at
@@ -1311,9 +1343,75 @@ type outsourceWorkerProjection struct {
 	typeDisplay func(string) string
 }
 
+// myTaskDTO is the outsource worker's claim (get_my_task). Its task carries the
+// SLIM step projection (slimMyTaskSteps): full content for the current step(s)
+// only, id/name/status/order_idx for the rest. steps_omitted_chars reports what
+// that projection dropped — the resumeTaskDTO.detail_chars move: an omission is
+// served as a NUMBER so the caller can peek-then-decide (get_task still serves
+// every step in full).
 type myTaskDTO struct {
-	Task   taskDTO        `json:"task"`
-	Manual *taskManualDTO `json:"manual"` // null for an ad-hoc task
+	Task              taskDTO        `json:"task"`
+	Manual            *taskManualDTO `json:"manual"` // null for an ad-hoc task
+	StepsOmittedChars int            `json:"steps_omitted_chars"`
+}
+
+// slimMyTaskSteps trims steps IN PLACE to the get_my_task projection and returns
+// the number of runes (CJK counts 1, not 3) of dod + note it dropped.
+//
+// "Current" is every step in a live status — in_progress / waiting_owner /
+// waiting_external — because a parallel group can have several at once and the
+// worker needs all of them. With none live (a fresh plan), the lowest-order_idx
+// pending step is what the worker is about to pick up, so that one is current.
+//
+// What a non-current row still carries is decided by SIZE, not by tidiness.
+// dod and note are the whole reason this projection exists (step notes alone
+// were 42.7% of a 100k-character response), so they go. parallel_group, is_gate
+// and waiting_reason are bounded scalars — a few bytes each — and each one
+// answers a question the worker is INSTRUCTED to ask of the plan as a whole:
+// am I inside a parallel stage (the SOP says fan out a sub-agent per lane),
+// is there an approval gate waiting further down (the SOP says see it coming,
+// not discover it), and why is that other step parked. Blanking them buys
+// nothing measurable and removes behaviour, so they stay on every row.
+func slimMyTaskSteps(steps []taskStepDTO) int {
+	current := map[int]bool{}
+	for i, st := range steps {
+		switch st.Status {
+		case StepStatusInProgress, StepStatusWaitingOwner, StepStatusWaitingExternal:
+			current[i] = true
+		}
+	}
+	if len(current) == 0 {
+		next := -1
+		for i, st := range steps {
+			if st.Status != StepStatusPending {
+				continue
+			}
+			if next < 0 || st.OrderIdx < steps[next].OrderIdx {
+				next = i
+			}
+		}
+		if next >= 0 {
+			current[next] = true
+		}
+	}
+	omitted := 0
+	for i := range steps {
+		if current[i] {
+			continue
+		}
+		omitted += utf8.RuneCountInString(steps[i].DoD) +
+			utf8.RuneCountInString(steps[i].Note)
+		steps[i] = taskStepDTO{
+			ID:            steps[i].ID,
+			OrderIdx:      steps[i].OrderIdx,
+			Name:          steps[i].Name,
+			Status:        steps[i].Status,
+			ParallelGroup: steps[i].ParallelGroup,
+			IsGate:        steps[i].IsGate,
+			WaitingReason: steps[i].WaitingReason,
+		}
+	}
+	return omitted
 }
 
 // newTaskStepDTO projects one step row onto the wire. cardStatus maps a bound

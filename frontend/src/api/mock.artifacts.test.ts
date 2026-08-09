@@ -77,7 +77,10 @@ describe("mock task artifacts", () => {
     __injectMockTask(
       mkTask({ artifacts: [mkArtifact({ id: "ta-1" }), mkArtifact({ id: "ta-2" })] }),
     );
-    const after = await mockApi.removeTaskArtifact("task-art", "ta-1");
+    await mockApi.removeTaskArtifact("task-art", "ta-1");
+    // The write itself is a bounded receipt (T-a98d), so the fresh set is read
+    // back the way the cockpit reads it.
+    const after = await mockApi.getTask("task-art");
     expect(after.artifacts?.map((a) => a.id)).toEqual(["ta-2"]);
     expect(after.artifactCount).toBe(1);
   });
