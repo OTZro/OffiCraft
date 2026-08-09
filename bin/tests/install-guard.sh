@@ -758,9 +758,25 @@ esac
 # inside the script it guards is satisfied by whoever deletes the gate and leaves
 # a gate-shaped line behind; this repo has already been bitten by a marker living
 # in the file it was supposed to protect. And a script cannot testify that it
-# aborts — only a caller that watches it abort can. So the oracle is out here,
-# and it is BEHAVIOURAL: no branch is matched as text, so any rewrite that keeps
-# refusing passes and any rewrite that stops refusing reddens.
+# aborts — only a caller that watches it abort can. So the oracle is out here.
+#
+# 🔴 WHAT IS PINNED, AND HOW — stated per case, because the previous version of
+# this comment claimed "no branch is matched as text, keep refusing and you pass,
+# stop refusing and you redden" and that was false in every direction.
+#   · The SPINE of each case is behavioural: the exit status, and whether the
+#     packaged installer was reached. Those hold whatever the wording is.
+#   · The MESSAGE is also pinned, deliberately. On a `curl … | bash` install the
+#     refusal text is the entire user interface of this gate — "it aborted" with
+#     an unreadable reason is a support ticket, not a protection. Consequence,
+#     stated plainly so nobody is surprised by it: REWORDING A REFUSAL REDDENS
+#     HERE EVEN THOUGH THE BEHAVIOUR IS INTACT (verified: changing only the
+#     no-entry wording gave 96 ok / 1 failed while the installer still exited 1).
+#     That is a chosen cost, and the fix is to update this file in the same edit.
+#   · NOT COVERED, known: an escape hatch keyed on an environment variable this
+#     harness does not set (`[[ -n "$OC_SKIP_SHA256" ]] && …`) is invisible here —
+#     these runs use `env -i` with a fixed list, so an invented name is simply
+#     never present. Conditionalising the gate on properties of the DOWNLOADED
+#     FILES is covered, because the cases below choose those bytes.
 #
 # HERMETIC. curl is replaced by a file-copying stub, so no network is touched and
 # the suite chooses byte-for-byte what "the release" contains. The delegated
@@ -817,10 +833,15 @@ SH
 (cd "$SHA_ROOT/pkgsrc" && tar -czf "$SHA_SERVE/$SHA_ASSET" "officraft-$SHA_TAG-darwin-arm64")
 SHA_GOOD="$(shasum -a 256 "$SHA_SERVE/$SHA_ASSET" | cut -d' ' -f1)"
 
-# sha_run <checksums.txt body> — drives the real bootstrap path end to end.
+# sha_run <checksums.txt body> — drives the real bootstrap path end to end. The
+# literal ABSENT publishes no checksums.txt at all, so curl 404s on it.
 # Sets SHA_RC, SHA_OUT, SHA_DELEGATED_HITS, SHA_CURL_CALLS.
 sha_run() {
-  printf '%s' "$1" > "$SHA_SERVE/checksums.txt"
+  if [[ "$1" == "ABSENT" ]]; then
+    rm -f "$SHA_SERVE/checksums.txt"
+  else
+    printf '%s' "$1" > "$SHA_SERVE/checksums.txt"
+  fi
   rm -rf "$SHA_HOME"; mkdir -p "$SHA_HOME/Library/LaunchAgents"
   : > "$SHA_ROOT/.curl.log"; : > "$SHA_ROOT/.delegated"
   SHA_OUT="$(cd "$SHA_ROOT" && env -i \
@@ -885,6 +906,29 @@ check "sha256 mismatch: NOTHING was installed — the packaged installer was nev
 # reason. Both files must really have been fetched.
 check "sha256pc the mismatch run really downloaded the asset AND checksums.txt (2 curl calls)" \
   "2" "$SHA_CURL_CALLS"
+
+# ── BRANCH 3: checksums.txt is EMPTY. Behaviourally this is the same refusal as
+# branch 1, so on its own it looks redundant — it is not. The three cases above
+# all hand the gate a NON-EMPTY list, so wrapping the whole verification in
+# `if [[ -s "$TMP/checksums.txt" ]]; then … fi` leaves every one of them passing
+# while an empty list installs unverified (measured: 97 ok / 0 failed, rc=0).
+# Whoever publishes an empty checksums.txt by accident is precisely the case a
+# release-side bug produces, and it is the one an attacker can also produce by
+# truncating a response. Emptiness must not be a way past the gate.
+sha_run ""
+check "sha256 empty list: an EMPTY checksums.txt ABORTS — an unverifiable download is not an approved one" \
+  "1" "$SHA_RC"
+check "sha256 empty list: NOTHING was installed — the packaged installer was never reached" \
+  "0" "$SHA_DELEGATED_HITS"
+
+# ── BRANCH 4: checksums.txt is not published at all. Same reasoning one step
+# earlier: skipping verification when the list cannot be FETCHED is the other
+# half of "no list means no gate", and a 404 is what a half-finished release
+# actually looks like.
+sha_run "ABSENT"
+check "sha256 absent list: a checksums.txt that 404s ABORTS" "1" "$SHA_RC"
+check "sha256 absent list: NOTHING was installed — the packaged installer was never reached" \
+  "0" "$SHA_DELEGATED_HITS"
 
 echo "install-guard tests: $PASS ok, $FAIL failed"
 [[ "$FAIL" == "0" ]] || exit 1
