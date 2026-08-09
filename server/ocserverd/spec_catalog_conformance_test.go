@@ -54,7 +54,6 @@ import (
 //	list_tasks.open          → HandleListTasksApiTasksGet          trimmedOrEmpty(params.Open) == "true"
 //	get_chat.peek            → HandleListChatApiChatGet            trimmedOrEmpty(params.Peek) == "true"
 //	get_members.fields       → HandleListMembersApiMembersGet      trimmedOrEmpty(params.Fields) == "light"
-//	list_task_manuals.view   → HandleListTaskManualsApiTaskManualsGet  trimmedOrEmpty(params.View) == "list"
 //	update_task_manual.display_name → HandleCreateTaskManualApiTaskManualsPost + HandleUpdateTaskManualApiTaskManualsTypeKeyPost
 //	ingest_telemetry.binaries/claude → HandleIngestTelemetryApiMonitoringTelemetryPost (the asObject reads)
 //
@@ -74,13 +73,20 @@ import (
 // gate, which needs its own ticket and its own conformance run. Baselining keeps
 // this test fail-closed for anything NEW while staying loud about the debt.
 //
+// ONE OF THE SIX IS REPAID: list_task_manuals.view is now advertised (T-a98d).
+// It was the entry that cost the most to leave sitting here — that tool's
+// DEFAULT answer is every manual in full, six figures of characters, and
+// ?view=list was the only way down from it. A lever that exists, works, and is
+// the sole escape from an unreadable default does not exist at all while it is
+// off tools/list, so it was repaid with the response-size work rather than
+// waiting for a catalog-wide ticket. The other five stand.
+//
 // Checked in BOTH directions (see the rot assertion below): if one is fixed,
 // this test fails until the entry is deleted. A stale allowlist that silently
 // permits drift is the same disease as a stale comment, and this file exists
 // because of a stale comment.
 var knownCatalogDrift = map[string][]string{
 	"ingest_telemetry":   {"binaries", "claude"},
-	"list_task_manuals":  {"view"},
 	"update_task_manual": {"display_name"},
 	"list_tasks":         {"open"},
 	"get_members":        {"fields"},

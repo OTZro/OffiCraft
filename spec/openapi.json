@@ -12675,10 +12675,11 @@
     },
     "/api/task-manuals": {
       "get": {
-        "description": "List task manuals (the 設定 › 任務手冊 cards).",
+        "description": "List task manuals (the 設定 › 任務手冊 cards). Answers with the FULL manual of every type by default — every ``sop_md`` and every ``learnings`` blob in one response, which is measured in six figures of characters once a few types are authored. Pass ``view=list`` for the light row instead (T-ec2c) and pull the one manual you need with get_task_manual.",
         "operationId": "handle_list_task_manuals_api_task_manuals_get",
         "parameters": [
           {
+            "description": "``list`` = the LIGHT row: type_key / display_name / purpose / updated_ts plus the SIZES of the omitted text (``sop_md_chars``, ``learnings_chars``, ``cap_chars``), with sop_md and learnings served empty and fields/assignee empty. Any other value, or omitting it, keeps the DEFAULT: the full manual of every type, SOP and learnings included. Reach for ``list`` whenever you are matching or choosing a type rather than executing one — the two answers differ by orders of magnitude in size, and the light row still carries the sizes, so you can see what you skipped and fetch just that type with get_task_manual.",
             "in": "query",
             "name": "view",
             "required": false,

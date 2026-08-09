@@ -2850,9 +2850,14 @@
       "name": "set_outsource_worker_model"
     },
     {
-      "description": "List task types (match by display_name/purpose; address by type_key).",
+      "description": "List task types (match by display_name/purpose; address by type_key). WITHOUT view=list this returns the FULL manual of every type — every SOP and every learnings blob in one answer, six figures of characters on a real roster. Pass view=list unless you actually need the text.",
       "inputSchema": {
-        "properties": {},
+        "properties": {
+          "view": {
+            "description": "\"list\" = the LIGHT row: type_key / display_name / purpose / updated_ts plus the SIZES of the omitted text (sop_md_chars, learnings_chars, cap_chars), with sop_md and learnings served empty. Omitted (the default) = the FULL manual of every type, SOP and learnings included. Use \"list\" whenever you are matching or choosing a type rather than executing one: the two answers differ by orders of magnitude, and the light row still tells you how big each manual is, so you can pull the one you picked with get_task_manual.",
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "name": "list_task_manuals"

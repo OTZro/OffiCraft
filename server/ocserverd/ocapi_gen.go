@@ -2431,6 +2431,7 @@ type HandleListReplyCardsApiReplyCardsGet200JSONResponseBody struct {
 
 // HandleListTaskManualsApiTaskManualsGetParams defines parameters for HandleListTaskManualsApiTaskManualsGet.
 type HandleListTaskManualsApiTaskManualsGetParams struct {
+	// View ``list`` = the LIGHT row: type_key / display_name / purpose / updated_ts plus the SIZES of the omitted text (``sop_md_chars``, ``learnings_chars``, ``cap_chars``), with sop_md and learnings served empty and fields/assignee empty. Any other value, or omitting it, keeps the DEFAULT: the full manual of every type, SOP and learnings included. Reach for ``list`` whenever you are matching or choosing a type rather than executing one — the two answers differ by orders of magnitude in size, and the light row still carries the sizes, so you can see what you skipped and fetch just that type with get_task_manual.
 	View *string `form:"view,omitempty" json:"view,omitempty"`
 }
 
