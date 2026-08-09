@@ -6198,16 +6198,19 @@ export interface components {
          *     `display_language` — the owner's cockpit visual prefs ("" = unset).
          *     `display_wide` — whether the cockpit uses the wide layout (default false =
          *     the narrow centred column). `doc_cap_chars_duty` / `doc_cap_chars_insight` /
-         *     `doc_cap_chars_learning` / `doc_cap_chars_manual` (T-ae38) — the FOUR
-         *     independent size caps on the accumulating documents, in CHARACTERS (Unicode
-         *     code points): a role's Duty (role definition), Insight and Learning (lessons),
-         *     plus a task manual's sop_md and learnings. Each knob's shipped default is the
-         *     `default` on its own field below — Duty's is deliberately much smaller than the
-         *     other three's, and every one of them is owner-adjustable, so no prose here
-         *     restates a number. EVERY key carries a suffix on purpose: `get_settings`
-         *     shows an agent key NAMES and no descriptions, so an unsuffixed `doc.cap_chars`
-         *     sitting beside three suffixed ones reads as a global default and would be
-         *     adjusted by someone believing they had moved all four.
+         *     `doc_cap_chars_learning` / `doc_cap_chars_manual_sop` /
+         *     `doc_cap_chars_manual_learnings` (T-ae38, manual split in two by T-30f1) — the
+         *     FIVE independent size caps on the accumulating documents, in CHARACTERS
+         *     (Unicode code points): a role's Duty (role definition), Insight and Learning
+         *     (lessons), plus a task manual's sop_md and learnings, which are now judged by
+         *     TWO separate knobs rather than one shared manual cap. Each knob's shipped
+         *     default is the `default` on its own field below — Duty's is deliberately much
+         *     smaller than the other four's, and every one of them is owner-adjustable, so no
+         *     prose here restates a number. EVERY key carries a suffix on purpose:
+         *     `get_settings` shows an agent key NAMES and no descriptions, so an unsuffixed
+         *     `doc.cap_chars` — or a bare `doc.cap_chars.manual` sitting beside the two it
+         *     was split into — reads as a global default and would be adjusted by someone
+         *     believing they had moved all of them.
          */
         SettingsDTO: {
             /**
@@ -6259,11 +6262,17 @@ export interface components {
              */
             doc_cap_chars_learning: number;
             /**
-             * Doc Cap Chars Manual
-             * @description The size cap on a TASK MANUAL's two long documents (sop_md and learnings), in CHARACTERS (Unicode code points). The floor of the adjustable range is this segment's shipped default (the `default` field above), the ceiling is 100000. These are keyed by type_key — assets of a task TYPE, not of a role journal — which is why they answer to their own knob rather than to any of the three role-journal segments. This is the key the single doc.cap_chars setting was RENAMED to in T-ae38; its stored value carried over unchanged.
+             * Doc Cap Chars Manual Learnings
+             * @description The size cap on a TASK MANUAL's LEARNINGS doc, in CHARACTERS (Unicode code points). The floor of the adjustable range is this segment's shipped default (the `default` field above), the ceiling is 100000. Task manuals are keyed by type_key — assets of a task TYPE, not of a role journal — which is why they answer to their own knobs rather than to any of the three role-journal segments. T-30f1 split the single doc.cap_chars.manual knob into this one and doc_cap_chars_manual_sop; migration 00049 copied the stored value to BOTH, so no installation's effective cap was lowered.
              * @default 15000
              */
-            doc_cap_chars_manual: number;
+            doc_cap_chars_manual_learnings: number;
+            /**
+             * Doc Cap Chars Manual Sop
+             * @description The size cap on a TASK MANUAL's SOP doc (sop_md), in CHARACTERS (Unicode code points). The floor of the adjustable range is this segment's shipped default (the `default` field above), the ceiling is 100000. Independent of doc_cap_chars_manual_learnings: the SOP is a written-once-then-refined blueprint while learnings accumulate, so the two documents are sized against separate budgets since T-30f1.
+             * @default 15000
+             */
+            doc_cap_chars_manual_sop: number;
             /** Handover Pct */
             handover_pct: number;
             /**
@@ -6321,10 +6330,10 @@ export interface components {
          *     `updater_receive_beta` toggles whether the GitHub-release update check also
          *     admits prereleases; `updater_auto_update` toggles unattended background
          *     self-upgrade to the newest admissible release (both booleans, default false;
-         *     the manual upgrade endpoint is unaffected). The four document caps (T-ae38)
-         *     are independent knobs. Each one MUST be between THAT segment's shipped default
-         *     (the `default` on the matching `SettingsDTO` field — Duty's is its own, much
-         *     smaller number) and 100000. The floor equalling the shipped default is the
+         *     the manual upgrade endpoint is unaffected). The five document caps (T-ae38;
+         *     the manual's one became two in T-30f1) are independent knobs. Each one MUST be
+         *     between THAT segment's shipped default (the `default` on the matching
+         *     `SettingsDTO` field — Duty's is its own, much smaller number) and 100000. The floor equalling the shipped default is the
          *     point: a cap can only ever be RAISED (owner ruling 2026-07-31), because
          *     lowering one would turn documents that are legal today into shrink-only ones.
          */
@@ -6350,10 +6359,15 @@ export interface components {
              */
             doc_cap_chars_learning?: number | null;
             /**
-             * Doc Cap Chars Manual
-             * @description The size cap on a TASK MANUAL's sop_md and learnings, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default (see `SettingsDTO.doc_cap_chars_manual`, whose `default` is that floor) and at most 100000.
+             * Doc Cap Chars Manual Learnings
+             * @description The size cap on a TASK MANUAL's learnings doc, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default (see `SettingsDTO.doc_cap_chars_manual_learnings`, whose `default` is that floor) and at most 100000.
              */
-            doc_cap_chars_manual?: number | null;
+            doc_cap_chars_manual_learnings?: number | null;
+            /**
+             * Doc Cap Chars Manual Sop
+             * @description The size cap on a TASK MANUAL's sop_md doc, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default (see `SettingsDTO.doc_cap_chars_manual_sop`, whose `default` is that floor) and at most 100000.
+             */
+            doc_cap_chars_manual_sop?: number | null;
             /**
              * Display Language
              * @description The owner's cockpit language (T-0b41-p2) — trimmed; "" clears it back to unset. Must be one of zh, en (or ""); anything else is a 422.
@@ -6771,7 +6785,7 @@ export interface components {
         };
         /**
          * TaskLearningsPatchResultDTO
-         * @description Receipt of a task-learnings PATCH (MCP ``patch_task_learnings``). ``size`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc.cap_chars.manual`` cap the write is judged against; it counted UTF-8 BYTES until 2026-07-31, when the owner ruled the receipt must speak the cap's unit) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING learnings text, so the caller can confirm the write landed without re-reading the full doc. ``applied_edits`` is the number of edits that ACTUALLY changed the doc (a no-op append/replace does not count), so "0 applied" is expressible and a silent no-op cannot masquerade as success.
+         * @description Receipt of a task-learnings PATCH (MCP ``patch_task_learnings``). ``size`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc.cap_chars.manual_learnings`` cap the write is judged against; it counted UTF-8 BYTES until 2026-07-31, when the owner ruled the receipt must speak the cap's unit) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING learnings text, so the caller can confirm the write landed without re-reading the full doc. ``applied_edits`` is the number of edits that ACTUALLY changed the doc (a no-op append/replace does not count), so "0 applied" is expressible and a silent no-op cannot masquerade as success.
          */
         TaskLearningsPatchResultDTO: {
             /**
@@ -6786,7 +6800,7 @@ export interface components {
             sha256: string;
             /**
              * Cap Chars
-             * @description The document size cap in force when this write was judged, in CHARACTERS (the doc.cap_chars.manual setting). Returned so a caller can see its remaining budget without a second request — the cap is adjustable and agents cannot read the settings surface.
+             * @description The document size cap in force when this write was judged, in CHARACTERS (the doc.cap_chars.manual_learnings setting — this face only ever writes learnings). Returned so a caller can see its remaining budget without a second request — the cap is adjustable and agents cannot read the settings surface.
              * @default 0
              */
             cap_chars: number;
@@ -6964,16 +6978,28 @@ export interface components {
         TaskManualDTO: {
             /**
              * Cap Chars
-             * @description The document size cap now in force, in CHARACTERS (the doc.cap_chars.manual setting). Served on the READ face so an agent can size an edit BEFORE writing it.
+             * @description DEPRECATED since T-30f1 — read learnings_cap_chars or sop_md_cap_chars instead. The manual's SOP and learnings are judged by two SEPARATE caps now, and one field cannot report both: this one carries the LEARNINGS cap (doc.cap_chars.manual_learnings) only, and says nothing about sop_md. Kept so existing clients keep reading a real number rather than a zero.
              * @default 0
              */
             cap_chars: number;
             /**
+             * Learnings Cap Chars
+             * @description The cap on `learnings` now in force, in CHARACTERS (the doc.cap_chars.manual_learnings setting). Served on the READ face so an agent can size an edit BEFORE writing it. Independent of sop_md_cap_chars since T-30f1.
+             * @default 0
+             */
+            learnings_cap_chars: number;
+            /**
              * Learnings Chars
-             * @description Size of `learnings` in CHARACTERS. Reported PER CAPPED DOCUMENT rather than as one total, because the cap applies to each of learnings and sop_md separately. Carried on the light ?view=list projection too, where the bulky text itself is omitted but its size is not.
+             * @description Size of `learnings` in CHARACTERS. Reported PER CAPPED DOCUMENT rather than as one total, because learnings and sop_md are judged separately — against their own caps since T-30f1. Carried on the light ?view=list projection too, where the bulky text itself is omitted but its size is not.
              * @default 0
              */
             learnings_chars: number;
+            /**
+             * Sop Md Cap Chars
+             * @description The cap on `sop_md` now in force, in CHARACTERS (the doc.cap_chars.manual_sop setting). See learnings_cap_chars.
+             * @default 0
+             */
+            sop_md_cap_chars: number;
             /**
              * Sop Md Chars
              * @description Size of `sop_md` in CHARACTERS. See learnings_chars.

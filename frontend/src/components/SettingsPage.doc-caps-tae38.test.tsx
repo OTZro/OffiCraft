@@ -156,7 +156,7 @@ describe("T-ae38 — the three journal blocks each show their OWN budget", () =>
   });
 });
 
-describe("T-ae38 — four knobs, each writing its own key", () => {
+describe("T-ae38 / T-30f1 — five knobs, each writing its own key", () => {
   it("renders one row per cap, each seeded from its own setting", async () => {
     await setCaps();
     const utils = await openParamsPage();
@@ -166,9 +166,15 @@ describe("T-ae38 — four knobs, each writing its own key", () => {
     expect(read(s.docCapDuty)).toBe(String(DUTY_CAP));
     expect(read(s.docCapInsight)).toBe(String(INSIGHT_CAP));
     expect(read(s.docCapLearning)).toBe(String(LEARNING_CAP));
-    // Untouched by setCaps → still the shipped default, which proves the four
-    // rows are not all reading one value.
-    expect(read(s.docCapManual)).toBe(String(DOC_CAP_CHARS_DEFAULTS.manual));
+    // Untouched by setCaps → still the shipped default, which proves the rows
+    // are not all reading one value. The manual's TWO rows are what T-30f1
+    // added: one row here would mean the split never reached this surface.
+    expect(read(s.docCapManualSop)).toBe(
+      String(DOC_CAP_CHARS_DEFAULTS.manualSop)
+    );
+    expect(read(s.docCapManualLearnings)).toBe(
+      String(DOC_CAP_CHARS_DEFAULTS.manualLearnings)
+    );
   });
 
   it("editing the Duty row moves ONLY the Duty setting", async () => {
@@ -183,7 +189,36 @@ describe("T-ae38 — four knobs, each writing its own key", () => {
     expect(after.docCapCharsDuty).toBe(2500);
     expect(after.docCapCharsInsight).toBe(DOC_CAP_CHARS_DEFAULTS.insight);
     expect(after.docCapCharsLearning).toBe(DOC_CAP_CHARS_DEFAULTS.learning);
-    expect(after.docCapCharsManual).toBe(DOC_CAP_CHARS_DEFAULTS.manual);
+    expect(after.docCapCharsManualSop).toBe(DOC_CAP_CHARS_DEFAULTS.manualSop);
+    expect(after.docCapCharsManualLearnings).toBe(
+      DOC_CAP_CHARS_DEFAULTS.manualLearnings
+    );
+  });
+
+  it("editing the manual SOP row moves ONLY the SOP cap", async () => {
+    // The T-30f1 shape of the same failure: two rows that look independent but
+    // write one key save without error and move the other document's budget.
+    const utils = await openParamsPage();
+    const input = utils.getByLabelText(s.docCapManualSop);
+    fireEvent.change(input, { target: { value: "40000" } });
+    fireEvent.blur(input);
+
+    const after = await mockApi.getServerSettings();
+    expect(after.docCapCharsManualSop).toBe(40000);
+    expect(after.docCapCharsManualLearnings).toBe(
+      DOC_CAP_CHARS_DEFAULTS.manualLearnings
+    );
+  });
+
+  it("editing the manual learnings row moves ONLY the learnings cap", async () => {
+    const utils = await openParamsPage();
+    const input = utils.getByLabelText(s.docCapManualLearnings);
+    fireEvent.change(input, { target: { value: "40000" } });
+    fireEvent.blur(input);
+
+    const after = await mockApi.getServerSettings();
+    expect(after.docCapCharsManualLearnings).toBe(40000);
+    expect(after.docCapCharsManualSop).toBe(DOC_CAP_CHARS_DEFAULTS.manualSop);
   });
 
   it("the Duty row's local floor is its own, NOT the other three's", async () => {
@@ -222,13 +257,24 @@ describe("T-ae38 — capForKind routes each document kind to its own cap", () =>
     // uncapped kinds is load-bearing: falling back to "whichever number is
     // nearest" would let the cockpit mark a global-context revision
     // un-restorable when the server would accept it.
-    const caps = { duty: 1, insight: 2, learning: 3, manual: 4 };
+    // Five DISTINCT numbers: the manual's two kinds sharing one would make
+    // "routed to its own cap" and "routed to the one manual cap" the same
+    // assertion, which is exactly what T-30f1 had to stop being true.
+    const caps = {
+      duty: 1,
+      insight: 2,
+      learning: 3,
+      manualSop: 4,
+      manualLearnings: 5,
+    };
     expect(capForKind("role_definition", caps)).toBe(1);
     expect(capForKind("insight", caps)).toBe(2);
     expect(capForKind("lessons", caps)).toBe(3);
     expect(capForKind("task_manual_sop", caps)).toBe(4);
-    expect(capForKind("task_manual_learnings", caps)).toBe(4);
-    expect(capForKind("task_manual", caps)).toBe(4);
+    expect(capForKind("task_manual_learnings", caps)).toBe(5);
+    // The retired bundle kind covers both documents and has no restore path
+    // left; it takes the learnings cap, as the deprecated wire field does.
+    expect(capForKind("task_manual", caps)).toBe(5);
     expect(capForKind("global_context", caps)).toBeUndefined();
     expect(capForKind("task_description", caps)).toBeUndefined();
   });

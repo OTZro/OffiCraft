@@ -1320,9 +1320,12 @@ export const en: Dict = {
     docCapLearning: "Learning size cap",
     docCapLearningSub:
       "Per-role limit on the lessons doc. The floor is the shipped default and the ceiling is 100000, so this can only be raised.",
-    docCapManual: "Task manual size cap",
-    docCapManualSub:
-      "Per-document limit on a task manual's SOP and learnings. The floor is the shipped default and the ceiling is 100000, so this can only be raised.",
+    docCapManualSop: "Task manual SOP size cap",
+    docCapManualSopSub:
+      "Limit on a task manual's SOP (the plan blueprint). Independent of the field below — the SOP is refined in place while the learnings accumulate, so one number could only ever be right for one of them. The floor is the shipped default and the ceiling is 100000, so this can only be raised.",
+    docCapManualLearnings: "Task manual learnings size cap",
+    docCapManualLearningsSub:
+      "Limit on a task manual's learnings doc, independent of the SOP cap above. The floor is the shipped default and the ceiling is 100000, so this can only be raised.",
     docUsage: "Used",
     chars: "characters",
     // ── Verified-save read-back (T-1c2e; lives in the software-update view

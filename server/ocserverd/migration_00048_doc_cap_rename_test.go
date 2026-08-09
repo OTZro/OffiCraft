@@ -51,7 +51,10 @@ func TestMigration00048RenamesTheSharedDocCapToManual(t *testing.T) {
 		t.Fatalf("seed the pre-00048 shared key: %v", err)
 	}
 
-	if err := runMigrations(db); err != nil {
+	// UpTo 48, not all the way: 00049 (T-30f1) splits this very key in two and
+	// deletes it, so a full up would erase the state this test is about. The
+	// 00049 half is asserted in its own file, starting from where this one ends.
+	if err := goose.UpTo(db, "migrations", 48); err != nil {
 		t.Fatalf("00048 up: %v", err)
 	}
 
@@ -65,9 +68,12 @@ func TestMigration00048RenamesTheSharedDocCapToManual(t *testing.T) {
 		}
 	}
 
-	if got := value(settingDocCapCharsManual); got == nil || *got != raised {
-		t.Fatalf("the owner's raised cap (%s) must arrive at %s intact, got %v",
-			raised, settingDocCapCharsManual, got)
+	// Spelled out rather than read from a constant: T-30f1 retired this key, so
+	// there is no longer a constant naming it, and the migration's own effect is
+	// still exactly this string.
+	if got := value("doc.cap_chars.manual"); got == nil || *got != raised {
+		t.Fatalf("the owner's raised cap (%s) must arrive at doc.cap_chars.manual intact, got %v",
+			raised, got)
 	}
 	// The old key must be GONE, not merely shadowed. A row left behind is the
 	// unsuffixed key this ticket exists to remove — and settings.go would never
@@ -87,13 +93,20 @@ func TestMigration00048RenamesTheSharedDocCapToManual(t *testing.T) {
 		}
 	}
 
-	// And the loader turns that state into the four live caps the owner named.
+	// And the loader turns that state into the live caps the owner named. Read
+	// through 00049's keys because the schema is now migrated the rest of the
+	// way — the carried-over value has to survive BOTH migrations to matter.
+	if err := runMigrations(db); err != nil {
+		t.Fatalf("finish the migrations: %v", err)
+	}
 	got, err := loadAuthSettings(NewDAL(db), defaultConfig(), func(string) {})
 	if err != nil {
 		t.Fatalf("loadAuthSettings: %v", err)
 	}
-	if got.docCapCharsManual != contextDocMaxCharsDefault+5000 {
-		t.Fatalf("manual cap = %d, want the carried-over %s", got.docCapCharsManual, raised)
+	if got.docCapCharsManualSop != contextDocMaxCharsDefault+5000 ||
+		got.docCapCharsManualLearnings != contextDocMaxCharsDefault+5000 {
+		t.Fatalf("both manual caps = %d/%d, want the carried-over %s",
+			got.docCapCharsManualSop, got.docCapCharsManualLearnings, raised)
 	}
 	if got.docCapCharsDuty != dutyCapCharsDefault {
 		t.Fatalf("duty cap = %d, want the shipped %d", got.docCapCharsDuty, dutyCapCharsDefault)
@@ -125,9 +138,10 @@ func TestMigration00048OnAnInstallThatNeverRaisedTheCap(t *testing.T) {
 	if got.docCapCharsDuty != dutyCapCharsDefault ||
 		got.docCapCharsInsight != contextDocMaxCharsDefault ||
 		got.docCapCharsLearning != contextDocMaxCharsDefault ||
-		got.docCapCharsManual != contextDocMaxCharsDefault {
-		t.Fatalf("a fresh install must read all four defaults, got %d/%d/%d/%d",
-			got.docCapCharsDuty, got.docCapCharsInsight,
-			got.docCapCharsLearning, got.docCapCharsManual)
+		got.docCapCharsManualSop != contextDocMaxCharsDefault ||
+		got.docCapCharsManualLearnings != contextDocMaxCharsDefault {
+		t.Fatalf("a fresh install must read all five defaults, got %d/%d/%d/%d/%d",
+			got.docCapCharsDuty, got.docCapCharsInsight, got.docCapCharsLearning,
+			got.docCapCharsManualSop, got.docCapCharsManualLearnings)
 	}
 }

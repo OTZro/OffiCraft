@@ -139,7 +139,7 @@
             "description": "The size cap on a role's LEARNING doc (the lessons doc), in CHARACTERS (Unicode code points). Must be at least this segment's shipped default and at most 100000. Read the current values from get_settings rather than assuming a number.",
             "title": "Doc Cap Chars Learning"
           },
-          "doc_cap_chars_manual": {
+          "doc_cap_chars_manual_learnings": {
             "anyOf": [
               {
                 "type": "integer"
@@ -148,8 +148,20 @@
                 "type": "null"
               }
             ],
-            "description": "The size cap on a TASK MANUAL's sop_md and learnings, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default and at most 100000. Read the current values from get_settings rather than assuming a number.",
-            "title": "Doc Cap Chars Manual"
+            "description": "The size cap on a TASK MANUAL's learnings doc, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default and at most 100000. Read the current values from get_settings rather than assuming a number.",
+            "title": "Doc Cap Chars Manual Learnings"
+          },
+          "doc_cap_chars_manual_sop": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The size cap on a TASK MANUAL's sop_md doc, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default and at most 100000. Read the current values from get_settings rather than assuming a number.",
+            "title": "Doc Cap Chars Manual Sop"
           },
           "custom_themes": {
             "anyOf": [

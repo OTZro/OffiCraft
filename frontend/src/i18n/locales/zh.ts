@@ -1411,9 +1411,12 @@ export const zh = {
     docCapLearning: "學習經驗字數上限",
     docCapLearningSub:
       "一個角色的學習經驗的字數上限。下限就是出廠預設，上限 100000，所以只能調高。",
-    docCapManual: "任務手冊字數上限",
-    docCapManualSub:
-      "任務手冊的 SOP 與學習經驗，每一份各自的字數上限。下限就是出廠預設，上限 100000，所以只能調高。",
+    docCapManualSop: "任務手冊 SOP 字數上限",
+    docCapManualSopSub:
+      "任務手冊的 SOP（做法藍圖）的字數上限。與下面那格各自獨立——SOP 是改寫收斂的藍圖，學習經驗是持續累積的紀錄，一個數字只能對其中一份是對的。下限就是出廠預設，上限 100000，所以只能調高。",
+    docCapManualLearnings: "任務手冊學習經驗字數上限",
+    docCapManualLearningsSub:
+      "任務手冊的學習經驗的字數上限，與上面的 SOP 那格各自獨立。下限就是出廠預設，上限 100000，所以只能調高。",
     docUsage: "已用字數",
     chars: "字",
     // ── 存檔回讀對帳（T-1c2e，rework 後住在系統更新與備份區：secret 只顯示

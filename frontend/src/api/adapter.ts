@@ -682,7 +682,8 @@ export interface ServerSettingsView {
   docCapCharsDuty: number;
   docCapCharsInsight: number;
   docCapCharsLearning: number;
-  docCapCharsManual: number;
+  docCapCharsManualSop: number;
+  docCapCharsManualLearnings: number;
   /** Whether the GitHub-release update check also admits prereleases
    * (false = official releases only, the default). */
   updaterReceiveBeta: boolean;
@@ -755,7 +756,8 @@ export interface ServerSettingsPatch {
   docCapCharsDuty?: number;
   docCapCharsInsight?: number;
   docCapCharsLearning?: number;
-  docCapCharsManual?: number;
+  docCapCharsManualSop?: number;
+  docCapCharsManualLearnings?: number;
   /** Also admit GitHub prereleases in update checks (default false). */
   updaterReceiveBeta?: boolean;
   /** Arm unattended background self-upgrade (default false = manual-only). */

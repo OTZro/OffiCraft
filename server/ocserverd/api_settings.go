@@ -263,10 +263,14 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 	// Each floor is THAT segment's shipped default, so a knob only ever RAISES
 	// its cap (owner 2026-07-31). Lowering one would strand every document that
 	// is legal today in shrink-only mode — the refusal says so rather than
-	// making the caller infer it from a bare range. Four independent knobs
-	// since T-ae38; Duty's floor is minDutyCapChars, NOT the other three's
-	// minDocCapChars, or its own shipped default would be unreachable from this
-	// surface. The numbers live in domain.go — do not restate them here.
+	// making the caller infer it from a bare range. Five independent knobs:
+	// three role-journal segments since T-ae38, and the manual's SOP and
+	// learnings since T-30f1. Duty's floor is minDutyCapChars, NOT the other
+	// four's minDocCapChars, or its own shipped default would be unreachable
+	// from this surface. The numbers live in domain.go — do not restate them
+	// here. Every knob must appear in this table: a missing row is not a
+	// missing check, it is an UNCHECKED cap that the load face will later
+	// refuse to boot on.
 	capRange := []struct {
 		field *int
 		name  string
@@ -275,7 +279,8 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		{body.DocCapCharsDuty, "doc_cap_chars_duty", minDutyCapChars},
 		{body.DocCapCharsInsight, "doc_cap_chars_insight", minDocCapChars},
 		{body.DocCapCharsLearning, "doc_cap_chars_learning", minDocCapChars},
-		{body.DocCapCharsManual, "doc_cap_chars_manual", minDocCapChars},
+		{body.DocCapCharsManualSop, "doc_cap_chars_manual_sop", minDocCapChars},
+		{body.DocCapCharsManualLearnings, "doc_cap_chars_manual_learnings", minDocCapChars},
 	}
 	for _, c := range capRange {
 		if c.field != nil && (*c.field < c.min || *c.field > maxDocCapChars) {
@@ -399,7 +404,8 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		{body.DocCapCharsDuty, settingDocCapCharsDuty, &s.docCapCharsDuty},
 		{body.DocCapCharsInsight, settingDocCapCharsInsight, &s.docCapCharsInsight},
 		{body.DocCapCharsLearning, settingDocCapCharsLearning, &s.docCapCharsLearning},
-		{body.DocCapCharsManual, settingDocCapCharsManual, &s.docCapCharsManual},
+		{body.DocCapCharsManualSop, settingDocCapCharsManualSop, &s.docCapCharsManualSop},
+		{body.DocCapCharsManualLearnings, settingDocCapCharsManualLearnings, &s.docCapCharsManualLearnings},
 	}
 	for _, c := range capWrite {
 		if c.field == nil {
@@ -534,24 +540,25 @@ func (s *apiServer) settingsView() settingsDTO {
 		customThemes = []ThemeBundleDTO{}
 	}
 	return settingsDTO{
-		TokenTTL:                 s.tokenTTL,
-		HandoverPct:              s.ctxhigh.HandoverPct,
-		CodexCompactionThreshold: s.codexCompactionThreshold,
-		MonitoringRefreshSeconds: s.monitoringRefreshSeconds,
-		OutsourceMaxParallel:     s.outsourceMaxParallel,
-		DocCapCharsDuty:          s.docCapCharsDuty,
-		DocCapCharsInsight:       s.docCapCharsInsight,
-		DocCapCharsLearning:      s.docCapCharsLearning,
-		DocCapCharsManual:        s.docCapCharsManual,
-		UpdaterReceiveBeta:       s.updaterReceiveBeta,
-		UpdaterAutoUpdate:        s.updaterAutoUpdate,
-		OrgName:                  s.orgName,
-		OwnerName:                s.ownerName,
-		PushContactEmail:         s.pushContactEmail,
-		DisplayTheme:             s.displayTheme,
-		DisplayLanguage:          s.displayLanguage,
-		DisplayWide:              s.displayWide,
-		CustomThemes:             customThemes,
+		TokenTTL:                   s.tokenTTL,
+		HandoverPct:                s.ctxhigh.HandoverPct,
+		CodexCompactionThreshold:   s.codexCompactionThreshold,
+		MonitoringRefreshSeconds:   s.monitoringRefreshSeconds,
+		OutsourceMaxParallel:       s.outsourceMaxParallel,
+		DocCapCharsDuty:            s.docCapCharsDuty,
+		DocCapCharsInsight:         s.docCapCharsInsight,
+		DocCapCharsLearning:        s.docCapCharsLearning,
+		DocCapCharsManualSop:       s.docCapCharsManualSop,
+		DocCapCharsManualLearnings: s.docCapCharsManualLearnings,
+		UpdaterReceiveBeta:         s.updaterReceiveBeta,
+		UpdaterAutoUpdate:          s.updaterAutoUpdate,
+		OrgName:                    s.orgName,
+		OwnerName:                  s.ownerName,
+		PushContactEmail:           s.pushContactEmail,
+		DisplayTheme:               s.displayTheme,
+		DisplayLanguage:            s.displayLanguage,
+		DisplayWide:                s.displayWide,
+		CustomThemes:               customThemes,
 		// Read from the DAL, NOT from the settings snapshot: onboarding runs in
 		// its own goroutine and finishes after this handler returned, so a
 		// boot-time snapshot would serve a permanently stale "running".

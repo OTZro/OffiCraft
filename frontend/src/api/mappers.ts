@@ -889,7 +889,9 @@ export function toServerSettings(w: WireServerSettings): ServerSettingsView {
     docCapCharsInsight: w.doc_cap_chars_insight ?? DOC_CAP_CHARS_DEFAULTS.insight,
     docCapCharsLearning:
       w.doc_cap_chars_learning ?? DOC_CAP_CHARS_DEFAULTS.learning,
-    docCapCharsManual: w.doc_cap_chars_manual ?? DOC_CAP_CHARS_DEFAULTS.manual,
+    docCapCharsManualSop: w.doc_cap_chars_manual_sop ?? DOC_CAP_CHARS_DEFAULTS.manualSop,
+    docCapCharsManualLearnings:
+      w.doc_cap_chars_manual_learnings ?? DOC_CAP_CHARS_DEFAULTS.manualLearnings,
     // The two software-update toggles (schema-optional for DTO-compat; the
     // Go wire always emits both — `?? false` only fires against an older
     // server, where OFF is exactly the honest reading).

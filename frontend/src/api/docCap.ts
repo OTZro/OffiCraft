@@ -28,14 +28,16 @@
 // task_manual caps `learnings` AND `sop_md` — either one over the cap refuses
 // the whole restore.
 //
-// T-ae38 also made the cap PER SEGMENT: which of the four numbers applies is a
-// property of the kind, transcribed here from the same switch. Judging a Duty
-// revision against the Learning cap would mark a 4,000-char role definition as
-// restorable when the server refuses it at 1,000.
+// T-ae38 also made the cap PER SEGMENT: which number applies is a property of
+// the kind, transcribed here from the same switch. Judging a Duty revision
+// against the Learning cap would mark a 4,000-char role definition as
+// restorable when the server refuses it at 1,000. T-30f1 split the manual's one
+// number into two, so the manual's two streams no longer share an answer here
+// either.
 
 import type { DocumentKind } from "../types";
 
-/** The four SHIPPED DEFAULTS (server/ocserverd/domain.go:
+/** The five SHIPPED DEFAULTS (server/ocserverd/domain.go:
  * dutyCapCharsDefault + contextDocMaxCharsDefault) — defaults, NOT the caps
  * themselves. Since T-3aeb the live values are the `doc.cap_chars.*` settings,
  * so callers pass them in; these exist only as the fallback for a caller with
@@ -45,19 +47,21 @@ export interface DocCaps {
   duty: number;
   insight: number;
   learning: number;
-  manual: number;
+  manualSop: number;
+  manualLearnings: number;
 }
 
 export const DOC_CAP_CHARS_DEFAULTS: DocCaps = {
   duty: 1000,
   insight: 15000,
   learning: 15000,
-  manual: 15000,
+  manualSop: 15000,
+  manualLearnings: 15000,
 };
 
 /** The single number the shared fixture (bin/tests/fixtures/doc-cap-cases.tsv)
  * anchors its rows to. That table tests the PREDICATE, which takes the cap as a
- * parameter and is unchanged by the four-way split, so it keeps one anchor. */
+ * parameter and is unchanged by any of the splits, so it keeps one anchor. */
 export const DOC_CAP_CHARS_DEFAULT = DOC_CAP_CHARS_DEFAULTS.learning;
 
 /** Length in UNICODE CODE POINTS — the unit the server measures in
@@ -156,9 +160,10 @@ export function docCapBlockedFields(
  * are never refused on size, so a caller cannot accidentally judge them by
  * whichever number happened to be nearest.
  *
- * The task manual's two documents answer to `manual`, NOT to any of the three
- * role-journal segments: they are keyed by type_key, so they are assets of a
- * task TYPE rather than entries in a role's journal. */
+ * The task manual's two documents answer to `manualSop` / `manualLearnings`,
+ * NOT to any of the three role-journal segments: they are keyed by type_key, so
+ * they are assets of a task TYPE rather than entries in a role's journal, and
+ * since T-30f1 they answer to one number EACH. */
 export function capForKind(
   kind: DocumentKind,
   caps: DocCaps
@@ -170,10 +175,15 @@ export function capForKind(
       return caps.insight;
     case "lessons":
       return caps.learning;
-    case "task_manual":
     case "task_manual_sop":
+      return caps.manualSop;
+    // The retired bundle kind covers BOTH documents, and one number cannot
+    // judge two. It gets the learnings cap for the same reason the wire's
+    // deprecated `cap_chars` does — and it has no restore path left at all, so
+    // nothing reaches this arm today.
+    case "task_manual":
     case "task_manual_learnings":
-      return caps.manual;
+      return caps.manualLearnings;
     case "global_context":
     case "task_description":
       return undefined;

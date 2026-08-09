@@ -244,52 +244,84 @@ func TestReplaceLessonsReceiptReportsSizeAndCap(t *testing.T) {
 // TestUpdateSettingsDocCapCharsRange pins the range the owner set, both ends,
 // and the floor's REASON: the floor is the shipped default, so there is no such
 // thing as lowering this cap.
+//
+// 🔴 EVERY knob is exercised, not just one. Until T-30f1 this test drove only
+// `doc_cap_chars_learning`, so a knob whose floor was written as the wrong
+// constant — say the manual halves given Duty's much smaller minimum, which
+// would let the owner lower them — went green here. A per-knob table is the
+// only shape that fails when a row is missing or holds the wrong floor.
 func TestUpdateSettingsDocCapCharsRange(t *testing.T) {
-	api, srv, d, _ := newSettingsTestServer(t, "settings-pass")
-	status, data := doJSON(t, "POST", srv.URL+"/api/login", "", `{"password":"settings-pass"}`)
-	if status != 200 {
-		t.Fatalf("login: %d", status)
+	knobs := []struct {
+		field string
+		key   string
+		floor int
+		live  func(*apiServer) int
+	}{
+		{"doc_cap_chars_duty", settingDocCapCharsDuty, dutyCapCharsDefault,
+			func(s *apiServer) int { return s.dutyCap() }},
+		{"doc_cap_chars_insight", settingDocCapCharsInsight, contextDocMaxCharsDefault,
+			func(s *apiServer) int { return s.insightCap() }},
+		{"doc_cap_chars_learning", settingDocCapCharsLearning, contextDocMaxCharsDefault,
+			func(s *apiServer) int { return s.learningCap() }},
+		{"doc_cap_chars_manual_sop", settingDocCapCharsManualSop, contextDocMaxCharsDefault,
+			func(s *apiServer) int { return s.manualSopCap() }},
+		{"doc_cap_chars_manual_learnings", settingDocCapCharsManualLearnings, contextDocMaxCharsDefault,
+			func(s *apiServer) int { return s.manualLearningsCap() }},
 	}
-	owner := data["token"].(string)
+	for _, k := range knobs {
+		t.Run(k.field, func(t *testing.T) {
+			api, srv, d, _ := newSettingsTestServer(t, "settings-pass")
+			status, data := doJSON(t, "POST", srv.URL+"/api/login", "", `{"password":"settings-pass"}`)
+			if status != 200 {
+				t.Fatalf("login: %d", status)
+			}
+			owner := data["token"].(string)
 
-	// The default is served, so a cockpit that never PATCHes still sees a cap.
-	if status, data := doJSON(t, "GET", srv.URL+"/api/settings", owner, ""); status != 200 ||
-		data["doc_cap_chars_learning"] != float64(contextDocMaxCharsDefault) {
-		t.Fatalf("GET must serve the default cap: %d %v", status, data)
-	}
+			// The default is served, so a cockpit that never PATCHes still sees
+			// a cap. This is also the assertion that catches a knob the server
+			// never puts on the wire: absent reads as the Go zero value, and the
+			// frontend's `?? DEFAULT` fallback would otherwise disguise it.
+			if status, data := doJSON(t, "GET", srv.URL+"/api/settings", owner, ""); status != 200 ||
+				data[k.field] != float64(k.floor) {
+				t.Fatalf("GET must serve %s's default: %d %v", k.field, status, data[k.field])
+			}
 
-	// Below the floor is refused — including the value one under the default,
-	// which is the shape a "let me lower it a little" attempt actually takes.
-	for _, body := range []string{
-		`{"doc_cap_chars_learning":` + strconv.Itoa(contextDocMaxCharsDefault-1) + `}`,
-		`{"doc_cap_chars_learning":0}`,
-		`{"doc_cap_chars_learning":-1}`,
-		`{"doc_cap_chars_learning":100001}`,
-		`{"handover_pct":60,"doc_cap_chars_learning":` + strconv.Itoa(contextDocMaxCharsDefault-1) + `}`, // one bad field poisons the patch
-	} {
-		if status, _ := patchSettings(t, srv.URL, owner, body); status != 422 {
-			t.Fatalf("PATCH %s: want 422, got %d", body, status)
-		}
-	}
-	if v, err := d.GetSetting(settingDocCapCharsLearning); err != nil || v != nil {
-		t.Fatalf("a rejected patch must write nothing: %v %v", v, err)
-	}
-	if got := api.learningCap(); got != contextDocMaxCharsDefault {
-		t.Fatalf("a rejected patch must not move the live cap: %d", got)
-	}
+			// Below the floor is refused — including the value one under the
+			// default, which is the shape a "let me lower it a little" attempt
+			// actually takes.
+			below := strconv.Itoa(k.floor - 1)
+			for _, body := range []string{
+				`{"` + k.field + `":` + below + `}`,
+				`{"` + k.field + `":0}`,
+				`{"` + k.field + `":-1}`,
+				`{"` + k.field + `":100001}`,
+				`{"handover_pct":60,"` + k.field + `":` + below + `}`, // one bad field poisons the patch
+			} {
+				if status, _ := patchSettings(t, srv.URL, owner, body); status != 422 {
+					t.Fatalf("PATCH %s: want 422, got %d", body, status)
+				}
+			}
+			if v, err := d.GetSetting(k.key); err != nil || v != nil {
+				t.Fatalf("a rejected patch must write nothing to %s: %v %v", k.key, v, err)
+			}
+			if got := k.live(api); got != k.floor {
+				t.Fatalf("a rejected patch must not move %s's live cap: %d", k.field, got)
+			}
 
-	// Both ends of the range are accepted, durable, and live.
-	for _, n := range []string{strconv.Itoa(contextDocMaxCharsDefault), "100000", "42000"} {
-		status, data := patchSettings(t, srv.URL, owner, `{"doc_cap_chars_learning":`+n+`}`)
-		if status != 200 {
-			t.Fatalf("PATCH doc_cap_chars_learning=%s: want 200, got %d: %v", n, status, data)
-		}
-		if v, err := d.GetSetting(settingDocCapCharsLearning); err != nil || v == nil || *v != n {
-			t.Fatalf("doc_cap_chars_learning=%s must be durable: %v %v", n, v, err)
-		}
-		if got := api.learningCap(); got != atoiOrFail(t, n) {
-			t.Fatalf("doc_cap_chars_learning=%s must be live immediately, got %d", n, got)
-		}
+			// Both ends of the range are accepted, durable, and live.
+			for _, n := range []string{strconv.Itoa(k.floor), "100000", "42000"} {
+				status, data := patchSettings(t, srv.URL, owner, `{"`+k.field+`":`+n+`}`)
+				if status != 200 {
+					t.Fatalf("PATCH %s=%s: want 200, got %d: %v", k.field, n, status, data)
+				}
+				if v, err := d.GetSetting(k.key); err != nil || v == nil || *v != n {
+					t.Fatalf("%s=%s must be durable: %v %v", k.field, n, v, err)
+				}
+				if got := k.live(api); got != atoiOrFail(t, n) {
+					t.Fatalf("%s=%s must be live immediately, got %d", k.field, n, got)
+				}
+			}
+		})
 	}
 }
 
@@ -310,15 +342,36 @@ func atoiOrFail(t *testing.T, s string) int {
 // beats a server quietly running a cap nobody chose (the posture
 // TestLoadAuthSettingsFailsLoudOnCorruptValues already pins for its neighbours).
 func TestLoadAuthSettingsRejectsAnOutOfRangeDocCap(t *testing.T) {
-	for _, bad := range []string{strconv.Itoa(contextDocMaxCharsDefault - 1), "100001", "0", "-5", "lots"} {
+	// Every key, for the reason the PATCH-face table above gives: a key missing
+	// from the load face is never range-checked at all, and the way that shows
+	// up is a server that boots happily on a cap the PATCH face would refuse.
+	keys := map[string]int{
+		settingDocCapCharsDuty:            dutyCapCharsDefault,
+		settingDocCapCharsInsight:         contextDocMaxCharsDefault,
+		settingDocCapCharsLearning:        contextDocMaxCharsDefault,
+		settingDocCapCharsManualSop:       contextDocMaxCharsDefault,
+		settingDocCapCharsManualLearnings: contextDocMaxCharsDefault,
+	}
+	for key, floor := range keys {
+		for _, bad := range []string{strconv.Itoa(floor - 1), "100001", "0", "-5", "lots"} {
+			d := newTestDAL(t)
+			if err := d.PutSetting(key, bad); err != nil {
+				t.Fatalf("PutSetting: %v", err)
+			}
+			// loadAuthSettings directly, NOT loadForTest: that helper t.Fatal's
+			// on a load error, so it can never express "this load must fail".
+			if _, err := loadAuthSettings(d, defaultConfig(), func(string) {}); err == nil {
+				t.Fatalf("%s=%q must fail the boot load, not be silently accepted", key, bad)
+			}
+		}
+		// Positive control: at the floor the same key loads. Without it, a load
+		// face that refused everything would satisfy the loop above.
 		d := newTestDAL(t)
-		if err := d.PutSetting(settingDocCapCharsLearning, bad); err != nil {
+		if err := d.PutSetting(key, strconv.Itoa(floor)); err != nil {
 			t.Fatalf("PutSetting: %v", err)
 		}
-		// loadAuthSettings directly, NOT loadForTest: that helper t.Fatal's on a
-		// load error, so it can never express "this load must fail".
-		if _, err := loadAuthSettings(d, defaultConfig(), func(string) {}); err == nil {
-			t.Fatalf("doc.cap_chars=%q must fail the boot load, not be silently accepted", bad)
+		if _, err := loadAuthSettings(d, defaultConfig(), func(string) {}); err != nil {
+			t.Fatalf("%s at its floor must load: %v", key, err)
 		}
 	}
 }
@@ -404,7 +457,9 @@ func TestTaskManualReadReportsPerDocumentSizes(t *testing.T) {
 // than the omission it describes: the list is exactly where "which manual is
 // close to the cap" gets asked.
 func TestListViewOmitsTheTextButNotItsSize(t *testing.T) {
-	s := &apiServer{dal: newTestDAL(t), hub: NewHub(), docCapCharsManual: contextDocMaxCharsDefault}
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		docCapCharsManualSop:       contextDocMaxCharsDefault,
+		docCapCharsManualLearnings: contextDocMaxCharsDefault}
 	learnings := cjkDoc(t, 260)
 	sop := cjkDoc(t, 90)
 	if err := s.dal.PutTaskManual(TaskManual{

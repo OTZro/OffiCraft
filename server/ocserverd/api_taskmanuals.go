@@ -79,7 +79,7 @@ func manualDisplayLabel(displayName, typeKey string) string {
 
 // writeTaskManual is the common single-manual response tail.
 func (s *apiServer) writeTaskManual(w http.ResponseWriter, m TaskManual) {
-	dto, err := newTaskManualDTO(m, s.manualCap())
+	dto, err := newTaskManualDTO(m, s.manualSopCap(), s.manualLearningsCap())
 	if err != nil {
 		internalError(w, err)
 		return
@@ -195,15 +195,19 @@ func (s *apiServer) HandleListTaskManualsApiTaskManualsGet(w http.ResponseWriter
 	}
 	list := trimmedOrEmpty(params.View) == "list"
 	out := []taskManualDTO{}
-	// Read the cap ONCE for the whole listing: per-row reads could straddle a
-	// PATCH and hand back one list quoting two different caps.
-	capChars := s.manualCap()
+	// Read each cap ONCE for the whole listing: per-row reads could straddle a
+	// PATCH and hand back one list quoting two different caps for the same
+	// segment. The two segments' caps are still read independently — they are
+	// different settings, and a list reporting one number for both is the bug
+	// T-30f1 exists to remove.
+	sopCapChars := s.manualSopCap()
+	learningsCapChars := s.manualLearningsCap()
 	for _, m := range manuals {
 		if list {
-			out = append(out, newTaskManualListItemDTO(m, capChars))
+			out = append(out, newTaskManualListItemDTO(m, sopCapChars, learningsCapChars))
 			continue
 		}
-		dto, err := newTaskManualDTO(m, capChars)
+		dto, err := newTaskManualDTO(m, sopCapChars, learningsCapChars)
 		if err != nil {
 			internalError(w, err)
 			return
@@ -363,16 +367,22 @@ func (s *apiServer) HandleUpdateTaskManualApiTaskManualsTypeKeyPost(w http.Respo
 	// have left both an uncapped door onto the same document and sop_md with no
 	// gate at all. Validated BEFORE any field is applied, so a refusal leaves
 	// the whole partial update unwritten (the handler's existing posture).
-	// Both fields are judged against ONE read of the live cap (T-3aeb): two
-	// reads could straddle a concurrent PATCH and judge one doc by a cap the
-	// other never saw.
-	docCap := s.manualCap()
-	if body.SopMd != nil && DocCapBlocked(docCap, m.SopMD, *body.SopMd) {
-		writeError(w, http.StatusBadRequest, docCapRefusal(docCap, "sop_md doc", m.SopMD, *body.SopMd))
+	// Each field is judged against ITS OWN cap, read once (T-30f1). Until then
+	// both were judged against one read of one shared cap, and the reason given
+	// was that two reads could straddle a concurrent PATCH and judge one doc by
+	// a cap the other never saw — true only while there was a single number to
+	// straddle. sop_md and learnings now answer to two independent settings, so
+	// sharing a read would mean judging one document by the other's budget.
+	// Each cap is still read exactly once, so neither field is judged twice
+	// against two different values of its own setting.
+	sopCap := s.manualSopCap()
+	learningsCap := s.manualLearningsCap()
+	if body.SopMd != nil && DocCapBlocked(sopCap, m.SopMD, *body.SopMd) {
+		writeError(w, http.StatusBadRequest, docCapRefusal(sopCap, "sop_md doc", m.SopMD, *body.SopMd))
 		return
 	}
-	if body.Learnings != nil && DocCapBlocked(docCap, m.Learnings, *body.Learnings) {
-		writeError(w, http.StatusBadRequest, docCapRefusal(docCap, "learnings doc", m.Learnings, *body.Learnings))
+	if body.Learnings != nil && DocCapBlocked(learningsCap, m.Learnings, *body.Learnings) {
+		writeError(w, http.StatusBadRequest, docCapRefusal(learningsCap, "learnings doc", m.Learnings, *body.Learnings))
 		return
 	}
 	// All validated — apply the partial update. The two versioned fields are
@@ -485,7 +495,7 @@ func (s *apiServer) HandleWriteTaskLearningsApiTaskManualsTypeKeyLearningsPost(w
 	}
 	// T-3351 hard cap. Unconditional — allow_shrink governs the opposite
 	// direction (shrinking too far) and is not a bypass for this one.
-	if cap := s.manualCap(); DocCapBlocked(cap, m.Learnings, body.Text) {
+	if cap := s.manualLearningsCap(); DocCapBlocked(cap, m.Learnings, body.Text) {
 		writeError(w, http.StatusBadRequest, docCapRefusal(cap, "learnings doc", m.Learnings, body.Text))
 		return
 	}
@@ -570,7 +580,7 @@ func (s *apiServer) HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchP
 	// T-3351 hard cap, judged on the RESULT of the patch (not the patch's own
 	// size). Unconditional: allow_shrink is not a bypass.
 	// One read, reused by the receipt below (see api_roles.go).
-	cap := s.manualCap()
+	cap := s.manualLearningsCap()
 	if DocCapBlocked(cap, m.Learnings, next) {
 		writeError(w, http.StatusBadRequest, docCapRefusal(cap, "learnings doc", m.Learnings, next))
 		return
