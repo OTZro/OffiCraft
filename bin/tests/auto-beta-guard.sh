@@ -584,6 +584,37 @@ elif what == "publish-gated-on-freshness":
     cond = norm((steps[0] if steps else {}).get("if", ""))
     print("gated" if re.search(r"steps\.\w+\.outputs\.\w+", cond) else (cond or "-"))
 
+elif what == "freshness-gate-ref":
+    # Read the gate off the PUBLISH step rather than hardcoding "freshness": the
+    # thing being pinned is that publishing is bound to a real staleness verdict,
+    # so the step id, the output name and the value that OPENS the gate all come
+    # from the workflow itself. Renaming the step is fine; severing the binding is
+    # not, and nothing downstream can be satisfied by a step this does not find.
+    steps = publish_steps()
+    cond = norm(unwrap((steps[0] if steps else {}).get("if", "")))
+    m = re.search(r"steps\.(\w+)\.outputs\.(\w+)\s*==\s*'([^']*)'", cond)
+    print("%s %s %s" % m.groups() if m else "-")
+
+elif what == "step-run":
+    # The `run:` body of the step with this id, plus its env bindings, emitted as
+    # a shell-sourceable fixture so the guard can EXECUTE the real comparison
+    # instead of pattern-matching it. `${{ github.sha }}` — in an env value or
+    # interpolated straight into the body — is rewritten to $OC_PC_TRIGGER_SHA,
+    # which is the one value the harness varies.
+    want = sys.argv[3]
+    hit = [s for s in (me.get("steps") or []) if str(s.get("id", "")) == want]
+    if not hit:
+        sys.exit("no step with id %r in job %r" % (want, job))
+    step = hit[0]
+    SHA_RX = re.compile(r"\$\{\{\s*github\.sha\s*\}\}")
+    for k, v in (step.get("env") or {}).items():
+        v = str(v)
+        if SHA_RX.fullmatch(v.strip()):
+            print("export %s=\"$OC_PC_TRIGGER_SHA\"" % k)
+        else:
+            print("export %s=%s" % (k, json.dumps(v)))
+    print(SHA_RX.sub('"$OC_PC_TRIGGER_SHA"', str(step.get("run", ""))))
+
 elif what == "checkout-with":
     # fetch-depth alone is not the whole requirement: tags have to arrive too, and
     # a tagless checkout is rc=0 + zero tags, which bin/next-beta-tag now refuses.
@@ -1531,6 +1562,95 @@ check "W5 that call carries --no-settle, --target = the triggering SHA, --beta =
   "no-settle,target-sha,beta-from-tag-step" "$(q publish-call-shape)"
 check "W5b the publish step is gated on the staleness check (a re-run of an old main run must not republish)" \
   "gated" "$(q publish-gated-on-freshness)"
+
+# ── W5c: the staleness verdict is REAL, driven, not read ───────────────────
+# W5b only says the publish step hangs off `steps.<x>.outputs.<y>`. That is a
+# statement about WIRING and it survives everything that actually matters: gut
+# the comparison to `fresh=yes` unconditionally, drop the `git rev-parse
+# FETCH_HEAD` half, invert the branches — W5b stays green, and a re-run of an old
+# main run publishes an OLDER tree under a HIGHER version number, which the
+# station then admits by semver order (server/ocserverd/update_check.go).
+#
+# So this RUNS the step's own `run:` body, lifted verbatim out of ci.yml, twice
+# against a `git` that is the oracle: once where main's head IS this run's commit
+# and once where it is NOT. The gate must OPEN in the first and CLOSE in the
+# second. Nothing here reads the text of the comparison, so any rewrite that
+# keeps the behaviour passes and any rewrite that loses it reddens.
+#
+# ⚠️ THE ASSERTION LIVES HERE AND NOT IN ci.yml ON PURPOSE. A check that a file
+# contains X, kept inside that same file, is satisfied by whoever deletes X and
+# leaves a bare X-shaped line behind — this repo has already been bitten by that
+# exact shape (a marker living in the file it guarded). The workflow cannot
+# execute a self-test of its own step either: the step only runs on a green push
+# to main, which is precisely the run this is protecting.
+GATE_REF="$(q freshness-gate-ref)"
+if [[ "$GATE_REF" == "-" ]]; then
+  bad "W5c the publish step's \`if\` does not compare a step output to a literal, so there is no staleness verdict to drive: $(q publish-gated-on-freshness)"
+else
+  read -r GATE_STEP GATE_OUT GATE_OPEN <<<"$GATE_REF"
+  ok "W5c the publish gate reads steps.$GATE_STEP.outputs.$GATE_OUT == '$GATE_OPEN'"
+
+  FRESHDIR="$WORK/freshness"; mkdir -p "$FRESHDIR/bin"
+  # git: the oracle AND a tripwire. It answers rev-parse with the head this case
+  # is positing and records every call, so "the body never ran" cannot be mistaken
+  # for "the body ran and agreed" — an empty or unextractable run: would otherwise
+  # leave GITHUB_OUTPUT empty in BOTH cases and score as a clean pass.
+  cat > "$FRESHDIR/bin/git" <<'GITSH'
+#!/usr/bin/env bash
+echo "git $*" >> "$OC_PC_GITLOG"
+case "${1:-}" in
+  rev-parse) printf '%s\n' "$OC_PC_MAIN_HEAD" ;;
+  *) : ;;
+esac
+exit 0
+GITSH
+  chmod +x "$FRESHDIR/bin/git"
+
+  if ! q step-run "$GATE_STEP" > "$FRESHDIR/step.sh" 2>"$FRESHDIR/step.err"; then
+    bad "W5c could not lift the '$GATE_STEP' step out of ci.yml: $(tr '\n' ' ' < "$FRESHDIR/step.err")"
+  else
+    # drive <main-head> <trigger-sha> — sets FRESH_RC, FRESH_VAL, FRESH_CALLS.
+    drive() {
+      : > "$FRESHDIR/out.txt"; : > "$FRESHDIR/git.log"
+      env PATH="$FRESHDIR/bin:$PATH" \
+          GITHUB_OUTPUT="$FRESHDIR/out.txt" \
+          OC_PC_GITLOG="$FRESHDIR/git.log" \
+          OC_PC_MAIN_HEAD="$1" \
+          OC_PC_TRIGGER_SHA="$2" \
+          bash "$FRESHDIR/step.sh" >"$FRESHDIR/step.log" 2>&1
+      FRESH_RC=$?
+      FRESH_VAL="$(sed -n "s/^$GATE_OUT=//p" "$FRESHDIR/out.txt" | tail -1)"
+      FRESH_CALLS="$(grep -c . "$FRESHDIR/git.log" || true)"
+    }
+
+    SHA_A="1111111111111111111111111111111111111111"
+    SHA_B="2222222222222222222222222222222222222222"
+
+    drive "$SHA_A" "$SHA_A"
+    check "W5c FRESH (main's head IS this run's commit): the step exits clean" "0" "$FRESH_RC"
+    check "W5c FRESH: it wrote $GATE_OUT=$GATE_OPEN, so the publish gate OPENS" \
+      "$GATE_OPEN" "$FRESH_VAL"
+    FRESH_CALLS_FRESH="$FRESH_CALLS"
+
+    drive "$SHA_B" "$SHA_A"
+    check "W5c STALE (main has moved on): the step still exits clean — a stale re-run SKIPS, it does not fail" \
+      "0" "$FRESH_RC"
+    if [[ "$FRESH_VAL" == "$GATE_OPEN" ]]; then
+      bad "W5c STALE: the step still wrote $GATE_OUT=$GATE_OPEN — an old main run would republish OLDER code under a HIGHER version. The comparison is gone, inverted, or unconditional."
+    else
+      ok "W5c STALE: $GATE_OUT='${FRESH_VAL:-<unwritten>}' ≠ '$GATE_OPEN', so the publish gate CLOSES"
+    fi
+
+    # Positive control on the harness itself: the body must really have consulted
+    # git in BOTH runs. Two identical verdicts reached without ever asking what
+    # main's head is would be a comparison against something that is not main.
+    if [[ "$FRESH_CALLS_FRESH" -ge 1 && "$FRESH_CALLS" -ge 1 ]]; then
+      ok "W5cpc the lifted body really executed and really consulted git ($FRESH_CALLS_FRESH and $FRESH_CALLS calls) — an empty extraction cannot score these cases green"
+    else
+      bad "W5cpc the lifted '$GATE_STEP' body never invoked git (fresh=$FRESH_CALLS_FRESH stale=$FRESH_CALLS): the two verdicts above were not reached by comparing against main's head"
+    fi
+  fi
+fi
 
 # ── W6: the checkout is deep AND brings tags ───────────────────────────────
 check "W6 $JOB checks out with fetch-depth: 0 AND fetch-tags: true (worktree add <sha> + the tag union need both)" \
