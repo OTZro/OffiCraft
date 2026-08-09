@@ -13,12 +13,22 @@
 #
 #   bash bin/build-seedsdist          # stage seeds/*.md into seedsdist/
 #   (cd server/ocserverd && go build) # then bakes the seeds into the binary
+#
+# OC_SEEDS_SRC overrides WHICH directory is staged (default: repo-root seeds/).
+# It exists so a throwaway server can be built from a CANDIDATE boot context
+# without editing the tracked seeds/ — the boot context is embed-only, so
+# "run an agent against a different boot context" has no runtime knob and
+# swapping it otherwise means dirtying the working tree. Unset, this script
+# stages exactly what it staged before.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+SEEDS_SRC="${OC_SEEDS_SRC:-$ROOT/seeds}"
+[ -d "$SEEDS_SRC" ] || { echo "[build-seedsdist] seeds source not a directory: $SEEDS_SRC" >&2; exit 1; }
 
 SEEDSDIST="$ROOT/server/ocserverd/seedsdist"
 rm -rf "$SEEDSDIST"
 mkdir -p "$SEEDSDIST"
-cp "$ROOT"/seeds/*.md "$SEEDSDIST/"
+cp "$SEEDS_SRC"/*.md "$SEEDSDIST/"
 touch "$SEEDSDIST/.gitkeep"
-echo "[build-seedsdist] staged seeds → server/ocserverd/seedsdist ($(find "$SEEDSDIST" -type f -name '*.md' | wc -l | tr -d ' ') files)"
+echo "[build-seedsdist] staged seeds → server/ocserverd/seedsdist from $SEEDS_SRC ($(find "$SEEDSDIST" -type f -name '*.md' | wc -l | tr -d ' ') files)"
