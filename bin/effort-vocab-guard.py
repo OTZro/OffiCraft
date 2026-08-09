@@ -230,6 +230,8 @@ def scan(truth: Set[str]) -> Tuple[List[Finding], List[str], Dict[str, int]]:
     for rel in tracked_files():
         if rel in SKIP_FILES:
             continue
+        compared_lines: Set[int] = set()
+        pending_unreadable: List[Tuple[str, int, int]] = []
         if Path(rel).suffix not in TEXT_SUFFIXES:
             continue
         try:
@@ -246,6 +248,7 @@ def scan(truth: Set[str]) -> Tuple[List[Finding], List[str], Dict[str, int]]:
 
         def record(shape: str, index: int, listed: Set[str]) -> None:
             counts[shape] += 1
+            compared_lines.add(line_of(text, index))
             if listed != truth:
                 findings.append(
                     Finding(rel, line_of(text, index), shape, listed, excerpt_at(text, index))
@@ -257,18 +260,14 @@ def scan(truth: Set[str]) -> Tuple[List[Finding], List[str], Dict[str, int]]:
         for m in re.finditer(r"effort must be one of([^\";]*)", text, re.I):
             listed = words(m.group(1))
             if not listed:
-                # OBSERVED: the phrase is here and no list follows it on this line.
-                # WHY is not observable from here — it could be a message assembled
-                # at runtime, a test asserting only the prefix, or prose naming the
-                # message — so this says what it saw and lets the reader pick the
-                # remedy. An earlier version diagnosed "built at runtime", which the
-                # scan never established and which was wrong for two of the three.
-                counts["unreadable-message"] += 1
-                unreadable.append(
-                    f"{rel}:{line_of(text, m.start())} names 'effort must be one "
-                    f"of' with no list after it on this line\n"
-                    f"      {excerpt_at(text, m.start()).strip()[:120]}"
-                )
+                # OBSERVED, stated no wider than what was looked at: the text
+                # between the phrase and the end of its string literal names no
+                # level. Deliberately NOT "no list on this line" — the region stops
+                # at the closing quote, so prose can carry the list just past it and
+                # an earlier wording contradicted its own printed excerpt. Whether
+                # THAT line is nonetheless compared is settled below, once every
+                # shape has had its turn at it.
+                pending_unreadable.append((rel, line_of(text, m.start()), m.start()))
                 continue
             record("must-be-one-of", m.start(), listed)
 
@@ -350,15 +349,30 @@ def scan(truth: Set[str]) -> Tuple[List[Finding], List[str], Dict[str, int]]:
                 if listed:
                     record("prose", start + m.start(), listed)
 
+        for rel_u, line_u, index_u in pending_unreadable:
+            if line_u in compared_lines:
+                # Another shape on the SAME line handed us a list, so this line IS
+                # compared and there is nothing for a reader to fix.
+                continue
+            counts["unreadable-message"] += 1
+            unreadable.append(
+                f"{rel_u}:{line_u} names 'effort must be one of' and nothing on "
+                f"that line yields a list this scan can compare\n"
+                f"      {excerpt_at(text, index_u).strip()[:120]}"
+            )
+
     return findings, unreadable, counts
 
 
 def main() -> None:
     truth = ssot()
     findings, unreadable, counts = scan(truth)
+    blocks: List[str] = []
     if findings:
-        listing = "\n  ".join(f.render(truth) for f in sorted(findings, key=lambda f: (f.rel, f.line)))
-        fail(
+        listing = "\n  ".join(
+            f.render(truth) for f in sorted(findings, key=lambda f: (f.rel, f.line))
+        )
+        blocks.append(
             f"the effort vocabulary enforced by {SSOT_FILE}:{SSOT_FUNC} is "
             f"{{{', '.join(sorted(truth))}}}, but these copies disagree:\n  {listing}\n\n"
             "  Fix the copies, not this guard. Do NOT narrow the scan to make a row go "
@@ -369,20 +383,25 @@ def main() -> None:
         )
     if unreadable:
         rows = "\n  ".join(unreadable)
-        fail(
-            "these lines name the validation message but carry no list this scan "
-            f"can read, so nothing here compares them to {SSOT_FILE}:{SSOT_FUNC}:\n  "
-            f"{rows}\n\n"
-            "  Pick the one that is true and act on it — this guard cannot tell them "
-            "apart:\n"
+        blocks.append(
+            "these lines name the validation message but nothing on them yields a "
+            f"list to compare against {SSOT_FILE}:{SSOT_FUNC}:\n  {rows}\n\n"
+            "  This scan cannot tell these apart, so pick the one that is true:\n"
             "    * the message is assembled at runtime ⇒ write the levels as a "
-            "literal, or the printed list can drift forever with nothing to catch it;\n"
-            "    * this only NAMES the message (a test matching the prefix, prose "
-            "about it) and the list lives elsewhere ⇒ that elsewhere is what this "
-            "guard should be reading, so add this file to SKIP_FILES with a committed "
-            "reason;\n"
+            "literal, or the list it prints can drift forever with nothing to catch it;\n"
+            "    * the line only NAMES the message (a test matching the prefix) and "
+            "the real copy is elsewhere ⇒ the cheapest honest fix is to put the levels "
+            "on this line too. SKIP_FILES is the escape hatch but it is FILE-level: it "
+            "would also remove any real copy in this file from the sweep, so take it "
+            "only when the whole file has none;\n"
             "    * the list was meant to be here and got lost ⇒ put it back."
         )
+    # Both classes are reported TOGETHER. They were two separate fail() calls until
+    # a review pointed out that fail() never returns, so the second one could not
+    # run: real drift silently swallowed every unreadable line. That is the previous
+    # round's defect with its direction reversed.
+    if blocks:
+        fail("\n\n  ".join(blocks))
     total = sum(counts.values())
     breakdown = ", ".join(f"{n} {shape}" for shape, n in sorted(counts.items()) if n)
     print(

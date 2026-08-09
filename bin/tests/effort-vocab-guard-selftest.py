@@ -215,7 +215,7 @@ def _(root: Path) -> None:
     edit(root, "docs/guide/members.md", "低／中／高", "低／中")
 
 
-@case("message-named-but-list-not-readable", "server/ocserverd/api_members.go:6 names 'effort must be one of' with no list")
+@case("message-named-but-list-not-readable", "server/ocserverd/api_members.go:6 names 'effort must be one of' and nothing on")
 def _(root: Path) -> None:
     """A validation message whose list this scan cannot read must not pass as
     "nothing to compare". The expectation pins the RENDERED SENTENCE, not the
@@ -300,7 +300,7 @@ EXPECTED_CASES = frozenset(
         ("equality-chain-drops-a-level", "frontend/src/components/AgentDetailPanel.tsx:2"),
         ("label-map-drops-a-level", "frontend/src/i18n/locales/en.ts:2"),
         ("chinese-doc-prose-drops-a-level", "docs/guide/members.md:1"),
-        ("message-named-but-list-not-readable", "server/ocserverd/api_members.go:6 names 'effort must be one of' with no list"),
+        ("message-named-but-list-not-readable", "server/ocserverd/api_members.go:6 names 'effort must be one of' and nothing on"),
         ("ssot-grows-real-tree", CODEX_REL),
         ("ssot-grows-names-every-stale-copy", "frontend/src/types.ts"),
         ("reported-effort-passthrough-is-not-a-copy", None),
