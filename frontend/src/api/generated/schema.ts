@@ -2597,13 +2597,13 @@ export interface paths {
         };
         /**
          * Read one task manual (purpose/fields/SOP/learnings/assignee).
-         * @description Read one manual in full (purpose / fields / SOP / learnings / assignee) — the intake's type-judgement AND the planner's blueprint read. Unknown type → 404.
+         * @description Read one manual in full (purpose / fields / SOP / learnings / assignee) — the intake's type-judgement AND the planner's blueprint read. Unknown type → 404. The SOP and the learnings are judged by two SEPARATE caps, reported as ``sop_md_cap_chars`` and ``learnings_cap_chars``; the older ``cap_chars`` is DEPRECATED — it carries the LEARNINGS cap only and says nothing about sop_md, so read ``sop_md_cap_chars`` for the SOP.
          */
         get: operations["handle_get_task_manual_api_task_manuals__type_key__get"];
         put?: never;
         /**
          * Edit a task manual (partial; content fields agent-editable; assignee = owner/admin agent).
-         * @description Partial manual edit — only supplied fields change. Agent floor: content fields (purpose / fields / sop_md / learnings) are agent-editable; ``assignee`` is GOVERNANCE — a caller below admin_agent supplying it is a 403 (T-6020). ``assignee`` is {"kind":"member","member_id":…} or {"kind":"outsource","model":…,"effort":…,"copies":N}; {} unsets it. Unknown keys are REJECTED (422) rather than silently dropped: this endpoint writes the same learnings document as ``write_task_learnings``, which spells the field ``text`` instead of ``learnings`` — sending the wrong name used to answer 200 having written nothing (T-2d99). Omitting a field remains legal; only unrecognised names are refused.
+         * @description Partial manual edit — only supplied fields change. Agent floor: content fields (purpose / fields / sop_md / learnings) are agent-editable; ``assignee`` is GOVERNANCE — a caller below admin_agent supplying it is a 403 (T-6020). ``assignee`` is {"kind":"member","member_id":…} or {"kind":"outsource","model":…,"effort":…,"copies":N}; {} unsets it. Unknown keys are REJECTED (422) rather than silently dropped: this endpoint writes the same learnings document as ``write_task_learnings``, which spells the field ``text`` instead of ``learnings`` — sending the wrong name used to answer 200 having written nothing (T-2d99). Omitting a field remains legal; only unrecognised names are refused. The SOP and the learnings are judged by two SEPARATE caps, reported as ``sop_md_cap_chars`` and ``learnings_cap_chars``; the older ``cap_chars`` is DEPRECATED — it carries the LEARNINGS cap only and says nothing about sop_md, so read ``sop_md_cap_chars`` for the SOP.
          */
         post: operations["handle_update_task_manual_api_task_manuals__type_key__post"];
         /**

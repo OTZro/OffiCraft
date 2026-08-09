@@ -2922,7 +2922,7 @@
       "name": "create_task_manual"
     },
     {
-      "description": "Read one task manual (purpose/fields/SOP/learnings/assignee).",
+      "description": "Read one task manual (purpose/fields/SOP/learnings/assignee). The SOP and the learnings are judged by two SEPARATE caps: read sop_md_cap_chars and learnings_cap_chars. The older cap_chars is DEPRECATED — it carries the LEARNINGS cap only and says nothing about sop_md, so read sop_md_cap_chars for the SOP.",
       "inputSchema": {
         "properties": {
           "type_key": {
@@ -2937,7 +2937,7 @@
       "name": "get_task_manual"
     },
     {
-      "description": "Edit a task manual (partial; content fields agent-editable; assignee = owner/admin agent). An outsource assignee may select runtime claude/codex; absent = claude. Only the fields you name change, so omitting a field is safe — but unknown keys are rejected rather than dropped: the learnings doc goes in learnings (NOT text — that is write_task_learnings' field name).",
+      "description": "Edit a task manual (partial; content fields agent-editable; assignee = owner/admin agent). An outsource assignee may select runtime claude/codex; absent = claude. Only the fields you name change, so omitting a field is safe — but unknown keys are rejected rather than dropped: the learnings doc goes in learnings (NOT text — that is write_task_learnings' field name). The SOP and the learnings are judged by two SEPARATE caps: read sop_md_cap_chars and learnings_cap_chars. The older cap_chars is DEPRECATED — it carries the LEARNINGS cap only and says nothing about sop_md, so read sop_md_cap_chars for the SOP.",
       "inputSchema": {
         "properties": {
           "assignee": {

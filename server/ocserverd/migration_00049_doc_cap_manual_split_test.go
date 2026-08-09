@@ -139,6 +139,15 @@ func TestMigration00049DownFoldsBackTheLargerHalf(t *testing.T) {
 		{"sop was raised higher", contextDocMaxCharsDefault + 9000, contextDocMaxCharsDefault + 1000, contextDocMaxCharsDefault + 9000},
 		{"learnings was raised higher", contextDocMaxCharsDefault + 1000, contextDocMaxCharsDefault + 9000, contextDocMaxCharsDefault + 9000},
 		{"both equal", contextDocMaxCharsDefault + 3000, contextDocMaxCharsDefault + 3000, contextDocMaxCharsDefault + 3000},
+		// The column is TEXT, and every other case above happens to be five
+		// digits wide, where lexical order and numeric order agree. The real
+		// adjustable range runs from minDocCapChars to maxDocCapChars, so the
+		// two orders DISAGREE across the digit-count boundary: lexically
+		// '15000' outranks '100000'. A site that raised its SOP to the ceiling
+		// would roll back to the floor — the silent downgrade this migration
+		// exists to prevent.
+		{"the larger half has more digits", maxDocCapChars, minDocCapChars, maxDocCapChars},
+		{"the smaller half has more digits", minDocCapChars, maxDocCapChars, maxDocCapChars},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
