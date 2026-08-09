@@ -1362,8 +1362,16 @@ type myTaskDTO struct {
 // waiting_external — because a parallel group can have several at once and the
 // worker needs all of them. With none live (a fresh plan), the lowest-order_idx
 // pending step is what the worker is about to pick up, so that one is current.
-// Everything else keeps only id / name / status / order_idx: enough to see the
-// shape of the plan, none of the prose that made this response unreadable.
+//
+// What a non-current row still carries is decided by SIZE, not by tidiness.
+// dod and note are the whole reason this projection exists (step notes alone
+// were 42.7% of a 100k-character response), so they go. parallel_group, is_gate
+// and waiting_reason are bounded scalars — a few bytes each — and each one
+// answers a question the worker is INSTRUCTED to ask of the plan as a whole:
+// am I inside a parallel stage (the SOP says fan out a sub-agent per lane),
+// is there an approval gate waiting further down (the SOP says see it coming,
+// not discover it), and why is that other step parked. Blanking them buys
+// nothing measurable and removes behaviour, so they stay on every row.
 func slimMyTaskSteps(steps []taskStepDTO) int {
 	current := map[int]bool{}
 	for i, st := range steps {
@@ -1394,10 +1402,13 @@ func slimMyTaskSteps(steps []taskStepDTO) int {
 		omitted += utf8.RuneCountInString(steps[i].DoD) +
 			utf8.RuneCountInString(steps[i].Note)
 		steps[i] = taskStepDTO{
-			ID:       steps[i].ID,
-			OrderIdx: steps[i].OrderIdx,
-			Name:     steps[i].Name,
-			Status:   steps[i].Status,
+			ID:            steps[i].ID,
+			OrderIdx:      steps[i].OrderIdx,
+			Name:          steps[i].Name,
+			Status:        steps[i].Status,
+			ParallelGroup: steps[i].ParallelGroup,
+			IsGate:        steps[i].IsGate,
+			WaitingReason: steps[i].WaitingReason,
 		}
 	}
 	return omitted

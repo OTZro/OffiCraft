@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -241,6 +242,33 @@ func taskReq(t *testing.T, method, path string, body any, sub, scope string) *ht
 	claims := map[string]any{"sub": sub, "scope": scope}
 	return req.WithContext(
 		context.WithValue(req.Context(), claimsContextKey, claims))
+}
+
+// assertReceiptKeys pins a bounded receipt by its EXACT top-level key set.
+//
+// It exists because decodeBody alone cannot tell a receipt from the whole task:
+// json.Unmarshal ignores unknown keys, and taskDTO happens to carry `priority`
+// and `frozen_by` at its own top level — so a handler that went back to
+// answering with the full task would fill in every field the receipt test reads
+// and the assertion would pass while the bug it guards is live. Comparing the
+// key set is the assertion that cannot be satisfied by a fatter body.
+func assertReceiptKeys(t *testing.T, rec *httptest.ResponseRecorder, want ...string) {
+	t.Helper()
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode receipt (%d %s): %v", rec.Code, rec.Body.String(), err)
+	}
+	got := make([]string, 0, len(body))
+	for k := range body {
+		got = append(got, k)
+	}
+	sort.Strings(got)
+	sorted := append([]string(nil), want...)
+	sort.Strings(sorted)
+	if strings.Join(got, ",") != strings.Join(sorted, ",") {
+		t.Fatalf("receipt must carry exactly %v, got %v (body: %s)",
+			sorted, got, rec.Body.String())
+	}
 }
 
 func decodeBody[T any](t *testing.T, rec *httptest.ResponseRecorder) T {
@@ -1871,7 +1899,7 @@ func TestGetMyTaskClaimsAndActivates(t *testing.T) {
 	}
 	plan := submitPlan(t, api, created.Task.ID, "m-exec", []map[string]any{
 		{"name": "gather", "dod": "DODONE"},
-		{"name": "build", "dod": "DODTWO"},
+		{"name": "build", "dod": "DODTWO", "is_gate": true},
 	})
 	for _, st := range plan.Steps {
 		if rec := writeStepNote(t, api, created.Task.ID, st.ID, "m-exec",
@@ -1916,6 +1944,9 @@ func TestGetMyTaskClaimsAndActivates(t *testing.T) {
 	if other.ID == "" || other.Name != "build" ||
 		other.Status != StepStatusPending || other.OrderIdx != 1 {
 		t.Fatalf("non-current step must keep id/name/status/order_idx: %+v", other)
+	}
+	if !other.IsGate {
+		t.Fatalf("a gate further down the plan must stay visible: %+v", other)
 	}
 	if want := len("DODTWO") + len("NOTE-build"); got.StepsOmittedChars != want {
 		t.Fatalf("steps_omitted_chars = %d, want %d", got.StepsOmittedChars, want)
@@ -1992,12 +2023,17 @@ func TestSlimMyTaskSteps(t *testing.T) {
 		}
 		eq(t, fullIdx(steps), nil)
 		bare := steps[0]
-		if bare.ParallelGroup != "" || bare.IsGate || bare.WaitingReason != "" ||
-			bare.TaskID != "" || bare.StartedTS != 0 || bare.FinishedTS != 0 {
-			t.Fatalf("a slimmed row keeps only id/name/status/order_idx: %+v", bare)
+		if bare.TaskID != "" || bare.StartedTS != 0 || bare.FinishedTS != 0 {
+			t.Fatalf("a slimmed row drops what the reader already has: %+v", bare)
 		}
 		if bare.ID == "" || bare.Name != "n" || bare.Status != StepStatusDone {
 			t.Fatalf("a slimmed row must keep its identity: %+v", bare)
+		}
+		// The bounded structural scalars SURVIVE the trim: the worker is told to
+		// fan out a sub-agent per parallel lane and to see an approval gate
+		// coming, and it can do neither if the projection hides the shape.
+		if bare.ParallelGroup != "g" || !bare.IsGate || bare.WaitingReason != "w" {
+			t.Fatalf("a slimmed row must keep parallel_group/is_gate/waiting_reason: %+v", bare)
 		}
 	})
 }
@@ -2632,8 +2668,12 @@ func TestSetTaskPriorityOwnerSetsEveryValueAndFansTheDelta(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("owner %s: %d %s", p, rec.Code, rec.Body.String())
 		}
-		if got := decodeBody[taskPriorityReceiptDTO](t, rec); got.Priority != p {
-			t.Fatalf("priority: want %q, got %q", p, got.Priority)
+		// The key set, not just the values: taskDTO carries priority/frozen_by
+		// too, so reading fields alone would still pass on a full-task answer.
+		assertReceiptKeys(t, rec, "task_id", "priority", "frozen_by")
+		if got := decodeBody[taskPriorityReceiptDTO](t, rec); got.Priority != p ||
+			got.TaskID != task.ID {
+			t.Fatalf("priority receipt: want %q on %s, got %+v", p, task.ID, got)
 		}
 		found := false
 		for {

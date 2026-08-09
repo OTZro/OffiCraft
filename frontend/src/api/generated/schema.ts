@@ -2489,7 +2489,7 @@ export interface paths {
         };
         /**
          * Outsource worker's claim: read the task bound to the caller.
-         * @description The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active. A caller with no bound worker row (any roster member included) is a 404.
+         * @description The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active. A caller with no bound worker row (any roster member included) is a 404. ``task.steps`` is SLIM here and here only: the CURRENT step(s) — every step in ``in_progress`` / ``waiting_owner`` / ``waiting_external``, or, when none is live, the lowest-``order_idx`` ``pending`` one — carry their full content, while every other step serves ``dod`` and ``note`` EMPTY and keeps the rest: ``id`` / ``name`` / ``status`` / ``order_idx`` plus the bounded structural scalars ``parallel_group`` / ``is_gate`` / ``waiting_reason``, so the shape of the plan — which stage runs in parallel, which gate is coming, why another step is parked — survives the trim. ``steps_omitted_chars`` reports how much text that dropped (the ``ResumeTaskDTO.detail_chars`` move: peek the number, then pull get_task, which is unslimmed).
          */
         get: operations["handle_get_my_task_api_self_task_get"];
         put?: never;
@@ -5232,7 +5232,7 @@ export interface components {
         };
         /**
          * MyTaskDTO
-         * @description The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active. ``task.steps`` is SLIM here and here only: the CURRENT step(s) — every step in ``in_progress`` / ``waiting_owner`` / ``waiting_external``, or, when none is live, the lowest-``order_idx`` ``pending`` one — carry their full content, while every other step keeps only ``id`` / ``name`` / ``status`` / ``order_idx`` and serves the rest of its fields empty. ``steps_omitted_chars`` reports how much that dropped (the ``ResumeTaskDTO.detail_chars`` move: peek the number, then pull get_task, which is unslimmed).
+         * @description The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active. ``task.steps`` is SLIM here and here only: the CURRENT step(s) — every step in ``in_progress`` / ``waiting_owner`` / ``waiting_external``, or, when none is live, the lowest-``order_idx`` ``pending`` one — carry their full content, while every other step serves ``dod`` and ``note`` EMPTY and keeps the rest: ``id`` / ``name`` / ``status`` / ``order_idx`` plus the bounded structural scalars ``parallel_group`` / ``is_gate`` / ``waiting_reason``, so the shape of the plan — which stage runs in parallel, which gate is coming, why another step is parked — survives the trim. ``steps_omitted_chars`` reports how much text that dropped (the ``ResumeTaskDTO.detail_chars`` move: peek the number, then pull get_task, which is unslimmed).
          */
         MyTaskDTO: {
             /** Manual */
