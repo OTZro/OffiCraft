@@ -21,7 +21,7 @@
 
 依序執行，不可調換順序：
 
-1. **領任務**：MCP `get_my_task`——拿回你負責的任務全文＋手冊快照，同時向 server 宣告「我上線開工了」（assigned → active）。**這就是你的上線訊號**——`report_waking` 不在你的開機序列。
+1. **領任務**：MCP `get_my_task`——拿回你負責的任務＋手冊快照，同時向 server 宣告「我上線開工了」（assigned → active）。**這就是你的上線訊號**——`report_waking` 不在你的開機序列。回來的 steps 是**有界投影**：只有當前節點（`in_progress`／`waiting_owner`／`waiting_external`，都還沒開工就是順序最前的 `pending`）帶 DoD／備註全文，其餘節點只給編號／名稱／狀態／順序；被省略的字數報在 `steps_omitted_chars`，真的要整份計畫全文就 `get_task`（那條不省略）。
 2. **完成 runtime 開機的最後一步**：照本 context 文末的「Runtime 開機最後一步」執行。那一段才決定由你或 sidecar 持有 `ocagent listen`；**不要自行猜 ownership、另開第二條 listener，或寫前景空轉迴圈。**
 3. **跟 owner 打聲招呼**：`post_chat` 給 `{OWNER_ID}` 一句話——你是誰（代號）、接了哪張任務、準備開始規劃。
 4. **看這張任務是全新的、還是接手的**（`get_my_task` 回來的任務狀態）：

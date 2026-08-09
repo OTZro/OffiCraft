@@ -1311,9 +1311,64 @@ type outsourceWorkerProjection struct {
 	typeDisplay func(string) string
 }
 
+// myTaskDTO is the outsource worker's claim (get_my_task). Its task carries the
+// SLIM step projection (slimMyTaskSteps): full content for the current step(s)
+// only, id/name/status/order_idx for the rest. steps_omitted_chars reports what
+// that projection dropped — the resumeTaskDTO.detail_chars move: an omission is
+// served as a NUMBER so the caller can peek-then-decide (get_task still serves
+// every step in full).
 type myTaskDTO struct {
-	Task   taskDTO        `json:"task"`
-	Manual *taskManualDTO `json:"manual"` // null for an ad-hoc task
+	Task              taskDTO        `json:"task"`
+	Manual            *taskManualDTO `json:"manual"` // null for an ad-hoc task
+	StepsOmittedChars int            `json:"steps_omitted_chars"`
+}
+
+// slimMyTaskSteps trims steps IN PLACE to the get_my_task projection and returns
+// the number of runes (CJK counts 1, not 3) of dod + note it dropped.
+//
+// "Current" is every step in a live status — in_progress / waiting_owner /
+// waiting_external — because a parallel group can have several at once and the
+// worker needs all of them. With none live (a fresh plan), the lowest-order_idx
+// pending step is what the worker is about to pick up, so that one is current.
+// Everything else keeps only id / name / status / order_idx: enough to see the
+// shape of the plan, none of the prose that made this response unreadable.
+func slimMyTaskSteps(steps []taskStepDTO) int {
+	current := map[int]bool{}
+	for i, st := range steps {
+		switch st.Status {
+		case StepStatusInProgress, StepStatusWaitingOwner, StepStatusWaitingExternal:
+			current[i] = true
+		}
+	}
+	if len(current) == 0 {
+		next := -1
+		for i, st := range steps {
+			if st.Status != StepStatusPending {
+				continue
+			}
+			if next < 0 || st.OrderIdx < steps[next].OrderIdx {
+				next = i
+			}
+		}
+		if next >= 0 {
+			current[next] = true
+		}
+	}
+	omitted := 0
+	for i := range steps {
+		if current[i] {
+			continue
+		}
+		omitted += utf8.RuneCountInString(steps[i].DoD) +
+			utf8.RuneCountInString(steps[i].Note)
+		steps[i] = taskStepDTO{
+			ID:       steps[i].ID,
+			OrderIdx: steps[i].OrderIdx,
+			Name:     steps[i].Name,
+			Status:   steps[i].Status,
+		}
+	}
+	return omitted
 }
 
 // newTaskStepDTO projects one step row onto the wire. cardStatus maps a bound

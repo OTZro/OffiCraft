@@ -5232,11 +5232,16 @@ export interface components {
         };
         /**
          * MyTaskDTO
-         * @description The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active.
+         * @description The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active. ``task.steps`` is SLIM here and here only: the CURRENT step(s) — every step in ``in_progress`` / ``waiting_owner`` / ``waiting_external``, or, when none is live, the lowest-``order_idx`` ``pending`` one — carry their full content, while every other step keeps only ``id`` / ``name`` / ``status`` / ``order_idx`` and serves the rest of its fields empty. ``steps_omitted_chars`` reports how much that dropped (the ``ResumeTaskDTO.detail_chars`` move: peek the number, then pull get_task, which is unslimmed).
          */
         MyTaskDTO: {
             /** Manual */
             manual: components["schemas"]["TaskManualDTO"] | null;
+            /**
+             * Steps Omitted Chars
+             * @description Total runes of ``dod`` + ``note`` blanked out of the non-current steps (CJK counts 1 per character). 0 = nothing was dropped.
+             */
+            steps_omitted_chars: number;
             task: components["schemas"]["TaskDTO"];
         };
         /**

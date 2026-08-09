@@ -2672,7 +2672,12 @@ func (s *apiServer) HandleGetMyTaskApiSelfTaskGet(w http.ResponseWriter, r *http
 		internalError(w, err)
 		return
 	}
-	out := myTaskDTO{Task: taskView}
+	// SLIM the steps for this face only (T-a98d): the full task + manual
+	// measured 100k characters, over the client's token ceiling, and 43% of it
+	// was step notes for steps the worker is not on. get_task is untouched —
+	// the cockpit and any agent that wants the whole plan still pull it there.
+	omitted := slimMyTaskSteps(taskView.Steps)
+	out := myTaskDTO{Task: taskView, StepsOmittedChars: omitted}
 	if t.TypeKey != "" {
 		manual, err := s.dal.GetTaskManual(t.TypeKey)
 		if err != nil {
