@@ -1257,7 +1257,8 @@ const DEFAULT_MOCK_SETTINGS = {
   doc_cap_chars_duty: DOC_CAP_CHARS_DEFAULTS.duty,
   doc_cap_chars_insight: DOC_CAP_CHARS_DEFAULTS.insight,
   doc_cap_chars_learning: DOC_CAP_CHARS_DEFAULTS.learning,
-  doc_cap_chars_manual: DOC_CAP_CHARS_DEFAULTS.manual,
+  doc_cap_chars_manual_sop: DOC_CAP_CHARS_DEFAULTS.manualSop,
+  doc_cap_chars_manual_learnings: DOC_CAP_CHARS_DEFAULTS.manualLearnings,
   // The two software-update toggles — both OFF out of the box, mirroring the
   // server (updates come from GitHub Releases; there is no updater server to
   // configure any more).
@@ -1292,13 +1293,13 @@ const DEFAULT_MOCK_SETTINGS = {
 /** Mirror of the server's per-document size/cap reporting (T-3aeb). Runes, not
  * UTF-16 units — same reason docCap.ts spells it [...s].length.
  *
- * T-ae38: the cap is now per SEGMENT, so the caller names which of the four it
- * is judged by. Passing the wrong one here would make the mock disagree with
- * the server about a doc's remaining budget — the one thing this helper exists
- * to keep honest. */
+ * T-ae38, widened by T-30f1: the cap is per SEGMENT, so the caller names which
+ * of the five it is judged by. Passing the wrong one here would make the mock
+ * disagree with the server about a doc's remaining budget — the one thing this
+ * helper exists to keep honest. */
 function docSizeFields(
   text: string,
-  cap: "duty" | "insight" | "learning" | "manual"
+  cap: "duty" | "insight" | "learning" | "manualSop" | "manualLearnings"
 ) {
   return {
     size_chars: [...text].length,
@@ -1306,7 +1307,8 @@ function docSizeFields(
       duty: mockServerSettings.doc_cap_chars_duty,
       insight: mockServerSettings.doc_cap_chars_insight,
       learning: mockServerSettings.doc_cap_chars_learning,
-      manual: mockServerSettings.doc_cap_chars_manual,
+      manualSop: mockServerSettings.doc_cap_chars_manual_sop,
+      manualLearnings: mockServerSettings.doc_cap_chars_manual_learnings,
     }[cap],
   };
 }
@@ -3347,9 +3349,9 @@ export const mockApi: Api = {
         "outsource_max_parallel must be between -1 and 20 (-1 = unlimited)"
       );
     }
-    // Server parity (T-3aeb / T-ae38): each floor IS that segment's shipped
-    // default, so a document cap can only ever be raised. Duty's floor is its
-    // OWN default, not the other three's — sharing one number here would make
+    // Server parity (T-3aeb / T-ae38 / T-30f1): each floor IS that segment's
+    // shipped default, so a document cap can only ever be raised. Duty's floor
+    // is its OWN default, not the others' — sharing one number here would make
     // the owner's Duty default unreachable through this surface. The numbers
     // are read from DOC_CAP_CHARS_DEFAULTS, never restated.
     for (const [field, wire, min] of [
@@ -3365,9 +3367,14 @@ export const mockApi: Api = {
         DOC_CAP_CHARS_DEFAULTS.learning,
       ],
       [
-        patch.docCapCharsManual,
-        "doc_cap_chars_manual",
-        DOC_CAP_CHARS_DEFAULTS.manual,
+        patch.docCapCharsManualSop,
+        "doc_cap_chars_manual_sop",
+        DOC_CAP_CHARS_DEFAULTS.manualSop,
+      ],
+      [
+        patch.docCapCharsManualLearnings,
+        "doc_cap_chars_manual_learnings",
+        DOC_CAP_CHARS_DEFAULTS.manualLearnings,
       ],
     ] as const) {
       if (field !== undefined && (field < min || field > 100000)) {
@@ -3469,8 +3476,12 @@ export const mockApi: Api = {
     if (patch.docCapCharsLearning !== undefined) {
       mockServerSettings.doc_cap_chars_learning = patch.docCapCharsLearning;
     }
-    if (patch.docCapCharsManual !== undefined) {
-      mockServerSettings.doc_cap_chars_manual = patch.docCapCharsManual;
+    if (patch.docCapCharsManualSop !== undefined) {
+      mockServerSettings.doc_cap_chars_manual_sop = patch.docCapCharsManualSop;
+    }
+    if (patch.docCapCharsManualLearnings !== undefined) {
+      mockServerSettings.doc_cap_chars_manual_learnings =
+        patch.docCapCharsManualLearnings;
     }
     if (patch.updaterReceiveBeta !== undefined) {
       mockServerSettings.updater_receive_beta = patch.updaterReceiveBeta;

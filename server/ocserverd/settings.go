@@ -61,27 +61,33 @@ const (
 	// assignment scheduler's admission knob; member tasks never count (H7).
 	settingOutsourceMaxParallel = "task.outsource_max_parallel"
 	// settingDocCapChars* (T-3aeb, owner 2026-07-31; split four ways in T-ae38,
-	// owner 2026-08-03) are the size caps on the accumulating context documents
-	// — see contextDocMaxCharsDefault in domain.go for the rule they feed.
-	// Adjustable so the owner can raise one without a release; each floor
-	// equals that segment's default, so a cap only ever goes UP.
+	// owner 2026-08-03; the manual's one split again in T-30f1) are the size
+	// caps on the accumulating context documents — see contextDocMaxCharsDefault
+	// in domain.go for the rule they feed. Adjustable so the owner can raise one
+	// without a release; each floor equals that segment's default, so a cap only
+	// ever goes UP.
 	//
-	// 🔴 EVERY key carries a suffix, including the one that inherited the old
-	// key's value. There is no `doc.cap_chars` any more, and that is the point:
-	// an agent reading `get_settings` sees key NAMES with no descriptions
-	// attached, so an unsuffixed key sitting beside three suffixed ones reads
-	// as "the global default". Someone wanting to raise the manual cap would
-	// edit it and believe they had moved all four, and nothing would say
-	// otherwise. The rename costs one migration, which had to be written
-	// regardless — the value has to move to `.manual` either way.
+	// 🔴 EVERY key carries a suffix, including the ones that inherited an older
+	// key's value. There is no `doc.cap_chars` any more, and since T-30f1 no
+	// `doc.cap_chars.manual` either, and that is the point: an agent reading
+	// `get_settings` sees key NAMES with no descriptions attached, so a key that
+	// names a WHOLE artefact sitting beside the segments it was split into reads
+	// as "the default for all of them". Someone wanting to raise the manual's
+	// learnings cap would edit `.manual` and believe they had moved both halves,
+	// and nothing would say otherwise. Each rename costs one migration, which
+	// had to be written regardless — the value has to move either way.
 	//
-	// The task manual's `sop_md` / `learnings` answer to `.manual`, NOT to any
-	// of the three role-journal segments: they are keyed by `type_key`, so they
-	// are assets of a task TYPE, not entries in a role's journal.
-	settingDocCapCharsDuty     = "doc.cap_chars.duty"
-	settingDocCapCharsInsight  = "doc.cap_chars.insight"
-	settingDocCapCharsLearning = "doc.cap_chars.learning"
-	settingDocCapCharsManual   = "doc.cap_chars.manual"
+	// The task manual's `sop_md` / `learnings` answer to `.manual_sop` /
+	// `.manual_learnings`, NOT to any of the three role-journal segments: they
+	// are keyed by `type_key`, so they are assets of a task TYPE, not entries in
+	// a role's journal. They are two keys and not one because the SOP is a
+	// blueprint that is refined in place while the learnings accumulate — one
+	// number could only ever be right for one of them.
+	settingDocCapCharsDuty            = "doc.cap_chars.duty"
+	settingDocCapCharsInsight         = "doc.cap_chars.insight"
+	settingDocCapCharsLearning        = "doc.cap_chars.learning"
+	settingDocCapCharsManualSop       = "doc.cap_chars.manual_sop"
+	settingDocCapCharsManualLearnings = "doc.cap_chars.manual_learnings"
 	// The retired updater.url / updater.invite_code keys belonged to the
 	// removed ocupdaterd updater-server chain (updates now ship as GitHub
 	// Releases on pkyosx/OffiCraft — update_check.go). They are no longer
@@ -164,27 +170,28 @@ const defaultMonitoringRefreshSeconds = 5
 
 // authSettings is the boot-time snapshot cmdServe stamps onto the apiServer.
 type authSettings struct {
-	secret                   []byte
-	passwordHash             string // "" = not set in DB (first-run: set-password flow)
-	passwordChangedAt        int64  // epoch secs; owner tokens with iat before it are refused
-	tokenTTL                 int64
-	ctxhigh                  SseContextHighConfig
-	codexCompactionThreshold int
-	monitoringRefreshSeconds int
-	outsourceMaxParallel     int              // task.outsource_max_parallel (default 3)
-	docCapCharsDuty          int              // doc.cap_chars.duty (default dutyCapCharsDefault)
-	docCapCharsInsight       int              // doc.cap_chars.insight (default contextDocMaxCharsDefault)
-	docCapCharsLearning      int              // doc.cap_chars.learning (default contextDocMaxCharsDefault)
-	docCapCharsManual        int              // doc.cap_chars.manual (default contextDocMaxCharsDefault)
-	updaterReceiveBeta       bool             // updater.receive_beta (default false = official releases only)
-	updaterAutoUpdate        bool             // updater.auto_update (default false = manual upgrades only)
-	orgName                  string           // org.name ("" = never set → localized default in the topbar)
-	ownerName                string           // owner.name ("" = never set → localized default in the profile pill)
-	pushContactEmail         string           // push.contact_email ("" = never set → Web Push delivery is refused)
-	displayTheme             string           // display.theme ("" = never set → frontend cache/default)
-	displayLanguage          string           // display.language ("" = never set → frontend cache/default)
-	displayWide              bool             // display.wide (default false = the narrow centred column)
-	displayCustomThemes      []ThemeBundleDTO // display.custom_themes (nil = none saved)
+	secret                     []byte
+	passwordHash               string // "" = not set in DB (first-run: set-password flow)
+	passwordChangedAt          int64  // epoch secs; owner tokens with iat before it are refused
+	tokenTTL                   int64
+	ctxhigh                    SseContextHighConfig
+	codexCompactionThreshold   int
+	monitoringRefreshSeconds   int
+	outsourceMaxParallel       int              // task.outsource_max_parallel (default 3)
+	docCapCharsDuty            int              // doc.cap_chars.duty (default dutyCapCharsDefault)
+	docCapCharsInsight         int              // doc.cap_chars.insight (default contextDocMaxCharsDefault)
+	docCapCharsLearning        int              // doc.cap_chars.learning (default contextDocMaxCharsDefault)
+	docCapCharsManualSop       int              // doc.cap_chars.manual_sop (default contextDocMaxCharsDefault)
+	docCapCharsManualLearnings int              // doc.cap_chars.manual_learnings (default contextDocMaxCharsDefault)
+	updaterReceiveBeta         bool             // updater.receive_beta (default false = official releases only)
+	updaterAutoUpdate          bool             // updater.auto_update (default false = manual upgrades only)
+	orgName                    string           // org.name ("" = never set → localized default in the topbar)
+	ownerName                  string           // owner.name ("" = never set → localized default in the profile pill)
+	pushContactEmail           string           // push.contact_email ("" = never set → Web Push delivery is refused)
+	displayTheme               string           // display.theme ("" = never set → frontend cache/default)
+	displayLanguage            string           // display.language ("" = never set → frontend cache/default)
+	displayWide                bool             // display.wide (default false = the narrow centred column)
+	displayCustomThemes        []ThemeBundleDTO // display.custom_themes (nil = none saved)
 }
 
 // loadAuthSettings loads the snapshot from the migrated DB, running the
@@ -332,7 +339,9 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 	// have refused. Each floor is that segment's own default (owner 2026-07-31:
 	// a cap only ever goes up), so a stored value below it is corruption, not a
 	// downgrade. The legacy single `doc.cap_chars` row was RENAMED to
-	// `doc.cap_chars.manual` by migration 00048 — the DB never holds both.
+	// `doc.cap_chars.manual` by migration 00048, and that row was in turn
+	// COPIED to `.manual_sop` and `.manual_learnings` and deleted by 00049 —
+	// the DB never holds a retired key beside its successors.
 	loadCap := func(key string, min int, dst *int, def int) error {
 		*dst = def
 		v, err := d.GetSetting(key)
@@ -359,8 +368,12 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 		&out.docCapCharsLearning, contextDocMaxCharsDefault); err != nil {
 		return out, err
 	}
-	if err := loadCap(settingDocCapCharsManual, minDocCapChars,
-		&out.docCapCharsManual, contextDocMaxCharsDefault); err != nil {
+	if err := loadCap(settingDocCapCharsManualSop, minDocCapChars,
+		&out.docCapCharsManualSop, contextDocMaxCharsDefault); err != nil {
+		return out, err
+	}
+	if err := loadCap(settingDocCapCharsManualLearnings, minDocCapChars,
+		&out.docCapCharsManualLearnings, contextDocMaxCharsDefault); err != nil {
 		return out, err
 	}
 

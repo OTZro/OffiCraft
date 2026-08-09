@@ -122,9 +122,9 @@ export function DocumentHistoryModal({
    * still loading: the diff then says so instead of comparing against nothing,
    * and the cap verdict abstains exactly as it does on the list. */
   currentContent?: Record<string, string>;
-  /** The FOUR live document size caps (the `doc.cap_chars.*` settings, T-3aeb /
-   * T-ae38) — not a constant on either side any more, and since T-ae38 not one
-   * number either: `docCapBlockedFields` picks the one that judges THIS kind.
+  /** The live document size caps (the `doc.cap_chars.*` settings, T-3aeb /
+   * T-ae38 / T-30f1) — not a constant on either side any more, and since T-ae38
+   * not one number either: `docCapBlockedFields` picks the one that judges THIS kind.
    * Resolved by the host for the same reason `actorLine` is: a modal pulling
    * its own copy would refetch the settings every time a row is clicked.
    * `undefined` while it loads, which makes the cap verdict abstain rather than

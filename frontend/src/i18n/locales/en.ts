@@ -1307,22 +1307,25 @@ export const en: Dict = {
     monitoringRefresh: "Monitoring refresh interval",
     monitoringRefreshSub: "Minimum seconds between monitoring refreshes (1–60)",
     seconds: "seconds",
-    // T-ae38: one cap became four. Deleting from these four documents costs
-    // wildly different amounts — a role definition is a standing description,
-    // a lessons doc is append-only environment Q&A — so they no longer share
-    // one ruler.
+    // T-ae38 (split again by T-30f1): one cap became many. Deleting from these
+    // documents costs wildly different amounts — a role definition is a
+    // standing description, a lessons doc is append-only environment Q&A — so
+    // they no longer share one ruler.
     docCapDuty: "Duty size cap",
     docCapDutySub:
-      "Per-role limit on the role definition. The floor is this segment's own shipped default (smaller than the other three) and the ceiling is 100000, so this can only be raised — lowering it would leave documents that are legal today able to shrink only.",
+      "Per-role limit on the role definition. The floor is this segment's own shipped default (smaller than every other segment's) and the ceiling is 100000, so this can only be raised — lowering it would leave documents that are legal today able to shrink only.",
     docCapInsight: "Insight size cap",
     docCapInsightSub:
       "Per-role limit on the insight doc. The floor is the shipped default and the ceiling is 100000, so this can only be raised.",
     docCapLearning: "Learning size cap",
     docCapLearningSub:
       "Per-role limit on the lessons doc. The floor is the shipped default and the ceiling is 100000, so this can only be raised.",
-    docCapManual: "Task manual size cap",
-    docCapManualSub:
-      "Per-document limit on a task manual's SOP and learnings. The floor is the shipped default and the ceiling is 100000, so this can only be raised.",
+    docCapManualSop: "Task manual SOP size cap",
+    docCapManualSopSub:
+      "Limit on a task manual's SOP (the plan blueprint). Independent of the field below — the SOP is refined in place while the learnings accumulate, so one number could only ever be right for one of them. The floor is the shipped default and the ceiling is 100000, so this can only be raised.",
+    docCapManualLearnings: "Task manual learnings size cap",
+    docCapManualLearningsSub:
+      "Limit on a task manual's learnings doc, independent of the SOP cap above. The floor is the shipped default and the ceiling is 100000, so this can only be raised.",
     docUsage: "Used",
     chars: "characters",
     // ── Verified-save read-back (T-1c2e; lives in the software-update view

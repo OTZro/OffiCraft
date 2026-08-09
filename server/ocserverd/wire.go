@@ -55,15 +55,17 @@ type settingsDTO struct {
 	OutsourceMaxParallel     int   `json:"outsource_max_parallel"`
 	// DocCapChars* are the live size caps on the accumulating context
 	// documents, in CHARACTERS (runes) — the same unit the patch receipts and
-	// the refusal message speak (T-3aeb). FOUR independent knobs since T-ae38:
-	// a role's Duty / Insight / Learning, plus the task manual's two long docs
-	// (keyed by type_key, so an asset of a task TYPE rather than of a journal).
-	// Every wire name carries its suffix for the same reason the DB keys do —
-	// an unsuffixed one beside three suffixed ones reads as a global default.
-	DocCapCharsDuty     int `json:"doc_cap_chars_duty"`
-	DocCapCharsInsight  int `json:"doc_cap_chars_insight"`
-	DocCapCharsLearning int `json:"doc_cap_chars_learning"`
-	DocCapCharsManual   int `json:"doc_cap_chars_manual"`
+	// the refusal message speak (T-3aeb). FIVE independent knobs: a role's
+	// Duty / Insight / Learning since T-ae38, plus the task manual's two long
+	// docs, which T-30f1 gave a knob EACH (keyed by type_key, so assets of a
+	// task TYPE rather than of a journal). Every wire name carries its suffix
+	// for the same reason the DB keys do — an unsuffixed one, or a bare
+	// `manual` beside the two it was split into, reads as a global default.
+	DocCapCharsDuty            int `json:"doc_cap_chars_duty"`
+	DocCapCharsInsight         int `json:"doc_cap_chars_insight"`
+	DocCapCharsLearning        int `json:"doc_cap_chars_learning"`
+	DocCapCharsManualSop       int `json:"doc_cap_chars_manual_sop"`
+	DocCapCharsManualLearnings int `json:"doc_cap_chars_manual_learnings"`
 	// UpdaterReceiveBeta / UpdaterAutoUpdate are the two software-update
 	// toggles (default false): follow GitHub prereleases too / self-upgrade
 	// in the background when a newer release exists.
@@ -1155,20 +1157,29 @@ type taskCountDTO struct {
 }
 
 type taskManualDTO struct {
-	// Per-CAPPED-DOCUMENT sizes plus the live cap (T-3aeb). Two numbers, not
-	// one total: the cap applies to learnings and sop_md separately, so a
-	// combined figure would answer neither question.
-	LearningsChars int            `json:"learnings_chars"`
-	SopMDChars     int            `json:"sop_md_chars"`
-	CapChars       int            `json:"cap_chars"`
-	TypeKey        string         `json:"type_key"`
-	DisplayName    string         `json:"display_name"`
-	Purpose        string         `json:"purpose"`
-	Fields         []ManualField  `json:"fields"`
-	SopMD          string         `json:"sop_md"`
-	Learnings      string         `json:"learnings"`
-	Assignee       map[string]any `json:"assignee"`
-	UpdatedTS      float64        `json:"updated_ts"`
+	// Per-CAPPED-DOCUMENT sizes AND, since T-30f1, per-capped-document caps:
+	// learnings and sop_md are judged by two independent settings, so a single
+	// cap number could only ever be right for one of them.
+	//
+	// CapChars is the DEPRECATED pre-split field. It is kept on the wire (its
+	// removal is a separate, owner-approved step) and carries the LEARNINGS cap
+	// — the segment that actually accumulates, and the one every pre-split
+	// caller was watching. A client reading it about sop_md gets a number that
+	// is merely stale rather than absent, which is why the split fields are the
+	// ones the descriptions point at.
+	LearningsChars    int            `json:"learnings_chars"`
+	SopMDChars        int            `json:"sop_md_chars"`
+	LearningsCapChars int            `json:"learnings_cap_chars"`
+	SopMDCapChars     int            `json:"sop_md_cap_chars"`
+	CapChars          int            `json:"cap_chars"`
+	TypeKey           string         `json:"type_key"`
+	DisplayName       string         `json:"display_name"`
+	Purpose           string         `json:"purpose"`
+	Fields            []ManualField  `json:"fields"`
+	SopMD             string         `json:"sop_md"`
+	Learnings         string         `json:"learnings"`
+	Assignee          map[string]any `json:"assignee"`
+	UpdatedTS         float64        `json:"updated_ts"`
 }
 
 type taskManualDeleteResultDTO struct {
@@ -1591,7 +1602,7 @@ func newTaskDepRefDTOs(deps []string, byID map[string]Task) []taskDepRefDTO {
 
 // newTaskManualDTO projects one manual row onto the wire (stored JSON blobs
 // parsed; a corrupt blob is an error, never a silent empty).
-func newTaskManualDTO(m TaskManual, capChars int) (taskManualDTO, error) {
+func newTaskManualDTO(m TaskManual, sopCapChars, learningsCapChars int) (taskManualDTO, error) {
 	fields, err := ParseManualFields(m.Fields)
 	if err != nil {
 		return taskManualDTO{}, err
@@ -1607,17 +1618,19 @@ func newTaskManualDTO(m TaskManual, capChars int) (taskManualDTO, error) {
 		}
 	}
 	return taskManualDTO{
-		LearningsChars: utf8.RuneCountInString(m.Learnings),
-		SopMDChars:     utf8.RuneCountInString(m.SopMD),
-		CapChars:       capChars,
-		TypeKey:        m.TypeKey,
-		DisplayName:    m.DisplayName,
-		Purpose:        m.Purpose,
-		Fields:         fields,
-		SopMD:          m.SopMD,
-		Learnings:      m.Learnings,
-		Assignee:       assignee,
-		UpdatedTS:      m.UpdatedTS,
+		LearningsChars:    utf8.RuneCountInString(m.Learnings),
+		SopMDChars:        utf8.RuneCountInString(m.SopMD),
+		LearningsCapChars: learningsCapChars,
+		SopMDCapChars:     sopCapChars,
+		CapChars:          learningsCapChars,
+		TypeKey:           m.TypeKey,
+		DisplayName:       m.DisplayName,
+		Purpose:           m.Purpose,
+		Fields:            fields,
+		SopMD:             m.SopMD,
+		Learnings:         m.Learnings,
+		Assignee:          assignee,
+		UpdatedTS:         m.UpdatedTS,
 	}, nil
 }
 
@@ -1628,22 +1641,24 @@ func newTaskManualDTO(m TaskManual, capChars int) (taskManualDTO, error) {
 // fields an empty list, assignee an empty object. It never parses the stored
 // fields/assignee JSON, so unlike newTaskManualDTO it cannot fail on a corrupt
 // blob (the light path deliberately does not touch those columns).
-func newTaskManualListItemDTO(m TaskManual, capChars int) taskManualDTO {
+func newTaskManualListItemDTO(m TaskManual, sopCapChars, learningsCapChars int) taskManualDTO {
 	// The sizes are measured on the STORED row, not on the blanked-out wire
 	// fields: this projection omits the bulky text but must not therefore
 	// report it as 0 chars — a zero that looks like a measurement is worse
 	// than the omission it describes. Sizes without the bulk is exactly what
 	// a list view wants.
 	return taskManualDTO{
-		LearningsChars: utf8.RuneCountInString(m.Learnings),
-		SopMDChars:     utf8.RuneCountInString(m.SopMD),
-		CapChars:       capChars,
-		TypeKey:        m.TypeKey,
-		DisplayName:    m.DisplayName,
-		Purpose:        m.Purpose,
-		Fields:         []ManualField{},
-		Assignee:       map[string]any{},
-		UpdatedTS:      m.UpdatedTS,
+		LearningsChars:    utf8.RuneCountInString(m.Learnings),
+		SopMDChars:        utf8.RuneCountInString(m.SopMD),
+		LearningsCapChars: learningsCapChars,
+		SopMDCapChars:     sopCapChars,
+		CapChars:          learningsCapChars,
+		TypeKey:           m.TypeKey,
+		DisplayName:       m.DisplayName,
+		Purpose:           m.Purpose,
+		Fields:            []ManualField{},
+		Assignee:          map[string]any{},
+		UpdatedTS:         m.UpdatedTS,
 	}
 }
 

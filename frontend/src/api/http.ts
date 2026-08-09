@@ -1500,7 +1500,8 @@ export const httpApi: Api = {
       doc_cap_chars_duty?: number;
       doc_cap_chars_insight?: number;
       doc_cap_chars_learning?: number;
-      doc_cap_chars_manual?: number;
+      doc_cap_chars_manual_sop?: number;
+      doc_cap_chars_manual_learnings?: number;
       updater_receive_beta?: boolean;
       updater_auto_update?: boolean;
       org_name?: string;
@@ -1530,8 +1531,11 @@ export const httpApi: Api = {
     if (patch.docCapCharsLearning !== undefined) {
       body.doc_cap_chars_learning = patch.docCapCharsLearning;
     }
-    if (patch.docCapCharsManual !== undefined) {
-      body.doc_cap_chars_manual = patch.docCapCharsManual;
+    if (patch.docCapCharsManualSop !== undefined) {
+      body.doc_cap_chars_manual_sop = patch.docCapCharsManualSop;
+    }
+    if (patch.docCapCharsManualLearnings !== undefined) {
+      body.doc_cap_chars_manual_learnings = patch.docCapCharsManualLearnings;
     }
     if (patch.updaterReceiveBeta !== undefined) {
       body.updater_receive_beta = patch.updaterReceiveBeta;

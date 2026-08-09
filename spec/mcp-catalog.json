@@ -139,7 +139,7 @@
             "description": "The size cap on a role's LEARNING doc (the lessons doc), in CHARACTERS (Unicode code points). Must be at least this segment's shipped default and at most 100000. Read the current values from get_settings rather than assuming a number.",
             "title": "Doc Cap Chars Learning"
           },
-          "doc_cap_chars_manual": {
+          "doc_cap_chars_manual_learnings": {
             "anyOf": [
               {
                 "type": "integer"
@@ -148,8 +148,20 @@
                 "type": "null"
               }
             ],
-            "description": "The size cap on a TASK MANUAL's sop_md and learnings, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default and at most 100000. Read the current values from get_settings rather than assuming a number.",
-            "title": "Doc Cap Chars Manual"
+            "description": "The size cap on a TASK MANUAL's learnings doc, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default and at most 100000. Read the current values from get_settings rather than assuming a number.",
+            "title": "Doc Cap Chars Manual Learnings"
+          },
+          "doc_cap_chars_manual_sop": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The size cap on a TASK MANUAL's sop_md doc, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default and at most 100000. Read the current values from get_settings rather than assuming a number.",
+            "title": "Doc Cap Chars Manual Sop"
           },
           "custom_themes": {
             "anyOf": [
@@ -2854,7 +2866,7 @@
       "inputSchema": {
         "properties": {
           "view": {
-            "description": "\"list\" = the LIGHT row: type_key / display_name / purpose / updated_ts plus the SIZES of the omitted text (sop_md_chars, learnings_chars, cap_chars), with sop_md and learnings served empty. Omitted (the default) = the FULL manual of every type, SOP and learnings included. Use \"list\" whenever you are matching or choosing a type rather than executing one: the two answers differ by orders of magnitude, and the light row still tells you how big each manual is, so you can pull the one you picked with get_task_manual.",
+            "description": "\"list\" = the LIGHT row: type_key / display_name / purpose / updated_ts plus the SIZES of the omitted text (sop_md_chars, learnings_chars) and the caps each is judged against (sop_md_cap_chars, learnings_cap_chars \u2014 the older cap_chars is DEPRECATED: it carries the LEARNINGS cap only and says nothing about sop_md), with sop_md and learnings served empty. Omitted (the default) = the FULL manual of every type, SOP and learnings included. Use \"list\" whenever you are matching or choosing a type rather than executing one: the two answers differ by orders of magnitude, and the light row still tells you how big each manual is, so you can pull the one you picked with get_task_manual.",
             "type": "string"
           }
         },
@@ -2910,7 +2922,7 @@
       "name": "create_task_manual"
     },
     {
-      "description": "Read one task manual (purpose/fields/SOP/learnings/assignee).",
+      "description": "Read one task manual (purpose/fields/SOP/learnings/assignee). The SOP and the learnings are judged by two SEPARATE caps: read sop_md_cap_chars and learnings_cap_chars. The older cap_chars is DEPRECATED — it carries the LEARNINGS cap only and says nothing about sop_md, so read sop_md_cap_chars for the SOP.",
       "inputSchema": {
         "properties": {
           "type_key": {
@@ -2925,7 +2937,7 @@
       "name": "get_task_manual"
     },
     {
-      "description": "Edit a task manual (partial; content fields agent-editable; assignee = owner/admin agent). An outsource assignee may select runtime claude/codex; absent = claude. Only the fields you name change, so omitting a field is safe — but unknown keys are rejected rather than dropped: the learnings doc goes in learnings (NOT text — that is write_task_learnings' field name).",
+      "description": "Edit a task manual (partial; content fields agent-editable; assignee = owner/admin agent). An outsource assignee may select runtime claude/codex; absent = claude. Only the fields you name change, so omitting a field is safe — but unknown keys are rejected rather than dropped: the learnings doc goes in learnings (NOT text — that is write_task_learnings' field name). The SOP and the learnings are judged by two SEPARATE caps: read sop_md_cap_chars and learnings_cap_chars. The older cap_chars is DEPRECATED — it carries the LEARNINGS cap only and says nothing about sop_md, so read sop_md_cap_chars for the SOP.",
       "inputSchema": {
         "properties": {
           "assignee": {

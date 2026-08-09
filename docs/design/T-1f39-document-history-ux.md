@@ -98,7 +98,7 @@ owner 原話（2026-07-31，逐字）：
 ## 6. 字數上限 — **不變**
 
 > 併入 origin/main 後補記（T-3aeb，owner 2026-07-31）：上限已經不是寫死的 10,000，而是設定值
-> （T-ae38 起是四個：`doc_cap_chars_duty` / `_insight` / `_learning` / `_manual`，角色定義有自己一個比較小的預設、其餘三個共用另一個——實際數字見 `server/ocserverd/domain.go`，這裡不複述；
+> （T-ae38 起是四個，T-30f1 起是五個：`doc_cap_chars_duty` / `_insight` / `_learning` / `_manual_sop` / `_manual_learnings`，角色定義有自己一個比較小的預設、其餘四個共用另一個——實際數字見 `server/ocserverd/domain.go`，這裡不複述；
 > 角色定義也是 T-ae38 才開始有上限的）。以下這段沿用單一 `doc_cap_chars`
 > 設定（範圍的下限＝出廠預設、上限 100,000，只能往上調）。本節寫「10,000」的地方一律讀作**當下設定的上限**；
 > 本節主張的「逐欄獨立、拆包不改變上限行為」與那項改動正交，兩邊都成立。

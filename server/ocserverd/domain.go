@@ -654,9 +654,10 @@ func LessonsShrinkBlocked(before, after string) bool {
 // range equals its default, so a cap can only ever be RAISED: lowering it
 // would turn documents that are legal today into shrink-only ones.
 //
-// T-ae38 (owner 2026-08-03): ONE cap became FOUR. This constant is the default
-// SHARED by Insight, Learning and the task manual; Duty got its own, much
-// smaller one below (dutyCapCharsDefault). The owner's words: 「我預期 duty
+// T-ae38 (owner 2026-08-03): ONE cap became FOUR, and T-30f1 split the task
+// manual's in two again. This constant is the default SHARED by Insight,
+// Learning and BOTH of a task manual's capped documents (sop_md, learnings);
+// Duty got its own, much smaller one below (dutyCapCharsDefault). The owner's words: 「我預期 duty
 // 1000 / insight 10000 / learning 10000 但是三者都可以調整」 — quoted as the
 // record of the ruling, NOT as a statement of the current numbers. He revised
 // them the same day, and every one of them is a runtime setting on top of that,

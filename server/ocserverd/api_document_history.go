@@ -479,7 +479,7 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 	case docKindTaskManualSop:
 		return s.restoreTaskManualField(key, taskManualHistoryStreams(key, actor, true, false),
 			func(m *TaskManual) error {
-				if DocCapBlocked(s.manualCap(), m.SopMD, content["sop_md"]) {
+				if DocCapBlocked(s.manualSopCap(), m.SopMD, content["sop_md"]) {
 					return errDocumentHistoryCap
 				}
 				m.SopMD = content["sop_md"]
@@ -488,7 +488,7 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 	case docKindTaskManualLearnings:
 		return s.restoreTaskManualField(key, taskManualHistoryStreams(key, actor, false, true),
 			func(m *TaskManual) error {
-				if DocCapBlocked(s.manualCap(), m.Learnings, content["learnings"]) {
+				if DocCapBlocked(s.manualLearningsCap(), m.Learnings, content["learnings"]) {
 					return errDocumentHistoryCap
 				}
 				m.Learnings = content["learnings"]

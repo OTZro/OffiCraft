@@ -2700,7 +2700,7 @@ func (s *apiServer) HandleGetMyTaskApiSelfTaskGet(w http.ResponseWriter, r *http
 			return
 		}
 		if manual != nil {
-			dto, err := newTaskManualDTO(*manual, s.manualCap())
+			dto, err := newTaskManualDTO(*manual, s.manualSopCap(), s.manualLearningsCap())
 			if err != nil {
 				internalError(w, err)
 				return

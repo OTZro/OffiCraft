@@ -46,14 +46,14 @@ import {
 import { navigateHash } from "../lib/hashRoute";
 import { DOC_CAP_CHARS_DEFAULTS } from "../api/docCap";
 
-/** The four adjustable document caps (T-ae38), in the order the parameters card
- * lists them: the three role-journal segments in journal order (Duty → Insight
- * → Learning), then the task manual's pair. The key IS the ServerSettingsView /
+/** The adjustable document caps (T-ae38, widened by T-30f1), in the order the
+ * parameters card lists them: the three role-journal segments in journal order
+ * (Duty → Insight → Learning), then the task manual's pair. The key IS the ServerSettingsView /
  * ServerSettingsPatch field, so the row cannot read one setting and write
  * another.
  *
  * `min` is per row and is NOT decoration: Duty's floor is its OWN shipped
- * default. Sharing the other three's floor here would make the local guard
+ * default. Sharing the other segments' floor here would make the local guard
  * reject the value the server ships with — the field would refuse its own
  * current contents. The numbers come from DOC_CAP_CHARS_DEFAULTS (docCap.ts,
  * mirroring server/ocserverd/domain.go) and are never restated: they are
@@ -62,23 +62,26 @@ type DocCapField =
   | "docCapCharsDuty"
   | "docCapCharsInsight"
   | "docCapCharsLearning"
-  | "docCapCharsManual";
+  | "docCapCharsManualSop"
+  | "docCapCharsManualLearnings";
 
 const DOC_CAP_FIELDS: Record<
   DocCapField,
-  { min: number; inputId: string; labelKey: "docCapDuty" | "docCapInsight" | "docCapLearning" | "docCapManual"; subKey: "docCapDutySub" | "docCapInsightSub" | "docCapLearningSub" | "docCapManualSub" }
+  { min: number; inputId: string; labelKey: "docCapDuty" | "docCapInsight" | "docCapLearning" | "docCapManualSop" | "docCapManualLearnings"; subKey: "docCapDutySub" | "docCapInsightSub" | "docCapLearningSub" | "docCapManualSopSub" | "docCapManualLearningsSub" }
 > = {
   docCapCharsDuty: { min: DOC_CAP_CHARS_DEFAULTS.duty, inputId: "param-doc-cap-duty", labelKey: "docCapDuty", subKey: "docCapDutySub" },
   docCapCharsInsight: { min: DOC_CAP_CHARS_DEFAULTS.insight, inputId: "param-doc-cap-insight", labelKey: "docCapInsight", subKey: "docCapInsightSub" },
   docCapCharsLearning: { min: DOC_CAP_CHARS_DEFAULTS.learning, inputId: "param-doc-cap-learning", labelKey: "docCapLearning", subKey: "docCapLearningSub" },
-  docCapCharsManual: { min: DOC_CAP_CHARS_DEFAULTS.manual, inputId: "param-doc-cap-manual", labelKey: "docCapManual", subKey: "docCapManualSub" },
+  docCapCharsManualSop: { min: DOC_CAP_CHARS_DEFAULTS.manualSop, inputId: "param-doc-cap-manual-sop", labelKey: "docCapManualSop", subKey: "docCapManualSopSub" },
+  docCapCharsManualLearnings: { min: DOC_CAP_CHARS_DEFAULTS.manualLearnings, inputId: "param-doc-cap-manual-learnings", labelKey: "docCapManualLearnings", subKey: "docCapManualLearningsSub" },
 };
 
 const DOC_CAP_ORDER: DocCapField[] = [
   "docCapCharsDuty",
   "docCapCharsInsight",
   "docCapCharsLearning",
-  "docCapCharsManual",
+  "docCapCharsManualSop",
+  "docCapCharsManualLearnings",
 ];
 import { Breadcrumbs, type Crumb } from "./Breadcrumbs";
 import {
@@ -641,8 +644,8 @@ function ServerParams({
   const [handoverDraft, setHandoverDraft] = useState<string | null>(null);
   const [codexHandoverDraft, setCodexHandoverDraft] = useState<string | null>(null);
   const [monitoringRefreshDraft, setMonitoringRefreshDraft] = useState<string | null>(null);
-  // T-ae38: four independent caps, so four independent drafts. A shared draft
-  // would make typing in one field snap the other three back.
+  // T-ae38, widened by T-30f1: five independent caps, so five independent
+  // drafts. A shared draft would make typing in one field snap the others back.
   const [docCapDrafts, setDocCapDrafts] = useState<
     Partial<Record<DocCapField, string>>
   >({});
@@ -689,9 +692,9 @@ function ServerParams({
   }
 
   // Each floor is THAT segment's shipped default, so a knob only raises its own
-  // cap (owner 2026-07-31; four of them since T-ae38) — the local guard mirrors
+  // cap (owner 2026-07-31; five of them since T-30f1) — the local guard mirrors
   // the server's 422 range exactly, INCLUDING Duty's own smaller floor. Reusing
-  // the other three's floor here would locally reject the shipped Duty default.
+  // the other four's floor here would locally reject the shipped Duty default.
   function commitDocCap(field: DocCapField) {
     const draft = docCapDrafts[field];
     if (!settings || draft === undefined) return;

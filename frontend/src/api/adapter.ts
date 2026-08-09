@@ -671,18 +671,19 @@ export interface ServerSettingsView {
    * **-1 ⇒ 無限 (unlimited — no global cap)**; 0 ⇒ outsource assignment is
    * PAUSED — the panel annotates it). */
   outsourceMaxParallel: number;
-  /** T-3aeb / T-ae38: the FOUR independent size caps on the accumulating
+  /** T-3aeb / T-ae38 / T-30f1: the independent size caps on the accumulating
    * documents, in CHARACTERS (runes) — a role's Duty (role definition),
-   * Insight, Learning (the lessons doc) and Manual (a task manual's sop_md +
-   * learnings). The shipped defaults live in `DOC_CAP_CHARS_DEFAULTS`
-   * (docCap.ts, mirroring server/ocserverd/domain.go); Duty's is deliberately
-   * much smaller than the other three's. Each floor IS that segment's own
+   * Insight, Learning (the lessons doc), and a task manual's sop_md and
+   * learnings, which answer to one cap EACH. The shipped defaults live in
+   * `DOC_CAP_CHARS_DEFAULTS` (docCap.ts, mirroring server/ocserverd/domain.go);
+   * Duty's is deliberately much smaller than every other one. Each floor IS that segment's own
    * default and the ceiling is 100000, so a cap only ever goes UP. Numbers are
    * not restated here — they are owner-adjustable settings. */
   docCapCharsDuty: number;
   docCapCharsInsight: number;
   docCapCharsLearning: number;
-  docCapCharsManual: number;
+  docCapCharsManualSop: number;
+  docCapCharsManualLearnings: number;
   /** Whether the GitHub-release update check also admits prereleases
    * (false = official releases only, the default). */
   updaterReceiveBeta: boolean;
@@ -755,7 +756,8 @@ export interface ServerSettingsPatch {
   docCapCharsDuty?: number;
   docCapCharsInsight?: number;
   docCapCharsLearning?: number;
-  docCapCharsManual?: number;
+  docCapCharsManualSop?: number;
+  docCapCharsManualLearnings?: number;
   /** Also admit GitHub prereleases in update checks (default false). */
   updaterReceiveBeta?: boolean;
   /** Arm unattended background self-upgrade (default false = manual-only). */

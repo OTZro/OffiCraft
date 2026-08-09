@@ -4385,7 +4385,7 @@
         "type": "object"
       },
       "SettingsDTO": {
-        "description": "The org-adjustable settings surface (`GET /api/settings`; owner or admin agent since T-6020). `token_ttl` —\nthe owner-login JWT lifetime (seconds). `handover_pct` — the context\nhandover threshold. `outsource_max_parallel` — the global cap on\nconcurrently live outsource workers (-1 = unlimited, 0 pauses assignment).\n`updater_receive_beta` — whether the GitHub-release update check also\nadmits prereleases (default false: official releases only).\n`updater_auto_update` — arms unattended background self-upgrade to the\nnewest admissible GitHub release (default false: upgrading stays an\nexplicit owner action). `org_name` — the studio display name (\"\" = unset).\n`owner_name` — the owner's display nickname (\"\" = unset). `display_theme` /\n`display_language` — the owner's cockpit visual prefs (\"\" = unset).\n`display_wide` — whether the cockpit uses the wide layout (default false =\nthe narrow centred column). `doc_cap_chars_duty` / `doc_cap_chars_insight` /\n`doc_cap_chars_learning` / `doc_cap_chars_manual` (T-ae38) — the FOUR\nindependent size caps on the accumulating documents, in CHARACTERS (Unicode\ncode points): a role's Duty (role definition), Insight and Learning (lessons),\nplus a task manual's sop_md and learnings. Each knob's shipped default is the\n`default` on its own field below — Duty's is deliberately much smaller than the\nother three's, and every one of them is owner-adjustable, so no prose here\nrestates a number. EVERY key carries a suffix on purpose: `get_settings`\nshows an agent key NAMES and no descriptions, so an unsuffixed `doc.cap_chars`\nsitting beside three suffixed ones reads as a global default and would be\nadjusted by someone believing they had moved all four.",
+        "description": "The org-adjustable settings surface (`GET /api/settings`; owner or admin agent since T-6020). `token_ttl` —\nthe owner-login JWT lifetime (seconds). `handover_pct` — the context\nhandover threshold. `outsource_max_parallel` — the global cap on\nconcurrently live outsource workers (-1 = unlimited, 0 pauses assignment).\n`updater_receive_beta` — whether the GitHub-release update check also\nadmits prereleases (default false: official releases only).\n`updater_auto_update` — arms unattended background self-upgrade to the\nnewest admissible GitHub release (default false: upgrading stays an\nexplicit owner action). `org_name` — the studio display name (\"\" = unset).\n`owner_name` — the owner's display nickname (\"\" = unset). `display_theme` /\n`display_language` — the owner's cockpit visual prefs (\"\" = unset).\n`display_wide` — whether the cockpit uses the wide layout (default false =\nthe narrow centred column). `doc_cap_chars_duty` / `doc_cap_chars_insight` /\n`doc_cap_chars_learning` / `doc_cap_chars_manual_sop` /\n`doc_cap_chars_manual_learnings` (T-ae38, manual split in two by T-30f1) — the\nFIVE independent size caps on the accumulating documents, in CHARACTERS\n(Unicode code points): a role's Duty (role definition), Insight and Learning\n(lessons), plus a task manual's sop_md and learnings, which are now judged by\nTWO separate knobs rather than one shared manual cap. Each knob's shipped\ndefault is the `default` on its own field below — Duty's is deliberately much\nsmaller than the other four's, and every one of them is owner-adjustable, so no\nprose here restates a number. EVERY key carries a suffix on purpose:\n`get_settings` shows an agent key NAMES and no descriptions, so an unsuffixed\n`doc.cap_chars` — or a bare `doc.cap_chars.manual` sitting beside the two it\nwas split into — reads as a global default and would be adjusted by someone\nbelieving they had moved all of them.",
         "properties": {
           "codex_compaction_threshold": {
             "default": 3,
@@ -4438,10 +4438,16 @@
             "title": "Doc Cap Chars Learning",
             "type": "integer"
           },
-          "doc_cap_chars_manual": {
+          "doc_cap_chars_manual_learnings": {
             "default": 15000,
-            "description": "The size cap on a TASK MANUAL's two long documents (sop_md and learnings), in CHARACTERS (Unicode code points). The floor of the adjustable range is this segment's shipped default (the `default` field above), the ceiling is 100000. These are keyed by type_key — assets of a task TYPE, not of a role journal — which is why they answer to their own knob rather than to any of the three role-journal segments. This is the key the single doc.cap_chars setting was RENAMED to in T-ae38; its stored value carried over unchanged.",
-            "title": "Doc Cap Chars Manual",
+            "description": "The size cap on a TASK MANUAL's LEARNINGS doc, in CHARACTERS (Unicode code points). The floor of the adjustable range is this segment's shipped default (the `default` field above), the ceiling is 100000. Task manuals are keyed by type_key — assets of a task TYPE, not of a role journal — which is why they answer to their own knobs rather than to any of the three role-journal segments. T-30f1 split the single doc.cap_chars.manual knob into this one and doc_cap_chars_manual_sop; migration 00049 copied the stored value to BOTH, so no installation's effective cap was lowered.",
+            "title": "Doc Cap Chars Manual Learnings",
+            "type": "integer"
+          },
+          "doc_cap_chars_manual_sop": {
+            "default": 15000,
+            "description": "The size cap on a TASK MANUAL's SOP doc (sop_md), in CHARACTERS (Unicode code points). The floor of the adjustable range is this segment's shipped default (the `default` field above), the ceiling is 100000. Independent of doc_cap_chars_manual_learnings: the SOP is a written-once-then-refined blueprint while learnings accumulate, so the two documents are sized against separate budgets since T-30f1.",
+            "title": "Doc Cap Chars Manual Sop",
             "type": "integer"
           },
           "handover_pct": {
@@ -4512,7 +4518,7 @@
         "type": "object"
       },
       "SettingsUpdateDTO": {
-        "description": "Partial settings edit (`PATCH /api/settings`) — only supplied fields change,\neffective immediately (no restart). `token_ttl` MUST be one of 43200 / 86400 /\n604800 / 2592000 seconds (12h / 24h / 7d / 30d — a whitelist, so a stray 0 can\nnever lock every future login out); `handover_pct` MUST be 40..90 (the warn\nband sits at 40 — a handover threshold below it would fire before the\nwarning). Anything else is a 422. `outsource_max_parallel` MUST be -1..20 (-1 = 無限/unlimited — no global cap; 0 pauses outsource assignment).\n`updater_receive_beta` toggles whether the GitHub-release update check also\nadmits prereleases; `updater_auto_update` toggles unattended background\nself-upgrade to the newest admissible release (both booleans, default false;\nthe manual upgrade endpoint is unaffected). The four document caps (T-ae38)\nare independent knobs. Each one MUST be between THAT segment's shipped default\n(the `default` on the matching `SettingsDTO` field — Duty's is its own, much\nsmaller number) and 100000. The floor equalling the shipped default is the\npoint: a cap can only ever be RAISED (owner ruling 2026-07-31), because\nlowering one would turn documents that are legal today into shrink-only ones.",
+        "description": "Partial settings edit (`PATCH /api/settings`) — only supplied fields change,\neffective immediately (no restart). `token_ttl` MUST be one of 43200 / 86400 /\n604800 / 2592000 seconds (12h / 24h / 7d / 30d — a whitelist, so a stray 0 can\nnever lock every future login out); `handover_pct` MUST be 40..90 (the warn\nband sits at 40 — a handover threshold below it would fire before the\nwarning). Anything else is a 422. `outsource_max_parallel` MUST be -1..20 (-1 = 無限/unlimited — no global cap; 0 pauses outsource assignment).\n`updater_receive_beta` toggles whether the GitHub-release update check also\nadmits prereleases; `updater_auto_update` toggles unattended background\nself-upgrade to the newest admissible release (both booleans, default false;\nthe manual upgrade endpoint is unaffected). The five document caps (T-ae38;\nthe manual's one became two in T-30f1) are independent knobs. Each one MUST be\nbetween THAT segment's shipped default (the `default` on the matching\n`SettingsDTO` field — Duty's is its own, much smaller number) and 100000. The floor equalling the shipped default is the\npoint: a cap can only ever be RAISED (owner ruling 2026-07-31), because\nlowering one would turn documents that are legal today into shrink-only ones.",
         "properties": {
           "codex_compaction_threshold": {
             "anyOf": [
@@ -4546,13 +4552,21 @@
             "description": "The size cap on a role's LEARNING doc (the lessons doc), in CHARACTERS (Unicode code points). Must be at least this segment's shipped default (see `SettingsDTO.doc_cap_chars_learning`, whose `default` is that floor) and at most 100000.",
             "title": "Doc Cap Chars Learning"
           },
-          "doc_cap_chars_manual": {
+          "doc_cap_chars_manual_learnings": {
             "anyOf": [
               {"type": "integer"},
               {"type": "null"}
             ],
-            "description": "The size cap on a TASK MANUAL's sop_md and learnings, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default (see `SettingsDTO.doc_cap_chars_manual`, whose `default` is that floor) and at most 100000.",
-            "title": "Doc Cap Chars Manual"
+            "description": "The size cap on a TASK MANUAL's learnings doc, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default (see `SettingsDTO.doc_cap_chars_manual_learnings`, whose `default` is that floor) and at most 100000.",
+            "title": "Doc Cap Chars Manual Learnings"
+          },
+          "doc_cap_chars_manual_sop": {
+            "anyOf": [
+              {"type": "integer"},
+              {"type": "null"}
+            ],
+            "description": "The size cap on a TASK MANUAL's sop_md doc, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default (see `SettingsDTO.doc_cap_chars_manual_sop`, whose `default` is that floor) and at most 100000.",
+            "title": "Doc Cap Chars Manual Sop"
           },
           "display_language": {
             "anyOf": [
@@ -5318,7 +5332,7 @@
         "type": "object"
       },
       "TaskLearningsPatchResultDTO": {
-        "description": "Receipt of a task-learnings PATCH (MCP ``patch_task_learnings``). ``size`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc.cap_chars.manual`` cap the write is judged against; it counted UTF-8 BYTES until 2026-07-31, when the owner ruled the receipt must speak the cap's unit) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING learnings text, so the caller can confirm the write landed without re-reading the full doc. ``applied_edits`` is the number of edits that ACTUALLY changed the doc (a no-op append/replace does not count), so \"0 applied\" is expressible and a silent no-op cannot masquerade as success.",
+        "description": "Receipt of a task-learnings PATCH (MCP ``patch_task_learnings``). ``size`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc.cap_chars.manual_learnings`` cap the write is judged against; it counted UTF-8 BYTES until 2026-07-31, when the owner ruled the receipt must speak the cap's unit) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING learnings text, so the caller can confirm the write landed without re-reading the full doc. ``applied_edits`` is the number of edits that ACTUALLY changed the doc (a no-op append/replace does not count), so \"0 applied\" is expressible and a silent no-op cannot masquerade as success.",
         "properties": {
           "applied_edits": {
             "default": 0,
@@ -5332,7 +5346,7 @@
           },
           "cap_chars": {
             "default": 0,
-            "description": "The document size cap in force when this write was judged, in CHARACTERS (the doc.cap_chars.manual setting). Returned so a caller can see its remaining budget without a second request — the cap is adjustable and agents cannot read the settings surface.",
+            "description": "The document size cap in force when this write was judged, in CHARACTERS (the doc.cap_chars.manual_learnings setting — this face only ever writes learnings). Returned so a caller can see its remaining budget without a second request — the cap is adjustable and agents cannot read the settings surface.",
             "title": "Cap Chars",
             "type": "integer"
           },
@@ -5593,14 +5607,26 @@
         "properties": {
           "cap_chars": {
             "default": 0,
-            "description": "The document size cap now in force, in CHARACTERS (the doc.cap_chars.manual setting). Served on the READ face so an agent can size an edit BEFORE writing it.",
+            "description": "DEPRECATED since T-30f1 — read learnings_cap_chars or sop_md_cap_chars instead. The manual's SOP and learnings are judged by two SEPARATE caps now, and one field cannot report both: this one carries the LEARNINGS cap (doc.cap_chars.manual_learnings) only, and says nothing about sop_md. Kept so existing clients keep reading a real number rather than a zero.",
             "title": "Cap Chars",
+            "type": "integer"
+          },
+          "learnings_cap_chars": {
+            "default": 0,
+            "description": "The cap on `learnings` now in force, in CHARACTERS (the doc.cap_chars.manual_learnings setting). Served on the READ face so an agent can size an edit BEFORE writing it. Independent of sop_md_cap_chars since T-30f1.",
+            "title": "Learnings Cap Chars",
             "type": "integer"
           },
           "learnings_chars": {
             "default": 0,
-            "description": "Size of `learnings` in CHARACTERS. Reported PER CAPPED DOCUMENT rather than as one total, because the cap applies to each of learnings and sop_md separately. Carried on the light ?view=list projection too, where the bulky text itself is omitted but its size is not.",
+            "description": "Size of `learnings` in CHARACTERS. Reported PER CAPPED DOCUMENT rather than as one total, because learnings and sop_md are judged separately — against their own caps since T-30f1. Carried on the light ?view=list projection too, where the bulky text itself is omitted but its size is not.",
             "title": "Learnings Chars",
+            "type": "integer"
+          },
+          "sop_md_cap_chars": {
+            "default": 0,
+            "description": "The cap on `sop_md` now in force, in CHARACTERS (the doc.cap_chars.manual_sop setting). See learnings_cap_chars.",
+            "title": "Sop Md Cap Chars",
             "type": "integer"
           },
           "sop_md_chars": {
@@ -12679,7 +12705,7 @@
         "operationId": "handle_list_task_manuals_api_task_manuals_get",
         "parameters": [
           {
-            "description": "``list`` = the LIGHT row: type_key / display_name / purpose / updated_ts plus the SIZES of the omitted text (``sop_md_chars``, ``learnings_chars``, ``cap_chars``), with sop_md and learnings served empty and fields/assignee empty. Any other value, or omitting it, keeps the DEFAULT: the full manual of every type, SOP and learnings included. Reach for ``list`` whenever you are matching or choosing a type rather than executing one — the two answers differ by orders of magnitude in size, and the light row still carries the sizes, so you can see what you skipped and fetch just that type with get_task_manual.",
+            "description": "``list`` = the LIGHT row: type_key / display_name / purpose / updated_ts plus the SIZES of the omitted text (``sop_md_chars``, ``learnings_chars``) and the caps each is judged against (``sop_md_cap_chars``, ``learnings_cap_chars`` \u2014 the older ``cap_chars`` is DEPRECATED: it carries the LEARNINGS cap only and says nothing about sop_md), with sop_md and learnings served empty and fields/assignee empty. Any other value, or omitting it, keeps the DEFAULT: the full manual of every type, SOP and learnings included. Reach for ``list`` whenever you are matching or choosing a type rather than executing one — the two answers differ by orders of magnitude in size, and the light row still carries the sizes, so you can see what you skipped and fetch just that type with get_task_manual.",
             "in": "query",
             "name": "view",
             "required": false,
@@ -12862,7 +12888,7 @@
         "summary": "Delete a task type (open tasks of the type → 409)."
       },
       "get": {
-        "description": "Read one manual in full (purpose / fields / SOP / learnings / assignee) — the intake's type-judgement AND the planner's blueprint read. Unknown type → 404.",
+        "description": "Read one manual in full (purpose / fields / SOP / learnings / assignee) — the intake's type-judgement AND the planner's blueprint read. Unknown type → 404. The SOP and the learnings are judged by two SEPARATE caps, reported as ``sop_md_cap_chars`` and ``learnings_cap_chars``; the older ``cap_chars`` is DEPRECATED — it carries the LEARNINGS cap only and says nothing about sop_md, so read ``sop_md_cap_chars`` for the SOP.",
         "operationId": "handle_get_task_manual_api_task_manuals__type_key__get",
         "parameters": [
           {
@@ -12920,7 +12946,7 @@
         "summary": "Read one task manual (purpose/fields/SOP/learnings/assignee)."
       },
       "post": {
-        "description": "Partial manual edit — only supplied fields change. Agent floor: content fields (purpose / fields / sop_md / learnings) are agent-editable; ``assignee`` is GOVERNANCE — a caller below admin_agent supplying it is a 403 (T-6020). ``assignee`` is {\"kind\":\"member\",\"member_id\":…} or {\"kind\":\"outsource\",\"model\":…,\"effort\":…,\"copies\":N}; {} unsets it. Unknown keys are REJECTED (422) rather than silently dropped: this endpoint writes the same learnings document as ``write_task_learnings``, which spells the field ``text`` instead of ``learnings`` — sending the wrong name used to answer 200 having written nothing (T-2d99). Omitting a field remains legal; only unrecognised names are refused.",
+        "description": "Partial manual edit — only supplied fields change. Agent floor: content fields (purpose / fields / sop_md / learnings) are agent-editable; ``assignee`` is GOVERNANCE — a caller below admin_agent supplying it is a 403 (T-6020). ``assignee`` is {\"kind\":\"member\",\"member_id\":…} or {\"kind\":\"outsource\",\"model\":…,\"effort\":…,\"copies\":N}; {} unsets it. Unknown keys are REJECTED (422) rather than silently dropped: this endpoint writes the same learnings document as ``write_task_learnings``, which spells the field ``text`` instead of ``learnings`` — sending the wrong name used to answer 200 having written nothing (T-2d99). Omitting a field remains legal; only unrecognised names are refused. The SOP and the learnings are judged by two SEPARATE caps, reported as ``sop_md_cap_chars`` and ``learnings_cap_chars``; the older ``cap_chars`` is DEPRECATED — it carries the LEARNINGS cap only and says nothing about sop_md, so read ``sop_md_cap_chars`` for the SOP.",
         "operationId": "handle_update_task_manual_api_task_manuals__type_key__post",
         "parameters": [
           {

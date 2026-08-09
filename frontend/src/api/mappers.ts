@@ -883,13 +883,15 @@ export function toServerSettings(w: WireServerSettings): ServerSettingsView {
     outsourceMaxParallel: w.outsource_max_parallel ?? 0,
     // ?? that segment's shipped default, not 0: a server too old to send the
     // field still caps at it, and a 0 here would read as "no cap" to every
-    // caller. Duty has its own, smaller default; the other three share one
+    // caller. Duty has its own, smaller default; every other segment shares one
     // (T-ae38) — the numbers live in DOC_CAP_CHARS_DEFAULTS, not here.
     docCapCharsDuty: w.doc_cap_chars_duty ?? DOC_CAP_CHARS_DEFAULTS.duty,
     docCapCharsInsight: w.doc_cap_chars_insight ?? DOC_CAP_CHARS_DEFAULTS.insight,
     docCapCharsLearning:
       w.doc_cap_chars_learning ?? DOC_CAP_CHARS_DEFAULTS.learning,
-    docCapCharsManual: w.doc_cap_chars_manual ?? DOC_CAP_CHARS_DEFAULTS.manual,
+    docCapCharsManualSop: w.doc_cap_chars_manual_sop ?? DOC_CAP_CHARS_DEFAULTS.manualSop,
+    docCapCharsManualLearnings:
+      w.doc_cap_chars_manual_learnings ?? DOC_CAP_CHARS_DEFAULTS.manualLearnings,
     // The two software-update toggles (schema-optional for DTO-compat; the
     // Go wire always emits both — `?? false` only fires against an older
     // server, where OFF is exactly the honest reading).
