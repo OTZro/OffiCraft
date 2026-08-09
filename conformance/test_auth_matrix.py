@@ -1182,6 +1182,17 @@ MATRIX: dict[str, Route] = {
             *_matrix_task_step(ctx)),
         body={"note": "conf matrix note"},
     ),
+    "POST /api/tasks/{task_id}/steps/{step_id}/note/patch": Route(
+        # T-1667. The anchor-patch twin of the note write above, so the matrix
+        # face is identical: at-floor agent passes on its OWN task, another
+        # agent's token is a 403. An empty `old` appends, which needs no
+        # pre-existing note — the scratch step's blank note is fine.
+        requires="agent",
+        overrides={"agent_other": 403},
+        path=lambda ctx, _i: "/api/tasks/{}/steps/{}/note/patch".format(
+            *_matrix_task_step(ctx)),
+        body={"edits": [{"old": "", "new": "conf matrix note patch"}]},
+    ),
     "POST /api/tasks/{task_id}/steps/{step_id}/gate": Route(
         requires="agent",
         overrides={"agent_other": 403},
@@ -1358,6 +1369,13 @@ MATRIX: dict[str, Route] = {
         requires="agent",
         path=lambda ctx, _i: f"/api/task-manuals/{_matrix_manual(ctx)}/learnings/patch",
         body={"edits": [{"old": "", "new": "conf matrix patch"}]},
+    ),
+    "POST /api/task-manuals/{type_key}/sop/patch": Route(
+        # the agent patch face for sop_md — same agent floor as the whole-doc
+        # update_task_manual content fields (per-type, not per-executor).
+        requires="agent",
+        path=lambda ctx, _i: f"/api/task-manuals/{_matrix_manual(ctx)}/sop/patch",
+        body={"edits": [{"old": "", "new": "conf matrix sop patch"}]},
     ),
     # ── product guide (docs/guide embed) ────────────────────────────────────
     "GET /api/docs": Route(requires="machine"),

@@ -799,6 +799,13 @@
   },
   {
     "auth": "gated",
+    "mcp_tool": "patch_step_note",
+    "method": "POST",
+    "path": "/api/tasks/{task_id}/steps/{step_id}/note/patch",
+    "requires": "agent"
+  },
+  {
+    "auth": "gated",
     "mcp_tool": "open_gate",
     "method": "POST",
     "path": "/api/tasks/{task_id}/steps/{step_id}/gate",
@@ -949,6 +956,13 @@
     "mcp_tool": "patch_task_learnings",
     "method": "POST",
     "path": "/api/task-manuals/{type_key}/learnings/patch",
+    "requires": "agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "patch_task_sop",
+    "method": "POST",
+    "path": "/api/task-manuals/{type_key}/sop/patch",
     "requires": "agent"
   },
   {

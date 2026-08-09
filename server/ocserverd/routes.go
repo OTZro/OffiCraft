@@ -1459,6 +1459,18 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			MCPTool:  "update_step_note",
 		},
 		{
+			Method:  "POST",
+			Path:    "/api/tasks/{task_id}/steps/{step_id}/note/patch",
+			Handler: w.HandlePatchTaskStepNoteApiTasksTaskIdStepsStepIdNotePatchPost,
+			Auth:    authGated,
+			// T-1667: the anchor-patch twin of the wholesale write above. Same
+			// executor-or-admin gate — the handler shares it verbatim, so the two
+			// faces onto one field can never disagree about who may write.
+			Requires: principalAgent,
+			Summary:  "Patch a step's working note by unique anchors ({edits:[{old,new}]}).",
+			MCPTool:  "patch_step_note",
+		},
+		{
 			Method:   "POST",
 			Path:     "/api/tasks/{task_id}/steps/{step_id}/gate",
 			Handler:  w.HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePost,
@@ -1701,6 +1713,18 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Requires: principalAgent,
 			Summary:  "Patch a type's learnings by unique anchors ({edits:[{old,new}]}) — the learnings twin of patch_lessons, so the write cost scales with the CHANGE, not the whole (30k-char) doc, and re-typing the whole doc can no longer silently drop content. Edits apply in order; a non-empty old must match the current learnings EXACTLY ONCE (0 or >1 hits reject the WHOLE batch with a 400, zero writes — the unique anchor also acts as an optimistic lock); an empty old appends. Wiping the doc, or shrinking it below a tenth, needs allow_shrink=true.",
 			MCPTool:  "patch_task_learnings",
+		},
+		{
+			Method:  "POST",
+			Path:    "/api/task-manuals/{type_key}/sop/patch",
+			Handler: w.HandlePatchTaskSopApiTaskManualsTypeKeySopPatchPost,
+			Auth:    authGated,
+			// T-1667: the anchor-patch twin of update_task_manual's sop_md field.
+			// Same agent floor as every other manual CONTENT face; assignee (the
+			// one governance field) is not reachable from here at all.
+			Requires: principalAgent,
+			Summary:  "Patch a type's SOP by unique anchors ({edits:[{old,new}]}).",
+			MCPTool:  "patch_task_sop",
 		},
 		// ── Retained history of the editable documents above ────────────────
 		// One read + one restore for EVERY overwritable long-form document

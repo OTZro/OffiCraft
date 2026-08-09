@@ -873,6 +873,38 @@ type taskLearningsPatchResultDTO struct {
 	Sha256       string `json:"sha256"`
 }
 
+// taskSopPatchResultDTO is the patch_task_sop receipt (T-1667): the sop_md twin
+// of taskLearningsPatchResultDTO, field-for-field identical because it reports
+// the same three things about a different document — how many edits landed, and
+// the size/sha256 of the result so the caller can confirm the write without
+// re-reading the doc. cap_chars is the sop_md cap, not the learnings one.
+type taskSopPatchResultDTO struct {
+	TypeKey      string `json:"type_key"`
+	AppliedEdits int    `json:"applied_edits"`
+	SizeChars    int    `json:"size_chars"`
+	CapChars     int    `json:"cap_chars"`
+	Sha256       string `json:"sha256"`
+}
+
+// taskStepNotePatchResultDTO is the patch_step_note receipt (T-1667). It is the
+// UNION of the two receipt shapes it sits between, and deliberately so: the
+// patch family's applied_edits/size_chars/cap_chars/sha256, plus the note as
+// STORED, which taskStepNoteReceiptDTO echoes for a reason that does not stop
+// applying here — a step note is bounded and the whole point of the field is
+// that a later session reads it back, so the write stays verifiable at the
+// write. The larger documents' patch receipts omit their text because echoing
+// 30k chars would defeat the purpose of patching; a step note cannot get there.
+type taskStepNotePatchResultDTO struct {
+	TaskID       string `json:"task_id"`
+	StepID       string `json:"step_id"`
+	StepStatus   string `json:"step_status"`
+	Note         string `json:"note"`
+	AppliedEdits int    `json:"applied_edits"`
+	SizeChars    int    `json:"size_chars"`
+	CapChars     int    `json:"cap_chars"`
+	Sha256       string `json:"sha256"`
+}
+
 type replyCardAnswerDTO struct {
 	OptionIdx   *int                `json:"option_idx"` // null = free text only
 	Text        string              `json:"text"`

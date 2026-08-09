@@ -620,3 +620,93 @@ func (s *apiServer) HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchP
 		Sha256:       hex.EncodeToString(sum[:]),
 	})
 }
+
+// POST /api/task-manuals/{type_key}/sop/patch — anchor-addressed patch of a
+// type's SOP (T-1667; the patch_task_learnings twin for the OTHER long-form
+// document a manual carries). ApplyDocEdits is the SHARED engine, so the
+// anchor/append/atomicity semantics are byte-identical to the three patch faces
+// that came before it.
+//
+// WHY THIS EXISTS — CONCURRENT OVERWRITE, not token economy. update_task_manual
+// is the only other write face for sop_md and it is a whole-doc replace, so two
+// writers on one manual lose each other's work by construction: the second one
+// sends a copy it read before the first landed, and everything the first added
+// is gone. Nothing catches it. The shrink guard does not fire, because the
+// stale copy is typically the LONGER of the two (it was written by a session
+// that had the whole SOP in context and re-typed all of it) — so the write does
+// not even look like a deletion. The result is a silent loss with zero signal.
+// The unique anchor is an optimistic lock against exactly that: a concurrent
+// write that moved or duplicated the anchor turns this batch into a visible
+// 400. Making the write cost scale with the CHANGE is the secondary benefit.
+// (It still does not solve concurrent edits to DIFFERENT anchors — that needs a
+// version/etag lock, tracked separately.)
+//
+// Semantics: edits apply IN ORDER; a non-empty old must match exactly once
+// (0/>1 → flat 400 naming the failing edit index and get_task_manual as the
+// re-read, WHOLE batch rejected, zero writes); an empty old appends. A patch
+// that wipes the doc, or shrinks a substantial doc to <10%, is refused without
+// allow_shrink=true. The sop_md cap is judged on the RESULT and allow_shrink is
+// not a bypass — the same posture the learnings twin takes. Same agent floor as
+// update_task_manual's content fields. Unknown type → 404.
+func (s *apiServer) HandlePatchTaskSopApiTaskManualsTypeKeySopPatchPost(w http.ResponseWriter, r *http.Request, typeKey string) {
+	var body TaskSopPatchDTO
+	if !decodeJSONBodyStrict(w, r, &body, "edits") {
+		return
+	}
+	if !requireNonEmptyEdits(w, body.Edits) {
+		return
+	}
+	// Target first, content second — the order patch_task_learnings takes, so an
+	// unknown type_key answers 404 on both faces rather than one of them ruling
+	// on the edits of a manual that does not exist.
+	m, err := s.resolveTaskManual(typeKey)
+	if err != nil {
+		writeResolveError(w, err, "task manual", typeKey)
+		return
+	}
+	edits, ok := decodePatchEdits(w, body.Edits)
+	if !ok {
+		return
+	}
+	// get_task_manual, not get_lessons: the anchor-miss message tells the caller
+	// where to look next, and naming the wrong document is worse than naming
+	// none (the reason ApplyDocEdits takes the tool name as a parameter).
+	next, applied, err := ApplyDocEdits(m.SopMD, edits, "get_task_manual")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	allowShrink := body.AllowShrink != nil && *body.AllowShrink
+	if !allowShrink && LessonsShrinkBlocked(m.SopMD, next) {
+		writeError(w, http.StatusBadRequest,
+			"patch would empty (or shrink to under a tenth of) the sop_md doc — pass allow_shrink=true if this is intended, or use update_task_manual; nothing was written")
+		return
+	}
+	// T-3351 hard cap, judged on the RESULT of the patch (not the patch's own
+	// size). Unconditional: allow_shrink is not a bypass. One read, reused by
+	// the receipt below.
+	cap := s.manualSopCap()
+	if DocCapBlocked(cap, m.SopMD, next) {
+		writeError(w, http.StatusBadRequest, docCapRefusal(cap, "sop_md doc", m.SopMD, next))
+		return
+	}
+	m.SopMD = next
+	m.UpdatedTS = nowSecs()
+	if err := s.dal.SaveWithDocumentHistories(
+		taskManualHistoryStreams(typeKey, currentActor(r), true, false),
+		func(ex sqlExecer) error {
+			return putTaskManualOn(ex, *m)
+		}); err != nil {
+		internalError(w, err)
+		return
+	}
+	s.publishTaskManual(typeKey, requestTrigger(r))
+	sum := sha256.Sum256([]byte(next))
+	writeJSON(w, http.StatusOK, taskSopPatchResultDTO{
+		TypeKey:      typeKey,
+		AppliedEdits: applied,
+		SizeChars:    utf8.RuneCountInString(next),
+		CapChars:     cap,
+		Sha256:       hex.EncodeToString(sum[:]),
+	})
+}

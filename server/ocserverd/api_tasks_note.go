@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"strconv"
 	"unicode/utf8"
@@ -42,37 +44,136 @@ func (s *apiServer) HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost(w 
 		return
 	}
 	note := trimString(body.Note)
-	// Same ceiling as the task-level handover note (HandleReassignTaskApi...):
-	// it is the same kind of writing for the same reader, so it gets the same
-	// limit rather than a second number to remember. Runes, not bytes — these
-	// notes are written in Chinese.
+	if !stepNoteWithinLimit(w, note) {
+		return
+	}
+	t, step, ok := s.resolveStepForNoteWrite(w, r, taskId, stepId)
+	if !ok {
+		return
+	}
+	if !s.storeStepNote(w, r, t, step, note) {
+		return
+	}
+	writeJSON(w, http.StatusOK, taskStepNoteReceiptDTO{
+		TaskID: t.ID, StepID: step.ID, StepStatus: step.Status, Note: step.Note,
+	})
+}
+
+// POST /api/tasks/{task_id}/steps/{step_id}/note/patch — anchor-addressed patch
+// of one step's working note (T-1667; MCP patch_step_note). ApplyDocEdits is
+// the SHARED engine, so the anchor/append/atomicity semantics are
+// byte-identical to the three patch faces that came before it.
+//
+// WHY THIS EXISTS — CONCURRENT OVERWRITE, not token economy. The wholesale
+// write above replaces the note, and a step note has more than one writer by
+// design: a handover is precisely the moment when an outgoing session and its
+// successor are both writing about the same lane. Whoever writes second from a
+// copy read before the other landed deletes the other's text outright. Nothing
+// catches it — the stale copy is usually the LONGER one (it was re-typed in
+// full by a session that had the whole note in context), so the write does not
+// even look like a deletion and no guard fires. The unique anchor is an
+// optimistic lock against exactly that: a concurrent write that moved or
+// duplicated the anchor turns this batch into a visible 400 instead.
+//
+// Guards are the wholesale write's, called through the SAME two helpers rather
+// than restated — two faces onto one field must not be able to disagree about
+// who may write, which task states are open, or what the note's ceiling is.
+// The ceiling is applied to the RESULT of the patch: a patch face that skipped
+// it would be an uncapped door onto a capped field.
+func (s *apiServer) HandlePatchTaskStepNoteApiTasksTaskIdStepsStepIdNotePatchPost(w http.ResponseWriter, r *http.Request, taskId string, stepId string) {
+	var body TaskStepNotePatchDTO
+	if !decodeJSONBodyStrict(w, r, &body, "edits") {
+		return
+	}
+	if !requireNonEmptyEdits(w, body.Edits) {
+		return
+	}
+	// Target first, content second — existence, then authz, then state, then the
+	// edits themselves; that is the order the older patch faces take, and a
+	// caller pointed at a task it may not touch should hear that, not a verdict
+	// on its edits.
+	t, step, ok := s.resolveStepForNoteWrite(w, r, taskId, stepId)
+	if !ok {
+		return
+	}
+	edits, ok := decodePatchEdits(w, body.Edits)
+	if !ok {
+		return
+	}
+	// get_task, not get_lessons: the anchor-miss message tells the caller where
+	// to look next, and a step note is read back through the task view (the
+	// reason ApplyDocEdits takes the tool name as a parameter).
+	next, applied, err := ApplyDocEdits(step.Note, edits, "get_task")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	allowShrink := body.AllowShrink != nil && *body.AllowShrink
+	if !allowShrink && LessonsShrinkBlocked(step.Note, next) {
+		writeError(w, http.StatusBadRequest,
+			"patch would empty (or shrink to under a tenth of) the step note — pass allow_shrink=true if this is intended, or use update_step_note; nothing was written")
+		return
+	}
+	if !stepNoteWithinLimit(w, next) {
+		return
+	}
+	if !s.storeStepNote(w, r, t, step, next) {
+		return
+	}
+	sum := sha256.Sum256([]byte(next))
+	writeJSON(w, http.StatusOK, taskStepNotePatchResultDTO{
+		TaskID:       t.ID,
+		StepID:       step.ID,
+		StepStatus:   step.Status,
+		Note:         step.Note,
+		AppliedEdits: applied,
+		SizeChars:    utf8.RuneCountInString(next),
+		CapChars:     chatBodyMaxChars,
+		Sha256:       hex.EncodeToString(sum[:]),
+	})
+}
+
+// stepNoteWithinLimit holds a would-be note to the field's ceiling, writing the
+// 400 and returning false when it is over.
+//
+// Same ceiling as the task-level handover note (HandleReassignTaskApi...): it
+// is the same kind of writing for the same reader, so it gets the same limit
+// rather than a second number to remember. Runes, not bytes — these notes are
+// written in Chinese.
+func stepNoteWithinLimit(w http.ResponseWriter, note string) bool {
 	if n := utf8.RuneCountInString(note); n > chatBodyMaxChars {
 		writeError(w, http.StatusBadRequest, "step note is "+strconv.Itoa(n)+
 			" chars, over the "+strconv.Itoa(chatBodyMaxChars)+"-char limit")
-		return
+		return false
 	}
+	return true
+}
+
+// resolveStepForNoteWrite runs the guard chain both note write faces share and
+// returns the task and step they resolved to.
+func (s *apiServer) resolveStepForNoteWrite(w http.ResponseWriter, r *http.Request, taskId, stepId string) (*Task, *TaskStep, bool) {
 	t, err := s.resolveTask(taskId)
 	if err != nil {
 		writeResolveError(w, err, "task", taskId)
-		return
+		return nil, nil, false
 	}
 	if !s.callerMayDriveTask(r, *t) {
 		writeError(w, http.StatusForbidden, "caller is not the task's executor")
-		return
+		return nil, nil, false
 	}
 	if TaskIsTerminal(t.Status) {
 		writeError(w, http.StatusConflict,
 			"task '"+taskId+"' is already closed ("+t.Status+")")
-		return
+		return nil, nil, false
 	}
 	step, err := s.dal.GetTaskStep(stepId)
 	if err != nil {
 		internalError(w, err)
-		return
+		return nil, nil, false
 	}
 	if step == nil || step.TaskID != taskId {
 		writeError(w, http.StatusNotFound, "step '"+stepId+"' not found")
-		return
+		return nil, nil, false
 	}
 	// No step-status check on purpose. Writing a note is legal on a pending step
 	// (recording what the lane is for before it starts), an in_progress one (the
@@ -83,18 +184,25 @@ func (s *apiServer) HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost(w 
 	// Note that the TASK-level terminal gate above still applies: once every
 	// step is done the task auto-closes, so a done step is writable while its
 	// task is still open and not after. That is the same line the artifact set
-	// draws — a closed task's record stops moving — and the tool description
-	// says so rather than promising a write that would 409.
+	// draws — a closed task's record stops moving — and the tool descriptions
+	// say so rather than promising a write that would 409.
+	return t, step, true
+}
+
+// storeStepNote persists the note and fans the task delta, shared by both write
+// faces. It mutates step.Note and t.UpdatedTS in place so the caller's receipt
+// echoes what was STORED.
+func (s *apiServer) storeStepNote(w http.ResponseWriter, r *http.Request, t *Task, step *TaskStep, note string) bool {
 	ok, err := s.dal.SetTaskStepNote(step.ID, note)
 	if err != nil {
 		internalError(w, err)
-		return
+		return false
 	}
 	if !ok {
 		// The step existed a moment ago and does not now — a concurrent
 		// submit_plan deleted it. Honest 404 beats resurrecting the row.
-		writeError(w, http.StatusNotFound, "step '"+stepId+"' not found")
-		return
+		writeError(w, http.StatusNotFound, "step '"+step.ID+"' not found")
+		return false
 	}
 	step.Note = note
 	// Move updated_ts so the cockpit actually shows this. The SSE task delta
@@ -106,11 +214,9 @@ func (s *apiServer) HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost(w 
 	now := nowSecs()
 	if err := s.dal.TouchTaskUpdatedTS(t.ID, now); err != nil {
 		internalError(w, err)
-		return
+		return false
 	}
 	t.UpdatedTS = now
 	s.publishTask(*t, requestTrigger(r))
-	writeJSON(w, http.StatusOK, taskStepNoteReceiptDTO{
-		TaskID: t.ID, StepID: step.ID, StepStatus: step.Status, Note: step.Note,
-	})
+	return true
 }

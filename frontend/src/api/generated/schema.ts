@@ -2982,6 +2982,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/task-manuals/{type_key}/sop/patch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Patch a type's SOP by unique anchors ({edits:[{old,new}]}).
+         * @description Anchor-addressed PATCH of a type's SOP (MCP ``patch_task_sop`` — the sop_md twin of ``patch_task_learnings``). PRIMARY REASON: concurrent overwrite. Until this endpoint existed the only sop_md write face was ``update_task_manual.sop_md``, a whole-doc replace — so a caller working from a stale copy silently deletes whatever a second writer added in between, and since the stale copy is usually the LONGER one not even the shrink guard fires: the loss lands with zero signal. An anchor patch cannot express that write, because the unique anchor is an optimistic lock. Scaling the write cost with the CHANGE rather than the doc is the secondary benefit.
+         *
+         *     Semantics: ``edits`` apply IN ORDER against the manual's current sop_md; each non-empty ``old`` must match the current text exactly once (0 hits or >1 hits → flat 400 naming the failing edit index and the tool to re-read with, WHOLE batch rejected, zero writes); an empty ``old`` appends ``new`` at the end. A patch that empties the doc (or shrinks it below a tenth of its size) is refused unless ``allow_shrink=true`` — the r-76 wipe-guard posture. The ``doc.cap_chars.manual_sop`` cap is judged on the RESULT of the patch and ``allow_shrink`` is not a bypass. Unknown type → 404.
+         *
+         *     Write authz is the agent floor — identical to ``update_task_manual``'s content fields (manual CONTENT is agent-editable). The wholesale ``update_task_manual.sop_md`` face is unchanged and still available. The receipt carries ``size_chars``/``sha256`` verification anchors over the resulting SOP.
+         */
+        post: operations["handle_patch_task_sop_api_task_manuals__type_key__sop_patch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks": {
         parameters: {
             query?: never;
@@ -3304,6 +3328,30 @@ export interface paths {
          * @description Write one step's working note (MCP ``update_step_note``, T-cc3e): what this step got to and what comes next. WHAT TO WRITE — three things, then stop: (1) STATE — one sentence on where this step actually got to; (2) NEXT — one sentence on what whoever takes over does next; (3) EVIDENCE POINTERS — version ids, file and log paths, what you verified YOURSELF versus what you are taking on someone's word, and the limits of what was NOT done. Long narrative does not live here: reasoning and scope belong in the task description, reports and diffs belong on the task as artifacts. The note is the current state — not a report, not an append-only log. Accepted in ANY STEP status — the note records where the work stands, which is orthogonal to the step state machine. Same executor/admin gate as every other task-driving write (403 otherwise), 404 for an unknown task, a step that does not belong to it, or a step a concurrent replan deleted; 400 when the note is over the 4,000-character limit (counted in runes); and 409 once the TASK is terminal — a task auto-closes when its last step is reported done, so a done step is writable while its task is still open and not after (a closed task's timeline is history, consistent with the frozen artifact set). The write also moves the task's updated_ts, which is what makes an already-open cockpit card re-read its steps. The write is wholesale: the body's ``note`` replaces whatever was there, and ``""`` clears it. Its own endpoint and its own MCP tool by charter §14 (intent-per-tool) — writing a note is a different intent from reporting a transition.
          */
         post: operations["handle_update_task_step_note_api_tasks__task_id__steps__step_id__note_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/steps/{step_id}/note/patch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Patch a step's working note by unique anchors ({edits:[{old,new}]}).
+         * @description Anchor-addressed PATCH of one step's working note (MCP ``patch_step_note``). PRIMARY REASON: concurrent overwrite. ``update_step_note`` is a whole-doc replace, so two writers on the same step — the common handover shape, where one session is still writing while its successor starts — silently lose each other's text: the second write is built on a copy read before the first landed. Nothing catches it, because the stale copy is usually the LONGER one and no shrink guard fires. An anchor patch cannot express that write: each non-empty ``old`` must match the current note EXACTLY ONCE, so a moved or duplicated anchor turns the batch into a refusal instead of a silent deletion.
+         *
+         *     Semantics: ``edits`` apply IN ORDER against the step's current note; 0 hits or >1 hits → flat 400 naming the failing edit index and the tool to re-read with, WHOLE batch rejected, zero writes; an empty ``old`` appends ``new`` at the end. A patch that empties the note (or shrinks it below a tenth of its size) is refused unless ``allow_shrink=true``. The resulting note is held to the SAME character limit as the wholesale write (400 when over it) — a patch face that skipped it would be an uncapped door onto the same field.
+         *
+         *     Guards are the wholesale write's, unchanged: executor-or-admin (403 otherwise), 404 for an unknown task, a step that is not its own, or a step a concurrent replan deleted, and 409 once the TASK is terminal. Accepted in ANY step status. The wholesale ``update_step_note`` face is unchanged and still the right tool for an honest rewrite from scratch.
+         */
+        post: operations["handle_patch_task_step_note_api_tasks__task_id__steps__step_id__note_patch_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8331,6 +8379,52 @@ export interface components {
             type_key: string;
         };
         /**
+         * TaskSopPatchDTO
+         * @description Anchor-addressed PATCH of a type's SOP (MCP ``patch_task_sop`` — the sop_md twin of ``patch_task_learnings``): ``{edits: [{old, new}], allow_shrink?}``. It exists to stop CONCURRENT OVERWRITE: the only sop_md write face was ``update_task_manual.sop_md``, a whole-doc replace, so a caller holding a stale copy silently deletes whatever landed in between — and because the stale copy is usually the LONGER one, the shrink guard never fires and the loss carries no signal at all. An anchor patch cannot express that write: the unique anchor is an optimistic lock, so a concurrent write that moved or duplicated it turns the batch into a refusal. ATOMIC — edits apply sequentially to an in-memory copy and any failing anchor (absent or ambiguous ``old``) rejects the ENTIRE batch with a flat 400 and ZERO writes. ``allow_shrink`` (default false) must be set explicitly for a patch that empties the doc or shrinks it to under a tenth of its size — the r-76 wipe-guard posture.
+         */
+        TaskSopPatchDTO: {
+            /**
+             * Allow Shrink
+             * @default false
+             */
+            allow_shrink: boolean;
+            /** Edits */
+            edits: components["schemas"]["LessonsEditDTO"][];
+        };
+        /**
+         * TaskSopPatchResultDTO
+         * @description Receipt of a task-SOP PATCH (MCP ``patch_task_sop``). ``size_chars`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc.cap_chars.manual_sop`` cap the write is judged against) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING sop_md text, so the caller can confirm the write landed without re-reading the full doc. ``applied_edits`` is the number of edits that ACTUALLY changed the doc (a no-op append/replace does not count), so "0 applied" is expressible and a silent no-op cannot masquerade as success.
+         */
+        TaskSopPatchResultDTO: {
+            /**
+             * Applied Edits
+             * @default 0
+             */
+            applied_edits: number;
+            /**
+             * Sha256
+             * @default
+             */
+            sha256: string;
+            /**
+             * Cap Chars
+             * @description The document size cap in force when this write was judged, in CHARACTERS (the doc.cap_chars.manual_sop setting — this face only ever writes sop_md). Returned so a caller can see its remaining budget without a second request — the cap is adjustable and agents cannot read the settings surface.
+             * @default 0
+             */
+            cap_chars: number;
+            /**
+             * Size Chars
+             * @description Size of the RESULTING document in CHARACTERS (Unicode code points) — the same unit as cap_chars.
+             * @default 0
+             */
+            size_chars: number;
+            /**
+             * Type Key
+             * @default
+             */
+            type_key: string;
+        };
+        /**
          * TaskStepDTO
          * @description One workflow node on the task timeline. Every row is one progress leaf (parallel items are separate rows sharing ``parallel_group``). A parallel stage is CONSECUTIVE rows sharing a non-empty ``parallel_group`` — submit_plan refuses (400) split groups, one-lane groups and gates inside a group, so stored plans always fold cleanly. ``status`` is the closed set ``pending`` | ``in_progress`` | ``waiting_owner`` | ``done`` | ``superseded``. ``done`` and ``superseded`` are the step's terminal states: ``superseded`` (T-1aea) is stamped by submit_plan alone — a replan freezes a step whose latest bound reply card was already answered/expired as kept history (original order, ahead of the fresh plan) unless the fresh plan re-lists the node by name; a superseded row counts toward neither ``progress_done`` nor ``progress_total``, is never the current node, is not agent-reportable and cannot be re-armed; its ``finished_ts`` is the freeze moment. Gate projection: ``is_gate`` with an empty ``reply_card_id`` is the ANNOUNCED (dashed) gate; a non-empty ``reply_card_id`` is a step carrying a live reply card — an ARMED gate, or a plain step a ``create_reply_card`` ask auto-bound to. ``reply_card_id`` always points at the LATEST bound card and persists after the step finishes (the permanent approval mark).
          */
@@ -8403,6 +8497,54 @@ export interface components {
         TaskStepNoteReceiptDTO: {
             /** Note */
             note: string;
+            /** Step Id */
+            step_id: string;
+            /** Step Status */
+            step_status: string;
+            /** Task Id */
+            task_id: string;
+        };
+        /**
+         * TaskStepNotePatchDTO
+         * @description Anchor-addressed PATCH of one step's working note (MCP ``patch_step_note``): ``{edits: [{old, new}], allow_shrink?}``. It exists to stop CONCURRENT OVERWRITE: ``update_step_note`` is a whole-doc replace, so a caller that read the note earlier and writes it back silently deletes whatever a second writer added in between — and because the stale copy is usually the LONGER one, no shrink guard fires and the loss carries no signal at all. An anchor patch cannot express that write: each non-empty ``old`` must match the current note EXACTLY ONCE, so a concurrent write that moved or duplicated the anchor turns the batch into a refusal. ATOMIC — edits apply sequentially to an in-memory copy and any failing anchor (absent or ambiguous ``old``) rejects the ENTIRE batch with a flat 400 and ZERO writes; an empty ``old`` appends ``new``. ``allow_shrink`` (default false) must be set explicitly for a patch that empties the note or shrinks it to under a tenth of its size — the r-76 wipe-guard posture; use ``update_step_note`` for an honest wholesale rewrite.
+         */
+        TaskStepNotePatchDTO: {
+            /**
+             * Allow Shrink
+             * @default false
+             */
+            allow_shrink: boolean;
+            /** Edits */
+            edits: components["schemas"]["LessonsEditDTO"][];
+        };
+        /**
+         * TaskStepNotePatchResultDTO
+         * @description Receipt of a step-note PATCH (MCP ``patch_step_note``). Echoes the note as STORED — the same posture as the wholesale receipt, since the whole point of the field is that a later session reads it back — plus ``applied_edits`` (the number of edits that ACTUALLY changed the note, so "0 applied" is expressible and a silent no-op cannot masquerade as success) and ``size_chars``/``cap_chars``/``sha256`` verification anchors over the resulting note. ``size_chars`` and ``cap_chars`` are CHARACTERS (Unicode code points), the unit the note's limit is enforced in.
+         */
+        TaskStepNotePatchResultDTO: {
+            /**
+             * Applied Edits
+             * @default 0
+             */
+            applied_edits: number;
+            /**
+             * Cap Chars
+             * @description The step-note ceiling this write was judged against, in CHARACTERS — the same limit ``update_step_note`` enforces, shared with the task-level handover note. NOT a setting: unlike the ``cap_chars`` on the manual patch receipts (which report the adjustable ``doc.cap_chars.*`` values), this one is a server CONSTANT and no settings key moves it. Same field name, different source — do not read one as evidence about the other.
+             * @default 0
+             */
+            cap_chars: number;
+            /** Note */
+            note: string;
+            /**
+             * Sha256
+             * @default
+             */
+            sha256: string;
+            /**
+             * Size Chars
+             * @default 0
+             */
+            size_chars: number;
             /** Step Id */
             step_id: string;
             /** Step Status */
@@ -14782,6 +14924,59 @@ export interface operations {
             };
         };
     };
+    handle_patch_task_sop_api_task_manuals__type_key__sop_patch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                type_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskSopPatchDTO"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskSopPatchResultDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
     handle_list_tasks_api_tasks_get: {
         parameters: {
             query?: {
@@ -15685,6 +15880,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskStepNoteReceiptDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_patch_task_step_note_api_tasks__task_id__steps__step_id__note_patch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+                step_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskStepNotePatchDTO"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskStepNotePatchResultDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */

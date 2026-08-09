@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -482,4 +483,46 @@ func intSliceOrNil(p *[]int) []int {
 		return nil
 	}
 	return *p
+}
+
+// requireNonEmptyEdits refuses an empty edits list: it is not "a patch that
+// changes nothing", it is a caller that built the request wrong.
+//
+// Split from decodePatchEdits because the two checks sit on OPPOSITE sides of
+// the target's resolve/authz chain in patch_lessons and patch_task_learnings,
+// and the newer patch faces mirror that placement rather than invent a second
+// order — otherwise the same malformed batch against a nonexistent target
+// answers 422 on one endpoint and 404 on its neighbour.
+func requireNonEmptyEdits(w http.ResponseWriter, dtos []LessonsEditDTO) bool {
+	if len(dtos) == 0 {
+		writeError(w, http.StatusUnprocessableEntity,
+			"edits requires at least one {old, new} entry")
+		return false
+	}
+	return true
+}
+
+// decodePatchEdits folds a wire []LessonsEditDTO into the engine's
+// []LessonsEdit, writing a 422 and returning ok=false for an edit carrying
+// NEITHER old NOR new — that would fold to the empty-old APPEND branch where
+// appending "" is a perfect no-op, so the batch would answer 200 with an
+// unchanged doc, i.e. report success while doing nothing. The check is the one
+// patch_lessons and patch_task_learnings already spell inline (T-2d99), lifted
+// here so the newer patch faces cannot answer a malformed batch differently.
+//
+// The WHOLE batch is refused before anything is written, matching the
+// anchor-miss posture. Callers run it AFTER resolving the target (see
+// requireNonEmptyEdits).
+func decodePatchEdits(w http.ResponseWriter, dtos []LessonsEditDTO) ([]LessonsEdit, bool) {
+	edits := make([]LessonsEdit, len(dtos))
+	for i, e := range dtos {
+		if e.Old == nil && e.New == nil {
+			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(
+				"edits[%d]: neither old nor new was given — an edit needs at least one of them "+
+					"(empty old appends new); nothing was written", i))
+			return nil, false
+		}
+		edits[i] = LessonsEdit{Old: strOrEmpty(e.Old), New: strOrEmpty(e.New)}
+	}
+	return edits, true
 }

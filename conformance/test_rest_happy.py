@@ -1671,6 +1671,21 @@ HAPPY: dict[str, Happy] = {
             and bool(d["task_id"]) and bool(d["step_id"]),
         ),
     ),
+    "POST /api/tasks/{task_id}/steps/{step_id}/note/patch": Happy(
+        # T-1667. Appends onto a step whose note is still empty (each Happy row
+        # gets its own scratch task/step), so the check reads BOTH halves of the
+        # receipt: applied_edits proves the engine ran, and the echoed note
+        # proves what landed — a handler that 200s without storing cannot pass.
+        identity="agent",
+        path=lambda ctx: "/api/tasks/{}/steps/{}/note/patch".format(
+            *_happy_task_step(ctx)),
+        body={"edits": [{"old": "", "new": "conf happy note patch"}]},
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: d["applied_edits"] == 1
+            and d["note"] == "conf happy note patch",
+        ),
+    ),
     "POST /api/tasks/{task_id}/steps/{step_id}/gate": Happy(
         identity="agent",
         path=lambda ctx: "/api/tasks/{}/steps/{}/gate".format(
@@ -1784,6 +1799,12 @@ HAPPY: dict[str, Happy] = {
         identity="agent",
         path=lambda ctx: f"/api/task-manuals/{_happy_manual(ctx)}/learnings/patch",
         body={"edits": [{"old": "", "new": "conf happy patch"}]},
+        check=lambda _c, r: _expect(r, lambda d: d["applied_edits"] == 1),
+    ),
+    "POST /api/task-manuals/{type_key}/sop/patch": Happy(
+        identity="agent",
+        path=lambda ctx: f"/api/task-manuals/{_happy_manual(ctx)}/sop/patch",
+        body={"edits": [{"old": "", "new": "conf happy sop patch"}]},
         check=lambda _c, r: _expect(r, lambda d: d["applied_edits"] == 1),
     ),
     # ── product guide (docs/guide embed) ────────────────────────────────────
