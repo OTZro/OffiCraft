@@ -12639,7 +12639,7 @@ export interface operations {
     handle_list_task_manuals_api_task_manuals_get: {
         parameters: {
             query?: {
-                /** @description ``list`` = the LIGHT row: type_key / display_name / purpose / updated_ts plus the SIZES of the omitted text (``sop_md_chars``, ``learnings_chars``, ``cap_chars``), with sop_md and learnings served empty and fields/assignee empty. Any other value, or omitting it, keeps the DEFAULT: the full manual of every type, SOP and learnings included. Reach for ``list`` whenever you are matching or choosing a type rather than executing one — the two answers differ by orders of magnitude in size, and the light row still carries the sizes, so you can see what you skipped and fetch just that type with get_task_manual. */
+                /** @description ``list`` = the LIGHT row: type_key / display_name / purpose / updated_ts plus the SIZES of the omitted text (``sop_md_chars``, ``learnings_chars``) and the caps each is judged against (``sop_md_cap_chars``, ``learnings_cap_chars`` — the older ``cap_chars`` is DEPRECATED: it carries the LEARNINGS cap only and says nothing about sop_md), with sop_md and learnings served empty and fields/assignee empty. Any other value, or omitting it, keeps the DEFAULT: the full manual of every type, SOP and learnings included. Reach for ``list`` whenever you are matching or choosing a type rather than executing one — the two answers differ by orders of magnitude in size, and the light row still carries the sizes, so you can see what you skipped and fetch just that type with get_task_manual. */
                 view?: string | null;
             };
             header?: never;

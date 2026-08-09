@@ -1307,10 +1307,10 @@ export const en: Dict = {
     monitoringRefresh: "Monitoring refresh interval",
     monitoringRefreshSub: "Minimum seconds between monitoring refreshes (1–60)",
     seconds: "seconds",
-    // T-ae38: one cap became four. Deleting from these four documents costs
-    // wildly different amounts — a role definition is a standing description,
-    // a lessons doc is append-only environment Q&A — so they no longer share
-    // one ruler.
+    // T-ae38 (split again by T-30f1): one cap became many. Deleting from these
+    // documents costs wildly different amounts — a role definition is a
+    // standing description, a lessons doc is append-only environment Q&A — so
+    // they no longer share one ruler.
     docCapDuty: "Duty size cap",
     docCapDutySub:
       "Per-role limit on the role definition. The floor is this segment's own shipped default (smaller than every other segment's) and the ceiling is 100000, so this can only be raised — lowering it would leave documents that are legal today able to shrink only.",

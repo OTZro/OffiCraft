@@ -2866,7 +2866,7 @@
       "inputSchema": {
         "properties": {
           "view": {
-            "description": "\"list\" = the LIGHT row: type_key / display_name / purpose / updated_ts plus the SIZES of the omitted text (sop_md_chars, learnings_chars, cap_chars), with sop_md and learnings served empty. Omitted (the default) = the FULL manual of every type, SOP and learnings included. Use \"list\" whenever you are matching or choosing a type rather than executing one: the two answers differ by orders of magnitude, and the light row still tells you how big each manual is, so you can pull the one you picked with get_task_manual.",
+            "description": "\"list\" = the LIGHT row: type_key / display_name / purpose / updated_ts plus the SIZES of the omitted text (sop_md_chars, learnings_chars) and the caps each is judged against (sop_md_cap_chars, learnings_cap_chars \u2014 the older cap_chars is DEPRECATED: it carries the LEARNINGS cap only and says nothing about sop_md), with sop_md and learnings served empty. Omitted (the default) = the FULL manual of every type, SOP and learnings included. Use \"list\" whenever you are matching or choosing a type rather than executing one: the two answers differ by orders of magnitude, and the light row still tells you how big each manual is, so you can pull the one you picked with get_task_manual.",
             "type": "string"
           }
         },
