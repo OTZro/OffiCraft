@@ -45,6 +45,7 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/../lib/http.sh"
+. "$HERE/../lib/window.sh"
 
 BASE="${OC_SG_BASE:?}"
 AGENT="${OC_SG_AGENT:?}"
@@ -158,7 +159,7 @@ if [[ -n "$TASK" ]] && ! skipped closeout; then
     say "🔴 ⑦ cannot run: task $TASK has no step 1 — see the [http] lines above."
   else
     ST=""
-    for _ in $(seq 1 "${OC_SG_CARD_WAIT:-30}"); do
+    for _ in $(seq 1 "$OC_SG_CARD_WAIT"); do
       ST="$(sg_http GET "/api/tasks/$TASK" | jget "steps.1.status")"
       [[ "$ST" == "waiting_owner" ]] || break
       say "   ⑦ waiting for the owner to answer the card (step is waiting_owner)…"
