@@ -838,9 +838,13 @@ export const en: Dict = {
       loadError: "Failed to load scheduled messages",
       createError:
         "Failed to create the scheduled message (check the text, the time and the timezone)",
+      updateError:
+        "Failed to save the changes (check the text, the time and the timezone). Nothing has been changed.",
       unlabeled: "(unnamed)",
       create: "Create",
+      save: "Save",
       cancel: "Cancel",
+      editLabel: "Edit",
       deleteLabel: "Delete",
       deleteConfirm:
         "Delete this scheduled message? It will never be sent again and this cannot be undone.",
@@ -849,6 +853,10 @@ export const en: Dict = {
       bodyLabel: "Message",
       bodyPlaceholder:
         "The message to send when the time comes — delivered to this member verbatim",
+      // The row shows the first few lines and offers these. Both words describe
+      // what the ROW is showing — the stored message is untouched either way.
+      bodyExpand: "Show the whole message",
+      bodyCollapse: "Show less",
       cadenceLabel: "Repeats",
       cadenceDaily: "Daily",
       cadenceWeekly: "Weekly",

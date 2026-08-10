@@ -15,8 +15,17 @@
 //   5. 🔴 The OUTSOURCE panel grows the card too. `WorkerDetailPanel` had no
 //      `extraExpandCards` caller at all before this ticket, which is exactly how
 //      the webhook section ended up existing on only one of the two panels.
+//   6. An existing schedule can be EDITED — every setting a create can reach —
+//      and the saved values appear without a remount. Cancel keeps the stored
+//      values; a rejected save stays on screen as an error and never lets the
+//      row read as saved.
+//   7. A long message is collapsed on the row and can be opened per row. The
+//      collapse is a CLASS on the full string: the whole text still goes back
+//      over the wire when that row is edited.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { render, fireEvent, waitFor, within } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
@@ -76,7 +85,11 @@ const createScheduledMessage = vi.fn(
 const updateScheduledMessage = vi.fn(
   async (_memberId: string, scheduleId: string, patch: ScheduledMessageUpdate) => {
     const s = store.find((x) => x.id === scheduleId)!;
-    if (patch.status !== undefined) s.status = patch.status;
+    // Applies EVERY field the patch carries, not just `status` — otherwise a
+    // component that saved an edit and a component that dropped it on the floor
+    // would produce the same list, and the edit assertions below could not tell
+    // them apart.
+    Object.assign(s, patch);
     return { ...s };
   }
 );
@@ -176,6 +189,13 @@ const s = zh.mp.schedmsg;
 const NOW = new Date(2026, 7, 10, 10, 0, 0, 0);
 const FIRED_AT = new Date(2026, 7, 9, 21, 30, 0, 0);
 const TIME_SHAPE = /\d{1,2}\/\d{1,2}\s\d{2}:\d{2}/;
+
+/** Longer than the row shows collapsed. No edge whitespace, so a trim on the
+ * way to the wire cannot be mistaken for the truncation being asserted against. */
+const LONG_BODY = Array.from(
+  { length: 12 },
+  (_, i) => `第 ${i + 1} 行:早安,請看一下昨天的 CI 有沒有紅的。`
+).join("\n");
 
 beforeEach(() => {
   store = [];
@@ -386,6 +406,172 @@ describe("ScheduledMessagesCard", () => {
     expect(line.textContent).not.toMatch(TIME_SHAPE);
   });
 
+  it("edits every setting of an existing schedule and shows the result without a remount", async () => {
+    store = [mkSchedule({ label: "每日巡檢", body: "看一下 CI" })];
+    const target = store[0];
+    const view = await renderOpenCard();
+
+    fireEvent.click(await view.findByTestId(`mp-schedmsg-edit-${target.id}`));
+    const p = `mp-schedmsg-edit-${target.id}`;
+    // The editor opens on what the server currently holds — an editor that
+    // opened blank would silently blank whatever the owner did not retype.
+    expect(
+      (view.getByTestId(`${p}-label-input`) as HTMLInputElement).value
+    ).toBe("每日巡檢");
+    expect(
+      (view.getByTestId(`${p}-body-input`) as HTMLTextAreaElement).value
+    ).toBe("看一下 CI");
+
+    fireEvent.change(view.getByTestId(`${p}-label-input`), {
+      target: { value: "週報" },
+    });
+    fireEvent.change(view.getByTestId(`${p}-body-input`), {
+      target: { value: "整理本週進度" },
+    });
+    fireEvent.change(view.getByTestId(`${p}-cadence`), {
+      target: { value: "weekly" },
+    });
+    fireEvent.change(view.getByTestId(`${p}-dayofweek`), {
+      target: { value: "5" },
+    });
+    fireEvent.change(view.getByTestId(`${p}-hour`), { target: { value: "17" } });
+    fireEvent.change(view.getByTestId(`${p}-minute`), {
+      target: { value: "30" },
+    });
+    fireEvent.change(view.getByTestId(`${p}-timezone`), {
+      target: { value: "Europe/Berlin" },
+    });
+    fireEvent.click(view.getByTestId(`mp-schedmsg-edit-save-${target.id}`));
+
+    await waitFor(() => expect(updateScheduledMessage).toHaveBeenCalledTimes(1));
+    expect(updateScheduledMessage.mock.calls[0][2]).toEqual({
+      label: "週報",
+      body: "整理本週進度",
+      cadence: "weekly",
+      dayOfWeek: 5,
+      hour: 17,
+      minute: 30,
+      timezone: "Europe/Berlin",
+    });
+    // Same rule as the create path: the day field the cadence does not read
+    // must not ride along.
+    expect(updateScheduledMessage.mock.calls[0][2].dayOfMonth).toBeUndefined();
+
+    // The evidence is the ROW, not the call: only a post-mutation refetch puts
+    // the saved values on screen without the owner reopening the member.
+    const row = await view.findByTestId(`mp-schedmsg-row-${target.id}`);
+    expect(within(row).getByText("週報")).toBeTruthy();
+    expect(within(row).getByText("整理本週進度")).toBeTruthy();
+    expect(within(row).getByText(s.weeklyOn(s.weekdayFri))).toBeTruthy();
+    expect(within(row).getByText("17:30")).toBeTruthy();
+    expect(within(row).getByText("Europe/Berlin")).toBeTruthy();
+  });
+
+  it("throws the draft away when an edit is cancelled", async () => {
+    store = [mkSchedule({ label: "每日巡檢", body: "看一下 CI" })];
+    const target = store[0];
+    const view = await renderOpenCard();
+    const p = `mp-schedmsg-edit-${target.id}`;
+
+    fireEvent.click(await view.findByTestId(`mp-schedmsg-edit-${target.id}`));
+    fireEvent.change(view.getByTestId(`${p}-body-input`), {
+      target: { value: "改到一半反悔" },
+    });
+    fireEvent.click(view.getByTestId(`mp-schedmsg-edit-cancel-${target.id}`));
+
+    expect(updateScheduledMessage).not.toHaveBeenCalled();
+    const row = await view.findByTestId(`mp-schedmsg-row-${target.id}`);
+    expect(within(row).getByText("看一下 CI")).toBeTruthy();
+    // Reopening must show the ORIGINAL, not the abandoned draft — a cancel that
+    // only hid the form would hand the next edit a value nobody chose.
+    fireEvent.click(view.getByTestId(`mp-schedmsg-edit-${target.id}`));
+    expect(
+      (view.getByTestId(`${p}-body-input`) as HTMLTextAreaElement).value
+    ).toBe("看一下 CI");
+  });
+
+  it("keeps a failed save on screen as an error instead of as a saved row", async () => {
+    store = [mkSchedule({ label: "每日巡檢", body: "看一下 CI" })];
+    const target = store[0];
+    const view = await renderOpenCard();
+    const p = `mp-schedmsg-edit-${target.id}`;
+    updateScheduledMessage.mockRejectedValueOnce(new Error("server said no"));
+
+    fireEvent.click(await view.findByTestId(`mp-schedmsg-edit-${target.id}`));
+    fireEvent.change(view.getByTestId(`${p}-body-input`), {
+      target: { value: "會被拒絕的內容" },
+    });
+    fireEvent.click(view.getByTestId(`mp-schedmsg-edit-save-${target.id}`));
+
+    expect(
+      await view.findByTestId(`mp-schedmsg-edit-error-${target.id}`)
+    ).toBeTruthy();
+    // Still in the editor, still holding the rejected draft: closing it would
+    // read as "saved", and the row underneath would then be the only thing on
+    // screen — showing the OLD text with no sign the save was lost.
+    expect(view.getByTestId(`mp-schedmsg-editform-${target.id}`)).toBeTruthy();
+    expect(
+      (view.getByTestId(`${p}-body-input`) as HTMLTextAreaElement).value
+    ).toBe("會被拒絕的內容");
+    expect(view.queryByTestId(`mp-schedmsg-row-${target.id}`)).toBeNull();
+  });
+
+  it("collapses a long message per row and reveals the whole text on demand", async () => {
+    store = [
+      mkSchedule({ label: "長的", body: LONG_BODY }),
+      mkSchedule({ label: "也很長", body: LONG_BODY }),
+      mkSchedule({ label: "短的", body: "看一下 CI" }),
+    ];
+    const [first, second, short] = store;
+    const view = await renderOpenCard();
+
+    const text = await view.findByTestId(`mp-schedmsg-text-${first.id}`);
+    expect(text.className).toContain("mp-schedmsg__text--clamped");
+    // Collapsed is a CLASS on the full string, never a shortened one.
+    expect(text.textContent).toBe(LONG_BODY);
+
+    fireEvent.click(view.getByTestId(`mp-schedmsg-text-toggle-${first.id}`));
+    expect(
+      view.getByTestId(`mp-schedmsg-text-${first.id}`).className
+    ).not.toContain("mp-schedmsg__text--clamped");
+    // Per ROW: the second long message is still collapsed. One shared switch
+    // would have opened both.
+    expect(
+      view.getByTestId(`mp-schedmsg-text-${second.id}`).className
+    ).toContain("mp-schedmsg__text--clamped");
+
+    fireEvent.click(view.getByTestId(`mp-schedmsg-text-toggle-${first.id}`));
+    expect(view.getByTestId(`mp-schedmsg-text-${first.id}`).className).toContain(
+      "mp-schedmsg__text--clamped"
+    );
+
+    // The other direction — a message that fits is neither clamped nor offered
+    // a control, otherwise the clamp class above would be unconditional.
+    expect(
+      view.getByTestId(`mp-schedmsg-text-${short.id}`).className
+    ).not.toContain("mp-schedmsg__text--clamped");
+    expect(
+      view.queryByTestId(`mp-schedmsg-text-toggle-${short.id}`)
+    ).toBeNull();
+  });
+
+  it("sends a collapsed message back whole when its row is edited", async () => {
+    store = [mkSchedule({ label: "長的", body: LONG_BODY })];
+    const target = store[0];
+    const view = await renderOpenCard();
+
+    // Left collapsed on purpose: the row shows a few lines, and the save must
+    // still carry every character. "只看到前幾行" must not become "只送出前幾行".
+    expect(
+      (await view.findByTestId(`mp-schedmsg-text-${target.id}`)).className
+    ).toContain("mp-schedmsg__text--clamped");
+    fireEvent.click(view.getByTestId(`mp-schedmsg-edit-${target.id}`));
+    fireEvent.click(view.getByTestId(`mp-schedmsg-edit-save-${target.id}`));
+
+    await waitFor(() => expect(updateScheduledMessage).toHaveBeenCalledTimes(1));
+    expect(updateScheduledMessage.mock.calls[0][2].body).toBe(LONG_BODY);
+  });
+
   it("says the load failed instead of reading as honest-empty", async () => {
     const view = render(
       <I18nProvider>
@@ -427,5 +613,25 @@ describe("both detail panels render the 定期訊息 card", () => {
     // Bound to the WORKER's own id — a card wired to some member id would list
     // the wrong agent's schedules and this row would never appear.
     expect(await view.findByText("外包排程")).toBeTruthy();
+  });
+});
+
+// 🔴 jsdom evaluates NO CSS, so every assertion above can only see the class
+// NAME. Delete the rule the class points at and the whole suite above stays
+// green while the row goes back to rendering a wall of text — the T-7526 shape
+// (found by looking at a screenshot). So the rule itself is checked where it is
+// cheap and exact: at the source, like styleOwnership.test.ts.
+describe("member-detail.css backs the collapsed-message class", () => {
+  it("clamps .mp-schedmsg__text--clamped to a few lines and hides the rest", () => {
+    const css = readFileSync(join(__dirname, "member-detail.css"), "utf8");
+    const start = css.indexOf(".mp-schedmsg__text--clamped");
+    expect(start).toBeGreaterThan(-1);
+    const rule = css.slice(start, css.indexOf("}", start));
+    expect(rule).toMatch(/-webkit-line-clamp:\s*\d+/);
+    // Anchored on the declaration boundary: `\b` would have matched the
+    // `-webkit-` line above and made this assertion a restatement of it.
+    expect(rule).toMatch(/[;{\n]\s*line-clamp:\s*\d+/);
+    // Without this the clamped box still lays out every line and simply spills.
+    expect(rule).toMatch(/overflow:\s*hidden/);
   });
 });

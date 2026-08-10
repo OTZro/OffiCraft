@@ -1394,7 +1394,9 @@
   font-size: 12.5px;
   color: var(--color-text-muted);
 }
-.mp-schedmsg__delete {
+/* 列上的動作鈕(編輯、刪除)共用同一個方框,只有 hover 的意義不同:編輯是一般
+   動作,刪除是不可復原的動作。 */
+.mp-schedmsg__rowbtn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1405,6 +1407,10 @@
   background: transparent;
   color: var(--color-text-muted);
   transition: color 0.15s, border-color 0.15s;
+}
+.mp-schedmsg__rowbtn:hover {
+  color: var(--color-text);
+  border-color: var(--color-indigo);
 }
 .mp-schedmsg__delete:hover {
   color: var(--color-danger);
@@ -1436,6 +1442,27 @@
   color: var(--color-text);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+/* 長訊息在列上先收到三行,否則一條長內容就把整張卡變成一面文字牆。這是純顯示:
+   節點裡放的一直是完整字串,收合只是把它裁在視窗外。 */
+.mp-schedmsg__text--clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+.mp-schedmsg__textmore {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+  transition: color 0.15s;
+}
+.mp-schedmsg__textmore:hover {
+  color: var(--color-text);
 }
 /* last-sent line: the delivery cursor the list endpoint carries. Secondary to
    the label and the body — it reports history, it does not compete with what
