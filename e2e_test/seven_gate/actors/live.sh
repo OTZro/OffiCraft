@@ -187,6 +187,29 @@ say "machine online"
 #      adds the PLACEMENT, which is what makes the reconcile actually dispatch a
 #      START to the warden we just started. Owner-scope, so it is the owner's
 #      act, not the agent's. ────────────────────────────────────────────────────
+# ── PRE-SPEND PREFLIGHT ─────────────────────────────────────────────────────
+# 🔴 EVERYTHING THAT CAN KILL THIS SCRIPT MUST FAIL ABOVE THIS LINE. The activate
+# below is the spend point: it makes the warden spawn a real agent, and from that
+# instant every remaining line is being paid for. The first real run died AFTER
+# it — an unbound variable on line 213 — so the actor's trap killed the tmux
+# session, ②..⑨ went red, and the verdict blamed the agent for the harness's own
+# crash. Money spent, zero information.
+#
+# So the two things the LATE phases depend on are exercised HERE, while failing
+# is still free:
+#   * every wait variable those phases reference — naming one that does not exist
+#     is precisely the bug above, and `set -u` fires on the mention;
+#   * the friction questions parse — that file is read minutes later, and a
+#     broken heading there would waste the whole run at the very end.
+# This is a runtime echo of what lib/varcheck.py proves statically in CI; the
+# static one catches it without running at all, this one catches whatever a
+# name-level check cannot see.
+: "$OC_SG_LIVE_WAIT" "$OC_SG_FRICTION_WAIT" "$OC_SG_MACHINE_WAIT" "$OC_SG_SPAWN_WAIT" \
+  "${OC_SG_LIVE_POLL:-20}" "$RUN_DIR" "$AGENT" "$SG"
+sg_friction_questions "$SG/friction.md" >/dev/null \
+  || die "the friction questions do not parse — they are asked at the very END of the run, so this would waste the entire spend before anyone found out."
+say "pre-spend preflight ok — everything the post-spawn phases need resolves"
+
 sg_http POST "/api/members/$AGENT/activate" "{\"machine_id\":\"$MACHINE\"}" >/dev/null \
   || die "activate onto $MACHINE was refused — see the [http] line above. Without a placement the warden is never told to start anything."
 
@@ -210,7 +233,7 @@ say "spawned: tmux session $SESSION pane_pid=${PANE_PID:-<unknown>}"
 #      finished run is pure waste; otherwise we stop at the deadline and let the
 #      judge report whatever did and did not land. ──────────────────────────────
 DEADLINE=$(( $(date +%s) + $OC_SG_LIVE_WAIT ))
-say "waiting for the agent to walk the path (deadline in $OC_SG_LIVE_WAITs; this is a stopping condition, not a verdict)"
+say "waiting for the agent to walk the path (deadline in ${OC_SG_LIVE_WAIT}s; this is a stopping condition, not a verdict)"
 while [[ "$(date +%s)" -lt "$DEADLINE" ]]; do
   sleep "${OC_SG_LIVE_POLL:-20}"
   MINE="$(sg_http GET /api/tasks | python3 -c '
@@ -252,7 +275,7 @@ while IFS= read -r q; do
 done < <(sg_friction_questions "$SG/friction.md")
 [[ "$QCOUNT" -gt 0 ]] || die "no friction questions were extracted — refusing to record an unasked follow-up."
 
-say "collecting the agent's own answers (up to $OC_SG_FRICTION_WAITs)"
+say "collecting the agent's own answers (up to ${OC_SG_FRICTION_WAIT}s)"
 FR_DEADLINE=$(( $(date +%s) + $OC_SG_FRICTION_WAIT ))
 ANSWERS=""
 while [[ "$(date +%s)" -lt "$FR_DEADLINE" ]]; do

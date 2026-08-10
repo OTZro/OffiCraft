@@ -228,6 +228,43 @@ collector 收集窗  ≥  actor 預算（machine + spawn + live + friction + car
 `HTTP 422 effort must be one of [high low max medium]; got 'bogus'`，載體當場拒跑（rc=2）——
 所以「讀回來相符」不是一句空話，這道檢查真的會說不。
 
+## 一個字母花掉一次真跑：為什麼守衛不能是「跑跑看」
+
+第一次真跑,agent **已經被 spawn 起來**、①報到 PASS,然後 actor 當場死在:
+
+```
+actors/live.sh: line 213: OC_SG_LIVE_WAITs: unbound variable
+```
+
+——就是上面那個 `window.sh` 重構,把 `${OC_SG_LIVE_WAIT:-1800}s` 改寫成 `$OC_SG_LIVE_WAIT` 時,
+**把「秒」的那個 `s` 黏進了變數名**。actor 死掉 → 它的 trap 殺掉 tmux session → ②～⑨ 全紅。
+判定寫的是「agent 什麼都沒做」,**事實是載體把它殺了**。錢照花,資訊零。
+
+⚠️ **CI 從頭到尾是綠的,而且它沒有做錯**:CI 永遠不執行 `live.sh`——那支只在真跑時執行,而真跑正是
+CI 絕對不能做的事。所以守衛不能是「跑跑看」,必須是**在不 spawn、不花錢的前提下,把每一個變數
+引用走一遍**。那就是 `lib/varcheck.py`(案例 23):`set -u` 底下,一個引用只有兩種安全來源——
+自己帶預設(`${V:-x}` 那一族),或名字真的在某處被綁。兩者皆非 = 沒人設過的名字 = 打錯字 = 半路暴斃。
+
+- **mutant**:把那個錯字放回去,守衛 rc=1 並**逐字點名** `OC_SG_LIVE_WAITs`;同一份沒有錯字的複本
+  必須綠(否則紅的是 fixture 不是錯字)。fixture 樹**刻意做成跟真實一樣的 `actors/` ＋ `lib/` 佈局**
+  ——varcheck 是靠往上走找到 `lib/window.sh` 的,丟進裸的暫存目錄會讓每個旋鈕都看起來沒綁。
+- **同型掃描**結果:同一次改寫製造了**兩個**,第二個在 friction 段(`$OC_SG_FRICTION_WAITs`),
+  真跑那次還沒走到就先死在第一個。兩個都修了。
+- ⚠️ **守衛的射程**:它是**名字層級**的,而且**不做完整的 bash 引號解析**——所以它適用於這個載體的
+  腳本,**不適合指著 `tests_guard/run.sh` 那種「內容大多是在談論別的腳本」的檔**(那裡的 `$x` 住在
+  單引號 fixture 與 sed 程式裡,看起來跟真的展開一模一樣)。單引號區段**刻意不剝除**:剝了會讓
+  一句 `"⑦'s fact"` 的撇號吃掉整行剩下的部分,而**藏起一個真引用的檢查器比多叫一次更糟**。
+
+## 檢查要排在花錢之前
+
+這次的形狀是**先花錢、再死在載體**。所以 `live.sh` 在 activate(＝spawn＝開始計費)那一行**之前**多了
+一段 **PRE-SPEND PREFLIGHT**:把後半段會用到的等待變數全部逼出來展開一次(`set -u` 會在「提到」的
+當下就炸),並且先把 friction 問句 parse 一遍(那個檔是整場最後才讀的,壞在那裡等於整輪白花)。
+案例 23d 釘住「preflight 的行號 < 花錢那一行的行號」。
+
+⚠️ **做不到全部**:preflight 只能保證「這些名字現在展開得出來」,擋不掉後半段的邏輯錯、server 中途
+改行為、或環境在跑的過程中變化。真正把這一類擋在花錢之前的是 CI 裡那道靜態檢查——它**根本不用跑**。
+
 ## 為什麼不是拿 `task_system_e2e.sh`（那支「寫 42」的）來當 live actor
 
 repo 裡**已經有**一支會起真 claude 的 e2e：`e2e_test/task_system_e2e.sh`——建一張 outsource 任務、

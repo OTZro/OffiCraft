@@ -1835,6 +1835,74 @@ for _knob in OC_SG_LIVE_WAIT OC_SG_MACHINE_WAIT OC_SG_SPAWN_WAIT OC_SG_FRICTION_
   check "seven_gate: $_knob has no second default outside lib/window.sh" "0" "${_dupes:-0}"
 done
 
+# ── 23) T-42bb: an unbound-variable typo in live.sh must go red WITHOUT a run ──
+#
+# WHAT HAPPENED. The first real-agent run died on actors/live.sh line 213:
+#
+#     actors/live.sh: line 213: OC_SG_LIVE_WAITs: unbound variable
+#
+# One letter — the `s` of "seconds" glued onto the NAME when the window.sh
+# refactor rewrote `${OC_SG_LIVE_WAIT:-1800}s` as `$OC_SG_LIVE_WAIT`. The agent
+# had ALREADY BEEN SPAWNED and ① had passed; the actor then died, its trap killed
+# the tmux session, and ②..⑨ all went red. The verdict said 「the agent did
+# nothing」; the truth was 「the harness killed it」. A paid run, zero information.
+#
+# WHY CI DID NOT CATCH IT. CI never executes live.sh — that file only runs on a
+# real run, which is the one thing CI must never do. So the guard cannot be "run
+# it": it has to walk every variable REFERENCE while spawning nothing. That is
+# lib/varcheck.py, and this case is what makes it load-bearing rather than a
+# script nobody calls.
+SG_VARCHECK="$SG_DIR/lib/varcheck.py"
+SG_VARFILES=("$SG_DIR/actors/live.sh" "$SG_DIR/actors/stub.sh" "$SG_DIR/run.sh"
+             "$SG_DIR/lib/http.sh" "$SG_DIR/lib/friction.sh" "$SG_DIR/lib/window.sh")
+
+# 23a) the shipped harness is clean.
+python3 "$SG_VARCHECK" "${SG_VARFILES[@]}" >/dev/null 2>&1
+check "seven_gate: every variable reference in the harness scripts is bound (no unbound-variable landmine)" "0" "$?"
+
+# 23b) THE MUTANT — put the exact typo back and the guard must go red, naming it.
+# Without this, a varcheck.py that returned 0 unconditionally would satisfy 23a
+# and this case would be guarding nothing. The mutant is the historical bug
+# verbatim, not an invented one.
+# The fixture tree MIRRORS the real layout (actors/ beside lib/): varcheck
+# resolves `. "$SG/lib/window.sh"` by walking up from the file, so a copy dropped
+# into a bare temp dir would report every knob as unbound — the control would
+# fail and the mutant would "pass" for the wrong reason.
+SG_VARTREE="$SHIMDIR/sg-vartree"
+rm -rf "$SG_VARTREE"; mkdir -p "$SG_VARTREE/actors" "$SG_VARTREE/lib"
+cp "$SG_DIR"/lib/*.sh "$SG_VARTREE/lib/"
+cp "$SG_DIR/friction.md" "$SG_VARTREE/" 2>/dev/null || true
+SG_VARMUT="$SG_VARTREE/actors/live.sh"
+sed 's|deadline in ${OC_SG_LIVE_WAIT}s;|deadline in $OC_SG_LIVE_WAITs;|' \
+    "$SG_DIR/actors/live.sh" > "$SG_VARMUT"
+if ! grep -q 'OC_SG_LIVE_WAITs' "$SG_VARMUT"; then
+  bad "seven_gate: the varcheck mutant did not apply — the line moved, so case 23b is testing nothing (fix the sed)"
+else
+  _vc_out="$(python3 "$SG_VARCHECK" "$SG_VARMUT" 2>&1)"; _vc_rc=$?
+  check "seven_gate: with the typo put back, varcheck goes RED" "1" "$_vc_rc"
+  case "$_vc_out" in
+    *"OC_SG_LIVE_WAITs"*) ok "seven_gate: varcheck NAMES the typo'd variable — $(printf '%s' "$_vc_out" | head -1)" ;;
+    *) bad "seven_gate: varcheck reddened but never named OC_SG_LIVE_WAITs, so it would not tell anyone what to fix: $_vc_out" ;;
+  esac
+  # …and the SAME tree without the typo must pass, or 23b's red proves nothing
+  # about the typo (it could be the copy, the path, or the tool being broken).
+  cp "$SG_DIR/actors/live.sh" "$SG_VARTREE/actors/live-control.sh"
+  python3 "$SG_VARCHECK" "$SG_VARTREE/actors/live-control.sh" >/dev/null 2>&1
+  check "seven_gate: the SAME copy without the typo passes (23b's red is the typo, not the fixture)" "0" "$?"
+fi
+
+# 23d) the expensive-path preflight must come BEFORE the spend. live.sh spawns a
+# real agent at the activate/tmux step; anything that can kill the actor AFTER
+# that point burns money to produce nothing. The variables the late phases use
+# are therefore forced to expand in a preflight ahead of it.
+_pf_line="$(grep -n 'PRE-SPEND PREFLIGHT' "$SG_DIR/actors/live.sh" | head -1 | cut -d: -f1)"
+_spend_line="$(grep -n 'activate' "$SG_DIR/actors/live.sh" | grep -v '^.*#' | head -1 | cut -d: -f1)"
+if [[ -n "$_pf_line" && -n "$_spend_line" && "$_pf_line" -lt "$_spend_line" ]]; then
+  ok "seven_gate: live.sh's pre-spend preflight (line $_pf_line) runs before the spend point (line $_spend_line)"
+else
+  bad "seven_gate: live.sh has no PRE-SPEND PREFLIGHT ahead of the activate that starts the spending (preflight=${_pf_line:-none} spend=${_spend_line:-none})"
+fi
+
 echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1
 
