@@ -386,6 +386,18 @@ shell** 負責寫的，所以它從來沒被寫出來。**「死了」跟「還�
 而且查過：改之前 `git grep -nE 'nohup|setsid|disown' -- e2e_test/seven_gate` **零命中**——
 **載體活不活得下來，完全取決於起它的人記不記得加 `nohup`**。「靠人記得」正是這個關卡要消滅的東西。
 
+🔴 **但上面那個開場故事，這一包擋不住——先講清楚，別把它讀成「已經修好了」。**
+warden 收掉一個 member 時走的是 **PPID 樹**（`cli/ocwarden/kill.go` 的 `descendantPIDs`，
+`ps -eo pid=,ppid=`，接在 `escalateKill` 的殺前快照與 `snapshotMemberPIDs` 的 kill list 兩處；
+那裡有一支測試逐字叫 `TestEscalateKill_TreeWalkReapsDetachedOrphans`，註解寫明目的就是收
+「DETACHED to a new pgroup (setsid / double-fork orphans killpg can't reach)」）。而
+**`setsid` 改的是 session/pgroup，不改 PPID**（實測：`fork()` + `os.setsid()` 之後 `ps` 報的
+PPID 仍是父行程）⇒ **兩者正交，detach 對它無效**；連 watchdog 也在同一份 kill list 裡，所以
+「終局訊號」那一層對這個死法**同樣**寫不出來。
+⇒ **這一包治的是「呼叫者自己死掉、warden 沒介入」那一類**（shell 被關、上游 pipeline 斷、
+`kill` 打在呼叫者的 process group 上）。**relocate／refocus／stop 那條路要靠別的辦法**——
+正解是**別讓載體待在那棵樹下**（從另一台機器起它）：**站在外面的觀察者，本來就不會跟被觀察者一起死。**
+
 所以現在是兩件事，而**第二件比第一件重要**：
 
 1. **自己 detach**。`run.sh` 一開頭就把自己 re-exec 進**新的 session**（`os.setsid()`；macOS 沒有
@@ -405,7 +417,9 @@ shell** 負責寫的，所以它從來沒被寫出來。**「死了」跟「還�
   setup 或 actor 中間，訊號檔會在**那個指令結束時**才出現。保證的是「**一定會出現、rc 與 reason 正確**」，
   不是「立刻出現」。即時的那一格是 SIGKILL，由 watchdog 回答。
 - **detach 擋的是「打在呼叫者 group 上」的 kill**，不是「指名這一輪自己」的 kill：載體與 watchdog 若
-  被同一發打掉，就沒有人還活著能寫。
+  被同一發打掉，就沒有人還活著能寫。**最重要的實例是 warden 收 member**——它走 PPID 樹、專門收
+  setsid 出去的子孫（見上面那段），所以 **relocate 這條路 detach 與終局訊號都無效**。這不是可以靠
+  調參數補的，是兩個機制正交；要活下來只能不在那棵樹下。
 - 這一層**不殺任何東西、不指名任何 session**：唯一的動詞是 `kill -0`（探活、不送訊號），對象是
   這個 shell 自己記下的那一顆 pid。`lib/ownedkill.sh` 的隔離（自己的 socket ＋ 只殺 ledger 上的確切名字、
   fail-closed）**一個字都沒動**。
