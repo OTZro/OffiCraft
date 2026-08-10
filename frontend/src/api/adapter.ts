@@ -903,6 +903,75 @@ export interface WebhookCreateInput {
   signingSecret?: string;
 }
 
+// ── 定期訊息 · scheduled messages (T-f059) ────────────────────────────────────
+
+/** How often a scheduled message repeats. `weekly` reads `dayOfWeek`,
+ * `monthly` reads `dayOfMonth`, `daily` reads neither. */
+export type ScheduleCadence = "daily" | "weekly" | "monthly";
+
+/** One recurring message bound to a member (view model of
+ * `ScheduledMessageDTO`) — the clock-driven twin of a webhook endpoint: when a
+ * wall-clock slot comes due the server delivers `body` down the ordinary chat
+ * path. `status` is the reversible enable/disable toggle, NOT a lifecycle —
+ * DELETE is the permanent removal.
+ *
+ * `lastFiredSlot` is the IDENTIFIER of the slot already delivered (e.g.
+ * `2026-08-10T09:00+08:00`), never a "last run at" clock; `lastFiredTs` is the
+ * human-facing time of the last ACTUAL delivery and takes no part in the
+ * fire/skip decision. */
+export interface ScheduledMessage {
+  id: string;
+  memberId: string;
+  label: string;
+  body: string;
+  cadence: ScheduleCadence;
+  /** 0=Sunday … 6=Saturday. Read only by `weekly`. */
+  dayOfWeek: number;
+  /** 1–31. Read only by `monthly`. A month without that day is SKIPPED whole
+   * (RFC 5545), never clamped — so 29/30/31 silently miss some months. */
+  dayOfMonth: number;
+  hour: number;
+  minute: number;
+  /** IANA zone name the wall-clock slot is computed in. */
+  timezone: string;
+  status: "enabled" | "disabled";
+  lastFiredSlot: string;
+  lastFiredTs: number;
+  createdTs: number;
+}
+
+/** Create-form payload for a new scheduled message (mirrors
+ * `ScheduledMessageCreateDTO`). `body`/`cadence`/`hour`/`minute`/`timezone` are
+ * REQUIRED on the wire — a schedule with no time of day is meaningless, and a
+ * defaulted timezone would sooner or later be read as "wherever the server
+ * happens to run". `label` omitted = no label; `dayOfWeek` omitted = 0;
+ * `dayOfMonth` omitted = 1. */
+export interface ScheduledMessageCreateInput {
+  label?: string;
+  body: string;
+  cadence: ScheduleCadence;
+  dayOfWeek?: number;
+  dayOfMonth?: number;
+  hour: number;
+  minute: number;
+  timezone: string;
+}
+
+/** Partial edit of a scheduled message (mirrors `ScheduledMessageUpdateDTO`):
+ * only the supplied fields change. `status` flips the enable/disable toggle;
+ * `id` and `memberId` are immutable and are not editable here. */
+export interface ScheduledMessageUpdate {
+  label?: string;
+  body?: string;
+  cadence?: ScheduleCadence;
+  dayOfWeek?: number;
+  dayOfMonth?: number;
+  hour?: number;
+  minute?: number;
+  timezone?: string;
+  status?: "enabled" | "disabled";
+}
+
 // ── Resume summary (RESUME SUMMARY panel section, T-8b0d) ─────────────────────
 
 /** The size/概要 block of a resume snapshot (view model of
@@ -1113,6 +1182,32 @@ export interface Api {
     memberId: string,
     endpointId: string,
   ): Promise<WebhookRequestLog[]>;
+  /** List a member's scheduled messages, oldest→newest
+   * (`GET /api/members/{id}/scheduled-messages`, T-f059). The member may be an
+   * assistant OR an `ow-` outsource worker — the recipient rule ordinary chat
+   * uses. */
+  listScheduledMessages(memberId: string): Promise<ScheduledMessage[]>;
+  /** Create a scheduled message on a member
+   * (`POST /api/members/{id}/scheduled-messages`). The delivery cursor is
+   * seeded to the slot most recently elapsed, so a fresh schedule never fires
+   * on the spot. */
+  createScheduledMessage(
+    memberId: string,
+    input: ScheduledMessageCreateInput,
+  ): Promise<ScheduledMessage>;
+  /** Edit a scheduled message, including the enable/disable toggle
+   * (`PATCH /api/members/{id}/scheduled-messages/{scheduleId}`). Re-aiming any
+   * cadence/slot field moves the cursor to the slot most recently elapsed, so
+   * an edit never fires the slot it crosses. */
+  updateScheduledMessage(
+    memberId: string,
+    scheduleId: string,
+    patch: ScheduledMessageUpdate,
+  ): Promise<ScheduledMessage>;
+  /** Permanently remove a scheduled message
+   * (`DELETE /api/members/{id}/scheduled-messages/{scheduleId}`) — distinct
+   * from `status: disabled`, which is the reversible suspend. */
+  deleteScheduledMessage(memberId: string, scheduleId: string): Promise<void>;
   /** The target member's bounded wake snapshot (RESUME SUMMARY panel section,
    * T-8b0d) — the SAME `resumeSnapshotParts` assembly `resume_summary` uses for
    * the caller, here for `memberId`

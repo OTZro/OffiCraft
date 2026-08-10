@@ -61,6 +61,9 @@ import type {
   WebhookCreateInput,
   WebhookUpdate,
   WebhookRequestLog,
+  ScheduledMessage,
+  ScheduledMessageCreateInput,
+  ScheduledMessageUpdate,
   ReplyCard,
   ReplyCardAnswerInput,
   ReplyCardCounts,
@@ -116,6 +119,7 @@ import {
   toTaskManual,
   toWebhookEndpoint,
   toWebhookRequestLog,
+  toScheduledMessage,
   toMemberResumeSummary,
   fromTaskManualPatch,
   fromTaskReassignInput,
@@ -660,6 +664,104 @@ export const httpApi: Api = {
       ),
     );
     return wire.map(toWebhookRequestLog);
+  },
+
+  async listScheduledMessages(memberId: string): Promise<ScheduledMessage[]> {
+    // GET /api/members/{id}/scheduled-messages -> ScheduledMessageDTO[]
+    const wire = unwrap(
+      await client.GET("/api/members/{member_id}/scheduled-messages", {
+        params: { path: { member_id: memberId } },
+      }),
+    );
+    return wire.map(toScheduledMessage);
+  },
+
+  async createScheduledMessage(
+    memberId: string,
+    input: ScheduledMessageCreateInput,
+  ): Promise<ScheduledMessage> {
+    // POST /api/members/{id}/scheduled-messages {body, cadence, hour, minute,
+    // timezone, label?, day_of_week?, day_of_month?} -> ScheduledMessageDTO.
+    // The five required fields always ride; the three optional ones only when
+    // supplied (an absent field must not arrive as null).
+    const body: {
+      body: string;
+      cadence: "daily" | "weekly" | "monthly";
+      hour: number;
+      minute: number;
+      timezone: string;
+      label?: string;
+      day_of_week?: number;
+      day_of_month?: number;
+    } = {
+      body: input.body,
+      cadence: input.cadence,
+      hour: input.hour,
+      minute: input.minute,
+      timezone: input.timezone,
+    };
+    if (input.label !== undefined) body.label = input.label;
+    if (input.dayOfWeek !== undefined) body.day_of_week = input.dayOfWeek;
+    if (input.dayOfMonth !== undefined) body.day_of_month = input.dayOfMonth;
+    const wire = unwrap(
+      await client.POST("/api/members/{member_id}/scheduled-messages", {
+        params: { path: { member_id: memberId } },
+        body,
+      }),
+    );
+    return toScheduledMessage(wire);
+  },
+
+  async updateScheduledMessage(
+    memberId: string,
+    scheduleId: string,
+    patch: ScheduledMessageUpdate,
+  ): Promise<ScheduledMessage> {
+    // PATCH /api/members/{id}/scheduled-messages/{schedule_id} ->
+    // ScheduledMessageDTO. PATCH semantics — only supplied fields ride the
+    // body; `id` and `member_id` are immutable and never sent.
+    const body: {
+      label?: string;
+      body?: string;
+      cadence?: "daily" | "weekly" | "monthly";
+      day_of_week?: number;
+      day_of_month?: number;
+      hour?: number;
+      minute?: number;
+      timezone?: string;
+      status?: "enabled" | "disabled";
+    } = {};
+    if (patch.label !== undefined) body.label = patch.label;
+    if (patch.body !== undefined) body.body = patch.body;
+    if (patch.cadence !== undefined) body.cadence = patch.cadence;
+    if (patch.dayOfWeek !== undefined) body.day_of_week = patch.dayOfWeek;
+    if (patch.dayOfMonth !== undefined) body.day_of_month = patch.dayOfMonth;
+    if (patch.hour !== undefined) body.hour = patch.hour;
+    if (patch.minute !== undefined) body.minute = patch.minute;
+    if (patch.timezone !== undefined) body.timezone = patch.timezone;
+    if (patch.status !== undefined) body.status = patch.status;
+    const wire = unwrap(
+      await client.PATCH(
+        "/api/members/{member_id}/scheduled-messages/{schedule_id}",
+        {
+          params: { path: { member_id: memberId, schedule_id: scheduleId } },
+          body,
+        },
+      ),
+    );
+    return toScheduledMessage(wire);
+  },
+
+  async deleteScheduledMessage(
+    memberId: string,
+    scheduleId: string,
+  ): Promise<void> {
+    // DELETE /api/members/{id}/scheduled-messages/{schedule_id} ->
+    // ScheduledMessageDTO (the deleted row echo; the caller refetches).
+    await client.DELETE(
+      "/api/members/{member_id}/scheduled-messages/{schedule_id}",
+      { params: { path: { member_id: memberId, schedule_id: scheduleId } } },
+    );
   },
 
   async getMemberResumeSummary(

@@ -42,6 +42,9 @@ import type {
   WebhookCreateInput,
   WebhookUpdate,
   WebhookRequestLog,
+  ScheduledMessage,
+  ScheduledMessageCreateInput,
+  ScheduledMessageUpdate,
   ReplyCard,
   ReplyCardAnswerInput,
   ReplyCardCounts,
@@ -1431,6 +1434,137 @@ function mockWebhookToken(): string {
   );
 }
 
+// T-f059 定期訊息 — an in-memory store keyed by member id, the webhook store's
+// clock-driven twin. Seeded with one schedule on mira so the panel's section
+// renders populated offline.
+const mockScheduledMessages = new Map<string, ScheduledMessage[]>([
+  [
+    "mira",
+    [
+      {
+        id: "sch-0a1b2c3d4e5f",
+        memberId: "mira",
+        label: "每日巡檢",
+        body: "早安,請看一下昨天的 CI 有沒有紅的,有的話開一張票。",
+        cadence: "daily",
+        dayOfWeek: 0,
+        dayOfMonth: 1,
+        hour: 9,
+        minute: 0,
+        timezone: "Asia/Taipei",
+        status: "enabled",
+        lastFiredSlot: "2026-08-10T09:00+08:00",
+        lastFiredTs: Date.now() / 1000 - 7200,
+        createdTs: Date.now() / 1000 - 86400,
+      },
+    ],
+  ],
+]);
+
+function mockScheduleId(): string {
+  return (
+    "sch-" +
+    Array.from({ length: 12 }, () =>
+      Math.floor(Math.random() * 16).toString(16)
+    ).join("")
+  );
+}
+
+/** The delivery cursor a freshly created mock schedule carries.
+ *
+ * ⚠️ The mock runs NO tick loop, so this value is never compared against
+ * anything and cannot decide a delivery — it exists only so the row's shape is
+ * populated the way the server's is (the DTO says the cursor is never empty for
+ * a live schedule). It is deliberately NOT the server's "most recently elapsed
+ * slot" computation: reproducing that here would imply a fidelity the mock does
+ * not have. */
+function mockScheduleSlot(s: {
+  hour: number;
+  minute: number;
+  timezone: string;
+}): string {
+  const hh = String(s.hour).padStart(2, "0");
+  const mm = String(s.minute).padStart(2, "0");
+  let day = new Date().toISOString().slice(0, 10);
+  try {
+    // sv-SE renders as YYYY-MM-DD, so the zone's own calendar day comes out
+    // without any hand-rolled formatting.
+    day = new Intl.DateTimeFormat("sv-SE", { timeZone: s.timezone }).format(
+      new Date()
+    );
+  } catch {
+    // unknown zone — the create path below already rejects it; fall back to the
+    // UTC day rather than inventing an offset
+  }
+  return `${day}T${hh}:${mm}`;
+}
+
+/** Recipient parity with the server (T-f059): a schedule may bind to an
+ * assistant OR an `ow-` outsource worker — the recipient rule ordinary chat
+ * uses, NOT `resolveMember`, which excludes outsource. */
+function findScheduleRecipient(memberId: string): void {
+  if (wireMembers.some((m) => m.id === memberId)) return;
+  if (outsourceWorkers.some((w) => w.id === memberId)) return;
+  throw new ApiError(
+    `http 404 for /api/members/${memberId}/scheduled-messages`,
+    404,
+    "not_found",
+    `member '${memberId}' not found`
+  );
+}
+
+/** Server 422 parity for the create/patch slot fields. */
+function validateSchedulePart(
+  memberId: string,
+  part: {
+    body?: string;
+    cadence?: string;
+    dayOfWeek?: number;
+    dayOfMonth?: number;
+    hour?: number;
+    minute?: number;
+    timezone?: string;
+  }
+): void {
+  const bad = (detail: string) => {
+    throw new ApiError(
+      `http 422 for /api/members/${memberId}/scheduled-messages`,
+      422,
+      "validation_error",
+      detail
+    );
+  };
+  if (part.body !== undefined && part.body.trim() === "")
+    bad("body must not be blank");
+  if (
+    part.cadence !== undefined &&
+    !["daily", "weekly", "monthly"].includes(part.cadence)
+  )
+    bad("cadence must be one of daily / weekly / monthly");
+  if (part.hour !== undefined && (part.hour < 0 || part.hour > 23))
+    bad("hour must be 0-23");
+  if (part.minute !== undefined && (part.minute < 0 || part.minute > 59))
+    bad("minute must be 0-59");
+  if (
+    part.dayOfWeek !== undefined &&
+    (part.dayOfWeek < 0 || part.dayOfWeek > 6)
+  )
+    bad("day_of_week must be 0-6");
+  if (
+    part.dayOfMonth !== undefined &&
+    (part.dayOfMonth < 1 || part.dayOfMonth > 31)
+  )
+    bad("day_of_month must be 1-31");
+  if (part.timezone !== undefined) {
+    if (part.timezone.trim() === "") bad("timezone must not be blank");
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: part.timezone });
+    } catch {
+      bad(`unknown timezone '${part.timezone}'`);
+    }
+  }
+}
+
 // T-7fa1 staged *_pending responses. The mock has no wardens, so it can never
 // PRODUCE a real undelivered dispatch — but the UI branch that consumes one has
 // to be reachable, both from vitest and from a dev-server screenshot run. These
@@ -1735,6 +1869,109 @@ export const mockApi: Api = {
     // without simulated traffic honestly read empty.
     const rows = mockWebhookRequests.get(`${memberId} ${endpointId}`) ?? [];
     return rows.map((r) => ({ ...r }));
+  },
+
+  async listScheduledMessages(memberId: string): Promise<ScheduledMessage[]> {
+    findScheduleRecipient(memberId); // 404 parity
+    return (mockScheduledMessages.get(memberId) ?? []).map((s) => ({ ...s }));
+  },
+
+  async createScheduledMessage(
+    memberId: string,
+    input: ScheduledMessageCreateInput
+  ): Promise<ScheduledMessage> {
+    findScheduleRecipient(memberId);
+    validateSchedulePart(memberId, {
+      body: input.body,
+      cadence: input.cadence,
+      dayOfWeek: input.dayOfWeek,
+      dayOfMonth: input.dayOfMonth,
+      hour: input.hour,
+      minute: input.minute,
+      timezone: input.timezone,
+    });
+    const created: ScheduledMessage = {
+      id: mockScheduleId(),
+      memberId,
+      label: input.label?.trim() ?? "",
+      body: input.body,
+      cadence: input.cadence,
+      // The DTO's stated omitted-value behaviour: day_of_week → 0 (Sunday),
+      // day_of_month → 1.
+      dayOfWeek: input.dayOfWeek ?? 0,
+      dayOfMonth: input.dayOfMonth ?? 1,
+      hour: input.hour,
+      minute: input.minute,
+      timezone: input.timezone,
+      status: "enabled",
+      lastFiredSlot: mockScheduleSlot(input),
+      // A fresh schedule has never actually delivered (server parity: 0).
+      lastFiredTs: 0,
+      createdTs: Date.now() / 1000,
+    };
+    mockScheduledMessages.set(memberId, [
+      ...(mockScheduledMessages.get(memberId) ?? []),
+      created,
+    ]);
+    return { ...created };
+  },
+
+  async updateScheduledMessage(
+    memberId: string,
+    scheduleId: string,
+    patch: ScheduledMessageUpdate
+  ): Promise<ScheduledMessage> {
+    const list = mockScheduledMessages.get(memberId) ?? [];
+    const s = list.find((x) => x.id === scheduleId);
+    if (!s) {
+      throw new ApiError(
+        `http 404 for PATCH /api/members/${memberId}/scheduled-messages/${scheduleId}`,
+        404,
+        "not_found",
+        `scheduled message '${scheduleId}' not found`
+      );
+    }
+    validateSchedulePart(memberId, patch);
+    if (patch.label !== undefined) s.label = patch.label;
+    if (patch.body !== undefined) s.body = patch.body;
+    if (patch.cadence !== undefined) s.cadence = patch.cadence;
+    if (patch.dayOfWeek !== undefined) s.dayOfWeek = patch.dayOfWeek;
+    if (patch.dayOfMonth !== undefined) s.dayOfMonth = patch.dayOfMonth;
+    if (patch.hour !== undefined) s.hour = patch.hour;
+    if (patch.minute !== undefined) s.minute = patch.minute;
+    if (patch.timezone !== undefined) s.timezone = patch.timezone;
+    if (patch.status !== undefined) s.status = patch.status;
+    // Re-aim the cursor only when a CADENCE/SLOT field moved (design §實作時才
+    // 浮出來的三個決定 #1): editing label/body/status must leave it alone, or
+    // disable-then-enable would silently swallow the next delivery.
+    const reAimed =
+      patch.cadence !== undefined ||
+      patch.dayOfWeek !== undefined ||
+      patch.dayOfMonth !== undefined ||
+      patch.hour !== undefined ||
+      patch.minute !== undefined ||
+      patch.timezone !== undefined;
+    if (reAimed) s.lastFiredSlot = mockScheduleSlot(s);
+    return { ...s };
+  },
+
+  async deleteScheduledMessage(
+    memberId: string,
+    scheduleId: string
+  ): Promise<void> {
+    const list = mockScheduledMessages.get(memberId) ?? [];
+    if (!list.some((x) => x.id === scheduleId)) {
+      throw new ApiError(
+        `http 404 for DELETE /api/members/${memberId}/scheduled-messages/${scheduleId}`,
+        404,
+        "not_found",
+        `scheduled message '${scheduleId}' not found`
+      );
+    }
+    mockScheduledMessages.set(
+      memberId,
+      list.filter((x) => x.id !== scheduleId)
+    );
   },
 
   async getMemberResumeSummary(

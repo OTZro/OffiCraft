@@ -68,6 +68,7 @@ import type {
   WireReplyCard,
   WireWebhookEndpoint,
   WireWebhookRequestLog,
+  WireScheduledMessage,
   WireServerSettings,
   WireTask,
   WireTaskListItem,
@@ -101,6 +102,7 @@ import type {
   ManualAssigneeView,
   WebhookEndpoint,
   WebhookRequestLog,
+  ScheduledMessage,
   ResumeOverviewView,
   ResumeTaskView,
   MemberResumeSummaryView,
@@ -1312,6 +1314,30 @@ export function toWebhookRequestLog(
     headers: w.headers,
     body: w.body,
     truncated: w.truncated,
+  };
+}
+
+/** Map one wire scheduled message → the view model (T-f059). `timezone` is NOT
+ * defaulted to anything local: the wire always carries an explicit IANA name
+ * (the DTO requires it precisely so nobody reads a blank as "the server's
+ * zone"), so an absent one stays honestly empty rather than borrowing this
+ * browser's. */
+export function toScheduledMessage(w: WireScheduledMessage): ScheduledMessage {
+  return {
+    id: w.id,
+    memberId: w.member_id,
+    label: w.label ?? "",
+    body: w.body,
+    cadence: w.cadence,
+    dayOfWeek: w.day_of_week ?? 0,
+    dayOfMonth: w.day_of_month ?? 1,
+    hour: w.hour,
+    minute: w.minute,
+    timezone: w.timezone ?? "",
+    status: w.status === "disabled" ? "disabled" : "enabled",
+    lastFiredSlot: w.last_fired_slot ?? "",
+    lastFiredTs: w.last_fired_ts ?? 0,
+    createdTs: w.created_ts ?? 0,
   };
 }
 
