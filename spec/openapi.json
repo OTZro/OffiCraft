@@ -10721,7 +10721,7 @@
     },
     "/api/members/{member_id}/scheduled-messages": {
       "get": {
-        "description": "List a member's scheduled messages (T-f059), oldest→newest. Each row carries the whole schedule — label, body, cadence, wall-clock slot and timezone, plus the enabled/disabled toggle — and `last_fired_slot`, the identifier of the slot already delivered, so the panel can show exactly where the cursor stands. 404 if the member is absent or soft-removed.",
+        "description": "List a member's scheduled messages (T-f059), oldest→newest. Each row carries the whole schedule — label, body, cadence, wall-clock slot and timezone, plus the enabled/disabled toggle — and the delivery cursor: `last_fired_slot` (the identifier of the slot already delivered, which is what the fire/skip test compares) alongside `last_fired_ts` (when that delivery actually happened). The cockpit card surfaces the timestamp as a human-readable last-delivered line; the slot identifier is carried for clients that need to reason about the cursor itself. 404 if the member is absent or soft-removed.",
         "operationId": "handle_list_scheduled_messages_api_members__member_id__scheduled_messages_get",
         "parameters": [
           {

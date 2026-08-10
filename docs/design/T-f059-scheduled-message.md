@@ -160,30 +160,29 @@
 而 webhook 今天只長在正職那一套，正是「複製一份就開始各自漂移」的同一個形狀
 （`WorkerDetailPanel` 在本票之前**根本沒有任何 `extraExpandCards` 呼叫端**）。
 
-### 🔴 一個已知的缺口：`last_fired_slot` 上了 wire，但卡片不顯示它
+### 游標怎麼呈現：卡片顯示「上次送出時間」，不顯示槽的識別字串
 
-凍結 spec 裡 `GET …/scheduled-messages` 的 description 寫著：回應帶 `last_fired_slot`
-是 *"so the panel can show exactly where the cursor stands"*（`spec/openapi.json`，
-以及由它重生的 `ocapi_gen.go` / `frontend/src/api/generated/schema.ts`）。
+**現況（本票交付的樣子）**：每一列在內容底下有一行「上次送出」——
+送過就是人看得懂的絕對時戳（沿用 repo 既有的 `formatAbsolute`），沒送過就是「尚未送出」。
+兩個方向各有一條測試，並用 mutant 驗過紅的是對應那一條。
 
-**現況不是那樣。** 型別與 mapper 一路把 `lastFiredSlot` / `lastFiredTs` 帶到
-`adapter.ts`，但 `ScheduledMessagesCard.tsx` **一次都沒有 render 它們**
-（實查：該檔 `lastFired` 命中 0）。所以那句 description 是一句**現在式的假話**——
-它描述的不是這個面板做的事，而是一個沒有被實作的用途。
+`last_fired_slot`（槽的識別字串）**仍然上 wire、但不顯示在畫面上**——它是給需要推理游標本身的呼叫端用的，
+不是給人讀的（`2026-08-10T09:00+08:00` 對使用者沒有意義，對「有沒有送過」的判定才有意義）。
 
-**這裡刻意只記錄、不修**，兩個理由要分開講：
-- 那句話住在 `spec/openapi.json`，而動 wire 面要**先改 spec + owner 過目**（憲章 §13）；
-  本輪文件對質的範圍不含改凍結 spec。
-- 「該顯示游標」與「該把那句話改成忠實描述」是**兩個不同的裁定**，不是同一件事的兩種寫法：
-  前者要 owner 決定畫面上多一行字，後者只要求契約別宣稱一件沒發生的事。
+> **這一段的歷史，留著是因為它示範了一個容易自欺的形狀。**
+> 初版的 spec description 寫著回應帶 `last_fired_slot`「so the panel can show exactly where
+> the cursor stands」，而當時那張卡**一次都沒有 render 過它**——一句現在式的假話，
+> 住在一份已經凍結、而且 owner 過目過的契約裡。
+> 文件對質那一輪**沒有**把它窄化掉（窄化會讓不一致消失在文字裡，比留著缺口更糟），
+> 而是把缺口寫明留給裁定。
+> 處置分兩步，順序有意義：**先讓現實符合承諾**（卡片真的顯示上次送出），
+> **再把那句話收斂到現況**（區分「畫面顯示時戳」與「欄位供呼叫端推理」）。
+> 只做第二步就是抹平；只做第一步則會留下一句仍然不精確的話。
 
-⚠️ **不要用「窄化 description」來抹平它而不告訴 owner**——那會把一個可見的缺口
-換成一句看不出缺口的話。要收掉這件事，只有兩條路：**卡片真的顯示游標**，
-或**改那句 description 並在這裡註明是誰、哪一天裁的**。在那之前，這一段就是缺口本身的紀錄。
+### （已收掉）原本的缺口紀錄
 
-（附帶一筆同族的事實，寫下來免得被讀成漏掉：卡片也不顯示 `last_fired_ts`。
-`docs/guide/interface.md` 的欄位對照因此明說「這一區塊沒有顯示上一次送到哪一格」，
-不讓產品文件替一個不存在的畫面元素背書。）
+上面那段灰底引言就是它的完整紀錄。缺口本身已經在 `517f4f4`（卡片顯示上次送出）
+與其後的 spec description 收斂裡收掉了，所以這裡不再重複列出當時的兩條出路。
 
 ## 背景迴圈
 
