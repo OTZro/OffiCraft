@@ -433,8 +433,8 @@ func ValidateScheduledMessageSlotFields(hour, minute, dayOfWeek, dayOfMonth int)
 	return nil
 }
 
-// ValidateScheduledMessageTimezone rejects any IANA name the tz database cannot
-// resolve.
+// ValidateScheduledMessageTimezone rejects any name that does not pin the
+// schedule to a stated place on Earth.
 //
 // 🔴 There is deliberately NO fallback here and none anywhere downstream. A name
 // that will not load must fail the WRITE, loudly, while a human is still
@@ -442,9 +442,24 @@ func ValidateScheduledMessageSlotFields(hour, minute, dayOfWeek, dayOfMonth int)
 // runs perfectly and delivers at the wrong hour, and a message that arrives
 // eight hours early is indistinguishable from a correct one. "Did not send" is
 // discoverable; "sent at the wrong time" is not.
+//
+// 🔴 "Will it load?" is NOT the test, because the two most dangerous names load
+// fine. time.LoadLocation("Local") returns WHATEVER ZONE THE HOST IS IN and
+// time.LoadLocation("") returns UTC — both answer "when does this fire?" with a
+// deployment detail rather than with the owner's intent, which is precisely the
+// ambiguity this feature was built to remove. Moving the server between regions,
+// or editing one machine's /etc/localtime, would then move every schedule on it,
+// on time-looking messages that arrive at the wrong hour. So they are named and
+// refused. `UTC` itself is a real, stated zone and stays legal.
 func ValidateScheduledMessageTimezone(name string) error {
 	if strings.TrimSpace(name) == "" {
-		return errors.New("timezone cannot be blank")
+		return errors.New("timezone cannot be blank; it must be a stated IANA timezone name " +
+			"such as 'Asia/Taipei' or 'UTC' — an empty name would resolve to UTC by accident rather than by choice")
+	}
+	if strings.EqualFold(name, "Local") {
+		return errors.New("timezone 'Local' means the zone the SERVER happens to be in, " +
+			"which would move every schedule when the server moves; state the schedule's own " +
+			"IANA timezone name (e.g. 'Asia/Taipei', or 'UTC' if that is genuinely what is meant)")
 	}
 	if _, err := time.LoadLocation(name); err != nil {
 		return fmt.Errorf("timezone '%s' is not a known IANA timezone name", name)

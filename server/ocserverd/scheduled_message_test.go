@@ -560,6 +560,40 @@ func TestRunScheduledMessageTickDeliversOncePerOccurrenceAcrossDSTTransitions(t 
 	}
 }
 
+// TestRunScheduledMessageTickRefusesAHostRelativeTimezone is the tick-side half
+// of "no schedule ever runs in the host's zone".
+//
+// `Local` is not an IANA name: time.LoadLocation resolves it to WHATEVER ZONE
+// THE MACHINE IS IN, which is the one thing this feature's timezone rule exists
+// to eliminate. The write seam refuses it, so a row can only carry it by
+// predating that rule or by being written straight into the database — and the
+// tick is the last place anything is looking.
+//
+// Red when the tick's timezone guard is removed: mostRecentSlot's own
+// LoadLocation is happy to compute a slot for `Local`, so the message goes out,
+// at an hour that depends on where the server is deployed, and nothing says so.
+func TestRunScheduledMessageTickRefusesAHostRelativeTimezone(t *testing.T) {
+	for _, zone := range []string{"Local", ""} {
+		t.Run("timezone "+zone, func(t *testing.T) {
+			_, _, api := scheduledStack(t)
+			sm := ScheduledMessage{
+				ID: "sch-host", MemberID: "mira", Body: "should never go out",
+				Cadence: ScheduledMessageCadenceDaily, Hour: 0, DayOfMonth: 1,
+				Timezone: zone, Status: ScheduledMessageStatusEnabled,
+				LastFiredSlot: "1999-01-01T00:00+00:00", CreatedTS: nowSecs(),
+			}
+			if err := api.dal.PutScheduledMessage(sm); err != nil {
+				t.Fatalf("seed schedule: %v", err)
+			}
+			api.runScheduledMessageTick(nowSecs())
+			if n := len(chatsFrom(t, api, "sched:sch-host")); n != 0 {
+				t.Fatalf("a schedule with timezone %q delivered %d message(s) — it ran in "+
+					"the HOST's zone, which is the ambiguity this feature exists to remove", zone, n)
+			}
+		})
+	}
+}
+
 // TestCreateScheduledMessageDoesNotFireOnTheFirstTick pins the third acceptance
 // condition, on the REAL create path: the cursor is seeded at creation, so a
 // schedule created at 10:00 for daily 09:00 does not deliver today's 09:00.
@@ -662,6 +696,13 @@ func TestScheduledMessageValidationRefusesUnusableSchedules(t *testing.T) {
 		{"day_of_month zero", `{` + base + `,"day_of_month":0}`},
 		{"day_of_month past 31", `{` + base + `,"day_of_month":32}`},
 		{"unknown timezone", `{"body":"x","cadence":"daily","hour":9,"minute":0,"timezone":"Mars/Olympus_Mons"}`},
+		// 🔴 The dangerous timezone is not the one that fails to load — it is the
+		// one that loads and means "wherever this server happens to be running".
+		// time.LoadLocation("Local") returns the HOST's zone and ("") returns UTC,
+		// so both would be accepted by a load-succeeds check and would bind the
+		// schedule to a deployment detail nobody stated.
+		{"host-relative timezone Local", `{"body":"x","cadence":"daily","hour":9,"minute":0,"timezone":"Local"}`},
+		{"blank timezone", `{"body":"x","cadence":"daily","hour":9,"minute":0,"timezone":"   "}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -731,8 +772,11 @@ func TestUpdateScheduledMessageReAimsTheCursorOnlyWhenReAimed(t *testing.T) {
 			"most recently elapsed", got)
 	}
 
-	// An unloadable timezone is refused on PATCH too, not just on create.
-	if status, resp := doJSON(t, "PATCH", path, ownerTok, `{"timezone":"Mars/Olympus_Mons"}`); status != 422 {
-		t.Fatalf("patching to an unknown timezone: want 422, got %d %v", status, resp)
+	// An unloadable timezone is refused on PATCH too, not just on create — and so
+	// is the host-relative one, which is the one that would otherwise succeed.
+	for _, tz := range []string{"Mars/Olympus_Mons", "Local"} {
+		if status, resp := doJSON(t, "PATCH", path, ownerTok, `{"timezone":"`+tz+`"}`); status != 422 {
+			t.Fatalf("patching to timezone %q: want 422, got %d %v", tz, status, resp)
+		}
 	}
 }
