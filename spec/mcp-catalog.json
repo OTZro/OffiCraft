@@ -1514,6 +1514,14 @@
       "name": "list_roles"
     },
     {
+      "description": "Size-only overview of EVERY capped document on the station: each role's role definition / insight / DEFAULT lessons bucket, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). LIMITATION: lessons is reported for the default bucket only; nothing stops a write from naming another bucket, and such a document spends the same lessons cap yet never appears here. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on list_task_manuals ?view=list, and a role definition's size and cap are already on every list_roles row.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "peek_doc_sizes"
+    },
+    {
       "description": "Create a custom role + its founding member (one pair per call). runtime is claude/codex (absent = claude).",
       "inputSchema": {
         "properties": {

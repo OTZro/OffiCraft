@@ -1014,6 +1014,47 @@ HAPPY: dict[str, Happy] = {
         check=lambda _c, r: _expect(r, lambda d: d["is_default"] is True),
     ),
     "GET /api/roles": Happy(check=_nonempty_list),
+    "GET /api/doc-sizes": Happy(
+        # Size-only overview: every capped document reports its own size and
+        # its OWN segment's cap, and NO document text rides along (no
+        # definition_md / text / sop_md / learnings anywhere in the payload).
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: isinstance(d.get("roles"), list)
+            and isinstance(d.get("task_manuals"), list)
+            and d["roles"]
+            and all(
+                isinstance(row.get(seg), dict)
+                and isinstance(row[seg].get("size_chars"), int)
+                and isinstance(row[seg].get("cap_chars"), int)
+                for row in d["roles"]
+                for seg in ("duty", "insight", "lessons")
+            )
+            and all(
+                isinstance(row.get(seg), dict)
+                and isinstance(row[seg].get("size_chars"), int)
+                and isinstance(row[seg].get("cap_chars"), int)
+                for row in d["task_manuals"]
+                for seg in ("sop", "learnings")
+            )
+            # Exact key sets, so a document body cannot ride along under any
+            # name — an absence check naming the fields we happen to know about
+            # would go green on a payload that renamed them.
+            and set(d) == {"roles", "task_manuals"}
+            and all(
+                set(row) == {"role_key", "duty", "insight", "lessons"}
+                and set(row[seg]) == {"size_chars", "cap_chars"}
+                for row in d["roles"]
+                for seg in ("duty", "insight", "lessons")
+            )
+            and all(
+                set(row) == {"type_key", "sop", "learnings"}
+                and set(row[seg]) == {"size_chars", "cap_chars"}
+                for row in d["task_manuals"]
+                for seg in ("sop", "learnings")
+            ),
+        ),
+    ),
     "POST /api/roles": Happy(
         body=lambda _ctx: {"name": f"Conf Happy Role {uuid.uuid4().hex[:8]}"},
         check=lambda _c, r: _expect(r, lambda d: d["role"]["key"]),

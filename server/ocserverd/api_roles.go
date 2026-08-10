@@ -90,32 +90,41 @@ func (s *apiServer) HandleResetGlobalContextApiGlobalContextResetPost(w http.Res
 
 // ── role definitions ─────────────────────────────────────────────────────────
 
-// GET /api/roles — seed roles (folded with any owner edit) FIRST, then every
-// custom role (non-tombstoned overlay with no file seed).
-func (s *apiServer) HandleListRolesApiRolesGet(w http.ResponseWriter, r *http.Request) {
-	dtos := []roleDefDTO{}
+// listRoleKeys is the role roster in wire order: seed roles FIRST, then every
+// custom role (non-tombstoned overlay with no file seed). Shared by GET
+// /api/roles and the peek_doc_sizes overview so the two can never disagree
+// about which roles exist.
+func (s *apiServer) listRoleKeys() ([]string, error) {
+	keys := []string{}
 	seeds := map[string]bool{}
 	for _, roleKey := range seedRoleKeys() {
 		seeds[roleKey] = true
-		dto, err := s.foldRoleDefDTO(roleKey)
-		if err != nil {
-			internalError(w, err)
-			return
-		}
-		if dto != nil {
-			dtos = append(dtos, *dto)
-		}
+		keys = append(keys, roleKey)
 	}
 	overlays, err := s.dal.ListRoleDefs()
 	if err != nil {
-		internalError(w, err)
-		return
+		return nil, err
 	}
 	for _, overlay := range overlays {
 		if seeds[overlay.RoleKey] || overlay.Tombstoned {
 			continue
 		}
-		dto, err := s.foldRoleDefDTO(overlay.RoleKey)
+		keys = append(keys, overlay.RoleKey)
+	}
+	return keys, nil
+}
+
+// GET /api/roles — seed roles (folded with any owner edit) FIRST, then every
+// custom role (non-tombstoned overlay with no file seed).
+func (s *apiServer) HandleListRolesApiRolesGet(w http.ResponseWriter, r *http.Request) {
+	dtos := []roleDefDTO{}
+	keys, err := s.listRoleKeys()
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	for _, roleKey := range keys {
+		dto, err := s.foldRoleDefDTO(roleKey)
 		if err != nil {
 			internalError(w, err)
 			return

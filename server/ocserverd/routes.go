@@ -938,6 +938,19 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			MCPTool:  "list_roles",
 		},
 		{
+			Method:  "GET",
+			Path:    "/api/doc-sizes",
+			Handler: w.HandlePeekDocSizesApiDocSizesGet,
+			Auth:    authGated,
+			// The machine floor, matching the READ face of every document it
+			// sizes (list_roles / get_insight / get_lessons / list_task_manuals
+			// are all machine). It cannot leak more than those already do — it
+			// carries strictly less than any of them.
+			Requires: principalMachine,
+			Summary:  "Size-only overview of every capped document (each against its own cap; NO content; role lessons = DEFAULT bucket only).",
+			MCPTool:  "peek_doc_sizes",
+		},
+		{
 			Method:   "POST",
 			Path:     "/api/roles",
 			Handler:  w.HandleCreateRoleApiRolesPost,

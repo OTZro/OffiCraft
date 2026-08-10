@@ -569,6 +569,45 @@ type roleCreateResultDTO struct {
 	Member memberDTO  `json:"member"`
 }
 
+// docSizeDTO is ONE capped document reduced to its two numbers (peek_doc_sizes).
+// CapChars is the cap of THAT document's OWN segment — the five capped segments
+// carry five separate doc.cap_chars.* settings, so this pair is repeated per
+// document rather than hoisted to one field on the envelope. Hoisting it would
+// be the exact bug the split was made to remove: one number standing in for five
+// that are already allowed to differ.
+type docSizeDTO struct {
+	SizeChars int `json:"size_chars"`
+	CapChars  int `json:"cap_chars"`
+}
+
+// roleDocSizesDTO is one role's three capped documents, sizes only. Measured on
+// the FOLDED doc (overlay ⊕ seed) — the same text the per-document GETs report,
+// because the sizes come from the very same fold* helpers those handlers use.
+// Lessons is the DEFAULT bucket only: the write side does not constrain the
+// task_type, so lessons under another bucket name spend the same cap and are
+// not on this wire (see api_doc_sizes.go).
+type roleDocSizesDTO struct {
+	RoleKey string     `json:"role_key"`
+	Duty    docSizeDTO `json:"duty"`
+	Insight docSizeDTO `json:"insight"`
+	Lessons docSizeDTO `json:"lessons"`
+}
+
+// taskManualDocSizesDTO is one task manual's two capped documents, sizes only.
+type taskManualDocSizesDTO struct {
+	TypeKey   string     `json:"type_key"`
+	Sop       docSizeDTO `json:"sop"`
+	Learnings docSizeDTO `json:"learnings"`
+}
+
+// docSizesDTO is the station-wide capped-document size overview
+// (peek_doc_sizes). It carries no document text at all, so its size is a
+// function of how many roles and manuals exist and never of what they hold.
+type docSizesDTO struct {
+	Roles       []roleDocSizesDTO       `json:"roles"`
+	TaskManuals []taskManualDocSizesDTO `json:"task_manuals"`
+}
+
 type roleDeleteResultDTO struct {
 	Role                   string   `json:"role"`
 	RemovedMemberIDs       []string `json:"removed_member_ids"`

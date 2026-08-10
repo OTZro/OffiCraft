@@ -490,6 +490,48 @@ type DocDTO struct {
 	Title      string `json:"title"`
 }
 
+// DocSizeDTO ONE capped document reduced to its two numbers and nothing else.
+// “size_chars“ is what the document measures NOW, in CHARACTERS (Unicode code
+// points — the unit every cap is expressed in); “cap_chars“ is the cap in force
+// for THAT document's OWN segment at the moment of the read.
+//
+// The five capped segments (role definition, insight, role lessons, a task
+// manual's sop_md, a task manual's learnings) each have their own
+// “doc.cap_chars.*“ setting and are NOT one shared number, so every occurrence
+// of this object carries the ruler belonging to the document it describes.
+// Reading one segment's cap off another's is the specific mistake this shape
+// exists to make impossible.
+//
+// Carries no document text.
+type DocSizeDTO struct {
+	CapChars  int `json:"cap_chars"`
+	SizeChars int `json:"size_chars"`
+}
+
+// DocSizesDTO The station-wide capped-document size overview (“peek_doc_sizes“ MCP tool,
+// zero params; “GET /api/doc-sizes“): for EVERY role its role definition, its
+// insight and its DEFAULT lessons bucket, and for EVERY task manual its sop_md and
+// its learnings — each as its current size plus the cap in force for that segment,
+// and nothing else.
+//
+// Lessons is the one segment reported for the default bucket only. The write side
+// does not constrain the bucket name (the default merely fills in an absent
+// argument), so lessons written under any other bucket name draw on the same
+// lessons cap and are NOT counted here.
+//
+// It carries NO document content, so its size is a function of how many roles and
+// manuals exist, never of what they hold — which is the point. The two numbers no
+// listing on this station reports at any price are a role's insight and lessons
+// sizes; a manual's four numbers are already on the “list_task_manuals“ light
+// view and a role definition's size and cap already ride every “list_roles“ row.
+//
+// Read-only and deterministic; a station with no roles and no manuals gets empty
+// arrays, never an error.
+type DocSizesDTO struct {
+	Roles       []RoleDocSizesDTO       `json:"roles"`
+	TaskManuals []TaskManualDocSizesDTO `json:"task_manuals"`
+}
+
 // DocSummaryDTO One product-guide doc row (GET /api/docs): addressable slug + display title.
 type DocSummaryDTO struct {
 	Slug  string `json:"slug"`
@@ -1684,6 +1726,62 @@ type RoleDeleteResultDTO struct {
 	Role                   string    `json:"role"`
 }
 
+// RoleDocSizesDTO The three capped documents of ONE role, by size only: “duty“ (the role
+// definition, get_role), “insight“ (get_insight) and “lessons“ (get_lessons on
+// the DEFAULT “general“ bucket — that bucket ONLY; nothing constrains the
+// task_type a write may name, and lessons under another bucket name draw on this
+// same cap without being sized here). “role_key“ is how to go read whichever one
+// turns out to be nearly full. Sizes are measured on the FOLDED document — the
+// owner overlay ⊕ file seed a caller actually reads and edits — so they match what
+// the per-document GETs report. No text of any kind.
+type RoleDocSizesDTO struct {
+	// Duty ONE capped document reduced to its two numbers and nothing else.
+	// ``size_chars`` is what the document measures NOW, in CHARACTERS (Unicode code
+	// points — the unit every cap is expressed in); ``cap_chars`` is the cap in force
+	// for THAT document's OWN segment at the moment of the read.
+	//
+	// The five capped segments (role definition, insight, role lessons, a task
+	// manual's sop_md, a task manual's learnings) each have their own
+	// ``doc.cap_chars.*`` setting and are NOT one shared number, so every occurrence
+	// of this object carries the ruler belonging to the document it describes.
+	// Reading one segment's cap off another's is the specific mistake this shape
+	// exists to make impossible.
+	//
+	// Carries no document text.
+	Duty DocSizeDTO `json:"duty"`
+
+	// Insight ONE capped document reduced to its two numbers and nothing else.
+	// ``size_chars`` is what the document measures NOW, in CHARACTERS (Unicode code
+	// points — the unit every cap is expressed in); ``cap_chars`` is the cap in force
+	// for THAT document's OWN segment at the moment of the read.
+	//
+	// The five capped segments (role definition, insight, role lessons, a task
+	// manual's sop_md, a task manual's learnings) each have their own
+	// ``doc.cap_chars.*`` setting and are NOT one shared number, so every occurrence
+	// of this object carries the ruler belonging to the document it describes.
+	// Reading one segment's cap off another's is the specific mistake this shape
+	// exists to make impossible.
+	//
+	// Carries no document text.
+	Insight DocSizeDTO `json:"insight"`
+
+	// Lessons ONE capped document reduced to its two numbers and nothing else.
+	// ``size_chars`` is what the document measures NOW, in CHARACTERS (Unicode code
+	// points — the unit every cap is expressed in); ``cap_chars`` is the cap in force
+	// for THAT document's OWN segment at the moment of the read.
+	//
+	// The five capped segments (role definition, insight, role lessons, a task
+	// manual's sop_md, a task manual's learnings) each have their own
+	// ``doc.cap_chars.*`` setting and are NOT one shared number, so every occurrence
+	// of this object carries the ruler belonging to the document it describes.
+	// Reading one segment's cap off another's is the specific mistake this shape
+	// exists to make impossible.
+	//
+	// Carries no document text.
+	Lessons DocSizeDTO `json:"lessons"`
+	RoleKey string     `json:"role_key"`
+}
+
 // RuntimeCapabilityDTO Value-free readiness of one AI CLI runtime on a machine. “installed“ means the exact binary the warden would launch resolved and passed its version probe. “logged_in“ is true/false when a safe provider login probe concluded, null when unknown. “version“ is null when unresolved or probing failed. No credential value or path is exposed.
 type RuntimeCapabilityDTO struct {
 	Installed *bool   `json:"installed,omitempty"`
@@ -2083,6 +2181,43 @@ type TaskManualDTO struct {
 type TaskManualDeleteResultDTO struct {
 	Deleted bool   `json:"deleted"`
 	TypeKey string `json:"type_key"`
+}
+
+// TaskManualDocSizesDTO The two capped documents of ONE task manual, by size only: “sop“ (sop_md)
+// and “learnings“. “type_key“ is how to go read whichever one turns out to be
+// nearly full (get_task_manual). No text of any kind — which is the whole point:
+// the manual bodies are the bulk of what makes list_task_manuals unreadable.
+type TaskManualDocSizesDTO struct {
+	// Learnings ONE capped document reduced to its two numbers and nothing else.
+	// ``size_chars`` is what the document measures NOW, in CHARACTERS (Unicode code
+	// points — the unit every cap is expressed in); ``cap_chars`` is the cap in force
+	// for THAT document's OWN segment at the moment of the read.
+	//
+	// The five capped segments (role definition, insight, role lessons, a task
+	// manual's sop_md, a task manual's learnings) each have their own
+	// ``doc.cap_chars.*`` setting and are NOT one shared number, so every occurrence
+	// of this object carries the ruler belonging to the document it describes.
+	// Reading one segment's cap off another's is the specific mistake this shape
+	// exists to make impossible.
+	//
+	// Carries no document text.
+	Learnings DocSizeDTO `json:"learnings"`
+
+	// Sop ONE capped document reduced to its two numbers and nothing else.
+	// ``size_chars`` is what the document measures NOW, in CHARACTERS (Unicode code
+	// points — the unit every cap is expressed in); ``cap_chars`` is the cap in force
+	// for THAT document's OWN segment at the moment of the read.
+	//
+	// The five capped segments (role definition, insight, role lessons, a task
+	// manual's sop_md, a task manual's learnings) each have their own
+	// ``doc.cap_chars.*`` setting and are NOT one shared number, so every occurrence
+	// of this object carries the ruler belonging to the document it describes.
+	// Reading one segment's cap off another's is the specific mistake this shape
+	// exists to make impossible.
+	//
+	// Carries no document text.
+	Sop     DocSizeDTO `json:"sop"`
+	TypeKey string     `json:"type_key"`
 }
 
 // TaskManualFieldDTO One input field of a task manual (Q2 需要哪些資訊): name, required/optional, and whether it is (part of) the identity key.
@@ -2750,6 +2885,9 @@ type ServerInterface interface {
 	// Total chat unread count (the office nav red dot).
 	// (GET /api/chat/unread-count)
 	HandleChatUnreadCountApiChatUnreadCountGet(w http.ResponseWriter, r *http.Request)
+	// Size-only overview of every capped document (each against its own cap; NO content; role lessons = DEFAULT bucket only).
+	// (GET /api/doc-sizes)
+	HandlePeekDocSizesApiDocSizesGet(w http.ResponseWriter, r *http.Request)
 	// List the product-guide docs (slug + title).
 	// (GET /api/docs)
 	HandleListDocsApiDocsGet(w http.ResponseWriter, r *http.Request)
@@ -3537,6 +3675,20 @@ func (siw *ServerInterfaceWrapper) HandleChatUnreadCountApiChatUnreadCountGet(w 
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.HandleChatUnreadCountApiChatUnreadCountGet(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandlePeekDocSizesApiDocSizesGet operation middleware
+func (siw *ServerInterfaceWrapper) HandlePeekDocSizesApiDocSizesGet(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandlePeekDocSizesApiDocSizesGet(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -6561,6 +6713,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/chat/mark-read", wrapper.HandleMarkChatReadApiChatMarkReadPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/chat/reads", wrapper.HandleListChatReadsApiChatReadsGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/chat/unread-count", wrapper.HandleChatUnreadCountApiChatUnreadCountGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/doc-sizes", wrapper.HandlePeekDocSizesApiDocSizesGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/docs", wrapper.HandleListDocsApiDocsGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/docs/assets/{name}", wrapper.HandleGetDocAssetApiDocsAssetsNameGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/docs/{slug}", wrapper.HandleGetDocApiDocsSlugGet)
