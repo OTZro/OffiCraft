@@ -515,8 +515,10 @@ func (s *apiServer) HandleWriteTaskLearningsApiTaskManualsTypeKeyLearningsPost(w
 
 // POST /api/task-manuals/{type_key}/learnings/patch — anchor-addressed patch of
 // a type's learnings (T-9ffd; the patch_lessons twin for task manuals).
-// ApplyLessonsEdits is the SHARED engine — it is generic over the doc text, so
-// the anchor/append/atomicity semantics are byte-identical to patch_lessons.
+// ApplyDocEdits is the SHARED engine — it is generic over the doc text, so the
+// anchor/append/atomicity semantics are byte-identical to patch_lessons. The
+// one thing it is NOT generic over is which tool re-reads this doc: that is a
+// required argument, and this face passes get_task_manual.
 //
 // Why this exists: the ONLY write face for learnings was whole-doc replace
 // (write_task_learnings / update_task_manual.learnings). As a manual's
@@ -566,7 +568,11 @@ func (s *apiServer) HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchP
 		}
 		edits[i] = LessonsEdit{Old: strOrEmpty(e.Old), New: strOrEmpty(e.New)}
 	}
-	next, applied, err := ApplyLessonsEdits(m.Learnings, edits)
+	// get_task_manual, NOT get_lessons (T-2fbf): a manual's learnings is served
+	// by the manual, and an agent sent to re-read its ROLE's lessons will never
+	// find the anchor it missed — it re-anchors against the wrong document and
+	// misses again, with no error and no signal that it was misdirected.
+	next, applied, err := ApplyDocEdits(m.Learnings, edits, "get_task_manual")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

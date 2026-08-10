@@ -536,7 +536,7 @@ type LessonsEdit struct {
 	New string
 }
 
-// ApplyLessonsEdits applies edits IN ORDER to text and returns the resulting
+// ApplyDocEdits applies edits IN ORDER to text and returns the resulting
 // doc. ATOMIC BY CONSTRUCTION: it works on a value copy and returns an error —
 // with the failing edit's index — the moment any non-empty Old is absent (0
 // hits) or ambiguous (>1 hits) in the text as patched so far; the caller
@@ -549,14 +549,10 @@ type LessonsEdit struct {
 // information about whether anything landed. A no-op edit (appending "", or a
 // replace whose new equals its old) now decrements that count, so "0 applied"
 // becomes expressible and a silent no-op stops looking like a success.
-func ApplyLessonsEdits(text string, edits []LessonsEdit) (string, int, error) {
-	return ApplyDocEdits(text, edits, "get_lessons")
-}
-
-// ApplyDocEdits is the anchor-patch core shared by every per-role document that
-// takes {old,new} edits. Everything ApplyLessonsEdits documents above applies
-// here unchanged; the only parameter is rereadTool — the name of the tool the
-// caller should re-read with when an anchor misses.
+//
+// It is the anchor-patch core shared by every document that takes {old,new}
+// edits; rereadTool is the name of the tool the caller should re-read that
+// document with when an anchor does not resolve.
 //
 // 🔴 WHY THE TOOL NAME IS A PARAMETER AND NOT A CONSTANT. The anchor-miss
 // message tells the caller what to do next, and "re-read (get_lessons)" is
@@ -567,6 +563,13 @@ func ApplyLessonsEdits(text string, edits []LessonsEdit) (string, int, error) {
 // hard-codes the word "lessons" into a message served on a different document.
 // A wrong instruction is worse than a vague one: it sends the reader somewhere
 // with confidence.
+//
+// 🔴 THERE IS DELIBERATELY NO PER-DOCUMENT WRAPPER THAT BAKES THE NAME IN
+// (T-2fbf). A `ApplyLessonsEdits(text, edits)` convenience used to exist, and
+// the manual-learnings patch face reached for it as "the shared engine" —
+// which is exactly how patch_task_learnings came to tell its callers to
+// re-read get_lessons. Every call site must name its own document's read tool,
+// so that getting it wrong is a visible edit rather than a default.
 func ApplyDocEdits(text string, edits []LessonsEdit, rereadTool string) (string, int, error) {
 	result := text
 	applied := 0
@@ -589,8 +592,13 @@ func ApplyDocEdits(text string, edits []LessonsEdit, rereadTool string) (string,
 			return "", 0, fmt.Errorf(
 				"edits[%d]: old not found in the current doc — re-read (%s) and re-anchor; nothing was written", i, rereadTool)
 		case n > 1:
+			// The tool name belongs here too (T-2fbf): widening an anchor means
+			// looking at the doc's surrounding text, which the caller may no
+			// longer have. Naming the read tool only on the 0-hit arm would read
+			// as "the parameter is for that arm only" — and a caller sent to the
+			// wrong doc widens against text that is not the one being patched.
 			return "", 0, fmt.Errorf(
-				"edits[%d]: old matches %d locations — widen the anchor until it is unique; nothing was written", i, n)
+				"edits[%d]: old matches %d locations — re-read (%s) and widen the anchor until it is unique; nothing was written", i, n, rereadTool)
 		}
 		result = strings.Replace(result, edit.Old, edit.New, 1)
 		if result != before {

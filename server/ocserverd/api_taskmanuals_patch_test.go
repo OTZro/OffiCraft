@@ -11,7 +11,7 @@ package main
 // transcription loss — the tool answers 200 either way. patch makes the write
 // cost scale with the CHANGE, not the doc.
 //
-// ApplyLessonsEdits is the SHARED engine (generic over the doc text), so the
+// ApplyDocEdits is the SHARED engine (generic over the doc text), so the
 // anchor/append/atomicity/shrink semantics are byte-identical to patch_lessons;
 // these tests re-pin them on the LEARNINGS document specifically. EVERY test
 // asserts on a READ-BACK of the stored learnings, never the status code alone —
