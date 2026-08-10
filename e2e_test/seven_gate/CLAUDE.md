@@ -1,4 +1,4 @@
-# seven_gate/ — 七步關卡
+# seven_gate/ — 任務路徑關卡（資料夾名是歷史遺跡：格子已經是八個）
 
 進入 `e2e_test/seven_gate/` 時 nested-load。上層規則見 `e2e_test/CLAUDE.md` 與 root `CLAUDE.md`；
 本檔記這個載體專屬的設計。
@@ -10,9 +10,20 @@
 不會求救，它會很有禮貌地做別的事，然後回報一切正常。
 
 所以要驗的不是文件好不好讀，是：**一個沒讀過舊版說明的全新 agent，在隔離環境裡，能不能把
-一條真實路徑走完**。那條路徑固定七步，不可增刪：
+一條真實路徑走完**。那條路徑固定，不可增刪：
 
-報到 → 接回現場 → 開票 → 提出計畫 → 報一步完成 → 開一張等我回覆卡 → 回報收尾
+報到 → 接回現場 → 開票 → 提出計畫 → 報一步完成 → 開一張等我回覆卡 → 回報收尾 →
+**回覆另一個 agent** → **看得到圖**
+
+⚠️ **資料夾叫 `seven_gate`，但格子現在是九個。** 第一次 baseline 之後 owner 補了兩項：
+
+- 「跟其他 agent 溝通」（逐字：「包含 chat / reply card / task」「他要知道怎麼透過這三個元件跟
+  owner 溝通」「或是跟其他 agent 溝通」）。原本那六步把 chat／卡／任務三個元件都練過了，但
+  **收件人永遠是 owner**；跟同事講話是另一件事——不同的收件人，而且對面沒有一個有耐心的人。
+- 「看得到圖」（源自一支已經不在這個 repo 裡的舊測試：跟 agent 玩猜數字，偷偷給它一張寫著答案的圖）。
+
+名字是歷史遺跡，**`judge.py` 的 `STEPS` 才是契約**（別在別的文件裡複製一份步驟清單，那種清單會過期
+——資料夾名裡的「七」就是這樣過期的）。
 
 ## 判定規則（這是本載體的核心，不是實作細節）
 
@@ -31,19 +42,19 @@
 
 ## 為什麼是「journal + 純判定」這個形狀
 
-七個事實裡有一個是**會消失的**：①的 `presence=waking` 在 agent 掛上 SSE 之後就翻成 online。
+八個事實裡有一個是**會消失的**：①的 `presence=waking` 在 agent 掛上 SSE 之後就翻成 online。
 只看最後一張快照的載體，分不出「報過到」和「根本沒開機」。
 
 於是切成兩半：
 
 - `collect.py` —— 只做 I/O。從 agent 開機**之前**就開始輪詢隔離 server，每次一行 JSON
   append 進 `journal.ndjson`。它不判定任何事。
-- `judge.py` —— 純函數。吃一個 run 目錄，吐七行判定 ＋ 一個 rc。**不開 socket、不改任何東西**。
+- `judge.py` —— 純函數。吃一個 run 目錄，每格一行判定 ＋ 一個 rc。**不開 socket、不改任何東西**。
 
 這個切法唯一的目的是：**判定邏輯不需要 server 就能測**。`tests_guard` 案例 (21) 餵它捏造的
 bundle，跑在 `bin/ci.sh` 的第 (0) 階，不起任何服務。
 
-## 七步各自讀 server 上的哪一個事實
+## 每一格各自讀 server 上的哪一個事實
 
 | # | 步驟 | server 事實 | 讀哪裡 |
 |---|---|---|---|
@@ -54,9 +65,55 @@ bundle，跑在 `bin/ci.sh` 的第 (0) 階，不起任何服務。
 | ⑤ | 報一步完成 | 那張票有 step `status == "done"` | 同上 |
 | ⑥ | 開一張等我回覆卡 | 有一張卡 `from == agent` | `GET /api/reply-cards` |
 | ⑦ | 回報收尾 | 那張票 `closeout_reported == true` | 同上票的 full DTO |
+| ⑧ | 回覆另一個 agent | 有一則 `from == agent` **且 `to == peer`** 的訊息，且帶回 peer 的 nonce | `GET /api/chat` |
+| ⑨ | 看得到圖 | agent 自己發出的訊息裡有那個**只存在於圖片像素**的號碼 | `GET /api/chat` |
 
 ③④⑤⑦ 綁在**同一張票**上（③找到的那張，多張時取最早）。不綁的話，載體會被 server 上任何
 一張碰巧存在的票餵飽。
+
+### ⑧「回覆另一個 agent」為什麼要另外坐一個人進來
+
+前六格把 chat／卡／任務三個元件都練過了，但**收件人一律是 owner**。所以載體在開機前先僱第二個
+member（peer），**用 peer 自己的 token**（不是 owner 的——owner 講話是②⑥已經涵蓋的那半）
+發一則訊息給受測 agent，裡面帶 peer 自己的 nonce。⑦讀的是**一則 `from == agent`、
+`to == peer` 的訊息**，而且**帶回那個 nonce**。
+
+兩個條件是兩件不同的事，別把它們讀成一件：
+
+- `to == peer`：它**真的對同事講話了**（不是對 owner、不是對自己）。這是 owner 要的那半，
+  也是最低標。
+- 帶回 nonce：那是**回覆**，不是自說自話——同事說的話被讀進去了。與②同一招，也有**同一個
+  誠實限制**：它證明內容回來了，不證明是用哪一支工具讀到的。
+
+⚠️ **本輪判定是雙向的**（收到→回覆兩半都要），因為載體起得動第二個對象。代價要講明白：
+若哪天 peer 那則訊息從 agent 讀得到的地方消失，⑧會為了**載體的理由**變紅——`actors/stub.sh`
+因此在回覆前先檢查 nonce 在不在，不在就先喊出來。
+
+### ⑨「看得到圖」——這一格的成敗全在「答案不准出現在任何文字裡」
+
+開機前種一則**帶圖片附件**的訊息給 agent，號碼**只畫在像素上**：不在訊息正文、不在檔名
+（`handover-note.png`）、不在 mime、不在票面或計畫、不在任何它讀得到的檔案；PNG 也**不寫
+`tEXt` 中繼資料**（那是文字，`strings` 就讀得到）。判定＝**agent 自己發出的訊息裡有沒有那個號碼**。
+
+**號碼每次 run 重抽六位數，不是 42**：寫死的答案是模型可能背過的答案，而一個能靠記憶通過的格子
+什麼都沒量到。
+
+🔴 **這一格唯一的失效方式，是答案漏進文字**——那時候一個看不見圖的 agent 照樣過關，而**那個綠跟
+真的綠一模一樣**。所以 `run.sh` 3d 有一道**洩漏掃描**：把 agent 讀得到的文字面（`/api/chat`、
+`/api/tasks`、兩個卡 pane、`/api/members`、以及**它自己的 resume 快照**）全撈回來搜那個號碼，
+**命中 ≠ 0 就拒跑**。而且先跑一次**陽性對照**——用同一支掃描器去搜 scene nonce（那個**確實**在
+文字裡），對照找不到就代表掃描器壞了，「零命中」也就沒有意義，同樣拒跑。實跑那一輪印的是：
+`leak scan: answer 0 hits in readable text (positive control: scene nonce 2 hit(s) — the scanner works)`。
+
+⚠️ **誠實的界線**：
+- **stub 綠不代表「模型看得見」**。stub 不會 OCR，號碼是**用 env 告訴它的**（跟 scene nonce 一樣）；
+  它真正做的是**把附件的 bytes 從 `/api/chat/attachment/<id>` 抓下來**。所以 stub 綠＝「關卡讀得對、
+  而且附件那條路真的通」，**看不看得見只有 `actors/live.sh` 答得了**。
+- 答案會寫進 `runs/<stamp>/scene.json`（judge 要用）。那是**載體的目錄**，不是 agent 的工作區，
+  但 live run 的 agent 跟它在同一台機器上——這條沒有被構造擋住，只是沒有理由去翻。
+- ⚠️ **這一格順帶是附件路徑（上傳→列出→抓 bytes）在這個 repo 裡的第一個會跑的測試**：
+  `tests/06_chat_attachments.spec.js` 與 `11_attachment_content_fidelity.spec.js` 測的是 UI 那一端，
+  **沒有任何測試在守「agent 這一側真的把檔案抓下來」**這條路。
 
 ### ②「接回現場」為什麼要靠一個 nonce——這是本設計最需要被質疑的一格
 
@@ -85,7 +142,9 @@ SSE 的 agent 過關，而那正是要抓的病。
 
 ## 為什麼每一通呼叫都要留狀態碼
 
-第一次 baseline（`runs/baseline-20260810T065500Z`）①⑤⑦ 三步紅，而現場**查不出原因**：
+第一次 baseline（`runs/baseline-20260810T065500Z`）三步紅：報到、報一步完成、回報收尾
+（那時候還是七格，編號是①⑤⑦；⑦現在是「回覆另一個 agent」，回報收尾已經是⑧——**這一段講的是
+那三件事，不是今天的編號**），而現場**查不出原因**：
 當時每一通呼叫都寫成 `curl … >/dev/null`，於是**兩種完全不同的病長得一模一樣**——
 
 - **(a) 呼叫失敗**：server 拒收（4xx/5xx）或根本沒回答。什麼都沒寫進去。
@@ -104,14 +163,14 @@ SSE 的 agent 過關，而那正是要抓的病。
 
 三個都是**契約讀錯**，而且原文一直都在碼裡：
 
-| 步 | 真正的原因 | server 回的原文 |
+| 哪一件 | 真正的原因 | server 回的原文 |
 |---|---|---|
-| ① 報到 | `presence=waking` 需要 **desired_state==online ∧ 新鮮的 waking_since**（`domain.go` `PresenceState`），**兩個都要**。剛僱進來的 member 是 `desired_state=offline`，所以 `report_waking` 回 **200**、`waking_since` 也真的蓋了，投影出來還是 `offline`——教科書級的 (b)。 | （無錯誤：`POST /api/self/waking` → **HTTP 200**，body 裡 `"desired_state":"offline","presence":"offline"`） |
-| ⑤ 報一步完成 | `pending → done` 不是合法的 agent transition（`domain.go` `agentStepTransitions`），要 `pending → in_progress → done`。 | `HTTP 409 {"error":{"code":"conflict","message":"illegal step transition 'pending' -> 'done'"}}` |
-| ⑦ 回報收尾 | closeout **只收 terminal 的票**（`api_tasks.go`），而票是由 steps 推導成 done 的——所以最後一步得真的走到 done，交棒宣告也騎在**那一通**上，不是騎在 closeout 上。 | `HTTP 409 {"error":{"code":"conflict","message":"task 't-…' is still open (not_started) — close-out is reported after the task ends"}}` |
+| 報到（①） | `presence=waking` 需要 **desired_state==online ∧ 新鮮的 waking_since**（`domain.go` `PresenceState`），**兩個都要**。剛僱進來的 member 是 `desired_state=offline`，所以 `report_waking` 回 **200**、`waking_since` 也真的蓋了，投影出來還是 `offline`——教科書級的 (b)。 | （無錯誤：`POST /api/self/waking` → **HTTP 200**，body 裡 `"desired_state":"offline","presence":"offline"`） |
+| 報一步完成（⑤） | `pending → done` 不是合法的 agent transition（`domain.go` `agentStepTransitions`），要 `pending → in_progress → done`。 | `HTTP 409 {"error":{"code":"conflict","message":"illegal step transition 'pending' -> 'done'"}}` |
+| 回報收尾（今天的⑧） | closeout **只收 terminal 的票**（`api_tasks.go`），而票是由 steps 推導成 done 的——所以最後一步得真的走到 done，交棒宣告也騎在**那一通**上，不是騎在 closeout 上。 | `HTTP 409 {"error":{"code":"conflict","message":"task 't-…' is still open (not_started) — close-out is reported after the task ends"}}` |
 
 修 ① 的動作在 **owner 那一側**（`run.sh` 的 2b 打 `activate`），不在 actor 裡：那是 owner 把人打開，
-不是七步裡的任何一步。順序不能反——`activate` 會把 `waking_since` 歸零。
+不是那條路徑上的任何一格。順序不能反——`activate` 會把 `waking_since` 歸零。
 
 ### 修好⑤之後才浮出來的第四件事：⑥的卡會把步驟鎖住
 
@@ -126,15 +185,40 @@ so the ask can place no 等我回覆 hold and the task would keep running past i
 
 所以載體多了一個 **owner 端的回卡人**（`run.sh` 步驟 4b，背景跑、只回這個 run 的 agent 開的卡、
 收尾時按**確切 PID** 收掉）。那不是為了讓測試過關而加的方便門——**那就是對面那個人**。沒有他，
-⑥成功反而讓⑦不可能成立。
+⑥成功反而讓收尾那一格不可能成立。
+
+## 為什麼不是拿 `task_system_e2e.sh`（那支「寫 42」的）來當 live actor
+
+repo 裡**已經有**一支會起真 claude 的 e2e：`e2e_test/task_system_e2e.sh`——建一張 outsource 任務、
+`inputs {output_file, number:42}`，然後**用磁碟產物驗收**（`poll_file_eq "$SYNTH_OUT" "42"`，
+註解寫著 "Disk truth only"；stage D 還有 3/5/7 → 15 的 fork-join）。查過了，**它跟圖片無關**：
+祕密是走 `manual.sop_md` ＋ `task.inputs`，不是藏在圖裡；整個 repo 目前**沒有任何**「給 agent 看圖」
+的測試素材或案例。
+
+**結論：那支的 spawn 機制不能直接拿來當本關卡的 live actor，理由是結構性的，不是懶：**
+
+1. 它起的是 **outsource worker（`ow-…`）**，由 server 的排程器（`outsource_sched.go` →
+   `worker_spawn.go`）決定並 mint token。而本關卡判的是一個 **member（`m-…`）**：③要
+   `creator_id == agent`，而**外包 worker 依規定一張票都不能開（403）**——用那條路徑，③在構造上
+   就不可能綠。
+2. 它的隔離是**整套 namespaced 安裝**（`oc_resolve_instance` ＋ 真的 `bin/ocserver install` ＋
+   `oc_bootstrap_warden`），本關卡用的是 `e2e_test/setup.sh` 的 `:8791`（`go build` ＋ serve，
+   不安裝）。硬接會變成同一個 harness 裡兩套隔離機制。
+3. 它是**全站重置型**、要 `OC_TASK_SYSTEM_YES=1`，canonical 模式甚至會動正式安裝。
+
+**有被沿用的**：`actors/live.sh` 走的 member spawn 那條鏈（onboard → `ocwarden run` → activate →
+tmux＋claude）就是 `tests/05_machine_onboarding_spawn.live-agent.spec.js` 已經跑過的那一條，
+沒有另造第二套。**值得抄的還有**（本輪沒抄，記在這裡給下一個人）：`task_system_e2e.sh` 的
+`poll_file_eq`（磁碟產物驗收的原語）與它「每通呼叫都記狀態碼」的 `api_post_logged`——後者跟
+本載體的 `lib/http.sh` 是同一個教訓，兩邊各自學過一次。
 
 ## 失敗時怎麼指出是哪一步
 
-`judge.py` **七行都印**，每行 `PASS`/`FAIL` ＋ 一句「在 server 上找什麼、實際看到什麼」；最後
+`judge.py` **每一格都印一行**，每行 `PASS`/`FAIL` ＋ 一句「在 server 上找什麼、實際看到什麼」；最後
 一行是 `[seven_gate] RED — failed at stepN <key> (<中文>): <原因>`，rc=1。全綠時最後一行逐字
 是 `[seven_gate] all green`，rc=0。判定同時落成 `verdict.json`（機器可讀）。
 
-「先失敗的那一步」放在最後一行，是因為那是呼叫者真正要的答案；但七行全印，因為第一個紅之後
+「先失敗的那一步」放在最後一行，是因為那是呼叫者真正要的答案；但每一格全印，因為第一個紅之後
 的步驟往往也紅，而它們是紅在「前一步沒發生」還是紅在自己，要看得見才分得出來。
 
 ## 產物與 log（每次 run 都留）
@@ -149,9 +233,10 @@ so the ask can place no 等我回覆 hold and the task would keep running past i
 | `collect.log` | collector 自己的 stderr |
 | `actor.log` | agent 那一端的輸出（stub 或真 agent） |
 | `http.log` | **每一通對 server 的呼叫**：method / path / HTTP 狀態碼 / 回應內容 |
-| `verdict.json` | 七步逐項判定 |
+| `verdict.json` | 每一格逐項判定 |
 | `rc` | judge 的 rc（0 全綠 / 1 有紅），不經管線取 |
 | `friction.txt` | 追問的回答原文（stub run 由人貼進去；live run 由 `live.sh` 把 **agent 自己發出的訊息**原樣寫入。**載體不代寫、不摘要、不評分**——沒回答就寫「沒回答」） |
+| `scene-image.png` | ⑨種下去的那張圖（號碼只在像素裡） |
 | `warden.log` | 只有 live run 才有：那一顆 `ocwarden run` 的輸出 |
 
 `OC_SG_RUN_DIR` 可指定別的位置。**不覆蓋、不輪替**：一次 run 一個目錄，要清是人的決定。
@@ -177,7 +262,7 @@ so the ask can place no 等我回覆 hold and the task would keep running past i
 
 `run.sh` 不在乎 agent 那一端是什麼，只透過 env 交接：
 `OC_SG_BASE` / `OC_SG_AGENT` / `OC_SG_AGENT_TOKEN` / `OC_SG_SCENE_NONCE` / `OC_SG_RUN_DIR` /
-`OC_SG_OWNER` / `OC_SG_OWNER_TOKEN`。
+`OC_SG_OWNER` / `OC_SG_OWNER_TOKEN` / `OC_SG_PEER` / `OC_SG_PEER_NONCE` / `OC_SG_IMAGE_ANSWER`。
 **actor 的 rc 被記錄但不被採信**——一個 exit 0 卻什麼都沒做的 actor 照樣得紅，而它確實會紅，
 因為判定來自 server。
 
@@ -186,7 +271,7 @@ so the ask can place no 等我回覆 hold and the task would keep running past i
 self-report（owner 拿去報只會蓋到 owner 頭上），②⑥比對 `from == agent`、③比對 `creator_id == agent`、
 ④⑤⑦掛在**那張**票上。所以拿著它的 actor 一樣沒辦法把紅的 run 弄綠。
 
-- `actors/stub.sh`（預設）：用 member token 直接打 REST 走完七步。**它不是 agent。**
+- `actors/stub.sh`（預設）：用 member token 直接打 REST 走完整條路徑。**它不是 agent。**
   `OC_SG_SKIP_STEP=<key>` 讓其中一步不發生——載體要能說「不」，而只在成功的 run 上跑過的關卡
   是沒人看過它說不的關卡。
 - `actors/live.sh`：**真 agent 那一端**。onboard 一台機器 → 跑真的 `ocwarden run` → owner 把 agent
@@ -219,9 +304,10 @@ self-report（owner 拿去報只會蓋到 owner 頭上），②⑥比對 `from =
 - **stub 證明的只有「事實落地時關卡讀得對」**，它是照著判定寫的，**完全不證明**
   「一個只讀開機說明的 agent 會決定去做這七件事」。那是整張票的目的，還沒被回答。
 - `②` 讀的是後果不是工具呼叫（見上）。
-- `run.sh` 本身**已在隔離站上實跑過**：stub actor 七步全綠 rc=0（`runs/green-20260810T073637Z/`），
-  另跑一次 `OC_SG_SKIP_STEP=reply_card` 得到 rc=1 並精準點名⑥（`runs/sayno-*`）——關卡說得出「不」。
-  live actor 那條路徑一次都沒跑過。
+- `run.sh` 本身**已在隔離站上實跑過**：stub actor **九格全綠 rc=0**（`runs/nine-20260810T081142Z/`）；
+  另外三次刻意讓一格不發生——`OC_SG_SKIP_STEP=` `reply_card` / `peer_message` / `image_answer`——
+  都 rc=1 並精準點名那一格（`runs/sayno-*`、`runs/saynopeer-*`、`runs/saynoimage-*`），而且
+  **其餘格子照樣各自判**（跳過⑨時⑧仍綠）。live actor 那條路徑一次都沒跑過。
 - 這支不在 `run_all.sh` 裡、也不在 `bin/ci.sh` 裡。CI 守的是**判定邏輯**與載體的幾條靜態不變式
   （`tests_guard` 案例 21：21a–21e 判定與 friction 措辭、21f 沒有裸 curl／狀態碼有被抓、
   21g live actor 的花錢開關是嚴格 include flag），**不是任何一次真的 run**。

@@ -1587,6 +1587,8 @@ cat > "$SG_WORK/mk.py" <<'PY'
 import json, os, sys
 drop, out = sys.argv[1], sys.argv[2]
 AG, NONCE = "m-sg", "sg-nonce-deadbeef"
+PEER, PEER_NONCE = "m-sg-peer", "sg-peer-nonce-feedface"
+IMG_ANSWER = "481902"   # the number that, in a real run, exists only in pixels
 step0 = {"id": "s1", "name": "走完七步", "status": "done" if drop != "step_done" else "todo"}
 task = {"id": "T-1", "creator_id": AG, "title": "probe", "created_ts": 100,
         "updated_ts": 200, "status": "done",
@@ -1599,13 +1601,29 @@ samples = [
      "chat": [], "tasks": [], "reply_cards": []},
     {"t": 9.0, "member": {"id": AG, "presence": "online"},
      "chat": ([] if drop == "resume_scene" else
-              [{"id": "c1", "from": AG, "body": "接回現場：" + NONCE}]),
+              [{"id": "c1", "from": AG, "to": "owner", "body": "接回現場：" + NONCE}])
+             # ⑦'s fact: agent → PEER, quoting what the peer said. The mutant
+             # drops the whole message; note it is a DIFFERENT recipient from
+             # c1, so a judge that only checked `from == agent` would keep
+             # passing on c1 alone and this mutant would go green.
+             + ([] if drop == "peer_message" else
+                [{"id": "c2", "from": AG, "to": PEER,
+                  "body": "收到：" + PEER_NONCE}])
+             # ⑨'s fact: the agent SAID the number that only the picture carries.
+             # The mutant is the real-world "the picture had no answer in it / the
+             # agent never opened it" case — the message simply never appears.
+             + ([] if drop == "image_answer" else
+                [{"id": "c3", "from": AG, "to": "owner",
+                  "body": "圖上的號碼是 " + IMG_ANSWER}]),
      "tasks": [] if drop == "create_task" else [task],
      "reply_cards": [] if drop == "reply_card" else
                     [{"id": "rc-1", "from": AG, "status": "waiting"}]},
 ]
 os.makedirs(out, exist_ok=True)
-json.dump({"agent_id": AG, "scene_nonce": NONCE}, open(out + "/scene.json", "w"))
+json.dump({"agent_id": AG, "scene_nonce": NONCE,
+           "peer_id": PEER, "peer_nonce": PEER_NONCE,
+           "image_answer": IMG_ANSWER},
+          open(out + "/scene.json", "w"))
 with open(out + "/journal.ndjson", "w") as fh:
     for s in samples:
         fh.write(json.dumps(s, ensure_ascii=False) + "\n")
@@ -1627,7 +1645,7 @@ check "seven_gate: a complete run exits 0" "0" "${_sg%%|*}"
 check "seven_gate: a complete run's last line is the exact marker" \
   "[seven_gate] all green" "${_sg#*|}"
 
-# 21b) SEVEN mutants — one step's fact removed each time. Both halves are
+# 21b) ONE MUTANT PER STEP — that step's fact removed from the bundle each time. Both halves are
 # asserted per mutant: rc must be 1 (green would mean the gate cannot say no)
 # and the last line must name THAT step (a red pointing elsewhere sends the
 # reader to the wrong place, which costs more than no red at all).
@@ -1647,6 +1665,8 @@ sg_mutant submit_plan   提出計畫
 sg_mutant step_done     報一步完成
 sg_mutant reply_card    開一張等我回覆卡
 sg_mutant closeout      回報收尾
+sg_mutant peer_message  回覆另一個-agent
+sg_mutant image_answer  看得到圖
 
 # 21c) an EMPTY journal must not read as a pass. This is the failure mode a
 # collector crash produces, and "no evidence" answering green is the one bug

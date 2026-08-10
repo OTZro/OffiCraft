@@ -29,9 +29,16 @@
 #
 # MAY NOT: anything the AGENT is supposed to decide. It does not open the
 # ticket, does not file the plan, does not report a step, does not open the
-# card, does not report the close-out. If the agent does not do those, the run
-# is red, and a red run here is the ANSWER, not a bug in this file.
+# card, does not answer the colleague, does not report the close-out. If the
+# agent does not do those, the run is red, and a red run here is the ANSWER,
+# not a bug in this file.
 # It also does not write the friction answers — see 〈friction〉 below.
+#
+# THE COLLEAGUE (⑦) NEEDS NOTHING FROM THIS FILE. run.sh seats a second member
+# and has it speak first, BEFORE boot, so the colleague's message is simply part
+# of the scene the agent wakes into — exactly like the owner's. Whether the
+# agent answers a peer instead of only ever talking upward is the thing being
+# measured, so nothing here nudges it.
 #
 # ── WHY THE JUDGE STILL CANNOT BE FOOLED ────────────────────────────────────
 # This actor holds OC_SG_OWNER_TOKEN. It cannot forge one judged fact with it:

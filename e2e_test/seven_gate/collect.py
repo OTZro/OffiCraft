@@ -66,7 +66,11 @@ def sample(base, token, agent):
     m = get(base, token, "/api/members/" + agent)
     if isinstance(m, dict) and m.get("id"):
         member = m
-    chat = _list(get(base, token, "/api/chat?member_id=" + agent), "messages", "chat")
+    # The WHOLE stream, explicitly bounded. Two reasons the limit is spelled out:
+    # the route's default is 30 and a run now carries owner↔agent AND peer↔agent
+    # traffic, and an unfiltered read (no `with=`) is the one that stamps nothing
+    # — a collector must never mutate what it observes.
+    chat = _list(get(base, token, "/api/chat?limit=500"), "messages", "chat")
     # BOTH panes. /api/reply-cards defaults to status=waiting, so a card the
     # owner answers between two polls would vanish from every later sample —
     # and ⑥'s evidence with it, for a reason that has nothing to do with the
