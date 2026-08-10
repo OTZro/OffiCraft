@@ -669,7 +669,9 @@ func (s *apiServer) HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost(w http.
 		}
 		edits[i] = LessonsEdit{Old: strOrEmpty(e.Old), New: strOrEmpty(e.New)}
 	}
-	next, applied, err := ApplyLessonsEdits(current.Text, edits)
+	// get_lessons: the tool that serves THIS doc (the overlay ⊕ seed fold the
+	// caller anchored against).
+	next, applied, err := ApplyDocEdits(current.Text, edits, "get_lessons")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
