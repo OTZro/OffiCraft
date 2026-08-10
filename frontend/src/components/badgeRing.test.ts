@@ -9,9 +9,10 @@
 //     elements wear them, so an eighth badge with its own class, or one site
 //     quietly switched to another class, passes every existing gate.
 //   * 🔴 And `npm run test:ct` does not run on EVERY cloud gate. Since T-0fef it
-//     runs on the macOS runner (macos-host-gates → bin/ci-macos-host.sh block 4),
-//     but bin/ci-cloud.sh (ubuntu) still runs vitest only. So a CT-only guard is
-//     still invisible on that lane. This file is the half that runs everywhere.
+//     runs in the cloud as its own cell (make test-frontend-ct), separate from
+//     the cell that runs vitest (make test-frontend-unit). A failing cell stops
+//     its own steps, so a CT-only guard is invisible to the unit cell's verdict.
+//     This file is the half that runs in the unit cell.
 //     ⚠️ The older wording here said test:ct was in NO cloud gate at all; that
 //     stopped being true at T-0fef. The reason this file exists did not change —
 //     only the size of the gap it covers.

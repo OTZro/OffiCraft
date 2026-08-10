@@ -59,8 +59,8 @@ roster MemberCard 成員列**右側(flex 尾端)的紅色計數 badge**(>99 顯�
   這半在那裡做不到;`src/components/badgeRing.test.ts`(vitest)是來源掃描,盯
   「7 個 site 都戴那 3 個 class」＋「3 條規則都吃 ring token」＋標籤/產生器三件套。
   ⚠️ **後者當初存在的理由是「`test:ct` 不在雲端 gate 裡,只放 CT 等於回歸在 GitHub 上是綠的」
-  —— 那個前提自 T-0fef 起已經不成立**(CT 現在跑在 `macos-host-gates` 的
-  `bin/ci-macos-host.sh` 第 4 塊)。**但那不是拿掉 vitest 那半的理由**:兩層守的本來就
+  —— 那個前提自 T-0fef 起已經不成立**(CT 現在跑在雲端自己一格,
+  `make test-frontend-ct`)。**但那不是拿掉 vitest 那半的理由**:兩層守的本來就
   不是同一件事(真顏色 vs 來源掃描),理由過期不等於守衛過期。
 
 ## 聊天未讀跳轉(M2 批次 19;LINE/FB 式,純 FE)
@@ -1351,10 +1351,10 @@ T-081b 開放的葉子有好幾條是**句子片段**,邊界空白是有意義�
   「查找」**。所以「焦點實際落在哪個元素」與「瀏覽器找不找得到」只有這一層答得出來。
 - 上面那條 (d) **刻意**放在 jsdom。當初的理由是「CT 不在雲端 gate 裡,只放 CT 等於這個回歸
   在 GitHub 上是綠的」——⚠️ **那個理由自 T-0fef 起已經作廢**:`test:ct` 現在跑在
-  `macos-host-gates`(`bin/ci-macos-host.sh` 第 4 塊,macOS runner)。**但 (d) 不要搬走**:
+  雲端自己一格的 `make test-frontend-ct`(macOS runner)。**但 (d) 不要搬走**:
   jsdom 那條問的是「文件裡有沒有」,CT 那條問的是「焦點與瀏覽器查找」,兩層答的不是同一題。
-  ⚠️ **CT 仍然不在 `cloud-gates`(ubuntu)**:`bin/ci-cloud.sh` 裡 `test:ct` 命中仍是 0,
-  理由寫在該檔的 "WHAT IS DELIBERATELY OUT" —— Linux 字型堆疊從來沒被量過。
+  ⚠️ **CT 從來沒有在 Linux 上被量過**,而 T-4d88 起雲端已經沒有 Linux 那一格了——
+  所以這件事今天不再是「某一格少跑 CT」,而是「這個 repo 對 Linux 字型堆疊零量測」。
   ⚠️ **不要數 job 數量**(這句話已經在 T-ff8a / T-ab2a 各過期一次);判準是「哪一個 job
   真的呼叫到 `test:ct`」,去讀 `bin/ci-*.sh`,別從 job 名字推。
 

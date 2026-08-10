@@ -16,7 +16,7 @@
 #
 # WHY ruby AND NOT PyYAML
 # The hosted macOS runner this suite runs on has NO PyYAML, and this file is
-# dispatched by bin/tests/run.sh, which bin/ci-macos-host.sh runs there. Ruby with
+# dispatched by bin/tests/run.sh, which `make test-bin-guards` runs there. Ruby with
 # its bundled psych IS present on macOS (/usr/bin/ruby) and on the dev machine, so
 # it is the one parser both environments actually have. It is resolved by absolute
 # path fallback for the same reason bin/ci.sh resolves go/npm/gitleaks that way —

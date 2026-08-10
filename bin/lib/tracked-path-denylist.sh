@@ -2,9 +2,9 @@
 # Shared definition for the tracked-file hygiene denylist.
 #
 # Both the authoritative local gate (bin/ci.sh) and the Linux PR subset
-# (bin/ci-cloud.sh) call this function. Keep the rules here: duplicating the
-# list lets a newly forbidden path be blocked locally while silently passing
-# cloud-gates.
+# call this function through the Makefile's scan-tracked-paths target. Keep the
+# rules here: duplicating the list lets a newly forbidden path be blocked in one
+# caller while silently passing in another.
 
 tracked_path_denylist_hits() {
   local hits

@@ -1,119 +1,93 @@
-# officraft — the cloud-runnable gates, on every pull request.
+# officraft — the cloud check round, on every pull request and every push to main.
 #
 # WHY THIS EXISTS, AND WHAT IT IS NOT
 # bin/ci.sh remains the canonical, AUTHORITATIVE land gate and runs LOCALLY.
-# This workflow does NOT replace it and does not certify a land. It runs
-# everything that a Linux runner can honestly run — unit tests (Go + frontend),
-# the consistency / wire-freeze drift gates, and the black-box conformance
-# suite — on a clean Linux checkout, which is the one thing a developer's Mac
-# can never prove: that nothing depends on this machine.
+# This workflow does NOT replace it and does not certify a land. It runs the same
+# checks on hosted runners so that they apply to EVERY pull request instead of to
+# one developer's laptop.
 #
-# bin/ci.sh's header used to justify local-only CI with "we do not pay for
-# GitHub Actions". That premise no longer holds: this repo is PUBLIC, and
-# GitHub's standard-runner minutes are free for public repositories.
+# ONE DEFINITION, AND THIS FILE IS NOT IT (T-4d88)
+# Every check is a named target in the repo-root Makefile, and its implementation
+# lives in exactly one recipe there. Each cell below calls the targets it owns —
+# `make <target> <target>` — and contains no test path, no npm script name, no
+# module list and no gate logic of its own. A cell can choose WHICH checks it
+# runs; it cannot restate HOW, so a cloud round and a local round cannot drift.
+# If you are about to add a test invocation here: add a target to the Makefile.
 #
-# ONE SOURCE OF TRUTH: this file deliberately contains NO list of modules, no
-# npm script names, no test paths, no gate names. It installs a pinned toolchain
-# and calls bin/ci-cloud.sh. Everything about WHAT runs lives in that script,
-# in the repo, next to bin/ci.sh — so the cloud check and a local run are the same bytes and
-# cannot drift. If you find yourself about to add a test invocation here, add it
-# to bin/ci-cloud.sh instead.
+# The two subset scripts this file used to call (bin/ci-cloud.sh and
+# bin/ci-macos-host.sh) are gone. They existed to be "the one definition of the
+# subset", but each of them had to restate the checks, so the repo carried three
+# copies of every rule and they had already drifted — the e2e isolation guard ran
+# with its truncation protection locally and WITHOUT it in the cloud, on the round
+# that guards everybody else's pull request.
+#
+# ONE CONCERN PER CELL, AND THEY RUN IN PARALLEL (owner ruling). The split is by
+# what the checks ARE, not by how long they take: a red should be readable from
+# the job name alone, and a failing step stops the steps after it, so folding two
+# concerns into one cell hides the second one's verdict behind the first one's.
+# Two cells exist because the owner named them specifically: the bin/ guard suites
+# and the committed-binary integrity check are not part of the ordinary CI classes
+# and get their own cell each.
+#
+# EVERYTHING RUNS ON macOS (owner ruling, T-4d88). The ubuntu cell is gone. It
+# existed to catch macOS-only assumptions, which is a real thing to want and is
+# no longer bought here — that is a KNOWN, ACCEPTED cost of this ruling, not an
+# oversight, and it is written down so nobody "fixes" it by quietly adding a
+# Linux cell whose font stack and mktemp semantics have never been measured.
 #
 # Triggers are pull_request AND push-to-main. Pushes to a WORKING branch are the
-# local gate's job; re-running the same suites on every working-branch push would
-# just be noise. main is different: until T-ab2a nothing ran after a merge, so a
-# pair of individually-green PRs could combine into a red trunk and no one would
-# find out until the next PR author inherited it. The post-merge round exists to
-# name that moment, and to name it on the commit that caused it.
+# local gate's job. main is different: without a post-merge round, a pair of
+# individually-green PRs can combine into a red trunk and nobody finds out until
+# the next author inherits it.
 #
-# Both triggers run the SAME CHECKS — there is deliberately no second list of what
-# to run for main. A separate main-only definition of "the checks" would be a
-# second list, and two definitions drift; the one that drifts silently is always
-# the one nobody watches.
-#
-# ⚠️ "the same JOBS" is no longer literally true, and this paragraph used to say
-# exactly that. TWO jobs at the bottom are main-only: notify-main-red (T-5d3b),
-# which speaks only when a round failed, and auto-beta (T-9fe3), which publishes a
-# prerelease when one is green. Neither of them CHECKS anything, and that is the
-# whole of what this rule was protecting: main runs no CHECK a pull request does
-# not.
+# ⚠️ TWO jobs at the bottom are main-only: notify-main-red (T-5d3b), which speaks
+# only when a round failed, and auto-beta (T-9fe3), which publishes a prerelease
+# when one is green. Neither CHECKS anything, which is the whole of what the
+# "main runs no check a pull request does not" rule protects.
 #
 # THE GATE / NOT-A-GATE SPLIT IS DECLARED, NOT GUESSED
-# That distinction now decides something (below), so it is written down per job
-# rather than inferred: every job's body opens with a marker comment naming which
-# it is, and bin/tests/auto-beta-guard.sh reads them. A job with no marker, with
-# two, or with one it cannot read is a FAILURE that names the lines — a job it
-# cannot classify is never sorted into whichever bucket happens to be convenient.
-# The marker is not free either: a not-a-gate must pin itself to refs/heads/main,
-# and a gate must NOT, so a real gate cannot be excused from the set by
-# relabelling it, and hanging an `if` on a gate so it skips on pull requests
-# reddens rather than passing.
+# Every job's body opens with a marker comment naming which it is, and
+# bin/tests/auto-beta-guard.sh reads them. A job with no marker, with two, or with
+# one it cannot read is a FAILURE that names the lines. A not-a-gate must pin
+# itself to refs/heads/main and a gate must NOT, so a real gate cannot be excused
+# from the set by relabelling it.
 # ⚠️ AND THE NON-GATES ARE A CLOSED ROLL-CALL: exactly these two, no more. A THIRD
-# job declaring itself not-a-gate reddens even when it is labelled honestly and
-# pinned correctly, because leaving auto-beta's required set is a decision with an
-# owner ruling behind it (CLAUDE.md's land criteria: the exemption list is
-# hardcoded, and a third member needs its OWN ruling — the analogy to these two is
-# explicitly not enough). Adding one means editing the guard, which is the point.
+# job declaring itself not-a-gate reddens even when it is labelled honestly,
+# because leaving auto-beta's required set is a decision with an owner ruling
+# behind it. Adding one means editing the guard, which is the point.
 #
 # WHAT THE SPLIT BUYS: auto-beta's `needs` must equal the GATE set exactly, in
 # both directions, so a gate added for pull requests cannot quietly become
 # optional on main.
-# ⚠️ auto-beta deliberately does NOT need notify-main-red, and that is not an
-# oversight to be tidied up: notify only runs when something already failed, so an
-# edge to it would mean auto-beta never runs at all. The edge that DOES exist runs
-# the other way — notify-main-red needs auto-beta, because a publish that fails on
-# main is precisely "merged" and "reachable" drifting apart in silence, which is
-# the thing auto-beta exists to stop. Wiring both directions would be a `needs`
-# cycle, which GitHub rejects as a whole-file startup failure: zero jobs.
+# ⚠️ auto-beta deliberately does NOT need notify-main-red: notify only runs when
+# something already failed, so an edge to it would mean auto-beta never runs. The
+# edge that DOES exist runs the other way. Wiring both would be a `needs` cycle,
+# which GitHub rejects as a whole-file startup failure: zero jobs.
 #
 # NO GATE IN THIS WORKFLOW USES A SECRET, by design — so a fork PR runs the
-# identical, complete check. Exactly one secret exists here and it is not a
-# gate: notify-main-red (T-5d3b) reads a webhook URL to say "main is red", it
-# runs ONLY on push-to-main, and a fork PR cannot reach repository secrets in
-# any case — so the property above is unchanged for every pull request.
-# ⚠️ Adding a secret to any of the gate jobs WOULD change it, and would make a
-# fork PR run a different, smaller check than ours.
+# identical, complete check. Exactly one secret exists here and it is not a gate:
+# notify-main-red reads a webhook URL, and it runs ONLY on push-to-main.
 #
-# The workflow is no longer permission-FREE, though, and that is a different claim
-# from the secret one (T-9fe3). The gate jobs use no token at all. auto-beta
-# publishes a prerelease after a green push to main, which needs write access to
-# this repo's releases: it alone holds `permissions: contents: write`, using the
-# built-in GITHUB_TOKEN. No PAT and no repository secret is introduced, and the
-# workflow default above stays read-only. On a fork PR that job's `if` is false,
-# so it never runs and never asks for the token; what a fork loses is one job it
-# could not have run anyway, not a check.
+# The workflow is not permission-FREE, which is a different claim: the gate cells
+# use no token at all, and auto-beta alone holds `permissions: contents: write`
+# using the built-in GITHUB_TOKEN.
 name: ci
 
 # ⚠️ THIS BLOCK IS READ by bin/tests/auto-beta-guard.sh (W7), and it is the ONE
 # place a filter can silence every gate at once without touching a job: a
-# `paths-ignore` or a `branches` list under pull_request makes all three gates
-# skip on a pull request, and a skipped check looks exactly like a check that did
-# not go red.
+# `paths-ignore` or a `branches` list under pull_request makes every gate skip on
+# a pull request, and a skipped check looks exactly like a check that did not go
+# red.
 #
-# What W7 pins, precisely — it is NOT "this block is frozen", which is what this
-# comment said when W7 compared the whole mapping byte for byte:
+# What W7 pins, precisely:
 #   • The VALUE of each trigger below is pinned verbatim. Adding or changing a
 #     filter under `pull_request` or `push` reddens W7.
 #   • A trigger KEY on W7's allowlist may be ADDED here without touching the
-#     guard. `workflow_dispatch` is on that list today. ⚠️ THE REASON THIS COMMENT
-#     USED TO GIVE — "a separate trigger cannot filter an existing one" — IS FALSE
-#     IN THE DIRECTION IT DID NOT CONSIDER, and the same sentence was corrected in
-#     CLAUDE.md; this is its twin. The claim at the width it actually holds: adding
-#     workflow_dispatch cannot stop the gates being scheduled ON A PULL REQUEST,
-#     because a PR run has a different `github.ref` and therefore a different
-#     concurrency group from anything a dispatch can occupy — reasoned from the
-#     `group:` expression below, NOT tested on GitHub. And auto-beta's
-#     `github.event_name == 'push'` half separately stops a dispatched run from
-#     publishing.
-#     ⚠️ ON MAIN IT DOES NOT HOLD: main runs share one group with
-#     cancel-in-progress: false and a single pending slot, so a dispatched run
-#     against main can displace a QUEUED trunk commit, whose conclusion is then
-#     `cancelled` — not red, no verdict, no beta. Read off the concurrency comment
-#     below; also not tested on GitHub.
-#   • Any other trigger (`schedule`, `pull_request_target`, …) is refused until
-#     it is added to the allowlist in that guard, in the SAME commit — and that
-#     edit is the review. `pull_request_target` is the one this matters most for:
-#     it runs with a write token against fork code.
+#     guard. `workflow_dispatch` is on that list today.
+#   • Any other trigger (`schedule`, `pull_request_target`, …) is refused until it
+#     is added to the allowlist in that guard, in the SAME commit — and that edit
+#     is the review. `pull_request_target` is the one this matters most for: it
+#     runs with a write token against fork code.
 on:
   pull_request:
   push:
@@ -125,9 +99,7 @@ on:
 # main is exempt, and that asymmetry is the point: a cancelled run reports
 # conclusion=cancelled, which is NOT a red. Two merges landing close together
 # would cancel the first one's round, and the trunk commit that actually broke
-# main would end up carrying no verdict at all — indistinguishable, on the
-# commit list, from a commit that passed. Every commit on main gets its own
-# answer, even when that costs a duplicate round.
+# main would end up carrying no verdict at all.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -136,90 +108,213 @@ permissions:
   contents: read
 
 jobs:
-  cloud-gates:
+  # ---------------------------------------------------------------------------
+  # go — the whole Go story for every module under cli/ and server/. Staging the
+  # embed assets first is not this cell's choice: the Makefile declares it as a
+  # prerequisite of test-go, because server/ocserverd's tests read the STAGED
+  # embed and a clean checkout carries .gitkeep-only staging dirs. A runner is by
+  # definition always a clean checkout.
+  go-checks:
     # oc-job-role: gate
-    # ubuntu-latest on purpose: the point is to catch macOS-only assumptions.
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Pinned, not macos-latest: `latest` moves between OS majors on GitHub's
+    # schedule and these checks assert host-shaped behaviour. A version bump
+    # should be a commit somebody chose, not a Tuesday.
+    runs-on: macos-15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
-
-      # Versions pinned to what the repo actually develops against: go.mod says
-      # `go 1.26.4` in all three modules, and the dev machine runs node 22.10.0.
+      # Pinned to what the repo develops against (go.mod says 1.26.4).
       # check-latest:false + an exact version keeps the runner from silently
       # drifting ahead of the developer.
-      #
-      # ⚠️ THESE PINS ARE LOAD-BEARING, not hygiene. bin/ci-cloud.sh runs the
-      # regenerate-and-byte-compare consistency gates, which assert that a
-      # generator reproduces a committed artifact EXACTLY. Let the runner float
-      # ahead of the dev machine's Go/Node and those gates start reddening on
-      # generator output changes while the code is perfectly fine — the precise
-      # false-red this whole check exists to avoid.
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26.4'
           check-latest: false
-          # Only server/ocserverd has third-party deps (hence a go.sum); the two
-          # cli/ modules are stdlib-only. setup-go errors on an unresolved path,
-          # so listing the nonexistent ones would break the job, not just the cache.
+          # Only server/ocserverd has third-party deps (hence a go.sum); the
+          # cli/ modules are stdlib-only. setup-go errors on an unresolved path.
           cache-dependency-path: server/ocserverd/go.sum
+      - run: make lint-go-naming lint-go-fmt lint-go-vet build-go test-go
 
+  # ---------------------------------------------------------------------------
+  # frontend — typecheck, the static CSS/token lints, and the jsdom unit suite.
+  # The real-browser half is a separate cell on purpose (see frontend-ct).
+  frontend-checks:
+    # oc-job-role: gate
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
           node-version: '22.10.0'
           check-latest: false
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-
-      # zsh is NOT preinstalled on ubuntu-latest, but it is not optional here:
-      # cli/ocwarden's launch-prologue tests (agentenv_test.go) execute the real
-      # prologue under BOTH `sh` and `zsh` — zsh because that is the shell the
-      # spawned agents actually get on the macOS fleet. Making the test skip when
-      # zsh is absent would have turned a genuine guard into a silent no-op on
-      # every cloud run, so the runner gets the shell instead.
-      - name: install zsh and lsof (required by cloud test guards)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh lsof
-
-      - name: cloud gates (unit + consistency + conformance)
-        run: bash bin/ci-cloud.sh
+      - run: make lint-ts lint-css-tokens lint-css-token-roles test-frontend-unit
 
   # ---------------------------------------------------------------------------
-  # The real-browser end-to-end suite (e2e_test/run_all.sh), which until now ran
-  # on nobody's schedule: bin/ci.sh does not call it and neither did this file, so
-  # its browser scenarios were unguarded — break one and nothing anywhere turns
-  # red. owner approved wiring it in (rc-1f2f7a002363) and then chose the shape
-  # and the order: put the job up FIRST so the reds it finds are visible in the
-  # cloud, then fix them in the same PR (rc-d37ec87bb65b).
+  # frontend-ct — real-browser layout + paint guards. Separate from
+  # frontend-checks because vitest runs in jsdom, which applies no layout engine:
+  # a pure-CSS regression ships GREEN through the unit suite, so these two cells
+  # answer different questions and a red should say which one broke.
   #
-  # WHY macOS AND WHY IT IS AN ADDITIONAL JOB
-  # This suite is written against macOS userland (lsof -nP -tiTCP, uuidgen,
-  # ps -o command=, BSD find -delete) and drives a real launchd/tmux-shaped
-  # station. GitHub's standard runners — macOS included — are free and unmetered
-  # on public repositories, so the honest place to run it is a macOS runner
-  # rather than every developer's laptop.
-  # It does NOT replace cloud-gates above: that job runs on ubuntu precisely to
-  # catch macOS-only assumptions, so swapping it for a Mac would disarm the one
-  # check no Mac can perform. Different purposes, deliberately separate jobs —
-  # this pairing is about cloud-gates vs macos-e2e specifically; a third job
-  # (macos-host-gates, T-ab2a) now sits below and is a different concern again.
-  macos-e2e:
+  # ⚠️ Font environment: the CT harness page loads no webfonts and falls through
+  # to system-ui, so these guards measure the RUNNER's system font, never the font
+  # a user sees. That is a pre-existing gap. If a guard reddens here and is green
+  # on a dev Mac, the answer is the font environment — NEVER a looser threshold.
+  frontend-ct:
     # oc-job-role: gate
-    # Pinned, not macos-latest: `latest` moves between OS majors on GitHub's
-    # schedule, and this suite asserts host-shaped behaviour. A version bump here
-    # should be a commit somebody chose, not a Tuesday.
     runs-on: macos-15
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22.10.0'
+          check-latest: false
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: make test-frontend-ct
 
-      # Same pins, same reason as cloud-gates: the suite builds ocserverd and
-      # both cli binaries from source before it can bring a station up.
+  # ---------------------------------------------------------------------------
+  # drift — the regenerate-and-byte-compare class, together because they share
+  # one failure mode and one remedy.
+  #
+  # ⚠️ THE TOOLCHAIN PINS BELOW ARE LOAD-BEARING FOR THIS CELL, not hygiene.
+  # Every gate here asserts that a generator reproduces a committed artifact
+  # EXACTLY. Let the runner float ahead of the dev machine's Go/Node and these
+  # start reddening on generator output changes while the code is perfectly fine
+  # — the precise false-red this whole round exists to avoid.
+  drift-checks:
+    # oc-job-role: gate
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26.4'
           check-latest: false
           cache-dependency-path: server/ocserverd/go.sum
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22.10.0'
+          check-latest: false
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: make drift-ocapi drift-schema-ts drift-theme-tokens drift-message-keys drift-fonts
 
+  # ---------------------------------------------------------------------------
+  # contract-guards — the stdlib-python3 scanners over tracked files, each shipped
+  # WITH its own positive control (the Makefile target runs both halves; a scanner
+  # nobody verified still prints all green).
+  contract-guards:
+    # oc-job-role: gate
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - run: make lint-uplink-contract lint-effort-vocab
+
+  # ---------------------------------------------------------------------------
+  # conformance — the black-box import lint (fast, static) and then the full
+  # HTTP-only behaviour suite against a throwaway ocserverd and SQLite. The lint
+  # runs first inside the same cell so an import violation reddens without paying
+  # for the server boot.
+  conformance:
+    # oc-job-role: gate
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.4'
+          check-latest: false
+          cache-dependency-path: server/ocserverd/go.sum
+      - run: make lint-conformance-blackbox test-conformance
+
+  # ---------------------------------------------------------------------------
+  # hygiene — what is TRACKED (path denylist) and what is IN the files (gitleaks).
+  hygiene:
+    # oc-job-role: gate
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      # gitleaks is a HARD dependency, not an optional extra: an unrun secret
+      # scanner and a clean scan are indistinguishable. Installing it here is why
+      # the target can afford to treat "not found" as a failure.
+      - name: install gitleaks
+        run: brew install gitleaks
+      - run: make scan-tracked-paths scan-secrets
+
+  # ---------------------------------------------------------------------------
+  # bin-guards — its own cell by owner ruling: the bin/ guard suites are the
+  # tests OF the tooling (the release publish path, the CI marker guard, the lock
+  # guard), not one of the ordinary CI classes, and their reds should be readable
+  # as themselves rather than as "something in some cell broke".
+  bin-guards:
+    # oc-job-role: gate
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.4'
+          check-latest: false
+          cache-dependency-path: server/ocserverd/go.sum
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22.10.0'
+          check-latest: false
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: make test-bin-guards
+
+  # ---------------------------------------------------------------------------
+  # tcc-anchor — its own cell by owner ruling. The one owner-approved committed
+  # binary: its manifest binds a reviewable source snapshot to the checked-in
+  # executable, so this fails closed whenever the source moves without an explicit
+  # binary refresh.
+  tcc-anchor:
+    # oc-job-role: gate
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - run: make scan-tcc-anchor
+
+  # ---------------------------------------------------------------------------
+  # e2e-isolation-guard — the hermetic safety layer that keeps the DESTRUCTIVE
+  # e2e suites from wiping a live agent-fleet host. Toolchain-free and fast, and
+  # deliberately not folded into macos-e2e: it is the thing that has to be true
+  # BEFORE that suite is safe to run anywhere.
+  e2e-isolation-guard:
+    # oc-job-role: gate
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - run: make test-e2e-isolation-guard
+
+  # ---------------------------------------------------------------------------
+  # macos-e2e — the real-browser end-to-end suite against an isolated station.
+  # This one is NOT a Makefile target: it is not a check over the tree, it stands
+  # a whole station up and drives it, and run_all.sh owns that lifecycle
+  # (setup -> playwright -> teardown) including its own prerequisite refusals.
+  macos-e2e:
+    # oc-job-role: gate
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.4'
+          check-latest: false
+          cache-dependency-path: server/ocserverd/go.sum
       - uses: actions/setup-node@v5
         with:
           node-version: '22.10.0'
@@ -229,31 +324,21 @@ jobs:
 
       # setup.sh refuses to run without an oc.toml that binds the non-prod port
       # and names a repo-local DSN — those refusals ARE the prod guards, so a
-      # runner has to satisfy them rather than skip them. One named generator
-      # produces the file; see its header for why it never overwrites.
+      # runner has to satisfy them rather than skip them.
       - name: generate the isolated station's oc.toml
         run: bash e2e_test/gen-oc-toml.sh
 
-      # run_all.sh is setup -> playwright -> teardown, and its exit code is the
-      # payload. Its own prerequisite failures (npm/npx missing, chromium install
-      # failing) exit non-zero and say "NOT a spec failure", so a broken runner
-      # reddens the job instead of quietly testing nothing.
       # Deliberately sets NOTHING (T-c329): the specs that need a live agent and
       # burn API quota are default-off and declare themselves by filename, so a
-      # runner opts OUT of nothing — it simply never asks to spend. The previous
-      # `OC_E2E_EXCLUDE_REAL_FLEET: '1'` here was the whole bug: it made this the
-      # only path that was protected, while every laptop running the same script
-      # silently paid.
+      # runner opts OUT of nothing — it simply never asks to spend.
       - name: real-browser e2e (isolated station on :8791)
         run: |
           set -o pipefail
           bash e2e_test/run_all.sh 2>&1 | tee "$RUNNER_TEMP/e2e.log"
 
       # A zero exit says "nothing failed", not "something ran". This asserts the
-      # suite actually reported, above a floor, and that the default-OFF
-      # live-agent class stayed out of the log (it is excluded by its own filename,
-      # not by anything set here). Deliberately NOT `if: always()` — it exists to catch
-      # a GREEN run that guarded nothing.
+      # suite actually reported, above a floor. Deliberately NOT `if: always()` —
+      # it exists to catch a GREEN run that guarded nothing.
       - name: guard — the suite must have actually executed specs
         run: bash e2e_test/assert-specs-ran.sh "$RUNNER_TEMP/e2e.log"
 
@@ -268,147 +353,57 @@ jobs:
           if-no-files-found: warn
 
   # ---------------------------------------------------------------------------
-  # The macOS-HOST-SHAPED gates (T-ab2a). Until now these ran on exactly one
-  # developer's Mac, so nobody else's pull request was guarded by them: a
-  # contributor could redden the bin/ guard suites, commit a secret that only the
-  # content scan catches, or move the TCC anchor's source away from its committed
-  # binary, and the cloud would stay green.
-  #
-  # WHY A THIRD JOB RATHER THAN MORE STEPS IN macos-e2e
-  # Different purposes, and more importantly different failure reporting: folded
-  # into the e2e job, a red here would be hidden behind an e2e red (and vice
-  # versa) because a failing step stops the ones after it. Separate jobs mean
-  # "which kind of thing broke" is answered by the job name.
-  # It does NOT replace cloud-gates: that one runs on ubuntu precisely to catch
-  # macOS-only assumptions, and swapping a Mac in would disarm the single check
-  # no Mac can perform.
-  #
-  # WHICH GATES, AND WHY test:ct IS NOW ONE OF THEM
-  # The set was MEASURED on a hosted macOS runner (T-ab2a node 2), not assumed.
-  # frontend `test:ct` came back red then, and that red was environmental rather
-  # than real — but "environmental" was not the end of it: the red was exactly 2
-  # tests out of 207, both in one guard group that pinned macOS font metrics.
-  # T-0fef removed that group on the owner's ruling, so real-browser layout is no
-  # longer guarded by one laptop. See bin/ci-macos-host.sh for the measurements.
-  # It is NOT on cloud-gates: ubuntu is a different font stack and that question
-  # has never been measured — see bin/ci-cloud.sh's "WHAT IS DELIBERATELY OUT".
-  #
-  # The list of what runs is NOT here — it is bin/ci-macos-host.sh, next to
-  # ci.sh, for the same reason cloud-gates calls bin/ci-cloud.sh: a YAML file
-  # enumerating gates becomes a second list, and the second list drifts silently.
-  macos-host-gates:
-    # oc-job-role: gate
-    # Pinned for the same reason as macos-e2e: these assert host-shaped
-    # behaviour, so an OS major bump should be a commit somebody chose.
-    runs-on: macos-15
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version: '1.26.4'
-          check-latest: false
-          cache-dependency-path: server/ocserverd/go.sum
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: '22.10.0'
-          check-latest: false
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      # A clean checkout has no embedded assets, and without them the suites go
-      # red for a reason that has nothing to do with the change under test.
-      # bin/ci.sh stages these before anything else; matching that order is what
-      # makes a red here mean the same thing a local red means.
-      - name: stage embedded assets (same order bin/ci.sh uses)
-        run: |
-          bash bin/build-seedsdist
-          bash bin/build-docsdist
-          bash bin/build-bindist
-
-      # gitleaks is a HARD dependency of the subset, not an optional extra: an
-      # unrun secret scanner and a clean scan are indistinguishable. Installing it
-      # here (rather than letting the script skip) is why the script can afford to
-      # treat "not found" as a failure.
-      - name: install gitleaks
-        run: brew install gitleaks
-
-      # The whole subset, one call. See the script for what runs and why.
-      - name: macOS-host-shaped gates
-        run: |
-          set -o pipefail
-          bash bin/ci-macos-host.sh 2>&1 | tee "$RUNNER_TEMP/macos-host.log"
-
-      # A zero exit says "nothing failed", not "the gates ran". This asserts the
-      # subset reached its own end-marker, which is the one line that cannot be
-      # printed by an early return or a script that no-oped. Deliberately NOT
-      # `if: always()` — it exists to catch a GREEN run that guarded nothing.
-      - name: guard — the subset must have actually reached its end
-        run: |
-          grep -qFx '[ci-macos-host] all macos-host-shaped gates green' "$RUNNER_TEMP/macos-host.log" \
-            || { echo "the subset exited 0 without reaching its end-marker — it guarded nothing" >&2; exit 1; }
-
-      - name: upload subset log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-host-gates-log
-          path: ${{ runner.temp }}/macos-host.log
-          if-no-files-found: warn
-
-  # ---------------------------------------------------------------------------
-  # WHO FINDS OUT THAT main WENT RED (T-5d3b). The jobs above hang a verdict on
+  # WHO FINDS OUT THAT main WENT RED (T-5d3b). The cells above hang a verdict on
   # the commit that caused it — that half is a mechanism. The other half,
   # "somebody learns about it", had none: GitHub's default failure routing is a
-  # per-account notification setting that cannot be read from here, so a red
-  # trunk was found only by whoever happened to look, and the next author
-  # inherited it believing the red was theirs. owner ruling (rc-c2edbfdc36a1):
-  # post a webhook at the maintainer, and deliberately NOT open an issue.
+  # per-account notification setting that cannot be read from here, so a red trunk
+  # was found only by whoever happened to look, and the next author inherited it
+  # believing the red was theirs. owner ruling (rc-c2edbfdc36a1): post a webhook
+  # at the maintainer, and deliberately NOT open an issue.
   #
   # WHY ONE AGGREGATING JOB AND NOT A STEP INSIDE EACH JOB
-  # A step per job is the same curl copied three times (it will drift), and a
-  # round that reddens two jobs then sends two messages for one event. The price
-  # of `needs:` is that it re-enumerates the job names, so ANOTHER job added
-  # without touching this line would silently stop being covered. That
-  # enumeration is therefore not left to discipline:
-  # bin/tests/main-red-notify-guard.sh asserts that every other job in this file
-  # appears in the `needs:` below, and reddens when one does not.
+  # A step per job is the same curl copied N times (it will drift), and a round
+  # that reddens two jobs then sends two messages for one event. The price of
+  # `needs:` is that it re-enumerates the job names, so ANOTHER job added without
+  # touching this line would silently stop being covered. That enumeration is
+  # therefore not left to discipline: bin/tests/main-red-notify-guard.sh asserts
+  # that every other job in this file appears in the `needs:` below.
   #
-  # EVERY other job, auto-beta included (T-9fe3). auto-beta is not a check, so it
-  # is tempting to leave it out of a red-trunk alarm — but the thing it does is
-  # publish the release the station actually runs, and a publish that fails on
-  # main IS "merged" and "reachable" drifting apart, which is the exact hole
-  # auto-beta was added to close. Staying quiet about it would dig a second hole
-  # beside the first. (The edge only goes this way: auto-beta must NOT need this
-  # job — see the header. Both directions would be a `needs` cycle and GitHub
-  # would schedule zero jobs.)
+  # EVERY other job, auto-beta included (T-9fe3): the thing it does is publish the
+  # release the station actually runs, and a publish that fails on main IS
+  # "merged" and "reachable" drifting apart. (The edge only goes this way —
+  # auto-beta must NOT need this job. Both directions would be a `needs` cycle
+  # and GitHub would schedule zero jobs.)
   #
-  # THIS IS NOT A SECOND TEST LIST. The one-source-of-truth rule at the top of
-  # this file is about WHAT RUNS; this job runs no gate and names no suite.
-  #
-  # SCOPE, AND WHAT DELIBERATELY DOES NOT NOTIFY
-  # push-to-main only: a pull request is somebody's own branch and its red is
-  # already in front of them. A CANCELLED round does not notify either, because
-  # failure() is false for cancelled — the same position the concurrency block
-  # above takes, that cancelled is not a red.
+  # SCOPE: push-to-main only. A pull request is somebody's own branch and its red
+  # is already in front of them. A CANCELLED round does not notify either, because
+  # failure() is false for cancelled.
   notify-main-red:
     # oc-job-role: not-a-gate
-    needs: [cloud-gates, macos-e2e, macos-host-gates, auto-beta]
+    needs:
+      - go-checks
+      - frontend-checks
+      - frontend-ct
+      - drift-checks
+      - contract-guards
+      - conformance
+      - hygiene
+      - bin-guards
+      - tcc-anchor
+      - e2e-isolation-guard
+      - macos-e2e
+      - auto-beta
     if: failure() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       # THE URL IS THE CREDENTIAL. The receiving inlet authenticates on a token
       # carried in the URL itself and answers an identical silent 200 to
-      # everything (unknown token included), so (a) a leaked URL lets anyone
-      # forge "main is red" at the maintainer, and (b) a 200 here does not prove
-      # the TOKEN was good — the inlet answers 200 to an unknown token too, so
-      # token validity is only observable at the receiving end. What this side
-      # CAN see is the HTTP status: an inlet that moved (404), is down (502) or
-      # a mistyped URL (400) are all distinguishable, and --fail-with-body below
-      # is what turns them into a red instead of a silent exit 0.
+      # everything (unknown token included), so (a) a leaked URL lets anyone forge
+      # "main is red" at the maintainer, and (b) a 200 here does not prove the
+      # TOKEN was good. What this side CAN see is the HTTP status, and
+      # --fail-with-body below is what turns a moved/down/mistyped inlet into a
+      # red instead of a silent exit 0.
       # Hence: secret only, never a literal in this file, never echoed.
       - name: tell the maintainer that main is red
         env:
@@ -433,151 +428,121 @@ jobs:
                         | map("\(.key)=\(.value.result)")
                         | join(" ")' <<<"$NEEDS_JSON")"
           # The body is delivered VERBATIM as a chat message into a human-facing
-          # inbox, so it stays three short lines plus a link. A log dump here
-          # would charge the reader by the byte for every red round.
+          # inbox, so it stays three short lines plus a link.
           #
-          # Built with printf, NOT a multi-line shell string. A continuation
-          # line of such a string starts at column 1, which is less indented
-          # than this block scalar — YAML ends the scalar there and the whole
-          # workflow file stops parsing. That is not hypothetical: it shipped
-          # that way once and GitHub answered with a startup failure in which
-          # ZERO jobs ran, this one included.
+          # Built with printf, NOT a multi-line shell string. A continuation line
+          # of such a string starts at column 1, which is less indented than this
+          # block scalar — YAML ends the scalar there and the whole workflow file
+          # stops parsing. That is not hypothetical: it shipped that way once and
+          # GitHub answered with a startup failure in which ZERO jobs ran.
           #
-          # "非 success" and not "紅", because a skipped job also lands in `red`
-          # (jq selects result != "success") and calling a skip red is a lie.
-          #
+          # "非 success" and not "紅", because a skipped job also lands in `red`.
           # "項目" and not "檢查": `needs` includes `auto-beta`, which is NOT a
-          # gate (it checks nothing — it publishes). When a gate goes red,
-          # auto-beta is skipped and lands in this list; calling it a failed
-          # CHECK sends the reader hunting for a broken test that does not
-          # exist. The set this line reports is "jobs this run depended on",
-          # and only some of them are checks.
+          # gate — calling it a failed CHECK sends the reader hunting for a broken
+          # test that does not exist.
           body="$(printf '主幹紅了：%s@%s\n非 success 的項目：%s\n執行紀錄：%s' "$REPO" "${COMMIT_SHA:0:12}" "${red:-unknown}" "$RUN_URL")"
-          # --fail-with-body: without it curl exits 0 on 404/502/400 and this
-          # step stays green while nobody was told. That flag is what turns an
-          # HTTP error into a red here; --retry does not.
+          # --fail-with-body: without it curl exits 0 on 404/502/400 and this step
+          # stays green while nobody was told.
           #
           # --retry 2 ALREADY covers the errors worth retrying: 429, 5xx, and
-          # (with --retry-connrefused) a refused connection. There is
-          # deliberately NO --retry-all-errors. Its only added effect over the
-          # above is retrying PERMANENT 4xx, where a second and third attempt
-          # cannot succeed — a moved inlet (404), a revoked token (403) or a
-          # mistyped URL (400) answers the same way every time. The cost is not
-          # zero: if the inlet ACCEPTS the message and then answers non-2xx (a
-          # proxy in front of it returning 502 after the enqueue, say), the flag
-          # turns one "main is red" into THREE in the maintainer's inbox. A
-          # duplicate notification is a real failure mode, and buying it back
-          # with retries of the unretryable is a bad trade.
+          # (with --retry-connrefused) a refused connection. There is deliberately
+          # NO --retry-all-errors: its only added effect is retrying PERMANENT
+          # 4xx, where a second attempt cannot succeed, and its cost is turning
+          # one "main is red" into THREE in the maintainer's inbox when the inlet
+          # accepts the message and then answers non-2xx.
           #
-          # The response body is discarded rather than logged: an error page
-          # from the wrong host can quote the request URL back, and that URL is
-          # the credential. The exit code is the signal.
+          # The response body is discarded rather than logged: an error page from
+          # the wrong host can quote the request URL back, and that URL is the
+          # credential. The exit code is the signal.
           printf '%s' "$body" | curl -sS --fail-with-body --max-time 20 \
             --retry 2 --retry-connrefused \
             -X POST -H 'Content-Type: text/plain; charset=utf-8' \
             --data-binary @- "$MAIN_RED_WEBHOOK_URL" >/dev/null
 
   # ---------------------------------------------------------------------------
-  # AUTOMATIC BETA ON A GREEN TRUNK (T-9fe3). Landing on main did not put
-  # anything anywhere: the station runs a GitHub RELEASE and autodeploy follows
-  # the newest one, never main. So every merged change waited for a human to
-  # remember to cut a beta, and "merged" and "reachable" drifted apart silently.
-  # This job closes that gap: a push to main whose whole check set is green
-  # publishes a prerelease of exactly that commit.
+  # AUTOMATIC BETA ON A GREEN TRUNK (T-9fe3). Landing on main did not put anything
+  # anywhere: the station runs a GitHub RELEASE and autodeploy follows the newest
+  # one, never main. So every merged change waited for a human to remember to cut
+  # a beta, and "merged" and "reachable" drifted apart silently.
   #
   # WHAT IT DELIBERATELY DOES NOT DO
   # It publishes a PRERELEASE and nothing else. Turning a beta into the final
   # release — the flip that moves the Latest pointer — stays a human command run
-  # by hand: `bin/release`'s other subcommand, deliberately never named in any
-  # workflow file. bin/tests/auto-beta-guard.sh reddens on two things — that
-  # subcommand's name (W4), and the `gh release edit` flags that move the Latest
-  # pointer or publish a draft (W4b). Those flags are NOT spelled out here on
-  # purpose: W4b scans this file as text, comments included, so naming them would
-  # redden it. Read the guard for the exact list.
-  # ⚠️ That is TWO SPECIFIC SHAPES, not a proof that GA cannot be automated. An
-  # earlier version of this comment claimed "no future edit here can automate GA by
-  # accident", and a reviewer disproved it with one `gh release edit` line that
-  # never typed the subcommand's name — the name-only rule waved it straight
-  # through. A workflow could still reach GA via a script it calls, `gh api`, or a
-  # curl to the REST API. What the guard buys is that the two routes anyone would
-  # actually reach for both fail loudly.
+  # by hand: bin/release's other subcommand, deliberately never named in any
+  # workflow file. bin/tests/auto-beta-guard.sh reddens on that subcommand's name
+  # and on the `gh release edit` flags that move the Latest pointer. Those flags
+  # are NOT spelled out here on purpose: that guard scans this file as text,
+  # comments included.
+  # ⚠️ That is TWO SPECIFIC SHAPES, not a proof that GA cannot be automated. A
+  # workflow could still reach GA via a script it calls, `gh api`, or a curl to
+  # the REST API. What the guard buys is that the two routes anyone would actually
+  # reach for both fail loudly.
   #
   # ONE UNSTATED DEPENDENCY, named here so nobody removes it by accident: the
   # version rule ("greatest existing + patch") is only collision-free because main
-  # is EXEMPT from cancel-in-progress in the concurrency block above. That exemption
-  # serialises main's rounds, so a second merge's checkout already sees the tag the
-  # first one created. Turn main into cancel-in-progress to save runner minutes and
-  # two merges start racing for the same tag. That block is T-ab2a's and this job
-  # did not change it — it just depends on it now.
-  # ⚠️ And the honest cost of that same serialisation: GitHub keeps only ONE
-  # pending run per concurrency group, so with three merges in quick succession the
-  # middle one's run is cancelled — it gets no verdict AND no beta. Its code ships
-  # inside the third one's beta, so nothing is lost, but the claim above that
-  # "every commit on main gets its own answer" does not hold in that case.
+  # is EXEMPT from cancel-in-progress in the concurrency block above. That
+  # exemption serialises main's rounds, so a second merge's checkout already sees
+  # the tag the first one created.
+  # ⚠️ And the honest cost of that serialisation: GitHub keeps only ONE pending
+  # run per concurrency group, so with three merges in quick succession the middle
+  # one's run is cancelled — no verdict AND no beta.
   #
   # WHO ACTUALLY MOVES WHEN THIS FIRES — do not read it wider than this. What is
   # published is a PRERELEASE, and a station only picks one up when BOTH
-  # updater.receive_beta (server/ocserverd/settings.go, default false) and
-  # updater.auto_update (server/ocserverd/auto_update.go, default OFF) are on. For
-  # a default-configured station, nothing here changes which version it runs.
-  # The owner's own machine has both on, and he accepted that consequence
-  # explicitly (ruling 2, 2026-08-05): it will pick up every beta this produces
-  # and there is no button to go back. So there is deliberately NO throttle, no
-  # approval environment and no confirmation gate here — adding one would be
-  # reversing a decision that was already made.
+  # updater.receive_beta and updater.auto_update are on, and both default to off.
+  # The owner's own machine has both on and accepted that consequence explicitly
+  # (ruling 2, 2026-08-05), which is why there is deliberately NO throttle, no
+  # approval environment and no confirmation gate here.
   #
   # WHY macos-15: bin/release publish refuses to run anywhere but darwin/arm64
   # (the asset IS darwin-arm64), it runs the FULL bin/ci.sh inside a staging
   # worktree at the target commit before it builds, and then it builds the real
-  # product. None of that is portable to a Linux runner.
+  # product.
   #
   # WHY needs LISTS EVERY GATE JOB: "the trunk is green" has to mean all of the
   # checks, not the cheap ones. A `needs` that falls behind a newly-added gate
   # would publish on a partially-checked commit, so the guard computes the set
   # difference both ways rather than comparing against a hardcoded list.
-  # ⚠️ EVERY GATE, and deliberately NOTHING ELSE — an earlier cut of this said
-  # "every other job", which was true while the gates were the only other jobs and
-  # became a contradiction the moment notify-main-red landed: notify runs only on
-  # failure, so needing it would mean this job never runs, and needing each other
-  # would be a `needs` cycle GitHub answers with zero scheduled jobs. The guard
-  # therefore differences against the jobs DECLARED as gates (see the marker
-  # comments and the header), and refuses to guess for a job that declares nothing.
+  # ⚠️ EVERY GATE, and deliberately NOTHING ELSE — notify runs only on failure, so
+  # needing it would mean this job never runs, and needing each other would be a
+  # `needs` cycle GitHub answers with zero scheduled jobs.
   auto-beta:
     # oc-job-role: not-a-gate
-    needs: [cloud-gates, macos-e2e, macos-host-gates]
+    needs:
+      - go-checks
+      - frontend-checks
+      - frontend-ct
+      - drift-checks
+      - contract-guards
+      - conformance
+      - hygiene
+      - bin-guards
+      - tcc-anchor
+      - e2e-isolation-guard
+      - macos-e2e
     # Both halves are required, and they exclude different things. The ref test is
     # what holds the line TODAY: without it every push to a working branch would
     # try to publish. The event test excludes any OTHER trigger that also reports
-    # refs/heads/main — and to be honest about what it is worth right now, the
-    # `on:` block above has only pull_request and push, and a pull_request's ref is
-    # refs/pull/N/merge, never refs/heads/main, so nothing currently reaches it.
-    # It is there for the edit that adds a workflow_dispatch or a schedule, which
-    # would otherwise become a publish-on-demand button nobody reviewed as one.
-    # bin/tests/auto-beta-guard.sh requires both, so neither can quietly go.
+    # refs/heads/main — it is there for the edit that adds a workflow_dispatch or
+    # a schedule, which would otherwise become a publish-on-demand button nobody
+    # reviewed as one. bin/tests/auto-beta-guard.sh requires both.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: macos-15
     # A budget, not a measurement: full bin/ci.sh on a hosted macOS runner plus a
-    # real product build plus the upload. Nothing here has been timed on this
-    # runner class yet — if a run ever comes close, replace this with the measured
-    # number rather than doubling it on a hunch.
+    # real product build plus the upload.
     timeout-minutes: 90
     # The ONLY elevated permission in this workflow, and it lives on this job
-    # alone — the workflow default stays read-only, so the three gate jobs cannot
-    # write anything even by mistake. Built-in GITHUB_TOKEN only: no PAT, no
-    # repository secret.
+    # alone — the workflow default stays read-only, so the gate cells cannot write
+    # anything even by mistake. Built-in GITHUB_TOKEN only: no PAT, no secret.
     permissions:
       contents: write
     steps:
-      # BOTH inputs are load-bearing, and fetch-tags is spelled out rather than
-      # inferred. fetch-depth: 0 is needed twice over — bin/release cuts a staging
-      # worktree with `git worktree add --detach <sha>`, which needs the commit's
-      # real history; and bin/next-beta-tag compares against every existing git
-      # tag. fetch-depth: 0 is *believed* to bring tags along, but that is a
-      # reading of actions/checkout's refspec, not something anyone here measured,
-      # so it is stated explicitly instead of relied on: a tagless checkout leaves
-      # `git tag --list` at rc=0 with zero output, which is the exact shape
-      # bin/next-beta-tag now refuses rather than silently computing a version off
-      # GitHub releases alone.
+      # BOTH inputs are load-bearing. fetch-depth: 0 is needed twice over —
+      # bin/release cuts a staging worktree with `git worktree add --detach <sha>`,
+      # which needs the commit's real history; and bin/next-beta-tag compares
+      # against every existing git tag. fetch-tags is spelled out rather than
+      # inferred from fetch-depth, because a tagless checkout leaves
+      # `git tag --list` at rc=0 with zero output.
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
@@ -596,9 +561,8 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      # bin/release runs the full bin/ci.sh, whose hygiene gate treats a missing
-      # gitleaks as a FAILURE rather than a skip (an unrun scanner and a clean
-      # scan are indistinguishable). Same reason macos-host-gates installs it.
+      # bin/release runs the full bin/ci.sh, whose secret scan treats a missing
+      # gitleaks as a FAILURE rather than a skip. Same reason hygiene installs it.
       - name: install gitleaks
         run: brew install gitleaks
 
@@ -606,15 +570,11 @@ jobs:
       # Nothing stops anyone re-running an OLD main run, and the version rule is
       # "greatest existing + patch", so an older tree would be handed a HIGHER tag
       # than the current one. The station's update check admits by SEMVER ORDER,
-      # not by publication date (server/ocserverd/update_check.go), so that older
-      # tree would WIN: behaviour rolls backwards while the version number moves
-      # forwards. The owner's ruling 2 accepted taking every beta — it did not
-      # accept taking a beta whose code is older than what is already live.
+      # not by publication date, so that older tree would WIN: behaviour rolls
+      # backwards while the version number moves forwards.
       #
-      # A stale run SKIPS, loudly, and does not fail: the run is not broken and its
-      # gate jobs are still a real verdict on that commit. A red here would be a
-      # false alarm, and a silent no-op would leave someone wondering why no beta
-      # appeared. So it says so, in the log and in the run summary.
+      # A stale run SKIPS, loudly, and does not fail: the run is not broken and
+      # its gate jobs are still a real verdict on that commit.
       - name: is this commit still main's head (a re-run of an old run must not publish)
         id: freshness
         env:
@@ -633,8 +593,7 @@ jobs:
           fi
 
       # The version number is computed by a script in the repo, not by inline
-      # shell here — see bin/next-beta-tag's header, and ONE SOURCE OF TRUTH at
-      # the top of this file. It is read-only and creates nothing.
+      # shell here. It is read-only and creates nothing.
       - name: compute the next beta tag
         id: tag
         if: steps.freshness.outputs.fresh == 'yes'
@@ -648,26 +607,18 @@ jobs:
           echo "next beta tag: $TAG"
 
       # --target is the commit this run was triggered by, NOT whatever main points
-      # at when the job finally starts: two merges landing close together would
-      # otherwise both publish the later tree. --no-settle is the owner's ruling 1
-      # — see bin/release's header. This command still runs the full CI gate inside
-      # the staging worktree and still reads back what GitHub stored; neither is
-      # skippable.
+      # at when the job finally starts. --no-settle is the owner's ruling 1. This
+      # command still runs the full CI gate inside the staging worktree and still
+      # reads back what GitHub stored; neither is skippable.
       #
       # ⚠️ THE RELEASE IS CREATED BEFORE IT IS VERIFIED, AND NOTHING ROLLS IT BACK.
-      # bin/release uploads (step 6) and only then reads back what GitHub stored
-      # (step 7); there is no `gh release delete` anywhere in it. So a RED job does
-      # not imply "no beta exists" — a failure after the upload leaves a published
-      # prerelease that never passed the read-back. A draft-shaped failure is
-      # invisible to stations, but an incomplete asset set is not: admission only
-      # looks at draft/prerelease. Cleaning that up is a human action; see
-      # docs/dev/README.md.
+      # bin/release uploads and only then reads back what GitHub stored; there is
+      # no `gh release delete` anywhere in it. So a RED job does not imply "no beta
+      # exists". Cleaning that up is a human action; see docs/dev/README.md.
       #
       # Values reach the shell through `env:`, never interpolated into the script
-      # body. Neither value can currently contain anything hostile (the tag is
-      # built by integer formatting; github.sha is 40 hex), so this is closing the
-      # seam rather than fixing a live hole — but "the values happen to be safe
-      # today" is not a property anything enforces, and `env:` needs no such luck.
+      # body — closing the seam rather than fixing a live hole, but "the values
+      # happen to be safe today" is not a property anything enforces.
       - name: publish the beta (prerelease) for this commit
         if: steps.freshness.outputs.fresh == 'yes'
         env:

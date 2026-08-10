@@ -1,0 +1,456 @@
+# officraft — ONE NAMED TARGET PER CHECK, and each check's HOW exists exactly once.
+#
+# WHY THIS FILE EXISTS (T-4d88)
+# Every check in this repo used to be written down twice or three times: once in
+# bin/ci.sh (the local land gate), once in bin/ci-cloud.sh (the Linux subset) and
+# once in bin/ci-macos-host.sh (the macOS-shaped subset). Three copies of one
+# rule is how one copy silently loses a clause — measured, not feared: the
+# e2e isolation-guard suite ran with its truncation protection in ci.sh and
+# WITHOUT it in the cloud, so the one round that guarded everybody else's pull
+# request was the weaker one. The same shape produced a gen-ocapi call with a
+# PATH prefix on one side and not the other, and a staging step that lived in
+# .github/workflows/ci.yml rather than in the subset it was staging for.
+#
+# So: each check is a NAMED TARGET here, its implementation lives in exactly one
+# recipe, and every caller — the local run and every cloud cell — calls the same
+# target. A caller can choose WHICH checks to run; it cannot restate HOW.
+#
+# NAMING IS BY WHAT THE CHECK IS, NEVER BY WHO CALLS IT OR WHERE IT RUNS.
+# There is deliberately no `ci-local-*` / `ci-cloud-*` / `macos-*` prefix: that
+# is what produced the three drifting copies in the first place. The prefixes
+# are the ordinary ones:
+#   lint-*   static analysis over the tree as committed (nothing is generated)
+#   build-*  produce an artifact something else needs
+#   test-*   execute a suite and let its own exit code decide
+#   scan-*   hygiene / secret / integrity scans over files
+#   drift-*  regenerate a COMMITTED generated artifact and require it to come
+#            back byte-identical (the M1 wire freeze and its relatives)
+#
+# THERE IS DELIBERATELY NO AGGREGATE TARGET (no `make ci`, no `make all`).
+# Owner ruling: an aggregate is a second list of what the checks are, and the
+# list nobody watches is the one that drifts. Callers name the targets they want.
+#
+# ORDER IS NOT FREE, and two constraints are load-bearing:
+#   * build-embed-assets MUST precede any `go test` — server/ocserverd's tests
+#     read the STAGED embed (server/ocserverd/assets_test.go asserts on it by
+#     name), and a clean checkout carries .gitkeep-only staging dirs. Declared
+#     as a real prerequisite below rather than left to the caller's memory.
+#   * bin/ci.sh takes its working-copy lock BEFORE calling anything here.
+#     Everything in this file writes in place. bin/tests/ci-lock-guard.sh pins
+#     that ordering with a zero-hit scan of ci.sh's prologue.
+#
+# GNU make 3.81 (what macOS ships, and what the runners have) has no .ONESHELL
+# and no .SHELLFLAGS, so every recipe is ONE shell command built with backslash
+# continuations and opened with `set -euo pipefail`. Do not "tidy" a recipe into
+# separate lines: each line would become its own shell and a failing line in the
+# middle would stop failing the target.
+
+SHELL := /bin/bash
+ROOT := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
+
+# Every recipe opens with this: fail fast, run from the repo root regardless of
+# where make was invoked from, and pull in the single definition of toolchain
+# resolution (bin/lib/toolchain.sh — a missing tool is a FAILURE, never a skip).
+P = set -euo pipefail; cd "$(ROOT)"; source bin/lib/toolchain.sh;
+
+# The macOS-shaped checks refuse to pretend on another platform rather than
+# reporting a green that means nothing. This is a helper, not a check category.
+REQUIRE_DARWIN = [[ "$$(uname -s)" == "Darwin" ]] || { echo "FAIL — this check is macOS-shaped; refusing to pretend on $$(uname -s)" >&2; exit 1; };
+
+# One regenerate-and-byte-compare gate, parameterised: $(1) label, $(2) npm
+# script, $(3) and $(4) the two COMMITTED generated files. The generator writes
+# IN PLACE, so the committed bytes are snapshotted first and RESTORED before
+# failing — a red must not leave a mutated worktree behind. One definition
+# instead of three near-identical blocks, which is exactly how one of them
+# silently loses its restore during a later edit.
+REGEN_PAIR_GATE = $(P) \
+	NPM="$$(oc_npm)"; \
+	a="$(3)"; b="$(4)"; \
+	bak_a="$$(mktemp -t oc-regen-a.XXXXXX)"; bak_b="$$(mktemp -t oc-regen-b.XXXXXX)"; \
+	cp "$$a" "$$bak_a"; cp "$$b" "$$bak_b"; \
+	(cd frontend && "$$NPM" run --silent $(2) >/dev/null); \
+	if ! diff -u "$$bak_a" "$$a" || ! diff -u "$$bak_b" "$$b"; then \
+	  echo "FAIL — $(1) drift: the generated files are STALE vs their source."; \
+	  echo "regenerate + commit: (cd frontend && npm run $(2)) then git add both generated files"; \
+	  cp "$$bak_a" "$$a"; cp "$$bak_b" "$$b"; \
+	  rm -f "$$bak_a" "$$bak_b"; \
+	  exit 1; \
+	fi; \
+	rm -f "$$bak_a" "$$bak_b"
+
+.PHONY: \
+  lint-go-naming lint-go-fmt lint-go-vet lint-uplink-contract lint-effort-vocab \
+  lint-conformance-blackbox lint-ts lint-css-tokens lint-css-token-roles \
+  build-embed-assets build-go build-frontend-deps \
+  test-e2e-isolation-guard test-bin-guards test-go test-frontend-unit \
+  test-frontend-ct test-conformance \
+  scan-tracked-paths scan-secrets scan-tcc-anchor \
+  drift-ocapi drift-schema-ts drift-theme-tokens drift-message-keys drift-fonts
+
+# ===========================================================================
+# build
+# ===========================================================================
+
+# Stage the embed assets (T-e731). seeds/*.md, docs/guide, spec/mcp-catalog.json
+# and the prebuilt ocwarden/ocagent are served EMBED-ONLY (no disk fallback), and
+# a clean checkout carries .gitkeep-only seedsdist/docsdist/bindist — so anything
+# that boots or builds ocserverd reads an EMPTY embed unless this ran first.
+# build-bindist compiles ocwarden/ocagent with a bare `go`, hence the PATH prefix.
+build-embed-assets:
+	@$(P) \
+	GO="$$(oc_go)"; \
+	echo "[build-embed-assets] staging seedsdist + docsdist + bindist"; \
+	PATH="$$(dirname "$$GO"):$$PATH" bash bin/build-seedsdist; \
+	PATH="$$(dirname "$$GO"):$$PATH" bash bin/build-docsdist; \
+	PATH="$$(dirname "$$GO"):$$PATH" bash bin/build-bindist
+
+# Compile every module and DROP the fresh binary (gitignored). Nothing else in
+# the deploy pipeline compiles the Go modules on its own, so without this a
+# change could land — and autodeploy — while failing to compile.
+build-go:
+	@$(P) \
+	GO="$$(oc_go)"; \
+	for gomod in cli/*/go.mod server/*/go.mod; do \
+	  [[ -f "$$gomod" ]] || continue; \
+	  dir="$$(dirname "$$gomod")"; binary="$$(basename "$$dir")"; \
+	  echo "[build-go] go build $$dir"; \
+	  (cd "$$dir" && "$$GO" build -o "$$binary" ./...); \
+	done
+
+# npm ci is its own target because five other targets need node_modules and none
+# of them should be the one that happens to install it.
+build-frontend-deps:
+	@$(P) \
+	NPM="$$(oc_npm)"; \
+	[[ -f frontend/package.json ]] || { echo "FAIL — frontend/package.json missing" >&2; exit 1; }; \
+	echo "[build-frontend-deps] npm ci (frontend)"; \
+	(cd frontend && "$$NPM" ci --silent)
+
+# ===========================================================================
+# lint
+# ===========================================================================
+
+# Naming invariant (root CLAUDE.md §10 folder = module = binary). The binary name
+# is DERIVED from the folder basename, so the first clause is true by
+# construction here; it is kept because the derivation is what makes it true and
+# a future caller passing a name would need it.
+lint-go-naming:
+	@$(P) \
+	for gomod in cli/*/go.mod server/*/go.mod; do \
+	  [[ -f "$$gomod" ]] || continue; \
+	  dir="$$(dirname "$$gomod")"; base="$$(basename "$$dir")"; binary="$$base"; \
+	  echo "[lint-go-naming] $$dir"; \
+	  if [[ "$$base" != "$$binary" ]]; then \
+	    echo "FAIL — naming (CLAUDE.md 10): folder $$dir != binary '$$binary'"; exit 1; \
+	  fi; \
+	  if ! grep -qE "^module $${binary}\$$" "$$dir/go.mod"; then \
+	    echo "FAIL — naming (CLAUDE.md 10): $$dir/go.mod 'module' line is not 'module $$binary'"; exit 1; \
+	  fi; \
+	done
+
+# gofmt -l lists any unformatted file; non-empty = fail. testdata/ holds no *.go,
+# so a plain recursive scan of "." is safe.
+lint-go-fmt:
+	@$(P) \
+	GOFMT="$$(oc_gofmt)"; \
+	for gomod in cli/*/go.mod server/*/go.mod; do \
+	  [[ -f "$$gomod" ]] || continue; \
+	  dir="$$(dirname "$$gomod")"; \
+	  echo "[lint-go-fmt] $$dir"; \
+	  unformatted="$$(cd "$$dir" && "$$GOFMT" -l . 2>/dev/null || true)"; \
+	  if [[ -n "$$unformatted" ]]; then \
+	    echo "FAIL — gofmt: unformatted golang files in $$dir:"; \
+	    printf '  %s\n' $$unformatted; \
+	    echo "fix with: gofmt -w $$dir"; \
+	    exit 1; \
+	  fi; \
+	done
+
+# go vet type-checks *_test.go too, so this covers test-file compilation that
+# `go build ./...` (non-test only) would miss.
+lint-go-vet:
+	@$(P) \
+	GO="$$(oc_go)"; \
+	for gomod in cli/*/go.mod server/*/go.mod; do \
+	  [[ -f "$$gomod" ]] || continue; \
+	  dir="$$(dirname "$$gomod")"; \
+	  echo "[lint-go-vet] $$dir"; \
+	  (cd "$$dir" && "$$GO" vet ./...); \
+	done
+
+# Client-payload contract gate (T-9c8d) plus its own positive control. Both
+# halves move together, always: the selftest is what proves the scanner still
+# bites, and a scanner nobody verified is a green with a hole in it.
+lint-uplink-contract:
+	@$(P) \
+	echo "[lint-uplink-contract] every CLI send is declared, spec-checked and wire-tested"; \
+	python3 bin/uplink-guard.py; \
+	python3 bin/tests/uplink-guard-selftest.py
+
+# Effort-vocabulary contract gate (T-dbd4) plus its positive control, same shape
+# and same reason as the pair above.
+lint-effort-vocab:
+	@$(P) \
+	echo "[lint-effort-vocab] every hand-written copy lists exactly what the server enforces"; \
+	python3 bin/effort-vocab-guard.py; \
+	python3 bin/tests/effort-vocab-guard-selftest.py
+
+# The conformance suite is the language-agnostic black-box definition of the
+# wire; the moment its test code imports an implementation module it stops being
+# implementation-neutral. Static and fast, so it reddens without waiting on the
+# ~16s server boot that test-conformance pays.
+lint-conformance-blackbox:
+	@$(P) \
+	echo "[lint-conformance-blackbox] conformance/ must import no server-implementation module"; \
+	if [[ -d conformance ]]; then \
+	  hits="$$(grep -RInE --include='*.py' '^[[:space:]]*(import|from)[[:space:]]+(backend|service|dal|domain|plumbing)([.[:space:]]|$$)' conformance || true)"; \
+	  if [[ -n "$$hits" ]]; then \
+	    echo "FAIL — conformance black-box violation (suite must stay HTTP-only):"; \
+	    printf '  %s\n' "$$hits"; \
+	    echo "conformance tests speak ONLY HTTP to \$$OC_TARGET_URL (see conformance/CLAUDE.md)."; \
+	    exit 1; \
+	  fi; \
+	fi
+
+# The SECOND line of contract-drift defence: Wire* re-exports the generated
+# OpenAPI schema, so a DTO change surfaces as a tsc error even if drift-schema-ts
+# somehow missed it.
+lint-ts: build-frontend-deps
+	@$(P) \
+	NPM="$$(oc_npm)"; \
+	echo "[lint-ts] tsc --noEmit (frontend typecheck)"; \
+	(cd frontend && "$$NPM" run --silent typecheck)
+
+# A raw colour literal outside theme.css is invisible to the theme switch and to
+# user-defined themes — exactly how a new theme sprouts an un-restyled patch.
+lint-css-tokens: build-frontend-deps
+	@$(P) \
+	NPM="$$(oc_npm)"; \
+	echo "[lint-css-tokens] no raw colour literals outside theme.css (T-16a1)"; \
+	(cd frontend && "$$NPM" run --silent lint:tokens)
+
+# Three tokens each used to carry two semantically opposite jobs; T-081b split
+# them. A re-merge is INVISIBLE in the dark theme and breaks only light-theme
+# users, so it has to fail here instead.
+lint-css-token-roles: build-frontend-deps
+	@$(P) \
+	NPM="$$(oc_npm)"; \
+	echo "[lint-css-token-roles] the T-081b splits stay split"; \
+	(cd frontend && "$$NPM" run --silent lint:token-roles)
+
+# ===========================================================================
+# test
+# ===========================================================================
+
+# The hermetic safety layer that keeps the DESTRUCTIVE e2e suites from wiping a
+# live agent-fleet host.
+#
+# rc IS NOT ENOUGH here. That suite has no per-file discovery, so truncating it —
+# deleting its tail, including the PASS floor that is supposed to notice
+# truncation — leaves a script that exits 0 having asserted almost nothing.
+# MEASURED on b8c3805 (floor block deleted, trailing echo kept): PASS=153 FAIL=0
+# rc=0, last line still the marker, whole gate green. rc and the marker both saw
+# NOTHING. So: rc == 0, AND the last line equals the marker, AND the floor is
+# still statically present. The static assertion lives HERE rather than in the
+# guard for the obvious reason: a check that a file must contain X is worthless
+# if it lives in that file.
+#
+# ⚠️ This is the check that used to exist in two strengths — ci.sh had all three
+# clauses, the cloud round had only rc. The cloud round is the one that guarded
+# everybody else's pull request. One definition, the strong one.
+test-e2e-isolation-guard:
+	@$(P) \
+	echo "[test-e2e-isolation-guard] e2e_test isolation-guard unit tests (hermetic)"; \
+	tg=e2e_test/tests_guard/run.sh; \
+	[[ -x "$$tg" ]] || { echo "FAIL — $$tg missing or not executable (renamed? then this check stopped running)"; exit 1; }; \
+	if ! grep -qE '^PASS_FLOOR=[0-9]+$$' "$$tg" || ! grep -qF '"$$PASS" -lt "$$PASS_FLOOR"' "$$tg"; then \
+	  echo "FAIL — $$tg has no PASS floor any more."; \
+	  echo "That suite has no per-file discovery: delete a case block and it still exits 0"; \
+	  echo "with a smaller PASS count. The floor is the only thing that notices, and the"; \
+	  echo "success marker is echoed from its passing branch — so removing the floor while"; \
+	  echo "leaving a bare marker echo behind would go green on rc and on the marker alike."; \
+	  echo "Restore the floor, do not delete this assertion."; \
+	  exit 1; \
+	fi; \
+	log="$$(mktemp -t oc-tests-guard.XXXXXX)"; \
+	bash "$$tg" 2>&1 | tee "$$log"; \
+	if ! tail -n 1 "$$log" | grep -qFx '[tests_guard] all green'; then \
+	  echo "FAIL — tests_guard exited 0 but its last line is not '[tests_guard] all green'."; \
+	  echo "A green rc with the marker missing means the suite was truncated."; \
+	  tail -n 3 "$$log"; \
+	  rm -f "$$log"; \
+	  exit 1; \
+	fi; \
+	rm -f "$$log"
+
+# The dispatcher for the bin/ guard suites (hermetic PATH shims: no release is
+# created and no station is contacted). Its own cell in the cloud on owner's
+# ruling — it is not part of the ordinary CI classes and its reds should be
+# readable as themselves. macOS-shaped: its Linux reds were BSD/GNU `mktemp -t`
+# semantics and macOS-shaped install.sh fixtures.
+test-bin-guards:
+	@$(P) $(REQUIRE_DARWIN) \
+	echo "[test-bin-guards] bin/tests/run.sh"; \
+	[[ -x bin/tests/run.sh ]] || { echo "FAIL — bin/tests/run.sh missing or not executable (renamed? then this check stopped running)"; exit 1; }; \
+	bash bin/tests/run.sh
+
+# -count=1 is the documented way to DEFEAT go's test-result cache and it is
+# load-bearing for the whole meaning of this check (T-bedc): without it go
+# replays a previous PASS whenever the package's inputs hash the same, which
+# certifies a run that DID NOT HAPPEN and structurally hides flakes.
+# bin/tests/go-test-nocache-guard.sh pins this flag.
+test-go: build-embed-assets
+	@$(P) \
+	GO="$$(oc_go)"; \
+	for gomod in cli/*/go.mod server/*/go.mod; do \
+	  [[ -f "$$gomod" ]] || continue; \
+	  dir="$$(dirname "$$gomod")"; \
+	  echo "[test-go] go test -count=1 $$dir"; \
+	  (cd "$$dir" && "$$GO" test -count=1 ./...); \
+	done
+
+# vitest runs in jsdom, which applies no layout engine — see test-frontend-ct for
+# the half this one is structurally blind to.
+test-frontend-unit: build-frontend-deps
+	@$(P) \
+	NPM="$$(oc_npm)"; \
+	echo "[test-frontend-unit] vitest run (frontend unit suite)"; \
+	(cd frontend && "$$NPM" run --silent test)
+
+# `test:ct` is TWO Playwright configs: the CT visual guards against a dev server,
+# then the paint guards against a REAL `vite build` output served over HTTP. The
+# build is part of the check, not setup.
+#
+# Browser resolution: point Playwright at the machine's shared cache explicitly
+# rather than relying on default discovery (minimal-PATH callers). The install
+# probe's `|| true` keeps an offline run from failing on the probe; a genuinely
+# absent browser then fails the test run itself — never a silent skip.
+#
+# If a CT guard reddens on a runner and is green on a dev Mac, the fix is the
+# font environment, NEVER a looser threshold.
+test-frontend-ct: build-frontend-deps
+	@$(P) $(REQUIRE_DARWIN) \
+	NPM="$$(oc_npm)"; \
+	echo "[test-frontend-ct] real-browser CT layout guards + paint guards"; \
+	export PLAYWRIGHT_BROWSERS_PATH="$${PLAYWRIGHT_BROWSERS_PATH:-$$HOME/Library/Caches/ms-playwright}"; \
+	(cd frontend && npx --no-install playwright install chromium >/dev/null 2>&1 || true); \
+	(cd frontend && "$$NPM" run --silent test:ct)
+
+# The full HTTP-only behaviour suite: boots a throwaway ocserverd on a
+# kernel-assigned port against a throwaway SQLite, runs the suite, tears down.
+# It builds ocserverd from source, so it needs the staged embed too.
+# run.sh shells out to a BARE `go`, hence the PATH prefix and GOTOOLCHAIN.
+test-conformance: build-embed-assets
+	@$(P) \
+	GO="$$(oc_go)"; \
+	echo "[test-conformance] full black-box behaviour suite (isolated ocserverd)"; \
+	if ! GOTOOLCHAIN="$${GOTOOLCHAIN:-auto}" PATH="$$(dirname "$$GO"):$$PATH" conformance/run.sh --target go; then \
+	  echo "FAIL — conformance suite went red: the frozen wire drifted from live behaviour"; \
+	  echo "(manifest/spec/RBAC) or a behaviour pin broke."; \
+	  echo "Reproduce: bash conformance/run.sh --target go"; \
+	  exit 1; \
+	fi
+
+# ===========================================================================
+# scan
+# ===========================================================================
+
+# A HARD gate over TRACKED files. .gitignore already excludes these, but a
+# `git add -f` or an edited .gitignore can slip junk in; this re-checks what is
+# ACTUALLY tracked, independent of .gitignore.
+scan-tracked-paths:
+	@$(P) \
+	source bin/lib/tracked-path-denylist.sh; \
+	echo "[scan-tracked-paths] tracked-file path denylist"; \
+	hits="$$(tracked_path_denylist_hits)"; \
+	if [[ -n "$$hits" ]]; then \
+	  echo "FAIL — forbidden files are tracked (path denylist):"; \
+	  printf '  %s\n' $$hits; \
+	  echo "remove with: git rm --cached <file>   (and confirm .gitignore covers it)"; \
+	  exit 1; \
+	fi
+
+# The other half of hygiene: file CONTENTS. `dir` scans the tree, --config pins
+# the allowlist policy. A missing .gitleaks.toml is a refusal, not a default-rule
+# scan reported as a pass.
+scan-secrets:
+	@$(P) $(REQUIRE_DARWIN) \
+	GITLEAKS="$$(oc_gitleaks)"; \
+	[[ -f .gitleaks.toml ]] || { echo "FAIL — .gitleaks.toml missing — refusing to scan with default rules and call it a pass" >&2; exit 1; }; \
+	echo "[scan-secrets] gitleaks content scan"; \
+	"$$GITLEAKS" dir . --no-banner --config .gitleaks.toml
+
+# The one owner-approved committed binary (the TCC identity anchor). Its manifest
+# binds a reviewable source snapshot to the checked-in executable, so this fails
+# closed whenever the source moves without an explicit binary refresh. Its own
+# cell in the cloud on owner's ruling.
+scan-tcc-anchor:
+	@$(P) $(REQUIRE_DARWIN) \
+	echo "[scan-tcc-anchor] bin/check-officraft-dist"; \
+	[[ -x bin/check-officraft-dist ]] || { echo "FAIL — bin/check-officraft-dist missing or not executable (renamed? then this check stopped running)"; exit 1; }; \
+	bin/check-officraft-dist
+
+# ===========================================================================
+# drift — regenerate a committed artifact, require it back byte-identical
+# ===========================================================================
+#
+# ⚠️ THIS CLASS IS THE TOOLCHAIN-SENSITIVE ONE. Every gate here asserts
+# "regenerating produces byte-identical output", so a generator that behaves
+# differently on a different Node/Go build reddens while the CODE IS FINE. That
+# is why the workflow pins go + node to the dev machine's exact versions; loosen
+# those pins and this class is where it breaks first.
+
+# The wire-freeze gate on the SERVER's REST surface. ocapi_gen.go is a COMMITTED
+# generated artifact; a spec change landed without re-running bin/gen-ocapi (or a
+# hand-edit of the generated file) compiles fine and ships a drifted wire.
+# Regenerate to a temp file — the committed file is never touched.
+# The .go suffix on the temp file and the PATH prefix were one-per-copy before
+# T-4d88; this keeps both.
+drift-ocapi:
+	@$(P) \
+	GO="$$(oc_go)"; \
+	echo "[drift-ocapi] regenerate ocapi_gen.go from spec/openapi.json + diff committed"; \
+	fresh="$$(mktemp -t oc-fresh-ocapi.XXXXXX.go)"; \
+	PATH="$$(dirname "$$GO"):$$PATH" bin/gen-ocapi "$$fresh" >/dev/null; \
+	if ! diff -u server/ocserverd/ocapi_gen.go "$$fresh"; then \
+	  echo "FAIL — gen-ocapi drift: server/ocserverd/ocapi_gen.go is STALE vs spec/openapi.json."; \
+	  echo "wire 已凍結 (M1): spec-first — if the spec change IS approved, regenerate + commit:"; \
+	  echo "  bash bin/gen-ocapi && git add server/ocserverd/ocapi_gen.go"; \
+	  rm -f "$$fresh"; \
+	  exit 1; \
+	fi; \
+	rm -f "$$fresh"
+
+# The wire-freeze gate on the CLIENT surface: feed the FROZEN spec through the
+# SAME generator the committed schema was made with.
+drift-schema-ts: build-frontend-deps
+	@$(P) \
+	echo "[drift-schema-ts] regenerate schema.ts from spec/openapi.json + diff committed"; \
+	fresh="$$(mktemp -t oc-fresh-schema.XXXXXX)"; \
+	(cd frontend && npx --no-install openapi-typescript "$(ROOT)/spec/openapi.json" -o "$$fresh"); \
+	if ! diff -u frontend/src/api/generated/schema.ts "$$fresh"; then \
+	  echo "FAIL — contract drift: frontend/src/api/generated/schema.ts is STALE vs spec/openapi.json."; \
+	  echo "regenerate + commit: (cd frontend && npm run gen:api)"; \
+	  rm -f "$$fresh"; \
+	  exit 1; \
+	fi; \
+	rm -f "$$fresh"
+
+# styles/theme.css is the single token contract; the user-theme validators read a
+# GENERATED whitelist of its --color-* names (T-16a1 P2).
+drift-theme-tokens: build-frontend-deps
+	@echo "[drift-theme-tokens] regenerate from theme.css + diff committed (T-16a1 P2)"
+	@$(call REGEN_PAIR_GATE,theme-token whitelist,gen:tokens,frontend/src/styles/themeTokens.generated.ts,server/ocserverd/theme_colornames_gen.go)
+
+# locales/en.ts is the single message-code contract; the wording-overlay
+# validators read a GENERATED whitelist of its leaf-string key paths (T-16a1 P3).
+drift-message-keys: build-frontend-deps
+	@echo "[drift-message-keys] regenerate from locales/en.ts + diff committed (T-16a1 P3)"
+	@$(call REGEN_PAIR_GATE,message-key whitelist,gen:msgkeys,frontend/src/i18n/messageKeys.generated.ts,server/ocserverd/message_keys_gen.go)
+
+# themeFonts.source.json is the single font contract; the theme-bundle `fonts`
+# validators read a GENERATED whitelist of its --font-* names and its closed
+# safe-family stack set (T-16a1 P4).
+drift-fonts: build-frontend-deps
+	@echo "[drift-fonts] regenerate from themeFonts.source.json + diff committed (T-16a1 P4)"
+	@$(call REGEN_PAIR_GATE,font whitelist,gen:fonts,frontend/src/styles/themeFonts.generated.ts,server/ocserverd/theme_fonts_gen.go)

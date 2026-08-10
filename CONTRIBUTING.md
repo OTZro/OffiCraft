@@ -74,9 +74,11 @@ it never runs on a pull request at all. "No gate needs a secret" is the claim;
 
 What the gates cover: unit tests, the regenerate-and-compare consistency gates,
 the black-box conformance suite, the real-browser end-to-end suite, and the
-host-shaped guard suites. The authoritative list of what runs is in
-`bin/ci-cloud.sh` and `bin/ci-macos-host.sh`, not in the workflow file and not
-here — please read those scripts rather than trusting a list in prose.
+host-shaped guard suites. The authoritative definition of every check is the repo-root `Makefile` — one
+named target per check, each implemented exactly once — not the workflow file
+and not here. Read the targets rather than trusting a list in prose:
+`grep -nE '^[a-z][a-z0-9-]*:' Makefile`, and `grep -n 'make ' .github/workflows/ci.yml`
+for which cell calls which.
 
 **The bar for merging:** every check on the pull request has reached a
 conclusion, and every check is `success` — except for the jobs that only run
