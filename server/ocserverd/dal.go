@@ -115,6 +115,23 @@ type Member struct {
 	// rebirth after it. Unlike DesiredMachineID it never stalls a worker: an
 	// undispatchable last landing falls through to the configured chain.
 	LastMachineID string
+	// SessionBootTS is the durable SESSION-START anchor (T-4235,
+	// migrations/00051): unix seconds of the moment this session's FIRST SSE
+	// connect landed, 0 when no session is anchored (offline, or the last one
+	// ended at a real spawn/stop boundary). It is the DURABLE twin of the gauge's
+	// boot_ts, written and cleared by the SAME two functions (onFirstConnect /
+	// clearSessionBootTS) so the two stores can never drift apart.
+	//
+	// WHY IT HAS TO BE DURABLE: the gauge is in-memory by contract and a station
+	// re-exec empties it, but the AGENTS survive that re-exec — they just
+	// reconnect. Without this column that reconnect stamped a brand-new anchor,
+	// so a session alive for hours read as seconds old and the min-liveness floor
+	// refused its restart_self. This column is what the reconnect RESTORES the
+	// gauge from, so all three boot-storm consumers (restart_self,
+	// stampContextHighRecycle, autoHandoverWorker) see the real session age.
+	//
+	// It is NOT on the wire — no DTO field, no spec change.
+	SessionBootTS float64
 	WakingSince   float64
 	StoppingSince float64
 	StoppedSince  float64
@@ -158,7 +175,7 @@ const (
 
 const memberColumns = `id, name, kind, role_key, runtime, model, actual_model, effort,
 	actual_runtime, actual_effort,
-	desired_state, desired_machine_id, last_machine_id,
+	desired_state, desired_machine_id, last_machine_id, session_boot_ts,
 	waking_since, stopping_since, stopped_since, refocus_since, refocus_op, banked_cost,
 	last_op, last_op_ok, last_op_log, last_op_reason, last_op_at, roster_status,
 	linked_task_id, codename, created_ts, released_ts, activated_ts,
@@ -171,7 +188,7 @@ func scanMember(row interface{ Scan(...any) error }) (Member, error) {
 	err := row.Scan(
 		&m.ID, &m.Name, &m.Kind, &m.RoleKey, &m.Runtime, &m.Model, &m.ActualModel, &m.Effort,
 		&m.ActualRuntime, &m.ActualEffort,
-		&m.DesiredState, &m.DesiredMachineID, &m.LastMachineID,
+		&m.DesiredState, &m.DesiredMachineID, &m.LastMachineID, &m.SessionBootTS,
 		&m.WakingSince, &m.StoppingSince, &m.StoppedSince, &m.RefocusSince, &m.RefocusOp,
 		&m.BankedCost,
 		&m.LastOp, &lastOpOK, &m.LastOpLog, &m.LastOpReason, &m.LastOpAt, &m.RosterStatus,
@@ -279,7 +296,7 @@ func (d *DAL) PutMember(m Member) error {
 	}
 	_, err := d.wdb.Exec(`
 		INSERT INTO member (`+memberColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			name = excluded.name, kind = excluded.kind,
 			role_key = excluded.role_key, runtime = excluded.runtime,
@@ -289,6 +306,7 @@ func (d *DAL) PutMember(m Member) error {
 			effort = excluded.effort, desired_state = excluded.desired_state,
 			desired_machine_id = excluded.desired_machine_id,
 			last_machine_id = excluded.last_machine_id,
+			session_boot_ts = excluded.session_boot_ts,
 			waking_since = excluded.waking_since,
 			stopping_since = excluded.stopping_since,
 			stopped_since = excluded.stopped_since,
@@ -307,13 +325,35 @@ func (d *DAL) PutMember(m Member) error {
 			activated_ts = excluded.activated_ts`,
 		m.ID, m.Name, m.Kind, m.RoleKey, NormalizeRuntime(m.Runtime), m.Model, m.ActualModel, m.Effort,
 		m.ActualRuntime, m.ActualEffort,
-		m.DesiredState, m.DesiredMachineID, m.LastMachineID,
+		m.DesiredState, m.DesiredMachineID, m.LastMachineID, m.SessionBootTS,
 		m.WakingSince, m.StoppingSince, m.StoppedSince, m.RefocusSince, m.RefocusOp,
 		m.BankedCost,
 		m.LastOp, lastOpOK, m.LastOpLog, m.LastOpReason, m.LastOpAt, m.RosterStatus,
 		linkedTaskID, codename, m.CreatedTS, m.ReleasedTS, m.ActivatedTS,
 		m.AvatarAttachmentID,
 	)
+	return err
+}
+
+// SetMemberSessionBootTS writes ONLY member.session_boot_ts (T-4235). It is a
+// targeted column UPDATE rather than a PutMember round-trip for two reasons,
+// both load-bearing:
+//
+//   - NO SSE DELTA. The column is deliberately not on the wire (no DTO field),
+//     so a member delta on the SSE first-connect edge and on every session
+//     boundary would be pure churn — and the connect edge is the busiest edge
+//     the fleet has. Two tests catch this directly if it regresses
+//     (TestOutsourceWorkerSSEEdgesPublishCanonicalPresence,
+//     TestEventsHandler_DeliveredWardenCommandsLeaveNoResidue).
+//   - NO WHOLE-ROW WRITE. The callers (onFirstConnect / clearSessionBootTS) run
+//     inside the reconcile tick and on the SSE edge, next to HTTP faces that
+//     write member rows without holding reconcileMu. A whole-row write from
+//     either of those would put a snapshot back over whatever landed meanwhile;
+//     touching exactly one column cannot.
+//
+// A missing row is a clean no-op (0 rows affected, no error).
+func (d *DAL) SetMemberSessionBootTS(id string, ts float64) error {
+	_, err := d.wdb.Exec(`UPDATE member SET session_boot_ts = ? WHERE id = ?`, ts, id)
 	return err
 }
 

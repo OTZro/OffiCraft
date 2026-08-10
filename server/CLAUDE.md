@@ -537,6 +537,19 @@ owner 原話三句:「tasks 也一次拿太多了 說真的我們在意的只有
 
 - **mutant 驗證紀錄**：`docs/design/worker-panel-parity-mutants.md`（13 支，含 3 支第一輪存活、補測試後才紅的）。
 
+## session 起算錨點是持久的,不是純記憶體(T-4235)
+
+⚠️ **本節是新增,不是改寫**:在 T-4235 之前,`boot_ts` 這個 session 錨點在本檔**一個字都沒有**(實測 grep:`boot_ts` / `T-8fb2` / `session_boot` 三個詞在改動前的本檔命中 0;陽性對照:同一份 grep 對 `stampLandedMachine` 命中 2、對 `api_infra.go` 命中 6,所以查法是活的)。**別把「本檔以前沒說」讀成「以前也是持久的」**——改動前它確實只活在記憶體裡,下面第一段講的就是那個舊行為。
+
+- **舊行為與缺陷**:session 起算錨點 `boot_ts` 只活在 in-memory 的 context gauge(`newMemStore`),蓋在 SSE first-connect(`api_infra.go onFirstConnect`)、清在 spawn/stop 邊界(`clearSessionBootTS`)。gauge **依契約**在每次 server re-exec 被清空,而 **agent 不跟著 server 死**:它們的 SSE 串流只是斷掉、幾秒後重連,那次重連找不到錨點就蓋了一個**全新的 now**。一個活了幾小時的 session 因此讀成幾秒大。
+- 🔴 **一個 gauge、三個消費者,全部經 `gaugeSecsSinceBoot`**:`restart_self` 的最低存活門檻(600s 的 respawn-storm 擋門)、`stampContextHighRecycle`、`autoHandoverWorker`。第一個是**擋門**(誤擋:升級後十分鐘內沒有任何存活 agent 自我重啟得了,三次現場樣本 198s / 24s / 201s),後兩個是**抑制器**(誤抑:同一段時間內沒有成員自動回收、沒有 worker 自動換手,不管超線多遠)。**保護方向是反的**——它對剛升級完、最需要重開來吃到新工具目錄的長命 session 打得最兇。舊註解寫的「錨點不見時 fail-open」從來沒有生效過:讓 caller 算 online 的那次重連,正是重蓋錨點的那一次。
+- **修法(比照 T-98f4 `last_machine_id`,同一條 connect edge、同一個理由:session 還活著這件事必須活得比觀察它的行程久)**:`migrations/00051` 加 `member.session_boot_ts`(constant-DEFAULT ADD COLUMN),`onFirstConnect` 把「已經錨定了嗎?」改成問**持久那一列**(`anchorSessionBoot`)。re-exec 後的重連**從 durable 值還原 gauge**,不再鑄新的 now,三個消費者因此立刻看回真實 session 年齡。P7d 的 worker fold 兩半(`workerFromMember` / `memberFromWorker`)都帶這一欄,所以外包寫入不會把活 session 的錨點歸零。
+- 🔴 **反方向沒有被放寬,而且是這個形狀唯一會靜默壞掉的方向**:`clearSessionBootTS` 在每個 session 邊界**同時清兩個 store**,而寫兩個 store 的就是同一對函式,兩邊不可能漂到對「有沒有錨定」各說各話。真正的新 session 仍然讀成幾秒大,`restart_self` 仍然回 429。
+- **刻意不上 wire**:沒有 DTO 欄位、沒有 spec 變更。三個消費者都在 gauge 那一側讀,所以修在 connect edge 一個 seam 就夠。
+- **durable 那半是單欄 UPDATE(`SetMemberSessionBootTS`)、不是 `PutMember` 往返**:欄位不在 wire 上,走 `PutMember` 會在全機隊最忙的那條 edge 上發出純雜訊的 member delta(既有兩條測試直接抓這件事),而只碰一欄也不可能把一個 tick 前的快照蓋回一筆併發的 HTTP 寫入。
+- **哨兵**:`api_infra_session_anchor_t4235_test.go`——測試真的做一次 re-exec(把 `s.gauge` 換成空的 `memStore`)再跑真的 `onFirstConnect`,兩個方向都釘:活過升級的放行、新生的仍被拒、跨過 session 邊界重生的即使有 re-exec 遮掩也仍被拒。
+- ⚠️ **本包的 migration 編號從 `00050` 改成 `00051`**:`00050` 已被 T-f059 的 `00050_scheduled_message.sql` 佔走。照上面〈外包 worker 的落點黏性〉那條規則辦——**取當前主幹最大編號 +1、不補 gap**(撞號是安靜的 schema 缺漏,跳號很吵、擋在起站前)。
+
 ## 正職與外包的刻意不對稱（T-072b）
 
 - `reconcileDecide` 只共用 desired×observed 的純決策。member 的觀測是完整的 member projection；worker 在進核前有 worker lifecycle 的遮罩與狀態換算，不能為了形式對齊而合併 producer 或抹平這些輸入差異。

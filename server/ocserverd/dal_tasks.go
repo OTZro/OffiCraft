@@ -887,6 +887,14 @@ type OutsourceWorker struct {
 	// currently take the worker. Written only by the SSE first-connect edge; no
 	// owner verb writes it directly.
 	LastMachineID string
+	// SessionBootTS mirrors member.session_boot_ts (T-4235, migrations/00051):
+	// the durable anchor for when this worker's CURRENT session first connected,
+	// 0 when no session is anchored. Carried through workerFromMember /
+	// memberFromWorker for the SAME reason StoppingSince/StoppedSince are — the
+	// projection rebuilds a Member from scratch, so a column it forgets is ZEROED
+	// by the next outsource write, and zeroing this one hands a live hours-old
+	// session back to the boot-storm guard as "just booted".
+	SessionBootTS float64
 	// RefocusSince is the in-flight context-handover marker (T-32e1,
 	// migrations/00019), the worker twin of member.RefocusSince: >0 while a
 	// refocus (owner 換手 button OR the context-high auto-handover) is mid-flight,
@@ -968,6 +976,7 @@ func workerFromMember(m Member) OutsourceWorker {
 		LastOpAt:           m.LastOpAt,
 		DesiredMachineID:   m.DesiredMachineID,
 		LastMachineID:      m.LastMachineID,
+		SessionBootTS:      m.SessionBootTS,
 		RefocusSince:       m.RefocusSince,
 		RefocusOp:          m.RefocusOp,
 		StoppingSince:      m.StoppingSince,
@@ -1014,6 +1023,7 @@ func memberFromWorker(w OutsourceWorker) Member {
 		DesiredState:       w.DesiredState,
 		DesiredMachineID:   w.DesiredMachineID,
 		LastMachineID:      w.LastMachineID,
+		SessionBootTS:      w.SessionBootTS,
 		RefocusSince:       w.RefocusSince,
 		RefocusOp:          w.RefocusOp,
 		StoppingSince:      w.StoppingSince,

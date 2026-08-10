@@ -333,6 +333,13 @@ func (s *apiServer) sseStopGateRefusal(memberID string) string {
 // edge-flapping agent can neither self-rescue nor be auto-handed-over. A
 // genuinely new session (respawn / relocate / recycle) re-stamps because the
 // spawn/stop boundary cleared boot_ts first (clearSessionBootTS).
+//
+// 🔴 T-4235: "stamped IFF absent" is now decided against the DURABLE anchor
+// (member.session_boot_ts), not against the gauge — see anchorSessionBoot. The
+// gauge is emptied by contract on a station re-exec while the AGENTS survive it,
+// so asking the gauge "is this session already anchored?" answered "no" for
+// every live session the instant the station upgraded, and the reconnect minted
+// a fresh anchor. The whole fleet then read as seconds old for ten minutes.
 func (s *apiServer) onFirstConnect(memberID string) {
 	// Worker presence is projected from this connection edge. The owner's live
 	// worker list subscribes to outsource_worker, so fan its canonical delta
@@ -344,15 +351,75 @@ func (s *apiServer) onFirstConnect(memberID string) {
 			fmt.Fprintf(os.Stderr, "[sse] first-connect waking clear failed for %q: %v\n", memberID, err)
 		}
 	}
+	s.anchorSessionBoot(memberID)
+}
+
+// anchorSessionBoot is the T-4235 session-anchor resolution, run on the SSE
+// first-connect edge. It keeps the gauge's boot_ts — which every consumer still
+// reads — in agreement with the durable member.session_boot_ts, and it is the
+// ONLY place that decides whether this connect begins a new session:
+//
+//	durable > 0   this session is ALREADY anchored. Two shapes reach here and
+//	              both must leave the anchor where it is: a mid-session SSE flap
+//	              (the gauge still holds the same value → nothing to do), and a
+//	              server re-exec (the gauge is EMPTY → RESTORE it from the
+//	              durable value, never mint a new "now"). The restore is the
+//	              whole fix: it is what makes the min-liveness floor, the
+//	              context-high auto-recycle suppressor, and the worker
+//	              auto-handover loop-break all see the real session age again,
+//	              immediately, for sessions that were already running when the
+//	              station upgraded.
+//	durable == 0  no session is anchored — the last one ended at a real
+//	              spawn/stop boundary (clearSessionBootTS zeroes BOTH stores) or
+//	              this entity has never connected. THIS is a session birth, so
+//	              stamp a fresh anchor in both stores. The respawn-storm guard is
+//	              therefore not weakened: a genuinely new session still reads
+//	              seconds old and restart_self still answers 429.
+//
+// A pre-existing gauge boot_ts with no durable twin (a session that was already
+// anchored when this column shipped, or a durable write that failed) is ADOPTED
+// rather than overwritten: the anchor may only ever move backwards in time on
+// this edge, never forwards, because forwards is exactly the defect.
+//
+// Best-effort on the durable half — a storage fault must not kill the stream
+// that just opened; the gauge half still carries the session within this
+// process, which is the pre-T-4235 behaviour.
+func (s *apiServer) anchorSessionBoot(memberID string) {
 	entry := s.gauge.Get(memberID)
 	if entry == nil {
 		entry = map[string]any{}
 	}
-	if _, ok := gaugeBootTS(entry); ok {
-		return // session already anchored — a reconnect must not reset it
+	gaugeTS, gaugeHas := gaugeBootTS(entry)
+
+	m, err := s.dal.GetMember(memberID)
+	if err != nil || m == nil {
+		// No durable row to anchor against (an id the roster does not know).
+		// Degrade to the gauge-only rule rather than refusing to anchor at all.
+		if gaugeHas {
+			return
+		}
+		entry["boot_ts"] = nowSecs()
+		s.gauge.Set(memberID, entry)
+		return
 	}
-	entry["boot_ts"] = nowSecs()
+
+	if m.SessionBootTS > 0 {
+		if !gaugeHas || gaugeTS != m.SessionBootTS {
+			entry["boot_ts"] = m.SessionBootTS
+			s.gauge.Set(memberID, entry)
+		}
+		return
+	}
+
+	ts := nowSecs()
+	if gaugeHas {
+		ts = gaugeTS
+	}
+	entry["boot_ts"] = ts
 	s.gauge.Set(memberID, entry)
+	if err := s.dal.SetMemberSessionBootTS(memberID, ts); err != nil {
+		fmt.Fprintf(os.Stderr, "[sse] session-boot anchor persist failed for %q: %v\n", memberID, err)
+	}
 }
 
 // stampLandedMachine records the machine a session actually connected from
@@ -421,16 +488,33 @@ func (s *apiServer) stampLandedMachine(memberID, machineID string) {
 // absent, so clearing here is what makes the next connect re-stamp a fresh
 // anchor: "reconnect keeps boot_ts, respawn resets it" (T-8fb2). Best-effort; a
 // missing entry or missing key is a clean no-op.
+//
+// 🔴 T-4235: it clears BOTH stores, and the durable half is NOT guarded by the
+// gauge half. Zeroing member.session_boot_ts here is the ONLY thing that makes
+// the next connect stamp a fresh anchor, so the moment these two stores can
+// disagree about "is a session anchored?" the respawn-storm guard is weakened in
+// the dangerous direction — a genuinely new session would inherit its
+// predecessor's hours-old anchor and be waved through. Keeping the write and the
+// clear inside this one pair of functions is what makes drift impossible; do not
+// add a third writer.
 func (s *apiServer) clearSessionBootTS(id string) {
-	entry := s.gauge.Get(id)
-	if entry == nil {
-		return
+	if entry := s.gauge.Get(id); entry != nil {
+		delete(entry, "boot_ts")
+		// Codex compaction count belongs to the old App Server thread. Carrying
+		// it over a refocus would immediately recycle the fresh replacement
+		// session.
+		delete(entry, "compaction_count")
+		s.gauge.Set(id, entry)
 	}
-	delete(entry, "boot_ts")
-	// Codex compaction count belongs to the old App Server thread. Carrying it
-	// over a refocus would immediately recycle the fresh replacement session.
-	delete(entry, "compaction_count")
-	s.gauge.Set(id, entry)
+	// Write-on-change: the clear runs on every session boundary, and an
+	// unconditional UPDATE would cost a row write per boundary for nothing.
+	m, err := s.dal.GetMember(id)
+	if err != nil || m == nil || m.SessionBootTS == 0 {
+		return // no durable anchor to drop — a clean no-op, and zero row writes
+	}
+	if err := s.dal.SetMemberSessionBootTS(id, 0); err != nil {
+		fmt.Fprintf(os.Stderr, "[sse] session-boot anchor clear failed for %q: %v\n", id, err)
+	}
 }
 
 // onLastDisconnect handles the SSE last-disconnect edge for an agent
