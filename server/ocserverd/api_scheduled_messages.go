@@ -99,11 +99,17 @@ func (s *apiServer) HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessa
 	//
 	// 🔴 Compared by VALUE against the row as it stands, not by which fields the
 	// caller happened to send. Re-aiming on mere presence means a caller that
-	// PATCHes the whole form back — which is what every "save" button eventually
-	// does — moves the cursor to now on every save even when nothing about the
-	// timing changed. Land one of those in the window between a slot elapsing and
-	// the next tick (up to a minute) and that delivery is swallowed permanently,
-	// with no error, no log line and a card that looks entirely normal.
+	// PATCHes the whole form back moves the cursor to now on every save even when
+	// nothing about the timing changed. Land one of those in the window between a
+	// slot elapsing and the next tick (up to a minute) and that delivery is
+	// swallowed permanently, with no error, no log line and a card that looks
+	// entirely normal.
+	//
+	// This is no longer hypothetical: the card's per-row editor sends the whole
+	// form on every save, so this comparison is the only thing standing between a
+	// no-op save and a swallowed delivery. scheduled_message_patch_realign_test.go
+	// pins both directions (unchanged form ⇒ cursor untouched; changed timing ⇒
+	// re-aimed).
 	reAimed := (body.Cadence != nil && string(*body.Cadence) != m.Cadence) ||
 		(body.DayOfWeek != nil && *body.DayOfWeek != m.DayOfWeek) ||
 		(body.DayOfMonth != nil && *body.DayOfMonth != m.DayOfMonth) ||
