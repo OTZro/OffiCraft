@@ -1665,6 +1665,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/members/{member_id}/scheduled-messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List one member's scheduled messages.
+         * @description List a member's scheduled messages (T-f059), oldest→newest. Each row carries the whole schedule — label, body, cadence, wall-clock slot and timezone, plus the enabled/disabled toggle — and `last_fired_slot`, the identifier of the slot already delivered, so the panel can show exactly where the cursor stands. 404 if the member is absent or soft-removed.
+         */
+        get: operations["handle_list_scheduled_messages_api_members__member_id__scheduled_messages_get"];
+        put?: never;
+        /**
+         * Create a scheduled message on one member.
+         * @description Create a scheduled message on a member (T-f059). When a slot comes due the server delivers `body` down the ORDINARY chat path — live if the member is online, the durable mailbox otherwise — from the synthetic sender `sched:<schedule_id>`, with `meta.scheduled` naming the schedule and the slot. The delivery cursor is initialised to the slot most recently elapsed, so a schedule created at 10:00 for `daily` 09:00 does not fire today. The recipient may be an assistant OR an `ow-` outsource worker. A missing/blank `body`, a cadence outside the set, or an out-of-range slot field is a 422; the member absent is a 404.
+         */
+        post: operations["handle_create_scheduled_message_api_members__member_id__scheduled_messages_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/members/{member_id}/scheduled-messages/{schedule_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete one scheduled message.
+         * @description Permanently remove a scheduled message (T-f059) — the row is deleted and can never fire again. Distinct from `status: disabled`, which is the reversible suspend; this is the irreversible one. Returns the row as it stood at deletion. 404 if the member or the schedule is absent.
+         */
+        delete: operations["handle_delete_scheduled_message_api_members__member_id__scheduled_messages__schedule_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update one scheduled message (including enable/disable).
+         * @description Edit a scheduled message (T-f059): flip `status` (enable/disable — the reversible suspend, effective from the next tick) and/or edit the label, body, cadence, wall-clock slot or timezone. Only supplied fields change; `id` and `member_id` are immutable. Re-aiming the schedule moves the delivery cursor to the slot most recently elapsed, so an edit never fires the slot it crosses. 404 if the member or the schedule is absent; a bad cadence, a bad status or an out-of-range slot field is a 422.
+         */
+        patch: operations["handle_update_scheduled_message_api_members__member_id__scheduled_messages__schedule_id__patch"];
+        trace?: never;
+    };
     "/api/members/{member_id}/webhooks": {
         parameters: {
             query?: never;
@@ -6299,6 +6347,186 @@ export interface components {
             role: string;
         };
         /**
+         * ScheduledMessageCreateDTO
+         * @description Create one scheduled message on a member (T-f059 定期訊息). `body` and `cadence` are REQUIRED; every other field has a server default. `cadence` selects which day field applies — `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither — while `hour`/`minute`/`timezone` fix the wall-clock slot. The delivery cursor is initialised to the slot most recently elapsed at creation time, so a schedule created at 10:00 for `daily` 09:00 does not fire today. The recipient may be an assistant OR an `ow-` outsource worker — the same recipient rule ordinary chat uses.
+         */
+        ScheduledMessageCreateDTO: {
+            /**
+             * Body
+             * @description The message text delivered to the member when a slot comes due. It is sent verbatim, as an ordinary chat message.
+             */
+            body: string;
+            /**
+             * Cadence
+             * @description How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither.
+             * @enum {string}
+             */
+            cadence: "daily" | "weekly" | "monthly";
+            /**
+             * Day Of Month
+             * @description Day of month for `monthly` cadence, 1-28. Capped at 28 so that every month actually contains the day — allowing 29/30/31 would turn "this month never fired" into a silent failure that surfaces only in February.
+             */
+            day_of_month?: number | null;
+            /**
+             * Day Of Week
+             * @description Day of week for `weekly` cadence: 0=Sunday through 6=Saturday.
+             */
+            day_of_week?: number | null;
+            /**
+             * Hour
+             * @description Hour of the wall-clock slot, 0-23, read in `timezone`.
+             */
+            hour?: number | null;
+            /**
+             * Label
+             * @description Human-facing name for this schedule. Also rides the delivered message's `meta.scheduled.label`, so the receiving agent can tell which of its schedules just spoke.
+             */
+            label?: string | null;
+            /**
+             * Minute
+             * @description Minute of the wall-clock slot, 0-59, read in `timezone`.
+             */
+            minute?: number | null;
+            /**
+             * Timezone
+             * @description IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`).
+             */
+            timezone?: string | null;
+        };
+        /**
+         * ScheduledMessageDTO
+         * @description API representation of one scheduled_message (T-f059 定期訊息). The clock-driven twin of a webhook endpoint: identical shape, but the trigger is a recurring wall-clock slot instead of an inbound call. When a slot comes due the server delivers `body` to the bound member down the ORDINARY chat path — live if the member is online, the durable mailbox otherwise — from the synthetic sender `sched:<id>`, carrying `meta.scheduled = {schedule_id, label, slot}` so the receiving agent can tell what spoke to it. No new delivery semantics are invented here. `status` is the enable/disable toggle, not a lifecycle: DELETE is the permanent removal. `last_fired_slot` is the IDENTIFIER of the slot already delivered (e.g. `2026-08-10T09:00+08:00`), not a "last run at" clock — storing the slot is what makes restart-does-not-resend, missed-slots-are-not-backfilled and a-new-schedule-does-not-fire-immediately true by construction rather than by care.
+         */
+        ScheduledMessageDTO: {
+            /**
+             * Body
+             * @description The message text delivered to the member when a slot comes due. It is sent verbatim, as an ordinary chat message.
+             */
+            body: string;
+            /**
+             * Cadence
+             * @description How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither.
+             * @enum {string}
+             */
+            cadence: "daily" | "weekly" | "monthly";
+            /**
+             * Created Ts
+             * @description Epoch seconds the schedule was created.
+             * @default 0
+             */
+            created_ts: number;
+            /**
+             * Day Of Month
+             * @description Day of month for `monthly` cadence, 1-28. Capped at 28 so that every month actually contains the day — allowing 29/30/31 would turn "this month never fired" into a silent failure that surfaces only in February.
+             */
+            day_of_month: number;
+            /**
+             * Day Of Week
+             * @description Day of week for `weekly` cadence: 0=Sunday through 6=Saturday.
+             */
+            day_of_week: number;
+            /**
+             * Hour
+             * @description Hour of the wall-clock slot, 0-23, read in `timezone`.
+             */
+            hour: number;
+            /**
+             * Id
+             * @description Opaque schedule id — `sch-` followed by 12 hex digits.
+             */
+            id: string;
+            /**
+             * Label
+             * @description Human-facing name for this schedule. Also rides the delivered message's `meta.scheduled.label`, so the receiving agent can tell which of its schedules just spoke.
+             */
+            label: string;
+            /**
+             * Last Fired Slot
+             * @description Identifier of the time slot already delivered, e.g. `2026-08-10T09:00+08:00`. Each tick recomputes the most recently elapsed slot and fires only when it differs from this string. Set at creation to the slot current at that moment, so it is never empty for a live schedule.
+             */
+            last_fired_slot: string;
+            /**
+             * Last Fired Ts
+             * @description Epoch seconds of the last ACTUAL delivery — human-facing only, it takes no part in the fire/skip decision (`last_fired_slot` does). 0.0 when the schedule has never delivered.
+             * @default 0
+             */
+            last_fired_ts: number;
+            /**
+             * Member Id
+             * @description The recipient. May be an assistant OR an `ow-` outsource worker — the same recipient rule ordinary chat uses. A schedule bound to an outsource worker dies with that worker, which is a property of the outsource role rather than of this feature.
+             */
+            member_id: string;
+            /**
+             * Minute
+             * @description Minute of the wall-clock slot, 0-59, read in `timezone`.
+             */
+            minute: number;
+            /**
+             * Status
+             * @description The enabled/disabled toggle. `disabled` suspends firing and is reversible — it is NOT a lifecycle state; DELETE is the permanent removal.
+             * @default enabled
+             * @enum {string}
+             */
+            status: "enabled" | "disabled";
+            /**
+             * Timezone
+             * @description IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`).
+             * @default Asia/Taipei
+             */
+            timezone: string;
+        };
+        /**
+         * ScheduledMessageUpdateDTO
+         * @description Partial edit of a scheduled message (T-f059 定期訊息). PATCH semantics — EVERY field is optional and only the supplied ones change. `status` flips the enabled/disabled toggle, which is what enable/disable means here (DELETE is the permanent removal; a value outside the set is a 422). Editing any cadence or slot field re-aims the schedule and moves the delivery cursor to the slot most recently elapsed, so an edit never fires the slot it crosses. `id` and `member_id` are immutable and are NOT editable here.
+         */
+        ScheduledMessageUpdateDTO: {
+            /**
+             * Body
+             * @description The message text delivered to the member when a slot comes due. It is sent verbatim, as an ordinary chat message.
+             */
+            body?: string | null;
+            /**
+             * Cadence
+             * @description How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither.
+             */
+            cadence?: ("daily" | "weekly" | "monthly") | null;
+            /**
+             * Day Of Month
+             * @description Day of month for `monthly` cadence, 1-28. Capped at 28 so that every month actually contains the day — allowing 29/30/31 would turn "this month never fired" into a silent failure that surfaces only in February.
+             */
+            day_of_month?: number | null;
+            /**
+             * Day Of Week
+             * @description Day of week for `weekly` cadence: 0=Sunday through 6=Saturday.
+             */
+            day_of_week?: number | null;
+            /**
+             * Hour
+             * @description Hour of the wall-clock slot, 0-23, read in `timezone`.
+             */
+            hour?: number | null;
+            /**
+             * Label
+             * @description Human-facing name for this schedule. Also rides the delivered message's `meta.scheduled.label`, so the receiving agent can tell which of its schedules just spoke.
+             */
+            label?: string | null;
+            /**
+             * Minute
+             * @description Minute of the wall-clock slot, 0-59, read in `timezone`.
+             */
+            minute?: number | null;
+            /**
+             * Status
+             * @description The enabled/disabled toggle. `disabled` suspends firing and is reversible — it is NOT a lifecycle state; DELETE is the permanent removal.
+             */
+            status?: ("enabled" | "disabled") | null;
+            /**
+             * Timezone
+             * @description IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`).
+             */
+            timezone?: string | null;
+        };
+        /**
          * SetPasswordDTO
          * @description First-run owner-password claim (`POST /api/auth/set-password`, PUBLIC).
          *     `claim_token` is the one-shot token the server mints at first boot and prints
@@ -10693,6 +10921,212 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemberDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_list_scheduled_messages_api_members__member_id__scheduled_messages_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduledMessageDTO"][];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_create_scheduled_message_api_members__member_id__scheduled_messages_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduledMessageCreateDTO"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduledMessageDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_delete_scheduled_message_api_members__member_id__scheduled_messages__schedule_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                member_id: string;
+                schedule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduledMessageDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_update_scheduled_message_api_members__member_id__scheduled_messages__schedule_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                member_id: string;
+                schedule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduledMessageUpdateDTO"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduledMessageDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */
