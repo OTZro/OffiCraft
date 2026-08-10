@@ -203,18 +203,20 @@ func TestPublishAudience(t *testing.T) {
 		}
 	})
 
-	t.Run("audienceMembers drops blank ids (unassigned executor / absent creator)", func(t *testing.T) {
+	t.Run("audienceMembers drops a blank id (a task with no executor yet)", func(t *testing.T) {
 		h, owner, a, b, c := newFleet()
-		// A task with executor m-a but no creator ("") — only m-a + owner.
-		h.Publish("task", "patch", "task", "k", nil, audienceMembers("m-a", ""), "m-a")
-		if !got(a) {
-			t.Fatal("the executor must receive")
-		}
-		if got(b) || got(c) {
-			t.Fatal("a blank id must not widen the audience")
+		// The REACHABLE blank-id shape: a task reassigned to outsource lands
+		// with ExecutorID "" until the scheduler mints the worker, and
+		// publishTask fans it as audienceMembers(""). Since T-0eb5 that is the
+		// only blank a task delta can carry — the creator is not in the
+		// audience at all, so the old "executor + absent creator" setup this
+		// case used to be built on can no longer occur.
+		h.Publish("task", "patch", "task", "k", nil, audienceMembers(""), triggerServer)
+		if got(a) || got(b) || got(c) {
+			t.Fatal("a blank id must be DROPPED, never widened into a broadcast")
 		}
 		if !got(owner) {
-			t.Fatal("owner全量")
+			t.Fatal("owner全量 — the cockpit still sees an unassigned task's delta")
 		}
 	})
 }

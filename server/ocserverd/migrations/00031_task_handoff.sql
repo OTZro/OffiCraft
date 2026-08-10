@@ -2,7 +2,9 @@
 -- T-74f8 「交棒閘」— the ball must never be dropped at task close.
 --
 -- Fact base (T-8a1e post-mortem): a task's creator DOES get the close event
--- (publishTask fans to executor AND creator), but an SSE delta is a line that
+-- (publishTask fans to executor AND creator — true WHEN THIS MIGRATION WAS
+-- WRITTEN; T-0eb5 later removed the creator from that audience entirely, which
+-- only strengthens the case below), but an SSE delta is a line that
 -- washes away — nothing durable says "there is a ball on your side". And the
 -- moment the LAST step is reported done the task derives to done, closed_ts
 -- stamps, and submit_plan is a permanent 409: the system deletes the handover

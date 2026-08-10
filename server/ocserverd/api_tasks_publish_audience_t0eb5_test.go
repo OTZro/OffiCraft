@@ -39,8 +39,8 @@ func sawTaskFrame(l *hubListener) bool {
 func TestPublishTaskAudienceExcludesCreator(t *testing.T) {
 	api := newTasksTestServer(t)
 
-	owner, _ := api.hub.Connect("", "")       // the cockpit connection (memberID "")
-	exec, _ := api.hub.Connect("m-exec", "")  // the executor
+	owner, _ := api.hub.Connect("", "")      // the cockpit connection (memberID "")
+	exec, _ := api.hub.Connect("m-exec", "") // the executor
 	creator, _ := api.hub.Connect("m-creator", "")
 	bystander, _ := api.hub.Connect("m-other", "") // related to neither
 

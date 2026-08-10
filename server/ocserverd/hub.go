@@ -439,8 +439,8 @@ func audienceOwnerOnly() Audience { return Audience{} }
 
 // audienceMembers addresses a specific set of agent member ids (the owner is
 // always included by Publish regardless). Blank ids are dropped — an
-// unassigned executor, an absent creator on a pre-column row, or an empty peer
-// simply narrows the set, never widens it.
+// unassigned executor (a task 發包'd but not yet minted a worker) simply
+// narrows the set, never widens it.
 func audienceMembers(ids ...string) Audience {
 	m := map[string]bool{}
 	for _, id := range ids {
