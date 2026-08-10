@@ -145,17 +145,36 @@ func (s *apiServer) HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessa
 	if !s.validateScheduledMessage(w, *m) {
 		return
 	}
-	if reAimed {
-		// Re-aiming moves the cursor to the slot current NOW, so the edit never
-		// fires the slot it crossed: moving a daily schedule from 09:00 to 08:00
-		// at noon must not deliver today's 08:00 retroactively.
-		m.LastFiredSlot = currentSlotKey(*m, time.Now())
-	}
-	if err := s.dal.PutScheduledMessage(*m); err != nil {
+	// 🔴 The edit writes the owner's columns ONLY. It does not carry the cursor
+	// back, because everything above this line is a read-modify-write over a
+	// snapshot taken before the request was even parsed: a tick can deliver a
+	// slot in that gap, and a whole-row re-put would roll its advance back and
+	// make the next tick send the same slot again. The monotonic fire test cannot
+	// save that — the cursor itself would have gone backwards. See
+	// UpdateScheduledMessageSettings.
+	if err := s.dal.UpdateScheduledMessageSettings(*m); err != nil {
 		internalError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, newScheduledMessageDTO(*m))
+	if reAimed {
+		// Re-aiming moves the cursor to the slot current NOW, so the edit never
+		// fires the slot it crossed: moving a daily schedule from 09:00 to 08:00
+		// at noon must not deliver today's 08:00 retroactively. This is the one
+		// write to the cursor an edit may make, and it is stated, not inherited.
+		if err := s.dal.AimScheduledMessageCursor(m.ID, currentSlotKey(*m, time.Now())); err != nil {
+			internalError(w, err)
+			return
+		}
+	}
+	// Re-read rather than serialise the snapshot: the cursor fields on the wire
+	// must be the ones actually in the row, including an advance this request
+	// deliberately did not overwrite.
+	fresh, err := s.dal.GetScheduledMessage(m.ID)
+	if err != nil || fresh == nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newScheduledMessageDTO(*fresh))
 }
 
 // DELETE /api/members/{member_id}/scheduled-messages/{schedule_id} —

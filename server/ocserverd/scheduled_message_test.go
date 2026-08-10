@@ -800,3 +800,82 @@ func TestUpdateScheduledMessageReAimsTheCursorOnlyWhenReAimed(t *testing.T) {
 		}
 	}
 }
+
+// TestUpdateScheduledMessageSettingsLeavesAConcurrentCursorAdvanceAlone pins the
+// edit/tick race, which is the LAST way this feature could deliver twice.
+//
+// A PATCH is a read-modify-write: the handler reads the whole row, applies the
+// patch to that snapshot, and persists it. The tick runs every 60 seconds and
+// advances the same row's cursor. Persisting the snapshot WHOLE — including the
+// cursor as it stood before the request — rolls a delivery that already happened
+// back to "not delivered", and the very next tick sends it again. The monotonic
+// fire test is no defence: the cursor itself moved backwards, so the slot really
+// is strictly later than what the row now claims.
+//
+// The sequence below is that interleaving, made deterministic: the snapshot is
+// taken BEFORE the tick and persisted AFTER it, which is exactly what a PATCH
+// landing in the gap does.
+//
+// Red when the edit persists the cursor columns at all — the second tick then
+// delivers the same slot a second time, and in the chat log a duplicate is
+// indistinguishable from a correct delivery, so nothing anywhere says so.
+func TestUpdateScheduledMessageSettingsLeavesAConcurrentCursorAdvanceAlone(t *testing.T) {
+	_, _, api := scheduledStack(t)
+	// Daily 00:00 UTC: a slot has always already elapsed, and the planted cursor
+	// is old enough that the first tick must fire.
+	sm := ScheduledMessage{
+		ID: "sch-race", MemberID: "mira", Label: "before", Body: "the one delivery",
+		Cadence: ScheduledMessageCadenceDaily, DayOfMonth: 1, Timezone: "UTC",
+		Status: ScheduledMessageStatusEnabled, LastFiredSlot: "1999-01-01T00:00+00:00",
+		CreatedTS: nowSecs(),
+	}
+	if err := api.dal.PutScheduledMessage(sm); err != nil {
+		t.Fatalf("seed schedule: %v", err)
+	}
+
+	// The row as the PATCH handler holds it once its read has returned.
+	snapshot, err := api.dal.GetScheduledMessage("sch-race")
+	if err != nil || snapshot == nil {
+		t.Fatalf("read the row the way the handler does: %v %v", snapshot, err)
+	}
+
+	// …and the tick lands in the gap: one delivery, cursor advanced.
+	api.runScheduledMessageTick(nowSecs())
+	if n := len(chatsFrom(t, api, "sched:sch-race")); n != 1 {
+		t.Fatalf("the tick delivered %d message(s); want 1 — the race cannot be set up", n)
+	}
+	fired, err := api.dal.GetScheduledMessage("sch-race")
+	if err != nil || fired == nil {
+		t.Fatalf("reload after the tick: %v %v", fired, err)
+	}
+
+	// Now the PATCH completes, carrying the pre-tick snapshot. Only the label
+	// changed, so nothing about when this schedule fires was edited.
+	snapshot.Label = "renamed"
+	if err := api.dal.UpdateScheduledMessageSettings(*snapshot); err != nil {
+		t.Fatalf("persist the edit: %v", err)
+	}
+
+	api.runScheduledMessageTick(nowSecs())
+
+	if n := len(chatsFrom(t, api, "sched:sch-race")); n != 1 {
+		t.Fatalf("slot %s went out %d times — the edit persisted the cursor it read "+
+			"BEFORE the delivery, rolling the advance back, and the next tick resent it",
+			fired.LastFiredSlot, n)
+	}
+	after, err := api.dal.GetScheduledMessage("sch-race")
+	if err != nil || after == nil {
+		t.Fatalf("reload after the edit: %v %v", after, err)
+	}
+	if after.LastFiredSlot != fired.LastFiredSlot {
+		t.Fatalf("the edit moved the cursor from %q to %q", fired.LastFiredSlot, after.LastFiredSlot)
+	}
+	if after.LastFiredTS != fired.LastFiredTS {
+		t.Fatalf("the edit rewrote last_fired_ts from %v to %v — it records when a "+
+			"delivery happened, and this edit was not one", fired.LastFiredTS, after.LastFiredTS)
+	}
+	// And the edit itself really landed — the test must not pass by writing nothing.
+	if after.Label != "renamed" {
+		t.Fatalf("the edit did not apply: label is %q, want \"renamed\"", after.Label)
+	}
+}

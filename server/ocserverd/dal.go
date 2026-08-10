@@ -2113,6 +2113,46 @@ func (d *DAL) PutScheduledMessage(m ScheduledMessage) error {
 	return err
 }
 
+// UpdateScheduledMessageSettings writes the OWNER-EDITABLE columns of an
+// existing schedule and DELIBERATELY LEAVES last_fired_slot / last_fired_ts
+// ALONE — they are not in the SET list at all, which is not the same thing as
+// writing them back unchanged.
+//
+// 🔴 This is the mirror of the warning on MarkScheduledMessageFired, for the
+// other side of the same race. An edit is a read-modify-write: the handler reads
+// the row, applies the patch, and persists. If the tick delivers a slot in
+// between, a whole-row re-put would carry the cursor the handler read BEFORE the
+// delivery and roll it back — and the next tick would then send that slot again.
+// A duplicate delivery is indistinguishable, in the chat log, from a correct
+// one, so nothing would ever say so. Not naming the columns means a concurrent
+// advance survives the edit; the edit and the cursor never contend.
+//
+// Re-aiming is the one case that MUST move the cursor, and it says so out loud
+// through AimScheduledMessageCursor.
+func (d *DAL) UpdateScheduledMessageSettings(m ScheduledMessage) error {
+	_, err := d.wdb.Exec(`
+		UPDATE scheduled_message SET
+			label = ?, body = ?, cadence = ?, day_of_week = ?, day_of_month = ?,
+			hour = ?, minute = ?, timezone = ?, status = ?
+		WHERE id = ?`,
+		m.Label, m.Body, m.Cadence, m.DayOfWeek, m.DayOfMonth,
+		m.Hour, m.Minute, m.Timezone, m.Status, m.ID)
+	return err
+}
+
+// AimScheduledMessageCursor points the delivery cursor at slot — what an edit
+// that MOVED the schedule does so it never fires the slot it crossed.
+//
+// last_fired_ts is untouched on purpose: it records when a delivery actually
+// happened, and re-aiming is not a delivery. (Writing back the value the handler
+// read would be the same rollback UpdateScheduledMessageSettings exists to
+// avoid.)
+func (d *DAL) AimScheduledMessageCursor(id, slot string) error {
+	_, err := d.wdb.Exec(
+		`UPDATE scheduled_message SET last_fired_slot = ? WHERE id = ?`, slot, id)
+	return err
+}
+
 // MarkScheduledMessageFired advances ONLY the delivery cursor (and its
 // human-facing timestamp) after a slot really went out. Deliberately not a
 // PutScheduledMessage of a struct read earlier in the tick: the tick's copy is
