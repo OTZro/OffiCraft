@@ -102,6 +102,10 @@ func TestMostRecentSlot(t *testing.T) {
 	lordHowe := mustLoadZone(t, "Australia/Lord_Howe")
 	apia := mustLoadZone(t, "Pacific/Apia")
 	newYork := mustLoadZone(t, "America/New_York")
+	// The other side of Apia: a zone that keeps the date but loses the END of it.
+	// America/Nuuk springs forward at 23:00, so its March transition day has no
+	// reading at all from 23:00 to midnight.
+	nuuk := mustLoadZone(t, "America/Nuuk")
 	// The two zones with gaps WIDER than an hour: Troll jumps two hours every
 	// March (still happening), Casey has jumped three (2016-2022).
 	troll := mustLoadZone(t, "Antarctica/Troll")
@@ -209,6 +213,26 @@ func TestMostRecentSlot(t *testing.T) {
 		sm:   ScheduledMessage{Cadence: ScheduledMessageCadenceDaily, Hour: 9, Timezone: "Pacific/Apia"},
 		now:  time.Date(2011, time.December, 31, 8, 0, 0, 0, apia),
 		want: "2011-12-29T09:00-10:00",
+	}, {
+		// 🔴 The mirror image of Apia, and the one that reads identically from
+		// inside slotAt while meaning the opposite. America/Nuuk springs forward
+		// at 23:00 every March, so 2027-03-27 HAS most of its readings and then
+		// simply stops: 23:00-23:59 are not in the zone. The date is there; only
+		// its tail is gone, so a 23:30 schedule's occurrence for the 27th is one
+		// that HAPPENS — at the first reading the zone does have, which is on the
+		// next date. Stepping back a day instead answers with the 26th, the slot
+		// the cursor is already parked on, and the delivery vanishes in silence.
+		name: "daily whose wall clock falls in a gap that eats the rest of the day still happens",
+		sm:   ScheduledMessage{Cadence: ScheduledMessageCadenceDaily, Hour: 23, Minute: 30, Timezone: "America/Nuuk"},
+		now:  time.Date(2027, time.March, 28, 12, 0, 0, 0, nuuk),
+		want: "2027-03-28T00:00-01:00",
+	}, {
+		// And the day after is back at 23:30 — a shift over the day boundary is
+		// still one occurrence moved, not a new alignment.
+		name: "a gap that eats the rest of the day does not drift the following day",
+		sm:   ScheduledMessage{Cadence: ScheduledMessageCadenceDaily, Hour: 23, Minute: 30, Timezone: "America/Nuuk"},
+		now:  time.Date(2027, time.March, 29, 23, 59, 0, 0, nuuk),
+		want: "2027-03-29T23:30-01:00",
 	}, {
 		// Same rule on the weekly branch: 2026-03-08 is a Sunday, Havana has no
 		// 00:30 on it, and that Sunday's occurrence still happens — at 01:00.
@@ -531,6 +555,7 @@ func TestRunScheduledMessageTickDeliversOncePerOccurrenceAcrossDSTTransitions(t 
 	santiago := mustLoadZone(t, "America/Santiago")
 	newYork := mustLoadZone(t, "America/New_York")
 	havana := mustLoadZone(t, "America/Havana")
+	nuuk := mustLoadZone(t, "America/Nuuk")
 	cases := []struct {
 		name      string
 		id        string
@@ -585,6 +610,32 @@ func TestRunScheduledMessageTickDeliversOncePerOccurrenceAcrossDSTTransitions(t 
 		wantSlots: []string{
 			"2026-03-08T01:00-04:00",
 			"2026-04-08T00:30-04:00",
+		},
+	}, {
+		// 🔴 A gap that runs off the END of the day: America/Nuuk jumps 23:00 →
+		// 00:00 every March, so 2027-03-27 stops having readings at 23:00. A
+		// daily 23:30 must still deliver four times over these five days — the
+		// 27th's occurrence lands half an hour late, at midnight, in the offset
+		// the zone has by then.
+		//
+		// The shape this pins is a SILENT one and it does not go through the
+		// "no slot" exit: answering the 27th with the 26th's slot leaves the
+		// cursor exactly where it already was, so the tick skips without
+		// delivering, without erroring, and without logging. On the card it
+		// reads as a healthy schedule that simply had nothing to say that day.
+		name: "a gap that eats the end of the day still delivers that day",
+		id:   "sch-nuuk",
+		sm: ScheduledMessage{ID: "sch-nuuk", MemberID: "mira", Body: "daily ping",
+			Cadence: ScheduledMessageCadenceDaily, Hour: 23, Minute: 30, DayOfMonth: 1,
+			Timezone: "America/Nuuk"},
+		from: time.Date(2027, time.March, 25, 23, 30, 0, 0, nuuk),
+		to:   time.Date(2027, time.March, 29, 23, 59, 0, 0, nuuk),
+		step: time.Minute,
+		wantSlots: []string{
+			"2027-03-26T23:30-02:00",
+			"2027-03-28T00:00-01:00",
+			"2027-03-28T23:30-01:00",
+			"2027-03-29T23:30-01:00",
 		},
 	}}
 	for _, tc := range cases {

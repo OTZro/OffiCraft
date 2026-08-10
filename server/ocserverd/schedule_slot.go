@@ -45,15 +45,17 @@ const slotKeyLayout = "2006-01-02T15:04-07:00"
 const monthlyLookbackMonths = 12
 
 // dailyLookbackDays bounds how far back a daily schedule searches for a date its
-// zone actually HAS. Two steps is the worst real case (today's slot still ahead,
-// and yesterday a date the zone deleted outright — Pacific/Apia skipped 30
-// December 2011 for the date-line move); the third is headroom that keeps the
-// loop bounded.
+// zone actually HAS. It counts STEPS BACK from today, so the search covers today
+// plus this many earlier dates — four in all. Two steps is the worst real case
+// (today's slot still ahead, and yesterday a date the zone deleted outright —
+// Pacific/Apia skipped 30 December 2011 for the date-line move); the rest is
+// headroom that keeps the loop bounded.
 const dailyLookbackDays = 3
 
-// weeklyLookbackDays bounds the weekly search. Seven days finds the previous
-// occurrence of the weekday; fourteen is what it takes when THAT occurrence
-// landed on a date its zone deleted, so the answer is a week earlier again.
+// weeklyLookbackDays bounds the weekly search, again as steps back from today
+// (fifteen dates in all). Seven days finds the previous occurrence of the
+// weekday; fourteen is what it takes when THAT occurrence landed on a date its
+// zone deleted, so the answer is a week earlier again.
 const weeklyLookbackDays = 14
 
 // mostRecentSlot returns the latest slot of s at or before now, computed as
@@ -150,55 +152,96 @@ func monthlySlot(year int, month time.Month, s ScheduledMessage, loc *time.Locat
 	return slotAt(year, month, s.DayOfMonth, s, loc)
 }
 
-// 🔴 The forward search below is bounded BY THE CALENDAR DAY, not by a guess at
-// how large a DST gap can get. An earlier version guessed: it scanned 120
-// minutes and the comment called that "headroom" on the grounds that gaps are an
-// hour at most. That was false when it was written. Scanning every zone in
-// tzdata 2025b over 2015-2040 (599 zones):
+// 🔴 What decides "this date is not in this zone" is THE DATE HAVING NO READING
+// AT ALL — never how far a forward walk got, and never a guess at how large a
+// DST gap can be. Both earlier versions got this from the wrong place:
 //
-//	 30 min :   54 transitions
-//	 60 min : 5350 transitions
-//	120 min :   26 transitions   ← Antarctica/Troll, 14 of them still in the future
-//	180 min :    6 transitions   ← Antarctica/Casey, 2016-2022
+//	v1 bounded the walk at 120 MINUTES and called that headroom on the grounds
+//	that gaps are an hour at most. Antarctica/Troll needs exactly 120 every
+//	March — the bound fitted with nothing to spare — and Antarctica/Casey's 180
+//	did not fit at all, so those occurrences were dropped in silence.
+//	v2 bounded the walk at THE END OF THE CALENDAR DAY and read "the walk ran
+//	out" as "the zone does not have this date". That inference is false. A
+//	spring-forward can land ON midnight and take the whole tail of the day with
+//	it: America/Nuuk, Scoresbysund and their aliases jump 23:00 → 00:00 every
+//	March, so those dates have no reading from 23:00 onward while plainly
+//	existing. Reading that as a missing date sent the cadence loop back a day, to
+//	the slot the cursor was already parked on — so the tick skipped without
+//	delivering, without erroring and without logging. Same silence, one day a
+//	year, in a zone nobody tests.
 //
-// Troll jumps 01:00 → 03:00 every March, so a 01:00 schedule there needs a shift
-// of EXACTLY 120: the old bound fitted it with nothing to spare, while claiming
-// to be generous. Casey's 180 already exceeded it — those occurrences were
-// dropped in silence, which is the failure this whole search exists to avoid.
+// So the two absences are asked as two SEPARATE questions, in this order:
 //
-// A day boundary cannot be wrong about a future tzdata release the way a minute
-// count can, and it makes the two absences structurally distinct instead of
-// sharing one exit: "this reading moved later within its day" is an occurrence
-// that happens, and "this date has no reading at all from here on" is a date the
-// zone does not have (Pacific/Apia deleted 30 December 2011 outright for the
-// date-line move) — which sends the cadence loop back another day. It also means
-// a late-evening slot on a deleted day can no longer wander onto the next date.
-// The +1-minute walk matches svc-automation's _first_existing_instant; only the
-// bound differs.
+//	Does the zone have this DATE at all?  → firstReadingOn. No reading anywhere
+//	  in the 1440 wall readings means the zone deleted the date outright
+//	  (Pacific/Apia, 30 December 2011, the date-line move). The occurrence is
+//	  dropped and the cadence loop steps back a day. THIS is what decides the day
+//	  boundary now — nothing else does.
+//	Does the zone have this WALL CLOCK?  → the +1-minute walk, which matches
+//	  svc-automation's _first_existing_instant. It is NOT bounded by the day: it
+//	  may cross midnight onto the next date, because the reading it is looking
+//	  for is simply the next one the zone has.
+//
+// Neither question is answerable from the other's result, which is exactly what
+// both earlier versions assumed. The design doc carries the measured counts
+// behind each reversal, stamped with the tzdata release and the date they were
+// taken — they are a snapshot of one tzdata release, not a property of zones,
+// so they are deliberately NOT restated here where nothing would ever re-check
+// them.
+
+// firstReadingOn returns the earliest wall reading loc actually HAS on this
+// calendar date, and false when it has none — the test for "this zone does not
+// have this date".
+//
+// Cost is one probe on an ordinary date, since 00:00 exists; the full 1440 are
+// walked only for a date that really was deleted.
+func firstReadingOn(year int, month time.Month, day int, loc *time.Location) (time.Time, bool) {
+	start := time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+	for want := start; want.Day() == day && want.Month() == month && want.Year() == year; want = want.Add(time.Minute) {
+		if slot, ok := readBack(want, loc); ok {
+			return slot, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// readBack constructs want's wall reading in loc and returns it only if loc
+// genuinely has that reading.
+//
+// ⚠️ The read-back is not an optional check: time.Date NORMALISES a reading it
+// cannot honour rather than refusing it, in both directions and by an amount of
+// its own choosing. 31 February 2026 becomes 3 March; 00:30 on 2026-03-08 in
+// America/Havana becomes 03-07 23:30 (backwards, into the previous day); 02:15
+// on 2026-10-04 in Australia/Lord_Howe becomes 02:45 (forwards, thirty minutes,
+// same date — which a day-only check waves straight through). So every component
+// is compared, and only an exact match counts as the reading that was asked for.
+func readBack(want time.Time, loc *time.Location) (time.Time, bool) {
+	slot := time.Date(want.Year(), want.Month(), want.Day(),
+		want.Hour(), want.Minute(), 0, 0, loc)
+	ok := slot.Year() == want.Year() && slot.Month() == want.Month() && slot.Day() == want.Day() &&
+		slot.Hour() == want.Hour() && slot.Minute() == want.Minute()
+	return slot, ok
+}
 
 // slotAt builds the slot for (year, month, day) at s's hour:minute in loc.
 //
 // Two different absences are handled two DIFFERENT ways, and the asymmetry is
 // deliberate — see the design doc, which records the reasoning for each:
 //
-//	THE DATE DOES NOT EXIST (31 February) → the occurrence is DROPPED.
+//	THE DATE DOES NOT EXIST — either the month has no such day (31 February) or
+//	  the zone deleted the date outright (Pacific/Apia, 30 December 2011) → the
+//	  occurrence is DROPPED.
 //	  Owner ruling rc-aeef15360ab5, RFC 5545: the day the owner asked for is not
-//	  in that month at all, so there is nothing to move it to that would not be a
+//	  there at all, so there is nothing to move it to that would not be a
 //	  different day of the owner's month.
-//	THE WALL CLOCK DOES NOT EXIST (the hour a spring-forward skips) → the
-//	  occurrence MOVES FORWARD to the first reading the zone does have.
-//	  The day IS there; it is merely an hour short. Dropping it means the owner
-//	  gets nothing that day and nothing says so, which is the exact failure this
-//	  feature exists to prevent. An hour late is late; it is not silence.
-//
-// ⚠️ Neither absence announces itself: time.Date NORMALISES a reading it cannot
-// honour rather than refusing it, in both directions and by an amount of its own
-// choosing. 31 February 2026 becomes 3 March; 00:30 on 2026-03-08 in
-// America/Havana becomes 03-07 23:30 (backwards, into the previous day); 02:15
-// on 2026-10-04 in Australia/Lord_Howe becomes 02:45 (forwards, thirty minutes,
-// same date — which a day-only check waves straight through). So nothing here
-// trusts time.Date's output: every candidate is READ BACK, component by
-// component, and only an exact match counts as the reading that was asked for.
+//	THE WALL CLOCK DOES NOT EXIST (the reading a spring-forward skips) → the
+//	  occurrence MOVES FORWARD to the first reading the zone does have, EVEN IF
+//	  THAT READING IS ON THE NEXT DATE.
+//	  The date IS there; it is merely short of some readings, and when the gap
+//	  lands on midnight the ones it is short of are the last of the day. Dropping
+//	  it means the owner gets nothing that day and nothing says so, which is the
+//	  exact failure this feature exists to prevent. Half an hour late is late; it
+//	  is not silence.
 //
 // 🔴 The slot is always CONSTRUCTED from (year, month, day, hour, minute, zone)
 // and never derived from an offset of `now`. That is what makes it deterministic
@@ -207,21 +250,31 @@ func monthlySlot(year int, month time.Month, s ScheduledMessage, loc *time.Locat
 // pass delivers nothing. An "elapsed since" style computation would produce two
 // instants there and an ordering test alone would not catch it.
 func slotAt(year int, month time.Month, day int, s ScheduledMessage, loc *time.Location) (time.Time, bool) {
-	// Whether the DATE exists is a calendar question, asked zone-free — UTC has
-	// no transitions, so nothing here can be perturbed by one.
+	// Does the MONTH have this day? A calendar question, asked zone-free — UTC
+	// has no transitions, so nothing here can be perturbed by one.
 	wall := time.Date(year, month, day, s.Hour, s.Minute, 0, 0, time.UTC)
 	if wall.Year() != year || wall.Month() != month || wall.Day() != day {
 		return time.Time{}, false
 	}
+	// Does the ZONE have this date? Asked BEFORE the walk and independently of
+	// it, so that "the walk found nothing on this date" can no longer be
+	// mistaken for "the zone has no such date".
+	if _, exists := firstReadingOn(year, month, day, loc); !exists {
+		return time.Time{}, false
+	}
+	// Does the zone have this WALL CLOCK? If not, the occurrence takes the next
+	// reading the zone does have.
 	for want := wall; want.Day() == day && want.Month() == month && want.Year() == year; want = want.Add(time.Minute) {
-		slot := time.Date(want.Year(), want.Month(), want.Day(),
-			want.Hour(), want.Minute(), 0, 0, loc)
-		if slot.Hour() == want.Hour() && slot.Minute() == want.Minute() &&
-			slot.Day() == want.Day() && slot.Month() == want.Month() && slot.Year() == want.Year() {
+		if slot, ok := readBack(want, loc); ok {
 			return slot, true
 		}
 	}
-	return time.Time{}, false
+	// The gap ran off the end of the date (America/Nuuk, 23:00 → 00:00): the
+	// next reading is the first one of the following date. Should the zone not
+	// have that date either — which no tzdata release has ever done back to back
+	// — the occurrence is dropped rather than wandering further.
+	next := time.Date(year, month, day+1, 12, 0, 0, 0, time.UTC)
+	return firstReadingOn(next.Year(), next.Month(), next.Day(), loc)
 }
 
 // slotKey renders a slot as the identifier stored in last_fired_slot. The same
