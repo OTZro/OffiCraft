@@ -2010,6 +2010,52 @@ type webhookEndpointDTO struct {
 	LastDropReason   string  `json:"last_drop_reason"`
 }
 
+// scheduledMessageDTO is the response shape for one scheduled_message (T-f059
+// 定期訊息). Unlike its webhook twin it carries NO secret: the trigger is a clock,
+// not a bearer token, so nothing here is a credential. The admin_agent floor on
+// the four routes is for consistency with the neighbouring CRUD, not because a
+// secret rides this wire.
+//
+// last_fired_slot is the delivery CURSOR — the identifier of the slot already
+// sent, not a clock reading — and is exposed because it is the only externally
+// visible answer to "will this fire next time?"; last_fired_ts beside it is
+// human-facing and takes no part in the decision.
+type scheduledMessageDTO struct {
+	ID            string  `json:"id"`
+	MemberID      string  `json:"member_id"`
+	Label         string  `json:"label"`
+	Body          string  `json:"body"`
+	Cadence       string  `json:"cadence"`
+	DayOfWeek     int     `json:"day_of_week"`
+	DayOfMonth    int     `json:"day_of_month"`
+	Hour          int     `json:"hour"`
+	Minute        int     `json:"minute"`
+	Timezone      string  `json:"timezone"`
+	Status        string  `json:"status"`
+	LastFiredSlot string  `json:"last_fired_slot"`
+	LastFiredTS   float64 `json:"last_fired_ts"`
+	CreatedTS     float64 `json:"created_ts"`
+}
+
+func newScheduledMessageDTO(m ScheduledMessage) scheduledMessageDTO {
+	return scheduledMessageDTO{
+		ID:            m.ID,
+		MemberID:      m.MemberID,
+		Label:         m.Label,
+		Body:          m.Body,
+		Cadence:       m.Cadence,
+		DayOfWeek:     m.DayOfWeek,
+		DayOfMonth:    m.DayOfMonth,
+		Hour:          m.Hour,
+		Minute:        m.Minute,
+		Timezone:      m.Timezone,
+		Status:        m.Status,
+		LastFiredSlot: m.LastFiredSlot,
+		LastFiredTS:   m.LastFiredTS,
+		CreatedTS:     m.CreatedTS,
+	}
+}
+
 // webhookRequestLogDTO is one row of an endpoint's /in debug ring buffer
 // (GET .../webhooks/{endpoint_id}/requests, newest→oldest, ≤5 rows). headers
 // is the JSON-serialised request header map (≤4 KiB), body the raw payload

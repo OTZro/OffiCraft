@@ -564,6 +564,50 @@ MATRIX: dict[str, Route] = {
         requires="admin_agent",
         path=lambda ctx, _i: _matrix_webhook_requests_path(ctx),
     ),
+    # ── scheduled messages (T-f059) — the clock-driven twin of the webhook
+    # CRUD; all four verbs sit at the admin_agent floor. Unlike the webhook DTO
+    # this one carries NO credential, so the floor is for consistency with the
+    # neighbouring config CRUD, not secrecy. GET/POST aim at agent A (list is
+    # safe; each create makes its own row, and there is no per-member
+    # uniqueness key to collide on). PATCH/DELETE are DEGRADED — probed with a
+    # missing schedule id, so only the at-or-above-floor faces reach the 404.
+    "GET /api/members/{member_id}/scheduled-messages": Route(
+        requires="admin_agent",
+        path=lambda ctx, _i: (
+            f"/api/members/{ctx.agent_a.member_id}/scheduled-messages"
+        ),
+    ),
+    "POST /api/members/{member_id}/scheduled-messages": Route(
+        requires="admin_agent",
+        path=lambda ctx, _i: (
+            f"/api/members/{ctx.agent_a.member_id}/scheduled-messages"
+        ),
+        body=lambda _ctx, _i: {
+            "label": f"conf-sched-{uuid.uuid4().hex[:8]}",
+            "body": "conformance matrix schedule",
+            "cadence": "daily",
+            "hour": 9,
+            "minute": 0,
+            "timezone": "Asia/Taipei",
+        },
+    ),
+    "PATCH /api/members/{member_id}/scheduled-messages/{schedule_id}": Route(
+        requires="admin_agent",
+        overrides={i: 404 for i in _ADMIN_FACES},
+        path=lambda ctx, _i: (
+            f"/api/members/{ctx.agent_a.member_id}"
+            "/scheduled-messages/sch-conf-missing"
+        ),
+        body={"status": "disabled"},
+    ),
+    "DELETE /api/members/{member_id}/scheduled-messages/{schedule_id}": Route(
+        requires="admin_agent",
+        overrides={i: 404 for i in _ADMIN_FACES},
+        path=lambda ctx, _i: (
+            f"/api/members/{ctx.agent_a.member_id}"
+            "/scheduled-messages/sch-conf-missing"
+        ),
+    ),
     # T-8b0d: the SAME bounded wake snapshot as /api/resume-summary, for a
     # TARGET member instead of the caller (control-others; member_id is a
     # target param). requires=admin_agent — a plain agent is a flat 403; the
@@ -1310,6 +1354,18 @@ DEGRADED: dict[str, str] = {
         "probed with a missing endpoint id (404 for the admin/owner faces only; "
         "below-floor identities stay a derived 403 since T-5336); the full "
         "revoke round-trip is pinned in test_rest_happy.py."
+    ),
+    "PATCH /api/members/{member_id}/scheduled-messages/{schedule_id}": (
+        "probed with a missing schedule id (404 for the admin/owner faces only): "
+        "the admin_agent authz face passes, the schedule lookup 404s. Below-floor "
+        "identities are still a derived 403. The full edit — including the "
+        "re-aimed delivery cursor — is pinned in test_rest_happy.py and in the "
+        "server unit tests (scheduled_message_test.go)."
+    ),
+    "DELETE /api/members/{member_id}/scheduled-messages/{schedule_id}": (
+        "probed with a missing schedule id (404 for the admin/owner faces only; "
+        "below-floor identities stay a derived 403); the full delete round-trip "
+        "is pinned in test_rest_happy.py."
     ),
     "POST /api/members/{member_id}/refocus": (
         "owner face pinned at 409 (target offline; refocus is online-only) — the "

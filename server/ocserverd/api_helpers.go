@@ -432,3 +432,14 @@ func strOrEmpty(p *string) string {
 func trimmedOrEmpty(p *string) string {
 	return strings.TrimSpace(strOrEmpty(p))
 }
+
+// intOr dereferences an optional request-body int, falling back to the field's
+// declared default. Distinct from a bare deref-or-zero: the caller names the
+// default, so a field whose documented fallback is not 0 (day_of_month is 1)
+// cannot silently acquire one.
+func intOr(p *int, fallback int) int {
+	if p == nil {
+		return fallback
+	}
+	return *p
+}

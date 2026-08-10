@@ -514,6 +514,55 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Summary:  "Last 5 raw /in requests of one webhook endpoint (debug).",
 			MCPTool:  "list_webhook_requests",
 		},
+		// T-f059 定期訊息 — the clock-driven twin of the webhook CRUD above:
+		// same four verbs, same admin_agent floor, trigger swapped from an
+		// inbound call to a recurring wall-clock slot. requires=admin_agent for
+		// CONSISTENCY with the neighbour, NOT because a secret rides the wire:
+		// ScheduledMessageDTO carries no credential at all (the webhook DTO's
+		// plaintext token is what forced that one). Same level as the
+		// neighbouring config CRUD means the owner and the admin assistant set
+		// these up, which is what the design asks for.
+		//
+		// MCPExclude on all four, following the webhook precedent exactly:
+		// configuration CRUD belongs in the cockpit, not the tool catalogue —
+		// only the debugging read (list_webhook_requests) ever earned a tool.
+		// This batch adds NO MCP tool, so spec/mcp-catalog.json is untouched.
+		{
+			Method:     "GET",
+			Path:       "/api/members/{member_id}/scheduled-messages",
+			Handler:    w.HandleListScheduledMessagesApiMembersMemberIdScheduledMessagesGet,
+			Auth:       authGated,
+			Requires:   principalAdminAgent,
+			Summary:    "List one member's scheduled messages.",
+			MCPExclude: true,
+		},
+		{
+			Method:     "POST",
+			Path:       "/api/members/{member_id}/scheduled-messages",
+			Handler:    w.HandleCreateScheduledMessageApiMembersMemberIdScheduledMessagesPost,
+			Auth:       authGated,
+			Requires:   principalAdminAgent,
+			Summary:    "Create a scheduled message on one member.",
+			MCPExclude: true,
+		},
+		{
+			Method:     "PATCH",
+			Path:       "/api/members/{member_id}/scheduled-messages/{schedule_id}",
+			Handler:    w.HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessagesScheduleIdPatch,
+			Auth:       authGated,
+			Requires:   principalAdminAgent,
+			Summary:    "Update one scheduled message (including enable/disable).",
+			MCPExclude: true,
+		},
+		{
+			Method:     "DELETE",
+			Path:       "/api/members/{member_id}/scheduled-messages/{schedule_id}",
+			Handler:    w.HandleDeleteScheduledMessageApiMembersMemberIdScheduledMessagesScheduleIdDelete,
+			Auth:       authGated,
+			Requires:   principalAdminAgent,
+			Summary:    "Delete one scheduled message.",
+			MCPExclude: true,
+		},
 		// T-8b0d (owner 2026-08-02): the SAME bounded wake snapshot as
 		// /api/resume-summary, for a TARGET member instead of the caller
 		// (control-others; member_id is a target param, never the caller's
