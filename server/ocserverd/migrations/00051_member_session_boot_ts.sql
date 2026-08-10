@@ -1,0 +1,52 @@
+-- +goose Up
+-- T-4235 — the durable SESSION-START anchor.
+--
+-- Until now the only anchor for "when did this session start" was boot_ts on
+-- the in-memory gauge (newMemStore), stamped on the SSE first-connect edge
+-- (api_infra.go onFirstConnect) and cleared at the spawn/stop boundary
+-- (clearSessionBootTS). The gauge is emptied by contract on every server
+-- re-exec, so a station upgrade wiped every live session's anchor. The agents
+-- did not die with the server: their SSE streams merely dropped and they
+-- reconnected seconds later — and that reconnect, finding no anchor, stamped a
+-- BRAND NEW one. A session alive for hours therefore read as seconds old.
+--
+-- The consequence the owner hit, three field samples over two upgrades and
+-- three different agents: restart_self's minimum-liveness floor (600s, the
+-- respawn-storm guard) refused every one of them with "only 198s / 24s / 201s
+-- since this session started". The comment promised a FAIL-OPEN when the
+-- anchor is missing, but the anchor was never missing by the time the gate
+-- ran — the reconnect that made the caller online is exactly what re-stamped
+-- it. Protection inverted: the guard fired hardest on the long-lived sessions
+-- that had just been through an upgrade and most needed to cycle.
+--
+-- session_boot_ts closes that gap the way last_machine_id (00039) closed the
+-- placement one, on the SAME connect edge and for the same reason: the fact a
+-- session is alive must outlive the process that observed it.
+--
+--   0      no session anchored — the entity is offline, or its last session
+--          ended at a real boundary (START dispatch / STOP / kill), which is
+--          what makes the next first-connect stamp a FRESH anchor. Every
+--          pre-column row starts here, which is the honest state: nothing was
+--          recorded for them, and a first connect will record it.
+--   >0     unix seconds of the moment this session's FIRST connect landed.
+--          A mid-session SSE flap does not move it (onFirstConnect stamps iff
+--          absent — the T-8fb2 rule, now enforced against the durable store
+--          rather than the amnesiac one), and a server re-exec does not lose
+--          it: the reconnect RESTORES the gauge from this column instead of
+--          minting a new "now".
+--
+-- Deliberately NOT on the wire: no DTO field, no spec change. The three
+-- consumers (restart_self min-liveness, stampContextHighRecycle,
+-- autoHandoverWorker) all read the gauge through gaugeSecsSinceBoot, so
+-- restoring the gauge on the connect edge fixes all three at one seam and the
+-- frozen wire is untouched.
+--
+-- Lives on `member` (the P7d merged table) — workers ARE member rows since
+-- 00025, and both halves of the fold carry the column (workerFromMember /
+-- memberFromWorker), so no outsource write can zero a live session's anchor.
+--
+-- A constant-DEFAULT ADD COLUMN (cheap metadata op, no table rebuild).
+ALTER TABLE member ADD COLUMN session_boot_ts REAL NOT NULL DEFAULT 0;
+
+-- +goose Down
+ALTER TABLE member DROP COLUMN session_boot_ts;
