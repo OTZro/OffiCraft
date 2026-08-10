@@ -1563,6 +1563,130 @@ ff8a_mutant use 's|^  if ! oc_e2e_teardown_armed; then$|  if false; then|'
   && ok "after both mutants, the throwaway sentinel is STILL there — breaking the guard cannot make this test destructive" \
   || bad "a mutant DELETED the throwaway sentinel — this test file relies on the guard it is testing for its own safety"
 
+# ── 21) T-42bb: the seven_gate VERDICT — it must go red, and name the step ────
+#
+# seven_gate/judge.py decides whether a seven-step run happened, reading ONLY
+# what the server was observed to hold. The thing that can silently rot in it is
+# not "does a good run pass" — a judge that returns PASS unconditionally does
+# that too. It is "does a run MISSING one step go red, and does it say WHICH".
+# So the shape below is: one green fixture as the control, then SEVEN mutants,
+# one per step, each removing exactly that step's fact from the bundle. Each must
+# exit 1 AND name its own step on the last line. A mutant that reddens the wrong
+# step is as bad as one that stays green — the caller acts on the name.
+#
+# HERMETIC: no server, no network. The bundle is a handful of JSON objects
+# written here, which is the whole reason collect.py (I/O) and judge.py (pure)
+# are separate files.
+SG_DIR="$HERE/../seven_gate"
+SG_WORK="$SHIMDIR/seven-gate"
+mkdir -p "$SG_WORK"
+
+# The full-green bundle, as a python emitter so a mutant is one deleted key.
+# `python3` here is the same text-tool use lib/common.sh already makes of it.
+cat > "$SG_WORK/mk.py" <<'PY'
+import json, os, sys
+drop, out = sys.argv[1], sys.argv[2]
+AG, NONCE = "m-sg", "sg-nonce-deadbeef"
+step0 = {"id": "s1", "name": "走完七步", "status": "done" if drop != "step_done" else "todo"}
+task = {"id": "T-1", "creator_id": AG, "title": "probe", "created_ts": 100,
+        "updated_ts": 200, "status": "done",
+        "steps": [] if drop == "submit_plan" else [step0],
+        "closeout_reported": drop != "closeout"}
+samples = [
+    {"t": 1.0, "member": {"id": AG, "presence": "offline"}, "chat": [], "tasks": [], "reply_cards": []},
+    {"t": 2.0,
+     "member": {"id": AG, "presence": "online" if drop == "report_waking" else "waking"},
+     "chat": [], "tasks": [], "reply_cards": []},
+    {"t": 9.0, "member": {"id": AG, "presence": "online"},
+     "chat": ([] if drop == "resume_scene" else
+              [{"id": "c1", "from": AG, "body": "接回現場：" + NONCE}]),
+     "tasks": [] if drop == "create_task" else [task],
+     "reply_cards": [] if drop == "reply_card" else
+                    [{"id": "rc-1", "from": AG, "status": "waiting"}]},
+]
+os.makedirs(out, exist_ok=True)
+json.dump({"agent_id": AG, "scene_nonce": NONCE}, open(out + "/scene.json", "w"))
+with open(out + "/journal.ndjson", "w") as fh:
+    for s in samples:
+        fh.write(json.dumps(s, ensure_ascii=False) + "\n")
+PY
+
+sg_judge() { # sg_judge DROP -> prints "<rc>|<last line>"
+  local drop="$1" dir="$SG_WORK/b-$1"
+  rm -rf "$dir"
+  python3 "$SG_WORK/mk.py" "$drop" "$dir" >/dev/null 2>&1 || { echo "9|fixture-build-failed"; return; }
+  local outp rc
+  outp="$(python3 "$SG_DIR/judge.py" "$dir" 2>&1)"; rc=$?
+  printf '%s|%s\n' "$rc" "$(printf '%s\n' "$outp" | tail -n 1)"
+}
+
+# 21a) the control: nothing dropped → green, and the marker is EXACT. Without
+# this the seven mutants below are satisfied by a judge that fails everything.
+_sg="$(sg_judge none)"
+check "seven_gate: a complete run exits 0" "0" "${_sg%%|*}"
+check "seven_gate: a complete run's last line is the exact marker" \
+  "[seven_gate] all green" "${_sg#*|}"
+
+# 21b) SEVEN mutants — one step's fact removed each time. Both halves are
+# asserted per mutant: rc must be 1 (green would mean the gate cannot say no)
+# and the last line must name THAT step (a red pointing elsewhere sends the
+# reader to the wrong place, which costs more than no red at all).
+sg_mutant() { # sg_mutant KEY ZH
+  local key="$1" zh="$2" res rc last
+  res="$(sg_judge "$key")"; rc="${res%%|*}"; last="${res#*|}"
+  check "seven_gate: with 「${zh}」 missing, the verdict is RED" "1" "$rc"
+  case "$last" in
+    *"failed at step"*"$key"*) ok "seven_gate: the RED names 「${zh}」 ($key) — $last" ;;
+    *) bad "seven_gate: 「${zh}」 was missing but the verdict named something else: $last" ;;
+  esac
+}
+sg_mutant report_waking 報到
+sg_mutant resume_scene  接回現場
+sg_mutant create_task   開票
+sg_mutant submit_plan   提出計畫
+sg_mutant step_done     報一步完成
+sg_mutant reply_card    開一張等我回覆卡
+sg_mutant closeout      回報收尾
+
+# 21c) an EMPTY journal must not read as a pass. This is the failure mode a
+# collector crash produces, and "no evidence" answering green is the one bug
+# that would make every future run meaningless.
+rm -rf "$SG_WORK/b-empty"; mkdir -p "$SG_WORK/b-empty"
+printf '{"agent_id":"m-sg","scene_nonce":"n"}' > "$SG_WORK/b-empty/scene.json"
+: > "$SG_WORK/b-empty/journal.ndjson"
+python3 "$SG_DIR/judge.py" "$SG_WORK/b-empty" >/dev/null 2>&1
+check "seven_gate: an EMPTY journal is RED, not green" "1" "$?"
+
+# 21d) the friction wording is the load-bearing part of the follow-up and it
+# lives in exactly ONE file. Pinned verbatim, because the way this stops working
+# is someone "tidying" it into 「順不順」 — which returns a pleasantry every time
+# and therefore returns nothing.
+SG_FRICTION="$SG_DIR/friction.md"
+check "seven_gate: friction Q1 is verbatim" "1" \
+  "$(grep -cF '哪一步你猶豫了／翻回去重讀了／用猜的？' "$SG_FRICTION" || true)"
+check "seven_gate: friction Q2 is verbatim" "1" \
+  "$(grep -cF '你有沒有做出後來才發現做錯的事？' "$SG_FRICTION" || true)"
+# The banned phrasings may be NAMED in the prose that explains why they are
+# banned, so the scan is for a QUESTION — the phrase followed by a question mark.
+_sg_bad="$(grep -cE '(順不順|順利嗎|有沒有問題|還可以嗎)[？?]' "$SG_FRICTION" || true)"
+check "seven_gate: friction asks none of the pleasantry questions" "0" "${_sg_bad:-0}"
+# run.sh must READ that file rather than carry its own copy of the questions —
+# two copies drift, and the one that drifts is the one that gets asked.
+_sg_reads="$(grep -cF 'friction.md' "$SG_DIR/run.sh" || true)"
+[[ "${_sg_reads:-0}" -gt 0 ]] \
+  && ok "seven_gate: run.sh sources the questions from friction.md (no second copy)" \
+  || bad "seven_gate: run.sh no longer reads friction.md — the questions have been copied, and copies drift"
+
+# 21e) the default actor spawns nothing. This file cannot prove what a live
+# actor costs, but it CAN pin that the default is not one: run.sh's fallback
+# actor must be the stub, and the stub must not reach for a claude binary.
+_sg_def="$(grep -cE 'OC_SG_ACTOR:-\$HERE/actors/stub\.sh' "$SG_DIR/run.sh" || true)"
+[[ "${_sg_def:-0}" -gt 0 ]] \
+  && ok "seven_gate: run.sh's default actor is the stub (no agent spawned unless asked)" \
+  || bad "seven_gate: run.sh's default actor is no longer the stub — a bare run may now burn API quota"
+_sg_claude="$(grep -cE '(^|[^a-z])claude([^a-z]|$)' "$SG_DIR/actors/stub.sh" || true)"
+check "seven_gate: the stub actor never invokes claude" "0" "${_sg_claude:-0}"
+
 echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1
 
