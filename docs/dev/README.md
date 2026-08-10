@@ -22,7 +22,7 @@ spec/         凍結的 wire 契約（openapi.json / mcp-catalog.json）——�
 seeds/        語言中立 seed .md 資產（boot context；ocserverd runtime 直讀）
 conformance/  語言無關黑箱套件：server wire 行為的可執行定義（HTTP-only 回歸權威）
 e2e_test/     Playwright 端到端（隔離 port，絕不碰 prod）
-bin/          維運指令：ocserver / ocwarden / serve / migrate / build / ci.sh …
+bin/          維運指令：ocserver / ocwarden / serve / migrate / build / ci.sh / local-ci.sh …
 docs/         設計文件
 oc.toml.example  server 設定範本
 ```
@@ -56,6 +56,9 @@ cd e2e_test && bash run_all.sh              # 預設：不花錢
 OC_E2E_LIVE_AGENT=1 bash run_all.sh          # 明確要求：會 spawn 真 agent，會花錢
 ```
 
+（要連同 `bin/ci.sh` 一起跑的完整那一輪是 `bash bin/local-ci.sh [--live-agent]`，見〈CI〉。
+它餵給這裡的就是上面那個變數，機關是同一套、不是另一套。）
+
 - 成員資格由 spec **自己用檔名宣告**（`*.live-agent.spec.js`），`playwright.config.js` 裡**沒有檔名
   清單**——清單要靠每一支新測試記得回去登記，忘記的那支就預設偷偷跑、偷偷付錢。
 - 判定是**嚴格** `=== '1'`，所以 `true` / `yes` / `TRUE` 這類打錯字**一律落到「沒跑、沒花錢」**。
@@ -79,6 +82,36 @@ OC_E2E_LIVE_AGENT=1 bash run_all.sh          # 明確要求：會 spawn 真 agen
 bin/ci.sh          # 綠的判準是「rc == 0 且整份輸出的最後一行精確為 [ci] all green」，兩個條件都要
 ```
 
+### 更寬的那一輪：`bin/local-ci.sh`（不是每次都跑）
+
+`bin/ci.sh` **不跑 playwright spec**（它只透過 `e2e_test/tests_guard` 驗那支腳本的 wiring 形狀，
+那一輪一支 spec 都沒跑）。要把 spec 也跑起來的是另外**獨立的一支**：
+
+```bash
+bash bin/local-ci.sh                 # bin/ci.sh + e2e spec；預設不跑 live agent，不花錢
+bash bin/local-ci.sh --live-agent    # 🔴 連 live-agent 那一類也跑：spawn 真 agent、花真錢
+bash bin/local-ci.sh --dry-run       # 只印它會做什麼，什麼都不跑
+```
+
+**什麼時候跑**：出 GA 之前，或改到 live-agent 行為想真的看它跑起來的時候。**日常那一輪仍然是
+`bash bin/ci.sh`**——這一支會架一整座站、開真瀏覽器，帶旗標時還會花錢。
+
+- 它**不是** `bin/ci.sh` 的改名、也不是取代它：`bin/ci.sh` 一個字沒動，仍然自成一套、仍然是 push
+  前跑的那一輪。`local-ci.sh` 只是**呼叫**它，再補上它刻意不做的那一段（`e2e_test/run_all.sh`）。
+- 它也**不是** `make ci` 那種彙總項目：它一個檢查都不點名，那一輪是什麼由 `bin/ci.sh` 自己的
+  target 陣列決定 ⇒ **repo 裡沒有第二份「CI 跑哪些」的清單**。
+- phase 1 的判決照本檔上面那條兩半規則走（rc == 0 **且**末行精確等於權威字串），不是只看 rc。
+- 🔴 **live agent 的機關沒有另造一套**：成員資格仍由檔名宣告（`*.live-agent.spec.js`）、
+  `playwright.config.js` 仍是嚴格 `=== '1'`、`e2e_test/assert-specs-ran.sh` 仍在事後稽核
+  「沒被要求的那一類有沒有偷跑」。`local-ci.sh` 只決定要餵它們哪個值，而且**它自己的旗標是唯一
+  輸入**——環境裡既有的 `OC_E2E_LIVE_AGENT` 會被覆蓋並印一行說明，因為「那個 shell 還有沒有
+  export 那個變數」不該是「這一輪會不會花錢」的答案的一部分。
+- 🔴 **打錯字往不花錢那邊倒**：`--live-agent` 是**整個參數**比對，任何不認得的參數在**跑任何東西
+  之前**就被拒絕（rc=2）。所以打錯的 opt-in（`--live-agents`）不會變成 opt-in，而更要緊的是打錯的
+  **opt-out**（`--live-agent=0`）也不會被讀成同意花錢——前綴比對的 parser 正好會把後者讀成
+  「開」（實測：同一條命令，前綴比對的 mutant 讓 specs 收到 `OC_E2E_LIVE_AGENT=1`，本尊 rc=2 什麼
+  都沒跑）。
+
 ### 一份副本只准跑一輪 — 多輪＝多份副本（T-70c9）
 
 `bin/ci.sh` 對**它自己那份工作副本**上鎖。同一份 clone 裡起第二輪，會拿到一則明確的
@@ -91,8 +124,8 @@ bin/ci.sh          # 綠的判準是「rc == 0 且整份輸出的最後一行精
 ```
 
 **為什麼不是「小心一點就好」**：ci.sh 全程在**原地**寫這份副本——`npm ci` 會把
-`frontend/node_modules` 整個刪掉重建、三個 `build-*dist` staging 到固定路徑、而 4b1/4b2/4b3
-這三道會把**五個 committed 生成檔就地重生、再跟自己幾秒前拷的備份逐位元組比對**。兩輪交錯，
+`frontend/node_modules` 整個刪掉重建、三個 `build-*dist` staging 到固定路徑、而 `drift-*`
+那幾個項目會把**五個 committed 生成檔就地重生、再跟自己幾秒前拷的備份逐位元組比對**。兩輪交錯，
 那幾道比的就是 A 的備份對上 B 的重生。**失效方向不固定**：可能紅（假紅），也可能**綠**——
 綠在一棵這一輪根本沒驗過的樹上。`[ci] all green` 是這個 repo 的 land 權威，所以要殺的是後者。
 
@@ -121,20 +154,22 @@ cd /path/to/another-copy && bash bin/ci.sh   # 與別份副本並跑是支援的
 以及一條把「conformance 同副本 4 輪並行全綠」推翻掉的實測）：見
 [`docs/dev/ci-parallelism.md`](ci-parallelism.md)。
 
-可執行形式是 `bin/lib/ci-lock.sh`，守衛是 `bin/tests/ci-lock-guard.sh`（CI step 0b 派出）。
+可執行形式是 `bin/lib/ci-lock.sh`，守衛是 `bin/tests/ci-lock-guard.sh`（由 `bin/tests/run.sh` 派出，
+也就是 `test-bin-guards` 這個檢查項目；⚠️ 舊文寫「CI step 0b」，而 T-4d88 之後 `bin/ci.sh` 裡已經沒有
+編號步驟——它印的是一份 target 名單，`grep -n '^echo "\[ci\] (' bin/ci.sh` 現在零命中）。
 守衛**不會**真的並跑兩輪完整 CI：驗一個 mutant 必然要讓鎖失效，那時真並跑會把開發者的樹弄爛——
 一條「在它正在測的守衛失效時會造成真實破壞」的測試是定時炸彈。它改用拋棄式目錄 + 輕量替身
 行程去驅動 ci.sh 用的**同一份 lib**。
 
 判準為什麼是 **AND**（T-d3e3）：兩半各自都不夠。
 
-- **寬鬆 grep 完全無效**：step 0 的 `e2e_test/tests_guard` 第一步就印自己的 `all green`，所以**任何**中途爆掉的 log 裡都已經含有那個子字串。
+- **寬鬆 grep 完全無效**：`test-e2e-isolation-guard` 這個項目跑的 `e2e_test/tests_guard` 第一步就印自己的 `all green`，所以**任何**中途爆掉的 log 裡都已經含有那個子字串。
 - **只看最後一行會被 dispatch 的 lane 偽造**：ci.sh 不是這份 log 的唯一寫入者。一個被 dispatch 的 lane 只要 `echo "[ci] all green"; exit 1`，ci.sh 的 `set -e` 就在那裡中止，偽造的權威剛好留在最後一行——這個假綠是真的被做出來過的。
 - **只看 rc 也不夠**：這個 repo 有前例，`bin/common.sh` 的 `set -e` 打敗了 `run_all.sh` 刻意的 rc 捕獲，讓失敗訊號默默消失。舊文所以寫「判準是 marker、**不是** exit 0」——那句話講的是 **rc 不足以單獨判綠**，不是「rc 不該被檢查」。要求兩者同時成立比任一半都嚴格，與原意相容。
 
 `bin/tests/ci-success-marker.sh` 是這條規則的可執行形式：它同時掃描 **ci.sh 以及每一個被 dispatch 的 lane 腳本**，要求除了 ci.sh 之外沒有任何 shell 腳本「有能力」印出這個權威字串。
 
-CI 跑在本地、`bin/ci.sh` 是 land 權威，從第一個非零步驟就 fail-fast；push 前請自己跑到綠。**gate 內容以 `bin/ci.sh` 自己的步驟標頭為準**——⚠️ **這裡刻意不複製一份清單**：舊文那份（「go gate / 黑箱 lint / gitleaks / FE typecheck+drift」）漏掉的比列到的多，而它從變假的那天到被發現為止，沒有任何東西會叫它。複製品沒有東西釘著它；那支腳本有。
+CI 跑在本地、`bin/ci.sh` 是 land 權威，從第一個非零步驟就 fail-fast；push 前請自己跑到綠。**gate 內容以 `bin/ci.sh` 裡那份 target 名單、以及 `Makefile` 的具名項目為準**（`grep -nE '^[a-z][a-z0-9-]*:' Makefile`）——⚠️ 舊文寫「以 `bin/ci.sh` 自己的步驟標頭為準」，而 T-4d88 之後那支腳本裡一道檢查都沒有、也沒有編號步驟了：它只剩鎖、provenance 戳章、以及一份 target 名單。⚠️ **這裡刻意不複製一份清單**：舊文那份（「go gate / 黑箱 lint / gitleaks / FE typecheck+drift」）漏掉的比列到的多，而它從變假的那天到被發現為止，沒有任何東西會叫它。複製品沒有東西釘著它；那份名單有。
 
 （舊文寫「不付 GitHub Actions」——repo 轉 PUBLIC 後那個理由已不成立，公開 repo 用標準 runner 是免費的。真正的理由是這份 gate 裡有大量 host-shaped 與「重生後逐位元組比對」的步驟，我們不想把那些的權威搬到雲上。）
 
@@ -161,13 +196,13 @@ CI 跑在本地、`bin/ci.sh` 是 land 權威，從第一個非零步驟就 fail
 
 ⚠️ **workflow 裡的 go / node 版本釘選是承重的、不是衛生習慣**：一致性檢查斷言的是「重生的位元組與 committed 完全相同」，runner 的 toolchain 一旦浮動超前開發機，這一類就會在「碼完全沒問題」的情況下變紅。
 
-⚠️ **T-4d88 起沒有 ubuntu 那一格了**(owner 裁定:全部改在 macOS 上跑)。下面這段講的 ubuntu／Linux 對照是**歷史**,留著是因為它記著每一項當初為什麼進不了 Linux；今天的實況是每一格都在 macOS,而「Linux 上會怎樣」這件事這個 repo 不再有任何量測。**（歷史）不在 ubuntu `cloud-gates` 裡的**：`bin/tests/run.sh`（Linux 上會紅；根因是 BSD/GNU `mktemp -t` 語意、SIGPIPE 與 macOS 形狀的 `install.sh` fixture，尚未移植。⚠️ **這裡刻意不寫失敗條數**：舊文寫死「16 條」，而那個數字只在量它的那一天為真——`bin/ci-cloud.sh` 的檔頭早就記著它「在套件第一次改動時就過期了」。T-9fe3 又往這個套件加了一整組 `auto-beta-guard.sh`，所以那個數字現在更沒有理由成立，而**我們也沒有 Linux 機器可以重量**——正解是不要斷言一個沒人在維護的數字）、Playwright CT（真瀏覽器版面守衛；macOS↔Linux 的字型與光柵化差異會讓紅燈的意思從「版面壞了」變成「runner 字型不同」，而 Linux 那一側**從來沒被量過**）、gitleaks（內容級機密掃描）、`e2e_test` 的真機端到端測試（要真的 fleet host）。⚠️ **「不在 cloud-gates」不等於「只跑在本機」**：上面這幾項現在都有 macOS runner 上的 job(CT 是 T-0fef 才接上的,在那之前它確實只跑在一台開發機上)。**哪一項跑在哪個 job,這裡刻意不列**(見 `CLAUDE.md`〈文件鐵律〉——這種對照表正是會靜默過期、而且沒有東西會叫它的那種):要對號就讀那兩支腳本自己的步驟標頭,`grep -nE '^[a-z][a-z0-9-]*:' Makefile`,以及 `ci.yml` 裡每個 job `run:` 呼叫的是哪一支。**雲端流程的每一道閘都不用任何 secret，所以 fork PR 也能跑完整**——T-5d3b 之後 workflow 裡確實有一個 secret（`notify-main-red` 用的回呼網址），但它**不是閘**、只在 push-to-`main` 那條路徑上跑，而 fork PR 本來就拿不到 repo 的 secret ⇒ 對 pull request 而言上面那句性質一字未變。⚠️ 把 secret 加進**任何一道閘**就會改掉它（fork PR 會變成跑一份比我們小的檢查）。
+⚠️ **T-4d88 起沒有 ubuntu 那一格了**(owner 裁定:全部改在 macOS 上跑)。下面這段講的 ubuntu／Linux 對照是**歷史**,留著是因為它記著每一項當初為什麼進不了 Linux；今天的實況是每一格都在 macOS,而「Linux 上會怎樣」這件事這個 repo 不再有任何量測。**（歷史）不在 ubuntu `cloud-gates` 裡的**：`bin/tests/run.sh`（Linux 上會紅；根因是 BSD/GNU `mktemp -t` 語意、SIGPIPE 與 macOS 形狀的 `install.sh` fixture，尚未移植。⚠️ **這裡刻意不寫失敗條數**：舊文寫死「16 條」，而那個數字只在量它的那一天為真——`bin/ci-cloud.sh` 的檔頭早就記著它「在套件第一次改動時就過期了」。T-9fe3 又往這個套件加了一整組 `auto-beta-guard.sh`，所以那個數字現在更沒有理由成立，而**我們也沒有 Linux 機器可以重量**——正解是不要斷言一個沒人在維護的數字）、Playwright CT（真瀏覽器版面守衛；macOS↔Linux 的字型與光柵化差異會讓紅燈的意思從「版面壞了」變成「runner 字型不同」，而 Linux 那一側**從來沒被量過**）、gitleaks（內容級機密掃描）、`e2e_test` 的真機端到端測試（要真的 fleet host）。⚠️ **「不在 cloud-gates」不等於「只跑在本機」**：上面這幾項現在都有 macOS runner 上的 job(CT 是 T-0fef 才接上的,在那之前它確實只跑在一台開發機上)。**哪一項跑在哪個 job,這裡刻意不列**(見 `CLAUDE.md`〈文件鐵律〉——這種對照表正是會靜默過期、而且沒有東西會叫它的那種):要對號就讀 `Makefile` 的具名項目(`grep -nE '^[a-z][a-z0-9-]*:' Makefile`),以及 `ci.yml` 裡每一格 `run:` 點名了哪幾個項目(`grep -n 'run-checks' .github/workflows/ci.yml`)——⚠️ 舊文寫「讀那兩支腳本自己的步驟標頭」,那兩支(`bin/ci-cloud.sh` / `bin/ci-macos-host.sh`)在 T-4d88 已經刪除。**雲端流程的每一道閘都不用任何 secret，所以 fork PR 也能跑完整**——T-5d3b 之後 workflow 裡確實有一個 secret（`notify-main-red` 用的回呼網址），但它**不是閘**、只在 push-to-`main` 那條路徑上跑，而 fork PR 本來就拿不到 repo 的 secret ⇒ 對 pull request 而言上面那句性質一字未變。⚠️ 把 secret 加進**任何一道閘**就會改掉它（fork PR 會變成跑一份比我們小的檢查）。
 
-**Go 測試一律 `-count=1`（T-bedc）**：`bin/ci.sh` 裡跑 `go test` 的那一步一律帶 `-count=1`（⚠️ 舊文寫「CI step 1e」，而那個子標籤根本不存在——子標籤本身就是會漂的東西，指它不如指下面那道守衛）。`-count=1` 是「不吃 go 的測試結果快取」，**不可省**。省掉的後果是實測過的——log 裡出現 `ok  ocwarden  (cached)`，那格綠燈認證的是一次**根本沒執行**的跑。兩個獨立理由：(a) 快取 key 只涵蓋 package 的**輸入**，不涵蓋測試真正碰的世界（port、時鐘、launchd、host fleet、staged embed assets 的**效果**），所以今天會紅的 package 照樣報 ok；(b) 它**結構性地藏 flake**——一個 suite 只在「第一個改到它輸入的 commit」上跑過一次，間歇性失敗於是被攤平到近乎零觀測機率，`[ci] all green` 變成在講快取而不是在講碼。可執行形式是 `bin/tests/go-test-nocache-guard.sh`（由 `bin/tests/run.sh` 派出）：它以**命令位置解析**（不是 substring grep——那會匹配到 ci.sh 與守衛自己的說明文字）掃全 repo 的 shell 腳本，任何 `go test` 呼叫點少了 `-count=1` 就紅。注意 `go build` / `go vet` 的快取**刻意不管**：那是對編譯本身做 content-addressed，命中等價於未命中；只有**測試結果**快取會宣稱「行為被觀察過」而其實沒有。
+**Go 測試一律 `-count=1`（T-bedc）**：跑 `go test` 的地方一律帶 `-count=1`——⚠️ **今天那個地方是 `Makefile` 的 `test-go` recipe，不在 `bin/ci.sh` 裡**（T-4d88 把每道檢查的做法收斂成 Makefile 裡唯一一個具名項目；舊文寫「`bin/ci.sh` 裡跑 `go test` 的那一步」與更舊的「CI step 1e」都已不成立，而子標籤本身就是會漂的東西，指它不如指下面那道守衛）。`-count=1` 是「不吃 go 的測試結果快取」，**不可省**。省掉的後果是實測過的——log 裡出現 `ok  ocwarden  (cached)`，那格綠燈認證的是一次**根本沒執行**的跑。兩個獨立理由：(a) 快取 key 只涵蓋 package 的**輸入**，不涵蓋測試真正碰的世界（port、時鐘、launchd、host fleet、staged embed assets 的**效果**），所以今天會紅的 package 照樣報 ok；(b) 它**結構性地藏 flake**——一個 suite 只在「第一個改到它輸入的 commit」上跑過一次，間歇性失敗於是被攤平到近乎零觀測機率，`[ci] all green` 變成在講快取而不是在講碼。可執行形式是 `bin/tests/go-test-nocache-guard.sh`（由 `bin/tests/run.sh` 派出）：它以**命令位置解析**（不是 substring grep——那會匹配到說明文字）掃全 repo 的 shell 腳本**以及 tracked 的 make 檔**，任何 `go test` 呼叫點少了 `-count=1` 就紅。⚠️ **掃描集合長出 make 檔是 T-4d88 補的**：呼叫點搬進 `test-go` 的 recipe 之後，只掃 shell 腳本的舊版本掃到 0 個呼叫點——那是空集合上的真空綠，連 mutant 都造不出來。注意 `go build` / `go vet` 的快取**刻意不管**：那是對編譯本身做 content-addressed，命中等價於未命中；只有**測試結果**快取會宣稱「行為被觀察過」而其實沒有。
 
 改 Go 後只需 fresh build 驗證；`bin/ocagent`、`bin/ocwarden`、`bin/ocserverd` 若出現都是 gitignored build artifact，**永不 commit**。CI 一律編譯 source。部署 binary 由 `bin/release` / GitHub Release fresh build 產出。
 
-**唯一的例外是 TCC 身分錨點 `dist/officraft/officraft`（owner 明確核可，T-5831）**：它是 launchd 的 responsible process，而 TCC 用 bytes 認身分，所以那份 bytes 本身就是要被審的東西。`.gitignore` 只放行 `dist/officraft/` 底下四個路徑，其餘 `dist/` 照舊全擋。它附兩份紀錄（`source.sha256` 與 `binary.sha256`），由 `bin/check-officraft-dist` 在 CI step 3 比對；重建方式與**為什麼 build 一定要帶 `-trimpath -buildvcs=false`** 寫在 `dist/officraft/BUILD.md`。
+**唯一的例外是 TCC 身分錨點 `dist/officraft/officraft`（owner 明確核可，T-5831）**：它是 launchd 的 responsible process，而 TCC 用 bytes 認身分，所以那份 bytes 本身就是要被審的東西。`.gitignore` 只放行 `dist/officraft/` 底下四個路徑，其餘 `dist/` 照舊全擋。它附兩份紀錄（`source.sha256` 與 `binary.sha256`），由 `bin/check-officraft-dist` 比對（`scan-tcc-anchor` 這個檢查項目；⚠️ 舊文寫「CI step 3」，T-4d88 之後已無編號步驟）；重建方式與**為什麼 build 一定要帶 `-trimpath -buildvcs=false`** 寫在 `dist/officraft/BUILD.md`。
 
 ## wire freeze
 
@@ -186,6 +221,7 @@ bin/release promote <tag>                       [--dry-run]
 - 🔴 **`publish` 在 build 之前會先在那個 staging worktree 裡跑一次完整 `bin/ci.sh`,不綠就不發(T-b65e,owner 2026-08-02 明令)**。驗的是**即將出貨的那一棵樹**,不是「這台機器上碰巧有一份綠的紀錄」:rc 取自 `ci.sh` 自己、log **末行**必須精確等於 `[ci] all green`、跑完 tracked 檔不得有任何變動,證據落在 `dist/release/ci/<short>-<utc>-<pid>/ci.log`(per-run 唯一目錄,`mkdir` 非 `-p`,撞名硬錯)。任何一項不過 ⇒ 以非零退出中止,**不 build、不打包、不上傳、不打 tag**。為什麼要有這道閘:合併端已放寬(雲端門禁過就按),而 beta 會被站台的 auto_update 自己撿去上正式站 ⇒ **這是上線前唯一一道行為驗證**。⚠️ **沒有跳過開關,也不要加**(owner 卡 `rc-ffb4b06ad1d9` 拍板,與 CI 互斥鎖「刻意不留 bypass」同一立場)。`--dry-run` **照跑**這道閘——彩排不跑最可能擋下發版的那一步就不算彩排。
   - **代價要知道**:staging worktree 是全新 checkout,所以那一輪 CI 沒有 `node_modules` 可重用——完整 `npm ci` + 四個 Go module 的 `-count=1` 測試 + Playwright CT + conformance,**估 10 分鐘以上**,而且需要網路、gitleaks、Playwright 瀏覽器快取。`--dry-run` 彩排現在一樣貴。證據目錄**不會自動清理**(每次 publish/彩排留一份完整 CI log 在 `dist/release/ci/`,gitignored,自己看著清)。
   - `promote` **刻意不再驗一次**:它不重 build,出貨的 bytes 就是那顆 beta 已經被這道閘驗過的 bytes;再跑一輪只是換一棵樹重驗,不會更真。
+- 🔴 **出 GA 前的那一輪由人自己跑,不在 `promote` 裡**:`publish` 那道閘跑的是完整 `bin/ci.sh`,而那一輪**一支 playwright spec 都沒跑**(它只驗 `run_all.sh` 的 wiring 形狀)。要在出 GA 前真的把 spec 跑過一遍,跑 `bash bin/local-ci.sh`(改到 live-agent 行為時加 `--live-agent`,會花錢),見〈CI〉。**這刻意沒有被接進 `bin/release`**——那會讓每一顆 beta 都多付一輪 e2e,而自動發 beta 是無人值守的。
 - `promote` 把**既有且已驗過**的 prerelease 翻成正式版,**不重 build**——大家測的 bytes 就是出貨的 bytes。翻完回讀,若 asset 集合在翻的過程中變了(有人偷偷重傳)那是**失敗**,不是警告。
 - `--dry-run`:build + 驗完就停,印出它本來會跑的上傳指令,**什麼都不上傳**。彩排用這個。
 - `--no-settle`:**不等站台升上來**(跳過第 8 步)。理由是 owner 2026-08-05 裁定一:OffiCraft 是大家自架的服務、不是這個 repo 在營運的 SaaS,所以「某台站有沒有升上去」不是發版的成功條件;而無人值守的 runner 根本連不到私人站台,不給旗標的話每一輪自動發版都會死在一個跟 artifact 無關的理由上。**只是明示的 per-invocation opt-out**:預設一個字都沒變(人工發版照樣等站台、等不到照樣紅),第 7 步的回讀與 build 前的 CI 閘都**不受影響**,而且開了旗標那一輪會印一行講明為什麼不驗、結尾成功訊息也**不會**宣稱站台已在那顆 commit 上。守衛在 `bin/tests/release-guard.sh`(E3/E3b/E3c/E3d):E3 是它的**陽性對照**——同一組假站台狀態(站在別的 commit),不帶旗標仍以 `station-settle` 失敗,帶了才回 0。
@@ -245,9 +281,9 @@ gh release delete <tag> --repo pkyosx/OffiCraft --cleanup-tag --yes
 
 **這個 repo 不做 code signing,而且沒有任何開關可以打開它。** 原本的機制(`bin/codesign-artifact`、`bin/setup-codesign-cert`、`bin/build-release`、`bin/release publish --sign`、`OC_CODESIGN_*` 全套 env knob、`bin/tests/run.sh` 裡的 hermetic 簽章測試、`cli/ocwarden/selfupdate.go` 的 `signatureOf`/`codesignIdentity` 觀測路徑)在 T-0398 **全部刪除**——owner 拍板「全部拿掉,連手動簽章的逃生門一起刪」,所以不是預設關閉、不是留著等召回,是不在了。出貨的 binary 就是 `go build` 的產物(adhoc 簽章,cdhash 每 build 都變),`bin/release publish` 只有一種 builder。
 
-**被抽掉之後什麼不再被守**:CI 原本有一道守簽章的檢查(step 0b 的 `bin/tests/run.sh`),它守的是「預設路徑不碰共用 login keychain」「憑證檢查壞掉不可被讀成憑證不在」「`OC_CODESIGN_REQUIRE=1` 下絕不默默降級出 adhoc」。這些現在都不再被守——因為被守的東西整個不存在了,不是漏掉。要重新引入簽章,請當成一張新票、連守衛一起帶回來,不要只補一支腳本。
+**被抽掉之後什麼不再被守**:CI 原本有一道守簽章的檢查(`bin/tests/run.sh` 派出的,也就是今天的 `test-bin-guards` 項目),它守的是「預設路徑不碰共用 login keychain」「憑證檢查壞掉不可被讀成憑證不在」「`OC_CODESIGN_REQUIRE=1` 下絕不默默降級出 adhoc」。這些現在都不再被守——因為被守的東西整個不存在了,不是漏掉。要重新引入簽章,請當成一張新票、連守衛一起帶回來,不要只補一支腳本。
 
-⚠️ **不要把這條跟 TCC 身分錨點搞混**:`dist/officraft/officraft`(launchd 的 responsible process)是**用 bytes 認身分**的,所以它 byte-pinned、`bin/check-officraft-dist` 在 CI step 3 比對雜湊、裝過就永不覆寫。那套機制從來不依賴簽章憑證,**owner 核可保留,與本節無關**。
+⚠️ **不要把這條跟 TCC 身分錨點搞混**:`dist/officraft/officraft`(launchd 的 responsible process)是**用 bytes 認身分**的,所以它 byte-pinned、`bin/check-officraft-dist` 在 `scan-tcc-anchor` 那個項目比對雜湊、裝過就永不覆寫。那套機制從來不依賴簽章憑證,**owner 核可保留,與本節無關**。
 
 📌 **一份不隨簽章走的結論已搬家**:本節原本夾帶一份 repo 級的 shell 掃描結論(`pipefail` + 提前關 pipe 的消費者),它的主要案例當年是 `codesign-artifact`,但通則與逐檔判定跟簽章無關 ⇒ 見本文件最後一節〈shell 陷阱:`pipefail` 與提前關 pipe 的消費者〉。
 

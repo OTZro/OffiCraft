@@ -13,8 +13,11 @@ Go(ocserverd)是唯一 target(py leg 已隨 Python backend 退役;那段歷史�
 叫 `teardown.sh`。**實測**:在 `playwright test` 與 `RC=$?` 中間插一行 ⇒ FAIL=2 rc=1;把 trap 改成直接叫
 `teardown.sh` ⇒ FAIL=4 rc=1。<br>
 ⇒ **本機綠證明的是那幾條 wiring,不證明任何一支 spec 跑過**(那一輪一支都沒跑)。**spec 面的驗收是 PR 上
-`macos-e2e` 那一輪與它的 log。** 至於 `assert-specs-ran.sh`,本機**完全碰不到**(唯一呼叫者是 `ci.yml`),
-改它就真的只有雲端那一輪能驗。自動關卡在
+`macos-e2e` 那一輪與它的 log。** 要在本機把 spec 真的跑起來,那一輪是 `bash bin/local-ci.sh`(＝`bin/ci.sh` ＋ 這一套;`--live-agent` 才會花錢),
+**但它不是自動的、也不是每次都跑**——它是出 GA 前、或改到 live-agent 行為時才跑的那一支。
+至於 `assert-specs-ran.sh`,⚠️ **舊文寫「本機完全碰不到、唯一呼叫者是 `ci.yml`」,T-4d88 之後不成立**:
+`bin/local-ci.sh` 也會把 run_all 的 log 交給它。呼叫者是一條查詢、不是一句話——`git grep -nF assert-specs-ran.sh`,
+而且只算**真的呼叫**、不算註解裡提到它。自動關卡在
 **`.github/workflows/ci.yml` 的 `macos-e2e` job**:macOS runner、`pull_request` **與 push-to-`main`**
 兩個觸發都跑(T-ab2a 補上後者;`main` 上不 cancel-in-progress,見那個檔的註解),
 **那個 job 什麼旗標都不用設**(T-c329):要**活的 agent** 的 spec 是**預設不跑**的,所以雲端不必
