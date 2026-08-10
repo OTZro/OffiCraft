@@ -70,8 +70,8 @@ func (s *apiServer) runScheduledMessageTick(now float64) {
 			continue // no slot has elapsed yet (e.g. a monthly day no recent month has)
 		}
 		key := slotKey(slot)
-		if key == sm.LastFiredSlot {
-			continue // this slot already went out — the restart-safe half
+		if !slotIsAfterCursor(slot, sm.LastFiredSlot) {
+			continue // already delivered, or older than what was — see slotIsAfterCursor
 		}
 		if err := s.deliverScheduledMessage(sm, key, now); err != nil {
 			schedLog("skip %s: delivery failed: %v", describeSchedule(sm), err)

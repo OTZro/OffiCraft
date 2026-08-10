@@ -35,25 +35,44 @@ const slotKeyLayout = "2006-01-02T15:04-07:00"
 // monthlyLookbackMonths bounds how far back a monthly schedule searches for a
 // month that actually CONTAINS its day_of_month.
 //
-// 🔴 Looking back only ONE month is the bug this constant exists to prevent, and
-// it fails silently: with day_of_month=31 and now = 15 February, the correct
-// answer is 31 JANUARY — January is the nearest month that has a 31st, February
-// having been skipped entirely per RFC 5545. A one-month search finds nothing,
-// returns "no slot", and the schedule simply never fires, with nothing to
-// observe. Two months would suffice for every real case (28/29/30/31 are never
-// more than two months from a month that contains them), so twelve is
-// deliberately generous headroom; its only job is to keep the loop bounded.
+// 🔴 Looking back only ONE step is the bug this constant exists to prevent, and
+// it fails silently: with day_of_month=31 and now = 1 March, March's 31st has
+// not arrived and February has no 31st at all, so the correct answer is 31
+// JANUARY — two months back. A shorter search finds nothing, returns "no slot",
+// and the schedule simply never fires, with nothing to observe.
+// TestMostRecentSlotSkipsMonthsWithoutTheDay pins that two-months case; the rest
+// is bounded headroom, not a claim that any real schedule needs twelve.
 const monthlyLookbackMonths = 12
+
+// dailyLookbackDays bounds how far back a daily schedule searches for a date its
+// zone actually HAS. Two steps is the worst real case (today's slot still ahead,
+// and yesterday a date the zone deleted outright — Pacific/Apia skipped 30
+// December 2011 for the date-line move); the third is headroom that keeps the
+// loop bounded.
+const dailyLookbackDays = 3
+
+// weeklyLookbackDays bounds the weekly search. Seven days finds the previous
+// occurrence of the weekday; fourteen is what it takes when THAT occurrence
+// landed on a date its zone deleted, so the answer is a week earlier again.
+const weeklyLookbackDays = 14
 
 // mostRecentSlot returns the latest slot of s at or before now, computed as
 // WALL-CLOCK TIME IN s.Timezone — never in the host's zone, never in UTC.
 //
-// ok=false means "no slot exists", which happens in exactly two ways, both of
+// 🔴 The whole feature depends on this function being MONOTONIC in `now`: a
+// later `now` must never yield an earlier slot. Nothing about slot identity
+// enforces that, so the arithmetic below has to earn it — see dayAnchor for the
+// trap that broke it, and slotAt for what a slot is built out of.
+// runScheduledMessageTick nonetheless refuses to move the cursor backwards, so a
+// future non-monotonic answer costs a delivery rather than duplicating one.
+//
+// ok=false means "no slot exists", which happens in exactly these ways, all of
 // which the caller must treat as "do not deliver":
 //   - s.Timezone will not load (see the 🔴 in ValidateScheduledMessageTimezone:
 //     there is NO fallback zone, here or anywhere else in this feature);
-//   - a monthly schedule whose day_of_month appears in no month within
-//     monthlyLookbackMonths, or a cadence outside the closed set.
+//   - no date within the cadence's lookback exists in both the calendar and the
+//     zone (a 31st in February; a calendar day the zone deleted outright);
+//   - a cadence outside the closed set.
 func mostRecentSlot(s ScheduledMessage, now time.Time) (time.Time, bool) {
 	loc, err := time.LoadLocation(s.Timezone)
 	if err != nil {
@@ -62,25 +81,23 @@ func mostRecentSlot(s ScheduledMessage, now time.Time) (time.Time, bool) {
 	local := now.In(loc)
 	switch s.Cadence {
 	case ScheduledMessageCadenceDaily:
-		if slot := slotOn(local, s, loc); !slot.After(local) {
-			return slot, true
+		anchor := dayAnchor(local)
+		for back := 0; back <= dailyLookbackDays; back++ {
+			day := anchor.AddDate(0, 0, -back)
+			if slot, exists := slotOn(day, s, loc); exists && !slot.After(local) {
+				return slot, true
+			}
 		}
-		// Today's slot has not arrived yet, so the most recent one is
-		// yesterday's — computed from yesterday's DATE rather than by
-		// subtracting 24h, so a DST shift moves the instant and leaves the wall
-		// clock where the owner set it.
-		return slotOn(local.AddDate(0, 0, -1), s, loc), true
+		return time.Time{}, false
 
 	case ScheduledMessageCadenceWeekly:
-		// Eight days covers it: today may or may not be the right weekday, and
-		// if it is but its slot is still ahead, the answer is the same weekday
-		// one week back.
-		for back := 0; back <= 7; back++ {
-			day := local.AddDate(0, 0, -back)
+		anchor := dayAnchor(local)
+		for back := 0; back <= weeklyLookbackDays; back++ {
+			day := anchor.AddDate(0, 0, -back)
 			if int(day.Weekday()) != s.DayOfWeek {
 				continue
 			}
-			if slot := slotOn(day, s, loc); !slot.After(local) {
+			if slot, exists := slotOn(day, s, loc); exists && !slot.After(local) {
 				return slot, true
 			}
 		}
@@ -107,27 +124,92 @@ func mostRecentSlot(s ScheduledMessage, now time.Time) (time.Time, bool) {
 	return time.Time{}, false
 }
 
+// dayAnchor names t's calendar DATE — year, month, day, with the zone dropped —
+// as a noon-UTC instant, so day arithmetic can be done on it.
+//
+// 🔴 Day arithmetic is done here and never on a local time. `local.AddDate(0,0,-1)`
+// reads like "yesterday" but is not: when yesterday's midnight is an hour the
+// zone skipped (America/Santiago 2026-09-06, America/Havana 2026-03-08), the
+// result normalises BACKWARDS into the day before, so "yesterday" quietly
+// becomes the day before yesterday — the cursor walks backwards and the tick
+// redelivers slots it already sent. UTC has no transitions, so the same
+// arithmetic on this anchor is pure calendar counting. Noon, not midnight,
+// because midnight is the reading zones actually skip.
+func dayAnchor(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 12, 0, 0, 0, time.UTC)
+}
+
 // slotOn stamps s's hour:minute onto the calendar date of day, in loc.
-func slotOn(day time.Time, s ScheduledMessage, loc *time.Location) time.Time {
-	return time.Date(day.Year(), day.Month(), day.Day(), s.Hour, s.Minute, 0, 0, loc)
+func slotOn(day time.Time, s ScheduledMessage, loc *time.Location) (time.Time, bool) {
+	return slotAt(day.Year(), day.Month(), day.Day(), s, loc)
 }
 
 // monthlySlot builds the slot for s.DayOfMonth within (year, month), reporting
 // exists=false when that month has no such day.
-//
-// ⚠️ The check is NOT redundant: time.Date NORMALISES an out-of-range day
-// instead of refusing it, so asking for 31 February 2026 yields 3 March 2026 —
-// a perfectly valid time, in the wrong month, that would deliver the message
-// three days late every February and look entirely normal doing it. Reading the
-// components back and requiring them to be the ones asked for is what turns
-// that silent rollover into the RFC 5545 "this month is skipped" the design
-// calls for.
 func monthlySlot(year int, month time.Month, s ScheduledMessage, loc *time.Location) (time.Time, bool) {
-	slot := time.Date(year, month, s.DayOfMonth, s.Hour, s.Minute, 0, 0, loc)
-	if slot.Year() != year || slot.Month() != month || slot.Day() != s.DayOfMonth {
+	return slotAt(year, month, s.DayOfMonth, s, loc)
+}
+
+// dstGapScanMinutes bounds the search for the first wall clock that EXISTS after
+// one the zone skipped. Every gap in the tz database is an hour or less (Lord
+// Howe's is thirty minutes), so two hours is headroom, and the bound is what
+// makes a DELETED CALENDAR DAY — Pacific/Apia skipped 30 December 2011 outright
+// for the date-line move — run out of candidates and report "no slot on this
+// date", which sends the cadence loop back another day. (A schedule set inside
+// the last two hours of such a day would find its first existing reading on the
+// following one; that is one occurrence landing on the neighbouring date, not a
+// lost or duplicated one, and it is not worth a special case.)
+// The +1-minute scan matches svc-automation's _first_existing_instant.
+const dstGapScanMinutes = 120
+
+// slotAt builds the slot for (year, month, day) at s's hour:minute in loc.
+//
+// Two different absences are handled two DIFFERENT ways, and the asymmetry is
+// deliberate — see the design doc, which records the reasoning for each:
+//
+//	THE DATE DOES NOT EXIST (31 February) → the occurrence is DROPPED.
+//	  Owner ruling rc-aeef15360ab5, RFC 5545: the day the owner asked for is not
+//	  in that month at all, so there is nothing to move it to that would not be a
+//	  different day of the owner's month.
+//	THE WALL CLOCK DOES NOT EXIST (the hour a spring-forward skips) → the
+//	  occurrence MOVES FORWARD to the first reading the zone does have.
+//	  The day IS there; it is merely an hour short. Dropping it means the owner
+//	  gets nothing that day and nothing says so, which is the exact failure this
+//	  feature exists to prevent. An hour late is late; it is not silence.
+//
+// ⚠️ Neither absence announces itself: time.Date NORMALISES a reading it cannot
+// honour rather than refusing it, in both directions and by an amount of its own
+// choosing. 31 February 2026 becomes 3 March; 00:30 on 2026-03-08 in
+// America/Havana becomes 03-07 23:30 (backwards, into the previous day); 02:15
+// on 2026-10-04 in Australia/Lord_Howe becomes 02:45 (forwards, thirty minutes,
+// same date — which a day-only check waves straight through). So nothing here
+// trusts time.Date's output: every candidate is READ BACK, component by
+// component, and only an exact match counts as the reading that was asked for.
+//
+// 🔴 The slot is always CONSTRUCTED from (year, month, day, hour, minute, zone)
+// and never derived from an offset of `now`. That is what makes it deterministic
+// across the autumn side too: when a wall clock occurs TWICE, both passes
+// construct the same instant, so the cursor sees the same slot and the second
+// pass delivers nothing. An "elapsed since" style computation would produce two
+// instants there and an ordering test alone would not catch it.
+func slotAt(year int, month time.Month, day int, s ScheduledMessage, loc *time.Location) (time.Time, bool) {
+	// Whether the DATE exists is a calendar question, asked zone-free — UTC has
+	// no transitions, so nothing here can be perturbed by one.
+	wall := time.Date(year, month, day, s.Hour, s.Minute, 0, 0, time.UTC)
+	if wall.Year() != year || wall.Month() != month || wall.Day() != day {
 		return time.Time{}, false
 	}
-	return slot, true
+	for shift := 0; shift <= dstGapScanMinutes; shift++ {
+		want := wall.Add(time.Duration(shift) * time.Minute)
+		slot := time.Date(want.Year(), want.Month(), want.Day(),
+			want.Hour(), want.Minute(), 0, 0, loc)
+		if slot.Year() == want.Year() && slot.Month() == want.Month() &&
+			slot.Day() == want.Day() && slot.Hour() == want.Hour() &&
+			slot.Minute() == want.Minute() {
+			return slot, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // slotKey renders a slot as the identifier stored in last_fired_slot. The same
@@ -135,6 +217,29 @@ func monthlySlot(year int, month time.Month, s ScheduledMessage, loc *time.Locat
 // "already delivered" test.
 func slotKey(slot time.Time) string {
 	return slot.Format(slotKeyLayout)
+}
+
+// slotIsAfterCursor reports whether slot is STRICTLY LATER than the slot the
+// cursor names — the fire/skip test.
+//
+// 🔴 This is deliberately an ordering test and not string inequality. The cursor
+// is a rendered instant (`2026-09-06T09:00-03:00`), and inequality answers
+// "different from last time", which is not the question: a slot computation that
+// ever moves BACKWARDS produces a string that differs from the cursor and
+// therefore fires, redelivering something already sent — and a duplicate
+// delivery is indistinguishable, in the chat log, from a correct one. Comparing
+// instants makes the cursor a ratchet: the worst a future non-monotonic answer
+// can do is skip a delivery, which is at least discoverable.
+//
+// An empty or unparseable cursor means "no slot has been delivered", so the
+// schedule fires: that is the state of a row written before the cursor existed,
+// and refusing to fire on it would strand the schedule forever.
+func slotIsAfterCursor(slot time.Time, cursor string) bool {
+	previous, err := time.Parse(slotKeyLayout, cursor)
+	if err != nil {
+		return true
+	}
+	return slot.After(previous)
 }
 
 // currentSlotKey is the cursor value for "everything up to and including now has
