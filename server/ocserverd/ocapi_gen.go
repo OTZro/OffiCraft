@@ -1971,6 +1971,14 @@ type TaskArtifactReceiptDTO struct {
 	TaskId        string `json:"task_id"`
 }
 
+// TaskCloseoutReceiptDTO Bounded receipt returned after report_task_closeout (T-bb70). BOTH exits used to answer with the whole task — the first (stamping) report AND the idempotent no-op repeat — measured at over 51,000 characters for a write whose entire news is one bit, so re-reporting a close-out was the most expensive way in the system to be told nothing new. “closeout_ts“ rides along because the write DERIVES it (stamped by the first report, unmoved by every repeat), so it is the part the caller cannot predict — the same reason “frozen_by“ rides the priority receipt. Fetch GET /api/tasks/{task_id} when full task detail is needed.
+type TaskCloseoutReceiptDTO struct {
+	CloseoutReported bool    `json:"closeout_reported"`
+	CloseoutTs       float64 `json:"closeout_ts"`
+	TaskId           string  `json:"task_id"`
+	TaskStatus       string  `json:"task_status"`
+}
+
 // TaskCountDTO Open (non-terminal) task count — the tasks nav badge. “total“ (T-a3e4) is the count of ALL tasks, terminal ones included: once the list endpoint answers a status SET (“?statuses=“), an empty list no longer tells a client whether the workshop is empty or merely has nothing in those states, and 目前沒有任務 is a claim about the workshop. One grouped count, so a client never widens a list fetch just to word an empty screen.
 type TaskCountDTO struct {
 	Open int `json:"open"`

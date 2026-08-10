@@ -360,6 +360,18 @@ func (s *apiServer) writeTaskArtifactReceipt(w http.ResponseWriter, t Task, arti
 	})
 }
 
+// writeTaskCloseoutReceipt is the common tail of BOTH close-out exits — the
+// first (stamping) report and the idempotent no-op repeat (T-bb70). One tail on
+// purpose: the two exits cannot drift into answering with different shapes, and
+// the repeat — the one a re-reporting agent actually hits — can never again pay
+// 51k characters to be told what it already knew.
+func (s *apiServer) writeTaskCloseoutReceipt(w http.ResponseWriter, t Task) {
+	writeJSON(w, http.StatusOK, taskCloseoutReceiptDTO{
+		TaskID: t.ID, TaskStatus: t.Status,
+		CloseoutReported: t.CloseoutTS > 0, CloseoutTS: t.CloseoutTS,
+	})
+}
+
 func (s *apiServer) writeTaskStepStatusReceipt(w http.ResponseWriter, t Task, step TaskStep) {
 	steps, err := s.dal.ListTaskSteps(t.ID)
 	if err != nil {
@@ -2505,7 +2517,10 @@ func (s *apiServer) HandleReportTaskCloseoutApiTasksTaskIdCloseoutPost(w http.Re
 		return
 	}
 	if t.CloseoutTS > 0 {
-		s.writeTask(w, *t) // already reported — idempotent no-op
+		// Already reported — idempotent no-op. The receipt (T-bb70) carries the
+		// ORIGINAL stamp, which is the one fact a repeat caller cannot derive:
+		// it says the close-out landed, and when.
+		s.writeTaskCloseoutReceipt(w, *t)
 		return
 	}
 	now := nowSecs()
@@ -2520,7 +2535,7 @@ func (s *apiServer) HandleReportTaskCloseoutApiTasksTaskIdCloseoutPost(w http.Re
 	// Idempotent; member-executed tasks have no worker rows → no-op.
 	s.dismissOutsourceWorkersForTask(t.ID, now, requestTrigger(r))
 	s.publishTask(*t, requestTrigger(r))
-	s.writeTask(w, *t)
+	s.writeTaskCloseoutReceipt(w, *t)
 }
 
 // ── C.4 artifact set (T-3dc5) ────────────────────────────────────────────────

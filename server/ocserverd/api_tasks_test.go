@@ -2197,8 +2197,8 @@ func TestReportTaskCloseoutStampsOnceAndIsIdempotent(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("close-out: %d %s", rec.Code, rec.Body.String())
 	}
-	if view := decodeBody[taskDTO](t, rec); !view.CloseoutReported {
-		t.Fatalf("first report must serve closeout_reported:true: %+v", view)
+	if got := decodeBody[taskCloseoutReceiptDTO](t, rec); !got.CloseoutReported {
+		t.Fatalf("first report must serve closeout_reported:true: %+v", got)
 	}
 	stored, err := api.dal.GetTask(task.ID)
 	if err != nil || stored == nil || stored.CloseoutTS <= 0 {
@@ -2211,8 +2211,8 @@ func TestReportTaskCloseoutStampsOnceAndIsIdempotent(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("repeat close-out must 200, got %d %s", rec.Code, rec.Body.String())
 	}
-	if view := decodeBody[taskDTO](t, rec); !view.CloseoutReported {
-		t.Fatalf("repeat must still serve closeout_reported:true: %+v", view)
+	if got := decodeBody[taskCloseoutReceiptDTO](t, rec); !got.CloseoutReported {
+		t.Fatalf("repeat must still serve closeout_reported:true: %+v", got)
 	}
 	stored, err = api.dal.GetTask(task.ID)
 	if err != nil || stored == nil || stored.CloseoutTS != stamp {
