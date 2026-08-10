@@ -140,7 +140,6 @@ func TestReportTaskCloseoutBodySize(t *testing.T) {
 		repeat.Body.Len())
 }
 
-
 // TestReportTaskCloseoutAnswersABoundedReceiptOnBothExits pins BOTH exits —
 // the first (stamping) report and the idempotent no-op repeat.
 func TestReportTaskCloseoutAnswersABoundedReceiptOnBothExits(t *testing.T) {
