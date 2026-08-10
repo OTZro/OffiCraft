@@ -1317,6 +1317,229 @@
   opacity: 0.5;
 }
 
+/* ---- scheduled messages (T-f059 定期訊息) ----
+   The webhook section's clock-driven twin, so it deliberately reuses that
+   card's shape (count badge, bordered rows, dashed add button, stacked
+   label-first form) rather than inventing a second visual language for the
+   same kind of list. */
+.mp-schedmsg__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  margin-left: 2px;
+  border-radius: 10px;
+  background: var(--color-indigo);
+  color: var(--color-on-indigo);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+.mp-schedmsg__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.mp-schedmsg__empty,
+.mp-schedmsg__error {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  padding: 4px 0;
+}
+.mp-schedmsg__error {
+  color: var(--color-danger);
+}
+.mp-schedmsg__row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--color-overlay) 1.5%, transparent);
+}
+.mp-schedmsg__rowhead {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.mp-schedmsg__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.mp-schedmsg__dot--on {
+  background: var(--color-switch-on);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-switch-on) 16%, transparent);
+}
+.mp-schedmsg__dot--off {
+  background: var(--color-text-muted);
+}
+.mp-schedmsg__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-strong);
+  font-size: 13px;
+  font-weight: 600;
+}
+.mp-schedmsg__spacer {
+  flex: 1 1 auto;
+}
+.mp-schedmsg__statusword {
+  font-size: 12.5px;
+  color: var(--color-text-muted);
+}
+.mp-schedmsg__delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--color-text-muted);
+  transition: color 0.15s, border-color 0.15s;
+}
+.mp-schedmsg__delete:hover {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+/* when-line: cadence · HH:MM · zone. The zone is ALWAYS shown — a wall-clock
+   time with no zone beside it is the ambiguity this feature exists to remove. */
+.mp-schedmsg__when {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--color-text-muted);
+}
+.mp-schedmsg__time {
+  color: var(--color-text-strong);
+  font-family: "SFMono-Regular", ui-monospace, Menlo, monospace;
+  font-size: 13px;
+  font-weight: 600;
+}
+.mp-schedmsg__tz {
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-overlay) 6%, transparent);
+}
+.mp-schedmsg__text {
+  font-size: 13px;
+  color: var(--color-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.mp-schedmsg__add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 12px;
+  border: 1px dashed var(--color-border);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  transition: color 0.15s, border-color 0.15s;
+}
+.mp-schedmsg__add:hover {
+  color: var(--color-text);
+  border-color: var(--color-indigo);
+}
+.mp-schedmsg__form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--color-overlay) 1.5%, transparent);
+}
+.mp-schedmsg__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mp-schedmsg__fieldlabel {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-text-muted);
+}
+.mp-schedmsg__input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--color-surface-sunken) 20%, transparent);
+  color: var(--color-text);
+  font-size: 13px;
+}
+.mp-schedmsg__input:focus {
+  outline: none;
+  border-color: var(--color-indigo);
+}
+.mp-schedmsg__textarea {
+  min-height: 76px;
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.5;
+}
+.mp-schedmsg__select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 34px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238b90a0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+}
+/* 幾號 29/30/31 的跳過提示。刻意用警示色而不是靜音的說明色:它描述的是一個
+   會讓某些月份完全不送的選擇,不是一段補充說明。 */
+.mp-schedmsg__skiphint {
+  padding: 8px 10px;
+  border: 1px solid var(--color-warn-border);
+  border-radius: 8px;
+  background: var(--color-warn-bg);
+  color: var(--color-warn-fg);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+/* 時/分並排 — 它們是同一個「幾點幾分」,拆成兩列會讀成兩個獨立設定。 */
+.mp-schedmsg__timerow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.mp-schedmsg__formactions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.mp-schedmsg__formactions .btn {
+  height: 38px;
+  padding: 0 16px;
+}
+.mp-schedmsg__submit {
+  color: var(--color-on-indigo);
+  background: var(--color-indigo);
+}
+.mp-schedmsg__submit:hover:not(:disabled) {
+  filter: brightness(1.18);
+}
+.mp-schedmsg__submit:disabled {
+  opacity: 0.5;
+}
+
 /* ---- resume summary card (RESUME SUMMARY, T-8b0d) ---- */
 .mp-resume__note {
   margin-bottom: 12px;
