@@ -56,13 +56,17 @@ func (s *apiServer) runScheduledMessageTick(now float64) {
 	}
 	at := time.Unix(int64(now), 0)
 	for _, sm := range rows {
-		// Checked explicitly (rather than reading it out of mostRecentSlot's
-		// ok=false) so an unloadable zone says so, instead of hiding inside the
-		// same silence as "this month has no 31st". 🔴 It is skipped, NOT
-		// retried against UTC: delivering at a guessed hour looks exactly like
-		// delivering correctly.
-		if _, err := time.LoadLocation(sm.Timezone); err != nil {
-			schedLog("skip %s: timezone will not load (%v) — no fallback zone is applied", describeSchedule(sm), err)
+		// 🔴 The SAME rule the write seam applies, applied again here, and it is
+		// not redundant: mostRecentSlot resolves the zone with time.LoadLocation,
+		// which happily accepts `Local` (the HOST's zone) and `` (UTC) — the
+		// deployment-dependent answers this feature exists to refuse. A row can
+		// still carry one by predating the rule or by being written straight into
+		// the database, and the tick is the last place anything is looking.
+		// Skipped, NOT retried against UTC: delivering at a guessed hour looks
+		// exactly like delivering correctly. The log line is the only trace such
+		// a row leaves.
+		if err := ValidateScheduledMessageTimezone(sm.Timezone); err != nil {
+			schedLog("skip %s: %v — no fallback zone is applied", describeSchedule(sm), err)
 			continue
 		}
 		slot, ok := mostRecentSlot(sm, at)
