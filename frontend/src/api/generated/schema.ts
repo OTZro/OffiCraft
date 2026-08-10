@@ -6364,7 +6364,7 @@ export interface components {
             cadence: "daily" | "weekly" | "monthly";
             /**
              * Day Of Month
-             * @description Day of month for `monthly` cadence, 1-28. Capped at 28 so that every month actually contains the day — allowing 29/30/31 would turn "this month never fired" into a silent failure that surfaces only in February. Omitted or null means 1. Ignored by `daily` and `weekly`.
+             * @description Day of month for `monthly` cadence, 1-31. A month that does not contain the day is skipped entirely rather than clamped — the iCalendar RFC 5545 rule for invalid recurrence dates — so a schedule on day 31 fires seven times a year and never in February. Owner decision 2026-08-10, card rc-aeef15360ab5: match the common standard rather than cap the range. Omitted or null means 1. Ignored by `daily` and `weekly`.
              */
             day_of_month?: number | null;
             /**
@@ -6417,7 +6417,7 @@ export interface components {
             created_ts: number;
             /**
              * Day Of Month
-             * @description Day of month for `monthly` cadence, 1-28. Capped at 28 so that every month actually contains the day — allowing 29/30/31 would turn "this month never fired" into a silent failure that surfaces only in February.
+             * @description Day of month for `monthly` cadence, 1-31. A month that does not contain the day is skipped entirely rather than clamped — the iCalendar RFC 5545 rule for invalid recurrence dates — so a schedule on day 31 fires seven times a year and never in February. Owner decision 2026-08-10, card rc-aeef15360ab5: match the common standard rather than cap the range.
              */
             day_of_month: number;
             /**
@@ -6492,7 +6492,7 @@ export interface components {
             cadence?: ("daily" | "weekly" | "monthly") | null;
             /**
              * Day Of Month
-             * @description Day of month for `monthly` cadence, 1-28. Capped at 28 so that every month actually contains the day — allowing 29/30/31 would turn "this month never fired" into a silent failure that surfaces only in February.
+             * @description Day of month for `monthly` cadence, 1-31. A month that does not contain the day is skipped entirely rather than clamped — the iCalendar RFC 5545 rule for invalid recurrence dates — so a schedule on day 31 fires seven times a year and never in February. Owner decision 2026-08-10, card rc-aeef15360ab5: match the common standard rather than cap the range.
              */
             day_of_month?: number | null;
             /**

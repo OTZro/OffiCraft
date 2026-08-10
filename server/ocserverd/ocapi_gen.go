@@ -1896,7 +1896,7 @@ type ScheduledMessageCreateDTO struct {
 	// Cadence How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither.
 	Cadence ScheduledMessageCreateDTOCadence `json:"cadence"`
 
-	// DayOfMonth Day of month for `monthly` cadence, 1-28. Capped at 28 so that every month actually contains the day — allowing 29/30/31 would turn "this month never fired" into a silent failure that surfaces only in February. Omitted or null means 1. Ignored by `daily` and `weekly`.
+	// DayOfMonth Day of month for `monthly` cadence, 1-31. A month that does not contain the day is skipped entirely rather than clamped — the iCalendar RFC 5545 rule for invalid recurrence dates — so a schedule on day 31 fires seven times a year and never in February. Owner decision 2026-08-10, card rc-aeef15360ab5: match the common standard rather than cap the range. Omitted or null means 1. Ignored by `daily` and `weekly`.
 	DayOfMonth *int `json:"day_of_month,omitempty"`
 
 	// DayOfWeek Day of week for `weekly` cadence: 0=Sunday through 6=Saturday. Omitted or null means 0 (Sunday). Ignored by `daily` and `monthly`.
@@ -1929,7 +1929,7 @@ type ScheduledMessageDTO struct {
 	// CreatedTs Epoch seconds the schedule was created.
 	CreatedTs float64 `json:"created_ts"`
 
-	// DayOfMonth Day of month for `monthly` cadence, 1-28. Capped at 28 so that every month actually contains the day — allowing 29/30/31 would turn "this month never fired" into a silent failure that surfaces only in February.
+	// DayOfMonth Day of month for `monthly` cadence, 1-31. A month that does not contain the day is skipped entirely rather than clamped — the iCalendar RFC 5545 rule for invalid recurrence dates — so a schedule on day 31 fires seven times a year and never in February. Owner decision 2026-08-10, card rc-aeef15360ab5: match the common standard rather than cap the range.
 	DayOfMonth int `json:"day_of_month"`
 
 	// DayOfWeek Day of week for `weekly` cadence: 0=Sunday through 6=Saturday.
@@ -1977,7 +1977,7 @@ type ScheduledMessageUpdateDTO struct {
 	// Cadence How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither.
 	Cadence *ScheduledMessageUpdateDTOCadence `json:"cadence,omitempty"`
 
-	// DayOfMonth Day of month for `monthly` cadence, 1-28. Capped at 28 so that every month actually contains the day — allowing 29/30/31 would turn "this month never fired" into a silent failure that surfaces only in February.
+	// DayOfMonth Day of month for `monthly` cadence, 1-31. A month that does not contain the day is skipped entirely rather than clamped — the iCalendar RFC 5545 rule for invalid recurrence dates — so a schedule on day 31 fires seven times a year and never in February. Owner decision 2026-08-10, card rc-aeef15360ab5: match the common standard rather than cap the range.
 	DayOfMonth *int `json:"day_of_month,omitempty"`
 
 	// DayOfWeek Day of week for `weekly` cadence: 0=Sunday through 6=Saturday.
