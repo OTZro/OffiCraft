@@ -104,6 +104,13 @@
 
 ⚠️ **server 端不讀 `meta.scheduled`**，跟 `meta.webhook` 一樣——它純粹是給收件的 agent 讀的。
 
+⚠️ **`body` 沒有 4,000 字上限，而 `post_chat` 有。** 那道 cap（`chatBodyMaxChars`）掛在
+`POST /api/chat` 的 handler 上，不是掛在寫入上；`deliverScheduledMessage` 跟 webhook ingest
+一樣直接寫 `ChatMessage`，所以繞過它。這與 webhook 是同一個形狀、不是本功能新開的洞，
+但 `api_chat.go` 那段註解原本**列舉**了兩條豁免路徑（owner 與 `hook:*`），本包加了第三條
+而沒有任何東西會叫——所以那份列舉已換成一條可執行的查詢
+（`grep -n 'msg := ChatMessage{' server/ocserverd/*.go`）。
+
 ## 對外介面
 
 四條 REST，全部 `MCPExclude`（**不新增 MCP 工具**）：
@@ -144,6 +151,39 @@
 
 `ScheduledMessageUpdateDTO`（PATCH body）：以上每一欄都是 **optional**（照憲章 §12「對外 DTO 加欄一律 optional」），
 只送要改的那幾欄；`status` 也在這裡，用來啟用／停用。
+
+## 座艙：一張卡，長在兩個面板上
+
+`ScheduledMessagesCard.tsx` 一個元件，由 `AgentDetailPanel` 的 `extraExpandCards` 槽
+**同時**被正職 wrapper（`MemberDetailPanel`）與外包 wrapper（`WorkerDetailPanel`）呼叫。
+不複製 JSX 的理由跟收件者判準同一條：排程可以綁在 `ow-` worker 上，所以兩邊都要有；
+而 webhook 今天只長在正職那一套，正是「複製一份就開始各自漂移」的同一個形狀
+（`WorkerDetailPanel` 在本票之前**根本沒有任何 `extraExpandCards` 呼叫端**）。
+
+### 🔴 一個已知的缺口：`last_fired_slot` 上了 wire，但卡片不顯示它
+
+凍結 spec 裡 `GET …/scheduled-messages` 的 description 寫著：回應帶 `last_fired_slot`
+是 *"so the panel can show exactly where the cursor stands"*（`spec/openapi.json`，
+以及由它重生的 `ocapi_gen.go` / `frontend/src/api/generated/schema.ts`）。
+
+**現況不是那樣。** 型別與 mapper 一路把 `lastFiredSlot` / `lastFiredTs` 帶到
+`adapter.ts`，但 `ScheduledMessagesCard.tsx` **一次都沒有 render 它們**
+（實查：該檔 `lastFired` 命中 0）。所以那句 description 是一句**現在式的假話**——
+它描述的不是這個面板做的事，而是一個沒有被實作的用途。
+
+**這裡刻意只記錄、不修**，兩個理由要分開講：
+- 那句話住在 `spec/openapi.json`，而動 wire 面要**先改 spec + owner 過目**（憲章 §13）；
+  本輪文件對質的範圍不含改凍結 spec。
+- 「該顯示游標」與「該把那句話改成忠實描述」是**兩個不同的裁定**，不是同一件事的兩種寫法：
+  前者要 owner 決定畫面上多一行字，後者只要求契約別宣稱一件沒發生的事。
+
+⚠️ **不要用「窄化 description」來抹平它而不告訴 owner**——那會把一個可見的缺口
+換成一句看不出缺口的話。要收掉這件事，只有兩條路：**卡片真的顯示游標**，
+或**改那句 description 並在這裡註明是誰、哪一天裁的**。在那之前，這一段就是缺口本身的紀錄。
+
+（附帶一筆同族的事實，寫下來免得被讀成漏掉：卡片也不顯示 `last_fired_ts`。
+`docs/guide/interface.md` 的欄位對照因此明說「這一區塊沒有顯示上一次送到哪一格」，
+不讓產品文件替一個不存在的畫面元素背書。）
 
 ## 背景迴圈
 
