@@ -118,7 +118,16 @@
 
 `ScheduledMessageCreateDTO`（POST body）：
 `label` · `body` · `cadence` · `day_of_week` · `day_of_month` · `hour` · `minute` · `timezone`
-（`cadence` 與 `body` 必填，其餘有預設）
+
+**必填：`body` · `cadence` · `hour` · `minute` · `timezone`。**
+為什麼把時刻與時區也列進必填，而不是給它們一個預設值：
+- 一條**沒有時刻**的排程沒有意義，讓呼叫端省略它只是把「幾點送」這個問題推給一個沒人裁定過的數字。
+- **時區更關鍵**：一旦允許省略，那個預設值遲早會被讀成「server 所在的時區」，
+  而那正是 D2 要消除的東西。逼呼叫端明講，這個歧義在介面層就不存在。
+
+其餘三欄維持選填，**而且它們的 fallback 寫在各自欄位的 `description` 裡**（不另外編一份清單）：
+`label` 省略＝沒有標籤；`day_of_week` 省略＝0（週日），只有 `weekly` 會讀它；
+`day_of_month` 省略＝1，只有 `monthly` 會讀它。
 
 `ScheduledMessageUpdateDTO`（PATCH body）：以上每一欄都是 **optional**（照憲章 §12「對外 DTO 加欄一律 optional」），
 只送要改的那幾欄；`status` 也在這裡，用來啟用／停用。
