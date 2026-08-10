@@ -218,6 +218,16 @@ func TestPublishAudience(t *testing.T) {
 		if !got(owner) {
 			t.Fatal("owner全量 — the cockpit still sees an unassigned task's delta")
 		}
+		// POSITIVE CONTROL, in this subtest: without it the assertions above
+		// are also satisfied by a hub that has stopped delivering to agents
+		// altogether. Same reachable shape — the task once its worker exists.
+		h.Publish("task", "patch", "task", "k", nil, audienceMembers("m-a"), triggerServer)
+		if !got(a) {
+			t.Fatal("a named executor must receive — else the drops above prove nothing")
+		}
+		if got(b) || got(c) {
+			t.Fatal("only the named executor receives")
+		}
 	})
 }
 
