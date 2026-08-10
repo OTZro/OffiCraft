@@ -948,6 +948,8 @@ export const zh = {
       minuteLabel: "分",
       timezoneLabel: "時區",
       timezonePlaceholder: "IANA 時區名,例如 Asia/Taipei",
+      lastFiredLabel: "上次送出",
+      lastFiredNever: "尚未送出",
     },
     // ── RESUME SUMMARY（T-8b0d，同 resume_summary 的喚醒快照，供 owner 查看）──
     resumeSummary: {

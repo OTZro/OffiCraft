@@ -347,6 +347,8 @@ var messageKeys = map[string]bool{
 	"mp.schedmsg.hourLabel":                    true,
 	"mp.schedmsg.labelLabel":                   true,
 	"mp.schedmsg.labelPlaceholder":             true,
+	"mp.schedmsg.lastFiredLabel":               true,
+	"mp.schedmsg.lastFiredNever":               true,
 	"mp.schedmsg.loadError":                    true,
 	"mp.schedmsg.minuteLabel":                  true,
 	"mp.schedmsg.timezoneLabel":                true,

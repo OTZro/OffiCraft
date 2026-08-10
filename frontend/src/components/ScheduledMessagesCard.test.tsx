@@ -16,7 +16,7 @@
 //      `extraExpandCards` caller at all before this ticket, which is exactly how
 //      the webhook section ended up existing on only one of the two panels.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, waitFor, within } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
@@ -171,10 +171,20 @@ function mkWorker(over: Partial<OutsourceWorkerView> = {}): OutsourceWorkerView 
 
 const s = zh.mp.schedmsg;
 
+// Frozen clock for the last-sent assertions: 2026-08-10 10:00 local, with a
+// delivery the evening before.
+const NOW = new Date(2026, 7, 10, 10, 0, 0, 0);
+const FIRED_AT = new Date(2026, 7, 9, 21, 30, 0, 0);
+const TIME_SHAPE = /\d{1,2}\/\d{1,2}\s\d{2}:\d{2}/;
+
 beforeEach(() => {
   store = [];
   nextId = 0;
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 /** Render the card alone and open it (it ships collapsed, like the webhook
@@ -350,6 +360,30 @@ describe("ScheduledMessagesCard", () => {
     );
     const row = await view.findByTestId(`mp-schedmsg-row-${target.id}`);
     await waitFor(() => expect(within(row).getByText(s.disabled)).toBeTruthy());
+  });
+
+  it("shows when a schedule last delivered", async () => {
+    vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+    store = [
+      mkSchedule({ label: "每日巡檢", lastFiredTs: FIRED_AT.getTime() / 1000 }),
+    ];
+    const view = await renderOpenCard();
+
+    const line = await view.findByTestId(`mp-schedmsg-lastfired-${store[0].id}`);
+    expect(line.textContent).toContain(s.lastFiredLabel);
+    expect(line.textContent).toContain("8/9 21:30");
+  });
+
+  it("says a schedule has never delivered instead of printing a time", async () => {
+    vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+    store = [mkSchedule({ label: "剛建好的排程", lastFiredTs: 0 })];
+    const view = await renderOpenCard();
+
+    const line = await view.findByTestId(`mp-schedmsg-lastfired-${store[0].id}`);
+    expect(line.textContent).toContain(s.lastFiredNever);
+    // ts 0 is a real epoch, so formatting it unconditionally would print
+    // 1/1 08:00 and read as a delivery that never happened.
+    expect(line.textContent).not.toMatch(TIME_SHAPE);
   });
 
   it("says the load failed instead of reading as honest-empty", async () => {
