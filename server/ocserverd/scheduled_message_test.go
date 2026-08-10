@@ -960,6 +960,72 @@ func request(method, url, token, body string) (int, error) {
 	return resp.StatusCode, nil
 }
 
+// TestUpdateScheduledMessageDoesNotRollBackACursorAdvancedByAConcurrentTick is
+// the B2 guard, at the seam the invariant actually lives at: the HTTP handler.
+//
+// The edit is a read-modify-write over a snapshot, and the tick advances the
+// same row's cursor every 60 seconds. If the edit persists that snapshot WHOLE,
+// a tick landing between the handler's read and its write has its advance
+// overwritten — the delivery is laundered back into "not delivered" and the next
+// tick sends it again. The monotonic fire test cannot help: the cursor itself
+// went backwards.
+//
+// 🔴 This drives the REAL route (`PATCH .../scheduled-messages/{id}`) against a
+// REAL tick, concurrently, many rounds. Pinning the DAL function instead is not
+// enough and was measured not to be: reverting only the handler's call to
+// PutScheduledMessage — leaving the DAL correct — left the whole suite green
+// while reproducing duplicates in one round in five.
+//
+// Red when the handler persists cursor columns from the row it read.
+func TestUpdateScheduledMessageDoesNotRollBackACursorAdvancedByAConcurrentTick(t *testing.T) {
+	srv, secret, api := scheduledStack(t)
+	ownerTok, _ := mintJWT("owner", "owner", 300, secret, time.Now().Unix(), "")
+
+	const rounds = 300
+	duplicated, patchFailures := 0, 0
+	for i := 0; i < rounds; i++ {
+		id := fmt.Sprintf("sch-race-%03d", i)
+		armScheduledRow(t, api, id)
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			// A label-only edit: nothing about WHEN this schedule fires changed,
+			// so it has no business touching the cursor.
+			if status, err := request("PATCH",
+				srv.URL+"/api/members/mira/scheduled-messages/"+id, ownerTok,
+				`{"label":"renamed"}`); err != nil || status != 200 {
+				patchFailures++
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			api.runScheduledMessageTick(nowSecs())
+		}()
+		wg.Wait()
+
+		// Whatever the interleaving was, a second tick must find nothing to do.
+		api.runScheduledMessageTick(nowSecs())
+		if len(chatsFrom(t, api, "sched:"+id)) > 1 {
+			duplicated++
+		}
+		if err := api.dal.DeleteScheduledMessage(id); err != nil {
+			t.Fatalf("clear %s: %v", id, err)
+		}
+	}
+	if patchFailures != 0 {
+		t.Fatalf("%d/%d PATCHes did not return 200 — the race could not be set up",
+			patchFailures, rounds)
+	}
+	if duplicated != 0 {
+		t.Fatalf("%d/%d rounds delivered the SAME slot twice — a PATCH landing between "+
+			"the tick's delivery and its cursor write rolled the cursor back, and in the "+
+			"chat log the resend is indistinguishable from a correct delivery",
+			duplicated, rounds)
+	}
+}
+
 // TestUpdateScheduledMessageAnswersWhenTheRowIsDeletedMidRequest pins that a row
 // vanishing between the handler's read and its re-read is an ANSWER, not a
 // dropped connection.
