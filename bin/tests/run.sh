@@ -409,6 +409,47 @@ else
   bad "bin/tests/main-red-notify-guard.sh is missing"
 fi
 
+# ── the wrapper that proves a check RAN: its own contract (T-4d88) ───────────
+# bin/run-checks.sh runs `make <targets>` and then requires each target's own
+# `[oc-check-done] <target>` line, because a zero exit says "nothing failed",
+# not "something ran". Its behaviour was verified once, by hand, with two
+# mutants driven at a real target — evidence about that afternoon and nothing
+# after it. Neuter the marker loop, or soften the missing-marker exit into a
+# printed warning, and every cloud cell keeps reporting green while asserting
+# nothing. Those mutants live in the guard now and run every round, against a
+# throwaway root with a fixture Makefile — no real check is executed.
+RUNCHECKS="$HERE/run-checks-guard.sh"
+echo
+if [[ -f "$RUNCHECKS" ]]; then
+  if run_guard "$RUNCHECKS"; then
+    ok "run-checks.sh wrapper contract suite passed"
+  else
+    bad "run-checks.sh wrapper contract suite FAILED (see output above)"
+  fi
+else
+  bad "bin/tests/run-checks-guard.sh is missing"
+fi
+
+# ── and that the cloud cells actually come through that door (T-4d88) ────────
+# The wrapper only protects the cells that USE it, and nothing forced them to:
+# changing one cell's step back to `run: make …` removes the marker check for
+# that cell with no red, no shape change in the log, and a green tick on the PR.
+# This guard reads .github/workflows/ci.yml and refuses a bare `make` in any job
+# that declares itself `# oc-job-role: gate`. It deliberately does NOT enumerate
+# which checks exist or who owns which — that consistency assertion is absent by
+# owner ruling, and the enumeration it needs is the duplication T-4d88 deleted.
+ENTRYPOINT="$HERE/ci-run-checks-entrypoint-guard.sh"
+echo
+if [[ -f "$ENTRYPOINT" ]]; then
+  if run_guard "$ENTRYPOINT"; then
+    ok "every gate cell reaches its checks through bin/run-checks.sh"
+  else
+    bad "gate-cell run-checks entrypoint suite FAILED (see output above)"
+  fi
+else
+  bad "bin/tests/ci-run-checks-entrypoint-guard.sh is missing"
+fi
+
 # ── guard-of-the-guard (T-d3e3 rework) ──────────────────────────────────────
 # The ci success-marker guard is dispatched at the very BOTTOM of this file,
 # AFTER the `[[ "$FAIL" == "0" ]] || exit 1` enforcement below, so its exit code
