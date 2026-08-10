@@ -561,6 +561,13 @@
   },
   {
     "auth": "gated",
+    "mcp_tool": "peek_doc_sizes",
+    "method": "GET",
+    "path": "/api/doc-sizes",
+    "requires": "machine"
+  },
+  {
+    "auth": "gated",
     "mcp_tool": "create_role",
     "method": "POST",
     "path": "/api/roles",

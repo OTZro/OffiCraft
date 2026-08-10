@@ -1197,6 +1197,102 @@
         "additionalProperties": false,
         "type": "object"
       },
+      "DocSizeDTO": {
+        "description": "ONE capped document reduced to its two numbers and nothing else.\n``size_chars`` is what the document measures NOW, in CHARACTERS (Unicode code\npoints — the unit every cap is expressed in); ``cap_chars`` is the cap in force\nfor THAT document's OWN segment at the moment of the read.\n\nThe five capped segments (role definition, insight, role lessons, a task\nmanual's sop_md, a task manual's learnings) each have their own\n``doc.cap_chars.*`` setting and are NOT one shared number, so every occurrence\nof this object carries the ruler belonging to the document it describes.\nReading one segment's cap off another's is the specific mistake this shape\nexists to make impossible.\n\nCarries no document text.",
+        "properties": {
+          "size_chars": {
+            "title": "Size Chars",
+            "type": "integer"
+          },
+          "cap_chars": {
+            "title": "Cap Chars",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "size_chars",
+          "cap_chars"
+        ],
+        "title": "DocSizeDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "RoleDocSizesDTO": {
+        "description": "The three capped documents of ONE role, by size only: ``duty`` (the role\ndefinition, get_role), ``insight`` (get_insight) and ``lessons`` (get_lessons on\nthe DEFAULT ``general`` bucket — that bucket ONLY; nothing constrains the\ntask_type a write may name, and lessons under another bucket name draw on this\nsame cap without being sized here). ``role_key`` is how to go read whichever one\nturns out to be nearly full. Sizes are measured on the FOLDED document — the\nowner overlay ⊕ file seed a caller actually reads and edits — so they match what\nthe per-document GETs report. No text of any kind.",
+        "properties": {
+          "role_key": {
+            "title": "Role Key",
+            "type": "string"
+          },
+          "duty": {
+            "$ref": "#/components/schemas/DocSizeDTO"
+          },
+          "insight": {
+            "$ref": "#/components/schemas/DocSizeDTO"
+          },
+          "lessons": {
+            "$ref": "#/components/schemas/DocSizeDTO"
+          }
+        },
+        "required": [
+          "role_key",
+          "duty",
+          "insight",
+          "lessons"
+        ],
+        "title": "RoleDocSizesDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "TaskManualDocSizesDTO": {
+        "description": "The two capped documents of ONE task manual, by size only: ``sop`` (sop_md)\nand ``learnings``. ``type_key`` is how to go read whichever one turns out to be\nnearly full (get_task_manual). No text of any kind — which is the whole point:\nthe manual bodies are the bulk of what makes list_task_manuals unreadable.",
+        "properties": {
+          "type_key": {
+            "title": "Type Key",
+            "type": "string"
+          },
+          "sop": {
+            "$ref": "#/components/schemas/DocSizeDTO"
+          },
+          "learnings": {
+            "$ref": "#/components/schemas/DocSizeDTO"
+          }
+        },
+        "required": [
+          "type_key",
+          "sop",
+          "learnings"
+        ],
+        "title": "TaskManualDocSizesDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "DocSizesDTO": {
+        "description": "The station-wide capped-document size overview (``peek_doc_sizes`` MCP tool,\nzero params; ``GET /api/doc-sizes``): for EVERY role its role definition, its\ninsight and its DEFAULT lessons bucket, and for EVERY task manual its sop_md and\nits learnings — each as its current size plus the cap in force for that segment,\nand nothing else.\n\nLessons is the one segment reported for the default bucket only. The write side\ndoes not constrain the bucket name (the default merely fills in an absent\nargument), so lessons written under any other bucket name draw on the same\nlessons cap and are NOT counted here.\n\nIt carries NO document content, so its size is a function of how many roles and\nmanuals exist, never of what they hold — which is the point. The two numbers no\nlisting on this station reports at any price are a role's insight and lessons\nsizes; a manual's four numbers are already on the ``list_task_manuals`` light\nview and a role definition's size and cap already ride every ``list_roles`` row.\n\nRead-only and deterministic; a station with no roles and no manuals gets empty\narrays, never an error.",
+        "properties": {
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/RoleDocSizesDTO"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "task_manuals": {
+            "items": {
+              "$ref": "#/components/schemas/TaskManualDocSizesDTO"
+            },
+            "title": "Task Manuals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "roles",
+          "task_manuals"
+        ],
+        "title": "DocSizesDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
       "DocSummaryDTO": {
         "description": "One product-guide doc row (GET /api/docs): addressable slug + display title.",
         "properties": {
@@ -7804,6 +7900,55 @@
           }
         },
         "summary": "Total chat unread count (the office nav red dot)."
+      }
+    },
+    "/api/doc-sizes": {
+      "get": {
+        "description": "The station-wide capped-document SIZE overview (``peek_doc_sizes`` MCP tool,\nzero params; ``GET /api/doc-sizes``).\n\nOne call reports EVERY role's role definition, insight and DEFAULT lessons\nbucket, and EVERY task manual's sop_md and learnings, as ``size_chars`` plus the\n``cap_chars`` in force for THAT segment — the five segments have five separate\n``doc.cap_chars.*`` settings, so each document is reported against its own ruler\nand never against a shared one.\n\nLessons is reported for the DEFAULT bucket only. Nothing constrains the bucket\nname on the write side (the default is a fill-in for an absent argument), so\nlessons stored under any other bucket name spend the same lessons cap and do not\nappear here.\n\nIt carries NO document text. What it is FOR: a role's insight and lessons sizes\nare reported by no listing on this station at any price, so before this route\nthe only way to see them was one ``get_insight`` / ``get_lessons`` per role. The\nother three numbers exist elsewhere but scattered — a manual's sop_md/learnings\nsizes and caps are on the ``list_task_manuals`` light view (``?view=list``), and\na role definition's ``size_chars`` / ``cap_chars`` ride every ``list_roles``\nrow. Read-only and deterministic; a station with no roles and no manuals gets\nempty arrays, never an error.",
+        "operationId": "handle_peek_doc_sizes_api_doc_sizes_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocSizesDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Validation error (unified error envelope)."
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Client error (unified error envelope)."
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Server error (unified error envelope)."
+          }
+        },
+        "summary": "Size-only overview of every capped document (each against its own cap; NO content; role lessons = DEFAULT bucket only)."
       }
     },
     "/api/docs": {

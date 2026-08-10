@@ -791,6 +791,7 @@ MATRIX: dict[str, Route] = {
     ),
     "POST /api/global-context/reset": Route(requires="admin_agent"),
     "GET /api/roles": Route(requires="machine"),
+    "GET /api/doc-sizes": Route(requires="machine"),
     "POST /api/roles": Route(
         requires="admin_agent",
         body={"name": "Conf Matrix Role"},
