@@ -723,6 +723,35 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 		// path's to clear, not the stale parked stop's.
 		delete(s.workerStopPending, w.ID)
 	}
+	// 🔴 A LANDED START BEGINS A NEW SESSION — drop the previous session's
+	// boot_ts anchor here, at the dispatch, exactly like the member producer does
+	// (reconcile.go, right after its own accepted enqueue). T-4235: the anchor is
+	// DURABLE now, so an anchor left behind is not forgotten by the next re-exec —
+	// the fresh session's connect adopts its predecessor's hours-old anchor and
+	// the respawn-storm floor (restart_self's minimum liveness, the context-high
+	// suppressor, the worker auto-handover loop-break) is waved through.
+	//
+	// It lives HERE and not only in respawnWorkerNow because respawnWorkerNow is
+	// NOT the only path that begins a worker session, and the other two were the
+	// ones that silently kept the anchor:
+	//   - the FSM RESCUE arm (reconcileWorkerLiveness's START) — the ONLY way back
+	//     for a worker whose session died on its own (crash / machine reboot / a
+	//     report_stopped outside a handover). It dispatches a real START and the
+	//     warden opens a brand-new session, with no kill and therefore no
+	//     respawnWorkerNow anywhere on the path;
+	//   - the owner-op FALL-THROUGH (respawnWorkerForOwnerOpNow) — respawnWorkerNow
+	//     returns false BEFORE its clear when an ACTIVE worker has no kill target,
+	//     and the caller then dispatches the start anyway.
+	// Putting it on the dispatch makes "a start landed ⇒ the old anchor is gone"
+	// true by construction for every present and future caller, instead of being a
+	// rule each new caller has to remember. respawnWorkerNow keeps its own clear:
+	// there the SESSION ENDS at the kill, even when the re-dispatch never lands.
+	//
+	// Ordering matters: the placement-block clear / stamp below re-READ the row
+	// (GetOutsourceWorker) and write it back whole, so they must run AFTER this
+	// single-column write, never before — otherwise the whole-row write would put
+	// the stale anchor straight back.
+	s.clearSessionBootTS(w.ID)
 	s.workerSpawnAt[w.ID] = now
 	s.workerSpawnTarget[w.ID] = warden
 	// The warden now owes a command_result for this worker START — same deadline
