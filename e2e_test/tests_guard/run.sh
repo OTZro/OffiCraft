@@ -1855,7 +1855,7 @@ done
 SG_VARCHECK="$SG_DIR/lib/varcheck.py"
 SG_VARFILES=("$SG_DIR/actors/live.sh" "$SG_DIR/actors/stub.sh" "$SG_DIR/run.sh"
              "$SG_DIR/lib/http.sh" "$SG_DIR/lib/friction.sh" "$SG_DIR/lib/window.sh"
-             "$SG_DIR/lib/ownedkill.sh")
+             "$SG_DIR/lib/ownedkill.sh" "$SG_DIR/lib/carrier.sh")
 
 # 23a) the shipped harness is clean.
 python3 "$SG_VARCHECK" "${SG_VARFILES[@]}" >/dev/null 2>&1
@@ -2142,6 +2142,190 @@ else
     || bad "MUT-listpick: the list-and-pick mutant killed nobody else's session (recorded: $(tr '\n' '|' < "$SG24_TMUX_LOG")) — 24d would pass without the ledger and this case proves nothing"
 fi
 : > "$SG24_TMUX_LOG"
+
+# ── 25) T-42bb: the carrier must outlive its caller, and never die silently ──
+#
+# WHAT HAPPENED (2026-08-10, on a run that had already spent money). run.sh was
+# started as a background command by an agent session. The session was collected;
+# the carrier was killed WITH it, mid-poll. The agent it had spawned did NOT die
+# (agents live in tmux). So: nobody judged, nobody tore down, a real agent kept
+# burning quota — and the waiter never learned, because the rc it was watching
+# was the rc of the shell that died, and that rc was never written. A dead run
+# and a running run were the same silence.
+#
+# TWO PROPERTIES, and the second is the one that must not be traded away:
+#   ① the carrier puts ITSELF in a new session, so a group kill aimed at the
+#     caller cannot reach it (it must not depend on the caller remembering
+#     `nohup` — that is the class of bug this whole gate exists to delete);
+#   ② however it dies, a terminal signal file appears. Because if ① ever fails
+#     for a reason nobody predicted, the failure must be a VISIBLE death.
+#
+# Hermetic: no server, no agent, no tmux, no money. The fixture below is the
+# skeleton of run.sh's carrier wiring around a `sleep`, sourcing the REAL
+# lib/carrier.sh; 25f then pins that run.sh is wired the same way, since a
+# perfect lib called from nowhere protects nothing (case 20f's lesson).
+SG_CARRIER="$SG_DIR/lib/carrier.sh"
+SG25="$SHIMDIR/sg25"; rm -rf "$SG25"; mkdir -p "$SG25"
+SG25_FIX="$SG25/carrier-fixture.sh"
+cat > "$SG25_FIX" <<'SH'
+#!/usr/bin/env bash
+set -uo pipefail
+. "$SG25_LIB"
+RUN_DIR="$1"
+export OC_SG_RUN_DIR="$RUN_DIR"
+sg_carrier_detach "$0" "$@"
+cleanup() {
+  local rc=$?
+  sg_carrier_write "$rc"
+  sg_carrier_watchdog_stop
+}
+trap cleanup EXIT
+sg_carrier_arm "$RUN_DIR/outer.rc"
+sg_carrier_watchdog
+printf '%s\n' "$$" > "$RUN_DIR/carrier.pid"
+sleep "$SG25_SLEEP"
+printf 'finished\n' > "$RUN_DIR/finished"
+exit "$SG25_RC"
+SH
+
+# Start the fixture as the leader of its OWN session, so the test can kill that
+# whole process group the way a supervisor collecting a session does — WITHOUT
+# taking this test suite (which shares a process group with everything it spawns)
+# down as collateral. Prints the leader's pid; its pgid equals that pid.
+_sg25_spawn() { # _sg25_spawn RUN_DIR [env assignments…] -> leader pid
+  local run_dir="$1"; shift
+  python3 -c '
+import os, sys
+pid = os.fork()
+if pid:
+    print(pid)
+    sys.exit(0)
+# The child must NOT keep this command substitution`s pipe open, or the caller
+# would block until the fixture exits — which is the opposite of the point.
+fd = os.open(os.devnull, os.O_RDWR)
+os.dup2(fd, 1)
+os.dup2(fd, 2)
+os.setsid()
+os.execvp("env", ["env"] + sys.argv[1:])
+' "$@" bash "$SG25_FIX" "$run_dir"
+}
+_sg25_wait_file() { # _sg25_wait_file PATH DEADLINE_TENTHS -> 0 if it appeared
+  local p="$1" n="${2:-100}" i
+  for ((i = 0; i < n; i++)); do [[ -e "$p" ]] && return 0; sleep 0.1; done
+  return 1
+}
+_sg25_rc() { cat "$1/outer.rc" 2>/dev/null | tr -d ' \n'; }
+
+# 25a) THE INCIDENT ITSELF: kill the caller's whole process group, hard (SIGKILL
+# — no trap can soften it, which is exactly what a collected session looks like)
+# while the run is mid-flight. Both halves are asserted, because either alone is
+# a false comfort: the work must FINISH, and the terminal signal must EXIST.
+SG25_A="$SG25/a"; mkdir -p "$SG25_A"
+_sg25_leader="$(_sg25_spawn "$SG25_A" "SG25_LIB=$SG_CARRIER" SG25_SLEEP=4 SG25_RC=0 OC_SG_WATCHDOG_INTERVAL=1)"
+if ! _sg25_wait_file "$SG25_A/carrier.pid" 100; then
+  bad "carrier: the fixture never started (no carrier.pid) — case 25a is testing nothing"
+else
+  kill -KILL "-$_sg25_leader" 2>/dev/null
+  _sg25_wait_file "$SG25_A/finished" 120 || true
+  [[ -f "$SG25_A/finished" ]] \
+    && ok "carrier: the caller's process group was SIGKILLed mid-run and the carrier RAN TO COMPLETION anyway" \
+    || bad "carrier: a group SIGKILL aimed at the caller killed the carrier too — the run does not outlive the session that started it"
+  _sg25_wait_file "$SG25_A/outer.rc" 60 || true
+  check "carrier: …and the terminal signal exists, with the run's own rc" "0" "$(_sg25_rc "$SG25_A")"
+fi
+
+# 25b) THE CONTROL, and it is what makes 25a mean anything: the SAME kill against
+# a carrier that did not detach (OC_SG_NO_DETACH=1) must reproduce the incident —
+# the work stops, and there is no terminal signal. Without this, 25a would also
+# pass on a machine where that kill happened not to reach anything.
+SG25_B="$SG25/b"; mkdir -p "$SG25_B"
+_sg25_leader_b="$(_sg25_spawn "$SG25_B" "SG25_LIB=$SG_CARRIER" SG25_SLEEP=4 SG25_RC=0 OC_SG_NO_DETACH=1 OC_SG_WATCHDOG_INTERVAL=1)"
+if ! _sg25_wait_file "$SG25_B/carrier.pid" 100; then
+  bad "carrier: the no-detach control never started — case 25b is testing nothing"
+else
+  kill -KILL "-$_sg25_leader_b" 2>/dev/null
+  sleep 6
+  [[ -f "$SG25_B/finished" ]] \
+    && bad "carrier: CONTROL BROKEN — the un-detached carrier survived a group SIGKILL, so 25a's survival proves nothing about the detach" \
+    || ok "carrier: control — WITHOUT the detach, the same kill stops the run dead (this is the incident, reproduced)"
+  # The watchdog is a child of the carrier and shares its process group here, so
+  # it dies in the same volley: without the detach there is nobody left to
+  # write anything. That is the silence this whole case exists to remove.
+  [[ -f "$SG25_B/outer.rc" ]] \
+    && bad "carrier: CONTROL BROKEN — the un-detached carrier still produced a terminal signal, so 25a's signal proves nothing" \
+    || ok "carrier: control — and WITHOUT the detach there is no terminal signal at all: a dead run and a running run look identical (rc file absent)"
+fi
+
+# 25c) DEATH BY SIGNAL. TERM aimed at the carrier itself must still leave a
+# signal, with the reason recorded — a death that says what killed it.
+# ⚠️ TIMING, stated because the assertion below would otherwise be read as
+# stronger than it is: bash runs a caught signal's trap only once the FOREGROUND
+# COMMAND IT IS WAITING ON returns. So the signal file appears when the carrier
+# next regains control (here: when the fixture's `sleep` ends), not at the
+# instant of the TERM. The guarantee is that it appears AT ALL and carries the
+# right rc and reason — not that it is instantaneous. The instant-death case is
+# 25d's SIGKILL, which the watchdog answers without waiting for bash.
+SG25_C="$SG25/c"; mkdir -p "$SG25_C"
+_sg25_spawn "$SG25_C" "SG25_LIB=$SG_CARRIER" SG25_SLEEP=4 SG25_RC=0 OC_SG_WATCHDOG_INTERVAL=1 >/dev/null
+if ! _sg25_wait_file "$SG25_C/carrier.pid" 100; then
+  bad "carrier: the TERM fixture never started — case 25c is testing nothing"
+else
+  kill -TERM "$(cat "$SG25_C/carrier.pid")" 2>/dev/null
+  _sg25_wait_file "$SG25_C/outer.rc" 150 || true
+  check "carrier: a TERM to the carrier still writes the terminal signal (128+15)" "143" "$(_sg25_rc "$SG25_C")"
+  [[ -f "$SG25_C/finished" ]] \
+    && bad "carrier: the TERM never actually stopped the run (it reached its end), so the 143 above says nothing about a signalled death" \
+    || ok "carrier: …and the run really was cut short by it (its completion marker was never written)"
+  grep -q 'signal:TERM' "$SG25_C/outer.status" 2>/dev/null \
+    && ok "carrier: …and outer.status records WHY it ended — $(tail -1 "$SG25_C/outer.status")" \
+    || bad "carrier: the rc was written but nothing recorded that a signal caused it (outer.status: $(cat "$SG25_C/outer.status" 2>/dev/null))"
+fi
+
+# 25d) DEATH NO TRAP CAN SEE. SIGKILL straight at the carrier: every trap above
+# is a promise bash can only keep while bash is alive, and this is the death that
+# produced the incident's silence. The watchdog is the layer that answers it.
+SG25_D="$SG25/d"; mkdir -p "$SG25_D"
+_sg25_spawn "$SG25_D" "SG25_LIB=$SG_CARRIER" SG25_SLEEP=20 SG25_RC=0 OC_SG_WATCHDOG_INTERVAL=1 >/dev/null
+if ! _sg25_wait_file "$SG25_D/carrier.pid" 100; then
+  bad "carrier: the SIGKILL fixture never started — case 25d is testing nothing"
+else
+  kill -KILL "$(cat "$SG25_D/carrier.pid")" 2>/dev/null
+  _sg25_wait_file "$SG25_D/outer.rc" 100 || true
+  check "carrier: even an untrappable SIGKILL leaves a terminal signal (the watchdog writes it)" "137" "$(_sg25_rc "$SG25_D")"
+  grep -q 'vanished' "$SG25_D/outer.status" 2>/dev/null \
+    && ok "carrier: …and it says the carrier VANISHED rather than ended — $(tail -1 "$SG25_D/outer.status")" \
+    || bad "carrier: a signal appeared for the SIGKILL case but never said the carrier vanished (outer.status: $(cat "$SG25_D/outer.status" 2>/dev/null))"
+fi
+
+# 25e) THE ORDINARY ENDS still carry the run's own rc — including a REFUSAL,
+# which is the shape of every `exit 2` guard in run.sh. A terminal signal that
+# flattened every ending to 0 would be worse than none.
+SG25_E="$SG25/e"; mkdir -p "$SG25_E"
+_sg25_spawn "$SG25_E" "SG25_LIB=$SG_CARRIER" SG25_SLEEP=1 SG25_RC=2 OC_SG_WATCHDOG_INTERVAL=1 >/dev/null
+_sg25_wait_file "$SG25_E/outer.rc" 100 || true
+check "carrier: an ordinary exit writes ITS OWN rc, not a flattened 0 (a refusal stays a refusal)" "2" "$(_sg25_rc "$SG25_E")"
+
+# 25f) THE WIRING IN run.sh, in CODE. The lib can be perfect and called from
+# nowhere. Three things are pinned: the detach happens, the traps are armed, and
+# the terminal signal is written from the EXIT path (the same trap that runs
+# teardown — so a run that refuses at a guard still reports).
+_sg25_code() { grep -v '^[[:space:]]*#' "$1"; }
+for _sg25_fn in sg_carrier_detach sg_carrier_arm sg_carrier_write; do
+  _sg25_hits="$(_sg25_code "$SG_DIR/run.sh" | grep -cF "$_sg25_fn" || true)"
+  [[ "${_sg25_hits:-0}" -ge 1 ]] \
+    && ok "carrier: run.sh calls $_sg25_fn in code" \
+    || bad "carrier: run.sh no longer calls $_sg25_fn — the carrier protection is wired to nothing"
+done
+# ORDER: the detach must come before the run does anything expensive or
+# stateful. Detaching after setup.sh would leave the window in which the
+# incident actually happened wide open.
+_sg25_detach_line="$(_sg25_code "$SG_DIR/run.sh" | grep -n 'sg_carrier_detach' | head -1 | cut -d: -f1)"
+_sg25_setup_line="$(_sg25_code "$SG_DIR/run.sh" | grep -n 'setup\.sh' | head -1 | cut -d: -f1)"
+if [[ -n "$_sg25_detach_line" && -n "$_sg25_setup_line" && "$_sg25_detach_line" -lt "$_sg25_setup_line" ]]; then
+  ok "carrier: run.sh detaches (code line $_sg25_detach_line) before it starts the isolated server (line $_sg25_setup_line)"
+else
+  bad "carrier: run.sh's detach does not precede setup.sh (detach=${_sg25_detach_line:-none} setup=${_sg25_setup_line:-none}) — the run would spend part of its life killable by its caller"
+fi
 
 echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1

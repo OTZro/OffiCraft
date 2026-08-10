@@ -313,6 +313,8 @@ tmux＋claude）就是 `tests/05_machine_onboarding_spawn.live-agent.spec.js` �
 | `http.log` | **每一通對 server 的呼叫**：method / path / HTTP 狀態碼 / 回應內容 |
 | `verdict.json` | 每一格逐項判定 |
 | `rc` | judge 的 rc（0 全綠 / 1 有紅），不經管線取 |
+| `outer.rc` | **載體自己的**終局訊號——不管怎麼死都會出現（見〈載體必須活過…〉）。**等待者要盯的是這一個**：`rc` 只有走到判定那一步才會有，`outer.rc` 連「半路被殺」都有 |
+| `outer.status` | 一行說明它**為什麼**結束（`exit` / `signal:TERM` / `vanished:…`），給讀 log 的人用 |
 | `friction.txt` | 追問的回答原文（stub run 由人貼進去；live run 由 `live.sh` 把 **agent 自己發出的訊息**原樣寫入。**載體不代寫、不摘要、不評分**——沒回答就寫「沒回答」） |
 | `scene-image.png` | ⑨種下去的那張圖（號碼只在像素裡） |
 | `warden.log` | 只有 live run 才有：那一顆 `ocwarden run` 的輸出 |
@@ -369,6 +371,51 @@ self-report（owner 拿去報只會蓋到 owner 頭上），②⑥比對 `from =
   `--disallowedTools AskUserQuestion`（`cli/ocwarden/spawn.go`），所以 spawn 出來的 claude
   不會停在一個沒人看得到的選單上；live.sh 自己則是「缺什麼就當場大聲拒絕」，沒有任何互動確認。
   收尾只殺**自己記下的**：那一個 tmux session 名 ＋ 那一顆 warden PID，不用 `pkill -f`。
+
+## 載體必須活過「起它的那個 session」，而且不准無聲死掉（`lib/carrier.sh`）
+
+一次**已經花掉錢**的真跑是這樣死的：`run.sh` 是某個 agent session 用背景指令起的，那個 session 被
+relocate 收掉時，**載體被連坐殺死**——log 停在輪詢到一半，沒有錯誤、沒有 teardown、沒有判定。
+而**它起的 agent 沒死**（agent 住在 tmux、是 detached daemon）。於是拿到最糟的組合：
+**沒人判定、沒人 teardown、真 agent 繼續燒錢空轉**。
+
+更貴的是第二半：**等的人永遠等不到**。等待者盯的是那一輪呼叫的 rc，而那個 rc 是由**已經死掉的那個
+shell** 負責寫的，所以它從來沒被寫出來。**「死了」跟「還在跑」外觀完全一樣**（都是沉默），
+直到幾小時後逾時。
+
+而且查過：改之前 `git grep -nE 'nohup|setsid|disown' -- e2e_test/seven_gate` **零命中**——
+**載體活不活得下來，完全取決於起它的人記不記得加 `nohup`**。「靠人記得」正是這個關卡要消滅的東西。
+
+所以現在是兩件事，而**第二件比第一件重要**：
+
+1. **自己 detach**。`run.sh` 一開頭就把自己 re-exec 進**新的 session**（`os.setsid()`；macOS 沒有
+   `setsid(1)`，而 `nohup` 只擋 SIGHUP、不改 process group，所以打在呼叫者 group 上的 kill 照樣收得到）。
+   python 那一層**不是立刻退場**：它 fork，**原本那顆 pid 留下來等**那個 detached 的孩子並用它的 rc 結束——
+   所以 `bash run.sh; echo $?` 這個前景合約**一個字都沒變**，只有「呼叫者死掉」那條路徑不一樣。
+2. **一定寫得出終局訊號**。不管怎麼結束——正常、`exit 2` 拒跑、TERM／HUP／INT、stdout 斷管、
+   甚至擋不住的 KILL——`<run dir>/outer.rc` 都會出現，另有一行 `outer.status` 寫**為什麼**。
+   因為萬一 detach 因為某個沒人預料到的理由失效，**失敗的樣子必須是「看得見的死」，不是沉默**。
+
+三層刻意重疊：**EXIT trap**（所有正常結束，含每一個 `exit 2` 拒跑）、**signal traps**（bash 看得見的
+死法，各自記下自己的 reason，然後**經由 EXIT trap** 離開，所以 teardown 照跑）、**watchdog**
+（一個被記下 pid 的小孩，發現載體消失而且沒有 rc 檔，就補寫 `137 / vanished`——這層專治 SIGKILL）。
+
+⚠️ **誠實的界線**（別把綠讀得比它大）：
+- **trap 不是即時的**：bash 只在**它正在等的那個前景指令**回來之後才跑 handler，所以 TERM 打在
+  setup 或 actor 中間，訊號檔會在**那個指令結束時**才出現。保證的是「**一定會出現、rc 與 reason 正確**」，
+  不是「立刻出現」。即時的那一格是 SIGKILL，由 watchdog 回答。
+- **detach 擋的是「打在呼叫者 group 上」的 kill**，不是「指名這一輪自己」的 kill：載體與 watchdog 若
+  被同一發打掉，就沒有人還活著能寫。
+- 這一層**不殺任何東西、不指名任何 session**：唯一的動詞是 `kill -0`（探活、不送訊號），對象是
+  這個 shell 自己記下的那一顆 pid。`lib/ownedkill.sh` 的隔離（自己的 socket ＋ 只殺 ledger 上的確切名字、
+  fail-closed）**一個字都沒動**。
+
+**守衛在 `tests_guard` 案例 25**（hermetic，不起服務、不花錢）：用一份「只有 carrier 接線 ＋ 一個 sleep」
+的 fixture，把它起在**自己的 session** 裡，然後**對它的 process group 送 SIGKILL**——載體必須**跑完**
+而且 `outer.rc` 必須存在；**對照組**（`OC_SG_NO_DETACH=1`）在同一發 kill 底下必須重現病徵
+（沒跑完、**而且完全沒有訊號檔**），否則 25a 的綠什麼都不證明。另外三格分別是 TERM（143 ＋ reason）、
+SIGKILL（137 ＋ `vanished`，watchdog 那一層）、以及一般結束**帶著自己的 rc**（`exit 2` 仍然是 2，
+不會被抹平成 0）。最後一格是**接線**：`run.sh` 真的呼叫那三個函式，而且 detach **排在 setup.sh 之前**。
 
 ## 載體只准殺自己建立的東西（兩層，`lib/ownedkill.sh`）
 

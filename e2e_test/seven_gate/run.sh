@@ -25,6 +25,7 @@ E2E="$HERE/.."
 . "$HERE/lib/http.sh"
 . "$HERE/lib/friction.sh"
 . "$HERE/lib/window.sh"
+. "$HERE/lib/carrier.sh"
 
 ACTOR="${OC_SG_ACTOR:-$HERE/actors/stub.sh}"
 [[ "$ACTOR" = /* ]] || ACTOR="$HERE/$ACTOR"
@@ -33,6 +34,21 @@ ACTOR="${OC_SG_ACTOR:-$HERE/actors/stub.sh}"
 STAMP="$(date -u '+%Y%m%dT%H%M%SZ')"
 RUN_DIR="${OC_SG_RUN_DIR:-$HERE/runs/$STAMP}"
 mkdir -p "$RUN_DIR"
+
+# 0. THE RUN MUST OUTLIVE WHOEVER STARTED IT, AND IT MUST NEVER DIE SILENTLY.
+#    A paid run died exactly here: the agent session that had launched this
+#    script in the background was collected, the carrier was killed WITH it
+#    mid-poll, and — because the rc a waiter watches was the rc of the SHELL THAT
+#    DIED — nothing was ever written. Nobody judged, nobody tore down, and the
+#    real agent it had spawned (which lives in tmux and did NOT die) kept
+#    spending. See lib/carrier.sh for the full account and the three layers.
+#    The run dir is pinned BEFORE the re-exec so the detached copy writes to the
+#    same place, and announced BEFORE it so a caller that dies one second later
+#    still knows which file to look at.
+export OC_SG_RUN_DIR="$RUN_DIR"
+echo "[seven_gate] run $STAMP → $RUN_DIR (terminal signal: $RUN_DIR/outer.rc — it is written NO MATTER HOW this run ends)"
+sg_carrier_detach "$0" "$@"
+
 LOG="$RUN_DIR/run.log"
 exec > >(tee -a "$LOG") 2>&1
 echo "[seven_gate] run $STAMP → $RUN_DIR  (actor=$(basename "$ACTOR")  OC_SEEDS_SRC=${OC_SEEDS_SRC:-<repo seeds/>})"
@@ -43,11 +59,21 @@ RESPONDER_PID=""
 # with the same argv as the live one, so `pkill -f` here would take the fleet
 # down with it (root CLAUDE.md §13).
 cleanup() {
+  local rc=$?
   [[ -n "$RESPONDER_PID" ]] && kill "$RESPONDER_PID" 2>/dev/null
   [[ -n "$COLLECTOR_PID" ]] && kill "$COLLECTOR_PID" 2>/dev/null
   bash "$E2E/teardown.sh" || true
+  # LAST, and after teardown: the terminal signal means "this run is over and
+  # here is what happened", so it must not appear while the run is still
+  # dismantling itself. Every exit path arrives here — the ordinary end, every
+  # `exit 2` refusal above, and the signal handlers armed just below, which
+  # deliberately exit THROUGH this trap rather than around it.
+  sg_carrier_write "$rc"
+  sg_carrier_watchdog_stop
 }
 trap cleanup EXIT
+sg_carrier_arm "$RUN_DIR/outer.rc"
+sg_carrier_watchdog
 
 # 1. isolated server. setup.sh re-stages seedsdist through bin/build-seedsdist on
 #    every run, and that script honours OC_SEEDS_SRC — so a candidate boot
