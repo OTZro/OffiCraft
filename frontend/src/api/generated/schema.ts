@@ -6389,7 +6389,7 @@ export interface components {
             minute: number;
             /**
              * Timezone
-             * @description IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`). Must name a place: `Local` and the empty string are REFUSED with 422 even though they resolve, because they mean `wherever this server runs` and `UTC by accident` rather than a stated zone. `UTC` itself is accepted. A wall-clock reading this zone does not have — the hour a spring-forward skips, or a day_of_month the month lacks — is an occurrence that does not happen, per RFC 5545's treatment of an invalid recurrence date.
+             * @description IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`). Must name a place: `Local` and the empty string are REFUSED with 422 even though they resolve, because they mean `wherever this server runs` and `UTC by accident` rather than a stated zone. `UTC` itself is accepted. The two ways a wall-clock reading can be absent are treated differently. A day the MONTH does not have (a 31st in February) is an occurrence that does not happen, per RFC 5545's treatment of an invalid recurrence date. A TIME the DAY does not have, because the zone skipped it springing forward, still happens: it moves forward to the first reading that day does have — a 02:30 slot fires at 03:00 — and the following day returns to the stated time, so the shift never accumulates.
              */
             timezone: string;
         };
@@ -6470,7 +6470,7 @@ export interface components {
             status: "enabled" | "disabled";
             /**
              * Timezone
-             * @description IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`). Must name a place: `Local` and the empty string are REFUSED with 422 even though they resolve, because they mean `wherever this server runs` and `UTC by accident` rather than a stated zone. `UTC` itself is accepted. A wall-clock reading this zone does not have — the hour a spring-forward skips, or a day_of_month the month lacks — is an occurrence that does not happen, per RFC 5545's treatment of an invalid recurrence date.
+             * @description IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`). Must name a place: `Local` and the empty string are REFUSED with 422 even though they resolve, because they mean `wherever this server runs` and `UTC by accident` rather than a stated zone. `UTC` itself is accepted. The two ways a wall-clock reading can be absent are treated differently. A day the MONTH does not have (a 31st in February) is an occurrence that does not happen, per RFC 5545's treatment of an invalid recurrence date. A TIME the DAY does not have, because the zone skipped it springing forward, still happens: it moves forward to the first reading that day does have — a 02:30 slot fires at 03:00 — and the following day returns to the stated time, so the shift never accumulates.
              * @default Asia/Taipei
              */
             timezone: string;
@@ -6522,7 +6522,7 @@ export interface components {
             status?: ("enabled" | "disabled") | null;
             /**
              * Timezone
-             * @description IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`). Must name a place: `Local` and the empty string are REFUSED with 422 even though they resolve, because they mean `wherever this server runs` and `UTC by accident` rather than a stated zone. `UTC` itself is accepted. A wall-clock reading this zone does not have — the hour a spring-forward skips, or a day_of_month the month lacks — is an occurrence that does not happen, per RFC 5545's treatment of an invalid recurrence date.
+             * @description IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`). Must name a place: `Local` and the empty string are REFUSED with 422 even though they resolve, because they mean `wherever this server runs` and `UTC by accident` rather than a stated zone. `UTC` itself is accepted. The two ways a wall-clock reading can be absent are treated differently. A day the MONTH does not have (a 31st in February) is an occurrence that does not happen, per RFC 5545's treatment of an invalid recurrence date. A TIME the DAY does not have, because the zone skipped it springing forward, still happens: it moves forward to the first reading that day does have — a 02:30 slot fires at 03:00 — and the following day returns to the stated time, so the shift never accumulates.
              */
             timezone?: string | null;
         };

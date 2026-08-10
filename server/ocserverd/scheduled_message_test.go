@@ -102,6 +102,10 @@ func TestMostRecentSlot(t *testing.T) {
 	lordHowe := mustLoadZone(t, "Australia/Lord_Howe")
 	apia := mustLoadZone(t, "Pacific/Apia")
 	newYork := mustLoadZone(t, "America/New_York")
+	// The two zones with gaps WIDER than an hour: Troll jumps two hours every
+	// March (still happening), Casey has jumped three (2016-2022).
+	troll := mustLoadZone(t, "Antarctica/Troll")
+	casey := mustLoadZone(t, "Antarctica/Casey")
 	cases := []struct {
 		name string
 		sm   ScheduledMessage
@@ -252,6 +256,42 @@ func TestMostRecentSlot(t *testing.T) {
 		sm:   ScheduledMessage{Cadence: ScheduledMessageCadenceDaily, Hour: 1, Minute: 30, Timezone: "America/New_York"},
 		now:  time.Date(2026, time.November, 1, 6, 30, 0, 0, time.UTC),
 		want: "2026-11-01T01:30-04:00",
+	}, {
+		// 🔴 Antarctica/Troll jumps 01:00 → 03:00 every March: a TWO-HOUR gap,
+		// once a year, and fourteen of them are still ahead of us. A 01:00
+		// schedule there needs the search to walk exactly 120 minutes. The bound
+		// that used to sit at 120 fitted this with nothing to spare while its
+		// comment called two hours "headroom" — the tz database has had 30, 60,
+		// 120 and 180 minute gaps.
+		name: "a two hour gap still finds the first existing reading",
+		sm:   ScheduledMessage{Cadence: ScheduledMessageCadenceDaily, Hour: 1, Timezone: "Antarctica/Troll"},
+		now:  time.Date(2027, time.March, 28, 12, 0, 0, 0, troll),
+		want: "2027-03-28T03:00+02:00",
+	}, {
+		// A reading INSIDE the same gap but nearer its end walks less far, and
+		// lands on the same first existing reading — not on wherever time.Date's
+		// normalisation put it (which for 02:30 here is 04:30).
+		name: "a reading later in the same gap lands on the gap's end, not on the normalised time",
+		sm:   ScheduledMessage{Cadence: ScheduledMessageCadenceDaily, Hour: 2, Minute: 30, Timezone: "Antarctica/Troll"},
+		now:  time.Date(2027, time.March, 28, 12, 0, 0, 0, troll),
+		want: "2027-03-28T03:00+02:00",
+	}, {
+		// The day after is back at the wall clock the owner set — a two-hour shift
+		// is still one occurrence, not a new alignment.
+		name: "a two hour gap does not drift the following day",
+		sm:   ScheduledMessage{Cadence: ScheduledMessageCadenceDaily, Hour: 1, Timezone: "Antarctica/Troll"},
+		now:  time.Date(2027, time.March, 29, 12, 0, 0, 0, troll),
+		want: "2027-03-29T01:00+02:00",
+	}, {
+		// 🔴 And a THREE-hour gap, which the old 120-minute bound could not reach
+		// at all: Antarctica/Casey has done this six times, and those occurrences
+		// were dropped in silence. Note the answer is 03:01, not a round hour —
+		// Casey's jump runs 00:01 → 03:01, so the first reading the zone actually
+		// has is the one the search finds, never a tidied-up guess.
+		name: "a three hour gap is delivered, not dropped",
+		sm:   ScheduledMessage{Cadence: ScheduledMessageCadenceDaily, Minute: 30, Timezone: "Antarctica/Casey"},
+		now:  time.Date(2020, time.October, 4, 12, 0, 0, 0, casey),
+		want: "2020-10-04T03:01+11:00",
 	}, {
 		// The same date in the same zone at an hour the transition does not touch
 		// DOES exist — the rule is "this wall clock does not exist", never "this

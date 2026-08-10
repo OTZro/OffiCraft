@@ -150,17 +150,31 @@ func monthlySlot(year int, month time.Month, s ScheduledMessage, loc *time.Locat
 	return slotAt(year, month, s.DayOfMonth, s, loc)
 }
 
-// dstGapScanMinutes bounds the search for the first wall clock that EXISTS after
-// one the zone skipped. Every gap in the tz database is an hour or less (Lord
-// Howe's is thirty minutes), so two hours is headroom, and the bound is what
-// makes a DELETED CALENDAR DAY — Pacific/Apia skipped 30 December 2011 outright
-// for the date-line move — run out of candidates and report "no slot on this
-// date", which sends the cadence loop back another day. (A schedule set inside
-// the last two hours of such a day would find its first existing reading on the
-// following one; that is one occurrence landing on the neighbouring date, not a
-// lost or duplicated one, and it is not worth a special case.)
-// The +1-minute scan matches svc-automation's _first_existing_instant.
-const dstGapScanMinutes = 120
+// 🔴 The forward search below is bounded BY THE CALENDAR DAY, not by a guess at
+// how large a DST gap can get. An earlier version guessed: it scanned 120
+// minutes and the comment called that "headroom" on the grounds that gaps are an
+// hour at most. That was false when it was written. Scanning every zone in
+// tzdata 2025b over 2015-2040 (599 zones):
+//
+//	 30 min :   54 transitions
+//	 60 min : 5350 transitions
+//	120 min :   26 transitions   ← Antarctica/Troll, 14 of them still in the future
+//	180 min :    6 transitions   ← Antarctica/Casey, 2016-2022
+//
+// Troll jumps 01:00 → 03:00 every March, so a 01:00 schedule there needs a shift
+// of EXACTLY 120: the old bound fitted it with nothing to spare, while claiming
+// to be generous. Casey's 180 already exceeded it — those occurrences were
+// dropped in silence, which is the failure this whole search exists to avoid.
+//
+// A day boundary cannot be wrong about a future tzdata release the way a minute
+// count can, and it makes the two absences structurally distinct instead of
+// sharing one exit: "this reading moved later within its day" is an occurrence
+// that happens, and "this date has no reading at all from here on" is a date the
+// zone does not have (Pacific/Apia deleted 30 December 2011 outright for the
+// date-line move) — which sends the cadence loop back another day. It also means
+// a late-evening slot on a deleted day can no longer wander onto the next date.
+// The +1-minute walk matches svc-automation's _first_existing_instant; only the
+// bound differs.
 
 // slotAt builds the slot for (year, month, day) at s's hour:minute in loc.
 //
@@ -199,13 +213,11 @@ func slotAt(year int, month time.Month, day int, s ScheduledMessage, loc *time.L
 	if wall.Year() != year || wall.Month() != month || wall.Day() != day {
 		return time.Time{}, false
 	}
-	for shift := 0; shift <= dstGapScanMinutes; shift++ {
-		want := wall.Add(time.Duration(shift) * time.Minute)
+	for want := wall; want.Day() == day && want.Month() == month && want.Year() == year; want = want.Add(time.Minute) {
 		slot := time.Date(want.Year(), want.Month(), want.Day(),
 			want.Hour(), want.Minute(), 0, 0, loc)
-		if slot.Year() == want.Year() && slot.Month() == want.Month() &&
-			slot.Day() == want.Day() && slot.Hour() == want.Hour() &&
-			slot.Minute() == want.Minute() {
+		if slot.Hour() == want.Hour() && slot.Minute() == want.Minute() &&
+			slot.Day() == want.Day() && slot.Month() == want.Month() && slot.Year() == want.Year() {
 			return slot, true
 		}
 	}
