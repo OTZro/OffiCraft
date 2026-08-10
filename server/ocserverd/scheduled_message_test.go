@@ -11,8 +11,13 @@ package main
 // `ow-` schedule undeliverable — the same hole webhooks have today).
 
 import (
+	"fmt"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -877,5 +882,96 @@ func TestUpdateScheduledMessageSettingsLeavesAConcurrentCursorAdvanceAlone(t *te
 	// And the edit itself really landed — the test must not pass by writing nothing.
 	if after.Label != "renamed" {
 		t.Fatalf("the edit did not apply: label is %q, want \"renamed\"", after.Label)
+	}
+}
+
+// armScheduledRow plants an armed schedule whose cursor is old enough that the
+// very next tick must deliver.
+func armScheduledRow(t *testing.T, api *apiServer, id string) {
+	t.Helper()
+	// Daily 00:00 UTC: a slot has always already elapsed.
+	if err := api.dal.PutScheduledMessage(ScheduledMessage{
+		ID: id, MemberID: "mira", Label: "before", Body: "the one delivery",
+		Cadence: ScheduledMessageCadenceDaily, DayOfMonth: 1, Timezone: "UTC",
+		Status: ScheduledMessageStatusEnabled, LastFiredSlot: "1999-01-01T00:00+00:00",
+		CreatedTS: nowSecs(),
+	}); err != nil {
+		t.Fatalf("arm %s: %v", id, err)
+	}
+}
+
+// request performs one HTTP call and reports the status, distinguishing a
+// TRANSPORT failure (status 0) from any answer the server actually sent. The
+// difference is the whole point: a handler that panics closes the connection, so
+// the caller sees EOF rather than a status.
+func request(method, url, token, body string) (int, error) {
+	req, err := http.NewRequest(method, url, strings.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode, nil
+}
+
+// TestUpdateScheduledMessageAnswersWhenTheRowIsDeletedMidRequest pins that a row
+// vanishing between the handler's read and its re-read is an ANSWER, not a
+// dropped connection.
+//
+// The UPDATE matches zero rows without erroring, so a concurrent DELETE leaves
+// the re-read returning (nil, nil). Folding "gone" together with "storage broke"
+// handed internalError a nil error, and its first act is err.Error() — the
+// handler panicked, net/http killed that connection, and the caller got EOF with
+// no status at all.
+//
+// Red when the two are folded back together: rounds report a transport error
+// rather than a status.
+func TestUpdateScheduledMessageAnswersWhenTheRowIsDeletedMidRequest(t *testing.T) {
+	srv, secret, api := scheduledStack(t)
+	ownerTok, _ := mintJWT("owner", "owner", 300, secret, time.Now().Unix(), "")
+
+	const rounds = 300
+	var dropped, unexpected int
+	for i := 0; i < rounds; i++ {
+		id := fmt.Sprintf("sch-gone-%03d", i)
+		armScheduledRow(t, api, id)
+		path := srv.URL + "/api/members/mira/scheduled-messages/" + id
+
+		var wg sync.WaitGroup
+		var patchStatus int
+		var patchErr error
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			patchStatus, patchErr = request("PATCH", path, ownerTok, `{"label":"renamed"}`)
+		}()
+		go func() {
+			defer wg.Done()
+			request("DELETE", path, ownerTok, "")
+		}()
+		wg.Wait()
+
+		switch {
+		case patchErr != nil:
+			dropped++
+		case patchStatus != 200 && patchStatus != 404:
+			unexpected++
+		}
+		api.dal.DeleteScheduledMessage(id)
+	}
+	if dropped != 0 {
+		t.Fatalf("%d/%d PATCHes got no response at all (transport error) — the handler "+
+			"panicked on a row that was deleted mid-request instead of answering", dropped, rounds)
+	}
+	if unexpected != 0 {
+		t.Fatalf("%d/%d PATCHes answered with something other than 200 or 404 — a row "+
+			"deleted mid-request is a 404, the same answer a schedule that never existed gets",
+			unexpected, rounds)
 	}
 }
