@@ -169,9 +169,21 @@ func (s *apiServer) HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessa
 	// Re-read rather than serialise the snapshot: the cursor fields on the wire
 	// must be the ones actually in the row, including an advance this request
 	// deliberately did not overwrite.
+	//
+	// 🔴 "Gone" and "storage broke" are two answers, not one. The UPDATE above
+	// matches zero rows without erroring, so a DELETE landing between this
+	// request's read and its write leaves fresh == nil with err == nil — and
+	// folding those together fed internalError a nil error, whose first act is to
+	// call err.Error(). That panicked: the caller got a dropped connection (EOF),
+	// not a response. The row being gone is a 404, which is the same answer the
+	// read at the top of this handler gives for a schedule that was never there.
 	fresh, err := s.dal.GetScheduledMessage(m.ID)
-	if err != nil || fresh == nil {
+	if err != nil {
 		internalError(w, err)
+		return
+	}
+	if fresh == nil {
+		writeResolveError(w, errNotFound, "scheduled message", scheduleId)
 		return
 	}
 	writeJSON(w, http.StatusOK, newScheduledMessageDTO(*fresh))
