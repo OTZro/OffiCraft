@@ -67,7 +67,21 @@ def sample(base, token, agent):
     if isinstance(m, dict) and m.get("id"):
         member = m
     chat = _list(get(base, token, "/api/chat?member_id=" + agent), "messages", "chat")
-    cards = _list(get(base, token, "/api/reply-cards"), "cards", "reply_cards", "items")
+    # BOTH panes. /api/reply-cards defaults to status=waiting, so a card the
+    # owner answers between two polls would vanish from every later sample —
+    # and ⑥'s evidence with it, for a reason that has nothing to do with the
+    # agent. The answered pane keeps it readable.
+    cards = []
+    seen = set()
+    for status in ("waiting", "answered"):
+        for c in _list(get(base, token, "/api/reply-cards?status=" + status),
+                       "cards", "reply_cards", "items"):
+            cid = c.get("id") if isinstance(c, dict) else None
+            if cid and cid in seen:
+                continue
+            if cid:
+                seen.add(cid)
+            cards.append(c)
     tasks = []
     for t in _list(get(base, token, "/api/tasks"), "tasks", "items"):
         tid = t.get("id")
