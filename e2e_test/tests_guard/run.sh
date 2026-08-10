@@ -1854,7 +1854,8 @@ done
 # script nobody calls.
 SG_VARCHECK="$SG_DIR/lib/varcheck.py"
 SG_VARFILES=("$SG_DIR/actors/live.sh" "$SG_DIR/actors/stub.sh" "$SG_DIR/run.sh"
-             "$SG_DIR/lib/http.sh" "$SG_DIR/lib/friction.sh" "$SG_DIR/lib/window.sh")
+             "$SG_DIR/lib/http.sh" "$SG_DIR/lib/friction.sh" "$SG_DIR/lib/window.sh"
+             "$SG_DIR/lib/ownedkill.sh")
 
 # 23a) the shipped harness is clean.
 python3 "$SG_VARCHECK" "${SG_VARFILES[@]}" >/dev/null 2>&1
