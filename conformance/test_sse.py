@@ -610,7 +610,8 @@ def test_every_closed_topic_emits(client, owner_token, agent_a, fresh_member, ow
 #
 # The fan-out is per-recipient: an AGENT connection receives a delta iff it is
 # addressed (member→self, chat→participants, reply_card→initiator, task→
-# executor+creator); every other agent's stream stays quiet. This replaced the
+# executor only — the creator was dropped by T-0eb5); every other agent's
+# stream stays quiet. This replaced the
 # old全域廣播 where every online agent burned a wake on every unrelated delta
 # (owner report: a zero-task agent woken by every task delta in the system).
 # The owner/dashboard connection stays全量 — it is the global cockpit view, and

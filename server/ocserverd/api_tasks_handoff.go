@@ -283,9 +283,11 @@ func (s *apiServer) applyHandoffPlan(
 }
 
 // mintCreatorFollowUpTask is option ① made durable. The complaint the ticket
-// starts from is that the creator DOES get told (publishTask fans to the
-// creator) and it still drops: an SSE delta is a line that scrolls away, and
-// nothing in the system afterwards says "there is a ball on your side". The
+// starts from is that telling the creator over SSE still drops: a delta is a
+// line that scrolls away, and nothing in the system afterwards says "there is
+// a ball on your side". (Since T-0eb5 the creator is not even in the task
+// audience any more — publishTask fans to the executor only — so the durable
+// carrier below is the ONLY thing that puts the ball on their side.) The
 // durable equivalent that already exists is a TASK — it sits on the creator's
 // open list, it is counted in the resume snapshot (resumeTasksFor), it shows on
 // the cockpit, and it only leaves by being worked or terminated. So that is

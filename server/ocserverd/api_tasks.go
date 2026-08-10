@@ -48,13 +48,23 @@ func taskLog(format string, args ...any) {
 // ── SSE fan helpers (spec/sse.md §2.2 — hint payloads, never full bodies) ────
 
 func (s *apiServer) publishTask(t Task, trigger string) {
-	// A task delta reaches its executor (the wake) and its creator (tracking
-	// their own task), plus the owner cockpit (spec/sse.md §4). NOT dependents
-	// — coordination is server deps-fulfill + agent pull, never eavesdropping
-	// (owner 2026-07-15). A blank executor/creator narrows the set to owner.
+	// A task delta reaches its EXECUTOR (the wake) and the owner cockpit
+	// (spec/sse.md §4) — nobody else. NOT the creator: a task that was
+	// reassigned or 發包 away is no longer the creator's work, and the fan was
+	// per-step ("step done (3/12)", every `updated`), so it burned the
+	// creator's context to tell them something they were not acting on (owner
+	// 2026-08-08 ruling on card rc-0994e949872e, option ①: the creator
+	// receives NOTHING). A creator tracking their own dispatched task PULLS
+	// (list_tasks with statuses) — the same 主動去查 the boot context teaches.
+	// ⚠️ Do NOT re-introduce a partial fan ("only important events"): that was
+	// option ②, explicitly rejected — it needs a what-counts-as-important
+	// classification, which drifts from reality and nobody notices.
+	// NOT dependents either — coordination is server deps-fulfill + agent
+	// pull, never eavesdropping (owner 2026-07-15). A blank executor narrows
+	// the set to owner.
 	s.hub.Publish("task", "patch", "task", wireOwnerID+"::"+t.ID,
 		map[string]any{"id": t.ID, "status": t.Status, "priority": t.Priority},
-		audienceMembers(t.ExecutorID, t.CreatorID), trigger)
+		audienceMembers(t.ExecutorID), trigger)
 }
 
 // dispatchSpec is a resolved 發包 target: what an outsource worker minted for the
@@ -1428,9 +1438,10 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 		s.postTaskChat(*t, wireSystemSender, newMember.ID, msg, trigger)
 	}
 
-	// 6. Fan the task delta: publishTask reaches the NEW executor + creator +
-	// owner; the OLD executor just left that audience, so fan them once more
-	// explicitly — their cockpit/agent view must learn the task moved away.
+	// 6. Fan the task delta: publishTask reaches the NEW executor + owner (the
+	// creator is NOT in the audience — T-0eb5); the OLD executor just left
+	// that audience, so fan them once more explicitly — their cockpit/agent
+	// view must learn the task moved away.
 	s.publishTask(*t, trigger)
 	if oldExecutor != "" && oldExecutor != t.ExecutorID {
 		s.hub.Publish("task", "patch", "task", wireOwnerID+"::"+t.ID,
