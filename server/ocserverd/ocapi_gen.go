@@ -1896,23 +1896,23 @@ type ScheduledMessageCreateDTO struct {
 	// Cadence How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither.
 	Cadence ScheduledMessageCreateDTOCadence `json:"cadence"`
 
-	// DayOfMonth Day of month for `monthly` cadence, 1-28. Capped at 28 so that every month actually contains the day — allowing 29/30/31 would turn "this month never fired" into a silent failure that surfaces only in February.
+	// DayOfMonth Day of month for `monthly` cadence, 1-28. Capped at 28 so that every month actually contains the day — allowing 29/30/31 would turn "this month never fired" into a silent failure that surfaces only in February. Omitted or null means 1. Ignored by `daily` and `weekly`.
 	DayOfMonth *int `json:"day_of_month,omitempty"`
 
-	// DayOfWeek Day of week for `weekly` cadence: 0=Sunday through 6=Saturday.
+	// DayOfWeek Day of week for `weekly` cadence: 0=Sunday through 6=Saturday. Omitted or null means 0 (Sunday). Ignored by `daily` and `monthly`.
 	DayOfWeek *int `json:"day_of_week,omitempty"`
 
 	// Hour Hour of the wall-clock slot, 0-23, read in `timezone`.
-	Hour *int `json:"hour,omitempty"`
+	Hour int `json:"hour"`
 
-	// Label Human-facing name for this schedule. Also rides the delivered message's `meta.scheduled.label`, so the receiving agent can tell which of its schedules just spoke.
+	// Label Human-facing name for this schedule. Also rides the delivered message's `meta.scheduled.label`, so the receiving agent can tell which of its schedules just spoke. Omitted or null means no label.
 	Label *string `json:"label,omitempty"`
 
 	// Minute Minute of the wall-clock slot, 0-59, read in `timezone`.
-	Minute *int `json:"minute,omitempty"`
+	Minute int `json:"minute"`
 
 	// Timezone IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`).
-	Timezone *string `json:"timezone,omitempty"`
+	Timezone string `json:"timezone"`
 }
 
 // ScheduledMessageCreateDTOCadence How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither.
