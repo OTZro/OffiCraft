@@ -370,6 +370,32 @@ self-report（owner 拿去報只會蓋到 owner 頭上），②⑥比對 `from =
   不會停在一個沒人看得到的選單上；live.sh 自己則是「缺什麼就當場大聲拒絕」，沒有任何互動確認。
   收尾只殺**自己記下的**：那一個 tmux session 名 ＋ 那一顆 warden PID，不用 `pkill -f`。
 
+## 載體只准殺自己建立的東西（兩層，`lib/ownedkill.sh`）
+
+`actors/live.sh` 起真 agent，就得收自己起的東西。它原本收在 `cli/ocwarden/tmux.go` 的
+`officraft` 上——**那是正式 fleet 的 socket，服役中 agent 的 session 就住在上面**。它只殺確切名字，
+所以什麼壞事都沒發生；但「什麼壞事都沒發生」是**載體剛好沒寫錯**的結果，而上一節那個少一個字母的
+錯字，它的 trap 就殺掉了剛 spawn 起來的 agent。同一類 bug 發生在 fleet socket 上，不是一次紅的 run，
+是**別人**的 agent 被不可逆地殺掉。
+
+於是中間隔兩層，任何一層單獨都離 fleet 只差一個 bug：
+
+1. **物理層**——本輪自己抽一個 warden instance namespace（`OC_NAMESPACE` → `tmuxSocketFor` →
+   `officraft-<ns>`，`cli/ocwarden/namespace.go`）。打在 `officraft-<ns>` 的 kill **構造上就到不了**
+   `officraft` 上的 session，不是因為小心，是因為那是兩個不同的 socket。`sg_own_socket_assert`
+   另外明文拒絕 `officraft` 與**空字串**（空的 namespace 解出來就是 fleet）。
+2. **所有權層**——只殺**建立當下寫進 ledger** 的 session 名與 pid。沒有 ledger、或 ledger 是空的，
+   就**殺零個**（fail-closed）：漏掉一筆紀錄的後果必須是「漏殺、可回收、看得見」，不能是「殺錯、
+   不可逆」。
+
+**守衛在 `tests_guard` 案例 24**（hermetic，不起服務、不起 agent），三顆 mutant 各改一處、各套在一份
+**複本**上：拿掉 socket 隔離（socket 解回 `officraft`）、把 pid kill 放寬成 `pgrep -f` 樣式比對、
+把 session kill 放寬成「列出來挑像我們的」。三顆都實際套到**真檔**驗過會轉紅並點名
+（rc=1，各 4 / 2 / 2 條 FAIL）。
+🔴 **還有一格陽性對照，而且它是這一案最重要的一格**：上面每一條斷言都是「**沒有**殺到誰」，而那個綠
+用「什麼都不殺」就達得到，跟真的綠一模一樣。所以案例 24 起**真的行程**、記進 ledger、要求它**真的死**，
+同時旁邊放一個**位元組相同、沒被記下**的行程，要求它**活著**。
+
 ## 🔴 明確沒做到的界線
 
 - **從來沒有真 agent 走過這條關卡——`actors/live.sh` 已經寫好，但一次都沒被執行過。**
@@ -377,9 +403,12 @@ self-report（owner 拿去報只會蓋到 owner 頭上），②⑥比對 `from =
   ——onboard、`ocwarden run`、activate 帶 machine_id、等 tmux、逐字追問、寫 `friction.txt`——
   都只**照契約與 `tests/05_*.live-agent.spec.js` 寫過，未經執行驗證**。第一個按下去的人請預期要 debug；
   好消息是每一通呼叫的狀態碼與內容都在 `http.log`，debug 是「讀」不是「猜」。
-  ⚠️ 特別點名兩個**仍然**沒驗過的假設：(a) `run.sh` 先 activate（無機器）留下的 reconcile 狀態，
-  會不會讓 live.sh 第二次 activate（帶 machine_id）的 START 被 backoff 延後；(b) tmux socket 名沿用
-  `cli/ocwarden/tmux.go` 的 `officraft`，namespaced 安裝下不是這個名字。
+  ⚠️ 特別點名一個**仍然**沒驗過的假設：`run.sh` 先 activate（無機器）留下的 reconcile 狀態，
+  會不會讓 live.sh 第二次 activate（帶 machine_id）的 START 被 backoff 延後。
+  ⚠️ 原本列在這裡的第二個假設（tmux socket 名沿用 `cli/ocwarden/tmux.go` 的 `officraft`）**已經不是
+  假設，而是被拿掉的東西**：那個名字就是**正式 fleet 的 socket**，服役中的 agent 就住在上面。現在
+  live.sh 每一輪自己抽一個 `OC_NAMESPACE`，socket 是 `officraft-<ns>`，而 `lib/ownedkill.sh` 明文拒絕
+  `officraft`——見〈載體只准殺自己建立的東西〉。
   ✅ **已經驗掉的**（這一輪實測，沒有起真 agent）：codex 那條路**在這台機器上三個相依項都解得到**——
   `codex login status` 回 `Logged in using ChatGPT`、`/Users/eva/.local/bin/codex` 可執行、
   `ocwarden` build 得出來且跑得動（⇒ `WardenBin = os.Executable()` 解得到，那是 codex sidecar 的前提）。
@@ -397,4 +426,5 @@ self-report（owner 拿去報只會蓋到 owner 頭上），②⑥比對 `from =
   **其餘格子照樣各自判**（跳過⑨時⑧仍綠）。live actor 那條路徑一次都沒跑過。
 - 這支不在 `run_all.sh` 裡、也不在 `bin/ci.sh` 裡。CI 守的是**判定邏輯**與載體的幾條靜態不變式
   （`tests_guard` 案例 21：21a–21e 判定與 friction 措辭、21f 沒有裸 curl／狀態碼有被抓、
-  21g live actor 的花錢開關是嚴格 include flag），**不是任何一次真的 run**。
+  21g live actor 的花錢開關是嚴格 include flag；案例 24：隔離與所有權那兩層），
+  **不是任何一次真的 run**。

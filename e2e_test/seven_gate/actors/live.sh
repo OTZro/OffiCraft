@@ -53,6 +53,7 @@ SG="$HERE/.."
 . "$SG/lib/http.sh"
 . "$SG/lib/friction.sh"
 . "$SG/lib/window.sh"
+. "$SG/lib/ownedkill.sh"
 
 say() { printf '[actor:live] %s\n' "$*"; }
 die() { printf '[actor:live] FATAL: %s\n' "$*" >&2; exit 2; }
@@ -114,24 +115,47 @@ if [[ ! -x "$OCWARDEN" ]]; then
     || die "ocwarden build failed."
 fi
 
-TMUX_SOCKET="${OC_SG_TMUX_SOCKET:-officraft}"   # cli/ocwarden/tmux.go tmuxSocket
+# ── THIS RUN GETS ITS OWN TMUX SOCKET ───────────────────────────────────────
+# The warden's instance namespace (cli/ocwarden/namespace.go) keys BOTH the tmux
+# socket (tmuxSocketFor → "officraft-<ns>") and the data root
+# (officraftRootFor → ~/.officraft-<ns>). Handing it a per-run namespace means a
+# kill issued here CANNOT REACH the live fleet's `officraft` socket — where
+# serving members' sessions live — because it is a different socket. That is the
+# difference between "we only kill exact names" (a discipline, one typo from an
+# irreversible mistake) and "it physically cannot touch them".
+# Shape is locked by the warden: [a-z0-9-]{1,16} (namespaceShape). Note the
+# minimum of ONE character is the part that matters here: tmuxSocketFor("")
+# returns the bare `officraft` — the EMPTY namespace IS the fleet. A malformed
+# non-empty one is a different failure: realMain validates it before any
+# derivation and exits 1 with `[ocwarden] FATAL: OC_NAMESPACE must match …`, so
+# the warden never starts and this actor would sit out its whole spawn wait
+# waiting for a session nothing was ever going to create. Refuse here instead,
+# where the message can say which of the two it is.
+OC_SG_NAMESPACE="${OC_SG_NAMESPACE:-sg-$(od -An -tx1 -N4 /dev/urandom | tr -d ' \n')}"
+[[ "$OC_SG_NAMESPACE" =~ ^[a-z0-9-]{1,16}$ ]] \
+  || die "OC_SG_NAMESPACE='$OC_SG_NAMESPACE' does not match the warden's [a-z0-9-]{1,16}: an EMPTY namespace resolves to the FLEET socket '$SG_FLEET_SOCKET', and any other malformed value makes ocwarden exit 1 at startup so nothing ever spawns."
+TMUX_SOCKET="officraft-$OC_SG_NAMESPACE"
+sg_own_socket_assert "$TMUX_SOCKET" || exit 2
 SESSION="member-$(printf '%s' "$AGENT" | tr '[:upper:]' '[:lower:]')"
 
+# The ledgers: the only authority for what this run is allowed to kill. Written
+# at creation time, read at cleanup. Empty/absent ⇒ kill nothing.
+OWNED_SESSIONS="$RUN_DIR/owned-sessions"
+OWNED_PIDS="$RUN_DIR/owned-pids"
+: > "$OWNED_SESSIONS"; : > "$OWNED_PIDS"
+say "isolation: namespace=$OC_SG_NAMESPACE socket=$TMUX_SOCKET (the fleet's '$SG_FLEET_SOCKET' is unreachable from here)"
+
 # ── teardown: EXACT names, EXACT pids, nothing pattern-matched ──────────────
-# root CLAUDE.md §13: `pkill -f` / `killall` are banned here because the live
-# fleet runs the same binaries with the same argv. We kill the ONE tmux session
-# whose name we minted and the ONE warden pid we hold. run.sh's own trap takes
-# the server down.
+# root CLAUDE.md §13 bans killing by program NAME (`pkill -f` and friends),
+# because the live fleet runs the same binaries with the same argv — name is not
+# identity. Cleanup here kills ONLY what the ledgers say THIS run created, on
+# this run's OWN socket: no pattern, no glob, no "list the sessions and pick the
+# ones that look like ours". See lib/ownedkill.sh for why a missing ledger kills
+# nothing at all. run.sh's own trap takes the server down.
 WARDEN_PID=""
 live_cleanup() {
-  if [[ -n "$SESSION" ]]; then
-    say "killing tmux session $SESSION on socket $TMUX_SOCKET (exact name)"
-    tmux -L "$TMUX_SOCKET" kill-session -t "$SESSION" 2>/dev/null
-  fi
-  if [[ -n "$WARDEN_PID" ]]; then
-    say "killing warden pid $WARDEN_PID (exact pid)"
-    kill "$WARDEN_PID" 2>/dev/null
-  fi
+  sg_own_kill_sessions "$TMUX_SOCKET" "$OWNED_SESSIONS"
+  sg_own_kill_pids "$OWNED_PIDS"
 }
 trap live_cleanup EXIT
 
@@ -165,9 +189,11 @@ say "starting ocwarden run (this is the process that will spawn claude)"
 env -u OC_WARDEN_TOKFILE \
     OC_BASE="$BASE" OC_TOKEN="$MACHINE_TOK" OC_ID="$MACHINE" \
     OC_CLAUDE_BIN="$CLAUDE_BIN" OC_CODEX_BIN="$CODEX_BIN" \
+    OC_NAMESPACE="$OC_SG_NAMESPACE" \
     "$OCWARDEN" run >>"$RUN_DIR/warden.log" 2>&1 &
 WARDEN_PID=$!
-say "warden pid=$WARDEN_PID → $RUN_DIR/warden.log"
+sg_own_record "$OWNED_PIDS" "$WARDEN_PID"
+say "warden pid=$WARDEN_PID (recorded in the ledger) → $RUN_DIR/warden.log"
 
 ONLINE=""
 for _ in $(seq 1 "$OC_SG_MACHINE_WAIT"); do
@@ -223,6 +249,7 @@ done
 if [[ -z "$SPAWNED" ]]; then
   die "no tmux session '$SESSION' appeared — the warden accepted the START but nothing spawned. Read $RUN_DIR/warden.log."
 fi
+sg_own_record "$OWNED_SESSIONS" "$SESSION"
 PANE_PID="$(tmux -L "$TMUX_SOCKET" list-panes -t "$SESSION" -F '#{pane_pid}' 2>/dev/null | head -1)"
 say "spawned: tmux session $SESSION pane_pid=${PANE_PID:-<unknown>}"
 [[ -n "$PANE_PID" ]] && ps -p "$PANE_PID" -o command= 2>/dev/null | sed 's/^/[actor:live] pane: /'
