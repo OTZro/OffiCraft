@@ -150,10 +150,15 @@ oc_e2e_teardown_on_exit() { # $1 = the e2e_test dir holding teardown.sh
 # BEFORE dispatch — it records what was ASKED for, which is the question the
 # tests need ("did teardown try to delete anything at all?").
 #
-# OC_E2E_DESTROY_IMPL is the replaceable half: production leaves it unset and
-# gets the real rm; a test sets it to oc_e2e_destroy_record_only and gets a run
-# that is identical except that nothing is removed. That is what lets the tests
-# exercise the REAL teardown while the guard under test is deliberately broken.
+# SAFETY CONTRACT (this seam is where the property is enforced): teardown
+# code DOES run in tests, but only against a throwaway tree and only through the
+# record-only seam below, which records what it would have deleted. Production
+# leaves OC_E2E_DESTROY_IMPL unset and performs the real deletion; tests set it
+# to oc_e2e_destroy_record_only so the same teardown path runs without removing
+# anything. No real fleet is touched.
+#
+# OC_E2E_DESTROY_IMPL is the replaceable half. That is what lets tests exercise
+# the REAL teardown while the guard under test is deliberately broken.
 oc_e2e_destroy() {
   local target
   mkdir -p "$(dirname "$OC_E2E_DESTROY_RECORD")" 2>/dev/null || true
