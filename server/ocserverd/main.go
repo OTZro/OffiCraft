@@ -1,6 +1,6 @@
 // Command ocserverd is the officraft server daemon — the production
-// implementation (a Go port of the retired Python original; historical
-// rollback = git tag py-final). It carries the oc.toml config reader, the
+// implementation (a Go port of the retired Python original, whose history is
+// not in this repo — there is no rollback anchor). It carries the oc.toml config reader, the
 // HS256 JWT mint/verify, the declarative RouteSpec table + fail-closed boot
 // assertions, the REST/SSE/MCP surfaces, the reconcile producer, and the
 // goose migration base over modernc.org/sqlite (cgo-free).

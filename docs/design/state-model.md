@@ -1,7 +1,7 @@
 # 狀態模型 — member / warden 的 online 與生命週期
 
 > **owner(Seth)2026-07-10 定案。** 本文件是 member / warden「在不在線上」、狀態該存哪、與生命週期管理的**單一權威 logical spec**;相關 code 一律照此。
-> 取代舊的「host-mismatch 自動 relocate」機制(見文末「取代了什麼」;舊設計文件 t21-server-reconcile-design.md 已隨 Python 實作退場——歷史見 git tag `py-final`)。
+> 取代舊的「host-mismatch 自動 relocate」機制(見文末「取代了什麼」;舊設計文件 t21-server-reconcile-design.md 已隨 Python 實作退場,而那段歷史不在本 repo)。
 > 現行實作 = Go server(`server/ocserverd/`):「warden 也算 online」「砍自動 relocate」已實作完成(hub.go / reconcile.go);**原則 3 的「handshake 機器比對→suicide」未實作**(owner 2026-07-12 定案 code is right:唯一性由 dual-SSE 409+stop gate 承擔、換機維持手動,原則 3 降級為 backlog 設計選項,見 §3)。code 與本文不合時 flag owner 定奪。(較小版:member 起停決策**留在 server**,warden 是純執行手 / remote calling tool;非「決策搬 warden」。)
 
 ## WHY — 要解決的根本問題

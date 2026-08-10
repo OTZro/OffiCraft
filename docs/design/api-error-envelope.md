@@ -1,7 +1,7 @@
 # API 錯誤 envelope — 統一 wire 錯誤形狀
 
 **Status**: 定案(owner Seth 已裁:換掉原框架隱性 `{"detail": …}`)。
-**實作**:Go server `server/ocserverd/`(`server.go` 統一錯誤寫出 + `api_helpers.go` 422/400 分流)· wire 宣告在凍結 `spec/openapi.json`(每 route `422`/`4XX`/`5XX` → ErrorEnvelope)· FE 消費 `frontend/src/api/client.ts::ApiError` · 黑箱回歸 `conformance/test_error_envelope.py`。(原 Python 實作已退役——tag `py-final`;本文描述的 wire 契約不變。)
+**實作**:Go server `server/ocserverd/`(`server.go` 統一錯誤寫出 + `api_helpers.go` 422/400 分流)· wire 宣告在凍結 `spec/openapi.json`(每 route `422`/`4XX`/`5XX` → ErrorEnvelope)· FE 消費 `frontend/src/api/client.ts::ApiError` · 黑箱回歸 `conformance/test_error_envelope.py`。(原 Python 實作已退役、其歷史不在本 repo;本文描述的 wire 契約不變。)
 
 ## WHY
 

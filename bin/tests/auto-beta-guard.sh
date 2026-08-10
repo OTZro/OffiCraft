@@ -1780,11 +1780,13 @@ nbt_next() { # nbt_next <tags> — sets RC, TAG (stdout only) and BASE
 # N0 — the shape this repo actually uses, and the reason the rule is patch+1
 # rather than beta+1: the base is itself a -beta.1, and `-beta.N` sorts BELOW the
 # same X.Y.Z under semver, so anything that did not move the patch could not come
-# out greater than its own base.
+# out greater than its own base. The trailing non-semver tag is what pins the
+# other half of the rule — such a tag must be IGNORED, not rejected: mutate the
+# filter into a refusal and these three checks are the only ones that go red.
 nbt_next "v0.5.77-beta.1
 v0.5.78-beta.1
 v0.5.9
-py-final"
+some-tag"
 check "N0 the repo's own shape: base is the greatest beta, next bumps the patch" "0" "$RC"
 check "N0 …base chosen"      "v0.5.78-beta.1" "$BASE"
 check "N0 …next tag"         "v0.5.79-beta.1" "$TAG"
@@ -1813,7 +1815,7 @@ check "N2 …and the next tag is a beta above it" "v0.5.79-beta.1" "$TAG"
 # The realistic cause is a query that broke, and the friendly fallback would
 # republish a version from the beginning of history over a repo with a hundred
 # releases. Non-semver tags are ignored, so a list of only those is empty too.
-nbt "py-final
+nbt "some-tag
 not-a-version" nbt_next_beta_tag
 if [[ "$RC" == "0" ]]; then
   bad "N3 an empty candidate set must FAIL (it exited 0 and printed: $(printf '%s' "$OUT" | tr '\n' '|'))"

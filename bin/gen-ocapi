@@ -2,7 +2,7 @@
 # officraft — regenerate server/ocserverd/ocapi_gen.go from spec/openapi.json.
 #
 # The committed spec (M1 wire freeze SSOT) is OpenAPI 3.1 (dumped by the
-# retired Python implementation — git tag py-final); oapi-codegen supports 3.0
+# retired Python implementation, no longer in this repo); oapi-codegen supports 3.0
 # only, so this script first DOWNCONVERTS a temp copy:
 #   * `anyOf: [X, {"type":"null"}]` (the only 3.1 construct the spec uses)
 #     folds to X + `nullable: true` (a bare $ref wraps in single-member allOf,

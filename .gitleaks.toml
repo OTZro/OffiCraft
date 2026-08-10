@@ -37,7 +37,7 @@ paths = [
   # `-ldflags "-s -w"`). Path-scoped so ONLY this binary is exempt, never source.
   '''bin/ocserverd''',
   # server/ocserverd/jwt_test.go — JWT interop fixtures: two SYNTHETIC tokens
-  # minted by the retired Python implementation (git tag py-final) under a
+  # minted by the retired Python implementation (no longer in this repo) under a
   # deterministic unit-test signing secret, kept as frozen wire-compat vectors.
   # gitleaks' generic JWT rule fingerprints any `eyJ...` literal; these are
   # reproducible test vectors, never real credentials.

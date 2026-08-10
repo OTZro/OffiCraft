@@ -18,8 +18,8 @@
 // PHASE STATUS. Phase 0 (scaffold) landed the module skeleton and the shared
 // config/http seam ported from ocwarden. context-report AND listen (the persistent
 // SSE downlink — Phase 4) are implemented and dispatched; the spawn shim execs
-// THIS binary (the Python CLI it originally shadowed is retired — git tag
-// py-final).
+// THIS binary (the Python CLI it originally shadowed is retired; its source is
+// not in this repo).
 //
 // Design note: like ocwarden this is stdlib-only, zero third-party deps. The
 // network seam is the injectable httpClient interface — tests point Config.Base

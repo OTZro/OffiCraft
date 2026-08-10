@@ -56,8 +56,9 @@ nbt_die() { echo "[next-beta-tag] FATAL: $1" >&2; exit "${2:-1}"; }
 # Prints TWO lines on stdout: the base it chose, then the next tag.
 #
 # Tags that are not plain semver `vX.Y.Z[-prerelease]` are IGNORED rather than
-# rejected: this repo carries non-version tags (py-final, the permanent rollback
-# anchor) and they are not candidates for "the greatest version". Build metadata
+# rejected: a tag that is not a version is simply not a candidate for "the
+# greatest version", and refusing the whole set over one such tag would let any
+# unrelated tag block every release. Build metadata
 # (`+meta`) is also out of scope — nothing here has ever produced one, and
 # guessing at semantics nobody uses is how an unused branch rots.
 #

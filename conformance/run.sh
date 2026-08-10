@@ -3,8 +3,9 @@
 #
 #   conformance/run.sh --target go   # isolated ocserverd (kernel-assigned port, throwaway SQLite)
 #
-# go is the ONLY target since the Python retirement (rollback anchor: git tag
-# py-final); the flag stays so the target vocabulary remains explicit. The run:
+# go is the ONLY target since the Python retirement (that history is not in this
+# repo — no rollback anchor); the flag stays so the target vocabulary remains
+# explicit. The run:
 # temp oc.toml (via $OC_CONFIG) + temp SQLite → build ocserverd fresh → goose
 # migrate → serve on an ISOLATED port → pytest with OC_TARGET_URL injected →
 # teardown that kills ONLY the captured listener pid, plus a final reclaim of
@@ -30,7 +31,7 @@ while [[ $# -gt 0 ]]; do
 done
 if [[ "$TARGET" != "go" ]]; then
   echo "[conformance] usage: conformance/run.sh --target go" >&2
-  echo "[conformance] (the py target retired with the Python backend — rollback anchor: git tag py-final)" >&2
+  echo "[conformance] (the py target retired with the Python backend — that history is not in this repo)" >&2
   exit 64
 fi
 
@@ -123,7 +124,7 @@ if ! "$CVENV/bin/python" -c "import pytest, httpx" >/dev/null 2>&1; then
 fi
 
 # routes_manifest.json is a FROZEN committed snapshot (it was mechanically
-# extracted from the retired Python route table — tag py-final — and is now
+# extracted from the retired Python route table, no longer in this repo — and is now
 # wire-freeze material alongside spec/*.json: change it spec-first, through the
 # owner). The suite itself pins it against the live server: test_openapi_covers_
 # manifest locks manifest ≡ spec operations, and the auth matrix locks every

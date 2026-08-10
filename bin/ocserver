@@ -24,8 +24,7 @@
 # The server is the Go deploy binary (.deploy/ocserverd, SPA embedded),
 # produced by bin/build (npm webdist + go build) and exec'd by bin/serve /
 # bin/migrate. Install therefore runs build BEFORE migrate — no venv, no pip.
-# Rollback (historical): the retired Python implementation lives at git tag
-# py-final.
+# No Python-era rollback: that implementation's history is not in this repo.
 #
 # LAUNCHD (3 jobs, gui/<uid> domain):
 #   com.officraft.serve      -> repo/bin/serve       (the API)

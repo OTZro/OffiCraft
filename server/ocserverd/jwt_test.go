@@ -12,7 +12,7 @@ import (
 // with pinned inputs. The Go mint must reproduce these BYTE FOR BYTE, and the
 // Go verify must accept them — that is the cross-daemon interop contract.
 //
-// Regenerate (against the retired Python implementation — git tag py-final):
+// Regenerate (against the retired Python implementation, whose source is not in this repo):
 //
 //	from plumbing.auth import mint
 //	mint("kyle", "agent", 3600, "interop-unit-test-signing-secret",

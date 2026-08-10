@@ -62,7 +62,7 @@ bash run_all.sh          # setup → every default-ON spec → teardown, in one 
 ### Target
 
 The suite runs against the Go server (`ocserverd`) — the only implementation
-since the Python backend retired (rollback anchor: git tag `py-final`):
+since the Python backend retired (its history is not in this repo — no rollback anchor):
 
 ```bash
 bash run_all.sh                    # stage all embed assets → go build ocserverd
