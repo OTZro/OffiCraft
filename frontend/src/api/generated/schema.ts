@@ -6348,7 +6348,7 @@ export interface components {
         };
         /**
          * ScheduledMessageCreateDTO
-         * @description Create one scheduled message on a member (T-f059 定期訊息). `body` and `cadence` are REQUIRED; every other field has a server default. `cadence` selects which day field applies — `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither — while `hour`/`minute`/`timezone` fix the wall-clock slot. The delivery cursor is initialised to the slot most recently elapsed at creation time, so a schedule created at 10:00 for `daily` 09:00 does not fire today. The recipient may be an assistant OR an `ow-` outsource worker — the same recipient rule ordinary chat uses.
+         * @description Create one scheduled message on a member (T-f059 定期訊息). `body`, `cadence`, `hour`, `minute` and `timezone` are REQUIRED; `label`, `day_of_week` and `day_of_month` are optional and each states its own omitted-value behaviour. The wall-clock time and its zone are required rather than defaulted on purpose: a schedule with no time of day is meaningless, and a defaulted timezone would sooner or later be read as "wherever the server happens to run". `cadence` selects which day field applies — `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither — while `hour`/`minute`/`timezone` fix the wall-clock slot. The delivery cursor is initialised to the slot most recently elapsed at creation time, so a schedule created at 10:00 for `daily` 09:00 does not fire today. The recipient may be an assistant OR an `ow-` outsource worker — the same recipient rule ordinary chat uses.
          */
         ScheduledMessageCreateDTO: {
             /**
