@@ -53,6 +53,28 @@ ROOT := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 # resolution (bin/lib/toolchain.sh — a missing tool is a FAILURE, never a skip).
 P = set -euo pipefail; cd "$(ROOT)"; source bin/lib/toolchain.sh;
 
+# EVERY check target ends with this, as the LAST CLAUSE OF ITS RECIPE'S SINGLE
+# SHELL COMMAND — never as a separate recipe line.
+#
+# A zero exit says "nothing failed", not "something ran": a target whose recipe
+# is emptied, commented out, or cut short by an early `exit 0` succeeds
+# instantly and in complete silence, and no caller can tell that apart from a
+# check that ran and passed. Before T-4d88 the cloud macOS cell bought this
+# protection by grepping the subset script's final marker out of a tee'd log;
+# that script is gone and the marker went with it. This is where it lives now.
+#
+# Positioning is the whole mechanism. As the tail of the same `;`-joined command
+# under `set -e`, anything that stops the recipe early takes this with it. Put it
+# on its own recipe line and make would run it in a FRESH shell after an early
+# `exit 0` — the marker would print for a check that returned without doing
+# anything, which is precisely the failure it exists to catch.
+#
+# bin/run-checks.sh runs a set of targets and then requires the marker of each
+# one it was asked for; .github/workflows/ci.yml calls the checks through it, so
+# each cloud cell is held to its OWN targets and no list of "all the checks"
+# exists anywhere to drift.
+DONE = echo "[oc-check-done] $@"
+
 # The macOS-shaped checks refuse to pretend on another platform rather than
 # reporting a green that means nothing. This is a helper, not a check category.
 REQUIRE_DARWIN = [[ "$$(uname -s)" == "Darwin" ]] || { echo "FAIL — this check is macOS-shaped; refusing to pretend on $$(uname -s)" >&2; exit 1; };
@@ -102,7 +124,8 @@ build-embed-assets:
 	echo "[build-embed-assets] staging seedsdist + docsdist + bindist"; \
 	PATH="$$(dirname "$$GO"):$$PATH" bash bin/build-seedsdist; \
 	PATH="$$(dirname "$$GO"):$$PATH" bash bin/build-docsdist; \
-	PATH="$$(dirname "$$GO"):$$PATH" bash bin/build-bindist
+	PATH="$$(dirname "$$GO"):$$PATH" bash bin/build-bindist; \
+	$(DONE)
 
 # Compile every module and DROP the fresh binary (gitignored). Nothing else in
 # the deploy pipeline compiles the Go modules on its own, so without this a
@@ -115,7 +138,8 @@ build-go:
 	  dir="$$(dirname "$$gomod")"; binary="$$(basename "$$dir")"; \
 	  echo "[build-go] go build $$dir"; \
 	  (cd "$$dir" && "$$GO" build -o "$$binary" ./...); \
-	done
+	done; \
+	$(DONE)
 
 # npm ci is its own target because five other targets need node_modules and none
 # of them should be the one that happens to install it.
@@ -124,7 +148,8 @@ build-frontend-deps:
 	NPM="$$(oc_npm)"; \
 	[[ -f frontend/package.json ]] || { echo "FAIL — frontend/package.json missing" >&2; exit 1; }; \
 	echo "[build-frontend-deps] npm ci (frontend)"; \
-	(cd frontend && "$$NPM" ci --silent)
+	(cd frontend && "$$NPM" ci --silent); \
+	$(DONE)
 
 # ===========================================================================
 # lint
@@ -146,7 +171,8 @@ lint-go-naming:
 	  if ! grep -qE "^module $${binary}\$$" "$$dir/go.mod"; then \
 	    echo "FAIL — naming (CLAUDE.md 10): $$dir/go.mod 'module' line is not 'module $$binary'"; exit 1; \
 	  fi; \
-	done
+	done; \
+	$(DONE)
 
 # gofmt -l lists any unformatted file; non-empty = fail. testdata/ holds no *.go,
 # so a plain recursive scan of "." is safe.
@@ -164,7 +190,8 @@ lint-go-fmt:
 	    echo "fix with: gofmt -w $$dir"; \
 	    exit 1; \
 	  fi; \
-	done
+	done; \
+	$(DONE)
 
 # go vet type-checks *_test.go too, so this covers test-file compilation that
 # `go build ./...` (non-test only) would miss.
@@ -176,7 +203,8 @@ lint-go-vet:
 	  dir="$$(dirname "$$gomod")"; \
 	  echo "[lint-go-vet] $$dir"; \
 	  (cd "$$dir" && "$$GO" vet ./...); \
-	done
+	done; \
+	$(DONE)
 
 # Client-payload contract gate (T-9c8d) plus its own positive control. Both
 # halves move together, always: the selftest is what proves the scanner still
@@ -185,7 +213,8 @@ lint-uplink-contract:
 	@$(P) \
 	echo "[lint-uplink-contract] every CLI send is declared, spec-checked and wire-tested"; \
 	python3 bin/uplink-guard.py; \
-	python3 bin/tests/uplink-guard-selftest.py
+	python3 bin/tests/uplink-guard-selftest.py; \
+	$(DONE)
 
 # Effort-vocabulary contract gate (T-dbd4) plus its positive control, same shape
 # and same reason as the pair above.
@@ -193,7 +222,8 @@ lint-effort-vocab:
 	@$(P) \
 	echo "[lint-effort-vocab] every hand-written copy lists exactly what the server enforces"; \
 	python3 bin/effort-vocab-guard.py; \
-	python3 bin/tests/effort-vocab-guard-selftest.py
+	python3 bin/tests/effort-vocab-guard-selftest.py; \
+	$(DONE)
 
 # The conformance suite is the language-agnostic black-box definition of the
 # wire; the moment its test code imports an implementation module it stops being
@@ -210,7 +240,8 @@ lint-conformance-blackbox:
 	    echo "conformance tests speak ONLY HTTP to \$$OC_TARGET_URL (see conformance/CLAUDE.md)."; \
 	    exit 1; \
 	  fi; \
-	fi
+	fi; \
+	$(DONE)
 
 # The SECOND line of contract-drift defence: Wire* re-exports the generated
 # OpenAPI schema, so a DTO change surfaces as a tsc error even if drift-schema-ts
@@ -219,7 +250,8 @@ lint-ts: build-frontend-deps
 	@$(P) \
 	NPM="$$(oc_npm)"; \
 	echo "[lint-ts] tsc --noEmit (frontend typecheck)"; \
-	(cd frontend && "$$NPM" run --silent typecheck)
+	(cd frontend && "$$NPM" run --silent typecheck); \
+	$(DONE)
 
 # A raw colour literal outside theme.css is invisible to the theme switch and to
 # user-defined themes — exactly how a new theme sprouts an un-restyled patch.
@@ -227,7 +259,8 @@ lint-css-tokens: build-frontend-deps
 	@$(P) \
 	NPM="$$(oc_npm)"; \
 	echo "[lint-css-tokens] no raw colour literals outside theme.css (T-16a1)"; \
-	(cd frontend && "$$NPM" run --silent lint:tokens)
+	(cd frontend && "$$NPM" run --silent lint:tokens); \
+	$(DONE)
 
 # Three tokens each used to carry two semantically opposite jobs; T-081b split
 # them. A re-merge is INVISIBLE in the dark theme and breaks only light-theme
@@ -236,7 +269,8 @@ lint-css-token-roles: build-frontend-deps
 	@$(P) \
 	NPM="$$(oc_npm)"; \
 	echo "[lint-css-token-roles] the T-081b splits stay split"; \
-	(cd frontend && "$$NPM" run --silent lint:token-roles)
+	(cd frontend && "$$NPM" run --silent lint:token-roles); \
+	$(DONE)
 
 # ===========================================================================
 # test
@@ -281,7 +315,8 @@ test-e2e-isolation-guard:
 	  rm -f "$$log"; \
 	  exit 1; \
 	fi; \
-	rm -f "$$log"
+	rm -f "$$log"; \
+	$(DONE)
 
 # The dispatcher for the bin/ guard suites (hermetic PATH shims: no release is
 # created and no station is contacted). Its own cell in the cloud on owner's
@@ -292,7 +327,8 @@ test-bin-guards:
 	@$(P) $(REQUIRE_DARWIN) \
 	echo "[test-bin-guards] bin/tests/run.sh"; \
 	[[ -x bin/tests/run.sh ]] || { echo "FAIL — bin/tests/run.sh missing or not executable (renamed? then this check stopped running)"; exit 1; }; \
-	bash bin/tests/run.sh
+	bash bin/tests/run.sh; \
+	$(DONE)
 
 # -count=1 is the documented way to DEFEAT go's test-result cache and it is
 # load-bearing for the whole meaning of this check (T-bedc): without it go
@@ -307,7 +343,8 @@ test-go: build-embed-assets
 	  dir="$$(dirname "$$gomod")"; \
 	  echo "[test-go] go test -count=1 $$dir"; \
 	  (cd "$$dir" && "$$GO" test -count=1 ./...); \
-	done
+	done; \
+	$(DONE)
 
 # vitest runs in jsdom, which applies no layout engine — see test-frontend-ct for
 # the half this one is structurally blind to.
@@ -315,7 +352,8 @@ test-frontend-unit: build-frontend-deps
 	@$(P) \
 	NPM="$$(oc_npm)"; \
 	echo "[test-frontend-unit] vitest run (frontend unit suite)"; \
-	(cd frontend && "$$NPM" run --silent test)
+	(cd frontend && "$$NPM" run --silent test); \
+	$(DONE)
 
 # `test:ct` is TWO Playwright configs: the CT visual guards against a dev server,
 # then the paint guards against a REAL `vite build` output served over HTTP. The
@@ -334,7 +372,8 @@ test-frontend-ct: build-frontend-deps
 	echo "[test-frontend-ct] real-browser CT layout guards + paint guards"; \
 	export PLAYWRIGHT_BROWSERS_PATH="$${PLAYWRIGHT_BROWSERS_PATH:-$$HOME/Library/Caches/ms-playwright}"; \
 	(cd frontend && npx --no-install playwright install chromium >/dev/null 2>&1 || true); \
-	(cd frontend && "$$NPM" run --silent test:ct)
+	(cd frontend && "$$NPM" run --silent test:ct); \
+	$(DONE)
 
 # The full HTTP-only behaviour suite: boots a throwaway ocserverd on a
 # kernel-assigned port against a throwaway SQLite, runs the suite, tears down.
@@ -349,7 +388,8 @@ test-conformance: build-embed-assets
 	  echo "(manifest/spec/RBAC) or a behaviour pin broke."; \
 	  echo "Reproduce: bash conformance/run.sh --target go"; \
 	  exit 1; \
-	fi
+	fi; \
+	$(DONE)
 
 # ===========================================================================
 # scan
@@ -368,7 +408,8 @@ scan-tracked-paths:
 	  printf '  %s\n' $$hits; \
 	  echo "remove with: git rm --cached <file>   (and confirm .gitignore covers it)"; \
 	  exit 1; \
-	fi
+	fi; \
+	$(DONE)
 
 # The other half of hygiene: file CONTENTS. `dir` scans the tree, --config pins
 # the allowlist policy. A missing .gitleaks.toml is a refusal, not a default-rule
@@ -378,7 +419,8 @@ scan-secrets:
 	GITLEAKS="$$(oc_gitleaks)"; \
 	[[ -f .gitleaks.toml ]] || { echo "FAIL — .gitleaks.toml missing — refusing to scan with default rules and call it a pass" >&2; exit 1; }; \
 	echo "[scan-secrets] gitleaks content scan"; \
-	"$$GITLEAKS" dir . --no-banner --config .gitleaks.toml
+	"$$GITLEAKS" dir . --no-banner --config .gitleaks.toml; \
+	$(DONE)
 
 # The one owner-approved committed binary (the TCC identity anchor). Its manifest
 # binds a reviewable source snapshot to the checked-in executable, so this fails
@@ -388,7 +430,8 @@ scan-tcc-anchor:
 	@$(P) $(REQUIRE_DARWIN) \
 	echo "[scan-tcc-anchor] bin/check-officraft-dist"; \
 	[[ -x bin/check-officraft-dist ]] || { echo "FAIL — bin/check-officraft-dist missing or not executable (renamed? then this check stopped running)"; exit 1; }; \
-	bin/check-officraft-dist
+	bin/check-officraft-dist; \
+	$(DONE)
 
 # ===========================================================================
 # drift — regenerate a committed artifact, require it back byte-identical
@@ -419,7 +462,8 @@ drift-ocapi:
 	  rm -f "$$fresh"; \
 	  exit 1; \
 	fi; \
-	rm -f "$$fresh"
+	rm -f "$$fresh"; \
+	$(DONE)
 
 # The wire-freeze gate on the CLIENT surface: feed the FROZEN spec through the
 # SAME generator the committed schema was made with.
@@ -434,23 +478,27 @@ drift-schema-ts: build-frontend-deps
 	  rm -f "$$fresh"; \
 	  exit 1; \
 	fi; \
-	rm -f "$$fresh"
+	rm -f "$$fresh"; \
+	$(DONE)
 
 # styles/theme.css is the single token contract; the user-theme validators read a
 # GENERATED whitelist of its --color-* names (T-16a1 P2).
 drift-theme-tokens: build-frontend-deps
 	@echo "[drift-theme-tokens] regenerate from theme.css + diff committed (T-16a1 P2)"
-	@$(call REGEN_PAIR_GATE,theme-token whitelist,gen:tokens,frontend/src/styles/themeTokens.generated.ts,server/ocserverd/theme_colornames_gen.go)
+	@$(call REGEN_PAIR_GATE,theme-token whitelist,gen:tokens,frontend/src/styles/themeTokens.generated.ts,server/ocserverd/theme_colornames_gen.go); \
+	$(DONE)
 
 # locales/en.ts is the single message-code contract; the wording-overlay
 # validators read a GENERATED whitelist of its leaf-string key paths (T-16a1 P3).
 drift-message-keys: build-frontend-deps
 	@echo "[drift-message-keys] regenerate from locales/en.ts + diff committed (T-16a1 P3)"
-	@$(call REGEN_PAIR_GATE,message-key whitelist,gen:msgkeys,frontend/src/i18n/messageKeys.generated.ts,server/ocserverd/message_keys_gen.go)
+	@$(call REGEN_PAIR_GATE,message-key whitelist,gen:msgkeys,frontend/src/i18n/messageKeys.generated.ts,server/ocserverd/message_keys_gen.go); \
+	$(DONE)
 
 # themeFonts.source.json is the single font contract; the theme-bundle `fonts`
 # validators read a GENERATED whitelist of its --font-* names and its closed
 # safe-family stack set (T-16a1 P4).
 drift-fonts: build-frontend-deps
 	@echo "[drift-fonts] regenerate from themeFonts.source.json + diff committed (T-16a1 P4)"
-	@$(call REGEN_PAIR_GATE,font whitelist,gen:fonts,frontend/src/styles/themeFonts.generated.ts,server/ocserverd/theme_fonts_gen.go)
+	@$(call REGEN_PAIR_GATE,font whitelist,gen:fonts,frontend/src/styles/themeFonts.generated.ts,server/ocserverd/theme_fonts_gen.go); \
+	$(DONE)

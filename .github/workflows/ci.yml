@@ -9,10 +9,21 @@
 # ONE DEFINITION, AND THIS FILE IS NOT IT (T-4d88)
 # Every check is a named target in the repo-root Makefile, and its implementation
 # lives in exactly one recipe there. Each cell below calls the targets it owns —
-# `make <target> <target>` — and contains no test path, no npm script name, no
-# module list and no gate logic of its own. A cell can choose WHICH checks it
-# runs; it cannot restate HOW, so a cloud round and a local round cannot drift.
-# If you are about to add a test invocation here: add a target to the Makefile.
+# `bash bin/run-checks.sh <target> <target>` — and contains no test path, no npm
+# script name, no module list and no gate logic of its own. A cell can choose
+# WHICH checks it runs; it cannot restate HOW, so a cloud round and a local round
+# cannot drift. If you are about to add a test invocation here: add a target to
+# the Makefile.
+#
+# WHY THE WRAPPER AND NOT A BARE `make`: a zero exit says "nothing failed", not
+# "something ran". A target whose recipe is emptied, commented out or cut short
+# by an early exit succeeds instantly and in silence. Every check target ends by
+# printing its own `[oc-check-done] <target>` line, and run-checks.sh requires
+# the marker of every target IT WAS ASKED FOR — so each cell is held to its OWN
+# checks, and no cell (and no list in this file) enumerates anybody else's.
+# This protection is not new: the deleted macOS subset script was tee'd and
+# grepped for its final marker for exactly this reason, and that home went with
+# the script.
 #
 # The two subset scripts this file used to call (bin/ci-cloud.sh and
 # bin/ci-macos-host.sh) are gone. They existed to be "the one definition of the
@@ -133,7 +144,7 @@ jobs:
           # Only server/ocserverd has third-party deps (hence a go.sum); the
           # cli/ modules are stdlib-only. setup-go errors on an unresolved path.
           cache-dependency-path: server/ocserverd/go.sum
-      - run: make lint-go-naming lint-go-fmt lint-go-vet build-go test-go
+      - run: bash bin/run-checks.sh lint-go-naming lint-go-fmt lint-go-vet build-go test-go
 
   # ---------------------------------------------------------------------------
   # frontend — typecheck, the static CSS/token lints, and the jsdom unit suite.
@@ -150,7 +161,7 @@ jobs:
           check-latest: false
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - run: make lint-ts lint-css-tokens lint-css-token-roles test-frontend-unit
+      - run: bash bin/run-checks.sh lint-ts lint-css-tokens lint-css-token-roles test-frontend-unit
 
   # ---------------------------------------------------------------------------
   # frontend-ct — real-browser layout + paint guards. Separate from
@@ -174,7 +185,7 @@ jobs:
           check-latest: false
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - run: make test-frontend-ct
+      - run: bash bin/run-checks.sh test-frontend-ct
 
   # ---------------------------------------------------------------------------
   # drift — the regenerate-and-byte-compare class, together because they share
@@ -202,7 +213,7 @@ jobs:
           check-latest: false
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - run: make drift-ocapi drift-schema-ts drift-theme-tokens drift-message-keys drift-fonts
+      - run: bash bin/run-checks.sh drift-ocapi drift-schema-ts drift-theme-tokens drift-message-keys drift-fonts
 
   # ---------------------------------------------------------------------------
   # contract-guards — the stdlib-python3 scanners over tracked files, each shipped
@@ -214,7 +225,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
-      - run: make lint-uplink-contract lint-effort-vocab
+      - run: bash bin/run-checks.sh lint-uplink-contract lint-effort-vocab
 
   # ---------------------------------------------------------------------------
   # conformance — the black-box import lint (fast, static) and then the full
@@ -232,7 +243,7 @@ jobs:
           go-version: '1.26.4'
           check-latest: false
           cache-dependency-path: server/ocserverd/go.sum
-      - run: make lint-conformance-blackbox test-conformance
+      - run: bash bin/run-checks.sh lint-conformance-blackbox test-conformance
 
   # ---------------------------------------------------------------------------
   # hygiene — what is TRACKED (path denylist) and what is IN the files (gitleaks).
@@ -247,7 +258,7 @@ jobs:
       # the target can afford to treat "not found" as a failure.
       - name: install gitleaks
         run: brew install gitleaks
-      - run: make scan-tracked-paths scan-secrets
+      - run: bash bin/run-checks.sh scan-tracked-paths scan-secrets
 
   # ---------------------------------------------------------------------------
   # bin-guards — its own cell by owner ruling: the bin/ guard suites are the
@@ -271,7 +282,7 @@ jobs:
           check-latest: false
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - run: make test-bin-guards
+      - run: bash bin/run-checks.sh test-bin-guards
 
   # ---------------------------------------------------------------------------
   # tcc-anchor — its own cell by owner ruling. The one owner-approved committed
@@ -284,7 +295,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
-      - run: make scan-tcc-anchor
+      - run: bash bin/run-checks.sh scan-tcc-anchor
 
   # ---------------------------------------------------------------------------
   # e2e-isolation-guard — the hermetic safety layer that keeps the DESTRUCTIVE
@@ -297,7 +308,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
-      - run: make test-e2e-isolation-guard
+      - run: bash bin/run-checks.sh test-e2e-isolation-guard
 
   # ---------------------------------------------------------------------------
   # macos-e2e — the real-browser end-to-end suite against an isolated station.

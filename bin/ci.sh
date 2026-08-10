@@ -46,8 +46,8 @@
 # (*.live-agent.spec.js), so nothing anywhere has to remember to exclude it.
 #
 # WHAT RUNS WHERE is deliberately not enumerated in any doc: read the target list
-# below for this round, and `grep -n 'make ' .github/workflows/ci.yml` for the
-# cloud cells. Both name Makefile targets, so neither can describe a check the
+# below for this round, and `grep -n 'run-checks' .github/workflows/ci.yml` for
+# the cloud cells. Both name Makefile targets, so neither can describe a check the
 # other implements differently.
 set -euo pipefail
 
@@ -106,6 +106,12 @@ echo "[ci] commit $CI_SHA ($CI_BRANCH, tree $CI_TREE) — started $(date -u '+%Y
 # make itself fails fast: the first target whose recipe exits non-zero stops the
 # invocation, which trips `set -e` here, which means the marker at the bottom is
 # never reached. That is the same property the old inline steps had.
+#
+# It goes through bin/run-checks.sh rather than calling make directly because rc
+# alone cannot tell "every check passed" from "a check's recipe was emptied and
+# succeeded instantly". Each target prints its own `[oc-check-done] <target>` and
+# the wrapper requires the marker of every target IT WAS ASKED FOR — which is
+# this array, so there is no second list of the round anywhere.
 OC_ROUND=(
   build-embed-assets
   test-e2e-isolation-guard
@@ -135,7 +141,7 @@ OC_ROUND=(
   test-conformance
 )
 echo "[ci] round of ${#OC_ROUND[@]} checks: ${OC_ROUND[*]}"
-make -C "$ROOT" "${OC_ROUND[@]}"
+bash bin/run-checks.sh "${OC_ROUND[@]}"
 
 # The marker line stays BYTE-IDENTICAL and is the FINAL output line. A run is
 # green only when BOTH hold — rc == 0 AND `tail -n 1 | grep -qFx '[ci] all green'`.
