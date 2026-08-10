@@ -406,6 +406,76 @@ func TestResumeContractorCarriesTaskTitleAndMemberDoesNot(t *testing.T) {
 	}
 }
 
+// TestResumeContractorZeroProgressSeparatesNoStepsFromNoTask pins the DOUBLE
+// MEANING of a contractor row reading 0/0: it is either "bound to a task that
+// has no steps yet" or "bound to no task at all". Both come out of
+// contractorTaskFields with the same zero progress, so progress alone cannot
+// be read as "hasn't started" — task_status is the discriminator ("not_started"
+// vs ""), and this test is what says so in executable form rather than in
+// prose that nothing checks.
+//
+// The stepless task is created through the REAL create path, not PutTask with
+// a hand-picked status: the whole claim is that the status a stepless task
+// actually carries on the wire is non-empty, and a fixture that assigns that
+// status itself would prove nothing.
+//
+// MUTANT: blank task_status (or current_task) out for a stepless task, or fill
+// either one for a contractor with no task — the discriminator assertion goes
+// red naming the two rows it could no longer tell apart.
+func TestResumeContractorZeroProgressSeparatesNoStepsFromNoTask(t *testing.T) {
+	s := floorTestServer(t)
+	s.noOutsource = true // no scheduler spawn: this fixture binds its worker by hand
+	putFloorMember(t, s, Member{ID: "m-alpha", Name: "Alpha", Kind: KindAssistant, RoleKey: "assistant"})
+
+	rec := createTaskAs(t, s, map[string]any{
+		"title":  "尚未排步驟的外包任務",
+		"target": map[string]any{"kind": "outsource", "model": "sonnet", "effort": "high"},
+	}, "m-alpha", "agent")
+	if rec.Code != 200 {
+		t.Fatalf("create stepless task: %d %s", rec.Code, rec.Body.String())
+	}
+	stepless := decodeBody[taskCreateResultDTO](t, rec).Task
+	if len(stepless.Steps) != 0 {
+		t.Fatalf("fixture must have NO steps, got %d", len(stepless.Steps))
+	}
+	putFloorMember(t, s, Member{ID: "ow-stepless", Name: "O-11", Kind: KindOutsource, LinkedTaskID: &stepless.ID})
+	putFloorMember(t, s, Member{ID: "ow-taskless", Name: "O-22", Kind: KindOutsource})
+
+	got := resumeFor(t, s, "m-alpha")
+	withTask := rosterRow(t, got.Roster, "ow-stepless")
+	noTask := rosterRow(t, got.Roster, "ow-taskless")
+
+	// Scenario A — a task with no steps: title and status are carried, progress
+	// is 0/0 because the task is absent from the grouped step-count map.
+	if withTask.CurrentTask != "尚未排步驟的外包任務" {
+		t.Fatalf("stepless contractor current_task: want %q, got %q", "尚未排步驟的外包任務", withTask.CurrentTask)
+	}
+	if withTask.TaskStatus != TaskStatusNotStarted {
+		t.Fatalf("stepless contractor task_status: want %q, got %q", TaskStatusNotStarted, withTask.TaskStatus)
+	}
+	if withTask.WaitingReason != "" {
+		t.Fatalf("stepless contractor waiting_reason: want empty, got %q", withTask.WaitingReason)
+	}
+	if withTask.ProgressDone != 0 || withTask.ProgressTotal != 0 {
+		t.Fatalf("stepless contractor progress: want 0/0, got %d/%d", withTask.ProgressDone, withTask.ProgressTotal)
+	}
+	// Scenario B — no task at all: every field degrades to its zero value.
+	if noTask.CurrentTask != "" || noTask.TaskStatus != "" || noTask.WaitingReason != "" ||
+		noTask.ProgressDone != 0 || noTask.ProgressTotal != 0 {
+		t.Fatalf("taskless contractor must carry all-zero task fields, got %+v", noTask)
+	}
+	// The ambiguity itself: progress is byte-identical across the two rows.
+	if withTask.ProgressDone != noTask.ProgressDone || withTask.ProgressTotal != noTask.ProgressTotal {
+		t.Fatalf("progress is expected to be INDISTINGUISHABLE (%d/%d vs %d/%d)",
+			withTask.ProgressDone, withTask.ProgressTotal, noTask.ProgressDone, noTask.ProgressTotal)
+	}
+	// …and the one field that resolves it.
+	if withTask.TaskStatus == "" || noTask.TaskStatus != "" {
+		t.Fatalf("task_status must separate the two 0/0 rows: stepless=%q taskless=%q",
+			withTask.TaskStatus, noTask.TaskStatus)
+	}
+}
+
 // TestResumeYouAreOnSurvivesTheRosterFilters pins the capture ORDER inside
 // resumeFloorParts: "where am I" is read off the caller's row BEFORE the
 // roster-status and warden filters, not after.
