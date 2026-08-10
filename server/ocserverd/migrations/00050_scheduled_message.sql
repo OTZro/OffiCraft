@@ -15,11 +15,11 @@
 --
 -- 🔴 last_fired_slot stores the IDENTIFIER OF THE SLOT already delivered
 -- (`2026-08-10T09:00+08:00`), NOT a "last run at" timestamp. Every tick
--- recomputes the most recently elapsed slot and fires only when its string
--- differs from this column. That single choice makes three acceptance
--- conditions true BY CONSTRUCTION rather than by care:
---   * a server restart does not resend — the recomputed slot string compares
---     equal, so the tick skips; nothing lives in memory to be lost on upgrade;
+-- recomputes the most recently elapsed slot and fires only when it is STRICTLY
+-- LATER than the one this column names. That single choice carries three
+-- acceptance conditions:
+--   * a server restart does not resend — the recomputed slot compares equal,
+--     so the tick skips; nothing lives in memory to be lost on upgrade;
 --   * missed slots are not backfilled — only the MOST RECENT slot is ever
 --     considered, so three days of downtime delivers one message, not thirty;
 --   * a freshly created schedule does not fire immediately — creation seeds this
@@ -27,6 +27,19 @@
 -- A "last run at" timestamp would express none of them: comparing clocks means
 -- re-deriving "did this slot already go out" from two moving quantities, and a
 -- resend looks EXACTLY like a normal delivery — nothing would ever alarm.
+--
+-- ⚠️ "By construction" is what this column ORIGINALLY claimed, and it was too
+-- strong: the storage shape guarantees nothing on its own, because the three
+-- conditions all rest on the slot computation being monotonic in `now`, which
+-- is a property of schedule_slot.go and not of this table. It was in fact false
+-- when this feature shipped — in zones that spring forward AT MIDNIGHT
+-- (America/Santiago, America/Havana) the computed slot walked backwards and two
+-- already-delivered slots went out again — and it was false silently, because a
+-- duplicate delivery is indistinguishable from a correct one. The fire test is
+-- now an ORDERING one (strictly later, never merely different), so the cursor
+-- is a ratchet: the worst a wrong slot computation can now do is skip a
+-- delivery. That is a guard, not a proof; the pinning lives in the DST tests in
+-- scheduled_message_test.go.
 --
 -- last_fired_ts is the human-facing companion (when a delivery actually
 -- happened); it deliberately takes NO part in the fire/skip decision.

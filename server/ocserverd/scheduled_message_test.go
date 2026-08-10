@@ -62,6 +62,17 @@ func chatsFrom(t *testing.T, api *apiServer, sender string) []ChatMessage {
 	return out
 }
 
+// mustLoadZone loads an IANA zone or fails the test — a missing zone means the
+// embedded tz database is gone, which every assertion below silently depends on.
+func mustLoadZone(t *testing.T, name string) *time.Location {
+	t.Helper()
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		t.Fatalf("%s will not load — tz data is missing from this binary: %v", name, err)
+	}
+	return loc
+}
+
 func mustParseSlot(t *testing.T, key string) time.Time {
 	t.Helper()
 	parsed, err := time.Parse(slotKeyLayout, key)
@@ -76,10 +87,16 @@ func mustParseSlot(t *testing.T, key string) time.Time {
 // zone, if "today's slot has not arrived yet" fails to fall back a day/week, or
 // if the weekday indexing drifts (0 must be Sunday).
 func TestMostRecentSlot(t *testing.T) {
-	taipei, err := time.LoadLocation("Asia/Taipei")
-	if err != nil {
-		t.Fatalf("Asia/Taipei will not load — tz data is missing from this binary: %v", err)
-	}
+	taipei := mustLoadZone(t, "Asia/Taipei")
+	// Zones whose DST transition happens AT MIDNIGHT, so the skipped hour is
+	// 00:00-00:59 and the whole day's date arithmetic sits on top of a wall clock
+	// that does not exist. Nothing in this feature was exercised against one
+	// before; both production defects lived here.
+	santiago := mustLoadZone(t, "America/Santiago")
+	havana := mustLoadZone(t, "America/Havana")
+	lordHowe := mustLoadZone(t, "Australia/Lord_Howe")
+	apia := mustLoadZone(t, "Pacific/Apia")
+	newYork := mustLoadZone(t, "America/New_York")
 	cases := []struct {
 		name string
 		sm   ScheduledMessage
@@ -132,6 +149,113 @@ func TestMostRecentSlot(t *testing.T) {
 			Hour: 9, Timezone: "Asia/Taipei"},
 		now:  time.Date(2026, time.August, 10, 10, 0, 0, 0, taipei),
 		want: "2026-07-20T09:00+08:00",
+	}, {
+		// 🔴 Santiago skips 2026-09-06 00:00-00:59. Stepping back a day by
+		// subtracting from a LOCAL time lands on that skipped wall clock and Go
+		// normalises it to 09-05 23:00 — so "yesterday" silently becomes the day
+		// BEFORE yesterday, the cursor walks backwards, and the tick redelivers
+		// two slots it had already sent.
+		name: "daily across a midnight spring-forward takes yesterday, not the day before",
+		sm:   ScheduledMessage{Cadence: ScheduledMessageCadenceDaily, Hour: 9, Timezone: "America/Santiago"},
+		now:  time.Date(2026, time.September, 7, 0, 30, 0, 0, santiago),
+		want: "2026-09-06T09:00-03:00",
+	}, {
+		// 🔴 The schedule's own wall clock is the one the zone skipped: Havana
+		// jumps 00:00 → 01:00 on 2026-03-08, so it has no 00:30 that day. The
+		// occurrence MOVES FORWARD to the first reading the zone does have
+		// (01:00). It is not dropped — a dropped occurrence is a day the owner
+		// silently receives nothing — and it is not 03-07 23:30, which is merely
+		// where time.Date's normalisation happened to land.
+		name: "daily whose wall clock the zone skipped moves to the first existing one",
+		sm:   ScheduledMessage{Cadence: ScheduledMessageCadenceDaily, Hour: 0, Minute: 30, Timezone: "America/Havana"},
+		now:  time.Date(2026, time.March, 8, 12, 0, 0, 0, havana),
+		want: "2026-03-08T01:00-04:00",
+	}, {
+		// And the shift lasts exactly one day: the NEXT day's occurrence is back
+		// at the wall clock the owner set. A schedule that drifted permanently
+		// after a transition would be worse than one that skipped.
+		name: "the shift does not persist into the following day",
+		sm:   ScheduledMessage{Cadence: ScheduledMessageCadenceDaily, Hour: 0, Minute: 30, Timezone: "America/Havana"},
+		now:  time.Date(2026, time.March, 9, 12, 0, 0, 0, havana),
+		want: "2026-03-09T00:30-04:00",
+	}, {
+		// The same rule on the zone the sibling service pinned it with:
+		// America/New_York has no 02:30 on 2024-03-10, so that day's 02:30 lands
+		// at 03:00 …
+		name: "spring forward moves an 0230 daily slot to 0300",
+		sm:   ScheduledMessage{Cadence: ScheduledMessageCadenceDaily, Hour: 2, Minute: 30, Timezone: "America/New_York"},
+		now:  time.Date(2024, time.March, 10, 12, 0, 0, 0, newYork),
+		want: "2024-03-10T03:00-04:00",
+	}, {
+		// … and the next day is 02:30 again.
+		name: "spring forward does not drift the following day",
+		sm:   ScheduledMessage{Cadence: ScheduledMessageCadenceDaily, Hour: 2, Minute: 30, Timezone: "America/New_York"},
+		now:  time.Date(2024, time.March, 11, 12, 0, 0, 0, newYork),
+		want: "2024-03-11T02:30-04:00",
+	}, {
+		// Pacific/Apia skipped 30 December 2011 ENTIRELY (the date-line move), so
+		// the search has to step back two days, not one. This is what bounds the
+		// daily lookback below 3.
+		name: "daily over a calendar day the zone deleted steps back twice",
+		sm:   ScheduledMessage{Cadence: ScheduledMessageCadenceDaily, Hour: 9, Timezone: "Pacific/Apia"},
+		now:  time.Date(2011, time.December, 31, 8, 0, 0, 0, apia),
+		want: "2011-12-29T09:00-10:00",
+	}, {
+		// Same rule on the weekly branch: 2026-03-08 is a Sunday, Havana has no
+		// 00:30 on it, and that Sunday's occurrence still happens — at 01:00.
+		name: "weekly whose wall clock the zone skipped moves to the first existing one",
+		sm: ScheduledMessage{Cadence: ScheduledMessageCadenceWeekly, DayOfWeek: 0,
+			Hour: 0, Minute: 30, Timezone: "America/Havana"},
+		now:  time.Date(2026, time.March, 8, 12, 0, 0, 0, havana),
+		want: "2026-03-08T01:00-04:00",
+	}, {
+		// 🔴 And on the monthly branch — the case that made a whole month
+		// disappear. Havana has no 00:30 on the 8th of March 2026, and the day
+		// check read time.Date's backwards normalisation (03-07 23:30) as "March
+		// has no 8th", which is plainly false. March's occurrence happens, at
+		// 01:00.
+		name: "monthly whose wall clock the zone skipped keeps its month",
+		sm: ScheduledMessage{Cadence: ScheduledMessageCadenceMonthly, DayOfMonth: 8,
+			Hour: 0, Minute: 30, Timezone: "America/Havana"},
+		now:  time.Date(2026, time.March, 8, 12, 0, 0, 0, havana),
+		want: "2026-03-08T01:00-04:00",
+	}, {
+		// 🔴 Lord Howe's spring transition is a HALF hour at 02:00, so 02:15 does
+		// not exist on 2026-10-04 and time.Date normalises it FORWARD to 02:45 —
+		// same year, same month, same day, same hour, thirty minutes late. A day
+		// check alone accepts that. The first reading the zone actually has is
+		// 02:30, and that is where the occurrence goes: the shift is searched
+		// for, never inherited from whatever time.Date happened to return.
+		name: "monthly whose wall clock the zone skipped moves to the first existing one, not the normalised one",
+		sm: ScheduledMessage{Cadence: ScheduledMessageCadenceMonthly, DayOfMonth: 4,
+			Hour: 2, Minute: 15, Timezone: "Australia/Lord_Howe"},
+		now:  time.Date(2026, time.October, 4, 12, 0, 0, 0, lordHowe),
+		want: "2026-10-04T02:30+11:00",
+	}, {
+		// 🔴 The autumn side, where the ordering test alone would NOT save us:
+		// 01:30 happens twice in New York on 2026-11-01, at two different
+		// instants, and the later one IS strictly later than the earlier. What
+		// keeps it one occurrence is that a slot is CONSTRUCTED from its wall
+		// clock, so both passes name the same instant. These two rows are the same
+		// schedule observed on either side of the repeat.
+		name: "autumn fall back names one slot on the first pass through the repeated hour",
+		sm:   ScheduledMessage{Cadence: ScheduledMessageCadenceDaily, Hour: 1, Minute: 30, Timezone: "America/New_York"},
+		now:  time.Date(2026, time.November, 1, 5, 30, 0, 0, time.UTC),
+		want: "2026-11-01T01:30-04:00",
+	}, {
+		name: "autumn fall back names the same slot on the second pass",
+		sm:   ScheduledMessage{Cadence: ScheduledMessageCadenceDaily, Hour: 1, Minute: 30, Timezone: "America/New_York"},
+		now:  time.Date(2026, time.November, 1, 6, 30, 0, 0, time.UTC),
+		want: "2026-11-01T01:30-04:00",
+	}, {
+		// The same date in the same zone at an hour the transition does not touch
+		// DOES exist — the rule is "this wall clock does not exist", never "this
+		// month has no 4th".
+		name: "monthly outside the skipped window still takes the current month",
+		sm: ScheduledMessage{Cadence: ScheduledMessageCadenceMonthly, DayOfMonth: 4,
+			Hour: 9, Timezone: "Australia/Lord_Howe"},
+		now:  time.Date(2026, time.October, 4, 12, 0, 0, 0, lordHowe),
+		want: "2026-10-04T09:00+11:00",
 	}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -201,10 +325,7 @@ func TestMostRecentSlotIsComputedInTheSchedulesOwnZone(t *testing.T) {
 // clamped to the end of February, or when time.Date's rollover to 3 March is
 // accepted as a real slot.
 func TestMostRecentSlotSkipsMonthsWithoutTheDay(t *testing.T) {
-	taipei, err := time.LoadLocation("Asia/Taipei")
-	if err != nil {
-		t.Fatalf("Asia/Taipei will not load: %v", err)
-	}
+	taipei := mustLoadZone(t, "Asia/Taipei")
 	sm := ScheduledMessage{Cadence: ScheduledMessageCadenceMonthly, DayOfMonth: 31,
 		Hour: 9, Timezone: "Asia/Taipei"}
 	now := time.Date(2026, time.February, 15, 12, 0, 0, 0, taipei)
@@ -234,6 +355,23 @@ func TestMostRecentSlotSkipsMonthsWithoutTheDay(t *testing.T) {
 	if _, exists := monthlySlot(2026, time.February, sm, taipei); exists {
 		t.Fatal("29 February 2026 was accepted as a real date — time.Date's " +
 			"normalisation is not being checked")
+	}
+
+	// 🔴 The lookback must span more than ONE step back. day_of_month=31 on
+	// 1 March: March's 31st has not arrived, February has no 31st at all, so the
+	// answer is 31 JANUARY — two months back. A one-month lookback returns "no
+	// slot" and the schedule never fires with nothing to observe, which is
+	// exactly the failure monthlyLookbackMonths exists to prevent; before this
+	// assertion the constant could be lowered from 12 to 1 with the whole suite
+	// still green.
+	sm.DayOfMonth = 31
+	slot, ok = mostRecentSlot(sm, time.Date(2026, time.March, 1, 0, 30, 0, 0, taipei))
+	if !ok {
+		t.Fatal("no slot found for day_of_month=31 on 1 March — the lookback stopped " +
+			"one month back, at a February that has no 31st")
+	}
+	if got := slotKey(slot); got != "2026-01-31T09:00+08:00" {
+		t.Fatalf("want the 31 January slot (2026-01-31T09:00+08:00), got %s", got)
 	}
 }
 
@@ -300,6 +438,125 @@ func TestRunScheduledMessageTickFiresEachSlotOnce(t *testing.T) {
 	api.runScheduledMessageTick(nowSecs())
 	if n := len(chatsFrom(t, api, "sched:sch-once")); n != 2 {
 		t.Fatalf("an undelivered slot produced %d total messages; want 2", n)
+	}
+}
+
+// seedScheduleWithCurrentCursor plants an armed schedule whose cursor is aimed
+// at the slot current at `from` — the state a real schedule is in the moment
+// after it is created.
+func seedScheduleWithCurrentCursor(t *testing.T, api *apiServer, sm ScheduledMessage, from time.Time) {
+	t.Helper()
+	sm.Status = ScheduledMessageStatusEnabled
+	sm.CreatedTS = float64(from.Unix())
+	sm.LastFiredSlot = currentSlotKey(sm, from)
+	if sm.LastFiredSlot == "" {
+		t.Fatalf("seeding %s produced an empty cursor — the schedule would fire on the first tick", sm.ID)
+	}
+	if err := api.dal.PutScheduledMessage(sm); err != nil {
+		t.Fatalf("seed schedule: %v", err)
+	}
+}
+
+// tickEvery drives real ticks across [from, to] and returns the slot identifier
+// of every message the schedule delivered, in order.
+func tickEvery(t *testing.T, api *apiServer, scheduleID string, from, to time.Time, step time.Duration) []string {
+	t.Helper()
+	for at := from; !at.After(to); at = at.Add(step) {
+		api.runScheduledMessageTick(float64(at.Unix()))
+	}
+	var slots []string
+	for _, m := range chatsFrom(t, api, "sched:"+scheduleID) {
+		meta, _ := m.Meta["scheduled"].(map[string]any)
+		slot, _ := meta["slot"].(string)
+		slots = append(slots, slot)
+	}
+	return slots
+}
+
+// TestRunScheduledMessageTickDeliversOncePerOccurrenceAcrossDSTTransitions is the
+// end-to-end DST sentinel — the coverage this feature shipped without, and the
+// blind spot both production defects lived in.
+//
+// A daily schedule crossing a transition must deliver EXACTLY as many messages
+// as there are days, no matter which way the clocks moved. Red when the slot
+// arithmetic is not monotonic in `now` (spring forward at midnight: the cursor
+// walks backwards and two already-delivered slots go out again) or when the same
+// wall clock occurring twice is treated as two occurrences (autumn fall back).
+func TestRunScheduledMessageTickDeliversOncePerOccurrenceAcrossDSTTransitions(t *testing.T) {
+	santiago := mustLoadZone(t, "America/Santiago")
+	newYork := mustLoadZone(t, "America/New_York")
+	havana := mustLoadZone(t, "America/Havana")
+	cases := []struct {
+		name      string
+		id        string
+		sm        ScheduledMessage
+		from, to  time.Time
+		step      time.Duration
+		wantSlots []string
+	}{{
+		// 🔴 America/Santiago springs forward AT MIDNIGHT on 2026-09-06: the
+		// whole 00:00-00:59 hour does not exist. Four days, four deliveries.
+		name: "midnight spring forward delivers once a day",
+		id:   "sch-santiago",
+		sm: ScheduledMessage{ID: "sch-santiago", MemberID: "mira", Body: "daily ping",
+			Cadence: ScheduledMessageCadenceDaily, Hour: 9, DayOfMonth: 1,
+			Timezone: "America/Santiago"},
+		from: time.Date(2026, time.September, 4, 9, 0, 0, 0, santiago),
+		to:   time.Date(2026, time.September, 8, 23, 59, 0, 0, santiago),
+		step: time.Minute,
+		wantSlots: []string{
+			"2026-09-05T09:00-04:00",
+			"2026-09-06T09:00-03:00",
+			"2026-09-07T09:00-03:00",
+			"2026-09-08T09:00-03:00",
+		},
+	}, {
+		// The autumn side: 2026-11-01 01:30 happens TWICE in New York (once at
+		// -04:00, once at -05:00). One day, one delivery.
+		name: "repeated wall clock delivers once",
+		id:   "sch-newyork",
+		sm: ScheduledMessage{ID: "sch-newyork", MemberID: "mira", Body: "daily ping",
+			Cadence: ScheduledMessageCadenceDaily, Hour: 1, Minute: 30, DayOfMonth: 1,
+			Timezone: "America/New_York"},
+		from:      time.Date(2026, time.October, 31, 2, 0, 0, 0, newYork),
+		to:        time.Date(2026, time.November, 1, 23, 59, 0, 0, newYork),
+		step:      time.Minute,
+		wantSlots: []string{"2026-11-01T01:30-04:00"},
+	}, {
+		// 🔴 A whole MONTH used to vanish here. Havana springs forward at
+		// midnight on 2026-03-08, so a monthly schedule on the 8th at 00:30 asks
+		// for a wall clock that day does not have — and reading time.Date's
+		// backwards normalisation as "March has no 8th" dropped March entirely,
+		// with the card still showing a perfectly healthy last-delivered line.
+		// March happens, an hour late; April is back at 00:30.
+		name: "monthly over a midnight spring forward keeps its month",
+		id:   "sch-havana",
+		sm: ScheduledMessage{ID: "sch-havana", MemberID: "mira", Body: "monthly ping",
+			Cadence: ScheduledMessageCadenceMonthly, DayOfMonth: 8, Minute: 30,
+			Timezone: "America/Havana"},
+		from: time.Date(2026, time.February, 8, 12, 0, 0, 0, havana),
+		to:   time.Date(2026, time.April, 8, 23, 59, 0, 0, havana),
+		step: 30 * time.Minute,
+		wantSlots: []string{
+			"2026-03-08T01:00-04:00",
+			"2026-04-08T00:30-04:00",
+		},
+	}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, api := scheduledStack(t)
+			seedScheduleWithCurrentCursor(t, api, tc.sm, tc.from)
+			got := tickEvery(t, api, tc.id, tc.from, tc.to, tc.step)
+			if len(got) != len(tc.wantSlots) {
+				t.Fatalf("delivered %d message(s) over the transition; want %d\n got: %v\nwant: %v",
+					len(got), len(tc.wantSlots), got, tc.wantSlots)
+			}
+			for i, want := range tc.wantSlots {
+				if got[i] != want {
+					t.Fatalf("delivery %d was slot %s; want %s\n got: %v", i, got[i], want, got)
+				}
+			}
+		})
 	}
 }
 
