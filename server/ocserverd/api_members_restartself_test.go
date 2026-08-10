@@ -18,13 +18,14 @@ import (
 // doRestartSelf drives POST /api/self/refocus as sub (agent scope), with an
 // optional JSON body and no iat on the credential.
 func doRestartSelf(api *apiServer, sub, body string) *httptest.ResponseRecorder {
-	return doRestartSelfMintedAt(api, sub, body, 0)
+	return doRestartSelfMintedAt(api, sub, body, 0, 0)
 }
 
-// doRestartSelfMintedAt is doRestartSelf with the caller's token carrying an
-// iat (epoch seconds, as encoding/json hands it to the auth middleware); 0
-// omits the claim, standing in for a token minted before iat was recorded.
-func doRestartSelfMintedAt(api *apiServer, sub, body string, iat float64) *httptest.ResponseRecorder {
+// doRestartSelfMintedAt is doRestartSelf with the caller's token carrying the
+// iat/exp a mint of the given lifetime would produce (epoch seconds, as
+// encoding/json hands them to the auth middleware); ttl 0 omits both claims,
+// standing in for a token predating them.
+func doRestartSelfMintedAt(api *apiServer, sub, body string, iat, ttl float64) *httptest.ResponseRecorder {
 	var r *http.Request
 	if body == "" {
 		r = httptest.NewRequest("POST", "/api/self/refocus", nil)
@@ -32,8 +33,9 @@ func doRestartSelfMintedAt(api *apiServer, sub, body string, iat float64) *httpt
 		r = httptest.NewRequest("POST", "/api/self/refocus", strings.NewReader(body))
 	}
 	claims := map[string]any{"sub": sub, "scope": "agent"}
-	if iat != 0 {
+	if ttl != 0 {
 		claims["iat"] = iat
+		claims["exp"] = iat + ttl
 	}
 	r = r.WithContext(context.WithValue(r.Context(), claimsContextKey, claims))
 	rec := httptest.NewRecorder()
@@ -71,6 +73,21 @@ func TestRestartSelfStampsRefocusWhenOnlineAndPastLivenessFloor(t *testing.T) {
 	if m.RefocusSince <= 0.0 {
 		t.Fatalf("restart_self must stamp refocus_since; got %v", m.RefocusSince)
 	}
+	// The other direction of the two-anchor rule: a session token minted moments
+	// ago (a mid-session bootstrap re-mint) must not make a long-lived session
+	// read as newborn — the OLDER anchor decides, and here that is boot_ts.
+	putGateMember(t, dal, Member{ID: "rs-ok2", Kind: KindAssistant,
+		DesiredState: DesiredStateOnline})
+	defer online(t, api, "rs-ok2")()
+	api.gauge.Set("rs-ok2", map[string]any{"boot_ts": nowSecs() - (minSelfRestartSecs + 100)})
+
+	rec = doRestartSelfMintedAt(api, "rs-ok2", "", nowSecs()-5, float64(api.authTokenTTL()))
+	if rec.Code != 200 {
+		t.Fatalf("old boot_ts + freshly minted token: want 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	if m2, _ := dal.GetMember("rs-ok2"); m2.RefocusSince <= 0.0 {
+		t.Fatalf("restart_self must stamp refocus_since; got %v", m2.RefocusSince)
+	}
 }
 
 func TestRestartSelfRefusesWithinLivenessFloor(t *testing.T) {
@@ -84,7 +101,7 @@ func TestRestartSelfRefusesWithinLivenessFloor(t *testing.T) {
 	// turn a real respawn storm into a pass.
 	api.gauge.Set("rs-fresh", map[string]any{"boot_ts": nowSecs() - 60})
 
-	rec := doRestartSelfMintedAt(api, "rs-fresh", "", nowSecs()-60)
+	rec := doRestartSelfMintedAt(api, "rs-fresh", "", nowSecs()-60, float64(api.authTokenTTL()))
 	if rec.Code != 429 {
 		t.Fatalf("fresh session self-restart: want 429, got %d %s", rec.Code, rec.Body.String())
 	}
@@ -139,8 +156,11 @@ func TestRestartSelfAfterAStationRestartTrustsTheTokenIat(t *testing.T) {
 	if !ok || nowSecs()-bootTS >= minSelfRestartSecs {
 		t.Fatalf("fixture: the reconnect must leave a boot_ts inside the floor; got %v (ok=%t)", bootTS, ok)
 	}
+	// A station whose token TTL is 7 days, so a 2h-old session token is a
+	// perfectly ordinary unexpired START credential.
+	api.tokenTTL = 7 * 86400
 
-	rec := doRestartSelfMintedAt(api, "rs-reexec", "", nowSecs()-7200)
+	rec := doRestartSelfMintedAt(api, "rs-reexec", "", nowSecs()-7200, float64(api.authTokenTTL()))
 	if rec.Code != 200 {
 		t.Fatalf("a session whose token is 2h old must not read as newborn: want 200, got %d %s",
 			rec.Code, rec.Body.String())
@@ -148,6 +168,30 @@ func TestRestartSelfAfterAStationRestartTrustsTheTokenIat(t *testing.T) {
 	m, _ := dal.GetMember("rs-reexec")
 	if m.RefocusSince <= 0.0 {
 		t.Fatalf("an admitted self-restart must stamp refocus_since; got %v", m.RefocusSince)
+	}
+}
+
+// The floor's second source is the caller's iat, and POST /api/mint hands out
+// agent-scope tokens for an existing member lasting up to 400 days. An old one
+// of those reports an age of months at every call, so trusting its iat would
+// disable this member's floor permanently — the storm guard would be gone for
+// exactly the caller holding the longest-lived credential.
+func TestRestartSelfIgnoresTheIatOfALongLivedMintedToken(t *testing.T) {
+	api, dal := newGateTestAPI(t)
+	putGateMember(t, dal, Member{ID: "rs-mint", Kind: KindAssistant,
+		DesiredState: DesiredStateOnline})
+	defer online(t, api, "rs-mint")()
+	// A genuinely newborn session, called with a mint token issued 100 days ago
+	// for 400 days.
+	api.gauge.Set("rs-mint", map[string]any{"boot_ts": nowSecs() - 30})
+
+	rec := doRestartSelfMintedAt(api, "rs-mint", "", nowSecs()-100*86400, 400*86400)
+	if rec.Code != 429 {
+		t.Fatalf("a long-lived mint token must not vouch for session age: want 429, got %d %s",
+			rec.Code, rec.Body.String())
+	}
+	if m, _ := dal.GetMember("rs-mint"); m.RefocusSince != 0.0 {
+		t.Fatalf("a refused self-restart must not stamp refocus_since; got %v", m.RefocusSince)
 	}
 }
 

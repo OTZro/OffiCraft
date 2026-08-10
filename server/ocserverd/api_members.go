@@ -28,16 +28,38 @@ import (
 // distinct from the context-high boot-storm guard's MinBootSecs.
 const minSelfRestartSecs = 600.0
 
-// tokenAgeSecs is the seconds since the caller's credential was minted, or nil
-// when the claims carry no usable iat (an older token, or a caller reaching a
-// handler outside the auth middleware). Tokens are minted at START and never
-// refreshed agent-side, so for an agent credential this dates the session.
-func tokenAgeSecs(claims map[string]any, now float64) *float64 {
-	if claims == nil {
+// sessionTokenAgeSecs is the seconds since the caller's credential was minted,
+// but ONLY for a credential whose own declared lifetime (exp - iat) is no
+// longer than a START token's; nil otherwise, and nil when the claims carry no
+// usable iat/exp (a token predating either claim, or a caller reaching a
+// handler outside the auth middleware).
+//
+// The TTL ceiling is what makes an iat mean "this session started then".
+// POST /api/mint issues agent-scope tokens for an existing member with a
+// caller-chosen ttl_days capped at 400 days, and one of those is a perfectly
+// valid caller here. Without the ceiling, a mint token minted months ago
+// reports an age of months forever, which would disable this member's floor
+// permanently — a respawn storm the guard could no longer see. Reading the
+// token's declared lifetime rather than its current age refuses such a token at
+// EVERY age, including the day it was minted; an age bound alone would only
+// shrink the window, not close it.
+//
+// Residual, deliberately accepted: a mint whose ttl_days lands at or under the
+// station's configured token TTL is indistinguishable from a START token and is
+// still trusted. Refusing to trust it costs nothing but the second source, so
+// this errs toward the narrow read: an unrecognised shape falls back to
+// boot_ts alone, which is exactly today's behaviour.
+func sessionTokenAgeSecs(claims map[string]any, startTTLSecs float64, now float64) *float64 {
+	if claims == nil || startTTLSecs <= 0 {
 		return nil
 	}
-	iat, ok := asNumber(claims["iat"])
-	if !ok || iat <= 0 {
+	iat, okIat := asNumber(claims["iat"])
+	exp, okExp := asNumber(claims["exp"])
+	if !okIat || !okExp || iat <= 0 {
+		return nil
+	}
+	declaredTTL := exp - iat
+	if declaredTTL <= 0 || declaredTTL > startTTLSecs {
 		return nil
 	}
 	secs := now - iat
@@ -55,9 +77,9 @@ func tokenAgeSecs(claims map[string]any, now float64) *float64 {
 // tick with no caller credential in hand, so they cannot read the second
 // source. Their false-suppression after a re-exec is conservative (a recycle
 // deferred, not a refusal) and is out of scope here.
-func sessionAgeSecsForSelfRestart(record map[string]any, claims map[string]any, now float64) *float64 {
+func sessionAgeSecsForSelfRestart(record map[string]any, claims map[string]any, startTTLSecs float64, now float64) *float64 {
 	sinceBoot := gaugeSecsSinceBoot(record, now)
-	sinceIssue := tokenAgeSecs(claims, now)
+	sinceIssue := sessionTokenAgeSecs(claims, startTTLSecs, now)
 	switch {
 	case sinceBoot == nil:
 		return sinceIssue
@@ -903,14 +925,20 @@ func (s *apiServer) HandleReportStoppedApiSelfStoppedPost(w http.ResponseWriter,
 //     replaces promised a fail-open on a missing boot_ts, but that branch is
 //     UNREACHABLE here: the online gate above requires a live SSE stream, and
 //     reaching it is exactly what re-stamps the anchor. The token's iat survives
-//     the re-exec because it lives in the agent's hand, and a token is minted
-//     only at START (reconcile.mintMemberToken / worker_spawn.mintAgentToken),
-//     so it dates this session's real birth. The storm guard is NOT weakened: a
-//     genuinely fresh session has a fresh token too, so both anchors read
-//     seconds and the 429 still fires. KNOWN DEGRADATION: the bootstrap
-//     endpoint also mints on demand, so swapping a live session's token for a
-//     new one resets the iat; that case falls back to today's behaviour (a
-//     possible false 429) — never worse.
+//     the re-exec because it lives in the agent's hand. An iat is trusted only
+//     when the token's own declared lifetime is no longer than a START token's
+//     (sessionTokenAgeSecs) — POST /api/mint hands out agent-scope tokens
+//     lasting up to 400 days, and an old one of those would otherwise report an
+//     age of months and disable this member's floor permanently. Within that
+//     narrowed set, a token is minted at START (reconcile.mintMemberToken /
+//     worker_spawn.mintAgentToken) and never refreshed agent-side, so its iat
+//     dates this session's real birth: a session young by boot_ts and carrying
+//     a session-shaped token minted seconds ago is still refused. Anything the
+//     ceiling rejects falls back to boot_ts alone, i.e. today's behaviour.
+//     KNOWN DEGRADATION: the bootstrap endpoint also mints on demand at the
+//     START TTL, so swapping a live session's token for a new one resets the
+//     iat; that case falls back to today's behaviour (a possible false 429) —
+//     never worse.
 func (s *apiServer) HandleRestartSelfApiSelfRefocusPost(w http.ResponseWriter, r *http.Request) {
 	var body RestartSelfDTO
 	if !decodeJSONBody(w, r, &body) {
@@ -928,7 +956,8 @@ func (s *apiServer) HandleRestartSelfApiSelfRefocusPost(w http.ResponseWriter, r
 		return
 	}
 	secsSinceBoot := sessionAgeSecsForSelfRestart(
-		s.gauge.Get(m.ID), claimsFromContext(r.Context()), now)
+		s.gauge.Get(m.ID), claimsFromContext(r.Context()),
+		float64(s.authTokenTTL()), now)
 	if bootStormTripped(secsSinceBoot, minSelfRestartSecs) {
 		writeError(w, http.StatusTooManyRequests, fmt.Sprintf(
 			"restart_self refused: only %.0fs since this session started; the "+

@@ -2448,9 +2448,13 @@ export interface paths {
          *         edge) and the caller token's ``iat``. boot_ts alone is not enough — it lives
          *         in an in-memory store that a station restart empties, and the reconnect that
          *         follows re-stamps it, which would read an hours-old session as newborn. The
-         *         token is minted once at START and survives in the agent's hand, so it dates
-         *         the real session start. A session that is genuinely young by BOTH anchors is
-         *         still refused — never a false 429 on a long-lived session.
+         *         ``iat`` is trusted only when the token's own declared lifetime is no longer
+         *         than a START token's: ``POST /api/mint`` issues agent tokens lasting up to
+         *         400 days, and an old one of those would otherwise report an age of months
+         *         and disable this member's floor for good. Within that narrowed set a token
+         *         is minted at START and never refreshed, so its ``iat`` dates the real
+         *         session start; anything else falls back to boot_ts alone. A session young by
+         *         BOTH anchors is still refused — never a false 429 on a long-lived session.
          *
          *     ``reason`` (optional): a short human note for WHY — recorded on the recycle log
          *     line so an operator can distinguish a self-restart from an owner refocus.
