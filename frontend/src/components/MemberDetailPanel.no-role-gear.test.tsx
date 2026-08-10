@@ -37,6 +37,7 @@ vi.mock("../api", () => ({
         context: "",
       }),
     listWebhooks: () => Promise.resolve([]),
+    listScheduledMessages: () => Promise.resolve([]),
     createWebhook: () =>
       Promise.resolve({
         endpointId: "",

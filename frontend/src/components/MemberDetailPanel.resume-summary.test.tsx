@@ -25,6 +25,7 @@ vi.mock("../api", () => ({
     listMachines: () => Promise.resolve([]),
     getBootstrap: () => Promise.resolve({ context: "" }),
     listWebhooks: () => Promise.resolve([]),
+    listScheduledMessages: () => Promise.resolve([]),
     getMemberResumeSummary: () => {
       resumeSummaryCalls += 1;
       return resumeSummary();

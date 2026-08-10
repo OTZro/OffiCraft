@@ -11,6 +11,7 @@ import { ChevronLeftIcon, ChevronRightIcon } from "./icons";
 import { AvatarEditor } from "./AvatarEditor";
 import { Avatar } from "./Avatar";
 import { LifecycleDot, presenceVisual } from "./LifecycleDot";
+import { ScheduledMessagesCard } from "./ScheduledMessagesCard";
 // 🔴 This panel renders its settings dialog with the .machine-picker* classes,
 // so it must import their stylesheet ITSELF (T-7526). Both panels used to
 // free-ride on WorkerDetailPanel → useRelocateMachine → MachinePicker →
@@ -634,6 +635,14 @@ export function WorkerDetailPanel({
     </div>
   );
 
+  // ── extraExpandCards slot: 定期訊息 (T-f059) ───────────────────────────────
+  // 🔴 NOT member-only. A schedule may bind to an `ow-` worker — chat's own
+  // recipient rule allows outsource, and the server follows it — so the worker
+  // panel drives the SAME card the member panel does, from the SAME component.
+  // This slot had no caller here before, which is precisely how the webhook
+  // section ended up living on only one of the two panels.
+  const scheduleCard = <ScheduledMessagesCard memberId={worker.id} />;
+
   // ── released: the worker finished its task and left ──────────────────────
   // 🔴 ONE renderer, ONE sentence (owner 2026-07-31:「為什麼從不同進入頁面會有
   // 不同的顯示方式?不是應該要一致嗎」). The chat room's header reads the SAME
@@ -686,6 +695,7 @@ export function WorkerDetailPanel({
       overlays={settingsDialog}
       afterIdentityCards={taskCard}
       afterInfoCards={delegatorCard}
+      extraExpandCards={scheduleCard}
       vm={{
         testIdPrefix: "worker-detail",
         online,

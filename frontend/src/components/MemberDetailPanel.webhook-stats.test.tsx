@@ -35,6 +35,7 @@ vi.mock("../api", () => ({
     getBootstrap: () =>
       Promise.resolve({ role: "assistant", name: "", taskType: "", context: "" }),
     listWebhooks: () => Promise.resolve(store.map((e) => ({ ...e }))),
+    listScheduledMessages: () => Promise.resolve([]),
     createWebhook: () => Promise.reject(new Error("unused")),
     updateWebhook: () => Promise.reject(new Error("unused")),
     deleteWebhook: () => Promise.resolve(),
