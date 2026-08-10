@@ -502,6 +502,25 @@ def _happy_webhook_requests_path(ctx: HCtx) -> str:
     return f"/api/members/{ctx.agent.member_id}/webhooks/{endpoint_id}/requests"
 
 
+def _happy_scheduled_message(ctx: HCtx) -> tuple[str, str]:
+    """A fresh scheduled message on the happy agent; (member_id, schedule_id).
+    The GET/PATCH/DELETE rows seed one so their faces act on a real schedule."""
+    r = ctx.client.post(
+        f"/api/members/{ctx.agent.member_id}/scheduled-messages",
+        json={
+            "label": "conf happy schedule",
+            "body": "conformance scheduled body",
+            "cadence": "daily",
+            "hour": 9,
+            "minute": 0,
+            "timezone": "Asia/Taipei",
+        },
+        headers=_auth(ctx.owner_token),
+    )
+    assert r.status_code == 200, f"happy schedule seed failed: {r.status_code} {r.text}"
+    return ctx.agent.member_id, r.json()["id"]
+
+
 def _happy_restorable_revision(ctx: HCtx) -> str:
     """A restore path pointing at a revision that REALLY EXISTS.
 
@@ -763,6 +782,52 @@ HAPPY: dict[str, Happy] = {
             and d[0]["body"] == "conf request-log seed"
             and d[0]["truncated"] is False,
         ),
+    ),
+    # ── scheduled messages (T-f059) — the clock-driven twin of the webhook
+    # CRUD above; same admin_agent floor, no credential on the DTO ────────────
+    "GET /api/members/{member_id}/scheduled-messages": Happy(
+        path=lambda ctx: (
+            f"/api/members/{_happy_scheduled_message(ctx)[0]}/scheduled-messages"
+        ),
+        check=_nonempty_list,
+    ),
+    "POST /api/members/{member_id}/scheduled-messages": Happy(
+        path=lambda ctx: f"/api/members/{ctx.agent.member_id}/scheduled-messages",
+        body=lambda _ctx: {
+            "label": "conf happy create",
+            "body": "conformance scheduled create",
+            "cadence": "daily",
+            "hour": 9,
+            "minute": 0,
+            "timezone": "Asia/Taipei",
+        },
+        # last_fired_slot is seeded at creation, which is the wire-visible form
+        # of "a new schedule does not fire the slot it was born after". An empty
+        # cursor here would mean the next tick delivers immediately.
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: d["status"] == "enabled"
+            and d["id"].startswith("sch-")
+            and d["timezone"] == "Asia/Taipei"
+            and d["last_fired_slot"].endswith("T09:00+08:00"),
+        ),
+    ),
+    "PATCH /api/members/{member_id}/scheduled-messages/{schedule_id}": Happy(
+        path=lambda ctx: "/api/members/{}/scheduled-messages/{}".format(
+            *_happy_scheduled_message(ctx)
+        ),
+        body={"status": "disabled", "label": "conf happy patched"},
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: d["status"] == "disabled"
+            and d["label"] == "conf happy patched",
+        ),
+    ),
+    "DELETE /api/members/{member_id}/scheduled-messages/{schedule_id}": Happy(
+        path=lambda ctx: "/api/members/{}/scheduled-messages/{}".format(
+            *_happy_scheduled_message(ctx)
+        ),
+        check=lambda _c, r: _expect(r, lambda d: d["id"].startswith("sch-")),
     ),
     # T-8b0d: the SAME bounded wake snapshot as /api/resume-summary, for a
     # TARGET member (this file's own scratch agent) instead of the caller.
