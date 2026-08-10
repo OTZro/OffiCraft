@@ -1364,8 +1364,18 @@ HAPPY: dict[str, Happy] = {
     "POST /api/tasks/{task_id}/closeout": Happy(
         identity="agent",
         path=lambda ctx: f"/api/tasks/{_happy_closed_task(ctx)}/closeout",
+        # T-bb70: the close-out answers a BOUNDED receipt, not the whole task.
+        # The key-set equality is the point — asserting only that the fields are
+        # present would stay green if the route went back to serving the task,
+        # because a whole task carries closeout_reported too.
         check=lambda _c, r: _expect(
-            r, lambda d: d["closeout_reported"] is True and d["status"] == "done"
+            r,
+            lambda d: set(d) == {
+                "task_id", "task_status", "closeout_reported", "closeout_ts"
+            }
+            and d["closeout_reported"] is True
+            and d["task_status"] == "done"
+            and d["closeout_ts"] > 0,
         ),
     ),
     "POST /api/tasks/{task_id}/artifact": Happy(

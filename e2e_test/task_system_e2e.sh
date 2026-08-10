@@ -515,7 +515,9 @@ pass_stage
 stage "A7. closeout → task status=done + closed_ts stamped + closeout_reported==true (worker did its closeout duty)"
 # @9111cef: closeTask flips workers to `released` WITHOUT reclaiming the session; the WORKER
 #   itself must POST /api/tasks/{id}/closeout to be reclaimed immediately (else a 120s backstop
-#   grace reclaims it). closeout is a BOOLEAN `closeout_reported` (there is NO closeout_ts field).
+#   grace reclaims it). On the TASK (what we poll here) closeout is a BOOLEAN `closeout_reported`
+#   — the task DTO carries no closeout_ts. (T-bb70: the close-out ROUTE's own bounded receipt does
+#   carry `closeout_ts`, but this stage reads GET /api/tasks/{id}, not that response.)
 #   So we assert: task reached status=done + closed_ts set + closeout_reported==true — proving
 #   the worker performed its own closeout (immediate fire). Generous TASK_WORKER_TIMEOUT budget.
 _a7_ok=""; A7_STATUS=""; A7_CLOSED=""; A7_REPORTED=""

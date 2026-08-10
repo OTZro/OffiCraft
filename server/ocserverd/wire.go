@@ -999,6 +999,22 @@ type taskPriorityReceiptDTO struct {
 	FrozenBy string `json:"frozen_by"`
 }
 
+// taskCloseoutReceiptDTO is the bounded confirmation returned after
+// report_task_closeout (T-bb70). BOTH exits of that handler used to answer with
+// the whole task — the first (stamping) report AND the idempotent no-op repeat
+// — which measured over 51,000 characters for a write whose entire news is one
+// bit, so RE-reporting a close-out was the most expensive way in the system to
+// be told nothing new. CloseoutTS rides along because the write DERIVES it
+// (stamped by the first report, unmoved by every repeat), so it is exactly the
+// part the caller cannot predict — the same reason FrozenBy rides the priority
+// receipt. Full task detail remains available through get_task.
+type taskCloseoutReceiptDTO struct {
+	TaskID           string  `json:"task_id"`
+	TaskStatus       string  `json:"task_status"`
+	CloseoutReported bool    `json:"closeout_reported"`
+	CloseoutTS       float64 `json:"closeout_ts"`
+}
+
 // taskStepNoteReceiptDTO is the bounded receipt for a step-note write (T-cc3e).
 // It echoes the note as STORED rather than as sent: the whole point of the
 // field is that a later session reads it back, so the write is verifiable at

@@ -4937,6 +4937,19 @@
         "additionalProperties": false,
         "type": "object"
       },
+      "TaskCloseoutReceiptDTO": {
+        "description": "Bounded receipt returned after report_task_closeout (T-bb70). BOTH exits used to answer with the whole task — the first (stamping) report AND the idempotent no-op repeat — measured at over 51,000 characters for a write whose entire news is one bit, so re-reporting a close-out was the most expensive way in the system to be told nothing new. ``closeout_ts`` rides along because the write DERIVES it (stamped by the first report, unmoved by every repeat), so it is the part the caller cannot predict — the same reason ``frozen_by`` rides the priority receipt. Fetch GET /api/tasks/{task_id} when full task detail is needed.",
+        "properties": {
+          "closeout_reported": {"title": "Closeout Reported", "type": "boolean"},
+          "closeout_ts": {"title": "Closeout Ts", "type": "number"},
+          "task_id": {"title": "Task Id", "type": "string"},
+          "task_status": {"title": "Task Status", "type": "string"}
+        },
+        "required": ["task_id", "task_status", "closeout_reported", "closeout_ts"],
+        "title": "TaskCloseoutReceiptDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
       "TaskArtifactInputDTO": {
         "description": "Register one artifact onto a task (MCP ``add_task_artifact``). ``kind`` is required: file|image|link. For file/image, ``attachment_id`` is required — the chat_attachment blob id from a prior ``POST /api/chat/attachments`` upload (one blob mechanism, not two). For link, ``url`` is required — a bare http(s) URL (a PR link). ``label`` is an optional display name (a link's title such as \"PR #123\", or a filename override); absent = the blob's own filename (file/image) or the URL itself (link).",
         "properties": {
@@ -13816,7 +13829,7 @@
     },
     "/api/tasks/{task_id}/closeout": {
       "post": {
-        "description": "The executor reports the task's close-out follow-ups DONE (MCP ``report_task_closeout``; SPEC §6.3 step 1): learnings written back (the type's manual / the role's lessons) and the task's scratch data cleaned. TERMINAL tasks only (done/terminated — an open task is a 409); executor-guarded like every agent report row. IDEMPOTENT: the first report stamps ``closeout_reported`` and fans a ``task`` delta; a repeat answers 200 as a no-op. Recording only — the outsource-dismissal consequence (SPEC §6.3 step 2) is the worker-lifecycle batch's hook, deliberately NOT here.",
+        "description": "The executor reports the task's close-out follow-ups DONE (MCP ``report_task_closeout``; SPEC §6.3 step 1): learnings written back (the type's manual / the role's lessons) and the task's scratch data cleaned. TERMINAL tasks only (done/terminated — an open task is a 409); executor-guarded like every agent report row. IDEMPOTENT: the first report stamps ``closeout_reported`` and fans a ``task`` delta; a repeat answers 200 as a no-op. BOTH exits answer with a BOUNDED receipt (``TaskCloseoutReceiptDTO``), never the whole task (T-bb70) — fetch GET /api/tasks/{task_id} when full detail is needed. Recording only — the outsource-dismissal consequence (SPEC §6.3 step 2) is the worker-lifecycle batch's hook, deliberately NOT here.",
         "operationId": "handle_report_task_closeout_api_tasks__task_id__closeout_post",
         "parameters": [
           {
@@ -13834,7 +13847,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TaskDTO"
+                  "$ref": "#/components/schemas/TaskCloseoutReceiptDTO"
                 }
               }
             },

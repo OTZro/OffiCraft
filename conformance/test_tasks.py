@@ -1344,6 +1344,27 @@ def _closeout(client, token, task_id):
     return client.post(f"/api/tasks/{task_id}/closeout", headers=_auth(token))
 
 
+# T-bb70: BOTH close-out exits (first report and idempotent repeat) answer with
+# a bounded receipt, never the whole task. The key SET is pinned on purpose: a
+# whole task carries closeout_reported too, so a field-presence assertion would
+# stay green through exactly the regression this replaces.
+CLOSEOUT_RECEIPT_KEYS = {
+    "task_id", "task_status", "closeout_reported", "closeout_ts"}
+
+
+def _assert_closeout_receipt(r, task_id, status):
+    body = r.json()
+    assert set(body) == CLOSEOUT_RECEIPT_KEYS, (
+        f"close-out must answer a bounded receipt, got keys "
+        f"{sorted(set(body) - CLOSEOUT_RECEIPT_KEYS)} extra / "
+        f"{sorted(CLOSEOUT_RECEIPT_KEYS - set(body))} missing ({len(r.text)} chars)")
+    assert body["task_id"] == task_id, r.text
+    assert body["task_status"] == status, r.text
+    assert body["closeout_reported"] is True, r.text
+    assert body["closeout_ts"] > 0, r.text
+    return body
+
+
 def test_closeout_reports_after_terminal_and_is_idempotent(
     client, owner_token, executor
 ):
@@ -1356,15 +1377,16 @@ def test_closeout_reports_after_terminal_and_is_idempotent(
     assert _get_task(client, executor.token, task["id"])[
         "closeout_reported"] is False
 
-    # First report flips the flag.
+    # First report flips the flag and answers a bounded receipt.
     r = _closeout(client, executor.token, task["id"])
     assert r.status_code == 200, f"{r.status_code} {r.text}"
-    assert r.json()["closeout_reported"] is True
+    first = _assert_closeout_receipt(r, task["id"], "done")
 
-    # A repeat is a 200 no-op (idempotent — never a 409, never a re-flip).
+    # A repeat is a 200 no-op (idempotent — never a 409, never a re-flip), and
+    # it answers the SAME bounded receipt, stamp included.
     r = _closeout(client, executor.token, task["id"])
     assert r.status_code == 200, f"{r.status_code} {r.text}"
-    assert r.json()["closeout_reported"] is True
+    assert _assert_closeout_receipt(r, task["id"], "done") == first, r.text
     assert _get_task(client, executor.token, task["id"])[
         "closeout_reported"] is True
 
@@ -1381,8 +1403,7 @@ def test_closeout_covers_terminated_tasks_too(client, owner_token, executor):
     # The executor of a TERMINATED task still owes (and can file) a close-out.
     r = _closeout(client, executor.token, task["id"])
     assert r.status_code == 200, f"{r.status_code} {r.text}"
-    assert r.json()["closeout_reported"] is True
-    assert r.json()["status"] == "terminated"
+    _assert_closeout_receipt(r, task["id"], "terminated")
 
 
 def test_closeout_enforces_the_executor_guard(client, owner_token, executor):

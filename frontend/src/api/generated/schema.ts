@@ -2830,7 +2830,7 @@ export interface paths {
         put?: never;
         /**
          * Report the task's close-out follow-ups done (terminal tasks only; idempotent).
-         * @description The executor reports the task's close-out follow-ups DONE (MCP ``report_task_closeout``; SPEC §6.3 step 1): learnings written back (the type's manual / the role's lessons) and the task's scratch data cleaned. TERMINAL tasks only (done/terminated — an open task is a 409); executor-guarded like every agent report row. IDEMPOTENT: the first report stamps ``closeout_reported`` and fans a ``task`` delta; a repeat answers 200 as a no-op. Recording only — the outsource-dismissal consequence (SPEC §6.3 step 2) is the worker-lifecycle batch's hook, deliberately NOT here.
+         * @description The executor reports the task's close-out follow-ups DONE (MCP ``report_task_closeout``; SPEC §6.3 step 1): learnings written back (the type's manual / the role's lessons) and the task's scratch data cleaned. TERMINAL tasks only (done/terminated — an open task is a 409); executor-guarded like every agent report row. IDEMPOTENT: the first report stamps ``closeout_reported`` and fans a ``task`` delta; a repeat answers 200 as a no-op. BOTH exits answer with a BOUNDED receipt (``TaskCloseoutReceiptDTO``), never the whole task (T-bb70) — fetch GET /api/tasks/{task_id} when full detail is needed. Recording only — the outsource-dismissal consequence (SPEC §6.3 step 2) is the worker-lifecycle batch's hook, deliberately NOT here.
          */
         post: operations["handle_report_task_closeout_api_tasks__task_id__closeout_post"];
         delete?: never;
@@ -6636,6 +6636,20 @@ export interface components {
             priority: string;
             /** Task Id */
             task_id: string;
+        };
+        /**
+         * TaskCloseoutReceiptDTO
+         * @description Bounded receipt returned after report_task_closeout (T-bb70). BOTH exits used to answer with the whole task — the first (stamping) report AND the idempotent no-op repeat — measured at over 51,000 characters for a write whose entire news is one bit, so re-reporting a close-out was the most expensive way in the system to be told nothing new. ``closeout_ts`` rides along because the write DERIVES it (stamped by the first report, unmoved by every repeat), so it is the part the caller cannot predict — the same reason ``frozen_by`` rides the priority receipt. Fetch GET /api/tasks/{task_id} when full task detail is needed.
+         */
+        TaskCloseoutReceiptDTO: {
+            /** Closeout Reported */
+            closeout_reported: boolean;
+            /** Closeout Ts */
+            closeout_ts: number;
+            /** Task Id */
+            task_id: string;
+            /** Task Status */
+            task_status: string;
         };
         /**
          * TaskArtifactInputDTO
@@ -13541,7 +13555,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskDTO"];
+                    "application/json": components["schemas"]["TaskCloseoutReceiptDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */
