@@ -24,6 +24,7 @@ E2E="$HERE/.."
 . "$E2E/lib/common.sh"
 . "$HERE/lib/http.sh"
 . "$HERE/lib/friction.sh"
+. "$HERE/lib/window.sh"
 
 ACTOR="${OC_SG_ACTOR:-$HERE/actors/stub.sh}"
 [[ "$ACTOR" = /* ]] || ACTOR="$HERE/$ACTOR"
@@ -73,6 +74,48 @@ AGENT_TOK="$(sg_http POST /api/mint "{\"member_id\":\"$AGENT\",\"ttl_days\":1}" 
 [[ -n "$AGENT_TOK" ]] || { echo "[seven_gate] FATAL: mint failed for $AGENT." >&2; exit 2; }
 echo "[seven_gate] agent=$AGENT ($AGENT_NAME)"
 
+# 2b0. PIN THE RUNTIME / MODEL / EFFORT the agent will be launched with. The
+#      whole ticket is "does a NEW agent, reading only the boot context, walk
+#      this path" — and the answer is allowed to differ per runtime and per
+#      effort, so a regression that cannot name the configuration cannot compare
+#      two runs. These are the owner's launch settings on the member row
+#      (PATCH /api/members/{id}); the server hands them to the warden inside the
+#      START frame (reconcile.go buildStartFrame: Runtime/Model/Effort), which is
+#      why nothing in the spawn chain needs touching.
+#
+#      🔴 SET, THEN READ BACK, THEN REFUSE ON MISMATCH. A PATCH that answers 200
+#      having stored something else would give a run that claims one
+#      configuration and measures another — the exact class of lie this harness
+#      exists to remove. The read-back is what makes the claim evidence, so it
+#      is also written into scene.json and printed.
+if [[ -n "${OC_SG_RUNTIME:-}${OC_SG_MODEL:-}${OC_SG_EFFORT:-}" ]]; then
+  PATCH_BODY="$(python3 -c '
+import json, os, sys
+out = {}
+for env, key in (("OC_SG_RUNTIME", "runtime"), ("OC_SG_MODEL", "model"), ("OC_SG_EFFORT", "effort")):
+    v = os.environ.get(env, "")
+    if v:
+        out[key] = v
+print(json.dumps(out))')"
+  sg_http PATCH "/api/members/$AGENT" "$PATCH_BODY" >/dev/null \
+    || { echo "[seven_gate] FATAL: pinning runtime/model/effort was refused — see the [http] line above. A run that cannot set its own configuration must not claim one." >&2; exit 2; }
+fi
+# Read back UNCONDITIONALLY — including the no-pin case, so every run records
+# what it actually ran as instead of what it meant to.
+MEMBER_NOW="$(sg_http GET "/api/members/$AGENT")"
+read -r GOT_RUNTIME GOT_MODEL GOT_EFFORT <<<"$(printf '%s' "$MEMBER_NOW" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+print(d.get("runtime", "") or "-", d.get("model", "") or "-", d.get("effort", "") or "-")')"
+echo "[seven_gate] member config (read back from the server): runtime=$GOT_RUNTIME model=$GOT_MODEL effort=$GOT_EFFORT"
+for _want in "${OC_SG_RUNTIME:-}:$GOT_RUNTIME:runtime" "${OC_SG_MODEL:-}:$GOT_MODEL:model" "${OC_SG_EFFORT:-}:$GOT_EFFORT:effort"; do
+  _asked="${_want%%:*}"; _rest="${_want#*:}"; _got="${_rest%%:*}"; _field="${_rest#*:}"
+  if [[ -n "$_asked" && "$_asked" != "$_got" ]]; then
+    echo "[seven_gate] FATAL: asked for $_field='$_asked' but the server stored '$_got'. Refusing to run a regression that would report a configuration it is not using." >&2
+    exit 2
+  fi
+done
+
 # 2b. THE OWNER'S INTENT, and ① cannot be observed without it. presence=waking is
 #     derived (server/ocserverd/domain.go PresenceState) from desired_state ==
 #     online AND a fresh waking_since — BOTH, not either. A freshly hired member
@@ -83,6 +126,8 @@ echo "[seven_gate] agent=$AGENT ($AGENT_NAME)"
 #     it belongs on this side of the actor boundary, not in the actor.
 #     Order matters: activate ZEROES waking_since (api_members.go), so it must
 #     precede the agent's boot report, never follow it.
+#     Pinning above happens FIRST: activate is what triggers the reconcile that
+#     builds the START frame, so the launch settings must already be on the row.
 #     (the body is captured rather than discarded — see lib/http.sh's header:
 #     no server call in this harness may end in >/dev/null.)
 ACTIVATED="$(sg_http POST "/api/members/$AGENT/activate" '{}')"
@@ -186,15 +231,24 @@ if [[ "${LEAK_HITS:-0}" -ne 0 ]]; then
 fi
 echo "[seven_gate] leak scan: answer 0 hits in readable text (positive control: scene nonce $CONTROL_HITS hit(s) — the scanner works)"
 
-python3 -c 'import json,sys;json.dump({"agent_id":sys.argv[1],"scene_nonce":sys.argv[2],"stamp":sys.argv[3],"peer_id":sys.argv[5],"peer_nonce":sys.argv[6],"image_answer":sys.argv[7]},open(sys.argv[4],"w"),ensure_ascii=False,indent=2)' \
-  "$AGENT" "$NONCE" "$STAMP" "$RUN_DIR/scene.json" "$PEER" "$PEER_NONCE" "$IMG_ANSWER"
+python3 -c 'import json,sys;json.dump({"agent_id":sys.argv[1],"scene_nonce":sys.argv[2],"stamp":sys.argv[3],"peer_id":sys.argv[5],"peer_nonce":sys.argv[6],"image_answer":sys.argv[7],"agent_runtime":sys.argv[8],"agent_model":sys.argv[9],"agent_effort":sys.argv[10]},open(sys.argv[4],"w"),ensure_ascii=False,indent=2)' \
+  "$AGENT" "$NONCE" "$STAMP" "$RUN_DIR/scene.json" "$PEER" "$PEER_NONCE" "$IMG_ANSWER" \
+  "$GOT_RUNTIME" "$GOT_MODEL" "$GOT_EFFORT"
 echo "[seven_gate] scene planted: $NONCE"
 
 # 4. collector FIRST — ①'s presence=waking is gone within seconds of the agent
 #    mounting SSE, so a collector started after the actor reads a green run red.
+#    Its window is DERIVED from the actor budget (lib/window.sh), never set on
+#    its own: a collector that stops before the actor does turns every later
+#    fact into a red that names the AGENT for the harness's own gap. The
+#    assertion is here as well as in CI because a violated window makes the
+#    whole verdict untrustworthy, and that is a refusal, not a warning.
+sg_assert_collection_window || exit 2
+COLLECT_SECONDS="$(sg_collect_seconds)"
+echo "[seven_gate] collector window ${COLLECT_SECONDS}s ≥ actor budget $(sg_actor_budget_secs)s"
 python3 "$HERE/collect.py" --base "$BASE" --token-file "$E2E/.state/owner.tok" \
-  --agent "$AGENT" --run-dir "$RUN_DIR" --interval "${OC_SG_INTERVAL:-1}" \
-  --seconds "${OC_SG_MAX_SECONDS:-900}" >>"$RUN_DIR/collect.log" 2>&1 &
+  --agent "$AGENT" --run-dir "$RUN_DIR" --interval "$OC_SG_INTERVAL" \
+  --seconds "$COLLECT_SECONDS" >>"$RUN_DIR/collect.log" 2>&1 &
 COLLECTOR_PID=$!
 sleep 2
 
@@ -244,12 +298,12 @@ echo "[seven_gate] owner card-responder pid=$RESPONDER_PID (answers ONLY $AGENT'
 OC_SG_BASE="$BASE" OC_SG_AGENT="$AGENT" OC_SG_AGENT_TOKEN="$AGENT_TOK" \
 OC_SG_SCENE_NONCE="$NONCE" OC_SG_RUN_DIR="$RUN_DIR" OC_SG_OWNER="owner" \
 OC_SG_OWNER_TOKEN="$OWNER_TOK" OC_SG_PEER="$PEER" OC_SG_PEER_NONCE="$PEER_NONCE" \
-OC_SG_IMAGE_ANSWER="$IMG_ANSWER" \
+OC_SG_IMAGE_ANSWER="$IMG_ANSWER" OC_SG_RUNTIME="$GOT_RUNTIME" \
   bash "$ACTOR" 2>&1 | tee "$RUN_DIR/actor.log"
 echo "[seven_gate] actor rc=${PIPESTATUS[0]} (recorded, not judged)"
 
 # 6. one last settle, then stop collecting and judge what the server held.
-sleep "${OC_SG_SETTLE:-3}"
+sleep "$OC_SG_SETTLE"
 kill "$RESPONDER_PID" 2>/dev/null; wait "$RESPONDER_PID" 2>/dev/null
 RESPONDER_PID=""
 kill "$COLLECTOR_PID" 2>/dev/null; wait "$COLLECTOR_PID" 2>/dev/null

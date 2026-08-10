@@ -1770,6 +1770,71 @@ if [[ -f "$SG_DIR/actors/live.sh" ]]; then
     || bad "seven_gate: nothing states that the harness must not write the friction answers itself"
 fi
 
+# ── 22) T-42bb: the collection window must outlast the actor ──────────────────
+#
+# THE BUG. collect.py used to be started with `--seconds 900` while
+# actors/live.sh would wait 30 + 120 + 1800 + 300 ≈ 2250s. On DEFAULTS the
+# collector stopped sampling ~22 minutes before the actor stopped working, so
+# every fact that landed after that instant was invisible to judge.py — and the
+# verdict it produced was 「回報收尾 FAIL」: A RED NAMING THE AGENT FOR THE
+# HARNESS'S OWN GAP. The person who hit it worked around it by knowing to raise
+# OC_SG_MAX_SECONDS; the next person would not have known that flag existed.
+#
+# So what is pinned here is the RELATION, not a number: whatever the knobs are
+# set to, the collector's window must be >= the actor's budget. A future knob
+# that lengthens the actor lengthens the budget, and this keeps holding with
+# nobody remembering it.
+SG_WINDOW="$SG_DIR/lib/window.sh"
+sg_window_probe() { # sg_window_probe <file> [env assignments…] -> "budget|window|rc"
+  local f="$1"; shift
+  env "$@" bash -c '
+    . "$1" || exit 9
+    b="$(sg_actor_budget_secs)"; w="$(sg_collect_seconds)"
+    sg_assert_collection_window >/dev/null 2>&1; rc=$?
+    printf "%s|%s|%s\n" "$b" "$w" "$rc"' _ "$f"
+}
+
+# 22a) the shipped defaults hold — and the window is genuinely bigger, not equal
+# by accident of both being zero.
+_w="$(sg_window_probe "$SG_WINDOW")"
+_wb="${_w%%|*}"; _rest="${_w#*|}"; _ww="${_rest%%|*}"; _wrc="${_rest##*|}"
+check "seven_gate: the shipped defaults satisfy the collection-window invariant" "0" "$_wrc"
+[[ "${_wb:-0}" -gt 0 && "${_ww:-0}" -gt "${_wb:-0}" ]] \
+  && ok "seven_gate: collector window ${_ww}s strictly exceeds the actor budget ${_wb}s (not equal-by-accident)" \
+  || bad "seven_gate: window=${_ww:-?} budget=${_wb:-?} — the window must strictly exceed a non-zero budget"
+
+# 22b) it must track the ACTOR, not a constant: stretch the longest actor wait
+# and the window has to grow with it. This is the half a hardcoded number fails.
+_w2="$(sg_window_probe "$SG_WINDOW" OC_SG_LIVE_WAIT=99999)"
+_w2b="${_w2%%|*}"; _r2="${_w2#*|}"; _w2w="${_r2%%|*}"; _w2rc="${_r2##*|}"
+check "seven_gate: a much longer live wait still satisfies the invariant" "0" "$_w2rc"
+[[ "${_w2w:-0}" -gt "${_ww:-0}" ]] \
+  && ok "seven_gate: stretching OC_SG_LIVE_WAIT grew the collector window (${_ww}s → ${_w2w}s) — it is derived, not fixed" \
+  || bad "seven_gate: OC_SG_LIVE_WAIT grew but the collector window did not (${_ww}s → ${_w2w}s) — the derivation is severed"
+
+# 22c) THE MUTANT. Sever the derivation — put the old independent constant back —
+# and the invariant must go RED. Without this, a sg_collect_seconds that returned
+# a huge constant would satisfy 22a/22b's rc check and this case would guard
+# nothing. The mutant is the exact historical bug, not an invented one.
+SG_WMUT="$SHIMDIR/window-mutant.sh"
+sed -e 's|^  echo \$(( \$(sg_actor_budget_secs) + OC_SG_SETTLE + OC_SG_COLLECT_MARGIN ))$|  echo 900|' \
+    "$SG_WINDOW" > "$SG_WMUT"
+if ! grep -qE '^  echo 900$' "$SG_WMUT"; then
+  bad "seven_gate: the window mutant did not apply — the derivation line moved, so case 22c is testing nothing (fix the sed)"
+else
+  _wm="$(sg_window_probe "$SG_WMUT")"
+  _wmrc="${_wm##*|}"
+  check "seven_gate: with the derivation severed (collector window back to a constant 900), the invariant goes RED" "1" "$_wmrc"
+fi
+
+# 22d) the defaults have ONE home. A second `:-<default>` for any of these knobs
+# in run.sh or the actors is a second constant, and two constants a human keeps
+# in sync is the shape that produced the bug.
+for _knob in OC_SG_LIVE_WAIT OC_SG_MACHINE_WAIT OC_SG_SPAWN_WAIT OC_SG_FRICTION_WAIT OC_SG_CARD_WAIT OC_SG_SETTLE; do
+  _dupes="$(grep -h -oE "\\\$\{$_knob:-[^}]*\}" "$SG_DIR/run.sh" "$SG_DIR"/actors/*.sh 2>/dev/null | wc -l | tr -d ' ')"
+  check "seven_gate: $_knob has no second default outside lib/window.sh" "0" "${_dupes:-0}"
+done
+
 echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1
 

@@ -1,4 +1,4 @@
-# seven_gate/ — 任務路徑關卡（資料夾名是歷史遺跡：格子已經是八個）
+# seven_gate/ — 任務路徑關卡（資料夾名是歷史遺跡：格子已經是九個）
 
 進入 `e2e_test/seven_gate/` 時 nested-load。上層規則見 `e2e_test/CLAUDE.md` 與 root `CLAUDE.md`；
 本檔記這個載體專屬的設計。
@@ -187,6 +187,47 @@ so the ask can place no 等我回覆 hold and the task would keep running past i
 收尾時按**確切 PID** 收掉）。那不是為了讓測試過關而加的方便門——**那就是對面那個人**。沒有他，
 ⑥成功反而讓收尾那一格不可能成立。
 
+## 收集窗必須活得比 actor 久（不是一個數字，是一條關係）
+
+第一版把兩個常數分開寫：collector 起在 `--seconds 900`，而 `actors/live.sh` 最久會等
+`30 + 120 + 1800 + 300 ≈ 2250` 秒。**照預設跑，collector 會比 actor 早二十幾分鐘收工**，之後落地的
+每一個事實 judge 都看不到——而它吐出來的是「回報收尾 FAIL」。**又是一個載體的坑，卻讓紅指著 agent。**
+第一個踩到的人是靠手動調 `OC_SG_MAX_SECONDS` 繞開的，而**下一個人不會知道有那個旗標**。
+
+所以現在釘的是**關係**，不是數字（`lib/window.sh`）：
+
+```
+collector 收集窗  ≥  actor 預算（machine + spawn + live + friction + card×2）
+```
+
+- 那些等待時間的**預設值只有一個家**（`lib/window.sh`）。`run.sh` 與兩支 actor 都 source 它、直接用
+  `$OC_SG_LIVE_WAIT`，**不准再寫第二個 `:-1800`**——兩個常數靠人維持一致，就是這個 bug 的形狀。
+- collector 的秒數是**推導出來的**（`sg_collect_seconds`），不是另外設的。
+- `run.sh` 起 collector 之前先 `sg_assert_collection_window`，不成立就**拒跑**：窗口破了的那一輪，
+  判定本身不可信。
+- CI：`tests_guard` 案例 22 釘四件事——預設成立且窗**嚴格大於**預算（不是兩邊都零的巧合）、
+  拉長 `OC_SG_LIVE_WAIT` 窗會跟著長（證明它是推導的）、**mutant 把推導換回常數 900 必須轉紅**、
+  以及那些旗標在別處沒有第二份預設值。實測：預算 2310s、窗 2433s；mutant rc=1。
+
+## 鎖定 runtime / model / effort（regression 要能比較兩組）
+
+`OC_SG_RUNTIME` / `OC_SG_MODEL` / `OC_SG_EFFORT` 在 hire 之後、activate **之前**寫進成員列
+（`PATCH /api/members/{id}`）。**不動 spawn 那條鏈**：server 自己會把這三個欄位放進 START frame
+（`reconcile.go` buildStartFrame 的 `Runtime/Model/Effort`），warden 那邊本來就照著它挑 runtime。
+順序不能反——activate 才是觸發 reconcile 的那一下，設定必須先在列上。
+
+**設完一定讀回來，不一致就拒跑。** 一個回 200 卻存成別的值的 PATCH，會產生「宣稱跑 A、其實量到 B」
+的一輪，而那正是這個載體存在的理由要消滅的東西。讀回來的值也寫進 `scene.json`
+（`agent_runtime` / `agent_model` / `agent_effort`）並印在 log 上，所以每一輪都記得住自己是誰。
+⚠️ 沒指定時**照樣讀回來**——記錄的是「實際跑成什麼」，不是「本來想跑什麼」。
+
+**實測（stub，兩組各一輪，九格全綠 rc=0）**：
+`runtime=claude model=opus effort=medium` 與 `runtime=codex model=gpt-5.6-luna effort=max`，
+兩組的 `member config (read back from the server)` 都與指定值逐字相同。
+**陽性對照**：`OC_SG_EFFORT=bogus` ⇒ server 回
+`HTTP 422 effort must be one of [high low max medium]; got 'bogus'`，載體當場拒跑（rc=2）——
+所以「讀回來相符」不是一句空話，這道檢查真的會說不。
+
 ## 為什麼不是拿 `task_system_e2e.sh`（那支「寫 42」的）來當 live actor
 
 repo 裡**已經有**一支會起真 claude 的 e2e：`e2e_test/task_system_e2e.sh`——建一張 outsource 任務、
@@ -262,7 +303,8 @@ tmux＋claude）就是 `tests/05_machine_onboarding_spawn.live-agent.spec.js` �
 
 `run.sh` 不在乎 agent 那一端是什麼，只透過 env 交接：
 `OC_SG_BASE` / `OC_SG_AGENT` / `OC_SG_AGENT_TOKEN` / `OC_SG_SCENE_NONCE` / `OC_SG_RUN_DIR` /
-`OC_SG_OWNER` / `OC_SG_OWNER_TOKEN` / `OC_SG_PEER` / `OC_SG_PEER_NONCE` / `OC_SG_IMAGE_ANSWER`。
+`OC_SG_OWNER` / `OC_SG_OWNER_TOKEN` / `OC_SG_PEER` / `OC_SG_PEER_NONCE` / `OC_SG_IMAGE_ANSWER` /
+`OC_SG_RUNTIME`（本輪釘的 runtime，已由 server 讀回過）。
 **actor 的 rc 被記錄但不被採信**——一個 exit 0 卻什麼都沒做的 actor 照樣得紅，而它確實會紅，
 因為判定來自 server。
 
@@ -298,9 +340,17 @@ self-report（owner 拿去報只會蓋到 owner 頭上），②⑥比對 `from =
   ——onboard、`ocwarden run`、activate 帶 machine_id、等 tmux、逐字追問、寫 `friction.txt`——
   都只**照契約與 `tests/05_*.live-agent.spec.js` 寫過，未經執行驗證**。第一個按下去的人請預期要 debug；
   好消息是每一通呼叫的狀態碼與內容都在 `http.log`，debug 是「讀」不是「猜」。
-  ⚠️ 特別點名兩個沒驗過的假設：(a) `run.sh` 先 activate（無機器）留下的 reconcile 狀態，會不會讓
-  live.sh 第二次 activate（帶 machine_id）的 START 被 backoff 延後；(b) tmux socket 名沿用
+  ⚠️ 特別點名兩個**仍然**沒驗過的假設：(a) `run.sh` 先 activate（無機器）留下的 reconcile 狀態，
+  會不會讓 live.sh 第二次 activate（帶 machine_id）的 START 被 backoff 延後；(b) tmux socket 名沿用
   `cli/ocwarden/tmux.go` 的 `officraft`，namespaced 安裝下不是這個名字。
+  ✅ **已經驗掉的**（這一輪實測，沒有起真 agent）：codex 那條路**在這台機器上三個相依項都解得到**——
+  `codex login status` 回 `Logged in using ChatGPT`、`/Users/eva/.local/bin/codex` 可執行、
+  `ocwarden` build 得出來且跑得動（⇒ `WardenBin = os.Executable()` 解得到，那是 codex sidecar 的前提）。
+  `live.sh` 現在也在**自己這一端**先問一次 `codex login status`，不通就當場拒絕——warden 的同一道
+  preflight 會失敗成 wake timeout，而那個逾時看起來像 agent 的錯。
+  ⚠️ **但那只證明相依項齊備，不證明 codex 真的 spawn 得起來**：那需要起真 agent。
+  ⚠️ 也要分清楚：站上那個起不來的 codex 外包（`wake_timeout … not logged in`）是**另一台/另一個
+  daemon context**（launchd PATH、可能不同使用者），跟這裡量到的「我這個 shell 登入著」是兩件事。
 - **stub 證明的只有「事實落地時關卡讀得對」**，它是照著判定寫的，**完全不證明**
   「一個只讀開機說明的 agent 會決定去做這七件事」。那是整張票的目的，還沒被回答。
 - `②` 讀的是後果不是工具呼叫（見上）。

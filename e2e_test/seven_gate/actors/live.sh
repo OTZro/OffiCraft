@@ -52,6 +52,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SG="$HERE/.."
 . "$SG/lib/http.sh"
 . "$SG/lib/friction.sh"
+. "$SG/lib/window.sh"
 
 say() { printf '[actor:live] %s\n' "$*"; }
 die() { printf '[actor:live] FATAL: %s\n' "$*" >&2; exit 2; }
@@ -77,9 +78,30 @@ export SG_BASE="$BASE" SG_TOKEN="$OWNER_TOK" SG_HTTP_TAG="actor:live/owner" \
 # ── preconditions, all of them refusals BEFORE anything is created ──────────
 # Headless: this script must never reach a prompt. Everything it needs is
 # resolved here and a missing piece is a loud refusal, never a wait.
+# The runtime this run is pinned to (run.sh read it back off the member row, so
+# it is the server's stored value, not a wish). Only the SELECTED runtime's
+# binary is required: demanding claude on a codex run would refuse a run that
+# has no use for claude — and the refusal would look like a codex problem.
+RUNTIME="${OC_SG_RUNTIME:-claude}"
 CLAUDE_BIN="${OC_CLAUDE_BIN:-$(command -v claude 2>/dev/null)}"
-[[ -n "$CLAUDE_BIN" && -x "$CLAUDE_BIN" ]] \
-  || die "no claude binary (set OC_CLAUDE_BIN, or put claude on PATH) — the warden would spawn nothing."
+CODEX_BIN="${OC_CODEX_BIN:-$(command -v codex 2>/dev/null)}"
+case "$RUNTIME" in
+  claude)
+    [[ -n "$CLAUDE_BIN" && -x "$CLAUDE_BIN" ]] \
+      || die "runtime=claude but no claude binary (set OC_CLAUDE_BIN, or put claude on PATH) — the warden would spawn nothing." ;;
+  codex)
+    [[ -n "$CODEX_BIN" && -x "$CODEX_BIN" ]] \
+      || die "runtime=codex but no codex binary (set OC_CODEX_BIN, or put codex on PATH) — the warden would spawn nothing."
+    # The warden's own codex preflight (cli/ocwarden/spawn.go) refuses the spawn
+    # when `codex login status` fails, and that refusal surfaces late, as a wake
+    # timeout that reads like the agent's fault. Ask the same question here,
+    # before anything is created, so a logged-out codex is a loud refusal.
+    "$CODEX_BIN" login status >/dev/null 2>&1 \
+      || die "runtime=codex but \`codex login status\` fails on this host — the warden's spawn preflight would refuse, and it would surface as a wake timeout that looks like the agent's fault. Log codex in first." ;;
+  *)
+    die "unsupported runtime '$RUNTIME' — the server's own vocabulary is claude|codex (api_helpers.go ValidRuntime)." ;;
+esac
+say "runtime=$RUNTIME  claude=${CLAUDE_BIN:-<none>}  codex=${CODEX_BIN:-<none>}"
 command -v tmux >/dev/null 2>&1 || die "tmux is not on PATH — the warden spawns agents into tmux sessions."
 
 REPO_ROOT="$(cd "$SG/../.." && pwd)"
@@ -135,14 +157,20 @@ say "machine=$MACHINE"
 # ── 3. a REAL warden, holding the SSE. `run`, not launchd install: this process
 #      is ours, we hold its pid, and we kill exactly it. ────────────────────────
 say "starting ocwarden run (this is the process that will spawn claude)"
+# BOTH bins are handed over, not just the selected one: the warden resolves them
+# independently (transport.go resolveClaudeBin / resolveCodexBin) and a machine
+# may legitimately carry either or both. Passing only the one we happened to pin
+# would make the warden fall back to PATH for the other — which under launchd is
+# exactly the empty PATH that caused the historical boot-death.
 env -u OC_WARDEN_TOKFILE \
-    OC_BASE="$BASE" OC_TOKEN="$MACHINE_TOK" OC_ID="$MACHINE" OC_CLAUDE_BIN="$CLAUDE_BIN" \
+    OC_BASE="$BASE" OC_TOKEN="$MACHINE_TOK" OC_ID="$MACHINE" \
+    OC_CLAUDE_BIN="$CLAUDE_BIN" OC_CODEX_BIN="$CODEX_BIN" \
     "$OCWARDEN" run >>"$RUN_DIR/warden.log" 2>&1 &
 WARDEN_PID=$!
 say "warden pid=$WARDEN_PID → $RUN_DIR/warden.log"
 
 ONLINE=""
-for _ in $(seq 1 "${OC_SG_MACHINE_WAIT:-30}"); do
+for _ in $(seq 1 "$OC_SG_MACHINE_WAIT"); do
   sleep 1
   if sg_http GET /api/machines | python3 -c '
 import sys, json
@@ -165,7 +193,7 @@ sg_http POST "/api/members/$AGENT/activate" "{\"machine_id\":\"$MACHINE\"}" >/de
 # ── 5. the spawn. From here on the agent is on its own: nothing below asks it to
 #      do anything, and nothing below does anything on its behalf. ─────────────
 SPAWNED=""
-for _ in $(seq 1 "${OC_SG_SPAWN_WAIT:-120}"); do
+for _ in $(seq 1 "$OC_SG_SPAWN_WAIT"); do
   sleep 1
   if tmux -L "$TMUX_SOCKET" has-session -t "$SESSION" 2>/dev/null; then SPAWNED=1; break; fi
 done
@@ -181,8 +209,8 @@ say "spawned: tmux session $SESSION pane_pid=${PANE_PID:-<unknown>}"
 #      of the seven facts (⑦) is on the server, because continuing to bill for a
 #      finished run is pure waste; otherwise we stop at the deadline and let the
 #      judge report whatever did and did not land. ──────────────────────────────
-DEADLINE=$(( $(date +%s) + ${OC_SG_LIVE_WAIT:-1800} ))
-say "waiting for the agent to walk the path (deadline in ${OC_SG_LIVE_WAIT:-1800}s; this is a stopping condition, not a verdict)"
+DEADLINE=$(( $(date +%s) + $OC_SG_LIVE_WAIT ))
+say "waiting for the agent to walk the path (deadline in $OC_SG_LIVE_WAITs; this is a stopping condition, not a verdict)"
 while [[ "$(date +%s)" -lt "$DEADLINE" ]]; do
   sleep "${OC_SG_LIVE_POLL:-20}"
   MINE="$(sg_http GET /api/tasks | python3 -c '
@@ -224,8 +252,8 @@ while IFS= read -r q; do
 done < <(sg_friction_questions "$SG/friction.md")
 [[ "$QCOUNT" -gt 0 ]] || die "no friction questions were extracted — refusing to record an unasked follow-up."
 
-say "collecting the agent's own answers (up to ${OC_SG_FRICTION_WAIT:-300}s)"
-FR_DEADLINE=$(( $(date +%s) + ${OC_SG_FRICTION_WAIT:-300} ))
+say "collecting the agent's own answers (up to $OC_SG_FRICTION_WAITs)"
+FR_DEADLINE=$(( $(date +%s) + $OC_SG_FRICTION_WAIT ))
 ANSWERS=""
 while [[ "$(date +%s)" -lt "$FR_DEADLINE" ]]; do
   sleep 15
@@ -252,7 +280,7 @@ done
   if [[ -n "$ANSWERS" ]]; then
     printf '%s\n' "$ANSWERS"
   else
-    printf '（沒有收到回答。等了 %ss，agent 在提問後沒有發出任何訊息。這一格空著就是空著——\n載體不會替它回答。）\n' "${OC_SG_FRICTION_WAIT:-300}"
+    printf '（沒有收到回答。等了 %ss，agent 在提問後沒有發出任何訊息。這一格空著就是空著——\n載體不會替它回答。）\n' "$OC_SG_FRICTION_WAIT"
   fi
 } > "$FRICTION_TXT"
 say "friction.txt written → $FRICTION_TXT"
