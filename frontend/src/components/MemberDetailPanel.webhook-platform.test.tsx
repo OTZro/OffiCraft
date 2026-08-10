@@ -75,6 +75,7 @@ vi.mock("../api", () => ({
     getBootstrap: () =>
       Promise.resolve({ role: "assistant", name: "", taskType: "", context: "" }),
     listWebhooks: () => Promise.resolve(store.map((e) => ({ ...e }))),
+    listScheduledMessages: () => Promise.resolve([]),
     createWebhook: (memberId: string, input: WebhookCreateInput) =>
       createWebhook(memberId, input),
     updateWebhook: (memberId: string, endpointId: string, patch: WebhookUpdate) =>

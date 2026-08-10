@@ -23,6 +23,7 @@ import { AvatarEditor } from "./AvatarEditor";
 import { Avatar } from "./Avatar";
 import { avatarKindForMember } from "../lib/avatarKind";
 import { ConfirmModal } from "./ConfirmModal";
+import { ScheduledMessagesCard } from "./ScheduledMessagesCard";
 import { InlineEdit } from "./InlineEdit";
 import { ModelEffortEditor } from "./ModelEffortEditor";
 import { presenceVisual } from "./LifecycleDot";
@@ -1247,7 +1248,10 @@ export function MemberDetailPanel({
     </div>
   );
 
-  const webhookCards = (
+  // The panel's `extraExpandCards` payload: 回呼端點 (webhook) + 定期訊息
+  // (schedule) — the inbound-triggered and the clock-triggered halves of the
+  // same idea, in that order.
+  const extraExpandCards = (
     <>
       {/* expandable: webhook endpoints (M4 回呼端點) */}
       <div className="mp-card mp-expand mp-webhook">
@@ -1733,6 +1737,12 @@ export function MemberDetailPanel({
         </div>
       )}
 
+      {/* expandable: 定期訊息 (T-f059) — the webhook card's clock-driven twin,
+          so it sits right after it in the SAME slot. The shared shell places
+          `extraExpandCards` after the terminal card and before the initial
+          PROMPT, which is where this section belongs. The card is the ONE
+          component the worker panel renders too — no second copy of the JSX. */}
+      <ScheduledMessagesCard memberId={member.id} />
     </>
   );
 
@@ -1741,7 +1751,7 @@ export function MemberDetailPanel({
       onBack={onBack}
       identity={identityCard}
       overlays={overlayCards}
-      extraExpandCards={webhookCards}
+      extraExpandCards={extraExpandCards}
       afterPromptCards={resumeSummaryCard}
       vm={{
         testIdPrefix: "mp",
