@@ -25,6 +25,7 @@ vi.mock("../api", () => ({
     listMachines: () => Promise.resolve([]),
     getBootstrap: () => bootstrap(),
     listWebhooks: () => Promise.resolve([]),
+    listScheduledMessages: () => Promise.resolve([]),
     subscribeEvents: () => () => {},
   },
 }));

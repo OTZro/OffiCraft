@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -379,6 +380,91 @@ func ValidWebhookPlatform(platform string) bool {
 	return platform == WebhookPlatformGeneric ||
 		platform == WebhookPlatformSlack ||
 		platform == WebhookPlatformGithub
+}
+
+// ── scheduled messages (T-f059 定期訊息) ───────────────────────────────────────
+
+// ValidScheduledMessageCadence reports whether cadence is in the closed set.
+func ValidScheduledMessageCadence(cadence string) bool {
+	return cadence == ScheduledMessageCadenceDaily ||
+		cadence == ScheduledMessageCadenceWeekly ||
+		cadence == ScheduledMessageCadenceMonthly
+}
+
+// ValidScheduledMessageStatus reports whether status is in the closed set (the
+// enable/disable toggle domain).
+func ValidScheduledMessageStatus(status string) bool {
+	return status == ScheduledMessageStatusEnabled ||
+		status == ScheduledMessageStatusDisabled
+}
+
+// ValidateScheduledMessageBody rejects a blank body: a schedule that delivers
+// nothing is a schedule whose only observable effect is noise.
+func ValidateScheduledMessageBody(body string) error {
+	if strings.TrimSpace(body) == "" {
+		return errors.New("body cannot be blank")
+	}
+	return nil
+}
+
+// ValidateScheduledMessageSlotFields enforces the wall-clock field ranges. Both
+// day fields are checked REGARDLESS of cadence — the cadence is editable later,
+// so storing an out-of-range day_of_month behind "monthly does not read it
+// today" just defers the fault to the PATCH that flips the cadence.
+//
+// day_of_month is 1-31, NOT 1-28: owner ruling 2026-08-10 (卡 rc-aeef15360ab5)
+// adopted the iCalendar RFC 5545 rule — a month lacking the day drops that
+// occurrence from the recurrence set entirely, neither clamped nor an error. The
+// documented cost (a 31st schedule fires seven times a year and never in
+// February) is accepted knowingly; see docs/design/T-f059-scheduled-message.md.
+func ValidateScheduledMessageSlotFields(hour, minute, dayOfWeek, dayOfMonth int) error {
+	if hour < 0 || hour > 23 {
+		return fmt.Errorf("hour must be between 0 and 23; got %d", hour)
+	}
+	if minute < 0 || minute > 59 {
+		return fmt.Errorf("minute must be between 0 and 59; got %d", minute)
+	}
+	if dayOfWeek < 0 || dayOfWeek > 6 {
+		return fmt.Errorf("day_of_week must be between 0 (Sunday) and 6 (Saturday); got %d", dayOfWeek)
+	}
+	if dayOfMonth < 1 || dayOfMonth > 31 {
+		return fmt.Errorf("day_of_month must be between 1 and 31; got %d", dayOfMonth)
+	}
+	return nil
+}
+
+// ValidateScheduledMessageTimezone rejects any name that does not pin the
+// schedule to a stated place on Earth.
+//
+// 🔴 There is deliberately NO fallback here and none anywhere downstream. A name
+// that will not load must fail the WRITE, loudly, while a human is still
+// looking: substituting UTC (or the host's zone) would leave a schedule that
+// runs perfectly and delivers at the wrong hour, and a message that arrives
+// eight hours early is indistinguishable from a correct one. "Did not send" is
+// discoverable; "sent at the wrong time" is not.
+//
+// 🔴 "Will it load?" is NOT the test, because the two most dangerous names load
+// fine. time.LoadLocation("Local") returns WHATEVER ZONE THE HOST IS IN and
+// time.LoadLocation("") returns UTC — both answer "when does this fire?" with a
+// deployment detail rather than with the owner's intent, which is precisely the
+// ambiguity this feature was built to remove. Moving the server between regions,
+// or editing one machine's /etc/localtime, would then move every schedule on it,
+// on time-looking messages that arrive at the wrong hour. So they are named and
+// refused. `UTC` itself is a real, stated zone and stays legal.
+func ValidateScheduledMessageTimezone(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return errors.New("timezone cannot be blank; it must be a stated IANA timezone name " +
+			"such as 'Asia/Taipei' or 'UTC' — an empty name would resolve to UTC by accident rather than by choice")
+	}
+	if strings.EqualFold(name, "Local") {
+		return errors.New("timezone 'Local' means the zone the SERVER happens to be in, " +
+			"which would move every schedule when the server moves; state the schedule's own " +
+			"IANA timezone name (e.g. 'Asia/Taipei', or 'UTC' if that is genuinely what is meant)")
+	}
+	if _, err := time.LoadLocation(name); err != nil {
+		return fmt.Errorf("timezone '%s' is not a known IANA timezone name", name)
+	}
+	return nil
 }
 
 // ── chat: attachment refs (the only message→blob linkage) ────────────────────

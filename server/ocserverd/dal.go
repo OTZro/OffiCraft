@@ -1976,6 +1976,202 @@ func (d *DAL) ListWebhookRequestLogs(token string) ([]WebhookRequestLog, error) 
 	return out, rows.Err()
 }
 
+// ── scheduled messages (T-f059 定期訊息) ───────────────────────────────────────
+
+// ScheduledMessageStatus closed set — the revocation toggle, mirroring the
+// webhook one (migrations/00050). `disabled` suspends firing and is reversible;
+// DELETE is the permanent removal.
+const (
+	ScheduledMessageStatusEnabled  = "enabled"
+	ScheduledMessageStatusDisabled = "disabled"
+)
+
+// ScheduledMessageCadence closed set — which day field the slot computation
+// reads: weekly reads DayOfWeek, monthly reads DayOfMonth, daily reads neither.
+const (
+	ScheduledMessageCadenceDaily   = "daily"
+	ScheduledMessageCadenceWeekly  = "weekly"
+	ScheduledMessageCadenceMonthly = "monthly"
+)
+
+// ScheduledMessage mirrors the scheduled_message table: one recurring
+// wall-clock slot bound to a member, delivered down the ordinary chat path.
+// The clock-driven twin of WebhookEndpoint.
+//
+// 🔴 LastFiredSlot holds the IDENTIFIER of the slot already delivered
+// (slotKey, e.g. `2026-08-10T09:00+08:00`), NOT a clock reading. The tick
+// recomputes the most recently elapsed slot and fires only when the strings
+// differ — see migrations/00050 for why that, and not a "last run at"
+// timestamp, is what makes restart-does-not-resend true by construction.
+// LastFiredTS is the human-facing companion and takes NO part in the decision.
+type ScheduledMessage struct {
+	ID       string
+	MemberID string
+	Label    string
+	Body     string
+	Cadence  string
+	// DayOfWeek is 0=Sunday..6=Saturday (weekly only); DayOfMonth is 1-31
+	// (monthly only) and a month lacking the day is skipped, never clamped.
+	DayOfWeek  int
+	DayOfMonth int
+	Hour       int
+	Minute     int
+	// Timezone is an IANA name. The wall clock is ALWAYS read in this zone —
+	// there is deliberately no host-local fallback anywhere in this feature.
+	Timezone      string
+	Status        string
+	LastFiredSlot string
+	LastFiredTS   float64
+	CreatedTS     float64
+}
+
+const scheduledMessageColumns = `id, member_id, label, body, cadence, day_of_week, day_of_month, hour, minute, timezone, status, last_fired_slot, last_fired_ts, created_ts`
+
+func scanScheduledMessage(row interface{ Scan(...any) error }) (ScheduledMessage, error) {
+	var m ScheduledMessage
+	err := row.Scan(&m.ID, &m.MemberID, &m.Label, &m.Body, &m.Cadence,
+		&m.DayOfWeek, &m.DayOfMonth, &m.Hour, &m.Minute, &m.Timezone,
+		&m.Status, &m.LastFiredSlot, &m.LastFiredTS, &m.CreatedTS)
+	return m, err
+}
+
+// GetScheduledMessage returns one schedule by id, or nil when absent.
+func (d *DAL) GetScheduledMessage(id string) (*ScheduledMessage, error) {
+	row := d.rdb.QueryRow(
+		`SELECT `+scheduledMessageColumns+` FROM scheduled_message WHERE id = ?`, id)
+	m, err := scanScheduledMessage(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// ListScheduledMessagesByMember returns a member's schedules, oldest→newest.
+func (d *DAL) ListScheduledMessagesByMember(memberID string) ([]ScheduledMessage, error) {
+	rows, err := d.rdb.Query(
+		`SELECT `+scheduledMessageColumns+` FROM scheduled_message
+		 WHERE member_id = ? ORDER BY created_ts, id`, memberID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ScheduledMessage
+	for rows.Next() {
+		m, err := scanScheduledMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// ListAllEnabledScheduledMessages returns every armed schedule across all
+// members — the cadence tick's whole working set. Disabled rows are filtered in
+// SQL: a suspended schedule must not even be considered, so the tick cannot
+// accidentally advance its cursor.
+func (d *DAL) ListAllEnabledScheduledMessages() ([]ScheduledMessage, error) {
+	rows, err := d.rdb.Query(
+		`SELECT `+scheduledMessageColumns+` FROM scheduled_message
+		 WHERE status = ? ORDER BY created_ts, id`, ScheduledMessageStatusEnabled)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ScheduledMessage
+	for rows.Next() {
+		m, err := scanScheduledMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// PutScheduledMessage upserts a schedule row (keyed on the id PK). Create
+// passes a fresh id; an edit re-puts the SAME id.
+func (d *DAL) PutScheduledMessage(m ScheduledMessage) error {
+	_, err := d.wdb.Exec(`
+		INSERT INTO scheduled_message (`+scheduledMessageColumns+`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO UPDATE SET
+			member_id = excluded.member_id, label = excluded.label,
+			body = excluded.body, cadence = excluded.cadence,
+			day_of_week = excluded.day_of_week, day_of_month = excluded.day_of_month,
+			hour = excluded.hour, minute = excluded.minute,
+			timezone = excluded.timezone, status = excluded.status,
+			last_fired_slot = excluded.last_fired_slot,
+			last_fired_ts = excluded.last_fired_ts,
+			created_ts = excluded.created_ts`,
+		m.ID, m.MemberID, m.Label, m.Body, m.Cadence, m.DayOfWeek, m.DayOfMonth,
+		m.Hour, m.Minute, m.Timezone, m.Status, m.LastFiredSlot, m.LastFiredTS,
+		m.CreatedTS)
+	return err
+}
+
+// UpdateScheduledMessageSettings writes the OWNER-EDITABLE columns of an
+// existing schedule and DELIBERATELY LEAVES last_fired_slot / last_fired_ts
+// ALONE — they are not in the SET list at all, which is not the same thing as
+// writing them back unchanged.
+//
+// 🔴 This is the mirror of the warning on MarkScheduledMessageFired, for the
+// other side of the same race. An edit is a read-modify-write: the handler reads
+// the row, applies the patch, and persists. If the tick delivers a slot in
+// between, a whole-row re-put would carry the cursor the handler read BEFORE the
+// delivery and roll it back — and the next tick would then send that slot again.
+// A duplicate delivery is indistinguishable, in the chat log, from a correct
+// one, so nothing would ever say so. Not naming the columns means a concurrent
+// advance survives the edit; the edit and the cursor never contend.
+//
+// Re-aiming is the one case that MUST move the cursor, and it says so out loud
+// through AimScheduledMessageCursor.
+func (d *DAL) UpdateScheduledMessageSettings(m ScheduledMessage) error {
+	_, err := d.wdb.Exec(`
+		UPDATE scheduled_message SET
+			label = ?, body = ?, cadence = ?, day_of_week = ?, day_of_month = ?,
+			hour = ?, minute = ?, timezone = ?, status = ?
+		WHERE id = ?`,
+		m.Label, m.Body, m.Cadence, m.DayOfWeek, m.DayOfMonth,
+		m.Hour, m.Minute, m.Timezone, m.Status, m.ID)
+	return err
+}
+
+// AimScheduledMessageCursor points the delivery cursor at slot — what an edit
+// that MOVED the schedule does so it never fires the slot it crossed.
+//
+// last_fired_ts is untouched on purpose: it records when a delivery actually
+// happened, and re-aiming is not a delivery. (Writing back the value the handler
+// read would be the same rollback UpdateScheduledMessageSettings exists to
+// avoid.)
+func (d *DAL) AimScheduledMessageCursor(id, slot string) error {
+	_, err := d.wdb.Exec(
+		`UPDATE scheduled_message SET last_fired_slot = ? WHERE id = ?`, slot, id)
+	return err
+}
+
+// MarkScheduledMessageFired advances ONLY the delivery cursor (and its
+// human-facing timestamp) after a slot really went out. Deliberately not a
+// PutScheduledMessage of a struct read earlier in the tick: the tick's copy is
+// a snapshot, and re-putting it would silently roll back any edit the owner
+// made to the schedule while the tick was running.
+func (d *DAL) MarkScheduledMessageFired(id, slot string, ts float64) error {
+	_, err := d.wdb.Exec(
+		`UPDATE scheduled_message SET last_fired_slot = ?, last_fired_ts = ?
+		 WHERE id = ?`, slot, ts, id)
+	return err
+}
+
+// DeleteScheduledMessage permanently removes a schedule (idempotent) — the
+// operation `status = disabled` deliberately is NOT.
+func (d *DAL) DeleteScheduledMessage(id string) error {
+	_, err := d.wdb.Exec(`DELETE FROM scheduled_message WHERE id = ?`, id)
+	return err
+}
+
 // ── settings ─────────────────────────────────────────────────────────────────
 
 // GetSetting returns one settings value by key, or nil when the key was never

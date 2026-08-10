@@ -46,6 +46,11 @@ export type WireWebhookEndpoint = components["schemas"]["WebhookEndpointDTO"];
 export type WireWebhookRequestLog =
   components["schemas"]["WebhookRequestLogDTO"];
 
+/** Mirrors `ScheduledMessageDTO` (T-f059 定期訊息): one recurring message bound
+ * to a member — the clock-driven twin of a webhook endpoint. `last_fired_slot`
+ * is the IDENTIFIER of the slot already delivered, not a "last run at" clock. */
+export type WireScheduledMessage = components["schemas"]["ScheduledMessageDTO"];
+
 /** Mirrors `service/dto.py :: ChatGalleryEntryDTO`. ONE flattened gallery row:
  * an attachment plus its message's sender identity (`from` id + roster-resolved
  * `from_name`) and send time (`GET /api/chat/attachments?with=<member_id>`). */

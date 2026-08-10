@@ -827,6 +827,66 @@ export const en: Dict = {
       requestBodyEmpty: "(empty)",
       requestTruncated: "truncated",
     },
+    // ── scheduled messages (T-f059 — the webhook's twin, triggered by the
+    // clock instead of an inbound call) ──
+    schedmsg: {
+      title: "SCHEDULED MESSAGES",
+      enabled: "Enabled",
+      disabled: "Disabled",
+      add: "Add scheduled message",
+      empty: "No scheduled messages yet",
+      loadError: "Failed to load scheduled messages",
+      createError:
+        "Failed to create the scheduled message (check the text, the time and the timezone)",
+      updateError:
+        "Failed to save the changes (check the text, the time and the timezone). Nothing has been changed.",
+      unlabeled: "(unnamed)",
+      create: "Create",
+      save: "Save",
+      cancel: "Cancel",
+      editLabel: "Edit",
+      deleteLabel: "Delete",
+      deleteConfirm:
+        "Delete this scheduled message? It will never be sent again and this cannot be undone.",
+      labelLabel: "Name",
+      labelPlaceholder: "A human-facing name, e.g. “Daily check” (optional)",
+      bodyLabel: "Message",
+      bodyPlaceholder:
+        "The message to send when the time comes — delivered to this member verbatim",
+      // The row shows the first few lines and offers these. Both words describe
+      // what the ROW is showing — the stored message is untouched either way.
+      bodyExpand: "Show the whole message",
+      bodyCollapse: "Show less",
+      cadenceLabel: "Repeats",
+      cadenceDaily: "Daily",
+      cadenceWeekly: "Weekly",
+      cadenceMonthly: "Monthly",
+      // Row-summary phrases: the word order differs per language, so these are
+      // interpolated rather than glued together from fragments in the component.
+      weeklyOn: (weekday: string) => `Every ${weekday}`,
+      monthlyOn: (day: number) => `Day ${day} of every month`,
+      dayOfWeekLabel: "Day of week",
+      weekdaySun: "Sunday",
+      weekdayMon: "Monday",
+      weekdayTue: "Tuesday",
+      weekdayWed: "Wednesday",
+      weekdayThu: "Thursday",
+      weekdayFri: "Friday",
+      weekdaySat: "Saturday",
+      dayOfMonthLabel: "Day of month",
+      // 🔴 Owner ruling 2026-08-10 (card rc-aeef15360ab5): the range stays
+      // 1-31, and the price is that a month without that day is skipped whole.
+      // This line puts that price in front of whoever is choosing, instead of
+      // leaving them to infer it from "why has February been silent".
+      dayOfMonthSkipHint:
+        "A month that doesn't have this day is skipped entirely — it is not moved to the month's end. Pick 31 and February never fires.",
+      hourLabel: "Hour",
+      minuteLabel: "Minute",
+      timezoneLabel: "Timezone",
+      timezonePlaceholder: "IANA timezone name, e.g. Asia/Taipei",
+      lastFiredLabel: "Last sent",
+      lastFiredNever: "Not sent yet",
+    },
     // ── RESUME SUMMARY (T-8b0d — the same wake snapshot resume_summary
     // returns, here for the owner to view) ──
     resumeSummary: {

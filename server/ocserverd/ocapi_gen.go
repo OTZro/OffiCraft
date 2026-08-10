@@ -53,6 +53,105 @@ func (e MonitoringSessionDTORuntime) Valid() bool {
 	}
 }
 
+// Defines values for ScheduledMessageCreateDTOCadence.
+const (
+	ScheduledMessageCreateDTOCadenceDaily   ScheduledMessageCreateDTOCadence = "daily"
+	ScheduledMessageCreateDTOCadenceMonthly ScheduledMessageCreateDTOCadence = "monthly"
+	ScheduledMessageCreateDTOCadenceWeekly  ScheduledMessageCreateDTOCadence = "weekly"
+)
+
+// Valid indicates whether the value is a known member of the ScheduledMessageCreateDTOCadence enum.
+func (e ScheduledMessageCreateDTOCadence) Valid() bool {
+	switch e {
+	case ScheduledMessageCreateDTOCadenceDaily:
+		return true
+	case ScheduledMessageCreateDTOCadenceMonthly:
+		return true
+	case ScheduledMessageCreateDTOCadenceWeekly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScheduledMessageDTOCadence.
+const (
+	ScheduledMessageDTOCadenceDaily   ScheduledMessageDTOCadence = "daily"
+	ScheduledMessageDTOCadenceMonthly ScheduledMessageDTOCadence = "monthly"
+	ScheduledMessageDTOCadenceWeekly  ScheduledMessageDTOCadence = "weekly"
+)
+
+// Valid indicates whether the value is a known member of the ScheduledMessageDTOCadence enum.
+func (e ScheduledMessageDTOCadence) Valid() bool {
+	switch e {
+	case ScheduledMessageDTOCadenceDaily:
+		return true
+	case ScheduledMessageDTOCadenceMonthly:
+		return true
+	case ScheduledMessageDTOCadenceWeekly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScheduledMessageDTOStatus.
+const (
+	ScheduledMessageDTOStatusDisabled ScheduledMessageDTOStatus = "disabled"
+	ScheduledMessageDTOStatusEnabled  ScheduledMessageDTOStatus = "enabled"
+)
+
+// Valid indicates whether the value is a known member of the ScheduledMessageDTOStatus enum.
+func (e ScheduledMessageDTOStatus) Valid() bool {
+	switch e {
+	case ScheduledMessageDTOStatusDisabled:
+		return true
+	case ScheduledMessageDTOStatusEnabled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScheduledMessageUpdateDTOCadence.
+const (
+	Daily   ScheduledMessageUpdateDTOCadence = "daily"
+	Monthly ScheduledMessageUpdateDTOCadence = "monthly"
+	Weekly  ScheduledMessageUpdateDTOCadence = "weekly"
+)
+
+// Valid indicates whether the value is a known member of the ScheduledMessageUpdateDTOCadence enum.
+func (e ScheduledMessageUpdateDTOCadence) Valid() bool {
+	switch e {
+	case Daily:
+		return true
+	case Monthly:
+		return true
+	case Weekly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScheduledMessageUpdateDTOStatus.
+const (
+	ScheduledMessageUpdateDTOStatusDisabled ScheduledMessageUpdateDTOStatus = "disabled"
+	ScheduledMessageUpdateDTOStatusEnabled  ScheduledMessageUpdateDTOStatus = "enabled"
+)
+
+// Valid indicates whether the value is a known member of the ScheduledMessageUpdateDTOStatus enum.
+func (e ScheduledMessageUpdateDTOStatus) Valid() bool {
+	switch e {
+	case ScheduledMessageUpdateDTOStatusDisabled:
+		return true
+	case ScheduledMessageUpdateDTOStatusEnabled:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WebhookCreateDTOPlatform.
 const (
 	WebhookCreateDTOPlatformGeneric WebhookCreateDTOPlatform = "generic"
@@ -1789,6 +1888,123 @@ type RuntimeCapabilityDTO struct {
 	Version   *string `json:"version,omitempty"`
 }
 
+// ScheduledMessageCreateDTO Create one scheduled message on a member (T-f059 定期訊息). `body`, `cadence`, `hour`, `minute` and `timezone` are REQUIRED; `label`, `day_of_week` and `day_of_month` are optional and each states its own omitted-value behaviour. The wall-clock time and its zone are required rather than defaulted on purpose: a schedule with no time of day is meaningless, and a defaulted timezone would sooner or later be read as "wherever the server happens to run". `cadence` selects which day field applies — `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither — while `hour`/`minute`/`timezone` fix the wall-clock slot. The delivery cursor is initialised to the slot most recently elapsed at creation time, so a schedule created at 10:00 for `daily` 09:00 does not fire today. The recipient may be an assistant OR an `ow-` outsource worker — the same recipient rule ordinary chat uses.
+type ScheduledMessageCreateDTO struct {
+	// Body The message text delivered to the member when a slot comes due. It is sent verbatim, as an ordinary chat message.
+	Body string `json:"body"`
+
+	// Cadence How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither.
+	Cadence ScheduledMessageCreateDTOCadence `json:"cadence"`
+
+	// DayOfMonth Day of month for `monthly` cadence, 1-31. A month that does not contain the day is skipped entirely rather than clamped — the iCalendar RFC 5545 rule for invalid recurrence dates — so a schedule on day 31 fires seven times a year and never in February. Owner decision 2026-08-10, card rc-aeef15360ab5: match the common standard rather than cap the range. Omitted or null means 1. Ignored by `daily` and `weekly`.
+	DayOfMonth *int `json:"day_of_month,omitempty"`
+
+	// DayOfWeek Day of week for `weekly` cadence: 0=Sunday through 6=Saturday. Omitted or null means 0 (Sunday). Ignored by `daily` and `monthly`.
+	DayOfWeek *int `json:"day_of_week,omitempty"`
+
+	// Hour Hour of the wall-clock slot, 0-23, read in `timezone`.
+	Hour int `json:"hour"`
+
+	// Label Human-facing name for this schedule. Also rides the delivered message's `meta.scheduled.label`, so the receiving agent can tell which of its schedules just spoke. Omitted or null means no label.
+	Label *string `json:"label,omitempty"`
+
+	// Minute Minute of the wall-clock slot, 0-59, read in `timezone`.
+	Minute int `json:"minute"`
+
+	// Timezone IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`). Must name a place: `Local` and the empty string are REFUSED with 422 even though they resolve, because they mean `wherever this server runs` and `UTC by accident` rather than a stated zone. `UTC` itself is accepted. The two ways a wall-clock reading can be absent are treated differently. A DATE that is not there — a 31st in a month that has none, or a calendar day the zone deleted outright at a date-line move — is an occurrence that does not happen, per RFC 5545's treatment of an invalid recurrence date. A TIME the date does not have, because the zone skipped it springing forward, still happens: it moves forward to the next reading the zone does have — a 02:30 slot fires at 03:00, and where the skipped stretch runs to midnight the slot lands at the start of the following date — while the next occurrence returns to the stated time, so the shift never accumulates. That forward search is bounded by the following date: if the zone deleted that date outright too, the occurrence is skipped like an absent date rather than searched for any further.
+	Timezone string `json:"timezone"`
+}
+
+// ScheduledMessageCreateDTOCadence How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither.
+type ScheduledMessageCreateDTOCadence string
+
+// ScheduledMessageDTO API representation of one scheduled_message (T-f059 定期訊息). The clock-driven twin of a webhook endpoint: identical shape, but the trigger is a recurring wall-clock slot instead of an inbound call. When a slot comes due the server delivers `body` to the bound member down the ORDINARY chat path — live if the member is online, the durable mailbox otherwise — from the synthetic sender `sched:<id>`, carrying `meta.scheduled = {schedule_id, label, slot}` so the receiving agent can tell what spoke to it. No new delivery semantics are invented here. `status` is the enable/disable toggle, not a lifecycle: DELETE is the permanent removal. `last_fired_slot` is the IDENTIFIER of the slot already delivered (e.g. `2026-08-10T09:00+08:00`), not a "last run at" clock — storing the slot is what carries restart-does-not-resend, missed-slots-are-not-backfilled and a-new-schedule-does-not-fire-immediately. Those three rest on the slot computation being monotonic in the current time, which the storage shape does not by itself guarantee, so the fire test is an ORDERING one (strictly later than the cursor, never merely different from it) and the cursor only ever moves forwards.
+type ScheduledMessageDTO struct {
+	// Body The message text delivered to the member when a slot comes due. It is sent verbatim, as an ordinary chat message.
+	Body string `json:"body"`
+
+	// Cadence How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither.
+	Cadence ScheduledMessageDTOCadence `json:"cadence"`
+
+	// CreatedTs Epoch seconds the schedule was created.
+	CreatedTs float64 `json:"created_ts"`
+
+	// DayOfMonth Day of month for `monthly` cadence, 1-31. A month that does not contain the day is skipped entirely rather than clamped — the iCalendar RFC 5545 rule for invalid recurrence dates — so a schedule on day 31 fires seven times a year and never in February. Owner decision 2026-08-10, card rc-aeef15360ab5: match the common standard rather than cap the range.
+	DayOfMonth int `json:"day_of_month"`
+
+	// DayOfWeek Day of week for `weekly` cadence: 0=Sunday through 6=Saturday.
+	DayOfWeek int `json:"day_of_week"`
+
+	// Hour Hour of the wall-clock slot, 0-23, read in `timezone`.
+	Hour int `json:"hour"`
+
+	// Id Opaque schedule id — `sch-` followed by 12 hex digits.
+	Id string `json:"id"`
+
+	// Label Human-facing name for this schedule. Also rides the delivered message's `meta.scheduled.label`, so the receiving agent can tell which of its schedules just spoke.
+	Label string `json:"label"`
+
+	// LastFiredSlot Identifier of the time slot already delivered, e.g. `2026-08-10T09:00+08:00`. Each tick recomputes the most recently elapsed slot and fires only when that slot is STRICTLY LATER than the one named here, so the cursor never moves backwards and a slot is never delivered twice. Set at creation to the slot current at that moment, so it is never empty for a live schedule.
+	LastFiredSlot string `json:"last_fired_slot"`
+
+	// LastFiredTs Epoch seconds of the last ACTUAL delivery — human-facing only, it takes no part in the fire/skip decision (`last_fired_slot` does). 0.0 when the schedule has never delivered.
+	LastFiredTs float64 `json:"last_fired_ts"`
+
+	// MemberId The recipient. May be an assistant OR an `ow-` outsource worker — the same recipient rule ordinary chat uses. A schedule bound to an outsource worker dies with that worker, which is a property of the outsource role rather than of this feature.
+	MemberId string `json:"member_id"`
+
+	// Minute Minute of the wall-clock slot, 0-59, read in `timezone`.
+	Minute int `json:"minute"`
+
+	// Status The enabled/disabled toggle. `disabled` suspends firing and is reversible — it is NOT a lifecycle state; DELETE is the permanent removal.
+	Status ScheduledMessageDTOStatus `json:"status"`
+
+	// Timezone IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`). Must name a place: `Local` and the empty string are REFUSED with 422 even though they resolve, because they mean `wherever this server runs` and `UTC by accident` rather than a stated zone. `UTC` itself is accepted. The two ways a wall-clock reading can be absent are treated differently. A DATE that is not there — a 31st in a month that has none, or a calendar day the zone deleted outright at a date-line move — is an occurrence that does not happen, per RFC 5545's treatment of an invalid recurrence date. A TIME the date does not have, because the zone skipped it springing forward, still happens: it moves forward to the next reading the zone does have — a 02:30 slot fires at 03:00, and where the skipped stretch runs to midnight the slot lands at the start of the following date — while the next occurrence returns to the stated time, so the shift never accumulates. That forward search is bounded by the following date: if the zone deleted that date outright too, the occurrence is skipped like an absent date rather than searched for any further.
+	Timezone string `json:"timezone"`
+}
+
+// ScheduledMessageDTOCadence How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither.
+type ScheduledMessageDTOCadence string
+
+// ScheduledMessageDTOStatus The enabled/disabled toggle. `disabled` suspends firing and is reversible — it is NOT a lifecycle state; DELETE is the permanent removal.
+type ScheduledMessageDTOStatus string
+
+// ScheduledMessageUpdateDTO Partial edit of a scheduled message (T-f059 定期訊息). PATCH semantics — EVERY field is optional and only the supplied ones change. `status` flips the enabled/disabled toggle, which is what enable/disable means here (DELETE is the permanent removal; a value outside the set is a 422). Editing a cadence or slot field to a DIFFERENT value re-aims the schedule and moves the delivery cursor to the slot most recently elapsed, so an edit never fires the slot it crosses; supplying a field that already holds that value changes nothing, cursor included, so a caller that sends the whole form back on every save does not quietly swallow a delivery. `id` and `member_id` are immutable and are NOT editable here.
+type ScheduledMessageUpdateDTO struct {
+	// Body The message text delivered to the member when a slot comes due. It is sent verbatim, as an ordinary chat message.
+	Body *string `json:"body,omitempty"`
+
+	// Cadence How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither.
+	Cadence *ScheduledMessageUpdateDTOCadence `json:"cadence,omitempty"`
+
+	// DayOfMonth Day of month for `monthly` cadence, 1-31. A month that does not contain the day is skipped entirely rather than clamped — the iCalendar RFC 5545 rule for invalid recurrence dates — so a schedule on day 31 fires seven times a year and never in February. Owner decision 2026-08-10, card rc-aeef15360ab5: match the common standard rather than cap the range.
+	DayOfMonth *int `json:"day_of_month,omitempty"`
+
+	// DayOfWeek Day of week for `weekly` cadence: 0=Sunday through 6=Saturday.
+	DayOfWeek *int `json:"day_of_week,omitempty"`
+
+	// Hour Hour of the wall-clock slot, 0-23, read in `timezone`.
+	Hour *int `json:"hour,omitempty"`
+
+	// Label Human-facing name for this schedule. Also rides the delivered message's `meta.scheduled.label`, so the receiving agent can tell which of its schedules just spoke.
+	Label *string `json:"label,omitempty"`
+
+	// Minute Minute of the wall-clock slot, 0-59, read in `timezone`.
+	Minute *int `json:"minute,omitempty"`
+
+	// Status The enabled/disabled toggle. `disabled` suspends firing and is reversible — it is NOT a lifecycle state; DELETE is the permanent removal.
+	Status *ScheduledMessageUpdateDTOStatus `json:"status,omitempty"`
+
+	// Timezone IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`). Must name a place: `Local` and the empty string are REFUSED with 422 even though they resolve, because they mean `wherever this server runs` and `UTC by accident` rather than a stated zone. `UTC` itself is accepted. The two ways a wall-clock reading can be absent are treated differently. A DATE that is not there — a 31st in a month that has none, or a calendar day the zone deleted outright at a date-line move — is an occurrence that does not happen, per RFC 5545's treatment of an invalid recurrence date. A TIME the date does not have, because the zone skipped it springing forward, still happens: it moves forward to the next reading the zone does have — a 02:30 slot fires at 03:00, and where the skipped stretch runs to midnight the slot lands at the start of the following date — while the next occurrence returns to the stated time, so the shift never accumulates. That forward search is bounded by the following date: if the zone deleted that date outright too, the occurrence is skipped like an absent date rather than searched for any further.
+	Timezone *string `json:"timezone,omitempty"`
+}
+
+// ScheduledMessageUpdateDTOCadence How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither.
+type ScheduledMessageUpdateDTOCadence string
+
+// ScheduledMessageUpdateDTOStatus The enabled/disabled toggle. `disabled` suspends firing and is reversible — it is NOT a lifecycle state; DELETE is the permanent removal.
+type ScheduledMessageUpdateDTOStatus string
+
 // SetPasswordDTO First-run owner-password claim (`POST /api/auth/set-password`, PUBLIC).
 // `claim_token` is the one-shot token the server mints at first boot and prints
 // ONLY to its local serve log / installer banner — possessing it proves shell
@@ -2679,6 +2895,12 @@ type HandleActivateMemberApiMembersMemberIdActivatePostJSONRequestBody = MemberA
 // HandleRelocateMemberApiMembersMemberIdRelocatePostJSONRequestBody defines body for HandleRelocateMemberApiMembersMemberIdRelocatePost for application/json ContentType.
 type HandleRelocateMemberApiMembersMemberIdRelocatePostJSONRequestBody = MemberRelocateDTO
 
+// HandleCreateScheduledMessageApiMembersMemberIdScheduledMessagesPostJSONRequestBody defines body for HandleCreateScheduledMessageApiMembersMemberIdScheduledMessagesPost for application/json ContentType.
+type HandleCreateScheduledMessageApiMembersMemberIdScheduledMessagesPostJSONRequestBody = ScheduledMessageCreateDTO
+
+// HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessagesScheduleIdPatchJSONRequestBody defines body for HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessagesScheduleIdPatch for application/json ContentType.
+type HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessagesScheduleIdPatchJSONRequestBody = ScheduledMessageUpdateDTO
+
 // HandleCreateWebhookApiMembersMemberIdWebhooksPostJSONRequestBody defines body for HandleCreateWebhookApiMembersMemberIdWebhooksPost for application/json ContentType.
 type HandleCreateWebhookApiMembersMemberIdWebhooksPostJSONRequestBody = WebhookCreateDTO
 
@@ -3025,6 +3247,18 @@ type ServerInterface interface {
 	// Bounded LIGHT wake snapshot for a TARGET member (admin_agent+; same shape as resume_summary).
 	// (GET /api/members/{member_id}/resume-summary)
 	HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryGet(w http.ResponseWriter, r *http.Request, memberId string)
+	// List one member's scheduled messages.
+	// (GET /api/members/{member_id}/scheduled-messages)
+	HandleListScheduledMessagesApiMembersMemberIdScheduledMessagesGet(w http.ResponseWriter, r *http.Request, memberId string)
+	// Create a scheduled message on one member.
+	// (POST /api/members/{member_id}/scheduled-messages)
+	HandleCreateScheduledMessageApiMembersMemberIdScheduledMessagesPost(w http.ResponseWriter, r *http.Request, memberId string)
+	// Delete one scheduled message.
+	// (DELETE /api/members/{member_id}/scheduled-messages/{schedule_id})
+	HandleDeleteScheduledMessageApiMembersMemberIdScheduledMessagesScheduleIdDelete(w http.ResponseWriter, r *http.Request, memberId string, scheduleId string)
+	// Update one scheduled message (including enable/disable).
+	// (PATCH /api/members/{member_id}/scheduled-messages/{schedule_id})
+	HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessagesScheduleIdPatch(w http.ResponseWriter, r *http.Request, memberId string, scheduleId string)
 	// List a member's webhook endpoints (WebhookEndpointDTO[]).
 	// (GET /api/members/{member_id}/webhooks)
 	HandleListWebhooksApiMembersMemberIdWebhooksGet(w http.ResponseWriter, r *http.Request, memberId string)
@@ -4770,6 +5004,128 @@ func (siw *ServerInterfaceWrapper) HandleGetMemberResumeSummaryApiMembersMemberI
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryGet(w, r, memberId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleListScheduledMessagesApiMembersMemberIdScheduledMessagesGet operation middleware
+func (siw *ServerInterfaceWrapper) HandleListScheduledMessagesApiMembersMemberIdScheduledMessagesGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "member_id" -------------
+	var memberId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "member_id", r.PathValue("member_id"), &memberId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "member_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleListScheduledMessagesApiMembersMemberIdScheduledMessagesGet(w, r, memberId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleCreateScheduledMessageApiMembersMemberIdScheduledMessagesPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleCreateScheduledMessageApiMembersMemberIdScheduledMessagesPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "member_id" -------------
+	var memberId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "member_id", r.PathValue("member_id"), &memberId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "member_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleCreateScheduledMessageApiMembersMemberIdScheduledMessagesPost(w, r, memberId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleDeleteScheduledMessageApiMembersMemberIdScheduledMessagesScheduleIdDelete operation middleware
+func (siw *ServerInterfaceWrapper) HandleDeleteScheduledMessageApiMembersMemberIdScheduledMessagesScheduleIdDelete(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "member_id" -------------
+	var memberId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "member_id", r.PathValue("member_id"), &memberId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "member_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "schedule_id" -------------
+	var scheduleId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "schedule_id", r.PathValue("schedule_id"), &scheduleId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "schedule_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleDeleteScheduledMessageApiMembersMemberIdScheduledMessagesScheduleIdDelete(w, r, memberId, scheduleId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessagesScheduleIdPatch operation middleware
+func (siw *ServerInterfaceWrapper) HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessagesScheduleIdPatch(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "member_id" -------------
+	var memberId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "member_id", r.PathValue("member_id"), &memberId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "member_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "schedule_id" -------------
+	var scheduleId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "schedule_id", r.PathValue("schedule_id"), &scheduleId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "schedule_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessagesScheduleIdPatch(w, r, memberId, scheduleId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -6765,6 +7121,10 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/members/{member_id}/refocus", wrapper.HandleRefocusMemberApiMembersMemberIdRefocusPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/members/{member_id}/relocate", wrapper.HandleRelocateMemberApiMembersMemberIdRelocatePost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/members/{member_id}/resume-summary", wrapper.HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/members/{member_id}/scheduled-messages", wrapper.HandleListScheduledMessagesApiMembersMemberIdScheduledMessagesGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/members/{member_id}/scheduled-messages", wrapper.HandleCreateScheduledMessageApiMembersMemberIdScheduledMessagesPost)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/members/{member_id}/scheduled-messages/{schedule_id}", wrapper.HandleDeleteScheduledMessageApiMembersMemberIdScheduledMessagesScheduleIdDelete)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/members/{member_id}/scheduled-messages/{schedule_id}", wrapper.HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessagesScheduleIdPatch)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/members/{member_id}/webhooks", wrapper.HandleListWebhooksApiMembersMemberIdWebhooksGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/members/{member_id}/webhooks", wrapper.HandleCreateWebhookApiMembersMemberIdWebhooksPost)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/members/{member_id}/webhooks/{endpoint_id}", wrapper.HandleDeleteWebhookApiMembersMemberIdWebhooksEndpointIdDelete)
