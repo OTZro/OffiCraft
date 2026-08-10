@@ -876,6 +876,8 @@ export const en: Dict = {
       minuteLabel: "Minute",
       timezoneLabel: "Timezone",
       timezonePlaceholder: "IANA timezone name, e.g. Asia/Taipei",
+      lastFiredLabel: "Last sent",
+      lastFiredNever: "Not sent yet",
     },
     // ── RESUME SUMMARY (T-8b0d — the same wake snapshot resume_summary
     // returns, here for the owner to view) ──

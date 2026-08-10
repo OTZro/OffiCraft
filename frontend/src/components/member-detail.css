@@ -1437,6 +1437,20 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* last-sent line: the delivery cursor the list endpoint carries. Secondary to
+   the label and the body — it reports history, it does not compete with what
+   the schedule IS. */
+.mp-schedmsg__lastfired {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+.mp-schedmsg__lastfiredvalue {
+  font-family: "SFMono-Regular", ui-monospace, Menlo, monospace;
+}
 .mp-schedmsg__add {
   display: flex;
   align-items: center;

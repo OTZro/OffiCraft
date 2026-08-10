@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useI18n } from "../i18n";
 import { useScheduledMessages } from "../hooks/useScheduledMessages";
+import { formatAbsolute } from "../lib/dateFormat";
 import type { ScheduleCadence, ScheduledMessage } from "../api/adapter";
 import { ConfirmModal } from "./ConfirmModal";
 import { ChevronDownIcon, ChevronRightIcon, ClockIcon, TrashIcon } from "./icons";
@@ -162,6 +163,10 @@ export function ScheduledMessagesCard({ memberId }: ScheduledMessagesCardProps) 
   const showSkipHint =
     newCadence === "monthly" && SPARSE_DAYS.has(newDayOfMonth);
 
+  // Only decides whether formatAbsolute prefixes the year, so a render-time
+  // read is enough (the TaskArtifactsPopover pattern) — no ticking counter.
+  const nowTs = Date.now() / 1000;
+
   return (
     <>
       <div className="mp-card mp-expand mp-schedmsg">
@@ -248,6 +253,19 @@ export function ScheduledMessagesCard({ memberId }: ScheduledMessagesCardProps) 
                         <span className="mp-schedmsg__tz">{m.timezone}</span>
                       </div>
                       <div className="mp-schedmsg__text">{m.body}</div>
+                      <div
+                        className="mp-schedmsg__lastfired"
+                        data-testid={`mp-schedmsg-lastfired-${m.id}`}
+                      >
+                        <span className="mp-schedmsg__lastfiredlabel">
+                          {s.lastFiredLabel}
+                        </span>
+                        <span className="mp-schedmsg__lastfiredvalue">
+                          {m.lastFiredTs > 0
+                            ? formatAbsolute(m.lastFiredTs, nowTs)
+                            : s.lastFiredNever}
+                        </span>
+                      </div>
                     </div>
                   );
                 })}

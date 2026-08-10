@@ -346,6 +346,8 @@ export const MESSAGE_KEYS: readonly string[] = [
   "mp.schedmsg.hourLabel",
   "mp.schedmsg.labelLabel",
   "mp.schedmsg.labelPlaceholder",
+  "mp.schedmsg.lastFiredLabel",
+  "mp.schedmsg.lastFiredNever",
   "mp.schedmsg.loadError",
   "mp.schedmsg.minuteLabel",
   "mp.schedmsg.timezoneLabel",
