@@ -46,10 +46,11 @@ const monthlyLookbackMonths = 12
 
 // dailyLookbackDays bounds how far back a daily schedule searches for a date its
 // zone actually HAS. It counts STEPS BACK from today, so the search covers today
-// plus this many earlier dates — four in all. Two steps is the worst real case
-// (today's slot still ahead, and yesterday a date the zone deleted outright —
-// Pacific/Apia skipped 30 December 2011 for the date-line move); the rest is
-// headroom that keeps the loop bounded.
+// plus this many earlier dates — four in all. Two steps is the worst case anyone
+// has constructed (today's slot still ahead, and yesterday a date the zone
+// deleted outright — Pacific/Apia skipped 30 December 2011 for the date-line
+// move); that is a reasoned bound, NOT a measured maximum over every zone, so
+// the rest is headroom that keeps the loop bounded and absorbs the difference.
 const dailyLookbackDays = 3
 
 // weeklyLookbackDays bounds the weekly search, again as steps back from today
@@ -173,10 +174,17 @@ func monthlySlot(year int, month time.Month, s ScheduledMessage, loc *time.Locat
 // So the two absences are asked as two SEPARATE questions, in this order:
 //
 //	Does the zone have this DATE at all?  → firstReadingOn. No reading anywhere
-//	  in the 1440 wall readings means the zone deleted the date outright
+//	  in the 1440 wall readings is treated as "the zone deleted the date outright"
 //	  (Pacific/Apia, 30 December 2011, the date-line move). The occurrence is
 //	  dropped and the cadence loop steps back a day. THIS is what decides the day
 //	  boundary now — nothing else does.
+//	  ⚠️ The test is the read-back, not the zone's own history, so it is very
+//	  slightly stricter than "deleted": a date whose every wall reading normalises
+//	  to some other date reads as absent even though the zone technically has it.
+//	  Measured cases exist (Africa/Casablanca and Africa/El_Aaiun, in the far
+//	  future of the release measured in the design doc) and cost an hour's delay,
+//	  not a lost delivery. Widening it would mean trusting time.Date's
+//	  normalisation, which is what the two earlier versions did wrong.
 //	Does the zone have this WALL CLOCK?  → the +1-minute walk, which matches
 //	  svc-automation's _first_existing_instant. It is NOT bounded by the day: it
 //	  may cross midnight onto the next date, because the reading it is looking
@@ -193,8 +201,11 @@ func monthlySlot(year int, month time.Month, s ScheduledMessage, loc *time.Locat
 // calendar date, and false when it has none — the test for "this zone does not
 // have this date".
 //
-// Cost is one probe on an ordinary date, since 00:00 exists; the full 1440 are
-// walked only for a date that really was deleted.
+// Cost is one probe whenever 00:00 exists, which is the ordinary case; a date
+// whose gap covers midnight walks until the first reading it does have (Havana's
+// spring transition takes 61 probes), and only a date that reads as absent walks
+// the full 1440. Measured cost is in the design doc, stamped with its tzdata
+// release — it is a property of one release, not of zones.
 func firstReadingOn(year int, month time.Month, day int, loc *time.Location) (time.Time, bool) {
 	start := time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
 	for want := start; want.Day() == day && want.Month() == month && want.Year() == year; want = want.Add(time.Minute) {
