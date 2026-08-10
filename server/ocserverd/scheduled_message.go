@@ -71,7 +71,19 @@ func (s *apiServer) runScheduledMessageTick(now float64) {
 		}
 		slot, ok := mostRecentSlot(sm, at)
 		if !ok {
-			continue // no slot has elapsed yet (e.g. a monthly day no recent month has)
+			// 🔴 This is not an ordinary outcome and it is not "the schedule has
+			// simply not come round yet". Every cadence looks back far enough to
+			// cross the dates its zone or the calendar can be missing — a monthly
+			// 31st finds January, a daily one steps over a deleted day — so
+			// reaching here means NO date in the whole lookback had a usable
+			// reading. The most likely cause is a tz rule wider than anything the
+			// search expects. Silence was the old behaviour and it is exactly the
+			// shape this feature exists to remove: the schedule stops delivering
+			// and looks perfectly healthy while it does. One line per tick is the
+			// point — a schedule that never fires should be noisy.
+			schedLog("skip %s: no slot exists in the lookback window — this schedule is "+
+				"NOT delivering; check its timezone's transitions around now", describeSchedule(sm))
+			continue
 		}
 		key := slotKey(slot)
 		if !slotIsAfterCursor(slot, sm.LastFiredSlot) {
