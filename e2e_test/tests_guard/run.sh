@@ -1687,6 +1687,69 @@ _sg_def="$(grep -cE 'OC_SG_ACTOR:-\$HERE/actors/stub\.sh' "$SG_DIR/run.sh" || tr
 _sg_claude="$(grep -cE '(^|[^a-z])claude([^a-z]|$)' "$SG_DIR/actors/stub.sh" || true)"
 check "seven_gate: the stub actor never invokes claude" "0" "${_sg_claude:-0}"
 
+# 21f) NO SERVER CALL MAY BE MADE OUTSIDE THE ONE LOGGING HELPER. This is the
+# bug that cost the first baseline: every call was `curl … >/dev/null`, so the
+# three that the server REFUSED (a 409 each) looked exactly like the ones it
+# accepted, and "the call failed" was indistinguishable from "the call worked
+# and the fact still is not there" — which is the shape a wrong API contract
+# takes. lib/http.sh writes the method, path, HTTP STATUS and BODY of every
+# call; the invariant that keeps it true is that nothing else reaches curl.
+# A reminder in a comment would not survive; this will.
+# Comment lines are stripped first: these files EXPLAIN the banned shape in
+# their headers, and a scan that cannot tell the rule from its own description
+# reddens on the documentation — the fastest way to get a guard deleted.
+_sg_code_only() { grep -v '^[[:space:]]*#' "$1"; }
+for _sg_caller in "$SG_DIR/run.sh" "$SG_DIR"/actors/*.sh; do
+  _sg_curl="$(_sg_code_only "$_sg_caller" | grep -cE '(^|[^[:alnum:]_])curl([^[:alnum:]_]|$)' || true)"
+  check "seven_gate: $(basename "$_sg_caller") makes no raw curl call (every call goes through lib/http.sh, which logs status + body)" \
+    "0" "${_sg_curl:-0}"
+done
+# …and the helper itself must not throw a response away. `-o <file>` + `-w
+# %{http_code}` is the shape that keeps both halves; a curl in here piped to
+# /dev/null would restore the blindness at its source.
+_sg_helper_null="$(_sg_code_only "$SG_DIR/lib/http.sh" | grep -cE 'curl[^#]*>[[:space:]]*/dev/null' || true)"
+check "seven_gate: lib/http.sh never sends a curl response to /dev/null" "0" "${_sg_helper_null:-0}"
+# "log the whole body" and "never write a credential to disk" are both true only
+# because the helper redacts. /api/mint and /api/machines answer with live
+# bearer JWTs; the first run of this harness wrote three of them into run.log and
+# http.log and bin/ci.sh's gitleaks gate caught it. Pinned as a behaviour, not a
+# grep for the sed: a fixture body is pushed through the real function.
+_sg_redact="$(SG_HTTP_LOG="" bash -c '. "$1"/lib/http.sh; _sg_http_oneline "{\"token\":\"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJtLTEifQ.c2lnbmF0dXJl\",\"id\":\"m-1\"}"' _ "$SG_DIR" 2>/dev/null)"
+case "$_sg_redact" in
+  *eyJ*) bad "seven_gate: lib/http.sh logs a bearer JWT verbatim — the harness would write live credentials to run.log/http.log (got: $_sg_redact)" ;;
+  *REDACTED*id*m-1*) ok "seven_gate: lib/http.sh redacts credentials but keeps the rest of the body (got: $_sg_redact)" ;;
+  *) bad "seven_gate: lib/http.sh's redaction ate the body — a redacted log that shows nothing else is as blind as no log (got: $_sg_redact)" ;;
+esac
+_sg_helper_code="$(grep -cF '%{http_code}' "$SG_DIR/lib/http.sh" || true)"
+[[ "${_sg_helper_code:-0}" -ge 1 ]] \
+  && ok "seven_gate: lib/http.sh captures the HTTP status code (a body without a status cannot separate a refusal from a no-op)" \
+  || bad "seven_gate: lib/http.sh no longer captures %{http_code} — a refused call and an accepted one are indistinguishable again"
+
+# 21g) the LIVE actor is default-off, and its opt-in is STRICT. e2e_test/CLAUDE.md
+# records what the loose version cost: an EXCLUDE-shaped flag set in only one
+# place meant every laptop spawned real agents and paid for them. The switch
+# must be an INCLUDE flag compared exactly, so every typo lands on "did not run,
+# did not spend".
+if [[ -f "$SG_DIR/actors/live.sh" ]]; then
+  _sg_live_optin="$(grep -cE 'OC_SG_LIVE_AGENT.*!=[[:space:]]*"1"' "$SG_DIR/actors/live.sh" || true)"
+  [[ "${_sg_live_optin:-0}" -ge 1 ]] \
+    && ok "seven_gate: live.sh refuses unless OC_SG_LIVE_AGENT is EXACTLY \"1\" (strict include-flag, not an exclude-flag)" \
+    || bad "seven_gate: live.sh's spend opt-in is not a strict '!= \"1\"' refusal — a typo could now spawn a real agent and spend real quota"
+  # It must ask the questions from the ONE file, never carry its own copy —
+  # same reason 21d pins run.sh.
+  _sg_live_fr="$(grep -cE 'sg_friction_questions|friction\.md' "$SG_DIR/actors/live.sh" || true)"
+  [[ "${_sg_live_fr:-0}" -ge 1 ]] \
+    && ok "seven_gate: live.sh takes the friction questions from friction.md (no second copy)" \
+    || bad "seven_gate: live.sh no longer reads friction.md — the questions have been copied, and copies drift"
+  # And it must not author the answers. The banned shape is a friction.txt
+  # written from a string this file made up; the allowed one is the agent's own
+  # messages. Pinned as: live.sh never claims an answer the agent did not send.
+  _sg_live_verbatim="$(grep -cE '載體不代寫' "$SG_DIR/actors/live.sh" "$SG_DIR/friction.md" 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')"
+  [[ "${_sg_live_verbatim:-0}" -ge 1 ]] \
+    && ok "seven_gate: the no-ghostwriting rule for friction answers is stated where the writer of friction.txt will read it" \
+    || bad "seven_gate: nothing states that the harness must not write the friction answers itself"
+fi
+
 echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1
 
