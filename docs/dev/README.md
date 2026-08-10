@@ -10,7 +10,7 @@
 | frontend | React / TypeScript（Vite） |
 | cli | Go —— `ocwarden`（執行手）、`ocagent`（agent runtime） |
 
-（歷史：原 Python backend（FastAPI + alembic）已退役移除；**永久回滾錨點 = git tag `py-final`**。）
+（歷史：原 Python backend（FastAPI + alembic）已退役移除；**本 repo 不保留回滾錨點**——那段歷史不在這個 repo 裡。）
 
 ## Repo 結構
 

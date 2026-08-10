@@ -22,7 +22,7 @@
 # serve -> health -> push. Each gated step (build/migrate) is deterministic: a
 # failure parks the SHA immediately and leaves prod UNTOUCHED (no restart, old
 # version keeps serving). The Python-era venv/pip step is gone with the Python
-# backend (historical rollback = git tag py-final).
+# backend, whose history is not in this repo (no rollback anchor).
 #
 # Safety invariants (unchanged from the ported original):
 #   - Fast-forward pulls ONLY; rollback via `git checkout -B main <sha>` so the

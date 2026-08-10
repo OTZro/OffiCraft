@@ -4,7 +4,7 @@
 
 ## 定位(為什麼有這個套件)
 
-這是 server wire 行為的**可執行定義**——誕生於 golang-backend-migration 時期(當時同一套測試對 Python 與 Go 兩個 target 一視同仁,是遷移驗收權威;Go 411 全綠後 Python 已退役,回滾錨點 = git tag `py-final`)。現在它是 **Go server 的永久黑箱回歸守衛**:純 HTTP 進出,測試只透過 `OC_TARGET_URL` 指到的 base URL 打 HTTP,語言無關——未來任何 rewrite 仍以本套件全綠為行為等價的判準。
+這是 server wire 行為的**可執行定義**——誕生於 golang-backend-migration 時期(當時同一套測試對 Python 與 Go 兩個 target 一視同仁,是遷移驗收權威;Go 411 全綠後 Python 已退役,那段歷史不在本 repo、沒有回滾錨點)。現在它是 **Go server 的永久黑箱回歸守衛**:純 HTTP 進出,測試只透過 `OC_TARGET_URL` 指到的 base URL 打 HTTP,語言無關——未來任何 rewrite 仍以本套件全綠為行為等價的判準。
 
 兩套測試**互補、不合併**:
 
@@ -21,7 +21,7 @@
 2. `bin/ci.sh` 的 conformance blackbox-lint 段(靜態、快)；**完整套件也在同一支 `ci.sh` 裡跑**——step (5/5) 起一個隔離的 ocserverd(核心配埠)再跑 `run.sh --target go`,所以行為面每次 CI 都被驗過。
    ⚠️ 這裡原本寫「完整跑法走本目錄的 `run.sh` 入口,太重不掛進 ci.sh」,與 `ci.sh` 現況相反(owner 於 `rc-0e00082a5052` 裁定以 CI 腳本為準)。**別再引用那句作為「B 面平常不跑」的理由**:凡是落在 conformance 的檢查,都是每次 CI 都會執行的檢查。**條數也不要寫死在文件裡**——本檔與 root `CLAUDE.md` 兩份拷貝都曾停在 743 這個過期數字,而兩處都綠。
 
-route 表(`routes_manifest.json`)是**凍結的 committed 快照**(當年由退役 Python 實作的 ROUTE_SPECS 機械抽出——tag `py-final`),與 `spec/*.json` 同屬 wire-freeze 資產:要改一律 spec-first、過 owner。它沒有再生成器;守漂移的是套件本身——`test_openapi_covers_manifest` 釘 manifest ≡ spec operations,auth 矩陣逐列釘 requires 對 live 行為,manifest 漂了 run 直接紅。
+route 表(`routes_manifest.json`)是**凍結的 committed 快照**(當年由退役 Python 實作的 ROUTE_SPECS 機械抽出,而該實作已不在本 repo),與 `spec/*.json` 同屬 wire-freeze 資產:要改一律 spec-first、過 owner。它沒有再生成器;守漂移的是套件本身——`test_openapi_covers_manifest` 釘 manifest ≡ spec operations,auth 矩陣逐列釘 requires 對 live 行為,manifest 漂了 run 直接紅。
 
 ## 怎麼跑
 
@@ -29,7 +29,7 @@ route 表(`routes_manifest.json`)是**凍結的 committed 快照**(當年由退�
 conformance/run.sh --target go    # 起隔離 ocserverd(核心自動配埠、臨時空 SQLite)→ pytest → teardown
 ```
 
-(`--target py` 已隨 Python backend 退役;歷史回滾 = git tag `py-final`。)
+(`--target py` 已隨 Python backend 退役;那段歷史不在本 repo,沒有回滾錨點。)
 
 隔離紀律(同 e2e_test 鐵律):**絕不碰 prod**(officraft live 現跑 `:7755`,`:8766` vibe;`:8770` 是 2026-07-20 退役的舊 prod 埠);e2e 用 `:8791`,conformance 預設交給核心以 port `0` 原子分配可用埠，並讀回實際值，不互踩。若要重現特定情境可明設 `OC_CONF_PORT`。DB 是 mktemp 下的一次性 SQLite(migrate 到 head),oc.toml 也是臨時生成(`OC_CONFIG` 注入),不動 repo 根的 oc.toml。teardown 只 kill 捕獲到的 listener PID,絕不 pkill 亂槍。
 

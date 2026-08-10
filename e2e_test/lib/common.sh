@@ -27,11 +27,11 @@ STATE_DIR="$E2E_ROOT/.state"
 
 # Target implementation: go (ocserverd built fresh from server/ocserverd with
 # the SPA embedded) is the ONLY target — the py leg retired with the Python
-# backend (rollback anchor: git tag py-final). The knob stays so an explicit
+# backend, whose history is not in this repo (no rollback anchor). The knob stays so an explicit
 # OC_E2E_TARGET=go keeps working and a stale =py invocation fails loud.
 OC_E2E_TARGET="${OC_E2E_TARGET:-go}"
 if [ "$OC_E2E_TARGET" != "go" ]; then
-  echo "FATAL: OC_E2E_TARGET=$OC_E2E_TARGET — go is the only target (py retired; git tag py-final)." >&2
+  echo "FATAL: OC_E2E_TARGET=$OC_E2E_TARGET — go is the only target (py retired)." >&2
   exit 2
 fi
 

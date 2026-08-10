@@ -3,7 +3,7 @@
 進入 `e2e_test/` 時 nested-load。repo-wide 憲章見 root `CLAUDE.md`;本檔記 e2e 專屬。
 
 ## target:Go(唯一)
-Go(ocserverd)是唯一 target(py leg 已隨 Python backend 退役;歷史回滾 = git tag `py-final`):`bash run_all.sh`(`OC_E2E_TARGET=go` 仍可顯式指定;其他值 fail loud)。:8791 / repo-root oc.toml / fresh-DB 生命週期 / EXACT-PID teardown;流程 = stage SPA→webdist + docs→docsdist + seeds→seedsdist + binaries/MCP catalog→bindist → go build 進 `.state/` → goose migrate → serve。四種 embed asset 一律先 stage；漏 seedsdist 會讓真 agent boot persona 缺檔，漏 bindist 會讓 MCP `tools/list` 回 catalog unavailable 且 warden binary route 503。
+Go(ocserverd)是唯一 target(py leg 已隨 Python backend 退役;那段歷史不在本 repo,沒有回滾錨點):`bash run_all.sh`(`OC_E2E_TARGET=go` 仍可顯式指定;其他值 fail loud)。:8791 / repo-root oc.toml / fresh-DB 生命週期 / EXACT-PID teardown;流程 = stage SPA→webdist + docs→docsdist + seeds→seedsdist + binaries/MCP catalog→bindist → go build 進 `.state/` → goose migrate → serve。四種 embed asset 一律先 stage；漏 seedsdist 會讓真 agent boot persona 缺檔，漏 bindist 會讓 MCP `tools/list` 回 catalog unavailable 且 warden binary route 503。
 
 ## 誰會自動跑這套(T-ff8a)
 `bin/ci.sh` **不跑 playwright spec**(只跑 `tests_guard/run.sh` 那套 hermetic 守衛)。⚠️ **但別把這句

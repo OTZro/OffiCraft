@@ -7,8 +7,7 @@
 # it is missing so a broken deploy never silently serves nothing (the
 # autodeploy pipeline runs bin/build before restarting this service).
 #
-# Rollback (historical): the retired Python implementation lives at git tag
-# py-final.
+# No Python-era rollback: that implementation's history is not in this repo.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"

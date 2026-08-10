@@ -77,4 +77,4 @@ top-level:
 - **`e2e_test/`** — Playwright 端到端(隔離 port,**絕不碰 prod**)。詳見 `e2e_test/CLAUDE.md`。
 - **其他**:`spec/`(凍結 wire 契約 SSOT)· `seeds/`(語言中立 seed .md 資產,ocserverd runtime 磁碟優先直讀、單檔部署走 go:embed fallback)· `bin/`(`ci.sh` gate + 部署 / 安裝腳本)· `docs/`(架構文件)· `CLAUDE.md`(本檔,repo-wide 憲章 + 約定)· `.githooks/`(pre-commit 鏡像 CI gate)。
 
-歷史:原 Python backend(FastAPI)已於 2026-07 退役移除;**永久回滾錨點 = git tag `py-final`**(最後一個含完整 Python 實作的 commit)。
+歷史:原 Python backend(FastAPI)已於 2026-07 退役移除;**本 repo 不保留回滾錨點**——Python 實作的歷史不在這個 repo 裡,沒有可以回滾過去的 tag 或 commit。

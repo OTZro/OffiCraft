@@ -6,9 +6,8 @@
 # oc.toml. The deploy binary is produced by bin/build (the autodeploy pipeline
 # runs build before migrate); fail loud when it is missing.
 #
-# Rollback (historical): the retired Python implementation lives at git tag
-# py-final (its DB file was never touched by the Go server, which runs on its
-# own SQLite file).
+# No Python-era rollback: that implementation's history is not in this repo (its
+# DB file was never touched by the Go server, which runs on its own SQLite file).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
