@@ -102,9 +102,17 @@ const (
 	// above the cap, so the only tail it blocks is the ~40% of agent↔agent
 	// messages that paste material (reports / baton hand-off notes) inline —
 	// exactly the content that belongs in an attachment. A server constant so a
-	// tighter value can follow the post-guideline distribution. Owner (sender ==
-	// wireOwnerID — a human is never blocked by the system) and the hook:* ingest
-	// path (external payload, separate webhook handler) are exempt.
+	// tighter value can follow the post-guideline distribution.
+	//
+	// 🔴 SCOPE: the cap is enforced by the POST /api/chat handler, NOT by the
+	// write — so it binds only what arrives through that handler, and not the
+	// owner even there (sender == wireOwnerID: a human is never blocked by the
+	// system). Every OTHER producer of a chat message writes the row directly
+	// and is unbound by it. This comment used to carry a two-item list of the
+	// exempt paths; T-f059 added a third (the sched:* delivery) and nothing
+	// alarmed, so the list is replaced by the query that cannot go stale:
+	// `grep -n 'msg := ChatMessage{' server/ocserverd/*.go` names every writer,
+	// and each one answers for its own body length.
 	chatBodyMaxChars = 4000
 )
 
@@ -381,8 +389,10 @@ func (s *apiServer) HandlePostChatApiChatPost(w http.ResponseWriter, r *http.Req
 	}
 	// Enforce the body char cap BEFORE any attachment blob is stored, so a
 	// rejected over-limit post never orphans a freshly-written blob. Owner is
-	// exempt by sender identity (the human is never blocked by the system); the
-	// hook:* ingest path never reaches here (separate webhook handler). The
+	// exempt by sender identity (the human is never blocked by the system);
+	// server-synthesised messages never reach here at all — they write the row
+	// directly, see the SCOPE note on chatBodyMaxChars for how to enumerate
+	// them. The
 	// actionable 400 tells the agent to move the content to an attachment — a
 	// dead end for a naive retry loop, not a transient error to hammer.
 	if currentActor(r) != wireOwnerID {
