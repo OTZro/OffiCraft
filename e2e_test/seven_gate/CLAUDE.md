@@ -203,11 +203,29 @@ collector 收集窗  ≥  actor 預算（machine + spawn + live + friction + car
 - 那些等待時間的**預設值只有一個家**（`lib/window.sh`）。`run.sh` 與兩支 actor 都 source 它、直接用
   `$OC_SG_LIVE_WAIT`，**不准再寫第二個 `:-1800`**——兩個常數靠人維持一致，就是這個 bug 的形狀。
 - collector 的秒數是**推導出來的**（`sg_collect_seconds`），不是另外設的。
+- **collector 自己沒有窗**：`collect.py` 的 `--seconds` **required、沒有 default**。原本那裡寫著
+  `default=900.0`——那就是這個 bug 的另外半邊，而且**上面每一條斷言都看不到它**：22d 只掃 shell 檔裡
+  有沒有第二個 `${KNOB:-…}`，掃不到 argparse。**實測**（在 52f6a4b 那棵樹上）：把 run.sh 的
+  `--seconds "$COLLECT_SECONDS"` 整段刪掉——也就是讓那顆 900 重新生效、原病照原樣復發——
+  `tests_guard` 仍然 **PASS=251 FAIL=0 rc=0**。現在忘記傳的人拿到的是 argparse 當場拒絕，不是安靜的 900。
 - `run.sh` 起 collector 之前先 `sg_assert_collection_window`，不成立就**拒跑**：窗口破了的那一輪，
   判定本身不可信。
-- CI：`tests_guard` 案例 22 釘四件事——預設成立且窗**嚴格大於**預算（不是兩邊都零的巧合）、
-  拉長 `OC_SG_LIVE_WAIT` 窗會跟著長（證明它是推導的）、**mutant 把推導換回常數 900 必須轉紅**、
-  以及那些旗標在別處沒有第二份預設值。實測：預算 2310s、窗 2433s；mutant rc=1。
+- CI：`tests_guard` 案例 22 釘的是**這條關係的每一段**，不是任何一個數字——預設成立且窗**嚴格大於**
+  預算（不是兩邊都零的巧合，22a）、拉長 `OC_SG_LIVE_WAIT` 窗會跟著長（證明它是推導的，22b）、
+  **mutant 把推導換回常數 900 必須轉紅**（22c）、那些旗標在別處沒有第二份預設值（22d）、
+  **collector 自己沒有窗**（22e，行為面：不給就拒絕啟動並點名 `--seconds`）、
+  以及**推導真的走到 collector**（22f：`--seconds` 後面必須是一個變數，而那個變數必須來自
+  `sg_collect_seconds`；寫任何字面數字都紅，不只 900）。
+  實測：預算 2310s、窗 2433s；`tests_guard` **PASS=254 FAIL=0 rc=0**。
+  三顆 mutant 各自單獨一輪（每顆都 rc=1、各 1 條 FAIL）：
+  ① run.sh 把 `--seconds "$COLLECT_SECONDS"` 整段刪掉、② 改成字面 `--seconds 900`、
+  ③ `collect.py` 把 `default=900.0` 放回去。
+  **鑑別力對照**：同樣三顆打在 **52f6a4b（本次改動之前）**上——①② 各 **PASS=251 FAIL=0 rc=0 全靜默**，
+  ③ 在那棵樹上是 no-op（它本來就是 `default=900.0`，而那一輪同樣 251/0 rc=0）。
+  ⚠️ 22e 的斷言**不是「rc != 0」**：一個還帶著 default 的 collect.py 會走過 argparse、再死在讀不到的
+  token 檔，**同樣 rc != 0**（實測 mutant ③ rc=1、FileNotFoundError）。所以釘的是**它有沒有為了「沒人給窗」
+  而拒絕**（訊息點名 `--seconds`），並配一格陽性對照：給了窗之後，同一通呼叫必須改成死在 token 檔、
+  而且**不再提** `--seconds`。
 
 ## 鎖定 runtime / model / effort（regression 要能比較兩組）
 

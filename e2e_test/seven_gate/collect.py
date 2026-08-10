@@ -10,7 +10,11 @@ It runs for the WHOLE run, starting BEFORE the agent boots, because ①'s fact
 collector started late reads a green run as red.
 
   python3 collect.py --base http://127.0.0.1:8791 --token-file .state/owner.tok \\
-                     --agent m-xxxx --run-dir runs/<stamp> --interval 1 --seconds 300
+                     --agent m-xxxx --run-dir runs/<stamp> --interval 1 \\
+                     --seconds "$(sg_collect_seconds)"
+
+--seconds is REQUIRED and has no default: the window is derived from the actor
+budget in lib/window.sh, and a default here would be a second constant.
 
 Stops early and cleanly on SIGTERM/SIGINT (run.sh terminates it once the actor
 is done) — the journal is flushed per line, so a killed collector still leaves
@@ -106,7 +110,18 @@ def main(argv=None):
     ap.add_argument("--agent", required=True)
     ap.add_argument("--run-dir", required=True)
     ap.add_argument("--interval", type=float, default=1.0)
-    ap.add_argument("--seconds", type=float, default=900.0)
+    # NO DEFAULT — ON PURPOSE. This used to read `default=900.0`, and that 900
+    # was the second half of the bug lib/window.sh exists to kill: the actor's
+    # budget lives in one place while the collector's window was an independent
+    # constant sitting HERE, so on DEFAULTS the collector stopped sampling ~22
+    # minutes before the actor stopped working and every later fact became
+    # invisible to judge.py — a red NAMING THE AGENT for the harness's own gap.
+    # window.sh derived the caller's side of it; this line is the other side.
+    # Deleting the default is what makes the two impossible to drift apart: the
+    # window can now only arrive from sg_collect_seconds via the caller, and a
+    # caller that forgets to pass it gets a loud argparse refusal instead of a
+    # silent 900. Guarded by tests_guard case (22e/22f).
+    ap.add_argument("--seconds", type=float, required=True)
     args = ap.parse_args(argv)
 
     signal.signal(signal.SIGTERM, _on_signal)

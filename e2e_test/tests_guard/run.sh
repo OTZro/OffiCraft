@@ -1835,6 +1835,60 @@ for _knob in OC_SG_LIVE_WAIT OC_SG_MACHINE_WAIT OC_SG_SPAWN_WAIT OC_SG_FRICTION_
   check "seven_gate: $_knob has no second default outside lib/window.sh" "0" "${_dupes:-0}"
 done
 
+# 22e) THE LAST COPY OF 900, and the one 22a–22d could not see. 22d only greps
+# the SHELL files for a second `${KNOB:-…}`; the collector's own
+# `--seconds` default lived in collect.py's argparse and was still literally
+# 900. That is not a dead letter: it is what a caller that omits the flag gets,
+# SILENTLY, which is the original bug exactly — and it was reachable while every
+# assertion above stayed green. MEASURED on the pre-change tree: deleting
+# `--seconds "$COLLECT_SECONDS"` from run.sh left tests_guard at PASS=251 FAIL=0
+# rc=0, i.e. the whole of case 22 was blind to it.
+#
+# Pinned as a RELATION again, not a number: the collector must have NO window of
+# its own, so it must REFUSE to start when nobody hands it one. Behavioural, and
+# hermetic — argparse rejects before any socket or file is touched.
+SG_COLLECT="$SG_DIR/collect.py"
+#
+# ⚠️ The claim is NOT "rc != 0". A collect.py that still carries a default gets
+# past parsing and then dies on the unreadable token file — ALSO rc != 0, and
+# indistinguishable. MEASURED: mutant C (default=900.0 put back) exits 1 on
+# FileNotFoundError. So the assertion is that the refusal NAMES the window, and
+# it is paired with the control below.
+_c_noflag="$(python3 "$SG_COLLECT" --token-file /nonexistent --agent m-x --run-dir /nonexistent 2>&1)"; _c_noflag_rc=$?
+if [[ "$_c_noflag_rc" -ne 0 && "$_c_noflag" == *"--seconds"* ]]; then
+  ok "seven_gate: collect.py refuses to start without a window and names --seconds (rc=$_c_noflag_rc) — it carries no window of its own"
+else
+  bad "seven_gate: collect.py did not refuse for want of a window (rc=$_c_noflag_rc, said: $(echo "$_c_noflag" | tr '\n' '|')) — it is carrying its own default again, which is the 900 this case exists to kill"
+fi
+# POSITIVE CONTROL. Without it, "names --seconds" could be satisfied by a script
+# that mentions the flag in every failure. With the window supplied, the SAME
+# invocation must get PAST argument parsing and fail on the missing token file
+# instead — a different failure, and one that never mentions --seconds.
+_c_flag="$(python3 "$SG_COLLECT" --token-file /nonexistent --agent m-x --run-dir /nonexistent --seconds 1 2>&1)"
+case "$_c_flag" in
+  *"--seconds"*) bad "control broken: collect.py still complains about --seconds when it was given one — 22e cannot tell a missing window from a broken script" ;;
+  *) ok "seven_gate: control — given a window, collect.py gets past parsing and dies on the token file instead" ;;
+esac
+
+# 22f) …and the caller must hand it the DERIVED value. 22e closes "a forgotten
+# flag is silent"; it cannot see a caller that passes a literal. So the token
+# after --seconds in run.sh's collector invocation must be a variable expansion,
+# and that variable must be assigned from sg_collect_seconds. A number there —
+# any number, not just 900 — fails.
+_sec_tok="$(grep -oE -- '--seconds[[:space:]]+[^[:space:]]+' "$SG_DIR/run.sh" | head -1 | awk '{print $2}')"
+# Pure bash on purpose: BSD and GNU sed disagree about \{n,m\}, and a guard that
+# dies on the developer's sed is the a749470 shape all over again.
+_sec_bare="$(printf '%s' "${_sec_tok:-}" | tr -d '"'"'"'{}')"
+_sec_var=""
+[[ "$_sec_bare" =~ ^\$([A-Za-z_][A-Za-z_0-9]*)$ ]] && _sec_var="${BASH_REMATCH[1]}"
+if [[ -z "$_sec_var" ]]; then
+  bad "seven_gate: run.sh passes --seconds ${_sec_tok:-<nothing>} — that is not a variable, so the collector's window is a constant again"
+elif grep -qE "^[[:space:]]*$_sec_var=\"?\\\$\(sg_collect_seconds\)\"?[[:space:]]*$" "$SG_DIR/run.sh"; then
+  ok "seven_gate: run.sh passes --seconds \$$_sec_var and $_sec_var comes from sg_collect_seconds — derived end to end"
+else
+  bad "seven_gate: run.sh passes --seconds \$$_sec_var but $_sec_var is not assigned from sg_collect_seconds — the derivation does not reach the collector"
+fi
+
 # ── 23) T-42bb: an unbound-variable typo in live.sh must go red WITHOUT a run ──
 #
 # WHAT HAPPENED. The first real-agent run died on actors/live.sh line 213:
