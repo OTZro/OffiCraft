@@ -2441,11 +2441,16 @@ export interface paths {
          *     ABUSE GUARDS (two, both refuse LOUDLY so the agent can read them):
          *       * ONLINE-ONLY (409) — a self-restart is meaningless with no live session; the
          *         caller's DERIVED presence must be online, mirroring ``refocus_member``.
-         *       * MINIMUM-LIVENESS (429) — a call within the first 10 minutes after the session
-         *         connected (server-authoritative ``boot_ts`` from the SSE first-connect edge) is
-         *         refused, so a freshly respawned agent cannot immediately self-restart again and
-         *         spin a respawn storm. A missing boot_ts (server-restart amnesia) FAILS OPEN —
-         *         never a false 429 on a long-lived session.
+         *       * MINIMUM-LIVENESS (429) — a call within the first 10 minutes of the session
+         *         STARTING is refused, so a freshly respawned agent cannot immediately
+         *         self-restart again and spin a respawn storm. Two anchors are read and the
+         *         OLDER one decides: the server-authoritative ``boot_ts`` (SSE first-connect
+         *         edge) and the caller token's ``iat``. boot_ts alone is not enough — it lives
+         *         in an in-memory store that a station restart empties, and the reconnect that
+         *         follows re-stamps it, which would read an hours-old session as newborn. The
+         *         token is minted once at START and survives in the agent's hand, so it dates
+         *         the real session start. A session that is genuinely young by BOTH anchors is
+         *         still refused — never a false 429 on a long-lived session.
          *
          *     ``reason`` (optional): a short human note for WHY — recorded on the recycle log
          *     line so an operator can distinguish a self-restart from an owner refocus.

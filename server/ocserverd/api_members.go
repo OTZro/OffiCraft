@@ -28,6 +28,47 @@ import (
 // distinct from the context-high boot-storm guard's MinBootSecs.
 const minSelfRestartSecs = 600.0
 
+// tokenAgeSecs is the seconds since the caller's credential was minted, or nil
+// when the claims carry no usable iat (an older token, or a caller reaching a
+// handler outside the auth middleware). Tokens are minted at START and never
+// refreshed agent-side, so for an agent credential this dates the session.
+func tokenAgeSecs(claims map[string]any, now float64) *float64 {
+	if claims == nil {
+		return nil
+	}
+	iat, ok := asNumber(claims["iat"])
+	if !ok || iat <= 0 {
+		return nil
+	}
+	secs := now - iat
+	return &secs
+}
+
+// sessionAgeSecsForSelfRestart feeds bootStormTripped for the restart_self
+// min-liveness gate: the OLDER of the two independent session anchors (the
+// larger seconds-since), so a caller is refused only when EVERY anchor agrees
+// the session is young. See HandleRestartSelfApiSelfRefocusPost for why one
+// anchor is not enough and why this does not weaken the storm guard.
+//
+// Deliberately NOT folded into gaugeSecsSinceBoot: the other two callers of
+// that helper (stampContextHighRecycle, autoHandoverWorker) run on a server
+// tick with no caller credential in hand, so they cannot read the second
+// source. Their false-suppression after a re-exec is conservative (a recycle
+// deferred, not a refusal) and is out of scope here.
+func sessionAgeSecsForSelfRestart(record map[string]any, claims map[string]any, now float64) *float64 {
+	sinceBoot := gaugeSecsSinceBoot(record, now)
+	sinceIssue := tokenAgeSecs(claims, now)
+	switch {
+	case sinceBoot == nil:
+		return sinceIssue
+	case sinceIssue == nil:
+		return sinceBoot
+	case *sinceIssue > *sinceBoot:
+		return sinceIssue
+	}
+	return sinceBoot
+}
+
 // putMember validates + persists a member and fans the member delta: a
 // dismiss (roster_status=removed, the soft delete) rides as op=remove
 // (deleted:true, payload null — Repository.put_member parity); every other
@@ -852,10 +893,24 @@ func (s *apiServer) HandleReportStoppedApiSelfStoppedPost(w http.ResponseWriter,
 //   - ONLINE-ONLY (409): a self-restart is meaningless with no live session
 //     (mirrors refocus_member's gate).
 //   - MINIMUM-LIVENESS (429): a call within minSelfRestartSecs of this session
-//     connecting is refused — the server-authoritative boot_ts (stamped on the
-//     SSE first-connect edge, onFirstConnect) is the anchor; reusing the
-//     bootStormTripped loop-guard so a missing boot_ts (server-restart amnesia)
-//     FAILS OPEN, never a false 429 on a long-lived session.
+//     starting is refused. TWO anchors are read and the OLDER one wins
+//     (sessionAgeSecsForSelfRestart): the server-authoritative boot_ts (stamped
+//     on the SSE first-connect edge, onFirstConnect) and the caller's own JWT
+//     iat. boot_ts alone is NOT enough (T-4235): the gauge is in-memory by
+//     contract, so a station upgrade re-exec empties it and every agent's SSE
+//     reconnect makes onFirstConnect stamp a fresh boot_ts — a session alive for
+//     hours then reads as seconds old and gets a false 429. The comment this
+//     replaces promised a fail-open on a missing boot_ts, but that branch is
+//     UNREACHABLE here: the online gate above requires a live SSE stream, and
+//     reaching it is exactly what re-stamps the anchor. The token's iat survives
+//     the re-exec because it lives in the agent's hand, and a token is minted
+//     only at START (reconcile.mintMemberToken / worker_spawn.mintAgentToken),
+//     so it dates this session's real birth. The storm guard is NOT weakened: a
+//     genuinely fresh session has a fresh token too, so both anchors read
+//     seconds and the 429 still fires. KNOWN DEGRADATION: the bootstrap
+//     endpoint also mints on demand, so swapping a live session's token for a
+//     new one resets the iat; that case falls back to today's behaviour (a
+//     possible false 429) — never worse.
 func (s *apiServer) HandleRestartSelfApiSelfRefocusPost(w http.ResponseWriter, r *http.Request) {
 	var body RestartSelfDTO
 	if !decodeJSONBody(w, r, &body) {
@@ -872,7 +927,8 @@ func (s *apiServer) HandleRestartSelfApiSelfRefocusPost(w http.ResponseWriter, r
 			"restart_self requires you to be online (no live session to recycle)")
 		return
 	}
-	secsSinceBoot := gaugeSecsSinceBoot(s.gauge.Get(m.ID), now)
+	secsSinceBoot := sessionAgeSecsForSelfRestart(
+		s.gauge.Get(m.ID), claimsFromContext(r.Context()), now)
 	if bootStormTripped(secsSinceBoot, minSelfRestartSecs) {
 		writeError(w, http.StatusTooManyRequests, fmt.Sprintf(
 			"restart_self refused: only %.0fs since this session started; the "+
