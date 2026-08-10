@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # e2e_test/seven_gate/actors/stub.sh — the REPLACEABLE agent side.
 #
-# 🔴 THIS IS NOT AN AGENT AND MUST NEVER BE MISTAKEN FOR ONE. It walks the seven
-# steps over REST with a member token, so it proves exactly one thing: that the
-# gate reads the server correctly when the seven facts DO land. It proves NOTHING
+# 🔴 THIS IS NOT AN AGENT AND MUST NEVER BE MISTAKEN FOR ONE. It walks the whole
+# path over REST with a member token, so it proves exactly one thing: that the
+# gate reads the server correctly when the facts DO land. It proves NOTHING
 # about whether a real agent, reading only the boot context, would decide to do
 # any of them. That question is the entire reason this harness exists, and it is
 # answered only by actors/live.sh.
 #
 # The actor contract — anything obeying it can be dropped in as $OC_SG_ACTOR:
 #   in  (env): OC_SG_BASE OC_SG_AGENT OC_SG_AGENT_TOKEN OC_SG_SCENE_NONCE
-#              OC_SG_RUN_DIR OC_SG_OWNER
+#              OC_SG_RUN_DIR OC_SG_OWNER OC_SG_OWNER_TOKEN
+#              OC_SG_PEER OC_SG_PEER_NONCE  (the colleague ⑧ has to answer)
+#              OC_SG_IMAGE_ANSWER      (⑨ — the stub is TOLD it; it cannot see)
 #   out:       whatever it can make happen on the server. rc is logged, NOT
 #              judged — an actor that exits 0 having done nothing must still go
 #              red, and it does, because the verdict comes from the server.
@@ -36,8 +38,9 @@
 #
 # OC_SG_SKIP_STEP=<key> makes exactly one step NOT happen (keys as in judge.py:
 # report_waking resume_scene create_task submit_plan step_done reply_card
-# closeout). That is how a run proves the gate can still fail: a harness only
-# ever exercised on a passing run is a harness nobody has seen say no.
+# closeout peer_message image_answer). That is how a run proves the gate can still fail: a
+# harness only ever exercised on a passing run is a harness nobody has seen
+# say no.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -124,7 +127,28 @@ if [[ -n "$TASK" ]] && ! skipped reply_card; then
     '{"kind":"decision","summary":"七步關卡:要不要繼續收尾?","body":"這是載體用的請示卡。","options":["繼續收尾","先停在這裡"]}' >/dev/null
 fi
 
-# ⑦ 回報收尾 — wait for the owner to answer (the server restores the step to
+# ⑦ 回覆另一個 agent — the colleague spoke first (run.sh 3b) and is waiting. The
+# fact the gate reads is a message addressed to THAT member carrying the nonce
+# the colleague used: to==peer proves it talked to a colleague at all, the nonce
+# proves it read what the colleague said instead of broadcasting past it.
+if ! skipped peer_message; then
+  say "⑦ read the peer's message → reply to the peer"
+  PEER="${OC_SG_PEER:-}"
+  PEER_NONCE="${OC_SG_PEER_NONCE:-}"
+  if [[ -z "$PEER" || -z "$PEER_NONCE" ]]; then
+    say "🔴 ⑦ cannot run: run.sh seated no peer (OC_SG_PEER/OC_SG_PEER_NONCE empty)."
+  else
+    INBOX="$(sg_http GET "/api/chat?with=$AGENT&peek=true&limit=200")"
+    if ! printf '%s' "$INBOX" | grep -qF "$PEER_NONCE"; then
+      say "WARNING: the peer's message is NOT in the agent's chat. The plant and"
+      say "the read have drifted apart — ⑦ would go red for a harness reason."
+    fi
+    sg_step peer_message POST /api/chat \
+      "$(python3 -c 'import json,sys;print(json.dumps({"to":sys.argv[1],"body":"收到，這邊的線走完了，把你的記號帶回來："+sys.argv[2]}))' "$PEER" "$PEER_NONCE")" >/dev/null
+  fi
+fi
+
+# ⑧ 回報收尾 — wait for the owner to answer (the server restores the step to
 # in_progress when the card is answered), finish the last step with the handoff
 # declared IN THAT CALL (T-74f8 交棒閘), which derives the task to done — and
 # only a terminal task may report closeout.
@@ -151,6 +175,44 @@ if [[ -n "$TASK" ]] && ! skipped closeout; then
     sg_step closeout_last_step POST "/api/tasks/$TASK/steps/$SID2/status" \
       '{"status":"done","handoff":"none","handoff_note":"載體 run,無後續"}' >/dev/null
     sg_step closeout POST "/api/tasks/$TASK/closeout" '{}' >/dev/null
+  fi
+fi
+
+
+# ⑨ 看得到圖 — the honest one. The stub CANNOT see: there is no OCR here and
+# there is not going to be one. What it CAN do, and does, is exercise the half
+# of this cell that is plumbing rather than perception — find the attachment on
+# the planted message and actually PULL THE BYTES from
+# /api/chat/attachment/<id>, which nothing in this repo tested before today.
+# The number itself it is TOLD (OC_SG_IMAGE_ANSWER), exactly as it is told the
+# scene nonce, because the stub's job is to make the fact land so the gate can
+# be seen reading it — never to demonstrate that a model can see.
+# 🔴 SO A GREEN ⑨ ON A STUB RUN MEANS "the gate reads this correctly", NOT
+# "an agent can read the picture". Only actors/live.sh can answer that.
+if ! skipped image_answer; then
+  say "⑨ fetch the planted image's bytes, then answer with the number (TOLD, not read)"
+  ANS="${OC_SG_IMAGE_ANSWER:-}"
+  if [[ -z "$ANS" ]]; then
+    say "🔴 ⑨ cannot run: run.sh planted no image (OC_SG_IMAGE_ANSWER empty)."
+  else
+    ATT="$(sg_http GET "/api/chat?with=$AGENT&peek=true&limit=200" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+rows = d if isinstance(d, list) else d.get("messages", d.get("chat", []))
+for m in rows:
+    for a in (m.get("attachments") or []):
+        if a.get("is_image") and a.get("id"):
+            print(a["id"]); raise SystemExit(0)
+' 2>/dev/null)"
+    if [[ -z "$ATT" ]]; then
+      say "WARNING: no image attachment is visible on the agent's chat — ⑨ would go"
+      say "red for a HARNESS reason. Check the plant before trusting this red."
+    else
+      BYTES="$(sg_http GET "/api/chat/attachment/$ATT" | wc -c | tr -d ' ')"
+      say "   pulled attachment $ATT ($BYTES bytes) — the attachment path works"
+    fi
+    sg_step image_answer POST /api/chat \
+      "$(python3 -c 'import json,sys;print(json.dumps({"to":sys.argv[1],"body":"圖上的號碼是 "+sys.argv[2]}))' "$OWNER" "$ANS")" >/dev/null
   fi
 fi
 

@@ -97,8 +97,97 @@ echo "[seven_gate] owner intent: desired_state=online (waking is derivable from 
 NONCE="sg-nonce-$(od -An -tx1 -N6 /dev/urandom | tr -d ' \n')"
 PLANTED="$(sg_http POST /api/chat "$(python3 -c 'import json,sys;print(json.dumps({"to":sys.argv[1],"body":"【上一班留下的現場】本現場標記 "+sys.argv[2]+" — 接回現場後請把它原樣帶回來。"}))' "$AGENT" "$NONCE")")"
 [[ -n "$PLANTED" ]] || { echo "[seven_gate] FATAL: planting the scene message produced no response — ② could only ever be red, and red for a HARNESS reason. Read the [http] line above." >&2; exit 2; }
-python3 -c 'import json,sys;json.dump({"agent_id":sys.argv[1],"scene_nonce":sys.argv[2],"stamp":sys.argv[3]},open(sys.argv[4],"w"),ensure_ascii=False,indent=2)' \
-  "$AGENT" "$NONCE" "$STAMP" "$RUN_DIR/scene.json"
+
+# 3b. SEAT A COLLEAGUE. The six steps above all point at the OWNER — chat to the
+#     owner, a card for the owner, a task the owner watches. Talking to another
+#     AGENT is a different act with a different recipient and nobody patient on
+#     the other end, and the boot context has to teach it too (owner, after the
+#     first baseline: 「包含 chat / reply card / task」「他要知道怎麼透過這三個元件
+#     跟 owner 溝通」「或是跟其他 agent 溝通」).
+#     The peer SPEAKS FIRST, carrying its own nonce, so the fact the gate reads
+#     is a REPLY and not a broadcast: something addressed to the colleague that
+#     shows the colleague's message was actually read.
+PEER_NAME="sg-peer-$STAMP"
+PEER="$(sg_http POST /api/members "{\"name\":\"$PEER_NAME\",\"role_key\":\"assistant\"}" \
+  | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("id") or d.get("member",{}).get("id",""))')"
+[[ -n "$PEER" ]] || { echo "[seven_gate] FATAL: could not hire the peer agent — ⑦ could only ever be red, and red for a HARNESS reason." >&2; exit 2; }
+PEER_TOK="$(sg_http POST /api/mint "{\"member_id\":\"$PEER\",\"ttl_days\":1}" \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')"
+[[ -n "$PEER_TOK" ]] || { echo "[seven_gate] FATAL: mint failed for the peer $PEER." >&2; exit 2; }
+PEER_NONCE="sg-peer-nonce-$(od -An -tx1 -N6 /dev/urandom | tr -d ' \n')"
+# Sent AS THE PEER, from the peer's own token — an owner-sent message would be
+# the owner talking, which is the half ② and ⑥ already cover.
+PEER_SAID="$(SG_TOKEN="$PEER_TOK" SG_HTTP_TAG="peer" sg_http POST /api/chat \
+  "$(python3 -c 'import json,sys;print(json.dumps({"to":sys.argv[1],"body":"我是隔壁的 "+sys.argv[2]+"。我這邊在等你那條線的結果——你看完現場後直接回我一句，把這個記號帶上："+sys.argv[3]}))' "$AGENT" "$PEER_NAME" "$PEER_NONCE")")"
+[[ -n "$PEER_SAID" ]] || { echo "[seven_gate] FATAL: the peer's opening message did not land — see the [http] line above." >&2; exit 2; }
+echo "[seven_gate] peer=$PEER ($PEER_NAME) spoke first: $PEER_NONCE"
+
+
+# 3c. PLANT THE PICTURE. ⑨ asks one thing: can it SEE. So a number is drawn into
+#     a PNG and that number exists NOWHERE ELSE — not in the body, not in the
+#     filename, not in the mime, not in a task, not in any file the agent can
+#     open. If it ever leaks into text, an agent that cannot see passes, and
+#     THAT PASS IS INDISTINGUISHABLE FROM THE REAL ONE. Hence the scan below.
+#     Regenerated per run and never 42: a hard-coded answer is one a model can
+#     have memorised, and a cell that can be passed from memory measures nothing.
+IMG_ANSWER="$(python3 -c 'import random;print("".join(random.choice("0123456789") for _ in range(6)))')"
+IMG_PATH="$RUN_DIR/scene-image.png"
+python3 "$HERE/make_answer_png.py" "$IMG_ANSWER" "$IMG_PATH" >/dev/null \
+  || { echo "[seven_gate] FATAL: could not draw the scene image." >&2; exit 2; }
+# The body names the picture and asks for the number; it must NOT contain it.
+# Same for the filename — a filename is text, and text is exactly what this cell
+# is trying to rule out as a source.
+IMG_POSTED="$(python3 - "$AGENT" "$IMG_PATH" <<'PY'
+import base64, json, sys
+agent, path = sys.argv[1], sys.argv[2]
+print(json.dumps({
+    "to": agent,
+    "body": "【交接圖】上一班把要用的號碼寫在這張圖上了，沒有留文字版。看一下圖，把上面那個號碼原樣回我。",
+    "attachments": [{
+        "filename": "handover-note.png",
+        "mime": "image/png",
+        "data_b64": base64.b64encode(open(path, "rb").read()).decode("ascii"),
+    }],
+}, ensure_ascii=False))
+PY
+)"
+IMG_RESP="$(SG_HTTP_TAG="owner:image" sg_http POST /api/chat "$IMG_POSTED")"
+[[ -n "$IMG_RESP" ]] || { echo "[seven_gate] FATAL: the picture did not land — ⑨ could only ever be red, and red for a HARNESS reason." >&2; exit 2; }
+echo "[seven_gate] picture planted (the number is in the pixels only)"
+
+# 3d. THE LEAK SCAN — the cell's whole validity in one check. Everything the
+#     agent can READ AS TEXT is pulled back off the server and searched for the
+#     answer; a single hit means a text-only agent could pass, so the run
+#     REFUSES rather than producing a green nobody can trust.
+#     A POSITIVE CONTROL runs first: the same scanner looks for the scene nonce,
+#     which we KNOW is in the text. If the control finds nothing, the scanner is
+#     broken and "zero hits" would be meaningless — so that is a refusal too.
+scan_scene_text() { # scan_scene_text NEEDLE -> prints hit count
+  local needle="$1" hits=0 hay
+  for p in "/api/chat?limit=500" "/api/tasks" "/api/reply-cards?status=waiting" \
+           "/api/reply-cards?status=answered" "/api/members"; do
+    hay="$(SG_HTTP_TAG="owner:leakscan" sg_http GET "$p" 2>/dev/null)"
+    hits=$(( hits + $(printf '%s' "$hay" | grep -o -F "$needle" | wc -l | tr -d ' ') ))
+  done
+  # The agent's own wake snapshot — the one surface assembled FOR it.
+  hay="$(SG_TOKEN="$AGENT_TOK" SG_HTTP_TAG="owner:leakscan" sg_http GET /api/resume-summary 2>/dev/null)"
+  hits=$(( hits + $(printf '%s' "$hay" | grep -o -F "$needle" | wc -l | tr -d ' ') ))
+  printf '%s' "$hits"
+}
+CONTROL_HITS="$(scan_scene_text "$NONCE")"
+if [[ "${CONTROL_HITS:-0}" -lt 1 ]]; then
+  echo "[seven_gate] FATAL: the leak scanner's POSITIVE CONTROL found 0 hits for the scene nonce, which IS in the text. The scanner is broken, so a clean answer-scan would mean nothing. Refusing to run." >&2
+  exit 2
+fi
+LEAK_HITS="$(scan_scene_text "$IMG_ANSWER")"
+if [[ "${LEAK_HITS:-0}" -ne 0 ]]; then
+  echo "[seven_gate] FATAL: the image's number appears $LEAK_HITS time(s) in TEXT the agent can read. ⑨ would be passable without ever opening the picture, and that pass would look exactly like a real one. Refusing to run." >&2
+  exit 2
+fi
+echo "[seven_gate] leak scan: answer 0 hits in readable text (positive control: scene nonce $CONTROL_HITS hit(s) — the scanner works)"
+
+python3 -c 'import json,sys;json.dump({"agent_id":sys.argv[1],"scene_nonce":sys.argv[2],"stamp":sys.argv[3],"peer_id":sys.argv[5],"peer_nonce":sys.argv[6],"image_answer":sys.argv[7]},open(sys.argv[4],"w"),ensure_ascii=False,indent=2)' \
+  "$AGENT" "$NONCE" "$STAMP" "$RUN_DIR/scene.json" "$PEER" "$PEER_NONCE" "$IMG_ANSWER"
 echo "[seven_gate] scene planted: $NONCE"
 
 # 4. collector FIRST — ①'s presence=waking is gone within seconds of the agent
@@ -154,7 +243,8 @@ echo "[seven_gate] owner card-responder pid=$RESPONDER_PID (answers ONLY $AGENT'
 #    so an actor holding it still cannot make a red run look green.
 OC_SG_BASE="$BASE" OC_SG_AGENT="$AGENT" OC_SG_AGENT_TOKEN="$AGENT_TOK" \
 OC_SG_SCENE_NONCE="$NONCE" OC_SG_RUN_DIR="$RUN_DIR" OC_SG_OWNER="owner" \
-OC_SG_OWNER_TOKEN="$OWNER_TOK" \
+OC_SG_OWNER_TOKEN="$OWNER_TOK" OC_SG_PEER="$PEER" OC_SG_PEER_NONCE="$PEER_NONCE" \
+OC_SG_IMAGE_ANSWER="$IMG_ANSWER" \
   bash "$ACTOR" 2>&1 | tee "$RUN_DIR/actor.log"
 echo "[seven_gate] actor rc=${PIPESTATUS[0]} (recorded, not judged)"
 
