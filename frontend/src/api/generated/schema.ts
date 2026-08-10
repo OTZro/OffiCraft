@@ -6389,13 +6389,13 @@ export interface components {
             minute: number;
             /**
              * Timezone
-             * @description IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`).
+             * @description IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`). Must name a place: `Local` and the empty string are REFUSED with 422 even though they resolve, because they mean `wherever this server runs` and `UTC by accident` rather than a stated zone. `UTC` itself is accepted. A wall-clock reading this zone does not have — the hour a spring-forward skips, or a day_of_month the month lacks — is an occurrence that does not happen, per RFC 5545's treatment of an invalid recurrence date.
              */
             timezone: string;
         };
         /**
          * ScheduledMessageDTO
-         * @description API representation of one scheduled_message (T-f059 定期訊息). The clock-driven twin of a webhook endpoint: identical shape, but the trigger is a recurring wall-clock slot instead of an inbound call. When a slot comes due the server delivers `body` to the bound member down the ORDINARY chat path — live if the member is online, the durable mailbox otherwise — from the synthetic sender `sched:<id>`, carrying `meta.scheduled = {schedule_id, label, slot}` so the receiving agent can tell what spoke to it. No new delivery semantics are invented here. `status` is the enable/disable toggle, not a lifecycle: DELETE is the permanent removal. `last_fired_slot` is the IDENTIFIER of the slot already delivered (e.g. `2026-08-10T09:00+08:00`), not a "last run at" clock — storing the slot is what makes restart-does-not-resend, missed-slots-are-not-backfilled and a-new-schedule-does-not-fire-immediately true by construction rather than by care.
+         * @description API representation of one scheduled_message (T-f059 定期訊息). The clock-driven twin of a webhook endpoint: identical shape, but the trigger is a recurring wall-clock slot instead of an inbound call. When a slot comes due the server delivers `body` to the bound member down the ORDINARY chat path — live if the member is online, the durable mailbox otherwise — from the synthetic sender `sched:<id>`, carrying `meta.scheduled = {schedule_id, label, slot}` so the receiving agent can tell what spoke to it. No new delivery semantics are invented here. `status` is the enable/disable toggle, not a lifecycle: DELETE is the permanent removal. `last_fired_slot` is the IDENTIFIER of the slot already delivered (e.g. `2026-08-10T09:00+08:00`), not a "last run at" clock — storing the slot is what carries restart-does-not-resend, missed-slots-are-not-backfilled and a-new-schedule-does-not-fire-immediately. Those three rest on the slot computation being monotonic in the current time, which the storage shape does not by itself guarantee, so the fire test is an ORDERING one (strictly later than the cursor, never merely different from it) and the cursor only ever moves forwards.
          */
         ScheduledMessageDTO: {
             /**
@@ -6442,7 +6442,7 @@ export interface components {
             label: string;
             /**
              * Last Fired Slot
-             * @description Identifier of the time slot already delivered, e.g. `2026-08-10T09:00+08:00`. Each tick recomputes the most recently elapsed slot and fires only when it differs from this string. Set at creation to the slot current at that moment, so it is never empty for a live schedule.
+             * @description Identifier of the time slot already delivered, e.g. `2026-08-10T09:00+08:00`. Each tick recomputes the most recently elapsed slot and fires only when that slot is STRICTLY LATER than the one named here, so the cursor never moves backwards and a slot is never delivered twice. Set at creation to the slot current at that moment, so it is never empty for a live schedule.
              */
             last_fired_slot: string;
             /**
@@ -6470,14 +6470,14 @@ export interface components {
             status: "enabled" | "disabled";
             /**
              * Timezone
-             * @description IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`).
+             * @description IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`). Must name a place: `Local` and the empty string are REFUSED with 422 even though they resolve, because they mean `wherever this server runs` and `UTC by accident` rather than a stated zone. `UTC` itself is accepted. A wall-clock reading this zone does not have — the hour a spring-forward skips, or a day_of_month the month lacks — is an occurrence that does not happen, per RFC 5545's treatment of an invalid recurrence date.
              * @default Asia/Taipei
              */
             timezone: string;
         };
         /**
          * ScheduledMessageUpdateDTO
-         * @description Partial edit of a scheduled message (T-f059 定期訊息). PATCH semantics — EVERY field is optional and only the supplied ones change. `status` flips the enabled/disabled toggle, which is what enable/disable means here (DELETE is the permanent removal; a value outside the set is a 422). Editing any cadence or slot field re-aims the schedule and moves the delivery cursor to the slot most recently elapsed, so an edit never fires the slot it crosses. `id` and `member_id` are immutable and are NOT editable here.
+         * @description Partial edit of a scheduled message (T-f059 定期訊息). PATCH semantics — EVERY field is optional and only the supplied ones change. `status` flips the enabled/disabled toggle, which is what enable/disable means here (DELETE is the permanent removal; a value outside the set is a 422). Editing a cadence or slot field to a DIFFERENT value re-aims the schedule and moves the delivery cursor to the slot most recently elapsed, so an edit never fires the slot it crosses; supplying a field that already holds that value changes nothing, cursor included, so a caller that sends the whole form back on every save does not quietly swallow a delivery. `id` and `member_id` are immutable and are NOT editable here.
          */
         ScheduledMessageUpdateDTO: {
             /**
@@ -6522,7 +6522,7 @@ export interface components {
             status?: ("enabled" | "disabled") | null;
             /**
              * Timezone
-             * @description IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`).
+             * @description IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`). Must name a place: `Local` and the empty string are REFUSED with 422 even though they resolve, because they mean `wherever this server runs` and `UTC by accident` rather than a stated zone. `UTC` itself is accepted. A wall-clock reading this zone does not have — the hour a spring-forward skips, or a day_of_month the month lacks — is an occurrence that does not happen, per RFC 5545's treatment of an invalid recurrence date.
              */
             timezone?: string | null;
         };
