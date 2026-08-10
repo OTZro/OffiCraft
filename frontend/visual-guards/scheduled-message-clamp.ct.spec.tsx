@@ -21,12 +21,18 @@
 // Width is an INPUT — how many lines a paragraph wraps to is a property of the
 // panel's width — so every assertion runs at a narrow panel and a wide one.
 //
-// MUTANT (verified red→green, see the round report): delete the
-// `-webkit-line-clamp: 3` / `line-clamp: 3` pair from
-// `.mp-schedmsg__text--clamped` → the collapsed box grows to the full body,
-// assertions (2) and (3) go red at BOTH widths. The source-level pin reddens
-// too on that particular mutant; it does NOT redden on a cascade or
-// `display`-property mutant, which this file does catch.
+// MUTANTS, all three measured (T-f059 round report). Collapsed height at
+// 320px / 900px, against a 22px line:
+//
+//   mutant on .mp-schedmsg__text--clamped        this guard   source-level pin
+//   drop -webkit-line-clamp:3 + line-clamp:3     420 / 133 ✗  ✗
+//   drop `display: -webkit-box`                  420 / 133 ✗  ✓ 18/18 green
+//   a LATER equal-specificity `.mp-schedmsg__text
+//     { line-clamp: none }` wins the cascade     420 / 133 ✗  ✓ 18/18 green
+//
+// The last two are the point: the collapse is gone, the row is a wall of text
+// again, and every existing test — the source pin and all 18 jsdom cases —
+// stays green. Only a measured box catches them.
 import { test, expect } from "@playwright/experimental-ct-react";
 import { ScheduledMessagesClampStory } from "./stories/ScheduledMessagesClampStory";
 
