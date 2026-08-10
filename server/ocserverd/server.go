@@ -591,6 +591,11 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 	// `updater.auto_update` setting gates action, so an owner arming it via
 	// PATCH /api/settings needs no restart. An unarmed tick is two mutex reads.
 	api.startAutoUpdateCadence(autoUpdateCadence)
+	// Scheduled messages (scheduled_message.go, T-f059): ALWAYS mounted, no
+	// toggle. A tick with no armed schedules is one indexed read; the fire/skip
+	// test is slot identity, so nothing here depends on the process having been
+	// up when a slot came due.
+	api.startScheduledMessageCadence(scheduledMessageCadence)
 	// Backup trigger ② (backup.go): ALWAYS mounted, no toggle. A backup that
 	// has to be armed is a backup nobody has — and until T-ada9 this studio had
 	// none at all. The tick only wakes; runDatabaseBackup decides whether one
