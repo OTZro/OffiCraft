@@ -2017,9 +2017,11 @@ type webhookEndpointDTO struct {
 // secret rides this wire.
 //
 // last_fired_slot is the delivery CURSOR — the identifier of the slot already
-// sent, not a clock reading — and is exposed because it is the only externally
-// visible answer to "will this fire next time?"; last_fired_ts beside it is
-// human-facing and takes no part in the decision.
+// sent, not a clock reading. It is on the wire for callers that need to reason
+// about the cursor itself (it is the only field that answers "has this slot gone
+// out?"), NOT for display: the cockpit card renders last_fired_ts beside it as a
+// human-readable last-delivered line, because `2026-08-10T09:00+08:00` answers a
+// question a person is not asking.
 type scheduledMessageDTO struct {
 	ID            string  `json:"id"`
 	MemberID      string  `json:"member_id"`
