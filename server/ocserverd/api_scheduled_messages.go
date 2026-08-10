@@ -96,8 +96,20 @@ func (s *apiServer) HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessa
 	// Whether the schedule was RE-AIMED, which is a different question from
 	// whether it was edited: changing the label or the body leaves the slots
 	// where they were, so the cursor must stay put too.
-	reAimed := body.Cadence != nil || body.DayOfWeek != nil || body.DayOfMonth != nil ||
-		body.Hour != nil || body.Minute != nil || body.Timezone != nil
+	//
+	// 🔴 Compared by VALUE against the row as it stands, not by which fields the
+	// caller happened to send. Re-aiming on mere presence means a caller that
+	// PATCHes the whole form back — which is what every "save" button eventually
+	// does — moves the cursor to now on every save even when nothing about the
+	// timing changed. Land one of those in the window between a slot elapsing and
+	// the next tick (up to a minute) and that delivery is swallowed permanently,
+	// with no error, no log line and a card that looks entirely normal.
+	reAimed := (body.Cadence != nil && string(*body.Cadence) != m.Cadence) ||
+		(body.DayOfWeek != nil && *body.DayOfWeek != m.DayOfWeek) ||
+		(body.DayOfMonth != nil && *body.DayOfMonth != m.DayOfMonth) ||
+		(body.Hour != nil && *body.Hour != m.Hour) ||
+		(body.Minute != nil && *body.Minute != m.Minute) ||
+		(body.Timezone != nil && trimString(*body.Timezone) != m.Timezone)
 	if body.Label != nil {
 		m.Label = *body.Label
 	}

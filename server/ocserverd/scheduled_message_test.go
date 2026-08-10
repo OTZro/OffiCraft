@@ -772,6 +772,26 @@ func TestUpdateScheduledMessageReAimsTheCursorOnlyWhenReAimed(t *testing.T) {
 			"most recently elapsed", got)
 	}
 
+	// 🔴 Re-aiming is about the VALUE changing, not about the field appearing.
+	// Plant the stale cursor again and send the hour the schedule already has:
+	// nothing about when it fires has changed, so nothing about the cursor may
+	// change either. A caller that PATCHes the whole form back — every editor
+	// eventually does — otherwise swallows one delivery per save, in the window
+	// between a slot elapsing and the next tick, leaving no trace.
+	stored, _ = api.dal.GetScheduledMessage(id)
+	stored.LastFiredSlot = "1999-01-01T00:00+08:00"
+	if err := api.dal.PutScheduledMessage(*stored); err != nil {
+		t.Fatalf("replant cursor: %v", err)
+	}
+	status, patched = doJSON(t, "PATCH", path, ownerTok, `{"hour":8,"minute":0,"cadence":"daily","timezone":"Asia/Taipei"}`)
+	if status != 200 {
+		t.Fatalf("no-op patch: %d %v", status, patched)
+	}
+	if got, _ := patched["last_fired_slot"].(string); got != "1999-01-01T00:00+08:00" {
+		t.Fatalf("a patch that changed NO slot field moved the cursor to %q — the "+
+			"slot it just crossed will never be delivered and nothing will say so", got)
+	}
+
 	// An unloadable timezone is refused on PATCH too, not just on create — and so
 	// is the host-relative one, which is the one that would otherwise succeed.
 	for _, tz := range []string{"Mars/Olympus_Mons", "Local"} {
