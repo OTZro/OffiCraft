@@ -21,9 +21,12 @@ const DICTS: Record<Lang, Dict> = { zh, en };
 /** The FULL sets, spelled out rather than abbreviated: "every day" on this wire
  * IS the list of every day, and the summary's whole job is to say so in one
  * phrase instead of 31 numbers. */
+const ALL_MONTHS = Array.from({ length: 12 }, (_, i) => i + 1);
 const ALL_DAYS = Array.from({ length: 31 }, (_, i) => i + 1);
 const ALL_HOURS = Array.from({ length: 24 }, (_, i) => i);
 const ALL_MINUTES = Array.from({ length: 60 }, (_, i) => i);
+/** What the minute group's 全選 now hands over: the twelve cells it offers. */
+const EVERY_FIVE = Array.from({ length: 12 }, (_, i) => i * 5);
 
 /** [language, message, arguments, the text that must appear on screen]. */
 const EXPECTED: [Lang, string, (string | number | string[] | number[])[], string][] = [
@@ -85,18 +88,31 @@ const EXPECTED: [Lang, string, (string | number | string[] | number[])[], string
     // ── 定期訊息 · 自訂頻率 (T-49e7) ──
     // 每一組的三態各釘一次:整組選滿、部分、空的。空的那一態是可被拒絕的狀態,
     // 說出來才不會與「全選」看起來一樣。
+    ["zh", "schedCustomMonths", [ALL_MONTHS], "每個月"],
+    ["zh", "schedCustomMonths", [[3, 6, 9, 12]], "每年 3、6、9、12 月"],
+    ["zh", "schedCustomMonths", [[]], "尚未選擇"],
     ["zh", "schedCustomDays", [ALL_DAYS], "每天"],
     ["zh", "schedCustomDays", [[1, 15, 31]], "每月 1、15、31 號"],
+    // Scattered past the cap: four numbers, then how many were left unsaid.
+    ["zh", "schedCustomDays", [[1, 3, 5, 7, 9, 11]], "每月 1、3、5、7 號等 2 個"],
     ["zh", "schedCustomDays", [[]], "尚未選擇"],
     ["zh", "schedCustomHours", [ALL_HOURS], "每小時"],
     ["zh", "schedCustomHours", [[9, 17]], "第 9、17 點"],
     ["zh", "schedCustomHours", [[]], "尚未選擇"],
     ["zh", "schedCustomMinutes", [ALL_MINUTES], "每分鐘"],
-    ["zh", "schedCustomMinutes", [[0, 20, 40]], "第 0、20、40 分"],
+    // Evenly spaced from 0 IS an interval, and that is how the owner reads it
+    // back — this is the case that made him think the control only did intervals.
+    ["zh", "schedCustomMinutes", [[0, 20, 40]], "每 20 分鐘"],
+    ["zh", "schedCustomMinutes", [EVERY_FIVE], "每 5 分鐘"],
+    ["zh", "schedCustomMinutes", [[0, 30]], "每 30 分鐘"],
+    // …but an offset run is NOT: 「每 20 分鐘」 would not say WHICH minutes.
+    ["zh", "schedCustomMinutes", [[15, 35, 55]], "第 15、35、55 分"],
+    ["zh", "schedCustomMinutes", [[0, 20, 45]], "第 0、20、45 分"],
+    ["zh", "schedCustomMinutes", [[7]], "第 7 分"],
     ["zh", "schedCustomMinutes", [[]], "尚未選擇"],
-    ["zh", "schedCustomSummary", [ALL_DAYS, ALL_HOURS, [0, 20, 40]], "每天 · 每小時 · 第 0、20、40 分"],
-    ["zh", "schedCustomSummary", [[1, 15], [9], [30]], "每月 1、15 號 · 第 9 點 · 第 30 分"],
-    ["zh", "schedMinuteStep", [20], "每 20 分"],
+    ["zh", "schedCustomSummary", [ALL_MONTHS, ALL_DAYS, ALL_HOURS, [0, 20, 40]], "每個月 · 每天 · 每小時 · 每 20 分鐘"],
+    ["zh", "schedCustomSummary", [[3], [1, 15], [9], [30]], "每年 3 月 · 每月 1、15 號 · 第 9 點 · 第 30 分"],
+    ["zh", "schedMinuteStep", [20], "每 20 分鐘"],
     ["en", "taskProgress", [3,7], "Step 3/7"],
     ["en", "taskElapsed", ["2h"], "Elapsed 2h"],
     ["en", "taskPlanningBy", ["Mira"], "Waiting for Mira to create steps"],
@@ -158,18 +174,27 @@ const EXPECTED: [Lang, string, (string | number | string[] | number[])[], string
     ["en", "docHistoryActor", ["Kyle", "m-f663"], "Kyle (m-f663)"],
     ["en", "docHistoryActor", ["", "ow-c975"], "ow-c975"],
     ["en", "diffTooLarge", [2400], "Too long to compare line by line (2400 lines)."],
+    ["en", "schedCustomMonths", [ALL_MONTHS], "Every month"],
+    ["en", "schedCustomMonths", [[3, 6, 9, 12]], "Months 3, 6, 9, 12 of the year"],
+    ["en", "schedCustomMonths", [[]], "Nothing selected"],
     ["en", "schedCustomDays", [ALL_DAYS], "Daily"],
     ["en", "schedCustomDays", [[1, 15, 31]], "Days 1, 15, 31 of the month"],
+    ["en", "schedCustomDays", [[1, 3, 5, 7, 9, 11]], "Days 1, 3, 5, 7 of the month and 2 more"],
     ["en", "schedCustomDays", [[]], "Nothing selected"],
     ["en", "schedCustomHours", [ALL_HOURS], "Every hour"],
     ["en", "schedCustomHours", [[9, 17]], "Hours 9, 17 of the day"],
     ["en", "schedCustomHours", [[]], "Nothing selected"],
     ["en", "schedCustomMinutes", [ALL_MINUTES], "Every minute"],
-    ["en", "schedCustomMinutes", [[0, 20, 40]], "Minutes 0, 20, 40 of the hour"],
+    ["en", "schedCustomMinutes", [[0, 20, 40]], "Every 20 minutes"],
+    ["en", "schedCustomMinutes", [EVERY_FIVE], "Every 5 minutes"],
+    ["en", "schedCustomMinutes", [[0, 30]], "Every 30 minutes"],
+    ["en", "schedCustomMinutes", [[15, 35, 55]], "Minutes 15, 35, 55 of the hour"],
+    ["en", "schedCustomMinutes", [[0, 20, 45]], "Minutes 0, 20, 45 of the hour"],
+    ["en", "schedCustomMinutes", [[7]], "Minutes 7 of the hour"],
     ["en", "schedCustomMinutes", [[]], "Nothing selected"],
-    ["en", "schedCustomSummary", [ALL_DAYS, ALL_HOURS, [0, 20, 40]], "Daily · Every hour · Minutes 0, 20, 40 of the hour"],
-    ["en", "schedCustomSummary", [[1, 15], [9], [30]], "Days 1, 15 of the month · Hours 9 of the day · Minutes 30 of the hour"],
-    ["en", "schedMinuteStep", [20], "Every 20 min"],
+    ["en", "schedCustomSummary", [ALL_MONTHS, ALL_DAYS, ALL_HOURS, [0, 20, 40]], "Every month · Daily · Every hour · Every 20 minutes"],
+    ["en", "schedCustomSummary", [[3], [1, 15], [9], [30]], "Months 3 of the year · Days 1, 15 of the month · Hours 9 of the day · Minutes 30 of the hour"],
+    ["en", "schedMinuteStep", [20], "Every 20 minutes"],
 ];
 
 describe("makeMessages", () => {
@@ -294,6 +319,11 @@ describe("makeMessages", () => {
       "diff.tooLargeLead",
       "diff.tooLargeTail",
       "mp.schedmsg.cadenceDaily",
+      "mp.schedmsg.customEveryMonth",
+      "mp.schedmsg.customMonthsLead",
+      "mp.schedmsg.customMonthsTail",
+      "mp.schedmsg.customMoreLead",
+      "mp.schedmsg.customMoreTail",
       "mp.schedmsg.customDaysLead",
       "mp.schedmsg.customDaysTail",
       "mp.schedmsg.customEveryHour",

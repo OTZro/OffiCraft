@@ -73,10 +73,12 @@ export interface Messages {
   workerMachineMovingTo: (machine: string) => string;
   agentWindDownForChange: (by: string) => string;
   // ── 定期訊息 · custom cadence (T-49e7) ──
+  schedCustomMonths: (months: number[]) => string;
   schedCustomDays: (days: number[]) => string;
   schedCustomHours: (hours: number[]) => string;
   schedCustomMinutes: (minutes: number[]) => string;
   schedCustomSummary: (
+    months: number[],
     days: number[],
     hours: number[],
     minutes: number[]
@@ -106,6 +108,29 @@ export interface Messages {
   diffTooLarge: (lines: number) => string;
 }
 
+/** The interval a minute set IS, or `null` when it is not one (T-49e7 round 2).
+ *
+ * A set qualifies only when it tiles the whole hour: it starts at minute 0, the
+ * gap between neighbours never changes, and that gap divides 60 — so the last
+ * value wraps onto the next hour's 0 at the same spacing. {0,20,40} qualifies
+ * (every 20 minutes, forever); {15,35,55} does NOT, because 55 → 15 is a gap of
+ * 20 but the phrase 「每 20 分鐘」 gives a reader no way to know the offset, and
+ * {0,20,45} does not because it is not evenly spaced at all.
+ *
+ * 🔴 Two values minimum. A single tick has no gap to measure, and calling {7}
+ * "every 60 minutes" would rewrite a choice as a statement its author never
+ * made. */
+export function evenMinuteStep(minutes: number[]): number | null {
+  if (minutes.length < 2) return null;
+  if (minutes[0] !== 0) return null;
+  if (60 % minutes.length !== 0) return null;
+  const step = 60 / minutes.length;
+  for (let i = 0; i < minutes.length; i++) {
+    if (minutes[i] !== i * step) return null;
+  }
+  return step;
+}
+
 /** Build the composed messages for one (already wording-overlaid) dict. */
 export function makeMessages(t: Dict, language: Lang): Messages {
   // The separator between a parameter and an adjacent fragment where the two
@@ -123,6 +148,20 @@ export function makeMessages(t: Dict, language: Lang): Messages {
   const diff = t.diff;
   // The list separator between two codes: a join, not vocabulary.
   const listSep = language === "zh" ? "、" : ", ";
+  /** How many numbers a scattered `custom` set prints before the rest is
+   * carried by a count (owner ruling, T-49e7 round 2: 「最多列 4 個」). */
+  const LIST_CAP = 4;
+  /** Render one `custom` set as at most LIST_CAP numbers plus, when there are
+   * more, a phrase naming HOW MANY WERE NOT PRINTED. The tail sits inside the
+   * listed phrase's own tail ("第 0、7、13、22 分" + "等 2 個") so the sentence
+   * still reads as one clause in either language. */
+  const cappedList = (values: number[], lead: string, tail: string): string => {
+    const shown = values.slice(0, LIST_CAP);
+    const listed = `${lead}${shown.join(listSep)}${tail}`;
+    if (values.length <= LIST_CAP) return listed;
+    const rest = values.length - shown.length;
+    return `${listed}${sp}${sched.customMoreLead}${rest}${sched.customMoreTail}`;
+  };
   // Named rather than returned inline: the row summary is literally the three
   // group phrases joined, so it composes them through this same object instead
   // of keeping a second copy of the every-set/empty-set rules.
@@ -197,35 +236,57 @@ export function makeMessages(t: Dict, language: Lang): Messages {
     agentWindDownForChange: (by) =>
       `${mp.windDownForChangeLabel}${sp}·${sp}${mp.windDownByLabel} ${by} ${mp.windDownEffectSuffix}`,
 
-    // 定期訊息 · 自訂頻率 (T-49e7). The whole-set day phrase reuses the cadence
-    // menu's own 每天 / Daily rather than keeping a second word for the same
-    // idea — one leaf, so a theme that re-words it cannot re-word only half.
-    // Each of the three phrases stands ALONE under
-    // its own group heading, so none of them may borrow grammar from a
-    // neighbour; the row summary is those same three joined by a separator,
-    // which is a join and not vocabulary. A whole set reads as 「每天」/
-    // 「每小時」/「每分鐘」 rather than listing 24 or 60 numbers, and an EMPTY set
-    // says so out loud — it is a refusable state, never a silent "all".
+    // 定期訊息 · 自訂頻率 (T-49e7 round 2). The whole-set day phrase reuses the
+    // cadence menu's own 每天 / Daily rather than keeping a second word for the
+    // same idea — one leaf, so a theme that re-words it cannot re-word only
+    // half. Each of the four phrases stands ALONE under its own group heading,
+    // so none of them may borrow grammar from a neighbour; the row summary is
+    // those same four joined by a separator, which is a join and not
+    // vocabulary.
+    //
+    // 🔴 Three shapes, in this order (owner ruling, round 2):
+    //   whole set     say it in words — 每個月/每天/每小時 — never 12, 31 or 24
+    //                 numbers.
+    //   even interval (minutes only) 「每 N 分鐘」. Ticking 0, 20, 40 IS every
+    //                 twenty minutes, and that is the sentence the owner reads
+    //                 the schedule back as.
+    //   scattered     list at most LIST_CAP of them and let 等 N 個 carry the
+    //                 REST. A row summary that prints eleven numbers is a row
+    //                 summary nobody reads.
+    // An EMPTY set still says so out loud — it is a refusable state, never a
+    // silent "all".
+    schedCustomMonths: (months) =>
+      months.length === 0
+        ? sched.customNone
+        : months.length === 12
+          ? sched.customEveryMonth
+          : cappedList(months, sched.customMonthsLead, sched.customMonthsTail),
     schedCustomDays: (days) =>
       days.length === 0
         ? sched.customNone
         : days.length === 31
           ? sched.cadenceDaily
-          : `${sched.customDaysLead}${days.join(listSep)}${sched.customDaysTail}`,
+          : cappedList(days, sched.customDaysLead, sched.customDaysTail),
     schedCustomHours: (hours) =>
       hours.length === 0
         ? sched.customNone
         : hours.length === 24
           ? sched.customEveryHour
-          : `${sched.customHoursLead}${hours.join(listSep)}${sched.customHoursTail}`,
-    schedCustomMinutes: (minutes) =>
-      minutes.length === 0
-        ? sched.customNone
-        : minutes.length === 60
-          ? sched.customEveryMinute
-          : `${sched.customMinutesLead}${minutes.join(listSep)}${sched.customMinutesTail}`,
-    schedCustomSummary: (days, hours, minutes) =>
+          : cappedList(hours, sched.customHoursLead, sched.customHoursTail),
+    schedCustomMinutes: (minutes) => {
+      if (minutes.length === 0) return sched.customNone;
+      if (minutes.length === 60) return sched.customEveryMinute;
+      const step = evenMinuteStep(minutes);
+      if (step !== null) return messages.schedMinuteStep(step);
+      return cappedList(
+        minutes,
+        sched.customMinutesLead,
+        sched.customMinutesTail
+      );
+    },
+    schedCustomSummary: (months, days, hours, minutes) =>
       [
+        messages.schedCustomMonths(months),
         messages.schedCustomDays(days),
         messages.schedCustomHours(hours),
         messages.schedCustomMinutes(minutes),

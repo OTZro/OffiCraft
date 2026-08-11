@@ -877,21 +877,26 @@ export const en: Dict = {
       cadenceWeekly: "Weekly",
       cadenceMonthly: "Monthly",
       cadenceCustom: "Custom",
-      // ── Custom cadence (T-49e7). The schedule is the INTERSECTION of three
-      // sets — which days × which hours × which minutes — and each is listed
-      // explicitly: an empty set is a 422, because "fires every time" and
-      // "never fires" must not be one keystroke apart. ──
+      // ── Custom cadence (T-49e7). The schedule is the INTERSECTION of four
+      // sets — which months × which days × which hours × which minutes — and
+      // each is listed explicitly: an empty set is a 422, because "fires every
+      // time" and "never fires" must not be one keystroke apart.
+      // The four headings answer "which <unit>", matching the zh set the owner
+      // picked (幾月 / 幾號 / 幾點 / 幾分). ──
+      customMonthsLabel: "Which months",
       customDaysLabel: "Which days",
       customHoursLabel: "Which hours",
       customMinutesLabel: "Which minutes",
       customSelectAll: "Select all",
       customClear: "Clear",
-      customMinuteDetailShow: "Pick individual minutes",
       customEmptyHint:
-        "Each of the three needs at least one pick, or the schedule has no time to fire at — and the server will refuse it.",
+        "Each of the four needs at least one pick, or the schedule has no time to fire at — and the server will refuse it.",
       customNone: "Nothing selected",
       // Summary phrases: each stands on its own under its group heading, and the
-      // row summary joins the three with a middle dot.
+      // row summary joins the four with a middle dot.
+      customEveryMonth: "Every month",
+      customMonthsLead: "Months ",
+      customMonthsTail: " of the year",
       customDaysLead: "Days ",
       customDaysTail: " of the month",
       customEveryHour: "Every hour",
@@ -900,8 +905,14 @@ export const en: Dict = {
       customEveryMinute: "Every minute",
       customMinutesLead: "Minutes ",
       customMinutesTail: " of the hour",
+      // Evenly spaced minutes collapse to this (ticking only 0, 20, 40 reads as
+      // "Every 20 minutes").
       customStepLead: "Every ",
-      customStepTail: " min",
+      customStepTail: " minutes",
+      // A scattered pick lists the first few and lets this carry the REST —
+      // N is how many were not printed.
+      customMoreLead: "and ",
+      customMoreTail: " more",
       // Row-summary phrases: the word order differs per language, so these are
       // interpolated rather than glued together from fragments in the component.
       weeklyOn: (weekday: string) => `Every ${weekday}`,

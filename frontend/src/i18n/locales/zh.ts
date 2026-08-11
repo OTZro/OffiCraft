@@ -947,19 +947,24 @@ export const zh = {
       cadenceWeekly: "每週",
       cadenceMonthly: "每月",
       cadenceCustom: "自訂",
-      // ── 自訂頻率(T-49e7)。三組是「哪幾天 × 哪幾點 × 哪幾分」的交集,每一組
+      // ── 自訂頻率(T-49e7)。四組是「幾月 × 幾號 × 幾點 × 幾分」的交集,每一組
       // 都要逐項列出來:空集合會被伺服器擋下(422),因為「每次都送」與「永遠
-      // 不送」不可以只差一個鍵。 ──
-      customDaysLabel: "哪幾天",
-      customHoursLabel: "哪幾點",
-      customMinutesLabel: "哪幾分",
+      // 不送」不可以只差一個鍵。
+      // 🔴 四個標籤是 owner 於卡上逐字選定的(第二輪):幾月 / 幾號 / 幾點 / 幾分
+      // ——「月份／日期／小時／分鐘」那組是被否掉的建議,不要「順手」改回去。 ──
+      customMonthsLabel: "幾月",
+      customDaysLabel: "幾號",
+      customHoursLabel: "幾點",
+      customMinutesLabel: "幾分",
       customSelectAll: "全選",
       customClear: "清除",
-      customMinuteDetailShow: "細部選擇",
       customEmptyHint:
-        "三組都要至少選一項,否則這條排程沒有任何送出時間,伺服器也會拒絕。",
+        "四組都要至少選一項,否則這條排程沒有任何送出時間,伺服器也會拒絕。",
       customNone: "尚未選擇",
-      // 摘要片語:三組各自成句(標題就在它上面),列摘要再把三句用「 · 」接起來。
+      // 摘要片語:四組各自成句(標題就在它上面),列摘要再把四句用「 · 」接起來。
+      customEveryMonth: "每個月",
+      customMonthsLead: "每年 ",
+      customMonthsTail: " 月",
       customDaysLead: "每月 ",
       customDaysTail: " 號",
       customEveryHour: "每小時",
@@ -968,8 +973,13 @@ export const zh = {
       customEveryMinute: "每分鐘",
       customMinutesLead: "第 ",
       customMinutesTail: " 分",
+      // 等間隔的分鐘收合成這一句(只勾 0、20、40 ⇒「每 20 分鐘」)。
       customStepLead: "每 ",
-      customStepTail: " 分",
+      customStepTail: " 分鐘",
+      // 零散選擇只列前幾個,其餘用這一句帶過(「第 0、7、13、22 分等 2 個」)。
+      // N 是「沒列出來的那幾個」的數量。
+      customMoreLead: "等 ",
+      customMoreTail: " 個",
       // 列摘要用的組合詞:語序在各語言不同,所以用內插而不是把碎片在元件裡黏起來。
       weeklyOn: (weekday: string) => `每${weekday}`,
       monthlyOn: (day: number) => `每月 ${day} 號`,
