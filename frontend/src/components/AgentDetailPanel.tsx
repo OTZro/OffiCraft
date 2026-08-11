@@ -136,34 +136,85 @@ export interface AgentDetailVM {
   prompt?: AgentDetailPrompt;
 }
 
+/** The kind-specific card slots this panel offers, in render order.
+ *
+ * 🔴 This tuple is the ONE list, and `AgentDetailSlots` is DERIVED from it —
+ * that derivation is the whole point of T-0b4f (owner 2026-08-09,
+ * `rc-93536ece6a80`): 「兩邊共用應該是預設值,真正只有一邊有的東西反而是特例…
+ * 都要給插槽的 key,裡面某個欄位會說這個插槽有沒有生效,避免在沒注意到的情況下
+ * 漏掉。這樣外包跟正職要給的全部鍵值應該就是容器提供的全部鍵值」.
+ *
+ * So: adding a key HERE is what makes BOTH wrappers stop compiling until each
+ * one says what it does with the new slot. Before this, the slots were optional
+ * props — a new card added to one wrapper was silently absent from the other,
+ * and nothing anywhere would say so. That shape landed four times, and every
+ * time the owner was the one who noticed. Completeness is now structural, not
+ * something someone has to remember. */
+export const AGENT_DETAIL_SLOTS = [
+  "overlays",
+  "afterIdentityCards",
+  "afterInfoCards",
+  "extraExpandCards",
+  "afterPromptCards",
+] as const;
+
+export type AgentDetailSlotKey = (typeof AGENT_DETAIL_SLOTS)[number];
+
+declare const SLOT_REASON: unique symbol;
+/** A reason string minted ONLY by `notHere` — see why it is branded there. */
+export type SlotReason = string & { readonly [SLOT_REASON]: true };
+
+/** What ONE wrapper does with ONE slot. `on: false` is a DECISION that was
+ * written down, not an omission: it carries the reason, and it is the only way
+ * to say 「這一邊不要」 — there is no third state and no way to stay silent. */
+export type AgentDetailSlot =
+  | { on: true; node: ReactNode }
+  | { on: false; why: SlotReason };
+
+/** EVERY key, no exceptions. `Record` (not `Partial<Record>`) is what turns a
+ * forgotten slot into a compile error; the excess-property check on the object
+ * literal catches the other direction (a key the panel does not offer). */
+export type AgentDetailSlots = Record<AgentDetailSlotKey, AgentDetailSlot>;
+
+/** This side fills the slot with `node`. */
+export function slot(node: ReactNode): AgentDetailSlot {
+  return { on: true, node };
+}
+
+/** This side deliberately has nothing here — and says why.
+ *
+ * 🔴 The reason is branded (`SlotReason`) so the off variant CANNOT be written
+ * as a bare `{ on: false, why: "" }` literal, and the generic rejects the empty
+ * string outright. An un-reasoned "not here" is indistinguishable from having
+ * forgotten, which is the exact failure this whole type exists to remove. */
+export function notHere<W extends string>(
+  why: W extends "" ? never : W,
+): AgentDetailSlot {
+  return { on: false, why: why as unknown as SlotReason };
+}
+
+/** The only reader of a slot's `on` field. */
+function slotNode(s: AgentDetailSlot): ReactNode {
+  return s.on ? s.node : null;
+}
+
 interface AgentDetailPanelProps {
   vm: AgentDetailVM;
   onBack: () => void;
   /** The kind-specific identity card (member: avatar + rename + presence +
    * action buttons; worker: briefcase + codename + task chip). */
   identity: ReactNode;
-  /** Modal-ish overlays (machine pickers, confirms) — rendered right after
-   * the identity card, same as both panels always did. */
-  overlays?: ReactNode;
-  /** Pluggable cards between overlays and the 模型/機器 info card (worker:
-   * 委託任務, T-b0e3 — owner wants it above 模型/機器, not buried after 最近操作).
-   * Undefined ⇒ renders nothing, so the member page (no caller passes this) is
-   * unaffected. */
-  afterIdentityCards?: ReactNode;
-  /** Pluggable cards between the info card and the runtime card (worker:
-   * 狀態 + 委託人). */
-  afterInfoCards?: ReactNode;
-  /** Pluggable cards between the 最近操作 card and the terminal card. Unused by
-   * the worker panel since T-b0e3 (委託任務 moved to afterIdentityCards); kept
-   * for any future kind-specific card that belongs after 最近操作. */
-  beforeTerminalCards?: ReactNode;
-  /** Pluggable expand cards after the terminal card, BEFORE the initial-prompt
-   * card (member: 回呼端點 webhook). */
-  extraExpandCards?: ReactNode;
-  /** Pluggable cards AFTER the initial-prompt card — the LAST slot the panel
-   * offers (member: RESUME SUMMARY, T-8b0d). Undefined ⇒ renders nothing, so
-   * a caller that never passes it (the worker page today) is unaffected. */
-  afterPromptCards?: ReactNode;
+  /** Every slot the panel offers — see `AGENT_DETAIL_SLOTS`.
+   *
+   * Render positions, in order: `overlays` right after the identity card
+   * (modal-ish machine pickers / confirms) · `afterIdentityCards` between those
+   * and the 模型/機器 info card (worker: 委託任務, T-b0e3) · `afterInfoCards`
+   * between the info card and the runtime card (worker: 委託人) ·
+   * `extraExpandCards` after the terminal card and BEFORE the initial-prompt
+   * card (member: 回呼端點 webhook + 定期訊息; worker: 定期訊息) ·
+   * `afterPromptCards` after the initial-prompt card, the LAST slot the panel
+   * offers (member: RESUME SUMMARY, T-8b0d). */
+  slots: AgentDetailSlots;
 }
 
 /**
@@ -178,12 +229,7 @@ export function AgentDetailPanel({
   vm,
   onBack,
   identity,
-  overlays,
-  afterIdentityCards,
-  afterInfoCards,
-  beforeTerminalCards,
-  extraExpandCards,
-  afterPromptCards,
+  slots,
 }: AgentDetailPanelProps) {
   const { t, msg } = useI18n();
   const dash = t.mp.dash;
@@ -366,8 +412,8 @@ export function AgentDetailPanel({
       </button>
 
       {identity}
-      {overlays}
-      {afterIdentityCards}
+      {slotNode(slots.overlays)}
+      {slotNode(slots.afterIdentityCards)}
 
       {/* info card: LEFT 執行環境 + 模型 + 投入度 (editable launch intents), RIGHT 機器 +
        * runtime account — the member page's mp-info2 layout, now the ONE layout. */}
@@ -434,7 +480,7 @@ export function AgentDetailPanel({
         </div>
       </div>
 
-      {afterInfoCards}
+      {slotNode(slots.afterInfoCards)}
 
       {/* runtime card: context% + est.$ + 換手 */}
       <div className="mp-card mp-runtime">
@@ -551,8 +597,6 @@ export function AgentDetailPanel({
         </div>
       )}
 
-      {beforeTerminalCards}
-
       {/* terminal / tmux */}
       <div className="mp-card mp-terminal">
         <div className="mp-card__title mp-terminal__title">{t.mp.terminal}</div>
@@ -574,7 +618,7 @@ export function AgentDetailPanel({
         <div className="mp-terminal__hint">{vm.terminalHint}</div>
       </div>
 
-      {extraExpandCards}
+      {slotNode(slots.extraExpandCards)}
 
       {/* expandable: initial prompt */}
       {vm.prompt && (
@@ -634,7 +678,7 @@ export function AgentDetailPanel({
         </div>
       )}
 
-      {afterPromptCards}
+      {slotNode(slots.afterPromptCards)}
     </div>
   );
 }

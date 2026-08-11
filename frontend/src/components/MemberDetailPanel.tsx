@@ -17,7 +17,12 @@ import type {
   WebhookRequestLog,
   MemberResumeSummaryView,
 } from "../api/adapter";
-import { AgentDetailPanel, runtimeLabel } from "./AgentDetailPanel";
+import {
+  AgentDetailPanel,
+  notHere,
+  runtimeLabel,
+  slot,
+} from "./AgentDetailPanel";
 import { pendingChangeHint, reportedMachine } from "../lib/pendingChange";
 import { AvatarEditor } from "./AvatarEditor";
 import { Avatar } from "./Avatar";
@@ -1750,9 +1755,23 @@ export function MemberDetailPanel({
     <AgentDetailPanel
       onBack={onBack}
       identity={identityCard}
-      overlays={overlayCards}
-      extraExpandCards={extraExpandCards}
-      afterPromptCards={resumeSummaryCard}
+      // EVERY slot the panel offers, no exceptions (T-0b4f). A slot this side
+      // deliberately has nothing in is `notHere(<why>)` — a decision that is
+      // written down, not a prop nobody passed. Adding a slot to
+      // AGENT_DETAIL_SLOTS breaks THIS literal until it is answered here too.
+      slots={{
+        overlays: slot(overlayCards),
+        afterIdentityCards: notHere(
+          "委託任務卡是外包獨有：外包與任務一對一綁定（任務終態即 release），" +
+            "正職沒有對應概念（docs/design/worker-panel-parity.md C4）",
+        ),
+        afterInfoCards: notHere(
+          "委託人卡是外包獨有：外包是系統代 owner 生出來的，「誰委託的」是它才有的" +
+            "來歷資訊（docs/design/worker-panel-parity.md C3）",
+        ),
+        extraExpandCards: slot(extraExpandCards),
+        afterPromptCards: slot(resumeSummaryCard),
+      }}
       vm={{
         testIdPrefix: "mp",
         online,

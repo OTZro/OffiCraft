@@ -11,8 +11,22 @@
 import { I18nProvider } from "../../src/i18n";
 import {
   AgentDetailPanel,
+  notHere,
+  slot,
+  type AgentDetailSlots,
   type AgentDetailVM,
 } from "../../src/components/AgentDetailPanel";
+
+/** Every slot declined — these stories isolate the SHARED cards, so nothing
+ * kind-specific belongs on screen. Since T-0b4f the panel takes the whole slot
+ * map, so "this story wants none of them" has to be said, not left out. */
+const NO_SLOTS: AgentDetailSlots = {
+  overlays: notHere("此故事只量共用卡片的版面"),
+  afterIdentityCards: notHere("此故事只量共用卡片的版面"),
+  afterInfoCards: notHere("此故事只量共用卡片的版面"),
+  extraExpandCards: notHere("此故事只量共用卡片的版面"),
+  afterPromptCards: notHere("此故事只量共用卡片的版面"),
+};
 
 const NOOP_LABEL = (s: string) => s;
 
@@ -44,6 +58,7 @@ export function MemberDetailConvergenceStory() {
       <AgentDetailPanel
         onBack={() => {}}
         identity={<div className="mp-card mp-identity">member</div>}
+        slots={NO_SLOTS}
         vm={{ ...baseVM, testIdPrefix: "mp" }}
       />
     </I18nProvider>
@@ -60,11 +75,14 @@ export function WorkerDetailConvergenceStory() {
         // (its 狀態 half retired — owner 2026-07-31), so it is a plain .mp-card:
         // the assertion below deliberately reads the SHARED grid via .first(),
         // and a second .mp-info2 here would let a regression hide behind it.
-        afterInfoCards={
-          <div className="mp-card">
-            <div className="mp-field">delegator</div>
-          </div>
-        }
+        slots={{
+          ...NO_SLOTS,
+          afterInfoCards: slot(
+            <div className="mp-card">
+              <div className="mp-field">delegator</div>
+            </div>,
+          ),
+        }}
         vm={{
           ...baseVM,
           testIdPrefix: "worker-detail",
