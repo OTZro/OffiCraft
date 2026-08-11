@@ -2122,10 +2122,34 @@ fi
 # it": it has to walk every variable REFERENCE while spawning nothing. That is
 # lib/varcheck.py, and this case is what makes it load-bearing rather than a
 # script nobody calls.
+#
+# 🔴 SCOPE IS DRAWN BY CONSEQUENCE, NOT BY FILENAME — the same lesson case 24
+# paid an outage for, seven lines away, and this list did not learn it. It used
+# to be a hand-written roll-call of eight paths, and the exposure it guards
+# belongs to a PROPERTY, not to those eight: any .sh under seven_gate/ is a file
+# CI never executes and only a real, paid run does. MEASURED: lib/scrub.sh was
+# added to this harness — it runs at the PRE-SPEND hop, the most expensive
+# possible place to die — and a `$VARs` typo in it was completely silent, because
+# nobody thought to add a ninth line here. So the scope is now the same QUERY
+# case 24 uses (it picks up the next file somebody adds) plus a floor, because a
+# walk that finds nothing passes every assertion by having none.
 SG_VARCHECK="$SG_DIR/lib/varcheck.py"
-SG_VARFILES=("$SG_DIR/actors/live.sh" "$SG_DIR/actors/stub.sh" "$SG_DIR/run.sh"
-             "$SG_DIR/lib/http.sh" "$SG_DIR/lib/friction.sh" "$SG_DIR/lib/window.sh"
-             "$SG_DIR/lib/ownedkill.sh" "$SG_DIR/lib/carrier.sh")
+SG_VARFILES=()
+_sg_varscanned=0
+while IFS= read -r _sg_varf; do
+  SG_VARFILES+=("$_sg_varf")
+  _sg_varscanned=$(( _sg_varscanned + 1 ))
+done < <(find "$SG_DIR" -name '*.sh' -type f | sort)
+[[ "$_sg_varscanned" -ge 6 ]] \
+  && ok "seven_gate: varcheck's scope is the directory — it walked $_sg_varscanned .sh files under seven_gate/ (not a roll-call somebody has to remember to extend)" \
+  || bad "seven_gate: varcheck only found $_sg_varscanned .sh file(s) under $SG_DIR — a walk that finds nothing passes silently, which is exactly how this check lost its reach for lib/scrub.sh"
+# …and the files that ONLY a paid run executes are named, so a future narrowing
+# of the walk cannot quietly drop the expensive ones.
+for _sg_varmust in actors/live.sh lib/ownedkill.sh lib/scrub.sh; do
+  printf '%s\n' "${SG_VARFILES[@]}" | grep -Fqx "$SG_DIR/$_sg_varmust" \
+    && ok "seven_gate: …including $_sg_varmust (CI never runs it; a typo there only ever surfaces on a paid run)" \
+    || bad "seven_gate: $_sg_varmust is not in varcheck's reach — a one-letter typo there dies mid-run, after the money is spent"
+done
 
 # 23a) the shipped harness is clean.
 python3 "$SG_VARCHECK" "${SG_VARFILES[@]}" >/dev/null 2>&1
@@ -2160,6 +2184,31 @@ else
   cp "$SG_DIR/actors/live.sh" "$SG_VARTREE/actors/live-control.sh"
   python3 "$SG_VARCHECK" "$SG_VARTREE/actors/live-control.sh" >/dev/null 2>&1
   check "seven_gate: the SAME copy without the typo passes (23b's red is the typo, not the fixture)" "0" "$?"
+fi
+
+# 23c) THE SAME TYPO IN THE NEWEST FILE — which is the half a roll-call could not
+# do. 23b proves varcheck catches the historical bug in the file somebody
+# remembered to list; this proves the SCOPE reaches a file nobody listed, by
+# planting the identical one-letter shape in lib/scrub.sh. That file is worse
+# than live.sh to die in: it runs at the PRE-SPEND hop, so a crash there is the
+# harness refusing to spawn — silent, and indistinguishable from a machine that
+# never came online.
+SG_VARMUT2="$SG_VARTREE/lib/scrub-typo.sh"
+sed 's|for p in \$SG_SCRUB_PREFIXES; do|for p in $SG_SCRUB_PREFIXESs; do|' \
+    "$SG_DIR/lib/scrub.sh" > "$SG_VARMUT2"
+if ! grep -q 'SG_SCRUB_PREFIXESs' "$SG_VARMUT2"; then
+  bad "seven_gate: the scrub varcheck mutant did not apply — the loop moved, so case 23c is testing nothing (fix the sed)"
+else
+  _vc2_out="$(python3 "$SG_VARCHECK" "$SG_VARMUT2" 2>&1)"; _vc2_rc=$?
+  check "seven_gate: a \$VARs typo in lib/scrub.sh goes RED (the scope is the directory, so a new file is covered the day it lands)" \
+    "1" "$_vc2_rc"
+  case "$_vc2_out" in
+    *"SG_SCRUB_PREFIXESs"*) ok "seven_gate: …and it NAMES the typo'd variable — $(printf '%s' "$_vc2_out" | head -1)" ;;
+    *) bad "seven_gate: varcheck reddened on lib/scrub.sh but never named SG_SCRUB_PREFIXESs: $_vc2_out" ;;
+  esac
+  cp "$SG_DIR/lib/scrub.sh" "$SG_VARTREE/lib/scrub-control.sh"
+  python3 "$SG_VARCHECK" "$SG_VARTREE/lib/scrub-control.sh" >/dev/null 2>&1
+  check "seven_gate: the SAME copy of scrub.sh without the typo passes (23c's red is the typo, not the file)" "0" "$?"
 fi
 
 # 23d) the expensive-path preflight must come BEFORE the spend. live.sh spawns a
@@ -2721,31 +2770,48 @@ echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 #
 # A FLOOR, not the exact count, on purpose — the same reasoning that
 # e2e_test/assert-specs-ran.sh writes out for the spec tally: an exact number
-# goes stale the first time someone adds a case, and a stale exact number teaches
-# the next person that this file lies, which is worse than not asserting at all.
-# What the floor has to catch is "the suite got gutted", not "today's total
-# changed". It sits well under the current count so growth never reddens it, and
-# it does NOT need updating when cases are added.
+# reddens the first time someone legitimately adds a case, and a check that
+# reddens on correct work is a check somebody deletes.
 #
-# WHAT IT CATCHES — state the size of the hole, not just that one exists.
-# Measured 2026-08-10: PASS=237 against a floor of 100. So MORE THAN HALF the
-# assertions — 137 of them — can evaporate silently and this still goes green.
-# (The previous measurement, 2026-08-08, was PASS=153 / a hole of 53. The hole
-# grows with every case added, because the floor does not move; that is the
-# deliberate trade, but it is a trade that gets worse, not a constant. Recompute
-# it, do not trust it.)
+# 🔴 BUT A FLOOR THAT DRIFTS FAR ENOUGH BELOW THE COUNT IS NOT A FLOOR EITHER,
+# and this one had. It sat at 100 while the suite grew to 291: 191 assertions —
+# two thirds of the file — could evaporate and this still printed `all green`.
+# "It never needs updating when cases are added" is exactly what made it useless,
+# because what it measures is not how many assertions exist but how big a hole is
+# tolerated, and that hole grew with every case anyone wrote. Measured history of
+# the same 100: PASS=153 (2026-08-08, hole 53) → 237 (2026-08-10, hole 137) → 291
+# (2026-08-11, hole 191).
 #
-# And it is VOLUME-SHAPED, not importance-shaped: it counts assertions and does
-# not care WHICH ones went. The highest-value blocks are among the smallest —
-# case 11 (the rc-propagation shape of run_all.sh) and 20e (teardown's only way
-# out) — so deleting either one on its own sits comfortably inside the tolerance
-# and this file will tell you everything is fine. Nothing here watches at
-# case-name or block granularity; an exact count that would is refused above for
-# a reason that costs more than it saves.
-# Mutants, each restored from a scratchpad copy with the sha256 re-checked:
+# SO IT IS NOW SET NEAR THE COUNT, WITH DELIBERATE SLACK, AND IT IS EXPECTED TO
+# BE EDITED. 291 today, floor 288: three assertions of room. The slack is
+# measured, not guessed — deleting the whole of case 26 (8 assertions) gives
+# PASS=283, which is FATAL and named at 288 and was GREEN at 280. Read the
+# guarantee narrowly: a change that removes FOUR OR MORE assertions is loud; one
+# that removes three or fewer is not, and nothing here knows which case blocks
+# are that small.
+# ⚠️ THIS IS A FLOOR, NOT AN EXPECTATION — being ABOVE it means nothing, going
+# BELOW it means the suite collapsed. If a legitimate change genuinely removes
+# assertions, MOVE THIS NUMBER IN THE SAME COMMIT and say why; that edit is the
+# review this file wants, not an obstacle to route around. Do NOT "fix" a red
+# floor by lowering it to whatever today's run printed without knowing what left.
+#
+# WHAT IT STILL DOES NOT CATCH, said plainly: it is VOLUME-SHAPED, not
+# importance-shaped. It counts assertions and does not care WHICH ones went, so
+# a three-assertion deletion is invisible no matter how load-bearing those three
+# were — case 11 (the rc-propagation shape of run_all.sh) and 20e (teardown's
+# only way out) are among the highest-value and the smallest blocks in this file,
+# and whether either fits inside three assertions has NOT been measured. Nothing
+# here watches at case-name or block granularity.
+# Mutants (the first three measured when the suite stood at 153 assertions and
+# the floor at 100; each restored from a scratchpad copy with the sha256
+# re-checked):
 #   * floor raised to an unreachable 9999            → PASS=153 FAIL=0, rc=1, named.
 #   * the whole 19x/20x half of the file deleted     → PASS=66  FAIL=0, rc=1, named.
 #   * ONE case block (19a, five assertions) deleted  → PASS=148 FAIL=0, rc=0 — GREEN.
+#   * (2026-08-11, floor 288) case 26 deleted, 8     → PASS=283 FAIL=0, rc=1, named.
+# The third one is what a floor of 100 permitted; at 288 a five-assertion block
+# would no longer fit, and the fourth line is that same shape actually measured
+# against the new floor.
 #
 # THE SUCCESS MARKER IS PRINTED FROM INSIDE THIS BLOCK, from the floor's passing
 # branch and nowhere else — that is the only reason bin/ci.sh's `tail -n 1`
@@ -2754,7 +2820,7 @@ echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 # printed the marker with no floor evaluated at all: MEASURED, floor block
 # deleted and the trailing echo kept → PASS=153 FAIL=0 rc=0, last line
 # `[tests_guard] all green`, `bin/ci.sh` all green. Keep it in the branch.
-PASS_FLOOR=100
+PASS_FLOOR=288
 if [[ "$PASS" -lt "$PASS_FLOOR" ]]; then
   echo "[tests_guard] FATAL: only $PASS assertion(s) ran, floor is $PASS_FLOOR." >&2
   echo "[tests_guard] FAIL=0 with a collapsed PASS count means cases went missing, not that they passed." >&2
