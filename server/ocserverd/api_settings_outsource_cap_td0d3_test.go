@@ -65,8 +65,12 @@ func TestOutsourceCapBootLoadAcceptsUnlimited(t *testing.T) {
 	if got != -1 {
 		t.Fatalf("the loaded cap must be the stored value, got %d", got)
 	}
-	// Positive control on the other end of the legal range: without it a loader
-	// that accepted everything would satisfy the line above just as well.
+	// The top of the legal range, asserted as a VALUE not just as a successful
+	// load: 20 must come back as 20.
+	// This line does NOT catch a loader that accepts everything — that one is
+	// caught by TestOutsourceCapBootLoadStillFailsClosed. Measured: with the
+	// loader's range predicate disabled, this test still passes and that one
+	// fails. Do not describe this line as a control against accept-everything.
 	if got, err := loadOutsourceCap(t, "20"); err != nil || got != 20 {
 		t.Fatalf("20 must load as 20: %d %v", got, err)
 	}
