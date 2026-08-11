@@ -369,6 +369,12 @@ type sweepStats struct {
 	dstInMonth     int // DST windows where the fixture's set CONTAINS that month
 	dstOutOfMonth  int // DST windows where it does not
 	monthPerDayRun int // per-day checks run for a month-filtered fixture
+
+	// monthReasoned counts no-merge findings whose REASON is the month. It is
+	// carried separately from findings[] because that slice is capped at six per
+	// rule, and the planted-bug control needs to know whether ANY month finding
+	// happened, not whether one made it into the printed sample.
+	monthReasoned int
 }
 
 func newSweepStats() *sweepStats {
@@ -997,6 +1003,33 @@ func TestTZSweepIsAliveOnAPlantedBug(t *testing.T) {
 		t.Fatalf("the sweep found NOTHING on a version that resolves a deleted reading by searching forward — "+
 			"the invariants are not live and every clean result in this file is worthless\n%s", st.report())
 	}
+	assertControlFoundOnlyThePlantedBug(t, st)
+}
+
+// assertControlFoundOnlyThePlantedBug keeps the control honest about WHAT it
+// found, not merely that it found something.
+//
+// 🔴 mostRecentSlotWith is a COPY of mostRecentSlot's custom branch, and a copy
+// drifts. If its month test were dropped, the control would start reporting
+// slots in months the fixture switched off — real findings, in a different rule,
+// with nothing red, because "findings > 0" is satisfied by any bug at all. The
+// control would then be passing on the strength of its own defect rather than
+// the one it planted, and the planted bug could quietly stop being detected
+// underneath. forwardSearchingSlotOn walks forward only WITHIN one calendar date
+// (`probe.Day() == dayNum`), so it can never move a reading into another month:
+// a month finding here is never the planted bug.
+// ⚠️ It reads a COUNTER and not st.findings, because the printing budget is six
+// per rule and a month finding shares the no-merge rule with the planted bug —
+// scanning the printed sample would miss every month finding the moment six
+// planted-bug ones sorted ahead of it.
+func assertControlFoundOnlyThePlantedBug(t *testing.T, st *sweepStats) {
+	t.Helper()
+	if st.monthReasoned > 0 {
+		t.Fatalf("the control reported %d MONTH findings, which the planted bug cannot produce "+
+			"(it never leaves the calendar date it started on) — mostRecentSlotWith has drifted from "+
+			"mostRecentSlot's month test, so this control is passing on its own defect\n%s",
+			st.monthReasoned, st.report())
+	}
 }
 
 // forwardSearchingSlotOn is customSlotOn with the one line this ticket argued
@@ -1102,6 +1135,9 @@ func sweepWindowWith(st *sweepStats, sched sweepSchedule, loc *time.Location, wi
 			}
 		}
 		if why := readingIsDeclared(slot, sched.sm, loc); why != "" {
+			if strings.HasPrefix(why, "month ") {
+				st.monthReasoned++
+			}
 			st.note("no-merge", "%s %s: reported slot %s is not a declared reading (%s) — a deleted reading was MOVED instead of skipped",
 				loc, sched.name, key, why)
 		}
