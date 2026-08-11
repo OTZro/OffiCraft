@@ -20,6 +20,17 @@ package main
 // have floors), every invariant checker states what it looked at, and
 // TestTZSweepIsAliveOnAPlantedBug plants a bug and requires findings > 0.
 //
+// ROUND 2 — the MONTH dimension. custom grew a fourth set (custom_months,
+// migrations/00053), and round 1's sweep could not see it: every fixture here
+// selected all twelve months, so the month test never declined anything and the
+// oracle did not carry one. Round 2 teaches the oracle the month test and adds
+// fixtures that select FEWER than twelve — which re-opens the vacuity question
+// one level down, because a filtered fixture whose readings all land inside its
+// own months is indistinguishable from an unfiltered one. So the month events
+// are COUNTED (sweepStats.monthDeclined, crossMonth, monthEndSlots,
+// leapDaySlots, dstInMonth/dstOutOfMonth, monthPerDayRun) and each count carries
+// a floor. A clean sweep with a zero in that line is a failure, not a pass.
+//
 // Sampling size is a flag, not a constant: the default is the fast one that
 // runs on every `go test`, and `OC_TZSWEEP_YEARS` / `OC_TZSWEEP_STEP_SECS`
 // widen it for a deliberate deep run.
@@ -48,6 +59,13 @@ import (
 // 30 December 2011) are pinned by name in the sentinel file. Widen it with
 // OC_TZSWEEP_YEARS for a deep run.
 const tzSweepFirstYear = 2026
+
+// tzSweepLeapYear is pinned SEPARATELY from tzSweepFirstYear because 29 February
+// is a reading the sweep has to see and tzSweepFirstYear is not a leap year.
+// Widening OC_TZSWEEP_YEARS would eventually reach one, but "eventually" is not
+// coverage: the default run is the one that guards every commit, so the leap day
+// is a window of its own rather than a lucky consequence of a knob.
+const tzSweepLeapYear = 2028
 
 func tzSweepYears() int { return envInt("OC_TZSWEEP_YEARS", 1) }
 
@@ -171,6 +189,15 @@ type sweepSchedule struct {
 	sm   ScheduledMessage
 }
 
+// monthFiltered reports whether this fixture names FEWER than all twelve months
+// — i.e. whether the month test can decline anything at all for it. Derived from
+// the set rather than carried as a flag, so a fixture cannot claim one thing and
+// select another.
+func (s sweepSchedule) monthFiltered() bool {
+	return s.sm.Cadence == ScheduledMessageCadenceCustom &&
+		canonicalIntSet(s.sm.CustomMonths) != canonicalIntSet(intRange(1, 12))
+}
+
 // sweepSchedules are chosen so that every invariant below has something to bite
 // on: a dense one (a reading every twenty minutes, so a DST gap always swallows
 // several), a sparse one whose hours sit exactly where spring-forward gaps land
@@ -217,6 +244,97 @@ func sweepSchedules(tz string) []sweepSchedule {
 	}
 }
 
+// sweepMonthSchedules are the round-2 fixtures: every one of them names FEWER
+// than twelve months, so for every one of them there are dates the month test
+// must decline. Round 1 had none — every fixture selected all twelve — which is
+// why the fourth dimension was, at this layer, not swept at all.
+//
+// Each fixture is here for a reading that is hard to get any other way:
+//
+//	months-1-2-day-31   — the month END. January has a 31st, February does not,
+//	                      so the slot has to STAY on 31 January for the whole of
+//	                      February and then stop being reported once March (an
+//	                      unselected month) is more than a lookback away. This is
+//	                      simultaneously the cross-month case: the most recent
+//	                      slot is in the PREVIOUS month for weeks at a time.
+//	feb-29-only         — the leap day, and nothing else. It fires in 2028 and
+//	                      never in 2026: `months {2} × days {29}` is not a new
+//	                      rule, it is the day-by-day rule reading a date three
+//	                      Februaries in four do not have.
+//	feb-days-1-15-29-30-31 — February again, with three days the month never has
+//	                      and two it does, at hours that sit where spring-forward
+//	                      gaps land. The per-day rule has to keep the 1st and the
+//	                      15th while losing exactly the three absent dates.
+//	odd-months-every-20-min — the month test MEETING DST. The readings are dense
+//	                      (one every twenty minutes) so a gap always swallows
+//	                      several, and the month set is every ODD month, which
+//	                      across the shipped zones puts some transitions INSIDE a
+//	                      selected month and others outside it. Both sides are
+//	                      counted and floored (see sweepStats.dstInMonth /
+//	                      dstOutOfMonth) rather than assumed.
+func sweepMonthSchedules(tz string) []sweepSchedule {
+	return []sweepSchedule{
+		{name: "custom/months-1-2-day-31", sm: ScheduledMessage{
+			Cadence: ScheduledMessageCadenceCustom, Timezone: tz,
+			CustomMonths: []int{1, 2},
+			CustomDays:   []int{31}, CustomHours: []int{0, 12},
+			CustomMinutes: []int{0},
+		}},
+		{name: "custom/feb-29-only", sm: ScheduledMessage{
+			Cadence: ScheduledMessageCadenceCustom, Timezone: tz,
+			CustomMonths: []int{2},
+			CustomDays:   []int{29}, CustomHours: []int{9},
+			CustomMinutes: []int{0},
+		}},
+		{name: "custom/feb-days-1-15-29-30-31", sm: ScheduledMessage{
+			Cadence: ScheduledMessageCadenceCustom, Timezone: tz,
+			CustomMonths: []int{2},
+			CustomDays:   []int{1, 15, 29, 30, 31}, CustomHours: []int{0, 2, 3},
+			CustomMinutes: []int{0, 15, 30, 45},
+		}},
+		{name: "custom/odd-months-every-20-min", sm: ScheduledMessage{
+			Cadence: ScheduledMessageCadenceCustom, Timezone: tz,
+			CustomMonths: []int{1, 3, 5, 7, 9, 11},
+			CustomDays:   intRange(1, 31), CustomHours: intRange(0, 23),
+			CustomMinutes: []int{0, 20, 40},
+		}},
+	}
+}
+
+// sweepSchedulesFor picks the fixtures to drive over one window.
+//
+// 🔴 It is a SPLIT and not a cross product, and the reason is cost, stated here
+// rather than discovered by the next person watching the suite get slower: the
+// february window is by far the most expensive one (a whole month at one-hour
+// steps, in every zone), and running four more fixtures over it would roughly
+// double the sweep for coverage the two calendar windows below already give a
+// month-filtered fixture more cheaply. So:
+//
+//	dst, post-transition — BOTH families. The month × DST combination has to be
+//	  swept in every zone, and these windows are where a zone deletes or repeats
+//	  a reading at all.
+//	february             — the round-1 family only, unchanged.
+//	month-boundary, leap-february — the month-filtered family only. They exist
+//	  for the month dimension; an all-year fixture has nothing to say there that
+//	  the february window does not already say.
+//
+// Measured on the development machine at the default knobs: round 1 was 585
+// zones / 2,751,415 samples / ~117s, round 2 is 585 zones / 4,070,367 samples /
+// ~176s. That is a real half-minute-plus added to every `go test` of this
+// package, stated here rather than left for whoever notices the suite got
+// slower. A full cross product of both families over every window would have
+// been roughly twice round 1 again.
+func sweepSchedulesFor(tz string, win sweepWindowSpec) []sweepSchedule {
+	switch win.kind {
+	case "month-boundary", "leap-february":
+		return sweepMonthSchedules(tz)
+	case "february":
+		return sweepSchedules(tz)
+	default:
+		return append(sweepSchedules(tz), sweepMonthSchedules(tz)...)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Findings
 // ---------------------------------------------------------------------------
@@ -234,6 +352,23 @@ type sweepStats struct {
 	byRule     map[string]int
 	maxRecord  int
 	suppressed int
+
+	// 🔴 The month counters below are the anti-vacuity instrumentation for the
+	// FOURTH dimension, and they are the answer to the only question that
+	// matters about a clean sweep: did the month test ever actually decide
+	// anything? A month-filtered fixture whose readings all happen to fall
+	// inside its own month set is indistinguishable from an all-year one, and a
+	// sweep made of those would report "0 findings — CLEAN" while checking
+	// nothing at all. So each interesting month event is COUNTED and each count
+	// carries a floor in assertSweepLookedAtSomething.
+	monthSamples   int // samples driven by a month-filtered fixture
+	monthDeclined  int // instants whose OWN month is not in the fixture's set
+	crossMonth     int // reported slot sits in a different month from `now`
+	monthEndSlots  int // slot on a 31st while `now` is in a month with no 31st
+	leapDaySlots   int // slot on 29 February
+	dstInMonth     int // DST windows where the fixture's set CONTAINS that month
+	dstOutOfMonth  int // DST windows where it does not
+	monthPerDayRun int // per-day checks run for a month-filtered fixture
 }
 
 func newSweepStats() *sweepStats {
@@ -265,6 +400,21 @@ func (st *sweepStats) report() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "scanned %d zones, %d instants, %d samples (schedule × instant)\n",
 		st.zones, st.instants, st.samples)
+	// The month line is printed only when something counted it. The planted-bug
+	// control drives the same month-filtered fixtures but goes through
+	// sweepWindowWith, which deliberately carries no month instrumentation — its
+	// question is the planted bug, not the fourth dimension — so an all-zero
+	// line there would read as "the month fixtures were not swept", which is
+	// false. Absence of the line means "not measured"; a zero IN the line means
+	// "measured and never happened", and that one is a failure (see
+	// assertSweepActuallyExercisedTheMonthTest).
+	if st.monthSamples > 0 {
+		fmt.Fprintf(&b, "month dimension: %d month-filtered samples, %d instants outside their month set, "+
+			"%d cross-month slots, %d month-end slots, %d leap-day slots, %d in-month / %d out-of-month DST windows, "+
+			"%d month-filtered per-day checks\n",
+			st.monthSamples, st.monthDeclined, st.crossMonth, st.monthEndSlots, st.leapDaySlots,
+			st.dstInMonth, st.dstOutOfMonth, st.monthPerDayRun)
+	}
 	if st.total() == 0 {
 		b.WriteString("findings: 0 — CLEAN\n")
 		return b.String()
@@ -309,7 +459,7 @@ func sweepAllZones(t *testing.T) *sweepStats {
 			continue
 		}
 		for _, win := range sweepWindows(loc) {
-			for _, sched := range sweepSchedules(tz) {
+			for _, sched := range sweepSchedulesFor(tz, win) {
 				sweepWindow(st, sched, loc, win)
 			}
 		}
@@ -324,6 +474,10 @@ type sweepWindowSpec struct {
 	to    time.Time
 	step  time.Duration
 	perDa bool // run the per-day invariant over this window
+	// pivot is the transition this window was built around, zero for the
+	// calendar windows. It is what lets the month counters say whether a
+	// zone's deleted/repeated reading fell INSIDE a fixture's month set.
+	pivot time.Time
 }
 
 // sweepWindows returns the stretches of time worth walking in loc: every DST
@@ -334,7 +488,7 @@ func sweepWindows(loc *time.Location) []sweepWindowSpec {
 	var out []sweepWindowSpec
 	half := tzSweepWindow()
 	for _, tr := range zoneTransitions(loc, tzSweepFirstYear, tzSweepYears()) {
-		out = append(out, sweepWindowSpec{kind: "dst", from: tr.Add(-half), to: tr.Add(half), step: tzSweepStep()})
+		out = append(out, sweepWindowSpec{kind: "dst", from: tr.Add(-half), to: tr.Add(half), step: tzSweepStep(), pivot: tr})
 		// 🔴 And the stretch from the transition THROUGH the following local
 		// midnight, coarsely. A ±90-minute window cannot see the trap that
 		// broke monotonicity before: that one needs `now` to reach a reading
@@ -343,7 +497,7 @@ func sweepWindows(loc *time.Location) []sweepWindowSpec {
 		// not a boundary, so what matters is that both sides of the midnight
 		// are in the SAME window.
 		out = append(out, sweepWindowSpec{
-			kind: "post-transition", from: tr, to: midnightAfter(tr, loc).Add(half), step: 10 * time.Minute,
+			kind: "post-transition", from: tr, to: midnightAfter(tr, loc).Add(half), step: 10 * time.Minute, pivot: tr,
 		})
 	}
 	// February, hourly. The per-day rule asks a question about DATES, so the
@@ -351,6 +505,26 @@ func sweepWindows(loc *time.Location) []sweepWindowSpec {
 	feb := time.Date(tzSweepFirstYear, time.February, 1, 0, 0, 0, 0, time.UTC)
 	out = append(out, sweepWindowSpec{
 		kind: "february", from: feb, to: feb.AddDate(0, 1, 2), step: time.Hour, perDa: true,
+	})
+	// 🔴 The month boundary, coarsely, over three calendar months. This is the
+	// window the round-1 sweep did not have and could not have used: with every
+	// fixture selecting all twelve months, crossing from January into February
+	// changed nothing anyone could observe. With a month-filtered fixture it is
+	// where the answer STOPS MOVING — `months {1,2} × days {31}` keeps reporting
+	// 31 January for the whole of February — and where a month the set excludes
+	// (March) has to leave the previous month's slot standing rather than
+	// producing one of its own. Four-hour steps: the question is which DATE the
+	// slot sits on, not which minute.
+	boundary := time.Date(tzSweepFirstYear, time.January, 28, 0, 0, 0, 0, time.UTC)
+	out = append(out, sweepWindowSpec{
+		kind: "month-boundary", from: boundary, to: boundary.AddDate(0, 1, 6), step: 4 * time.Hour, perDa: true,
+	})
+	// 29 February, in a leap year pinned separately (see tzSweepLeapYear). Short
+	// and hourly: the whole point is the one date, plus enough of the days on
+	// either side to see it arrive and then stay reported once March begins.
+	leap := time.Date(tzSweepLeapYear, time.February, 26, 0, 0, 0, 0, time.UTC)
+	out = append(out, sweepWindowSpec{
+		kind: "leap-february", from: leap, to: leap.AddDate(0, 0, 5), step: time.Hour, perDa: true,
 	})
 	return out
 }
@@ -397,7 +571,10 @@ func zoneTransitions(loc *time.Location, firstYear, years int) []time.Time {
 //	               correct delivery.
 //	no-duplicate — a slot key that stopped being reported must never come back.
 //	               Same delivery, second time, via a different route.
-//	no-merge     — every reported slot must BE one of the declared readings.
+//	no-merge     — every reported slot must BE one of the declared readings —
+//	               month, day, hour and minute all four (round 2 added the
+//	               month; before it, a slot in a switched-off month passed this
+//	               rule silently because the rule did not know months existed).
 //	               A reading the zone deleted has to be SKIPPED; moving it onto
 //	               another reading is what collapses two occurrences into one
 //	               slot key, and moving it anywhere else delivers at a wall
@@ -415,15 +592,33 @@ func zoneTransitions(loc *time.Location, firstYear, years int) []time.Time {
 //	elapsed      — the slot must not be in the future.
 func sweepWindow(st *sweepStats, sched sweepSchedule, loc *time.Location, win sweepWindowSpec) {
 	custom := sched.sm.Cadence == ScheduledMessageCadenceCustom
+	monthed := sched.monthFiltered()
 	var prevSlot time.Time
 	var prevKey string
 	hadSlot := false
 	retired := map[string]bool{} // keys whose contiguous run has ended
 	sawDate := map[string]bool{} // "2026-02-15" → this date produced a slot
 
+	// Which side of the month test this zone's transition falls on. Counted per
+	// window rather than per instant: the question is about the TRANSITION, and
+	// one window is one transition.
+	if monthed && !win.pivot.IsZero() {
+		if intSetContains(sched.sm.CustomMonths, int(win.pivot.In(loc).Month())) {
+			st.dstInMonth++
+		} else {
+			st.dstOutOfMonth++
+		}
+	}
+
 	instants := 0
 	for now := win.from; !now.After(win.to); now = now.Add(win.step) {
 		instants++
+		if monthed {
+			st.monthSamples++
+			if !intSetContains(sched.sm.CustomMonths, int(now.In(loc).Month())) {
+				st.monthDeclined++
+			}
+		}
 		slot, ok := mostRecentSlot(sched.sm, now)
 		if !ok {
 			if hadSlot {
@@ -469,6 +664,9 @@ func sweepWindow(st *sweepStats, sched sweepSchedule, loc *time.Location, win sw
 		}
 
 		local := slot.In(loc)
+		if monthed {
+			noteMonthReading(st, local, now.In(loc))
+		}
 		sawDate[local.Format("2006-01-02")] = true
 		prevSlot, prevKey, hadSlot = slot, key, true
 	}
@@ -477,16 +675,48 @@ func sweepWindow(st *sweepStats, sched sweepSchedule, loc *time.Location, win sw
 	st.samples += instants
 
 	if win.perDa && custom {
+		if monthed {
+			st.monthPerDayRun++
+		}
 		checkPerDay(st, sched, loc, win, sawDate)
 	}
+}
+
+// noteMonthReading records what a reported slot says about the month dimension.
+// Nothing here is a verdict — these are the counters that stop a clean sweep
+// from being a sweep that never asked the question.
+func noteMonthReading(st *sweepStats, slotLocal, nowLocal time.Time) {
+	if slotLocal.Month() != nowLocal.Month() || slotLocal.Year() != nowLocal.Year() {
+		st.crossMonth++
+	}
+	if slotLocal.Day() == 31 && !monthHasDay(nowLocal.Year(), nowLocal.Month(), 31) {
+		st.monthEndSlots++
+	}
+	if slotLocal.Month() == time.February && slotLocal.Day() == 29 {
+		st.leapDaySlots++
+	}
+}
+
+// monthHasDay is the calendar question, asked zone-free: UTC has no transitions,
+// so time.Date can only normalise here for the reason being asked about.
+func monthHasDay(year int, month time.Month, day int) bool {
+	d := time.Date(year, month, day, 12, 0, 0, 0, time.UTC)
+	return d.Year() == year && d.Month() == month && d.Day() == day
 }
 
 // readingIsDeclared reports why slot is not one of the schedule's declared
 // readings, or "" when it is one. Read in loc, because the declaration is in
 // wall-clock terms in that zone and nowhere else.
+//
+// The month is asked FIRST, in the same order the production loop asks it, and
+// for the same reason: it is the cheapest way to reject a date, and a reported
+// slot in an unselected month is the bluntest possible month bug — the schedule
+// fired in a month the owner switched off.
 func readingIsDeclared(slot time.Time, sm ScheduledMessage, loc *time.Location) string {
 	local := slot.In(loc)
 	switch {
+	case !intSetContains(sm.CustomMonths, int(local.Month())):
+		return fmt.Sprintf("month %d is not in custom_months", int(local.Month()))
 	case !intSetContains(sm.CustomDays, local.Day()):
 		return fmt.Sprintf("day %d is not in custom_days", local.Day())
 	case !intSetContains(sm.CustomHours, local.Hour()):
@@ -508,6 +738,14 @@ func declaredReadingBetween(slot, now time.Time, sm ScheduledMessage, loc *time.
 	first := slot.In(loc)
 	last := now.In(loc)
 	for day := dayAnchor(first); !day.After(dayAnchor(last)); day = day.AddDate(0, 0, 1) {
+		// The month test, on the CANDIDATE date — never on `now` and never on
+		// the slot. A month-filtered schedule that is between two selected
+		// months has no missed reading behind it, and asking the question of
+		// the wrong date is precisely how an oracle starts demanding readings
+		// production correctly declines.
+		if !intSetContains(sm.CustomMonths, int(day.Month())) {
+			continue
+		}
 		if !intSetContains(sm.CustomDays, day.Day()) {
 			continue
 		}
@@ -531,11 +769,22 @@ func declaredReadingBetween(slot, now time.Time, sm ScheduledMessage, loc *time.
 // 15th. A cadence that reads the missing 31st as "skip the month" loses two
 // deliveries in silence, which is exactly the prose bug this ticket corrected.
 //
-// The expectation is derived, not listed: a date is owed a slot when its
-// day-of-month is declared AND the zone genuinely has at least one of the
-// declared readings on it AND that reading has elapsed inside the window.
+// The expectation is derived, not listed: a date is owed a slot when its MONTH
+// is declared AND its day-of-month is declared AND the zone genuinely has at
+// least one of the declared readings on it AND that reading has elapsed inside
+// the window.
+//
+// 🔴 The month condition here is a NARROWING, and that is the direction that can
+// hide a bug: a date in an unselected month is simply not owed anything, so the
+// rule stops accusing production of skipping it. What keeps that from disarming
+// the rule is the other side — a date whose month IS selected is owed a slot
+// exactly as before, and custom/feb-days-1-15-29-30-31 is a fixture whose whole
+// month set is selected, so for it this condition removes nothing at all.
 func checkPerDay(st *sweepStats, sched sweepSchedule, loc *time.Location, win sweepWindowSpec, saw map[string]bool) {
 	for day := dayAnchor(win.from.In(loc)); !day.After(dayAnchor(win.to.In(loc))); day = day.AddDate(0, 0, 1) {
+		if !intSetContains(sched.sm.CustomMonths, int(day.Month())) {
+			continue
+		}
 		if !intSetContains(sched.sm.CustomDays, day.Day()) {
 			continue
 		}
@@ -580,7 +829,7 @@ func earliestDeclaredReading(day time.Time, sm ScheduledMessage, loc *time.Locat
 // Red when: any of the four rules is broken anywhere. The failure names the
 // zone, the schedule, the instant and the rule.
 func TestTZSweepFindsNothing(t *testing.T) {
-	assertSweepSchedulesSelectEveryMonth(t)
+	assertSweepFixturesCoverBothSidesOfTheMonthTest(t)
 	st := sweepAllZones(t)
 	t.Log(st.report())
 	assertSweepLookedAtSomething(t, st)
@@ -589,32 +838,58 @@ func TestTZSweepFindsNothing(t *testing.T) {
 	}
 }
 
-// assertSweepSchedulesSelectEveryMonth keeps the independent oracle below
-// honest about the fourth set.
+// assertSweepFixturesCoverBothSidesOfTheMonthTest is what the round-1 gate
+// turned into, and the premise really did change rather than the gate merely
+// being switched off.
 //
-// The oracle re-derives the expected readings from CustomDays/Hours/Minutes and
-// has NO month condition — which is correct only while every custom fixture
-// here selects all twelve months. Add a month-filtered fixture and the oracle
-// would silently expect readings production correctly declines, so every
-// invariant in the sweep would start reporting findings that are not bugs. This
-// turns that into a named failure at the top of the sweep instead.
-func assertSweepSchedulesSelectEveryMonth(t *testing.T) {
+// 🔴 ROUND 1 read: "the oracle has NO month condition, so every fixture must
+// select all twelve months, or the oracle would expect readings production
+// correctly declines." That premise is gone — readingIsDeclared,
+// declaredReadingBetween, checkPerDay and mostRecentSlotWith each carry the
+// month test now, so a month-filtered fixture is exactly what the oracle is
+// built to be driven with. Keeping the old assertion would forbid the fixtures
+// this round exists to add.
+//
+// What survives is the danger the old gate was really pointing at: the month
+// dimension being present in the code and absent from the sweep. So the
+// assertion is INVERTED — both sides of the month test must be represented in
+// the fixture list. All-twelve fixtures keep the round-1 behaviour under
+// guard (a month test that started rejecting valid months would break them);
+// month-filtered fixtures are the only reason any month event below can happen
+// at all. Neither alone is a sweep of this dimension.
+//
+// ⚠️ This is a check on the FIXTURE LIST, not on what the sweep observed. It
+// cannot tell whether a filtered fixture's month test ever actually decided
+// anything — that is what the counters in assertSweepLookedAtSomething are for,
+// and the two are deliberately separate: this one fails before a two-minute run,
+// that one fails on the evidence the run produced.
+func assertSweepFixturesCoverBothSidesOfTheMonthTest(t *testing.T) {
 	t.Helper()
-	checked := 0
-	for _, sched := range sweepSchedules("UTC") {
+	allYear, filtered := 0, 0
+	for _, sched := range append(sweepSchedules("UTC"), sweepMonthSchedules("UTC")...) {
 		if sched.sm.Cadence != ScheduledMessageCadenceCustom {
 			continue
 		}
-		checked++
-		if canonicalIntSet(sched.sm.CustomMonths) != canonicalIntSet(intRange(1, 12)) {
-			t.Fatalf("sweep schedule %q selects months [%s], but the oracle below has no month "+
-				"condition and would expect readings production correctly declines. Teach the "+
-				"oracle the month test before adding a month-filtered fixture.",
-				sched.name, canonicalIntSet(sched.sm.CustomMonths))
+		if len(sched.sm.CustomMonths) == 0 {
+			t.Fatalf("sweep schedule %q names NO months. An empty set is a 422 at write time "+
+				"(ValidateScheduledMessageCustomSets), so a fixture in that shape sweeps a state "+
+				"production cannot be in, and every rule below would be vacuous for it.", sched.name)
+		}
+		if sched.monthFiltered() {
+			filtered++
+		} else {
+			allYear++
 		}
 	}
-	if checked == 0 {
-		t.Fatal("no custom schedules in the sweep — this check, and most of the sweep, would be vacuous")
+	if allYear == 0 {
+		t.Fatal("no all-twelve-month custom fixture is left in the sweep — every pre-round-2 row means " +
+			"exactly that (see migrations/00053), so dropping the last one stops sweeping the shape " +
+			"every existing schedule is in")
+	}
+	if filtered == 0 {
+		t.Fatal("no month-filtered custom fixture in the sweep — custom_months would be carried by the " +
+			"production loop and exercised by nothing here, which is the round-1 gap this check exists " +
+			"to keep closed")
 	}
 }
 
@@ -636,6 +911,45 @@ func assertSweepLookedAtSomething(t *testing.T, st *sweepStats) {
 	}
 	if st.samples < 10000 {
 		t.Fatalf("only %d samples were taken — too few for a clean result to mean anything", st.samples)
+	}
+	assertSweepActuallyExercisedTheMonthTest(t, st)
+}
+
+// assertSweepActuallyExercisedTheMonthTest is the anti-vacuity floor for the
+// FOURTH dimension, and it is the harder half of the two.
+//
+// 🔴 A month-filtered fixture proves nothing on its own. If every instant it was
+// driven at happened to fall inside its own month set, and every slot it
+// reported happened to sit in the same month as `now`, then the month test never
+// decided anything and the sweep is CLEAN for the same reason an empty sweep is
+// clean. Each counter below names one month event that a mutant in the month
+// arithmetic would have to disturb, so a zero here means "this sweep could not
+// have caught that class of bug" — which is a failure, not a pass.
+//
+// The floors are order-of-magnitude below the real counts on purpose (the same
+// reasoning as the zone/instant floors next door): a floor that hugs today's
+// number is a second copy of that number and goes stale the first time tzdata
+// ships a zone or a fixture is retuned.
+func assertSweepActuallyExercisedTheMonthTest(t *testing.T, st *sweepStats) {
+	t.Helper()
+	for _, c := range []struct {
+		got  int
+		min  int
+		what string
+	}{
+		{st.monthSamples, 10000, "samples driven by a month-filtered fixture — the fourth dimension was not swept at all"},
+		{st.monthDeclined, 1000, "instants whose own month is OUTSIDE the fixture's set — every reading fell in a selected month, so the month test never declined anything"},
+		{st.crossMonth, 1000, "reported slots sitting in a different month from `now` — the month test never had to look back past a month boundary"},
+		{st.monthEndSlots, 100, "slots on a 31st reported while `now` is in a month that has no 31st — the month-end case was never reached"},
+		{st.leapDaySlots, 100, "slots on 29 February — the leap day was never reported, so the leap-year window looked at nothing"},
+		{st.dstInMonth, 50, "DST windows whose transition falls INSIDE a filtered fixture's month set — month × DST never met"},
+		{st.dstOutOfMonth, 50, "DST windows whose transition falls OUTSIDE it — the other side of month × DST was never seen"},
+		{st.monthPerDayRun, 100, "per-day checks run for a month-filtered fixture — the day-by-day rule never met the month test"},
+	} {
+		if c.got < c.min {
+			t.Fatalf("month dimension is vacuous: only %d %s (want at least %d).\n%s",
+				c.got, c.what, c.min, st.report())
+		}
 	}
 }
 
@@ -666,7 +980,7 @@ func TestTZSweepIsAliveOnAPlantedBug(t *testing.T) {
 			if win.kind != "dst" {
 				continue // the planted bug lives in the DST gap
 			}
-			for _, sched := range sweepSchedules(tz) {
+			for _, sched := range sweepSchedulesFor(tz, win) {
 				if sched.sm.Cadence != ScheduledMessageCadenceCustom {
 					continue
 				}
@@ -735,6 +1049,13 @@ func mostRecentSlotWith(s ScheduledMessage, now time.Time, slotOnDate customSlot
 	anchor := dayAnchor(local)
 	for back := 0; back <= customLookbackDays; back++ {
 		day := anchor.AddDate(0, 0, -back)
+		// The month test, copied from mostRecentSlot: the planted bug being
+		// demonstrated lives in the per-DATE resolver, so everything ABOVE it
+		// has to stay faithful or the control would report month findings that
+		// are not the bug it planted.
+		if !intSetContains(s.CustomMonths, int(day.Month())) {
+			continue
+		}
 		if !intSetContains(s.CustomDays, day.Day()) {
 			continue
 		}
