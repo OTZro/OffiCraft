@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Shared definition for the tracked-file hygiene denylist.
 #
-# Both the authoritative local gate (bin/ci.sh) and the Linux PR subset
-# call this function through the Makefile's scan-tracked-paths target. Keep the
+# Both the local run (bin/ci.sh) and the pull request's cloud round call this
+# function through the Makefile's scan-tracked-paths target. Keep the
 # rules here: duplicating the list lets a newly forbidden path be blocked in one
 # caller while silently passing in another.
 

@@ -2,7 +2,9 @@
 #
 # WHY THIS FILE EXISTS (T-4d88)
 # Every check in this repo used to be written down twice or three times: once in
-# bin/ci.sh (the local land gate), once in bin/ci-cloud.sh (the Linux subset) and
+# bin/ci.sh (which was the land gate until 2026-08-11, when the owner moved the
+# merge verdict to the pull request's cloud round — card rc-c16ac4679fab), once
+# in bin/ci-cloud.sh (the Linux subset, and Linux itself is gone too) and
 # once in bin/ci-macos-host.sh (the macOS-shaped subset). Three copies of one
 # rule is how one copy silently loses a clause — measured, not feared: the
 # e2e isolation-guard suite ran with its truncation protection in ci.sh and

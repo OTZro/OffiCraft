@@ -1,10 +1,22 @@
 # officraft — the cloud check round, on every pull request and every push to main.
 #
-# WHY THIS EXISTS, AND WHAT IT IS NOT
-# bin/ci.sh remains the canonical, AUTHORITATIVE land gate and runs LOCALLY.
-# This workflow does NOT replace it and does not certify a land. It runs the same
-# checks on hosted runners so that they apply to EVERY pull request instead of to
-# one developer's laptop.
+# WHY THIS EXISTS, AND WHAT IT DECIDES
+# 🔴 THIS ROUND IS THE MERGE VERDICT (owner, 2026-08-11, card rc-c16ac4679fab).
+# This file's header used to say the opposite — "bin/ci.sh remains the canonical,
+# AUTHORITATIVE land gate ... this workflow does not certify a land" — and that
+# is exactly backwards now. The reason the verdict lives here is that this round
+# applies to EVERY pull request and anyone can read or re-run it, whereas a green
+# on one developer's laptop is visible only to them and expires the moment the
+# base moves.
+#
+# What bin/ci.sh is FOR, in the owner's own words, so nobody reads the above as
+# "you never have to run anything locally":
+#
+#   「但是自己開發的時候，當然要自己先確認通過自己新增或是跟自己有關的
+#     測試，沒問題才開PR上去跑，確認全部都通過」
+#
+# i.e. check your own area while developing, then open the PR and let this round
+# rule on the whole thing. Both halves are real; only the verdict moved.
 #
 # ONE DEFINITION, AND THIS FILE IS NOT IT (T-4d88)
 # Every check is a named target in the repo-root Makefile, and its implementation

@@ -1356,7 +1356,7 @@ T-081b 開放的葉子有好幾條是**句子片段**,邊界空白是有意義�
   ⚠️ **CT 從來沒有在 Linux 上被量過**,而 T-4d88 起雲端已經沒有 Linux 那一格了——
   所以這件事今天不再是「某一格少跑 CT」,而是「這個 repo 對 Linux 字型堆疊零量測」。
   ⚠️ **不要數 job 數量**(這句話已經在 T-ff8a / T-ab2a 各過期一次);判準是「哪一個 job
-  真的呼叫到 `test:ct`」,去讀 `bin/ci-*.sh`,別從 job 名字推。
+  真的呼叫到 `test:ct`」——⚠️ 這條查詢原本寫「去讀 `bin/ci-*.sh`」,而**那兩支在 T-4d88 已經刪掉**,今天 `bin/ci-*.sh` 只剩 `bin/ci.sh` 而它對 `test:ct` 零命中 ⇒ 那是一條答不出東西的查詢,比沒有更糟。今天要對號讀兩處:`grep -n 'run-checks' .github/workflows/ci.yml`(哪一格點名了哪些項目)＋ `grep -nE '^[a-z][a-z0-9-]*:' Makefile`(項目本身)。別從 job 名字推。
 
 **mutant 實測(把虛擬捲動整份放回去;還原用 scratchpad 備份 + shasum 對帳,未用
 `git checkout --`,還原前先把 CT build cache 移走)**:
