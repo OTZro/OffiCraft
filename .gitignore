@@ -44,3 +44,7 @@ cli/ocwarden/ocagent.prev
 !/dist/officraft/source.sha256
 !/dist/officraft/binary.sha256
 !/dist/officraft/BUILD.md
+
+# seven_gate run artifacts (e2e_test/seven_gate/run.sh) — one directory per run,
+# kept on disk on purpose (log + journal + verdict) and never committed.
+e2e_test/seven_gate/runs/

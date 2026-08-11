@@ -1563,6 +1563,1674 @@ ff8a_mutant use 's|^  if ! oc_e2e_teardown_armed; then$|  if false; then|'
   && ok "after both mutants, the throwaway sentinel is STILL there — breaking the guard cannot make this test destructive" \
   || bad "a mutant DELETED the throwaway sentinel — this test file relies on the guard it is testing for its own safety"
 
+# ── 21) T-42bb: the seven_gate VERDICT — it must go red, and name the step ────
+#
+# seven_gate/judge.py decides whether a seven-step run happened, reading ONLY
+# what the server was observed to hold. The thing that can silently rot in it is
+# not "does a good run pass" — a judge that returns PASS unconditionally does
+# that too. It is "does a run MISSING one step go red, and does it say WHICH".
+# So the shape below is: one green fixture as the control, then SEVEN mutants,
+# one per step, each removing exactly that step's fact from the bundle. Each must
+# exit 1 AND name its own step on the last line. A mutant that reddens the wrong
+# step is as bad as one that stays green — the caller acts on the name.
+#
+# HERMETIC: no server, no network. The bundle is a handful of JSON objects
+# written here, which is the whole reason collect.py (I/O) and judge.py (pure)
+# are separate files.
+SG_DIR="$HERE/../seven_gate"
+SG_WORK="$SHIMDIR/seven-gate"
+mkdir -p "$SG_WORK"
+
+# The full-green bundle, as a python emitter so a mutant is one deleted key.
+# `python3` here is the same text-tool use lib/common.sh already makes of it.
+cat > "$SG_WORK/mk.py" <<'PY'
+import hashlib, json, os, sys
+drop, out = sys.argv[1], sys.argv[2]
+AG, NONCE = "m-sg", "sg-nonce-deadbeef"
+PEER, PEER_NONCE = "m-sg-peer", "sg-peer-nonce-feedface"
+IMG_ANSWER, IMG_SALT = "481902", "sg-salt-c0ffee"
+REPLAN = os.environ.get("SG_REPLAN") == "1"
+
+# ── the plan, and the TWO SHAPES OF IT THE JOURNAL SEES ─────────────────────
+# ⑤ is a TIME fact now ("a step was done while the task was still open"), so the
+# fixture has to be a time series and not one final snapshot. Two versions of
+# the same task row are therefore emitted: a MID-FLIGHT one (step0 done, no
+# close-out) and a FINAL one (everything done, close-out reported).
+#
+# The step_done mutant is the real exposure this fixture exists to pin, and it
+# is now a state the SERVER CAN ACTUALLY PRODUCE: the mid-flight sample shows
+# the task open with NOTHING done yet, and the final sample shows the whole plan
+# done with the close-out already reported — i.e. the plan was back-filled in one
+# go at the close. closeout_reported stays TRUE, so it is a bundle where ⑤ is red
+# and ⑦ is green.
+# ⚠️ THE PREVIOUS VERSION OF THIS FIXTURE WAS NOT REACHABLE and therefore proved
+# nothing: it asserted step0.status="todo" together with task.status="done" and
+# closeout_reported=true, and DeriveTaskStatus cannot derive `done` while a step
+# is not done. It demonstrated that the predicate could be falsified, not that
+# the world it described exists.
+def step(i, name, status, fin):
+    return {"id": "s%d" % i, "name": name, "order_idx": i - 1, "status": status,
+            "started_ts": max(0.0, fin - 10.0) if fin else 0, "finished_ts": fin}
+
+if REPLAN:
+    # 21b-iii's world: the agent RE-PLANNED (submit_plan froze a node it did not
+    # re-list into `superseded`, and ReplaceTaskPlan leaves it in place,
+    # renumbered) and the two live nodes are a PARALLEL pair that finished
+    # backwards. Both are ordinary server behaviour; both used to be red.
+    mid_steps = [step(1, "被取代的舊節點", "superseded", 190.0),
+                 step(2, "並行 A", "done", 175.0),
+                 step(3, "並行 B", "in_progress", 0)]
+    final_steps = [step(1, "被取代的舊節點", "superseded", 190.0),
+                   step(2, "並行 A", "done", 175.0),
+                   step(3, "並行 B", "done", 160.0)]
+else:
+    mid_steps = [step(1, "走完七步", "in_progress" if drop == "step_done" else "done",
+                      0 if drop == "step_done" else 150.0),
+                 step(2, "回報收尾", "in_progress", 0)]
+    final_steps = [step(1, "走完七步", "done", 150.0),
+                   step(2, "回報收尾", "done", 180.0)]
+
+def task_row(steps, updated, status, closed):
+    return {"id": "T-1", "creator_id": AG, "title": "probe", "created_ts": 100,
+            "updated_ts": updated, "status": status,
+            "steps": [] if drop == "submit_plan" else steps,
+            "closeout_reported": closed}
+
+mid = task_row(mid_steps, 150, "in_progress", False)
+final = task_row(final_steps, 200, "done", drop != "closeout")
+# The scratch ticket: same creator, EARLIER created_ts, no plan on it. Nothing
+# on the server distinguishes it from the real one.
+draft = {"id": "T-0-draft", "creator_id": AG, "title": "草稿", "created_ts": 50,
+         "updated_ts": 60, "status": "not_started", "steps": [],
+         "closeout_reported": False}
+# 🔴 THE THIRD-PARTY ROW, AND IT IS NOW REALLY HERE. The comment that used to sit
+# on this line said "A THIRD-PARTY TASK ROW is always present: ③ must key on
+# creator_id, not on 'a task exists'" — and there was no such row in the fixture,
+# so relaxing ③'s `creator_id == agent` to `True` left the whole suite at
+# PASS=268 FAIL=0, silent (MEASURED). It is EARLIER than both of the agent's
+# tickets and carries no plan, so a creator-blind judge picks it as "the
+# earliest task" and ④ goes red — which is what makes the relaxation loud.
+other = {"id": "T-other", "creator_id": "m-someone-else", "title": "別人的票",
+         "created_ts": 10, "updated_ts": 20, "status": "in_progress",
+         "steps": [], "closeout_reported": False}
+def tasks_at(row):
+    # The third-party row is present in EVERY sample, including the create_task
+    # mutant's — that mutant must go red because no row carries the agent's id,
+    # not because the server happened to hold no tasks at all.
+    if drop == "create_task":
+        return [other]
+    return [other] + ([draft] if os.environ.get("SG_DRAFT") == "1" else []) + [row]
+
+# 🔴 THE OWNER'S OWN CARD, AND IT IS NOW REALLY HERE — FIRST in the list, so a
+# judge that stops keying on `from == agent` finds it instead. judge.py ⑥ says
+# "a card the harness opened on its behalf proves nothing, which is why the
+# initiator is checked"; with only the agent's card in the fixture, relaxing that
+# check to `True` was silent (MEASURED: PASS=268 FAIL=0).
+owner_card = {"id": "rc-owner", "from": "owner", "status": "waiting"}
+cards_final = [owner_card] + ([] if drop == "reply_card" else
+                              [{"id": "rc-1", "from": AG, "status": "waiting"}])
+
+chat_final = (
+    ([] if drop == "resume_scene" else
+     [{"id": "c1", "from": AG, "to": "owner", "body": "接回現場：" + NONCE}])
+    # 🔴 THE OWNER-ADDRESSED MESSAGE THAT CARRIES THE PEER'S NONCE. ⑧ is two
+    # different claims — `to == peer` ("it talked to a colleague at all", which
+    # judge.py calls the half the owner asked for) and the nonce ("it was a
+    # reply"). Dropping `to == peer` while keeping the nonce check used to be
+    # silent (MEASURED: PASS=268 FAIL=0) because nothing in the fixture quoted
+    # the peer's nonce anywhere but in a message to the peer. This row is an
+    # agent that reports UPWARD about the colleague without ever answering the
+    # colleague, and ⑧ must not accept it.
+    + [{"id": "c1b", "from": AG, "to": "owner",
+        "body": "我看到隔壁那條線的記號了：" + PEER_NONCE + "，稍後處理。"}]
+    # ⑧'s fact: agent → PEER, quoting what the peer said.
+    + ([] if drop == "peer_message" else
+       [{"id": "c2", "from": AG, "to": PEER, "body": "收到：" + PEER_NONCE}])
+    # ⑨'s fact: the agent SAID the number that only the picture carries.
+    + ([] if drop == "image_answer" else
+       [{"id": "c3", "from": AG, "to": "owner",
+         "body": "圖上的號碼是 " + IMG_ANSWER}]))
+
+samples = [
+    {"t": 1.0, "member": {"id": AG, "presence": "offline"},
+     "chat": [], "tasks": [other], "reply_cards": [owner_card]},
+    {"t": 2.0,
+     "member": {"id": AG, "presence": "online" if drop == "report_waking" else "waking"},
+     "chat": [], "tasks": [other], "reply_cards": [owner_card]},
+    # MID-FLIGHT: the task is open and (unless the step_done mutant is on) one
+    # step is already done. This sample is ⑤'s entire evidence.
+    {"t": 5.0, "member": {"id": AG, "presence": "online"},
+     "chat": [], "tasks": tasks_at(mid), "reply_cards": [owner_card]},
+    {"t": 9.0, "member": {"id": AG, "presence": "online"},
+     "chat": chat_final, "tasks": tasks_at(final), "reply_cards": cards_final},
+]
+os.makedirs(out, exist_ok=True)
+# scene.json carries salt+sha256, never the number — see judge.py's header and
+# seven_gate/run.sh 3c-bis.
+json.dump({"agent_id": AG, "scene_nonce": NONCE,
+           "peer_id": PEER, "peer_nonce": PEER_NONCE,
+           "image_answer_salt": IMG_SALT,
+           "image_answer_len": len(IMG_ANSWER),
+           "image_answer_sha256":
+               hashlib.sha256((IMG_SALT + IMG_ANSWER).encode("utf-8")).hexdigest()},
+          open(out + "/scene.json", "w"))
+with open(out + "/journal.ndjson", "w") as fh:
+    for s in samples:
+        fh.write(json.dumps(s, ensure_ascii=False) + "\n")
+PY
+
+sg_judge() { # sg_judge DROP -> prints "<rc>|<last line>"
+  local drop="$1" dir="$SG_WORK/b-$1"
+  rm -rf "$dir"
+  python3 "$SG_WORK/mk.py" "$drop" "$dir" >/dev/null 2>&1 || { echo "9|fixture-build-failed"; return; }
+  local outp rc
+  outp="$(python3 "$SG_DIR/judge.py" "$dir" 2>&1)"; rc=$?
+  printf '%s|%s\n' "$rc" "$(printf '%s\n' "$outp" | tail -n 1)"
+}
+
+# 21a) the control: nothing dropped → green, and the marker is EXACT. Without
+# this the seven mutants below are satisfied by a judge that fails everything.
+_sg="$(sg_judge none)"
+check "seven_gate: a complete run exits 0" "0" "${_sg%%|*}"
+check "seven_gate: a complete run's last line is the exact marker" \
+  "[seven_gate] all green" "${_sg#*|}"
+
+# 21b) ONE MUTANT PER STEP — that step's fact removed from the bundle each time. Both halves are
+# asserted per mutant: rc must be 1 (green would mean the gate cannot say no)
+# and the last line must name THAT step (a red pointing elsewhere sends the
+# reader to the wrong place, which costs more than no red at all).
+sg_mutant() { # sg_mutant KEY ZH
+  local key="$1" zh="$2" res rc last
+  res="$(sg_judge "$key")"; rc="${res%%|*}"; last="${res#*|}"
+  check "seven_gate: with 「${zh}」 missing, the verdict is RED" "1" "$rc"
+  case "$last" in
+    *"failed at step"*"$key"*) ok "seven_gate: the RED names 「${zh}」 ($key) — $last" ;;
+    *) bad "seven_gate: 「${zh}」 was missing but the verdict named something else: $last" ;;
+  esac
+}
+# ⚠️ NO `sg_mutant report_waking` — ON PURPOSE, same as ⑤ below, and 21b-v is
+# what replaces it. ① stopped being a gate (owner's ruling 2026-08-11, after ⑤)
+# because the field it reads is written BY THIS HARNESS in every round:
+# presence=="waking" is derived from `waking_since`, and reconcile stamps that on
+# the landed START that run.sh's own owner-side `activate` causes, before the
+# agent runs. A mutant here would assert the opposite of the contract.
+sg_mutant resume_scene  接回現場
+sg_mutant create_task   開票
+sg_mutant submit_plan   提出計畫
+# ⚠️ NO `sg_mutant step_done` — ON PURPOSE, and 21b-v below is what replaces it.
+# ⑤ is no longer a gate (owner's ruling, 2026-08-11): it prints what it observed
+# and cannot make a run red, because the thing it wanted to judge is not in the
+# data — the server stamps WHEN EACH REPORT ARRIVED and never whether work
+# happened between two reports. A mutant here would now assert the opposite of
+# the contract. 21b-v pins the downgrade itself, in both directions.
+sg_mutant reply_card    開一張等我回覆卡
+sg_mutant closeout      回報收尾
+sg_mutant peer_message  回覆另一個-agent
+sg_mutant image_answer  看得到圖
+
+# 21b-i) ⑤ HAS DISCRIMINATING POWER OF ITS OWN, AND IN A REACHABLE WORLD.
+# ⑤ used to ask "does ANY step carry done", and ⑦ (closeout) is terminal-only
+# while a task is terminal only when every non-superseded step is done
+# (DeriveTaskStatus) — so ⑦ green IMPLIED ⑤ green and no bundle could exist where
+# ⑤ was red and ⑦ was not. The prefix/ordering version that replaced it bought
+# almost nothing back (with ⑦ green the prefix half is true by construction) and
+# was RED ON REPLAN AND ON PARALLEL — see 21b-iii.
+# ⑤ now reads a TIME fact: was the task ever OBSERVED carrying a done step while
+# it had not yet reported its close-out. ⑦ reads the last state only and can say
+# nothing about the states passed through, so the two are independent — and the
+# bundle that separates them is a plain back-fill: nothing done mid-flight, the
+# whole plan done and closed out in the final sample. Every row of it is a state
+# the server can produce, which the previous fixture (step todo + task done) was
+# not.
+# ⚠️ 2026-08-11: THE CELL THIS PARAGRAPH DESCRIBES NO LONGER JUDGES ANYTHING.
+# The time fact it reads separates a fast honest agent from a slow one, not an
+# honest agent from a cheat — measured, see 21b-v and judge.py's ⑤ block. What
+# survives here is the BUNDLE: the back-fill world is still the interesting one
+# and it is still REACHABLE, which is the half the old fixture got wrong. What is
+# asserted about it changed from "⑤ goes red on it" to "⑤ CANNOT redden it".
+_sg_bf="$(sg_judge step_done)"
+check "seven_gate: the back-fill bundle (nothing done mid-flight, whole plan done and closed out at the end) exits 0 — ⑤ is an observation and cannot redden a run on its own" \
+  "0" "${_sg_bf%%|*}"
+check "seven_gate: …and its last line is the exact green marker (a downgraded cell must not leave a half-red verdict behind either)" \
+  "[seven_gate] all green" "${_sg_bf#*|}"
+# …and the bundle it says that about must be REACHABLE. The old one asserted a
+# `todo` step on a `done` task, which DeriveTaskStatus cannot produce: it proved
+# the predicate was falsifiable, not that the world existed.
+_sg_reach="$(python3 -c '
+import json, sys
+last = None
+for line in open(sys.argv[1]):
+    line = line.strip()
+    if line:
+        last = json.loads(line)
+for t in last.get("tasks") or []:
+    if t.get("id") != "T-1":
+        continue
+    bad = [s for s in t.get("steps") or []
+           if t.get("status") == "done" and s.get("status") not in ("done", "superseded")]
+    print("unreachable" if bad else "reachable")
+    break
+else:
+    print("no-task")' "$SG_WORK/b-step_done/journal.ndjson" 2>/dev/null)"
+check "seven_gate: …and the back-fill bundle is a state the server can actually reach (no un-done step on a done task)" \
+  "reachable" "$_sg_reach"
+
+# 21b-v) 🔴 THE GATE/OBSERVATION SPLIT ITSELF — pinned in BOTH directions.
+#
+# WHY THIS CASE EXISTS. TWO cells have been downgraded from gates to
+# observations, for two different reasons, and both downgrades are the right
+# answer AND exactly the shape this repo keeps getting hurt by: a check that
+# stops checking while everything still prints green.
+#   ⑤ — what it wanted to judge is NOT IN THE DATA (judge.py's ⑤ block has the
+#        measurements): the server stamps when each report arrived, never whether
+#        work happened between two reports.
+#   ① — the field it reads IS WRITTEN BY THIS HARNESS in every round: presence
+#        =="waking" derives from `waking_since`, and reconcile stamps that on the
+#        landed START that run.sh's own owner-side `activate` causes, before the
+#        agent runs. It was a gate that could not say no about its own
+#        population — an unfalsifiable green, which is worse than a false red.
+# So the membership of OBSERVATION_KEYS is not a comment, it is an assertion —
+# someone re-arming a downgraded cell goes red HERE, and so does someone quietly
+# moving a real gate into the observation set. Both directions matter: the first
+# resurrects a verdict nobody can stand behind, the second is how a gate
+# disappears without anyone noticing.
+#
+# 🔴 THE BOUNDARY OF THIS CASE, SAID BEFORE ANYONE HAS TO DISCOVER IT:
+#
+#   VERBATIM COMPARISON ONLY STOPS THE LINES WE THOUGHT OF. "THE SCREEN DOES NOT
+#   LIE" IS NOT AN ENUMERABLE PROPERTY, AND THIS GUARD IS BOUNDED.
+#
+# TWO rounds of independent review have each found three new ways to make this
+# harness print something false while the whole suite stayed all green — the
+# gate count (a wrong number), the position (a line saying "below" printed under
+# the cells), ⑤'s numbers (a constant), a SECOND NOTE line printed next to the
+# true one, ⑤'s PREFIX rewritten into a claim that the agent was verified, and
+# ①'s content pinned to a fixed sighting. Every one of those is now pinned. The
+# next reviewer will find a seventh. THAT IS NOT THIS GUARD FAILING — it never
+# promised the universal. What it holds, stated no wider than the mechanism:
+# THESE lines, byte for byte, on TWO fixtures whose values differ, and EXACTLY
+# ONE GATE-COUNT line — a line matching `NOTE: <n> of the …`, which is the only
+# shape the count and the position checks look at.
+# ⚠️ OTHER `NOTE:` LINES ARE NOT PINNED, and that is not hypothetical: judge.py
+# already prints an unpinned `NOTE: the journal is EMPTY …`, and a review mutant
+# printing `NOTE: every cell below is a GATE — this run verified all nine.` was
+# green. An earlier draft of this paragraph claimed "no unaccounted-for NOTE
+# line", which promised the whole NOTE population while the mechanism only ever
+# covered the gate-count subset — a boundary written wider than what it guards is
+# the same defect as a guard that stopped guarding.
+#
+# What that buys, precisely: an edit to any pinned sentence must be a DELIBERATE
+# edit here too. What it does not buy: safety from a sentence nobody pinned.
+# ⇒ If you are adding output to judge.py that a reader could act on, pin it here
+#   in the same commit. If you are reviewing and you find number seven, that is
+#   the guard working as designed — add it, do not conclude the guard was broken.
+_sg_labels() { # _sg_labels JUDGE BUNDLE -> "<gates>|<observations>|<obs keys>"
+  python3 - "$1" "$2" <<'PY'
+import json, os, subprocess, sys
+judge, bundle = sys.argv[1], sys.argv[2]
+subprocess.run([sys.executable, judge, bundle], capture_output=True)
+rows = json.load(open(os.path.join(bundle, "verdict.json")))
+# 🔴 THE TYPE IS PART OF THE CONTRACT, AND IT WAS NOT PINNED. This function used
+# to ask only `passed is None`, so a cell that returned a truthy non-boolean
+# sentinel (measured: a review mutant made ⑦ return the string 'not-checked')
+# printed PASS on screen, wrote 'not-checked' into verdict.json, AND was still
+# counted here as one of the eight gates. The machine-readable contract is
+# true/false/null — anything else is a shape nobody downstream can read, so it
+# is named rather than silently bucketed.
+bad = [r for r in rows if r["passed"] is not None and not isinstance(r["passed"], bool)]
+if bad:
+    print("BAD-TYPE:" + ",".join("%s=%r" % (r["key"], r["passed"]) for r in bad))
+    raise SystemExit(0)
+obs = [r for r in rows if r["passed"] is None]
+print("%d|%d|%s" % (len(rows) - len(obs), len(obs), ",".join(r["key"] for r in obs)))
+PY
+}
+check "seven_gate: the verdict declares 7 GATES and exactly 2 OBSERVATIONS, and they are ① and ⑤ (a cell that stopped deciding must say so in the machine-readable output, not only in a comment)" \
+  "7|2|report_waking,step_done" "$(_sg_labels "$SG_DIR/judge.py" "$SG_WORK/b-none")"
+# …and on screen. `passed: null` in a file nobody opens is not a label. BOTH
+# downgraded cells are checked, and BOTH ARE PINNED THE SAME WAY: whole line,
+# byte for byte, on two fixtures whose values differ. The asymmetry this replaces
+# was measured — ⑤ had a verbatim suffix plus a counter-fixture while ① had two
+# substrings, so a mutant that made ① print a FIXED sighting ("seen at t=0.0") on
+# a bundle where the agent was NEVER seen waking left the suite at 319/0. The
+# weakly-pinned cell was the newly-downgraded one, whose entire remaining job is
+# to say whether and when it saw anything.
+_sg_line() { # _sg_line BUNDLE STEPPREFIX -> that one output line
+  python3 "$SG_DIR/judge.py" "$1" 2>&1 | grep -E "^\[seven_gate\] $2 "
+}
+_sg_obs_line="$(_sg_line "$SG_WORK/b-none" 'step5 step_done')"
+_sg_obs1_line="$(_sg_line "$SG_WORK/b-none" 'step1 report_waking')"
+case "$_sg_obs_line" in
+  *OBSERVED*) ok "seven_gate: …and ⑤'s line reads OBSERVED, not PASS — $(printf '%s' "$_sg_obs_line" | cut -c1-120)…" ;;
+  *) bad "seven_gate: ⑤'s line does not say OBSERVED, so a reader counts it as a step that was verified: $_sg_obs_line" ;;
+esac
+case "$_sg_obs1_line" in
+  *OBSERVED*) ok "seven_gate: …and ①'s line reads OBSERVED, not PASS — $(printf '%s' "$_sg_obs1_line" | cut -c1-120)…" ;;
+  *) bad "seven_gate: ①'s line does not say OBSERVED, so a reader counts it as a step that was verified: $_sg_obs1_line" ;;
+esac
+# ⑤ AND ① — WHOLE LINE, VERBATIM, INCLUDING THE PART BEFORE THE COLON. The old
+# form cut at a marker and compared only the SUFFIX, so the whole "why this cell
+# cannot decide" preamble was free text: a mutant rewrote ⑤'s prefix into
+# "⑤ CONFIRMS THIS AGENT REPORTED EACH STEP AS THE WORK WENT" and the suite
+# stayed at 319/0. The preamble is the half a reader forms their conclusion from.
+check "seven_gate: …and ⑤'s line is EXACTLY this, preamble included (comparing only the suffix let a mutant rewrite the preamble into a claim that the agent was verified — measured)" \
+  '[seven_gate] step5 step_done      報一步完成 OBSERVED — OBSERVED, NOT JUDGED (this cell cannot make the run red — the server records when each report ARRIVED, never whether work happened between two reports, so nothing here separates '"'"'reported as the work went'"'"' from '"'"'reported all at once'"'"'): task T-1: 2 of 2 plan step(s) at done; 2 distinct server-stamped finished_ts; first→last completion 30.000s (server-stamped, not sampled); first completion→close-out sighting not comparable in this bundle (the sample clock reads before the server'"'"'s finished_ts)' \
+  "$_sg_obs_line"
+check "seven_gate: …and ①'s line is EXACTLY this, preamble included (it says WHY it cannot decide — without that the downgrade is a null in a file plus one English word)" \
+  '[seven_gate] step1 report_waking  報到 OBSERVED — OBSERVED, NOT JUDGED (this cell cannot make the run red — on the live path, where a warden is online before the harness activates the member, reconcile stamps the `waking_since` this projection derives from when the START lands, before the agent runs; so a sighting here is not evidence the agent reported anything): member m-sg was seen at presence=waking at t=2.0' \
+  "$_sg_obs1_line"
+# …and ①'s COUNTER-FIXTURE, the half ⑤ already had and ① did not: on a bundle
+# where the agent was never seen waking, that line must CHANGE. Without this the
+# assertion above is satisfied by a cell that ignores the bundle entirely.
+rm -rf "$SG_WORK/b-report_waking"
+python3 "$SG_WORK/mk.py" report_waking "$SG_WORK/b-report_waking" >/dev/null 2>&1 \
+  || bad "seven_gate: could not build the ① counter-fixture — the assertion under it would be testing nothing"
+_sg_obs1_neg="$(_sg_line "$SG_WORK/b-report_waking" 'step1 report_waking')"
+check "seven_gate: …and on a bundle where the agent was NEVER seen waking, ①'s line follows the bundle (this is what separates 'it reports what it saw' from 'it prints a sentence')" \
+  '[seven_gate] step1 report_waking  報到 OBSERVED — OBSERVED, NOT JUDGED (this cell cannot make the run red — on the live path, where a warden is online before the harness activates the member, reconcile stamps the `waking_since` this projection derives from when the START lands, before the agent runs; so a sighting here is not evidence the agent reported anything): no sample ever showed member m-sg at presence=waking' \
+  "$_sg_obs1_neg"
+# …and THAT bundle still exits 0 — the cost of the downgrade, asserted so nobody
+# rediscovers it by accident. On the control tree (f29f63c2) this same bundle was
+# rc=1 with `RED — failed at step1 report_waking`. "This agent never reported in"
+# is now something NO cell in this harness will say no to.
+python3 "$SG_DIR/judge.py" "$SG_WORK/b-report_waking" >/dev/null 2>&1
+check "seven_gate: …and that bundle is GREEN (rc=0) — ① cannot redden a run, which is exactly the capability the downgrade gave up; if this ever goes to 1 again, the ruling changed" \
+  "0" "$?"
+# 🔴 THE GATE-COUNT LINE IS PINNED VERBATIM, NOT COUNTED, AND ITS POSITION IS
+# PINNED SEPARATELY. This used to be `grep -c 'cells below are GATES'` == 1,
+# i.e. "that substring appears once" — nothing about the NUMBER, nothing about
+# WHERE. Independent review 2026-08-11 planted three mutants in the real
+# judge.py and the whole suite stayed at PASS=303 FAIL=0:
+#   * `len(gates)` → `len(verdicts)` ⇒ the screen said "9 of the 9 cells below
+#     are GATES … read a green run as 'the 9 gates held'" — the exact misreading
+#     the downgrade exists to prevent, printed BY THE HARNESS, while
+#     verdict.json still recorded 8|1|step_done. Screen and file contradicted
+#     each other and nothing spoke.
+#   * the whole gates/obs/NOTE block moved BELOW the per-cell loop ⇒ a line
+#     saying "the cells BELOW" printed under step9.
+#   * a constant `return "OBSERVED: 0 distinct …"` in _observe_step_shape ⇒ ⑤'s
+#     only remaining function (reporting the shape truthfully) replaced by a
+#     fixed lie.
+# So: the sentence is compared whole, the position is compared to step1's, and
+# ⑤'s numbers are pinned to THIS fixture's known values with a counter-fixture
+# that must change them. ⚠️ EDITING THE SENTENCE IN judge.py MEANS EDITING THE
+# LINE BELOW — that is the cost of pinning it, and it is the point.
+# …AND THERE MUST BE EXACTLY ONE OF THEM. This used to be `| head -n 1`, and the
+# position check took the FIRST match too — so nothing required the line to be
+# unique. A mutant printing a SECOND NOTE line right beside the true one ("9 of
+# the 9 cells below are GATES — this run verified all nine.") left the suite at
+# 319/0: the first line was still correct, and the second could say anything.
+_sg_head_n="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-none" 2>&1 | grep -cE '^\[seven_gate\] NOTE: [0-9]+ of the')"
+check "seven_gate: …and there is EXACTLY ONE gate-count line (a second one printed next to the true one said the opposite and was silent — measured)" \
+  "1" "$_sg_head_n"
+_sg_head_line="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-none" 2>&1 | grep -E '^\[seven_gate\] NOTE: [0-9]+ of the')"
+check "seven_gate: …and the GATE-COUNT line above the cells is EXACTLY this sentence (counting the substring let a mutant print '9 of the 9' and stay green — measured)" \
+  '[seven_gate] NOTE: 7 of the 9 cells below are GATES (their fact is absent ⇒ the run is red). THE REST ARE OBSERVATIONS — step1 report_waking (報到), step5 step_done (報一步完成) — they print what they saw and CANNOT make this run red. Read a green run as "the 7 gates held", never as "9 things were verified".' \
+  "$_sg_head_line"
+_sg_head_pos="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-none" 2>&1 | awk '
+  /^\[seven_gate\] NOTE: [0-9]+ of the/ { c++; if (!n) n = NR }
+  /^\[seven_gate\] step1 / { if (!s) s = NR }
+  END { if (!n) print "no-note-line"; else if (c > 1) print "note-printed-" c "-times";
+        else if (!s) print "no-step1-line";
+        else print (n < s ? "note-above-cells" : "note-below-cells") }')"
+check "seven_gate: …and that line is printed ABOVE the cells it talks about (it says 'the cells below'; a mutant that moved it under step9 was silent — same shape as case 23d's 'preflight line < spend line')" \
+  "note-above-cells" "$_sg_head_pos"
+# ⑤'s COUNTER-FIXTURE (its whole line is already pinned above, on b-none, whose
+# plan is two done steps stamped 150.0 and 180.0 — 2 distinct stamps, 30.000s
+# apart). Collapse the two stamps into one and BOTH numbers
+# must follow. Without this, the line above is still only "⑤ prints a string
+# somebody wrote down once".
+python3 - "$SG_WORK/b-none" "$SG_WORK/b-onestamp" <<'PY'
+import json, os, shutil, sys
+src, dst = sys.argv[1], sys.argv[2]
+if not os.path.isdir(dst):
+    os.makedirs(dst)
+shutil.copy(os.path.join(src, "scene.json"), os.path.join(dst, "scene.json"))
+rows = []
+for line in open(os.path.join(src, "journal.ndjson"), encoding="utf-8"):
+    if not line.strip():
+        continue
+    s = json.loads(line)
+    for t in s.get("tasks") or []:
+        for st in t.get("steps") or []:
+            if st.get("status") == "done" and st.get("finished_ts"):
+                st["finished_ts"] = 150.0
+    rows.append(json.dumps(s, ensure_ascii=False))
+with open(os.path.join(dst, "journal.ndjson"), "w", encoding="utf-8") as fh:
+    fh.write("\n".join(rows) + "\n")
+PY
+_sg_one_shape="$(python3 -c '
+import json, sys
+last = [json.loads(l) for l in open(sys.argv[1]) if l.strip()][-1]
+t = [x for x in last["tasks"] if x["id"] == "T-1"][0]
+done = [s for s in t["steps"] if s["status"] == "done"]
+print("%d done|%d distinct" % (len(done), len({s["finished_ts"] for s in done})))
+' "$SG_WORK/b-onestamp/journal.ndjson" 2>/dev/null)"
+check "seven_gate: the one-stamp counter-fixture really carries two done steps sharing a single finished_ts (otherwise the assertion under it proves nothing)" \
+  "2 done|1 distinct" "$_sg_one_shape"
+_sg_one_line="$(_sg_line "$SG_WORK/b-onestamp" 'step5 step_done')"
+check "seven_gate: …and on that bundle ⑤'s line CHANGES with it, whole line (this is what separates 'it reports the shape' from 'it prints a sentence')" \
+  '[seven_gate] step5 step_done      報一步完成 OBSERVED — OBSERVED, NOT JUDGED (this cell cannot make the run red — the server records when each report ARRIVED, never whether work happened between two reports, so nothing here separates '"'"'reported as the work went'"'"' from '"'"'reported all at once'"'"'): task T-1: 2 of 2 plan step(s) at done; 1 distinct server-stamped finished_ts; first→last completion n/a (2 done steps share ONE server stamp); first completion→close-out sighting not comparable in this bundle (the sample clock reads before the server'"'"'s finished_ts)' \
+  "$_sg_one_line"
+# ⚠️ AND IT MUST NOT SAY "a one-step plan is a legitimate way to get here" ON A
+# LINE THAT ALSO SAYS "2 of 2". That sentence was the ONLY else-branch until
+# 2026-08-11, so every multi-step plan that shared a stamp (or carried none) got
+# a line that contradicted itself half-way through.
+_sg_one_contra="$(printf '%s' "$_sg_one_line" | grep -cF 'a one-step plan is a legitimate way to get here')"
+check "seven_gate: …and it does NOT call a 2-step plan a one-step plan (the self-contradicting line the else-branch used to print)" \
+  "0" "$_sg_one_contra"
+# MUT-regate / MUT-degrade — the declaration moved, on a COPY of judge.py.
+# Each mutant judges its OWN bundle (judge.py writes verdict.json into whatever
+# directory it is given, and a shared one would let the last writer decide).
+SG_JMUT="$SG_WORK/judge-mut.py"
+python3 "$SG_WORK/mk.py" none "$SG_WORK/b-regate"  >/dev/null 2>&1 \
+  && python3 "$SG_WORK/mk.py" none "$SG_WORK/b-degrade" >/dev/null 2>&1 \
+  || bad "seven_gate: could not build the 21b-v mutant bundles — the two cells below would be testing nothing"
+sed 's/^OBSERVATION_KEYS = ("report_waking", "step_done")$/OBSERVATION_KEYS = ()/' \
+    "$SG_DIR/judge.py" > "$SG_JMUT"
+if ! grep -q '^OBSERVATION_KEYS = ()$' "$SG_JMUT"; then
+  bad "seven_gate: MUT-regate did not apply — the OBSERVATION_KEYS declaration moved, so 21b-v is testing nothing (fix the sed)"
+else
+  check "MUT-regate: with ① and ⑤ put back in the gate set, the split is visibly different (a re-armed observation cannot slip past this case)" \
+    "9|0|" "$(_sg_labels "$SG_JMUT" "$SG_WORK/b-regate")"
+  # …and ON SCREEN too: with nothing downgraded there is no gate-count line at
+  # all. Only verdict.json was checked here before, so the screen half of the
+  # label had no mutant of its own in either direction.
+  _sg_regate_note="$(python3 "$SG_JMUT" "$SG_WORK/b-regate" 2>&1 | grep -cE '^\[seven_gate\] NOTE: [0-9]+ of the')"
+  check "MUT-regate: …and the gate-count line disappears from the screen with it (nothing is downgraded, so there is nothing to warn about)" \
+    "0" "$_sg_regate_note"
+fi
+sed 's/^OBSERVATION_KEYS = ("report_waking", "step_done")$/OBSERVATION_KEYS = ("report_waking", "step_done", "closeout")/' \
+    "$SG_DIR/judge.py" > "$SG_JMUT"
+if ! grep -q '"report_waking", "step_done", "closeout"' "$SG_JMUT"; then
+  bad "seven_gate: MUT-degrade did not apply — the OBSERVATION_KEYS declaration moved, so the other direction is testing nothing (fix the sed)"
+else
+  check "MUT-degrade: quietly moving a REAL gate (⑦) into the observation set is caught and named — this is the direction in which a gate disappears silently" \
+    "6|3|report_waking,step_done,closeout" "$(_sg_labels "$SG_JMUT" "$SG_WORK/b-degrade")"
+fi
+# …and a HALF re-arm is caught too. Both directions above move the whole set; a
+# third shape moves ONE member, which is what someone "tidying up" actually does
+# — and it is the shape that would quietly put ① back to deciding a run on a
+# field the harness writes itself.
+sed 's/^OBSERVATION_KEYS = ("report_waking", "step_done")$/OBSERVATION_KEYS = ("step_done",)/' \
+    "$SG_DIR/judge.py" > "$SG_JMUT"
+if ! grep -q '^OBSERVATION_KEYS = ("step_done",)$' "$SG_JMUT"; then
+  bad "seven_gate: MUT-rearm-one did not apply — the OBSERVATION_KEYS declaration moved (fix the sed)"
+else
+  check "MUT-rearm-one: re-arming JUST ① (the shape a tidy-up produces) is caught and named, not averaged away by the other observation staying put" \
+    "8|1|step_done" "$(_sg_labels "$SG_JMUT" "$SG_WORK/b-degrade")"
+fi
+# 21b-vi) FAIL-CLOSED, AND THE SENTENCE UNDERNEATH IT. A gate that produced no
+# verdict at all is red — that half was already true and review confirmed it by
+# hand. What was NOT true is the evidence line: the cell's else-branch text goes
+# out unchanged, so a ⑦ that decided nothing printed "task T-1 has
+# closeout_reported=false" over a bundle where it is TRUE. The red is right and
+# the sentence under it is wrong, which is the exact failure mode this repo
+# keeps paying for. _seal() is the one place the conversion happens, so it is
+# asserted directly rather than through a judge.py mutant.
+_sg_seal="$(cd "$SG_DIR" && python3 -c '
+import judge
+rows = judge._seal([("closeout", "回報收尾", None, "EVIDENCE-FROM-THE-ELSE-BRANCH"),
+                    ("step_done", "報一步完成", None, "obs"),
+                    ("create_task", "開票", True, "ok")])
+print("|".join("%s=%r,%s" % (k, p, "MARKED" if judge.NOTHING_DECIDED in w else "bare")
+               for k, _z, p, w in rows))' 2>&1)"
+check "seven_gate: a GATE that decided nothing is red AND its evidence says so, while an OBSERVATION keeps its null and a real verdict is untouched (fail-closed, and the red points at judge.py instead of the agent)" \
+  "closeout=False,MARKED|step_done=None,bare|create_task=True,bare" "$_sg_seal"
+
+# 21b-vii) 🔴 A BROKEN PLANT MUST NOT BE WORDED AS AN AGENT FAILURE. ⑧ and ⑨
+# each already had one branch that says "This is a HARNESS red, not an agent
+# red" — for a missing peer_id and a missing image digest. Neither covered the
+# EMPTY-VALUE case, and the fall-through accused the agent verbatim (review
+# 2026-08-11, measured on the real judge.py):
+#   step8 … chat message c2 runs m-sg → m-sg-peer but does NOT carry the peer's
+#   nonce '' — the agent spoke to the colleague without showing it read what the
+#   colleague said
+# An empty nonce can never be matched (`peer_nonce and peer_nonce in body`), so
+# that sentence was structurally unearnable — the harness blaming the agent for
+# its own missing plant, which is the shape ⑤ was downgraded for.
+_sg_plant() { # _sg_plant KEY VALUE STEPGREP -> the evidence line for that cell
+  python3 - "$SG_WORK/b-none" "$SG_WORK/b-plant" "$1" "$2" <<'PY'
+import json, os, shutil, sys
+src, dst, key, value = sys.argv[1:5]
+if os.path.isdir(dst):
+    shutil.rmtree(dst)
+shutil.copytree(src, dst)
+path = os.path.join(dst, "scene.json")
+scene = json.load(open(path, encoding="utf-8"))
+scene[key] = value
+json.dump(scene, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+PY
+  python3 "$SG_DIR/judge.py" "$SG_WORK/b-plant" 2>&1 | grep -E "^\[seven_gate\] $3 "
+}
+#
+# 🔴 ② IS THE SAME BUG POINTING THE OTHER WAY, AND IT IS THE WORSE HALF: it does
+# `nonce in body`, and `"" in body` is TRUE for every message — so an unplanted
+# scene_nonce made ② PASS on the agent's first word. MEASURED 2026-08-11 on the
+# green fixture: scene_nonce="" ⇒ step2 PASS, `all green`, rc=0, nothing said.
+# A gate that stops gating while everything prints green is the whole subject of
+# this round, so it is asserted here next to its two siblings.
+for _sg_pl in "peer_nonce|step8|step8 peer_message" \
+              "image_answer_salt|step9|step9 image_answer" \
+              "scene_nonce|step2|step2 resume_scene"; do
+  _sg_pl_key="${_sg_pl%%|*}"; _sg_pl_rest="${_sg_pl#*|}"
+  _sg_pl_step="${_sg_pl_rest%%|*}"; _sg_pl_grep="${_sg_pl_rest#*|}"
+  _sg_pl_line="$(_sg_plant "$_sg_pl_key" "" "$_sg_pl_grep")"
+  case "$_sg_pl_line" in
+    *"This is a HARNESS red, not an agent red"*)
+      ok "seven_gate: an EMPTY $_sg_pl_key in scene.json makes $_sg_pl_step say the plant is broken, not that the agent failed" ;;
+    *) bad "seven_gate: an EMPTY $_sg_pl_key in scene.json does not name the harness: $_sg_pl_line" ;;
+  esac
+  case "$_sg_pl_line" in
+    *"the agent spoke to the colleague without showing"*|*"nothing shows the picture was opened"*|*"nothing shows the prior scene was read back"*)
+      bad "seven_gate: …and it still carries the sentence that accuses the agent: $_sg_pl_line" ;;
+    *) ok "seven_gate: …and it does NOT carry the sentence that accuses the agent ($_sg_pl_step)" ;;
+  esac
+  # …and it is FAIL. Two different ways this matters: a harness red must stay a
+  # red (naming the culprit is not excusing the run), and ②'s empty needle must
+  # not be the PASS it used to be.
+  case "$_sg_pl_line" in
+    *" FAIL — "*) ok "seven_gate: …and $_sg_pl_step is still FAIL, not PASS (empty $_sg_pl_key)" ;;
+    *) bad "seven_gate: …and $_sg_pl_step is not FAIL on an empty $_sg_pl_key: $_sg_pl_line" ;;
+  esac
+done
+# …and WHITESPACE counts as empty. `peer_nonce` and `salt` were .strip()ed from
+# the start; `scene_nonce` was not, so a nonce of one space walked straight past
+# the empty check and `" " in body` matched an UNRELATED message — ② PASS, rc=0
+# (measured on the fix before this one). Three fields, one rule.
+_sg_ws_line="$(_sg_plant scene_nonce " " 'step2 resume_scene')"
+case "$_sg_ws_line" in
+  *"This is a HARNESS red, not an agent red"*)
+    ok "seven_gate: …and a scene_nonce of pure WHITESPACE is treated as the broken plant it is, not matched against every message" ;;
+  *) bad "seven_gate: a whitespace-only scene_nonce does not name the harness: $_sg_ws_line" ;;
+esac
+
+# 21b-iii) ⑤ MUST NOT BE RED ON THE TWO THINGS THE SERVER DOES ON PURPOSE.
+# This is the other half of 21b-i and it is the half that was broken: a bundle
+# with (a) a `superseded` replan record sitting BEFORE later work — exactly where
+# ReplaceTaskPlan leaves it, renumbered, while DeriveTaskStatus/TaskProgress skip
+# it — and (b) two parallel nodes whose finished_ts run BACKWARDS along
+# order_idx, which SPEC §3.1 permits by construction. Both are what a correct
+# agent produces; both were a deterministic RED that named the agent.
+rm -rf "$SG_WORK/b-replan"
+SG_REPLAN=1 python3 "$SG_WORK/mk.py" none "$SG_WORK/b-replan" >/dev/null 2>&1
+# The fixture has to really contain both shapes, or this case is a green that
+# proves nothing.
+_sg_rp_shape="$(python3 -c '
+import json, sys
+last = [json.loads(l) for l in open(sys.argv[1]) if l.strip()][-1]
+t = [x for x in last["tasks"] if x["id"] == "T-1"][0]
+sup = [s for s in t["steps"] if s["status"] == "superseded"]
+done = [s for s in t["steps"] if s["status"] == "done"]
+fts = [s["finished_ts"] for s in sorted(done, key=lambda s: s["order_idx"])]
+back = any(a > b for a, b in zip(fts, fts[1:]))
+first_is_sup = t["steps"][0]["status"] == "superseded"
+print("%s|%s|%s" % (bool(sup) and first_is_sup, back, t.get("closeout_reported")))
+' "$SG_WORK/b-replan/journal.ndjson" 2>/dev/null)"
+check "seven_gate: the replan/parallel fixture really carries a leading superseded row AND backwards finished_ts" \
+  "True|True|True" "$_sg_rp_shape"
+_sg_rp_out="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-replan" 2>&1)"; _sg_rp_rc=$?
+check "seven_gate: a replanned plan with a parallel group finishing out of order is GREEN (⑤ is not red on correct agent behaviour)" \
+  "0" "$_sg_rp_rc"
+case "$(printf '%s\n' "$_sg_rp_out" | tail -n 1)" in
+  "[seven_gate] all green") ok "seven_gate: …and it is green on the marker, not by accident" ;;
+  *) bad "seven_gate: the replan/parallel bundle did not end green: $(printf '%s\n' "$_sg_rp_out" | tail -n 3 | tr '\n' '|')" ;;
+esac
+
+# 21b-iv) THE FIXTURE'S OWN INTEGRITY — three rows whose absence used to make
+# three cells unguarded while the comments claimed otherwise. Each was MEASURED
+# silent: relaxing ③'s creator_id, ⑧'s `to == peer` or ⑥'s `from == agent` to a
+# constant left the whole suite at PASS=268 FAIL=0. The mutants are caught by the
+# per-step cases above ONLY because these rows exist, so they are asserted here
+# by name: deleting one must not be a quiet loss of reach.
+_sg_bundle="$SG_WORK/b-none/journal.ndjson"
+check "seven_gate: the bundle carries a task row from SOMEBODY ELSE (③ must key on creator_id, not on 'a task exists')" \
+  "1" "$(grep -qF 'm-someone-else' "$_sg_bundle" && echo 1 || echo 0)"
+check "seven_gate: the bundle carries a reply card opened by the OWNER (⑥ must key on the initiator, not on the count)" \
+  "1" "$(grep -qF '"rc-owner"' "$_sg_bundle" && echo 1 || echo 0)"
+_sg_upward="$(python3 -c '
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+hit = [m for s in rows for m in (s.get("chat") or [])
+       if m.get("from") == "m-sg" and m.get("to") == "owner"
+       and "sg-peer-nonce-feedface" in (m.get("body") or "")]
+print(1 if hit else 0)' "$_sg_bundle" 2>/dev/null)"
+check "seven_gate: the bundle carries an OWNER-addressed message quoting the peer's nonce (⑧'s 'to == peer' half must be load-bearing)" \
+  "1" "$_sg_upward"
+
+# 21b-ii) ③ TAKES THE EARLIEST TASK, AND THAT IS A GUESS — the one guess in that
+# file. An agent that opens a scratch ticket before the real one gets ④⑤⑦ judged
+# against the wrong row (MEASURED: ③ PASS pointing at the draft, ④⑤⑦ all FAIL,
+# first red 「提出計畫 FAIL — task … has an empty steps[]」). It cannot be fixed by
+# picking whichever task satisfies ④⑤⑦ — that would make those cells
+# unfalsifiable — and it cannot be fixed with a planted marker, because
+# assignment.md deliberately never tells the agent to open a ticket at all. So
+# the requirement is that the verdict SAYS SO instead of silently accusing the
+# agent.
+rm -rf "$SG_WORK/b-draft"
+SG_DRAFT=1 python3 "$SG_WORK/mk.py" none "$SG_WORK/b-draft" >/dev/null 2>&1
+_sg_draft_out="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-draft" 2>&1)"
+case "$_sg_draft_out" in
+  *"OPENED 2 TASKS"*"T-0-draft"*)
+    ok "seven_gate: with a draft ticket opened first, the verdict names BOTH tasks and says it judged the earliest" ;;
+  *) bad "seven_gate: two tasks from the same agent produced no warning — ④⑤⑦'s reds would silently accuse the agent of the harness's own guess: $_sg_draft_out" ;;
+esac
+_sg_draft_last="$(printf '%s\n' "$_sg_draft_out" | tail -n 1)"
+case "$_sg_draft_last" in
+  *"suspect a draft"*) ok "seven_gate: …and the FIRST RED itself carries the hint — $_sg_draft_last" ;;
+  *) bad "seven_gate: the last line (the one a caller acts on) does not mention the extra ticket: $_sg_draft_last" ;;
+esac
+# …and it must stay a WARNING that fires only when it applies: a hint printed on
+# every run is one nobody reads by the time it matters.
+_sg_single_out="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-none" 2>&1)"
+case "$_sg_single_out" in
+  *"OPENED"*) bad "seven_gate: a run with ONE task still prints the multi-task warning — a warning that is always on is noise" ;;
+  *) ok "seven_gate: a run with one task prints no multi-task warning (the hint fires only when it applies)" ;;
+esac
+
+# 21c) an EMPTY journal must not read as a pass. This is the failure mode a
+# collector crash produces, and "no evidence" answering green is the one bug
+# that would make every future run meaningless.
+rm -rf "$SG_WORK/b-empty"; mkdir -p "$SG_WORK/b-empty"
+printf '{"agent_id":"m-sg","scene_nonce":"n"}' > "$SG_WORK/b-empty/scene.json"
+: > "$SG_WORK/b-empty/journal.ndjson"
+python3 "$SG_DIR/judge.py" "$SG_WORK/b-empty" >/dev/null 2>&1
+check "seven_gate: an EMPTY journal is RED, not green" "1" "$?"
+
+# 21d) the friction wording is the load-bearing part of the follow-up and it
+# lives in exactly ONE file. Pinned verbatim, because the way this stops working
+# is someone "tidying" it into 「順不順」 — which returns a pleasantry every time
+# and therefore returns nothing.
+SG_FRICTION="$SG_DIR/friction.md"
+check "seven_gate: friction Q1 is verbatim" "1" \
+  "$(grep -cF '哪一步你猶豫了／翻回去重讀了／用猜的？' "$SG_FRICTION" || true)"
+check "seven_gate: friction Q2 is verbatim" "1" \
+  "$(grep -cF '你有沒有做出後來才發現做錯的事？' "$SG_FRICTION" || true)"
+# The banned phrasings may be NAMED in the prose that explains why they are
+# banned, so the scan is for a QUESTION — the phrase followed by a question mark.
+_sg_bad="$(grep -cE '(順不順|順利嗎|有沒有問題|還可以嗎)[？?]' "$SG_FRICTION" || true)"
+check "seven_gate: friction asks none of the pleasantry questions" "0" "${_sg_bad:-0}"
+# run.sh must READ that file rather than carry its own copy of the questions —
+# two copies drift, and the one that drifts is the one that gets asked.
+_sg_reads="$(grep -cF 'friction.md' "$SG_DIR/run.sh" || true)"
+[[ "${_sg_reads:-0}" -gt 0 ]] \
+  && ok "seven_gate: run.sh sources the questions from friction.md (no second copy)" \
+  || bad "seven_gate: run.sh no longer reads friction.md — the questions have been copied, and copies drift"
+
+# 21e) the default actor spawns nothing. This file cannot prove what a live
+# actor costs, but it CAN pin that the default is not one: run.sh's fallback
+# actor must be the stub, and the stub must not reach for a claude binary.
+_sg_def="$(grep -cE 'OC_SG_ACTOR:-\$HERE/actors/stub\.sh' "$SG_DIR/run.sh" || true)"
+[[ "${_sg_def:-0}" -gt 0 ]] \
+  && ok "seven_gate: run.sh's default actor is the stub (no agent spawned unless asked)" \
+  || bad "seven_gate: run.sh's default actor is no longer the stub — a bare run may now burn API quota"
+_sg_claude="$(grep -cE '(^|[^a-z])claude([^a-z]|$)' "$SG_DIR/actors/stub.sh" || true)"
+check "seven_gate: the stub actor never invokes claude" "0" "${_sg_claude:-0}"
+
+# 21f) NO SERVER CALL MAY BE MADE OUTSIDE THE ONE LOGGING HELPER. This is the
+# bug that cost the first baseline: every call was `curl … >/dev/null`, so the
+# three that the server REFUSED (a 409 each) looked exactly like the ones it
+# accepted, and "the call failed" was indistinguishable from "the call worked
+# and the fact still is not there" — which is the shape a wrong API contract
+# takes. lib/http.sh writes the method, path, HTTP STATUS and BODY of every
+# call; the invariant that keeps it true is that nothing else reaches curl.
+# A reminder in a comment would not survive; this will.
+# Comment lines are stripped first: these files EXPLAIN the banned shape in
+# their headers, and a scan that cannot tell the rule from its own description
+# reddens on the documentation — the fastest way to get a guard deleted.
+_sg_code_only() { grep -v '^[[:space:]]*#' "$1"; }
+for _sg_caller in "$SG_DIR/run.sh" "$SG_DIR"/actors/*.sh; do
+  _sg_curl="$(_sg_code_only "$_sg_caller" | grep -cE '(^|[^[:alnum:]_])curl([^[:alnum:]_]|$)' || true)"
+  check "seven_gate: $(basename "$_sg_caller") makes no raw curl call (every call goes through lib/http.sh, which logs status + body)" \
+    "0" "${_sg_curl:-0}"
+done
+# …and the helper itself must not throw a response away. `-o <file>` + `-w
+# %{http_code}` is the shape that keeps both halves; a curl in here piped to
+# /dev/null would restore the blindness at its source.
+_sg_helper_null="$(_sg_code_only "$SG_DIR/lib/http.sh" | grep -cE 'curl[^#]*>[[:space:]]*/dev/null' || true)"
+check "seven_gate: lib/http.sh never sends a curl response to /dev/null" "0" "${_sg_helper_null:-0}"
+# "log the whole body" and "never write a credential to disk" are both true only
+# because the helper redacts. /api/mint and /api/machines answer with live
+# bearer JWTs; the first run of this harness wrote three of them into run.log and
+# http.log and bin/ci.sh's gitleaks gate caught it. Pinned as a behaviour, not a
+# grep for the sed: a fixture body is pushed through the real function.
+_sg_redact="$(SG_HTTP_LOG="" bash -c '. "$1"/lib/http.sh; _sg_http_oneline "{\"token\":\"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJtLTEifQ.c2lnbmF0dXJl\",\"id\":\"m-1\"}"' _ "$SG_DIR" 2>/dev/null)"
+case "$_sg_redact" in
+  *eyJ*) bad "seven_gate: lib/http.sh logs a bearer JWT verbatim — the harness would write live credentials to run.log/http.log (got: $_sg_redact)" ;;
+  *REDACTED*id*m-1*) ok "seven_gate: lib/http.sh redacts credentials but keeps the rest of the body (got: $_sg_redact)" ;;
+  *) bad "seven_gate: lib/http.sh's redaction ate the body — a redacted log that shows nothing else is as blind as no log (got: $_sg_redact)" ;;
+esac
+_sg_helper_code="$(grep -cF '%{http_code}' "$SG_DIR/lib/http.sh" || true)"
+[[ "${_sg_helper_code:-0}" -ge 1 ]] \
+  && ok "seven_gate: lib/http.sh captures the HTTP status code (a body without a status cannot separate a refusal from a no-op)" \
+  || bad "seven_gate: lib/http.sh no longer captures %{http_code} — a refused call and an accepted one are indistinguishable again"
+
+# 21g) the LIVE actor is default-off, and its opt-in is STRICT. e2e_test/CLAUDE.md
+# records what the loose version cost: an EXCLUDE-shaped flag set in only one
+# place meant every laptop spawned real agents and paid for them. The switch
+# must be an INCLUDE flag compared exactly, so every typo lands on "did not run,
+# did not spend".
+if [[ -f "$SG_DIR/actors/live.sh" ]]; then
+  _sg_live_optin="$(grep -cE 'OC_SG_LIVE_AGENT.*!=[[:space:]]*"1"' "$SG_DIR/actors/live.sh" || true)"
+  [[ "${_sg_live_optin:-0}" -ge 1 ]] \
+    && ok "seven_gate: live.sh refuses unless OC_SG_LIVE_AGENT is EXACTLY \"1\" (strict include-flag, not an exclude-flag)" \
+    || bad "seven_gate: live.sh's spend opt-in is not a strict '!= \"1\"' refusal — a typo could now spawn a real agent and spend real quota"
+  # It must ask the questions from the ONE file, never carry its own copy —
+  # same reason 21d pins run.sh.
+  _sg_live_fr="$(grep -cE 'sg_friction_questions|friction\.md' "$SG_DIR/actors/live.sh" || true)"
+  [[ "${_sg_live_fr:-0}" -ge 1 ]] \
+    && ok "seven_gate: live.sh takes the friction questions from friction.md (no second copy)" \
+    || bad "seven_gate: live.sh no longer reads friction.md — the questions have been copied, and copies drift"
+  # And it must not author the answers. The banned shape is a friction.txt
+  # written from a string this file made up; the allowed one is the agent's own
+  # messages. Pinned as: live.sh never claims an answer the agent did not send.
+  _sg_live_verbatim="$(grep -cE '載體不代寫' "$SG_DIR/actors/live.sh" "$SG_DIR/friction.md" 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')"
+  [[ "${_sg_live_verbatim:-0}" -ge 1 ]] \
+    && ok "seven_gate: the no-ghostwriting rule for friction answers is stated where the writer of friction.txt will read it" \
+    || bad "seven_gate: nothing states that the harness must not write the friction answers itself"
+fi
+
+# ── 22) T-42bb: the collection window must outlast the actor ──────────────────
+#
+# THE BUG. collect.py used to be started with `--seconds 900` while
+# actors/live.sh would wait 30 + 120 + 1800 + 300 ≈ 2250s. On DEFAULTS the
+# collector stopped sampling ~22 minutes before the actor stopped working, so
+# every fact that landed after that instant was invisible to judge.py — and the
+# verdict it produced was 「回報收尾 FAIL」: A RED NAMING THE AGENT FOR THE
+# HARNESS'S OWN GAP. The person who hit it worked around it by knowing to raise
+# OC_SG_MAX_SECONDS; the next person would not have known that flag existed.
+#
+# So what is pinned here is the RELATION, not a number: whatever the knobs are
+# set to, the collector's window must be >= the actor's budget. A future knob
+# that lengthens the actor lengthens the budget, and this keeps holding with
+# nobody remembering it.
+SG_WINDOW="$SG_DIR/lib/window.sh"
+sg_window_probe() { # sg_window_probe <file> [env assignments…] -> "budget|window|rc"
+  local f="$1"; shift
+  env "$@" bash -c '
+    . "$1" || exit 9
+    b="$(sg_actor_budget_secs)"; w="$(sg_collect_seconds)"
+    sg_assert_collection_window >/dev/null 2>&1; rc=$?
+    printf "%s|%s|%s\n" "$b" "$w" "$rc"' _ "$f"
+}
+
+# 22a) the shipped defaults hold — and the window is genuinely bigger, not equal
+# by accident of both being zero.
+_w="$(sg_window_probe "$SG_WINDOW")"
+_wb="${_w%%|*}"; _rest="${_w#*|}"; _ww="${_rest%%|*}"; _wrc="${_rest##*|}"
+check "seven_gate: the shipped defaults satisfy the collection-window invariant" "0" "$_wrc"
+[[ "${_wb:-0}" -gt 0 && "${_ww:-0}" -gt "${_wb:-0}" ]] \
+  && ok "seven_gate: collector window ${_ww}s strictly exceeds the actor budget ${_wb}s (not equal-by-accident)" \
+  || bad "seven_gate: window=${_ww:-?} budget=${_wb:-?} — the window must strictly exceed a non-zero budget"
+
+# 22b) it must track the ACTOR, not a constant: stretch the longest actor wait
+# and the window has to grow with it. This is the half a hardcoded number fails.
+_w2="$(sg_window_probe "$SG_WINDOW" OC_SG_LIVE_WAIT=99999)"
+_w2b="${_w2%%|*}"; _r2="${_w2#*|}"; _w2w="${_r2%%|*}"; _w2rc="${_r2##*|}"
+check "seven_gate: a much longer live wait still satisfies the invariant" "0" "$_w2rc"
+[[ "${_w2w:-0}" -gt "${_ww:-0}" ]] \
+  && ok "seven_gate: stretching OC_SG_LIVE_WAIT grew the collector window (${_ww}s → ${_w2w}s) — it is derived, not fixed" \
+  || bad "seven_gate: OC_SG_LIVE_WAIT grew but the collector window did not (${_ww}s → ${_w2w}s) — the derivation is severed"
+
+# 22c) THE MUTANT. Sever the derivation — put the old independent constant back —
+# and the invariant must go RED. Without this, a sg_collect_seconds that returned
+# a huge constant would satisfy 22a/22b's rc check and this case would guard
+# nothing. The mutant is the exact historical bug, not an invented one.
+SG_WMUT="$SHIMDIR/window-mutant.sh"
+sed -e 's|^  echo \$(( \$(sg_actor_budget_secs) + OC_SG_SETTLE + OC_SG_COLLECT_MARGIN ))$|  echo 900|' \
+    "$SG_WINDOW" > "$SG_WMUT"
+if ! grep -qE '^  echo 900$' "$SG_WMUT"; then
+  bad "seven_gate: the window mutant did not apply — the derivation line moved, so case 22c is testing nothing (fix the sed)"
+else
+  _wm="$(sg_window_probe "$SG_WMUT")"
+  _wmrc="${_wm##*|}"
+  check "seven_gate: with the derivation severed (collector window back to a constant 900), the invariant goes RED" "1" "$_wmrc"
+fi
+
+# 22d) the defaults have ONE home. A second `:-<default>` for any of these knobs
+# in run.sh or the actors is a second constant, and two constants a human keeps
+# in sync is the shape that produced the bug.
+for _knob in OC_SG_LIVE_WAIT OC_SG_MACHINE_WAIT OC_SG_SPAWN_WAIT OC_SG_FRICTION_WAIT OC_SG_CARD_WAIT OC_SG_SETTLE; do
+  _dupes="$(grep -h -oE "\\\$\{$_knob:-[^}]*\}" "$SG_DIR/run.sh" "$SG_DIR"/actors/*.sh 2>/dev/null | wc -l | tr -d ' ')"
+  check "seven_gate: $_knob has no second default outside lib/window.sh" "0" "${_dupes:-0}"
+done
+
+# 22e) THE LAST COPY OF 900, and the one 22a–22d could not see. 22d only greps
+# the SHELL files for a second `${KNOB:-…}`; the collector's own
+# `--seconds` default lived in collect.py's argparse and was still literally
+# 900. That is not a dead letter: it is what a caller that omits the flag gets,
+# SILENTLY, which is the original bug exactly — and it was reachable while every
+# assertion above stayed green. MEASURED on the pre-change tree: deleting
+# `--seconds "$COLLECT_SECONDS"` from run.sh left tests_guard at PASS=251 FAIL=0
+# rc=0, i.e. the whole of case 22 was blind to it.
+#
+# Pinned as a RELATION again, not a number: the collector must have NO window of
+# its own, so it must REFUSE to start when nobody hands it one. Behavioural, and
+# hermetic — argparse rejects before any socket or file is touched.
+SG_COLLECT="$SG_DIR/collect.py"
+#
+# ⚠️ The claim is NOT "rc != 0". A collect.py that still carries a default gets
+# past parsing and then dies on the unreadable token file — ALSO rc != 0, and
+# indistinguishable. MEASURED: mutant C (default=900.0 put back) exits 1 on
+# FileNotFoundError. So the assertion is that the refusal NAMES the window, and
+# it is paired with the control below.
+_c_noflag="$(python3 "$SG_COLLECT" --token-file /nonexistent --agent m-x --run-dir /nonexistent 2>&1)"; _c_noflag_rc=$?
+if [[ "$_c_noflag_rc" -ne 0 && "$_c_noflag" == *"--seconds"* ]]; then
+  ok "seven_gate: collect.py refuses to start without a window and names --seconds (rc=$_c_noflag_rc) — it carries no window of its own"
+else
+  bad "seven_gate: collect.py did not refuse for want of a window (rc=$_c_noflag_rc, said: $(echo "$_c_noflag" | tr '\n' '|')) — it is carrying its own default again, which is the 900 this case exists to kill"
+fi
+# POSITIVE CONTROL. Without it, "names --seconds" could be satisfied by a script
+# that mentions the flag in every failure. With the window supplied, the SAME
+# invocation must get PAST argument parsing and fail on the missing token file
+# instead — a different failure, and one that never mentions --seconds.
+_c_flag="$(python3 "$SG_COLLECT" --token-file /nonexistent --agent m-x --run-dir /nonexistent --seconds 1 2>&1)"
+case "$_c_flag" in
+  *"--seconds"*) bad "control broken: collect.py still complains about --seconds when it was given one — 22e cannot tell a missing window from a broken script" ;;
+  *) ok "seven_gate: control — given a window, collect.py gets past parsing and dies on the token file instead" ;;
+esac
+
+# 22f) …and the caller must hand it the DERIVED value. 22e closes "a forgotten
+# flag is silent"; it cannot see a caller that passes a literal. So the token
+# after --seconds in run.sh's collector invocation must be a variable expansion,
+# and that variable must be assigned from sg_collect_seconds. A number there —
+# any number, not just 900 — fails.
+_sec_tok="$(grep -oE -- '--seconds[[:space:]]+[^[:space:]]+' "$SG_DIR/run.sh" | head -1 | awk '{print $2}')"
+# Pure bash on purpose: BSD and GNU sed disagree about \{n,m\}, and a guard that
+# dies on the developer's sed is the a749470 shape all over again.
+_sec_bare="$(printf '%s' "${_sec_tok:-}" | tr -d '"'"'"'{}')"
+_sec_var=""
+[[ "$_sec_bare" =~ ^\$([A-Za-z_][A-Za-z_0-9]*)$ ]] && _sec_var="${BASH_REMATCH[1]}"
+if [[ -z "$_sec_var" ]]; then
+  bad "seven_gate: run.sh passes --seconds ${_sec_tok:-<nothing>} — that is not a variable, so the collector's window is a constant again"
+elif grep -qE "^[[:space:]]*$_sec_var=\"?\\\$\(sg_collect_seconds\)\"?[[:space:]]*$" "$SG_DIR/run.sh"; then
+  ok "seven_gate: run.sh passes --seconds \$$_sec_var and $_sec_var comes from sg_collect_seconds — derived end to end"
+else
+  bad "seven_gate: run.sh passes --seconds \$$_sec_var but $_sec_var is not assigned from sg_collect_seconds — the derivation does not reach the collector"
+fi
+
+# ── 23) T-42bb: an unbound-variable typo in live.sh must go red WITHOUT a run ──
+#
+# WHAT HAPPENED. The first real-agent run died on actors/live.sh line 213:
+#
+#     actors/live.sh: line 213: OC_SG_LIVE_WAITs: unbound variable
+#
+# One letter — the `s` of "seconds" glued onto the NAME when the window.sh
+# refactor rewrote `${OC_SG_LIVE_WAIT:-1800}s` as `$OC_SG_LIVE_WAIT`. The agent
+# had ALREADY BEEN SPAWNED and ① had passed; the actor then died, its trap killed
+# the tmux session, and ②..⑨ all went red. The verdict said 「the agent did
+# nothing」; the truth was 「the harness killed it」. A paid run, zero information.
+#
+# WHY CI DID NOT CATCH IT. CI never executes live.sh — that file only runs on a
+# real run, which is the one thing CI must never do. So the guard cannot be "run
+# it": it has to walk every variable REFERENCE while spawning nothing. That is
+# lib/varcheck.py, and this case is what makes it load-bearing rather than a
+# script nobody calls.
+#
+# 🔴 SCOPE IS DRAWN BY CONSEQUENCE, NOT BY FILENAME — the same lesson case 24
+# paid an outage for, seven lines away, and this list did not learn it. It used
+# to be a hand-written roll-call of eight paths, and the exposure it guards
+# belongs to a PROPERTY, not to those eight: any .sh under seven_gate/ is a file
+# CI never executes and only a real, paid run does. MEASURED: lib/scrub.sh was
+# added to this harness — it runs at the PRE-SPEND hop, the most expensive
+# possible place to die — and a `$VARs` typo in it was completely silent, because
+# nobody thought to add a ninth line here. So the scope is now the same QUERY
+# case 24 uses (it picks up the next file somebody adds) plus a floor, because a
+# walk that finds nothing passes every assertion by having none.
+#
+# ⚠️ `find -L`, NOT plain `find`: a plain walk does not DESCEND INTO A SYMLINKED
+# DIRECTORY, so the query's "every .sh under seven_gate/" was not true of a file
+# behind one. MEASURED (2026-08-11, both walks): a .sh carrying a `$VARs` typo
+# AND a banned `pgrep`, planted under `lib/zzsymdir -> <tmpdir>`, left this case
+# and case 24 completely green. `-L` also costs nothing here: with a symlink
+# LOOP planted, /usr/bin/find -L still terminated and listed each real file once
+# (measured; GNU-style finds print a "filesystem loop" error to stderr and exit
+# 1, but the pipelines below read stdout and never look at find's rc).
+SG_VARCHECK="$SG_DIR/lib/varcheck.py"
+SG_VARFILES=()
+_sg_varscanned=0
+while IFS= read -r _sg_varf; do
+  SG_VARFILES+=("$_sg_varf")
+  _sg_varscanned=$(( _sg_varscanned + 1 ))
+done < <(find -L "$SG_DIR" -name '*.sh' -type f | sort)
+[[ "$_sg_varscanned" -ge 6 ]] \
+  && ok "seven_gate: varcheck's scope is the directory — it walked $_sg_varscanned .sh files under seven_gate/ (not a roll-call somebody has to remember to extend)" \
+  || bad "seven_gate: varcheck only found $_sg_varscanned .sh file(s) under $SG_DIR — a walk that finds nothing passes silently, which is exactly how this check lost its reach for lib/scrub.sh"
+# …and the files that ONLY a paid run executes are named, so a future narrowing
+# of the walk cannot quietly drop the expensive ones.
+for _sg_varmust in actors/live.sh lib/ownedkill.sh lib/scrub.sh; do
+  printf '%s\n' "${SG_VARFILES[@]}" | grep -Fqx "$SG_DIR/$_sg_varmust" \
+    && ok "seven_gate: …including $_sg_varmust (CI never runs it; a typo there only ever surfaces on a paid run)" \
+    || bad "seven_gate: $_sg_varmust is not in varcheck's reach — a one-letter typo there dies mid-run, after the money is spent"
+done
+
+# 23a) the shipped harness is clean.
+# The output is KEPT, not sent to /dev/null: varcheck already prints file, line
+# and variable name (23b/23c assert on exactly that), and this cell used to throw
+# all of it away — so a real typo in a real file produced "want '0' got '1'" and
+# nothing else, while the two mutant cells right below it named their variable.
+# A red that does not say WHERE is a red somebody has to reproduce by hand.
+_vc_ship_out="$(python3 "$SG_VARCHECK" "${SG_VARFILES[@]}" 2>&1)"; _vc_ship_rc=$?
+if [[ "$_vc_ship_rc" -eq 0 ]]; then
+  ok "seven_gate: every variable reference in the harness scripts is bound (no unbound-variable landmine)"
+else
+  bad "seven_gate: every variable reference in the harness scripts is bound (no unbound-variable landmine) — varcheck rc=$_vc_ship_rc: $(printf '%s' "$_vc_ship_out" | head -5 | tr '\n' ' ')"
+fi
+
+# 23b) THE MUTANT — put the exact typo back and the guard must go red, naming it.
+# Without this, a varcheck.py that returned 0 unconditionally would satisfy 23a
+# and this case would be guarding nothing. The mutant is the historical bug
+# verbatim, not an invented one.
+# The fixture tree MIRRORS the real layout (actors/ beside lib/): varcheck
+# resolves `. "$SG/lib/window.sh"` by walking up from the file, so a copy dropped
+# into a bare temp dir would report every knob as unbound — the control would
+# fail and the mutant would "pass" for the wrong reason.
+SG_VARTREE="$SHIMDIR/sg-vartree"
+rm -rf "$SG_VARTREE"; mkdir -p "$SG_VARTREE/actors" "$SG_VARTREE/lib"
+cp "$SG_DIR"/lib/*.sh "$SG_VARTREE/lib/"
+cp "$SG_DIR/friction.md" "$SG_VARTREE/" 2>/dev/null || true
+SG_VARMUT="$SG_VARTREE/actors/live.sh"
+sed 's|deadline in ${OC_SG_LIVE_WAIT}s;|deadline in $OC_SG_LIVE_WAITs;|' \
+    "$SG_DIR/actors/live.sh" > "$SG_VARMUT"
+if ! grep -q 'OC_SG_LIVE_WAITs' "$SG_VARMUT"; then
+  bad "seven_gate: the varcheck mutant did not apply — the line moved, so case 23b is testing nothing (fix the sed)"
+else
+  _vc_out="$(python3 "$SG_VARCHECK" "$SG_VARMUT" 2>&1)"; _vc_rc=$?
+  check "seven_gate: with the typo put back, varcheck goes RED" "1" "$_vc_rc"
+  case "$_vc_out" in
+    *"OC_SG_LIVE_WAITs"*) ok "seven_gate: varcheck NAMES the typo'd variable — $(printf '%s' "$_vc_out" | head -1)" ;;
+    *) bad "seven_gate: varcheck reddened but never named OC_SG_LIVE_WAITs, so it would not tell anyone what to fix: $_vc_out" ;;
+  esac
+  # …and the SAME tree without the typo must pass, or 23b's red proves nothing
+  # about the typo (it could be the copy, the path, or the tool being broken).
+  cp "$SG_DIR/actors/live.sh" "$SG_VARTREE/actors/live-control.sh"
+  python3 "$SG_VARCHECK" "$SG_VARTREE/actors/live-control.sh" >/dev/null 2>&1
+  check "seven_gate: the SAME copy without the typo passes (23b's red is the typo, not the fixture)" "0" "$?"
+fi
+
+# 23c) THE SAME TYPO IN THE NEWEST FILE — which is the half a roll-call could not
+# do. 23b proves varcheck catches the historical bug in the file somebody
+# remembered to list; this proves the SCOPE reaches a file nobody listed, by
+# planting the identical one-letter shape in lib/scrub.sh. That file is worse
+# than live.sh to die in: it runs at the PRE-SPEND hop, so a crash there is the
+# harness refusing to spawn — silent, and indistinguishable from a machine that
+# never came online.
+SG_VARMUT2="$SG_VARTREE/lib/scrub-typo.sh"
+sed 's|for p in \$SG_SCRUB_PREFIXES; do|for p in $SG_SCRUB_PREFIXESs; do|' \
+    "$SG_DIR/lib/scrub.sh" > "$SG_VARMUT2"
+if ! grep -q 'SG_SCRUB_PREFIXESs' "$SG_VARMUT2"; then
+  bad "seven_gate: the scrub varcheck mutant did not apply — the loop moved, so case 23c is testing nothing (fix the sed)"
+else
+  _vc2_out="$(python3 "$SG_VARCHECK" "$SG_VARMUT2" 2>&1)"; _vc2_rc=$?
+  check "seven_gate: a \$VARs typo in lib/scrub.sh goes RED (the scope is the directory, so a new file is covered the day it lands)" \
+    "1" "$_vc2_rc"
+  case "$_vc2_out" in
+    *"SG_SCRUB_PREFIXESs"*) ok "seven_gate: …and it NAMES the typo'd variable — $(printf '%s' "$_vc2_out" | head -1)" ;;
+    *) bad "seven_gate: varcheck reddened on lib/scrub.sh but never named SG_SCRUB_PREFIXESs: $_vc2_out" ;;
+  esac
+  cp "$SG_DIR/lib/scrub.sh" "$SG_VARTREE/lib/scrub-control.sh"
+  python3 "$SG_VARCHECK" "$SG_VARTREE/lib/scrub-control.sh" >/dev/null 2>&1
+  check "seven_gate: the SAME copy of scrub.sh without the typo passes (23c's red is the typo, not the file)" "0" "$?"
+fi
+
+# 23d) the expensive-path preflight must come BEFORE the spend. live.sh spawns a
+# real agent at the activate/tmux step; anything that can kill the actor AFTER
+# that point burns money to produce nothing. The variables the late phases use
+# are therefore forced to expand in a preflight ahead of it.
+_pf_line="$(grep -n 'PRE-SPEND PREFLIGHT' "$SG_DIR/actors/live.sh" | head -1 | cut -d: -f1)"
+_spend_line="$(grep -n 'activate' "$SG_DIR/actors/live.sh" | grep -v '^.*#' | head -1 | cut -d: -f1)"
+if [[ -n "$_pf_line" && -n "$_spend_line" && "$_pf_line" -lt "$_spend_line" ]]; then
+  ok "seven_gate: live.sh's pre-spend preflight (line $_pf_line) runs before the spend point (line $_spend_line)"
+else
+  bad "seven_gate: live.sh has no PRE-SPEND PREFLIGHT ahead of the activate that starts the spending (preflight=${_pf_line:-none} spend=${_spend_line:-none})"
+fi
+
+# 23e) …AND IT MUST PARSE UNDER THE BASH THAT ACTUALLY RUNS IT.
+#
+# 🔴 THE HOLE THIS CLOSES. varcheck answers "is every name bound"; it says
+# nothing about SYNTAX. And the syntax that matters is not this developer's
+# bash: every one of these scripts is `#!/usr/bin/env bash`, so WHICH bash runs
+# them is decided by PATH — a Mac without Homebrew bash, or any trimmed
+# launchd/cron PATH, resolves to the stock /bin/bash, which on macOS is still
+# 3.2.57 (this repo already has a launchd-empty-PATH boot-death in its history).
+# MEASURED at 68e3bfd1: lib/scrub.sh — the file that runs at the PRE-SPEND hop —
+# could not run under 3.2 at all, while the whole suite was green here.
+#
+# ⚠️ SAID NARROWLY, BECAUSE THIS CHECK IS WEAKER THAN IT LOOKS: `-n` parses the
+# file, and a command substitution's CONTENTS are parsed at EXPANSION time, not
+# at file-parse time. So `-n` did NOT see the 68e3bfd1 bug (measured, and pinned
+# as an assertion in case 26). This cell catches the class `-n` can see — a
+# construct that is valid in bash 4+/5 and rejected outright by 3.2. The
+# behavioural half of the same exposure lives in case 26, which runs the scrub
+# under the stock interpreter for real.
+SG_STOCK_BASH="/bin/bash"
+if [[ ! -x "$SG_STOCK_BASH" ]]; then
+  bad "seven_gate: there is no executable $SG_STOCK_BASH on this host, so the stock-interpreter parse check cannot run (23e is testing nothing)"
+  bad "seven_gate: (23e mutant skipped — no stock bash)"
+  bad "seven_gate: (23e control skipped — no stock bash)"
+else
+  _sg_stockver="$("$SG_STOCK_BASH" -c 'echo "${BASH_VERSION%%(*}"')"
+  _sg_synbad=""
+  for _sg_synf in "${SG_VARFILES[@]}"; do
+    "$SG_STOCK_BASH" -n "$_sg_synf" 2>/dev/null || _sg_synbad="$_sg_synbad ${_sg_synf#$SG_DIR/}"
+  done
+  check "seven_gate: every .sh under seven_gate/ parses under the STOCK $SG_STOCK_BASH ($_sg_stockver), not just this shell's bash ($BASH_VERSION) — nothing here is green because of what is early on somebody's PATH" \
+    "" "$_sg_synbad"
+  # THE MUTANT, and it is the whole point of pinning the interpreter: a shape
+  # that the developer's bash accepts and the stock one rejects. `|&` is bash 4.
+  SG_SYNMUT="$SHIMDIR/sg-syntax-mut.sh"
+  printf '#!/usr/bin/env bash\necho hi |%s cat\n' '&' > "$SG_SYNMUT"
+  "$SG_STOCK_BASH" -n "$SG_SYNMUT" 2>/dev/null
+  check "MUT-bash4syntax: a bash-4-only construct is REJECTED by the stock $SG_STOCK_BASH (so the cell above is a live check, not a walk over files nothing parses)" \
+    "2" "$?"
+  # …and the negative control, because "rejects everything" and "rejects this"
+  # look identical: a trivially valid file must be ACCEPTED by the same binary.
+  # (The other half — that THIS shell's bash accepts `|&` and 3.2 does not — is
+  # deliberately NOT an assertion: tests_guard itself gets run under whatever
+  # bash is first on PATH, and this suite's assertion COUNT must not depend on
+  # the host. MEASURED by hand 2026-08-11 on this machine: `/bin/bash -n` rc=2
+  # vs `bash -n` (5.3.9) rc=0 on the identical file.)
+  printf '#!/usr/bin/env bash\necho hi\n' > "$SHIMDIR/sg-syntax-ok.sh"
+  "$SG_STOCK_BASH" -n "$SHIMDIR/sg-syntax-ok.sh" 2>/dev/null
+  check "MUT-bash4syntax: …and the same stock binary ACCEPTS an ordinary script (it is not rejecting everything, which would make the cell above vacuous)" \
+    "0" "$?"
+fi
+
+# ── 24) T-42bb: the harness may only kill what it can PROVE it created ───────
+#
+# WHAT THIS IS ABOUT. actors/live.sh spawns a real agent into tmux and then has
+# to clean up after itself. It used to do that on the socket named `officraft` —
+# THE LIVE FLEET'S SOCKET, where serving members' sessions live. It killed only
+# exact names, so nothing bad happened; but "nothing bad happened" was a property
+# of the harness being CORRECT, and case (23) is the record of this same harness
+# shipping a one-letter typo whose trap killed the agent it had just spawned. On
+# the fleet socket that class of bug is not a red run, it is an irreversible kill
+# of someone else's live agent.
+#
+# So lib/ownedkill.sh puts TWO INDEPENDENT layers between the harness and that
+# outcome, and this case is what makes each of them load-bearing rather than a
+# comment:
+#
+#   ① PHYSICAL — the run gets its OWN tmux socket (`officraft-<ns>`, via the
+#      warden's OC_NAMESPACE), and sg_own_socket_assert refuses the fleet's
+#      `officraft` outright. MUTANT: point the derivation back at the fleet.
+#   ② OWNERSHIP — only the session names / pids this run WROTE DOWN at creation
+#      time may be killed. MUTANT (twice): relax the kill to `pgrep -f` pattern
+#      matching, and to "list the sessions and pick the ones that look like ours".
+#
+# AND A POSITIVE CONTROL, because both layers can be satisfied by a teardown that
+# quietly kills NOTHING — and that green looks exactly like the real one. So a
+# REAL process is spawned, recorded, and must actually die; a second identical
+# process is NOT recorded, and must survive.
+SG_OWNED="$SG_DIR/lib/ownedkill.sh"
+SG_LIVE="$SG_DIR/actors/live.sh"
+SG24="$SHIMDIR/sg24"; rm -rf "$SG24"; mkdir -p "$SG24/bin"
+SG24_TMUX_LOG="$SG24/tmux.log"; : > "$SG24_TMUX_LOG"
+
+# A RECORDING tmux, ahead of the file-wide stub on PATH. Every tmux command the
+# ownership layer issues lands in one file, so "it killed nothing" and "it killed
+# somebody else's session" stop being the same silence. It also answers
+# list-sessions, which is what a "list and pick" mutant reaches for.
+cat > "$SG24/bin/tmux" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$SG24_TMUX_LOG"
+[[ "${3:-}" == "list-sessions" || "${3:-}" == "ls" ]] && printf '%s\n' "${SG24_SESSIONS:-}"
+exit 0
+SH
+chmod +x "$SG24/bin/tmux"
+# The socket the fixture calls "ours", and the sessions the recording tmux will
+# report as living on it: the one this run owns, plus a FOREIGN one. The foreign
+# name is deliberately the same shape (`member-*`) as ours — that is the whole
+# point, because on the real fleet socket it always will be.
+SG24_SOCK="officraft-sg24"
+SG24_OWNED_SESSION="member-m-sg24"
+SG24_FOREIGN_SESSION="member-someone-else"
+SG24_SESSIONS="$SG24_OWNED_SESSION
+$SG24_FOREIGN_SESSION"
+SG24_SLEDGER="$SG24/session-ledger"
+
+sg24_sessions() { # sg24_sessions LIB SOCKET LEDGER -> "<rc>"; tmux calls → $SG24_TMUX_LOG
+  : > "$SG24_TMUX_LOG"
+  PATH="$SG24/bin:$PATH" SG24_TMUX_LOG="$SG24_TMUX_LOG" SG24_SESSIONS="$SG24_SESSIONS" \
+    bash -c '. "$1" || exit 9; sg_own_kill_sessions "$2" "$3"' _ "$1" "$2" "$3" \
+    >"$SG24/sess.out" 2>&1
+  echo $?
+}
+sg24_killed() { grep -c 'kill-session' "$SG24_TMUX_LOG" 2>/dev/null || true; }
+
+# 24a) THE REFUSAL ITSELF, on the shipped lib. This is the line that turns "we
+# are careful" into "it cannot happen", so it is exercised, not grepped.
+_sg24_assert() { # _sg24_assert SOCKET -> "<rc>"; message → $SG24/assert.err
+  bash -c '. "$1" || exit 9; sg_own_socket_assert "$2"' _ "$SG_OWNED" "$1" \
+    2>"$SG24/assert.err" >/dev/null
+  echo $?
+}
+check "ownedkill: sg_own_socket_assert REFUSES the live fleet socket 'officraft'" "2" "$(_sg24_assert officraft)"
+grep -q 'LIVE FLEET' "$SG24/assert.err" \
+  && ok "ownedkill: …and says so by name — $(head -1 "$SG24/assert.err")" \
+  || bad "ownedkill: the fleet socket was refused but the message never named it, so nobody reading a log would know why (got: $(head -c 200 "$SG24/assert.err"))"
+# The EMPTY socket is the other way onto a shared socket: `tmux` with no -L is
+# tmux's own default, shared with every tmux on the host.
+check "ownedkill: an EMPTY socket is refused too (that is tmux's shared default socket)" "2" "$(_sg24_assert '')"
+check "ownedkill: this run's own namespaced socket is ACCEPTED (the assert is not a blanket 'no')" "0" "$(_sg24_assert "$SG24_SOCK")"
+
+# 24b) THE DERIVATION IN live.sh IS REALLY NAMESPACED — evaluated, not grepped.
+# A grep for "officraft-" would pass on a line that can still resolve to the bare
+# fleet socket, which is exactly the historical shape
+# (`${OC_SG_TMUX_SOCKET:-officraft}`). So the assignment lines are pulled out of
+# the file and RUN, and we look at what comes out.
+sg24_socket_of() { # sg24_socket_of FILE -> the socket that file would use
+  bash -c 'set -u
+           eval "$(grep -E "^OC_SG_NAMESPACE=|^TMUX_SOCKET=" "$1")"
+           printf "%s\n" "${TMUX_SOCKET:-}"' _ "$1" 2>/dev/null
+}
+_sg24_live_sock="$(sg24_socket_of "$SG_LIVE")"
+[[ -n "$_sg24_live_sock" ]] \
+  && ok "seven_gate: live.sh's socket derivation still evaluates (got '$_sg24_live_sock')" \
+  || bad "seven_gate: live.sh's socket derivation produced NOTHING — the TMUX_SOCKET/OC_SG_NAMESPACE assignments moved and 24b/24c are testing nothing"
+[[ "$_sg24_live_sock" != "officraft" ]] \
+  && ok "seven_gate: live.sh does NOT resolve to the fleet socket (got '$_sg24_live_sock')" \
+  || bad "seven_gate: live.sh's tmux socket resolves to the LIVE FLEET socket 'officraft' — a teardown here can reach serving members' sessions"
+check "seven_gate: and that derived socket passes sg_own_socket_assert" "0" "$(_sg24_assert "$_sg24_live_sock")"
+# PER-RUN, not a fixed namespace: two evaluations must differ. A constant
+# namespace is off the fleet socket but shared between concurrent runs, so run A
+# would be killing run B's sessions — the same bug one blast radius smaller.
+[[ "$(sg24_socket_of "$SG_LIVE")" != "$_sg24_live_sock" ]] \
+  && ok "seven_gate: the namespace is minted PER RUN (two evaluations differ) — two concurrent runs cannot share a socket" \
+  || bad "seven_gate: two evaluations of live.sh's namespace produced the SAME socket '$_sg24_live_sock' — concurrent runs would share it and kill each other's sessions"
+# …and the assert must be WIRED, in code. It can survive as a function in the lib
+# and be called from nowhere (case 20f's second mutant is the same lesson).
+_sg24_wired="$(_sg_code_only "$SG_LIVE" | grep -cE 'sg_own_socket_assert' || true)"
+[[ "${_sg24_wired:-0}" -ge 1 ]] \
+  && ok "seven_gate: live.sh runs its socket through sg_own_socket_assert in CODE (not just in a comment)" \
+  || bad "seven_gate: live.sh no longer calls sg_own_socket_assert outside a comment — the refusal is wired to nothing"
+# …and its teardown must go through the ledger helpers, not straight at tmux.
+_sg24_rawkill="$(_sg_code_only "$SG_LIVE" | grep -cE 'tmux .*kill-session' || true)"
+check "seven_gate: live.sh issues no raw tmux kill-session of its own (every kill goes through the ledger helpers)" "0" "${_sg24_rawkill:-0}"
+
+# 24c) MUTANT ① — REMOVE THE SOCKET ISOLATION. The historical line goes back in,
+# on a COPY (nothing under $SG_DIR is touched), and both halves must redden: the
+# derivation resolves to the fleet socket, and the assert refuses it BY NAME
+# before a single tmux command is issued.
+SG24_LIVEMUT="$SG24/live-nosocket.sh"
+sed 's|^TMUX_SOCKET="officraft-\$OC_SG_NAMESPACE"$|TMUX_SOCKET="${OC_SG_TMUX_SOCKET:-officraft}"|' \
+    "$SG_LIVE" > "$SG24_LIVEMUT"
+if cmp -s "$SG24_LIVEMUT" "$SG_LIVE"; then
+  bad "seven_gate: MUT-nosocket did not change live.sh — the TMUX_SOCKET line moved, so case 24c is testing nothing (fix the sed)"
+else
+  _sg24_mut_sock="$(sg24_socket_of "$SG24_LIVEMUT")"
+  check "MUT-nosocket: with the namespacing removed, live.sh resolves back to the FLEET socket" "officraft" "$_sg24_mut_sock"
+  check "MUT-nosocket: …and sg_own_socket_assert REFUSES it (rc=2), so 24b is pinned to the assert" "2" "$(_sg24_assert "$_sg24_mut_sock")"
+  case "$(cat "$SG24/assert.err")" in
+    *officraft*LIVE\ FLEET*|*LIVE\ FLEET*officraft*)
+      ok "MUT-nosocket: the refusal NAMES the fleet socket — $(head -1 "$SG24/assert.err")" ;;
+    *) bad "MUT-nosocket: the refusal never named 'officraft' as the LIVE FLEET socket, so the red would not tell anyone what it just stopped (got: $(head -c 200 "$SG24/assert.err"))" ;;
+  esac
+  # END TO END: a cleanup aimed at that socket must issue ZERO tmux commands.
+  printf '%s\n' "$SG24_OWNED_SESSION" > "$SG24_SLEDGER"
+  check "MUT-nosocket: a cleanup aimed at the fleet socket exits 2" "2" "$(sg24_sessions "$SG_OWNED" "$_sg24_mut_sock" "$SG24_SLEDGER")"
+  check "MUT-nosocket: …and issued NO tmux command at all — the refusal is before the kill, not after it" "0" "$(wc -l < "$SG24_TMUX_LOG" | tr -d ' ')"
+fi
+
+# 24d) POSITIVE CONTROL, sessions: ON ITS OWN SOCKET, WITH A LEDGER, IT REALLY
+# KILLS. Without this the whole case is satisfied by a teardown that does nothing
+# — and that green is indistinguishable from the real one.
+printf '%s\n' "$SG24_OWNED_SESSION" > "$SG24_SLEDGER"
+check "ownedkill: on its own socket, a ledgered session IS killed (rc)" "0" "$(sg24_sessions "$SG_OWNED" "$SG24_SOCK" "$SG24_SLEDGER")"
+check "ownedkill: …exactly one kill-session was issued" "1" "$(sg24_killed)"
+grep -Fq -- "-L $SG24_SOCK kill-session -t $SG24_OWNED_SESSION" "$SG24_TMUX_LOG" \
+  && ok "ownedkill: …on OUR socket, naming the ledgered session exactly ($SG24_OWNED_SESSION)" \
+  || bad "ownedkill: the kill did not name the ledgered session on our socket (recorded: $(tr '\n' '|' < "$SG24_TMUX_LOG"))"
+grep -Fq "$SG24_FOREIGN_SESSION" "$SG24_TMUX_LOG" \
+  && bad "ownedkill: a session that is NOT in the ledger ($SG24_FOREIGN_SESSION) was named — the ledger is not the authority" \
+  || ok "ownedkill: the un-ledgered session $SG24_FOREIGN_SESSION was never touched"
+# FAIL-CLOSED, both shapes. A missing record must leak (recoverable, visible),
+# never kill (irreversible).
+: > "$SG24_SLEDGER"
+check "ownedkill: an EMPTY ledger kills nothing, and does not fail the run" "0" "$(sg24_sessions "$SG_OWNED" "$SG24_SOCK" "$SG24_SLEDGER")"
+check "ownedkill: …zero tmux commands issued for an empty ledger" "0" "$(wc -l < "$SG24_TMUX_LOG" | tr -d ' ')"
+check "ownedkill: an ABSENT ledger kills nothing either" "0" "$(sg24_sessions "$SG_OWNED" "$SG24_SOCK" "$SG24/no-such-ledger")"
+check "ownedkill: …zero tmux commands issued for an absent ledger" "0" "$(wc -l < "$SG24_TMUX_LOG" | tr -d ' ')"
+
+# 24e) POSITIVE CONTROL + OWNERSHIP, on REAL PROCESSES. No stub can prove this
+# half: the claim is that a recorded pid dies and an identical un-recorded one
+# lives, and "identical" is the load-bearing word — on the fleet the same binary
+# runs with the same argv, which is why `pkill -f` is banned. So both sleepers
+# are literally the same executable with the same command line.
+SG24_MARK="sg24-$$-${RANDOM}"
+SG24_SLEEPER="$SG24/$SG24_MARK"
+# `exec -a` keeps the marker in the sleeper's OWN argv (so a pattern matcher can
+# find it) while leaving exactly ONE process to kill and reap.
+printf '#!/usr/bin/env bash\nexec -a "$0" sleep 20\n' > "$SG24_SLEEPER"
+chmod +x "$SG24_SLEEPER"
+SG24_PLEDGER="$SG24/pid-ledger"
+sg24_alive() { local s; s="$(ps -p "$1" -o state= 2>/dev/null | tr -d ' ')"; [[ -n "$s" && "$s" != Z* ]]; }
+sg24_pids() { # sg24_pids LIB -> "<owned alive|dead>|<decoy alive|dead>"
+  local lib="$1" owned decoy i o=dead d=alive
+  "$SG24_SLEEPER" & owned=$!
+  "$SG24_SLEEPER" & decoy=$!
+  printf '%s\n' "$owned" > "$SG24_PLEDGER"
+  SG24_MARK="$SG24_MARK" bash -c '. "$1" || exit 9; sg_own_kill_pids "$2"' _ "$lib" "$SG24_PLEDGER" >/dev/null 2>&1
+  # `wait` is the synchronisation point: it returns only once the signal has
+  # actually landed on the pid we expected to die. The decoy then gets a bounded
+  # grace window of its own, so "the decoy survived" can never be a race — the
+  # shipped lib never signals it, so it sits out all ten rounds.
+  wait "$owned" 2>/dev/null
+  sg24_alive "$owned" && o=alive
+  for i in 1 2 3 4 5 6 7 8 9 10; do sg24_alive "$decoy" || { d=dead; break; }; sleep 0.05; done
+  kill "$decoy" 2>/dev/null; wait "$decoy" 2>/dev/null
+  printf '%s|%s\n' "$o" "$d"
+}
+_sg24_p="$(sg24_pids "$SG_OWNED")"
+check "ownedkill: POSITIVE CONTROL — the pid written to the ledger is really killed" "dead" "${_sg24_p%%|*}"
+check "ownedkill: OWNERSHIP — an IDENTICAL process that was never recorded survives" "alive" "${_sg24_p#*|}"
+# fail-closed on this side too: no ledger ⇒ the recorded-nowhere process lives.
+"$SG24_SLEEPER" & _sg24_orphan=$!
+bash -c '. "$1" || exit 9; sg_own_kill_pids "$2"' _ "$SG_OWNED" "$SG24/no-such-ledger" >/dev/null 2>&1
+sg24_alive "$_sg24_orphan" \
+  && ok "ownedkill: with NO pid ledger, nothing is killed (a leaked process is recoverable; a wrong kill is not)" \
+  || bad "ownedkill: with no pid ledger something still died — the missing-record case is not fail-closed"
+kill "$_sg24_orphan" 2>/dev/null; wait "$_sg24_orphan" 2>/dev/null
+
+# 24f) MUTANT ②a — RELAX THE PID KILL TO PATTERN MATCHING. This is the exact
+# shape root CLAUDE.md §13 bans and the exact shape that took the cockpit and
+# every agent offline for two minutes: `pkill -f` / `pgrep -f` on a name, when
+# the fleet runs the same binaries with the same argv. Name is not identity.
+SG24_PIDMUT="$SG24/ownedkill-pgrep.sh"
+sed 's|kill "$pid" 2>/dev/null|kill $(pgrep -f "$SG24_MARK") 2>/dev/null|' "$SG_OWNED" > "$SG24_PIDMUT"
+if ! grep -q 'pgrep -f' "$SG24_PIDMUT"; then
+  bad "seven_gate: MUT-pgrep did not apply to lib/ownedkill.sh — the exact-kill line moved, so case 24f is testing nothing (fix the sed)"
+else
+  _sg24_pm="$(sg24_pids "$SG24_PIDMUT")"
+  check "MUT-pgrep: the mutant still kills the process it owns (so the difference below is the PATTERN, not a broken mutant)" "dead" "${_sg24_pm%%|*}"
+  check "MUT-pgrep: …and it ALSO kills the un-recorded look-alike — 24e is pinned to the ledger, not to luck" "dead" "${_sg24_pm#*|}"
+fi
+# The text scan that would have caught this one before it ran.
+#
+# 🔴 SCOPE IS DRAWN BY CONSEQUENCE, NOT BY FILENAME — this cost a real outage.
+# The scan used to name two files (lib/ownedkill.sh, actors/live.sh), and the
+# ban's blast radius has nothing to do with which two files somebody listed:
+# ANY of these scripts runs on a machine where the live fleet's ocserverd,
+# ocwarden and agents are running the same binaries with the same argv. MEASURED
+# on the old scan, one mutant, three targets: planted in actors/live.sh → rc=1,
+# named; planted in run.sh's cleanup() → rc=0, SILENT; planted in lib/carrier.sh
+# → rc=0, SILENT. That last file is the one tests_guard case 25 EXECUTES as a
+# fixture, and on 2026-08-11 somebody put `pkill -f "ocserverd serve"` into it to
+# build a positive control, ran this suite, and took the live ocserverd down for
+# 27 seconds. So the scope is now "every .sh under seven_gate/", which is a
+# QUERY (it picks up the next file somebody adds) rather than a roll-call.
+#
+# Comments are stripped first: several of these files NAME the banned shape in
+# their headers to explain why it is banned, and a scan that reddens on its own
+# documentation is a scan somebody deletes. Those comments must stay green.
+#
+# ⚠️ `find -L` for the same reason case 23 spells out: plain `find` does not
+# descend into a symlinked directory, so "every .sh under seven_gate/" was false
+# of anything behind one — measured green with a banned shape planted there.
+_sg24_scanned=0
+while IFS= read -r _sg24_f; do
+  _sg24_scanned=$(( _sg24_scanned + 1 ))
+  _sg24_bans="$(_sg_code_only "$_sg24_f" | grep -cE '(^|[^[:alnum:]_])(pkill|killall|pgrep)([^[:alnum:]_]|$)' || true)"
+  check "seven_gate: ${_sg24_f#$SG_DIR/} uses no pkill/killall/pgrep in code (name is not identity)" "0" "${_sg24_bans:-0}"
+done < <(find -L "$SG_DIR" -name '*.sh' -type f | sort)
+# A roll-call of zero files would pass every assertion above by having none. The
+# floor is a floor, not a count: it must not need editing when a script is added,
+# only when the walk itself breaks.
+[[ "$_sg24_scanned" -ge 6 ]] \
+  && ok "seven_gate: the banned-shape scan walked $_sg24_scanned .sh files under seven_gate/ (scope is the directory, not a list of names)" \
+  || bad "seven_gate: the banned-shape scan only found $_sg24_scanned .sh file(s) under $SG_DIR — a walk that finds nothing passes silently, which is how this ban lost its reach the first time"
+# …and the three files the old two-name scan could not see are each named, so a
+# future narrowing of the walk cannot quietly drop them.
+for _sg24_must in run.sh lib/carrier.sh actors/live.sh; do
+  find -L "$SG_DIR" -name '*.sh' -type f | grep -Fqx "$SG_DIR/$_sg24_must" \
+    && ok "seven_gate: …including $_sg24_must (a mutant here used to be SILENT)" \
+    || bad "seven_gate: $_sg24_must is not in the banned-shape scan's reach — that is the file that took the live server down"
+done
+check "banned-shape scan control: the SAME scan finds the shape in the pgrep mutant" "1" \
+  "$(_sg_code_only "$SG24_PIDMUT" | grep -cE '(^|[^[:alnum:]_])(pkill|killall|pgrep)([^[:alnum:]_]|$)' || true)"
+
+# 24g) MUTANT ②b — "LIST THE SESSIONS AND PICK THE ONES THAT LOOK LIKE OURS".
+# The one the text scan above CANNOT see: it contains no pkill, no pgrep, no
+# glob — just tmux telling the truth about what is running and the harness
+# choosing. That is why 24d is behavioural and recorded rather than a grep.
+SG24_SESSMUT="$SG24/ownedkill-listpick.sh"
+sed 's@tmux -L "$socket" kill-session -t "$name" 2>/dev/null@tmux -L "$socket" list-sessions -F "#{session_name}" 2>/dev/null | grep "^member-" | while IFS= read -r n; do tmux -L "$socket" kill-session -t "$n"; done@' \
+    "$SG_OWNED" > "$SG24_SESSMUT"
+if ! grep -q 'list-sessions' "$SG24_SESSMUT"; then
+  bad "seven_gate: MUT-listpick did not apply to lib/ownedkill.sh — the kill-session line moved, so case 24g is testing nothing (fix the sed)"
+else
+  printf '%s\n' "$SG24_OWNED_SESSION" > "$SG24_SLEDGER"
+  sg24_sessions "$SG24_SESSMUT" "$SG24_SOCK" "$SG24_SLEDGER" >/dev/null
+  grep -Fq "$SG24_FOREIGN_SESSION" "$SG24_TMUX_LOG" \
+    && ok "MUT-listpick: with the kill relaxed to list-and-pick, the FOREIGN session $SG24_FOREIGN_SESSION is killed — 24d's silence is the ledger, not an empty socket"
+  grep -Fq "$SG24_FOREIGN_SESSION" "$SG24_TMUX_LOG" \
+    || bad "MUT-listpick: the list-and-pick mutant killed nobody else's session (recorded: $(tr '\n' '|' < "$SG24_TMUX_LOG")) — 24d would pass without the ledger and this case proves nothing"
+fi
+: > "$SG24_TMUX_LOG"
+
+# ── 25) T-42bb: the carrier must outlive its caller, and never die silently ──
+#
+# WHAT HAPPENED (2026-08-10, on a run that had already spent money). run.sh was
+# started as a background command by an agent session. The session was collected;
+# the carrier was killed WITH it, mid-poll. The agent it had spawned did NOT die
+# (agents live in tmux). So: nobody judged, nobody tore down, a real agent kept
+# burning quota — and the waiter never learned, because the rc it was watching
+# was the rc of the shell that died, and that rc was never written. A dead run
+# and a running run were the same silence.
+#
+# TWO PROPERTIES, and the second is the one that must not be traded away:
+#   ① the carrier puts ITSELF in a new session, so a group kill aimed at the
+#     caller cannot reach it (it must not depend on the caller remembering
+#     `nohup` — that is the class of bug this whole gate exists to delete);
+#   ② however it dies, a terminal signal file appears. Because if ① ever fails
+#     for a reason nobody predicted, the failure must be a VISIBLE death.
+#
+# Hermetic: no server, no agent, no tmux, no money. The fixture below is the
+# skeleton of run.sh's carrier wiring around a `sleep`, sourcing the REAL
+# lib/carrier.sh; 25f then pins that run.sh is wired the same way, since a
+# perfect lib called from nowhere protects nothing (case 20f's lesson).
+SG_CARRIER="$SG_DIR/lib/carrier.sh"
+SG25="$SHIMDIR/sg25"; rm -rf "$SG25"; mkdir -p "$SG25"
+SG25_FIX="$SG25/carrier-fixture.sh"
+cat > "$SG25_FIX" <<'SH'
+#!/usr/bin/env bash
+set -uo pipefail
+. "$SG25_LIB"
+RUN_DIR="$1"
+export OC_SG_RUN_DIR="$RUN_DIR"
+sg_carrier_detach "$0" "$@"
+cleanup() {
+  local rc=$?
+  sg_carrier_write "$rc"
+  sg_carrier_watchdog_stop
+}
+trap cleanup EXIT
+sg_carrier_arm "$RUN_DIR/outer.rc"
+sg_carrier_watchdog
+printf '%s\n' "$$" > "$RUN_DIR/carrier.pid"
+sleep "$SG25_SLEEP"
+printf 'finished\n' > "$RUN_DIR/finished"
+exit "$SG25_RC"
+SH
+
+# Start the fixture as the leader of its OWN session, so the test can kill that
+# whole process group the way a supervisor collecting a session does — WITHOUT
+# taking this test suite (which shares a process group with everything it spawns)
+# down as collateral. Prints the leader's pid; its pgid equals that pid.
+_sg25_spawn() { # _sg25_spawn RUN_DIR [env assignments…] -> leader pid
+  local run_dir="$1"; shift
+  python3 -c '
+import os, sys
+pid = os.fork()
+if pid:
+    print(pid)
+    sys.exit(0)
+# The child must NOT keep this command substitution`s pipe open, or the caller
+# would block until the fixture exits — which is the opposite of the point.
+fd = os.open(os.devnull, os.O_RDWR)
+os.dup2(fd, 1)
+os.dup2(fd, 2)
+os.setsid()
+os.execvp("env", ["env"] + sys.argv[1:])
+' "$@" bash "$SG25_FIX" "$run_dir"
+}
+_sg25_wait_file() { # _sg25_wait_file PATH DEADLINE_TENTHS -> 0 if it appeared
+  local p="$1" n="${2:-100}" i
+  for ((i = 0; i < n; i++)); do [[ -e "$p" ]] && return 0; sleep 0.1; done
+  return 1
+}
+_sg25_rc() { cat "$1/outer.rc" 2>/dev/null | tr -d ' \n'; }
+
+# 25a) THE INCIDENT ITSELF: kill the caller's whole process group, hard (SIGKILL
+# — no trap can soften it, which is exactly what a collected session looks like)
+# while the run is mid-flight. Both halves are asserted, because either alone is
+# a false comfort: the work must FINISH, and the terminal signal must EXIST.
+SG25_A="$SG25/a"; mkdir -p "$SG25_A"
+_sg25_leader="$(_sg25_spawn "$SG25_A" "SG25_LIB=$SG_CARRIER" SG25_SLEEP=4 SG25_RC=0 OC_SG_WATCHDOG_INTERVAL=1)"
+if ! _sg25_wait_file "$SG25_A/carrier.pid" 100; then
+  bad "carrier: the fixture never started (no carrier.pid) — case 25a is testing nothing"
+else
+  kill -KILL "-$_sg25_leader" 2>/dev/null
+  _sg25_wait_file "$SG25_A/finished" 120 || true
+  [[ -f "$SG25_A/finished" ]] \
+    && ok "carrier: the caller's process group was SIGKILLed mid-run and the carrier RAN TO COMPLETION anyway" \
+    || bad "carrier: a group SIGKILL aimed at the caller killed the carrier too — the run does not outlive the session that started it"
+  _sg25_wait_file "$SG25_A/outer.rc" 60 || true
+  check "carrier: …and the terminal signal exists, with the run's own rc" "0" "$(_sg25_rc "$SG25_A")"
+fi
+
+# 25b) THE CONTROL, and it is what makes 25a mean anything: the SAME kill against
+# a carrier that did not detach (OC_SG_NO_DETACH=1) must reproduce the incident —
+# the work stops, and there is no terminal signal. Without this, 25a would also
+# pass on a machine where that kill happened not to reach anything.
+SG25_B="$SG25/b"; mkdir -p "$SG25_B"
+_sg25_leader_b="$(_sg25_spawn "$SG25_B" "SG25_LIB=$SG_CARRIER" SG25_SLEEP=4 SG25_RC=0 OC_SG_NO_DETACH=1 OC_SG_WATCHDOG_INTERVAL=1)"
+if ! _sg25_wait_file "$SG25_B/carrier.pid" 100; then
+  bad "carrier: the no-detach control never started — case 25b is testing nothing"
+else
+  kill -KILL "-$_sg25_leader_b" 2>/dev/null
+  sleep 6
+  [[ -f "$SG25_B/finished" ]] \
+    && bad "carrier: CONTROL BROKEN — the un-detached carrier survived a group SIGKILL, so 25a's survival proves nothing about the detach" \
+    || ok "carrier: control — WITHOUT the detach, the same kill stops the run dead (this is the incident, reproduced)"
+  # The watchdog is a child of the carrier and shares its process group here, so
+  # it dies in the same volley: without the detach there is nobody left to
+  # write anything. That is the silence this whole case exists to remove.
+  [[ -f "$SG25_B/outer.rc" ]] \
+    && bad "carrier: CONTROL BROKEN — the un-detached carrier still produced a terminal signal, so 25a's signal proves nothing" \
+    || ok "carrier: control — and WITHOUT the detach there is no terminal signal at all: a dead run and a running run look identical (rc file absent)"
+fi
+
+# 25c) DEATH BY SIGNAL. TERM aimed at the carrier itself must still leave a
+# signal, with the reason recorded — a death that says what killed it.
+# ⚠️ TIMING, stated because the assertion below would otherwise be read as
+# stronger than it is: bash runs a caught signal's trap only once the FOREGROUND
+# COMMAND IT IS WAITING ON returns. So the signal file appears when the carrier
+# next regains control (here: when the fixture's `sleep` ends), not at the
+# instant of the TERM. The guarantee is that it appears AT ALL and carries the
+# right rc and reason — not that it is instantaneous. The instant-death case is
+# 25d's SIGKILL, which the watchdog answers without waiting for bash.
+SG25_C="$SG25/c"; mkdir -p "$SG25_C"
+_sg25_spawn "$SG25_C" "SG25_LIB=$SG_CARRIER" SG25_SLEEP=4 SG25_RC=0 OC_SG_WATCHDOG_INTERVAL=1 >/dev/null
+if ! _sg25_wait_file "$SG25_C/carrier.pid" 100; then
+  bad "carrier: the TERM fixture never started — case 25c is testing nothing"
+else
+  kill -TERM "$(cat "$SG25_C/carrier.pid")" 2>/dev/null
+  _sg25_wait_file "$SG25_C/outer.rc" 150 || true
+  check "carrier: a TERM to the carrier still writes the terminal signal (128+15)" "143" "$(_sg25_rc "$SG25_C")"
+  [[ -f "$SG25_C/finished" ]] \
+    && bad "carrier: the TERM never actually stopped the run (it reached its end), so the 143 above says nothing about a signalled death" \
+    || ok "carrier: …and the run really was cut short by it (its completion marker was never written)"
+  grep -q 'signal:TERM' "$SG25_C/outer.status" 2>/dev/null \
+    && ok "carrier: …and outer.status records WHY it ended — $(tail -1 "$SG25_C/outer.status")" \
+    || bad "carrier: the rc was written but nothing recorded that a signal caused it (outer.status: $(cat "$SG25_C/outer.status" 2>/dev/null))"
+fi
+
+# 25d) DEATH NO TRAP CAN SEE. SIGKILL straight at the carrier: every trap above
+# is a promise bash can only keep while bash is alive, and this is the death that
+# produced the incident's silence. The watchdog is the layer that answers it.
+SG25_D="$SG25/d"; mkdir -p "$SG25_D"
+_sg25_spawn "$SG25_D" "SG25_LIB=$SG_CARRIER" SG25_SLEEP=20 SG25_RC=0 OC_SG_WATCHDOG_INTERVAL=1 >/dev/null
+if ! _sg25_wait_file "$SG25_D/carrier.pid" 100; then
+  bad "carrier: the SIGKILL fixture never started — case 25d is testing nothing"
+else
+  kill -KILL "$(cat "$SG25_D/carrier.pid")" 2>/dev/null
+  _sg25_wait_file "$SG25_D/outer.rc" 100 || true
+  check "carrier: even an untrappable SIGKILL leaves a terminal signal (the watchdog writes it)" "137" "$(_sg25_rc "$SG25_D")"
+  grep -q 'vanished' "$SG25_D/outer.status" 2>/dev/null \
+    && ok "carrier: …and it says the carrier VANISHED rather than ended — $(tail -1 "$SG25_D/outer.status")" \
+    || bad "carrier: a signal appeared for the SIGKILL case but never said the carrier vanished (outer.status: $(cat "$SG25_D/outer.status" 2>/dev/null))"
+fi
+
+# 25e) THE ORDINARY ENDS still carry the run's own rc — including a REFUSAL,
+# which is the shape of every `exit 2` guard in run.sh. A terminal signal that
+# flattened every ending to 0 would be worse than none.
+SG25_E="$SG25/e"; mkdir -p "$SG25_E"
+_sg25_spawn "$SG25_E" "SG25_LIB=$SG_CARRIER" SG25_SLEEP=1 SG25_RC=2 OC_SG_WATCHDOG_INTERVAL=1 >/dev/null
+_sg25_wait_file "$SG25_E/outer.rc" 100 || true
+check "carrier: an ordinary exit writes ITS OWN rc, not a flattened 0 (a refusal stays a refusal)" "2" "$(_sg25_rc "$SG25_E")"
+
+# 25f) THE WIRING IN run.sh, in CODE. The lib can be perfect and called from
+# nowhere. Three things are pinned: the detach happens, the traps are armed, and
+# the terminal signal is written from the EXIT path (the same trap that runs
+# teardown — so a run that refuses at a guard still reports).
+_sg25_code() { grep -v '^[[:space:]]*#' "$1"; }
+for _sg25_fn in sg_carrier_detach sg_carrier_arm sg_carrier_write; do
+  _sg25_hits="$(_sg25_code "$SG_DIR/run.sh" | grep -cF "$_sg25_fn" || true)"
+  [[ "${_sg25_hits:-0}" -ge 1 ]] \
+    && ok "carrier: run.sh calls $_sg25_fn in code" \
+    || bad "carrier: run.sh no longer calls $_sg25_fn — the carrier protection is wired to nothing"
+done
+# ORDER: the detach must come before the run does anything expensive or
+# stateful. Detaching after setup.sh would leave the window in which the
+# incident actually happened wide open.
+_sg25_detach_line="$(_sg25_code "$SG_DIR/run.sh" | grep -n 'sg_carrier_detach' | head -1 | cut -d: -f1)"
+_sg25_setup_line="$(_sg25_code "$SG_DIR/run.sh" | grep -n 'setup\.sh' | head -1 | cut -d: -f1)"
+if [[ -n "$_sg25_detach_line" && -n "$_sg25_setup_line" && "$_sg25_detach_line" -lt "$_sg25_setup_line" ]]; then
+  ok "carrier: run.sh detaches (code line $_sg25_detach_line) before it starts the isolated server (line $_sg25_setup_line)"
+else
+  bad "carrier: run.sh's detach does not precede setup.sh (detach=${_sg25_detach_line:-none} setup=${_sg25_setup_line:-none}) — the run would spend part of its life killable by its caller"
+fi
+
+# ── 26) T-42bb: the answers to ②⑧⑨ must not reach the agent's own shell ──────
+#
+# 🔴 WHAT WAS MEASURED, statically end to end plus the last hop live: run.sh 5
+# exports OC_SG_SCENE_NONCE / OC_SG_PEER_NONCE / OC_SG_IMAGE_ANSWER to the actor;
+# actors/live.sh started the warden with `env -u OC_WARDEN_TOKFILE …` (ONE
+# variable unset); cli/ocwarden's execRunner.Run never sets cmd.Env, so the child
+# inherits os.Environ(); and the tmux `new-session` it issues inherits that in
+# turn — verified on a throwaway socket: a value exported before
+# `tmux -L … new-session -d 'env > f'` is in f. So ⑨'s answer sat one `env` away
+# from the real agent, and ⑨'s own comment says a leak there makes a blind
+# agent's green indistinguishable from a real one. The leak scan could not see
+# it: it read server TEXT only.
+#
+# The fix is in the harness, not in cli/ocwarden (that spawn path is the whole
+# fleet's). lib/scrub.sh removes the harness's entire OC_SG_*/SG_* namespace from
+# the child environment and proves it before the spawn. This case is hermetic: it
+# starts no server, spawns no agent, and works on a COPY of the lib so the mutant
+# can never touch the real one.
+SG26="$SHIMDIR/sg-scrub"; mkdir -p "$SG26"
+SG_SCRUB="$SG_DIR/lib/scrub.sh"
+if [[ ! -f "$SG_SCRUB" ]]; then
+  bad "seven_gate: lib/scrub.sh is gone — nothing is keeping ②⑧⑨'s answers out of the agent's environment"
+else
+  cp "$SG_SCRUB" "$SG26/scrub.sh"
+  # 26a) the child environment is really clean, and the check can really see.
+  _sg26() { # _sg26 <lib> [interpreter] [PATH] -> "<assert-rc>|<secret hits>|<harness names>"
+    env -i PATH="${3:-$PATH}" HOME="${HOME:-/tmp}" \
+        OC_SG_IMAGE_ANSWER=481902 OC_SG_SCENE_NONCE=sg-nonce-deadbeef \
+        SG_TOKEN=owner-token-abc \
+        "${2:-bash}" -c '
+set -uo pipefail
+. "$1" || exit 9
+sg_scrub_assert "481902" "sg-nonce-deadbeef" "owner-token-abc" >/dev/null 2>&1; a=$?
+h=$(sg_scrub_env printenv | grep -cE "481902|sg-nonce-deadbeef|owner-token-abc" || true)
+n=$(sg_scrub_env printenv | grep -cE "^(OC_SG_|SG_)" || true)
+printf "%s|%s|%s\n" "$a" "$h" "$n"' _ "$1"
+  }
+  check "seven_gate: with the scrub in place, the environment the warden (and therefore the agent) would inherit carries none of ②⑧⑨'s answers" \
+    "0|0|0" "$(_sg26 "$SG26/scrub.sh")"
+  # 26a-bis) THE SAME THING UNDER THE INTERPRETER THIS ACTUALLY RUNS ON.
+  #
+  # 🔴 THE CELL ABOVE WAS BLIND FOR A REASON WORTH KEEPING WRITTEN DOWN: it says
+  # `env -i PATH="$PATH"`, i.e. it inherits the DEVELOPER'S PATH, so it only ever
+  # exercised whatever bash is early on it (5.3.9 here). actors/live.sh is
+  # `#!/usr/bin/env bash`, so on a Mac without Homebrew bash — or under any
+  # trimmed launchd/cron PATH — the interpreter is the stock /bin/bash, 3.2.57.
+  # MEASURED at 68e3bfd1: this file's names_left= filter was written as a
+  # one-line `case` inside `$( )`, which 3.2 cannot parse; sg_scrub_assert died
+  # mid-function and live.sh refused to spawn ONE HOP BEFORE THE SPEND, looking
+  # exactly like a machine that never came online — and this suite was green.
+  # So the PATH is pinned to /usr/bin:/bin and the interpreter is named.
+  if [[ -x "$SG_STOCK_BASH" ]]; then
+    check "seven_gate: …and the same holds under the stock $SG_STOCK_BASH with a pinned PATH (the hop that refuses to spawn must work on a stock macOS, not just where Homebrew bash is first on PATH)" \
+      "0|0|0" "$(_sg26 "$SG26/scrub.sh" "$SG_STOCK_BASH" /usr/bin:/bin)"
+    # MUT-inlinecase — the 68e3bfd1 shape put back, verbatim. Three cells,
+    # because the interesting fact is the DISAGREEMENT between interpreters.
+    awk '{ if ($0 ~ /\| sg_scrub_filter\)"$/) {
+             print "                | while IFS= read -r n; do";
+             print "                    for p in $SG_SCRUB_PREFIXES; do";
+             print "                      case \"$n\" in \"$p\"*) printf '"'"'%s '"'"' \"$n\"; break ;; esac";
+             print "                    done";
+             print "                  done)\"" } else print }' \
+        "$SG26/scrub.sh" > "$SG26/scrub-inline.sh"
+    if ! grep -q 'in "\$p"\*) printf' "$SG26/scrub-inline.sh"; then
+      bad "seven_gate: MUT-inlinecase did not apply to lib/scrub.sh — the names_left= pipeline moved, so 26a-bis is testing nothing (fix the awk)"
+      bad "seven_gate: (MUT-inlinecase second cell skipped — mutant did not apply)"
+      bad "seven_gate: (MUT-inlinecase third cell skipped — mutant did not apply)"
+    else
+      _sg26_inl32="$(_sg26 "$SG26/scrub-inline.sh" "$SG_STOCK_BASH" /usr/bin:/bin)"
+      _sg26_inl32_clean=no; [[ "$_sg26_inl32" == "0|0|0" ]] && _sg26_inl32_clean=yes
+      check "MUT-inlinecase: with the filter written back as a one-line case inside \$( ), the stock $SG_STOCK_BASH never reaches a clean spawn (got '${_sg26_inl32:-<the assert died mid-function, there is not even an rc>}')" \
+        "no" "$_sg26_inl32_clean"
+      # …and the disagreement itself. The UNPINNED form of the cell above (the
+      # one that says `PATH="$PATH"` and plain `bash`) reports this same file
+      # perfectly clean on bash 4+ — that blindness is the whole reason the
+      # pinned cell exists. The expectation is written per major version because
+      # tests_guard is itself run by whatever bash is first on PATH, and this
+      # suite's assertion COUNT and RESULT must not depend on the host: run this
+      # file under 3.2 and the unpinned interpreter IS the stock one, so it
+      # agrees with the pinned cell instead of disagreeing with it.
+      _sg26_unpinned_exp="0|0|0"
+      [[ "${BASH_VERSINFO[0]}" -lt 4 ]] && _sg26_unpinned_exp=""
+      check "MUT-inlinecase: …and the UNPINNED interpreter (this shell's bash $BASH_VERSION) reports what its major version predicts on the identical file — on 4+ that is a spotless '0|0|0', which is exactly the blindness the pinned cell was added to remove" \
+        "$_sg26_unpinned_exp" "$(_sg26 "$SG26/scrub-inline.sh")"
+      "$SG_STOCK_BASH" -n "$SG26/scrub-inline.sh" 2>/dev/null
+      check "MUT-inlinecase: …and even the stock binary's own \`-n\` passes it (a command substitution is parsed when it is EXPANDED) — which is why 23e's static parse is not enough on its own" \
+        "0" "$?"
+    fi
+  else
+    bad "seven_gate: no executable $SG_STOCK_BASH — the scrub is only ever exercised under whatever bash is first on PATH"
+    bad "seven_gate: (MUT-inlinecase skipped — no stock bash)"
+    bad "seven_gate: (MUT-inlinecase skipped — no stock bash)"
+    bad "seven_gate: (MUT-inlinecase skipped — no stock bash)"
+  fi
+  # 26b) MUTANT — the derivation severed, the assertion must REFUSE and NAME it.
+  # Without this, 26a is satisfied by an environment that never had the secrets.
+  sed 's/^sg_scrub_names() {$/sg_scrub_names() { return 0;/' \
+      "$SG26/scrub.sh" > "$SG26/scrub-mut.sh"
+  if ! grep -q 'sg_scrub_names() { return 0;' "$SG26/scrub-mut.sh"; then
+    bad "seven_gate: MUT-noscrub did not apply to lib/scrub.sh — the function signature moved, so case 26b is testing nothing (fix the sed)"
+  else
+    _sg26_mut="$(_sg26 "$SG26/scrub-mut.sh")"
+    check "MUT-noscrub: with the scrub reduced to a no-op, the child environment carries all three answers again" \
+      "3" "$(printf '%s' "$_sg26_mut" | cut -d'|' -f2)"
+    check "MUT-noscrub: …and sg_scrub_assert REFUSES rather than letting the spawn happen" \
+      "1" "$(printf '%s' "$_sg26_mut" | cut -d'|' -f1)"
+    _sg26_msg="$(env -i PATH="$PATH" HOME="${HOME:-/tmp}" OC_SG_IMAGE_ANSWER=481902 \
+      bash -c '. "$1"; sg_scrub_assert "481902" 2>&1' _ "$SG26/scrub-mut.sh")"
+    case "$_sg26_msg" in
+      *OC_SG_IMAGE_ANSWER*) ok "MUT-noscrub: …and it NAMES the variable that survived — $(printf '%s' "$_sg26_msg" | tail -1)" ;;
+      *) bad "MUT-noscrub: the refusal never named what leaked, so it would not tell anyone what to fix: $_sg26_msg" ;;
+    esac
+  fi
+  # 26c) THE POSITIVE CONTROL OF THE POSITIVE CONTROL. A scrub that is asked
+  # about secrets that were never in the environment must refuse too — otherwise
+  # "clean" is reachable by asking the wrong question.
+  _sg26_vac="$(env -i PATH="$PATH" HOME="${HOME:-/tmp}" \
+    bash -c '. "$1"; sg_scrub_assert "not-in-this-environment" >/dev/null 2>&1; echo $?' _ "$SG26/scrub.sh")"
+  check "seven_gate: the scrub refuses when its own control finds nothing (a vacuous 'clean' is not a pass)" \
+    "1" "$_sg26_vac"
+  # 26d) THE WIRING. The lib can be perfect and called from nowhere — which is
+  # exactly what happened to the `env -u OC_WARDEN_TOKFILE` line it replaces.
+  _sg26_code() { grep -v '^[[:space:]]*#' "$1"; }
+  _sg26_live="$SG_DIR/actors/live.sh"
+  _sg26_code "$_sg26_live" | grep -qF 'sg_scrub_assert' \
+    && ok "seven_gate: live.sh proves the scrub in CODE before it starts the warden" \
+    || bad "seven_gate: live.sh no longer calls sg_scrub_assert — the proof is wired to nothing and ⑨'s answer rides into the agent's shell again"
+  _sg26_assert_line="$(_sg26_code "$_sg26_live" | grep -n 'sg_scrub_assert' | head -1 | cut -d: -f1)"
+  _sg26_warden_line="$(_sg26_code "$_sg26_live" | grep -n 'OCWARDEN" run' | head -1 | cut -d: -f1)"
+  if [[ -n "$_sg26_assert_line" && -n "$_sg26_warden_line" && "$_sg26_assert_line" -lt "$_sg26_warden_line" ]]; then
+    ok "seven_gate: …and it proves it BEFORE the warden starts (code line $_sg26_assert_line < $_sg26_warden_line)"
+  else
+    bad "seven_gate: live.sh's scrub proof does not precede the warden start (assert=${_sg26_assert_line:-none} warden=${_sg26_warden_line:-none}) — a refusal after the spawn is not a refusal"
+  fi
+  _sg26_code "$_sg26_live" | grep -qE 'sg_scrub_env[[:space:]]+env' \
+    && ok "seven_gate: …and the warden is actually launched THROUGH the scrub" \
+    || bad "seven_gate: live.sh launches the warden without sg_scrub_env — the assertion above would be proving something about an environment the warden never gets"
+fi
+
 echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1
 
@@ -1574,29 +3242,52 @@ echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 #
 # A FLOOR, not the exact count, on purpose — the same reasoning that
 # e2e_test/assert-specs-ran.sh writes out for the spec tally: an exact number
-# goes stale the first time someone adds a case, and a stale exact number teaches
-# the next person that this file lies, which is worse than not asserting at all.
-# What the floor has to catch is "the suite got gutted", not "today's total
-# changed". It sits well under the current count so growth never reddens it, and
-# it does NOT need updating when cases are added.
+# reddens the first time someone legitimately adds a case, and a check that
+# reddens on correct work is a check somebody deletes.
 #
-# WHAT IT CATCHES — state the size of the hole, not just that one exists.
-# Measured 2026-08-08: PASS=153 against a floor of 100. So roughly A THIRD of the
-# assertions — 53 of them — can evaporate silently and this still goes green.
-# (That figure moves as cases are added; it is recorded as a measurement on a
-# day, not as the current state. Recompute it, do not trust it.)
+# 🔴 BUT A FLOOR THAT DRIFTS FAR ENOUGH BELOW THE COUNT IS NOT A FLOOR EITHER,
+# and this one had. It sat at 100 while the suite grew to 291: 191 assertions —
+# two thirds of the file — could evaporate and this still printed `all green`.
+# "It never needs updating when cases are added" is exactly what made it useless,
+# because what it measures is not how many assertions exist but how big a hole is
+# tolerated, and that hole grew with every case anyone wrote. Measured history of
+# the same 100: PASS=153 (2026-08-08, hole 53) → 237 (2026-08-10, hole 137) → 291
+# (2026-08-11, hole 191).
 #
-# And it is VOLUME-SHAPED, not importance-shaped: it counts assertions and does
-# not care WHICH ones went. The highest-value blocks are among the smallest —
-# case 11 (the rc-propagation shape of run_all.sh) and 20e (teardown's only way
-# out) — so deleting either one on its own sits comfortably inside the tolerance
-# and this file will tell you everything is fine. Nothing here watches at
-# case-name or block granularity; an exact count that would is refused above for
-# a reason that costs more than it saves.
-# Mutants, each restored from a scratchpad copy with the sha256 re-checked:
+# SO IT IS NOW SET NEAR THE COUNT, WITH DELIBERATE SLACK, AND IT IS EXPECTED TO
+# BE EDITED. 303 today, floor 300: three assertions of room. (291/288 → 298/295
+# when 2026-08-11's bash-3.2 round added 23e's three cells and case 26's four →
+# 303/300 when ⑤'s downgrade traded two cells away — `sg_mutant step_done` and
+# the ⑤-red/⑦-green pair — for seven in 21b-i/21b-v. Each move edited the floor
+# in the same commit, which is the edit this block asks for.) The slack is measured, not guessed — deleting the whole of case 26 (then
+# 8 assertions) gave PASS=283, which was FATAL and named at 288 and GREEN at
+# 280. Read the
+# guarantee narrowly: a change that removes FOUR OR MORE assertions is loud; one
+# that removes three or fewer is not, and nothing here knows which case blocks
+# are that small.
+# ⚠️ THIS IS A FLOOR, NOT AN EXPECTATION — being ABOVE it means nothing, going
+# BELOW it means the suite collapsed. If a legitimate change genuinely removes
+# assertions, MOVE THIS NUMBER IN THE SAME COMMIT and say why; that edit is the
+# review this file wants, not an obstacle to route around. Do NOT "fix" a red
+# floor by lowering it to whatever today's run printed without knowing what left.
+#
+# WHAT IT STILL DOES NOT CATCH, said plainly: it is VOLUME-SHAPED, not
+# importance-shaped. It counts assertions and does not care WHICH ones went, so
+# a three-assertion deletion is invisible no matter how load-bearing those three
+# were — case 11 (the rc-propagation shape of run_all.sh) and 20e (teardown's
+# only way out) are among the highest-value and the smallest blocks in this file,
+# and whether either fits inside three assertions has NOT been measured. Nothing
+# here watches at case-name or block granularity.
+# Mutants (the first three measured when the suite stood at 153 assertions and
+# the floor at 100; each restored from a scratchpad copy with the sha256
+# re-checked):
 #   * floor raised to an unreachable 9999            → PASS=153 FAIL=0, rc=1, named.
 #   * the whole 19x/20x half of the file deleted     → PASS=66  FAIL=0, rc=1, named.
 #   * ONE case block (19a, five assertions) deleted  → PASS=148 FAIL=0, rc=0 — GREEN.
+#   * (2026-08-11, floor 288) case 26 deleted, 8     → PASS=283 FAIL=0, rc=1, named.
+# The third one is what a floor of 100 permitted; at 288 a five-assertion block
+# would no longer fit, and the fourth line is that same shape actually measured
+# against the new floor.
 #
 # THE SUCCESS MARKER IS PRINTED FROM INSIDE THIS BLOCK, from the floor's passing
 # branch and nowhere else — that is the only reason bin/ci.sh's `tail -n 1`
@@ -1605,7 +3296,7 @@ echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 # printed the marker with no floor evaluated at all: MEASURED, floor block
 # deleted and the trailing echo kept → PASS=153 FAIL=0 rc=0, last line
 # `[tests_guard] all green`, `bin/ci.sh` all green. Keep it in the branch.
-PASS_FLOOR=100
+PASS_FLOOR=320
 if [[ "$PASS" -lt "$PASS_FLOOR" ]]; then
   echo "[tests_guard] FATAL: only $PASS assertion(s) ran, floor is $PASS_FLOOR." >&2
   echo "[tests_guard] FAIL=0 with a collapsed PASS count means cases went missing, not that they passed." >&2

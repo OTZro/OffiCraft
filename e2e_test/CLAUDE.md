@@ -43,6 +43,15 @@ spec 預設偷偷跑、偷偷花錢。判定是嚴格 `=== '1'`,所以 `true`/`y
 `workers` 已釘死 **1**(見 `playwright.config.js` 註解:整套共用一台 server／一顆 SQLite,
 並行 7 → 7 紅、序列 → 4 紅,假紅會讓一個新閘一週內被關掉)。
 
+## seven_gate/ — 任務路徑關卡(另一條路徑,不在 playwright 套件裡)
+`seven_gate/` 驗的是「一個只讀開機說明的 agent,能不能把一條真實任務路徑走完」
+(路徑固定幾格、每格讀哪個 server 事實,以 `seven_gate/judge.py` 的 `STEPS` 為準——**這裡刻意不複製
+一份步驟清單**,那種清單會過期;資料夾名裡的「七」就是這樣過期的),判定**只讀 server 上的
+事實**、不問 agent。它不是 spec、不在 `run_all.sh`、也不在 `bin/ci.sh` 的服務型步驟裡——CI 守的是它的
+**判定邏輯**(`tests_guard` 案例 21,hermetic、不起服務)。候選開機說明用 `OC_SEEDS_SRC` 換,不動
+被追蹤的 `seeds/`。設計、每一格各讀哪個事實、產物放哪、以及**哪些部分還沒有真 agent 驗證過**,見
+`seven_gate/CLAUDE.md`。
+
 ## 鐵律:絕不碰 prod
 e2e 一律跑**隔離 port / 隔離 server**(如 `:8791`),**絕不**碰 prod(officraft live 現跑 `:7755`,`:8766` vibe;`:8770` 是 2026-07-20 退役的舊 prod 埠)。造真實素材(真 `ocwarden run`、真 claude spawn)但全在隔離環境。spec 進 repo = 永久回歸守衛。
 
