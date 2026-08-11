@@ -8,8 +8,15 @@ package main
 // DROPPED, never searched forward, because searching forward lands on a reading
 // already in the set and two deliveries merge into one without a word), and the
 // autumn one pins the behaviour that is NOT changed (an ambiguous reading
-// resolves to the earlier offset, so the second pass delivers nothing) so that
-// it stays a recorded decision rather than an accident somebody later "fixes".
+// resolves DETERMINISTICALLY to one of its two instants, so the second pass
+// produces the same slotKey and delivers nothing) so that it stays a recorded
+// decision rather than an accident somebody later "fixes".
+//
+// ⚠️ 2026-08-11: this header used to say "resolves to the EARLIER offset". That
+// is false for about half the zones (Europe/London and Africa/Cairo resolve to
+// the LATER one — measured; see customSlotOn's header and the test at the foot
+// of this file, which deliberately asserts ONCE and never WHICH). Only the
+// wording changed here; no assertion in this file was touched.
 
 import (
 	"fmt"
