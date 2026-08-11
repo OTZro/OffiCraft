@@ -70,13 +70,26 @@ const weeklyLookbackDays = 14
 // plus the hour×minute enumeration, and only days actually listed in
 // CustomDays are probed at all.
 //
-// ⚠️ NOTHING PINS THIS CONSTANT, AND THAT IS PROPORTIONATE — do not read the
-// paragraph above as a claim that a guard is watching it (70 → 40 leaves every
-// test green). It is a bound with headroom, and the cost of it being too small
-// is that mostRecentSlot reports NO slot for an interval in which no slot was
-// due anyway, so the delivery outcome is unchanged. That is unlike
-// monthlyLookbackMonths next door, where an insufficient bound really does stop
-// a schedule from ever firing and a named test says so.
+// ⚠️ ROUND 2 PUT A FLOOR UNDER THIS CONSTANT, AND NOBODY DECIDED TO — it is a
+// side effect of the month tests, so measure before you touch it rather than
+// trusting this paragraph. Measured by lowering the constant and running
+// `-run 'TestCustom|TestScheduled|TestMostRecent|TestTZSweep|TestPatchingMonths'`
+// with a cleared test cache: 40 and 55 each turn TWO tests red
+// (TestCustomCrossesAMonthBoundaryToTheRightSlot/in_an_included_month_before_its_reading
+// and TestTZSweepFindsNothing), 60 is green — so the smallest green value is
+// somewhere in 56..60 and was not narrowed further.
+//
+// ⚠️ AND THE COST OF THIS BOUND IS NOT "NO SLOT WAS DUE ANYWAY". That was true
+// in round 1, where a window shorter than the longest day-gap only ever hid an
+// interval containing no occurrence. With months in the picture a REAL past
+// occurrence can sit outside the window (months {1,2} × days {31} is the
+// sweep's own fixture), and then mostRecentSlot answers "no slot" for a slot
+// that genuinely happened — which is also why it is not monotonic in `now` over
+// spans longer than this window. What is unchanged is the DELIVERY outcome, for
+// the compositional reason set out below; do not shorten that back into a claim
+// about slots not existing. Contrast monthlyLookbackMonths next door, where an
+// insufficient bound really does stop a schedule from ever firing and a named
+// test says so.
 //
 // ⚠️ THE MONTH SET (round 2) MAKES THE WORST-CASE GAP FAR LARGER THAN 70 DAYS
 // AND THE CONSTANT IS DELIBERATELY NOT RAISED. months {1} × days {1} has a gap
