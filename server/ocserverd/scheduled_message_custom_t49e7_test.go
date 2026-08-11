@@ -602,8 +602,17 @@ func TestPatchCustomSetsReAimOnlyOnARealChange(t *testing.T) {
 	}
 }
 
-// TestPatchAwayFromCustomKeepsTheStoredSets: flipping the cadence must not
-// destroy the owner's choice.
+// TestPatchAwayFromCustomKeepsTheStoredSets pins the PATCH clause of the
+// reviewed contract: "switching AWAY from `custom` leaves the stored sets in
+// place, unread, so switching back does not lose the choice".
+//
+// ⚠️ THE CONTRACT CONTRADICTS ITSELF HERE and the conflict is NOT resolved by
+// this test. The response schema in the same spec file says the three fields
+// are "Empty for every other cadence", which would require the opposite. That
+// is an owner ruling, still open; this test pins the clause that describes
+// this verb, so the behaviour cannot drift silently while the question is
+// settled. Whoever settles it will have to change this test on purpose —
+// which is the point.
 //
 // Red when: leaving `custom` clears the three columns. The sets are gone
 // irreversibly, as a side effect of a toggle, and switching back presents an

@@ -175,10 +175,17 @@ func (s *apiServer) HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessa
 		m.Minute = *body.Minute
 	}
 	// 🔴 Each set is written ONLY when supplied, and switching AWAY from
-	// `custom` deliberately leaves the stored sets in place rather than
-	// clearing them: a schedule flipped to daily and back would otherwise lose
-	// the owner's whole choice, irreversibly, as a side effect of a cadence
-	// toggle. They are unread while the cadence is not `custom`.
+	// `custom` leaves the stored sets in place rather than clearing them —
+	// the PATCH `cadence` description in spec/openapi.json states exactly
+	// that ("switching AWAY from `custom` leaves the stored sets in place,
+	// unread, so switching back does not lose the choice").
+	//
+	// ⚠️ THAT SENTENCE CONTRADICTS THE RESPONSE SCHEMA IN THE SAME FILE, which
+	// says the three fields are "Empty for every other cadence". The conflict
+	// is INSIDE the reviewed contract, not between the contract and this code,
+	// so it is not settled here: it is an owner ruling, deliberately left open
+	// and deliberately not papered over by editing either sentence. This code
+	// follows the PATCH clause because it is the one that describes THIS verb.
 	if body.CustomDays != nil {
 		m.CustomDays = *body.CustomDays
 	}
@@ -199,12 +206,15 @@ func (s *apiServer) HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessa
 		}
 		m.Status = string(*body.Status)
 	}
-	// 🔴 Leaving `custom` for a calendar cadence must STATE the wall clock. A
-	// custom row's hour/minute columns hold their 0/0 defaults — the fields it
-	// does not read — so inheriting them would hand back a schedule that fires
-	// at midnight, a time nobody chose, and it would look exactly like a
-	// schedule that was asked to run at midnight. Only this transition is
-	// affected: a daily row edited to weekly keeps the hour it already stated.
+	// 🔴 THIS GUARD EXISTS BECAUSE A CUSTOM ROW'S hour/minute WERE NEVER CHOSEN.
+	// They are the fields `custom` does not read, so they hold their 0/0
+	// defaults; inheriting them on the way out would hand back a schedule that
+	// fires at midnight — a time nobody picked — and it would look exactly like
+	// a schedule that was asked to run at midnight. That is the silent-zero this
+	// feature refuses everywhere else, arriving through a cadence toggle instead
+	// of through an omitted field. Only this transition is affected: a daily row
+	// edited to weekly keeps the hour it already stated.
+	// (Stricter than the create-side rule by design — do not "simplify" it away.)
 	if wasCustom && m.Cadence != ScheduledMessageCadenceCustom {
 		if err := ValidateScheduledMessageWallClockPresence(
 			m.Cadence, body.Hour != nil, body.Minute != nil); err != nil {
