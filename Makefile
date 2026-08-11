@@ -157,21 +157,57 @@ build-frontend-deps:
 # lint
 # ===========================================================================
 
-# Naming invariant (root CLAUDE.md §10 folder = module = binary). The binary name
-# is DERIVED from the folder basename, so the first clause is true by
-# construction here; it is kept because the derivation is what makes it true and
-# a future caller passing a name would need it.
+# Naming invariant (root CLAUDE.md §10 folder = module = binary). THREE names,
+# so this needs THREE INDEPENDENT SOURCES or it proves nothing. Folder basename
+# and go.mod's `module` line are two of them. The third — the name the shipped
+# executable actually gets — lives ONLY in the build scripts' `-o` flags
+# (bin/build-bindist for the three cli/ modules, bin/build for ocserverd). That
+# is what deploys, nothing ties it to the folder name, and it drifts freely.
+# Until T-ac67 the first clause read `binary="$$base"` and then compared $$base
+# against $$binary: a variable against itself, structurally incapable of being
+# false. Renaming a `-o` target passed silently.
+#
+# DELIBERATELY NOT A TABLE HERE. Hardcoding a module→binary map in this Makefile
+# would be a FOURTH copy of the name, i.e. one more thing that can drift; the
+# build scripts are read because they are what actually decides the name.
+#
+# A module with NO matching `go build … -o` line is a FAIL, never a skip —
+# otherwise deleting the build line would silence the check, which is exactly
+# the hole being closed. The match is anchored on the module's own
+# `cd "$$ROOT/<dir>"` AND on `go build` AND on a quoted `-o`, so a comment that
+# merely mentions the name cannot satisfy it. Continuation lines are folded
+# first (bin/build's ocserverd build spans three physical lines), and comment
+# lines are dropped before matching.
 lint-go-naming:
 	@$(P) \
+	scripts="bin/build-bindist bin/build"; \
 	for gomod in cli/*/go.mod server/*/go.mod; do \
 	  [[ -f "$$gomod" ]] || continue; \
-	  dir="$$(dirname "$$gomod")"; base="$$(basename "$$dir")"; binary="$$base"; \
+	  dir="$$(dirname "$$gomod")"; base="$$(basename "$$dir")"; \
 	  echo "[lint-go-naming] $$dir"; \
-	  if [[ "$$base" != "$$binary" ]]; then \
-	    echo "FAIL — naming (CLAUDE.md 10): folder $$dir != binary '$$binary'"; exit 1; \
+	  needle="cd \"\$$ROOT/$$dir\""; \
+	  found=0; \
+	  for s in $$scripts; do \
+	    if [[ ! -f "$$s" ]]; then \
+	      echo "FAIL — naming (CLAUDE.md 10): build script '$$s' is missing, so the produced-executable name for $$dir cannot be read"; exit 1; \
+	    fi; \
+	    outs="$$(awk '/\\$$/ { sub(/\\$$/,""); buf = buf $$0; next } { print buf $$0; buf = "" }' "$$s" \
+	      | grep -v '^[[:space:]]*#' \
+	      | grep -F "$$needle" \
+	      | grep -F 'go build' \
+	      | sed -nE 's/.*[[:space:]]-o[[:space:]]+"([^"]*)".*/\1/p' || true)"; \
+	    for out in $$outs; do \
+	      found=1; obin="$$(basename "$$out")"; \
+	      if [[ "$$base" != "$$obin" ]]; then \
+	        echo "FAIL — naming (CLAUDE.md 10): module $$dir has folder name '$$base' but $$s builds it as '$$obin' (-o \"$$out\") — folder, go.mod module and produced executable must all be the same name"; exit 1; \
+	      fi; \
+	    done; \
+	  done; \
+	  if [[ "$$found" != 1 ]]; then \
+	    echo "FAIL — naming (CLAUDE.md 10): module $$dir (folder '$$base') has no 'go build … -o \"…\"' line in any of: $$scripts — the produced executable name is unknowable, so the folder=module=binary rule cannot be checked. Do NOT delete or reshape the build line to silence this; add/repair the build line."; exit 1; \
 	  fi; \
-	  if ! grep -qE "^module $${binary}\$$" "$$dir/go.mod"; then \
-	    echo "FAIL — naming (CLAUDE.md 10): $$dir/go.mod 'module' line is not 'module $$binary'"; exit 1; \
+	  if ! grep -qE "^module $${base}\$$" "$$dir/go.mod"; then \
+	    echo "FAIL — naming (CLAUDE.md 10): $$dir/go.mod 'module' line is not 'module $$base'"; exit 1; \
 	  fi; \
 	done; \
 	$(DONE)
