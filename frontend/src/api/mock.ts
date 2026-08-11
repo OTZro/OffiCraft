@@ -1620,7 +1620,7 @@ function validateSchedulePart(
     !["daily", "weekly", "monthly", "custom"].includes(part.cadence)
   )
     bad("cadence must be one of daily / weekly / monthly / custom");
-  // The three `custom` sets are EXPLICIT: an empty set is a 422 rather than a
+  // All four `custom` sets are EXPLICIT: an empty set is a 422 rather than a
   // silent "all" or a silent "never", because a schedule that always fires and
   // one that never fires must not be one keystroke apart.
   //

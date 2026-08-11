@@ -2032,9 +2032,10 @@ const (
 // ScheduledMessageCadence closed set — which day field the slot computation
 // reads: weekly reads DayOfWeek, monthly reads DayOfMonth, daily reads neither.
 //
-// `custom` (T-49e7) reads NONE of those four. It reads the three explicit sets
-// CustomDays/CustomHours/CustomMinutes and fires at every wall-clock reading
-// where all three hold at once, so it is the only cadence that can fire more
+// `custom` (T-49e7) reads NONE of those four. It reads the four explicit sets
+// CustomMonths/CustomDays/CustomHours/CustomMinutes (months added in round 2)
+// and fires at every wall-clock reading where all four hold at once, so it is
+// the only cadence that can fire more
 // than once a day — which is the whole point of it (owner card
 // rc-4acc4013a0ae: "every 20 minutes", whose only alternative was 72 separate
 // schedules a day).
