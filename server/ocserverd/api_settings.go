@@ -53,6 +53,30 @@ const (
 	maxOutsourceParallel = 20
 )
 
+// outsourceParallelInRange is the SINGLE source of truth for which
+// task.outsource_max_parallel values this build accepts. BOTH faces call it —
+// the PATCH validator right below, and the boot-time loader in settings.go
+// (loadAuthSettings) — so a value that survives a save can never be the value
+// that refuses to boot on the next start.
+//
+// It exists because the two faces used to disagree: the PATCH face allowed
+// -1 (the 無限 button) while the loader applied the generic "non-negative
+// integer" check that belongs to timestamp-shaped keys, so saving -1 succeeded
+// and the NEXT start died with `FATAL: load settings` (exit 1) — no warning at
+// save time. Whoever narrows or widens these bounds must edit this one place,
+// and both faces move together.
+func outsourceParallelInRange(n int) bool {
+	return n >= minOutsourceParallel && n <= maxOutsourceParallel
+}
+
+// outsourceParallelRangeMsg is the ONE wording of that refusal, derived from
+// the constants above so it can never quote a range the code does not enforce.
+// The PATCH face prefixes the field name; the loader prefixes `settings <key>`.
+// It states the range and nothing else — there is no bypass to teach.
+var outsourceParallelRangeMsg = fmt.Sprintf(
+	"must be between %d and %d (%d = unlimited)",
+	minOutsourceParallel, maxOutsourceParallel, minOutsourceParallel)
+
 // maxOrgNameLen caps the studio display name (org.name; T-d693) — a topbar
 // label, not a document. Whitespace is trimmed; "" clears it back to the
 // localized default. Counted in runes so CJK names get the full budget.
@@ -254,10 +278,9 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		return
 	}
 	if body.OutsourceMaxParallel != nil &&
-		(*body.OutsourceMaxParallel < minOutsourceParallel ||
-			*body.OutsourceMaxParallel > maxOutsourceParallel) {
+		!outsourceParallelInRange(*body.OutsourceMaxParallel) {
 		writeError(w, http.StatusUnprocessableEntity,
-			"outsource_max_parallel must be between -1 and 20 (-1 = unlimited)")
+			"outsource_max_parallel "+outsourceParallelRangeMsg)
 		return
 	}
 	// Each floor is THAT segment's shipped default, so a knob only ever RAISES
