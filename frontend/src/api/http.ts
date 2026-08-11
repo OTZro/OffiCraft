@@ -681,12 +681,17 @@ export const httpApi: Api = {
     input: ScheduledMessageCreateInput,
   ): Promise<ScheduledMessage> {
     // POST /api/members/{id}/scheduled-messages {body, cadence, timezone,
-    // hour?, minute?, label?, day_of_week?, day_of_month?, custom_days?,
-    // custom_hours?, custom_minutes?} -> ScheduledMessageDTO.
+    // hour?, minute?, label?, day_of_week?, day_of_month?, custom_months?,
+    // custom_days?, custom_hours?, custom_minutes?} -> ScheduledMessageDTO.
     // The three unconditionally required fields always ride; every other one
     // only when supplied (an absent field must not arrive as null). `hour` and
     // `minute` left the unconditional set in T-49e7 so a `custom` schedule does
     // not have to send two values it never reads.
+    //
+    // 🔴 `custom_months` must keep its `undefined`/`[]` distinction all the way
+    // to the socket: absent means every month, `[]` is a 422. The `!== undefined`
+    // guard below is what preserves it — a `?? []` anywhere on this path would
+    // turn every pre-round-2-shaped create into a server refusal.
     const body: {
       body: string;
       cadence: "daily" | "weekly" | "monthly" | "custom";
@@ -696,6 +701,7 @@ export const httpApi: Api = {
       label?: string;
       day_of_week?: number;
       day_of_month?: number;
+      custom_months?: number[];
       custom_days?: number[];
       custom_hours?: number[];
       custom_minutes?: number[];
@@ -709,6 +715,8 @@ export const httpApi: Api = {
     if (input.label !== undefined) body.label = input.label;
     if (input.dayOfWeek !== undefined) body.day_of_week = input.dayOfWeek;
     if (input.dayOfMonth !== undefined) body.day_of_month = input.dayOfMonth;
+    if (input.customMonths !== undefined)
+      body.custom_months = input.customMonths;
     if (input.customDays !== undefined) body.custom_days = input.customDays;
     if (input.customHours !== undefined) body.custom_hours = input.customHours;
     if (input.customMinutes !== undefined)
@@ -738,6 +746,11 @@ export const httpApi: Api = {
       day_of_month?: number;
       hour?: number;
       minute?: number;
+      // Same undefined-vs-[] contract as on create: absent means "leave the
+      // stored months alone" (or, on a switch to `custom` from a row that has
+      // none, every month), `[]` means the caller asked for a schedule that
+      // never fires and is refused.
+      custom_months?: number[];
       custom_days?: number[];
       custom_hours?: number[];
       custom_minutes?: number[];
@@ -749,6 +762,8 @@ export const httpApi: Api = {
     if (patch.cadence !== undefined) body.cadence = patch.cadence;
     if (patch.dayOfWeek !== undefined) body.day_of_week = patch.dayOfWeek;
     if (patch.dayOfMonth !== undefined) body.day_of_month = patch.dayOfMonth;
+    if (patch.customMonths !== undefined)
+      body.custom_months = patch.customMonths;
     if (patch.customDays !== undefined) body.custom_days = patch.customDays;
     if (patch.customHours !== undefined) body.custom_hours = patch.customHours;
     if (patch.customMinutes !== undefined)

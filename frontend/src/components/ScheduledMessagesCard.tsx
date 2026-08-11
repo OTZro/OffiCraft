@@ -44,21 +44,37 @@ const CLAMP_CHARS_PER_LINE = 46;
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 const MINUTES = Array.from({ length: 60 }, (_, i) => i);
 const DAYS_OF_MONTH = Array.from({ length: 31 }, (_, i) => i + 1);
+const MONTHS_OF_YEAR = Array.from({ length: 12 }, (_, i) => i + 1);
 
-/** The intervals an owner actually asks for, offered as one click each on the
- * minute group. They are SHORTCUTS, not values: each expands to the explicit
- * wall-clock minutes it names (每 20 分 → 0/20/40), because the wire has no
- * "interval" and an interval that does not divide an hour cannot be one. */
-const MINUTE_STEPS = [5, 10, 15, 20, 30];
+/** The minutes the group OFFERS by default: 0, 5, 10 … 55.
+ *
+ * 🔴 This is a display choice, not a narrowing of the wire. `custom_minutes`
+ * is still the closed set 0–59 on both sides of the seam — round 2 did not
+ * touch it — so anything already stored outside this twelve stays legal, keeps
+ * firing, and has to stay VISIBLE (see `minuteOptions`).
+ *
+ * It replaces a 60-cell grid that sat behind a 「細部選擇」 disclosure with a row
+ * of 每 5/10/15/20/30 分 shortcut buttons above it. The owner read that layout
+ * as "this thing only does intervals" — which was the opposite of the feature —
+ * so both the disclosure and the shortcut row are gone: every minute an owner
+ * asked for through those shortcuts (0/5/…, 0/10/…, 0/15/30/45, 0/20/40, 0/30)
+ * is one of these twelve cells, reachable by clicking the number itself. */
+const DEFAULT_MINUTES = Array.from({ length: 12 }, (_, i) => i * 5);
 
-function minutesForStep(step: number): number[] {
-  const out: number[] = [];
-  for (let m = 0; m < 60; m += step) out.push(m);
-  return out;
-}
-
-function sameSet(a: number[], b: number[]): boolean {
-  return a.length === b.length && a.every((v, i) => v === b[i]);
+/** The cells the minute group renders for a given selection: the default
+ * twelve, plus any stored minute that is not one of them.
+ *
+ * 🔴 This is what stops the twelve-cell grid from EATING an existing choice.
+ * A schedule stored on minute 7 predates round 2 (or came from an agent, or
+ * from anything that talks to the wire directly); if its cell were missing, the
+ * box would render unticked, the form would send back a set without it, and a
+ * schedule would quietly stop firing at a time its owner never changed. Growing
+ * the grid by one cell is the whole fix — the owner sees the 7, does not touch
+ * it, and it saves back identical. */
+function minuteOptions(values: number[]): number[] {
+  const extra = values.filter((v) => !DEFAULT_MINUTES.includes(v));
+  if (extra.length === 0) return DEFAULT_MINUTES;
+  return [...new Set([...DEFAULT_MINUTES, ...extra])].sort((a, b) => a - b);
 }
 
 /** Toggle one value in a sorted set. Sorted on the way in, so two orderings of
@@ -95,16 +111,23 @@ interface ScheduleFormValues {
   dayOfMonth: number;
   hour: number;
   minute: number;
+  customMonths: number[];
   customDays: number[];
   customHours: number[];
   customMinutes: number[];
   timezone: string;
 }
 
-/** 🔴 The three custom sets start EMPTY, and that is a form that cannot be
+/** 🔴 The four custom sets start EMPTY, and that is a form that cannot be
  * submitted until the owner picks. Seeding them with "everything" would put a
  * schedule nobody chose one click from going live, and seeding them with a
- * guess is the silent-default the wire refuses on purpose. */
+ * guess is the silent-default the wire refuses on purpose.
+ *
+ * ⚠️ Months are empty here too, even though an OMITTED `custom_months` means
+ * every month on the wire: this form always states what it sends, so the owner
+ * is never shown four empty groups while one of them secretly means "all". The
+ * absent-means-all rule exists for clients that predate round 2, not for a
+ * screen that is asking the question. */
 const BLANK_FORM: ScheduleFormValues = {
   label: "",
   body: "",
@@ -113,6 +136,7 @@ const BLANK_FORM: ScheduleFormValues = {
   dayOfMonth: 1,
   hour: 9,
   minute: 0,
+  customMonths: [],
   customDays: [],
   customHours: [],
   customMinutes: [],
@@ -128,6 +152,7 @@ function formValuesOf(m: ScheduledMessage): ScheduleFormValues {
     dayOfMonth: m.dayOfMonth,
     hour: m.hour,
     minute: m.minute,
+    customMonths: m.customMonths,
     customDays: m.customDays,
     customHours: m.customHours,
     customMinutes: m.customMinutes,
@@ -147,11 +172,17 @@ function wirePayload(v: ScheduleFormValues): ScheduledMessageCreateInput {
     // sending the other one would write a value nothing will ever apply.
     ...(v.cadence === "weekly" ? { dayOfWeek: v.dayOfWeek } : {}),
     ...(v.cadence === "monthly" ? { dayOfMonth: v.dayOfMonth } : {}),
-    // `custom` reads neither hour nor minute — it reads the three sets, and
+    // `custom` reads neither hour nor minute — it reads the four sets, and
     // sending a wall-clock reading it ignores is the required-but-ignored
     // ambiguity the DTO went out of its way to remove.
+    //
+    // 🔴 Months ride EXPLICITLY, always. The wire lets a caller omit them to
+    // mean the whole year, but this form has just asked the question, so it
+    // answers it — an omitted field would make "the owner ticked all twelve"
+    // and "the owner was never asked" the same request.
     ...(custom
       ? {
+          customMonths: v.customMonths,
           customDays: v.customDays,
           customHours: v.customHours,
           customMinutes: v.customMinutes,
@@ -168,7 +199,8 @@ function incomplete(v: ScheduleFormValues): boolean {
   if (v.body.trim() === "" || v.timezone.trim() === "") return true;
   return (
     v.cadence === "custom" &&
-    (v.customDays.length === 0 ||
+    (v.customMonths.length === 0 ||
+      v.customDays.length === 0 ||
       v.customHours.length === 0 ||
       v.customMinutes.length === 0)
   );
@@ -177,28 +209,27 @@ function incomplete(v: ScheduleFormValues): boolean {
 interface NumberSetPickerProps {
   /** `<idPrefix>-custom-<name>-*` is this group's whole test-id namespace. */
   idPrefix: string;
-  name: "days" | "hours" | "minutes";
+  name: "months" | "days" | "hours" | "minutes";
   label: string;
   /** The plain-language sentence for the CURRENT selection, rendered above the
-   * boxes: 60 ticked checkboxes are not something anyone reads back. */
+   * boxes: thirty-one ticked checkboxes are not something anyone reads back. */
   summary: string;
   options: number[];
   values: number[];
   onChange: (next: number[]) => void;
-  /** Shortcut row + collapsed detail grid. The minute group has 60 boxes, which
-   * laid out flat is a wall nobody wants to aim at for the thing they almost
-   * always want ("every 20 minutes"). */
-  steps?: number[];
-  stepLabel?: (step: number) => string;
-  detailShowLabel?: string;
-  detailHideLabel?: string;
   selectAllLabel: string;
   clearLabel: string;
 }
 
 /** One explicit set of wall-clock numbers, with 全選 / 清除 and a live summary.
  * 全選 lists every option — the wire has no "all" value and an empty set means
- * "refused", so the only honest way to say "every day" is to name every day. */
+ * "refused", so the only honest way to say "every day" is to name every day.
+ *
+ * 🔴 All four groups render their boxes UNCONDITIONALLY. Round 1 hid the minute
+ * boxes behind a disclosure with an interval-shortcut row standing in for them,
+ * and the owner came back reading the control as "intervals only, I cannot pick
+ * which minute". A group whose values are only reachable through a second click
+ * is a group most people never learn they have. */
 function NumberSetPicker({
   idPrefix,
   name,
@@ -207,32 +238,24 @@ function NumberSetPicker({
   options,
   values,
   onChange,
-  steps,
-  stepLabel,
-  detailShowLabel,
-  detailHideLabel,
   selectAllLabel,
   clearLabel,
 }: NumberSetPickerProps) {
   const p = `${idPrefix}-custom-${name}`;
-  // Collapsed by default only where there IS a shortcut row to stand in for it:
-  // hiding the boxes with nothing offered in their place would just hide the
-  // control. The group opens itself when the current selection is not one of
-  // the shortcuts, so an owner who picked odd minutes still sees them.
-  const collapsible = Boolean(steps && steps.length > 0);
-  const matchesAStep = Boolean(
-    steps?.some((st) => sameSet(values, minutesForStep(st)))
-  );
-  const [detailOpen, setDetailOpen] = useState(
-    collapsible ? values.length > 0 && !matchesAStep : true
-  );
-  const gridOpen = !collapsible || detailOpen;
+  // 🔴 The cells this group offers are FROZEN at mount, and that matters for
+  // exactly one of the four: the minute grid's options are derived from the
+  // current selection (`minuteOptions`), so a live derivation would delete the
+  // off-grid cell the moment its box was unticked — the box vanishes from under
+  // the pointer and there is no way to put the value back. Freezing keeps the
+  // grid the same shape for the whole edit. The other three pass a constant
+  // array, so this is a no-op for them.
+  const [offered] = useState(options);
 
   return (
     // Named as a group, the way MultiSelectFilter names its option list. Without
-    // it a screen reader announces sixty checkboxes called 「0」…「59」 with
-    // nothing anywhere saying they are minutes — and the days (1…31) and hours
-    // (0…23) grids are indistinguishable from them by ear.
+    // it a screen reader announces thirty-one checkboxes called 「1」…「31」 with
+    // nothing anywhere saying they are days — and the months (1…12), hours
+    // (0…23) and minutes grids are indistinguishable from them by ear.
     <div
       className="mp-schedmsg__setgroup"
       role="group"
@@ -247,7 +270,7 @@ function NumberSetPicker({
         <button
           type="button"
           className="mp-schedmsg__setaction"
-          onClick={() => onChange([...options])}
+          onClick={() => onChange([...offered])}
           data-testid={`${p}-all`}
         >
           {selectAllLabel}
@@ -264,54 +287,22 @@ function NumberSetPicker({
       <div className="mp-schedmsg__setsummary" data-testid={`${p}-summary`}>
         {summary}
       </div>
-      {collapsible && (
-        <div className="mp-schedmsg__quickrow">
-          {steps!.map((st) => {
-            const on = sameSet(values, minutesForStep(st));
-            return (
-              <button
-                key={st}
-                type="button"
-                aria-pressed={on}
-                className={`mp-schedmsg__quickbtn${on ? " mp-schedmsg__quickbtn--on" : ""}`}
-                onClick={() => onChange(minutesForStep(st))}
-                data-testid={`${p}-step-${st}`}
-              >
-                {stepLabel!(st)}
-              </button>
-            );
-          })}
-        </div>
-      )}
-      {collapsible && (
-        <button
-          type="button"
-          className="mp-schedmsg__setmore"
-          aria-expanded={detailOpen}
-          onClick={() => setDetailOpen((v) => !v)}
-          data-testid={`${p}-detail-toggle`}
-        >
-          {detailOpen ? detailHideLabel : detailShowLabel}
-        </button>
-      )}
-      {gridOpen && (
-        <div
-          className={`mp-schedmsg__setgrid mp-schedmsg__setgrid--${name}`}
-          data-testid={`${p}-grid`}
-        >
-          {options.map((o) => (
-            <label key={o} className="mp-schedmsg__setbox">
-              <input
-                type="checkbox"
-                checked={values.includes(o)}
-                onChange={() => onChange(toggleIn(values, o))}
-                data-testid={`${p}-${o}`}
-              />
-              <span>{o}</span>
-            </label>
-          ))}
-        </div>
-      )}
+      <div
+        className={`mp-schedmsg__setgrid mp-schedmsg__setgrid--${name}`}
+        data-testid={`${p}-grid`}
+      >
+        {offered.map((o) => (
+          <label key={o} className="mp-schedmsg__setbox">
+            <input
+              type="checkbox"
+              checked={values.includes(o)}
+              onChange={() => onChange(toggleIn(values, o))}
+              data-testid={`${p}-${o}`}
+            />
+            <span>{o}</span>
+          </label>
+        ))}
+      </div>
     </div>
   );
 }
@@ -430,11 +421,25 @@ function ScheduleFields({
           )}
         </label>
       )}
-      {/* 自訂: the three sets ARE the schedule, so the single wall-clock
+      {/* 自訂: the four sets ARE the schedule, so the single wall-clock
           reading below is not rendered at all — a visible 時/分 pair the server
-          ignores would read as part of the choice. */}
+          ignores would read as part of the choice.
+
+          Order is largest unit first (月 → 號 → 點 → 分), so reading the four
+          headings downwards spells the same sentence the row summary prints. */}
       {values.cadence === "custom" && (
         <>
+          <NumberSetPicker
+            idPrefix={idPrefix}
+            name="months"
+            label={s.customMonthsLabel}
+            summary={msg.schedCustomMonths(values.customMonths)}
+            options={MONTHS_OF_YEAR}
+            values={values.customMonths}
+            onChange={(next) => onChange({ customMonths: next })}
+            selectAllLabel={s.customSelectAll}
+            clearLabel={s.customClear}
+          />
           <NumberSetPicker
             idPrefix={idPrefix}
             name="days"
@@ -462,20 +467,14 @@ function ScheduleFields({
             name="minutes"
             label={s.customMinutesLabel}
             summary={msg.schedCustomMinutes(values.customMinutes)}
-            options={MINUTES}
+            options={minuteOptions(values.customMinutes)}
             values={values.customMinutes}
             onChange={(next) => onChange({ customMinutes: next })}
-            steps={MINUTE_STEPS}
-            stepLabel={msg.schedMinuteStep}
-            detailShowLabel={s.customMinuteDetailShow}
-            // The generic collapse verb the message body already uses — the
-            // same action, and a second leaf saying 「收合」 would just be a word
-            // a theme could re-word in one place and not the other.
-            detailHideLabel={s.bodyCollapse}
             selectAllLabel={s.customSelectAll}
             clearLabel={s.customClear}
           />
-          {(values.customDays.length === 0 ||
+          {(values.customMonths.length === 0 ||
+            values.customDays.length === 0 ||
             values.customHours.length === 0 ||
             values.customMinutes.length === 0) && (
             <div
@@ -603,7 +602,12 @@ export function ScheduledMessagesCard({ memberId }: ScheduledMessagesCardProps) 
   // nothing on screen saying otherwise.
   function cadenceText(m: ScheduledMessage): string {
     if (m.cadence === "custom")
-      return msg.schedCustomSummary(m.customDays, m.customHours, m.customMinutes);
+      return msg.schedCustomSummary(
+        m.customMonths,
+        m.customDays,
+        m.customHours,
+        m.customMinutes
+      );
     if (m.cadence === "weekly") return s.weeklyOn(weekdayNames[m.dayOfWeek] ?? "");
     if (m.cadence === "monthly") return s.monthlyOn(m.dayOfMonth);
     return s.cadenceDaily;

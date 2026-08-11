@@ -19,8 +19,9 @@
 
 ## 資料模型
 
-`scheduled_message`（建表 migration `00050_scheduled_message.sql`；`custom` 頻率那三欄與
-cadence CHECK 的移除見 `00052_scheduled_message_custom_cadence.sql`，T-49e7）
+`scheduled_message`（建表 migration `00050_scheduled_message.sql`；`custom` 頻率最初那三欄與
+cadence CHECK 的移除見 `00052_scheduled_message_custom_cadence.sql`，T-49e7；第四欄 `custom_months`
+與既有 `custom` 列一律回填成十二個月見 `00053_scheduled_message_custom_months.sql`，T-49e7 第二輪）
 
 | 欄位 | 型別 | 說明 |
 |---|---|---|
@@ -32,7 +33,7 @@ cadence CHECK 的移除見 `00052_scheduled_message_custom_cadence.sql`，T-49e7
 | `day_of_week` | INTEGER | weekly 用，0=週日 … 6=週六 |
 | `day_of_month` | INTEGER | monthly 用，**1–31**（見下方「不存在的日期怎麼辦」） |
 | `hour` / `minute` | INTEGER | 0–23 / 0–59。**`custom` 不讀這兩欄**，它們在 custom 的列上是沒人選過的 0/0 |
-| `custom_days` / `custom_hours` / `custom_minutes` | TEXT | `custom` 用（T-49e7）。正規化的逗號串（升冪、去重、無空白，`0,20,40`），非 `custom` 一律 `''`。三組的**交集**就是要送出的牆鐘讀數；**空集合在寫入就被拒（422）**，不讀成「全部」也不讀成「永遠不送」 |
+| `custom_months` / `custom_days` / `custom_hours` / `custom_minutes` | TEXT | `custom` 用（`custom_months` 是 T-49e7 第二輪加的第四欄，1–12）。正規化的逗號串（升冪、去重、無空白，`0,20,40`），非 `custom` 一律 `''`。四組的**交集**就是要送出的牆鐘讀數；**空集合在寫入就被拒（422）**，不讀成「全部」也不讀成「永遠不送」。⚠️ **「省略 = 全年」是請求層的規則、不是這一欄的**：handler 在「送來的是 `[]` 還是根本沒送」還分得出來的地方就把它解析掉，所以落到這一欄的每一個 `custom` 列都**明確列著自己的月份**，00053 也把既有列全部回填成十二個月 |
 | `timezone` | TEXT | IANA 時區名，預設 `Asia/Taipei` |
 | `status` | TEXT | `enabled` / `disabled`。**是撤銷開關、不是生命週期**；`DELETE` 才是永久移除 |
 | `last_fired_slot` | TEXT | 🔴 **已送出的那個時間槽的識別字串**（見下） |
@@ -145,14 +146,20 @@ Casey 的 180 分直接**超出**舊上限 ⇒ 那幾次是**靜靜被丟掉的*
   而整份 log 裡沒有任何一行與它有關）。
   **這條路在真實資料上不可達**：1850–2100 全歷史普查，「連續兩天都被刪掉」出現 **0 次**
   （tzdata 2025c，量測日 2026-08-10，598 zones）——所以它是**敘述缺陷，不是活的漏送**。
-  cadence 回看（daily 今天＋往回 3 天共 4 天；weekly 15 天；monthly 13 個月；custom 71 天）的用途是
+  cadence 回看（daily 今天＋往回 3 天共 4 天；weekly 15 天；monthly 13 個月）的用途是
   「往回找**這個時區真的有**的那個日期」，**不是**替漏送兜底。
   （各自的上限常數就在 `schedule_slot.go` 那幾行 `LookbackDays` / `LookbackMonths` 旁邊，
   各自寫著自己的最壞情形——上面這串數字要對號就去讀那裡，別回頭信這一行。）
+  ⚠️ **`custom` 已經不在這串裡了**（T-49e7 第二輪）：它沒有回看窗，改成從月×日集合**直接倒推
+  候選日期**（`mostRecentCustomSlot`）。理由見下方〈`custom` 沒有回看窗〉那節——一句話是「月」
+  這個維度讓兩次發生之間的間隔可以長到一年、甚至八年，任何以「天」為單位的窗都會對一個**真的
+  發生過**的槽回答「沒有槽」，而那就是 `mostRecentSlot` 對 `now` 不單調。
 
 - **目前會靜默丟掉的完整清單**（沒有 log、沒有錯誤，刻意如此）：
   1. 那個月沒有那一天（31 號遇到二月）——owner 裁定 `rc-aeef15360ab5` 選②，RFC 5545 語意。
-     `custom` 逐日判定，所以掉的只有那一天：`custom_days = [1,15,31]` 在二月照送 1 號與 15 號。
+     `custom` 逐日判定，所以掉的只有那一天：`custom_days = [1,15,31]`（月份含二月時）在二月照送
+     1 號與 15 號。第二輪的月集合是**同一個日期上多問的一個條件**，不是新的一種跳過：
+     `custom_months = [2]` × `custom_days = [29]` 只在有 29 號的二月成立，也就是閏年。
   2. 時區把那一整天刪掉（換日線移動，如 Pacific/Apia 2011-12-30）。四種頻率同一個判準
      （`firstReadingOn`）。
   3. 上面那條極端退路（連兩天都被刪；真實資料不可達）。
@@ -192,21 +199,45 @@ Casey 的 180 分直接**超出**舊上限 ⇒ 那幾次是**靜靜被丟掉的*
 而且**要往後挪就自己挪、不能撿 `time.Date` 正規化的結果**（Lord Howe 那例正確答案是 **02:30**，
 不是 Go 隨手給的 02:45）。
 
-## `custom`：三個明確集合的交集（T-49e7）
+## `custom`：四個明確集合的交集（T-49e7；第二輪加上「月」）
 
 owner 2026-08-11 於卡 `rc-4acc4013a0ae` 拍板選項①：多一種 `custom` 頻率，
-由 `custom_days` × `custom_hours` × `custom_minutes` **三組明確集合的交集**
+第一輪由 `custom_days` × `custom_hours` × `custom_minutes` **三組明確集合的交集**
 指名所有要送出的牆鐘讀數。立案理由是「每 20 分鐘」這種用法在既有三種頻率下**表達不出來**，
 唯一的替代做法是一天排七十二條排程。**既有三種頻率一字未動。**
+
+**第二輪加上第四個維度「月」**（`custom_months`，1–12，migration `00053`）：交集因此是
+`custom_months` × `custom_days` × `custom_hours` × `custom_minutes`，說得出「只在三月、六月、
+九月、十二月的 1 號與 15 號 09:00」這種季度排程——第一輪唯一的變通是每個月都送、叫收件者
+自己忽略。**下面這一節其餘每一條規則對第四組原樣適用**，只有一件事是它獨有的，寫在下一條。
 
 - **它是唯一一天可以送超過一次的頻率**，本文件其他地方凡是預設「一天一個讀數」的句子，
   都只描述那三種。
 - 🔴 **空集合是 422，不是「全部」也不是「永遠不送」**。那兩種讀法在畫面上分不出來，
   而它們差一個鍵。所以「每天」是**把每一天都列出來**，不是送一個特殊值。
+- 🔴 **交集為空同樣是 422，而這扇門是第二輪才開的**。四組全部非空、全部在範圍內，
+  交集仍然可以是空的：`months{2} × days{31}` 每一個值都合法，座艙畫成「每年 2 月 ·
+  每月 31 號」每個字都對，而它**一則都不會送**。第一輪造不出這種列——只有日集合時，
+  任何非空的日集合遲早會遇到有那一天的月份——**是「月」這個維度造出了空交集**。所以
+  它與上面那條空集合 422 是**同一條規則的兩扇門**（「永遠不送」不可以跟一條讀起來
+  再正常不過的排程只差一個鍵），不是新規則。
+  ⚠️ **界線畫在「不存在任何可行的 (月,日) 配對」，而且二月一律以 29 天計**：
+  `months{2} × days{29}` 是設計與 spec 都明文寫過的**刻意閏年排程**，必須活著。
+  判定在 `ValidateScheduledMessageCustomSets` 的最後（`scheduledMessageMonthDayFeasible`），
+  所以 create 與 PATCH 同時吃到——PATCH 是先組出整列才判，把一列本來正常的排程
+  **把月份收窄**到打不到的日子也一樣被擋。422 訊息要講得出**為什麼**（哪兩組、
+  最長的那個月幾天、最小的那個日是幾號、怎麼改），只丟一個代碼等於把問題留給使用者猜。
 - **`hour`／`minute`／`day_of_week`／`day_of_month` 一個都不讀**。連帶結果寫在下方 DTO 那節：
   `hour`／`minute` 因此從無條件必填改成**依 cadence 條件必填**。
-- **切走不清空**：一則排程從 `custom` 改成別的頻率時，三組集合**留著、只是不再被讀**，
-  切回來之前勾的還在（owner 卡 `rc-68c581070e55`）。
+- 🔴 **`custom_months` 是四組裡唯一「整個省略也有意義」的**（第二輪）：create（或把 cadence
+  切成 `custom` 而該列還沒有月份）的請求裡**整個沒有這個欄位** = 全年十二個月，因為第二輪之前
+  寫的 client 從來不送它、而它們的排程本來就是每個月都送；**明確送一個空陣列仍然是 422**，
+  與另外三組一模一樣。⚠️ 兩者是**兩個不同的請求**，這條規則只活在 handler ——資料庫那一欄
+  分不出它們，所以判定必須做在請求還是請求的地方（`00053` 的檔頭寫的是同一件事）。
+  ⚠️ **PATCH 上「省略」是普通的「這一欄不改」**，不是重新宣告十二個月。
+- **切走不清空**：一則排程從 `custom` 改成別的頻率時，四組集合**留著、只是不再被讀**，
+  切回來之前勾的還在（owner 卡 `rc-68c581070e55`）。`00053` 的回填因此**刻意比
+  `cadence = 'custom'` 寬**（`custom_days <> ''` 就算），否則切回來的那一刻月份是空的。
 
 ### 🔴 `custom`：一天多個讀數，所以 DST 的處置反過來
 
@@ -219,10 +250,73 @@ owner 2026-08-11 於卡 `rc-4acc4013a0ae` 拍板選項①：多一種 `custom` �
 於是兩次投遞算出同一個瞬間、渲染成同一個 slotKey，第二次被游標擋掉、**無聲併掉**。
 少送幾格看得見也測得出來，靜默合併看不見。
 
-⚠️ **秋季那一半刻意沒有做成對稱的**：牆鐘讀數重複出現時，`time.Date` 一律解析成**較早**的那個
-偏移，所以第二輪算出同一個瞬間、同一個 slotKey，游標擋下——那個讀數**送一次，不是兩次**。
-沒有在這裡改，是因為那個解析住在四種頻率共用的 `readBack`／`time.Date` 路徑上，動它會動到全部四種。
-改由測試釘住，讓它是一個有紀錄的決定而不是一個意外。
+⚠️ **秋季那一半刻意沒有做成對稱的**：牆鐘讀數重複出現時，`time.Date` 會**決定性地**挑出兩個瞬間
+其中之一，所以第二輪算出同一個瞬間、同一個 slotKey，游標擋下——那個讀數**送一次，不是兩次**。
+
+🔴 **它挑哪一個是實作定義的，不保證是較早的那個。** 實測：America/New_York 把 2024-11-03 01:30
+解析成**較早**的瞬間，而 Europe/London 與 Africa/Cairo 把自己那個重複讀數解析成**較晚**的；大致各半的
+時區各走一邊，所以「一律較早」對半個世界是假話。我們真正依賴的是它的**決定性**——一個牆鐘讀數重建出
+一個瞬間、產生一個 slotKey、游標拒絕第二次 ⇒ **只送一次**——而偏移的**方向刻意不釘**，因為那不是這段碼
+守得住的承諾。
+
+⚠️ **這一段原本寫的是「牆鐘讀數重複出現時，`time.Date` 一律解析成較早的那個偏移」，而
+`server/ocserverd/schedule_slot.go` 的 `customSlotOn` 檔頭寫的是相反的話（「NOT always the earlier
+offset — measured…」）：兩份權威直接矛盾。owner 2026-08-11 於卡 `rc-02dc12c09c4b` 裁定「以實測為準」，
+所以改的是這份設計文件、`schedule_slot.go` 那段註解一個字沒動。這句留著，是為了讓下一個人知道這裡曾經
+對不上、以及是誰拍的板——把它寫成從來沒有矛盾過，就是把下一次的重新發現藏起來。**
+
+行為沒有在這裡改，是因為那個解析住在四種頻率共用的 `readBack`／`time.Date` 路徑上，動它會動到全部四種。
+改由測試釘住（`TestCustomDeliversAnAmbiguousWallClockOnceInEveryZone` 在三個各走一邊的時區都只斷言
+「送一次」、刻意不斷言是哪一個瞬間），讓它是一個有紀錄的決定而不是一個意外。
+
+### 🔴 `custom` 沒有回看窗：候選日期由日曆倒推（T-49e7 第二輪）
+
+`daily`／`weekly`／`monthly` 都用「從今天往回走 N 步」找上一個已發生的槽，而那隻在
+**N 大於兩次發生之間的最長間隔**時才成立。第一輪的 `custom` 也是這個形狀
+（`customLookbackDays = 70`，推導自「31 Jan → 31 Mar 是 59 天」）。
+
+**第二輪的「月」把那個前提作廢了，而且是可觀測的，不是理論的**：`custom_months = [1]` ×
+`custom_days = [1]` 一年只發生一次，`[2] × [29]` 更可以隔**八年**（2096 → 2104，因為 2100
+不是閏年）。於是 `mostRecentSlot` 在 day+70 回報那個槽、在 day+71 回報「沒有槽」——
+**一則排程不會「取消發生」**，而 `mostRecentSlot` 的檔頭寫著整個功能靠它對 `now` 單調。
+
+所以 `custom` 這一支改成 **倒推**（`mostRecentCustomSlot`）：候選日期直接從 月 × 日 兩組集合
+的笛卡兒積由近而遠列舉，只問排程**自己講過**的日期。三件事刻意沒有動：
+
+- **每一個候選日期仍然交給 `customSlotOn` 解**（同一組參數、同一個 `notAfter`），
+  所以 DST 兩條裁定（被跳過的牆鐘讀數直接跳過不前搜；重複讀數只送一次）**由構造不變**。
+- **逐日判定不變**：月份沒有的那一天只掉那一天（`[1,15,31]` 在二月照送 1 號與 15 號），
+  永不 clamp 到月底。
+- **游標語意不變**：存已送出的槽字串，比的是解析後的時間。
+
+年份上界是**推導**不是餘裕：不是 (2,29) 的可行 (月,日) 對**每一年都存在**，所以上一次發生至多
+一年前（`customYearsBack = 2`，多的那一年是留給「那一年那個日期剛好被時區刪掉」）；只有 (2,29)
+可行時由格里曆決定，一般 4 年、跨世紀非閏年 8 年（`customLeapDayYearsBack = 9`）。
+**它仍然是一個截斷**，失效條件寫在常數旁邊：某個時區連續 `customYearsBack` 年把這則排程宣告的
+每一個日期都刪掉——今天沒有任何 tzdata 這樣做。
+
+⚠️ **可見的語意變化，誠實記下**：`[2] × [29]` 在非閏年的二月，第一輪回答「沒有槽」（窗搆不到
+上一個閏年），現在回答**上一個閏年的 2 月 29 日**——那個槽真的發生過。投遞結果不變（游標早就
+停在那一格），變的是 `mostRecentSlot` 不再對一件發生過的事說沒發生。
+`TestCustomMonthsComposeWithFebruaryAndLeapDays` 原本把前者釘成契約，已隨這一輪改寫。
+
+**升級路徑**：窗看不到的槽會讓 `currentSlotKey` 回空字串，而空游標的意思是「還沒送過、下一個
+tick 就送」。倒推法看得到那個舊槽 ⇒ 升級後第一個 tick 會補送一則可能一年前的訊息，違反
+「漏掉的槽不補送」。`migrations` 之外的 **Go migration `00054_reaim_custom_cursors.go`**
+（本 repo 第一支 Go migration，因為要算的是時區裡的牆鐘、SQL 算不出來）在升級當下把所有
+`cadence='custom'` 且游標為空的列重瞄成 `currentSlotKey(now)`。
+守衛 `TestMigration00054ReAimsEmptyCustomCursorsSoTheFirstTickSendsNothing` 走的是真的 tick。
+
+##### 護欄
+
+- `TestBackDerivedCustomSlotMatchesADayByDayScan`：倒推法 vs **逐日暴力掃 4200 天**（語意定義），
+  2000 組隨機語料 × 14 個時區，語料本身帶反空洞下限（多少組落在舊窗之外、閏日、月底、無解）。
+- `TestBackDerivedCustomSlotIsMonotonicInNow`：跨三年、每 12 小時一格，槽不得倒退、也不得消失。
+- `TestCustomFeasibilityPrecheckAgreesWithTheCalendar`：12 × 31 全部 (月,日) 對逐一與暴力掃對質
+  （可行性預檢與寫入面共用 `maxDaysInMonth`，二月算 29 天）。
+- `TestBackDerivedCustomSlotSpansTheCenturyLeapGap`：2096 → 2104 那八年。
+- 全 IANA 時區掃描（`scheduled_message_tzsweep_t49e7_test.go`）新增 `custom/jan-1-only` fixture：
+  **每一個取樣點都離它唯一那次發生好幾個月**，所以那個 fixture 的每一個答案都是只有倒推法給得出來的。
 
 ## 🔴 排程游標：存「時間槽」，不是存「上次執行時間」
 
@@ -230,7 +324,7 @@ owner 2026-08-11 於卡 `rc-4acc4013a0ae` 拍板選項①：多一種 `custom` �
 
 每個 tick：
 1. 依 `cadence` 讀它自己那組欄位（`daily`／`weekly`／`monthly` 讀 `day_of_*` + `hour` + `minute`；
-   `custom` 讀三組 `custom_*` 集合），一律在 `timezone` 裡，算出**現在之前最近的一個到期時間槽**。
+   `custom` 讀四組 `custom_*` 集合），一律在 `timezone` 裡，算出**現在之前最近的一個到期時間槽**。
    （欄位的分工由 `mostRecentSlot` 的 switch 決定，那裡每一支都寫著自己讀什麼。）
 2. 那個槽**若嚴格晚於** `last_fired_slot` 所指的那一刻 → 送出，然後把它寫回 `last_fired_slot`。
 3. 否則（相等、或更早）→ 什麼都不做。
@@ -365,15 +459,19 @@ jq '.components.schemas.ScheduledMessageCreateDTO             | {properties: (.p
 🔴 **`hour`／`minute` 自 T-49e7 起是「依 cadence 條件必填」，不再是無條件必填。**
 `daily`／`weekly`／`monthly` **一定要**送（少一個是 422，絕不折成午夜）；`custom` **不必**送，
 因為它根本不讀那兩欄——逼它送兩個伺服器會忽略的數字，就是這份 DTO 一直在拒絕的
-「required-but-ignored」歧義。同理，`custom` **一定要**送三組 `custom_*`（少一組或空集合是 422）。
+「required-but-ignored」歧義。同理，`custom` **一定要**送 `custom_days` / `custom_hours` /
+`custom_minutes`（少一組或空集合是 422）；**`custom_months` 是四組裡唯一可以整個省略的**
+（省略 = 全年，見上面〈`custom`：四個明確集合的交集〉那節；送空陣列照樣是 422）。
 - 代價講明白：「沒送 hour」從此是一個**表示得出來**的狀態，所以它必須被明文拒絕，
   而**這條規則在 OpenAPI schema 裡表達不出來**，沒有任何生成的 client 擋得住它。
-  ⚠️ **它散文寫在哪裡是不對稱的，別以為讀那一欄就讀得到**：三組 `custom_*` 的 description
-  各自寫了「REQUIRED when `cadence` is `custom`」，但 `hour` / `minute` 的 description
-  **對條件必填隻字未提**——那半只寫在 DTO 的總描述與 operation 描述裡。
+  ⚠️ **它散文寫在哪裡是不對稱的，別以為讀那一欄就讀得到**：`custom_days` / `custom_hours` /
+  `custom_minutes` 三欄的 description 各自寫了「REQUIRED when `cadence` is `custom`」
+  （`custom_months` 那一欄寫的是相反的那半：可以省略、省略 = 全年），
+  但 `hour` / `minute` 的 description **對條件必填隻字未提**——那半只寫在 DTO 的總描述與
+  operation 描述裡。
   `ValidateScheduledMessageWallClockPresence` 是唯一那道閘。
 - 一條**沒有時刻**的排程仍然沒有意義，這一點沒變；變的只是「時刻」對 `custom` 而言
-  是三組集合、不是兩個純量。
+  是四組集合、不是兩個純量。
 
 🔴 **「必填」不等於「擋住了」——`Local` 與空字串要另外明文拒絕（422）。**
 `time.LoadLocation` 對這兩個名字**都會成功**：`"Local"` 回**主機所在時區**、`""` 回 UTC。
@@ -442,7 +540,7 @@ jq '.components.schemas.ScheduledMessageCreateDTO             | {properties: (.p
 
 `PATCH` 動到**任何一個決定「什麼時候送」的欄位**時，游標重新種到**當下**那個槽——
 今天是 `cadence` / `day_of_week` / `day_of_month` / `hour` / `minute` /
-`custom_days` / `custom_hours` / `custom_minutes` / `timezone`
+`custom_months` / `custom_days` / `custom_hours` / `custom_minutes` / `timezone`
 （逐欄以 `api_scheduled_messages.go` 裡那個 `reAimed :=` 運算式為準，別回頭信這一行）。
 理由：中午把「每天 09:00」改成「每天 08:00」，不重新對準的話會**當場補送今天的 08:00**——
 使用者只是改了設定，不預期它立刻說話。
@@ -457,11 +555,11 @@ jq '.components.schemas.ScheduledMessageCreateDTO             | {properties: (.p
 只要那次存檔落在「槽剛過、下一個 tick 還沒到」的那 60 秒窗口裡，**那一則就被永久吞掉**，
 沒有錯誤、沒有 log、卡片上完全正常。所以現在是**拿新值跟 DB 裡的舊值逐欄比對**，真的變了才對準。
 
-🔴 **三組集合比的是「同一個選擇」，不是「同一串位元組」（T-49e7）。** 兩側都先正規化
+🔴 **四組集合比的是「同一個選擇」，不是「同一串位元組」（T-49e7；月份自第二輪起同一條規則）。** 兩側都先正規化
 （升冪、去重）再比，所以 `[20,0,40]` 與 `[0,20,40]` 移動不了游標。不這樣做的話，
 座艙那個「整張表單一起送回」的存檔會**單純因為勾選順序不同**而每按一次就重新對準，
 上一段那個 60 秒窗口的吞沒就會變成日常。正規化因此是**儲存層的不變式**、不是排版偏好——
-寫入端一律經 `canonicalIntSet`，系統裡沒有第二個人可以裸寫那三個欄位。
+寫入端一律經 `canonicalIntSet`，系統裡沒有第二個人可以裸寫那四個欄位。
 
 ⚠️ **「不動游標」是字面上的不動**：不重新對準的那條路，`UPDATE` 語句裡連
 `last_fired_slot` / `last_fired_ts` 都沒有。把讀出來的原值再寫回去**不等於不動**——

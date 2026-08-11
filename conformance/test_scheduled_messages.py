@@ -8,7 +8,13 @@ the spec's prose:
     `cadence` is `custom`, and an EMPTY set is a 422 rather than a silent "all"
     or a silent "never" — those two readings sit one keystroke apart and are
     indistinguishable on screen;
-  * their ranges (1-31 / 0-23 / 0-59) are enforced server-side;
+  * `custom_months` (round 2) is the fourth intersected set and the ONE that may
+    be OMITTED — an absent field means all twelve months, which is what keeps
+    every client written before the field working unchanged. An explicit `[]` is
+    still a 422: absent and empty are different requests and get opposite
+    answers, and only the absent one is a shape a slipped keystroke cannot
+    produce;
+  * their ranges (1-12 / 1-31 / 0-23 / 0-59) are enforced server-side;
   * `hour`/`minute` are required for `daily`/`weekly`/`monthly` and optional
     for `custom` — they left the unconditional required list so a `custom`
     schedule need not send two values it never reads.
@@ -89,7 +95,9 @@ def test_custom_accepts_the_three_sets_without_hour_or_minute(
     assert got["hour"] == 0 and got["minute"] == 0
 
 
-@pytest.mark.parametrize("field", ["custom_days", "custom_hours", "custom_minutes"])
+@pytest.mark.parametrize(
+    "field", ["custom_months", "custom_days", "custom_hours", "custom_minutes"]
+)
 def test_custom_refuses_an_empty_set(client, owner_token, recipient, field):
     """An empty set is a 422, per set, one case each.
 
@@ -105,11 +113,17 @@ def test_custom_refuses_an_empty_set(client, owner_token, recipient, field):
 
 @pytest.mark.parametrize("field", ["custom_days", "custom_hours", "custom_minutes"])
 def test_custom_refuses_an_omitted_set(client, owner_token, recipient, field):
-    """Omitting a set is the same refusal as sending an empty one.
+    """Omitting one of the three REQUIRED sets is the same refusal as sending an
+    empty one.
 
-    They are one requirement, not two: the schema marks all three optional
-    (they are ignored by every other cadence), so only the server can tell a
-    caller that `custom` needs them.
+    They are one requirement, not two: the schema marks them optional (they are
+    ignored by every other cadence), so only the server can tell a caller that
+    `custom` needs them.
+
+    🔴 `custom_months` is deliberately NOT in this list — omitting it is legal
+    and means all twelve months. Adding it here would be a refusal that breaks
+    every client written before round 2; the empty-set case above is where it
+    belongs.
     """
     fields = _custom()
     fields.pop(field)
@@ -123,6 +137,8 @@ def test_custom_refuses_an_omitted_set(client, owner_token, recipient, field):
 @pytest.mark.parametrize(
     "field,value",
     [
+        ("custom_months", [0]),
+        ("custom_months", [13]),
         ("custom_days", [0]),
         ("custom_days", [32]),
         ("custom_hours", [24]),
@@ -131,6 +147,7 @@ def test_custom_refuses_an_omitted_set(client, owner_token, recipient, field):
         # A legal value beside an illegal one: the whole set is judged, not
         # just its first element.
         ("custom_days", [1, 32]),
+        ("custom_months", [6, 13]),
     ],
 )
 def test_custom_refuses_out_of_range_set_values(
@@ -147,8 +164,8 @@ def test_custom_accepts_the_ends_of_every_range(client, owner_token, recipient):
     """The sentinel against a well-meaning tighten: day 31, hour 23 and minute
     59 are all schedulable, and so are day 1, hour 0 and minute 0."""
     r = _create(client, owner_token, recipient,
-                **_custom(custom_days=[1, 31], custom_hours=[0, 23],
-                          custom_minutes=[0, 59]))
+                **_custom(custom_months=[1, 12], custom_days=[1, 31],
+                          custom_hours=[0, 23], custom_minutes=[0, 59]))
     assert r.status_code == 200, f"boundary values must be accepted: {r.status_code} {r.text}"
 
 
@@ -173,7 +190,47 @@ def test_calendar_cadences_still_require_the_wall_clock(
     )
 
 
-def test_the_three_sets_are_always_on_the_response(client, owner_token, recipient):
+def test_custom_months_omitted_means_every_month(client, owner_token, recipient):
+    """The one asymmetry against the other three sets, and the reason round 2
+    did not break anyone.
+
+    A client written before `custom_months` sends a body with no month field at
+    all — `_FULL_SETS` above is that body, verbatim. Its schedules already meant
+    "every month", so the server must accept the create AND land all twelve
+    months explicitly. Landing an empty set instead would arm a schedule that
+    can never fire again, with no error, no log line and a card that reads
+    normally.
+    """
+    assert "custom_months" not in _FULL_SETS, (
+        "the pre-round-2 fixture must not name months, or this test proves nothing"
+    )
+    r = _create(client, owner_token, recipient, **_custom())
+    assert r.status_code == 200, (
+        f"a create with no custom_months must be accepted, got {r.status_code} {r.text}"
+    )
+    assert r.json()["custom_months"] == list(range(1, 13)), (
+        f"an omitted custom_months landed as {r.json()['custom_months']!r}, "
+        "want every month listed explicitly"
+    )
+
+
+def test_custom_months_stated_are_stored_as_given(client, owner_token, recipient):
+    """The positive control for the test above: a stated month set is NOT
+    widened to all twelve.
+
+    Without this, "omitted means all twelve" would also pass on a server that
+    ignores the field entirely.
+    """
+    r = _create(client, owner_token, recipient,
+                **_custom(custom_months=[9, 3, 12, 3]))
+    assert r.status_code == 200, r.text
+    assert r.json()["custom_months"] == [3, 9, 12], (
+        f"stated months came back as {r.json()['custom_months']!r}, "
+        "want the canonical [3, 9, 12] — sorted, deduplicated, and not widened"
+    )
+
+
+def test_the_four_sets_are_always_on_the_response(client, owner_token, recipient):
     """Present for EVERY cadence, as an honest-empty array.
 
     A field that appears only sometimes forces every reader to distinguish
@@ -184,6 +241,6 @@ def test_the_three_sets_are_always_on_the_response(client, owner_token, recipien
                 cadence="daily", hour=9, minute=0)
     assert r.status_code == 200, r.text
     got = r.json()
-    for field in ("custom_days", "custom_hours", "custom_minutes"):
+    for field in ("custom_months", "custom_days", "custom_hours", "custom_minutes"):
         assert field in got, f"{field} is absent from a daily schedule's response"
         assert got[field] == [], f"{field} is {got[field]!r} on a daily schedule, want []"

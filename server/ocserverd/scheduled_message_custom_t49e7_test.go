@@ -8,8 +8,15 @@ package main
 // DROPPED, never searched forward, because searching forward lands on a reading
 // already in the set and two deliveries merge into one without a word), and the
 // autumn one pins the behaviour that is NOT changed (an ambiguous reading
-// resolves to the earlier offset, so the second pass delivers nothing) so that
-// it stays a recorded decision rather than an accident somebody later "fixes".
+// resolves DETERMINISTICALLY to one of its two instants, so the second pass
+// produces the same slotKey and delivers nothing) so that it stays a recorded
+// decision rather than an accident somebody later "fixes".
+//
+// ⚠️ 2026-08-11: this header used to say "resolves to the EARLIER offset". That
+// is false for about half the zones (Europe/London and Africa/Cairo resolve to
+// the LATER one — measured; see customSlotOn's header and the test at the foot
+// of this file, which deliberately asserts ONCE and never WHICH). Only the
+// wording changed here; no assertion in this file was touched.
 
 import (
 	"fmt"
@@ -67,7 +74,8 @@ func TestEveryCadenceInTheClosedSetProducesASlot(t *testing.T) {
 		ScheduledMessageCadenceMonthly: {Cadence: ScheduledMessageCadenceMonthly,
 			DayOfMonth: 1, Hour: 9, Minute: 0, Timezone: "Asia/Taipei"},
 		ScheduledMessageCadenceCustom: {Cadence: ScheduledMessageCadenceCustom,
-			CustomDays: intRange(1, 31), CustomHours: intRange(0, 23),
+			CustomMonths: intRange(1, 12),
+			CustomDays:   intRange(1, 31), CustomHours: intRange(0, 23),
 			CustomMinutes: []int{0, 20, 40}, Timezone: "Asia/Taipei"},
 	}
 	if len(scheduledMessageCadences) == 0 {
@@ -118,6 +126,19 @@ func TestScheduledMessageRowSurvivesTheTableRebuild(t *testing.T) {
 		Cadence: ScheduledMessageCadenceMonthly, DayOfWeek: 6, DayOfMonth: 31,
 		Hour: 0, Minute: 0, Timezone: "America/New_York", Status: ScheduledMessageStatusEnabled,
 		LastFiredSlot: "2026-07-31T00:00-04:00", LastFiredTS: 1786000002.5, CreatedTS: 1785000002.25,
+	}, {
+		// 🔴 The four set columns are adjacent TEXT columns holding the same
+		// shape of value, so a transposition between any two of them survives
+		// every test that writes and reads one field. The four sets below are
+		// therefore pairwise DISJOINT and each is illegal in the others' range
+		// where possible — months [11] is not a legal hour set member's
+		// neighbour by accident, and reading months back as [7] names the swap.
+		ID: "sch-rt-custom", MemberID: "mira", Label: "custom label", Body: "custom body",
+		Cadence: ScheduledMessageCadenceCustom, DayOfWeek: 2, DayOfMonth: 9,
+		CustomMonths: []int{3, 11}, CustomDays: []int{22, 28},
+		CustomHours: []int{7, 19}, CustomMinutes: []int{35, 55},
+		Hour: 0, Minute: 0, Timezone: "Europe/London", Status: ScheduledMessageStatusEnabled,
+		LastFiredSlot: "2026-03-22T07:35+00:00", LastFiredTS: 1786000003.5, CreatedTS: 1785000003.25,
 	}}
 	for _, want := range rows {
 		t.Run(want.Cadence, func(t *testing.T) {
@@ -148,7 +169,8 @@ func TestCustomSetsRoundTripInCanonicalForm(t *testing.T) {
 	sm := ScheduledMessage{
 		ID: "sch-canon", MemberID: "mira", Body: "tick",
 		Cadence: ScheduledMessageCadenceCustom, DayOfMonth: 1,
-		CustomDays: []int{31, 1, 15, 1}, CustomHours: []int{9, 0, 9},
+		CustomMonths: []int{12, 3, 12, 1},
+		CustomDays:   []int{31, 1, 15, 1}, CustomHours: []int{9, 0, 9},
 		CustomMinutes: []int{20, 0, 40},
 		Timezone:      "Asia/Taipei", Status: ScheduledMessageStatusEnabled, CreatedTS: nowSecs(),
 	}
@@ -164,6 +186,7 @@ func TestCustomSetsRoundTripInCanonicalForm(t *testing.T) {
 		got   []int
 		want  []int
 	}{
+		{"custom_months", got.CustomMonths, []int{1, 3, 12}},
 		{"custom_days", got.CustomDays, []int{1, 15, 31}},
 		{"custom_hours", got.CustomHours, []int{0, 9}},
 		{"custom_minutes", got.CustomMinutes, []int{0, 20, 40}},
@@ -340,9 +363,10 @@ func TestCustomFiresEveryTwentyMinutes(t *testing.T) {
 	taipei := mustLoadZone(t, "Asia/Taipei")
 	sm := ScheduledMessage{
 		ID: "sch-20min", MemberID: "mira", Body: "twenty minutes",
-		Cadence:     ScheduledMessageCadenceCustom,
-		CustomDays:  intRange(1, 31),
-		CustomHours: intRange(0, 23), CustomMinutes: []int{0, 20, 40},
+		Cadence:      ScheduledMessageCadenceCustom,
+		CustomMonths: intRange(1, 12),
+		CustomDays:   intRange(1, 31),
+		CustomHours:  intRange(0, 23), CustomMinutes: []int{0, 20, 40},
 		Timezone: "Asia/Taipei",
 	}
 
@@ -406,8 +430,9 @@ func TestCustomSkipsADateTheMonthDoesNotHave(t *testing.T) {
 	_, _, api := scheduledStack(t)
 	sm := ScheduledMessage{
 		ID: "sch-31st", MemberID: "mira", Body: "month end",
-		Cadence:    ScheduledMessageCadenceCustom,
-		CustomDays: []int{31}, CustomHours: []int{9}, CustomMinutes: []int{0},
+		Cadence:      ScheduledMessageCadenceCustom,
+		CustomMonths: intRange(1, 12),
+		CustomDays:   []int{31}, CustomHours: []int{9}, CustomMinutes: []int{0},
 		Timezone: "UTC",
 	}
 	// Mid-February: the most recent occurrence is 31 JANUARY. Anything else means
@@ -442,8 +467,9 @@ func TestCustomSkipsADateTheMonthDoesNotHave(t *testing.T) {
 	_, _, api2 := scheduledStack(t)
 	many := ScheduledMessage{
 		ID: "sch-1-15-31", MemberID: "mira", Body: "three days",
-		Cadence:    ScheduledMessageCadenceCustom,
-		CustomDays: []int{1, 15, 31}, CustomHours: []int{9}, CustomMinutes: []int{0},
+		Cadence:      ScheduledMessageCadenceCustom,
+		CustomMonths: intRange(1, 12),
+		CustomDays:   []int{1, 15, 31}, CustomHours: []int{9}, CustomMinutes: []int{0},
 		Timezone: "UTC",
 	}
 	febStart := time.Date(2026, time.February, 1, 0, 0, 0, 0, time.UTC)
@@ -475,8 +501,9 @@ func TestCustomDropsAWallClockTheZoneSkipped(t *testing.T) {
 	newYork := mustLoadZone(t, "America/New_York")
 	sm := ScheduledMessage{
 		ID: "sch-spring", MemberID: "mira", Body: "in the gap",
-		Cadence:    ScheduledMessageCadenceCustom,
-		CustomDays: []int{8}, CustomHours: []int{2}, CustomMinutes: []int{0, 30},
+		Cadence:      ScheduledMessageCadenceCustom,
+		CustomMonths: intRange(1, 12),
+		CustomDays:   []int{8}, CustomHours: []int{2}, CustomMinutes: []int{0, 30},
 		Timezone: "America/New_York",
 	}
 	// Late on the transition day, the most recent occurrence is a MONTH earlier.
@@ -535,8 +562,9 @@ func TestCustomDeliversAnAmbiguousWallClockOnce(t *testing.T) {
 	_, _, api := scheduledStack(t)
 	sm := ScheduledMessage{
 		ID: "sch-autumn", MemberID: "mira", Body: "the repeated hour",
-		Cadence:    ScheduledMessageCadenceCustom,
-		CustomDays: []int{1}, CustomHours: []int{1}, CustomMinutes: []int{0},
+		Cadence:      ScheduledMessageCadenceCustom,
+		CustomMonths: intRange(1, 12),
+		CustomDays:   []int{1}, CustomHours: []int{1}, CustomMinutes: []int{0},
 		Timezone: "America/New_York",
 	}
 	start := time.Date(2026, time.November, 1, 0, 0, 0, 0, newYork)
@@ -653,8 +681,9 @@ func TestCustomDeliversAnAmbiguousWallClockOnceInEveryZone(t *testing.T) {
 			_, _, api := scheduledStack(t)
 			sm := ScheduledMessage{
 				ID: "sch-ambiguous-" + zone, MemberID: "mira", Body: "the repeated hour",
-				Cadence:    ScheduledMessageCadenceCustom,
-				CustomDays: []int{repeated.Day()}, CustomHours: []int{repeated.Hour()},
+				Cadence:      ScheduledMessageCadenceCustom,
+				CustomMonths: intRange(1, 12),
+				CustomDays:   []int{repeated.Day()}, CustomHours: []int{repeated.Hour()},
 				CustomMinutes: []int{0},
 				Timezone:      zone,
 			}
@@ -678,7 +707,7 @@ func TestCustomDeliversAnAmbiguousWallClockOnceInEveryZone(t *testing.T) {
 // TestPatchIgnoredFieldsNeverReAimTheCursor pins the other half of the re-aim
 // comparison: a field the row's cadence does not read cannot move the cursor.
 //
-// Red when: the three sets are compared regardless of cadence. A `daily`
+// Red when: the four sets are compared regardless of cadence. A `daily`
 // schedule PATCHed with `custom_days` — which the contract says is "ignored by
 // every other cadence" — then re-aims, and a re-aim landing between a slot
 // elapsing and the next tick swallows that delivery permanently, with no error,
@@ -705,6 +734,7 @@ func TestPatchIgnoredFieldsNeverReAimTheCursor(t *testing.T) {
 	}
 
 	for _, body := range []string{
+		`{"custom_months":[1,2]}`,
 		`{"custom_days":[1,2,3]}`,
 		`{"custom_hours":[7,8]}`,
 		`{"custom_minutes":[0,20,40]}`,
@@ -802,7 +832,7 @@ func TestPatchAwayFromCustomKeepsTheStoredSets(t *testing.T) {
 }
 
 // TestScheduledMessageDTOAlwaysCarriesTheSets pins the honest-empty wire shape:
-// the three fields are present for EVERY cadence.
+// the four fields are present for EVERY cadence.
 //
 // Red when: they are omitted (or null) for non-custom rows. A reader then cannot
 // tell "this schedule has no sets" from "this server does not know about sets",
@@ -815,7 +845,7 @@ func TestScheduledMessageDTOAlwaysCarriesTheSets(t *testing.T) {
 	if status != 200 {
 		t.Fatalf("create: %d %v", status, created)
 	}
-	for _, field := range []string{"custom_days", "custom_hours", "custom_minutes"} {
+	for _, field := range []string{"custom_months", "custom_days", "custom_hours", "custom_minutes"} {
 		got, present := created[field]
 		if !present {
 			t.Fatalf("%s is absent from a daily schedule's response", field)

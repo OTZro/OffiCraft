@@ -1,0 +1,70 @@
+-- +goose Up
+-- T-49e7 round 2 自訂頻率「月」: the FOURTH dimension of the `custom` cadence.
+--
+-- 00052 shipped `custom` as the intersection of three sets — day × hour ×
+-- minute. The owner then asked for a "which months" row as well, so the
+-- intersection becomes month × day × hour × minute and a schedule can say
+-- "the 1st and the 15th, 09:00, but only in March, June, September and
+-- December". Same storage shape as the other three: TEXT holding a canonical
+-- comma-joined list of decimal integers, sorted ascending and deduplicated
+-- ('3,6,9,12'), written only by canonicalIntSet.
+--
+-- 🔴 THE BACKFILL IS THE WHOLE RISK OF THIS MIGRATION, AND IT IS NOT COSMETIC.
+-- Every `custom` row that already exists was written with no notion of months,
+-- and every one of them MEANS "every month" — that is what a day×hour×minute
+-- intersection with no month filter does. A column added empty would make the
+-- month test fail for every existing row, and the failure is the silent kind
+-- this feature keeps producing: the schedule stops firing, forever, with no
+-- error, no log line, and a cockpit card that looks entirely normal. So the
+-- rows are backfilled to ALL TWELVE MONTHS, explicitly listed, which is the
+-- same explicit-set discipline the other three columns already follow — the
+-- meaning is unchanged and it is now written down rather than implied by an
+-- absence. migration_00053_scheduled_message_months_test.go pins that: every
+-- pre-existing row round-trips field for field across the upgrade AND computes
+-- the same set of slots it computed before.
+--
+-- The backfill deliberately reaches WIDER than `cadence = 'custom'`. A row
+-- SWITCHED AWAY from `custom` keeps its sets (owner ruling rc-68c581070e55,
+-- 2026-08-11) precisely so switching back does not lose the choice, so those
+-- rows carry a live day set under another cadence — and leaving their months
+-- empty would mean that switching back yields a schedule whose months were
+-- silently dropped. `custom_days <> ''` is exactly "this row carries a custom
+-- choice", live or parked, because an empty day set is refused at write time
+-- (domain.ValidateScheduledMessageCustomSets) and '' is therefore only ever
+-- the never-was-custom marker.
+--
+-- 🔴 An EMPTY set stays a 422 for `custom_months` too — "never" and "always"
+-- must not be one keystroke apart, the rule 00052's header states. The ONE
+-- asymmetry against the other three sets lives in the API layer, not here: an
+-- OMITTED `custom_months` on a create means all twelve, because a client
+-- written before this field never sends it and its schedules already meant
+-- every month. Omitted and empty are different requests and get different
+-- answers; nothing in this column can tell them apart, which is why the
+-- distinction is made where the request is still a request.
+--
+-- No CHECK, on this column or any other: the range 1-12 is guarded in Go
+-- (ValidateScheduledMessageCustomSets), the same place the day/hour/minute
+-- ranges and the cadence whitelist live since 00052 moved them there on the
+-- 00011/00016 template. A constant-DEFAULT ADD COLUMN, so no table rebuild.
+ALTER TABLE scheduled_message ADD COLUMN custom_months TEXT NOT NULL DEFAULT '';
+UPDATE scheduled_message
+   SET custom_months = '1,2,3,4,5,6,7,8,9,10,11,12'
+ WHERE cadence = 'custom' OR custom_days <> '';
+
+-- +goose Down
+-- Dropping the column loses the month choice, and the older binary reads the
+-- surviving row as month-less — which is exactly what it meant before this
+-- migration existed: every month. So a row that selected ALL twelve rolls back
+-- to an identical meaning, and a row that selected FEWER rolls back to firing
+-- MORE often than the owner asked.
+--
+-- ⚠️ FIRING MORE OFTEN IS THE LOSS THIS DOWN ACCEPTS, AND IT IS NOT THE SAME
+-- CHOICE 00052's Down MADE. 00052 disabled the rows it could not represent,
+-- because there the alternative was a delivery at an hour NOBODY CHOSE
+-- (midnight, from an unread hour column). Here the alternative is deliveries
+-- at readings the owner DID choose, merely in months they excluded — noise in
+-- an intended channel, not a message at an invented time. Stopping the
+-- schedule outright would be the heavier harm of the two, so this Down leaves
+-- the schedules running. It is still a loss, and it is silent: nothing records
+-- that a month filter used to exist. Do not read the rollback as lossless.
+ALTER TABLE scheduled_message DROP COLUMN custom_months;

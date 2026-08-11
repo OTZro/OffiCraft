@@ -1561,11 +1561,13 @@
   grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
-/* ---- 自訂頻率的三組集合 (T-49e7) ----
-   哪幾天 × 哪幾點 × 哪幾分 的交集就是送出時刻,所以三組長得一樣、只有格子數不同。
-   分鐘那組有 60 格:格線用 auto-fill + minmax 讓它在 320px 的面板寬也只會變成更
-   多列、不會橫向溢出,再用 max-height 把列數收在捲動盒裡,免得一組選項就把整張
-   面板撐到看不見底下的按鈕。 */
+/* ---- 自訂頻率的四組集合 (T-49e7 第二輪) ----
+   幾月 × 幾號 × 幾點 × 幾分 的交集就是送出時刻,所以四組長得一樣、只有格子數不同
+   (12 / 31 / 24 / 12+)。四組的格子都直接畫出來、沒有任何展開鈕:第一輪把分鐘的
+   60 格藏在「細部選擇」後面、上面擺一排間隔捷徑,owner 讀成「這東西只能設間隔」。
+   格線用 auto-fill + minmax 讓它在 320px 的面板寬也只會變成更多列、不會橫向溢出,
+   再用 max-height 把列數收在捲動盒裡,免得一組選項就把整張面板撐到看不見底下的
+   按鈕——最大的那一組(幾號,31 格)仍然需要它。 */
 .mp-schedmsg__setgroup {
   display: flex;
   flex-direction: column;
@@ -1600,43 +1602,9 @@
   color: var(--color-text-strong);
   overflow-wrap: anywhere;
 }
-.mp-schedmsg__quickrow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-.mp-schedmsg__quickbtn {
-  padding: 4px 10px;
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--color-text-muted);
-  font-size: 12px;
-  white-space: nowrap;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
-}
-.mp-schedmsg__quickbtn:hover {
-  color: var(--color-text);
-  border-color: var(--color-indigo);
-}
-.mp-schedmsg__quickbtn--on {
-  color: var(--color-on-indigo);
-  background: var(--color-indigo);
-  border-color: var(--color-indigo);
-}
-.mp-schedmsg__setmore {
-  align-self: flex-start;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--color-text-muted);
-  font-size: 12.5px;
-  transition: color 0.15s;
-}
-.mp-schedmsg__setmore:hover {
-  color: var(--color-text);
-}
+/* 第一輪的 __quickrow / __quickbtn / __setmore 三組規則已隨那排間隔捷徑與
+   「細部選擇」展開鈕一起刪除,不是暫時註解掉——留著的 CSS 會讓下一個人以為那個
+   控制項還在,而且沒有任何東西會因為它沒被用到而變紅。 */
 .mp-schedmsg__setgrid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(46px, 1fr));

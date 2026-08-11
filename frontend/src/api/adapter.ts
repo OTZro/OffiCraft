@@ -909,11 +909,12 @@ export interface WebhookCreateInput {
  * `monthly` reads `dayOfMonth`, `daily` reads neither — those three fire once a
  * day at the single wall-clock reading `hour`/`minute` names.
  *
- * `custom` (T-49e7) reads none of those four: it reads the three sets
- * `customDays`/`customHours`/`customMinutes` and fires at EVERY reading where
- * all three hold at once, so it is the only cadence that can fire more than
- * once a day. Each set is EXPLICIT — "every day" means listing every day; an
- * empty set is a 422, never a silent "all" and never a silent "never". */
+ * `custom` (T-49e7) reads none of those four: it reads the four sets
+ * `customMonths`/`customDays`/`customHours`/`customMinutes` and fires at EVERY
+ * reading where all four hold at once, so it is the only cadence that can fire
+ * more than once a day. Each set is EXPLICIT — "every day" means listing every
+ * day; an empty set is a 422, never a silent "all" and never a silent
+ * "never". */
 export type ScheduleCadence = "daily" | "weekly" | "monthly" | "custom";
 
 /** One recurring message bound to a member (view model of
@@ -939,6 +940,11 @@ export interface ScheduledMessage {
   dayOfMonth: number;
   hour: number;
   minute: number;
+  /** Months of the year `custom` fires on (1–12), sorted and deduplicated.
+   * Empty for every other cadence; never empty for `custom` — a row that
+   * reaches this view model always LISTS its months, including the whole year.
+   * (Absent-means-every-month is a rule of the CREATE/PATCH request only.) */
+  customMonths: number[];
   /** Days of the month `custom` fires on (1–31), sorted and deduplicated.
    * EMPTY for every other cadence, and never empty for `custom`. Membership is
    * decided day by day: a listed day the month lacks is dropped for THAT DAY
@@ -963,8 +969,9 @@ export interface ScheduledMessage {
  * UNCONDITIONALLY — a defaulted timezone would sooner or later be read as
  * "wherever the server happens to run". The rest is required or ignored
  * ACCORDING TO `cadence`: `daily`/`weekly`/`monthly` need `hour`+`minute`
- * (omitting either is a 422, never a silent midnight), `custom` needs the three
- * sets instead and never reads `hour`/`minute`/`dayOfWeek`/`dayOfMonth`. That
+ * (omitting either is a 422, never a silent midnight), `custom` needs the four
+ * sets instead — months being the one it may omit, see `customMonths` — and
+ * never reads `hour`/`minute`/`dayOfWeek`/`dayOfMonth`. That
  * is why `hour`/`minute` are optional HERE and required in practice for the
  * calendar cadences — a `custom` schedule must not have to send two values it
  * never reads. `label` omitted = no label; `dayOfWeek` omitted = 0;
@@ -977,6 +984,14 @@ export interface ScheduledMessageCreateInput {
   dayOfMonth?: number;
   hour?: number;
   minute?: number;
+  /** 🔴 The ONE set whose ABSENCE carries a meaning: omitted on a `custom`
+   * create means EVERY month (1–12), because a client written before round 2
+   * never sends it and its schedules always did fire every month. An
+   * explicitly EMPTY array is still a 422 — "never fires" and "always fires"
+   * may not be one keystroke apart. So `undefined` and `[]` are two different
+   * requests here, and nothing between this type and the wire may collapse
+   * them. */
+  customMonths?: number[];
   /** REQUIRED (and non-empty) when `cadence` is `custom`; ignored otherwise. */
   customDays?: number[];
   customHours?: number[];
@@ -995,9 +1010,16 @@ export interface ScheduledMessageUpdate {
   dayOfMonth?: number;
   hour?: number;
   minute?: number;
-  /** Switching a schedule TO `custom` must supply all three sets in the SAME
-   * request unless the stored row already carries them; switching AWAY leaves
-   * them stored and unread, so switching back does not lose the choice. */
+  /** Switching a schedule TO `custom` must supply the day/hour/minute sets in
+   * the SAME request unless the stored row already carries them; switching
+   * AWAY leaves them stored and unread, so switching back does not lose the
+   * choice.
+   *
+   * `customMonths` is the exception, and it is the same exception as on
+   * create: omitting it on a switch-to-`custom` of a row that has never
+   * carried months means EVERY month, while omitting it on a row that already
+   * lists months means unchanged. `[]` remains a 422 either way. */
+  customMonths?: number[];
   customDays?: number[];
   customHours?: number[];
   customMinutes?: number[];

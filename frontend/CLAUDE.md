@@ -63,33 +63,83 @@ roster MemberCard 成員列**右側(flex 尾端)的紅色計數 badge**(>99 顯�
   `make test-frontend-ct`)。**但那不是拿掉 vitest 那半的理由**:兩層守的本來就
   不是同一件事(真顏色 vs 來源掃描),理由過期不等於守衛過期。
 
-## 定期訊息 · `custom` 頻率 = 三個 EXPLICIT 集合的交集(T-49e7)
+## 定期訊息 · `custom` 頻率 = 四個 EXPLICIT 集合的交集(T-49e7,第二輪加月)
 
-`cadence` 多一個 `custom`,配 `custom_days`(1–31)/`custom_hours`(0–23)/
-`custom_minutes`(0–59) 三個整數陣列;**三組的交集**就是送出的牆鐘時刻,所以它是唯一
-一天可以送超過一次的頻率。daily/weekly/monthly **一個字都沒動**。
+`cadence` 多一個 `custom`,配 `custom_months`(1–12)/`custom_days`(1–31)/
+`custom_hours`(0–23)/`custom_minutes`(0–59) 四個整數陣列;**四組的交集**就是送出的
+牆鐘時刻,所以它是唯一一天可以送超過一次的頻率。daily/weekly/monthly **一個字都沒動**。
 
 - 🔴 **空集合是伺服器的 422,不是「全部」也不是「永遠不送」**。所以「全選」= 把每一項
-  都列出來(31 / 24 / 60 個數字真的送上去),**不是**送一個特殊值。`BLANK_FORM` 的三組
+  都列出來(12 / 31 / 24 個數字真的送上去),**不是**送一個特殊值。`BLANK_FORM` 的四組
   刻意是**空的**:預設塞滿等於把一條沒人選過的排程放在按鈕旁邊一下就上線。
-- **前端也擋空集合**(`incomplete()`)。伺服器那道是後盾;讓人按了「建立」才知道,那個
-  形狀本身就是缺陷。護欄:`ScheduledMessagesCard.test.tsx` 的
-  「blocks a custom schedule with an empty set…」(mutant:拿掉那個 clause → **恰好紅 1 條**)。
+- 🔴 **交集為空也是 422,而且座艙擋不住它**:四組全部非空、全部在範圍內,交集仍然可以是
+  空的(`months{2}×days{31}`——每個值都合法、摘要畫成「每年 2 月 · 每月 31 號」每個字都對、
+  一則都不會送)。`incomplete()` 只看四組非不非空,**看不到這件事**,所以這一條純粹由伺服器
+  與 `mock.ts` 的 `requireAPossibleDate` 擋。⚠️ 二月一律以 **29** 天計:`months{2}×days{29}`
+  是刻意的閏年排程,必須放行——要在畫面上先攔的話,界線也只能畫在同一個地方。
+- 🔴 **`custom_months` 是四組裡唯一「省略也有意義」的**:請求裡**整個省略** = 全年
+  (第二輪之前的 client 從來不送這個欄位,而它們的排程本來就是每個月都送);明確傳
+  **空陣列**仍是 422。`undefined` 與 `[]` 是**兩個不同的請求**,從 `adapter.ts` 的型別
+  到 `http.ts` 的 body 組裝到 `mock.ts` 的 `resolveMockMonths` 一路不准塌成一個
+  ——路徑上任何一個 `?? []` 都會把每一條「舊形狀」的 create 變成伺服器拒收。
+  **回應面沒有這條規則**:server 在 handler 就把它解析掉,送出來的每一列都列出自己的
+  月份,所以 `mappers.ts` 的 `?? []` 只是 additive-optional 的地板,不是「省略 = 全年」。
+  ⚠️ **座艙自己永遠明確送月份**(`wirePayload`):畫面已經問過了,省略會讓「勾滿十二個」
+  與「根本沒被問」變成同一個請求。
+- **前端也擋空集合**(`incomplete()`,四組都要非空)。伺服器那道是後盾;讓人按了「建立」
+  才知道,那個形狀本身就是缺陷。護欄:`ScheduledMessagesCard.test.tsx` 的
+  「blocks a custom schedule with an empty set…」(月刻意排在最後一個才勾——它是 wire 上
+  可以省略的那一個,一個「順手」繼承了那個許可的表單會提早放行)。
 - 🔴 **列摘要 `cadenceText` 的 `custom` 分支不是裝飾**。它原本是 if-weekly /
   if-monthly / **else-daily**,所以少了那一支,一條一天送 72 次的排程會被畫成
-  「每天」,而且畫面上沒有任何東西承認這件事。護欄:同檔的
-  「states a custom schedule's own times in the list instead of drawing it as 每天」
-  (**帶一條 daily 對照列**,否則「跟每天不一樣」可能只是 fixture 的巧合;mutant:拿掉
-  那一支 → 紅 2 條,訊息直接印出 `'每天Asia/Taipei'`)。
+  「每天」。**第二輪多守一半:四組的任何組合都不可以被畫成「每天」**——一條
+  {3,6,9,12}×{1}×{9}×{0} 的季度排程,日/時/分那三組看起來再普通不過,只有月份說得出
+  它一年只送四次。護欄:同檔的「states a custom schedule's own times in the list
+  instead of drawing it as 每天」,**帶一條 daily 對照列 + 一條季度列**。
 - **`custom` 不讀 `hour`/`minute`/`day_of_week`/`day_of_month`**,所以那四個
-  **不上線**(`wirePayload`),列上也**不印**那個 `HH:mm` —— 送一個伺服器會忽略的讀數
-  正是 DTO 特地拿掉的 required-but-ignored 歧義。
-- **分鐘那組 60 格**:上排是常用間隔快捷(每 5/10/15/20/30 分,**展開成它指名的那些分鐘**
-  ——wire 上沒有「間隔」這種東西,不整除小時的間隔更不可能是),細部勾選預設收合。
-  版面護欄只有真瀏覽器答得出來:`visual-guards/scheduled-message-custom-sets.ct.spec.tsx`
-  在 320 / 900 兩個面板寬**量矩形**(面板橫向溢出、每個勾選框的實際 rect、格線高度、
-  收合前後的表單高度)。⚠️ **同一顆壞掉的 sheet 下,把那些斷言換成 class 名 + 數量,
-  6 條全綠**(實測)——這類守衛的鑑別力**全部**來自量到的幾何。
+  **不上線**(`wirePayload`),列上也**不印**那個 `HH:mm`。
+- 🔴 **四排的標籤是 owner 第二輪逐字選定的:「幾月」「幾號」「幾點」「幾分」**
+  (`customMonthsLabel` / `customDaysLabel` / `customHoursLabel` / `customMinutesLabel`)。
+  「月份／日期／小時／分鐘」那一組是**被否掉的建議**,不要「順手」改回去。
+- 🔴 **分鐘那組預設就是 0、5、10 … 55 十二格,沒有任何要展開的東西**。第一輪把 60 格
+  藏在「細部選擇」後面、上面擺一排「每 5/10/15/20/30 分」的間隔捷徑,owner 因此讀成
+  「這東西只能設間隔、不能選第幾分」。**兩者都已刪除**(連同 `__quickrow` /
+  `__quickbtn` / `__setmore` 三組 CSS):那些捷徑指名的每一個分鐘都在這十二格裡,點數字
+  本身就到得了。
+  ⚠️ **這是「畫面提供什麼」變窄,不是 wire 變窄**——`custom_minutes` 兩側都還是 0–59
+  的閉集,契約一個字沒動。
+- 🔴 **既有值不可以被這十二格吃掉**:DB 裡有停在第 7 分的排程(第二輪之前建的、agent 建的、
+  或任何直接打 wire 的)。`minuteOptions()` 把不在十二格裡的既有值**多長一格**接上去,
+  而且 `NumberSetPicker` 把「提供哪些格子」**在 mount 當下凍結**(`const [offered] =
+  useState(options)`)——不凍結的話,把第 7 分取消勾選的那一瞬間那一格會從游標底下消失、
+  再也放不回去(**這是 CT 抓到的真缺陷,不是假想**)。護欄:同檔的
+  「keeps a stored minute the twelve cells do not offer and saves it back unchanged」
+  ——載入 → **什麼都不動** → 存檔 → 逐欄相同。
+- **摘要的收合規則(owner 第二輪裁定),三種形狀依序**:①整組全選 → 說人話
+  (每個月 / 每天 / 每小時);②**只有分鐘**做等間隔收合 → 「每 N 分鐘」(勾 0、20、40
+  就是每 20 分鐘)。判準在 `compose.ts::evenMinuteStep`:**必須從 0 開始、間距固定、
+  且整除 60**——{15,35,55} 不算(「每 20 分鐘」講不出偏移量),單一值也不算;
+  ③零散 → 最多列 4 個,其餘由「等,另 N 個」承載(**N 是沒被列出來的那幾個**,en 是
+  「and N more」)。⚠️ **不要縮回「等 N 個」**(owner 裁定):中文那個慣用法的 N 是**總數**
+  (「北京、上海等 3 個城市」= 共 3 個),所以「列了 4 個卻說 2 個」讀起來自相矛盾,而
+  英文的「and 2 more」毫無歧義——同一個 N 兩種語言兩種意思。「另」把它釘成餘數,兩語同義。⚠️ **月/日/時刻意不做間隔收合**,owner 給的例子只有分鐘,而日的
+  「每 7 天」跨月界根本不成立。
+- **版面護欄只有真瀏覽器答得出來**:`visual-guards/scheduled-message-custom-sets.ct.spec.tsx`
+  在 320 / 900 兩個面板寬**量矩形**——十二格分鐘在**預設狀態、不展開任何東西**就完整落在
+  自己的格線可視框內(320px 實測 grid clientHeight == scrollHeight == 118,4 列;900px
+  26,1 列)、每一格的中心點 `elementFromPoint` 回到自己、四組的 top 嚴格遞增、面板與
+  頁面橫向溢出皆 0。⚠️ **同一顆壞掉的 sheet 下,把那些斷言換成 class 名 + 數量會全綠**
+  ——這類守衛的鑑別力**全部**來自量到的幾何。
+- **mock ↔ server parity 有自己的護欄**:`api/mock.scheduled-messages.test.ts`
+  (省略 = 全年、`[]` = 422 且不半執行、1–12 範圍、非 custom 不套空集合規則、
+  切到 custom 不帶月份 = 全年、切離 custom 保留月份)。
+  ⚠️ **刻意沒測的**:月份改動是否 re-aim 游標——mock 的游標字串只由 hour/minute/timezone
+  推出、又沒有 tick loop,兩個分支的值逐位元組相同,寫了也只是看起來像覆蓋。那條由
+  server 側的 `TestPatchingMonthsReAimsTheCursorOnlyWhenTheyChange` 守。
+- ⚠️ **一處已知的 mock↔server 落差,本輪沒動**:非 custom 的 create,server 把送來的
+  `custom_days`/`custom_hours`/`custom_minutes` **逐字存下**(`intSliceOrNil`),
+  mock 則一律存成 `[]`。月份這一欄本輪照 server 做(走 resolver、非 custom 也存送來的值),
+  所以四組在 mock 裡目前**不對稱**。這是既有缺陷、不是本輪造成的,要修是另一件事。
 - **這個閉集在前端有很多份手抄副本,加值時每一份都要動**(漏一份就是一條路徑不認得新值,
   而**沒有任何東西會紅**)。刻意不在這裡列它們——清單會過期而不會變色。**當下的完整清單
   自己跑出來**(`api/` 之外也有,例如手寫的 `<option>` 選單):
@@ -98,6 +148,9 @@ roster MemberCard 成員列**右側(flex 尾端)的紅色計數 badge**(>99 顯�
     | grep -v '\.test\.\|/stories/\|/visual-guards/\|/generated/'
   ```
   `/generated/` 那幾筆由 spec 重生、不手改;其餘每一筆都要看(散文命中順手排掉)。
+- ⚠️ **改 `i18n/locales/*.ts` 的葉子會連帶重生 `server/ocserverd/message_keys_gen.go`**
+  (`npm run gen:msgkeys` 一次寫兩個檔,那份 Go 是主題包 wording 白名單的機械孿生、
+  標著 DO NOT EDIT)。它跟著 FE 改動一起 commit 是正常的,不是動到後端。
 
 ## 聊天未讀跳轉(M2 批次 19;LINE/FB 式,純 FE)
 ChatArea 兩個行為,皆不動 server:

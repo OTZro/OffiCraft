@@ -212,7 +212,15 @@ func assertJournalMode(db *sql.DB, want string) (got string, err error) {
 	return got, nil
 }
 
-// runMigrations applies every embedded goose migration (goose up) to db.
+// runMigrations applies every goose migration (goose up) to db.
+//
+// ⚠️ "Every migration" is NOT the same as "every file under migrations/". goose
+// also runs Go migrations registered through goose.AddNamedMigrationContext,
+// which live in this package because a Go migration cannot sit inside the
+// migrations directory (that directory is embedded as *.sql, and a .go file
+// there would be a package of its own). Find them with
+// `grep -rn AddNamedMigrationContext server/ocserverd` rather than by listing
+// migrations/, which no longer answers the question on its own.
 func runMigrations(db *sql.DB) error {
 	goose.SetBaseFS(embeddedMigrations)
 	if err := goose.SetDialect("sqlite3"); err != nil {

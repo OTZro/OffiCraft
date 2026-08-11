@@ -57,6 +57,7 @@ function mkSchedule(over: Partial<ScheduledMessage> = {}): ScheduledMessage {
     dayOfMonth: 1,
     hour: 9,
     minute: 0,
+    customMonths: [],
     customDays: [],
     customHours: [],
     customMinutes: [],
@@ -80,6 +81,7 @@ const createScheduledMessage = vi.fn(
       dayOfMonth: input.dayOfMonth ?? 1,
       hour: input.hour ?? 0,
       minute: input.minute ?? 0,
+      customMonths: input.customMonths ?? [],
       customDays: input.customDays ?? [],
       customHours: input.customHours ?? [],
       customMinutes: input.customMinutes ?? [],
@@ -195,8 +197,11 @@ const m = makeMessages(zh, "zh");
 /** The FULL sets. Spelled out because that is what the wire carries: "every
  * day" IS the list of every day, and an implementation that shipped a marker
  * instead would satisfy any assertion written the short way. */
+const ALL_MONTHS = Array.from({ length: 12 }, (_, i) => i + 1);
 const ALL_DAYS = Array.from({ length: 31 }, (_, i) => i + 1);
 const ALL_HOURS = Array.from({ length: 24 }, (_, i) => i);
+/** The minute cells the group offers by default: 0, 5, 10 … 55. */
+const DEFAULT_MINUTES = Array.from({ length: 12 }, (_, i) => i * 5);
 
 // Frozen clock for the last-sent assertions: 2026-08-10 10:00 local, with a
 // delivery the evening before.
@@ -586,7 +591,7 @@ describe("ScheduledMessagesCard", () => {
     expect(updateScheduledMessage.mock.calls[0][2].body).toBe(LONG_BODY);
   });
 
-  it("creates a custom-cadence schedule from the three sets and sends no wall-clock reading", async () => {
+  it("creates a custom-cadence schedule from the four sets and sends no wall-clock reading", async () => {
     const view = await renderOpenCard();
     fireEvent.click(await view.findByTestId("mp-schedmsg-add"));
     fireEvent.change(await view.findByTestId("mp-schedmsg-body-input"), {
@@ -595,16 +600,22 @@ describe("ScheduledMessagesCard", () => {
     fireEvent.change(await view.findByTestId("mp-schedmsg-cadence"), {
       target: { value: "custom" },
     });
+    fireEvent.click(view.getByTestId("mp-schedmsg-custom-months-all"));
     fireEvent.click(view.getByTestId("mp-schedmsg-custom-days-all"));
     fireEvent.click(view.getByTestId("mp-schedmsg-custom-hours-all"));
-    // The shortcut is not a value on the wire: it expands to the explicit
-    // minutes it names.
-    fireEvent.click(view.getByTestId("mp-schedmsg-custom-minutes-step-20"));
+    // Minutes are ticked one cell at a time — there is no interval shortcut to
+    // press any more, and "every 20 minutes" is what those three cells MEAN.
+    for (const min of [0, 20, 40])
+      fireEvent.click(view.getByTestId(`mp-schedmsg-custom-minutes-${min}`));
     fireEvent.click(view.getByTestId("mp-schedmsg-create"));
 
     await waitFor(() => expect(createScheduledMessage).toHaveBeenCalledTimes(1));
     const input = createScheduledMessage.mock.calls[0][1];
     expect(input.cadence).toBe("custom");
+    // 🔴 Months ride EXPLICITLY. Omitting them would mean "every month" on the
+    // wire too, so an implementation that never sent them would look right on
+    // this fixture — the assertion is that the form STATES what it was asked.
+    expect(input.customMonths).toEqual(ALL_MONTHS);
     expect(input.customDays).toEqual(ALL_DAYS);
     expect(input.customHours).toEqual(ALL_HOURS);
     expect(input.customMinutes).toEqual([0, 20, 40]);
@@ -636,26 +647,124 @@ describe("ScheduledMessagesCard", () => {
     fireEvent.click(submit);
     expect(createScheduledMessage).not.toHaveBeenCalled();
 
-    // TWO of three is still empty: the block is about the INTERSECTION, so it
-    // must not lift until every set has something in it.
+    // THREE of four is still empty: the block is about the INTERSECTION, so it
+    // must not lift until every set has something in it. Months are checked
+    // last on purpose — they are the set the wire lets a caller omit, and a
+    // form that inherited that permission would let this submit early.
     fireEvent.click(view.getByTestId("mp-schedmsg-custom-days-all"));
     fireEvent.click(view.getByTestId("mp-schedmsg-custom-hours-all"));
+    fireEvent.click(view.getByTestId("mp-schedmsg-custom-minutes-0"));
     expect(
       (view.getByTestId("mp-schedmsg-create") as HTMLButtonElement).disabled
     ).toBe(true);
 
     // The other direction — a block that never lifted would satisfy everything
-    // above on its own. The 60 minute boxes ship collapsed behind the shortcut
-    // row, so reaching one is the two-step it is on screen.
-    expect(view.queryByTestId("mp-schedmsg-custom-minutes-grid")).toBeNull();
-    fireEvent.click(view.getByTestId("mp-schedmsg-custom-minutes-detail-toggle"));
-    fireEvent.click(view.getByTestId("mp-schedmsg-custom-minutes-0"));
+    // above on its own.
+    fireEvent.click(view.getByTestId("mp-schedmsg-custom-months-1"));
     expect(
       (view.getByTestId("mp-schedmsg-create") as HTMLButtonElement).disabled
     ).toBe(false);
     expect(view.queryByTestId("mp-schedmsg-custom-empty-hint")).toBeNull();
     fireEvent.click(view.getByTestId("mp-schedmsg-create"));
     await waitFor(() => expect(createScheduledMessage).toHaveBeenCalledTimes(1));
+  });
+
+  // 🔴 Round 1 put the sixty minute boxes behind a 「細部選擇」 disclosure with a
+  // row of 每 5/10/15/20/30 分 shortcut buttons standing in for them, and the
+  // owner read the group as "intervals only — I cannot choose WHICH minute".
+  // Both are gone: the twelve cells are the control, reachable with no
+  // intermediate click. (This is the DOM half; whether they are actually
+  // VISIBLE and hittable is geometry, and only
+  // visual-guards/scheduled-message-custom-sets.ct.spec.tsx can answer it.)
+  it("offers minute 0, 5 … 55 with nothing to expand and no interval shortcut to press", async () => {
+    const view = await renderOpenCard();
+    fireEvent.click(await view.findByTestId("mp-schedmsg-add"));
+    fireEvent.change(await view.findByTestId("mp-schedmsg-cadence"), {
+      target: { value: "custom" },
+    });
+
+    const grid = view.getByTestId("mp-schedmsg-custom-minutes-grid");
+    const cells = within(grid).getAllByRole("checkbox");
+    expect(cells).toHaveLength(DEFAULT_MINUTES.length);
+    expect(
+      DEFAULT_MINUTES.map((min) =>
+        Number(
+          view
+            .getByTestId(`mp-schedmsg-custom-minutes-${min}`)
+            .closest("label")!
+            .textContent!.trim()
+        )
+      )
+    ).toEqual(DEFAULT_MINUTES);
+    // The two controls that made the group read as interval-only are gone, in
+    // BOTH forms — the create form here and every row editor.
+    expect(
+      view.queryByTestId("mp-schedmsg-custom-minutes-detail-toggle")
+    ).toBeNull();
+    for (const step of [5, 10, 15, 20, 30])
+      expect(
+        view.queryByTestId(`mp-schedmsg-custom-minutes-step-${step}`)
+      ).toBeNull();
+
+    // …and a single cell really is one pick, not an interval: ticking 20 alone
+    // sends exactly [20].
+    fireEvent.change(await view.findByTestId("mp-schedmsg-body-input"), {
+      target: { value: "每小時的第 20 分" },
+    });
+    fireEvent.click(view.getByTestId("mp-schedmsg-custom-months-all"));
+    fireEvent.click(view.getByTestId("mp-schedmsg-custom-days-all"));
+    fireEvent.click(view.getByTestId("mp-schedmsg-custom-hours-all"));
+    fireEvent.click(view.getByTestId("mp-schedmsg-custom-minutes-20"));
+    fireEvent.click(view.getByTestId("mp-schedmsg-create"));
+    await waitFor(() => expect(createScheduledMessage).toHaveBeenCalledTimes(1));
+    expect(createScheduledMessage.mock.calls[0][1].customMinutes).toEqual([20]);
+  });
+
+  // 🔴 THE ROUND-TRIP. `custom_minutes` is still the closed set 0-59 on the
+  // wire — round 2 narrowed what the GRID OFFERS, not what the wire accepts —
+  // so rows sitting on minute 7 exist and must not be quietly rewritten by a
+  // form that has no cell for them. The owner opens the editor to change
+  // something else, or nothing at all, and saves: every value has to come back
+  // byte-identical.
+  it("keeps a stored minute the twelve cells do not offer and saves it back unchanged", async () => {
+    const STORED_MINUTES = [7, 30];
+    store = [
+      mkSchedule({
+        label: "第 7 分",
+        cadence: "custom",
+        customMonths: [2, 5],
+        customDays: [1, 9],
+        customHours: [8],
+        customMinutes: STORED_MINUTES,
+      }),
+    ];
+    const target = store[0];
+    const view = await renderOpenCard();
+    const p = `mp-schedmsg-edit-${target.id}`;
+    fireEvent.click(await view.findByTestId(`mp-schedmsg-edit-${target.id}`));
+
+    // It is ON SCREEN and ticked — an off-grid value that rendered nowhere
+    // would be invisible right up to the moment it disappeared from the wire.
+    const seven = view.getByTestId(`${p}-custom-minutes-7`) as HTMLInputElement;
+    expect(seven.checked).toBe(true);
+    // …in its sorted place among the twelve, as a THIRTEENTH cell rather than
+    // in place of one of them.
+    const cells = within(view.getByTestId(`${p}-custom-minutes-grid`))
+      .getAllByRole("checkbox")
+      .map((c) => Number(c.getAttribute("data-testid")!.split("-").pop()));
+    expect(cells).toEqual([0, 5, 7, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]);
+
+    // Touch NOTHING, save.
+    fireEvent.click(view.getByTestId(`mp-schedmsg-edit-save-${target.id}`));
+    await waitFor(() => expect(updateScheduledMessage).toHaveBeenCalledTimes(1));
+    const patch = updateScheduledMessage.mock.calls[0][2];
+    expect(patch.customMinutes).toEqual(STORED_MINUTES);
+    expect(patch.customMonths).toEqual([2, 5]);
+    expect(patch.customDays).toEqual([1, 9]);
+    expect(patch.customHours).toEqual([8]);
+    expect(patch.cadence).toBe("custom");
+    expect(patch.body).toBe(target.body);
+    expect(patch.timezone).toBe(target.timezone);
   });
 
   it("selects and clears a whole set, and says in words what is selected", async () => {
@@ -689,7 +798,29 @@ describe("ScheduledMessagesCard", () => {
       (view.getByTestId("mp-schedmsg-custom-hours-0") as HTMLInputElement).checked
     ).toBe(false);
 
-    // …and 清除 hit one group, not all three.
+    // The months group is the newest one and gets the same two buttons: 全選
+    // lists all twelve (never an omitted-means-all shorthand), 清除 empties it
+    // back to the state the submit guard refuses.
+    fireEvent.click(view.getByTestId("mp-schedmsg-custom-months-all"));
+    expect(
+      view.getByTestId("mp-schedmsg-custom-months-summary").textContent
+    ).toBe(m.schedCustomMonths(ALL_MONTHS));
+    for (const mo of ALL_MONTHS) {
+      expect(
+        (view.getByTestId(`mp-schedmsg-custom-months-${mo}`) as HTMLInputElement)
+          .checked
+      ).toBe(true);
+    }
+    fireEvent.click(view.getByTestId("mp-schedmsg-custom-months-clear"));
+    expect(
+      view.getByTestId("mp-schedmsg-custom-months-summary").textContent
+    ).toBe(s.customNone);
+    expect(
+      (view.getByTestId("mp-schedmsg-custom-months-1") as HTMLInputElement)
+        .checked
+    ).toBe(false);
+
+    // …and 清除 hit one group, not all four.
     fireEvent.click(view.getByTestId("mp-schedmsg-custom-days-all"));
     fireEvent.click(view.getByTestId("mp-schedmsg-custom-hours-clear"));
     expect(view.getByTestId("mp-schedmsg-custom-days-summary").textContent).toBe(
@@ -697,7 +828,7 @@ describe("ScheduledMessagesCard", () => {
     );
   });
 
-  it("names each of the three sets as a group instead of leaving 60 bare checkboxes", async () => {
+  it("names each of the four sets as a group instead of leaving bare checkboxes", async () => {
     const view = await renderOpenCard();
     fireEvent.click(await view.findByTestId("mp-schedmsg-add"));
     fireEvent.change(await view.findByTestId("mp-schedmsg-cadence"), {
@@ -705,10 +836,15 @@ describe("ScheduledMessagesCard", () => {
     });
 
     // Read the way a screen reader does: by accessible name, not by class. The
-    // minute grid is sixty checkboxes labelled 0…59; without a named group there
-    // is nothing on the page saying they are minutes, and the days and hours
-    // grids sound the same.
+    // day grid is thirty-one checkboxes labelled 1…31; without a named group
+    // there is nothing on the page saying they are days, and the months, hours
+    // and minutes grids sound the same.
+    //
+    // The labels are the owner's own words (round 2) and are asserted through
+    // the dictionary, so re-wording them stays a one-place edit — but the four
+    // being DISTINCT is checked below, which is what a copy-paste would break.
     for (const [name, label] of [
+      ["months", s.customMonthsLabel],
       ["days", s.customDaysLabel],
       ["hours", s.customHoursLabel],
       ["minutes", s.customMinutesLabel],
@@ -717,11 +853,19 @@ describe("ScheduledMessagesCard", () => {
       expect(group).toBe(view.getByTestId(`mp-schedmsg-custom-${name}`));
     }
 
-    // …and the three names are distinct, so "named" is not one name three times.
+    // …and the four names are distinct, so "named" is not one name four times.
     const named = view
       .getAllByRole("group")
       .map((g) => g.getAttribute("aria-labelledby"));
     expect(new Set(named).size).toBe(named.length);
+    expect(
+      new Set([
+        s.customMonthsLabel,
+        s.customDaysLabel,
+        s.customHoursLabel,
+        s.customMinutesLabel,
+      ]).size
+    ).toBe(4);
   });
 
   it("edits a custom schedule from its stored sets and shows the result without a remount", async () => {
@@ -729,6 +873,7 @@ describe("ScheduledMessagesCard", () => {
       mkSchedule({
         label: "佇列巡檢",
         cadence: "custom",
+        customMonths: ALL_MONTHS,
         customDays: ALL_DAYS,
         customHours: ALL_HOURS,
         customMinutes: [0, 30],
@@ -744,24 +889,33 @@ describe("ScheduledMessagesCard", () => {
     expect(view.getByTestId(`${p}-custom-minutes-summary`).textContent).toBe(
       m.schedCustomMinutes([0, 30])
     );
-    fireEvent.click(view.getByTestId(`${p}-custom-minutes-detail-toggle`));
+    expect(view.getByTestId(`${p}-custom-months-summary`).textContent).toBe(
+      m.schedCustomMonths(ALL_MONTHS)
+    );
     expect(
       (view.getByTestId(`${p}-custom-minutes-30`) as HTMLInputElement).checked
     ).toBe(true);
 
-    fireEvent.click(view.getByTestId(`${p}-custom-minutes-step-15`));
+    // Narrow the year to the quarters, and fill the hour out to every 15.
+    for (const mo of [1, 2, 4, 5, 7, 8, 10, 11])
+      fireEvent.click(view.getByTestId(`${p}-custom-months-${mo}`));
+    for (const min of [15, 45])
+      fireEvent.click(view.getByTestId(`${p}-custom-minutes-${min}`));
     fireEvent.click(view.getByTestId(`mp-schedmsg-edit-save-${target.id}`));
 
     await waitFor(() => expect(updateScheduledMessage).toHaveBeenCalledTimes(1));
     expect(updateScheduledMessage.mock.calls[0][2].customMinutes).toEqual([
       0, 15, 30, 45,
     ]);
+    expect(updateScheduledMessage.mock.calls[0][2].customMonths).toEqual([
+      3, 6, 9, 12,
+    ]);
     expect(updateScheduledMessage.mock.calls[0][2].hour).toBeUndefined();
 
     const row = await view.findByTestId(`mp-schedmsg-row-${target.id}`);
     expect(
       within(row).getByText(
-        m.schedCustomSummary(ALL_DAYS, ALL_HOURS, [0, 15, 30, 45])
+        m.schedCustomSummary([3, 6, 9, 12], ALL_DAYS, ALL_HOURS, [0, 15, 30, 45])
       )
     ).toBeTruthy();
   });
@@ -769,30 +923,51 @@ describe("ScheduledMessagesCard", () => {
   // 🔴 The list summary used to be if-weekly / if-monthly / else-daily. Without
   // a custom branch a schedule that fires 72 times a day is DRAWN as 「每天」,
   // with nothing on the row admitting it — the silent lie this case exists for.
+  // 🔴 Round 2 adds the second half: NO combination of the four sets may draw
+  // as 每天 either. A quarterly schedule whose day/hour/minute sets happen to be
+  // full is the shape that would slip through a branch that only looked at days.
   it("states a custom schedule's own times in the list instead of drawing it as 每天", async () => {
     store = [
       mkSchedule({ label: "真的每天", cadence: "daily" }),
       mkSchedule({
         label: "每 20 分",
         cadence: "custom",
+        customMonths: ALL_MONTHS,
         customDays: ALL_DAYS,
         customHours: ALL_HOURS,
         customMinutes: [0, 20, 40],
       }),
+      mkSchedule({
+        label: "每季一號",
+        cadence: "custom",
+        customMonths: [3, 6, 9, 12],
+        customDays: [1],
+        customHours: [9],
+        customMinutes: [0],
+      }),
     ];
-    const [daily, custom] = store;
+    const [daily, custom, quarterly] = store;
     const view = await renderOpenCard();
 
     const when = await view.findByTestId(`mp-schedmsg-when-${custom.id}`);
     expect(when.textContent).toContain(
-      m.schedCustomSummary(ALL_DAYS, ALL_HOURS, [0, 20, 40])
+      m.schedCustomSummary(ALL_MONTHS, ALL_DAYS, ALL_HOURS, [0, 20, 40])
     );
     // The daily row is the CONTROL: it proves 每天 is what a daily schedule
-    // really renders, so the custom row differing from it is a real difference
+    // really renders, so the custom rows differing from it is a real difference
     // and not an artefact of the fixture.
     const dailyWhen = await view.findByTestId(`mp-schedmsg-when-${daily.id}`);
     expect(dailyWhen.textContent).toContain(s.cadenceDaily);
     expect(when.textContent).not.toBe(dailyWhen.textContent);
+
+    // 🔴 The quarterly row is the one that catches a months-blind summary: it
+    // fires four times a YEAR, and a summary that ignored `customMonths` would
+    // print exactly what a schedule firing every single day prints.
+    const quarterWhen = await view.findByTestId(
+      `mp-schedmsg-when-${quarterly.id}`
+    );
+    expect(quarterWhen.textContent).toContain(m.schedCustomMonths([3, 6, 9, 12]));
+    expect(quarterWhen.textContent).not.toBe(dailyWhen.textContent);
 
     // custom reads no single wall-clock reading, so the row prints none — the
     // stored 09:00 belongs to a cadence this schedule is not on.

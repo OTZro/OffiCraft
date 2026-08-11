@@ -435,7 +435,7 @@ var scheduledMessageCadenceFields = map[string][]string{
 	ScheduledMessageCadenceDaily:   {"hour", "minute"},
 	ScheduledMessageCadenceWeekly:  {"day_of_week", "hour", "minute"},
 	ScheduledMessageCadenceMonthly: {"day_of_month", "hour", "minute"},
-	ScheduledMessageCadenceCustom:  {"custom_days", "custom_hours", "custom_minutes"},
+	ScheduledMessageCadenceCustom:  {"custom_months", "custom_days", "custom_hours", "custom_minutes"},
 }
 
 // scheduledMessageCadenceReads reports whether cadence reads field. A cadence
@@ -450,9 +450,32 @@ func scheduledMessageCadenceReads(cadence, field string) bool {
 	return false
 }
 
-// ValidateScheduledMessageCustomSets enforces the three explicit sets `custom`
+// allCustomMonths is the whole year, listed. It is what an OMITTED
+// `custom_months` resolves to (round 2, migrations/00053) and what the
+// migration backfilled every pre-existing `custom` row to.
+//
+// 🔴 It is a LISTED set, never a nil "means everything" sentinel. Every other
+// part of this feature reads an empty set as "the caller told us nothing", and
+// one column that read emptiness as "all twelve" would put the two meanings the
+// 422 exists to separate back into the same value.
+func allCustomMonths() []int {
+	out := make([]int, 12)
+	for i := range out {
+		out[i] = i + 1
+	}
+	return out
+}
+
+// ValidateScheduledMessageCustomSets enforces the four explicit sets `custom`
 // intersects (T-49e7). Applied ONLY when the cadence is `custom` — every other
 // cadence ignores these columns outright.
+//
+// 🔴 `custom_months` is judged here exactly like the other three: 1-12, and
+// EMPTY IS A 422. The rule an omitted `custom_months` gets — all twelve months
+// — is applied BEFORE this function, in the handler, where "the caller sent
+// []" and "the caller sent nothing" are still two different requests. By the
+// time a row arrives here it always lists its months, so this function never
+// has to guess which of the two it is looking at.
 //
 // 🔴 An EMPTY set is a 422 rather than a silent "all" or a silent "never"
 // (migrations/00052): those two readings sit one keystroke apart and are
@@ -465,20 +488,36 @@ func scheduledMessageCadenceReads(cadence, field string) bool {
 // gofmt's doc-comment formatter rewrites that pair into a curly quote, which
 // turns the sentence into something a reader cannot parse — and the rewrite is
 // silent.)
-func ValidateScheduledMessageCustomSets(days, hours, minutes []int) error {
+//
+// 🔴 The LAST check is the round-2 half of the same rule: four non-empty,
+// in-range sets can still describe a schedule that structurally never fires,
+// because the month set can empty the intersection. months {2} × days {31} is
+// the plainest one — every value is legal, the cockpit renders 每年 2 月 · 每月
+// 31 號 and every word of that is true, and not one message is ever sent. That
+// is the very shape migrations/00052 argues about: "never fires" must not sit
+// one keystroke away from a schedule that looks perfectly ordinary.
+//
+// 🔴 February counts as 29 days here, ON PURPOSE. months {2} × days {29} is a
+// DELIBERATE leap-year schedule that spec and design both spell out, so the
+// refusal is drawn at the only line that cannot swallow it: refuse only when NO
+// (month, day) pair is possible in any year at all.
+func ValidateScheduledMessageCustomSets(months, days, hours, minutes []int) error {
 	for _, set := range []struct {
 		field  string
 		vals   []int
 		lo, hi int
+		hint   string
 	}{
-		{"custom_days", days, 1, 31},
-		{"custom_hours", hours, 0, 23},
-		{"custom_minutes", minutes, 0, 59},
+		{"custom_months", months, 1, 12,
+			" (to mean every month, OMIT the field entirely rather than sending [])"},
+		{"custom_days", days, 1, 31, ""},
+		{"custom_hours", hours, 0, 23, ""},
+		{"custom_minutes", minutes, 0, 59, ""},
 	} {
 		if len(set.vals) == 0 {
 			return fmt.Errorf("%s cannot be empty when cadence is 'custom'; "+
 				"list every value that should fire (an empty set would be read as either "+
-				"'always' or 'never', and those must not be one keystroke apart)", set.field)
+				"'always' or 'never', and those must not be one keystroke apart)%s", set.field, set.hint)
 		}
 		for _, v := range set.vals {
 			if v < set.lo || v > set.hi {
@@ -487,7 +526,48 @@ func ValidateScheduledMessageCustomSets(days, hours, minutes []int) error {
 			}
 		}
 	}
+	if err := scheduledMessageMonthDayFeasible(months, days); err != nil {
+		return err
+	}
 	return nil
+}
+
+// maxDaysInMonth is how many days month m can have in the BEST year — February
+// answers 29, which is what keeps a leap-year-only schedule legal.
+func maxDaysInMonth(m int) int {
+	switch m {
+	case 2:
+		return 29
+	case 4, 6, 9, 11:
+		return 30
+	default:
+		return 31
+	}
+}
+
+// scheduledMessageMonthDayFeasible refuses a month × day pair that no calendar
+// can ever satisfy. Both sets are already known non-empty and in range.
+func scheduledMessageMonthDayFeasible(months, days []int) error {
+	best := 0
+	for _, m := range months {
+		if d := maxDaysInMonth(m); d > best {
+			best = d
+		}
+	}
+	smallest := days[0]
+	for _, d := range days {
+		if d < smallest {
+			smallest = d
+		}
+	}
+	if smallest <= best {
+		return nil
+	}
+	return fmt.Errorf("custom_months %v and custom_days %v never occur together, so this "+
+		"schedule could never fire: the longest of the chosen months has %d days, and the "+
+		"earliest day chosen is the %d. Pick a day one of these months actually has, or add a "+
+		"month that has this day. (February counts as 29 days, so February with the 29th is "+
+		"allowed and fires in leap years only.)", months, days, best, smallest)
 }
 
 // ValidateScheduledMessageWallClockPresence refuses a calendar cadence

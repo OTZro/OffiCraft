@@ -1333,9 +1333,17 @@ export function toScheduledMessage(w: WireScheduledMessage): ScheduledMessage {
     dayOfMonth: w.day_of_month ?? 1,
     hour: w.hour,
     minute: w.minute,
-    // The three `custom` sets are additive-optional on the wire (a reader
+    // The four `custom` sets are additive-optional on the wire (a reader
     // written before T-49e7 must keep working), so an absent one lands as the
     // EMPTY set — which is exactly what every non-custom cadence carries.
+    //
+    // 🔴 The absent-means-every-month rule of `custom_months` belongs to the
+    // REQUEST, not to the response: the server resolves it in the handler and
+    // every row it serves lists its own months. Repeating the rule here would
+    // make a truly month-less row (there is no such thing) read as the whole
+    // year, and would put the two meanings the 422 exists to separate back
+    // into one value.
+    customMonths: w.custom_months ?? [],
     customDays: w.custom_days ?? [],
     customHours: w.custom_hours ?? [],
     customMinutes: w.custom_minutes ?? [],
