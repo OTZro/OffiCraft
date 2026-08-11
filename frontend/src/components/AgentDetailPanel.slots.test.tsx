@@ -120,6 +120,44 @@ function mkVM(): AgentDetailVM {
   };
 }
 
+/** The opposite corner from `mkVM()`: online, everything reported, every
+ * optional present. It exists so the sentinel above does not mount only in the
+ * least production-like state — a render site gated on any of these fields
+ * reads as "always rendered" under the minimal VM alone. */
+function mkPopulatedVM(): AgentDetailVM {
+  return {
+    ...mkVM(),
+    online: true,
+    reportedRuntime: "claude",
+    model: "opus",
+    effort: "medium",
+    machineText: "Machine A",
+    accountText: "acct",
+    contextPct: 42,
+    compactionCount: 1,
+    cost: 7,
+    modelIsReported: true,
+    machineAction: <button type="button">change</button>,
+    pending: { runtime: "", model: "", effort: "", machine: "" },
+    refocusSince: 1,
+    refocusOp: "refocus",
+    refocusDeadline: 2,
+    lastOp: "wake",
+    lastOpVerb: "wake",
+    lastOpOk: true,
+    lastOpLog: "log",
+    lastOpReason: "reason",
+    lastOpAt: 3,
+    tmuxSession: "member-mira",
+    terminalHint: "hint",
+    prompt: {
+      fetch: () => Promise.resolve("boot"),
+      cacheKey: "k",
+      hint: "hint",
+    },
+  };
+}
+
 describe("AgentDetailPanel slot map", () => {
   it("offers exactly the five slots both wrappers must answer", () => {
     // Pins the LIST itself: growing it is exactly the event that must break
@@ -185,15 +223,38 @@ describe("AgentDetailPanel slot map", () => {
   });
 
   // 🔴 The half `satisfies` cannot answer: a key can be RESOLVED in the panel and
-  // still never reach the screen. Independent review built exactly that mutant —
-  // add a slot, have BOTH wrappers fill it with a real card, forget the render
-  // site — and got tsc rc=0 with 2072 tests green: the original bug of this
-  // ticket (a card that silently is not there), relocated from the wrapper side
-  // to the panel side. This test is the sentinel for that side.
+  // still never reach the screen. Round-1 review built exactly that mutant — add
+  // a slot, have BOTH wrappers fill it with a real card, forget the render site —
+  // and got tsc rc=0 with every test green: the original bug of this ticket (a
+  // card that silently is not there), relocated from the wrapper side to the
+  // panel side. This is the sentinel for that side.
   //
-  // It asserts on the DOM, not on call counts: "slotNode was called" is
-  // satisfied by a panel that computes the node and drops it on the floor.
-  it("puts every declared slot's content on the screen", () => {
+  // Three things carry its discriminating power; weaken any one and the mutant
+  // walks (round-2 review measured both weakenings):
+  //   (a) a DISTINCT marker per key — a shared one cannot say WHICH is missing;
+  //   (b) the assertion is set membership (`missing` → `[]`), not a boolean and
+  //       not a count. Swapping it for "container is non-empty" or "count === 5"
+  //       let the mutant through, measured;
+  //   (c) it mounts under MORE THAN ONE view model — see below.
+  //
+  // ⚠️ (c) exists because round-2 broke the single-VM version: wrapping a render
+  // site in a condition that happens to be TRUE under the minimal VM
+  // (`{!vm.online && rendered.afterInfoCards}`) was completely green, and that is
+  // this ticket's own bug wearing a different hat — the card would vanish the
+  // moment the agent came online. A minimal all-falsy VM is the LEAST
+  // production-like state there is, so it cannot be the only one we mount.
+  //
+  // ⚠️ KNOWN LIMIT, stated rather than papered over: this asserts the content
+  // REACHES THE DOM, not that a human can see it. jsdom applies no stylesheets,
+  // so a render site wrapped in `display:none` still passes (round-2 measured
+  // that too). Answering "visible" needs a real browser; there is no CT guard for
+  // it today. Do not read this test as more than its name says.
+  it("puts every declared slot's content into the DOM, under more than one view model", () => {
+    // A vacuous pass is possible if the slot list is ever emptied — `[].filter()`
+    // is `[]`. The list's own shape is pinned by the sibling test above, but that
+    // is an UNWRITTEN dependency until it is written down, so: written down.
+    expect(AGENT_DETAIL_SLOTS.length).toBeGreaterThan(0);
+
     const markers = Object.fromEntries(
       AGENT_DETAIL_SLOTS.map((k) => [k, `SLOT-MARKER-${k}`]),
     ) as Record<(typeof AGENT_DETAIL_SLOTS)[number], string>;
@@ -202,21 +263,26 @@ describe("AgentDetailPanel slot map", () => {
       AGENT_DETAIL_SLOTS.map((k) => [k, slot(<div>{markers[k]}</div>)]),
     ) as AgentDetailSlots;
 
-    const { container } = render(
-      <I18nProvider>
-        <AgentDetailPanel
-          onBack={() => {}}
-          identity={<div className="mp-card mp-identity">identity</div>}
-          slots={filled}
-          vm={mkVM()}
-        />
-      </I18nProvider>,
-    );
-
-    const text = container.textContent ?? "";
-    const missing = AGENT_DETAIL_SLOTS.filter((k) => !text.includes(markers[k]));
-    // Names the offenders — "expected 4 to be 5" would not tell you WHICH slot
-    // the panel forgot, and that is the whole question when this reddens.
-    expect(missing).toEqual([]);
+    for (const [label, vm] of [
+      ["minimal", mkVM()],
+      ["populated", mkPopulatedVM()],
+    ] as const) {
+      const { container, unmount } = render(
+        <I18nProvider>
+          <AgentDetailPanel
+            onBack={() => {}}
+            identity={<div className="mp-card mp-identity">identity</div>}
+            slots={filled}
+            vm={vm}
+          />
+        </I18nProvider>,
+      );
+      const text = container.textContent ?? "";
+      const missing = AGENT_DETAIL_SLOTS.filter((k) => !text.includes(markers[k]));
+      // Names the offenders AND the view model: "expected 4 to be 5" would tell
+      // you neither, and both are the first question when this reddens.
+      expect({ vm: label, missing }).toEqual({ vm: label, missing: [] });
+      unmount();
+    }
   });
 });

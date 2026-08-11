@@ -234,8 +234,16 @@ interface AgentDetailPanelProps {
    * ⚠️ WHICH CARD each side puts in each slot is deliberately NOT listed here.
    * That inventory goes stale without anything changing colour — the same reason
    * this ticket stopped `docs/design/worker-panel-parity.md` from maintaining it.
-   * Read it off the code instead (positions above are pinned by the JSX below and
-   * by `visual-guards/worker-detail-task-card-order.ct.spec.tsx`):
+   * Read it off the code instead:
+   *
+   * ⚠️ And read the ORDER above as documentation, not as a guarantee. An earlier
+   * draft of this comment claimed the positions were "pinned by the JSX below and
+   * by worker-detail-task-card-order.ct.spec.tsx" — round-2 review showed that is
+   * false: that spec pins exactly ONE relation (the worker's 委託任務 sits above
+   * the 模型/機器 card) on ONE side, and it is a Playwright CT that the vitest
+   * gate never runs. Reorder the entries in `rendered` and NOTHING reddens. A
+   * false sense of safety is worse than none, which is the whole point of this
+   * ticket, so the claim is gone rather than softened.
    *
    *   command grep -an "slots={" -A 20 src/components/MemberDetailPanel.tsx \
    *                                      src/components/WorkerDetailPanel.tsx
@@ -274,8 +282,19 @@ export function AgentDetailPanel({
   //
   // ⚠️ `satisfies` proves every key was RESOLVED, not that every value reached
   // the DOM — a resolved-but-unrendered key still compiles. That second half is
-  // pinned at runtime by "every declared slot actually reaches the DOM" in
-  // AgentDetailPanel.slots.test.tsx. Neither layer replaces the other.
+  // pinned at runtime by the sentinel in AgentDetailPanel.slots.test.tsx.
+  //
+  // ⚠️ Their relation is ASYMMETRIC, and an earlier draft here overstated it as
+  // "neither layer replaces the other" (round-2 review measured it): on DETECTION
+  // the sentinel alone already covers this line — delete the `satisfies` and add
+  // a key, and the sentinel still reddens and still names the key. What this line
+  // buys is an EARLIER failure with a better message (TS1360 at compile time,
+  // pointing here), not the only failure. The reverse does not hold: the sentinel
+  // sees nothing at compile time.
+  //
+  // ⚠️ And this line has no guard of its own — deleting the `satisfies` clause is
+  // completely green (measured). It is a declaration nobody is watching; the
+  // sentinel is what makes that survivable.
   const rendered = {
     overlays: slotNode(slots.overlays),
     afterIdentityCards: slotNode(slots.afterIdentityCards),

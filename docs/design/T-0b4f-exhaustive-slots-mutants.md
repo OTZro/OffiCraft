@@ -151,6 +151,25 @@ src/components/AgentDetailPanel.tsx(286,5): error TS1360: Type '{ overlays: Reac
 
 ⇒ 訊息刻意設計成印出「漏掉的那個 key」而不是「expected 4 to be 5」——它紅的時候，唯一該問的問題就是「是哪一個」。
 
+## H · 第二輪審查打出的殘留：渲染點被一個 VM 條件包起來
+
+**第二輪（換一個全新 actor，只審增量）做出的 mutant，當時全綠**：把 `{rendered.afterInfoCards}` 改成
+`{!vm.online && rendered.afterInfoCards}` ⇒ tsc rc=0、237 檔 2073 條全過。
+⚠️ **後果是 production 級的**：外包面板的「委託人」卡會在 agent **上線的那一刻消失** —— 又是本票要根治的那個病（一張卡靜默地不在），只是換了向量。
+
+**根因**：哨兵只在一組**全 falsy 的最小 VM** 下掛載，而那是**最不像 production 的狀態**（`online:false`、字串全空、數值全 null）⇒ 任何「在最小 VM 下恰好為真」的條件都對它隱形。方向是不對稱的：條件在最小 VM 下為**假** ⇒ 紅（第二輪也驗了）；為**真** ⇒ 綠。
+
+**修法**：哨兵改成在**兩組 VM** 下各掛載一次（最小 ＋ 一組 online、每個 optional 都給值的），失敗訊息同時印出**是哪一組 VM、漏了哪個 key**。
+
+**mutant（修完當下實跑）**：重放 `{!vm.online && rendered.afterInfoCards}` ⇒
+
+```
+× puts every declared slot's content into the DOM, under more than one view model
+  → expected { vm: 'populated', …(1) } to deeply equal { vm: 'populated', missing: [] }
+```
+
+⚠️ **這不是「這個方向已經解決了」**：兩組 VM 只涵蓋得到「在這兩組之間有分歧」的條件。要窮舉得改成 property-based，本包沒做。**寫在下面的誠實界線裡，不要讀成已解決。**
+
 ## 這份紀錄沒有涵蓋的（誠實界線）
 
 - **`frontend/visual-guards/` 不在任何一份 tsconfig 的 `include` 裡**（`tsconfig.guards.json` 只收 `paint-guards`
@@ -158,3 +177,7 @@ src/components/AgentDetailPanel.tsx(286,5): error TS1360: Type '{ overlays: Reac
   是共用面板的**第三個呼叫端**。⇒ 上面 A/A2 那道「加一個插槽，全部呼叫端都會紅」的保證，**看不到那一個**。
   本包已把該 story 改成新形狀（所以 CT 不會壞），但**那個洞本身沒有補**：owner 於卡 `rc-72209ca50748` 裁定範圍。
 - CT（真瀏覽器）那一層**沒有為本包新增護欄**：本包不動任何版面或樣式，插槽的渲染位置與順序一個字沒改。
+- 🔴 **「到得了 DOM」不等於「看得見」**：哨兵讀的是 `container.textContent`，而 jsdom **不套任何樣式表** ⇒ 把某個渲染點包進 `<div style={{display:"none"}}>` 照樣全綠（第二輪實測）。要回答「使用者看不看得到」只有真瀏覽器答得出來，**本包沒有為此新增 CT**。哨兵的名字已經改成只講「進 DOM」，別把它讀成更多。
+- 🔴 **插槽的順序完全沒有守衛**：`rendered` 的五個值互換位置，兩層都不會紅（`satisfies` 只看鍵集合、哨兵只看子字串存在）。唯一沾到邊的 `visual-guards/worker-detail-task-card-order.ct.spec.tsx` 只釘**一條關係、只釘外包側**，而且是 Playwright CT、不在 vitest 那道閘裡。
+- 🔴 **`satisfies` 那一行自己沒有守衛**：整句刪掉是完全綠的（第二輪實測 tsc rc=0、2073 全過）。它買到的是「更早、訊息更好的失敗」，不是唯一的失敗——真出事時哨兵仍會紅。
+- **VM 條件那個方向只被兩組 VM 涵蓋**，不是窮舉（見上方 H 列）。

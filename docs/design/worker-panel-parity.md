@@ -36,9 +36,13 @@
   `{vm.onSaveModelEffort && (<button …model-effort-edit>)}`）~~ —— **已不成立**：那顆就地編輯器
   連同 `onSaveModelEffort` 這個 prop 本身，已於 **T-7f28 整個移除**。留著這句會讓下一個人去找
   一段不存在的碼。
-  ⚠️ 這裡原本寫「今天原碼裡零命中」，**那句話不準**（獨立審查抓到）：全庫掃描實際上還有兩處
-  命中——`AgentDetailPanel.tsx` 一句記錄「它被移除了」的註解（無害），以及 `frontend/CLAUDE.md`
-  同族的那段敘述（已於同一包一併更正）。**準確的說法是「型別與 production 碼裡沒有這個 prop」**，
+  ⚠️ 這裡原本寫「今天原碼裡零命中」，**那句話不準**（獨立審查抓到）：全庫掃描實際上在
+  **五個檔**都有命中——`frontend/src/components/AgentDetailPanel.tsx` 一句記錄「它被移除了」的
+  註解（無害）、`frontend/CLAUDE.md` 同族的那段敘述（已於同一包一併更正）、本檔自己、
+  `docs/design/worker-panel-parity-mutants.md`，以及一個 playwright build cache 產物。
+  ⚠️ 這個數字我改過兩次：初稿寫「零命中」，第一輪審查改成「兩處」，**第二輪審查指出還是漏了
+  `worker-panel-parity-mutants.md`**。⇒ **一句話裡的數字，改一次不代表這次就對了**；會過期／會數錯
+  的是「命中幾處」，不會過期的是下面那個準確說法。**準確的說法是「型別與 production 碼裡沒有這個 prop」**，
   不是「repo 裡零命中」。
 - `vm.machineAction` 未傳 ⇒ 機器格標題右側無任何控制項 —— **仍然成立**（該欄位今天仍是
   `AgentDetailVM` 上的 optional prop）。
