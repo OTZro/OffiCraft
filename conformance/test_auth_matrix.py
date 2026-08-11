@@ -1073,6 +1073,17 @@ MATRIX: dict[str, Route] = {
         path=lambda ctx, _i: f"/api/tasks/{_matrix_closed_task(ctx)}/description",
         body={"description": "conf matrix corrected description"},
     ),
+    "POST /api/tasks/{task_id}/title": Route(
+        # T-2ebe. Same executor-or-admin gate as its description twin (agent B on
+        # agent A's task → 403), and pointed at the same CLOSED task for the same
+        # reason: aimed at an open task this row would pass whether or not the
+        # terminal gate existed, and would assert nothing about the ruling that
+        # a closed ticket's text stays correctable.
+        requires="agent",
+        overrides={"agent_other": 403},
+        path=lambda ctx, _i: f"/api/tasks/{_matrix_closed_task(ctx)}/title",
+        body={"title": "conf matrix corrected title"},
+    ),
     "POST /api/tasks/{task_id}/duplicate": Route(
         # T-02c9: executor-guarded like every agent report row (agent B on
         # agent A's task → 403); admin capability (owner/admin_agent) passes.

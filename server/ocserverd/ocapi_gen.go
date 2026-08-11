@@ -2593,6 +2593,11 @@ type TaskStepStatusUpdateDTO struct {
 	WaitingReason *string `json:"waiting_reason,omitempty"`
 }
 
+// TaskTitleDTO Correct one task's title in place (MCP “update_task_title“, T-2ebe). PARTIAL update in “TaskDescriptionDTO“'s shape: the ONLY field is “title“, omitting it is a legal no-op that versions nothing, and unknown keys are refused (“additionalProperties: false“) so a caller who reaches for “name“ or “summary“ is told rather than ignored. ONE DELIBERATE DIFFERENCE FROM THE DESCRIPTION TWIN, and it is a difference in kind rather than an oversight: an explicit blank (“""“ or whitespace-only) is REFUSED with 400 instead of clearing the field. “create_task“ has always refused a blank title on the same terms, and an edit door looser than the create door would let a caller reach a state the create door forbids — a task whose only cell on the task list is empty, which is precisely the surface this capability exists to keep true. The value is trimmed of surrounding whitespace before it is stored, again matching create. The write is wholesale within that one field; there is no append form.
+type TaskTitleDTO struct {
+	Title *string `json:"title,omitempty"`
+}
+
 // ThemeBundleDTO One owner-authored theme colour bundle (T-16a1 P2). `id` is a client-generated stable slug (`^[a-z0-9][a-z0-9-]{1,63}$`), unique within the owner's set and never a built-in name (`office` / `xian`). `name` is the display label (trimmed, 1..80 runes). `colors` maps `--color-*` token names — each MUST be a token defined in styles/theme.css — to CONCRETE colour values (hex / rgb() / rgba() / hsl() / hsla() / transparent only; no var(), no color-mix(), no arbitrary CSS). 1..200 pairs. The server 422s any bundle that violates the shape, the token whitelist, or the colour grammar. `wording` (optional, T-16a1 P3) carries per-language message-key text overrides; see its own description. `fonts` (optional, T-16a1 P4) carries font-family choices; see its own description.
 type ThemeBundleDTO struct {
 	// Avatars Optional per-role avatar images (T-16a1 P5; extended per role in T-ea81). Keys are the closed set `member` (一般正職 member) / `outsource` (外包 outsource worker) / `owner` (the human CEO / owner) / `assistant` (a member whose role is `assistant`, e.g. Mira). Each value is an EMBEDDED image encoded as a base64 `data:` URI so the image travels inside the bundle on export/import. The value is NOT arbitrary: only a `data:image/<mime>;base64,<...>` URI whose mime is a whitelisted RASTER format (`image/png` / `image/jpeg` / `image/webp`) is accepted. SVG (`image/svg+xml`) is REJECTED (it can carry script/onload — XSS). The base64 must decode, the decoded byte size is capped (<=64 KiB) and the string length capped, and the leading magic bytes must match the declared mime (PNG `89 50 4E 47`, JPEG `FF D8 FF`, WEBP `RIFF....WEBP`) — a value that declares one mime but carries another is rejected. Absent = that role falls back to the built-in avatar glyph (office never degrades). The server 422s any avatars that violates the key set, the mime whitelist, the size caps, the base64, or the magic-byte check.
@@ -2996,6 +3001,9 @@ type HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePostJSONRequestBody = 
 
 // HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPostJSONRequestBody defines body for HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPost for application/json ContentType.
 type HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPostJSONRequestBody = TaskStepStatusUpdateDTO
+
+// HandleUpdateTaskTitleApiTasksTaskIdTitlePostJSONRequestBody defines body for HandleUpdateTaskTitleApiTasksTaskIdTitlePost for application/json ContentType.
+type HandleUpdateTaskTitleApiTasksTaskIdTitlePostJSONRequestBody = TaskTitleDTO
 
 // HandleFetchThemeApiThemeFetchPostJSONRequestBody defines body for HandleFetchThemeApiThemeFetchPost for application/json ContentType.
 type HandleFetchThemeApiThemeFetchPostJSONRequestBody = ThemeFetchDTO
@@ -3463,6 +3471,9 @@ type ServerInterface interface {
 	// Terminate a task (owner/admin agent; the only non-executor status change).
 	// (POST /api/tasks/{task_id}/terminate)
 	HandleTerminateTaskApiTasksTaskIdTerminatePost(w http.ResponseWriter, r *http.Request, taskId string)
+	// Correct a task's title (executor/admin; closed tasks included).
+	// (POST /api/tasks/{task_id}/title)
+	HandleUpdateTaskTitleApiTasksTaskIdTitlePost(w http.ResponseWriter, r *http.Request, taskId string)
 	// Fetch a theme bundle from a link (owner/admin agent).
 	// (POST /api/theme/fetch)
 	HandleFetchThemeApiThemeFetchPost(w http.ResponseWriter, r *http.Request)
@@ -6777,6 +6788,32 @@ func (siw *ServerInterfaceWrapper) HandleTerminateTaskApiTasksTaskIdTerminatePos
 	handler.ServeHTTP(w, r)
 }
 
+// HandleUpdateTaskTitleApiTasksTaskIdTitlePost operation middleware
+func (siw *ServerInterfaceWrapper) HandleUpdateTaskTitleApiTasksTaskIdTitlePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "task_id" -------------
+	var taskId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "task_id", r.PathValue("task_id"), &taskId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "task_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleUpdateTaskTitleApiTasksTaskIdTitlePost(w, r, taskId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // HandleFetchThemeApiThemeFetchPost operation middleware
 func (siw *ServerInterfaceWrapper) HandleFetchThemeApiThemeFetchPost(w http.ResponseWriter, r *http.Request) {
 
@@ -7193,6 +7230,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/steps/{step_id}/note", wrapper.HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/steps/{step_id}/status", wrapper.HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/terminate", wrapper.HandleTerminateTaskApiTasksTaskIdTerminatePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/title", wrapper.HandleUpdateTaskTitleApiTasksTaskIdTitlePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/theme/fetch", wrapper.HandleFetchThemeApiThemeFetchPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/update/upgrade", wrapper.HandleUpgradeApiUpdateUpgradePost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/version", wrapper.HandleVersionApiVersionGet)

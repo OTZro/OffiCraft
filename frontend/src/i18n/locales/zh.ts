@@ -212,6 +212,18 @@ export const zh = {
     // 結案任務照樣改得動(裁定②)。這句只在終態卡的編輯面出現,講清楚它不是漏擋:
     // 票寫錯常常是結案後才發現的,而產出物清單相反、結案即凍結。
     descClosedNote: "已結案的任務仍可更正敘述(產出物則已凍結)。",
+    // 標題就地編輯(T-2ebe),敘述那一家的雙生兄弟。唯一不同的規則是 titleBlank:
+    // 標題不能清空——它是任務清單上唯一看得到的那一格,空的等於整列沒東西。
+    titleLabel: "標題",
+    titleEdit: "編輯標題",
+    titleEditHint: "標題是任務清單上唯一看得到的內容,請用一句話說明這張任務是什麼。",
+    titlePlaceholder: "用一句話說明這張任務是什麼…",
+    titleSave: "儲存",
+    titleCancel: "取消",
+    titleBlank: "標題不能空白。",
+    titleError: "標題儲存失敗,請稍後重試",
+    titleHistoryTitle: "任務標題",
+    titleClosedNote: "已結案的任務仍可更正標題(產出物則已凍結)。",
     // 任務編號 chip 點擊複製(owner 2026-07-19 圈截圖):點 chip 把顯示的任務
     // 編號寫進剪貼簿,給一個短暫「已複製」回饋。copyTaskNo 是 chip 的 aria-label
     // (帶顯示號),taskNoCopied 是複製成功後的短暫提示文字。

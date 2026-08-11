@@ -1365,6 +1365,25 @@ HAPPY: dict[str, Happy] = {
             and d["closed_ts"] is not None,
         ),
     ),
+    "POST /api/tasks/{task_id}/title": Happy(
+        # T-2ebe: the executor corrects its own task's title. Aimed at the same
+        # CLOSED task as its description twin above and for the same reason — a
+        # terminal task stays correctable, and a 200 that echoes the new title on
+        # a card whose artifact set is frozen is the wire statement of that. The
+        # check reads the title back rather than only asserting 200: a route that
+        # accepted the body and wrote nothing would pass a status check. It also
+        # re-asserts the task is still done and still closed, so a title write
+        # that quietly disturbed the task's terminal state could not pass either.
+        identity="agent",
+        path=lambda ctx: f"/api/tasks/{_happy_closed_task(ctx)}/title",
+        body={"title": "corrected title"},
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: d["title"] == "corrected title"
+            and d["status"] == "done"
+            and d["closed_ts"] is not None,
+        ),
+    ),
     "POST /api/tasks/{task_id}/duplicate": Happy(
         # T-02c9: mark a fresh task a duplicate of a fresh original — the
         # subject is executed by the happy agent, so the executor guard passes.

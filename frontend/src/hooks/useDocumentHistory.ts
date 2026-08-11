@@ -43,6 +43,8 @@ const TOPIC_OF: Record<DocumentKind, string> = {
   // both fan the `task` topic (publishDocumentHistoryRestore's own branch calls
   // publishTask) — the same topic useTasks reconciles on.
   task_description: "task",
+  // T-2ebe: a title belongs to the same TASK, so it fans the same topic.
+  task_title: "task",
 };
 
 interface UseDocumentHistory {

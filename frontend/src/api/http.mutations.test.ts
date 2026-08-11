@@ -269,3 +269,53 @@ describe("httpApi · updateTaskDescription wire shape", () => {
     expect(Object.keys(JSON.parse(String(body)))).toContain("description");
   });
 });
+
+// ── T-2ebe 標題更正的 wire 形狀 ─────────────────────────────────────────────
+describe("httpApi · updateTaskTitle wire shape", () => {
+  const WIRE_TASK = {
+    id: "t-1",
+    task_no: "T-0001",
+    title: "corrected",
+    status: "in_progress",
+    priority: "high",
+    executor_kind: "member",
+    closed_ts: null,
+    deps: [],
+    steps: [],
+    progress_done: 0,
+    progress_total: 0,
+    description: "",
+  };
+
+  it("POSTs the task's title route with the text in the body", async () => {
+    fetchMock.mockImplementation(async () => jsonResponse(WIRE_TASK));
+    const task = await httpApi.updateTaskTitle("t-1", "corrected");
+    const { url, method, body } = await lastRequest();
+    expect(url).toBe("/api/tasks/t-1/title");
+    expect(method).toBe("POST");
+    expect(JSON.parse(String(body))).toEqual({ title: "corrected" });
+    expect(task.title).toBe("corrected");
+  });
+
+  it("rejects a blank title with the server's 400 rather than refusing locally", async () => {
+    // The seam does NOT pre-empt the refusal by trimming to a no-op: the
+    // cockpit's job is to surface which door said no, and a locally invented
+    // success would be a lie. The 400 arrives as an ApiError carrying the
+    // unified envelope, which is what the card's editor branches on.
+    fetchMock.mockImplementation(async () =>
+      jsonResponse(
+        { error: { code: "bad_request", message: "title must not be blank" } },
+        400
+      )
+    );
+    const err = await httpApi.updateTaskTitle("t-1", "   ").catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(400);
+    expect((err as ApiError).serverMessage).toBe("title must not be blank");
+    // And the blank really went out — a seam that swallowed it would never
+    // learn the server's verdict at all.
+    expect(JSON.parse(String((await lastRequest()).body))).toEqual({
+      title: "   ",
+    });
+  });
+});

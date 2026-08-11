@@ -764,6 +764,13 @@
   },
   {
     "auth": "gated",
+    "mcp_tool": "update_task_title",
+    "method": "POST",
+    "path": "/api/tasks/{task_id}/title",
+    "requires": "agent"
+  },
+  {
+    "auth": "gated",
     "mcp_tool": "mark_duplicate",
     "method": "POST",
     "path": "/api/tasks/{task_id}/duplicate",

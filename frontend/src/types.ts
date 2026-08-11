@@ -641,7 +641,7 @@ export interface GlobalContextView {
  * Which editable long-form document a retained revision belongs to. The
  * companion `key` is "global" for global_context, the role key for
  * role_definition, "<role_key>::<task_type>" for lessons, the type_key for
- * every task_manual kind, and the TASK id for task_description.
+ * every task_manual kind, and the TASK id for task_description / task_title.
  *
  * `task_description` (T-e271) is the odd one out in what it keys on: every
  * other kind names a document that belongs to a TYPE or a role, this one names
@@ -667,7 +667,11 @@ export type DocumentKind =
   | "task_manual"
   | "task_manual_sop"
   | "task_manual_learnings"
-  | "task_description";
+  | "task_description"
+  // T-2ebe: the description's twin, keyed on the task id in the same way. A
+  // SEPARATE series over that shared key — restoring a title never disturbs the
+  // description's own three retained revisions, and the other way round.
+  | "task_title";
 
 /**
  * ONE retained revision of an editable long-form document. `content` is the

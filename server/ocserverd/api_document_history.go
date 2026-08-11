@@ -197,6 +197,15 @@ func (s *apiServer) documentHistoryAllowed(w http.ResponseWriter, r *http.Reques
 		if write && !s.taskDescriptionRestoreAuthz(w, r, primary) {
 			return false
 		}
+	case docKindTaskTitle:
+		// T-2ebe. Same per-DOCUMENT posture as the description above, and for
+		// the same reason: who may correct THIS task's text is a fact about this
+		// key, not about the caller's class. Shares the one predicate rather
+		// than growing a second — a restore must never put back a title the
+		// caller was not allowed to write.
+		if write && !s.taskTitleRestoreAuthz(w, r, primary) {
+			return false
+		}
 	case docKindTaskManual:
 		// The legacy four-field bundle. Its rows were deleted by migration 00045
 		// (owner ruling, T-1f39), so the kind names nothing at all — an empty
@@ -371,7 +380,12 @@ func (s *apiServer) publishDocumentHistoryRestore(r *http.Request, kind, key str
 		s.hub.Publish("insight", "patch", "insight", wireOwnerID+"::"+key, nil, audienceOwnerOnly(), requestTrigger(r))
 	case docKindTaskManualSop, docKindTaskManualLearnings:
 		s.publishTaskManual(key, requestTrigger(r))
-	case docKindTaskDescription:
+	case docKindTaskDescription, docKindTaskTitle:
+		// Both fan the same task delta: the cockpit's list and card reconcile by
+		// re-reading the task, so one topic serves either field. T-2ebe rides
+		// the description's arm rather than adding a second identical one —
+		// see the insight case above for why forgetting to be here at all is
+		// the failure this switch is most prone to.
 		if t, err := s.resolveTask(key); err == nil {
 			s.publishTask(*t, requestTrigger(r))
 		}
@@ -393,6 +407,15 @@ func (s *apiServer) taskDescriptionRestoreAuthz(w http.ResponseWriter, r *http.R
 		return false
 	}
 	return true
+}
+
+// taskTitleRestoreAuthz answers whether this caller may put an earlier title
+// back, and writes the refusal when not (T-2ebe). Twin of the description
+// predicate above, and it calls the same callerMayDriveTask for the same reason:
+// the restore face and the edit face of "who may change this task's text" must
+// be one decision, not two that can drift.
+func (s *apiServer) taskTitleRestoreAuthz(w http.ResponseWriter, r *http.Request, taskID string) bool {
+	return s.taskDescriptionRestoreAuthz(w, r, taskID)
 }
 
 func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, content map[string]string) error {
@@ -453,6 +476,33 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 			return err
 		}
 		ok, err := s.writeTaskDescription(t, actor, content["description"])
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errNotFound
+		}
+		return nil
+	case docKindTaskTitle:
+		// T-2ebe. No doc cap, for the reason its edit door states: create_task
+		// has never capped this field either.
+		//
+		// 🔴 The blank refusal the edit door enforces is NOT re-applied here, and
+		// that is a decision rather than an omission: a retained title revision
+		// can only have been written through a door that already refused blanks,
+		// so there is no stored revision to restore that would produce one. The
+		// empty-string case that DOES reach this arm is a snapshot of "{}" — the
+		// row was gone when the revision was taken — and that is caught below by
+		// the same not-found path any restore of a vanished task takes.
+		t, err := s.resolveTask(key)
+		if err != nil {
+			return err
+		}
+		title := trimString(content["title"])
+		if title == "" {
+			return errNotFound
+		}
+		ok, err := s.writeTaskTitle(t, actor, title)
 		if err != nil {
 			return err
 		}

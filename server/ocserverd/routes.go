@@ -1282,6 +1282,26 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Summary:  "Correct a task's description (executor/admin; closed tasks included).",
 			MCPTool:  "update_task_description",
 		},
+		// T-2ebe: the same correctability for the ONE field the task list
+		// actually shows. T-e271 gave the description a way to catch up with
+		// reality and left the title frozen at its first wording, so a card
+		// whose scope was later overturned went on advertising the original on
+		// the list while contradicting it inside. Same executor gate, same
+		// closed-task editability, same document-history series as the row above
+		// — deliberately not a second answer to a question T-e271 already
+		// settled. The one difference is at the door: a blank title is a 400,
+		// not a clear, because create_task refuses one too (owner card
+		// rc-796541192519, option ①). Kept adjacent to its twin because the MCP
+		// catalogue's element-wise order mirrors this table.
+		{
+			Method:   "POST",
+			Path:     "/api/tasks/{task_id}/title",
+			Handler:  w.HandleUpdateTaskTitleApiTasksTaskIdTitlePost,
+			Auth:     authGated,
+			Requires: principalAgent,
+			Summary:  "Correct a task's title (executor/admin; closed tasks included).",
+			MCPTool:  "update_task_title",
+		},
 		{
 			Method:   "POST",
 			Path:     "/api/tasks/{task_id}/duplicate",
