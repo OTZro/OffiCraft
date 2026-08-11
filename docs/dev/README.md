@@ -18,7 +18,8 @@
 server/       Go server daemon：ocserverd（route 表 / handlers / SSE hub / goose migrations）
 frontend/     React/TS web UI（Vite）；build 產物由 go:embed 進 ocserverd
 cli/          Go 模組：ocwarden（push-executor）、ocagent（agent runtime）
-spec/         凍結的 wire 契約（openapi.json / mcp-catalog.json）——動 wire 先改 spec
+spec/         凍結的 wire 契約：openapi.json 是權威（動 wire 先改它）；mcp-catalog.json 是
+              由 openapi.json 的 x-mcp 產生的 committed 生成物，不手改
 seeds/        語言中立 seed .md 資產（boot context；ocserverd runtime 直讀）
 conformance/  語言無關黑箱套件：server wire 行為的可執行定義（HTTP-only 回歸權威）
 e2e_test/     Playwright 端到端（隔離 port，絕不碰 prod）
@@ -215,7 +216,11 @@ cd /path/to/another-copy && bash bin/ci.sh   # 與別份副本並跑是支援的
 
 ## wire freeze
 
-wire（HTTP OpenAPI 面、MCP tool 面）已凍結：**動 wire 一律 spec 先行**——先改 `spec/openapi.json` / `spec/mcp-catalog.json`（+ owner 過目），再 `bash bin/gen-ocapi` 重生、動碼。CI 的 wire-freeze gate 擋任何未過 spec 的漂移；行為面由 `conformance/run.sh --target go` 收官。完整紀律見 [CLAUDE.md](../../CLAUDE.md) §13。
+wire（HTTP OpenAPI 面、MCP tool 面）已凍結：**動 wire 一律 spec 先行**——先改 `spec/openapi.json`（+ owner 過目），再 `bash bin/gen-ocapi` 重生、動碼。
+
+⚠️ **MCP tool 面的入口也是 `spec/openapi.json`，不是 `spec/mcp-catalog.json`（T-2590 起）**：目錄是 committed 生成物，由 `bin/gen-mcp-catalog` 從每個 operation 的 `x-mcp` 區塊渲染。動工具面 = 改該 operation 的 `x-mcp` → 跑 `bin/gen-mcp-catalog`（預設就地寫 `spec/mcp-catalog.json`）→ 兩個檔同批 commit。`make drift-mcp-catalog` 會把 committed 目錄跟重新渲染的結果逐位元比對，忘了重生就會紅。
+
+CI 的 wire-freeze gate 擋任何未過 spec 的漂移；行為面由 `conformance/run.sh --target go` 收官。完整紀律見 [CLAUDE.md](../../CLAUDE.md) §13、產生器與兩道守衛的分工見 [spec/mcp.md](../../spec/mcp.md) §5。
 
 ## 發版指令(T-588c)
 

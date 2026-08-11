@@ -109,7 +109,8 @@ REGEN_PAIR_GATE = $(P) \
   test-e2e-isolation-guard test-bin-guards test-go test-frontend-unit \
   test-frontend-ct test-conformance \
   scan-tracked-paths scan-secrets scan-tcc-anchor \
-  drift-ocapi drift-schema-ts drift-theme-tokens drift-message-keys drift-fonts
+  drift-ocapi drift-schema-ts drift-theme-tokens drift-message-keys drift-fonts \
+  drift-mcp-catalog
 
 # ===========================================================================
 # build
@@ -539,6 +540,36 @@ drift-ocapi:
 	  echo "FAIL — gen-ocapi drift: server/ocserverd/ocapi_gen.go is STALE vs spec/openapi.json."; \
 	  echo "wire 已凍結 (M1): spec-first — if the spec change IS approved, regenerate + commit:"; \
 	  echo "  bash bin/gen-ocapi && git add server/ocserverd/ocapi_gen.go"; \
+	  rm -f "$$fresh"; \
+	  exit 1; \
+	fi; \
+	rm -f "$$fresh"; \
+	$(DONE)
+
+# The wire-freeze gate on the MCP tool surface. spec/mcp-catalog.json is what
+# ocserverd serves verbatim from tools/list, and it was HAND-maintained until
+# T-2590 — spec/mcp.md §5 said so in one paragraph while §4 required the catalog
+# to be derived, which is two rules for one file and therefore no rule at all.
+# It is now a COMMITTED GENERATED artifact: bin/gen-mcp-catalog renders it from
+# the x-mcp metadata on each spec/openapi.json operation, and this gate requires
+# the render to come back BYTE-IDENTICAL to the committed bytes.
+#
+# 🔴 THIS IS NOT THE SAME CHECK AS bin/tests/mcp-catalog-generator.sh, and
+# neither replaces the other. That guard drives the GENERATOR against mutated
+# inputs (does it still refuse a lie?); this gate asserts the COMMITTED FILE has
+# not drifted from its source. A generator that is provably correct still leaves
+# a stale catalog on disk if nobody re-runs it, and that stale file is what the
+# wire serves.
+# Regenerate to a temp file — the committed file is never touched.
+drift-mcp-catalog:
+	@$(P) \
+	echo "[drift-mcp-catalog] regenerate spec/mcp-catalog.json from spec/openapi.json x-mcp + diff committed"; \
+	fresh="$$(mktemp -t oc-fresh-mcp-catalog.XXXXXX.json)"; \
+	bin/gen-mcp-catalog "$$fresh" >/dev/null; \
+	if ! diff -u spec/mcp-catalog.json "$$fresh"; then \
+	  echo "FAIL — gen-mcp-catalog drift: spec/mcp-catalog.json is STALE vs spec/openapi.json."; \
+	  echo "wire 已凍結 (M1): the MCP tool surface is spec-first — if the spec change IS approved, regenerate + commit:"; \
+	  echo "  bin/gen-mcp-catalog && git add spec/mcp-catalog.json"; \
 	  rm -f "$$fresh"; \
 	  exit 1; \
 	fi; \

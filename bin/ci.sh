@@ -142,6 +142,7 @@ OC_ROUND=(
   lint-uplink-contract
   lint-effort-vocab
   drift-ocapi
+  drift-mcp-catalog
   lint-conformance-blackbox
   scan-tcc-anchor
   scan-tracked-paths

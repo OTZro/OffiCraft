@@ -323,10 +323,14 @@ func TestT6020OpenedAndWithheldAreDisjointAndComplete(t *testing.T) {
 }
 
 // TestT6020OpenedToolsCarryTheirWholeParameterSet is the field-level tooth for
-// the 19 new descriptors. spec/mcp-catalog.json is HAND-MAINTAINED (spec/mcp.md
-// §5 says so outright: there is no generator in this tree), so a
-// descriptor missing a parameter is the DEFAULT outcome of adding one by hand,
-// not an exotic failure: the tool would list, resolve, and answer — and Mira
+// the 19 new descriptors. spec/mcp-catalog.json is generated (bin/gen-mcp-catalog
+// renders it from the x-mcp metadata on spec/openapi.json's operations, and
+// spec/mcp.md §5 describes that flow), but each descriptor still comes from a
+// hand-written x-mcp.legacy.descriptor fragment that the generator emits
+// VERBATIM: it cross-checks that fragment's name and description against x-mcp
+// and that inputSchema is a JSON object, never what is inside inputSchema. So a
+// descriptor missing a parameter is still the DEFAULT outcome of adding one by
+// hand, not an exotic failure: the tool would list, resolve, and answer — and Mira
 // would simply have no way to send the argument.
 //
 // The comparison itself already exists and works: spec_catalog_conformance_test.go
