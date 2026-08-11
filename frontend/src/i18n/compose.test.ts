@@ -94,7 +94,9 @@ const EXPECTED: [Lang, string, (string | number | string[] | number[])[], string
     ["zh", "schedCustomDays", [ALL_DAYS], "每天"],
     ["zh", "schedCustomDays", [[1, 15, 31]], "每月 1、15、31 號"],
     // Scattered past the cap: four numbers, then how many were left unsaid.
-    ["zh", "schedCustomDays", [[1, 3, 5, 7, 9, 11]], "每月 1、3、5、7 號等 2 個"],
+    // 另 makes the 2 a REMAINDER; a bare 等 2 個 would read as the total and
+    // contradict the four numbers standing right before it.
+    ["zh", "schedCustomDays", [[1, 3, 5, 7, 9, 11]], "每月 1、3、5、7 號等,另 2 個"],
     ["zh", "schedCustomDays", [[]], "尚未選擇"],
     ["zh", "schedCustomHours", [ALL_HOURS], "每小時"],
     ["zh", "schedCustomHours", [[9, 17]], "第 9、17 點"],

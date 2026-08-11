@@ -153,8 +153,10 @@ export function makeMessages(t: Dict, language: Lang): Messages {
   const LIST_CAP = 4;
   /** Render one `custom` set as at most LIST_CAP numbers plus, when there are
    * more, a phrase naming HOW MANY WERE NOT PRINTED. The tail sits inside the
-   * listed phrase's own tail ("第 0、7、13、22 分" + "等 2 個") so the sentence
-   * still reads as one clause in either language. */
+   * listed phrase's own tail ("第 0、7、13、22 分" + "等,另 2 個") so the
+   * sentence still reads as one clause in either language. The zh wording says
+   * 另 rather than a bare 等 N 個 because that idiom counts the TOTAL; the
+   * count here is the remainder, the same thing en's "and N more" says. */
   const cappedList = (values: number[], lead: string, tail: string): string => {
     const shown = values.slice(0, LIST_CAP);
     const listed = `${lead}${shown.join(listSep)}${tail}`;
