@@ -636,7 +636,9 @@ describe("validateWording", () => {
     // smuggled past it in bulk behind the new leniency.
     const over: Record<string, string> = {};
     for (let i = 0; i <= MAX_WORDING_ENTRIES_PER_LANG; i++) over[`junk.key.${i}`] = "x";
-    expect(validateWording({ zh: over })).toMatch(/more than 1000 entries/);
+    expect(validateWording({ zh: over })).toMatch(
+      new RegExp(`more than ${MAX_WORDING_ENTRIES_PER_LANG} entries`)
+    );
   });
 });
 

@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { mockApi, __resetMock } from "./mock";
 import { ApiError } from "./errors";
+import { MAX_WORDING_ENTRIES_PER_LANG } from "../lib/themeBundleCore";
 
 describe("mock settings — display prefs (display_theme / display_language)", () => {
   beforeEach(() => __resetMock());
@@ -179,7 +180,7 @@ describe("mock settings — display prefs (display_theme / display_language)", (
 
   it("422s an illegal wording overlay, writing nothing", async () => {
     const overCap: Record<string, string> = {};
-    for (let i = 0; i <= 1000; i++) overCap[`junk.key.${i}`] = "x";
+    for (let i = 0; i <= MAX_WORDING_ENTRIES_PER_LANG; i++) overCap[`junk.key.${i}`] = "x";
     const bad: Record<string, Record<string, string>>[] = [
       { xian: { "nav.tasks": "仙" } }, // language not in {zh,en}
       { zh: overCap }, // over the per-language cap, counted on RAW entries

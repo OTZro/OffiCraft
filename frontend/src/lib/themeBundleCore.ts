@@ -99,19 +99,24 @@ export const MAX_THEME_NAME_LEN = 80;
 // Wording overlay bounds (T-16a1 P3) — the character-for-character twin of the
 // Go constants in server/ocserverd/wording_bundle.go.
 export const MAX_WORDING_VALUE_LEN = 200;
-// 🔴 THIS CEILING IS FULL. The message-key whitelist
-// (src/i18n/messageKeys.generated.ts) holds 999 keys as of T-49e7, and the
-// usable ceiling is 999 rather than 1000 because ThemeSettings.test.tsx forges a
-// pack of "every whitelisted key + 1" to prove the cap rejects an oversized one.
-// ⇒ ADDING ONE MORE MESSAGE KEY TURNS THAT TEST RED, and its failure reads
-// `expected 1 to be 2` — the oversized pack is rejected, so only the built-in row
-// is still named 辦公室. A message with nothing in it pointing back here, so the
-// next person pays for the diagnosis rather than the fix. T-49e7 hit this: the
-// whitelist stood at 980 on origin/main and this branch adds 19 leaves, landing
-// exactly on 999. The fix is to raise this constant AND its Go twin together (they are
-// compared for equality); it was left alone deliberately because that is a wire
-// concern and belongs in its own ticket, not smuggled into a feature branch.
-export const MAX_WORDING_ENTRIES_PER_LANG = 1000;
+// The cap counts the RAW submitted entries, BEFORE unknown codes are pruned, so
+// it is not "how big may the whitelist get" — it is "how many raw entries may
+// one submission carry". The binding constraint is therefore that it must sit
+// ABOVE the whitelist length (src/i18n/messageKeys.generated.ts): a legitimate
+// pack that re-words EVERY message key submits exactly MESSAGE_KEYS.length
+// entries, and a cap at or below that number makes that pack refuse itself.
+//
+// 1200 (owner ruling 2026-08-11) against a whitelist of ~1009: ~190 spare
+// entries is a year-odd of headroom at the ~10-keys-a-month growth actually
+// measured, for +20% on the worst-case stored row. Deliberately not larger —
+// themeBundleCore.test.ts turns the next collision into a message that names
+// both numbers and says to raise both twins, so there is no need to buy slack
+// by doubling the worst-case payload.
+//
+// Raise this together with its Go twin (maxWordingEntriesPerLang in
+// server/ocserverd/wording_bundle.go); they are asserted equal, so moving one
+// alone is red.
+export const MAX_WORDING_ENTRIES_PER_LANG = 1200;
 
 // Font overlay bound (T-16a1 P4) — the twin of maxFontValueLen in
 // server/ocserverd/font_bundle.go. A font value is a whole family stack; the
