@@ -2023,15 +2023,15 @@ type webhookEndpointDTO struct {
 // human-readable last-delivered line, because `2026-08-10T09:00+08:00` answers a
 // question a person is not asking.
 type scheduledMessageDTO struct {
-	ID            string  `json:"id"`
-	MemberID      string  `json:"member_id"`
-	Label         string  `json:"label"`
-	Body          string  `json:"body"`
-	Cadence       string  `json:"cadence"`
-	DayOfWeek     int     `json:"day_of_week"`
-	DayOfMonth    int     `json:"day_of_month"`
-	Hour       int `json:"hour"`
-	Minute     int `json:"minute"`
+	ID         string `json:"id"`
+	MemberID   string `json:"member_id"`
+	Label      string `json:"label"`
+	Body       string `json:"body"`
+	Cadence    string `json:"cadence"`
+	DayOfWeek  int    `json:"day_of_week"`
+	DayOfMonth int    `json:"day_of_month"`
+	Hour       int    `json:"hour"`
+	Minute     int    `json:"minute"`
 	// The three `custom` sets (T-49e7). ALWAYS emitted, as an honest-empty
 	// array for every other cadence — never omitted. A field that appears only
 	// sometimes forces every reader to distinguish "this schedule has no set"

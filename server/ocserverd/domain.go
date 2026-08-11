@@ -434,8 +434,13 @@ func scheduledMessageCadenceList() string {
 // (migrations/00052): those two readings sit one keystroke apart and are
 // indistinguishable on screen, so "every day" is expressed by LISTING every
 // day. A set that reached the table empty would mean a writer bypassed this
-// function, which is why the column default '' can only ever be the not-custom
-// marker.
+// function, which is why the column's empty-string default can only ever be the
+// not-custom marker.
+//
+// (Written as "empty-string" rather than as a pair of single quotes on purpose:
+// gofmt's doc-comment formatter rewrites that pair into a curly quote, which
+// turns the sentence into something a reader cannot parse — and the rewrite is
+// silent.)
 func ValidateScheduledMessageCustomSets(days, hours, minutes []int) error {
 	for _, set := range []struct {
 		field  string
