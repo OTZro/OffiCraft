@@ -149,6 +149,20 @@ jobs:
   # ---------------------------------------------------------------------------
   # frontend — typecheck, the static CSS/token lints, and the jsdom unit suite.
   # The real-browser half is a separate cell on purpose (see frontend-ct).
+  #
+  # ⚠️ THIS CELL NEEDS GO, and that is not an accident of packaging.
+  # The unit suite contains a cross-language parity test
+  # (frontend/src/lib/themeName.parity.test.ts) whose whole reason to exist is
+  # that TS and Go must reach the SAME verdict on the same cases — so it shells
+  # out to `go test` and compares. A parity test belongs to NEITHER side; it
+  # needs both toolchains wherever it runs. It lives in the vitest suite because
+  # that is the harness that can call both, so this is the cell that carries Go.
+  #
+  # This dependency was invisible until T-4d88 split the cells: the old cloud
+  # layout ran Go and the frontend in one cell, so `go` was on PATH by luck. The
+  # split did not create the coupling, it exposed it (spawnSync go ENOENT).
+  # The sibling case does NOT need this: paintArtifact.test.ts shells out too,
+  # but only to `vite build`, which this cell's own toolchain already provides.
   frontend-checks:
     # oc-job-role: gate
     runs-on: macos-15
@@ -161,6 +175,14 @@ jobs:
           check-latest: false
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+      # Same pins as go-checks, for the same reason: the parity test asserts
+      # agreement with the Go implementation, so a runner that floats ahead of
+      # what the repo develops against would redden on toolchain drift.
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.4'
+          check-latest: false
+          cache-dependency-path: server/ocserverd/go.sum
       - run: bash bin/run-checks.sh lint-ts lint-css-tokens lint-css-token-roles test-frontend-unit
 
   # ---------------------------------------------------------------------------
