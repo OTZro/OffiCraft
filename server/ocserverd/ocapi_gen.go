@@ -1968,13 +1968,13 @@ type ScheduledMessageDTO struct {
 	// CreatedTs Epoch seconds the schedule was created.
 	CreatedTs float64 `json:"created_ts"`
 
-	// CustomDays Days of the month `custom` fires on, 1-31, sorted and deduplicated. Empty for every other cadence — and never empty for `custom`, which refuses an empty set at write time rather than treating it as "all" or as "never". Optional on this response for the reason the repo charter gives for every added field (§12): a reader written before T-49e7 must keep working, and a field it has never heard of must not become one it is required to find.
+	// CustomDays Days of the month `custom` fires on, 1-31, sorted and deduplicated. Empty for a schedule that has never been `custom`; a schedule SWITCHED AWAY from `custom` KEEPS the sets it had (owner ruling 2026-08-11, card rc-68c581070e55) — they are simply not read while another cadence is selected, so switching back does not lose the choice. Never empty for a live `custom` schedule, which refuses an empty set at write time rather than treating it as "all" or as "never". Optional on this response for the reason the repo charter gives for every added field (§12): a reader written before T-49e7 must keep working, and a field it has never heard of must not become one it is required to find.
 	CustomDays *[]int `json:"custom_days,omitempty"`
 
-	// CustomHours Hours of the day `custom` fires on, 0-23, read in `timezone`, sorted and deduplicated. Empty for every other cadence; never empty for `custom`.
+	// CustomHours Hours of the day `custom` fires on, 0-23, read in `timezone`, sorted and deduplicated. Empty unless the schedule is or once was `custom`; a schedule switched away from `custom` keeps its sets unread rather than losing them (see `custom_days`). Never empty for a live `custom` schedule.
 	CustomHours *[]int `json:"custom_hours,omitempty"`
 
-	// CustomMinutes Minutes of the hour `custom` fires on, 0-59, read in `timezone`, sorted and deduplicated. Empty for every other cadence; never empty for `custom`.
+	// CustomMinutes Minutes of the hour `custom` fires on, 0-59, read in `timezone`, sorted and deduplicated. Empty unless the schedule is or once was `custom`; a schedule switched away from `custom` keeps its sets unread rather than losing them (see `custom_days`). Never empty for a live `custom` schedule.
 	CustomMinutes *[]int `json:"custom_minutes,omitempty"`
 
 	// DayOfMonth Day of month for `monthly` cadence, 1-31. A month that does not contain the day is skipped entirely rather than clamped — the iCalendar RFC 5545 rule for invalid recurrence dates — so a schedule on day 31 fires seven times a year and never in February. Owner decision 2026-08-10, card rc-aeef15360ab5: match the common standard rather than cap the range.

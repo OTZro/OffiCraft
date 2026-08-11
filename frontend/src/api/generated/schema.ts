@@ -6455,17 +6455,17 @@ export interface components {
             created_ts: number;
             /**
              * Custom Days
-             * @description Days of the month `custom` fires on, 1-31, sorted and deduplicated. Empty for every other cadence — and never empty for `custom`, which refuses an empty set at write time rather than treating it as "all" or as "never". Optional on this response for the reason the repo charter gives for every added field (§12): a reader written before T-49e7 must keep working, and a field it has never heard of must not become one it is required to find.
+             * @description Days of the month `custom` fires on, 1-31, sorted and deduplicated. Empty for a schedule that has never been `custom`; a schedule SWITCHED AWAY from `custom` KEEPS the sets it had (owner ruling 2026-08-11, card rc-68c581070e55) — they are simply not read while another cadence is selected, so switching back does not lose the choice. Never empty for a live `custom` schedule, which refuses an empty set at write time rather than treating it as "all" or as "never". Optional on this response for the reason the repo charter gives for every added field (§12): a reader written before T-49e7 must keep working, and a field it has never heard of must not become one it is required to find.
              */
             custom_days?: number[];
             /**
              * Custom Hours
-             * @description Hours of the day `custom` fires on, 0-23, read in `timezone`, sorted and deduplicated. Empty for every other cadence; never empty for `custom`.
+             * @description Hours of the day `custom` fires on, 0-23, read in `timezone`, sorted and deduplicated. Empty unless the schedule is or once was `custom`; a schedule switched away from `custom` keeps its sets unread rather than losing them (see `custom_days`). Never empty for a live `custom` schedule.
              */
             custom_hours?: number[];
             /**
              * Custom Minutes
-             * @description Minutes of the hour `custom` fires on, 0-59, read in `timezone`, sorted and deduplicated. Empty for every other cadence; never empty for `custom`.
+             * @description Minutes of the hour `custom` fires on, 0-59, read in `timezone`, sorted and deduplicated. Empty unless the schedule is or once was `custom`; a schedule switched away from `custom` keeps its sets unread rather than losing them (see `custom_days`). Never empty for a live `custom` schedule.
              */
             custom_minutes?: number[];
             /**
