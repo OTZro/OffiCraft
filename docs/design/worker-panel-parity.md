@@ -8,10 +8,37 @@
 - 正職 wrapper `frontend/src/components/MemberDetailPanel.tsx`（T-927a 已改：面板唯讀、設定收進喚醒區）
 - 外包 wrapper `frontend/src/components/WorkerDetailPanel.tsx`（未動）
 
-「共用面板的鍵由 wrapper 傳不傳 callback 決定」屬實：
-`AgentDetailVM.onSaveModelEffort` 未傳 ⇒ 模型格不長編輯鈕（`AgentDetailPanel.tsx` 的
-`{vm.onSaveModelEffort && (<button …model-effort-edit>)}`）；`vm.machineAction` 未傳 ⇒
-機器格標題右側無任何控制項。正職兩個都不傳，外包兩個都傳。
+> ## ⚠️ 2026-08-12（T-0b4f）起，這份文件**不再是「哪個插槽兩邊各傳了什麼」的權威**
+>
+> 那一半已經改由**型別**強制：共用面板的插槽從 optional props 換成一份必填的
+> `AgentDetailSlots`（`AGENT_DETAIL_SLOTS` 是唯一的 key 清單），**兩個 wrapper 都必須對
+> 每一個 key 表態**，漏一個是編譯錯誤、而不是畫面上一格靜默的空白。「這一邊不要」是一個
+> 帶理由的值 `notHere(<why>)`，理由就寫在該 wrapper 的碼裡。
+>
+> ⇒ **要看某個插槽今天在兩邊各是什麼，不要讀這份文件的敘述——跑這條查詢**（清單會過期，
+> 查詢不會）：
+>
+> ```
+> grep -n "slots={" -A 12 frontend/src/components/MemberDetailPanel.tsx \
+>                          frontend/src/components/WorkerDetailPanel.tsx
+> ```
+>
+> 這份文件仍然是**下面那些逐項裁定的家**（哪些差異是刻意的、理由是什麼）——那是型別答不出來的。
+> 設計與 mutant 證據見 `T-0b4f-exhaustive-slots-mutants.md`。
+
+⚠️ **下面這段是本文件寫成當時（`acac15a`）的觀察，其中一半已經不成立**（T-0b4f 逐句核對）：
+
+- ~~`AgentDetailVM.onSaveModelEffort` 未傳 ⇒ 模型格不長編輯鈕（`AgentDetailPanel.tsx` 的
+  `{vm.onSaveModelEffort && (<button …model-effort-edit>)}`）~~ —— **已不成立**：那顆就地編輯器
+  連同 `onSaveModelEffort` 這個 prop 本身，已於 **T-7f28 整個移除**，今天原碼裡零命中（實查
+  2026-08-12）。留著這句會讓下一個人去找一段不存在的碼。
+- `vm.machineAction` 未傳 ⇒ 機器格標題右側無任何控制項 —— **仍然成立**（該欄位今天仍是
+  `AgentDetailVM` 上的 optional prop）。
+- 「共用面板的鍵由 wrapper 傳不傳決定」這個**總結句**，對**插槽**已不再成立（見上方 T-0b4f
+  的說明）；對 `machineAction` 這類 **view-model 上的 optional 欄位仍然成立**。
+  ⚠️ **這是一個已知的、還沒收掉的缺口，不是本票的範圍**：view model 自己的 optional 欄位
+  沒有跟著插槽一起變成必填，所以「兩邊都得表態」目前只涵蓋插槽那一層。要不要把同一個形狀
+  套到 view model 上，**交 owner 裁**。
 
 狀態欄位說明：**同**＝行為與外觀已一致｜**差**＝需要對齊｜**外包獨有**｜**正職獨有**｜
 **待裁定**＝說不出明確期望，交回 owner。

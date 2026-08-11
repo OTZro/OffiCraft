@@ -991,8 +991,14 @@ describe("ScheduledMessagesCard", () => {
 // 🔴 The card is ONE component rendered by BOTH wrappers. Proving it on the
 // member panel proves nothing about the worker panel: they are two different
 // callers of AgentDetailPanel's `extraExpandCards` slot, and the worker one had
-// no caller at all until this ticket. Drop `extraExpandCards` from either
-// wrapper and exactly one of these two reddens.
+// no caller at all until this ticket. Turn either wrapper's `extraExpandCards`
+// into `notHere(...)` and exactly one of these two reddens.
+// ⚠️ This used to read "Drop `extraExpandCards` from either wrapper". Since
+// T-0b4f the slots are an exhaustive map, so dropping a key is a COMPILE error,
+// not a silent nothing — the mutant that still reaches the runtime is declining
+// the slot on purpose. That change of wording IS the ticket: the shape this
+// comment was warning about ("the worker one had no caller at all") can no
+// longer happen by accident.
 describe("both detail panels render the 定期訊息 card", () => {
   it("renders it on the member panel", async () => {
     store = [mkSchedule({ memberId: "mira", label: "正職排程" })];
