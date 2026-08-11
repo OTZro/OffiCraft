@@ -286,13 +286,31 @@ export function makeMessages(t: Dict, language: Lang): Messages {
         sched.customMinutesTail
       );
     },
-    schedCustomSummary: (months, days, hours, minutes) =>
-      [
-        messages.schedCustomMonths(months),
+    // 🔴 The ROW summary drops the month phrase when the whole year is
+    // selected — and ONLY there. Migration 00053 backfilled every existing row
+    // with all twelve, so 「每個月」 would lead almost every row while saying
+    // nothing. The other three groups keep the every-set phrase: 每天/每小時 sit
+    // beside a neighbour that narrows them, while a full year narrows nothing.
+    // The GROUP phrase (`schedCustomMonths`, printed under 幾月) is untouched —
+    // there the reader is choosing months and needs to be told what is chosen.
+    //
+    // 🔴 An EMPTY month set stays loud, and it is NAMED: once the full year is
+    // omitted the leading phrase is no longer "the months slot", so a bare
+    // 尚未選擇 would read as any group's. Empty is a 422 and may never look like
+    // 全年.
+    schedCustomSummary: (months, days, hours, minutes) => {
+      const rest = [
         messages.schedCustomDays(days),
         messages.schedCustomHours(hours),
         messages.schedCustomMinutes(minutes),
-      ].join(" · "),
+      ];
+      if (months.length === 12) return rest.join(" · ");
+      const head =
+        months.length === 0
+          ? `${sched.customMonthsLabel}${language === "zh" ? ":" : ": "}${sched.customNone}`
+          : messages.schedCustomMonths(months);
+      return [head, ...rest].join(" · ");
+    },
     schedMinuteStep: (step) =>
       `${sched.customStepLead}${step}${sched.customStepTail}`,
 

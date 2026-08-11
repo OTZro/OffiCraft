@@ -112,8 +112,16 @@ const EXPECTED: [Lang, string, (string | number | string[] | number[])[], string
     ["zh", "schedCustomMinutes", [[0, 20, 45]], "第 0、20、45 分"],
     ["zh", "schedCustomMinutes", [[7]], "第 7 分"],
     ["zh", "schedCustomMinutes", [[]], "尚未選擇"],
-    ["zh", "schedCustomSummary", [ALL_MONTHS, ALL_DAYS, ALL_HOURS, [0, 20, 40]], "每個月 · 每天 · 每小時 · 每 20 分鐘"],
+    // 全年 carries no information on a row (00053 backfilled every existing row
+    // with all twelve), so the row summary — and ONLY the row summary — leaves
+    // the month phrase out. The other three groups are byte-for-byte unchanged.
+    ["zh", "schedCustomSummary", [ALL_MONTHS, ALL_DAYS, ALL_HOURS, [0, 20, 40]], "每天 · 每小時 · 每 20 分鐘"],
+    // Anything short of the whole year still names the months.
     ["zh", "schedCustomSummary", [[3], [1, 15], [9], [30]], "每年 3 月 · 每月 1、15 號 · 第 9 點 · 第 30 分"],
+    ["zh", "schedCustomSummary", [[3, 6, 9, 12], ALL_DAYS, ALL_HOURS, [0]], "每年 3、6、9、12 月 · 每天 · 每小時 · 第 0 分"],
+    // 🔴 An empty month set is a 422 and must never render as the omitted 全年.
+    // It is named because the leading slot is no longer the months slot.
+    ["zh", "schedCustomSummary", [[], ALL_DAYS, ALL_HOURS, [0, 20, 40]], "幾月:尚未選擇 · 每天 · 每小時 · 每 20 分鐘"],
     ["zh", "schedMinuteStep", [20], "每 20 分鐘"],
     ["en", "taskProgress", [3,7], "Step 3/7"],
     ["en", "taskElapsed", ["2h"], "Elapsed 2h"],
@@ -194,8 +202,10 @@ const EXPECTED: [Lang, string, (string | number | string[] | number[])[], string
     ["en", "schedCustomMinutes", [[0, 20, 45]], "Minutes 0, 20, 45 of the hour"],
     ["en", "schedCustomMinutes", [[7]], "Minutes 7 of the hour"],
     ["en", "schedCustomMinutes", [[]], "Nothing selected"],
-    ["en", "schedCustomSummary", [ALL_MONTHS, ALL_DAYS, ALL_HOURS, [0, 20, 40]], "Every month · Daily · Every hour · Every 20 minutes"],
+    ["en", "schedCustomSummary", [ALL_MONTHS, ALL_DAYS, ALL_HOURS, [0, 20, 40]], "Daily · Every hour · Every 20 minutes"],
     ["en", "schedCustomSummary", [[3], [1, 15], [9], [30]], "Months 3 of the year · Days 1, 15 of the month · Hours 9 of the day · Minutes 30 of the hour"],
+    ["en", "schedCustomSummary", [[3, 6, 9, 12], ALL_DAYS, ALL_HOURS, [0]], "Months 3, 6, 9, 12 of the year · Daily · Every hour · Minutes 0 of the hour"],
+    ["en", "schedCustomSummary", [[], ALL_DAYS, ALL_HOURS, [0, 20, 40]], "Which months: Nothing selected · Daily · Every hour · Every 20 minutes"],
     ["en", "schedMinuteStep", [20], "Every 20 minutes"],
 ];
 
@@ -322,6 +332,7 @@ describe("makeMessages", () => {
       "diff.tooLargeTail",
       "mp.schedmsg.cadenceDaily",
       "mp.schedmsg.customEveryMonth",
+      "mp.schedmsg.customMonthsLabel",
       "mp.schedmsg.customMonthsLead",
       "mp.schedmsg.customMonthsTail",
       "mp.schedmsg.customMoreLead",
