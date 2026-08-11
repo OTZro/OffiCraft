@@ -56,10 +56,15 @@ for (const width of [1280, 390]) {
         const el = document.querySelector(sel) as HTMLElement;
         return el.scrollWidth - el.clientWidth;
       };
+      const ofY = (sel: string) => {
+        const el = document.querySelector(sel) as HTMLElement;
+        return el.scrollHeight - el.clientHeight;
+      };
       return {
         error: of(".confirm-modal__error"),
         box: of(".confirm-modal__box"),
         modal: of(".confirm-modal"),
+        errorY: ofY(".confirm-modal__error"),
       };
     });
     expect(
@@ -68,6 +73,15 @@ for (const width of [1280, 390]) {
     ).toBeLessThanOrEqual(1);
     expect(overflowIn.box, `[${width}px] modal box`).toBeLessThanOrEqual(1);
     expect(overflowIn.modal, `[${width}px] modal root`).toBeLessThanOrEqual(1);
+    // 🔴 …and VERTICALLY too. Independent review measured this: with only the
+    // horizontal assertion, `max-height: 22px; overflow-y: hidden` clipped two
+    // of the three lines and this file stayed 2/2 GREEN. Vertical is the
+    // direction this change actually pushes on (10 characters became 3 lines),
+    // so leaving it out was the same mistake as the rect version, one axis over.
+    expect(
+      overflowIn.errorY,
+      `[${width}px] the reason must not be clipped vertically (+${overflowIn.errorY}px hidden)`
+    ).toBeLessThanOrEqual(1);
 
     // …and it also stays inside the modal box's rect (the plain containment
     // half — cheap, and it catches a reason placed outside the panel).
