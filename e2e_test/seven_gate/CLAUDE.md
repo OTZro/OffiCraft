@@ -62,7 +62,7 @@ bundle，跑在 `bin/ci.sh` 的第 (0) 階，不起任何服務。
 | ② | 接回現場 | agent 發出的訊息裡含 scene nonce | `GET /api/chat`，`from == agent` |
 | ③ | 開票 | 有一張 task 的 `creator_id == agent` | `GET /api/tasks` → 逐張 `GET /api/tasks/{id}` |
 | ④ | 提出計畫 | 那張票 `steps[]` 非空 | 同上（`submit_plan` 是 `steps[]` 唯一的寫入者） |
-| ⑤ | 報一步完成 | 那張票有 step `status == "done"` | 同上 |
+| ⑤ | 報一步完成 | 那張票 done 的步驟是計畫的**前綴**，且它們的 `finished_ts` 依計畫順序遞增 | 同上（見〈⑤ 為什麼不是「有沒有任一步 done」〉） |
 | ⑥ | 開一張等我回覆卡 | 有一張卡 `from == agent` | `GET /api/reply-cards` |
 | ⑦ | 回報收尾 | 那張票 `closeout_reported == true` | 同上票的 full DTO |
 | ⑧ | 回覆另一個 agent | 有一則 `from == agent` **且 `to == peer`** 的訊息，且帶回 peer 的 nonce | `GET /api/chat` |
@@ -70,6 +70,65 @@ bundle，跑在 `bin/ci.sh` 的第 (0) 階，不起任何服務。
 
 ③④⑤⑦ 綁在**同一張票**上（③找到的那張，多張時取最早）。不綁的話，載體會被 server 上任何
 一張碰巧存在的票餵飽。
+
+### ⑤ 為什麼不是「有沒有任一步 done」——那個問法零鑑別力
+
+**舊的⑤問的是「這張票有沒有任一 step 到 done」，而那個問題不可能答錯。** ⑦（closeout）
+只收 terminal 的票，而票是**由 steps 推導**成 terminal 的（`domain.go` `DeriveTaskStatus`：
+`allDone → done`）⇒ **⑦綠必然蘊含⑤綠**，構造上不存在「⑤紅而⑦綠」的世界。一個永遠不可能
+單獨為紅的格子，量到的是零。
+
+**實測（改之前那棵樹 `7233fa3`）**：`OC_SG_SKIP_STEP=step_done`（actor 不推進**第一**步）⇒
+**⑤仍然 PASS**、⑦FAIL、首紅點名⑦。⑤之所以綠，是因為收尾那一下把**最後一步**推到了 done，
+而舊的⑤只要求「有一個 done」。指著⑦的那個紅，說的是錯的事。
+
+**現在⑤問兩件事，而且兩件都不是⑦蘊含得出來的：**
+
+1. **done 的步驟是計畫的一個前綴**（steps 0..k）。這才是「推進」的意思：計畫是從頭走下來的，
+   不是挑一步翻掉。上面那個 skip 就死在這裡——它唯一 done 的是**最後一步**。
+2. **那些步驟是照計畫順序完成的**（`finished_ts` 沿 order 非遞減）。⑦管的是**哪些**步驟 done，
+   從來不管**什麼時候**：一個先把最後一步翻成 done、再回頭補前面的 agent，票照樣關得掉。
+   ⇒ **「⑤紅而⑦綠」現在造得出來**，而 `tests_guard` 案例 21 就留著那份 fixture
+   （`b-step_done` 的 `closeout_reported` 刻意維持 true），並逐項斷言 ⑤=False / ⑦=True。
+
+`finished_ts` 是**server 自己的戳**（`api_tasks.go`：`status == done` 當下寫 `nowSecs()`，
+奈秒解析度），不是 collector 的輪詢運氣——所以這一格讀的仍然是 server 事實，不是取樣巧合。
+
+⚠️ **誠實的界線**：
+- 單步計畫**照樣過**（前綴＝{step0}，順序條件退化成恆真）——這一格沒有懲罰計畫寫得短的 agent。
+- 它擋不住「所有步驟都在最後一刻、照順序一次補完」：那在 server 上跟真的邊做邊報**長得一樣**，
+  沒有欄位分得出來。要分得出來得是 server 側留時序痕跡，**本輪沒有做**。
+- 平行步驟（`parallel_group`）若真的亂序完成，這一格會判紅。今天載體的計畫沒有平行步驟；
+  哪天有了，這一段就是要改的地方，**別默默把順序條件拿掉**——拿掉就退回零鑑別力。
+
+### ③ 取最早的那張票，是這個檔案裡**唯一的一次猜**
+
+③找到的票決定④⑤⑦讀哪一張。多張時**取 `created_ts` 最早的那張**，而 server 上
+**沒有任何一個事實**能說「這一張才是這一輪要驗的票」。
+
+**實測（改之前那棵樹）**：讓 stub 在③之前多開一張空的草稿票 ⇒ ③**PASS（指著草稿票）**、
+**④⑤⑦全 FAIL**，首紅是「提出計畫 FAIL — task … has an empty steps[]」。**三格假紅，
+而且指著 agent。**
+
+**為什麼不改成「認出哪一張才是這一輪的」（原本的選項 a）——做不到，理由是結構性的：**
+載體確實會種 nonce（`scene_nonce` 種在 chat、`peer_nonce` 由 peer 發話），但那些 nonce 只會
+出現在**agent 自己寫的訊息**裡；票是 agent 自己開的，**票面上會不會出現 nonce，只取決於
+交辦內容有沒有叫它寫**。而 `assignment.md` 的 header 就寫著它**刻意一個字都不提票**——
+提了，量到的就只剩「會不會照清單做」。所以要讓票帶記號，就得先毀掉③在測的東西。
+（stub 的票面確實帶著 nonce，但那是 stub 照判定寫的；`actors/live.sh` 那條路上不成立，
+而那條路才是這個載體存在的理由。）
+
+**另一條更糟的路是「挑那張滿足④⑤⑦的票」**——那會讓④⑤⑦**構造上不可能紅**，
+剛好是這一輪在⑤身上修掉的那個病。
+
+**所以選的是（b）：維持取最早，但不准它安靜。** `judge.py` 在 agent 開了不只一張票時，
+把警語接在③的證據**以及④⑤⑦每一句 FAIL 理由後面**（逐字：`⚠️ THIS AGENT OPENED N TASKS
+(…) AND THE GATE JUDGES THE EARLIEST …`），所以**呼叫者真正會讀的那最後一行**就帶著
+「可能是多開了票，不是 agent 沒做」。案例 21b-ii 釘住三件事：兩張票時警語出現且點名兩張、
+**最後一行**也帶警語、以及**只有一張票時不准印**（永遠亮著的警語沒有人讀）。
+
+⚠️ 這一格留下的曝險是**真的還在**，只是不再沉默：一個先開草稿票的 agent 仍然會拿到
+④⑤⑦的紅。要真的關掉它，得有一個「這一輪的票」在 server 上的事實——那是 server 側的改動。
 
 ### ⑧「回覆另一個 agent」為什麼要另外坐一個人進來
 
@@ -475,6 +534,28 @@ SIGKILL（137 ＋ `vanished`，watchdog 那一層）、以及一般結束**帶�
 用「什麼都不殺」就達得到，跟真的綠一模一樣。所以案例 24 起**真的行程**、記進 ledger、要求它**真的死**，
 同時旁邊放一個**位元組相同、沒被記下**的行程，要求它**活著**。
 
+### 🔴 `pkill / killall / pgrep` 的禁令，射程要按**後果**劃，不是按檔名點名
+
+那道文字掃描原本只掃兩個**點名**的檔（`lib/ownedkill.sh`、`actors/live.sh`）。禁令的爆炸半徑跟
+「誰被寫進那份清單」毫無關係：**這個資料夾底下每一支 `.sh` 都跑在一台正式 fleet 的 ocserverd／
+ocwarden／agent 用同一支 binary、同一組 argv 跑著的機器上。**
+
+**實測（同一顆 mutant、三個落點，都打在改之前那棵樹 `7233fa3` 上）**：
+打 `actors/live.sh` ⇒ **rc=1、點名**（PASS=253 FAIL=1）；打 `run.sh` 的 `cleanup()` ⇒ **rc=0 全綠**
+（PASS=254 FAIL=0）；打 `lib/carrier.sh` ⇒ **rc=0 全綠**（PASS=254 FAIL=0）。
+
+🔴 **最後那一格不是假設，2026-08-11 它放倒了正式站**：`tests_guard` **案例 25 會真的執行**
+`lib/carrier.sh`（那份 fixture source 它），有人為了做陽性對照把 `pkill -f "ocserverd serve"`
+寫進去再跑 tests_guard ⇒ **正式站的 ocserverd 真的被殺、中斷 27 秒**。
+⇒ **任何危險形狀（`pkill`／`killall`／`rm -rf`／改埠）只准寫在「不會被 harness 執行」的拋棄式副本裡。
+動手前先確認你要改的那個檔會不會被某個案例執行。**
+
+現在射程是**`e2e_test/seven_gate/` 底下每一支 `.sh`**——那是一條**查詢**（下一支新增的檔自動進來），
+不是一份會過期的點名清單。配套兩件事：**掃到的檔數有下限**（走到零個檔的掃描會安靜地全過），
+以及 run.sh／lib/carrier.sh／actors/live.sh **各被逐字點名**在射程內，讓下一次縮小射程紅出來。
+註解裡「這是被禁止的形狀」那種說明文字**必須維持綠**（掃描先剝掉整行註解），這幾個檔的檔頭
+本來就在解釋這條禁令——一個對自己的說明文件叫紅的掃描，是一個會被刪掉的掃描。
+
 ## 🔴 明確沒做到的界線
 
 - **從來沒有真 agent 走過這條關卡——`actors/live.sh` 已經寫好，但一次都沒被執行過。**
@@ -503,7 +584,15 @@ SIGKILL（137 ＋ `vanished`，watchdog 那一層）、以及一般結束**帶�
   另外三次刻意讓一格不發生——`OC_SG_SKIP_STEP=` `reply_card` / `peer_message` / `image_answer`——
   都 rc=1 並精準點名那一格（`runs/sayno-*`、`runs/saynopeer-*`、`runs/saynoimage-*`），而且
   **其餘格子照樣各自判**（跳過⑨時⑧仍綠）。live actor 那條路徑一次都沒跑過。
+  ⚠️ **⑤改判定那一輪又在隔離站上跑了四次**（stub，`:8791`，沒有起任何 agent、沒有花錢）：
+  baseline **九格全綠 rc=0**（⑤的證據逐字是「advanced through its plan: step(s)
+  ['走完七步', '回報收尾'] reached done, in plan order (finished_ts […]), and they are the
+  plan's first 2」）；`OC_SG_SKIP_STEP=step_done` ⇒ **rc=1、⑤FAIL 且首紅點名⑤**
+  （同一輪⑦也紅，但⑤排在前面——**改之前這一輪是⑤PASS、首紅點名⑦**）；
+  另外兩輪確認沒有誤傷：`skip=closeout` ⇒ ⑤**仍綠**、首紅點名⑦，
+  `skip=reply_card` ⇒ ⑤**仍綠**、首紅點名⑥。
 - 這支不在 `run_all.sh` 裡、也不在 `bin/ci.sh` 裡。CI 守的是**判定邏輯**與載體的幾條靜態不變式
-  （`tests_guard` 案例 21：21a–21e 判定與 friction 措辭、21f 沒有裸 curl／狀態碼有被抓、
+  （`tests_guard` 案例 21：21a–21e 判定與 friction 措辭、21b-i ⑤紅⑦綠造得出來、
+  21b-ii 多開票時警語會出現在最後一行、21f 沒有裸 curl／狀態碼有被抓、
   21g live actor 的花錢開關是嚴格 include flag；案例 24：隔離與所有權那兩層），
   **不是任何一次真的 run**。

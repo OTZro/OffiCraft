@@ -119,17 +119,37 @@ def judge(scene, samples):
 
     # ③ 開票 — a task row whose creator_id is the agent. Earliest wins, and it
     # is THE task ④⑤⑦ are judged on.
+    #
+    # ⚠️ EARLIEST IS A GUESS, AND IT IS THE ONE PLACE THIS FILE GUESSES. There is
+    # no server fact that says "this ticket is the one this round is about": the
+    # assignment (assignment.md) deliberately never mentions tickets, so the
+    # harness cannot plant a marker the agent would carry into the task without
+    # destroying what ③ measures. An agent that opens a scratch/draft ticket
+    # first therefore gets ④⑤⑦ judged against the WRONG row — three reds that
+    # are the harness's, not the agent's. The alternative (pick whichever of the
+    # agent's tasks satisfies ④⑤⑦) is worse: it makes those cells unfalsifiable
+    # by construction. So the exposure is kept, named here, written verbatim in
+    # CLAUDE.md, and — since it cannot be removed — SAID OUT LOUD in the evidence
+    # of every cell it can poison (`_multi` below).
     mine = {}
     for _, t in _iter(samples, "tasks"):
         if t.get("creator_id") == agent:
             prev = mine.get(t.get("id"))
             if prev is None or (t.get("updated_ts") or 0) >= (prev.get("updated_ts") or 0):
                 mine[t["id"]] = t
-    task = None
-    if mine:
-        task = sorted(mine.values(), key=lambda t: (t.get("created_ts") or 0, t.get("id")))[0]
+    ordered = sorted(mine.values(), key=lambda t: (t.get("created_ts") or 0, t.get("id")))
+    task = ordered[0] if ordered else None
+    _multi = ""
+    if len(ordered) > 1:
+        _multi = (" ⚠️ THIS AGENT OPENED %d TASKS (%s) AND THE GATE JUDGES THE "
+                  "EARLIEST — ④⑤⑦ are read from %s only. If those cells look "
+                  "wrong, suspect a draft/scratch ticket opened before the real "
+                  "one rather than the agent: the gate has no server fact that "
+                  "says which ticket this round is about (see CLAUDE.md 〈③ 取最早…〉)."
+                  % (len(ordered), ", ".join(t.get("id") or "<no id>" for t in ordered),
+                     task.get("id")))
     out.append(("create_task", "開票", task is not None,
-                "task %s (%r) has creator_id=%s" % (task.get("id"), task.get("title"), agent) if task
+                ("task %s (%r) has creator_id=%s" % (task.get("id"), task.get("title"), agent)) + _multi if task
                 else "no task on the server carries creator_id=%s — this agent "
                      "never opened a ticket" % agent))
 
@@ -137,16 +157,63 @@ def judge(scene, samples):
     steps = (task or {}).get("steps") or []
     out.append(("submit_plan", "提出計畫", bool(task) and len(steps) > 0,
                 "task %s carries %d plan step(s)" % (task.get("id"), len(steps)) if steps
-                else "task %s has an empty steps[] — no plan was ever submitted"
-                     % (task.get("id") if task else "<none: ③ failed>")))
+                else ("task %s has an empty steps[] — no plan was ever submitted"
+                      % (task.get("id") if task else "<none: ③ failed>")) + _multi))
 
-    # ⑤ 報一步完成 — at least one of that plan's steps reached done.
+    # ⑤ 報一步完成 — did the agent ADVANCE the plan, step by step.
+    #
+    # 🔴 WHAT THIS CELL USED TO ASK, AND WHY IT MEASURED NOTHING: "does ANY step
+    # of this task carry status=done". ⑦ (closeout) is terminal-tasks-only and a
+    # task is terminal only when EVERY step derives it there (domain.go
+    # DeriveTaskStatus: allDone → done), so ⑦ GREEN IMPLIED ⑤ GREEN — there was
+    # no world in which this cell could be red while ⑦ was green, which is the
+    # definition of a cell with no discriminating power. MEASURED on the tree
+    # before this change: OC_SG_SKIP_STEP=step_done (the actor never advances the
+    # FIRST step) left ⑤ PASS — the closing act on the LAST step had put a `done`
+    # on the task, and that was all the old cell asked for. The red landed on ⑦.
+    #
+    # WHAT IT ASKS NOW — two facts, and NEITHER is implied by ⑦:
+    #   * the done steps are a PREFIX of the plan (steps 0..k). This is what
+    #     "推進" means: the plan was walked from its start, not cherry-picked.
+    #     The skip case above dies here — its only done step is the LAST one.
+    #   * those steps finished IN PLAN ORDER (finished_ts non-decreasing along
+    #     order). ⑦ constrains WHICH steps are done, never WHEN: an agent that
+    #     flips the last step done first and back-fills the earlier ones closes
+    #     the task all the same. So ⑤-red-while-⑦-green is now CONSTRUCTIBLE,
+    #     and tests_guard case 21 keeps a fixture that is exactly that.
+    #
+    # finished_ts is the server's own stamp, written at the moment the step
+    # report lands (api_tasks.go: `if status == StepStatusDone { step.FinishedTS
+    # = now }`, nowSecs() = ns resolution), so it is the SERVER's account of the
+    # ordering, not the collector's polling luck.
     done = [s for s in steps if s.get("status") == "done"]
-    out.append(("step_done", "報一步完成", len(done) > 0,
-                "step %r on task %s reached status=done" % (done[0].get("name"), task.get("id")) if done
-                else "no step of task %s ever reached status=done — the plan was "
-                     "filed and then nothing moved"
-                     % (task.get("id") if task else "<none: ③ failed>")))
+    n_done = len(done)
+    prefix = [s for s in steps[:n_done] if s.get("status") == "done"]
+    is_prefix = n_done > 0 and len(prefix) == n_done
+    fts = [float(s.get("finished_ts") or 0) for s in prefix]
+    in_order = all(a <= b for a, b in zip(fts, fts[1:]))
+    if not task or not steps:
+        why = ("task %s has no plan to advance — ⑤ cannot be read before ④ lands"
+               % (task.get("id") if task else "<none: ③ failed>")) + _multi
+    elif n_done == 0:
+        why = ("no step of task %s ever reached status=done — the plan was filed "
+               "and then nothing moved" % task.get("id")) + _multi
+    elif not is_prefix:
+        why = ("task %s has %d step(s) at done, but they are NOT the plan's first "
+               "%d — the done steps are %s while the plan reads %s. Nothing shows "
+               "the agent advanced THROUGH the plan; a task can be closed by "
+               "flipping whichever step is in the way, and that is not 報一步完成."
+               % (task.get("id"), n_done, n_done,
+                  [s.get("name") for s in done], [s.get("name") for s in steps])) + _multi
+    elif not in_order:
+        why = ("task %s finished its first %d step(s) OUT OF PLAN ORDER "
+               "(finished_ts %s) — the plan was not walked, it was back-filled"
+               % (task.get("id"), n_done, fts)) + _multi
+    else:
+        why = ("task %s advanced through its plan: step(s) %s reached done, in "
+               "plan order (finished_ts %s), and they are the plan's first %d"
+               % (task.get("id"), [s.get("name") for s in prefix], fts, n_done))
+    out.append(("step_done", "報一步完成", bool(task) and is_prefix and in_order, why))
 
     # ⑥ 開一張等我回覆卡 — a reply card whose `from` is the agent. The agent has
     # to DECIDE to open it; a card the harness opened on its behalf proves
@@ -165,9 +232,9 @@ def judge(scene, samples):
     out.append(("closeout", "回報收尾", closed,
                 "task %s has closeout_reported=true (status=%s)"
                 % (task.get("id"), task.get("status")) if closed
-                else "task %s has closeout_reported=false — the work may have "
-                     "stopped but no closeout was ever reported"
-                     % (task.get("id") if task else "<none: ③ failed>")))
+                else ("task %s has closeout_reported=false — the work may have "
+                      "stopped but no closeout was ever reported"
+                      % (task.get("id") if task else "<none: ③ failed>")) + _multi))
 
     # ⑧ 回覆另一個 agent — the three channels an agent has are chat, the reply
     # card and the task, and every step above exercises them only TOWARDS THE

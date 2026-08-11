@@ -1589,11 +1589,29 @@ drop, out = sys.argv[1], sys.argv[2]
 AG, NONCE = "m-sg", "sg-nonce-deadbeef"
 PEER, PEER_NONCE = "m-sg-peer", "sg-peer-nonce-feedface"
 IMG_ANSWER = "481902"   # the number that, in a real run, exists only in pixels
-step0 = {"id": "s1", "name": "走完七步", "status": "done" if drop != "step_done" else "todo"}
+# TWO steps, because ⑤ is about ADVANCING a plan and a one-step plan cannot
+# express the difference. The step_done mutant is the REAL exposure this fixture
+# exists to pin, and it is not "no step is done": it is the shape measured on a
+# live stub run with OC_SG_SKIP_STEP=step_done — the FIRST step never moves while
+# the LAST one is driven to done by the closing act. The old ⑤ ("any step is
+# done") passed on exactly this. Note what else this mutant is: closeout_reported
+# stays TRUE, so it is a bundle where ⑤ is red AND ⑦ is green — the world the old
+# ⑤ could not construct, which is why it had no discriminating power at all.
+step0 = {"id": "s1", "name": "走完七步", "order_idx": 0,
+         "status": "todo" if drop == "step_done" else "done",
+         "started_ts": 0 if drop == "step_done" else 140.0,
+         "finished_ts": 0 if drop == "step_done" else 150.0}
+step1 = {"id": "s2", "name": "回報收尾", "order_idx": 1, "status": "done",
+         "started_ts": 170.0, "finished_ts": 180.0}
 task = {"id": "T-1", "creator_id": AG, "title": "probe", "created_ts": 100,
         "updated_ts": 200, "status": "done",
-        "steps": [] if drop == "submit_plan" else [step0],
+        "steps": [] if drop == "submit_plan" else [step0, step1],
         "closeout_reported": drop != "closeout"}
+# The scratch ticket: same creator, EARLIER created_ts, no plan on it. Nothing
+# on the server distinguishes it from the real one.
+draft = {"id": "T-0-draft", "creator_id": AG, "title": "草稿", "created_ts": 50,
+         "updated_ts": 60, "status": "not_started", "steps": [],
+         "closeout_reported": False}
 samples = [
     {"t": 1.0, "member": {"id": AG, "presence": "offline"}, "chat": [], "tasks": [], "reply_cards": []},
     {"t": 2.0,
@@ -1615,7 +1633,12 @@ samples = [
              + ([] if drop == "image_answer" else
                 [{"id": "c3", "from": AG, "to": "owner",
                   "body": "圖上的號碼是 " + IMG_ANSWER}]),
-     "tasks": [] if drop == "create_task" else [task],
+     # A THIRD-PARTY TASK ROW is always present: ③ must key on creator_id, not
+     # on "a task exists". And with SG_DRAFT=1 the agent ALSO opened an earlier,
+     # empty scratch ticket — the shape that makes ③ point at the wrong row and
+     # ④⑤⑦ go red for the harness's reason (see judge.py ③).
+     "tasks": [] if drop == "create_task" else
+              ([draft] if os.environ.get("SG_DRAFT") == "1" else []) + [task],
      "reply_cards": [] if drop == "reply_card" else
                     [{"id": "rc-1", "from": AG, "status": "waiting"}]},
 ]
@@ -1667,6 +1690,52 @@ sg_mutant reply_card    開一張等我回覆卡
 sg_mutant closeout      回報收尾
 sg_mutant peer_message  回覆另一個-agent
 sg_mutant image_answer  看得到圖
+
+# 21b-i) ⑤ HAS DISCRIMINATING POWER OF ITS OWN — the property the old cell did
+# not have. ⑤ used to ask "does ANY step carry done", and ⑦ (closeout) is
+# terminal-tasks-only while a task is terminal only when EVERY step is done
+# (domain.go DeriveTaskStatus) — so ⑦ green IMPLIED ⑤ green, and no bundle could
+# exist where ⑤ was red and ⑦ was not. MEASURED before the fix, on a live stub
+# run: OC_SG_SKIP_STEP=step_done left ⑤ PASS and put the red on ⑦.
+# The step_done fixture above IS that bundle now (its closeout_reported stays
+# true), so this asserts the two halves separately: ⑤ red, ⑦ green, same run.
+_sg_v="$SG_WORK/b-step_done/verdict.json"
+_sg_pair="$(python3 -c '
+import json, sys
+v = {r["key"]: r["passed"] for r in json.load(open(sys.argv[1]))}
+print("%s|%s" % (v.get("step_done"), v.get("closeout")))' "$_sg_v" 2>/dev/null)"
+check "seven_gate: ⑤ can be RED while ⑦ is GREEN — the cell is independently falsifiable, not implied by the close-out" \
+  "False|True" "$_sg_pair"
+
+# 21b-ii) ③ TAKES THE EARLIEST TASK, AND THAT IS A GUESS — the one guess in that
+# file. An agent that opens a scratch ticket before the real one gets ④⑤⑦ judged
+# against the wrong row (MEASURED: ③ PASS pointing at the draft, ④⑤⑦ all FAIL,
+# first red 「提出計畫 FAIL — task … has an empty steps[]」). It cannot be fixed by
+# picking whichever task satisfies ④⑤⑦ — that would make those cells
+# unfalsifiable — and it cannot be fixed with a planted marker, because
+# assignment.md deliberately never tells the agent to open a ticket at all. So
+# the requirement is that the verdict SAYS SO instead of silently accusing the
+# agent.
+rm -rf "$SG_WORK/b-draft"
+SG_DRAFT=1 python3 "$SG_WORK/mk.py" none "$SG_WORK/b-draft" >/dev/null 2>&1
+_sg_draft_out="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-draft" 2>&1)"
+case "$_sg_draft_out" in
+  *"OPENED 2 TASKS"*"T-0-draft"*)
+    ok "seven_gate: with a draft ticket opened first, the verdict names BOTH tasks and says it judged the earliest" ;;
+  *) bad "seven_gate: two tasks from the same agent produced no warning — ④⑤⑦'s reds would silently accuse the agent of the harness's own guess: $_sg_draft_out" ;;
+esac
+_sg_draft_last="$(printf '%s\n' "$_sg_draft_out" | tail -n 1)"
+case "$_sg_draft_last" in
+  *"suspect a draft"*) ok "seven_gate: …and the FIRST RED itself carries the hint — $_sg_draft_last" ;;
+  *) bad "seven_gate: the last line (the one a caller acts on) does not mention the extra ticket: $_sg_draft_last" ;;
+esac
+# …and it must stay a WARNING that fires only when it applies: a hint printed on
+# every run is one nobody reads by the time it matters.
+_sg_single_out="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-none" 2>&1)"
+case "$_sg_single_out" in
+  *"OPENED"*) bad "seven_gate: a run with ONE task still prints the multi-task warning — a warning that is always on is noise" ;;
+  *) ok "seven_gate: a run with one task prints no multi-task warning (the hint fires only when it applies)" ;;
+esac
 
 # 21c) an EMPTY journal must not read as a pass. This is the failure mode a
 # collector crash produces, and "no evidence" answering green is the one bug
@@ -2167,13 +2236,42 @@ else
   check "MUT-pgrep: the mutant still kills the process it owns (so the difference below is the PATTERN, not a broken mutant)" "dead" "${_sg24_pm%%|*}"
   check "MUT-pgrep: …and it ALSO kills the un-recorded look-alike — 24e is pinned to the ledger, not to luck" "dead" "${_sg24_pm#*|}"
 fi
-# The text scan that would have caught this one before it ran. Comments are
-# stripped first: lib/ownedkill.sh and live.sh both NAME the banned shape in
+# The text scan that would have caught this one before it ran.
+#
+# 🔴 SCOPE IS DRAWN BY CONSEQUENCE, NOT BY FILENAME — this cost a real outage.
+# The scan used to name two files (lib/ownedkill.sh, actors/live.sh), and the
+# ban's blast radius has nothing to do with which two files somebody listed:
+# ANY of these scripts runs on a machine where the live fleet's ocserverd,
+# ocwarden and agents are running the same binaries with the same argv. MEASURED
+# on the old scan, one mutant, three targets: planted in actors/live.sh → rc=1,
+# named; planted in run.sh's cleanup() → rc=0, SILENT; planted in lib/carrier.sh
+# → rc=0, SILENT. That last file is the one tests_guard case 25 EXECUTES as a
+# fixture, and on 2026-08-11 somebody put `pkill -f "ocserverd serve"` into it to
+# build a positive control, ran this suite, and took the live ocserverd down for
+# 27 seconds. So the scope is now "every .sh under seven_gate/", which is a
+# QUERY (it picks up the next file somebody adds) rather than a roll-call.
+#
+# Comments are stripped first: several of these files NAME the banned shape in
 # their headers to explain why it is banned, and a scan that reddens on its own
-# documentation is a scan somebody deletes.
-for _sg24_f in "$SG_OWNED" "$SG_LIVE"; do
+# documentation is a scan somebody deletes. Those comments must stay green.
+_sg24_scanned=0
+while IFS= read -r _sg24_f; do
+  _sg24_scanned=$(( _sg24_scanned + 1 ))
   _sg24_bans="$(_sg_code_only "$_sg24_f" | grep -cE '(^|[^[:alnum:]_])(pkill|killall|pgrep)([^[:alnum:]_]|$)' || true)"
-  check "seven_gate: $(basename "$_sg24_f") uses no pkill/killall/pgrep in code (name is not identity)" "0" "${_sg24_bans:-0}"
+  check "seven_gate: ${_sg24_f#$SG_DIR/} uses no pkill/killall/pgrep in code (name is not identity)" "0" "${_sg24_bans:-0}"
+done < <(find "$SG_DIR" -name '*.sh' -type f | sort)
+# A roll-call of zero files would pass every assertion above by having none. The
+# floor is a floor, not a count: it must not need editing when a script is added,
+# only when the walk itself breaks.
+[[ "$_sg24_scanned" -ge 6 ]] \
+  && ok "seven_gate: the banned-shape scan walked $_sg24_scanned .sh files under seven_gate/ (scope is the directory, not a list of names)" \
+  || bad "seven_gate: the banned-shape scan only found $_sg24_scanned .sh file(s) under $SG_DIR — a walk that finds nothing passes silently, which is how this ban lost its reach the first time"
+# …and the three files the old two-name scan could not see are each named, so a
+# future narrowing of the walk cannot quietly drop them.
+for _sg24_must in run.sh lib/carrier.sh actors/live.sh; do
+  find "$SG_DIR" -name '*.sh' -type f | grep -Fqx "$SG_DIR/$_sg24_must" \
+    && ok "seven_gate: …including $_sg24_must (a mutant here used to be SILENT)" \
+    || bad "seven_gate: $_sg24_must is not in the banned-shape scan's reach — that is the file that took the live server down"
 done
 check "banned-shape scan control: the SAME scan finds the shape in the pgrep mutant" "1" \
   "$(_sg_code_only "$SG24_PIDMUT" | grep -cE '(^|[^[:alnum:]_])(pkill|killall|pgrep)([^[:alnum:]_]|$)' || true)"
