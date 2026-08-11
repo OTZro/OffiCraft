@@ -53,6 +53,24 @@ func (e MonitoringSessionDTORuntime) Valid() bool {
 	}
 }
 
+// Defines values for ReplyCardCreateDTOKind.
+const (
+	Action   ReplyCardCreateDTOKind = "action"
+	Decision ReplyCardCreateDTOKind = "decision"
+)
+
+// Valid indicates whether the value is a known member of the ReplyCardCreateDTOKind enum.
+func (e ReplyCardCreateDTOKind) Valid() bool {
+	switch e {
+	case Action:
+		return true
+	case Decision:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ScheduledMessageCreateDTOCadence.
 const (
 	ScheduledMessageCreateDTOCadenceDaily   ScheduledMessageCreateDTOCadence = "daily"
@@ -1517,12 +1535,15 @@ type ReplyCardCreateDTO struct {
 	Attachments *[]ChatAttachmentInputDTO `json:"attachments,omitempty"`
 
 	// Bind Auto-binding opt-out. Omit (or "") for the default AUTO binding: when you are the executor of exactly one active task, the card binds to that task's CURRENT step and places the 等我回覆 hold. Send ``"none"`` to declare this ask is NOT about your task — the card opens as a plain unbound 請示 regardless of what work you hold. Any other value is a 400.
-	Bind    *string  `json:"bind,omitempty"`
-	Body    *string  `json:"body,omitempty"`
-	Kind    string   `json:"kind"`
-	Options []string `json:"options"`
-	Summary string   `json:"summary"`
+	Bind    *string                `json:"bind,omitempty"`
+	Body    *string                `json:"body,omitempty"`
+	Kind    ReplyCardCreateDTOKind `json:"kind"`
+	Options []string               `json:"options"`
+	Summary string                 `json:"summary"`
 }
+
+// ReplyCardCreateDTOKind defines model for ReplyCardCreateDTO.Kind.
+type ReplyCardCreateDTOKind string
 
 // ReplyCardDTO One reply card (等我回覆卡). “from“ is the initiating member (the verified JWT sub at create time). “status“ is the closed set “waiting“ | “answered“ | “expired“ — the only transitions are waiting→answered via an answer (the owner's positive close) and waiting→expired via the expire action (the card's own author, the owner, or an admin agent — T-6020 opened it to the admin floor, T-1b88 widened it to the author) (標為過期 — NOT an answer: the ask went stale and the owner declined it; terminal, no reopen); a revised answer (PUT) keeps “answered“. “chat_message_id“ links the chat message the card rides in (the jump-to-origin anchor); “answered_ts“/“answer“ are null unless answered; “expired_ts“ is null unless expired. “attachments“ are the QUESTION-side attachments the initiator opened the card with (served refs incl. download url; always an array, “[]“ when none).
 type ReplyCardDTO struct {

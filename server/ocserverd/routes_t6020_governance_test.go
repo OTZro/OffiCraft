@@ -338,15 +338,27 @@ func TestT6020OpenedAndWithheldAreDisjointAndComplete(t *testing.T) {
 //
 // What that test canNOT stop is the escape hatch: knownCatalogDrift silences a
 // tool's missing parameters by name, and adding an entry is a one-line edit that
-// makes a red run green. It exists for six PRE-EXISTING gaps (T-c362, frozen by
-// the owner — not this ticket's to fix). None of the 19 is in it, and none may
-// ever be: these descriptors were written today, so a "known drift" on one of
-// them could only ever mean "we shipped it wrong and wrote that down instead of
+// makes a red run green. It existed for six PRE-EXISTING gaps (T-c362) — those
+// were REPAID in T-1ba2 and the map is now empty, so today the only populated
+// hatch is openapiOverweight. None of the 19 is in either, and none may ever be:
+// these descriptors were written for T-6020, so a "known drift" on one of them
+// could only ever mean "we shipped it wrong and wrote that down instead of
 // fixing it".
 func TestT6020OpenedToolsCarryTheirWholeParameterSet(t *testing.T) {
-	if len(knownCatalogDrift) == 0 {
-		t.Fatalf("knownCatalogDrift is empty — the check below would be vacuous; " +
-			"if the T-c362 debt really was paid, delete this guard's premise too")
+	// Anti-vacuity, in the two places this test can go dead. The premise used to
+	// be `len(knownCatalogDrift) == 0` and it Fatal'd on exactly the state that
+	// means the debt was PAID — its own message said to delete it in that case,
+	// which T-1ba2 is doing. What actually has to be non-empty is (a) the corpus
+	// the loop walks, and (b) at least ONE escape-hatch map, so the lookups below
+	// are exercised against real data rather than two empty maps.
+	rows := t6020AllOpenedRows()
+	if len(rows) == 0 {
+		t.Fatalf("t6020AllOpenedRows() is empty — this test would pass vacuously")
+	}
+	if len(knownCatalogDrift)+len(openapiOverweight) == 0 {
+		t.Fatalf("both escape-hatch maps are empty — the lookups below would be " +
+			"vacuous. If that is genuinely correct, this test has stopped being " +
+			"able to catch anything and should be reconsidered, not silenced")
 	}
 	for key, tool := range t6020AllOpenedRows() {
 		if params, baselined := knownCatalogDrift[tool]; baselined {

@@ -5875,8 +5875,11 @@ export interface components {
              * @default
              */
             body: string;
-            /** Kind */
-            kind: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "decision" | "action";
             /** Options */
             options: string[];
             /** Summary */

@@ -79,19 +79,22 @@ import (
 // ?view=list was the only way down from it. A lever that exists, works, and is
 // the sole escape from an unreadable default does not exist at all while it is
 // off tools/list, so it was repaid with the response-size work rather than
-// waiting for a catalog-wide ticket. The other five stand.
+// waiting for a catalog-wide ticket.
+//
+// ALL SIX ARE NOW REPAID (T-1ba2), so this map is EMPTY. The catalog-wide
+// ticket the note above was waiting for is this one: the remaining five tools'
+// six parameters are advertised in spec/mcp-catalog.json with descriptions, and
+// the entries that recorded them as debt were deleted in the same change. The
+// map is kept (rather than deleted outright) because it is the seam a FUTURE
+// deliberate baseline would go through; an entry added here still has to be
+// traced to the line that reads it, and still has to be deleted the moment the
+// gap is repaired.
 //
 // Checked in BOTH directions (see the rot assertion below): if one is fixed,
 // this test fails until the entry is deleted. A stale allowlist that silently
 // permits drift is the same disease as a stale comment, and this file exists
 // because of a stale comment.
-var knownCatalogDrift = map[string][]string{
-	"ingest_telemetry":   {"binaries", "claude"},
-	"update_task_manual": {"display_name"},
-	"list_tasks":         {"open"},
-	"get_members":        {"fields"},
-	"get_chat":           {"peek"},
-}
+var knownCatalogDrift = map[string][]string{}
 
 // openapiOverweight is the OTHER direction, and it is NOT debt: openapi lists a
 // field for this operation that the operation's handler never reads, so the

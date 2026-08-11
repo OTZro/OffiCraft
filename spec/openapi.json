@@ -3637,6 +3637,10 @@
             "type": "string"
           },
           "kind": {
+            "enum": [
+              "decision",
+              "action"
+            ],
             "title": "Kind",
             "type": "string"
           },

@@ -167,7 +167,13 @@ func (s *apiServer) openReplyCard(actor string, body ReplyCardCreateDTO, taskID,
 			taskID + "' with no step: a step-less task binding places no 等我回覆 hold " +
 			"and orphans the card when the task closes")
 	}
-	kind := trimString(body.Kind)
+	// string(): the generated request type now carries the enum spec/openapi.json
+	// declares, so this is a named string type rather than a bare string. The
+	// closed-set check below is UNCHANGED and still load-bearing — the generated
+	// Valid() is never called on the decode path, so an out-of-set kind still has
+	// to be rejected HERE, and still as a 400 rather than the decoder's 422
+	// (conformance/test_reply_cards.py pins {"kind": "poll"} == 400).
+	kind := trimString(string(body.Kind))
 	if kind != replyCardKindDecision && kind != replyCardKindAction {
 		return nil, "kind must be 'decision' or 'action'", nil
 	}
