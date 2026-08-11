@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""Regenerate the frozen MCP catalog from OpenAPI operation metadata."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import pathlib
+import sys
+from typing import Any, Iterator, NoReturn
+
+
+HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options", "trace"})
+
+
+class CatalogError(Exception):
+    pass
+
+
+def fail(message: str) -> "NoReturn":
+    raise CatalogError(message)
+
+
+def operations(spec: dict[str, Any]) -> Iterator[tuple[str, str, dict[str, Any]]]:
+    paths = spec.get("paths")
+    if not isinstance(paths, dict):
+        fail("spec/openapi.json has no object-valued paths")
+    for path, path_item in paths.items():
+        if not isinstance(path_item, dict):
+            fail(f"path {path!r} is not an object")
+        for method, operation in path_item.items():
+            if method not in HTTP_METHODS:
+                continue
+            if not isinstance(operation, dict):
+                fail(f"{method.upper()} {path} is not an operation object")
+            yield method.upper(), path, operation
+
+
+def legacy_descriptor(operation: dict[str, Any], method: str, path: str) -> tuple[int, str]:
+    metadata = operation.get("x-mcp")
+    if not isinstance(metadata, dict):
+        fail(f"{method} {path}: missing x-mcp metadata")
+    if metadata.get("include") is not True:
+        return -1, ""
+
+    order = metadata.get("order")
+    if not isinstance(order, int) or isinstance(order, bool) or order < 0:
+        fail(f"{method} {path}: x-mcp.order must be a non-negative integer")
+    name = metadata.get("name")
+    description = metadata.get("description")
+    legacy = metadata.get("legacy")
+    if not isinstance(name, str) or not name:
+        fail(f"{method} {path}: x-mcp.name must be a non-empty string")
+    if not isinstance(description, str):
+        fail(f"{method} {path}: x-mcp.description must be a string")
+    if not isinstance(legacy, dict):
+        fail(f"{method} {path}: x-mcp.legacy is required for byte compatibility")
+    raw = legacy.get("descriptor")
+    if not isinstance(raw, str) or not raw or raw != raw.strip():
+        fail(f"{method} {path}: x-mcp.legacy.descriptor must be a trimmed JSON fragment")
+    try:
+        descriptor = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        fail(f"{method} {path}: x-mcp.legacy.descriptor is not valid JSON: {exc}")
+    if not isinstance(descriptor, dict):
+        fail(f"{method} {path}: legacy descriptor must be a JSON object")
+    if set(descriptor) != {"description", "inputSchema", "name"}:
+        fail(f"{method} {path}: legacy descriptor keys must be description, inputSchema, name")
+    if descriptor.get("name") != name:
+        fail(f"{method} {path}: x-mcp.name disagrees with legacy descriptor name")
+    if descriptor.get("description") != description:
+        fail(f"{method} {path}: x-mcp.description disagrees with legacy descriptor description")
+    if not isinstance(descriptor.get("inputSchema"), dict):
+        fail(f"{method} {path}: legacy inputSchema must be a JSON object")
+    return order, raw
+
+
+def render(spec: dict[str, Any]) -> bytes:
+    entries: list[tuple[int, str, str, str]] = []
+    for method, path, operation in operations(spec):
+        metadata = operation.get("x-mcp")
+        if not isinstance(metadata, dict):
+            fail(f"{method} {path}: missing x-mcp metadata")
+        include = metadata.get("include")
+        if not isinstance(include, bool):
+            fail(f"{method} {path}: x-mcp.include must be boolean")
+        order, raw = legacy_descriptor(operation, method, path)
+        if include:
+            entries.append((order, method, path, raw))
+        elif set(metadata) != {"include"}:
+            fail(f"{method} {path}: excluded x-mcp metadata must contain only include:false")
+
+    if not entries:
+        fail("x-mcp metadata contains no included operations")
+    entries.sort(key=lambda item: item[0])
+    expected_orders = list(range(len(entries)))
+    actual_orders = [item[0] for item in entries]
+    if actual_orders != expected_orders:
+        fail(f"x-mcp.order must be the consecutive range 0..{len(entries) - 1}; got {actual_orders}")
+    names: set[str] = set()
+    fragments: list[str] = []
+    for _, method, path, raw in entries:
+        descriptor = json.loads(raw)
+        name = descriptor["name"]
+        if name in names:
+            fail(f"duplicate MCP tool name {name!r} at {method} {path}")
+        names.add(name)
+        fragments.append(raw)
+
+    output = ['{\n', '  "tools": [\n']
+    for index, fragment in enumerate(fragments):
+        output.append("    ")
+        output.append(fragment)
+        output.append(",\n" if index + 1 < len(fragments) else "\n")
+    output.extend(['  ]\n', '}\n'])
+    return "".join(output).encode("utf-8")
+
+
+def parse_args() -> argparse.Namespace:
+    root = pathlib.Path(__file__).resolve().parent.parent
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output", nargs="?", type=pathlib.Path, default=root / "spec/mcp-catalog.json")
+    parser.add_argument("--spec", type=pathlib.Path, default=root / "spec/openapi.json")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    try:
+        spec = json.loads(args.spec.read_text(encoding="utf-8"))
+        if not isinstance(spec, dict):
+            fail("OpenAPI document must be a JSON object")
+        rendered = render(spec)
+        args.output.write_bytes(rendered)
+    except (OSError, json.JSONDecodeError, CatalogError) as exc:
+        print(f"[gen-mcp-catalog] FAIL — {exc}", file=sys.stderr)
+        return 1
+    print(f"[gen-mcp-catalog] generated {args.output}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

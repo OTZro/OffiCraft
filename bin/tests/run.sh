@@ -409,6 +409,29 @@ else
   bad "bin/tests/main-red-notify-guard.sh is missing"
 fi
 
+# ── the MCP catalog generator: is it honest? (T-2590) ───────────────────────
+# spec/mcp-catalog.json stopped being hand-maintained: bin/gen-mcp-catalog
+# renders it from the x-mcp metadata on spec/openapi.json's operations. Static
+# and hermetic — it regenerates into its own tempdir and never writes the tree.
+# Positive controls, because a generator that silently accepts a mutated input
+# turns `make drift-mcp-catalog` into a check that can never fail: it drives
+# mutants at the spec (a lying x-mcp.name must be REFUSED, an edited descriptor
+# must REACH the output) and at the committed catalog (a drifted byte must be
+# NAMED in the diff). The byte-diff over the committed file is the OTHER check
+# — `make drift-mcp-catalog`, run in the cloud's drift cell — and this suite
+# also asserts that gate still exists and is still called.
+MCPCATALOG="$HERE/mcp-catalog-generator.sh"
+echo
+if [[ -f "$MCPCATALOG" ]]; then
+  if run_guard "$MCPCATALOG"; then
+    ok "MCP catalog generator suite passed"
+  else
+    bad "MCP catalog generator suite FAILED (see output above)"
+  fi
+else
+  bad "bin/tests/mcp-catalog-generator.sh is missing"
+fi
+
 # ── the wrapper that proves a check RAN: its own contract (T-4d88) ───────────
 # bin/run-checks.sh runs `make <targets>` and then requires each target's own
 # `[oc-check-done] <target>` line, because a zero exit says "nothing failed",
