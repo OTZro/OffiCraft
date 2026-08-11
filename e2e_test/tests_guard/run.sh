@@ -1834,6 +1834,27 @@ check "seven_gate: …and the back-fill bundle is a state the server can actuall
 # moving a real gate into the observation set. Both directions matter: the first
 # resurrects a verdict nobody can stand behind, the second is how a gate
 # disappears without anyone noticing.
+#
+# 🔴 THE BOUNDARY OF THIS CASE, SAID BEFORE ANYONE HAS TO DISCOVER IT:
+#
+#   VERBATIM COMPARISON ONLY STOPS THE LINES WE THOUGHT OF. "THE SCREEN DOES NOT
+#   LIE" IS NOT AN ENUMERABLE PROPERTY, AND THIS GUARD IS BOUNDED.
+#
+# Three rounds of independent review have each found new ways to make this
+# harness print something false while the whole suite stayed all green — the
+# gate count (a wrong number), the position (a line saying "below" printed under
+# the cells), ⑤'s numbers (a constant), a SECOND NOTE line printed next to the
+# true one, ⑤'s PREFIX rewritten into a claim that the agent was verified, and
+# ①'s content pinned to a fixed sighting. Every one of those is now pinned. The
+# next reviewer will find a seventh. THAT IS NOT THIS GUARD FAILING — it never
+# promised the universal. What it holds is: THESE lines, byte for byte, on TWO
+# fixtures whose values differ, and no unaccounted-for NOTE line.
+#
+# What that buys, precisely: an edit to any pinned sentence must be a DELIBERATE
+# edit here too. What it does not buy: safety from a sentence nobody pinned.
+# ⇒ If you are adding output to judge.py that a reader could act on, pin it here
+#   in the same commit. If you are reviewing and you find number seven, that is
+#   the guard working as designed — add it, do not conclude the guard was broken.
 _sg_labels() { # _sg_labels JUDGE BUNDLE -> "<gates>|<observations>|<obs keys>"
   python3 - "$1" "$2" <<'PY'
 import json, os, subprocess, sys
@@ -1858,26 +1879,54 @@ PY
 check "seven_gate: the verdict declares 7 GATES and exactly 2 OBSERVATIONS, and they are ① and ⑤ (a cell that stopped deciding must say so in the machine-readable output, not only in a comment)" \
   "7|2|report_waking,step_done" "$(_sg_labels "$SG_DIR/judge.py" "$SG_WORK/b-none")"
 # …and on screen. `passed: null` in a file nobody opens is not a label. BOTH
-# downgraded cells are checked: ① was added to the set on 2026-08-11 and the
-# screen half of its label would otherwise have no assertion at all.
-_sg_obs_line="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-none" 2>&1 | grep -E '^\[seven_gate\] step5 step_done')"
+# downgraded cells are checked, and BOTH ARE PINNED THE SAME WAY: whole line,
+# byte for byte, on two fixtures whose values differ. The asymmetry this replaces
+# was measured — ⑤ had a verbatim suffix plus a counter-fixture while ① had two
+# substrings, so a mutant that made ① print a FIXED sighting ("seen at t=0.0") on
+# a bundle where the agent was NEVER seen waking left the suite at 319/0. The
+# weakly-pinned cell was the newly-downgraded one, whose entire remaining job is
+# to say whether and when it saw anything.
+_sg_line() { # _sg_line BUNDLE STEPPREFIX -> that one output line
+  python3 "$SG_DIR/judge.py" "$1" 2>&1 | grep -E "^\[seven_gate\] $2 "
+}
+_sg_obs_line="$(_sg_line "$SG_WORK/b-none" 'step5 step_done')"
+_sg_obs1_line="$(_sg_line "$SG_WORK/b-none" 'step1 report_waking')"
 case "$_sg_obs_line" in
   *OBSERVED*) ok "seven_gate: …and ⑤'s line reads OBSERVED, not PASS — $(printf '%s' "$_sg_obs_line" | cut -c1-120)…" ;;
   *) bad "seven_gate: ⑤'s line does not say OBSERVED, so a reader counts it as a step that was verified: $_sg_obs_line" ;;
 esac
-_sg_obs1_line="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-none" 2>&1 | grep -E '^\[seven_gate\] step1 report_waking')"
 case "$_sg_obs1_line" in
   *OBSERVED*) ok "seven_gate: …and ①'s line reads OBSERVED, not PASS — $(printf '%s' "$_sg_obs1_line" | cut -c1-120)…" ;;
   *) bad "seven_gate: ①'s line does not say OBSERVED, so a reader counts it as a step that was verified: $_sg_obs1_line" ;;
 esac
-# …and ① says WHY it cannot decide, on the line the reader acts on. Without this
-# the downgrade is a null in a file plus the word OBSERVED — neither of which
-# tells anyone that the harness's own activate writes the field this cell reads.
-case "$_sg_obs1_line" in
-  *"stamped by reconcile on the landed START"*)
-    ok "seven_gate: …and ①'s line says why it cannot decide (the harness's own activate writes the field it reads)" ;;
-  *) bad "seven_gate: ①'s line does not name the reason it stopped deciding, so the downgrade is invisible to whoever reads the run: $_sg_obs1_line" ;;
-esac
+# ⑤ AND ① — WHOLE LINE, VERBATIM, INCLUDING THE PART BEFORE THE COLON. The old
+# form cut at a marker and compared only the SUFFIX, so the whole "why this cell
+# cannot decide" preamble was free text: a mutant rewrote ⑤'s prefix into
+# "⑤ CONFIRMS THIS AGENT REPORTED EACH STEP AS THE WORK WENT" and the suite
+# stayed at 319/0. The preamble is the half a reader forms their conclusion from.
+check "seven_gate: …and ⑤'s line is EXACTLY this, preamble included (comparing only the suffix let a mutant rewrite the preamble into a claim that the agent was verified — measured)" \
+  '[seven_gate] step5 step_done      報一步完成 OBSERVED — OBSERVED, NOT JUDGED (this cell cannot make the run red — the server records when each report ARRIVED, never whether work happened between two reports, so nothing here separates '"'"'reported as the work went'"'"' from '"'"'reported all at once'"'"'): task T-1: 2 of 2 plan step(s) at done; 2 distinct server-stamped finished_ts; first→last completion 30.000s (server-stamped, not sampled); first completion→close-out sighting not comparable in this bundle (the sample clock reads before the server'"'"'s finished_ts)' \
+  "$_sg_obs_line"
+check "seven_gate: …and ①'s line is EXACTLY this, preamble included (it says WHY it cannot decide — without that the downgrade is a null in a file plus one English word)" \
+  '[seven_gate] step1 report_waking  報到 OBSERVED — OBSERVED, NOT JUDGED (this cell cannot make the run red — on the live path, where a warden is online before the harness activates the member, reconcile stamps the `waking_since` this projection derives from when the START lands, before the agent runs; so a sighting here is not evidence the agent reported anything): member m-sg was seen at presence=waking at t=2.0' \
+  "$_sg_obs1_line"
+# …and ①'s COUNTER-FIXTURE, the half ⑤ already had and ① did not: on a bundle
+# where the agent was never seen waking, that line must CHANGE. Without this the
+# assertion above is satisfied by a cell that ignores the bundle entirely.
+rm -rf "$SG_WORK/b-report_waking"
+python3 "$SG_WORK/mk.py" report_waking "$SG_WORK/b-report_waking" >/dev/null 2>&1 \
+  || bad "seven_gate: could not build the ① counter-fixture — the assertion under it would be testing nothing"
+_sg_obs1_neg="$(_sg_line "$SG_WORK/b-report_waking" 'step1 report_waking')"
+check "seven_gate: …and on a bundle where the agent was NEVER seen waking, ①'s line follows the bundle (this is what separates 'it reports what it saw' from 'it prints a sentence')" \
+  '[seven_gate] step1 report_waking  報到 OBSERVED — OBSERVED, NOT JUDGED (this cell cannot make the run red — on the live path, where a warden is online before the harness activates the member, reconcile stamps the `waking_since` this projection derives from when the START lands, before the agent runs; so a sighting here is not evidence the agent reported anything): no sample ever showed member m-sg at presence=waking' \
+  "$_sg_obs1_neg"
+# …and THAT bundle still exits 0 — the cost of the downgrade, asserted so nobody
+# rediscovers it by accident. On the control tree (f29f63c2) this same bundle was
+# rc=1 with `RED — failed at step1 report_waking`. "This agent never reported in"
+# is now something NO cell in this harness will say no to.
+python3 "$SG_DIR/judge.py" "$SG_WORK/b-report_waking" >/dev/null 2>&1
+check "seven_gate: …and that bundle is GREEN (rc=0) — ① cannot redden a run, which is exactly the capability the downgrade gave up; if this ever goes to 1 again, the ruling changed" \
+  "0" "$?"
 # 🔴 THE GATE-COUNT LINE IS PINNED VERBATIM, NOT COUNTED, AND ITS POSITION IS
 # PINNED SEPARATELY. This used to be `grep -c 'cells below are GATES'` == 1,
 # i.e. "that substring appears once" — nothing about the NUMBER, nothing about
@@ -1897,26 +1946,29 @@ esac
 # ⑤'s numbers are pinned to THIS fixture's known values with a counter-fixture
 # that must change them. ⚠️ EDITING THE SENTENCE IN judge.py MEANS EDITING THE
 # LINE BELOW — that is the cost of pinning it, and it is the point.
-_sg_head_line="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-none" 2>&1 | grep -F '] NOTE: ' | head -n 1)"
+# …AND THERE MUST BE EXACTLY ONE OF THEM. This used to be `| head -n 1`, and the
+# position check took the FIRST match too — so nothing required the line to be
+# unique. A mutant printing a SECOND NOTE line right beside the true one ("9 of
+# the 9 cells below are GATES — this run verified all nine.") left the suite at
+# 319/0: the first line was still correct, and the second could say anything.
+_sg_head_n="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-none" 2>&1 | grep -cE '^\[seven_gate\] NOTE: [0-9]+ of the')"
+check "seven_gate: …and there is EXACTLY ONE gate-count line (a second one printed next to the true one said the opposite and was silent — measured)" \
+  "1" "$_sg_head_n"
+_sg_head_line="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-none" 2>&1 | grep -E '^\[seven_gate\] NOTE: [0-9]+ of the')"
 check "seven_gate: …and the GATE-COUNT line above the cells is EXACTLY this sentence (counting the substring let a mutant print '9 of the 9' and stay green — measured)" \
   '[seven_gate] NOTE: 7 of the 9 cells below are GATES (their fact is absent ⇒ the run is red). THE REST ARE OBSERVATIONS — step1 report_waking (報到), step5 step_done (報一步完成) — they print what they saw and CANNOT make this run red. Read a green run as "the 7 gates held", never as "9 things were verified".' \
   "$_sg_head_line"
 _sg_head_pos="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-none" 2>&1 | awk '
-  /^\[seven_gate\] NOTE: [0-9]+ of the/ { if (!n) n = NR }
+  /^\[seven_gate\] NOTE: [0-9]+ of the/ { c++; if (!n) n = NR }
   /^\[seven_gate\] step1 / { if (!s) s = NR }
-  END { if (!n) print "no-note-line"; else if (!s) print "no-step1-line";
+  END { if (!n) print "no-note-line"; else if (c > 1) print "note-printed-" c "-times";
+        else if (!s) print "no-step1-line";
         else print (n < s ? "note-above-cells" : "note-below-cells") }')"
 check "seven_gate: …and that line is printed ABOVE the cells it talks about (it says 'the cells below'; a mutant that moved it under step9 was silent — same shape as case 23d's 'preflight line < spend line')" \
   "note-above-cells" "$_sg_head_pos"
-# …and the shape ⑤ exists to report is the shape of THIS bundle, not a constant.
-# b-none's plan is two done steps stamped 150.0 and 180.0 (mk.py), so the two
-# numbers are known: 2 distinct stamps, 30.000s apart.
-_sg_cut="'reported all at once'): "
-_sg_five="${_sg_obs_line#*$_sg_cut}"
-check "seven_gate: …and ⑤ prints the shape of THIS bundle verbatim (a mutant returning a fixed 'OBSERVED: 0 distinct …' string was green when only the substring was counted)" \
-  "task T-1: 2 of 2 plan step(s) at done; 2 distinct server-stamped finished_ts; first→last completion 30.000s (server-stamped, not sampled); first completion→close-out sighting not comparable in this bundle (the sample clock reads before the server's finished_ts)" \
-  "$_sg_five"
-# …and the counter-fixture: collapse the two stamps into one and BOTH numbers
+# ⑤'s COUNTER-FIXTURE (its whole line is already pinned above, on b-none, whose
+# plan is two done steps stamped 150.0 and 180.0 — 2 distinct stamps, 30.000s
+# apart). Collapse the two stamps into one and BOTH numbers
 # must follow. Without this, the line above is still only "⑤ prints a string
 # somebody wrote down once".
 python3 - "$SG_WORK/b-none" "$SG_WORK/b-onestamp" <<'PY'
@@ -1947,11 +1999,10 @@ print("%d done|%d distinct" % (len(done), len({s["finished_ts"] for s in done}))
 ' "$SG_WORK/b-onestamp/journal.ndjson" 2>/dev/null)"
 check "seven_gate: the one-stamp counter-fixture really carries two done steps sharing a single finished_ts (otherwise the assertion under it proves nothing)" \
   "2 done|1 distinct" "$_sg_one_shape"
-_sg_one_line="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-onestamp" 2>&1 | grep -E '^\[seven_gate\] step5 step_done')"
-_sg_one_five="${_sg_one_line#*$_sg_cut}"
-check "seven_gate: …and on that bundle ⑤'s numbers CHANGE with it (this is what separates 'it reports the shape' from 'it prints a sentence')" \
-  "task T-1: 2 of 2 plan step(s) at done; 1 distinct server-stamped finished_ts; first→last completion n/a (2 done steps share ONE server stamp); first completion→close-out sighting not comparable in this bundle (the sample clock reads before the server's finished_ts)" \
-  "$_sg_one_five"
+_sg_one_line="$(_sg_line "$SG_WORK/b-onestamp" 'step5 step_done')"
+check "seven_gate: …and on that bundle ⑤'s line CHANGES with it, whole line (this is what separates 'it reports the shape' from 'it prints a sentence')" \
+  '[seven_gate] step5 step_done      報一步完成 OBSERVED — OBSERVED, NOT JUDGED (this cell cannot make the run red — the server records when each report ARRIVED, never whether work happened between two reports, so nothing here separates '"'"'reported as the work went'"'"' from '"'"'reported all at once'"'"'): task T-1: 2 of 2 plan step(s) at done; 1 distinct server-stamped finished_ts; first→last completion n/a (2 done steps share ONE server stamp); first completion→close-out sighting not comparable in this bundle (the sample clock reads before the server'"'"'s finished_ts)' \
+  "$_sg_one_line"
 # ⚠️ AND IT MUST NOT SAY "a one-step plan is a legitimate way to get here" ON A
 # LINE THAT ALSO SAYS "2 of 2". That sentence was the ONLY else-branch until
 # 2026-08-11, so every multi-step plan that shared a stamp (or carried none) got
@@ -2074,6 +2125,16 @@ for _sg_pl in "peer_nonce|step8|step8 peer_message" \
     *) bad "seven_gate: …and $_sg_pl_step is not FAIL on an empty $_sg_pl_key: $_sg_pl_line" ;;
   esac
 done
+# …and WHITESPACE counts as empty. `peer_nonce` and `salt` were .strip()ed from
+# the start; `scene_nonce` was not, so a nonce of one space walked straight past
+# the empty check and `" " in body` matched an UNRELATED message — ② PASS, rc=0
+# (measured on the fix before this one). Three fields, one rule.
+_sg_ws_line="$(_sg_plant scene_nonce " " 'step2 resume_scene')"
+case "$_sg_ws_line" in
+  *"This is a HARNESS red, not an agent red"*)
+    ok "seven_gate: …and a scene_nonce of pure WHITESPACE is treated as the broken plant it is, not matched against every message" ;;
+  *) bad "seven_gate: a whitespace-only scene_nonce does not name the harness: $_sg_ws_line" ;;
+esac
 
 # 21b-iii) ⑤ MUST NOT BE RED ON THE TWO THINGS THE SERVER DOES ON PURPOSE.
 # This is the other half of 21b-i and it is the half that was broken: a bundle
@@ -3226,7 +3287,7 @@ echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 # printed the marker with no floor evaluated at all: MEASURED, floor block
 # deleted and the trailing echo kept → PASS=153 FAIL=0 rc=0, last line
 # `[tests_guard] all green`, `bin/ci.sh` all green. Keep it in the branch.
-PASS_FLOOR=316
+PASS_FLOOR=320
 if [[ "$PASS" -lt "$PASS_FLOOR" ]]; then
   echo "[tests_guard] FATAL: only $PASS assertion(s) ran, floor is $PASS_FLOOR." >&2
   echo "[tests_guard] FAIL=0 with a collapsed PASS count means cases went missing, not that they passed." >&2

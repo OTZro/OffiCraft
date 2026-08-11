@@ -80,9 +80,11 @@ bundle，跑在 `bin/ci.sh` 的第 (0) 階，不起任何服務。
 
 ⚠️ **兩格降級的理由是不同的，別把它們讀成同一件事**：
 **⑤ 是「它想判的事實不在資料裡」**（server 只 stamp 回報抵達的時刻）；
-**① 是「它讀的欄位由載體自己每一輪寫進去」**（`waking_since` 的第二個寫入者是 reconcile，
-而觸發它的正是 `run.sh` owner 端的 `activate`）⇒ ⑤ 的問題是**判不出來**，
-①的問題是**它的綠對每一輪都成立**——一個對目標母體恆真、卻讀起來像驗收證據的欄位。
+**① 是「它讀的欄位在真跑那條路上由載體自己寫進去」**（`waking_since` 的第二個寫入者是
+reconcile，而它要 START **被 warden 接走**才 stamp——`live.sh` 正是先把 warden 起起來才 activate）
+⇒ ⑤ 的問題是**判不出來**，①的問題是**它的綠在真正服役的那條路上恆成立**。
+⚠️ **stub 那條路是例外**（沒有 warden、不 stamp），而那件事讓論證更強：
+**唯一還能證偽①的路，是今天沒有人在跑的那條。**
 
 ### ⑤ 已經降級成觀察行——三個問法各自壞在哪，以及為什麼沒有第四個
 
@@ -170,6 +172,16 @@ collector 端點的替身 server** 實測：一個每一步都回報、順序正
     （真閘被靜默降級）、**只把 ① 搬回閘裡**（「順手整理」真正會產生的那個形狀）。
     ⚠️ **上一版這裡只數三個 substring 出現幾次**，於是覆核用三顆 mutant 讓畫面說謊而整套維持
     303/0 全綠（印成 `9 of the 9`、把 NOTE 搬到格子下面、⑤ 永遠印同一句假數字）。
+    **下一版只釘了「後綴 ＋ 兩個 substring」，於是又有三種**（NOTE 印**兩次**、改寫 ⑤ 的**前綴**
+    成一句「⑤ CONFIRMS…」、把①的內容釘成**恆定**的「seen at t=0.0」），整套 319/0 全綠。
+    三種都補上了：**NOTE 行數必須恰好 1**、**①⑤兩行都整行逐字比對**、**①也有自己的對照 fixture**。
+    🔴 **而這裡有一條界線，逐字寫在 21b-v 的檔頭、也寫在這裡**：
+
+    > **逐字比對只擋得住我們想到的那幾行；「畫面不會說謊」這件事列舉不完，這道守衛是有界的。**
+
+    連三輪覆核各找到新的一種,**下一個人會找到第七種——那不是守衛壞了,它從來沒承諾全稱**。
+    它承諾的是:**這幾行、逐位元組、在兩份數值不同的 fixture 上、而且沒有沒被算到的 NOTE 行**。
+    ⇒ 在 `judge.py` 加一句讀的人會據以行動的輸出,就在**同一顆 commit** 裡把它釘進 21b-v。
   - **21b-v 不回答「閘還會不會說不」**——那是 21b 那七顆 `sg_mutant`（一格一顆）的工作。
     別把這一格讀成「一條斷言就守住了整個降級」。
   21b-i 現在釘的是「那份 back-fill bundle 是 server 產得出來的狀態、而且⑤**紅不動它**」；
@@ -231,8 +243,15 @@ member（peer），**用 peer 自己的 token**（不是 owner 的——owner �
 ——**一句載體自己沒種好、卻逐字指控 agent 的紅**（2026-08-11 覆核實測）。
 `image_answer_salt` 空字串是它的雙胞胎（digest 是 salt+answer 算的，空 salt 比對不到任何東西，
 訊息卻說「沒有證據顯示它打開過那張圖」）。**兩條都補上了**，守衛在 `tests_guard` 21b-vii
-（兩個方向各一格：必須說出是載體的錯、而且**不准**帶著那句指控 agent 的話；
-另有一格要求它**仍然是 FAIL**——講清楚是誰的錯不等於把 run 放綠）。
+（三個欄位各三條：必須說出是載體的錯、**不准**帶著那句指控 agent 的話、而且**仍然是 FAIL**
+——講清楚是誰的錯不等於把 run 放綠；另有一條釘住**只有空白**的 nonce 也算空）。
+
+🔴 **所以這個載體的紅有三類，三種處置，別讀成兩類**：
+| 紅的種類 | 長什麼樣 | 誰該動手 |
+|---|---|---|
+| **agent 的錯** | 一般的 `FAIL — <在 server 上找什麼、實際看到什麼>` | 看那句話，那就是 agent 沒做的事 |
+| **載體種壞了** | 訊息逐字帶 `This is a HARNESS red, not an agent red: fix the plant.` | 修 `run.sh` 的種植，**不要**去問 agent |
+| **`judge.py` 自己壞了** | 訊息逐字結尾 `⚠️ FAIL-CLOSED: this GATE produced no verdict at all … Fix judge.py, not the agent.` | 修判定程式；**那一格上面那句 evidence 是 else 分支借來的，可能跟 bundle 相反，別照著它 debug** |
 
 ### ⑨「看得到圖」——這一格的成敗全在「答案不准出現在任何文字裡」
 
@@ -321,26 +340,55 @@ member（peer），**用 peer 自己的 token**（不是 owner 的——owner �
 2. 🔴 `reconcile.go:926` —— **reconcile 在一個「已落地的 START」上就 stamp 它**
    （T-ba62 刻意加的：在那之前「wake 失敗」跟「沒人叫醒它」長得一模一樣）。
 
-而**觸發那個 START 的，正是這個載體 owner 端的 `activate`**（`run.sh` 2b／`live.sh`）
-⇒ **這個欄位在載體的每一輪都會被寫，agent 什麼都不做也一樣。**
-一道對它自己的目標母體恆真的閘不是閘，它是一句**讀起來像驗收證據、而永遠不會叫**的話——
-而這正好是這個載體存在要抓的病。
+🔴 **而「已落地」這三個字是整段的關鍵，別把它讀成無條件句**（本檔上一版就是無條件句，
+第四輪覆核打掉了）。`reconcile.go:926` 的條件是 `if decision.Command == reconcileCmdStart`，
+而 `reconcileOne` 會先把**沒被 warden 接走**的 START 降級成 `reconcileCmdNone`（設 `DispatchUnlanded`）
+⇒ **沒有 warden，就沒有那個 stamp。** 兩條路因此不一樣：
 
-🔴 **證據強度，逐字說清楚**：以上是**讀碼 ＋ 讀 server 自己那支測試**得到的——
-`reconcile_wake_observability_test.go` 的 `TestReconcile_LandedStartStampsWakingSince`
-逐字斷言那個 stamp，並且接著斷言 `PresenceState(...) == waking`。
-**沒有任何人起一台 server、activate 一個 member、再去抽 `presence` 看它是不是 waking。**
-**不要把這一段引用成實測。**
+| 路徑 | 有沒有 warden | START 落不落地 | ①的綠來自誰 |
+|---|---|---|---|
+| **`actors/live.sh`（真跑，這個載體存在的理由）** | 有：onboard 機器 → 真的 `ocwarden run` → **等它 online** → **才** activate 帶 `machine_id` | **落地** ⇒ reconcile stamp，**發生在 claude 被 spawn 之前** | 🔴 **載體自己**，與 agent 無關 |
+| **`actors/stub.sh`（今天唯一真的跑過的路）** | **沒有**（`grep -c onboard run.sh` = **0**；`run.sh:159` 的 activate 帶的是 `{}`，無 `machine_id`） | **不落地** ⇒ `DispatchUnlanded` ⇒ **不 stamp** | actor 自己打的 `POST /api/self/waking`（`stub.sh:77`） |
+
+⇒ **所以「這個欄位在載體的每一輪都會被寫」是假的,只有 live 那條成立。**
+而這件事**讓論證更強、不是更弱**：**唯一還能證偽①的那條路，正是今天沒有人在跑的那條**；
+而**會花錢的那條路上，它是不可證偽的**。一道在它真正服役的母體上恆真的閘不是閘，
+它是一句讀起來像驗收證據、而永遠不會叫的話——那正好是這個載體存在要抓的病。
+
+🔴 **證據強度，逐字說清楚（分兩層，別混在一起引用）**：
+- **機制那半，測試在這棵樹上實跑過、兩支都過**（`cd server/ocserverd && go test -run
+  'TestReconcile_(LandedStartStampsWakingSince|UnlandedStartDoesNotStampWakingSince)$' -count=1`
+  ⇒ `--- PASS` ×2、`ok ocserverd`）：`Landed` 那支斷言 stamp **並且**斷言
+  `PresenceState(...) == waking`（不是只寫進一個沒人讀的欄位）；`Unlanded` 那支是**鑑別半**
+  ——roster 上有 warden 但從沒連線 ⇒ 不 stamp。
+  ⚠️ **乾淨 worktree 要先 `bash bin/build-seedsdist && bash bin/build-docsdist`**，
+  否則那兩支會紅在 `open role_def_assistant.md: file does not exist`，
+  而那個紅**看起來像「這個推理的測試是紅的」**。
+- **live／stub 分野那半，是讀 `run.sh`／`live.sh`／`stub.sh` 的順序得到的，不是實測。**
+- **沒有任何人起一台 server、onboard 一台機器、跑真 warden、activate，再去抽 `presence`。**
+  **不要把這一段引用成一次真跑。**
 
 ⚠️ **另一個方向也是真的，但那不是它被降級的原因**：那個值是**瞬時的**
 （掛上 SSE 就把錨點清成 0——`api_infra.go:348-349`，註解逐字寫「spent exactly once」；TTL 過期落回
 offline）⇒ 它本來就會為了**取樣／activate 順序／訊號過期**而紅，而那個紅指著 agent。
 **降級之後兩半都不見了**——這一格不再判任何事。
 
+🔴 **降級的代價，寫在這裡而不是只寫在附錄**（第四輪覆核量的，我自跑複驗）：
+`OC_SG_SKIP_STEP=report_waking` 那份 bundle（agent 從沒被看到 waking）——
+**對照樹 `f29f63c2`**：`rc=1`、`RED — failed at step1 report_waking (報到)`；
+**今天**：`rc=0`、`[seven_gate] all green`。
+⇒ **「這個 agent 根本沒報到」這件事，現在整個載體沒有任何一格會說不。**
+在 stub 那條路上（今天唯一跑過的路）它本來是說得出來的。這不是副作用，這**就是**降級——
+一格不再判生死，就是不再判生死。`tests_guard` 21b-v 有一條斷言逐字釘住這個代價
+（那份 bundle 必須 rc=0），所以哪天有人把①改回閘，那條會紅並提醒他裁定變了。
+
 **它現在提供什麼**：一行 `OBSERVED`，說有沒有、在哪個 `t` 看到 `presence=waking`，
-**並且在同一行逐字說出它為什麼不能判**（`… also stamped by reconcile on the landed START that
-the harness's own activate causes …`）。`tests_guard` 21b-v 有一條斷言專門釘那句理由必須在——
-否則「降級」對讀 run 的人來說只剩一個 null 跟一個英文單字。
+**並且在同一行逐字說出它為什麼不能判**（`… on the live path, where a warden is online before the
+harness activates the member, reconcile stamps the waking_since this projection derives from …`）。
+`tests_guard` 21b-v **把①與⑤兩行都整行逐字釘死、而且各配一份數值不同的對照 fixture**
+（①的是 `drop=report_waking`：那一行必須從「seen at t=2.0」變成「no sample ever showed…」）
+——否則「降級」對讀 run 的人來說只剩一個 null 跟一個英文單字，
+而一顆讓①**恆印**「看到它 waking」的 mutant 曾經整套 319/0 全綠。
 
 **怎麼把它變回一道閘**（寫在這裡，下一個人不用重新發現）：需要一個**只有 agent 自己的
 `report_waking` 寫得到、而且在 collector 讀得到的 DTO 上**的 server 事實。今天兩個條件都不成立：
@@ -614,9 +662,12 @@ tmux＋claude）就是 `tests/05_machine_onboarding_spawn.live-agent.spec.js` �
 
 🔴 **①是例外，而且舊文這裡寫反了。** 舊文寫「①是綁 caller 自己 token 的 self-report，owner 拿去報
 只會蓋到 owner 頭上」——`POST /api/self/waking` 那半確實如此，**但①讀的不是那支工具，是
-`presence == "waking"` 這個衍生值**，而 `waking_since` 有**第二個寫入者**：reconcile 在一個已落地的
-START 上就會 stamp 它（`reconcile.go:926`）。而**那個 START 正是 owner 端的 `activate` 觸發的**
-⇒ **owner 這一側的動作本身就能讓①綠**。詳見〈① 也降級成觀察行〉——**這一格已經因為這件事降級了**。
+`presence == "waking"` 這個衍生值**，而 `waking_since` 有**第二個寫入者**：reconcile 在一個
+**已落地的** START 上就會 stamp 它（`reconcile.go:926`）。
+⇒ **在有 warden 接得走 START 的那條路上（也就是 `live.sh`：warden 先 online、才 activate 帶
+`machine_id`），owner 這一側的動作本身就能讓①綠。**
+（stub 那條路沒有 warden、START 不落地、不 stamp，①的綠來自 stub 自己的 `report_waking`
+——所以那條路上這句話不成立。）詳見〈① 也降級成觀察行〉——**這一格已經因為這件事降級了**。
 
 - `actors/stub.sh`（預設）：用 member token 直接打 REST 走完整條路徑。**它不是 agent。**
   `OC_SG_SKIP_STEP=<key>` 讓其中一步不發生——載體要能說「不」，而只在成功的 run 上跑過的關卡

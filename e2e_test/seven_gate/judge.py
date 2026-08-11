@@ -87,19 +87,30 @@ STEPS = [
 # records whether work happened between two reports. Two designs tried to judge
 # it anyway and both failed — see the block at ⑤ below for the measurements.
 #
-# ① is here (owner's ruling, 2026-08-11, after ⑤) because IT IS TRUE OF EVERY RUN
-# THIS HARNESS PRODUCES, whatever the agent does. It reads presence == "waking",
-# which PresenceState derives from `waking_since` — and `waking_since` HAS A
-# SECOND WRITER: reconcile stamps it on a landed START (reconcile.go,
-# `m.WakingSince = now`), which is exactly what the harness's own owner-side
-# `activate` triggers, BEFORE the agent runs. So the field this cell reads is
-# written by the harness in every round, and a green here does not mean
-# report_waking was ever called. A gate that cannot say no about the population
-# it is aimed at is not a gate; it is a sentence that reads like evidence.
-#   🔴 EVIDENCE STRENGTH, SAID PLAINLY: this was established by READING THE CODE
-#   and the server's own test (TestReconcile_LandedStartStampsWakingSince, which
-#   asserts both the stamp and that PresenceState then reads "waking"). NOBODY
-#   STARTED A SERVER AND MEASURED IT. Do not cite it as a live measurement.
+# ① is here (owner's ruling, 2026-08-11, after ⑤) because ON THE LIVE PATH — the
+# one this harness exists for — IT IS TRUE OF EVERY RUN whatever the agent does.
+# It reads presence == "waking", which PresenceState derives from `waking_since`
+# — and `waking_since` HAS A SECOND WRITER: reconcile stamps it on a LANDED START
+# (reconcile.go, `m.WakingSince = now`). actors/live.sh onboards a machine, runs a
+# real ocwarden, WAITS FOR IT TO COME ONLINE, and only then activates with a
+# machine_id ⇒ the START lands ⇒ reconcile stamps, BEFORE claude is spawned. A
+# gate that cannot say no about the population it is aimed at is not a gate; it is
+# a sentence that reads like evidence.
+#   ⚠️ SCOPE — THE STUB PATH IS THE EXCEPTION, AND SAYING SO MAKES THE ARGUMENT
+#   STRONGER, NOT WEAKER. run.sh's own activate carries `{}` (no machine_id) and
+#   there is no warden anywhere on that path, so the START never lands
+#   (DispatchUnlanded ⇒ no stamp — that is what
+#   TestReconcile_UnlandedStartDoesNotStampWakingSince pins). ①'s green under the
+#   stub comes from actors/stub.sh calling report_waking itself. So the ONLY path
+#   on which this cell can still be falsified is the one NOBODY RUNS, while the
+#   path that costs money is the one where it is unfalsifiable.
+#   🔴 EVIDENCE STRENGTH, SAID PLAINLY: established by READING THE CODE plus
+#   RUNNING the server's own two tests on this tree — TestReconcile_
+#   LandedStartStampsWakingSince (stamps, and PresenceState then reads "waking")
+#   and TestReconcile_UnlandedStartDoesNotStampWakingSince (does not stamp), BOTH
+#   PASS. NOBODY STARTED A SERVER, ONBOARDED A MACHINE AND SAMPLED `presence`.
+#   The live/stub split above is derived from reading run.sh, live.sh and stub.sh
+#   in that order — it is not a live measurement either. Do not cite it as one.
 #   HOW IT BECOMES A GATE AGAIN: when the server holds a fact only the agent's
 #   own report_waking can write, and that fact is on a DTO the collector reads.
 #   Today waking_since is on neither (not on MemberDTO; GET /api/members/{id} is
@@ -262,7 +273,11 @@ def judge(scene, samples):
     read from' — which is what binds those three to THIS run instead of to any
     task that happens to exist on the server."""
     agent = scene["agent_id"]
-    nonce = scene["scene_nonce"]
+    # .strip() for the same reason peer_nonce and salt have it: a needle that is
+    # only whitespace is a broken plant, and " " in body is true of almost every
+    # message — the empty-string case below would not catch it. run.sh's nonce is
+    # urandom hex so it cannot produce one today; the asymmetry was the defect.
+    nonce = (scene["scene_nonce"] or "").strip()
     out = []
 
     # ① 報到 — OBSERVATION ONLY: this cell judges nothing (see OBSERVATION_KEYS
@@ -270,10 +285,13 @@ def judge(scene, samples):
     # reports whether, and when, the member was ever seen projected as "waking".
     #
     # WHY IT STOPPED DECIDING, in one line: `presence == "waking"` is derived
-    # from `waking_since`, which reconcile stamps on a landed START — the very
-    # thing the harness's owner-side `activate` causes, before the agent runs. So
-    # this cell was true of every run this harness produces regardless of the
-    # agent, i.e. a gate that could not say no about its own population.
+    # from `waking_since`, which reconcile stamps on a LANDED START — and on the
+    # live path live.sh has a warden online before it activates, so the START
+    # lands and the stamp happens before claude is spawned. On that path the cell
+    # could not say no about its own population. (The stub path has no warden, so
+    # the START does not land and ①'s green there comes from stub.sh's own
+    # report_waking — i.e. the only path that can still falsify this cell is the
+    # one nobody runs. Full scope note at OBSERVATION_KEYS.)
     #
     # ⚠️ THE OTHER DIRECTION IS ALSO REAL AND IS NOT WHY IT WAS DOWNGRADED: the
     # value is transient (mounting SSE clears the anchor; the TTL lapses), so a
@@ -286,11 +304,11 @@ def judge(scene, samples):
     hit = next((s for s in samples
                 if (s.get("member") or {}).get("presence") == "waking"), None)
     out.append(("report_waking", "報到", None,
-                "OBSERVED, NOT JUDGED (this cell cannot make the run red — "
-                "`waking_since`, which this projection is derived from, is also "
-                "stamped by reconcile on the landed START that the harness's own "
-                "activate causes, so a sighting here is not evidence the agent "
-                "reported anything): "
+                "OBSERVED, NOT JUDGED (this cell cannot make the run red — on the "
+                "live path, where a warden is online before the harness activates "
+                "the member, reconcile stamps the `waking_since` this projection "
+                "derives from when the START lands, before the agent runs; so a "
+                "sighting here is not evidence the agent reported anything): "
                 + ("member %s was seen at presence=waking at t=%s"
                    % (agent, hit["t"]) if hit
                    else "no sample ever showed member %s at presence=waking"
