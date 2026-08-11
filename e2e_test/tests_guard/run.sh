@@ -1748,7 +1748,12 @@ sg_mutant() { # sg_mutant KEY ZH
     *) bad "seven_gate: 「${zh}」 was missing but the verdict named something else: $last" ;;
   esac
 }
-sg_mutant report_waking 報到
+# ⚠️ NO `sg_mutant report_waking` — ON PURPOSE, same as ⑤ below, and 21b-v is
+# what replaces it. ① stopped being a gate (owner's ruling 2026-08-11, after ⑤)
+# because the field it reads is written BY THIS HARNESS in every round:
+# presence=="waking" is derived from `waking_since`, and reconcile stamps that on
+# the landed START that run.sh's own owner-side `activate` causes, before the
+# agent runs. A mutant here would assert the opposite of the contract.
 sg_mutant resume_scene  接回現場
 sg_mutant create_task   開票
 sg_mutant submit_plan   提出計畫
@@ -1812,40 +1817,148 @@ check "seven_gate: …and the back-fill bundle is a state the server can actuall
 
 # 21b-v) 🔴 THE GATE/OBSERVATION SPLIT ITSELF — pinned in BOTH directions.
 #
-# WHY THIS CASE EXISTS. ⑤ was downgraded from a gate to an observation because
-# what it wanted to judge is not in the data (judge.py's ⑤ block has the
-# measurements). That downgrade is the right answer AND it is exactly the shape
-# this repo keeps getting hurt by: a check that stops checking while everything
-# still prints green. So the membership of OBSERVATION_KEYS is not a comment, it
-# is an assertion — someone re-arming ⑤ as a gate goes red HERE, and so does
-# someone quietly moving a real gate into the observation set. Both directions
-# matter: the first would resurrect a measured false red that names the agent,
-# the second is how a gate disappears without anyone noticing.
+# WHY THIS CASE EXISTS. TWO cells have been downgraded from gates to
+# observations, for two different reasons, and both downgrades are the right
+# answer AND exactly the shape this repo keeps getting hurt by: a check that
+# stops checking while everything still prints green.
+#   ⑤ — what it wanted to judge is NOT IN THE DATA (judge.py's ⑤ block has the
+#        measurements): the server stamps when each report arrived, never whether
+#        work happened between two reports.
+#   ① — the field it reads IS WRITTEN BY THIS HARNESS in every round: presence
+#        =="waking" derives from `waking_since`, and reconcile stamps that on the
+#        landed START that run.sh's own owner-side `activate` causes, before the
+#        agent runs. It was a gate that could not say no about its own
+#        population — an unfalsifiable green, which is worse than a false red.
+# So the membership of OBSERVATION_KEYS is not a comment, it is an assertion —
+# someone re-arming a downgraded cell goes red HERE, and so does someone quietly
+# moving a real gate into the observation set. Both directions matter: the first
+# resurrects a verdict nobody can stand behind, the second is how a gate
+# disappears without anyone noticing.
 _sg_labels() { # _sg_labels JUDGE BUNDLE -> "<gates>|<observations>|<obs keys>"
   python3 - "$1" "$2" <<'PY'
 import json, os, subprocess, sys
 judge, bundle = sys.argv[1], sys.argv[2]
 subprocess.run([sys.executable, judge, bundle], capture_output=True)
 rows = json.load(open(os.path.join(bundle, "verdict.json")))
+# 🔴 THE TYPE IS PART OF THE CONTRACT, AND IT WAS NOT PINNED. This function used
+# to ask only `passed is None`, so a cell that returned a truthy non-boolean
+# sentinel (measured: a review mutant made ⑦ return the string 'not-checked')
+# printed PASS on screen, wrote 'not-checked' into verdict.json, AND was still
+# counted here as one of the eight gates. The machine-readable contract is
+# true/false/null — anything else is a shape nobody downstream can read, so it
+# is named rather than silently bucketed.
+bad = [r for r in rows if r["passed"] is not None and not isinstance(r["passed"], bool)]
+if bad:
+    print("BAD-TYPE:" + ",".join("%s=%r" % (r["key"], r["passed"]) for r in bad))
+    raise SystemExit(0)
 obs = [r for r in rows if r["passed"] is None]
 print("%d|%d|%s" % (len(rows) - len(obs), len(obs), ",".join(r["key"] for r in obs)))
 PY
 }
-check "seven_gate: the verdict declares 8 GATES and exactly 1 OBSERVATION, and the observation is ⑤ (a cell that stopped deciding must say so in the machine-readable output, not only in a comment)" \
-  "8|1|step_done" "$(_sg_labels "$SG_DIR/judge.py" "$SG_WORK/b-none")"
-# …and on screen. `passed: null` in a file nobody opens is not a label.
+check "seven_gate: the verdict declares 7 GATES and exactly 2 OBSERVATIONS, and they are ① and ⑤ (a cell that stopped deciding must say so in the machine-readable output, not only in a comment)" \
+  "7|2|report_waking,step_done" "$(_sg_labels "$SG_DIR/judge.py" "$SG_WORK/b-none")"
+# …and on screen. `passed: null` in a file nobody opens is not a label. BOTH
+# downgraded cells are checked: ① was added to the set on 2026-08-11 and the
+# screen half of its label would otherwise have no assertion at all.
 _sg_obs_line="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-none" 2>&1 | grep -E '^\[seven_gate\] step5 step_done')"
 case "$_sg_obs_line" in
   *OBSERVED*) ok "seven_gate: …and ⑤'s line reads OBSERVED, not PASS — $(printf '%s' "$_sg_obs_line" | cut -c1-120)…" ;;
   *) bad "seven_gate: ⑤'s line does not say OBSERVED, so a reader counts it as a step that was verified: $_sg_obs_line" ;;
 esac
-_sg_head="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-none" 2>&1 | grep -cF 'cells below are GATES')"
-check "seven_gate: …and the verdict states the GATE COUNT above the cells (so 'all green' is not read as 'nine things were verified')" \
-  "1" "$_sg_head"
-# …and the two numbers ⑤ exists to report are actually reported.
-_sg_nums="$(printf '%s' "$_sg_obs_line" | grep -cE 'distinct server-stamped finished_ts')"
-check "seven_gate: …and it prints the shape it observed (distinct server-stamped finished_ts), which is the whole of what it still offers" \
-  "1" "$_sg_nums"
+_sg_obs1_line="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-none" 2>&1 | grep -E '^\[seven_gate\] step1 report_waking')"
+case "$_sg_obs1_line" in
+  *OBSERVED*) ok "seven_gate: …and ①'s line reads OBSERVED, not PASS — $(printf '%s' "$_sg_obs1_line" | cut -c1-120)…" ;;
+  *) bad "seven_gate: ①'s line does not say OBSERVED, so a reader counts it as a step that was verified: $_sg_obs1_line" ;;
+esac
+# …and ① says WHY it cannot decide, on the line the reader acts on. Without this
+# the downgrade is a null in a file plus the word OBSERVED — neither of which
+# tells anyone that the harness's own activate writes the field this cell reads.
+case "$_sg_obs1_line" in
+  *"stamped by reconcile on the landed START"*)
+    ok "seven_gate: …and ①'s line says why it cannot decide (the harness's own activate writes the field it reads)" ;;
+  *) bad "seven_gate: ①'s line does not name the reason it stopped deciding, so the downgrade is invisible to whoever reads the run: $_sg_obs1_line" ;;
+esac
+# 🔴 THE GATE-COUNT LINE IS PINNED VERBATIM, NOT COUNTED, AND ITS POSITION IS
+# PINNED SEPARATELY. This used to be `grep -c 'cells below are GATES'` == 1,
+# i.e. "that substring appears once" — nothing about the NUMBER, nothing about
+# WHERE. Independent review 2026-08-11 planted three mutants in the real
+# judge.py and the whole suite stayed at PASS=303 FAIL=0:
+#   * `len(gates)` → `len(verdicts)` ⇒ the screen said "9 of the 9 cells below
+#     are GATES … read a green run as 'the 9 gates held'" — the exact misreading
+#     the downgrade exists to prevent, printed BY THE HARNESS, while
+#     verdict.json still recorded 8|1|step_done. Screen and file contradicted
+#     each other and nothing spoke.
+#   * the whole gates/obs/NOTE block moved BELOW the per-cell loop ⇒ a line
+#     saying "the cells BELOW" printed under step9.
+#   * a constant `return "OBSERVED: 0 distinct …"` in _observe_step_shape ⇒ ⑤'s
+#     only remaining function (reporting the shape truthfully) replaced by a
+#     fixed lie.
+# So: the sentence is compared whole, the position is compared to step1's, and
+# ⑤'s numbers are pinned to THIS fixture's known values with a counter-fixture
+# that must change them. ⚠️ EDITING THE SENTENCE IN judge.py MEANS EDITING THE
+# LINE BELOW — that is the cost of pinning it, and it is the point.
+_sg_head_line="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-none" 2>&1 | grep -F '] NOTE: ' | head -n 1)"
+check "seven_gate: …and the GATE-COUNT line above the cells is EXACTLY this sentence (counting the substring let a mutant print '9 of the 9' and stay green — measured)" \
+  '[seven_gate] NOTE: 7 of the 9 cells below are GATES (their fact is absent ⇒ the run is red). THE REST ARE OBSERVATIONS — step1 report_waking (報到), step5 step_done (報一步完成) — they print what they saw and CANNOT make this run red. Read a green run as "the 7 gates held", never as "9 things were verified".' \
+  "$_sg_head_line"
+_sg_head_pos="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-none" 2>&1 | awk '
+  /^\[seven_gate\] NOTE: [0-9]+ of the/ { if (!n) n = NR }
+  /^\[seven_gate\] step1 / { if (!s) s = NR }
+  END { if (!n) print "no-note-line"; else if (!s) print "no-step1-line";
+        else print (n < s ? "note-above-cells" : "note-below-cells") }')"
+check "seven_gate: …and that line is printed ABOVE the cells it talks about (it says 'the cells below'; a mutant that moved it under step9 was silent — same shape as case 23d's 'preflight line < spend line')" \
+  "note-above-cells" "$_sg_head_pos"
+# …and the shape ⑤ exists to report is the shape of THIS bundle, not a constant.
+# b-none's plan is two done steps stamped 150.0 and 180.0 (mk.py), so the two
+# numbers are known: 2 distinct stamps, 30.000s apart.
+_sg_cut="'reported all at once'): "
+_sg_five="${_sg_obs_line#*$_sg_cut}"
+check "seven_gate: …and ⑤ prints the shape of THIS bundle verbatim (a mutant returning a fixed 'OBSERVED: 0 distinct …' string was green when only the substring was counted)" \
+  "task T-1: 2 of 2 plan step(s) at done; 2 distinct server-stamped finished_ts; first→last completion 30.000s (server-stamped, not sampled); first completion→close-out sighting not comparable in this bundle (the sample clock reads before the server's finished_ts)" \
+  "$_sg_five"
+# …and the counter-fixture: collapse the two stamps into one and BOTH numbers
+# must follow. Without this, the line above is still only "⑤ prints a string
+# somebody wrote down once".
+python3 - "$SG_WORK/b-none" "$SG_WORK/b-onestamp" <<'PY'
+import json, os, shutil, sys
+src, dst = sys.argv[1], sys.argv[2]
+if not os.path.isdir(dst):
+    os.makedirs(dst)
+shutil.copy(os.path.join(src, "scene.json"), os.path.join(dst, "scene.json"))
+rows = []
+for line in open(os.path.join(src, "journal.ndjson"), encoding="utf-8"):
+    if not line.strip():
+        continue
+    s = json.loads(line)
+    for t in s.get("tasks") or []:
+        for st in t.get("steps") or []:
+            if st.get("status") == "done" and st.get("finished_ts"):
+                st["finished_ts"] = 150.0
+    rows.append(json.dumps(s, ensure_ascii=False))
+with open(os.path.join(dst, "journal.ndjson"), "w", encoding="utf-8") as fh:
+    fh.write("\n".join(rows) + "\n")
+PY
+_sg_one_shape="$(python3 -c '
+import json, sys
+last = [json.loads(l) for l in open(sys.argv[1]) if l.strip()][-1]
+t = [x for x in last["tasks"] if x["id"] == "T-1"][0]
+done = [s for s in t["steps"] if s["status"] == "done"]
+print("%d done|%d distinct" % (len(done), len({s["finished_ts"] for s in done})))
+' "$SG_WORK/b-onestamp/journal.ndjson" 2>/dev/null)"
+check "seven_gate: the one-stamp counter-fixture really carries two done steps sharing a single finished_ts (otherwise the assertion under it proves nothing)" \
+  "2 done|1 distinct" "$_sg_one_shape"
+_sg_one_line="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-onestamp" 2>&1 | grep -E '^\[seven_gate\] step5 step_done')"
+_sg_one_five="${_sg_one_line#*$_sg_cut}"
+check "seven_gate: …and on that bundle ⑤'s numbers CHANGE with it (this is what separates 'it reports the shape' from 'it prints a sentence')" \
+  "task T-1: 2 of 2 plan step(s) at done; 1 distinct server-stamped finished_ts; first→last completion n/a (2 done steps share ONE server stamp); first completion→close-out sighting not comparable in this bundle (the sample clock reads before the server's finished_ts)" \
+  "$_sg_one_five"
+# ⚠️ AND IT MUST NOT SAY "a one-step plan is a legitimate way to get here" ON A
+# LINE THAT ALSO SAYS "2 of 2". That sentence was the ONLY else-branch until
+# 2026-08-11, so every multi-step plan that shared a stamp (or carried none) got
+# a line that contradicted itself half-way through.
+_sg_one_contra="$(printf '%s' "$_sg_one_line" | grep -cF 'a one-step plan is a legitimate way to get here')"
+check "seven_gate: …and it does NOT call a 2-step plan a one-step plan (the self-contradicting line the else-branch used to print)" \
+  "0" "$_sg_one_contra"
 # MUT-regate / MUT-degrade — the declaration moved, on a COPY of judge.py.
 # Each mutant judges its OWN bundle (judge.py writes verdict.json into whatever
 # directory it is given, and a shared one would let the last writer decide).
@@ -1853,22 +1966,114 @@ SG_JMUT="$SG_WORK/judge-mut.py"
 python3 "$SG_WORK/mk.py" none "$SG_WORK/b-regate"  >/dev/null 2>&1 \
   && python3 "$SG_WORK/mk.py" none "$SG_WORK/b-degrade" >/dev/null 2>&1 \
   || bad "seven_gate: could not build the 21b-v mutant bundles — the two cells below would be testing nothing"
-sed 's/^OBSERVATION_KEYS = ("step_done",)$/OBSERVATION_KEYS = ()/' \
+sed 's/^OBSERVATION_KEYS = ("report_waking", "step_done")$/OBSERVATION_KEYS = ()/' \
     "$SG_DIR/judge.py" > "$SG_JMUT"
 if ! grep -q '^OBSERVATION_KEYS = ()$' "$SG_JMUT"; then
   bad "seven_gate: MUT-regate did not apply — the OBSERVATION_KEYS declaration moved, so 21b-v is testing nothing (fix the sed)"
 else
-  check "MUT-regate: with ⑤ put back in the gate set, the split is visibly different (a re-armed ⑤ cannot slip past this case)" \
+  check "MUT-regate: with ① and ⑤ put back in the gate set, the split is visibly different (a re-armed observation cannot slip past this case)" \
     "9|0|" "$(_sg_labels "$SG_JMUT" "$SG_WORK/b-regate")"
+  # …and ON SCREEN too: with nothing downgraded there is no gate-count line at
+  # all. Only verdict.json was checked here before, so the screen half of the
+  # label had no mutant of its own in either direction.
+  _sg_regate_note="$(python3 "$SG_JMUT" "$SG_WORK/b-regate" 2>&1 | grep -cE '^\[seven_gate\] NOTE: [0-9]+ of the')"
+  check "MUT-regate: …and the gate-count line disappears from the screen with it (nothing is downgraded, so there is nothing to warn about)" \
+    "0" "$_sg_regate_note"
 fi
-sed 's/^OBSERVATION_KEYS = ("step_done",)$/OBSERVATION_KEYS = ("step_done", "closeout")/' \
+sed 's/^OBSERVATION_KEYS = ("report_waking", "step_done")$/OBSERVATION_KEYS = ("report_waking", "step_done", "closeout")/' \
     "$SG_DIR/judge.py" > "$SG_JMUT"
-if ! grep -q '"step_done", "closeout"' "$SG_JMUT"; then
+if ! grep -q '"report_waking", "step_done", "closeout"' "$SG_JMUT"; then
   bad "seven_gate: MUT-degrade did not apply — the OBSERVATION_KEYS declaration moved, so the other direction is testing nothing (fix the sed)"
 else
   check "MUT-degrade: quietly moving a REAL gate (⑦) into the observation set is caught and named — this is the direction in which a gate disappears silently" \
-    "7|2|step_done,closeout" "$(_sg_labels "$SG_JMUT" "$SG_WORK/b-degrade")"
+    "6|3|report_waking,step_done,closeout" "$(_sg_labels "$SG_JMUT" "$SG_WORK/b-degrade")"
 fi
+# …and a HALF re-arm is caught too. Both directions above move the whole set; a
+# third shape moves ONE member, which is what someone "tidying up" actually does
+# — and it is the shape that would quietly put ① back to deciding a run on a
+# field the harness writes itself.
+sed 's/^OBSERVATION_KEYS = ("report_waking", "step_done")$/OBSERVATION_KEYS = ("step_done",)/' \
+    "$SG_DIR/judge.py" > "$SG_JMUT"
+if ! grep -q '^OBSERVATION_KEYS = ("step_done",)$' "$SG_JMUT"; then
+  bad "seven_gate: MUT-rearm-one did not apply — the OBSERVATION_KEYS declaration moved (fix the sed)"
+else
+  check "MUT-rearm-one: re-arming JUST ① (the shape a tidy-up produces) is caught and named, not averaged away by the other observation staying put" \
+    "8|1|step_done" "$(_sg_labels "$SG_JMUT" "$SG_WORK/b-degrade")"
+fi
+# 21b-vi) FAIL-CLOSED, AND THE SENTENCE UNDERNEATH IT. A gate that produced no
+# verdict at all is red — that half was already true and review confirmed it by
+# hand. What was NOT true is the evidence line: the cell's else-branch text goes
+# out unchanged, so a ⑦ that decided nothing printed "task T-1 has
+# closeout_reported=false" over a bundle where it is TRUE. The red is right and
+# the sentence under it is wrong, which is the exact failure mode this repo
+# keeps paying for. _seal() is the one place the conversion happens, so it is
+# asserted directly rather than through a judge.py mutant.
+_sg_seal="$(cd "$SG_DIR" && python3 -c '
+import judge
+rows = judge._seal([("closeout", "回報收尾", None, "EVIDENCE-FROM-THE-ELSE-BRANCH"),
+                    ("step_done", "報一步完成", None, "obs"),
+                    ("create_task", "開票", True, "ok")])
+print("|".join("%s=%r,%s" % (k, p, "MARKED" if judge.NOTHING_DECIDED in w else "bare")
+               for k, _z, p, w in rows))' 2>&1)"
+check "seven_gate: a GATE that decided nothing is red AND its evidence says so, while an OBSERVATION keeps its null and a real verdict is untouched (fail-closed, and the red points at judge.py instead of the agent)" \
+  "closeout=False,MARKED|step_done=None,bare|create_task=True,bare" "$_sg_seal"
+
+# 21b-vii) 🔴 A BROKEN PLANT MUST NOT BE WORDED AS AN AGENT FAILURE. ⑧ and ⑨
+# each already had one branch that says "This is a HARNESS red, not an agent
+# red" — for a missing peer_id and a missing image digest. Neither covered the
+# EMPTY-VALUE case, and the fall-through accused the agent verbatim (review
+# 2026-08-11, measured on the real judge.py):
+#   step8 … chat message c2 runs m-sg → m-sg-peer but does NOT carry the peer's
+#   nonce '' — the agent spoke to the colleague without showing it read what the
+#   colleague said
+# An empty nonce can never be matched (`peer_nonce and peer_nonce in body`), so
+# that sentence was structurally unearnable — the harness blaming the agent for
+# its own missing plant, which is the shape ⑤ was downgraded for.
+_sg_plant() { # _sg_plant KEY VALUE STEPGREP -> the evidence line for that cell
+  python3 - "$SG_WORK/b-none" "$SG_WORK/b-plant" "$1" "$2" <<'PY'
+import json, os, shutil, sys
+src, dst, key, value = sys.argv[1:5]
+if os.path.isdir(dst):
+    shutil.rmtree(dst)
+shutil.copytree(src, dst)
+path = os.path.join(dst, "scene.json")
+scene = json.load(open(path, encoding="utf-8"))
+scene[key] = value
+json.dump(scene, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+PY
+  python3 "$SG_DIR/judge.py" "$SG_WORK/b-plant" 2>&1 | grep -E "^\[seven_gate\] $3 "
+}
+#
+# 🔴 ② IS THE SAME BUG POINTING THE OTHER WAY, AND IT IS THE WORSE HALF: it does
+# `nonce in body`, and `"" in body` is TRUE for every message — so an unplanted
+# scene_nonce made ② PASS on the agent's first word. MEASURED 2026-08-11 on the
+# green fixture: scene_nonce="" ⇒ step2 PASS, `all green`, rc=0, nothing said.
+# A gate that stops gating while everything prints green is the whole subject of
+# this round, so it is asserted here next to its two siblings.
+for _sg_pl in "peer_nonce|step8|step8 peer_message" \
+              "image_answer_salt|step9|step9 image_answer" \
+              "scene_nonce|step2|step2 resume_scene"; do
+  _sg_pl_key="${_sg_pl%%|*}"; _sg_pl_rest="${_sg_pl#*|}"
+  _sg_pl_step="${_sg_pl_rest%%|*}"; _sg_pl_grep="${_sg_pl_rest#*|}"
+  _sg_pl_line="$(_sg_plant "$_sg_pl_key" "" "$_sg_pl_grep")"
+  case "$_sg_pl_line" in
+    *"This is a HARNESS red, not an agent red"*)
+      ok "seven_gate: an EMPTY $_sg_pl_key in scene.json makes $_sg_pl_step say the plant is broken, not that the agent failed" ;;
+    *) bad "seven_gate: an EMPTY $_sg_pl_key in scene.json does not name the harness: $_sg_pl_line" ;;
+  esac
+  case "$_sg_pl_line" in
+    *"the agent spoke to the colleague without showing"*|*"nothing shows the picture was opened"*|*"nothing shows the prior scene was read back"*)
+      bad "seven_gate: …and it still carries the sentence that accuses the agent: $_sg_pl_line" ;;
+    *) ok "seven_gate: …and it does NOT carry the sentence that accuses the agent ($_sg_pl_step)" ;;
+  esac
+  # …and it is FAIL. Two different ways this matters: a harness red must stay a
+  # red (naming the culprit is not excusing the run), and ②'s empty needle must
+  # not be the PASS it used to be.
+  case "$_sg_pl_line" in
+    *" FAIL — "*) ok "seven_gate: …and $_sg_pl_step is still FAIL, not PASS (empty $_sg_pl_key)" ;;
+    *) bad "seven_gate: …and $_sg_pl_step is not FAIL on an empty $_sg_pl_key: $_sg_pl_line" ;;
+  esac
+done
 
 # 21b-iii) ⑤ MUST NOT BE RED ON THE TWO THINGS THE SERVER DOES ON PURPOSE.
 # This is the other half of 21b-i and it is the half that was broken: a bundle
@@ -3021,7 +3226,7 @@ echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 # printed the marker with no floor evaluated at all: MEASURED, floor block
 # deleted and the trailing echo kept → PASS=153 FAIL=0 rc=0, last line
 # `[tests_guard] all green`, `bin/ci.sh` all green. Keep it in the branch.
-PASS_FLOOR=300
+PASS_FLOOR=316
 if [[ "$PASS" -lt "$PASS_FLOOR" ]]; then
   echo "[tests_guard] FATAL: only $PASS assertion(s) ran, floor is $PASS_FLOOR." >&2
   echo "[tests_guard] FAIL=0 with a collapsed PASS count means cases went missing, not that they passed." >&2

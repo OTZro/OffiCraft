@@ -44,11 +44,11 @@ EXIT — 0 iff EVERY GATE passed; 1 otherwise, with the FIRST failing gate named
 the last line. Every cell prints its own line regardless, because "which step"
 is the answer the caller actually needs; a bare red tells them nothing.
 
-⚠️ "EVERY GATE", not "every cell": one cell (see OBSERVATION_KEYS below) is an
-OBSERVATION — it prints what it saw, is rendered OBSERVED rather than PASS/FAIL,
-and cannot make this run red. `all green` therefore means "every gate held", NOT
-"nine things were verified"; main() prints the gate count above the cells so that
-distinction is on screen and not only in this docstring.
+⚠️ "EVERY GATE", not "every cell": some cells (see OBSERVATION_KEYS below) are
+OBSERVATIONS — they print what they saw, are rendered OBSERVED rather than
+PASS/FAIL, and cannot make this run red. `all green` therefore means "every gate
+held", NOT "nine things were verified"; main() prints the gate count above the
+cells so that distinction is on screen and not only in this docstring.
 """
 import hashlib
 import json
@@ -86,19 +86,41 @@ STEPS = [
 # the server holds is stamped when the agent pressed the button, and nothing
 # records whether work happened between two reports. Two designs tried to judge
 # it anyway and both failed — see the block at ⑤ below for the measurements.
-# Downgrading it is the honest answer, but a downgrade that nobody can see is
-# how a gate disappears quietly, so:
+#
+# ① is here (owner's ruling, 2026-08-11, after ⑤) because IT IS TRUE OF EVERY RUN
+# THIS HARNESS PRODUCES, whatever the agent does. It reads presence == "waking",
+# which PresenceState derives from `waking_since` — and `waking_since` HAS A
+# SECOND WRITER: reconcile stamps it on a landed START (reconcile.go,
+# `m.WakingSince = now`), which is exactly what the harness's own owner-side
+# `activate` triggers, BEFORE the agent runs. So the field this cell reads is
+# written by the harness in every round, and a green here does not mean
+# report_waking was ever called. A gate that cannot say no about the population
+# it is aimed at is not a gate; it is a sentence that reads like evidence.
+#   🔴 EVIDENCE STRENGTH, SAID PLAINLY: this was established by READING THE CODE
+#   and the server's own test (TestReconcile_LandedStartStampsWakingSince, which
+#   asserts both the stamp and that PresenceState then reads "waking"). NOBODY
+#   STARTED A SERVER AND MEASURED IT. Do not cite it as a live measurement.
+#   HOW IT BECOMES A GATE AGAIN: when the server holds a fact only the agent's
+#   own report_waking can write, and that fact is on a DTO the collector reads.
+#   Today waking_since is on neither (not on MemberDTO; GET /api/members/{id} is
+#   the only member read collect.py makes), and the one member field written
+#   solely by report_waking — actual_model — is optional in the body and is also
+#   written by the telemetry ingest. Re-arming needs a wire change, not an edit
+#   here.
+#
+# Downgrading is the honest answer in both cases, but a downgrade that nobody can
+# see is how a gate disappears quietly, so:
 #   * the per-step line says OBSERVED, never PASS/FAIL;
 #   * verdict.json records `passed: null` (not true — "true" would read as
 #     "verified");
 #   * main() prints, above the verdict, HOW MANY cells are gates and names the
 #     ones that are not;
 #   * and tests_guard case 21b-v pins this membership in BOTH directions: a
-#     mutant that re-arms ⑤ as a gate goes red, and so does one that quietly
-#     downgrades any other cell into this set.
+#     mutant that re-arms a downgraded cell as a gate goes red, and so does one
+#     that quietly downgrades any other cell into this set.
 # Read a green run as "the N gates below held", never as "nine things were
 # verified".
-OBSERVATION_KEYS = ("step_done",)
+OBSERVATION_KEYS = ("report_waking", "step_done")
 
 
 def load_bundle(run_dir):
@@ -166,12 +188,27 @@ def _observe_step_shape(task, samples, multi=""):
                      if (s.get("finished_ts") or 0)})
     bits = ["task %s: %d of %d plan step(s) at done" % (tid, len(done), len(steps)),
             "%d distinct server-stamped finished_ts" % len(stamps)]
+    # ⚠️ THE "one-step plan" SENTENCE USED TO BE THE ONLY ELSE-BRANCH, so it was
+    # printed on the SAME LINE as "3 of 3 plan step(s) at done" whenever three
+    # steps shared one stamp or carried none at all — a line that contradicted
+    # itself. The four cases below are told apart because the reader acts on this
+    # text; none of them is a verdict (this cell judges nothing).
     if len(stamps) >= 2:
         bits.append("first→last completion %.3fs (server-stamped, not sampled)"
                     % (stamps[-1] - stamps[0]))
+    elif not done:
+        bits.append("first→last completion n/a (no step is at done)")
+    elif not stamps:
+        bits.append("first→last completion n/a (%d done step(s) and NOT ONE carries "
+                    "a server stamp — this server stamps finished_ts on every step "
+                    "it moves to done, so suspect the bundle, not the agent)"
+                    % len(done))
+    elif len(done) == 1:
+        bits.append("first→last completion n/a (one done step, one stamp — a "
+                    "one-step plan is a legitimate way to get here)")
     else:
-        bits.append("first→last completion n/a (fewer than two distinct stamps — "
-                    "a one-step plan is a legitimate way to get here)")
+        bits.append("first→last completion n/a (%d done steps share ONE server "
+                    "stamp)" % len(done))
     closed_ts = task.get("closed_ts")
     if stamps and closed_ts:
         bits.append("first completion→task closed_ts %.3fs (both server-stamped)"
@@ -184,7 +221,16 @@ def _observe_step_shape(task, samples, multi=""):
                 break
         if first_co is not None:
             break
-    if stamps and first_co:
+    # CLAUDE.md promises this second number is printed EVERY ROUND. It used to be
+    # skipped in silence when there were no stamps but the close-out HAD been
+    # seen (neither `stamps and first_co` nor `not first_co` held), so the branch
+    # order below is: say why it is missing before saying nothing.
+    if not first_co:
+        bits.append("the close-out was never seen in any sample")
+    elif not stamps:
+        bits.append("first completion→close-out sighting n/a (no done step "
+                    "carries a server stamp to measure from)")
+    else:
         gap = float(first_co) - stamps[0]
         if gap < 0:
             # The journal's own clock and the server's stamps are not comparable
@@ -198,8 +244,6 @@ def _observe_step_shape(task, samples, multi=""):
                         "%.2fs (⚠️ SAMPLED at the collector's poll interval — not "
                         "a server fact; the server's own closeout_ts is not on "
                         "TaskDTO)" % gap)
-    elif not first_co:
-        bits.append("the close-out was never seen in any sample")
     return ("OBSERVED, NOT JUDGED (this cell cannot make the run red — the server "
             "records when each report ARRIVED, never whether work happened "
             "between two reports, so nothing here separates 'reported as the work "
@@ -221,29 +265,63 @@ def judge(scene, samples):
     nonce = scene["scene_nonce"]
     out = []
 
-    # ① 報到 — report_waking stamps waking_since, and presence_state() derives
-    # "waking" from it. Transient by construction: mounting SSE flips it to
-    # online. If this is missed, fix the collector's sampling, do NOT relax this
-    # into "presence was ever non-offline" — that passes on an agent that never
-    # reported and was merely listening.
+    # ① 報到 — OBSERVATION ONLY: this cell judges nothing (see OBSERVATION_KEYS
+    # at the top of this file for the ruling and the evidence behind it). It
+    # reports whether, and when, the member was ever seen projected as "waking".
+    #
+    # WHY IT STOPPED DECIDING, in one line: `presence == "waking"` is derived
+    # from `waking_since`, which reconcile stamps on a landed START — the very
+    # thing the harness's owner-side `activate` causes, before the agent runs. So
+    # this cell was true of every run this harness produces regardless of the
+    # agent, i.e. a gate that could not say no about its own population.
+    #
+    # ⚠️ THE OTHER DIRECTION IS ALSO REAL AND IS NOT WHY IT WAS DOWNGRADED: the
+    # value is transient (mounting SSE clears the anchor; the TTL lapses), so a
+    # missed sample used to redden this AND NAME THE AGENT. Both halves are gone
+    # now for the same reason — nothing here decides anything.
+    #
+    # DO NOT "FIX" THIS BY RELAXING IT to "presence was ever non-offline". That
+    # is strictly worse: it would pass on an agent that never reported and was
+    # merely listening, and it would still be an observation.
     hit = next((s for s in samples
                 if (s.get("member") or {}).get("presence") == "waking"), None)
-    out.append(("report_waking", "報到", hit is not None,
-                "member %s observed presence=waking at t=%s" % (agent, hit["t"]) if hit
-                else "no sample ever showed member %s at presence=waking — the "
-                     "server was never told this agent booted" % agent))
+    out.append(("report_waking", "報到", None,
+                "OBSERVED, NOT JUDGED (this cell cannot make the run red — "
+                "`waking_since`, which this projection is derived from, is also "
+                "stamped by reconcile on the landed START that the harness's own "
+                "activate causes, so a sighting here is not evidence the agent "
+                "reported anything): "
+                + ("member %s was seen at presence=waking at t=%s"
+                   % (agent, hit["t"]) if hit
+                   else "no sample ever showed member %s at presence=waking"
+                        % agent)))
 
     # ② 接回現場 — resume_summary is a GET and stamps NOTHING server-side, so
     # there is no row to read. What IS readable is the consequence: the scene
     # nonce was planted, before boot, where only the resume snapshot surfaces
     # it, and the agent has to quote it back into a server-stored message. An
     # agent that skipped the resume cannot produce the nonce.
-    hit = next((item for _, item in _iter(samples, "chat")
-                if item.get("from") == agent and nonce in (item.get("body") or "")), None)
-    out.append(("resume_scene", "接回現場", hit is not None,
-                "chat message %s from %s quotes the scene nonce" % (hit.get("id"), agent) if hit
-                else "no server-stored message from %s ever quoted the scene nonce "
-                     "%r — nothing shows the prior scene was read back" % (agent, nonce)))
+    #
+    # 🔴 AND THE EMPTY NONCE IS THE OTHER DIRECTION OF THE SAME BROKEN-PLANT BUG
+    # ⑧⑨ have: `"" in body` is TRUE for every message, so an unplanted nonce made
+    # this GATE PASS on the agent's first word — a gate silently ceasing to gate,
+    # which is the exact shape this whole round is about. MEASURED 2026-08-11:
+    # scene_nonce="" on the green fixture ⇒ ② PASS, run all green, nothing said.
+    if not nonce:
+        out.append(("resume_scene", "接回現場", False,
+                    "scene.json carries an EMPTY scene_nonce — the harness never "
+                    "planted anything for the agent to read back, so this step "
+                    "could not be observed at all (and an empty needle matches "
+                    "every message, which would have made this gate PASS "
+                    "unconditionally). This is a HARNESS red, not an agent red: "
+                    "fix the plant."))
+    else:
+        hit = next((item for _, item in _iter(samples, "chat")
+                    if item.get("from") == agent and nonce in (item.get("body") or "")), None)
+        out.append(("resume_scene", "接回現場", hit is not None,
+                    "chat message %s from %s quotes the scene nonce" % (hit.get("id"), agent) if hit
+                    else "no server-stored message from %s ever quoted the scene nonce "
+                         "%r — nothing shows the prior scene was read back" % (agent, nonce)))
 
     # ③ 開票 — a task row whose creator_id is the agent. Earliest wins, and it
     # is THE task ④⑤⑦ are judged on.
@@ -288,7 +366,9 @@ def judge(scene, samples):
                 else ("task %s has an empty steps[] — no plan was ever submitted"
                       % (task.get("id") if task else "<none: ③ failed>")) + _multi))
 
-    # ⑤ 報一步完成 — was a step reported done WHILE THE TASK WAS STILL RUNNING.
+    # ⑤ 報一步完成 — OBSERVATION ONLY: this cell judges nothing (see
+    # OBSERVATION_KEYS at the top of this file). It prints the shape of the
+    # progress reports and cannot make the run red.
     #
     # 🔴 THE TWO THINGS THIS CELL HAS ALREADY BEEN, AND WHY BOTH FAILED.
     #
@@ -405,6 +485,19 @@ def judge(scene, samples):
                     "scene.json carries no peer_id — the harness never seated a "
                     "second agent, so this step could not be observed at all. "
                     "This is a HARNESS red, not an agent red: fix the plant."))
+    elif not peer_nonce:
+        # 🔴 WITHOUT THIS BRANCH THE EMPTY NONCE ACCUSED THE AGENT. `replied`
+        # tests `peer_nonce and peer_nonce in body`, so an empty nonce can never
+        # match — and the run fell through to the "spoke to the colleague without
+        # showing it read what the colleague said" sentence, which names the
+        # agent for a plant the harness never made. Same class as the missing
+        # peer_id above; it just did not have its own branch.
+        out.append(("peer_message", "回覆另一個 agent", False,
+                    "scene.json carries an EMPTY peer_nonce — the peer never "
+                    "spoke (or its message carried no nonce), so there is nothing "
+                    "for the agent to quote back and this step could not be "
+                    "observed at all. This is a HARNESS red, not an agent red: "
+                    "fix the plant."))
     else:
         addressed = [item for _, item in _iter(samples, "chat")
                      if item.get("from") == agent and item.get("to") == peer]
@@ -465,6 +558,17 @@ def judge(scene, samples):
                     "scene.json carries no image_answer_sha256 — the harness "
                     "never planted the picture, so this step could not be "
                     "observed at all. This is a HARNESS red, not an agent red."))
+    elif not salt:
+        # The twin of the empty peer_nonce above. run.sh always writes a 32-hex
+        # salt and hashes salt+answer, so an empty salt means the plant broke:
+        # _says_answer would hash the bare digits and match nothing, and the
+        # else-branch below would tell the reader the agent never opened the
+        # picture.
+        out.append(("image_answer", "看得到圖", False,
+                    "scene.json carries a digest but an EMPTY image_answer_salt "
+                    "— the digest was computed over salt+answer, so nothing can "
+                    "ever match it and this step could not be observed at all. "
+                    "This is a HARNESS red, not an agent red."))
     else:
         seen = next((item for _, item in _iter(samples, "chat")
                      if item.get("from") == agent
@@ -477,14 +581,38 @@ def judge(scene, samples):
                          "and read (the number appears in no text the agent can "
                          "reach, so it cannot be produced any other way)" % agent))
 
-    # THE GATE/OBSERVATION SPLIT IS APPLIED HERE, FROM THE DECLARATION AT THE TOP
-    # OF THE FILE — not sprinkled through the cells — so that there is exactly one
-    # place to read (and exactly one place a mutant can move). Fail-closed both
-    # ways: a cell in OBSERVATION_KEYS never decides anything no matter what it
-    # computed, and a GATE that somehow produced no verdict is a red, never a
-    # pass, because "nothing was decided" must not print as PASS.
-    return [(k, z, (None if k in OBSERVATION_KEYS else (False if p is None else p)), w)
-            for k, z, p, w in out]
+    # THE GATE/OBSERVATION SPLIT IS APPLIED IN _seal() BELOW — see it for why.
+    return _seal(out)
+
+
+# ⚠️ THE EVIDENCE OF A FAIL-CLOSED RED DESCRIBES NOTHING THAT WAS MEASURED. A
+# gate that produced no verdict at all still carries whatever text its cell
+# happened to build — which is the cell's else-branch, and that branch asserts a
+# fact ("closeout_reported=false") that may be the opposite of what is in the
+# bundle. Reviewed 2026-08-11: the red is correct, the sentence under it is not,
+# so the conversion says so in the line the reader acts on.
+NOTHING_DECIDED = (" ⚠️ FAIL-CLOSED: this GATE produced no verdict at all, so it "
+                   "is red because NOTHING WAS DECIDED, not because the sentence "
+                   "above was measured — that text is the cell's else-branch and "
+                   "may not describe this bundle. Fix judge.py, not the agent.")
+
+
+def _seal(rows):
+    """Apply the gate/observation split from the single declaration at the top of
+    this file — not sprinkled through the cells — so that there is exactly one
+    place to read (and exactly one place a mutant can move). Fail-closed both
+    ways: a cell in OBSERVATION_KEYS never decides anything no matter what it
+    computed, and a GATE that somehow produced no verdict is a red, never a pass,
+    because "nothing was decided" must not print as PASS."""
+    out = []
+    for k, z, p, w in rows:
+        if k in OBSERVATION_KEYS:
+            out.append((k, z, None, w))
+        elif p is None:
+            out.append((k, z, False, w + NOTHING_DECIDED))
+        else:
+            out.append((k, z, p, w))
+    return out
 
 
 def main(argv):
@@ -505,12 +633,17 @@ def main(argv):
     gates = [k for k, _z, p, _w in verdicts if p is not None]
     obs = [(i, k, z) for i, (k, z, p, _w) in enumerate(verdicts, 1) if p is None]
     if obs:
+        # ⚠️ THE WORDING MUST SURVIVE MORE THAN ONE OBSERVATION. It used to be
+        # built as "<cell> is an OBSERVATION", which read as
+        # "step1 … (報到) is, step5 … (報一步完成) is an OBSERVATION" the moment a
+        # second cell was downgraded — a sentence the reader has to parse twice
+        # on the one line that exists to stop a misreading.
         print("[seven_gate] NOTE: %d of the %d cells below are GATES (their fact "
-              "is absent ⇒ the run is red). %s an OBSERVATION: it prints what it "
-              "saw and CANNOT make this run red — read a green run as \"the %d "
-              "gates held\", never as \"%d things were verified\"."
+              "is absent ⇒ the run is red). THE REST ARE OBSERVATIONS — %s — they "
+              "print what they saw and CANNOT make this run red. Read a green run "
+              "as \"the %d gates held\", never as \"%d things were verified\"."
               % (len(gates), len(verdicts),
-                 ", ".join("step%d %s (%s) is" % (i, k, z) for i, k, z in obs),
+                 ", ".join("step%d %s (%s)" % (i, k, z) for i, k, z in obs),
                  len(gates), len(verdicts)))
     failed = None
     for i, (key, zh, passed, why) in enumerate(verdicts, 1):

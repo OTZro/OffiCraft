@@ -58,7 +58,7 @@ bundle，跑在 `bin/ci.sh` 的第 (0) 階，不起任何服務。
 
 | # | 步驟 | server 事實 | 讀哪裡 |
 |---|---|---|---|
-| ① | 報到 | `presence == "waking"` 曾經出現過 | `GET /api/members/{id}`，journal 任一 sample |
+| ① | 報到 | 🔴 **這一格不判生死**（owner 2026-08-11 裁定，比照⑤）——它只**照實記錄**有沒有、什麼時候看到 `presence == "waking"` | 見〈① 也降級成觀察行〉 |
 | ② | 接回現場 | agent 發出的訊息裡含 scene nonce | `GET /api/chat`，`from == agent` |
 | ③ | 開票 | 有一張 task 的 `creator_id == agent` | `GET /api/tasks` → 逐張 `GET /api/tasks/{id}` |
 | ④ | 提出計畫 | 那張票 `steps[]` 非空 | 同上（`submit_plan` 是 `steps[]` 唯一的寫入者） |
@@ -71,11 +71,18 @@ bundle，跑在 `bin/ci.sh` 的第 (0) 階，不起任何服務。
 ③④⑤⑦ 綁在**同一張票**上（③找到的那張，多張時取最早）。不綁的話，載體會被 server 上任何
 一張碰巧存在的票餵飽。
 
-🔴 **九格裡只有八格是閘。** ⑤ 不判生死（下一節），所以「全綠」的意思是**那八道閘都成立**，
-不是「九件事都被驗過」。`judge.py` 把這件事印在判定列**上面**（`… of the 9 cells below are GATES …`）、
-把 ⑤ 那一列印成 `OBSERVED`（不是 `PASS`）、`verdict.json` 記 `passed: null`；
-成員資格寫在 `judge.py` 的 `OBSERVATION_KEYS`，而 `tests_guard` 案例 21b-v **雙向釘住**它
-（把 ⑤ 重新武裝成閘會紅、把任何一道真閘偷偷降級成觀察也會紅）。
+🔴 **九格裡只有七格是閘。** ⑤ 與 ① 都不判生死（各自的理由在下面兩節），所以「全綠」的意思是
+**那七道閘都成立**，不是「九件事都被驗過」。`judge.py` 把這件事印在判定列**上面**
+（`… of the 9 cells below are GATES … THE REST ARE OBSERVATIONS — …`）、把那兩列印成 `OBSERVED`
+（不是 `PASS`）、`verdict.json` 記 `passed: null`；成員資格寫在 `judge.py` 的 `OBSERVATION_KEYS`，
+而 `tests_guard` 案例 21b-v **三個方向釘住**它（整組重新武裝會紅、把任何一道真閘偷偷降級也會紅、
+**只把其中一格搬回去**——「順手整理」真正會產生的那個形狀——也會紅並印出實際的切分）。
+
+⚠️ **兩格降級的理由是不同的，別把它們讀成同一件事**：
+**⑤ 是「它想判的事實不在資料裡」**（server 只 stamp 回報抵達的時刻）；
+**① 是「它讀的欄位由載體自己每一輪寫進去」**（`waking_since` 的第二個寫入者是 reconcile，
+而觸發它的正是 `run.sh` owner 端的 `activate`）⇒ ⑤ 的問題是**判不出來**，
+①的問題是**它的綠對每一輪都成立**——一個對目標母體恆真、卻讀起來像驗收證據的欄位。
 
 ### ⑤ 已經降級成觀察行——三個問法各自壞在哪，以及為什麼沒有第四個
 
@@ -136,6 +143,14 @@ collector 端點的替身 server** 實測：一個每一步都回報、順序正
   `dal_tasks.go` 的 `closeout_ts` 欄），但 **`TaskDTO` 只曝 `closeout_reported` 這個布林**
   （`wire.go`：`CloseoutReported: t.CloseoutTS > 0`），所以那個時刻 judge 讀不到。
 
+⚠️ **「每一輪都印」現在才是字面為真的**：這兩個數字量不出來的時候印的是 `n/a ＋ 為什麼`，
+不是安靜略過（第二個數字在「一個 stamp 都沒有、但收尾看得到」那一格上曾經整行不印）；
+而且**多步計畫的那條線不再被說成「單步計畫是合法的」**——三步共用一個 stamp、或一個 stamp 都沒有，
+各自有自己的話（後者逐字寫「這不是這個 server 產得出來的形狀，該懷疑的是 bundle 不是 agent」）。
+覆核實查過**那兩個形狀今天在真 server 上產不出來**（`nowSecs()` 兩通 HTTP 撞不出同一個 float；
+唯一會把 `FinishedTS` 寫成 0 的地方明文跳過 terminal 的 step）⇒ **這是措辭缺陷，不是真跑風險，
+所以修的是措辭，沒有為它加任何判定邏輯。**
+
 **要真的把它變回一道閘，需要兩樣今天都沒有的東西**（寫在這裡，下一個人不用重新發現）：
 ① 把**收尾時刻**曝進 `TaskDTO`——那是**動 wire**，照 root §13 要 spec-first ＋ owner 過目，本輪刻意沒做；
 ② 一個**推導得出來**的門檻，而不是挑一個數字。上面說明了為什麼今天沒有第二樣。
@@ -145,9 +160,18 @@ collector 端點的替身 server** 實測：一個每一步都回報、順序正
   也不要把它印出來的小數字讀成「這個 agent 作弊」。**
 - 單步計畫**照樣不受影響**——它本來就不再被判。
 - 它擋不住「邊做邊報但其實是照抄」這一類語意問題——這一格量的是時序，不是內容。
-- **降級本身被守著**：`tests_guard` 21b-v 釘住「八閘一觀察、而且那一格是⑤」（`verdict.json` 的
-  `passed: null` ＋ 畫面上的 `OBSERVED` ＋ 判定列上面那行閘數），並用兩顆 mutant 雙向證明它會紅
-  ——`OBSERVATION_KEYS` 清空（⑤ 被重新武裝）、以及把 ⑦ 偷偷塞進去（真閘被靜默降級）。
+- **降級本身被守著，但要看清楚是「哪一半」被誰守著**：
+  - **21b-v 回答的是「誰是閘」**：`verdict.json` 的 `7|2|report_waking,step_done`（而且 `passed` 的**型別**也被釘，
+    非 bool／非 null 會被點名——一顆讓 ⑦ 回字串 sentinel 的 mutant 曾經從這裡溜過去）、畫面上
+    ①與⑤ 兩列的 `OBSERVED`、**①那一列必須逐字說出它為什麼不能判**、判定列上面那行閘數
+    （**逐字比對整行 ＋ 它必須印在 `step1` 上面**）、以及 ⑤ 印的兩個數字**必須是那份 fixture 的值**
+    （配一份把兩個 stamp 併成一個的對照 fixture，數字要跟著變）。三顆 mutant 三個方向：
+    `OBSERVATION_KEYS` 清空（整組重新武裝，畫面上那行閘數也必須跟著消失）、把 ⑦ 偷偷塞進去
+    （真閘被靜默降級）、**只把 ① 搬回閘裡**（「順手整理」真正會產生的那個形狀）。
+    ⚠️ **上一版這裡只數三個 substring 出現幾次**，於是覆核用三顆 mutant 讓畫面說謊而整套維持
+    303/0 全綠（印成 `9 of the 9`、把 NOTE 搬到格子下面、⑤ 永遠印同一句假數字）。
+  - **21b-v 不回答「閘還會不會說不」**——那是 21b 那七顆 `sg_mutant`（一格一顆）的工作。
+    別把這一格讀成「一條斷言就守住了整個降級」。
   21b-i 現在釘的是「那份 back-fill bundle 是 server 產得出來的狀態、而且⑤**紅不動它**」；
   21b-iii 仍然釘 replan ＋ 並行亂序必須是綠的。
 
@@ -172,13 +196,15 @@ collector 端點的替身 server** 實測：一個每一步都回報、順序正
 剛好是這一輪在⑤身上修掉的那個病。
 
 **所以選的是（b）：維持取最早，但不准它安靜。** `judge.py` 在 agent 開了不只一張票時，
-把警語接在③的證據**以及④⑤⑦每一句 FAIL 理由後面**（逐字：`⚠️ THIS AGENT OPENED N TASKS
+把警語接在③的證據**以及④⑦的 FAIL 理由後面**（⑤ 今天沒有 FAIL 理由——它是觀察行，
+警語接在它那句觀察文字後面）（逐字：`⚠️ THIS AGENT OPENED N TASKS
 (…) AND THE GATE JUDGES THE EARLIEST …`），所以**呼叫者真正會讀的那最後一行**就帶著
 「可能是多開了票，不是 agent 沒做」。案例 21b-ii 釘住三件事：兩張票時警語出現且點名兩張、
 **最後一行**也帶警語、以及**只有一張票時不准印**（永遠亮著的警語沒有人讀）。
 
 ⚠️ 這一格留下的曝險是**真的還在**，只是不再沉默：一個先開草稿票的 agent 仍然會拿到
-④⑤⑦的紅。要真的關掉它，得有一個「這一輪的票」在 server 上的事實——那是 server 側的改動。
+**④⑦兩格**的紅（⑤ 降級之後不再是其中之一，它只印一句帶著同一段警語的觀察）。
+要真的關掉它，得有一個「這一輪的票」在 server 上的事實——那是 server 側的改動。
 
 ### ⑧「回覆另一個 agent」為什麼要另外坐一個人進來
 
@@ -197,6 +223,16 @@ member（peer），**用 peer 自己的 token**（不是 owner 的——owner �
 ⚠️ **本輪判定是雙向的**（收到→回覆兩半都要），因為載體起得動第二個對象。代價要講明白：
 若哪天 peer 那則訊息從 agent 讀得到的地方消失，⑧會為了**載體的理由**變紅——`actors/stub.sh`
 因此在回覆前先檢查 nonce 在不在，不在就先喊出來。
+
+🔴 **而載體的紅必須自己承認是載體的紅。** ⑧⑨ 各有「沒種 peer」「沒種圖」兩條會逐字說
+`This is a HARNESS red, not an agent red` 的分支，**但空值那一格以前不走那條**：
+`peer_nonce` 是空字串時，`replied` 構造上永遠找不到，於是落進
+「the agent spoke to the colleague without showing it read what the colleague said」
+——**一句載體自己沒種好、卻逐字指控 agent 的紅**（2026-08-11 覆核實測）。
+`image_answer_salt` 空字串是它的雙胞胎（digest 是 salt+answer 算的，空 salt 比對不到任何東西，
+訊息卻說「沒有證據顯示它打開過那張圖」）。**兩條都補上了**，守衛在 `tests_guard` 21b-vii
+（兩個方向各一格：必須說出是載體的錯、而且**不准**帶著那句指控 agent 的話；
+另有一格要求它**仍然是 FAIL**——講清楚是誰的錯不等於把 run 放綠）。
 
 ### ⑨「看得到圖」——這一格的成敗全在「答案不准出現在任何文字裡」
 
@@ -266,12 +302,59 @@ member（peer），**用 peer 自己的 token**（不是 owner 的——owner �
 - nonce 是種在 chat 裡的，而 resume 快照包含 chat——若哪天快照的組成變了，②會為了**載體的
   理由**而變紅。`actors/stub.sh` 因此在拉完快照後檢查 nonce 在不在，不在就先喊出來，讓人
   不要把載體的紅誤讀成 agent 的紅。
+- 🔴 **而 nonce 沒種成功的時候，②以前是靜默地 PASS**：判定是 `nonce in body`，而
+  `"" in body` 對每一則訊息都為真 ⇒ **空的 `scene_nonce` 讓這道閘在 agent 講第一句話時就綠**。
+  **實測（2026-08-11，全綠 fixture 把 `scene_nonce` 改成空字串）**：step2 PASS、`all green`、rc=0，
+  沒有任何東西出聲。這就是這一整包在追的形狀——**一道閘停止把關、輸出照樣好看**。
+  現在空 nonce 走的是跟⑧⑨同一條「載體沒種好」的紅（逐字 `This is a HARNESS red, not an agent red`），
+  守衛在 `tests_guard` 21b-vii 與⑧⑨同一個迴圈裡。
 
-### ①為什麼不放寬
+### ① 也降級成觀察行（owner 2026-08-11 裁定，在⑤之後）——理由跟⑤不同
 
-`presence=waking` 抓不到的時候，正確的動作是**把 `--interval` 調密、確認 collector 比 actor 早
-起**，不是把判定放寬成「presence 曾經不是 offline」——那條放寬會讓一個從沒報到、只是掛著
-SSE 的 agent 過關，而那正是要抓的病。
+**⑤ 是「它想判的事實不在資料裡」。① 不是：①的問題是它的綠對每一輪都成立。**
+
+①讀的是 `presence == "waking"`，而那是 `desired_state==online` ∧ **新鮮的** `waking_since`
+投影出來的（`domain.go` `PresenceState` ＋ `WakingTTLSecs`）。而 **`waking_since` 有兩個寫入者**
+（`grep -rn "WakingSince = nowSecs()\|WakingSince = now" server/ocserverd/*.go`）：
+
+1. `api_members.go:749` —— agent 自己的 `POST /api/self/waking`；
+2. 🔴 `reconcile.go:926` —— **reconcile 在一個「已落地的 START」上就 stamp 它**
+   （T-ba62 刻意加的：在那之前「wake 失敗」跟「沒人叫醒它」長得一模一樣）。
+
+而**觸發那個 START 的，正是這個載體 owner 端的 `activate`**（`run.sh` 2b／`live.sh`）
+⇒ **這個欄位在載體的每一輪都會被寫，agent 什麼都不做也一樣。**
+一道對它自己的目標母體恆真的閘不是閘，它是一句**讀起來像驗收證據、而永遠不會叫**的話——
+而這正好是這個載體存在要抓的病。
+
+🔴 **證據強度，逐字說清楚**：以上是**讀碼 ＋ 讀 server 自己那支測試**得到的——
+`reconcile_wake_observability_test.go` 的 `TestReconcile_LandedStartStampsWakingSince`
+逐字斷言那個 stamp，並且接著斷言 `PresenceState(...) == waking`。
+**沒有任何人起一台 server、activate 一個 member、再去抽 `presence` 看它是不是 waking。**
+**不要把這一段引用成實測。**
+
+⚠️ **另一個方向也是真的，但那不是它被降級的原因**：那個值是**瞬時的**
+（掛上 SSE 就把錨點清成 0——`api_infra.go:348-349`，註解逐字寫「spent exactly once」；TTL 過期落回
+offline）⇒ 它本來就會為了**取樣／activate 順序／訊號過期**而紅，而那個紅指著 agent。
+**降級之後兩半都不見了**——這一格不再判任何事。
+
+**它現在提供什麼**：一行 `OBSERVED`，說有沒有、在哪個 `t` 看到 `presence=waking`，
+**並且在同一行逐字說出它為什麼不能判**（`… also stamped by reconcile on the landed START that
+the harness's own activate causes …`）。`tests_guard` 21b-v 有一條斷言專門釘那句理由必須在——
+否則「降級」對讀 run 的人來說只剩一個 null 跟一個英文單字。
+
+**怎麼把它變回一道閘**（寫在這裡，下一個人不用重新發現）：需要一個**只有 agent 自己的
+`report_waking` 寫得到、而且在 collector 讀得到的 DTO 上**的 server 事實。今天兩個條件都不成立：
+
+| 我查了什麼 | 結果 |
+|---|---|
+| collector 讀 member 的入口 | 只有 `GET /api/members/{id}`（`collect.py`），回 `MemberDTO` |
+| `MemberDTO` 有沒有 `waking_since` | **沒有**（`spec/openapi.json` 的 26 個欄位、`wire.go:152` 的 struct 都沒有） |
+| 有沒有替代的持久欄位 | `actual_model` **在 DTO 上、而且只有 `report_waking` 寫**——但它是 **optional body 欄位**（`if body.Model != nil`），而且**遙測上行 `api_monitoring.go:785` 是第二個寫入者** ⇒ 不成立 |
+
+⇒ **那是動 wire**（root §13：spec-first ＋ owner 過目），本輪刻意沒做。
+
+⚠️ **不准用「放寬」代替**：把判定改成「presence 曾經不是 offline」會讓一個從沒報到、
+只是掛著 SSE 的 agent 過關——**比現在更糟，而且它還是一個觀察**。
 
 ## 為什麼每一通呼叫都要留狀態碼
 
@@ -372,7 +455,7 @@ collector 收集窗  ≥  actor 預算（machine + spawn + live + friction + car
 （`agent_runtime` / `agent_model` / `agent_effort`）並印在 log 上，所以每一輪都記得住自己是誰。
 ⚠️ 沒指定時**照樣讀回來**——記錄的是「實際跑成什麼」，不是「本來想跑什麼」。
 
-**實測（stub，兩組各一輪，九格全綠 rc=0）**：
+**實測（stub，兩組各一輪，①⑤降級之前的樹〔`a2296332` 之前〕，那一輪九格全綠 rc=0）**：
 `runtime=claude model=opus effort=medium` 與 `runtime=codex model=gpt-5.6-luna effort=max`，
 兩組的 `member config (read back from the server)` 都與指定值逐字相同。
 **陽性對照**：`OC_SG_EFFORT=bogus` ⇒ server 回
@@ -470,7 +553,7 @@ tmux＋claude）就是 `tests/05_machine_onboarding_spawn.live-agent.spec.js` �
 `judge.py` **每一格都印一行**，每行 `PASS`/`FAIL` ＋ 一句「在 server 上找什麼、實際看到什麼」；最後
 一行是 `[seven_gate] RED — failed at stepN <key> (<中文>): <原因>`，rc=1。全綠時最後一行逐字
 是 `[seven_gate] all green`，rc=0。判定同時落成 `verdict.json`（機器可讀）。
-⚠️ **觀察行那一格印的是 `OBSERVED`，不是 `PASS`／`FAIL`**（今天只有⑤，見上），`verdict.json` 記
+⚠️ **觀察行印的是 `OBSERVED`，不是 `PASS`／`FAIL`**（今天是 ① 與 ⑤ 兩格，見上），`verdict.json` 記
 `passed: null`，而且它**永遠不會是那個 RED**。判定列之前另有一行說明**有幾格是閘**——
 `all green` 的意思是「那幾道閘都成立」，不是「九件事都被驗過」。
 
@@ -526,9 +609,14 @@ tmux＋claude）就是 `tests/05_machine_onboarding_spawn.live-agent.spec.js` �
 因為判定來自 server。
 
 ⚠️ `OC_SG_OWNER_TOKEN`（owner 那一側）在契約裡，是因為**真 agent 需要對面有個人**：得有人交辦、
-得有人回卡、得有人事後問那兩題。它**偽造不了任何一個被判定的事實**——①是綁 caller 自己 token 的
-self-report（owner 拿去報只會蓋到 owner 頭上），②⑥比對 `from == agent`、③比對 `creator_id == agent`、
-④⑤⑦掛在**那張**票上。所以拿著它的 actor 一樣沒辦法把紅的 run 弄綠。
+得有人回卡、得有人事後問那兩題。**②③④⑤⑥⑦⑧⑨ 它偽造不了**——②⑥⑧⑨比對 `from == agent`、
+③比對 `creator_id == agent`、④⑤⑦掛在**那張**票上。
+
+🔴 **①是例外，而且舊文這裡寫反了。** 舊文寫「①是綁 caller 自己 token 的 self-report，owner 拿去報
+只會蓋到 owner 頭上」——`POST /api/self/waking` 那半確實如此，**但①讀的不是那支工具，是
+`presence == "waking"` 這個衍生值**，而 `waking_since` 有**第二個寫入者**：reconcile 在一個已落地的
+START 上就會 stamp 它（`reconcile.go:926`）。而**那個 START 正是 owner 端的 `activate` 觸發的**
+⇒ **owner 這一側的動作本身就能讓①綠**。詳見〈① 也降級成觀察行〉——**這一格已經因為這件事降級了**。
 
 - `actors/stub.sh`（預設）：用 member token 直接打 REST 走完整條路徑。**它不是 agent。**
   `OC_SG_SKIP_STEP=<key>` 讓其中一步不發生——載體要能說「不」，而只在成功的 run 上跑過的關卡
@@ -681,10 +769,15 @@ ocwarden／agent 用同一支 binary、同一組 argv 跑著的機器上。**
 - **stub 證明的只有「事實落地時關卡讀得對」**，它是照著判定寫的，**完全不證明**
   「一個只讀開機說明的 agent 會決定去做這七件事」。那是整張票的目的，還沒被回答。
 - `②` 讀的是後果不是工具呼叫（見上）。
-- `run.sh` 本身**已在隔離站上實跑過**：stub actor **九格全綠 rc=0**（`runs/nine-20260810T081142Z/`）；
+- `①` 不判生死了（見〈① 也降級成觀察行〉），而**它為什麼降級這件事本身沒有被實打過**——
+  那是讀 `reconcile.go` ＋ 讀 server 自己那支測試得到的，**沒有人起一台 server 去量**。
+- `run.sh` 本身**在⑤降級之前的那棵樹上、已在隔離站上實跑過**：stub actor **那一輪九格全綠 rc=0**
+  （`runs/nine-20260810T081142Z/`，樹在 `a2296332` 之前——**那時候⑤與①都還是閘**）；
   另外三次刻意讓一格不發生——`OC_SG_SKIP_STEP=` `reply_card` / `peer_message` / `image_answer`——
   都 rc=1 並精準點名那一格（`runs/sayno-*`、`runs/saynopeer-*`、`runs/saynoimage-*`），而且
-  **其餘格子照樣各自判**（跳過⑨時⑧仍綠）。live actor 那條路徑一次都沒跑過。
+  **其餘格子照樣各自判**（跳過⑨時⑧仍綠）。**這四輪全部是同一棵樹、同一個舊 judge 判的**——
+  今天的 judge 產不出「九格全綠」這個輸出（它印的是七閘 ＋ ①⑤ 兩行 `OBSERVED`），
+  所以這四輪只證明那時候的判定邏輯會說不，不是今天這份的證據。live actor 那條路徑一次都沒跑過。
   🔴 **這裡本來有一段「⑤改判定那一輪又在隔離站上跑了四次」的四輪實測（含 `skip=reply_card`
   ⇒ ⑤仍綠），2026-08-11 刪掉了——那四輪量的是 a2296332 的⑤，不是今天這個⑤。**
   證據是它引用的⑤逐字證據（「… in plan order (finished_ts …), and they are the plan's first 2」）
@@ -692,12 +785,17 @@ ocwarden／agent 用同一支 binary、同一組 argv 跑著的機器上。**
   （2026-08-11 自跑）。放在「⑤改判定那一輪」標題底下，讀起來就是「新⑤已經在真站上驗過四輪」，
   而下一個人會據此**跳過**「新⑤在 `skip=reply_card` 上還綠不綠」這個檢查——那正好是新⑤最容易
   誤紅的那一輪。**今天這個⑤在隔離站上一輪都沒跑過**，這一行不補上任何沒量過的替代宣稱。
-- 這支不在 `run_all.sh` 裡、也不在 `bin/ci.sh` 裡。CI 守的是**判定邏輯**與載體的幾條靜態不變式
-  （`tests_guard` 案例 21：21a–21e 判定與 friction 措辭、21b-i back-fill 那份 fixture 可達**且⑤紅不動它**、
-  21b-v ⑤ 的降級雙向被釘（八閘一觀察、`OBSERVED` 標籤、閘數那一行；兩顆 mutant：重新武裝⑤／偷偷降級⑦）、
-  21b-ii 多開票時警語會出現在最後一行、21b-iii replan ＋ 並行亂序必須是綠的、
-  21b-iv fixture 自己帶著第三方票／owner 的卡／對 owner 講的那則帶 peer nonce 的訊息
-  （這三列不在，③⑧⑥ 三格的判定放鬆都是靜默的——實測過）、21f 沒有裸 curl／狀態碼有被抓、
-  21g live actor 的花錢開關是嚴格 include flag；案例 24：隔離與所有權那兩層；
-  案例 26：交給 warden 的環境裡沒有②⑧⑨的答案），
-  **不是任何一次真的 run**。
+- 這支不在 `run_all.sh` 裡、也不在 `bin/ci.sh` 的服務型步驟裡。CI 守的是**判定邏輯**與載體的
+  幾條靜態不變式，**不是任何一次真的 run**。
+  **哪些案例、各守什麼，這裡刻意不列**（見 root〈文件鐵律〉：列舉會過期，而且沒有東西會叫它——
+  這一段上一版就漏了案例 22／23／25 三個，而它剛剛才被編輯過）。成員資格與射程由**一條查詢**回答，
+  每個案例的標頭自己寫著它守什麼：
+
+  ```
+  grep -nE '^ *# (── )?2[1-6][a-z]*(-[a-z]+)?\)' e2e_test/tests_guard/run.sh
+  ```
+
+  ⚠️ **這條查詢的三個小地方都是被逼出來的，別「簡化」它**：頂層案例的標頭前面有 `── `
+  （`# ── 26) …`）、子案例 26a–26d 是**縮排的**、而 `21b-i`…`21b-vii` 帶連字號。
+  覆核建議的 `^# 2[1-6]` **漏掉整個案例 26**（自跑：39 行、沒有 26）——那正好是這一段
+  上一版有列到、而如果照建議換過去就會被查詢弄丟的那一個。今天這條回 **49 行**。
