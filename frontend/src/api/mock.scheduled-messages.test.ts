@@ -45,7 +45,11 @@ async function clean(): Promise<void> {
 beforeEach(clean);
 
 async function create(
-  over: Partial<{ customMonths: number[]; cadence: "daily" | "custom" }> = {}
+  over: Partial<{
+    customMonths: number[];
+    customDays: number[];
+    cadence: "daily" | "custom";
+  }> = {}
 ): Promise<ScheduledMessage> {
   const { cadence = "custom" as const, ...rest } = over;
   return mockApi.createScheduledMessage(MEMBER, {
@@ -123,6 +127,35 @@ describe("mockApi.createScheduledMessage", () => {
     const alsoDaily = await create({ cadence: "daily" });
     expect(alsoDaily.customMonths).toEqual([]);
   });
+
+  it("refuses a months × days pair that no calendar ever has, and keeps the leap-year one", async () => {
+    // Every value is in range and no set is empty, so nothing else in the
+    // validator objects — yet these three deliver nothing for the rest of time.
+    for (const [months, days] of [
+      [[2], [30]],
+      [[2], [31]],
+      [[4, 6, 9, 11], [31]],
+    ]) {
+      const err = await refusal(() =>
+        create({ customMonths: months, customDays: days })
+      );
+      expect(
+        err,
+        `months ${JSON.stringify(months)} × days ${JSON.stringify(days)} was accepted`
+      ).not.toBeNull();
+      expect(err!.status).toBe(422);
+      // Readable enough to act on: which two sets, and what to change.
+      expect(err!.serverMessage).toContain("custom_months");
+      expect(err!.serverMessage).toContain("custom_days");
+      expect(err!.serverMessage).toContain("never occur together");
+    }
+
+    // The positive sample the line was drawn around: February with the 29th is
+    // a leap-year schedule somebody meant to write.
+    const leap = await create({ customMonths: [2], customDays: [29] });
+    expect(leap.customMonths).toEqual([2]);
+    expect(leap.customDays).toEqual([29]);
+  });
 });
 
 describe("mockApi.updateScheduledMessage", () => {
@@ -166,6 +199,26 @@ describe("mockApi.updateScheduledMessage", () => {
     // error over a value that had already changed.
     expect(after.label).toBe(created.label);
     expect(after.customMonths).toEqual([5]);
+  });
+
+  it("refuses a months patch that narrows the row onto a date it can never reach", async () => {
+    // January has a 31st, so this row is perfectly ordinary when it is created.
+    const created = await create({ customMonths: [1, 2], customDays: [31] });
+    const err = await refusal(() =>
+      mockApi.updateScheduledMessage(MEMBER, created.id, {
+        label: "T49E7 不該被寫進去",
+        customMonths: [2],
+      })
+    );
+    expect(err!.status).toBe(422);
+    // The days set is not in this request at all, so the mock has to judge the
+    // whole row the way the server does rather than only what was stated.
+    expect(err!.serverMessage).toContain("custom_days");
+    const after = (await mockApi.listScheduledMessages(MEMBER)).find(
+      (r) => r.id === created.id
+    )!;
+    expect(after.label).toBe(created.label);
+    expect(after.customMonths).toEqual([1, 2]);
   });
 
   it("keeps the months a row carried after it switches AWAY from custom", async () => {

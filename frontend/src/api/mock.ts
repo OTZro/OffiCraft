@@ -1683,6 +1683,38 @@ function validateSchedulePart(
   }
 }
 
+/** Server parity for the round-2 half of "a schedule must be able to fire"
+ * (T-49e7): four non-empty, in-range sets can still name a date no calendar
+ * ever has. months {2} × days {31} passes every other check, renders as a
+ * perfectly ordinary card, and delivers nothing for the rest of time — the same
+ * failure the empty-set 422 exists to refuse, reached through the month set.
+ *
+ * 🔴 February counts as 29, so months {2} × days {29} — a deliberate leap-year
+ * schedule — stays legal. The refusal fires only when NO (month, day) pair is
+ * possible in any year at all. Mirrors `scheduledMessageMonthDayFeasible`. */
+function requireAPossibleDate(
+  memberId: string,
+  months: number[],
+  days: number[]
+): void {
+  if (months.length === 0 || days.length === 0) return;
+  const longest = Math.max(
+    ...months.map((m) => (m === 2 ? 29 : [4, 6, 9, 11].includes(m) ? 30 : 31))
+  );
+  const earliest = Math.min(...days);
+  if (earliest <= longest) return;
+  throw new ApiError(
+    `http 422 for /api/members/${memberId}/scheduled-messages`,
+    422,
+    "validation_error",
+    `custom_months [${months.join(", ")}] and custom_days [${days.join(", ")}] never occur ` +
+      `together, so this schedule could never fire: the longest of the chosen months has ` +
+      `${longest} days, and the earliest day chosen is the ${earliest}. Pick a day one of ` +
+      `these months actually has, or add a month that has this day. (February counts as 29 ` +
+      `days, so February with the 29th is allowed and fires in leap years only.)`
+  );
+}
+
 /** The CONDITIONAL half of the create/patch 422 (T-49e7): which fields a
  * cadence cannot do without. `daily`/`weekly`/`monthly` fire at the single
  * reading `hour`/`minute` names, so omitting either is a 422 and never a silent
@@ -2060,6 +2092,8 @@ export const mockApi: Api = {
       timezone: input.timezone,
     });
     requireCadenceFields(memberId, input.cadence, input);
+    if (input.cadence === "custom")
+      requireAPossibleDate(memberId, months, input.customDays ?? []);
     const created: ScheduledMessage = {
       id: mockScheduleId(),
       memberId,
@@ -2140,6 +2174,11 @@ export const mockApi: Api = {
         customMinutes: patch.customMinutes ?? s.customMinutes,
       });
     }
+    // Judged on the WHOLE row the way the server judges it, not on what this
+    // request happened to state: narrowing the months alone is how an ordinary
+    // schedule becomes one that can never fire again.
+    if (cadenceAfter === "custom")
+      requireAPossibleDate(memberId, months, patch.customDays ?? s.customDays);
     if (patch.label !== undefined) s.label = patch.label;
     if (patch.body !== undefined) s.body = patch.body;
     if (patch.cadence !== undefined) s.cadence = patch.cadence;

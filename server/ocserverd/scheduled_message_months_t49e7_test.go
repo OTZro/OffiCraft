@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -267,6 +268,83 @@ func TestCustomMonthsRefusesOutOfRangeValues(t *testing.T) {
 		customMonthlyPayload([]int{1, 12}, []int{1}, []int{9}, []int{0}, "UTC"))
 	if status != 200 {
 		t.Fatalf("the ends of the window must be accepted, got %d %v", status, resp)
+	}
+}
+
+// TestCustomMonthsAndDaysThatNeverMeetAreRefused closes the second door onto
+// the same room the empty-set 422 guards: a schedule that is structurally
+// incapable of ever firing.
+//
+// Round 1 could not build one — with only a day set, any non-empty choice of
+// days eventually meets a month that has it. The MONTH set is what makes an
+// empty intersection expressible, and every value in it is individually legal,
+// so nothing downstream ever complains: the cockpit renders 每年 2 月 · 每月 31
+// 號, every word of which is true, and not one message is ever delivered.
+//
+// 🔴 The line is drawn at "no (month, day) pair is possible in ANY year", which
+// is what keeps months {2} × days {29} — a deliberate leap-year schedule the
+// spec spells out — alive. That positive sample is asserted here rather than
+// left implicit: a well-meaning tighten to 28 would kill it silently.
+//
+// Red when: an unschedulable month × day pair is accepted (the owner arms a
+// schedule that can never speak), or the February ceiling slips to 28 (the
+// leap-year schedule becomes unexpressible).
+func TestCustomMonthsAndDaysThatNeverMeetAreRefused(t *testing.T) {
+	srv, secret, api := scheduledStack(t)
+	ownerTok, _ := mintJWT("owner", "owner", 300, secret, time.Now().Unix(), "")
+	url := srv.URL + "/api/members/mira/scheduled-messages"
+
+	for _, tc := range []struct {
+		name         string
+		months, days []int
+	}{
+		{"February and the 30th", []int{2}, []int{30}},
+		{"February and the 31st", []int{2}, []int{31}},
+		{"the four short months and the 31st", []int{4, 6, 9, 11}, []int{31}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, resp := doJSON(t, "POST", url, ownerTok,
+				customMonthlyPayload(tc.months, tc.days, []int{9}, []int{0}, "UTC"))
+			if status != 422 {
+				t.Fatalf("want 422, got %d %v — this schedule passes validation and delivers nothing, ever",
+					status, resp)
+			}
+			envelope, _ := resp["error"].(map[string]any)
+			detail, _ := envelope["message"].(string)
+			for _, want := range []string{"custom_months", "custom_days", "never occur together"} {
+				if !strings.Contains(detail, want) {
+					t.Fatalf("the refusal must say why it is impossible; %q is missing from %q", want, detail)
+				}
+			}
+		})
+	}
+
+	// The edit face too: the same impossible pair must not be reachable by
+	// patching a schedule that was legal when it was created.
+	status, created := doJSON(t, "POST", url, ownerTok,
+		customMonthlyPayload([]int{1, 2}, []int{31}, []int{9}, []int{0}, "UTC"))
+	if status != 200 {
+		t.Fatalf("seed (January has a 31st, so this pair is fine): %d %v", status, created)
+	}
+	id, _ := created["id"].(string)
+	if status, resp := doJSON(t, "PATCH", url+"/"+id, ownerTok, `{"custom_months":[2]}`); status != 422 {
+		t.Fatalf("patching the months down to February alone: want 422, got %d %v", status, resp)
+	}
+	stored, err := api.dal.GetScheduledMessage(id)
+	if err != nil || stored == nil {
+		t.Fatalf("reload: %v %v", stored, err)
+	}
+	if want := []int{1, 2}; !reflect.DeepEqual(stored.CustomMonths, want) {
+		t.Fatalf("the refused PATCH left months as %v, want the stored %v untouched", stored.CustomMonths, want)
+	}
+
+	// 🔴 The positive sample. February with the 29th fires in leap years only,
+	// and that is a schedule someone meant to write.
+	status, leap := doJSON(t, "POST", url, ownerTok,
+		customMonthlyPayload([]int{2}, []int{29}, []int{9}, []int{0}, "UTC"))
+	if status != 200 {
+		t.Fatalf("months {2} × days {29} is a deliberate leap-year schedule and must stay legal; got %d %v",
+			status, leap)
 	}
 }
 

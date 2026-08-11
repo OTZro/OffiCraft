@@ -488,6 +488,19 @@ func allCustomMonths() []int {
 // gofmt's doc-comment formatter rewrites that pair into a curly quote, which
 // turns the sentence into something a reader cannot parse — and the rewrite is
 // silent.)
+//
+// 🔴 The LAST check is the round-2 half of the same rule: four non-empty,
+// in-range sets can still describe a schedule that structurally never fires,
+// because the month set can empty the intersection. months {2} × days {31} is
+// the plainest one — every value is legal, the cockpit renders 每年 2 月 · 每月
+// 31 號 and every word of that is true, and not one message is ever sent. That
+// is the very shape migrations/00052 argues about: "never fires" must not sit
+// one keystroke away from a schedule that looks perfectly ordinary.
+//
+// 🔴 February counts as 29 days here, ON PURPOSE. months {2} × days {29} is a
+// DELIBERATE leap-year schedule that spec and design both spell out, so the
+// refusal is drawn at the only line that cannot swallow it: refuse only when NO
+// (month, day) pair is possible in any year at all.
 func ValidateScheduledMessageCustomSets(months, days, hours, minutes []int) error {
 	for _, set := range []struct {
 		field  string
@@ -513,7 +526,48 @@ func ValidateScheduledMessageCustomSets(months, days, hours, minutes []int) erro
 			}
 		}
 	}
+	if err := scheduledMessageMonthDayFeasible(months, days); err != nil {
+		return err
+	}
 	return nil
+}
+
+// maxDaysInMonth is how many days month m can have in the BEST year — February
+// answers 29, which is what keeps a leap-year-only schedule legal.
+func maxDaysInMonth(m int) int {
+	switch m {
+	case 2:
+		return 29
+	case 4, 6, 9, 11:
+		return 30
+	default:
+		return 31
+	}
+}
+
+// scheduledMessageMonthDayFeasible refuses a month × day pair that no calendar
+// can ever satisfy. Both sets are already known non-empty and in range.
+func scheduledMessageMonthDayFeasible(months, days []int) error {
+	best := 0
+	for _, m := range months {
+		if d := maxDaysInMonth(m); d > best {
+			best = d
+		}
+	}
+	smallest := days[0]
+	for _, d := range days {
+		if d < smallest {
+			smallest = d
+		}
+	}
+	if smallest <= best {
+		return nil
+	}
+	return fmt.Errorf("custom_months %v and custom_days %v never occur together, so this "+
+		"schedule could never fire: the longest of the chosen months has %d days, and the "+
+		"earliest day chosen is the %d. Pick a day one of these months actually has, or add a "+
+		"month that has this day. (February counts as 29 days, so February with the 29th is "+
+		"allowed and fires in leap years only.)", months, days, best, smallest)
 }
 
 // ValidateScheduledMessageWallClockPresence refuses a calendar cadence
