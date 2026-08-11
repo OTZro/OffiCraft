@@ -314,6 +314,15 @@ fi
 LEAK_HITS="$(scan_scene_text "$IMG_ANSWER")"
 if [[ "${LEAK_HITS:-0}" -ne 0 ]]; then
   echo "[seven_gate] FATAL: the image's number appears $LEAK_HITS time(s) in TEXT the agent can read. ⑨ would be passable without ever opening the picture, and that pass would look exactly like a real one. Refusing to run." >&2
+  # WHERE, because this refusal has TWO possible causes and they need different
+  # actions. (a) the harness really leaked the answer — fix that. (b) COINCIDENCE:
+  # the answer is six digits and the scanned corpus is full of epoch stamps and
+  # ids, so a run-dir walk gives a small-but-real chance that a random six digits
+  # already occur somewhere. The action for (b) is simply to run again (the answer
+  # is redrawn per run). Printing the hits is what lets the reader tell which.
+  grep -rn -a -F "$IMG_ANSWER" "$RUN_DIR" 2>/dev/null \
+    | grep -v 'scene-image\.png' | head -5 | sed 's/^/[seven_gate]   hit: /' >&2
+  echo "[seven_gate] (six random digits can also collide with a timestamp by chance — if the hits above are not the harness handing the answer over, just run again: the number is redrawn every run.)" >&2
   exit 2
 fi
 echo "[seven_gate] leak scan: answer 0 hits in readable text AND in $RUN_DIR (positive controls: scene nonce $CONTROL_HITS hit(s) overall, $FILE_CONTROL_HITS of them in files — both halves of the scanner work)"
