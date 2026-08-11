@@ -1840,15 +1840,24 @@ check "seven_gate: …and the back-fill bundle is a state the server can actuall
 #   VERBATIM COMPARISON ONLY STOPS THE LINES WE THOUGHT OF. "THE SCREEN DOES NOT
 #   LIE" IS NOT AN ENUMERABLE PROPERTY, AND THIS GUARD IS BOUNDED.
 #
-# Three rounds of independent review have each found new ways to make this
+# TWO rounds of independent review have each found three new ways to make this
 # harness print something false while the whole suite stayed all green — the
 # gate count (a wrong number), the position (a line saying "below" printed under
 # the cells), ⑤'s numbers (a constant), a SECOND NOTE line printed next to the
 # true one, ⑤'s PREFIX rewritten into a claim that the agent was verified, and
 # ①'s content pinned to a fixed sighting. Every one of those is now pinned. The
 # next reviewer will find a seventh. THAT IS NOT THIS GUARD FAILING — it never
-# promised the universal. What it holds is: THESE lines, byte for byte, on TWO
-# fixtures whose values differ, and no unaccounted-for NOTE line.
+# promised the universal. What it holds, stated no wider than the mechanism:
+# THESE lines, byte for byte, on TWO fixtures whose values differ, and EXACTLY
+# ONE GATE-COUNT line — a line matching `NOTE: <n> of the …`, which is the only
+# shape the count and the position checks look at.
+# ⚠️ OTHER `NOTE:` LINES ARE NOT PINNED, and that is not hypothetical: judge.py
+# already prints an unpinned `NOTE: the journal is EMPTY …`, and a review mutant
+# printing `NOTE: every cell below is a GATE — this run verified all nine.` was
+# green. An earlier draft of this paragraph claimed "no unaccounted-for NOTE
+# line", which promised the whole NOTE population while the mechanism only ever
+# covered the gate-count subset — a boundary written wider than what it guards is
+# the same defect as a guard that stopped guarding.
 #
 # What that buys, precisely: an edit to any pinned sentence must be a DELIBERATE
 # edit here too. What it does not buy: safety from a sentence nobody pinned.

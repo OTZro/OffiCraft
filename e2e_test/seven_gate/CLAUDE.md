@@ -179,8 +179,14 @@ collector 端點的替身 server** 實測：一個每一步都回報、順序正
 
     > **逐字比對只擋得住我們想到的那幾行；「畫面不會說謊」這件事列舉不完，這道守衛是有界的。**
 
-    連三輪覆核各找到新的一種,**下一個人會找到第七種——那不是守衛壞了,它從來沒承諾全稱**。
-    它承諾的是:**這幾行、逐位元組、在兩份數值不同的 fixture 上、而且沒有沒被算到的 NOTE 行**。
+    **兩輪**覆核各找到三種,**下一個人會找到第七種——那不是守衛壞了,它從來沒承諾全稱**。
+    它承諾的是（**寫得不比機制寬**）:**這幾行、逐位元組、在兩份數值不同的 fixture 上、
+    而且 gate-count 那一行恰好只有一條**（＝符合 `NOTE: <數字> of the …` 那個形狀的行，
+    計數與位置兩條檢查只看這個形狀）。
+    ⚠️ **其他 `NOTE:` 行不在射程內**，而且這不是假設：`judge.py` 本來就會印一行沒人釘的
+    `NOTE: the journal is EMPTY …`，覆核也用一行 `NOTE: every cell below is a GATE …` 打出全綠。
+    這段話上一版寫的是「沒有沒被算到的 NOTE 行」——**承諾了整個 NOTE 母體，而機制只守 gate-count
+    那個子集**。**界線寫得比實際能守的寬，跟一道停止把關的閘是同一種缺陷。**
     ⇒ 在 `judge.py` 加一句讀的人會據以行動的輸出,就在**同一顆 commit** 裡把它釘進 21b-v。
   - **21b-v 不回答「閘還會不會說不」**——那是 21b 那七顆 `sg_mutant`（一格一顆）的工作。
     別把這一格讀成「一條斷言就守住了整個降級」。
@@ -251,7 +257,7 @@ member（peer），**用 peer 自己的 token**（不是 owner 的——owner �
 |---|---|---|
 | **agent 的錯** | 一般的 `FAIL — <在 server 上找什麼、實際看到什麼>` | 看那句話，那就是 agent 沒做的事 |
 | **載體種壞了** | 訊息逐字帶 `This is a HARNESS red, not an agent red: fix the plant.` | 修 `run.sh` 的種植，**不要**去問 agent |
-| **`judge.py` 自己壞了** | 訊息逐字結尾 `⚠️ FAIL-CLOSED: this GATE produced no verdict at all … Fix judge.py, not the agent.` | 修判定程式；**那一格上面那句 evidence 是 else 分支借來的，可能跟 bundle 相反，別照著它 debug** |
+| **`judge.py` 自己壞了** | 訊息會帶一個 fail-closed 標記，今天的措辭是 `⚠️ FAIL-CLOSED: this GATE produced no verdict at all … Fix judge.py, not the agent.`（⚠️ **標記有沒有被接上去**有斷言釘住〔21b-vi〕，**那段字寫什麼沒有**——覆核改掉那句話 ⇒ 整套仍 323/0） | 修判定程式；**那一格上面那句 evidence 是 else 分支借來的，可能跟 bundle 相反，別照著它 debug** |
 
 ### ⑨「看得到圖」——這一格的成敗全在「答案不准出現在任何文字裡」
 
@@ -321,12 +327,15 @@ member（peer），**用 peer 自己的 token**（不是 owner 的——owner �
 - nonce 是種在 chat 裡的，而 resume 快照包含 chat——若哪天快照的組成變了，②會為了**載體的
   理由**而變紅。`actors/stub.sh` 因此在拉完快照後檢查 nonce 在不在，不在就先喊出來，讓人
   不要把載體的紅誤讀成 agent 的紅。
-- 🔴 **而 nonce 沒種成功的時候，②以前是靜默地 PASS**：判定是 `nonce in body`，而
-  `"" in body` 對每一則訊息都為真 ⇒ **空的 `scene_nonce` 讓這道閘在 agent 講第一句話時就綠**。
-  **實測（2026-08-11，全綠 fixture 把 `scene_nonce` 改成空字串）**：step2 PASS、`all green`、rc=0，
-  沒有任何東西出聲。這就是這一整包在追的形狀——**一道閘停止把關、輸出照樣好看**。
-  現在空 nonce 走的是跟⑧⑨同一條「載體沒種好」的紅（逐字 `This is a HARNESS red, not an agent red`），
-  守衛在 `tests_guard` 21b-vii 與⑧⑨同一個迴圈裡。
+- 🔴 **而 nonce 沒種成功的時候，②以前是靜默地 PASS。判定是 `nonce in body`，而空掉的方式有兩種、
+  壞法不一樣，別併成一句講**：
+  - **空字串**：`"" in body` 對每一則訊息都為真 ⇒ **這道閘無條件 PASS**，在 agent 講第一句話時就綠。
+    **實測（2026-08-11，全綠 fixture 把 `scene_nonce` 改成 `""`）**：step2 PASS、`all green`、rc=0。
+  - **只有空白**：`" " in body` **不是恆真**，它會比對到**任何含空白的訊息** ⇒ 綠不綠取決於
+    journal 裡剛好有什麼。**實測**：它比對到一則**不相干**的訊息 `c3`，step2 照樣 PASS。
+  兩種都是「一道閘停止把關、輸出照樣好看」——這一整包在追的形狀。
+  現在兩種都走跟⑧⑨同一條「載體沒種好」的紅（逐字 `This is a HARNESS red, not an agent red`；
+  空白那半靠 `nonce` 的 `.strip()`），守衛在 `tests_guard` 21b-vii 與⑧⑨同一個迴圈裡。
 
 ### ① 也降級成觀察行（owner 2026-08-11 裁定，在⑤之後）——理由跟⑤不同
 
@@ -354,6 +363,10 @@ member（peer），**用 peer 自己的 token**（不是 owner 的——owner �
 而這件事**讓論證更強、不是更弱**：**唯一還能證偽①的那條路，正是今天沒有人在跑的那條**；
 而**會花錢的那條路上，它是不可證偽的**。一道在它真正服役的母體上恆真的閘不是閘，
 它是一句讀起來像驗收證據、而永遠不會叫的話——那正好是這個載體存在要抓的病。
+
+🔴 **而更準的說法是這句**（嚴格講「落地」還要看那個 frame 沒有中途掉——`reconcile.go` 自己有一段
+`UndeliveredCommandSince` 在處理這件事——但那不弱化結論，反而讓它更乾淨）：
+**在 live 那條路上，① 要嘛是不可證偽的綠、要嘛是載體自己的紅，兩種都不是關於 agent 的陳述。**
 
 🔴 **證據強度，逐字說清楚（分兩層，別混在一起引用）**：
 - **機制那半，測試在這棵樹上實跑過、兩支都過**（`cd server/ocserverd && go test -run
