@@ -484,20 +484,59 @@ func TestCustomMonthsComposeWithFebruaryAndLeapDays(t *testing.T) {
 	// stands instead is the previous LEAP year's occurrence, which really did
 	// happen and is still the most recent one.
 	//
-	// ⚠️ THE SECOND HALF OF THAT USED TO READ "there is no slot at all", and
-	// that was a property of the retired 70-day lookback rather than of this
-	// rule: the window could not reach 2024 from 2027, so it answered "no slot"
-	// for an occurrence that genuinely elapsed — which is exactly the
-	// non-monotonicity mostRecentCustomSlot replaced. The invariant this test
-	// is really for is unchanged and is asserted below: never the 28th.
-	slot, ok := mostRecentSlot(leapDay, time.Date(2027, time.February, 28, 23, 59, 0, 0, time.UTC))
-	if !ok || slotKey(slot) != "2024-02-29T09:00+00:00" {
-		t.Fatalf("in a non-leap February the slot is %q (ok=%v), want the previous leap day "+
-			"2024-02-29T09:00+00:00 — an occurrence that happened does not stop having happened", slotKey(slot), ok)
-	}
-	if ok && slot.Day() == 28 {
-		t.Fatalf("a non-leap February produced %q — the 29th must be an occurrence that does not "+
-			"happen, never clamped onto the 28th", slotKey(slot))
+	// ⚠️ 2026-08-11 — WHAT THIS ASSERTION USED TO SAY, AND WHY IT WAS WRONG TO
+	// SAY IT. It used to read "there is no slot at all" in a non-leap February.
+	// That answer was AN ARTEFACT OF THE RETIRED 70-DAY LOOKBACK WINDOW, NOT AN
+	// INTENT: the window could not reach 2024 from 2027, so it reported "no
+	// slot" for an occurrence that genuinely elapsed, and this test froze that
+	// report as if it were the rule — which is how a test comes to defend the
+	// bug it was written beside. That non-monotonicity is exactly what this
+	// round removed: the window is gone and mostRecentCustomSlot now DERIVES the
+	// candidate dates from the calendar, newest first, so it can see a leap day
+	// four years back. The right answer is therefore that leap day. Do not
+	// "restore" the old expectation — a schedule whose last occurrence is old is
+	// not a schedule with no last occurrence.
+	//
+	// 🔴 THE ARMS ARE ORDERED AND THE ORDER IS LOAD-BEARING. The never-28
+	// invariant — the thing this test has always really been for, and the one
+	// piece of it the retired window had nothing to do with — is asserted FIRST,
+	// so a clamp onto 28 February reports itself as a clamp. Put the exact-date
+	// arm first and the clamp arm becomes a condition that can never fail: the
+	// provably-dead guard that reads like a second layer of protection.
+	//
+	// 🔴 THE EXACT-DATE ARM IS NOT "is there a slot". Reaching back to the WRONG
+	// leap year still yields a slot, still on a 29th, still on a date that truly
+	// happened — every weaker assertion stays green through it. Only naming the
+	// leap day that most recently elapsed can tell those apart, which is why the
+	// table drives three different `now`s at the same expected answer.
+	for _, tc := range []struct{ name, now, want string }{
+		{"the last minute of a non-leap February", "2027-02-28T23:59:00Z", "2024-02-29T09:00+00:00"},
+		{"deep inside a non-leap year", "2026-06-01T00:00:00Z", "2024-02-29T09:00+00:00"},
+		{"the minute before the next leap day's own reading", "2028-02-29T08:59:00Z", "2024-02-29T09:00+00:00"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now, err := time.Parse(time.RFC3339, tc.now)
+			if err != nil {
+				t.Fatalf("bad fixture: %v", err)
+			}
+			slot, ok := mostRecentSlot(leapDay, now)
+			if !ok {
+				t.Fatalf("at %s there is no slot at all — an occurrence that happened does not "+
+					"stop having happened, and a lookback that cannot reach it is a property of "+
+					"the lookback, not of this schedule", tc.now)
+			}
+			if slot.Day() != 29 {
+				t.Fatalf("at %s the slot fell on day %d (%q) — the 29th must be an occurrence "+
+					"that does not happen, never clamped onto the 28th or onto anything else in "+
+					"a February that has no 29th", tc.now, slot.Day(), slotKey(slot))
+			}
+			if got := slotKey(slot); got != tc.want {
+				t.Fatalf("at %s the most recent slot is %q, want %q — a leap day is not enough: "+
+					"the answer has to be the one that most recently ELAPSED, and reaching back "+
+					"to a different leap year is still a real 29th on a real occurrence",
+					tc.now, got, tc.want)
+			}
+		})
 	}
 
 	// The other half: a February schedule whose days DO exist there fires
