@@ -700,7 +700,7 @@ func TestCustomDeliversAnAmbiguousWallClockOnceInEveryZone(t *testing.T) {
 // TestPatchIgnoredFieldsNeverReAimTheCursor pins the other half of the re-aim
 // comparison: a field the row's cadence does not read cannot move the cursor.
 //
-// Red when: the three sets are compared regardless of cadence. A `daily`
+// Red when: the four sets are compared regardless of cadence. A `daily`
 // schedule PATCHed with `custom_days` — which the contract says is "ignored by
 // every other cadence" — then re-aims, and a re-aim landing between a slot
 // elapsing and the next tick swallows that delivery permanently, with no error,
@@ -727,6 +727,7 @@ func TestPatchIgnoredFieldsNeverReAimTheCursor(t *testing.T) {
 	}
 
 	for _, body := range []string{
+		`{"custom_months":[1,2]}`,
 		`{"custom_days":[1,2,3]}`,
 		`{"custom_hours":[7,8]}`,
 		`{"custom_minutes":[0,20,40]}`,
@@ -824,7 +825,7 @@ func TestPatchAwayFromCustomKeepsTheStoredSets(t *testing.T) {
 }
 
 // TestScheduledMessageDTOAlwaysCarriesTheSets pins the honest-empty wire shape:
-// the three fields are present for EVERY cadence.
+// the four fields are present for EVERY cadence.
 //
 // Red when: they are omitted (or null) for non-custom rows. A reader then cannot
 // tell "this schedule has no sets" from "this server does not know about sets",
@@ -837,7 +838,7 @@ func TestScheduledMessageDTOAlwaysCarriesTheSets(t *testing.T) {
 	if status != 200 {
 		t.Fatalf("create: %d %v", status, created)
 	}
-	for _, field := range []string{"custom_days", "custom_hours", "custom_minutes"} {
+	for _, field := range []string{"custom_months", "custom_days", "custom_hours", "custom_minutes"} {
 		got, present := created[field]
 		if !present {
 			t.Fatalf("%s is absent from a daily schedule's response", field)

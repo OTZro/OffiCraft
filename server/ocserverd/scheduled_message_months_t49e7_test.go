@@ -430,3 +430,60 @@ func TestCustomMonthsComposeWithFebruaryAndLeapDays(t *testing.T) {
 		})
 	}
 }
+
+// TestPatchingMonthsReAimsTheCursorOnlyWhenTheyChange is the months half of the
+// re-aim rule every other timing field already follows.
+//
+// Narrowing the months MOVES the schedule, so the cursor must move with it —
+// otherwise the edit can retroactively fire a slot it crossed. Re-sending the
+// SAME months in a different order moves nothing, which is what stops a cockpit
+// that posts the whole form back on every save from re-aiming on every press;
+// a re-aim landing between a slot elapsing and the next tick swallows that
+// delivery permanently, with no error and no log line.
+//
+// Red when: months are left out of the re-aim comparison (an edit fires a slot
+// it crossed), or compared as SENT rather than in canonical form (every no-op
+// save swallows a delivery).
+func TestPatchingMonthsReAimsTheCursorOnlyWhenTheyChange(t *testing.T) {
+	srv, secret, api := scheduledStack(t)
+	ownerTok, _ := mintJWT("owner", "owner", 300, secret, time.Now().Unix(), "")
+	status, created := doJSON(t, "POST", srv.URL+"/api/members/mira/scheduled-messages",
+		ownerTok, customMonthlyPayload([]int{3, 6, 9}, []int{1}, []int{9}, []int{0}, "Asia/Taipei"))
+	if status != 200 {
+		t.Fatalf("create: %d %v", status, created)
+	}
+	id, _ := created["id"].(string)
+	path := srv.URL + "/api/members/mira/scheduled-messages/" + id
+
+	const planted = "2020-01-01T09:00+08:00"
+	plant := func() {
+		t.Helper()
+		stored, _ := api.dal.GetScheduledMessage(id)
+		stored.LastFiredSlot = planted
+		if err := api.dal.PutScheduledMessage(*stored); err != nil {
+			t.Fatalf("plant cursor: %v", err)
+		}
+	}
+
+	// Same choice, different order and with a duplicate: nothing moves.
+	plant()
+	status, same := doJSON(t, "PATCH", path, ownerTok, `{"custom_months":[9,3,6,9]}`)
+	if status != 200 {
+		t.Fatalf("re-send the same months: %d %v", status, same)
+	}
+	if got, _ := same["last_fired_slot"].(string); got != planted {
+		t.Fatalf("re-sending the same months in a different order moved the cursor to %q. "+
+			"A cockpit that posts the whole form back would swallow a delivery on every save", got)
+	}
+
+	// A genuinely different choice re-aims.
+	plant()
+	status, changed := doJSON(t, "PATCH", path, ownerTok, `{"custom_months":[3,6]}`)
+	if status != 200 {
+		t.Fatalf("narrow the months: %d %v", status, changed)
+	}
+	if got, _ := changed["last_fired_slot"].(string); got == planted {
+		t.Fatalf("narrowing the months left the cursor at %q — an edit that moves the schedule "+
+			"must move the cursor, or it can retroactively fire the slot it crossed", got)
+	}
+}
