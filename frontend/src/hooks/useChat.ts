@@ -143,11 +143,16 @@ export function useChat(withId: string): UseChat {
     // MERGE the newest page (id-dedupe, history kept in front) — never
     // replace, or the loaded scrollback would vanish under the owner.
     const next = await api.listChat(withId);
-    setThread((prev) =>
-      prev.peer === withId
-        ? mergeLatestPage(prev, next)
-        : { peer: withId, messages: next, hasMore: next.length >= CHAT_PAGE_SIZE },
-    );
+    setThread((prev) => {
+      // A peer switch mid-flight: this page belongs to the peer the owner has
+      // already left — DROP it (same guard loadOlder's setThread already has).
+      // The previous else-arm wrote `{ peer: withId, messages: next }`, i.e. it
+      // replaced the current conversation's thread AND re-registered the OLD
+      // peer as the thread's owner, so the window kept rendering the old
+      // conversation until some later event for the current peer overwrote it.
+      if (prev.peer !== withId) return prev;
+      return mergeLatestPage(prev, next);
+    });
     // listChat itself marks the owner's read watermark server-side; pull the
     // peer's watermark alongside so the badges reconcile.
     await refetchReads();
