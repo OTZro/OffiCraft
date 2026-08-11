@@ -2030,8 +2030,16 @@ type scheduledMessageDTO struct {
 	Cadence       string  `json:"cadence"`
 	DayOfWeek     int     `json:"day_of_week"`
 	DayOfMonth    int     `json:"day_of_month"`
-	Hour          int     `json:"hour"`
-	Minute        int     `json:"minute"`
+	Hour       int `json:"hour"`
+	Minute     int `json:"minute"`
+	// The three `custom` sets (T-49e7). ALWAYS emitted, as an honest-empty
+	// array for every other cadence — never omitted. A field that appears only
+	// sometimes forces every reader to distinguish "this schedule has no set"
+	// from "this server does not know about sets", and those are two different
+	// answers to two different questions.
+	CustomDays    []int   `json:"custom_days"`
+	CustomHours   []int   `json:"custom_hours"`
+	CustomMinutes []int   `json:"custom_minutes"`
 	Timezone      string  `json:"timezone"`
 	Status        string  `json:"status"`
 	LastFiredSlot string  `json:"last_fired_slot"`
@@ -2050,12 +2058,26 @@ func newScheduledMessageDTO(m ScheduledMessage) scheduledMessageDTO {
 		DayOfMonth:    m.DayOfMonth,
 		Hour:          m.Hour,
 		Minute:        m.Minute,
+		CustomDays:    intSetOrEmpty(m.CustomDays),
+		CustomHours:   intSetOrEmpty(m.CustomHours),
+		CustomMinutes: intSetOrEmpty(m.CustomMinutes),
 		Timezone:      m.Timezone,
 		Status:        m.Status,
 		LastFiredSlot: m.LastFiredSlot,
 		LastFiredTS:   m.LastFiredTS,
 		CreatedTS:     m.CreatedTS,
 	}
+}
+
+// intSetOrEmpty renders a set on the wire in sorted, deduplicated form and
+// never as JSON null: a nil []int would serialise to `null`, and this feature's
+// three set fields mean "no values", which is `[]`.
+func intSetOrEmpty(vals []int) []int {
+	sorted := sortedIntSet(vals)
+	if sorted == nil {
+		return []int{}
+	}
+	return sorted
 }
 
 // webhookRequestLogDTO is one row of an endpoint's /in debug ring buffer

@@ -37,12 +37,26 @@ func (s *apiServer) HandleListScheduledMessagesApiMembersMemberIdScheduledMessag
 }
 
 // POST /api/members/{member_id}/scheduled-messages — create. body/cadence/
-// hour/minute/timezone are required (spec): a schedule with no time of day is
-// meaningless, and an omitted timezone would sooner or later be read as "the
-// server's zone", which is the ambiguity this feature exists to remove.
+// timezone are required unconditionally (spec): an omitted timezone would
+// sooner or later be read as "the server's zone", which is the ambiguity this
+// feature exists to remove.
+//
+// 🔴 hour/minute are required CONDITIONALLY, not unconditionally, and the
+// conditional half is enforced below rather than here. They left the
+// unconditional list in T-49e7 so a `custom` schedule need not send two values
+// it never reads; the price is that a missing hour became representable, so
+// ValidateScheduledMessageWallClockPresence refuses it for every other cadence.
+// That rule is not expressible in the OpenAPI schema — it lives only in the
+// field descriptions — so no generated client will catch it and this server is
+// the only thing standing between an omitted hour and a silent midnight.
 func (s *apiServer) HandleCreateScheduledMessageApiMembersMemberIdScheduledMessagesPost(w http.ResponseWriter, r *http.Request, memberId string) {
 	var body ScheduledMessageCreateDTO
-	if !decodeJSONBodyRequired(w, r, &body, "body", "cadence", "hour", "minute", "timezone") {
+	if !decodeJSONBodyRequired(w, r, &body, "body", "cadence", "timezone") {
+		return
+	}
+	if err := ValidateScheduledMessageWallClockPresence(
+		string(body.Cadence), body.Hour != nil, body.Minute != nil); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 	recipient, err := s.resolveChatRecipient(memberId)
@@ -60,11 +74,21 @@ func (s *apiServer) HandleCreateScheduledMessageApiMembersMemberIdScheduledMessa
 		// daily schedule PATCHed to weekly later must have a defined day.
 		DayOfWeek:  intOr(body.DayOfWeek, 0),
 		DayOfMonth: intOr(body.DayOfMonth, 1),
-		Hour:       body.Hour,
-		Minute:     body.Minute,
-		Timezone:   trimString(body.Timezone),
-		Status:     ScheduledMessageStatusEnabled,
-		CreatedTS:  nowSecs(),
+		// 0 here is reached ONLY by a `custom` schedule, which never reads these
+		// two — every other cadence had to state them (checked above).
+		Hour:   intOr(body.Hour, 0),
+		Minute: intOr(body.Minute, 0),
+		// Stored for every cadence, canonicalised by the write seam. Only
+		// `custom` reads them, and only `custom` has them validated — a
+		// non-custom row that carries a set it does not read cannot defer a
+		// fault, because a PATCH that flips the cadence to `custom` judges the
+		// WHOLE assembled row before it lands.
+		CustomDays:    intSliceOrNil(body.CustomDays),
+		CustomHours:   intSliceOrNil(body.CustomHours),
+		CustomMinutes: intSliceOrNil(body.CustomMinutes),
+		Timezone:      trimString(body.Timezone),
+		Status:        ScheduledMessageStatusEnabled,
+		CreatedTS:     nowSecs(),
 	}
 	if !s.validateScheduledMessage(w, m) {
 		return
@@ -110,12 +134,25 @@ func (s *apiServer) HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessa
 	// no-op save and a swallowed delivery. scheduled_message_patch_realign_test.go
 	// pins both directions (unchanged form ⇒ cursor untouched; changed timing ⇒
 	// re-aimed).
+	//
+	// 🔴 The three sets are compared in CANONICAL form on both sides, so
+	// [20,0,40] and [0,20,40] are the same choice and move nothing. Comparing
+	// them as sent would make the cockpit's whole-form save re-aim on every
+	// press purely because a checkbox order differed — and a re-aim inside the
+	// window between a slot elapsing and the next tick swallows that delivery
+	// permanently, silently, on a card that looks entirely normal.
 	reAimed := (body.Cadence != nil && string(*body.Cadence) != m.Cadence) ||
 		(body.DayOfWeek != nil && *body.DayOfWeek != m.DayOfWeek) ||
 		(body.DayOfMonth != nil && *body.DayOfMonth != m.DayOfMonth) ||
 		(body.Hour != nil && *body.Hour != m.Hour) ||
 		(body.Minute != nil && *body.Minute != m.Minute) ||
+		(body.CustomDays != nil && canonicalIntSet(*body.CustomDays) != canonicalIntSet(m.CustomDays)) ||
+		(body.CustomHours != nil && canonicalIntSet(*body.CustomHours) != canonicalIntSet(m.CustomHours)) ||
+		(body.CustomMinutes != nil && canonicalIntSet(*body.CustomMinutes) != canonicalIntSet(m.CustomMinutes)) ||
 		(body.Timezone != nil && trimString(*body.Timezone) != m.Timezone)
+	// Whether this edit leaves `custom` behind, asked BEFORE the patch is
+	// applied — see the wall-clock guard further down for why it matters.
+	wasCustom := m.Cadence == ScheduledMessageCadenceCustom
 	if body.Label != nil {
 		m.Label = *body.Label
 	}
@@ -137,6 +174,20 @@ func (s *apiServer) HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessa
 	if body.Minute != nil {
 		m.Minute = *body.Minute
 	}
+	// 🔴 Each set is written ONLY when supplied, and switching AWAY from
+	// `custom` deliberately leaves the stored sets in place rather than
+	// clearing them: a schedule flipped to daily and back would otherwise lose
+	// the owner's whole choice, irreversibly, as a side effect of a cadence
+	// toggle. They are unread while the cadence is not `custom`.
+	if body.CustomDays != nil {
+		m.CustomDays = *body.CustomDays
+	}
+	if body.CustomHours != nil {
+		m.CustomHours = *body.CustomHours
+	}
+	if body.CustomMinutes != nil {
+		m.CustomMinutes = *body.CustomMinutes
+	}
 	if body.Timezone != nil {
 		m.Timezone = trimString(*body.Timezone)
 	}
@@ -147,6 +198,19 @@ func (s *apiServer) HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessa
 			return
 		}
 		m.Status = string(*body.Status)
+	}
+	// 🔴 Leaving `custom` for a calendar cadence must STATE the wall clock. A
+	// custom row's hour/minute columns hold their 0/0 defaults — the fields it
+	// does not read — so inheriting them would hand back a schedule that fires
+	// at midnight, a time nobody chose, and it would look exactly like a
+	// schedule that was asked to run at midnight. Only this transition is
+	// affected: a daily row edited to weekly keeps the hour it already stated.
+	if wasCustom && m.Cadence != ScheduledMessageCadenceCustom {
+		if err := ValidateScheduledMessageWallClockPresence(
+			m.Cadence, body.Hour != nil, body.Minute != nil); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
 	}
 	if !s.validateScheduledMessage(w, *m) {
 		return
@@ -237,7 +301,7 @@ func (s *apiServer) resolveScheduledMessage(memberID, scheduleID string) (*Sched
 func (s *apiServer) validateScheduledMessage(w http.ResponseWriter, m ScheduledMessage) bool {
 	if !ValidScheduledMessageCadence(m.Cadence) {
 		writeError(w, http.StatusUnprocessableEntity,
-			"cadence must be one of ['daily' 'weekly' 'monthly']; got '"+m.Cadence+"'")
+			"cadence must be one of "+scheduledMessageCadenceList()+"; got '"+m.Cadence+"'")
 		return false
 	}
 	if err := ValidateScheduledMessageBody(m.Body); err != nil {
@@ -247,6 +311,16 @@ func (s *apiServer) validateScheduledMessage(w http.ResponseWriter, m ScheduledM
 	if err := ValidateScheduledMessageSlotFields(m.Hour, m.Minute, m.DayOfWeek, m.DayOfMonth); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return false
+	}
+	// The three sets are judged only for `custom`, the only cadence that reads
+	// them. Because a PATCH assembles the WHOLE row before it is judged,
+	// switching a schedule TO `custom` without sets — in the request or already
+	// stored — is refused here rather than landing a cadence with no times.
+	if m.Cadence == ScheduledMessageCadenceCustom {
+		if err := ValidateScheduledMessageCustomSets(m.CustomDays, m.CustomHours, m.CustomMinutes); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return false
+		}
 	}
 	// 🔴 A timezone the tz database cannot resolve is refused HERE, at the write,
 	// never softened into UTC downstream — a schedule that runs at the wrong
