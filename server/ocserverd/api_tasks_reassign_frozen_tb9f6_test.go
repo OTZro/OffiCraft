@@ -41,6 +41,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -139,5 +140,82 @@ func TestReassignFrozenTaskToOutsourceWakesNobody(t *testing.T) {
 	}
 	if thawed.ExecutorID == "" {
 		t.Fatalf("an unfrozen, reassigned task must be picked up on the next tick")
+	}
+}
+
+// TestReassignFrozenTaskTellsTheSuccessorNotToAdvance pins the half the outsource
+// scheduler does NOT cover.
+//
+// 🔴 An outsource successor is safe by construction (nothing is minted while the
+// task is frozen — the tests above). A MEMBER successor is not gated anywhere:
+// `grep -rn TaskPriorityFrozen --include=*.go server/ocserverd | grep -v _test`
+// shows the scheduler and the priority setter are the only frozen enforcement in
+// the server, so claim / step reports / replan all go through. Before this, the
+// reassign's own handover notice told that successor to claim and get going —
+// i.e. the SERVER was the thing starting work on a task the owner had paused.
+// owner chose to fix it in the notice rather than with a new refusal (card
+// rc-4a166be12a29, option ①): arranging a handover while paused stays legal.
+//
+// Both directions are asserted. Without the negative half, a mutant that pastes
+// the caveat onto EVERY handover would pass — and a caveat that appears on
+// tasks that are not paused is how people learn to skip reading it.
+func TestReassignFrozenTaskTellsTheSuccessorNotToAdvance(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		freeze     bool
+		wantCaveat bool
+	}{
+		{"frozen task warns the successor", true, true},
+		{"an ordinary task carries no such warning", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newTasksTestServer(t)
+			for _, m := range []Member{
+				{ID: "m-old", Name: "Ken", Kind: "assistant", RosterStatus: RosterStatusActive},
+				{ID: "m-new", Name: "Rei", Kind: "assistant", RosterStatus: RosterStatusActive},
+			} {
+				if err := api.dal.PutMember(m); err != nil {
+					t.Fatalf("seed member: %v", err)
+				}
+			}
+			task := createAdHocTask(t, api, "m-old")
+			if tc.freeze {
+				rec := httptest.NewRecorder()
+				api.HandleSetTaskPriorityApiTasksTaskIdPriorityPost(rec,
+					taskReq(t, "POST", "/x", map[string]any{"priority": "frozen"},
+						wireOwnerID, "owner"), task.ID)
+				if rec.Code != http.StatusOK {
+					t.Fatalf("freeze: %d %s", rec.Code, rec.Body.String())
+				}
+			}
+			if rec := reassign(t, api, task.ID,
+				map[string]any{"target": map[string]any{
+					"kind": "member", "member_id": "m-new"}},
+				wireOwnerID, "owner"); rec.Code != http.StatusOK {
+				t.Fatalf("reassign: %d %s", rec.Code, rec.Body.String())
+			}
+
+			msgs, err := api.dal.ListChat()
+			if err != nil {
+				t.Fatalf("chat: %v", err)
+			}
+			var toNew *ChatMessage
+			for i := range msgs {
+				if msgs[i].Recipient == "m-new" {
+					toNew = &msgs[i]
+				}
+			}
+			// Positive control FIRST: the successor really did get the takeover
+			// notice. Without it, "the caveat is absent" would also be satisfied
+			// by a run where no message was sent at all.
+			if toNew == nil || !strings.Contains(toNew.Body, "你接手了任務") {
+				t.Fatalf("successor never got the takeover notice: %+v", toNew)
+			}
+			got := strings.Contains(toNew.Body, "認領之後不要開始推進")
+			if got != tc.wantCaveat {
+				t.Fatalf("frozen caveat present=%v, want %v — body: %s",
+					got, tc.wantCaveat, toNew.Body)
+			}
+		})
 	}
 }

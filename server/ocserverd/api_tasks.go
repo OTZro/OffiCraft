@@ -1435,6 +1435,25 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 	} else {
 		newExecutorLabel = "外包（待排程指派）"
 	}
+	// 🔴 A FROZEN task is reassignable (owner ruling 2026-08-11, T-b9f6) — but
+	// the successor notice below is an INSTRUCTION TO TAKE OVER, and frozen
+	// means "do not advance this". Without this line the server itself would be
+	// the thing telling someone to start work on a task the owner just paused:
+	// the outsource arm is safe (the scheduler skips frozen wholesale, so no
+	// worker is ever minted), while a MEMBER successor is not gated anywhere —
+	// `grep -rn TaskPriorityFrozen --include=*.go server/ocserverd | grep -v _test`
+	// shows the scheduler and the priority setter are the only enforcement in
+	// the whole server; claim / step reports / replan carry no frozen check.
+	// owner picked "say so in the notice" over "add a refusal" (card
+	// rc-4a166be12a29, option ①): arranging a handover while paused stays legal,
+	// starting work does not. ONE constant, used by both successor branches —
+	// two copies of a caveat drift into two different caveats.
+	frozenNotice := ""
+	if t.Priority == TaskPriorityFrozen {
+		frozenNotice = "\n\n⚠️ 這張任務現在是「凍結」（優先權 frozen ＝ 暫停推進）。" +
+			"**認領之後不要開始推進**：先問清楚為什麼被凍結，等能解凍的人解開再動。" +
+			"凍結期間安排接手是刻意允許的（owner 2026-08-11 裁定），被安排的是「之後由誰做」，不是「現在開始做」。"
+	}
 	no := TaskNo(t.ID)
 	if oldExecutor != "" {
 		s.postTaskChat(*t, wireSystemSender, oldExecutor,
@@ -1452,6 +1471,7 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 		if note := trimmedOrEmpty(body.Note); note != "" {
 			msg += "\n\n交接備註：" + note
 		}
+		msg += frozenNotice
 		s.postTaskChat(*t, wireSystemSender, newExecutorID, msg, trigger)
 	} else if newMember != nil {
 		// A not_started task with no prior executor (no predecessor to hand over
@@ -1462,6 +1482,7 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 		if note := trimmedOrEmpty(body.Note); note != "" {
 			msg += "\n\n交接備註：" + note
 		}
+		msg += frozenNotice
 		s.postTaskChat(*t, wireSystemSender, newMember.ID, msg, trigger)
 	}
 
