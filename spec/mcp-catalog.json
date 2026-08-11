@@ -342,7 +342,12 @@
     {
       "description": "List all members, including outsource members by default. fields=light preserves kind for every row (presence-derived MemberDTO[]).",
       "inputSchema": {
-        "properties": {},
+        "properties": {
+          "fields": {
+            "description": "The literal STRING \"light\" (not a boolean, and no other value does anything) asks for the identity-only projection of every row: id, member_no, name, kind, role_key/role_name, runtime, roster_status, avatar. It DROPS the per-member unread chat count and the observed live-host state, which is the expensive half of this endpoint. Pass it whenever you are looking someone up or resolving a name to an id; omit it only when you actually need unread counts or where a member is running.",
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "name": "get_members"
@@ -823,6 +828,10 @@
           "limit": {
             "type": "integer"
           },
+          "peek": {
+            "description": "The literal STRING \"true\" (not a boolean, and any other value is ignored) reads the conversation WITHOUT advancing your read watermark, so the messages you see stay unread and the auto read-receipt that a plain ?with= list fires does not. Use it whenever you are looking at a thread for context rather than acting on it — a background poll, a refresh, checking what someone said before you decide to reply. Omit it when you have actually consumed the messages and want them marked read.",
+            "type": "string"
+          },
           "with": {
             "type": "string"
           }
@@ -966,6 +975,10 @@
             "type": "string"
           },
           "kind": {
+            "enum": [
+              "decision",
+              "action"
+            ],
             "title": "Kind",
             "type": "string"
           },
@@ -1265,6 +1278,17 @@
           "account_label": {
             "default": null,
             "title": "Account Label"
+          },
+          "binaries": {
+            "default": null,
+            "description": "Warden heartbeats only — the content fingerprint of the binaries this host is ACTUALLY running: an object keyed by binary name (ocwarden, ocagent, officraft) whose values are that live file's sha256 12-hex prefix. The server diffs them against the build it has embedded to derive the machine's bin_status (current / stale / absent = honest unknown), so a heartbeat that omits this leaves the machine's upgrade state unknowable rather than current. Deliberately a content hash, not a version number.",
+            "title": "Binaries"
+          },
+          "claude": {
+            "default": null,
+            "description": "Warden heartbeats only — the host's local claude CLI probe. Presence-only, NEVER a secret value. All sub-fields optional: version (string — the resolved claude binary's --version first token; absent = unresolved or probe failed), cred_file (bool — ~/.claude/.credentials.json exists), sub_readable (bool — that file exists AND its claudeAiOauth.subscriptionType is non-blank, the exact readability the account-key derivation needs), keychain (bool — macOS login-keychain item present; ABSENT, not false, on non-darwin where the probe cannot answer). Send it so the roster can tell whether this host can actually run Claude.",
+            "title": "Claude",
+            "type": "object"
           },
           "command_result": {
             "default": null,
@@ -1891,6 +1915,19 @@
             "default": null,
             "title": "Executor"
           },
+          "open": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The literal STRING \"true\" (not a boolean, and any other value is ignored) drops every task that has already reached a terminal status — done, terminated, duplicated — and returns only the work that is still live. Use it instead of enumerating statuses when all you want is \"what is still open\"; it composes with executor/type/status. Omitted, the list carries the closed tasks too, which on a long-lived roster is most of it.",
+            "title": "Open"
+          },
           "status": {
             "anyOf": [
               {
@@ -2500,6 +2537,10 @@
             "type": "string"
           },
           "kind": {
+            "enum": [
+              "decision",
+              "action"
+            ],
             "title": "Kind",
             "type": "string"
           },
@@ -2988,6 +3029,19 @@
             ],
             "default": null,
             "title": "Assignee"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The manual's human-facing name — what list_task_manuals shows and what people match on when they pick a type — as opposed to type_key, the immutable id you address it by. Pass it to rename a type without breaking anything that references the key (leading/trailing whitespace is trimmed). Omitted leaves the stored name untouched, like every other field on this partial update.",
+            "title": "Display Name"
           },
           "fields": {
             "anyOf": [
