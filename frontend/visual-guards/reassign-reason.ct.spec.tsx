@@ -10,8 +10,12 @@
 // identical there. This measures real layout in real Chromium at 390 (phone) and
 // 1280 (desktop).
 //
-// MUTANT (verified): give .confirm-modal__error `white-space: nowrap` → the
-// long sentence stops wrapping → the containment assertion goes red at 390.
+// MUTANT (measured, both directions): give .confirm-modal__error
+// `white-space: nowrap` → 2 red (both widths), each naming the hidden overflow.
+// 🔴 The FIRST version of this file asserted only bounding rects and that
+// mutant passed 2/2 — the rects do not move, the text just gets clipped. The
+// assertion with the discriminating power is the content-overflow one below;
+// keep it, and do not "simplify" back to rects.
 //
 // The sentence lives in its own module (the avatarKindImages precedent): a CT
 // story module that exports BOTH a component and a value trips the component
@@ -41,7 +45,32 @@ for (const width of [1280, 390]) {
     await expect(err).toBeVisible();
     await expect(err).toHaveText(LONGEST_REFUSAL);
 
-    // (2) the error box stays inside the modal box at both widths.
+    // (2) 🔴 the sentence WRAPS — measured as content overflow, not as rects.
+    // Rects alone have NO discriminating power here and that is measured, not
+    // assumed: under `white-space: nowrap` at 390px every box keeps its exact
+    // geometry (error 304px inside a 350px modal, page scroll 0) while the text
+    // runs 380px past the element's own content box and is simply cut off. The
+    // first version of this guard asserted only rects and passed that mutant.
+    const overflowIn = await page.evaluate(() => {
+      const of = (sel: string) => {
+        const el = document.querySelector(sel) as HTMLElement;
+        return el.scrollWidth - el.clientWidth;
+      };
+      return {
+        error: of(".confirm-modal__error"),
+        box: of(".confirm-modal__box"),
+        modal: of(".confirm-modal"),
+      };
+    });
+    expect(
+      overflowIn.error,
+      `[${width}px] the reason must wrap, not run off its own box (+${overflowIn.error}px hidden)`
+    ).toBeLessThanOrEqual(1);
+    expect(overflowIn.box, `[${width}px] modal box`).toBeLessThanOrEqual(1);
+    expect(overflowIn.modal, `[${width}px] modal root`).toBeLessThanOrEqual(1);
+
+    // …and it also stays inside the modal box's rect (the plain containment
+    // half — cheap, and it catches a reason placed outside the panel).
     const box = (await page.locator(".confirm-modal__box").boundingBox())!;
     const errBox = (await err.boundingBox())!;
     expect(box, "modal box").not.toBeNull();
