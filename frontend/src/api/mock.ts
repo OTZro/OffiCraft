@@ -1688,21 +1688,20 @@ function validateSchedulePart(
  * reading `hour`/`minute` names, so omitting either is a 422 and never a silent
  * midnight; `custom` fires where the four sets intersect, so it needs
  * `custom_days`/`custom_hours`/`custom_minutes` (from the request, or already
- * stored on the row being patched). Months are NOT among them: they arrive
- * here already resolved, because an omitted `custom_months` means the whole
- * year rather than a missing answer. */
+ * stored on the row being patched).
+ *
+ * 🔴 Months are NOT among them, and this function does not check them at all.
+ * They arrive already resolved (resolveMockMonths), so an omitted
+ * `custom_months` is the whole year and an explicit `[]` has already been
+ * refused by validateSchedulePart — a months branch here could not be reached
+ * from either caller. A guard with no discriminating power reads like a second
+ * layer of protection that is not there. */
 function requireCadenceFields(
   memberId: string,
   cadence: ScheduleCadence,
   have: {
     hour?: number;
     minute?: number;
-    /** ALREADY RESOLVED (resolveMockMonths). An omitted `custom_months` has
-     * become the whole year by the time it arrives here, so this function never
-     * has to tell "the caller said nothing" from "the caller said []" — the
-     * same division of labour the server draws between its handler and
-     * ValidateScheduledMessageCustomSets. */
-    customMonths?: number[];
     customDays?: number[];
     customHours?: number[];
     customMinutes?: number[];
@@ -1717,8 +1716,6 @@ function requireCadenceFields(
     );
   };
   if (cadence === "custom") {
-    if (!have.customMonths?.length)
-      bad("custom_months is required for cadence custom");
     if (!have.customDays?.length) bad("custom_days is required for cadence custom");
     if (!have.customHours?.length)
       bad("custom_hours is required for cadence custom");
@@ -2062,10 +2059,7 @@ export const mockApi: Api = {
       customMinutes: input.customMinutes,
       timezone: input.timezone,
     });
-    requireCadenceFields(memberId, input.cadence, {
-      ...input,
-      customMonths: months,
-    });
+    requireCadenceFields(memberId, input.cadence, input);
     const created: ScheduledMessage = {
       id: mockScheduleId(),
       memberId,
@@ -2141,7 +2135,6 @@ export const mockApi: Api = {
       requireCadenceFields(memberId, patch.cadence, {
         hour: patch.hour ?? s.hour,
         minute: patch.minute ?? s.minute,
-        customMonths: months,
         customDays: patch.customDays ?? s.customDays,
         customHours: patch.customHours ?? s.customHours,
         customMinutes: patch.customMinutes ?? s.customMinutes,
