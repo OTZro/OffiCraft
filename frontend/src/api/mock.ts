@@ -1476,6 +1476,7 @@ const mockScheduledMessages = new Map<string, ScheduledMessage[]>([
         hour: 9,
         minute: 0,
         // Empty for every non-custom cadence (server parity, T-49e7).
+        customMonths: [],
         customDays: [],
         customHours: [],
         customMinutes: [],
@@ -1535,6 +1536,40 @@ function sortedSet(values: number[]): number[] {
   return [...new Set(values)].sort((a, b) => a - b);
 }
 
+/** The whole year, listed — mock twin of the server's `allCustomMonths`. It is
+ * a LISTED set and never a nil "means everything" sentinel, for the same reason
+ * the server refuses to have one: every other set reads emptiness as "the
+ * caller said nothing". */
+function allMockMonths(): number[] {
+  return Array.from({ length: 12 }, (_, i) => i + 1);
+}
+
+/** Mock twin of the server's `resolveCustomMonths` — the ONE place in this file
+ * where an ABSENT field carries a meaning, and the three questions are asked in
+ * the same order as there:
+ *
+ *   sent given        honour it VERBATIM, `[]` included — validation refuses
+ *                     that, and substituting all twelve for it would erase the
+ *                     difference the 422 exists to state.
+ *   not custom        no months are read; keep whatever is stored (nothing on a
+ *                     create, the parked set on a PATCH that left `custom`).
+ *   stored non-empty  an existing choice the caller did not touch.
+ *
+ * Only when all three fall through does the all-twelve default apply: a
+ * `custom` create, or a PATCH that switches a never-custom row to `custom`.
+ * That is what keeps a client written before round 2 working — it never sends
+ * the field, and its schedules always did mean every month. */
+function resolveMockMonths(
+  cadence: string,
+  stored: number[],
+  sent: number[] | undefined
+): number[] {
+  if (sent !== undefined) return sent;
+  if (cadence !== "custom") return stored;
+  if (stored.length > 0) return stored;
+  return allMockMonths();
+}
+
 /** Recipient parity with the server (T-f059): a schedule may bind to an
  * assistant OR an `ow-` outsource worker — the recipient rule ordinary chat
  * uses, NOT `resolveMember`, which excludes outsource. */
@@ -1559,6 +1594,7 @@ function validateSchedulePart(
     dayOfMonth?: number;
     hour?: number;
     minute?: number;
+    customMonths?: number[];
     customDays?: number[];
     customHours?: number[];
     customMinutes?: number[];
@@ -1595,14 +1631,31 @@ function validateSchedulePart(
   // accepted there. A mock that refuses it teaches the caller a rule the wire
   // does not have.
   const cadence = cadenceInEffect ?? part.cadence;
-  const set = (name: string, values: number[] | undefined, lo: number, hi: number) => {
+  const set = (
+    name: string,
+    values: number[] | undefined,
+    lo: number,
+    hi: number,
+    hint = ""
+  ) => {
     if (values === undefined) return;
-    if (values.length === 0 && cadence === "custom") bad(`${name} must not be empty`);
+    if (values.length === 0 && cadence === "custom")
+      bad(`${name} must not be empty${hint}`);
     for (const v of values) {
       if (!Number.isInteger(v) || v < lo || v > hi)
         bad(`${name} must be ${lo}-${hi}`);
     }
   };
+  // 🔴 By the time a set reaches here the absent-months rule has already been
+  // applied (resolveMockMonths), so an empty months array can only mean the
+  // caller really sent `[]` — which is the 422 the server states, hint and all.
+  set(
+    "custom_months",
+    part.customMonths,
+    1,
+    12,
+    " (to mean every month, OMIT the field entirely rather than sending [])"
+  );
   set("custom_days", part.customDays, 1, 31);
   set("custom_hours", part.customHours, 0, 23);
   set("custom_minutes", part.customMinutes, 0, 59);
@@ -1641,6 +1694,12 @@ function requireCadenceFields(
   have: {
     hour?: number;
     minute?: number;
+    /** ALREADY RESOLVED (resolveMockMonths). An omitted `custom_months` has
+     * become the whole year by the time it arrives here, so this function never
+     * has to tell "the caller said nothing" from "the caller said []" — the
+     * same division of labour the server draws between its handler and
+     * ValidateScheduledMessageCustomSets. */
+    customMonths?: number[];
     customDays?: number[];
     customHours?: number[];
     customMinutes?: number[];
@@ -1655,6 +1714,8 @@ function requireCadenceFields(
     );
   };
   if (cadence === "custom") {
+    if (!have.customMonths?.length)
+      bad("custom_months is required for cadence custom");
     if (!have.customDays?.length) bad("custom_days is required for cadence custom");
     if (!have.customHours?.length)
       bad("custom_hours is required for cadence custom");
@@ -1982,6 +2043,9 @@ export const mockApi: Api = {
     input: ScheduledMessageCreateInput
   ): Promise<ScheduledMessage> {
     findScheduleRecipient(memberId);
+    // Months are resolved BEFORE anything judges them — a create has no prior
+    // row, so `stored` is empty and an omitted field becomes the whole year.
+    const months = resolveMockMonths(input.cadence, [], input.customMonths);
     validateSchedulePart(memberId, {
       body: input.body,
       cadence: input.cadence,
@@ -1989,12 +2053,16 @@ export const mockApi: Api = {
       dayOfMonth: input.dayOfMonth,
       hour: input.hour,
       minute: input.minute,
+      customMonths: months,
       customDays: input.customDays,
       customHours: input.customHours,
       customMinutes: input.customMinutes,
       timezone: input.timezone,
     });
-    requireCadenceFields(memberId, input.cadence, input);
+    requireCadenceFields(memberId, input.cadence, {
+      ...input,
+      customMonths: months,
+    });
     const created: ScheduledMessage = {
       id: mockScheduleId(),
       memberId,
@@ -2007,6 +2075,11 @@ export const mockApi: Api = {
       dayOfMonth: input.dayOfMonth ?? 1,
       hour: input.hour ?? 0,
       minute: input.minute ?? 0,
+      // Months come from the resolver, not from this ternary: a `custom` row
+      // always LISTS its months (the whole year when the caller named none),
+      // and a non-custom row keeps whatever the caller stated — which the
+      // resolver has already reduced to the empty set when that was nothing.
+      customMonths: sortedSet(months),
       // Empty for every cadence but `custom` — the sets are that cadence's
       // whole schedule, and a non-custom row must not carry a stale one.
       customDays:
@@ -2044,14 +2117,28 @@ export const mockApi: Api = {
         `scheduled message '${scheduleId}' not found`
       );
     }
-    validateSchedulePart(memberId, patch, patch.cadence ?? s.cadence);
-    // Switching TO custom must arrive with the three sets in the SAME request
+    // 🔴 Resolved against the cadence this row will HAVE, not the one it had:
+    // that is what lets a PATCH switch a never-custom row to `custom` without
+    // naming months and still land the all-twelve meaning it has always had.
+    const cadenceAfter = patch.cadence ?? s.cadence;
+    const months = resolveMockMonths(
+      cadenceAfter,
+      s.customMonths,
+      patch.customMonths
+    );
+    validateSchedulePart(
+      memberId,
+      { ...patch, customMonths: months },
+      cadenceAfter
+    );
+    // Switching TO custom must arrive with the four sets in the SAME request
     // unless the stored row already carries them — a cadence with no times for
     // it is exactly what the conditional 422 exists to refuse.
     if (patch.cadence !== undefined) {
       requireCadenceFields(memberId, patch.cadence, {
         hour: patch.hour ?? s.hour,
         minute: patch.minute ?? s.minute,
+        customMonths: months,
         customDays: patch.customDays ?? s.customDays,
         customHours: patch.customHours ?? s.customHours,
         customMinutes: patch.customMinutes ?? s.customMinutes,
@@ -2066,6 +2153,11 @@ export const mockApi: Api = {
     if (patch.minute !== undefined) s.minute = patch.minute;
     // Switching AWAY from custom leaves the stored sets in place, unread, so
     // switching back does not lose the choice.
+    // Months are assigned unconditionally because the resolver has already
+    // answered "absent means unchanged" for them — assigning only on
+    // `!== undefined` would drop the all-twelve default a switch-to-custom
+    // depends on.
+    s.customMonths = sortedSet(months);
     if (patch.customDays !== undefined) s.customDays = sortedSet(patch.customDays);
     if (patch.customHours !== undefined)
       s.customHours = sortedSet(patch.customHours);
@@ -2082,6 +2174,7 @@ export const mockApi: Api = {
       patch.dayOfMonth !== undefined ||
       patch.hour !== undefined ||
       patch.minute !== undefined ||
+      patch.customMonths !== undefined ||
       patch.customDays !== undefined ||
       patch.customHours !== undefined ||
       patch.customMinutes !== undefined ||

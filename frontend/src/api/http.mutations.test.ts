@@ -319,3 +319,65 @@ describe("httpApi · updateTaskTitle wire shape", () => {
     });
   });
 });
+
+// 🔴 `custom_months` (T-49e7 round 2) is the ONE scheduled-message field whose
+// ABSENCE means something on the wire: omitted = every month (that is what a
+// client written before round 2 always meant), `[]` = a schedule that never
+// fires, which the server answers with 422. So the http seam has to keep
+// `undefined` and `[]` apart all the way to the socket — a `?? []` anywhere on
+// this path would turn every omitted-months create into a refusal, and a
+// `?? allMonths()` would turn a refusable request into a silently different one.
+//
+// The two body types in http.ts are hand-written inline unions with no import
+// from the generated schema, so nothing but this file notices a field that was
+// added to one and not the other.
+describe("httpApi · scheduled-message custom_months keeps undefined ≠ []", () => {
+  const BASE = {
+    body: "巡檢",
+    cadence: "custom" as const,
+    timezone: "Asia/Taipei",
+    customDays: [1],
+    customHours: [9],
+    customMinutes: [0],
+  };
+
+  it("POSTs custom_months when the caller states it — including the empty set", async () => {
+    await httpApi.createScheduledMessage("mira", {
+      ...BASE,
+      customMonths: [3, 6, 9, 12],
+    });
+    expect(JSON.parse((await lastRequest()).body!).custom_months).toEqual([
+      3, 6, 9, 12,
+    ]);
+
+    await httpApi.createScheduledMessage("mira", { ...BASE, customMonths: [] });
+    const emptied = JSON.parse((await lastRequest()).body!);
+    // Present-and-empty, not absent: the server owes this request a 422, and it
+    // can only give one if the field arrives.
+    expect("custom_months" in emptied).toBe(true);
+    expect(emptied.custom_months).toEqual([]);
+  });
+
+  it("leaves custom_months OFF the POST body when the caller omits it", async () => {
+    await httpApi.createScheduledMessage("mira", BASE);
+    const sent = JSON.parse((await lastRequest()).body!);
+    expect("custom_months" in sent).toBe(false);
+    // The control: the sets that were supplied really did ride, so "absent"
+    // above is about this one field and not about a body that carried nothing.
+    expect(sent.custom_days).toEqual([1]);
+  });
+
+  it("PATCHes custom_months only when the patch carries it", async () => {
+    await httpApi.updateScheduledMessage("mira", "sch-1", {
+      customMonths: [2],
+    });
+    expect(JSON.parse((await lastRequest()).body!).custom_months).toEqual([2]);
+
+    await httpApi.updateScheduledMessage("mira", "sch-1", { label: "改名" });
+    const renamed = JSON.parse((await lastRequest()).body!);
+    // Absent means "leave the stored months alone" — sending [] here would ask
+    // the server to refuse a rename.
+    expect("custom_months" in renamed).toBe(false);
+    expect(renamed.label).toBe("改名");
+  });
+});
