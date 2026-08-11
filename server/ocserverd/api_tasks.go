@@ -1110,9 +1110,10 @@ func (s *apiServer) HandlePostTaskMessageApiTasksTaskIdMessagePost(w http.Respon
 //     executor, which would silently drop the person just unassigned).
 //
 // Identity is untouched: type/inputs/dedupe_key/task id/deps never change.
-// Guards: 404 unknown task; 409 terminal or target == current executor; 400
-// frozen task or an invalid target (unknown/inactive member, a warden,
-// missing member_id, a bad effort).
+// Guards: 404 unknown task; 409 terminal or target == current executor; 400 an
+// invalid target (unknown/inactive member, a warden, missing member_id, a bad
+// effort). A FROZEN task is reassignable (owner ruling 2026-08-11, T-b9f6 — see
+// the comment at the removed check below).
 func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.ResponseWriter, r *http.Request, taskId string) {
 	var body TaskReassignDTO
 	if !decodeJSONBodyRequired(w, r, &body, "target") {
@@ -1155,11 +1156,38 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 			"task '"+taskId+"' is already closed ("+t.Status+")")
 		return
 	}
-	if t.Priority == TaskPriorityFrozen {
-		writeError(w, http.StatusBadRequest,
-			"task '"+taskId+"' is frozen; unfreeze it before reassigning")
-		return
-	}
+	// 🔴 There is deliberately NO frozen check here (owner ruling 2026-08-11,
+	// T-b9f6, verbatim: 「我不覺得凍結的東西應該不能轉派 我覺得應該移除凍結不能轉派的
+	// 限制」). It used to 400 with "unfreeze it before reassigning".
+	//
+	// Why removing it is safe, and where that safety actually lives. Freezing
+	// means "do not advance this", and the fear was that a reassign wakes a new
+	// executor. The two arms answer that differently:
+	//
+	//   OUTSOURCE — nobody is woken, by construction: the scheduler refuses to
+	//   mint for a frozen task, so it just sits unassigned until someone
+	//   unfreezes it (TestReassignFrozenTaskToOutsourceWakesNobody). The
+	//   invariant lives in outsource_sched.go and is pinned there, at the layer
+	//   the freeze-race actually passes through — the re-read before the bind
+	//   (TestOutsourceTick_RereadsAndRejudgesBeforeBinding).
+	//
+	//   MEMBER — the server does NOT gate this anywhere. Do not take that on
+	//   trust and do not take this comment's word for how many gates exist:
+	//   `grep -rn TaskPriorityFrozen --include=*.go server/ocserverd | grep -v _test`
+	//   is the whole enforcement surface, and it is one line to run. What this
+	//   handler does instead is TELL the successor (owner ruling, card
+	//   rc-4a166be12a29): the handover notice says the task is paused and that
+	//   claiming it is not permission to start work.
+	//
+	// 🔴 An earlier version of this comment claimed the outsource scheduler had
+	// "two independent, redundant" frozen gates. Independent review measured it:
+	// the outsourceDecide one is UNREACHABLE in production (its caller only ever
+	// feeds it candidates that already passed outsourceAwaitingAssignment), and
+	// the same review found this comment's "a member target never woke anybody"
+	// to be false. Counting gates in prose is how that happened — run the grep.
+	//
+	// What this check actually blocked was the legitimate act of arranging a
+	// handover ahead of time and unfreezing later.
 
 	kind := trimString(body.Target.Kind)
 	var newMember *Member
@@ -1420,6 +1448,25 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 	} else {
 		newExecutorLabel = "外包（待排程指派）"
 	}
+	// 🔴 A FROZEN task is reassignable (owner ruling 2026-08-11, T-b9f6) — but
+	// the successor notice below is an INSTRUCTION TO TAKE OVER, and frozen
+	// means "do not advance this". Without this line the server itself would be
+	// the thing telling someone to start work on a task the owner just paused:
+	// the outsource arm is safe (the scheduler skips frozen wholesale, so no
+	// worker is ever minted), while a MEMBER successor is not gated anywhere —
+	// `grep -rn TaskPriorityFrozen --include=*.go server/ocserverd | grep -v _test`
+	// shows the scheduler and the priority setter are the only enforcement in
+	// the whole server; claim / step reports / replan carry no frozen check.
+	// owner picked "say so in the notice" over "add a refusal" (card
+	// rc-4a166be12a29, option ①): arranging a handover while paused stays legal,
+	// starting work does not. ONE constant, used by both successor branches —
+	// two copies of a caveat drift into two different caveats.
+	frozenNotice := ""
+	if t.Priority == TaskPriorityFrozen {
+		frozenNotice = "\n\n⚠️ 這張任務現在是「凍結」（優先權 frozen ＝ 暫停推進）。" +
+			"**認領之後不要開始推進**：先問清楚為什麼被凍結，等能解凍的人解開再動。" +
+			"凍結期間安排接手是刻意允許的（owner 2026-08-11 裁定），被安排的是「之後由誰做」，不是「現在開始做」。"
+	}
 	no := TaskNo(t.ID)
 	if oldExecutor != "" {
 		s.postTaskChat(*t, wireSystemSender, oldExecutor,
@@ -1437,6 +1484,7 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 		if note := trimmedOrEmpty(body.Note); note != "" {
 			msg += "\n\n交接備註：" + note
 		}
+		msg += frozenNotice
 		s.postTaskChat(*t, wireSystemSender, newExecutorID, msg, trigger)
 	} else if newMember != nil {
 		// A not_started task with no prior executor (no predecessor to hand over
@@ -1447,6 +1495,7 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 		if note := trimmedOrEmpty(body.Note); note != "" {
 			msg += "\n\n交接備註：" + note
 		}
+		msg += frozenNotice
 		s.postTaskChat(*t, wireSystemSender, newMember.ID, msg, trigger)
 	}
 

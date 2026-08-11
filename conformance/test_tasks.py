@@ -2085,12 +2085,24 @@ def test_reassign_guards(client, owner_token, executor):
                      {"kind": "member", "member_id": warden_id}).status_code == 400
     assert _reassign(client, owner_token, task["id"],
                      {"kind": "member", "member_id": "m-nobody"}).status_code == 400
-    # frozen task → 400 (unfreeze first).
+    # A FROZEN task IS reassignable (owner ruling 2026-08-11, T-b9f6 —
+    # 「我不覺得凍結的東西應該不能轉派 我覺得應該移除凍結不能轉派的限制」).
+    # This block used to assert 400 「unfreeze it before reassigning」; it is
+    # INVERTED rather than deleted, so the next reader sees the refusal was
+    # ruled away on purpose instead of guessing it was lost. Freezing still
+    # means "do not advance this" — the reassign only ARRANGES the successor,
+    # and the priority must survive it (a reassign that silently thawed the
+    # task would defeat the freeze while looking like success).
     assert client.post(f"/api/tasks/{task['id']}/priority",
                        json={"priority": "frozen"},
                        headers=_auth(owner_token)).status_code == 200
     assert _reassign(client, owner_token, task["id"],
-                     {"kind": "member", "member_id": fresh}).status_code == 400
+                     {"kind": "member", "member_id": fresh}).status_code == 200
+    assert client.get(f"/api/tasks/{task['id']}",
+                      headers=_auth(owner_token)).json()["priority"] == "frozen"
+    # Hand it back so the rest of this test keeps its original fixture, and
+    # unfreeze (the terminal-task case below must not be measuring a frozen one).
+    assert _reassign(client, owner_token, task["id"], member_target).status_code == 200
     assert client.post(f"/api/tasks/{task['id']}/priority",
                        json={"priority": "mid"},
                        headers=_auth(owner_token)).status_code == 200

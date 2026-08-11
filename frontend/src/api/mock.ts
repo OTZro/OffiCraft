@@ -2944,9 +2944,11 @@ export const mockApi: Api = {
         `task '${id}' is already closed (${t.status})`
       );
     }
-    if (t.priority === "frozen") {
-      throw badRequest(`task '${id}' is frozen; unfreeze it before reassigning`);
-    }
+    // 🔴 NO frozen guard here, mirroring the server (owner ruling 2026-08-11,
+    // T-b9f6). The mock used to 400 with 「is frozen; unfreeze it before
+    // reassigning」 exactly as the handler did; both were removed together —
+    // a mock that keeps a refusal the server dropped makes the cockpit's tests
+    // green against a server that no longer exists.
 
     const target = input.target;
     let newMember: WireMember | undefined;

@@ -27,6 +27,7 @@ import { useI18n } from "../i18n";
 import { effortText } from "../i18n/compose";
 import type { Effort, Member } from "../types";
 import type { TaskReassignInput, TaskView } from "../api/adapter";
+import { serverMessageOf } from "../api/errors";
 import { useMachines } from "../hooks/useMachines";
 import { useMonitoring } from "../hooks/useMonitoring";
 import { ConfirmModal } from "./ConfirmModal";
@@ -197,7 +198,20 @@ export function TaskReassignDialog({
       onClose();
     } catch (e) {
       console.warn("TaskReassignDialog: reassign failed", e);
-      setError(t.tasks.reassignError);
+      // 🔴 The server ALWAYS knows why it refused, and every refusal carries its
+      // own sentence. This comment deliberately does NOT list them: an earlier
+      // version named "the four", independent review counted fifteen
+      // `writeError` calls in that one handler, and a list in a comment goes
+      // stale without anything turning red. The live answer is one grep away —
+      // `grep -n writeError server/ocserverd/api_tasks.go` inside the reassign
+      // handler. This line used to drop all of it on the floor and print one
+      // fixed 「轉派失敗」, so the only way to learn which refusal you hit was to
+      // ask someone to read the code (owner did exactly that, 2026-08-11, chat
+      // c-066088ffad83 → T-b9f6). `console.warn` is not a channel: nobody has
+      // devtools open. Same shape as InsightCard / LessonsCard / MonitorPage:
+      // the server's reason when there is one, our own copy when there is not
+      // (an empty error line is worse than a generic one).
+      setError(serverMessageOf(e) || t.tasks.reassignError);
     } finally {
       setBusy(false);
     }

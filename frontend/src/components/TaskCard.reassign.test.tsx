@@ -12,11 +12,12 @@
 //   6. 轉派中 is an orthogonal LOCK (T-9ca5), not a status: the task keeps its
 //      derived status (in_progress), stays in 未結束, and renders the lock badge.
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent, waitFor, within } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { TasksPage } from "./TasksPage";
-import { __resetMock, __injectMockTask } from "../api/mock";
+import { __resetMock, __injectMockTask, mockApi } from "../api/mock";
+import { ApiError } from "../api/errors";
 import type { TaskView } from "../api/adapter";
 
 let seq = 0;
@@ -228,9 +229,23 @@ describe("TaskCard 轉派 commit", () => {
     });
   });
 
-  it("keeps the dialog open and surfaces the failure when the server refuses", async () => {
-    // A frozen task is a 400 (unfreeze first) — the honest inline failure path.
-    __injectMockTask(mkTask({ title: "凍結中", priority: "frozen" }));
+  it("keeps the dialog open and shows the SERVER's reason when it refuses", async () => {
+    // 🔴 This used to drive the refusal through a frozen task (a 400 back then)
+    // and assert the fixed string 「轉派失敗」. Both halves changed on
+    // 2026-08-11 (T-b9f6): frozen is reassignable now, and the reason the
+    // server already knew must reach the screen — owner hit the silent version
+    // and had to ask someone to read the code to learn it was 凍結 blocking him.
+    // The refusal is injected at the api seam because after the frozen guard
+    // came out, no refusal is reachable through the mock from this dialog.
+    vi.spyOn(mockApi, "reassignTask").mockRejectedValueOnce(
+      new ApiError(
+        "http 409 for POST /api/tasks/task-x/reassign",
+        409,
+        "conflict",
+        "task 'task-x' is already closed (terminated)"
+      )
+    );
+    __injectMockTask(mkTask({ title: "會被拒的" }));
     const { findByTestId } = renderPage();
     const dialog = await openDialog(findByTestId);
 
@@ -241,7 +256,12 @@ describe("TaskCard 轉派 commit", () => {
     await waitFor(() => {
       expect(
         document.querySelector('[data-testid="reassign"]')?.textContent
-      ).toContain("轉派失敗");
+      ).toContain("already closed (terminated)");
     });
+    // The generic copy is the FALLBACK, not the answer: if it shows up while
+    // the server did say why, the reason died at the seam again.
+    expect(
+      document.querySelector('[data-testid="reassign"]')?.textContent
+    ).not.toContain("轉派失敗");
   });
 });

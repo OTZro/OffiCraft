@@ -279,7 +279,7 @@ describe("mock reassign — outsource target", () => {
 });
 
 describe("mock reassign — task-level guards", () => {
-  it("refuses a closed task (409) and a frozen one (400)", async () => {
+  it("refuses a closed task (409) but reassigns a frozen one", async () => {
     const closed = mkTask({ status: "done", closedTs: Date.now() / 1000 });
     const frozen = mkTask({ priority: "frozen" });
     __injectMockTask(closed);
@@ -290,11 +290,15 @@ describe("mock reassign — task-level guards", () => {
         target: { kind: "member", memberId: "mira" },
       })
     ).rejects.toMatchObject({ status: 409 });
-    await expect(
-      mockApi.reassignTask(frozen.id, {
-        target: { kind: "member", memberId: "mira" },
-      })
-    ).rejects.toMatchObject({ status: 400 });
+
+    // 🔴 This used to assert 400 on the frozen one — the OLD behaviour, ruled
+    // away by owner on 2026-08-11 (T-b9f6). Inverted rather than deleted so the
+    // next reader sees the protection was removed on purpose, not lost. Frozen
+    // still means "do not advance this": the reassign only ARRANGES the
+    // handover, and the scheduler still refuses to wake anybody.
+    await mockApi.reassignTask(frozen.id, {
+      target: { kind: "member", memberId: "mira" },
+    });
   });
 
   it("404s an unknown task", async () => {
