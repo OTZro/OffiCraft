@@ -11,14 +11,19 @@ T-7526 的獨立審查回來時，那包宣稱的 mutant 驗證在 repo 裡找�
 4. **從 scratchpad 備份 `cp` 回來**（🔴 **不准 `git checkout --`** —— 那會吃掉別人未提交的編輯），
    再 `shasum -a 256 -c` 驗還原後**逐位元組相同**。
 
-全部 4 支的還原檢查都是 `OK`。基底：`t-0b4f/exhaustive-slots` @ `a8fdb42`（off `origin/main` `7246049`）。
+全部 5 支的還原檢查都是 `OK`（`shasum -a 256 -c` 逐位元組相同，且 `git status` 空）。
+
+🔴 **本檔的數字是 2026-08-11 在 `t-0b4f/exhaustive-slots` @ `ea28ad1`（基底 = 當時的 `origin/main` `1b21afb`）重跑的**，不是沿用更早那一輪。**理由：換基底之後「比對型」證據全部失效** —— 而這幾支 mutant 的證據形式正是 **tsc 的逐字訊息**，屬於比對型。第一輪跑在 `a8fdb42`（基底 `7246049`）上，主幹隨後動了兩次，所以那一輪的輸出已不可引用。
 
 ## 未施加 mutant 的基準（先證明它本來是綠的）
 
 | 檢查 | 結果 |
 |---|---|
+| 完整 `bash bin/ci.sh` | **rc=0**，`ci.log` 末行（去 ANSI 色碼後）逐字 `[ci] all green`；17:28:16Z→17:40:21Z |
 | `npm run typecheck`（含 `tsconfig.scripts.json` 與 `tsconfig.guards.json`） | rc=0 |
-| `npx vitest run` | 235 檔 / **2029 條全綠** |
+
+⚠️ **判綠沒有用這台的 `grep`**：它是包過的函式、帶 `-I`，會把有色碼的 CI log 判成非文字而**靜默跳過**（O-146 實測：連陽性對照都 0 命中，輸出跟「掃過了、很乾淨」一模一樣）。改用 python 讀 bytes 判斷，並同時證明掃描器活著：陽性對照 `[ci]` **3 命中**、陰性對照 `ZZZ_NO_SUCH_TOKEN` **0 命中**、`FAIL=[1-9]` **0 命中**。
+⚠️ 另外跑前跑後各存一份 `git status --porcelain` 指紋，兩份**相同且皆為空** ⇒ 這輪驗的是 commit 那棵樹，不是被中途動過的工作樹。
 
 ## A · 核心驗收：新增一個插槽，兩邊都沒實作
 
@@ -64,7 +69,7 @@ src/components/AgentDetailPanel.tsx(415,17): error TS2345: Argument of type 'Age
 
 **mutant**：`slotNode` 改成 `s.on ? null : null`（＝所有插槽都不渲染）。
 
-**vitest 大量轉紅**，而且**兩邊都有證人**（節錄）：
+**vitest 轉紅 81 條**，而且**兩邊都有證人**（節錄）：
 
 ```
 × both detail panels render the 定期訊息 card > renders it on the member panel
