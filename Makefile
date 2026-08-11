@@ -157,21 +157,99 @@ build-frontend-deps:
 # lint
 # ===========================================================================
 
-# Naming invariant (root CLAUDE.md §10 folder = module = binary). The binary name
-# is DERIVED from the folder basename, so the first clause is true by
-# construction here; it is kept because the derivation is what makes it true and
-# a future caller passing a name would need it.
+# Naming invariant (root CLAUDE.md §10 folder = module = binary). THREE names,
+# so this needs THREE INDEPENDENT SOURCES or it proves nothing. Folder basename
+# and go.mod's `module` line are two of them. The third — the name the shipped
+# executable actually gets — lives ONLY in the build scripts' `-o` flags
+# (bin/build-bindist for the three cli/ modules, bin/build for ocserverd). That
+# is what deploys, nothing ties it to the folder name, and it drifts freely.
+# Until T-ac67 the first clause read `binary="$$base"` and then compared $$base
+# against $$binary: a variable against itself, structurally incapable of being
+# false. Renaming a `-o` target passed silently.
+#
+# DELIBERATELY NOT A TABLE HERE. Hardcoding a module→binary map in this Makefile
+# would be a FOURTH copy of the name, i.e. one more thing that can drift; the
+# build scripts are read because they are what actually decides the name.
+#
+# A module with NO matching `go build … -o` line is a FAIL, never a skip, so
+# that DELETING a build line is caught rather than silently skipped. Deletion is
+# the whole of what that clause guarantees — see the range limits below, and do
+# not restate it more broadly than this.
+#
+# MATCH SHAPE. Backslash continuations are folded first (bin/build's ocserverd
+# build spans three physical lines), whole-line comments are dropped and
+# trailing `#` comments are stripped; a line then counts only if it carries ALL
+# THREE of the module's own `cd "$$ROOT/<dir>"`, `go build`, and a
+# double-quoted `-o "…"`. The trailing-comment strip happens BEFORE the `-o` is
+# read because the extractor deliberately takes the LAST `-o` on the line (which
+# is the one `go build` itself honours). Without the strip, a correct line
+# followed by `# historic: -o "xOLD"` reported 'xOLD' and went red on a good
+# script, and the mirror image (`-o "xOLD" … # -o "x"`) would have gone false
+# GREEN on a bad one.
+#
+# 🔴 RANGE LIMITS. Keep this list honest: a comment here claiming protection
+# that does not exist is worse than no comment, because the next reader skips
+# the check on the strength of it.
+#   * This is a TEXTUAL scan, NOT an execution trace. A line merely CONTAINING
+#     the three markers satisfies the match even if it never runs — swapping the
+#     real build for `echo 'cd "$$ROOT/cli/ocwarden" && go build -o "…"'
+#     >/dev/null` passes while that module is never built at all. So: deleting
+#     the build line is caught; RESHAPING it into inert text is NOT.
+#   * The mirror failure: a CORRECT build line written differently is not
+#     recognised and goes red. Unquoted or single-quoted `-o`, `go build -C
+#     <dir>`, or the `cd` on its own line all read as "missing". That is a false
+#     red from this matcher — widen the matcher here, never reshape a working
+#     build script to satisfy it.
+#   * Variables are NOT expanded, and that case lands in the OTHER branch:
+#     `OUT="…"; … -o "$$OUT"` matches, so it is reported as a name MISMATCH
+#     (`builds it as '$$OUT'`), never as "missing" — so the "widen the matcher"
+#     advice on the missing branch is not shown to whoever hits it.
+#   * The trailing-comment strip costs both directions. It can cut a line short
+#     at the first whitespace-then-`#` even when that `#` is inside a quoted
+#     value, and what follows the cut is discarded: if the discarded tail held a
+#     LATER `-o`, the check reads the earlier one. So the strip turns
+#     good-`-o` … quoted-`#` … bad-`-o` on one folded line from RED into GREEN,
+#     as well as truncating some lines into a (red) "missing".
+#   * Only bin/build-bindist and bin/build are read (hardcoded below), and only
+#     the BASENAME of `-o` is compared, so the destination directory is not
+#     checked at all.
 lint-go-naming:
 	@$(P) \
+	scripts="bin/build-bindist bin/build"; \
 	for gomod in cli/*/go.mod server/*/go.mod; do \
 	  [[ -f "$$gomod" ]] || continue; \
-	  dir="$$(dirname "$$gomod")"; base="$$(basename "$$dir")"; binary="$$base"; \
+	  dir="$$(dirname "$$gomod")"; base="$$(basename "$$dir")"; \
 	  echo "[lint-go-naming] $$dir"; \
-	  if [[ "$$base" != "$$binary" ]]; then \
-	    echo "FAIL — naming (CLAUDE.md 10): folder $$dir != binary '$$binary'"; exit 1; \
+	  needle="cd \"\$$ROOT/$$dir\""; \
+	  found=0; \
+	  for s in $$scripts; do \
+	    if [[ ! -f "$$s" ]]; then \
+	      echo "FAIL — naming (CLAUDE.md 10): build script '$$s' is missing, so the produced-executable name for $$dir cannot be read"; exit 1; \
+	    fi; \
+	    outs="$$(awk '/\\$$/ { sub(/\\$$/,""); buf = buf $$0; next } { print buf $$0; buf = "" }' "$$s" \
+	      | grep -v '^[[:space:]]*#' \
+	      | sed -E 's/[[:space:]]#.*$$//' \
+	      | grep -F "$$needle" \
+	      | grep -F 'go build' \
+	      | sed -nE 's/.*[[:space:]]-o[[:space:]]+"([^"]*)".*/\1/p' || true)"; \
+	    for out in $$outs; do \
+	      found=1; obin="$$(basename "$$out")"; \
+	      if [[ "$$base" != "$$obin" ]]; then \
+	        echo "FAIL — naming (CLAUDE.md 10): module $$dir has folder name '$$base' but $$s builds it as '$$obin' (-o \"$$out\") — folder, go.mod module and produced executable must all be the same name"; exit 1; \
+	      fi; \
+	    done; \
+	  done; \
+	  if [[ "$$found" != 1 ]]; then \
+	    echo "FAIL — naming (CLAUDE.md 10): module $$dir (folder '$$base') — no build line found, so the produced executable name is unknowable and folder=module=binary cannot be checked."; \
+	    echo "  Searched: $$scripts"; \
+	    echo "  Wanted: ONE line carrying ALL THREE of  cd \"\$$ROOT/$$dir\"  +  go build  +  a DOUBLE-QUOTED  -o \"…\"  (after backslash-continuations are folded, whole-line comments dropped and trailing '#' comments stripped)."; \
+	    echo "  If the build line was DELETED: restore it. Deletion is what this clause catches."; \
+	    echo "  If your build line is CORRECT but written differently — unquoted or single-quoted -o, 'go build -C $$dir', or the cd on its own line — then this is a RANGE LIMIT of this matcher, not a fault in your script: widen the matcher in this Makefile target, do NOT reshape the build script to satisfy it."; \
+	    echo "  NOT caught by this clause: text that merely LOOKS like the build line. A line containing those three markers satisfies the match even if it never executes, so replacing the real build with inert text (echo/quoted/dead code) passes silently. This is a textual scan, not an execution trace."; \
+	    exit 1; \
 	  fi; \
-	  if ! grep -qE "^module $${binary}\$$" "$$dir/go.mod"; then \
-	    echo "FAIL — naming (CLAUDE.md 10): $$dir/go.mod 'module' line is not 'module $$binary'"; exit 1; \
+	  if ! grep -qE "^module $${base}\$$" "$$dir/go.mod"; then \
+	    echo "FAIL — naming (CLAUDE.md 10): $$dir/go.mod 'module' line is not 'module $$base'"; exit 1; \
 	  fi; \
 	done; \
 	$(DONE)
