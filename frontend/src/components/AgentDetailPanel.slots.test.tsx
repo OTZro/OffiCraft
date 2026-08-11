@@ -121,12 +121,14 @@ function mkVM(): AgentDetailVM {
 }
 
 /** The opposite corner from `mkVM()`: online, everything reported, every
- * optional present — and that is a CHECKED claim, not a wish: round-3 review
+ * optional present AND TRUTHY (an empty string is present and blind — round-4
+ * measured `pending.*` that way) — a CHECKED claim, not a wish: round-3 review
  * caught this comment saying "every optional" while `onRefocus` and
  * `prompt.note` were missing from BOTH view models, and a render site gated on
  * `!vm.onRefocus` was completely green while every production caller passes it.
- * ⇒ if `AgentDetailVM` grows an optional field, it belongs here too, or this
- * comment goes back to being the reason nobody looks for the gap.
+ * ⇒ if `AgentDetailVM` grows an optional field — nested ones included — it
+ * belongs here too, with a truthy value, or this comment goes back to being the
+ * reason nobody looks for the gap.
  *
  * It exists so the sentinel above does not mount only in the least
  * production-like state — a render site gated on any of these fields reads as
@@ -146,7 +148,13 @@ function mkPopulatedVM(): AgentDetailVM {
     modelIsReported: true,
     machineAction: <button type="button">change</button>,
     onRefocus: () => Promise.resolve(),
-    pending: { runtime: "", model: "", effort: "", machine: "" },
+    // 🔴 TRUTHY, not just present: an empty string is `present` and blind.
+    pending: {
+      runtime: "→ Codex",
+      model: "→ opus",
+      effort: "→ high",
+      machine: "→ Machine B",
+    },
     refocusSince: 1,
     refocusOp: "refocus",
     refocusDeadline: 2,

@@ -181,6 +181,7 @@ src/components/AgentDetailPanel.tsx(286,5): error TS1360: Type '{ overlays: Reac
 - 🔴 **插槽的順序完全沒有守衛**：`rendered` 的五個值互換位置，兩層都不會紅（`satisfies` 只看鍵集合、哨兵只看子字串存在）。唯一沾到邊的 `visual-guards/worker-detail-task-card-order.ct.spec.tsx` 只釘**一條關係、只釘外包側**，而且是 Playwright CT、不在 vitest 那道閘裡。
 - 🔴 **`satisfies` 那一行自己沒有守衛**：整句刪掉是完全綠的（第二輪實測 tsc rc=0、2073 全過）。它買到的是「更早、訊息更好的失敗」，不是唯一的失敗——真出事時哨兵仍會紅。
 - **VM 條件那個方向只被兩組 VM 涵蓋**，不是窮舉（見上方 H 列）。
-  🔴 **而且「兩組」是就整體而言，不是每個欄位都有兩個取樣點**：兩組 VM 只在**它們取值不同的那些欄位**上有鑑別力。第三輪審查用這個縫打進來——`mkPopulatedVM` 的註解自稱「every optional present」，但 `onRefocus` 與 `prompt.note` **兩組都缺** ⇒ `{!vm.onRefocus && rendered.afterPromptCards}` 完全綠，而**四個 production 呼叫端全都傳 `onRefocus`**，正職面板的履歷摘要卡在真實頁面上會直接不存在。已補齊並用**雙向對照**坐實：補上後那顆 mutant 紅並點名 `vm: 'populated'`；**拿掉 populated 那一組則變回全綠**（＝抓到它的確實是那一組，不是別的東西）。
-  ⚠️ 同一位審查者另指出：同樣手法打 `afterInfoCards`／`overlays` 會被**既有測試偶然攔到**——**那是既有測試的副作用，不是這條哨兵的功勞**；`afterPromptCards` 沒有那層偶然，所以完全走掉。**別把「有東西紅」讀成「我的守衛守住了」。**
-  ⇒ 可執行的形式：**`AgentDetailVM` 每長一個 optional 欄位，`mkPopulatedVM` 就要跟著補**，否則那個欄位方向重新變成盲區。
+  🔴 **機制是 truthiness**：鑑別力存在 ⟺ 該 gate 運算式**在至少一組 VM 下為 falsy**。（第四輪實測推翻了我原本寫的「取值不同才有鑑別力」——**兩個方向都錯**：取值**相同**的 `testIdPrefix`／`runtime`／`refocusSinceLabel`／`refocusSubmittedNote` 打上去**全紅**；取值**不同**的 `pending.*` 卻**全綠**，因為 minimal 是 `undefined`、populated 當時填空字串，**兩組都 falsy**。）第三輪審查用這個縫打進來——`mkPopulatedVM` 的註解自稱「every optional present」，但 `onRefocus` 與 `prompt.note` **兩組都缺** ⇒ `{!vm.onRefocus && rendered.afterPromptCards}` 完全綠，而**四個 production 呼叫端全都傳 `onRefocus`**，正職面板的履歷摘要卡在真實頁面上會直接不存在。已補齊並用**雙向對照**坐實：補上後那顆 mutant 紅並點名 `vm: 'populated'`；**拿掉 populated 那一組則變回全綠**（＝抓到它的確實是那一組，不是別的東西）。
+  ⚠️ 同一位審查者另指出：同樣手法打 `afterInfoCards`／`overlays` 會被**既有測試偶然攔到**——**那是既有測試的副作用，不是這條哨兵的功勞**；`afterPromptCards` 與 `extraExpandCards` 沒有那層偶然，所以完全走掉（兩者現在都被哨兵蓋住）。**別把「有東西紅」讀成「我的守衛守住了」。**
+  ⇒ 可執行的形式：**`AgentDetailVM` 每長一個 optional 欄位——包含巢狀物件裡的——`mkPopulatedVM` 就要跟著補，而且值必須 truthy 才算補到**。
+  ⚠️ `pending.*` 那四個就是這樣漏的：**鍵在、值是空字串 ⇒ 形式上 present、實質上盲區**。修前四顆 mutant 全綠、修後全部紅並點名 `vm: 'populated'` ＋ `afterPromptCards`（雙向皆實跑）。
