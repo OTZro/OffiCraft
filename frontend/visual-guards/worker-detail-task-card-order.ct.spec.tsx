@@ -6,9 +6,16 @@
 // context / card spacing) at the widths the owner actually uses. Measured here
 // in a real browser at 375/390 (owner's phone) and 1280 (desktop).
 //
-// Mutant (documented): swap `afterIdentityCards={taskCard}` back to
-// `beforeTerminalCards={taskCard}` in WorkerDetailPanel.tsx → 委託任務 renders
-// after 最近操作 again → the order assertion reddens at all three widths.
+// Mutant (documented): move 委託任務 out of `afterIdentityCards` in
+// WorkerDetailPanel.tsx — e.g. hand it to `extraExpandCards` instead (and
+// decline the one it left) → 委託任務 no longer renders above 模型/機器 → the
+// order assertion reddens at all three widths.
+// ⚠️ This used to read "swap it back to `beforeTerminalCards={taskCard}`". That
+// slot was REMOVED by T-0b4f (zero callers repo-wide; owner 2026-08-11「沒人用
+// 的話移除吧」), so the old instruction named a prop that no longer exists — a
+// mutant nobody could replay. Since T-0b4f the slots are an exhaustive map, so
+// "just drop the prop" is not a mutant any more either: omitting a key is a
+// compile error, which is the point.
 import { test, expect } from "@playwright/experimental-ct-react";
 import { WorkerDetailPanelTaskOrderStory } from "./stories/WorkerDetailPanelTaskOrderStory";
 

@@ -8,10 +8,49 @@
 - 正職 wrapper `frontend/src/components/MemberDetailPanel.tsx`（T-927a 已改：面板唯讀、設定收進喚醒區）
 - 外包 wrapper `frontend/src/components/WorkerDetailPanel.tsx`（未動）
 
-「共用面板的鍵由 wrapper 傳不傳 callback 決定」屬實：
-`AgentDetailVM.onSaveModelEffort` 未傳 ⇒ 模型格不長編輯鈕（`AgentDetailPanel.tsx` 的
-`{vm.onSaveModelEffort && (<button …model-effort-edit>)}`）；`vm.machineAction` 未傳 ⇒
-機器格標題右側無任何控制項。正職兩個都不傳，外包兩個都傳。
+> ## ⚠️ 2026-08-12（T-0b4f）起，這份文件**不再是「哪個插槽兩邊各傳了什麼」的權威**
+>
+> 那一半已經改由**型別**強制：共用面板的插槽從 optional props 換成一份必填的
+> `AgentDetailSlots`（`AGENT_DETAIL_SLOTS` 是唯一的 key 清單），**兩個 wrapper 都必須對
+> 每一個 key 表態**，漏一個是編譯錯誤、而不是畫面上一格靜默的空白。「這一邊不要」是一個
+> 帶理由的值 `notHere(<why>)`，理由就寫在該 wrapper 的碼裡。
+>
+> ⇒ **要看某個插槽今天在兩邊各是什麼，不要讀這份文件的敘述——跑這條查詢**（清單會過期，
+> 查詢不會）：
+>
+> ```
+> command grep -an "slots={" -A 20 frontend/src/components/MemberDetailPanel.tsx \
+>                                   frontend/src/components/WorkerDetailPanel.tsx
+> ```
+>
+> （`command` 是為了繞過某些機器上被包過的 `grep` 函式，`-a` 讓它不會把檔案judge成
+> 非文字而靜默跳過。`-A 20` 而不是剛好夠用的行數——獨立審查指出原本的 `-A 12` 距離
+> 截斷只差一行，理由字串多一行就會靜默少印一個 key。）
+>
+> 這份文件仍然是**下面那些逐項裁定的家**（哪些差異是刻意的、理由是什麼）——那是型別答不出來的。
+> 設計與 mutant 證據見 `T-0b4f-exhaustive-slots-mutants.md`。
+
+⚠️ **下面這段是本文件寫成當時（`acac15a`）的觀察，其中一半已經不成立**（T-0b4f 逐句核對）：
+
+- ~~`AgentDetailVM.onSaveModelEffort` 未傳 ⇒ 模型格不長編輯鈕（`AgentDetailPanel.tsx` 的
+  `{vm.onSaveModelEffort && (<button …model-effort-edit>)}`）~~ —— **已不成立**：那顆就地編輯器
+  連同 `onSaveModelEffort` 這個 prop 本身，已於 **T-7f28 整個移除**。留著這句會讓下一個人去找
+  一段不存在的碼。
+  ⚠️ 這裡原本寫「今天原碼裡零命中」，**那句話不準**（獨立審查抓到）：這個符號在文件與註解裡
+  仍有若干處提及（本檔自己、`frontend/CLAUDE.md`、`AgentDetailPanel.tsx` 一句記錄「它被移除了」
+  的註解、`worker-panel-parity-mutants.md`）。
+  🔴 **這裡刻意不寫「幾個檔」**：那個計數我連錯三次（零 → 兩處 → 五個檔），而第三次還把一個
+  **只存在於某台機器的 build cache 產物**算了進去——**一句在乾淨 checkout 裡不可複現、會隨本機
+  狀態變動的計數，被寫成了事實**。⇒ **會過期又會數錯的是「命中幾處」；不會過期的是下面那個
+  準確說法**，留那個就好。**準確的說法是「型別與 production 碼裡沒有這個 prop」**，
+  不是「repo 裡零命中」。
+- `vm.machineAction` 未傳 ⇒ 機器格標題右側無任何控制項 —— **仍然成立**（該欄位今天仍是
+  `AgentDetailVM` 上的 optional prop）。
+- 「共用面板的鍵由 wrapper 傳不傳決定」這個**總結句**，對**插槽**已不再成立（見上方 T-0b4f
+  的說明）；對 `machineAction` 這類 **view-model 上的 optional 欄位仍然成立**。
+  ⚠️ **這是一個已知的、還沒收掉的缺口，不是本票的範圍**：view model 自己的 optional 欄位
+  沒有跟著插槽一起變成必填，所以「兩邊都得表態」目前只涵蓋插槽那一層。要不要把同一個形狀
+  套到 view model 上，**交 owner 裁**。
 
 狀態欄位說明：**同**＝行為與外觀已一致｜**差**＝需要對齊｜**外包獨有**｜**正職獨有**｜
 **待裁定**＝說不出明確期望，交回 owner。

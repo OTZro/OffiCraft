@@ -4,7 +4,12 @@ import { ApiError } from "../api/errors";
 import type { OutsourceWorkerView } from "../api/adapter";
 import type { MonSessionView } from "../types";
 import { useMachines } from "../hooks/useMachines";
-import { AgentDetailPanel, runtimeLabel } from "./AgentDetailPanel";
+import {
+  AgentDetailPanel,
+  notHere,
+  runtimeLabel,
+  slot,
+} from "./AgentDetailPanel";
 import { pendingChangeHint, reportedMachine } from "../lib/pendingChange";
 import { ModelEffortEditor } from "./ModelEffortEditor";
 import { ChevronLeftIcon, ChevronRightIcon } from "./icons";
@@ -692,10 +697,21 @@ export function WorkerDetailPanel({
     <AgentDetailPanel
       onBack={onBack}
       identity={identity}
-      overlays={settingsDialog}
-      afterIdentityCards={taskCard}
-      afterInfoCards={delegatorCard}
-      extraExpandCards={scheduleCard}
+      // EVERY slot the panel offers, no exceptions (T-0b4f) — see the twin
+      // literal in MemberDetailPanel.tsx. This is the side the old optional
+      // props kept silently short-changing: a card added to the member panel
+      // simply did not exist here, and nothing said so.
+      slots={{
+        overlays: slot(settingsDialog),
+        afterIdentityCards: slot(taskCard),
+        afterInfoCards: slot(delegatorCard),
+        extraExpandCards: slot(scheduleCard),
+        afterPromptCards: notHere(
+          "RESUME SUMMARY 目前對外包取不到資料：server 的 resolveMember 對 " +
+            "KindOutsource 回 404（api_helpers.go；那道邊界是通用的，不是為這張卡立的）。" +
+            "這是「還沒做」不是「不該有」——要掛上來得先動後端，見 T-0b4f 票面",
+        ),
+      }}
       vm={{
         testIdPrefix: "worker-detail",
         online,
