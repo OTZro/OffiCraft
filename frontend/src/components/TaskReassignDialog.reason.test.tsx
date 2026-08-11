@@ -7,15 +7,18 @@
 // the dialog caught the error, logged it to a console nobody has open, and
 // printed one fixed string.
 //
-// 🔴 The acceptance is NOT "a reason appears" — it is "the four refusals are
-// TELLABLE APART on screen", so every case below asserts its own sentence AND
-// the whole set is asserted to be pairwise distinct. A single-case test would
-// pass just as happily against a version that printed the same reason for
-// everything.
+// 🔴 The acceptance is NOT "a reason appears" — it is "refusals are TELLABLE
+// APART on screen", so every case below asserts its own sentence AND the whole
+// set is asserted to be pairwise distinct. A single-case test would pass just as
+// happily against a version that printed the same reason for everything.
 //
-// The four sentences are the server's own (server/ocserverd/api_tasks.go, the
-// reassign handler's guards); they are reproduced here as the CONTRACT this
-// seam carries end to end, not as a copy of an implementation detail. Three of
+// ⚠️ These four are a SAMPLE, not the refusal set. This file used to call them
+// "the four"; independent review counted fifteen `writeError` calls in that one
+// handler — the seam is generic (whatever sentence the server sends is what the
+// dialog shows), so the sample is chosen to cover the distinct STATUS classes
+// (409 / 403 / 403 / 400) rather than to enumerate. For today's real list run
+// `grep -n writeError server/ocserverd/api_tasks.go` inside the reassign
+// handler; a list frozen into a comment goes stale with nothing turning red. Three of
 // the four are unreachable through the mock from the cockpit (they depend on
 // WHO is calling), so the refusal is injected at the onReassign boundary — the
 // same boundary the page's real wiring rejects through.

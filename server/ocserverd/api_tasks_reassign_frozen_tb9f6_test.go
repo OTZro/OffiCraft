@@ -5,36 +5,37 @@
 // WAKE anybody. Freezing means "do not advance this"; the reassign only ARRANGES
 // who takes over when it thaws.
 //
-// 🔴 Where that invariant actually lives, and why the mutant discipline the
-// ticket asked for had to change shape. The ticket said to prove it by taking
-// away "the scheduler's frozen condition" (singular) and watching a test go red.
-// There are TWO frozen conditions, independent of each other:
+// 🔴 Where that invariant actually lives — and a correction, because the first
+// version of this header got it wrong and the wrong version reads just as
+// confidently as the right one.
 //
-//	(A) outsourceAwaitingAssignment  (outsource_sched.go) — candidate collection,
-//	    called from the sweep at collection time AND again just before the mint.
-//	(B) the outsourceDecide loop      (outsource_sched.go) — admission.
+// It said the scheduler has "TWO independent, redundant" frozen gates
+// (outsourceAwaitingAssignment and the outsourceDecide loop) and concluded that
+// no behavioural test could see either one go away. Independent review measured
+// it: they are NOT redundant, they are nested. `outsourceDecide`'s frozen
+// `continue` is UNREACHABLE in production — its only caller builds the candidate
+// list from tasks that already passed outsourceAwaitingAssignment, so a frozen
+// one never reaches it. A test written for that branch would be a test for dead
+// code: green today, green forever, red never.
 //
-// Either one ALONE is enough to keep a frozen task unassigned. So a behavioural
-// test — one that drives a tick and asserts nothing got bound — CANNOT go red
-// when only one of them is removed, and that is not a defect in the test: they
-// are genuinely redundant. Writing a test that appears to catch it would be
-// writing a fake.
+// What actually carries the invariant:
 //
-// So each layer is pinned AT ITS OWN LAYER (option (a) of the two Kyle laid out
-// on 2026-08-11), and the end-to-end scenario is pinned separately as the thing
-// the owner ruling is actually about:
+//   - the collection sweep — outsourceAwaitingAssignment over the snapshot,
+//     pinned directly by TestOutsourceAwaitingAssignment_SkipsFrozen below;
+//   - the RE-READ before the bind — the same predicate on a freshly read row,
+//     which is the only thing covering a freeze that lands between snapshot and
+//     bind, pinned by TestOutsourceTick_RereadsAndRejudgesBeforeBinding
+//     (outsource_sched_rereadguard_tb9f6_test.go);
+//   - end to end: TestReassignFrozenTaskToOutsourceWakesNobody, below.
 //
-//	(A) TestOutsourceAwaitingAssignment_SkipsFrozen  — this file. Before it, layer
-//	    (A)'s frozen arm had NO test of its own: every existing frozen assertion
-//	    ran through a tick, where layer (B) covered for it.
-//	(B) TestOutsourceDecideSkipsFrozenAndSpeclessTypes — outsource_sched_test.go,
-//	    already existed and drives outsourceDecide directly.
-//	end-to-end: TestReassignFrozenTaskToOutsourceWakesNobody — this file.
+// ⚠️ Do not re-derive "how many gates" from this comment — reachability is a
+// property of today's call graph, not of the language, and prose cannot hold it.
+// Run `grep -rn TaskPriorityFrozen --include=*.go server/ocserverd | grep -v _test`
+// and read the callers.
 //
-// ⚠️ Do not "simplify" this by deleting one of the two scheduler conditions
-// because "the other one covers it". Each is load-bearing for a different
-// caller, and their redundancy is exactly why neither is visible to a
-// behavioural test.
+// The MEMBER arm is not covered by any of this — the server does not gate it at
+// all; see TestReassignFrozenTaskTellsTheSuccessorNotToAdvance at the bottom of
+// this file for what is done instead (owner ruling, card rc-4a166be12a29).
 
 package main
 

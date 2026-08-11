@@ -1160,21 +1160,34 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 	// T-b9f6, verbatim: 「我不覺得凍結的東西應該不能轉派 我覺得應該移除凍結不能轉派的
 	// 限制」). It used to 400 with "unfreeze it before reassigning".
 	//
-	// Why removing it is safe, and where that safety actually lives: freezing
+	// Why removing it is safe, and where that safety actually lives. Freezing
 	// means "do not advance this", and the fear was that a reassign wakes a new
-	// executor. It does not — the outsource scheduler skips frozen tasks by
-	// itself, at TWO independent places (outsource_sched.go:
-	// outsourceAwaitingAssignment and the outsourceDecide loop), so a frozen
-	// task reassigned to outsource just sits unassigned until someone unfreezes
-	// it. That is the invariant this removal rests on, and each of the two is
-	// pinned at its OWN layer — TestOutsourceAwaitingAssignment_SkipsFrozen and
-	// TestOutsourceDecideSkipsFrozenAndSpeclessTypes — because they are
-	// redundant, so no behavioural test can see either one alone go away. The
-	// scenario itself is TestReassignFrozenTaskToOutsourceWakesNobody.
+	// executor. The two arms answer that differently:
+	//
+	//   OUTSOURCE — nobody is woken, by construction: the scheduler refuses to
+	//   mint for a frozen task, so it just sits unassigned until someone
+	//   unfreezes it (TestReassignFrozenTaskToOutsourceWakesNobody). The
+	//   invariant lives in outsource_sched.go and is pinned there, at the layer
+	//   the freeze-race actually passes through — the re-read before the bind
+	//   (TestOutsourceTick_RereadsAndRejudgesBeforeBinding).
+	//
+	//   MEMBER — the server does NOT gate this anywhere. Do not take that on
+	//   trust and do not take this comment's word for how many gates exist:
+	//   `grep -rn TaskPriorityFrozen --include=*.go server/ocserverd | grep -v _test`
+	//   is the whole enforcement surface, and it is one line to run. What this
+	//   handler does instead is TELL the successor (owner ruling, card
+	//   rc-4a166be12a29): the handover notice says the task is paused and that
+	//   claiming it is not permission to start work.
+	//
+	// 🔴 An earlier version of this comment claimed the outsource scheduler had
+	// "two independent, redundant" frozen gates. Independent review measured it:
+	// the outsourceDecide one is UNREACHABLE in production (its caller only ever
+	// feeds it candidates that already passed outsourceAwaitingAssignment), and
+	// the same review found this comment's "a member target never woke anybody"
+	// to be false. Counting gates in prose is how that happened — run the grep.
 	//
 	// What this check actually blocked was the legitimate act of arranging a
-	// handover ahead of time and unfreezing later. A member target never woke
-	// anybody at reassign time either (no inline mint — see the header above).
+	// handover ahead of time and unfreezing later.
 
 	kind := trimString(body.Target.Kind)
 	var newMember *Member

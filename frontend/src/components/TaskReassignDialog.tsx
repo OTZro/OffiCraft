@@ -198,10 +198,13 @@ export function TaskReassignDialog({
       onClose();
     } catch (e) {
       console.warn("TaskReassignDialog: reassign failed", e);
-      // 🔴 The server ALWAYS knows why it refused — terminal task (409), an
-      // outsource worker asking at all (403), a 一般正職 naming another member
-      // (403), an invalid target (400) — and each refusal carries its own
-      // sentence. This line used to drop all of it on the floor and print one
+      // 🔴 The server ALWAYS knows why it refused, and every refusal carries its
+      // own sentence. This comment deliberately does NOT list them: an earlier
+      // version named "the four", independent review counted fifteen
+      // `writeError` calls in that one handler, and a list in a comment goes
+      // stale without anything turning red. The live answer is one grep away —
+      // `grep -n writeError server/ocserverd/api_tasks.go` inside the reassign
+      // handler. This line used to drop all of it on the floor and print one
       // fixed 「轉派失敗」, so the only way to learn which refusal you hit was to
       // ask someone to read the code (owner did exactly that, 2026-08-11, chat
       // c-066088ffad83 → T-b9f6). `console.warn` is not a channel: nobody has
