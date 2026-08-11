@@ -180,12 +180,14 @@ func (s *apiServer) HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessa
 	// that ("switching AWAY from `custom` leaves the stored sets in place,
 	// unread, so switching back does not lose the choice").
 	//
-	// ⚠️ THAT SENTENCE CONTRADICTS THE RESPONSE SCHEMA IN THE SAME FILE, which
-	// says the three fields are "Empty for every other cadence". The conflict
-	// is INSIDE the reviewed contract, not between the contract and this code,
-	// so it is not settled here: it is an owner ruling, deliberately left open
-	// and deliberately not papered over by editing either sentence. This code
-	// follows the PATCH clause because it is the one that describes THIS verb.
+	// ⚠️ THAT SENTENCE ONCE CONTRADICTED THE RESPONSE SCHEMA IN THE SAME FILE,
+	// which said the three fields are "Empty for every other cadence" — two
+	// sentences in one reviewed contract that could not both be true, and
+	// neither review nor the owner's read-through caught it. The owner settled
+	// it on card rc-68c581070e55 (2026-08-11): the sets are KEPT, merely unread.
+	// The response-schema sentences were rewritten to say so; this code did not
+	// move, because it already followed the PATCH clause — the one that
+	// describes THIS verb. Nothing here is open.
 	if body.CustomDays != nil {
 		m.CustomDays = *body.CustomDays
 	}

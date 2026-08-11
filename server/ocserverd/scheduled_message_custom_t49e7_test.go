@@ -606,13 +606,13 @@ func TestPatchCustomSetsReAimOnlyOnARealChange(t *testing.T) {
 // reviewed contract: "switching AWAY from `custom` leaves the stored sets in
 // place, unread, so switching back does not lose the choice".
 //
-// ⚠️ THE CONTRACT CONTRADICTS ITSELF HERE and the conflict is NOT resolved by
-// this test. The response schema in the same spec file says the three fields
-// are "Empty for every other cadence", which would require the opposite. That
-// is an owner ruling, still open; this test pins the clause that describes
-// this verb, so the behaviour cannot drift silently while the question is
-// settled. Whoever settles it will have to change this test on purpose —
-// which is the point.
+// ⚠️ THE CONTRACT USED TO CONTRADICT ITSELF HERE: the response schema in the
+// same spec file said the three fields are "Empty for every other cadence",
+// which would require the opposite. The owner settled it on card
+// rc-68c581070e55 (2026-08-11) — the sets are KEPT, merely unread — and the
+// response-schema sentences were rewritten to match. This test pinned the
+// PATCH clause throughout, so the behaviour could not drift while the question
+// was open; it needs no change now that it is closed.
 //
 // Red when: leaving `custom` clears the three columns. The sets are gone
 // irreversibly, as a side effect of a toggle, and switching back presents an
