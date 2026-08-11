@@ -85,8 +85,9 @@ configurable level and must not be dragged into this set.
 
 bin/tests/effort-vocab-guard-selftest.py is what keeps this honest: one planted
 mutant per copy shape, each of which must still be caught AND still be named.
-Both halves are dispatched by bin/ci.sh and bin/ci-cloud.sh — a scanner nobody
-verified is a green with a hole in it.
+Both halves are dispatched by ONE Makefile target (lint-effort-vocab), so the
+scanner cannot travel without its positive control — a scanner nobody verified
+is a green with a hole in it.
 """
 
 import os

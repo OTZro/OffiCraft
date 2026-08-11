@@ -6,8 +6,11 @@
 # Owner ruling (card rc-bbf6a418fc23): one CI run per working copy; a second run
 # in the same copy is REFUSED loudly with a non-zero exit; more rounds means more
 # copies. The dangerous failure this replaces is NOT "two runs both go red" — it
-# is two runs interleaving and one of them emitting `[ci] all green`, the repo's
-# land authority, over a tree it never actually validated.
+# is two runs interleaving and one of them emitting `[ci] all green` over a tree
+# it never actually validated. (That line stopped being the merge verdict on
+# 2026-08-11 — owner card rc-c16ac4679fab moved it to the cloud round — but the
+# danger is unchanged: it is still the line a developer reads before deciding
+# their own area is clean enough to open a PR.)
 #
 # HOW IT IS TESTED, AND WHY NOT END-TO-END
 # ----------------------------------------

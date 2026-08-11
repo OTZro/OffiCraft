@@ -10,8 +10,9 @@
 // answers about a browser default that never ships. Every assertion below reads
 // the colour the browser ACTUALLY painted, which is the only form of this claim
 // worth pinning. The companion source scan (src/components/badgeRing.test.ts)
-// covers what jsdom CAN answer, and — importantly — runs in the cloud gate,
-// which `npm run test:ct` does not (bin/ci-cloud.sh runs vitest only).
+// covers what jsdom CAN answer, and — importantly — runs in the unit cell
+// (make test-frontend-unit), which is a different cloud cell from this file's
+// (make test-frontend-ct).
 //
 // 🔴 DISCRIMINATING POWER, stated honestly per assertion, because two of the
 // three would have passed BEFORE this change and must not be miscounted as

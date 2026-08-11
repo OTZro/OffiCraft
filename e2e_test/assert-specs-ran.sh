@@ -32,16 +32,22 @@
 # reporter reported this", plus wherever the log came from.
 #
 # WHO EXERCISES A CHANGE TO THIS FILE
-# Nothing local. `bin/ci.sh` never reaches this script — its only caller anywhere
-# is the `macos-e2e` job in .github/workflows/ci.yml. Do not take that on this
-# file's word; the callers are a query, and the answer moves:
+# `bin/ci.sh` never reaches this script. Two things do: the `macos-e2e` job in
+# .github/workflows/ci.yml, and `bin/local-ci.sh` — the wider local round a human
+# runs before a GA or after touching live-agent behaviour, which is NOT part of
+# any automatic gate. (T-4d88 added the second one; this header used to say the
+# cloud job was the only caller anywhere.) Do not take that on this file's word;
+# the callers are a query, and the answer moves:
 #   git grep -nF assert-specs-ran.sh
 # What matters is which hits are INVOCATIONS rather than prose — a mention in a
 # comment is not a caller. (This sentence used to assert a hit count under bin/
 # and tests_guard/ instead, and a comment added in the very same commit falsified
-# it on the spot.) So for an edit HERE the land authority going green really
-# is no evidence — that run never executed this file. Acceptance is the
-# `macos-e2e` job on the PR and its log.
+# it on the spot.) So for an edit HERE a green `bin/ci.sh` is still no evidence
+# — that run never executed this file. Acceptance is the `macos-e2e` job on the
+# PR and its log, or a deliberate local `bash bin/local-ci.sh`. (This used to say
+# "the land authority going green"; since 2026-08-11 the merge verdict IS the PR
+# round — owner card rc-c16ac4679fab — which if anything sharpens the point: the
+# cell named here is the one that decides, and `bin/ci.sh` never runs this file.)
 #
 # NOTE the asymmetry, it is not the same for its neighbour: a change to
 # `run_all.sh` IS partly covered locally, because tests_guard executes that file

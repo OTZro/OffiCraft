@@ -68,7 +68,8 @@
 #
 # 🔴 THIS FILE MUST PARSE UNDER APPLE'S BASH 3.2, NOT JUST YOURS.
 # bin/tests/run.sh dispatches guards with `bash <file>`, which on a developer's
-# Mac is usually a homebrew bash 5.x on PATH — but on the macos-host-gates runner
+# Mac is usually a homebrew bash 5.x on PATH — but on the runner that executes
+# this suite (the bin-guards cell since T-4d88; macos-host-gates before it)
 # it is /bin/bash 3.2.57. That difference is invisible to a local green run.
 # It has already bitten this file once: an awk program embedded as $(cat <<'AWK'
 # ...) contained a literal apostrophe inside a character class, and bash 3.2's
@@ -109,9 +110,10 @@ fi
 # what is installed is not a gate.
 #
 # ruby is the one that is always there. This guard's ONLY execution surface is
-# macOS — bin/tests/run.sh is reached through bin/ci.sh locally and through
-# macos-host-gates in the cloud; the ubuntu cloud-gates lane does not run
-# bin/tests at all. macOS ships ruby; the macOS runner ships ruby and does NOT
+# macOS — bin/tests/run.sh is reached through bin/ci.sh locally and through the
+# bin-guards cell in the cloud, and since T-4d88 EVERY cloud cell runs on macOS
+# (the ubuntu lane this paragraph used to name is gone, along with the
+# macos-host-gates cell). macOS ships ruby; the macOS runner ships ruby and does NOT
 # have PyYAML. Missing ruby is a FAIL with instructions, never a skip and never
 # a quiet downgrade to some other parser: "no parser" must not look like "file
 # is fine", and neither must "a different parser".

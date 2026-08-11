@@ -74,9 +74,14 @@ it never runs on a pull request at all. "No gate needs a secret" is the claim;
 
 What the gates cover: unit tests, the regenerate-and-compare consistency gates,
 the black-box conformance suite, the real-browser end-to-end suite, and the
-host-shaped guard suites. The authoritative list of what runs is in
-`bin/ci-cloud.sh` and `bin/ci-macos-host.sh`, not in the workflow file and not
-here — please read those scripts rather than trusting a list in prose.
+host-shaped guard suites. The authoritative definition of every check is the repo-root `Makefile` — one
+named target per check, each implemented exactly once — not the workflow file
+and not here. Read the targets rather than trusting a list in prose:
+`grep -nE '^[a-z][a-z0-9-]*:' Makefile`, and `grep -n 'run-checks' .github/workflows/ci.yml`
+for which cell calls which. (That second query said `grep -n 'make '` until an
+independent review ran it and got zero lines: the cells invoke the targets
+through `bin/run-checks.sh`, never `make` directly — a query that answers nothing
+is worse than none, because it reads as if it were checked.)
 
 **The bar for merging:** every check on the pull request has reached a
 conclusion, and every check is `success` — except for the jobs that only run
@@ -99,11 +104,19 @@ comment on your change.
 
 ### Running the checks yourself
 
-The authoritative gate is `bash bin/ci.sh`, and it runs locally. It expects a
-macOS Apple Silicon machine and a full developer setup, so we do not assume
-every contributor can run it. If you cannot, say so in the pull request
-description and let the cloud checks do the talking — but please at least run
-the tests for whatever you touched.
+`bash bin/ci.sh` runs the whole gate locally. It is NOT what decides whether your
+change can be merged — the pull request's checks are (owner ruling, 2026-08-11);
+see "The bar for merging" above. What it is for is checking your own work before
+you open the PR. It expects a macOS Apple Silicon machine and a full developer
+setup, so we do not assume every contributor can run it. If you cannot, say so in
+the pull request description and let the cloud checks do the talking — but please
+at least run the tests for whatever you touched.
+
+To run only part of it, name the targets instead: `bash bin/run-checks.sh <target> …`
+(target names: `grep -nE '^[a-z][a-z0-9-]*:' Makefile`). That wrapper's own
+all-clear line is what tells you it passed; it deliberately cannot print the
+whole-run marker `bin/ci.sh` ends with, and a guard enforces that no other script
+is even capable of printing it.
 
 Push a branch to your fork and open the pull request; the cloud round starts
 from there on its own — this repository does not hold fork runs for maintainer
