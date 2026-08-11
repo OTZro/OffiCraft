@@ -196,10 +196,20 @@ build-frontend-deps:
 #     >/dev/null` passes while that module is never built at all. So: deleting
 #     the build line is caught; RESHAPING it into inert text is NOT.
 #   * The mirror failure: a CORRECT build line written differently is not
-#     recognised and goes red. Unquoted or single-quoted `-o`, the output path
-#     held in a variable, `go build -C <dir>`, or the `cd` on its own line all
-#     read as "missing". That is a false red from this matcher — widen the
-#     matcher here, never reshape a working build script to satisfy it.
+#     recognised and goes red. Unquoted or single-quoted `-o`, `go build -C
+#     <dir>`, or the `cd` on its own line all read as "missing". That is a false
+#     red from this matcher — widen the matcher here, never reshape a working
+#     build script to satisfy it.
+#   * Variables are NOT expanded, and that case lands in the OTHER branch:
+#     `OUT="…"; … -o "$$OUT"` matches, so it is reported as a name MISMATCH
+#     (`builds it as '$$OUT'`), never as "missing" — so the "widen the matcher"
+#     advice on the missing branch is not shown to whoever hits it.
+#   * The trailing-comment strip costs both directions. It can cut a line short
+#     at the first whitespace-then-`#` even when that `#` is inside a quoted
+#     value, and what follows the cut is discarded: if the discarded tail held a
+#     LATER `-o`, the check reads the earlier one. So the strip turns
+#     good-`-o` … quoted-`#` … bad-`-o` on one folded line from RED into GREEN,
+#     as well as truncating some lines into a (red) "missing".
 #   * Only bin/build-bindist and bin/build are read (hardcoded below), and only
 #     the BASENAME of `-o` is compared, so the destination directory is not
 #     checked at all.
@@ -234,7 +244,7 @@ lint-go-naming:
 	    echo "  Searched: $$scripts"; \
 	    echo "  Wanted: ONE line carrying ALL THREE of  cd \"\$$ROOT/$$dir\"  +  go build  +  a DOUBLE-QUOTED  -o \"…\"  (after backslash-continuations are folded, whole-line comments dropped and trailing '#' comments stripped)."; \
 	    echo "  If the build line was DELETED: restore it. Deletion is what this clause catches."; \
-	    echo "  If your build line is CORRECT but written differently — unquoted or single-quoted -o, output path held in a variable, 'go build -C $$dir', or the cd on its own line — then this is a RANGE LIMIT of this matcher, not a fault in your script: widen the matcher in this Makefile target, do NOT reshape the build script to satisfy it."; \
+	    echo "  If your build line is CORRECT but written differently — unquoted or single-quoted -o, 'go build -C $$dir', or the cd on its own line — then this is a RANGE LIMIT of this matcher, not a fault in your script: widen the matcher in this Makefile target, do NOT reshape the build script to satisfy it."; \
 	    echo "  NOT caught by this clause: text that merely LOOKS like the build line. A line containing those three markers satisfies the match even if it never executes, so replacing the real build with inert text (echo/quoted/dead code) passes silently. This is a textual scan, not an execution trace."; \
 	    exit 1; \
 	  fi; \
