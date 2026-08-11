@@ -36,13 +36,13 @@
   `{vm.onSaveModelEffort && (<button …model-effort-edit>)}`）~~ —— **已不成立**：那顆就地編輯器
   連同 `onSaveModelEffort` 這個 prop 本身，已於 **T-7f28 整個移除**。留著這句會讓下一個人去找
   一段不存在的碼。
-  ⚠️ 這裡原本寫「今天原碼裡零命中」，**那句話不準**（獨立審查抓到）：全庫掃描實際上在
-  **五個檔**都有命中——`frontend/src/components/AgentDetailPanel.tsx` 一句記錄「它被移除了」的
-  註解（無害）、`frontend/CLAUDE.md` 同族的那段敘述（已於同一包一併更正）、本檔自己、
-  `docs/design/worker-panel-parity-mutants.md`，以及一個 playwright build cache 產物。
-  ⚠️ 這個數字我改過兩次：初稿寫「零命中」，第一輪審查改成「兩處」，**第二輪審查指出還是漏了
-  `worker-panel-parity-mutants.md`**。⇒ **一句話裡的數字，改一次不代表這次就對了**；會過期／會數錯
-  的是「命中幾處」，不會過期的是下面那個準確說法。**準確的說法是「型別與 production 碼裡沒有這個 prop」**，
+  ⚠️ 這裡原本寫「今天原碼裡零命中」，**那句話不準**（獨立審查抓到）：這個符號在文件與註解裡
+  仍有若干處提及（本檔自己、`frontend/CLAUDE.md`、`AgentDetailPanel.tsx` 一句記錄「它被移除了」
+  的註解、`worker-panel-parity-mutants.md`）。
+  🔴 **這裡刻意不寫「幾個檔」**：那個計數我連錯三次（零 → 兩處 → 五個檔），而第三次還把一個
+  **只存在於某台機器的 build cache 產物**算了進去——**一句在乾淨 checkout 裡不可複現、會隨本機
+  狀態變動的計數，被寫成了事實**。⇒ **會過期又會數錯的是「命中幾處」；不會過期的是下面那個
+  準確說法**，留那個就好。**準確的說法是「型別與 production 碼裡沒有這個 prop」**，
   不是「repo 裡零命中」。
 - `vm.machineAction` 未傳 ⇒ 機器格標題右側無任何控制項 —— **仍然成立**（該欄位今天仍是
   `AgentDetailVM` 上的 optional prop）。

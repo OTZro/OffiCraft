@@ -121,9 +121,16 @@ function mkVM(): AgentDetailVM {
 }
 
 /** The opposite corner from `mkVM()`: online, everything reported, every
- * optional present. It exists so the sentinel above does not mount only in the
- * least production-like state — a render site gated on any of these fields
- * reads as "always rendered" under the minimal VM alone. */
+ * optional present — and that is a CHECKED claim, not a wish: round-3 review
+ * caught this comment saying "every optional" while `onRefocus` and
+ * `prompt.note` were missing from BOTH view models, and a render site gated on
+ * `!vm.onRefocus` was completely green while every production caller passes it.
+ * ⇒ if `AgentDetailVM` grows an optional field, it belongs here too, or this
+ * comment goes back to being the reason nobody looks for the gap.
+ *
+ * It exists so the sentinel above does not mount only in the least
+ * production-like state — a render site gated on any of these fields reads as
+ * "always rendered" under the minimal VM alone. */
 function mkPopulatedVM(): AgentDetailVM {
   return {
     ...mkVM(),
@@ -138,6 +145,7 @@ function mkPopulatedVM(): AgentDetailVM {
     cost: 7,
     modelIsReported: true,
     machineAction: <button type="button">change</button>,
+    onRefocus: () => Promise.resolve(),
     pending: { runtime: "", model: "", effort: "", machine: "" },
     refocusSince: 1,
     refocusOp: "refocus",
@@ -154,6 +162,7 @@ function mkPopulatedVM(): AgentDetailVM {
       fetch: () => Promise.resolve("boot"),
       cacheKey: "k",
       hint: "hint",
+      note: "note",
     },
   };
 }

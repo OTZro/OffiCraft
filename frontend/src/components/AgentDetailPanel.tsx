@@ -241,9 +241,16 @@ interface AgentDetailPanelProps {
    * by worker-detail-task-card-order.ct.spec.tsx" — round-2 review showed that is
    * false: that spec pins exactly ONE relation (the worker's 委託任務 sits above
    * the 模型/機器 card) on ONE side, and it is a Playwright CT that the vitest
-   * gate never runs. Reorder the entries in `rendered` and NOTHING reddens. A
-   * false sense of safety is worse than none, which is the whole point of this
-   * ticket, so the claim is gone rather than softened.
+   * gate never runs. SWAP TWO RENDER SITES IN THE JSX BELOW and nothing reddens
+   * — measured (tsc rc=0, whole suite green), including the very relation that
+   * spec claims to pin. A false sense of safety is worse than none, which is the
+   * whole point of this ticket, so the claim is gone rather than softened.
+   *
+   * ⚠️ An earlier draft aimed that sentence at "reorder the entries in
+   * `rendered`" — round-3 review pointed out that is the WRONG target: the
+   * object is a literal whose values are each referenced by name at their own
+   * JSX position, so reordering its keys is a semantic no-op that could never
+   * redden, guard or no guard. Right conclusion, wrong experiment.
    *
    *   command grep -an "slots={" -A 20 src/components/MemberDetailPanel.tsx \
    *                                      src/components/WorkerDetailPanel.tsx
