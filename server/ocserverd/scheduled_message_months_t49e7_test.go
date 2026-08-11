@@ -479,11 +479,23 @@ func TestCustomMonthsComposeWithFebruaryAndLeapDays(t *testing.T) {
 		t.Fatalf("on 29 February 2028 the slot is %q (ok=%v), want 2028-02-29T09:00+00:00",
 			slotKey(slot), ok)
 	}
-	// 🔴 In a NON-leap February there is no such date, so there is no slot —
-	// and 28 February is emphatically not the answer. The lookback (70 days)
-	// cannot reach the previous leap year either, which is the honest "no slot"
-	// this cadence reports rather than inventing one.
-	if slot, ok := mostRecentSlot(leapDay, time.Date(2027, time.February, 28, 23, 59, 0, 0, time.UTC)); ok {
+	// 🔴 In a NON-leap February there is no such date, so that February
+	// contributes NOTHING and 28 February is emphatically not the answer. What
+	// stands instead is the previous LEAP year's occurrence, which really did
+	// happen and is still the most recent one.
+	//
+	// ⚠️ THE SECOND HALF OF THAT USED TO READ "there is no slot at all", and
+	// that was a property of the retired 70-day lookback rather than of this
+	// rule: the window could not reach 2024 from 2027, so it answered "no slot"
+	// for an occurrence that genuinely elapsed — which is exactly the
+	// non-monotonicity mostRecentCustomSlot replaced. The invariant this test
+	// is really for is unchanged and is asserted below: never the 28th.
+	slot, ok := mostRecentSlot(leapDay, time.Date(2027, time.February, 28, 23, 59, 0, 0, time.UTC))
+	if !ok || slotKey(slot) != "2024-02-29T09:00+00:00" {
+		t.Fatalf("in a non-leap February the slot is %q (ok=%v), want the previous leap day "+
+			"2024-02-29T09:00+00:00 — an occurrence that happened does not stop having happened", slotKey(slot), ok)
+	}
+	if ok && slot.Day() == 28 {
 		t.Fatalf("a non-leap February produced %q — the 29th must be an occurrence that does not "+
 			"happen, never clamped onto the 28th", slotKey(slot))
 	}

@@ -146,10 +146,14 @@ Casey 的 180 分直接**超出**舊上限 ⇒ 那幾次是**靜靜被丟掉的*
   而整份 log 裡沒有任何一行與它有關）。
   **這條路在真實資料上不可達**：1850–2100 全歷史普查，「連續兩天都被刪掉」出現 **0 次**
   （tzdata 2025c，量測日 2026-08-10，598 zones）——所以它是**敘述缺陷，不是活的漏送**。
-  cadence 回看（daily 今天＋往回 3 天共 4 天；weekly 15 天；monthly 13 個月；custom 71 天）的用途是
+  cadence 回看（daily 今天＋往回 3 天共 4 天；weekly 15 天；monthly 13 個月）的用途是
   「往回找**這個時區真的有**的那個日期」，**不是**替漏送兜底。
   （各自的上限常數就在 `schedule_slot.go` 那幾行 `LookbackDays` / `LookbackMonths` 旁邊，
   各自寫著自己的最壞情形——上面這串數字要對號就去讀那裡，別回頭信這一行。）
+  ⚠️ **`custom` 已經不在這串裡了**（T-49e7 第二輪）：它沒有回看窗，改成從月×日集合**直接倒推
+  候選日期**（`mostRecentCustomSlot`）。理由見下方〈`custom` 沒有回看窗〉那節——一句話是「月」
+  這個維度讓兩次發生之間的間隔可以長到一年、甚至八年，任何以「天」為單位的窗都會對一個**真的
+  發生過**的槽回答「沒有槽」，而那就是 `mostRecentSlot` 對 `now` 不單調。
 
 - **目前會靜默丟掉的完整清單**（沒有 log、沒有錯誤，刻意如此）：
   1. 那個月沒有那一天（31 號遇到二月）——owner 裁定 `rc-aeef15360ab5` 選②，RFC 5545 語意。
@@ -250,6 +254,55 @@ owner 2026-08-11 於卡 `rc-4acc4013a0ae` 拍板選項①：多一種 `custom` �
 偏移，所以第二輪算出同一個瞬間、同一個 slotKey，游標擋下——那個讀數**送一次，不是兩次**。
 沒有在這裡改，是因為那個解析住在四種頻率共用的 `readBack`／`time.Date` 路徑上，動它會動到全部四種。
 改由測試釘住，讓它是一個有紀錄的決定而不是一個意外。
+
+### 🔴 `custom` 沒有回看窗：候選日期由日曆倒推（T-49e7 第二輪）
+
+`daily`／`weekly`／`monthly` 都用「從今天往回走 N 步」找上一個已發生的槽，而那隻在
+**N 大於兩次發生之間的最長間隔**時才成立。第一輪的 `custom` 也是這個形狀
+（`customLookbackDays = 70`，推導自「31 Jan → 31 Mar 是 59 天」）。
+
+**第二輪的「月」把那個前提作廢了，而且是可觀測的，不是理論的**：`custom_months = [1]` ×
+`custom_days = [1]` 一年只發生一次，`[2] × [29]` 更可以隔**八年**（2096 → 2104，因為 2100
+不是閏年）。於是 `mostRecentSlot` 在 day+70 回報那個槽、在 day+71 回報「沒有槽」——
+**一則排程不會「取消發生」**，而 `mostRecentSlot` 的檔頭寫著整個功能靠它對 `now` 單調。
+
+所以 `custom` 這一支改成 **倒推**（`mostRecentCustomSlot`）：候選日期直接從 月 × 日 兩組集合
+的笛卡兒積由近而遠列舉，只問排程**自己講過**的日期。三件事刻意沒有動：
+
+- **每一個候選日期仍然交給 `customSlotOn` 解**（同一組參數、同一個 `notAfter`），
+  所以 DST 兩條裁定（被跳過的牆鐘讀數直接跳過不前搜；重複讀數只送一次）**由構造不變**。
+- **逐日判定不變**：月份沒有的那一天只掉那一天（`[1,15,31]` 在二月照送 1 號與 15 號），
+  永不 clamp 到月底。
+- **游標語意不變**：存已送出的槽字串，比的是解析後的時間。
+
+年份上界是**推導**不是餘裕：不是 (2,29) 的可行 (月,日) 對**每一年都存在**，所以上一次發生至多
+一年前（`customYearsBack = 2`，多的那一年是留給「那一年那個日期剛好被時區刪掉」）；只有 (2,29)
+可行時由格里曆決定，一般 4 年、跨世紀非閏年 8 年（`customLeapDayYearsBack = 9`）。
+**它仍然是一個截斷**，失效條件寫在常數旁邊：某個時區連續 `customYearsBack` 年把這則排程宣告的
+每一個日期都刪掉——今天沒有任何 tzdata 這樣做。
+
+⚠️ **可見的語意變化，誠實記下**：`[2] × [29]` 在非閏年的二月，第一輪回答「沒有槽」（窗搆不到
+上一個閏年），現在回答**上一個閏年的 2 月 29 日**——那個槽真的發生過。投遞結果不變（游標早就
+停在那一格），變的是 `mostRecentSlot` 不再對一件發生過的事說沒發生。
+`TestCustomMonthsComposeWithFebruaryAndLeapDays` 原本把前者釘成契約，已隨這一輪改寫。
+
+**升級路徑**：窗看不到的槽會讓 `currentSlotKey` 回空字串，而空游標的意思是「還沒送過、下一個
+tick 就送」。倒推法看得到那個舊槽 ⇒ 升級後第一個 tick 會補送一則可能一年前的訊息，違反
+「漏掉的槽不補送」。`migrations` 之外的 **Go migration `00054_reaim_custom_cursors.go`**
+（本 repo 第一支 Go migration，因為要算的是時區裡的牆鐘、SQL 算不出來）在升級當下把所有
+`cadence='custom'` 且游標為空的列重瞄成 `currentSlotKey(now)`。
+守衛 `TestMigration00054ReAimsEmptyCustomCursorsSoTheFirstTickSendsNothing` 走的是真的 tick。
+
+##### 護欄
+
+- `TestBackDerivedCustomSlotMatchesADayByDayScan`：倒推法 vs **逐日暴力掃 4200 天**（語意定義），
+  2000 組隨機語料 × 14 個時區，語料本身帶反空洞下限（多少組落在舊窗之外、閏日、月底、無解）。
+- `TestBackDerivedCustomSlotIsMonotonicInNow`：跨三年、每 12 小時一格，槽不得倒退、也不得消失。
+- `TestCustomFeasibilityPrecheckAgreesWithTheCalendar`：12 × 31 全部 (月,日) 對逐一與暴力掃對質
+  （可行性預檢與寫入面共用 `maxDaysInMonth`，二月算 29 天）。
+- `TestBackDerivedCustomSlotSpansTheCenturyLeapGap`：2096 → 2104 那八年。
+- 全 IANA 時區掃描（`scheduled_message_tzsweep_t49e7_test.go`）新增 `custom/jan-1-only` fixture：
+  **每一個取樣點都離它唯一那次發生好幾個月**，所以那個 fixture 的每一個答案都是只有倒推法給得出來的。
 
 ## 🔴 排程游標：存「時間槽」，不是存「上次執行時間」
 

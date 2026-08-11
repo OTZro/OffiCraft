@@ -202,8 +202,8 @@ func (s sweepSchedule) monthFiltered() bool {
 // on: a dense one (a reading every twenty minutes, so a DST gap always swallows
 // several), a sparse one whose hours sit exactly where spring-forward gaps land
 // and whose days include a 31st (February's missing day), and a single-day one
-// where the gap between two occurrences is the 59-day worst case customLookbackDays
-// is sized for.
+// whose two occurrences are 59 days apart (31 January → 31 March, because
+// February has no 31st) — the longest gap the day set alone can produce.
 func sweepSchedules(tz string) []sweepSchedule {
 	return []sweepSchedule{
 		{name: "custom/every-20-min", sm: ScheduledMessage{
@@ -253,10 +253,18 @@ func sweepSchedules(tz string) []sweepSchedule {
 //
 //	months-1-2-day-31   — the month END. January has a 31st, February does not,
 //	                      so the slot has to STAY on 31 January for the whole of
-//	                      February and then stop being reported once March (an
-//	                      unselected month) is more than a lookback away. This is
-//	                      simultaneously the cross-month case: the most recent
-//	                      slot is in the PREVIOUS month for weeks at a time.
+//	                      February and go on being reported through March and
+//	                      beyond, because an unselected month contributes no
+//	                      occurrence of its own. This is simultaneously the
+//	                      cross-month case: the most recent slot is in the
+//	                      PREVIOUS month for weeks at a time.
+//	jan-1-only          — ONE reading a year. This is the shape the round-1
+//	                      lookback window could not answer at all: 70 days after
+//	                      1 January it reported the slot and 71 days after it
+//	                      reported NOTHING, which is the non-monotonicity that
+//	                      retired the window. Every window below sits months away
+//	                      from its one occurrence, so for this fixture EVERY
+//	                      sample is an answer only a calendar derivation can give.
 //	feb-29-only         — the leap day, and nothing else. It fires in 2028 and
 //	                      never in 2026: `months {2} × days {29}` is not a new
 //	                      rule, it is the day-by-day rule reading a date three
@@ -278,6 +286,12 @@ func sweepMonthSchedules(tz string) []sweepSchedule {
 			Cadence: ScheduledMessageCadenceCustom, Timezone: tz,
 			CustomMonths: []int{1, 2},
 			CustomDays:   []int{31}, CustomHours: []int{0, 12},
+			CustomMinutes: []int{0},
+		}},
+		{name: "custom/jan-1-only", sm: ScheduledMessage{
+			Cadence: ScheduledMessageCadenceCustom, Timezone: tz,
+			CustomMonths: []int{1},
+			CustomDays:   []int{1}, CustomHours: []int{9},
 			CustomMinutes: []int{0},
 		}},
 		{name: "custom/feb-29-only", sm: ScheduledMessage{
@@ -318,12 +332,15 @@ func sweepMonthSchedules(tz string) []sweepSchedule {
 //	  for the month dimension; an all-year fixture has nothing to say there that
 //	  the february window does not already say.
 //
-// Measured on the development machine at the default knobs: round 1 was 585
-// zones / 2,751,415 samples / ~117s, round 2 is 585 zones / 4,070,367 samples /
-// ~176s. That is a real half-minute-plus added to every `go test` of this
-// package, stated here rather than left for whoever notices the suite got
-// slower. A full cross product of both families over every window would have
-// been roughly twice round 1 again.
+// Measured on the development machine at the default knobs, TestTZSweepFindsNothing
+// alone: round 1 was 585 zones / 2,751,415 samples / ~117s; round 2 as first
+// written was 585 zones / 4,070,367 samples / ~176s; today it is 585 zones /
+// 4,400,105 samples / ~80s. The sweep got BIGGER and FASTER in the same change,
+// and the reason is the thing this round is about: `custom` no longer walks up
+// to 71 candidate dates per sample looking for one its sets name — it derives
+// the dates from the sets, so a sparse fixture costs one candidate instead of
+// seventy. A full cross product of both families over every window would still
+// be roughly twice this.
 func sweepSchedulesFor(tz string, win sweepWindowSpec) []sweepSchedule {
 	switch win.kind {
 	case "month-boundary", "leap-february":
@@ -1073,27 +1090,64 @@ type customSlotOnFunc func(day time.Time, s ScheduledMessage, loc *time.Location
 
 // mostRecentSlotWith is mostRecentSlot's custom branch with the per-date
 // resolver injected. It exists only for the positive control.
+//
+// 🔴 Everything ABOVE the injected resolver is a faithful copy of
+// mostRecentCustomSlot's candidate enumeration — the calendar derivation, not
+// the day-at-a-time window round 1 had — because the bug being demonstrated
+// lives in the per-DATE resolver and a drifted enumeration would make the
+// control report findings that are not the bug it planted.
+// TestPlantedBugControlEnumeratesTheSameCandidatesAsProduction holds this copy
+// to production directly: driven with the REAL customSlotOn it must agree with
+// mostRecentSlot on every case of the differential corpus, so the copy cannot
+// drift silently.
 func mostRecentSlotWith(s ScheduledMessage, now time.Time, slotOnDate customSlotOnFunc) (time.Time, bool) {
 	loc, err := time.LoadLocation(s.Timezone)
 	if err != nil {
 		return time.Time{}, false
 	}
 	local := now.In(loc)
-	anchor := dayAnchor(local)
-	for back := 0; back <= customLookbackDays; back++ {
-		day := anchor.AddDate(0, 0, -back)
-		// The month test, copied from mostRecentSlot: the planted bug being
-		// demonstrated lives in the per-DATE resolver, so everything ABOVE it
-		// has to stay faithful or the control would report month findings that
-		// are not the bug it planted.
-		if !intSetContains(s.CustomMonths, int(day.Month())) {
-			continue
+	months, days := sortedIntSet(s.CustomMonths), sortedIntSet(s.CustomDays)
+	if len(months) == 0 || len(days) == 0 || len(s.CustomHours) == 0 || len(s.CustomMinutes) == 0 {
+		return time.Time{}, false
+	}
+	feasible, onlyLeapDay := false, true
+	for _, m := range months {
+		for _, d := range days {
+			if d > maxDaysInMonth(m) {
+				continue
+			}
+			feasible = true
+			if m != 2 || d != 29 {
+				onlyLeapDay = false
+			}
 		}
-		if !intSetContains(s.CustomDays, day.Day()) {
-			continue
-		}
-		if slot, ok := slotOnDate(day, s, loc, local); ok {
-			return slot, true
+	}
+	if !feasible {
+		return time.Time{}, false
+	}
+	yearsBack := customYearsBack
+	if onlyLeapDay {
+		yearsBack = customLeapDayYearsBack
+	}
+	for year := local.Year(); year >= local.Year()-yearsBack; year-- {
+		for mi := len(months) - 1; mi >= 0; mi-- {
+			month := time.Month(months[mi])
+			if year == local.Year() && month > local.Month() {
+				continue
+			}
+			for di := len(days) - 1; di >= 0; di-- {
+				day := days[di]
+				if year == local.Year() && month == local.Month() && day > local.Day() {
+					continue
+				}
+				candidate := time.Date(year, month, day, 12, 0, 0, 0, time.UTC)
+				if candidate.Year() != year || candidate.Month() != month || candidate.Day() != day {
+					continue
+				}
+				if slot, ok := slotOnDate(candidate, s, loc, local); ok {
+					return slot, true
+				}
+			}
 		}
 	}
 	return time.Time{}, false

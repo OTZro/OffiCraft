@@ -59,60 +59,48 @@ const dailyLookbackDays = 3
 // zone deleted, so the answer is a week earlier again.
 const weeklyLookbackDays = 14
 
-// customLookbackDays bounds how far back a `custom` schedule scans for a date
-// whose day-of-month is in CustomDays.
+// customYearsBack and customLeapDayYearsBack bound the CALENDAR DERIVATION the
+// `custom` cadence uses instead of a scan window. There is no lookback window
+// here any more, and the two numbers below are derived rather than chosen:
 //
-// 🔴 Why 70 and not something smaller: custom_days may name a SINGLE day, and
-// the longest gap between two dates that actually exist is 31 January → 31
-// March — February has no 31st, so that occurrence is skipped entirely — which
-// is 59 days. 70 leaves headroom over that worst case without letting the loop
-// grow expensive: every candidate day costs at most one firstReadingOn probe
-// plus the hour×minute enumeration, and only days actually listed in
-// CustomDays are probed at all.
+// 🔴 WHY A WINDOW COULD NOT BE MADE TO WORK, since a window is the obvious
+// shape and round 1 shipped one (customLookbackDays = 70). A window has to be
+// at least as wide as the longest gap between two occurrences, and the MONTH
+// set (round 2) makes that gap unbounded in the only direction that matters:
+// months {1} × days {1} occurs once a YEAR, and months {2} × days {29} can go
+// EIGHT years between occurrences (2096 → 2104, because 2100 is not a leap
+// year). A 70-day window therefore answered "no slot" for a slot that
+// genuinely happened, which made mostRecentSlot NOT MONOTONIC in `now` — the
+// property the header below says the whole feature rests on. That was not a
+// theoretical hole: months {1} × days {1} reports its slot at day+70 and
+// reports NOTHING at day+71.
 //
-// ⚠️ ROUND 2 PUT A FLOOR UNDER THIS CONSTANT, AND NOBODY DECIDED TO — it is a
-// side effect of the month tests, so measure before you touch it rather than
-// trusting this paragraph. Measured by lowering the constant and running
-// `-run 'TestCustom|TestScheduled|TestMostRecent|TestTZSweep|TestPatchingMonths'`
-// with a cleared test cache: 40 and 55 each turn TWO tests red
-// (TestCustomCrossesAMonthBoundaryToTheRightSlot/in_an_included_month_before_its_reading
-// and TestTZSweepFindsNothing), 60 is green — so the smallest green value is
-// somewhere in 56..60 and was not narrowed further.
+// WHAT REPLACES IT. The candidate dates are enumerated straight out of the
+// month × day sets, newest first, so only dates the schedule actually names
+// are ever probed. The per-date resolver (customSlotOn) is untouched, which is
+// what keeps every DST decision this feature argued about exactly where it was.
 //
-// ⚠️ AND THE COST OF THIS BOUND IS NOT "NO SLOT WAS DUE ANYWAY". That was true
-// in round 1, where a window shorter than the longest day-gap only ever hid an
-// interval containing no occurrence. With months in the picture a REAL past
-// occurrence can sit outside the window (months {1,2} × days {31} is the
-// sweep's own fixture), and then mostRecentSlot answers "no slot" for a slot
-// that genuinely happened — which is also why it is not monotonic in `now` over
-// spans longer than this window. What is unchanged is the DELIVERY outcome, for
-// the compositional reason set out below; do not shorten that back into a claim
-// about slots not existing. Contrast monthlyLookbackMonths next door, where an
-// insufficient bound really does stop a schedule from ever firing and a named
-// test says so.
+// 🔴 THE BOUND IS A PROOF, NOT HEADROOM. Any feasible (month, day) pair that
+// is not (2, 29) exists in EVERY year — 31 January, 30 April and 28 February
+// are all annual — so the previous occurrence is at most one year back and
+// scanning the current year plus one is already exhaustive. customYearsBack is
+// 2, and the extra year is the only part that is headroom: it absorbs a year
+// whose one declared date the zone happens to delete outright.
 //
-// ⚠️ THE MONTH SET (round 2) MAKES THE WORST-CASE GAP FAR LARGER THAN 70 DAYS
-// AND THE CONSTANT IS DELIBERATELY NOT RAISED. months {1} × days {1} has a gap
-// of a whole year, so for most of that year mostRecentSlot answers "no slot" —
-// the previous occurrence is out of the window. That does NOT strand the
-// schedule, and the reason is that the SAME function answers both questions
-// this feature asks: currentSlotKey seeds a new schedule's cursor with it, and
-// the tick fires from it. A slot the window cannot reach is therefore invisible
-// to both, consistently — the cursor is seeded empty (which fires at the next
-// real slot, per slotIsAfterCursor) and the tick delivers nothing until that
-// slot actually arrives, at which point it is zero days back and plainly in
-// range. Past slots only ever move FURTHER out of the window as time advances,
-// so nothing can drift back into range and fire late.
+// (2, 29) is the sole exception, and its gap is fixed by the Gregorian rule:
+// four years normally, EIGHT across a century that is not a leap year (1900,
+// 2100, 2200). customLeapDayYearsBack is 9 for the same reason, one year of
+// headroom over a bound that is otherwise exact.
 //
-// 🔴 THIS IS AN ASSERTION ABOUT COMPOSITION, NOT A MEASURED PROPERTY, AND IT IS
-// THE ONE THING TO RE-DERIVE IF A THIRD CALLER OF mostRecentSlot APPEARS. What
-// the bound really costs is a STALE catch-up: come back from downtime longer
-// than the window and the occurrence missed during it is not delivered late.
-// That is already this feature's stated behaviour (missed slots are not
-// backfilled), which is why the window was not grown to a year — a year of
-// lookback would enlarge no promise and would make every tick of every
-// month-filtered schedule walk 365 dates.
-const customLookbackDays = 70
+// ⚠️ THESE ARE STILL TRUNCATIONS, AND HERE IS WHAT WOULD MAKE THEM BITE: a
+// zone that deletes every declared date of a schedule for customYearsBack
+// CONSECUTIVE years. No tzdata release does anything of the kind — deletions
+// are single dates around a date-line move — but that, and not "is the number
+// big enough", is the condition to re-derive against.
+const (
+	customYearsBack        = 2
+	customLeapDayYearsBack = 9
+)
 
 // mostRecentSlot returns the latest slot of s at or before now, computed as
 // WALL-CLOCK TIME IN s.Timezone — never in the host's zone, never in UTC.
@@ -124,12 +112,25 @@ const customLookbackDays = 70
 // runScheduledMessageTick nonetheless refuses to move the cursor backwards, so a
 // future non-monotonic answer costs a delivery rather than duplicating one.
 //
+// ⚠️ THE THREE CALENDAR CADENCES EARN IT THROUGH A WINDOW, WHICH IS ONLY SOUND
+// WHILE THE WINDOW EXCEEDS THE LONGEST GAP BETWEEN OCCURRENCES. daily, weekly
+// and monthly each have AT MOST ONE reading per day/week/month, so their gaps
+// are bounded by the calendar and their constants are sized against a stated
+// worst case. `custom` is the one whose gap is not bounded that way, and it
+// therefore derives its candidates from the calendar instead — see
+// customYearsBack.
+//
 // ok=false means "no slot exists", which happens in exactly these ways, all of
 // which the caller must treat as "do not deliver":
 //   - s.Timezone will not load (see the 🔴 in ValidateScheduledMessageTimezone:
 //     there is NO fallback zone, here or anywhere else in this feature);
-//   - no date within the cadence's lookback exists in both the calendar and the
-//     zone (a 31st in February; a calendar day the zone deleted outright);
+//   - for daily/weekly/monthly, no date within the cadence's lookback exists in
+//     both the calendar and the zone (a 31st in February; a calendar day the
+//     zone deleted outright);
+//   - for `custom`, no date the sets name exists in both the calendar and the
+//     zone within the derived bound — including the case where NO (month, day)
+//     pair is possible at all (months {2} × days {30}), which is refused at
+//     write time and answered here without one zone lookup;
 //   - a cadence outside the closed set.
 func mostRecentSlot(s ScheduledMessage, now time.Time) (time.Time, bool) {
 	loc, err := time.LoadLocation(s.Timezone)
@@ -180,36 +181,7 @@ func mostRecentSlot(s ScheduledMessage, now time.Time) (time.Time, bool) {
 		return time.Time{}, false
 
 	case ScheduledMessageCadenceCustom:
-		anchor := dayAnchor(local)
-		for back := 0; back <= customLookbackDays; back++ {
-			day := anchor.AddDate(0, 0, -back)
-			// Membership is decided DATE BY DATE, walking real calendar dates:
-			// a listed day the month does not contain simply never comes up,
-			// and the month's OTHER listed days are unaffected — [1,15,31] in
-			// February fires on the 1st and the 15th and has no 31st. The day
-			// is never clamped onto the month's last date, which is the same
-			// RFC 5545 rule `monthly` follows; `monthly` names a single day, so
-			// for it that rule reads as "the whole month is skipped", and that
-			// phrasing does not carry over to a set.
-			//
-			// The MONTH test (round 2) is one more condition on the same date,
-			// asked first because it is the cheapest way to skip a whole month
-			// of candidate days. It composes with CustomDays rather than
-			// overriding it: months {2} × days {29} names 29 February and
-			// therefore fires in leap years only — the 29th is simply a date
-			// the other three Februaries do not have, which is the day-by-day
-			// rule above, not a new one.
-			if !intSetContains(s.CustomMonths, int(day.Month())) {
-				continue
-			}
-			if !intSetContains(s.CustomDays, day.Day()) {
-				continue
-			}
-			if slot, ok := customSlotOn(day, s, loc, local); ok {
-				return slot, true
-			}
-		}
-		return time.Time{}, false
+		return mostRecentCustomSlot(s, loc, local)
 	}
 	// A cadence outside the closed set produces no slot — that half is
 	// deliberate and unchanged. What is NOT acceptable is doing it in silence:
@@ -217,6 +189,100 @@ func mostRecentSlot(s ScheduledMessage, now time.Time) (time.Time, bool) {
 	// exactly like a schedule working correctly. One log line is the whole
 	// remedy; the trigger behaviour is untouched.
 	schedLog("skip %s: unknown cadence %q — this schedule can never fire", s.ID, s.Cadence)
+	return time.Time{}, false
+}
+
+// mostRecentCustomSlot answers mostRecentSlot's question for the `custom`
+// cadence by DERIVING the candidate dates from the calendar, newest first,
+// instead of scanning backwards a day at a time hoping to meet one.
+//
+// 🔴 WHAT DID NOT CHANGE, because it is the part every DST ruling lives in:
+// each candidate date is still resolved by customSlotOn, with the same
+// arguments and the same notAfter. A wall reading the zone skipped is still
+// SKIPPED rather than searched forward; a repeated reading still reconstructs
+// to one instant and fires once; a date the zone deleted outright still costs
+// that date and nothing else. The only thing this function decides is WHICH
+// DATE IS ASKED NEXT — and the answer is no longer "yesterday", it is "the next
+// date this schedule actually names".
+//
+// The enumeration is descending year, then descending month, then descending
+// day, which for real calendar dates IS descending date order — so the first
+// candidate that yields a slot is the most recent one, the same reason the
+// day-at-a-time scan could stop at its first hit.
+//
+// Membership is still decided DATE BY DATE: a listed day the month does not
+// contain simply never becomes a candidate, and the month's OTHER listed days
+// are unaffected — [1,15,31] in February fires on the 1st and the 15th and has
+// no 31st. The day is never clamped onto the month's last date (the RFC 5545
+// rule `monthly` follows; `monthly` names a single day, so for it that rule
+// reads as "the whole month is skipped", and that phrasing does not carry over
+// to a set). months {2} × days {29} is that same rule read across years: 29
+// February is a date three Februaries in four do not have, so the schedule
+// fires in leap years only.
+//
+// 🔴 THE FEASIBILITY PRE-CHECK IS A GUARD, NOT AN OPTIMISATION. A set pair no
+// calendar can satisfy (months {2} × days {30}) has ZERO candidate dates, so
+// without it the loop would run its full year bound producing nothing — but
+// worse, the check is what lets the bound below be stated as a proof: the
+// no-pair case is answered separately, so every remaining schedule provably has
+// an occurrence within customYearsBack. It shares maxDaysInMonth with the write
+// seam (ValidateScheduledMessageCustomSets) rather than carrying a second
+// hand-written copy of the calendar, and TestCustomFeasibilityPrecheckAgrees-
+// WithTheCalendar holds that shared judgement to a brute-force scan over all
+// 12 × 31 pairs — a mistake here would silence a legal schedule, quietly.
+//
+// An empty set is refused at write time; a row that reached the table with one
+// (written straight into the database) has no readings at all, so it is
+// answered here without a zone lookup and — as before — without a log line.
+func mostRecentCustomSlot(s ScheduledMessage, loc *time.Location, local time.Time) (time.Time, bool) {
+	months, days := sortedIntSet(s.CustomMonths), sortedIntSet(s.CustomDays)
+	if len(months) == 0 || len(days) == 0 || len(s.CustomHours) == 0 || len(s.CustomMinutes) == 0 {
+		return time.Time{}, false
+	}
+	feasible, onlyLeapDay := false, true
+	for _, m := range months {
+		for _, d := range days {
+			if d > maxDaysInMonth(m) {
+				continue
+			}
+			feasible = true
+			if m != 2 || d != 29 {
+				onlyLeapDay = false
+			}
+		}
+	}
+	if !feasible {
+		return time.Time{}, false
+	}
+	yearsBack := customYearsBack
+	if onlyLeapDay {
+		yearsBack = customLeapDayYearsBack
+	}
+	for year := local.Year(); year >= local.Year()-yearsBack; year-- {
+		for mi := len(months) - 1; mi >= 0; mi-- {
+			month := time.Month(months[mi])
+			if year == local.Year() && month > local.Month() {
+				continue // still ahead of `now`
+			}
+			for di := len(days) - 1; di >= 0; di-- {
+				day := days[di]
+				if year == local.Year() && month == local.Month() && day > local.Day() {
+					continue // still ahead of `now`
+				}
+				// Does the MONTH have this day? Asked exactly as slotAt asks
+				// it — construct and compare every component, because
+				// time.Date NORMALISES 31 February into 3 March rather than
+				// refusing it.
+				candidate := time.Date(year, month, day, 12, 0, 0, 0, time.UTC)
+				if candidate.Year() != year || candidate.Month() != month || candidate.Day() != day {
+					continue
+				}
+				if slot, ok := customSlotOn(candidate, s, loc, local); ok {
+					return slot, true
+				}
+			}
+		}
+	}
 	return time.Time{}, false
 }
 
