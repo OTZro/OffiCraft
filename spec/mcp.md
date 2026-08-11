@@ -101,14 +101,17 @@ The catalog is NOT a hand-maintained list: it MUST be derived from the authorita
 per-operation definitions, keeping every operation **not** excluded, in declared order.
 Today that authority is the `x-mcp` block carried by each operation in `spec/openapi.json`:
 `include: true` puts the operation on the tool surface and `order` fixes its position;
-`include: false` keeps it off (ops probes, login/mint, the SSE stream, installer/binary, the
-MCP endpoint itself). That included set mirrors the implementation's single route table
-(the rows **not** flagged `mcp_exclude`), and `server/ocserverd/spec_catalog_conformance_test.go`
-confronts the route table, `spec/openapi.json` and the catalog against each other so the
-three cannot disagree in silence. **Counts are deliberately not written down here** — how the
-committed catalog is produced and pinned is §5; the numbers come from re-running those tools.
-At M1 freeze this yielded **37 tools** (of 54 route rows; 17 `mcp_exclude`) — a historical
-figure, not today's.
+`include: false` keeps it off. That included set mirrors the implementation's single route
+table (the rows **not** flagged `mcp_exclude`). Two tests hold the three sources together and
+they cover different things: `TestMcpToolIndexMatchesFrozenCatalog`
+(`server/ocserverd/mcp_test.go`) pins the tool-NAME set of the route table and the catalog to
+be equal, while `server/ocserverd/spec_catalog_conformance_test.go` walks the route table into
+`spec/openapi.json` and the catalog to compare each tool's parameter names. ⚠️ **That second
+walk is one-directional** (route table → catalog), and it skips any parameter listed in its
+`knownCatalogDrift` / `openapiOverweight` / `deliberatelyOffMCP` maps — a disagreement written
+into one of those maps is silenced by design, so read them before trusting a green run.
+**Counts are deliberately not written down here** — how the committed catalog is produced and
+pinned is §5.
 
 Each tool descriptor is exactly:
 
@@ -149,8 +152,8 @@ drifting list).
 - **A byte-diff gate stops the committed file going stale.** `make drift-mcp-catalog`
   re-renders into a temp file and `diff -u`s it against the committed bytes — wired into
   `bin/ci.sh` and into the drift cell of `.github/workflows/ci.yml`. A **separate** guard,
-  `bin/tests/mcp-catalog-generator.sh` (dispatched from `bin/tests/run.sh`), drives the
-  generator with mutated inputs and requires it to refuse the lie. The two answer different
+  `bin/tests/mcp-catalog-generator.sh` (dispatched from `bin/tests/run.sh`), exercises the
+  generator itself against mutated inputs. The two answer different
   questions — *has the committed file drifted from its source* vs *is the generator still
   honest* — and neither substitutes for the other: a provably correct generator still leaves
   a stale catalog on disk if nobody re-runs it, and that stale file is what the wire serves.
@@ -164,9 +167,9 @@ drifting list).
 - ⚠️ **Transitional (T-2590):** `x-mcp.legacy.descriptor` still carries each tool's
   descriptor as a verbatim JSON fragment, which is what makes the render byte-identical to
   the catalog frozen at M1. Until those fragments are unfolded into real derivation from the
-  DTO/param definitions, changing a tool's wire shape means editing that fragment — the
-  generator cross-checks it against `x-mcp.name` / `x-mcp.description` and refuses when they
-  disagree, so the two cannot silently diverge.
+  DTO/param definitions, changing a tool's wire shape means editing that fragment. The
+  generator cross-checks the fragment's `name` and `description` against `x-mcp` and refuses
+  when those disagree; it does **not** look inside the fragment's `inputSchema`.
 - JSON key order within an object is not significant on the live wire; the committed file
   is kept sorted-key/2-space/trailing-newline so it byte-diffs cleanly by hand.
 
