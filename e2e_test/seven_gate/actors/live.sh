@@ -54,6 +54,7 @@ SG="$HERE/.."
 . "$SG/lib/friction.sh"
 . "$SG/lib/window.sh"
 . "$SG/lib/ownedkill.sh"
+. "$SG/lib/scrub.sh"
 
 say() { printf '[actor:live] %s\n' "$*"; }
 die() { printf '[actor:live] FATAL: %s\n' "$*" >&2; exit 2; }
@@ -186,7 +187,22 @@ say "starting ocwarden run (this is the process that will spawn claude)"
 # may legitimately carry either or both. Passing only the one we happened to pin
 # would make the warden fall back to PATH for the other — which under launchd is
 # exactly the empty PATH that caused the historical boot-death.
-env -u OC_WARDEN_TOKFILE \
+# 🔴 AND THE HARNESS'S OWN NAMESPACE COMES OFF HERE — this is the ONE hop where
+# it can. `ocwarden run` execs without setting cmd.Env, so the child inherits
+# os.Environ(), and the tmux session it opens inherits that in turn: whatever is
+# in THIS process's environment when the line below runs ends up one `env` away
+# from the real agent. It used to be everything — ②'s scene nonce, ⑧'s peer
+# nonce, ⑨'S ANSWER, and SG_TOKEN (the owner's). A blind agent could have read
+# the number and produced a green indistinguishable from a real one.
+# lib/scrub.sh removes the whole OC_SG_*/SG_* namespace rather than three named
+# secrets (the next secret would be added by someone who never reads this), and
+# sg_scrub_assert PROVES the removal — with a positive control — before anything
+# is spawned. Nothing below the warden needs a harness variable: everything the
+# warden legitimately gets is named on this very line.
+sg_scrub_assert "${OC_SG_IMAGE_ANSWER:-}" "${OC_SG_SCENE_NONCE:-}" \
+                "${OC_SG_PEER_NONCE:-}" "${OWNER_TOK}" \
+  || die "the environment scrub could not be proven, so the warden was not started and nothing has been spent. A live run must not hand the agent the answers to ②⑧⑨."
+sg_scrub_env env -u OC_WARDEN_TOKFILE \
     OC_BASE="$BASE" OC_TOKEN="$MACHINE_TOK" OC_ID="$MACHINE" \
     OC_CLAUDE_BIN="$CLAUDE_BIN" OC_CODEX_BIN="$CODEX_BIN" \
     OC_NAMESPACE="$OC_SG_NAMESPACE" \

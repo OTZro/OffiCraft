@@ -1584,68 +1584,135 @@ mkdir -p "$SG_WORK"
 # The full-green bundle, as a python emitter so a mutant is one deleted key.
 # `python3` here is the same text-tool use lib/common.sh already makes of it.
 cat > "$SG_WORK/mk.py" <<'PY'
-import json, os, sys
+import hashlib, json, os, sys
 drop, out = sys.argv[1], sys.argv[2]
 AG, NONCE = "m-sg", "sg-nonce-deadbeef"
 PEER, PEER_NONCE = "m-sg-peer", "sg-peer-nonce-feedface"
-IMG_ANSWER = "481902"   # the number that, in a real run, exists only in pixels
-# TWO steps, because ⑤ is about ADVANCING a plan and a one-step plan cannot
-# express the difference. The step_done mutant is the REAL exposure this fixture
-# exists to pin, and it is not "no step is done": it is the shape measured on a
-# live stub run with OC_SG_SKIP_STEP=step_done — the FIRST step never moves while
-# the LAST one is driven to done by the closing act. The old ⑤ ("any step is
-# done") passed on exactly this. Note what else this mutant is: closeout_reported
-# stays TRUE, so it is a bundle where ⑤ is red AND ⑦ is green — the world the old
-# ⑤ could not construct, which is why it had no discriminating power at all.
-step0 = {"id": "s1", "name": "走完七步", "order_idx": 0,
-         "status": "todo" if drop == "step_done" else "done",
-         "started_ts": 0 if drop == "step_done" else 140.0,
-         "finished_ts": 0 if drop == "step_done" else 150.0}
-step1 = {"id": "s2", "name": "回報收尾", "order_idx": 1, "status": "done",
-         "started_ts": 170.0, "finished_ts": 180.0}
-task = {"id": "T-1", "creator_id": AG, "title": "probe", "created_ts": 100,
-        "updated_ts": 200, "status": "done",
-        "steps": [] if drop == "submit_plan" else [step0, step1],
-        "closeout_reported": drop != "closeout"}
+IMG_ANSWER, IMG_SALT = "481902", "sg-salt-c0ffee"
+REPLAN = os.environ.get("SG_REPLAN") == "1"
+
+# ── the plan, and the TWO SHAPES OF IT THE JOURNAL SEES ─────────────────────
+# ⑤ is a TIME fact now ("a step was done while the task was still open"), so the
+# fixture has to be a time series and not one final snapshot. Two versions of
+# the same task row are therefore emitted: a MID-FLIGHT one (step0 done, no
+# close-out) and a FINAL one (everything done, close-out reported).
+#
+# The step_done mutant is the real exposure this fixture exists to pin, and it
+# is now a state the SERVER CAN ACTUALLY PRODUCE: the mid-flight sample shows
+# the task open with NOTHING done yet, and the final sample shows the whole plan
+# done with the close-out already reported — i.e. the plan was back-filled in one
+# go at the close. closeout_reported stays TRUE, so it is a bundle where ⑤ is red
+# and ⑦ is green.
+# ⚠️ THE PREVIOUS VERSION OF THIS FIXTURE WAS NOT REACHABLE and therefore proved
+# nothing: it asserted step0.status="todo" together with task.status="done" and
+# closeout_reported=true, and DeriveTaskStatus cannot derive `done` while a step
+# is not done. It demonstrated that the predicate could be falsified, not that
+# the world it described exists.
+def step(i, name, status, fin):
+    return {"id": "s%d" % i, "name": name, "order_idx": i - 1, "status": status,
+            "started_ts": max(0.0, fin - 10.0) if fin else 0, "finished_ts": fin}
+
+if REPLAN:
+    # 21b-iii's world: the agent RE-PLANNED (submit_plan froze a node it did not
+    # re-list into `superseded`, and ReplaceTaskPlan leaves it in place,
+    # renumbered) and the two live nodes are a PARALLEL pair that finished
+    # backwards. Both are ordinary server behaviour; both used to be red.
+    mid_steps = [step(1, "被取代的舊節點", "superseded", 190.0),
+                 step(2, "並行 A", "done", 175.0),
+                 step(3, "並行 B", "in_progress", 0)]
+    final_steps = [step(1, "被取代的舊節點", "superseded", 190.0),
+                   step(2, "並行 A", "done", 175.0),
+                   step(3, "並行 B", "done", 160.0)]
+else:
+    mid_steps = [step(1, "走完七步", "in_progress" if drop == "step_done" else "done",
+                      0 if drop == "step_done" else 150.0),
+                 step(2, "回報收尾", "in_progress", 0)]
+    final_steps = [step(1, "走完七步", "done", 150.0),
+                   step(2, "回報收尾", "done", 180.0)]
+
+def task_row(steps, updated, status, closed):
+    return {"id": "T-1", "creator_id": AG, "title": "probe", "created_ts": 100,
+            "updated_ts": updated, "status": status,
+            "steps": [] if drop == "submit_plan" else steps,
+            "closeout_reported": closed}
+
+mid = task_row(mid_steps, 150, "in_progress", False)
+final = task_row(final_steps, 200, "done", drop != "closeout")
 # The scratch ticket: same creator, EARLIER created_ts, no plan on it. Nothing
 # on the server distinguishes it from the real one.
 draft = {"id": "T-0-draft", "creator_id": AG, "title": "草稿", "created_ts": 50,
          "updated_ts": 60, "status": "not_started", "steps": [],
          "closeout_reported": False}
+# 🔴 THE THIRD-PARTY ROW, AND IT IS NOW REALLY HERE. The comment that used to sit
+# on this line said "A THIRD-PARTY TASK ROW is always present: ③ must key on
+# creator_id, not on 'a task exists'" — and there was no such row in the fixture,
+# so relaxing ③'s `creator_id == agent` to `True` left the whole suite at
+# PASS=268 FAIL=0, silent (MEASURED). It is EARLIER than both of the agent's
+# tickets and carries no plan, so a creator-blind judge picks it as "the
+# earliest task" and ④ goes red — which is what makes the relaxation loud.
+other = {"id": "T-other", "creator_id": "m-someone-else", "title": "別人的票",
+         "created_ts": 10, "updated_ts": 20, "status": "in_progress",
+         "steps": [], "closeout_reported": False}
+def tasks_at(row):
+    # The third-party row is present in EVERY sample, including the create_task
+    # mutant's — that mutant must go red because no row carries the agent's id,
+    # not because the server happened to hold no tasks at all.
+    if drop == "create_task":
+        return [other]
+    return [other] + ([draft] if os.environ.get("SG_DRAFT") == "1" else []) + [row]
+
+# 🔴 THE OWNER'S OWN CARD, AND IT IS NOW REALLY HERE — FIRST in the list, so a
+# judge that stops keying on `from == agent` finds it instead. judge.py ⑥ says
+# "a card the harness opened on its behalf proves nothing, which is why the
+# initiator is checked"; with only the agent's card in the fixture, relaxing that
+# check to `True` was silent (MEASURED: PASS=268 FAIL=0).
+owner_card = {"id": "rc-owner", "from": "owner", "status": "waiting"}
+cards_final = [owner_card] + ([] if drop == "reply_card" else
+                              [{"id": "rc-1", "from": AG, "status": "waiting"}])
+
+chat_final = (
+    ([] if drop == "resume_scene" else
+     [{"id": "c1", "from": AG, "to": "owner", "body": "接回現場：" + NONCE}])
+    # 🔴 THE OWNER-ADDRESSED MESSAGE THAT CARRIES THE PEER'S NONCE. ⑧ is two
+    # different claims — `to == peer` ("it talked to a colleague at all", which
+    # judge.py calls the half the owner asked for) and the nonce ("it was a
+    # reply"). Dropping `to == peer` while keeping the nonce check used to be
+    # silent (MEASURED: PASS=268 FAIL=0) because nothing in the fixture quoted
+    # the peer's nonce anywhere but in a message to the peer. This row is an
+    # agent that reports UPWARD about the colleague without ever answering the
+    # colleague, and ⑧ must not accept it.
+    + [{"id": "c1b", "from": AG, "to": "owner",
+        "body": "我看到隔壁那條線的記號了：" + PEER_NONCE + "，稍後處理。"}]
+    # ⑧'s fact: agent → PEER, quoting what the peer said.
+    + ([] if drop == "peer_message" else
+       [{"id": "c2", "from": AG, "to": PEER, "body": "收到：" + PEER_NONCE}])
+    # ⑨'s fact: the agent SAID the number that only the picture carries.
+    + ([] if drop == "image_answer" else
+       [{"id": "c3", "from": AG, "to": "owner",
+         "body": "圖上的號碼是 " + IMG_ANSWER}]))
+
 samples = [
-    {"t": 1.0, "member": {"id": AG, "presence": "offline"}, "chat": [], "tasks": [], "reply_cards": []},
+    {"t": 1.0, "member": {"id": AG, "presence": "offline"},
+     "chat": [], "tasks": [other], "reply_cards": [owner_card]},
     {"t": 2.0,
      "member": {"id": AG, "presence": "online" if drop == "report_waking" else "waking"},
-     "chat": [], "tasks": [], "reply_cards": []},
+     "chat": [], "tasks": [other], "reply_cards": [owner_card]},
+    # MID-FLIGHT: the task is open and (unless the step_done mutant is on) one
+    # step is already done. This sample is ⑤'s entire evidence.
+    {"t": 5.0, "member": {"id": AG, "presence": "online"},
+     "chat": [], "tasks": tasks_at(mid), "reply_cards": [owner_card]},
     {"t": 9.0, "member": {"id": AG, "presence": "online"},
-     "chat": ([] if drop == "resume_scene" else
-              [{"id": "c1", "from": AG, "to": "owner", "body": "接回現場：" + NONCE}])
-             # ⑦'s fact: agent → PEER, quoting what the peer said. The mutant
-             # drops the whole message; note it is a DIFFERENT recipient from
-             # c1, so a judge that only checked `from == agent` would keep
-             # passing on c1 alone and this mutant would go green.
-             + ([] if drop == "peer_message" else
-                [{"id": "c2", "from": AG, "to": PEER,
-                  "body": "收到：" + PEER_NONCE}])
-             # ⑨'s fact: the agent SAID the number that only the picture carries.
-             # The mutant is the real-world "the picture had no answer in it / the
-             # agent never opened it" case — the message simply never appears.
-             + ([] if drop == "image_answer" else
-                [{"id": "c3", "from": AG, "to": "owner",
-                  "body": "圖上的號碼是 " + IMG_ANSWER}]),
-     # A THIRD-PARTY TASK ROW is always present: ③ must key on creator_id, not
-     # on "a task exists". And with SG_DRAFT=1 the agent ALSO opened an earlier,
-     # empty scratch ticket — the shape that makes ③ point at the wrong row and
-     # ④⑤⑦ go red for the harness's reason (see judge.py ③).
-     "tasks": [] if drop == "create_task" else
-              ([draft] if os.environ.get("SG_DRAFT") == "1" else []) + [task],
-     "reply_cards": [] if drop == "reply_card" else
-                    [{"id": "rc-1", "from": AG, "status": "waiting"}]},
+     "chat": chat_final, "tasks": tasks_at(final), "reply_cards": cards_final},
 ]
 os.makedirs(out, exist_ok=True)
+# scene.json carries salt+sha256, never the number — see judge.py's header and
+# seven_gate/run.sh 3c-bis.
 json.dump({"agent_id": AG, "scene_nonce": NONCE,
            "peer_id": PEER, "peer_nonce": PEER_NONCE,
-           "image_answer": IMG_ANSWER},
+           "image_answer_salt": IMG_SALT,
+           "image_answer_len": len(IMG_ANSWER),
+           "image_answer_sha256":
+               hashlib.sha256((IMG_SALT + IMG_ANSWER).encode("utf-8")).hexdigest()},
           open(out + "/scene.json", "w"))
 with open(out + "/journal.ndjson", "w") as fh:
     for s in samples:
@@ -1691,14 +1758,20 @@ sg_mutant closeout      回報收尾
 sg_mutant peer_message  回覆另一個-agent
 sg_mutant image_answer  看得到圖
 
-# 21b-i) ⑤ HAS DISCRIMINATING POWER OF ITS OWN — the property the old cell did
-# not have. ⑤ used to ask "does ANY step carry done", and ⑦ (closeout) is
-# terminal-tasks-only while a task is terminal only when EVERY step is done
-# (domain.go DeriveTaskStatus) — so ⑦ green IMPLIED ⑤ green, and no bundle could
-# exist where ⑤ was red and ⑦ was not. MEASURED before the fix, on a live stub
-# run: OC_SG_SKIP_STEP=step_done left ⑤ PASS and put the red on ⑦.
-# The step_done fixture above IS that bundle now (its closeout_reported stays
-# true), so this asserts the two halves separately: ⑤ red, ⑦ green, same run.
+# 21b-i) ⑤ HAS DISCRIMINATING POWER OF ITS OWN, AND IN A REACHABLE WORLD.
+# ⑤ used to ask "does ANY step carry done", and ⑦ (closeout) is terminal-only
+# while a task is terminal only when every non-superseded step is done
+# (DeriveTaskStatus) — so ⑦ green IMPLIED ⑤ green and no bundle could exist where
+# ⑤ was red and ⑦ was not. The prefix/ordering version that replaced it bought
+# almost nothing back (with ⑦ green the prefix half is true by construction) and
+# was RED ON REPLAN AND ON PARALLEL — see 21b-iii.
+# ⑤ now reads a TIME fact: was the task ever OBSERVED carrying a done step while
+# it had not yet reported its close-out. ⑦ reads the last state only and can say
+# nothing about the states passed through, so the two are independent — and the
+# bundle that separates them is a plain back-fill: nothing done mid-flight, the
+# whole plan done and closed out in the final sample. Every row of it is a state
+# the server can produce, which the previous fixture (step todo + task done) was
+# not.
 _sg_v="$SG_WORK/b-step_done/verdict.json"
 _sg_pair="$(python3 -c '
 import json, sys
@@ -1706,6 +1779,80 @@ v = {r["key"]: r["passed"] for r in json.load(open(sys.argv[1]))}
 print("%s|%s" % (v.get("step_done"), v.get("closeout")))' "$_sg_v" 2>/dev/null)"
 check "seven_gate: ⑤ can be RED while ⑦ is GREEN — the cell is independently falsifiable, not implied by the close-out" \
   "False|True" "$_sg_pair"
+# …and the bundle it says that about must be REACHABLE. The old one asserted a
+# `todo` step on a `done` task, which DeriveTaskStatus cannot produce: it proved
+# the predicate was falsifiable, not that the world existed.
+_sg_reach="$(python3 -c '
+import json, sys
+last = None
+for line in open(sys.argv[1]):
+    line = line.strip()
+    if line:
+        last = json.loads(line)
+for t in last.get("tasks") or []:
+    if t.get("id") != "T-1":
+        continue
+    bad = [s for s in t.get("steps") or []
+           if t.get("status") == "done" and s.get("status") not in ("done", "superseded")]
+    print("unreachable" if bad else "reachable")
+    break
+else:
+    print("no-task")' "$SG_WORK/b-step_done/journal.ndjson" 2>/dev/null)"
+check "seven_gate: …and the ⑤-red/⑦-green bundle is a state the server can actually reach (no un-done step on a done task)" \
+  "reachable" "$_sg_reach"
+
+# 21b-iii) ⑤ MUST NOT BE RED ON THE TWO THINGS THE SERVER DOES ON PURPOSE.
+# This is the other half of 21b-i and it is the half that was broken: a bundle
+# with (a) a `superseded` replan record sitting BEFORE later work — exactly where
+# ReplaceTaskPlan leaves it, renumbered, while DeriveTaskStatus/TaskProgress skip
+# it — and (b) two parallel nodes whose finished_ts run BACKWARDS along
+# order_idx, which SPEC §3.1 permits by construction. Both are what a correct
+# agent produces; both were a deterministic RED that named the agent.
+rm -rf "$SG_WORK/b-replan"
+SG_REPLAN=1 python3 "$SG_WORK/mk.py" none "$SG_WORK/b-replan" >/dev/null 2>&1
+# The fixture has to really contain both shapes, or this case is a green that
+# proves nothing.
+_sg_rp_shape="$(python3 -c '
+import json, sys
+last = [json.loads(l) for l in open(sys.argv[1]) if l.strip()][-1]
+t = [x for x in last["tasks"] if x["id"] == "T-1"][0]
+sup = [s for s in t["steps"] if s["status"] == "superseded"]
+done = [s for s in t["steps"] if s["status"] == "done"]
+fts = [s["finished_ts"] for s in sorted(done, key=lambda s: s["order_idx"])]
+back = any(a > b for a, b in zip(fts, fts[1:]))
+first_is_sup = t["steps"][0]["status"] == "superseded"
+print("%s|%s|%s" % (bool(sup) and first_is_sup, back, t.get("closeout_reported")))
+' "$SG_WORK/b-replan/journal.ndjson" 2>/dev/null)"
+check "seven_gate: the replan/parallel fixture really carries a leading superseded row AND backwards finished_ts" \
+  "True|True|True" "$_sg_rp_shape"
+_sg_rp_out="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-replan" 2>&1)"; _sg_rp_rc=$?
+check "seven_gate: a replanned plan with a parallel group finishing out of order is GREEN (⑤ is not red on correct agent behaviour)" \
+  "0" "$_sg_rp_rc"
+case "$(printf '%s\n' "$_sg_rp_out" | tail -n 1)" in
+  "[seven_gate] all green") ok "seven_gate: …and it is green on the marker, not by accident" ;;
+  *) bad "seven_gate: the replan/parallel bundle did not end green: $(printf '%s\n' "$_sg_rp_out" | tail -n 3 | tr '\n' '|')" ;;
+esac
+
+# 21b-iv) THE FIXTURE'S OWN INTEGRITY — three rows whose absence used to make
+# three cells unguarded while the comments claimed otherwise. Each was MEASURED
+# silent: relaxing ③'s creator_id, ⑧'s `to == peer` or ⑥'s `from == agent` to a
+# constant left the whole suite at PASS=268 FAIL=0. The mutants are caught by the
+# per-step cases above ONLY because these rows exist, so they are asserted here
+# by name: deleting one must not be a quiet loss of reach.
+_sg_bundle="$SG_WORK/b-none/journal.ndjson"
+check "seven_gate: the bundle carries a task row from SOMEBODY ELSE (③ must key on creator_id, not on 'a task exists')" \
+  "1" "$(grep -qF 'm-someone-else' "$_sg_bundle" && echo 1 || echo 0)"
+check "seven_gate: the bundle carries a reply card opened by the OWNER (⑥ must key on the initiator, not on the count)" \
+  "1" "$(grep -qF '"rc-owner"' "$_sg_bundle" && echo 1 || echo 0)"
+_sg_upward="$(python3 -c '
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+hit = [m for s in rows for m in (s.get("chat") or [])
+       if m.get("from") == "m-sg" and m.get("to") == "owner"
+       and "sg-peer-nonce-feedface" in (m.get("body") or "")]
+print(1 if hit else 0)' "$_sg_bundle" 2>/dev/null)"
+check "seven_gate: the bundle carries an OWNER-addressed message quoting the peer's nonce (⑧'s 'to == peer' half must be load-bearing)" \
+  "1" "$_sg_upward"
 
 # 21b-ii) ③ TAKES THE EARLIEST TASK, AND THAT IS A GUESS — the one guess in that
 # file. An agent that opens a scratch ticket before the real one gets ④⑤⑦ judged
@@ -2477,6 +2624,90 @@ if [[ -n "$_sg25_detach_line" && -n "$_sg25_setup_line" && "$_sg25_detach_line" 
   ok "carrier: run.sh detaches (code line $_sg25_detach_line) before it starts the isolated server (line $_sg25_setup_line)"
 else
   bad "carrier: run.sh's detach does not precede setup.sh (detach=${_sg25_detach_line:-none} setup=${_sg25_setup_line:-none}) — the run would spend part of its life killable by its caller"
+fi
+
+# ── 26) T-42bb: the answers to ②⑧⑨ must not reach the agent's own shell ──────
+#
+# 🔴 WHAT WAS MEASURED, statically end to end plus the last hop live: run.sh 5
+# exports OC_SG_SCENE_NONCE / OC_SG_PEER_NONCE / OC_SG_IMAGE_ANSWER to the actor;
+# actors/live.sh started the warden with `env -u OC_WARDEN_TOKFILE …` (ONE
+# variable unset); cli/ocwarden's execRunner.Run never sets cmd.Env, so the child
+# inherits os.Environ(); and the tmux `new-session` it issues inherits that in
+# turn — verified on a throwaway socket: a value exported before
+# `tmux -L … new-session -d 'env > f'` is in f. So ⑨'s answer sat one `env` away
+# from the real agent, and ⑨'s own comment says a leak there makes a blind
+# agent's green indistinguishable from a real one. The leak scan could not see
+# it: it read server TEXT only.
+#
+# The fix is in the harness, not in cli/ocwarden (that spawn path is the whole
+# fleet's). lib/scrub.sh removes the harness's entire OC_SG_*/SG_* namespace from
+# the child environment and proves it before the spawn. This case is hermetic: it
+# starts no server, spawns no agent, and works on a COPY of the lib so the mutant
+# can never touch the real one.
+SG26="$SHIMDIR/sg-scrub"; mkdir -p "$SG26"
+SG_SCRUB="$SG_DIR/lib/scrub.sh"
+if [[ ! -f "$SG_SCRUB" ]]; then
+  bad "seven_gate: lib/scrub.sh is gone — nothing is keeping ②⑧⑨'s answers out of the agent's environment"
+else
+  cp "$SG_SCRUB" "$SG26/scrub.sh"
+  # 26a) the child environment is really clean, and the check can really see.
+  _sg26() { # _sg26 <lib> -> "<assert-rc>|<secret hits in child env>|<harness names in child env>"
+    env -i PATH="$PATH" HOME="${HOME:-/tmp}" \
+        OC_SG_IMAGE_ANSWER=481902 OC_SG_SCENE_NONCE=sg-nonce-deadbeef \
+        SG_TOKEN=owner-token-abc \
+        bash -c '
+set -uo pipefail
+. "$1" || exit 9
+sg_scrub_assert "481902" "sg-nonce-deadbeef" "owner-token-abc" >/dev/null 2>&1; a=$?
+h=$(sg_scrub_env printenv | grep -cE "481902|sg-nonce-deadbeef|owner-token-abc" || true)
+n=$(sg_scrub_env printenv | grep -cE "^(OC_SG_|SG_)" || true)
+printf "%s|%s|%s\n" "$a" "$h" "$n"' _ "$1"
+  }
+  check "seven_gate: with the scrub in place, the environment the warden (and therefore the agent) would inherit carries none of ②⑧⑨'s answers" \
+    "0|0|0" "$(_sg26 "$SG26/scrub.sh")"
+  # 26b) MUTANT — the derivation severed, the assertion must REFUSE and NAME it.
+  # Without this, 26a is satisfied by an environment that never had the secrets.
+  sed 's/^sg_scrub_names() {$/sg_scrub_names() { return 0;/' \
+      "$SG26/scrub.sh" > "$SG26/scrub-mut.sh"
+  if ! grep -q 'sg_scrub_names() { return 0;' "$SG26/scrub-mut.sh"; then
+    bad "seven_gate: MUT-noscrub did not apply to lib/scrub.sh — the function signature moved, so case 26b is testing nothing (fix the sed)"
+  else
+    _sg26_mut="$(_sg26 "$SG26/scrub-mut.sh")"
+    check "MUT-noscrub: with the scrub reduced to a no-op, the child environment carries all three answers again" \
+      "3" "$(printf '%s' "$_sg26_mut" | cut -d'|' -f2)"
+    check "MUT-noscrub: …and sg_scrub_assert REFUSES rather than letting the spawn happen" \
+      "1" "$(printf '%s' "$_sg26_mut" | cut -d'|' -f1)"
+    _sg26_msg="$(env -i PATH="$PATH" HOME="${HOME:-/tmp}" OC_SG_IMAGE_ANSWER=481902 \
+      bash -c '. "$1"; sg_scrub_assert "481902" 2>&1' _ "$SG26/scrub-mut.sh")"
+    case "$_sg26_msg" in
+      *OC_SG_IMAGE_ANSWER*) ok "MUT-noscrub: …and it NAMES the variable that survived — $(printf '%s' "$_sg26_msg" | tail -1)" ;;
+      *) bad "MUT-noscrub: the refusal never named what leaked, so it would not tell anyone what to fix: $_sg26_msg" ;;
+    esac
+  fi
+  # 26c) THE POSITIVE CONTROL OF THE POSITIVE CONTROL. A scrub that is asked
+  # about secrets that were never in the environment must refuse too — otherwise
+  # "clean" is reachable by asking the wrong question.
+  _sg26_vac="$(env -i PATH="$PATH" HOME="${HOME:-/tmp}" \
+    bash -c '. "$1"; sg_scrub_assert "not-in-this-environment" >/dev/null 2>&1; echo $?' _ "$SG26/scrub.sh")"
+  check "seven_gate: the scrub refuses when its own control finds nothing (a vacuous 'clean' is not a pass)" \
+    "1" "$_sg26_vac"
+  # 26d) THE WIRING. The lib can be perfect and called from nowhere — which is
+  # exactly what happened to the `env -u OC_WARDEN_TOKFILE` line it replaces.
+  _sg26_code() { grep -v '^[[:space:]]*#' "$1"; }
+  _sg26_live="$SG_DIR/actors/live.sh"
+  _sg26_code "$_sg26_live" | grep -qF 'sg_scrub_assert' \
+    && ok "seven_gate: live.sh proves the scrub in CODE before it starts the warden" \
+    || bad "seven_gate: live.sh no longer calls sg_scrub_assert — the proof is wired to nothing and ⑨'s answer rides into the agent's shell again"
+  _sg26_assert_line="$(_sg26_code "$_sg26_live" | grep -n 'sg_scrub_assert' | head -1 | cut -d: -f1)"
+  _sg26_warden_line="$(_sg26_code "$_sg26_live" | grep -n 'OCWARDEN" run' | head -1 | cut -d: -f1)"
+  if [[ -n "$_sg26_assert_line" && -n "$_sg26_warden_line" && "$_sg26_assert_line" -lt "$_sg26_warden_line" ]]; then
+    ok "seven_gate: …and it proves it BEFORE the warden starts (code line $_sg26_assert_line < $_sg26_warden_line)"
+  else
+    bad "seven_gate: live.sh's scrub proof does not precede the warden start (assert=${_sg26_assert_line:-none} warden=${_sg26_warden_line:-none}) — a refusal after the spawn is not a refusal"
+  fi
+  _sg26_code "$_sg26_live" | grep -qE 'sg_scrub_env[[:space:]]+env' \
+    && ok "seven_gate: …and the warden is actually launched THROUGH the scrub" \
+    || bad "seven_gate: live.sh launches the warden without sg_scrub_env — the assertion above would be proving something about an environment the warden never gets"
 fi
 
 echo "[tests_guard] PASS=$PASS FAIL=$FAIL"

@@ -15,7 +15,19 @@ fact is absent, the step FAILED, no matter how the run narrated itself.
 INPUT — one directory containing:
   scene.json      {"agent_id": "...", "scene_nonce": "...",
                    "peer_id": "...", "peer_nonce": "...",
-                   "image_answer": "..."}                     (written before boot)
+                   "image_answer_salt": "...",
+                   "image_answer_sha256": "..."}              (written before boot)
+
+                  ⚠️ THE IMAGE ANSWER IS NOT IN THERE IN CLEAR. It used to be,
+                  and this directory sits in the repo tree on the same machine
+                  the live agent runs on — so ⑨'s own claim ("the number exists
+                  in no file the agent can open") was false about the harness's
+                  own bundle. Only salt+sha256 is stored now and this file
+                  re-derives the match by hashing the digit runs it finds in the
+                  agent's messages. That removes the plaintext from disk; it does
+                  NOT make the answer unrecoverable to a determined process on
+                  the same host (10^6 candidates against a salt that is right
+                  there), and no claim here should be read as saying otherwise.
   journal.ndjson  one JSON object per poll:
                   {"t": <epoch float>, "member": <MemberDTO|null>,
                    "chat": [ChatMessageDTO...], "tasks": [TaskDTO...],
@@ -32,6 +44,7 @@ EXIT — 0 iff EVERY step passed; 1 otherwise, with the FIRST failing step named
 the last line. Every step prints its own line regardless, because "which step"
 is the answer the caller actually needs; a bare red tells them nothing.
 """
+import hashlib
 import json
 import os
 import sys
@@ -76,6 +89,25 @@ def load_bundle(run_dir):
                     "'the agent did nothing'." % (lineno, exc)
                 )
     return scene, samples
+
+
+def _says_answer(body, salt, digest, width=6):
+    """Does `body` contain the planted number, without this file ever holding it?
+
+    The number is `width` digits. Every window of that length in the body is
+    hashed with the run's salt and compared — so the check is exactly as strong
+    as the old `answer in body` was, with the plaintext gone from disk.
+    Overlapping windows are deliberate: 「號碼是481902」 and 「4819023」 must both
+    be found, and a non-overlapping scan would miss the second."""
+    if not digest:
+        return False
+    for i in range(0, max(0, len(body) - width + 1)):
+        chunk = body[i:i + width]
+        if not chunk.isdigit():
+            continue
+        if hashlib.sha256((salt + chunk).encode("utf-8")).hexdigest() == digest:
+            return True
+    return False
 
 
 def _iter(samples, key):
@@ -160,60 +192,99 @@ def judge(scene, samples):
                 else ("task %s has an empty steps[] — no plan was ever submitted"
                       % (task.get("id") if task else "<none: ③ failed>")) + _multi))
 
-    # ⑤ 報一步完成 — did the agent ADVANCE the plan, step by step.
+    # ⑤ 報一步完成 — was a step reported done WHILE THE TASK WAS STILL RUNNING.
     #
-    # 🔴 WHAT THIS CELL USED TO ASK, AND WHY IT MEASURED NOTHING: "does ANY step
-    # of this task carry status=done". ⑦ (closeout) is terminal-tasks-only and a
-    # task is terminal only when EVERY step derives it there (domain.go
-    # DeriveTaskStatus: allDone → done), so ⑦ GREEN IMPLIED ⑤ GREEN — there was
-    # no world in which this cell could be red while ⑦ was green, which is the
-    # definition of a cell with no discriminating power. MEASURED on the tree
-    # before this change: OC_SG_SKIP_STEP=step_done (the actor never advances the
-    # FIRST step) left ⑤ PASS — the closing act on the LAST step had put a `done`
-    # on the task, and that was all the old cell asked for. The red landed on ⑦.
+    # 🔴 THE TWO THINGS THIS CELL HAS ALREADY BEEN, AND WHY BOTH FAILED.
     #
-    # WHAT IT ASKS NOW — two facts, and NEITHER is implied by ⑦:
-    #   * the done steps are a PREFIX of the plan (steps 0..k). This is what
-    #     "推進" means: the plan was walked from its start, not cherry-picked.
-    #     The skip case above dies here — its only done step is the LAST one.
-    #   * those steps finished IN PLAN ORDER (finished_ts non-decreasing along
-    #     order). ⑦ constrains WHICH steps are done, never WHEN: an agent that
-    #     flips the last step done first and back-fills the earlier ones closes
-    #     the task all the same. So ⑤-red-while-⑦-green is now CONSTRUCTIBLE,
-    #     and tests_guard case 21 keeps a fixture that is exactly that.
+    # (1) "does ANY step of this task carry status=done". ⑦ (closeout) is
+    #     terminal-tasks-only and a task is terminal only when every non-
+    #     superseded step derives it there (domain.go DeriveTaskStatus: allDone →
+    #     done), so ⑦ GREEN IMPLIED ⑤ GREEN: no world existed in which this cell
+    #     was red while ⑦ was green. Zero discriminating power. MEASURED:
+    #     OC_SG_SKIP_STEP=step_done left ⑤ PASS and put the red on ⑦.
     #
-    # finished_ts is the server's own stamp, written at the moment the step
-    # report lands (api_tasks.go: `if status == StepStatusDone { step.FinishedTS
-    # = now }`, nowSecs() = ns resolution), so it is the SERVER's account of the
-    # ordering, not the collector's polling luck.
-    done = [s for s in steps if s.get("status") == "done"]
-    n_done = len(done)
-    prefix = [s for s in steps[:n_done] if s.get("status") == "done"]
-    is_prefix = n_done > 0 and len(prefix) == n_done
-    fts = [float(s.get("finished_ts") or 0) for s in prefix]
-    in_order = all(a <= b for a, b in zip(fts, fts[1:]))
+    # (2) "the done steps are a PREFIX of the plan, finished in plan order". That
+    #     one is worse than zero, because it is red on TWO behaviours the server
+    #     produces on purpose:
+    #       * REPLAN. submit_plan freezes the nodes it did not re-list into
+    #         `superseded` and LEAVES THEM IN PLACE, renumbered 0..n-1
+    #         (dal_tasks.go ReplaceTaskPlan), while DeriveTaskStatus and
+    #         TaskProgress both SKIP them. A superseded row therefore sits BEFORE
+    #         later done rows, and a prefix test fails after any replan — and the
+    #         boot context teaches agents to replan (seeds/system_interaction.md:
+    #         「重新規劃——用 submit_plan 重交 plan」).
+    #       * PARALLEL. SPEC §3.1: every step row is one leaf and parallel items
+    #         are separate rows, so nodes in a parallel group finish in whatever
+    #         order they finish. An order test calls that "back-filled".
+    #     Both reds land on the AGENT for something the model does by design —
+    #     the exact disease lib/window.sh's header names.
+    #     And it bought almost nothing: with ⑦ green every non-superseded step is
+    #     done, so the prefix half is TRUE BY CONSTRUCTION and only the ordering
+    #     half was still saying anything.
+    #
+    # WHAT IT ASKS NOW — a TIME fact, read from the journal:
+    #
+    #   was there ever a moment at which this task carried a step at `done`
+    #   AND HAD NOT YET REPORTED ITS CLOSE-OUT?
+    #
+    # WHERE THE DISCRIMINATING POWER COMES FROM WHEN ⑦ IS GREEN: ⑦ reads the
+    # LAST state of the task and nothing else — it cannot say anything about
+    # which states the task passed THROUGH. An agent that leaves every step
+    # untouched and then, at the end, flips them all and closes out produces a
+    # final snapshot indistinguishable from a green run, and this cell is red on
+    # it because no sample ever caught the task mid-flight. That is the same
+    # shape ① already relies on (presence=waking is gone seconds later), which is
+    # why this file reads a journal instead of a final snapshot.
+    #
+    # AND IT IS IMMUNE TO BOTH FALSE REDS ABOVE: superseded rows are not `done`
+    # so they cannot be mistaken for progress, and no ordering between steps is
+    # examined at all — a parallel group finishing backwards still leaves a
+    # moment where one of its nodes was done and the task was open.
+    #
+    # ⚠️ THE HONEST LIMIT, and it is a sampling one: if EVERY step report and the
+    # close-out land inside a single collector poll (OC_SG_INTERVAL, 1s by
+    # default), the journal never catches the intermediate state and this cell is
+    # red for the harness's reason. The failure message says so, in those words,
+    # so the reader is not sent after the agent for it. It is not a red anyone has
+    # observed: the collector starts before boot and polls throughout, and the
+    # path itself puts an owner card round-trip between the steps and the close.
+    tid = task.get("id") if task else None
+    inflight = None      # (t, done-step names) of the first mid-flight sighting
+    ever_done = False    # a done step was seen at all, closed-out or not
+    for s in samples:
+        for t in s.get("tasks") or []:
+            if t.get("id") != tid:
+                continue
+            d = [x.get("name") for x in (t.get("steps") or [])
+                 if x.get("status") == "done"]
+            if not d:
+                continue
+            ever_done = True
+            if not t.get("closeout_reported") and inflight is None:
+                inflight = (s.get("t"), d)
     if not task or not steps:
         why = ("task %s has no plan to advance — ⑤ cannot be read before ④ lands"
                % (task.get("id") if task else "<none: ③ failed>")) + _multi
-    elif n_done == 0:
-        why = ("no step of task %s ever reached status=done — the plan was filed "
-               "and then nothing moved" % task.get("id")) + _multi
-    elif not is_prefix:
-        why = ("task %s has %d step(s) at done, but they are NOT the plan's first "
-               "%d — the done steps are %s while the plan reads %s. Nothing shows "
-               "the agent advanced THROUGH the plan; a task can be closed by "
-               "flipping whichever step is in the way, and that is not 報一步完成."
-               % (task.get("id"), n_done, n_done,
-                  [s.get("name") for s in done], [s.get("name") for s in steps])) + _multi
-    elif not in_order:
-        why = ("task %s finished its first %d step(s) OUT OF PLAN ORDER "
-               "(finished_ts %s) — the plan was not walked, it was back-filled"
-               % (task.get("id"), n_done, fts)) + _multi
+    elif not ever_done:
+        why = ("no step of task %s ever reached status=done in any sample — the "
+               "plan was filed and then nothing moved" % tid) + _multi
+    elif inflight is None:
+        why = ("task %s was NEVER observed carrying a completed step while it was "
+               "still open: in every one of the %d sample(s) that show a step at "
+               "done, the close-out had already been reported. Nothing here is a "
+               "step reported AS THE WORK WENT — the whole plan appears at the "
+               "close. (⚠️ the other way to produce this: every step report AND "
+               "the close-out landed inside one collector poll, in which case the "
+               "red is the harness's and not the agent's — check journal.ndjson "
+               "and the poll interval before reading it as the agent's.)"
+               % (tid, len(samples))) + _multi
     else:
-        why = ("task %s advanced through its plan: step(s) %s reached done, in "
-               "plan order (finished_ts %s), and they are the plan's first %d"
-               % (task.get("id"), [s.get("name") for s in prefix], fts, n_done))
-    out.append(("step_done", "報一步完成", bool(task) and is_prefix and in_order, why))
+        why = ("task %s was observed at t=%s with step(s) %s already at done and "
+               "the close-out NOT yet reported — a step was reported complete "
+               "while the work was still running, which is a state the final "
+               "snapshot (⑦) cannot show"
+               % (tid, inflight[0], inflight[1]))
+    out.append(("step_done", "報一步完成", inflight is not None, why))
 
     # ⑥ 開一張等我回覆卡 — a reply card whose `from` is the agent. The agent has
     # to DECIDE to open it; a card the harness opened on its behalf proves
@@ -281,31 +352,47 @@ def judge(scene, samples):
         out.append(("peer_message", "回覆另一個 agent", replied is not None, why))
 
     # ⑨ 看得到圖 — can it SEE? An image was planted before boot whose pixels
-    # carry a number, and that number exists NOWHERE else: not in the message
-    # body, not in the filename, not in the mime, not in any task, plan or file
-    # the agent can open (run.sh scans the whole planted scene and refuses to
-    # start if it finds it in text, with a positive control so that "zero hits"
-    # can never quietly mean "the scanner is broken").
+    # carry a number. The fact is simply: did a message the agent SENT ever
+    # contain that number. A text-only agent has no path to those digits but the
+    # pixels — PROVIDED the answer is not reachable as text anywhere else, which
+    # is the entire validity of this cell and is NOT something a comment can
+    # assert. What actually holds it up, and exactly how far each part reaches:
     #
-    # So the fact is simply: did a message the agent SENT ever contain the
-    # number. A text-only agent cannot produce it — it has no path to those
-    # digits but the pixels. THIS is the one cell where the failure and the
-    # success would look identical if the answer ever leaked into text, which is
-    # why the leak scan lives in the harness and not in a comment.
+    #   * run.sh 3d scans the planted scene as TEXT ON THE SERVER (/api/chat,
+    #     /api/tasks, both reply-card panes, /api/members, the agent's own resume
+    #     snapshot) AND every file this run writes under the run dir except the
+    #     picture itself, and refuses to start on a single hit. A positive
+    #     control runs first so "zero hits" can never quietly mean "the scanner
+    #     is broken".
+    #   * actors/live.sh scrubs the harness's whole OC_SG_*/SG_* namespace out of
+    #     the environment it hands the warden, and PROVES it (lib/scrub.sh
+    #     sg_scrub_assert, with its own positive control) before spawning. Before
+    #     that existed the answer travelled run.sh → actor → warden → tmux → the
+    #     agent's shell, where one `env` would have handed a blind agent a green
+    #     indistinguishable from a real one.
+    #   * scene.json holds salt+sha256, not the number (see this file's header).
+    #
+    # WHAT IS STILL NOT COVERED, said plainly: the live agent runs as the same
+    # user on the same host, so nothing here stops a process that goes LOOKING —
+    # reading the repo tree, or brute-forcing 10^6 candidates against the salt.
+    # The construction removes the answer from everything the agent is HANDED; it
+    # does not make it unreachable.
     #
     # The answer is REGENERATED PER RUN and never the famous 42: a hard-coded
     # answer is one a model can have memorised, and a cell a model can pass from
     # memory measures nothing.
-    answer = (scene.get("image_answer") or "").strip()
-    if not answer:
+    salt = (scene.get("image_answer_salt") or "").strip()
+    digest = (scene.get("image_answer_sha256") or "").strip().lower()
+    width = int(scene.get("image_answer_len") or 6)
+    if not digest:
         out.append(("image_answer", "看得到圖", False,
-                    "scene.json carries no image_answer — the harness never "
-                    "planted the picture, so this step could not be observed at "
-                    "all. This is a HARNESS red, not an agent red."))
+                    "scene.json carries no image_answer_sha256 — the harness "
+                    "never planted the picture, so this step could not be "
+                    "observed at all. This is a HARNESS red, not an agent red."))
     else:
         seen = next((item for _, item in _iter(samples, "chat")
                      if item.get("from") == agent
-                     and answer in (item.get("body") or "")), None)
+                     and _says_answer(item.get("body") or "", salt, digest, width)), None)
         out.append(("image_answer", "看得到圖", seen is not None,
                     "chat message %s from %s carries the number that exists only "
                     "in the planted image's pixels" % (seen.get("id"), agent) if seen

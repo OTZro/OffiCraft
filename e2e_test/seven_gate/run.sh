@@ -226,6 +226,32 @@ IMG_RESP="$(SG_HTTP_TAG="owner:image" sg_http POST /api/chat "$IMG_POSTED")"
 [[ -n "$IMG_RESP" ]] || { echo "[seven_gate] FATAL: the picture did not land — ⑨ could only ever be red, and red for a HARNESS reason." >&2; exit 2; }
 echo "[seven_gate] picture planted (the number is in the pixels only)"
 
+# 3c-bis. THE EVIDENCE BUNDLE'S OWN HEADER — written HERE, before the leak scan,
+#     so the scan below walks it like any other file. It carries salt+sha256 of
+#     the answer, NEVER the answer: this directory lives in the repo tree on the
+#     same host as a live agent, so a plaintext answer here made ⑨'s own claim
+#     ("in no file the agent can open") false about the harness's own bundle.
+#     judge.py re-derives the match by hashing the digit runs in the agent's
+#     messages, so nothing is lost. ⚠️ This raises the bar from `grep` to
+#     brute-forcing 10^6 candidates against a salt sitting in the same file — it
+#     is not secrecy, and no line here may claim it is.
+IMG_SALT="$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')"
+python3 - "$AGENT" "$NONCE" "$STAMP" "$RUN_DIR/scene.json" "$PEER" "$PEER_NONCE" \
+          "$IMG_ANSWER" "$IMG_SALT" "$GOT_RUNTIME" "$GOT_MODEL" "$GOT_EFFORT" <<'PY'
+import hashlib, json, sys
+(agent, nonce, stamp, out, peer, peer_nonce, answer, salt,
+ runtime, model, effort) = sys.argv[1:12]
+json.dump({"agent_id": agent, "scene_nonce": nonce, "stamp": stamp,
+           "peer_id": peer, "peer_nonce": peer_nonce,
+           "image_answer_salt": salt,
+           "image_answer_len": len(answer),
+           "image_answer_sha256":
+               hashlib.sha256((salt + answer).encode("utf-8")).hexdigest(),
+           "agent_runtime": runtime, "agent_model": model, "agent_effort": effort},
+          open(out, "w"), ensure_ascii=False, indent=2)
+PY
+echo "[seven_gate] scene planted: $NONCE (scene.json carries the picture's answer as salt+sha256, never in clear)"
+
 # 3d. THE LEAK SCAN — the cell's whole validity in one check. Everything the
 #     agent can READ AS TEXT is pulled back off the server and searched for the
 #     answer; a single hit means a text-only agent could pass, so the run
@@ -233,6 +259,21 @@ echo "[seven_gate] picture planted (the number is in the pixels only)"
 #     A POSITIVE CONTROL runs first: the same scanner looks for the scene nonce,
 #     which we KNOW is in the text. If the control finds nothing, the scanner is
 #     broken and "zero hits" would be meaningless — so that is a refusal too.
+#
+#     🔴 THE SCANNER'S REACH IS PART OF THE CLAIM, AND IT USED TO BE SHORTER THAN
+#     THE CLAIM. Until this round it read SERVER TEXT ONLY, while ⑨ said the
+#     number was "in no task, plan or FILE the agent can open" — and the harness
+#     was writing it, in clear, into $RUN_DIR/scene.json, inside the repo tree,
+#     on the machine the live agent runs on. Two things changed: scene.json now
+#     carries salt+sha256 instead of the number (judge.py re-derives the match),
+#     and the scan below walks the run dir as well as the server.
+#     The picture itself is EXCLUDED by name and that is not a loophole: the
+#     answer is supposed to be in those pixels, and a compressed PNG matching six
+#     ASCII digits by chance would be a refusal nobody could act on.
+#     The THIRD surface — the environment handed down to a real agent — is not
+#     scannable from here, because the stub legitimately receives the answer that
+#     way. It is enforced at the only hop that matters, actor → warden → tmux, by
+#     actors/live.sh via lib/scrub.sh (which carries its own positive control).
 scan_scene_text() { # scan_scene_text NEEDLE -> prints hit count
   local needle="$1" hits=0 hay
   for p in "/api/chat?limit=500" "/api/tasks" "/api/reply-cards?status=waiting" \
@@ -243,9 +284,29 @@ scan_scene_text() { # scan_scene_text NEEDLE -> prints hit count
   # The agent's own wake snapshot — the one surface assembled FOR it.
   hay="$(SG_TOKEN="$AGENT_TOK" SG_HTTP_TAG="owner:leakscan" sg_http GET /api/resume-summary 2>/dev/null)"
   hits=$(( hits + $(printf '%s' "$hay" | grep -o -F "$needle" | wc -l | tr -d ' ') ))
+  # …and every file this run has written so far, the picture excepted.
+  hits=$(( hits + $(scan_scene_files "$needle") ))
+  printf '%s' "$hits"
+}
+scan_scene_files() { # scan_scene_files NEEDLE -> prints hit count over $RUN_DIR
+  local needle="$1" hits=0 f
+  while IFS= read -r f; do
+    [[ "$(basename "$f")" == "scene-image.png" ]] && continue
+    hits=$(( hits + $(grep -o -a -F "$needle" "$f" 2>/dev/null | wc -l | tr -d ' ') ))
+  done < <(find "$RUN_DIR" -type f 2>/dev/null | sort)
   printf '%s' "$hits"
 }
 CONTROL_HITS="$(scan_scene_text "$NONCE")"
+# The file half needs its own control: the server half alone can satisfy the
+# combined count above while the directory walk finds nothing at all (an empty
+# walk and a clean walk look identical), which is how the pkill ban lost its
+# reach the first time. scene.json is written BEFORE this point and carries the
+# scene nonce in clear, so a working walk must see it.
+FILE_CONTROL_HITS="$(scan_scene_files "$NONCE")"
+if [[ "${FILE_CONTROL_HITS:-0}" -lt 1 ]]; then
+  echo "[seven_gate] FATAL: the leak scanner's FILE walk found 0 hits for the scene nonce under $RUN_DIR, and scene.json carries it in clear. The walk is reaching nothing, so a clean file scan would mean nothing. Refusing to run." >&2
+  exit 2
+fi
 if [[ "${CONTROL_HITS:-0}" -lt 1 ]]; then
   echo "[seven_gate] FATAL: the leak scanner's POSITIVE CONTROL found 0 hits for the scene nonce, which IS in the text. The scanner is broken, so a clean answer-scan would mean nothing. Refusing to run." >&2
   exit 2
@@ -255,12 +316,7 @@ if [[ "${LEAK_HITS:-0}" -ne 0 ]]; then
   echo "[seven_gate] FATAL: the image's number appears $LEAK_HITS time(s) in TEXT the agent can read. ⑨ would be passable without ever opening the picture, and that pass would look exactly like a real one. Refusing to run." >&2
   exit 2
 fi
-echo "[seven_gate] leak scan: answer 0 hits in readable text (positive control: scene nonce $CONTROL_HITS hit(s) — the scanner works)"
-
-python3 -c 'import json,sys;json.dump({"agent_id":sys.argv[1],"scene_nonce":sys.argv[2],"stamp":sys.argv[3],"peer_id":sys.argv[5],"peer_nonce":sys.argv[6],"image_answer":sys.argv[7],"agent_runtime":sys.argv[8],"agent_model":sys.argv[9],"agent_effort":sys.argv[10]},open(sys.argv[4],"w"),ensure_ascii=False,indent=2)' \
-  "$AGENT" "$NONCE" "$STAMP" "$RUN_DIR/scene.json" "$PEER" "$PEER_NONCE" "$IMG_ANSWER" \
-  "$GOT_RUNTIME" "$GOT_MODEL" "$GOT_EFFORT"
-echo "[seven_gate] scene planted: $NONCE"
+echo "[seven_gate] leak scan: answer 0 hits in readable text AND in $RUN_DIR (positive controls: scene nonce $CONTROL_HITS hit(s) overall, $FILE_CONTROL_HITS of them in files — both halves of the scanner work)"
 
 # 4. collector FIRST — ①'s presence=waking is gone within seconds of the agent
 #    mounting SSE, so a collector started after the actor reads a green run red.

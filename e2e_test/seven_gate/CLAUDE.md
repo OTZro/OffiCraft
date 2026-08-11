@@ -62,7 +62,7 @@ bundle，跑在 `bin/ci.sh` 的第 (0) 階，不起任何服務。
 | ② | 接回現場 | agent 發出的訊息裡含 scene nonce | `GET /api/chat`，`from == agent` |
 | ③ | 開票 | 有一張 task 的 `creator_id == agent` | `GET /api/tasks` → 逐張 `GET /api/tasks/{id}` |
 | ④ | 提出計畫 | 那張票 `steps[]` 非空 | 同上（`submit_plan` 是 `steps[]` 唯一的寫入者） |
-| ⑤ | 報一步完成 | 那張票 done 的步驟是計畫的**前綴**，且它們的 `finished_ts` 依計畫順序遞增 | 同上（見〈⑤ 為什麼不是「有沒有任一步 done」〉） |
+| ⑤ | 報一步完成 | 那張票**曾經被觀察到**「已有步驟 done、而收尾還沒回報」 | journal 的**時序**（見〈⑤ 為什麼是一個時間事實〉） |
 | ⑥ | 開一張等我回覆卡 | 有一張卡 `from == agent` | `GET /api/reply-cards` |
 | ⑦ | 回報收尾 | 那張票 `closeout_reported == true` | 同上票的 full DTO |
 | ⑧ | 回覆另一個 agent | 有一則 `from == agent` **且 `to == peer`** 的訊息，且帶回 peer 的 nonce | `GET /api/chat` |
@@ -71,35 +71,50 @@ bundle，跑在 `bin/ci.sh` 的第 (0) 階，不起任何服務。
 ③④⑤⑦ 綁在**同一張票**上（③找到的那張，多張時取最早）。不綁的話，載體會被 server 上任何
 一張碰巧存在的票餵飽。
 
-### ⑤ 為什麼不是「有沒有任一步 done」——那個問法零鑑別力
+### ⑤ 為什麼是一個時間事實——前兩個問法各自壞在哪
 
-**舊的⑤問的是「這張票有沒有任一 step 到 done」，而那個問題不可能答錯。** ⑦（closeout）
-只收 terminal 的票，而票是**由 steps 推導**成 terminal 的（`domain.go` `DeriveTaskStatus`：
-`allDone → done`）⇒ **⑦綠必然蘊含⑤綠**，構造上不存在「⑤紅而⑦綠」的世界。一個永遠不可能
-單獨為紅的格子，量到的是零。
+**第一個問法：「這張票有沒有任一 step 到 done」——不可能答錯。** ⑦（closeout）只收 terminal 的票，
+而票是**由 steps 推導**成 terminal 的（`domain.go` `DeriveTaskStatus`：`allDone → done`）
+⇒ **⑦綠必然蘊含⑤綠**，構造上不存在「⑤紅而⑦綠」的世界。**實測（`7233fa3`）**：
+`OC_SG_SKIP_STEP=step_done` ⇒ ⑤仍然 PASS、⑦FAIL——收尾那一下把最後一步推到了 done，
+而舊的⑤只要求「有一個 done」。
 
-**實測（改之前那棵樹 `7233fa3`）**：`OC_SG_SKIP_STEP=step_done`（actor 不推進**第一**步）⇒
-**⑤仍然 PASS**、⑦FAIL、首紅點名⑦。⑤之所以綠，是因為收尾那一下把**最後一步**推到了 done，
-而舊的⑤只要求「有一個 done」。指著⑦的那個紅，說的是錯的事。
+**第二個問法：「done 的步驟是計畫的前綴，且 `finished_ts` 沿 order 非遞減」——比零還糟。**
+它對**兩種 server 刻意產生的正常行為**確定性假紅，而且紅在點名 agent：
 
-**現在⑤問兩件事，而且兩件都不是⑦蘊含得出來的：**
+- **replan。** `submit_plan` 把沒重列的節點凍結成 `superseded`，而 `ReplaceTaskPlan`
+  **把它留在原位重編**；`DeriveTaskStatus` 與 `TaskProgress` 兩邊都**跳過**它。於是一列 superseded
+  必然排在後續 done 節點之前 ⇒ 前綴判定在**任何一次 replan 之後必敗**。而開機說明本身就在教
+  replan（`seeds/system_interaction.md`：「重新規劃——用 `submit_plan` 重交 plan」）。
+- **並行。** SPEC §3.1：每一列 step 就是一個 leaf、並行項是各自的列，所以並行段的節點本來就
+  可能亂序完成。順序判定會把那叫做「back-filled」。
 
-1. **done 的步驟是計畫的一個前綴**（steps 0..k）。這才是「推進」的意思：計畫是從頭走下來的，
-   不是挑一步翻掉。上面那個 skip 就死在這裡——它唯一 done 的是**最後一步**。
-2. **那些步驟是照計畫順序完成的**（`finished_ts` 沿 order 非遞減）。⑦管的是**哪些**步驟 done，
-   從來不管**什麼時候**：一個先把最後一步翻成 done、再回頭補前面的 agent，票照樣關得掉。
-   ⇒ **「⑤紅而⑦綠」現在造得出來**，而 `tests_guard` 案例 21 就留著那份 fixture
-   （`b-step_done` 的 `closeout_reported` 刻意維持 true），並逐項斷言 ⑤=False / ⑦=True。
+而它換來的鑑別力幾乎是零：**⑦綠 ⇒ 所有非 superseded 節點都 done ⇒ 前綴那半恆真**，
+真正還在做事的只剩順序那半——也就是唯一會誤判的那半。
 
-`finished_ts` 是**server 自己的戳**（`api_tasks.go`：`status == done` 當下寫 `nowSecs()`，
-奈秒解析度），不是 collector 的輪詢運氣——所以這一格讀的仍然是 server 事實，不是取樣巧合。
+**現在⑤問的是一個時間事實，而它從 journal 讀：**
+
+> **曾經存在一個時刻，這張票已經有步驟 `done`、而收尾（`closeout_reported`）還沒回報。**
+
+**⑦綠的時候鑑別力從哪裡來**：⑦只讀這張票的**最後一個狀態**，對它**經過**哪些狀態一個字都說不出來。
+一個從頭到尾不動步驟、最後一口氣把全部翻成 done 再收尾的 agent，最後一張快照跟真的走完
+**長得一模一樣**，而這一格紅——因為沒有任何一次取樣抓到它在半路。這跟①靠的是同一個形狀
+（`presence=waking` 幾秒後就消失），也正是這個檔案讀 journal 而不是讀最終快照的理由。
+
+**而且它對上面兩種假紅免疫**：superseded 的 status 不是 `done`，不會被誤認成進度；
+步驟之間的**順序完全不看**，並行段倒著完成照樣留下「某個節點 done、票還開著」的那一刻。
 
 ⚠️ **誠實的界線**：
-- 單步計畫**照樣過**（前綴＝{step0}，順序條件退化成恆真）——這一格沒有懲罰計畫寫得短的 agent。
-- 它擋不住「所有步驟都在最後一刻、照順序一次補完」：那在 server 上跟真的邊做邊報**長得一樣**，
-  沒有欄位分得出來。要分得出來得是 server 側留時序痕跡，**本輪沒有做**。
-- 平行步驟（`parallel_group`）若真的亂序完成，這一格會判紅。今天載體的計畫沒有平行步驟；
-  哪天有了，這一段就是要改的地方，**別默默把順序條件拿掉**——拿掉就退回零鑑別力。
+- **這一格的失效方式是取樣**：如果**所有**步驟回報加上收尾全部落在**同一個 collector 輪詢間隔內**
+  （`OC_SG_INTERVAL`，預設 1 秒），journal 就沒抓到中間態，這一格會為了**載體的理由**變紅。
+  失敗訊息**逐字寫著這件事**，要讀的人先去看 `journal.ndjson` 與輪詢間隔，不要先怪 agent。
+  緩解不是靠祈禱：collector 從開機前就起、整場都在輪詢，而路徑本身在步驟與收尾之間夾著一次
+  ⑥的卡（owner 回卡才解得開 `waiting_owner`）。**但這一條沒有在真跑上實測過**（本輪沒跑）。
+- 單步計畫**照樣過**：只要那一步 done 的當下收尾還沒回報。
+- 它擋不住「邊做邊報但其實是照抄」這一類語意問題——這一格量的是時序，不是內容。
+- `tests_guard` 案例 21b-i 釘「⑤紅⑦綠造得出來」，**而且釘那份 fixture 是 server 產得出來的狀態**
+  （舊的那份是 `step0=todo` ＋ `task=done`，`DeriveTaskStatus` 產不出來——它證明的是判定式可被
+  證偽，不是那個世界存在）；21b-iii 反過來釘**replan ＋ 並行亂序必須是綠的**。
 
 ### ③ 取最早的那張票，是這個檔案裡**唯一的一次猜**
 
@@ -157,19 +172,43 @@ member（peer），**用 peer 自己的 token**（不是 owner 的——owner �
 **號碼每次 run 重抽六位數，不是 42**：寫死的答案是模型可能背過的答案，而一個能靠記憶通過的格子
 什麼都沒量到。
 
-🔴 **這一格唯一的失效方式，是答案漏進文字**——那時候一個看不見圖的 agent 照樣過關，而**那個綠跟
-真的綠一模一樣**。所以 `run.sh` 3d 有一道**洩漏掃描**：把 agent 讀得到的文字面（`/api/chat`、
-`/api/tasks`、兩個卡 pane、`/api/members`、以及**它自己的 resume 快照**）全撈回來搜那個號碼，
-**命中 ≠ 0 就拒跑**。而且先跑一次**陽性對照**——用同一支掃描器去搜 scene nonce（那個**確實**在
-文字裡），對照找不到就代表掃描器壞了，「零命中」也就沒有意義，同樣拒跑。實跑那一輪印的是：
-`leak scan: answer 0 hits in readable text (positive control: scene nonce 2 hit(s) — the scanner works)`。
+🔴 **這一格唯一的失效方式，是答案漏進 agent 拿得到的地方**——那時候一個看不見圖的 agent 照樣
+過關，而**那個綠跟真的綠一模一樣**。三個面，各自被誰擋住，逐條寫在這裡，**因為上一版只擋住第一個
+而註解宣稱三個都擋住了**：
+
+1. **server 上的文字。** `run.sh` 3d 的洩漏掃描：`/api/chat`、`/api/tasks`、兩個卡 pane、
+   `/api/members`、以及**它自己的 resume 快照**，命中 ≠ 0 就拒跑。先跑**陽性對照**（用同一支掃描器
+   搜 scene nonce，那個確實在文字裡），對照找不到＝掃描器壞了，同樣拒跑。
+2. **檔案。** 同一支掃描器現在**也走 `$RUN_DIR` 底下每一個檔**（`scene-image.png` 除外——答案本來
+   就該在那些像素裡，而一份壓縮 PNG 偶然命中六個 ASCII 數字會是一個沒人能處理的拒跑）。
+   **檔案那半有自己的陽性對照**：scene.json 明文帶著 scene nonce，走不到檔案的 walk 會被抓出來。
+   而且 `scene.json` **不再存明文答案**，改存 `image_answer_salt` ＋ `image_answer_sha256`
+   ＋ `image_answer_len`，judge 把 agent 訊息裡每一段等長數字拿去雜湊比對。
+   ⚠️ **那不是保密**：salt 就在同一個檔裡，10^6 個候選對一支程式是瞬間的事。它把門檻從 `grep`
+   抬到「刻意去破」，僅此而已，別把它讀成別的。
+3. **環境變數——這一面上一版整個沒有。** 鏈路是 `run.sh` 5（把答案 export 給 actor，因為 **stub
+   需要**它）→ `live.sh` 起 warden（原本只 `env -u OC_WARDEN_TOKFILE` 一個）→ ocwarden
+   `exec.Command` 沒設 `cmd.Env` ⇒ 繼承 `os.Environ()` → tmux `new-session` 再繼承一次
+   （**最後一跳實測過**：拋棄式 socket 上 `new-session -d 'env > f'`，值真的在 f 裡）。
+   ⇒ 真 agent 一句 `env` 就拿到②⑧⑨三個答案，外加 `SG_TOKEN`（owner 的 token）。
+   現在 `lib/scrub.sh` 在 **actor → warden** 那一跳把載體**整個 `OC_SG_*` / `SG_*` 命名空間**
+   拿掉（不是三個點名的變數——下一個秘密會由沒讀過這段的人加進 run.sh），並且 `sg_scrub_assert`
+   **在 spawn 之前先證明**它真的拿掉了，連陽性對照都有（控制組找不到秘密＝這道檢查是空的，
+   同樣拒絕）。**這一段解在載體側，`cli/ocwarden` 一個字都沒動**——那是全 fleet 共用的 spawn 路徑。
+   守衛在 `tests_guard` 案例 26（hermetic，含一顆把 scrub 變成 no-op 的 mutant）。
+
+⚠️ **仍然擋不住的**：live run 的 agent 跟載體**同一個使用者、同一台機器**。以上三件事拿掉的是
+「答案被**交到**它手上」那條路；一個主動去翻 repo 樹、或拿 salt 去暴力搜的行程，沒有任何構造擋它。
 
 ⚠️ **誠實的界線**：
 - **stub 綠不代表「模型看得見」**。stub 不會 OCR，號碼是**用 env 告訴它的**（跟 scene nonce 一樣）；
   它真正做的是**把附件的 bytes 從 `/api/chat/attachment/<id>` 抓下來**。所以 stub 綠＝「關卡讀得對、
   而且附件那條路真的通」，**看不看得見只有 `actors/live.sh` 答得了**。
-- 答案會寫進 `runs/<stamp>/scene.json`（judge 要用）。那是**載體的目錄**，不是 agent 的工作區，
-  但 live run 的 agent 跟它在同一台機器上——這條沒有被構造擋住，只是沒有理由去翻。
+- `runs/<stamp>/scene.json` 只帶 salt＋sha256＋長度，**不帶明文答案**（judge 用雜湊比對）。
+  那是**載體的目錄**，不是 agent 的工作區，但 live run 的 agent 跟它在同一台機器上——
+  **明文拿掉了，可達性沒有**。
+- **stub 仍然是用 env 拿到答案的**，那是刻意的（它不會 OCR）。被構造擋掉的是**再往下一跳**：
+  `live.sh` 交給 warden 的環境裡沒有它。
 - ⚠️ **這一格順帶是附件路徑（上傳→列出→抓 bytes）在這個 repo 裡的第一個會跑的測試**：
   `tests/06_chat_attachments.spec.js` 與 `11_attachment_content_fidelity.spec.js` 測的是 UI 那一端，
   **沒有任何測試在守「agent 這一側真的把檔案抓下來」**這條路。
@@ -383,7 +422,7 @@ tmux＋claude）就是 `tests/05_machine_onboarding_spawn.live-agent.spec.js` �
 | 檔 | 內容 |
 |---|---|
 | `run.log` | 整場 stdout/stderr（`tee`，含 setup/teardown） |
-| `scene.json` | `agent_id` ＋ `scene_nonce` ＋ stamp（判定的輸入之一） |
+| `scene.json` | `agent_id` ＋ `scene_nonce` ＋ `peer_*` ＋ stamp ＋ 圖片答案的 **salt/sha256/長度**（判定的輸入之一；**明文答案不在裡面**，見〈⑨〉） |
 | `journal.ndjson` | 每次輪詢一行的 server 事實時間序列——**這就是證據本體** |
 | `collect.log` | collector 自己的 stderr |
 | `actor.log` | agent 那一端的輸出（stub 或真 agent） |
@@ -592,7 +631,10 @@ ocwarden／agent 用同一支 binary、同一組 argv 跑著的機器上。**
   另外兩輪確認沒有誤傷：`skip=closeout` ⇒ ⑤**仍綠**、首紅點名⑦，
   `skip=reply_card` ⇒ ⑤**仍綠**、首紅點名⑥。
 - 這支不在 `run_all.sh` 裡、也不在 `bin/ci.sh` 裡。CI 守的是**判定邏輯**與載體的幾條靜態不變式
-  （`tests_guard` 案例 21：21a–21e 判定與 friction 措辭、21b-i ⑤紅⑦綠造得出來、
-  21b-ii 多開票時警語會出現在最後一行、21f 沒有裸 curl／狀態碼有被抓、
-  21g live actor 的花錢開關是嚴格 include flag；案例 24：隔離與所有權那兩層），
+  （`tests_guard` 案例 21：21a–21e 判定與 friction 措辭、21b-i ⑤紅⑦綠造得出來**且那份 fixture 可達**、
+  21b-ii 多開票時警語會出現在最後一行、21b-iii replan ＋ 並行亂序必須是綠的、
+  21b-iv fixture 自己帶著第三方票／owner 的卡／對 owner 講的那則帶 peer nonce 的訊息
+  （這三列不在，③⑧⑥ 三格的判定放鬆都是靜默的——實測過）、21f 沒有裸 curl／狀態碼有被抓、
+  21g live actor 的花錢開關是嚴格 include flag；案例 24：隔離與所有權那兩層；
+  案例 26：交給 warden 的環境裡沒有②⑧⑨的答案），
   **不是任何一次真的 run**。
