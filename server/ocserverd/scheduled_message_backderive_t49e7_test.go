@@ -35,7 +35,6 @@ package main
 // answered, leap-day answers, month-end answers, and honest no-slot answers.
 
 import (
-	"fmt"
 	"math/rand"
 	"testing"
 	"time"
@@ -430,5 +429,6 @@ func TestPlantedBugControlEnumeratesTheSameCandidatesAsProduction(t *testing.T) 
 			"across America/Havana's spring transition — the comparison above cannot distinguish two resolvers, " +
 			"so its agreement proves nothing")
 	}
-	_ = fmt.Sprint(disagreements)
+	t.Logf("copy fidelity: %d cases agreed with production, and %d readings disagree when the copy is pointed "+
+		"at the forward-searching resolver", agreed, disagreements)
 }
