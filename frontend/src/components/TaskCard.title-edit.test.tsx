@@ -101,10 +101,119 @@ describe("T-2ebe 標題就地編輯", () => {
     expect(within(card).queryByTestId("task-title-editor")).toBeNull();
   });
 
-  // 🔴 The rule that differs from the description editor. Two halves, because
-  // either alone is satisfiable by the wrong implementation: the control must be
-  // disabled (so the owner is not invited to post a blank), AND the click must
-  // not write (so a keyboard/Enter path cannot slip one through).
+  it("Enter saves the correction from the input", async () => {
+    // The keydown handler's Enter branch is the fast path anyone editing a
+    // one-line field will actually use, and it is the ONLY path the blank case
+    // below really exercises — without this positive case, a handler that did
+    // nothing at all on Enter would satisfy that one and leave the save path
+    // entirely unguarded.
+    const save = vi.fn(async () => {});
+    const utils = renderCard(mkTask({}), save);
+    const card = await expand(utils);
+
+    fireEvent.click(within(card).getByTestId("task-title-edit"));
+    const input = within(card).getByTestId("task-title-input");
+    fireEvent.change(input, { target: { value: "用 Enter 存的標題" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await act(async () => {});
+
+    expect(save).toHaveBeenCalledWith("t-title-1", "用 Enter 存的標題");
+    expect(within(card).queryByTestId("task-title-editor")).toBeNull();
+  });
+
+  it("Escape closes the editor without writing, and does not collapse the card", async () => {
+    // The Escape branch of the input's onKeyDown. Deleting it leaves the editor
+    // stuck open on a draft the owner has decided against — every other way out
+    // (cancel, outside click) refuses to close a DIRTY editor, so Escape is the
+    // only key that discards.
+    const save = vi.fn(async () => {});
+    const utils = renderCard(mkTask({}), save);
+    const card = await expand(utils);
+
+    fireEvent.click(within(card).getByTestId("task-title-edit"));
+    const input = within(card).getByTestId("task-title-input");
+    fireEvent.change(input, { target: { value: "打到一半就反悔" } });
+
+    // Control: an unrelated key must NOT close it, otherwise "the editor is
+    // gone" would say nothing about Escape in particular.
+    fireEvent.keyDown(input, { key: "a" });
+    await act(async () => {});
+    expect(within(card).getByTestId("task-title-editor")).toBeTruthy();
+
+    fireEvent.keyDown(input, { key: "Escape" });
+    await act(async () => {});
+
+    expect(within(card).queryByTestId("task-title-editor")).toBeNull();
+    expect(save).not.toHaveBeenCalled();
+    // Escape dismisses the editor, not the card underneath it — and it
+    // preventDefaults so the app-wide escape layer does not take a second bite.
+    expect(card.getAttribute("aria-expanded")).toBe("true");
+    // Re-opening seeds from the STORED title: the draft really was discarded.
+    fireEvent.click(within(card).getByTestId("task-title-edit"));
+    expect(
+      (within(card).getByTestId("task-title-input") as HTMLInputElement).value
+    ).toBe("原本的標題");
+  });
+
+  it("a click on the editor's own chrome never collapses the card", async () => {
+    // The title editor stands INSIDE the card head, which is the whole card's
+    // expand/collapse toggle. The toggle's closest() filter exempts the input
+    // and the buttons, but not the editor's padding or its hint line — so
+    // without the container's onClick stopPropagation, a stray click while
+    // composing a correction collapses the card and takes the half-written
+    // draft with it.
+    const save = vi.fn(async () => {});
+    const utils = renderCard(mkTask({}), save);
+    const card = await expand(utils);
+    expect(card.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(within(card).getByTestId("task-title-edit"));
+    fireEvent.change(within(card).getByTestId("task-title-input"), {
+      target: { value: "寫到一半的更正" },
+    });
+
+    // The container's own padding, then the hint line inside it — neither is an
+    // interactive element, so either one reaches the card toggle if nothing
+    // stops it. 🔴 Asserted one click at a time ON PURPOSE: the toggle flips,
+    // so two unguarded clicks in a row land back on "expanded" and the case
+    // would pass against the very defect it exists to catch.
+    const editor = within(card).getByTestId("task-title-editor");
+    fireEvent.click(editor);
+    await act(async () => {});
+    expect(card.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(editor.querySelector(".task-card__desc-hint") as Element);
+    await act(async () => {});
+    expect(card.getAttribute("aria-expanded")).toBe("true");
+
+    expect(within(card).getByTestId("task-title-editor")).toBeTruthy();
+    expect(
+      (within(card).getByTestId("task-title-input") as HTMLInputElement).value
+    ).toBe("寫到一半的更正");
+    expect(save).not.toHaveBeenCalled();
+
+    // Control: the card really is collapsible by a click that is NOT stopped —
+    // otherwise the assertions above would hold on a card that cannot toggle at
+    // all, and the guard they claim to prove would be untested.
+    fireEvent.click(card);
+    await act(async () => {});
+    expect(card.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  // 🔴 The rule that differs from the description editor, pinned by TWO
+  // assertions that prove DIFFERENT things — and the difference matters, because
+  // the obvious reading of this case is wrong.
+  //
+  //   • `saveBtn.disabled` is the affordance: the owner is not invited to post a
+  //     blank. The click on it that follows is INERT in jsdom (a disabled button
+  //     dispatches nothing), so it proves nothing on its own — it is there only
+  //     so the two lines read as one gesture.
+  //   • The Enter keydown is the assertion with teeth: it is the ONE path in
+  //     this case that actually reaches the blank guard inside doSaveTitle. Take
+  //     that guard out and this is the line that goes red.
+  //
+  // The positive Enter case above ("Enter saves…") is what stops this one from
+  // passing vacuously against a keydown handler that simply does nothing.
   it("refuses a blank title without sending it", async () => {
     const save = vi.fn(async () => {});
     const utils = renderCard(mkTask({}), save);

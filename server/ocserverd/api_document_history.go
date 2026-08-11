@@ -487,13 +487,25 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 		// T-2ebe. No doc cap, for the reason its edit door states: create_task
 		// has never capped this field either.
 		//
-		// 🔴 The blank refusal the edit door enforces is NOT re-applied here, and
-		// that is a decision rather than an omission: a retained title revision
-		// can only have been written through a door that already refused blanks,
-		// so there is no stored revision to restore that would produce one. The
-		// empty-string case that DOES reach this arm is a snapshot of "{}" — the
-		// row was gone when the revision was taken — and that is caught below by
-		// the same not-found path any restore of a vanished task takes.
+		// 🔴 The blank check below is BELT-AND-BRACES, and saying so is the point:
+		// an earlier draft of this comment claimed it was the thing that caught
+		// the "{}" snapshot case, which is not true and was corrected by
+		// independent review rather than left to read as a mechanism.
+		//
+		// What actually happens: a vanished task is refused at the DOOR —
+		// documentHistoryAllowed → taskTitleRestoreAuthz → resolveTask answers a
+		// clean 404 before this function runs. A retained revision can only have
+		// been written through a door that already refused blanks, so no stored
+		// revision restores to one either. The guard is therefore expected to be
+		// unreachable; it stays because the cost of being wrong about that is a
+		// blank title on the task list, which is the one state this whole
+		// capability exists to prevent.
+		//
+		// ⚠️ Its failure shape is inherited, not chosen: errNotFound from any arm
+		// of this switch is funnelled into internalError, so it would surface as
+		// a 500 rather than a 404. That is pre-existing (the description arm at
+		// the top of this switch does the same) and is NOT fixed here — flagged
+		// so the next reader knows it was seen and scoped out, not missed.
 		t, err := s.resolveTask(key)
 		if err != nil {
 			return err

@@ -2636,7 +2636,13 @@ export const mockApi: Api = {
       throw new ApiError(
         `http 400 for POST /api/tasks/${id}/title`,
         400,
-        "bad_request",
+        // The real server answers `validation_error` here (its envelope maps
+        // both 400 and 422 to that code) — pinned by the Go side's
+        // assertErrorEnvelope. An earlier draft said `bad_request`, which made
+        // this fake a FALSE ORACLE for anything that ever branches on the code
+        // rather than the status: component tests would agree with a server
+        // that does not exist.
+        "validation_error",
         "title must not be blank"
       );
     }

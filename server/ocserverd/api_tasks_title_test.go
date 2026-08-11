@@ -123,6 +123,25 @@ func TestTaskTitleNonExecutorIsRefusedAndNothingIsWritten(t *testing.T) {
 		t.Fatalf("refused stranger write still landed: title = %q", got)
 	}
 
+	// 🔴 Guard order, stated in the handler's comment and otherwise unguarded:
+	// the blank-title 400 sits AFTER this gate on purpose. Swap the two blocks
+	// and every other case in this file stays green, because no other case sends
+	// a body that BOTH gates object to. A caller who may not touch this task must
+	// learn that — not be handed a critique of a body it was never entitled to
+	// submit, which also tells it the shape of a route it cannot use.
+	for _, blank := range []string{"", "   "} {
+		rec = postTaskTitle(t, api, task.ID, "m-stranger", "agent",
+			map[string]any{"title": blank})
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("non-executor blank %q status = %d, want 403 (the permission "+
+				"gate runs BEFORE the blank check): %s", blank, rec.Code, rec.Body.String())
+		}
+		assertErrorEnvelope(t, rec, "forbidden", "caller is not the task's executor")
+		if got := readTaskTitle(t, api, task.ID); got != standing {
+			t.Fatalf("refused blank write still landed: title = %q", got)
+		}
+	}
+
 	// Positive controls: the route is not simply broken for everyone.
 	if got := postTaskTitle(t, api, task.ID, "m-exec", "agent",
 		map[string]any{"title": "executor rewrite"}).Code; got != http.StatusOK {
@@ -380,6 +399,85 @@ func TestTaskTitleRestoreIsGatedLikeTheEdit(t *testing.T) {
 	}
 	if got := readTaskTitle(t, api, task.ID); got != "original wording" {
 		t.Fatalf("restore read back = %q, want original wording", got)
+	}
+}
+
+// TestTaskTitleEditFansATaskDelta guards the headline acceptance criterion.
+//
+// Delete `s.publishTask(*t, requestTrigger(r))` from the edit handler and the
+// route still answers 200, still stores the correction, still retains the
+// revision — and the whole Go package stays green. The only symptom is that an
+// ALREADY-OPEN cockpit task list goes on showing the stale title, which is the
+// one thing this capability exists to fix.
+//
+// The description edit is the positive control: it fans from its own,
+// independent publishTask call, so a listener that received nothing at all
+// would otherwise be indistinguishable from a broken fixture.
+//
+// The no-op arm is here for the opposite mutant: a handler that fanned
+// unconditionally (before the unchanged-value early return) would satisfy the
+// first assertion while spraying a delta for every re-send.
+func TestTaskTitleEditFansATaskDelta(t *testing.T) {
+	api := newTasksTestServer(t)
+	task := createAdHocTask(t, api, "m-exec")
+
+	// Connect AFTER the seed write so the queue holds only what we drive below.
+	if got := postTaskTitle(t, api, task.ID, "m-exec", "agent",
+		map[string]any{"title": "the standing title"}).Code; got != http.StatusOK {
+		t.Fatalf("seed title write status = %d", got)
+	}
+	listener, err := api.hub.Connect("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Positive control first: the description edit has always fanned.
+	if got := writeTaskDescription(t, api, task.ID, "m-exec", "agent",
+		map[string]any{"description": "some prose"}).Code; got != http.StatusOK {
+		t.Fatalf("control description write status = %d", got)
+	}
+	if raw := listener.pop(); raw == nil {
+		t.Fatal("control: a description edit fanned NO frame — the listener or the " +
+			"publish seam is broken, so a missing title frame below proves nothing")
+	}
+
+	// The real assertion.
+	if got := postTaskTitle(t, api, task.ID, "m-exec", "agent",
+		map[string]any{"title": "the corrected title"}).Code; got != http.StatusOK {
+		t.Fatalf("title edit status = %d", got)
+	}
+	raw := listener.pop()
+	if raw == nil {
+		t.Fatal("a successful title edit fanned NO frame: the route answered 200 and " +
+			"stored the correction, so nothing else in the build will tell you — " +
+			"every open task list is now showing the stale title. Put " +
+			"s.publishTask back at the end of the edit handler.")
+	}
+	_, envelope := parseSSEFrame(t, raw)
+	if envelope["topic"] != "task" {
+		t.Fatalf("edit fanned topic=%v, want \"task\"", envelope["topic"])
+	}
+	data, ok := envelope["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("frame data is not an object: %v", envelope["data"])
+	}
+	if want := wireOwnerID + "::" + task.ID; data["key"] != want {
+		t.Fatalf("frame key = %v, want %q", data["key"], want)
+	}
+
+	// And the arms that changed nothing fan nothing: a delta claiming a task
+	// moved when it did not is noise every open cockpit pays for.
+	for _, noop := range []map[string]any{
+		{"title": "the corrected title"},     // identical
+		{"title": "  the corrected title  "}, // identical after trimming
+		{},                                   // field omitted entirely
+	} {
+		if got := postTaskTitle(t, api, task.ID, "m-exec", "agent", noop).Code; got != http.StatusOK {
+			t.Fatalf("no-op %v status = %d, want 200", noop, got)
+		}
+		if extra := listener.pop(); extra != nil {
+			t.Fatalf("no-op %v fanned a frame: %s", noop, extra)
+		}
 	}
 }
 
