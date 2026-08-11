@@ -42,9 +42,12 @@
 # What matters is which hits are INVOCATIONS rather than prose — a mention in a
 # comment is not a caller. (This sentence used to assert a hit count under bin/
 # and tests_guard/ instead, and a comment added in the very same commit falsified
-# it on the spot.) So for an edit HERE the land authority going green still is no
-# evidence — that run never executed this file. Acceptance is the `macos-e2e` job
-# on the PR and its log, or a deliberate local `bash bin/local-ci.sh`.
+# it on the spot.) So for an edit HERE a green `bin/ci.sh` is still no evidence
+# — that run never executed this file. Acceptance is the `macos-e2e` job on the
+# PR and its log, or a deliberate local `bash bin/local-ci.sh`. (This used to say
+# "the land authority going green"; since 2026-08-11 the merge verdict IS the PR
+# round — owner card rc-c16ac4679fab — which if anything sharpens the point: the
+# cell named here is the one that decides, and `bin/ci.sh` never runs this file.)
 #
 # NOTE the asymmetry, it is not the same for its neighbour: a change to
 # `run_all.sh` IS partly covered locally, because tests_guard executes that file

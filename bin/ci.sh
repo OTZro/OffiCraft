@@ -1,18 +1,33 @@
 #!/usr/bin/env bash
-# officraft local CI — the canonical, AUTHORITATIVE quality gate.
+# officraft local CI — run the whole gate locally, in one command.
 #
-# CI runs LOCALLY and THIS script is the land authority. (The old reason given
-# here — "we do not pay for GitHub Actions" — was factually wrong once the repo
-# went PUBLIC: standard-runner minutes are free for public repos. The real
-# reason this stays local is that the gate below includes host-shaped and
-# regenerate-and-byte-compare steps whose authority we do not want to move.)
+# 🔴 THIS SCRIPT IS NOT THE LAND AUTHORITY ANY MORE (owner, 2026-08-11, card
+# rc-c16ac4679fab: he was asked whether a change becomes mergeable on the
+# cloud round or on this script, and picked THE CLOUD ROUND). What decides
+# whether something may be merged is the pull request's checks, not a green
+# line printed on somebody's laptop. His words on how that plays out day to
+# day, verbatim:
+#
+#   「但是自己開發的時候，當然要自己先確認通過自己新增或是跟自己有關的
+#     測試，沒問題才開PR上去跑，確認全部都通過」
+#
+# So this script did not lose its job, it changed jobs: it is what you reach
+# for WHILE DEVELOPING to check your own area before opening a PR — not a
+# toll gate every change has to pay in full. The reason the verdict moved is
+# that a green here is visible only to whoever ran it, and it expires the
+# moment the base moves; the PR's checks are visible to everyone and can be
+# re-run by anyone.
+#
+# (The even older reason this used to live here — "we do not pay for GitHub
+# Actions" — was factually wrong once the repo went PUBLIC: standard-runner
+# minutes are free for public repos.)
 #
 # ⚠️ WHAT CHANGED IN T-4d88, because it changes how you read this file:
 # this script no longer CONTAINS any check. Every check is a named target in the
 # repo-root Makefile, and its implementation lives in exactly one recipe there.
 # What this file still owns is the three things that are about the RUN rather
 # than about any check: the working-copy lock, the provenance stamp, and the
-# land-authority marker. Everything between them is a list of target names —
+# end-of-run marker. Everything between them is a list of target names —
 # a CHOICE of which checks to run and in what order, never a second copy of how.
 #
 # Before T-4d88 the same checks were written out here, again in bin/ci-cloud.sh
@@ -61,8 +76,11 @@ cd "$ROOT"
 # byte-compare them against a backup they took moments earlier. A second run in
 # the SAME clone interleaves with all of that, and the resulting verdict is not
 # reliably red: it can just as easily come out GREEN on a tree this run never
-# actually validated. `[ci] all green` is the land authority, so that false green
-# is the outcome worth refusing outright.
+# actually validated. That false green is still the outcome worth refusing
+# outright even though the merge verdict now lives in the cloud (see the header):
+# a green here is what a developer reads before opening a PR, and one that
+# describes a tree nobody validated sends them into review believing their own
+# area is checked when it is not.
 #
 # The lock is bound to THIS WORKING COPY ($ROOT/.ci-lock), not to the machine, so
 # concurrent runs in SEPARATE clones stay possible — that is the supported way to
@@ -83,8 +101,8 @@ trap 'ci_lock_release; exit 143' TERM
 ci_lock_acquire "$ROOT"
 
 # ---------------------------------------------------------------------------
-# Provenance stamp (T-da4b). "[ci] all green" is the land authority, but a green
-# log with no identity is unattributable: deciding WHICH tree an old log belongs
+# Provenance stamp (T-da4b). "[ci] all green" no longer decides mergeability
+# (see the header), but a green log with no identity is unattributable: deciding WHICH tree an old log belongs
 # to otherwise means inferring it from tree hash + a clean tree + an unmoved
 # base. Stamp the sha/branch/dirty-state directly into the log's first line so a
 # log proves its own provenance. Never let this gate CI — it is pure metadata.

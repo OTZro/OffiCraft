@@ -26,9 +26,14 @@
 # executing the real binary on a real host.
 #
 # This guard is HOST-SHAPED on purpose: it asserts a property of the machine CI
-# runs on, not of the source. That is the point. The repo's land authority is
-# the local `bin/ci.sh` run on a fleet machine, so a host-shaped assertion about
-# a fleet machine is exactly as authoritative as the rest of the gate.
+# runs on, not of the source. That is the point, and it survived the verdict
+# moving: since T-4d88 every cloud cell runs on macOS too, so a host-shaped
+# assertion is as authoritative as the rest of the gate wherever the gate runs.
+# (This paragraph used to justify itself with "the repo's land authority is the
+# local bin/ci.sh run on a fleet machine". That premise is gone — owner ruled on
+# 2026-08-11, card rc-c16ac4679fab, that the merge verdict is the cloud round.
+# The conclusion did not depend on it, but the sentence did, so it is rewritten
+# rather than left standing on a premise nobody holds any more.)
 #
 # ── WHAT IT DOES *NOT* COVER ─────────────────────────────────────────────────
 #  1. It proves the fields exist HERE. A fleet machine on a different OS
