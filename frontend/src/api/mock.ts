@@ -1528,7 +1528,7 @@ function mockScheduleSlot(s: {
   return `${day}T${hh}:${mm}`;
 }
 
-/** Server parity for the three `custom` sets: duplicates collapse and the set
+/** Server parity for all four `custom` sets: duplicates collapse and the set
  * is stored sorted, so two orderings of the same choice compare equal — which
  * is what stops a caller that sends the whole form back on every save from
  * re-aiming the delivery cursor. */
@@ -1686,8 +1686,11 @@ function validateSchedulePart(
 /** The CONDITIONAL half of the create/patch 422 (T-49e7): which fields a
  * cadence cannot do without. `daily`/`weekly`/`monthly` fire at the single
  * reading `hour`/`minute` names, so omitting either is a 422 and never a silent
- * midnight; `custom` fires where the three sets intersect, so it needs all
- * three (from the request, or already stored on the row being patched). */
+ * midnight; `custom` fires where the four sets intersect, so it needs
+ * `custom_days`/`custom_hours`/`custom_minutes` (from the request, or already
+ * stored on the row being patched). Months are NOT among them: they arrive
+ * here already resolved, because an omitted `custom_months` means the whole
+ * year rather than a missing answer. */
 function requireCadenceFields(
   memberId: string,
   cadence: ScheduleCadence,

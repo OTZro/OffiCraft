@@ -178,7 +178,7 @@ func (s *apiServer) HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessa
 	// pins both directions (unchanged form ⇒ cursor untouched; changed timing ⇒
 	// re-aimed).
 	//
-	// 🔴 The three sets are compared in CANONICAL form on both sides, so
+	// 🔴 All four sets are compared in CANONICAL form on both sides, so
 	// [20,0,40] and [0,20,40] are the same choice and move nothing. Comparing
 	// them as sent would make the cockpit's whole-form save re-aim on every
 	// press purely because a checkbox order differed — and a re-aim inside the
@@ -188,7 +188,7 @@ func (s *apiServer) HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessa
 	// because it cannot move a single slot. `custom_days` is documented as
 	// "ignored by every other cadence", and a caller that PATCHes the whole form
 	// back — the generated client, any "send every field" integration — sends all
-	// three sets on a `daily` row. Comparing them anyway made that no-op save
+	// four sets on a `daily` row. Comparing them anyway made that no-op save
 	// re-aim, which inside the window between a slot elapsing and the next tick
 	// swallows that delivery permanently, silently, on a card that looks entirely
 	// normal: exactly the failure the canonical-form comparison above already

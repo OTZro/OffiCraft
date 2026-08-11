@@ -969,8 +969,9 @@ export interface ScheduledMessage {
  * UNCONDITIONALLY — a defaulted timezone would sooner or later be read as
  * "wherever the server happens to run". The rest is required or ignored
  * ACCORDING TO `cadence`: `daily`/`weekly`/`monthly` need `hour`+`minute`
- * (omitting either is a 422, never a silent midnight), `custom` needs the three
- * sets instead and never reads `hour`/`minute`/`dayOfWeek`/`dayOfMonth`. That
+ * (omitting either is a 422, never a silent midnight), `custom` needs the four
+ * sets instead — months being the one it may omit, see `customMonths` — and
+ * never reads `hour`/`minute`/`dayOfWeek`/`dayOfMonth`. That
  * is why `hour`/`minute` are optional HERE and required in practice for the
  * calendar cadences — a `custom` schedule must not have to send two values it
  * never reads. `label` omitted = no label; `dayOfWeek` omitted = 0;
